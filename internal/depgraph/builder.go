@@ -346,7 +346,11 @@ func buildGraphFromFetcherWithBatch(
 		if !ok {
 			continue
 		}
-		refs := ParseCrossRepoRefs(body, repoAliases)
+		// ParseDependencyRefs, not ParseCrossRepoRefs: the same-repo spellings
+		// ("Depends on: #1187") resolve against the declaring node's own repo,
+		// which is the half the cross-repo parser structurally cannot see
+		// (#1492).
+		refs := ParseDependencyRefs(body, node.Repo, repoAliases)
 		for _, ref := range refs {
 			if ref.Repo == node.Repo && ref.Number == node.Number {
 				continue // self-reference
@@ -354,7 +358,7 @@ func buildGraphFromFetcherWithBatch(
 			edge := Edge{
 				From:       node.ID(),
 				To:         NodeID{Repo: ref.Repo, Number: ref.Number},
-				Type:       "crossRepo",
+				Type:       bodyEdgeType(node.Repo, ref.Repo),
 				Source:     ref.Source,
 				Resolvable: workspaceRepos[ref.Repo],
 				SourceLine: ref.SourceLine,
@@ -413,7 +417,7 @@ func BuildGraphFromItems(items []types.BoardItem, bodies map[string]string, work
 		if !ok {
 			continue
 		}
-		refs := ParseCrossRepoRefs(body, repoAliases)
+		refs := ParseDependencyRefs(body, node.Repo, repoAliases)
 		for _, ref := range refs {
 			if ref.Repo == node.Repo && ref.Number == node.Number {
 				continue
@@ -421,7 +425,7 @@ func BuildGraphFromItems(items []types.BoardItem, bodies map[string]string, work
 			edge := Edge{
 				From:       node.ID(),
 				To:         NodeID{Repo: ref.Repo, Number: ref.Number},
-				Type:       "crossRepo",
+				Type:       bodyEdgeType(node.Repo, ref.Repo),
 				Source:     ref.Source,
 				Resolvable: workspaceRepos[ref.Repo],
 				SourceLine: ref.SourceLine,
@@ -439,6 +443,18 @@ func BuildGraphFromItems(items []types.BoardItem, bodies map[string]string, work
 	g.ComputeStats()
 
 	return g
+}
+
+// bodyEdgeType names a body-derived edge for what it actually is. A
+// dependency declared in prose is "crossRepo" only when it points at a
+// different repository; the same-repo spellings ("Depends on: #1187") are
+// "bodyDeclared", so an operator reading the graph is not told a same-repo
+// blocker crossed a repository boundary (#1492).
+func bodyEdgeType(fromRepo, toRepo string) string {
+	if strings.EqualFold(fromRepo, toRepo) {
+		return "bodyDeclared"
+	}
+	return "crossRepo"
 }
 
 // fetchBoardItems fetches all board items for a repo.

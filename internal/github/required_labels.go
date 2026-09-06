@@ -8,7 +8,7 @@ import (
 // RequiredLabel is a label the Go layer READS at runtime. The distinction
 // matters: the `nightgauge-repo-init` skill provisions a much larger taxonomy
 // (component:*, size:*, priority:*), but those are conventions for humans and
-// for board field mapping. The three below are load-bearing — a control-flow
+// for board field mapping. The ones below are load-bearing — a control-flow
 // decision is made on their presence, so a repo missing one does not merely
 // look untidy, it misbehaves.
 type RequiredLabel struct {
@@ -75,6 +75,23 @@ var RequiredLabels = []RequiredLabel{
 		Name:        "owner-action",
 		Description: "Requires owner action (real account / external state)",
 		Color:       "FBCA04",
+	},
+	{
+		// The second entry of DefaultExcludeLabels (#1492). Its description is
+		// a promise about scheduler behaviour, so it is load-bearing in the
+		// same way owner-action is — and it was missing from this registry
+		// while the description was already deployed in provisioned repos,
+		// which is the worst of both: an operator reads "the scheduler skips
+		// it", applies the label, and a repo that never got the label cannot
+		// even record the intent.
+		//
+		// Colour and description are the ones already live in the provisioned
+		// repositories. `label create` is idempotent by NAME, so changing
+		// either here would repaint nothing that exists and give only future
+		// repos a different label.
+		Name:        "blocked",
+		Description: "Waits on another issue or a decision; the scheduler skips it",
+		Color:       "B60205",
 	},
 	{
 		// DefaultArchitectureApprovalLabel (internal/config/config.go:1302),

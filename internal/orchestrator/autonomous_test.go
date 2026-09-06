@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/depgraph"
 	"github.com/nightgauge/nightgauge/internal/focus"
 	"github.com/nightgauge/nightgauge/pkg/types"
@@ -5332,4 +5334,109 @@ func TestPendingRetryClearsOnSuccess(t *testing.T) {
 func retryDeadline(as *AutonomousScheduler, key string) (time.Time, bool) {
 	p, ok := as.retryBackoff[key]
 	return p.Until, ok
+}
+
+// TestDefaultExcludeLabels_MirrorsConfig pins the copy that autonomous.go
+// keeps of config.DefaultExcludeLabels. The mirror exists so autonomous.go
+// stays config-shape-agnostic; nothing else would notice if the two drifted,
+// and a drifted mirror means the runtime default differs from the documented
+// one for every caller that constructs AutonomousConfig directly.
+func TestDefaultExcludeLabels_MirrorsConfig(t *testing.T) {
+	want := config.DefaultExcludeLabels
+	if len(defaultExcludeLabels) != len(want) {
+		t.Fatalf("defaultExcludeLabels = %v, config.DefaultExcludeLabels = %v", defaultExcludeLabels, want)
+	}
+	for i := range want {
+		if defaultExcludeLabels[i] != want[i] {
+			t.Fatalf("defaultExcludeLabels = %v, config.DefaultExcludeLabels = %v", defaultExcludeLabels, want)
+		}
+	}
+}
+
+// TestPrioritize_SkipsBlockedLabel covers #1492. The `blocked` label's own
+// description reads "Waits on another issue or a decision; the scheduler skips
+// it", and until this test that sentence described nothing: the default
+// exclude set held only owner-action, so a labelled issue was dispatched on
+// the next tick while the operator believed it was held. A label that promises
+// scheduler behaviour is worse than no label when nothing implements it,
+// because it is believed.
+func TestPrioritize_SkipsBlockedLabel(t *testing.T) {
+	nodes := []*depgraph.Node{
+		{Repo: "R", Number: 1, Title: "Waiting on a decision", State: "OPEN", BoardStatus: "Ready", Labels: []string{"blocked"}, Priority: "P0", Size: "XS", Weight: 1},
+		{Repo: "R", Number: 2, Title: "Mixed case", State: "OPEN", BoardStatus: "Ready", Labels: []string{"Blocked"}, Priority: "P0", Size: "XS", Weight: 1},
+		{Repo: "R", Number: 3, Title: "Regular", State: "OPEN", BoardStatus: "Ready", Priority: "P1", Size: "M", Weight: 3},
+	}
+	g := buildTestGraph(nodes, nil)
+
+	as := &AutonomousScheduler{
+		config: AutonomousConfig{MaxConcurrent: 5},
+		state:  &AutonomousState{},
+	}
+
+	candidates := as.prioritize(context.Background(), g)
+	if len(candidates) != 1 {
+		t.Fatalf("expected 1 candidate (both blocked-labelled items skipped), got %d", len(candidates))
+	}
+	if candidates[0].Number != 3 {
+		t.Errorf("expected #3, got #%d", candidates[0].Number)
+	}
+}
+
+// TestPrioritize_HoldsOnBodyDeclaredSameRepoDependency is the scheduler half
+// of #1492. The graph builder turns "Depends on: #1187" into an edge exactly
+// as it always has for the cross-repo spelling, and the existing
+// "blocked … by open dep" path then holds the issue. Before the parser change
+// there was no edge, so this dispatched.
+func TestPrioritize_HoldsOnBodyDeclaredSameRepoDependency(t *testing.T) {
+	nodes := []*depgraph.Node{
+		{Repo: "R", Number: 1187, Title: "Prerequisite", State: "OPEN", BoardStatus: "Ready", Priority: "P1", Size: "M", Weight: 1},
+		{Repo: "R", Number: 1188, Title: "Dependent", State: "OPEN", BoardStatus: "Ready", Priority: "P0", Size: "S", Weight: 1},
+	}
+	edges := []depgraph.Edge{{
+		From:       depgraph.NodeID{Repo: "R", Number: 1188},
+		To:         depgraph.NodeID{Repo: "R", Number: 1187},
+		Type:       "bodyDeclared",
+		Source:     "depends_on",
+		Resolvable: true,
+		SourceLine: "Depends on: #1187",
+	}}
+	g := buildTestGraph(nodes, edges)
+
+	as := &AutonomousScheduler{
+		config: AutonomousConfig{MaxConcurrent: 5},
+		state:  &AutonomousState{},
+	}
+
+	candidates := as.prioritize(context.Background(), g)
+	for _, c := range candidates {
+		if c.Number == 1188 {
+			t.Fatalf("#1188 dispatched while its body-declared dependency #1187 is still OPEN")
+		}
+	}
+	if len(candidates) != 1 || candidates[0].Number != 1187 {
+		t.Fatalf("expected only the prerequisite #1187 to be a candidate, got %v", candidates)
+	}
+}
+
+// TestDescribeEdgeSource_NamesTheBodyLine guards the diagnostic half: an
+// operator who sees a hold must be told which sentence caused it, or the only
+// way to find out is to read internal/depgraph/parser.go (#126).
+func TestDescribeEdgeSource_NamesTheBodyLine(t *testing.T) {
+	nodes := []*depgraph.Node{
+		{Repo: "R", Number: 1187, State: "OPEN", BoardStatus: "Ready"},
+		{Repo: "R", Number: 1188, State: "OPEN", BoardStatus: "Ready"},
+	}
+	edges := []depgraph.Edge{{
+		From:       depgraph.NodeID{Repo: "R", Number: 1188},
+		To:         depgraph.NodeID{Repo: "R", Number: 1187},
+		Type:       "bodyDeclared",
+		Source:     "depends_on",
+		SourceLine: "Depends on: #1187",
+	}}
+	g := buildTestGraph(nodes, edges)
+
+	got := describeEdgeSource(g, g.NodeKey(depgraph.NodeID{Repo: "R", Number: 1188}), g.NodeKey(depgraph.NodeID{Repo: "R", Number: 1187}))
+	if !strings.Contains(got, "Depends on: #1187") {
+		t.Errorf("edge provenance %q does not name the responsible body line", got)
+	}
 }

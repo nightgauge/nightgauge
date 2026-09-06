@@ -724,7 +724,7 @@ blockedBy(first: 10) {
 }
 ```
 
-### Body Text (cross-repo)
+### Body Text (same-repo and cross-repo)
 
 Regex patterns in issue bodies:
 
@@ -733,10 +733,39 @@ Blocked by platform #535
 Blocked by acme/acme-api#100
 Depends on: flutter #127, angular #152
 Depends on acme-mobile #127
+Depends on: #1187
+Depends on #1187, #1190 and #1195
+Blocked by #1187
 ```
 
 Short names (`platform`, `flutter`, `angular`, `core`) are resolved via a
-built-in alias map.
+built-in alias map. A reference with **no** repo token resolves to the
+declaring issue's own repository.
+
+The same-repo forms were added in Issue #1492. Until then every pattern
+required a repo token before the `#`, which made the scheduler _stricter about
+a dependency in another repository than about one in its own_: "Depends on:
+platform #535" held the issue and "Depends on: #1187" — the far more common
+spelling — produced no edge at all, so an issue whose only prerequisite was in
+its own repo dispatched, and feature-planning discovered the prerequisite by
+reading prose the scheduler had ignored.
+
+Two rules keep the bare form from over-matching:
+
+- A bare `#N` counts only where a dependency is being **declared**: after a
+  "Blocked by" / "Depends on" keyword on that line (text _before_ the keyword
+  is excluded, so `Closes #99 — depends on #100` declares one dependency), or
+  under a `## Dependencies` / `## Blocked by` / `## Depends on` /
+  `## Cross-Repo Dependencies` header. A `#N` in narrative prose is a
+  reference, not a blocker: promoting incidental mentions to hard edges
+  silently stalls dispatch, which is why URL extraction was already scoped to
+  these same contexts.
+- A `#N` already qualified by a repo token ("platform #535",
+  `acme/platform#535`) is **not** also read as a same-repo reference, which
+  would block on an unrelated issue that happens to share a number.
+
+The non-gating markers below apply to these forms exactly as they do to the
+qualified ones.
 
 ### Structured Section
 
@@ -1392,8 +1421,9 @@ an actual promotable count.
 
 - Verify the repo alias is in the alias map (e.g., `platform` maps to
   `acme/platform`)
-- Check body text format: `Blocked by <repo> #<number>` or
-  `Depends on <repo> #<number>`
+- Check body text format: `Blocked by <repo> #<number>`,
+  `Depends on <repo> #<number>`, or the same-repo `Depends on: #<number>` /
+  `Blocked by #<number>`
 - For structured sections, use the exact header `## Cross-Repo Dependencies`
 - Check the status marker: `⏸️`, `deferred`, and `not-gating` entries are
   intentionally **not** edges (see

@@ -636,3 +636,58 @@ func TestBoardItemToNode_CarriesLabelsTruncated(t *testing.T) {
 		t.Fatal("LabelsTruncated set on a node whose item was complete")
 	}
 }
+
+// TestBuildGraphFromItems_SameRepoBodyDependency is the builder half of #1492.
+// "Depends on: #2" in an issue body is the most ordinary way to declare a
+// prerequisite and produced no edge at all, while "Depends on core #2" — the
+// same sentence with a repo token — produced one. The scheduler was stricter
+// about a dependency in another repository than about one in its own.
+func TestBuildGraphFromItems_SameRepoBodyDependency(t *testing.T) {
+	items := []types.BoardItem{
+		{Number: 1, Title: "Dependent", State: "OPEN", Repo: "O/core", Size: "M"},
+		{Number: 2, Title: "Prerequisite", State: "OPEN", Repo: "O/core", Size: "S"},
+	}
+	bodies := map[string]string{
+		"O/core#1": "## Goal\n\nShip the thing.\n\nDepends on: #2\n",
+	}
+
+	g := BuildGraphFromItems(items, bodies, map[string]bool{"O/core": true}, nil)
+
+	if len(g.Edges) != 1 {
+		t.Fatalf("expected 1 edge from the body declaration, got %d: %v", len(g.Edges), g.Edges)
+	}
+	e := g.Edges[0]
+	if e.From.Number != 1 || e.To.Number != 2 || e.To.Repo != "O/core" {
+		t.Fatalf("edge = %+v, want O/core#1 → O/core#2", e)
+	}
+	if e.Type != "bodyDeclared" {
+		t.Errorf("edge type = %q, want %q — a same-repo blocker did not cross a repository boundary", e.Type, "bodyDeclared")
+	}
+	if !e.Resolvable {
+		t.Error("an edge inside the workspace's own repo must be resolvable")
+	}
+	if e.SourceLine != "Depends on: #2" {
+		t.Errorf("SourceLine = %q, want the declaring line", e.SourceLine)
+	}
+}
+
+// TestBuildGraphFromItems_ProseReferenceIsNotADependency is the other
+// direction, and the one that keeps the fix from grounding the fleet: a `#N`
+// in narrative prose is a reference, not a blocker. #3635 already established
+// that promoting incidental references to hard edges silently stalls
+// dispatch.
+func TestBuildGraphFromItems_ProseReferenceIsNotADependency(t *testing.T) {
+	items := []types.BoardItem{
+		{Number: 1, Title: "Dependent", State: "OPEN", Repo: "O/core", Size: "M"},
+		{Number: 2, Title: "Mentioned", State: "OPEN", Repo: "O/core", Size: "S"},
+	}
+	bodies := map[string]string{
+		"O/core#1": "## Goal\n\nFollow-up to #2, which shipped the parser.\n",
+	}
+
+	g := BuildGraphFromItems(items, bodies, map[string]bool{"O/core": true}, nil)
+
+	if len(g.Edges) != 0 {
+		t.Fatalf("prose mention became %d dependency edge(s): %v", len(g.Edges), g.Edges)
+	}
+}

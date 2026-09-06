@@ -50,6 +50,23 @@ var (
 		`(?i)depends?\s+on:?\s+([\w-]+(?:/[\w-]+)?)\s*#(\d+)`,
 	)
 
+	// A dependency DECLARATION keyword anywhere on a line: "Blocked by …",
+	// "Depends on …". Used by the same-repo pass to decide whether the bare
+	// `#N` tokens on that line are dependencies or ordinary prose references.
+	reDeclKeyword = regexp.MustCompile(
+		`(?i)(blocked\s+by|depends?\s+on)\s*:?`,
+	)
+
+	// A possibly repo-qualified reference: the token in front of a `#N`, and
+	// the gap between them. The same-repo pass uses it to decide which `#N`
+	// tokens already belong to another repository — see maskQualifiedRefs.
+	reQualifiedRef = regexp.MustCompile(
+		`([\w-]+(?:/[\w-]+)?)([ \t]*)#\d+`,
+	)
+
+	// A bare issue reference with no repo in front of it.
+	reBareRef = regexp.MustCompile(`#(\d+)`)
+
 	// Structured section entries:
 	// "- ✅ platform #535 — description" / "- ❌ flutter #127" / "- ⚠️ angular #152"
 	// / "- owner/repo#535 — description" (unmarked, gates by default — #132)
@@ -361,6 +378,179 @@ func ParseCrossRepoRefs(body string, repoAliases map[string]string) []CrossRepoR
 					SourceLine: lineAt(depContext, m[0]),
 				})
 			}
+		}
+	}
+
+	return refs
+}
+
+// depFragment is one slice of an issue body that may declare dependencies,
+// plus the whole line it came from (for SourceLine) and the parser source
+// label to record on any ref found in it.
+type depFragment struct {
+	text   string // the part of the line eligible for a bare `#N` scan
+	line   string // the whole trimmed line, for diagnostics
+	source string // "depends_on" | "body_text" | "structured_section"
+}
+
+// depDeclarationFragments returns the body slices in which a BARE `#N` (no
+// repo token in front of it) counts as a dependency declaration:
+//
+//  1. Everything after a "Blocked by" / "Depends on" keyword on its own line.
+//     The text BEFORE the keyword is excluded on purpose — "Closes #99 —
+//     depends on #100" declares one dependency, not two.
+//  2. Every line under a `## Blocked by` / `## Depends on` / `## Dependencies`
+//     / `## Cross-Repo Dependencies` header, until the next header.
+//
+// Lines the author marked non-gating (⏸️, "deferred", "not-gating") yield
+// nothing, exactly as they do for every other pattern.
+func depDeclarationFragments(body string) []depFragment {
+	if body == "" {
+		return nil
+	}
+	var out []depFragment
+
+	// 1. Dependency-declaration keyword lines, anywhere in the body.
+	for _, line := range strings.Split(body, "\n") {
+		loc := reDeclKeyword.FindStringIndex(line)
+		if loc == nil {
+			continue
+		}
+		if isNonGatingLine(line) {
+			continue
+		}
+		source := "body_text"
+		if strings.Contains(strings.ToLower(line[loc[0]:loc[1]]), "depend") {
+			source = "depends_on"
+		}
+		out = append(out, depFragment{
+			text:   line[loc[1]:],
+			line:   strings.TrimSpace(line),
+			source: source,
+		})
+	}
+
+	// 2. Dependency-section bodies. A bare entry under "## Dependencies" is a
+	// dependency by virtue of where it sits, with no keyword to repeat.
+	for _, loc := range reDepSectionHeader.FindAllStringIndex(body, -1) {
+		sectionStart := loc[1]
+		if nl := strings.IndexByte(body[sectionStart:], '\n'); nl != -1 {
+			sectionStart += nl + 1
+		} else {
+			continue
+		}
+		sectionEnd := len(body)
+		if remaining := body[sectionStart:]; len(remaining) > 0 {
+			if nextLoc := reAnyHeader.FindStringIndex(remaining); nextLoc != nil {
+				sectionEnd = sectionStart + nextLoc[0]
+			}
+		}
+		for _, line := range strings.Split(body[sectionStart:sectionEnd], "\n") {
+			if strings.TrimSpace(line) == "" || isNonGatingLine(line) {
+				continue
+			}
+			// A keyword line inside a section is already covered by pass 1,
+			// which trims the text before the keyword; adding the whole line
+			// again would undo that trim.
+			if reDeclKeyword.MatchString(line) {
+				continue
+			}
+			out = append(out, depFragment{
+				text:   line,
+				line:   strings.TrimSpace(line),
+				source: "structured_section",
+			})
+		}
+	}
+
+	return out
+}
+
+// maskQualifiedRefs blanks every REPO-QUALIFIED reference in s, preserving
+// length, so that what survives is exactly the bare `#N` tokens. Without it
+// "Blocked by platform #535" would yield both a cross-repo edge to
+// platform#535 and a same-repo edge to #535 — a hold on an unrelated issue
+// that happens to share a number.
+//
+// A token in front of a `#N` qualifies it only when the token names a
+// repository: it resolves through the alias map (or already looks like
+// "owner/repo"), or it is glued to the `#` with no space, which is the
+// unambiguous "owner/repo#N" / "repo#N" spelling. Everything else is ordinary
+// prose — "and #1195", the "-" of a list bullet, a version number — and the
+// reference after it is bare.
+//
+// The residual ambiguity is "Depends on: someunknownrepo #55", which this
+// reads as same-repo #55. That is deliberate: an unrecognised token yields a
+// dependency the scheduler HOLDS on rather than one it silently drops, and
+// holding a dispatch is the recoverable direction. Dropping it is what #1492
+// was.
+func maskQualifiedRefs(s string, aliases map[string]string) string {
+	locs := reQualifiedRef.FindAllStringSubmatchIndex(s, -1)
+	if len(locs) == 0 {
+		return s
+	}
+	b := []byte(s)
+	for _, loc := range locs {
+		token := s[loc[2]:loc[3]]
+		gap := s[loc[4]:loc[5]]
+		if gap != "" && resolveAlias(token, aliases) == "" {
+			continue // prose in front of a bare reference, not a repo
+		}
+		for i := loc[0]; i < loc[1]; i++ {
+			b[i] = ' '
+		}
+	}
+	return string(b)
+}
+
+// ParseDependencyRefs is ParseCrossRepoRefs plus the SAME-REPO declaration
+// forms, which carry no repo token and so resolve to selfRepo — the repository
+// of the issue whose body this is:
+//
+//	Depends on: #1187
+//	Depends on #1187, #1190 and #1195
+//	Blocked by #1187
+//	Blocked by: #1187
+//
+// Before #1492 these produced no edge at all, while the cross-repo spellings
+// of the same sentence produced one. The scheduler was therefore stricter
+// about a dependency in ANOTHER repository than about one in its own: an issue
+// whose body said "Depends on: #1187" with #1187 still open was dispatched,
+// and feature-planning discovered the prerequisite by reading prose the
+// scheduler had ignored.
+//
+// selfRepo == "" degrades to exactly ParseCrossRepoRefs.
+func ParseDependencyRefs(body, selfRepo string, repoAliases map[string]string) []CrossRepoRef {
+	refs := ParseCrossRepoRefs(body, repoAliases)
+	if body == "" || selfRepo == "" {
+		return refs
+	}
+	if repoAliases == nil {
+		repoAliases = DefaultRepoAliases
+	}
+
+	seen := make(map[string]bool, len(refs))
+	for _, r := range refs {
+		seen[r.Repo+"#"+strconv.Itoa(r.Number)] = true
+	}
+
+	for _, frag := range depDeclarationFragments(body) {
+		for _, m := range reBareRef.FindAllStringSubmatch(maskQualifiedRefs(frag.text, repoAliases), -1) {
+			num, _ := strconv.Atoi(m[1])
+			if num <= 0 {
+				continue
+			}
+			key := selfRepo + "#" + strconv.Itoa(num)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			refs = append(refs, CrossRepoRef{
+				Repo:       selfRepo,
+				Number:     num,
+				Source:     frag.source,
+				SourceLine: frag.line,
+			})
 		}
 	}
 

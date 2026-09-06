@@ -778,18 +778,19 @@ func TestResolvedEnabledRepos(t *testing.T) {
 }
 
 // TestResolvedExcludeLabels verifies the autonomous.exclude_labels resolution
-// (#317): unset/empty falls back to the single default ["owner-action"], a
-// configured list overrides it entirely (not additively), and whitespace/
-// empty entries are trimmed and dropped like ResolvedEnabledRepos.
+// (#317, #1492): unset/empty falls back to the default
+// ["owner-action", "blocked"], a configured list overrides it entirely (not
+// additively), and whitespace/empty entries are trimmed and dropped like
+// ResolvedEnabledRepos.
 func TestResolvedExcludeLabels(t *testing.T) {
 	tests := []struct {
 		name string
 		cfg  *AutonomousConfig
 		want []string
 	}{
-		{"nil config", nil, []string{"owner-action"}},
-		{"empty value", &AutonomousConfig{}, []string{"owner-action"}},
-		{"explicit empty list", &AutonomousConfig{ExcludeLabels: []string{}}, []string{"owner-action"}},
+		{"nil config", nil, []string{"owner-action", "blocked"}},
+		{"empty value", &AutonomousConfig{}, []string{"owner-action", "blocked"}},
+		{"explicit empty list", &AutonomousConfig{ExcludeLabels: []string{}}, []string{"owner-action", "blocked"}},
 		{
 			"custom single label overrides default",
 			&AutonomousConfig{ExcludeLabels: []string{"needs-human"}},
@@ -808,7 +809,7 @@ func TestResolvedExcludeLabels(t *testing.T) {
 		{
 			"all entries blank falls back to default",
 			&AutonomousConfig{ExcludeLabels: []string{"", "  "}},
-			[]string{"owner-action"},
+			[]string{"owner-action", "blocked"},
 		},
 	}
 	for _, tc := range tests {

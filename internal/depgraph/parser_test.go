@@ -925,3 +925,146 @@ func TestMarkedEntriesUnaffectedByOptionalMarkerGroup(t *testing.T) {
 		})
 	}
 }
+
+// --- Same-repo declaration forms (#1492) -------------------------------------
+//
+// Before #1492 the parser required a repo token before every `#`, so the
+// cross-repo spelling of a sentence produced a scheduler edge and the
+// same-repo spelling of the identical sentence produced nothing. These pin
+// the bare forms, the list forms, and — just as important — the negatives:
+// a `#N` with no declaration keyword is prose, not a dependency.
+
+const selfRepo = "nightgauge/nightgauge"
+
+func sameRepoNumbers(t *testing.T, body string) []int {
+	t.Helper()
+	var got []int
+	for _, r := range ParseDependencyRefs(body, selfRepo, nil) {
+		if r.Repo == selfRepo {
+			got = append(got, r.Number)
+		}
+	}
+	return got
+}
+
+func TestParseDependencyRefs_BareSameRepoForms(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want []int
+	}{
+		{"depends on with colon", "Depends on: #1187", []int{1187}},
+		{"depends on without colon", "Depends on #1187", []int{1187}},
+		{"depend singular", "This depend on #1187", []int{1187}},
+		{"blocked by", "Blocked by #1187", []int{1187}},
+		{"blocked by with colon", "Blocked by: #1187", []int{1187}},
+		{"case insensitive", "BLOCKED BY #1187", []int{1187}},
+		{"comma list", "Depends on: #1187, #1190", []int{1187, 1190}},
+		{"list with and", "Depends on #1187, #1190 and #1195", []int{1187, 1190, 1195}},
+		{"semicolon list", "Blocked by #1187; #1190", []int{1187, 1190}},
+		{"mid-sentence declaration", "The API rewrite depends on #1187 landing first.", []int{1187}},
+		{"under a Dependencies header", "## Dependencies\n\n- #1187 — the API rewrite\n", []int{1187}},
+		{"under a Blocked by header", "## Blocked by\n\n- #1187\n- #1190\n", []int{1187, 1190}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sameRepoNumbers(t, tc.body)
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+			for i := range tc.want {
+				if got[i] != tc.want[i] {
+					t.Fatalf("got %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+func TestParseDependencyRefs_NegativesStayProse(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"plain mention", "See #1187 for background."},
+		{"closes keyword", "Closes #1187"},
+		{"prose with a number", "Rewrote the #1187 handler naming."},
+		{"non-gating marker", "⏸️ Depends on #1187 — recorded for context"},
+		{"deferred text", "Depends-on note: deferred, see #1187"},
+		{"before the keyword on the same line", "Closes #99 — depends on #100"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sameRepoNumbers(t, tc.body)
+			for _, n := range got {
+				if n == 1187 || n == 99 {
+					t.Fatalf("body %q produced same-repo dependency #%d — a reference "+
+						"with no dependency declaration in front of it is prose", tc.body, n)
+				}
+			}
+		})
+	}
+}
+
+// TestParseDependencyRefs_NonGatingDeferredStillDeclares pins the precedence
+// rule the cross-repo parser already honours: an explicit declaration beats an
+// incidental "deferred" adjective on the same line.
+func TestParseDependencyRefs_DeclarationBeatsIncidentalDeferred(t *testing.T) {
+	got := sameRepoNumbers(t, "Blocked by #491 — needed for the deferred rollout")
+	if len(got) != 1 || got[0] != 491 {
+		t.Fatalf("got %v, want [491] — an explicit declaration outranks a stray adjective", got)
+	}
+}
+
+// TestParseDependencyRefs_QualifiedRefsNotDoubleCounted is the guard against
+// the failure this pass could most easily introduce: reading "platform #535"
+// as BOTH a cross-repo edge to platform#535 and a same-repo edge to #535,
+// which would block on an unrelated issue in the wrong repository.
+func TestParseDependencyRefs_QualifiedRefsNotDoubleCounted(t *testing.T) {
+	body := "Blocked by platform #535\nDepends on: acme/platform#600\n"
+	refs := ParseDependencyRefs(body, selfRepo, nil)
+	for _, r := range refs {
+		if r.Repo == selfRepo {
+			t.Errorf("repo-qualified ref also produced a same-repo edge to #%d (line %q)",
+				r.Number, r.SourceLine)
+		}
+	}
+	if len(refs) != 2 {
+		t.Fatalf("got %d refs, want 2 (%v)", len(refs), refs)
+	}
+}
+
+func TestParseDependencyRefs_MixedQualifiedAndBareOnOneLine(t *testing.T) {
+	refs := ParseDependencyRefs("Depends on: platform #535 and #1187", selfRepo, nil)
+	var sawPlatform, sawSelf bool
+	for _, r := range refs {
+		switch {
+		case r.Repo == "acme/platform" && r.Number == 535:
+			sawPlatform = true
+		case r.Repo == selfRepo && r.Number == 1187:
+			sawSelf = true
+		default:
+			t.Errorf("unexpected ref %s#%d", r.Repo, r.Number)
+		}
+	}
+	if !sawPlatform || !sawSelf {
+		t.Fatalf("want both platform#535 and %s#1187, got %v", selfRepo, refs)
+	}
+}
+
+func TestParseDependencyRefs_SelfReferenceAndEmptyRepo(t *testing.T) {
+	if refs := ParseDependencyRefs("Depends on: #1187", "", nil); len(refs) != 0 {
+		t.Errorf("empty selfRepo must degrade to ParseCrossRepoRefs, got %v", refs)
+	}
+	refs := ParseDependencyRefs("Depends on: #1187", selfRepo, nil)
+	if len(refs) != 1 || refs[0].SourceLine != "Depends on: #1187" {
+		t.Fatalf("SourceLine must name the responsible prose, got %v", refs)
+	}
+}
+
+func TestParseDependencyRefs_Deduplicates(t *testing.T) {
+	body := "Depends on: #1187\nBlocked by #1187\n"
+	if got := sameRepoNumbers(t, body); len(got) != 1 {
+		t.Fatalf("same dependency declared twice must yield one ref, got %v", got)
+	}
+}

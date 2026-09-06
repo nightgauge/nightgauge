@@ -250,3 +250,117 @@ func TestEvaluateDeps(t *testing.T) {
 		t.Error("git not found in required deps")
 	}
 }
+
+// --- Body-declared dependencies at pickup (#1492) -----------------------------
+
+// TestEvaluateIssueDeps_BodyDeclaredSameRepo is the pickup half of #1492. The
+// gate read only GitHub's native blockedBy relation, so an issue whose body
+// said "Depends on: #1187" had dependencies.blockedBy written as [] in
+// issue-<N>.json — and feature-planning was the first stage to notice the
+// prerequisite, mid-plan, by reading the body itself.
+func TestEvaluateIssueDeps_BodyDeclaredSameRepo(t *testing.T) {
+	mock := &mockFetcher{issues: map[string]*types.Issue{
+		"nightgauge/nightgauge#1188": {
+			Number: 1188,
+			Body:   "## Goal\n\nRewrite the client.\n\nDepends on: #1187\n",
+		},
+		"nightgauge/nightgauge#1187": {
+			Number: 1187,
+			Title:  "Prerequisite",
+			State:  "OPEN",
+		},
+	}}
+
+	result, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 1188)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.ShouldBlock || result.OpenCount != 1 {
+		t.Fatalf("expected the body-declared dependency to block, got %+v", result)
+	}
+	dep := result.OpenDependencies[0]
+	if dep.Number != 1187 || dep.Repo != "nightgauge/nightgauge" {
+		t.Errorf("dependency = %+v, want nightgauge/nightgauge#1187", dep)
+	}
+	if dep.Source != "body" || dep.SourceLine != "Depends on: #1187" {
+		t.Errorf("dependency provenance = %q / %q — an operator must be told which "+
+			"declaration to edit to clear the hold", dep.Source, dep.SourceLine)
+	}
+}
+
+// TestEvaluateIssueDeps_BodyDeclaredClosedDoesNotBlock — a declaration that has
+// already shipped is satisfied, exactly like a closed native blocker.
+func TestEvaluateIssueDeps_BodyDeclaredClosedDoesNotBlock(t *testing.T) {
+	mock := &mockFetcher{issues: map[string]*types.Issue{
+		"nightgauge/nightgauge#1188": {Number: 1188, Body: "Blocked by #1187"},
+		"nightgauge/nightgauge#1187": {Number: 1187, State: "CLOSED"},
+	}}
+
+	result, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 1188)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.ShouldBlock {
+		t.Fatalf("a closed prerequisite must not hold pickup, got %+v", result)
+	}
+}
+
+// TestEvaluateIssueDeps_BodyDeclaredNotDoubleCountedWithNative — the same
+// dependency declared both ways is one dependency.
+func TestEvaluateIssueDeps_BodyDeclaredNotDoubleCountedWithNative(t *testing.T) {
+	mock := &mockFetcher{issues: map[string]*types.Issue{
+		"nightgauge/nightgauge#1188": {
+			Number: 1188,
+			Body:   "Depends on: #1187",
+			BlockedBy: []types.BlockingRef{
+				{Number: 1187, Title: "Prerequisite", State: "OPEN", Repo: "nightgauge/nightgauge"},
+			},
+		},
+		"nightgauge/nightgauge#1187": {Number: 1187, State: "OPEN"},
+	}}
+
+	result, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 1188)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.OpenCount != 1 {
+		t.Fatalf("expected 1 dependency, got %d: %+v", result.OpenCount, result.OpenDependencies)
+	}
+	if result.OpenDependencies[0].Source != "blockedBy" {
+		t.Errorf("the native relation must win the dedup, got source %q", result.OpenDependencies[0].Source)
+	}
+}
+
+// TestEvaluateIssueDeps_UnresolvableBodyRefIsSkipped — prose can name a
+// repository that does not exist. A permanent un-clearable hold on a typo is
+// worse than the deferral it would buy, so the reference is skipped.
+func TestEvaluateIssueDeps_UnresolvableBodyRefIsSkipped(t *testing.T) {
+	mock := &mockFetcher{issues: map[string]*types.Issue{
+		"nightgauge/nightgauge#1188": {Number: 1188, Body: "Blocked by acme/nonexistent#9999"},
+	}}
+
+	result, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 1188)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.ShouldBlock {
+		t.Fatalf("an unfetchable prose reference must not create a permanent hold, got %+v", result)
+	}
+}
+
+// TestEvaluateIssueDeps_ProseMentionIsNotADependency — the negative that keeps
+// the fix from grounding the fleet.
+func TestEvaluateIssueDeps_ProseMentionIsNotADependency(t *testing.T) {
+	mock := &mockFetcher{issues: map[string]*types.Issue{
+		"nightgauge/nightgauge#1188": {Number: 1188, Body: "Follow-up to #1187, which shipped the parser."},
+		"nightgauge/nightgauge#1187": {Number: 1187, State: "OPEN"},
+	}}
+
+	result, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 1188)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.ShouldBlock {
+		t.Fatalf("a prose mention became a blocker: %+v", result)
+	}
+}

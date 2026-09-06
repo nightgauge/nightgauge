@@ -147,6 +147,7 @@ create_label "type:spike"    "c2e0c6" "Research/investigation task"
 create_label "pipeline:refined"      "0969da" "Issue has been refined and is ready for development"
 create_label "auto-process"          "8957e5" "Issue is queued for automatic pipeline processing"
 create_label "owner-action"          "FBCA04" "Requires owner action (real account / external state)"
+create_label "blocked"               "B60205" "Waits on another issue or a decision; the scheduler skips it"
 create_label "approved:architecture" "0e8a16" "Human-approved architectural decision — architecture gate passes"
 
 # NOTE: Priority and Size are NOT created as labels.

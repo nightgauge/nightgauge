@@ -50,7 +50,7 @@ func (n *Node) ID() NodeID {
 type Edge struct {
 	From       NodeID `json:"from"`       // blocked issue (depends on To)
 	To         NodeID `json:"to"`         // blocking issue
-	Type       string `json:"type"`       // "blockedBy", "crossRepo"
+	Type       string `json:"type"`       // "blockedBy", "crossRepo", "bodyDeclared"
 	Source     string `json:"source"`     // "graphql", "body_text", "structured_section", "depends_on"
 	Resolvable bool   `json:"resolvable"` // false if target repo not in workspace
 	// SourceLine is the issue-body line this edge was parsed from, for
