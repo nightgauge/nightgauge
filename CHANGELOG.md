@@ -26,6 +26,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The dependency scanner recognises the board field's own spelling of the
+  keyword — `blockedBy`, `blocked-by`, `blocked_by`, `dependsOn`, `depends-on`,
+  `depends_on`, with or without surrounding backticks or bold markers — and a
+  keyword now claims every repo-qualified reference in its sentence, not just
+  the one next to it. An issue whose body said "`blockedBy` owner/repo#N"
+  produced no edge and was dispatched over an open cross-repo blocker (#1505)
 - A planning stage that refuses an issue blocked on someone else's open work now
   ends the run `blocked` instead of halting the repository. The feature-planning
   skill mandates one shape for an open prerequisite — a `PLAN_REVISION_NEEDED`
