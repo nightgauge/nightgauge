@@ -958,23 +958,6 @@ async function runAutonomousStallWatchdog(logger: Logger): Promise<void> {
   }
 }
 
-/**
- * Format an AutonomousStatusResult into a human-readable string for the
- * output channel or quick-pick display.
- *
- * The `completed` and `failed` arrays in the status result are LIFETIME
- * state — they persist across Start/Stop cycles in `.nightgauge/
- * autonomous/state.json`. Previously the formatter printed them verbatim
- * under a header saying "Started: 1s ago", which made every session start
- * look like 8 failures had just happened. This formatter separates:
- *
- *   • "This session" — items with timestamps after `status.startedAt`.
- *   • "History" — counts-only summary of everything prior.
- *   • "Repeat failures" — deduplicated ×N list of issues that failed more
- *     than once across all sessions (the real actionable signal).
- *
- * Passing `now` is for deterministic testing; production callers omit it.
- */
 // ── Reload-safety watch (#1511) ────────────────────────────────────────────
 // After Stop, the running slots keep going — Stop does not abort them, a
 // window reload does. Nothing polled after Stop (the stall watchdog and the
@@ -1087,6 +1070,23 @@ export function describeReloadSafety(runningCount: number): string {
   );
 }
 
+/**
+ * Format an AutonomousStatusResult into a human-readable string for the
+ * output channel or quick-pick display.
+ *
+ * The `completed` and `failed` arrays in the status result are LIFETIME
+ * state — they persist across Start/Stop cycles in `.nightgauge/
+ * autonomous/state.json`. Previously the formatter printed them verbatim
+ * under a header saying "Started: 1s ago", which made every session start
+ * look like 8 failures had just happened. This formatter separates:
+ *
+ *   • "This session" — items with timestamps after `status.startedAt`.
+ *   • "History" — counts-only summary of everything prior.
+ *   • "Repeat failures" — deduplicated ×N list of issues that failed more
+ *     than once across all sessions (the real actionable signal).
+ *
+ * Passing `now` is for deterministic testing; production callers omit it.
+ */
 function formatStatus(status: AutonomousStatusResult, now: Date = new Date()): string {
   const lines: string[] = [];
 
