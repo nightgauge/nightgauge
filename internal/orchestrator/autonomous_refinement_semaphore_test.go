@@ -95,6 +95,10 @@ func TestRunRefinementCycle_RefusedSemaphoreGatesDispatch(t *testing.T) {
 	defer srv.Close()
 
 	cfg := DefaultAutonomousConfig()
+	// These fixtures are off-board issues — tier 3 under #1514, which the
+	// default refuses. This test is about the semaphore, not about the tier gate, so the
+	// backlog sweep is turned on to keep the fixtures candidates.
+	cfg.RefinementBacklog = true
 	cfg.RefinementMaxConcurrent = 1 // one slot, three eligible candidates
 
 	client := gh.NewClientWithURL("test-token", srv.URL)
@@ -191,6 +195,10 @@ func TestRunRefinementCycle_SaturatedCycleSpendsNoAPIQuota(t *testing.T) {
 	defer srv.Close()
 
 	cfg := DefaultAutonomousConfig()
+	// These fixtures are off-board issues — tier 3 under #1514, which the
+	// default refuses. This test is about the semaphore, not about the tier gate, so the
+	// backlog sweep is turned on to keep the fixtures candidates.
+	cfg.RefinementBacklog = true
 	cfg.RefinementMaxConcurrent = 1
 
 	client := gh.NewClientWithURL("test-token", srv.URL)

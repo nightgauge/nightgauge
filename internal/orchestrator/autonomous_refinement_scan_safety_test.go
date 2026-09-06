@@ -54,6 +54,10 @@ func TestRunRefinementCycle_ReposShrinkMidScanDoesNotPanic(t *testing.T) {
 	defer srv.Close()
 
 	cfg := DefaultAutonomousConfig()
+	// These fixtures are off-board issues — tier 3 under #1514, which the
+	// default refuses. This test is about scan safety, not about the tier gate, so the
+	// backlog sweep is turned on to keep the fixtures candidates.
+	cfg.RefinementBacklog = true
 	client := gh.NewClientWithURL("test-token", srv.URL)
 	sched := NewScheduler(client, SchedulerConfig{WorkspaceRoot: t.TempDir()})
 	as := NewAutonomousScheduler(sched, client, []depgraph.RepoConfig{
@@ -126,6 +130,10 @@ func TestRunRefinementCycle_OffsetDoesNotAdvanceOnSaturatedCycle(t *testing.T) {
 	defer srv.Close()
 
 	cfg := DefaultAutonomousConfig()
+	// These fixtures are off-board issues — tier 3 under #1514, which the
+	// default refuses. This test is about scan safety, not about the tier gate, so the
+	// backlog sweep is turned on to keep the fixtures candidates.
+	cfg.RefinementBacklog = true
 	cfg.RefinementMaxConcurrent = 1
 
 	client := gh.NewClientWithURL("test-token", srv.URL)

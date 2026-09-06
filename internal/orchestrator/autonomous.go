@@ -72,6 +72,18 @@ type AutonomousConfig struct {
 	RefinementMaxConcurrent int           // default: 1 (max 3) — concurrent refinement slots
 	RefinementCooldown      time.Duration // default: 5m — per-issue cooldown after refinement
 
+	// RefinementBacklog gates tier-3 refinement — every open issue that is on
+	// no project board, or on one without a Ready status or a Priority
+	// (autonomous.refinement_backlog, default FALSE). When false the scan only
+	// refines what the dispatch scan is about to consume: board Ready, board
+	// Backlog-with-priority, and anything explicitly labelled auto-process.
+	//
+	// Default off because a backlog sweep is unbounded work at a model call
+	// each: 165 unrefined issues at the default rate rail is ~17 hours of
+	// Sonnet calls on issues that may never dispatch (#1514). Turning it on is
+	// a deliberate cost opt-in.
+	RefinementBacklog bool
+
 	// AutoActionable controls whether auto-refined issues go to Ready (true) or Backlog (false).
 	AutoActionable bool
 
@@ -182,6 +194,8 @@ func DefaultAutonomousConfig() AutonomousConfig {
 		RefinementInterval:      60 * time.Second,
 		RefinementMaxConcurrent: 1,
 		RefinementCooldown:      5 * time.Minute,
+		// Tier 3 (the open backlog) is a cost opt-in, off by default (#1514).
+		RefinementBacklog: false,
 		// #3023 phase 1: when the loop sits idle for 4 cycles in a row
 		// (default 2 minutes at base 30s cadence) it widens to 5 minutes.
 		// Snaps back to base on any rescan trigger or candidate appearance.
@@ -3791,6 +3805,13 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 			}
 			as.safetyRails.RecordPipelineStart()
 		}
+
+		// Refine-if-slot-free, immediately before dispatch (#1514). This is
+		// what makes refinement demand-driven: the issue about to run is
+		// refined first when a slot and the rate rail allow it, and dispatched
+		// unrefined (with a line saying so) when they do not. A cold workspace
+		// therefore needs no backlog sweep before the pipeline is useful.
+		as.refineBeforeDispatch(ctx, graph, item)
 
 		as.enqueueItem(ctx, item)
 		dispatched++
@@ -7446,6 +7467,13 @@ func (as *AutonomousScheduler) runRefinementCycle(ctx context.Context) {
 	if numRepos > 1 {
 		log.Printf("[refinement] cycle scan starting at repo offset %d/%d", scanStart, numRepos)
 	}
+	// Order and skip decisions for this whole cycle are taken from ONE
+	// snapshot (#1514): the cached board graph the dispatch scan already
+	// built, the human-hold set, and the open-PR sets. No forge call, and the
+	// tier cap it carries is workspace-wide precisely because it is answered
+	// before the per-repo loop starts.
+	view := as.refinementView()
+
 	winnerAbsIdx := -1
 	for scanIdx := 0; scanIdx < numRepos; scanIdx++ {
 		absIdx := (scanStart + scanIdx) % numRepos
@@ -7524,13 +7552,32 @@ func (as *AutonomousScheduler) runRefinementCycle(ctx context.Context) {
 		// gh.LabelEpic IS "type:epic" — the literal that used to sit beside it
 		// here was a no-op duplicate, and exactly the drift a registry exists
 		// to prevent.
-		candidates, err := issueSvc.ListIssuesExcludingLabels(ctx, owner, repo,
-			[]string{gh.LabelRefined, gh.LabelEpic}, 5)
+		//
+		// The listing is unlimited where it used to ask for 5 (#1514). The
+		// call is the SAME single query either way — the limit only trims the
+		// survivors client-side — and trimming before the ordering below is
+		// what made the scan pick the five OLDEST unrefined issues rather than
+		// the five about to dispatch. The per-cycle cap of five is applied by
+		// planRefinement, after ordering.
+		listed, err := issueSvc.ListIssuesExcludingLabels(ctx, owner, repo,
+			[]string{gh.LabelRefined, gh.LabelEpic}, 0)
 		if err != nil {
 			log.Printf("[refinement] %s: failed to list unrefined issues: %v", fullRepo, err)
 			continue
 		}
 
+		// Order by dispatch relevance and drop what can never dispatch.
+		plan, skips := view.planRefinement(fullRepo, listed)
+		logRefinementSkips(fullRepo, skips)
+		candidates := make([]gh.UnrefinedIssue, 0, len(plan))
+		for _, c := range plan {
+			candidates = append(candidates, c.issue)
+		}
+
+		// An all-skipped repo caches as empty for the same reason a
+		// literally-empty one does: nothing here is refinable right now, and
+		// re-listing it every 60s spends quota to learn that again. The TTL is
+		// short enough that a board change takes effect on its own.
 		if len(candidates) == 0 {
 			as.mu.Lock()
 			as.refinementEmptyCache[fullRepo] = time.Now()
@@ -7544,7 +7591,7 @@ func (as *AutonomousScheduler) runRefinementCycle(ctx context.Context) {
 		delete(as.refinementEmptyCache, fullRepo)
 		as.mu.Unlock()
 
-		log.Printf("[refinement] %s: found %d unrefined issue(s)", fullRepo, len(candidates))
+		log.Printf("[refinement] %s: %d candidate(s) in dispatch order: %v", fullRepo, len(candidates), planNumbersOf(plan))
 
 		now := time.Now()
 		dispatched := 0
