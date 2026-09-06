@@ -17,6 +17,7 @@ import { handleIpcRejection } from "../services/ipcRejection";
 import { handleGoPipelineComplete, type GoPipelineCompleteDeps } from "./pipelineComplete";
 import { handleInteractivePipelineComplete } from "./pipelineFinish";
 import { Logger, createMainLogger, installLogDiskSink } from "../utils/logger";
+import { setRunningWorktreePathsProvider } from "../utils/skillRunner";
 import { StatusBarManager } from "../utils/statusBar";
 import { resolveActiveRepository } from "../utils/resolveActiveRepository";
 import {
@@ -1454,6 +1455,15 @@ export async function initializeServices(
     // re-populating the queue after the user has cleared it.
     const cpmRef = concurrentPipelineManager;
     issueQueueService.setShutdownGuard(() => cpmRef.isShutdownInProgress);
+
+    // #1499: tell worktree containment which repos other slots are working in.
+    // With max_concurrent > 1 each slot's own legitimate activity in its own
+    // repo (its worktree lives under that repo's `.worktrees/`, its pr stages
+    // fetch and push in the root) is, from every OTHER slot's point of view,
+    // an out-of-bounds repo going dirty. Those repos stay observed but become
+    // warning-only, so one slot can no longer fail another for doing its job.
+    setRunningWorktreePathsProvider(() => cpmRef.getActiveSlots().map((s) => s.worktreePath));
+    context.subscriptions.push({ dispose: () => setRunningWorktreePathsProvider(null) });
 
     // Set up per-slot output channels
     slotOutputManager = new SlotOutputManager();

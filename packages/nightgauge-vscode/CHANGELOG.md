@@ -11,6 +11,11 @@ and this project adheres to
 
 ### Fixed
 
+- A pipeline stage is no longer failed for "writing outside its worktree" when
+  another checkout's branch ref moved without its working tree, or when another
+  running slot was simply working in its own repo. Both looked identical to a
+  stage write and, on 2026-09-06, halted the fleet by killing three slots at
+  once for one breach none of them committed (#1499)
 - Validation stages that wait on a long test suite, docker run or emulator boot
   are no longer killed mid-run. The runaway monitor reads a declared child
   process, a growing declared log, and a tool call still in flight as proof the

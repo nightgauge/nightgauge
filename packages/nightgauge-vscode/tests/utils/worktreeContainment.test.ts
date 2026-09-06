@@ -28,6 +28,7 @@ import {
   captureContainmentBaseline,
   detectContainmentBreach,
   formatContainmentFailure,
+  formatContainmentRefMoveWarning,
   formatContainmentWarning,
   parsePorcelainZ,
   resolveContainmentTargets,
@@ -523,6 +524,172 @@ describe("retry — a rewrite of the same paths is still the stage's (#129)", ()
     });
     expect(validateReport.breaches).toHaveLength(1);
     expect(validateReport.breaches[0].paths).toContain("src/handlers.ts");
+  });
+});
+
+describe("a bare ref move is not a stage write (#1499)", () => {
+  /**
+   * The 2026-09-06 incident, reproduced exactly.
+   *
+   * `git update-ref refs/heads/main <newer>` on a CHECKED-OUT branch moves HEAD
+   * and nothing else. The index and working tree still hold the old commit's
+   * content, so `git status` — which is relative to HEAD — reports every path
+   * the two commits differ in as a staged change that no process wrote. The
+   * containment baseline was taken against the old HEAD, so all of them read
+   * `clean -> dirty` and got attributed to whichever stage closed next. Three
+   * concurrent slots closed within two minutes and all three were killed for
+   * the identical 31-path "breach" in a repo none had touched.
+   */
+  function advanceSiblingOriginAndMoveRefOnly(): { before: string; after: string } {
+    const before = git(["rev-parse", "HEAD"], sibling).trim();
+    // A commit reachable from a ref other than the checked-out branch, standing
+    // in for the `origin/main` that had moved ahead overnight.
+    git(["checkout", "--quiet", "-b", "ahead"], sibling);
+    fs.writeFileSync(
+      path.join(sibling, "src", "router.ts"),
+      "export const routes = ['/merged'];\n"
+    );
+    fs.writeFileSync(path.join(sibling, "docs.md"), "merged docs\n");
+    git(["add", "-A"], sibling);
+    git(["commit", "--quiet", "-m", "two merged PRs"], sibling);
+    const after = git(["rev-parse", "HEAD"], sibling).trim();
+    git(["checkout", "--quiet", "main"], sibling);
+    // THE MOVE. No pull, no fetch, no checkout: a raw ref write, exactly what
+    // go-git's Storer.SetReference produces — and, like it, no reflog message.
+    git(["update-ref", "refs/heads/main", after], sibling);
+    return { before, after };
+  }
+
+  it("does not attribute dirt that only a HEAD move explains", async () => {
+    const baseline = await captureContainmentBaseline({
+      stageCwd: worktree,
+      repoPaths: [primary, sibling],
+    });
+    const { before, after } = advanceSiblingOriginAndMoveRefOnly();
+
+    // The precondition the incident turned on: the tree never moved, but git
+    // now reports the whole delta as dirty.
+    expect(git(["status", "--porcelain"], sibling).trim()).not.toBe("");
+
+    const report = await detectContainmentBreach({
+      baseline,
+      stage: "feature-dev",
+      issueNumber: 1499,
+    });
+
+    expect(report.breaches).toHaveLength(0);
+    expect(report.refMoves).toHaveLength(1);
+    expect(report.refMoves[0].repoName).toBe("sibling");
+    expect(report.refMoves[0].baselineHead).toBe(before);
+    expect(report.refMoves[0].postHead).toBe(after);
+    expect(report.refMoves[0].branch).toBe("main");
+    expect(report.refMoves[0].explainedPaths).toEqual(["docs.md", "src/router.ts"]);
+
+    const warning = formatContainmentRefMoveWarning("feature-dev", report);
+    expect(warning).toContain("sibling");
+    expect(warning).toContain(before.slice(0, 12));
+    expect(warning).toContain(after.slice(0, 12));
+    expect(warning).toContain("2 path(s)");
+  });
+
+  it("still attributes a path the ref move does not explain", async () => {
+    const baseline = await captureContainmentBaseline({
+      stageCwd: worktree,
+      repoPaths: [primary, sibling],
+    });
+    advanceSiblingOriginAndMoveRefOnly();
+    // A real escape, on a path neither commit touched. Narrowing attribution
+    // must not become disabling it.
+    fs.mkdirSync(path.join(sibling, "src", "api"), { recursive: true });
+    fs.writeFileSync(path.join(sibling, "src", "api", "things.ts"), "export const things = 1;\n");
+
+    const report = await detectContainmentBreach({
+      baseline,
+      stage: "feature-dev",
+      issueNumber: 1499,
+    });
+
+    expect(report.breaches).toHaveLength(1);
+    expect(report.breaches[0].paths).toEqual(["src/api/things.ts"]);
+    expect(report.refMoves).toHaveLength(1);
+    expect(report.refMoves[0].explainedPaths).not.toContain("src/api/things.ts");
+  });
+
+  it("attributes normally when HEAD held still", async () => {
+    const baseline = await captureContainmentBaseline({
+      stageCwd: worktree,
+      repoPaths: [primary, sibling],
+    });
+    stageWritesIntoSibling();
+    const report = await detectContainmentBreach({ baseline, stage: "feature-dev" });
+    expect(report.refMoves).toHaveLength(0);
+    expect(report.breaches).toHaveLength(1);
+    expect(report.breaches[0].paths).toContain("src/api/things.ts");
+  });
+});
+
+describe("a sibling slot's own repo is not this stage's breach (#1499)", () => {
+  /** A second repo with its own running slot, as `max_concurrent: 2` produces. */
+  let secondRepo: string;
+  let secondWorktree: string;
+
+  beforeEach(() => {
+    secondRepo = path.join(tmp, "second");
+    initRepo(secondRepo, "main");
+    secondWorktree = path.join(secondRepo, ".worktrees", "issue-800");
+    git(["worktree", "add", "--quiet", "-b", "fix/800", secondWorktree, "HEAD"], secondRepo);
+  });
+
+  it("demotes a repo another running slot owns to warning-only", async () => {
+    // Slot A: this stage, in `primary`'s worktree. Slot B: another pipeline,
+    // in `secondRepo`'s worktree. Both are in the running set.
+    const baseline = await captureContainmentBaseline({
+      stageCwd: worktree,
+      repoPaths: [primary, sibling, secondRepo],
+      runningWorktreePaths: [worktree, secondWorktree],
+    });
+    expect(baseline.warnOnlyRepoPaths).toEqual([secondRepo]);
+
+    // Slot B does its job in its own repo root: a pr stage fetching and
+    // writing there is legitimate, and invisible as such from slot A.
+    fs.writeFileSync(path.join(secondRepo, "src", "router.ts"), "export const routes = ['/b'];\n");
+
+    const report = await detectContainmentBreach({ baseline, stage: "feature-dev" });
+
+    expect(report.breaches).toHaveLength(0);
+    expect(report.warnings).toHaveLength(1);
+    expect(report.warnings[0].repoName).toBe("second");
+    expect(report.warnings[0].paths).toEqual(["src/router.ts"]);
+    expect(report.warnings[0].warnOnlyReason).toContain("another running pipeline");
+    expect(formatContainmentWarning("feature-dev", report)).toContain("src/router.ts");
+  });
+
+  it("keeps the stage's OWN repo a hard breach while its slot is running", async () => {
+    // This stage's slot is in the running set too. Demoting on that basis
+    // would disable #129 entirely — the incident's second repo WAS the
+    // stage's own main checkout.
+    const baseline = await captureContainmentBaseline({
+      stageCwd: worktree,
+      repoPaths: [primary, sibling, secondRepo],
+      runningWorktreePaths: [worktree, secondWorktree],
+    });
+    expect(baseline.warnOnlyRepoPaths).not.toContain(primary);
+
+    fs.writeFileSync(path.join(primary, "src", "router.ts"), "export const routes = ['/own'];\n");
+    const report = await detectContainmentBreach({ baseline, stage: "feature-dev" });
+
+    expect(report.breaches.map((b) => b.repoName)).toEqual(["primary"]);
+  });
+
+  it("still fails a repo NO running slot owns", async () => {
+    const baseline = await captureContainmentBaseline({
+      stageCwd: worktree,
+      repoPaths: [primary, sibling, secondRepo],
+      runningWorktreePaths: [worktree, secondWorktree],
+    });
+    stageWritesIntoSibling();
+    const report = await detectContainmentBreach({ baseline, stage: "feature-dev" });
+    expect(report.breaches.map((b) => b.repoName)).toEqual(["sibling"]);
   });
 });
 

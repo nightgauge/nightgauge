@@ -192,6 +192,7 @@ import { preserveWorkInProgress, shouldPreserveWorkOnExit } from "./preserveWork
 import {
   captureContainmentBaseline,
   detectContainmentBreach,
+  formatContainmentRefMoveWarning,
   formatContainmentFailure,
   formatContainmentWarning,
   type ContainmentBaseline,
@@ -1693,6 +1694,32 @@ function deriveCanonicalFromWorktree(workspaceRoot: string): string | null {
 function resolveContainmentRepoPaths(): string[] {
   try {
     return RepositoryContextLoader.getInstance().getAllRepositoryPaths();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Working directories of every pipeline slot currently running, this one
+ * included (#1499).
+ *
+ * A registered function rather than a singleton read, because
+ * `ConcurrentPipelineManager` is constructed in `bootstrap/services.ts` and has
+ * no `getInstance()` — and because it is the only object that knows the running
+ * set, while this module is the only place that needs it. Unregistered (unit
+ * tests, single-stage invocation) reads as "nothing else is running", which is
+ * the pre-#1499 behaviour exactly.
+ */
+let runningWorktreePathsProvider: (() => readonly string[]) | null = null;
+
+/** Register the running-slot source. Pass null to clear (test teardown). */
+export function setRunningWorktreePathsProvider(provider: (() => readonly string[]) | null): void {
+  runningWorktreePathsProvider = provider;
+}
+
+function resolveRunningWorktreePaths(): string[] {
+  try {
+    return [...(runningWorktreePathsProvider?.() ?? [])];
   } catch {
     return [];
   }
@@ -4894,6 +4921,7 @@ export function runStageSkillHeadless(
       ? captureContainmentBaseline({
           stageCwd: workspaceRoot,
           repoPaths: containmentRepoPaths,
+          runningWorktreePaths: resolveRunningWorktreePaths(),
         })
       : null;
 
@@ -7257,6 +7285,11 @@ export function runStageSkillHeadless(
           stage,
           ...(issueNumber != null ? { issueNumber } : {}),
         });
+        if (report.refMoves.length > 0) {
+          // Before the breach line: when both fire, the ref move is the
+          // explanation and reading it second inverts the triage order.
+          callbacks?.onStderr?.(`${formatContainmentRefMoveWarning(stage, report)}\n`);
+        }
         if (report.warnings.length > 0) {
           callbacks?.onStderr?.(`${formatContainmentWarning(stage, report)}\n`);
         }
