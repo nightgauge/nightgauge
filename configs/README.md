@@ -1,7 +1,20 @@
-# Tool-Specific Configurations
+# Configuration Reference and Tool-Specific Configurations
 
-This directory contains tool-specific configurations for various AI coding
-assistants.
+## `config.example.yaml`
+
+[`config.example.yaml`](config.example.yaml) is the annotated reference
+configuration: every shipped default, with the reason for it written next to the
+value. It is not a starting point — `nightgauge config init` writes the short
+file a new workspace needs — it is there so an operator can read what they are
+running under without reading the source.
+
+`TestDefaultsAgree` in `internal/config` pins every value in it against the
+resolver that applies it, so it cannot drift.
+
+## Tool-specific configurations
+
+The rest of this directory contains tool-specific configurations for various AI
+coding assistants.
 
 > **Note:** The primary way to use Nightgauge is through the **VSCode
 > Extension** or **Claude Code CLI**. Codex includes adapter wrappers for the

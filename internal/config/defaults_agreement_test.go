@@ -58,6 +58,12 @@ type defaultCase struct {
 	// initPath is the dotted path into the rendered `config init` template.
 	// Empty when the template deliberately does not carry the key.
 	initPath string
+
+	// examplePath is the dotted path into configs/config.example.yaml, the
+	// annotated reference config. Empty when the example deliberately omits
+	// the key (identity fields, and anything whose default is "follows another
+	// key" and so cannot be written as a value).
+	examplePath string
 }
 
 func defaultCases() []defaultCase {
@@ -68,7 +74,8 @@ func defaultCases() []defaultCase {
 			goVal:      func() string { return fmt.Sprint((*KnowledgeConfig)(nil).IsEnabled()) },
 			ts:         "knowledge.enabled",
 			docsAnchor: "## Knowledge Base Configuration", docsRow: "enabled",
-			initPath: "knowledge.enabled",
+			initPath:    "knowledge.enabled",
+			examplePath: "knowledge.enabled",
 		},
 		{
 			key:        "knowledge.auto_scaffold",
@@ -76,19 +83,22 @@ func defaultCases() []defaultCase {
 			goVal:      func() string { return fmt.Sprint((&KnowledgeConfig{}).IsAutoScaffold()) },
 			ts:         "knowledge.auto_scaffold",
 			docsAnchor: "## Knowledge Base Configuration", docsRow: "auto_scaffold",
-			initPath: "knowledge.auto_scaffold",
+			initPath:    "knowledge.auto_scaffold",
+			examplePath: "knowledge.auto_scaffold",
 		},
 		{
 			key: "knowledge.require_decisions", ship: "true",
 			goVal:      func() string { return fmt.Sprint((*KnowledgeConfig)(nil).ResolveRequireDecisions()) },
 			ts:         "knowledge.require_decisions",
 			docsAnchor: "## Knowledge Base Configuration", docsRow: "require_decisions",
+			examplePath: "knowledge.require_decisions",
 		},
 		{
 			key: "knowledge.workspace_scoped", ship: "true",
 			goVal:      func() string { return fmt.Sprint((*KnowledgeConfig)(nil).IsWorkspaceScoped()) },
 			ts:         "knowledge.workspace_scoped",
 			docsAnchor: "## Knowledge Base Configuration", docsRow: "workspace_scoped",
+			examplePath: "knowledge.workspace_scoped",
 		},
 		{
 			// Follows knowledge.enabled (ADR-005): there is no static value to
@@ -103,213 +113,253 @@ func defaultCases() []defaultCase {
 			key: "knowledge.auto_index", ship: "true",
 			ts:         "knowledge.auto_index",
 			docsAnchor: "## Knowledge Base Configuration", docsRow: "auto_index",
+			examplePath: "knowledge.auto_index",
 		},
 		{
 			key: "knowledge.auto_prune_on_merge", ship: "true",
 			ts:         "knowledge.auto_prune_on_merge",
 			docsAnchor: "## Knowledge Base Configuration", docsRow: "auto_prune_on_merge",
+			examplePath: "knowledge.auto_prune_on_merge",
 		},
 		{
 			key: "platform.enabled", ship: "false",
 			ts:         "platform.enabled",
 			docsAnchor: "## Platform Configuration", docsRow: "enabled",
+			examplePath: "platform.enabled",
 		},
 		{
 			key: "platform.telemetry.enabled", ship: "true",
 			goVal:      func() string { return fmt.Sprint((*TelemetryConfig)(nil).IsEnabled()) },
 			ts:         "platform.telemetry.enabled",
 			docsAnchor: "## Platform Configuration", docsRow: "telemetry.enabled",
+			examplePath: "platform.telemetry.enabled",
 		},
 		{
 			key: "pull_request.auto_merge", ship: "false",
 			ts:         "pull_request.auto_merge",
 			docsAnchor: "### pr", docsRow: "auto_merge",
+			examplePath: "pull_request.auto_merge",
 		},
 		{
 			key: "project.auto_dates", ship: "true",
 			ts:         "project.auto_dates",
 			docsAnchor: "### project", docsRow: "auto_dates",
+			examplePath: "project.auto_dates",
 		},
 		{
 			key: "project.sprint.auto_assign", ship: "false",
 			ts:         "",
 			docsAnchor: "#### project.sprint", docsRow: "auto_assign",
-			initPath: "project.sprint.auto_assign",
+			initPath:    "project.sprint.auto_assign",
+			examplePath: "project.sprint.auto_assign",
 		},
 		{
 			key: "issue.auto_assign", ship: "true",
 			ts:         "issue.auto_assign",
 			docsAnchor: "### issue", docsRow: "auto_assign",
+			examplePath: "issue.auto_assign",
 		},
 		{
 			key: "ui.project_board.default_epic_collapsed", ship: "true",
 			ts:         "ui.project_board.default_epic_collapsed",
 			docsAnchor: "### ui.project_board", docsRow: "default_epic_collapsed",
+			examplePath: "ui.project_board.default_epic_collapsed",
 		},
 		{
 			key: "pipeline.ci_timeout", ship: "300",
 			ts:         "pipeline.ci_timeout",
 			docsAnchor: "### pipeline", docsRow: "ci_timeout",
+			examplePath: "pipeline.ci_timeout",
 		},
 		{
 			key: "pipeline.auto_fix", ship: "true",
 			ts:         "pipeline.auto_fix",
 			docsAnchor: "### pipeline", docsRow: "auto_fix",
-			initPath: "pipeline.auto_fix",
+			initPath:    "pipeline.auto_fix",
+			examplePath: "pipeline.auto_fix",
 		},
 		{
 			key: "pipeline.adaptive_budget", ship: "true",
 			ts:         "pipeline.adaptive_budget",
 			docsAnchor: "### pipeline", docsRow: "adaptive_budget",
+			examplePath: "pipeline.adaptive_budget",
 		},
 		{
 			key: "pipeline.max_concurrent", ship: "3",
 			goVal:      func() string { return fmt.Sprint(DefaultPipelineMaxConcurrent) },
 			ts:         "pipeline.max_concurrent",
 			docsAnchor: "#### pipeline.max_concurrent", docsRow: "max_concurrent",
+			examplePath: "pipeline.max_concurrent",
 		},
 		{
 			key: "pipeline.token_budget_ceiling.ceiling_usd", ship: "75",
 			goVal:      func() string { return fmt.Sprint((*PipelineConfig)(nil).ResolveTokenBudgetCeilingUSD()) },
 			ts:         "pipeline.token_budget_ceiling.ceiling_usd",
 			docsAnchor: "#### pipeline.token_budget_ceiling", docsRow: "ceiling_usd",
+			examplePath: "pipeline.token_budget_ceiling.ceiling_usd",
 		},
 		{
 			key: "model_routing.mode", ship: "automatic",
 			goVal:      func() string { return (*ModelRoutingConfig)(nil).ResolveMode() },
 			ts:         "model_routing.mode",
 			docsAnchor: "### model_routing", docsRow: "mode",
+			examplePath: "model_routing.mode",
 		},
 		{
 			key: "autonomous.debounce_repos", ship: "true",
 			goVal:      func() string { return fmt.Sprint((*AutonomousConfig)(nil).ResolveDebounceRepos()) },
 			docsAnchor: "#### autonomous scheduler options", docsRow: "debounce_repos",
+			examplePath: "autonomous.debounce_repos",
 		},
 		{
 			key: "autonomous.safety_rails.budget_ceiling", ship: "500000",
 			goVal:      func() string { return fmt.Sprint(ResolveSafetyBudgetCeiling(nil)) },
 			docsAnchor: "#### autonomous.safety_rails", docsRow: "budget_ceiling",
+			examplePath: "autonomous.safety_rails.budget_ceiling",
 		},
 		{
 			key: "autonomous.safety_rails.health_gate_min", ship: "30",
 			goVal:      func() string { return fmt.Sprint(ResolveHealthGateMin(nil)) },
 			docsAnchor: "#### autonomous.safety_rails", docsRow: "health_gate_min",
+			examplePath: "autonomous.safety_rails.health_gate_min",
 		},
 		{
 			key: "autonomous.safety_rails.epic_checkpoint", ship: "true",
 			goVal:      func() string { return fmt.Sprint(ResolveEpicCheckpoint(nil)) },
 			docsAnchor: "#### autonomous.safety_rails", docsRow: "epic_checkpoint",
+			examplePath: "autonomous.safety_rails.epic_checkpoint",
 		},
 		{
 			key: "sanitization.mode", ship: "block",
 			goVal:      func() string { return string((*SanitizationConfig)(nil).ResolvedMode()) },
 			ts:         "sanitization.mode",
 			docsAnchor: "### sanitization", docsRow: "mode",
-			initPath: "sanitization.mode",
+			initPath:    "sanitization.mode",
+			examplePath: "sanitization.mode",
 		},
 		{
 			key: "pull_request.auto_merge_epic", ship: "false",
 			ts:         "pull_request.auto_merge_epic",
 			docsAnchor: "### pr", docsRow: "auto_merge_epic",
+			examplePath: "pull_request.auto_merge_epic",
 		},
 		{
 			key: "model_routing.use_eval_recommendations", ship: "true",
 			goVal:      func() string { return fmt.Sprint((*ModelRoutingConfig)(nil).ResolveUseEvalRecommendations()) },
 			ts:         "model_routing.use_eval_recommendations",
 			docsAnchor: "### model_routing", docsRow: "use_eval_recommendations",
+			examplePath: "model_routing.use_eval_recommendations",
 		},
 		{
 			key: "model_routing.auto_tune", ship: "true",
 			ts:         "model_routing.auto_tune",
 			docsAnchor: "### model_routing", docsRow: "auto_tune",
+			examplePath: "model_routing.auto_tune",
 		},
 		{
 			key: "pipeline.context_budgets.mode", ship: "hard",
 			goVal:      func() string { return DefaultContextBudgetMode },
 			ts:         "pipeline.context_budgets.mode",
 			docsAnchor: "#### pipeline.context_budgets", docsRow: "mode",
+			examplePath: "pipeline.context_budgets.mode",
 		},
 		{
 			key: "pipeline.scope_drift_gate.enforcement_mode", ship: "strict",
 			goVal:      func() string { return DefaultScopeDriftEnforcementMode },
 			docsAnchor: "### pipeline.scope_drift_gate", docsRow: "enforcement_mode",
+			examplePath: "pipeline.scope_drift_gate.enforcement_mode",
 		},
 		{
 			key: "complexity_model.cross_project.enabled", ship: "true",
 			ts:         "complexity_model.cross_project.enabled",
 			docsAnchor: "#### complexity_model.cross_project", docsRow: "enabled",
+			examplePath: "complexity_model.cross_project.enabled",
 		},
 		{
 			key: "knowledge.aggregate", ship: "true",
 			ts:         "knowledge.aggregate",
 			docsAnchor: "## Knowledge Base Configuration", docsRow: "aggregate",
+			examplePath: "knowledge.aggregate",
 		},
 		{
 			key: "ui.core.codex.resume_enabled", ship: "true",
 			ts:         "ui.core.codex.resume_enabled",
 			docsAnchor: "#### Codex Adapter Settings", docsRow: "codex.resume_enabled",
+			examplePath: "ui.core.codex.resume_enabled",
 		},
 		{
 			key: "project.sync.enabled", ship: "false",
 			ts:         "project.sync.enabled",
 			docsAnchor: "#### project.sync", docsRow: "enabled",
+			examplePath: "project.sync.enabled",
 		},
 		{
 			// Unchanged at false, and listed here so the reason is pinned with
 			// the value: it creates issues without a human. That is an
 			// authorisation reason, not a footprint or cost one.
 			key: "pipeline.feedback_loop.auto_retro.auto_create_issues", ship: "false",
-			ts: "pipeline.feedback_loop.auto_retro.auto_create_issues",
+			ts:          "pipeline.feedback_loop.auto_retro.auto_create_issues",
+			examplePath: "pipeline.feedback_loop.auto_retro.auto_create_issues",
 		},
 		{
 			key: "human_in_the_loop.auto_accept_stages", ship: "false",
-			ts:       "human_in_the_loop.auto_accept_stages",
-			initPath: "human_in_the_loop.auto_accept_stages",
+			ts:          "human_in_the_loop.auto_accept_stages",
+			initPath:    "human_in_the_loop.auto_accept_stages",
+			examplePath: "human_in_the_loop.auto_accept_stages",
 		},
 		{
 			key: "human_in_the_loop.auto_accept_permissions", ship: "false",
-			ts:       "human_in_the_loop.auto_accept_permissions",
-			initPath: "human_in_the_loop.auto_accept_permissions",
+			ts:          "human_in_the_loop.auto_accept_permissions",
+			initPath:    "human_in_the_loop.auto_accept_permissions",
+			examplePath: "human_in_the_loop.auto_accept_permissions",
 		},
 		{
 			key: "pipeline.adversarial_review.enabled", ship: "true",
-			goVal:    func() string { return fmt.Sprint(DefaultAdversarialReviewEnabled) },
-			initPath: "pipeline.adversarial_review.enabled",
+			goVal:       func() string { return fmt.Sprint(DefaultAdversarialReviewEnabled) },
+			initPath:    "pipeline.adversarial_review.enabled",
+			examplePath: "pipeline.adversarial_review.enabled",
 		},
 		{
 			key: "pipeline.grounding_gate.enabled", ship: "true",
-			goVal:    func() string { return fmt.Sprint(DefaultGroundingGateEnabled) },
-			initPath: "pipeline.grounding_gate.enabled",
+			goVal:       func() string { return fmt.Sprint(DefaultGroundingGateEnabled) },
+			initPath:    "pipeline.grounding_gate.enabled",
+			examplePath: "pipeline.grounding_gate.enabled",
 		},
 		{
 			key: "pipeline.architecture_approval.enabled", ship: "true",
-			goVal:    func() string { return fmt.Sprint(DefaultArchitectureApprovalEnabled) },
-			initPath: "pipeline.architecture_approval.enabled",
+			goVal:       func() string { return fmt.Sprint(DefaultArchitectureApprovalEnabled) },
+			initPath:    "pipeline.architecture_approval.enabled",
+			examplePath: "pipeline.architecture_approval.enabled",
 		},
 		{
 			key: "pipeline.feedback_loop.health_warning_threshold", ship: "70",
-			goVal: func() string { return fmt.Sprint((*FeedbackLoopConfig)(nil).ResolveWarningThreshold()) },
-			ts:    "pipeline.feedback_loop.health_warning_threshold",
+			goVal:       func() string { return fmt.Sprint((*FeedbackLoopConfig)(nil).ResolveWarningThreshold()) },
+			ts:          "pipeline.feedback_loop.health_warning_threshold",
+			examplePath: "pipeline.feedback_loop.health_warning_threshold",
 		},
 		{
 			key: "pipeline.feedback_loop.health_critical_threshold", ship: "50",
-			goVal: func() string { return fmt.Sprint((*FeedbackLoopConfig)(nil).ResolveCriticalThreshold()) },
-			ts:    "pipeline.feedback_loop.health_critical_threshold",
+			goVal:       func() string { return fmt.Sprint((*FeedbackLoopConfig)(nil).ResolveCriticalThreshold()) },
+			ts:          "pipeline.feedback_loop.health_critical_threshold",
+			examplePath: "pipeline.feedback_loop.health_critical_threshold",
 		},
 		{
 			key: "pipeline.feedback_loop.health_emergency_threshold", ship: "30",
-			goVal: func() string { return fmt.Sprint((*FeedbackLoopConfig)(nil).ResolveEmergencyThreshold()) },
-			ts:    "pipeline.feedback_loop.health_emergency_threshold",
+			goVal:       func() string { return fmt.Sprint((*FeedbackLoopConfig)(nil).ResolveEmergencyThreshold()) },
+			ts:          "pipeline.feedback_loop.health_emergency_threshold",
+			examplePath: "pipeline.feedback_loop.health_emergency_threshold",
 		},
 		{
 			key: "pipeline.feedback_loop.health_actions_enabled", ship: "true",
-			goVal: func() string { return fmt.Sprint((*FeedbackLoopConfig)(nil).ResolveActionsEnabled()) },
-			ts:    "pipeline.feedback_loop.health_actions_enabled",
+			goVal:       func() string { return fmt.Sprint((*FeedbackLoopConfig)(nil).ResolveActionsEnabled()) },
+			ts:          "pipeline.feedback_loop.health_actions_enabled",
+			examplePath: "pipeline.feedback_loop.health_actions_enabled",
 		},
 		{
 			key: "pipeline.feedback_loop.health_policies_enabled", ship: "true",
-			goVal: func() string { return fmt.Sprint((*FeedbackLoopConfig)(nil).ResolvePoliciesEnabled()) },
-			ts:    "pipeline.feedback_loop.health_policies_enabled",
+			goVal:       func() string { return fmt.Sprint((*FeedbackLoopConfig)(nil).ResolvePoliciesEnabled()) },
+			ts:          "pipeline.feedback_loop.health_policies_enabled",
+			examplePath: "pipeline.feedback_loop.health_policies_enabled",
 		},
 	}
 }
@@ -320,6 +370,7 @@ func TestDefaultsAgree(t *testing.T) {
 	tsDefaults := loadTSDefaultConfig(t, root)
 	docs := readRepoFile(t, root, filepath.Join("docs", "CONFIGURATION.md"))
 	initTemplate := renderInitTemplate(t)
+	exampleConfig := loadExampleConfig(t, root)
 
 	for _, tc := range defaultCases() {
 		t.Run(tc.key, func(t *testing.T) {
@@ -361,6 +412,18 @@ func TestDefaultsAgree(t *testing.T) {
 				} else if normalizeDefault(got) != normalizeDefault(tc.ship) {
 					t.Errorf("`nightgauge config init` template writes %s: %q, ship value is %q",
 						tc.initPath, got, tc.ship)
+				}
+			}
+			if tc.examplePath != "" {
+				got, ok := lookupInitPath(exampleConfig, tc.examplePath)
+				if !ok {
+					t.Errorf("configs/config.example.yaml does not carry %s (expected %q)",
+						tc.examplePath, tc.ship)
+				} else if normalizeDefault(got) != normalizeDefault(tc.ship) {
+					t.Errorf("configs/config.example.yaml says %s: %q, ship value is %q. "+
+						"The example is annotated by hand and pinned by this test — "+
+						"update it in the same change that moves the default.",
+						tc.examplePath, got, tc.ship)
 				}
 			}
 		})
@@ -418,6 +481,23 @@ func renderInitTemplate(t *testing.T) map[string]any {
 	var m map[string]any
 	if err := yaml.Unmarshal([]byte(out), &m); err != nil {
 		t.Fatalf("the `config init` template does not parse as YAML: %v", err)
+	}
+	return m
+}
+
+// loadExampleConfig parses configs/config.example.yaml — the annotated
+// reference config every value of which IS a shipped default.
+//
+// It is written by hand rather than generated, because the point of the file is
+// the reason next to each value and no generator can write those. What keeps it
+// honest is this test: the example is just a fifth source in the same table, so
+// a value that drifts fails here exactly like a docs table would.
+func loadExampleConfig(t *testing.T, root string) map[string]any {
+	t.Helper()
+	raw := readRepoFile(t, root, filepath.Join("configs", "config.example.yaml"))
+	var m map[string]any
+	if err := yaml.Unmarshal([]byte(raw), &m); err != nil {
+		t.Fatalf("configs/config.example.yaml does not parse as YAML: %v", err)
 	}
 	return m
 }

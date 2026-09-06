@@ -319,6 +319,10 @@ type AutonomousConfig struct {
 	// PickupBacklog controls whether the autonomous scheduler dispatches issues
 	// in "Backlog" status after all "Ready" items for a repo have been processed.
 	// Default: false — only "Ready" items are dispatched.
+	//
+	// OFF for PER-RUN COST: a backlog is where under-specified work sits, and
+	// dispatching it spends a full pipeline per issue to discover that. Repos
+	// whose issues are created directly in a pipeline-ready state turn it on.
 	// Set to true for repos where issues are created directly into a pipeline-
 	// ready state (no manual triage step). Ready items always take priority
 	// regardless of this setting.
@@ -332,6 +336,10 @@ type AutonomousConfig struct {
 	// AutoActionable controls whether auto-refined issues are placed directly
 	// into Ready status (true) or held in Backlog for manual review (false).
 	// Default: false — issues require manual triage before becoming actionable.
+	//
+	// OFF for an AUTHORISATION reason (ADR-021): moving an issue to Ready is
+	// what makes the scheduler spend money on it. That transition is the last
+	// point at which a human sees the work before a pipeline runs it.
 	AutoActionable *bool `yaml:"auto_actionable" json:"autoActionable,omitempty"`
 	// RefinementEnabled controls whether the autonomous refinement scheduler is
 	// active. Default: true.
@@ -377,6 +385,11 @@ type AutonomousConfig struct {
 
 	// AutoRedispatchStalled re-runs `pr merge` automatically when a stalled
 	// ready-to-merge PR is detected. Default: false.
+	//
+	// OFF for an AUTHORISATION reason, not a cost or footprint one (ADR-021):
+	// it merges code into the default branch with no human in the loop. A
+	// stalled PR is usually stalled for a reason the watchdog cannot see, and
+	// "merge it again and see" is a decision an operator should make.
 	AutoRedispatchStalled *bool `yaml:"auto_redispatch_stalled" json:"autoRedispatchStalled,omitempty"`
 
 	// OnFailureStatus controls where issues move on the project board when a
@@ -966,8 +979,14 @@ type NotificationsConfig struct {
 // shape the extension's config schema defines, deliberately: the Go binary and
 // the extension post to the same channel with the same bot token.
 type SlackNotificationsConfig struct {
-	// Enabled gates Slack delivery for Go-side alerts. Nil/unset = disabled,
-	// so an existing config without this block is unaffected.
+	// Enabled gates Slack delivery for Go-side alerts. Nil/unset = disabled.
+	//
+	// OFF because it NEEDS A CREDENTIAL: without a bot token in the
+	// environment and a channel to post to, turning it on would only produce
+	// failed deliveries. The same reason holds for the Discord and Mattermost
+	// destinations. (This comment used to say "so an existing config without
+	// this block is unaffected" — a backward-compatibility note, which is not
+	// one of the two reasons an opt-out may exist. ADR-021, #1518.)
 	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 	// BotTokenEnv names the environment variable holding the bot token
 	// (xoxb-…). Empty = DefaultSlackBotTokenEnv. The secret stays in the

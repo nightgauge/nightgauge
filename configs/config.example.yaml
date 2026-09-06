@@ -1,0 +1,260 @@
+# Nightgauge — annotated example configuration
+#
+# Every value below IS the shipped default. Copying this file into
+# `.nightgauge/config.yaml` and changing nothing changes nothing: it exists so
+# you can see what you are running under, and read the reason for each default
+# next to it, without reading the source.
+#
+# `nightgauge config init` writes a much shorter file — the nine keys a new
+# workspace has to answer. This one is the reference.
+#
+# The rule every default follows (ADR-020, ADR-021): a feature that adds value
+# defaults ON. An opt-out exists for repository footprint, per-run cost, or
+# authorisation — a switch that takes an action a person would want to approve.
+# "Conservative rollout" and "backward compatibility" are migration reasons and
+# are never a default.
+#
+# TestConfigExampleMatchesDefaults (internal/config) pins every value here
+# against the resolver that applies it, so this file cannot drift into fiction.
+
+# --- Identity -----------------------------------------------------------
+# No defaults: these are yours. `nightgauge config init` fills them in.
+#
+# owner: your-org
+# owner_type: org          # "org" or "user"
+# repo: your-repo
+
+project:
+  # Auto-populate the board's Start/Target date fields on pickup and close.
+  auto_dates: true
+
+  sprint:
+    # Needs an iteration field on the Project. Without one there is nothing to
+    # assign to, so both ship off.
+    enabled: false
+    auto_assign: false
+
+  sync:
+    # Bidirectional label <-> board-field sync writes to the board on every
+    # change. A workspace that has not asked for that should not have its board
+    # rewritten, so it ships off.
+    enabled: false
+
+issue:
+  # Assign the acting GitHub user on pickup, so "who is on this?" has an answer
+  # without opening the run.
+  auto_assign: true
+
+pull_request:
+  # Forge-side auto-merge lands a PR the moment its last check reports — past
+  # the pr-merge stage that is supposed to decide, and past the one gate the
+  # forge itself enforces. Both ship off (ADR-021).
+  auto_merge: false
+  auto_merge_epic: false
+
+  # A draft PR does not run required checks on some forge configurations, which
+  # turns the pipeline's own CI gate off as a side effect.
+  draft_by_default: false
+
+pipeline:
+  # Timeout waiting for CI checks, in SECONDS.
+  ci_timeout: 300
+
+  # Fix lint during feature-dev rather than failing the run on formatting.
+  auto_fix: true
+
+  # Concurrent pipeline slots across the workspace. Each runs in its own
+  # worktree; set to 1 for sequential execution with no worktrees.
+  max_concurrent: 3
+
+  # Fresh-eyes LLM critics gate feature-validate. Per-run cost: one or more
+  # extra model passes. It is the read the implementing model cannot give
+  # itself.
+  adversarial_review:
+    enabled: true
+
+  # Deterministic pre-feature-dev check that the worktree is on the branch the
+  # run thinks it is. No model call, so nothing to opt out of.
+  grounding_gate:
+    enabled: true
+
+  # Human approval for high-impact architectural decisions.
+  architecture_approval:
+    enabled: true
+
+  # Derive per-stage token budgets from this repo's own exit records once there
+  # are enough samples; falls back to the static table otherwise.
+  adaptive_budget: true
+
+  token_budget_ceiling:
+    # Hard stop for a single pipeline run, in USD.
+    ceiling_usd: 75
+
+  context_budgets:
+    # "hard" terminates a stage over budget. It used to be "soft" — a log line
+    # and carry on — which is not a budget. `grace_percent` is the calibration
+    # knob; "soft" remains the documented opt-out (ADR-021).
+    mode: hard
+
+  scope_drift_gate:
+    # "strict" blocks a PR whose real diff reaches outside the allowlist for a
+    # type:docs or type:chore issue. The `scope:cross-cutting` label is the
+    # per-issue escape hatch (ADR-021).
+    enforcement_mode: strict
+
+  gates:
+    # Docs-only and config-only changes skip the gate's retry/sleep overhead.
+    # Membership is decided by the deterministic classifier from the real
+    # post-dev diff, not from the issue's declared type. An explicit empty list
+    # turns relaxation off without removing the key.
+    pr_create:
+      relax_on_change_class: [docs_only, config_only]
+    pr_merge:
+      relax_on_change_class: [docs_only, config_only]
+
+  # One extra planning + dev pass on the first stall-kill, paid whether or not
+  # re-planning would have helped. Off for per-run cost.
+  adaptive_stall_recovery: false
+
+  feedback_loop:
+    health_warning_threshold: 70
+    health_critical_threshold: 50
+    health_emergency_threshold: 30
+    health_actions_enabled: true
+    health_policies_enabled: true
+    auto_retro:
+      # Filing issues on the pipeline's own judgement is an authorisation
+      # decision, not a cost one. The retro still runs and still reports.
+      auto_create_issues: false
+
+model_routing:
+  # Defer every stage's base model to the complexity router. "manual" uses the
+  # explicit stage table; "hybrid" lets explicit entries win and defers the rest.
+  mode: automatic
+
+  # Read-only: with no advice file, or no advisable evidence, routing is
+  # identical to what it was before the advisor existed (ADR-021).
+  use_eval_recommendations: true
+
+  # Writes tuned values back into .nightgauge/config.yaml — a real repository
+  # footprint, which is why the opt-out exists and is documented. The guardrails
+  # below are what keep it from thrashing.
+  auto_tune: true
+  auto_tune_confidence: high
+  auto_tune_min_samples: 5
+  auto_tune_max_delta: 1
+
+sanitization:
+  # "block" refuses a command matching a destructive / exfiltration /
+  # escalation / traversal pattern. A control that logs and proceeds is not a
+  # control. "warn" is the opt-out while calibrating rules against a real
+  # workload; "disabled" turns the gate off entirely (ADR-021).
+  mode: block
+
+human_in_the_loop:
+  # Approval between stages and for tool-permission prompts. Both off means
+  # "ask me" — the honest default for a pipeline that edits your repository.
+  auto_accept_stages: false
+  auto_accept_permissions: false
+
+validation:
+  require_tests: true
+  # Forces a changelog edit into every PR, including ones invisible to a release
+  # reader. Repository footprint; this repository turns it on in its own config.
+  require_changelog: false
+
+knowledge:
+  # Persistent per-issue context: a PRD and a decision log per issue, committed
+  # under .nightgauge/knowledge/. The opt-out reasons are that footprint and the
+  # per-run token cost of recall (ADR-020).
+  enabled: true
+  auto_scaffold: true
+  # Gate planning when the plan trades approaches off and decisions.md has no
+  # ADR block. Only fires on a plan that actually carries tradeoff signals.
+  require_decisions: true
+  # Read-mostly, and inert in a single-repo workspace.
+  aggregate: true
+  workspace_scoped: true
+  auto_index: true
+  auto_prune_on_merge: true
+  # telemetry.enabled has no static default: it FOLLOWS knowledge.enabled
+  # (ADR-005), and is always off when the knowledge base is off.
+
+complexity_model:
+  cross_project:
+    # Read-mostly, and exists for the multi-repo workspace. confidence_damping
+    # already discounts a pattern learned in another repository.
+    enabled: true
+
+platform:
+  # Opt-in: the platform needs a URL and a key, and without them every platform
+  # call is inert. Audit emission follows this switch — there is no independent
+  # audit.enabled (ADR-021).
+  enabled: false
+  telemetry:
+    # Opt-OUT, and paired with a one-time disclosure notice: the CLI has no
+    # consent dialog, so defaulting on silently would leave an operator with no
+    # moment at which they were told. See docs/TELEMETRY_PRIVACY.md.
+    enabled: true
+
+autonomous:
+  # Only re-query repositories with recent completions between scans — a GitHub
+  # API quota saving with no behavioural cost.
+  debounce_repos: true
+
+  # A backlog is where under-specified work sits; dispatching it spends a full
+  # pipeline per issue to discover that. Per-run cost.
+  pickup_backlog: false
+
+  # Both authorisation decisions, not cost ones: the first is the last point a
+  # human sees the work before money is spent on it, the second merges code
+  # into the default branch with nobody in the loop.
+  auto_actionable: false
+  auto_redispatch_stalled: false
+
+  safety_rails:
+    # Every rail ships ON, and omitting one keeps its default rather than
+    # zeroing it. `budget_ceiling: 0` is not "unlimited" — the only way to lift
+    # a rail is to name a larger number.
+    budget_ceiling: 500000
+    circuit_breaker_max: 3
+    rate_limit_per_hour: 20
+    epic_checkpoint: true
+    health_gate_min: 30
+
+  discipline_gate:
+    # Steers an under-prepared repository — no real test suite, no CI — toward
+    # human-in-the-loop instead of full autonomy. Local score, no model call.
+    enabled: true
+    min_score: 30
+    mode: block
+
+  stuck_epic_detection:
+    # One Discord message per stalled epic, at most once per re_alert_after.
+    # Needs a webhook env var to deliver anything.
+    enabled: true
+
+ready_to_ship:
+  # One Discord message when an epic fully closes, carrying the deploy command.
+  # It posts the command; it never runs it.
+  enabled: true
+
+remote_commands:
+  # The polling loop that lets a dashboard drive a local daemon. Inert without
+  # a platform; costs GitHub API quota while a platform is configured.
+  enabled: true
+
+ui:
+  core:
+    codex:
+      # Resuming a Codex session re-uses context already paid for: lower
+      # per-run cost, no repository footprint.
+      resume_enabled: true
+  project_board:
+    # Epics arrive collapsed, so a board of many epics opens readable.
+    default_epic_collapsed: true
+  ready_items:
+    # Polling the board on a timer spends the same GitHub quota an active
+    # pipeline needs, from an editor nobody is looking at. refresh_interval is
+    # the knob for operators who want it anyway.
+    auto_refresh: false

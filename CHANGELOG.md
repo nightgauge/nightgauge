@@ -59,6 +59,18 @@ knowledge_path is null` on every run. Every layer that read an absent key as
 
 ### Added
 
+- `configs/config.example.yaml` — every shipped default written out with the
+  reason for it beside the value. Copying it changes nothing; it exists so an
+  operator can see what they are running under without reading the source, and
+  `TestDefaultsAgree` pins all 44 values in it against the resolvers, so it
+  cannot drift into fiction (#1518)
+- `docs/CONFIGURATION.md` gains two reference tables that did not exist:
+  **What ships on, and what it costs** names the per-run cost or repository
+  footprint of every on-by-default gate — thirteen of which appeared nowhere in
+  the reference at all — and **Off by default, and why** gives every off switch
+  its one-line reason. The reason is also written into the Go struct or Zod
+  JSDoc where a switch has one, so it is next to the code that reads it (#1518)
+
 - Six defaults now ship on that were off for a reason that had expired:
   eval-advice routing and router auto-tune (`model_routing.use_eval_recommendations`,
   `auto_tune`), cross-project complexity transfer, multi-repo knowledge
@@ -103,6 +115,11 @@ is not safe yet`, and `Stopped — 0 running; safe to reload` once they land.
   `n/2` and marks the ones at the cap (#1487)
 
 ### Fixed
+
+- The Slack notification switch's comment said it was off "so an existing config
+  without this block is unaffected" — a backward-compatibility note, which is
+  not one of the reasons an opt-out may exist. It is off because it needs a bot
+  token and a channel, and now says so (#1518)
 
 - Nineteen configuration keys shipped a different default depending on which
   surface you asked. `platform.telemetry.enabled` was documented as opt-out
