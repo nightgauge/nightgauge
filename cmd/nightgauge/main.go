@@ -7533,6 +7533,20 @@ func gitBranchCreateCmd() *cobra.Command {
 					return err
 				}
 				if err := svc.ResetLocalBranchToRemote(branchName); err != nil {
+					// #1499: the reset is refused when another worktree has the
+					// branch checked out, because moving the ref alone would
+					// leave that tree reporting the whole delta as phantom dirt
+					// — which is what tripped three concurrent slots' worktree
+					// containment on 2026-09-04..06. Say which checkout holds it
+					// rather than returning a bare go-git error; the operator's
+					// next move is to look there, not here.
+					var held *gitpkg.BranchHeldByWorktreeError
+					if errors.As(err, &held) {
+						return fmt.Errorf(
+							"cannot reuse remote branch %s: %w — that checkout must move its own tree "+
+								"(git -C %s pull --ff-only), or the run must use a different branch",
+							branchName, err, held.Worktree)
+					}
 					return err
 				}
 				if err := svc.Checkout(branchName); err != nil {

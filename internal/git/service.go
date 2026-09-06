@@ -227,29 +227,6 @@ func (s *Service) RemoteBranchExists(name string) (bool, error) {
 	return false, nil
 }
 
-// EnsureLocalBranchFromRemote creates a local branch reference from origin/<name> when needed.
-func (s *Service) EnsureLocalBranchFromRemote(name string) error {
-	exists, err := s.LocalBranchExists(name)
-	if err != nil {
-		return err
-	}
-	if exists {
-		return nil
-	}
-
-	remoteRef, err := s.repo.Reference(plumbing.ReferenceName("refs/remotes/origin/"+name), true)
-	if err != nil {
-		return fmt.Errorf("lookup remote branch origin/%s: %w", name, err)
-	}
-
-	localRef := plumbing.NewHashReference(plumbing.NewBranchReferenceName(name), remoteRef.Hash())
-	if err := s.repo.Storer.SetReference(localRef); err != nil {
-		return fmt.Errorf("create local branch %s from origin/%s: %w", name, name, err)
-	}
-
-	return nil
-}
-
 // ResetLocalBranchToRemote points the local branch ref at origin/<name>,
 // creating it when absent and force-updating it when it already exists — e.g.
 // a stale ref left by a prior pipeline run that has since diverged from the
@@ -261,10 +238,68 @@ func (s *Service) EnsureLocalBranchFromRemote(name string) error {
 // fast-forward and push cleanly. Without it, a stale diverged local branch is
 // checked out as-is, the push is rejected as non-fast-forward, the force-push
 // safety hook blocks the overwrite, and pr-create dead-ends with no PR.
+//
+// # Why this refuses a branch some worktree has checked out (#1499)
+//
+// Storer.SetReference writes the ref and NOTHING else — no index, no working
+// tree, and (go-git implements no reflog) not even a reflog message. On a
+// branch nobody has checked out that is exactly right. On a CHECKED-OUT branch
+// it desynchronises HEAD from the tree that is sitting on it: every path the
+// old and new commits differ in immediately reports as a staged change that no
+// process wrote, because `git status` is relative to HEAD.
+//
+// NewService opens with EnableDotGitCommonDir, so the write lands in the
+// repository's SHARED ref store no matter which worktree the caller is in —
+// the desynchronised checkout can be the primary one, belonging to the
+// operator, in a repository this run has nothing to do with.
+//
+// That is the 2026-09-06 incident. `refs/heads/main` in the dashboard's main
+// checkout moved to origin/main with an empty reflog message and an untouched
+// tree; the 31-path delta then read as fresh dirt to every pipeline slot's
+// worktree-containment baseline, and three concurrent slots in three OTHER
+// repositories were each killed for a breach none of them committed.
+//
+// So: protected branches are refused outright, a branch another worktree holds
+// is refused with *BranchHeldByWorktreeError and nothing is written, and when
+// the caller's OWN checkout holds the branch the move goes through
+// `git reset --hard`, which moves ref and tree together and writes a reflog
+// entry. Occupancy is asked of `git worktree list`, which answers for the whole
+// repository from any member — see branchesHeldByWorktrees.
 func (s *Service) ResetLocalBranchToRemote(name string) error {
+	if err := validateRefArg("branch", name); err != nil {
+		return err
+	}
+	// A per-issue branch is the only thing this is for. `nightgauge git
+	// branch-create main` reached here as an unvalidated positional argument
+	// and is the one command that can force-move the default branch of
+	// whatever checkout it is run from.
+	if name == "main" || name == "master" {
+		return fmt.Errorf("refusing to reset protected branch %q to origin/%s", name, name)
+	}
+
 	remoteRef, err := s.repo.Reference(plumbing.ReferenceName("refs/remotes/origin/"+name), true)
 	if err != nil {
 		return fmt.Errorf("lookup remote branch origin/%s: %w", name, err)
+	}
+
+	held, err := s.branchesHeldByWorktrees()
+	if err != nil {
+		// Occupancy unknown. Refusing is the safe read: the failure mode of
+		// writing anyway is a silently corrupted checkout somewhere else.
+		return fmt.Errorf("reset local branch %s: cannot determine worktree occupancy: %w", name, err)
+	}
+	if holder, occupied := held[name]; occupied {
+		own, ownErr := s.worktreeTopLevel()
+		if ownErr != nil || !sameDir(own, holder) {
+			return &BranchHeldByWorktreeError{Branch: name, Worktree: holder}
+		}
+		// Our own checkout holds it, so we are entitled to move its tree —
+		// and must, or the ref move leaves this tree reporting phantom dirt.
+		// git writes the reflog entry go-git would not.
+		if _, err := s.gitExec("reset", "--hard", "refs/remotes/origin/"+name); err != nil {
+			return fmt.Errorf("reset local branch %s to origin/%s: %w", name, name, err)
+		}
+		return nil
 	}
 
 	localRef := plumbing.NewHashReference(plumbing.NewBranchReferenceName(name), remoteRef.Hash())
@@ -273,6 +308,34 @@ func (s *Service) ResetLocalBranchToRemote(name string) error {
 	}
 
 	return nil
+}
+
+// worktreeTopLevel is the root of the working tree this service is operating
+// in — what `git worktree list` names the caller's own entry.
+func (s *Service) worktreeTopLevel() (string, error) {
+	out, err := s.gitExec("rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// sameDir compares two directory paths after resolving symlinks, because
+// `git worktree list` reports the real path while a caller's CWD may reach the
+// same directory through one (/tmp on macOS is the standing example).
+func sameDir(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	ra, err := filepath.EvalSymlinks(a)
+	if err != nil {
+		ra = filepath.Clean(a)
+	}
+	rb, err := filepath.EvalSymlinks(b)
+	if err != nil {
+		rb = filepath.Clean(b)
+	}
+	return ra == rb
 }
 
 // ListLocalBranches returns all local branch names (excluding HEAD).

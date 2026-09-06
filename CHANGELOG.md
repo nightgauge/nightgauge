@@ -26,6 +26,17 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- Worktree containment no longer blames a stage for a branch ref that moved
+  under a still-untouched checkout. `git status` is relative to HEAD, so a raw
+  `git update-ref` on a checked-out branch makes the whole commit delta read as
+  dirt nothing wrote — which killed three concurrent slots in three different
+  repositories for one identical 31-path "breach" none of them committed. The
+  baseline now records each repo's HEAD, subtracts exactly what a HEAD move
+  explains, and warns with both SHAs; anything the move does not explain is
+  still attributed. A repo another running slot owns is warning-only too.
+  `ResetLocalBranchToRemote` — the ref writer that caused it — refuses
+  `main`/`master`, refuses a branch another worktree holds, and moves ref and
+  tree together when the caller's own checkout is the holder (#1499)
 - A `feature-validate` stage waiting on a long external process is no longer
   killed for waiting. The runaway monitor now counts a declared child process
   that is still alive, byte growth of a declared progress log, and a tool call

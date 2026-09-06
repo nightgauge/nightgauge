@@ -932,6 +932,29 @@ the likelier explanation, so those paths are never attributed to the stage,
 never captured, and never fail the run — they are only named so you can check
 them. Only paths that went **clean → dirty** during the stage are attributed.
 
+**`[containment-ref-move]` means HEAD moved, not that a stage wrote (#1499).**
+`git status` is relative to HEAD, so if a checkout's branch ref moves while its
+tree does not — a raw `git update-ref`, or any in-process ref write that skips
+the checkout — every path the two commits differ in reports as a staged change
+nothing wrote. Those paths are subtracted from the attributed set and named in
+this warning with the repo, both SHAs and the count. Repair the checkout itself:
+
+```bash
+git -C <repo> status          # confirm the delta is the reverse of recent merges
+git -C <repo> reset --hard HEAD   # after checking nothing of yours is in it
+```
+
+Suspect this whenever **several stages in different repos report the identical
+breach in one other repo within a few minutes** — three separate stages cannot
+each have written the same files, and a repo the stages cannot even see is not
+one they wrote to. The 2026-09-06 incident had exactly that signature.
+
+**A breach against a repo another slot is working in is a warning, not a
+failure (#1499).** With `max_concurrent > 1` a sibling slot's own repo goes
+dirty for legitimate reasons — its worktree lives there and its `pr-*` stages
+fetch and push in the root. Repos owned by other running pipelines are reported
+with `[another running pipeline owns this repository]` and never fail a stage.
+
 **`[containment-check-failed]`** means git could not be consulted (missing repo,
 timeout). The check fails open: out-of-worktree writes were not verified for
 that stage, but nothing else changed.

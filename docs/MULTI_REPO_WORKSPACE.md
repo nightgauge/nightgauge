@@ -974,6 +974,8 @@ workspace repo it does not own, and compares after the stage closes:
 | dirty → dirty, fingerprint changed | Warning only. Never attributed, never captured.    |
 | dirty at baseline, unchanged       | Ignored — the operator's standing work.            |
 | anything under `.nightgauge/`      | Ignored — the pipeline mirrors artifacts there.    |
+| explained by a HEAD move           | Subtracted, warned about. Never attributed.        |
+| a repo another running slot owns   | Warning only. Never a failure.                     |
 
 The asymmetry is deliberate. A sibling repo is very often dirty because the
 **operator** is working in it, and an operator's edit is indistinguishable from
@@ -989,6 +991,41 @@ performs. Nothing in the other repo is staged, committed, stashed, reverted or
 touched. (This is why the #128 work-in-progress preservation is not reused: it
 commits the worktree in place, which would sweep up the operator's unrelated
 files, move their HEAD, and refuse outright on `main`.)
+
+#### Two things that look exactly like a stage write, and are not (Issue #1499)
+
+`git status` reports the working tree and index **relative to HEAD**, so the
+clean → dirty comparison above only means "the stage wrote this" while HEAD
+holds still. Move a checked-out branch's ref without moving the tree — a raw
+`git update-ref refs/heads/main origin/main`, or any in-process ref write that
+skips the checkout — and every path the two commits differ in reports as a
+staged change that no process wrote. The baseline was taken against the old
+HEAD, so the whole delta reads clean → dirty and is attributed in full to
+whichever stage happens to close next. On 2026-09-06 three concurrent slots in
+three different repositories were each killed for the identical 31-path
+"breach" in a fourth repository none of them had touched.
+
+So each snapshot now records the repo's `HEAD` and branch. When HEAD moved
+between baseline and post-snapshot, the paths `git diff --name-only
+<baselineHEAD> <postHEAD>` names are subtracted from the attributed set and a
+`[containment-ref-move]` warning names the repo, both SHAs and the count. This
+**narrows** attribution on evidence: a path dirty for a reason the ref move does
+not explain is still the stage's, and a stage that writes into a repo whose HEAD
+also happened to move still fails.
+
+The second look-alike is concurrency. With `max_concurrent > 1` another slot is
+running a pipeline in its own repo — its worktree lives under that repo's
+`.worktrees/`, and its `pr-*` stages fetch and push in the root. From every
+other slot's point of view that is an out-of-bounds repo going dirty. The
+orchestrator therefore passes the running slots' working directories into the
+baseline; each resolves to its repo, and every repo other than the stage's own
+becomes **warning-only** — still snapshotted, still reported, never a failure.
+The stage's own repo is deliberately exempt from this demotion: keeping the
+stage's own main checkout in scope is the point of #129.
+
+Also see [GO_BINARY.md](GO_BINARY.md) on `ResetLocalBranchToRemote`, which is
+where the incident's ref move came from and which now refuses to move a branch
+some worktree has checked out.
 
 Scope notes:
 

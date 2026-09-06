@@ -129,6 +129,47 @@ export interface RepoSnapshot {
   entries: Record<string, string>;
   /** Codes keyed by path, so the patch writer can split tracked vs untracked. */
   codes: Record<string, string>;
+  /**
+   * `git rev-parse HEAD` at snapshot time, or null when it cannot be resolved
+   * (an unborn branch, or a repo git refuses to answer for).
+   *
+   * Dirtiness is a statement RELATIVE TO HEAD, so it is only comparable across
+   * two snapshots when HEAD is the same in both. See {@link RefMove}.
+   */
+  head: string | null;
+  /** Short branch name, or null when HEAD is detached. Diagnostics only. */
+  branch: string | null;
+}
+
+/**
+ * A repo whose HEAD moved while the stage ran (#1499).
+ *
+ * `git status` reports the working tree and index RELATIVE TO HEAD. Move HEAD
+ * without moving either — `git update-ref refs/heads/main origin/main` on a
+ * checked-out branch is enough — and every path the two commits differ in
+ * appears as a staged change that no process wrote. The containment baseline
+ * was taken against the old HEAD, so those paths read `clean → dirty` and are
+ * attributed in full to whichever stage happens to close next.
+ *
+ * That is exactly the 2026-09-06 incident: three concurrent slots in three
+ * different repos were each killed for the identical 31-path "breach" in a
+ * fourth repo that none of them had touched.
+ */
+export interface RefMove {
+  repoPath: string;
+  repoName: string;
+  /** HEAD when the baseline was taken. */
+  baselineHead: string;
+  /** HEAD at the post-stage snapshot. */
+  postHead: string;
+  /** Short branch name at the post-stage snapshot, when not detached. */
+  branch: string | null;
+  /**
+   * Paths that were attributed to the stage but are fully explained by the
+   * ref move, and were therefore subtracted. Paths dirty for a reason the ref
+   * move does NOT explain stay attributed.
+   */
+  explainedPaths: string[];
 }
 
 /** Pre-stage state, threaded from spawn to the process-close handler. */
@@ -139,6 +180,16 @@ export interface ContainmentBaseline {
   artifactRoot: string;
   /** Repos in scope, with their pre-stage dirty state. */
   snapshots: RepoSnapshot[];
+  /**
+   * Repos that another RUNNING pipeline owns (#1499). Still snapshotted and
+   * still reported, but never a breach: with `max_concurrent > 1` a sibling
+   * slot's legitimate work in its own repo — its worktree lives under that
+   * repo's `.worktrees/`, and its `pr-*` stages fetch and push in the repo
+   * root — is indistinguishable, from here, from this stage escaping into it.
+   * Failing this stage for another slot's correct behaviour is a pure false
+   * positive, and with three slots up it fires three times at once.
+   */
+  warnOnlyRepoPaths: string[];
 }
 
 /** A repo the stage wrote into. */
@@ -156,6 +207,12 @@ export interface ContainmentBreach {
   patchPath?: string;
   /** Why no patch exists, when {@link patchPath} is unset. */
   patchError?: string;
+  /**
+   * Set when this repo was demoted from breach to warning because something
+   * other than the stage explains the dirt — currently only "another running
+   * pipeline owns it". Names the reason so the warning line can say it.
+   */
+  warnOnlyReason?: string;
 }
 
 export interface ContainmentReport {
@@ -169,6 +226,12 @@ export interface ContainmentReport {
   warnings: ContainmentBreach[];
   /** Directory the patches and manifest were written to, when anything was. */
   artifactDir?: string;
+  /**
+   * Repos whose HEAD moved during the stage. Diagnostics, not a verdict: the
+   * paths a ref move explains have already been subtracted from
+   * {@link ContainmentBreach.paths} by the time this is returned.
+   */
+  refMoves: RefMove[];
 }
 
 async function git(cwd: string, args: string[]): Promise<string> {
@@ -249,6 +312,27 @@ async function fingerprint(
   }
 }
 
+/**
+ * The commit HEAD points at, and the branch it is on. Both null-tolerant: an
+ * unborn branch has no HEAD commit and a detached HEAD has no branch, and
+ * neither is a reason to fail a snapshot.
+ */
+async function readHead(repoPath: string): Promise<{ head: string | null; branch: string | null }> {
+  let head: string | null = null;
+  let branch: string | null = null;
+  try {
+    head = (await git(repoPath, ["rev-parse", "HEAD"])).trim() || null;
+  } catch {
+    /* unborn branch, or a repo git will not answer for */
+  }
+  try {
+    branch = (await git(repoPath, ["symbolic-ref", "--quiet", "--short", "HEAD"])).trim() || null;
+  } catch {
+    /* detached HEAD */
+  }
+  return { head, branch };
+}
+
 /** Snapshot one repo's dirty state. Returns null when the repo is unusable. */
 async function snapshotRepo(repoPath: string): Promise<RepoSnapshot | null> {
   let stdout: string;
@@ -266,7 +350,33 @@ async function snapshotRepo(repoPath: string): Promise<RepoSnapshot | null> {
     entries[entry.path] = await fingerprint(repoPath, entry);
     codes[entry.path] = entry.code;
   }
-  return { repoPath, repoName: path.basename(repoPath), entries, codes };
+  // Recorded so detection can tell "the stage wrote this" from "HEAD moved
+  // under a still-untouched tree" (#1499). Read AFTER the status so a ref move
+  // racing the snapshot is caught by the post-snapshot comparison rather than
+  // being baked invisibly into this one.
+  const { head, branch } = await readHead(repoPath);
+  return { repoPath, repoName: path.basename(repoPath), entries, codes, head, branch };
+}
+
+/**
+ * Paths that differ between two commits — the dirt a ref move alone explains.
+ *
+ * Returns null when the diff cannot be taken (either commit missing from this
+ * repo, e.g. a ref move that also pruned objects). Null means "cannot explain
+ * anything", which leaves every path attributed: this narrows attribution on
+ * evidence and never widens it on a guess.
+ */
+async function pathsExplainedByRefMove(
+  repoPath: string,
+  fromSha: string,
+  toSha: string
+): Promise<Set<string> | null> {
+  try {
+    const out = await gitDiff(repoPath, ["diff", "--name-only", "-z", fromSha, toSha]);
+    return new Set(out.split("\0").filter((p) => p.length > 0));
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -388,12 +498,33 @@ async function writeLedger(artifactRoot: string, ledger: ContainmentLedger): Pro
 export async function captureContainmentBaseline(args: {
   stageCwd: string;
   repoPaths: readonly string[];
+  /**
+   * Working directories of every pipeline currently RUNNING, including this
+   * one (#1499). Each is resolved to the repo it belongs to; every repo other
+   * than this stage's own becomes warning-only, because a repo another slot is
+   * actively working in is expected to move for reasons this stage cannot see.
+   *
+   * Worktree paths rather than repo roots on purpose: the orchestrator already
+   * knows a slot by its worktree, and resolving through `--git-common-dir` is
+   * exact where guessing a root from a `.worktrees/` path is not.
+   */
+  runningWorktreePaths?: readonly string[];
 }): Promise<ContainmentBaseline> {
   const stageCwd = path.resolve(args.stageCwd);
   let artifactRoot = stageCwd;
   const snapshots: RepoSnapshot[] = [];
+  const warnOnlyRepoPaths: string[] = [];
   try {
     artifactRoot = await resolveArtifactRoot(stageCwd);
+    for (const raw of args.runningWorktreePaths ?? []) {
+      if (!raw) continue;
+      const root = await resolveArtifactRoot(path.resolve(raw));
+      // The stage's own repo is never demoted: keeping the stage's OWN main
+      // checkout in scope is the whole point of #129, and this slot appears in
+      // the running set like every other.
+      if (root === artifactRoot) continue;
+      if (!warnOnlyRepoPaths.includes(root)) warnOnlyRepoPaths.push(root);
+    }
     const targets = await resolveContainmentTargets(stageCwd, args.repoPaths);
     if (targets.length > 0) {
       // Leftovers a previous attempt already attributed to the pipeline are NOT
@@ -429,7 +560,7 @@ export async function captureContainmentBaseline(args: {
   } catch {
     /* fail open — see doc comment */
   }
-  return { stageCwd, artifactRoot, snapshots };
+  return { stageCwd, artifactRoot, snapshots, warnOnlyRepoPaths };
 }
 
 /** Build a `git apply`-able patch for exactly the attributed paths. */
@@ -485,8 +616,9 @@ export async function detectContainmentBreach(
   args: DetectContainmentArgs
 ): Promise<ContainmentReport> {
   const { baseline, stage, issueNumber } = args;
-  const report: ContainmentReport = { breaches: [], warnings: [] };
+  const report: ContainmentReport = { breaches: [], warnings: [], refMoves: [] };
   if (baseline.snapshots.length === 0) return report;
+  const warnOnly = new Set(baseline.warnOnlyRepoPaths ?? []);
 
   /**
    * Post-stage snapshot per repo. Only the AFTER snapshot has codes and
@@ -506,7 +638,7 @@ export async function detectContainmentBreach(
     if (!after) continue;
     post.set(before.repoPath, after);
 
-    const attributed: string[] = [];
+    let attributed: string[] = [];
     const ambiguous: string[] = [];
     for (const [filePath, fp] of Object.entries(after.entries)) {
       const baselineFp = before.entries[filePath];
@@ -516,6 +648,30 @@ export async function detectContainmentBreach(
         ambiguous.push(filePath);
       }
     }
+
+    // ── Did HEAD move under us? (#1499) ──────────────────────────────────
+    // `git status` is relative to HEAD, so the clean → dirty comparison above
+    // only means "the stage wrote this" while HEAD holds still. When it moved,
+    // subtract exactly the paths the two commits differ in — no more. A path
+    // dirty for a reason the ref move does not explain is STILL the stage's.
+    if (before.head && after.head && before.head !== after.head && attributed.length > 0) {
+      const explained = await pathsExplainedByRefMove(before.repoPath, before.head, after.head);
+      if (explained) {
+        const subtracted = attributed.filter((p) => explained.has(p));
+        if (subtracted.length > 0) {
+          attributed = attributed.filter((p) => !explained.has(p));
+          report.refMoves.push({
+            repoPath: before.repoPath,
+            repoName: before.repoName,
+            baselineHead: before.head,
+            postHead: after.head,
+            branch: after.branch,
+            explainedPaths: subtracted.sort(),
+          });
+        }
+      }
+    }
+
     if (attributed.length === 0 && ambiguous.length === 0) continue;
 
     const breach: ContainmentBreach = {
@@ -524,8 +680,17 @@ export async function detectContainmentBreach(
       paths: attributed.sort(),
       ambiguousPaths: ambiguous.sort(),
     };
-    if (attributed.length > 0) report.breaches.push(breach);
-    else report.warnings.push(breach);
+    if (warnOnly.has(before.repoPath)) {
+      // Another running pipeline owns this repo. Its worktree lives under this
+      // repo and its pr stages fetch and push here, so movement is expected
+      // and belongs to that slot, not to this stage.
+      breach.warnOnlyReason = "another running pipeline owns this repository";
+      report.warnings.push(breach);
+    } else if (attributed.length > 0) {
+      report.breaches.push(breach);
+    } else {
+      report.warnings.push(breach);
+    }
   }
 
   if (report.breaches.length === 0) return report;
@@ -586,7 +751,17 @@ export async function detectContainmentBreach(
           warnings: report.warnings.map((w) => ({
             repoName: w.repoName,
             repoPath: w.repoPath,
+            paths: w.paths,
             ambiguousPaths: w.ambiguousPaths,
+            warnOnlyReason: w.warnOnlyReason ?? null,
+          })),
+          refMoves: report.refMoves.map((m) => ({
+            repoName: m.repoName,
+            repoPath: m.repoPath,
+            branch: m.branch,
+            baselineHead: m.baselineHead,
+            postHead: m.postHead,
+            explainedPaths: m.explainedPaths,
           })),
           note:
             "Captured by Nightgauge. NOTHING in the listed repositories was " +
@@ -648,13 +823,44 @@ export function formatContainmentFailure(stage: string, report: ContainmentRepor
 
 /** Warn-only line for repos where only pre-existing dirty paths changed. */
 export function formatContainmentWarning(stage: string, report: ContainmentReport): string {
-  const parts = report.warnings.map(
-    (w) => `${w.repoName}: ${w.ambiguousPaths.slice(0, 5).join(", ")}`
-  );
+  const parts = report.warnings.map((w) => {
+    const shown = (w.warnOnlyReason ? [...w.paths, ...w.ambiguousPaths] : w.ambiguousPaths).slice(
+      0,
+      5
+    );
+    const suffix = w.warnOnlyReason ? ` [${w.warnOnlyReason}]` : "";
+    return `${w.repoName}: ${shown.join(", ")}${suffix}`;
+  });
   return (
     `[containment-ambiguous] Stage ${stage}: path(s) that were ALREADY dirty before the ` +
-    `stage changed while it ran (${parts.join("; ")}). Not attributed to the stage — an ` +
-    `operator editing their own uncommitted file is indistinguishable from a stage write, ` +
-    `and the likelier explanation. Nothing was touched. (Issue #129)`
+    `stage changed while it ran, or that belong to a repository another running pipeline ` +
+    `owns (${parts.join("; ")}). Not attributed to the stage — an operator editing their own ` +
+    `uncommitted file, or a sibling slot working in its own repo, is indistinguishable from ` +
+    `a stage write and is the likelier explanation. Nothing was touched. (Issues #129, #1499)`
+  );
+}
+
+/**
+ * Warn line for repos whose HEAD moved during the stage (#1499).
+ *
+ * Named in full — repo, both SHAs, the count — because a bare ref move leaves
+ * no other trace: the branch reflog entry for `git update-ref` carries an empty
+ * message and HEAD's reflog carries nothing at all, so this line is the only
+ * durable record that the checkout's HEAD went somewhere while a stage ran.
+ */
+export function formatContainmentRefMoveWarning(stage: string, report: ContainmentReport): string {
+  const parts = report.refMoves.map(
+    (m) =>
+      `${m.repoName}${m.branch ? ` (${m.branch})` : ""} ${m.baselineHead.slice(0, 12)} → ` +
+      `${m.postHead.slice(0, 12)}: ${m.explainedPaths.length} path(s)`
+  );
+  return (
+    `[containment-ref-move] Stage ${stage}: HEAD moved in ${report.refMoves.length} ` +
+    `repository/repositories while the stage ran (${parts.join("; ")}). \`git status\` is ` +
+    `relative to HEAD, so those path(s) read as dirty without anything writing them; they ` +
+    `were NOT attributed to the stage. Any remaining dirt still was. A ref move with no ` +
+    `working-tree move usually means a raw \`git update-ref\`/\`git fetch <sha>:refs/heads/…\` ` +
+    `against the checkout — repair it with \`git -C <repo> reset --hard HEAD\` after checking ` +
+    `nothing of yours is in the delta. (Issue #1499)`
   );
 }
