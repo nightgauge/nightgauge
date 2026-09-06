@@ -890,8 +890,15 @@ func (s *Server) compareAndDeleteRun(entry *runEntry, runID string) {
 // prompt. `Stale` lets the caller say "no progress for 40m — it may already be
 // finished" instead of silently dropping the row.
 //
-// autonomousRunning is the scheduler's own list, used only to label each row's
-// source; it never adds or removes rows.
+// The scheduler's own running list is consulted only to LABEL each row's
+// source; it never adds or removes a row.
+//
+// The registry scan copies out every runtimesMu-guarded field — `repo`,
+// `issue`, `lastSeen` — inside the lock, and takes each run's own mutex (via
+// Snapshot) only afterwards. Reading `lastSeen` after the unlock would race
+// touchLocked, which stamps it on every accepted run-progress verb; and taking
+// N run mutexes while holding the server-global one is the lock-ordering
+// problem the derived issue index (Decision 6) exists to avoid.
 func (s *Server) RunningPipelinesSnapshot(now time.Time) RunningPipelinesResult {
 	autonomous := map[string]bool{}
 	if s.autonomousScheduler != nil {
@@ -900,13 +907,20 @@ func (s *Server) RunningPipelinesSnapshot(now time.Time) RunningPipelinesResult 
 		}
 	}
 
+	// A registry row, copied out under runtimesMu.
+	type row struct {
+		rs       *state.RuntimeState
+		repo     string
+		issue    int
+		lastSeen time.Time
+	}
 	s.runtimesMu.Lock()
-	entries := make([]*runEntry, 0, len(s.activeRuntimes))
+	entries := make([]row, 0, len(s.activeRuntimes))
 	for _, e := range s.activeRuntimes {
 		if e == nil || e.terminal || e.abandoned {
 			continue
 		}
-		entries = append(entries, e)
+		entries = append(entries, row{rs: e.rs, repo: e.repo, issue: e.issue, lastSeen: e.lastSeen})
 	}
 	s.runtimesMu.Unlock()
 
