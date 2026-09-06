@@ -191,6 +191,8 @@ printf '<!-- phase:start name="baseline-comparison" index=9 total=23 stage="feat
 
 > **Read `skills/nightgauge-feature-validate/_includes/build-and-tests.md` now and follow its instructions before continuing this phase.** Identify pre-existing failures (already failing on main) so the Ralph Loop skips them; runs ONLY when tests fail, skipped when dev context shows all passed.
 
+<!-- include: ../_shared/LONG_RUNNING_PROCESSES.md -->
+
 ### Phase 2: Run Tests (Redundancy-Aware)
 
 ```bash

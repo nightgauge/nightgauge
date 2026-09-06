@@ -185,6 +185,46 @@ productive window has elapsed. It is deliberately **not** activity-gated —
 killing a stage that is busy but not converging is its entire purpose (#3811:
 530 tool calls, 0 commits, $112).
 
+### External Progress (#1488)
+
+Every clock above reads the agent's own message stream, so all of them go cold
+in the one case where the stage is behaving perfectly: it started a long
+external process and is waiting for it. Two `feature-validate` runs in a
+downstream workspace repository proved it: one issue was killed twice inside 90
+minutes with a Playwright suite mid-run — once by the churn detector (40
+`tail`/`ps` polls), once by the no-progress window — and another was killed at
+810s with its own `git commit` still running, because the commit registered as
+productive the moment the call was issued and the window then expired underneath
+the very command that proved the stage productive.
+
+The monitor therefore consults three sources that do not depend on the model
+emitting anything:
+
+- a **declared child pid** that is still alive (`kill(pid, 0)`),
+- **byte growth** of a **declared progress log**,
+- a **tool call currently in flight**, derived from tool_use ids with no
+  matching tool_result — which every adapter produces, unlike the optional
+  `tool_progress` heartbeat of #1083 that neither of those runs emitted.
+
+A stage declares the first two by echoing one line at spawn:
+
+```bash
+echo "NIGHTGAUGE_PROGRESS: {\"pid\": $SUITE_PID, \"log\": \"$SUITE_LOG\", \"label\": \"playwright e2e\"}"
+```
+
+See `skills/_shared/LONG_RUNNING_PROCESSES.md` for the stage-side contract.
+
+External progress is **activity, never productive**: it defers a kill and
+suppresses the churn detector (a poll loop around a live child is
+indistinguishable from churn by tool count alone — the live child is the
+discriminator), but it can never satisfy a kill, and the stage hard-cap and
+catastrophic-cost backstop are untouched. A dead pid stops deferring
+immediately, a log that stops growing stops deferring at the next poll, and the
+whole mechanism is bounded by `external_progress_ceiling_ms` (20 minutes,
+matching `WEDGED_TOOL_CALL_CEILING_S`) so a wedged child cannot make a stage
+immortal. A stage that loops on `ls`/`cat` with nothing declared is killed on
+exactly the old schedule.
+
 ### Dollar-Ceiling Demotion
 
 The former `runwayCeilingUsd` kill path (`max($75, effectiveCap × 3.0)`) is
@@ -201,6 +241,7 @@ pipeline:
     no_progress_window_ms: 120000 # 2 min window (minimum: 30s)
     min_cost_to_activate_usd: 0.50 # don't fire on cheap stages
     catastrophic_limit_usd: 200 # warn-only backstop if monitor itself fails
+    external_progress_ceiling_ms: 1200000 # 20 min cap on external-progress deferral (0 disables)
 ```
 
 All fields support env var overrides:
@@ -209,6 +250,7 @@ All fields support env var overrides:
 - `NIGHTGAUGE_PIPELINE_PROGRESS_RUNAWAY_WINDOW_MS`
 - `NIGHTGAUGE_PIPELINE_PROGRESS_RUNAWAY_MIN_COST_USD`
 - `NIGHTGAUGE_PIPELINE_PROGRESS_RUNAWAY_CATASTROPHIC_LIMIT_USD`
+- `NIGHTGAUGE_PIPELINE_PROGRESS_RUNAWAY_EXTERNAL_CEILING_MS`
 
 ### Interaction with Performance Modes
 
