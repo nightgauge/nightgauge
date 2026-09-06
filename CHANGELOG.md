@@ -26,6 +26,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A `Part of #N` parent link under a `## Dependencies` header is no longer read
+  as a dependency on the parent epic. The same-repo dependency parsing added in
+  #1492 treated every line in a dependency section as a declaration, and real
+  issue bodies put the epic membership line there — so a child issue blocked on
+  its own epic, which never closes before its children, and the epic cascade
+  spread the deadlock to every sibling in the wave. Parent, `Sub-issue of`,
+  `Child of`, `Tracks` / `Tracked by`, `Related`, `See also` and the closing
+  keywords are excluded on the same grounds, while a dependency that merely
+  mentions one of those words in its description still gates (#1497)
 - A `feature-validate` stage waiting on a long external process is no longer
   killed for waiting. The runaway monitor now counts a declared child process
   that is still alive, byte growth of a declared progress log, and a tool call
