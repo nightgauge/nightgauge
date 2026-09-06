@@ -441,6 +441,9 @@ func TestDefaultAutonomousConfig_NewFields(t *testing.T) {
 	if cfg.RefinementInterval.Duration() != 60*time.Second {
 		t.Errorf("RefinementInterval default = %s, want 60s", cfg.RefinementInterval.Duration())
 	}
+	if cfg.RefinementBacklog == nil || *cfg.RefinementBacklog {
+		t.Errorf("RefinementBacklog default = %v, want false — the backlog sweep is a cost opt-in (#1514)", cfg.RefinementBacklog)
+	}
 	if cfg.RefinementMaxConcurrent != 1 {
 		t.Errorf("RefinementMaxConcurrent default = %d, want 1", cfg.RefinementMaxConcurrent)
 	}

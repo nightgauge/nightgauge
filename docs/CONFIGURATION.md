@@ -6411,7 +6411,7 @@ knowledge:
 
 | Key                                | Type    | Default | Description                                                                                                 |
 | ---------------------------------- | ------- | ------- | ----------------------------------------------------------------------------------------------------------- |
-| `enabled`                          | boolean | `true`  | Master switch. When `false`, all knowledge operations are disabled                                          |
+| `enabled`                          | boolean | `true`  | Master switch. **Absent means on** (ADR-020). When `false`, all knowledge operations are disabled           |
 | `auto_scaffold`                    | boolean | `true`  | Automatically create knowledge directory during issue-pickup (requires `enabled: true`)                     |
 | `wiki_links`                       | boolean | `true`  | Enable `[[wiki-link]]` resolution in knowledge documents                                                    |
 | `index_on_commit`                  | boolean | `false` | Regenerate the knowledge index on every commit via a git hook (reserved for future git hook use)            |
@@ -6437,8 +6437,15 @@ scoring path; there is no plain-BM25 mode.
 
 ### Behavior
 
+- The knowledge base is **on by default**, including in a repo with no
+  `knowledge:` section: a feature that adds value to a workspace defaults ON
+  ([ADR-020](decisions/020-value-adding-features-default-on.md)).
 - Setting `enabled: false` disables all knowledge operations — scaffolding,
-  indexing, and wiki-link resolution are all skipped.
+  indexing, and wiki-link resolution are all skipped. It is the supported
+  opt-out, and exists for exactly two reasons: **repo footprint** (the knowledge
+  base writes files under `.nightgauge/knowledge/` and commits them) and
+  **per-run token cost** (recall and enrichment add tokens to every pipeline
+  run). It is not a way to hide the feature.
 - `auto_scaffold: true` causes issue-pickup to create a
   `.nightgauge/knowledge/{epics|features}/{N}-{slug}/` directory with
   `PRD.md` and `decisions.md` templates.
@@ -6819,6 +6826,7 @@ autonomous:
   refinement_enabled: true # Enable autonomous refinement scheduler (default: true)
   refinement_interval: 60s # Time between refinement scans, min 30s (default: 60s)
   refinement_max_concurrent: 1 # Max concurrent refinement operations, 1-3 (default: 1)
+  refinement_backlog: false # Also refine the open backlog, not just board work (default: false)
   safety_rails:
     circuit_breaker_max: 3 # Consecutive failures before trip (default: 3)
     rate_limit_per_hour: 20 # Max pipeline starts per hour (default: 20)
@@ -7083,6 +7091,31 @@ provides a comfortable margin above the minimum.
 Maximum number of refinement operations that run concurrently. Capped at 3 to
 prevent resource exhaustion. The conservative default of 1 is appropriate for
 most teams; increase to 2 or 3 only when refinement throughput is a bottleneck.
+
+### refinement_backlog
+
+| Key                  | Type    | Default |
+| -------------------- | ------- | ------- |
+| `refinement_backlog` | boolean | `false` |
+
+Whether the refinement scan also sweeps the **open backlog** — every open issue
+that is on no project board, or on one without a `Ready` status or a Priority
+(tier 3 in
+[AUTONOMOUS_ORCHESTRATOR.md § 5](AUTONOMOUS_ORCHESTRATOR.md#5-refinement-scan)).
+
+With the default `false`, refinement only touches what the dispatch scan is
+about to consume: board `Ready`, board `Backlog` with a Priority, and any issue
+explicitly labelled `auto-process`. With `true`, everything else open is also
+refined, oldest first — but only once no higher-tier issue anywhere in the
+workspace is unrefined, so the backlog can never take the rail from work that is
+about to run.
+
+**Why it is off by default — the cost.** A backlog sweep is unbounded work at
+one Sonnet call per issue, and the refinement rail allows 10 starts an hour. A
+workspace with 165 unrefined open issues therefore spends roughly **17 hours of
+model calls** refining issues that may never be dispatched. Turning this on is a
+deliberate cost decision; leaving it off keeps a new install's refinement spend
+proportional to what it actually dispatches (#1514).
 
 ---
 

@@ -58,9 +58,14 @@ func TestRunRefinementCycle_SkipsUntrustedAuthor(t *testing.T) {
 
 	client := gh.NewClientWithURL("test-token", srv.URL)
 	sched := NewScheduler(client, SchedulerConfig{WorkspaceRoot: t.TempDir()})
+	// Both fixtures are off-board issues — tier 3 under #1514, which the
+	// default refuses. This test is about the author-trust gate, not the tier
+	// gate, so the backlog sweep is turned on to keep them candidates.
+	cfg := DefaultAutonomousConfig()
+	cfg.RefinementBacklog = true
 	as := NewAutonomousScheduler(sched, client, []depgraph.RepoConfig{
 		{Owner: "o", Name: "r", Project: 1},
-	}, nil, DefaultAutonomousConfig(), t.TempDir())
+	}, nil, cfg, t.TempDir())
 	as.state.Status = "running"
 
 	dispatched := make(chan int, 2)

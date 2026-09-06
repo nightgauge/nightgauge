@@ -2910,7 +2910,7 @@ export type ComplexityModelConfig = z.infer<typeof ComplexityModelConfigSchema>;
  * Knowledge scaffolding configuration (Issue #1680)
  */
 export const KnowledgeConfigSchema = z.object({
-  /** Enable knowledge directory scaffolding during issue pickup */
+  /** Enable knowledge directory scaffolding during issue pickup (default: true — ADR-020; set false to opt out for repo footprint or token cost) */
   enabled: z.boolean().optional(),
   /** Automatically scaffold when picking up an issue (requires enabled=true) */
   auto_scaffold: z.boolean().optional(),
@@ -3445,6 +3445,14 @@ export const AutonomousConfigSchema = z.object({
    * Capped at 3 to prevent resource exhaustion. Default: 1.
    */
   refinement_max_concurrent: z.number().int().min(1).max(3).optional(),
+  /**
+   * Refine the open backlog as well as the work about to dispatch.
+   * Default: false — only board "Ready", board "Backlog" with a Priority, and
+   * issues labelled `auto-process` are refined. True adds every other open
+   * issue, oldest first, once nothing higher-tier is unrefined.
+   * A cost opt-in: a backlog sweep is one model call per issue (#1514).
+   */
+  refinement_backlog: z.boolean().optional(),
   /**
    * Where issues move on the project board when a pipeline run fails.
    * - "ready" (default): Allows autonomous scheduler to re-dispatch on next scan.

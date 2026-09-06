@@ -348,6 +348,7 @@ deny:
       - "docs/decisions/017-runtime-identity-keying.md"
       - "docs/decisions/018-adapter-usage-quota-model.md"
       - "docs/decisions/019-relayed-resolve-routing.md"
+      - "docs/decisions/020-value-adding-features-default-on.md"
     rationale: >-
       ADRs are private until individually reviewed and excepted. The exceptions
       describe shipped open-source implementation decisions.

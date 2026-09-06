@@ -33,6 +33,7 @@ func TestBuildAutonomousConfigServePathHonorsConfigKeys(t *testing.T) {
 			RefinementEnabled:           boolPtr(false),
 			RefinementInterval:          config.YAMLDuration(90 * time.Second),
 			RefinementMaxConcurrent:     3,
+			RefinementBacklog:           boolPtr(true),
 			PickupBacklog:               boolPtr(true),
 			ExcludeLabels:               []string{"needs-human", " design-review "},
 			SafetyRails: &config.SafetyRailsConfig{
@@ -73,6 +74,9 @@ func TestBuildAutonomousConfigServePathHonorsConfigKeys(t *testing.T) {
 	}
 	if got.RefinementMaxConcurrent != 3 {
 		t.Errorf("RefinementMaxConcurrent = %d, want 3", got.RefinementMaxConcurrent)
+	}
+	if !got.RefinementBacklog {
+		t.Errorf("RefinementBacklog = false, want true (autonomous.refinement_backlog: true was set)")
 	}
 	if !got.PickupBacklog {
 		t.Errorf("PickupBacklog = false, want true (autonomous.pickup_backlog: true was set)")

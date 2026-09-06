@@ -635,7 +635,7 @@ func knowledgeScaffoldCmd() *cobra.Command {
 	cmd.Flags().StringArrayVar(&criteria, "criteria", nil, "Acceptance criteria lines (repeatable)")
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Workspace root (default: cwd)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output result as JSON")
-	cmd.Flags().BoolVar(&knowledgeEnabled, "knowledge-enabled", false, "Honor knowledge.enabled config flag; when false, returns skipped immediately")
+	cmd.Flags().BoolVar(&knowledgeEnabled, "knowledge-enabled", true, "Honor knowledge.enabled config flag; when false, returns skipped immediately. Defaults true to match the config default (ADR-020)")
 	cmd.Flags().BoolVar(&workspaceScoped, "workspace-scoped", true, "Honor knowledge.workspace_scoped config flag")
 	_ = cmd.MarkFlagRequired("issue-number")
 	_ = cmd.MarkFlagRequired("title")

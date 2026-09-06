@@ -14,6 +14,19 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Changed
+
+- The knowledge base is **on by default**. `knowledge.enabled` now resolves to
+  `true` when unset, so a repo with no `knowledge:` section scaffolds PRDs and
+  decision logs at issue pickup instead of logging `knowledge.enabled=false and
+knowledge_path is null` on every run. Every layer that read an absent key as
+  "off" — the Go resolver, the SDK scaffold guard, the VS Code command guards
+  and the skills' shell readers — now reads it as the default; only an explicit
+  `knowledge.enabled: false` opts out, and the two reasons to (repo footprint
+  and per-run token cost) are documented beside the flag. A feature that adds
+  value to a workspace defaults ON — see
+  [ADR-020](docs/decisions/020-value-adding-features-default-on.md) (#1513)
+
 ### Added
 
 - A run's size now comes from three sources, not one: the issue's `size:*`
@@ -244,6 +257,17 @@ validate` enforces OKF conformance pre-merge, recall and metrics weigh trust
 - The "this run cannot calibrate the pre-flight cost estimate" warning fires
   only when a run has no size from any of the three sources. It used to fire
   whenever an issue had no `size:*` label, i.e. on nearly every run (#1515)
+- The autonomous refinement scan now refines issues in **dispatch order**
+  instead of oldest-first: board `Ready`, then board `Backlog` with a Priority,
+  and only then the rest of the open backlog. Issues that can never dispatch —
+  an `owner-action`/`blocked` label, `In progress`/`In review`/`Done` on the
+  board, an open linked PR, or a hold awaiting a human — are skipped, and tier 3
+  never takes the hourly rate rail while higher-tier work is unrefined. The
+  dispatch scan also refines the issue it is about to enqueue when a refinement
+  slot is free, and dispatches it unrefined with a log line when none is. The
+  new `autonomous.refinement_backlog` (default `false`) is the cost opt-in for
+  sweeping the backlog at all — a 165-issue backlog is ~17 hours of model calls
+  on issues that may never run (#1514)
 - `nightgauge serve` shuts down through a bounded drain: in-flight board
   writes get a grace period, then a bounded cancel, instead of being abandoned
   on SIGTERM (#489)

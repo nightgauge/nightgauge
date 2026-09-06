@@ -7029,7 +7029,9 @@ nightgauge knowledge graduate <issue> --section <docs#anchor> --adr ADR-NNN [--j
 returns `"skipped": true` when the directory already exists. `--criteria` is
 repeatable to inject acceptance criteria into `PRD.md`.
 
-When `--knowledge-enabled false` is passed, the command exits 0 immediately and
+`--knowledge-enabled` defaults to `true`, matching the `knowledge.enabled`
+config default (ADR-020). When `--knowledge-enabled false` is passed, the
+command exits 0 immediately and
 returns `{"skipped": true, "skip_reason": "knowledge.enabled=false in config"}`.
 This allows consuming shell scripts to gate scaffolding on the config flag
 without running Node/Python interpreters. The `--workspace-scoped` flag is
@@ -7629,11 +7631,12 @@ Every knowledge subcommand emits one JSONL event to
 path. Skills and downstream stages can also emit events for operations that
 happen outside the binary via `knowledge telemetry record`.
 
-Telemetry is enabled by default once `knowledge.enabled: true` is set in
-`.nightgauge/config.yaml`. Opt out with `knowledge.telemetry.enabled:
-false`. When `knowledge.enabled` is false the telemetry emitter is forced
-off regardless of the nested flag — no surprise files appear in projects
-that have not opted into the KB.
+Telemetry is enabled by default wherever `knowledge.enabled` resolves true —
+which is everywhere `.nightgauge/config.yaml` does not explicitly set it to
+`false` (ADR-020). Opt out with `knowledge.telemetry.enabled: false`. When
+`knowledge.enabled` is false the telemetry emitter is forced off regardless of
+the nested flag — no surprise files appear in projects that opted out of the
+KB.
 
 **Event schema** (one JSON object per line):
 

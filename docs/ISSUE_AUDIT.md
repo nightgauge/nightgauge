@@ -235,9 +235,10 @@ directions.
 
 ### Phase 9 — Knowledge scaffold
 
-When `knowledge.enabled: true` in `.nightgauge/config.yaml` OR the
-manifest entry sets `knowledge_path`, verify the knowledge directory exists
-and `PRD.md` is non-empty.
+When `knowledge.enabled` resolves true in `.nightgauge/config.yaml` — which is
+the default, and an absent key means the default (ADR-020) — OR the manifest
+entry sets `knowledge_path`, verify the knowledge directory exists and `PRD.md`
+is non-empty.
 
 | Finding type            | Severity | Trigger                                                                            |
 | ----------------------- | -------- | ---------------------------------------------------------------------------------- |
