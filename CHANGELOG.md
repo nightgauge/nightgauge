@@ -129,6 +129,15 @@ is not safe yet`, and `Stopped — 0 running; safe to reload` once they land.
 
 ### Fixed
 
+- Refinement now runs in extension (IPC) mode. It had no execution path there at
+  all — the daemon builds its scheduler without a CLI adapter, so every cycle
+  logged `disabled: no IPC dispatcher registered` and every dispatch went
+  unrefined, while the product default said refinement was on. It now crosses
+  the same stage bridge every pipeline stage uses, and each refinement writes
+  one line naming its tier and source (#1529)
+- `refinement_max_concurrent` bounds concurrent refinements, not handoffs. The
+  slot is held until the refine skill exits in every mode, so a failed
+  refinement is recorded as a failure instead of being labelled refined (#503)
 - The Slack notification switch's comment said it was off "so an existing config
   without this block is unaffected" — a backward-compatibility note, which is
   not one of the reasons an opt-out may exist. It is off because it needs a bot

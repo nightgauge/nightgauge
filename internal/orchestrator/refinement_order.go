@@ -372,7 +372,11 @@ func (as *AutonomousScheduler) refineBeforeDispatch(ctx context.Context, g *depg
 		return unrefined("refinement is disabled (autonomous.refinement_enabled)")
 	}
 	if !as.refinementIsViable() {
-		return unrefined("no IPC dispatcher and no CLI adapter to run the refine skill")
+		// Reached only when refinement has no execution path at all — no
+		// registered runner and no CLI adapter. In extension (IPC) mode
+		// WithIPCRefinement registers one (#1529), so this line is the
+		// exception it was always meant to be rather than every dispatch.
+		return unrefined("no refinement runner and no CLI adapter to run the refine skill")
 	}
 	// The author-trust gate (#270) is not a slot question — a stranger's issue
 	// text must never reach the model, whatever the rail says.
@@ -407,6 +411,14 @@ func (as *AutonomousScheduler) refineBeforeDispatch(ctx context.Context, g *depg
 		Title:             node.Title,
 		Labels:            node.Labels,
 		AuthorAssociation: node.AuthorAssociation,
+	}, refinementOrigin{
+		// The tier is read off the same board fields the cycle's view reads,
+		// so the two sources report the same vocabulary.
+		tier: refinementTierFor(refinementNode{
+			boardStatus: node.BoardStatus,
+			priority:    node.Priority,
+		}, true),
+		source: refinementSourcePreDispatch,
 	})
 	return true
 }

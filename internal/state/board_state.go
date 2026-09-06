@@ -25,6 +25,13 @@ const (
 	// recommendations YAML block. Appended after StagePRMerge for type:spike
 	// issues only — see internal/orchestrator/scheduler.go.
 	StageSpikeMaterialize PipelineStage = "spike-materialize"
+	// StageIssueRefine is NOT part of the pipeline sequence: it is the
+	// autonomous scheduler's own refinement dispatch, which rewrites an
+	// issue's body before anything picks it up. It is a PipelineStage because
+	// it is executed by the same machinery — skillrender, execution.Manager
+	// on the CLI path, and the StageRunner bridge in extension (IPC) mode
+	// (#1529) — and it must never be added to a stage-ordering list.
+	StageIssueRefine PipelineStage = "issue-refine"
 )
 
 // BoardStatus represents the project board status field values.

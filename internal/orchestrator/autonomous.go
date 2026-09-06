@@ -29,6 +29,8 @@ import (
 	"github.com/nightgauge/nightgauge/internal/forge/boardcache"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/intelligence/baselineGate"
+	"github.com/nightgauge/nightgauge/internal/intelligence/routing"
+	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/skillrender"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
@@ -1128,9 +1130,19 @@ type AutonomousScheduler struct {
 	// readable. Key namespace is the caller's ("labels:<repo>", "gaveup:<key>").
 	refinementWarned map[string]bool
 
-	// onRefinementDispatch is an optional callback for IPC mode.
-	// When nil, refinement is spawned directly via execution.Manager.
-	onRefinementDispatch func(owner, repo string, issueNumber int)
+	// refinementRunner executes one refinement and returns when it has
+	// FINISHED — the seam IPC mode is wired through (#1529) and the seam a
+	// test injects. When nil, refinement is spawned directly via
+	// execution.Manager (CLI mode, refineViaCLI).
+	//
+	// It is deliberately synchronous. Its fire-and-forget predecessor handed
+	// the issue to the extension and returned, so refineIssue's deferred
+	// semaphore release fired at HANDOFF: refinement_max_concurrent bounded
+	// handoffs rather than refinements, and nothing could tell a failed
+	// refinement from a successful one (#503). A runner that returns an error
+	// when the refinement failed makes the slot, the failure counter, the
+	// cooldown and the pipeline:refined write all agree on one outcome.
+	refinementRunner RefinementRunner
 
 	// refinementUnavailableOnce ensures the "refinement not wired" log is
 	// emitted at most once per scheduler lifetime, instead of once per cycle.
@@ -7368,22 +7380,35 @@ func (as *AutonomousScheduler) SafetyRails() *SafetyRails {
 	return as.safetyRails
 }
 
-// OnRefinementDispatch sets a callback for dispatching refinement to the
-// TypeScript extension (IPC mode). When nil, refinement is spawned directly
-// via execution.Manager (CLI mode).
-func (as *AutonomousScheduler) OnRefinementDispatch(fn func(owner, repo string, issueNumber int)) {
-	as.onRefinementDispatch = fn
+// RefinementRunner executes the refine skill for one issue and returns only
+// when that refinement has finished — nil for success, an error naming the
+// failure otherwise. The refinement semaphore slot is held for the whole call,
+// in every mode (#503), so refinement_max_concurrent bounds in-flight
+// refinements rather than dispatches.
+type RefinementRunner func(ctx context.Context, owner, repo string, issueNumber int) error
+
+// WithRefinementRunner installs the synchronous refinement runner. When unset,
+// refinement is spawned directly through execution.Manager (CLI mode).
+func (as *AutonomousScheduler) WithRefinementRunner(fn RefinementRunner) {
+	as.refinementRunner = fn
+}
+
+// WithIPCRefinement routes refinement through the scheduler's StageRunner, the
+// same bridge every pipeline stage crosses in extension (IPC) mode. Call it
+// from the IPC entry point once the stage runner is attached; the CLI path is
+// untouched and keeps using execution.Manager directly.
+func (as *AutonomousScheduler) WithIPCRefinement() {
+	as.refinementRunner = as.refineViaStageRunner
 }
 
 // refinementIsViable reports whether the scheduler has a path to actually
-// execute a refinement. True when either an IPC dispatcher is registered
-// (TypeScript extension runs the skill) or the underlying execution manager
-// has a CLI adapter. When both are absent — the default in VSCode IPC mode
-// today — refinement would synchronously panic on adapter.BuildCommand, so
-// the cycle skips entirely and the feature is effectively disabled until
-// IPC refinement is wired.
+// execute a refinement. True when a refinement runner is registered — in
+// extension (IPC) mode WithIPCRefinement registers one that crosses the stage
+// bridge — or when the underlying execution manager has a CLI adapter. When
+// both are absent refinement would synchronously panic on adapter.BuildCommand,
+// so the cycle skips entirely and says so once.
 func (as *AutonomousScheduler) refinementIsViable() bool {
-	if as.onRefinementDispatch != nil {
+	if as.refinementRunner != nil {
 		return true
 	}
 	if as.scheduler == nil {
@@ -7409,11 +7434,11 @@ func (as *AutonomousScheduler) runRefinementCycle(ctx context.Context) {
 	as.mu.Unlock()
 
 	// Skip entirely if there is no working path to execute refinement. Prevents
-	// a backend-killing nil-pointer panic in refineViaCLI when VSCode IPC mode
-	// hands us a Scheduler with no CLI adapter and no IPC dispatcher.
+	// a backend-killing nil-pointer panic in refineViaCLI when a Scheduler
+	// arrives with neither a CLI adapter nor a registered refinement runner.
 	if !as.refinementIsViable() {
 		as.refinementUnavailableOnce.Do(func() {
-			log.Printf("[refinement] disabled: no IPC dispatcher registered and no CLI adapter configured — skipping refinement cycles")
+			log.Printf("[refinement] disabled: no refinement runner registered and no CLI adapter configured — skipping refinement cycles")
 		})
 		return
 	}
@@ -7688,6 +7713,11 @@ func (as *AutonomousScheduler) runRefinementCycle(ctx context.Context) {
 			log.Printf("[refinement] Refining issue #%d (%s) — %d of %d unrefined",
 				candidate.Number, candidate.Title, i+1, len(candidates))
 
+			// candidates is built from plan in order, so plan[i] is this
+			// candidate's ordering record — the selection tier the per-issue
+			// log line names.
+			tier := plan[i].tier
+
 			// Same merge as enqueueItem's RunQueue spawn: refineIssue is a real
 			// adapter invocation carrying the cycle context, so the generation
 			// context is folded in to keep a drain's join bounded.
@@ -7696,7 +7726,10 @@ func (as *AutonomousScheduler) runRefinementCycle(ctx context.Context) {
 				stop := context.AfterFunc(genCtx, rcancel)
 				defer stop()
 				defer rcancel()
-				as.refineIssue(rctx, owner, repo, candidate)
+				as.refineIssue(rctx, owner, repo, candidate, refinementOrigin{
+					tier:   tier,
+					source: refinementSourceCycle,
+				})
 			})
 			dispatched++
 		}
@@ -7839,10 +7872,42 @@ func (as *AutonomousScheduler) refinementExhausted(key string) bool {
 	return as.refinementFailures[key] >= maxRefinementFailures
 }
 
+// refinementOrigin is the provenance of one refinement, carried only so the
+// per-refinement log line can name it: which selection tier the issue came
+// from, and whether the refinement cycle or the pre-dispatch hook (#1522) ran
+// it. Never a control input.
+type refinementOrigin struct {
+	tier   int
+	source string
+}
+
+const (
+	refinementSourceCycle       = "cycle"
+	refinementSourcePreDispatch = "pre-dispatch"
+)
+
+// tierLabel renders the selection tier for the log line. "?" when the caller
+// had no tier to hand over, which is honest rather than a fabricated 3.
+func (o refinementOrigin) tierLabel() string {
+	if o.tier <= 0 {
+		return "?"
+	}
+	return strconv.Itoa(o.tier)
+}
+
+// sourceLabel renders the origin for the log line, never empty.
+func (o refinementOrigin) sourceLabel() string {
+	if o.source == "" {
+		return "unknown"
+	}
+	return o.source
+}
+
 // refineIssue runs the refinement skill for a single issue. It manages state
 // transitions, label updates, and board status. Releases the refinement
-// semaphore when done.
-func (as *AutonomousScheduler) refineIssue(ctx context.Context, owner, repo string, issue gh.UnrefinedIssue) {
+// semaphore when done — after the refinement itself has finished, in every
+// mode (#503).
+func (as *AutonomousScheduler) refineIssue(ctx context.Context, owner, repo string, issue gh.UnrefinedIssue, origin refinementOrigin) {
 	fullRepo := fmt.Sprintf("%s/%s", owner, repo)
 	key := fmt.Sprintf("%s#%d", fullRepo, issue.Number)
 
@@ -7888,11 +7953,13 @@ func (as *AutonomousScheduler) refineIssue(ctx context.Context, owner, repo stri
 	as.mu.Unlock()
 	as.persistState()
 
-	// Dispatch refinement
+	// Run the refinement. Both arms are synchronous, so the deferred semaphore
+	// release above fires when the refinement has finished, not when it was
+	// handed to someone else (#503).
 	var refineErr error
-	if as.onRefinementDispatch != nil {
-		// IPC path — delegate to TypeScript extension
-		as.onRefinementDispatch(owner, repo, issue.Number)
+	if as.refinementRunner != nil {
+		// Registered runner — the stage bridge in extension (IPC) mode.
+		refineErr = as.refinementRunner(ctx, owner, repo, issue.Number)
 	} else {
 		// CLI path — invoke skill directly via execution.Manager
 		refineErr = as.refineViaCLI(ctx, owner, repo, issue.Number)
@@ -7901,9 +7968,14 @@ func (as *AutonomousScheduler) refineIssue(ctx context.Context, owner, repo stri
 	issueSvc := gh.NewIssueService(as.ghClient)
 
 	if refineErr != nil {
+		log.Printf("[refinement] failed %s#%d (tier=%s, source=%s): %v",
+			fullRepo, issue.Number, origin.tierLabel(), origin.sourceLabel(), refineErr)
 		as.recordRefinementFailure(fullRepo, key, issue, refineErr)
 		return
 	}
+
+	log.Printf("[refinement] refined %s#%d (tier=%s, source=%s)",
+		fullRepo, issue.Number, origin.tierLabel(), origin.sourceLabel())
 
 	// Adding pipeline:refined is the ONLY durable record that this issue is
 	// done. Candidacy is re-derived every cycle from live GitHub labels
@@ -8003,7 +8075,7 @@ func (as *AutonomousScheduler) refineStageOptions(owner, repo string, issueNumbe
 	// <binary>/../skills, which is the only root that exists in a workspace
 	// that is not the nightgauge source tree.
 	rendered, err := skillrender.Render(skillrender.Options{
-		Stage:       "issue-refine",
+		Stage:       string(state.StageIssueRefine),
 		Model:       "sonnet", // Refinement is a lighter workload
 		Adapter:     adapterName,
 		SkillsRoots: refineSkillRoots(as.workspaceRoot),
@@ -8017,7 +8089,7 @@ func (as *AutonomousScheduler) refineStageOptions(owner, repo string, issueNumbe
 	return execution.StageOptions{
 		Repo:        fullRepo,
 		IssueNumber: issueNumber,
-		Stage:       "issue-refine",
+		Stage:       string(state.StageIssueRefine),
 		SkillPath:   rendered.SkillPath,
 		Model:       "sonnet",
 		Timeout:     5 * time.Minute,
@@ -8029,7 +8101,7 @@ func (as *AutonomousScheduler) refineStageOptions(owner, repo string, issueNumbe
 		// is strictly harder to detect.
 		AllowedTools: skillrender.FilterHeadlessTools(rendered.AllowedTools),
 		Prompt: execution.BuildPrompt(
-			state.PipelineStage("issue-refine"),
+			state.StageIssueRefine,
 			rendered.Content,
 			issueNumber,
 			filepath.Dir(rendered.SkillPath),
@@ -8058,6 +8130,85 @@ func (as *AutonomousScheduler) refineViaCLI(ctx context.Context, owner, repo str
 		return fmt.Errorf("skill exited with code %d", result.ExitCode)
 	}
 
+	return nil
+}
+
+// refineViaStageRunner invokes the issue-refine skill through the scheduler's
+// StageRunner — in extension (IPC) mode that is IpcStageRunner, so refinement
+// crosses the same pipeline.runStage / pipeline.stageResult bridge every
+// pipeline stage crosses, and this call returns only when the extension has
+// delivered the stage result (#1529, #503).
+//
+// The envelope is composed exactly as the scheduler composes a normal IPC
+// stage: refineStageOptions supplies the rendered skill, its headless tool
+// allowance, the prompt and the refinement timeout; Effort and Thinking are
+// resolved by resolveWireEffort/resolveWireThinking, because on this path the
+// scheduler is the ONLY resolver (#340/#581). No adapter is named — the
+// extension owns per-stage adapter selection (#611).
+func (as *AutonomousScheduler) refineViaStageRunner(ctx context.Context, owner, repo string, issueNumber int) error {
+	if as.scheduler == nil || as.scheduler.stageRunner == nil {
+		return fmt.Errorf("no stage runner available for refinement")
+	}
+	fullRepo := fmt.Sprintf("%s/%s", owner, repo)
+
+	// The adapter name is empty for the same reason StageRunParams carries no
+	// Adapter field: Go holds no adapter on this path, so anything it named
+	// here would be a guess at the extension's own decision.
+	opts, err := as.refineStageOptions(owner, repo, issueNumber, "")
+	if err != nil {
+		return err
+	}
+
+	// The refinement runs in the TARGET repo's checkout, not the launch root:
+	// the daemon is multi-repo, and the refine skill reads the repository it
+	// is refining an issue for. resolveRunRoot refuses rather than silently
+	// rooting one repo's work in another (#882).
+	runRoot, err := as.scheduler.resolveRunRoot(fullRepo)
+	if err != nil {
+		return fmt.Errorf("resolve repo root: %w", err)
+	}
+
+	// Refinement is not a pipeline run, so it has no run to borrow an identity
+	// from; it mints its own so the stage's trace, phase and progress calls are
+	// booked somewhere real instead of being dropped by an empty id (ADR-017
+	// step 0b, which the dispatch boundary asserts).
+	runID, err := runstate.NewRunID()
+	if err != nil {
+		return fmt.Errorf("mint run identity: %w", err)
+	}
+
+	// The refinement timeout is the SLOT's deadline, not just the skill's. On
+	// the bridge, RunStage waits on the extension's reply until the context
+	// ends — so without a deadline here a reply that never arrives (an
+	// extension host that went away mid-stage) would hold a refinement slot for
+	// the life of the daemon.
+	runCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
+	defer cancel()
+
+	result, err := as.scheduler.stageRunner.RunStage(runCtx, StageRunParams{
+		Stage:        state.StageIssueRefine,
+		IssueNumber:  issueNumber,
+		Repo:         fullRepo,
+		Model:        opts.Model,
+		Effort:       resolveWireEffort(as.workspaceRoot, state.StageIssueRefine),
+		Thinking:     resolveWireThinking(opts.Model, routing.ResolvePerformanceMode(as.workspaceRoot)),
+		Timeout:      opts.Timeout,
+		SkillPath:    opts.SkillPath,
+		TargetRepo:   fullRepo,
+		WorktreePath: runRoot,
+		RunID:        runID,
+		AllowedTools: opts.AllowedTools,
+		Prompt:       opts.Prompt,
+	})
+	if err != nil {
+		return fmt.Errorf("refinement stage failed: %w", err)
+	}
+	if result != nil && result.ExitCode != 0 {
+		if result.ErrorText != "" {
+			return fmt.Errorf("refinement stage exited with code %d: %s", result.ExitCode, result.ErrorText)
+		}
+		return fmt.Errorf("refinement stage exited with code %d", result.ExitCode)
+	}
 	return nil
 }
 

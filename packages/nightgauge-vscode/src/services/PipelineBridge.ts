@@ -29,7 +29,7 @@ import type { StatusBarManager } from "../utils/statusBar";
 import type { PipelineTreeProvider } from "../views/PipelineTreeProvider";
 import { createStreamOutputHandler } from "../utils/streamOutputHandler";
 import { createPhaseTracker, type PhaseTracker } from "../utils/phaseTracker";
-import { getStageLabel, formatRateLimitCountdown } from "../utils/skillRunner";
+import { getStageLabel, formatRateLimitCountdown, REFINEMENT_STAGE } from "../utils/skillRunner";
 import {
   isRetryableApiError,
   calculateBackoffDelay,
@@ -51,6 +51,11 @@ import { buildAccountUrl } from "../commands/auditCommands";
  * Matches ipc.RunStageParams in pipeline_messages.go.
  */
 interface IpcRunStageParams {
+  /**
+   * The stage to run. Usually a `PipelineStage`; `issue-refine`
+   * (REFINEMENT_STAGE) is the autonomous scheduler's refinement dispatch,
+   * which crosses this same bridge but is not part of the pipeline (#1529).
+   */
   stage: string;
   issueNumber: number;
   model: string;
@@ -100,6 +105,17 @@ interface IpcAbortParams {
  */
 export class PipelineBridge {
   private readonly skillRunner: SkillRunner;
+  /**
+   * A SECOND executor, used only for refinement (#1529).
+   *
+   * `SkillRunner` tracks exactly one active process handle, which is what
+   * `abort()` kills. Refinement runs on the autonomous scheduler's own cadence
+   * and can overlap a pipeline stage, so sharing one runner would let a
+   * refinement overwrite the pipeline's abort handle — and `pipeline.abort`
+   * would then kill the refinement while the stage it meant to stop kept
+   * running. Two runners keep the two lifecycles independent.
+   */
+  private readonly refinementRunner: SkillRunner;
   private readonly disposables: Array<{ dispose: () => void }> = [];
   private readonly streamHandler: ReturnType<typeof createStreamOutputHandler> | null;
   private readonly phaseTracker: PhaseTracker | null;
@@ -123,6 +139,7 @@ export class PipelineBridge {
     private readonly claudeRateLimitStore: ClaudeRateLimitStore | null = null
   ) {
     this.skillRunner = new SkillRunner(ipcClient, logger);
+    this.refinementRunner = new SkillRunner(ipcClient, logger);
     this.stallStatusBarItem = new StallStatusBarItem();
     this.disposables.push(this.stallStatusBarItem);
 
@@ -200,10 +217,112 @@ export class PipelineBridge {
   }
 
   /**
+   * Execute the autonomous scheduler's refinement dispatch (#1529, closing
+   * #503's unwired-path correction).
+   *
+   * The Go scheduler resolved the whole envelope — model, effort, thinking,
+   * timeout, the target repo's checkout as `worktreeDir` (the daemon is
+   * multi-repo, so this is the repo the issue belongs to, not the launch
+   * root) — and holds its refinement semaphore slot until the
+   * `pipeline.stageResult` below arrives. So this path must ALWAYS answer:
+   * a swallowed error here parks a refinement slot until the stage's own
+   * deadline expires.
+   *
+   * The refine skill is non-destructive by construction: its tool allowance
+   * comes from its own frontmatter through `renderSkill`, exactly as it does
+   * on the CLI path, and nothing here widens it.
+   */
+  private async handleRefinementStage(ipcParams: IpcRunStageParams): Promise<void> {
+    const target = `${ipcParams.repo ?? "?"}#${ipcParams.issueNumber}`;
+    this.logger.info("PipelineBridge: refining issue", {
+      issue: target,
+      model: ipcParams.model,
+      worktreeDir: ipcParams.worktreeDir,
+    });
+
+    const runParams: RunStageParams = {
+      stage: REFINEMENT_STAGE,
+      issueNumber: ipcParams.issueNumber,
+      model: ipcParams.model,
+      effort: ipcParams.effort,
+      thinking: ipcParams.thinking,
+      maxTokens: ipcParams.maxTokens,
+      timeout: ipcParams.timeoutMs,
+      skillContent: ipcParams.skillContent,
+      contextFile: ipcParams.contextFile,
+      outputFile: ipcParams.outputFile,
+      worktreeDir: ipcParams.worktreeDir,
+      repo: ipcParams.repo,
+      allowedTools: ipcParams.allowedTools,
+      autonomousMode: ipcParams.autonomousMode,
+      runId: ipcParams.runId,
+    };
+
+    let result: Awaited<ReturnType<typeof this.refinementRunner.runStage>> | undefined;
+    let thrown: unknown;
+    try {
+      result = await this.refinementRunner.runStage(runParams);
+    } catch (err) {
+      thrown = err;
+      this.logger.error("PipelineBridge: refinement failed", {
+        issue: target,
+        error: String(err),
+      });
+    }
+
+    // One result, always — success, non-zero exit, or throw. The payload is
+    // deliberately narrower than a pipeline stage's: refinement has no
+    // escalation ladder, no budget kill and no PR to ship, so the fields Go
+    // reads back are the outcome, the tokens it cost and the reason it failed.
+    await this.ipcClient
+      .call("pipeline.stageResult", {
+        stage: REFINEMENT_STAGE,
+        issueNumber: ipcParams.issueNumber,
+        success: result?.success ?? false,
+        exitCode: result?.exitCode ?? 1,
+        inputTokens: result?.inputTokens ?? 0,
+        outputTokens: result?.outputTokens ?? 0,
+        cacheReadTokens: result?.cacheReadTokens ?? 0,
+        cacheCreationTokens: result?.cacheCreationTokens ?? 0,
+        costUsd: result?.costUsd ?? 0,
+        errorText: thrown ? `pipeline-bridge: ${String(thrown)}` : result?.errorText,
+        lastOutputLines: result?.lastOutputLines,
+        sessionId: result?.sessionId,
+        servedModel: result?.servedModel,
+        servedEffort: result?.servedEffort,
+        servedThinking: result?.servedThinking,
+      })
+      .catch((err) => {
+        // Go is blocked on this result. If even the reply fails there is
+        // nothing left to do but say so loudly — the slot frees on the
+        // stage's own deadline.
+        this.logger.error("PipelineBridge: refinement result delivery failed", {
+          issue: target,
+          error: String(err),
+        });
+      });
+
+    this.logger.info("PipelineBridge: refinement complete", {
+      issue: target,
+      success: result?.success ?? false,
+      exitCode: result?.exitCode ?? 1,
+    });
+  }
+
+  /**
    * Handle a pipeline.runStage event from Go.
    * Executes the stage via SkillRunner and sends the result back.
    */
   private async handleRunStage(ipcParams: IpcRunStageParams): Promise<void> {
+    // Refinement is dispatched over this same wire but is not a pipeline
+    // stage: it has no stage row in the tree, no board column and no place in
+    // the status bar's progression, so it takes its own path rather than
+    // driving the pipeline UI with a stage nothing there knows about (#1529).
+    if (ipcParams.stage === REFINEMENT_STAGE) {
+      await this.handleRefinementStage(ipcParams);
+      return;
+    }
+
     const stage = ipcParams.stage as PipelineStage;
 
     this.logger.info("PipelineBridge: received runStage", {

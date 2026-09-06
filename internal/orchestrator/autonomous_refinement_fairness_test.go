@@ -134,15 +134,16 @@ func TestRunRefinementCycle_RotatesScanStartAcrossCycles(t *testing.T) {
 	var mu sync.Mutex
 	var dispatchedRepo string
 	// holdSlot pins the slot for the duration of a cycle, exactly as in
-	// TestRunRefinementCycle_RefusedSemaphoreGatesDispatch: OnRefinementDispatch
-	// runs synchronously inside refineIssue, before its release defer, so
+	// TestRunRefinementCycle_RefusedSemaphoreGatesDispatch: the refinement
+	// runner runs synchronously inside refineIssue, before its release defer, so
 	// blocking here holds the token until the test lets it go.
 	holdSlot := make(chan struct{})
-	as.OnRefinementDispatch(func(owner, repo string, _ int) {
+	as.WithRefinementRunner(func(_ context.Context, owner, repo string, _ int) error {
 		mu.Lock()
 		dispatchedRepo = repo
 		mu.Unlock()
 		<-holdSlot
+		return nil
 	})
 	observed := func() string {
 		mu.Lock()

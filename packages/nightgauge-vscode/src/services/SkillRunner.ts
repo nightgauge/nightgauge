@@ -26,6 +26,7 @@ import {
   type RateLimitEventData,
   type RecentBashEntry,
   type ToolCallLogEntry,
+  type RunnableStage,
 } from "../utils/skillRunner";
 import type { StallEvent } from "../schemas/stallEvents";
 import type { StallEscalationLevel, PauseForStallPayload } from "../schemas/pipelineState";
@@ -38,7 +39,13 @@ import type { IpcClient } from "./IpcClient";
  * Matches the Go RunStageParams from pipeline_messages.go.
  */
 export interface RunStageParams {
-  stage: PipelineStage;
+  /**
+   * The stage to execute. `issue-refine` (REFINEMENT_STAGE) is accepted
+   * alongside the pipeline stages: the autonomous scheduler dispatches
+   * refinement over the same `pipeline.runStage` wire (#1529), and it is
+   * deliberately NOT a `PipelineStage` — it belongs to no stage ordering.
+   */
+  stage: RunnableStage;
   issueNumber: number;
   /**
    * The model this stage runs on — AUTHORITATIVE (#340).
@@ -327,6 +334,11 @@ export class SkillRunner {
    */
   async runStage(params: RunStageParams, callbacks?: SkillRunnerCallbacks): Promise<StageResult> {
     const { stage, issueNumber } = params;
+    // The callback surface is typed by `PipelineStage` for the same reason the
+    // executor is (see the dispatch call below): refinement rides this wire
+    // without joining the stage union. Consumers switch on the stage they
+    // dispatched, not on this value.
+    const callbackStage = stage as PipelineStage;
     const startTime = Date.now();
 
     // The wire model is the decision, so an absent one is a broken contract —
@@ -380,23 +392,29 @@ export class SkillRunner {
 
     return new Promise<StageResult>((resolve) => {
       const handle = runStageSkillHeadless(
-        stage,
+        // The executor's stage-keyed tables are typed by `PipelineStage`, and
+        // refinement must stay out of that union — it belongs to no stage
+        // ordering, board column or progression table. The two tables it does
+        // need carry an explicit entry for it (STAGE_TO_SKILL_DIR, the label
+        // map); every other lookup is a config read that resolves to its
+        // default for an unknown key, which is the behaviour refinement wants.
+        stage as PipelineStage,
         issueNumber,
         {
           onStdout: (data) => {
-            callbacks?.onStdout?.(stage, data);
+            callbacks?.onStdout?.(callbackStage, data);
           },
           onStderr: (data) => {
-            callbacks?.onStderr?.(stage, data);
+            callbacks?.onStderr?.(callbackStage, data);
           },
           onTokenUsage: async (usage) => {
             callbacks?.onTokenUsage?.(usage);
           },
           onStageProgress: (usage) => {
-            callbacks?.onStageProgress?.(stage, usage);
+            callbacks?.onStageProgress?.(callbackStage, usage);
           },
           onPhaseStart: (_detectedStage, name, index, total) => {
-            callbacks?.onPhaseStart?.(stage, name, index, total);
+            callbacks?.onPhaseStart?.(callbackStage, name, index, total);
           },
           onToolCall: (toolName, toolInput) => {
             const input = toolInput as Record<string, unknown> | undefined;
@@ -408,7 +426,7 @@ export class SkillRunner {
                   : typeof input?.pattern === "string"
                     ? (input.pattern as string)
                     : "";
-            callbacks?.onToolCall?.(stage, { tool: toolName, target });
+            callbacks?.onToolCall?.(callbackStage, { tool: toolName, target });
           },
           onRateLimitEvent: (event) => {
             callbacks?.onRateLimitEvent?.(event);
@@ -421,11 +439,11 @@ export class SkillRunner {
           },
           onStallEscalation: callbacks?.onStallEscalation
             ? (level, event) => {
-                callbacks.onStallEscalation!(stage, level, event);
+                callbacks.onStallEscalation!(callbackStage, level, event);
               }
             : undefined,
           onStallPause: callbacks?.onStallPause
-            ? (payload) => callbacks.onStallPause!(stage, payload)
+            ? (payload) => callbacks.onStallPause!(callbackStage, payload)
             : undefined,
           onComplete: async (result: SkillRunResult) => {
             const durationMs = Date.now() - startTime;

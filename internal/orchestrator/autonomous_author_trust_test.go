@@ -69,8 +69,9 @@ func TestRunRefinementCycle_SkipsUntrustedAuthor(t *testing.T) {
 	as.state.Status = "running"
 
 	dispatched := make(chan int, 2)
-	as.OnRefinementDispatch(func(owner, repo string, issueNumber int) {
+	as.WithRefinementRunner(func(_ context.Context, owner, repo string, issueNumber int) error {
 		dispatched <- issueNumber
+		return nil
 	})
 
 	as.runRefinementCycle(context.Background())
