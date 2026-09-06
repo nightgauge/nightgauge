@@ -42,7 +42,11 @@ export interface ScaffoldResult {
 }
 
 export interface KnowledgeConfig {
-  /** Enable knowledge directory scaffolding */
+  /**
+   * Enable knowledge directory scaffolding. Defaults to true when omitted
+   * (ADR-020); only an explicit `false` opts out, for repo footprint or
+   * per-run token cost.
+   */
   enabled?: boolean;
   /** Automatically scaffold when picking up an issue (requires enabled=true) */
   auto_scaffold?: boolean;
@@ -207,7 +211,10 @@ export class KnowledgeService {
     isEpic: boolean,
     config: KnowledgeConfig
   ): Promise<ScaffoldResult> {
-    if (!config.enabled) {
+    // Absent means ON (ADR-020). Only an explicit `false` opts out, so an
+    // `!config.enabled` test here would silently disable the knowledge base
+    // for every caller that passes a config without the key.
+    if (config.enabled === false) {
       return {
         knowledge_path: "",
         files_created: [],

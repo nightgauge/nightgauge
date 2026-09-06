@@ -201,7 +201,7 @@ feature additions, single-file changes, or straightforward implementations.
 
 **No-op conditions** (skip silently, set `ARCH_CONSTRAINTS="[]"`):
 
-- `knowledge.enabled != true` in config
+- `knowledge.enabled: false` in config (an absent key means enabled — ADR-020)
 - No knowledge index exists or recall binary missing
 - `files_to_modify` and `files_to_create` are both empty
 - Recall exits with an error (log warning, continue — no-op safe)
@@ -210,7 +210,8 @@ feature additions, single-file changes, or straightforward implementations.
 ARCH_CONSTRAINTS="[]"
 ARCH_CONSTRAINT_COUNT=0
 
-KNOWLEDGE_ENABLED=$(jq -r '.knowledge.enabled // false' .nightgauge/config.yaml 2>/dev/null || echo "false")
+# Absent means ON (ADR-020) — only an explicit `false` opts out.
+KNOWLEDGE_ENABLED=$(jq -r '.knowledge.enabled // true' .nightgauge/config.yaml 2>/dev/null || echo "true")
 if [ "$KNOWLEDGE_ENABLED" != "true" ]; then
   echo "Phase 1.6: knowledge.enabled=false — skipping recall"
 else

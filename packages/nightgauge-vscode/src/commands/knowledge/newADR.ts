@@ -57,9 +57,10 @@ export function registerKnowledgeNewADRCommand(logger: Logger): vscode.Disposabl
       return;
     }
 
-    // Guard: knowledge must be enabled
+    // Guard: knowledge must be enabled. The fallback is `true` — absent means
+    // ON (ADR-020), so only an explicit opt-out disables the command.
     const knowledgeConfig = vscode.workspace.getConfiguration("nightgauge.knowledge");
-    const enabled = knowledgeConfig.get<boolean>("enabled", false);
+    const enabled = knowledgeConfig.get<boolean>("enabled", true);
     if (!enabled) {
       vscode.window.showInformationMessage(
         "Knowledge base is disabled. Enable it in settings (nightgauge.knowledge.enabled)."

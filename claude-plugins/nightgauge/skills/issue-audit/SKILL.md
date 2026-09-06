@@ -469,8 +469,9 @@ Parse the lifecycle output for cross-repo references and emit:
 
 ### Phase 9: Knowledge Scaffold
 
-When `knowledge.enabled: true` in `.nightgauge/config.yaml` OR the
-manifest entry sets `knowledge_path`:
+When `knowledge.enabled` resolves true in `.nightgauge/config.yaml` — the
+default, and an absent key means the default (ADR-020) — OR the manifest entry
+sets `knowledge_path`:
 
 ```bash
 KNOWLEDGE_PATH=$(printf '%s\n' "$ENTRY" | jq -r '.knowledge_path // empty')

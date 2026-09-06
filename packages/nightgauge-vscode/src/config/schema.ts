@@ -2910,7 +2910,7 @@ export type ComplexityModelConfig = z.infer<typeof ComplexityModelConfigSchema>;
  * Knowledge scaffolding configuration (Issue #1680)
  */
 export const KnowledgeConfigSchema = z.object({
-  /** Enable knowledge directory scaffolding during issue pickup */
+  /** Enable knowledge directory scaffolding during issue pickup (default: true — ADR-020; set false to opt out for repo footprint or token cost) */
   enabled: z.boolean().optional(),
   /** Automatically scaffold when picking up an issue (requires enabled=true) */
   auto_scaffold: z.boolean().optional(),

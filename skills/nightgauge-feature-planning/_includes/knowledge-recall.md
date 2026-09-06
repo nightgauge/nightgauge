@@ -78,7 +78,7 @@ re-deriving them.
 
 **No-op conditions** (skip silently, set `RECALL_HITS="[]"`):
 
-- `knowledge.enabled` is false in `.nightgauge/config.yaml`
+- `knowledge.enabled: false` in `.nightgauge/config.yaml` (absent means enabled — ADR-020)
 - No knowledge index exists (`.nightgauge/knowledge/` is empty or missing)
 - `nightgauge knowledge recall` exits with an error
 - Recall returns 0 results above threshold
@@ -89,7 +89,8 @@ to 4096 characters total.
 
 ```bash
 # Step 3.7.1: Check knowledge.enabled guard
-KB_ENABLED=$(jq -r '.knowledge.enabled // false' .nightgauge/config.yaml 2>/dev/null || echo "false")
+# Absent means ON (ADR-020) — only an explicit `false` opts out.
+KB_ENABLED=$(jq -r '.knowledge.enabled // true' .nightgauge/config.yaml 2>/dev/null || echo "true")
 RECALL_HITS="[]"
 RECALL_HIT_COUNT=0
 RECALL_QUERY_ID=""

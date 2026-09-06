@@ -75,5 +75,6 @@ human_in_the_loop:
 
 # Knowledge base — persistent context per issue (PRD + decision logs)
 knowledge:
-  enabled: false # Set to true to enable automatic knowledge scaffolding
+  enabled: true # Set to false to opt out — the two reasons are repo footprint
+  # (files are written and committed under .nightgauge/knowledge/) and per-run token cost
   auto_scaffold: true # Scaffold automatically on issue pickup (requires enabled: true)
