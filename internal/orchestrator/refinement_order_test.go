@@ -36,7 +36,7 @@ func unrefined(number int, labels ...string) gh.UnrefinedIssue {
 // state the board it means without standing up a graph builder.
 func viewOver(backlogEnabled bool, nodes map[string]*depgraph.Node) refinementDispatchView {
 	v := refinementDispatchView{
-		nodes:          nodes,
+		nodes:          snapshotRefinementNodes(nodes),
 		holds:          map[string]string{},
 		openPR:         map[string]bool{},
 		excludeLabels:  defaultExcludeLabels,
@@ -310,9 +310,16 @@ func tieredIssuesServer(t *testing.T) *httptest.Server {
 }
 
 // TestRunRefinementCycle_RefinesInDispatchOrder is the wiring assertion: the
-// cycle itself (not just planRefinement) refines the Ready issue first and
-// leaves the oldest, off-board one alone under the default backlog gate.
+// cycle itself (not just planRefinement) picks the Ready issue before the
+// prioritized Backlog one and leaves the oldest, off-board issue alone under
+// the default backlog gate.
+//
+// The ORDER is asserted from the cycle's own plan line, which is written
+// synchronously as the candidates are chosen. The dispatch callbacks are not
+// an order oracle: refineIssue runs each candidate in its own goroutine, so
+// with more than one slot their callbacks legitimately interleave.
 func TestRunRefinementCycle_RefinesInDispatchOrder(t *testing.T) {
+	logs := withCapturedLog(t)
 	srv := tieredIssuesServer(t)
 	defer srv.Close()
 
@@ -331,10 +338,10 @@ func TestRunRefinementCycle_RefinesInDispatchOrder(t *testing.T) {
 	as.graphCacheAt = time.Now()
 
 	var mu sync.Mutex
-	var order []int
+	refined := map[int]bool{}
 	as.OnRefinementDispatch(func(_, _ string, n int) {
 		mu.Lock()
-		order = append(order, n)
+		refined[n] = true
 		mu.Unlock()
 	})
 	as.markRefinedFn = func(context.Context, string, string, int) error { return nil }
@@ -342,11 +349,16 @@ func TestRunRefinementCycle_RefinesInDispatchOrder(t *testing.T) {
 	as.runRefinementCycle(context.Background())
 	as.drainBackground()
 
+	if out := logs.String(); !strings.Contains(out, "candidate(s) in dispatch order: [3 2]") {
+		t.Fatalf("expected the plan to order Ready #3 before prioritized-Backlog #2, got:\n%s", out)
+	}
 	mu.Lock()
-	got := append([]int(nil), order...)
-	mu.Unlock()
-	if len(got) != 2 || got[0] != 3 || got[1] != 2 {
-		t.Fatalf("refinement order = %v, want [3 2] — Ready before prioritized Backlog, and #1 (off board) not refined at all", got)
+	defer mu.Unlock()
+	if !refined[3] || !refined[2] {
+		t.Fatalf("both board issues should have been refined, got %v", refined)
+	}
+	if refined[1] {
+		t.Fatal("#1 is off the board (tier 3) and refinement_backlog is off — it must not be refined")
 	}
 }
 

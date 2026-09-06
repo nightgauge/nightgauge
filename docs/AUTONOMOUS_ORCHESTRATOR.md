@@ -223,15 +223,15 @@ acceptance criteria, labels, and sizing before dispatch.
    (#482).
 2. Issues already running through refinement, on cooldown, or already in a
    pipeline slot are skipped
-2a. **Candidates are ordered by dispatch relevance, not by age** (#1514).
+   2a. **Candidates are ordered by dispatch relevance, not by age** (#1514).
    Three tiers, highest first, and within a tier the dispatch scan's own
    priority ordering (P0 → P3, then oldest issue number):
 
-   | Tier | What it is                                       | Refined by default |
-   | ---- | ------------------------------------------------ | ------------------ |
-   | 1    | On a project board with Status `Ready`           | yes                |
-   | 2    | On the board in `Backlog` **with a Priority set** | yes                |
-   | 3    | Every other open issue, oldest first             | **no** — see `refinement_backlog` |
+   | Tier | What it is                                        | Refined by default                |
+   | ---- | ------------------------------------------------- | --------------------------------- |
+   | 1    | On a project board with Status `Ready`            | yes                               |
+   | 2    | On the board in `Backlog` **with a Priority set** | yes                               |
+   | 3    | Every other open issue, oldest first              | **no** — see `refinement_backlog` |
 
    The scan used to take whatever the listing returned first, which is
    GitHub's default order: the OLDEST open issues. On a workspace with 165
@@ -240,33 +240,29 @@ acceptance criteria, labels, and sizing before dispatch.
    stay unrefined and unsized.
 
 2b. **Issues that can never dispatch are skipped**, because refining one spends
-   a model call on a body no pipeline will read. The classes are: an
-   `autonomous.exclude_labels` label (`owner-action`, `blocked`); a board
-   status of `In progress`, `In review` or `Done`; an open PR linked to the
-   issue (the work already shipped, and a rewrite edits text the PR was
-   written against); and an issue held for a human decision
-   (`architecture-approval`, operator-resume). One log line is written per
-   skip class per repo per cycle — never one per issue.
+a model call on a body no pipeline will read. The classes are: an
+`autonomous.exclude_labels` label (`owner-action`, `blocked`); a board
+status of `In progress`, `In review` or `Done`; an open PR linked to the
+issue (the work already shipped, and a rewrite edits text the PR was
+written against); and an issue held for a human decision
+(`architecture-approval`, operator-resume). One log line is written per
+skip class per repo per cycle — never one per issue.
 
 2c. **Tier cap.** The per-repo cap of five candidates per cycle is unchanged;
-   what changed is which five. On top of it, tier 3 is not refined at all
-   while a tier-1 or tier-2 issue **anywhere in the workspace** is still
-   unrefined, so the hourly rate rail is never spent on the backlog while
-   work that is about to run is unsized. Issues labelled `auto-process` are
-   exempt from both tier gates — that label is the operator asking for one
-   issue by name.
-3. Qualifying issues are dispatched to the `nightgauge-issue-refine` skill
-   via the execution manager (CLI mode) or IPC callback (VSCode mode)
-4. On success: `pipeline:refined` label is added, `auto-process` label is
-   removed (if present), and the issue is moved to Ready status on the board
-5. On failure — including a failure to ADD the `pipeline:refined` label, which
-   was previously logged and dropped — the run is recorded in
-   `state.RefinementFailed` with its reason, the per-issue consecutive-failure
-   counter is incremented, and the issue enters a cooldown (default: 5 minutes)
-6. After **3 consecutive failures** the candidate loop stops re-selecting that
-   issue and raises an Action Center card. The cooldown bounds how OFTEN an
-   issue is retried; this bounds how MANY times. Without it a deterministic
-   failure retried at the rail's cap indefinitely (#993)
+what changed is which five. On top of it, tier 3 is not refined at all
+while a tier-1 or tier-2 issue **anywhere in the workspace** is still
+unrefined, so the hourly rate rail is never spent on the backlog while
+work that is about to run is unsized. Issues labelled `auto-process` are
+exempt from both tier gates — that label is the operator asking for one
+issue by name. 3. Qualifying issues are dispatched to the `nightgauge-issue-refine` skill
+via the execution manager (CLI mode) or IPC callback (VSCode mode) 4. On success: `pipeline:refined` label is added, `auto-process` label is
+removed (if present), and the issue is moved to Ready status on the board 5. On failure — including a failure to ADD the `pipeline:refined` label, which
+was previously logged and dropped — the run is recorded in
+`state.RefinementFailed` with its reason, the per-issue consecutive-failure
+counter is incremented, and the issue enters a cooldown (default: 5 minutes) 6. After **3 consecutive failures** the candidate loop stops re-selecting that
+issue and raises an Action Center card. The cooldown bounds how OFTEN an
+issue is retried; this bounds how MANY times. Without it a deterministic
+failure retried at the rail's cap indefinitely (#993)
 
 **Concurrency control:**
 

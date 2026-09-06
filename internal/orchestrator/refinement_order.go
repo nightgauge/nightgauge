@@ -51,6 +51,37 @@ const (
 	refinementSkipTierCap       = "tier-cap-higher-tier-pending"
 )
 
+// refinementNode is the immutable slice of one board node the refinement scan
+// needs. Copied under as.mu; never a pointer into the live graph.
+type refinementNode struct {
+	boardStatus     string
+	priority        string
+	labels          []string
+	labelsTruncated bool
+	state           string
+}
+
+// snapshotRefinementNodes copies the fields the refinement scan reads out of a
+// built graph.
+func snapshotRefinementNodes(nodes map[string]*depgraph.Node) map[string]refinementNode {
+	out := make(map[string]refinementNode, len(nodes))
+	for key, n := range nodes {
+		if n == nil {
+			continue
+		}
+		labels := make([]string, len(n.Labels))
+		copy(labels, n.Labels)
+		out[key] = refinementNode{
+			boardStatus:     n.BoardStatus,
+			priority:        n.Priority,
+			labels:          labels,
+			labelsTruncated: n.LabelsTruncated,
+			state:           n.State,
+		}
+	}
+	return out
+}
+
 // refinementCandidate is one issue with the ordering keys derived from the
 // board graph.
 type refinementCandidate struct {
@@ -63,11 +94,16 @@ type refinementCandidate struct {
 // refinement order and skips. Every field is either already in memory or
 // derived from the cached dependency graph — building one costs no forge call.
 type refinementDispatchView struct {
-	// nodes is the cached board graph keyed "owner/repo#number". Nil or empty
-	// when no dispatch cycle has built a graph yet; every issue then falls to
-	// tier 3, which is exactly the pre-#1514 behaviour and is gated off by
+	// nodes is a SNAPSHOT of the cached board graph, keyed "owner/repo#number".
+	// A copy, not the graph's own nodes: the refinement scan runs on its own
+	// goroutine and the dispatch cycle mutates node fields in place (the
+	// in-review recovery rewrites BoardStatus), so holding pointers into the
+	// live graph would be a cross-goroutine read of mutating state.
+	//
+	// Empty when no dispatch cycle has built a graph yet; every issue then
+	// falls to tier 3, which is the pre-#1514 behaviour and is gated off by
 	// default.
-	nodes map[string]*depgraph.Node
+	nodes map[string]refinementNode
 	// holds maps an issue key to the human hold it is waiting on.
 	holds map[string]string
 	// openPR is the union of "open PR is BLOCKED" and "In review, PR-backed":
@@ -88,6 +124,7 @@ type refinementDispatchView struct {
 // skip candidates. Takes as.mu once; makes no GitHub call.
 func (as *AutonomousScheduler) refinementView() refinementDispatchView {
 	v := refinementDispatchView{
+		nodes:          map[string]refinementNode{},
 		holds:          map[string]string{},
 		openPR:         map[string]bool{},
 		excludeLabels:  resolvedExcludeLabels(as.config.ExcludeLabels),
@@ -96,7 +133,7 @@ func (as *AutonomousScheduler) refinementView() refinementDispatchView {
 
 	as.mu.Lock()
 	if as.graphCache != nil {
-		v.nodes = as.graphCache.Nodes
+		v.nodes = snapshotRefinementNodes(as.graphCache.Nodes)
 	}
 	for _, f := range as.state.Failed {
 		if hold := HoldForTerminalKind(f.Kind); hold != HoldNone {
@@ -129,19 +166,18 @@ func (as *AutonomousScheduler) refinementView() refinementDispatchView {
 // tier 3 permanently on a single over-labelled issue.
 func (v refinementDispatchView) hasHigherTierPending() bool {
 	for key, node := range v.nodes {
-		if node == nil || !strings.EqualFold(node.State, "OPEN") || node.LabelsTruncated {
+		if !strings.EqualFold(node.state, "OPEN") || node.labelsTruncated {
 			continue
 		}
-		if labelSetHas(node.Labels, gh.LabelRefined) || labelSetHas(node.Labels, gh.LabelEpic) {
+		if labelSetHas(node.labels, gh.LabelRefined) || labelSetHas(node.labels, gh.LabelEpic) {
 			continue
 		}
-		tier := refinementTierForNode(node)
-		if tier > refinementTierPrioritizedBacklog {
+		if refinementTierFor(node, true) > refinementTierPrioritizedBacklog {
 			continue
 		}
 		// Tier gates are deliberately not consulted here: this function is
 		// what feeds them, and consulting them would be circular.
-		if v.baseSkipReason(key, node, node.Labels) != "" {
+		if v.baseSkipReason(key, node, true, node.labels) != "" {
 			continue
 		}
 		return true
@@ -149,16 +185,16 @@ func (v refinementDispatchView) hasHigherTierPending() bool {
 	return false
 }
 
-// refinementTierForNode classifies one board node. A nil node — an issue that
-// is on no board the workspace polls — is tier 3.
-func refinementTierForNode(node *depgraph.Node) int {
-	if node == nil {
+// refinementTierFor classifies one issue. An issue on no board the workspace
+// polls (onBoard false) is tier 3.
+func refinementTierFor(node refinementNode, onBoard bool) int {
+	if !onBoard {
 		return refinementTierBacklog
 	}
-	if isReadyStatus(node.BoardStatus) {
+	if isReadyStatus(node.boardStatus) {
 		return refinementTierReady
 	}
-	if isBacklogStatus(node.BoardStatus) && strings.TrimSpace(node.Priority) != "" {
+	if isBacklogStatus(node.boardStatus) && strings.TrimSpace(node.priority) != "" {
 		return refinementTierPrioritizedBacklog
 	}
 	return refinementTierBacklog
@@ -182,7 +218,7 @@ func refinementBoardStatusRefinable(status string) bool {
 // baseSkipReason returns the skip class for conditions that are independent of
 // the tier gates: a human-only label, a human hold, an open PR, or a board
 // status with no dispatch ahead of it. Empty string means "not skipped".
-func (v refinementDispatchView) baseSkipReason(key string, node *depgraph.Node, labels []string) string {
+func (v refinementDispatchView) baseSkipReason(key string, node refinementNode, onBoard bool, labels []string) string {
 	if _, excluded := excludedLabelMatch(labels, v.excludeLabels); excluded {
 		return refinementSkipExcludedLabel
 	}
@@ -192,7 +228,7 @@ func (v refinementDispatchView) baseSkipReason(key string, node *depgraph.Node, 
 	if v.openPR[key] {
 		return refinementSkipOpenPR
 	}
-	if node != nil && !refinementBoardStatusRefinable(node.BoardStatus) {
+	if onBoard && !refinementBoardStatusRefinable(node.boardStatus) {
 		return refinementSkipBoardStatus
 	}
 	return ""
@@ -202,8 +238,8 @@ func (v refinementDispatchView) baseSkipReason(key string, node *depgraph.Node, 
 // gates. `auto-process` is exempt from both: the label is the operator saying
 // "this one, now", and honouring it is what lets a cold workspace get useful
 // work refined without turning the whole backlog sweep on.
-func (v refinementDispatchView) skipReason(key string, node *depgraph.Node, labels []string, tier int) string {
-	if reason := v.baseSkipReason(key, node, labels); reason != "" {
+func (v refinementDispatchView) skipReason(key string, node refinementNode, onBoard bool, labels []string, tier int) string {
+	if reason := v.baseSkipReason(key, node, onBoard, labels); reason != "" {
 		return reason
 	}
 	if tier != refinementTierBacklog || labelSetHas(labels, gh.LabelAutoProcess) {
@@ -240,15 +276,15 @@ func (v refinementDispatchView) planRefinement(fullRepo string, issues []gh.Unre
 
 	for _, issue := range issues {
 		key := fmt.Sprintf("%s#%d", fullRepo, issue.Number)
-		node := v.nodes[key]
-		tier := refinementTierForNode(node)
-		if reason := v.skipReason(key, node, issue.Labels, tier); reason != "" {
+		node, onBoard := v.nodes[key]
+		tier := refinementTierFor(node, onBoard)
+		if reason := v.skipReason(key, node, onBoard, issue.Labels, tier); reason != "" {
 			skips[reason] = append(skips[reason], issue.Number)
 			continue
 		}
 		rank := candidatePriorityRank("")
-		if node != nil {
-			rank = candidatePriorityRank(node.Priority)
+		if onBoard {
+			rank = candidatePriorityRank(node.priority)
 		}
 		kept = append(kept, refinementCandidate{issue: issue, tier: tier, priorityRank: rank})
 	}
