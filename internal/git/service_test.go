@@ -1,6 +1,7 @@
 package git
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -1748,5 +1749,133 @@ func TestPushBranchRefusesAnOptionLikeName(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "refusing") {
 		t.Errorf("error = %v, want the ref-arg refusal", err)
+	}
+}
+
+// TestResetLocalBranchToRemote_RefusesBranchHeldByAnotherWorktree pins the
+// 2026-09-06 containment incident (#1499) at its source.
+//
+// Storer.SetReference writes the ref and nothing else — no index, no working
+// tree, no reflog message. Aimed at a branch a DIFFERENT worktree has checked
+// out (and NewService's EnableDotGitCommonDir means the write always lands in
+// the shared ref store, whichever worktree the caller sits in) it leaves that
+// checkout's HEAD ahead of its own tree, and every path the two commits differ
+// in reads as a staged change nothing wrote. That delta then read as fresh dirt
+// to the worktree-containment baseline of three concurrent pipeline slots in
+// three OTHER repositories, and killed all three.
+func TestResetLocalBranchToRemote_RefusesBranchHeldByAnotherWorktree(t *testing.T) {
+	svc, workDir := setupTestRepoWithRemote(t)
+
+	const branch = "feat/1499-held-elsewhere"
+
+	if err := svc.BranchCreate(branch); err != nil {
+		t.Fatalf("BranchCreate: %v", err)
+	}
+	commitFile(t, svc, workDir, "work.txt", "published work", "feat: work")
+	if err := svc.PushBranch(branch); err != nil {
+		t.Fatalf("PushBranch: %v", err)
+	}
+	if err := svc.Fetch(true); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if err := svc.Checkout("master"); err != nil {
+		t.Fatalf("Checkout master: %v", err)
+	}
+
+	// A linked worktree takes the branch, as a concurrent slot's does.
+	linked := filepath.Join(t.TempDir(), "slot")
+	gitExecTest(t, workDir, "worktree", "add", "--quiet", linked, branch)
+
+	// Move origin ahead of the local ref so a reset would have something to
+	// write. The slot commits in its own worktree (which legitimately moves the
+	// branch), pushes, and then the local ref is rewound to the stale tip — the
+	// exact shape ResetLocalBranchToRemote exists to reconcile.
+	stale := localBranchHash(t, svc, branch)
+	gitExecTest(t, linked, "commit", "--quiet", "--allow-empty", "-m", "slot work")
+	gitExecTest(t, linked, "push", "--quiet", "origin", branch)
+	gitExecTest(t, linked, "reset", "--hard", "--quiet", stale)
+	if err := svc.Fetch(true); err != nil {
+		t.Fatalf("Fetch after slot push: %v", err)
+	}
+	before := localBranchHash(t, svc, branch)
+	if remoteBranchHash(t, svc, branch) == before {
+		t.Fatal("setup failed: origin should have moved ahead of the stale local ref")
+	}
+
+	err := svc.ResetLocalBranchToRemote(branch)
+	if err == nil {
+		t.Fatal("expected a refusal: the branch is checked out by another worktree")
+	}
+	var held *BranchHeldByWorktreeError
+	if !errors.As(err, &held) {
+		t.Fatalf("got %v, want *BranchHeldByWorktreeError", err)
+	}
+	if held.Branch != branch {
+		t.Errorf("held.Branch = %q, want %q", held.Branch, branch)
+	}
+
+	// NOTHING was written. A guard that refuses after the fact is not a guard.
+	if got := localBranchHash(t, svc, branch); got != before {
+		t.Errorf("ref moved despite the refusal: %s -> %s", before, got)
+	}
+	if status := gitExecTest(t, linked, "status", "--porcelain"); strings.TrimSpace(status) != "" {
+		t.Errorf("the holding worktree was left dirty by a refused reset:\n%s", status)
+	}
+}
+
+// TestResetLocalBranchToRemote_RefusesProtectedBranch covers the one command
+// that could aim the ref write at a default branch: `nightgauge git
+// branch-create main` takes its name from an unvalidated positional argument
+// (#1499).
+func TestResetLocalBranchToRemote_RefusesProtectedBranch(t *testing.T) {
+	svc, _ := setupTestRepoWithRemote(t)
+
+	before := localBranchHash(t, svc, "master")
+	if err := svc.ResetLocalBranchToRemote("master"); err == nil {
+		t.Fatal("expected a refusal for the default branch")
+	} else if !strings.Contains(err.Error(), "protected") {
+		t.Errorf("error = %q, want it to name the protected branch", err)
+	}
+	if got := localBranchHash(t, svc, "master"); got != before {
+		t.Errorf("protected ref moved: %s -> %s", before, got)
+	}
+}
+
+// TestResetLocalBranchToRemote_MovesTreeWhenOwnWorktreeHoldsBranch: when the
+// CALLER's own checkout is the holder, the reset is legitimate — but it must
+// move ref and tree together, or it manufactures the same phantom dirt in the
+// caller's own tree. That is the #3884 re-run path, and it must keep working.
+func TestResetLocalBranchToRemote_MovesTreeWhenOwnWorktreeHoldsBranch(t *testing.T) {
+	svc, workDir := setupTestRepoWithRemote(t)
+
+	const branch = "feat/1499-own-worktree"
+
+	if err := svc.BranchCreate(branch); err != nil {
+		t.Fatalf("BranchCreate: %v", err)
+	}
+	commitFile(t, svc, workDir, "work.txt", "published work", "feat: work")
+	if err := svc.PushBranch(branch); err != nil {
+		t.Fatalf("PushBranch: %v", err)
+	}
+	if err := svc.Fetch(true); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	remoteHash := remoteBranchHash(t, svc, branch)
+
+	// Diverge locally, still on the branch.
+	commitFile(t, svc, workDir, "local.txt", "divergent", "feat: divergent")
+	if localBranchHash(t, svc, branch) == remoteHash {
+		t.Fatal("setup failed: local should have diverged")
+	}
+
+	if err := svc.ResetLocalBranchToRemote(branch); err != nil {
+		t.Fatalf("ResetLocalBranchToRemote: %v", err)
+	}
+	if got := localBranchHash(t, svc, branch); got != remoteHash {
+		t.Errorf("local = %s, want origin tip %s", got, remoteHash)
+	}
+	// The point of the whole issue: the tree followed the ref.
+	if status := gitExecTest(t, workDir, "status", "--porcelain"); strings.TrimSpace(status) != "" {
+		t.Errorf("tree did not follow the ref move — phantom dirt:\n%s", status)
 	}
 }

@@ -799,6 +799,7 @@ describe("DiscordService retry and flush", () => {
         },
       ],
       warnings: [],
+      refMoves: [],
     });
 
     async function renderContainmentField(): Promise<{ name: string; value: string }> {

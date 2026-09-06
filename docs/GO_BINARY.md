@@ -1109,6 +1109,25 @@ to prevent. Opening a non-repository path must fail; a negative test in
 `internal/git/service_test.go` pins that and goes red the moment `DetectDotGit`
 is enabled.
 
+**`EnableDotGitCommonDir` makes every ref write a SHARED-STORE write, and
+`ResetLocalBranchToRemote` is guarded accordingly (#1499).** `Storer.SetReference`
+writes the ref and nothing else — no index, no working tree, and (go-git
+implements no reflog) not even a reflog message. Because the storer resolves the
+common dir, that write lands in the repository's shared ref store no matter which
+worktree the caller sits in, so it can move a branch the **primary** checkout has
+out. The checkout's HEAD then sits ahead of its own tree and `git status` reports
+every path the two commits differ in as a staged change nothing wrote — which is
+what read as fresh dirt to three concurrent slots' write-containment baselines on
+2026-09-06 and killed all three, in three repositories that had nothing to do
+with it. `ResetLocalBranchToRemote` now refuses `main`/`master` outright, refuses
+with `*BranchHeldByWorktreeError` (writing nothing) when another worktree holds
+the branch, and goes through `git reset --hard` — moving ref and tree together,
+with a reflog entry — when the caller's own checkout is the holder. Occupancy
+comes from `git worktree list --porcelain`, which answers for the whole
+repository from any member. `nightgauge git branch-create <name>` takes `<name>`
+as an unvalidated positional argument and was the one command that could aim this
+at a default branch.
+
 **Reads use go-git; the mutations git guards use git.** Common-dir resolution
 made several go-git mutations reachable inside linked worktrees for the first
 time, and go-git implements none of git's safety rules for them: it moves HEAD
