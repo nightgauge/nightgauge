@@ -9,6 +9,15 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- Resolving a card from the Action Center works again. Clicking an option — and
+  `attention resolve` / `ack` from the CLI — hung indefinitely with no error
+  while the card list kept loading normally, so there was no working way to
+  clear a card. The daemon-side write path could block forever behind its own
+  event push; it is now bounded and reports what went wrong instead of never
+  returning (#1539)
+
 ## [0.3.0] - 2026-09-07
 
 ### Changed
@@ -47,13 +56,6 @@ and this project adheres to
   labelled `auto-process` (#1514)
 
 ### Fixed
-
-- Resolving a card from the Action Center works again. Clicking an option — and
-  `attention resolve` / `ack` from the CLI — hung indefinitely with no error
-  while the card list kept loading normally, so there was no working way to
-  clear a card. The daemon-side write path could block forever behind its own
-  event push; it is now bounded and reports what went wrong instead of never
-  returning (#1539)
 
 - The pipeline tree shows real phase progress for a deterministic
   issue-pickup. Pickup's primary path runs no LLM, so it emitted no phase
