@@ -4050,12 +4050,14 @@ func runCmd() *cobra.Command {
 		maxPerRepo    int
 		issueNumber   int
 		adapterName   string
+		repoName      string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "run [issue number]",
 		Short: "Run pipeline for next ready issue or continuously with --auto",
-		Example: `  nightgauge run 1311                    # Run pipeline for specific issue
+		Example: `  nightgauge run 1311                    # Run pipeline for specific issue in this checkout's repo
+  nightgauge run 1311 --repo acme/other-repo  # Run it in another repo
   nightgauge run 1311 --adapter codex    # Run with Codex adapter
   nightgauge run --project 5              # Pick next ready issue and run
   nightgauge run --auto --project 5       # Run continuously`,
@@ -4142,7 +4144,11 @@ func runCmd() *cobra.Command {
 
 			// Run specific issue if provided
 			if issueNumber > 0 {
-				repo := fmt.Sprintf("%s/nightgauge", owner)
+				repo, repoErr := resolveRunTargetRepo(cmd, runCfg, owner, repoName)
+				if repoErr != nil {
+					return repoErr
+				}
+				fmt.Printf("Running #%d in %s\n", issueNumber, repo)
 				sched.QueueAdd(orchestrator.QueueEntry{
 					Repo:        repo,
 					IssueNumber: issueNumber,
@@ -4177,6 +4183,7 @@ func runCmd() *cobra.Command {
 	cmd.Flags().IntVar(&pollSeconds, "poll", 30, "Poll interval in seconds (with --auto)")
 	cmd.Flags().IntVar(&maxPerRepo, "max-per-repo", 1, "Max concurrent pipelines per repo")
 	cmd.Flags().IntVar(&issueNumber, "issue", 0, "Specific issue number to run")
+	cmd.Flags().StringVar(&repoName, "repo", "", "Target repository for an explicit issue number (owner/repo, or a bare name resolved against --owner). Defaults to this checkout's configured repo.")
 	cmd.Flags().StringVar(&adapterName, "adapter", "", "AI adapter (claude-headless, claude-sdk, codex, gemini, gemini-sdk)")
 
 	// `nightgauge run state {get,set,resume,discard,detect}` —
@@ -4184,6 +4191,60 @@ func runCmd() *cobra.Command {
 	cmd.AddCommand(runstatecmd.Cmd())
 
 	return cmd
+}
+
+// resolveRunTargetRepo decides which repository `nightgauge run <issue>` acts
+// on.
+//
+// This used to be a string literal — fmt.Sprintf("%s/nightgauge", owner) — so
+// the explicit-issue path could not target anything but the core repo,
+// whatever checkout it ran from and whatever --project said (#1553). Issue
+// numbers collide across repositories, which makes that more than a "not
+// found on board" annoyance: `nightgauge run 812` from a sibling repo's checkout
+// would, if core#812 happened to be Ready on board 3, plan, edit and open a
+// pull request against a repository the operator never named.
+//
+// Precedence is --repo, then the checkout's own configured repo. There is
+// deliberately no default: guessing the repo is the bug, and refusing matches
+// how a cross-repo run root already behaves when it cannot be resolved (#882).
+func resolveRunTargetRepo(cmd *cobra.Command, cfg *config.Config, ownerFlag, repoFlag string) (string, error) {
+	owner := strings.TrimSpace(ownerFlag)
+	// --owner carries a non-empty default, so an unchanged flag must not beat
+	// the checkout's configured owner.
+	if cfg != nil && !cmd.Flags().Changed("owner") && strings.TrimSpace(cfg.Owner) != "" {
+		owner = strings.TrimSpace(cfg.Owner)
+	}
+
+	repo := strings.TrimSpace(repoFlag)
+	fromFlag := repo != ""
+	if repo == "" && cfg != nil {
+		repo = strings.TrimSpace(cfg.DefaultRepo)
+	}
+	if repo == "" {
+		return "", errors.New("cannot tell which repository this issue belongs to: " +
+			"no --repo was given and this checkout's .nightgauge/config.yaml sets no `repo:`. " +
+			"Pass --repo <owner/repo>, or run from the checkout that owns the issue")
+	}
+
+	// An owner-qualified value wins outright — it is the most explicit thing
+	// either source can say.
+	if strings.Contains(repo, "/") {
+		parts := strings.SplitN(repo, "/", 2)
+		qualifiedOwner := strings.TrimSpace(parts[0])
+		qualifiedRepo := strings.TrimSpace(parts[1])
+		if qualifiedOwner == "" || qualifiedRepo == "" || strings.Contains(qualifiedRepo, "/") {
+			if fromFlag {
+				return "", fmt.Errorf("invalid --repo %q: want owner/repo", repoFlag)
+			}
+			return "", fmt.Errorf("invalid `repo:` %q in this checkout's config: want owner/repo or a bare repository name", repo)
+		}
+		return qualifiedOwner + "/" + qualifiedRepo, nil
+	}
+
+	if owner == "" {
+		return "", fmt.Errorf("cannot tell which owner repository %q belongs to: pass --repo <owner/repo>", repo)
+	}
+	return owner + "/" + repo, nil
 }
 
 // --- queue command ---
