@@ -109,6 +109,7 @@ import {
 } from "../utils/skillRunner";
 import type { PipelineStateService, PipelineOutcomeType } from "./PipelineStateService";
 import { countFailedStages } from "../utils/failedStages";
+import { createDeterministicPhaseReporter } from "../utils/deterministicPhases";
 import { SUCCESS_OUTCOMES } from "../utils/telemetryEventBuilder";
 import type { RepositoryContextLoader, ContextFileType } from "./RepositoryContextLoader";
 import type { Logger } from "../utils/logger";
@@ -10825,9 +10826,20 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             });
           }
 
+          // #1534: hand the deterministic path a phase reporter. Without it
+          // the stage renders 0/14 for its whole life and 14 `unreported`
+          // when it finishes — the honest reading (#1246) of a path that
+          // spawns no LLM and therefore emits no skill phase markers. This is
+          // the TS counterpart of the Go reporter PR #1398 gave pr-merge and
+          // pr-create.
+          const pickupPhases = this.stateService
+            ? createDeterministicPhaseReporter("issue-pickup", this.stateService)
+            : undefined;
+
           const deterministicGenerated = await this.contextAssembler.generateDeterministicContext(
             "issue-pickup",
-            issueNumber
+            issueNumber,
+            pickupPhases
           );
 
           // Fail closed on open blockedBy dependencies (#189): the primary

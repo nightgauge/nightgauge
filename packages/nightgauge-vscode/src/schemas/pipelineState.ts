@@ -150,6 +150,14 @@ export const StagePhaseSchema = z.object({
   status: z.enum(["pending", "running", "complete", "skipped", "unreported", "failed"]),
   started_at: z.string().datetime().optional(),
   completed_at: z.string().datetime().optional(),
+  /**
+   * Why the phase was skipped (#1534). Set by a deterministic stage path,
+   * which knows its own waypoints and can therefore say WHY it did not
+   * perform a registry phase — the one thing `unreported` cannot express.
+   * Declared here so the reason survives a state.json round trip; an
+   * undeclared key is stripped by the schema, not merely untyped.
+   */
+  reason: z.string().optional(),
 });
 export type StagePhase = z.infer<typeof StagePhaseSchema>;
 

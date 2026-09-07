@@ -129,6 +129,20 @@ is not safe yet`, and `Stopped — 0 running; safe to reload` once they land.
 
 ### Fixed
 
+- A deterministic issue-pickup reports its phases. The stage's primary path is
+  the extension's `ContextAssembler.generateDeterministicContext` — no LLM, so
+  no skill phase markers, so nothing ever reached the phase tracker — while
+  `PHASE_REGISTRY["issue-pickup"]` declares 14 phases. Every run therefore
+  rendered `0/14` for the stage's whole life and `14 unreported` the moment it
+  succeeded. The path now reports the five registry waypoints it actually
+  performs (`validate-environment`, `issue-selection`, `issue-analysis`,
+  `blocked-dependency-gate`, `write-context`) as start/complete and the
+  remaining nine as `skipped` with the reason "deterministic pickup path", so
+  the tree shows live progress and settles at 14/14 with zero unreported rows.
+  This is the TypeScript half of the reporter #1247/#1398 gave the Go
+  deterministic runners; `PHASE_REGISTRY` now documents which of the three
+  producers — skill markers, the Go reporter, the TS deterministic path —
+  serves each stage (#1534)
 - `pr-create` no longer waits for CI, and is no longer killed for doing so. Its
   Phase 3.5 ran `nightgauge ci wait --timeout 15` right after opening the PR and
   sat on it, emitting no commit, file, phase marker or tool call the whole time

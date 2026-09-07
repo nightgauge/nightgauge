@@ -50,6 +50,10 @@ import {
   type RoutingConfig,
 } from "../../utils/routingDecision";
 import { analyzeChange } from "../../utils/changeAnalyzer";
+import {
+  DETERMINISTIC_PICKUP_SKIP_REASON,
+  type DeterministicPhaseReporter,
+} from "../../utils/deterministicPhases";
 import type { IssueMetadata } from "@nightgauge/sdk";
 import { BinaryResolver } from "../../services/BinaryResolver";
 import { STAGE_OUTPUT_CONTEXT_TYPE } from "./stageContextFiles";
@@ -838,19 +842,27 @@ export class ContextAssembler {
    *
    * Delegates to the appropriate stage-specific generator.
    *
+   * @param phases - Optional phase reporter (#1534). When supplied, the
+   *   issue-pickup generator reports the registry phases it performs and
+   *   skips the ones it does not, so a deterministic pickup shows live
+   *   progress in the tree instead of `0/14`, and ends with zero
+   *   `unreported` rows instead of fourteen. This is the TypeScript half of
+   *   the contract PR #1398 gave the Go deterministic runners.
    * @returns generated=true when the context file was written. For
    *   issue-pickup, `blockedBy` is set (and generated=false) when the issue
    *   has OPEN blockedBy dependencies — the caller must DEFER pickup, not
    *   fall through to the LLM (#189 fail-closed).
    * @see Issue #697 — Subagent exits early without producing output
+   * @see Issue #1534 — deterministic pickup reports its phases
    */
   async generateDeterministicContext(
     stage: PipelineStage,
-    issueNumber: number
+    issueNumber: number,
+    phases?: DeterministicPhaseReporter
   ): Promise<DeterministicContextResult> {
     switch (stage) {
       case "issue-pickup":
-        return this.generateDeterministicIssueContext(issueNumber);
+        return this.generateDeterministicIssueContext(issueNumber, phases);
       case "feature-planning":
         return { generated: await this.generateDeterministicPlanningContext(issueNumber) };
       case "feature-dev":
@@ -1067,8 +1079,35 @@ export class ContextAssembler {
   // Stage-specific fallback generators
   // ---------------------------------------------------------------------------
 
+  /**
+   * The PRIMARY issue-pickup path (#2614). Its waypoints are reported through
+   * `phases` (#1534) using the names already declared in
+   * `PHASE_REGISTRY["issue-pickup"]`, so the tree renders one row set rather
+   * than two vocabularies:
+   *
+   *   validate-environment → issue-selection → issue-analysis →
+   *   blocked-dependency-gate → write-context
+   *
+   * A separate deterministic phase list (the shape #1398 chose for pr-merge)
+   * would have been the wrong call here: unlike pr-merge's Go runner, this
+   * path performs a genuine SUBSET of the skill's own waypoints under the
+   * same names, so reusing the registry keeps a pickup comparable across the
+   * deterministic and LLM paths — which is the comparison an operator makes
+   * when deciding whether a deterministic pickup was as thorough as an LLM
+   * one. Everything else in the registry is reported `skipped` with a reason;
+   * see DETERMINISTIC_PICKUP_SKIP_REASON.
+   *
+   * One of those skips is worth naming: `knowledge-scaffolding` IS performed
+   * at pickup, but by the Go scheduler (`scaffoldKnowledgeAtPickup`, #1205)
+   * rather than by this path, and Go's write does not reach the extension's
+   * phase records. The skip is scoped to what THIS path does, which is what
+   * its recorded reason says — and it is still a better answer than
+   * `unreported`, which would claim nothing is known about a phase whose
+   * owner is known exactly.
+   */
   private async generateDeterministicIssueContext(
-    issueNumber: number
+    issueNumber: number,
+    phases?: DeterministicPhaseReporter
   ): Promise<DeterministicContextResult> {
     const workspaceRoot = this.workspaceRootProvider();
     const contextPath = this.getContextPath("issue", issueNumber);
@@ -1079,6 +1118,9 @@ export class ContextAssembler {
     };
 
     try {
+      // validate-environment: the run must be on a branch before anything
+      // else is worth doing.
+      await phases?.start("validate-environment");
       const { stdout: branchRaw } = await execFileAsync(
         "git",
         ["branch", "--show-current"],
@@ -1087,9 +1129,14 @@ export class ContextAssembler {
       const branch = branchRaw.trim();
       if (!branch) {
         this.logger.error("Cannot generate deterministic context: no current branch");
+        // Deliberately NOT settled: this return falls through to the LLM
+        // subagent, which reports the remaining phases itself.
         return { generated: false };
       }
+      await phases?.complete("validate-environment");
 
+      // issue-selection: read the issue the run was dispatched for.
+      await phases?.start("issue-selection");
       let title = `Issue #${issueNumber}`;
       let labels: string[] = [];
       let issueType = "feature";
@@ -1143,6 +1190,11 @@ export class ContextAssembler {
         }
       }
 
+      await phases?.complete("issue-selection");
+
+      // issue-analysis: parse the body into requirements and derive the
+      // routing decision from labels + title.
+      await phases?.start("issue-analysis");
       // #1058: repository identity must be resolved BEFORE the body is parsed,
       // so a qualified `Part of owner/repo#N` can be compared against this repo.
       const sections = this.parseIssueBodySections(body, repository);
@@ -1238,6 +1290,10 @@ export class ContextAssembler {
         created_at: new Date().toISOString(),
       };
 
+      await phases?.complete("issue-analysis");
+
+      // blocked-dependency-gate: the fail-closed check below IS the gate.
+      await phases?.start("blocked-dependency-gate");
       // Dependency enforcement on the PRIMARY path (#189): this generator
       // used to hard-code blockedBy: [] — GitHub's native blockedBy edges
       // were never consulted, so nothing structural prevented picking up an
@@ -1258,15 +1314,25 @@ export class ContextAssembler {
               ),
             }
           );
+          // The gate RAN and returned a verdict, so it completes; the stage
+          // then defers, and the phases it will never reach are settled as
+          // skips rather than left unreported (#1534). This return does not
+          // fall through to the LLM — the caller defers on `blockedBy`.
+          await phases?.complete("blocked-dependency-gate");
+          await phases?.settleRemaining(DETERMINISTIC_PICKUP_SKIP_REASON);
           return { generated: false, blockedBy: deps.open };
         }
       }
+      await phases?.complete("blocked-dependency-gate");
 
+      // write-context: issue-{N}.json is the stage's deliverable.
+      await phases?.start("write-context");
       const contextDir = path.dirname(contextPath);
       if (!fs.existsSync(contextDir)) {
         fs.mkdirSync(contextDir, { recursive: true });
       }
       fs.writeFileSync(contextPath, JSON.stringify(fallbackContext, null, 2), "utf-8");
+      await phases?.complete("write-context");
 
       this.logger.info(
         "Generated deterministic issue context (issue-pickup subagent did not write file)",
@@ -1289,8 +1355,11 @@ export class ContextAssembler {
         }
       );
 
+      await phases?.settleRemaining(DETERMINISTIC_PICKUP_SKIP_REASON);
       return { generated: true };
     } catch (err) {
+      // Not settled: the caller falls through to the LLM subagent, whose own
+      // markers report the rest of the stage.
       this.logger.error("Failed to generate deterministic issue context", {
         issueNumber,
         err: err instanceof Error ? err.message : String(err),
