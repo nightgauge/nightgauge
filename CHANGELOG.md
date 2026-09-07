@@ -14,6 +14,8 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-07
+
 ### Breaking / behaviour change
 
 - **Sanitization now blocks.** `sanitization.mode` defaults to `block`, not
@@ -729,7 +731,8 @@ with GitHub Project board integration, dashboard, context file viewer, and
 the first set of commands and settings. Recorded so the extension's changelog
 and this one name the same versions.
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/nightgauge/nightgauge/compare/v0.2.3...v0.3.0
 [0.2.3]: https://github.com/nightgauge/nightgauge/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/nightgauge/nightgauge/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/nightgauge/nightgauge/compare/v0.2.0...v0.2.1
