@@ -10,6 +10,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Phase 3.5 no longer waits for CI.** It takes one non-blocking snapshot of
+  the check rollup and records it into `ci_monitoring` (`final_status: pending`
+  while checks run); the blocking `nightgauge ci wait` is gone. The wait emitted
+  no commit, file, phase marker or tool call for up to 15 minutes, so the
+  progress-runaway monitor killed pr-create with its PR already open. pr-merge
+  owns CI polling and auto-fix, and the deterministic Go pr-create runner never
+  waited either. (#1531)
 - Migrate all direct `gh` invocations to `nightgauge forge` (#3363, Wave 4 of forge-abstraction epic #3349). Skill now works against GitLab as well as GitHub via the forge abstraction.
 - **Now the LLM fallback for the deterministic-first pr-create stage.** Issue
   #3265 landed a Go-native pr-create runner at

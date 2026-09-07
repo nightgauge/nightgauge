@@ -660,6 +660,19 @@ const STAGE_ORDER: PipelineStage[] = [
 ];
 
 /**
+ * The AI stages a run can skip when the issue already has an open PR (#1531).
+ * pr-create is deliberately absent: it is marked complete rather than skipped,
+ * because its deliverable (`pr-{N}.json`) genuinely exists and pr-merge's
+ * pre-condition check validates it.
+ */
+const RESUMABLE_PRE_MERGE_STAGES: PipelineStage[] = [
+  "issue-pickup",
+  "feature-planning",
+  "feature-dev",
+  "feature-validate",
+];
+
+/**
  * Stages with a registered, non-NoOp post-condition gate (Issue #210).
  * Mirrors `internal/orchestrator/gates/registry.go`'s `Default()` map, minus
  * the bookend stages (`pipeline-start`, `pipeline-finish`), which have no
@@ -4913,6 +4926,81 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   }
 
   /**
+   * When `pr-{N}.json` already names an OPEN PR, mark everything up to and
+   * including pr-create as done so this run resumes at pr-merge instead of
+   * re-planning and re-implementing work that has already shipped.
+   *
+   * `issue-pickup` … `feature-validate` are recorded **skipped** (with the
+   * reason, so the board and the dashboard say why nothing ran) and
+   * `pr-create` **complete** — the latter is not a fiction: the PR exists and
+   * the context file pr-merge consumes is on disk, which is exactly what
+   * "pr-create completed" means. Marking pr-create complete also keeps
+   * pr-merge's pre-condition check pointed at a real, schema-validated
+   * `pr-{N}.json` instead of walking back past a chain of skipped ancestors.
+   *
+   * Returns true when the run was fast-forwarded.
+   *
+   * @see Issue #1531 — a re-dispatched issue with an open PR re-ran the whole
+   *   pipeline because a fresh slot's state had no memory of pr-create.
+   */
+  private async resumeAtPrMerge(issueNumber: number): Promise<boolean> {
+    if (!this.stateService) return false;
+
+    const prContextPath = this.getContextPath("pr", issueNumber);
+    if (!fs.existsSync(prContextPath)) return false;
+
+    let prNumber = 0;
+    let prStatus = "";
+    try {
+      const parsed = JSON.parse(fs.readFileSync(prContextPath, "utf-8")) as {
+        pr_number?: unknown;
+        status?: unknown;
+      };
+      if (typeof parsed.pr_number === "number") prNumber = parsed.pr_number;
+      if (typeof parsed.status === "string") prStatus = parsed.status.toLowerCase();
+    } catch {
+      // An unreadable context file is no evidence at all — fail toward the
+      // normal pipeline rather than skipping stages on a guess.
+      return false;
+    }
+
+    // Only an OPEN PR justifies the fast-forward. "merged" is handled by the
+    // #500 restore path, and "closed" means the work was rejected — that run
+    // genuinely has to start over.
+    if (prNumber <= 0 || prStatus !== "open") return false;
+
+    const reason = `Skipped: PR #${prNumber} is already open for this issue — resuming at pr-merge (#1531)`;
+
+    const state = await this.stateService.getState();
+    for (const stage of RESUMABLE_PRE_MERGE_STAGES) {
+      if (state?.stages[stage]?.status === "complete") continue;
+      try {
+        await this.stateService.skipStage(stage, reason);
+      } catch (err) {
+        this.logger.warn("Resume-at-pr-merge: could not mark stage skipped", { stage, err });
+        return false;
+      }
+    }
+
+    try {
+      await this.stateService.completeStage("pr-create");
+    } catch (err) {
+      this.logger.warn("Resume-at-pr-merge: could not mark pr-create complete", { err });
+      return false;
+    }
+
+    this.stateService.setMeta({ pr_number: prNumber });
+
+    this.logger.info(
+      "Open PR already exists for this issue — resuming at pr-merge instead of re-planning",
+      { issueNumber, prNumber, prContextPath }
+    );
+    this.eventDispatcher.onStageSkipped("feature-planning", reason);
+
+    return true;
+  }
+
+  /**
    * Detect an existing open PR for this issue's branch from a previous failed
    * pipeline run. If found, generates synthetic context files so the resume
    * logic can skip directly to pr-merge instead of re-running all stages.
@@ -4932,10 +5020,33 @@ export class HeadlessOrchestrator implements vscode.Disposable {
 
     // Check if pr-create was already completed in a previous run
     const prCreateState = state.stages["pr-create"];
+    const prContextPath = this.getContextPath("pr", issueNumber);
+
+    // ===================================================================
+    // #1531: RESUME AT PR-MERGE WHEN AN OPEN PR ALREADY EXISTS
+    //
+    // The #500 path below only fires when state REMEMBERS pr-create
+    // completing. A re-dispatch after a killed pr-create satisfies neither
+    // half of that: the slot gets a fresh PipelineStateService with no
+    // state.json (so every stage reads pending), while the reused worktree
+    // still holds `pr-{N}.json` naming an OPEN PR. The run therefore
+    // re-planned and re-implemented an issue that already had a PR, pushed
+    // more commits onto it, and arrived back at the same stage — $2.11 and
+    // 16 minutes on platform#1431 to rediscover PR #1447.
+    //
+    // An open PR recorded on disk is proof the work shipped, whatever state
+    // remembers. Skip forward to pr-merge on that evidence alone. This is a
+    // purely local decision on purpose — a speculative forge query on every
+    // pipeline start would spend API budget on the overwhelmingly common
+    // case of a brand-new issue with no PR (#1428).
+    // ===================================================================
+    if (prCreateState?.status !== "complete" && (await this.resumeAtPrMerge(issueNumber))) {
+      return;
+    }
+
     if (prCreateState?.status !== "complete") return;
 
     // Check if the pr context file is missing (worktree was cleaned up)
-    const prContextPath = this.getContextPath("pr", issueNumber);
     if (fs.existsSync(prContextPath)) return; // Already have context, resume will work
 
     this.logger.info(
@@ -5491,6 +5602,53 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * @returns 'ok' | 'recovered' | 'retry-needed' | 'warning'
    * @see Issue #1139 - pr-create state validation and retry
    */
+  /**
+   * Copy the verified PR number out of `pr-{N}.json` into `pipeline_meta` so
+   * every downstream consumer (Discord embeds, the UI, and — crucially — the
+   * failure comment) can tell "no PR was ever opened" from "the PR exists and
+   * the stage died afterwards".
+   *
+   * Called on BOTH the pr-create success path and the pr-create failure path.
+   * Success-only was the bug behind #1531: when the runaway monitor killed
+   * pr-create while it waited on CI, nothing recorded the PR the stage had
+   * already opened and verified in Phase 3.6, so the failure report told the
+   * operator "PR creation failed — the agent could not push the branch or
+   * create the PR" about a PR that was open and running checks.
+   *
+   * Best-effort and never throws: a missing or malformed context file simply
+   * leaves the meta unset, which reads as "no verified PR" — the conservative
+   * direction.
+   *
+   * @see Issue #1531
+   */
+  private recordVerifiedPrNumber(issueNumber: number): void {
+    try {
+      const prCtxPath = this.getContextPath("pr", issueNumber);
+      if (!fs.existsSync(prCtxPath)) return;
+      const prCtx = JSON.parse(fs.readFileSync(prCtxPath, "utf-8")) as {
+        pr_number?: unknown;
+        pr_url?: unknown;
+        url?: unknown;
+      };
+
+      let prNumber: number | undefined;
+      if (typeof prCtx.pr_number === "number" && prCtx.pr_number > 0) {
+        prNumber = prCtx.pr_number;
+      } else {
+        const prUrlStr = typeof prCtx.pr_url === "string" ? prCtx.pr_url : "";
+        const fallbackUrl = typeof prCtx.url === "string" ? prCtx.url : "";
+        const prNumMatch = (prUrlStr || fallbackUrl).match(/\/pull\/(\d+)/);
+        if (prNumMatch) prNumber = parseInt(prNumMatch[1], 10);
+      }
+
+      if (prNumber !== undefined && prNumber > 0) {
+        this.stateService?.setMeta({ pr_number: prNumber });
+      }
+    } catch {
+      // Non-critical
+    }
+  }
+
   private async validatePrCreateState(
     issueNumber: number
   ): Promise<"ok" | "recovered" | "retry-needed" | "warning"> {
@@ -11041,6 +11199,13 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           // TS-side pipeline path produced zero exit records and every retro
           // turned into log archaeology. Fire-and-forget — never blocks.
           void this.recordStageExitDiagnostic(stage, issueNumber, result, stageStartTime);
+          // #1531: a killed pr-create may still have opened and verified a PR
+          // (Phase 3.6 writes pr-{N}.json before Phase 3.5 ever looks at CI).
+          // Record it so the failure report can name the PR instead of
+          // claiming creation failed.
+          if (stage === "pr-create") {
+            this.recordVerifiedPrNumber(issueNumber);
+          }
           failedStage = stage;
           error = result.error;
           if (result.budgetExceeded) {
@@ -11700,21 +11865,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           const stateValidation = await this.validatePrCreateState(issueNumber);
 
           // Enrich pipeline state with PR number for Discord/UI
-          try {
-            const prCtxPath = this.getContextPath("pr", issueNumber);
-            if (fs.existsSync(prCtxPath)) {
-              const prCtx = JSON.parse(fs.readFileSync(prCtxPath, "utf-8"));
-              const prUrlStr = prCtx.pr_url ?? prCtx.url ?? "";
-              const prNumMatch = prUrlStr.match(/\/pull\/(\d+)/);
-              if (prNumMatch) {
-                this.stateService?.setMeta({
-                  pr_number: parseInt(prNumMatch[1], 10),
-                });
-              }
-            }
-          } catch {
-            // Non-critical
-          }
+          this.recordVerifiedPrNumber(issueNumber);
 
           if (stateValidation === "retry-needed") {
             if (!this.prCreateRetryAttempted.has(issueNumber)) {

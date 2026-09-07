@@ -129,6 +129,30 @@ is not safe yet`, and `Stopped — 0 running; safe to reload` once they land.
 
 ### Fixed
 
+- `pr-create` no longer waits for CI, and is no longer killed for doing so. Its
+  Phase 3.5 ran `nightgauge ci wait --timeout 15` right after opening the PR and
+  sat on it, emitting no commit, file, phase marker or tool call the whole time
+  — so every clock the progress-runaway monitor has went cold precisely while
+  the stage was behaving correctly. One run was terminated at 930s with its PR
+  open and running checks, reported as "PR creation failed", charged a lifetime
+  failure and re-dispatched. Phase 3.5 is now a single non-blocking snapshot of
+  the check rollup recorded into `ci_monitoring` (`final_status: pending` while
+  checks run); pr-merge already owns CI polling and auto-fix, and the
+  deterministic Go pr-create runner never waited either (#1531)
+- A failure report no longer claims "PR creation failed" about a PR that exists.
+  When pr-create is killed after Phase 3.6 verified an OPEN PR, the report names
+  and links that PR and describes a post-create stall, so the operator is not
+  sent to re-create work that already shipped. The orchestrator now records the
+  verified PR number on the pr-create failure path as well as the success path,
+  which is what made the distinction visible (#1531)
+- A re-dispatched issue that already has an open pipeline PR now resumes at
+  pr-merge instead of re-planning. The #500 fast-forward only fired when
+  pipeline state remembered pr-create completing, and a re-dispatch satisfies
+  neither half of that — the new slot's state is empty while the reused worktree
+  still holds `pr-{N}.json` naming the open PR. One re-dispatch spent $2.11 and
+  16 minutes re-running issue-pickup through pr-create to rediscover a PR it had
+  opened 43 minutes earlier, and pushed more commits onto it. An open PR
+  recorded on disk is now proof enough on its own (#1531)
 - Refinement now runs in extension (IPC) mode. It had no execution path there at
   all — the daemon builds its scheduler without a CLI adapter, so every cycle
   logged `disabled: no IPC dispatcher registered` and every dispatch went
