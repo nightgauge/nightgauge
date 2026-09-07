@@ -113,11 +113,19 @@ git push -u origin feat/description-of-change
 - **Manual PR merges only, and `--admin` is NOT the routine path.** Auto-merge
   is disabled on all workspace repos. Watch CI over REST, not `gh pr checks` —
   that call is GraphQL and shares the same hourly pool a board pull can
-  exhaust. Use the REST check-runs endpoint on the PR's head SHA instead (the
-  same call `scripts/post-merge-check.sh` already uses post-merge), fix/rerun
-  real failures (never dismiss a failing test as "flaky" without
-  root-causing it), then **`gh pr merge --squash`** — never `--auto`, and
-  **never `--admin` as a matter of course**.
+  exhaust. **Do not hand-write the raw check-runs one-liner** — run
+  `nightgauge ci checks-complete <sha> --repo <owner/repo>` (the same verb
+  `scripts/post-merge-check.sh` delegates to post-merge). The raw endpoint
+  named here before #1540 can report a rollup that is missing an in-flight
+  _required_ check entirely — `total_count>0` with zero pending while `lint`
+  and `publication boundary` were still `in_progress` — which reads as
+  GREEN to any query that only counts bad conclusions among whatever the
+  rollup happened to contain. The guarded verb asserts the _positive
+  presence_ of every required check name instead, returning NOT-YET until
+  every one of them has actually shown up. Fix/rerun real failures (never
+  dismiss a failing test as "flaky" without root-causing it), then
+  **`gh pr merge --squash`** — never `--auto`, and **never `--admin` as a
+  matter of course**.
 
   **A raw `gh` board pull is invisible to the ledger below and can cost ~340
   points in one command.** Pull the board once into a file rather than

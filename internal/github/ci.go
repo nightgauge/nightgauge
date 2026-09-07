@@ -336,11 +336,36 @@ func (s *CIService) WaitForChecks(ctx context.Context, owner, repo string, prNum
 
 	deadline := time.After(cfg.Timeout)
 
+	requiredOnly := len(cfg.RequiredCheckNames) > 0
 	pollFn := func() (*CheckStatus, error) {
-		if len(cfg.RequiredCheckNames) > 0 {
+		if requiredOnly {
 			return s.getRequiredOnlyStatus(ctx, owner, repo, prNumber, cfg.RequiredCheckNames)
 		}
 		return s.GetCheckStatus(ctx, owner, repo, prNumber)
+	}
+
+	// #1540 hardening (plan §3): the required-only path's rollup was observed
+	// to report a false-terminal verdict transiently, so a single terminal
+	// read is not trusted on its own here — two CONSECUTIVE polls must agree
+	// on the same State before it is returned. A verdict that changes between
+	// polls resets the confirmation; PENDING never needs confirmation, it
+	// already means "keep polling". An out-of-band merge (MergedExternally)
+	// is a definitive external event, not a rollup read, so it is trusted
+	// immediately.
+	var lastRequiredVerdict string
+	confirmedTerminal := func(status *CheckStatus) bool {
+		if !status.IsTerminal {
+			lastRequiredVerdict = ""
+			return false
+		}
+		if !requiredOnly || status.MergedExternally {
+			return true
+		}
+		if lastRequiredVerdict == status.State {
+			return true
+		}
+		lastRequiredVerdict = status.State
+		return false
 	}
 
 	// Check immediately before first tick
@@ -352,7 +377,7 @@ func (s *CIService) WaitForChecks(ctx context.Context, owner, repo string, prNum
 	if cfg.OnProgress != nil {
 		cfg.OnProgress(status)
 	}
-	if status.IsTerminal {
+	if confirmedTerminal(status) {
 		return status, nil
 	}
 
@@ -367,7 +392,7 @@ func (s *CIService) WaitForChecks(ctx context.Context, owner, repo string, prNum
 			if cfg.OnProgress != nil {
 				cfg.OnProgress(status)
 			}
-			if status.IsTerminal {
+			if confirmedTerminal(status) {
 				return status, nil
 			}
 
@@ -430,9 +455,6 @@ func (s *CIService) getRequiredOnlyStatusWithChecks(checks []CheckDetail, requir
 		successful      int
 		failed          int
 		pending         int
-		requiredTotal   int
-		requiredDone    int
-		requiredPassed  int
 		annotatedChecks []CheckDetail
 	)
 
@@ -460,16 +482,6 @@ func (s *CIService) getRequiredOnlyStatusWithChecks(checks []CheckDetail, requir
 			pending++
 		}
 
-		if isRequired {
-			requiredTotal++
-			if c.Status == "COMPLETED" {
-				requiredDone++
-				if passingCheckConclusions[c.Conclusion] {
-					requiredPassed++
-				}
-			}
-		}
-
 		annotatedChecks = append(annotatedChecks, c)
 	}
 
@@ -485,17 +497,21 @@ func (s *CIService) getRequiredOnlyStatusWithChecks(checks []CheckDetail, requir
 		AdvisoryFailedNames: advisoryFailedNames,
 	}
 
-	allRequiredDone := requiredTotal > 0 && requiredDone == requiredTotal
-
-	switch {
-	case allRequiredDone && requiredPassed == requiredTotal:
+	// #1540: the terminal decision is "every name in requiredNames is
+	// POSITIVELY PRESENT among checks, concluded, and passing" — not "every
+	// required check found among the checks present is done". Counting only
+	// from what the rollup happens to contain lets a required check that is
+	// entirely ABSENT from the response make the old allRequiredDone check
+	// true vacuously (the #1540 defect).
+	switch verdict, _ := EvaluateChecksComplete(checks, requiredNames); verdict {
+	case ChecksComplete:
 		status.State = "SUCCESS"
 		status.IsTerminal = true
 		status.RequiredPassed = true
-	case allRequiredDone && requiredPassed < requiredTotal:
+	case ChecksIncomplete:
 		status.State = "FAILURE"
 		status.IsTerminal = true
-	default:
+	default: // ChecksNotYet
 		status.State = "PENDING"
 		status.IsTerminal = false
 	}

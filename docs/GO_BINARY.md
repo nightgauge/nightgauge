@@ -4688,13 +4688,16 @@ Two rules follow directly from that:
   question about the same board is a second read of the file, not a second
   `gh project item-list`.
 - **Watch CI over REST, not GraphQL.** `gh pr checks` calls GraphQL and shares
-  the same 5,000-point pool a board pull just spent. Use the REST check-runs
-  endpoint instead — the same call `scripts/post-merge-check.sh` already uses
-  post-merge:
+  the same 5,000-point pool a board pull just spent. **Do not hand-write the
+  raw check-runs endpoint** — a rollup from it can report a required check as
+  done by simply omitting it, which reads as GREEN to anything that only
+  counts bad conclusions among whatever the response returned (#1540). Use the
+  guarded verb instead — the same one `scripts/post-merge-check.sh` delegates
+  to post-merge:
 
   ```bash
   sha=$(gh pr view <PR> --json headRefOid --jq .headRefOid)
-  gh api "repos/{owner}/{repo}/commits/$sha/check-runs" --paginate
+  nightgauge ci checks-complete "$sha" --repo {owner}/{repo}
   ```
 
 Before a bulk read, check what it would cost against what is left this hour:

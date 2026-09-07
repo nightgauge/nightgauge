@@ -192,11 +192,20 @@ answer, and folding it into either verdict is the entire defect. The general
 principle, the same shape as the "a green check on a job that skipped is not
 evidence" rule: **an absence of failures is not the presence of successes.**
 
-Note that the **Go** implementation was already correct — `nightgauge hook
-post-merge` polls to completion and never reads an empty list as green (below).
-Only the hand-written shell idiom was wrong, which is exactly the argument for
-scripting it: the same reasoning had already been done once, in the language
-that had a test suite.
+The Go implementation shared the empty-list/still-running guards above from
+day one, but **not** a third one: until #1540 it derived "every required check
+is done" by counting required names it found _among the checks the rollup
+returned_ — so a required check absent from the response entirely never
+contributed to that count, and the guard passed vacuously on a genuinely
+unfinished tree. GitHub's rollup was observed doing exactly that:
+`total_count=16` with zero pending while `lint` and `publication boundary`
+were still `in_progress`, simply missing from the response. The fix is a
+shared primitive — `internal/github.EvaluateChecksComplete` — that asserts the
+**positive presence** of every required check name instead of the absence of
+bad conclusions among whatever showed up, used by both `nightgauge hook
+post-merge` and the PR gate, and exposed as `nightgauge ci checks-complete
+<sha>` so `scripts/post-merge-check.sh` delegates to the same logic instead of
+carrying its own third bash transcription of the rule.
 
 `scripts/test-post-merge-check.sh` pins all three verdicts against stubbed
 check-run payloads, because the two states that motivated this — an empty list

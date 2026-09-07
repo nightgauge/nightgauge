@@ -472,6 +472,22 @@ operator's three-number order —
 3. `bad == 0` — then a conclusion outside `success` / `skipped` / `neutral`
    (AGENTS.md's filter verbatim, so `cancelled` counts) makes the verdict `red`.
 
+**A fourth assertion now runs before these three (#1540), not after them.**
+`total`/`pending` are counted only from whatever check-runs the rollup
+happened to return — so a required check **absent from the response
+entirely** never contributes to either number, and step 2 can read
+`pending == 0` on a tree that is not actually finished. This was observed
+directly: `total_count=16` with zero pending while `lint` and `publication
+boundary` were still `in_progress`, simply missing from the rollup.
+`VerifyMergeCommit` now resolves the branch's required-check set once, up
+front, and — once the three numbers above would otherwise call the verdict
+final — asserts that every required name is **positively present** in the
+rollup (`internal/github.MissingRequiredChecks`, the same primitive
+`internal/github.EvaluateChecksComplete` uses for the PR gate). A required
+check missing from the response holds the verdict at `pending`, exactly like
+a check still `in_progress`, regardless of what the three numbers say about
+whatever the rollup did return.
+
 The verdict vocabulary is closed — `green` | `red` | `pending` | `no_checks` |
 `error` | `skipped` — and only `red` is a failure. Budget exhaustion with checks
 still running is `pending`: still-pending checks are not evidence of breakage,

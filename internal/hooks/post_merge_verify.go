@@ -38,6 +38,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
+	gh "github.com/nightgauge/nightgauge/internal/github"
 )
 
 // MainCheckReader is what VerifyMergeCommit needs from the forge: the check runs
@@ -242,6 +243,17 @@ func VerifyMergeCommit(ctx context.Context, reader MainCheckReader, owner, repo,
 		"--main-check-wait 0 records the verdict from one immediate read instead)",
 		repo, shortSHA(sha), maxPolls, interval, wait.Timeout)
 
+	// #1540: resolve the branch's required-check set up front, not only after
+	// a red verdict (markRequired's old shape) — the missing-check gate below
+	// needs it on every poll, including ones that would otherwise read green.
+	// Best-effort: a failed lookup falls back to the pre-#1540
+	// total/pending/bad-only idiom for this call rather than blocking the
+	// whole verification on an auxiliary lookup.
+	requiredNames, reqErr := reader.GetRequiredCheckNames(ctx, owner, repo, branch)
+	if reqErr != nil {
+		requiredNames = nil
+	}
+
 	var last []forgetypes.CheckDetail
 	for {
 		runs, err := reader.GetIndividualCheckRuns(ctx, owner, repo, sha)
@@ -267,12 +279,25 @@ func VerifyMergeCommit(ctx context.Context, reader MainCheckReader, owner, repo,
 				return res
 			}
 		default:
-			// total > 0 and pending == 0: the numbers are final.
+			// total > 0 and pending == 0 over EVERY check on the rollup — but
+			// that is exactly the #1540 defect: a required check absent from
+			// the rollup never contributes to total/pending at all, so this
+			// point can be reached while a required job is still in flight,
+			// simply not reported. Assert its POSITIVE PRESENCE before
+			// trusting the three numbers as final.
+			if missing := gh.MissingRequiredChecks(last, requiredNames); len(missing) > 0 {
+				if res.Polls >= maxPolls {
+					res.Verdict = MainChecksPending
+					return res
+				}
+				break
+			}
+			// The numbers are final.
 			res.Failing = failingChecks(last)
 			res.Verdict = MainChecksGreen
 			if bad > 0 {
 				res.Verdict = MainChecksRed
-				markRequired(ctx, reader, owner, repo, branch, res.Failing)
+				markRequired(res.Failing, requiredNames)
 			}
 			return res
 		}
@@ -364,16 +389,14 @@ func failingChecks(runs []forgetypes.CheckDetail) []FailingCheck {
 	return out
 }
 
-// markRequired flags the failing checks the branch requires. Best-effort: a
-// failed lookup leaves every check advisory, which is the conservative reading
-// (a card that under-states severity beats one that shouts about a check
-// nothing requires).
-func markRequired(ctx context.Context, reader MainCheckReader, owner, repo, branch string, failing []FailingCheck) {
-	if branch == "" || len(failing) == 0 {
-		return
-	}
-	required, err := reader.GetRequiredCheckNames(ctx, owner, repo, branch)
-	if err != nil {
+// markRequired flags the failing checks the branch requires, from the
+// required-check set VerifyMergeCommit already resolved up front (#1540) — no
+// second lookup here. A nil/empty required leaves every check advisory, which
+// is the conservative reading (a card that under-states severity beats one
+// that shouts about a check nothing requires): VerifyMergeCommit passes nil
+// when its own up-front lookup failed.
+func markRequired(failing []FailingCheck, required []string) {
+	if len(failing) == 0 || len(required) == 0 {
 		return
 	}
 	isRequired := make(map[string]bool, len(required))

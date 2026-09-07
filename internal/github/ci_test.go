@@ -217,6 +217,27 @@ func TestWaitForChecks_RequiredOnly_FailsWhenRequiredFails(t *testing.T) {
 	}
 }
 
+// TestGetRequiredOnlyStatusWithChecks_MissingRequiredCheckStaysPending is the
+// #1540 regression guard at the PR-gate level: a rollup that OMITS a required
+// check entirely (not merely leaves it pending) must not let the vacuous
+// "0 of 0 required checks present" case read as done.
+func TestGetRequiredOnlyStatusWithChecks_MissingRequiredCheckStaysPending(t *testing.T) {
+	status, err := (&CIService{}).getRequiredOnlyStatusWithChecks([]CheckDetail{
+		{Name: "build", Status: "COMPLETED", Conclusion: "SUCCESS"},
+		// "lint" and "publication boundary" are required but absent from the
+		// rollup — the observed #1540 defect (total_count=16, zero pending).
+	}, []string{"build", "lint", "publication boundary"}, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status.State != "PENDING" {
+		t.Errorf("State = %q, want PENDING — a required check absent from the rollup is not done", status.State)
+	}
+	if status.IsTerminal {
+		t.Error("IsTerminal = true, want false while a required check is absent from the rollup")
+	}
+}
+
 func TestWaitForChecks_RequiredOnly_WaitsWhenRequiredPending(t *testing.T) {
 	status, err := (&CIService{}).getRequiredOnlyStatusWithChecks([]CheckDetail{
 		{Name: "CI", Status: "IN_PROGRESS", Conclusion: ""},

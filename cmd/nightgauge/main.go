@@ -6961,7 +6961,198 @@ func ciCmd() *cobra.Command {
 		Use:   "ci",
 		Short: "CI check operations (wait, logs, history, parity, discover-commands)",
 	}
-	cmd.AddCommand(ciWaitCmd(), ciLogsCmd(), ciHistoryCmd(), ciParityCheckCmd(), ciDiscoverCommandsCmd(), ciClassifyCmd(), ciClassifyUISurfaceCmd())
+	cmd.AddCommand(ciWaitCmd(), ciLogsCmd(), ciHistoryCmd(), ciParityCheckCmd(), ciDiscoverCommandsCmd(), ciClassifyCmd(), ciClassifyUISurfaceCmd(), ciChecksCompleteCmd())
+	return cmd
+}
+
+// checksCompleteResult is the JSON shape of `nightgauge ci checks-complete`.
+type checksCompleteResult struct {
+	Verdict       gh.ChecksCompleteVerdict `json:"verdict"`
+	Reasons       []string                 `json:"reasons,omitempty"`
+	Sha           string                   `json:"sha"`
+	Branch        string                   `json:"branch,omitempty"`
+	RequiredNames []string                 `json:"requiredNames,omitempty"`
+	Polls         int                      `json:"polls"`
+	CrossChecked  bool                     `json:"crossChecked"`
+}
+
+// checksCompleteReader is what pollChecksComplete needs from the forge.
+// *github.CIService satisfies it; tests substitute a fake.
+type checksCompleteReader interface {
+	GetIndividualCheckRuns(ctx context.Context, owner, repo, ref string) ([]gh.CheckDetail, error)
+	GetWorkflowRunsForRef(ctx context.Context, owner, repo, sha string) ([]gh.WorkflowRunSummary, error)
+}
+
+// pollChecksComplete is ciChecksCompleteCmd's polling loop, extracted for
+// testability. It confirms a terminal-looking verdict (green/red) across two
+// consecutive polls before trusting it (#1540 §3) — a verdict that changes
+// between polls resets the confirmation, and NOT-YET never needs one. The
+// single-read case (maxPolls==1) cannot confirm across two reads by
+// definition and returns its one read as final, matching the existing
+// `--main-check-wait 0` / `Timeout: 0` semantics elsewhere in this codebase.
+//
+// sleep is nil in production (real timer); tests inject a no-op.
+func pollChecksComplete(ctx context.Context, reader checksCompleteReader, owner, repo, sha, branch string, requiredNames []string, maxPolls int, interval time.Duration, skipCrossCheck bool, sleep func(context.Context, time.Duration) error, progress func(poll, maxPolls int, verdict gh.ChecksCompleteVerdict)) (checksCompleteResult, error) {
+	if sleep == nil {
+		sleep = func(ctx context.Context, d time.Duration) error {
+			select {
+			case <-time.After(d):
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+
+	res := checksCompleteResult{Sha: sha, Branch: branch, RequiredNames: requiredNames, CrossChecked: !skipCrossCheck}
+	var lastVerdict gh.ChecksCompleteVerdict
+
+	for poll := 1; ; poll++ {
+		res.Polls = poll
+		checks, err := reader.GetIndividualCheckRuns(ctx, owner, repo, sha)
+		if err != nil {
+			return res, fmt.Errorf("fetch check runs: %w", err)
+		}
+
+		var runs []gh.WorkflowRunSummary
+		if !skipCrossCheck {
+			// Best-effort (plan §2): a caller without actions/runs access
+			// (rate limit, scope) still gets the required-name guarantee —
+			// nil runs skip the cross-check layer.
+			runs, _ = reader.GetWorkflowRunsForRef(ctx, owner, repo, sha)
+		}
+
+		verdict, reasons := gh.EvaluateChecksCompleteCrossChecked(checks, requiredNames, runs)
+		res.Verdict, res.Reasons = verdict, reasons
+
+		confirmed := false
+		if verdict == gh.ChecksNotYet {
+			lastVerdict = ""
+		} else if lastVerdict == verdict || poll >= maxPolls {
+			confirmed = true
+		} else {
+			lastVerdict = verdict
+		}
+
+		if confirmed || poll >= maxPolls {
+			return res, nil
+		}
+		if progress != nil {
+			progress(poll, maxPolls, verdict)
+		}
+		if err := sleep(ctx, interval); err != nil {
+			return res, err
+		}
+	}
+}
+
+// ciChecksCompleteCmd implements `nightgauge ci checks-complete <sha> [--repo
+// owner/repo] [--branch <branch>] [--json]` — the #1540 shared completeness
+// verb: pr-merge and scripts/post-merge-check.sh both delegate to it (via the
+// binary-discovery cascade) instead of each hand-rolling the raw check-runs
+// idiom, so there is exactly one implementation of "are this SHA's checks
+// complete?" (github.EvaluateChecksCompleteCrossChecked) behind both callers.
+//
+// Exit codes match post-merge-check.sh's existing contract so the script's
+// delegation is a drop-in: 0 GREEN, 1 RED, 2 NOT-YET.
+func ciChecksCompleteCmd() *cobra.Command {
+	var (
+		owner        string
+		repo         string
+		branch       string
+		outputJSON   bool
+		timeoutMins  int
+		pollSecs     int
+		skipCrossRun bool
+	)
+
+	cmd := &cobra.Command{
+		Use:          "checks-complete <sha>",
+		Short:        "Answer \"are this SHA's checks complete?\" — NOT-YET when a required check is absent from the rollup",
+		Args:         cobra.ExactArgs(1),
+		SilenceUsage: true,
+		Example: `  nightgauge ci checks-complete abc1234 --repo nightgauge/nightgauge
+  nightgauge ci checks-complete abc1234 --repo nightgauge/nightgauge --branch main --json`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sha := args[0]
+			client, err := clientFromConfig()
+			if err != nil {
+				return err
+			}
+			ownerPart, repoPart := splitRepo(owner, repo)
+			svc := gh.NewCIService(client)
+
+			if branch == "" {
+				meta, metaErr := gh.NewRepoService(client).RepoMetadata(cmd.Context(), ownerPart, repoPart)
+				if metaErr == nil && meta != nil && meta.DefaultBranch != "" {
+					branch = meta.DefaultBranch
+				}
+			}
+
+			requiredNames, reqErr := svc.GetRequiredCheckNames(cmd.Context(), ownerPart, repoPart, branch)
+			if reqErr != nil {
+				// Best-effort (#1540 §5): a failed lookup falls back to the
+				// all-checks-concluded idiom rather than blocking the whole
+				// verb on an auxiliary lookup.
+				requiredNames = nil
+			}
+
+			interval := time.Duration(pollSecs) * time.Second
+			if interval <= 0 {
+				interval = hooks.DefaultMainCheckPollInterval
+			}
+			timeout := time.Duration(timeoutMins) * time.Minute
+			maxPolls := 1 + int(timeout/interval)
+
+			var progress func(poll, maxPolls int, verdict gh.ChecksCompleteVerdict)
+			if !outputJSON {
+				progress = func(poll, maxPolls int, verdict gh.ChecksCompleteVerdict) {
+					fmt.Fprintf(os.Stderr, "[%d/%d] %s@%s — %s\n", poll, maxPolls, repoPart, sha, verdict)
+				}
+			}
+
+			res, err := pollChecksComplete(cmd.Context(), svc, ownerPart, repoPart, sha, branch, requiredNames, maxPolls, interval, skipCrossRun, nil, progress)
+			if err != nil {
+				return err
+			}
+
+			if outputJSON {
+				if err := printJSON(res); err != nil {
+					return err
+				}
+			} else {
+				switch res.Verdict {
+				case gh.ChecksComplete:
+					fmt.Println("GREEN")
+				case gh.ChecksIncomplete:
+					fmt.Println("RED")
+				default:
+					fmt.Println("NOT-YET")
+				}
+				for _, r := range res.Reasons {
+					fmt.Println("  " + r)
+				}
+			}
+
+			switch res.Verdict {
+			case gh.ChecksComplete:
+				return nil
+			case gh.ChecksIncomplete:
+				os.Exit(1)
+			default:
+				os.Exit(2)
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
+	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	cmd.Flags().StringVar(&branch, "branch", "", "Branch to resolve required checks against (default: repo's default branch)")
+	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output result as JSON")
+	cmd.Flags().IntVar(&timeoutMins, "timeout", 0, "Wall-clock budget in minutes (0 = a single read, matching --main-check-wait 0)")
+	cmd.Flags().IntVar(&pollSecs, "poll", int(hooks.DefaultMainCheckPollInterval/time.Second), "Poll interval in seconds")
+	cmd.Flags().BoolVar(&skipCrossRun, "no-cross-check", false, "Skip the actions/runs per-run cross-check (rate limit, scope)")
 	return cmd
 }
 

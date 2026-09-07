@@ -180,8 +180,9 @@ func TestVerifyMergeCommit_RedIsOnlyDeclaredOncePendingIsZero(t *testing.T) {
 	if testCheck.URL != "https://ci/test" {
 		t.Errorf("URL = %q, want the run link", testCheck.URL)
 	}
+	// #1540: looked up once, up front — no longer gated on the verdict being red.
 	if reader.reqCalls != 1 {
-		t.Errorf("required names looked up %d times, want exactly once and only on red", reader.reqCalls)
+		t.Errorf("required names looked up %d times, want exactly once", reader.reqCalls)
 	}
 }
 
@@ -197,6 +198,30 @@ func TestVerifyMergeCommit_DuplicateRunsOfOneCheckCountOnce(t *testing.T) {
 
 	if res.Verdict != MainChecksRed || res.Bad != 1 || len(res.Failing) != 1 {
 		t.Errorf("verdict=%q bad=%d failing=%v, want red / 1 / one entry", res.Verdict, res.Bad, res.Failing)
+	}
+}
+
+// TestVerifyMergeCommit_MissingRequiredCheckIsPending is the #1540 regression
+// guard at the post-merge verifier: a rollup that OMITS a required check
+// entirely (not merely leaves it pending) must not read as green just
+// because nothing PRESENT is bad — the observed defect (total_count>0, zero
+// pending, while a required job was still in_progress and simply absent).
+func TestVerifyMergeCommit_MissingRequiredCheckIsPending(t *testing.T) {
+	reader := &scriptedChecks{
+		frames:   [][]forgetypes.CheckDetail{{run("build", "COMPLETED", "SUCCESS")}},
+		required: []string{"build", "lint"}, // "lint" never appears in any frame
+	}
+
+	res := VerifyMergeCommit(context.Background(), reader, "o", "r", "main", "abc1234", fastWait(3, 2))
+
+	if res.Verdict != MainChecksPending {
+		t.Fatalf("Verdict = %q, want pending — a required check absent from the rollup is not green", res.Verdict)
+	}
+	if res.Polls != 3 {
+		t.Errorf("Polls = %d, want the whole budget (3) — it never observed the missing required check", res.Polls)
+	}
+	if len(res.Failing) != 0 {
+		t.Errorf("Failing = %v, want none — a missing-required verdict must not name failures", res.Failing)
 	}
 }
 
@@ -240,8 +265,12 @@ func TestVerifyMergeCommit_BudgetExhaustedWhilePendingIsPendingNotRed(t *testing
 	if res.Pending != 1 || res.Total != 2 {
 		t.Errorf("Total/Pending = %d/%d, want 2/1", res.Total, res.Pending)
 	}
-	if reader.reqCalls != 0 {
-		t.Errorf("required names were looked up on a pending verdict")
+	// #1540: required names are now resolved once, up front, before the poll
+	// loop even starts — not only after a red verdict — because the
+	// missing-required-check gate needs them on every poll, including ones
+	// that would otherwise read green.
+	if reader.reqCalls != 1 {
+		t.Errorf("required names looked up %d times, want exactly once (up front, regardless of verdict)", reader.reqCalls)
 	}
 }
 
