@@ -14,28 +14,6 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
-### Fixed
-
-- The Action Center's mutating verbs can no longer hang. `attention resolve`,
-  `ack`, `mute` and `unmute` blocked forever over IPC — an established socket,
-  a daemon that logged nothing, and no working way to resolve a card from the
-  CLI or the sidebar — while `list` and `show` stayed instant. The store ran its
-  transition listeners inside the per-directory lock, and the daemon's listener
-  writes `attention.event` to the extension's stdio pipe: a peer that stopped
-  draining that pipe blocked the write, and the write held the lock every writer
-  in every nightgauge process serialises on. Listeners now fan out on their own
-  goroutine after the lock is released, the lock itself has a bounded acquire,
-  and every mutating IPC method carries a deadline and returns a real error
-  (#1539)
-
-- A card the platform mirror rejects for a schema reason is quarantined instead
-  of retried forever. One card was re-pushed and re-rejected on 931 consecutive
-  sweeps for a two-character `lifecycle.resolved.actor`; a validation verdict is
-  a pure function of the payload, so it is now reported once with the offending
-  field named and dropped from the sweep until the card's content changes. The
-  matching minimum is enforced locally at the moment a resolution is recorded,
-  so an unsyncable card is never created (#1539)
-
 ## [0.3.0] - 2026-09-07
 
 ### Breaking / behaviour change
@@ -152,6 +130,26 @@ is not safe yet`, and `Stopped — 0 running; safe to reload` once they land.
   `n/2` and marks the ones at the cap (#1487)
 
 ### Fixed
+
+- The Action Center's mutating verbs can no longer hang. `attention resolve`,
+  `ack`, `mute` and `unmute` blocked forever over IPC — an established socket,
+  a daemon that logged nothing, and no working way to resolve a card from the
+  CLI or the sidebar — while `list` and `show` stayed instant. The store ran its
+  transition listeners inside the per-directory lock, and the daemon's listener
+  writes `attention.event` to the extension's stdio pipe: a peer that stopped
+  draining that pipe blocked the write, and the write held the lock every writer
+  in every nightgauge process serialises on. Listeners now fan out on their own
+  goroutine after the lock is released, the lock itself has a bounded acquire,
+  and every mutating IPC method carries a deadline and returns a real error
+  (#1539)
+
+- A card the platform mirror rejects for a schema reason is quarantined instead
+  of retried forever. One card was re-pushed and re-rejected on 931 consecutive
+  sweeps for a two-character `lifecycle.resolved.actor`; a validation verdict is
+  a pure function of the payload, so it is now reported once with the offending
+  field named and dropped from the sweep until the card's content changes. The
+  matching minimum is enforced locally at the moment a resolution is recorded,
+  so an unsyncable card is never created (#1539)
 
 - A deterministic issue-pickup reports its phases. The stage's primary path is
   the extension's `ContextAssembler.generateDeterministicContext` — no LLM, so
