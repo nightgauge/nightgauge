@@ -9,6 +9,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-07
+
 ### Changed
 
 - Settings changes made from the UI no longer dirty the committed
@@ -350,7 +352,8 @@ shipped as [0.2.1].
 - Settings for authentication provider, model selection, and paths
 - Settings for notification sounds, volume, and Do Not Disturb respect
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/nightgauge/nightgauge/compare/v0.2.3...v0.3.0
 [0.2.3]: https://github.com/nightgauge/nightgauge/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/nightgauge/nightgauge/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/nightgauge/nightgauge/compare/v0.2.0...v0.2.1
