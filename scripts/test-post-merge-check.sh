@@ -55,10 +55,19 @@ EOF
 }
 
 # expect <name> <want-rc> <want-substring>
+#
+# NIGHTGAUGE_POST_MERGE_CHECK_BASH_ONLY=1 forces the script past its own
+# binary-discovery cascade (#1540) so these bash-fallback cases stay
+# deterministic regardless of whether a `nightgauge` binary happens to be
+# resolvable on the machine running this suite — this repo's own checkout has
+# one at bin/nightgauge, which would otherwise silently delegate every case
+# below to the compiled verb instead of exercising the bash logic.
+# `env -u NIGHTGAUGE_BIN` clears any ambient override for the same reason —
+# an agent harness invoking this suite may already export NIGHTGAUGE_BIN.
 expect() {
   local name="$1" want_rc="$2" want_sub="$3"
   local out rc
-  out=$(PATH="$FAKE_BIN:$PATH" bash "$SCRIPT" deadbeef acme/widget 2>&1)
+  out=$(env -u NIGHTGAUGE_BIN NIGHTGAUGE_POST_MERGE_CHECK_BASH_ONLY=1 PATH="$FAKE_BIN:$PATH" bash "$SCRIPT" deadbeef acme/widget 2>&1)
   rc=$?
   if [ "$rc" -ne "$want_rc" ]; then
     echo "FAIL  $name: exit $rc, want $want_rc"
@@ -141,6 +150,55 @@ stub_gh '{"check_runs": [
   {"name": "e2e", "status": "completed", "conclusion": "cancelled", "html_url": "https://example.invalid/run/2"}
 ]}'
 expect "a cancelled run is RED" 1 "cancelled"
+
+# (h) #1540: when a `nightgauge` binary CAN be resolved, the script must
+# delegate to it entirely and never touch its own gh/jq fallback logic — the
+# stub binary below never even looks at `gh`, so a mismatched exit code here
+# can only come from the delegation itself.
+stub_nightgauge() {
+  local rc="$1"
+  [ -n "$FAKE_BIN" ] && rm -rf "$FAKE_BIN"
+  FAKE_BIN=$(mktemp -d)
+  cat >"$FAKE_BIN/nightgauge" <<EOF
+#!/usr/bin/env bash
+echo "delegated: \$*"
+exit $rc
+EOF
+  chmod +x "$FAKE_BIN/nightgauge"
+}
+
+expect_delegated() {
+  local name="$1" want_rc="$2"
+  local out rc
+  out=$(env -u NIGHTGAUGE_BIN PATH="$FAKE_BIN:$PATH" bash "$SCRIPT" deadbeef acme/widget 2>&1)
+  rc=$?
+  if [ "$rc" -ne "$want_rc" ]; then
+    echo "FAIL  $name: exit $rc, want $want_rc"
+    echo "      output: $out"
+    FAIL=$((FAIL + 1))
+    return
+  fi
+  case "$out" in
+  *"delegated: ci checks-complete deadbeef --repo acme/widget"*) ;;
+  *)
+    echo "FAIL  $name: did not delegate to the binary as expected"
+    echo "      output: $out"
+    FAIL=$((FAIL + 1))
+    return
+    ;;
+  esac
+  echo "ok    $name"
+  PASS=$((PASS + 1))
+}
+
+stub_nightgauge 0
+expect_delegated "a resolvable binary is delegated to and owns GREEN's exit code" 0
+
+stub_nightgauge 1
+expect_delegated "a resolvable binary is delegated to and owns RED's exit code" 1
+
+stub_nightgauge 2
+expect_delegated "a resolvable binary is delegated to and owns NOT-YET's exit code" 2
 
 echo
 if [ "$FAIL" -gt 0 ]; then

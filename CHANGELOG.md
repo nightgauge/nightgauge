@@ -16,6 +16,16 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The check-runs completeness check no longer reads a rollup that is missing
+  an in-flight required job as done. `total_count > 0` with zero pending was
+  observed while `lint` and `publication boundary` were still `in_progress`
+  and simply absent from the response — every reader (the PR gate,
+  `nightgauge hook post-merge`, and `scripts/post-merge-check.sh`) counted
+  only checks the rollup happened to return, so a missing required check
+  never blocked a merge decision. A shared primitive now asserts the
+  positive presence of every required check name instead, exposed as
+  `nightgauge ci checks-complete <sha>` so all three callers — and
+  AGENTS.md's merge idiom — use the same guarded logic (#1540)
 - A usage cap no longer idles the whole fleet for an hour. A rate-limit
   rejection is now attributed to the model that was actually in flight, so a cap
   hit while running `fable` descends the existing tier ladder (fable → opus →

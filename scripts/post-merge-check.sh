@@ -48,6 +48,18 @@
 #
 # Read the EXIT CODE, not the text. `$?` without a pipe: a pipeline's status is
 # the last command's, so `post-merge-check.sh <sha> | tail` always reports 0.
+#
+# #1540: the three numbers above (total>0/pending==0/bad==0) have no way to
+# tell "a required check is absent from the rollup" from "nothing to wait
+# for" — that is the defect this issue reports, and bash has no cheap way to
+# resolve the branch's required-check set (branch protection + rulesets)
+# without duplicating internal/github.GetRequiredCheckNames a second time.
+# So this script now DELEGATES to the compiled `nightgauge ci
+# checks-complete` verb (internal/github.EvaluateChecksCompleteCrossChecked)
+# whenever the binary can be resolved, and its own total/pending/bad logic
+# below becomes the FALLBACK for when it cannot — a degraded path that lacks
+# the required-check-set assertion (and the per-run cross-check), which is
+# named explicitly wherever it fires.
 
 set -uo pipefail
 
@@ -79,6 +91,45 @@ if [[ -z "$REPO" ]]; then
   _owner="${REPO##*[:/]}" # owner, past the last : or /
   REPO="$_owner/$_name"
 fi
+
+# #1540: delegate to the compiled binary when it can be resolved — same
+# discovery cascade skills use (NIGHTGAUGE_BIN -> PATH -> repo bin/ ->
+# canonical-repo bin/ -> ~/go/bin). `nightgauge ci checks-complete` owns the
+# verdict/exit code entirely (0 GREEN / 1 RED / 2 NOT-YET, a drop-in match for
+# this script's own contract) and carries the required-check-set assertion
+# and the per-run cross-check this bash fallback cannot.
+#
+# NIGHTGAUGE_POST_MERGE_CHECK_BASH_ONLY forces this script's own fallback
+# logic below even when a binary IS resolvable — used only by
+# scripts/test-post-merge-check.sh so its bash-fallback cases stay
+# deterministic on a machine that happens to have a `nightgauge` binary
+# installed (this repo's own checkout, for one).
+if [[ -z "${NIGHTGAUGE_POST_MERGE_CHECK_BASH_ONLY:-}" ]]; then
+  BINARY="${NIGHTGAUGE_BIN:-}"
+  [[ -n "$BINARY" && ! -x "$BINARY" ]] && BINARY=""
+  [[ -z "$BINARY" ]] && BINARY=$(command -v nightgauge 2>/dev/null || true)
+  if [[ -z "$BINARY" ]]; then
+    REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+    [[ -x "$REPO_ROOT/bin/nightgauge" ]] && BINARY="$REPO_ROOT/bin/nightgauge"
+  fi
+  if [[ -z "$BINARY" ]]; then
+    GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
+    if [[ -n "$GIT_COMMON_DIR" ]]; then
+      CANONICAL_REPO="$(cd "$GIT_COMMON_DIR/.." 2>/dev/null && pwd)"
+      [[ -n "$CANONICAL_REPO" && -x "$CANONICAL_REPO/bin/nightgauge" ]] && BINARY="$CANONICAL_REPO/bin/nightgauge"
+    fi
+  fi
+  [[ -z "$BINARY" && -x "$HOME/go/bin/nightgauge" ]] && BINARY="$HOME/go/bin/nightgauge"
+
+  if [[ -n "$BINARY" ]]; then
+    exec "$BINARY" ci checks-complete "$SHA" --repo "$REPO"
+  fi
+fi
+
+# --- Fallback: the binary could not be resolved. Everything below lacks the
+# required-check-set assertion and the per-run cross-check (#1540) — bash has
+# no cheap way to resolve branch protection/ruleset required-check names
+# without a second implementation of internal/github.GetRequiredCheckNames.
 
 runs=$(gh api "repos/$REPO/commits/$SHA/check-runs" --paginate 2>/dev/null) || {
   # An API failure is not evidence of anything. Saying NOT-YET keeps the caller
