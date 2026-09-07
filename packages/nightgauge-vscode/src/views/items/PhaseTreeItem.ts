@@ -19,7 +19,8 @@ import { BaseTreeItem } from "./BaseTreeItem";
  * because the two carry opposite information about intent, and the
  * end-of-stage back-fill can only ever observe the second.
  */
-export type PhaseStatus = "pending" | "running" | "complete" | "skipped" | "unreported" | "failed";
+export type PhaseStatus =
+  "pending" | "running" | "complete" | "skipped" | "unreported" | "failed" | "abandoned";
 
 interface PhaseDisplayConfig {
   icon: string;
@@ -35,6 +36,12 @@ const PHASE_STATUS_CONFIG: Record<PhaseStatus, PhaseDisplayConfig> = {
   // not read as a decision the stage made (#1246).
   unreported: { icon: "question", iconColor: "disabledForeground" },
   failed: { icon: "error", iconColor: "testing.iconFailed" },
+  // Go's sixth status (#1009), which had no TS counterpart until #1558 and so
+  // normalised to `unreported`. That mapping lost the one thing an abandoned
+  // phase knows: it STARTED. "Nothing was said about it" and "it began and the
+  // stage moved past it without it ever finishing" are different findings, and
+  // the second is the one that points at a stuck stage.
+  abandoned: { icon: "debug-disconnect", iconColor: "testing.iconQueued" },
 };
 
 /**

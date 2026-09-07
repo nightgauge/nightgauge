@@ -24,6 +24,7 @@ export { RepositoryTreeItem } from "./RepositoryTreeItem";
 export { IssueSummaryTreeItem, type IssueCounts } from "./IssueSummaryTreeItem";
 export { BranchSelectorTreeItem } from "./BranchSelectorTreeItem";
 export { PhaseTreeItem, type PhaseStatus } from "./PhaseTreeItem";
+export { SkippedPhasesTreeItem } from "./SkippedPhasesTreeItem";
 export { ConcurrentSlotTreeItem } from "./ConcurrentSlotTreeItem";
 export { KnowledgeCategoryTreeItem } from "./KnowledgeCategoryTreeItem";
 export { KnowledgeEntryTreeItem } from "./KnowledgeEntryTreeItem";
