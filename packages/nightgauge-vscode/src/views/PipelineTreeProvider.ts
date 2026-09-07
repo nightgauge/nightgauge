@@ -18,6 +18,7 @@ import {
   QueueSectionTreeItem,
   BranchSelectorTreeItem,
   PhaseTreeItem,
+  SkippedPhasesTreeItem,
   TeamSectionTreeItem,
   SubscriptionSectionTreeItem,
   WorkspaceSyncSidebarItem,
@@ -90,6 +91,7 @@ const STAGE_ORDER: PipelineStage[] = [
  * tree view show live progress ("Implementation [7/17]") immediately from the
  * event without an async getState() round-trip to the persisted state file.
  */
+
 /**
  * Order phases by their registry index — the stage's real execution order —
  * rather than the order records happened to arrive (#1246).
@@ -121,22 +123,6 @@ export function orderPhasesByRegistry(
       return ra !== rb ? ra - rb : a.arrivalIndex - b.arrivalIndex;
     })
     .map((entry) => entry.phase);
-}
-
-function buildSyntheticPhases(
-  stage: string,
-  phaseName: string,
-  phaseIndex: number,
-  totalPhases: number,
-  currentComplete = false
-): StagePhase[] {
-  const registryPhases = (PHASE_REGISTRY as Record<string, Array<{ name: string }>>)[stage] ?? [];
-  const phases: StagePhase[] = [];
-  for (let i = 0; i < phaseIndex; i++) {
-    phases.push({ name: registryPhases[i]?.name ?? `step-${i + 1}`, status: "complete" });
-  }
-  phases.push({ name: phaseName, status: currentComplete ? "complete" : "running" });
-  return phases;
 }
 
 /**
@@ -277,8 +263,12 @@ export class PipelineTreeProvider
           stageItem.setStatus("running");
         }
         const totalPhases = event.totalPhases ?? event.total;
-        const phases = buildSyntheticPhases(event.stage, event.phase, event.index, totalPhases);
-        stageItem.setPhases(phases, event.phase, totalPhases);
+        stageItem.applyPhaseEvent(
+          event.phase,
+          "running",
+          totalPhases,
+          (PHASE_REGISTRY as Record<string, Array<{ name: string }>>)[event.stage] ?? []
+        );
         this.refresh(stageItem);
       }
     });
@@ -289,14 +279,12 @@ export class PipelineTreeProvider
       const stageItem = this.stages.get(event.stage as PipelineStage);
       if (stageItem) {
         const totalPhases = event.totalPhases ?? event.total;
-        const phases = buildSyntheticPhases(
-          event.stage,
+        stageItem.applyPhaseEvent(
           event.phase,
-          event.index,
+          "complete",
           totalPhases,
-          true
+          (PHASE_REGISTRY as Record<string, Array<{ name: string }>>)[event.stage] ?? []
         );
-        stageItem.setPhases(phases, undefined, totalPhases);
         this.refresh(stageItem);
       }
     });
@@ -808,8 +796,18 @@ export class PipelineTreeProvider
       if (element instanceof PhaseTreeItem) {
         for (const slot of this.concurrentSlots.values()) {
           for (const stage of STAGE_ORDER) {
+            const parent = slot.getStage(stage)?.parentOfPhase(element);
+            if (parent) {
+              return parent;
+            }
+          }
+        }
+      }
+      if (element instanceof SkippedPhasesTreeItem) {
+        for (const slot of this.concurrentSlots.values()) {
+          for (const stage of STAGE_ORDER) {
             const stageItem = slot.getStage(stage);
-            if (stageItem?.getChildren().includes(element)) {
+            if (stageItem?.ownsPhaseGroup(element)) {
               return stageItem;
             }
           }
@@ -825,10 +823,21 @@ export class PipelineTreeProvider
       return undefined;
     }
 
-    // Phase items have their stage as parent
+    // Phase items have their stage as parent — or, when the stage collapsed
+    // its skips, the group row that holds them (#1558).
     if (element instanceof PhaseTreeItem) {
       for (const stageItem of this.stages.values()) {
-        if (stageItem.getChildren().includes(element)) {
+        const parent = stageItem.parentOfPhase(element);
+        if (parent) {
+          return parent;
+        }
+      }
+      return undefined;
+    }
+
+    if (element instanceof SkippedPhasesTreeItem) {
+      for (const stageItem of this.stages.values()) {
+        if (stageItem.ownsPhaseGroup(element)) {
           return stageItem;
         }
       }

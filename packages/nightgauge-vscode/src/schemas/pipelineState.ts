@@ -146,8 +146,26 @@ export const StagePhaseSchema = z.object({
    * end-of-stage back-fill can only ever observe the second, and writing it
    * as the first told operators that fourteen phases were deliberately
    * skipped on a run whose gate record and session log prove two of them ran.
+   * `abandoned` — it started, and the stage finished without it ever settling
+   * (#1009). Go has written this since #1009 and this enum did not accept it,
+   * so a state.json carrying one failed to parse here; and the tree, which
+   * normalises an unknown status to `unreported`, then reported "nothing was
+   * said about this phase" about a phase that demonstrably started. It is the
+   * status that identifies a stuck stage, so losing it loses the finding
+   * (#1558).
+   *
+   * This list must stay in step with internal/state/runtime_state.go's
+   * PhaseRecord.Status and with PhaseStatus in views/items/PhaseTreeItem.ts.
    */
-  status: z.enum(["pending", "running", "complete", "skipped", "unreported", "failed"]),
+  status: z.enum([
+    "pending",
+    "running",
+    "complete",
+    "skipped",
+    "unreported",
+    "failed",
+    "abandoned",
+  ]),
   started_at: z.string().datetime().optional(),
   completed_at: z.string().datetime().optional(),
   /**

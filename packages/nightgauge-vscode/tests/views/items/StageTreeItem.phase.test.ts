@@ -242,21 +242,21 @@ describe("StageTreeItem — phase child management (Issue #1028)", () => {
   // -------------------------------------------------------------------------
 
   describe("formatDescription() with phases", () => {
-    it("shows registry phase progress when running before any phase marker arrives", () => {
+    it("says nothing has been reported rather than showing a frozen 0/18", () => {
       item.setStatus("running");
-      // Opus/extended-thinking models can start a stage before the first
-      // marker is surfaced. Keep the tree useful by showing the registry
-      // fallback instead of a bare "running..." label.
-      expect(item.description).toBe("Validate Environment [0/18]");
+      // This used to render "Validate Environment [0/18]" so the tree stayed
+      // "useful" before the first marker. It is not useful: feature-dev's
+      // markers are unconditional in the skill and the model emits them in
+      // ~11% of runs, so [0/18] is the EXPECTED display for the length of the
+      // stage, and an operator watching it concludes the stage is stuck when
+      // it is working normally (#1558).
+      expect(item.description).toBe("running · no phase markers yet");
     });
 
-    it("shows registry phase progress when running but currentPhase is absent", () => {
-      // Providing phases but no currentPhase means currentPhaseName is null,
-      // so the live phase branch falls back to the registry-defined first
-      // phase rather than dropping phase/count display entirely.
+    it("says the same when phases exist but none has been observed", () => {
       item.setStatus("running");
       item.setPhases(makePhases(13)); // no currentPhase argument
-      expect(item.description).toBe("Validate Environment [0/18]");
+      expect(item.description).toBe("running · no phase markers yet");
     });
 
     it("shows phase progress when running with currentPhase and phases", () => {
@@ -322,7 +322,7 @@ describe("StageTreeItem — phase child management (Issue #1028)", () => {
       expect(item.description).toBe("running... [1/18]");
     });
 
-    it("counts skipped phases as completed in the progress counter", () => {
+    it("a skip leaves the denominator rather than counting as completed work", () => {
       const phases: StagePhase[] = [
         makePhase("load-context", "complete"),
         makePhase("setup-branch", "skipped"),
@@ -332,8 +332,9 @@ describe("StageTreeItem — phase child management (Issue #1028)", () => {
       item.setStatus("running");
       item.setPhases(phases, "implementation");
 
-      // completedCount = complete(1) + skipped(1) = 2, total = 4
-      expect(item.description).toBe("Implementation [2/4]");
+      // observed = complete(1); applicable = 4 total − 1 skipped = 3.
+      // Was [2/4], which counted the skip as work done (#1558).
+      expect(item.description).toBe("Implementation [1/3]");
     });
 
     it("shows compact phase summary when complete with phases and no token info", () => {

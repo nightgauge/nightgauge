@@ -130,7 +130,13 @@ describe("ConcurrentSlotTreeItem — phase downgrade on terminal stage (#3255)",
     const stuck = children.find((c) => c.phaseName === "completion-checklist");
     expect(stuck, "completion-checklist child should still exist").toBeDefined();
     expect(stuck!.getStatus()).toBe("complete");
-    expect(children.some((c) => c.getStatus() === "running")).toBe(false);
+    expect(
+      children.some(
+        (c) =>
+          typeof (c as { getStatus?: () => string }).getStatus === "function" &&
+          (c as { getStatus: () => string }).getStatus() === "running"
+      )
+    ).toBe(false);
   });
 
   it("downgrades a phase stuck at 'running' to 'failed' when parent stage failed", async () => {
@@ -161,7 +167,13 @@ describe("ConcurrentSlotTreeItem — phase downgrade on terminal stage (#3255)",
     const stuck = children.find((c) => c.phaseName === "implementation");
     expect(stuck, "implementation child should still exist").toBeDefined();
     expect(stuck!.getStatus()).toBe("failed");
-    expect(children.some((c) => c.getStatus() === "running")).toBe(false);
+    expect(
+      children.some(
+        (c) =>
+          typeof (c as { getStatus?: () => string }).getStatus === "function" &&
+          (c as { getStatus: () => string }).getStatus() === "running"
+      )
+    ).toBe(false);
   });
 
   it("does not downgrade phases when parent stage is still running", async () => {

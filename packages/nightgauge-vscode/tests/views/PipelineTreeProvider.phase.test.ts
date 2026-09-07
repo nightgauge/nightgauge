@@ -199,8 +199,10 @@ describe("PipelineTreeProvider — phase event subscription and syncing (Issue #
     it("populates phase children on the running stage when phaseStart fires", async () => {
       provider = await createProvider(mockService);
 
-      // Fire the phaseStart event — handler now uses event payload directly (Issue #3486).
-      // index=1 → 1 synthetic "complete" preceding phase + 1 "running" current phase = 2 children.
+      // Fire the phaseStart event — the handler reads the event payload
+      // directly (Issue #3486). It now seeds the stage's whole registry as
+      // `pending` and marks only the reported phase, instead of fabricating a
+      // "complete" prefix for phases nobody reported (#1558).
       mockService._firePhaseStart({
         stage: "feature-dev",
         phase: "implementation",
@@ -212,8 +214,11 @@ describe("PipelineTreeProvider — phase event subscription and syncing (Issue #
       const stageItem = provider.getStage("feature-dev");
       expect(stageItem).toBeDefined();
       const children = stageItem!.getChildren();
-      expect(children).toHaveLength(2);
+      expect(children.length).toBeGreaterThan(1);
       expect(children.every((c) => c instanceof PhaseTreeItem)).toBe(true);
+      expect(children.filter((c) => (c as PhaseTreeItem).getStatus() === "running")).toHaveLength(
+        1
+      );
     });
 
     it("assigns correct statuses to phase children after phaseStart", async () => {
@@ -229,9 +234,14 @@ describe("PipelineTreeProvider — phase event subscription and syncing (Issue #
 
       const stageItem = provider.getStage("feature-dev")!;
       const children = stageItem.getChildren() as PhaseTreeItem[];
-      // Preceding phase (registry index 0) → "complete"; current phase → "running".
-      expect(children[0].getStatus()).toBe("complete");
-      expect(children[1].getStatus()).toBe("running");
+      // The preceding phase is `pending`, NOT `complete`. Nobody reported it,
+      // and a phase event for index 1 is not evidence that index 0 finished —
+      // markers arrive out of order, and most feature-dev runs emit none at
+      // all. Fabricating that prefix is how a stage that observed one phase
+      // displayed a finished run (#1558).
+      expect(children[0].getStatus()).toBe("pending");
+      expect(children.find((c) => c.phaseName === "implementation")!.getStatus()).toBe("running");
+      expect(children.some((c) => c.getStatus() === "complete")).toBe(false);
     });
 
     it("does not crash when phaseStart fires for an unknown stage", async () => {
@@ -264,9 +274,12 @@ describe("PipelineTreeProvider — phase event subscription and syncing (Issue #
       });
 
       const stageItem = provider.getStage("feature-dev")!;
-      // index=0 → no preceding phases, just the running phase itself.
-      expect(stageItem.getChildren()).toHaveLength(1);
-      expect((stageItem.getChildren()[0] as PhaseTreeItem).getStatus()).toBe("running");
+      const children = stageItem.getChildren() as PhaseTreeItem[];
+      // The registry is seeded so the reader sees the stage's whole plan; only
+      // the reported phase carries a status (#1558).
+      expect(children.find((c) => c.phaseName === "load-context")!.getStatus()).toBe("running");
+      expect(children.filter((c) => c.getStatus() === "running")).toHaveLength(1);
+      expect(children.some((c) => c.getStatus() === "complete")).toBe(false);
     });
 
     it("shows live phase count in description after phaseStart (Issue #3486)", async () => {
@@ -296,8 +309,22 @@ describe("PipelineTreeProvider — phase event subscription and syncing (Issue #
       });
 
       const stageItem = provider.getStage("feature-dev")!;
-      // Description should include "[8/18]" — 8 completed phases before "implementation" (index 8 in 18-phase registry).
-      expect(stageItem.description).toContain("[8/18]");
+      // The count reflects phases OBSERVED, and one marker for index 8 says
+      // nothing about the eight before it. It used to read "[8/18]" purely
+      // from the index — a progress bar derived from a phase's position in a
+      // catalogue rather than from anything that happened (#1558).
+      expect(stageItem.description).not.toContain("[8/18]");
+      expect(stageItem.description).toContain("Implementation");
+
+      // Observe one for real, and the counter appears.
+      mockService._firePhaseComplete({
+        stage: "feature-dev",
+        phase: "implementation",
+        index: 8,
+        total: 18,
+        totalPhases: 18,
+      });
+      expect(stageItem.description).toContain("[1/18]");
     });
   });
 
@@ -320,8 +347,10 @@ describe("PipelineTreeProvider — phase event subscription and syncing (Issue #
 
       const stageItem = provider.getStage("feature-dev")!;
       const children = stageItem.getChildren() as PhaseTreeItem[];
-      expect(children).toHaveLength(1);
-      expect(children[0].getStatus()).toBe("complete");
+      const reported = children.find((c) => c.phaseName === "load-context")!;
+      expect(reported.getStatus()).toBe("complete");
+      // Exactly one phase was observed; the rest of the registry is pending.
+      expect(children.filter((c) => c.getStatus() === "complete")).toHaveLength(1);
     });
 
     it("does not crash when phaseComplete fires for an unknown stage", async () => {

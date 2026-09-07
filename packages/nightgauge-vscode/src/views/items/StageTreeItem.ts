@@ -11,6 +11,7 @@ import * as vscode from "vscode";
 import { PHASE_REGISTRY, type PipelineStage } from "@nightgauge/sdk";
 import { BaseTreeItem } from "./BaseTreeItem";
 import { PhaseTreeItem, type PhaseStatus } from "./PhaseTreeItem";
+import { SkippedPhasesTreeItem } from "./SkippedPhasesTreeItem";
 import type { StageExecutionMode } from "../../services/PipelineStateService";
 import type { StagePhase } from "../../schemas/pipelineState";
 
@@ -83,6 +84,26 @@ function phaseNameToLabel(phaseName: string): string {
 }
 
 /**
+ * Render the live `[observed/applicable]` suffix, or nothing at all.
+ *
+ * A stage whose markers never arrive would otherwise show a `[0/N]` that sits
+ * still for the length of the stage and reads as a stall. Once even one phase
+ * is observed the counter is meaningful and is shown (#1558).
+ */
+/**
+ * Below this many skips, grouping them costs the reader an expand for less
+ * noise than it removes.
+ */
+const SKIPPED_PHASE_GROUP_THRESHOLD = 3;
+
+function formatLivePhaseProgress(observed: number, applicable: number): string {
+  if (applicable <= 0 || observed <= 0) {
+    return "";
+  }
+  return ` [${observed}/${applicable}]`;
+}
+
+/**
  * StageTreeItem - Represents a pipeline stage in the tree
  *
  * @example
@@ -121,6 +142,12 @@ export class StageTreeItem extends BaseTreeItem {
    * Total phases in this stage (for progress count display)
    */
   private totalPhaseCount: number = 0;
+
+  /**
+   * Flat record of every phase row, independent of how they are arranged as
+   * tree children. See `phaseItems()`.
+   */
+  private phaseRows: PhaseTreeItem[] = [];
 
   constructor(stage: PipelineStage, status: StageStatus = "pending") {
     super(STAGE_LABELS[stage], vscode.TreeItemCollapsibleState.None);
@@ -209,37 +236,26 @@ export class StageTreeItem extends BaseTreeItem {
 
     if (this.status === "running") {
       const registryPhases = PHASE_REGISTRY[this.stage as keyof typeof PHASE_REGISTRY];
-      if (this.currentPhaseName && this.totalPhaseCount > 0) {
-        // `unreported` is NOT settled work and must not inflate the numerator
-        // (#1246): counting it is how a run that observed four phases reported
-        // 18/18. A deliberate skip is settled and still counts.
-        const rawCount = this.countSettledPhases();
-        // Clamp: completed count must never exceed total (defensive guard
-        // against skill/registry phase count mismatches)
-        const completedCount = Math.min(rawCount, this.totalPhaseCount);
+      const applicable = this.applicablePhaseCount();
+      // Clamp: observed count must never exceed the applicable total
+      // (defensive guard against skill/registry phase count mismatches).
+      const observed = Math.min(this.countObservedPhases(), applicable);
 
-        // If the last-started phase is already complete, we're between phases —
-        // the next phase hasn't emitted its marker yet. Show the upcoming phase
-        // name from the registry so the user sees what's coming, not what just
-        // finished.
-        const currentPhaseItem = this.children.find(
-          (c) => c instanceof PhaseTreeItem && c.phaseName === this.currentPhaseName
-        ) as PhaseTreeItem | undefined;
-        if (!currentPhaseItem || currentPhaseItem.getStatus() !== "running") {
-          const currentIndex =
-            registryPhases?.findIndex((p) => p.name === this.currentPhaseName) ?? -1;
-          const nextPhase = registryPhases?.[currentIndex + 1];
-          const nextLabel = nextPhase ? phaseNameToLabel(nextPhase.name) : "running...";
-          return `${nextLabel} [${completedCount}/${this.totalPhaseCount}]`;
+      if (observed > 0 || this.currentPhaseName) {
+        const label = this.runningPhaseLabel(registryPhases);
+        const progress = formatLivePhaseProgress(observed, applicable);
+        if (label || progress) {
+          return `${label || "running..."}${progress}`;
         }
+      }
 
-        const phaseLabel = phaseNameToLabel(this.currentPhaseName);
-        return `${phaseLabel} [${completedCount}/${this.totalPhaseCount}]`;
-      }
-      if (registryPhases && registryPhases.length > 0) {
-        return `${phaseNameToLabel(registryPhases[0].name)} [0/${registryPhases.length}]`;
-      }
-      return "running...";
+      // A running stage that has reported nothing: say so. `0/18` looks like a
+      // progress bar that is about to move, and for feature-dev it is the
+      // expected display in ~89% of runs — its markers are unconditional in
+      // the skill and the model emits them in ~11% of them (#1246). A reader
+      // watching `0/18` for twenty-five minutes concludes the stage is stuck;
+      // the stage is working normally and nobody is narrating it (#1558).
+      return "running · no phase markers yet";
     }
 
     if (this.status === "pending") {
@@ -252,18 +268,25 @@ export class StageTreeItem extends BaseTreeItem {
 
     // Completed/failed stages with phases show compact summary
     if ((this.status === "complete" || this.status === "failed") && this.totalPhaseCount > 0) {
-      const rawCount = this.countSettledPhases();
-      // Clamp: completed count must never exceed total
-      const completedCount = Math.min(rawCount, this.totalPhaseCount);
+      const applicable = this.applicablePhaseCount();
+      // Clamp: observed count must never exceed the applicable total.
+      const completedCount = Math.min(this.countObservedPhases(), applicable);
       const unreportedCount = this.countPhasesWithStatus("unreported");
-      // Name the unreported number rather than folding it into the numerator
-      // (#1246). "18/18 phases" on a run that observed four of them is not a
-      // rounding problem — it is the reader being told the stage's own safety
-      // phases ran when the system has no evidence either way.
-      const phaseSummary =
-        unreportedCount > 0
-          ? `${completedCount}/${this.totalPhaseCount} phases · ${unreportedCount} unreported`
-          : `${completedCount}/${this.totalPhaseCount} phases`;
+      const skippedCount = this.countPhasesWithStatus("skipped");
+      const abandonedCount = this.countPhasesWithStatus("abandoned");
+      // Every claim is named, and none is folded into another (#1246, #1558).
+      // "18/18 phases" on a run that observed four of them is not a rounding
+      // problem — it is the reader being told the stage's own safety phases
+      // ran when the system has no evidence either way. The same is true of a
+      // skip: it is a decision, not work, and it belongs beside the count
+      // rather than inside it.
+      const parts: string[] = [
+        applicable > 0 ? `${completedCount}/${applicable} phases` : "no phases applicable",
+      ];
+      if (unreportedCount > 0) parts.push(`${unreportedCount} unreported`);
+      if (abandonedCount > 0) parts.push(`${abandonedCount} abandoned`);
+      if (skippedCount > 0) parts.push(`${skippedCount} skipped`);
+      const phaseSummary = parts.join(" · ");
 
       // Still show token info alongside phase summary for completed stages
       if (this.executionMode === "interactive") {
@@ -565,20 +588,62 @@ export class StageTreeItem extends BaseTreeItem {
    *   giving an accurate count before all phases have emitted markers.
    */
   /**
-   * Phases with a settled outcome: observed to run, or deliberately skipped.
-   * `unreported` is excluded — the stage said nothing about it, so it is not
-   * evidence of anything (#1246).
+   * Phases this stage was OBSERVED to run to completion.
+   *
+   * This is the numerator, and it holds exactly one status. Every other
+   * status is a different claim:
+   *
+   * | status       | claim                                    | counts? |
+   * | ------------ | ---------------------------------------- | ------- |
+   * | `complete`   | it ran, and we saw it finish             | yes     |
+   * | `failed`     | it ran and did not finish                | no      |
+   * | `abandoned`  | it started; the stage moved past it      | no      |
+   * | `skipped`    | the stage decided not to run it          | no — it leaves the denominator instead |
+   * | `unreported` | nothing was ever said about it           | no      |
+   * | `pending`    | it has not started                       | no      |
+   *
+   * #1246 removed `unreported` from this count and left `skipped` in, on the
+   * reasoning that a deliberate skip is settled work. That was true of the
+   * world it was written for, where skips were occasional. #1534 changed that
+   * world: a deterministic stage path legitimately skips MOST of the registry
+   * (`issue-pickup` skips 11 of 14 — "this path has no LLM, so there is no
+   * self-assessment"), and counting those as progress made a stage that
+   * observed NOTHING read as 11/14 — 79% done. A run that skips more looked
+   * like a run that did more.
+   *
+   * So a skip no longer raises the numerator; it lowers the denominator, via
+   * `applicablePhaseCount`. That is the same judgement #1246 made about
+   * `unreported`, applied to the other status that also is not evidence of
+   * work — and it is the version that cannot be resurrected by a future path
+   * that skips legitimately (#1558).
    */
-  private countSettledPhases(): number {
-    return this.children.filter(
-      (c) =>
-        c instanceof PhaseTreeItem && (c.getStatus() === "complete" || c.getStatus() === "skipped")
-    ).length;
+  private countObservedPhases(): number {
+    return this.phaseItems().filter((c) => c.getStatus() === "complete").length;
+  }
+
+  /**
+   * Phases this run could actually perform: the registry total minus the ones
+   * the stage said it would not do. The denominator answers "of the work this
+   * run intends", never "of the catalogue".
+   */
+  private applicablePhaseCount(): number {
+    return Math.max(0, this.totalPhaseCount - this.countPhasesWithStatus("skipped"));
+  }
+
+  /**
+   * The stage's phase rows, flat.
+   *
+   * Read through this rather than `this.children` so that grouping rows for
+   * display (see `setPhases`) can never silently change a count. Every
+   * counting bug in this file's history has been a display change moving a
+   * row out from under a filter.
+   */
+  private phaseItems(): PhaseTreeItem[] {
+    return this.phaseRows;
   }
 
   private countPhasesWithStatus(status: PhaseStatus): number {
-    return this.children.filter((c) => c instanceof PhaseTreeItem && c.getStatus() === status)
-      .length;
+    return this.phaseItems().filter((c) => c.getStatus() === status).length;
   }
 
   setPhases(phases: StagePhase[], currentPhase?: string, totalPhases?: number): void {
@@ -586,16 +651,130 @@ export class StageTreeItem extends BaseTreeItem {
     this.totalPhaseCount = totalPhases ?? phases.length;
     this.currentPhaseName = currentPhase ?? null;
 
-    for (const phase of phases) {
-      const item = new PhaseTreeItem(
-        phase.name,
-        phase.status as PhaseStatus,
-        this.stage,
-        phase.reason
-      );
+    // The flat record is built FIRST and is what every count reads, so the
+    // grouping below is purely a display arrangement and cannot move a row out
+    // from under a filter — which is how this file's counting has broken
+    // before (#1558).
+    this.phaseRows = phases.map(
+      (phase) =>
+        new PhaseTreeItem(phase.name, phase.status as PhaseStatus, this.stage, phase.reason)
+    );
+
+    this.rebuildPhaseChildren();
+    this.updateDisplay();
+  }
+
+  /**
+   * Arrange `phaseRows` as tree children. Skips collapse into one row;
+   * everything else keeps its place and its registry order. Below a small
+   * threshold the group is more indirection than it saves, so the rows stay
+   * inline. This is display only — counts read `phaseRows`.
+   */
+  private rebuildPhaseChildren(): void {
+    this.clearChildren();
+    const skipped = this.phaseRows.filter((p) => p.getStatus() === "skipped");
+    const groupSkips = skipped.length >= SKIPPED_PHASE_GROUP_THRESHOLD;
+
+    for (const item of this.phaseRows) {
+      if (groupSkips && item.getStatus() === "skipped") {
+        continue;
+      }
       this.addChild(item);
     }
+    if (groupSkips) {
+      this.addChild(new SkippedPhasesTreeItem(skipped));
+    }
+  }
 
+  /**
+   * The phase name to show beside a running stage's progress.
+   *
+   * When the last phase the stage named has already completed we are BETWEEN
+   * phases — the next one has not emitted its marker — so the registry's next
+   * entry is shown instead of the one that just finished. Returns "" when
+   * there is nothing to name, which is not the same as there being no
+   * progress: a stage can have observed phases and no current one (#1558).
+   */
+  private runningPhaseLabel(registryPhases: readonly { name: string }[] | undefined): string {
+    if (!this.currentPhaseName) {
+      return "";
+    }
+    const current = this.phaseItems().find((c) => c.phaseName === this.currentPhaseName);
+    if (current && current.getStatus() === "running") {
+      return phaseNameToLabel(this.currentPhaseName);
+    }
+    const currentIndex = registryPhases?.findIndex((p) => p.name === this.currentPhaseName) ?? -1;
+    const nextPhase = currentIndex >= 0 ? registryPhases?.[currentIndex + 1] : undefined;
+    return nextPhase ? phaseNameToLabel(nextPhase.name) : "";
+  }
+
+  /**
+   * The tree parent of one of this stage's phase rows, or undefined if it is
+   * not ours.
+   *
+   * Grouping skips (see `rebuildPhaseChildren`) means a phase row is not
+   * always a DIRECT child, so `getChildren().includes(phase)` is no longer the
+   * whole answer — and a parent lookup that silently returns undefined breaks
+   * `TreeView.reveal` for exactly the rows the group hides. Asking the stage
+   * keeps that knowledge with the arrangement that created it (#1558).
+   */
+  parentOfPhase(phase: PhaseTreeItem): BaseTreeItem | undefined {
+    for (const child of this.children) {
+      if (child === phase) {
+        return this;
+      }
+      if (child instanceof SkippedPhasesTreeItem && child.getChildren().includes(phase)) {
+        return child;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * True when this stage owns the given skipped-phase group row.
+   */
+  ownsPhaseGroup(group: BaseTreeItem): boolean {
+    return this.children.includes(group);
+  }
+
+  /**
+   * Apply ONE observed phase event, leaving every other row alone.
+   *
+   * This replaces `buildSyntheticPhases`, which rebuilt the whole array on
+   * every event and marked every phase before the current index `complete` —
+   * fabricating evidence for phases nobody reported, and discarding the real
+   * `skipped` / `unreported` records already on the rows. On a stage that
+   * emits its markers out of order, or emits only one, that invented a
+   * finished prefix out of nothing.
+   *
+   * Unreported phases stay `pending` while the stage runs and are back-filled
+   * to `unreported` when it ends (PipelineTreeProvider's complete/failed
+   * path), so silence is never promoted to completion at any point (#1558).
+   */
+  applyPhaseEvent(
+    phaseName: string,
+    status: PhaseStatus,
+    totalPhases: number,
+    registryPhases: readonly { name: string }[]
+  ): void {
+    if (this.phaseRows.length === 0 && registryPhases.length > 0) {
+      this.phaseRows = registryPhases.map((r) => new PhaseTreeItem(r.name, "pending", this.stage));
+    }
+    this.totalPhaseCount = totalPhases > 0 ? totalPhases : this.totalPhaseCount;
+
+    const existing = this.phaseRows.find((r) => r.phaseName === phaseName);
+    if (existing) {
+      existing.setStatus(status);
+    } else {
+      // A marker the registry does not define. Keep it rather than drop it —
+      // it is real evidence — and let it sort after the known rows.
+      this.phaseRows.push(new PhaseTreeItem(phaseName, status, this.stage));
+      if (this.phaseRows.length > this.totalPhaseCount) {
+        this.totalPhaseCount = this.phaseRows.length;
+      }
+    }
+    this.currentPhaseName = status === "running" ? phaseName : null;
+    this.rebuildPhaseChildren();
     this.updateDisplay();
   }
 
@@ -604,6 +783,7 @@ export class StageTreeItem extends BaseTreeItem {
    */
   clearPhases(): void {
     this.clearChildren();
+    this.phaseRows = [];
     this.currentPhaseName = null;
     this.totalPhaseCount = 0;
     this.updateDisplay();
