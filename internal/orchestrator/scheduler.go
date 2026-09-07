@@ -7092,9 +7092,29 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 	// RESOLVED is the decision, and it must be visible either way. The write's
 	// failure is not the decision, so it gets its own line rather than editing
 	// this one.
-	completionStatus := completionBoardStatus(reconciledArm)
-	log.Printf("#%d: pipeline complete — resolved terminal board status %s (arm %s: %s)",
-		item.Number, completionStatus, reconciledArm, reconciledArm.completionReason())
+	// Ask the forge whether the issue is closed RIGHT NOW (#1562).
+	//
+	// A run that reached pr-merge merged its own PR, and the PR body's
+	// `Closes #N` closes the issue AT MERGE — typically twenty minutes before
+	// this line runs. Every earlier reading of the issue's state was taken
+	// before that merge, so resolving the terminal status from one recorded
+	// In Review for an issue GitHub had already closed, on every self-completed
+	// run.
+	//
+	// Only asked when this run actually merged something: without a merge there
+	// is no new closure this run could have caused, the arms already covered
+	// the reconcile cases, and a forge round-trip on every completion is not
+	// worth paying for an answer that cannot have changed. issueClosedOnForge
+	// fails closed, so an unreachable forge keeps the conservative In Review.
+	issueClosedNow := false
+	if reconciledArm == reconcileNone && runtime.Snapshot().MergedAt != "" {
+		issueClosedNow = issueClosedOnForge(ctx, item.Repo, item.Number)
+	}
+
+	completionStatus := completionBoardStatus(reconciledArm, issueClosedNow)
+	log.Printf("#%d: pipeline complete — resolved terminal board status %s (arm %s: %s%s)",
+		item.Number, completionStatus, reconciledArm, reconciledArm.completionReason(),
+		map[bool]string{true: "; the issue is CLOSED on the forge, so the run is done, not in review"}[issueClosedNow])
 	if s.stateSvc != nil {
 		// Never discard this error. The board is what an operator and every
 		// dashboard read; a run that resolved Done/In Review and then failed to

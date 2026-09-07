@@ -108,20 +108,38 @@ func (o reconcileOutcome) completionReason() string {
 	}
 }
 
-// completionBoardStatus maps the arm that ended the run to the board status the
-// completion block writes (#398).
+// completionBoardStatus maps the arm that ended the run — plus a closure
+// OBSERVED at completion time — to the board status the completion block
+// writes (#398, #1562).
 //
-// Done means exactly one thing in this codebase: the issue is CLOSED. Only
-// reconcileIssueClosed observed that. The MERGED arm cannot claim it — it runs
-// ONLY after issueClosedOnForge has already answered NOT-closed (the issue
-// check runs first and short-circuits), and since #299 the reconciled run ends
-// right there, so nothing later in the pipeline closes the issue either.
-// Writing Done there would durably record Done-with-an-open-issue, breaking the
-// Done ⟺ closed invariant the board, the sweeps and the dashboards all encode.
-// Everything else — a reconcile backed by a stale OPEN PR, and every normal
-// completion — is In Review, which is where the pipeline has always left a run
-// with an open PR.
-func completionBoardStatus(arm reconcileOutcome) state.BoardStatus {
+// Done means exactly one thing in this codebase: the issue is CLOSED. The
+// invariant is unchanged and still load-bearing; what changed is that a normal
+// completion can now satisfy it.
+//
+// `issueClosedNow` is the fix for #1562. The original rule sent EVERY normal
+// completion to In Review, on the stated grounds that this is "where the
+// pipeline has always left a run with an open PR". That description stopped
+// being true of the success path: a run that reaches pr-merge merges its own
+// PR, and the PR body's `Closes #N` keyword closes the issue AT MERGE —
+// seconds later, and typically twenty minutes before this function is reached.
+// The board then recorded In Review for an issue GitHub had already closed, so
+// every self-completed run left behind a row an operator reads as a queue.
+//
+// The invariant survives because the caller does not INFER the closure from the
+// merge — it asks the forge, with the same issueClosedOnForge the reconcile
+// arms use, and that helper fails closed. So Done is still only ever written
+// against an observed closure; the difference is that the observation is now
+// taken when the answer matters instead of before the merge that changes it.
+//
+// The MERGED arm still cannot claim Done on its own: it runs ONLY after
+// issueClosedOnForge has already answered NOT-closed (the issue check runs
+// first and short-circuits), and since #299 the reconciled run ends right
+// there. If a later observation finds it closed, `issueClosedNow` carries that
+// and the arm is not what decided it.
+func completionBoardStatus(arm reconcileOutcome, issueClosedNow bool) state.BoardStatus {
+	if issueClosedNow {
+		return state.StatusDone
+	}
 	switch arm {
 	case reconcileIssueClosed:
 		return state.StatusDone
