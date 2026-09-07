@@ -4542,6 +4542,28 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		}
 		removeCurrentRunSidecar(workspaceRoot)
 
+		// ORDER: the worktree goes first, then the branch (#1561).
+		//
+		// git refuses to delete a branch a worktree still has checked out, and on
+		// the success path the run's OWN worktree is holding it — so with the
+		// branch delete first, `git branch -D` failed on every successful run,
+		// after the remote copy had already been deleted unconditionally. The
+		// extension has always done it this way round and says why:
+		// "a live worktree blocks the branch delete, so order matters"
+		// (ConcurrentPipelineManager.cleanupSlot, legacy issue 3969). This brings
+		// Go into line with it.
+
+		// Remove the worktree for every terminal outcome — merged, failed,
+		// abandoned/discarded — not only on success (#106). CleanupWorktree
+		// itself preserves a worktree with uncommitted tracked changes (logs
+		// SkipDirty and returns without removing), so a failed run a developer
+		// still needs to inspect is never silently destroyed here.
+		if s.execMgr != nil {
+			if err := s.execMgr.CleanupWorktree(item.Repo, item.Number); err != nil {
+				log.Printf("#%d: worktree cleanup failed: %v", item.Number, err)
+			}
+		}
+
 		// Clean up the feature branch after the pipeline completes.
 		//
 		// A shipped run's branch is spent: the PR merged, so origin's copy and
@@ -4567,15 +4589,29 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				// `git branch -D` a branch that isn't actually merged into the
 				// default branch — reuses the same squash-merge-safe check the
 				// worktree reclamation sweep relies on.
-				if err := s.execMgr.CleanupBranchAndRemoteIfMerged(item.Repo, branchName); err != nil {
+				// Log what HAPPENED, not what was attempted (#1561). The
+				// local delete soft-fails by design — git refuses to delete a
+				// branch a worktree still holds, and that is not a reason to
+				// fail a shipped run — but the remote copy is deleted FIRST
+				// and unconditionally, so a failed local delete leaves the two
+				// sides asymmetric. Reporting "cleaned up feature branch" for
+				// that state told the reader the opposite of the WARN printed
+				// two lines above it.
+				localGone, err := s.execMgr.CleanupBranchAndRemoteIfMerged(item.Repo, branchName)
+				switch {
+				case err != nil:
 					log.Printf("#%d: branch cleanup failed for %s: %v", item.Number, branchName, err)
-				} else {
+				case localGone:
 					log.Printf("#%d: cleaned up feature branch %s", item.Number, branchName)
+				default:
+					log.Printf("#%d: feature branch %s was NOT removed locally — see the branch cleanup line above. "+
+						"origin's copy is already gone, so the local ref is now the only copy",
+						item.Number, branchName)
 				}
 			case loadPrUrl(stageWorkspace(runtime, workspaceRoot), item.Number) != "":
 				log.Printf("#%d: run failed but PR exists — keeping origin/%s (the PR holds the work), dropping local ref only",
 					item.Number, branchName)
-				_ = s.execMgr.CleanupLocalBranch(item.Repo, branchName)
+				_, _ = s.execMgr.CleanupLocalBranch(item.Repo, branchName)
 			default:
 				// Reclaim from the repo root, not the worktree: linked worktrees
 				// share the ref store and object database, so the branch tip is
@@ -4587,18 +4623,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				} else {
 					log.Printf("#%d: orphaned-push reclamation declined — %s", item.Number, res.Reason)
 				}
-				_ = s.execMgr.CleanupLocalBranch(item.Repo, branchName)
-			}
-		}
-
-		// Remove the worktree for every terminal outcome — merged, failed,
-		// abandoned/discarded — not only on success (#106). CleanupWorktree
-		// itself preserves a worktree with uncommitted tracked changes (logs
-		// SkipDirty and returns without removing), so a failed run a developer
-		// still needs to inspect is never silently destroyed here.
-		if s.execMgr != nil {
-			if err := s.execMgr.CleanupWorktree(item.Repo, item.Number); err != nil {
-				log.Printf("#%d: worktree cleanup failed: %v", item.Number, err)
+				_, _ = s.execMgr.CleanupLocalBranch(item.Repo, branchName)
 			}
 		}
 

@@ -57,7 +57,7 @@ func TestCleanupLocalBranch_JudgesAndDeletesInTheSameRepo(t *testing.T) {
 	m := &Manager{workspaceRoot: workspace}
 	m.SetRepoPathResolver(func(string) string { return target })
 
-	if err := m.CleanupLocalBranch("acme/target", branch); err != nil {
+	if _, err := m.CleanupLocalBranch("acme/target", branch); err != nil {
 		t.Fatalf("CleanupLocalBranch: %v", err)
 	}
 
@@ -79,7 +79,7 @@ func TestCleanupLocalBranch_DeletesInTheTargetRepo(t *testing.T) {
 	m := &Manager{workspaceRoot: workspace}
 	m.SetRepoPathResolver(func(string) string { return target })
 
-	if err := m.CleanupLocalBranch("acme/target", branch); err != nil {
+	if _, err := m.CleanupLocalBranch("acme/target", branch); err != nil {
 		t.Fatalf("CleanupLocalBranch: %v", err)
 	}
 
@@ -96,6 +96,12 @@ func TestCleanupLocalBranch_DeletesInTheTargetRepo(t *testing.T) {
 // git refuses to delete a branch checked out in a worktree, and
 // `_ = delLocal.Run()` made that invisible: the caller logged "cleaned up
 // feature branch" for a branch that is still there.
+//
+// #1020 made the refusal VISIBLE (a WARN) but kept the nil error, so the
+// caller still had nothing to condition on and went on claiming success two
+// lines below the warning. #1561 adds the return value that closes it: the
+// error stays nil — a leftover branch is not a pipeline failure — and the
+// boolean is what the caller reads.
 func TestCleanupLocalBranch_ReportsARefusedDelete(t *testing.T) {
 	const branch = "feat/held"
 	repo := makeRepoWithBranch(t, branch, false)
@@ -106,12 +112,58 @@ func TestCleanupLocalBranch_ReportsARefusedDelete(t *testing.T) {
 
 	m := &Manager{workspaceRoot: repo}
 
+	deleted, err := m.CleanupLocalBranch("acme/target", branch)
 	// Still non-fatal — a branch left behind is not a pipeline failure.
-	if err := m.CleanupLocalBranch("acme/target", branch); err != nil {
+	if err != nil {
 		t.Fatalf("a refused delete must stay non-fatal: %v", err)
+	}
+	if deleted {
+		t.Fatal("a refused delete must report deleted=false — reporting true is what let the scheduler log \"cleaned up feature branch\" for a branch still on disk (#1561)")
 	}
 	if !branchExists(t, repo, branch) {
 		t.Fatal("git should have refused to delete a branch held by a worktree")
+	}
+}
+
+// TestCleanupLocalBranch_ReportsASuccessfulDelete is the positive half: the
+// signal must actually distinguish, or the caller learns nothing from it.
+func TestCleanupLocalBranch_ReportsASuccessfulDelete(t *testing.T) {
+	// withOwnCommit=false: nothing unique on the branch, so the content-diff
+	// guard permits the delete.
+	const branch = "feat/free"
+	repo := makeRepoWithBranch(t, branch, false)
+
+	m := &Manager{workspaceRoot: repo}
+
+	deleted, err := m.CleanupLocalBranch("acme/target", branch)
+	if err != nil {
+		t.Fatalf("CleanupLocalBranch: %v", err)
+	}
+	if !deleted {
+		t.Fatal("a branch that was actually deleted must report deleted=true")
+	}
+	if branchExists(t, repo, branch) {
+		t.Fatal("branch should be gone")
+	}
+}
+
+// TestCleanupLocalBranch_PreservedBranchIsNotReportedDeleted covers the third
+// outcome: the content-diff guard declined, so nothing was deleted and the
+// caller must not be told otherwise.
+func TestCleanupLocalBranch_PreservedBranchIsNotReportedDeleted(t *testing.T) {
+	// withOwnCommit=true: the branch carries commits the default branch does
+	// not, so the guard preserves it.
+	const branch = "feat/unmerged"
+	repo := makeRepoWithBranch(t, branch, true)
+
+	m := &Manager{workspaceRoot: repo}
+
+	deleted, err := m.CleanupLocalBranch("acme/target", branch)
+	if err != nil {
+		t.Fatalf("CleanupLocalBranch: %v", err)
+	}
+	if deleted {
+		t.Fatal("a preserved unmerged branch must report deleted=false")
 	}
 }
 
