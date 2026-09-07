@@ -9,6 +9,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-09-07
+
 ### Fixed
 
 - A usage cap no longer stops every repo for an hour. A cap hit while running
@@ -16,6 +18,19 @@ and this project adheres to
   quota cooldown applies only after both the tier ladder and the provider
   fallback chain are exhausted. A cap-driven tier or provider change raises an
   Action Center card naming the stage, the destination and the reason (#1545)
+- Stage progress in the pipeline view counts work that actually happened. A
+  phase the stage skipped no longer counts toward the total, so a stage that
+  reported nothing stops reading as nearly finished — `11/14 phases` on a stage
+  whose rows were eleven skips, three unreported and nothing complete. A running
+  stage that has not reported a phase now says so instead of showing a `0/18`
+  that never moves, phases before the one being reported are no longer shown as
+  complete on no evidence, and a long run of skipped phases collapses into one
+  expandable row (#1558)
+- A pipeline run that merges its own pull request now moves its issue's board
+  row to Done. The row was left in In review even after GitHub had closed the
+  issue, so finished work accumulated in a column that reads as a queue (#1562)
+- A completed run no longer reports that it cleaned up a branch it did not
+  delete (#1561)
 
 ## [0.3.0] - 2026-09-07
 
