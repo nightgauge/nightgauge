@@ -63,6 +63,14 @@ import { readEffectiveConfigTextSync } from "../mergedConfigReader";
  *                       candidate from `pipeline.adapter_fallback_chain` was
  *                       substituted. Issue #3223.
  * - `"default"`       — Fell through to the hardcoded `claude` default.
+ * - `"cap-fallback"`  — The Go scheduler pinned this adapter after a provider's
+ *                       usage cap exhausted the whole tier ladder and its
+ *                       provider walk placed the stage on the next installed,
+ *                       authenticated entry of `pipeline.adapter_fallback_chain`
+ *                       (#1545). Distinct from `"fallback"`, which is this
+ *                       layer's own stage-start PREREQ walk: same chain, a
+ *                       different trigger, and a different bound — see the
+ *                       adapterPin parameter on `runStageSkillHeadless`.
  */
 export const AdapterSourceSchema = z.enum([
   "env",
@@ -70,6 +78,7 @@ export const AdapterSourceSchema = z.enum([
   "global-config",
   "auto-router",
   "fallback",
+  "cap-fallback",
   "default",
 ]);
 export type AdapterSource = z.infer<typeof AdapterSourceSchema>;

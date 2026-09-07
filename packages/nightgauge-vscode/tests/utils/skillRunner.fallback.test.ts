@@ -257,3 +257,131 @@ test prompt`);
     expect(errArg.message).not.toContain("adapters_tried=");
   });
 });
+
+/**
+ * Cap-recovery adapter pin (Issue #1545).
+ *
+ * A SECOND trigger reaches `pipeline.adapter_fallback_chain`, and it is walked
+ * somewhere else entirely. The walker above is this layer's own, strictly
+ * stage-start, and fires only when `validateAdapterPrerequisites` fails — a
+ * missing CLI or a logged-out session, both knowable before any token is spent.
+ * A usage cap is knowable only mid-run, after the stage is already lost, so the
+ * Go scheduler owns that walk: it is the only component that can tell the tier
+ * ladder is spent. Widening the walker above to cover both would have handed a
+ * mid-stream PREREQ failure permission to re-run a stage that had already spent
+ * tokens, which is exactly the waste its stage-start bound exists to prevent.
+ *
+ * What arrives here is therefore not a decision to make but one already made:
+ * `adapterPin`, the last positional argument, naming the provider this dispatch
+ * must land on. These tests pin that it outranks local resolution, that it is
+ * validated rather than trusted, and that its absence changes nothing.
+ */
+describe("skillRunner — cap-recovery adapter pin (Issue #1545)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockProcess = createMockChildProcess();
+    vi.mocked(spawn).mockReturnValue(mockProcess);
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readFileSync).mockReturnValue(`---
+description: test
+allowed-tools: []
+---
+test prompt`);
+    walkAdapterFallbackMock.mockReturnValue({
+      winner: null,
+      hopsAttempted: [],
+      lastError: "",
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** runStageSkillHeadless takes 17 positional arguments; the pin is the last. */
+  const runWithPin = (pin: string | undefined, onComplete: (r: unknown) => void) =>
+    runStageSkillHeadless(
+      "feature-dev",
+      42,
+      { onComplete },
+      undefined, // issueMetadata
+      undefined, // _batchContext
+      undefined, // skipToPhase
+      undefined, // modelOverride
+      undefined, // pauseAutoRouting
+      undefined, // pinnedWorkspaceRoot
+      undefined, // modelOverrideSource
+      undefined, // injectedSkillContent
+      undefined, // autonomousMode
+      undefined, // warnThresholdUsd
+      undefined, // targetRepoOverride
+      undefined, // runId
+      undefined, // effortOverride
+      pin
+    );
+
+  it("runs the stage on the pinned adapter instead of the configured one", () => {
+    // The configured answer is the provider whose cap just cost this run a
+    // stage. Honouring it would walk the recovery straight back into the wall.
+    resolveStageAdapterMock.mockReturnValue({ adapter: "claude", source: "stage-config" });
+
+    const onComplete = vi.fn();
+    runWithPin("codex", onComplete);
+    mockProcess.emit("close", 0);
+
+    expect(onComplete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapterDecision: expect.objectContaining({ adapter: "codex", source: "cap-fallback" }),
+      })
+    );
+  });
+
+  it("records the pin as cap-fallback, distinct from the prereq walker's own fallback", () => {
+    // Two triggers, two sources. Collapsing them would make the audit trail
+    // unable to say whether a stage moved because a CLI was missing or because
+    // a provider stopped serving the account.
+    resolveStageAdapterMock.mockReturnValue({ adapter: "claude", source: "stage-config" });
+
+    const onComplete = vi.fn();
+    runWithPin("grok", onComplete);
+    mockProcess.emit("close", 0);
+
+    const decision = onComplete.mock.calls[0]?.[0]?.adapterDecision;
+    expect(decision.source).toBe("cap-fallback");
+    expect(decision.source).not.toBe("fallback");
+  });
+
+  it("ignores a pin the adapter enum does not recognise", () => {
+    // A typo in a pin must not fail the stage outright — the local decision is
+    // still a working answer, and losing a stage to a bad string would be a
+    // worse outcome than the cap the pin was recovering from.
+    resolveStageAdapterMock.mockReturnValue({ adapter: "claude", source: "stage-config" });
+
+    const onComplete = vi.fn();
+    runWithPin("clawed", onComplete);
+    mockProcess.emit("close", 0);
+
+    expect(onComplete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapterDecision: expect.objectContaining({ adapter: "claude", source: "stage-config" }),
+      })
+    );
+  });
+
+  it("changes nothing when no pin is sent — the ordinary dispatch", () => {
+    // #611's rule that this layer owns per-stage adapter selection is intact
+    // wherever Go says nothing, and Go says nothing on every dispatch but a
+    // cap recovery.
+    resolveStageAdapterMock.mockReturnValue({ adapter: "claude", source: "auto-router" });
+
+    const onComplete = vi.fn();
+    runWithPin(undefined, onComplete);
+    mockProcess.emit("close", 0);
+
+    expect(onComplete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapterDecision: expect.objectContaining({ adapter: "claude", source: "auto-router" }),
+      })
+    );
+  });
+});

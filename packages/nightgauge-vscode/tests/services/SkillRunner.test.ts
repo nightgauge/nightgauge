@@ -193,7 +193,8 @@ describe("SkillRunner", () => {
       undefined, // warnThresholdUsd (Go scheduler enforces budget)
       undefined, // targetRepoOverride — params.repo (Issue #3867)
       "01890a5d-ac96-774b-bcce-b302099a8057", // runId — params.runId (#228)
-      undefined // effortOverride — params.effort, the wire envelope (#581)
+      undefined, // effortOverride — params.effort, the wire envelope (#581)
+      undefined // adapterPin — params.adapterPin, the cap-recovery hop (#1545)
     );
   });
 
@@ -210,15 +211,16 @@ describe("SkillRunner", () => {
     await promise;
 
     const call = vi.mocked(runStageSkillHeadless).mock.calls[0];
-    // targetRepoOverride is the 14th positional argument; runId (#228) and
-    // effortOverride (#581) follow it, so it is third-from-last.
-    expect(call[call.length - 3]).toBe("nightgauge/acmeapp-platform");
+    // targetRepoOverride is the 14th positional argument; runId (#228),
+    // effortOverride (#581) and adapterPin (#1545) follow it, so it is
+    // fourth-from-last.
+    expect(call[call.length - 4]).toBe("nightgauge/acmeapp-platform");
   });
 
   // #228: the run's UUID (params.runId) must be forwarded to
   // runStageSkillHeadless as the 15th positional argument so the SDK
   // TraceRecorder writes to the run's <run_id>.jsonl. effortOverride (#581)
-  // now trails it.
+  // and adapterPin (#1545) now trail it.
   it("forwards params.runId as the runId argument", async () => {
     const params = createDefaultParams({ runId: "01890a5d-ac96-774b-bcce-b302099a8057" });
 
@@ -228,14 +230,14 @@ describe("SkillRunner", () => {
     await promise;
 
     const call = vi.mocked(runStageSkillHeadless).mock.calls[0];
-    expect(call[call.length - 2]).toBe("01890a5d-ac96-774b-bcce-b302099a8057");
+    expect(call[call.length - 3]).toBe("01890a5d-ac96-774b-bcce-b302099a8057");
   });
 
   // #581: the wire envelope's effort (params.effort) must be forwarded as the
-  // trailing effortOverride argument — the Go scheduler resolved it with the
-  // same chain resolveStageEffort runs locally, and SkillRunner executes it
-  // verbatim instead of re-resolving.
-  it("forwards params.effort as the trailing effortOverride argument", async () => {
+  // effortOverride argument — the Go scheduler resolved it with the same chain
+  // resolveStageEffort runs locally, and SkillRunner executes it verbatim
+  // instead of re-resolving. adapterPin (#1545) now trails it.
+  it("forwards params.effort as the effortOverride argument", async () => {
     const params = createDefaultParams({ effort: "high" });
 
     const promise = runner.runStage(params);
@@ -244,7 +246,23 @@ describe("SkillRunner", () => {
     await promise;
 
     const call = vi.mocked(runStageSkillHeadless).mock.calls[0];
-    expect(call[call.length - 1]).toBe("high");
+    expect(call[call.length - 2]).toBe("high");
+  });
+
+  // #1545: a cap-recovery provider hop the Go scheduler decided must reach the
+  // executor as the trailing adapterPin argument. Absent on every ordinary
+  // dispatch — this bridge invents nothing — but when Go sends one, dispatching
+  // anywhere else puts the run straight back into the cap it is recovering from.
+  it("forwards params.adapterPin as the trailing adapterPin argument", async () => {
+    const params = createDefaultParams({ adapterPin: "codex" });
+
+    const promise = runner.runStage(params);
+    await Promise.resolve();
+    capturedState.callbacks!.onComplete!(makeSuccessResult());
+    await promise;
+
+    const call = vi.mocked(runStageSkillHeadless).mock.calls[0];
+    expect(call[call.length - 1]).toBe("codex");
   });
 
   // ── Failure path ────────────────────────────────────────────────────────

@@ -4987,13 +4987,14 @@ pipeline:
     pr-create: claude
     pr-merge: claude
 
-  # Optional: when the resolved adapter's prereq check fails (auth missing,
-  # CLI not in PATH, etc.), the dispatcher tries each entry below in order
-  # before surfacing a `[stage:adapter-unavailable]` error envelope. Empty
-  # or missing means today's behavior (fail immediately on prereq failure).
+  # Optional: the ordered list of providers to fall back through. Two
+  # different triggers walk it — see "Provider fallback" below. Empty or
+  # missing means no walk at all: a prereq failure fails the stage, and a
+  # usage cap that exhausts the tier ladder applies the global cooldown.
   adapter_fallback_chain:
     - claude
     - codex
+    - grok
 
   # Optional: AutoProviderRouter (Issue #3230). When enabled (default true),
   # the resolver consults the SDK router after explicit overrides and before
@@ -5007,6 +5008,59 @@ pipeline:
       capability: 0.4 # 0..1 — higher → most-capable adapter wins
       context_window: 0.2 # 0..1 — higher → big-context adapters get an edge
 ```
+
+##### Provider fallback: `pipeline.adapter_fallback_chain`
+
+The chain is the operator's declared provider order, walked in the order you
+write it. Put the provider you _want_ first and the ones you'll accept after it:
+
+```yaml
+pipeline:
+  adapter_fallback_chain:
+    - claude
+    - codex
+    - grok
+```
+
+A candidate is only used when it is **installed and authenticated** — the same
+check `nightgauge doctor --adapters` reports. An entry whose CLI is missing, out
+of date, or logged out is skipped with a reason in the log; it never costs a
+dispatch to discover. Leave the chain empty (or omit it) to disable provider
+fallback entirely.
+
+**Two triggers walk the same chain, with deliberately different bounds.**
+
+| Trigger                                                                       | When it walks                                     | Recorded as                    |
+| ----------------------------------------------------------------------------- | ------------------------------------------------- | ------------------------------ |
+| The resolved adapter fails its prereq check — CLI missing, session logged out | **Stage start only**, before any tokens are spent | `adapter_source: fallback`     |
+| A provider's **usage cap** exhausted the whole tier ladder for that provider  | **Mid-run**, after the stage is already lost      | `adapter_source: cap-fallback` |
+
+The bounds differ because the knowledge does. A missing CLI is knowable before
+the stage runs, so re-running a stage to discover it would be pure waste — that
+walk stays strictly stage-start. A usage cap cannot be known before dispatch and
+the stage is already lost when it surfaces, so re-running it on another provider
+costs one stage against an hour of idle fleet.
+
+**What a usage cap does, in order.** A cap is attributed to the model that was
+actually in flight, and the fleet-wide response is the _last_ resort rather than
+the first:
+
+1. **Descend the tier ladder** on the same provider — fable → opus → sonnet →
+   haiku — sticky for the rest of the run. A cap on one tier says nothing about
+   the tiers below it.
+2. **Walk this chain** when every tier of that provider is spent, and re-run the
+   stage on the next installed, authenticated provider. Entries belonging to the
+   provider that just refused you are skipped, and a provider is never revisited
+   within one run. The hop is pinned for the remainder of the run, so the next
+   stage does not resolve straight back to the capped provider.
+3. **Global cooldown** only once both are exhausted. Dispatch is suspended for
+   every repo until the bucket's own `resetsAt`. With no chain configured, step 2
+   is a no-op and this is reached directly — which is the pre-existing behaviour
+   for an account that genuinely is out of quota.
+
+Each descent and each hop raises an Action Center card (`cap-fallback`,
+severity `fyi`) naming the stage, the destination and the reason, so the change
+is visible in the product rather than only in `go-backend.log`.
 
 ##### `pipeline.auto_router` reference
 

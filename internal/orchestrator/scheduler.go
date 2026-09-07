@@ -86,13 +86,24 @@ type StageRunParams struct {
 	// grok CLI, with NIGHTGAUGE_GROK_EFFORT demoted to operator override.
 	Effort   string
 	Thinking string
-	// NOTE (#611): there is deliberately no Adapter field here. On the
-	// Go-direct path the runner IS execMgr's adapter, so the value would be a
-	// restatement; on the IPC path Go holds no adapter and the extension owns
-	// per-stage selection (auto-router + stage-start fallback walk), so any
-	// value Go could put here would be a guess at someone else's decision.
-	// The IPC consumer keys off the adapter's own first-hand report instead —
-	// see DowngradeProviderForServedModel.
+	// AdapterPin is the ONE thing Go may say about the adapter, and it is a
+	// recovery instruction rather than a selection (#1545).
+	//
+	// #611 established that Go must not name the adapter on this path: the
+	// extension owns per-stage selection (auto-router + stage-start fallback
+	// walk), Go cannot re-derive that chain, and a guess would apply one
+	// provider's decisions to another's dispatch. That reasoning is untouched
+	// and this field is EMPTY on every ordinary dispatch, so the normal path
+	// still carries no adapter at all.
+	//
+	// It is non-empty only after a usage cap exhausted the tier ladder and the
+	// cap-recovery provider walk placed the stage on another provider. That is
+	// not a guess at the extension's decision — it is a decision only the
+	// scheduler can make, because only the scheduler knows the ladder is spent,
+	// and it is useless unless the next dispatch actually lands there. The
+	// extension honours it above every other rung for the same reason: the
+	// configured adapter is the one whose cap just cost the run a stage.
+	AdapterPin   string
 	MaxTokens    int
 	Timeout      time.Duration
 	SkillPath    string
@@ -147,6 +158,13 @@ type StageRunResult struct {
 	FallbackRecorded  bool
 	FallbackFromModel string
 	FallbackToModel   string
+	// FallbackReason is DecideCapRecovery's own operator-facing sentence for
+	// the descent above (#1545) — carried rather than re-derived so the log
+	// line, the run record and the Action Center card cannot tell three
+	// different stories about one decision. Empty from a runner that did not
+	// produce one; the card falls back to a generic sentence rather than
+	// going unraised.
+	FallbackReason string
 	// ── #91 served-model attribution ────────────────────────────────────
 	// ServedModel is the model that ACTUALLY served the stage per the CLI
 	// stream (last observed). Empty when the stream carried no model info.
@@ -671,6 +689,11 @@ type Scheduler struct {
 	// a stage_adapters entry revert to it after a per-stage switch (#54).
 	runDefaultAdapter adapters.SkillRunner
 
+	// capAdapterUsable probes whether a fallback-chain candidate is installed
+	// and authenticated. Defaults to AdapterUsableForCapHop; overridden in tests
+	// so the decision never shells a vendor CLI.
+	capAdapterUsable func(adapter string) (bool, string)
+
 	// Callbacks
 	onStageStart    func(repo string, issue int, stage string, title string)
 	onStageComplete func(repo string, issue int, stage string, err error, inputTokens, outputTokens, cacheReadTokens int, costUsd float64, model string)
@@ -1030,13 +1053,22 @@ func warnProjectMappingMismatch(runtimeCfg *config.Config, workspaceRoot string)
 // per-stage selection there) and only when the invocation did not pin the
 // adapter explicitly. An unresolvable adapter name is a stage failure with
 // remediation, never a silent fallback.
-func (s *Scheduler) applyStageAdapter(stage, workspaceRoot string) error {
+func (s *Scheduler) applyStageAdapter(stage, workspaceRoot, capPin string) error {
 	cfg, err := config.Load(workspaceRoot)
 	if err != nil {
 		cfg = nil // no readable config — resolution falls through to the run default
 	}
 	res := config.ResolveStageAdapter(cfg, stage, os.Getenv)
 	target := res.Adapter
+	// A cap-recovery provider hop outranks every configured source (#1545). It
+	// is not a preference: the configured provider is the one whose usage cap
+	// just cost this run a stage, and re-pointing back to it here would send
+	// the very next stage into the same wall. The pin is run-scoped state —
+	// see RuntimeState.PinCapAdapter for why it cannot live on the Scheduler.
+	if capPin != "" {
+		target = capPin
+		res.Source = "cap-fallback"
+	}
 	if target == "" || res.Source == "adapter-env" {
 		// Nothing stage-specific resolved (adapter-env is the invocation
 		// override, already active) — restore the run default in case an
@@ -4905,8 +4937,13 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// The error is still consumed by the dispatch switch below, unchanged;
 		// only the re-point moves, and it touches nothing but execMgr's adapter.
 		var adapterResolveErr error
-		if s.adapterExplicit == "" && s.execMgr != nil && s.execMgr.HasAdapter() {
-			adapterResolveErr = s.applyStageAdapter(string(stage), workspaceRoot)
+		// A cap-recovery hop (#1545) re-points the adapter even when the
+		// invocation pinned one: `--adapter grok` states which provider to
+		// PREFER, and a provider that has just refused the run for the next
+		// seven days cannot be served by preferring it harder.
+		capPin := runtime.CapAdapterPin()
+		if (s.adapterExplicit == "" || capPin != "") && s.execMgr != nil && s.execMgr.HasAdapter() {
+			adapterResolveErr = s.applyStageAdapter(string(stage), workspaceRoot, capPin)
 		}
 
 		// Resolve the dispatch model BEFORE composing the skill (#79). Overlays
@@ -5299,6 +5336,10 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// the wire effort verbatim; see the wire-envelope block above.
 			Effort:   wireEffort,
 			Thinking: wireThinking,
+			// Empty on every ordinary dispatch; set only after a usage cap
+			// exhausted the tier ladder and the provider walk re-pointed the
+			// run (#1545). See StageRunParams.AdapterPin.
+			AdapterPin: capPin,
 			// Stage-aware + model-aware last-resort context deadline (#73).
 			// Replaces a blind 30-min literal that killed frontier-mode Fable
 			// stages before their own progress-gated hard cap could apply.
@@ -6105,6 +6146,17 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				})
 				log.Printf("#%d: stage %s — model %s rejected by API; falling back to %s for the rest of the run",
 					item.Number, stage, result.FallbackFromModel, result.FallbackToModel)
+				// The card is raised HERE as well as at the cap-recovery block
+				// below, because this branch is the IPC path's descent and it
+				// `continue`s before that block is ever reached (#1545). The
+				// IPC path is where the reported harm happened, so a card that
+				// only fired on the Go-direct arm would be absent from exactly
+				// the mode it was written for.
+				s.raiseCapFallback(item, runtime, stage, CapRecoveryDecision{
+					Verdict:   CapRecoveryDescendTier,
+					Downgrade: DowngradeDecision{NewTier: result.FallbackToModel},
+					Why:       capDescentReason(result.FallbackReason, result.FallbackFromModel, result.FallbackToModel),
+				})
 				s.fireModelFallback(item.Repo, item.Number, stage,
 					result.FallbackFromModel, result.FallbackToModel, result.ErrorText)
 				continue
@@ -6471,43 +6523,88 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			if authFailed {
 				terminalFailureKind = TerminalKindAdapterAuthFailed
 			}
-			if modelRejected {
-				// The wire model is a band, and a band cannot name its
-				// provider (#340) — so the ladder this rejection walks is
-				// keyed on the provider the dispatch actually executed on
-				// (#611). This arm is the Go-direct path only: an IPC
-				// rejection is evaluated by IpcStageRunner and returns with
-				// FallbackRecorded set, which `continue`s well above here. So
-				// descentProvider is execMgr's adapter, and an xai dispatch
-				// walks the xai ladder (grok-4.6's effort rungs) instead of
-				// the anthropic one (#606, the #532 runtime resolution). It is
-				// the SAME value the sticky-effort lookup above reads, so a
-				// descent cannot be recorded under one provider and looked up
-				// under another.
-				if dg := s.retryEngine.EvaluateDowngradeForProvider(model, descentProvider); dg.ShouldDowngrade {
-					s.retryEngine.RecordDowngrade(model, dg)
-					runtime.AppendEscalation(state.EscalationRecord{
-						Stage:     stage,
-						FromModel: model,
-						ToModel:   dg.NewTier,
-						Reason:    state.EscalationReasonModelUnavailable,
-						At:        time.Now(),
-					})
-					tracer.Emit(trace.KindComplexityEscalation, string(stage), trace.EscalationPayload{
-						Direction: "down",
-						FromModel: model,
-						ToModel:   dg.NewTier,
-						Reasoning: "model rejected by API; substituting next-best tier (sticky for the run) — a stronger model on a plan that refused this one would be rejected the same way",
-						Trigger:   "model_unavailable",
-					})
-					log.Printf("#%d: stage %s — model %s rejected by API; falling back to %s for the rest of the run",
-						item.Number, stage, model, dg.NewTier)
-					s.fireModelFallback(item.Repo, item.Number, stage, model, dg.NewTier, failText)
-					continue // Retry same stage on the substituted tier
-				}
-				log.Printf("#%d: stage %s — model %s rejected by API and no weaker tier available; giving up",
-					item.Number, stage, model)
-				terminalFailureKind = TerminalKindModelUnavailable
+			// USAGE-CAP RECOVERY (#42 descent, #1545 attribution + provider
+			// walk). One decision covers both cap kinds and both dispatch
+			// paths — see DecideCapRecovery for why the order is tier ladder →
+			// provider walk → global cooldown, and why an account-wide reading
+			// is only earned by surviving the first two.
+			//
+			// The wire model is a band, and a band cannot name its provider
+			// (#340), so the ladder is keyed on the provider the dispatch
+			// actually EXECUTED on (#611). Both halves of that evidence go in
+			// and DecideCapRecovery resolves them in the same precedence
+			// descentProviderForDispatch uses: servedModel, the adapter's own
+			// first-hand report, then adapterName, execMgr's adapter on the
+			// Go-direct path. Resolving it there rather than passing
+			// descentProvider keeps ONE resolution for both dispatch paths, so
+			// a descent cannot be recorded under one provider and looked up
+			// under another.
+			capInput := CapRecoveryInput{
+				Kind:          resolvedFailureKind,
+				DispatchModel: model,
+				ServedModel:   servedModel,
+				Adapter:       adapterName,
+				Tried:         runtime.CapAdaptersTried(),
+				Engine:        s.retryEngine,
+				AdapterUsable: s.capAdapterUsableFn(),
+			}
+			// The chain is read from disk only for a failure the ladder
+			// actually governs. Every other stage failure — the overwhelming
+			// majority — must not pay a config.Load for a decision that will
+			// return not-applicable on its first line.
+			if isCapRejection(resolvedFailureKind) {
+				capInput.Chain = s.capFallbackChain(workspaceRoot)
+			}
+			capDecision := DecideCapRecovery(capInput)
+			switch capDecision.Verdict {
+			case CapRecoveryDescendTier:
+				dg := capDecision.Downgrade
+				s.retryEngine.RecordDowngrade(model, dg)
+				runtime.AppendEscalation(state.EscalationRecord{
+					Stage:     stage,
+					FromModel: model,
+					ToModel:   dg.NewTier,
+					Reason:    state.EscalationReasonModelUnavailable,
+					At:        time.Now(),
+				})
+				tracer.Emit(trace.KindComplexityEscalation, string(stage), trace.EscalationPayload{
+					Direction: "down",
+					FromModel: model,
+					ToModel:   dg.NewTier,
+					Reasoning: capDecision.Why,
+					Trigger:   "model_unavailable",
+				})
+				log.Printf("#%d: stage %s — %s", item.Number, stage, capDecision.Why)
+				s.raiseCapFallback(item, runtime, stage, capDecision)
+				s.fireModelFallback(item.Repo, item.Number, stage, model, dg.NewTier, failText)
+				continue // Retry same stage on the substituted tier
+			case CapRecoveryHopProvider:
+				// The ladder is spent, so the next dispatch must leave this
+				// provider entirely. Pin the hop for the rest of the run, mark
+				// it tried so the walk cannot cycle, and clear the sticky
+				// downgrades so the new provider starts at the top of ITS
+				// ladder rather than partway down one it never refused.
+				runtime.PinCapAdapter(capDecision.NextAdapter)
+				s.retryEngine.ClearDowngrades()
+				runtime.RecordStageAdapter(stage, capDecision.NextAdapter)
+				tracer.Emit(trace.KindComplexityEscalation, string(stage), trace.EscalationPayload{
+					Direction: "lateral",
+					FromModel: model,
+					ToModel:   model,
+					Reasoning: capDecision.Why,
+					Trigger:   "adapter_fallback_chain",
+				})
+				log.Printf("#%d: stage %s — %s", item.Number, stage, capDecision.Why)
+				s.raiseCapFallback(item, runtime, stage, capDecision)
+				continue // Re-run the same stage on the next provider
+			case CapRecoveryCoolDown:
+				// Both recoveries are exhausted. EffectiveKind is the INCOMING
+				// kind, unchanged, which is what routes a genuine account-wide
+				// exhaustion to the global cooldown — and keeps a plain
+				// model_unavailable (an unknown id, a plan restriction) out of
+				// it, because that says nothing about the account's quota.
+				log.Printf("#%d: stage %s — %s", item.Number, stage, capDecision.Why)
+				terminalFailureKind = capDecision.EffectiveKind
 			}
 
 			// Stage failed — evaluate model escalation before giving up.
@@ -6533,7 +6630,13 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				log.Printf("#%d: stage %s failed — NOT escalating model: %s (no model can supply a missing credential)",
 					item.Number, stage, catReason)
 			}
-			if !modelRejected && !authFailed && !catBlocked {
+			// A usage cap is excluded from upward escalation for the same
+			// reason a model rejection is, and #1545 makes the exclusion cover
+			// the rate-limit kind too: escalating a capped run to a STRONGER
+			// tier walks toward the caps that fill first, which is the opposite
+			// of the descent the cap called for.
+			capRejected := capDecision.Verdict != CapRecoveryNotApplicable
+			if !modelRejected && !capRejected && !authFailed && !catBlocked {
 				escalation := s.retryEngine.EvaluateEscalation(string(stage), model)
 				if escalation.ShouldEscalate {
 					log.Printf("#%d: stage %s failed — escalating model to %s",

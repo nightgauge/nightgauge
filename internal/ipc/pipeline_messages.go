@@ -63,8 +63,26 @@ type RunStageParams struct {
 	// demoted to operator override — it wins when set, the envelope
 	// dispatches otherwise — which is what lets a same-model effort descent
 	// (the #532 xai ladder) reach the spawned CLI.
-	Effort            string   `json:"effort,omitempty"`
-	Thinking          string   `json:"thinking,omitempty"`
+	Effort   string `json:"effort,omitempty"`
+	Thinking string `json:"thinking,omitempty"`
+	// AdapterPin re-points THIS dispatch onto a named adapter, and it is the
+	// only thing Go says about adapter selection on this wire (#1545).
+	//
+	// ABSENT on every ordinary dispatch — #611's rule that the extension owns
+	// per-stage adapter selection is unchanged, and a missing key means exactly
+	// what it always meant. It appears only after a usage cap exhausted the
+	// tier ladder and the scheduler's cap-recovery provider walk placed the
+	// stage on the next installed, authenticated provider in
+	// pipeline.adapter_fallback_chain. The scheduler is the only component that
+	// can know the ladder is spent, and the hop is inert unless the dispatch it
+	// decided actually lands on that provider.
+	//
+	// VOCABULARY: an ExecutionAdapter name (claude | codex | gemini | grok | …),
+	// not a provider and not a model. The extension honours it ABOVE every
+	// resolution rung including its own env overrides, because every one of
+	// those rungs would point back at the provider whose cap just cost the run
+	// a stage.
+	AdapterPin        string   `json:"adapterPin,omitempty"`
 	MaxTokens         int      `json:"maxTokens,omitempty"`
 	TimeoutMs         int      `json:"timeoutMs"`
 	SkillContent      string   `json:"skillContent"`

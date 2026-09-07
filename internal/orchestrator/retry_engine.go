@@ -756,6 +756,26 @@ func (r *RetryEngine) NextModel(current string) (string, bool) {
 	return "", false
 }
 
+// ClearDowngrades drops the sticky tier substitutions (and their same-model
+// effort half) WITHOUT touching escalation counters, traversed edges or the
+// conflict ledger — everything else Reset clears is genuinely per-run and the
+// run is still in flight here.
+//
+// It exists for exactly one caller: the cap-recovery provider hop (#1545). The
+// downgrade map is keyed by tier and scoped to the ladder that produced it, so
+// carrying it across a hop would start the NEW provider partway down a ladder it
+// never refused — a run capped on anthropic's fable would skip codex's strongest
+// tier for no reason, which is a worse dispatch bought with the recovery that
+// was supposed to help. Each provider gets its own ladder from the top; the
+// hopped-away-from provider is not revisited because the walk's own Tried set
+// bars it.
+func (r *RetryEngine) ClearDowngrades() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.downgrades = make(map[string]string)
+	r.downgradeEfforts = make(map[string]string)
+}
+
 // Reset clears all state for a new pipeline run. Every per-run counter MUST be
 // cleared here — the RetryEngine is constructed once per Scheduler and reused for
 // every issue, so a missed map leaks budget across runs. conflictEdges in

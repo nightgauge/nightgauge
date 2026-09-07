@@ -9,6 +9,14 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- A usage cap no longer stops every repo for an hour. A cap hit while running
+  `fable` now descends the tier ladder and the run continues, and the fleet-wide
+  quota cooldown applies only after both the tier ladder and the provider
+  fallback chain are exhausted. A cap-driven tier or provider change raises an
+  Action Center card naming the stage, the destination and the reason (#1545)
+
 ## [0.3.0] - 2026-09-07
 
 ### Changed

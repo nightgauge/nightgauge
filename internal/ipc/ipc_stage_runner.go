@@ -106,8 +106,11 @@ func (r *IpcStageRunner) RunStage(ctx context.Context, params orchestrator.Stage
 		// resolved next to Model by the same authority and executed
 		// verbatim by the TS SkillRunner (effort) / recorded alongside the
 		// dispatch (thinking).
-		Effort:            params.Effort,
-		Thinking:          params.Thinking,
+		Effort:   params.Effort,
+		Thinking: params.Thinking,
+		// Empty on every ordinary dispatch (#611 unchanged); non-empty only for
+		// a cap-recovery provider hop (#1545). See RunStageParams.AdapterPin.
+		AdapterPin:        params.AdapterPin,
 		MaxTokens:         params.MaxTokens,
 		TimeoutMs:         int(params.Timeout / time.Millisecond),
 		SkillContent:      params.SkillContent,
@@ -160,9 +163,32 @@ func (r *IpcStageRunner) RunStage(ctx context.Context, params orchestrator.Stage
 		// shared RetryEngine so the re-dispatch resolves the weaker tier.
 		escalationRecorded := false
 		fallbackRecorded := false
-		fallbackFrom, fallbackTo := "", ""
+		fallbackFrom, fallbackTo, fallbackReason := "", "", ""
 		if exitCode != 0 && r.retryEngine != nil {
-			if orchestrator.ClassifyTerminalKind(result.ErrorText) == orchestrator.TerminalKindModelUnavailable {
+			// #1545: the rejection is attributed to the model in flight before
+			// it is routed. A structured `rate_limit_event` carries no model at
+			// all, so skillRunner's `[rate-limit-quota-exhausted]` stamp reads
+			// account-wide by default and the tier ladder that exists for
+			// exactly this case is never consulted — every Fable cap idling the
+			// whole fleet for an hour with opus, sonnet and haiku available.
+			// DecideCapRecovery reads result.ServedModel, the concrete id the
+			// adapter reported serving, and descends when a tier remains.
+			//
+			// Only the DESCENT arm is decided here. The provider walk needs the
+			// workspace's pipeline.adapter_fallback_chain and a live adapter
+			// health probe, neither of which this runner holds — so an
+			// exhausted ladder returns no fallback and the scheduler's own
+			// cap-recovery block (which has both) decides the hop or the
+			// cooldown. One authority per decision; this arm is the half that
+			// must happen here because RecordDowngrade must land before the
+			// scheduler re-resolves the dispatch model.
+			capDecision := orchestrator.DecideCapRecovery(orchestrator.CapRecoveryInput{
+				Kind:          orchestrator.ClassifyTerminalKind(result.ErrorText),
+				DispatchModel: params.Model,
+				ServedModel:   result.ServedModel,
+				Engine:        r.retryEngine,
+			})
+			if capDecision.Verdict != orchestrator.CapRecoveryNotApplicable {
 				// params.Model is a registry BAND, and a band cannot name its
 				// provider (#340) — so this evaluation resolved every
 				// extension-side rejection against anthropic, and the #606
@@ -180,17 +206,18 @@ func (r *IpcStageRunner) RunStage(ctx context.Context, params orchestrator.Stage
 				// re-derivation that guessed wrong would apply an xai rung to
 				// a claude dispatch — the very bleed #611 is closing.
 				// Unreported or unknown to the registry ⇒ "" ⇒ the historical
-				// anthropic inference, unchanged.
-				downgradeProvider := orchestrator.DowngradeProviderForServedModel(result.ServedModel)
-				if dg := r.retryEngine.EvaluateDowngradeForProvider(params.Model, downgradeProvider); dg.ShouldDowngrade {
-					log.Printf("#%d: stage %s — model %s rejected by API; falling back to %s for the rest of the run",
-						params.IssueNumber, params.Stage, params.Model, dg.NewTier)
+				// anthropic inference, unchanged. DecideCapRecovery resolves it
+				// the same way and carries the resulting decision below.
+				if capDecision.Verdict == orchestrator.CapRecoveryDescendTier {
+					dg := capDecision.Downgrade
+					log.Printf("#%d: stage %s — %s", params.IssueNumber, params.Stage, capDecision.Why)
 					r.retryEngine.RecordDowngrade(params.Model, dg)
 					fallbackRecorded = true
 					fallbackFrom, fallbackTo = params.Model, dg.NewTier
+					fallbackReason = capDecision.Why
 				} else {
-					log.Printf("#%d: stage %s — model %s rejected by API and no weaker tier available (%s)",
-						params.IssueNumber, params.Stage, params.Model, dg.Reason)
+					log.Printf("#%d: stage %s — model %s rejected and the tier ladder is spent; leaving the provider walk to the scheduler",
+						params.IssueNumber, params.Stage, params.Model)
 				}
 			} else if blocked, reason := orchestrator.EscalationBlockedByCategory(result.ErrorText, result.LastOutputLines); blocked {
 				// #878: a permission failure is not a capability shortfall.
@@ -250,6 +277,7 @@ func (r *IpcStageRunner) RunStage(ctx context.Context, params orchestrator.Stage
 			FallbackRecorded:   fallbackRecorded,
 			FallbackFromModel:  fallbackFrom,
 			FallbackToModel:    fallbackTo,
+			FallbackReason:     fallbackReason,
 			ErrorText:          result.ErrorText,
 			LastOutputLines:    result.LastOutputLines,
 			// #3605 stage-exit diagnostic record fields. Empty when TS

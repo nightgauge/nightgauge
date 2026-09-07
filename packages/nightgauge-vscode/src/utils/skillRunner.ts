@@ -166,6 +166,10 @@ import {
   type DefaultModel,
   type PipelineModelOverride,
 } from "./nightgaugeConfig";
+// #1545: the adapter-name enum, used to validate a cap-recovery adapter pin
+// arriving over the IPC wire. A pin the schema does not recognise falls back to
+// local resolution rather than failing the stage on a typo.
+import { ExecutionAdapterSchema } from "../config/schema";
 // Direct resolver import (#569): the registry effort gate for non-Claude
 // adapter dispatches. Deliberately not routed through the nightgaugeConfig
 // barrel — this is dispatch preflight, not configuration reading.
@@ -3833,7 +3837,25 @@ export function runStageSkillHeadless(
    * local-resolution path (`resolveModel`) still owns effort where it owns
    * the model.
    */
-  effortOverride?: string
+  effortOverride?: string,
+  /**
+   * A cap-recovery adapter pin (#1545): the adapter this dispatch MUST run on,
+   * decided by the Go scheduler after a provider's usage cap exhausted the whole
+   * tier ladder and its provider walk placed the stage on the next installed,
+   * authenticated entry of `pipeline.adapter_fallback_chain`.
+   *
+   * Absent on every ordinary dispatch, so the resolution below is unchanged for
+   * every caller that does not pass one — #611's rule that this layer owns
+   * per-stage adapter selection still holds wherever Go says nothing.
+   *
+   * When present it wins over EVERY rung of `resolveStageAdapter`, env overrides
+   * included, because each of those rungs resolves back to the provider whose cap
+   * just cost this run a stage. It also bypasses the stage-start prereq walk's
+   * *primary* pick while leaving that walk fully intact as a safety net: a pinned
+   * adapter that fails its own prereq check still falls through the chain rather
+   * than failing the stage outright.
+   */
+  adapterPin?: string
 ): SkillProcessHandle {
   // When a pinned workspace root is provided (from HeadlessOrchestrator),
   // use it directly to prevent repo-switch mid-pipeline from changing CWD.
@@ -3910,9 +3932,19 @@ export function runStageSkillHeadless(
   // ~line 3609) still uses the global lookup intentionally — see comment.
   const autoRouterOptions = buildAutoRouterOptions(stage, workspaceRoot, issueMetadata);
   const initialDecision = resolveStageAdapter(stage, workspaceRoot, process.env, autoRouterOptions);
-  let adapter: ExecutionAdapter = initialDecision.adapter;
-  let adapterSource: AdapterSource = initialDecision.source;
-  let routerRationale: string | undefined = initialDecision.rationale;
+  // A cap-recovery pin from the Go scheduler replaces the whole local decision
+  // (#1545). Not a preference among rungs — every rung resolves back to the
+  // provider whose usage cap just exhausted its tier ladder, so consulting them
+  // is how the run walks straight back into the wall it is recovering from. The
+  // pin is validated as a known adapter first: an unrecognised value falls back
+  // to the local decision rather than failing the stage on a typo.
+  const pinnedAdapter =
+    adapterPin && ExecutionAdapterSchema.safeParse(adapterPin).success
+      ? (adapterPin as ExecutionAdapter)
+      : undefined;
+  let adapter: ExecutionAdapter = pinnedAdapter ?? initialDecision.adapter;
+  let adapterSource: AdapterSource = pinnedAdapter ? "cap-fallback" : initialDecision.source;
+  let routerRationale: string | undefined = pinnedAdapter ? undefined : initialDecision.rationale;
   let prereqError = validateAdapterPrerequisites(adapter, workspaceRoot, "headless");
 
   // Issue #3231 — track every adapter the dispatcher considers at stage start,
