@@ -36,9 +36,9 @@ func TestResolveRunTargetRepo(t *testing.T) {
 			// The #1553 regression: run from a non-core checkout with no
 			// --repo must target THAT repo, not <owner>/nightgauge.
 			name:      "config repo wins over the old hardcoded core repo",
-			cfg:       &config.Config{Owner: "nightgauge", DefaultRepo: "nightgauge-platform"},
+			cfg:       &config.Config{Owner: "nightgauge", DefaultRepo: "sibling-repo"},
 			ownerFlag: "nightgauge",
-			want:      "nightgauge/nightgauge-platform",
+			want:      "nightgauge/sibling-repo",
 		},
 		{
 			name:      "core checkout still resolves to core",
@@ -48,17 +48,17 @@ func TestResolveRunTargetRepo(t *testing.T) {
 		},
 		{
 			name:      "explicit --repo overrides the checkout config",
-			cfg:       &config.Config{Owner: "nightgauge", DefaultRepo: "nightgauge-platform"},
+			cfg:       &config.Config{Owner: "nightgauge", DefaultRepo: "sibling-repo"},
 			ownerFlag: "nightgauge",
-			repoFlag:  "nightgauge/nightgauge-flutter",
-			want:      "nightgauge/nightgauge-flutter",
+			repoFlag:  "acme/other-repo",
+			want:      "acme/other-repo",
 		},
 		{
 			name:      "bare --repo resolves against the owner",
-			cfg:       &config.Config{Owner: "nightgauge", DefaultRepo: "nightgauge-platform"},
+			cfg:       &config.Config{Owner: "nightgauge", DefaultRepo: "sibling-repo"},
 			ownerFlag: "nightgauge",
-			repoFlag:  "nightgauge-dashboard",
-			want:      "nightgauge/nightgauge-dashboard",
+			repoFlag:  "third-repo",
+			want:      "nightgauge/third-repo",
 		},
 		{
 			name:      "owner-qualified --repo keeps its own owner",

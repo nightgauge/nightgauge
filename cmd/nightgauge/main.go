@@ -4057,7 +4057,7 @@ func runCmd() *cobra.Command {
 		Use:   "run [issue number]",
 		Short: "Run pipeline for next ready issue or continuously with --auto",
 		Example: `  nightgauge run 1311                    # Run pipeline for specific issue in this checkout's repo
-  nightgauge run 1311 --repo nightgauge/nightgauge-flutter  # Run it in another repo
+  nightgauge run 1311 --repo acme/other-repo  # Run it in another repo
   nightgauge run 1311 --adapter codex    # Run with Codex adapter
   nightgauge run --project 5              # Pick next ready issue and run
   nightgauge run --auto --project 5       # Run continuously`,
@@ -4200,7 +4200,7 @@ func runCmd() *cobra.Command {
 // the explicit-issue path could not target anything but the core repo,
 // whatever checkout it ran from and whatever --project said (#1553). Issue
 // numbers collide across repositories, which makes that more than a "not
-// found on board" annoyance: `nightgauge run 812` from the dashboard checkout
+// found on board" annoyance: `nightgauge run 812` from a sibling repo's checkout
 // would, if core#812 happened to be Ready on board 3, plan, edit and open a
 // pull request against a repository the operator never named.
 //
