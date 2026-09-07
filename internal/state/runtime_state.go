@@ -34,6 +34,12 @@ type LicenseSnapshot struct {
 type RuntimeState struct {
 	mu sync.Mutex
 
+	// capHopAdapter / capHopTried are the cap-recovery provider pin (#1545).
+	// Unexported and unserialized — see PinCapAdapter below for the scope
+	// argument and for why they are not part of the run record.
+	capHopAdapter string
+	capHopTried   map[string]bool
+
 	// Execution identity
 	Repo        string `json:"repo"`
 	IssueNumber int    `json:"issueNumber"`
@@ -1648,6 +1654,73 @@ func (rs *RuntimeState) StageAdapter(stage PipelineStage) string {
 		return ""
 	}
 	return rs.StageAdapters[string(stage)]
+}
+
+// CAP-RECOVERY PROVIDER PIN (#1545) — run-scoped, because the run is the only
+// correct scope for it.
+//
+// When a provider's usage cap exhausts a run's whole tier ladder, the scheduler
+// walks pipeline.adapter_fallback_chain and re-points the run at another
+// provider. That decision must survive to the NEXT stage — re-resolving the
+// configured adapter would send the very next dispatch back into the cap the
+// run is recovering from — so it is state, not a local.
+//
+// It lives HERE rather than on the Scheduler because a Scheduler is shared: the
+// wave orchestrator runs several pipelines against one instance concurrently.
+// A pin held there is both a data race and, worse, a cross-run leak — issue A's
+// hop would silently re-point issue B's adapter, and a run that never hit a cap
+// would be moved off its configured provider by one that did. RuntimeState is
+// minted per run and already carries the mutex every recorder here holds.
+//
+// Both fields are deliberately UNEXPORTED and absent from the JSON projection:
+// they are in-flight routing state, not part of the run record. What the record
+// keeps is the OUTCOME — StageAdapters, written by RecordStageAdapter at the
+// moment of the hop.
+
+// PinCapAdapter pins adapter for the remainder of the run and marks it tried,
+// so a later walk in the same run cannot cycle back onto it.
+func (rs *RuntimeState) PinCapAdapter(adapter string) {
+	if adapter == "" {
+		return
+	}
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.capHopAdapter = adapter
+	if rs.capHopTried == nil {
+		rs.capHopTried = make(map[string]bool)
+	}
+	rs.capHopTried[adapter] = true
+}
+
+// CapAdapterPin returns the pinned cap-recovery adapter, or "" when this run has
+// not hopped. "" is the ordinary case and means "nothing pinned": every
+// consumer treats it exactly as it did before the pin existed.
+func (rs *RuntimeState) CapAdapterPin() string {
+	if rs == nil {
+		return ""
+	}
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	return rs.capHopAdapter
+}
+
+// CapAdaptersTried returns a COPY of the adapters this run has already hopped
+// to. A copy because the walk reads it outside the lock; handing out the live
+// map would reintroduce the race this scope move exists to remove.
+func (rs *RuntimeState) CapAdaptersTried() map[string]bool {
+	if rs == nil {
+		return nil
+	}
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if len(rs.capHopTried) == 0 {
+		return nil
+	}
+	out := make(map[string]bool, len(rs.capHopTried))
+	for k, v := range rs.capHopTried {
+		out[k] = v
+	}
+	return out
 }
 
 // ModelRefusalFallback records one CLI-internal model swap observed in a

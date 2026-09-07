@@ -774,6 +774,69 @@ for capture provenance and the redaction rules.
 
 ---
 
+## A usage cap is attributed to the model in flight (#1545)
+
+The two cap kinds route very differently — `model_unavailable` descends the tier
+ladder and keeps going; `rate_limit_quota_exhausted` backs off on the same model
+and applies a **global** cooldown that suspends dispatch for every repo. Picking
+between them from text alone works only when the text names a model.
+
+`Claude Opus 4.5 usage limit reached; resets at 5pm` does, and satisfies
+`model-unavailable`'s `@mentions_registry_model` predicate. The structured
+stream event does not:
+
+```json
+{
+  "type": "rate_limit_event",
+  "rate_limit_info": {
+    "status": "rejected",
+    "rateLimitType": "seven_day_overage_included",
+    "overageStatus": "rejected",
+    "resetsAt": 1789185600
+  }
+}
+```
+
+Only a bucket name. `skillRunner` stamps `[rate-limit-quota-exhausted]` from it,
+and that explicit marker outranks the model-name heuristic, so the account-wide
+reading wins by default. Observed cost: one Fable cap on a Max plan halted every
+repo for an hour with opus, sonnet, haiku, codex and grok all available and
+nothing tried.
+
+**The table is not what changed.** The rule ladder still answers "what did the
+text say", and the marker above still classifies `rate_limit_quota_exhausted` —
+`TestTheObservedMarkerStillClassifiesAccountWide` pins that deliberately. What
+was missing is a second, separate question, answered in
+`internal/orchestrator/cap_recovery.go` by `DecideCapRecovery`: _given what was
+actually running, what should happen next?_
+
+It reads `StageResultParams.ServedModel` — the concrete id the adapter process
+was spawned with, reported after model preflight and after every adapter
+decision the extension made — so the rejection can be attributed without a
+second classifier and without a new vocabulary on the wire. The order:
+
+| Verdict        | Condition                                                                                       | Kind the scheduler routes on |
+| -------------- | ----------------------------------------------------------------------------------------------- | ---------------------------- |
+| `descend_tier` | a weaker tier remains on that provider's ladder                                                 | `model_unavailable`          |
+| `hop_provider` | ladder spent; `pipeline.adapter_fallback_chain` names another installed, authenticated provider | `model_unavailable`          |
+| `cool_down`    | both exhausted                                                                                  | the incoming kind, unchanged |
+
+So the account-wide reading — and the global cooldown it triggers — is _earned_
+by surviving both recoveries, which is the only evidence the account itself is
+out rather than one model's window. An empty chain collapses `hop_provider` into
+`cool_down`, which is why an account-wide rejection with no fallback configured
+still cools the fleet down exactly as it did before.
+
+A `model_unavailable` that survives both keeps its own kind and therefore still
+takes no global cooldown: a plan that does not offer a band says nothing about
+the account's quota, and halting every repo over one would be this defect with
+the kinds swapped.
+
+Operator configuration for the provider walk:
+[CONFIGURATION.md § Provider fallback](CONFIGURATION.md#provider-fallback-pipelineadapter_fallback_chain).
+
+---
+
 ## Attribution: the first cause, not the last symptom (#875, #878)
 
 A run's `terminal_failure_kind` is not a label — it is what

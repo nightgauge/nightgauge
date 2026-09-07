@@ -69,6 +69,22 @@ interface IpcRunStageParams {
    */
   effort?: string;
   thinking?: string;
+  /**
+   * A cap-recovery adapter pin (#1545) — the ONE thing Go says about adapter
+   * selection on this wire, and a recovery instruction rather than a choice.
+   *
+   * ABSENT on every ordinary dispatch, so #611's rule that the extension owns
+   * per-stage adapter selection is unchanged and a missing key means what it
+   * always meant. It appears only after a provider's usage cap exhausted the
+   * whole tier ladder and the Go scheduler's provider walk placed this stage on
+   * the next installed, authenticated entry of
+   * `pipeline.adapter_fallback_chain`. Only the scheduler can know the ladder is
+   * spent, and the hop is inert unless this dispatch actually lands there — so
+   * when present it outranks EVERY local resolution rung, env overrides
+   * included: each of those would point back at the provider whose cap just
+   * cost the run a stage.
+   */
+  adapterPin?: string;
   maxTokens?: number;
   timeoutMs: number;
   skillContent?: string;
@@ -246,6 +262,10 @@ export class PipelineBridge {
       model: ipcParams.model,
       effort: ipcParams.effort,
       thinking: ipcParams.thinking,
+      // Empty on every ordinary dispatch; a cap-recovery provider hop
+      // otherwise (#1545). Forwarded verbatim — the bridge never invents or
+      // second-guesses it.
+      adapterPin: ipcParams.adapterPin,
       maxTokens: ipcParams.maxTokens,
       timeout: ipcParams.timeoutMs,
       skillContent: ipcParams.skillContent,

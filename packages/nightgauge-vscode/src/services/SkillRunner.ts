@@ -74,6 +74,22 @@ export interface RunStageParams {
    * spawned.
    */
   thinking?: string;
+  /**
+   * A cap-recovery adapter pin (#1545) — the ONE thing Go says about adapter
+   * selection on this wire, and a recovery instruction rather than a choice.
+   *
+   * ABSENT on every ordinary dispatch, so #611's rule that the extension owns
+   * per-stage adapter selection is unchanged and a missing key means what it
+   * always meant. It appears only after a provider's usage cap exhausted the
+   * whole tier ladder and the Go scheduler's provider walk placed this stage on
+   * the next installed, authenticated entry of
+   * `pipeline.adapter_fallback_chain`. Only the scheduler can know the ladder is
+   * spent, and the hop is inert unless this dispatch actually lands there — so
+   * when present it outranks EVERY local resolution rung, env overrides
+   * included: each of those would point back at the provider whose cap just
+   * cost the run a stage.
+   */
+  adapterPin?: string;
   maxTokens?: number;
   timeout: number; // ms
   skillContent?: string; // Resolved SKILL.md body from platform (paid tiers); empty = use local file
@@ -611,7 +627,11 @@ export class SkillRunner {
         // #581: the wire envelope's effort — the Go scheduler resolved it on
         // this path (the same resolveStageEffort chain that used to run
         // locally here), and SkillRunner executes it verbatim.
-        params.effort // effortOverride
+        params.effort, // effortOverride
+        // #1545: a cap-recovery provider hop the Go scheduler decided. Absent
+        // on every ordinary dispatch; when present it pins the adapter above
+        // every local resolution rung.
+        params.adapterPin
       );
 
       this.activeHandle = handle;

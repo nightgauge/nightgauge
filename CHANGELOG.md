@@ -14,6 +14,35 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- A usage cap no longer idles the whole fleet for an hour. A rate-limit
+  rejection is now attributed to the model that was actually in flight, so a cap
+  hit while running `fable` descends the existing tier ladder (fable → opus →
+  sonnet → haiku) and the run continues. The structured `rate_limit_event` the
+  provider sends carries no model at all, so every cap read as an account-wide
+  exhaustion and applied a global cooldown that suspended dispatch for every
+  repo — with opus, sonnet, haiku, codex and grok all available and nothing
+  tried (#1545)
+- The global quota cooldown is now a last resort, not a first move. It applies
+  only once the tier ladder and the provider walk are both exhausted, which is
+  the only evidence the account itself is out rather than one model's window. An
+  account-wide rejection with no fallback chain configured still cools the fleet
+  down exactly as before (#1545)
+
+### Added
+
+- `pipeline.adapter_fallback_chain` is now reachable on usage-cap exhaustion,
+  not just on a stage-start prereq failure. When every tier of a provider is
+  spent, the stage re-runs on the next installed and authenticated provider in
+  the chain — `adapter_fallback_chain: [claude, codex, grok]` — and the hop is
+  pinned for the rest of the run. See
+  [docs/CONFIGURATION.md § Provider fallback](docs/CONFIGURATION.md#provider-fallback-pipelineadapter_fallback_chain)
+  (#1545)
+- An Action Center card when a usage cap changes how a run is routed, naming the
+  stage, the tier or provider it moved to, and why — so the operator learns it
+  from the product instead of from `go-backend.log` at 3am (#1545)
+
 ## [0.3.0] - 2026-09-07
 
 ### Breaking / behaviour change
