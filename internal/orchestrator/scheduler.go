@@ -1056,7 +1056,8 @@ func (s *Scheduler) applyStageAdapter(stage, workspaceRoot, capPin string) error
 	// A cap-recovery provider hop outranks every configured source (#1545). It
 	// is not a preference: the configured provider is the one whose usage cap
 	// just cost this run a stage, and re-pointing back to it here would send
-	// the very next stage into the same wall. See Scheduler.capHopAdapter.
+	// the very next stage into the same wall. The pin is run-scoped state —
+	// see RuntimeState.PinCapAdapter for why it cannot live on the Scheduler.
 	if capPin != "" {
 		target = capPin
 		res.Source = "cap-fallback"
@@ -6511,12 +6512,15 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// is only earned by surviving the first two.
 			//
 			// The wire model is a band, and a band cannot name its provider
-			// (#340) — so the ladder this rejection walks is keyed on the
-			// provider the dispatch actually executed on (#611): descentProvider
-			// is execMgr's adapter on the Go-direct path and the adapter's own
-			// served-model report on the IPC path. It is the SAME value the
-			// sticky-effort lookup above reads, so a descent cannot be recorded
-			// under one provider and looked up under another.
+			// (#340), so the ladder is keyed on the provider the dispatch
+			// actually EXECUTED on (#611). Both halves of that evidence go in
+			// and DecideCapRecovery resolves them in the same precedence
+			// descentProviderForDispatch uses: servedModel, the adapter's own
+			// first-hand report, then adapterName, execMgr's adapter on the
+			// Go-direct path. Resolving it there rather than passing
+			// descentProvider keeps ONE resolution for both dispatch paths, so
+			// a descent cannot be recorded under one provider and looked up
+			// under another.
 			capInput := CapRecoveryInput{
 				Kind:          resolvedFailureKind,
 				DispatchModel: model,
