@@ -14,6 +14,8 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-09-07
+
 ### Fixed
 
 - The check-runs completeness check no longer reads a rollup that is missing
@@ -39,6 +41,47 @@ changelog, and the release workflow refuses a tag that does not.
   the only evidence the account itself is out rather than one model's window. An
   account-wide rejection with no fallback chain configured still cools the fleet
   down exactly as before (#1545)
+- A usage cap on a model now reaches the tier descent instead of being recorded
+  as a crash. The vendor CLI exits non-zero with an empty stderr and reports the
+  cap inside its streaming-JSON terminal envelope, so the classifier received
+  `exit 1: ` with nothing to match and answered `subagent_crash` — a _lifetime_
+  failure kind. #1545's fable → opus → sonnet → haiku ladder was correct and
+  structurally unreachable, so every dispatch inside a cap window consumed the
+  issue's lifetime budget and booked a cascade strike for a condition that
+  clears on its own. The transcript's terminal envelope is now read when, and
+  only when, the vendor itself set `is_error`, and the table learned the
+  wording (#1556)
+- `nightgauge run <issue>` acts on the repository it was invoked for. The
+  target was a string literal — `<owner>/nightgauge` — so the explicit-issue
+  path could not reach any other repo whatever the checkout, the config or
+  `--project` said. Issue numbers collide across repositories, so this was not
+  only a "not found on board" annoyance: the command could plan, edit and open
+  a pull request against a repository the operator never named. A new `--repo`
+  flag takes precedence, the checkout's configured `repo:` is the default, and
+  a run whose repository cannot be resolved is refused rather than guessed
+  (#1553)
+- Stage phase progress counts work that was observed. A deliberate skip now
+  lowers the denominator instead of raising the numerator, so a stage that
+  observed nothing no longer reads as nearly complete — `11/14 phases` on a
+  stage whose rows were 11 skipped, 3 unreported and 0 complete. A running
+  stage with no markers says so rather than showing a `0/18` that never moves,
+  the tree no longer fabricates `complete` for phases before the one reported,
+  and skips collapse into one expandable row. `abandoned` became a first-class
+  phase status: Go has persisted it since the phase record existed, the schema
+  rejected it, and the tree rendered it as `unreported` — losing the one thing
+  it knows, that the phase started (#1558)
+- The pipeline removes a run's worktree before deleting its branch. git refuses
+  to delete a branch a worktree holds, and on the success path that holder is
+  the run's own worktree — so `git branch -D` failed on every successful run,
+  after the remote copy had already been deleted, and the run reported full
+  cleanup anyway. Cleanup now reports whether the local ref is actually gone;
+  a leftover branch still never fails a shipped run (#1561)
+- A run that closes its own issue resolves the board to Done. The terminal
+  status was decided from a reading of the issue taken before the merge, and
+  the PR body's `Closes #N` fires at merge — so every self-completed run left a
+  row reading In review on an issue GitHub had already closed. Done still means
+  exactly one thing: the closure is observed from the forge at completion time,
+  never inferred from the merge (#1562)
 
 ### Added
 
@@ -52,6 +95,14 @@ changelog, and the release workflow refuses a tag that does not.
 - An Action Center card when a usage cap changes how a run is routed, naming the
   stage, the tier or provider it moved to, and why — so the operator learns it
   from the product instead of from `go-backend.log` at 3am (#1545)
+- `nightgauge autonomous start`, and `status` / `stop` that reach the running
+  daemon. The daemon has always exposed a full autonomous control surface over
+  IPC; the CLI wired two of thirteen. `status` printed `state.json` — which the
+  scheduler writes and never re-reads — as the live answer, `stop` wrote the
+  same file and reported a stop no running scheduler received, and `start` did
+  not exist, so the fleet could only be started from the extension UI. Each verb
+  now names which surface answered, so a state-file write is never mistaken for
+  a live one (#1555, #1536)
 
 ## [0.3.0] - 2026-09-07
 
