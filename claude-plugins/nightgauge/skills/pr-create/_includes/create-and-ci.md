@@ -1,14 +1,14 @@
-# PR Create — Create PR, Verify, Monitor CI (Phases 3, 3.6, 3.5)
+# PR Create — Create PR, Verify, Snapshot CI (Phases 3, 3.6, 3.5)
 
 Procedural detail for Phase 3 (Create PR via Go Binary), Phase 3.6 (Verify PR
-Created), and Phase 3.5 (Monitor CI Status). The Phase 3.5 HARD RULE stays
+Created), and Phase 3.5 (Snapshot CI Status). The Phase 3.5 HARD RULE stays
 inline in `SKILL.md`; this file carries the procedural steps it governs.
 
 ## Contents
 
 - [Phase 3: create PR via Go binary](#phase-3-create-pr-via-go-binary)
 - [Phase 3.6: verify PR created](#phase-36-verify-pr-created)
-- [Phase 3.5: monitor CI status](#phase-35-monitor-ci-status)
+- [Phase 3.5: snapshot CI status](#phase-35-snapshot-ci-status)
 
 ## Phase 3: create PR via Go binary
 
@@ -229,20 +229,31 @@ not found, stage exits with status 1, and the orchestrator classifies this as
 > PR is a false success that strands the issue and pages the operator. When in
 > doubt, fail loudly: pr-create is idempotent and safe to re-run.
 
-## Phase 3.5: monitor CI status
+## Phase 3.5: snapshot CI status
 
-**Activation**: Runs when `PR_NUMBER` and `BINARY` are available from Phase 3.
-Skips gracefully (sets `CI_MONITORED=false`) if either is absent.
+**Activation**: Runs when `PR_NUMBER` is available from Phase 3. Skips
+gracefully (sets `CI_MONITORED=false`) if it is absent.
 
 **Headless safe**: No interactive prompts. All output is informational only.
 
-### Step 3.5.1: Configure and Run CI Wait
+> **NEVER BLOCK HERE (Issue #1531).** This phase takes **one** non-blocking
+> snapshot of check status and returns. Do **not** run `nightgauge ci wait`,
+> `gh pr checks --watch`, `sleep`, or any polling loop in pr-create. A blocking
+> wait produces no commit, no new file, no phase marker and no tool call for as
+> long as CI runs, so every clock the progress-runaway monitor has goes cold
+> while the stage is behaving correctly — and the stage is killed with its PR
+> already open. That is exactly what happened on 2026-09-07: pr-create opened a
+> PR, waited 15 minutes on `ci wait`, was terminated by
+> `runaway-progress-exceeded`, and the run was reported as "PR creation failed".
+> pr-merge owns CI polling and auto-fix; a `pending` snapshot here is the
+> correct, complete answer.
+
+### Step 3.5.1: Take the CI snapshot
 
 ```bash
-CI_TIMEOUT=${NIGHTGAUGE_CI_TIMEOUT_MINS:-15}
-CI_POLL=${NIGHTGAUGE_CI_POLL_SECS:-30}
 CI_MONITORED=false
 CI_FINAL_STATUS="pending"
+CI_STATE="PENDING"
 CI_CHECKS_TOTAL=0
 CI_CHECKS_PASSED=0
 CI_CHECKS_FAILED=0
@@ -251,66 +262,59 @@ CI_MONITOR_DURATION=0
 CI_FAILURES_JSON="[]"
 CI_NOTES=""
 CI_MONITOR_TIMESTAMP=""
+CI_RESULT='{}'
 
-if [ -z "$BINARY" ] || [ -z "$PR_NUMBER" ] || [ "$PR_NUMBER" = "null" ]; then
-  echo "CI monitoring: skipped (binary or PR number unavailable)"
+if [ -z "$PR_NUMBER" ] || [ "$PR_NUMBER" = "null" ]; then
+  echo "CI snapshot: skipped (PR number unavailable)"
 else
-  echo "Monitoring CI checks for PR #${PR_NUMBER} (timeout: ${CI_TIMEOUT}m, poll: ${CI_POLL}s)..."
+  echo "Snapshotting CI check status for PR #${PR_NUMBER} (one call, no waiting)..."
 
-  CI_RESULT=$("$BINARY" ci wait "$PR_NUMBER" \
-    --timeout "$CI_TIMEOUT" \
-    --poll "$CI_POLL" \
-    --json 2>&1) || true
+  # One non-blocking read of the check rollup. `gh pr view` returns whatever
+  # GitHub knows right now and exits; it never polls. The same rollup shape
+  # (name/status/conclusion/detailsUrl) is what Step 3.5.2 classifies, and it
+  # is the shape the previous `ci wait` fallback already used.
+  GH_ROLLUP=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json statusCheckRollup 2>/dev/null || echo '{"statusCheckRollup":[]}')
+  GH_CHECKS=$(printf '%s\n' "$GH_ROLLUP" | jq -c '[.statusCheckRollup[]? | {name, status, conclusion, detailsUrl}]' 2>/dev/null || echo "[]")
 
   CI_MONITOR_TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  CI_RESULT=$(jq -nc --argjson checks "$GH_CHECKS" '{checks: $checks, total: ($checks | length)}')
 
-  # Parse result fields from Go binary JSON output
-  # Fields: state, total, successful, failed, pending, elapsedSecs, checks[]
-  CI_STATE=$(printf '%s\n' "$CI_RESULT" | jq -r '.state // "UNKNOWN"' 2>/dev/null || echo "UNKNOWN")
-  CI_CHECKS_TOTAL=$(printf '%s\n' "$CI_RESULT" | jq -r '.total // 0' 2>/dev/null || echo "0")
-  CI_CHECKS_PASSED=$(printf '%s\n' "$CI_RESULT" | jq -r '.successful // 0' 2>/dev/null || echo "0")
-  CI_CHECKS_FAILED=$(printf '%s\n' "$CI_RESULT" | jq -r '.failed // 0' 2>/dev/null || echo "0")
-  CI_CHECKS_PENDING=$(printf '%s\n' "$CI_RESULT" | jq -r '.pending // 0' 2>/dev/null || echo "0")
-  CI_MONITOR_DURATION=$(printf '%s\n' "$CI_RESULT" | jq -r '.elapsedSecs // 0' 2>/dev/null || echo "0")
+  CI_CHECKS_TOTAL=$(printf '%s\n' "$GH_CHECKS" | jq 'length' 2>/dev/null || echo "0")
+  CI_CHECKS_PASSED=$(printf '%s\n' "$GH_CHECKS" | jq '[.[] | select((.conclusion // "" | ascii_downcase) as $c | $c == "success" or $c == "skipped" or $c == "neutral")] | length' 2>/dev/null || echo "0")
+  CI_CHECKS_FAILED=$(printf '%s\n' "$GH_CHECKS" | jq '[.[] | select((.conclusion // "" | ascii_downcase) as $c | $c == "failure" or $c == "timed_out" or $c == "action_required" or $c == "cancelled" or $c == "startup_failure")] | length' 2>/dev/null || echo "0")
+  CI_CHECKS_PENDING=$(printf '%s\n' "$GH_CHECKS" | jq '[.[] | select((.status // "" | ascii_upcase) != "COMPLETED")] | length' 2>/dev/null || echo "0")
+
+  # A snapshot has three honest verdicts and no fourth. TIMEOUT cannot occur
+  # here — nothing waited — and "no checks registered yet" is PENDING, not
+  # SUCCESS: an empty rollup seconds after PR creation means CI has not started.
+  if [ "$CI_CHECKS_FAILED" -gt 0 ]; then
+    CI_STATE="FAILURE"
+  elif [ "$CI_CHECKS_TOTAL" -gt 0 ] && [ "$CI_CHECKS_PENDING" -eq 0 ]; then
+    CI_STATE="SUCCESS"
+  else
+    CI_STATE="PENDING"
+  fi
 
   CI_MONITORED=true
-
-  # Fallback (#273 defense-in-depth, mirrors the Phase 3.6 forge/gh
-  # cross-check pattern): `ci wait` now populates checks[]/total on a
-  # terminal FAILURE/ERROR verdict itself, but if that in-process
-  # augmentation couldn't complete (e.g. a transient REST error fetching
-  # individual check runs), fall back to `gh pr view --json
-  # statusCheckRollup` so classification never operates on an empty
-  # evidence set. GitHub's rollup entries already use the same
-  # name/status/conclusion shape Step 3.5.2 expects.
-  if [ "$CI_CHECKS_TOTAL" -eq 0 ] && { [ "$CI_STATE" = "FAILURE" ] || [ "$CI_STATE" = "ERROR" ]; }; then
-    GH_ROLLUP=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json statusCheckRollup 2>/dev/null || echo '{"statusCheckRollup":[]}')
-    GH_CHECKS=$(printf '%s\n' "$GH_ROLLUP" | jq -c '[.statusCheckRollup[]? | {name, status, conclusion, detailsUrl}]' 2>/dev/null || echo "[]")
-    GH_CHECKS_COUNT=$(printf '%s\n' "$GH_CHECKS" | jq 'length' 2>/dev/null || echo "0")
-    if [ "$GH_CHECKS_COUNT" -gt 0 ]; then
-      CI_RESULT=$(printf '%s\n' "$CI_RESULT" | jq --argjson checks "$GH_CHECKS" '. + {checks: $checks, total: ($checks | length)}' 2>/dev/null || echo "$CI_RESULT")
-      CI_CHECKS_TOTAL="$GH_CHECKS_COUNT"
-      echo "  (ci wait returned no check detail for a $CI_STATE verdict — cross-checked via 'gh pr view --json statusCheckRollup': $GH_CHECKS_COUNT checks found)"
-    fi
-  fi
 fi
 ```
 
 ### Step 3.5.2: Classify Failures
 
-When `CI_STATE` is `FAILURE` or `ERROR`, extract failed checks and classify each
-using the same patterns as `ciCheckHelpers.ts` (deterministic — no AI inference).
-Note: `detailsUrl` is not yet available from the Go binary `ci wait` output — it
-will be empty until the CheckDetail struct is extended in a future issue.
+When `CI_STATE` is `FAILURE`, extract failed checks and classify each using the
+same patterns as `ciCheckHelpers.ts` (deterministic — no AI inference). This is
+a handoff record for pr-merge, not a to-do list for pr-create: see the HARD
+RULE in `SKILL.md`.
 
 ```bash
-if [ "$CI_MONITORED" = "true" ] && { [ "$CI_STATE" = "FAILURE" ] || [ "$CI_STATE" = "ERROR" ]; }; then
-  # Extract failed checks from Go binary result
+if [ "$CI_MONITORED" = "true" ] && [ "$CI_STATE" = "FAILURE" ]; then
+  # Extract failed checks from the snapshot
   FAILED_CHECKS=$(printf '%s\n' "$CI_RESULT" | jq -c '[
     .checks[] |
     select(
-      .status == "COMPLETED" and
-      (.conclusion == "FAILURE" or .conclusion == "TIMED_OUT" or .conclusion == "ACTION_REQUIRED")
+      (.status | ascii_upcase) == "COMPLETED" and
+      ((.conclusion // "" | ascii_upcase) as $c |
+        $c == "FAILURE" or $c == "TIMED_OUT" or $c == "ACTION_REQUIRED")
     )
   ]' 2>/dev/null || echo "[]")
 
@@ -333,7 +337,6 @@ if [ "$CI_MONITORED" = "true" ] && { [ "$CI_STATE" = "FAILURE" ] || [ "$CI_STATE
       (($conclusion == "timed_out") or
        ($name | test("timed?.?out|timeout|flaky|network.?error|connection.?refused|econnreset|enotfound|rate.?limit|503|502|504|retry"; "i"))
       ) as $is_transient |
-      # detailsUrl: Go binary CheckDetail does not yet carry this field (future work)
       (.detailsUrl // "") as $details_url |
       {
         name: $check.name,
@@ -347,28 +350,30 @@ if [ "$CI_MONITORED" = "true" ] && { [ "$CI_STATE" = "FAILURE" ] || [ "$CI_STATE
 fi
 ```
 
-### Step 3.5.3: Map Go Binary State to Final Status
+### Step 3.5.3: Map Snapshot State to Final Status
 
 ```bash
 case "$CI_STATE" in
   SUCCESS) CI_FINAL_STATUS="success" ;;
   FAILURE) CI_FINAL_STATUS="failure" ;;
-  ERROR)   CI_FINAL_STATUS="error"   ;;
-  TIMEOUT) CI_FINAL_STATUS="timeout" ;;
   PENDING) CI_FINAL_STATUS="pending" ;;
   *)       CI_FINAL_STATUS="unknown" ;;
 esac
 ```
 
+`CI_FINAL_STATUS=pending` is the expected value for most runs — pr-create
+snapshots seconds after opening the PR, when checks have usually not started.
+It is a fact about the moment of observation, never a failure.
+
 ### Step 3.5.4: Report Results
 
 ```bash
 echo ""
-echo "=== CI Status Report ==="
-echo "PR #${PR_NUMBER}: ${CI_FINAL_STATUS} (${CI_MONITOR_DURATION}s elapsed)"
+echo "=== CI Status Snapshot ==="
+echo "PR #${PR_NUMBER}: ${CI_FINAL_STATUS} (single non-blocking check, no waiting)"
 echo "Checks: ${CI_CHECKS_TOTAL} total | ${CI_CHECKS_PASSED} passed | ${CI_CHECKS_FAILED} failed | ${CI_CHECKS_PENDING} pending"
 
-if [ "$CI_FINAL_STATUS" = "failure" ] || [ "$CI_FINAL_STATUS" = "error" ]; then
+if [ "$CI_FINAL_STATUS" = "failure" ]; then
   echo ""
   echo "Failed checks:"
   printf '%s\n' "$CI_FAILURES_JSON" | jq -r '.[] |
@@ -377,8 +382,8 @@ if [ "$CI_FINAL_STATUS" = "failure" ] || [ "$CI_FINAL_STATUS" = "error" ]; then
     (if .details_url != "" then "\n    Logs: \(.details_url)" else "" end)
   ' 2>/dev/null || true
 
-  # Offer quick fixes for auto-fixable types (format, lint)
-  AUTO_FIXABLE=$(echo "$CI_FAILURES_JSON" | \
+  # Record auto-fixable types (format, lint) for pr-merge — never fix them here
+  AUTO_FIXABLE=$(printf '%s\n' "$CI_FAILURES_JSON" | \
     jq '[.[] | select(.failure_type == "format" or .failure_type == "lint")] | length' \
     2>/dev/null || echo "0")
 
@@ -395,16 +400,12 @@ if [ "$CI_FINAL_STATUS" = "failure" ] || [ "$CI_FINAL_STATUS" = "error" ]; then
   echo "NOTE: pr-merge will apply its RALPH Loop auto-fix for any remaining failures."
   echo "      pr-create exits here — see Phase 3.5 HARD RULE (#3666)."
 
-elif [ "$CI_FINAL_STATUS" = "timeout" ]; then
-  echo "CI checks did not complete within ${CI_TIMEOUT} minutes."
-  echo "pr-merge will continue monitoring CI status."
-  CI_NOTES="CI monitoring timed out after ${CI_TIMEOUT} minutes. pr-merge will continue monitoring."
-
 elif [ "$CI_FINAL_STATUS" = "success" ]; then
-  echo "All CI checks passed. PR is ready for review."
+  echo "All CI checks already green at snapshot time. PR is ready for review."
 
-elif [ "$CI_FINAL_STATUS" = "pending" ] || [ "$CI_MONITORED" = "false" ]; then
-  echo "CI checks not yet available — pr-merge will monitor status."
+else
+  echo "CI checks still running or not yet registered — pr-merge owns polling from here."
+  [ -z "$CI_NOTES" ] && CI_NOTES="Snapshot only; checks pending at pr-create exit. pr-merge polls."
 fi
 ```
 
@@ -414,14 +415,14 @@ All `CI_*` variables are now available for Phase 4 to write into the
 `ci_monitoring` block of `pr-{N}.json`:
 
 ```
-CI_MONITORED            — true | false
-CI_FINAL_STATUS         — success | failure | error | timeout | pending | unknown
-CI_MONITOR_DURATION     — elapsed seconds (integer)
-CI_CHECKS_TOTAL         — total check count
+CI_MONITORED            — true | false (true means a snapshot was taken)
+CI_FINAL_STATUS         — success | failure | pending | unknown
+CI_MONITOR_DURATION     — always 0 (a snapshot does not wait)
+CI_CHECKS_TOTAL         — total check count at snapshot time
 CI_CHECKS_PASSED        — passed check count
 CI_CHECKS_FAILED        — failed check count
 CI_CHECKS_PENDING       — pending check count
 CI_FAILURES_JSON        — JSON array of classified failure objects
 CI_NOTES                — human-readable note string (empty when no issues)
-CI_MONITOR_TIMESTAMP    — ISO 8601 timestamp when monitoring completed
+CI_MONITOR_TIMESTAMP    — ISO 8601 timestamp of the snapshot
 ```

@@ -353,3 +353,109 @@ describe("postFailureComment — blocked-dependency deferral (Issue #231)", () =
     expect(cmd).not.toContain("verify the issue exists");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Issue #1531 — a pr-create kill AFTER the PR was verified must not be reported
+// as "PR creation failed". pr-create writes pr-{N}.json the moment Phase 3.6
+// confirms an OPEN PR; the stage can still be killed afterwards (the runaway
+// monitor fired while it observed CI). The report must name the PR and describe
+// a post-create stall instead of sending the operator to re-create the work.
+// ---------------------------------------------------------------------------
+
+function prCreateKilledResult(): PipelineRunResult {
+  return {
+    success: false,
+    completedStages: ["issue-pickup", "feature-planning", "feature-dev", "feature-validate"],
+    skippedStages: [],
+    deferredStages: [],
+    failedStage: "pr-create",
+    totalDurationMs: 930_000,
+    budgetExceeded: false,
+    outcomeType: "failure",
+    error: new Error(
+      "Stage pr-create terminated: No productive progress (commit / new file / phase / CI) for 930s"
+    ),
+  };
+}
+
+function prCreateState(prMeta: Record<string, unknown>): PipelineState {
+  return {
+    schema_version: "1.0",
+    issue_number: 1431,
+    title: "Test post-create stall",
+    branch: "feat/1431-test",
+    base_branch: "main",
+    started_at: new Date(Date.now() - 930_000).toISOString(),
+    updated_at: new Date().toISOString(),
+    execution_mode: "automatic",
+    paused: false,
+    stages: {
+      "pr-create": { status: "failed", error: "runaway progress" },
+    },
+    ...prMeta,
+  } as unknown as PipelineState;
+}
+
+describe("postFailureComment — pr-create killed with a verified PR (Issue #1531)", () => {
+  beforeEach(() => {
+    execMock.mockReset();
+    execMock.mockImplementation((_cmd: string, _opts: unknown, cb: Function) => {
+      cb(null, "", "");
+    });
+  });
+
+  it("names the PR and does not claim creation failed when pipeline_meta has the PR number", async () => {
+    await postFailureComment({
+      issueNumber: 1431,
+      result: prCreateKilledResult(),
+      state: prCreateState({
+        pipeline_meta: { pr_number: 1447 },
+        pr_url: "https://github.com/acme/acme-platform/pull/1447",
+      }),
+      cwd: "/tmp/repo",
+      logger,
+    });
+
+    const cmd: string = execMock.mock.calls[0][0];
+    // The false claim must be gone.
+    expect(cmd).not.toContain("PR creation failed");
+    expect(cmd).not.toContain("could not push the branch or create the PR");
+    // The PR must be named, and linked when its URL is known.
+    expect(cmd).toContain("PR #1447");
+    expect(cmd).toContain("https://github.com/acme/acme-platform/pull/1447");
+    // And the stall must be described as post-create.
+    expect(cmd).toContain("stalled after opening it");
+    expect(cmd).toContain("nothing needs re-creating");
+  });
+
+  it("recovers the PR number from pr_url alone when pipeline_meta is absent", async () => {
+    await postFailureComment({
+      issueNumber: 1431,
+      result: prCreateKilledResult(),
+      state: prCreateState({
+        pr_url: "https://github.com/acme/acme-platform/pull/1447",
+      }),
+      cwd: "/tmp/repo",
+      logger,
+    });
+
+    const cmd: string = execMock.mock.calls[0][0];
+    expect(cmd).not.toContain("PR creation failed");
+    expect(cmd).toContain("PR #1447");
+  });
+
+  it("still reports a real creation failure when no PR was ever verified", async () => {
+    await postFailureComment({
+      issueNumber: 1431,
+      result: prCreateKilledResult(),
+      state: prCreateState({}),
+      cwd: "/tmp/repo",
+      logger,
+    });
+
+    const cmd: string = execMock.mock.calls[0][0];
+    expect(cmd).toContain("PR creation failed");
+    expect(cmd).toContain("could not push the branch or create the PR");
+    expect(cmd).not.toContain("stalled after opening it");
+  });
+});

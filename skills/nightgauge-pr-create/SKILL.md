@@ -75,7 +75,7 @@ authoritative output of the materializer.
 - `skills/nightgauge-pr-create/_includes/security-and-scope.md` — read in
   Phases 2.5 and 2.6 (security re-scan, scope drift gate)
 - `skills/nightgauge-pr-create/_includes/create-and-ci.md` — read in Phases
-  3, 3.6, and 3.5 (create PR, verify PR exists, monitor CI)
+  3, 3.6, and 3.5 (create PR, verify PR exists, snapshot CI)
 
 ## Orchestration
 
@@ -365,15 +365,28 @@ exits with status 1, and the orchestrator classifies this as
 
 ---
 
-### Phase 3.5: Monitor CI Status
+### Phase 3.5: Snapshot CI Status
 
 ```bash
 printf '<!-- phase:start name="monitor-ci-status" index=11 total=14 stage="pr-create" -->\n'
 ```
 
-**PURPOSE**: Poll CI check status after PR creation, classify failures
-deterministically, and record what we observed into Phase 4's `ci_monitoring`
-block so pr-merge has the context to take over.
+**PURPOSE**: Take **one** non-blocking reading of CI check status after PR
+creation, classify anything already failing deterministically, and record what
+we observed into Phase 4's `ci_monitoring` block so pr-merge has the context to
+take over.
+
+**HARD RULE — DO NOT WAIT FOR CI HERE (Issue #1531):**
+
+> This phase makes a single snapshot call and returns. **Do not run
+> `nightgauge ci wait`, a forge-CLI `pr checks --watch` loop, `sleep`, or any
+> polling loop.**
+> pr-create emits no commit, no new file, no phase marker and no tool call
+> while it blocks, so the progress-runaway monitor's clocks all go cold exactly
+> while the stage is behaving correctly and it is killed with its PR already
+> open — the run is then reported as "PR creation failed" for a PR that exists
+> and is running CI. `CI_FINAL_STATUS=pending` is the correct, complete answer
+> when checks have not finished; pr-merge owns polling and auto-fix.
 
 **HARD RULE — DO NOT FIX CI HERE (Issue #3666):**
 
@@ -391,8 +404,8 @@ block so pr-merge has the context to take over.
 > `CI_FAILURES_JSON`, leave a concise `CI_NOTES` describing what you saw,
 > and exit. pr-merge will read your handoff and act.
 
-**Activation**: Runs when `PR_NUMBER` and `BINARY` are available from Phase 3.
-Skips gracefully (sets `CI_MONITORED=false`) if either is absent.
+**Activation**: Runs when `PR_NUMBER` is available from Phase 3. Skips
+gracefully (sets `CI_MONITORED=false`) if it is absent.
 
 **Headless safe**: No interactive prompts. All output is informational only.
 

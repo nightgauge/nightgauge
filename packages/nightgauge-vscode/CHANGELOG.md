@@ -46,6 +46,18 @@ and this project adheres to
 
 ### Fixed
 
+- A pipeline failure comment no longer says "PR creation failed" about a PR that
+  is open and running checks. When pr-create is terminated after it verified an
+  OPEN PR — the runaway monitor firing while the stage watched CI was the
+  reported case — the report now names and links that PR and describes a
+  post-create stall, instead of sending the operator to re-push a branch that
+  already shipped. pr-create itself no longer waits for CI, so the kill that
+  produced this report should not recur (#1531)
+- Re-queuing an issue that already has an open pipeline PR no longer re-runs
+  planning, development and validation. The run now fast-forwards to pr-merge on
+  the strength of the `pr-{N}.json` the previous run left behind, instead of
+  spending a second full pass to rediscover its own PR and push more commits
+  onto it (#1531)
 - The extension now executes issue refinement. The Go daemon dispatches it over
   the same stage bridge it uses for pipeline stages, and the refine skill runs
   headless in the checkout of the repo the issue belongs to. Before this,

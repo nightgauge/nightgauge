@@ -49,6 +49,43 @@ const STAGE_ORDER: PipelineStage[] = [
   "pr-merge",
 ];
 
+/** A PR this run verifiably opened, as recorded by pr-create's Phase 3.6. */
+interface VerifiedPr {
+  number: number;
+  url?: string;
+}
+
+/**
+ * Resolve the PR the run actually opened, or null when none was ever verified.
+ *
+ * The orchestrator copies `pr-{N}.json`'s PR number into `pipeline_meta` on
+ * both the pr-create success path and its failure path (#1531), and Go state
+ * carries `pr_url`; either is proof a PR exists. Absence is the conservative
+ * answer — an unverifiable PR reads as "not created", which is the reading the
+ * generic guidance is written for.
+ */
+function resolveVerifiedPr(state: PipelineState | null): VerifiedPr | null {
+  const url = typeof state?.pr_url === "string" && state.pr_url ? state.pr_url : undefined;
+
+  const metaNumber = state?.pipeline_meta?.pr_number;
+  if (typeof metaNumber === "number" && metaNumber > 0) {
+    return { number: metaNumber, url };
+  }
+
+  const match = url?.match(/\/pull\/(\d+)/);
+  if (match) {
+    const parsed = parseInt(match[1], 10);
+    if (parsed > 0) return { number: parsed, url };
+  }
+
+  return null;
+}
+
+/** Render a verified PR as a link when we have its URL, else as `#N`. */
+function formatPrRef(pr: VerifiedPr): string {
+  return pr.url ? `[PR #${pr.number}](${pr.url})` : `PR #${pr.number}`;
+}
+
 interface FailureCommentOptions {
   issueNumber: number;
   result: PipelineRunResult;
@@ -248,11 +285,15 @@ function buildCommentBody(
   const complexity = state?.pipeline_meta?.complexity ?? "unknown";
   const route = state?.pipeline_meta?.route ?? "unknown";
   const budgetEstimate = state?.pipeline_meta?.budget_estimate_usd;
+  // #1531: name the PR in the summary whenever one was verified open, so a
+  // post-create stall never reads as "no PR exists".
+  const verifiedPr = resolveVerifiedPr(state);
 
   sections.push(
     "| Field | Value |",
     "|-------|-------|",
     `| **Failed Stage** | \`${failedStage}\` |`,
+    ...(verifiedPr ? [`| **PR** | ${formatPrRef(verifiedPr)} (created before the failure) |`] : []),
     `| **Duration** | ${duration} |`,
     `| **Cost** | ${costUsd != null ? `$${costUsd.toFixed(2)}` : "N/A"}${budgetEstimate != null ? ` / $${budgetEstimate.toFixed(2)} estimate` : ""} |`,
     `| **Complexity** | ${complexity} |`,
@@ -427,11 +468,27 @@ function getRecommendations(
         "- \u2705 **Validation failed** — the implementation did not pass tests or acceptance criteria. Review the test output above and consider whether the acceptance criteria are achievable in a single pass."
       );
       break;
-    case "pr-create":
-      recs.push(
-        "- \u{1F4E4} **PR creation failed** — the agent could not push the branch or create the PR. Check for branch protection rules, auth permissions, or missing commits."
-      );
+    case "pr-create": {
+      // #1531: only claim the PR was never created when no PR was verified.
+      // pr-create writes pr-{N}.json the moment Phase 3.6 confirms an OPEN PR,
+      // and the stage can still be killed afterwards (a runaway-progress kill
+      // while it observed CI, a cost cap, a hard cap). Telling the operator
+      // "the agent could not push the branch or create the PR" about a PR that
+      // is open and running checks sends them to re-create work that exists.
+      const verifiedPr = resolveVerifiedPr(state);
+      if (verifiedPr) {
+        recs.push(
+          `- \u{1F4E4} **The PR was created — pr-create stalled after opening it.** ${formatPrRef(verifiedPr)} ` +
+            "was verified open before the stage was terminated, so nothing needs re-creating. " +
+            "Re-queue the issue (the pipeline resumes at pr-merge against the existing PR), or merge the PR by hand once its checks are green."
+        );
+      } else {
+        recs.push(
+          "- \u{1F4E4} **PR creation failed** — the agent could not push the branch or create the PR. Check for branch protection rules, auth permissions, or missing commits."
+        );
+      }
       break;
+    }
     case "pr-merge":
       recs.push(
         "- \u{1F500} **PR merge failed** — this typically means CI failed or merge conflicts. Check the PR for review feedback or failing checks."
