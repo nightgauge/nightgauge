@@ -131,7 +131,8 @@
       "extension": {
         "file": "packages/nightgauge-vscode/src/services/ConcurrentPipelineManager.ts",
         "anchor": "const deleteMergedBranch = pipelineSucceeded && !slot.userCancelled;"
-      }
+      },
+      "note": "#1561 CHANGES THE GO SIDE'S ORDER AND ITS REPORT; THE EXTENSION OWES NOTHING. Go used to delete the feature branch BEFORE removing the run's worktree, and git refuses to delete a branch a worktree still holds \u2014 so on the success path, where the run's own worktree is the holder, `git branch -D` failed on EVERY successful run. CleanupBranch deletes origin's copy first and unconditionally, so the two sides ended asymmetric: the remote gone, the local ref standing and now the only copy, and the run logging \"cleaned up feature branch\" two lines under the WARN that said otherwise. THE EXTENSION ALREADY DID THIS CORRECTLY, and its own comment is the argument: `git branch -D` (a live worktree blocks the branch delete, so order matters) \u2014 ConcurrentPipelineManager.cleanupSlot passes deleteBranch into worktreeManager.cleanup, which tears the worktree down first (legacy issue 3969). This brings Go into line with the extension rather than asking the extension for anything. The second half is reporting: CleanupLocalBranch / CleanupBranch / CleanupBranchAndRemoteIfMerged now return whether the local ref is actually gone. The error stays nil \u2014 #1020 decided a leftover branch must not fail a shipped run, and that decision is unchanged \u2014 but the caller now logs what happened instead of what it attempted. The extension needs no equivalent: it makes no per-branch success claim, and its startup sweep already reports the branches it actually deleted."
     },
     {
       "name": "orphaned-remote-branch-reclaim",
@@ -356,11 +357,11 @@
         "                                different behavior rows) \u2014 a force-cleared dispatch still raises",
         "                                neither, and the honest disposition is 'not reachable from this",
         "                                funnel', not absence.",
-        "  out-of-scope-blocked-finding — the finding is written, commented and carded by",
+        "  out-of-scope-blocked-finding \u2014 the finding is written, commented and carded by",
         "                                HeadlessOrchestrator's own post-validate gate, from a deliverable it",
         "                                has in hand. A dispatch the deadline force-cleared never produced a",
         "                                deliverable and never reached that gate, so there is no finding to",
-        "                                record — nothing is withheld here. Note the shape difference from",
+        "                                record \u2014 nothing is withheld here. Note the shape difference from",
         "                                the omission above it: this funnel deliberately posts no failure",
         "                                comment, and that stays true; the comment this behavior posts is a",
         "                                different one, on a run that stopped for a reason, and it simply",
@@ -538,7 +539,7 @@
       "file": "internal/orchestrator/scheduler.go",
       "begin": "terminal-parity:begin runPipeline-terminal-defer",
       "end": "terminal-parity:end runPipeline-terminal-defer",
-      "sha256": "952cd237d1ada2fc6f828efe2ad05b56b9a44d8fdc256762b431709fb745033a"
+      "sha256": "235b8ed26ed1e664c5488eb93c82cc240ecd5ebdd9c0d175b980d2e75d84671d"
     },
     {
       "id": "extension-runSlotPipeline-finally",

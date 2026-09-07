@@ -398,9 +398,16 @@ func (m *Manager) repoRoot(repo string) string {
 // working tree of its own).
 //
 // Idempotent; protected branches are never deleted.
-func (m *Manager) CleanupLocalBranch(repo, branchName string) error {
+//
+// Returns whether the local ref is actually GONE. #1020 made the delete's
+// refusal visible here but kept the nil error, deliberately — a branch left
+// behind is not a pipeline failure — so the caller had nothing to condition
+// its own log on and went on printing "cleaned up feature branch" two lines
+// under this function's WARN. The soft-fail stays; the outcome is now
+// reportable (#1561).
+func (m *Manager) CleanupLocalBranch(repo, branchName string) (bool, error) {
 	if branchName == "" || branchName == "main" || branchName == "master" {
-		return nil
+		return false, nil
 	}
 	// ONE root for the guard and the action (#1020). This used to read
 	// m.workspaceRoot here while the safety check below evaluated
@@ -413,7 +420,7 @@ func (m *Manager) CleanupLocalBranch(repo, branchName string) error {
 	if ahead, err := branchAheadOfBase(repoRoot, branchName); err == nil && ahead {
 		log.Printf("branch cleanup: preserving local branch %s — carries commits not on the default branch (%s)",
 			branchName, SkipUnmergedContent)
-		return nil
+		return false, nil
 	}
 
 	// Do not swallow the delete (#1020). git refuses to delete a branch that
@@ -421,18 +428,20 @@ func (m *Manager) CleanupLocalBranch(repo, branchName string) error {
 	// invisible — the caller then logged "cleaned up feature branch" for a
 	// branch that is still there. Report it and keep going: a branch left
 	// behind is not a pipeline failure, but it must not be silent.
+	deleted := true
 	delLocal := exec.Command("git", "branch", "-D", branchName)
 	delLocal.Dir = repoRoot
 	if out, err := delLocal.CombinedOutput(); err != nil {
 		log.Printf("[WARN] branch cleanup: git branch -D %s in %s failed (%v): %s — branch left in place",
 			branchName, repoRoot, err, strings.TrimSpace(string(out)))
+		deleted = false
 	}
 
 	prune := exec.Command("git", "remote", "prune", "origin")
 	prune.Dir = repoRoot
 	_ = prune.Run()
 
-	return nil
+	return deleted, nil
 }
 
 // CleanupBranch deletes a local branch and its remote tracking branch.
@@ -443,16 +452,20 @@ func (m *Manager) CleanupLocalBranch(repo, branchName string) error {
 // PR is merged, so origin's copy is spent. On a failed run use
 // CleanupLocalBranch plus the guarded ReclaimOrphanedRemoteBranch, which drops
 // origin's copy only when the pipeline itself pushed it.
-func (m *Manager) CleanupBranch(repo, branchName string) error {
+func (m *Manager) CleanupBranch(repo, branchName string) (bool, error) {
 	if branchName == "" || branchName == "main" || branchName == "master" {
-		return nil
+		return false, nil
 	}
 	// The run's own repo, not the workspace root (#1020) — otherwise a
 	// cross-repo run pushes the delete to whichever remote the workspace root
 	// happens to point at.
 	repoRoot := m.repoRoot(repo)
 
-	// Delete remote branch
+	// Delete remote branch. The remote goes FIRST and its error is ignored
+	// (the branch may not exist there), which means a local delete that then
+	// fails leaves the two sides asymmetric: origin's copy gone, the local ref
+	// standing and now the only copy. The caller is told which happened rather
+	// than being left to assume both (#1561).
 	delRemote := exec.Command("git", "push", "origin", "--delete", branchName)
 	delRemote.Dir = repoRoot
 	_ = delRemote.Run() // ignore error — branch may not exist on remote
@@ -471,12 +484,12 @@ func (m *Manager) CleanupBranch(repo, branchName string) error {
 // Soft-fail throughout: an unresolvable default branch, a failed content-diff
 // check, an unmerged branch, or a branch with no commits of its own all just
 // log and return nil without deleting — this must never fail the caller's run.
-func (m *Manager) CleanupBranchIfMerged(repo, branchName string) error {
+func (m *Manager) CleanupBranchIfMerged(repo, branchName string) (bool, error) {
 	if branchName == "" || branchName == "main" || branchName == "master" {
-		return nil
+		return false, nil
 	}
 	if merged := m.branchMergedIntoDefault(repo, branchName); !merged {
-		return nil
+		return false, nil
 	}
 	return m.CleanupLocalBranch(repo, branchName)
 }
@@ -532,12 +545,12 @@ func (m *Manager) branchMergedIntoDefault(repo, branchName string) bool {
 // the PR merged, but this gate is the load-bearing safety net rather than
 // trusting outcome classification alone before an irreversible `git branch -D`
 // / `git push --delete`.
-func (m *Manager) CleanupBranchAndRemoteIfMerged(repo, branchName string) error {
+func (m *Manager) CleanupBranchAndRemoteIfMerged(repo, branchName string) (bool, error) {
 	if branchName == "" || branchName == "main" || branchName == "master" {
-		return nil
+		return false, nil
 	}
 	if merged := m.branchMergedIntoDefault(repo, branchName); !merged {
-		return nil
+		return false, nil
 	}
 	return m.CleanupBranch(repo, branchName)
 }

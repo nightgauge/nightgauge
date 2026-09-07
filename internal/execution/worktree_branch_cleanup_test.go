@@ -26,7 +26,7 @@ func TestCleanupBranchIfMerged_DeletesMergedBranch(t *testing.T) {
 	run(t, f.root, "git", "worktree", "remove", wt, "--force")
 
 	m := newBranchCleanupManager(f.root)
-	if err := m.CleanupBranchIfMerged("owner/repo", "fix/200-thing"); err != nil {
+	if _, err := m.CleanupBranchIfMerged("owner/repo", "fix/200-thing"); err != nil {
 		t.Fatalf("CleanupBranchIfMerged: %v", err)
 	}
 
@@ -47,7 +47,7 @@ func TestCleanupBranchIfMerged_KeepsUnmergedBranch(t *testing.T) {
 	run(t, f.root, "git", "worktree", "remove", wt, "--force")
 
 	m := newBranchCleanupManager(f.root)
-	if err := m.CleanupBranchIfMerged("owner/repo", "fix/201-thing"); err != nil {
+	if _, err := m.CleanupBranchIfMerged("owner/repo", "fix/201-thing"); err != nil {
 		t.Fatalf("CleanupBranchIfMerged: %v", err)
 	}
 
@@ -67,7 +67,7 @@ func TestCleanupBranchIfMerged_KeepsBranchWithNoOwnCommits(t *testing.T) {
 	run(t, f.root, "git", "branch", "fix/202-nocommits", "origin/main")
 
 	m := newBranchCleanupManager(f.root)
-	if err := m.CleanupBranchIfMerged("owner/repo", "fix/202-nocommits"); err != nil {
+	if _, err := m.CleanupBranchIfMerged("owner/repo", "fix/202-nocommits"); err != nil {
 		t.Fatalf("CleanupBranchIfMerged: %v", err)
 	}
 
@@ -93,7 +93,7 @@ func TestCleanupLocalBranch_PreservesUnmergedBranch(t *testing.T) {
 	run(t, f.root, "git", "worktree", "remove", wt, "--force")
 
 	m := newBranchCleanupManager(f.root)
-	if err := m.CleanupLocalBranch("owner/repo", "feat/266-thing"); err != nil {
+	if _, err := m.CleanupLocalBranch("owner/repo", "feat/266-thing"); err != nil {
 		t.Fatalf("CleanupLocalBranch: %v", err)
 	}
 
@@ -116,7 +116,7 @@ func TestCleanupLocalBranch_DeletesMergedBranch(t *testing.T) {
 	run(t, f.root, "git", "worktree", "remove", wt, "--force")
 
 	m := newBranchCleanupManager(f.root)
-	if err := m.CleanupLocalBranch("owner/repo", "feat/268-thing"); err != nil {
+	if _, err := m.CleanupLocalBranch("owner/repo", "feat/268-thing"); err != nil {
 		t.Fatalf("CleanupLocalBranch: %v", err)
 	}
 
