@@ -534,7 +534,7 @@ func TestAcknowledgeIsNonBlocking(t *testing.T) {
 	if _, _, err := s.Raise(validRequest(id, "cond")); err != nil {
 		t.Fatalf("Raise: %v", err)
 	}
-	if _, err := s.Acknowledge(id, "octocat"); err != nil {
+	if _, err := s.Acknowledge(context.Background(), id, "octocat"); err != nil {
 		t.Fatalf("Acknowledge: %v", err)
 	}
 	got, _, _ := s.Get(id)
@@ -673,7 +673,7 @@ func TestJournalRecordsEveryTransition(t *testing.T) {
 	if _, _, err := s.Raise(validRequest(id, "cond")); err != nil {
 		t.Fatalf("Raise: %v", err)
 	}
-	if _, err := s.Acknowledge(id, "octocat"); err != nil {
+	if _, err := s.Acknowledge(context.Background(), id, "octocat"); err != nil {
 		t.Fatalf("Acknowledge: %v", err)
 	}
 	if _, err := s.Resolve(context.Background(), id, "go", "octocat", "", "", &spyExecutor{}); err != nil {

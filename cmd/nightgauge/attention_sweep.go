@@ -15,6 +15,7 @@ package main
 // still true should end its card.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -269,7 +270,9 @@ func attentionAckCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			req, err := attention.New(root).Acknowledge(args[0], attentionActor(actor, root))
+			ctx, cancel := attentionCLIContext(cmd)
+			defer cancel()
+			req, err := attention.New(root).Acknowledge(ctx, args[0], attentionActor(actor, root))
 			if err != nil {
 				return err
 			}
@@ -303,7 +306,9 @@ The card stays in the inbox at its severity. Muting is not resolving.`,
 			if err != nil {
 				return err
 			}
-			req, err := attention.New(root).Mute(args[0], attentionActor(actor, root))
+			ctx, cancel := attentionCLIContext(cmd)
+			defer cancel()
+			req, err := attention.New(root).Mute(ctx, args[0], attentionActor(actor, root))
 			if err != nil {
 				return err
 			}
@@ -335,7 +340,9 @@ func attentionUnmuteCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			req, err := attention.New(root).Unmute(args[0], attentionActor(actor, root))
+			ctx, cancel := attentionCLIContext(cmd)
+			defer cancel()
+			req, err := attention.New(root).Unmute(ctx, args[0], attentionActor(actor, root))
 			if err != nil {
 				return err
 			}
@@ -346,6 +353,26 @@ func attentionUnmuteCmd() *cobra.Command {
 	cmd.Flags().StringVar(&actor, "actor", "", "Who is unmuting (recorded in the audit trail)")
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Project root (default: current working directory)")
 	return cmd
+}
+
+// attentionCLITimeout bounds every mutating attention CLI invocation (#1539).
+//
+// It is the client-side half of the daemon's attentionMutationTimeout and sits
+// deliberately ABOVE it, so a call the daemon can answer — including the
+// daemon's own "the store is busy" refusal — is never cut off by the client
+// first; a caller must read the server's reason when there is one. It bounds
+// what the server-side deadline structurally cannot: the local file-store
+// fallback path, and a daemon too old or too wedged to answer at all.
+const attentionCLITimeout = 70 * time.Second
+
+// attentionCLIContext derives the bounded context a mutating attention command
+// runs under, rooted at the command's own context so Ctrl-C still cancels.
+func attentionCLIContext(cmd *cobra.Command) (context.Context, context.CancelFunc) {
+	ctx := cmd.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithTimeout(ctx, attentionCLITimeout)
 }
 
 // attentionActor resolves who is acting, for the audit trail:

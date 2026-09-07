@@ -44,6 +44,7 @@ package attention
 // resolve what is no longer true.
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -176,7 +177,7 @@ func (s *Store) ReconcileStanding(sw StandingSweep) (StandingResult, error) {
 		evaluated[p] = true
 	}
 
-	release := acquireDir(s.dir)
+	release := s.acquireSection()
 	defer release()
 
 	stored, err := s.scanLocked()
@@ -252,7 +253,7 @@ func (s *Store) AutoResolveUnobserved(producer string, observed []string) (int, 
 		stillTrue[k] = true
 	}
 
-	release := acquireDir(s.dir)
+	release := s.acquireSection()
 	defer release()
 
 	stored, err := s.scanLocked()
@@ -296,7 +297,7 @@ func (s *Store) AutoResolveKey(producer, idempotencyKey string) (bool, error) {
 		return false, fmt.Errorf("attention: auto-resolve requires an idempotency_key")
 	}
 
-	release := acquireDir(s.dir)
+	release := s.acquireSection()
 	defer release()
 
 	stored, err := s.scanLocked()
@@ -555,8 +556,19 @@ func latestResolvedByKey(stored []storedRequest, key string) (*DecisionRequest, 
 // inbox at its severity — muting is not resolving. Terminal requests are a
 // no-op, and re-muting an already-muted request re-pins to the current
 // fingerprint rather than erroring.
-func (s *Store) Mute(id, actor string) (*DecisionRequest, error) {
-	release := acquireDir(s.dir)
+//
+// ctx bounds the wait for the directory lock, so a muted card is never a
+// process that never returns (#1539); actor is validated for the same reason
+// Resolve validates it — the mute record is mirrored and a too-short actor can
+// never be accepted.
+func (s *Store) Mute(ctx context.Context, id, actor string) (*DecisionRequest, error) {
+	if err := ValidateActor(actor); err != nil {
+		return nil, fmt.Errorf("attention: muting %s: %w", id, err)
+	}
+	release, err := s.acquireSectionCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
 	defer release()
 
 	path, req, err := s.loadLocked(id)
@@ -586,8 +598,14 @@ func (s *Store) Mute(id, actor string) (*DecisionRequest, error) {
 }
 
 // Unmute restores alerting. Unmuting an unmuted request is a no-op.
-func (s *Store) Unmute(id, actor string) (*DecisionRequest, error) {
-	release := acquireDir(s.dir)
+func (s *Store) Unmute(ctx context.Context, id, actor string) (*DecisionRequest, error) {
+	if err := ValidateActor(actor); err != nil {
+		return nil, fmt.Errorf("attention: unmuting %s: %w", id, err)
+	}
+	release, err := s.acquireSectionCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
 	defer release()
 
 	path, req, err := s.loadLocked(id)

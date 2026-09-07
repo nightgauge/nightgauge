@@ -306,7 +306,13 @@ func attentionResolveCmd() *cobra.Command {
 			// handleAttentionResolve runs the FULL verb executor (all
 			// registered verbs, not just the CLI's 3-verb local subset), the
 			// same path the VSCode extension's click-to-resolve already uses.
-			ctx := context.Background()
+			// Bounded, not context.Background() (#1539). The dial timeout only
+			// covers connecting: this call used to wait forever for a REPLY,
+			// which is exactly what an operator saw — an established socket, a
+			// daemon that logged nothing, and a resolve that never returned.
+			// Client.Call turns the deadline into a socket deadline.
+			ctx, cancel := attentionCLIContext(cmd)
+			defer cancel()
 			if client, dialErr := ipc.DialClient(ctx, ipc.DaemonSocketPath(root), daemonDialTimeout); dialErr == nil {
 				defer client.Close()
 				var res ipc.AttentionResolveResult

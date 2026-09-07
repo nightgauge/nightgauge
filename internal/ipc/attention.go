@@ -15,6 +15,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/attention/sweep"
@@ -75,6 +76,36 @@ func ipcAttentionActor(actor, surface string) string {
 	return surface
 }
 
+// attentionMutationTimeout bounds EVERY mutating attention IPC method
+// end-to-end (#1539).
+//
+// An IPC method that can block forever is worse than one that fails: the CLI
+// prints nothing, the sidebar spins, the daemon logs nothing (the request never
+// reaches a line that logs), and the operator has no way to tell a wedged store
+// from a hung socket. Both mutating verbs did exactly that — `attention resolve`
+// and `attention ack` never returned while `attention list` and `attention show`,
+// which take no store lock, answered instantly.
+//
+// The value is above the store's own worst legitimate hold — flockTimeout (30s)
+// waiting on another process, plus verbTimeout (20s) running the option's verb —
+// so a resolve queued behind a slow-but-healthy one still succeeds, and only a
+// genuinely wedged store trips it. Asserted in
+// TestAttentionMutationTimeoutExceedsTheStoresWorstHold.
+// A var, not a const, only so the tests can shorten it — nothing in the
+// product reassigns it.
+var attentionMutationTimeout = 55 * time.Second
+
+// withAttentionDeadline derives the bounded context every mutating handler
+// runs under. It is a helper rather than a line repeated four times because a
+// verb that forgets it is a verb that can hang forever, and that is invisible
+// in review.
+func withAttentionDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithTimeout(ctx, attentionMutationTimeout)
+}
+
 // attentionStore returns the shared DecisionRequest store, or nil when no
 // autonomous scheduler is attached (the store lives on it).
 
@@ -123,9 +154,26 @@ func (s *Server) handleAttentionResolve(ctx context.Context, raw json.RawMessage
 	if store == nil {
 		return nil, fmt.Errorf("attention.resolve: attention store not configured")
 	}
+	ctx, cancel := withAttentionDeadline(ctx)
+	defer cancel()
 	res, err := store.Resolve(ctx, p.ID, p.OptionID, ipcAttentionActor(p.Actor, actorSurfaceVSCode), p.SteerText, p.Note, s)
 	if err != nil {
 		log.Printf("attention.resolve: rejected id=%s option=%s: %v", p.ID, p.OptionID, err)
+		// Two rejections a caller must be able to tell apart, so they are not
+		// collapsed into the generic message (#1539). A busy store is transient
+		// and retryable; an invalid actor is the caller's to fix and naming the
+		// field is the whole point of validating it locally. Neither leaks
+		// store internals — §J error hygiene is about the option/verb detail.
+		if errors.Is(err, attention.ErrStoreBusy) {
+			return nil, fmt.Errorf("attention.resolve: the attention store is busy — another write is in flight and did not finish within %s; retry", attentionMutationTimeout)
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, fmt.Errorf("attention.resolve: timed out after %s", attentionMutationTimeout)
+		}
+		var actorErr *attention.ActorError
+		if errors.As(err, &actorErr) {
+			return nil, fmt.Errorf("attention.resolve: %w", actorErr)
+		}
 		return nil, fmt.Errorf("attention.resolve: could not resolve request")
 	}
 	if res.SteerErr != nil {
@@ -154,6 +202,11 @@ func (s *Server) ApplyRelayedResolve(ctx context.Context, requestID, optionID, a
 	if store == nil {
 		return platform.AttentionResolveOutcome{}, fmt.Errorf("attention store not configured")
 	}
+	// Bounded like the local path (#1539). This one arrives on the command
+	// consumer's long-lived context, so without a deadline a wedged store would
+	// stall the whole relay stream rather than one card.
+	ctx, cancel := withAttentionDeadline(ctx)
+	defer cancel()
 	res, err := store.Resolve(ctx, requestID, optionID, ipcAttentionActor(actor, actorSurfacePlatform), steerText, "", s)
 	if err != nil {
 		if errors.Is(err, attention.ErrRequestNotFound) {
@@ -192,7 +245,7 @@ func (s *Server) ApplyRelayedResolve(ctx context.Context, requestID, optionID, a
 }
 
 // handleAttentionAcknowledge marks a request seen without resolving it.
-func (s *Server) handleAttentionAcknowledge(_ context.Context, raw json.RawMessage) (interface{}, error) {
+func (s *Server) handleAttentionAcknowledge(ctx context.Context, raw json.RawMessage) (interface{}, error) {
 	var p AttentionAcknowledgeParams
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return nil, fmt.Errorf("attention.acknowledge: parse params: %w", err)
@@ -204,7 +257,9 @@ func (s *Server) handleAttentionAcknowledge(_ context.Context, raw json.RawMessa
 	if store == nil {
 		return nil, fmt.Errorf("attention.acknowledge: attention store not configured")
 	}
-	if _, err := store.Acknowledge(p.ID, ipcAttentionActor(p.Actor, actorSurfaceVSCode)); err != nil {
+	ctx, cancel := withAttentionDeadline(ctx)
+	defer cancel()
+	if _, err := store.Acknowledge(ctx, p.ID, ipcAttentionActor(p.Actor, actorSurfaceVSCode)); err != nil {
 		return nil, fmt.Errorf("attention.acknowledge: %w", err)
 	}
 	return AttentionAcknowledgeResult{Ok: true}, nil

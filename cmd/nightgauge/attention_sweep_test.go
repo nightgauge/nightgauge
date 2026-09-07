@@ -231,7 +231,7 @@ func TestAttentionSweepRootCommand_BareConfigRepoStillRequiresFlag(t *testing.T)
 func TestAttentionListMarksMutedCards(t *testing.T) {
 	dir := t.TempDir()
 	id := seedRequest(t, dir, "k-muted", "Fleet stopped", attention.SeverityBlockingFleet)
-	if _, err := attention.New(dir).Mute(id, "octocat"); err != nil {
+	if _, err := attention.New(dir).Mute(context.Background(), id, "octocat"); err != nil {
 		t.Fatalf("Mute: %v", err)
 	}
 

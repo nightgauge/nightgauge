@@ -255,7 +255,7 @@ func TestMuteSuppressesUntilTheConditionChangesNotUntilATimer(t *testing.T) {
 	sweepOnce(t, s, obs)
 	id := openRequests(t, s)[0].ID
 
-	if _, err := s.Mute(id, "octocat"); err != nil {
+	if _, err := s.Mute(context.Background(), id, "octocat"); err != nil {
 		t.Fatalf("Mute: %v", err)
 	}
 	muted := notifications(t, s)
@@ -289,7 +289,7 @@ func TestMutedCardsAreSilencedNotHidden(t *testing.T) {
 	s := New(t.TempDir())
 	sweepOnce(t, s, standingObservation("k:branch", "check:build=failure"))
 	id := openRequests(t, s)[0].ID
-	if _, err := s.Mute(id, "octocat"); err != nil {
+	if _, err := s.Mute(context.Background(), id, "octocat"); err != nil {
 		t.Fatalf("Mute: %v", err)
 	}
 
@@ -304,7 +304,7 @@ func TestMutedCardsAreSilencedNotHidden(t *testing.T) {
 		t.Errorf("ExcludeMuted must drop muted cards for alert-worthy views, got %d", len(quiet))
 	}
 
-	if _, err := s.Unmute(id, "octocat"); err != nil {
+	if _, err := s.Unmute(context.Background(), id, "octocat"); err != nil {
 		t.Fatalf("Unmute: %v", err)
 	}
 	quiet, _ = s.List(ListFilter{Repo: testRepo, ExcludeMuted: true})
@@ -320,7 +320,7 @@ func TestAcknowledgementIsScopedToTheConditionTheOperatorSaw(t *testing.T) {
 	obs := standingObservation("k:branch", "check:build=failure")
 	sweepOnce(t, s, obs)
 	id := openRequests(t, s)[0].ID
-	if _, err := s.Acknowledge(id, "octocat"); err != nil {
+	if _, err := s.Acknowledge(context.Background(), id, "octocat"); err != nil {
 		t.Fatalf("Acknowledge: %v", err)
 	}
 

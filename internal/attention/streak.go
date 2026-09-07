@@ -109,7 +109,7 @@ func (s *Store) IncrementStreak(key string) (int, error) {
 		return 0, fmt.Errorf("attention: increment streak requires a key")
 	}
 
-	release := acquireDir(s.dir)
+	release := s.acquireSection()
 	defer release()
 
 	f := s.loadStreaksLocked()
@@ -129,7 +129,7 @@ func (s *Store) ResetStreak(key string) error {
 		return fmt.Errorf("attention: reset streak requires a key")
 	}
 
-	release := acquireDir(s.dir)
+	release := s.acquireSection()
 	defer release()
 
 	f := s.loadStreaksLocked()
@@ -142,7 +142,7 @@ func (s *Store) ResetStreak(key string) error {
 
 // StreakCount reports the current count for key without changing it.
 func (s *Store) StreakCount(key string) int {
-	release := acquireDir(s.dir)
+	release := s.acquireSection()
 	defer release()
 
 	return s.loadStreaksLocked().Counts[key]
