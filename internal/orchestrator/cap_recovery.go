@@ -323,6 +323,19 @@ func providerLabel(provider string) string {
 	return provider
 }
 
+// capDescentReason prefers the decision's own sentence and falls back to a
+// generic one. A runner that reported no reason still gets a card: an operator
+// learning "feature-planning dropped to opus" with a thin explanation is
+// strictly better off than learning nothing, which is the state #1545 found.
+func capDescentReason(reason, fromModel, toModel string) string {
+	if strings.TrimSpace(reason) != "" {
+		return reason
+	}
+	return fmt.Sprintf(
+		"usage cap hit while running %s; descending to %s (sticky for the run) — a cap on one tier says nothing about the tiers below it",
+		fromModel, toModel)
+}
+
 // AdapterUsableForCapHop is the production CapRecoveryInput.AdapterUsable
 // probe: the adapter doctor's own health check, which is the single place that
 // already knows what "installed and authenticated" means per adapter kind (a

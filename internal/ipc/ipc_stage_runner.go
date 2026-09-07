@@ -163,7 +163,7 @@ func (r *IpcStageRunner) RunStage(ctx context.Context, params orchestrator.Stage
 		// shared RetryEngine so the re-dispatch resolves the weaker tier.
 		escalationRecorded := false
 		fallbackRecorded := false
-		fallbackFrom, fallbackTo := "", ""
+		fallbackFrom, fallbackTo, fallbackReason := "", "", ""
 		if exitCode != 0 && r.retryEngine != nil {
 			// #1545: the rejection is attributed to the model in flight before
 			// it is routed. A structured `rate_limit_event` carries no model at
@@ -214,6 +214,7 @@ func (r *IpcStageRunner) RunStage(ctx context.Context, params orchestrator.Stage
 					r.retryEngine.RecordDowngrade(params.Model, dg)
 					fallbackRecorded = true
 					fallbackFrom, fallbackTo = params.Model, dg.NewTier
+					fallbackReason = capDecision.Why
 				} else {
 					log.Printf("#%d: stage %s — model %s rejected and the tier ladder is spent; leaving the provider walk to the scheduler",
 						params.IssueNumber, params.Stage, params.Model)
@@ -276,6 +277,7 @@ func (r *IpcStageRunner) RunStage(ctx context.Context, params orchestrator.Stage
 			FallbackRecorded:   fallbackRecorded,
 			FallbackFromModel:  fallbackFrom,
 			FallbackToModel:    fallbackTo,
+			FallbackReason:     fallbackReason,
 			ErrorText:          result.ErrorText,
 			LastOutputLines:    result.LastOutputLines,
 			// #3605 stage-exit diagnostic record fields. Empty when TS

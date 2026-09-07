@@ -158,6 +158,13 @@ type StageRunResult struct {
 	FallbackRecorded  bool
 	FallbackFromModel string
 	FallbackToModel   string
+	// FallbackReason is DecideCapRecovery's own operator-facing sentence for
+	// the descent above (#1545) — carried rather than re-derived so the log
+	// line, the run record and the Action Center card cannot tell three
+	// different stories about one decision. Empty from a runner that did not
+	// produce one; the card falls back to a generic sentence rather than
+	// going unraised.
+	FallbackReason string
 	// ── #91 served-model attribution ────────────────────────────────────
 	// ServedModel is the model that ACTUALLY served the stage per the CLI
 	// stream (last observed). Empty when the stream carried no model info.
@@ -6139,6 +6146,17 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				})
 				log.Printf("#%d: stage %s — model %s rejected by API; falling back to %s for the rest of the run",
 					item.Number, stage, result.FallbackFromModel, result.FallbackToModel)
+				// The card is raised HERE as well as at the cap-recovery block
+				// below, because this branch is the IPC path's descent and it
+				// `continue`s before that block is ever reached (#1545). The
+				// IPC path is where the reported harm happened, so a card that
+				// only fired on the Go-direct arm would be absent from exactly
+				// the mode it was written for.
+				s.raiseCapFallback(item, runtime, stage, CapRecoveryDecision{
+					Verdict:   CapRecoveryDescendTier,
+					Downgrade: DowngradeDecision{NewTier: result.FallbackToModel},
+					Why:       capDescentReason(result.FallbackReason, result.FallbackFromModel, result.FallbackToModel),
+				})
 				s.fireModelFallback(item.Repo, item.Number, stage,
 					result.FallbackFromModel, result.FallbackToModel, result.ErrorText)
 				continue
