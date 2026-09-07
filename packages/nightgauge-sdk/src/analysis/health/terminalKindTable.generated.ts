@@ -142,7 +142,7 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
     "consumer follows automatically; none of them can be changed on its own."
   ],
   "schema_version": 2,
-  "input_contract": "errorText is `exit N: ` followed by the LAST 3 non-empty lines a CLI stage wrote to its OWN stderr, hard-capped at 2KB before the line split (internal/orchestrator/scheduler.go: stderrFailureReason, stderrReasonMaxLines=3, stderrReasonMaxBytes=2048). It is never stdout — stdout for an agentic CLI is the whole streaming-JSON transcript (model prose, tool_result payloads), and classifying that would misroute an ordinary tool-output line quoting a table term. Since #533 this text is frequently ADAPTER-AUTHORED: whatever the vendor CLI happened to print, not a string Nightgauge synthesized, so a rule written for one producer's exact wording can be satisfied by an unrelated CLI's incidental phrasing. Match is over the WHOLE joined string, not per-line: a clause's terms need not share a line, and a rule earlier in `rules` wins even when its match sits on an earlier line than a later rule's more specific match on the real failure. There is no structured envelope alternative — adapter stderr reaches Classify exactly as printed, by design (#565); the mitigation for a false hit is rule ORDER, not a second input shape.",
+  "input_contract": "errorText is `exit N: ` followed by the LAST 3 non-empty lines a CLI stage wrote to its OWN stderr, hard-capped at 2KB before the line split (internal/orchestrator/scheduler.go: stderrFailureReason, stderrReasonMaxLines=3, stderrReasonMaxBytes=2048). It is stderr FIRST; when stderr is entirely silent and stdout carries no transcript, the same bounded tail of stdout is used instead (#1556, scheduler.go: vendorStdoutFailureReason). A stdout WITH a transcript in it is still refused outright — stdout for an agentic CLI is the whole streaming-JSON transcript (model prose, tool_result payloads), and classifying that would misroute an ordinary tool-output line quoting a table term. The narrowing exists because a vendor CLI that refuses to start prints one plain line to stdout and exits non-zero with an empty stderr, and discarding it made a model cap book subagent_crash — a lifetime failure kind — instead of the tier descent its own text asks for. Since #533 this text is frequently ADAPTER-AUTHORED: whatever the vendor CLI happened to print, not a string Nightgauge synthesized, so a rule written for one producer's exact wording can be satisfied by an unrelated CLI's incidental phrasing. Match is over the WHOLE joined string, not per-line: a clause's terms need not share a line, and a rule earlier in `rules` wins even when its match sits on an earlier line than a later rule's more specific match on the real failure. There is no structured envelope alternative — adapter stderr reaches Classify exactly as printed, by design (#565); the mitigation for a false hit is rule ORDER, not a second input shape.",
   "predicates": [
     {
       "name": "mentions_registry_model",
@@ -335,6 +335,10 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
           "@mentions_registry_model"
         ],
         [
+          "reached your",
+          "@mentions_registry_model"
+        ],
+        [
           "usage limit",
           "@mentions_registry_model"
         ],
@@ -347,7 +351,7 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
           "@mentions_registry_model"
         ]
       ],
-      "why": "The API rejected the model (#42). BELOW the explicit quota marker — an explicit stamp beats a heuristic — and above the generic rules. The plan-restriction and usage-cap wordings are each gated on the mentions_registry_model predicate so an unrelated failure that merely says `limit` or `not found` does not misclassify; the 404 `not_found_error` shape and the invalid/unknown-model wordings are specific enough to stand alone."
+      "why": "The API rejected the model (#42). BELOW the explicit quota marker — an explicit stamp beats a heuristic — and above the generic rules. The plan-restriction and usage-cap wordings are each gated on the mentions_registry_model predicate so an unrelated failure that merely says `limit` or `not found` does not misclassify; the 404 `not_found_error` shape and the invalid/unknown-model wordings are specific enough to stand alone. The `reached your` clause is the CURRENT Anthropic CLI's own cap wording (#1556) — `You've reached your Fable limit. Switch to another model, …` — and carries the same registry-model gate as its siblings, which is what keeps it off the account-level `You've hit your weekly limit` envelopes that name no model and must stay on the quota path. Its verb differs from those captured rows (`reached` vs `hit`), so it could not reach them even with the gate removed."
     },
     {
       "id": "issue-closed",

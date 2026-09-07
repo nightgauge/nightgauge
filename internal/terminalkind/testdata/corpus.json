@@ -280,6 +280,24 @@
       "rationale": "Routes to the tier-downgrade fallback rather than a retry of the same rejected model. Matched after the explicit quota marker — an explicit stamp beats a heuristic — and before every generic block, because the message also contains `api error` and would otherwise read as a transport drop."
     },
     {
+      "id": "model-unavailable-cap-wording-reached-your",
+      "input": "exit 1: You've reached your Fable limit. Switch to another model, or manage usage credits at claude.ai/settings/usage?from=cc_cli_limit_message, to continue.",
+      "expected": "model_unavailable",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "The Anthropic CLI's model-cap line on a `--model fable` invocation. Transcribed verbatim from a live invocation on 2026-09-07 (#1556); synthetic rather than captured because it came from a hand-run command, not from the telemetry scripts/capture-terminal-kind-fixture.sh reads.",
+      "rationale": "THE REAL SHAPE, and the reason #1545's tier ladder never fired. This is a MODEL-scoped cap, not an account one: it names a registry model and its own remedy is `Switch to another model`, which is precisely the fable→opus→sonnet→haiku descent. Before this clause it satisfied no rule and booked subagent_crash — a LIFETIME failure kind — so a cap that clears on its own consumed the issue's lifetime budget and a cascade strike. Contrast the two captured `You've hit your…limit` rows: those name no model, are account-level, and must stay unclassified here."
+    },
+    {
+      "id": "boundary-negative-reached-your-account-limit",
+      "input": "You've reached your weekly limit · resets Sep 11 at 10pm",
+      "expected": "",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "The account-level sibling of the row above — the same verb, no model named.",
+      "rationale": "THE NEGATIVE HALF of the `reached your` clause, and the row that keeps the gate honest. An ACCOUNT limit must not downgrade a model that was never the problem, so with no registry model named this classifies as nothing — exactly like the two captured `You've hit your…limit` envelopes. Drop `@mentions_registry_model` from the clause and this row goes red, which is the point of writing it down."
+    },
+    {
       "id": "model-unavailable-plan-phrase",
       "input": "Your plan does not include claude-opus-4-5: this model is not available on your current plan",
       "expected": "model_unavailable",
