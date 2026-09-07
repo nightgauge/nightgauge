@@ -424,9 +424,64 @@ func TestReconcileOutcome_EnumHygiene(t *testing.T) {
 	}
 	// The board write must stay conservative for an arm nobody mapped: it may
 	// never claim a closure that was not observed.
-	if got := completionBoardStatus(unknown); got != state.StatusInReview {
+	if got := completionBoardStatus(unknown, false); got != state.StatusInReview {
 		t.Errorf("completionBoardStatus(unknown arm) = %q, want %q — an unmapped arm must never write Done",
 			got, state.StatusInReview)
+	}
+}
+
+// TestCompletionBoardStatus_ObservedClosureWins pins #1562.
+//
+// A run that reaches pr-merge merges its own PR, and the PR body's `Closes #N`
+// closes the issue AT MERGE — before this status is resolved. Sending every
+// normal completion to In Review therefore recorded In Review for an issue
+// GitHub had already closed, on every self-completed run, leaving a board row
+// an operator reads as a queue.
+//
+// The Done ⟺ closed invariant is NOT weakened: the boolean is an observation
+// taken from the forge at completion time (issueClosedOnForge, which fails
+// closed), never an inference from the merge.
+func TestCompletionBoardStatus_ObservedClosureWins(t *testing.T) {
+	cases := []struct {
+		name           string
+		arm            reconcileOutcome
+		issueClosedNow bool
+		want           state.BoardStatus
+		why            string
+	}{
+		{
+			name: "normal completion whose merge closed the issue is Done",
+			arm:  reconcileNone, issueClosedNow: true, want: state.StatusDone,
+			why: "the issue was OBSERVED closed at completion — this is the #1562 case",
+		},
+		{
+			name: "normal completion with the issue still open stays In Review",
+			arm:  reconcileNone, issueClosedNow: false, want: state.StatusInReview,
+			why: "no closure was observed, so Done may not be claimed",
+		},
+		{
+			name: "an unreachable forge keeps the conservative answer",
+			arm:  reconcilePrMerged, issueClosedNow: false, want: state.StatusInReview,
+			why: "issueClosedOnForge fails closed; a merged PR alone never proves closure",
+		},
+		{
+			name: "the MERGED arm still reaches Done when the closure is observed",
+			arm:  reconcilePrMerged, issueClosedNow: true, want: state.StatusDone,
+			why: "the observation decides, not the arm",
+		},
+		{
+			name: "an unmapped arm may still be rescued by an observed closure",
+			arm:  reconcileOutcome(99), issueClosedNow: true, want: state.StatusDone,
+			why: "Done tracks the closure, which was observed, not the arm nobody mapped",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := completionBoardStatus(tc.arm, tc.issueClosedNow); got != tc.want {
+				t.Errorf("completionBoardStatus(%v, %v) = %q, want %q — %s",
+					tc.arm, tc.issueClosedNow, got, tc.want, tc.why)
+			}
+		})
 	}
 }
 
@@ -449,7 +504,7 @@ func TestCompletionBoardStatus_PerArm(t *testing.T) {
 		{reconcilePrOpenStale, state.StatusInReview, "the work is in review, NOT merged — Done would be a lie"},
 	}
 	for _, tc := range cases {
-		if got := completionBoardStatus(tc.arm); got != tc.want {
+		if got := completionBoardStatus(tc.arm, false); got != tc.want {
 			t.Errorf("completionBoardStatus(%v) = %q, want %q — %s", tc.arm, got, tc.want, tc.why)
 		}
 	}
