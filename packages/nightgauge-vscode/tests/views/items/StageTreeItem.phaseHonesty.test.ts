@@ -57,7 +57,14 @@ describe("StageTreeItem phase counting (#1246)", () => {
     expect(label).not.toContain("18/18");
   });
 
-  it("still counts a deliberate skip as settled work", () => {
+  // #1246 pinned the opposite of this ("still counts a deliberate skip as
+  // settled work") and was right for its world, where skips were occasional.
+  // #1534 changed that world: a deterministic path skips MOST of the registry,
+  // and counting skips as progress made a stage that observed nothing read as
+  // 79% done. A skip now leaves the denominator instead of raising the
+  // numerator — the same judgement #1246 made about `unreported`, applied to
+  // the other status that is not evidence of work (#1558).
+  it("a deliberate skip leaves the denominator rather than counting as work", () => {
     const item = new StageTreeItem(STAGE, "pending");
     item.setStatus("complete");
     item.setPhases(
@@ -71,11 +78,42 @@ describe("StageTreeItem phase counting (#1246)", () => {
     );
 
     const label = String(item.description ?? "");
-    expect(label).toContain("2/3 phases");
+    expect(label).toContain("1/2 phases");
     expect(label).toContain("1 unreported");
+    expect(label).toContain("1 skipped");
+    expect(label).not.toContain("2/3");
   });
 
-  it("omits the unreported clause when every phase is settled", () => {
+  // The exact shape the operator reported on #1540: eleven skips, three
+  // unreported, nothing observed — displayed as "11/14 phases".
+  it("a stage that observed nothing never reads as progress", () => {
+    const item = new StageTreeItem(STAGE, "pending");
+    item.setStatus("complete");
+    const phases = [
+      ...Array.from({ length: 11 }, (_, i) => phase(`skipped-${i}`, "skipped")),
+      ...Array.from({ length: 3 }, (_, i) => phase(`silent-${i}`, "unreported")),
+    ];
+    item.setPhases(phases, undefined, 14);
+
+    const label = String(item.description ?? "");
+    expect(label).toContain("0/3 phases");
+    expect(label).toContain("3 unreported");
+    expect(label).toContain("11 skipped");
+    expect(label).not.toContain("11/14");
+  });
+
+  it("says so when every phase was skipped, rather than showing a full bar", () => {
+    const item = new StageTreeItem(STAGE, "pending");
+    item.setStatus("complete");
+    item.setPhases([phase("a", "skipped"), phase("b", "skipped")], undefined, 2);
+
+    const label = String(item.description ?? "");
+    expect(label).toContain("no phases applicable");
+    expect(label).toContain("2 skipped");
+    expect(label).not.toContain("2/2");
+  });
+
+  it("omits the unreported clause when nothing is unreported", () => {
     const item = new StageTreeItem(STAGE, "pending");
     item.setStatus("complete");
     item.setPhases(
@@ -84,7 +122,99 @@ describe("StageTreeItem phase counting (#1246)", () => {
       2
     );
 
-    expect(String(item.description ?? "")).not.toContain("unreported");
+    const label = String(item.description ?? "");
+    expect(label).not.toContain("unreported");
+    expect(label).toContain("1/1 phases");
+  });
+
+  it("a running stage with no markers says so instead of a frozen 0/N", () => {
+    const item = new StageTreeItem(STAGE, "pending");
+    item.setStatus("running");
+
+    expect(String(item.description ?? "")).toBe("running · no phase markers yet");
+  });
+
+  it("counts an abandoned phase as neither work nor silence", () => {
+    const item = new StageTreeItem(STAGE, "pending");
+    item.setStatus("complete");
+    item.setPhases(
+      [phase("a", "complete"), phase("b", "abandoned"), phase("c", "unreported")],
+      undefined,
+      3
+    );
+
+    const label = String(item.description ?? "");
+    expect(label).toContain("1/3 phases");
+    expect(label).toContain("1 abandoned");
+    expect(label).toContain("1 unreported");
+  });
+});
+
+describe("StageTreeItem skipped-phase grouping (#1558)", () => {
+  it("collapses skips into one row without changing any count", () => {
+    const item = new StageTreeItem(STAGE, "pending");
+    item.setStatus("complete");
+    item.setPhases(
+      [
+        phase("observed", "complete"),
+        phase("s1", "skipped"),
+        phase("s2", "skipped"),
+        phase("s3", "skipped"),
+      ],
+      undefined,
+      4
+    );
+
+    // One observed row + one group row, not four rows.
+    expect(item.getChildren()).toHaveLength(2);
+    // The counts still read the flat record, which is the whole point.
+    const label = String(item.description ?? "");
+    expect(label).toContain("1/1 phases");
+    expect(label).toContain("3 skipped");
+  });
+
+  it("leaves a small number of skips inline", () => {
+    const item = new StageTreeItem(STAGE, "pending");
+    item.setStatus("complete");
+    item.setPhases([phase("observed", "complete"), phase("s1", "skipped")], undefined, 2);
+
+    expect(item.getChildren()).toHaveLength(2);
+    expect(String(item.description ?? "")).toContain("1/1 phases");
+  });
+});
+
+describe("StageTreeItem live phase events (#1558)", () => {
+  const registry = [{ name: "a" }, { name: "b" }, { name: "c" }];
+
+  it("does not fabricate completion for phases before the reported one", () => {
+    const item = new StageTreeItem(STAGE, "pending");
+    item.setStatus("running");
+    // The stage reports its THIRD phase first — markers are not ordered.
+    item.applyPhaseEvent("c", "running", 3, registry);
+
+    const statuses = item
+      .getChildren()
+      .map((c) => (c as unknown as { getStatus?: () => string }).getStatus?.());
+    // a and b were never reported: pending, not complete.
+    expect(statuses).toEqual(["pending", "pending", "running"]);
+    expect(String(item.description ?? "")).not.toContain("[2/3]");
+  });
+
+  it("shows progress once a phase is actually observed", () => {
+    const item = new StageTreeItem(STAGE, "pending");
+    item.setStatus("running");
+    item.applyPhaseEvent("a", "complete", 3, registry);
+    item.applyPhaseEvent("b", "running", 3, registry);
+
+    expect(String(item.description ?? "")).toContain("[1/3]");
+  });
+
+  it("keeps a marker the registry does not define", () => {
+    const item = new StageTreeItem(STAGE, "pending");
+    item.setStatus("running");
+    item.applyPhaseEvent("not-in-registry", "complete", 3, registry);
+
+    expect(item.getChildren()).toHaveLength(4);
   });
 });
 
