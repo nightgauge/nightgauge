@@ -109,7 +109,15 @@ export interface StagePhase {
    * end-of-stage back-fill. They were one value until a feature-dev that
    * demonstrably ran Testing and Write Dev Context reported both as skipped.
    */
-  status?: "pending" | "running" | "complete" | "failed" | "skipped" | "unreported";
+  status?:
+    | "pending"
+    | "running"
+    | "complete"
+    | "failed"
+    | "skipped"
+    | "unreported"
+    // Go's sixth (#1009): started, and the stage finished without it settling.
+    | "abandoned";
   started_at?: string;
   completed_at?: string;
   /**
