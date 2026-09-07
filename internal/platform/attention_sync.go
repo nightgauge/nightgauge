@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -74,6 +75,24 @@ type attentionSyncRejection struct {
 // mismatch, and the whole point of #214 is that those must not be silent.
 const unackedWarnThreshold = 3
 
+// quarantineAfter is how many consecutive REJECTIONS-WITH-A-REASON one card may
+// collect before this service stops pushing it (#1539).
+//
+// A rejection carrying a reason is the platform's validator speaking, and a
+// validator is a pure function of the payload: the same bytes rejected now will
+// be rejected identically on the next sweep, and the one after that, forever. It
+// is not a retryable condition and treating it as one produced 931 identical log
+// lines for a single card whose `lifecycle.resolved.actor` was two characters
+// long — noise that hid the defect instead of reporting it.
+//
+// So a card that is refused this many times in a row is quarantined: dropped
+// from the dirty set, reported ONCE with the offending field named, and left
+// alone until its content changes. A changed fingerprint clears the quarantine,
+// because a re-resolved or re-raised card is a genuinely new payload and
+// deserves one more attempt. Nothing local is affected — quarantine governs
+// what this uploader retries, never what the store holds.
+const quarantineAfter = 3
+
 // AttentionLister is the read side of the attention store the uploader sweeps.
 // *attention.Store satisfies it.
 type AttentionLister interface {
@@ -86,10 +105,21 @@ type AttentionSyncService struct {
 	machineID string
 
 	mu         sync.Mutex
-	agentID    string            // platform-assigned agent id; empty = mirror-only (agent_id omitted)
-	generation uint64            // bumped on every agent-id change; guards stale watermark writes
-	watermark  map[string]string // request id -> last-synced content fingerprint
-	unacked    map[string]int    // request id -> consecutive sweeps sent but not acknowledged
+	agentID    string                     // platform-assigned agent id; empty = mirror-only (agent_id omitted)
+	generation uint64                     // bumped on every agent-id change; guards stale watermark writes
+	watermark  map[string]string          // request id -> last-synced content fingerprint
+	unacked    map[string]int             // request id -> consecutive sweeps sent but not acknowledged
+	rejected   map[string]int             // request id -> consecutive rejections carrying a validator reason
+	quarantine map[string]quarantinedCard // request id -> the payload that was refused
+}
+
+// quarantinedCard is the terminal record for one card the mirror will never
+// accept, kept so the report is written exactly once and so a later content
+// change can lift the quarantine.
+type quarantinedCard struct {
+	fingerprint string // the payload that was refused
+	field       string // the offending field, e.g. lifecycle.resolved.actor
+	reason      string // the validator's verbatim message
 }
 
 // NewAttentionSyncService creates a sync service bound to the platform client.
@@ -105,10 +135,12 @@ func NewAttentionSyncService(client *Client) *AttentionSyncService {
 		machineID = client.AgentID()
 	}
 	return &AttentionSyncService{
-		client:    client,
-		machineID: machineID,
-		watermark: make(map[string]string),
-		unacked:   make(map[string]int),
+		client:     client,
+		machineID:  machineID,
+		watermark:  make(map[string]string),
+		unacked:    make(map[string]int),
+		rejected:   make(map[string]int),
+		quarantine: make(map[string]quarantinedCard),
 	}
 }
 
@@ -133,6 +165,13 @@ func (s *AttentionSyncService) SetAgentID(agentID string) {
 	s.agentID = agentID
 	s.generation++
 	s.watermark = make(map[string]string)
+	// Quarantines are cleared with the watermark (#1539): the body's identity
+	// half just changed, so every card gets exactly one fresh attempt under the
+	// new agent id. A card the validator still refuses re-quarantines after
+	// quarantineAfter attempts — at the cost of three log lines per re-register,
+	// not 931.
+	s.rejected = make(map[string]int)
+	s.quarantine = make(map[string]quarantinedCard)
 }
 
 // Attach subscribes the uploader to the store's transition stream (push each
@@ -207,9 +246,14 @@ func (s *AttentionSyncService) SyncAll(ctx context.Context, store AttentionListe
 	var dirty []attention.DecisionRequest
 	s.mu.Lock()
 	for _, r := range reqs {
-		if s.watermark[r.ID] != fingerprint(r) {
-			dirty = append(dirty, r)
+		fp := fingerprint(r)
+		if s.watermark[r.ID] == fp {
+			continue
 		}
+		if s.isQuarantinedLocked(r.ID, fp) {
+			continue
+		}
+		dirty = append(dirty, r)
 	}
 	s.mu.Unlock()
 	if len(dirty) == 0 {
@@ -233,10 +277,11 @@ func (s *AttentionSyncService) syncOne(ctx context.Context, req attention.Decisi
 	if !s.online() {
 		return nil
 	}
+	fp := fingerprint(req)
 	s.mu.Lock()
-	unchanged := s.watermark[req.ID] == fingerprint(req)
+	skip := s.watermark[req.ID] == fp || s.isQuarantinedLocked(req.ID, fp)
 	s.mu.Unlock()
-	if unchanged {
+	if skip {
 		return nil
 	}
 	return s.pushBatch(ctx, []attention.DecisionRequest{req})
@@ -296,17 +341,31 @@ func (s *AttentionSyncService) pushBatch(ctx context.Context, reqs []attention.D
 	// it unwatermarked lets the next sweep re-push it under the new agent id (FK
 	// backfill), rather than re-populating the just-cleared watermark with a
 	// stale entry.
+	reasonByID := make(map[string]string, len(parsed.Rejected))
+	for _, rej := range parsed.Rejected {
+		reasonByID[rej.ID] = rej.Reason
+	}
 	if s.generation == gen {
 		for _, r := range reqs {
 			if !parseOK || acked[r.ID] {
 				s.watermark[r.ID] = fingerprint(r)
 				delete(s.unacked, r.ID)
+				delete(s.rejected, r.ID)
 				continue
 			}
 			// Sent, 2xx, not echoed: leave it dirty so the next sweep retries.
 			s.unacked[r.ID]++
+			// …unless the server said WHY. A reason is a validator verdict and
+			// verdicts do not change on their own, so these are counted
+			// separately and quarantined (#1539).
+			if reasonByID[r.ID] != "" {
+				s.rejected[r.ID]++
+			} else {
+				delete(s.rejected, r.ID)
+			}
 		}
 	}
+	quarantined := s.quarantineLocked(reqs, acked, reasonByID, parseOK)
 	stuck := s.stuckIDsLocked(reqs, acked, parsed.Rejected, parseOK)
 	s.mu.Unlock()
 
@@ -317,10 +376,78 @@ func (s *AttentionSyncService) pushBatch(ctx context.Context, reqs []attention.D
 		// reason about. Loud, because it silently disables the guard above.
 		log.Printf("attention sync: 2xx with an unreadable body — cannot confirm which cards were mirrored; assuming all %d accepted", len(reqs))
 	}
+	for _, msg := range quarantined {
+		log.Printf("attention sync: %s", msg)
+	}
 	for _, msg := range stuck {
 		log.Printf("attention sync: %s", msg)
 	}
 	return nil
+}
+
+// isQuarantinedLocked reports whether id is quarantined AT THIS CONTENT. A card
+// whose fingerprint has moved since it was quarantined is a different payload,
+// so the quarantine is lifted and it gets a fresh attempt — an operator who
+// re-resolves a card with a valid actor must see it reach the mirror without
+// restarting the daemon.
+//
+// Caller holds s.mu.
+func (s *AttentionSyncService) isQuarantinedLocked(id, fp string) bool {
+	q, ok := s.quarantine[id]
+	if !ok {
+		return false
+	}
+	if q.fingerprint != fp {
+		delete(s.quarantine, id)
+		delete(s.rejected, id)
+		delete(s.unacked, id)
+		return false
+	}
+	return true
+}
+
+// quarantineLocked promotes ids that have now been rejected with a reason
+// quarantineAfter times running, returning the ONE line each is reported with.
+//
+// Caller holds s.mu.
+func (s *AttentionSyncService) quarantineLocked(reqs []attention.DecisionRequest, acked map[string]bool, reasonByID map[string]string, parseOK bool) []string {
+	if !parseOK {
+		return nil
+	}
+	var msgs []string
+	for _, r := range reqs {
+		if acked[r.ID] {
+			continue
+		}
+		reason := reasonByID[r.ID]
+		if reason == "" || s.rejected[r.ID] < quarantineAfter {
+			continue
+		}
+		if _, already := s.quarantine[r.ID]; already {
+			continue
+		}
+		field := rejectedField(reason)
+		s.quarantine[r.ID] = quarantinedCard{fingerprint: fingerprint(r), field: field, reason: reason}
+		msgs = append(msgs, fmt.Sprintf(
+			"card %s (state=%s) QUARANTINED after %d rejections — the mirror refuses it on field %s: %s. "+
+				"This is a schema verdict, not an outage: it would be refused identically forever, so it will not be retried "+
+				"until the card's content changes. The local store is unaffected.",
+			r.ID, r.Lifecycle.State, s.rejected[r.ID], field, reason))
+	}
+	return msgs
+}
+
+// rejectedField extracts the field path a validator names in its message —
+// `lifecycle.resolved.actor: Too small: expected string …` → the path before
+// the first colon. A reason that names no field reports as "(unnamed)" rather
+// than inventing one.
+func rejectedField(reason string) string {
+	head, _, found := strings.Cut(reason, ":")
+	head = strings.TrimSpace(head)
+	if !found || head == "" || strings.ContainsAny(head, " \t") {
+		return "(unnamed)"
+	}
+	return head
 }
 
 // acknowledgedIDs decodes the response and returns the set of ids the server
@@ -356,6 +483,11 @@ func (s *AttentionSyncService) stuckIDsLocked(reqs []attention.DecisionRequest, 
 	var msgs []string
 	for _, r := range reqs {
 		if acked[r.ID] {
+			continue
+		}
+		if _, quarantined := s.quarantine[r.ID]; quarantined {
+			// Already reported, terminally, with the field named. Repeating the
+			// "N consecutive sweeps" line is the 931-line noise this fixes.
 			continue
 		}
 		n := s.unacked[r.ID]

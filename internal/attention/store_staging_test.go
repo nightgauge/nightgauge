@@ -82,7 +82,7 @@ func TestMaterializedWriteStagesOffTheSharedName(t *testing.T) {
 		name string
 		run  func() error
 	}{
-		{"acknowledge", func() error { _, err := s.Acknowledge(id, "operator"); return err }},
+		{"acknowledge", func() error { _, err := s.Acknowledge(context.Background(), id, "operator"); return err }},
 		{"resolve", func() error {
 			_, err := s.Resolve(context.Background(), id, "go", "operator", "", "", NoopExecutor{})
 			return err

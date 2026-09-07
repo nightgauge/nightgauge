@@ -215,7 +215,7 @@ func TestStaleRemediationLifecycle_RaiseEscalateAutoResolve(t *testing.T) {
 	// 3. The operator mutes it — mute lasts until the CONDITION changes, so a
 	//    quiet sweep must not lift it.
 	card := onlyOpen(t, store)
-	if _, err := store.Mute(card.ID, "operator"); err != nil {
+	if _, err := store.Mute(context.Background(), card.ID, "operator"); err != nil {
 		t.Fatalf("Mute: %v", err)
 	}
 	if got := runSweep(t); got.Refreshed != 1 {
