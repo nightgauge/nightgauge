@@ -85,7 +85,21 @@ var ErrRequestNotFound = errors.New("not found")
 // the streak file's read-modify-write (streak.go), and the journal append in
 // emitLocked are all reached only from a caller holding this lock, so one
 // chokepoint covers all three.
-var dirLocks sync.Map // dir -> *sync.Mutex
+//
+// The lock is a CAPACITY-ONE CHANNEL rather than a sync.Mutex, and that is the
+// whole point of #1539: a sync.Mutex has no bounded acquire. When a holder
+// wedged, every mutating IPC method — resolve, acknowledge, mute, unmute —
+// parked here forever with the daemon logging nothing at all, while the read
+// verbs (List takes no lock) stayed instant. A channel can be selected against
+// a context, so an operator-facing mutation now fails with a real error
+// instead of never returning. See acquireDirCtx.
+var dirLocks sync.Map // dir -> chan struct{} (capacity 1)
+
+// ErrStoreBusy reports that the per-directory store lock could not be taken
+// before the caller's deadline. It is deliberately distinct from every other
+// error: "someone else is mid-write" is a transient, retryable condition an
+// operator acts on, while a validation or IO failure is not.
+var ErrStoreBusy = errors.New("attention: the store is busy")
 
 // flockTimeout bounds the WAIT for the cross-process lock. A wedged holder
 // must not stall every producer in the daemon indefinitely, so the wait
@@ -132,18 +146,147 @@ var verbTimeout = 20 * time.Second
 // SweepExpired) skip it structurally rather than by name.
 const lockFileName = "nightgauge-attention.lock"
 
-// acquireDir takes both locks for dir and returns the release func.
+// dirLockFor returns the capacity-one channel serialising writers for dir.
+func dirLockFor(dir string) chan struct{} {
+	if c, ok := dirLocks.Load(dir); ok {
+		return c.(chan struct{})
+	}
+	c, _ := dirLocks.LoadOrStore(dir, make(chan struct{}, 1))
+	return c.(chan struct{})
+}
+
+// acquireDir takes both locks for dir and returns the release func, waiting as
+// long as it takes. Reserved for the daemon's own background producers (raise,
+// sweep, streak, standing), which run on their own goroutines and whose being
+// queued is invisible to an operator. Every OPERATOR-FACING mutation uses
+// acquireDirCtx instead — a person waiting on a socket must be told, not
+// parked.
 func acquireDir(dir string) func() {
-	m, _ := dirLocks.LoadOrStore(dir, &sync.Mutex{})
-	mu := m.(*sync.Mutex)
-	mu.Lock()
+	release, _ := acquireDirCtx(context.Background(), dir)
+	return release
+}
+
+// acquireDirCtx takes both locks for dir, giving up when ctx expires.
+//
+// The wait covers ONLY the in-process queue; flockDir has always bounded its
+// own cross-process wait at flockTimeout. Returning ErrStoreBusy on expiry is
+// what makes "an IPC attention method cannot block indefinitely" true, and it
+// is true independently of what the holder is doing — a wedged verb, a peer
+// that stopped draining the event stream, or simply a busy store.
+func acquireDirCtx(ctx context.Context, dir string) (func(), error) {
+	lock := dirLockFor(dir)
+	select {
+	case lock <- struct{}{}:
+	case <-ctx.Done():
+		return nil, fmt.Errorf("%w: could not take the %s lock before the deadline: %w", ErrStoreBusy, dir, ctx.Err())
+	}
 
 	unflock := flockDir(dir)
 	return func() {
 		if unflock != nil {
 			unflock()
 		}
-		mu.Unlock()
+		<-lock
+	}, nil
+}
+
+// pendingEmit is one queued listener fan-out, held until the directory lock is
+// released.
+type pendingEmit struct {
+	entry JournalEntry
+	req   *DecisionRequest
+}
+
+// acquireSection is acquireDir plus the deferred listener fan-out: the release
+// it returns unlocks FIRST and only then runs the listeners queued by
+// emitLocked. See flushEmits for why that ordering is the fix for #1539.
+func (s *Store) acquireSection() func() {
+	release := acquireDir(s.dir)
+	return func() {
+		release()
+		s.flushEmits()
+	}
+}
+
+// acquireSectionCtx is acquireSection with a deadline.
+func (s *Store) acquireSectionCtx(ctx context.Context) (func(), error) {
+	release, err := acquireDirCtx(ctx, s.dir)
+	if err != nil {
+		return nil, err
+	}
+	return func() {
+		release()
+		s.flushEmits()
+	}, nil
+}
+
+// flushEmits hands every transition queued inside the just-released critical
+// section to the fan-out goroutine, never blocking the caller.
+//
+// LISTENERS MUST NEVER RUN UNDER THE DIRECTORY LOCK (#1539). They are arbitrary
+// callbacks wired by whoever embeds the store, and the daemon's own is the
+// proof: it pushes `attention.event` onto the extension's stdio stream, a
+// blocking write to a pipe whose peer may stop reading. Called from inside the
+// section — as it was — that write held the lock that serialises every writer
+// in every nightgauge process on this directory, so a single unread pipe wedged
+// every resolve, ack, mute and unmute on the machine while `attention list`,
+// which takes no lock, kept answering instantly. The journal append stays
+// inside the section (it is part of the transition's durability); only the
+// fan-out moves out.
+//
+// Ordering is preserved: entries fan out in the order they were queued, and the
+// directory lock still serialises the sections that queue them.
+func (s *Store) flushEmits() {
+	s.listenerMu.Lock()
+	pending := s.pendingEmits
+	s.pendingEmits = nil
+	ch := s.emitCh
+	s.listenerMu.Unlock()
+
+	if ch == nil {
+		return // nobody subscribed; there is nothing to deliver
+	}
+	for _, p := range pending {
+		select {
+		case ch <- p:
+		default:
+			// The queue is full, which means a listener has been stuck for
+			// emitQueueDepth transitions. Dropping is the only non-blocking
+			// answer, and it is the right one: these are push notifications for
+			// surfaces that re-read the store anyway, while the journal and the
+			// materialized file — the actual record — are already durable. What
+			// must never happen is the writer waiting on the reader.
+			fmt.Fprintf(os.Stderr,
+				"attention: transition event queue full (%d pending) — dropping the %s event for %s; a subscriber is not keeping up\n",
+				emitQueueDepth, p.entry.Action, p.entry.ID)
+		}
+	}
+}
+
+// drainEmits runs the listener fan-out on ONE goroutine per store, forever.
+//
+// One goroutine, so transitions reach every listener in the order they were
+// committed; not the caller's goroutine, so a listener that blocks cannot make
+// a mutation block. Both halves are #1539: the daemon's own listener writes
+// `attention.event` to the extension's stdio pipe, and a peer that stops
+// draining that pipe blocks the write for as long as it likes. Run inline, that
+// write held the directory lock and wedged every writer in every nightgauge
+// process on the machine; run on the caller's goroutine it would still hang the
+// IPC method that triggered it, which is the symptom this issue is named for.
+//
+// The trade-off is stated rather than hidden: a listener is best-effort and
+// asynchronous. Nothing durable rides on one — the journal append and the
+// materialized write both happen inside the critical section, before anything
+// is queued here.
+func (s *Store) drainEmits(ch chan pendingEmit) {
+	for p := range ch {
+		s.listenerMu.Lock()
+		listeners := make([]TransitionListener, len(s.listeners))
+		copy(listeners, s.listeners)
+		s.listenerMu.Unlock()
+		for _, l := range listeners {
+			l(p.entry, p.req)
+		}
 	}
 }
 
@@ -249,10 +392,18 @@ type Store struct {
 	dir     string
 	now     func() time.Time // injectable clock for tests
 
-	listenerMu  sync.Mutex
-	listeners   []TransitionListener
-	steerWriter SteerWriter
+	listenerMu   sync.Mutex
+	listeners    []TransitionListener
+	steerWriter  SteerWriter
+	pendingEmits []pendingEmit
+	emitCh       chan pendingEmit // nil until the first Subscribe
 }
+
+// emitQueueDepth is how many committed transitions may wait on a stuck
+// listener before events start being dropped. Deep enough that a momentarily
+// slow surface loses nothing, shallow enough that a permanently stuck one is
+// reported instead of accumulating without bound.
+const emitQueueDepth = 1024
 
 // New constructs a Store rooted at the workspace root. rootDir is the directory
 // that contains `.nightgauge/`.
@@ -266,12 +417,24 @@ func New(rootDir string) *Store {
 
 // Subscribe registers a transition listener. Safe to call concurrently;
 // listeners fire in registration order after each persisted transition.
+//
+// ASYNCHRONOUSLY, on one goroutine shared by every listener of this store
+// (#1539). Transitions still arrive in commit order, but a listener no longer
+// runs on — or blocks — the goroutine that made the transition, and never
+// under the directory lock. A listener is therefore best-effort: nothing
+// durable may depend on it, and one that blocks forever costs its store's event
+// stream (dropped past emitQueueDepth, loudly) rather than every writer on the
+// machine. See drainEmits.
 func (s *Store) Subscribe(l TransitionListener) {
 	if s == nil || l == nil {
 		return
 	}
 	s.listenerMu.Lock()
 	s.listeners = append(s.listeners, l)
+	if s.emitCh == nil {
+		s.emitCh = make(chan pendingEmit, emitQueueDepth)
+		go s.drainEmits(s.emitCh)
+	}
 	s.listenerMu.Unlock()
 }
 
@@ -369,7 +532,7 @@ func (s *Store) Raise(req DecisionRequest) (RaiseOutcome, string, error) {
 	}
 	s.applyRaiseDefaults(&req)
 
-	release := acquireDir(s.dir)
+	release := s.acquireSection()
 	defer release()
 
 	stored, err := s.scanLocked()
@@ -660,15 +823,67 @@ func sortInbox(reqs []DecisionRequest) {
 	})
 }
 
+// MinActorLen is the shortest actor string a lifecycle record may carry.
+//
+// It exists because the platform mirror enforces its own minimum and a card
+// that fails it can NEVER be mirrored: the rejection is a schema verdict, not a
+// transient error, so every retry produces the identical answer. One card
+// resolved with `--actor po` was re-pushed and re-rejected 931 times with
+// `lifecycle.resolved.actor: Too small: expected string …` before anything
+// noticed (#1539). The cheapest place to stop that is here, at the moment the
+// record is written — an unsyncable card is never created rather than being
+// quarantined afterwards.
+//
+// Three, not one: this package's own fallback labels ("cli", "vscode",
+// "platform") are the floor of what a real actor looks like, and a one- or
+// two-character actor names nobody in an audit record anyway.
+const MinActorLen = 3
+
+// ActorError is a refused actor. Typed so a surface can say what is wrong with
+// the caller's input instead of the generic "could not resolve request" that
+// §J error hygiene requires for option/verb detail — the actor came from the
+// caller, so telling them about it leaks nothing.
+type ActorError struct {
+	Actor string
+	Min   int
+}
+
+func (e *ActorError) Error() string {
+	if strings.TrimSpace(e.Actor) == "" {
+		return "an actor is required (lifecycle.*.actor)"
+	}
+	return fmt.Sprintf("actor %q is too short: lifecycle.*.actor requires at least %d characters and the platform mirror rejects anything shorter, so the card could never sync", e.Actor, e.Min)
+}
+
+// ValidateActor enforces MinActorLen, naming the field the mirror names so a
+// local refusal and a remote rejection read as the same problem.
+func ValidateActor(actor string) error {
+	trimmed := strings.TrimSpace(actor)
+	if trimmed == "" {
+		return &ActorError{Min: MinActorLen}
+	}
+	if len(trimmed) < MinActorLen {
+		return &ActorError{Actor: trimmed, Min: MinActorLen}
+	}
+	return nil
+}
+
 // Acknowledge marks a request seen without resolving it (non-blocking — ADR-015
 // §A). Terminal or already-acknowledged requests are a no-op.
-func (s *Store) Acknowledge(id, actor string) (*DecisionRequest, error) {
-	if strings.TrimSpace(actor) == "" {
-		// Same contract as Resolve (#1405): the acknowledgement record carries
-		// an actor the platform requires to be non-empty.
-		return nil, fmt.Errorf("attention: acknowledging %s requires an actor", id)
+//
+// ctx bounds the wait for the store's directory lock and nothing else — the
+// body is local file IO. Before #1539 this method could park forever on that
+// lock with no way for a caller to give up.
+func (s *Store) Acknowledge(ctx context.Context, id, actor string) (*DecisionRequest, error) {
+	if err := ValidateActor(actor); err != nil {
+		// Same contract as Resolve (#1405, #1539): the acknowledgement record
+		// carries an actor the platform validates.
+		return nil, fmt.Errorf("attention: acknowledging %s: %w", id, err)
 	}
-	release := acquireDir(s.dir)
+	release, err := s.acquireSectionCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
 	defer release()
 
 	path, req, err := s.loadLocked(id)
@@ -728,7 +943,21 @@ type ResolveResult struct {
 // mutation, no persist, no journal entry — so the card stays open and a
 // retry after the underlying condition clears hits the same code path fresh.
 func (s *Store) Resolve(ctx context.Context, id, optionID, actor, steerText, note string, exec VerbExecutor) (ResolveResult, error) {
-	release := acquireDir(s.dir)
+	// Refused BEFORE the lock is taken: a resolution that cannot be recorded
+	// must not queue behind anything, and the check needs no state (#1539).
+	if err := ValidateActor(actor); err != nil {
+		// The card contract requires a resolver the platform will accept, and a
+		// resolution nobody is validly named for is not worth recording (#1405,
+		// #1539). Refused rather than defaulted: the store cannot know who the
+		// operator is, and inventing one puts a false name in an audit record.
+		// The callers that DO know supply it — the CLI via attentionActor(),
+		// the IPC layer via its own fallback.
+		return ResolveResult{}, fmt.Errorf("attention: resolving %s: %w", id, err)
+	}
+	release, err := s.acquireSectionCtx(ctx)
+	if err != nil {
+		return ResolveResult{}, err
+	}
 
 	path, req, err := s.loadLocked(id)
 	if err != nil {
@@ -738,20 +967,6 @@ func (s *Store) Resolve(ctx context.Context, id, optionID, actor, steerText, not
 	if req.Lifecycle.State.IsTerminal() {
 		release()
 		return ResolveResult{Request: req, AlreadyResolved: true}, nil
-	}
-	if strings.TrimSpace(actor) == "" {
-		// The card contract requires a non-empty resolver (the platform's
-		// LifecycleSchema is `actor: z.string().min(1)`), and a resolution
-		// nobody is named for is not worth recording (#1405). Refused BEFORE
-		// the verb runs, so a caller that forgot the actor does not get a
-		// half-applied resolution it cannot persist.
-		//
-		// Refused rather than defaulted: the store cannot know who the operator
-		// is, and inventing one puts a false name in an audit record. The
-		// callers that DO know supply it — the CLI via attentionActor(), the
-		// IPC layer via its own fallback.
-		release()
-		return ResolveResult{}, fmt.Errorf("attention: resolving %s requires an actor", id)
 	}
 	opt, err := ValidateOption(req, optionID)
 	if err != nil {
@@ -843,7 +1058,7 @@ func (s *Store) Resolve(ctx context.Context, id, optionID, actor, steerText, not
 func (s *Store) SweepExpired(ctx context.Context, exec VerbExecutor) (int, error) {
 	now := s.nowUTC()
 
-	release := acquireDir(s.dir)
+	release := s.acquireSection()
 
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
@@ -1014,9 +1229,12 @@ func normalizeForWire(req *DecisionRequest) {
 	}
 }
 
-// emitLocked appends the journal line and fires the OnTransition hook. Called
-// under the per-dir lock; the hook must not re-enter the store (it drives
-// event push / external audit legs only).
+// emitLocked appends the journal line and QUEUES the transition for the
+// listener fan-out. Called under the per-dir lock, which is exactly why it no
+// longer calls the listeners itself: the hook drives event push and external
+// audit legs, both of which can block on something this store does not control
+// (#1539). flushEmits hands the queue on once the lock is released, and
+// drainEmits runs it on its own goroutine.
 //
 // The journal append needs no lock of its own on either axis (#1425). Every
 // caller is already inside acquireDir's critical section, so it is covered
@@ -1035,13 +1253,12 @@ func (s *Store) emitLocked(entry JournalEntry, req *DecisionRequest) {
 		// append failure must not fail the transition.
 		fmt.Fprintf(os.Stderr, "attention: journal append failed (fail-open): %v\n", err)
 	}
+	// QUEUED, not run: the fan-out happens in flushEmits once the caller
+	// releases the directory lock (#1539). A listener is arbitrary code and one
+	// of them writes to a pipe.
 	s.listenerMu.Lock()
-	listeners := make([]TransitionListener, len(s.listeners))
-	copy(listeners, s.listeners)
+	s.pendingEmits = append(s.pendingEmits, pendingEmit{entry: entry, req: req})
 	s.listenerMu.Unlock()
-	for _, l := range listeners {
-		l(entry, req)
-	}
 }
 
 // ReadJournal reads every journal entry in order (oldest first). Used for audit
@@ -1098,3 +1315,14 @@ func materializedTempPath(path string) (string, error) {
 	}
 	return fmt.Sprintf("%s.%d.%s.tmp", path, os.Getpid(), hex.EncodeToString(b[:])), nil
 }
+
+// WorstCaseHold is the longest a single healthy critical section can hold the
+// directory lock: the bounded wait for another process's flock, plus the
+// bounded run of the option's verb inside it.
+//
+// Exported so the layers above can size their own deadlines against the real
+// numbers instead of a copied constant that drifts. internal/ipc asserts its
+// attention mutation timeout exceeds this, which is what makes "a queued
+// resolve behind a slow-but-healthy one still succeeds" a checked claim rather
+// than an intention.
+func WorstCaseHold() time.Duration { return flockTimeout + verbTimeout }

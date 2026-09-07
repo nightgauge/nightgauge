@@ -304,7 +304,7 @@ func normalizeRepoSpecs(in []string) []string {
 // changes. The card stays in the inbox at its severity — muting is not
 // resolving, and a surface that hides a muted card is misreporting the state of
 // the repo.
-func (s *Server) handleAttentionMute(_ context.Context, raw json.RawMessage) (interface{}, error) {
+func (s *Server) handleAttentionMute(ctx context.Context, raw json.RawMessage) (interface{}, error) {
 	var p AttentionMuteParams
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return nil, fmt.Errorf("attention.mute: parse params: %w", err)
@@ -316,7 +316,9 @@ func (s *Server) handleAttentionMute(_ context.Context, raw json.RawMessage) (in
 	if store == nil {
 		return nil, fmt.Errorf("attention.mute: attention store not configured")
 	}
-	req, err := store.Mute(p.ID, p.Actor)
+	ctx, cancel := withAttentionDeadline(ctx)
+	defer cancel()
+	req, err := store.Mute(ctx, p.ID, ipcAttentionActor(p.Actor, actorSurfaceVSCode))
 	if err != nil {
 		return nil, fmt.Errorf("attention.mute: %w", err)
 	}
@@ -324,7 +326,7 @@ func (s *Server) handleAttentionMute(_ context.Context, raw json.RawMessage) (in
 }
 
 // handleAttentionUnmute restores alerting on a muted request.
-func (s *Server) handleAttentionUnmute(_ context.Context, raw json.RawMessage) (interface{}, error) {
+func (s *Server) handleAttentionUnmute(ctx context.Context, raw json.RawMessage) (interface{}, error) {
 	var p AttentionUnmuteParams
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return nil, fmt.Errorf("attention.unmute: parse params: %w", err)
@@ -336,7 +338,9 @@ func (s *Server) handleAttentionUnmute(_ context.Context, raw json.RawMessage) (
 	if store == nil {
 		return nil, fmt.Errorf("attention.unmute: attention store not configured")
 	}
-	req, err := store.Unmute(p.ID, p.Actor)
+	ctx, cancel := withAttentionDeadline(ctx)
+	defer cancel()
+	req, err := store.Unmute(ctx, p.ID, ipcAttentionActor(p.Actor, actorSurfaceVSCode))
 	if err != nil {
 		return nil, fmt.Errorf("attention.unmute: %w", err)
 	}

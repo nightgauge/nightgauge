@@ -138,7 +138,7 @@ func TestAcknowledgeRefusesAnEmptyActor(t *testing.T) {
 	if _, _, err := s.Raise(req); err != nil {
 		t.Fatalf("Raise: %v", err)
 	}
-	if _, err := s.Acknowledge(req.ID, ""); err == nil {
+	if _, err := s.Acknowledge(context.Background(), req.ID, ""); err == nil {
 		t.Error("Acknowledge accepted an empty actor")
 	}
 }

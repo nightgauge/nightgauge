@@ -167,7 +167,7 @@ func TestStoreSerialisesMutationsAcrossProcesses(t *testing.T) {
 
 	// The holder is now provably mid-write against this store directory. A
 	// mutation from THIS process must queue behind it.
-	if _, err := s.Acknowledge(other, "operator"); err != nil {
+	if _, err := s.Acknowledge(context.Background(), other, "operator"); err != nil {
 		t.Fatalf("Acknowledge: %v", err)
 	}
 	appendMarker(logPath, "second-process-wrote")
@@ -223,7 +223,7 @@ func TestWritesLeaveNoTempResidue(t *testing.T) {
 	if _, _, err := s.Raise(validRequest(id, "cond:residue")); err != nil {
 		t.Fatalf("Raise: %v", err)
 	}
-	if _, err := s.Acknowledge(id, "operator"); err != nil {
+	if _, err := s.Acknowledge(context.Background(), id, "operator"); err != nil {
 		t.Fatalf("Acknowledge: %v", err)
 	}
 	if _, err := s.IncrementStreak("cond:residue"); err != nil {

@@ -66,10 +66,21 @@ export interface AttentionCommandDeps {
   sweep?: { sweep(trigger: "manual" | "view-refresh"): Promise<unknown> };
 }
 
+/**
+ * The shortest actor the daemon will record (`attention.MinActorLen`), which is
+ * in turn the shortest the platform mirror accepts. Kept here so a name this
+ * side cannot use is dropped rather than sent and refused (#1539).
+ */
+const MIN_ACTOR_LENGTH = 3;
+
 /** Best-effort local actor for the resolution audit trail — never blocks or throws. */
 function resolveActor(): string | undefined {
   try {
-    return os.userInfo().username || undefined;
+    const name = os.userInfo().username?.trim();
+    // A name too short to be recorded is worse than no name: the daemon refuses
+    // it and the operator's click fails, whereas `undefined` lets the daemon
+    // label the resolution with the surface that actually acted ("vscode").
+    return name && name.length >= MIN_ACTOR_LENGTH ? name : undefined;
   } catch {
     return undefined;
   }
