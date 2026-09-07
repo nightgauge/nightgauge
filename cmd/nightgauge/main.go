@@ -10159,6 +10159,7 @@ func autonomousCmd() *cobra.Command {
 		Short: "Autonomous cross-repo pipeline scheduler",
 	}
 	cmd.AddCommand(autonomousRunCmd())
+	cmd.AddCommand(autonomousStartCmd())
 	cmd.AddCommand(autonomousStatusCmd())
 	cmd.AddCommand(autonomousResumeCmd())
 	cmd.AddCommand(autonomousClearFailuresCmd())
@@ -10580,6 +10581,47 @@ func autonomousStatusCmd() *cobra.Command {
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			workdir, _ := os.Getwd()
+
+			// Ask the RUNNING scheduler first (#1555). state.json is written by
+			// the scheduler but never re-read by it, so with a daemon up the
+			// file is a snapshot of unknown age — and printing that as the
+			// answer to "what is the scheduler doing" is the same defect as
+			// `stop` reporting a stop it never delivered. The file stays the
+			// answer when nothing is listening, which is the only case where it
+			// is the best one available.
+			if client, dialErr := ipc.DialClient(cmd.Context(), ipc.DaemonSocketPath(workdir), daemonDialTimeout); dialErr == nil {
+				defer client.Close()
+				var res orchestrator.AutonomousState
+				if callErr := client.Call(cmd.Context(), "autonomous.status", nil, &res); callErr == nil {
+					if outputJSON {
+						return printJSON(map[string]any{
+							"daemon":  true,
+							"status":  res.Status,
+							"cycles":  res.CyclesRun,
+							"running": res.Running,
+						})
+					}
+					fmt.Printf("Source: live daemon\nStatus: %s\nCycles: %d\n", res.Status, res.CyclesRun)
+					if len(res.Running) > 0 {
+						fmt.Printf("\nRunning (%d):\n", len(res.Running))
+						for _, r := range res.Running {
+							repoShort := r.Repo
+							if idx := strings.LastIndex(r.Repo, "/"); idx >= 0 {
+								repoShort = r.Repo[idx+1:]
+							}
+							fmt.Printf("  #%-4d %-12s %s elapsed\n", r.Number, repoShort, formatElapsedSince(r.StartedAt))
+						}
+					}
+					return nil
+				}
+				// A daemon that is up but cannot answer is not licence to print
+				// the file as though it were live. Say so, then label what
+				// follows.
+				fmt.Fprintln(cmd.ErrOrStderr(),
+					"warning: a daemon is listening but did not answer autonomous.status — "+
+						"falling back to the state file, which the running scheduler does not re-read")
+			}
+
 			statePath := filepath.Join(workdir, ".nightgauge", "autonomous", "state.json")
 			data, err := os.ReadFile(statePath)
 			if os.IsNotExist(err) {
@@ -11032,14 +11074,87 @@ func autonomousClearFailuresCmd() *cobra.Command {
 	return cmd
 }
 
-func autonomousStopCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:          "stop",
-		Short:        "Signal the autonomous scheduler to stop",
-		Long:         "Writes a stop signal to the autonomous state file. The running scheduler will pick it up on the next cycle.",
+// autonomousStartCmd starts the RUNNING daemon's scheduler (#1555).
+//
+// The daemon has exposed autonomous.start since it had a scheduler; only the
+// CLI never wired it, so starting the fleet required pressing Start in the
+// extension. That made a headless caller — a script, a cron entry, a CI job, an
+// agent verifying its own fix — able to observe the pipeline but not operate
+// it, and it made the verification of a scheduler fix the least automated step
+// in the process.
+//
+// Deliberately daemon-only, with no state-file fallback. There is nothing a
+// file write could start: `autonomous run` is the in-process scheduler and is
+// still the way to run one without a daemon. Saying that is more useful than a
+// write that looks like it worked.
+func autonomousStartCmd() *cobra.Command {
+	var outputJSON bool
+
+	cmd := &cobra.Command{
+		Use:   "start",
+		Short: "Start the running daemon's autonomous scheduler",
+		Long: "Starts the autonomous scheduler inside a running daemon over IPC. Requires a daemon " +
+			"(`nightgauge serve`, or the VS Code extension). To run a scheduler in this process " +
+			"instead, use `nightgauge autonomous run`.",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			workdir, _ := os.Getwd()
+
+			client, dialErr := ipc.DialClient(cmd.Context(), ipc.DaemonSocketPath(workdir), daemonDialTimeout)
+			if dialErr != nil {
+				return fmt.Errorf("no daemon is listening in %s, so there is no scheduler to start: %w\n"+
+					"Start a daemon (`nightgauge serve`, or open the VS Code extension), "+
+					"or run one in this process with `nightgauge autonomous run`", workdir, dialErr)
+			}
+			defer client.Close()
+
+			var status orchestrator.AutonomousState
+			if err := client.Call(cmd.Context(), "autonomous.start", ipc.AutonomousStartParams{}, &status); err != nil {
+				return err
+			}
+			if outputJSON {
+				return printJSON(status)
+			}
+			fmt.Printf("Started the daemon's scheduler (status=%s).\n", status.Status)
+			if len(status.Running) > 0 {
+				fmt.Printf("Running (%d):\n", len(status.Running))
+				for _, r := range status.Running {
+					fmt.Printf("  #%-4d %s\n", r.Number, r.Repo)
+				}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
+	return cmd
+}
+
+func autonomousStopCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "stop",
+		Short: "Stop the autonomous scheduler",
+		Long: "Stops the running scheduler over IPC when a daemon is listening, and otherwise writes " +
+			"a stop signal to the autonomous state file for the next process that reads it.",
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			workdir, _ := os.Getwd()
+
+			// Live daemon first (#1536, #1555). The scheduler keeps its state
+			// in memory and never re-reads state.json, so the file write below
+			// reaches a RUNNING scheduler not at all — it printed "Stop signal
+			// written" while the fleet kept dispatching for another ninety
+			// minutes. The file path stays for the no-daemon case, where it is
+			// the only thing that can carry the signal.
+			if client, dialErr := ipc.DialClient(cmd.Context(), ipc.DaemonSocketPath(workdir), daemonDialTimeout); dialErr == nil {
+				defer client.Close()
+				var res orchestrator.AutonomousState
+				if err := client.Call(cmd.Context(), "autonomous.stop", nil, &res); err != nil {
+					return err
+				}
+				fmt.Printf("Scheduler stopped (daemon). status=%s running=%d\n", res.Status, len(res.Running))
+				return nil
+			}
+
 			statePath := filepath.Join(workdir, ".nightgauge", "autonomous", "state.json")
 			data, err := os.ReadFile(statePath)
 			if os.IsNotExist(err) {
@@ -11069,7 +11184,11 @@ func autonomousStopCmd() *cobra.Command {
 			if err := os.Rename(tmp, statePath); err != nil {
 				return fmt.Errorf("rename state: %w", err)
 			}
-			fmt.Println("Stop signal written. The scheduler will stop on the next cycle.")
+			// Say which surface answered. A state-file write is NOT a stop —
+			// no scheduler is listening, so this only marks the file for
+			// whatever reads it next (#1555).
+			fmt.Println("No daemon is listening. Stop signal written to the state file; " +
+				"it will be observed by the next process that reads it, not by a scheduler running now.")
 			return nil
 		},
 	}
