@@ -118,6 +118,13 @@ export interface StagePhase {
    * reason either.
    */
   error?: string;
+  /**
+   * Why the phase was skipped. Only ever set for `status: "skipped"` — a
+   * deterministic path records WHY it did not perform a registry phase
+   * (#1534), which is the difference between "the pickup path has no LLM and
+   * therefore no self-assessment" and an unexplained gap.
+   */
+  reason?: string;
 }
 
 export interface PTCMetrics {
@@ -1711,9 +1718,10 @@ export class PipelineStateService implements vscode.Disposable {
     stage: string,
     phaseName: string,
     total: number,
-    registryIndex?: number
+    registryIndex?: number,
+    reason?: string
   ): Promise<void> {
-    return this.recordTerminalPhase(stage, phaseName, total, "skipped", registryIndex);
+    return this.recordTerminalPhase(stage, phaseName, total, "skipped", registryIndex, reason);
   }
 
   /**
@@ -1746,7 +1754,8 @@ export class PipelineStateService implements vscode.Disposable {
     phaseName: string,
     total: number,
     status: "skipped" | "unreported",
-    registryIndex?: number
+    registryIndex?: number,
+    reason?: string
   ): Promise<void> {
     if (!this._lastState) return;
     const stageState = this._lastState.stages[stage];
@@ -1758,6 +1767,7 @@ export class PipelineStateService implements vscode.Disposable {
       index: registryIndex ?? phases.length,
       total,
       status,
+      ...(reason !== undefined ? { reason } : {}),
     });
     stageState.phases = phases;
     stageState.total_phases = total;

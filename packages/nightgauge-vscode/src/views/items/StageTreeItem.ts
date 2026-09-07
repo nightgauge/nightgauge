@@ -587,7 +587,12 @@ export class StageTreeItem extends BaseTreeItem {
     this.currentPhaseName = currentPhase ?? null;
 
     for (const phase of phases) {
-      const item = new PhaseTreeItem(phase.name, phase.status as PhaseStatus, this.stage);
+      const item = new PhaseTreeItem(
+        phase.name,
+        phase.status as PhaseStatus,
+        this.stage,
+        phase.reason
+      );
       this.addChild(item);
     }
 

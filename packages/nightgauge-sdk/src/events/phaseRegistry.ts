@@ -8,7 +8,33 @@
  * Phase names are kebab-case identifiers that remain stable across versions.
  * Changing phase names or counts requires a skill version bump.
  *
+ * ## Who reports a stage's phases
+ *
+ * The registry declares what a stage's phases ARE; it does not say who
+ * reports them. Three producers exist, and a stage can be served by more than
+ * one depending on which execution path a run takes:
+ *
+ * | Producer | Where | Serves |
+ * | --- | --- | --- |
+ * | **Skill markers** | `<!-- phase:start … -->` in skill output, parsed by the extension's `streamOutputHandler` → `PhaseTracker` | every stage on its LLM path |
+ * | **Go deterministic reporter** | `internal/orchestrator/deterministic_phases.go` (`newDeterministicPhaseReporter`), passed to the runners via `stages.WithPhaseReporter` | `pr-merge`, `pr-create` on their deterministic Go paths (#1247 / PR #1398), and the `pr-stage` CLI route (PR #1408) |
+ * | **TS deterministic reporter** | `packages/nightgauge-vscode/src/utils/deterministicPhases.ts` (`createDeterministicPhaseReporter`), writing through `PipelineStateService` | `issue-pickup` on the extension's deterministic-first path, `ContextAssembler.generateDeterministicContext` (#1534) |
+ *
+ * A path that reports NOTHING is not neutral: the tree seeds this registry's
+ * rows, shows `0/N` for the run's duration, and back-fills every row as
+ * `unreported` at the end (#1246). That was `issue-pickup`'s deterministic
+ * path until #1534 — 0/14 while running, 14 unreported when it succeeded.
+ * Any new non-LLM path for a stage in this registry must take one of the two
+ * reporters above, or the stage's rows regress to that state.
+ *
+ * A deterministic path reports the registry phases it performs and marks the
+ * rest `skipped` WITH A REASON. `skipped` is the correct word — the path
+ * decided not to run them — where `unreported` would claim the system cannot
+ * tell, which a deterministic path always can.
+ *
  * @see Issue #1027 - Skills emit structured phase markers
+ * @see Issue #1247 / PR #1398 - deterministic Go runners report their phases
+ * @see Issue #1534 - deterministic issue-pickup reports its phases
  */
 
 import type { PipelineStage } from "./EventBus.js";

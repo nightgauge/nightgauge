@@ -46,6 +46,13 @@ and this project adheres to
 
 ### Fixed
 
+- The pipeline tree shows real phase progress for a deterministic
+  issue-pickup. Pickup's primary path runs no LLM, so it emitted no phase
+  markers and the stage rendered `0/14` while running and `14 unreported` when
+  it finished. It now reports the waypoints it performs and marks the rest
+  skipped with a reason, so the stage progresses live and settles at 14/14
+  with nothing unreported. A skipped phase's reason is shown beside its status
+  in the tree (#1534)
 - A pipeline failure comment no longer says "PR creation failed" about a PR that
   is open and running checks. When pr-create is terminated after it verified an
   OPEN PR — the runaway monitor firing while the stage watched CI was the

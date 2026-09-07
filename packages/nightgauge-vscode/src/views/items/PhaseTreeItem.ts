@@ -77,13 +77,26 @@ export class PhaseTreeItem extends BaseTreeItem {
   readonly phaseName: string;
   readonly stage: PipelineStage | undefined;
   private status: PhaseStatus;
+  /**
+   * Why the phase carries its status — currently only set for skips recorded
+   * by a deterministic stage path (#1534). Shown next to the status so a
+   * reader can tell "this path has no LLM, so there is no self-assessment"
+   * from an unexplained skip.
+   */
+  private readonly reason: string | undefined;
 
-  constructor(name: string, status: PhaseStatus = "pending", stage?: PipelineStage) {
+  constructor(
+    name: string,
+    status: PhaseStatus = "pending",
+    stage?: PipelineStage,
+    reason?: string
+  ) {
     super(toTitleCase(name), vscode.TreeItemCollapsibleState.None);
 
     this.phaseName = name;
     this.stage = stage;
     this.status = normalizePhaseStatus(status);
+    this.reason = reason;
 
     this.updateDisplay();
   }
@@ -101,7 +114,7 @@ export class PhaseTreeItem extends BaseTreeItem {
 
     // Show status text for non-running phases
     if (this.status !== "running") {
-      this.description = this.status;
+      this.description = this.reason ? `${this.status} — ${this.reason}` : this.status;
     } else {
       this.description = "";
     }

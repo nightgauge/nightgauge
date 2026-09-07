@@ -109,6 +109,16 @@ export interface StageRouting {
  * skill — it is keyed by the executable-stage set, excluding the
  * `pipeline-start`/`pipeline-finish` boundary sentinels) and ordered by
  * `PIPELINE_STAGE_ORDER`, rather than re-encoding the sentinel names here.
+ *
+ * Membership here says a stage HAS phases, not that an adapter reports them:
+ * a stage's phases can arrive from skill markers (the LLM path), from the Go
+ * deterministic reporter (`internal/orchestrator/deterministic_phases.go` —
+ * pr-merge, pr-create), or from the TS deterministic reporter
+ * (`src/utils/deterministicPhases.ts` — issue-pickup's deterministic-first
+ * path, #1534). Only the first depends on the adapter this command resolves,
+ * so a stage running deterministically reports its phases identically under
+ * every adapter. See the "Who reports a stage's phases" table on
+ * `PHASE_REGISTRY`.
  */
 export const EXECUTABLE_STAGES: readonly PipelineStage[] = PIPELINE_STAGE_ORDER.filter(
   (s) => s in PHASE_REGISTRY
