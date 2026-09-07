@@ -576,6 +576,26 @@
       "signal": ""
     },
     {
+      "input": "reached your gpt-5.6-terra",
+      "kind": "model_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: reached your gpt-5.6-terra",
+      "kind": "model_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "REACHED YOUR GPT-5.6-TERRA",
+      "kind": "model_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "reached your",
+      "kind": "",
+      "signal": ""
+    },
+    {
       "input": "usage limit gpt-5.6-terra",
       "kind": "model_unavailable",
       "signal": "rate_limit_quota_exhausted"

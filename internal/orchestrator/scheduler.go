@@ -329,10 +329,94 @@ const (
 // died. The motivating failure needs nothing more — grok writes
 // `Error: Couldn't set model …: "unknown model id"` to stderr.
 //
+// #1556 narrowed "empty ErrorText" to "empty ErrorText when there is also no
+// vendor line on a transcript-free stdout" — see vendorStdoutFailureReason.
+// The bound above is unchanged: a stdout with a transcript in it is still
+// refused outright.
+//
 // The result is cloned: strings.Join returns its single element unchanged, and
 // that element is a slice of the caller's stderr buffer, which would otherwise
 // be pinned for the lifetime of the run.
 func stderrFailureReason(stderr string) string {
+	return boundedReasonTail(stderr)
+}
+
+// vendorResultEvent is the terminal envelope an agentic CLI writes as the last
+// line of its streaming-JSON transcript. Only the error-gated fields are
+// modelled: `result` carries the MODEL's answer on a successful run and the
+// VENDOR's reason on a failed one, so `is_error` is what makes reading it safe.
+type vendorResultEvent struct {
+	Type    string `json:"type"`
+	IsError bool   `json:"is_error"`
+	Result  string `json:"result"`
+	Error   string `json:"error"`
+}
+
+// vendorStdoutFailureReason is the LAST RESORT for a CLI stage that exited
+// non-zero having written nothing at all to its stderr (#1556).
+//
+// The rule above — stdout is never a classification source — is about the
+// agentic TRANSCRIPT: assistant turns and tool_result payloads are model- and
+// tool-authored prose that must never reach a substring classifier. Two shapes
+// are not that prose, and both are refused today for no reason anyone argued:
+//
+//  1. The transcript's own terminal envelope, when it declares an error:
+//
+//     {"type":"result","is_error":true,"api_error_status":429,
+//     "result":"You've reached your Fable limit. Switch to another model, …"}
+//
+//     `result` holds model output on a successful run, so it is read ONLY when
+//     the vendor set is_error — the same field, gated by the vendor's own
+//     verdict on whether it holds an answer or a reason.
+//
+//  2. A stdout carrying no transcript at all, which is what a CLI that refuses
+//     to start work leaves behind: one plain line, then a non-zero exit.
+//
+// Discarding both is what made an Anthropic model cap classify as
+// subagent_crash — a LIFETIME failure kind — so #1545's fable→opus→sonnet→haiku
+// descent was never consulted, and a cap that clears on its own instead
+// consumed the issue's lifetime budget and booked a cascade strike.
+//
+// Everything else is still refused, structurally rather than by trusting the
+// caller: a line opening a JSON object or array means a transcript was being
+// written, so the plain-text branch cannot see one.
+func vendorStdoutFailureReason(stdout string) string {
+	lines := strings.Split(stdout, "\n")
+
+	// Last envelope wins: it is the one that ended the run.
+	sawTranscript := false
+	for i := len(lines) - 1; i >= 0; i-- {
+		t := strings.TrimSpace(lines[i])
+		if t == "" {
+			continue
+		}
+		if t[0] != '{' && t[0] != '[' {
+			continue
+		}
+		sawTranscript = true
+		var ev vendorResultEvent
+		if json.Unmarshal([]byte(t), &ev) != nil || ev.Type != "result" || !ev.IsError {
+			continue
+		}
+		if reason := strings.TrimSpace(ev.Result); reason != "" {
+			return boundedReasonTail(reason)
+		}
+		if reason := strings.TrimSpace(ev.Error); reason != "" {
+			return boundedReasonTail(reason)
+		}
+	}
+	if sawTranscript {
+		// A transcript with no error envelope tells us nothing we are allowed
+		// to classify. "We do not know why it died" stays the honest answer.
+		return ""
+	}
+	return boundedReasonTail(stdout)
+}
+
+// boundedReasonTail is the shared bound both reason sources apply: the last
+// stderrReasonMaxLines non-empty lines, hard-capped at stderrReasonMaxBytes.
+// Returns "" when the text carried nothing.
+func boundedReasonTail(stderr string) string {
 	if len(stderr) > stderrReasonMaxBytes {
 		stderr = stderr[len(stderr)-stderrReasonMaxBytes:]
 		// Drop the partial first line the byte cut left behind, unless that
@@ -360,8 +444,11 @@ func stderrFailureReason(stderr string) string {
 //
 // The two fields have DIFFERENT contracts and therefore different sources:
 //
-//	ErrorText       — curated reason, read by ClassifyTerminalKind. Stderr only,
-//	                  bounded by stderrFailureReason. Empty when stderr is silent.
+//	ErrorText       — curated reason, read by ClassifyTerminalKind. Stderr
+//	                  first, bounded by stderrFailureReason; when stderr is
+//	                  silent, a stdout carrying no transcript, bounded the same
+//	                  way (vendorStdoutFailureReason, #1556). Empty when neither
+//	                  produced vendor-authored text.
 //	LastOutputLines — raw forensic evidence, never classified. The combined
 //	                  stdout+stderr tail, bounded by the same caps
 //	                  RecordStageOutputTail applies (state.TruncateOutputTail).
@@ -376,7 +463,14 @@ func cliFailureText(stdout, stderr string) (errorText, lastOutputLines string) {
 		}
 		combined += errTail
 	}
-	return stderrFailureReason(stderr), state.TruncateOutputTail(combined)
+	reason := stderrFailureReason(stderr)
+	if reason == "" {
+		// Stderr said nothing. Rather than book "we do not know why it died"
+		// over a diagnostic the process did print, fall back to a stdout that
+		// carries no transcript (#1556).
+		reason = vendorStdoutFailureReason(stdout)
+	}
+	return reason, state.TruncateOutputTail(combined)
 }
 
 // stageFailureText is the single text every terminal-failure classification
