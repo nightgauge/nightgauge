@@ -14,6 +14,17 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- A default branch no longer reads as red forever because of one old failing
+  check run. For each check name, only its most recent completed run now
+  decides pass or fail, so a scheduled workflow that failed once and has
+  succeeded on every run since against the same unchanged commit clears the
+  fleet blocker instead of holding it up until someone pushes. Recency is
+  established from the run's own completion time; an undated run and a
+  cancelled re-run are both treated as non-evidence, so neither can suppress a
+  real failure (#1572)
+
 ## [0.3.1] - 2026-09-07
 
 ### Fixed

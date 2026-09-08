@@ -147,22 +147,42 @@ type failedCheck struct {
 //     all. A failure whose completion time is unknown is treated as past the
 //     grace: the alternative is suppressing a real blocker indefinitely because
 //     an adapter did not populate a timestamp.
+//
+// A third exclusion is the latest-run rule (issue #1572): a check name whose
+// most recent completed run PASSED is not failing, however many older failing
+// runs the forge still reports for it. See latestOutcomes.
 func (p *DefaultBranchHealth) failingChecks(runs []forgetypes.CheckDetail, required []string) (blocking, advisory []failedCheck) {
 	isRequired := make(map[string]bool, len(required))
 	for _, name := range required {
 		isRequired[name] = true
 	}
 	cutoff := p.now().Add(-p.grace())
+	latest := latestOutcomes(runs)
 
 	for _, run := range runs {
 		if !isFailedConclusion(run.Conclusion) {
 			continue
 		}
+		out, ok := latest[run.Name]
+		if !ok || !out.failed {
+			// A more recent completed run of this same check name passed, so
+			// the check is green now and this run is history.
+			continue
+		}
+		if out.hasTime && out.at.After(cutoff) {
+			// The grace window belongs to the run that DECIDES the verdict, not
+			// to each run of the name: an old failure cannot card a check whose
+			// deciding failure happened a minute ago and may yet be re-run green.
+			continue
+		}
 		fc := failedCheck{name: run.Name, url: run.DetailsURL, sha: run.HeadSHA}
 		if ts, err := time.Parse(time.RFC3339, run.CompletedAt); err == nil {
 			fc.completedAt, fc.hasTime = ts, true
-			if ts.After(cutoff) {
-				continue // still inside the grace window
+			if out.hasPass && ts.Before(out.passedAt) {
+				// An earlier failure episode the check has since recovered from.
+				// Listing it would claim in the prose that the check has been
+				// failing far longer than it has.
+				continue
 			}
 		}
 		if isRequired[run.Name] {
@@ -181,6 +201,92 @@ func (p *DefaultBranchHealth) failingChecks(runs []forgetypes.CheckDetail, requi
 	sort.SliceStable(blocking, byName(blocking))
 	sort.SliceStable(advisory, byName(advisory))
 	return blocking, advisory
+}
+
+// checkOutcome is the current verdict for one check NAME on the default branch,
+// derived from the most recent run of that name that reached a pass/fail
+// conclusion.
+type checkOutcome struct {
+	// failed is the deciding run's verdict.
+	failed bool
+	// at and hasTime are the deciding run's completion instant, when it
+	// reported one. The grace period is measured from here.
+	at      time.Time
+	hasTime bool
+	// passedAt and hasPass are the most recent SUCCESS for this name. When the
+	// verdict is a failure, every failing run older than this belongs to an
+	// episode the check has already recovered from.
+	passedAt time.Time
+	hasPass  bool
+}
+
+// latestOutcomes reduces the raw check runs to one verdict per check NAME: the
+// most recent run that reached a pass/fail conclusion decides, and every older
+// run of that name is history (issue #1572).
+//
+// Without this rule a scheduled workflow that failed once and has passed on
+// every run since reads as "main is red" forever. The failing run never leaves
+// the forge's list for the commit, so a producer that cards any failing run
+// keeps carding it until someone pushes. Observed on a repository whose `sync`
+// check failed at 01:13Z and then succeeded twice on the same unchanged commit,
+// at 05:59Z and 10:36Z — the fleet blocker was still standing at 11:39Z, and
+// nothing but a new commit would ever have cleared it.
+//
+// Three ordering rules, each chosen so the error falls toward carding a real
+// failure rather than suppressing one:
+//
+//   - Only failure-class and SUCCESS conclusions vote. CANCELLED, SKIPPED,
+//     NEUTRAL and STALE are non-verdicts — they are not evidence the check
+//     passed, so they must neither raise a card nor clear one, and a cancelled
+//     re-run therefore leaves the previous failure standing.
+//   - A run carrying a completion time always outranks one that does not. An
+//     adapter that omits the timestamp must not be able to pass an undated
+//     success off as newer than a dated failure.
+//   - When no run of a name is dated, no ordering exists at all, so any failure
+//     wins. That is the pre-#1572 behaviour, kept for exactly the case the new
+//     rule has no information to decide.
+//
+// This is upstream of distinctFailing and does not disturb it: the fingerprint
+// is still the SET of failing check names, and re-runs of a still-failing check
+// still collapse to one name. What changes is only WHICH names are failing.
+func latestOutcomes(runs []forgetypes.CheckDetail) map[string]checkOutcome {
+	out := make(map[string]checkOutcome, len(runs))
+	for _, run := range runs {
+		failed := isFailedConclusion(run.Conclusion)
+		passed := isPassedConclusion(run.Conclusion)
+		if !failed && !passed {
+			continue
+		}
+		cand := checkOutcome{failed: failed}
+		if ts, err := time.Parse(time.RFC3339, run.CompletedAt); err == nil {
+			cand.at, cand.hasTime = ts, true
+		}
+		cur, seen := out[run.Name]
+		if passed && cand.hasTime && (!cur.hasPass || cand.at.After(cur.passedAt)) {
+			cur.passedAt, cur.hasPass = cand.at, true
+		}
+		if !seen || supersedes(cand, cur) {
+			// The pass history is a property of the NAME, not of the deciding
+			// run, so it survives the verdict being replaced.
+			cand.passedAt, cand.hasPass = cur.passedAt, cur.hasPass
+			cur = cand
+		}
+		out[run.Name] = cur
+	}
+	return out
+}
+
+// supersedes reports whether cand is the more recent verdict of the two. See
+// latestOutcomes for why an undated run always loses and why a tie goes to the
+// failure.
+func supersedes(cand, cur checkOutcome) bool {
+	if cand.hasTime != cur.hasTime {
+		return cand.hasTime
+	}
+	if cand.hasTime && !cand.at.Equal(cur.at) {
+		return cand.at.After(cur.at)
+	}
+	return cand.failed && !cur.failed
 }
 
 // distinctFailing collapses failing check RUNS into the set of distinct failing
@@ -238,6 +344,14 @@ func isFailedConclusion(conclusion string) bool {
 		// path open or are the operator's own doing.
 		return false
 	}
+}
+
+// isPassedConclusion reports whether a check-run conclusion is a definite pass.
+// It is deliberately narrower than "not a failure": only a real SUCCESS is
+// evidence that a check has recovered and may therefore retire an older
+// failing run of the same name.
+func isPassedConclusion(conclusion string) bool {
+	return strings.EqualFold(strings.TrimSpace(conclusion), "SUCCESS")
 }
 
 // blockingRequest builds the standing observation for a default branch whose
