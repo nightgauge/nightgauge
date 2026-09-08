@@ -28,11 +28,7 @@ function destSkillName(dirName: string, restorePrefix: boolean): string {
   if (!restorePrefix) {
     return dirName;
   }
-  if (
-    UNPREFIXED.has(dirName) ||
-    dirName.startsWith("nightgauge-") ||
-    dirName.startsWith("incredibuilders-")
-  ) {
+  if (UNPREFIXED.has(dirName) || dirName.startsWith("nightgauge-")) {
     return dirName;
   }
   return `nightgauge-${dirName}`;
