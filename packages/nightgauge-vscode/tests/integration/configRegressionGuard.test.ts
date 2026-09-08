@@ -59,6 +59,7 @@ const EXEMPT_FILES = [
   "config/warningSettings.ts", // Warning settings
   "commands/migrateConfig.ts", // Migration command needs to check VSCode settings
   "services/CodexSetupService.ts", // Reads nightgauge.plugins.autoPrompt (VSCode-only UI setting)
+  "services/GrokSetupService.ts", // Reads nightgauge.plugins.autoPrompt (VSCode-only UI setting)
   "commands/auditCommands.ts", // Reads nightgauge.dashboardUrl (VSCode-only UI setting, Issue #3325)
 ];
 

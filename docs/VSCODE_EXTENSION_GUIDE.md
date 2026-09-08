@@ -587,6 +587,7 @@ Commands are organized by function. Access via Command Palette (Cmd+Shift+P / Ct
 | `Nightgauge: Switch Execution Adapter`  | Switch between Claude/Codex/Gemini        |
 | `Nightgauge: Setup Claude Code Plugins` | Configure Claude Code CLI plugins         |
 | `Nightgauge: Setup Codex Commands`      | Configure Codex adapter                   |
+| `Nightgauge: Setup Grok Skills`         | Install Nightgauge skills for Grok        |
 | `Nightgauge: Disable Auto-Accept`       | Toggle permission auto-acceptance         |
 | `Nightgauge: Select Target Branch`      | Choose branch for PR creation             |
 | `Nightgauge: Switch Repository`         | Switch active workspace repo (multi-repo) |

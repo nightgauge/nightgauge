@@ -87,14 +87,14 @@ the overview and per-phase Read directives; the heavy procedural detail (bash,
 GraphQL, config templates, tables) lives in `_includes/` and is loaded only when
 its phase fires.
 
-- `skills/nightgauge-repo-init/_includes/prerequisites.md` — read in Phase 0 (tool checks, account pin, token scopes, argument parsing, repo identity, existing config)
-- `skills/nightgauge-repo-init/_includes/project-selection.md` — read in Phase 1 (link check, project discovery, `--project` resolution, prompt, confirm)
-- `skills/nightgauge-repo-init/_includes/labels.md` — read in Phases 2 and 3 (component label selection, label setup)
-- `skills/nightgauge-repo-init/_includes/board-fields-and-link.md` — read in Phases 4, 5, and 5.2 (field validation, repo link, standard views)
-- `skills/nightgauge-repo-init/_includes/workspace-registration.md` — read in Phase 5.5 (multi-repo workspace registration)
-- `skills/nightgauge-repo-init/_includes/config-generation.md` — read in Phases 6 and 6.5 (generate config.yaml, verify field IDs)
-- `skills/nightgauge-repo-init/_includes/knowledge-and-complexity.md` — read in Phases 6.7 and 6.8 (scaffold knowledge, bootstrap complexity model)
-- `skills/nightgauge-repo-init/_includes/summary-and-migration.md` — read in Phases 7 and 7.5 (summary report, native sub-issue migration check)
+- `_includes/prerequisites.md` (same directory as this SKILL.md) — read in Phase 0 (tool checks, account pin, token scopes, argument parsing, repo identity, existing config)
+- `_includes/project-selection.md` (same directory as this SKILL.md) — read in Phase 1 (link check, project discovery, `--project` resolution, prompt, confirm)
+- `_includes/labels.md` (same directory as this SKILL.md) — read in Phases 2 and 3 (component label selection, label setup)
+- `_includes/board-fields-and-link.md` (same directory as this SKILL.md) — read in Phases 4, 5, and 5.2 (field validation, repo link, standard views)
+- `_includes/workspace-registration.md` (same directory as this SKILL.md) — read in Phase 5.5 (multi-repo workspace registration)
+- `_includes/config-generation.md` (same directory as this SKILL.md) — read in Phases 6 and 6.5 (generate config.yaml, verify field IDs)
+- `_includes/knowledge-and-complexity.md` (same directory as this SKILL.md) — read in Phases 6.7 and 6.8 (scaffold knowledge, bootstrap complexity model)
+- `_includes/summary-and-migration.md` (same directory as this SKILL.md) — read in Phases 7 and 7.5 (summary report, native sub-issue migration check)
 
 ---
 
@@ -109,7 +109,7 @@ its phase fires.
 Verify tools, pin the active forge account, validate token scopes, parse
 arguments, resolve repo identity, and detect any existing config.
 
-> **Read `skills/nightgauge-repo-init/_includes/prerequisites.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/prerequisites.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -118,7 +118,7 @@ arguments, resolve repo identity, and detect any existing config.
 Discover, resolve, and confirm the GitHub Project to use — org-preferred,
 reusing an existing link when present. Five ordered steps gate each other.
 
-> **Read `skills/nightgauge-repo-init/_includes/project-selection.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/project-selection.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -126,7 +126,7 @@ reusing an existing link when present. Five ordered steps gate each other.
 
 Ask which component label set to create (the only project-specific label group).
 
-> **Read `skills/nightgauge-repo-init/_includes/labels.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/labels.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -135,7 +135,7 @@ Ask which component label set to create (the only project-specific label group).
 Create all standard labels plus the selected component labels, skipping any that
 already exist (idempotent).
 
-> **Read `skills/nightgauge-repo-init/_includes/labels.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/labels.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -144,7 +144,7 @@ already exist (idempotent).
 Create or ensure all required project board fields exist via the Go binary's
 idempotent `project ensure-fields` verb, returning their field IDs.
 
-> **Read `skills/nightgauge-repo-init/_includes/board-fields-and-link.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/board-fields-and-link.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -153,7 +153,7 @@ idempotent `project ensure-fields` verb, returning their field IDs.
 Link the repo to the resolved project (skipping if already linked from the
 Phase 1 link check).
 
-> **Read `skills/nightgauge-repo-init/_includes/board-fields-and-link.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/board-fields-and-link.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -162,7 +162,7 @@ Phase 1 link check).
 Create the standard set of board/table/roadmap views (Backlog, Priority board,
 Team items, Roadmap, My items), skipping any that already exist.
 
-> **Read `skills/nightgauge-repo-init/_includes/board-fields-and-link.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/board-fields-and-link.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -171,7 +171,7 @@ Team items, Roadmap, My items), skipping any that already exist.
 If the repo belongs to an existing multi-repo workspace, register it in the
 workspace config (handling N:1 shared-project topology). Standalone repos skip.
 
-> **Read `skills/nightgauge-repo-init/_includes/workspace-registration.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/workspace-registration.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -196,7 +196,7 @@ setting; the pipeline's local teardown still applies.)
 Create the pipeline directory structure and `.gitignore`, then generate
 `config.yaml` (with all field IDs) via the deterministic `config init` verb.
 
-> **Read `skills/nightgauge-repo-init/_includes/config-generation.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/config-generation.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -205,7 +205,7 @@ Create the pipeline directory structure and `.gitignore`, then generate
 Verify `project.id` and `project.fields` are present in `config.yaml` — without
 them every pipeline stage skips board status sync.
 
-> **Read `skills/nightgauge-repo-init/_includes/config-generation.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/config-generation.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -214,7 +214,7 @@ them every pipeline stage skips board status sync.
 Create the knowledge base directory structure (idempotent). Skip if
 `--skip-knowledge` was passed.
 
-> **Read `skills/nightgauge-repo-init/_includes/knowledge-and-complexity.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/knowledge-and-complexity.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -223,7 +223,7 @@ Create the knowledge base directory structure (idempotent). Skip if
 Create `.nightgauge/complexity-model.yaml` with baseline calibration (or
 seed it from another repo via `--seed-from`) if it does not already exist.
 
-> **Read `skills/nightgauge-repo-init/_includes/knowledge-and-complexity.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/knowledge-and-complexity.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -232,7 +232,7 @@ seed it from another repo via `--seed-from`) if it does not already exist.
 Output a clear summary of everything created/verified (labels, board, views,
 config, workspace, knowledge), then the recommended next steps.
 
-> **Read `skills/nightgauge-repo-init/_includes/summary-and-migration.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/summary-and-migration.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -241,7 +241,7 @@ config, workspace, knowledge), then the recommended next steps.
 Flag any existing issues using the legacy "Part of #X" body pattern that lack
 native GitHub sub-issue links (the pipeline requires native sub-issues).
 
-> **Read `skills/nightgauge-repo-init/_includes/summary-and-migration.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/summary-and-migration.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ---
 

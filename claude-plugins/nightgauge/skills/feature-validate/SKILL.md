@@ -79,14 +79,14 @@ For `type:spike` issues, run `nightgauge spike materialize "$ISSUE_NUMBER" --dry
 
 ## Supporting files (load on demand)
 
-- `skills/nightgauge-feature-validate/_includes/configuration.md` — config key defaults and environment overrides (read when a config default is needed)
-- `skills/nightgauge-feature-validate/_includes/context-load.md` — read in Phase 0 (read dev context), Phase 0.5 (batch detection), Phase 0.6 (AC ac-check steps)
-- `skills/nightgauge-feature-validate/_includes/test-setup.md` — read in Phase 1 (detect testing environment) and Phase 1.8 (PTC detection)
-- `skills/nightgauge-feature-validate/_includes/build-and-tests.md` — read in Phase 1.5 (build verification), Phase 1.6 (dead code), Phase 1.7 (baseline comparison), Phase 2 (run tests), Phase 2.4 (mobile MCP E2E), Step 2.5 (evidence-of-execution gate)
-- `skills/nightgauge-feature-validate/_includes/verify-ui-gate.md` — read in Phase 2.45 (web UI verification gate)
-- `skills/nightgauge-feature-validate/_includes/ci-and-knowledge.md` — read in Phase 2.5 (CI parity), Phase 2.6 (knowledge coverage), Phase 2.7 (pre-push gate)
-- `skills/nightgauge-feature-validate/_includes/feedback-and-commit.md` — read in Phase 3 (checklist), Phase 4 (feedback signals), Phase 4.9 (compute status), Phase 5 (commit and push)
-- `skills/nightgauge-feature-validate/_includes/context-and-board.md` — read in Phase 6 (write validate context) and Phase 7 (sync board)
+- `_includes/configuration.md` (same directory as this SKILL.md) — config key defaults and environment overrides (read when a config default is needed)
+- `_includes/context-load.md` (same directory as this SKILL.md) — read in Phase 0 (read dev context), Phase 0.5 (batch detection), Phase 0.6 (AC ac-check steps)
+- `_includes/test-setup.md` (same directory as this SKILL.md) — read in Phase 1 (detect testing environment) and Phase 1.8 (PTC detection)
+- `_includes/build-and-tests.md` (same directory as this SKILL.md) — read in Phase 1.5 (build verification), Phase 1.6 (dead code), Phase 1.7 (baseline comparison), Phase 2 (run tests), Phase 2.4 (mobile MCP E2E), Step 2.5 (evidence-of-execution gate)
+- `_includes/verify-ui-gate.md` (same directory as this SKILL.md) — read in Phase 2.45 (web UI verification gate)
+- `_includes/ci-and-knowledge.md` (same directory as this SKILL.md) — read in Phase 2.5 (CI parity), Phase 2.6 (knowledge coverage), Phase 2.7 (pre-push gate)
+- `_includes/feedback-and-commit.md` (same directory as this SKILL.md) — read in Phase 3 (checklist), Phase 4 (feedback signals), Phase 4.9 (compute status), Phase 5 (commit and push)
+- `_includes/context-and-board.md` (same directory as this SKILL.md) — read in Phase 6 (write validate context) and Phase 7 (sync board)
 
 ## Orchestration
 
@@ -123,7 +123,7 @@ printf '<!-- phase:start name="validate-environment" index=0 total=23 stage="fea
 printf '<!-- phase:start name="read-dev-context" index=1 total=23 stage="feature-validate" -->\n'
 ```
 
-> **Read `skills/nightgauge-feature-validate/_includes/context-load.md` now and follow its instructions before continuing this phase.** Extract the issue number from the branch; load `.nightgauge/pipeline/dev-{N}.json`. Missing file → ask git ground truth via `gate verify feature-dev` (#134); proceed against the working tree if git finds changes, otherwise exit 1.
+> **Read `_includes/context-load.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Extract the issue number from the branch; load `.nightgauge/pipeline/dev-{N}.json`. Missing file → ask git ground truth via `gate verify feature-dev` (#134); proceed against the working tree if git finds changes, otherwise exit 1.
 
 ### Phase 0.5: Batch Dev Context Detection
 
@@ -131,7 +131,7 @@ printf '<!-- phase:start name="read-dev-context" index=1 total=23 stage="feature
 printf '<!-- phase:start name="batch-detection" index=2 total=23 stage="feature-validate" -->\n'
 ```
 
-> **Read `skills/nightgauge-feature-validate/_includes/context-load.md` now and follow its instructions before continuing this phase.** If `dev-batch-{E}.json` exists, route to consolidated validation — build and test once for all changes.
+> **Read `_includes/context-load.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** If `dev-batch-{E}.json` exists, route to consolidated validation — build and test once for all changes.
 
 ### Phase 0.6: AC Completion Check (type:docs)
 
@@ -139,7 +139,7 @@ printf '<!-- phase:start name="batch-detection" index=2 total=23 stage="feature-
 printf '<!-- phase:start name="ac-completion-check" index=3 total=23 stage="feature-validate" -->\n'
 ```
 
-> **Read `skills/nightgauge-feature-validate/_includes/context-load.md` now and follow its instructions before continuing this phase.** `type:docs` issues only (no-op otherwise): set `AC_CHECK_REQUIRED=true` when the label is present, else `AC_CHECK_REQUIRED=false` and `AC_CHECK_SKIP=true`. Steps 0.6.2 (run ac-check), 0.6.2b (substantiate unchecked criteria against the diff and mark what the change demonstrably satisfies, #1233) and 0.6.3 (gate on result) live in the include — run all three; criteria that cannot be substantiated remain unchecked → exit 1 naming them.
+> **Read `_includes/context-load.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** `type:docs` issues only (no-op otherwise): set `AC_CHECK_REQUIRED=true` when the label is present, else `AC_CHECK_REQUIRED=false` and `AC_CHECK_SKIP=true`. Steps 0.6.2 (run ac-check), 0.6.2b (substantiate unchecked criteria against the diff and mark what the change demonstrably satisfies, #1233) and 0.6.3 (gate on result) live in the include — run all three; criteria that cannot be substantiated remain unchecked → exit 1 naming them.
 
 ### Phase 1: Detect Testing Environment (Deterministic)
 
@@ -147,7 +147,7 @@ printf '<!-- phase:start name="ac-completion-check" index=3 total=23 stage="feat
 printf '<!-- phase:start name="detect-testing-environment" index=4 total=23 stage="feature-validate" -->\n'
 ```
 
-> **Read `skills/nightgauge-feature-validate/_includes/test-setup.md` now and follow its instructions before continuing this phase.** Identify available frameworks and project type; no tests configured → proceed with manual checklist only.
+> **Read `_includes/test-setup.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Identify available frameworks and project type; no tests configured → proceed with manual checklist only.
 
 ### Phase 1.8: PTC Detection and Execution (CONDITIONAL)
 
@@ -155,7 +155,7 @@ printf '<!-- phase:start name="detect-testing-environment" index=4 total=23 stag
 printf '<!-- phase:start name="ptc-detection" index=5 total=23 stage="feature-validate" -->\n'
 ```
 
-> **Read `skills/nightgauge-feature-validate/_includes/test-setup.md` now and follow its instructions before continuing this phase.** If Programmatic Tool Calling is available, run validation through a single PTC session instead of individual Bash calls.
+> **Read `_includes/test-setup.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** If Programmatic Tool Calling is available, run validation through a single PTC session instead of individual Bash calls.
 
 ### Phase 1.4: Base Branch Freshness Check
 
@@ -173,7 +173,7 @@ Best-effort: if `FRESHNESS_CHECK_FAILED=true`, log a warning and continue — pr
 printf '<!-- phase:start name="build-verification" index=7 total=23 stage="feature-validate" -->\n'
 ```
 
-> **Read `skills/nightgauge-feature-validate/_includes/build-and-tests.md` now and follow its instructions before continuing this phase.** **Hard gate** (see Gotchas): build failure fails validation with `errorCategory: "build-failed"` and a captured stderr tail.
+> **Read `_includes/build-and-tests.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** **Hard gate** (see Gotchas): build failure fails validation with `errorCategory: "build-failed"` and a captured stderr tail.
 
 ### Phase 1.6: Dead Code Detection (CONFIGURABLE GATE)
 
@@ -181,7 +181,7 @@ printf '<!-- phase:start name="build-verification" index=7 total=23 stage="featu
 printf '<!-- phase:start name="dead-code-detection" index=8 total=23 stage="feature-validate" -->\n'
 ```
 
-> **Read `skills/nightgauge-feature-validate/_includes/build-and-tests.md` now and follow its instructions before continuing this phase.** When `validation.dead_code=gate` (default), current-issue error-severity dead-code findings block validation.
+> **Read `_includes/build-and-tests.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** When `validation.dead_code=gate` (default), current-issue error-severity dead-code findings block validation.
 
 ### Phase 1.7: Baseline Comparison for Test Failures
 
@@ -189,7 +189,7 @@ printf '<!-- phase:start name="dead-code-detection" index=8 total=23 stage="feat
 printf '<!-- phase:start name="baseline-comparison" index=9 total=23 stage="feature-validate" -->\n'
 ```
 
-> **Read `skills/nightgauge-feature-validate/_includes/build-and-tests.md` now and follow its instructions before continuing this phase.** Identify pre-existing failures (already failing on main) so the Ralph Loop skips them; runs ONLY when tests fail, skipped when dev context shows all passed.
+> **Read `_includes/build-and-tests.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Identify pre-existing failures (already failing on main) so the Ralph Loop skips them; runs ONLY when tests fail, skipped when dev context shows all passed.
 
 <!-- include: ../_shared/LONG_RUNNING_PROCESSES.md -->
 
@@ -199,7 +199,7 @@ printf '<!-- phase:start name="baseline-comparison" index=9 total=23 stage="feat
 printf '<!-- phase:start name="run-tests" index=10 total=23 stage="feature-validate" -->\n'
 ```
 
-> **Read `skills/nightgauge-feature-validate/_includes/build-and-tests.md` now and follow its instructions before continuing this phase.** Run integration and E2E tests (dev does NOT); do not re-run unit tests the dev context confirms passed. Failures → record in context; Ralph Loop auto-fix if enabled. On a fix issue that touched a test file, Step 2.2.5 also proves the new assertion can go red — revert the fix from a COPY and confirm the test FAILS; green there means the test is decoration. Step 2.5 then closes the phase with `nightgauge gate check-test-execution`: a suite the configured test command structurally cannot reach has never been executed by anything, so a passing run says nothing about it (#1261). Silent in any repo that excludes nothing.
+> **Read `_includes/build-and-tests.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Run integration and E2E tests (dev does NOT); do not re-run unit tests the dev context confirms passed. Failures → record in context; Ralph Loop auto-fix if enabled. On a fix issue that touched a test file, Step 2.2.5 also proves the new assertion can go red — revert the fix from a COPY and confirm the test FAILS; green there means the test is decoration. Step 2.5 then closes the phase with `nightgauge gate check-test-execution`: a suite the configured test command structurally cannot reach has never been executed by anything, so a passing run says nothing about it (#1261). Silent in any repo that excludes nothing.
 
 ### Phase 2.4: Mobile MCP E2E Tests (Agent-Driven)
 
@@ -207,7 +207,7 @@ printf '<!-- phase:start name="run-tests" index=10 total=23 stage="feature-valid
 printf '<!-- phase:start name="mobile-mcp-tests" index=11 total=23 stage="feature-validate" -->\n'
 ```
 
-> **Read `skills/nightgauge-feature-validate/_includes/build-and-tests.md` now and follow its instructions before continuing this phase.** Build the debug APK, boot the `Pixel_9_Pro` emulator, run every `test/mobile_mcp/specs/*.md` spec via mobile-mcp tools with screenshot/result-JSON evidence, stop the emulator. Config: `validation.mobile_mcp_tests` (default `"strict"` — spec failures block PR creation); zero-overhead skip when no runnable specs or no `flutter`/`adb`/`emulator` toolchain.
+> **Read `_includes/build-and-tests.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Build the debug APK, boot the `Pixel_9_Pro` emulator, run every `test/mobile_mcp/specs/*.md` spec via mobile-mcp tools with screenshot/result-JSON evidence, stop the emulator. Config: `validation.mobile_mcp_tests` (default `"strict"` — spec failures block PR creation); zero-overhead skip when no runnable specs or no `flutter`/`adb`/`emulator` toolchain.
 
 ### Phase 2.45: Web UI Verification Gate (verify-ui)
 
@@ -215,7 +215,7 @@ printf '<!-- phase:start name="mobile-mcp-tests" index=11 total=23 stage="featur
 printf '<!-- phase:start name="verify-ui-gate" index=12 total=23 stage="feature-validate" -->\n'
 ```
 
-> **Read `skills/nightgauge-feature-validate/_includes/verify-ui-gate.md` now and follow its instructions before continuing this phase.** When the diff touches frontend code in a UI-bearing repo, start the dev server, chain into `nightgauge-verify-ui` to drive the flow in a real browser, and gate on the result; emits the verify-ui `gate record-metric` per the include. Config: `validation.verify_ui_tests` (default `"strict"`). Trigger detection is deterministic (`nightgauge ci classify-ui-surface`), never LLM-judged. UI-relevant diff with no registered flow → record an explicit skip reason, never a silent pass.
+> **Read `_includes/verify-ui-gate.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** When the diff touches frontend code in a UI-bearing repo, start the dev server, chain into `nightgauge-verify-ui` to drive the flow in a real browser, and gate on the result; emits the verify-ui `gate record-metric` per the include. Config: `validation.verify_ui_tests` (default `"strict"`). Trigger detection is deterministic (`nightgauge ci classify-ui-surface`), never LLM-judged. UI-relevant diff with no registered flow → record an explicit skip reason, never a silent pass.
 
 ### Phase 2.5: CI Parity Check (Deterministic)
 
@@ -223,7 +223,7 @@ printf '<!-- phase:start name="verify-ui-gate" index=12 total=23 stage="feature-
 printf '<!-- phase:start name="ci-parity-check" index=13 total=23 stage="feature-validate" -->\n'
 ```
 
-> **Read `skills/nightgauge-feature-validate/_includes/ci-and-knowledge.md` now and follow its instructions before continuing this phase.** Run the repo's actual CI commands locally (format, lint, typecheck, full build). **HARD GATE**: they must pass (after up to 3 auto-fix attempts) or `VALIDATION_STATUS=failed` — PRs arrive green. The adversarial-review `gate record-metric` is emitted per the include.
+> **Read `_includes/ci-and-knowledge.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Run the repo's actual CI commands locally (format, lint, typecheck, full build). **HARD GATE**: they must pass (after up to 3 auto-fix attempts) or `VALIDATION_STATUS=failed` — PRs arrive green. The adversarial-review `gate record-metric` is emitted per the include.
 
 ### Phase 2.6: Knowledge Coverage Check
 
@@ -231,7 +231,7 @@ printf '<!-- phase:start name="ci-parity-check" index=13 total=23 stage="feature
 printf '<!-- phase:start name="knowledge-coverage-check" index=14 total=23 stage="feature-validate" -->\n'
 ```
 
-> **Read `skills/nightgauge-feature-validate/_includes/ci-and-knowledge.md` now and follow its instructions before continuing this phase.** Cross-check the implementation against the issue's `PRD.md` ACs and `decisions.md`; emit a coverage map and telemetry. Non-blocking by default (`knowledge.validate.strict: true` to gate); skip when `knowledge_path` is unset or the files are missing.
+> **Read `_includes/ci-and-knowledge.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Cross-check the implementation against the issue's `PRD.md` ACs and `decisions.md`; emit a coverage map and telemetry. Non-blocking by default (`knowledge.validate.strict: true` to gate); skip when `knowledge_path` is unset or the files are missing.
 
 ### Phase 2.7: Pre-Push Merge Validation Gate
 
@@ -239,7 +239,7 @@ printf '<!-- phase:start name="knowledge-coverage-check" index=14 total=23 stage
 printf '<!-- phase:start name="pre-push-merge-validation" index=15 total=23 stage="feature-validate" -->\n'
 ```
 
-> **Read `skills/nightgauge-feature-validate/_includes/ci-and-knowledge.md` now and follow its instructions before continuing this phase.** Validate against the latest target branch before commit/push (conflicts, merged-state regressions, security). **Gate**: on failure set `VALIDATION_STATUS=failed` and skip commit/push.
+> **Read `_includes/ci-and-knowledge.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Validate against the latest target branch before commit/push (conflicts, merged-state regressions, security). **Gate**: on failure set `VALIDATION_STATUS=failed` and skip commit/push.
 
 ### Phase 3: Generate Manual Checklist (Conditional)
 
@@ -247,7 +247,7 @@ printf '<!-- phase:start name="pre-push-merge-validation" index=15 total=23 stag
 printf '<!-- phase:start name="generate-checklist" index=16 total=23 stage="feature-validate" -->\n'
 ```
 
-> **Read `skills/nightgauge-feature-validate/_includes/feedback-and-commit.md` now and follow its instructions before continuing this phase.** Component-specific checklist from project type and changed files; auto-passed at >1000 passing tests and 0 failures; security items omitted (feature-dev ran them).
+> **Read `_includes/feedback-and-commit.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Component-specific checklist from project type and changed files; auto-passed at >1000 passing tests and 0 failures; security items omitted (feature-dev ran them).
 
 ### Phase 4: Feedback Signal Evaluation
 
@@ -255,11 +255,11 @@ printf '<!-- phase:start name="generate-checklist" index=16 total=23 stage="feat
 printf '<!-- phase:start name="feedback-signal-evaluation" index=17 total=23 stage="feature-validate" -->\n'
 ```
 
-> **Read `skills/nightgauge-feature-validate/_includes/feedback-and-commit.md` now and follow its instructions before continuing this phase.** Emit backward signals ONLY for upstream structural problems (planning errors, ambiguous requirements, model limits) — normal test failures dev simply fixes do NOT warrant a signal.
+> **Read `_includes/feedback-and-commit.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Emit backward signals ONLY for upstream structural problems (planning errors, ambiguous requirements, model limits) — normal test failures dev simply fixes do NOT warrant a signal.
 
 ### Phase 4.9: Compute Validation Status (Pre-Commit)
 
-> **Read `skills/nightgauge-feature-validate/_includes/feedback-and-commit.md` now and follow its instructions before continuing this phase.** Compute `VALIDATION_STATUS` before the commit decision so Phase 5 can gate on it.
+> **Read `_includes/feedback-and-commit.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Compute `VALIDATION_STATUS` before the commit decision so Phase 5 can gate on it.
 
 ### Phase 5: Commit and Push Validated Code
 
@@ -267,7 +267,7 @@ printf '<!-- phase:start name="feedback-signal-evaluation" index=17 total=23 sta
 printf '<!-- phase:start name="commit-and-push" index=18 total=23 stage="feature-validate" -->\n'
 ```
 
-> **Read `skills/nightgauge-feature-validate/_includes/feedback-and-commit.md` now and follow its instructions before continuing this phase.** Commit all changes (feature-dev implementation + Ralph fixes) and push — the commit lives here, not in feature-dev (#1608). **Gate**: if `VALIDATION_STATUS` is `"failed"`, do NOT commit or push. Commit-skip evidence rule: see Gotchas.
+> **Read `_includes/feedback-and-commit.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Commit all changes (feature-dev implementation + Ralph fixes) and push — the commit lives here, not in feature-dev (#1608). **Gate**: if `VALIDATION_STATUS` is `"failed"`, do NOT commit or push. Commit-skip evidence rule: see Gotchas.
 
 ### Phase 6: Write Validate Context
 
@@ -275,7 +275,7 @@ printf '<!-- phase:start name="commit-and-push" index=18 total=23 stage="feature
 printf '<!-- phase:start name="write-validate-context" index=19 total=23 stage="feature-validate" -->\n'
 ```
 
-> **Read `skills/nightgauge-feature-validate/_includes/context-and-board.md` now and follow its instructions before continuing this phase.** Write `.nightgauge/pipeline/validate-{N}.json` for `/nightgauge-pr-create` (schema: [docs/CONTEXT_ARCHITECTURE.md](../../../../docs/CONTEXT_ARCHITECTURE.md)) — **every run, even on failure** (Exit Contract above).
+> **Read `_includes/context-and-board.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Write `.nightgauge/pipeline/validate-{N}.json` for `/nightgauge-pr-create` (schema: [docs/CONTEXT_ARCHITECTURE.md](../../../../docs/CONTEXT_ARCHITECTURE.md)) — **every run, even on failure** (Exit Contract above).
 
 ### Phase 7: Sync Project Board Status
 
@@ -283,7 +283,7 @@ printf '<!-- phase:start name="write-validate-context" index=19 total=23 stage="
 printf '<!-- phase:start name="sync-project-status" index=20 total=23 stage="feature-validate" -->\n'
 ```
 
-> **Read `skills/nightgauge-feature-validate/_includes/context-and-board.md` now and follow its instructions before continuing this phase.** Sync board Status to "In progress" via Go binary `project move-status` (idempotent, best-effort — never fail validation over it).
+> **Read `_includes/context-and-board.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Sync board Status to "In progress" via Go binary `project move-status` (idempotent, best-effort — never fail validation over it).
 
 ### Phase 8: Output Summary and Signal Complete
 

@@ -270,21 +270,21 @@ if ! "$SCRIPT_DIR/check-runtime-assets.sh" "$INSTALLED_DIR/dist"; then
 fi
 
 # ---------------------------------------------------------------------------
-# Refresh the GLOBAL agent skill installs (Claude Code plugins + Codex skills)
-# from this local working tree, so the skills you edit here are usable in any
-# project you open — not just inside this repo. The .vsix above already bundles
-# the pipeline skills for the extension; this covers the two tool-native global
-# locations the extension does not own.
+# Refresh the GLOBAL agent skill installs (Claude Code plugins + Codex skills
+# + Grok skills) from this local working tree, so the skills you edit here are
+# usable in any project you open — not just inside this repo. The .vsix above
+# already bundles the pipeline skills for the extension; this covers the three
+# tool-native global locations the extension does not own.
 #
 # Best-effort: the extension is already installed at this point, so a skill-sync
-# hiccup (e.g. Claude/Codex not installed) must NOT fail the dev-install.
+# hiccup (e.g. Claude/Codex/Grok not installed) must NOT fail the dev-install.
 # Set NIGHTGAUGE_SKIP_SKILL_SYNC=1 to skip entirely.
 # ---------------------------------------------------------------------------
 if [ "${NIGHTGAUGE_SKIP_SKILL_SYNC:-0}" != "1" ]; then
-  echo "==> Syncing agent skills (Claude Code + Codex) from local working tree..."
+  echo "==> Syncing agent skills (Claude Code + Codex + Grok) from local working tree..."
   if ! bash "$REPO_ROOT/scripts/install-agent-skills.sh"; then
     echo "WARNING: agent skill sync reported an error — the extension installed"
-    echo "         fine, but Claude Code/Codex skills may not be fully refreshed."
+    echo "         fine, but Claude Code/Codex/Grok skills may not be fully refreshed."
     echo "         Re-run manually: ./scripts/install-agent-skills.sh"
   fi
 fi

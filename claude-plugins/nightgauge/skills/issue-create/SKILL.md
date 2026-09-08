@@ -55,12 +55,12 @@ Do not inline large label taxonomies or template text in this skill.
 
 ## Supporting files (load on demand)
 
-- `skills/nightgauge-issue-create/_includes/environment-and-content.md` — read in Phases 1, 2
-- `skills/nightgauge-issue-create/_includes/epic-routing.md` — read in Phases 2.4, 2.5, 2.6
-- `skills/nightgauge-issue-create/_includes/spike-routing.md` — read in Phases 2.7, 2.X
-- `skills/nightgauge-issue-create/_includes/scope-gates.md` — read in Phases 2.8, 2.85, 2.9
-- `skills/nightgauge-issue-create/_includes/create-and-dependencies.md` — read in Phases 3, 3.5
-- `skills/nightgauge-issue-create/_includes/board-and-audit.md` — read in Phases 4, 4.5, 4.6, 4.7, 4.8, 4.9, 5, 6
+- `_includes/environment-and-content.md` (same directory as this SKILL.md) — read in Phases 1, 2
+- `_includes/epic-routing.md` (same directory as this SKILL.md) — read in Phases 2.4, 2.5, 2.6
+- `_includes/spike-routing.md` (same directory as this SKILL.md) — read in Phases 2.7, 2.X
+- `_includes/scope-gates.md` (same directory as this SKILL.md) — read in Phases 2.8, 2.85, 2.9
+- `_includes/create-and-dependencies.md` (same directory as this SKILL.md) — read in Phases 3, 3.5
+- `_includes/board-and-audit.md` (same directory as this SKILL.md) — read in Phases 4, 4.5, 4.6, 4.7, 4.8, 4.9, 5, 6
 
 ## Gotchas
 
@@ -90,61 +90,61 @@ Do not inline large label taxonomies or template text in this skill.
 
 Verify the Go binary, `GITHUB_TOKEN`, and a GitHub-backed remote are present before any work; stop with an exact remediation command if a prerequisite fails.
 
-> **Read `skills/nightgauge-issue-create/_includes/environment-and-content.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/environment-and-content.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ### Phase 2: Build Issue Content
 
 Classify the issue (implementation vs spike), draft a concise, actionable title and body with acceptance criteria **and a `## Verification` section a reviewer could run**, state any security hazard in the proposed design as an acceptance criterion, choose the parent epic from the open-epic list, determine labels, and size the issue from the complexity model and file-based heuristics.
 
-> **Read `skills/nightgauge-issue-create/_includes/environment-and-content.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/environment-and-content.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ### Phase 2.4: Multi-Repo Sub-Issue Routing (Mandatory for Epics)
 
 **Gate**: Runs UNCONDITIONALLY for any epic with sub-issues; skipped for standalone issues. Build, hard-gate, and persist a routing manifest mapping each sub-issue to its target repo/project BEFORE any GitHub mutation — the #3232 footgun defense.
 
-> **Read `skills/nightgauge-issue-create/_includes/epic-routing.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/epic-routing.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ### Phase 2.5: Parallel Decomposition (Agent Teams)
 
 **Gate**: Check `agent_teams.enabled`; if disabled, skip to Phase 2.6. Detect dependencies, compute execution waves, assign per-issue complexity and model suggestions, and embed dependency metadata in each sub-issue body.
 
-> **Read `skills/nightgauge-issue-create/_includes/epic-routing.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/epic-routing.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ### Phase 2.6: Dependency Analysis (Always for Epics)
 
 **Gate**: Runs for epics with 2+ sub-issues when Phase 2.5 was skipped. Use the Go binary (`epic plan-waves`) for deterministic wave assignment, with a prose-based fallback when sub-issues are not yet created.
 
-> **Read `skills/nightgauge-issue-create/_includes/epic-routing.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/epic-routing.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ### Phase 2.7: Spike + Dependent Implementation Routing
 
 **Gate**: Runs for epics with a spike + dependents, or cross-repo dependents sharing an architectural decision. Route each dependent group through exactly one of Path A (recommendations), Path B (concurrent siblings — triggers the single-point-of-failure guard), or Path C (spike-with-implementation, the cross-repo default).
 
-> **Read `skills/nightgauge-issue-create/_includes/spike-routing.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/spike-routing.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ### Phase 2.8: Cross-Repo Reality Check (Recommended for API Issues)
 
 **Gate**: Runs when the issue references platform API endpoints, cross-repo dependencies, or companion-repo integration; skip for purely internal issues. Verify endpoint/companion-repo assumptions against reality and record a `## Cross-Repo Dependencies` section in the body.
 
-> **Read `skills/nightgauge-issue-create/_includes/scope-gates.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/scope-gates.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ### Phase 2.85: Oversized-Scope Hard-Gate
 
 **Gate**: Runs UNCONDITIONALLY for **every issue type**. **Blocking** — an issue bundling many independent targets/refactors MUST be decomposed into an epic, or carry an explicit `<!-- nightgauge:oversized-scope-accepted -->` marker, before any GitHub mutation (the #3811 $112-runaway defense).
 
-> **Read `skills/nightgauge-issue-create/_includes/scope-gates.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/scope-gates.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ### Phase 2.9: Epic Decomposition Hard-Gate
 
 **Gate**: Runs UNCONDITIONALLY when `TYPE_LABEL=epic`; skipped for non-epics. **Blocking** — every epic creation MUST fall into one of three explicit shapes (Path A sub-issues, Path B placeholder chore, Path C standalone declaration) before any GitHub mutation.
 
-> **Read `skills/nightgauge-issue-create/_includes/scope-gates.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/scope-gates.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ### Phase 2.X: Spike Artifact Path Selection
 
 **Gate**: Only runs for `type:spike` issues. Compute, validate, and scaffold the artifact path (`docs/spikes/<N>-<slug>.md` and the `yaml recommendations` block) so the issue is spike-contract-conformant by default and `feature-validate` has a concrete path to check.
 
-> **Read `skills/nightgauge-issue-create/_includes/spike-routing.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/spike-routing.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -152,61 +152,61 @@ Classify the issue (implementation vs spike), draft a concise, actionable title 
 
 Create the issue with `nightgauge issue create`/`create-sub`, capturing the issue number. For epics, the Phase 2.4 routing manifest is the mandatory source of truth for every sub-issue's target repo — never re-derive routing. Includes the `type:spike` pre-creation validation hard-gate.
 
-> **Read `skills/nightgauge-issue-create/_includes/create-and-dependencies.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/create-and-dependencies.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ### Phase 3.5: Set Dependency Relationships (Epic Sub-Issues)
 
 **Gate**: Always runs for epics with 2+ sub-issues. Set GitHub's native `addBlockedBy` relationships (cross-epic in Step 1, intra-epic in Step 2) so the pipeline respects execution ordering — body text and labels are invisible to it.
 
-> **Read `skills/nightgauge-issue-create/_includes/create-and-dependencies.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/create-and-dependencies.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ### Phase 4: Sync Project Board and Set Fields (Mandatory)
 
 All created issues MUST be added to the project board with Status set, passing BOTH `--repo` and `--project` from the Phase 2.4 manifest (#3232) — defaults are forbidden. Priority and Size fields are set from labels by `project add`.
 
-> **Read `skills/nightgauge-issue-create/_includes/board-and-audit.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/board-and-audit.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ### Phase 4.6: Promote to Ready (After All Relationships Are Configured)
 
 **Epics only.** After board sync, fields, `blockedBy`, and `addSubIssue` are all complete, promote the epic and its sub-issues from Backlog to Ready — closing the race window where the scheduler dispatches before relationships exist.
 
-> **Read `skills/nightgauge-issue-create/_includes/board-and-audit.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/board-and-audit.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ### Phase 4.7: Verification (Mandatory)
 
 Verify board fields were actually set (via binary exit codes; assert `.status == "Ready"` for standalone issues). Do NOT report success if any field is empty — empty fields make issues invisible in the tree views.
 
-> **Read `skills/nightgauge-issue-create/_includes/board-and-audit.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/board-and-audit.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ### Phase 4.8: Cross-Repo Project Membership Audit (Mandatory for Epics)
 
 **Gate**: Runs UNCONDITIONALLY for any epic that produced sub-issues. Audit each sub-issue's actual project membership against the Phase 2.4 manifest; a mismatch is fatal. The manifest is deleted only after this audit passes.
 
-> **Read `skills/nightgauge-issue-create/_includes/board-and-audit.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/board-and-audit.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ### Phase 4.5: Knowledge Scaffolding (--with-knowledge)
 
 **Gate**: Only runs when `--with-knowledge` is passed. Scaffold a knowledge directory for the new issue (and append a knowledge reference to each sub-issue body for epics).
 
-> **Read `skills/nightgauge-issue-create/_includes/board-and-audit.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/board-and-audit.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ### Phase 4.9: Write Creation Manifest
 
 Write the strict-mode creation manifest (`.nightgauge/pipeline/issue-create-manifest-<ts>.json`) consumed by the Phase 6 terminal audit, and validate it parses as JSON.
 
-> **Read `skills/nightgauge-issue-create/_includes/board-and-audit.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/board-and-audit.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ### Phase 5: Return Structured Result
 
 Return the issue number/URL, final metadata, parent-link status, knowledge path, manifest path, and the suggested next command (`/nightgauge-issue-pickup <issue-number>`).
 
-> **Read `skills/nightgauge-issue-create/_includes/board-and-audit.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/board-and-audit.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ### Phase 6: Terminal Audit Pass (Mandatory)
 
 **Gate**: Runs UNCONDITIONALLY after Phase 5 unless `--no-audit`. Invoke `/nightgauge:issue-audit --manifest <path>`; its exit code is authoritative (0 READY, 1 NEEDS FIXES, 2 failure) and propagates.
 
-> **Read `skills/nightgauge-issue-create/_includes/board-and-audit.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/board-and-audit.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ## Decision Rules
 

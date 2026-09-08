@@ -66,6 +66,7 @@ import { ContextWatcherService } from "../services/ContextWatcherService";
 import { RefreshTriggerService } from "../services/RefreshTriggerService";
 import { PluginSetupService } from "../services/PluginSetupService";
 import { CodexSetupService } from "../services/CodexSetupService";
+import { GrokSetupService } from "../services/GrokSetupService";
 import { NotificationService } from "../services/NotificationService";
 import { PipelineStateService, type PipelineState } from "../services/PipelineStateService";
 import { HeadlessOrchestrator } from "../services/HeadlessOrchestrator";
@@ -200,6 +201,7 @@ export interface ExtensionServices {
   outputWindow: OutputWindow;
   pluginSetupService: PluginSetupService;
   codexSetupService: CodexSetupService;
+  grokSetupService: GrokSetupService;
   notificationService: NotificationService;
   pipelineStateService: PipelineStateService | null;
   issueQueueService: IssueQueueService | null;
@@ -774,6 +776,13 @@ export async function initializeServices(
     logger.warn("Codex setup check failed", { error });
   });
   context.subscriptions.push(codexSetupService);
+
+  // Initialize Grok setup service and check for Grok skill installation
+  const grokSetupService = new GrokSetupService(context);
+  grokSetupService.checkAndPromptSetup().catch((error) => {
+    logger.warn("Grok setup check failed", { error });
+  });
+  context.subscriptions.push(grokSetupService);
 
   // ── 4. Notification service ───────────────────────────────────────────
 
@@ -4559,6 +4568,7 @@ export async function initializeServices(
     outputWindow,
     pluginSetupService,
     codexSetupService,
+    grokSetupService,
     notificationService,
     pipelineStateService,
     issueQueueService,

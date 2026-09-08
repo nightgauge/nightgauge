@@ -100,6 +100,17 @@ claude plugin install nightgauge@nightgauge-plugins
 /nightgauge:issue-pickup
 ```
 
+### Grok Build TUI
+
+```bash
+# Home copy (~/.grok/skills) plus grok plugin install
+./scripts/install-agent-skills.sh --grok-only
+```
+
+Skills then resolve as `/nightgauge-issue-create` (canonical names) or
+`/issue-create` when loaded via the plugin. `dev-install.sh` and the
+VS Code extension activate path install the same tree.
+
 ### OpenAI Codex CLI (Beta Adapter)
 
 Codex support is available through both slash commands and the unified stage
@@ -247,6 +258,7 @@ Skills work with any AI tool supporting the
 | ------------------ | ------------------------------------------------ |
 | **GitHub Copilot** | Copy `skills/nightgauge-*/` to `.github/skills/` |
 | **OpenAI Codex**   | Copy to `~/.codex/skills/`                       |
+| **Grok Build TUI** | Copy to `~/.grok/skills/`                        |
 | **Cursor IDE**     | Copy to `.cursor/skills/`                        |
 
 ---

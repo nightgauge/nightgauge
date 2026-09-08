@@ -1,8 +1,8 @@
 /**
  * CodexSetupService - Codex CLI command/skill installation management
  *
- * Installs Nightgauge Codex slash commands into ~/.codex/commands and, when
- * available in the workspace, installs Nightgauge skills into ~/.codex/skills.
+ * Installs Nightgauge Codex slash commands into ~/.codex/commands and copies
+ * skills into ~/.codex/skills from the workspace checkout or the VSIX bundle.
  */
 
 import * as vscode from "vscode";
@@ -12,6 +12,7 @@ import * as os from "os";
 import { exec } from "child_process";
 import { promisify } from "util";
 import { getPrefixedMainChannel } from "../utils/logger";
+import { copySkillsTree, resolveBundledSkillsDir } from "./bundledSkills";
 
 const execAsync = promisify(exec);
 
@@ -140,27 +141,18 @@ export class CodexSetupService implements vscode.Disposable {
         );
       }
 
-      // Best-effort skill sync from workspace (if present).
+      // Skill sync: workspace checkout first (maintainers), else the VSIX
+      // bundle so marketplace users still get ~/.codex/skills.
       const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      if (workspaceRoot) {
-        const sourceSkillsDir = path.join(workspaceRoot, "skills");
+      const workspaceSkills =
+        workspaceRoot && fs.existsSync(path.join(workspaceRoot, "skills"))
+          ? path.join(workspaceRoot, "skills")
+          : null;
+      const sourceSkillsDir =
+        workspaceSkills ?? resolveBundledSkillsDir(this.context.extensionPath);
+      if (sourceSkillsDir) {
         const skillsDest = path.join(codexHome, "skills");
-        if (fs.existsSync(sourceSkillsDir)) {
-          await fs.promises.mkdir(skillsDest, { recursive: true });
-          const entries = await fs.promises.readdir(sourceSkillsDir, {
-            withFileTypes: true,
-          });
-          for (const entry of entries) {
-            if (!entry.isDirectory()) continue;
-            const sourceDir = path.join(sourceSkillsDir, entry.name);
-            const skillFile = path.join(sourceDir, "SKILL.md");
-            if (!fs.existsSync(skillFile)) continue;
-
-            const targetDir = path.join(skillsDest, entry.name);
-            await fs.promises.rm(targetDir, { recursive: true, force: true });
-            await fs.promises.cp(sourceDir, targetDir, { recursive: true });
-          }
-        }
+        await copySkillsTree(sourceSkillsDir, skillsDest);
       }
 
       await this.context.globalState.update(CodexSetupService.INSTALLED_KEY, true);

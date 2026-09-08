@@ -54,6 +54,7 @@ Copy skills directly to your tool's skills directory:
 | -------------- | ------------------ |
 | GitHub Copilot | `.github/skills/`  |
 | OpenAI Codex   | `~/.codex/skills/` |
+| Grok Build TUI | `~/.grok/skills/`  |
 | Cursor IDE     | `.cursor/skills/`  |
 
 Skills are located in the `skills/` directory at the root of this repository.

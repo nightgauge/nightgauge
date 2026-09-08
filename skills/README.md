@@ -18,14 +18,15 @@ Agent Skills are portable, reusable capabilities that can be invoked by AI codin
 
 ### Supported AI Tools
 
-| Tool               | Invocation                 | Skill Location                            |
-| ------------------ | -------------------------- | ----------------------------------------- |
-| **Claude Code**    | `/skill-name` (via plugin) | Via claude-plugins wrapper                |
-| **OpenAI Codex**   | `$skill-name`              | `~/.codex/skills/` or `.codex/skills/`    |
-| **GitHub Copilot** | Agent Skills UI            | `.github/skills/` or `~/.copilot/skills/` |
-| **Cursor IDE**     | Agent Skills               | `.cursor/skills/`                         |
-| **Gemini CLI**     | Agent Skills               | `.gemini/skills/`                         |
-| **VS Code**        | Copilot Agent Skills       | `.github/skills/`                         |
+| Tool               | Invocation                                    | Skill Location                            |
+| ------------------ | --------------------------------------------- | ----------------------------------------- |
+| **Claude Code**    | `/skill-name` (via plugin)                    | Via claude-plugins wrapper                |
+| **OpenAI Codex**   | `$skill-name`                                 | `~/.codex/skills/` or `.codex/skills/`    |
+| **Grok Build TUI** | `/issue-create` or `/nightgauge-issue-create` | `~/.grok/skills/`                         |
+| **GitHub Copilot** | Agent Skills UI                               | `.github/skills/` or `~/.copilot/skills/` |
+| **Cursor IDE**     | Agent Skills                                  | `.cursor/skills/`                         |
+| **Gemini CLI**     | Agent Skills                                  | `.gemini/skills/`                         |
+| **VS Code**        | Copilot Agent Skills                          | `.github/skills/`                         |
 
 ---
 

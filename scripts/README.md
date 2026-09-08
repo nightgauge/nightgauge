@@ -12,13 +12,14 @@ directly.
 
 Installs/refreshes the Nightgauge skills into the agent tools on this
 machine, sourced from the **local working tree** — so skills you edit here are
-usable in any project you open with Claude Code or Codex.
+usable in any project you open with Claude Code, Codex, or Grok.
 
 ```bash
 # Usage
-./scripts/install-agent-skills.sh                # refresh Claude Code + Codex
+./scripts/install-agent-skills.sh                # refresh Claude Code + Codex + Grok
 ./scripts/install-agent-skills.sh --claude-only  # only Claude Code plugins
 ./scripts/install-agent-skills.sh --codex-only   # only Codex (~/.codex/skills)
+./scripts/install-agent-skills.sh --grok-only    # only Grok (~/.grok/skills + plugin)
 ```
 
 What it does:
@@ -28,6 +29,11 @@ What it does:
   `/nightgauge:<name>`).
 - **Codex:** mirrors every `skills/*` skill into `~/.codex/skills/` (invoked as
   `$nightgauge-<name>`).
+- **Grok:** mirrors every `skills/*` skill into `~/.grok/skills/` under the
+  canonical names (invoked as `/nightgauge-issue-create`) and best-effort
+  installs the Nightgauge plugin via `grok plugin marketplace add` /
+  `grok plugin install … --trust`. Canonical copies never receive
+  `disable-model-invocation` (that injection is Claude-plugin-only).
 
 Runs automatically as part of the VS Code extension `dev-install.sh` (set
 `NIGHTGAUGE_SKIP_SKILL_SYNC=1` to skip). The extension itself bundles the

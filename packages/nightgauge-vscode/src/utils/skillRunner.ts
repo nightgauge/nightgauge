@@ -3542,17 +3542,18 @@ function loadAutoAcceptConfigSync(
  * Rewrite skill-relative read-directive paths to absolute host paths (#196).
  *
  * ADR-010's progressive-disclosure directives ("Read
- * `skills/<name>/_includes/foo.md` now…") assumed CWD is the nightgauge
- * repo root — only true when dogfooding nightgauge itself. Cross-repo
- * pipeline runs spawn with cwd = the TARGET repo's worktree, which has no
- * skills/ directory, so agents ran `find / -maxdepth 6` (~40s whole-fs
- * scans) and converged on ~/.codex/skills — a stale-version /
- * cross-adapter contamination hazard. The runner knows the absolute skill
- * directory at prompt-build time; rewrite the skill's OWN references (its
- * resolved dir basename, the canonical `nightgauge-<stage>` name, and the
- * prefix-stripped `<stage>` variant used by the plugin cache) plus the
- * sibling `skills/_shared/` — never cross-skill references, which must
- * keep naming the other skill.
+ * `_includes/foo.md` (same directory as this SKILL.md) now…", historically
+ * `skills/<name>/_includes/foo.md`) assumed CWD is the nightgauge repo
+ * root — only true when dogfooding nightgauge itself. Cross-repo pipeline
+ * runs spawn with cwd = the TARGET repo's worktree, which has no skills/
+ * directory, so agents ran `find / -maxdepth 6` (~40s whole-fs scans) and
+ * converged on ~/.codex/skills — a stale-version / cross-adapter
+ * contamination hazard. The runner knows the absolute skill directory at
+ * prompt-build time; rewrite the skill's OWN references (its resolved dir
+ * basename, the canonical `nightgauge-<stage>` name, the prefix-stripped
+ * `<stage>` variant used by the plugin cache, and backtick-wrapped
+ * `_includes/`) plus the sibling `skills/_shared/` — never cross-skill
+ * references, which must keep naming the other skill.
  */
 export function rewriteSkillRelativePaths(
   content: string,
@@ -3566,6 +3567,10 @@ export function rewriteSkillRelativePaths(
   for (const name of ownNames) {
     out = out.split(`skills/${name}/`).join(dir + path.sep);
   }
+  // Skill-relative form used by Grok/Codex/plugin copies that are not a
+  // nightgauge checkout. Require the leading backtick so an already-absolute
+  // `/abs/_includes/` path is not rewritten again.
+  out = out.split("`_includes/").join("`" + dir + path.sep + "_includes/");
   return out;
 }
 

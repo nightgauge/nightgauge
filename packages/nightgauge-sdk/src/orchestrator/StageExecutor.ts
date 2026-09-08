@@ -410,6 +410,7 @@ export function rewriteStageSkillPaths(
   for (const name of ownNames) {
     rewritten = rewritten.split(`skills/${name}/`).join(`${directory}${path.sep}`);
   }
+  rewritten = rewritten.split("`_includes/").join("`" + directory + path.sep + "_includes/");
   return rewritten;
 }
 

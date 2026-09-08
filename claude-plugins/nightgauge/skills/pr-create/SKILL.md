@@ -69,13 +69,13 @@ authoritative output of the materializer.
 
 ## Supporting files (load on demand)
 
-- `skills/nightgauge-pr-create/_includes/context-load.md` — read in Phases 1
+- `_includes/context-load.md` (same directory as this SKILL.md) — read in Phases 1
   and 1.5 (parallel context gathering, stage-start signal, batch detection)
-- `skills/nightgauge-pr-create/_includes/pr-sections.md` — read in Phases
+- `_includes/pr-sections.md` (same directory as this SKILL.md) — read in Phases
   1.7 and 1.8 (Knowledge and What-to-Test PR-body sections)
-- `skills/nightgauge-pr-create/_includes/security-and-scope.md` — read in
+- `_includes/security-and-scope.md` (same directory as this SKILL.md) — read in
   Phases 2.5 and 2.6 (security re-scan, scope drift gate)
-- `skills/nightgauge-pr-create/_includes/create-and-ci.md` — read in Phases
+- `_includes/create-and-ci.md` (same directory as this SKILL.md) — read in Phases
   3, 3.6, and 3.5 (create PR, verify PR exists, snapshot CI)
 
 ## Orchestration
@@ -211,7 +211,7 @@ fi
 
 **Steps 1.3–1.7: Gather context in parallel, merge it, load knowledge, signal start**
 
-> **Read `skills/nightgauge-pr-create/_includes/context-load.md` now and
+> **Read `_includes/context-load.md` (same directory as this SKILL.md) now and
 > follow its instructions before continuing this phase.**
 
 ### Phase 1.5: Batch Context Detection
@@ -223,7 +223,7 @@ printf '<!-- phase:start name="batch-detection" index=2 total=14 stage="pr-creat
 **PURPOSE**: Detect batch mode when `dev-batch-{E}.json` exists and create a
 single PR with multi-issue closing keywords.
 
-> **Read `skills/nightgauge-pr-create/_includes/context-load.md` now and
+> **Read `_includes/context-load.md` (same directory as this SKILL.md) now and
 > follow its instructions before continuing this phase.**
 
 ### Phase 1.7: Build Knowledge Section
@@ -236,7 +236,7 @@ printf '<!-- phase:start name="build-knowledge-section" index=3 total=14 stage="
 base entries created during the pipeline run. This section is **omitted
 entirely** when no knowledge entries exist — never include an empty section.
 
-> **Read `skills/nightgauge-pr-create/_includes/pr-sections.md` now and
+> **Read `_includes/pr-sections.md` (same directory as this SKILL.md) now and
 > follow its instructions before continuing this phase.**
 
 ### Phase 1.8: Build What to Test Section
@@ -251,7 +251,7 @@ before `## Knowledge`. **No-op** when the dependency graph file is absent or
 when the git diff produces no output — set `WHAT_TO_TEST_SECTION=""` and
 continue without error.
 
-> **Read `skills/nightgauge-pr-create/_includes/pr-sections.md` now and
+> **Read `_includes/pr-sections.md` (same directory as this SKILL.md) now and
 > follow its instructions before continuing this phase.**
 
 ### Phase 2: Preflight Checks
@@ -311,7 +311,7 @@ introduced during implementation that tests wouldn't detect.
 **Inputs**: `COMMIT_SHA` from `validate-{N}.json` (set in Phase 1). Scans files
 changed between `BASE_BRANCH` and HEAD.
 
-> **Read `skills/nightgauge-pr-create/_includes/security-and-scope.md` now
+> **Read `_includes/security-and-scope.md` (same directory as this SKILL.md) now
 > and follow its instructions before continuing this phase.**
 
 ### Phase 2.6: Scope Drift Gate
@@ -325,7 +325,7 @@ fall within the configured allowlist. Out-of-scope changes indicate scope drift
 — often caused by stale worktrees reverting recently-merged work alongside
 legitimate scoped changes (see Issue #3040 and platform incident #840).
 
-> **Read `skills/nightgauge-pr-create/_includes/security-and-scope.md` now
+> **Read `_includes/security-and-scope.md` (same directory as this SKILL.md) now
 > and follow its instructions before continuing this phase.**
 
 The resulting `$SCOPE_DRIFT_STATUS` flows into `preflight_results.scope_drift_check`
@@ -343,7 +343,7 @@ Create the PR using the Go binary. The skill constructs the title, body (with
 correct closing keywords), and handles reviewer assignment with self-reviewer
 guard. Append `KNOWLEDGE_SECTION` to the PR body when non-empty.
 
-> **Read `skills/nightgauge-pr-create/_includes/create-and-ci.md` now and
+> **Read `_includes/create-and-ci.md` (same directory as this SKILL.md) now and
 > follow its instructions before continuing this phase.**
 
 ### Phase 3.6: Verify PR Created
@@ -357,7 +357,7 @@ the feature branch. Protects against silent pr-create failures where the subagen
 exits cleanly but never invokes `nightgauge forge pr create` (or the Go binary's `pr create`
 command).
 
-> **Read `skills/nightgauge-pr-create/_includes/create-and-ci.md` now and
+> **Read `_includes/create-and-ci.md` (same directory as this SKILL.md) now and
 > follow its instructions before continuing this phase.**
 
 **Result**: If PR was found, continue to Phase 3.5 normally. If not found, stage
@@ -410,7 +410,7 @@ gracefully (sets `CI_MONITORED=false`) if it is absent.
 
 **Headless safe**: No interactive prompts. All output is informational only.
 
-> **Read `skills/nightgauge-pr-create/_includes/create-and-ci.md` now and
+> **Read `_includes/create-and-ci.md` (same directory as this SKILL.md) now and
 > follow its instructions before continuing this phase.** It carries Steps
 > 3.5.1–3.5.5, including the full list of `CI_*` variables passed to Phase 4.
 

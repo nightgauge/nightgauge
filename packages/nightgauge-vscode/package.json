@@ -277,6 +277,11 @@
         "icon": "$(terminal)"
       },
       {
+        "command": "nightgauge.setupGrok",
+        "title": "Nightgauge: Setup Grok Skills",
+        "icon": "$(terminal)"
+      },
+      {
         "command": "nightgauge.resetPipeline",
         "title": "Nightgauge: Reset Pipeline",
         "icon": "$(clear-all)"
@@ -1506,7 +1511,7 @@
         "nightgauge.plugins.autoPrompt": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically prompt to install Claude plugins and Codex commands on startup"
+          "description": "Automatically prompt to install Claude plugins, Codex commands, and Grok skills on startup"
         },
         "nightgauge.plugins.marketplaceUrl": {
           "type": "string",

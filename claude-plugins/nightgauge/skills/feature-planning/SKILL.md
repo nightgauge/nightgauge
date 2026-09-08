@@ -66,10 +66,10 @@ Do not duplicate full schema or template content here; read docs on demand.
 
 ## Supporting files (load on demand)
 
-- `skills/nightgauge-feature-planning/_includes/feedback-and-context.md` — read in Phases 0, 1, 1.5 (feedback/revision detection, context load + stage start, batch detection)
-- `skills/nightgauge-feature-planning/_includes/pattern-and-docs.md` — read in Phases 2.5, 3 (pattern mining, documentation-first analysis)
-- `skills/nightgauge-feature-planning/_includes/knowledge-recall.md` — read in Phases 3.5, 3.7 (knowledge base read, recall prior decisions)
-- `skills/nightgauge-feature-planning/_includes/plan-and-enrichment.md` — read in Phases 4, 5.5 (produce plan file, knowledge base enrichment)
+- `_includes/feedback-and-context.md` (same directory as this SKILL.md) — read in Phases 0, 1, 1.5 (feedback/revision detection, context load + stage start, batch detection)
+- `_includes/pattern-and-docs.md` (same directory as this SKILL.md) — read in Phases 2.5, 3 (pattern mining, documentation-first analysis)
+- `_includes/knowledge-recall.md` (same directory as this SKILL.md) — read in Phases 3.5, 3.7 (knowledge base read, recall prior decisions)
+- `_includes/plan-and-enrichment.md` (same directory as this SKILL.md) — read in Phases 4, 5.5 (produce plan file, knowledge base enrichment)
 
 ## Spike Issues (`type:spike`)
 
@@ -114,7 +114,7 @@ any other output for that phase.
 printf '<!-- phase:start name="feedback-context-check" index=0 total=14 stage="feature-planning" -->\n'
 ```
 
-> **Read `skills/nightgauge-feature-planning/_includes/feedback-and-context.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/feedback-and-context.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 It covers Phase 0 (feedback/revision detection), Phase 1, and Phase 1.5. Emit
 each phase's marker inline (below) as you reach it.
@@ -128,7 +128,7 @@ printf '<!-- phase:start name="load-context" index=1 total=14 stage="feature-pla
 ```
 
 Load issue context and signal stage start — see
-`skills/nightgauge-feature-planning/_includes/feedback-and-context.md`.
+`_includes/feedback-and-context.md` (same directory as this SKILL.md).
 
 ### Phase 1.5: Batch Context Detection
 
@@ -239,7 +239,7 @@ Fibonacci complexity score from `docs/ESTIMATION.md`: `XS=1`, `S=2`, `M=3`, `L=5
 printf '<!-- phase:start name="pattern-mining" index=5 total=14 stage="feature-planning" -->\n'
 ```
 
-> **Read `skills/nightgauge-feature-planning/_includes/pattern-and-docs.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/pattern-and-docs.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 It covers Phase 2.5 (pattern mining) and Phase 3 (documentation-first analysis).
 Emit each phase's marker inline (below) as you reach it.
@@ -259,7 +259,7 @@ file (`pattern-and-docs.md`).
 printf '<!-- phase:start name="knowledge-base-read" index=7 total=14 stage="feature-planning" -->\n'
 ```
 
-> **Read `skills/nightgauge-feature-planning/_includes/knowledge-recall.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/knowledge-recall.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 It covers Phase 3.5 (scaffolded PRD.md + cross-repo/workspace detection) and
 Phase 3.7 (recall prior decisions). Emit each marker inline (below) as you reach
@@ -273,7 +273,7 @@ printf '<!-- phase:start name="recall-prior-decisions" index=8 total=14 stage="f
 
 Query the knowledge base for semantically-related prior decisions and set
 `RECALL_HITS` for Phases 4 and 5 — see
-`skills/nightgauge-feature-planning/_includes/knowledge-recall.md`.
+`_includes/knowledge-recall.md` (same directory as this SKILL.md).
 
 ---
 
@@ -283,7 +283,7 @@ Query the knowledge base for semantically-related prior decisions and set
 printf '<!-- phase:start name="produce-plan" index=9 total=14 stage="feature-planning" -->\n'
 ```
 
-> **Read `skills/nightgauge-feature-planning/_includes/plan-and-enrichment.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/plan-and-enrichment.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 It covers Phase 4 (produce the `.nightgauge/plans/{N}-*.md` plan file) and
 Phase 5.5 (knowledge base enrichment). Phase 5 below is the inline output
@@ -484,7 +484,7 @@ jq . "$CONTEXT_FILE" > /dev/null || { echo "ERROR: issue context JSON invalid af
 printf '<!-- phase:start name="knowledge-base-enrichment" index=11 total=14 stage="feature-planning" -->\n'
 ```
 
-> **Read `skills/nightgauge-feature-planning/_includes/plan-and-enrichment.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/plan-and-enrichment.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 It covers enriching the scaffolded `PRD.md` in place, populating `decisions.md`
 with ADR blocks, deferred scaffolding, patching `knowledge_path` /

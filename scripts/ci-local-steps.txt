@@ -42,6 +42,7 @@ Markdown link check
 Changelog gate regression suite
 Changelog names every released tag
 Mirror drift gate regression suite
+Agent-skill install target regression suite
 Issue-body contract gate regression suite
 Issue-body heading contract
 Skill echo-into-jq gate regression suite
