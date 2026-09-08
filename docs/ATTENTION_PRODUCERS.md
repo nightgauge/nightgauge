@@ -190,9 +190,9 @@ because its constraints are less obvious than a boolean condition:
   number so a dismissed-then-re-raised alert becomes a genuinely new card
   rather than a resurrection.
 - **No repair verb** — the same call Invariant 3 below makes for
-  `default-branch-health` and `human-gate`: nothing in the closed verb
-  registry can patch a vulnerability, so the only option is an honest dismiss
-  and the real next action rides on `Context.URL`.
+  `default-branch-health`, and for three of `human-gate`'s four gate codes:
+  nothing in the closed verb registry can patch a vulnerability, so the only
+  option is an honest dismiss and the real next action rides on `Context.URL`.
 - **Deliberately skips cross-producer dedupe** that a structurally similar
   producer (`human-gate`) performs — an open advisory and a PR that cannot
   merge are two different conditions observed from two vantage points, not one
@@ -253,10 +253,11 @@ Every `option.verb` must resolve in the closed verb registry
 unregistered one. But the stricter rule is editorial: **if no registered verb
 can actually fix the condition, ship no repair option.**
 
-Nothing in the registry can fix a red `main`, approve a PR, or patch a
-vulnerability — `default-branch-health`, `human-gate`, and `dependabot-alerts`
-all land on the same conclusion for their own condition. A card that offers to
-anyway is worse than a card that offers nothing — the operator clicks it,
+Nothing in the registry can fix a red `main`, approve a PR, resolve a merge
+conflict, or patch a vulnerability — `default-branch-health`, `dependabot-alerts`
+and three of `human-gate`'s four gate codes all land on the same conclusion for
+their own condition. A card that offers to anyway is worse than a card that
+offers nothing — the operator clicks it,
 nothing changes, and the next card they see is one they have already learned to
 distrust. Use `VerbNoop` for an honest dismiss and put the real next action in
 `Context.URL`, which surfaces render as a first-class affordance.
@@ -293,6 +294,28 @@ would leave an issue that never runs again with no affordance to say otherwise.
 its target has TWO coordinates, and BOTH the repository and the issue come from
 the persisted request's `Context`, because a caller-supplied issue number would
 let any local process lift the hold on an issue nobody clicked on.
+
+**The rule expiring is the normal case, not the exception — so state the
+capability, not the verdict.** `human-gate` (#1575) is the second producer to
+have its dismiss-only comment go stale, and its comment is the cautionary
+version: it said "no verb in the registry can approve a PR or rebase a branch",
+which is true, reads as a principle, and is an argument for **adding the verb**.
+Three of its four gate codes are still genuinely dismiss-only — `review_required`
+needs a human's approving review, which is authority the fleet does not have;
+`branch_protection` names a rule the operator configured deliberately, and a verb
+that relaxed it would be the card resolving itself by removing the check that
+raised it; `conflict` needs judgement over content. The fourth, `behind`, is one
+deterministic forge call with no parameters, and the operator clicking dismiss on
+it was performing the same "yes, update it" every time. `pr.updateBranch` is
+bounded exactly like `blocked.clearFinding`: an empty argument surface, and both
+coordinates of its target — the repository and the PR number — read from the
+persisted request's `Context`.
+
+The test to apply is the one the epic behind #1575 states: **a card is warranted
+when a human has information or authority the pipeline does not** — a decision, a
+credential, a contract, a judgement call. It is not warranted merely because no
+verb happens to exist yet. When the answer is "no verb exists", the missing verb
+is the bug.
 
 ## Choosing a severity
 

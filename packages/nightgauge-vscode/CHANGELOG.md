@@ -9,6 +9,14 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- An Action Center card for a green PR that is behind its base branch now offers
+  "Update the branch from the base" as its primary action, with dismiss as the
+  secondary. Previously the only option was dismiss, so clearing three stale
+  dependabot PRs meant leaving the sidebar and doing by hand what one click can
+  now do (#1575)
+
 ## [0.3.1] - 2026-09-07
 
 ### Fixed

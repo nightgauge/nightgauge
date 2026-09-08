@@ -409,6 +409,16 @@ func (s *Server) ExecuteVerb(ctx context.Context, req *attention.DecisionRequest
 		return attention.ExecuteClearBlockedFinding(ctx, blockedFindingClearer{server: s},
 			req, opt, sweep.ConfiguredRepos(s.workspaceRootPath()))
 
+	case attention.VerbPRUpdateBranch:
+		// The workspace root's configured set, the same one workspace.addRepo
+		// and blocked.clearFinding are checked against — the repository this
+		// verb may touch has to come from configuration, never from the request
+		// being resolved. The client is resolved for the CARD'S owner/repo so a
+		// multi-repo workspace authenticates with that repo's configured
+		// identity rather than the daemon's single startup client.
+		return attention.ExecuteUpdatePRBranch(ctx, prBranchUpdater{server: s}, req, opt,
+			sweep.ConfiguredRepos(s.workspaceRootPath()))
+
 	case attention.VerbIssueApproveArchitecture:
 		return s.approveArchitecture(ctx, key, repo, owner, name, issue)
 
@@ -778,4 +788,22 @@ func (c blockedFindingClearer) ClearBlockedFinding(_ context.Context, repo strin
 		return fmt.Errorf("attention: clear blocked finding for %s#%d: %w", repo, issue, err)
 	}
 	return nil
+}
+
+// prBranchUpdater backs attention.VerbPRUpdateBranch with the forge's
+// update-branch call (#1575).
+//
+// It holds the server rather than an owner/repo/number: all three coordinates
+// arrive from the card's own Context through ExecuteUpdatePRBranch, so there is
+// no field here a resolving surface could influence.
+type prBranchUpdater struct{ server *Server }
+
+// UpdatePRBranch merges the base branch into the PR's head branch, using the
+// client configured for that repository.
+func (u prBranchUpdater) UpdatePRBranch(ctx context.Context, owner, repo string, number int) error {
+	c, err := u.server.resolveClientForRequest(ctx, "", owner, repo)
+	if err != nil {
+		return fmt.Errorf("attention: pr.updateBranch for %s/%s#%d: %w", owner, repo, number, err)
+	}
+	return gh.NewPRService(c).UpdatePRBranch(ctx, owner, repo, number)
 }

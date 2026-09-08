@@ -109,6 +109,17 @@ func (p *HumanGate) Evaluate(ctx context.Context, in Input) ([]attention.Decisio
 	return out, nil
 }
 
+// The four stable gate codes. They are constants rather than literals because
+// exactly one of them — gateCodeBehind — now selects a repair verb, so the
+// string that classifies a PR and the string that decides whether the card gets
+// a working button have to be the same string, not two that happen to match.
+const (
+	gateCodeReviewRequired   = "review_required"
+	gateCodeBranchProtection = "branch_protection"
+	gateCodeConflict         = "conflict"
+	gateCodeBehind           = "behind"
+)
+
 // gate names why a green PR cannot merge, and who has to act.
 type gate struct {
 	// kind is approve when a review is the sole remaining requirement, and
@@ -152,17 +163,17 @@ func classifyGate(pr types.PullRequest) (gate, bool) {
 	switch strings.ToUpper(pr.MergeStateStatus) {
 	case "BLOCKED":
 		if review == string(types.ReviewReviewRequired) {
-			return gate{kind: attention.KindApprove, reason: "a review is required", code: "review_required"}, true
+			return gate{kind: attention.KindApprove, reason: "a review is required", code: gateCodeReviewRequired}, true
 		}
 		if review == string(types.ReviewChangesRequested) {
 			// The author was told by the reviewer. Not our card to raise.
 			return gate{}, false
 		}
-		return gate{kind: attention.KindUnblock, reason: "branch protection is blocking the merge", code: "branch_protection"}, true
+		return gate{kind: attention.KindUnblock, reason: "branch protection is blocking the merge", code: gateCodeBranchProtection}, true
 	case "DIRTY":
-		return gate{kind: attention.KindUnblock, reason: "the branch has merge conflicts", code: "conflict"}, true
+		return gate{kind: attention.KindUnblock, reason: "the branch has merge conflicts", code: gateCodeConflict}, true
 	case "BEHIND":
-		return gate{kind: attention.KindUnblock, reason: "the base branch has moved on", code: "behind"}, true
+		return gate{kind: attention.KindUnblock, reason: "the base branch has moved on", code: gateCodeBehind}, true
 	default:
 		// CLEAN and HAS_HOOKS are mergeable. UNSTABLE means a check is failing
 		// or pending despite the rollup. UNKNOWN means the forge has not
@@ -181,7 +192,13 @@ func (p *HumanGate) individual(repo string, g gatedPR) attention.DecisionRequest
 	if waited != "" {
 		body += fmt.Sprintf("It has been open %s. ", waited)
 	}
-	body += "The work is finished; the next step is a person's.\n"
+	if g.gate.code == gateCodeBehind {
+		// Not "the next step is a person's" — for this one gate it no longer
+		// is, and the body has to agree with the button below it.
+		body += "The work is finished and the only thing between it and main is a stale base. Updating the branch from the base is one deterministic call; the option below makes it.\n"
+	} else {
+		body += "The work is finished; the next step is a person's.\n"
+	}
 	if pr.URL != "" {
 		body += "\n" + pr.URL + "\n"
 	}
@@ -201,14 +218,50 @@ func (p *HumanGate) individual(repo string, g gatedPR) attention.DecisionRequest
 			Blocker: g.gate.reason,
 			URL:     pr.URL,
 		},
-		Options: []attention.Option{
-			// No verb in the registry can approve a PR or rebase a branch, and
-			// inventing one to make the card look actionable would be a lie the
-			// operator only discovers after clicking. Dismiss records the human
-			// decision and suppresses re-raising until the gate itself changes.
-			{ID: "dismiss", Label: "Dismiss — I've seen it", Verb: attention.VerbNoop, Style: attention.StyleDefault},
-		},
+		Options:       repairOptionsFor(g.gate),
 		DefaultAction: attention.ExpireNoop,
+	}
+}
+
+// repairOptionsFor picks the options for one gate code.
+//
+// Exactly one of the four gate codes is repairable by a registered verb, and
+// the split is the point rather than an implementation detail. `behind` is one
+// deterministic forge call with no parameters and no judgement — the operator
+// clicking dismiss on a green, behind PR was performing the same "yes, update
+// it" every time — so pr.updateBranch (#1575) is the primary option and dismiss
+// stays as the secondary.
+//
+// The other three are still dismiss-only, and for the reason Invariant 3 asks
+// producers to record rather than merely assert. `review_required` needs a
+// human's approving review, which is authority the fleet does not have and
+// should not be given. `branch_protection` names a rule the operator configured
+// deliberately; a verb that relaxed it would be the card resolving itself by
+// removing the check that raised it. `conflict` needs a real merge resolution —
+// judgement over content, which is the one thing a registry verb may not do.
+// Each of those is a card because a person genuinely holds something the
+// pipeline does not, which is exactly when a card is warranted.
+func repairOptionsFor(g gate) []attention.Option {
+	dismiss := attention.Option{
+		ID: "dismiss", Label: "Dismiss — I've seen it",
+		Verb: attention.VerbNoop, Style: attention.StyleDefault,
+	}
+	if g.code != gateCodeBehind {
+		return []attention.Option{dismiss}
+	}
+	return []attention.Option{
+		{
+			ID:    "update-branch",
+			Label: "Update the branch from the base",
+			Verb:  attention.VerbPRUpdateBranch,
+			Style: attention.StylePrimary,
+			// NO ARGS, deliberately: the executor reads BOTH the repository
+			// and the PR number from this request's Context — what this
+			// producer declared when it raised the card — and requires
+			// configuration to already cover the repo. An args map here would
+			// be the first step toward a surface naming its own pull request.
+		},
+		dismiss,
 	}
 }
 
