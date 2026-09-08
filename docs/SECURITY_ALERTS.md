@@ -150,7 +150,7 @@ advisory has none yet.
 
 The card ships exactly one option: an honest dismiss (`VerbNoop`, "Dismiss —
 I've seen it"). This follows the same precedent already established for
-`default-branch-health` and `human-gate`
+`default-branch-health` and for `human-gate`'s unrepairable gate codes
 ([docs/ATTENTION_PRODUCERS.md Invariant 3](ATTENTION_PRODUCERS.md#3-do-not-declare-an-option-you-cannot-perform)):
 nothing in the closed verb registry (`internal/attention/verbs.go`) can patch a
 vulnerability, and an affordance that does nothing when clicked is worse than

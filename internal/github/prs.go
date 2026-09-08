@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/forge"
@@ -421,4 +422,38 @@ func splitPROwnerRepo(full string) (string, string) {
 		return "", full
 	}
 	return parts[0], parts[1]
+}
+
+// UpdatePRBranch merges the base branch into a pull request's head branch via
+// the REST update-branch endpoint, so a PR that is green but BEHIND its base
+// can merge (#1575).
+//
+// REST rather than GraphQL: GitHub exposes no `updatePullRequestBranch`
+// mutation, and this endpoint is the same one `gh pr update-branch` calls.
+//
+// A 202 is the success case (GitHub queues the merge). A PR that is already up
+// to date answers 422, and that is reported as SUCCESS rather than an error:
+// the caller is an Action Center repair whose card is CAS-resolved only when
+// this returns nil, so failing on "nothing to do" would leave an
+// un-resolvable card in front of an operator whose PR is genuinely mergeable.
+// Every other non-2xx — a protected branch, a conflict that appeared since the
+// sweep, a revoked token — is a real failure and is returned.
+func (s *PRService) UpdatePRBranch(ctx context.Context, owner, repo string, number int) error {
+	if owner == "" || repo == "" || number <= 0 {
+		return fmt.Errorf("update PR branch: owner, repo and number are required (got %q/%q#%d)", owner, repo, number)
+	}
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/update-branch", owner, repo, number)
+	body, status, err := s.client.restDoStatus(ctx, http.MethodPut, path, map[string]any{})
+	if err != nil {
+		return fmt.Errorf("update branch for %s/%s#%d: %w", owner, repo, number, err)
+	}
+	if status == http.StatusUnprocessableEntity {
+		// Already up to date — the base stopped moving between the sweep and
+		// the click. Nothing to do is not a failure.
+		return nil
+	}
+	if status < 200 || status >= 300 {
+		return fmt.Errorf("update branch for %s/%s#%d: status %d: %s", owner, repo, number, status, string(body))
+	}
+	return nil
 }
