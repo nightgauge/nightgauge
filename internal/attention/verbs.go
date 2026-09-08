@@ -123,6 +123,35 @@ const (
 	// name an issue. See ExecuteClearBlockedFinding, the verb's only executor.
 	VerbBlockedFindingClear Verb = "blocked.clearFinding"
 
+	// VerbPRUpdateBranch merges the base branch into ONE pull request that is
+	// green but behind its base, so the merge the pipeline already finished can
+	// actually land (#1575).
+	//
+	// It exists because human-gate's `behind` card was the clearest instance of
+	// the failure this verb's epic names: the producer's own comment said "no
+	// verb in the registry can approve a PR or rebase a branch", which is an
+	// argument for adding the verb, not for interrupting a person. Being behind
+	// the base is not a decision, a credential, a contract or a judgement — the
+	// four things a card is actually for. It is one deterministic forge call
+	// with no parameters, and the operator clicking dismiss was performing the
+	// same "yes, update it" every single time.
+	//
+	// It is bounded like blocked.clearFinding rather than like
+	// dependabot.enableAlerts, because its target also has TWO coordinates. The
+	// argument surface is EMPTY — the repository AND the PR number both come
+	// from the persisted request's Context, which is what the producer declared
+	// when it raised the card — so a resolving surface can neither name a
+	// repository nor name a pull request. A caller-supplied number would let any
+	// local process push a base-branch merge into an arbitrary PR in a
+	// configured repo. See ExecuteUpdatePRBranch, the verb's only executor.
+	//
+	// The verb deliberately does NOT merge the PR. Updating a branch is
+	// reversible, idempotent in effect, and gated by the same branch protection
+	// as everything else; merging is the decision the operator may still want to
+	// make, and the card's other gate codes (conflict, review_required,
+	// branch_protection) are untouched by it.
+	VerbPRUpdateBranch Verb = "pr.updateBranch"
+
 	// VerbNoop is the explicit "do nothing but resolve" choice — the registry
 	// binding for the ADR's leave / keep-paused / wait / halt options, where the
 	// operator deliberately declines to mutate the fleet. Registry-gated like any
@@ -147,6 +176,7 @@ var registry = map[Verb]struct{}{
 	VerbDependabotEnableAlerts:       {},
 	VerbWorkspaceAddRepo:             {},
 	VerbBlockedFindingClear:          {},
+	VerbPRUpdateBranch:               {},
 	VerbNoop:                         {},
 }
 
@@ -492,4 +522,77 @@ func ExecuteClearBlockedFinding(ctx context.Context, clearer BlockedFindingClear
 		return fmt.Errorf("attention: %s is not available on this surface", VerbBlockedFindingClear)
 	}
 	return clearer.ClearBlockedFinding(ctx, repo, req.Context.Issue)
+}
+
+// --- pr.updateBranch (#1575) ------------------------------------------------
+
+// PullRequestBranchUpdater is the single forge capability pr.updateBranch
+// needs.
+//
+// One method, for the same reason DependabotAlertEnabler, WorkspaceRepoAdder
+// and BlockedFindingClearer are one method each: an executor that can bring a
+// pull request up to date with its base cannot, through this seam, also merge
+// it, close it, approve it or push to it. The daemon passes an implementation
+// backed by the forge's update-branch call; tests pass a recorder.
+//
+// A PR that is ALREADY up to date is SUCCESS, not an error. Two surfaces can
+// resolve the same card, and the base branch can stop moving between the sweep
+// and the click — an implementation that reported "nothing to update" as a
+// failure would leave an un-resolvable card in front of an operator whose PR is
+// genuinely mergeable.
+type PullRequestBranchUpdater interface {
+	UpdatePRBranch(ctx context.Context, owner, repo string, number int) error
+}
+
+// ExecuteUpdatePRBranch is the ONLY implementation of the pr.updateBranch
+// verb, so no surface can re-derive its target differently.
+//
+// Five refusals guard one mutation, in this order:
+//
+//  1. the option must actually bind this verb (a mis-dispatched arm must not
+//     silently push a merge commit into someone's branch);
+//  2. the option must carry NO arguments — the verb takes no caller-supplied
+//     policy at all;
+//  3. BOTH halves of the target — repository and PR number — come from the
+//     persisted request's Context and nowhere else;
+//  4. the repository must be in the configured repo list; and
+//  5. a surface without the capability fails loudly rather than succeeding.
+//
+// (3) is what actually closes the hole: a caller-supplied PR number would turn
+// a card about one stale dependabot PR into a general "merge base into any PR
+// in a configured repo" primitive. (4) is defense in depth, and (5) matters for
+// the reason it does everywhere else here — the store CAS-resolves only after
+// the verb returns nil, so a silent success would consume the card and leave
+// the PR exactly as stuck as before, with the one affordance that could have
+// fixed it now gone.
+func ExecuteUpdatePRBranch(ctx context.Context, updater PullRequestBranchUpdater, req *DecisionRequest, opt Option, configuredRepos []string) error {
+	if req == nil {
+		return fmt.Errorf("attention: %s requires the persisted request", VerbPRUpdateBranch)
+	}
+	if opt.Verb != VerbPRUpdateBranch {
+		return fmt.Errorf("attention: %s executor invoked for verb %q", VerbPRUpdateBranch, opt.Verb)
+	}
+	if len(opt.Args) > 0 {
+		return fmt.Errorf("%w: %s was given %d", ErrVerbArgsNotAccepted, VerbPRUpdateBranch, len(opt.Args))
+	}
+
+	repo := strings.TrimSpace(req.Context.Repo)
+	if repo == "" {
+		return fmt.Errorf("attention: %s: request %s names no repository", VerbPRUpdateBranch, req.ID)
+	}
+	if req.Context.PR <= 0 {
+		return fmt.Errorf("attention: %s: request %s names no pull request", VerbPRUpdateBranch, req.ID)
+	}
+	if !RepoInConfiguredSet(configuredRepos, repo) {
+		return fmt.Errorf("%w: %q", ErrVerbTargetNotConfigured, repo)
+	}
+
+	owner, name, found := strings.Cut(repo, "/")
+	if !found || owner == "" || name == "" || strings.Contains(name, "/") {
+		return fmt.Errorf("attention: %s target %q is not owner/name", VerbPRUpdateBranch, repo)
+	}
+	if updater == nil {
+		return fmt.Errorf("attention: %s is not available on this surface", VerbPRUpdateBranch)
+	}
+	return updater.UpdatePRBranch(ctx, owner, name, req.Context.PR)
 }
