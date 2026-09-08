@@ -14,6 +14,17 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Added
+
+- An Action Center card for a PR that is green but behind its base branch now
+  offers to update it, instead of offering only "dismiss". The new
+  `pr.updateBranch` verb merges the base into the PR's head branch in one
+  deterministic forge call, with an empty argument surface — both the repository
+  and the PR number come from the card the producer raised, and the repository
+  must already be configured. Three of `human-gate`'s four gate codes still
+  genuinely need a person (an approving review, a protection rule, a merge
+  conflict); being behind the base never did (#1575)
+
 ### Fixed
 
 - A default branch no longer reads as red forever because of one old failing

@@ -3,6 +3,7 @@ package attention
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -14,7 +15,7 @@ func TestRegistryIsClosedAllowlist(t *testing.T) {
 		VerbAutonomousComplete, VerbAutonomousClearIssueFailures, VerbProjectSyncStatus,
 		VerbIssueClose, VerbBudgetRaiseCeiling, VerbRunRetryWithEscalation,
 		VerbIssueApproveArchitecture, VerbDependabotEnableAlerts,
-		VerbWorkspaceAddRepo, VerbBlockedFindingClear, VerbNoop,
+		VerbWorkspaceAddRepo, VerbBlockedFindingClear, VerbPRUpdateBranch, VerbNoop,
 	}
 	for _, v := range registered {
 		if !IsRegisteredVerb(v) {
@@ -47,6 +48,13 @@ func TestRegistryIsClosedAllowlist(t *testing.T) {
 	if !IsRegisteredVerb(VerbBlockedFindingClear) {
 		t.Error("blocked.clearFinding must be registered")
 	}
+	// The human-gate `behind` card's repair button (#1575). The producer's own
+	// comment used to defend its absence — "no verb in the registry can approve
+	// a PR or rebase a branch" — which was an argument for adding the verb, not
+	// for interrupting a person.
+	if !IsRegisteredVerb(VerbPRUpdateBranch) {
+		t.Error("pr.updateBranch must be registered")
+	}
 	// Anything not on the allowlist is rejected — the security boundary. The
 	// near-miss spellings of the approval verb must NOT resolve: the executor
 	// resolves the label name from config, so a surface cannot reach a
@@ -64,7 +72,12 @@ func TestRegistryIsClosedAllowlist(t *testing.T) {
 		// Nothing generic or adjacent to the finding clearer is reachable by
 		// guessing: the card can retract one issue's hold and nothing else.
 		"blocked.clearFinding ", "blocked.clear", "blocked.writeFinding",
-		"pipeline.deleteFile", "findings.clear"} {
+		"pipeline.deleteFile", "findings.clear",
+		// Nothing generic or adjacent to the branch updater is reachable by
+		// guessing: the card can bring one PR up to date with its base and
+		// nothing else. Merging, approving and force-pushing stay unreachable.
+		"pr.updateBranch ", "pr.update", "pr.merge", "pr.approve", "pr.rebase",
+		"pr.forcePush", "branch.update"} {
 		if IsRegisteredVerb(v) {
 			t.Errorf("verb %q must NOT be registered", v)
 		}
@@ -86,7 +99,8 @@ func TestIsCLIExecutableVerb(t *testing.T) {
 		VerbQueueAdd, VerbIssueRemoveBlockedBy, VerbAutonomousResume, VerbAutonomousRescan,
 		VerbAutonomousComplete, VerbAutonomousClearIssueFailures, VerbProjectSyncStatus,
 		VerbIssueClose, VerbIssueApproveArchitecture, VerbDependabotEnableAlerts,
-		VerbWorkspaceAddRepo, "unregistered.verb",
+		VerbWorkspaceAddRepo, VerbBlockedFindingClear, VerbPRUpdateBranch,
+		"unregistered.verb",
 	}
 	for _, v := range daemonOnly {
 		if IsCLIExecutableVerb(v) {
@@ -394,5 +408,141 @@ func TestExecuteAddRepo_PropagatesWriterFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no project board") {
 		t.Errorf("error = %q, want the writer's own message preserved", err)
+	}
+}
+
+// --- pr.updateBranch (#1575) -------------------------------------------------
+
+// recordingUpdater captures every (owner, repo, number) the verb resolved, so
+// "the forge was never touched" is an assertion rather than an inference.
+type recordingUpdater struct {
+	targets []string
+	err     error
+}
+
+func (u *recordingUpdater) UpdatePRBranch(_ context.Context, owner, repo string, number int) error {
+	u.targets = append(u.targets, fmt.Sprintf("%s/%s#%d", owner, repo, number))
+	return u.err
+}
+
+func behindCard(repo string, pr int) *DecisionRequest {
+	return &DecisionRequest{
+		ID:             "dr_gate",
+		IdempotencyKey: fmt.Sprintf("human-gate:%s#%d", repo, pr),
+		Producer:       "human-gate",
+		Context:        Context{Repo: repo, PR: pr},
+		Options: []Option{
+			{ID: "update-branch", Verb: VerbPRUpdateBranch},
+			{ID: "dismiss", Verb: VerbNoop},
+		},
+	}
+}
+
+var updateBranchOpt = Option{ID: "update-branch", Verb: VerbPRUpdateBranch}
+
+func TestExecuteUpdatePRBranch_UpdatesAConfiguredRepo(t *testing.T) {
+	// Matched the way the workspace sweep matches coverage, so a manifest entry
+	// written as either `name` or `owner/name` authorises the repo the producer
+	// carded.
+	for _, configured := range [][]string{
+		{"acme/web"},
+		{"web"},
+		{"other/thing", "acme/web"},
+	} {
+		u := &recordingUpdater{}
+		if err := ExecuteUpdatePRBranch(context.Background(), u, behindCard("acme/web", 1546), updateBranchOpt, configured); err != nil {
+			t.Fatalf("configured=%v: ExecuteUpdatePRBranch() error: %v", configured, err)
+		}
+		if len(u.targets) != 1 || u.targets[0] != "acme/web#1546" {
+			t.Fatalf("configured=%v: forge saw %v, want [acme/web#1546]", configured, u.targets)
+		}
+	}
+}
+
+// BOTH coordinates come from the persisted request and nowhere else. A
+// caller-supplied PR number would turn a card about one stale PR into a general
+// "merge base into any PR in a configured repo" primitive, so args are refused
+// outright rather than ignored — an ignored argument is a silent invitation to
+// add policy at the surface later.
+func TestExecuteUpdatePRBranch_RefusesCallerSuppliedPolicy(t *testing.T) {
+	for _, args := range []map[string]any{
+		{"number": 99},
+		{"repo": "attacker/evil"},
+		{"owner": "attacker"},
+		{"force": true},
+	} {
+		u := &recordingUpdater{}
+		opt := Option{ID: "update-branch", Verb: VerbPRUpdateBranch, Args: args}
+		err := ExecuteUpdatePRBranch(context.Background(), u, behindCard("acme/web", 1546), opt, []string{"acme/web"})
+		if !errors.Is(err, ErrVerbArgsNotAccepted) {
+			t.Fatalf("args=%v: error = %v, want ErrVerbArgsNotAccepted", args, err)
+		}
+		if len(u.targets) != 0 {
+			t.Fatalf("args=%v: the forge was reached: %v", args, u.targets)
+		}
+	}
+}
+
+// The configured list is the security boundary: it comes from the thing an
+// operator edits deliberately, never from the request being resolved.
+func TestExecuteUpdatePRBranch_RefusesATargetOutsideTheConfiguredList(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		cardRepo   string
+		configured []string
+	}{
+		{"foreign repo", "attacker/evil", []string{"acme/web"}},
+		{"nothing configured", "acme/web", nil},
+		{"near-miss name", "acme/web-staging", []string{"acme/web"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			u := &recordingUpdater{}
+			err := ExecuteUpdatePRBranch(context.Background(), u, behindCard(tc.cardRepo, 7), updateBranchOpt, tc.configured)
+			if !errors.Is(err, ErrVerbTargetNotConfigured) {
+				t.Fatalf("error = %v, want ErrVerbTargetNotConfigured", err)
+			}
+			if len(u.targets) != 0 {
+				t.Fatalf("the forge was reached: %v", u.targets)
+			}
+		})
+	}
+}
+
+// The store CAS-resolves only after the verb returns nil, so every refusal here
+// must be loud. A silent success would consume the card and leave the PR
+// exactly as stuck as before, with the one affordance that could have fixed it
+// now gone.
+func TestExecuteUpdatePRBranch_FailsLoudlyRatherThanSilentlySucceeding(t *testing.T) {
+	if err := ExecuteUpdatePRBranch(context.Background(), &recordingUpdater{}, nil, updateBranchOpt, []string{"acme/web"}); err == nil {
+		t.Error("a nil request must be refused")
+	}
+	if err := ExecuteUpdatePRBranch(context.Background(), &recordingUpdater{},
+		behindCard("", 7), updateBranchOpt, []string{"acme/web"}); err == nil {
+		t.Error("a request naming no repository must be refused")
+	}
+	if err := ExecuteUpdatePRBranch(context.Background(), &recordingUpdater{},
+		behindCard("acme/web", 0), updateBranchOpt, []string{"acme/web"}); err == nil {
+		t.Error("a request naming no pull request must be refused")
+	}
+	if err := ExecuteUpdatePRBranch(context.Background(), &recordingUpdater{},
+		behindCard("notownerrepo", 7), updateBranchOpt, []string{"notownerrepo"}); err == nil {
+		t.Error("a target that is not owner/name must be refused")
+	}
+	if err := ExecuteUpdatePRBranch(context.Background(), &recordingUpdater{},
+		behindCard("acme/web", 7), Option{ID: "x", Verb: VerbNoop}, []string{"acme/web"}); err == nil {
+		t.Error("a mis-dispatched verb must be refused")
+	}
+	// A surface without the capability says so rather than succeeding.
+	if err := ExecuteUpdatePRBranch(context.Background(), nil,
+		behindCard("acme/web", 7), updateBranchOpt, []string{"acme/web"}); err == nil {
+		t.Error("an executor with no updater must be refused")
+	}
+	// A real forge failure propagates — the card must survive to say the PR is
+	// still behind.
+	boom := errors.New("update-branch: 409")
+	err := ExecuteUpdatePRBranch(context.Background(), &recordingUpdater{err: boom},
+		behindCard("acme/web", 7), updateBranchOpt, []string{"acme/web"})
+	if !errors.Is(err, boom) {
+		t.Errorf("error = %v, want the forge failure", err)
 	}
 }

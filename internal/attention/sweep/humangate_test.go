@@ -400,3 +400,127 @@ func TestHumanGate_RegisteredInTheDefaultRegistry(t *testing.T) {
 		t.Fatalf("%q is not in the default registry — `nightgauge attention sweep` would never run it", ProducerHumanGate)
 	}
 }
+
+// --- pr.updateBranch on the `behind` gate (#1575) ----------------------------
+
+// Exactly one of the four gate codes is repairable by a registered verb, and
+// the producer must be able to tell them apart. A card that offered the repair
+// on `conflict` would be the dead affordance Invariant 3 forbids: the operator
+// clicks, the forge refuses the merge, and the next card is one they have
+// learned to distrust.
+func TestHumanGate_OnlyTheBehindGateCarriesTheRepairOption(t *testing.T) {
+	cases := []struct {
+		name       string
+		mergeState string
+		review     string
+		wantRepair bool
+	}{
+		{"behind", "BEHIND", "APPROVED", true},
+		{"conflict", "DIRTY", "APPROVED", false},
+		{"review required", "BLOCKED", "REVIEW_REQUIRED", false},
+		{"branch protection", "BLOCKED", "APPROVED", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newHumanGate()
+			in := gateInput(&gatePRs{list: []types.PullRequest{greenPR(9, tc.mergeState, tc.review)}})
+
+			got := evaluateGate(t, p, in)
+			if len(got) != 1 {
+				t.Fatalf("observations = %d, want 1", len(got))
+			}
+			opts := got[0].Options
+
+			var repair *attention.Option
+			for i := range opts {
+				if opts[i].Verb == attention.VerbPRUpdateBranch {
+					repair = &opts[i]
+				}
+			}
+			if !tc.wantRepair {
+				if repair != nil {
+					t.Fatalf("gate %q must not offer pr.updateBranch — nothing in the registry repairs it", tc.name)
+				}
+				if len(opts) != 1 || opts[0].Verb != attention.VerbNoop {
+					t.Fatalf("gate %q options = %+v, want dismiss only", tc.name, opts)
+				}
+				return
+			}
+
+			if repair == nil {
+				t.Fatalf("the behind gate must offer pr.updateBranch, got %+v", opts)
+			}
+			// PRIMARY and FIRST: the operator was clicking dismiss on this card
+			// to mean "yes, update it", so the update is the default reading of
+			// the card, not an alternative buried under it.
+			if opts[0].Verb != attention.VerbPRUpdateBranch {
+				t.Errorf("options[0].Verb = %q, want the repair first", opts[0].Verb)
+			}
+			if repair.Style != attention.StylePrimary {
+				t.Errorf("repair style = %q, want %q", repair.Style, attention.StylePrimary)
+			}
+			// NO ARGS. The executor reads both the repo and the PR number from
+			// the request's Context; an args map here would be the first step
+			// toward a surface naming its own pull request.
+			if len(repair.Args) != 0 {
+				t.Errorf("repair args = %v, want none", repair.Args)
+			}
+			// dismiss survives as the secondary — "off on purpose" is still a
+			// legitimate answer to a card.
+			if len(opts) != 2 || opts[1].Verb != attention.VerbNoop || opts[1].Style != attention.StyleDefault {
+				t.Errorf("options = %+v, want dismiss as the secondary", opts)
+			}
+		})
+	}
+}
+
+// The card the producer emits and the executor that runs its button must agree
+// about the target. The producer supplies both coordinates through Context; the
+// executor reads them from there and nowhere else, so a card built here
+// executes against exactly the PR it names.
+func TestHumanGate_BehindCardExecutesAgainstThePRItNames(t *testing.T) {
+	p := newHumanGate()
+	in := gateInput(&gatePRs{list: []types.PullRequest{greenPR(1546, "BEHIND", "APPROVED")}})
+
+	got := evaluateGate(t, p, in)
+	if len(got) != 1 {
+		t.Fatalf("observations = %d, want 1", len(got))
+	}
+	card := got[0]
+	if card.Context.Repo != "octocat/acme" || card.Context.PR != 1546 {
+		t.Fatalf("context = %q#%d, want octocat/acme#1546", card.Context.Repo, card.Context.PR)
+	}
+
+	var updated []string
+	err := attention.ExecuteUpdatePRBranch(context.Background(),
+		updaterFunc(func(_ context.Context, owner, repo string, number int) error {
+			updated = append(updated, fmt.Sprintf("%s/%s#%d", owner, repo, number))
+			return nil
+		}),
+		&card, card.Options[0], []string{"octocat/acme"})
+	if err != nil {
+		t.Fatalf("ExecuteUpdatePRBranch: %v", err)
+	}
+	if len(updated) != 1 || updated[0] != "octocat/acme#1546" {
+		t.Fatalf("forge saw %v, want [octocat/acme#1546]", updated)
+	}
+
+	// And the producer's matcher agrees with the executor's: a repo the sweep
+	// would card but configuration does not cover must be refused rather than
+	// quietly executed, which is the dead-affordance failure in reverse.
+	err = attention.ExecuteUpdatePRBranch(context.Background(),
+		updaterFunc(func(context.Context, string, string, int) error {
+			t.Fatal("the forge must not be reached for an unconfigured repo")
+			return nil
+		}),
+		&card, card.Options[0], []string{"octocat/other"})
+	if !errors.Is(err, attention.ErrVerbTargetNotConfigured) {
+		t.Fatalf("error = %v, want ErrVerbTargetNotConfigured", err)
+	}
+}
+
+type updaterFunc func(ctx context.Context, owner, repo string, number int) error
+
+func (f updaterFunc) UpdatePRBranch(ctx context.Context, owner, repo string, number int) error {
+	return f(ctx, owner, repo, number)
+}
