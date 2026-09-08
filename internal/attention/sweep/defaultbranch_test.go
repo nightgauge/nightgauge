@@ -744,3 +744,185 @@ func TestDefaultBranch_RegisteredInTheDefaultRegistry(t *testing.T) {
 		t.Fatalf("%q is not in the default registry — `nightgauge attention sweep` would never run it", ProducerDefaultBranchHealth)
 	}
 }
+
+// --- latest run per check name wins (issue #1572) ----------------------------
+
+func TestDefaultBranch_NewerSuccessOfTheSameCheckRetiresTheOlderFailure(t *testing.T) {
+	// The reported shape: a scheduled workflow failed once on a commit and has
+	// succeeded on every run since, against that same unchanged commit. The
+	// failing run never leaves the forge's list, so a producer that cards any
+	// failing run cards it forever — nothing but a new push would clear it.
+	p := newDefaultBranchProducer()
+	in := branchInput(&repoSvc{defaultBranch: "main"}, &branchCI{
+		required: []string{"sync"},
+		runs: []forgetypes.CheckDetail{
+			{Name: "sync", Status: "COMPLETED", Conclusion: "FAILURE", CompletedAt: ago(10 * time.Hour), DetailsURL: "https://forge/run/1", HeadSHA: "abcdef1234567"},
+			{Name: "sync", Status: "COMPLETED", Conclusion: "SUCCESS", CompletedAt: ago(time.Hour), DetailsURL: "https://forge/run/2", HeadSHA: "abcdef1234567"},
+		},
+	})
+
+	got, err := p.Evaluate(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("observations = %d, want 0 — the latest run of %q passed, so main is not red: %+v", len(got), "sync", got)
+	}
+}
+
+func TestDefaultBranch_OlderSuccessDoesNotRetireTheNewerFailure(t *testing.T) {
+	// The same two runs the other way round. Latest-wins must be a rule about
+	// recency, not a rule that any success anywhere silences a check.
+	p := newDefaultBranchProducer()
+	in := branchInput(&repoSvc{defaultBranch: "main"}, &branchCI{
+		required: []string{"sync"},
+		runs: []forgetypes.CheckDetail{
+			{Name: "sync", Status: "COMPLETED", Conclusion: "SUCCESS", CompletedAt: ago(10 * time.Hour)},
+			{Name: "sync", Status: "COMPLETED", Conclusion: "FAILURE", CompletedAt: ago(time.Hour), DetailsURL: "https://forge/run/2"},
+		},
+	})
+
+	got, err := p.Evaluate(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("observations = %d, want 1 — the latest run of %q failed", len(got), "sync")
+	}
+	if got[0].Fingerprint != "checks:sync" {
+		t.Errorf("fingerprint = %q, want %q", got[0].Fingerprint, "checks:sync")
+	}
+	// The resolved earlier episode must not appear in the prose: "failing for
+	// 10h" would be a false claim about a check that passed nine hours ago.
+	if strings.Contains(got[0].Body, "10h") {
+		t.Errorf("body carried a run from a recovered episode:\n%s", got[0].Body)
+	}
+}
+
+func TestDefaultBranch_RecoveredCheckDropsOutOfTheFingerprint(t *testing.T) {
+	// Two checks red, then one recovers. The card must survive on the check
+	// that is still failing, and the fingerprint must move — the operator's
+	// mute was for a two-check condition that no longer holds.
+	p := newDefaultBranchProducer()
+	sweep := func(runs []forgetypes.CheckDetail) attention.DecisionRequest {
+		t.Helper()
+		got, err := p.Evaluate(context.Background(), branchInput(
+			&repoSvc{defaultBranch: "main"},
+			&branchCI{required: []string{"build", "sync"}, runs: runs},
+		))
+		if err != nil {
+			t.Fatalf("Evaluate: %v", err)
+		}
+		if len(got) != 1 {
+			t.Fatalf("observations = %d, want exactly 1", len(got))
+		}
+		return got[0]
+	}
+
+	bothRed := []forgetypes.CheckDetail{
+		{Name: "build", Status: "COMPLETED", Conclusion: "FAILURE", CompletedAt: ago(10 * time.Hour), DetailsURL: "https://forge/run/b"},
+		{Name: "sync", Status: "COMPLETED", Conclusion: "FAILURE", CompletedAt: ago(10 * time.Hour), DetailsURL: "https://forge/run/s"},
+	}
+	before := sweep(bothRed)
+	if before.Fingerprint != "checks:build,sync" {
+		t.Fatalf("fingerprint = %q, want %q", before.Fingerprint, "checks:build,sync")
+	}
+
+	after := sweep(append(append([]forgetypes.CheckDetail{}, bothRed...),
+		forgetypes.CheckDetail{Name: "sync", Status: "COMPLETED", Conclusion: "SUCCESS", CompletedAt: ago(time.Hour)},
+	))
+	if after.Fingerprint != "checks:build" {
+		t.Errorf("fingerprint = %q, want %q — the recovered check must leave the set", after.Fingerprint, "checks:build")
+	}
+	if before.IdempotencyKey != after.IdempotencyKey {
+		t.Error("idempotency key moved — the card would duplicate instead of updating")
+	}
+	if strings.Contains(after.Body, "https://forge/run/s") {
+		t.Errorf("body still lists the recovered check's failing run:\n%s", after.Body)
+	}
+}
+
+func TestDefaultBranch_UndatedSuccessCannotSuppressADatedFailure(t *testing.T) {
+	// An adapter that does not populate CompletedAt must not be able to pass a
+	// success off as the newest run. The producer errs toward carding the real
+	// failure, exactly as it does for an undated failure and the grace window.
+	p := newDefaultBranchProducer()
+	in := branchInput(&repoSvc{defaultBranch: "main"}, &branchCI{
+		required: []string{"build"},
+		runs: []forgetypes.CheckDetail{
+			{Name: "build", Status: "COMPLETED", Conclusion: "FAILURE", CompletedAt: ago(3 * time.Hour), DetailsURL: "https://forge/run/1"},
+			{Name: "build", Status: "COMPLETED", Conclusion: "SUCCESS"},
+		},
+	})
+
+	got, err := p.Evaluate(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("observations = %d, want 1 — an undated success is not evidence of recency", len(got))
+	}
+}
+
+func TestDefaultBranch_CancelledRerunLeavesThePreviousFailureStanding(t *testing.T) {
+	// CANCELLED is a non-verdict: it says nothing about whether the check would
+	// pass, so it must neither raise a card nor clear one.
+	p := newDefaultBranchProducer()
+	in := branchInput(&repoSvc{defaultBranch: "main"}, &branchCI{
+		required: []string{"build"},
+		runs: []forgetypes.CheckDetail{
+			{Name: "build", Status: "COMPLETED", Conclusion: "FAILURE", CompletedAt: ago(3 * time.Hour), DetailsURL: "https://forge/run/1"},
+			{Name: "build", Status: "COMPLETED", Conclusion: "CANCELLED", CompletedAt: ago(time.Hour)},
+		},
+	})
+
+	got, err := p.Evaluate(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("observations = %d, want 1 — a cancelled re-run is not a pass", len(got))
+	}
+}
+
+func TestDefaultBranch_GraceIsMeasuredFromTheDecidingRun(t *testing.T) {
+	// The check failed hours ago and has just failed again. The deciding run is
+	// inside the grace window and may yet be re-run green, so the older run of
+	// the same name must not card it in the meantime.
+	p := newDefaultBranchProducer()
+	in := branchInput(&repoSvc{defaultBranch: "main"}, &branchCI{
+		required: []string{"build"},
+		runs: []forgetypes.CheckDetail{
+			{Name: "build", Status: "COMPLETED", Conclusion: "FAILURE", CompletedAt: ago(3 * time.Hour), DetailsURL: "https://forge/run/1"},
+			{Name: "build", Status: "COMPLETED", Conclusion: "FAILURE", CompletedAt: ago(2 * time.Minute), DetailsURL: "https://forge/run/2"},
+		},
+	})
+
+	got, err := p.Evaluate(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("observations = %d, want 0 — the deciding run is inside the grace window", len(got))
+	}
+}
+
+func TestDefaultBranch_LatestRunRuleAppliesToAdvisoryChecksToo(t *testing.T) {
+	p := newDefaultBranchProducer()
+	in := branchInput(&repoSvc{defaultBranch: "main"}, &branchCI{
+		required: []string{"build"},
+		runs: []forgetypes.CheckDetail{
+			{Name: "build", Status: "COMPLETED", Conclusion: "SUCCESS", CompletedAt: ago(time.Hour)},
+			{Name: "e2e", Status: "COMPLETED", Conclusion: "FAILURE", CompletedAt: ago(10 * time.Hour)},
+			{Name: "e2e", Status: "COMPLETED", Conclusion: "SUCCESS", CompletedAt: ago(time.Hour)},
+		},
+	})
+
+	got, err := p.Evaluate(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("observations = %d, want 0 — recency decides for non-required checks exactly as for required ones", len(got))
+	}
+}
