@@ -89,10 +89,10 @@ The `$ARGUMENTS` variable contains everything after the skill name.
 
 ## Supporting files (load on demand)
 
-- `skills/nightgauge-issue-pickup/_includes/issue-selection-and-gates.md` — read in Phases 2.5, 2.7, 2.8 (signal stage start, size gate, baseline-CI gate)
-- `skills/nightgauge-issue-pickup/_includes/issue-analysis.md` — read in Phase 3 (fetch, parse, route, requirements summary)
-- `skills/nightgauge-issue-pickup/_includes/branch-and-env.md` — read in Phase 5 (deterministic branch creation)
-- `skills/nightgauge-issue-pickup/_includes/context-and-knowledge.md` — read in Phases 8, 9 (write context file, knowledge scaffolding)
+- `_includes/issue-selection-and-gates.md` (same directory as this SKILL.md) — read in Phases 2.5, 2.7, 2.8 (signal stage start, size gate, baseline-CI gate)
+- `_includes/issue-analysis.md` (same directory as this SKILL.md) — read in Phase 3 (fetch, parse, route, requirements summary)
+- `_includes/branch-and-env.md` (same directory as this SKILL.md) — read in Phase 5 (deterministic branch creation)
+- `_includes/context-and-knowledge.md` (same directory as this SKILL.md) — read in Phases 8, 9 (write context file, knowledge scaffolding)
 
 ---
 
@@ -219,7 +219,7 @@ printf '<!-- phase:start name="signal-stage-start" index=2 total=14 stage="issue
 Signal the stage start by moving the issue's board status to `in-progress`
 (runs after issue selection so `$ISSUE_NUMBER` is set).
 
-> **Read `skills/nightgauge-issue-pickup/_includes/issue-selection-and-gates.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/issue-selection-and-gates.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -232,7 +232,7 @@ printf '<!-- phase:start name="size-gate-preflight" index=3 total=14 stage="issu
 Reject or soft-route issues that exceed pipeline size thresholds before
 committing resources to branch creation and analysis.
 
-> **Read `skills/nightgauge-issue-pickup/_includes/issue-selection-and-gates.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/issue-selection-and-gates.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -245,7 +245,7 @@ printf '<!-- phase:start name="baseline-ci-gate" index=4 total=14 stage="issue-p
 Defer dispatch of issues whose acceptance criteria require promoting a CI check
 on `main` when `main`'s recent runs of that check are failing.
 
-> **Read `skills/nightgauge-issue-pickup/_includes/issue-selection-and-gates.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/issue-selection-and-gates.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -259,7 +259,7 @@ Defer pickup of issues that have an OPEN native `blockedBy` dependency (the
 blocker's PR is not merged). A controlled hold, not a failure — the item is
 paused and automatically re-queued when its blockers close.
 
-> **Read `skills/nightgauge-issue-pickup/_includes/issue-selection-and-gates.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/issue-selection-and-gates.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -272,7 +272,7 @@ printf '<!-- phase:start name="issue-analysis" index=6 total=14 stage="issue-pic
 Fetch the full issue, parse its content, derive the change-detection/routing
 decision, and produce the requirements summary.
 
-> **Read `skills/nightgauge-issue-pickup/_includes/issue-analysis.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/issue-analysis.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 The following two sub-steps stay in this body (they expand shared `_shared`
 includes) — apply them after Step 3.1.4 and before Step 3.2 as the reference
@@ -322,7 +322,7 @@ Verify a clean working tree, then create the feature branch deterministically
 via the Go binary (prefix/slug derivation, parent-epic detection, lazy
 epic-branch creation, idempotent re-runs).
 
-> **Read `skills/nightgauge-issue-pickup/_includes/branch-and-env.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/branch-and-env.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -385,7 +385,7 @@ printf '<!-- phase:start name="write-context" index=11 total=14 stage="issue-pic
 All data is available in shell variables at this point — write the context
 inline using `jq -n` for safe JSON construction.
 
-> **Read `skills/nightgauge-issue-pickup/_includes/context-and-knowledge.md` now and follow its instructions before continuing this phase.** Run Steps 8.1 and 8.2 there, then emit the `knowledge-scaffolding` marker below and continue through Steps 8.3–8.7.
+> **Read `_includes/context-and-knowledge.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Run Steps 8.1 and 8.2 there, then emit the `knowledge-scaffolding` marker below and continue through Steps 8.3–8.7.
 
 #### Step 8.3: Knowledge Scaffolding (MANDATORY)
 

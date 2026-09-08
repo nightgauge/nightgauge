@@ -132,7 +132,8 @@ func TestMissingIncludeIsLeftInPlace(t *testing.T) {
 func TestRewriteSkillRelativePaths(t *testing.T) {
 	content := "Read `skills/nightgauge-feature-dev/_includes/plan.md` now.\n" +
 		"Also see skills/_shared/GOTCHAS.md and skills/feature-dev/_includes/x.md.\n" +
-		"Cross-skill ref: skills/nightgauge-pipeline-audit/SKILL.md stays put.\n"
+		"Cross-skill ref: skills/nightgauge-pipeline-audit/SKILL.md stays put.\n" +
+		"Skill-relative: Read `_includes/plan.md` (same directory as this SKILL.md) now.\n"
 	got := RewriteSkillRelativePaths(content, "feature-dev", "/bundle/dist/skills/nightgauge-feature-dev")
 
 	for _, want := range []string{
@@ -147,6 +148,9 @@ func TestRewriteSkillRelativePaths(t *testing.T) {
 	}
 	if strings.Contains(got, "`skills/nightgauge-feature-dev/") {
 		t.Errorf("own-skill relative path survived the rewrite:\n%s", got)
+	}
+	if strings.Contains(got, "`_includes/") {
+		t.Errorf("skill-relative `_includes/` path survived the rewrite:\n%s", got)
 	}
 }
 
@@ -799,7 +803,7 @@ func TestPRMergeBatchDetailReadIsConditional(t *testing.T) {
 		`[ -n "$EPIC_NUMBER" ] && [ -f "$BATCH_DEV" ]`,
 		`BATCH_CONTEXT_FOUND=$BATCH_DEV`,
 		"Only when the probe prints `BATCH_CONTEXT_FOUND=...`",
-		"skills/nightgauge-pr-merge/_includes/batch-detection.md",
+		"_includes/batch-detection.md",
 		"Do not read the file when the probe prints `SINGLE_ISSUE`",
 	}
 	last := -1
@@ -815,7 +819,7 @@ func TestPRMergeBatchDetailReadIsConditional(t *testing.T) {
 		last = idx
 	}
 
-	unconditional := "> **Read `skills/nightgauge-pr-merge/_includes/batch-detection.md` now"
+	unconditional := "> **Read `_includes/batch-detection.md` (same directory as this SKILL.md) now"
 	if strings.Contains(phase, unconditional) {
 		t.Errorf("single-issue path still carries the unconditional batch-detail read: %q", unconditional)
 	}

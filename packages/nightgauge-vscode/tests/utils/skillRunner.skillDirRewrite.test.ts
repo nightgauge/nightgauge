@@ -44,4 +44,12 @@ describe("rewriteSkillRelativePaths (#196)", () => {
     expect(out).toContain("skills/nightgauge-pipeline-audit/SKILL.md");
     expect(out).not.toContain("/bundle/dist/skills/nightgauge-pr-merge/SKILL.md");
   });
+
+  it("rewrites backtick-wrapped skill-relative _includes/ paths", () => {
+    const content =
+      "> **Read `_includes/merge.md` (same directory as this SKILL.md) now and follow its instructions.**";
+    const out = rewriteSkillRelativePaths(content, "pr-merge", SKILL_DIR);
+    expect(out).toContain("/bundle/dist/skills/nightgauge-pr-merge/_includes/merge.md");
+    expect(out).not.toContain("`_includes/");
+  });
 });

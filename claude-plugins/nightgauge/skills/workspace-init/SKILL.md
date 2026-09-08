@@ -91,9 +91,9 @@ the overview and per-phase Read directives; the procedural detail (bash, YAML
 templates, verification logic) lives in `_includes/` and is loaded only when its
 phase fires.
 
-- `skills/nightgauge-workspace-init/_includes/member-detection.md` — read in Phases 1 and 2 (scan members, derive shared project)
-- `skills/nightgauge-workspace-init/_includes/manifest-generation.md` — read in Phases 3 and 4 (existing-manifest handling, generate/merge the YAML)
-- `skills/nightgauge-workspace-init/_includes/verification.md` — read in Phases 5 and 6 (sync-payload verification, summary report)
+- `_includes/member-detection.md` (same directory as this SKILL.md) — read in Phases 1 and 2 (scan members, derive shared project)
+- `_includes/manifest-generation.md` (same directory as this SKILL.md) — read in Phases 3 and 4 (existing-manifest handling, generate/merge the YAML)
+- `_includes/verification.md` (same directory as this SKILL.md) — read in Phases 5 and 6 (sync-payload verification, summary report)
 
 ---
 
@@ -108,7 +108,7 @@ phase fires.
 Verify the `nightgauge` binary is available, resolve the workspace root
 (`--root` or CWD), and parse arguments.
 
-> **Read `skills/nightgauge-workspace-init/_includes/member-detection.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/member-detection.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -119,7 +119,7 @@ contains `.nightgauge/config.yaml`. Read each member's `owner`, `repo`, and
 `project.number`. Fail with a clear error if fewer than 2 members are found
 (a single repo does not need a workspace manifest — use `repo-init` instead).
 
-> **Read `skills/nightgauge-workspace-init/_includes/member-detection.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/member-detection.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -130,7 +130,7 @@ read it from the members' configs (they should agree); else query
 `nightgauge workspace repos-from-project`. Pick a `default_repository`
 (the member whose role is primary, or the first detected).
 
-> **Read `skills/nightgauge-workspace-init/_includes/member-detection.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/member-detection.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -141,7 +141,7 @@ If `.vscode/nightgauge-workspace.yaml` already exists, read it and MERGE
 workspace description, add only newly-detected members. In `--dry-run`, print
 the would-be manifest and stop.
 
-> **Read `skills/nightgauge-workspace-init/_includes/manifest-generation.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/manifest-generation.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -152,7 +152,7 @@ description), `repositories[]` (name/path/role/project_number per member),
 `routing` (default_repository + any patterns), and an `epic` block. Match the
 verified reference shape documented in the include.
 
-> **Read `skills/nightgauge-workspace-init/_includes/manifest-generation.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/manifest-generation.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -163,7 +163,7 @@ the `repos` array is non-empty and contains every detected member. A non-empty
 payload proves the extension will render the shared board. Run `workspace
 doctor` and surface any fatal validation errors.
 
-> **Read `skills/nightgauge-workspace-init/_includes/verification.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/verification.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -173,7 +173,7 @@ Output a clear summary: workspace name, members registered, shared project,
 manifest path, and `sync-payload` verification result. Then the recommended next
 step (open the parent folder in VSCode).
 
-> **Read `skills/nightgauge-workspace-init/_includes/verification.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/verification.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ---
 

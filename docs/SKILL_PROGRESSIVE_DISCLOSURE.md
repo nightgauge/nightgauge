@@ -54,17 +54,18 @@ Replace each extracted body with a model-facing directive **at the same
 position** — immediately after the phase's `<!-- phase:start -->` marker and
 heading:
 
-> **Read `skills/<skill>/_includes/X.md` now and follow its instructions before
-> continuing this phase.**
+> **Read `_includes/X.md` (same directory as this SKILL.md) now and follow its
+> instructions before continuing this phase.**
 
 Rules:
 
-- Use the **repo-root-relative** path (`skills/<skill>/...`). Do not use `../`
-  relative paths. The runner rewrites these to absolute host paths at
-  prompt-build time and exports `NIGHTGAUGE_SKILL_DIR` into the agent env
-  (#196) — the original "CWD is the repo root" assumption (spike Q3) only
-  held when dogfooding the nightgauge repo itself; cross-repo pipeline runs
-  spawn in the target repo's worktree, which has no `skills/` directory.
+- Use the **skill-relative** path (`_includes/X.md`), not a repo-root path
+  (`skills/<skill>/_includes/X.md`). Interactive agents (Grok, Codex, the
+  Claude plugin copy whose directory is renamed to `issue-create/`) are not
+  running with cwd at the nightgauge checkout, so a repo-root path cannot
+  resolve. Pipeline runtimes rewrite backtick-wrapped `_includes/` (and the
+  historical `skills/<name>/_includes/` form) to absolute host paths at
+  prompt-build time and export `NIGHTGAUGE_SKILL_DIR` (#196).
   Only the skill's OWN paths (and `skills/_shared/`) are rewritten —
   cross-skill references pass through untouched.
 - The directive is **plain prose**, never an `<!-- include: -->` comment — that
@@ -81,8 +82,8 @@ loading it:
 ```markdown
 ## Supporting files (load on demand)
 
-- `skills/<skill>/_includes/testing.md` — read in Phase 2 (run tests)
-- `skills/<skill>/_includes/merge.md` — read in Phase 6 (merge gate)
+- `_includes/testing.md` (same directory as this SKILL.md) — read in Phase 2 (run tests)
+- `_includes/merge.md` (same directory as this SKILL.md) — read in Phase 6 (merge gate)
 ```
 
 This is the **one-level-deep index** the acceptance criteria require. List every
@@ -122,8 +123,8 @@ keeps the read graph flat and predictable.
 ## The platform injected-string caveat
 
 The TS platform path (`skillRunner.ts` `parseSkillContent`, Issue #1473) serves
-skills as an **injected string with no on-disk file**, so a `Read
-skills/.../_includes/X.md` directive cannot resolve there. Therefore:
+skills as an **injected string with no on-disk file**, so a skill-relative
+`Read` directive cannot resolve there. Therefore:
 
 - **Keep inline** anything the platform path strictly needs to function before
   reaching the next on-disk read — environment preflight, contract definitions,

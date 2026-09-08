@@ -11,6 +11,13 @@ and this project adheres to
 
 ### Added
 
+- Grok is a first-class skill consumer. Activating the extension (or running
+  `Nightgauge: Setup Grok Skills`) installs Nightgauge skills into
+  `~/.grok/skills` from the bundled VSIX, and marketplace Codex installs now
+  copy bundled skills into `~/.codex/skills` even when the workspace has no
+  `skills/` directory. Progressive-disclosure `Read` paths are skill-relative
+  so they resolve outside this checkout.
+
 - An Action Center card for a green PR that is behind its base branch now offers
   "Update the branch from the base" as its primary action, with dismiss as the
   secondary. Previously the only option was dismiss, so clearing three stale

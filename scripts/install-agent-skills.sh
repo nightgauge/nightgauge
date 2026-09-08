@@ -5,15 +5,17 @@
 #
 #   - Claude Code (standalone)  -> /nightgauge:<name>   (plugin marketplace)
 #   - OpenAI Codex              -> $nightgauge-<name>    (~/.codex/skills)
+#   - Grok Build TUI            -> /nightgauge-<name>    (~/.grok/skills)
 #
 # The VS Code extension is handled separately by dev-install.sh, which bundles
-# the pipeline skills into the .vsix. This script covers the two GLOBAL,
-# tool-native install locations that dev-install.sh did not previously touch.
+# the pipeline skills into the .vsix. This script covers the three GLOBAL,
+# tool-native install locations that the extension does not own.
 #
 # Usage:
-#   ./scripts/install-agent-skills.sh                 # refresh Claude + Codex
+#   ./scripts/install-agent-skills.sh                 # refresh Claude + Codex + Grok
 #   ./scripts/install-agent-skills.sh --claude-only   # only Claude Code plugins
 #   ./scripts/install-agent-skills.sh --codex-only    # only Codex ~/.codex/skills
+#   ./scripts/install-agent-skills.sh --grok-only     # only Grok ~/.grok/skills (+ plugin)
 #   ./scripts/install-agent-skills.sh --generate-only # regenerate the mirror, no tool refresh
 #   ./scripts/install-agent-skills.sh --check-mirror  # ASSERT the mirror, non-mutating
 #
@@ -37,10 +39,12 @@ PLUGIN_SKILLS="$REPO_ROOT/$MIRROR_REL"
 
 DO_CLAUDE=1
 DO_CODEX=1
+DO_GROK=1
 MODE="install"
 case "${1:-}" in
-  --claude-only) DO_CODEX=0 ;;
-  --codex-only) DO_CLAUDE=0 ;;
+  --claude-only) DO_CODEX=0; DO_GROK=0 ;;
+  --codex-only) DO_CLAUDE=0; DO_GROK=0 ;;
+  --grok-only) DO_CLAUDE=0; DO_CODEX=0 ;;
   # Regenerate the committed plugin skills tree in place and stop. No tool
   # refresh, no assertions — this is the FIX command a contributor runs after
   # editing `skills/` (CONTRIBUTING.md § Authoring Checklist). It mutates the
@@ -52,7 +56,7 @@ case "${1:-}" in
   "") ;;
   *)
     echo "Unknown argument: $1" >&2
-    echo "Usage: $0 [--claude-only|--codex-only|--generate-only|--check-mirror]" >&2
+    echo "Usage: $0 [--claude-only|--codex-only|--grok-only|--generate-only|--check-mirror]" >&2
     exit 2
     ;;
 esac
@@ -222,6 +226,72 @@ install_codex() {
   fi
 
   echo "    Synced $count skills to Codex."
+}
+
+# ---------------------------------------------------------------------------
+# Grok Build TUI: copy every skill (a dir containing SKILL.md) into
+# ~/.grok/skills/ under the canonical directory names (nightgauge-issue-create,
+# etc.), matching Codex. Grok discovers user-scoped skills there and exposes
+# them as /nightgauge-<name>. Canonical skills stay tool-agnostic — this copy
+# never injects disable-model-invocation (DMI is Claude-plugin-only).
+#
+# Skip when neither the `grok` CLI nor ~/.grok exists (same shape as Codex
+# skipping when ~/.codex is missing). `grok` on PATH is sufficient even if
+# ~/.grok has not been created yet: mkdir -p the dest. Plugin install is
+# best-effort and must not fail the script.
+# ---------------------------------------------------------------------------
+install_grok() {
+  local grok_cli=0
+  if command -v grok >/dev/null 2>&1; then
+    grok_cli=1
+  fi
+  if [ "$grok_cli" -eq 0 ] && [ ! -d "$HOME/.grok" ]; then
+    echo "==> Grok: neither 'grok' CLI nor ~/.grok found — skipping."
+    return 0
+  fi
+
+  local dest_root="$HOME/.grok/skills"
+  echo "==> Grok: syncing skills into $dest_root ..."
+  mkdir -p "$dest_root"
+
+  local count=0
+  for src in "$SKILLS_SRC"/*/; do
+    local name
+    name="$(basename "$src")"
+    [ -f "$src/SKILL.md" ] || continue
+    rsync -a --delete "$src" "$dest_root/$name/"
+    count=$((count + 1))
+  done
+
+  if [ -d "$SKILLS_SRC/_shared" ]; then
+    rsync -a --delete "$SKILLS_SRC/_shared/" "$dest_root/_shared/"
+  fi
+
+  echo "    Synced $count skills to Grok."
+
+  # Plugin install is the Claude analog: point Grok at this checkout's
+  # marketplace (it accepts .claude-plugin/marketplace.json) and install the
+  # nightgauge plugin. Empirically (2026-09-08):
+  #   grok plugin marketplace add "$REPO_ROOT"
+  #   grok plugin install "$REPO_ROOT/claude-plugins/nightgauge" --trust
+  # `nightgauge@nightgauge-plugins` fails — Grok names a local marketplace
+  # after the directory (`nightgauge`), not marketplace.json's `name`.
+  # `grok plugin install nightgauge --trust` works after marketplace add.
+  # A plugin-command failure must not fail the home-skills copy.
+  if [ "$grok_cli" -eq 1 ]; then
+    local plugin_src="$REPO_ROOT/claude-plugins/nightgauge"
+    echo "    Installing Nightgauge plugin via grok (best-effort) ..."
+    if ! grok plugin marketplace add "$REPO_ROOT" >/dev/null; then
+      echo "    WARNING: grok plugin marketplace add failed — ~/.grok/skills copy still applies." >&2
+    fi
+    if grok plugin install "$plugin_src" --trust >/dev/null; then
+      echo "    Grok plugin installed from $plugin_src."
+    elif grok plugin install nightgauge --trust >/dev/null; then
+      echo "    Grok plugin installed as nightgauge."
+    else
+      echo "    WARNING: grok plugin install failed — ~/.grok/skills copy still applies." >&2
+    fi
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -576,5 +646,6 @@ fi
 
 [ "$DO_CODEX" = "1" ] && install_codex
 [ "$DO_CLAUDE" = "1" ] && install_claude
+[ "$DO_GROK" = "1" ] && install_grok
 
 echo "==> Agent skill sync complete."

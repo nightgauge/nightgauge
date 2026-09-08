@@ -387,6 +387,9 @@ func RewriteSkillRelativePaths(content string, stage string, skillDir string) st
 		seen[name] = true
 		out = strings.ReplaceAll(out, "skills/"+name+"/", dir+string(filepath.Separator))
 	}
+	// Skill-relative form (`_includes/foo.md` next to SKILL.md). Require the
+	// leading backtick so an already-absolute path is not rewritten again.
+	out = strings.ReplaceAll(out, "`_includes/", "`"+dir+string(filepath.Separator)+"_includes/")
 	return out
 }
 

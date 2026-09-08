@@ -249,6 +249,11 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
       icon: "$(terminal)",
     },
     {
+      command: "nightgauge.setupGrok",
+      title: "Nightgauge: Setup Grok Skills",
+      icon: "$(terminal)",
+    },
+    {
       command: "nightgauge.resetPipeline",
       title: "Nightgauge: Reset Pipeline",
       icon: "$(clear-all)",

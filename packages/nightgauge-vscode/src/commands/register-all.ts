@@ -135,6 +135,7 @@ import type { SlotOutputManager } from "../views/SlotOutputManager";
 // Services
 import type { PluginSetupService } from "../services/PluginSetupService";
 import type { CodexSetupService } from "../services/CodexSetupService";
+import type { GrokSetupService } from "../services/GrokSetupService";
 import type { PipelineStateService } from "../services/PipelineStateService";
 import type { HeadlessOrchestrator } from "../services/HeadlessOrchestrator";
 import type { IssueQueueService } from "../services/IssueQueueService";
@@ -173,6 +174,7 @@ export interface AllCommandDeps {
   outputWindow: OutputWindow;
   pluginSetupService: PluginSetupService;
   codexSetupService: CodexSetupService;
+  grokSetupService: GrokSetupService;
   headlessOrchestrator: HeadlessOrchestrator | null;
   pipelineStateService: PipelineStateService | null;
   issueQueueService: IssueQueueService | null;
@@ -231,6 +233,7 @@ export function registerAllCommands(deps: AllCommandDeps): void {
     outputWindow,
     pluginSetupService,
     codexSetupService,
+    grokSetupService,
     headlessOrchestrator,
     pipelineStateService,
     issueQueueService,
@@ -342,6 +345,11 @@ export function registerAllCommands(deps: AllCommandDeps): void {
   // Codex setup
   const setupCodexCommand = vscode.commands.registerCommand("nightgauge.setupCodex", async () => {
     await codexSetupService.showSetupPrompt();
+  });
+
+  // Grok setup
+  const setupGrokCommand = vscode.commands.registerCommand("nightgauge.setupGrok", async () => {
+    await grokSetupService.showSetupPrompt();
   });
 
   // Reset session
@@ -894,6 +902,7 @@ export function registerAllCommands(deps: AllCommandDeps): void {
     cleanupSessionLogsCommand,
     setupPluginsCommand,
     setupCodexCommand,
+    setupGrokCommand,
     resetSessionCommand,
     showBrownfieldDashboardCommand,
     showKnowledgeValueDashboardCommand,

@@ -46,8 +46,8 @@ for skill in nightgauge-issue-pickup nightgauge-feature-planning \
     cp "$src/SKILL.md" "$dest/SKILL.md"
     # Bundle the skill's on-demand _includes/ reference files (ADR-010
     # progressive disclosure). The refactored SKILL.md bodies emit
-    # "Read skills/<skill>/_includes/X.md now ..." directives, so the
-    # bundled skill is incomplete without them.
+    # "Read `_includes/X.md` (same directory as this SKILL.md) now ..."
+    # directives, so the bundled skill is incomplete without them.
     if [ -d "$src/_includes" ]; then
       rsync -a "$src/_includes/" "$dest/_includes/"
     fi

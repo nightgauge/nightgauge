@@ -16,6 +16,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- Claude, Codex, and Grok are all first-class skill consumers. The local
+  installer (`scripts/install-agent-skills.sh`) copies skills into
+  `~/.grok/skills` by default (with `--grok-only` / `--claude-only` /
+  `--codex-only`), the VS Code extension installs Grok skills on activate from
+  the bundled VSIX, and Codex marketplace installs no longer depend on a
+  workspace `skills/` tree. Progressive-disclosure `Read` paths in SKILL.md are
+  skill-relative (`_includes/foo.md`) so they resolve in Grok, Codex, and the
+  Claude plugin copy, not only inside this checkout.
+
 - An Action Center card for a PR that is green but behind its base branch now
   offers to update it, instead of offering only "dismiss". The new
   `pr.updateBranch` verb merges the base into the PR's head branch in one

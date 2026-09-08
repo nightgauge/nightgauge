@@ -70,6 +70,7 @@ REQUIRED_FILES=(
   scripts/check-changelog.sh
   scripts/test-check-changelog.sh
   scripts/test-mirror-drift-gate.sh
+  scripts/test-install-agent-skills-targets.sh
   scripts/test-issue-body-contract.sh
   scripts/check-issue-body-contract.py
   scripts/test-skill-echo-json.sh
@@ -573,6 +574,12 @@ run_group "Changelog names every released tag" bash scripts/check-changelog.sh
 #     (#546). Paired with 11b as 5b is paired with 5.
 run_group "Mirror drift gate regression suite" \
   bash scripts/test-mirror-drift-gate.sh
+
+# 11a. Agent-skill install targets — Grok/Codex/Claude home copies and
+#      --*-only flags, against a throwaway HOME. Self-test includes a
+#      vacuous-fail arm (install_grok commented out).
+run_group "Agent-skill install target regression suite" \
+  bash scripts/test-install-agent-skills-targets.sh
 
 # 11a2. Issue-body heading contract (#711) — the required-heading table exists
 #       in three files (issue-audit SKILL.md, docs/ISSUE_AUDIT.md, and

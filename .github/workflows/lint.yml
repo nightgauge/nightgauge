@@ -104,6 +104,8 @@ jobs:
       # which is #529 all over again.
       - name: Mirror drift gate self-test
         run: bash scripts/test-mirror-drift-gate.sh
+      - name: Agent-skill install target regression suite
+        run: bash scripts/test-install-agent-skills-targets.sh
       # Read-only, and free to sit anywhere in this job: `--check-mirror`
       # regenerates into a temp destination and compares the two trees — paths,
       # contents, symlink targets and the executable bit git tracks — so it

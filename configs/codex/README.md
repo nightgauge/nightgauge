@@ -26,7 +26,9 @@ from the local working tree with:
 ```
 
 This also runs automatically as part of the VS Code extension `dev-install.sh`,
-which refreshes the Claude Code plugins and Codex skills alongside the extension.
+which refreshes the Claude Code plugins, Codex skills, and Grok skills
+alongside the extension. Use `--grok-only` to refresh Grok without touching
+Codex.
 
 ## Why This Exists
 

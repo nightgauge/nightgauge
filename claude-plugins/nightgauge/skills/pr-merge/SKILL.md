@@ -102,14 +102,14 @@ attempt to populate that section itself; leave the placeholder from
 
 ## Supporting files (load on demand)
 
-- `skills/nightgauge-pr-merge/_includes/context-bootstrap.md` — read in Phase 0 (stage start + context reconstruction)
-- `skills/nightgauge-pr-merge/_includes/batch-detection.md` — read conditionally in Phase 0.5 only when the batch context file exists (multi-issue close, batch context cleanup)
-- `skills/nightgauge-pr-merge/_includes/validate-environment.md` — read in Phase 1 (verify branch, PR state, pre-CI Go build check)
-- `skills/nightgauge-pr-merge/_includes/reviews.md` — read in Phase 3 (fetch & parse review feedback, CI status)
-- `skills/nightgauge-pr-merge/_includes/merge.md` — read in Phase 6 (ruleset pre-check, knowledge conformance gate, conflict resolution, merge gate, execute merge)
-- `skills/nightgauge-pr-merge/_includes/post-merge.md` — read in Phase 7 (post-merge build, issue close, epic completion, branch cleanup, outcome recording)
-- `skills/nightgauge-pr-merge/_includes/feedback.md` — read in Phase 7.8 (retrospective feedback)
-- `skills/nightgauge-pr-merge/_includes/failure-cleanup.md` — read in Failure Cleanup (cleanup_failed_pr function + exit-point usage)
+- `_includes/context-bootstrap.md` (same directory as this SKILL.md) — read in Phase 0 (stage start + context reconstruction)
+- `_includes/batch-detection.md` (same directory as this SKILL.md) — read conditionally in Phase 0.5 only when the batch context file exists (multi-issue close, batch context cleanup)
+- `_includes/validate-environment.md` (same directory as this SKILL.md) — read in Phase 1 (verify branch, PR state, pre-CI Go build check)
+- `_includes/reviews.md` (same directory as this SKILL.md) — read in Phase 3 (fetch & parse review feedback, CI status)
+- `_includes/merge.md` (same directory as this SKILL.md) — read in Phase 6 (ruleset pre-check, knowledge conformance gate, conflict resolution, merge gate, execute merge)
+- `_includes/post-merge.md` (same directory as this SKILL.md) — read in Phase 7 (post-merge build, issue close, epic completion, branch cleanup, outcome recording)
+- `_includes/feedback.md` (same directory as this SKILL.md) — read in Phase 7.8 (retrospective feedback)
+- `_includes/failure-cleanup.md` (same directory as this SKILL.md) — read in Failure Cleanup (cleanup_failed_pr function + exit-point usage)
 
 ---
 
@@ -190,7 +190,7 @@ Read PR context: resolve the issue number from the branch, load
 `.nightgauge/pipeline/pr-{N}.json`, signal stage start, and reconstruct the
 context file from GitHub if it is missing.
 
-> **Read `skills/nightgauge-pr-merge/_includes/context-bootstrap.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/context-bootstrap.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -216,7 +216,7 @@ if [ -n "$EPIC_NUMBER" ] && [ -f "$BATCH_DEV" ]; then echo "BATCH_CONTEXT_FOUND=
 ```
 
 **Only when the probe prints `BATCH_CONTEXT_FOUND=...`**: read
-`skills/nightgauge-pr-merge/_includes/batch-detection.md` now and follow its
+`_includes/batch-detection.md` (same directory as this SKILL.md) now and follow its
 instructions before continuing this phase.
 
 **Do not read the file when the probe prints `SINGLE_ISSUE`**. Continue to
@@ -233,7 +233,7 @@ printf '<!-- phase:start name="validate-environment" index=2 total=14 stage="pr-
 Verify the feature branch (handling detached HEAD), resolve the PR number and
 state, extract the issue number, and run the pre-CI Go build integrity check.
 
-> **Read `skills/nightgauge-pr-merge/_includes/validate-environment.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/validate-environment.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -266,7 +266,7 @@ printf '<!-- phase:start name="fetch-reviews" index=5 total=14 stage="pr-merge" 
 Fetch PR details and reviews, wait for CI status, fetch inline review comments
 and review summaries, and parse both automated and human reviews.
 
-> **Read `skills/nightgauge-pr-merge/_includes/reviews.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/reviews.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -404,7 +404,7 @@ Go-binary merge (with its `blockedBy` gate), and merge verification.
 > improvise an admin-bypass merge via raw `gh` (incident: #186). A PreToolUse
 > hook blocks these flags during pipeline sessions.
 
-> **Read `skills/nightgauge-pr-merge/_includes/merge.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/merge.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -418,7 +418,7 @@ Verify the post-merge build, close the issue and sync the board deterministicall
 fire the post-merge hook, check epic completion, delete the feature branch, and
 record the outcome to the complexity model.
 
-> **Read `skills/nightgauge-pr-merge/_includes/post-merge.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/post-merge.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -431,7 +431,7 @@ printf '<!-- phase:start name="retrospective-feedback" index=11 total=14 stage="
 Capture non-blocking post-merge workflow feedback (interactive only; skipped in
 headless mode) and persist it to the context file.
 
-> **Read `skills/nightgauge-pr-merge/_includes/feedback.md` now and follow its instructions before continuing this phase.**
+> **Read `_includes/feedback.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -509,7 +509,7 @@ When the skill is about to exit with a non-zero code AND a PR number is known,
 define and invoke the `cleanup_failed_pr` function. Replace ALL bare `exit 1`
 calls in the phases above with the `cleanup_failed_pr` + `exit 1` pattern.
 
-> **Read `skills/nightgauge-pr-merge/_includes/failure-cleanup.md` now and follow its instructions before relying on this section.**
+> **Read `_includes/failure-cleanup.md` (same directory as this SKILL.md) now and follow its instructions before relying on this section.**
 
 ---
 
