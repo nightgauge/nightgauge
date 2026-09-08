@@ -17,6 +17,16 @@ package sweep
 // would say it either. The producer now cards that condition too, at `fyi`:
 // worth knowing, interrupts nobody, and never dressed up as a fleet blocker.
 //
+// It is not the only observer of a red default branch. `merge-commit-checks`
+// (internal/hooks) raises when the pipeline's own merge turns the branch red,
+// and names the merge that did it. That is one fact seen from two vantage
+// points, so this producer defers whenever that card is already open for the
+// same branch (issue #1573) — the same shape as `human-gate` deferring to the
+// run-scoped `branch-protection` producer, and for the same reason: the more
+// SPECIFIC observation wins. "main is red" is a strictly weaker sentence than
+// "main is red because PR #123's merge commit failed these checks", and the
+// operator who gets both learns to read neither.
+//
 // The card this raises deliberately has no repair affordance. Nothing in the
 // verb registry can fix a red `main`, and an option that implies otherwise is
 // worse than no option: the operator clicks it, nothing changes, and the next
@@ -39,6 +49,13 @@ import (
 // ProducerDefaultBranchHealth is the stable producer id. It is half of the
 // sticky (producer, idempotency_key) identity, so it must never change.
 const ProducerDefaultBranchHealth = "default-branch-health"
+
+// producerMergeCommitChecks is the producer this one defers to. It lives in
+// internal/hooks as ProducerMergeCommitChecks; duplicating the literal here is
+// deliberate, exactly as producerBranchProtection is duplicated in humangate.go
+// — importing the hooks package from a sweep producer would invert the
+// dependency and drag the post-merge machinery into every sweep.
+const producerMergeCommitChecks = "merge-commit-checks"
 
 // DefaultBranchGrace is how long a failing check is left alone before it is
 // carded. CI fails transiently and is re-run green within minutes often enough
@@ -91,6 +108,17 @@ func (p *DefaultBranchHealth) Evaluate(ctx context.Context, in Input) ([]attenti
 		// An empty repository, or an adapter that cannot report the default
 		// branch. Guessing "main" here would produce a 404 that reads as a
 		// producer failure forever; declining to observe is the honest answer.
+		return nil, nil
+	}
+
+	if _, dup := in.OpenRequestForBranch(producerMergeCommitChecks, in.Repo, branch); dup {
+		// A more specific producer already cards this exact branch, and names
+		// the merge that turned it red. Returning nil here is the positive
+		// assertion that THIS producer has nothing to say, so an older
+		// default-branch-health card retracts and the operator is left with the
+		// one that carries the merge — which is the outcome we want, not a
+		// side effect to be worked around. It also saves the two check-run
+		// reads below, which is real sweep budget.
 		return nil, nil
 	}
 
@@ -384,6 +412,7 @@ func (p *DefaultBranchHealth) blockingRequest(repo, branch string, failing []fai
 		Fingerprint: "checks:" + strings.Join(names, ","),
 		Context: attention.Context{
 			Repo:    repo,
+			Branch:  branch,
 			Blocker: fmt.Sprintf("required check(s) failing on %s: %s", branch, strings.Join(names, ", ")),
 			URL:     url,
 		},
@@ -418,6 +447,7 @@ func (p *DefaultBranchHealth) advisoryRequest(repo, branch string, failing []fai
 		Fingerprint: "advisory-checks:" + strings.Join(names, ","),
 		Context: attention.Context{
 			Repo:    repo,
+			Branch:  branch,
 			Blocker: fmt.Sprintf("non-required check(s) failing on %s: %s", branch, strings.Join(names, ", ")),
 			URL:     url,
 		},

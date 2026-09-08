@@ -491,3 +491,32 @@ func assertTracedTransition(t *testing.T, root, sweepID, transition string) {
 	}
 	t.Errorf("no %q decision_request event in trace %s (%d events)", transition, sweepID, len(events))
 }
+
+func TestOpenRequestForBranchMatchesProducerRepoAndBranch(t *testing.T) {
+	open := attention.DecisionRequest{
+		Producer: "merge-commit-checks",
+		Context:  attention.Context{Repo: "octocat/acme", Branch: "main"},
+	}
+	resolved := attention.DecisionRequest{
+		Producer: "merge-commit-checks",
+		Context:  attention.Context{Repo: "octocat/acme", Branch: "release"},
+	}
+	resolved.Lifecycle.State = attention.StateResolved
+	in := Input{Existing: []attention.DecisionRequest{open, resolved}}
+
+	if _, ok := in.OpenRequestForBranch("merge-commit-checks", "octocat/acme", "main"); !ok {
+		t.Error("the open card for (repo, branch) was not found")
+	}
+	for _, tc := range []struct{ producer, repo, branch, why string }{
+		{"other-producer", "octocat/acme", "main", "a different producer's card"},
+		{"merge-commit-checks", "octocat/other", "main", "another repository"},
+		{"merge-commit-checks", "octocat/acme", "develop", "another branch"},
+		{"merge-commit-checks", "octocat/acme", "release", "a terminal card"},
+		{"merge-commit-checks", "octocat/acme", "", "an unknown branch must match nothing"},
+		{"merge-commit-checks", "", "main", "an unknown repo must match nothing"},
+	} {
+		if _, ok := in.OpenRequestForBranch(tc.producer, tc.repo, tc.branch); ok {
+			t.Errorf("matched %s", tc.why)
+		}
+	}
+}

@@ -98,6 +98,31 @@ func (in Input) OpenRequestForPR(producer string, pr int) (attention.DecisionReq
 	return attention.DecisionRequest{}, false
 }
 
+// OpenRequestForBranch returns the first non-terminal request from the named
+// producer that is about the given repo and branch. It is the branch-scoped
+// twin of OpenRequestForPR, and exists for the same reason: some conditions are
+// facts about a BRANCH rather than about a pull request — a red default branch
+// above all — and a producer that wants to defer to a more specific observer of
+// that fact has no PR number to key on.
+//
+// Both arguments are matched. A card carries the repo it is about in its own
+// Context rather than inheriting the sweep's, and Existing is only ever the one
+// repo's cards today; requiring the repo to match anyway keeps that an
+// invariant of the lookup rather than of the caller.
+func (in Input) OpenRequestForBranch(producer, repo, branch string) (attention.DecisionRequest, bool) {
+	if repo == "" || branch == "" {
+		// An unknown branch matches nothing. Returning "found" on the empty
+		// string would let one producer silence another wholesale.
+		return attention.DecisionRequest{}, false
+	}
+	for _, r := range in.Existing {
+		if r.Producer == producer && r.Context.Repo == repo && r.Context.Branch == branch && !r.Lifecycle.State.IsTerminal() {
+			return r, true
+		}
+	}
+	return attention.DecisionRequest{}, false
+}
+
 // Producer evaluates one class of repo-scoped standing condition.
 //
 // Registration is an interface precisely so the producers in this epic — and

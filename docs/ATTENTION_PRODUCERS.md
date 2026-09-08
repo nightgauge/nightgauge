@@ -417,6 +417,34 @@ if _, dup := in.OpenRequestForPR(producerBranchProtection, pr.Number); dup {
 `Existing` is read once per sweep, before any producer runs, so the outcome does
 not depend on registration order. Treat it as read-only advisory context.
 
+Some conditions are facts about a **branch**, not about a pull request, and
+have no PR number to key on. `OpenRequestForBranch` is the branch-scoped twin:
+the sweep's `default-branch-health` producer uses it to defer to
+`merge-commit-checks`, which the post-merge hook raises when the pipeline's own
+merge turned the branch red.
+
+```go
+if _, dup := in.OpenRequestForBranch(producerMergeCommitChecks, in.Repo, branch); dup {
+    return nil, nil
+}
+```
+
+Two rules make this safe, and both generalise:
+
+- **The more SPECIFIC producer wins.** "main is red" is a strictly weaker
+  sentence than "main is red because PR #123's merge commit failed these
+  checks". An operator handed both learns to read neither.
+- **Defer by returning nothing, not by suppressing the write.** `nil` is the
+  positive assertion that this producer has nothing to say, so an older card of
+  its own retracts and exactly one card survives. That is the intended outcome
+  — see [Invariant 1](#1-an-empty-result-means-the-condition-is-false).
+
+The lookup keys on `Context.Branch`, so a producer that wants to be deferred TO
+has to populate it — recognition is not automatic and is not one-directional.
+The producer id it defers to is duplicated as a local constant rather than
+imported, for the same reason `producerBranchProtection` is: importing the
+owning package from a sweep producer inverts the dependency.
+
 ## Bounding cost
 
 A sweep runs on a timer, and on demand from several event-driven triggers. Your

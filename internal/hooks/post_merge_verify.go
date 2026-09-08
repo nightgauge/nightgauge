@@ -489,7 +489,12 @@ func BuildMainRedCard(owner, repo, branch string, issue, pr int, res MainCheckRe
 		Fingerprint: "sha:" + res.MergeCommitSha + ";checks:" + strings.Join(names, ","),
 		ExpiresAt:   time.Now().UTC().Add(attention.StandingExpiry).Format(time.RFC3339Nano),
 		Context: attention.Context{
-			Repo:    fullRepo,
+			Repo: fullRepo,
+			// The branch is in the identity key already; it is repeated here
+			// because that is where another producer can read it. The sweep's
+			// default-branch-health producer defers to this card, and it
+			// recognises it by (repo, branch) — see Input.OpenRequestForBranch.
+			Branch:  branch,
 			Issue:   issue,
 			PR:      pr,
 			Blocker: fmt.Sprintf("check(s) failing on %s at %s: %s", branch, short, strings.Join(names, ", ")),
