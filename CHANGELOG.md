@@ -24,6 +24,13 @@ changelog, and the release workflow refuses a tag that does not.
   established from the run's own completion time; an undated run and a
   cancelled re-run are both treated as non-evidence, so neither can suppress a
   real failure (#1572)
+- A red default branch no longer produces two cards. `default-branch-health`
+  now defers to `merge-commit-checks` whenever that producer already has an
+  open card for the same repository and branch, so the operator gets the one
+  observation that names which merge turned the branch red rather than that
+  one plus a weaker duplicate. Cards raised about a branch now carry it in
+  `Context.branch`, which is what the new branch-scoped dedupe lookup keys on
+  (#1573)
 
 ## [0.3.1] - 2026-09-07
 

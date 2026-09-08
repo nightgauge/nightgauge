@@ -384,6 +384,12 @@ func TestBuildMainRedCard_NamesMergeCommitPRAndChecks(t *testing.T) {
 	if req.Context.PR != 1360 || req.Context.Issue != 1249 || req.Context.Repo != "nightgauge/nightgauge" || req.Context.URL != "https://ci/e2e" {
 		t.Errorf("Context = %+v", req.Context)
 	}
+	// The sweep's default-branch-health producer defers to this card and
+	// recognises it by (repo, branch), so the branch must be readable from the
+	// Context and not only from the identity key (#1573).
+	if req.Context.Branch != "main" {
+		t.Errorf("Context.Branch = %q, want %q — the sweep producer dedupes against it", req.Context.Branch, "main")
+	}
 	if req.Severity != attention.SeverityFYI {
 		t.Errorf("Severity = %q, want fyi when no required check failed (#1250 semantics)", req.Severity)
 	}

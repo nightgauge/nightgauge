@@ -926,3 +926,158 @@ func TestDefaultBranch_LatestRunRuleAppliesToAdvisoryChecksToo(t *testing.T) {
 		t.Fatalf("observations = %d, want 0 — recency decides for non-required checks exactly as for required ones", len(got))
 	}
 }
+
+// --- deferring to merge-commit-checks (issue #1573) --------------------------
+
+// mergeCommitCard is the card internal/hooks raises when the pipeline's own
+// merge turns a branch red. Only the fields the deferral keys on are set; the
+// literal producer id mirrors hooks.ProducerMergeCommitChecks, which the sweep
+// deliberately does not import.
+func mergeCommitCard(repo, branch string) attention.DecisionRequest {
+	return attention.DecisionRequest{
+		IdempotencyKey: "merge-commit-checks:" + repo + ":" + branch,
+		Producer:       producerMergeCommitChecks,
+		Kind:           attention.KindUnblock,
+		Severity:       attention.SeverityBlockingFleet,
+		Title:          branch + " is red after PR #123 merged",
+		Standing:       true,
+		Context:        attention.Context{Repo: repo, Branch: branch, PR: 123},
+		DefaultAction:  attention.ExpireNoop,
+	}
+}
+
+func redBranchInput(existing ...attention.DecisionRequest) Input {
+	in := branchInput(&repoSvc{defaultBranch: "main"}, &branchCI{
+		required: []string{"route-walk"},
+		runs: []forgetypes.CheckDetail{
+			{Name: "route-walk", Status: "COMPLETED", Conclusion: "FAILURE", CompletedAt: ago(2 * time.Hour), DetailsURL: "https://forge/run/1"},
+		},
+	})
+	in.Existing = existing
+	return in
+}
+
+func TestDefaultBranch_DefersToMergeCommitChecksOnTheSameBranch(t *testing.T) {
+	// Observed live: default-branch-health:<repo>:main and
+	// merge-commit-checks:<repo>:main both open for the same failing check on
+	// the same commit. One fact, two vantage points — and the card that names
+	// WHICH merge did it is strictly the more useful of the two.
+	p := newDefaultBranchProducer()
+	got, err := p.Evaluate(context.Background(), redBranchInput(mergeCommitCard("octocat/acme", "main")))
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	// nil is the positive assertion that this producer has nothing to say, so
+	// an older default-branch-health card retracts and the operator is left
+	// holding the specific one. That is the intended outcome, not a side effect.
+	if len(got) != 0 {
+		t.Fatalf("observations = %d, want 0 — merge-commit-checks already cards this branch: %+v", len(got), got)
+	}
+}
+
+func TestDefaultBranch_DeferralIsScopedToTheBranchAndRepo(t *testing.T) {
+	// A merge-commit card for a DIFFERENT branch, or a different repo, says
+	// nothing about this one. A deferral that ignored either would silence the
+	// only producer watching a red default branch nothing merged onto.
+	p := newDefaultBranchProducer()
+	for _, tc := range []struct {
+		name string
+		card attention.DecisionRequest
+	}{
+		{"other branch", mergeCommitCard("octocat/acme", "develop")},
+		{"other repo", mergeCommitCard("octocat/other", "main")},
+		{"branch unknown to the card", mergeCommitCard("octocat/acme", "")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := p.Evaluate(context.Background(), redBranchInput(tc.card))
+			if err != nil {
+				t.Fatalf("Evaluate: %v", err)
+			}
+			if len(got) != 1 {
+				t.Fatalf("observations = %d, want 1 — this card is about something else", len(got))
+			}
+		})
+	}
+}
+
+func TestDefaultBranch_DeferralIsScopedToTheMoreSpecificProducer(t *testing.T) {
+	// Its OWN standing card must not suppress it: a producer that deferred to
+	// itself would retract on the second sweep and re-raise on the third
+	// forever.
+	p := newDefaultBranchProducer()
+	own := mergeCommitCard("octocat/acme", "main")
+	own.Producer = ProducerDefaultBranchHealth
+	own.IdempotencyKey = ProducerDefaultBranchHealth + ":octocat/acme:main"
+
+	got, err := p.Evaluate(context.Background(), redBranchInput(own))
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("observations = %d, want 1 — a producer must not defer to itself", len(got))
+	}
+}
+
+func TestDefaultBranch_ResolvedMergeCommitCardDoesNotSuppress(t *testing.T) {
+	// A terminal card is not an open observation. If the operator resolved the
+	// merge-commit card and the branch is still red, somebody has to say so.
+	p := newDefaultBranchProducer()
+	done := mergeCommitCard("octocat/acme", "main")
+	done.Lifecycle.State = attention.StateResolved
+
+	got, err := p.Evaluate(context.Background(), redBranchInput(done))
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("observations = %d, want 1 — a resolved card is not an open one", len(got))
+	}
+}
+
+func TestDefaultBranch_CardsCarryTheBranchSoOthersCanDedupeAgainstThem(t *testing.T) {
+	// The deferral is keyed on Context.Branch, so this producer's own cards must
+	// populate it too — otherwise the recognition only works in one direction.
+	p := newDefaultBranchProducer()
+	for _, tc := range []struct {
+		name     string
+		required []string
+	}{
+		{"blocking", []string{"route-walk"}},
+		{"advisory", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := branchInput(&repoSvc{defaultBranch: "main"}, &branchCI{
+				required: tc.required,
+				runs: []forgetypes.CheckDetail{
+					{Name: "route-walk", Status: "COMPLETED", Conclusion: "FAILURE", CompletedAt: ago(2 * time.Hour)},
+				},
+			})
+			got, err := p.Evaluate(context.Background(), in)
+			if err != nil {
+				t.Fatalf("Evaluate: %v", err)
+			}
+			if len(got) != 1 {
+				t.Fatalf("observations = %d, want 1", len(got))
+			}
+			if got[0].Context.Branch != "main" {
+				t.Errorf("Context.Branch = %q, want %q", got[0].Context.Branch, "main")
+			}
+		})
+	}
+}
+
+func TestDefaultBranch_DeferralSkipsTheCheckRunReads(t *testing.T) {
+	// Deferring before the two CI reads is the point at which it is cheapest,
+	// and sweep budget is a stated design constraint.
+	p := newDefaultBranchProducer()
+	ci := &branchCI{required: []string{"route-walk"}}
+	in := branchInput(&repoSvc{defaultBranch: "main"}, ci)
+	in.Existing = []attention.DecisionRequest{mergeCommitCard("octocat/acme", "main")}
+
+	if _, err := p.Evaluate(context.Background(), in); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if ci.sawBranch != "" {
+		t.Errorf("the producer read required checks for %q after deciding to defer", ci.sawBranch)
+	}
+}

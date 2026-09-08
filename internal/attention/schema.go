@@ -165,8 +165,15 @@ type DecisionRequest struct {
 // Context carries everything a card needs without a join, plus the ADR-013
 // trace back-reference (ADR 015 §A).
 type Context struct {
-	Repo  string `json:"repo"`
-	Issue int    `json:"issue,omitempty"`
+	Repo string `json:"repo"`
+	// Branch is the branch the card is about, when the condition is branch-wide
+	// rather than about one PR. It is the branch analogue of PR below and
+	// exists for the same reason: two producers observing one red default
+	// branch from different vantage points — a sweep that scanned it and a
+	// post-merge hook that watched a specific merge turn it red — need a way to
+	// recognise each other and card the fact once.
+	Branch string `json:"branch,omitempty"`
+	Issue  int    `json:"issue,omitempty"`
 	// PR is the pull/merge request the card is about. Repo-scoped producers
 	// raise cards that have no issue and no run but do name a PR, and it is
 	// also how two producers observing the same PR from different vantage
