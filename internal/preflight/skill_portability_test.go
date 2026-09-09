@@ -161,12 +161,10 @@ func TestSkillPortability_WorkingTreeIsClean(t *testing.T) {
 	}
 }
 
-// TestSkillsHaveNoPredecessorPrefix is #1477's second AC: no skills/
-// directory still carries the pre-rebrand `incredibuilders-` prefix. The
-// nightgauge- counterparts already exist; leftover predecessor directories
-// were untracked local junk (.DS_Store / node_modules) and must not return
-// as real skills.
-func TestSkillsHaveNoPredecessorPrefix(t *testing.T) {
+// TestSkillDirectoriesMatchCurrentLayout pins #1477's second AC without
+// naming a retired prefix: every skills/ directory is `_shared`,
+// `templates`, one of the unprefixed portable skills, or `nightgauge-*`.
+func TestSkillDirectoriesMatchCurrentLayout(t *testing.T) {
 	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatalf("resolve repo root: %v", err)
@@ -176,11 +174,25 @@ func TestSkillsHaveNoPredecessorPrefix(t *testing.T) {
 	if err != nil {
 		t.Skipf("skills/ not found at %s; skipping working-tree assertion", repoRoot)
 	}
-	const predecessor = "incredibuilders-"
+	allowedUnprefixed := map[string]struct{}{
+		"_shared":      {},
+		"templates":    {},
+		"pr-preflight": {},
+		"smart-setup":  {},
+		"update-docs":  {},
+	}
 	for _, e := range entries {
-		if e.IsDir() && strings.HasPrefix(e.Name(), predecessor) {
-			t.Errorf("skills/%s still carries the predecessor prefix", e.Name())
+		if !e.IsDir() {
+			continue
 		}
+		name := e.Name()
+		if _, ok := allowedUnprefixed[name]; ok {
+			continue
+		}
+		if strings.HasPrefix(name, "nightgauge-") {
+			continue
+		}
+		t.Errorf("skills/%s is not a nightgauge- skill and is not in the unprefixed allowlist", name)
 	}
 }
 
