@@ -36,6 +36,9 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- `nightgauge knowledge index --help` now names `index.md` as the generated
+  index file, matching the Open Knowledge Format layout that replaced
+  `README.md` in #1370 (#1477)
 - A default branch no longer reads as red forever because of one old failing
   check run. For each check name, only its most recent completed run now
   decides pass or fail, so a scheduled workflow that failed once and has

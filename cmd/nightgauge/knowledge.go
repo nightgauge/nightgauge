@@ -259,7 +259,7 @@ func knowledgeNewCmd() *cobra.Command {
 		Short: "Scaffold a repo-topic knowledge entry",
 		Long: `Scaffold a repo-topic knowledge entry at .nightgauge/knowledge/<type>/<slug>.md.
 
-When the category directory is new, README.md and _template.md are also created.
+When the category directory is new, index.md and _template.md are also created.
 The operation is idempotent — calling it a second time with the same type and slug
 returns without modifying the existing file.
 
@@ -734,7 +734,7 @@ func knowledgeIndexCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:          "index",
-		Short:        "Generate the knowledge base index (README.md)",
+		Short:        "Generate the knowledge base index (index.md)",
 		SilenceUsage: true,
 		Example: `  nightgauge knowledge index
   nightgauge knowledge index --json

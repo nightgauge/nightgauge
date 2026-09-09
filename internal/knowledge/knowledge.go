@@ -641,7 +641,7 @@ type RepoTopicResult struct {
 // ScaffoldRepoTopic creates (idempotently) a repo-topic KB entry.
 //
 // Creates .nightgauge/knowledge/{type}/{slug}.md. When the category
-// directory is new, also creates README.md and _template.md. The entry file
+// directory is new, also creates index.md and _template.md. The entry file
 // is never clobbered — a second call returns Skipped=true.
 func ScaffoldRepoTopic(workspaceRoot string, topicType RepoTopicType, slug string) (RepoTopicResult, error) {
 	categoryDir := filepath.Join(workspaceRoot, ".nightgauge", "knowledge", string(topicType))
@@ -709,7 +709,7 @@ func ScaffoldRepoTopic(workspaceRoot string, topicType RepoTopicType, slug strin
 	return result, nil
 }
 
-// generateRepoTopicREADME produces the README.md for a repo-topic category directory.
+// generateRepoTopicIndex produces the index.md seed for a repo-topic category directory.
 func generateRepoTopicIndex(topicType RepoTopicType) (string, error) {
 	fm, err := ScaffoldFrontmatter(okf.TypeIndex, WithTitle(titleCaseCategory(string(topicType))))
 	if err != nil {
