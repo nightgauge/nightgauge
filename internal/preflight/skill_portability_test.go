@@ -161,6 +161,29 @@ func TestSkillPortability_WorkingTreeIsClean(t *testing.T) {
 	}
 }
 
+// TestSkillsHaveNoPredecessorPrefix is #1477's second AC: no skills/
+// directory still carries the pre-rebrand `incredibuilders-` prefix. The
+// nightgauge- counterparts already exist; leftover predecessor directories
+// were untracked local junk (.DS_Store / node_modules) and must not return
+// as real skills.
+func TestSkillsHaveNoPredecessorPrefix(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatalf("resolve repo root: %v", err)
+	}
+	skillsDir := filepath.Join(repoRoot, "skills")
+	entries, err := os.ReadDir(skillsDir)
+	if err != nil {
+		t.Skipf("skills/ not found at %s; skipping working-tree assertion", repoRoot)
+	}
+	const predecessor = "incredibuilders-"
+	for _, e := range entries {
+		if e.IsDir() && strings.HasPrefix(e.Name(), predecessor) {
+			t.Errorf("skills/%s still carries the predecessor prefix", e.Name())
+		}
+	}
+}
+
 // ─── #55: Stop-hook ban + truncated-cascade drift guard ─────────────────────
 
 func TestSkillPortability_FlagsHooksFrontmatter(t *testing.T) {
