@@ -1,6 +1,11 @@
 package github
 
-import "testing"
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
 
 // TestEvaluateChecksComplete_MissingRequiredCheckIsNotYet is the #1540
 // regression guard: a rollup carrying 15 of 16 required names, all
@@ -62,6 +67,56 @@ func TestEvaluateChecksComplete_CaseInsensitiveNameMatch(t *testing.T) {
 	verdict, _ := EvaluateChecksComplete(checks, []string{"lint"})
 	if verdict != ChecksComplete {
 		t.Fatalf("verdict = %q, want %q (name match must be case-insensitive)", verdict, ChecksComplete)
+	}
+}
+
+func TestEvaluateChecksComplete_DuplicateStatusSurfaceFailsClosed(t *testing.T) {
+	tests := []struct {
+		name   string
+		second CheckDetail
+		want   ChecksCompleteVerdict
+	}{
+		{name: "pending is not masked", second: CheckDetail{Name: "cla", Status: "IN_PROGRESS"}, want: ChecksNotYet},
+		{name: "failure is not masked", second: CheckDetail{Name: "cla", Status: "COMPLETED", Conclusion: "FAILURE"}, want: ChecksIncomplete},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			checks := []CheckDetail{{Name: "cla", Status: "COMPLETED", Conclusion: "SUCCESS"}, tc.second}
+			verdict, _ := EvaluateChecksComplete(checks, []string{"cla"})
+			if verdict != tc.want {
+				t.Fatalf("verdict = %q, want %q", verdict, tc.want)
+			}
+		})
+	}
+}
+
+func TestGetCommitStatuses_MapsCombinedStatusSurface(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/o/r/commits/abc123/status" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{
+			"sha":"abc123",
+			"statuses":[
+				{"context":"cla","state":"success","updated_at":"2026-09-10T23:24:40Z","target_url":"https://example.test/cla"},
+				{"context":"deploy","state":"pending","updated_at":"2026-09-10T23:25:00Z"}
+			]
+		}`))
+	}))
+	defer srv.Close()
+
+	statuses, err := newCIServiceForRESTTest(srv).GetCommitStatuses(context.Background(), "o", "r", "abc123")
+	if err != nil {
+		t.Fatalf("GetCommitStatuses: %v", err)
+	}
+	if len(statuses) != 2 {
+		t.Fatalf("statuses = %d, want 2", len(statuses))
+	}
+	if got := statuses[0]; got.Name != "cla" || got.Status != "COMPLETED" || got.Conclusion != "SUCCESS" || got.CompletedAt == "" || got.HeadSHA != "abc123" {
+		t.Errorf("successful status = %+v", got)
+	}
+	if got := statuses[1]; got.Status != "IN_PROGRESS" || got.Conclusion != "" || got.CompletedAt != "" {
+		t.Errorf("pending status = %+v", got)
 	}
 }
 

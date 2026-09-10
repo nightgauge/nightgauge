@@ -4710,6 +4710,11 @@ Two rules follow directly from that:
   nightgauge ci checks-complete "$sha" --repo {owner}/{repo}
   ```
 
+  The verb resolves required contexts from the branch ruleset and verifies
+  them across both GitHub status surfaces: Check Runs and legacy Commit
+  Statuses. It returns NOT-YET when either surface is unavailable, a required
+  context has not appeared, or a required observation is still pending.
+
 Before a bulk read, check what it would cost against what is left this hour:
 `nightgauge api-usage --budget` reports the remaining GraphQL budget for the
 current hour and prices a full board read against it, entirely from the local

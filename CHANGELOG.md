@@ -36,6 +36,9 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- Required GitHub commit-status contexts now participate in the guarded CI
+  completeness verdict instead of appearing permanently absent (#1593)
+
 - Fresh repositories now learn from their first pipeline outcome: the Go recorder
   auto-creates the canonical model, VS Code uses its correct path and a shared
   transaction, and setup guidance uses `nightgauge outcome init` (#1590)

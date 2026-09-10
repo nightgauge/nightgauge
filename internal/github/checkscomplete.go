@@ -70,23 +70,37 @@ func MissingRequiredChecks(checks []CheckDetail, requiredNames []string) []strin
 // the pre-#1540 total>0/pending==0/bad==0 idiom, so an unprotected branch
 // still gets a real verdict instead of a permanent NOT-YET.
 func EvaluateChecksComplete(checks []CheckDetail, requiredNames []string) (ChecksCompleteVerdict, []string) {
-	present := make(map[string]CheckDetail, len(checks))
+	present := make(map[string][]CheckDetail, len(checks))
 	for _, c := range checks {
-		present[strings.ToLower(strings.TrimSpace(c.Name))] = c
+		name := strings.ToLower(strings.TrimSpace(c.Name))
+		present[name] = append(present[name], c)
 	}
 
 	missing := MissingRequiredChecks(checks, requiredNames)
 	var pending, failed []string
 	for _, name := range requiredNames {
-		c, ok := present[strings.ToLower(strings.TrimSpace(name))]
+		observations, ok := present[strings.ToLower(strings.TrimSpace(name))]
 		if !ok {
 			continue // already counted in `missing`
 		}
-		if !isChecksCompleteConcluded(c) {
-			pending = append(pending, name)
-			continue
+		isPending := false
+		isFailed := false
+		for _, c := range observations {
+			if !isChecksCompleteConcluded(c) {
+				isPending = true
+				continue
+			}
+			if !passingCheckConclusions[strings.ToUpper(strings.TrimSpace(c.Conclusion))] {
+				isFailed = true
+			}
 		}
-		if !passingCheckConclusions[strings.ToUpper(strings.TrimSpace(c.Conclusion))] {
+		// A required context can exist on both GitHub status surfaces. Never
+		// let a passing observation mask a pending or failed observation with
+		// the same name; GitHub's ruleset is the final merge authority, and
+		// this local gate must fail closed when the surfaces disagree.
+		if isPending {
+			pending = append(pending, name)
+		} else if isFailed {
 			failed = append(failed, name)
 		}
 	}
@@ -109,6 +123,62 @@ func EvaluateChecksComplete(checks []CheckDetail, requiredNames []string) (Check
 		return evaluateAllChecksComplete(checks)
 	}
 	return ChecksComplete, nil
+}
+
+// GetCommitStatuses returns the combined legacy Commit Status contexts for a
+// ref. GitHub rulesets may require contexts published through either this API
+// or the Check Runs API; omitting this surface makes a successful status such
+// as `cla` look permanently absent.
+func (s *CIService) GetCommitStatuses(ctx context.Context, owner, repo, ref string) ([]CheckDetail, error) {
+	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/commits/%s/status", owner, repo, ref)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+
+	resp, err := s.client.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch commit statuses: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, checkRunsStatusError(resp, body)
+	}
+
+	var result struct {
+		SHA      string `json:"sha"`
+		Statuses []struct {
+			Context   string `json:"context"`
+			State     string `json:"state"`
+			UpdatedAt string `json:"updated_at"`
+			TargetURL string `json:"target_url"`
+		} `json:"statuses"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode commit statuses: %w", err)
+	}
+
+	statuses := make([]CheckDetail, 0, len(result.Statuses))
+	for _, status := range result.Statuses {
+		state := strings.ToUpper(strings.TrimSpace(status.State))
+		detail := CheckDetail{
+			Name:        status.Context,
+			Status:      "COMPLETED",
+			Conclusion:  state,
+			CompletedAt: status.UpdatedAt,
+			DetailsURL:  status.TargetURL,
+			HeadSHA:     result.SHA,
+		}
+		if state == "PENDING" {
+			detail.Status = "IN_PROGRESS"
+			detail.Conclusion = ""
+			detail.CompletedAt = ""
+		}
+		statuses = append(statuses, detail)
+	}
+	return statuses, nil
 }
 
 // evaluateAllChecksComplete is the fallback used when no required-check set

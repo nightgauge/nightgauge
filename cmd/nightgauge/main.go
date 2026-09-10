@@ -6980,6 +6980,7 @@ type checksCompleteResult struct {
 // *github.CIService satisfies it; tests substitute a fake.
 type checksCompleteReader interface {
 	GetIndividualCheckRuns(ctx context.Context, owner, repo, ref string) ([]gh.CheckDetail, error)
+	GetCommitStatuses(ctx context.Context, owner, repo, ref string) ([]gh.CheckDetail, error)
 	GetWorkflowRunsForRef(ctx context.Context, owner, repo, sha string) ([]gh.WorkflowRunSummary, error)
 }
 
@@ -7013,6 +7014,11 @@ func pollChecksComplete(ctx context.Context, reader checksCompleteReader, owner,
 		if err != nil {
 			return res, fmt.Errorf("fetch check runs: %w", err)
 		}
+		statuses, err := reader.GetCommitStatuses(ctx, owner, repo, sha)
+		if err != nil {
+			return res, fmt.Errorf("fetch commit statuses: %w", err)
+		}
+		checks = append(checks, statuses...)
 
 		var runs []gh.WorkflowRunSummary
 		if !skipCrossCheck {
