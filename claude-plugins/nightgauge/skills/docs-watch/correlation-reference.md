@@ -35,7 +35,7 @@ Claude Code release date, correlate the change with that release.
   - Example: New feature page added on 2026-03-24, v2.1.82 released 2026-03-24
 - **Medium confidence (60–94%)** — Change detected 2–7 days after release
   - Indicates: Docs were updated shortly after release (post-release cleanup common)
-  - Example: Feature released 2026-07-19, docs updated 2026-07-21
+  - Example: Feature released 2026-07-19, documentation changed two days later
 - **Low confidence (< 60%)** — No matching release within ±7 days
   - Indicates: Change unrelated to recent releases OR release too old
 
@@ -429,4 +429,4 @@ assert_equals(
 **Author:** nightgauge
 **Version:** 1.0.0
 **License:** Apache-2.0
-**Last Updated:** 2026-03-24
+**Last Updated:** 2026-09-10

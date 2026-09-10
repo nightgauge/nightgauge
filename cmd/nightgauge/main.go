@@ -11534,7 +11534,7 @@ func modelAccuracyAlternate(modelAccuracy *float64) string {
 // is inverted.
 var doctorCheckOrder = []string{
 	"binary", "gh", "github_auth", "api_user", "scopes", "rate_limit", "github_api_budget", "config", "project",
-	"ai_adapter",
+	"complexity_model", "ai_adapter",
 	"compose_orphans", "worktree_leaks", "stranded_branches", "pipeline_stashes", "preserved_wip", "orphaned_processes",
 	"serve_lease",
 	"survival_backlog", "survival_coverage", "corpus_calibration", "scheduled_automations",
@@ -11554,6 +11554,7 @@ func doctorCmd() *cobra.Command {
   - GitHub API rate limit
   - .nightgauge/config.yaml validity
   - Project number and owner configuration
+  - Complexity model presence (nightgauge outcome init repairs it)
   - At least one usable AI coding agent (Issue #862)
 
 The AI-agent row answers one question: can this machine run a stage at all?

@@ -154,5 +154,8 @@ func renderPreflightHuman(report backlogpreflight.BacklogPreflightReport) {
 		} else {
 			fmt.Printf("  [project] %s\n", f.Detail)
 		}
+		if f.Suggestion != "" {
+			fmt.Printf("    → %s\n", f.Suggestion)
+		}
 	}
 }

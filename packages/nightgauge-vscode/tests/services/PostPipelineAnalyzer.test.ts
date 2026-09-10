@@ -39,6 +39,51 @@ vi.mock("../../src/utils/executionHistoryReader", () => ({
 const mockAnalyze = vi.fn();
 const mockFailureAnalyze = vi.fn();
 const mockSkillEffectivenessAnalyze = vi.fn();
+const {
+  mockRecordOutcome,
+  mockSaveModel,
+  mockComplexityModelService,
+  mockOutcomeRecorder,
+  mockCommitModel,
+  mockWithComplexityModelService,
+} = vi.hoisted(() => {
+  const recordOutcome = vi.fn();
+  const saveModel = vi.fn();
+  const commitModel = vi.fn();
+  const modelService = {
+    save: async (...args: unknown[]) => {
+      saveModel(...args);
+      await commitModel("serialized-model");
+    },
+  };
+  return {
+    mockRecordOutcome: recordOutcome,
+    mockSaveModel: saveModel,
+    mockCommitModel: commitModel,
+    mockWithComplexityModelService: vi.fn(
+      async (_workspaceRoot: string, action: (service: typeof modelService) => Promise<unknown>) =>
+        action(modelService)
+    ),
+    mockComplexityModelService: vi.fn(function (
+      modelPath: string,
+      writer?: (content: string) => Promise<void>
+    ) {
+      return {
+        modelPath,
+        save: async (...args: unknown[]) => {
+          saveModel(...args);
+          await writer?.("serialized-model");
+        },
+      };
+    }),
+    mockOutcomeRecorder: vi.fn(function () {
+      return { recordOutcome: (...args: unknown[]) => recordOutcome(...args) };
+    }),
+  };
+});
+vi.mock("../../src/services/ComplexityModelLock", () => ({
+  withComplexityModelService: mockWithComplexityModelService,
+}));
 vi.mock("@nightgauge/sdk", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@nightgauge/sdk")>();
   return {
@@ -52,6 +97,8 @@ vi.mock("@nightgauge/sdk", async (importOriginal) => {
     SkillEffectivenessAnalyzer: {
       analyze: (...args: unknown[]) => mockSkillEffectivenessAnalyze(...args),
     },
+    ComplexityModelService: mockComplexityModelService,
+    OutcomeRecorder: mockOutcomeRecorder,
   };
 });
 
@@ -229,6 +276,8 @@ describe("PostPipelineAnalyzer", () => {
     });
     // Default: gate metrics returns empty
     mockGateMetricsReadAll.mockResolvedValue([]);
+    mockRecordOutcome.mockResolvedValue({ skipped: false, model: { schema_version: "1.0" } });
+    mockSaveModel.mockResolvedValue(undefined);
   });
 
   // =========================================================================
@@ -406,6 +455,44 @@ describe("PostPipelineAnalyzer", () => {
       expect(result!.costSavingsVsStaticUsd).toBe(0.005);
       expect(result!.overallRecommendation).toBe("1 optimization identified.");
       expect(result!.analysisFile).toContain("analysis-");
+    });
+
+    it("records the outcome through the canonical complexity-model file path", async () => {
+      mockReadAll.mockResolvedValue([createRunRecord()]);
+      mockAnalyze.mockReturnValue({
+        analyzedAt: "2026-02-19T01:00:00Z",
+        recordsAnalyzed: 2,
+        stageComparisons: [],
+        recommendations: [],
+        summary: {
+          totalPotentialSavingsUsd: 0,
+          stagesWithSufficientData: 0,
+          stagesNeedingMoreData: [],
+          outcomeRecorded: false,
+          selfAssessmentSynthesis: null,
+          overallRecommendation: "Optimal.",
+        },
+      });
+      vi.mocked(fs.readFile).mockImplementation(async (file) => {
+        if (String(file).endsWith(".nightgauge/pipeline/pr-100.json")) {
+          return JSON.stringify({ pr_number: 200 });
+        }
+        throw new Error("ENOENT");
+      });
+
+      const result = await PostPipelineAnalyzer.analyze(workspaceRoot, 100, logger as any);
+
+      expect(result?.outcomeRecorded).toBe(true);
+      expect(mockWithComplexityModelService).toHaveBeenCalledWith(
+        workspaceRoot,
+        expect.any(Function)
+      );
+      expect(mockOutcomeRecorder).toHaveBeenCalledTimes(1);
+      expect(mockRecordOutcome).toHaveBeenCalledWith(
+        expect.objectContaining({ issue_number: 100, pr_number: 200 })
+      );
+      expect(mockSaveModel).toHaveBeenCalledWith({ schema_version: "1.0" });
+      expect(mockCommitModel).toHaveBeenCalledWith("serialized-model");
     });
 
     it("catches errors and returns null (non-critical)", async () => {

@@ -147,6 +147,29 @@ describe("OutcomeRecorder", () => {
       expect(result.model.prediction_accuracy!.recent_outcomes).toHaveLength(1);
       expect(result.model.prediction_accuracy!.recent_outcomes[0].issue_number).toBe(42);
     });
+
+    it("preserves nested self-heal and survival calibration data", async () => {
+      const model: ComplexityModel = {
+        ...validModel,
+        prediction_accuracy: {
+          total_predictions: 1,
+          correct_predictions: 1,
+          by_type: {},
+          by_size: {},
+          recent_outcomes: [],
+        },
+      };
+      await writeModel(model);
+
+      const result = await recorder.recordOutcome(createOutcome());
+
+      expect(result.model.prediction_accuracy?.self_heal_events).toEqual(
+        model.prediction_accuracy?.self_heal_events
+      );
+      expect(result.model.prediction_accuracy?.survival_calibration).toEqual(
+        model.prediction_accuracy?.survival_calibration
+      );
+    });
   });
 
   // ── 2. Idempotency check ─────────────────────────────────────────────────
@@ -169,6 +192,22 @@ describe("OutcomeRecorder", () => {
               recorded_at: "2026-02-05T12:00:00.000Z",
             },
           ],
+          self_heal_events: [
+            {
+              issue_number: 7,
+              category: "stale_sdk_dist",
+              stage: "feature-validate",
+              recorded_at: "2026-09-01T12:00:00Z",
+            },
+          ],
+          survival_calibration: {
+            confidence: 0.55,
+            negative_observations: 1,
+            positive_observations: 2,
+            penalties_applied: 1,
+            rewards_applied: 2,
+            processed_shas: ["abc123"],
+          },
         },
       };
       await writeModel(modelWithExisting);
@@ -1120,6 +1159,22 @@ describe("OutcomeRecorder", () => {
               actual_lines_changed: 0,
             },
           ],
+          self_heal_events: [
+            {
+              issue_number: 7,
+              category: "stale_sdk_dist",
+              stage: "feature-validate",
+              recorded_at: "2026-09-01T12:00:00Z",
+            },
+          ],
+          survival_calibration: {
+            confidence: 0.55,
+            negative_observations: 1,
+            positive_observations: 2,
+            penalties_applied: 1,
+            rewards_applied: 2,
+            processed_shas: ["abc123"],
+          },
         },
       };
       await writeModel(modelWithGarbage);
@@ -1139,6 +1194,12 @@ describe("OutcomeRecorder", () => {
       expect(entry.issue_number).toBe(77);
       expect(entry.actual_lines_changed).toBe(493);
       expect(entry.actual_size_bucket).toBe("M");
+      expect(result.model.prediction_accuracy?.self_heal_events).toEqual(
+        modelWithGarbage.prediction_accuracy?.self_heal_events
+      );
+      expect(result.model.prediction_accuracy?.survival_calibration).toEqual(
+        modelWithGarbage.prediction_accuracy?.survival_calibration
+      );
     });
 
     it("should still protect non-zero entries with idempotency", async () => {

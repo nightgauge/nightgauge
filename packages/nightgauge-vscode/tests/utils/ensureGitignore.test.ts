@@ -63,6 +63,7 @@ describe("ensureGitignore", () => {
       "/containment/",
       "/health/",
       "/autonomous/",
+      "/complexity-model.lock",
     ]) {
       expect(generated).toContain(rule);
     }

@@ -247,6 +247,7 @@ export class OutcomeRecorder {
     return {
       ...model,
       prediction_accuracy: {
+        ...accuracy,
         total_predictions: totalPredictions,
         correct_predictions: correctPredictions,
         by_type: byType,
@@ -575,6 +576,7 @@ export class OutcomeRecorder {
         },
       },
       prediction_accuracy: {
+        ...accuracy,
         total_predictions: totalPredictions,
         correct_predictions: correctPredictions,
         by_type: byType,

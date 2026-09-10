@@ -312,6 +312,9 @@ export {
   PipelineOutcomeSchema,
   ExecutionOutcomeSchema,
   PredictionAccuracySchema,
+  WorkTimeFeedbackSchema,
+  WorkTimeObservationSchema,
+  WorkTimeSizeAverageSchema,
   MatchedPatternSchema,
   SizeSuggestionSchema,
   // Types
@@ -344,6 +347,9 @@ export {
   type PipelineOutcome,
   type ExecutionOutcome,
   type PredictionAccuracy,
+  type WorkTimeFeedback,
+  type WorkTimeObservation,
+  type WorkTimeSizeAverage,
   type MatchedPattern,
   type SizeSuggestion,
   // Survival Outcome Model Schemas (#4151/#4152/#4153)

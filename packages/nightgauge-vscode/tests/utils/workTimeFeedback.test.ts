@@ -13,7 +13,6 @@ import {
   calculateWorkTime,
   getCompletedStages,
   createObservation,
-  appendObservationToYAML,
   pruneOldObservations,
   calculateSizeAverages,
   readWorkTimeFeedback,
@@ -595,128 +594,6 @@ describe("YAML persistence", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  describe("appendObservationToYAML", () => {
-    it("should create file if it does not exist", async () => {
-      const observation: WorkTimeObservation = {
-        issue_number: 310,
-        size: "M",
-        priority: "high",
-        task_type: "feature",
-        actual_work_minutes: 45,
-        estimated_minutes: 30,
-        routing: "standard",
-        stages_completed: ["issue-pickup", "feature-dev"] as PipelineStage[],
-        timestamp: "2026-02-06T10:00:00Z",
-      };
-
-      await appendObservationToYAML(observation, yamlPath);
-
-      const content = await fs.readFile(yamlPath, "utf-8");
-      expect(content).toContain("work_time_feedback");
-      expect(content).toContain("issue_number: 310");
-      expect(content).toContain("size: M");
-    });
-
-    it("should append to existing file", async () => {
-      // Create initial file with one observation
-      const obs1: WorkTimeObservation = {
-        issue_number: 1,
-        size: "S",
-        priority: "low",
-        task_type: "bugfix",
-        actual_work_minutes: 10,
-        estimated_minutes: 15,
-        routing: "trivial",
-        stages_completed: ["issue-pickup"] as PipelineStage[],
-        timestamp: "2026-02-06T09:00:00Z",
-      };
-
-      await appendObservationToYAML(obs1, yamlPath);
-
-      // Append second observation
-      const obs2: WorkTimeObservation = {
-        issue_number: 2,
-        size: "M",
-        priority: "high",
-        task_type: "feature",
-        actual_work_minutes: 45,
-        estimated_minutes: 30,
-        routing: "standard",
-        stages_completed: ["issue-pickup", "feature-dev"] as PipelineStage[],
-        timestamp: "2026-02-06T10:00:00Z",
-      };
-
-      await appendObservationToYAML(obs2, yamlPath);
-
-      const feedback = await readWorkTimeFeedback(yamlPath);
-      expect(feedback?.observations).toHaveLength(2);
-      expect(feedback?.observations[0].issue_number).toBe(1);
-      expect(feedback?.observations[1].issue_number).toBe(2);
-    });
-
-    it("should recalculate size averages after append", async () => {
-      const obs1: WorkTimeObservation = {
-        issue_number: 1,
-        size: "M",
-        priority: "medium",
-        task_type: "feature",
-        actual_work_minutes: 40,
-        estimated_minutes: 30,
-        routing: "standard",
-        stages_completed: ["issue-pickup"] as PipelineStage[],
-        timestamp: "2026-02-06T09:00:00Z",
-      };
-
-      const obs2: WorkTimeObservation = {
-        issue_number: 2,
-        size: "M",
-        priority: "medium",
-        task_type: "feature",
-        actual_work_minutes: 50,
-        estimated_minutes: 30,
-        routing: "standard",
-        stages_completed: ["issue-pickup"] as PipelineStage[],
-        timestamp: "2026-02-06T10:00:00Z",
-      };
-
-      await appendObservationToYAML(obs1, yamlPath);
-      await appendObservationToYAML(obs2, yamlPath);
-
-      const feedback = await readWorkTimeFeedback(yamlPath);
-
-      expect(feedback?.size_averages["M"]).toEqual({
-        estimated: 30,
-        actual_average: 45, // (40 + 50) / 2
-        observation_count: 2,
-      });
-    });
-
-    it("should prune to 50 observations", async () => {
-      // Append 52 observations
-      for (let i = 1; i <= 52; i++) {
-        const obs: WorkTimeObservation = {
-          issue_number: i,
-          size: "M",
-          priority: "medium",
-          task_type: "feature",
-          actual_work_minutes: 30,
-          estimated_minutes: 30,
-          routing: "standard",
-          stages_completed: ["issue-pickup"] as PipelineStage[],
-          timestamp: `2026-02-06T10:${String(i).padStart(2, "0")}:00Z`,
-        };
-
-        await appendObservationToYAML(obs, yamlPath);
-      }
-
-      const feedback = await readWorkTimeFeedback(yamlPath);
-
-      expect(feedback?.observations).toHaveLength(50);
-      expect(feedback?.observations[0].issue_number).toBe(3); // First 2 pruned
-      expect(feedback?.observations[49].issue_number).toBe(52); // Last kept
-    });
-  });
-
   describe("readWorkTimeFeedback", () => {
     it("should return null if file does not exist", async () => {
       const feedback = await readWorkTimeFeedback(path.join(tmpDir, "nonexistent.yaml"));
@@ -745,7 +622,13 @@ describe("YAML persistence", () => {
         timestamp: "2026-02-06T10:00:00Z",
       };
 
-      await appendObservationToYAML(obs, yamlPath);
+      await fs.writeFile(
+        yamlPath,
+        JSON.stringify({
+          work_time_feedback: { enabled: true, observations: [obs], size_averages: {} },
+        }),
+        "utf-8"
+      );
 
       const feedback = await readWorkTimeFeedback(yamlPath);
 

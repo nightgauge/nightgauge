@@ -270,7 +270,7 @@ func (v *Validator) CheckGreenfield(workdir string) []BacklogFinding {
 		{
 			path:       filepath.Join(workdir, ".nightgauge", "complexity-model.yaml"),
 			detail:     "Missing .nightgauge/complexity-model.yaml — pipeline size gate has no calibration data",
-			suggestion: "Run: nightgauge size calibrate to generate the complexity model",
+			suggestion: "Run: nightgauge outcome init to generate the complexity model",
 		},
 		{
 			path:       filepath.Join(workdir, "docs"),

@@ -36,6 +36,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- Fresh repositories now learn from their first pipeline outcome: the Go recorder
+  auto-creates the canonical model, VS Code uses its correct path and a shared
+  transaction, and setup guidance uses `nightgauge outcome init` (#1590)
+
 - A default branch no longer reads as red forever because of one old failing
   check run. For each check name, only its most recent completed run now
   decides pass or fail, so a scheduled workflow that failed once and has

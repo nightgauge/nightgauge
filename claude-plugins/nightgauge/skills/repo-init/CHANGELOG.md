@@ -13,3 +13,9 @@ All notable changes to this skill are documented here.
 ### Changed
 
 - Migrate all direct `gh` invocations to `nightgauge forge` (#3363, Wave 4 of forge-abstraction epic #3349). Skill now works against GitLab as well as GitHub via the forge abstraction.
+
+### Fixed
+
+- Initialize the canonical complexity baseline through `nightgauge outcome init`
+  instead of maintaining a duplicate inline YAML template. Failed seed transforms
+  now reach the same supported fallback path (#1590).

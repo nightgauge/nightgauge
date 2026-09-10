@@ -32,6 +32,9 @@ export class ModelValidationError extends Error {
   }
 }
 
+/** Installs one fully validated serialized model document. */
+export type SerializedComplexityModelWriter = (content: string) => Promise<void>;
+
 /**
  * ComplexityModelService handles persistence and operations on the complexity model
  *
@@ -52,9 +55,14 @@ export class ModelValidationError extends Error {
  */
 export class ComplexityModelService {
   private modelPath: string;
+  private serializedWriter?: SerializedComplexityModelWriter;
 
-  constructor(modelPath: string = ".nightgauge/complexity-model.yaml") {
+  constructor(
+    modelPath: string = ".nightgauge/complexity-model.yaml",
+    serializedWriter?: SerializedComplexityModelWriter
+  ) {
     this.modelPath = modelPath;
+    this.serializedWriter = serializedWriter;
   }
 
   /**
@@ -352,21 +360,24 @@ export class ComplexityModelService {
    * Check if the model file exists
    */
   async exists(): Promise<boolean> {
+    await this.assertSafeModelDirectory(false);
     try {
-      await fs.access(this.modelPath);
+      const info = await fs.lstat(this.modelPath);
+      if (info.isSymbolicLink()) {
+        throw new ModelValidationError(this.modelPath, "Refusing symlinked complexity model");
+      }
+      if (!info.isFile()) {
+        throw new ModelValidationError(this.modelPath, "Complexity model is not a regular file");
+      }
       return true;
-    } catch {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       return false;
     }
   }
 
-  /**
-   * Save the complexity model to YAML with atomic write
-   *
-   * @param model The model to save
-   */
-  async save(model: ComplexityModel): Promise<void> {
-    // Validate before saving
+  /** Validate and serialize a complete model without writing it. */
+  serialize(model: ComplexityModel): string {
     const result = ComplexityModelSchema.safeParse(model);
     if (!result.success) {
       throw new ModelValidationError(
@@ -375,52 +386,49 @@ export class ComplexityModelService {
       );
     }
 
-    // Update last_updated timestamp
     const modelToSave = {
       ...result.data,
       last_updated: new Date().toISOString().split("T")[0],
     };
-
-    const content = yaml.dump(modelToSave, {
+    return yaml.dump(modelToSave, {
       lineWidth: 100,
       noRefs: true,
       quoteStyle: "double",
     });
+  }
 
-    // Atomic write: write to temp file, copy to target, verify, then clean up
+  /**
+   * Save the complexity model to YAML with atomic write
+   *
+   * @param model The model to save
+   */
+  async save(model: ComplexityModel): Promise<void> {
+    const content = this.serialize(model);
+    if (this.serializedWriter) {
+      await this.serializedWriter(content);
+      return;
+    }
+
     const dir = path.dirname(this.modelPath);
-    await fs.mkdir(dir, { recursive: true });
+    await this.assertSafeModelDirectory(true);
+
+    await this.exists(); // performs no-follow validation when the target exists
 
     const tempPath = path.join(dir, `.complexity-model-${crypto.randomUUID()}.yaml.tmp`);
     try {
-      await fs.writeFile(tempPath, content, "utf-8");
-      await fs.copyFile(tempPath, this.modelPath);
+      await fs.writeFile(tempPath, content, { encoding: "utf-8", mode: 0o600 });
+      const verifyError = await this.verifyWrittenFile(tempPath);
+      if (verifyError) {
+        throw new ModelValidationError(
+          this.modelPath,
+          `Pre-install verification failed: ${verifyError}`
+        );
+      }
+      await fs.rename(tempPath, this.modelPath);
     } catch (error) {
       await fs.unlink(tempPath).catch(() => {});
       throw error;
     }
-
-    // Post-write verification: read back and validate
-    const verifyError = await this.verifyWrittenFile();
-    if (verifyError) {
-      // Attempt restore from temp file (known-good copy)
-      try {
-        await fs.rename(tempPath, this.modelPath);
-      } catch (restoreError) {
-        throw new ModelValidationError(
-          this.modelPath,
-          `Post-write verification failed: ${verifyError}. ` +
-            `Restore from temp also failed: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`
-        );
-      }
-      throw new ModelValidationError(
-        this.modelPath,
-        `Post-write verification failed (restored from temp): ${verifyError}`
-      );
-    }
-
-    // Verification passed — clean up temp file
-    await fs.unlink(tempPath).catch(() => {});
   }
 
   /**
@@ -541,9 +549,9 @@ export class ComplexityModelService {
    *
    * @returns Error description string if verification failed, or null if valid
    */
-  protected async verifyWrittenFile(): Promise<string | null> {
+  protected async verifyWrittenFile(filePath: string = this.modelPath): Promise<string | null> {
     try {
-      const content = await fs.readFile(this.modelPath, "utf-8");
+      const content = await fs.readFile(filePath, "utf-8");
       const data = yaml.load(content);
       const result = ComplexityModelSchema.safeParse(data);
       if (!result.success) {
@@ -552,6 +560,25 @@ export class ComplexityModelService {
       return null;
     } catch (error) {
       return error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  private async assertSafeModelDirectory(create: boolean): Promise<void> {
+    const dir = path.dirname(this.modelPath);
+    let info: Awaited<ReturnType<typeof fs.lstat>>;
+    try {
+      info = await fs.lstat(dir);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      if (!create) return;
+      await fs.mkdir(dir, { recursive: true });
+      info = await fs.lstat(dir);
+    }
+    if (info.isSymbolicLink()) {
+      throw new ModelValidationError(this.modelPath, `Refusing symlinked model directory: ${dir}`);
+    }
+    if (!info.isDirectory()) {
+      throw new ModelValidationError(this.modelPath, `Model directory is not a directory: ${dir}`);
     }
   }
 

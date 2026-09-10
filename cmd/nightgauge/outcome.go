@@ -15,8 +15,69 @@ func outcomeCmd() *cobra.Command {
 		Use:   "outcome",
 		Short: "Outcome recording operations",
 	}
+	cmd.AddCommand(outcomeInitCmd())
+	cmd.AddCommand(outcomeLockCmd())
 	cmd.AddCommand(outcomeRecordCmd())
 	cmd.AddCommand(outcomeRecordSelfHealCmd())
+	return cmd
+}
+
+// outcomeLockCmd is an internal transaction broker for non-Go model writers.
+// It holds the canonical advisory lock, then atomically installs the complete
+// model document supplied on stdin before releasing that lock.
+func outcomeLockCmd() *cobra.Command {
+	var workdir string
+	cmd := &cobra.Command{
+		Use:          "lock",
+		Hidden:       true,
+		SilenceUsage: true,
+		Args:         cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if workdir == "" {
+				var err error
+				workdir, err = os.Getwd()
+				if err != nil {
+					return fmt.Errorf("get working directory: %w", err)
+				}
+			}
+			return gh.NewOutcomeService(workdir).RunModelTransaction(
+				cmd.InOrStdin(),
+				cmd.OutOrStdout(),
+			)
+		},
+	}
+	cmd.Flags().StringVar(&workdir, "workdir", "", "Workspace root (default: cwd)")
+	return cmd
+}
+
+func outcomeInitCmd() *cobra.Command {
+	var workdir string
+
+	cmd := &cobra.Command{
+		Use:          "init",
+		Short:        "Initialize the canonical complexity model if it is missing",
+		SilenceUsage: true,
+		Args:         cobra.NoArgs,
+		Example: `  nightgauge outcome init
+  nightgauge outcome init --workdir /path/to/repository`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if workdir == "" {
+				var err error
+				workdir, err = os.Getwd()
+				if err != nil {
+					return fmt.Errorf("get working directory: %w", err)
+				}
+			}
+
+			result, err := gh.NewOutcomeService(workdir).InitializeModel()
+			if err != nil {
+				return err
+			}
+			return printJSON(result)
+		},
+	}
+
+	cmd.Flags().StringVar(&workdir, "workdir", "", "Workspace root (default: cwd)")
 	return cmd
 }
 

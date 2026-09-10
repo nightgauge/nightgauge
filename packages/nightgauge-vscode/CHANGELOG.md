@@ -24,6 +24,12 @@ and this project adheres to
   dependabot PRs meant leaving the sidebar and doing by hand what one click can
   now do (#1575)
 
+### Fixed
+
+- Post-pipeline outcome recording now uses the correct complexity-model path and
+  the Go-owned transaction, allowing safe first-run calibration through the
+  shared automatic bootstrap (#1590)
+
 ## [0.3.1] - 2026-09-07
 
 ### Fixed

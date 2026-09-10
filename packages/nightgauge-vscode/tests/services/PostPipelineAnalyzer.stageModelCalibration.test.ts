@@ -77,7 +77,8 @@ const { mockExec, mockExecFile } = vi.hoisted(() => {
     Promise.resolve<{ stdout: string; stderr: string }>({ stdout: "", stderr: "" });
   return { mockExec: execMock, mockExecFile: execFileMock };
 });
-vi.mock("node:child_process", () => ({
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
   exec: mockExec,
   execFile: mockExecFile,
 }));

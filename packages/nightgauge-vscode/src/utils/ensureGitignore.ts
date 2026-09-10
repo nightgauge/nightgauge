@@ -17,7 +17,7 @@ import { loadWorkspaceConfig } from "./workspaceDetection";
  * Bump this when adding new patterns so the extension knows to update
  * existing .gitignore files that were written with an older version.
  */
-const GITIGNORE_VERSION = 11;
+const GITIGNORE_VERSION = 12;
 const VERSION_MARKER = `# nightgauge-gitignore-version: ${GITIGNORE_VERSION}`;
 
 /**
@@ -64,6 +64,7 @@ logs/*
 /config.local.yaml
 /config.yaml.tmp
 /complexity-model.yaml
+/complexity-model.lock
 /outcome-recovery.jsonl
 /cross-project-patterns.json
 /saved-queries.yaml

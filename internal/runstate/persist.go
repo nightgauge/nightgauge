@@ -4,7 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
+
+	"github.com/nightgauge/nightgauge/internal/atomicfile"
 )
 
 // Load reads run-state.json from the given base dir. Returns (nil, nil) when
@@ -66,43 +67,10 @@ func Save(baseDir string, rs *RunState) error {
 // every error path; only a hard kill mid-write can leave one behind, and a
 // `*.tmp` name matches no reader in the tree.
 //
-// This is the canonical durability primitive for everything under
-// .nightgauge/pipeline/. Other packages (state.AtomicWriteFile) call into
-// this implementation via the same shape — kept duplicated only because we
-// don't want every package to import internal/runstate just for I/O.
+// This runstate-facing wrapper delegates to the neutral atomicfile package so
+// model and run-state writers share the same unique-temp durability contract.
+// Other packages may retain specialized writers when their recovery protocol
+// depends on a stable temp pathname.
 func AtomicWriteFile(target string, data []byte, perm os.FileMode) error {
-	f, err := os.CreateTemp(filepath.Dir(target), filepath.Base(target)+".*.tmp")
-	if err != nil {
-		return fmt.Errorf("open tmp: %w", err)
-	}
-	tmp := f.Name()
-	// CreateTemp opens 0600; the caller's perm is the contract.
-	if err := os.Chmod(tmp, perm); err != nil {
-		f.Close()
-		os.Remove(tmp)
-		return fmt.Errorf("chmod tmp: %w", err)
-	}
-	if _, err := f.Write(data); err != nil {
-		f.Close()
-		os.Remove(tmp)
-		return fmt.Errorf("write tmp: %w", err)
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		os.Remove(tmp)
-		return fmt.Errorf("fsync tmp: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		os.Remove(tmp)
-		return fmt.Errorf("close tmp: %w", err)
-	}
-	if err := os.Rename(tmp, target); err != nil {
-		os.Remove(tmp)
-		return fmt.Errorf("rename: %w", err)
-	}
-	if dir, err := os.Open(filepath.Dir(target)); err == nil {
-		_ = dir.Sync()
-		_ = dir.Close()
-	}
-	return nil
+	return atomicfile.Write(target, data, perm)
 }

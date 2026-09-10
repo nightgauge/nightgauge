@@ -513,13 +513,22 @@ func TestOutcomeCmdRegistered(t *testing.T) {
 		t.Fatal("outcome subcommand not registered in rootCmd")
 	}
 
-	// Verify 'record' subcommand exists
+	// Verify 'init' and 'record' subcommands exist.
+	var initCmd *cobra.Command
 	var recordCmd *cobra.Command
 	for _, sub := range outcomeCmd.Commands() {
+		if sub.Name() == "init" {
+			initCmd = sub
+		}
 		if sub.Name() == "record" {
 			recordCmd = sub
-			break
 		}
+	}
+	if initCmd == nil {
+		t.Fatal("outcome init subcommand not found")
+	}
+	if initCmd.Flags().Lookup("workdir") == nil {
+		t.Error("outcome init missing --workdir flag")
 	}
 	if recordCmd == nil {
 		t.Fatal("outcome record subcommand not found")
@@ -530,6 +539,54 @@ func TestOutcomeCmdRegistered(t *testing.T) {
 		if recordCmd.Flags().Lookup(flagName) == nil {
 			t.Errorf("outcome record missing --%s flag", flagName)
 		}
+	}
+}
+
+func TestOutcomeInitCreatesModelAtWorkdir(t *testing.T) {
+	dir := t.TempDir()
+	cmd := rootCmd()
+	cmd.SetArgs([]string{"outcome", "init", "--workdir", dir})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("outcome init failed: %v", err)
+	}
+
+	modelPath := filepath.Join(dir, ".nightgauge", "complexity-model.yaml")
+	if _, err := os.Stat(modelPath); err != nil {
+		t.Fatalf("expected model at %s: %v", modelPath, err)
+	}
+}
+
+func TestOutcomeLockCommitsModelDocument(t *testing.T) {
+	dir := t.TempDir()
+	initCmd := rootCmd()
+	initCmd.SetArgs([]string{"outcome", "init", "--workdir", dir})
+	if err := initCmd.Execute(); err != nil {
+		t.Fatalf("outcome init failed: %v", err)
+	}
+	modelPath := filepath.Join(dir, ".nightgauge", "complexity-model.yaml")
+	data, err := os.ReadFile(modelPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := strings.Replace(string(data), "total_observations: 0", "total_observations: 9", 1)
+
+	cmd := rootCmd()
+	var stdout bytes.Buffer
+	cmd.SetIn(strings.NewReader(updated))
+	cmd.SetOut(&stdout)
+	cmd.SetArgs([]string{"outcome", "lock", "--workdir", dir})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("outcome lock failed: %v", err)
+	}
+	if stdout.String() != "READY\n" {
+		t.Fatalf("outcome lock stdout = %q, want READY newline", stdout.String())
+	}
+	committed, err := os.ReadFile(modelPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(committed), "total_observations: 9") {
+		t.Fatal("outcome lock did not commit the supplied model document")
 	}
 }
 

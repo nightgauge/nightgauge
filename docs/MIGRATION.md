@@ -359,4 +359,4 @@ Reference: `docs/strategy/codex/CROSS_TOOL_COMMAND_CONTRACT.md`
 
 ---
 
-_Last updated: 2026-07-21 (Issues #132, #570, #1804, #3799)_
+_Last updated: 2026-09-10 (Issues #132, #570, #1804, #3799)_
