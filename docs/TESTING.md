@@ -756,8 +756,9 @@ guarantee (unique temp name per write, cleanup on failure):
 and `packages/nightgauge-sdk/src`:**
 
 - **Fixed in this issue:**
-  - `packages/nightgauge-vscode/src/utils/workTimeFeedback.ts`
-    (`appendObservationToYAML`) — now calls `writeFileAtomic`.
+  - The former `appendObservationToYAML` helper was later retired because a
+    section-only write could discard the rest of the complexity model. Model
+    feedback now persists through the full-document Go transaction broker.
   - `packages/nightgauge-vscode/src/services/TelemetryUploaderService.ts`
     (`saveWatermarks`) — this one writes through `vscode.workspace.fs`, not
     `node:fs/promises`, so it can't call the shared helper directly; it now

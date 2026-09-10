@@ -73,7 +73,6 @@ import {
   PRContextSchema,
   FeedbackContextSchema,
   type PipelineFeedbackSignal,
-  ComplexityModelService,
   FeedbackLearningService,
   AuditEventClient,
   MissingInputFile,
@@ -188,6 +187,7 @@ import type { ExecutionHistoryRecord } from "../schemas/executionHistory";
 import { PostPipelineAnalyzer, type PostPipelineAnalysisResult } from "./PostPipelineAnalyzer";
 import { HealthActionService } from "./HealthActionService";
 import { AutoRetroService } from "./AutoRetroService";
+import { withComplexityModelService } from "./ComplexityModelLock";
 import { checkPipelineAlerts } from "../utils/pipelineAlertChecker";
 import {
   checkCostCapTightness,
@@ -8812,19 +8812,17 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       const issueType = this.extractTypeLabel(labels) ?? "feature";
 
       const workspaceRoot = this.getWorkingDirectory();
-      const modelService = new ComplexityModelService(
-        path.join(workspaceRoot, ".nightgauge/complexity-model.yaml")
-      );
-      const learningService = new FeedbackLearningService(modelService);
-
-      const result = await learningService.recordUnderestimation(
-        issueNumber,
-        predictedSize,
-        issueType,
-        issueTitle,
-        issueDescription,
-        underestimationSignal
-      );
+      const result = await withComplexityModelService(workspaceRoot, async (modelService) => {
+        const learningService = new FeedbackLearningService(modelService);
+        return learningService.recordUnderestimation(
+          issueNumber,
+          predictedSize,
+          issueType,
+          issueTitle,
+          issueDescription,
+          underestimationSignal
+        );
+      });
 
       if (result.skipped) {
         this.logger.debug("FeedbackLearning: skipped duplicate underestimation", {
@@ -8946,54 +8944,42 @@ export class HeadlessOrchestrator implements vscode.Disposable {
               : "COMMENTED") as "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED",
         }));
 
-      // Parse comments into reviewer signals
       const workspaceRoot = this.getWorkingDirectory();
-      const modelService = new ComplexityModelService(
-        path.join(workspaceRoot, ".nightgauge/complexity-model.yaml")
-      );
-      const learningService = new FeedbackLearningService(modelService);
+      const result = await withComplexityModelService(workspaceRoot, async (modelService) => {
+        const learningService = new FeedbackLearningService(modelService);
+        const signals = learningService.parseReviewerComments(comments, minCommentLength);
+        if (signals.length === 0) {
+          this.logger.debug("ReviewerFeedback: no signals detected", {
+            issueNumber,
+            prNumber,
+            reviewCount: reviews.length,
+          });
+          return null;
+        }
 
-      const signals = learningService.parseReviewerComments(comments, minCommentLength);
+        const issueContextPath = this.getIssueContextPath(issueNumber);
+        if (!fs.existsSync(issueContextPath)) {
+          this.logger.debug("ReviewerFeedback: no issue context", { issueNumber });
+          return null;
+        }
 
-      if (signals.length === 0) {
-        this.logger.debug("ReviewerFeedback: no signals detected", {
+        const issueRaw = JSON.parse(fs.readFileSync(issueContextPath, "utf-8"));
+        const labels: string[] = Array.isArray(issueRaw.labels) ? issueRaw.labels : [];
+        const hasChangesRequested = reviews.some((r) => r.state === "CHANGES_REQUESTED");
+
+        return learningService.processReviewerFeedback(
           issueNumber,
-          prNumber,
-          reviewCount: reviews.length,
-        });
-        return;
-      }
+          this.extractSizeLabel(labels) ?? "S",
+          this.extractTypeLabel(labels) ?? "feature",
+          issueRaw.title ?? "",
+          issueRaw.requirements?.summary ?? "",
+          signals,
+          hasChangesRequested ? "CHANGES_REQUESTED" : "APPROVED",
+          confidencePenalty
+        );
+      });
 
-      // Load issue context for title/description/labels
-      const issueContextPath = this.getIssueContextPath(issueNumber);
-      if (!fs.existsSync(issueContextPath)) {
-        this.logger.debug("ReviewerFeedback: no issue context", {
-          issueNumber,
-        });
-        return;
-      }
-
-      const issueRaw = JSON.parse(fs.readFileSync(issueContextPath, "utf-8"));
-      const labels: string[] = Array.isArray(issueRaw.labels) ? issueRaw.labels : [];
-      const issueTitle: string = issueRaw.title ?? "";
-      const issueDescription: string = issueRaw.requirements?.summary ?? "";
-      const predictedSize = this.extractSizeLabel(labels) ?? "S";
-      const issueType = this.extractTypeLabel(labels) ?? "feature";
-
-      // Determine overall verdict from reviews
-      const hasChangesRequested = reviews.some((r) => r.state === "CHANGES_REQUESTED");
-      const overallVerdict = hasChangesRequested ? "CHANGES_REQUESTED" : "APPROVED";
-
-      const result = await learningService.processReviewerFeedback(
-        issueNumber,
-        predictedSize,
-        issueType,
-        issueTitle,
-        issueDescription,
-        signals,
-        overallVerdict,
-        confidencePenalty
-      );
+      if (result === null) return;
 
       if (result.skipped) {
         this.logger.debug("ReviewerFeedback: skipped (already recorded)", {

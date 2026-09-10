@@ -40,7 +40,7 @@ automatically). Otherwise, write the full file:
 #   config.yaml           — repository-wide pipeline configuration
 #   .gitignore            — this file
 #   */.gitkeep            — preserve directory structure
-# nightgauge-gitignore-version: 11
+# nightgauge-gitignore-version: 12
 
 # ─── Pipeline context, state, and execution data ─────────────────────
 pipeline/*
@@ -71,6 +71,7 @@ logs/*
 /config.local.yaml
 /config.yaml.tmp
 /complexity-model.yaml
+/complexity-model.lock
 /outcome-recovery.jsonl
 /cross-project-patterns.json
 /saved-queries.yaml

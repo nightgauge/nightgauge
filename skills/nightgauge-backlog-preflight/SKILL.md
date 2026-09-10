@@ -6,7 +6,7 @@ description: Validate backlog issues are pipeline-ready before processing. Check
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.1.0"
+  version: "1.1.1"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task
 context: fork
@@ -361,7 +361,7 @@ PYEOF
   #### Check 2.5: Greenfield Readiness
 
   if [ "$FOCUS" = "all" ] || [ "$FOCUS" = "greenfield" ]; then
-    [ ! -f ".nightgauge/complexity-model.yaml" ] && GREENFIELD_WARNINGS+=("Missing complexity-model.yaml — run /nightgauge:repo-init or repo-init --seed-from <path>")
+    [ ! -f ".nightgauge/complexity-model.yaml" ] && GREENFIELD_WARNINGS+=("Missing complexity-model.yaml — run nightgauge outcome init")
     [ ! -d "docs" ] && GREENFIELD_WARNINGS+=("Missing docs/ directory — feature-dev will use CLAUDE.md fallback for standards")
     [ ! -f "docs/CODE_STANDARDS.md" ] && GREENFIELD_WARNINGS+=("Missing docs/CODE_STANDARDS.md — feature-dev will fall back to CLAUDE.md or language defaults")
     if [ ! -f "docs/SECURITY_AND_ERROR_HANDLING.md" ] && [ ! -f "docs/SECURITY.md" ]; then

@@ -68,6 +68,7 @@ import type { Logger } from "../utils/logger";
 import { GateMetricsWriter } from "../utils/gateMetricsWriter";
 import { SkillEffectivenessWriter } from "../utils/SkillEffectivenessWriter";
 import type { HealthEvaluation } from "./HealthActionService";
+import { withComplexityModelService } from "./ComplexityModelLock";
 
 /** Directory for analysis result storage */
 const ANALYSIS_DIR = ".nightgauge/analysis";
@@ -658,7 +659,7 @@ export class PostPipelineAnalyzer {
           }
 
           if (prNumber !== null) {
-            const { OutcomeRecorder, ComplexityModelService } = await import("@nightgauge/sdk");
+            const { OutcomeRecorder } = await import("@nightgauge/sdk");
 
             const stagesObj = thisIssueRun.stages as Record<string, { status: string } | undefined>;
             const stagesRun = Object.entries(stagesObj)
@@ -702,9 +703,14 @@ export class PostPipelineAnalyzer {
                 (thisIssueRun.is_supercharge ? "supercharge" : "normal"),
             };
 
-            const modelService = new ComplexityModelService(workspaceRoot);
-            const recorder = new OutcomeRecorder(modelService);
-            const result = await recorder.recordOutcome(outcome);
+            const result = await withComplexityModelService(workspaceRoot, async (modelService) => {
+              const recorder = new OutcomeRecorder(modelService);
+              const recorded = await recorder.recordOutcome(outcome);
+              if (!recorded.skipped) {
+                await modelService.save(recorded.model);
+              }
+              return recorded;
+            });
             outcomeRecorded = !result.skipped;
             logger.info("Complexity model outcome recording complete", {
               issueNumber,

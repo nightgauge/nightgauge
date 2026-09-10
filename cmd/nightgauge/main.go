@@ -6980,6 +6980,7 @@ type checksCompleteResult struct {
 // *github.CIService satisfies it; tests substitute a fake.
 type checksCompleteReader interface {
 	GetIndividualCheckRuns(ctx context.Context, owner, repo, ref string) ([]gh.CheckDetail, error)
+	GetCommitStatuses(ctx context.Context, owner, repo, ref string) ([]gh.CheckDetail, error)
 	GetWorkflowRunsForRef(ctx context.Context, owner, repo, sha string) ([]gh.WorkflowRunSummary, error)
 }
 
@@ -7013,6 +7014,11 @@ func pollChecksComplete(ctx context.Context, reader checksCompleteReader, owner,
 		if err != nil {
 			return res, fmt.Errorf("fetch check runs: %w", err)
 		}
+		statuses, err := reader.GetCommitStatuses(ctx, owner, repo, sha)
+		if err != nil {
+			return res, fmt.Errorf("fetch commit statuses: %w", err)
+		}
+		checks = append(checks, statuses...)
 
 		var runs []gh.WorkflowRunSummary
 		if !skipCrossCheck {
@@ -11534,7 +11540,7 @@ func modelAccuracyAlternate(modelAccuracy *float64) string {
 // is inverted.
 var doctorCheckOrder = []string{
 	"binary", "gh", "github_auth", "api_user", "scopes", "rate_limit", "github_api_budget", "config", "project",
-	"ai_adapter",
+	"complexity_model", "ai_adapter",
 	"compose_orphans", "worktree_leaks", "stranded_branches", "pipeline_stashes", "preserved_wip", "orphaned_processes",
 	"serve_lease",
 	"survival_backlog", "survival_coverage", "corpus_calibration", "scheduled_automations",
@@ -11554,6 +11560,7 @@ func doctorCmd() *cobra.Command {
   - GitHub API rate limit
   - .nightgauge/config.yaml validity
   - Project number and owner configuration
+  - Complexity model presence (nightgauge outcome init repairs it)
   - At least one usable AI coding agent (Issue #862)
 
 The AI-agent row answers one question: can this machine run a stage at all?

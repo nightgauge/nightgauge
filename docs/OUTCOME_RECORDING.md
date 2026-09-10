@@ -6,9 +6,10 @@
 > the pipeline, see [docs/ARCHITECTURE.md](ARCHITECTURE.md).
 
 > **Not to be confused with the learning outcome corpus.** Two subsystems are
-> both called "outcome recording". _This_ document covers the TypeScript/SDK
-> **complexity model** (`OutcomeRecorder` → `.nightgauge/complexity-model.yaml`,
-> success-only, driven by `PostPipelineAnalyzer`). The **learning/calibration
+> both called "outcome recording". _This_ document covers the shared
+> **complexity model** (SDK `OutcomeRecorder` and Go `OutcomeService` →
+> `.nightgauge/complexity-model.yaml`, success-only, driven by pipeline
+> completion). The **learning/calibration
 > corpus** is a separate, Go-owned system
 > (`internal/intelligence/learning.Recorder` →
 > `.nightgauge/pipeline/history/outcomes.jsonl`) that feeds the self-improvement
@@ -478,22 +479,48 @@ critical_files:
 
 ### Bootstrap from Cross-Repo Data (Issue #1316)
 
-`load()` auto-bootstraps when the model file does not exist. It calls the static
-method `createBootstrapModel()`, which returns a baseline model pre-seeded with
-universal calibration data derived from cross-repo observations. The bootstrap
-sets `bootstrap_date` in the YAML so callers can identify freshly-initialized
-models. Bootstrapping is silent — the pipeline never requires the model to be
-manually initialized.
+Both language paths auto-bootstrap when the model file does not exist. The SDK
+calls `ComplexityModelService.createBootstrapModel()`; the Go
+`OutcomeService` calls its exclusive initializer before retrying the read. Both
+emit the same universal calibration baseline and set `bootstrap_date`, so the
+first completed run can be recorded even when `.nightgauge` did not exist.
+
+Operators and setup skills can initialize the same model explicitly:
+
+```bash
+nightgauge outcome init
+nightgauge outcome init --workdir /path/to/repository
+```
+
+The command emits JSON containing `created` and `path`. It is idempotent and
+never replaces an existing file; malformed or unreadable existing models are
+not silently reset and still fail when a recorder loads them.
+`PostPipelineAnalyzer` constructs the SDK service with the full
+`<workspace>/.nightgauge/complexity-model.yaml` path and saves each non-skipped
+model returned by `OutcomeRecorder` through the Go transaction broker. The two
+mid-pipeline feedback writers use the same broker.
 
 ### Atomic Save
 
-`save(model)` protects against partial writes:
+Direct SDK `save(model)` calls protect against partial writes:
 
 1. Serialize `model` to YAML
 2. Write to a temp file alongside the target path
-3. Copy temp file to the target path
-4. Perform post-write verification (read back and confirm non-empty)
-5. On failure at any step, restore from the temp file and re-throw
+3. Validate the temp file before installation
+4. Atomically rename the validated file over the target
+
+The Go initializer writes and syncs a private (`0600`) sibling temp file, then
+installs it with an exclusive hard link. Go model mutations and SDK transactions
+share the advisory `.nightgauge/complexity-model.lock`. For SDK transactions,
+the Go broker owns both that lock and the final validated atomic install; if the
+broker exits, JavaScript has no independent write to continue after lock loss.
+Concurrent first-run recorders therefore converge without overwriting
+observations.
+
+On a direct first run, the Go initializer also creates a lightweight nested
+`.gitignore` (or extends an existing regular file) so the model and lock do not
+pollute `git status`. Repo-init or the VS Code extension later promotes that
+file to the complete canonical `.nightgauge` ignore set.
 
 ### Exponential Decay (`applyDecay()`)
 

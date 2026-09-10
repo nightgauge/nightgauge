@@ -182,6 +182,17 @@ export const PredictionAccuracySchema = z.object({
       })
     )
     .default([]),
+  /** Mid-pipeline recovery events recorded by the Go outcome service. */
+  self_heal_events: z
+    .array(
+      z.object({
+        issue_number: z.number().int().positive(),
+        category: z.string().min(1),
+        stage: z.string().min(1),
+        recorded_at: z.string().min(1),
+      })
+    )
+    .optional(),
   /**
    * Bias-safe calibration state derived from finalized post-merge survival
    * verdicts (#4152 penalize-reverts, #4153 weak-reward-survived; spike
@@ -208,6 +219,60 @@ const CriticalFilesSchema = z.object({
 });
 type _CriticalFiles = z.infer<typeof CriticalFilesSchema>;
 
+export const WorkTimeObservationSchema = z
+  .object({
+    issue_number: z.number().int().positive(),
+    size: z.enum(["XS", "S", "M", "L", "XL"]).nullable(),
+    priority: z.string().nullable(),
+    task_type: z
+      .enum(["feature", "bugfix", "verification", "docs-only", "refactor", "chore", "spike"])
+      .nullable(),
+    actual_work_minutes: z.number().finite().nonnegative(),
+    estimated_minutes: z.number().finite().nonnegative(),
+    routing: z.string().min(1),
+    stages_completed: z.array(
+      z.enum([
+        "pipeline-start",
+        "issue-pickup",
+        "feature-planning",
+        "feature-dev",
+        "feature-validate",
+        "pr-create",
+        "pr-merge",
+        "pipeline-finish",
+      ])
+    ),
+    timestamp: z.string().datetime(),
+  })
+  .strict();
+export type WorkTimeObservation = z.infer<typeof WorkTimeObservationSchema>;
+
+export const WorkTimeSizeAverageSchema = z
+  .object({
+    estimated: z.number().finite().nonnegative(),
+    actual_average: z.number().finite().nonnegative(),
+    observation_count: z.number().int().nonnegative(),
+  })
+  .strict();
+export type WorkTimeSizeAverage = z.infer<typeof WorkTimeSizeAverageSchema>;
+
+export const WorkTimeFeedbackSchema = z
+  .object({
+    enabled: z.boolean(),
+    observations: z.array(WorkTimeObservationSchema).max(50),
+    size_averages: z
+      .object({
+        XS: WorkTimeSizeAverageSchema.optional(),
+        S: WorkTimeSizeAverageSchema.optional(),
+        M: WorkTimeSizeAverageSchema.optional(),
+        L: WorkTimeSizeAverageSchema.optional(),
+        XL: WorkTimeSizeAverageSchema.optional(),
+      })
+      .strict(),
+  })
+  .strict();
+export type WorkTimeFeedback = z.infer<typeof WorkTimeFeedbackSchema>;
+
 /**
  * Complete Complexity Model Schema
  *
@@ -215,48 +280,53 @@ type _CriticalFiles = z.infer<typeof CriticalFilesSchema>;
  *
  * @see docs/ARCHITECTURE.md for design rationale
  */
-export const ComplexityModelSchema = z.object({
-  /** Schema version for forward compatibility */
-  schema_version: z.string().default("1.0"),
-  /** Last update timestamp (YYYY-MM-DD) */
-  last_updated: z.string(),
-  /** Bootstrap date when model was first created */
-  bootstrap_date: z.string().nullish(),
-  /** Source repo path when model was seeded from another repo (Issue #1323) */
-  seeded_from: z.string().nullish(),
-  /** Total number of observations in the model */
-  total_observations: z.number().int().nonnegative(),
+export const ComplexityModelSchema = z
+  .object({
+    /** Schema version for forward compatibility */
+    schema_version: z.string().default("1.0"),
+    /** Last update timestamp (YYYY-MM-DD) */
+    last_updated: z.string(),
+    /** Bootstrap date when model was first created */
+    bootstrap_date: z.string().nullish(),
+    /** Source repo path when model was seeded from another repo (Issue #1323) */
+    seeded_from: z.string().nullish(),
+    /** Total number of observations in the model */
+    total_observations: z.number().int().nonnegative(),
 
-  /** Decay configuration */
-  decay: DecayConfigSchema,
+    /** Decay configuration */
+    decay: DecayConfigSchema,
 
-  /** AI model tracking */
-  model_tracking: ModelTrackingSchema,
+    /** AI model tracking */
+    model_tracking: ModelTrackingSchema,
 
-  /** Keyword patterns by complexity category */
-  patterns: PatternCategoriesSchema,
+    /** Keyword patterns by complexity category */
+    patterns: PatternCategoriesSchema,
 
-  /** Size calibration data */
-  size_calibration: SizeCalibrationSchema,
+    /** Size calibration data */
+    size_calibration: SizeCalibrationSchema,
 
-  /** Type-specific adjustments */
-  type_adjustments: z.record(z.string(), TypeAdjustmentSchema),
+    /** Type-specific adjustments */
+    type_adjustments: z.record(z.string(), TypeAdjustmentSchema),
 
-  /** Priority-specific adjustments */
-  priority_adjustments: z.record(z.string(), PriorityAdjustmentSchema),
+    /** Priority-specific adjustments */
+    priority_adjustments: z.record(z.string(), PriorityAdjustmentSchema),
 
-  /** Lines changed thresholds for size mapping */
-  lines_changed_thresholds: LinesChangedThresholdsSchema,
+    /** Lines changed thresholds for size mapping */
+    lines_changed_thresholds: LinesChangedThresholdsSchema,
 
-  /** Human-readable learnings and notes */
-  learnings: z.array(z.string()).default([]),
+    /** Human-readable learnings and notes */
+    learnings: z.array(z.string()).default([]),
 
-  /** Prediction accuracy tracking (Issue #650) */
-  prediction_accuracy: PredictionAccuracySchema.nullish(),
+    /** Prediction accuracy tracking (Issue #650) */
+    prediction_accuracy: PredictionAccuracySchema.nullish(),
 
-  /** Critical files registry for file-aware scoring (Issue #1309) */
-  critical_files: CriticalFilesSchema.optional(),
-});
+    /** Critical files registry for file-aware scoring (Issue #1309) */
+    critical_files: CriticalFilesSchema.optional(),
+
+    /** Work-time calibration owned by the VS Code feedback writer. */
+    work_time_feedback: WorkTimeFeedbackSchema.optional(),
+  })
+  .strict();
 export type ComplexityModel = z.infer<typeof ComplexityModelSchema>;
 
 /**

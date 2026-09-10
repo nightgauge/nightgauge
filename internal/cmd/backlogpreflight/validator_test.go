@@ -319,4 +319,14 @@ func TestCheckGreenfield_EmptyProject(t *testing.T) {
 	if len(findings) < 4 {
 		t.Fatalf("expected at least 4 greenfield findings for empty dir, got %d", len(findings))
 	}
+
+	for _, finding := range findings {
+		if strings.Contains(finding.Detail, "complexity-model.yaml") {
+			if finding.Suggestion != "Run: nightgauge outcome init to generate the complexity model" {
+				t.Fatalf("complexity-model suggestion = %q", finding.Suggestion)
+			}
+			return
+		}
+	}
+	t.Fatal("missing complexity-model greenfield finding")
 }

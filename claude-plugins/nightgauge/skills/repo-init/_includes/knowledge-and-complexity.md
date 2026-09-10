@@ -97,9 +97,12 @@ the directory exists, it is skipped entirely — no files are overwritten.
 
 ## Phase 6.8: Bootstrap Complexity Model
 
-Create `.nightgauge/complexity-model.yaml` with universal baseline
-calibration defaults if it does not already exist. This ensures the pipeline can
-run without a first-run crash in `ComplexityModelService.load()`.
+Initialize `.nightgauge/complexity-model.yaml` through the supported Go command.
+`nightgauge outcome init` owns the canonical universal baseline, creates the
+`.nightgauge` directory when needed, and leaves an existing model untouched.
+The Go outcome recorder calls this same initializer automatically, so a fresh
+repository can also learn from its first completed run without a setup-only
+dependency.
 
 When `--seed-from` is provided, seed the model from an existing repo's model
 file instead of using bootstrap defaults. The seed operation copies universal
@@ -109,15 +112,23 @@ accuracy). This gives a new repo the benefit of cross-repo learning without
 polluting with another repo's history.
 
 ```bash
-if [ -n "$SEED_FROM" ]; then
+MODEL_PATH=".nightgauge/complexity-model.yaml"
+
+if [ -L ".nightgauge" ]; then
+  echo "ERROR: refusing symlinked .nightgauge directory" >&2
+  exit 1
+elif [ -e "$MODEL_PATH" ] || [ -L "$MODEL_PATH" ]; then
+  echo "$MODEL_PATH already exists — preserving it"
+elif [ -n "$SEED_FROM" ]; then
   # Cross-repo seeding (#1323): Python YAML transform (jq cannot parse YAML)
   echo "Seeding complexity model from $SEED_FROM..."
   TODAY=$(date +%Y-%m-%d)
-  python3 - "$SEED_FROM" "$TODAY" << 'PYEOF'
-import sys, yaml, datetime
+  python3 - "$SEED_FROM" "$TODAY" "$MODEL_PATH" << 'PYEOF'
+import os, sys, tempfile, yaml
 
 source_path = sys.argv[1]
 today = sys.argv[2]
+target_path = sys.argv[3]
 
 with open(source_path, 'r') as f:
     model = yaml.safe_load(f)
@@ -152,115 +163,39 @@ patterns = model.get('patterns', {})
 for category in ['high_complexity', 'medium_complexity', 'low_complexity']:
     patterns[category] = filter_patterns(patterns.get(category, []))
 
-with open('.nightgauge/complexity-model.yaml', 'w') as f:
-    yaml.dump(model, f, default_flow_style=False, allow_unicode=True)
-
-print(f"Seeded complexity model from {source_path}")
+temp_path = None
+try:
+    with tempfile.NamedTemporaryFile(
+        mode='w', dir=os.path.dirname(target_path),
+        prefix='.complexity-model-seed-', suffix='.yaml.tmp', delete=False,
+    ) as f:
+        temp_path = f.name
+        yaml.dump(model, f, default_flow_style=False, allow_unicode=True)
+        f.flush()
+        os.fsync(f.fileno())
+    try:
+        os.link(temp_path, target_path)
+        print(f"Seeded complexity model from {source_path}")
+    except FileExistsError:
+        print(f"{target_path} appeared during seeding — preserving it")
+finally:
+    if temp_path:
+        try:
+            os.unlink(temp_path)
+        except FileNotFoundError:
+            pass
 PYEOF
   if [ $? -ne 0 ]; then
     echo "WARNING: Python seed transform failed. Using bootstrap defaults instead."
-    # Fall through to bootstrap creation below
     SEED_FROM=""
   fi
-elif [ ! -f ".nightgauge/complexity-model.yaml" ]; then
-  TODAY=$(date +%Y-%m-%d)
-  cat > .nightgauge/complexity-model.yaml << YAML
-schema_version: "1.0"
-last_updated: "${TODAY}"
-bootstrap_date: "${TODAY}"
-total_observations: 0
-decay:
-  enabled: false
-  half_life_days: 30
-model_tracking:
-  current_default: "claude-sonnet-4-6"
-  observations_by_model: {}
-patterns:
-  high_complexity:
-    - match: "refactor|redesign|rewrite"
-      modifier: 1.5
-      confidence: 0.45
-      rationale: "Refactoring/redesign typically requires touching many files"
-      observations: 0
-    - match: "migrate|migration"
-      modifier: 1.3
-      confidence: 0.45
-      rationale: "Migration work spans analysis, planning, and execution layers"
-      observations: 0
-    - match: "multi.?repo|workspace|cross.?repo"
-      modifier: 1.5
-      confidence: 0.50
-      rationale: "Multi-repo features require coordination across boundaries"
-      observations: 0
-  medium_complexity:
-    - match: "config|setting|option"
-      modifier: 0
-      confidence: 0.50
-      rationale: "Configuration changes are moderate scope"
-      observations: 0
-    - match: "validation|schema|zod"
-      modifier: 0
-      confidence: 0.57
-      rationale: "Schema/validation changes are moderate scope"
-      observations: 0
-  low_complexity:
-    - match: "typo|spelling|wording"
-      modifier: -1
-      confidence: 0.70
-      rationale: "Typo/spelling fixes are minimal scope"
-      observations: 0
-    - match: "readme|changelog|documentation"
-      modifier: -0.8
-      confidence: 0.65
-      rationale: "Documentation-only changes are small scope"
-      observations: 0
-    - match: "bump|upgrade|version"
-      modifier: -0.5
-      confidence: 0.56
-      rationale: "Version bumps are typically small"
-      observations: 0
-size_calibration:
-  XS: { expected_lines: 50, actual_average_lines: 59, sample_count: 0 }
-  S:  { expected_lines: 150, actual_average_lines: 213, sample_count: 0 }
-  M:  { expected_lines: 500, actual_average_lines: 574, sample_count: 0 }
-  L:  { expected_lines: 1200, actual_average_lines: 1476, sample_count: 0 }
-  XL: { expected_lines: 2500, actual_average_lines: 2352, sample_count: 0 }
-type_adjustments:
-  feature:  { modifier: -1.45, observations: 0, rationale: "Seeded from cross-repo baseline (45 observations)" }
-  bug:      { modifier: -0.6,  observations: 0, rationale: "Bugs tend toward smaller scope" }
-  docs:     { modifier: -0.7,  observations: 0, rationale: "Documentation changes are typically smaller" }
-  refactor: { modifier: 0.3,   observations: 0, rationale: "Refactors tend to touch more files" }
-  chore:    { modifier: -0.3,  observations: 0, rationale: "Chores are typically small maintenance" }
-priority_adjustments:
-  critical: { modifier: 0.2,  rationale: "Critical issues often have broader scope",           observations: 0 }
-  high:     { modifier: 0.1,  rationale: "High priority slightly correlates with complexity",  observations: 0 }
-  medium:   { modifier: 0,    rationale: "Baseline priority",                                  observations: 0 }
-  low:      { modifier: -0.1, rationale: "Low priority often simpler scope",                   observations: 0 }
-lines_changed_thresholds:
-  XS: 100
-  S:  325
-  M:  850
-  L:  1850
-  XL: 2500
-learnings:
-  - "${TODAY}: Bootstrap model created during repo-init with universal baseline calibration."
-prediction_accuracy:
-  total_predictions: 0
-  correct_predictions: 0
-  by_type: {}
-  by_size: {}
-  recent_outcomes: []
-critical_files:
-  description: "Files whose modification significantly increases issue complexity"
-  registry: []
-  per_file_modifier: 0.5
-  max_modifier: 1.5
-YAML
-  echo "Created .nightgauge/complexity-model.yaml (bootstrap defaults)"
-else
-  echo ".nightgauge/complexity-model.yaml already exists — skipping"
+fi
+
+if [ ! -e "$MODEL_PATH" ] && [ ! -L "$MODEL_PATH" ]; then
+  nightgauge outcome init
 fi
 ```
 
-This YAML is NOT committed to git (covered by `.nightgauge/.gitignore`). It
-is populated with real data via the feedback loop as pipeline runs accumulate.
+The generated YAML is NOT committed to git (covered by
+`.nightgauge/.gitignore`). It is populated with real data via the feedback loop
+as pipeline runs accumulate.

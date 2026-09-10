@@ -89,6 +89,11 @@ func (s *OutcomeService) ApplySurvivalVerdicts(records []survival.Record) Surviv
 	if len(records) == 0 {
 		return SurvivalCalibrationResult{}
 	}
+	release, err := s.lockModel()
+	if err != nil {
+		return SurvivalCalibrationResult{Error: fmt.Sprintf("lock model: %v", err)}
+	}
+	defer release()
 
 	model, err := s.loadModel()
 	if err != nil {

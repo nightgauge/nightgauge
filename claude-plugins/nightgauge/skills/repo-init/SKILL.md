@@ -11,7 +11,7 @@ description: Prime a new GitHub repository and project board for the Nightgauge 
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.3.0"
+  version: "1.3.1"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Bash AskUserQuestion
 disable-model-invocation: true

@@ -421,6 +421,7 @@ export class FeedbackLearningService {
     return {
       ...model,
       prediction_accuracy: {
+        ...accuracy,
         total_predictions: accuracy.total_predictions + 1,
         correct_predictions: accuracy.correct_predictions,
         by_type: byType,

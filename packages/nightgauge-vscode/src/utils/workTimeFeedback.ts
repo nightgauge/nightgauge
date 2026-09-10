@@ -6,7 +6,7 @@
  *
  * Key Principles:
  * - Pure functions (no side effects) for testability
- * - Atomic YAML writes (temp file + rename) for crash safety
+ * - Persistence is handled by the shared brokered ComplexityModelService
  * - Only count completed stages (not failed/skipped)
  * - Rolling window of last 50 observations
  *
@@ -18,42 +18,28 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as yaml from "js-yaml";
 import type { PipelineState } from "../services/PipelineStateService";
-import type { PipelineStage } from "@nightgauge/sdk";
+import type {
+  PipelineStage,
+  WorkTimeFeedback as SDKWorkTimeFeedback,
+  WorkTimeObservation as SDKWorkTimeObservation,
+  WorkTimeSizeAverage,
+} from "@nightgauge/sdk";
 import type { SizeLabel, TaskType } from "./changeAnalyzer";
-import { writeFileAtomic } from "./atomicWrite";
 
 /**
  * Work-time observation captured after PR merge
  */
-export interface WorkTimeObservation {
-  issue_number: number;
-  size: SizeLabel;
-  priority: string | null;
-  task_type: TaskType | null;
-  actual_work_minutes: number;
-  estimated_minutes: number;
-  routing: string;
-  stages_completed: PipelineStage[];
-  timestamp: string;
-}
+export type WorkTimeObservation = SDKWorkTimeObservation;
 
 /**
  * Size-specific average work time
  */
-export interface SizeAverage {
-  estimated: number;
-  actual_average: number;
-  observation_count: number;
-}
+export type SizeAverage = WorkTimeSizeAverage;
 
 /**
  * Work-time feedback section in complexity-model.yaml
  */
-export interface WorkTimeFeedback {
-  enabled: boolean;
-  observations: WorkTimeObservation[];
-  size_averages: Partial<Record<NonNullable<SizeLabel>, SizeAverage>>;
-}
+export type WorkTimeFeedback = SDKWorkTimeFeedback;
 
 /**
  * Calculate actual work time from pipeline state
@@ -128,7 +114,8 @@ export function getCompletedStages(state: PipelineState): PipelineStage[] {
  * Create work-time observation from pipeline state
  *
  * Extracts relevant fields from state and issue context to build an observation.
- * Does NOT write to YAML - call appendObservationToYAML() separately.
+ * Does NOT write to YAML. Persist the resulting section through the shared
+ * broker-backed ComplexityModelService transaction.
  *
  * @param state - Pipeline state with completed stages
  * @param issueContext - Additional context from issue-pickup (labels, routing, etc.)
@@ -155,71 +142,6 @@ export function createObservation(
     stages_completed: getCompletedStages(state),
     timestamp: new Date().toISOString(),
   };
-}
-
-/**
- * Append observation to complexity-model.yaml with atomic write
- *
- * Reads existing YAML, appends observation, prunes to last 50, recalculates averages,
- * and writes atomically (temp file + rename) for crash safety.
- *
- * Creates file with default structure if it doesn't exist.
- *
- * @param observation - Observation to append
- * @param yamlPath - Path to complexity-model.yaml (absolute or relative to workspace)
- */
-export async function appendObservationToYAML(
-  observation: WorkTimeObservation,
-  yamlPath: string
-): Promise<void> {
-  // Read existing or create default structure
-  let feedback: WorkTimeFeedback;
-
-  try {
-    const content = await fs.readFile(yamlPath, "utf-8");
-    const parsed = yaml.load(content) as Record<string, unknown>;
-
-    feedback = (parsed.work_time_feedback as WorkTimeFeedback | undefined) ?? {
-      enabled: true,
-      observations: [],
-      size_averages: {},
-    };
-  } catch (error: unknown) {
-    // File doesn't exist or is corrupted - create default
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      feedback = {
-        enabled: true,
-        observations: [],
-        size_averages: {},
-      };
-    } else {
-      throw new Error(
-        `Failed to read complexity-model.yaml: ${error instanceof Error ? error.message : String(error)}`,
-        { cause: error }
-      );
-    }
-  }
-
-  // Append observation
-  feedback.observations.push(observation);
-
-  // Prune to last 50 observations
-  feedback.observations = pruneOldObservations(feedback.observations, 50);
-
-  // Recalculate size averages
-  feedback.size_averages = calculateSizeAverages(feedback.observations);
-
-  // Atomic write: unique-suffix temp file + rename (#786 — a fixed temp
-  // path races two concurrent writers the same way #777 did).
-  const yamlContent = yaml.dump(
-    { work_time_feedback: feedback },
-    {
-      indent: 2,
-      lineWidth: -1, // No line wrapping
-    }
-  );
-
-  await writeFileAtomic(yamlPath, yamlContent);
 }
 
 /**

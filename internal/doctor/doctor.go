@@ -111,6 +111,7 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 	var warnings []string
 	var errors []string
 	hasRequiredFailure := false
+	cwd, _ := os.Getwd()
 
 	// --- binary (warning) ---
 	// Self-check: which binary would the hooks resolve from this directory?
@@ -224,6 +225,15 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 		}
 	}
 
+	// --- complexity_model (warning) ---
+	// Outcome recording bootstraps this file automatically, while doctor also
+	// advertises the shared explicit initializer used by repository setup.
+	complexityModel, complexityModelWarning := checkComplexityModel(cwd)
+	result.Checks["complexity_model"] = complexityModel
+	if complexityModelWarning != "" {
+		warnings = append(warnings, complexityModelWarning)
+	}
+
 	// --- project_mapping (required when a workspace manifest exists and cfg is loaded) ---
 	// Cross-checks the workspace manifest's repositories[].project_number
 	// (Source A) against the board config.ResolveRepoProject declares for that
@@ -320,7 +330,6 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 	// longer exists indicate a leaked teardown. Surface them so the operator
 	// can run `nightgauge cleanup`. Skipped silently when docker is
 	// unavailable.
-	cwd, _ := os.Getwd()
 	orphans, orphansDetermined := findOrphanedComposeProjects(ctx, cwd)
 	switch {
 	case !orphansDetermined:

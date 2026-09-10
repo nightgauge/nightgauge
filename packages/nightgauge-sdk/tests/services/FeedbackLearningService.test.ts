@@ -143,6 +143,47 @@ describe("FeedbackLearningService", () => {
       expect(savedModel.prediction_accuracy?.total_predictions).toBe(4);
       expect(savedModel.prediction_accuracy?.correct_predictions).toBe(2);
     });
+
+    it("preserves nested recovery and survival calibration data", async () => {
+      const model = makeModel();
+      model.prediction_accuracy = {
+        ...model.prediction_accuracy!,
+        self_heal_events: [
+          {
+            issue_number: 7,
+            category: "stale_sdk_dist",
+            stage: "feature-validate",
+            recorded_at: "2026-09-01T12:00:00Z",
+          },
+        ],
+        survival_calibration: {
+          confidence: 0.55,
+          negative_observations: 1,
+          positive_observations: 2,
+          penalties_applied: 1,
+          rewards_applied: 2,
+          processed_shas: ["abc123"],
+        },
+      };
+      vi.mocked(modelService.load).mockResolvedValue(model);
+
+      await learningService.recordUnderestimation(
+        42,
+        "S",
+        "feature",
+        "Refactor the auth service",
+        "Needs deep refactor",
+        testSignal
+      );
+
+      const saved = vi.mocked(modelService.save).mock.calls[0][0];
+      expect(saved.prediction_accuracy?.self_heal_events).toEqual(
+        model.prediction_accuracy.self_heal_events
+      );
+      expect(saved.prediction_accuracy?.survival_calibration).toEqual(
+        model.prediction_accuracy.survival_calibration
+      );
+    });
   });
 
   describe("idempotency", () => {

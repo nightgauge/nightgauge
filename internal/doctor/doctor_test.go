@@ -16,6 +16,9 @@ import (
 func TestRunDoctor_NilClient(t *testing.T) {
 	ctx := context.Background()
 	result := RunDoctor(ctx, nil, nil, nil)
+	if _, ok := result.Checks["complexity_model"]; !ok {
+		t.Fatal("expected RunDoctor to emit the complexity_model check")
+	}
 
 	if result.ExitCode != 2 {
 		t.Errorf("expected ExitCode 2, got %d", result.ExitCode)

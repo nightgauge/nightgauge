@@ -1,0 +1,177 @@
+{
+  "schema_version": "1.0",
+  "last_updated": "2000-01-02",
+  "bootstrap_date": "2000-01-02",
+  "total_observations": 0,
+  "decay": {
+    "enabled": false,
+    "half_life_days": 30
+  },
+  "model_tracking": {
+    "current_default": "claude-sonnet-4-6",
+    "observations_by_model": {}
+  },
+  "patterns": {
+    "high_complexity": [
+      {
+        "match": "refactor|redesign|rewrite",
+        "modifier": 1.5,
+        "confidence": 0.45,
+        "rationale": "Refactoring/redesign typically requires touching many files",
+        "observations": 0
+      },
+      {
+        "match": "migrate|migration",
+        "modifier": 1.3,
+        "confidence": 0.45,
+        "rationale": "Migration work spans analysis, planning, and execution layers",
+        "observations": 0
+      },
+      {
+        "match": "multi.?repo|workspace|cross.?repo",
+        "modifier": 1.5,
+        "confidence": 0.5,
+        "rationale": "Multi-repo features require coordination across boundaries",
+        "observations": 0
+      }
+    ],
+    "medium_complexity": [
+      {
+        "match": "config|setting|option",
+        "modifier": 0,
+        "confidence": 0.5,
+        "rationale": "Configuration changes are moderate scope",
+        "observations": 0
+      },
+      {
+        "match": "validation|schema|zod",
+        "modifier": 0,
+        "confidence": 0.57,
+        "rationale": "Schema/validation changes are moderate scope",
+        "observations": 0
+      }
+    ],
+    "low_complexity": [
+      {
+        "match": "typo|spelling|wording",
+        "modifier": -1,
+        "confidence": 0.7,
+        "rationale": "Typo/spelling fixes are minimal scope",
+        "observations": 0
+      },
+      {
+        "match": "readme|changelog|documentation",
+        "modifier": -0.8,
+        "confidence": 0.65,
+        "rationale": "Documentation-only changes are small scope",
+        "observations": 0
+      },
+      {
+        "match": "bump|upgrade|version",
+        "modifier": -0.5,
+        "confidence": 0.56,
+        "rationale": "Version bumps are typically small",
+        "observations": 0
+      }
+    ]
+  },
+  "size_calibration": {
+    "XS": {
+      "expected_lines": 50,
+      "actual_average_lines": 59,
+      "sample_count": 0
+    },
+    "S": {
+      "expected_lines": 150,
+      "actual_average_lines": 213,
+      "sample_count": 0
+    },
+    "M": {
+      "expected_lines": 500,
+      "actual_average_lines": 574,
+      "sample_count": 0
+    },
+    "L": {
+      "expected_lines": 1200,
+      "actual_average_lines": 1476,
+      "sample_count": 0
+    },
+    "XL": {
+      "expected_lines": 2500,
+      "actual_average_lines": 2352,
+      "sample_count": 0
+    }
+  },
+  "type_adjustments": {
+    "feature": {
+      "modifier": -1.45,
+      "observations": 0,
+      "rationale": "Seeded from cross-repo baseline (45 observations show features over-predicted)"
+    },
+    "bug": {
+      "modifier": -0.6,
+      "observations": 0,
+      "rationale": "Bugs tend toward smaller scope"
+    },
+    "docs": {
+      "modifier": -0.7,
+      "observations": 0,
+      "rationale": "Documentation changes are typically smaller"
+    },
+    "refactor": {
+      "modifier": 0.3,
+      "observations": 0,
+      "rationale": "Refactors tend to touch more files"
+    },
+    "chore": {
+      "modifier": -0.3,
+      "observations": 0,
+      "rationale": "Chores are typically small maintenance"
+    }
+  },
+  "priority_adjustments": {
+    "critical": {
+      "modifier": 0.2,
+      "rationale": "Critical issues often have broader scope",
+      "observations": 0
+    },
+    "high": {
+      "modifier": 0.1,
+      "rationale": "High priority slightly correlates with complexity",
+      "observations": 0
+    },
+    "medium": {
+      "modifier": 0,
+      "rationale": "Baseline priority",
+      "observations": 0
+    },
+    "low": {
+      "modifier": -0.1,
+      "rationale": "Low priority often simpler scope",
+      "observations": 0
+    }
+  },
+  "lines_changed_thresholds": {
+    "XS": 100,
+    "S": 325,
+    "M": 850,
+    "L": 1850,
+    "XL": 2500
+  },
+  "learnings": [
+    "2000-01-02: Bootstrap model created with universal baseline calibration from cross-repo data."
+  ],
+  "prediction_accuracy": {
+    "total_predictions": 0,
+    "correct_predictions": 0,
+    "by_type": {},
+    "by_size": {},
+    "recent_outcomes": []
+  },
+  "critical_files": {
+    "description": "Files whose modification significantly increases issue complexity. When referenced in technical notes, each critical file bumps the complexity score.",
+    "registry": [],
+    "per_file_modifier": 0.5,
+    "max_modifier": 1.5
+  }
+}

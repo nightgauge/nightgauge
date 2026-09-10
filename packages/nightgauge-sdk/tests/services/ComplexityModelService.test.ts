@@ -162,6 +162,67 @@ describe("ComplexityModelService", () => {
       expect(loaded.schema_version).toBe("1.0");
     });
 
+    it("preserves Go self-heal events and VS Code work-time feedback", async () => {
+      const model: ComplexityModel = {
+        ...validModel,
+        prediction_accuracy: {
+          total_predictions: 0,
+          correct_predictions: 0,
+          by_type: {},
+          by_size: {},
+          recent_outcomes: [],
+          self_heal_events: [
+            {
+              issue_number: 42,
+              category: "stale_sdk_dist",
+              stage: "feature-validate",
+              recorded_at: "2026-02-19T01:00:00Z",
+            },
+          ],
+        },
+        work_time_feedback: {
+          enabled: true,
+          observations: [
+            {
+              issue_number: 42,
+              size: "S",
+              priority: "high",
+              task_type: "feature",
+              actual_work_minutes: 12,
+              estimated_minutes: 15,
+              routing: "standard",
+              stages_completed: ["feature-dev", "feature-validate"],
+              timestamp: "2026-02-19T01:00:00Z",
+            },
+          ],
+          size_averages: {},
+        },
+      };
+
+      await service.save(model);
+      const loaded = await service.load();
+
+      expect(loaded.prediction_accuracy?.self_heal_events).toEqual(
+        model.prediction_accuracy?.self_heal_events
+      );
+      expect(loaded.work_time_feedback).toEqual(model.work_time_feedback);
+    });
+
+    it("rejects incomplete work-time feedback instead of silently normalizing it", async () => {
+      const invalid = {
+        ...validModel,
+        work_time_feedback: {
+          enabled: true,
+          observations: [{ issue_number: 42, actual_work_minutes: 12 }],
+          size_averages: {},
+        },
+      };
+
+      await expect(service.save(invalid as unknown as ComplexityModel)).rejects.toThrow(
+        ModelValidationError
+      );
+    });
+
     it("should update last_updated timestamp on save", async () => {
       const oldDate = "2025-01-01";
       const modelWithOldDate = { ...validModel, last_updated: oldDate };
@@ -173,6 +234,33 @@ describe("ComplexityModelService", () => {
       expect(loaded.last_updated).not.toBe(oldDate);
       expect(loaded.last_updated).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     });
+
+    it("can delegate the validated serialized document to a transaction broker", async () => {
+      const writer = vi.fn().mockResolvedValue(undefined);
+      const brokeredService = new ComplexityModelService(modelPath, writer);
+
+      await brokeredService.save(validModel);
+
+      expect(writer).toHaveBeenCalledTimes(1);
+      expect(writer.mock.calls[0][0]).toContain('schema_version: "1.0"');
+      await expect(fs.stat(modelPath)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
+  it("matches the shared canonical bootstrap fixture", async () => {
+    const fixturePath = path.resolve(
+      __dirname,
+      "../../../../tests/fixtures/complexity-model-bootstrap.json"
+    );
+    const fixture = JSON.parse(await fs.readFile(fixturePath, "utf-8"));
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2000-01-02T12:00:00Z"));
+    try {
+      expect(ComplexityModelService.createBootstrapModel()).toEqual(fixture);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   describe("post-write verification", () => {
@@ -189,40 +277,18 @@ describe("ComplexityModelService", () => {
       expect(tempFiles).toHaveLength(0);
     });
 
-    it("should throw ModelValidationError and restore from temp when verification fails", async () => {
+    it("should reject a failed temp-file verification before replacing the model", async () => {
       class FailVerifyService extends ComplexityModelService {
         protected override async verifyWrittenFile(): Promise<string | null> {
           return "simulated corruption: schema validation failed";
         }
       }
 
+      await service.save(validModel);
+      const before = await fs.readFile(modelPath, "utf-8");
       const failService = new FailVerifyService(modelPath);
-      await expect(failService.save(validModel)).rejects.toThrow(
-        /Post-write verification failed.*restored from temp/
-      );
-
-      // After restore, the file should still be valid (restored from temp)
-      const loaded = await service.load();
-      expect(loaded.schema_version).toBe("1.0");
-    });
-
-    it("should include both errors when verification and restore both fail", async () => {
-      class FailVerifyAndRestoreService extends ComplexityModelService {
-        protected override async verifyWrittenFile(): Promise<string | null> {
-          // Delete temp files so restore rename will fail
-          const dir = path.dirname(this.getModelPath());
-          const files = await fs.readdir(dir);
-          for (const f of files) {
-            if (f.endsWith(".yaml.tmp")) {
-              await fs.unlink(path.join(dir, f));
-            }
-          }
-          return "simulated corruption";
-        }
-      }
-
-      const failService = new FailVerifyAndRestoreService(modelPath);
-      await expect(failService.save(validModel)).rejects.toThrow(/Restore from temp also failed/);
+      await expect(failService.save(validModel)).rejects.toThrow(/Pre-install verification failed/);
+      expect(await fs.readFile(modelPath, "utf-8")).toBe(before);
     });
   });
 
@@ -236,6 +302,16 @@ describe("ComplexityModelService", () => {
 
     it("should return false when file does not exist", async () => {
       expect(await service.exists()).toBe(false);
+    });
+
+    it("rejects a symlinked model instead of following it", async () => {
+      const outside = path.join(tempDir, "outside.yaml");
+      await fs.writeFile(outside, "outside: true\n", "utf-8");
+      await fs.symlink(outside, modelPath);
+
+      await expect(service.load()).rejects.toThrow(/Refusing symlinked complexity model/);
+      await expect(service.save(validModel)).rejects.toThrow(/Refusing symlinked complexity model/);
+      expect(await fs.readFile(outside, "utf-8")).toBe("outside: true\n");
     });
   });
 

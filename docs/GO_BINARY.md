@@ -237,6 +237,10 @@ nightgauge backlog preflight --status Ready --issue 42 --json
 nightgauge backlog preflight --focus greenfield
 ```
 
+When the greenfield check reports a missing complexity model, initialize the
+canonical baseline with `nightgauge outcome init`. The same initializer runs
+automatically when the Go outcome recorder observes its first completed run.
+
 ### Skill Composition (Issue #78 / ADR 016)
 
 `nightgauge skill render` is the **one** composer for a stage's executable
@@ -4032,6 +4036,12 @@ nightgauge teams detect-deps        # stdin: issues JSON
 nightgauge teams split-budget       # stdin: issues JSON
 nightgauge teams detect-conflicts   # stdin: issues JSON
 
+# Complexity-model lifecycle and recording
+nightgauge outcome init [--workdir <path>]
+nightgauge outcome record --issue <N> --pr <N> --model <id> \
+  --predicted-size <XS|S|M|L|XL> --actual-lines <N> [--type <type>] \
+  [--workdir <path>]
+
 # Loop effectiveness analysis (Issue #3086, audit row B28)
 nightgauge intelligence loop-verdicts [--workdir <path>] [--period <days>]
 
@@ -4700,6 +4710,11 @@ Two rules follow directly from that:
   nightgauge ci checks-complete "$sha" --repo {owner}/{repo}
   ```
 
+  The verb resolves required contexts from the branch ruleset and verifies
+  them across both GitHub status surfaces: Check Runs and legacy Commit
+  Statuses. It returns NOT-YET when either surface is unavailable, a required
+  context has not appeared, or a required observation is still pending.
+
 Before a bulk read, check what it would cost against what is left this hour:
 `nightgauge api-usage --budget` reports the remaining GraphQL budget for the
 current hour and prices a full board read against it, entirely from the local
@@ -5035,6 +5050,7 @@ pipeline skill calls this as Phase 0 preflight via `skills/_shared/PREFLIGHT.md`
 | `rate_limit`  | API requests remaining (warn < 500, warn < 100) | warning    |
 | `config`      | `.nightgauge/config.yaml` parseable        | required\* |
 | `project`     | `project_number` and `owner` set in config      | required\* |
+| `complexity_model` | `.nightgauge/complexity-model.yaml` exists; missing output points to `nightgauge outcome init` | warning |
 
 Plus the leaked-machine-state checks (#330 / #332 / #341), all **warning-only**:
 
@@ -5063,6 +5079,11 @@ back in as `ActiveIssues` (whose contract is "runs in flight") makes every
 candidate skip as `active-run` and the check reports nothing, forever.
 
 \* Downgraded to warning for fresh repositories (no `config.yaml`).
+
+A missing complexity model is warning-only because the first Go outcome write
+auto-bootstraps it. Running `nightgauge outcome init` explicitly is idempotent:
+it creates the canonical SDK-compatible baseline and never replaces an existing
+file.
 
 #### Orphaned processes (issue #341)
 

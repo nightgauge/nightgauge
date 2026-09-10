@@ -1,7 +1,7 @@
 # Adapter Selection Guide
 
 **Version:** 1.2
-**Updated:** 2026-08-15
+**Updated:** 2026-09-10
 **Issue:** #2599, #584
 
 ---

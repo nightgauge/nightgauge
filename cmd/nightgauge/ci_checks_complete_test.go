@@ -13,10 +13,25 @@ import (
 // shape as internal/hooks's scriptedChecks: the last frame repeats once the
 // script is exhausted.
 type fakeChecksCompleteReader struct {
-	checkFrames [][]gh.CheckDetail
-	runFrames   [][]gh.WorkflowRunSummary
-	errAt       map[int]error
-	polls       int
+	checkFrames  [][]gh.CheckDetail
+	statusFrames [][]gh.CheckDetail
+	runFrames    [][]gh.WorkflowRunSummary
+	errAt        map[int]error
+	polls        int
+}
+
+func (f *fakeChecksCompleteReader) GetCommitStatuses(_ context.Context, _, _, _ string) ([]gh.CheckDetail, error) {
+	if len(f.statusFrames) == 0 {
+		return nil, nil
+	}
+	i := f.polls - 1
+	if i < 0 {
+		i = 0
+	}
+	if i >= len(f.statusFrames) {
+		i = len(f.statusFrames) - 1
+	}
+	return f.statusFrames[i], nil
 }
 
 func (f *fakeChecksCompleteReader) GetIndividualCheckRuns(_ context.Context, _, _, _ string) ([]gh.CheckDetail, error) {
@@ -92,6 +107,22 @@ func TestPollChecksComplete_AllRequiredPresentIsGreenAfterConfirmation(t *testin
 	// confirms it (#1540 §3).
 	if res.Polls != 2 {
 		t.Errorf("Polls = %d, want 2 — a terminal verdict needs a confirming second read", res.Polls)
+	}
+}
+
+func TestPollChecksComplete_RequiredCommitStatusSatisfiesPresence(t *testing.T) {
+	reader := &fakeChecksCompleteReader{
+		checkFrames:  [][]gh.CheckDetail{{detail("build", "COMPLETED", "SUCCESS")}},
+		statusFrames: [][]gh.CheckDetail{{detail("cla", "COMPLETED", "SUCCESS")}},
+	}
+
+	res, err := pollChecksComplete(context.Background(), reader, "o", "r", "abc123", "main",
+		[]string{"build", "cla"}, 2, time.Millisecond, true, noSleepCmd, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Verdict != gh.ChecksComplete {
+		t.Fatalf("Verdict = %q, want %q", res.Verdict, gh.ChecksComplete)
 	}
 }
 

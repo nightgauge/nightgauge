@@ -14,7 +14,7 @@ Complete reference for all Nightgauge skills — what they do, when to use them,
 | `nightgauge-pr-merge`               | Core Pipeline    | Wait for reviews and merge PR                                              | 1.13.0  | `/nightgauge-pr-merge`                         |
 | `nightgauge-assess-epic`            | Project Ops      | Analyze epic for batch vs sequential strategy                              | 1.0.0   | `/nightgauge:assess-epic <#>`                  |
 | `nightgauge-backlog-groom`          | Project Ops      | Groom the open backlog (validity, worth, verification, security, epic fit) | 2.0.0   | `/nightgauge:backlog-groom [options]`          |
-| `nightgauge-backlog-preflight`      | Project Ops      | Validate backlog before processing                                         | 1.1.0   | `/nightgauge:backlog-preflight [options]`      |
+| `nightgauge-backlog-preflight`      | Project Ops      | Validate backlog before processing                                         | 1.1.1   | `/nightgauge:backlog-preflight [options]`      |
 | `nightgauge-config-show`            | Project Ops      | Display effective configuration                                            | 1.1.0   | `/nightgauge-config-show`                      |
 | `nightgauge-epic-validate`          | Project Ops      | Post-creation epic validation                                              | 1.0.0   | `/nightgauge:epic-validate <#>`                |
 | `nightgauge-issue-create`           | Project Ops      | Create well-structured GitHub issues                                       | 1.15.0  | `/nightgauge:issue-create [options]`           |
@@ -39,7 +39,7 @@ Complete reference for all Nightgauge skills — what they do, when to use them,
 | `pr-preflight`                      | Portable         | Universal PR pre-flight validation                                         | 1.1.0   | `/pr-preflight`                                |
 | `smart-setup`                       | Portable         | Make repository AI-ready                                                   | 4.7.1   | `/smart-setup`                                 |
 | `update-docs`                       | Portable         | Verify and update documentation                                            | 1.7.0   | `/update-docs [options]`                       |
-| `nightgauge-repo-init`              | Project Ops      | Prime repository for Nightgauge                                            | 1.3.0   | `/nightgauge:repo-init [options]`              |
+| `nightgauge-repo-init`              | Project Ops      | Prime repository for Nightgauge                                            | 1.3.1   | `/nightgauge:repo-init [options]`              |
 | `nightgauge-workspace-init`         | Project Ops      | Scaffold multi-repo workspace manifest                                     | 1.0.0   | `/nightgauge:workspace-init [options]`         |
 
 ---
@@ -248,7 +248,7 @@ Skills for repository initialization, issue management, and board synchronizatio
 
 ### `/nightgauge:repo-init`
 
-**Version:** 1.3.0 | **Purpose:** Prime repository for Nightgauge
+**Version:** 1.3.1 | **Purpose:** Prime repository for Nightgauge
 
 **Description:**
 Set up everything a repository needs to work with the Nightgauge pipeline: standard labels, GitHub Project board fields, repo-to-project linking, and `.nightgauge/config.yaml` with all field IDs pre-populated.
@@ -594,7 +594,7 @@ See [full specification](../skills/nightgauge-backlog-groom/SKILL.md)
 
 ### `/nightgauge:backlog-preflight`
 
-**Version:** 1.1.0 | **Purpose:** Validate backlog before processing
+**Version:** 1.1.1 | **Purpose:** Validate backlog before processing
 
 **Description:**
 Validate that issues meet minimum requirements for pipeline processing. Judges a chosen batch immediately before a run (backlog-groom judges the whole backlog on a cadence) and adds greenfield-specific checks (docs drift, API assumptions, etc.).
