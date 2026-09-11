@@ -32,12 +32,14 @@ check_rejected() {
 check_channel 0.2.3 release
 check_channel 0.3.1 pre-release
 check_channel 0.4.0 release
+check_channel 0.4.0-rc.1 release
 check_channel 0.5.0 pre-release
+check_channel 0.5.0-rc.2 pre-release
 check_channel 1.0.0 release
 check_channel 2.7.4 release
 check_rejected ""
 check_rejected 0.4
-check_rejected 0.4.0-rc.1
+check_rejected 0.4.0-beta.1
 
 # All packaging and publishing paths must consume the same resolver. Counting
 # the call sites makes a copied inline rule or a missing registry leg go red.

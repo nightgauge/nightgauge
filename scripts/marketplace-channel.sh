@@ -8,8 +8,8 @@
 set -euo pipefail
 
 VERSION="${1:-}"
-if [[ ! "$VERSION" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-  echo "ERROR: expected release version X.Y.Z, got '${VERSION:-<empty>}'" >&2
+if [[ ! "$VERSION" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(-rc\.[1-9][0-9]*)?$ ]]; then
+  echo "ERROR: expected version X.Y.Z or X.Y.Z-rc.N, got '${VERSION:-<empty>}'" >&2
   exit 2
 fi
 
