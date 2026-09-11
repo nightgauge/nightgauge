@@ -14,6 +14,8 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-11
+
 ### Changed
 
 - VS Code Marketplace and Open VSX releases now use even `0.x` minor lines for
@@ -902,7 +904,9 @@ with GitHub Project board integration, dashboard, context file viewer, and
 the first set of commands and settings. Recorded so the extension's changelog
 and this one name the same versions.
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/nightgauge/nightgauge/compare/v0.3.1...v0.4.0
+[0.3.1]: https://github.com/nightgauge/nightgauge/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/nightgauge/nightgauge/compare/v0.2.3...v0.3.0
 [0.2.3]: https://github.com/nightgauge/nightgauge/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/nightgauge/nightgauge/compare/v0.2.1...v0.2.2

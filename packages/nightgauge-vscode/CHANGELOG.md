@@ -9,6 +9,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-11
+
 ### Changed
 
 - Marketplace releases now use even `0.x` minor lines for normal installs and
@@ -409,7 +411,9 @@ shipped as [0.2.1].
 - Settings for authentication provider, model selection, and paths
 - Settings for notification sounds, volume, and Do Not Disturb respect
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/nightgauge/nightgauge/compare/v0.3.1...v0.4.0
+[0.3.1]: https://github.com/nightgauge/nightgauge/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/nightgauge/nightgauge/compare/v0.2.3...v0.3.0
 [0.2.3]: https://github.com/nightgauge/nightgauge/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/nightgauge/nightgauge/compare/v0.2.1...v0.2.2
