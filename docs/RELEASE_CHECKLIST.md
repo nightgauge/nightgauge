@@ -551,7 +551,8 @@ pre-release.
 
 ## What this checklist is not
 
-- It is not a GO to move 0.x off the Marketplace **pre-release** channel;
-  the stable-channel flip is the 1.0 decision, not a version bump.
+- It is not the current channel policy. This file records the first Marketplace
+  launch; the active even-minor release / odd-minor preview contract lives in
+  [GIT_WORKFLOW.md](GIT_WORKFLOW.md#extension-registry-channels).
 - It is not permission to ship producer/resume/restart/discard recovery.
 - It is not a claim that every contributed command was hand-tested.

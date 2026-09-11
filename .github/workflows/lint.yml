@@ -95,6 +95,8 @@ jobs:
       # #539/#549 lesson).
       - name: Workflow-reference gate self-test
         run: bash scripts/test-workflow-refs-check.sh
+      - name: Marketplace channel regression suite
+        run: bash scripts/test-marketplace-channel.sh
       - name: Nonexistent-workflow-reference gate
         run: python3 scripts/check-workflow-refs.py
       # Proves the gate below still FAILS CLOSED rather than passing vacuously

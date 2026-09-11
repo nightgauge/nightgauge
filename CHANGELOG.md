@@ -14,6 +14,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Changed
+
+- VS Code Marketplace and Open VSX releases now use even `0.x` minor lines for
+  normal installs and odd minor lines for opt-in previews. The next release can
+  install without the misleading "no release version" warning while Nightgauge
+  continues to describe its product maturity honestly (#1594)
+
 ### Added
 
 - Claude, Codex, and Grok are all first-class skill consumers. The local
