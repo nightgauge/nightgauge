@@ -14,6 +14,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- Marketplace and Open VSX publish now retry PAT verification through transient
+  registry timeouts instead of failing the whole publish on one, and package
+  and publish with updated `@vscode/vsce` 3.9.2 and `ovsx` 1.2.0, which drop
+  the deprecated `glob@11` dependency from the build (v0.4.0 publish, #1599)
+
 ## [0.4.0] - 2026-09-11
 
 ### Changed
