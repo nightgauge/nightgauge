@@ -135,7 +135,16 @@ jobs:
           set -euo pipefail
           PUBLISHER=$(node -p "require('./packages/nightgauge-vscode/package.json').publisher")
           [[ -n "${VSCE_PAT:-}" ]] || { echo "::error::VSCE_PAT secret is not set"; exit 1; }
-          npx --yes @vscode/vsce@3.9.1 verify-pat "$PUBLISHER"
+          # Azure DevOps intermittently times out /_apis/securityroles (seen on
+          # the v0.4.0 publish, #1599). A transient timeout is not a bad PAT,
+          # so retry before failing.
+          for attempt in 1 2 3 4 5; do
+            if npx --yes @vscode/vsce@3.9.2 verify-pat "$PUBLISHER"; then exit 0; fi
+            echo "::warning::verify-pat attempt $attempt failed; retrying in 15s"
+            sleep 15
+          done
+          echo "::error::VSCE_PAT verification failed after 5 attempts"
+          exit 1
 
       # Open VSX (#1316): the namespace is the same identifier as the
       # Marketplace publisher. Verified before the build for the same reason.
@@ -147,7 +156,14 @@ jobs:
           set -euo pipefail
           NAMESPACE=$(node -p "require('./packages/nightgauge-vscode/package.json').publisher")
           [[ -n "${OVSX_PAT:-}" ]] || { echo "::error::OVSX_PAT secret is not set"; exit 1; }
-          npx --yes ovsx@1.1.1 verify-pat "$NAMESPACE"
+          # Same transient-timeout retry as the Marketplace step above.
+          for attempt in 1 2 3 4 5; do
+            if npx --yes ovsx@1.2.0 verify-pat "$NAMESPACE"; then exit 0; fi
+            echo "::warning::verify-pat attempt $attempt failed; retrying in 15s"
+            sleep 15
+          done
+          echo "::error::OVSX_PAT verification failed after 5 attempts"
+          exit 1
 
       # Cross-compile every target binary up front so each platform-specific
       # .vsix can bundle the matching one. The extension loads its Go binary from
@@ -246,7 +262,7 @@ jobs:
             [[ -f "$SRC" ]] || { echo "ERROR: missing $SRC (did 'make build-all' run?)"; exit 1; }
             cp "$SRC" dist/bin/nightgauge
             chmod +x dist/bin/nightgauge
-            npx @vscode/vsce@3.9.1 package --no-dependencies --target "$T" ${CHANNEL[@]+"${CHANNEL[@]}"}
+            npx @vscode/vsce@3.9.2 package --no-dependencies --target "$T" ${CHANNEL[@]+"${CHANNEL[@]}"}
           done
           echo "Packaged:"; ls -1 *.vsix
 
@@ -308,7 +324,7 @@ jobs:
           # publishes it for the right platform without re-specifying --target.
           for VSIX in *.vsix; do
             echo "Publishing $VSIX"
-            npx @vscode/vsce@3.9.1 publish --no-dependencies --packagePath "$VSIX" ${CHANNEL[@]+"${CHANNEL[@]}"}
+            npx @vscode/vsce@3.9.2 publish --no-dependencies --packagePath "$VSIX" ${CHANNEL[@]+"${CHANNEL[@]}"}
           done
 
       - name: Publish per-target VSIXs to Open VSX
@@ -330,7 +346,7 @@ jobs:
           fi
           for VSIX in *.vsix; do
             echo "Publishing $VSIX to Open VSX"
-            npx --yes ovsx@1.1.1 publish "$VSIX" ${CHANNEL[@]+"${CHANNEL[@]}"}
+            npx --yes ovsx@1.2.0 publish "$VSIX" ${CHANNEL[@]+"${CHANNEL[@]}"}
           done
 
       - name: Upload the published VSIXs as a workflow artifact

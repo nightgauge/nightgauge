@@ -121,7 +121,7 @@ jobs:
             [[ -f "$SRC" ]] || { echo "ERROR: missing $SRC (did 'make build-all' run?)"; exit 1; }
             cp "$SRC" dist/bin/nightgauge
             chmod +x dist/bin/nightgauge
-            npx @vscode/vsce@3.9.1 package --no-dependencies --target "$T" ${CHANNEL[@]+"${CHANNEL[@]}"}
+            npx @vscode/vsce@3.9.2 package --no-dependencies --target "$T" ${CHANNEL[@]+"${CHANNEL[@]}"}
           done
           echo "Packaged:"; ls -1 *.vsix
 

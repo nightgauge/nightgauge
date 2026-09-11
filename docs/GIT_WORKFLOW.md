@@ -853,7 +853,7 @@ gh run watch
 
 # 11. Confirm the listings serve the version, then run the post-merge hook for
 #     any issue the release closes (AGENTS.md § After Merge).
-npx --yes @vscode/vsce@3.9.1 show nightgauge.nightgauge-vscode --json | jq '.versions[]|{version,targetPlatform}'
+npx --yes @vscode/vsce@3.9.2 show nightgauge.nightgauge-vscode --json | jq '.versions[]|{version,targetPlatform}'
 curl -s https://open-vsx.org/api/nightgauge/nightgauge-vscode | jq '{version,preRelease}'
 ```
 
