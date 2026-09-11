@@ -135,6 +135,8 @@ jobs:
       # execute cla-check.mjs itself and fail on the missing environment.
       - name: CLA gate regression suite
         run: node --test .github/scripts/cla-check.test.mjs
+      - name: Main CLA observation regression suite
+        run: node --test .github/scripts/main-cla-status.test.mjs
       # ci-local.sh step inventory (#983): the mandatory local gate guarded 31
       # of its steps behind `if [ -f <the script it runs> ]` with no `else`, so
       # a deleted script removed the step and the gate still exited 0. It cannot

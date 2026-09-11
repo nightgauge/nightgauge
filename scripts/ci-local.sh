@@ -62,6 +62,7 @@ REQUIRED_FILES=(
   scripts/apply-proposal-artifact.sh
   scripts/test-validate-proposal-artifact.sh
   .github/scripts/cla-check.test.mjs
+  .github/scripts/main-cla-status.test.mjs
   scripts/test-measure-cache-boundary-loss.sh
   scripts/validate-phase-markers.ts
   packages/nightgauge-vscode/scripts/generate-package-contributions.ts
@@ -512,6 +513,7 @@ run_group "Proposal-artifact validator regression suite" bash scripts/test-valid
 #     backoff is deliberately real, because a test-only zero-delay knob would
 #     re-open the mutation the timing assertion exists to kill.
 run_group "CLA gate regression suite" node --test .github/scripts/cla-check.test.mjs
+run_group "Main CLA observation regression suite" node --test .github/scripts/main-cla-status.test.mjs
 
 # 4b. Cache-boundary measurement smoke test
 run_step "Cache-boundary measurement smoke" bash scripts/test-measure-cache-boundary-loss.sh
