@@ -56,3 +56,17 @@ jobs:
         uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
           category: "/language:${{ matrix.language }}"
+
+  # A stable aggregate context is required alongside the language jobs. Keep
+  # it fail-closed: always emit the check, but pass only when the entire matrix
+  # succeeded.
+  codeql:
+    name: CodeQL
+    if: always()
+    needs: analyze
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every CodeQL analysis
+        env:
+          ANALYZE_RESULT: ${{ needs.analyze.result }}
+        run: test "$ANALYZE_RESULT" = success

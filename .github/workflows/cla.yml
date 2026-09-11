@@ -3,6 +3,8 @@ name: CLA
 # First-party CLA gate. The workflow never checks out or executes fork code.
 # Signatures are stored in the private nightgauge/.cla-signatures repository.
 on:
+  push:
+    branches: [main]
   pull_request_target:
     types: [opened, reopened, synchronize]
   issue_comment:
@@ -18,6 +20,23 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # CLA is enforced before merge. Re-emit the same required context on the
+  # trusted main commit so post-merge verification can positively observe it.
+  cla-main-observation:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Report the merged commit's CLA context
+        run: node .github/scripts/main-cla-status.mjs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   # The required status check context is `cla` (posted by cla-check.mjs), not
   # this job's id — do not rename either.
   cla-workflow:

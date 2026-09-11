@@ -29,6 +29,7 @@ Marketplace channel regression suite
 nonexistent-workflow-reference gate
 Proposal-artifact validator regression suite
 CLA gate regression suite
+Main CLA observation regression suite
 Cache-boundary measurement smoke
 VSCode test-tree typecheck
 ESLint

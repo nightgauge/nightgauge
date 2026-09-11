@@ -21,6 +21,12 @@ changelog, and the release workflow refuses a tag that does not.
   install without the misleading "no release version" warning while Nightgauge
   continues to describe its product maturity honestly (#1594)
 
+### Fixed
+
+- Post-merge verification now receives the required CLA and aggregate CodeQL
+  contexts on `main`, so a fully green merge no longer waits until timeout
+  before release work can continue (#1596)
+
 ### Added
 
 - Claude, Codex, and Grok are all first-class skill consumers. The local
