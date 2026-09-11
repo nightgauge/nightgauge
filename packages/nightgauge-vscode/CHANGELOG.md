@@ -9,6 +9,14 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-11
+
+### Fixed
+
+- Extension publication now retries transient Marketplace and Open VSX token
+  verification failures, preventing a temporary registry outage from blocking
+  an otherwise valid stable release (#1599)
+
 ## [0.4.0] - 2026-09-11
 
 ### Changed
@@ -411,7 +419,8 @@ shipped as [0.2.1].
 - Settings for authentication provider, model selection, and paths
 - Settings for notification sounds, volume, and Do Not Disturb respect
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/nightgauge/nightgauge/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/nightgauge/nightgauge/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/nightgauge/nightgauge/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/nightgauge/nightgauge/compare/v0.2.3...v0.3.0
