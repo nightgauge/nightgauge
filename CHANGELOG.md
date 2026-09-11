@@ -25,6 +25,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- Release-candidate staging now resolves its registry channel from the RC's base
+  version, so `0.4.0-rc.N` packages exercise the same stable-channel shape as
+  the eventual `0.4.0` release (#1599)
+
 - Post-merge verification now receives the required CLA and aggregate CodeQL
   contexts on `main`, so a fully green merge no longer waits until timeout
   before release work can continue (#1596)
