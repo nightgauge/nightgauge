@@ -3,7 +3,7 @@
 # This is the ONLY Marketplace / Open VSX publish path. release.yml builds the
 # per-target VSIXs and attaches them to the GitHub Release; it never publishes
 # to a registry. This workflow is re-runnable on its own: build the per-target
-# binaries and VSIXs exactly as release.yml does (pre-release for 0.x), verify
+# binaries and VSIXs exactly as release.yml does, verify
 # the PAT against the publisher, attest, publish. It never touches the GitHub
 # Release or the Homebrew tap.
 #
@@ -68,8 +68,8 @@ jobs:
       - name: Require a stable release tag as the run's ref
         # Fails before anything is checked out: the environment policy above
         # already refuses branches, and this rejects rc tags (the Marketplace
-        # publishes stable tags only; 0.x lands on the pre-release channel by
-        # version, not by tag suffix) and anything that is not vX.Y.Z.
+        # publishes release tags only; registry channel is derived from the
+        # numeric version, not by tag suffix) and anything that is not vX.Y.Z.
         env:
           REF_TYPE: ${{ github.ref_type }}
           TAG: ${{ github.ref_name }}
@@ -230,12 +230,15 @@ jobs:
           )
           # vsce records the pre-release flag in the VSIX manifest at PACKAGE
           # time; `publish --pre-release` on a VSIX packaged without it is
-          # refused (#1299). 0.x is pre-release, as the publish step says.
+          # refused (#1299). Use the same resolver as both publish steps.
           VERSION="$(node -p "require('./package.json').version")"
           CHANNEL=()
-          if [[ "${VERSION%%.*}" == "0" ]]; then
+          CHANNEL_NAME="$(bash "$GITHUB_WORKSPACE/scripts/marketplace-channel.sh" "$VERSION")"
+          if [[ "$CHANNEL_NAME" == "pre-release" ]]; then
             CHANNEL=(--pre-release)
-            echo "Version $VERSION is 0.x → packaging as pre-release"
+            echo "Version $VERSION → packaging as pre-release"
+          else
+            echo "Version $VERSION → packaging as release"
           fi
           mkdir -p dist/bin
           for T in darwin-arm64 darwin-x64 linux-x64; do
@@ -290,16 +293,16 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          # 0.x ships on the Marketplace PRE-RELEASE channel (#1135,
-          # docs/RELEASE_CHECKLIST.md P3): users opt in with "Install
-          # Pre-Release Version" / `--pre-release`, and the listing carries the
-          # Pre-Release badge. The flag drops on its own at v1.0.0.
+          # Even 0.x minor lines are releases; odd 0.x minor lines are previews.
+          # This follows Marketplace numeric-version ordering guidance and lets
+          # 0.4.0 install normally without presenting beta maturity as GA.
           CHANNEL=()
-          if [[ "${VERSION%%.*}" == "0" ]]; then
+          CHANNEL_NAME="$(bash "$GITHUB_WORKSPACE/scripts/marketplace-channel.sh" "$VERSION")"
+          if [[ "$CHANNEL_NAME" == "pre-release" ]]; then
             CHANNEL=(--pre-release)
-            echo "Version $VERSION is 0.x → publishing to the pre-release channel"
+            echo "Version $VERSION → publishing to the pre-release channel"
           else
-            echo "Version $VERSION is ${VERSION%%.*}.x → publishing to the stable channel"
+            echo "Version $VERSION → publishing to the stable channel"
           fi
           # Each .vsix carries its targetPlatform in the manifest, so vsce
           # publishes it for the right platform without re-specifying --target.
@@ -316,11 +319,14 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          # Same channel rule as the Marketplace: 0.x is a pre-release.
+          # Apply the same channel contract as the Marketplace.
           CHANNEL=()
-          if [[ "${VERSION%%.*}" == "0" ]]; then
+          CHANNEL_NAME="$(bash "$GITHUB_WORKSPACE/scripts/marketplace-channel.sh" "$VERSION")"
+          if [[ "$CHANNEL_NAME" == "pre-release" ]]; then
             CHANNEL=(--pre-release)
-            echo "Version $VERSION is 0.x → publishing to Open VSX as pre-release"
+            echo "Version $VERSION → publishing to Open VSX as pre-release"
+          else
+            echo "Version $VERSION → publishing to Open VSX as release"
           fi
           for VSIX in *.vsix; do
             echo "Publishing $VSIX to Open VSX"

@@ -729,6 +729,17 @@ they share one version.
 - Version is always derived from the git tag — never hardcode release versions
   in package.json (the base version `0.1.0` is a placeholder)
 
+### Extension Registry Channels
+
+The Marketplace and Open VSX require different numeric versions for release
+and pre-release uploads; a version already published as pre-release cannot be
+republished as release. While the unified product version is `0.x`, Nightgauge
+uses even minor lines (`0.4.x`, `0.6.x`) for normal release-channel builds and
+odd minor lines (`0.5.x`, `0.7.x`) for opt-in previews. Versions `1.x` and later
+publish to the release channel. `scripts/marketplace-channel.sh` is the single
+resolver consumed by staging, GitHub Release packaging, Marketplace publishing,
+and Open VSX publishing.
+
 ## Deployment Strategy — Tags & Environments
 
 ### Environment Tiers
@@ -778,9 +789,9 @@ main ──●──●──●──●──●──
 7. Push the tag: `git push origin v0.2.0`
 8. `release.yml` runs → builds, creates the GitHub Release with attested
    assets, opens the Homebrew cask PR (gated by the `production` environment)
-9. `gh workflow run marketplace-publish.yml --ref v0.2.0 -f registries=both`
+9. `gh workflow run marketplace-publish.yml --ref v0.4.0 -f registries=both`
    → publishes the per-target VSIXs to the VS Code Marketplace and Open VSX
-   (0.x on the pre-release channel; same environment gate)
+   (even 0.x minor lines are stable; odd 0.x minor lines are pre-release)
 
 ### Per-Repository Workflows
 
@@ -835,9 +846,9 @@ gh attestation verify /tmp/rel/nightgauge-vscode-darwin-arm64-*.vsix --owner nig
 
 # 10. Publish to the registries — ON THE TAG, never from a branch. The run
 #     verifies VSCE_PAT / OVSX_PAT against the publisher before building, packages
-#     0.x as pre-release, attests, publishes. The `production` environment refuses
+#     resolves the registry channel, attests, publishes. The `production` environment refuses
 #     a branch ref, and the workflow refuses anything that is not vX.Y.Z.
-gh workflow run marketplace-publish.yml --ref v0.2.0 -f registries=both
+gh workflow run marketplace-publish.yml --ref v0.4.0 -f registries=both
 gh run watch
 
 # 11. Confirm the listings serve the version, then run the post-merge hook for

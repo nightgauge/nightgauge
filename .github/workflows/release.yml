@@ -269,12 +269,15 @@ jobs:
           )
           # vsce records the pre-release flag in the VSIX manifest at PACKAGE
           # time; `publish --pre-release` on a VSIX packaged without it is
-          # refused (#1299). 0.x is pre-release, as the publish step says.
+          # refused (#1299). Keep release assets aligned with registry channel.
           VERSION="$(node -p "require('./package.json').version")"
           CHANNEL=()
-          if [[ "${VERSION%%.*}" == "0" ]]; then
+          CHANNEL_NAME="$(bash "$GITHUB_WORKSPACE/scripts/marketplace-channel.sh" "$VERSION")"
+          if [[ "$CHANNEL_NAME" == "pre-release" ]]; then
             CHANNEL=(--pre-release)
-            echo "Version $VERSION is 0.x → packaging as pre-release"
+            echo "Version $VERSION → packaging as pre-release"
+          else
+            echo "Version $VERSION → packaging as release"
           fi
           mkdir -p dist/bin
           for T in darwin-arm64 darwin-x64 linux-x64; do

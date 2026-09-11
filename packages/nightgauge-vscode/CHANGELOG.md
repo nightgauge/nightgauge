@@ -9,6 +9,12 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- Marketplace releases now use even `0.x` minor lines for normal installs and
+  odd minor lines for opt-in previews, so the release version installs without
+  requiring users to select **Install Pre-Release** (#1594)
+
 ### Added
 
 - Grok is a first-class skill consumer. Activating the extension (or running

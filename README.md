@@ -53,10 +53,9 @@ cd nightgauge
 go install ./cmd/nightgauge
 ```
 
-Signed release binaries, checksums, and the Homebrew cask will be available
-with the first public release. Until then, build from the reviewed source tree.
-See [docs/GO_BINARY.md](docs/GO_BINARY.md) for the full install matrix and
-details on each method.
+Signed release binaries, checksums, and the Homebrew cask are available from
+[GitHub Releases](https://github.com/nightgauge/nightgauge/releases). See
+[docs/GO_BINARY.md](docs/GO_BINARY.md) for the full install matrix.
 
 ## Quick Start
 
@@ -65,14 +64,12 @@ details on each method.
 The full Nightgauge experience with visual dashboard, project board
 integration, batch processing, and one-click pipeline execution.
 
-Before the first production release, use a target-specific VSIX from a reviewed
-GitHub Actions release-candidate run. After `v0.2.0`, download the VSIX matching
-your OS/architecture from the GitHub Release and install it with **Extensions →
-… → Install from VSIX**. Building locally or running `dev-install.sh` is for
-extension development and intentionally produces a non-release build.
-
-> Not yet on the VS Code Marketplace — a Marketplace listing is planned as its
-> own follow-up release.
+Install **Nightgauge** from the
+[VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=nightgauge.nightgauge-vscode),
+which selects the build for your platform automatically. Target-specific VSIXs
+are also available from the GitHub Release; **Extensions → … → Install from
+VSIX** installs one manually. Building locally or running `dev-install.sh` is
+for extension development and intentionally produces a non-release build.
 
 **Features:**
 

@@ -56,6 +56,7 @@ REQUIRED_FILES=(
   scripts/test-band-vocabulary-check.sh
   scripts/check-visibility-prose.py
   scripts/test-workflow-refs-check.sh
+  scripts/test-marketplace-channel.sh
   scripts/check-workflow-refs.py
   scripts/validate-proposal-artifact.mjs
   scripts/apply-proposal-artifact.sh
@@ -495,6 +496,7 @@ run_step "visibility-prose reintroduction gate" python3 scripts/check-visibility
 # names a `.github/workflows/*.yml` path that does not exist. Self-test first:
 # a gate nothing exercises degrades into an unconditional pass.
 run_group "Workflow-reference gate regression suite" bash scripts/test-workflow-refs-check.sh
+run_group "Marketplace channel regression suite" bash scripts/test-marketplace-channel.sh
 run_step "nonexistent-workflow-reference gate" python3 scripts/check-workflow-refs.py
 
 # 5f2. Proposal-artifact validator regression suite (#1304) — the schema gate
