@@ -41,7 +41,7 @@ check_rejected 0.4.0-rc.1
 
 # All packaging and publishing paths must consume the same resolver. Counting
 # the call sites makes a copied inline rule or a missing registry leg go red.
-WORKFLOW_CALLS="$(rg -n 'scripts/marketplace-channel\.sh' \
+WORKFLOW_CALLS="$(grep -h 'scripts/marketplace-channel\.sh' \
   "$ROOT/.github/workflows/staging.yml" \
   "$ROOT/.github/workflows/release.yml" \
   "$ROOT/.github/workflows/marketplace-publish.yml" | wc -l | tr -d ' ')"
@@ -53,7 +53,7 @@ else
   FAIL=$((FAIL + 1))
 fi
 
-if rg -n 'VERSION%%\.\*.*==.*0|0\.x is pre-release' \
+if grep -En 'VERSION%%\.\*.*==.*0|0\.x is pre-release' \
   "$ROOT/.github/workflows/staging.yml" \
   "$ROOT/.github/workflows/release.yml" \
   "$ROOT/.github/workflows/marketplace-publish.yml" >/dev/null; then
