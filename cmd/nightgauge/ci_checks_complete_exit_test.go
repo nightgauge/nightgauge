@@ -12,6 +12,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -35,7 +36,12 @@ type failingTransport struct{ err error }
 
 func (t failingTransport) RoundTrip(*http.Request) (*http.Response, error) { return nil, t.err }
 
-func clientOver(rt http.RoundTripper) func() (*gh.Client, error) {
+// clientOver builds the real client over rt. The client records every request
+// in the API ledger, by default under the working directory — the package
+// source tree — so each test points it at its own temp file.
+func clientOver(t *testing.T, rt http.RoundTripper) func() (*gh.Client, error) {
+	t.Helper()
+	t.Setenv("NIGHTGAUGE_GITHUB_API_LOG", filepath.Join(t.TempDir(), "github-api.jsonl"))
 	return func() (*gh.Client, error) {
 		return gh.NewClientWithHTTPClient(&http.Client{Transport: rt}), nil
 	}
@@ -59,7 +65,7 @@ func forgeServing(t *testing.T, checkRuns, statuses string) func() (*gh.Client, 
 		}
 	}))
 	t.Cleanup(srv.Close)
-	return clientOver(rewriteTransport{srv})
+	return clientOver(t, rewriteTransport{srv})
 }
 
 // forgeFailing answers every request with status and body.
@@ -70,7 +76,7 @@ func forgeFailing(t *testing.T, status int, body string) func() (*gh.Client, err
 		_, _ = w.Write([]byte(body))
 	}))
 	t.Cleanup(srv.Close)
-	return clientOver(rewriteTransport{srv})
+	return clientOver(t, rewriteTransport{srv})
 }
 
 func runVerb(t *testing.T, newClient func() (*gh.Client, error), outputJSON bool) (code int, stdout, stderr string) {
@@ -97,8 +103,8 @@ func TestRunChecksComplete_MeasurementErrorsExitTwo(t *testing.T) {
 				return nil, errors.New("no GitHub token available for configured github_user \"someone\"")
 			}
 		}, "resolve GitHub client: no GitHub token available"},
-		{"network error", func(*testing.T) func() (*gh.Client, error) {
-			return clientOver(failingTransport{errors.New("dial tcp: connection refused")})
+		{"network error", func(t *testing.T) func() (*gh.Client, error) {
+			return clientOver(t, failingTransport{errors.New("dial tcp: connection refused")})
 		}, "connection refused"},
 		{"5xx", func(t *testing.T) func() (*gh.Client, error) {
 			return forgeFailing(t, http.StatusBadGateway, `{"message":"Server Error"}`)

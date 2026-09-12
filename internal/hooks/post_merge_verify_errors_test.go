@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
 	gh "github.com/nightgauge/nightgauge/internal/github"
@@ -30,6 +31,9 @@ func (refusedTransport) RoundTrip(*http.Request) (*http.Response, error) {
 // an unparseable body each mean main was not measured. The verdict is error
 // ("could not verify"), never red, and no failing check is invented.
 func TestVerifyMergeCommit_MeasurementErrorsAreNeverRed(t *testing.T) {
+	// The real client records every request in the API ledger, by default
+	// under the working directory — the package source tree. Keep it out.
+	t.Setenv("NIGHTGAUGE_GITHUB_API_LOG", filepath.Join(t.TempDir(), "github-api.jsonl"))
 	serve := func(status int, body string) http.RoundTripper {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(status)
