@@ -14,6 +14,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Changed
+
+- Agent guidance is now tool-neutral and docs-first: concise `AGENTS.md` files
+  route to canonical documentation, `CLAUDE.md` is a thin adapter, and Smart
+  Setup generates and validates the same portable structure (#1604)
+
 ## [0.4.1] - 2026-09-11
 
 ### Fixed

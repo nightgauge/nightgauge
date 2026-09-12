@@ -341,9 +341,9 @@ emitted (no empty header).
 # Load code standards with graceful fallback for greenfield repos (#1320)
 if [ -f docs/CODE_STANDARDS.md ]; then
   cat docs/CODE_STANDARDS.md
-elif [ -f CLAUDE.md ]; then
-  echo "=== CODE STANDARDS: Extracted from CLAUDE.md (no docs/CODE_STANDARDS.md found) ==="
-  cat CLAUDE.md
+elif [ -f AGENTS.md ]; then
+  echo "=== CODE STANDARDS: Extracted from AGENTS.md (no docs/CODE_STANDARDS.md found) ==="
+  cat AGENTS.md
   echo "=== END FALLBACK: Apply TypeScript defaults: ESM, strict mode, named exports ==="
 else
   echo "=== CODE STANDARDS: No standards file found. Using language defaults ==="
@@ -362,10 +362,10 @@ if [ -f docs/SECURITY_AND_ERROR_HANDLING.md ]; then
   cat docs/SECURITY_AND_ERROR_HANDLING.md
 elif [ -f docs/SECURITY.md ]; then
   cat docs/SECURITY.md
-elif [ -f CLAUDE.md ]; then
-  echo "=== SECURITY STANDARDS: Extracted from CLAUDE.md (no docs/SECURITY*.md found) ==="
-  grep -A5 -i "security\|secret\|inject\|validate\|auth" CLAUDE.md 2>/dev/null || \
-    echo "No security section in CLAUDE.md. Apply defaults: no hardcoded secrets, validate all inputs, parameterized queries."
+elif [ -f AGENTS.md ]; then
+  echo "=== SECURITY STANDARDS: Extracted from AGENTS.md (no docs/SECURITY*.md found) ==="
+  grep -A5 -i "security\|secret\|inject\|validate\|auth" AGENTS.md 2>/dev/null || \
+    echo "No security section in AGENTS.md. Apply defaults: no hardcoded secrets, validate all inputs, parameterized queries."
 else
   echo "=== SECURITY STANDARDS: Using defaults: no hardcoded secrets, validate inputs, no eval ==="
 fi

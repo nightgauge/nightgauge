@@ -59,6 +59,8 @@ EXEMPT = {
     # nothing here for them to resolve against.
     ("smart-setup/SKILL.md", "docs/GIT_WORKFLOW.md"),
     ("smart-setup/SKILL.md", "docs/SECURITY_AND_ERROR_HANDLING.md"),
+    ("smart-setup/SKILL.md", "docs/CODE_STANDARDS.md"),
+    ("smart-setup/SKILL.md", "docs/TESTING.md"),
 }
 
 # Binary assets are out of scope for a reference-integrity gate, matching

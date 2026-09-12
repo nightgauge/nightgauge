@@ -475,8 +475,9 @@ hierarchy:
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │  AI Configuration Files                                         │
-│  ├── AGENTS.md → References docs/ with brief summaries          │
-│  ├── CLAUDE.md → References docs/ with brief summaries          │
+│  ├── AGENTS.md → Small tool-neutral contract and docs router    │
+│  ├── CLAUDE.md → Imports AGENTS.md; Claude-only behavior        │
+│  ├── docs/AGENT_GUIDANCE.md → Documentation routing map         │
 │  └── .cursor/rules/ → References docs/ files                    │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -518,7 +519,8 @@ Use feature/, bugfix/, docs/ prefixes... [100+ lines duplicated from docs/]
 When creating files for a new repository:
 
 1. **FIRST**: Create docs/ files (GIT_WORKFLOW.md, CODE_STANDARDS.md, etc.)
-2. **THEN**: Create AGENTS.md/CLAUDE.md that **reference** the docs/ files
+2. **THEN**: Create a concise `AGENTS.md` that routes to the docs and a thin
+   `CLAUDE.md` that imports `AGENTS.md`
 3. **NEVER**: Create AI configs first and docs later
 
 This ensures the authoritative content exists before any references to it.
@@ -603,7 +605,7 @@ development, ensuring optimal accuracy, cost, and performance.
 | Plan feature approach         | Probabilistic | Requires exploring codebase and making decisions |
 
 This pattern aligns with the Single Source of Truth philosophy: `docs/` files
-are authoritative, CLAUDE.md references them, and skills stay slim by delegating
+are authoritative, agent adapters route to them, and skills stay slim by delegating
 deterministic work to scripts.
 
 ### Workflow Engine (multi-agent orchestration)
@@ -813,7 +815,8 @@ validates.
 >
 > This is not a style preference. These examples used to restate the full
 > schemas, drifted to `schema_version: "1.0"` while the skills moved on, and
-> `docs/ARCHITECTURE.md` is routed to stages by the CLAUDE.md Documentation Map —
+> `docs/ARCHITECTURE.md` is routed to stages by the tool-neutral Documentation
+> Map in `docs/AGENT_GUIDANCE.md` —
 > so a stage reading this section for its output contract got a shape its own
 > gate rejects. #240 and #256 were both lost that way, mid-run, after the money
 > was spent. See #258.

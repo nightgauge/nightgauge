@@ -474,7 +474,8 @@ contract that GitLab did. Concretely:
 7. **Document edition / tier semantics** if the new forge has them. Add a
    matrix to this doc analogous to §7. Adapters without edition splits
    skip this step.
-8. **Update the doc map** in [CLAUDE.md](../CLAUDE.md) so AI agents
+8. **Update the doc map** in
+   [AGENT_GUIDANCE.md](./AGENT_GUIDANCE.md) so AI agents
    discover the new adapter on relevant keywords.
 
 What you do **not** need to do: touch any caller in

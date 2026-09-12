@@ -202,7 +202,7 @@ job — that is the stage that commits and pushes (#1608), and running it twice
 doubles the cost of every issue.
 
 ```bash
-# Get test command from CLAUDE.md, package.json, or common locations
+# Get the test command from AGENTS.md, package.json, or common locations
 npm test
 # or: pytest, dotnet test, etc.
 ```

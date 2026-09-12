@@ -672,7 +672,8 @@ Once you have at least three consecutive dual-runs land cleanly:
 
 1. Remove the GitHub mirror's `forges.github` entry (or rename it to
    `github-archive` and stop adding new issues to it).
-2. Update the doc-map row in `CLAUDE.md` so onboarding agents prefer GitLab.
+2. Update the doc-map row in `docs/AGENT_GUIDANCE.md` so onboarding agents
+   prefer GitLab.
 3. Roll the change to the rest of the repos in waves of 3–5.
 
 ### 14.5 Rollback

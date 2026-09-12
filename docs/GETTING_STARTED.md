@@ -44,7 +44,7 @@ Add to your `~/.claude/settings.json`:
 }
 ```
 
-### GitHub Copilot
+### GitHub Copilot, OpenAI Codex, Cursor, and Kiro
 
 Copy the AGENTS.md template to your repository:
 
@@ -52,20 +52,10 @@ Copy the AGENTS.md template to your repository:
 curl -o AGENTS.md https://raw.githubusercontent.com/nightgauge/nightgauge/main/standards/AGENTS_TEMPLATE.md
 ```
 
-Or copy the Copilot-specific instructions:
-
-```bash
-mkdir -p .github
-curl -o .github/copilot-instructions.md https://raw.githubusercontent.com/nightgauge/nightgauge/main/configs/copilot/copilot-instructions.md
-```
+These tools consume the tool-neutral `AGENTS.md` contract. Claude Code projects
+add a thin `CLAUDE.md` containing `@AGENTS.md` plus any Claude-only behavior.
 
 ### OpenAI Codex
-
-Copy the AGENTS.md template (Codex reads AGENTS.md automatically):
-
-```bash
-curl -o AGENTS.md https://raw.githubusercontent.com/nightgauge/nightgauge/main/standards/AGENTS_TEMPLATE.md
-```
 
 #### Codex CLI Quickstart (Beta Adapter)
 

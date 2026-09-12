@@ -7,6 +7,7 @@ repository.
 
 | Document                                             | Purpose                                            |
 | ---------------------------------------------------- | -------------------------------------------------- |
+| [AGENT_GUIDANCE.md](./AGENT_GUIDANCE.md)             | Tool-neutral agent architecture and doc routing    |
 | [NIGHTGAUGE_SDLC.md](./NIGHTGAUGE_SDLC.md)           | **Complete adoption guide for new teams**          |
 | [ARCHITECTURE.md](./ARCHITECTURE.md)                 | Repository structure and design decisions          |
 | [GETTING_STARTED.md](./GETTING_STARTED.md)           | How to install and use plugins                     |
@@ -23,8 +24,8 @@ repository.
 
 ## Related Resources
 
-- [AGENTS.md](../AGENTS.md) - AI agent configuration for this repository
-- [CLAUDE.md](../CLAUDE.md) - Claude Code specific instructions
+- [AGENTS.md](../AGENTS.md) - Tool-neutral, always-loaded agent contract
+- [CLAUDE.md](../CLAUDE.md) - Thin Claude Code adapter importing AGENTS.md
 - [Main README](../README.md) - Repository overview and quick start
 
 ## Documentation Philosophy

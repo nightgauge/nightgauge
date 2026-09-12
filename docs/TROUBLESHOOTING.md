@@ -148,19 +148,19 @@ This guide helps resolve common issues when using nightgauge.
 
 **Symptoms:**
 
-- Copilot ignores `.github/copilot-instructions.md`
+- Copilot ignores repository guidance
 - Suggestions don't follow guidelines
 
 **Solutions:**
 
-1. **Verify file path:**
+1. **Verify the tool-neutral contract exists at the repository root:**
 
    ```bash
-   ls .github/copilot-instructions.md
+   ls AGENTS.md
    ```
 
-2. **Check Copilot version:** Custom instructions require recent Copilot
-   versions.
+2. **Check Copilot version:** `AGENTS.md` support requires a recent Copilot
+   version.
 
 3. **Workspace vs. user settings:** Repository-level instructions may be
    overridden by user settings.

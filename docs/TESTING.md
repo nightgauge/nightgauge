@@ -427,13 +427,13 @@ yamllint configs/ standards/
 
 ### Smart Setup Command
 
-| Scenario                            | Expected Result                                              |
-| ----------------------------------- | ------------------------------------------------------------ |
-| Empty repository                    | Creates AGENTS.md, CLAUDE.md, docs/, copilot-instructions.md |
-| Repository with existing AGENTS.md  | Reads existing, identifies gaps, asks permission to add      |
-| Repository with complete docs       | Reports "No changes needed"                                  |
-| "Just audit what's missing" request | Reports status without making changes                        |
-| "Skip questions" request            | Uses `[TEAM TO DOCUMENT]` markers                            |
+| Scenario                            | Expected Result                                          |
+| ----------------------------------- | -------------------------------------------------------- |
+| Empty repository                    | Creates AGENTS.md, optional CLAUDE.md, and focused docs/ |
+| Repository with existing AGENTS.md  | Reads existing, identifies gaps, asks permission to add  |
+| Repository with complete docs       | Reports "No changes needed"                              |
+| "Just audit what's missing" request | Reports status without making changes                    |
+| "Skip questions" request            | Uses `[TEAM TO DOCUMENT]` markers                        |
 
 ### Update Docs Command
 
