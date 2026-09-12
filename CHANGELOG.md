@@ -28,6 +28,16 @@ changelog, and the release workflow refuses a tag that does not.
   a hash-verified shared rules block; `scripts/post-merge-check.sh` takes
   `--repo` and derives the repository from any `origin` URL shape (#1606)
 
+### Fixed
+
+- `scripts/check-agent-guidance.sh` no longer reads Markdown link text in the
+  routing table as a path, so a link such as `[sub/thing](../sub/x.md)` passes
+  instead of failing as an unresolved `[sub/thing`. Whole links and images are
+  parsed, with titles and angle brackets removed from the destination; the docs
+  index link check ignores links shown in code, and a nested `AGENTS.md` counts
+  as listed only when its whole path appears, not the tail of a longer one
+  (#1676)
+
 ### Removed
 
 - `configs/codex/AGENTS.md`, which duplicated `configs/codex/README.md` and was
