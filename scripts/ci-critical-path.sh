@@ -38,9 +38,9 @@ ARG=""
 # with only one argument left shifts NOTHING and returns non-zero, so `$1`
 # stays the flag and the loop spins forever: `--pr` with no number burned 100%
 # of a core, silently, until killed. A hang is the worst possible failure for a
-# tool whose whole job is answering "why is CI slow?" on demand, and AGENTS.md
-# § Reap every background process already carries the scar of an unbounded
-# spin loop. `${2:-}` was not a fix — it defaulted the VALUE while leaving the
+# tool whose whole job is answering "why is CI slow?" on demand, and the
+# background-process rule in AGENTS.md § Workspace-wide rules exists because
+# of an unbounded spin loop. `${2:-}` was not a fix — it defaulted the VALUE while leaving the
 # shift short.
 need_value() { # $1: flag name, $2: how many args are left including the flag
   [ "$2" -ge 2 ] || { echo "$1 needs a value" >&2; exit 2; }

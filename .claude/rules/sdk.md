@@ -17,8 +17,8 @@ All public API surface is exported from `src/index.ts`. When adding new modules:
    delete an export, update every call site and the `src/index.ts` barrel in
    the same change; never leave a deprecated alias, re-export shim, or
    compatibility wrapper behind. Consolidate overlapping APIs to one and delete
-   the rest. This mirrors the workspace-wide mandate in the root `CLAUDE.md` /
-   `AGENTS.md` ("Delete old paths; never add deprecation shims").
+   the rest. This mirrors the pre-customer rule in the root `AGENTS.md`
+   ("Remove superseded paths instead of adding compatibility shims").
 
 ## Pipeline Orchestration
 

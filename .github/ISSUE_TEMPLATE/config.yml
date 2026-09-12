@@ -1,6 +1,6 @@
 # blank_issues_enabled: false — every issue must go through a template so it
 # carries exactly one `type:*` label, which the Nightgauge pipeline requires
-# (see CLAUDE.md). Blank issues produce unlabeled work the pipeline can't route.
+# (see docs/ISSUE_AUDIT.md). Blank issues produce unlabeled work the pipeline can't route.
 # Flip to true if template friction outweighs that.
 blank_issues_enabled: false
 contact_links:

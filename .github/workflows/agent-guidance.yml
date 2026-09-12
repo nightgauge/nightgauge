@@ -1,0 +1,34 @@
+# Agent guidance — the portable agent-instruction architecture
+# (docs/AGENT_GUIDANCE.md § Deterministic check).
+#
+# Its own job with a fixed display name, `agent guidance`, because every
+# Nightgauge workspace repository runs the same byte-identical check under the
+# same check name, so it can be a required status check everywhere. No path
+# filter: a required check that does not run blocks the merge.
+name: Agent guidance
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-guidance-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  agent-guidance:
+    name: agent guidance
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Self-test first: every check must still be able to go red.
+      - name: Agent-guidance check self-test
+        run: bash scripts/test-agent-guidance-check.sh
+      - name: Agent-guidance architecture
+        run: bash scripts/check-agent-guidance.sh --workspace-block required

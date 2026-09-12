@@ -191,8 +191,8 @@ func TestCollectReconcileActions_MissingDirIsNoop(t *testing.T) {
 // of what this file asserted before ADR-017 step 5 (F24).
 //
 // The old test pinned "the snapshot survives a reconcile when analyticsSvc is
-// nil", which is `reconcileOrphanedRuns` returning on line 1 — and AGENTS.md
-// states the product "runs fully locally against your own model keys with no
+// nil", which is `reconcileOrphanedRuns` returning on line 1 — and the
+// project states the product "runs fully locally against your own model keys with no
 // account and no server". On that first-class configuration the reconciler, the
 // retention rules and the legacy sweep were all dead code, while the scheme
 // moved from one file per ISSUE (overwritten by every re-dispatch) to one file

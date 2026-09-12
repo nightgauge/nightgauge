@@ -200,6 +200,67 @@ expect_delegated "a resolvable binary is delegated to and owns RED's exit code" 
 stub_nightgauge 2
 expect_delegated "a resolvable binary is delegated to and owns NOT-YET's exit code" 2
 
+# (i) Portability: sibling repositories vendor a byte-identical copy, so the
+# repository must come from a flag or from the checkout's own origin remote,
+# never from anything baked into the script.
+expect_args() {
+  local name="$1" want_rc="$2" want_sub="$3"
+  shift 3
+  local out rc
+  out=$(env -u NIGHTGAUGE_BIN PATH="$FAKE_BIN:$PATH" bash "$SCRIPT" "$@" 2>&1)
+  rc=$?
+  if [ "$rc" -ne "$want_rc" ]; then
+    echo "FAIL  $name: exit $rc, want $want_rc"
+    echo "      output: $out"
+    FAIL=$((FAIL + 1))
+    return
+  fi
+  case "$out" in
+  *"$want_sub"*) ;;
+  *)
+    echo "FAIL  $name: output does not contain '$want_sub'"
+    echo "      output: $out"
+    FAIL=$((FAIL + 1))
+    return
+    ;;
+  esac
+  echo "ok    $name"
+  PASS=$((PASS + 1))
+}
+
+stub_nightgauge 0
+expect_args "--repo names the repository" 0 \
+  "delegated: ci checks-complete deadbeef --repo acme/widget" deadbeef --repo acme/widget
+expect_args "--repo=<value> names the repository" 0 \
+  "delegated: ci checks-complete deadbeef --repo acme/widget" deadbeef --repo=acme/widget
+expect_args "a missing sha is a usage error" 2 "usage:"
+expect_args "an unknown flag is a usage error" 2 "unknown flag" deadbeef --bogus
+expect_args "a malformed repository is refused" 2 "is not an owner/repo name" \
+  deadbeef 'acme/widget;touch'
+
+# (j) The default repository is derived from the origin remote, in each URL
+# shape a workspace checkout uses.
+REMOTE_REPO=$(mktemp -d)
+git -C "$REMOTE_REPO" init -q
+for url in git@github.com:acme/widget.git ssh://git@github.com/acme/widget.git \
+  https://github.com/acme/widget https://github.com/acme/widget.git/; do
+  git -C "$REMOTE_REPO" remote remove origin 2>/dev/null
+  git -C "$REMOTE_REPO" remote add origin "$url"
+  out=$(cd "$REMOTE_REPO" && env -u NIGHTGAUGE_BIN PATH="$FAKE_BIN:$PATH" bash "$SCRIPT" deadbeef 2>&1)
+  case "$out" in
+  "delegated: ci checks-complete deadbeef --repo acme/widget")
+    echo "ok    origin $url derives acme/widget"
+    PASS=$((PASS + 1))
+    ;;
+  *)
+    echo "FAIL  origin $url did not derive acme/widget"
+    echo "      output: $out"
+    FAIL=$((FAIL + 1))
+    ;;
+  esac
+done
+rm -rf "$REMOTE_REPO"
+
 echo
 if [ "$FAIL" -gt 0 ]; then
   echo "$FAIL post-merge-check test(s) failed, $PASS passed"

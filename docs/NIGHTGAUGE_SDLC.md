@@ -442,7 +442,7 @@ Use this checklist when setting up Nightgauge for a new team:
 
 - [ ] Create `.nightgauge/config.yaml` with project number
 - [ ] Run `/smart-setup` if docs/ missing
-- [ ] Verify CLAUDE.md references docs/ files
+- [ ] Verify AGENTS.md routes to docs/ (and CLAUDE.md starts with `@AGENTS.md`)
 - [ ] Create issue templates (optional)
 
 ### First Pipeline Run

@@ -227,7 +227,7 @@ Before finalizing any issue, check:
   reviewer could run? An AC with no way to observe it is a wish, not a
   criterion — rewrite or drop it.
 - Does the ask preserve one path? Under the no-backwards-compat doctrine
-  (`AGENTS.md` § Agent Operating Rules) an issue must never request a compat
+  (`AGENTS.md` § Repository operating contract) an issue must never request a compat
   shim, a migration fallback, a feature flag that keeps both behaviors, or
   "support the old format too". Consolidate to the single resolved behavior
   and say what gets deleted.

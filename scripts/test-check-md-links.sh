@@ -42,7 +42,7 @@ TMP=""
 SERVER_PID=""
 
 cleanup() {
-  # Reap by the PID captured at spawn (AGENTS.md § background processes) —
+  # Reap by the PID captured at spawn (AGENTS.md § Workspace-wide rules) —
   # never `jobs`, whose table belongs to one shell instance.
   if [ -n "$SERVER_PID" ]; then
     kill "$SERVER_PID" 2>/dev/null || true

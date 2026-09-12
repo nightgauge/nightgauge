@@ -357,8 +357,8 @@ run_step "gofmt -l ./internal ./cmd" \
   bash -c '! gofmt -l ./internal ./cmd | grep .'
 
 # 1b. branch-merged-check.sh regression suite — the shell-side decision
-#     procedure `git branch -D` reclaim decisions defer to (AGENTS.md § Clean
-#     up on merge). Kept aligned with the Go sweep's own ancestry-acceptance
+#     procedure `git branch -D` reclaim decisions defer to (docs/GIT_WORKFLOW.md
+#     § After Merge). Kept aligned with the Go sweep's own ancestry-acceptance
 #     door (#593).
 run_group "branch-merged-check.sh regression suite" \
   bash scripts/test-branch-merged-check.sh
@@ -568,7 +568,8 @@ run_group "Link-check gate regression suite" bash scripts/test-check-md-links.sh
 run_group "Markdown link check" bash scripts/check-md-links.sh
 run_group "Agent-guidance gate regression suite" \
   bash scripts/test-agent-guidance-check.sh
-run_group "Agent-guidance architecture" bash scripts/check-agent-guidance.sh
+run_group "Agent-guidance architecture" \
+  bash scripts/check-agent-guidance.sh --workspace-block required
 
 # Changelog ↔ release contract (docs/GIT_WORKFLOW.md § Changelog): every
 # released tag has a section in CHANGELOG.md and the extension's changelog, and

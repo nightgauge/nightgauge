@@ -228,7 +228,7 @@ Check key documentation files for staleness:
    - Does the Platform Integration Status section exist and is it current?
    - Does the tech stack table match actual dependencies?
 
-3. **CLAUDE.md** (each repo):
+3. **AGENTS.md** (each repo; `CLAUDE.md` only as its adapter):
    - Are companion repository references current?
    - Are epic references still valid (not closed/superseded)?
 

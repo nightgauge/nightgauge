@@ -266,7 +266,7 @@ jobs:
             go-test-race.log
           if-no-files-found: ignore
           retention-days: 7
-      # The shell-side decision procedure AGENTS.md § Clean up on merge
+      # The shell-side decision procedure docs/GIT_WORKFLOW.md § After Merge
       # defers to for `git branch -D` calls, kept aligned with the Go sweep's
       # own ancestry-acceptance door (#593). No npm/node needed, so it runs
       # here rather than in lint.yml.

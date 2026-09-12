@@ -54,15 +54,15 @@ phase** before documentation reading:
 
 ---
 
-## Documentation Map Format
+## Routing Table Format
 
-The Documentation Map is stored in `docs/AGENT_GUIDANCE.md` as a Markdown
-table:
+The routing table is stored under the `## Documentation routing` heading of
+`docs/AGENT_GUIDANCE.md` as a Markdown table:
 
 ```markdown
-## Documentation Map
+## Documentation routing
 
-> This map helps AI agents find relevant documentation based on the task at
+> This table helps AI agents find relevant documentation based on the task at
 > hand. Keywords are matched against issue content to prioritize which docs to
 > read.
 
@@ -119,7 +119,7 @@ Following the
 
 ## Matching Algorithm
 
-Keywords are matched against the Documentation Map using case-insensitive word
+Keywords are matched against the routing table using case-insensitive word
 boundary matching:
 
 ```bash
@@ -145,7 +145,7 @@ selected:
 
 | Method            | Description                                   | When Used                      |
 | ----------------- | --------------------------------------------- | ------------------------------ |
-| `keyword-matched` | Keywords from issue matched Documentation Map | Keywords found matches         |
+| `keyword-matched` | Keywords from issue matched routing table     | Keywords found matches         |
 | `scope-fallback`  | No keyword matches, used scope-based defaults | No matches, non-extended       |
 | `extended-all`    | Extended scope reads all docs regardless      | size:L/XL or priority:critical |
 
@@ -203,9 +203,9 @@ documentation.
 ## Backward Compatibility
 
 - **No breaking changes**: `docs_consulted` is optional
-- **Default behavior preserved**: Missing Documentation Map falls back to
+- **Default behavior preserved**: Missing routing table falls back to
   scope-based reading
-- **Graceful degradation**: Repositories without a documentation map continue
+- **Graceful degradation**: Repositories without a routing table continue
   working
 - **Schema version bump**: 1.0 → 1.1 (additive change)
 
@@ -225,7 +225,7 @@ reading feature (Issue #162):
 ┌─────────────────────────────────────────────────────────────────┐
 │  Phase 1.5: Documentation Discovery (NEW)                       │
 │  ├─ Extract keywords from issue                                 │
-│  ├─ Match against Documentation Map                             │
+│  ├─ Match against routing table                                 │
 │  └─ Build PRIORITY_DOCS list                                    │
 └─────────────────────────────────────────────────────────────────┘
                               ↓
@@ -243,12 +243,12 @@ reading feature (Issue #162):
 
 No configuration required. The feature works automatically when:
 
-1. `docs/AGENT_GUIDANCE.md` exists with a Documentation Map section
+1. `docs/AGENT_GUIDANCE.md` exists with a `## Documentation routing` section
 2. Issue content contains extractable keywords
 
-### Customizing the Documentation Map
+### Customizing the Routing Table
 
-Teams can customize keyword mappings by editing the Documentation Map in
+Teams can customize keyword mappings by editing the routing table in
 docs/AGENT_GUIDANCE.md:
 
 ```markdown
@@ -273,7 +273,7 @@ documentation for an actual pipeline run.
 Extracted keywords: [output, window, focus, editor, preserve, reveal, panel]
 ```
 
-**Step 2 — Documentation map matching** against the tool-neutral table:
+**Step 2 — Routing table matching** against the tool-neutral table:
 
 ```
 Match results (scored by keyword overlap):
@@ -283,7 +283,7 @@ Match results (scored by keyword overlap):
   ...
 ```
 
-No high-confidence matches from the documentation map — this is a focused VSCode
+No high-confidence matches from the routing table — this is a focused VSCode
 extension bug, not an architectural concern.
 
 **Step 3 — Complexity-aware scope selection** (via adaptive reading):

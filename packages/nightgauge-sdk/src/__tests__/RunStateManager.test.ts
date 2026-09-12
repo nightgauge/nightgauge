@@ -216,8 +216,8 @@ describe("RunStateManager", () => {
    * run is silently discarded.
    *
    * The decision is refusal, not "lenient with telemetry": a compat branch for
-   * on-disk files no customer has is out under `AGENTS.md` § Agent Operating
-   * Rules. The resume path must fail LOUDLY — never silently drop the run and
+   * on-disk files no customer has is out under `AGENTS.md` § Repository
+   * operating contract. The resume path must fail LOUDLY — never silently drop the run and
    * never rewrite the id — so the refusal surfaces as the existing
    * `ContextSchemaError`, which already carries the file path, and the message
    * names the offending id so the operator can see which bytes are wrong.

@@ -36,8 +36,8 @@ platform-side contract change and is deferred.
 
 ## Context: what this repository can and cannot decide
 
-The platform is a separate, closed repository (`AGENTS.md` § _Public Core
-Boundary_), and `api/openapi.yaml` has never existed in this tree
+The platform is a separate, closed repository (`AGENTS.md` § _Security and
+publication boundary_), and `api/openapi.yaml` has never existed in this tree
 (`api/platform-operations.yaml:18-24`) — so no field can be added to the
 generated types here, and codegen is not reproducible. Server-side delivery is
 keyed on the agent id: the stream subscribes to one channel per agent

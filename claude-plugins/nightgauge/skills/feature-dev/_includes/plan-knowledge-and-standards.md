@@ -345,6 +345,11 @@ elif [ -f AGENTS.md ]; then
   echo "=== CODE STANDARDS: Extracted from AGENTS.md (no docs/CODE_STANDARDS.md found) ==="
   cat AGENTS.md
   echo "=== END FALLBACK: Apply TypeScript defaults: ESM, strict mode, named exports ==="
+elif [ -f CLAUDE.md ]; then
+  # Claude-only repositories that have not adopted AGENTS.md yet.
+  echo "=== CODE STANDARDS: Extracted from CLAUDE.md (no docs/CODE_STANDARDS.md or AGENTS.md found) ==="
+  cat CLAUDE.md
+  echo "=== END FALLBACK: Apply TypeScript defaults: ESM, strict mode, named exports ==="
 else
   echo "=== CODE STANDARDS: No standards file found. Using language defaults ==="
   echo "TypeScript defaults: ESM modules, strict: true, named exports, camelCase vars, PascalCase types"
@@ -366,6 +371,11 @@ elif [ -f AGENTS.md ]; then
   echo "=== SECURITY STANDARDS: Extracted from AGENTS.md (no docs/SECURITY*.md found) ==="
   grep -A5 -i "security\|secret\|inject\|validate\|auth" AGENTS.md 2>/dev/null || \
     echo "No security section in AGENTS.md. Apply defaults: no hardcoded secrets, validate all inputs, parameterized queries."
+elif [ -f CLAUDE.md ]; then
+  # Claude-only repositories that have not adopted AGENTS.md yet.
+  echo "=== SECURITY STANDARDS: Extracted from CLAUDE.md (no docs/SECURITY*.md or AGENTS.md found) ==="
+  grep -A5 -i "security\|secret\|inject\|validate\|auth" CLAUDE.md 2>/dev/null || \
+    echo "No security section in CLAUDE.md. Apply defaults: no hardcoded secrets, validate all inputs, parameterized queries."
 else
   echo "=== SECURITY STANDARDS: Using defaults: no hardcoded secrets, validate inputs, no eval ==="
 fi

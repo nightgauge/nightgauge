@@ -91,7 +91,7 @@ leaks is reclaimed by the next run.
 Note this scan covers the **files on disk** — tracked paths plus untracked,
 non-`.gitignore`d ones — but GitHub issue and epic bodies are not files, so
 nothing mechanical catches private content written there; see `AGENTS.md`
-§ Public Core Boundary & Content Hygiene.
+§ Security and publication boundary.
 
 When uncertain, document the public contract here and keep the business or
 private implementation rationale internal.

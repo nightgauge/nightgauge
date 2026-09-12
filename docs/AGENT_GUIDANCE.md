@@ -7,30 +7,110 @@ organize agent instructions and route tasks to durable documentation.
 
 Use four layers, each with one responsibility:
 
-1. Root `AGENTS.md` is the small, always-loaded operating contract. It contains
-   non-obvious repository rules and tells agents which documentation to read.
-2. Nested `AGENTS.md` files hold portable instructions for a package or
-   subtree. The closest file takes precedence.
-3. Tool adapters such as `CLAUDE.md` import the root contract and add only
-   behavior unique to that tool.
+1. Root `AGENTS.md` is the small operating contract. It holds every rule a
+   session launched at the repository root must obey, and tells agents which
+   documentation to read.
+2. Nested `AGENTS.md` files add rules for one subtree. They never hold a rule
+   that a root-launched session needs, because several tools never load them
+   (see [How tools load instruction files](#how-tools-load-instruction-files)).
+3. `CLAUDE.md` is an adapter. Its line 1 is exactly `@AGENTS.md`; anything
+   below the import is Claude Code behavior only.
 4. `docs/`, `standards/`, and task-specific skills own explanations,
    procedures, architecture, and reference material.
 
-Do not symlink instruction files across repositories. Every repository must
-remain valid as an independent clone, on every supported operating system,
-and on either side of the public/private publication boundary. If several
-repositories need the same short rule, distribute and verify a bounded copy;
-do not introduce a filesystem dependency on a sibling checkout.
+Instruction files are regular files. Do not symlink them, and do not import
+across repositories: every repository must remain valid as an independent
+clone, on every supported operating system, and on either side of the
+public/private publication boundary. If several repositories need the same
+short rule, distribute a bounded, hash-verified copy (see
+[Adopting the structure in sibling repositories](#adopting-the-structure-in-sibling-repositories)).
 
 Instructions guide model behavior. Requirements that must execute every time
 belong in deterministic scripts, hooks, CI, schemas, or forge rulesets.
 
+## How tools load instruction files
+
+The [AGENTS.md specification](https://agents.md/) intends the closest file to
+take precedence. Tools do not all implement that, so never rely on it:
+
+| Tool                                                                                       | Root `AGENTS.md`                                                                                                            | Nested `AGENTS.md`                                                                                                                       | `CLAUDE.md`                                                                                                |
+| ------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| [Claude Code](https://code.claude.com/docs/en/memory)                                      | Only through an `@AGENTS.md` import in `CLAUDE.md`                                                                          | Not read                                                                                                                                 | Ancestors load at launch; nested files load when Claude reads files in that subtree; root survives compact |
+| [Codex](https://developers.openai.com/codex/guides/agents-md)                              | Yes                                                                                                                         | One file per directory from the project root down to the working directory, concatenated root first; nothing below the working directory | Not read                                                                                                   |
+| [GitHub Copilot](https://docs.github.com/en/copilot/reference/custom-instructions-support) | Cloud agent, CLI, code review and VS Code chat; not github.com chat, Visual Studio, JetBrains, Eclipse, Xcode or IDE review | Cloud agent uses the nearest file; VS Code needs the experimental `chat.useNestedAgentsMdFiles` (off by default)                         | CLI and cloud agent; VS Code chat through `chat.useClaudeMdFile` (on by default)                           |
+| [Cursor](https://cursor.com/docs/context/rules)                                            | Yes, always applied                                                                                                         | Yes                                                                                                                                      | Yes, the same way as `AGENTS.md`                                                                           |
+| [Kiro](https://kiro.dev/docs/steering/)                                                    | Yes, always included                                                                                                        | Yes                                                                                                                                      | Not documented                                                                                             |
+
+Consequences:
+
+- A session started at the root in Claude Code or Codex sees only the root
+  contract, so the root must be complete on its own.
+- Codex stops reading at `project_doc_max_bytes` (32 KiB by default), so the
+  root-to-deepest chain of `AGENTS.md` files must stay under that budget.
+- Copilot surfaces that do not read `AGENTS.md` need a short
+  `.github/copilot-instructions.md` pointer.
+- Because Cursor, Copilot and VS Code also load `CLAUDE.md`, it must not carry
+  commands, portable rules or documentation routing. Put Claude-only content
+  below the import under a heading that names Claude Code.
+
+## Nested instruction files
+
+Add a nested `AGENTS.md` only when a subtree needs rules that do not apply to
+the rest of the repository. When you do:
+
+- keep it additive: never restate, weaken or override a root rule;
+- list its path in the root `AGENTS.md`;
+- add a sibling regular-file `CLAUDE.md` whose line 1 is `@AGENTS.md`, so
+  Claude Code loads it when working in that subtree;
+- keep the chain from the root `AGENTS.md` down to it under the byte budget.
+
+A file that is a template for users, rather than guidance for this
+repository, must not be named `AGENTS.md` or `CLAUDE.md`; several tools would
+load it as instructions for its directory.
+
+## Deterministic check
+
+`scripts/check-agent-guidance.sh` enforces this architecture. It is portable
+(bash 3.2 or later and POSIX tools), read-only, treats every file as data, and
+prints every failure before exiting `1`; usage errors exit `2`.
+
+| Flag                                                  | Default                  | Checks                                                                                             |
+| ----------------------------------------------------- | ------------------------ | -------------------------------------------------------------------------------------------------- |
+| `--root <dir>`                                        | git top level            | Repository to check                                                                                |
+| `--routing <path>`                                    | `docs/AGENT_GUIDANCE.md` | Exists, has a documentation routing heading, and every path in its routing table resolves          |
+| `--docs-index <path>`                                 | `docs/README.md`         | Links the routing file; `none` when the routing file is itself the index                           |
+| `--agents-max-lines <n>`                              | `200`                    | Root `AGENTS.md` size                                                                              |
+| `--claude-max-lines <n>`                              | `100`                    | Root `CLAUDE.md` size                                                                              |
+| `--copilot-max-lines <n>`                             | `30`                     | `.github/copilot-instructions.md` size; it must reference `AGENTS.md`                              |
+| `--chain-max-bytes <n>`                               | `32768`                  | Bytes of the root-to-deepest `AGENTS.md` chain                                                     |
+| `--workspace-block required \| forbidden \| optional` | `optional`               | Marker-delimited workspace block and its recorded SHA-256                                          |
+| `--require-claude yes \| no \| auto`                  | `auto`                   | `yes` requires root `CLAUDE.md`; `auto` checks it when present; `no` skips the root adapter checks |
+| `--print-block-hash`                                  |                          | Print the computed workspace-block hash and exit                                                   |
+
+Every flag has an environment fallback named `AGENT_GUIDANCE_<FLAG>` in upper
+case with underscores, for example `AGENT_GUIDANCE_WORKSPACE_BLOCK`.
+
+It also fails when root `AGENTS.md` is missing or a symlink, when its first
+heading names a tool, or when it defers to `CLAUDE.md` (an `@CLAUDE.md` import,
+or "read/see/follow/consult `CLAUDE.md` first/instead"); when `CLAUDE.md` does
+not start with `@AGENTS.md`, owns a routing heading or routing table, or
+contains a fenced shell block; when a nested `AGENTS.md` is unlisted or lacks
+its sibling `CLAUDE.md`; when any tracked instruction file (`AGENTS.md`,
+`CLAUDE.md`, `.github/copilot-instructions.md`, `.github/instructions/`,
+`.claude/rules/`, `.cursor/rules/`) is a symlink; and when an `@` import in any
+`CLAUDE.md` resolves outside the root. `scripts/test-agent-guidance-check.sh`
+proves each failure with a mutation.
+
+CI runs both in `.github/workflows/agent-guidance.yml` as a job named exactly
+`agent guidance`, with no path filter, so every workspace repository reports
+the same check name and it can be required everywhere.
+
 ## Adopting the structure in sibling repositories
 
-This repository owns the reference architecture, Smart Setup templates, and
-validation script. It does not rewrite independently cloned sibling
-repositories as part of the same change. Adopt the structure in each sibling
-in a separate session, branch, and pull request so that repository's own rules,
+This repository owns the reference architecture, the canonical workspace block,
+and the check. It does not rewrite independently cloned sibling repositories
+as part of the same change. Adopt the structure in each sibling in a separate
+session, branch, and pull request so that repository's own rules,
 documentation, publication boundary, and validation gate remain authoritative.
 
 For each sibling repository:
@@ -38,30 +118,42 @@ For each sibling repository:
 1. Start the session in the sibling repository and read its current
    `AGENTS.md`, `CLAUDE.md`, documentation index, and contribution workflow.
 2. Make root `AGENTS.md` the concise, tool-neutral operating contract. Preserve
-   repository-specific safety, validation, release, and merge rules.
-3. Move durable explanations and documentation routing into
+   repository-specific safety, validation, release, and merge rules outside
+   the workspace block, including the command for its complete local gate.
+3. Copy the block from `<!-- nightgauge-workspace-rules:begin v1 -->` through
+   the matching end marker byte-for-byte from this repository's `AGENTS.md`.
+   Never edit it in place; change it here first, then propagate.
+4. Move durable explanations and documentation routing into
    `docs/AGENT_GUIDANCE.md` and link it from the repository's documentation
    index.
-4. Keep `CLAUDE.md` as a regular file beginning with `@AGENTS.md`; add only
-   Claude Code-specific memory, rule-loading, or compaction guidance.
-5. Retain other tool adapters only where a supported surface does not load
-   `AGENTS.md`; keep each adapter as a short pointer instead of a second
-   ruleset.
-6. Add or adapt deterministic checks for the repository, run its complete
-   local gate, and land the change through its normal pull-request workflow.
+5. Make `CLAUDE.md` a regular file whose line 1 is `@AGENTS.md`, with only
+   Claude Code-specific content below it.
+6. Retain other tool adapters only where a supported surface does not load
+   `AGENTS.md`; keep each adapter a short pointer instead of a second ruleset.
+7. Copy `scripts/check-agent-guidance.sh`,
+   `scripts/test-agent-guidance-check.sh` and `scripts/post-merge-check.sh`
+   byte-for-byte. Wire the check into the local gate and into a CI job named
+   `agent guidance` with `--workspace-block required` and any flags the
+   repository needs, run the complete local gate, and land the change through
+   its normal pull-request workflow.
 
-Do not copy this repository's product-specific rules blindly. The shared
-architecture is portable; each repository's operating contract is local.
+Do not copy this repository's product-specific rules blindly. The workspace
+block and the check are portable; each repository's operating contract is
+local.
 
 ## Durable knowledge
 
 - Agent behavior and routing live in `AGENTS.md` and this document.
 - Stable technical knowledge lives in the appropriate existing file under
-  `docs/`; use the map below rather than creating a parallel document.
+  `docs/`; use the routing table below rather than creating a parallel
+  document.
 - Per-issue requirements and decisions live under `.nightgauge/knowledge/` and
   graduate according to [KNOWLEDGE_BASE.md](KNOWLEDGE_BASE.md).
 - Private execution handoffs live in `nightgauge-internal/runbooks/handoffs/`.
   Verify their state against the repository before relying on it.
+- `.nightgauge/session-handoff.md` and
+  `.nightgauge/backlog-orchestrator-prompt.md` are gitignored per-machine
+  runtime state, not handoffs; their state blocks are routinely stale.
 
 ## Session discipline
 
@@ -76,19 +168,27 @@ architecture is portable; each repository's operating contract is local.
 
 ## Compatibility basis
 
-This layout follows the current upstream guidance:
-
-- The [AGENTS.md standard](https://agents.md/) defines root and nested
-  `AGENTS.md` files, with the closest file taking precedence.
+- The [AGENTS.md specification](https://agents.md/) defines root and nested
+  `AGENTS.md` files and intends the closest to win; the table above records
+  where tools differ.
 - [Claude Code memory guidance](https://code.claude.com/docs/en/memory)
-  recommends importing `AGENTS.md` from `CLAUDE.md`; a symlink is suitable only
-  when no Claude-specific content is needed.
+  documents that Claude Code reads `CLAUDE.md`, not `AGENTS.md`, and recommends
+  a `CLAUDE.md` that imports `@AGENTS.md`. It resolves imports relative to the
+  importing file, skips imports inside code spans and fenced blocks, and
+  suggests under 200 lines per file. A symlink is offered only when no
+  Claude-specific content is needed and not on Windows; Nightgauge forbids it
+  because other tools also read `CLAUDE.md`.
 - [Claude Code best practices](https://code.claude.com/docs/en/best-practices)
   recommend keeping always-loaded instructions short and moving detailed or
   occasional workflows elsewhere.
+- [Codex AGENTS.md guidance](https://developers.openai.com/codex/guides/agents-md)
+  documents the root-to-working-directory walk and the 32 KiB default budget.
 - [GitHub Copilot's support matrix](https://docs.github.com/en/copilot/reference/custom-instructions-support)
   shows that `AGENTS.md` support varies by surface, so its
   `.github/copilot-instructions.md` adapter remains a concise pointer.
+- [Cursor rules](https://cursor.com/docs/context/rules) and
+  [Kiro steering](https://kiro.dev/docs/steering/) include root and nested
+  `AGENTS.md`; Cursor applies `CLAUDE.md` the same way.
 
 ## Documentation routing
 
