@@ -42,8 +42,20 @@ feature is enabled.
 
 ## Scoped instructions
 
-Add nested `AGENTS.md` files only when a subtree needs portable instructions
-that do not apply to the entire repository. The closest file takes precedence.
+Tools load nested files differently: some never read them, and some read only
+the files between the repository root and the working directory. See
+[AGENT_GUIDANCE.md](https://github.com/nightgauge/nightgauge/blob/main/docs/AGENT_GUIDANCE.md#how-tools-load-instruction-files).
+So:
+
+- Keep every rule a session started at the repository root must obey in this
+  file.
+- Add a nested `AGENTS.md` only for additive rules that apply to one subtree,
+  and list each one here by path: [TEAM TO DOCUMENT or "none"].
+- Give each nested `AGENTS.md` a sibling `CLAUDE.md` whose first line is
+  `@AGENTS.md`.
+- Keep `CLAUDE.md` a regular file whose first line is `@AGENTS.md`. Other tools
+  also read it, so put only Claude Code-specific content below the import.
+- Never symlink instruction files.
 
 ---
 

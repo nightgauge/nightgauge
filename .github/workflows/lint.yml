@@ -140,7 +140,7 @@ jobs:
       - name: Agent-guidance gate self-test
         run: bash scripts/test-agent-guidance-check.sh
       - name: Agent-guidance architecture
-        run: bash scripts/check-agent-guidance.sh
+        run: bash scripts/check-agent-guidance.sh --workspace-block required
       # ci-local.sh step inventory (#983): the mandatory local gate guarded 31
       # of its steps behind `if [ -f <the script it runs> ]` with no `else`, so
       # a deleted script removed the step and the gate still exited 0. It cannot

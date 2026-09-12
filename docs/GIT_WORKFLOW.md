@@ -155,6 +155,22 @@ Restore `required_approving_review_count: 1` the moment a second maintainer can
 review — the requirement is worth keeping once it is satisfiable, and it no
 longer costs you the check gate to do so.
 
+**Green checks are the go signal, not a prompt to ask for one.** An agent that
+finishes the work, watches CI go green and then stops to ask permission to merge
+has not finished the work — completing work includes landing it. The approval it
+waits for adds nothing: the ruleset already makes a merge impossible while a
+check is red or pending, so the gate is enforced by the forge, not by the
+operator being awake to answer. Merge, then run the post-merge verification
+below. A real failure is still surfaced rather than merged around — this removes
+a redundant confirmation, not the judgement.
+
+**Never dismiss a failing test as "flaky" without root-causing it.** Re-running
+until a check turns green converts a real signal into noise: a nondeterministic
+test is a defect in the test or in the code it covers, and the rerun that
+passes proves only that the defect is intermittent. Reproduce it, name the
+cause, and fix it or file it with the evidence. When the cause really is the
+environment, say which part and how you know.
+
 ### Verify `main` After Every Merge
 
 A green PR check is a **prediction** about a tree that does not exist yet; the
@@ -165,10 +181,19 @@ disagree, and when they do the disagreement is the finding:
 scripts/post-merge-check.sh <merge-sha>   # repo defaults to this checkout's origin
 ```
 
-It exits `0` GREEN / `1` RED / `2` NOT-YET. `1` means `main` is red and it is the
-merger's to fix immediately. Read the exit code **without a pipe** — a
-pipeline's status is the last command's, so `post-merge-check.sh <sha> | tail`
-always reports 0.
+It exits `0` GREEN / `1` RED / `2` NOT-YET, and only `0` is evidence:
+
+| Exit | Verdict | What to do                                                                                   |
+| ---- | ------- | -------------------------------------------------------------------------------------------- |
+| `0`  | GREEN   | Continue with the post-merge hook and cleanup.                                               |
+| `1`  | RED     | `main` is red and it is the merger's to fix now. Never re-run hoping for a better answer.    |
+| `2`  | NOT-YET | No check-runs exist yet, some are still running, or the API was unreadable. Wait and re-run. |
+
+Read the exit code **without a pipe** — a pipeline's status is the last
+command's, so `post-merge-check.sh <sha> | tail` always reports 0. The
+repository defaults to the checkout's `origin` remote; pass `--repo
+<owner/repo>` to check another. The script contains nothing specific to this
+repository, so every workspace repository carries a byte-identical copy.
 
 #### Why this is a script (#1038)
 
@@ -279,6 +304,16 @@ should**, so pick the split deliberately rather than opportunistically:
 
 Two sessions on disjoint files is a real gain. Two sessions on the same area is
 strictly worse than one.
+
+**Concurrent issues must be conflict-free by construction.** If the file sets
+overlap, work the issues sequentially, or declare a `blockedBy` edge and honor
+it — declaring the edge and starting both anyway is the same failure with extra
+steps. Prefer sequencing whenever the overlap is uncertain.
+
+**Broad mechanical sweeps land alone.** Renames, redactions and codemods touch
+everything by definition, so they collide with every concurrent change. Land
+them by themselves, over settled code, never alongside logic changes to the same
+files.
 
 **Before starting, check whether you are alone**, because the tree does not
 say so:
@@ -687,6 +722,26 @@ the branch was cut (#593).
 All three fail toward deleting unmerged work, and all three look like a clean
 pass. That is why the check is a script with an explicit `UNKNOWN` verdict.
 
+**The cleanup itself is one script, and it is not per-repository.**
+`nightgauge-internal/scripts/branch-cleanup.sh`, run with no arguments, sweeps
+every workspace repository and deletes a branch only when one of two independent
+tests proves it holds no unique work — `ahead=0` against `origin/main`, or a
+merged PR at that exact head. Everything else is reported and kept; stashes and
+worktrees are never touched, and a branch held by a worktree is reported with the
+worktree path. `branch-merged-check.sh` is the single-branch verdict tool; the
+sweep is the routine. Do not write a per-repository cleanup script and do not
+hand-write `git branch -D`; list the existing scripts before building
+workspace-level tooling.
+
+**"Blocked" is three different diagnoses.** A harness may refuse `git branch -D`
+as a direct tool invocation while permitting a script that calls it internally.
+Sessions have recorded this chore as "blocked, needs a human with a shell" on
+that basis and been wrong — the existing script then completed it with no prompt
+at all. "The tool is missing", "the tool is blocked" and "this _invocation form_
+is blocked" share one symptom, a chore that never gets done, and have different
+fixes. Try the existing tool before concluding anything about why a chore is
+undone, and record which of the three you actually observed.
+
 **Why this is a standing rule.** Skipping it is invisible for one merge and
 compounding across a hundred. Accumulated local branches and worktrees make
 `git branch` unreadable, leave `node_modules` trees and per-issue docker stacks
@@ -852,7 +907,7 @@ gh workflow run marketplace-publish.yml --ref v0.4.0 -f registries=both
 gh run watch
 
 # 11. Confirm the listings serve the version, then run the post-merge hook for
-#     any issue the release closes (AGENTS.md § After Merge).
+#     any issue the release closes (§ After Merge).
 npx --yes @vscode/vsce@3.9.2 show nightgauge.nightgauge-vscode --json | jq '.versions[]|{version,targetPlatform}'
 curl -s https://open-vsx.org/api/nightgauge/nightgauge-vscode | jq '{version,preRelease}'
 ```

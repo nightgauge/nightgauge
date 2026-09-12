@@ -204,8 +204,8 @@ schema documentation.
   [`_shared/UNOBSERVED_MECHANISM.md`](../_shared/UNOBSERVED_MECHANISM.md).
 - **Never run the repo's full pre-submission suite here (#223).** `bash
 scripts/ci-local.sh` and its equivalents belong to feature-validate, which is
-  the stage that commits and pushes (#1608). CLAUDE.md's "MANDATORY before every
-  push" rule is scoped to pushing — you do not push. On #221 this stage spent
+  the stage that commits and pushes (#1608). `AGENTS.md`'s "run the complete local gate
+  once before pushing" rule is scoped to pushing — you do not push. On #221 this stage spent
   the back half of its budget backgrounding, losing, polling for, and killing
   `ci-local.sh`, then ended its turn on `echo waiting-for-notification` having
   written a correct implementation it never handed off. Verify what you changed;

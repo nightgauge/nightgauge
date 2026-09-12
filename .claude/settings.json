@@ -1,4 +1,5 @@
 {
+  "autoMemoryEnabled": false,
   "permissions": {
     "allow": ["Bash(__NEW_LINE_2d5d70ec07396d52__ echo \"\")"]
   },

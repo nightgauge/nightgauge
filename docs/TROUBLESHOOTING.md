@@ -131,18 +131,23 @@ This guide helps resolve common issues when using nightgauge.
 
 **Solutions:**
 
-1. **Verify file location:** AGENTS.md must be in repository root.
+1. **Verify file location:** every supported tool reads the root `AGENTS.md`.
+   Nested `AGENTS.md` files are not read by every tool: Codex reads only the
+   files between the repository root and the directory it was started in, and
+   Claude Code reads none. Keep every rule a root-launched session needs in the
+   root file.
 
 2. **Check file syntax:** Ensure valid Markdown formatting.
 
-3. **Verify AI tool support:**
+3. **Verify AI tool support:** see the per-tool table in
+   [AGENT_GUIDANCE.md § How tools load instruction files](AGENT_GUIDANCE.md#how-tools-load-instruction-files).
+   Claude Code reads `CLAUDE.md`, not `AGENTS.md`, so the repository needs a
+   regular-file `CLAUDE.md` whose first line is `@AGENTS.md`. Some Copilot
+   surfaces do not read `AGENTS.md` and rely on
+   `.github/copilot-instructions.md`.
 
-   | Tool           | Reads AGENTS.md        |
-   | -------------- | ---------------------- |
-   | GitHub Copilot | ✅ Yes                 |
-   | OpenAI Codex   | ✅ Yes                 |
-   | Cursor         | ✅ Yes                 |
-   | Claude Code    | Uses CLAUDE.md instead |
+4. **Run the check:** `bash scripts/check-agent-guidance.sh` reports a missing
+   import, a symlinked instruction file, or an unlisted nested `AGENTS.md`.
 
 ### Copilot instructions not applying
 
@@ -672,7 +677,7 @@ no error) and no scheduler is created. Fix: add a root
 `TestContract_*` hangs on the shared self-hosted Mac runner under CPU load
 (especially when local `go test` runs during CI). Stop local tests and
 `gh run rerun <id> --failed`; the GitHub-hosted `build-and-test` job stays
-green. (Per [no flaky dismissal](../AGENTS.md#agent-operating-rules): confirm
+green. (Per [no flaky dismissal](../AGENTS.md#workspace-wide-rules): confirm
 it's contention, don't assume.)
 
 ### Dashboard shows "0 runs" while the pipeline is healthy

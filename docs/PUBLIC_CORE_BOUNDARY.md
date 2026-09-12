@@ -106,4 +106,4 @@ The checker reports both populations by name (`retired: <path> #N` and
 legible. A crossing is **reported, never gated**: the change that raised the mark
 introduced nothing and cannot fix it by editing its own diff. The ratchet on the
 count is the gate and is unchanged — and `tree_baseline` is still only lowered to
-the value the checker names. See `AGENTS.md` § _Public Core Boundary_.
+the value the checker names. See `AGENTS.md` § _Security and publication boundary_.

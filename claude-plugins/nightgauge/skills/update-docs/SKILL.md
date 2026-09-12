@@ -357,7 +357,7 @@ references to a single source of truth.
 **What to Detect:**
 
 1. **Rule/Guideline Duplication** - Same rules defined in multiple files (e.g.,
-   git workflow rules in both CLAUDE.md and docs/GIT_WORKFLOW.md)
+   git workflow rules in both AGENTS.md and docs/GIT_WORKFLOW.md)
 2. **Code Standards Duplication** - Coding conventions duplicated instead of
    referenced
 3. **Process Documentation Duplication** - Same process documented in multiple
@@ -373,46 +373,59 @@ grep -rn "## Git Workflow\|## Security\|## Code Standards" --include="*.md" . | 
   grep -v node_modules | sort
 
 # Check for files that should reference docs/ but define their own content
-# Look for AI config files (CLAUDE.md, AGENTS.md) with substantial content
-# that duplicates docs/ files
+# Look for agent instruction files (AGENTS.md, CLAUDE.md, tool adapters) with
+# substantial content that duplicates docs/ files
 ```
 
 **Duplication Patterns to Flag:**
 
 | Pattern                    | Example                              | Recommended Fix                           |
 | -------------------------- | ------------------------------------ | ----------------------------------------- |
-| Rules listed in AI config  | CLAUDE.md lists 5 git rules          | Reference `@docs/GIT_WORKFLOW.md` instead |
+| Rules listed in AI config  | AGENTS.md restates 5 git rules       | Link `docs/GIT_WORKFLOW.md` instead       |
 | Checklists duplicated      | Security checklist in multiple files | Define once in docs/, reference elsewhere |
 | Commands/examples repeated | Same bash examples in multiple docs  | Create single reference, link to it       |
 | Version info duplicated    | Version listed in multiple files     | Single source of truth for version        |
 
 **What Belongs Where:**
 
-| Content Type         | Belongs In                            | Other Files Should            |
-| -------------------- | ------------------------------------- | ----------------------------- |
-| Team-wide workflows  | `docs/` folder                        | Reference with links          |
-| Coding standards     | `docs/CODE_STANDARDS.md`              | Reference, not duplicate      |
-| Security guidelines  | `docs/SECURITY_AND_ERROR_HANDLING.md` | Reference, not duplicate      |
-| AI-specific behavior | `CLAUDE.md`, `AGENTS.md`              | Define only AI-specific rules |
+| Content Type                        | Belongs In                            | Other Files Should                  |
+| ----------------------------------- | ------------------------------------- | ----------------------------------- |
+| Team-wide workflows                 | `docs/` folder                        | Reference with links                |
+| Coding standards                    | `docs/CODE_STANDARDS.md`              | Reference, not duplicate            |
+| Security guidelines                 | `docs/SECURITY_AND_ERROR_HANDLING.md` | Reference, not duplicate            |
+| Agent commands and operating rules  | `AGENTS.md` (tool-neutral)            | Not repeat them                     |
+| Documentation routing (keyword map) | `docs/AGENT_GUIDANCE.md`              | Link it, never copy the table       |
+| Claude Code-only behavior           | `CLAUDE.md` below its `@AGENTS.md`    | Nothing else; it is only an adapter |
 
 **Output Format:**
 
 ```text
 ### Duplication Issues (MEDIUM)
-1. `CLAUDE.md:45-67` duplicates content from `docs/GIT_WORKFLOW.md:12-34`
-   - CLAUDE.md defines 5 git rules that exist in GIT_WORKFLOW.md
-   - Recommendation: Replace with reference: "See @docs/GIT_WORKFLOW.md"
+1. `AGENTS.md:45-67` duplicates content from `docs/GIT_WORKFLOW.md:12-34`
+   - AGENTS.md restates 5 git rules that exist in GIT_WORKFLOW.md
+   - Recommendation: Keep one-line rules, link docs/GIT_WORKFLOW.md for detail
 
 2. `AGENTS.md:89-112` duplicates `docs/SECURITY_AND_ERROR_HANDLING.md:15-45`
    - Security checklist repeated instead of referenced
    - Recommendation: Reference the authoritative source
 ```
 
-### Phase 4.8: CLAUDE.md Quality Audit
+### Phase 4.8: Agent Instruction Quality Audit
 
-**CRITICAL:** A bloated CLAUDE.md causes Claude to ignore important
-instructions. This phase detects CLAUDE.md files that violate official best
-practices.
+**CRITICAL:** Bloated or misplaced always-loaded instructions cause agents to
+ignore important rules. This phase audits the instruction files against the
+tool-neutral model:
+
+- `AGENTS.md` is the operating contract: commands an agent cannot guess and
+  non-obvious rules. Every rule a session started at the repository root must
+  obey lives here, because several tools never read nested files.
+- `docs/AGENT_GUIDANCE.md` owns documentation routing (the keyword table).
+- `CLAUDE.md` is an adapter: a regular file whose first line is `@AGENTS.md`,
+  with only Claude Code-specific behavior below it. Other tools (Cursor,
+  Copilot CLI and cloud agent, VS Code) also read it, so it must not carry
+  commands, portable rules or routing.
+- Repositories that only have a `CLAUDE.md` are audited as a single file until
+  the owner adopts `AGENTS.md`.
 
 **The Core Principle (from Claude Code Best Practices):**
 
@@ -421,25 +434,29 @@ practices.
 
 **Quality Metrics:**
 
-| Metric                    | Good  | Warning | Flag      |
-| ------------------------- | ----- | ------- | --------- |
-| Line count                | < 100 | 100-200 | > 200     |
-| File-by-file descriptions | None  | Some    | Extensive |
-| Self-evident instructions | None  | Few     | Many      |
-| Discoverable information  | None  | Some    | Lots      |
+| Metric                    | Good                  | Warning | Flag          |
+| ------------------------- | --------------------- | ------- | ------------- |
+| `AGENTS.md` line count    | < 150                 | 150-200 | > 200         |
+| `CLAUDE.md` line count    | < 50                  | 50-100  | > 100         |
+| `CLAUDE.md` line 1        | `@AGENTS.md`          | —       | anything else |
+| Routing table location    | `docs/AGENT_GUIDANCE` | —       | in an adapter |
+| File-by-file descriptions | None                  | Some    | Extensive     |
+| Self-evident instructions | None                  | Few     | Many          |
+| Discoverable information  | None                  | Some    | Lots          |
+| Instruction file symlinks | None                  | —       | Any           |
 
 **What to Flag:**
 
 1. **File-by-File Directory Listings** - Exhaustive lists like:
 
    ```markdown
-   # BAD - Claude can discover this by reading code
+   # BAD - an agent can discover this by reading code
 
    .claude/ ├── instructions/ │ ├── code-review.md │ ├── debugging.md │ └──
    testing.md
    ```
 
-2. **Self-Evident Instructions** - Things Claude would do anyway:
+2. **Self-Evident Instructions** - Things an agent would do anyway:
    - "Write clean, readable code"
    - "Review code before merging"
    - "Follow best practices"
@@ -450,16 +467,21 @@ practices.
    - "Use camelCase for functions" (standard convention)
    - "Add comments to complex code" (universal practice)
 
-4. **Information Claude Can Discover** - By reading code:
+4. **Information an Agent Can Discover** - By reading code:
    - Tech stack (visible in package.json, requirements.txt)
    - Project structure (visible from file system)
    - Dependencies (visible in manifest files)
 
-**What SHOULD Be in CLAUDE.md:**
+5. **Misplaced Content** - Commands, portable rules or a documentation routing table in
+   `CLAUDE.md`; a routing table in `AGENTS.md` instead of
+   `docs/AGENT_GUIDANCE.md`; a rule only in a nested `AGENTS.md` that a
+   root-launched session needs.
+
+**What SHOULD Be in AGENTS.md:**
 
 | Keep                                | Why                                               |
 | ----------------------------------- | ------------------------------------------------- |
-| Bash commands Claude can't guess    | `npm run test:integration` vs `npm test`          |
+| Commands an agent can't guess       | `npm run test:integration` vs `npm test`          |
 | Code style deviating from standards | "We use snake_case in JavaScript"                 |
 | Repository-specific workflow        | "Always run /update-docs before commits"          |
 | Critical safety rules               | "NEVER push to main directly"                     |
@@ -468,55 +490,56 @@ practices.
 **Detection Commands:**
 
 ```bash
-# Count lines in CLAUDE.md
-wc -l CLAUDE.md
+# Sizes of the contract and the adapter
+wc -l AGENTS.md CLAUDE.md 2>/dev/null
+
+# The adapter must start with the import
+[ -f CLAUDE.md ] && [ "$(head -n 1 CLAUDE.md)" != "@AGENTS.md" ] && echo "CLAUDE.md: line 1 is not @AGENTS.md"
+
+# Instruction files must be regular files
+find . -name AGENTS.md -type l -o -name CLAUDE.md -type l | grep -v node_modules
 
 # Find file-by-file listings (directory tree patterns)
-grep -n "├──\|└──\|│" CLAUDE.md | wc -l
+grep -n "├──\|└──\|│" AGENTS.md CLAUDE.md 2>/dev/null | wc -l
 
 # Find self-evident phrases
-grep -in "clean code\|best practice\|readable\|document.*code\|review.*before" CLAUDE.md
+grep -in "clean code\|best practice\|readable\|document.*code\|review.*before" AGENTS.md CLAUDE.md 2>/dev/null
 
-# Find exhaustive directory descriptions
-grep -n "^- \*\*\|^  - " CLAUDE.md | wc -l
+# Use the deterministic check when the repository has one
+[ -x scripts/check-agent-guidance.sh ] && bash scripts/check-agent-guidance.sh
 ```
 
 **Output Format:**
 
 ```text
-### CLAUDE.md Quality Issues (MEDIUM)
+### Agent Instruction Quality Issues (MEDIUM)
 
-**File:** CLAUDE.md (267 lines - exceeds 200 line threshold)
+**File:** CLAUDE.md (167 lines - exceeds the 100-line adapter budget)
 
 **Issues Found:**
-1. **Lines 45-89**: File-by-file directory listing
-   - Contains 44 lines describing .claude/ directory contents
-   - Recommendation: Remove - Claude can discover this by reading files
-
-2. **Lines 112-118**: Self-evident instructions
-   - "Follow best practices for code quality"
-   - "Document your code appropriately"
-   - Recommendation: Remove - Claude does this by default
-
-3. **Lines 156-198**: Standard language conventions
-   - Lists naming conventions that match TypeScript standards
-   - Recommendation: Remove unless your project deviates
+1. **Lines 1-3**: Heading before the import
+   - Recommendation: Make line 1 exactly `@AGENTS.md`
+2. **Lines 45-89**: Documentation routing table
+   - Recommendation: Move the table to docs/AGENT_GUIDANCE.md
+3. **Lines 112-140**: Git and test commands
+   - Recommendation: Move to AGENTS.md; other tools also read CLAUDE.md
 
 **Recommendations:**
-- Target: Reduce to < 100 lines
-- Keep: Git workflow rules, security rules, repo-specific commands
-- Remove: Discoverable info, self-evident practices, standard conventions
+- Keep in AGENTS.md: commands, git workflow rules, security rules
+- Keep in CLAUDE.md: only Claude Code behavior below the import
+- Remove: discoverable info, self-evident practices, standard conventions
 ```
 
 **Why This Matters:**
 
-- **Context window is precious**: Every unnecessary line in CLAUDE.md takes
+- **Context window is precious**: Every unnecessary always-loaded line takes
   space from actual code
 - **Instruction dilution**: Important rules get lost in noise
-- **False confidence**: Long CLAUDE.md files feel thorough but reduce AI
-  effectiveness
-- **Official guidance**: Claude Code docs explicitly warn against bloated
-  CLAUDE.md
+- **Tool coverage**: A rule only in `CLAUDE.md` is invisible to tools that
+  read `AGENTS.md` only, and a rule only in a nested file is invisible to a
+  root-launched session in several tools
+- **Official guidance**: Claude Code docs recommend a `CLAUDE.md` that imports
+  `AGENTS.md` and warn against bloated always-loaded files
 
 ### Phase 5: Generate Discrepancy Report
 

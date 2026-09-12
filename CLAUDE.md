@@ -1,30 +1,36 @@
-# Nightgauge Claude Code Instructions
-
 @AGENTS.md
 
-This file contains only Claude Code behavior. Repository rules, documentation
-routing, and durable technical knowledge are owned by `AGENTS.md` and `docs/`.
+# Claude Code adapter
 
-## Memory
+Other tools also load this file, so everything below applies to Claude Code
+only. Repository rules, commands and documentation routing live in `AGENTS.md`
+and `docs/AGENT_GUIDANCE.md`; do not add them here.
 
-Disable project auto-memory. Do not create or rely on `MEMORY.md` or per-fact
-memory files. Record durable facts in the repository location selected by
-`docs/AGENT_GUIDANCE.md`; private session handoffs live in
-`nightgauge-internal/runbooks/handoffs/` and must be verified against reality.
+## Claude Code: memory
 
-## Scoped rules
+Auto memory is disabled for this project by `autoMemoryEnabled: false` in the
+committed `.claude/settings.json`. Do not create or rely on `MEMORY.md` or
+per-fact memory files. Record durable facts in the repository location that
+`docs/AGENT_GUIDANCE.md` selects.
 
-- `.claude/rules/vscode-extension.md` applies under
-  `packages/nightgauge-vscode/**`.
-- `.claude/rules/scripts.md` applies under `claude-plugins/**` and `scripts/**`.
+## Claude Code: scoped rules
 
-## Subagent models
+Each file under `.claude/rules/` loads when Claude reads a matching path:
+
+- `.claude/rules/scripts.md`: `claude-plugins/**`, `scripts/**`, `cmd/**`,
+  `internal/**`, `.nightgauge/**`
+- `.claude/rules/sdk.md`: `packages/nightgauge-sdk/**`
+- `.claude/rules/skills.md`: `skills/**`
+- `.claude/rules/vscode-extension.md`: `packages/nightgauge-vscode/**`
+
+## Claude Code: subagent models
 
 Choose by task shape: Haiku for bounded lookups, Sonnet for focused fixes and
 read-only audits, Opus for multi-package or contract changes, and Fable for
 architecture decisions. Return conclusions instead of file dumps.
 
-## Compaction
+## Claude Code: compaction
 
-Preserve modified paths, issue and stage, acceptance criteria, branch, pending
-tests, and unresolved errors.
+Only this root file is re-injected after `/compact`. Preserve modified paths,
+issue and stage, acceptance criteria, branch, pending tests, and unresolved
+errors.

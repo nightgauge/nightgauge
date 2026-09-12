@@ -54,7 +54,7 @@ provide specific functionality, verify those assumptions against reality:
    or integration patterns, note which docs need updating:
    - `docs/ECOSYSTEM.md` (cross-repo truth)
    - `docs/ARCHITECTURE.md` (per-repo architecture)
-   - `CLAUDE.md` (AI agent instructions)
+   - `AGENTS.md` (agent instructions; `CLAUDE.md` is only its adapter)
    - Platform OpenAPI spec
 
 5. **Output**: Add a `## Cross-Repo Dependencies` section to the issue body

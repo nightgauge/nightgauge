@@ -37,7 +37,7 @@ import { RUN_IDENTITY_PATTERN } from "../runIdentity.js";
  *
  * REFUSAL IS STRICT, with no lenient-with-telemetry branch: that would be a
  * compatibility shim for on-disk files no customer has, which `AGENTS.md`
- * § Agent Operating Rules rules out. `RunStateManager.read()` turns the refusal
+ * § Repository operating contract rules out. `RunStateManager.read()` turns the refusal
  * into a `ContextSchemaError` naming the file, and the message below names the
  * id, so the resume path fails loudly instead of silently dropping a run or
  * rewriting the id underneath the operator.

@@ -2,72 +2,99 @@
 # Answer one question: did the merge commit's own CI actually go green?
 #
 # Usage:
-#   scripts/post-merge-check.sh <merge-sha> [owner/repo]   # default repo: this checkout's origin
+#   scripts/post-merge-check.sh <merge-sha> [owner/repo]
+#   scripts/post-merge-check.sh <merge-sha> --repo <owner/repo>
 #
-# Verdicts / exit codes:
-#   0  GREEN        every check-run completed, and none of them failed
-#   1  RED          at least one completed check-run did not succeed — yours to fix now
-#   2  NOT-YET      not observable: no check-runs exist yet, or some are still running
+# The repository defaults to the one named by this checkout's `origin` remote.
 #
-# Why this is a script and not the one-liner it replaces
-# ------------------------------------------------------
-# `AGENTS.md` mandates verifying `main`'s own run after every merge, because a
-# green PR check is a PREDICTION against a merge that has not happened, and
-# three failure classes are visible only afterwards: a nondeterministic test
-# that passes the PR and fails `main` on the identical tree (this is exactly how
-# #572 was found), merge skew between two PRs that were green apart, and the
-# secrets and permissions `main` has that PR runs do not.
+# Exit-code contract (read the code, not the text, and never through a pipe —
+# a pipeline's status is the last command's, so `... | tail` always reports 0):
+#   0  GREEN    every check-run completed, and none of them failed
+#   1  RED      at least one completed check-run did not succeed. `main` is red
+#               and it is the merger's to fix now; never re-run hoping for a
+#               better answer
+#   2  NOT-YET  not observable: no check-runs exist yet, some are still
+#               running, or the API could not be read. Wait and re-run
 #
-# The idiom it mandated was:
+# Portability: this file contains nothing specific to one repository. Every
+# Nightgauge workspace repository carries a byte-identical copy; the canonical
+# one lives in nightgauge/nightgauge. Change it there first, then re-copy.
 #
-#   gh api ".../check-runs" --jq '[.check_runs[]|select(.conclusion!="success"
-#     and .conclusion!="skipped" and .conclusion!="neutral")]|length'
+# Why a script and not a one-liner
+# --------------------------------
+# A green PR check is a PREDICTION about a merge that has not happened. Three
+# failure classes are visible only on the merge commit: a nondeterministic test
+# that passes the PR and fails `main` on the identical tree, merge skew between
+# two PRs that were green apart, and the secrets and permissions `main` has that
+# PR runs do not.
 #
-# with "non-zero means red". That counts BAD things without first establishing
-# that it looked at anything, and it fails in both directions:
+# The obvious one-liner counts non-green check-runs and calls zero green. That
+# counts BAD things without first establishing that it looked at anything, and
+# it fails in both directions:
 #
 #   1. Immediately after a merge the workflows for the merge commit have not
-#      been created yet, so `.check_runs` is an EMPTY ARRAY. The filter returns
-#      0 — the documented signal for GREEN. The check that exists to catch a red
-#      `main` reports green precisely when run promptly, which is exactly when an
-#      agent runs it. Found independently by two sessions in two repositories,
-#      the second of which got a false green on a real merge (#1038).
+#      been created yet, so the check-run list is EMPTY and the count is zero —
+#      a false GREEN precisely when the check is run promptly.
+#   2. A check still `in_progress` has `conclusion: null`, so a healthy merge
+#      briefly reads RED, which trains an operator to re-run until the answer
+#      is nicer — and then to believe failure 1.
 #
-#   2. A check still `in_progress` carries `conclusion: null`, which is not
-#      success/skipped/neutral, so it counts as a failure and a healthy merge
-#      briefly reads RED. Less dangerous, but it trains an operator to re-run
-#      the command until it says what they want — which is how failure 1 gets
-#      believed.
+# AN ABSENCE OF FAILURES IS NOT THE PRESENCE OF SUCCESSES. NOT-YET is its own
+# exit code because "I cannot tell yet" is a third answer.
 #
-# The general principle, the same shape as the "a green check on a job that
-# skipped is not evidence" rule already in AGENTS.md: AN ABSENCE OF FAILURES IS
-# NOT THE PRESENCE OF SUCCESSES. Any check that counts bad things must first
-# establish that it looked at anything at all. That is why NOT-YET is its own
-# exit code rather than being folded into either verdict — "I cannot tell yet"
-# is a third answer, and collapsing it into GREEN is the entire defect.
-#
-# Read the EXIT CODE, not the text. `$?` without a pipe: a pipeline's status is
-# the last command's, so `post-merge-check.sh <sha> | tail` always reports 0.
-#
-# #1540: the three numbers above (total>0/pending==0/bad==0) have no way to
-# tell "a required check is absent from the rollup" from "nothing to wait
-# for" — that is the defect this issue reports, and bash has no cheap way to
-# resolve the branch's required-check set (branch protection + rulesets)
-# without duplicating internal/github.GetRequiredCheckNames a second time.
-# So this script now DELEGATES to the compiled `nightgauge ci
-# checks-complete` verb (internal/github.EvaluateChecksCompleteCrossChecked)
-# whenever the binary can be resolved, and its own total/pending/bad logic
-# below becomes the FALLBACK for when it cannot — a degraded path that lacks
-# the required-check-set assertion (and the per-run cross-check), which is
-# named explicitly wherever it fires.
+# When the compiled `nightgauge` binary can be resolved, the verdict is
+# delegated to `nightgauge ci checks-complete`, which also asserts that every
+# REQUIRED check name is present (a rollup can omit an in-flight required
+# check entirely). The bash logic below is the fallback when no binary is
+# available, and it cannot make that assertion.
 
 set -uo pipefail
 
-SHA="${1:-}"
-REPO="${2:-}"
+usage() {
+  echo "usage: scripts/post-merge-check.sh <merge-sha> [owner/repo | --repo <owner/repo>]" >&2
+}
+
+SHA=""
+REPO=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+  -h | --help)
+    usage
+    exit 2
+    ;;
+  --repo)
+    if [[ $# -lt 2 || -z "$2" ]]; then
+      usage
+      exit 2
+    fi
+    REPO="$2"
+    shift 2
+    ;;
+  --repo=*)
+    REPO="${1#--repo=}"
+    shift
+    ;;
+  -*)
+    echo "unknown flag: $1" >&2
+    usage
+    exit 2
+    ;;
+  *)
+    if [[ -z "$SHA" ]]; then
+      SHA="$1"
+    elif [[ -z "$REPO" ]]; then
+      REPO="$1"
+    else
+      usage
+      exit 2
+    fi
+    shift
+    ;;
+  esac
+done
 
 if [[ -z "$SHA" ]]; then
-  echo "usage: scripts/post-merge-check.sh <merge-sha> [owner/repo]" >&2
+  usage
   exit 2
 fi
 
@@ -77,22 +104,23 @@ if [[ -z "$REPO" ]]; then
     echo "NOT-YET  no owner/repo given and this directory has no origin remote" >&2
     exit 2
   fi
-  # Handles both git@host:owner/repo(.git) and https://host/owner/repo(.git).
-  #
-  # Pure parameter expansion, not sed. The first draft of this line used an
-  # -E regex with a lazy `+?`, which BSD sed — macOS, where this runs most —
-  # rejects outright: every invocation printed "repetition-operator operand
-  # invalid" and fell through to NOT-YET. It failed in the safe direction, but
-  # a verification script whose repo detection never works is furniture.
-  REPO="${origin%.git}"   # drop a trailing .git
-  REPO="${REPO%/}"        # drop a trailing slash
+  # Handles git@host:owner/repo(.git), ssh://git@host/owner/repo(.git) and
+  # https://host/owner/repo(.git). Pure parameter expansion, not sed: BSD sed
+  # (macOS) rejects the lazy-quantifier regex a sed version would need.
+  REPO="${origin%/}"      # drop a trailing slash
+  REPO="${REPO%.git}"     # drop a trailing .git
   _name="${REPO##*/}"     # repo
-  REPO="${REPO%/$_name}"  # everything before it
+  REPO="${REPO%/"$_name"}" # everything before it
   _owner="${REPO##*[:/]}" # owner, past the last : or /
   REPO="$_owner/$_name"
 fi
 
-# #1540: delegate to the compiled binary when it can be resolved — same
+if [[ ! "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+  echo "NOT-YET  '$REPO' is not an owner/repo name" >&2
+  exit 2
+fi
+
+# Delegate to the compiled binary when it can be resolved — the same
 # discovery cascade skills use (NIGHTGAUGE_BIN -> PATH -> repo bin/ ->
 # canonical-repo bin/ -> ~/go/bin). `nightgauge ci checks-complete` owns the
 # verdict/exit code entirely (0 GREEN / 1 RED / 2 NOT-YET, a drop-in match for
@@ -103,7 +131,7 @@ fi
 # logic below even when a binary IS resolvable — used only by
 # scripts/test-post-merge-check.sh so its bash-fallback cases stay
 # deterministic on a machine that happens to have a `nightgauge` binary
-# installed (this repo's own checkout, for one).
+# installed.
 if [[ -z "${NIGHTGAUGE_POST_MERGE_CHECK_BASH_ONLY:-}" ]]; then
   BINARY="${NIGHTGAUGE_BIN:-}"
   [[ -n "$BINARY" && ! -x "$BINARY" ]] && BINARY=""
@@ -127,9 +155,8 @@ if [[ -z "${NIGHTGAUGE_POST_MERGE_CHECK_BASH_ONLY:-}" ]]; then
 fi
 
 # --- Fallback: the binary could not be resolved. Everything below lacks the
-# required-check-set assertion and the per-run cross-check (#1540) — bash has
-# no cheap way to resolve branch protection/ruleset required-check names
-# without a second implementation of internal/github.GetRequiredCheckNames.
+# required-check-set assertion and the per-run cross-check — bash has no cheap
+# way to resolve branch-protection and ruleset required-check names.
 
 runs=$(gh api "repos/$REPO/commits/$SHA/check-runs" --paginate 2>/dev/null) || {
   # An API failure is not evidence of anything. Saying NOT-YET keeps the caller

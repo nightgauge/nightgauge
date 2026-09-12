@@ -19,6 +19,20 @@ changelog, and the release workflow refuses a tag that does not.
 - Agent guidance is now tool-neutral and docs-first: concise `AGENTS.md` files
   route to canonical documentation, `CLAUDE.md` is a thin adapter, and Smart
   Setup generates and validates the same portable structure (#1604)
+- Agent guidance now documents how each supported tool actually loads root and
+  nested `AGENTS.md` and `CLAUDE.md`, instead of assuming the closest file
+  wins, and requires every root-session rule to live in the root file (#1606)
+- `scripts/check-agent-guidance.sh` is now a portable, flag-driven check that
+  reports every violation at once: import on line 1 of `CLAUDE.md`, no
+  symlinked instruction files, indexed nested files, byte and line budgets, and
+  a hash-verified shared rules block; `scripts/post-merge-check.sh` takes
+  `--repo` and derives the repository from any `origin` URL shape (#1606)
+
+### Removed
+
+- `configs/codex/AGENTS.md`, which duplicated `configs/codex/README.md` and was
+  loaded as instructions for that directory by tools that read nested
+  `AGENTS.md` files (#1606)
 
 ## [0.4.1] - 2026-09-11
 
