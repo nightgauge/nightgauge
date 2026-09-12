@@ -9,6 +9,13 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- Codex stages no longer leave generated `AGENTS.md` steering in your commits:
+  if the agent committed it, the stage's cleanup adds a commit removing it, and
+  the steering summary now comes from `AGENTS.md` rather than `CLAUDE.md`
+  (issue 1675)
+
 ## [0.4.1] - 2026-09-11
 
 ### Fixed

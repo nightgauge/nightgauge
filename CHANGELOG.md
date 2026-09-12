@@ -27,9 +27,30 @@ changelog, and the release workflow refuses a tag that does not.
   symlinked instruction files, indexed nested files, byte and line budgets, and
   a hash-verified shared rules block; `scripts/post-merge-check.sh` takes
   `--repo` and derives the repository from any `origin` URL shape (#1606)
+- Smart Setup now migrates repositories in the older `CLAUDE.md`-first layout:
+  it produces a migration plan listing every moved rule plus a proposed diff
+  for review, instead of adding sections to the old files. It installs the
+  bundled agent-guidance check with an `agent guidance` CI job, and
+  `/smart-setup verify` reports conformance read-only (issue 1675)
+- Codex and Gemini steering now summarizes the repository's `AGENTS.md`, falling
+  back to `CLAUDE.md` (without its `@AGENTS.md` import) only when `AGENTS.md`
+  has no content of its own (issue 1675)
+
+### Added
+
+- `nightgauge preflight managed-steering` reports generated Nightgauge steering
+  committed in any tracked `AGENTS.md`, and `--fix` removes it from the working
+  tree (issue 1675)
 
 ### Fixed
 
+- Generated Codex steering no longer ends up in commits. The Go-direct path
+  never removed it, and the agent could commit it mid-stage on every path;
+  pipeline commits now strip it before committing, a commit that carried it is
+  repaired after every stage and before pr-create pushes, and pr-merge refuses
+  a pull request whose head still carries it (issue 1675)
+- Steering summaries no longer collapse to a document's title when its first
+  heading is followed directly by a subsection (issue 1675)
 - `scripts/check-agent-guidance.sh` no longer reads Markdown link text in the
   routing table as a path, so a link such as `[sub/thing](../sub/x.md)` passes
   instead of failing as an unresolved `[sub/thing`. Whole links and images are

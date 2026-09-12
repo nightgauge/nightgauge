@@ -25,46 +25,120 @@ export function readFileGracefully(filePath: string): string | null {
   }
 }
 
+const SUMMARY_HEADING_RE = /^(#{1,6})([ \t]|$)/;
+const SUMMARY_BLANK_RE = /^[ \t\r]*$/;
+const SUMMARY_FENCE_RE = /^[ \t]*(```|~~~)/;
+
 /**
- * Extract the first section (up to the second H1/H2) from a markdown file
- * to keep the context concise.
+ * Return up to `maxLines` lines of a markdown document's meaningful content,
+ * across sections. A heading is kept only when body text follows it before a
+ * heading of the same or a higher level, so a title immediately followed by a
+ * sub-heading keeps the sub-section's body instead of ending the summary at
+ * the title (issue 1675). Runs of blank lines collapse to one, and lines inside
+ * fenced code blocks are body, never headings. Mirrors the Go
+ * `codexprovision.extractSummary` byte-for-byte.
  */
 export function extractSummary(content: string, maxLines: number = 50): string {
-  const lines = content.split("\n");
   const result: string[] = [];
-  let foundFirstHeader = false;
+  const isHeading: boolean[] = [];
+  let pending: Array<{ level: number; line: string; blankAfter: boolean }> = [];
+  let pendingBlank = false;
+  let inFence = false;
 
-  for (const line of lines) {
-    if (line.startsWith("# ") || line.startsWith("## ")) {
-      if (foundFirstHeader) break;
-      foundFirstHeader = true;
+  const emit = (line: string, head: boolean): boolean => {
+    if (result.length >= maxLines) return false;
+    if (pendingBlank && result.length > 0) {
+      result.push("");
+      isHeading.push(false);
+      pendingBlank = false;
+      if (result.length >= maxLines) return false;
     }
+    pendingBlank = false;
     result.push(line);
-    if (result.length >= maxLines) break;
+    isHeading.push(head);
+    return result.length < maxLines;
+  };
+
+  for (const line of content.split("\n")) {
+    if (!inFence) {
+      const m = SUMMARY_HEADING_RE.exec(line);
+      if (m) {
+        const level = m[1].length;
+        pending = pending.filter((h) => h.level < level);
+        pending.push({ level, line, blankAfter: false });
+        continue;
+      }
+      if (SUMMARY_BLANK_RE.test(line)) {
+        if (pending.length > 0) {
+          pending[pending.length - 1].blankAfter = true;
+        } else {
+          pendingBlank = true;
+        }
+        continue;
+      }
+    }
+    if (SUMMARY_FENCE_RE.test(line)) inFence = !inFence;
+    let cont = true;
+    for (const h of pending) {
+      cont = emit(h.line, true);
+      if (!cont) break;
+      pendingBlank = h.blankAfter;
+    }
+    pending = [];
+    if (!cont || !emit(line, false)) break;
   }
 
+  // The line budget can run out between a heading and its body; a trailing
+  // heading is then as empty as any other bodiless heading, so drop it.
+  while (
+    result.length > 0 &&
+    (isHeading[result.length - 1] || SUMMARY_BLANK_RE.test(result[result.length - 1]))
+  ) {
+    result.pop();
+  }
   return result.join("\n").trim();
 }
 
 /**
- * Read project description from CLAUDE.md or AGENTS.md header.
+ * Read the project description from the repository's canonical agent contract:
+ * the user part of AGENTS.md (the managed steering block is stripped first so
+ * generated steering is never read back). CLAUDE.md is only a fallback for a
+ * repository with no usable AGENTS.md; a leading `@AGENTS.md` import is skipped
+ * there because it is an adapter line, not a description (issue 1675).
  */
 export function readProjectDescription(projectRoot: string): string | null {
-  const claudeMd = readFileGracefully(path.join(projectRoot, "CLAUDE.md"));
-  if (claudeMd) {
-    return extractSummary(claudeMd);
+  const agentsMd = readFileGracefully(path.join(projectRoot, "AGENTS.md"));
+  if (agentsMd !== null) {
+    // Strip any pipeline-managed block first so NO provider (Gemini or Codex)
+    // reads generated steering back as the project description. #4028
+    const userPart = stripManagedBlock(agentsMd).trim();
+    if (userPart.length > 0) return extractSummary(userPart);
   }
 
-  const agentsMd = readFileGracefully(path.join(projectRoot, "AGENTS.md"));
-  if (agentsMd) {
-    // Strip any pipeline-managed block first so NO provider (Gemini or Codex)
-    // reads generated steering back as the project description — the managed
-    // block is generated content, not user-authored project context. #4028
-    const userPart = stripManagedBlock(agentsMd).trim();
-    return userPart.length > 0 ? extractSummary(userPart) : null;
+  const claudeMd = readFileGracefully(path.join(projectRoot, "CLAUDE.md"));
+  if (claudeMd !== null) {
+    const body = stripLeadingAgentsImport(claudeMd).trim();
+    if (body.length > 0) return extractSummary(body);
   }
 
   return null;
+}
+
+/**
+ * Drop the first non-blank line of a CLAUDE.md when it is the `@AGENTS.md` (or
+ * `@./AGENTS.md`) import. Mirrors the Go `stripLeadingAgentsImport`.
+ */
+export function stripLeadingAgentsImport(content: string): string {
+  const lines = content.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    if (SUMMARY_BLANK_RE.test(lines[i])) continue;
+    const t = lines[i].replace(/^[ \t\r]+|[ \t\r]+$/g, "");
+    if (t === "@AGENTS.md" || t === "@./AGENTS.md") {
+      return lines.slice(i + 1).join("\n");
+    }
+    return content;
+  }
+  return content;
 }
 
 /**

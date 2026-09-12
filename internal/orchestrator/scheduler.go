@@ -3787,6 +3787,12 @@ func RecoverUncommittedWork(worktreePath string, issueNumber int, stage string) 
 			log.Printf("#%d: unstaging pipeline exhaust before recovery commit failed (non-fatal): %v", issueNumber, err)
 		}
 	}
+	// Generated Codex steering is exhaust too, but it lives INSIDE a tracked
+	// file, so unstaging the path would also drop the user's own AGENTS.md
+	// edits. Stage AGENTS.md without the managed block instead (issue 1675).
+	if _, err := codexprovision.SanitizeStagedAgentsMd(context.Background(), worktreePath); err != nil {
+		return outcome, fmt.Errorf("refusing a recovery commit that would publish generated steering: %w", err)
+	}
 	// Withhold the DELETIONS from a tree that is mostly the deletion of tracked
 	// files (#1053, narrowed by #1108). A stage that removes generated output
 	// intending to regenerate it, and dies before regenerating, leaves exactly
@@ -5504,10 +5510,10 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// adapterResolveErr was produced by the hoisted per-stage adapter
 		// resolution above (#79) — the render needs the adapter, so the
 		// re-point runs there and only its outcome is consumed here.
-		deterministicMerged, detMergePRState, mergeRateLimited := s.tryDeterministicPRMerge(ctx, stage, runtime, item, workspaceRoot)
+		deterministicMerged, detMergePRState, mergeRateLimited, mergeRefusal := s.tryDeterministicPRMerge(ctx, stage, runtime, item, workspaceRoot)
 		deterministicCreated := false
 		createRateLimited := false
-		if !deterministicMerged && !mergeRateLimited {
+		if !deterministicMerged && !mergeRateLimited && mergeRefusal == nil {
 			deterministicCreated, createRateLimited = s.tryDeterministicPRCreate(ctx, stage, runtime, item, workspaceRoot)
 		}
 		// prStageRateLimited is true when the deterministic pr-merge/pr-create
@@ -5522,6 +5528,11 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		case adapterResolveErr != nil:
 			result = &StageRunResult{ExitCode: 1}
 			stageRunErr = adapterResolveErr
+		case mergeRefusal != nil:
+			// Refused by a deterministic gate (issue 1675): fail the stage, never
+			// hand the head to the LLM skill.
+			result = &StageRunResult{ExitCode: 1}
+			stageRunErr = mergeRefusal
 		case prStageRateLimited:
 			result = &StageRunResult{ExitCode: 1}
 			stageRunErr = fmt.Errorf("github-quota-low: %s deterministic path rate-limited; deferring until GitHub bucket reset (LLM fallback skipped to avoid quota/token burn) [#3976]", stage)
@@ -9265,15 +9276,20 @@ func classifyMergeBlocker(pr *types.PullRequest) string {
 // $5–$25 of tokens and can leave the issue stuck "In review". Instead the
 // caller fails the stage with a github-quota-low marker so it routes through
 // the environmental recovery path (#3896). Issue #3976.
+//
+// The fourth return value (refusal) is non-nil when the runner REFUSED the
+// merge (PathRefused) — generated steering on the PR head (issue 1675). The
+// caller fails the stage with it and must not fall through to the LLM path,
+// which could merge the same head.
 func (s *Scheduler) tryDeterministicPRMerge(
 	ctx context.Context,
 	stage state.PipelineStage,
 	runtime *state.RuntimeState,
 	item types.BoardItem,
 	workspaceRoot string,
-) (bool, string, bool) {
+) (bool, string, bool, error) {
 	if stage != state.StagePRMerge || s.prMergeRunner == nil {
-		return false, "", false
+		return false, "", false, nil
 	}
 
 	// Read pr-{N}.json (and run `gh` from) the worktree the run's stages executed
@@ -9294,7 +9310,14 @@ func (s *Scheduler) tryDeterministicPRMerge(
 		// retry records it accurately. Issue #3976.
 		log.Printf("#%d: pr-merge deterministic path rate-limited — deferring (no LLM fallback) until GitHub bucket resets [#3976]",
 			item.Number)
-		return false, detResult.PRState, true
+		return false, detResult.PRState, true, nil
+	}
+	if detErr == nil && detResult.Path == pmstages.PathRefused {
+		// A refusal is a gate, not a punt: no LLM fallback (issue 1675).
+		runtime.RecordExecutionPath(stage, "deterministic")
+		runtime.RecordStagePuntReason(stage, detResult.Reason)
+		log.Printf("#%d: pr-merge refused (PR #%d): %s", item.Number, detResult.PRNumber, detResult.Reason)
+		return false, detResult.PRState, false, fmt.Errorf("pr-merge refused: %s", detResult.Reason)
 	}
 	if detErr == nil && detResult.Path == pmstages.PathMerged {
 		runtime.RecordExecutionPath(stage, "deterministic")
@@ -9329,7 +9352,7 @@ func (s *Scheduler) tryDeterministicPRMerge(
 		if phases != nil {
 			phases.PhaseComplete(string(stage), "post-merge-cleanup")
 		}
-		return true, detResult.PRState, false
+		return true, detResult.PRState, false, nil
 	}
 
 	runtime.RecordExecutionPath(stage, "llm")
@@ -9351,7 +9374,7 @@ func (s *Scheduler) tryDeterministicPRMerge(
 	if IsBranchProtectionPunt(detResult.Reason) {
 		s.raiseBranchProtectionBlock(item.Repo, item.Number, detResult.PRNumber, runtime.RunID, detResult.Reason)
 	}
-	return false, "", false
+	return false, "", false, nil
 }
 
 // parsePRURL extracts owner, repo, and number from a GitHub PR URL.

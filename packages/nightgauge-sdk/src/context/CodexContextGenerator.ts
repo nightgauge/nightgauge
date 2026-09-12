@@ -28,6 +28,11 @@ import {
   stripManagedBlock,
   CODEX_MANAGED_BEGIN,
 } from "./steeringSources.js";
+import {
+  repairCommittedSteering,
+  repairCommittedSteeringSync,
+  type SteeringRepairResult,
+} from "./steeringGuard.js";
 
 // Re-exported so callers (the SDK barrel, tests) can reach the managed-block
 // markers/helpers via the Codex generator that owns the AGENTS.md contract,
@@ -152,55 +157,59 @@ export class CodexContextGenerator {
   }
 
   /**
-   * Remove the managed block after stage completion, preserving any user content.
-   * Deletes AGENTS.md only when it held nothing but the generated block.
+   * Remove the managed block after stage completion, preserving any user content,
+   * then repair a block the stage committed (issue 1675). Deletes AGENTS.md only when
+   * it held nothing but the generated block.
+   *
+   * Stripping the working tree alone cannot keep the block out of history: the
+   * stage's own agent commits while the block is present. So once the last
+   * provisioner releases, HEAD is checked too, and a leaked block is removed in
+   * one commit — pushed when the leaked commit was already the upstream tip.
    *
    * Refcounted (#4024 review #3): a release while another provisioner still holds
    * the block is a no-op, so a concurrent same-root Codex stage keeps its steering.
    */
-  async cleanup(projectRoot: string): Promise<void> {
+  async cleanup(projectRoot: string): Promise<SteeringRepairResult | null> {
     const filePath = path.join(projectRoot, "AGENTS.md");
     if (!releaseManagedBlock(filePath)) {
-      return;
+      return null;
     }
     const existing = readFileOrNull(filePath);
-    if (existing === null || !existing.includes(CODEX_MANAGED_BEGIN)) {
-      // No file, or a user-authored file we never touched — leave it alone.
-      return;
+    if (existing !== null && existing.includes(CODEX_MANAGED_BEGIN)) {
+      const stripped = stripManagedBlock(existing);
+      if (stripped.trim().length === 0) {
+        await fsPromises.unlink(filePath).catch(() => {});
+      } else {
+        await fsPromises.writeFile(filePath, stripped, "utf-8");
+      }
     }
-
-    const stripped = stripManagedBlock(existing);
-    if (stripped.trim().length === 0) {
-      await fsPromises.unlink(filePath).catch(() => {});
-      return;
-    }
-    await fsPromises.writeFile(filePath, stripped, "utf-8");
+    return repairCommittedSteering(projectRoot, { push: true });
   }
 
   /**
-   * Synchronous cleanup for use in skillRunner's process-close handler, which is
-   * synchronous. Same non-destructive semantics as {@link cleanup}.
+   * Synchronous cleanup for callers that cannot await. Same non-destructive
+   * semantics as {@link cleanup}, and the same HEAD repair, but the repair is
+   * never pushed from here: the next pipeline push publishes it.
    */
-  cleanupSync(projectRoot: string): void {
+  cleanupSync(projectRoot: string): SteeringRepairResult | null {
     const filePath = path.join(projectRoot, "AGENTS.md");
     if (!releaseManagedBlock(filePath)) {
-      return;
+      return null;
     }
     const existing = readFileOrNull(filePath);
-    if (existing === null || !existing.includes(CODEX_MANAGED_BEGIN)) {
-      return;
-    }
-
-    const stripped = stripManagedBlock(existing);
-    if (stripped.trim().length === 0) {
-      try {
-        fs.unlinkSync(filePath);
-      } catch {
-        /* best-effort */
+    if (existing !== null && existing.includes(CODEX_MANAGED_BEGIN)) {
+      const stripped = stripManagedBlock(existing);
+      if (stripped.trim().length === 0) {
+        try {
+          fs.unlinkSync(filePath);
+        } catch {
+          /* best-effort */
+        }
+      } else {
+        fs.writeFileSync(filePath, stripped, "utf-8");
       }
-      return;
     }
-    fs.writeFileSync(filePath, stripped, "utf-8");
+    return repairCommittedSteeringSync(projectRoot);
   }
 
   /**
@@ -246,10 +255,10 @@ export class CodexContextGenerator {
       }
     }
 
-    // Intentionally STABLE: no per-issue Stage/Issue/Acceptance-Criteria here.
-    // AGENTS.md may be a committed file, so the managed block stays idempotent
-    // and commit-safe; the per-issue task context is delivered via the prompt
-    // (this block is the preset-equivalent BASELINE steering, not the task).
+    // Intentionally STABLE: no per-issue Stage/Issue/Acceptance-Criteria here,
+    // so regenerating the block is idempotent; the per-issue task context is
+    // delivered via the prompt (this block is the preset-equivalent BASELINE
+    // steering, not the task). It is still never committed: see steeringGuard.
     sections.push("## Key Rules\n");
     sections.push("- Never push directly to main");
     sections.push("- Never hardcode secrets");

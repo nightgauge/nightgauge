@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/deliverable"
+	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
 )
 
 // PRCreatePath is the outcome of a deterministic pr-create attempt.
@@ -906,6 +908,15 @@ func NewExecGitClient() gitClient {
 }
 
 func (g *execGitClient) PushBranch(ctx context.Context, workdir, branch string) error {
+	// The pushed tip becomes the pull request's tree. If any earlier commit —
+	// typically one a Codex stage's agent made while its steering block was
+	// present — published the block, remove it in one commit first (issue 1675).
+	// The push below publishes the repair, so no separate push is needed.
+	if rep, err := codexprovision.RepairCommittedSteering(ctx, workdir, false); err != nil {
+		return fmt.Errorf("refusing to push generated steering: %w", err)
+	} else if rep.Repaired {
+		log.Printf("pr-create: removed generated steering committed on %s (%s)", branch, codexprovision.ShortSHA(rep.NewHead))
+	}
 	cmd := exec.CommandContext(ctx, "git", "push", "-u", "origin", branch)
 	cmd.Dir = workdir
 	if _, err := cmd.Output(); err != nil {
@@ -1006,6 +1017,10 @@ func (g *execGitClient) CommitAll(ctx context.Context, workdir, message string, 
 		if err := reset.Run(); err != nil {
 			return "", fmt.Errorf("unstage pipeline exhaust: %w", normalizeGhError(err))
 		}
+	}
+	// Never publish the ephemeral Codex steering block (issue 1675).
+	if _, err := codexprovision.SanitizeStagedAgentsMd(ctx, workdir); err != nil {
+		return "", fmt.Errorf("refusing to commit generated steering: %w", err)
 	}
 	// `diff --cached --quiet` exits 0 when nothing is staged. Committing then
 	// would fail with git's own "nothing to commit", which reads as a fault;

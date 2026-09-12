@@ -247,6 +247,28 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	} else if len(res.SkippedCollisions) > 0 {
 		fmt.Fprintf(os.Stderr, "[codex-provision] skipped user-defined MCP servers: %s\n", strings.Join(res.SkippedCollisions, ", "))
 	}
+	// The other half of the steering lifecycle (issue 1675). The managed block is
+	// ephemeral, and this path used to write it and never remove it, so every
+	// later commit in the worktree published it. The deferred call runs on
+	// every exit from here — clean exit, failure, and the early returns before
+	// spawn — removes the block from the working tree, and repairs HEAD when
+	// the stage's own agent committed it while it was present. It runs for
+	// every adapter: any stage can commit a block an interrupted Codex stage
+	// left behind. context.Background: the stage context may already be done.
+	defer func() {
+		rep, aerr := codexprovision.AfterStage(context.Background(), adapter.Name(), worktreeDir)
+		switch {
+		case aerr != nil:
+			fmt.Fprintf(os.Stderr, "[codex-provision] steering cleanup failed: %v\n", aerr)
+		case rep.Repaired:
+			fmt.Fprintf(os.Stderr, "[codex-provision] removed generated steering the stage committed (%s -> %s)\n", codexprovision.ShortSHA(rep.OldHead), codexprovision.ShortSHA(rep.NewHead))
+			if rep.PushErr != nil {
+				fmt.Fprintf(os.Stderr, "[codex-provision] repair not pushed; the next pipeline push carries it: %v\n", rep.PushErr)
+			}
+		case rep.Pushed:
+			fmt.Fprintf(os.Stderr, "[codex-provision] published an earlier steering repair to the branch upstream\n")
+		}
+	}()
 
 	// Build command from adapter
 	runOpts := buildRunOptions(opts, worktreeDir)

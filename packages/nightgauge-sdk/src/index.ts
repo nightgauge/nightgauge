@@ -121,6 +121,22 @@ export {
 } from "./context/CodexContextGenerator.js";
 
 export {
+  containsManagedSteering,
+  stripManagedSteering,
+  sanitizeStagedAgentsMd,
+  sanitizeStagedAgentsMdSync,
+  repairCommittedSteering,
+  repairCommittedSteeringSync,
+  committedSteeringAt,
+  publishSteeringRepair,
+  guardUpstreamHead,
+  STEERING_REPAIR_COMMIT_MESSAGE,
+  type SteeringRepairResult,
+  type UpstreamSteeringVerdict,
+  type SteeringGitRunner,
+} from "./context/steeringGuard.js";
+
+export {
   CodexMcpProvisioner,
   resolveCodexHome,
   type CodexMcpOptions,

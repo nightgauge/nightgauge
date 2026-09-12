@@ -18,7 +18,7 @@ func TestPreflightCmd_RegistersAllSubcommands(t *testing.T) {
 		got = append(got, s.Use)
 	}
 	sort.Strings(got)
-	want := []string{"ac-reconcile <issue-number>", "dependency-guard", "links", "mitigation-rule", "platform-raw-http", "secrets", "skill-anti-patterns", "skill-includes", "skill-no-direct-gh", "skill-portability", "syntax", "thinking-effort"}
+	want := []string{"ac-reconcile <issue-number>", "dependency-guard", "links", "managed-steering", "mitigation-rule", "platform-raw-http", "secrets", "skill-anti-patterns", "skill-includes", "skill-no-direct-gh", "skill-portability", "syntax", "thinking-effort"}
 	if len(got) != len(want) {
 		t.Fatalf("subcommand count = %d, want %d (got: %v)", len(got), len(want), got)
 	}
@@ -33,8 +33,9 @@ func TestPreflightCmd_FixFlagOnlyOnApplicators(t *testing.T) {
 	// --fix is the apply-mode flag; it belongs only on subcommands that
 	// implement a deterministic in-place rewrite. After the skills-canonical
 	// migration (#3876) retired the command-wrapper-coupled skill-versions and
-	// skill-banners verbs, no remaining subcommand has a deterministic auto-fix.
-	applicators := map[string]bool{}
+	// skill-banners verbs, managed-steering (issue 1675) is the one deterministic
+	// rewrite: it strips generated steering from the working-tree AGENTS.md.
+	applicators := map[string]bool{"managed-steering": true}
 	cmd := preflightCmd()
 	for _, sub := range cmd.Commands() {
 		fix := sub.Flags().Lookup("fix")

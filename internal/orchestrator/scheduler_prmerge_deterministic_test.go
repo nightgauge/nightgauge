@@ -182,7 +182,7 @@ func TestScheduler_PRMerge_DeterministicSkipsLLM(t *testing.T) {
 	rs.BeginStage(state.StagePRMerge)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
-	merged, _, _ := s.tryDeterministicPRMerge(context.Background(), state.StagePRMerge, rs, item, "/tmp")
+	merged, _, _, _ := s.tryDeterministicPRMerge(context.Background(), state.StagePRMerge, rs, item, "/tmp")
 	if !merged {
 		t.Fatalf("tryDeterministicPRMerge returned false, want true")
 	}
@@ -221,7 +221,7 @@ func TestScheduler_PRMerge_PuntInvokesLLM(t *testing.T) {
 	rs.BeginStage(state.StagePRMerge)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
-	merged, _, _ := s.tryDeterministicPRMerge(context.Background(), state.StagePRMerge, rs, item, "/tmp")
+	merged, _, _, _ := s.tryDeterministicPRMerge(context.Background(), state.StagePRMerge, rs, item, "/tmp")
 	if merged {
 		t.Fatalf("tryDeterministicPRMerge returned true on punt, want false (so LLM runs)")
 	}
@@ -262,7 +262,7 @@ func TestScheduler_PRMerge_RateLimitedDefersNoLLM(t *testing.T) {
 	rs.BeginStage(state.StagePRMerge)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
-	merged, _, rateLimited := s.tryDeterministicPRMerge(context.Background(), state.StagePRMerge, rs, item, "/tmp")
+	merged, _, rateLimited, _ := s.tryDeterministicPRMerge(context.Background(), state.StagePRMerge, rs, item, "/tmp")
 	if merged {
 		t.Fatalf("tryDeterministicPRMerge returned merged=true on rate-limit, want false")
 	}
@@ -292,7 +292,7 @@ func TestScheduler_PRMerge_DeterministicErrorFallsThroughToLLM(t *testing.T) {
 	rs.BeginStage(state.StagePRMerge)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
-	merged, _, _ := s.tryDeterministicPRMerge(context.Background(), state.StagePRMerge, rs, item, "/tmp")
+	merged, _, _, _ := s.tryDeterministicPRMerge(context.Background(), state.StagePRMerge, rs, item, "/tmp")
 	if merged {
 		t.Fatalf("tryDeterministicPRMerge returned true on error, want false")
 	}
@@ -329,7 +329,7 @@ func TestScheduler_PRMerge_DeterministicPath_CostZero(t *testing.T) {
 	beforeIn := rs.InputTokens
 	beforeOut := rs.OutputTokens
 
-	merged, _, _ := s.tryDeterministicPRMerge(context.Background(), state.StagePRMerge, rs, item, "/tmp")
+	merged, _, _, _ := s.tryDeterministicPRMerge(context.Background(), state.StagePRMerge, rs, item, "/tmp")
 	if !merged {
 		t.Fatalf("expected deterministic merged=true")
 	}
@@ -359,7 +359,7 @@ func TestScheduler_PRMerge_NonPRMergeStage_NoOp(t *testing.T) {
 	rs.BeginStage(state.StageFeatureDev)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
-	if merged, _, _ := s.tryDeterministicPRMerge(context.Background(), state.StageFeatureDev, rs, item, "/tmp"); merged {
+	if merged, _, _, _ := s.tryDeterministicPRMerge(context.Background(), state.StageFeatureDev, rs, item, "/tmp"); merged {
 		t.Errorf("tryDeterministicPRMerge returned true for non-pr-merge stage")
 	}
 	if det.callCount != 0 {
@@ -451,7 +451,7 @@ func TestScheduler_PRMerge_Deterministic_CleansUpRemoteBranch(t *testing.T) {
 	rs.BeginStage(state.StagePRMerge)
 	item := types.BoardItem{Number: 42, Repo: "nightgauge/nightgauge"}
 
-	merged, _, _ := s.tryDeterministicPRMerge(context.Background(), state.StagePRMerge, rs, item, worktreeDir)
+	merged, _, _, _ := s.tryDeterministicPRMerge(context.Background(), state.StagePRMerge, rs, item, worktreeDir)
 	if !merged {
 		t.Fatalf("tryDeterministicPRMerge returned false, want true")
 	}
@@ -491,7 +491,7 @@ func TestScheduler_PRMerge_Deterministic_NoHeadRefSkipsCleanup(t *testing.T) {
 	// this would either panic or, worse, silently walk up to an unrelated
 	// repository (git.NewService with an empty HeadRefName must never be
 	// called at all).
-	merged, _, _ := s.tryDeterministicPRMerge(context.Background(), state.StagePRMerge, rs, item, "/tmp")
+	merged, _, _, _ := s.tryDeterministicPRMerge(context.Background(), state.StagePRMerge, rs, item, "/tmp")
 	if !merged {
 		t.Fatalf("tryDeterministicPRMerge returned false, want true")
 	}
@@ -507,7 +507,7 @@ func TestScheduler_PRMerge_NilRunner_NoOp(t *testing.T) {
 	rs.BeginStage(state.StagePRMerge)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
-	merged, _, _ := s.tryDeterministicPRMerge(context.Background(), state.StagePRMerge, rs, item, "/tmp")
+	merged, _, _, _ := s.tryDeterministicPRMerge(context.Background(), state.StagePRMerge, rs, item, "/tmp")
 	if merged {
 		t.Errorf("nil runner should produce merged=false")
 	}

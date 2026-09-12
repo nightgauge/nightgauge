@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
 	"github.com/nightgauge/nightgauge/internal/heal"
 	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
 	"github.com/nightgauge/nightgauge/internal/state"
@@ -332,6 +333,10 @@ func (a *PipelineHealBase) applyFixAndPush(ctx context.Context, workspace, branc
 
 	if _, err := execGit(ctx, workspace, "add", "-A"); err != nil {
 		return fmt.Errorf("add: %w", err)
+	}
+	// Never publish the ephemeral Codex steering block (issue 1675).
+	if _, err := codexprovision.SanitizeStagedAgentsMd(ctx, workspace); err != nil {
+		return fmt.Errorf("sanitize: %w", err)
 	}
 	commitMsg := fix.CommitMessage
 	if commitMsg == "" {

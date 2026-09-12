@@ -56,6 +56,31 @@ It then evaluates a pure decision function over the typed snapshot:
 | `OPEN`   | `MERGEABLE`   | `CLEAN`                | none             | required      | punt                                                                     |
 | `CLOSED` | -             | -                      | -                | -             | punt                                                                     |
 
+### Generated-steering gate (issue 1675)
+
+Before any verdict that could punt, and again immediately before the merge
+call, the runner fetches the PR's head branch and checks every `AGENTS.md` at
+its tip for the pipeline's managed Codex steering markers. That block is
+generated per stage and must never reach the default branch. A head carrying
+it is **refused** (`path: refused`, reason
+`generated-steering-committed: …`), never merged and never punted, because a
+punt hands the stage to the LLM skill, which could merge the same head. The
+scheduler and the extension both fail the stage on a refusal.
+
+- **A local worktree is on the head branch:** the runner removes the block in
+  one `chore(agents): remove generated Nightgauge steering from AGENTS.md`
+  commit (or reuses a repair already made there) and pushes it when the branch
+  is the published head plus repair commits only. The reason says the repair
+  was pushed and required checks must re-run; the next attempt merges the
+  clean head.
+- **No worktree, or the repair cannot be published:** the reason names
+  `nightgauge preflight managed-steering --fix` to run on that branch.
+
+When the extension's LLM pr-merge skill runs (after a punt, or when the Go
+binary could not run), it first applies the same check to the branch's
+upstream head. A head that cannot be inspected is logged and passed; the
+pr-create push and the post-stage repair are the other layers of the guard.
+
 ### Bounded CI wait (Issue #297)
 
 pr-merge starts **immediately** after pr-create, so on repos whose CI takes

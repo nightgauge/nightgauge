@@ -70,6 +70,7 @@ REQUIRED_FILES=(
   scripts/check-md-links.sh
   scripts/test-check-md-links.sh
   scripts/check-agent-guidance.sh
+  skills/smart-setup/scripts/check-agent-guidance.sh
   scripts/test-agent-guidance-check.sh
   scripts/check-changelog.sh
   scripts/test-check-changelog.sh
@@ -570,6 +571,10 @@ run_group "Agent-guidance gate regression suite" \
   bash scripts/test-agent-guidance-check.sh
 run_group "Agent-guidance architecture" \
   bash scripts/check-agent-guidance.sh --workspace-block required
+# Smart Setup installs this check into downstream repositories from its own
+# bundled copy, so the copy must be the canonical file byte-for-byte (issue 1675).
+run_group "Smart Setup bundles the canonical agent-guidance check" \
+  cmp scripts/check-agent-guidance.sh skills/smart-setup/scripts/check-agent-guidance.sh
 
 # Changelog ↔ release contract (docs/GIT_WORKFLOW.md § Changelog): every
 # released tag has a section in CHANGELOG.md and the extension's changelog, and

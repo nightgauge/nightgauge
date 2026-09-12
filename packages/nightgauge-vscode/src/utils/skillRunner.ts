@@ -48,6 +48,7 @@ import {
   GeminiContextGenerator,
   CodexContextGenerator,
   CodexMcpProvisioner,
+  repairCommittedSteeringSync,
   parsePhaseMarker,
   parsePhaseMarkers,
   createPhaseInference,
@@ -7141,16 +7142,25 @@ export function runStageSkillHeadless(
     if (stallWarningShown) {
       callbacks?.onStallWarningClear?.();
     }
-    // Strip the Codex AGENTS.md managed block now the stage is done, so the
-    // ephemeral steering never lands in a commit (AGENTS.md is a committed file;
-    // user content outside the markers is preserved). Mirrors GEMINI.md's
-    // generate→use→cleanup lifecycle. Issue #4028.
-    if (adapter === "codex") {
-      try {
-        new CodexContextGenerator().cleanupSync(workspaceRoot);
-      } catch {
-        /* best-effort */
+    // Strip the Codex AGENTS.md managed block now the stage is done (user
+    // content outside the markers is preserved; Issue #4028), and repair a block
+    // the stage's agent committed while it was present — the strip alone only
+    // fixes the working tree (issue 1675). Every adapter gets the HEAD check: any
+    // stage can commit a block an interrupted Codex stage left behind. Sync and
+    // local, so the close tick is not delayed; the deterministic pr-create push
+    // publishes the repair.
+    try {
+      const repair =
+        adapter === "codex"
+          ? new CodexContextGenerator().cleanupSync(workspaceRoot)
+          : repairCommittedSteeringSync(workspaceRoot);
+      if (repair?.repaired) {
+        callbacks?.onStderr?.(
+          `[skillRunner] Removed generated AGENTS.md steering the stage committed (${(repair.newHead ?? "").slice(0, 12)})\n`
+        );
       }
+    } catch {
+      /* best-effort */
     }
     // Orphan reaper: kill any descendants that outlived the parent. Tracked
     // pids were captured periodically while the parent was alive, so we can

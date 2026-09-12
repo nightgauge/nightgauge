@@ -48,6 +48,7 @@
 
 import { execFile } from "child_process";
 import { promisify } from "util";
+import { sanitizeStagedAgentsMd } from "@nightgauge/sdk";
 
 // #2884: never a sync subprocess — this runs on the extension host event loop.
 const execFileAsync = promisify(execFile);
@@ -229,6 +230,8 @@ export async function preserveWorkInProgress(opts: PreserveWipOptions): Promise<
   //    on a kill path) and gpgsign is disabled so no pinentry can block.
   try {
     await git(cwd, ["add", "-A"]);
+    // Never publish the ephemeral Codex steering block (issue 1675).
+    await sanitizeStagedAgentsMd(cwd);
     await git(cwd, [
       "-c",
       "commit.gpgsign=false",

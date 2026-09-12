@@ -119,7 +119,9 @@ When the rule says "create," the runner:
 1. Calls `prClient.ListOpenPRsForBranch` for idempotency. If an open PR
    already exists for the branch, the runner returns `created` with
    `reason=pr-already-exists` (no second push, no second create call).
-2. Pushes the feature branch (`git push -u origin <branch>`). If the push is
+2. Pushes the feature branch (`git push -u origin <branch>`). Before pushing
+   it removes generated Codex steering from a committed `AGENTS.md` in one
+   repair commit, so the pull request's tree never carries it (issue 1675). If the push is
    rejected, the runner is **idempotent on the branch** (#3828): it checks
    whether `origin` already has the branch (feature-dev typically pushed it).
    If so, it proceeds to open the PR from the remote branch with

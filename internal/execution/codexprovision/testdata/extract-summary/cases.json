@@ -1,0 +1,18 @@
+[
+  {
+    "name": "h1-then-h2",
+    "maxLines": 50
+  },
+  {
+    "name": "empty-headings",
+    "maxLines": 50
+  },
+  {
+    "name": "fenced-code",
+    "maxLines": 50
+  },
+  {
+    "name": "budget-ends-at-heading",
+    "maxLines": 7
+  }
+]

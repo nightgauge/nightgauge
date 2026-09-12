@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	docspkg "github.com/nightgauge/nightgauge/internal/docs"
+	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
 	"github.com/nightgauge/nightgauge/internal/preflight"
 	"github.com/nightgauge/nightgauge/internal/scan"
 	"github.com/spf13/cobra"
@@ -25,7 +26,7 @@ import (
 func preflightCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "preflight",
-		Short: "Pre-submission gates (links, syntax, secrets, skill-includes, skill-no-direct-gh, skill-anti-patterns, skill-portability, dependency-guard, mitigation-rule)",
+		Short: "Pre-submission gates (links, syntax, secrets, skill-includes, skill-no-direct-gh, skill-anti-patterns, skill-portability, dependency-guard, mitigation-rule, managed-steering)",
 		Long: `Deterministic pre-submission validation gates. Each subcommand inspects the
 working tree for a specific class of defect and exits non-zero when findings
 exist, so they can be chained in CI or git pre-push hooks. Replaces the
@@ -44,7 +45,91 @@ fragile bash + python3 + sed chains in skills/pr-preflight/SKILL.md
 	cmd.AddCommand(preflightACReconcileCmd())
 	cmd.AddCommand(preflightThinkingEffortCmd())
 	cmd.AddCommand(preflightMitigationRuleCmd())
+	cmd.AddCommand(preflightManagedSteeringCmd())
 	return cmd
+}
+
+// preflightManagedSteeringCmd implements `nightgauge preflight managed-steering`
+// (issue 1675): fail when an AGENTS.md committed at HEAD carries the pipeline's
+// managed Codex steering block, which is generated per stage and must never be
+// committed.
+func preflightManagedSteeringCmd() *cobra.Command {
+	var (
+		jsonOutput bool
+		root       string
+		fix        bool
+	)
+	cmd := &cobra.Command{
+		Use:   "managed-steering",
+		Short: "Fail when a committed AGENTS.md carries generated Nightgauge steering",
+		Long: `Check every AGENTS.md tracked at HEAD for the pipeline's managed steering
+markers (<!-- BEGIN NIGHTGAUGE MANAGED STEERING --> ... END ...). The block is
+written into AGENTS.md for a Codex stage and removed afterwards; finding it in
+a commit means it leaked.
+
+--fix rewrites each offending working-tree AGENTS.md without the block (deleting
+it when nothing else remains) and leaves the change uncommitted, so it lands
+through the repository's normal review.
+
+Schema version 1 — field names (v, root, files_checked, findings, fixed) are
+stable and consumed by callers via fixed jq paths.
+
+Exit codes:
+  0  no committed AGENTS.md carries the block (or --fix removed it)
+  1  one or more committed AGENTS.md files carry the block
+  2  hard error (e.g. not a git repository)`,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if root == "" {
+				wd, err := os.Getwd()
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "preflight managed-steering: %v\n", err)
+					os.Exit(2)
+				}
+				root = wd
+			}
+			result, err := codexprovision.FindCommittedSteering(cmd.Context(), root, fix)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "preflight managed-steering: %v\n", err)
+				os.Exit(2)
+			}
+			if jsonOutput {
+				if err := printJSON(result); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: failed to encode JSON output: %v\n", err)
+				}
+			} else {
+				printPreflightManagedSteeringHuman(result)
+			}
+			if len(result.Findings) > len(result.Fixed) {
+				os.Exit(1)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output result as JSON (parsed by skills)")
+	cmd.Flags().StringVar(&root, "root", "", "Repository root (default: current working directory)")
+	cmd.Flags().BoolVar(&fix, "fix", false, "Remove the block from each offending working-tree AGENTS.md (left uncommitted)")
+	return cmd
+}
+
+func printPreflightManagedSteeringHuman(r codexprovision.CommittedSteeringResult) {
+	fmt.Printf("nightgauge preflight managed-steering — schema v%d\n", r.V)
+	fmt.Printf("root: %s\n", r.Root)
+	fmt.Printf("AGENTS.md files checked: %d  findings: %d\n", r.FilesChecked, len(r.Findings))
+	fixed := map[string]bool{}
+	for _, p := range r.Fixed {
+		fixed[p] = true
+	}
+	for _, p := range r.Findings {
+		if fixed[p] {
+			fmt.Printf("  ~ %s  generated steering removed from the working tree; commit the change\n", p)
+		} else {
+			fmt.Printf("  ✗ %s  committed with generated Nightgauge steering (re-run with --fix)\n", p)
+		}
+	}
+	if len(r.Findings) == 0 {
+		fmt.Println("no committed AGENTS.md carries generated steering ✓")
+	}
 }
 
 // preflightThinkingEffortCmd implements `nightgauge preflight thinking-effort`

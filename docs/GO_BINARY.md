@@ -375,6 +375,9 @@ nightgauge preflight thinking-effort --model opus --effort max [--stage feature-
 
 # Fail when the unobserved-mechanism rule is missing, or a mitigation is untracked (#1263)
 nightgauge preflight mitigation-rule --root . [--json]
+
+# Fail when an AGENTS.md committed at HEAD carries generated Codex steering (issue 1675)
+nightgauge preflight managed-steering --root . [--fix] [--json]
 ```
 
 **Exit codes (uniform across the family):**
@@ -397,6 +400,7 @@ nightgauge preflight mitigation-rule --root . [--json]
 | `skill-anti-patterns` | `internal/preflight`   | `v, root, files_checked, findings[{check, file, line, match}], warnings`                           |
 | `thinking-effort`     | `internal/preflight`   | `v, thinking_disabled, checked, findings[{source, model, effort, max_allowed, message}], warnings` |
 | `skill-portability`   | `internal/preflight`   | `v, root, files_checked, findings[{skill_file, line, check, match}], warnings`                     |
+| `managed-steering`    | `codexprovision`       | `v, root, files_checked, findings[path], fixed[path]`                                              |
 
 **`syntax` finding format enum:** `"json"` or `"yaml"`. Empty files are
 treated as valid (matches `python3 -m json.tool` and `yaml.safe_load`
@@ -409,6 +413,18 @@ points at another supporting file), `backslash_path` (a Windows `\` path
 separator), `missing_toc` (a long supporting file lacks a `## Contents`
 heading). The `skill-no-direct-gh` gate honors an allowlist
 (`scripts/lint-skills/allowlist.txt`) for the un-migrated forge tail.
+
+**`managed-steering` — generated steering never ships (issue 1675).** A Codex
+stage reads baseline steering from a managed block the pipeline writes into
+`AGENTS.md` for the stage. The block is never committed: every pipeline-owned
+commit stages `AGENTS.md` without it, every stage ends by stripping it from the
+working tree and repairing a commit the stage's own agent made while it was
+present (one `chore(agents): remove generated Nightgauge steering from
+AGENTS.md` commit, pushed when the leaked commit was already the upstream tip),
+and the deterministic pr-create push repairs the tip before publishing. This
+verb finds a block that was committed anyway — for example by a version that
+predates the guard — in any `AGENTS.md` tracked at `HEAD`. `--fix` removes it
+from the working-tree file and leaves the change uncommitted for review.
 
 **`mitigation-rule` — the unobserved-mechanism gate (#1263).** Two mechanical
 halves of one rule that is otherwise pure judgement.
