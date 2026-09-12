@@ -187,7 +187,12 @@ It exits `0` GREEN / `1` RED / `2` NOT-YET, and only `0` is evidence:
 | ---- | ------- | -------------------------------------------------------------------------------------------- |
 | `0`  | GREEN   | Continue with the post-merge hook and cleanup.                                               |
 | `1`  | RED     | `main` is red and it is the merger's to fix now. Never re-run hoping for a better answer.    |
-| `2`  | NOT-YET | No check-runs exist yet, some are still running, or the API was unreadable. Wait and re-run. |
+| `2`  | NOT-YET | Nothing exists yet, something is still running, or the API was unreadable. Wait and re-run.  |
+
+Every check run **and** commit status on the merge commit counts, required or
+not: a failed optional check is `1`, and a running one is `2`. Required
+contexts, resolved from branch protection and rulesets, must also be present.
+Every page of both surfaces is read (#1681).
 
 Read the exit code **without a pipe** — a pipeline's status is the last
 command's, so `post-merge-check.sh <sha> | tail` always reports 0. The
@@ -225,12 +230,13 @@ contributed to that count, and the guard passed vacuously on a genuinely
 unfinished tree. GitHub's rollup was observed doing exactly that:
 `total_count=16` with zero pending while `lint` and `publication boundary`
 were still `in_progress`, simply missing from the response. The fix is a
-shared primitive — `internal/github.EvaluateChecksComplete` — that asserts the
+shared primitive — `internal/github.MissingRequiredChecks` — that asserts the
 **positive presence** of every required check name instead of the absence of
-bad conclusions among whatever showed up, used by both `nightgauge hook
-post-merge` and the PR gate, and exposed as `nightgauge ci checks-complete
-<sha>` so `scripts/post-merge-check.sh` delegates to the same logic instead of
-carrying its own third bash transcription of the rule.
+bad conclusions among whatever showed up. `nightgauge hook post-merge` and
+`nightgauge ci checks-complete <sha>` evaluate a commit through one function,
+`internal/github.EvaluateCommitChecks`, over one reader of both GitHub status
+surfaces (#1674), so `scripts/post-merge-check.sh` delegates to the same logic
+the hook runs instead of carrying its own third bash transcription of the rule.
 
 `scripts/test-post-merge-check.sh` pins all three verdicts against stubbed
 check-run payloads, because the two states that motivated this — an empty list

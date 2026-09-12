@@ -1503,14 +1503,21 @@ while the PR still had two pending checks — the loop reported a state it had
 never observed.
 
 Capture the output, bail to a `sleep` on a non-zero exit, and compare against
-the literal `false` rather than testing for the absence of `true`:
+the literal `false` rather than testing for the absence of `true`. `--paginate`
+runs the `--jq` program once **per page**, so a whole-document program prints
+one answer per page; emit one line per check instead, and settle only when
+there is at least one line and every line is `completed`:
 
 ```bash
-out=$(gh api "repos/{owner}/{repo}/commits/$sha/check-runs" --paginate \
-    --jq '[.check_runs[].status] | any(. != "completed")' 2>/dev/null) \
+out=$(gh api "repos/{owner}/{repo}/commits/$sha/check-runs?per_page=100" --paginate \
+    --jq '.check_runs[].status' 2>/dev/null) \
   || { sleep 30; continue; }
-[ "$out" = "false" ] && break
+[ -n "$out" ] && ! grep -qvx completed <<<"$out" && break
 ```
+
+This still ignores commit statuses and required contexts that have not
+appeared; `nightgauge ci checks-complete <sha>` handles both and is the
+preferred wait.
 
 Bound the loop with an iteration count as well, so an endpoint that stays
 unreachable fails loudly instead of spinning.

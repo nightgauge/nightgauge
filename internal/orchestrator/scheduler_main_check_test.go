@@ -20,7 +20,7 @@ import (
 // sleeps.
 type redMainReader struct{ refs []string }
 
-func (r *redMainReader) GetIndividualCheckRuns(_ context.Context, _, _, ref string) ([]forgetypes.CheckDetail, error) {
+func (r *redMainReader) GetCommitChecks(_ context.Context, _, _, ref string) ([]forgetypes.CheckDetail, error) {
 	r.refs = append(r.refs, ref)
 	return []forgetypes.CheckDetail{
 		{Name: "e2e", Status: "COMPLETED", Conclusion: "FAILURE", DetailsURL: "https://ci/e2e"},

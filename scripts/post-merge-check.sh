@@ -9,12 +9,14 @@
 #
 # Exit-code contract (read the code, not the text, and never through a pipe —
 # a pipeline's status is the last command's, so `... | tail` always reports 0):
-#   0  GREEN    every check-run completed, and none of them failed
-#   1  RED      at least one completed check-run did not succeed. `main` is red
-#               and it is the merger's to fix now; never re-run hoping for a
-#               better answer
-#   2  NOT-YET  not observable: no check-runs exist yet, some are still
-#               running, or the API could not be read. Wait and re-run
+#   0  GREEN    every check-run and commit status completed, and none of them
+#               failed — required or not
+#   1  RED      at least one completed check-run or commit status did not
+#               succeed. `main` is red and it is the merger's to fix now; never
+#               re-run hoping for a better answer
+#   2  NOT-YET  not observable: nothing exists yet, something is still
+#               running, a required context has not appeared, or the API could
+#               not be read. Wait and re-run
 #
 # Portability: this file contains nothing specific to one repository. Every
 # Nightgauge workspace repository carries a byte-identical copy; the canonical
@@ -47,6 +49,11 @@
 # REQUIRED check name is present (a rollup can omit an in-flight required
 # check entirely). The bash logic below is the fallback when no binary is
 # available, and it cannot make that assertion.
+#
+# Both paths read every page of both GitHub status surfaces — check-runs and
+# commit statuses — because a list endpoint returns 30 items per page by
+# default, and a context on page 2 or on the other surface is otherwise never
+# seen.
 
 set -uo pipefail
 
@@ -158,36 +165,53 @@ fi
 # required-check-set assertion and the per-run cross-check — bash has no cheap
 # way to resolve branch-protection and ruleset required-check names.
 
-runs=$(gh api "repos/$REPO/commits/$SHA/check-runs" --paginate 2>/dev/null) || {
+# `gh api --paginate --jq` runs the jq program once PER PAGE, so a
+# whole-document program such as `.check_runs | length` prints one number per
+# page and every comparison below would silently fail on a commit with more
+# than one page. Emit one JSON line per item instead and slurp them afterwards:
+# that is correct for any number of pages. Commit statuses are normalized into
+# the check-run shape, pending ones as still running.
+runs=$(gh api --paginate "repos/$REPO/commits/$SHA/check-runs?per_page=100" \
+  --jq '.check_runs[] | {name, status, conclusion, url: .html_url} | tojson' 2>/dev/null) || {
   # An API failure is not evidence of anything. Saying NOT-YET keeps the caller
   # from reading a network blip as a clean bill of health.
   echo "NOT-YET  could not read check-runs for $REPO@${SHA:0:8} (API error or unknown sha)"
   exit 2
 }
+statuses=$(gh api --paginate "repos/$REPO/commits/$SHA/status?per_page=100" \
+  --jq '.statuses[] | {name: .context, status: (if .state == "pending" then "in_progress" else "completed" end), conclusion: (if .state == "pending" then null else .state end), url: .target_url} | tojson' 2>/dev/null) || {
+  echo "NOT-YET  could not read commit statuses for $REPO@${SHA:0:8} (API error or unknown sha)"
+  exit 2
+}
+checks=$(printf '%s\n%s\n' "$runs" "$statuses" | jq -s '.') || {
+  echo "NOT-YET  could not parse the check-runs and statuses for $REPO@${SHA:0:8}"
+  exit 2
+}
 
-total=$(printf '%s' "$runs" | jq '.check_runs | length')
+total=$(printf '%s' "$checks" | jq 'length')
 if [[ "$total" -eq 0 ]]; then
-  echo "NOT-YET  $REPO@${SHA:0:8} has no check-runs yet — the workflows have not been created."
+  echo "NOT-YET  $REPO@${SHA:0:8} has no check-runs or commit statuses yet — the workflows have not been created."
   echo "         An empty list is not evidence of success. Wait and re-run."
   exit 2
 fi
 
-pending=$(printf '%s' "$runs" | jq '[.check_runs[] | select(.status != "completed")] | length')
+pending=$(printf '%s' "$checks" | jq '[.[] | select(.status != "completed")] | length')
 if [[ "$pending" -gt 0 ]]; then
-  names=$(printf '%s' "$runs" | jq -r '[.check_runs[] | select(.status != "completed") | .name] | join(", ")')
-  echo "NOT-YET  $pending of $total check-run(s) still running on $REPO@${SHA:0:8}: $names"
+  names=$(printf '%s' "$checks" | jq -r '[.[] | select(.status != "completed") | .name] | join(", ")')
+  echo "NOT-YET  $pending of $total check(s) still running on $REPO@${SHA:0:8}: $names"
   exit 2
 fi
 
-# Only now is counting failures meaningful: every run completed, and there is at
-# least one of them.
-failed=$(printf '%s' "$runs" | jq '[.check_runs[] | select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral")] | length')
+# Only now is counting failures meaningful: everything completed, and there is
+# at least one of them. Required or not, a failure makes the commit red.
+bad='select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral")'
+failed=$(printf '%s' "$checks" | jq "[.[] | $bad] | length")
 if [[ "$failed" -gt 0 ]]; then
-  echo "RED      $failed of $total check-run(s) failed on $REPO@${SHA:0:8}:"
-  printf '%s' "$runs" | jq -r '.check_runs[] | select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral") | "           \(.conclusion // "?")  \(.name)  \(.html_url)"'
+  echo "RED      $failed of $total check(s) failed on $REPO@${SHA:0:8}:"
+  printf '%s' "$checks" | jq -r ".[] | $bad | \"           \\(.conclusion // \"?\")  \\(.name)  \\(.url // \"\")\""
   echo "         main is red and it is yours to fix immediately."
   exit 1
 fi
 
-echo "GREEN    all $total check-run(s) completed successfully on $REPO@${SHA:0:8}"
+echo "GREEN    all $total check(s) completed successfully on $REPO@${SHA:0:8}"
 exit 0

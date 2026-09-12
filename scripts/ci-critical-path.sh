@@ -118,7 +118,7 @@ if [ -n "$SHA" ] && [ "${#SHA}" -ne 40 ]; then
 fi
 
 if [ -n "$SHA" ]; then
-  RUN_IDS=$(gh api "repos/$REPO/actions/runs?head_sha=$SHA&per_page=100" \
+  RUN_IDS=$(gh api --paginate "repos/$REPO/actions/runs?head_sha=$SHA&per_page=100" \
     --jq '.workflow_runs[].id' 2>/dev/null)
   if [ -z "$RUN_IDS" ]; then
     echo "no workflow runs found for $REPO@${SHA:0:8}" >&2

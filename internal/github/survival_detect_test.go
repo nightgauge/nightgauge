@@ -13,7 +13,7 @@ import (
 type ghScenario struct {
 	commitsList string            // JSON array for the revert-scan commits call
 	headSHA     string            // resolved base HEAD sha (refSHA)
-	checkRuns   map[string]string // sha -> check-runs JSON ({"check_runs":[...]})
+	checkRuns   map[string]string // sha -> gh output: one JSON check-run per line, every page
 }
 
 func installGhStub(t *testing.T, sc ghScenario) {
@@ -25,11 +25,16 @@ func installGhStub(t *testing.T, sc ghScenario) {
 		joined := strings.Join(args, " ")
 		switch {
 		case strings.Contains(joined, "/check-runs"):
+			// #1681: a check-runs read without --paginate sees page 1 only.
+			// The stub refuses it outright rather than modelling the page.
+			if !containsArg(args, "--paginate") || !strings.Contains(joined, "per_page=100") {
+				return nil, fmt.Errorf("stub: check-runs read must be paginated at per_page=100: %s", joined)
+			}
 			sha := shaFromCheckRunsArgs(args)
 			if body, ok := sc.checkRuns[sha]; ok {
 				return []byte(body), nil
 			}
-			return []byte(`{"check_runs":[]}`), nil
+			return nil, nil
 		case containsArg(args, "GET"):
 			return []byte(sc.commitsList), nil
 		default: // refSHA: repos/o/r/commits/<ref> --jq .sha
@@ -50,8 +55,8 @@ func containsArg(args []string, want string) bool {
 func shaFromCheckRunsArgs(args []string) string {
 	for _, a := range args {
 		if strings.Contains(a, "/check-runs") {
-			// repos/o/r/commits/<sha>/check-runs
-			parts := strings.Split(a, "/")
+			// repos/o/r/commits/<sha>/check-runs?per_page=100
+			parts := strings.Split(strings.SplitN(a, "?", 2)[0], "/")
 			for i, p := range parts {
 				if p == "check-runs" && i > 0 {
 					return parts[i-1]
@@ -62,16 +67,13 @@ func shaFromCheckRunsArgs(args []string) string {
 	return ""
 }
 
+// checkRunsJSON renders what `gh api --paginate --jq '.check_runs[] | ... |
+// tojson'` prints: one compact JSON object per line, pages concatenated.
 func checkRunsJSON(runs ...[2]string) string {
 	var b strings.Builder
-	b.WriteString(`{"check_runs":[`)
-	for i, r := range runs {
-		if i > 0 {
-			b.WriteString(",")
-		}
-		fmt.Fprintf(&b, `{"name":%q,"status":"completed","conclusion":%q}`, r[0], r[1])
+	for _, r := range runs {
+		fmt.Fprintf(&b, "{\"name\":%q,\"status\":\"completed\",\"conclusion\":%q}\n", r[0], r[1])
 	}
-	b.WriteString("]}")
 	return b.String()
 }
 
@@ -166,7 +168,7 @@ func TestSurvivalDetector_NoBaselineNoBreakage(t *testing.T) {
 		commitsList: `[]`,
 		headSHA:     "headSHA222",
 		checkRuns: map[string]string{
-			"mergeSHA111": `{"check_runs":[]}`, // no green-at-merge baseline
+			"mergeSHA111": "", // no green-at-merge baseline
 			"headSHA222":  checkRunsJSON([2]string{"build", "failure"}),
 		},
 	})
@@ -185,5 +187,35 @@ func TestSurvivalDetector_MalformedRepo(t *testing.T) {
 	bad.Repo = "not-a-repo"
 	if _, err := NewSurvivalDetector().Observe(context.Background(), bad); err == nil {
 		t.Error("expected error on malformed repo slug")
+	}
+}
+
+// TestSurvivalDetector_BreakagePastTheFirstPage is the #1681 regression: the
+// check that broke is the 31st run on the head commit, past the 30-run first
+// page an un-paginated read returned. Every page's lines must be parsed.
+func TestSurvivalDetector_BreakagePastTheFirstPage(t *testing.T) {
+	var headRuns, mergeRuns [][2]string
+	for i := 1; i <= 30; i++ {
+		name := fmt.Sprintf("job-%02d", i)
+		headRuns = append(headRuns, [2]string{name, "success"})
+		mergeRuns = append(mergeRuns, [2]string{name, "success"})
+	}
+	headRuns = append(headRuns, [2]string{"late", "failure"})
+	mergeRuns = append(mergeRuns, [2]string{"late", "success"})
+
+	installGhStub(t, ghScenario{
+		commitsList: `[]`,
+		headSHA:     "headSHA222",
+		checkRuns: map[string]string{
+			"mergeSHA111": checkRunsJSON(mergeRuns...),
+			"headSHA222":  checkRunsJSON(headRuns...),
+		},
+	})
+	obs, err := NewSurvivalDetector().Observe(context.Background(), rec("mergeSHA111"))
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	if !obs.Broke || !strings.Contains(obs.BrokeDetail, "late") {
+		t.Errorf("a failure on page 2 must be attributed, got %+v", obs)
 	}
 }

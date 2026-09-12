@@ -48,7 +48,11 @@ export class EscapedDefectDetector {
    * Query GitHub Actions check runs for a merged PR's commit SHA and return
    * the names/output text of failing jobs.
    *
-   * Uses: `gh api /repos/{owner}/{repo}/commits/{sha}/check-runs`
+   * Uses: `gh api --paginate /repos/{owner}/{repo}/commits/{sha}/check-runs`.
+   * Every page is read (#1681): the endpoint returns 30 runs per page by
+   * default. `--paginate` runs the `--jq` program once per page, so each
+   * failing run is emitted as its own JSON line rather than as one array per
+   * page, which would not parse as a single document.
    *
    * @returns Array of failing job names (best-effort — empty when `gh` unavailable)
    */
@@ -60,17 +64,18 @@ export class EscapedDefectDetector {
     try {
       const { stdout } = await execFileAsync("gh", [
         "api",
-        `/repos/${owner}/${repo}/commits/${prSha}/check-runs`,
+        "--paginate",
+        `/repos/${owner}/${repo}/commits/${prSha}/check-runs?per_page=100`,
         "--jq",
-        '[.check_runs[] | select(.conclusion == "failure") | {name: .name, text: (.output.text // "")}]',
+        '.check_runs[] | select(.conclusion == "failure") | {name: .name, text: (.output.text // "")} | tojson',
       ]);
 
-      const raw = JSON.parse(stdout.trim()) as Array<{
-        name: string;
-        text: string;
-      }>;
-
-      return raw.map((job) => ({ name: job.name, outputText: job.text }));
+      return stdout
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+        .map((line) => JSON.parse(line) as { name: string; text: string })
+        .map((job) => ({ name: job.name, outputText: job.text }));
     } catch {
       // gh unavailable or API error — return empty, no throw
       return [];
