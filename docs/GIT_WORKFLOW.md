@@ -183,11 +183,11 @@ scripts/post-merge-check.sh <merge-sha>   # repo defaults to this checkout's ori
 
 It exits `0` GREEN / `1` RED / `2` NOT-YET, and only `0` is evidence:
 
-| Exit | Verdict | What to do                                                                                   |
-| ---- | ------- | -------------------------------------------------------------------------------------------- |
-| `0`  | GREEN   | Continue with the post-merge hook and cleanup.                                               |
-| `1`  | RED     | `main` is red and it is the merger's to fix now. Never re-run hoping for a better answer.    |
-| `2`  | NOT-YET | Nothing exists yet, something is still running, or the API was unreadable. Wait and re-run.  |
+| Exit | Verdict | What to do                                                                                  |
+| ---- | ------- | ------------------------------------------------------------------------------------------- |
+| `0`  | GREEN   | Continue with the post-merge hook and cleanup.                                              |
+| `1`  | RED     | `main` is red and it is the merger's to fix now. Never re-run hoping for a better answer.   |
+| `2`  | NOT-YET | Nothing exists yet, something is still running, or the API was unreadable. Wait and re-run. |
 
 Every check run **and** commit status on the merge commit counts, required or
 not: a failed optional check is `1`, and a running one is `2`. Required
