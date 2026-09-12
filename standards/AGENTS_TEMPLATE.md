@@ -1,54 +1,50 @@
 # AGENTS.md Template
 
-> This is a minimal template. For a comprehensive, customized AGENTS.md, use
-> [AI_SMART_SETUP.md](https://github.com/nightgauge/nightgauge/blob/main/AI_SMART_SETUP.md)
+> Keep this file concise. Put architecture, standards, procedures, and
+> explanations in `docs/`, then route agents to the relevant documents here.
 
-## Project Overview
+## Project scope
 
-[TEAM TO DOCUMENT: What does this project do?]
+[TEAM TO DOCUMENT: What does this repository own, and what is explicitly out
+of scope?]
 
-## Technology Stack
+Before substantive work, use `docs/AGENT_GUIDANCE.md` and `docs/README.md` to
+select the relevant documentation.
 
-- **Language**: [TEAM TO DOCUMENT]
-- **Framework**: [TEAM TO DOCUMENT]
-- **Database**: [TEAM TO DOCUMENT]
-- **Testing**: [TEAM TO DOCUMENT]
-
-## Quick Start
+## Commands
 
 ```bash
-# Install dependencies
+# Install
 [TEAM TO DOCUMENT]
 
-# Run development server
+# Focused test
 [TEAM TO DOCUMENT]
 
-# Run tests
+# Complete pre-push validation
 [TEAM TO DOCUMENT]
 ```
 
-## Project Structure
+## Non-obvious operating rules
 
-```text
-[TEAM TO DOCUMENT: Add your directory structure]
-```
+- [TEAM TO DOCUMENT: Rules an agent cannot infer from code]
+- [TEAM TO DOCUMENT: Safety or validation constraints that always apply]
+- Follow `docs/GIT_WORKFLOW.md` for branches, commits, pull requests, and merge
+  cleanup.
+- Follow `docs/CODE_STANDARDS.md` and `docs/TESTING.md` for implementation and
+  verification.
+- Follow `docs/SECURITY_AND_ERROR_HANDLING.md` for security requirements.
 
-## Code Standards
+## Knowledge
 
-See `docs/CODE_STANDARDS.md` or reference [Nightgauge code standards](https://github.com/nightgauge/nightgauge/blob/main/standards/code-standards.md).
+When pipeline context provides `knowledge_path`, read its `PRD.md` and
+`decisions.md` before implementation. See `docs/KNOWLEDGE_BASE.md` when that
+feature is enabled.
 
-## Security Requirements
+## Scoped instructions
 
-See `docs/SECURITY.md` or reference [Nightgauge security standards](https://github.com/nightgauge/nightgauge/blob/main/standards/security.md).
-
-## Key Patterns
-
-[TEAM TO DOCUMENT: Architecture patterns, coding patterns to follow]
-
-## What to Avoid
-
-[TEAM TO DOCUMENT: Anti-patterns, deprecated approaches, things not to do]
+Add nested `AGENTS.md` files only when a subtree needs portable instructions
+that do not apply to the entire repository. The closest file takes precedence.
 
 ---
 
-**Generated with** [Nightgauge](https://github.com/nightgauge/nightgauge)
+Generated with [Nightgauge](https://github.com/nightgauge/nightgauge).

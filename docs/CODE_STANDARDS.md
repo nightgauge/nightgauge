@@ -19,13 +19,13 @@ This repository primarily contains:
 
 ### Files
 
-| File Type     | Convention                        | Example                   |
-| ------------- | --------------------------------- | ------------------------- |
-| Commands      | `kebab-case.md`                   | `smart-setup.md`          |
-| Templates     | `SCREAMING_SNAKE_CASE.md`         | `AGENTS_TEMPLATE.md`      |
-| Manifests     | `plugin.json`, `marketplace.json` | Always these names        |
-| Documentation | `SCREAMING_SNAKE_CASE.md`         | `GETTING_STARTED.md`      |
-| Config files  | `kebab-case.ext`                  | `copilot-instructions.md` |
+| File Type     | Convention                        | Example              |
+| ------------- | --------------------------------- | -------------------- |
+| Commands      | `kebab-case.md`                   | `smart-setup.md`     |
+| Templates     | `SCREAMING_SNAKE_CASE.md`         | `AGENTS_TEMPLATE.md` |
+| Manifests     | `plugin.json`, `marketplace.json` | Always these names   |
+| Documentation | `SCREAMING_SNAKE_CASE.md`         | `GETTING_STARTED.md` |
+| Config files  | `kebab-case.ext`                  | `agent-guidance.md`  |
 
 ## Markdown Standards
 

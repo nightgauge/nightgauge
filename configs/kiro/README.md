@@ -133,12 +133,12 @@ globs:
 
 ## Kiro vs Other AI Tools
 
-| Feature         | Kiro              | Claude Code | Copilot                           |
-| --------------- | ----------------- | ----------- | --------------------------------- |
-| Steering files  | `.kiro/steering/` | `CLAUDE.md` | `.github/copilot-instructions.md` |
-| Skills location | `.kiro/skills/`   | Via plugin  | `.github/skills/`                 |
-| MCP support     | Yes               | Yes         | Limited                           |
-| Autonomous mode | Yes (Autopilot)   | Yes         | No                                |
+| Feature         | Kiro              | Claude Code | Copilot           |
+| --------------- | ----------------- | ----------- | ----------------- |
+| Steering files  | `.kiro/steering/` | `CLAUDE.md` | `AGENTS.md`       |
+| Skills location | `.kiro/skills/`   | Via plugin  | `.github/skills/` |
+| MCP support     | Yes               | Yes         | Limited           |
+| Autonomous mode | Yes (Autopilot)   | Yes         | No                |
 
 ## Related Resources
 

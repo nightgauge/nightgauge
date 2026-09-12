@@ -114,7 +114,9 @@ fi
 
 When `GREENFIELD=true`:
 
-1. Read CLAUDE.md and AGENTS.md for project conventions and tech stack.
+1. Read `AGENTS.md` for the tool-neutral project contract, then read
+   `docs/AGENT_GUIDANCE.md` and the relevant documents it routes to. Read a
+   tool-specific adapter such as `CLAUDE.md` only when running under that tool.
 2. Read `.nightgauge/config.yaml` for any configured patterns.
 3. Check existing code (if any) to infer emerging patterns.
 4. For each requirement, note whether it **establishes** a new pattern or

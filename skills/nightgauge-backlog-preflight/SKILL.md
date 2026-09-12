@@ -362,8 +362,8 @@ PYEOF
 
   if [ "$FOCUS" = "all" ] || [ "$FOCUS" = "greenfield" ]; then
     [ ! -f ".nightgauge/complexity-model.yaml" ] && GREENFIELD_WARNINGS+=("Missing complexity-model.yaml — run nightgauge outcome init")
-    [ ! -d "docs" ] && GREENFIELD_WARNINGS+=("Missing docs/ directory — feature-dev will use CLAUDE.md fallback for standards")
-    [ ! -f "docs/CODE_STANDARDS.md" ] && GREENFIELD_WARNINGS+=("Missing docs/CODE_STANDARDS.md — feature-dev will fall back to CLAUDE.md or language defaults")
+    [ ! -d "docs" ] && GREENFIELD_WARNINGS+=("Missing docs/ directory — feature-dev will use AGENTS.md fallback for standards")
+    [ ! -f "docs/CODE_STANDARDS.md" ] && GREENFIELD_WARNINGS+=("Missing docs/CODE_STANDARDS.md — feature-dev will fall back to AGENTS.md or language defaults")
     if [ ! -f "docs/SECURITY_AND_ERROR_HANDLING.md" ] && [ ! -f "docs/SECURITY.md" ]; then
       GREENFIELD_WARNINGS+=("Missing docs/SECURITY*.md — feature-dev will use security defaults")
     fi

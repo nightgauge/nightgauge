@@ -37,7 +37,7 @@ Complete reference for all Nightgauge skills — what they do, when to use them,
 | `nightgauge-docs-write`             | Documentation    | Write narrative documentation sections                                     | 1.1.0   | `/nightgauge:docs-write [options]`             |
 | `nightgauge-continuous-improvement` | Self-Improvement | Unified continuous improvement review                                      | 1.0.0   | `/nightgauge:continuous-improvement [options]` |
 | `pr-preflight`                      | Portable         | Universal PR pre-flight validation                                         | 1.1.0   | `/pr-preflight`                                |
-| `smart-setup`                       | Portable         | Make repository AI-ready                                                   | 4.7.1   | `/smart-setup`                                 |
+| `smart-setup`                       | Portable         | Make repository AI-ready                                                   | 4.8.0   | `/smart-setup`                                 |
 | `update-docs`                       | Portable         | Verify and update documentation                                            | 1.7.0   | `/update-docs [options]`                       |
 | `nightgauge-repo-init`              | Project Ops      | Prime repository for Nightgauge                                            | 1.3.1   | `/nightgauge:repo-init [options]`              |
 | `nightgauge-workspace-init`         | Project Ops      | Scaffold multi-repo workspace manifest                                     | 1.0.0   | `/nightgauge:workspace-init [options]`         |

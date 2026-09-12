@@ -69,6 +69,8 @@ REQUIRED_FILES=(
   packages/nightgauge-vscode/scripts/check-engine-types.mjs
   scripts/check-md-links.sh
   scripts/test-check-md-links.sh
+  scripts/check-agent-guidance.sh
+  scripts/test-agent-guidance-check.sh
   scripts/check-changelog.sh
   scripts/test-check-changelog.sh
   scripts/test-mirror-drift-gate.sh
@@ -564,6 +566,9 @@ run_step "@types/vscode <= engines.vscode" \
 #     no longer failing on a dead internal link.
 run_group "Link-check gate regression suite" bash scripts/test-check-md-links.sh
 run_group "Markdown link check" bash scripts/check-md-links.sh
+run_group "Agent-guidance gate regression suite" \
+  bash scripts/test-agent-guidance-check.sh
+run_group "Agent-guidance architecture" bash scripts/check-agent-guidance.sh
 
 # Changelog ↔ release contract (docs/GIT_WORKFLOW.md § Changelog): every
 # released tag has a section in CHANGELOG.md and the extension's changelog, and

@@ -10,6 +10,9 @@ and this project adheres to
 
 ### Changed
 
+- Generate `AGENTS.md` as the universal contract for every repository, keep
+  Claude and Copilot files as thin adapters, and store documentation routing in
+  `docs/AGENT_GUIDANCE.md` (#1604).
 - Migrate all direct `gh` invocations to `nightgauge forge` (#3363, Wave 4 of forge-abstraction epic #3349). Skill now works against GitLab as well as GitHub via the forge abstraction.
 
 ## [4.5.0] - 2026-03-07
