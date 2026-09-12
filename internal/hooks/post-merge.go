@@ -456,8 +456,8 @@ func verifyMain(ctx context.Context, input PostMergeInput, out PostMergeResult) 
 		fmt.Fprintf(os.Stderr, "Post-merge: %s is green at merge commit %s (%d checks, %d polls)\n",
 			out.BaseRef, shortSHA(out.MergedCommitSha), res.Total, res.Polls)
 	case MainChecksPending:
-		fmt.Fprintf(os.Stderr, "Post-merge: %s verification budget exhausted at merge commit %s — %d of %d checks still pending (not evidence of breakage)\n",
-			out.BaseRef, shortSHA(out.MergedCommitSha), res.Pending, res.Total)
+		fmt.Fprintf(os.Stderr, "Post-merge: %s verification budget exhausted at merge commit %s — %d of %d checks still pending (not evidence of breakage): %s\n",
+			out.BaseRef, shortSHA(out.MergedCommitSha), res.Pending, res.Total, strings.Join(res.Reasons, "; "))
 	case MainChecksNone:
 		fmt.Fprintf(os.Stderr, "Post-merge: no check runs appeared on merge commit %s within the grace — %s is NOT verified green\n",
 			shortSHA(out.MergedCommitSha), out.BaseRef)

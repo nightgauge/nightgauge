@@ -6977,10 +6977,12 @@ type checksCompleteResult struct {
 }
 
 // checksCompleteReader is what pollChecksComplete needs from the forge.
-// *github.CIService satisfies it; tests substitute a fake.
+// *github.CIService satisfies it; tests substitute a fake. GetCommitChecks is
+// the same reader the post-merge hook's main verification polls
+// (hooks.MainCheckReader), so the two cannot disagree about which contexts a
+// commit carries (#1674).
 type checksCompleteReader interface {
-	GetIndividualCheckRuns(ctx context.Context, owner, repo, ref string) ([]gh.CheckDetail, error)
-	GetCommitStatuses(ctx context.Context, owner, repo, ref string) ([]gh.CheckDetail, error)
+	GetCommitChecks(ctx context.Context, owner, repo, ref string) ([]gh.CheckDetail, error)
 	GetWorkflowRunsForRef(ctx context.Context, owner, repo, sha string) ([]gh.WorkflowRunSummary, error)
 }
 
@@ -7010,15 +7012,10 @@ func pollChecksComplete(ctx context.Context, reader checksCompleteReader, owner,
 
 	for poll := 1; ; poll++ {
 		res.Polls = poll
-		checks, err := reader.GetIndividualCheckRuns(ctx, owner, repo, sha)
+		checks, err := reader.GetCommitChecks(ctx, owner, repo, sha)
 		if err != nil {
-			return res, fmt.Errorf("fetch check runs: %w", err)
+			return res, err
 		}
-		statuses, err := reader.GetCommitStatuses(ctx, owner, repo, sha)
-		if err != nil {
-			return res, fmt.Errorf("fetch commit statuses: %w", err)
-		}
-		checks = append(checks, statuses...)
 
 		var runs []gh.WorkflowRunSummary
 		if !skipCrossCheck {
@@ -7028,7 +7025,7 @@ func pollChecksComplete(ctx context.Context, reader checksCompleteReader, owner,
 			runs, _ = reader.GetWorkflowRunsForRef(ctx, owner, repo, sha)
 		}
 
-		verdict, reasons := gh.EvaluateChecksCompleteCrossChecked(checks, requiredNames, runs)
+		verdict, reasons := gh.EvaluateCommitChecksCrossChecked(checks, requiredNames, runs)
 		res.Verdict, res.Reasons = verdict, reasons
 
 		confirmed := false
@@ -7056,8 +7053,13 @@ func pollChecksComplete(ctx context.Context, reader checksCompleteReader, owner,
 // owner/repo] [--branch <branch>] [--json]` — the #1540 shared completeness
 // verb: pr-merge and scripts/post-merge-check.sh both delegate to it (via the
 // binary-discovery cascade) instead of each hand-rolling the raw check-runs
-// idiom, so there is exactly one implementation of "are this SHA's checks
-// complete?" (github.EvaluateChecksCompleteCrossChecked) behind both callers.
+// idiom, so there is exactly one implementation of "did this SHA's CI go
+// green?" (github.EvaluateCommitChecks, cross-checked) behind both callers —
+// the same evaluation the post-merge hook applies to a merge commit (#1674).
+//
+// Every check run and commit status on the SHA counts: a failed optional check
+// is RED, and a still-running one is NOT-YET. Required contexts are resolved
+// from branch protection and rulesets and must additionally be present.
 //
 // Exit codes match post-merge-check.sh's existing contract so the script's
 // delegation is a drop-in: 0 GREEN, 1 RED, 2 NOT-YET.
@@ -7074,7 +7076,7 @@ func ciChecksCompleteCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:          "checks-complete <sha>",
-		Short:        "Answer \"are this SHA's checks complete?\" — NOT-YET when a required check is absent from the rollup",
+		Short:        "Answer \"did this SHA's CI go green?\" — every check run and status must pass; required ones must be present",
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		Example: `  nightgauge ci checks-complete abc1234 --repo nightgauge/nightgauge

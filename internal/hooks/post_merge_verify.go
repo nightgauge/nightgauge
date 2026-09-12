@@ -23,6 +23,11 @@ package hooks
 //	bad     == 0  — only then is a conclusion outside success / skipped /
 //	                neutral a failure, and only then is `main` red.
 //
+// The verdict itself comes from github.EvaluateCommitChecks over
+// github.CIService.GetCommitChecks — every check run and commit status on the
+// commit, every page — the same function and reader `nightgauge ci
+// checks-complete` uses, so the hook and the verb cannot disagree (#1674).
+//
 // The wait is bounded and the verdict vocabulary is closed. Budget exhaustion
 // with checks still pending is a distinct verdict, not a failure: still-pending
 // checks are not evidence of breakage, and a card raised on them would be noise
@@ -41,12 +46,18 @@ import (
 	gh "github.com/nightgauge/nightgauge/internal/github"
 )
 
-// MainCheckReader is what VerifyMergeCommit needs from the forge: the check runs
-// of one commit, and the names the branch requires so the verdict can say
-// whether the red is a fleet blocker or advisory. Implemented by
+// MainCheckReader is what VerifyMergeCommit needs from the forge: every check
+// context on one commit, and the names the branch requires so the verdict can
+// say whether the red is a fleet blocker or advisory. Implemented by
 // *github.CIService.
+//
+// GetCommitChecks is the same reader `nightgauge ci checks-complete` polls: all
+// check runs AND all commit-status contexts, every page of each (#1674, #1681).
+// A reader of check runs alone never sees a required context published as a
+// commit status (a CLA status, for one), so the presence assertion below held
+// the hook for its entire budget on a commit `ci checks-complete` called green.
 type MainCheckReader interface {
-	GetIndividualCheckRuns(ctx context.Context, owner, repo, ref string) ([]forgetypes.CheckDetail, error)
+	GetCommitChecks(ctx context.Context, owner, repo, ref string) ([]forgetypes.CheckDetail, error)
 	GetRequiredCheckNames(ctx context.Context, owner, repo, branch string) ([]string, error)
 }
 
@@ -179,6 +190,10 @@ type MainCheckResult struct {
 	Failing []FailingCheck `json:"failing,omitempty"`
 	// Polls is how many reads were made.
 	Polls int `json:"polls"`
+	// Reasons is the last poll's explanation from the shared evaluator
+	// (github.EvaluateCommitChecks): what is still running, which required
+	// context is absent, what failed. Empty on green.
+	Reasons []string `json:"reasons,omitempty"`
 	// Error is the read failure behind MainChecksError.
 	Error string `json:"error,omitempty"`
 }
@@ -254,52 +269,46 @@ func VerifyMergeCommit(ctx context.Context, reader MainCheckReader, owner, repo,
 		requiredNames = nil
 	}
 
-	var last []forgetypes.CheckDetail
 	for {
-		runs, err := reader.GetIndividualCheckRuns(ctx, owner, repo, sha)
+		runs, err := reader.GetCommitChecks(ctx, owner, repo, sha)
 		res.Polls++
 		if err != nil {
 			res.Verdict = MainChecksError
 			res.Error = err.Error()
 			return res
 		}
-		last = runs
 		total, pending, bad := threeNumbers(runs)
 		res.Total, res.Pending, res.Bad = total, pending, bad
 
-		switch {
-		case total == 0:
+		// The verdict is the same function `nightgauge ci checks-complete`
+		// applies to the same commit (#1674): every check run and commit
+		// status concluded and passing, and every required context PRESENT
+		// (#1540 — a required check absent from the rollup contributes to
+		// neither total nor pending, so the three numbers alone can read final
+		// while it is still in flight or published on the other surface).
+		verdict, reasons := gh.EvaluateCommitChecks(runs, requiredNames)
+		res.Reasons = reasons
+		if total == 0 {
 			if res.Polls >= gracePolls {
 				res.Verdict = MainChecksNone
 				return res
 			}
-		case pending > 0:
-			if res.Polls >= maxPolls {
-				res.Verdict = MainChecksPending
+		} else {
+			switch verdict {
+			case gh.ChecksComplete:
+				res.Verdict = MainChecksGreen
 				return res
-			}
-		default:
-			// total > 0 and pending == 0 over EVERY check on the rollup — but
-			// that is exactly the #1540 defect: a required check absent from
-			// the rollup never contributes to total/pending at all, so this
-			// point can be reached while a required job is still in flight,
-			// simply not reported. Assert its POSITIVE PRESENCE before
-			// trusting the three numbers as final.
-			if missing := gh.MissingRequiredChecks(last, requiredNames); len(missing) > 0 {
+			case gh.ChecksIncomplete:
+				res.Verdict = MainChecksRed
+				res.Failing = failingChecks(runs)
+				markRequired(res.Failing, requiredNames)
+				return res
+			default:
 				if res.Polls >= maxPolls {
 					res.Verdict = MainChecksPending
 					return res
 				}
-				break
 			}
-			// The numbers are final.
-			res.Failing = failingChecks(last)
-			res.Verdict = MainChecksGreen
-			if bad > 0 {
-				res.Verdict = MainChecksRed
-				markRequired(res.Failing, requiredNames)
-			}
-			return res
 		}
 
 		if res.Polls >= maxPolls {
@@ -314,8 +323,8 @@ func VerifyMergeCommit(ctx context.Context, reader MainCheckReader, owner, repo,
 			wait.progress("Post-merge: poll %d/%d — no check runs on %s yet",
 				res.Polls, maxPolls, shortSHA(sha))
 		} else {
-			wait.progress("Post-merge: poll %d/%d — %d of %d check(s) still running on %s",
-				res.Polls, maxPolls, pending, total, shortSHA(sha))
+			wait.progress("Post-merge: poll %d/%d — %d of %d check(s) still running on %s: %s",
+				res.Polls, maxPolls, pending, total, shortSHA(sha), strings.Join(reasons, "; "))
 		}
 		if err := wait.sleep(ctx, interval); err != nil {
 			res.Verdict = MainChecksError
@@ -399,12 +408,14 @@ func markRequired(failing []FailingCheck, required []string) {
 	if len(failing) == 0 || len(required) == 0 {
 		return
 	}
+	// Case-insensitive, trimmed: the same name match github.EvaluateCommitChecks
+	// uses, so the card's "(required)" and the verdict cannot disagree.
 	isRequired := make(map[string]bool, len(required))
 	for _, name := range required {
-		isRequired[name] = true
+		isRequired[strings.ToLower(strings.TrimSpace(name))] = true
 	}
 	for i := range failing {
-		failing[i].Required = isRequired[failing[i].Name]
+		failing[i].Required = isRequired[strings.ToLower(strings.TrimSpace(failing[i].Name))]
 	}
 }
 

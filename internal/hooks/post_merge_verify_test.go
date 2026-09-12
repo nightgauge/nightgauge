@@ -25,7 +25,7 @@ type scriptedChecks struct {
 	refs     []string
 }
 
-func (s *scriptedChecks) GetIndividualCheckRuns(_ context.Context, _, _, ref string) ([]forgetypes.CheckDetail, error) {
+func (s *scriptedChecks) GetCommitChecks(_ context.Context, _, _, ref string) ([]forgetypes.CheckDetail, error) {
 	i := s.polls
 	s.polls++
 	s.refs = append(s.refs, ref)
@@ -625,9 +625,9 @@ type orderedReader struct {
 	onRead func()
 }
 
-func (o *orderedReader) GetIndividualCheckRuns(ctx context.Context, owner, repo, ref string) ([]forgetypes.CheckDetail, error) {
+func (o *orderedReader) GetCommitChecks(ctx context.Context, owner, repo, ref string) ([]forgetypes.CheckDetail, error) {
 	o.onRead()
-	return o.inner.GetIndividualCheckRuns(ctx, owner, repo, ref)
+	return o.inner.GetCommitChecks(ctx, owner, repo, ref)
 }
 
 func (o *orderedReader) GetRequiredCheckNames(ctx context.Context, owner, repo, branch string) ([]string, error) {
@@ -706,5 +706,33 @@ func TestVerifyMergeCommit_NoPerPollNoiseWhenItConcludesImmediately(t *testing.T
 		if strings.Contains(l, "poll ") {
 			t.Errorf("a wait that concluded on its first read narrated a poll: %q", l)
 		}
+	}
+}
+
+// TestVerifyMergeCommit_RequiredStatusOnlyContextIsGreenOnFirstPoll is the
+// #1674 regression at the hook's own seam: the branch requires `cla`, which
+// GitHub publishes as a commit status, not a check run. The reader returns
+// both surfaces (GetCommitChecks), so the presence assertion is satisfied and
+// the full default budget is never spent — any sleep fails the test.
+func TestVerifyMergeCommit_RequiredStatusOnlyContextIsGreenOnFirstPoll(t *testing.T) {
+	reader := &scriptedChecks{
+		frames: [][]forgetypes.CheckDetail{{
+			run("build", "COMPLETED", "SUCCESS"),
+			run("lint", "COMPLETED", "SUCCESS"),
+			{Name: "cla", Status: "COMPLETED", Conclusion: "SUCCESS"}, // a commit status
+		}},
+		required: []string{"build", "cla"},
+	}
+	wait := DefaultMainCheckWait()
+	wait.Progress = func(string) {}
+	wait.Sleep = func(context.Context, time.Duration) error {
+		t.Fatal("the hook slept: a required status-only context was not counted")
+		return nil
+	}
+
+	res := VerifyMergeCommit(context.Background(), reader, "o", "r", "main", "abc1234", wait)
+
+	if res.Verdict != MainChecksGreen || res.Polls != 1 {
+		t.Fatalf("verdict = %q after %d poll(s) (%v), want green on the first", res.Verdict, res.Polls, res.Reasons)
 	}
 }

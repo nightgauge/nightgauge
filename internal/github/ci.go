@@ -196,87 +196,98 @@ func (s *CIService) getProtectionRequiredChecks(ctx context.Context, owner, repo
 func (s *CIService) getRulesetRequiredChecks(ctx context.Context, owner, repo, branch string) ([]string, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/rules/branches/%s", owner, repo, branch)
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-
-	resp, err := s.client.http.Do(req)
+	// The rules list is paginated like every other REST list (#1681): a
+	// required_status_checks rule past the first page would otherwise drop
+	// its contexts from the required set.
+	var rules []branchRule
+	err := s.getAllPages(ctx, url, func(resp *http.Response, body []byte) error {
+		if resp.StatusCode == 404 || resp.StatusCode == 403 {
+			return nil
+		}
+		return fmt.Errorf("GitHub rules API returned %d: %s", resp.StatusCode, string(body))
+	}, func(body io.Reader) error {
+		var page []branchRule
+		if err := json.NewDecoder(body).Decode(&page); err != nil {
+			return fmt.Errorf("decode branch rules: %w", err)
+		}
+		rules = append(rules, page...)
+		return nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("fetch branch rules: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == 404 || resp.StatusCode == 403 {
-		return nil, nil
-	}
-
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("GitHub rules API returned %d: %s", resp.StatusCode, string(body))
-	}
-
-	var rules []branchRule
-	if err := json.NewDecoder(resp.Body).Decode(&rules); err != nil {
-		return nil, fmt.Errorf("decode branch rules: %w", err)
 	}
 
 	return requiredCheckContexts(rules), nil
 }
 
-// GetIndividualCheckRuns returns the list of check runs for a given ref via GitHub REST API.
+// GetIndividualCheckRuns returns EVERY check run for a ref via the GitHub REST
+// API, following the Link header across pages (#1681). The endpoint returns 30
+// runs per page by default; reading only the first page made a required check
+// that landed on page 2 permanently "absent from the rollup".
 func (s *CIService) GetIndividualCheckRuns(ctx context.Context, owner, repo, ref string) ([]CheckDetail, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/commits/%s/check-runs", owner, repo, ref)
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-
-	resp, err := s.client.http.Do(req)
+	var checks []CheckDetail
+	err := s.getAllPages(ctx, url, checkRunsStatusError, func(body io.Reader) error {
+		var page struct {
+			CheckRuns []struct {
+				Name        string `json:"name"`
+				Status      string `json:"status"`
+				Conclusion  string `json:"conclusion"`
+				CompletedAt string `json:"completed_at"`
+				DetailsURL  string `json:"details_url"`
+				HTMLURL     string `json:"html_url"`
+				HeadSHA     string `json:"head_sha"`
+			} `json:"check_runs"`
+		}
+		if err := json.NewDecoder(body).Decode(&page); err != nil {
+			return fmt.Errorf("decode check runs: %w", err)
+		}
+		for _, run := range page.CheckRuns {
+			url := run.HTMLURL
+			if url == "" {
+				url = run.DetailsURL
+			}
+			checks = append(checks, CheckDetail{
+				Name:        run.Name,
+				Status:      strings.ToUpper(run.Status),
+				Conclusion:  strings.ToUpper(run.Conclusion),
+				CompletedAt: run.CompletedAt,
+				DetailsURL:  url,
+				HeadSHA:     run.HeadSHA,
+			})
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("fetch check runs: %w", err)
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, checkRunsStatusError(resp, body)
-	}
-
-	var result struct {
-		CheckRuns []struct {
-			Name        string `json:"name"`
-			Status      string `json:"status"`
-			Conclusion  string `json:"conclusion"`
-			CompletedAt string `json:"completed_at"`
-			DetailsURL  string `json:"details_url"`
-			HTMLURL     string `json:"html_url"`
-			HeadSHA     string `json:"head_sha"`
-		} `json:"check_runs"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode check runs: %w", err)
-	}
-
-	checks := make([]CheckDetail, 0, len(result.CheckRuns))
-	for _, run := range result.CheckRuns {
-		url := run.HTMLURL
-		if url == "" {
-			url = run.DetailsURL
-		}
-		checks = append(checks, CheckDetail{
-			Name:        run.Name,
-			Status:      strings.ToUpper(run.Status),
-			Conclusion:  strings.ToUpper(run.Conclusion),
-			CompletedAt: run.CompletedAt,
-			DetailsURL:  url,
-			HeadSHA:     run.HeadSHA,
-		})
+	if checks == nil {
+		checks = []CheckDetail{}
 	}
 	return checks, nil
+}
+
+// GetCommitChecks returns every check context GitHub attaches to a commit:
+// all check runs followed by all combined-status contexts, each read across
+// every page.
+//
+// This is the single reader behind both `nightgauge ci checks-complete` and
+// the post-merge hook's verification of the merge commit (#1674). A branch's
+// required contexts may be published through either surface — a CLA status is
+// a commit status, not a check run — so a reader of only one surface finds a
+// required context permanently absent, and the two callers disagreed about the
+// same commit.
+func (s *CIService) GetCommitChecks(ctx context.Context, owner, repo, ref string) ([]CheckDetail, error) {
+	runs, err := s.GetIndividualCheckRuns(ctx, owner, repo, ref)
+	if err != nil {
+		return nil, err
+	}
+	statuses, err := s.GetCommitStatuses(ctx, owner, repo, ref)
+	if err != nil {
+		return nil, err
+	}
+	return append(runs, statuses...), nil
 }
 
 // checkRunsStatusError translates a non-200 from the check-runs endpoint into

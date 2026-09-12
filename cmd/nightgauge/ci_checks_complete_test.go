@@ -7,6 +7,7 @@ import (
 	"time"
 
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/hooks"
 )
 
 // fakeChecksCompleteReader answers pollChecksComplete from a script, the same
@@ -20,33 +21,22 @@ type fakeChecksCompleteReader struct {
 	polls        int
 }
 
-func (f *fakeChecksCompleteReader) GetCommitStatuses(_ context.Context, _, _, _ string) ([]gh.CheckDetail, error) {
-	if len(f.statusFrames) == 0 {
-		return nil, nil
-	}
-	i := f.polls - 1
-	if i < 0 {
-		i = 0
-	}
-	if i >= len(f.statusFrames) {
-		i = len(f.statusFrames) - 1
-	}
-	return f.statusFrames[i], nil
-}
-
-func (f *fakeChecksCompleteReader) GetIndividualCheckRuns(_ context.Context, _, _, _ string) ([]gh.CheckDetail, error) {
+// GetCommitChecks mirrors *github.CIService.GetCommitChecks: check runs
+// followed by commit statuses, one frame of each per poll.
+func (f *fakeChecksCompleteReader) GetCommitChecks(_ context.Context, _, _, _ string) ([]gh.CheckDetail, error) {
 	i := f.polls
 	f.polls++
 	if err, ok := f.errAt[i]; ok {
 		return nil, err
 	}
-	if len(f.checkFrames) == 0 {
-		return nil, nil
+	var out []gh.CheckDetail
+	if len(f.checkFrames) > 0 {
+		out = append(out, f.checkFrames[min(i, len(f.checkFrames)-1)]...)
 	}
-	if i >= len(f.checkFrames) {
-		i = len(f.checkFrames) - 1
+	if len(f.statusFrames) > 0 {
+		out = append(out, f.statusFrames[min(i, len(f.statusFrames)-1)]...)
 	}
-	return f.checkFrames[i], nil
+	return out, nil
 }
 
 func (f *fakeChecksCompleteReader) GetWorkflowRunsForRef(_ context.Context, _, _, _ string) ([]gh.WorkflowRunSummary, error) {
@@ -204,5 +194,95 @@ func TestPollChecksComplete_ReadErrorIsReturned(t *testing.T) {
 		nil, 3, time.Millisecond, true, noSleepCmd, nil)
 	if err == nil {
 		t.Fatal("want an error from the failed read")
+	}
+}
+
+// TestPollChecksComplete_EveryContextCounts pins the post-merge contract that
+// scripts/post-merge-check.sh delegates here for: a failed OPTIONAL check is
+// RED, a running optional check is NOT-YET, and required-ness never hides
+// either. Before this, a required-only evaluation reported GREEN for both.
+func TestPollChecksComplete_EveryContextCounts(t *testing.T) {
+	cases := []struct {
+		name   string
+		checks []gh.CheckDetail
+		want   gh.ChecksCompleteVerdict
+	}{
+		{"optional failed is red", []gh.CheckDetail{
+			detail("build", "COMPLETED", "SUCCESS"), detail("advisory", "COMPLETED", "FAILURE")}, gh.ChecksIncomplete},
+		{"optional in progress is not-yet", []gh.CheckDetail{
+			detail("build", "COMPLETED", "SUCCESS"), detail("nightly", "IN_PROGRESS", "")}, gh.ChecksNotYet},
+		{"all green is green", []gh.CheckDetail{
+			detail("build", "COMPLETED", "SUCCESS"), detail("advisory", "COMPLETED", "NEUTRAL")}, gh.ChecksComplete},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reader := &fakeChecksCompleteReader{
+				checkFrames:  [][]gh.CheckDetail{tc.checks},
+				statusFrames: [][]gh.CheckDetail{{detail("cla", "COMPLETED", "SUCCESS")}},
+			}
+			res, err := pollChecksComplete(context.Background(), reader, "o", "r", "abc123", "main",
+				[]string{"build", "cla"}, 3, time.Millisecond, true, noSleepCmd, nil)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if res.Verdict != tc.want {
+				t.Fatalf("Verdict = %q (%v), want %q", res.Verdict, res.Reasons, tc.want)
+			}
+		})
+	}
+}
+
+// hookReader adapts the fake to hooks.MainCheckReader, so the hook and the
+// verb read the very same frames.
+type hookReader struct {
+	*fakeChecksCompleteReader
+	required []string
+}
+
+func (h hookReader) GetRequiredCheckNames(context.Context, string, string, string) ([]string, error) {
+	return h.required, nil
+}
+
+// TestChecksCompleteAndHookAgree is #1674's third acceptance criterion: the
+// hook and `ci checks-complete` return the same verdict for the same commit,
+// including a required context that exists only as a commit status.
+func TestChecksCompleteAndHookAgree(t *testing.T) {
+	required := []string{"build", "cla"}
+	cases := []struct {
+		name     string
+		checks   []gh.CheckDetail
+		statuses []gh.CheckDetail
+		verb     gh.ChecksCompleteVerdict
+		hook     hooks.MainCheckVerdict
+	}{
+		{"required status-only context", []gh.CheckDetail{detail("build", "COMPLETED", "SUCCESS")},
+			[]gh.CheckDetail{detail("cla", "COMPLETED", "SUCCESS")}, gh.ChecksComplete, hooks.MainChecksGreen},
+		{"failed optional check", []gh.CheckDetail{detail("build", "COMPLETED", "SUCCESS"), detail("advisory", "COMPLETED", "FAILURE")},
+			[]gh.CheckDetail{detail("cla", "COMPLETED", "SUCCESS")}, gh.ChecksIncomplete, hooks.MainChecksRed},
+		{"running optional check", []gh.CheckDetail{detail("build", "COMPLETED", "SUCCESS"), detail("nightly", "IN_PROGRESS", "")},
+			[]gh.CheckDetail{detail("cla", "COMPLETED", "SUCCESS")}, gh.ChecksNotYet, hooks.MainChecksPending},
+		{"absent required status", []gh.CheckDetail{detail("build", "COMPLETED", "SUCCESS")},
+			nil, gh.ChecksNotYet, hooks.MainChecksPending},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			frames := func() *fakeChecksCompleteReader {
+				r := &fakeChecksCompleteReader{checkFrames: [][]gh.CheckDetail{tc.checks}}
+				if tc.statuses != nil {
+					r.statusFrames = [][]gh.CheckDetail{tc.statuses}
+				}
+				return r
+			}
+			res, err := pollChecksComplete(context.Background(), frames(), "o", "r", "abc123", "main",
+				required, 1, time.Millisecond, true, noSleepCmd, nil)
+			if err != nil {
+				t.Fatalf("pollChecksComplete: %v", err)
+			}
+			hookRes := hooks.VerifyMergeCommit(context.Background(), hookReader{frames(), required},
+				"o", "r", "main", "abc123", hooks.MainCheckWait{Progress: func(string) {}})
+			if res.Verdict != tc.verb || hookRes.Verdict != tc.hook {
+				t.Fatalf("verb = %q, hook = %q; want %q and %q", res.Verdict, hookRes.Verdict, tc.verb, tc.hook)
+			}
+		})
 	}
 }

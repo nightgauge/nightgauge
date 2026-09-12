@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"strings"
 )
 
@@ -128,55 +127,46 @@ func EvaluateChecksComplete(checks []CheckDetail, requiredNames []string) (Check
 // GetCommitStatuses returns the combined legacy Commit Status contexts for a
 // ref. GitHub rulesets may require contexts published through either this API
 // or the Check Runs API; omitting this surface makes a successful status such
-// as `cla` look permanently absent.
+// as `cla` look permanently absent. The combined status is paginated like any
+// REST list (30 contexts per page by default), so every page is read (#1681).
 func (s *CIService) GetCommitStatuses(ctx context.Context, owner, repo, ref string) ([]CheckDetail, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/commits/%s/status", owner, repo, ref)
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
 
-	resp, err := s.client.http.Do(req)
+	statuses := []CheckDetail{}
+	err := s.getAllPages(ctx, url, checkRunsStatusError, func(body io.Reader) error {
+		var page struct {
+			SHA      string `json:"sha"`
+			Statuses []struct {
+				Context   string `json:"context"`
+				State     string `json:"state"`
+				UpdatedAt string `json:"updated_at"`
+				TargetURL string `json:"target_url"`
+			} `json:"statuses"`
+		}
+		if err := json.NewDecoder(body).Decode(&page); err != nil {
+			return fmt.Errorf("decode commit statuses: %w", err)
+		}
+		for _, status := range page.Statuses {
+			state := strings.ToUpper(strings.TrimSpace(status.State))
+			detail := CheckDetail{
+				Name:        status.Context,
+				Status:      "COMPLETED",
+				Conclusion:  state,
+				CompletedAt: status.UpdatedAt,
+				DetailsURL:  status.TargetURL,
+				HeadSHA:     page.SHA,
+			}
+			if state == "PENDING" {
+				detail.Status = "IN_PROGRESS"
+				detail.Conclusion = ""
+				detail.CompletedAt = ""
+			}
+			statuses = append(statuses, detail)
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("fetch commit statuses: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, checkRunsStatusError(resp, body)
-	}
-
-	var result struct {
-		SHA      string `json:"sha"`
-		Statuses []struct {
-			Context   string `json:"context"`
-			State     string `json:"state"`
-			UpdatedAt string `json:"updated_at"`
-			TargetURL string `json:"target_url"`
-		} `json:"statuses"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode commit statuses: %w", err)
-	}
-
-	statuses := make([]CheckDetail, 0, len(result.Statuses))
-	for _, status := range result.Statuses {
-		state := strings.ToUpper(strings.TrimSpace(status.State))
-		detail := CheckDetail{
-			Name:        status.Context,
-			Status:      "COMPLETED",
-			Conclusion:  state,
-			CompletedAt: status.UpdatedAt,
-			DetailsURL:  status.TargetURL,
-			HeadSHA:     result.SHA,
-		}
-		if state == "PENDING" {
-			detail.Status = "IN_PROGRESS"
-			detail.Conclusion = ""
-			detail.CompletedAt = ""
-		}
-		statuses = append(statuses, detail)
 	}
 	return statuses, nil
 }
@@ -223,49 +213,38 @@ type WorkflowRunSummary struct {
 
 // GetWorkflowRunsForRef returns the workflow runs attached to sha via the
 // actions/runs REST endpoint, for cross-checking against the check-runs
-// rollup (CrossCheckWorkflowRuns).
+// rollup (CrossCheckWorkflowRuns). Every page is read (#1681): a run still in
+// flight on page 2 is exactly the disagreement the cross-check exists to see.
 func (s *CIService) GetWorkflowRunsForRef(ctx context.Context, owner, repo, sha string) ([]WorkflowRunSummary, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/actions/runs?head_sha=%s", owner, repo, sha)
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-
-	resp, err := s.client.http.Do(req)
+	runs := []WorkflowRunSummary{}
+	err := s.getAllPages(ctx, url, checkRunsStatusError, func(body io.Reader) error {
+		var page struct {
+			WorkflowRuns []struct {
+				ID         int64  `json:"id"`
+				Name       string `json:"name"`
+				Status     string `json:"status"`
+				Conclusion string `json:"conclusion"`
+				HeadSHA    string `json:"head_sha"`
+			} `json:"workflow_runs"`
+		}
+		if err := json.NewDecoder(body).Decode(&page); err != nil {
+			return fmt.Errorf("decode workflow runs: %w", err)
+		}
+		for _, r := range page.WorkflowRuns {
+			runs = append(runs, WorkflowRunSummary{
+				ID:         r.ID,
+				Name:       r.Name,
+				Status:     strings.ToUpper(r.Status),
+				Conclusion: strings.ToUpper(r.Conclusion),
+				HeadSHA:    r.HeadSHA,
+			})
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("fetch workflow runs: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, checkRunsStatusError(resp, body)
-	}
-
-	var result struct {
-		WorkflowRuns []struct {
-			ID         int64  `json:"id"`
-			Name       string `json:"name"`
-			Status     string `json:"status"`
-			Conclusion string `json:"conclusion"`
-			HeadSHA    string `json:"head_sha"`
-		} `json:"workflow_runs"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode workflow runs: %w", err)
-	}
-
-	runs := make([]WorkflowRunSummary, 0, len(result.WorkflowRuns))
-	for _, r := range result.WorkflowRuns {
-		runs = append(runs, WorkflowRunSummary{
-			ID:         r.ID,
-			Name:       r.Name,
-			Status:     strings.ToUpper(r.Status),
-			Conclusion: strings.ToUpper(r.Conclusion),
-			HeadSHA:    r.HeadSHA,
-		})
 	}
 	return runs, nil
 }
@@ -283,7 +262,7 @@ func (s *CIService) GetWorkflowRunsForRef(ctx context.Context, owner, repo, sha 
 //
 // runs empty/nil means no per-run data was available (endpoint unreachable,
 // rate limited, insufficient scope) — this is a deliberately separable check
-// (see EvaluateChecksCompleteCrossChecked): a caller without actions/runs
+// (see EvaluateCommitChecksCrossChecked): a caller without actions/runs
 // access still gets the required-name guarantee and simply skips this layer,
 // rather than being blocked on an auxiliary lookup.
 func CrossCheckWorkflowRuns(checks []CheckDetail, runs []WorkflowRunSummary) (agree bool, reasons []string) {
@@ -314,15 +293,87 @@ func CrossCheckWorkflowRuns(checks []CheckDetail, runs []WorkflowRunSummary) (ag
 	return true, nil
 }
 
-// EvaluateChecksCompleteCrossChecked layers the per-run cross-check on top of
-// EvaluateChecksComplete: the cross-check only runs once the required-name
-// assertion would otherwise return a terminal-looking verdict (ChecksComplete
-// or ChecksIncomplete) — a check that is still legitimately pending does not
-// need a second outbound API call to tell it so. runs may be nil when the
-// caller has no access to actions/runs; CrossCheckWorkflowRuns then leaves the
-// required-name-only verdict untouched.
-func EvaluateChecksCompleteCrossChecked(checks []CheckDetail, requiredNames []string, runs []WorkflowRunSummary) (ChecksCompleteVerdict, []string) {
-	verdict, reasons := EvaluateChecksComplete(checks, requiredNames)
+// EvaluateCommitChecks answers "did this commit's own CI go green?" — the
+// contract of `nightgauge ci checks-complete`, scripts/post-merge-check.sh and
+// the post-merge hook's verification of a merge commit, which all evaluate a
+// commit through this one function.
+//
+// Every context on the commit counts, required or not: a check run or commit
+// status that concluded outside success / skipped / neutral makes the commit
+// red, because "main's own run is green" means all of it. Required-ness only
+// adds a presence assertion (#1540): a required name with no observation at
+// all is not-yet, never "nothing to fail". EvaluateChecksComplete, by
+// contrast, is the required-only PR merge gate, where a failing advisory check
+// must not block a merge (#1248).
+//
+// The order is the post-merge contract's:
+//
+//	empty            -> not-yet (checks have not been created yet)
+//	any pending      -> not-yet (a queued or running check has no conclusion)
+//	required missing -> not-yet (absent is not done)
+//	any failed       -> red
+//	otherwise        -> green
+//
+// A failure already observed while other checks still run is named in the
+// not-yet reasons, so it is visible before the verdict can be final.
+func EvaluateCommitChecks(checks []CheckDetail, requiredNames []string) (ChecksCompleteVerdict, []string) {
+	if len(checks) == 0 {
+		return ChecksNotYet, []string{"no checks present on the commit yet"}
+	}
+
+	required := make(map[string]bool, len(requiredNames))
+	for _, name := range requiredNames {
+		required[strings.ToLower(strings.TrimSpace(name))] = true
+	}
+	label := func(name string) string {
+		if required[strings.ToLower(strings.TrimSpace(name))] {
+			return name + " (required)"
+		}
+		return name
+	}
+
+	var pending, failed []string
+	seenFailed := make(map[string]bool)
+	for _, c := range checks {
+		if !isChecksCompleteConcluded(c) {
+			pending = append(pending, label(c.Name))
+			continue
+		}
+		if !passingCheckConclusions[strings.ToUpper(strings.TrimSpace(c.Conclusion))] && !seenFailed[c.Name] {
+			seenFailed[c.Name] = true
+			failed = append(failed, fmt.Sprintf("%s: %s", label(c.Name), strings.ToLower(strings.TrimSpace(c.Conclusion))))
+		}
+	}
+	missing := MissingRequiredChecks(checks, requiredNames)
+
+	var reasons []string
+	if len(pending) > 0 {
+		reasons = append(reasons, fmt.Sprintf("check(s) still running: %s", strings.Join(pending, ", ")))
+	}
+	if len(missing) > 0 {
+		reasons = append(reasons, fmt.Sprintf("required check(s) absent from the commit: %s", strings.Join(missing, ", ")))
+	}
+	if len(failed) > 0 {
+		reasons = append(reasons, fmt.Sprintf("check(s) failed: %s", strings.Join(failed, ", ")))
+	}
+	switch {
+	case len(pending) > 0 || len(missing) > 0:
+		return ChecksNotYet, reasons
+	case len(failed) > 0:
+		return ChecksIncomplete, reasons
+	default:
+		return ChecksComplete, nil
+	}
+}
+
+// EvaluateCommitChecksCrossChecked layers the per-run cross-check on top of
+// EvaluateCommitChecks: the cross-check only runs once the commit would
+// otherwise read terminal (ChecksComplete or ChecksIncomplete) — a check that
+// is still legitimately pending does not need a second outbound API call to
+// tell it so. runs may be nil when the caller has no access to actions/runs;
+// CrossCheckWorkflowRuns then leaves the verdict untouched.
+func EvaluateCommitChecksCrossChecked(checks []CheckDetail, requiredNames []string, runs []WorkflowRunSummary) (ChecksCompleteVerdict, []string) {
+	verdict, reasons := EvaluateCommitChecks(checks, requiredNames)
 	if verdict == ChecksNotYet {
 		return verdict, reasons
 	}

@@ -58,6 +58,20 @@ changelog, and the release workflow refuses a tag that does not.
   index link check ignores links shown in code, and a nested `AGENTS.md` counts
   as listed only when its whole path appears, not the tail of a longer one
   (issue 1676)
+- Check-run, commit-status, workflow-run and branch-rule reads now follow
+  every page instead of stopping at GitHub's first 30 results. A required
+  check on page 2 was never observed, so `nightgauge ci checks-complete` and
+  `scripts/post-merge-check.sh` answered NOT-YET forever and survival detection
+  could miss a failure on `main`. The `post-merge-check.sh` fallback also no
+  longer reports a false GREEN on a commit with more than one page (#1681)
+- `nightgauge hook post-merge` no longer waits out its whole budget when a
+  required context is a commit status, such as a CLA status. The hook and
+  `nightgauge ci checks-complete` now read both GitHub status surfaces through
+  one reader and reach one verdict for the same commit (#1674)
+- `nightgauge ci checks-complete` and `scripts/post-merge-check.sh` now report
+  RED when any check run or commit status on the SHA failed, and NOT-YET while
+  any is still running, required or not. They previously evaluated required
+  checks only and could report GREEN over a failed optional check
 
 ### Removed
 

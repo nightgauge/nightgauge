@@ -31,27 +31,75 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# stub_gh <payload-json> — install a fake `gh` that prints payload for any
-# api call. An empty payload makes the fake exit non-zero, standing in for an
-# API failure or an unknown sha.
+# stub_gh <check-runs-page>... [-- <status-page>...] — install a fake `gh`
+# that serves the given pages of the check-runs and combined-status endpoints
+# the way the real one does: without `--paginate` only page 1 is returned, and
+# with `--jq` the program runs once PER PAGE (raw strings, as gh prints them).
+# That per-page behaviour is what made a whole-document jq program report a
+# false GREEN on a commit with more than one page (#1681), so the fake applies
+# the script's real jq programs rather than returning pre-filtered output.
+# Omitted status pages mean "no commit statuses". An empty first argument
+# makes the fake exit non-zero, standing in for an API failure or unknown sha.
 stub_gh() {
-  local payload="$1"
   [ -n "$FAKE_BIN" ] && rm -rf "$FAKE_BIN"
   FAKE_BIN=$(mktemp -d)
-  if [ -z "$payload" ]; then
-    cat >"$FAKE_BIN/gh" <<'EOF'
-#!/usr/bin/env bash
-exit 1
-EOF
-  else
-    {
-      echo '#!/usr/bin/env bash'
-      echo "cat <<'PAYLOAD_EOF'"
-      printf '%s\n' "$payload"
-      echo 'PAYLOAD_EOF'
-    } >"$FAKE_BIN/gh"
+  if [ $# -eq 0 ] || [ -z "$1" ]; then
+    printf '#!/usr/bin/env bash\nexit 1\n' >"$FAKE_BIN/gh"
+    chmod +x "$FAKE_BIN/gh"
+    return
   fi
+  mkdir -p "$FAKE_BIN/pages"
+  local surface=check-runs n=0 page
+  for page in "$@"; do
+    if [ "$page" = "--" ]; then
+      surface=status
+      n=0
+      continue
+    fi
+    n=$((n + 1))
+    printf '%s\n' "$page" >"$FAKE_BIN/pages/$surface.$n.json"
+  done
+  [ -e "$FAKE_BIN/pages/status.1.json" ] || echo '{"statuses": []}' >"$FAKE_BIN/pages/status.1.json"
+  {
+    echo '#!/usr/bin/env bash'
+    echo "pages='$FAKE_BIN/pages'"
+    cat <<'GH_STUB'
+paginate=0 expr="" endpoint=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+  --paginate) paginate=1 ;;
+  --jq)
+    expr="$2"
+    shift
+    ;;
+  */check-runs*) endpoint=check-runs ;;
+  */status*) endpoint=status ;;
+  esac
+  shift
+done
+[ -n "$endpoint" ] || exit 1
+n=1
+while [ -e "$pages/$endpoint.$n.json" ]; do
+  if [ -n "$expr" ]; then
+    jq -r "$expr" "$pages/$endpoint.$n.json" || exit 1
+  else
+    cat "$pages/$endpoint.$n.json"
+  fi
+  [ "$paginate" -eq 1 ] || break
+  n=$((n + 1))
+done
+GH_STUB
+  } >"$FAKE_BIN/gh"
   chmod +x "$FAKE_BIN/gh"
+}
+
+# success_runs <count> — a check-runs page of <count> completed, successful runs.
+success_runs() {
+  local i out=""
+  for ((i = 1; i <= $1; i++)); do
+    out+="${out:+,}{\"name\": \"job-$i\", \"status\": \"completed\", \"conclusion\": \"success\"}"
+  done
+  printf '{"check_runs": [%s]}' "$out"
 }
 
 # expect <name> <want-rc> <want-substring>
@@ -94,7 +142,7 @@ expect() {
 # catch a red main reported green precisely when run promptly, which is exactly
 # when an agent runs it.
 stub_gh '{"check_runs": []}'
-expect "an empty check-run list is NOT-YET, never green" 2 "no check-runs yet"
+expect "an empty check-run list is NOT-YET, never green" 2 "no check-runs or commit statuses yet"
 
 # (b) The other direction. A run still going has conclusion null, which the old
 # idiom counted as a failure, so a healthy merge briefly read RED — which is how
@@ -150,6 +198,38 @@ stub_gh '{"check_runs": [
   {"name": "e2e", "status": "completed", "conclusion": "cancelled", "html_url": "https://example.invalid/run/2"}
 ]}'
 expect "a cancelled run is RED" 1 "cancelled"
+
+# (h0) #1681: every page is read. A failure or a running check on page 2 is
+# the same verdict it would be on page 1 — the old whole-document jq program
+# printed one count per page and fell through to GREEN.
+stub_gh "$(success_runs 30)" '{"check_runs": [
+  {"name": "late", "status": "completed", "conclusion": "failure", "html_url": "https://example.invalid/run/3"}
+]}'
+expect "a failure on page 2 is RED" 1 "late"
+stub_gh "$(success_runs 30)" '{"check_runs": [
+  {"name": "late", "status": "in_progress", "conclusion": null}
+]}'
+expect "a running check on page 2 is NOT-YET" 2 "late"
+stub_gh "$(success_runs 30)" "$(success_runs 5)"
+expect "two all-green pages are GREEN and counted in full" 0 "all 35 check(s)"
+
+# (h1) Commit statuses are the other GitHub status surface (a CLA status, for
+# one). They count exactly like check-runs: a failed status is RED, a pending
+# one is NOT-YET, a successful one is counted.
+stub_gh '{"check_runs": [
+  {"name": "build", "status": "completed", "conclusion": "success"}
+]}' -- '{"statuses": [{"context": "cla", "state": "failure", "target_url": "https://example.invalid/cla"}]}'
+expect "a failed commit status is RED" 1 "cla"
+stub_gh '{"check_runs": [
+  {"name": "build", "status": "completed", "conclusion": "success"}
+]}' -- '{"statuses": [{"context": "cla", "state": "pending"}]}'
+expect "a pending commit status is NOT-YET" 2 "cla"
+stub_gh '{"check_runs": [
+  {"name": "build", "status": "completed", "conclusion": "success"}
+]}' -- '{"statuses": [{"context": "cla", "state": "success"}]}'
+expect "a successful commit status is counted" 0 "all 2 check(s)"
+stub_gh '{"check_runs": []}' -- '{"statuses": [{"context": "cla", "state": "success"}]}'
+expect "a status-only commit is GREEN, not empty" 0 "all 1 check(s)"
 
 # (h) #1540: when a `nightgauge` binary CAN be resolved, the script must
 # delegate to it entirely and never touch its own gh/jq fallback logic — the

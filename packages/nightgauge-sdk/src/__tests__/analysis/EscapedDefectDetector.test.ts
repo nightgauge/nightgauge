@@ -20,7 +20,8 @@ import { EscapedDefectDetector } from "../../analysis/EscapedDefectDetector.js";
 // ── Helpers ────────────────────────────────────────────────────────
 
 /**
- * Configure execFile mock to simulate a successful `gh api` response.
+ * Configure execFile mock to simulate a successful `gh api --paginate --jq
+ * '... | tojson'` response: one JSON object per line, pages concatenated.
  * The mock uses the promisify custom symbol pattern so promisify() works.
  */
 function mockGhSuccess(jobs: Array<{ name: string; text: string }>) {
@@ -31,7 +32,8 @@ function mockGhSuccess(jobs: Array<{ name: string; text: string }>) {
       _args: unknown[],
       callback: (err: Error | null, result: { stdout: string; stderr: string }) => void
     ) => {
-      callback(null, { stdout: JSON.stringify(jobs) + "\n", stderr: "" });
+      const stdout = jobs.map((job) => JSON.stringify(job) + "\n").join("");
+      callback(null, { stdout, stderr: "" });
     }
   );
 }
@@ -83,6 +85,35 @@ describe("EscapedDefectDetector", () => {
       const files = detector.parseTestFilesFromOutput(output);
       const fooCount = files.filter((f) => f.endsWith("foo.test.ts")).length;
       expect(fooCount).toBe(1);
+    });
+  });
+
+  describe("fetchFailingCIJobs()", () => {
+    it("reads every page of check-runs and parses one failing run per line (#1681)", async () => {
+      const execFileMock = childProcess.execFile as unknown as Mock;
+      execFileMock.mockImplementation(
+        (
+          _cmd: string,
+          _args: unknown[],
+          callback: (err: Error | null, result: { stdout: string; stderr: string }) => void
+        ) => {
+          // Page 1's failure, then page 2's — what --paginate prints.
+          const stdout =
+            JSON.stringify({ name: "unit", text: "FAIL a.test.ts" }) +
+            "\n" +
+            JSON.stringify({ name: "late", text: "FAIL b.test.ts" }) +
+            "\n";
+          callback(null, { stdout, stderr: "" });
+        }
+      );
+
+      const detector = new EscapedDefectDetector("/tmp/gaps.jsonl");
+      const jobs = await detector.fetchFailingCIJobs("nightgauge", "nightgauge", "abc123");
+
+      expect(jobs.map((job) => job.name)).toEqual(["unit", "late"]);
+      const args = execFileMock.mock.calls[0][1] as string[];
+      expect(args).toContain("--paginate");
+      expect(args.some((arg) => arg.includes("check-runs?per_page=100"))).toBe(true);
     });
   });
 

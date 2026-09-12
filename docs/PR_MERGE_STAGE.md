@@ -485,8 +485,8 @@ tests, merge skew, environment differences) were invisible to the pipeline, and
 a red `main` was found by an operator reading the Actions tab.
 
 `hooks.EvaluatePostMerge` now ends with `hooks.VerifyMergeCommit`: a bounded poll
-of the **merge commit's own check runs** on the base branch, evaluated in the
-operator's three-number order —
+of **every check context on the merge commit** — all check runs and all commit
+statuses, every page of each — evaluated in the operator's three-number order —
 
 1. `total > 0` — an **empty** check-runs list is _never_ green. GitHub creates
    check runs seconds after a push, so an empty list right after a merge means
@@ -512,6 +512,18 @@ rollup (`internal/github.MissingRequiredChecks`, the same primitive
 check missing from the response holds the verdict at `pending`, exactly like
 a check still `in_progress`, regardless of what the three numbers say about
 whatever the rollup did return.
+
+**The hook and `nightgauge ci checks-complete` are one implementation
+(#1674, #1681).** Both read the commit through
+`internal/github.CIService.GetCommitChecks` and decide through
+`internal/github.EvaluateCommitChecks`. A required context can be published on
+either GitHub status surface — a CLA status is a commit status, not a check
+run — and a commit can carry more than one page of either. A reader of check
+runs alone, or of the first page alone, found such a required context
+permanently absent, so the hook waited out its whole budget on a commit
+`checks-complete` called green. `checks-complete` additionally cross-checks
+the per-SHA workflow runs; the hook does not, so a workflow waiting on a manual
+approval cannot hold it.
 
 The verdict vocabulary is closed — `green` | `red` | `pending` | `no_checks` |
 `error` | `skipped` — and only `red` is a failure. Budget exhaustion with checks

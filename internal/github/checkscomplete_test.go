@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -162,7 +163,7 @@ func TestEvaluateChecksComplete_CrossCheckDisagreementIsNotYet(t *testing.T) {
 	runs := []WorkflowRunSummary{
 		{ID: 1, Name: "lint", Status: "IN_PROGRESS"},
 	}
-	verdict, reasons := EvaluateChecksCompleteCrossChecked(checks, []string{"lint"}, runs)
+	verdict, reasons := EvaluateCommitChecksCrossChecked(checks, []string{"lint"}, runs)
 	if verdict != ChecksNotYet {
 		t.Fatalf("verdict = %q, want %q — the rollup and actions/runs disagree", verdict, ChecksNotYet)
 	}
@@ -178,7 +179,7 @@ func TestEvaluateChecksComplete_CrossCheckAgreementStaysGreen(t *testing.T) {
 	runs := []WorkflowRunSummary{
 		{ID: 1, Name: "lint", Status: "COMPLETED", Conclusion: "SUCCESS"},
 	}
-	verdict, _ := EvaluateChecksCompleteCrossChecked(checks, []string{"lint"}, runs)
+	verdict, _ := EvaluateCommitChecksCrossChecked(checks, []string{"lint"}, runs)
 	if verdict != ChecksComplete {
 		t.Fatalf("verdict = %q, want %q", verdict, ChecksComplete)
 	}
@@ -190,7 +191,7 @@ func TestEvaluateChecksComplete_CrossCheckSkippedWhenRunsUnavailable(t *testing.
 	checks := []CheckDetail{
 		{Name: "lint", Status: "COMPLETED", Conclusion: "SUCCESS"},
 	}
-	verdict, _ := EvaluateChecksCompleteCrossChecked(checks, []string{"lint"}, nil)
+	verdict, _ := EvaluateCommitChecksCrossChecked(checks, []string{"lint"}, nil)
 	if verdict != ChecksComplete {
 		t.Fatalf("verdict = %q, want %q — nil runs must not block the verdict", verdict, ChecksComplete)
 	}
@@ -206,7 +207,7 @@ func TestEvaluateChecksComplete_CrossCheckNotConsultedWhilePending(t *testing.T)
 	// Deliberately nil: if the cross-check were consulted with pending
 	// verdicts, a nil `runs` would need special-casing. It must not be
 	// reached at all.
-	verdict, _ := EvaluateChecksCompleteCrossChecked(checks, []string{"lint"}, nil)
+	verdict, _ := EvaluateCommitChecksCrossChecked(checks, []string{"lint"}, nil)
 	if verdict != ChecksNotYet {
 		t.Fatalf("verdict = %q, want %q", verdict, ChecksNotYet)
 	}
@@ -216,5 +217,57 @@ func TestCrossCheckWorkflowRuns_NoRunsAgreesByDefault(t *testing.T) {
 	agree, reasons := CrossCheckWorkflowRuns(nil, nil)
 	if !agree || reasons != nil {
 		t.Errorf("agree=%v reasons=%v, want true/nil when no run data is available", agree, reasons)
+	}
+}
+
+// TestEvaluateCommitChecks_EveryContextCounts pins the post-merge contract:
+// every check run and commit status counts, required or not, and required
+// contexts must additionally be present.
+func TestEvaluateCommitChecks_EveryContextCounts(t *testing.T) {
+	ok := func(name string) CheckDetail {
+		return CheckDetail{Name: name, Status: "COMPLETED", Conclusion: "SUCCESS"}
+	}
+	done := func(name, conclusion string) CheckDetail {
+		return CheckDetail{Name: name, Status: "COMPLETED", Conclusion: conclusion}
+	}
+	running := func(name string) CheckDetail { return CheckDetail{Name: name, Status: "IN_PROGRESS"} }
+
+	cases := []struct {
+		name     string
+		checks   []CheckDetail
+		required []string
+		want     ChecksCompleteVerdict
+		reason   string
+	}{
+		{"empty is not-yet", nil, []string{"build"}, ChecksNotYet, "no checks"},
+		{"all green is green", []CheckDetail{ok("build"), ok("lint")}, []string{"build"}, ChecksComplete, ""},
+		{"skipped and neutral pass", []CheckDetail{ok("build"), done("opt", "SKIPPED"), done("adv", "NEUTRAL")}, []string{"build"}, ChecksComplete, ""},
+		{"failed optional check is red", []CheckDetail{ok("build"), done("advisory", "FAILURE")}, []string{"build"}, ChecksIncomplete, "advisory: failure"},
+		{"running optional check is not-yet", []CheckDetail{ok("build"), running("nightly")}, []string{"build"}, ChecksNotYet, "nightly"},
+		{"required status-only context is counted", []CheckDetail{ok("build"), ok("cla")}, []string{"build", "cla"}, ChecksComplete, ""},
+		{"absent required context is not-yet", []CheckDetail{ok("build")}, []string{"build", "cla"}, ChecksNotYet, "cla"},
+		{"failed required status is red and labelled", []CheckDetail{ok("build"), done("cla", "ERROR")}, []string{"build", "cla"}, ChecksIncomplete, "cla (required): error"},
+		{"pending wins over an observed failure", []CheckDetail{done("lint", "FAILURE"), running("build")}, nil, ChecksNotYet, "lint: failure"},
+	}
+	for _, conclusion := range []string{"CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE"} {
+		cases = append(cases, struct {
+			name     string
+			checks   []CheckDetail
+			required []string
+			want     ChecksCompleteVerdict
+			reason   string
+		}{"optional " + conclusion + " is red", []CheckDetail{ok("build"), done("opt", conclusion)}, []string{"build"}, ChecksIncomplete, "opt"})
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			verdict, reasons := EvaluateCommitChecks(tc.checks, tc.required)
+			if verdict != tc.want {
+				t.Fatalf("verdict = %q (%v), want %q", verdict, reasons, tc.want)
+			}
+			if tc.reason != "" && !strings.Contains(strings.Join(reasons, "; "), tc.reason) {
+				t.Errorf("reasons = %v, want one containing %q", reasons, tc.reason)
+			}
+		})
 	}
 }

@@ -184,22 +184,32 @@ type checkRun struct {
 	Conclusion string `json:"conclusion"`
 }
 
-// checkRuns fetches the check-runs for a commit SHA.
+// checkRuns fetches EVERY check-run for a commit SHA (#1681). `gh api
+// --paginate --jq` runs the jq program once per page, so a whole-document
+// program would print one JSON document per page — and a single-page read saw
+// only the first 30 runs, missing a failure on page 2. Each run is emitted as
+// its own JSON line instead, which is correct for any number of pages.
 func (d *SurvivalDetector) checkRuns(ctx context.Context, owner, repo, sha string) ([]checkRun, error) {
-	out, err := survivalExecGh(ctx, "api",
-		fmt.Sprintf("repos/%s/%s/commits/%s/check-runs", owner, repo, sha),
+	out, err := survivalExecGh(ctx, "api", "--paginate",
+		fmt.Sprintf("repos/%s/%s/commits/%s/check-runs?per_page=%d", owner, repo, sha, restListPerPage),
 		"-H", "Accept: application/vnd.github+json",
-		"--jq", "{check_runs: [.check_runs[] | {name, status, conclusion}]}")
+		"--jq", ".check_runs[] | {name, status, conclusion} | tojson")
 	if err != nil {
 		return nil, fmt.Errorf("survival detect: check-runs for %s: %w", shortSHA(sha), err)
 	}
-	var resp struct {
-		CheckRuns []checkRun `json:"check_runs"`
+	var runs []checkRun
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var run checkRun
+		if jsonErr := json.Unmarshal([]byte(line), &run); jsonErr != nil {
+			return nil, fmt.Errorf("survival detect: parse check-runs: %w", jsonErr)
+		}
+		runs = append(runs, run)
 	}
-	if jsonErr := json.Unmarshal(out, &resp); jsonErr != nil {
-		return nil, fmt.Errorf("survival detect: parse check-runs: %w", jsonErr)
-	}
-	return resp.CheckRuns, nil
+	return runs, nil
 }
 
 func splitSurvivalRepo(full string) (owner, repo string, ok bool) {
