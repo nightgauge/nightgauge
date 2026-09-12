@@ -10,6 +10,7 @@ import (
 	"time"
 
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/intelligence/survival"
 )
 
@@ -36,6 +37,14 @@ import (
 // "the issue is closed on the forge" answer silently changes a run's terminal
 // board status. A test that reaches gh must say what the forge answered.
 func TestMain(m *testing.M) {
+	// The scheduler under test runs real git (commits, worktree operations)
+	// through plain exec.Command, which never sees gittest.Env(). Without the
+	// process-wide disarm, one of those commits can fork a detached
+	// `gc --auto` that is still writing into a fixture repository when
+	// t.TempDir cleanup runs, failing a passing test with "directory not
+	// empty" (#680, #1293). Observed on
+	// TestScheduler_NonTerminalReconcile_OwnRunPrOpen_FailurePreserved in CI.
+	gittest.IsolateProcess()
 	reconcileExecGh = refuseUnstubbedGh
 	finalizeDueSurvivalRecords = refuseUnstubbedSurvivalSweep
 	code := m.Run()
