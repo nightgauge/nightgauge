@@ -36,7 +36,7 @@ changelog, and the release workflow refuses a tag that does not.
   parsed, with titles and angle brackets removed from the destination; the docs
   index link check ignores links shown in code, and a nested `AGENTS.md` counts
   as listed only when its whole path appears, not the tail of a longer one
-  (#1676)
+  (issue 1676)
 
 ### Removed
 
