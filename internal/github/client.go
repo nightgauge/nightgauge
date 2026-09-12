@@ -471,6 +471,20 @@ func NewClientWithURL(token, graphqlURL string) *Client {
 	return c
 }
 
+// NewClientWithHTTPClient creates a client for api.github.com over a
+// caller-supplied http.Client. Use in tests only: the transport routes
+// requests to a mock server, or fails them, without touching any global.
+func NewClientWithHTTPClient(httpClient *http.Client) *Client {
+	c := &Client{
+		http:       httpClient,
+		limiter:    rate.NewLimiter(rate.Every(time.Second), 5),
+		graphqlURL: "https://api.github.com/graphql",
+	}
+	c.installHeaderInterceptor()
+	c.gql = graphql.NewClient(c.graphqlURL, c.http)
+	return c
+}
+
 // WithRateLimitTracker attaches a SharedRateLimitTracker to the client so that
 // (a) every query/mutate consults it before dispatching, returning
 // ErrRateLimitGated when remaining < floor and we're inside the reset window,

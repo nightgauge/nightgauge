@@ -526,7 +526,10 @@ the per-SHA workflow runs; the hook does not, so a workflow waiting on a manual
 approval cannot hold it.
 
 The verdict vocabulary is closed — `green` | `red` | `pending` | `no_checks` |
-`error` | `skipped` — and only `red` is a failure. Budget exhaustion with checks
+`error` | `skipped` — and only `red` is a failure. `error` means the checks
+could not be read (authentication, network, rate limit, 5xx, an unparseable
+response): the hook reports that it could not verify the branch, never that
+it is red — the same class `checks-complete` exits `2` for. Budget exhaustion with checks
 still running is `pending`: still-pending checks are not evidence of breakage,
 and a card raised on them would be noise that trains operators to wait cards
 out. The hook stays non-blocking and exits 0 whatever the verdict.

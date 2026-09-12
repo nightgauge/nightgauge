@@ -462,8 +462,12 @@ func verifyMain(ctx context.Context, input PostMergeInput, out PostMergeResult) 
 		fmt.Fprintf(os.Stderr, "Post-merge: no check runs appeared on merge commit %s within the grace — %s is NOT verified green\n",
 			shortSHA(out.MergedCommitSha), out.BaseRef)
 	case MainChecksError:
-		fmt.Fprintf(os.Stderr, "Warning: post-merge: could not read check runs for merge commit %s: %s\n",
-			shortSHA(out.MergedCommitSha), res.Error)
+		// A measurement failure, never a verdict (#1691): the same class
+		// `nightgauge ci checks-complete` exits 2 for. Say so, so it is not
+		// read as a red main.
+		fmt.Fprintf(os.Stderr, "Warning: post-merge: could not verify %s at merge commit %s — the checks could not be read: %s. "+
+			"This is not a red verdict; %s is NOT verified. Re-run the verification once the forge is readable\n",
+			out.BaseRef, shortSHA(out.MergedCommitSha), res.Error, out.BaseRef)
 	}
 	return &res
 }

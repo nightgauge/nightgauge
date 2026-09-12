@@ -72,6 +72,14 @@ changelog, and the release workflow refuses a tag that does not.
   RED when any check run or commit status on the SHA failed, and NOT-YET while
   any is still running, required or not. They previously evaluated required
   checks only and could report GREEN over a failed optional check
+- `nightgauge ci checks-complete`, and so `scripts/post-merge-check.sh`, no
+  longer reports a failure to measure as a red commit. Exit 1 now means a
+  completed check failed and nothing else; a token-resolution failure, an
+  authentication error, a network error, a rate limit, a 5xx, an unparseable
+  response or a bad argument exits 2 with a `could not run: <reason>` line
+  instead of sending the operator to fix a `main` that may be green. The
+  post-merge hook likewise says it could not verify the branch, not that it is
+  red (#1691)
 
 ### Removed
 

@@ -4733,6 +4733,12 @@ Two rules follow directly from that:
   NOT-YET when one has not appeared or either surface is unavailable. The
   post-merge hook evaluates a merge commit through the same function.
 
+  Exit codes: `0` GREEN, `1` RED, `2` NOT-YET. Exit `1` means a completed
+  check run or commit status failed, and nothing else. An error that prevents
+  measuring — token resolution, authentication, a network error, a rate
+  limit, a 5xx, an unparseable response, or a bad argument — exits `2` with a
+  `could not run: <reason>` line, because it says nothing about the commit.
+
 Before a bulk read, check what it would cost against what is left this hour:
 `nightgauge api-usage --budget` reports the remaining GraphQL budget for the
 current hour and prices a full board read against it, entirely from the local
