@@ -1037,6 +1037,54 @@ func TestGetIssuesByNumbersWithoutRelations(t *testing.T) {
 	}
 }
 
+// TestBatchIssueReadsWaitOnRateLimitGate holds the aliased batch read to the
+// rate-limit floor gate that GetIssue's first request passes through. The
+// dependency graph's per-issue body fallback uses the batch read, so without
+// the gate a failed bulk fetch below the floor sent one request per node from
+// the reserved budget. A fail-fast client below the floor sends nothing.
+func TestBatchIssueReadsWaitOnRateLimitGate(t *testing.T) {
+	reads := []struct {
+		name string
+		run  func(ctx context.Context, svc *IssueService) (any, error)
+	}{
+		{"GetIssuesByNumbers", func(ctx context.Context, svc *IssueService) (any, error) {
+			return svc.GetIssuesByNumbers(ctx, "acme", "widgets", []int{700, 701})
+		}},
+		{"GetIssuesByNumbersWithoutRelations", func(ctx context.Context, svc *IssueService) (any, error) {
+			return svc.GetIssuesByNumbersWithoutRelations(ctx, "acme", "widgets", []int{700, 701})
+		}},
+		{"GetIssue", func(ctx context.Context, svc *IssueService) (any, error) {
+			return svc.GetIssue(ctx, "acme", "widgets", 700)
+		}},
+	}
+	for _, r := range reads {
+		t.Run(r.name, func(t *testing.T) {
+			t.Setenv(rateLimitFloorEnv, "100")
+			f := newRelationForge(t)
+			f.issue(700, "OPEN")
+			f.issue(701, "CLOSED")
+			tr := NewSharedRateLimitTracker(filepath.Join(t.TempDir(), "rate-limit.json"))
+			if err := tr.Set("alice", &RateLimitInfo{
+				Remaining: 5, Limit: 5000, ResetAt: time.Now().Add(time.Hour).Unix(),
+			}); err != nil {
+				t.Fatalf("seed tracker: %v", err)
+			}
+			svc := NewIssueService(f.client().WithRateLimitTracker(tr, "alice"))
+
+			res, err := r.run(context.Background(), svc)
+			if !errors.Is(err, ErrRateLimitGated) {
+				t.Fatalf("err = %v, want ErrRateLimitGated", err)
+			}
+			if v := reflect.ValueOf(res); v.IsValid() && !v.IsNil() {
+				t.Fatalf("returned %+v alongside a gated read", res)
+			}
+			if got := len(f.answered()); got != 0 {
+				t.Fatalf("requests = %d, want 0 below the floor", got)
+			}
+		})
+	}
+}
+
 // TestRelationPageSelectionsMatchStructs pins the follow-up selections to the
 // structs the first page decodes into: the GraphQL client renders
 // subIssuePage and blockingPage exactly as the constants read, so a field

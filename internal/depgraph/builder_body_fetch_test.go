@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/forge"
 	gh "github.com/nightgauge/nightgauge/internal/github"
@@ -97,5 +99,54 @@ func TestBuildGraphWithBoards_BodyFetchSkipsRelationships(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("edges = %+v, want the body-declared O/a#10 -> O/a#20", g.Edges)
+	}
+}
+
+// TestBuildGraphWithBoards_BodyFetchHonorsRateLimitFloor: when the bulk body
+// fetch fails, the graph falls back to one body read per node. Below the
+// shared tracker's rate-limit floor both the bulk read and every fallback read
+// must stop at the gate, so a failing forge is not sent one request per node
+// from the reserved budget. The fake forge fails every request with a 502.
+func TestBuildGraphWithBoards_BodyFetchHonorsRateLimitFloor(t *testing.T) {
+	t.Setenv("NIGHTGAUGE_GITHUB_RATELIMIT_FLOOR", "100")
+	var (
+		mu       sync.Mutex
+		requests int
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		requests++
+		mu.Unlock()
+		http.Error(w, "bad gateway", http.StatusBadGateway)
+	}))
+	t.Cleanup(srv.Close)
+
+	tr := gh.NewSharedRateLimitTracker(filepath.Join(t.TempDir(), "rate-limit.json"))
+	if err := tr.Set("alice", &gh.RateLimitInfo{
+		Remaining: 5, Limit: 5000, ResetAt: time.Now().Add(time.Hour).Unix(),
+	}); err != nil {
+		t.Fatalf("seed tracker: %v", err)
+	}
+	client := gh.NewClientWithURL("test-token", srv.URL).WithRateLimitTracker(tr, "alice")
+
+	board := staticBoard{items: []types.BoardItem{
+		{Number: 10, Title: "Issue 10", State: "OPEN", Repo: "O/a"},
+		{Number: 20, Title: "Issue 20", State: "OPEN", Repo: "O/a"},
+		{Number: 30, Title: "Issue 30", State: "OPEN", Repo: "O/a"},
+	}}
+	g, err := BuildGraphWithBoards(context.Background(), client,
+		func(RepoConfig) forge.BoardService { return board },
+		[]RepoConfig{{Owner: "O", Name: "a", Project: 1}}, nil)
+	if err != nil {
+		t.Fatalf("BuildGraphWithBoards: %v", err)
+	}
+	if len(g.Nodes) != 3 {
+		t.Fatalf("nodes = %d, want the 3 board items", len(g.Nodes))
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if requests != 0 {
+		t.Fatalf("body fetch sent %d requests below the rate-limit floor, want 0", requests)
 	}
 }

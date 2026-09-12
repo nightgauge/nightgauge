@@ -91,8 +91,10 @@ changelog, and the release workflow refuses a tag that does not.
   as the first page does. A list that cannot be read in full is an error, not
   a short list: epic enqueue, wave planning and the dependency gate stop
   instead of treating the issue as unblocked. Blocker-state refreshes and the
-  dependency graph's body fetch no longer read these lists at all.
-  `epic validate` also prints the number of sub-issues checked when it finds
+  dependency graph's body fetch no longer read these lists at all. The batch
+  issue read that `epic validate`, the scheduler and the dependency graph use
+  now waits on the rate-limit floor too, so a failed body fetch below the
+  floor no longer falls back to one request per issue. `epic validate` also prints the number of sub-issues checked when it finds
   gaps (#1682)
 
 ### Removed
