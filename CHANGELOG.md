@@ -51,9 +51,6 @@ changelog, and the release workflow refuses a tag that does not.
   a pull request whose head still carries it (issue 1675)
 - Steering summaries no longer collapse to a document's title when its first
   heading is followed directly by a subsection (issue 1675)
-
-### Fixed
-
 - `scripts/check-agent-guidance.sh` no longer reads Markdown link text in the
   routing table as a path, so a link such as `[sub/thing](../sub/x.md)` passes
   instead of failing as an unresolved `[sub/thing`. Whole links and images are

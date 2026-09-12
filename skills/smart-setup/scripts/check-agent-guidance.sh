@@ -212,6 +212,52 @@ join_rel() {
   if [ -z "$1" ]; then printf '%s\n' "$2"; else printf '%s/%s\n' "$1" "$2"; fi
 }
 
+# POSIX awk functions (program text, never data) prepended to every awk program
+# that reads Markdown links. md_link(s) finds the leftmost whole inline link or
+# image, [text](dest) or ![alt](dest), whose text holds no brackets. It sets
+# md_start and md_len to the entire link, so callers remove all of it and never
+# tokenise link text, and md_dest to the destination with any title and angle
+# brackets removed. It returns 0 when s holds no such link.
+MD_LINK_AWK='
+function md_trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
+function md_link(s,    lnk, p, d, e) {
+  if (!match(s, /!?\[[^][]*\]\([^)]*\)/)) return 0
+  md_start = RSTART; md_len = RLENGTH
+  lnk = substr(s, RSTART, RLENGTH)
+  p = index(lnk, "](")
+  d = md_trim(substr(lnk, p + 2, length(lnk) - p - 2))
+  if (substr(d, 1, 1) == "<") {
+    e = index(d, ">")
+    if (e > 0) d = substr(d, 2, e - 2)
+  } else {
+    sub(/[[:space:]].*$/, "", d)
+  }
+  md_dest = d
+  return 1
+}
+'
+
+# path_listed <root-relative path> <file>: the path occurs in the file as a
+# whole path, optionally prefixed by ./, and not as the tail or prefix of a
+# longer one (pkg/AGENTS.md is not listed by mypkg/AGENTS.md or
+# lib/pkg/AGENTS.md).
+path_listed() {
+  P="$1" LC_ALL=C awk '
+    BEGIN { p = ENVIRON["P"]; L = length(p) }
+    {
+      s = $0
+      while ((i = index(s, p)) > 0) {
+        pre = substr(s, 1, i - 1)
+        post = substr(s, i + L, 1)
+        if ((pre !~ /[[:alnum:]_.\/-]$/ || pre ~ /(^|[^[:alnum:]_.\/-])\.\/$/) &&
+          post !~ /^[[:alnum:]_\/-]/) { found = 1; exit }
+        s = substr(s, i + 1)
+      }
+    }
+    END { exit found ? 0 : 1 }
+  ' "$2"
+}
+
 # ---------------------------------------------------------------------------
 # Inventory of candidate files (tracked plus untracked-but-not-ignored), as a
 # newline-separated list. Names containing a newline are refused as data we
@@ -361,8 +407,7 @@ else
     # the routing file) and "R<TAB>path" for bare paths (relative to the root).
     # A line "NOTABLE" means no table with a path column was found.
     routing_dir=$(dir_of "$ROUTING")
-    table_paths=$(LC_ALL=C awk -v phrases="$ROUTING_PHRASES" '
-      function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
+    table_paths=$(LC_ALL=C awk -v phrases="$ROUTING_PHRASES" "$MD_LINK_AWK"'
       /^[[:space:]]*(```|~~~)/ { fence = !fence; next }
       fence { next }
       !started && /^#+[[:space:]]/ {
@@ -380,7 +425,7 @@ else
         if (!intable) {
           intable = 1; col = 0
           for (i = 1; i <= n; i++) {
-            h = tolower(trim(cells[i]))
+            h = tolower(md_trim(cells[i]))
             if (h ~ /keyword/) continue
             if (h ~ /doc|path|link|primary|file/) { col = i; break }
           }
@@ -389,11 +434,12 @@ else
         }
         if (line ~ /^[[:space:]]*:?---*/) next
         rows++
-        cell = trim(cells[col])
-        while (match(cell, /\]\([^)]*\)/)) {
-          tgt = substr(cell, RSTART + 2, RLENGTH - 3)
-          print "L\t" tgt
-          cell = substr(cell, 1, RSTART - 1) " " substr(cell, RSTART + RLENGTH)
+        cell = md_trim(cells[col])
+        # Remove each whole link, text included: link text is prose, not a
+        # path, even when it holds a slash or a dot.
+        while (md_link(cell)) {
+          print "L\t" md_dest
+          cell = substr(cell, 1, md_start - 1) " " substr(cell, md_start + md_len)
         }
         gsub(/\[[^]]*\]/, " ", cell)
         gsub(/`/, " ", cell)
@@ -444,6 +490,23 @@ EOF
   fi
 fi
 
+# index_links <file>: print the destination of every inline link outside
+# fences and code spans, one per line. A link shown as an example is not a link.
+index_links() {
+  LC_ALL=C awk "$MD_LINK_AWK"'
+    /^[[:space:]]*(```|~~~)/ { fence = !fence; next }
+    fence { next }
+    {
+      line = $0
+      gsub(/`[^`]*`/, " ", line)
+      while (md_link(line)) {
+        print md_dest
+        line = substr(line, 1, md_start - 1) " " substr(line, md_start + md_len)
+      }
+    }
+  ' "$1"
+}
+
 if [ "$DOCS_INDEX" != "none" ]; then
   INDEX_PATH="$ROOT/$DOCS_INDEX"
   if [ ! -f "$INDEX_PATH" ]; then
@@ -461,7 +524,7 @@ if [ "$DOCS_INDEX" != "none" ]; then
         break
       fi
     done <<EOF
-$(LC_ALL=C grep -Eo '\]\([^) ]+' "$INDEX_PATH" | sed 's/^](//' || true)
+$(index_links "$INDEX_PATH")
 EOF
     [ "$linked" -eq 1 ] || fail "docs index does not link the routing file: $DOCS_INDEX -> $ROUTING"
   fi
@@ -526,7 +589,7 @@ EOF
 
   case "$rel" in
   */AGENTS.md)
-    if ! LC_ALL=C grep -Fq -- "$rel" "$AGENTS" 2>/dev/null; then
+    if ! path_listed "$rel" "$AGENTS" 2>/dev/null; then
       fail "nested AGENTS.md not listed in root AGENTS.md: $rel"
     fi
     dir=$(dir_of "$rel")
