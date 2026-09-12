@@ -153,8 +153,8 @@ type projectItemNode struct {
 //
 // The relationship sizes are FIRST-PAGE sizes, not limits: an item whose
 // subIssues, blockedBy or blocking connection reports a next page has the rest
-// read by a follow-up query on the issue's node id (connection_paging.go), so
-// only items larger than a first page pay for more.
+// read by node(id:) follow-up queries shared across the scan
+// (connection_paging.go), so only items larger than a first page pay for more.
 type projectItemContent struct {
 	TypeName    string `graphql:"__typename"`
 	IssueFields struct {
@@ -175,7 +175,7 @@ type projectItemContent struct {
 		Repository struct {
 			NameWithOwner graphql.String
 		}
-		// First pages only; BoardService.itemFromNode reads the rest.
+		// First pages only; BoardService.itemsFromNodes reads the rest.
 		SubIssues subIssuePage `graphql:"subIssues(first: 12)"`
 		BlockedBy blockingPage `graphql:"blockedBy(first: 5)"`
 		Blocking  blockingPage `graphql:"blocking(first: 5)"`
@@ -270,7 +270,7 @@ type pageInfo struct {
 
 // issueQuery is used by GetIssue (single issue) and indirectly by
 // GetEpicProgressByNumber. The relationship sizes are first-page sizes:
-// GetIssue reads every later page through the follow-up query in
+// GetIssue reads every later page through the follow-up queries in
 // connection_paging.go, so an epic with more than 25 sub-issues, or an issue
 // with more than 5 blockers, is returned whole.
 type issueQuery struct {

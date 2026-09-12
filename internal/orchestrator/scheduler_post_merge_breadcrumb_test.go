@@ -91,6 +91,10 @@ func (m *breadcrumbIssueSvc) GetIssuesByNumbers(_ context.Context, _, _ string, 
 	return nil, fmt.Errorf("not implemented")
 }
 
+func (m *breadcrumbIssueSvc) GetIssuesByNumbersWithoutRelations(_ context.Context, _, _ string, _ []int) (map[int]*types.Issue, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
 func (m *breadcrumbIssueSvc) GetEpicProgress(_ context.Context, _ string) (*types.EpicProgress, error) {
 	return nil, fmt.Errorf("not implemented")
 }

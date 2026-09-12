@@ -59,7 +59,7 @@ func (b *BoardService) ListItems(ctx context.Context, statusFilter string) ([]ty
 // This typically returns a single page (e.g., 2-15 items for "Ready") instead
 // of paginating through all 400+ items.
 func (b *BoardService) listItemsFiltered(ctx context.Context, statusFilter string) ([]types.BoardItem, error) {
-	allItems := make([]types.BoardItem, 0)
+	var nodes []projectItemNode
 	var cursor *graphql.String
 
 	// "Done" items are typically closed issues — don't filter by is:open
@@ -82,17 +82,7 @@ func (b *BoardService) listItemsFiltered(ctx context.Context, statusFilter strin
 		if err != nil {
 			return nil, fmt.Errorf("fetch board items (filtered): %w", err)
 		}
-
-		for _, node := range result.Items.Nodes {
-			item, err := b.itemFromNode(ctx, node)
-			if err != nil {
-				return nil, fmt.Errorf("fetch board items (filtered): %w", err)
-			}
-			if item == nil {
-				continue
-			}
-			allItems = append(allItems, *item)
-		}
+		nodes = append(nodes, result.Items.Nodes...)
 
 		if !bool(result.Items.PageInfo.HasNextPage) {
 			break
@@ -101,7 +91,11 @@ func (b *BoardService) listItemsFiltered(ctx context.Context, statusFilter strin
 		cursor = &endCursor
 	}
 
-	return allItems, nil
+	items, err := b.itemsFromNodes(ctx, nodes)
+	if err != nil {
+		return nil, fmt.Errorf("fetch board items (filtered): %w", err)
+	}
+	return items, nil
 }
 
 // ListOpenItems fetches only open items from the board using server-side
@@ -110,8 +104,7 @@ func (b *BoardService) listItemsFiltered(ctx context.Context, statusFilter strin
 // Returns the filtered items, the total raw node count from GraphQL (before
 // nodeToItem filtering), and any error.
 func (b *BoardService) ListOpenItems(ctx context.Context) ([]types.BoardItem, int, error) {
-	allItems := make([]types.BoardItem, 0)
-	rawCount := 0
+	var nodes []projectItemNode
 	var cursor *graphql.String
 
 	for {
@@ -128,17 +121,7 @@ func (b *BoardService) ListOpenItems(ctx context.Context) ([]types.BoardItem, in
 			return nil, 0, fmt.Errorf("fetch board items (open): %w", err)
 		}
 
-		rawCount += len(result.Items.Nodes)
-		for _, node := range result.Items.Nodes {
-			item, err := b.itemFromNode(ctx, node)
-			if err != nil {
-				return nil, 0, fmt.Errorf("fetch board items (open): %w", err)
-			}
-			if item == nil {
-				continue
-			}
-			allItems = append(allItems, *item)
-		}
+		nodes = append(nodes, result.Items.Nodes...)
 
 		if !bool(result.Items.PageInfo.HasNextPage) {
 			break
@@ -147,12 +130,16 @@ func (b *BoardService) ListOpenItems(ctx context.Context) ([]types.BoardItem, in
 		cursor = &endCursor
 	}
 
-	return allItems, rawCount, nil
+	items, err := b.itemsFromNodes(ctx, nodes)
+	if err != nil {
+		return nil, 0, fmt.Errorf("fetch board items (open): %w", err)
+	}
+	return items, len(nodes), nil
 }
 
 // listItemsAll fetches all project board items without filtering.
 func (b *BoardService) listItemsAll(ctx context.Context) ([]types.BoardItem, error) {
-	allItems := make([]types.BoardItem, 0)
+	var nodes []projectItemNode
 	var cursor *graphql.String
 
 	for {
@@ -167,17 +154,7 @@ func (b *BoardService) listItemsAll(ctx context.Context) ([]types.BoardItem, err
 		if err != nil {
 			return nil, fmt.Errorf("fetch board items: %w", err)
 		}
-
-		for _, node := range result.Items.Nodes {
-			item, err := b.itemFromNode(ctx, node)
-			if err != nil {
-				return nil, fmt.Errorf("fetch board items: %w", err)
-			}
-			if item == nil {
-				continue
-			}
-			allItems = append(allItems, *item)
-		}
+		nodes = append(nodes, result.Items.Nodes...)
 
 		if !bool(result.Items.PageInfo.HasNextPage) {
 			break
@@ -186,27 +163,45 @@ func (b *BoardService) listItemsAll(ctx context.Context) ([]types.BoardItem, err
 		cursor = &endCursor
 	}
 
-	return allItems, nil
+	items, err := b.itemsFromNodes(ctx, nodes)
+	if err != nil {
+		return nil, fmt.Errorf("fetch board items: %w", err)
+	}
+	return items, nil
 }
 
-// itemFromNode converts a project item node to a BoardItem with its
+// itemsFromNodes converts a board read's item nodes to BoardItems with their
 // relationships whole. The board query holds only the first page of an issue's
-// subIssues, blockedBy and blocking connections; any that reports a next page
-// is read to its end first, because the scheduler's blocker check and the epic
-// views decide from these lists. A connection that cannot be read whole fails
-// the read (ErrConnectionTruncated) instead of yielding a short list.
-func (b *BoardService) itemFromNode(ctx context.Context, node projectItemNode) (*types.BoardItem, error) {
-	if node.Content.TypeName == "Issue" {
-		f := &node.Content.IssueFields
-		if err := b.client.completeRelations(ctx, nodeIDString(f.ID), &f.SubIssues, &f.BlockedBy, &f.Blocking); err != nil {
-			return nil, fmt.Errorf("board item %s#%d: %w", f.Repository.NameWithOwner, f.Number, err)
+// subIssues, blockedBy and blocking connections; every one that reports a next
+// page is read to its end first, all of them together, because the scheduler's
+// blocker check and the epic views decide from these lists. A connection that
+// cannot be read whole fails the read (ErrConnectionTruncated) instead of
+// yielding a short list. Nodes that are not issues or pull requests are
+// dropped, as nodeToItem drops them.
+func (b *BoardService) itemsFromNodes(ctx context.Context, nodes []projectItemNode) ([]types.BoardItem, error) {
+	var walk relationWalk
+	for i := range nodes {
+		if nodes[i].Content.TypeName != "Issue" {
+			continue
+		}
+		f := &nodes[i].Content.IssueFields
+		walk.add(nodeIDString(f.ID), fmt.Sprintf("%s#%d", f.Repository.NameWithOwner, f.Number),
+			&f.SubIssues, &f.BlockedBy, &f.Blocking)
+	}
+	if err := b.client.completeRelations(ctx, &walk); err != nil {
+		return nil, err
+	}
+	items := make([]types.BoardItem, 0, len(nodes))
+	for _, node := range nodes {
+		if item := b.nodeToItem(node); item != nil {
+			items = append(items, *item)
 		}
 	}
-	return b.nodeToItem(node), nil
+	return items, nil
 }
 
 // nodeToItem converts a GraphQL project item node to a BoardItem as the node
-// holds it; itemFromNode is the reader that first completes relationships.
+// holds it; itemsFromNodes is the reader that first completes relationships.
 func (b *BoardService) nodeToItem(node projectItemNode) *types.BoardItem {
 	var item types.BoardItem
 	item.ID = fmt.Sprintf("%v", node.ID)
@@ -338,18 +333,19 @@ func (b *BoardService) GetItem(ctx context.Context, owner, repo string, issueNum
 	}
 
 	wantRepo := owner + "/" + repo
-	for _, node := range result.Items.Nodes {
-		item := b.nodeToItem(node)
+	nodes := result.Items.Nodes
+	for i := range nodes {
+		item := b.nodeToItem(nodes[i])
 		if item == nil {
 			continue
 		}
 		if item.Number == issueNumber && item.Repo == wantRepo {
 			// Only the matched item pays for reading its relationships whole.
-			full, err := b.itemFromNode(ctx, node)
+			full, err := b.itemsFromNodes(ctx, nodes[i:i+1])
 			if err != nil {
 				return nil, fmt.Errorf("get board item #%d: %w", issueNumber, err)
 			}
-			return full, nil
+			return &full[0], nil
 		}
 	}
 	return nil, fmt.Errorf("board item %s/%s#%d: %w", owner, repo, issueNumber, forge.ErrNotFound)

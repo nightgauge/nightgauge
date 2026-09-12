@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -43,9 +44,28 @@ type relationForge struct {
 	endlessOn int
 	// noCursor makes the endless connection omit its endCursor.
 	noCursor bool
-	// followUps counts the follow-up page reads per connection name.
-	followUps map[string]int
+	// failFollowUps makes every follow-up request fail the given way; see
+	// the followUpFailure constants.
+	failFollowUps followUpFailure
+	// followUps counts the follow-up page reads per connection name, and
+	// followUpRequests the requests that carried them.
+	followUps        map[string]int
+	followUpRequests int
+	// queries records every query the fake answered, in order.
+	queries []string
 }
+
+// followUpFailure is a way a follow-up page read can fail.
+type followUpFailure string
+
+const (
+	followUpsServed    followUpFailure = ""
+	followUpHTTP502    followUpFailure = "HTTP 502"
+	followUpGraphQLErr followUpFailure = "GraphQL errors body"
+	followUpNullNode   followUpFailure = "null node"
+	followUpNotAnIssue followUpFailure = "node is not an Issue"
+	followUpNoPage     followUpFailure = "Issue without the connection"
+)
 
 type fakeIssue struct {
 	id                           string
@@ -96,9 +116,13 @@ func (f *relationForge) client() *Client {
 }
 
 var (
-	reFollowUp  = regexp.MustCompile(`(subIssues|blockedBy|blocking)\(first: \$first, after: \$after\)`)
+	// reFollowUp matches one aliased connection read of a follow-up request:
+	// alias index, connection, page size, and the cursor variable's index.
+	reFollowUp = regexp.MustCompile(
+		`r(\d+): node\(id: \$id(\d+)\) \{ __typename \.\.\. on Issue \{ (subIssues|blockedBy|blocking)\(first: (\d+), after: \$after(\d+)\)`)
 	reBatchItem = regexp.MustCompile(`i(\d+): issue\(number: (\d+)\)`)
 	reIssueID   = regexp.MustCompile(`\.\.\.\s*on Issue\s*\{\s*id\b`)
+	reRelation  = regexp.MustCompile(`\b(subIssues|blockedBy|blocking)\(`)
 )
 
 // followUpCount is the number of follow-up pages read for conn so far.
@@ -106,6 +130,20 @@ func (f *relationForge) followUpCount(conn string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.followUps[conn]
+}
+
+// followUpRequestCount is the number of follow-up requests served so far.
+func (f *relationForge) followUpRequestCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.followUpRequests
+}
+
+// answered returns the queries answered so far.
+func (f *relationForge) answered() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.queries...)
 }
 
 func (f *relationForge) serve(w http.ResponseWriter, r *http.Request) {
@@ -122,22 +160,44 @@ func (f *relationForge) serve(w http.ResponseWriter, r *http.Request) {
 	defer f.mu.Unlock()
 
 	q, vars := req.Query, req.Variables
+	f.queries = append(f.queries, q)
 	var data map[string]interface{}
 	switch {
 	case reFollowUp.MatchString(q):
-		conn := reFollowUp.FindStringSubmatch(q)[1]
-		f.followUps[conn]++
-		iss := f.byID[fmt.Sprint(vars["id"])]
-		if iss == nil {
-			data = map[string]interface{}{"node": nil}
-			break
+		f.followUpRequests++
+		data = map[string]interface{}{}
+		for _, m := range reFollowUp.FindAllStringSubmatch(q, -1) {
+			alias, idVar, conn, afterVar := "r"+m[1], "id"+m[2], m[3], "after"+m[5]
+			first, _ := strconv.Atoi(m[4])
+			f.followUps[conn]++
+			iss := f.byID[fmt.Sprint(vars[idVar])]
+			switch {
+			case iss == nil || f.failFollowUps == followUpNullNode:
+				data[alias] = nil
+			case f.failFollowUps == followUpNotAnIssue:
+				data[alias] = map[string]interface{}{"__typename": "PullRequest"}
+			case f.failFollowUps == followUpNoPage:
+				data[alias] = map[string]interface{}{"__typename": "Issue"}
+			default:
+				start, _ := strconv.Atoi(strings.TrimPrefix(fmt.Sprint(vars[afterVar]), "after-"))
+				data[alias] = map[string]interface{}{
+					"__typename": "Issue",
+					conn:         f.page(conn, iss, start, first, true),
+				}
+			}
 		}
-		first := int(vars["first"].(float64))
-		start, _ := strconv.Atoi(strings.TrimPrefix(fmt.Sprint(vars["after"]), "after-"))
-		data = map[string]interface{}{"node": map[string]interface{}{
-			"__typename": "Issue",
-			conn:         f.page(conn, iss, start, first, true),
-		}}
+		switch f.failFollowUps {
+		case followUpHTTP502:
+			http.Error(w, "bad gateway", http.StatusBadGateway)
+			return
+		case followUpGraphQLErr:
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"data":   nil,
+				"errors": []interface{}{map[string]interface{}{"message": "Something went wrong while executing your query."}},
+			})
+			return
+		}
 	case strings.Contains(q, "projectV2("):
 		nodes := make([]interface{}, 0, len(f.board))
 		for _, n := range f.board {
@@ -297,6 +357,36 @@ func blockedByOpen(refs []types.BlockingRef) bool {
 	return false
 }
 
+// boardReader is one BoardService read that returns board items. Each
+// completes relationships itself, so each is exercised: the scheduler picks
+// from ListItems("Ready"), autonomous mode, the dependency graph and the board
+// cache read ListOpenItems, `board list` reads ListItems(""), and RunQueue
+// and `project field-get` read GetItem.
+type boardReader struct {
+	name string
+	read func(ctx context.Context, b *BoardService, number int) ([]types.BoardItem, error)
+}
+
+var boardReaders = []boardReader{
+	{"ListItems all", func(ctx context.Context, b *BoardService, _ int) ([]types.BoardItem, error) {
+		return b.ListItems(ctx, "")
+	}},
+	{"ListItems Ready", func(ctx context.Context, b *BoardService, _ int) ([]types.BoardItem, error) {
+		return b.ListItems(ctx, "Ready")
+	}},
+	{"ListOpenItems", func(ctx context.Context, b *BoardService, _ int) ([]types.BoardItem, error) {
+		items, _, err := b.ListOpenItems(ctx)
+		return items, err
+	}},
+	{"GetItem", func(ctx context.Context, b *BoardService, number int) ([]types.BoardItem, error) {
+		item, err := b.GetItem(ctx, "acme", "widgets", number)
+		if err != nil {
+			return nil, err
+		}
+		return []types.BoardItem{*item}, nil
+	}},
+}
+
 func assertNumbers(t *testing.T, what string, got, want []int) {
 	t.Helper()
 	if fmt.Sprint(got) != fmt.Sprint(want) {
@@ -336,16 +426,18 @@ func TestSubIssuesPaginatesPast25(t *testing.T) {
 		assertNumbers(t, "batch sub-issues", subIssueNumbers(got[100].SubIssues), epic.subIssues)
 	})
 
-	t.Run("board scan", func(t *testing.T) {
-		items, err := NewBoardService(c, "acme", 1).ListItems(ctx, "")
-		if err != nil {
-			t.Fatalf("ListItems: %v", err)
-		}
-		if len(items) != 1 {
-			t.Fatalf("board items = %d, want 1", len(items))
-		}
-		assertNumbers(t, "board sub-issues", subIssueNumbers(items[0].SubIssues), epic.subIssues)
-	})
+	for _, br := range boardReaders {
+		t.Run("board scan/"+br.name, func(t *testing.T) {
+			items, err := br.read(ctx, NewBoardService(c, "acme", 1), 100)
+			if err != nil {
+				t.Fatalf("%s: %v", br.name, err)
+			}
+			if len(items) != 1 {
+				t.Fatalf("board items = %d, want 1", len(items))
+			}
+			assertNumbers(t, "board sub-issues", subIssueNumbers(items[0].SubIssues), epic.subIssues)
+		})
+	}
 
 	t.Run("epic validate", func(t *testing.T) {
 		res, err := NewEpicService(c).Validate(ctx, "acme", "widgets", 100)
@@ -422,16 +514,18 @@ func TestBlockedByPaginatesPast5(t *testing.T) {
 		check(t, "GetIssuesByNumbers", got[300].BlockedBy, got[300].Blocking)
 	})
 
-	t.Run("board scan feeds the scheduler blocker check", func(t *testing.T) {
-		items, err := NewBoardService(c, "acme", 1).ListItems(ctx, "")
-		if err != nil {
-			t.Fatalf("ListItems: %v", err)
-		}
-		if len(items) != 1 {
-			t.Fatalf("board items = %d, want 1", len(items))
-		}
-		check(t, "board scan", items[0].BlockedBy, items[0].Blocking)
-	})
+	for _, br := range boardReaders {
+		t.Run("board scan feeds the scheduler blocker check/"+br.name, func(t *testing.T) {
+			items, err := br.read(ctx, NewBoardService(c, "acme", 1), 300)
+			if err != nil {
+				t.Fatalf("%s: %v", br.name, err)
+			}
+			if len(items) != 1 {
+				t.Fatalf("board items = %d, want 1", len(items))
+			}
+			check(t, br.name, items[0].BlockedBy, items[0].Blocking)
+		})
+	}
 
 	t.Run("wave planning orders the issue after its page-two blocker", func(t *testing.T) {
 		res, err := NewEpicService(c).PlanWaves(ctx, "acme", "widgets", []int{300, 311})
@@ -518,11 +612,16 @@ func TestConnectionPageCapIsError(t *testing.T) {
 		requireCapped(t, f, "blockedBy", err)
 	})
 
-	t.Run("board scan", func(t *testing.T) {
-		f, c := setup(t, "blockedBy", false)
-		_, err := NewBoardService(c, "acme", 1).ListItems(ctx, "")
-		requireCapped(t, f, "blockedBy", err)
-	})
+	for _, br := range boardReaders {
+		t.Run("board scan/"+br.name, func(t *testing.T) {
+			f, c := setup(t, "blockedBy", false)
+			items, err := br.read(ctx, NewBoardService(c, "acme", 1), 700)
+			requireCapped(t, f, "blockedBy", err)
+			if items != nil {
+				t.Fatalf("%s returned %d items alongside a truncated read", br.name, len(items))
+			}
+		})
+	}
 
 	t.Run("GetEpicProgress", func(t *testing.T) {
 		f, c := setup(t, "subIssues", false)
@@ -561,4 +660,263 @@ func TestConnectionPageCapIsError(t *testing.T) {
 			t.Fatalf("follow-up pages read = %d, want 0 with no cursor to continue from", got)
 		}
 	})
+}
+
+// TestRelationFollowUpFailureIsError fails every follow-up page read, in each
+// way a real one fails: a 5xx, a GraphQL errors body, a null node, a node that
+// is not an issue, and an issue without the connection. Page two failing is
+// how a connection really gets cut short, so every reader and every decision
+// built on one must return ErrConnectionTruncated and nothing else: not the
+// first page as if it were the list, and not a plan, rollup or validation
+// built from it.
+func TestRelationFollowUpFailureIsError(t *testing.T) {
+	ctx := context.Background()
+
+	// #700 has more sub-issues than any reader's first page (60 > 50) and
+	// more blockers than one page (11 > 5); only its last blocker is open.
+	// #800 is the epic #700 belongs to.
+	setup := func(t *testing.T, mode followUpFailure) *Client {
+		f := newRelationForge(t)
+		f.failFollowUps = mode
+		iss := f.issue(700, "OPEN")
+		iss.subIssues = f.numbers(1001, 60, "CLOSED")
+		iss.blockedBy = f.numbers(301, 11, "CLOSED")
+		f.byNumber[311].state = "OPEN"
+		epic := f.issue(800, "OPEN")
+		epic.subIssues = []int{700}
+		f.board = []int{700}
+		return f.client()
+	}
+
+	type read struct {
+		name string
+		run  func(ctx context.Context, c *Client) (result any, err error)
+	}
+	reads := []read{
+		{"GetIssue", func(ctx context.Context, c *Client) (any, error) {
+			return NewIssueService(c).GetIssue(ctx, "acme", "widgets", 700)
+		}},
+		{"GetIssuesByNumbers", func(ctx context.Context, c *Client) (any, error) {
+			return NewIssueService(c).GetIssuesByNumbers(ctx, "acme", "widgets", []int{700})
+		}},
+		{"GetEpicProgress", func(ctx context.Context, c *Client) (any, error) {
+			return NewIssueService(c).GetEpicProgress(ctx, "I_700")
+		}},
+		{"GetEpicProgressByNumber", func(ctx context.Context, c *Client) (any, error) {
+			return NewIssueService(c).GetEpicProgressByNumber(ctx, "acme", "widgets", 700)
+		}},
+		{"epic rollup", func(ctx context.Context, c *Client) (any, error) {
+			return NewEpicService(c).CheckCompletion(ctx, "acme", "widgets", 700)
+		}},
+		{"wave planning", func(ctx context.Context, c *Client) (any, error) {
+			return NewEpicService(c).PlanWaves(ctx, "acme", "widgets", []int{700})
+		}},
+		{"epic validate", func(ctx context.Context, c *Client) (any, error) {
+			return NewEpicService(c).Validate(ctx, "acme", "widgets", 800)
+		}},
+	}
+	for _, br := range boardReaders {
+		reads = append(reads, read{"board scan/" + br.name, func(ctx context.Context, c *Client) (any, error) {
+			return br.read(ctx, NewBoardService(c, "acme", 1), 700)
+		}})
+	}
+
+	modes := []followUpFailure{followUpHTTP502, followUpGraphQLErr, followUpNullNode, followUpNotAnIssue, followUpNoPage}
+	for _, mode := range modes {
+		for _, r := range reads {
+			t.Run(string(mode)+"/"+r.name, func(t *testing.T) {
+				res, err := r.run(ctx, setup(t, mode))
+				if !errors.Is(err, ErrConnectionTruncated) {
+					t.Fatalf("err = %v, want ErrConnectionTruncated", err)
+				}
+				if v := reflect.ValueOf(res); v.IsValid() && !v.IsNil() {
+					t.Fatalf("returned %+v alongside a truncated read", res)
+				}
+			})
+		}
+	}
+}
+
+// TestRelationFollowUpsShareRequests pins the cost of completing connections.
+// The client allows about one request a second, so the follow-up pages of
+// every oversized connection in one read go out together: one aliased request
+// per round, split only past relationFollowUpsPerRequest connections.
+func TestRelationFollowUpsShareRequests(t *testing.T) {
+	ctx := context.Background()
+
+	// oversized adds n issues from first, each with every connection larger
+	// than any first page, and returns their numbers.
+	oversized := func(f *relationForge, first, n int) []int {
+		children := f.numbers(5001, 42, "CLOSED")
+		blockers := f.numbers(6001, 11, "CLOSED")
+		blocks := f.numbers(7001, 7, "OPEN")
+		var out []int
+		for i := 0; i < n; i++ {
+			iss := f.issue(first+i, "OPEN")
+			iss.subIssues, iss.blockedBy, iss.blocks = children, blockers, blocks
+			out = append(out, first+i)
+		}
+		return out
+	}
+	whole := func(t *testing.T, what string, subs []types.SubIssueRef, by, blocking []types.BlockingRef) {
+		t.Helper()
+		if len(subs) != 42 || len(by) != 11 || len(blocking) != 7 {
+			t.Fatalf("%s: got %d sub-issues, %d blockers, %d blocking; want 42, 11, 7",
+				what, len(subs), len(by), len(blocking))
+		}
+	}
+
+	t.Run("board scan of three oversized items", func(t *testing.T) {
+		f := newRelationForge(t)
+		f.board = oversized(f, 100, 3)
+		items, _, err := NewBoardService(f.client(), "acme", 1).ListOpenItems(ctx)
+		if err != nil {
+			t.Fatalf("ListOpenItems: %v", err)
+		}
+		for _, it := range items {
+			whole(t, fmt.Sprintf("board item #%d", it.Number), it.SubIssues, it.BlockedBy, it.Blocking)
+		}
+		if got := f.followUpRequestCount(); got != 1 {
+			t.Fatalf("follow-up requests = %d, want 1 for 9 connections", got)
+		}
+	})
+
+	t.Run("GetIssuesByNumbers of three oversized issues", func(t *testing.T) {
+		f := newRelationForge(t)
+		nums := oversized(f, 100, 3)
+		got, err := NewIssueService(f.client()).GetIssuesByNumbers(ctx, "acme", "widgets", nums)
+		if err != nil {
+			t.Fatalf("GetIssuesByNumbers: %v", err)
+		}
+		for _, n := range nums {
+			whole(t, fmt.Sprintf("issue #%d", n), got[n].SubIssues, got[n].BlockedBy, got[n].Blocking)
+		}
+		if got := f.followUpRequestCount(); got != 1 {
+			t.Fatalf("follow-up requests = %d, want 1 for 9 connections", got)
+		}
+	})
+
+	t.Run("GetIssue with every connection oversized", func(t *testing.T) {
+		f := newRelationForge(t)
+		oversized(f, 100, 1)
+		got, err := NewIssueService(f.client()).GetIssue(ctx, "acme", "widgets", 100)
+		if err != nil {
+			t.Fatalf("GetIssue: %v", err)
+		}
+		whole(t, "issue #100", got.SubIssues, got.BlockedBy, got.Blocking)
+		if got := f.followUpRequestCount(); got != 1 {
+			t.Fatalf("follow-up requests = %d, want 1 for 3 connections", got)
+		}
+	})
+
+	t.Run("more connections than one request carries", func(t *testing.T) {
+		f := newRelationForge(t)
+		f.board = oversized(f, 100, 20)
+		items, _, err := NewBoardService(f.client(), "acme", 1).ListOpenItems(ctx)
+		if err != nil {
+			t.Fatalf("ListOpenItems: %v", err)
+		}
+		if len(items) != 20 {
+			t.Fatalf("board items = %d, want 20", len(items))
+		}
+		for _, it := range items {
+			whole(t, fmt.Sprintf("board item #%d", it.Number), it.SubIssues, it.BlockedBy, it.Blocking)
+		}
+		want := (60 + relationFollowUpsPerRequest - 1) / relationFollowUpsPerRequest
+		if got := f.followUpRequestCount(); got != want {
+			t.Fatalf("follow-up requests = %d, want %d for 60 connections", got, want)
+		}
+	})
+
+	t.Run("a connection several pages long", func(t *testing.T) {
+		f := newRelationForge(t)
+		epic := f.issue(100, "OPEN")
+		epic.subIssues = f.numbers(1001, 230, "CLOSED")
+		got, err := NewIssueService(f.client()).GetIssue(ctx, "acme", "widgets", 100)
+		if err != nil {
+			t.Fatalf("GetIssue: %v", err)
+		}
+		assertNumbers(t, "sub-issues", subIssueNumbers(got.SubIssues), epic.subIssues)
+		// 25 on the first page, then 100, 100 and 5.
+		if got := f.followUpRequestCount(); got != 3 {
+			t.Fatalf("follow-up requests = %d, want 3", got)
+		}
+	})
+}
+
+// TestGetIssuesByNumbersWithoutRelations covers the read for callers that use
+// only an issue's state or body (the scheduler's blocker-state refresh and
+// dangling-edge check, the dependency graph's body fetch). It selects no
+// relationship connection, so it reads no follow-up page and cannot fail on
+// one, even for an issue whose connections could not be completed.
+func TestGetIssuesByNumbersWithoutRelations(t *testing.T) {
+	ctx := context.Background()
+	f := newRelationForge(t)
+	f.failFollowUps = followUpHTTP502
+	iss := f.issue(700, "OPEN")
+	iss.subIssues = f.numbers(1001, 60, "CLOSED")
+	iss.blockedBy = f.numbers(301, 11, "CLOSED")
+	iss.blocks = f.numbers(401, 7, "OPEN")
+	f.issue(701, "CLOSED")
+	svc := NewIssueService(f.client())
+
+	got, err := svc.GetIssuesByNumbersWithoutRelations(ctx, "acme", "widgets", []int{700, 701})
+	if err != nil {
+		t.Fatalf("GetIssuesByNumbersWithoutRelations: %v", err)
+	}
+	if got[700] == nil || got[700].State != "OPEN" || got[701] == nil || got[701].State != "CLOSED" {
+		t.Fatalf("states = %+v, want #700 OPEN and #701 CLOSED", got)
+	}
+	if n := len(got[700].SubIssues) + len(got[700].BlockedBy) + len(got[700].Blocking); n != 0 || got[700].IsEpic {
+		t.Fatalf("#700 carries %d relationships (IsEpic %v); the read selects none", n, got[700].IsEpic)
+	}
+	if n := f.followUpRequestCount(); n != 0 {
+		t.Fatalf("follow-up requests = %d, want 0", n)
+	}
+	for _, q := range f.answered() {
+		if m := reRelation.FindString(q); m != "" {
+			t.Fatalf("query selects the %s connection:\n%s", strings.TrimSuffix(m, "("), q)
+		}
+	}
+
+	// The same issue through the relationship read cannot be completed here.
+	if _, err := svc.GetIssuesByNumbers(ctx, "acme", "widgets", []int{700}); !errors.Is(err, ErrConnectionTruncated) {
+		t.Fatalf("GetIssuesByNumbers err = %v, want ErrConnectionTruncated", err)
+	}
+}
+
+// TestRelationPageSelectionsMatchStructs pins the follow-up selections to the
+// structs the first page decodes into: the GraphQL client renders
+// subIssuePage and blockingPage exactly as the constants read, so a field
+// added to subIssueNode or blockingNode reaches follow-up pages too.
+func TestRelationPageSelectionsMatchStructs(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Query string `json:"query"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		got = append(got, req.Query)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"p":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[]}}}`))
+	}))
+	t.Cleanup(srv.Close)
+	c := NewClientWithURL("test-token", srv.URL)
+	c.limiter = rate.NewLimiter(rate.Inf, 1)
+
+	var sub struct {
+		P subIssuePage `graphql:"p"`
+	}
+	var blk struct {
+		P blockingPage `graphql:"p"`
+	}
+	for _, q := range []interface{}{&sub, &blk} {
+		if err := c.query(context.Background(), q, nil); err != nil {
+			t.Fatalf("query: %v", err)
+		}
+	}
+	want := []string{"{p" + subIssuePageSelection + "}", "{p" + blockingPageSelection + "}"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("client renders\n  %q\nfollow-up selections read\n  %q", got, want)
+	}
 }

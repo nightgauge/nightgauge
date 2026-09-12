@@ -54,9 +54,9 @@ type spawnFileSpec struct {
 var spawnPinTable = map[string]spawnFileSpec{
 	"autonomous.go": {trackedFunc: "goTracked"},
 	"wave_orchestrator.go": {allowedLines: map[int]string{
-		485: "runWaveParallel — joined via wg.Wait() before the function returns",
-		542: "runWaveScaled — joined via wg.Wait() before the batch loop continues",
-		591: "runSubagent — joined via the done-channel select below (ctx.Done()/<-done)",
+		492: "runWaveParallel — joined via wg.Wait() before the function returns",
+		549: "runWaveScaled — joined via wg.Wait() before the batch loop continues",
+		598: "runSubagent — joined via the done-channel select below (ctx.Done()/<-done)",
 	}},
 	"epic.go": {allowedLines: map[int]string{
 		72: "checkEpicCompletion — process-lifetime, 35s-bounded, WithoutCancel; documented at the call site",

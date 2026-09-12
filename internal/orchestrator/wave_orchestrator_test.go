@@ -20,6 +20,8 @@ import (
 type mockEpicIssueSvc struct {
 	issues map[string]*types.Issue
 	epics  map[string]*types.EpicProgress
+	// errs makes GetIssue fail for the keyed issue with the given error.
+	errs map[string]error
 }
 
 func newMockEpicIssueSvc() *mockEpicIssueSvc {
@@ -39,6 +41,9 @@ func (m *mockEpicIssueSvc) addEpic(owner, repo string, number int, epic *types.E
 
 func (m *mockEpicIssueSvc) GetIssue(_ context.Context, owner, repo string, number int) (*types.Issue, error) {
 	key := fmt.Sprintf("%s/%s#%d", owner, repo, number)
+	if err, ok := m.errs[key]; ok {
+		return nil, err
+	}
 	if issue, ok := m.issues[key]; ok {
 		return issue, nil
 	}
@@ -54,6 +59,10 @@ func (m *mockEpicIssueSvc) GetIssuesByNumbers(_ context.Context, owner, repo str
 		}
 	}
 	return out, nil
+}
+
+func (m *mockEpicIssueSvc) GetIssuesByNumbersWithoutRelations(ctx context.Context, owner, repo string, numbers []int) (map[int]*types.Issue, error) {
+	return m.GetIssuesByNumbers(ctx, owner, repo, numbers)
 }
 
 func (m *mockEpicIssueSvc) GetEpicProgress(_ context.Context, nodeID string) (*types.EpicProgress, error) {

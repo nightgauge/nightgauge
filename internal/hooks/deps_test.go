@@ -2,19 +2,26 @@ package hooks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
+	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
 // mockFetcher implements IssueFetcher for testing.
 type mockFetcher struct {
 	issues map[string]*types.Issue
+	// errs makes GetIssue fail for the keyed issue with the given error.
+	errs map[string]error
 }
 
 func (m *mockFetcher) GetIssue(_ context.Context, owner, repo string, number int) (*types.Issue, error) {
 	key := fmt.Sprintf("%s/%s#%d", owner, repo, number)
+	if err, ok := m.errs[key]; ok {
+		return nil, err
+	}
 	if issue, ok := m.issues[key]; ok {
 		return issue, nil
 	}
@@ -328,6 +335,28 @@ func TestEvaluateIssueDeps_BodyDeclaredNotDoubleCountedWithNative(t *testing.T) 
 	}
 	if result.OpenDependencies[0].Source != "blockedBy" {
 		t.Errorf("the native relation must win the dedup, got source %q", result.OpenDependencies[0].Source)
+	}
+}
+
+// TestEvaluateIssueDeps_TruncatedBodyDependencyIsAnError — a body-declared
+// dependency that exists but whose relationships could not be read whole is
+// not the typo the skip rule forgives. Skipping it let pickup proceed while
+// the dependency was OPEN; the evaluation must fail, which every caller
+// treats as a hold.
+func TestEvaluateIssueDeps_TruncatedBodyDependencyIsAnError(t *testing.T) {
+	mock := &mockFetcher{
+		issues: map[string]*types.Issue{
+			"nightgauge/nightgauge#10": {Number: 10, Body: "Depends on: #20"},
+		},
+		errs: map[string]error{
+			"nightgauge/nightgauge#20": fmt.Errorf("fetch issue #20: blocking of nightgauge/nightgauge#20: %w: read page 2: 502",
+				gh.ErrConnectionTruncated),
+		},
+	}
+
+	result, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 10)
+	if !errors.Is(err, gh.ErrConnectionTruncated) {
+		t.Fatalf("err = %v (result %+v), want ErrConnectionTruncated", err, result)
 	}
 }
 

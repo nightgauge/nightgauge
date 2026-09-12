@@ -121,7 +121,8 @@ func (s *IssueService) GetIssue(ctx context.Context, owner, repo string, number 
 		return nil, fmt.Errorf("fetch issue #%d: %w", number, err)
 	}
 	qi := &q.Repository.Issue
-	if err := s.client.completeRelations(ctx, nodeIDString(qi.ID), &qi.SubIssues, &qi.BlockedBy, &qi.Blocking); err != nil {
+	label := fmt.Sprintf("%s/%s#%d", owner, repo, number)
+	if err := s.client.completeIssueRelations(ctx, nodeIDString(qi.ID), label, &qi.SubIssues, &qi.BlockedBy, &qi.Blocking); err != nil {
 		return nil, fmt.Errorf("fetch issue #%d: %w", number, err)
 	}
 
@@ -178,15 +179,32 @@ func (s *IssueService) GetIssue(ctx context.Context, owner, repo string, number 
 // silently omitted from the result.
 //
 // This avoids the per-issue round-trip pattern (N GetIssue calls) used on hot
-// paths such as Scheduler.refreshBlockerStates, ProjectService.UpdateEpicEstimates,
-// and IssueService.ValidateEpic.
+// paths such as EpicService.Validate and the IPC issue.viewMany method.
 //
 // The returned issues populate the same fields as GetIssue: Labels, Assignees,
-// SubIssues, BlockedBy, Blocking, Parent. Numbers are deduplicated. A
+// SubIssues, BlockedBy, Blocking, Parent. Numbers are deduplicated. Every
 // relationship connection larger than the fragment's first page is read to
-// its end by a follow-up query for that issue; one that cannot be is an
-// ErrConnectionTruncated error for the whole call, never a short list.
+// its end by follow-up queries shared across the batch; one that cannot be is
+// an ErrConnectionTruncated error for the whole call, never a short list.
 func (s *IssueService) GetIssuesByNumbers(ctx context.Context, owner, repo string, numbers []int) (map[int]*types.Issue, error) {
+	return s.getIssuesByNumbers(ctx, owner, repo, numbers, true)
+}
+
+// GetIssuesByNumbersWithoutRelations is GetIssuesByNumbers for callers that
+// read an issue's body, state, labels, assignees or parent and never its
+// relationships, such as the scheduler's blocker-state refresh and the
+// dependency graph's body fetch. It does not select the subIssues, blockedBy
+// or blocking connections, so SubIssues, BlockedBy and Blocking are empty and
+// IsEpic is false. Selecting none, it reads no follow-up pages: it neither
+// spends requests on relationships it would discard nor fails because one of
+// them could not be read.
+func (s *IssueService) GetIssuesByNumbersWithoutRelations(ctx context.Context, owner, repo string, numbers []int) (map[int]*types.Issue, error) {
+	return s.getIssuesByNumbers(ctx, owner, repo, numbers, false)
+}
+
+// getIssuesByNumbers is the aliased batch read behind GetIssuesByNumbers and,
+// with withRelations false, GetIssuesByNumbersWithoutRelations.
+func (s *IssueService) getIssuesByNumbers(ctx context.Context, owner, repo string, numbers []int, withRelations bool) (map[int]*types.Issue, error) {
 	if len(numbers) == 0 {
 		return map[int]*types.Issue{}, nil
 	}
@@ -232,11 +250,14 @@ func (s *IssueService) GetIssuesByNumbers(ctx context.Context, owner, repo strin
   parent { id number title repository { nameWithOwner } }
   labels(first: 10) { nodes { name } }
   assignees(first: 5) { nodes { login } }
-  subIssues(first: 25) { pageInfo { hasNextPage endCursor } nodes { id number title state repository { nameWithOwner } } }
+`)
+	if withRelations {
+		sb.WriteString(`  subIssues(first: 25) { pageInfo { hasNextPage endCursor } nodes { id number title state repository { nameWithOwner } } }
   blockedBy(first: 5) { pageInfo { hasNextPage endCursor } nodes { id number title state repository { nameWithOwner } } }
   blocking(first: 5) { pageInfo { hasNextPage endCursor } nodes { id number title state repository { nameWithOwner } } }
-}
 `)
+	}
+	sb.WriteString("}\n")
 
 	vars := map[string]interface{}{
 		"owner": owner,
@@ -301,13 +322,25 @@ func (s *IssueService) GetIssuesByNumbers(ctx context.Context, owner, repo strin
 		return nil, fmt.Errorf("batch fetch issues: %s", env.Errors[0].Message)
 	}
 
-	out := make(map[int]*types.Issue, len(ordered))
+	// Read every oversized connection in the batch to its end before any
+	// issue is built, sharing follow-up requests across the batch. Without
+	// relationships selected every page is empty and final, so this reads
+	// nothing.
+	var walk relationWalk
 	for _, node := range env.Data.Repository {
 		if node == nil || node.Number == 0 {
 			continue
 		}
-		if err := s.client.completeRelations(ctx, node.ID, &node.SubIssues, &node.BlockedBy, &node.Blocking); err != nil {
-			return nil, fmt.Errorf("batch fetch issues: issue #%d: %w", node.Number, err)
+		walk.add(node.ID, fmt.Sprintf("%s/%s#%d", owner, repo, node.Number), &node.SubIssues, &node.BlockedBy, &node.Blocking)
+	}
+	if err := s.client.completeRelations(ctx, &walk); err != nil {
+		return nil, fmt.Errorf("batch fetch issues: %w", err)
+	}
+
+	out := make(map[int]*types.Issue, len(ordered))
+	for _, node := range env.Data.Repository {
+		if node == nil || node.Number == 0 {
+			continue
 		}
 		issue := &types.Issue{
 			NodeID: node.ID,
@@ -1146,7 +1179,8 @@ func (s *IssueService) GetEpicProgress(ctx context.Context, epicNodeID string) (
 	if q.Node.TypeName != "Issue" {
 		return nil, fmt.Errorf("node %s is not an Issue (got %s)", epicNodeID, q.Node.TypeName)
 	}
-	if err := s.client.completeRelations(ctx, epicNodeID, &q.Node.Issue.SubIssues, nil, nil); err != nil {
+	label := fmt.Sprintf("%s#%d", q.Node.Issue.Repository.NameWithOwner, q.Node.Issue.Number)
+	if err := s.client.completeIssueRelations(ctx, epicNodeID, label, &q.Node.Issue.SubIssues, nil, nil); err != nil {
 		return nil, fmt.Errorf("fetch epic node: %w", err)
 	}
 

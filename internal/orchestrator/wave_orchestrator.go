@@ -12,6 +12,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/intelligence/batch"
 	"github.com/nightgauge/nightgauge/internal/intelligence/teams"
 	"github.com/nightgauge/nightgauge/internal/state"
@@ -382,6 +384,11 @@ func (wo *WaveOrchestrator) fetchSubIssueDetails(ctx context.Context, owner, rep
 		}
 
 		issue, err := wo.scheduler.issueSvc.GetIssue(ctx, siOwner, siRepo, si.Number)
+		if errors.Is(err, gh.ErrConnectionTruncated) {
+			// Planning without this sub-issue would also drop its siblings'
+			// edges to it and run them in an earlier wave than it allows.
+			return nil, nil, fmt.Errorf("fetch sub-issue #%d: %w", si.Number, err)
+		}
 		if err != nil {
 			log.Printf("epic #%d: warn — failed to fetch sub-issue #%d: %v", wo.epicNumber, si.Number, err)
 			continue

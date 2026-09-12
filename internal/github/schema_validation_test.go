@@ -306,8 +306,9 @@ func TestPaginationArguments(t *testing.T) {
 //	                    and fails closed at dispatch, so the page stays at 8
 //	                    rather than growing to chase the worst-case issue.
 //	subIssues    ≤ 12 — first page only. An item with more has the rest read
-//	                    by a per-issue follow-up (connection_paging.go), so
-//	                    only oversized items pay for more nodes.
+//	                    by follow-up queries shared across the scan
+//	                    (connection_paging.go), so only oversized items pay
+//	                    for more nodes.
 //	blockedBy    ≤  5 — first page only, completed the same way
 //	blocking     ≤  5 — symmetric
 //	subIssue.labels ≤ 3 — sub-issue labels are barely consumed at the board layer

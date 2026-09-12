@@ -602,6 +602,10 @@ func cliRunResultToStageResult(result *adapters.RunResult) *StageRunResult {
 type issueGetter interface {
 	GetIssue(ctx context.Context, owner, repo string, number int) (*types.Issue, error)
 	GetIssuesByNumbers(ctx context.Context, owner, repo string, numbers []int) (map[int]*types.Issue, error)
+	// GetIssuesByNumbersWithoutRelations reads issues without their
+	// subIssues, blockedBy and blocking connections: the read for callers
+	// that need only an issue's state or body.
+	GetIssuesByNumbersWithoutRelations(ctx context.Context, owner, repo string, numbers []int) (map[int]*types.Issue, error)
 	GetEpicProgress(ctx context.Context, epicNodeID string) (*types.EpicProgress, error)
 	GetEpicProgressByNumber(ctx context.Context, owner, repo string, number int) (*types.EpicProgress, error)
 	CloseIssue(ctx context.Context, issueID string) error
@@ -2746,6 +2750,12 @@ func (s *Scheduler) EnqueueEpic(ctx context.Context, owner, repo string, epicNum
 		// different configured identity than the epic's repo (#3700). The
 		// resolver caches clients, so same-repo sub-issues reuse one client.
 		siIssue, err := s.issueServiceFor(ctx, siOwner, siRepo).GetIssue(ctx, siOwner, siRepo, si.Number)
+		if errors.Is(err, gh.ErrConnectionTruncated) {
+			// The sub-issue's relationships could not be read whole.
+			// Enqueuing it without the blockers it was read with would let
+			// DequeueIndependent dispatch it while a blocker is still open.
+			return fmt.Errorf("enqueue epic #%d: blockers of sub-issue #%d: %w", epicNumber, si.Number, err)
+		}
 		if err != nil {
 			log.Printf("WARN: failed to fetch blockedBy for sub-issue #%d: %v", si.Number, err)
 			continue
@@ -7287,9 +7297,11 @@ func (s *Scheduler) refreshBlockerStates(ctx context.Context) {
 	}
 
 	// Group targets by repo so each repo can be served by a single batched
-	// GraphQL query (issueSvc.GetIssuesByNumbers) instead of one round-trip
-	// per blocker. A queue of 10 items × 2 OPEN blockers in one repo collapses
-	// from 20 serial GetIssue calls to 1 aliased GraphQL request.
+	// GraphQL query instead of one round-trip per blocker. A queue of 10
+	// items × 2 OPEN blockers in one repo collapses from 20 serial GetIssue
+	// calls to 1 aliased GraphQL request. Only each blocker's State is read,
+	// so the batch skips relationships: a blocker's own long blocking list
+	// costs no follow-up read and cannot fail the refresh.
 	type result struct {
 		target refreshTarget
 		state  string
@@ -7302,7 +7314,7 @@ func (s *Scheduler) refreshBlockerStates(ctx context.Context) {
 	stateByRepoNumber := make(map[string]map[int]string, len(byRepo))
 	for repo, nums := range byRepo {
 		owner, name := splitOwnerRepo(repo)
-		issues, err := s.issueSvc.GetIssuesByNumbers(ctx, owner, name, nums)
+		issues, err := s.issueSvc.GetIssuesByNumbersWithoutRelations(ctx, owner, name, nums)
 		if err != nil {
 			// Per-repo failure is non-fatal: other repos still get refreshed.
 			log.Printf("WARN: refreshBlockerStates: batch fetch failed for %s: %v", repo, err)
@@ -7418,7 +7430,8 @@ func splitNodeKey(key string) (repo string, number int, ok bool) {
 
 // resolveIssueStatesByKey batch-resolves the current GitHub State ("OPEN" or
 // "CLOSED") of the given graph node keys ("owner/repo#number") via
-// issueSvc.GetIssuesByNumbers, grouped by repo so any number of keys sharing a
+// issueSvc.GetIssuesByNumbersWithoutRelations (State is all it reads), grouped
+// by repo so any number of keys sharing a
 // repo cost exactly ONE GraphQL round trip — the same batching discipline as
 // refreshBlockerStates above (a queue of N items spread across R repos
 // collapses from N calls to R). Used by the autonomous scheduler's
@@ -7448,7 +7461,7 @@ func resolveIssueStatesByKey(ctx context.Context, issueSvc issueGetter, keys []s
 	resolved := make(map[string]string, len(keys))
 	for repo, nums := range byRepo {
 		owner, name := splitOwnerRepo(repo)
-		issues, err := issueSvc.GetIssuesByNumbers(ctx, owner, name, nums)
+		issues, err := issueSvc.GetIssuesByNumbersWithoutRelations(ctx, owner, name, nums)
 		if err != nil {
 			log.Printf("WARN: resolveIssueStatesByKey: batch fetch failed for %s: %v", repo, err)
 			continue
