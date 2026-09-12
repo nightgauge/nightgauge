@@ -2,7 +2,9 @@
  * CodexSetupService - Codex CLI command/skill installation management
  *
  * Installs Nightgauge Codex slash commands into ~/.codex/commands and copies
- * skills into ~/.codex/skills from the workspace checkout or the VSIX bundle.
+ * skills into ~/.codex/skills, both from the VSIX bundle. A workspace's
+ * `.codex/commands/` is never copied, and its `skills/` is used only by the
+ * separate development command, installSkillsFromWorkspace().
  */
 
 import * as vscode from "vscode";
@@ -12,9 +14,13 @@ import * as os from "os";
 import { exec } from "child_process";
 import { promisify } from "util";
 import { getPrefixedMainChannel } from "../utils/logger";
-import { copySkillsTree, resolveBundledSkillsDir } from "./bundledSkills";
+import { copySkillsTree, installWorkspaceSkills, resolveBundledSkillsDir } from "./bundledSkills";
 
 const execAsync = promisify(exec);
+
+function codexHome(): string {
+  return process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
+}
 
 const REQUIRED_COMMANDS = [
   "nightgauge-issue-pickup.md",
@@ -96,8 +102,7 @@ export class CodexSetupService implements vscode.Disposable {
       return { codexCliAvailable: false, commandsInstalled: false };
     }
 
-    const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
-    const commandsDir = path.join(codexHome, "commands");
+    const commandsDir = path.join(codexHome(), "commands");
     const commandsInstalled = REQUIRED_COMMANDS.every((file) =>
       fs.existsSync(path.join(commandsDir, file))
     );
@@ -105,19 +110,13 @@ export class CodexSetupService implements vscode.Disposable {
     return { codexCliAvailable, commandsInstalled };
   }
 
+  /**
+   * The VSIX bundle's command definitions, never a workspace's
+   * `.codex/commands/`: every Codex session loads ~/.codex/commands.
+   */
   private resolveCommandsSourceDir(): string | null {
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    const workspaceSource = workspaceRoot ? path.join(workspaceRoot, ".codex", "commands") : null;
-    if (workspaceSource && fs.existsSync(workspaceSource)) {
-      return workspaceSource;
-    }
-
     const bundledSource = path.join(this.context.extensionPath, "resources", "codex", "commands");
-    if (fs.existsSync(bundledSource)) {
-      return bundledSource;
-    }
-
-    return null;
+    return fs.existsSync(bundledSource) ? bundledSource : null;
   }
 
   private async installAssets(): Promise<void> {
@@ -127,11 +126,10 @@ export class CodexSetupService implements vscode.Disposable {
     try {
       const sourceCommandsDir = this.resolveCommandsSourceDir();
       if (!sourceCommandsDir) {
-        throw new Error("No Codex command source found (.codex/commands or bundled resources).");
+        throw new Error("No bundled Codex commands found (resources/codex/commands).");
       }
 
-      const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
-      const commandsDest = path.join(codexHome, "commands");
+      const commandsDest = path.join(codexHome(), "commands");
       await fs.promises.mkdir(commandsDest, { recursive: true });
 
       for (const file of REQUIRED_COMMANDS) {
@@ -141,18 +139,13 @@ export class CodexSetupService implements vscode.Disposable {
         );
       }
 
-      // Skill sync: workspace checkout first (maintainers), else the VSIX
-      // bundle so marketplace users still get ~/.codex/skills.
-      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      const workspaceSkills =
-        workspaceRoot && fs.existsSync(path.join(workspaceRoot, "skills"))
-          ? path.join(workspaceRoot, "skills")
-          : null;
-      const sourceSkillsDir =
-        workspaceSkills ?? resolveBundledSkillsDir(this.context.extensionPath);
+      // Skill sync reads the VSIX bundle only, never the workspace: the
+      // development source is installSkillsFromWorkspace().
+      const sourceSkillsDir = resolveBundledSkillsDir(this.context.extensionPath);
       if (sourceSkillsDir) {
-        const skillsDest = path.join(codexHome, "skills");
-        await copySkillsTree(sourceSkillsDir, skillsDest);
+        await copySkillsTree(sourceSkillsDir, path.join(codexHome(), "skills"), (message) =>
+          this.outputChannel.appendLine(`WARNING: ${message}`)
+        );
       }
 
       await this.context.globalState.update(CodexSetupService.INSTALLED_KEY, true);
@@ -168,6 +161,14 @@ export class CodexSetupService implements vscode.Disposable {
       this.outputChannel.appendLine(`✗ Installation failed: ${errorMessage}`);
       vscode.window.showErrorMessage(`Failed to install Codex commands: ${errorMessage}`);
     }
+  }
+
+  /**
+   * Development only: install ~/.codex/skills from the open workspace's
+   * `skills/`, behind workspace trust and a modal confirmation.
+   */
+  async installSkillsFromWorkspace(): Promise<void> {
+    await installWorkspaceSkills("Codex", path.join(codexHome(), "skills"), this.outputChannel);
   }
 
   dispose(): void {

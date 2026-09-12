@@ -87,6 +87,23 @@ changelog, and the release workflow refuses a tag that does not.
   loaded as instructions for that directory by tools that read nested
   `AGENTS.md` files (#1606)
 
+### Security
+
+- The VS Code extension's Grok and Codex setup now installs only the skills
+  and Codex commands bundled with the extension. It no longer copies the open
+  workspace's `skills/` or `.codex/commands/` folder into `~/.grok` or
+  `~/.codex`, which every later session loads in every project. Installing
+  skills from a checkout is a separate development command that refuses an
+  untrusted workspace or a destination overlapping the source, and names both
+  paths in a confirmation. The copy follows no symlink out of the source folder
+  and no symlinked folder at all, and it replaces an existing skill folder only
+  when the folder holds the `.nightgauge-installed` marker that the extension
+  now writes. Any other folder is left untouched with a warning that names it.
+  That includes a folder an earlier version of the extension installed and one
+  `scripts/install-agent-skills.sh` installed or refreshed, because the script
+  writes no marker. Delete such a folder to let the extension install it
+  (#1683)
+
 ## [0.4.1] - 2026-09-11
 
 ### Fixed

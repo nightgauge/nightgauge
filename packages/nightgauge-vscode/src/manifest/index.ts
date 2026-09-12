@@ -254,6 +254,16 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
       icon: "$(terminal)",
     },
     {
+      command: "nightgauge.setupCodexFromWorkspace",
+      title: "Nightgauge: Install Codex Skills from This Workspace (Development)",
+      icon: "$(terminal)",
+    },
+    {
+      command: "nightgauge.setupGrokFromWorkspace",
+      title: "Nightgauge: Install Grok Skills from This Workspace (Development)",
+      icon: "$(terminal)",
+    },
+    {
       command: "nightgauge.resetPipeline",
       title: "Nightgauge: Reset Pipeline",
       icon: "$(clear-all)",

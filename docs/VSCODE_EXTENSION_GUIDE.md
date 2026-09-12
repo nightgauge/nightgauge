@@ -581,16 +581,18 @@ Commands are organized by function. Access via Command Palette (Cmd+Shift+P / Ct
 
 ### Configuration & Setup
 
-| Command                                 | What It Does                              |
-| --------------------------------------- | ----------------------------------------- |
-| `Nightgauge: Open Settings`             | Open extension settings                   |
-| `Nightgauge: Switch Execution Adapter`  | Switch between Claude/Codex/Gemini        |
-| `Nightgauge: Setup Claude Code Plugins` | Configure Claude Code CLI plugins         |
-| `Nightgauge: Setup Codex Commands`      | Configure Codex adapter                   |
-| `Nightgauge: Setup Grok Skills`         | Install Nightgauge skills for Grok        |
-| `Nightgauge: Disable Auto-Accept`       | Toggle permission auto-acceptance         |
-| `Nightgauge: Select Target Branch`      | Choose branch for PR creation             |
-| `Nightgauge: Switch Repository`         | Switch active workspace repo (multi-repo) |
+| Command                                                              | What It Does                                                                |
+| -------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `Nightgauge: Open Settings`                                          | Open extension settings                                                     |
+| `Nightgauge: Switch Execution Adapter`                               | Switch between Claude/Codex/Gemini                                          |
+| `Nightgauge: Setup Claude Code Plugins`                              | Configure Claude Code CLI plugins                                           |
+| `Nightgauge: Setup Codex Commands`                                   | Configure Codex adapter                                                     |
+| `Nightgauge: Setup Grok Skills`                                      | Install Nightgauge skills for Grok                                          |
+| `Nightgauge: Install Codex Skills from This Workspace (Development)` | Install `~/.codex/skills` from this checkout's `skills/` after confirmation |
+| `Nightgauge: Install Grok Skills from This Workspace (Development)`  | Install `~/.grok/skills` from this checkout's `skills/` after confirmation  |
+| `Nightgauge: Disable Auto-Accept`                                    | Toggle permission auto-acceptance                                           |
+| `Nightgauge: Select Target Branch`                                   | Choose branch for PR creation                                               |
+| `Nightgauge: Switch Repository`                                      | Switch active workspace repo (multi-repo)                                   |
 
 ### Cleanup & Reset
 

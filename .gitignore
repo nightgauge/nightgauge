@@ -129,6 +129,12 @@ packages/**/.nightgauge/
 # Pipeline debug logs (may be large)
 nightgauge-output-*.json
 
+# Install marker that the VS Code extension writes into each skill directory it
+# installs under ~/.codex or ~/.grok. A skills directory linked into this
+# checkout can receive one; it is never skill content, so it must never be
+# committed or published with the plugin (#1683).
+.nightgauge-installed
+
 # Generated AI context files
 GEMINI.md
 
