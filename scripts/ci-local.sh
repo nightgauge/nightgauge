@@ -592,7 +592,11 @@ run_group "Mirror drift gate regression suite" \
 
 # 11a. Agent-skill install targets — Grok/Codex/Claude home copies and
 #      --*-only flags, against a throwaway HOME. Self-test includes a
-#      vacuous-fail arm (install_grok commented out).
+#      vacuous-fail arm (install_grok commented out). Safe in the group only
+#      because it runs the installer in a sandbox seeded from `git archive
+#      HEAD`: the installer regenerates its repository's plugin-skills mirror,
+#      and run against this checkout it made 11b read a half-rebuilt mirror.
+#      Arm (g) fails if the suite writes the checkout's mirror again.
 run_group "Agent-skill install target regression suite" \
   bash scripts/test-install-agent-skills-targets.sh
 

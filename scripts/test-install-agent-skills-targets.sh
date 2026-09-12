@@ -6,7 +6,8 @@
 # `grok plugin list` was empty and `~/.grok/skills` did not exist. These arms
 # pin the home-skills copy for Grok and Codex, the --*-only flags, and the
 # skip-when-absent path — against a throwaway HOME, never the operator's
-# real ~/.codex or ~/.grok.
+# real ~/.codex or ~/.grok, and a sandbox copy of the repository, never this
+# checkout, whose committed plugin-skills mirror the installer would rewrite.
 #
 # Arm (vacuous) copies the installer, comments out the install_grok call, and
 # asserts --grok-only then leaves ~/.grok/skills empty. Without that, a test
@@ -18,7 +19,6 @@ set -uo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 REPO_ROOT="$(pwd)"
-INSTALLER="$REPO_ROOT/scripts/install-agent-skills.sh"
 PASS=0
 FAIL=0
 TMP=""
@@ -41,6 +41,19 @@ nope() {
 
 TMP="$(mktemp -d)"
 
+# The installer derives REPO_ROOT from its own path and always regenerates
+# <REPO_ROOT>/claude-plugins/nightgauge/skills first, so every arm runs a copy
+# of it inside a sandbox, never the checkout's own copy. The skills come from
+# HEAD, so an arm sees only what it sets up. The installer and its link helper
+# are the working-tree copies, so an uncommitted edit to them is what gets
+# tested. Arm (g) proves the checkout's mirror is left alone.
+SANDBOX="$TMP/repo"
+mkdir -p "$SANDBOX/scripts/lib"
+git archive HEAD skills | tar -x -C "$SANDBOX"
+cp scripts/install-agent-skills.sh "$SANDBOX/scripts/"
+cp scripts/lib/mirror_links.py "$SANDBOX/scripts/lib/"
+INSTALLER="$SANDBOX/scripts/install-agent-skills.sh"
+
 # PATH with the real claude/codex/grok CLIs stripped so the installer cannot
 # write into the operator's plugin caches. Keep rsync/python3/node/git.
 filter_path() {
@@ -56,6 +69,25 @@ filter_path() {
   printf '%s\n' "$filtered"
 }
 SAFE_PATH="$(filter_path)"
+
+# Path, inode, mtime and size of every entry in the checkout's committed mirror.
+# The installer regenerates the mirror by deleting and recreating each skill
+# directory, so any installer run against this checkout changes the listing.
+CHECKOUT_MIRROR="$REPO_ROOT/claude-plugins/nightgauge/skills"
+mirror_fingerprint() {
+  python3 - "$CHECKOUT_MIRROR" <<'PY'
+import os, sys
+root = sys.argv[1]
+rows = []
+for dirpath, dirnames, filenames in os.walk(root):
+    for name in [""] + dirnames + filenames:
+        path = os.path.join(dirpath, name) if name else dirpath
+        st = os.lstat(path)
+        rows.append(f"{os.path.relpath(path, root)}\t{st.st_ino}\t{st.st_mtime_ns}\t{st.st_size}")
+print("\n".join(sorted(rows)))
+PY
+}
+MIRROR_BEFORE="$(mirror_fingerprint)"
 
 # --- (a) default install copies Codex + Grok when both dest roots exist -----
 HOME_A="$TMP/home-a"
@@ -146,9 +178,9 @@ fi
 
 # --- (f) commenting out install_grok makes --grok-only miss dest ------------
 # The installer computes REPO_ROOT from its own path, so the copy is patched
-# to keep pointing at this checkout while the grok call is disabled.
+# to keep pointing at the sandbox while the grok call is disabled.
 BROKEN="$TMP/broken-install.sh"
-python3 - "$INSTALLER" "$BROKEN" "$REPO_ROOT" <<'PY'
+python3 - "$INSTALLER" "$BROKEN" "$SANDBOX" <<'PY'
 import sys
 src, dest, repo = sys.argv[1], sys.argv[2], sys.argv[3]
 text = open(src, encoding="utf-8").read()
@@ -181,6 +213,17 @@ else
   # A disabled grok install must still exit 0 (best-effort skip).
   nope "(f) patched installer exited non-zero"
   sed 's/^/    /' "$TMP/f.err"
+fi
+
+# --- (g) the checkout's committed mirror was never written ------------------
+# ci-local.sh runs this suite concurrently with the read-only mirror drift gate,
+# and lint.yml runs it just before that gate. A run that regenerated the
+# checkout's mirror would make the gate read a half-rebuilt tree locally and
+# compare generator output with itself in CI.
+if [ "$(mirror_fingerprint)" = "$MIRROR_BEFORE" ]; then
+  ok "(g) the checkout's claude-plugins/nightgauge/skills was not written"
+else
+  nope "(g) the suite rewrote the checkout's claude-plugins/nightgauge/skills"
 fi
 
 echo ""
