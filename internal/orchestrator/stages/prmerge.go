@@ -14,11 +14,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
 	"github.com/nightgauge/nightgauge/internal/knowledge"
 )
 
@@ -30,11 +32,16 @@ import (
 //     human or LLM judgment (real conflict, failed CI, missing review,
 //     rate-limit, unexpected error). Scheduler falls through to the existing
 //     LLM skill path.
+//   - PathRefused — the runner refused the merge for a reason no LLM retry may
+//     override (generated steering on the PR head, issue 1675). The scheduler
+//     fails the stage instead of falling through to the LLM skill, which could
+//     otherwise merge the same head.
 type PRMergePath string
 
 const (
-	PathMerged PRMergePath = "merged"
-	PathPunt   PRMergePath = "punt"
+	PathMerged  PRMergePath = "merged"
+	PathPunt    PRMergePath = "punt"
+	PathRefused PRMergePath = "refused"
 )
 
 // Reason codes recorded on PRMergeResult.Reason. Free-form strings are also
@@ -82,6 +89,11 @@ const (
 	// entry from an unrelated issue must never block someone's merge; the
 	// whole-base sweep is `knowledge validate --conformance`.
 	ReasonKnowledgeNonConformant = "knowledge-non-conformant"
+	// ReasonGeneratedSteering is recorded (with PathRefused) when an AGENTS.md
+	// at the PR head carries the pipeline's managed Codex steering block —
+	// generated, per-stage content that must never reach the default branch
+	// (issue 1675). Never merged and never handed to the LLM path.
+	ReasonGeneratedSteering = "generated-steering-committed"
 )
 
 // CI-wait budget for the deterministic pr-merge path (Issue #297). When the
@@ -231,6 +243,10 @@ type DeterministicRunner struct {
 	// knowledgeConformance checks the issue's knowledge entries against the
 	// frontmatter contract. Injectable for tests; nil disables the gate.
 	knowledgeConformance func(workdir string, issueNumber int) (*knowledge.ConformanceResult, error)
+	// steeringGate inspects the PR head for committed managed steering and
+	// repairs it from a local worktree when one exists (issue 1675).
+	// Injectable for tests; nil disables the gate.
+	steeringGate func(ctx context.Context, workdir, headRef string) (codexprovision.PRHeadVerdict, error)
 }
 
 // NewDeterministicRunner builds a runner using a real `gh`-backed client.
@@ -248,6 +264,9 @@ func NewDeterministicRunner() *DeterministicRunner {
 		now:            time.Now,
 
 		knowledgeConformance: knowledge.ValidateConformanceForIssue,
+		steeringGate: func(ctx context.Context, workdir, headRef string) (codexprovision.PRHeadVerdict, error) {
+			return codexprovision.GuardPRHead(ctx, workdir, "origin", headRef)
+		},
 	}
 }
 
@@ -303,6 +322,14 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 			PRNumber: prNumber,
 			Reason:   classifyFetchError(fetchErr),
 		}, nil)
+	}
+
+	// The steering gate runs before any verdict that could punt: a punt hands
+	// the stage to the LLM skill, which can merge the same head, so the refusal
+	// has to come first to be a gate rather than a suggestion (issue 1675).
+	if refused := r.refuseGeneratedSteering(ctx, workdir, prNumber, snap); refused != nil {
+		ph.failInFlight()
+		return finish(*refused, nil)
 	}
 
 	decision := Decide(snap)
@@ -411,6 +438,12 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 		}
 	}
 
+	// Re-check the head immediately before merging: the CI wait above can
+	// last minutes, and a push inside it would otherwise land unexamined.
+	if refused := r.refuseGeneratedSteering(ctx, workdir, prNumber, snap); refused != nil {
+		return finish(*refused, nil)
+	}
+
 	// Issue the merge. Idempotent at the GitHub level: re-issuing on an
 	// already-merged PR returns a benign error which we tolerate (the
 	// re-poll below confirms MERGED).
@@ -483,6 +516,48 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 		PRState:  postSnap.State,
 		Reason:   ReasonMergeECTimeout,
 	}, nil)
+}
+
+// refuseGeneratedSteering is the steering gate (issue 1675). It returns a
+// PathRefused result when an AGENTS.md at the PR head carries the managed
+// steering block, nil otherwise. With a local worktree on the head branch the
+// block is repaired and the repair pushed first, so the next attempt can merge
+// once required checks re-run on the new head; without one the operator is
+// told the exact command. A head that cannot be inspected is logged and
+// passed: the pr-create push and the post-stage repair are the other layers.
+func (r *DeterministicRunner) refuseGeneratedSteering(ctx context.Context, workdir string, prNumber int, snap PRViewSnapshot) *PRMergeResult {
+	if r.steeringGate == nil || snap.State != "OPEN" || snap.HeadRefName == "" {
+		return nil
+	}
+	v, err := r.steeringGate(ctx, workdir, snap.HeadRefName)
+	if err != nil {
+		log.Printf("pr-merge: could not inspect PR #%d head %s for generated steering (not blocking): %v",
+			prNumber, snap.HeadRefName, err)
+		return nil
+	}
+	if len(v.Leaked) == 0 {
+		return nil
+	}
+	head := codexprovision.ShortSHA(v.HeadSHA)
+	files := strings.Join(v.Leaked, ", ")
+	var detail string
+	switch {
+	case v.Pushed:
+		detail = fmt.Sprintf("PR head %s carries generated Nightgauge steering in %s; the repair %s was pushed to %s, so required checks must re-run before the merge is retried",
+			head, files, codexprovision.ShortSHA(v.RepairSHA), snap.HeadRefName)
+	case v.Worktree != "":
+		detail = fmt.Sprintf("PR head %s carries generated Nightgauge steering in %s and the repair could not be published from %s (%v); run 'nightgauge preflight managed-steering --fix' there, commit and push, then retry",
+			head, files, v.Worktree, v.PushErr)
+	default:
+		detail = fmt.Sprintf("PR head %s carries generated Nightgauge steering in %s and no local worktree is on %s; run 'nightgauge preflight managed-steering --fix' on that branch, commit and push, then retry",
+			head, files, snap.HeadRefName)
+	}
+	return &PRMergeResult{
+		Path:     PathRefused,
+		PRNumber: prNumber,
+		PRState:  snap.State,
+		Reason:   ReasonGeneratedSteering + ": " + detail,
+	}
 }
 
 // conformanceSummary renders the offending entries compactly enough for a

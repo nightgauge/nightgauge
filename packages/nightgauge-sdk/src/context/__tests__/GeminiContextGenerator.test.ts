@@ -82,7 +82,7 @@ describe("GeminiContextGenerator", () => {
       expect(content).not.toContain("### Acceptance Criteria");
     });
 
-    it("includes project description from CLAUDE.md when available", () => {
+    it("falls back to CLAUDE.md when AGENTS.md is missing", () => {
       fs.writeFileSync(path.join(tmpDir, "CLAUDE.md"), "# My Project\n\nThis is a test project.\n");
 
       const content = generator.assembleContent(opts());
@@ -91,16 +91,21 @@ describe("GeminiContextGenerator", () => {
       expect(content).toContain("My Project");
     });
 
-    it("falls back to AGENTS.md when CLAUDE.md is missing", () => {
+    it("reads the AGENTS.md contract before a CLAUDE.md adapter (issue 1675)", () => {
       fs.writeFileSync(
         path.join(tmpDir, "AGENTS.md"),
         "# Agent Config\n\nAgent instructions here.\n"
+      );
+      fs.writeFileSync(
+        path.join(tmpDir, "CLAUDE.md"),
+        "@AGENTS.md\n\n# Claude Code adapter\n\nClaude-only notes.\n"
       );
 
       const content = generator.assembleContent(opts());
 
       expect(content).toContain("## Project");
       expect(content).toContain("Agent Config");
+      expect(content).not.toContain("Claude-only notes");
     });
 
     it("does not pull a Codex managed block out of AGENTS.md into Gemini context (#4028)", () => {

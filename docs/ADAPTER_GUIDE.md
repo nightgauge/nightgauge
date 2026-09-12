@@ -833,16 +833,51 @@ assumption (#4028):
 - **Claude** (`claude-sdk` / `claude-headless`): the `claude_code` SDK
   system-prompt preset.
 - **Codex**: an `AGENTS.md` managed block provisioned before the stage and
-  stripped after (`CodexContextGenerator`). It is **non-destructive** — a
+  stripped after (`CodexContextGenerator` in the SDK and extension,
+  `codexprovision` on the Go-direct path). It is **non-destructive** — a
   user-authored `AGENTS.md` is preserved; only the delimited
-  `NIGHTGAUGE MANAGED STEERING` block is written/removed, so nothing leaks
-  into commits.
+  `NIGHTGAUGE MANAGED STEERING` block is written/removed. See
+  [Generated steering is never committed](#generated-steering-is-never-committed).
 - **Gemini** (`gemini` / `gemini-sdk`): a generated `GEMINI.md`
   (`GeminiContextGenerator`, gitignored).
 - **lm-studio / ollama / copilot**: no preset; guidance arrives via the prompt.
 
 `systemPromptPresetForAdapter()` resolves the preset (Claude only); the per-adapter
 context generators self-guard by adapter name.
+
+#### Where the project description comes from
+
+The `## Project` section of the Codex block and of `GEMINI.md` summarizes the
+repository's own contract: the user-authored part of root `AGENTS.md`, with any
+managed block removed. `CLAUDE.md` is read only when `AGENTS.md` is absent or
+holds nothing but the managed block, and then a leading `@AGENTS.md` import
+line is skipped. In the agent-guidance architecture `CLAUDE.md` is a thin
+adapter that imports `AGENTS.md`, so reading it first would summarize the
+adapter instead of the rules. Go and TypeScript share this precedence and the
+same summary rules (headings without body text are dropped, so a title
+followed directly by a subsection still yields the subsection's content),
+pinned by shared fixtures in
+`internal/execution/codexprovision/testdata/extract-summary/`.
+
+#### Generated steering is never committed
+
+The Codex agent runs, and may commit, while the block is in `AGENTS.md`, so
+stripping the working tree after the stage is not enough. Every path is
+guarded:
+
+- **Pipeline-owned commits** (pr-create, the scheduler's recovery commit, the
+  reset checkpoint, the heal commit, the extension's WIP and validate
+  backstops) remove the block from the staged `AGENTS.md` before committing;
+  the working tree keeps its steering while a stage is live.
+- **Commits the agent made itself** are repaired after every stage, on every
+  adapter and exit path: when `HEAD`'s `AGENTS.md` carries the block, one
+  commit removing exactly the block is added. The deterministic pr-create push
+  repairs before pushing, and pr-merge refuses to merge a pull request whose
+  head still carries the block.
+- **Existing repositories**: `nightgauge preflight managed-steering` reports a
+  block committed in any tracked `AGENTS.md` (exit `1`), and `--fix` removes it
+  from the working tree for review. Smart Setup's migration and verify mode use
+  the same check.
 
 ---
 

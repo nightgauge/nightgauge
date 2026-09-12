@@ -246,6 +246,32 @@ func TestHasUncommittedWork_IgnoresOnlyGeneratedCodexSteering(t *testing.T) {
 	}
 }
 
+// TestRecoverUncommittedWork_NeverCommitsGeneratedSteering_1675 reproduces the
+// recovery-commit leak: hasUncommittedWork ignores AGENTS.md only when the
+// managed block is its sole change, so any real work alongside it sent the
+// block through `git add -A` into the rescue commit.
+func TestRecoverUncommittedWork_NeverCommitsGeneratedSteering_1675(t *testing.T) {
+	dir := t.TempDir()
+	gitInitRepo(t, dir)
+	managed := "<!-- BEGIN NIGHTGAUGE MANAGED STEERING -->\ngenerated\n<!-- END NIGHTGAUGE MANAGED STEERING -->\n"
+	if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("# User rules\n\n"+managed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "impl.go"), []byte("package impl\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RecoverUncommittedWork(dir, 1675, "feature-dev"); err != nil {
+		t.Fatalf("RecoverUncommittedWork = %v", err)
+	}
+	head := gittest.Run(t, dir, "show", "HEAD:AGENTS.md")
+	if strings.Contains(head, "MANAGED STEERING") || !strings.Contains(head, "# User rules") {
+		t.Fatalf("recovery commit published generated steering or lost user content:\n%s", head)
+	}
+	if got := gittest.Run(t, dir, "show", "HEAD:impl.go"); got != "package impl" {
+		t.Errorf("the rescued work must be committed, got %q", got)
+	}
+}
+
 // TestRecoverUncommittedWork verifies the recovery commit is created with the
 // canonical message, and that the function errors gracefully on a bad path.
 func TestRecoverUncommittedWork(t *testing.T) {

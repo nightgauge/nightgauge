@@ -195,11 +195,11 @@ Tools for creating well-structured issues and managing knowledge across teams.
 
 Universal skills that work across any repository and AI tool.
 
-| Skill                                 | Version | Description                                                                                                                              |
-| ------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| [smart-setup](smart-setup/SKILL.md)   | 4.8.0   | Make any repository AI-ready with AGENTS.md, CLAUDE.md, and focused documentation. One-time setup for AI readiness.                      |
-| [update-docs](update-docs/SKILL.md)   | 1.7.0   | Verify and update documentation to match current codebase. Detects drift, deprecated references, and inconsistencies. Works on any repo. |
-| [pr-preflight](pr-preflight/SKILL.md) | 1.1.0   | Universal pre-flight validation for pull requests. Catches common issues like broken links, invalid syntax, and missing documentation.   |
+| Skill                                 | Version | Description                                                                                                                                                 |
+| ------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [smart-setup](smart-setup/SKILL.md)   | 5.0.0   | Make any repository AI-ready with a tool-neutral AGENTS.md, a thin CLAUDE.md, focused docs and a CI check; migrates older layouts and verifies conformance. |
+| [update-docs](update-docs/SKILL.md)   | 1.7.0   | Verify and update documentation to match current codebase. Detects drift, deprecated references, and inconsistencies. Works on any repo.                    |
+| [pr-preflight](pr-preflight/SKILL.md) | 1.1.0   | Universal pre-flight validation for pull requests. Catches common issues like broken links, invalid syntax, and missing documentation.                      |
 
 ---
 

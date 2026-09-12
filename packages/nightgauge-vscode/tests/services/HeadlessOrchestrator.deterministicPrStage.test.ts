@@ -53,37 +53,46 @@ vi.mock("../../src/services/BinaryResolver", () => ({
 }));
 
 // Mutable state shared between the hoisted mock factory and the tests.
-const { prStageCalls, prStageCreate, prStageMerge, gatePrMergePassed, prStagePhaseLines } =
-  vi.hoisted(() => ({
-    prStageCalls: { value: [] as Array<{ verb: string; args: string[] }> },
-    // Default: both stages succeed deterministically.
-    prStageCreate: {
-      value: {
-        stage: "pr-create",
-        path: "created",
-        pr_number: 999,
-        pr_url: "https://github.com/TestOrg/test-repo/pull/999",
-        reason: "rich-context",
-        rate_limited: false,
-        duration_ms: 4,
-      } as Record<string, unknown>,
-    },
-    prStageMerge: {
-      value: {
-        stage: "pr-merge",
-        path: "merged",
-        pr_number: 999,
-        pr_state: "MERGED",
-        reason: "clean-mergeable: merged",
-        rate_limited: false,
-        duration_ms: 6,
-      } as Record<string, unknown>,
-    },
-    gatePrMergePassed: { value: true },
-    // #1397 — the sentinel-prefixed phase transitions the fake pr-stage binary
-    // writes to stderr while it "runs".
-    prStagePhaseLines: { value: [] as string[] },
-  }));
+const {
+  prStageCalls,
+  prStageCreate,
+  prStageMerge,
+  gatePrMergePassed,
+  prStagePhaseLines,
+  gitHeadLeaked,
+} = vi.hoisted(() => ({
+  // Issue 1675: when true, the branch's published head commits AGENTS.md
+  // with the managed steering block (the fake `git` below serves it).
+  gitHeadLeaked: { value: false },
+  prStageCalls: { value: [] as Array<{ verb: string; args: string[] }> },
+  // Default: both stages succeed deterministically.
+  prStageCreate: {
+    value: {
+      stage: "pr-create",
+      path: "created",
+      pr_number: 999,
+      pr_url: "https://github.com/TestOrg/test-repo/pull/999",
+      reason: "rich-context",
+      rate_limited: false,
+      duration_ms: 4,
+    } as Record<string, unknown>,
+  },
+  prStageMerge: {
+    value: {
+      stage: "pr-merge",
+      path: "merged",
+      pr_number: 999,
+      pr_state: "MERGED",
+      reason: "clean-mergeable: merged",
+      rate_limited: false,
+      duration_ms: 6,
+    } as Record<string, unknown>,
+  },
+  gatePrMergePassed: { value: true },
+  // #1397 — the sentinel-prefixed phase transitions the fake pr-stage binary
+  // writes to stderr while it "runs".
+  prStagePhaseLines: { value: [] as string[] },
+}));
 
 vi.mock("child_process", async () => {
   const actual = await vi.importActual<typeof import("child_process")>("child_process");
@@ -104,6 +113,24 @@ vi.mock("child_process", async () => {
   execFileMock[kCustom] = (cmd: string, args: string[]) => {
     const a = args ?? [];
     const isBinary = typeof cmd === "string" && cmd.includes("nightgauge");
+
+    if (cmd === "git" && gitHeadLeaked.value) {
+      const g = a[0] === "-C" ? a.slice(2) : a;
+      const ok = (stdout: string) => Promise.resolve({ stdout, stderr: "" });
+      if (g[0] === "symbolic-ref") return ok("fix/300-x\n");
+      if (g[0] === "config" && g[2]?.endsWith(".remote")) return ok("origin\n");
+      if (g[0] === "config" && g[2]?.endsWith(".merge")) return ok("refs/heads/fix/300-x\n");
+      if (g[0] === "fetch") return ok("");
+      if (g[0] === "rev-parse") return ok("abc123def4567890\n");
+      if (g[0] === "ls-tree") return ok("AGENTS.md\0README.md\0");
+      if (g[0] === "show") {
+        return ok(
+          "# Rules\n\n<!-- BEGIN NIGHTGAUGE MANAGED STEERING -->\ngenerated\n<!-- END NIGHTGAUGE MANAGED STEERING -->\n"
+        );
+      }
+      // merge-base / log / push: nothing publishable from this fake clone.
+      return Promise.reject(new Error(`git ${g.join(" ")}: not in this fixture`));
+    }
 
     if (isBinary && a[0] === "pr-stage") {
       const verb = a[1]; // "create" | "merge"
@@ -570,6 +597,63 @@ describe("HeadlessOrchestrator deterministic-first pr-stage (Issue #300)", () =>
       "pr-merge",
       expect.stringContaining("github-quota-low")
     );
+  });
+
+  it("pr-merge: 'refused' fails the stage — the LLM skill is NOT run (issue 1675)", async () => {
+    prStageMerge.value = {
+      stage: "pr-merge",
+      path: "refused",
+      pr_number: 999,
+      pr_state: "OPEN",
+      reason: "generated-steering-committed: PR head abc carries generated Nightgauge steering",
+      rate_limited: false,
+      duration_ms: 2,
+    };
+    mockSkillSuccess(); // must NOT be invoked
+    const state = createMockStateService("pr-merge");
+    const orchestrator = new HeadlessOrchestrator(state, mockLogger, { contextFileWaitMs: 0 });
+    orchestrator.setWorktreeOverride(WORKTREE);
+
+    const result = await orchestrator.runPipeline(300);
+
+    const skillStages = vi.mocked(runStageSkillHeadless).mock.calls.map((c) => c[0]);
+    expect(skillStages).not.toContain("pr-merge");
+    expect(result.success).toBe(false);
+    expect(vi.mocked(state.failStage)).toHaveBeenCalledWith(
+      "pr-merge",
+      expect.stringContaining("generated-steering-committed")
+    );
+  });
+
+  it("pr-merge: a punt is still gated — a leaked published head never reaches the LLM skill (issue 1675)", async () => {
+    gitHeadLeaked.value = true;
+    try {
+      prStageMerge.value = {
+        stage: "pr-merge",
+        path: "punt",
+        pr_number: 999,
+        pr_state: "OPEN",
+        reason: "ci-wait-timeout",
+        rate_limited: false,
+        duration_ms: 3,
+      };
+      mockSkillSuccess(); // must NOT be invoked
+      const state = createMockStateService("pr-merge");
+      const orchestrator = new HeadlessOrchestrator(state, mockLogger, { contextFileWaitMs: 0 });
+      orchestrator.setWorktreeOverride(WORKTREE);
+
+      const result = await orchestrator.runPipeline(300);
+
+      const skillStages = vi.mocked(runStageSkillHeadless).mock.calls.map((c) => c[0]);
+      expect(skillStages).not.toContain("pr-merge");
+      expect(result.success).toBe(false);
+      expect(vi.mocked(state.failStage)).toHaveBeenCalledWith(
+        "pr-merge",
+        expect.stringContaining("nightgauge preflight managed-steering --fix")
+      );
+    } finally {
+      gitHeadLeaked.value = false;
+    }
   });
 
   it("pr-create: deterministic 'created' skips the LLM skill and passes --repo + --workdir", async () => {

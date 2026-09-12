@@ -37,7 +37,7 @@ Complete reference for all Nightgauge skills — what they do, when to use them,
 | `nightgauge-docs-write`             | Documentation    | Write narrative documentation sections                                     | 1.1.0   | `/nightgauge:docs-write [options]`             |
 | `nightgauge-continuous-improvement` | Self-Improvement | Unified continuous improvement review                                      | 1.0.0   | `/nightgauge:continuous-improvement [options]` |
 | `pr-preflight`                      | Portable         | Universal PR pre-flight validation                                         | 1.1.0   | `/pr-preflight`                                |
-| `smart-setup`                       | Portable         | Make repository AI-ready                                                   | 4.8.0   | `/smart-setup`                                 |
+| `smart-setup`                       | Portable         | Make repository AI-ready                                                   | 5.0.0   | `/smart-setup`                                 |
 | `update-docs`                       | Portable         | Verify and update documentation                                            | 1.7.0   | `/update-docs [options]`                       |
 | `nightgauge-repo-init`              | Project Ops      | Prime repository for Nightgauge                                            | 1.3.1   | `/nightgauge:repo-init [options]`              |
 | `nightgauge-workspace-init`         | Project Ops      | Scaffold multi-repo workspace manifest                                     | 1.0.0   | `/nightgauge:workspace-init [options]`         |
@@ -1406,10 +1406,10 @@ See [full specification](../skills/pr-preflight/SKILL.md)
 
 ### `/smart-setup`
 
-**Version:** 4.7.1 | **Purpose:** Make repository AI-ready
+**Version:** 5.0.0 | **Purpose:** Make repository AI-ready
 
 **Description:**
-Analyze a repository and create minimal, focused documentation (AGENTS.md, CLAUDE.md) optimized for both humans and AI agents. Uses tiered approach to avoid bloating repositories.
+Analyze a repository and create minimal, focused documentation optimized for both humans and AI agents: a tool-neutral AGENTS.md, a thin CLAUDE.md adapter, docs/AGENT_GUIDANCE.md routing, and a CI job (`agent guidance`) running the bundled conformance check. A repository in the older CLAUDE.md-first layout gets a migration plan and proposed diff instead of an additive merge; `/smart-setup verify` reports conformance without changing anything.
 
 **When to Use:**
 
@@ -1420,11 +1420,11 @@ Analyze a repository and create minimal, focused documentation (AGENTS.md, CLAUD
 
 **Invocation:**
 
-| Tool        | Command                         |
-| ----------- | ------------------------------- |
-| Claude Code | `/smart-setup`                  |
-| Copilot     | Invoke via Agent Skills         |
-| Cursor      | Agent Skills or direct SKILL.md |
+| Tool        | Command                               |
+| ----------- | ------------------------------------- |
+| Claude Code | `/smart-setup`, `/smart-setup verify` |
+| Copilot     | Invoke via Agent Skills               |
+| Cursor      | Agent Skills or direct SKILL.md       |
 
 **Philosophy:**
 
@@ -1434,7 +1434,7 @@ Analyze a repository and create minimal, focused documentation (AGENTS.md, CLAUD
 - Leave room for WHY — mark sections requiring human input
 - Don't bloat repositories — skip files for unused tools
 
-**Output:** AGENTS.md + CLAUDE.md + optional config docs
+**Output:** AGENTS.md + CLAUDE.md + docs + `agent guidance` CI check, or a migration plan and diff for review
 
 See [full specification](../skills/smart-setup/SKILL.md)
 

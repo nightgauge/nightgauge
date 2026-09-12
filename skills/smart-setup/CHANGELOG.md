@@ -8,7 +8,33 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- `/smart-setup verify`: a read-only conformance report against the DC-01…DC-22
+  checklist, running the installed check for the items it covers (issue 1675).
+- Installs a byte-identical copy of the bundled `check-agent-guidance.sh` and a
+  CI job named `agent guidance` (`--workspace-block forbidden`), and tells the
+  user to make it a required status check (issue 1675).
+- Generated `AGENTS.md` carries the `<!-- nightgauge:agent-guidance v1 -->`
+  provenance marker; nested `AGENTS.md` files with a sibling `CLAUDE.md` are
+  proposed for sub-packages with their own toolchain (issue 1675).
+
 ### Changed
+
+- A repository in the older layout (rules in `CLAUDE.md`, `AGENTS.md` deferring
+  to `CLAUDE.md`, symlinked instruction files, a committed managed-steering
+  block) now gets a migration plan listing every moved rule plus a proposed
+  diff for review, instead of an additive merge. The additive policy applies
+  only to files already in the new layout (issue 1675).
+- Copilot's pointer adapter is created only when Copilot is selected, matching
+  GitHub's support matrix; Cursor and Kiro get no generated copy of
+  `AGENTS.md` (issue 1675).
+
+### Fixed
+
+- Every template renders completely (broken nested fences), the knowledge row
+  is part of the routing table, and the `CLAUDE.md` template starts with
+  `@AGENTS.md` on line 1 (issue 1675).
 
 - Generate `AGENTS.md` as the universal contract for every repository, keep
   Claude and Copilot files as thin adapters, and store documentation routing in

@@ -86,6 +86,8 @@ import {
   deliverableKindForStage,
   stampPolicyMarker,
   summarizePolicy,
+  sanitizeStagedAgentsMd,
+  guardUpstreamHead,
   type NightgaugeAdapter,
   type RecoveryAction,
   type RecoveryRequiredPayload,
@@ -1940,6 +1942,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
 
       // Stage all changes and commit
       await execAsync("git add -A", { cwd: workDir, timeout: 10_000 });
+      // Never publish the ephemeral Codex steering block (issue 1675).
+      await sanitizeStagedAgentsMd(workDir);
       const commitMsg =
         `WIP: budget-exceeded checkpoint for #${issueNumber} (${stage})\n\n` +
         `Auto-committed by pipeline budget-pause (Issue #1935).\n` +
@@ -3084,6 +3088,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         cwd,
         timeout: 15_000,
       });
+      // Never publish the ephemeral Codex steering block (issue 1675).
+      await sanitizeStagedAgentsMd(cwd);
       const commitMsg =
         `feat(#${issueNumber}): commit validated implementation (deterministic backstop)\n\n` +
         `feature-validate passed but skipped its commit-and-push phase (Issue #1608 ` +
@@ -4059,6 +4065,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     | { kind: "llm" }
     | { kind: "handled"; result: StageRunResult }
     | { kind: "deferred"; error: Error }
+    | { kind: "refused"; error: Error }
   > {
     if (stage !== "pr-create" && stage !== "pr-merge") {
       return { kind: "llm" };
@@ -4205,6 +4212,27 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       return { kind: "deferred", error: deferErr };
     }
 
+    // Refused → a deterministic gate declined the merge (generated steering on
+    // the PR head, issue 1675). Never fall through to the LLM skill, which
+    // could merge the same head; fail the stage with the classified reason.
+    if (parsed.path === "refused") {
+      const refuseErr = new Error(`deterministic ${stage} refused: ${reason}`);
+      this.stageExecutionPaths.set(stage, { path: "deterministic", puntReason: reason });
+      this.logger.warn("Deterministic pr-stage refused — failing the stage (no LLM fallback)", {
+        stage,
+        issueNumber,
+        reason,
+      });
+      if (this.stateService) {
+        try {
+          await this.stateService.failStage(stage, refuseErr.message);
+        } catch {
+          // Non-critical — the caller still breaks the loop.
+        }
+      }
+      return { kind: "refused", error: refuseErr };
+    }
+
     const created = stage === "pr-create" && parsed.path === "created";
     const merged = stage === "pr-merge" && parsed.path === "merged";
     if (created || merged) {
@@ -4249,6 +4277,61 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       issueNumber,
     });
     return { kind: "llm" };
+  }
+
+  /**
+   * Steering gate for the LLM pr-merge path (issue 1675) — the TypeScript twin
+   * of the Go runner's gate. Returns the refusal error when the branch's
+   * published head carries generated Nightgauge steering (after repairing it
+   * and pushing the repair where possible), or null when the merge may run.
+   * A head that cannot be inspected is logged and passed, like the Go gate.
+   */
+  private async refuseLlmMergeOnGeneratedSteering(issueNumber: number): Promise<Error | null> {
+    const workdir = this.getWorkingDirectory();
+    let verdict;
+    try {
+      // Through this file's own execFile, the seam every other subprocess
+      // here uses (and that tests substitute).
+      verdict = await guardUpstreamHead(workdir, async (cwd, args) => {
+        try {
+          const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], {
+            timeout: 120_000,
+          });
+          return String(stdout);
+        } catch {
+          return null;
+        }
+      });
+    } catch (err) {
+      this.logger.warn("pr-merge steering gate could not inspect the head (not blocking)", {
+        issueNumber,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+    if (!verdict.inspected || verdict.leaked.length === 0) return null;
+    const head = (verdict.headSha ?? "").slice(0, 12);
+    const files = verdict.leaked.join(", ");
+    const detail = verdict.pushed
+      ? `PR head ${head} carries generated Nightgauge steering in ${files}; the repair was pushed, so required checks must re-run before the merge is retried`
+      : `PR head ${head} carries generated Nightgauge steering in ${files} and the repair could not be published (${verdict.pushError ?? "unknown"}); run 'nightgauge preflight managed-steering --fix' on the branch, commit and push, then retry`;
+    const refuseErr = new Error(`pr-merge refused: generated-steering-committed: ${detail}`);
+    this.stageExecutionPaths.set("pr-merge", {
+      path: "deterministic",
+      puntReason: "generated-steering-committed",
+    });
+    this.logger.warn("pr-merge refused before the LLM skill — generated steering on the PR head", {
+      issueNumber,
+      detail,
+    });
+    if (this.stateService) {
+      try {
+        await this.stateService.failStage("pr-merge", refuseErr.message);
+      } catch {
+        // Non-critical — the caller still breaks the loop.
+      }
+    }
+    return refuseErr;
   }
 
   /**
@@ -11044,10 +11127,22 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         // rate-limit DEFERS (no LLM fallback, #3976).
         // ===================================================================
         const detOutcome = await this.runDeterministicPrStage(stage, issueNumber, stageStartTime);
-        if (detOutcome.kind === "deferred") {
+        if (detOutcome.kind === "deferred" || detOutcome.kind === "refused") {
           failedStage = stage;
           error = detOutcome.error;
           break;
+        }
+        // The LLM pr-merge skill can merge whatever head the PR has, and it is
+        // reached both on a runner punt and when the runner could not run at
+        // all. Gate it on the published head here, so generated steering is
+        // never merged whichever path the stage takes (issue 1675).
+        if (stage === "pr-merge" && detOutcome.kind === "llm") {
+          const steeringRefusal = await this.refuseLlmMergeOnGeneratedSteering(issueNumber);
+          if (steeringRefusal) {
+            failedStage = stage;
+            error = steeringRefusal;
+            break;
+          }
         }
 
         const result =

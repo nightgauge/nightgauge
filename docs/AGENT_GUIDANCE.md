@@ -141,6 +141,27 @@ Do not copy this repository's product-specific rules blindly. The workspace
 block and the check are portable; each repository's operating contract is
 local.
 
+### Projects that use Nightgauge
+
+Repositories that use Nightgauge, rather than build it, adopt the same
+architecture through Smart Setup (`skills/smart-setup/`), without the workspace
+block:
+
+- It classifies the repository first. Files already in this architecture get
+  an additive gap fill. A repository in the older layout — rules, commands or
+  routing in `CLAUDE.md`, an `AGENTS.md` that defers to `CLAUDE.md` or is named
+  after a tool, symlinked instruction files, over-budget files, or a committed
+  managed steering block — gets a migration plan that lists every moved rule
+  with its old and new location, plus a proposed diff for review. No rule is
+  deleted and none is copied from another repository.
+- It installs a byte-identical copy of `scripts/check-agent-guidance.sh`, which
+  ships with the skill, and a CI job named `agent guidance` that runs it with
+  `--workspace-block forbidden`, then asks the user to make that job a
+  required status check. `lint.yml` and `scripts/ci-local.sh` keep the bundled
+  copy byte-identical to this repository's script.
+- `/smart-setup verify` reports conformance against the same checklist
+  without changing anything.
+
 ## Durable knowledge
 
 - Agent behavior and routing live in `AGENTS.md` and this document.

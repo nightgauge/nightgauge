@@ -384,7 +384,7 @@ func TestScheduler_PRMerge_ReadsContextFromWorktree(t *testing.T) {
 	rs.BeginStage(state.StagePRMerge)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
-	if merged, _, _ := s.tryDeterministicPRMerge(context.Background(), state.StagePRMerge, rs, item, "/tmp/repo"); !merged || det.lastWorkdir != worktree {
+	if merged, _, _, _ := s.tryDeterministicPRMerge(context.Background(), state.StagePRMerge, rs, item, "/tmp/repo"); !merged || det.lastWorkdir != worktree {
 		t.Fatalf("PRMergeRunner.Run workdir = %q, want worktree %q (#275)", det.lastWorkdir, worktree)
 	}
 }
@@ -403,7 +403,7 @@ func TestScheduler_PRCreate_OrthogonalToPRMerge(t *testing.T) {
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
 	// Call pr-merge hook for pr-create stage — must NOT fire.
-	if merged, _, _ := s.tryDeterministicPRMerge(context.Background(), state.StagePRCreate, rs, item, "/tmp"); merged {
+	if merged, _, _, _ := s.tryDeterministicPRMerge(context.Background(), state.StagePRCreate, rs, item, "/tmp"); merged {
 		t.Errorf("pr-merge hook fired for pr-create stage")
 	}
 	if prMerge.callCount != 0 {

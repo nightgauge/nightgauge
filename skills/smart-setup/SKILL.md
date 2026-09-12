@@ -1,12 +1,14 @@
 ---
 name: smart-setup
-description: Make any repository AI-ready with AGENTS.md, CLAUDE.md, and focused
-  documentation. Use when setting up a new project or when a repository is
-  missing AI configuration files.
+description: Make any repository AI-ready with a tool-neutral AGENTS.md, a thin
+  CLAUDE.md adapter, focused docs and a CI conformance check, migrating
+  repositories that use the older CLAUDE.md-first layout. Use when setting up a
+  new project, when a repository is missing or has outdated AI configuration
+  files, or to verify conformance with `/smart-setup verify`.
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "4.8.0"
+  version: "5.0.0"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task AskUserQuestion
 ---
@@ -21,14 +23,38 @@ This skill analyzes your repository and creates **minimal, focused
 documentation** optimized for both humans and AI coding agents. It uses a
 **tiered approach** to avoid bloating repositories with unnecessary files.
 
+It has two modes:
+
+- **Setup** (default) — detect which instruction model the repository uses and
+  either generate the files, fill gaps in files that already follow the
+  architecture, or produce a **migration plan and proposed diff** for a
+  repository in the older model. It installs a deterministic check and its CI
+  job so the result stays conformant.
+- **Verify** (`/smart-setup verify`) — read-only conformance report against the
+  DC-01…DC-22 checklist.
+
 ## Invocation
 
-| Tool           | Command                     |
-| -------------- | --------------------------- |
-| Claude Code    | `/smart-setup` (via plugin) |
-| OpenAI Codex   | `$smart-setup`              |
-| GitHub Copilot | Invoke via Agent Skills     |
-| Cursor         | Invoke via Agent Skills     |
+| Tool           | Command                                          |
+| -------------- | ------------------------------------------------ |
+| Claude Code    | `/smart-setup` or `/smart-setup verify` (plugin) |
+| OpenAI Codex   | `$smart-setup` or `$smart-setup verify`          |
+| GitHub Copilot | Invoke via Agent Skills                          |
+| Cursor         | Invoke via Agent Skills                          |
+
+## Supporting files (load on demand)
+
+Each file sits in the same directory as this SKILL.md; pipeline runtimes export
+that directory as `NIGHTGAUGE_SKILL_DIR`. Call it `SKILL_DIR` below.
+
+- `_includes/migration.md` — read in Step 0.3 (classify the instruction model)
+  and Phase 4M (migration plan and diff for the OLD model)
+- `_includes/templates.md` — read in Phase 4 (every file template)
+- `_includes/enforcement.md` — read in Phase 4, step 7 (install the check and
+  its `agent guidance` CI job)
+- `_includes/verify.md` — read in Verify mode (DC-01…DC-22)
+- `scripts/check-agent-guidance.sh` — the deterministic check, byte-identical
+  to the one Nightgauge runs on itself; installed into the target repository
 
 ## Philosophy
 
@@ -39,13 +65,16 @@ documentation** optimized for both humans and AI coding agents. It uses a
 - **Leave room for WHY** — Mark sections requiring human input (tribal knowledge
   AI can't infer)
 - **Don't bloat repositories** — Skip files for tools the team doesn't use
-- **Single source of truth** — Create docs/ files first, then have AI configs
-  reference them (see
-  [docs/ARCHITECTURE.md](https://github.com/nightgauge/nightgauge/blob/main/docs/ARCHITECTURE.md#documentation-architecture-philosophy))
+- **One home per fact** — Explanations live in `docs/`; `AGENTS.md` holds the
+  rules every session needs and points to them
+- **Never lose a rule** — Migration moves every rule to its new home and lists
+  where it went; it never deletes one
+- **Enforce, don't just instruct** — Structure is checked in CI, not trusted to
+  a model
 
 Use this marker for information only humans can provide:
 
-```
+```text
 [TEAM TO DOCUMENT: <specific question>]
 ```
 
@@ -73,16 +102,55 @@ This prevents AI hallucination and preserves tribal knowledge.
 This skill supports inline arguments via `$ARGUMENTS`:
 
 ```bash
-# Run with default settings
+# Setup with default settings
 /smart-setup
 
 # Specify configuration level
 /smart-setup --tier essential
 /smart-setup --tier standard
 /smart-setup --tier advanced
+
+# Read-only conformance report (changes nothing)
+/smart-setup verify
 ```
 
-The `$ARGUMENTS` variable contains everything after the skill name.
+The `$ARGUMENTS` variable contains everything after the skill name. When it
+starts with `verify`, skip to [Verify Mode](#verify-mode).
+
+## Instruction Architecture
+
+Smart Setup produces the architecture defined in Nightgauge's
+[agent guidance reference](https://github.com/nightgauge/nightgauge/blob/main/docs/AGENT_GUIDANCE.md).
+Tools load instruction files differently, so the layout is designed for the
+tool that reads the least:
+
+| Tool           | Root `AGENTS.md`                            | Nested `AGENTS.md`                                       | `CLAUDE.md`                    |
+| -------------- | ------------------------------------------- | -------------------------------------------------------- | ------------------------------ |
+| Claude Code    | Only through `@AGENTS.md` in `CLAUDE.md`    | Not read (nested `CLAUDE.md` is)                         | Yes                            |
+| Codex          | Yes                                         | Root down to the working directory, nothing deeper       | Not read                       |
+| GitHub Copilot | Cloud agent, CLI, code review, VS Code chat | Cloud agent; VS Code only behind an experimental setting | CLI, cloud agent, VS Code chat |
+| Cursor         | Yes                                         | Yes                                                      | Yes                            |
+| Kiro           | Yes                                         | Yes                                                      | Not documented                 |
+
+Therefore:
+
+1. **Root `AGENTS.md` is the operating contract** and must be complete on its
+   own: a session started at the root in Claude Code or Codex sees nothing
+   else. Its first heading names the project, never a tool; it never defers to
+   `CLAUDE.md`; it names the complete local gate; it stays under 200 lines.
+2. **Root `AGENTS.md` indexes every nested `AGENTS.md`.** A nested file only
+   adds rules for its subtree, and each has a sibling `CLAUDE.md` whose line 1
+   is `@AGENTS.md` so Claude Code loads it there. The root-to-deepest chain
+   stays under 32 KiB (Codex's default budget).
+3. **`CLAUDE.md` line 1 is exactly `@AGENTS.md`.** Cursor, Copilot and VS Code
+   read `CLAUDE.md` too, so below the import it holds only Claude Code content,
+   under a heading that names Claude Code — no commands, rules or routing.
+4. **Routing lives in `docs/AGENT_GUIDANCE.md`** under the heading
+   `## Documentation routing`, linked from the docs index (`docs/README.md`).
+5. **Instruction files are regular files** — no symlinks, no imports from
+   outside the repository.
+6. **Enforcement is deterministic** — `scripts/check-agent-guidance.sh` runs in
+   a CI job named `agent guidance`.
 
 ## IMPORTANT: Tiered Approach
 
@@ -101,19 +169,24 @@ These are the minimum files every AI-ready repository needs:
 | Claude Code + any other tool          | ✅ Yes           | ✅ Yes                       |
 
 > `AGENTS.md` is always the tool-neutral contract. Claude Code does not read it
-> directly, so Claude projects also receive a thin `CLAUDE.md` that imports
-> `@AGENTS.md`. This avoids duplicate instructions while leaving the repository
-> ready for other compatible agents.
+> directly, so Claude projects also receive a thin `CLAUDE.md` whose line 1
+> imports `@AGENTS.md`. This avoids duplicate instructions while leaving the
+> repository ready for other compatible agents.
 
-**Documentation Files (always created):**
+**Documentation files (always created):**
 
-- `docs/README.md` - Documentation index
-- `docs/AGENT_GUIDANCE.md` - Agent architecture and documentation routing
+- `docs/README.md` - Documentation index (links `docs/AGENT_GUIDANCE.md`)
+- `docs/AGENT_GUIDANCE.md` - Agent architecture and `## Documentation routing`
 - `docs/ARCHITECTURE.md` - System architecture
 - `docs/CODE_STANDARDS.md` - Coding conventions
 - `docs/GIT_WORKFLOW.md` - Git/version control workflow (or equivalent for TFS,
   etc.)
 - `docs/SECURITY_AND_ERROR_HANDLING.md` - Security guidelines and error handling
+
+**Enforcement (always installed):**
+
+- `scripts/check-agent-guidance.sh` - byte-identical copy of the bundled check
+- `.github/workflows/agent-guidance.yml` - CI job named `agent guidance`
 
 > **Note**: Tier 1 files are created regardless of whether user selects
 > Essential, Standard, or Advanced. Higher tiers ADD to Tier 1, not replace it.
@@ -122,13 +195,19 @@ These are the minimum files every AI-ready repository needs:
 
 **Only create these if the user uses that specific tool:**
 
-- `.cursor/rules/` - Only if using Cursor IDE
-- `.kiro/steering/` - Only if using Kiro IDE
-- `.github/copilot-instructions.md` - Thin adapter only if using GitHub Copilot
+- `.github/copilot-instructions.md` — **only when GitHub Copilot is selected.**
+  `AGENTS.md` is read by the Copilot cloud agent, Copilot CLI, code review and
+  VS Code chat; github.com Chat, Visual Studio, JetBrains, Eclipse and Xcode
+  chat and IDE code review read only this file
+  ([support matrix](https://docs.github.com/en/copilot/reference/custom-instructions-support)).
+  It is a pointer to `AGENTS.md` of at most 30 lines, never a second ruleset.
+- `.cursor/rules/` — Cursor already applies `AGENTS.md` and `CLAUDE.md`. Create
+  a rule only for something genuinely Cursor-specific (a glob-scoped rule).
+- `.kiro/steering/` — Kiro already includes `AGENTS.md`. Create a steering file
+  only for something genuinely Kiro-specific.
 
-> Copilot agent surfaces read `AGENTS.md`, while some IDE and review surfaces
-> still use `.github/copilot-instructions.md`. Keep that file as a thin pointer
-> to `AGENTS.md`, never as a second copy of project rules.
+Never create `.cursorrules`, `.windsurfrules` or `GEMINI.md` copies of
+`AGENTS.md`.
 
 ### Tier 3: Advanced (Opt-in Only)
 
@@ -162,14 +241,18 @@ Before asking questions, detect:
 
 **Existing AI Config Files:**
 
-- `AGENTS.md` — Universal AI config (current standard)
-- `CLAUDE.md` — thin Claude Code adapter importing `AGENTS.md`
-- `.github/copilot-instructions.md` — Copilot adapter; migrate substantive
-  content to `AGENTS.md` or `docs/`
-- `.cursor/rules/` — Cursor IDE config
-- `.kiro/steering/` — Kiro IDE config
+- `AGENTS.md` (root and nested) — the tool-neutral contract
+- `CLAUDE.md` (root and nested) — Claude Code adapter; line 1 should be
+  `@AGENTS.md`
+- `.github/copilot-instructions.md` — Copilot pointer adapter
+- `.cursor/rules/`, `.cursorrules` — Cursor config
+- `.kiro/steering/` — Kiro config
+- `.windsurfrules`, `GEMINI.md` — other tool files
+- `scripts/check-agent-guidance.sh`, `.github/workflows/*` running it —
+  enforcement
 
-**Documentation:** Check for docs/ directory and its contents.
+**Documentation:** Check for docs/ directory and its contents, and for an
+existing documentation index.
 
 **Nightgauge Knowledge Base:**
 
@@ -211,19 +294,19 @@ Store results internally for Phase 1 reporting.
       "options": [
         {
           "label": "Claude Code",
-          "description": "Anthropic's CLI and VS Code agent"
+          "description": "Reads CLAUDE.md, which imports AGENTS.md"
         },
         {
           "label": "GitHub Copilot",
-          "description": "Uses AGENTS.md directly (no extra config needed)"
+          "description": "Agent, CLI, review and VS Code chat read AGENTS.md; other chat surfaces need a short pointer file"
         },
         {
           "label": "Cursor IDE",
-          "description": "AI-first code editor (needs .cursor/rules/)"
+          "description": "Reads AGENTS.md and CLAUDE.md natively; no extra file needed"
         },
         {
           "label": "Kiro IDE",
-          "description": "AWS-backed agent (needs .kiro/steering/)"
+          "description": "Reads AGENTS.md natively; no extra file needed"
         }
       ]
     },
@@ -234,7 +317,7 @@ Store results internally for Phase 1 reporting.
       "options": [
         {
           "label": "Essential (Recommended)",
-          "description": "Core files only: AGENTS.md, CLAUDE.md, basic docs"
+          "description": "AGENTS.md, CLAUDE.md if selected, core docs, CI check"
         },
         {
           "label": "Standard",
@@ -249,6 +332,9 @@ Store results internally for Phase 1 reporting.
   ]
 }
 ```
+
+Codex and other `AGENTS.md`-compatible agents need no extra file; a user may
+name them under "Other".
 
 **WAIT for user response before proceeding to Phase 1.**
 
@@ -271,6 +357,7 @@ Generated: [YYYY-MM-DD]
 - **Config Level**: [Essential/Standard/Advanced]
 - **Version Control**: [Git/TFS/etc.]
 - **CLAUDE.md**: [Yes/No]
+- **Instruction model detected**: [NONE/OLD/NEW]
 
 ## Project Context Questions
 
@@ -282,43 +369,60 @@ Generated: [YYYY-MM-DD]
 - [ ] File 2 - status
 ```
 
+#### Step 0.3: Classify the Instruction Model
+
+**Read `_includes/migration.md` (same directory as this SKILL.md) now and run
+its Phase 0.3 detection before continuing.**
+
+It classifies the repository as `NONE` (no instruction files), `OLD` (any of
+signals M1–M8: `CLAUDE.md` without `@AGENTS.md` on line 1; routing, commands
+or portable rules in `CLAUDE.md`; `AGENTS.md` deferring to `CLAUDE.md`;
+`AGENTS.md` whose first heading names a tool; a committed managed-steering
+block; symlinked instruction files; over-budget files; rules only in a tool
+file) or `NEW`. The model decides the Phase 4 path.
+
 ---
 
 ### Phase 1: Scan & Report
 
 Scan ONLY files relevant to user's selections. Report findings clearly:
 
-```
-Based on your selections (Claude Code, Essential config, Git):
+```text
+Based on your selections (Claude Code + Copilot, Essential config, Git):
+
+Instruction model: OLD — a migration plan will be proposed, not an additive merge
+  [M1] CLAUDE.md line 1 is not @AGENTS.md
+  [M3] AGENTS.md:3 "Read CLAUDE.md first"
+  [M5] AGENTS.md:88-140 managed steering block committed
 
 ✅ AGENTS.md - exists (127 lines)
-❌ CLAUDE.md - missing
+✅ CLAUDE.md - exists (214 lines, holds the documentation map and commands)
 ✅ docs/ - exists with 5 files
    ├── README.md ✅
    ├── ARCHITECTURE.md ✅
    ├── CODE_STANDARDS.md ✅
    ├── GIT_WORKFLOW.md ✅
    └── SECURITY_AND_ERROR_HANDLING.md ❌ missing
-
-⚠️ Legacy files found (will integrate into modern config):
-   └── .github/copilot-instructions.md (67 lines) → content will merge into AGENTS.md
-
-Your repository is mostly AI-ready! Only 2 files need attention.
+❌ docs/AGENT_GUIDANCE.md - missing (routing currently in CLAUDE.md)
+❌ scripts/check-agent-guidance.sh - not installed
+⚠️ .github/copilot-instructions.md (67 lines) - rules will move to AGENTS.md;
+   the file becomes a pointer (Copilot selected)
 ```
 
-**DO NOT report on tool-specific files the user didn't select.**
+**DO NOT report on tool-specific files the user didn't select**, except that
+an unselected tool's file holding project rules is reported as a migration
+source (its rules must move before it can be removed).
 
 **Nightgauge Knowledge Base reporting**: When
 `HAS_NIGHTGAUGE_CONFIG=true`:
 
 - If `KNOWLEDGE_DIR_EXISTS=true`: Report
   `✅ Knowledge base active (.nightgauge/knowledge/ — {KNOWLEDGE_ENTRY_COUNT} issue entries)`
-  — the Knowledge Base row will be added to the Documentation Map in
-  `docs/AGENT_GUIDANCE.md`, and a
-  `## Knowledge Base` section to AGENTS.md.
+  — the Knowledge row will be added to the `## Documentation routing` table in
+  `docs/AGENT_GUIDANCE.md`, and a `## Knowledge base` section to AGENTS.md.
 - If `KNOWLEDGE_DIR_EXISTS=false`: Report the following recommendation:
 
-```
+```text
 ℹ️  Knowledge base directory not present yet. It is enabled by default and is
     scaffolded on the next issue pickup — no config needed. To opt out (repo
     footprint or per-run token cost), add to .nightgauge/config.yaml:
@@ -327,18 +431,21 @@ Your repository is mostly AI-ready! Only 2 files need attention.
     See: docs/KNOWLEDGE_BASE.md
 ```
 
-**Legacy File Handling:** If `.github/copilot-instructions.md` exists, its
-valuable content will be integrated into `AGENTS.md` during generation. The
-legacy file can then be removed or kept as a reference.
-
 ---
 
 ### Phase 2: Context Questions About Files
 
-**For existing files**, ask how to handle:
+**For a `NEW`-model repository**, ask about each gap the check or the
+templates reveal:
 
-- "CLAUDE.md exists (89 lines). Keep as-is, review and suggest improvements, or
-  replace?"
+- "AGENTS.md follows the architecture (127 lines). It does not name the local
+  gate. Add a Commands section taken from your CI workflow?"
+
+**For an `OLD`-model repository**, ask once:
+
+- "This repository uses the older layout (signals M1, M3, M5). I'll prepare a
+  migration plan and a proposed diff on a new branch for your review; nothing
+  is committed until you approve. Proceed?"
 
 **For missing files**, ask if they want them created:
 
@@ -353,6 +460,8 @@ legacy file can then be removed or kept as a reference.
    - Framework (check imports, dependencies)
    - Build tools & package managers
    - Testing frameworks
+   - CI workflows and the commands they run (the local gate must match them)
+   - Sub-packages with their own toolchain (nested-file candidates)
    - IDE indicators (.idea/, .vscode/, .vs/)
 
 2. **Ask questions AI cannot infer:**
@@ -369,28 +478,48 @@ legacy file can then be removed or kept as a reference.
 
 ### Phase 4: Generate Documentation
 
-**CRITICAL: Generation Order**
+**Read `_includes/templates.md` (same directory as this SKILL.md) now; every
+file below uses its template.**
 
-Generate files in this order so later files can reference earlier ones:
+**Path by model:**
 
-1. **First**: `docs/GIT_WORKFLOW.md` (or TFS) — using content from
-   [Git Workflow Rules](#git-workflow-rules)
-2. **Second**: `docs/SECURITY_AND_ERROR_HANDLING.md` — using content from
-   [Security Rules](#security-rules)
-3. **Then**: Other docs/ files
-4. **Then**: `AGENTS.md` — always; keep it concise and reference the docs
-5. **Then**: `CLAUDE.md` — only if Claude Code was selected; import
-   `@AGENTS.md` and add only Claude-specific behavior
-6. **Finally**: Tool-specific files (Tier 2) — reference `AGENTS.md` and docs
+- `NONE` — generate from the templates in the order below.
+- `NEW` — additive: add only the parts the user approved in Phase 2; never
+  rewrite content that already conforms.
+- `OLD` — **HARD GATE: run Phase 4M from `_includes/migration.md` instead of
+  the additive merge.** It produces a migration plan and proposed diff; the
+  steps below are applied inside it.
+
+**Generation order** (later files reference earlier ones):
+
+1. `docs/GIT_WORKFLOW.md` (or TFS) — using [Git Workflow Rules](#git-workflow-rules)
+2. `docs/SECURITY_AND_ERROR_HANDLING.md` — using [Security Rules](#security-rules)
+3. Other docs/ files, then `docs/AGENT_GUIDANCE.md` (`## Documentation
+routing`; every path must resolve) and `docs/README.md` linking it
+4. Root `AGENTS.md` — always; tool-neutral first heading, the provenance marker
+   `<!-- nightgauge:agent-guidance v1 -->` below it, the complete local gate,
+   and the nested-file index
+5. Nested `AGENTS.md` + sibling `CLAUDE.md` — only for approved sub-packages
+6. `CLAUDE.md` — only if Claude Code was selected; line 1 `@AGENTS.md`, then
+   only Claude Code content
+7. **Enforcement** — **Read `_includes/enforcement.md` (same directory as this
+   SKILL.md) now** and install `scripts/check-agent-guidance.sh` plus the
+   `agent guidance` CI job with `--workspace-block forbidden`
+8. Tool-specific files (Tier 2) — only for selected tools; pointers, not copies
+9. Run the installed check; it must exit `0` before you present the result
 
 **CRITICAL RULES:**
 
 1. **Use REAL code examples only** — Every example MUST come from actual files
    in this repository
 2. **Never overwrite without permission** — Always ask before modifying existing
-   files
-3. **Mark unknowns clearly** — `[TEAM TO DOCUMENT: Why was PostgreSQL chosen?]`
-4. **Respect tier selection** — Don't create files for unselected tools
+   files; in the `OLD` model, the migration diff is the request
+3. **Never delete a rule** — every rule in a file you change ends up somewhere,
+   and the plan says where
+4. **Never copy rules from another repository** — including Nightgauge's own
+   rules and its workspace-rules block
+5. **Mark unknowns clearly** — `[TEAM TO DOCUMENT: Why was PostgreSQL chosen?]`
+6. **Respect tier selection** — Don't create files for unselected tools
 
 ---
 
@@ -437,332 +566,18 @@ referenced (not duplicated) by other files:
 
 ## File Templates
 
-### docs/GIT_WORKFLOW.md Template
-
-```markdown
-# Git Workflow
-
-## Critical Rules
-
-**These rules are MANDATORY for ALL contributors, including AI assistants:**
-
-| Rule                              | Description                                                            |
-| --------------------------------- | ---------------------------------------------------------------------- |
-| **NEVER push directly to `main`** | All changes must go through feature branches                           |
-| **ALWAYS use feature branches**   | Create a branch for every change                                       |
-| **ALWAYS create pull requests**   | Every merge to main requires a reviewed PR                             |
-| **Follow branch naming**          | Use prefixes: `feat/`, `fix/`, `docs/`, `refactor/`, `test/`, `chore/` |
-
-## Branch Naming
-
-- `feat/TICKET-123-description` - New features
-- `fix/TICKET-123-description` - Bug fixes
-- `docs/TICKET-123-description` - Documentation
-- `refactor/TICKET-123-description` - Refactoring
-- `test/TICKET-123-description` - Test changes
-- `chore/TICKET-123-description` - Maintenance
-
-## Commit Message Format
-```
-
-[TYPE][TICKET-ID] Short summary (50 chars or less)
-
-Detailed explanation if necessary.
-
-Refs: TICKET-ID
-
-```
-
-Types: `[FEAT]`, `[FIX]`, `[DOCS]`, `[STYLE]`, `[REFACTOR]`, `[TEST]`, `[CHORE]`
-
-## Pull Request Process
-
-1. Create feature branch from `main`
-2. Make changes with meaningful commits
-3. Push branch and create PR
-4. Request review from team member
-5. Address feedback
-6. Merge after approval (squash or merge per team preference)
-```
-
----
-
-### docs/SECURITY_AND_ERROR_HANDLING.md Template
-
-```markdown
-# Security and Error Handling
-
-## Security Rules (CRITICAL)
-
-| Rule                                 | Description                                    |
-| ------------------------------------ | ---------------------------------------------- |
-| **NEVER hardcode secrets**           | Use environment variables or secret management |
-| **ALWAYS validate input**            | Sanitize at system boundaries                  |
-| **NEVER expose sensitive data**      | Keep credentials out of logs/responses         |
-| **ALWAYS use parameterized queries** | Prevent SQL injection                          |
-| **NEVER commit secrets**             | Use .gitignore, pre-commit hooks               |
-
-## Input Validation
-
-- Validate all user input at API boundaries
-- Use allowlists over denylists where possible
-- Sanitize data before database operations
-- Encode output appropriately (HTML, URL, SQL)
-
-## Error Handling
-
-- Return generic error messages to users
-- Log detailed errors server-side with context
-- Include request IDs for correlation
-- Never expose stack traces in production
-
-## Logging Guidelines
-
-**Log these:**
-
-- Authentication attempts (success and failure)
-- Authorization failures
-- Input validation failures
-- System errors
-
-**Never log:**
-
-- Passwords or tokens
-- Full credit card numbers
-- Personal identifiable information (PII)
-- Session tokens or API keys
-```
-
----
-
-### docs/AGENT_GUIDANCE.md Template
-
-```markdown
-# Agent Guidance and Documentation Routing
-
-This document is the tool-neutral source for documentation routing. Root
-`AGENTS.md` contains the small always-loaded contract; tool adapters import it
-and add only tool-specific behavior.
-
-## Documentation Map
-
-| Topic        | Primary Docs                        | Keywords                                    |
-| ------------ | ----------------------------------- | ------------------------------------------- |
-| Architecture | docs/ARCHITECTURE.md                | architecture, design, components, structure |
-| Git          | docs/GIT_WORKFLOW.md                | git, branch, commit, merge, pull, request   |
-| Security     | docs/SECURITY_AND_ERROR_HANDLING.md | security, validation, secrets, auth, input  |
-| Testing      | docs/TESTING.md                     | test, coverage, unit, integration, e2e      |
-| Standards    | docs/CODE_STANDARDS.md              | naming, style, format, convention           |
-
-<!-- Add the following row only when KNOWLEDGE_DIR_EXISTS=true -->
-
-| Knowledge | .nightgauge/knowledge/ | knowledge, prd, decision, adr, provenance |
-```
-
----
-
-### AGENTS.md Template
-
-````markdown
-# [Project Name]
-
-## Overview
-
-[Brief description based on README and code analysis]
-
-Use `docs/README.md` and `docs/AGENT_GUIDANCE.md` to select relevant project
-documentation before substantive work. Keep explanations and procedures in
-`docs/`; keep this file to non-obvious instructions needed in every session.
-
-<!-- Include the following section only when KNOWLEDGE_DIR_EXISTS=true -->
-
-## Knowledge Base
-
-Issue-specific context files (PRDs and decision logs) are stored under
-`.nightgauge/knowledge/`. Structure:
-
-- `epics/{N}-{slug}/PRD.md` — Epic product requirements
-- `epics/{N}-{slug}/decisions.md` — Epic architectural decisions
-- `features/{N}-{slug}/PRD.md` — Feature requirements
-- `features/{N}-{slug}/decisions.md` — Feature decisions
-
-See `docs/KNOWLEDGE_BASE.md` for schema and usage.
-
-<!-- End conditional Knowledge Base section -->
-
-## Quick Start
-
-```bash
-[Real commands from package.json/Makefile/csproj/etc.]
-```
-````
-
-## Non-obvious project rules
-
-- [Rule an agent cannot infer from code]
-- [Repository-specific validation or safety constraint]
-- Follow [docs/CODE_STANDARDS.md](docs/CODE_STANDARDS.md) for implementation
-  conventions and [docs/TESTING.md](docs/TESTING.md) when it exists.
-
-## Git Workflow (CRITICAL)
-
-**See [docs/GIT_WORKFLOW.md](docs/GIT_WORKFLOW.md)** for complete workflow.
-
-Never push directly to `main`. Use the repository's feature-branch and pull
-request workflow, and run its documented validation before pushing.
-
-## Security (CRITICAL)
-
-**See
-[docs/SECURITY_AND_ERROR_HANDLING.md](docs/SECURITY_AND_ERROR_HANDLING.md)**
-
-Never hardcode secrets. Validate input at system boundaries and use
-parameterized queries.
-
-````
-
----
-
-### CLAUDE.md Template
-
-**CRITICAL: CLAUDE.md must be concise.** A bloated CLAUDE.md causes Claude to ignore important instructions. Follow this principle from official Claude Code best practices:
-
-> "For each line, ask: Would removing this cause Claude to make mistakes? If not, cut it."
-
-**Quality Guidelines:**
-
-| Metric | Good | Warning | Concern |
-| ------ | ---- | ------- | ------- |
-| Line count | < 100 | 100-200 | > 200 |
-| Self-evident instructions | None | Few | Many |
-| Discoverable information | None | Some | Lots |
-
-**What to INCLUDE:**
-
-- Bash commands Claude can't guess (non-standard test commands, build steps)
-- Code style that deviates from language standards
-- Critical safety rules (don't delete production data, don't push to main)
-- Non-obvious project conventions
-- References to detailed docs (not the content itself)
-
-**What to EXCLUDE:**
-
-- File-by-file directory listings (Claude can explore)
-- Self-evident instructions ("write clean code", "use meaningful names")
-- Standard language conventions (Claude already knows TypeScript best practices)
-- Information Claude can discover by reading files
-
-```markdown
-# [Project Name] - Claude Code Configuration
-
-@AGENTS.md
-
-This file contains only Claude Code-specific behavior. Repository rules and
-documentation routing are owned by `AGENTS.md` and `docs/AGENT_GUIDANCE.md`.
-
-## Claude Code
-
-[Only behavior unique to Claude Code; omit this section when none is needed.]
-````
-
-**Anti-patterns to AVOID in CLAUDE.md:**
-
-```markdown
-# BAD - Too verbose, self-evident
-
-## Directory Structure
-
-- src/ - Source code
-- tests/ - Test files
-- docs/ - Documentation
-
-## Coding Standards
-
-- Use meaningful variable names
-- Write clean, readable code
-- Follow TypeScript best practices
-```
-
----
-
-### Tool-Specific Templates (Tier 2)
-
-**Create ONLY if user selected that tool.**
-
-#### .github/copilot-instructions.md
-
-```markdown
-# GitHub Copilot Instructions
-
-Read and follow the repository-root `AGENTS.md`; it is the canonical project
-contract. Use `docs/AGENT_GUIDANCE.md` to select relevant documentation.
-
-This adapter contains no duplicate project rules. It exists for Copilot
-surfaces that do not yet load `AGENTS.md` directly.
-```
-
-#### .cursor/rules/project-rules.mdc
-
-```markdown
----
-description: Project-specific coding standards
-globs: ["**/*"]
-alwaysApply: true
----
-
-# [Project Name] Cursor Rules
-
-## Language: [detected] | Framework: [detected]
-
-## Coding Conventions
-
-[Key patterns from CODE_STANDARDS.md]
-
-## Git Workflow
-
-**See [docs/GIT_WORKFLOW.md](docs/GIT_WORKFLOW.md)**
-
-## Security
-
-**See
-[docs/SECURITY_AND_ERROR_HANDLING.md](docs/SECURITY_AND_ERROR_HANDLING.md)**
-
-## References
-
-See `AGENTS.md` for comprehensive guidelines.
-```
-
-#### .kiro/steering/project-standards.md
-
-```markdown
-# [Project Name] Standards
-
-## Overview
-
-[Brief project description]
-
-## Technology Stack
-
-- **Language**: [detected]
-- **Framework**: [detected]
-
-## Key Constraints
-
-[Important rules and patterns]
-
-## Git Workflow
-
-**See [docs/GIT_WORKFLOW.md](docs/GIT_WORKFLOW.md)**
-
-## Security
-
-**See
-[docs/SECURITY_AND_ERROR_HANDLING.md](docs/SECURITY_AND_ERROR_HANDLING.md)**
-
-## References
-
-See `AGENTS.md` for comprehensive guidelines.
-```
+All templates live in `_includes/templates.md` (same directory as this
+SKILL.md): `docs/GIT_WORKFLOW.md`, `docs/SECURITY_AND_ERROR_HANDLING.md`,
+`docs/README.md`, `docs/AGENT_GUIDANCE.md`, root `AGENTS.md`, `CLAUDE.md`,
+nested `AGENTS.md` with its sibling `CLAUDE.md`, and
+`.github/copilot-instructions.md`. The enforcement workflow template is in
+`_includes/enforcement.md`.
+
+**CLAUDE.md must stay small.** For each line, ask: would removing it make
+Claude Code make a mistake? If not, cut it. No directory listings, no
+self-evident advice, no standard language conventions, nothing discoverable by
+reading the code — and, because other tools read it too, no commands, rules or
+routing.
 
 ---
 
@@ -805,84 +620,54 @@ JUnit/TestNG patterns, Checkstyle/SpotBugs configuration.
 
 ## Validation Checklist
 
-After creating files, verify:
+After creating or migrating files, run [Verify Mode](#verify-mode) on the
+result. Every `FAIL` must be fixed before the change is proposed; report each
+`WARN` to the user. In addition, confirm the judgement items the checklist
+cannot see:
 
-### Tier 1 - AI Config Files
-
-- [ ] `AGENTS.md` created as the concise, tool-neutral contract
-- [ ] `CLAUDE.md` created if Claude Code was selected (or unless user explicitly
-      declined)
-
-### Tier 1 - Documentation Files (Always)
-
-- [ ] `docs/README.md` serves as documentation index
-- [ ] `docs/AGENT_GUIDANCE.md` owns documentation routing
-- [ ] `docs/ARCHITECTURE.md` describes system structure
-- [ ] `docs/CODE_STANDARDS.md` reflects actual codebase patterns
-- [ ] `docs/GIT_WORKFLOW.md` or `docs/TFS_WORKFLOW.md` exists
-- [ ] `docs/SECURITY_AND_ERROR_HANDLING.md` exists
-
-### Tier 2 (Only If Selected)
-
-- [ ] `.cursor/rules/` — only if Cursor IDE selected
-- [ ] `.kiro/steering/` — only if Kiro IDE selected
-- [ ] `.github/copilot-instructions.md` — thin adapter only if Copilot selected
-
-> Copilot-specific instructions must not duplicate the `AGENTS.md` contract.
-
-### Quality Checks
-
-- [ ] All examples from THIS repository (no generic/placeholder code)
+- [ ] All examples come from THIS repository (no generic/placeholder code)
 - [ ] All `[TEAM TO DOCUMENT]` markers are specific questions
-- [ ] **CLAUDE.md is concise** (< 100 lines ideal, flag if > 200)
-- [ ] **CLAUDE.md contains no self-evident instructions** (no "write clean
-      code")
-- [ ] **CLAUDE.md contains no discoverable information** (no file-by-file
-      listings)
-- [ ] **CLAUDE.md imports `@AGENTS.md`** and contains only Claude-specific rules
-- [ ] **AGENTS.md references docs/ files** instead of duplicating procedures
-- [ ] No files created for unselected tools
-- [ ] User's tier selection was respected
+- [ ] `CLAUDE.md` holds no self-evident or discoverable information
+- [ ] `AGENTS.md` references `docs/` files instead of duplicating procedures
+- [ ] No files created for unselected tools; the tier selection was respected
 - [ ] No empty/stub files that provide no value
-- [ ] Git/Security rules reference docs/ files (not duplicated in full)
+- [ ] In a migration, every inventoried rule appears in the plan with a
+      destination
 
 ---
 
-## Existing Files Policy (NON-DESTRUCTIVE)
+## Existing Files Policy
 
-When existing documentation is found:
+The policy depends on the instruction model detected in Step 0.3.
 
-1. **READ existing file first** — Understand what's documented
-2. **NEVER overwrite** — Do not replace existing content
-3. **IDENTIFY gaps** — Compare against template to find missing sections
-4. **OFFER additions** — Suggest specific sections to ADD
-5. **ASK permission** — Before ANY modification:
+### `NEW` model — additive, non-destructive
+
+For files that already follow the architecture:
+
+1. **READ the existing file first** — understand what is documented
+2. **NEVER overwrite** — do not replace existing content
+3. **IDENTIFY gaps** — compare against the templates and the check's findings
+4. **OFFER additions** — suggest specific sections to ADD
+5. **ASK permission** — before ANY modification:
    > "AGENTS.md exists (127 lines). I found these gaps: [list]. Add them?"
 
-### Legacy File Integration
+### `OLD` model — migration plan, never an additive merge
 
-When legacy configuration files are found, **integrate their valuable content**
-into modern files:
+Adding sections to an old-model file leaves the old model in place. Instead,
+Phase 4M in `_includes/migration.md`:
 
-| Legacy File                       | Integrate Into  | Action                                                           |
-| --------------------------------- | --------------- | ---------------------------------------------------------------- |
-| `.github/copilot-instructions.md` | `AGENTS.md`     | Extract project-specific rules, coding standards, and guidelines |
-| Existing `CLAUDE.md`              | New `CLAUDE.md` | Preserve all existing content, add missing sections              |
-| Existing `AGENTS.md`              | New `AGENTS.md` | Preserve all existing content, add missing sections              |
+| Existing file                                                                     | Becomes                                                                  |
+| --------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `CLAUDE.md` holding rules, commands or routing                                    | Thin adapter; each rule moved to `AGENTS.md`, `docs/` or a nested file   |
+| `AGENTS.md` deferring to `CLAUDE.md` / tool-named                                 | Tool-neutral contract holding the moved rules                            |
+| Documentation map anywhere but the routing doc                                    | `docs/AGENT_GUIDANCE.md` § `## Documentation routing`, linked from index |
+| `.github/copilot-instructions.md` with rules                                      | Rules moved; file kept as a pointer only if Copilot is selected          |
+| `.cursorrules`, `.windsurfrules`, `GEMINI.md`, `.kiro/steering/*` restating rules | Unique rules moved; file proposed for removal                            |
+| Symlinked instruction file                                                        | Regular file                                                             |
+| Committed managed-steering block in `AGENTS.md`                                   | Removed (generated content, not a rule)                                  |
 
-**Integration Process:**
-
-1. **Read the legacy file** — Extract valuable project-specific content
-2. **Identify unique content** — Find rules, patterns, or guidelines not in
-   templates
-3. **Merge intelligently** — Incorporate unique content into the appropriate
-   sections of the new file
-4. **Preserve team customizations** — Never discard project-specific rules the
-   team has defined
-5. **Offer cleanup** — After successful integration, ask:
-   > "I've integrated content from `.github/copilot-instructions.md` into
-   > `AGENTS.md`. Would you like to delete the legacy file or keep it as a
-   > reference?"
+The plan lists every moved rule with its old and new location; the diff is
+presented on a branch for review before anything is committed.
 
 ---
 
@@ -1330,9 +1115,12 @@ nightgauge forge graphql -f query='
 
 ## Phase 6: Completion
 
-1. **Review generated files** for accuracy
+1. **Review generated files** for accuracy, then run [Verify Mode](#verify-mode)
 2. **Generate TODO file** for `[TEAM TO DOCUMENT]` markers (see below)
-3. **Commit documentation** to repository
+3. **Commit through the repository's workflow** — a feature branch and a pull
+   request, never a direct push to the default branch
+4. **Tell the user to make `agent guidance` a required status check** once the
+   pull request that adds it has merged; until then a red check can be merged
 
 ### Documentation TODO File
 
@@ -1382,16 +1170,56 @@ _Generated by AI Smart Setup on [DATE]_
 
 **Cleanup Offers**: After completion, ask:
 
-> "Setup complete! I created AI_SETUP_TODO.md with X items that need team input.
-> Would you like me to delete AI_SMART_SETUP.md? It's no longer needed."
+> "Setup complete! I created AI_SETUP_TODO.md with X items that need team
+> input."
 
 If answer log was created, also ask about its deletion (remind about sensitive
 info).
 
 ---
 
+## Verify Mode
+
+`/smart-setup verify` — read-only conformance report. It changes no file.
+
+**Read `_includes/verify.md` (same directory as this SKILL.md) now and follow
+it.** It runs the installed `scripts/check-agent-guidance.sh` with the flags
+the repository's `agent guidance` CI job uses (the items marked "script"), then
+performs the remaining checklist items with explicit commands:
+
+| ID    | Requirement                                                                      | Decided by     |
+| ----- | -------------------------------------------------------------------------------- | -------------- |
+| DC-01 | Root `AGENTS.md` is a regular file                                               | script         |
+| DC-02 | `AGENTS.md` ≤ 200 lines; `AGENTS.md` chain ≤ 32 KiB                              | script         |
+| DC-03 | First heading of `AGENTS.md` names no tool                                       | script         |
+| DC-04 | `AGENTS.md` does not defer to `CLAUDE.md`                                        | script         |
+| DC-05 | `CLAUDE.md` regular, line 1 `@AGENTS.md`, ≤ 100 lines                            | script         |
+| DC-06 | No routing or commands in `CLAUDE.md`                                            | script         |
+| DC-07 | Routing doc exists, linked from index, pointed to by `AGENTS.md`                 | script + skill |
+| DC-08 | Routing-map paths resolve                                                        | script         |
+| DC-09 | Nested `AGENTS.md` files indexed from root                                       | script         |
+| DC-10 | Nested `AGENTS.md` files have a sibling `CLAUDE.md`                              | script         |
+| DC-11 | No symlinked instruction files                                                   | script         |
+| DC-12 | No out-of-repository imports                                                     | script         |
+| DC-13 | Copilot adapter only if Copilot selected, ≤ 30 lines, references `AGENTS.md`     | script + skill |
+| DC-14 | No redundant `.cursorrules`/`GEMINI.md`/`.kiro/steering`/`.windsurfrules` (warn) | skill          |
+| DC-15 | `AGENTS.md` names the complete local gate                                        | skill          |
+| DC-16 | Every gate command appears in a PR CI workflow (warn)                            | skill          |
+| DC-17 | Check installed and run by a PR workflow job named `agent guidance`              | skill          |
+| DC-18 | Provenance marker present (warn)                                                 | skill          |
+| DC-19 | No Nightgauge workspace block (`--workspace-block forbidden`)                    | script         |
+| DC-20 | No committed managed-steering block                                              | skill          |
+| DC-21 | No `AGENTS.md`/`CLAUDE.md` at a multi-repository workspace root (warn)           | skill          |
+| DC-22 | No doc claims to be canonical for a topic routed elsewhere (warn)                | skill          |
+
+The report ends with the fix for each `FAIL`: an `OLD`-model finding points to
+`/smart-setup` (which proposes a migration), a `NEW`-model gap to the additive
+step that closes it.
+
+---
+
 ## Source
 
-This skill follows the
-[AI_SMART_SETUP.md](https://github.com/nightgauge/nightgauge/blob/main/AI_SMART_SETUP.md)
-methodology from Nightgauge.
+This skill implements the agent-instruction architecture defined in
+Nightgauge's
+[docs/AGENT_GUIDANCE.md](https://github.com/nightgauge/nightgauge/blob/main/docs/AGENT_GUIDANCE.md).

@@ -43,6 +43,7 @@ Link-check gate regression suite
 Markdown link check
 Agent-guidance gate regression suite
 Agent-guidance architecture
+Smart Setup bundles the canonical agent-guidance check
 Changelog gate regression suite
 Changelog names every released tag
 Mirror drift gate regression suite

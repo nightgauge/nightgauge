@@ -384,8 +384,8 @@ yamllint configs/ standards/
    ```bash
    cd /path/to/test-repo
 
-   # Test smart-setup
-   /nightgauge:smart-setup --audit-only
+   # Test smart-setup (read-only conformance report)
+   /nightgauge:smart-setup verify
 
    # Test update-docs
    /nightgauge:update-docs --report-only
@@ -427,13 +427,14 @@ yamllint configs/ standards/
 
 ### Smart Setup Command
 
-| Scenario                            | Expected Result                                          |
-| ----------------------------------- | -------------------------------------------------------- |
-| Empty repository                    | Creates AGENTS.md, optional CLAUDE.md, and focused docs/ |
-| Repository with existing AGENTS.md  | Reads existing, identifies gaps, asks permission to add  |
-| Repository with complete docs       | Reports "No changes needed"                              |
-| "Just audit what's missing" request | Reports status without making changes                    |
-| "Skip questions" request            | Uses `[TEAM TO DOCUMENT]` markers                        |
+| Scenario                                                 | Expected Result                                                           |
+| -------------------------------------------------------- | ------------------------------------------------------------------------- |
+| Empty repository                                         | Creates AGENTS.md, optional CLAUDE.md, focused docs/, and the CI check    |
+| AGENTS.md already in the new model                       | Reads existing, identifies gaps, asks permission to add                   |
+| Rules in CLAUDE.md, or AGENTS.md deferring to CLAUDE.md  | Migration plan listing every moved rule, plus a proposed diff on a branch |
+| Committed Nightgauge managed-steering block in AGENTS.md | Reported, and removed in the migration diff                               |
+| `/smart-setup verify`                                    | DC-01…DC-22 report without making changes                                 |
+| "Skip questions" request                                 | Uses `[TEAM TO DOCUMENT]` markers                                         |
 
 ### Update Docs Command
 

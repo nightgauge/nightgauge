@@ -3,6 +3,7 @@
 package git
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +24,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-git/v5/plumbing/transport/http"
 
+	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
 	"github.com/nightgauge/nightgauge/internal/reclaim"
 )
 
@@ -1220,6 +1222,10 @@ func (s *Service) commitAll(message string) error {
 	addCmd.Dir = s.repoPath
 	if out, err := addCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git add -A: %w: %s", err, string(out))
+	}
+	// Never publish the ephemeral Codex steering block (issue 1675).
+	if _, err := codexprovision.SanitizeStagedAgentsMd(context.Background(), s.repoPath); err != nil {
+		return fmt.Errorf("refusing to commit generated steering: %w", err)
 	}
 	commitCmd := exec.Command("git", "commit", "-m", message)
 	commitCmd.Dir = s.repoPath

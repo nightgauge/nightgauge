@@ -30,15 +30,17 @@ import (
 //
 // Contract (stdout, one line of JSON on a produced result):
 //
-//	{ "stage": "pr-create"|"pr-merge", "path": "created"|"merged"|"punt",
+//	{ "stage": "pr-create"|"pr-merge", "path": "created"|"merged"|"punt"|"refused",
 //	  "pr_number": N, "pr_url": "...", "pr_state": "...", "reason": "...",
 //	  "rate_limited": bool, "duration_ms": N }
 //
 // Exit codes:
 //
-//	0 — a result was produced (created / merged / punt / rate-limited). The
-//	    caller reads `path` + `rate_limited` from the JSON, never the exit code,
-//	    to decide skip-LLM vs LLM-fallthrough vs defer.
+//	0 — a result was produced (created / merged / punt / refused /
+//	    rate-limited). The caller reads `path` + `rate_limited` from the JSON,
+//	    never the exit code, to decide skip-LLM vs LLM-fallthrough vs defer.
+//	    `refused` (pr-merge only, issue 1675) fails the stage: never fall
+//	    through to the LLM skill.
 //	1 — CLI/setup error (bad args, unresolved repo, client build failure). The
 //	    caller falls through to the LLM path — the safe default.
 func prStageCmd() *cobra.Command {

@@ -1,6 +1,8 @@
 package codexprovision
 
 import (
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -8,17 +10,68 @@ import (
 
 // --- extractSummary ---
 
-func TestExtractSummary_StopsAtSecondHeader(t *testing.T) {
-	// extractSummary keeps the first section only: it stops at the SECOND header
-	// of any level (## First here), so the intro under # Title is kept but every
-	// later section is dropped.
-	content := "# Title\nintro line\n## First\nbody\n## Second\nshould not appear"
+func TestExtractSummary_H1ThenH2KeepsTheSectionBody(t *testing.T) {
+	// issue 1675: the old reader stopped at the SECOND H1/H2, so a title immediately
+	// followed by a sub-heading summarised to the title alone.
+	content := "# Project\n## Overview\nIt does X.\n## Build\nrun make\n"
 	got := extractSummary(content, 50)
-	if !strings.Contains(got, "# Title") || !strings.Contains(got, "intro line") {
-		t.Errorf("summary dropped the first section: %q", got)
+	for _, want := range []string{"# Project", "## Overview", "It does X.", "## Build", "run make"} {
+		assertContains(t, got, want)
 	}
-	if strings.Contains(got, "## First") || strings.Contains(got, "Second") {
-		t.Errorf("summary should stop at the second header of any level: %q", got)
+	if got == "# Project" {
+		t.Fatalf("summary collapsed to the title: %q", got)
+	}
+}
+
+func TestExtractSummary_DropsHeadingsWithNoBody(t *testing.T) {
+	got := extractSummary("# T\n\n## Empty\n\n## Real\nbody\n## Tail\n", 50)
+	if strings.Contains(got, "Empty") || strings.Contains(got, "Tail") {
+		t.Errorf("bodiless headings must be dropped: %q", got)
+	}
+	assertContains(t, got, "## Real\nbody")
+}
+
+// TestExtractSummary_SharedFixtures pins the Go reader to the byte-exact
+// goldens the TypeScript steeringSources test also reads, so the two dispatch
+// paths cannot drift (issue 1675). Regenerate with
+// NIGHTGAUGE_UPDATE_GOLDEN=1 go test ./internal/execution/codexprovision/.
+func TestExtractSummary_SharedFixtures(t *testing.T) {
+	dir := filepath.Join("testdata", "extract-summary")
+	raw, err := os.ReadFile(filepath.Join(dir, "cases.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases []struct {
+		Name     string `json:"name"`
+		MaxLines int    `json:"maxLines"`
+	}
+	if err := json.Unmarshal(raw, &cases); err != nil {
+		t.Fatal(err)
+	}
+	if len(cases) == 0 {
+		t.Fatal("no fixtures")
+	}
+	for _, c := range cases {
+		t.Run(c.Name, func(t *testing.T) {
+			in, err := os.ReadFile(filepath.Join(dir, c.Name+".input"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := extractSummary(string(in), c.MaxLines)
+			goldenPath := filepath.Join(dir, c.Name+".golden")
+			if os.Getenv("NIGHTGAUGE_UPDATE_GOLDEN") == "1" {
+				if err := os.WriteFile(goldenPath, []byte(got), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			want, err := os.ReadFile(goldenPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != string(want) {
+				t.Errorf("summary drifted from golden\n--- got ---\n%s\n--- want ---\n%s", got, want)
+			}
+		})
 	}
 }
 
@@ -60,9 +113,42 @@ func TestAssembleSteeringContent_IncludesProjectAndStandards(t *testing.T) {
 	assertContains(t, got, "## Git Workflow")
 }
 
+func TestReadProjectDescription_PrefersAgentsMdOverClaudeAdapter(t *testing.T) {
+	// issue 1675: CLAUDE.md is a thin `@AGENTS.md` adapter; steering must summarise
+	// the canonical contract, not the adapter.
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "AGENTS.md"), "# Contract\n## Scope\nThe real rules.\n")
+	writeFile(t, filepath.Join(dir, "CLAUDE.md"), "@AGENTS.md\n\n# Claude Code adapter\nClaude-only notes.\n")
+	got := readProjectDescription(dir)
+	assertContains(t, got, "The real rules.")
+	if strings.Contains(got, "Claude-only") {
+		t.Errorf("adapter text leaked into the description: %q", got)
+	}
+}
+
+func TestReadProjectDescription_FallsBackToClaudeSkippingImport(t *testing.T) {
+	dir := t.TempDir()
+	// AGENTS.md holding only the managed block has no user part.
+	writeFile(t, filepath.Join(dir, "AGENTS.md"), steeringManagedBegin+"\ngen\n"+steeringManagedEnd+"\n")
+	writeFile(t, filepath.Join(dir, "CLAUDE.md"), "\n@AGENTS.md\n\n# Legacy\nOld-model description.\n")
+	got := readProjectDescription(dir)
+	if strings.Contains(got, "@AGENTS.md") {
+		t.Errorf("the import line is not a description: %q", got)
+	}
+	assertContains(t, got, "Old-model description.")
+}
+
+func TestReadProjectDescription_ImportOnlyClaudeIsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "CLAUDE.md"), "@AGENTS.md\n")
+	if got := readProjectDescription(dir); got != "" {
+		t.Errorf("import-only CLAUDE.md must yield no description, got %q", got)
+	}
+}
+
 func TestReadProjectDescription_StripsManagedBlockFromAgentsMd(t *testing.T) {
 	dir := t.TempDir()
-	// No CLAUDE.md → falls back to AGENTS.md, but the managed block must be ignored.
+	// The managed block must be ignored when reading AGENTS.md.
 	agents := "# User Project Notes\nReal description.\n\n" +
 		steeringManagedBegin + "\n# generated junk\n" + steeringManagedEnd + "\n"
 	writeFile(t, filepath.Join(dir, "AGENTS.md"), agents)
