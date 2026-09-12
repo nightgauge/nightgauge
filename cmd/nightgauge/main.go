@@ -2278,7 +2278,8 @@ func epicValidateCmd() *cobra.Command {
 				fmt.Printf("Epic #%d: valid — no structural gaps found (%d sub-issues checked)\n",
 					result.EpicNumber, result.TotalSubIssues)
 			} else {
-				fmt.Printf("Epic #%d: %d gap(s) found\n", result.EpicNumber, len(result.Gaps))
+				fmt.Printf("Epic #%d: %d gap(s) found (%d sub-issues checked)\n",
+					result.EpicNumber, len(result.Gaps), result.TotalSubIssues)
 				for _, g := range result.Gaps {
 					fmt.Printf("  [%s] #%d %s — %s\n", g.GapType, g.SubIssueNumber, g.SubIssueTitle, g.Detail)
 				}

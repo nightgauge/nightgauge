@@ -44,8 +44,13 @@ from task list checkboxes in the issue body).
 - `projectItemContent` — board item display in the Ready Items tree view
 - `nodeQuery` — cross-repo epic progress (`GetEpicProgress`)
 
-**Pagination**: `first: 50` — supports epics with up to 50 sub-issues. Increase
-if epic size limits grow.
+**Pagination**: each query reads a first page (12 on the board scan, 25 in
+`issueQuery`, 50 in `nodeQuery`) and selects `pageInfo`; while a page reports
+`hasNextPage`, the rest is read 100 at a time through a `node(id:)` follow-up
+(`internal/github/connection_paging.go`). The walk stops at 20 pages, and a
+connection still reporting more is `ErrConnectionTruncated`, never a short
+list: epic rollup, wave planning and `epic validate` fail rather than decide
+from part of an epic.
 
 **Risk**: Critical. Removing `subIssues` breaks epic tracking entirely. The
 board would show epics with no sub-issues and 0% progress.
@@ -64,7 +69,9 @@ determine whether an issue is currently blocked (any open blocker = blocked).
 - `issueQuery` — fetching blocking state for a specific issue
 - `projectItemContent` — board item display (determines 🔒 lock icon)
 
-**Pagination**: `first: 10` — assumes issues have at most 10 blockers.
+**Pagination**: a first page of 5, then the same `pageInfo` follow-up and
+20-page cap as `subIssues`. The scheduler's blocker check reads the whole list,
+so an issue with more than 5 blockers stays blocked while any one is open.
 
 **Risk**: Critical. Without `blockedBy`, lock icons disappear and the pipeline
 cannot enforce sequential epic ordering based on blocking relationships.
@@ -83,7 +90,7 @@ blocking. Used for informational display on board items.
 - `issueQuery` — fetching outgoing blocking relationships
 - `projectItemContent` — board item display
 
-**Pagination**: `first: 10`
+**Pagination**: same as `blockedBy`.
 
 **Risk**: Critical (same as `blockedBy`).
 

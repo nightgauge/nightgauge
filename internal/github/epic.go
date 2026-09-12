@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -87,6 +88,11 @@ func (e *EpicService) Validate(ctx context.Context, owner, repo string, epicNumb
 	for repoKey, numbers := range byRepo {
 		on := repoOwnerName[repoKey]
 		issues, err := issueSvc.GetIssuesByNumbers(ctx, on[0], on[1], numbers)
+		if errors.Is(err, ErrConnectionTruncated) {
+			// Validating from a blocker list read only in part would report
+			// the epic valid over gaps it never saw.
+			return nil, fmt.Errorf("validate epic #%d: sub-issues from %s: %w", epicNumber, repoKey, err)
+		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: batch fetch sub-issues from %s: %v\n", repoKey, err)
 			continue

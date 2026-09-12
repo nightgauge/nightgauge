@@ -80,6 +80,15 @@ changelog, and the release workflow refuses a tag that does not.
   instead of sending the operator to fix a `main` that may be green. The
   post-merge hook likewise says it could not verify the branch, not that it is
   red (#1691)
+- Sub-issue, blocked-by and blocking lists are now read in full. They stopped
+  at the first 12, 25 or 50 sub-issues and the first 5 blockers, so
+  `nightgauge epic validate` reported 25 sub-issues for an epic with 42, epic
+  rollup could close an epic whose open children were past the first page, and
+  the scheduler and `epic plan-waves` could treat an issue with more than 5
+  blockers as unblocked. Reads now follow every page up to a 20-page cap. A
+  list that cannot be read in full is an error, not a short list.
+  `epic validate` also prints the number of sub-issues checked when it finds
+  gaps (#1682)
 
 ### Removed
 

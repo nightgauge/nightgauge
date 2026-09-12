@@ -84,7 +84,10 @@ func (b *BoardService) listItemsFiltered(ctx context.Context, statusFilter strin
 		}
 
 		for _, node := range result.Items.Nodes {
-			item := b.nodeToItem(node)
+			item, err := b.itemFromNode(ctx, node)
+			if err != nil {
+				return nil, fmt.Errorf("fetch board items (filtered): %w", err)
+			}
 			if item == nil {
 				continue
 			}
@@ -127,7 +130,10 @@ func (b *BoardService) ListOpenItems(ctx context.Context) ([]types.BoardItem, in
 
 		rawCount += len(result.Items.Nodes)
 		for _, node := range result.Items.Nodes {
-			item := b.nodeToItem(node)
+			item, err := b.itemFromNode(ctx, node)
+			if err != nil {
+				return nil, 0, fmt.Errorf("fetch board items (open): %w", err)
+			}
 			if item == nil {
 				continue
 			}
@@ -163,7 +169,10 @@ func (b *BoardService) listItemsAll(ctx context.Context) ([]types.BoardItem, err
 		}
 
 		for _, node := range result.Items.Nodes {
-			item := b.nodeToItem(node)
+			item, err := b.itemFromNode(ctx, node)
+			if err != nil {
+				return nil, fmt.Errorf("fetch board items: %w", err)
+			}
 			if item == nil {
 				continue
 			}
@@ -180,7 +189,24 @@ func (b *BoardService) listItemsAll(ctx context.Context) ([]types.BoardItem, err
 	return allItems, nil
 }
 
-// nodeToItem converts a GraphQL project item node to a BoardItem.
+// itemFromNode converts a project item node to a BoardItem with its
+// relationships whole. The board query holds only the first page of an issue's
+// subIssues, blockedBy and blocking connections; any that reports a next page
+// is read to its end first, because the scheduler's blocker check and the epic
+// views decide from these lists. A connection that cannot be read whole fails
+// the read (ErrConnectionTruncated) instead of yielding a short list.
+func (b *BoardService) itemFromNode(ctx context.Context, node projectItemNode) (*types.BoardItem, error) {
+	if node.Content.TypeName == "Issue" {
+		f := &node.Content.IssueFields
+		if err := b.client.completeRelations(ctx, nodeIDString(f.ID), &f.SubIssues, &f.BlockedBy, &f.Blocking); err != nil {
+			return nil, fmt.Errorf("board item %s#%d: %w", f.Repository.NameWithOwner, f.Number, err)
+		}
+	}
+	return b.nodeToItem(node), nil
+}
+
+// nodeToItem converts a GraphQL project item node to a BoardItem as the node
+// holds it; itemFromNode is the reader that first completes relationships.
 func (b *BoardService) nodeToItem(node projectItemNode) *types.BoardItem {
 	var item types.BoardItem
 	item.ID = fmt.Sprintf("%v", node.ID)
@@ -204,13 +230,7 @@ func (b *BoardService) nodeToItem(node projectItemNode) *types.BoardItem {
 		item.LabelsTruncated = f.Labels.truncated()
 		// Sub-issue relationships (GitHub native)
 		for _, si := range f.SubIssues.Nodes {
-			item.SubIssues = append(item.SubIssues, types.SubIssueRef{
-				NodeID: fmt.Sprintf("%v", si.ID),
-				Number: int(si.Number),
-				Title:  string(si.Title),
-				State:  string(si.State),
-				Repo:   string(si.Repository.NameWithOwner),
-			})
+			item.SubIssues = append(item.SubIssues, subIssueRef(si))
 		}
 		// An epic is identified by the canonical `type:epic` label OR by the
 		// presence of native sub-issues. Label is the source of truth — children
@@ -225,22 +245,10 @@ func (b *BoardService) nodeToItem(node projectItemNode) *types.BoardItem {
 		}
 		// Blocking relationships (GitHub native)
 		for _, b := range f.BlockedBy.Nodes {
-			item.BlockedBy = append(item.BlockedBy, types.BlockingRef{
-				NodeID: fmt.Sprintf("%v", b.ID),
-				Number: int(b.Number),
-				Title:  string(b.Title),
-				State:  string(b.State),
-				Repo:   string(b.Repository.NameWithOwner),
-			})
+			item.BlockedBy = append(item.BlockedBy, blockingRef(b))
 		}
 		for _, b := range f.Blocking.Nodes {
-			item.Blocking = append(item.Blocking, types.BlockingRef{
-				NodeID: fmt.Sprintf("%v", b.ID),
-				Number: int(b.Number),
-				Title:  string(b.Title),
-				State:  string(b.State),
-				Repo:   string(b.Repository.NameWithOwner),
-			})
+			item.Blocking = append(item.Blocking, blockingRef(b))
 		}
 	case "PullRequest":
 		f := node.Content.PRFields
@@ -336,7 +344,12 @@ func (b *BoardService) GetItem(ctx context.Context, owner, repo string, issueNum
 			continue
 		}
 		if item.Number == issueNumber && item.Repo == wantRepo {
-			return item, nil
+			// Only the matched item pays for reading its relationships whole.
+			full, err := b.itemFromNode(ctx, node)
+			if err != nil {
+				return nil, fmt.Errorf("get board item #%d: %w", issueNumber, err)
+			}
+			return full, nil
 		}
 	}
 	return nil, fmt.Errorf("board item %s/%s#%d: %w", owner, repo, issueNumber, forge.ErrNotFound)
