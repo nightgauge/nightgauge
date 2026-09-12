@@ -219,9 +219,59 @@ func startAttentionCommandStream(ctx context.Context, platformClient *platform.C
 }
 
 func main() {
-	if err := rootCmd().Execute(); err != nil {
-		os.Exit(1)
+	cmd, err := rootCmd().ExecuteC()
+	os.Exit(exitCodeFor(os.Stderr, cmd, err))
+}
+
+// verdictExit carries a verdict command's exit code out through cobra. The
+// command has already written its own output; main only exits with the code.
+type verdictExit struct{ code int }
+
+func (e verdictExit) Error() string { return fmt.Sprintf("exit status %d", e.code) }
+
+// couldNotRunAnnotation marks a command whose exit codes are a verdict
+// contract in which 1 means "the thing measured failed" (#1691). For such a
+// command an error is never a verdict: it means the measurement did not
+// happen, so it exits 2 ("could not run") instead of cobra's default 1. That
+// covers errors cobra raises before RunE runs (arguments, flags) as well as
+// the ones RunE returns. Set it with markCouldNotRunExit.
+const couldNotRunAnnotation = "nightgauge.io/could-not-run-exit"
+
+// exitCouldNotRun is the exit code of a verdict command that could not
+// measure: the same "not observable yet, wait and re-run" code as NOT-YET.
+const exitCouldNotRun = 2
+
+// markCouldNotRunExit opts cmd into the could-not-run exit contract. It also
+// silences cobra's own "Error:" line, which exitCodeFor replaces with a
+// "could not run:" line.
+func markCouldNotRunExit(cmd *cobra.Command) {
+	if cmd.Annotations == nil {
+		cmd.Annotations = map[string]string{}
 	}
+	cmd.Annotations[couldNotRunAnnotation] = "true"
+	cmd.SilenceErrors = true
+}
+
+// oneLine collapses every run of whitespace, newlines included, to one space
+// so an error that embeds a pretty-printed API response body still reads as
+// the single "could not run:" line the contract promises.
+func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// exitCodeFor maps the command cobra executed and the error it returned to the
+// process exit code.
+func exitCodeFor(stderr io.Writer, cmd *cobra.Command, err error) int {
+	if err == nil {
+		return 0
+	}
+	var ve verdictExit
+	if errors.As(err, &ve) {
+		return ve.code
+	}
+	if cmd != nil && cmd.Annotations[couldNotRunAnnotation] == "true" {
+		fmt.Fprintf(stderr, "could not run: %s\n", oneLine(err.Error()))
+		return exitCouldNotRun
+	}
+	return 1
 }
 
 // getOwnerType reads the --owner-type persistent flag from the root command.
@@ -6974,7 +7024,22 @@ type checksCompleteResult struct {
 	RequiredNames []string                 `json:"requiredNames,omitempty"`
 	Polls         int                      `json:"polls"`
 	CrossChecked  bool                     `json:"crossChecked"`
+	// CouldNotRun is why the commit was not measured at all (#1691). Set only
+	// with verdict not-yet and exit 2: a failure to measure is never red.
+	CouldNotRun string `json:"couldNotRun,omitempty"`
 }
+
+// Exit codes of `nightgauge ci checks-complete`, shared with
+// scripts/post-merge-check.sh.
+const (
+	exitChecksGreen = 0
+	// exitChecksRed: at least one completed check run or commit status failed.
+	// The only code that says main is red.
+	exitChecksRed = 1
+	// exitChecksNotObservable: still running, a required context has not
+	// appeared, or the commit could not be measured. Wait and re-run.
+	exitChecksNotObservable = exitCouldNotRun
+)
 
 // checksCompleteReader is what pollChecksComplete needs from the forge.
 // *github.CIService satisfies it; tests substitute a fake. GetCommitChecks is
@@ -7061,17 +7126,17 @@ func pollChecksComplete(ctx context.Context, reader checksCompleteReader, owner,
 // is RED, and a still-running one is NOT-YET. Required contexts are resolved
 // from branch protection and rulesets and must additionally be present.
 //
-// Exit codes match post-merge-check.sh's existing contract so the script's
-// delegation is a drop-in: 0 GREEN, 1 RED, 2 NOT-YET.
+// Exit codes match post-merge-check.sh's contract so the script's delegation
+// is a drop-in: 0 GREEN, 1 RED, 2 NOT-YET. Exit 1 is reserved for a completed
+// check that failed; anything that prevents measuring — token resolution, an
+// auth failure, a network error, a rate limit, a 5xx, an unparseable response,
+// even a bad argument — exits 2 with a "could not run:" line (#1691), because
+// reporting it as red sends the operator to "fix" a main that may be green.
 func ciChecksCompleteCmd() *cobra.Command {
 	var (
-		owner        string
-		repo         string
-		branch       string
-		outputJSON   bool
-		timeoutMins  int
-		pollSecs     int
-		skipCrossRun bool
+		opts        checksCompleteOptions
+		timeoutMins int
+		pollSecs    int
 	)
 
 	cmd := &cobra.Command{
@@ -7082,86 +7147,136 @@ func ciChecksCompleteCmd() *cobra.Command {
 		Example: `  nightgauge ci checks-complete abc1234 --repo nightgauge/nightgauge
   nightgauge ci checks-complete abc1234 --repo nightgauge/nightgauge --branch main --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			sha := args[0]
-			client, err := clientFromConfig()
-			if err != nil {
-				return err
-			}
-			ownerPart, repoPart := splitRepo(owner, repo)
-			svc := gh.NewCIService(client)
-
-			if branch == "" {
-				meta, metaErr := gh.NewRepoService(client).RepoMetadata(cmd.Context(), ownerPart, repoPart)
-				if metaErr == nil && meta != nil && meta.DefaultBranch != "" {
-					branch = meta.DefaultBranch
-				}
-			}
-
-			requiredNames, reqErr := svc.GetRequiredCheckNames(cmd.Context(), ownerPart, repoPart, branch)
-			if reqErr != nil {
-				// Best-effort (#1540 §5): a failed lookup falls back to the
-				// all-checks-concluded idiom rather than blocking the whole
-				// verb on an auxiliary lookup.
-				requiredNames = nil
-			}
-
-			interval := time.Duration(pollSecs) * time.Second
-			if interval <= 0 {
-				interval = hooks.DefaultMainCheckPollInterval
-			}
-			timeout := time.Duration(timeoutMins) * time.Minute
-			maxPolls := 1 + int(timeout/interval)
-
-			var progress func(poll, maxPolls int, verdict gh.ChecksCompleteVerdict)
-			if !outputJSON {
-				progress = func(poll, maxPolls int, verdict gh.ChecksCompleteVerdict) {
-					fmt.Fprintf(os.Stderr, "[%d/%d] %s@%s — %s\n", poll, maxPolls, repoPart, sha, verdict)
-				}
-			}
-
-			res, err := pollChecksComplete(cmd.Context(), svc, ownerPart, repoPart, sha, branch, requiredNames, maxPolls, interval, skipCrossRun, nil, progress)
-			if err != nil {
-				return err
-			}
-
-			if outputJSON {
-				if err := printJSON(res); err != nil {
-					return err
-				}
-			} else {
-				switch res.Verdict {
-				case gh.ChecksComplete:
-					fmt.Println("GREEN")
-				case gh.ChecksIncomplete:
-					fmt.Println("RED")
-				default:
-					fmt.Println("NOT-YET")
-				}
-				for _, r := range res.Reasons {
-					fmt.Println("  " + r)
-				}
-			}
-
-			switch res.Verdict {
-			case gh.ChecksComplete:
-				return nil
-			case gh.ChecksIncomplete:
-				os.Exit(1)
-			default:
-				os.Exit(2)
+			opts.interval = time.Duration(pollSecs) * time.Second
+			opts.timeout = time.Duration(timeoutMins) * time.Minute
+			code := runChecksComplete(cmd.Context(), args[0], opts, clientFromConfig, nil, os.Stdout, os.Stderr)
+			if code != exitChecksGreen {
+				return verdictExit{code: code}
 			}
 			return nil
 		},
 	}
+	markCouldNotRunExit(cmd)
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
-	cmd.Flags().StringVar(&branch, "branch", "", "Branch to resolve required checks against (default: repo's default branch)")
-	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output result as JSON")
+	cmd.Flags().StringVar(&opts.owner, "owner", "nightgauge", "GitHub organization")
+	repoNameFlag(cmd, &opts.repo, "nightgauge", "Repository (owner/name or name)")
+	cmd.Flags().StringVar(&opts.branch, "branch", "", "Branch to resolve required checks against (default: repo's default branch)")
+	cmd.Flags().BoolVar(&opts.outputJSON, "json", false, "Output result as JSON")
 	cmd.Flags().IntVar(&timeoutMins, "timeout", 0, "Wall-clock budget in minutes (0 = a single read, matching --main-check-wait 0)")
 	cmd.Flags().IntVar(&pollSecs, "poll", int(hooks.DefaultMainCheckPollInterval/time.Second), "Poll interval in seconds")
-	cmd.Flags().BoolVar(&skipCrossRun, "no-cross-check", false, "Skip the actions/runs per-run cross-check (rate limit, scope)")
+	cmd.Flags().BoolVar(&opts.skipCrossCheck, "no-cross-check", false, "Skip the actions/runs per-run cross-check (rate limit, scope)")
 	return cmd
+}
+
+// checksCompleteOptions are the flags of `nightgauge ci checks-complete`.
+type checksCompleteOptions struct {
+	owner, repo, branch string
+	outputJSON          bool
+	// timeout is the wall-clock budget; zero is a single read.
+	timeout time.Duration
+	// interval is the gap between reads; zero or less takes the default.
+	interval       time.Duration
+	skipCrossCheck bool
+}
+
+// runChecksComplete measures sha, writes the verdict, and returns the exit
+// code. It is the whole verb minus cobra, so every path to an exit code is
+// testable (#1691).
+//
+// Only a verdict returns exitChecksRed. Every error on the way to one returns
+// exitChecksNotObservable with a "could not run:" line: an error is the
+// absence of a measurement, and the contract's answer to "I could not look" is
+// "wait and re-run", never "main is red".
+//
+// newClient resolves the GitHub client (clientFromConfig in production); sleep
+// is nil in production.
+func runChecksComplete(ctx context.Context, sha string, opts checksCompleteOptions, newClient func() (*gh.Client, error), sleep func(context.Context, time.Duration) error, stdout, stderr io.Writer) int {
+	ownerPart, repoPart := splitRepo(opts.owner, opts.repo)
+	branch := opts.branch
+
+	couldNotRun := func(err error) int {
+		reason := oneLine(err.Error())
+		if opts.outputJSON {
+			res := checksCompleteResult{Verdict: gh.ChecksNotYet, Sha: sha, Branch: branch, CouldNotRun: reason}
+			if data, mErr := json.MarshalIndent(res, "", "  "); mErr == nil {
+				fmt.Fprintln(stdout, string(data))
+			}
+			fmt.Fprintf(stderr, "could not run: %s\n", reason)
+		} else {
+			fmt.Fprintln(stdout, "NOT-YET")
+			fmt.Fprintf(stdout, "  could not run: %s\n", reason)
+		}
+		fmt.Fprintf(stderr, "%s@%s was not measured; this is not a verdict on it. Fix the cause and re-run.\n", repoPart, sha)
+		return exitChecksNotObservable
+	}
+
+	client, err := newClient()
+	if err != nil {
+		return couldNotRun(fmt.Errorf("resolve GitHub client: %w", err))
+	}
+	svc := gh.NewCIService(client)
+
+	if branch == "" {
+		meta, metaErr := gh.NewRepoService(client).RepoMetadata(ctx, ownerPart, repoPart)
+		if metaErr == nil && meta != nil && meta.DefaultBranch != "" {
+			branch = meta.DefaultBranch
+		}
+	}
+
+	requiredNames, reqErr := svc.GetRequiredCheckNames(ctx, ownerPart, repoPart, branch)
+	if reqErr != nil {
+		// Best-effort (#1540 §5): a failed lookup falls back to the
+		// all-checks-concluded idiom rather than blocking the whole
+		// verb on an auxiliary lookup.
+		requiredNames = nil
+	}
+
+	interval := opts.interval
+	if interval <= 0 {
+		interval = hooks.DefaultMainCheckPollInterval
+	}
+	maxPolls := 1 + int(opts.timeout/interval)
+
+	var progress func(poll, maxPolls int, verdict gh.ChecksCompleteVerdict)
+	if !opts.outputJSON {
+		progress = func(poll, maxPolls int, verdict gh.ChecksCompleteVerdict) {
+			fmt.Fprintf(stderr, "[%d/%d] %s@%s — %s\n", poll, maxPolls, repoPart, sha, verdict)
+		}
+	}
+
+	res, err := pollChecksComplete(ctx, svc, ownerPart, repoPart, sha, branch, requiredNames, maxPolls, interval, opts.skipCrossCheck, sleep, progress)
+	if err != nil {
+		return couldNotRun(err)
+	}
+
+	if opts.outputJSON {
+		data, err := json.MarshalIndent(res, "", "  ")
+		if err != nil {
+			return couldNotRun(fmt.Errorf("encode result: %w", err))
+		}
+		fmt.Fprintln(stdout, string(data))
+	} else {
+		switch res.Verdict {
+		case gh.ChecksComplete:
+			fmt.Fprintln(stdout, "GREEN")
+		case gh.ChecksIncomplete:
+			fmt.Fprintln(stdout, "RED")
+		default:
+			fmt.Fprintln(stdout, "NOT-YET")
+		}
+		for _, r := range res.Reasons {
+			fmt.Fprintln(stdout, "  "+r)
+		}
+	}
+
+	switch res.Verdict {
+	case gh.ChecksComplete:
+		return exitChecksGreen
+	case gh.ChecksIncomplete:
+		return exitChecksRed
+	default:
+		return exitChecksNotObservable
+	}
 }
 
 // ciClassifyUISurfaceCmd implements
