@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/nightgauge/nightgauge/pkg/types"
 	"github.com/shurcooL/graphql"
@@ -177,6 +178,13 @@ func (c *Client) completeIssueRelations(ctx context.Context, issueID, issue stri
 // readNextRelationPages reads the next page of each connection in batch with
 // one aliased query, and appends it. A failed request, a GraphQL error, or an
 // alias that is not an Issue with the connection fails the whole batch.
+//
+// The request is raw GraphQL, for the aliases, but it is paced like a
+// Client.query first page: it waits on the rate-limit floor gate first, and a
+// rate-limit error in the response body is retried after the same backoff
+// rather than reported as a truncated connection. The error it returns keeps
+// its cause, so a gated or cancelled read is still ErrRateLimitGated or
+// context.Canceled to the caller as well as ErrConnectionTruncated.
 func (c *Client) readNextRelationPages(ctx context.Context, batch []*openRelation) error {
 	var sb strings.Builder
 	vars := make(map[string]interface{}, 2*len(batch))
@@ -196,18 +204,17 @@ func (c *Client) readNextRelationPages(ctx context.Context, batch []*openRelatio
 	}
 	sb.WriteString("}\n")
 
-	failed := func(format string, args ...interface{}) error {
+	failed := func(cause error) error {
 		what := batch[0].String()
 		if len(batch) > 1 {
 			what = fmt.Sprintf("%s and %d more", what, len(batch)-1)
 		}
-		return fmt.Errorf("%s: %w: read page %d: %s",
-			what, ErrConnectionTruncated, batch[0].pages+1, fmt.Sprintf(format, args...))
+		return fmt.Errorf("%s: %w: read page %d: %w",
+			what, ErrConnectionTruncated, batch[0].pages+1, cause)
 	}
 
-	raw, err := c.queryRaw(ctx, sb.String(), vars)
-	if err != nil {
-		return failed("%v", err)
+	if err := c.waitRateLimitGate(ctx); err != nil {
+		return failed(err)
 	}
 	var env struct {
 		Data   map[string]map[string]json.RawMessage `json:"data"`
@@ -215,11 +222,31 @@ func (c *Client) readNextRelationPages(ctx context.Context, batch []*openRelatio
 			Message string `json:"message"`
 		} `json:"errors"`
 	}
-	if err := json.Unmarshal(raw, &env); err != nil {
-		return failed("decode response: %v", err)
-	}
-	if len(env.Errors) > 0 {
-		return failed("%s", env.Errors[0].Message)
+	for attempt := 0; ; attempt++ {
+		raw, err := c.queryRaw(ctx, sb.String(), vars)
+		if err != nil {
+			return failed(err)
+		}
+		env.Data, env.Errors = nil, nil
+		if err := json.Unmarshal(raw, &env); err != nil {
+			return failed(fmt.Errorf("decode response: %w", err))
+		}
+		if len(env.Errors) == 0 {
+			break
+		}
+		msgs := make([]string, len(env.Errors))
+		for i, e := range env.Errors {
+			msgs[i] = e.Message
+		}
+		gqlErr := errors.New(strings.Join(msgs, "; "))
+		if !isRateLimited(gqlErr) || attempt == maxRetries {
+			return failed(gqlErr)
+		}
+		select {
+		case <-time.After(c.computeRateLimitBackoff(ctx, gqlErr, attempt)):
+		case <-ctx.Done():
+			return failed(ctx.Err())
+		}
 	}
 	for i, r := range batch {
 		node := env.Data[fmt.Sprintf("r%d", i)]
@@ -237,7 +264,7 @@ func (c *Client) readNextRelationPages(ctx context.Context, batch []*openRelatio
 				r, ErrConnectionTruncated, r.pages+1, r.field)
 		}
 		if err := r.absorb(page); err != nil {
-			return fmt.Errorf("%s: %w: page %d: decode: %v",
+			return fmt.Errorf("%s: %w: page %d: decode: %w",
 				r, ErrConnectionTruncated, r.pages+1, err)
 		}
 		r.pages++

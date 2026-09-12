@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/nightgauge/nightgauge/pkg/types"
 	"golang.org/x/time/rate"
@@ -51,6 +53,14 @@ type relationForge struct {
 	// followUpRequests the requests that carried them.
 	followUps        map[string]int
 	followUpRequests int
+	// rateLimitedFollowUps is how many follow-up requests, from the first,
+	// are answered with GitHub's rate-limit errors body instead of pages.
+	rateLimitedFollowUps int
+	// remaining, when set, is the X-RateLimit-Remaining every response
+	// reports, with the reset twenty minutes out.
+	remaining string
+	// onFollowUp, when set, runs before a follow-up request is answered.
+	onFollowUp func(*http.Request)
 	// queries records every query the fake answered, in order.
 	queries []string
 }
@@ -161,10 +171,32 @@ func (f *relationForge) serve(w http.ResponseWriter, r *http.Request) {
 
 	q, vars := req.Query, req.Variables
 	f.queries = append(f.queries, q)
+	if f.remaining != "" {
+		w.Header().Set("X-RateLimit-Remaining", f.remaining)
+		w.Header().Set("X-RateLimit-Limit", "5000")
+		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Unix()+1200, 10))
+	}
 	var data map[string]interface{}
 	switch {
 	case reFollowUp.MatchString(q):
 		f.followUpRequests++
+		if f.onFollowUp != nil {
+			f.onFollowUp(r)
+		}
+		if f.rateLimitedFollowUps > 0 {
+			f.rateLimitedFollowUps--
+			// GitHub reports an exhausted GraphQL budget as HTTP 200 with
+			// a RATE_LIMITED error and no data.
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"data": nil,
+				"errors": []interface{}{map[string]interface{}{
+					"type":    "RATE_LIMITED",
+					"message": "API rate limit already exceeded for user ID 1.",
+				}},
+			})
+			return
+		}
 		data = map[string]interface{}{}
 		for _, m := range reFollowUp.FindAllStringSubmatch(q, -1) {
 			alias, idVar, conn, afterVar := "r"+m[1], "id"+m[2], m[3], "after"+m[5]
@@ -243,6 +275,12 @@ func (f *relationForge) serve(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		data = map[string]interface{}{"repository": map[string]interface{}{"issue": f.issueFields(q, iss)}}
+	case strings.Contains(q, "rateLimit{"):
+		// The client's backoff probe: budget left, so it pauses briefly.
+		data = map[string]interface{}{"rateLimit": map[string]interface{}{
+			"remaining": 4999,
+			"resetAt":   time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+		}}
 	default:
 		f.t.Errorf("relationForge: unrecognised query %q", q)
 		http.Error(w, "unrecognised query", http.StatusBadRequest)
@@ -735,6 +773,120 @@ func TestRelationFollowUpFailureIsError(t *testing.T) {
 			})
 		}
 	}
+}
+
+// TestRelationFollowUpsArePacedLikeFirstPages holds a follow-up page read to
+// the rate-limit handling of the first page it extends (Client.query): it
+// waits on the rate-limit floor gate, it retries a rate-limit error in the
+// response body, and the error it returns keeps its cause, so a caller can
+// still tell a gated or cancelled read from a broken connection.
+func TestRelationFollowUpsArePacedLikeFirstPages(t *testing.T) {
+	// #700 has more sub-issues than any reader's first page (60 > 50) and
+	// more blockers than one page (11 > 5); only its last blocker is open.
+	setup := func(t *testing.T) *relationForge {
+		f := newRelationForge(t)
+		iss := f.issue(700, "OPEN")
+		iss.subIssues = f.numbers(1001, 60, "CLOSED")
+		iss.blockedBy = f.numbers(301, 11, "CLOSED")
+		f.byNumber[311].state = "OPEN"
+		f.board = []int{700}
+		return f
+	}
+
+	// Each of these reads is one first-page query and then its follow-ups,
+	// so the follow-up is the first request made after the first page.
+	type read struct {
+		name string
+		run  func(ctx context.Context, c *Client) (result any, err error)
+	}
+	reads := []read{
+		{"GetIssue", func(ctx context.Context, c *Client) (any, error) {
+			return NewIssueService(c).GetIssue(ctx, "acme", "widgets", 700)
+		}},
+		{"GetIssuesByNumbers", func(ctx context.Context, c *Client) (any, error) {
+			return NewIssueService(c).GetIssuesByNumbers(ctx, "acme", "widgets", []int{700})
+		}},
+		{"GetEpicProgress", func(ctx context.Context, c *Client) (any, error) {
+			return NewIssueService(c).GetEpicProgress(ctx, "I_700")
+		}},
+	}
+	for _, br := range boardReaders {
+		reads = append(reads, read{"board scan/" + br.name, func(ctx context.Context, c *Client) (any, error) {
+			return br.read(ctx, NewBoardService(c, "acme", 1), 700)
+		}})
+	}
+
+	for _, r := range reads {
+		t.Run("below the rate-limit floor/"+r.name, func(t *testing.T) {
+			// The first page reports 5 points left, under the floor of 100.
+			// A fail-fast client must not send the follow-up.
+			t.Setenv(rateLimitFloorEnv, "100")
+			f := setup(t)
+			f.remaining = "5"
+			tr := NewSharedRateLimitTracker(filepath.Join(t.TempDir(), "rate-limit.json"))
+			c := f.client().WithRateLimitTracker(tr, "alice")
+			res, err := r.run(context.Background(), c)
+			if !errors.Is(err, ErrRateLimitGated) || !errors.Is(err, ErrConnectionTruncated) {
+				t.Fatalf("err = %v, want ErrRateLimitGated and ErrConnectionTruncated", err)
+			}
+			if v := reflect.ValueOf(res); v.IsValid() && !v.IsNil() {
+				t.Fatalf("returned %+v alongside a truncated read", res)
+			}
+			if got := f.followUpRequestCount(); got != 0 {
+				t.Fatalf("follow-up requests = %d, want 0 below the floor", got)
+			}
+		})
+	}
+
+	t.Run("rate-limit error body is retried", func(t *testing.T) {
+		f := setup(t)
+		f.rateLimitedFollowUps = 1
+		got, err := NewIssueService(f.client()).GetIssue(context.Background(), "acme", "widgets", 700)
+		if err != nil {
+			t.Fatalf("GetIssue: %v", err)
+		}
+		if len(got.SubIssues) != 60 || len(got.BlockedBy) != 11 {
+			t.Fatalf("got %d sub-issues and %d blockers, want 60 and 11", len(got.SubIssues), len(got.BlockedBy))
+		}
+		if !blockedByOpen(got.BlockedBy) {
+			t.Fatal("issue reads unblocked although its 11th blocker is open")
+		}
+		if got := f.followUpRequestCount(); got != 2 {
+			t.Fatalf("follow-up requests = %d, want 2 (one rate-limited, one retry)", got)
+		}
+	})
+
+	t.Run("rate-limit error body past the retries is truncation", func(t *testing.T) {
+		f := setup(t)
+		f.rateLimitedFollowUps = maxRetries + 1
+		got, err := NewIssueService(f.client()).GetIssue(context.Background(), "acme", "widgets", 700)
+		if !errors.Is(err, ErrConnectionTruncated) || !strings.Contains(fmt.Sprint(err), "rate limit") {
+			t.Fatalf("err = %v, want ErrConnectionTruncated naming the rate limit", err)
+		}
+		if got != nil {
+			t.Fatalf("returned %+v alongside a truncated read", got)
+		}
+		if got := f.followUpRequestCount(); got != maxRetries+1 {
+			t.Fatalf("follow-up requests = %d, want %d", got, maxRetries+1)
+		}
+	})
+
+	t.Run("cancellation keeps its cause", func(t *testing.T) {
+		f := setup(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		f.onFollowUp = func(r *http.Request) {
+			cancel()
+			select {
+			case <-r.Context().Done():
+			case <-time.After(5 * time.Second):
+			}
+		}
+		_, err := NewIssueService(f.client()).GetIssue(ctx, "acme", "widgets", 700)
+		if !errors.Is(err, context.Canceled) || !errors.Is(err, ErrConnectionTruncated) {
+			t.Fatalf("err = %v, want context.Canceled and ErrConnectionTruncated", err)
+		}
+	})
 }
 
 // TestRelationFollowUpsShareRequests pins the cost of completing connections.

@@ -87,11 +87,13 @@ changelog, and the release workflow refuses a tag that does not.
   the scheduler and `epic plan-waves` could treat an issue with more than 5
   blockers as unblocked. Reads now follow every page up to a 20-page cap, and
   the extra pages for every long list in one read come from one shared
-  request. A list that cannot be read in full is an error, not a short list:
-  epic enqueue, wave planning and the dependency gate stop instead of treating
-  the issue as unblocked. Blocker-state refreshes and the dependency graph's
-  body fetch no longer read these lists at all. `epic validate` also prints
-  the number of sub-issues checked when it finds gaps (#1682)
+  request, which waits on the rate-limit floor and retries a rate-limit error
+  as the first page does. A list that cannot be read in full is an error, not
+  a short list: epic enqueue, wave planning and the dependency gate stop
+  instead of treating the issue as unblocked. Blocker-state refreshes and the
+  dependency graph's body fetch no longer read these lists at all.
+  `epic validate` also prints the number of sub-issues checked when it finds
+  gaps (#1682)
 
 ### Removed
 
