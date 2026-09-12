@@ -118,6 +118,23 @@ expect_fail() {
   esac
 }
 
+# expect_fail_without <name> <message substring> <forbidden substring> [check args...]
+# Like expect_fail, and the output must not contain the forbidden substring.
+expect_fail_without() {
+  local name="$1" want="$2" unwanted="$3"
+  shift 3
+  run_check "$@"
+  if [ "$RC" -ne 1 ]; then
+    bad "$name (want exit 1)"
+    return
+  fi
+  case "$OUT" in
+  *"$unwanted"*) bad "$name (output must not contain: $unwanted)" ;;
+  *"$want"*) ok "$name" ;;
+  *) bad "$name (want message: $want)" ;;
+  esac
+}
+
 # expect_usage <name> [check args...]
 expect_usage() {
   local name="$1"
@@ -227,6 +244,62 @@ expect_fail "unresolved routing link" "routing path does not resolve: NOPE.md"
 valid_fixture
 printf '| Out | ../../etc/passwd | out |\n' >>"$FIX/docs/AGENT_GUIDANCE.md"
 expect_fail "routing path leaving the root" "routing path does not resolve: ../../etc/passwd (leaves --root)"
+
+# Link text is prose: only the destination is a path, and a whole link
+# (text, destination and title) is removed before the cell is tokenised.
+# add_row <path-column cell> — routing row plus a resolvable sub/x.md.
+add_row() {
+  mkdir -p "$FIX/sub"
+  printf 'x\n' >"$FIX/sub/x.md"
+  printf '| Row | %s | row |\n' "$1" >>"$FIX/docs/AGENT_GUIDANCE.md"
+}
+valid_fixture
+add_row '[sub/thing](../sub/x.md)'
+expect_pass "routing link text containing a slash is not a path"
+valid_fixture
+add_row '[AGENTS.md](../AGENTS.md)'
+expect_pass "routing link text containing a dot is not a path"
+valid_fixture
+add_row '[sub/thing](../sub/missing.md)'
+expect_fail_without "unresolved routing link reports its destination, not its text" \
+  "routing path does not resolve: ../sub/missing.md" "[sub/thing"
+valid_fixture
+add_row '`sub/x.md`'
+expect_pass "bare backticked routing path resolves from the root"
+valid_fixture
+add_row '`sub/nope.md`'
+expect_fail "unresolved bare backticked routing path" "routing path does not resolve: sub/nope.md"
+valid_fixture
+add_row '[x](../sub/x.md "Title with a/slash.md")'
+expect_pass "routing link with a title resolves its destination"
+valid_fixture
+add_row '[x](../sub/nope.md "Some title")'
+expect_fail_without "unresolved routing link with a title reports the destination only" \
+  "routing path does not resolve: ../sub/nope.md" '"Some'
+valid_fixture
+add_row '[x](<../sub/x.md>)'
+expect_pass "routing link with an angle-bracket destination resolves"
+valid_fixture
+add_row '![a/logo.png](../sub/x.md) [![b/c.md](../sub/x.md)](../sub/x.md), `sub/x.md`'
+expect_pass "image and linked-image routing cells parse as whole links"
+valid_fixture
+add_row '![logo](../sub/nope.png)'
+expect_fail_without "unresolved routing image reports its destination" \
+  "routing path does not resolve: ../sub/nope.png" "![logo"
+
+valid_fixture
+printf '# Docs\n\n- [Guidance](<AGENT_GUIDANCE.md> "Routing")\n' >"$FIX/docs/README.md"
+expect_pass "docs index link with angle brackets and a title"
+valid_fixture
+printf '# Docs\n\n- [AGENT_GUIDANCE.md](ARCH.md)\n' >"$FIX/docs/README.md"
+expect_fail "docs index naming the routing file only as link text" \
+  "docs index does not link the routing file"
+valid_fixture
+printf '# Docs\n\n```md\n[Guidance](AGENT_GUIDANCE.md)\n```\n' >"$FIX/docs/README.md"
+expect_fail "docs index link only inside a fence" "docs index does not link the routing file"
+valid_fixture
+printf '# Docs\n\nWrite `[Guidance](AGENT_GUIDANCE.md)` in the index.\n' >"$FIX/docs/README.md"
+expect_fail "docs index link only inside a code span" "docs index does not link the routing file"
 valid_fixture
 printf '# Docs\n\n- [Other](ARCH.md)\n' >"$FIX/docs/README.md"
 expect_fail "docs index missing the link" "docs index does not link the routing file"
@@ -240,6 +313,23 @@ write_agents
 sed 's|Nested files: pkg/AGENTS.md|Nested files: none|' "$FIX/AGENTS.md" >"$FIX/a.tmp"
 mv "$FIX/a.tmp" "$FIX/AGENTS.md"
 expect_fail "nested AGENTS.md not indexed" "nested AGENTS.md not listed in root AGENTS.md: pkg/AGENTS.md"
+# list_nested <text> — replace the fixture's nested-file listing line.
+list_nested() {
+  sed "s|Nested files: pkg/AGENTS.md|Nested files: $1|" "$FIX/AGENTS.md" >"$FIX/a.tmp"
+  mv "$FIX/a.tmp" "$FIX/AGENTS.md"
+}
+for other in mypkg/AGENTS.md lib/pkg/AGENTS.md pkg/AGENTS.mdx; do
+  valid_fixture
+  list_nested "$other"
+  expect_fail "nested AGENTS.md listed only inside a longer path ($other)" \
+    "nested AGENTS.md not listed in root AGENTS.md: pkg/AGENTS.md"
+done
+valid_fixture
+list_nested './pkg/AGENTS.md.'
+expect_pass "nested AGENTS.md listed with a ./ prefix"
+valid_fixture
+list_nested '[pkg rules](pkg/AGENTS.md)'
+expect_pass "nested AGENTS.md listed as a link destination"
 valid_fixture
 rm -f "$FIX/pkg/CLAUDE.md"
 expect_fail "nested AGENTS.md without sibling CLAUDE.md" "nested AGENTS.md has no sibling CLAUDE.md: pkg/AGENTS.md"
