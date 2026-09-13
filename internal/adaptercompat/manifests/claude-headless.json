@@ -1,0 +1,28 @@
+{
+  "adapter": "claude-headless",
+  "binary": "claude",
+  "min_version": "2.1.223",
+  "min_version_reason": "The oldest version a captured fixture backs: both stream-json captures in internal/execution/testdata were taken on Claude Code 2.1.223.",
+  "floor_policy": "warn",
+  "max_tested": "2.1.258",
+  "max_tested_reason": "The version CI installs for the continuous-improvement and release-watchdog workflows.",
+  "feeds": [
+    { "kind": "npm", "ref": "@anthropic-ai/claude-code" },
+    { "kind": "github", "ref": "anthropics/claude-code" }
+  ],
+  "companion_feeds": [],
+  "install": { "npm": "@anthropic-ai/claude-code" },
+  "managed_install": "",
+  "required_flags": [],
+  "catalog": {
+    "skip_reason": "claude --help (2.1.233) lists --model to select a model and no command that lists them; see internal/doctor/testdata/no-catalog-cli-probes."
+  },
+  "fixtures": [
+    "internal/execution/testdata/claude_stream_real_capture.jsonl",
+    "internal/execution/testdata/claude_stream_subagent_multi_result.jsonl",
+    "internal/doctor/testdata/no-catalog-cli-probes/claude-help.txt"
+  ],
+  "config_schema_sha256": "",
+  "plugin_api_version": "",
+  "experimental_hooks": []
+}

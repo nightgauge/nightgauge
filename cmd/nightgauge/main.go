@@ -11782,29 +11782,7 @@ Use --json for machine-readable output (skills parse this format).`,
 
 			if len(result.Adapters) > 0 {
 				fmt.Println("\nAdapters:")
-				for _, a := range result.Adapters {
-					status := "✓"
-					if !a.OK {
-						status = "✗"
-					}
-					detail := renderAdapterDetail(a)
-					fmt.Printf("  %s  %-14s  %s\n", status, a.Adapter, detail)
-					if a.Mcp != nil {
-						mcpState := "config.toml missing"
-						if a.Mcp.ConfigPresent {
-							mcpState = "config.toml present"
-							if a.Mcp.ManagedBlock {
-								mcpState += ", MCP managed block present"
-							} else {
-								mcpState += ", no MCP managed block"
-							}
-						}
-						fmt.Printf("        mcp: %s (%s)\n", mcpState, a.Mcp.ConfigPath)
-					}
-					if !a.OK && a.Remediation != "" {
-						fmt.Printf("        → %s\n", a.Remediation)
-					}
-				}
+				writeAdapterRows(os.Stdout, result.Adapters)
 			}
 
 			if len(result.Warnings) > 0 {
@@ -11872,6 +11850,38 @@ func parseAdaptersFlag(raw string) []string {
 		out = append(out, name)
 	}
 	return out
+}
+
+// writeAdapterRows prints one row per adapter. The mark is ✗ for an adapter
+// that is not usable and ⚠ for one that is usable but below its version floor
+// (claude, which stays usable below its floor); either prints the remediation
+// beneath it.
+func writeAdapterRows(w io.Writer, adapters []doctor.AdapterHealth) {
+	for _, a := range adapters {
+		status := "✓"
+		switch {
+		case !a.OK:
+			status = "✗"
+		case !a.VersionOK:
+			status = "⚠"
+		}
+		fmt.Fprintf(w, "  %s  %-14s  %s\n", status, a.Adapter, renderAdapterDetail(a))
+		if a.Mcp != nil {
+			mcpState := "config.toml missing"
+			if a.Mcp.ConfigPresent {
+				mcpState = "config.toml present"
+				if a.Mcp.ManagedBlock {
+					mcpState += ", MCP managed block present"
+				} else {
+					mcpState += ", no MCP managed block"
+				}
+			}
+			fmt.Fprintf(w, "        mcp: %s (%s)\n", mcpState, a.Mcp.ConfigPath)
+		}
+		if status != "✓" && a.Remediation != "" {
+			fmt.Fprintf(w, "        → %s\n", a.Remediation)
+		}
+	}
 }
 
 // renderAdapterDetail builds the one-line human summary for an adapter row.

@@ -9,7 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/adaptercompat"
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/models"
 )
 
 // fakeProbe builds an adapterProbe whose side effects are driven by in-memory
@@ -120,8 +122,8 @@ func TestCheckAdapter_CodexBelowMinVersion(t *testing.T) {
 	if h.VersionOK {
 		t.Error("expected VersionOK=false for 0.110.0 < 0.111.0")
 	}
-	if h.Remediation == "" {
-		t.Error("expected a remediation hint for stale version")
+	if !strings.Contains(h.Remediation, "0.111.0") {
+		t.Errorf("expected a remediation naming the 0.111.0 floor, got %q", h.Remediation)
 	}
 }
 
@@ -143,10 +145,10 @@ func TestCheckAdapter_CodexNotInstalled(t *testing.T) {
 	}
 }
 
-func TestCheckAdapter_ClaudeAliasAndNoVersionFloor(t *testing.T) {
+func TestCheckAdapter_ClaudeAlias(t *testing.T) {
 	fp := fakeProbe{
 		paths:    map[string]string{"claude": "/opt/claude"},
-		versions: map[string]string{"/opt/claude": "claude 2.1.38 (Claude Code)\n"},
+		versions: map[string]string{"/opt/claude": "claude 2.1.233 (Claude Code)\n"},
 	}
 	// "claude" is an alias for "claude-headless".
 	h := checkAdapter("claude", fp.toProbe())
@@ -156,11 +158,11 @@ func TestCheckAdapter_ClaudeAliasAndNoVersionFloor(t *testing.T) {
 	if h.Binary != "claude" {
 		t.Errorf("expected binary claude, got %q", h.Binary)
 	}
-	if h.Version != "2.1.38" {
-		t.Errorf("expected version 2.1.38, got %q", h.Version)
+	if h.Version != "2.1.233" {
+		t.Errorf("expected version 2.1.233, got %q", h.Version)
 	}
-	if h.MinVersion != "" {
-		t.Errorf("expected no min version floor for claude, got %q", h.MinVersion)
+	if !h.VersionOK {
+		t.Errorf("expected 2.1.233 to meet the claude-headless floor %q", h.MinVersion)
 	}
 	if h.Mcp != nil {
 		t.Error("expected no MCP section for claude")
@@ -191,7 +193,7 @@ func TestCheckAdapter_ClaudeRetentionRejectionIsNamed(t *testing.T) {
 	var probedArgs []string
 	fp := fakeProbe{
 		paths:    map[string]string{"claude": "/opt/claude"},
-		versions: map[string]string{"/opt/claude": "claude 2.1.38 (Claude Code)\n"},
+		versions: map[string]string{"/opt/claude": "claude 2.1.233 (Claude Code)\n"},
 		modelProbe: func(_ string, args []string) (string, error) {
 			probedArgs = args
 			return retentionRejectionOutput, errors.New("exit status 1")
@@ -237,7 +239,7 @@ func TestCheckAdapter_ClaudeModelProbeOutcomes(t *testing.T) {
 	base := func(probe func(string, []string) (string, error)) fakeProbe {
 		return fakeProbe{
 			paths:      map[string]string{"claude": "/opt/claude"},
-			versions:   map[string]string{"/opt/claude": "claude 2.1.38 (Claude Code)\n"},
+			versions:   map[string]string{"/opt/claude": "claude 2.1.233 (Claude Code)\n"},
 			modelProbe: probe,
 		}
 	}
@@ -429,7 +431,8 @@ func TestCheckAdapter_GeminiAndCopilot(t *testing.T) {
 
 // TestCheckAdapter_VersionSpawnError: binary present but `--version` errors →
 // the adapter is reported not ready against a floor with an "unknown" hint;
-// a floor-less adapter stays OK.
+// claude, usable below its floor, stays OK, and a floor-less adapter is
+// untouched.
 func TestCheckAdapter_VersionSpawnError(t *testing.T) {
 	codexErr := fakeProbe{
 		paths:   map[string]string{"codex": "/bin/codex"},
@@ -447,13 +450,23 @@ func TestCheckAdapter_VersionSpawnError(t *testing.T) {
 		t.Errorf("expected 'unknown' in remediation, got %q", h.Remediation)
 	}
 
-	// claude has no floor → a version-spawn error still leaves it OK.
+	// claude is usable below its floor → an unknown version is reported
+	// against the floor and still leaves it OK.
 	claudeErr := fakeProbe{
 		paths:   map[string]string{"claude": "/bin/claude"},
 		verErrs: map[string]error{"/bin/claude": errors.New("boom")},
 	}
-	if h2 := checkAdapter("claude", claudeErr.toProbe()); !h2.OK {
-		t.Errorf("expected floor-less claude OK despite version error, got %+v", h2)
+	if c := checkAdapter("claude", claudeErr.toProbe()); !c.OK || c.VersionOK || !strings.Contains(c.Remediation, "unknown") {
+		t.Errorf("expected claude OK with an unmet floor and an 'unknown' hint despite version error, got %+v", c)
+	}
+
+	// copilot has no floor → a version-spawn error leaves it OK and VersionOK.
+	copilotErr := fakeProbe{
+		paths:   map[string]string{"copilot": "/bin/copilot"},
+		verErrs: map[string]error{"/bin/copilot": errors.New("boom")},
+	}
+	if h2 := checkAdapter("copilot", copilotErr.toProbe()); !h2.OK || !h2.VersionOK {
+		t.Errorf("expected floor-less copilot OK despite version error, got %+v", h2)
 	}
 }
 
@@ -510,24 +523,203 @@ func TestVersionParsingAndFloor(t *testing.T) {
 	}
 }
 
-// TestAdapterSpecConstants guards the min-version constants that MIRROR the SDK
-// MIN_KNOWN_VERSION values. A drift here must be a deliberate edit kept in sync
-// with packages/nightgauge-sdk/src/cli/adapters/*Adapter.ts.
+// TestAdapterSpecConstants holds every CLI adapter's floor to its compat
+// manifest (internal/adaptercompat/manifests/<adapter>.json), the single
+// source. A literal put back in adapterSpecs that differs from the manifest
+// turns this red.
 func TestAdapterSpecConstants(t *testing.T) {
-	if adapterSpecs["codex"].minVersion != "0.111.0" {
-		t.Errorf("codex minVersion drifted from SDK MIN_KNOWN_VERSION 0.111.0: %q", adapterSpecs["codex"].minVersion)
+	for name, spec := range adapterSpecs {
+		if spec.kind != kindCLI {
+			if spec.minVersion != "" || spec.floorPolicy != "" {
+				t.Errorf("%s is not a CLI adapter but has floor %q policy %q", name, spec.minVersion, spec.floorPolicy)
+			}
+			continue
+		}
+		m, ok := adaptercompat.Get(name)
+		if !ok {
+			t.Errorf("CLI adapter %s has no compat manifest", name)
+			continue
+		}
+		if spec.minVersion != m.MinVersion {
+			t.Errorf("%s minVersion = %q, want the manifest's min_version %q", name, spec.minVersion, m.MinVersion)
+		}
+		if spec.floorPolicy != m.FloorPolicy {
+			t.Errorf("%s floorPolicy = %q, want the manifest's floor_policy %q", name, spec.floorPolicy, m.FloorPolicy)
+		}
+		if spec.binary != m.Binary {
+			t.Errorf("%s binary = %q, want the manifest's binary %q", name, spec.binary, m.Binary)
+		}
 	}
-	if adapterSpecs["gemini"].minVersion != "0.29.0" {
-		t.Errorf("gemini minVersion drifted from SDK MIN_KNOWN_VERSION 0.29.0: %q", adapterSpecs["gemini"].minVersion)
+	// The four adapters with a floor, named, so an adapter dropped from
+	// adapterSpecs cannot pass the loop above by being absent.
+	for _, name := range []string{"codex", "gemini", "grok", "claude-headless"} {
+		m, _ := adaptercompat.Get(name)
+		if m.MinVersion == "" || adapterSpecs[name].minVersion != m.MinVersion {
+			t.Errorf("%s minVersion = %q, want the manifest's non-empty min_version %q",
+				name, adapterSpecs[name].minVersion, m.MinVersion)
+		}
+		if adapterSpecs[name].floorPolicy != adaptercompat.FloorWarn {
+			t.Errorf("%s floorPolicy = %q, want %q", name, adapterSpecs[name].floorPolicy, adaptercompat.FloorWarn)
+		}
 	}
-	if adapterSpecs["grok"].minVersion != "1.0.0" {
-		t.Errorf("grok minVersion drifted from SDK GROK_MIN_KNOWN_VERSION 1.0.0: %q", adapterSpecs["grok"].minVersion)
+	// Only claude stays usable below its floor. Codex, gemini and grok keep
+	// the floor they had before the manifest: below it they are not usable.
+	for name, spec := range adapterSpecs {
+		if want := name == "claude-headless"; spec.usableBelowFloor != want {
+			t.Errorf("%s usableBelowFloor = %v, want %v", name, spec.usableBelowFloor, want)
+		}
 	}
 	if !adapterSpecs["codex"].mcp {
 		t.Error("codex must be flagged as MCP-provisioning")
 	}
 	if len(AllAdapterNames()) != 9 {
 		t.Errorf("expected 9 adapters in AllAdapterNames, got %d", len(AllAdapterNames()))
+	}
+}
+
+// TestCheckAdapter_ClaudeBelowManifestFloorWarns: claude-headless has a floor
+// from its compat manifest (the oldest version a captured fixture backs), under
+// the warn policy, and its spec keeps it usable below that floor. A claude
+// below it is reported with a remediation naming the floor, and the adapter
+// stays usable, so the doctor adds no warning for it.
+func TestCheckAdapter_ClaudeBelowManifestFloorWarns(t *testing.T) {
+	m, ok := adaptercompat.Get("claude-headless")
+	if !ok || m.MinVersion != "2.1.223" {
+		t.Fatalf("claude-headless manifest floor = %q (found %v), want 2.1.223", m.MinVersion, ok)
+	}
+	fp := fakeProbe{
+		paths:    map[string]string{"claude": "/opt/claude"},
+		versions: map[string]string{"/opt/claude": "2.1.100 (Claude Code)\n"},
+	}
+	h := checkAdapter("claude-headless", fp.toProbe())
+	if h.Version != "2.1.100" || h.MinVersion != "2.1.223" {
+		t.Errorf("version=%q min=%q, want 2.1.100 against the 2.1.223 floor", h.Version, h.MinVersion)
+	}
+	if h.VersionOK {
+		t.Error("expected VersionOK=false: 2.1.100 is below the floor")
+	}
+	if !strings.Contains(h.Remediation, "2.1.223") {
+		t.Errorf("remediation %q does not name the 2.1.223 floor", h.Remediation)
+	}
+	if !h.OK {
+		t.Errorf("claude below its floor failed the adapter: %+v", h)
+	}
+}
+
+// TestCheckAdapter_ClaudeBelowFloorKeepsItsProbes: a claude below its floor is
+// still usable, so it still gets the deeper checks every usable claude gets:
+// the catalog-skip note and the model probe (the data-retention check). The
+// probe's remediation follows the floor's rather than replacing it.
+func TestCheckAdapter_ClaudeBelowFloorKeepsItsProbes(t *testing.T) {
+	base := func(probe func(string, []string) (string, error)) fakeProbe {
+		return fakeProbe{
+			paths:      map[string]string{"claude": "/opt/claude"},
+			versions:   map[string]string{"/opt/claude": "2.1.100 (Claude Code)\n"},
+			modelProbe: probe,
+		}
+	}
+
+	served := checkAdapter("claude-headless", base(func(string, []string) (string, error) {
+		return "ok\n", nil
+	}).toProbe())
+	if served.VersionOK || !served.OK {
+		t.Fatalf("want claude 2.1.100 below its floor and usable, got %+v", served)
+	}
+	if served.ModelOK == nil || !*served.ModelOK {
+		t.Errorf("ModelOK = %v, want true: the model probe must run below the floor", served.ModelOK)
+	}
+	if !strings.HasPrefix(served.CatalogWarning, "no catalog probe: ") {
+		t.Errorf("CatalogWarning = %q, want the no-catalog note", served.CatalogWarning)
+	}
+
+	barred := checkAdapter("claude-headless", base(func(string, []string) (string, error) {
+		return retentionRejectionOutput, errors.New("exit status 1")
+	}).toProbe())
+	if barred.ModelOK == nil || *barred.ModelOK {
+		t.Errorf("ModelOK = %v, want false: the model was rejected", barred.ModelOK)
+	}
+	for _, want := range []string{"2.1.223", "30-day data retention"} {
+		if !strings.Contains(barred.Remediation, want) {
+			t.Errorf("remediation %q does not name %q", barred.Remediation, want)
+		}
+	}
+}
+
+// TestCheckAdapter_FailClosedFloorFailsTheAdapter is the other policy: below
+// a fail_closed floor the adapter is not usable, even with usableBelowFloor
+// set, and it gets no probe. No doctor adapter carries such a floor today, so
+// a spec is registered for the test.
+func TestCheckAdapter_FailClosedFloorFailsTheAdapter(t *testing.T) {
+	const name = "test-fail-closed"
+	adapterSpecs[name] = adapterSpec{binary: "fc", kind: kindCLI, minVersion: "1.2.3",
+		floorPolicy: adaptercompat.FloorFailClosed, usableBelowFloor: true, catalogSkipReason: "test spec",
+		modelProbeBand: models.BandFable, modelProbeArgs: claudeModelProbeArgs}
+	t.Cleanup(func() { delete(adapterSpecs, name) })
+
+	spawned := false
+	below := fakeProbe{paths: map[string]string{"fc": "/bin/fc"}, versions: map[string]string{"/bin/fc": "fc 1.2.2"},
+		modelProbe: func(string, []string) (string, error) { spawned = true; return "ok", nil }}
+	h := checkAdapter(name, below.toProbe())
+	if h.OK || h.VersionOK || !strings.Contains(h.Remediation, "1.2.3") {
+		t.Errorf("below a fail_closed floor: want !OK, !VersionOK and the floor named, got %+v", h)
+	}
+	if spawned || h.ModelOK != nil || h.CatalogWarning != "" {
+		t.Errorf("an adapter that is not usable was probed: spawned=%v %+v", spawned, h)
+	}
+	at := fakeProbe{paths: map[string]string{"fc": "/bin/fc"}, versions: map[string]string{"/bin/fc": "fc 1.2.3"}}
+	if h := checkAdapter(name, at.toProbe()); !h.OK || !h.VersionOK {
+		t.Errorf("at a fail_closed floor: want OK, got %+v", h)
+	}
+}
+
+// TestCheckAdapters_CompatLoadFailureIsOneFailingRow: a compat manifest that
+// fails to load leaves every floor unset; the doctor says so in one failing
+// row carrying the loader's error, which names the manifest and the field.
+func TestCheckAdapters_CompatLoadFailureIsOneFailingRow(t *testing.T) {
+	loadErr := &adaptercompat.Error{File: "codex.json", Adapter: "codex", Field: "min_version",
+		Msg: `"1.x" is not a semver version (MAJOR.MINOR.PATCH)`}
+	orig := loadCompatManifests
+	loadCompatManifests = func() error { return loadErr }
+	t.Cleanup(func() { loadCompatManifests = orig })
+
+	fp := fakeProbe{paths: map[string]string{"claude": "/b/claude"}, versions: map[string]string{"/b/claude": "claude 2.1.233"}}
+	got := checkAdaptersWithProbe([]string{"claude"}, fp.toProbe())
+	if len(got) != 2 {
+		t.Fatalf("got %d rows, want the compat row plus claude", len(got))
+	}
+	row := got[0]
+	if row.Adapter != compatManifestRowName || row.OK {
+		t.Errorf("first row = %+v, want a failing %s row", row, compatManifestRowName)
+	}
+	for _, want := range []string{"codex.json", "min_version"} {
+		if !strings.Contains(row.Remediation, want) {
+			t.Errorf("compat row remediation %q does not name %q", row.Remediation, want)
+		}
+	}
+	if got[1].Adapter != "claude" {
+		t.Errorf("second row = %q, want claude", got[1].Adapter)
+	}
+
+	loadCompatManifests = orig
+	if rows := checkAdaptersWithProbe([]string{"claude"}, fp.toProbe()); len(rows) != 1 {
+		t.Errorf("the embedded manifests load, yet the doctor reported %d rows for one adapter", len(rows))
+	}
+}
+
+// TestOpenCodeManifestIsDataOnly: the opencode manifest exists for later
+// consumers; the doctor reads a manifest only by one of its own adapter names,
+// and opencode is not one, so its presence changes no doctor row.
+func TestOpenCodeManifestIsDataOnly(t *testing.T) {
+	if _, ok := adaptercompat.Get("opencode"); !ok {
+		t.Fatal("no opencode manifest")
+	}
+	if _, ok := adapterSpecs["opencode"]; ok {
+		t.Error("adapterSpecs has an opencode entry; the doctor's OpenCode checks are separate work")
+	}
+	for _, name := range AllAdapterNames() {
+		if normalizeAdapterName(name) == "opencode" {
+			t.Error("AllAdapterNames includes opencode")
+		}
 	}
 }
 

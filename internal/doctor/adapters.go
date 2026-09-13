@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/adaptercompat"
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/models"
 	yaml "gopkg.in/yaml.v3"
@@ -128,13 +129,14 @@ const (
 const codexManagedMcpBegin = "# >>> BEGIN NIGHTGAUGE MANAGED MCP >>>"
 
 // adapterSpec is the declarative description of an adapter's health
-// requirements. Min versions MIRROR the canonical SDK constants
-// (packages/nightgauge-sdk/src/cli/adapters/*Adapter.ts MIN_KNOWN_VERSION);
-// TestAdapterSpecConstants guards the values so a drift is a deliberate edit.
+// requirements. A kindCLI adapter's version floor and floor policy come from
+// its compat manifest (internal/adaptercompat/manifests/<adapter>.json), never
+// from a literal here; TestAdapterSpecConstants holds the two together.
 type adapterSpec struct {
 	binary         string      // CLI binary name (kindCLI only)
 	kind           adapterKind //
 	minVersion     string      // "" when no floor is enforced
+	floorPolicy    string      // the manifest's floor_policy (adaptercompat.FloorWarn or FloorFailClosed)
 	apiKeyEnvs     []string    // kindSDK: any one present satisfies "configured"
 	modelEnv       string      // kindHTTP: env var carrying the required local model id
 	modelConfigKey string      // kindHTTP: machine-tier dotted key (e.g. lm_studio.model)
@@ -143,6 +145,11 @@ type adapterSpec struct {
 	baseURLEnv     string      // kindHTTP: env var overriding the local server base URL
 	defaultBaseURL string      // kindHTTP: base URL when the env override is unset
 	mcp            bool        // codex: provisions an MCP managed block in config.toml
+	// usableBelowFloor (kindCLI) reports a CLI below minVersion (VersionOK
+	// false, a remediation naming the floor) and leaves it usable. It is
+	// honoured only while floorPolicy is FloorWarn, so a fail_closed manifest
+	// always wins. Without it, a CLI below its floor is not usable.
+	usableBelowFloor bool
 	// catalogArgs/catalogParser (#551): kindCLI adapters that can list their
 	// own model catalog wire both — catalogArgs is the subcommand (e.g.
 	// grok's {"models"}) and catalogParser turns its output into the live
@@ -177,17 +184,55 @@ type adapterSpec struct {
 // the VSCode extension (claude, codex, gemini, gemini-sdk, lm-studio, ollama,
 // copilot) all resolve here after normalizeAdapterName.
 var adapterSpecs = map[string]adapterSpec{
-	"claude-headless": {binary: "claude", kind: kindCLI, catalogSkipReason: claudeNoCatalogReason,
-		modelProbeBand: models.BandFable, modelProbeArgs: claudeModelProbeArgs},
+	// claude's floor is the oldest version a captured fixture backs, not a
+	// version known to break, and claude is the default adapter: a claude
+	// below it is reported and stays usable (usableBelowFloor).
+	"claude-headless": {binary: "claude", kind: kindCLI,
+		minVersion: compatMinVersion("claude-headless"), floorPolicy: compatFloorPolicy("claude-headless"),
+		usableBelowFloor:  true,
+		catalogSkipReason: claudeNoCatalogReason, modelProbeBand: models.BandFable, modelProbeArgs: claudeModelProbeArgs},
 	"claude-sdk": {kind: kindSDK, apiKeyEnvs: []string{"ANTHROPIC_API_KEY"}},
-	"codex":      {binary: "codex", kind: kindCLI, minVersion: "0.111.0", mcp: true, catalogSkipReason: codexNoCatalogReason},
-	"gemini":     {binary: "gemini", kind: kindCLI, minVersion: "0.29.0", catalogSkipReason: geminiNoCatalogReason},
+	"codex": {binary: "codex", kind: kindCLI,
+		minVersion: compatMinVersion("codex"), floorPolicy: compatFloorPolicy("codex"),
+		mcp: true, catalogSkipReason: codexNoCatalogReason},
+	"gemini": {binary: "gemini", kind: kindCLI,
+		minVersion: compatMinVersion("gemini"), floorPolicy: compatFloorPolicy("gemini"),
+		catalogSkipReason: geminiNoCatalogReason},
 	"gemini-sdk": {kind: kindSDK, apiKeyEnvs: []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"}},
 	"ollama":     {kind: kindHTTP, modelEnv: "NIGHTGAUGE_OLLAMA_MODEL", modelConfigKey: "ollama.model", pullHint: "ollama pull", bridgeBinary: "claude", baseURLEnv: "NIGHTGAUGE_OLLAMA_BASE_URL", defaultBaseURL: "http://localhost:11434/v1"},
 	"lm-studio":  {kind: kindHTTP, modelEnv: "NIGHTGAUGE_LM_STUDIO_MODEL", modelConfigKey: "lm_studio.model", pullHint: "lms get", bridgeBinary: "claude", baseURLEnv: "NIGHTGAUGE_LM_STUDIO_BASE_URL", defaultBaseURL: "http://localhost:1234/v1"},
-	"copilot":    {binary: "copilot", kind: kindCLI, catalogSkipReason: copilotNoCatalogReason},
-	"grok":       {binary: "grok", kind: kindCLI, minVersion: "1.0.0", catalogArgs: []string{"models"}, catalogParser: parseGrokCatalog},
+	"copilot": {binary: "copilot", kind: kindCLI,
+		minVersion: compatMinVersion("copilot"), floorPolicy: compatFloorPolicy("copilot"),
+		catalogSkipReason: copilotNoCatalogReason},
+	"grok": {binary: "grok", kind: kindCLI,
+		minVersion: compatMinVersion("grok"), floorPolicy: compatFloorPolicy("grok"),
+		catalogArgs: []string{"models"}, catalogParser: parseGrokCatalog},
 }
+
+// compatMinVersion and compatFloorPolicy read a CLI adapter's floor from its
+// embedded compat manifest. When the embedded set fails to load they return
+// "", so no floor is enforced and loadCompatManifests reports the failure as
+// one failing row instead of the doctor panicking at package init.
+func compatMinVersion(adapter string) string {
+	m, _ := adaptercompat.Get(adapter)
+	return m.MinVersion
+}
+
+func compatFloorPolicy(adapter string) string {
+	m, _ := adaptercompat.Get(adapter)
+	return m.FloorPolicy
+}
+
+// loadCompatManifests is the check behind that row; a variable so a test can
+// stand in a failing load.
+var loadCompatManifests = func() error {
+	_, err := adaptercompat.Load()
+	return err
+}
+
+// compatManifestRowName labels the row reporting a compat manifest that
+// failed to load. It is not an adapter name.
+const compatManifestRowName = "compat-manifests"
 
 // No-catalog skip reasons (#604): each names the captured, real evidence
 // backing the "no catalog probe" decision — never a guess. Full provenance
@@ -371,7 +416,16 @@ func CheckAdapters(names []string) []AdapterHealth {
 }
 
 func checkAdaptersWithProbe(names []string, probe adapterProbe) []AdapterHealth {
-	out := make([]AdapterHealth, 0, len(names))
+	out := make([]AdapterHealth, 0, len(names)+1)
+	if err := loadCompatManifests(); err != nil {
+		// The error names the manifest file and the field. Every CLI floor is
+		// unset while it stands, which is why it leads the report.
+		out = append(out, AdapterHealth{
+			Adapter:     compatManifestRowName,
+			OK:          false,
+			Remediation: "Version floors are not enforced: " + err.Error(),
+		})
+	}
 	for _, name := range names {
 		out = append(out, checkAdapter(name, probe))
 	}
@@ -411,14 +465,23 @@ func checkAdapter(name string, probe adapterProbe) AdapterHealth {
 				h.Remediation = "Update " + spec.binary + " to >= " + spec.minVersion + " (current " + cur + ")."
 			}
 		}
-		h.OK = h.Installed && h.VersionOK
-		switch {
-		case spec.catalogParser != nil:
-			applyCatalogProbe(&h, spec, canonical, probe)
-		case spec.catalogSkipReason != "":
-			applyCatalogSkip(&h, spec)
+		// Below its floor a CLI is not usable, unless its spec keeps it
+		// usable under a warn floor; then VersionOK false and the remediation
+		// above report the floor on an adapter that still runs.
+		usableBelowFloor := spec.usableBelowFloor && spec.floorPolicy == adaptercompat.FloorWarn
+		h.OK = h.Installed && (h.VersionOK || usableBelowFloor)
+		// The deeper probes run on every usable CLI, one below a floor it
+		// stays usable under included. An adapter that is not usable is
+		// already reported for that reason and gets no second complaint.
+		if h.OK {
+			switch {
+			case spec.catalogParser != nil:
+				applyCatalogProbe(&h, spec, canonical, probe)
+			case spec.catalogSkipReason != "":
+				applyCatalogSkip(&h, spec)
+			}
+			applyModelProbe(&h, spec, probe)
 		}
-		applyModelProbe(&h, spec, probe)
 
 	case kindSDK:
 		h.Installed = anyEnvSet(probe.getenv, spec.apiKeyEnvs)
@@ -504,16 +567,16 @@ func checkAdapter(name string, probe adapterProbe) AdapterHealth {
 // detection half of the #532 drift class: the registry declares a model
 // CLI-served but the CLI's own catalog does not actually offer it.
 //
-// Only runs when the adapter already passed its baseline (binary present,
-// version floor met, if any) — an adapter that is already !OK for that
-// reason gets no second, redundant complaint layered on top. Any failure to
+// checkAdapter calls it only on a usable adapter (binary present, and its
+// version floor met or one it stays usable under) — an adapter that is
+// already !OK gets no second, redundant complaint layered on top. Any failure to
 // RUN or PARSE the catalog (spawn error, timeout, not authenticated,
 // unrecognized output shape) degrades to CatalogWarning and never touches
 // OK: only a confirmed comparison against a successfully parsed live catalog
 // may fail the adapter, matching "never a hard doctor failure for a missing
 // optional adapter."
 func applyCatalogProbe(h *AdapterHealth, spec adapterSpec, canonical string, probe adapterProbe) {
-	if !h.Installed || !h.VersionOK || probe.runCatalog == nil {
+	if probe.runCatalog == nil {
 		return
 	}
 	cmdLabel := spec.binary + " " + strings.Join(spec.catalogArgs, " ")
@@ -568,14 +631,11 @@ func applyCatalogProbe(h *AdapterHealth, spec adapterSpec, canonical string, pro
 // call for that adapter — never silently indistinguishable from a probe that
 // simply has not been wired yet.
 //
-// Gated the same way as applyCatalogProbe (baseline already passed) so an
-// adapter that is already !OK for an unrelated reason (missing binary, stale
-// version) gets no additional, redundant note layered on top — that failure
-// is already reported via Installed/VersionOK/Remediation.
+// Gated the same way as applyCatalogProbe (called only on a usable adapter)
+// so an adapter that is already !OK for an unrelated reason (missing binary,
+// a floor it is not usable below) gets no additional, redundant note layered
+// on top — that failure is already reported via Installed/VersionOK/Remediation.
 func applyCatalogSkip(h *AdapterHealth, spec adapterSpec) {
-	if !h.Installed || !h.VersionOK {
-		return
-	}
 	h.CatalogWarning = "no catalog probe: " + spec.catalogSkipReason
 }
 
@@ -617,14 +677,15 @@ func retentionRejection(output string) bool {
 // current leader of spec.modelProbeBand and records whether the provider
 // actually serves that model to THIS caller.
 //
-// Gated exactly like applyCatalogProbe: only when the adapter already passed
-// its baseline (binary present, version floor met) and the probe is wired —
-// nil runModelProbe is the plain-`doctor` path, which spends nothing. Like
-// the catalog probe it never flips h.OK: a model the org cannot use is a real
-// finding, but it is not "this adapter cannot run a stage" — every other band
-// still dispatches. It is reported as a named remediation instead.
+// Gated exactly like applyCatalogProbe: called only on a usable adapter (a
+// claude below the floor it stays usable under included), and only when the
+// probe is wired — nil runModelProbe is the plain-`doctor` path, which spends
+// nothing. Like the catalog probe it never flips h.OK: a model the org cannot
+// use is a real finding, but it is not "this adapter cannot run a stage" —
+// every other band still dispatches. It is reported as a named remediation
+// instead, after any floor remediation already on the row.
 func applyModelProbe(h *AdapterHealth, spec adapterSpec, probe adapterProbe) {
-	if !h.Installed || !h.VersionOK || probe.runModelProbe == nil || spec.modelProbeArgs == nil {
+	if probe.runModelProbe == nil || spec.modelProbeArgs == nil {
 		return
 	}
 	m, ok := models.Get(spec.modelProbeBand)

@@ -1,0 +1,20 @@
+{
+  "adapter": "gemini",
+  "binary": "gemini",
+  "min_version": "0.29.0",
+  "floor_policy": "warn",
+  "max_tested": "",
+  "max_tested_reason": "No gemini CLI has been captured: it was not installed on the machine that captured the doctor evidence (internal/doctor/testdata/no-catalog-cli-probes).",
+  "feeds": [{ "kind": "npm", "ref": "@google/gemini-cli" }],
+  "companion_feeds": [],
+  "install": { "npm": "@google/gemini-cli" },
+  "managed_install": "",
+  "required_flags": [],
+  "catalog": {
+    "skip_reason": "No gemini CLI output has been captured to build a catalog parser against; see internal/doctor/testdata/no-catalog-cli-probes."
+  },
+  "fixtures": [],
+  "config_schema_sha256": "",
+  "plugin_api_version": "",
+  "experimental_hooks": []
+}

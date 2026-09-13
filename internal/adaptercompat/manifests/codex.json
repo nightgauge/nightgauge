@@ -1,0 +1,20 @@
+{
+  "adapter": "codex",
+  "binary": "codex",
+  "min_version": "0.111.0",
+  "floor_policy": "warn",
+  "max_tested": "0.145.0",
+  "max_tested_reason": "The version whose --help is captured in internal/doctor/testdata/no-catalog-cli-probes.",
+  "feeds": [{ "kind": "npm", "ref": "@openai/codex" }],
+  "companion_feeds": [],
+  "install": { "npm": "@openai/codex" },
+  "managed_install": "",
+  "required_flags": [],
+  "catalog": {
+    "skip_reason": "codex --help (codex-cli 0.145.0) lists -m/--model to select a model and no command that lists them; see internal/doctor/testdata/no-catalog-cli-probes."
+  },
+  "fixtures": ["internal/doctor/testdata/no-catalog-cli-probes/codex-help.txt"],
+  "config_schema_sha256": "",
+  "plugin_api_version": "",
+  "experimental_hooks": []
+}

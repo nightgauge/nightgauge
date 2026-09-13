@@ -9,6 +9,11 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- The Adapter Doctor checks the claude CLI against a 2.1.223 floor. A claude
+  below it shows its version as a warning and stays ready (#1613)
+
 ### Fixed
 
 - Codex stages no longer leave generated `AGENTS.md` steering in your commits:

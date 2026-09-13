@@ -1,0 +1,36 @@
+{
+  "adapter": "opencode",
+  "binary": "opencode",
+  "min_version": "1.18.30",
+  "min_version_reason": "Every OpenCode behaviour ADR-022 relies on was observed on 1.18.30 (ADR-022 section 20).",
+  "floor_policy": "fail_closed",
+  "max_tested": "1.18.30",
+  "max_tested_reason": "The only version observed; above it, dispatch warns and self-tests, and endpoint dispatch stops (ADR-022 section 20).",
+  "feeds": [
+    { "kind": "npm", "ref": "opencode-ai" },
+    {
+      "kind": "github",
+      "ref": "anomalyco/opencode",
+      "tag_pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
+    }
+  ],
+  "companion_feeds": [
+    { "kind": "github", "ref": "lmstudio-ai/lms" },
+    { "kind": "github", "ref": "ollama/ollama" }
+  ],
+  "install": { "npm": "opencode-ai" },
+  "managed_install": "",
+  "required_flags": [],
+  "catalog": {
+    "skip_reason": "No OpenCode model-listing output has been captured yet; the evidence covers opencode run --help only (internal/execution/adapters/testdata/opencode-cli)."
+  },
+  "fixtures": [
+    "internal/execution/adapters/testdata/opencode-cli/run-help.txt",
+    "internal/execution/adapters/testdata/opencode-cli/version.txt",
+    "internal/adaptercompat/testdata/opencode-feed/releases.txt",
+    "internal/adaptercompat/testdata/opencode-feed/tags.txt"
+  ],
+  "config_schema_sha256": "",
+  "plugin_api_version": "",
+  "experimental_hooks": []
+}

@@ -329,7 +329,9 @@ TypeScript namesake.)
 ## Extending to a new adapter
 
 1. Add the adapter to the Go `adapterSpecs` table (`internal/doctor/adapters.go`)
-   with its `kind`, binary/env requirements, and (mirrored) min-version floor.
+   with its `kind` and binary/env requirements. A CLI adapter also gets a compat
+   manifest (`internal/adaptercompat/manifests/<adapter>.json`), and its spec
+   reads the version floor and floor policy from it.
 2. Ensure the SDK adapter implements `validateAuth()` (the auth layer is
    automatic via `runAdapterAuthPreflight`).
 3. Declare its agentic truth: `agentic` on the SDK adapter class and

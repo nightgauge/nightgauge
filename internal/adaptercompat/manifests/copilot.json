@@ -1,0 +1,21 @@
+{
+  "adapter": "copilot",
+  "binary": "copilot",
+  "min_version": "",
+  "min_version_reason": "No floor: no working standalone Copilot CLI has been captured, so no version is known to work.",
+  "floor_policy": "warn",
+  "max_tested": "",
+  "max_tested_reason": "The only copilot captured is an editor bootstrap shim that fails without a real CLI (internal/doctor/testdata/no-catalog-cli-probes/copilot-help.txt).",
+  "feeds": [{ "kind": "npm", "ref": "@github/copilot" }],
+  "companion_feeds": [],
+  "install": { "npm": "@github/copilot" },
+  "managed_install": "",
+  "required_flags": [],
+  "catalog": {
+    "skip_reason": "No working standalone Copilot CLI output has been captured to build a catalog parser against; see internal/doctor/testdata/no-catalog-cli-probes."
+  },
+  "fixtures": ["internal/doctor/testdata/no-catalog-cli-probes/copilot-help.txt"],
+  "config_schema_sha256": "",
+  "plugin_api_version": "",
+  "experimental_hooks": []
+}
