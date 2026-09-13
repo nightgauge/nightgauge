@@ -77,6 +77,12 @@ changelog, and the release workflow refuses a tag that does not.
 - Each CLI adapter has a compat manifest (`internal/adaptercompat/manifests/`),
   the one validated record of its floor, newest tested version, release feeds,
   install recipe and fixtures; the doctor reads its floors from it (#1613)
+- `cmd/stub-provider` is a new deterministic, scripted, OpenAI-compatible chat
+  completions server for adapter contract runs in CI: it answers
+  `/v1/chat/completions` (streamed and non-streamed) and `/v1/models` from a
+  named script, binds loopback only, and stops itself after a bounded number
+  of requests, an idle timeout, or SIGTERM. Turn selection is stateless and
+  pure, so identical requests get identical replies (#1618)
 
 ### Fixed
 
