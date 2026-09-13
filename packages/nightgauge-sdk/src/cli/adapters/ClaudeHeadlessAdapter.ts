@@ -26,11 +26,23 @@ import {
   runClaudeNativeWorkflow,
   type NativeWorkflowReadiness,
 } from "./ClaudeNativeWorkflow.js";
+import { ADAPTER_COMPAT } from "./adapterCompat.generated.js";
 
 const ADAPTER_NAME = "Claude Headless";
 const CLAUDE_DOCS_URL = "https://docs.anthropic.com/en/docs/claude-code";
 const CLAUDE_INSTALL_CMD = "brew install claude  # or: npm install -g @anthropic-ai/claude-code";
 const AUTH_TIMEOUT_MS = 10_000;
+
+function compareVersions(a: string, b: string): number {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const na = pa[i] ?? 0;
+    const nb = pb[i] ?? 0;
+    if (na !== nb) return na - nb;
+  }
+  return 0;
+}
 
 export class ClaudeHeadlessAdapter implements ICliAdapter {
   readonly name = "claude-headless" as const;
@@ -70,6 +82,22 @@ export class ClaudeHeadlessAdapter implements ICliAdapter {
     // mode to `sdk-fanout`; ordinary `claude --print` execution still works.
     const detectedVersion = await detectClaudeCliVersion(runner, cwd);
     this.nativeWorkflowReadiness = preflightNativeWorkflow(detectedVersion);
+
+    // General compatibility floor (#1621), the same warn-don't-throw shape as
+    // Codex/Gemini/Grok. An undetectable version (detectedVersion === null)
+    // stays a no-op — there is nothing to compare, and the native-workflow
+    // preflight above already treats that case as "not ready" on its own
+    // terms.
+    if (detectedVersion) {
+      const minVersion = ADAPTER_COMPAT["claude-headless"].minVersion;
+      if (compareVersions(detectedVersion, minVersion) < 0) {
+        console.warn(
+          `[claude-headless-adapter] WARNING: Claude CLI version ${detectedVersion} is older ` +
+            `than minimum known compatible version ${minVersion}. Some features may not work ` +
+            `as expected.`
+        );
+      }
+    }
 
     // Check auth status
     const authResult = await runner("claude", ["auth", "status"], cwd);

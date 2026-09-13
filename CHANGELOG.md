@@ -83,6 +83,16 @@ changelog, and the release workflow refuses a tag that does not.
   named script, binds loopback only, and stops itself after a bounded number
   of requests, an idle timeout, or SIGTERM. Turn selection is stateless and
   pure, so identical requests get identical replies (#1618)
+- `cmd/adaptercompat-codegen` renders the compat manifests
+  (`internal/adaptercompat/manifests/*.json`) into
+  `packages/nightgauge-sdk/src/cli/adapters/adapterCompat.generated.ts`, a
+  frozen `ADAPTER_COMPAT` map the SDK adapters read their version floor from
+  instead of each holding its own literal. `codex`, `gemini` and `grok` now
+  source `minVersion` from it, and `claude-headless` gets the same
+  warn-don't-block floor check the others already had. `scripts/adapter-cli-pin.sh`
+  reads a manifest's `max_tested` to print an npm install pin, which
+  `release-watchdog.yml` and `continuous-improvement.yml` now use instead of a
+  hardcoded `claude-code@` version (#1621)
 
 ### Fixed
 

@@ -25,11 +25,12 @@ import { createCliQueryFn, parseCliArgs } from "./cliQueryHelper.js";
 import { AdapterError } from "./errors.js";
 import { resolveAndValidateModel } from "./modelPreflight.js";
 import { grokCliEffortFlag } from "./grokEffort.js";
+import { ADAPTER_COMPAT } from "./adapterCompat.generated.js";
 
 const ADAPTER_NAME = "Grok";
 const GROK_DOCS_URL = "https://docs.x.ai/build/overview";
 const GROK_INSTALL_CMD = "curl -fsSL https://x.ai/cli/install.sh | bash";
-export const GROK_MIN_KNOWN_VERSION = "1.0.0";
+export const GROK_MIN_KNOWN_VERSION = ADAPTER_COMPAT.grok.minVersion;
 
 function compareVersions(a: string, b: string): number {
   const pa = a.split(".").map(Number);
