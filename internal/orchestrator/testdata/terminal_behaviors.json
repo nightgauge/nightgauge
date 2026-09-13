@@ -123,6 +123,17 @@
       }
     },
     {
+      "name": "opencode-run-root-cleanup",
+      "note": "ADR-022 § 22: the OpenCode per-run root, with the run's session database and transcripts, is deleted at every terminal outcome (#1616).",
+      "go": {
+        "file": "internal/orchestrator/scheduler.go",
+        "anchor": "s.execMgr.CleanupOpenCodeRunRoot(runtime.RunID)"
+      },
+      "extension": {
+        "pathSpecific": "Go-only until #1648: only the Go manager dispatches opencode, and it is the only path that creates a per-run root. The extension path spawns stages through the SDK, which does not dispatch opencode yet; #1648 brings it the per-run root through the nightgauge opencode verb, and deletes it on that path."
+      }
+    },
+    {
       "name": "merged-branch-cleanup",
       "go": {
         "file": "internal/orchestrator/scheduler.go",
@@ -305,7 +316,7 @@
         "delete a successor's worktree.",
         "",
         "EVERY behavior in this manifest, accounted for. This list is exhaustive by construction: if you add a",
-        "behavior row above, add its disposition here, and keep the section counts summing to 24. TestForceClearAccountingIsExhaustive fails when a name is missing. (24 behaviors + this row.)",
+        "behavior row above, add its disposition here, and keep the section counts summing to 25. TestForceClearAccountingIsExhaustive fails when a name is missing. (25 behaviors + this row.)",
         "",
         "PERFORMED (3):",
         "  queue-item-completion       \u2014 completeQueueItem releases the dequeue's `processing` mark, on BOTH",
@@ -447,6 +458,11 @@
         "NOT APPLICABLE \u2014 Go-only by design (1):",
         "  lifecycle-decision-trace    \u2014 ADR 013 / #179; the extension path emits no trace on either funnel.",
         "",
+        "NOT APPLICABLE \u2014 Go-only until #1648 (1):",
+        "  opencode-run-root-cleanup   \u2014 only the Go manager dispatches opencode, so only a Go run has an OpenCode",
+        "                                per-run root to delete, and the Go terminal defer deletes it. An",
+        "                                extension-path dispatch, force-cleared or settled, created none.",
+        "",
         "KNOWN EXPOSURE \u2014 Go-side late settlement, deliberately not fixed here. ADR-017 step 3 changed what",
         "crosses the wire but NOT what the server does with it: every call a run makes now carries its run id,",
         "and the server ACCEPTS AND IGNORES it until the step-4 re-key.",
@@ -539,7 +555,7 @@
       "file": "internal/orchestrator/scheduler.go",
       "begin": "terminal-parity:begin runPipeline-terminal-defer",
       "end": "terminal-parity:end runPipeline-terminal-defer",
-      "sha256": "235b8ed26ed1e664c5488eb93c82cc240ecd5ebdd9c0d175b980d2e75d84671d"
+      "sha256": "4671ff9c8c42e77a0964e3aad30f636a49a999acac04a27969094e19a078e73c"
     },
     {
       "id": "extension-runSlotPipeline-finally",

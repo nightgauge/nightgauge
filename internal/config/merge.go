@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -99,6 +100,31 @@ func defaultMachineConfigPath() (string, error) {
 // same path the loader uses.
 func MachineConfigPath() (string, error) {
 	return machineConfigPathFn()
+}
+
+// MachineConfigDir returns the directory holding the machine-tier config file
+// Load reads: the directory of MachineConfigPath, or the Linux legacy
+// ~/.nightgauge when the canonical file is absent and the legacy one exists,
+// which is the fallback readMachineConfigBytes takes.
+//
+// A child process given NIGHTGAUGE_CONFIG_HOME set to it reads the same
+// machine tier as this process, whatever XDG_CONFIG_HOME it runs under. The
+// opencode adapter moves XDG_CONFIG_HOME into a per-run root (ADR-022 § 8),
+// and without this pin every nightgauge command a stage runs would lose the
+// machine tier.
+func MachineConfigDir() (string, error) {
+	path, err := machineConfigPathFn()
+	if err != nil {
+		return "", err
+	}
+	if _, statErr := os.Stat(path); errors.Is(statErr, fs.ErrNotExist) {
+		if legacy := legacyMachineConfigPath(); legacy != "" && legacy != path {
+			if _, legacyErr := os.Stat(legacy); legacyErr == nil {
+				return filepath.Dir(legacy), nil
+			}
+		}
+	}
+	return filepath.Dir(path), nil
 }
 
 // SwapMachineConfigPathForTest replaces the resolver used by Load and
