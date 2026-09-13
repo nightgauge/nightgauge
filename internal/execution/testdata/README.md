@@ -298,20 +298,20 @@ the CLI's shape changes.
 One turn (`turn.completed`), its `usage` object:
 
 | turn      | input_tokens | cached_input_tokens | output_tokens |
-| --------- | ------------: | -------------------: | --------------: |
-| turn 1    |        67553 |                56704 |             124 |
-| **total** |        67553 |                56704 |             124 |
+| --------- | -----------: | ------------------: | ------------: |
+| turn 1    |        67553 |               56704 |           124 |
+| **total** |        67553 |               56704 |           124 |
 
 `ParseCodexStreamLine` stores `input_tokens - cached_input_tokens` as input
 (the cached subset is disjoint from input, matching the Claude/SDK
 convention) and `cached_input_tokens` as cache-read:
 
-| accumulator field | value                  |
-| ------------------ | ---------------------: |
-| `InputTokens`       | 67553 − 56704 = 10849 |
-| `OutputTokens`       |                   124 |
-| `CacheRead`          |                 56704 |
-| `CacheCreated`       |                     0 |
+| accumulator field |                 value |
+| ----------------- | --------------------: |
+| `InputTokens`     | 67553 − 56704 = 10849 |
+| `OutputTokens`    |                   124 |
+| `CacheRead`       |                 56704 |
+| `CacheCreated`    |                     0 |
 
 ### Redaction
 
