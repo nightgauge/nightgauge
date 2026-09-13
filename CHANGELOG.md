@@ -38,6 +38,20 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- An experimental `opencode` adapter runs stages through the OpenCode CLI, one
+  adapter for local (LM Studio, Ollama) and hosted models. It refuses to
+  dispatch unless `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` is set in the
+  environment, and each dispatch it allows warns which controls are not
+  enforced yet. A stage names its model as `<provider>/<model>`, and the
+  adapter never infers a provider from a bare id. An `anthropic/*` model is
+  refused even with the switch set, until Anthropic through OpenCode is held
+  to `ANTHROPIC_API_KEY` and never uses a stored subscription or OAuth login;
+  run Anthropic models on `claude-headless` meanwhile. The prompt goes on
+  stdin, never argv, every spawn gets its own server password, and no spawn
+  inherits `OPENCODE_AUTH_CONTENT`, a variable OpenCode reads stored logins
+  from.
+  [ADR-022](docs/decisions/022-opencode-multi-provider-adapter.md) records the
+  design (#1612)
 - `nightgauge preflight managed-steering` reports generated Nightgauge steering
   committed in any tracked `AGENTS.md`, and `--fix` removes it from the working
   tree (issue 1675)

@@ -38,6 +38,7 @@ func NewRegistry() *Registry {
 			"lm-studio":       func() SkillRunner { return NewLmStudioAdapter() },
 			"copilot":         func() SkillRunner { return NewCopilotAdapter() },
 			"grok":            func() SkillRunner { return NewGrokAdapter() },
+			"opencode":        func() SkillRunner { return NewOpenCodeAdapter() },
 		},
 		aliases: map[string]string{
 			"claude":          "claude-headless",
@@ -197,6 +198,8 @@ func adapterDisplayName(name string) string {
 		return "GitHub Copilot"
 	case "grok":
 		return "Grok"
+	case "opencode":
+		return "OpenCode"
 	default:
 		return name
 	}
