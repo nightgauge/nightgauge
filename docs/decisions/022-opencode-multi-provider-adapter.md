@@ -99,6 +99,10 @@ capture script and the full observation table are in
 | The catalog a run loads is the one bundled in the binary; no run fetched one                                                                                                   | § Endpoints                |
 | A `--format json` `error` event for a failed model request carries the request's full URL                                                                                      | § Endpoints                |
 | `--print-logs` adds stderr but still writes `log/opencode.log` in the data directory, and an error goes to both                                                                | The command, § 22          |
+| The four XDG base variables move config, data, cache and state; `home` does not move, and `tmp` stays at `$TMPDIR/opencode`                                                    | § 8                        |
+| `$HOME/.opencode` is read as a config directory whatever the XDG variables, `OPENCODE_DISABLE_PROJECT_CONFIG` or `OPENCODE_PURE` say                                           | § 8                        |
+| `$HOME/.agents/skills` loads whatever the XDG variables say; `OPENCODE_DISABLE_EXTERNAL_SKILLS=1` stops it                                                                     | § 8, § 11                  |
+| Config precedence, lowest first: the XDG config directory's files, `OPENCODE_CONFIG`, `OPENCODE_CONFIG_DIR`, `OPENCODE_CONFIG_CONTENT`                                         | § 8                        |
 
 The first contradiction changes § 8: once project config is disabled, which it
 must be (a repository must not grant itself permissions, plugins or providers),
@@ -107,6 +111,12 @@ changes § 11: there is no switch that drops the operator's personal
 `~/.claude/CLAUDE.md` and keeps the repository's `CLAUDE.md`. Both lead to the
 same answer. Nightgauge hands OpenCode the repository's steering explicitly and
 lets OpenCode discover nothing.
+
+A third assumption failed when run isolation was built (#1616): moving the XDG
+base directories does not move everything OpenCode reads from the operator.
+It still reads `~/.opencode` as a config directory and `~/.agents/skills` for
+skills, from the home directory, which does not move. § 8 records what closes
+each.
 
 ## Decision
 
