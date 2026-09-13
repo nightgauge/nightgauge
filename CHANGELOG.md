@@ -80,42 +80,12 @@ changelog, and the release workflow refuses a tag that does not.
   instead of sending the operator to fix a `main` that may be green. The
   post-merge hook likewise says it could not verify the branch, not that it is
   red (#1691)
-- Sub-issue, blocked-by and blocking lists are now read in full. They stopped
-  at the first 12, 25 or 50 sub-issues and the first 5 blockers, so
-  `nightgauge epic validate` reported 25 sub-issues for an epic with 42, epic
-  rollup could close an epic whose open children were past the first page, and
-  the scheduler and `epic plan-waves` could treat an issue with more than 5
-  blockers as unblocked. Reads now follow every page up to a 20-page cap, and
-  the extra pages for every long list in one read come from one shared
-  request, which waits on the rate-limit floor and retries a rate-limit error
-  as the first page does. A list that cannot be read in full is an error, not
-  a short list: epic enqueue, wave planning, `epic assess` and the dependency
-  gate stop instead of treating the issue as unblocked. A read that returns
-  whole issues or board items reads every list of every issue in it, and fails
-  when any one of them cannot be read in full: `issue view`,
-  `forge issue view`, the IPC `issue.view`, `issue.viewMany` and `board.list`
-  methods, and the board reads behind the scheduler's pick and queue,
-  `board list`, `forge project item-list` and `field-get`, the dependency
-  graph and the attention sweeps. Every other read names the lists it uses,
-  so a long list it does not use can neither cost it requests nor fail it. The
-  dependency gate reads only the issue's own blockers and judges a dependency
-  declared in the body by its state alone. Epic enqueue, wave planning,
-  `epic validate`, `epic assess` and the ready-sub-issue check read each
-  sub-issue's blockers and no other list of it. Epic rollup, orphan closing,
-  the size gate and board reconcile read only sub-issue lists; the lifecycle
-  audit and `backlog preflight` read only blocker lists. The baseline gate,
-  the post-merge hook and its board repair, label updates, refinement's
-  `pipeline:refined` marker, the epic backstop sweep, the board drift check,
-  `doctor`, `issue route` and every other command that uses only an issue's
-  title, body, labels or state follow no list. After a failed run, the check
-  that keeps an In-review issue out of Ready, and the pipeline-stage read, now
-  read that one board item instead of the whole board, and a status the check
-  cannot read leaves the issue where it is instead of moving it to Ready,
-  where it would be re-dispatched on top of its own open PR. The batch issue
-  read that `epic validate`, the scheduler and the dependency graph use now
-  waits on the rate-limit floor too, so a failed body fetch below the floor no
-  longer falls back to one request per issue. `epic validate` also prints the
-  number of sub-issues checked when it finds gaps (#1682)
+- Sub-issue, blocked-by and blocking reads now page to completion (up to a
+  20-page cap) instead of silently stopping at the first 12, 25 or 50 items,
+  so epic validate, rollup and wave planning no longer act on a truncated
+  list. A list that cannot be read in full is now an explicit error rather
+  than being treated as short. See `docs/GITHUB_API_DEPENDENCIES.md` for
+  which commands read which lists (#1682)
 
 ### Removed
 
