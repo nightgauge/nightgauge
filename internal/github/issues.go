@@ -104,8 +104,42 @@ func NewIssueService(client *Client) *IssueService {
 	}
 }
 
-// GetIssue fetches a single issue with sub-issues and blocking relationships.
+// IssueRelations names the relationship connections of an issue that a
+// single-issue read returns. Each named connection is read to its end, and
+// one that cannot be is ErrConnectionTruncated. A connection that is not
+// named is returned empty and none of its later pages is read, so a long list
+// the caller would discard can neither cost it requests nor fail it.
+type IssueRelations uint8
+
+const (
+	// RelationSubIssues is the issue's subIssues connection.
+	RelationSubIssues IssueRelations = 1 << iota
+	// RelationBlockedBy is the issue's blockedBy connection.
+	RelationBlockedBy
+	// RelationBlocking is the issue's blocking connection.
+	RelationBlocking
+)
+
+const (
+	// NoRelations reads an issue's own fields and none of its relationships.
+	NoRelations IssueRelations = 0
+	// AllRelations reads every relationship connection, as GetIssue does.
+	AllRelations = RelationSubIssues | RelationBlockedBy | RelationBlocking
+)
+
+// GetIssue fetches a single issue with its sub-issues and blocking
+// relationships, each read to its end.
 func (s *IssueService) GetIssue(ctx context.Context, owner, repo string, number int) (*types.Issue, error) {
+	return s.GetIssueWithRelations(ctx, owner, repo, number, AllRelations)
+}
+
+// GetIssueWithRelations is GetIssue for a caller that uses only some of an
+// issue's relationships. Only the connections in rels are read to their end
+// and returned. SubIssues, BlockedBy and Blocking are empty for the others,
+// never a first page passed off as the whole list. IsEpic reports whether the
+// issue has sub-issues whatever rels holds, because the first page, which
+// every read selects, is enough to tell.
+func (s *IssueService) GetIssueWithRelations(ctx context.Context, owner, repo string, number int, rels IssueRelations) (*types.Issue, error) {
 	graphQLNumber, err := checkedGraphQLInt("issue number", number)
 	if err != nil {
 		return nil, err
@@ -121,8 +155,20 @@ func (s *IssueService) GetIssue(ctx context.Context, owner, repo string, number 
 		return nil, fmt.Errorf("fetch issue #%d: %w", number, err)
 	}
 	qi := &q.Repository.Issue
+	// A nil page is one completeIssueRelations leaves alone.
+	var subIssues *subIssuePage
+	var blockedBy, blocking *blockingPage
+	if rels&RelationSubIssues != 0 {
+		subIssues = &qi.SubIssues
+	}
+	if rels&RelationBlockedBy != 0 {
+		blockedBy = &qi.BlockedBy
+	}
+	if rels&RelationBlocking != 0 {
+		blocking = &qi.Blocking
+	}
 	label := fmt.Sprintf("%s/%s#%d", owner, repo, number)
-	if err := s.client.completeIssueRelations(ctx, nodeIDString(qi.ID), label, &qi.SubIssues, &qi.BlockedBy, &qi.Blocking); err != nil {
+	if err := s.client.completeIssueRelations(ctx, nodeIDString(qi.ID), label, subIssues, blockedBy, blocking); err != nil {
 		return nil, fmt.Errorf("fetch issue #%d: %w", number, err)
 	}
 
@@ -151,23 +197,27 @@ func (s *IssueService) GetIssue(ctx context.Context, owner, repo string, number 
 		issue.Assignees = append(issue.Assignees, string(a.Login))
 	}
 
-	// Sub-issues
-	for _, si := range qi.SubIssues.Nodes {
-		siRef := subIssueRef(si)
-		for _, l := range si.Labels.Nodes {
-			siRef.Labels = append(siRef.Labels, string(l.Name))
+	issue.IsEpic = len(qi.SubIssues.Nodes) > 0
+
+	// Relationships, only those read whole.
+	if subIssues != nil {
+		for _, si := range subIssues.Nodes {
+			siRef := subIssueRef(si)
+			for _, l := range si.Labels.Nodes {
+				siRef.Labels = append(siRef.Labels, string(l.Name))
+			}
+			issue.SubIssues = append(issue.SubIssues, siRef)
 		}
-		issue.SubIssues = append(issue.SubIssues, siRef)
 	}
-
-	issue.IsEpic = len(issue.SubIssues) > 0
-
-	// Blocking relationships
-	for _, b := range qi.BlockedBy.Nodes {
-		issue.BlockedBy = append(issue.BlockedBy, blockingRef(b))
+	if blockedBy != nil {
+		for _, b := range blockedBy.Nodes {
+			issue.BlockedBy = append(issue.BlockedBy, blockingRef(b))
+		}
 	}
-	for _, b := range qi.Blocking.Nodes {
-		issue.Blocking = append(issue.Blocking, blockingRef(b))
+	if blocking != nil {
+		for _, b := range blocking.Nodes {
+			issue.Blocking = append(issue.Blocking, blockingRef(b))
+		}
 	}
 
 	return issue, nil

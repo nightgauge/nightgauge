@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
@@ -78,6 +81,38 @@ func TestFetchSubIssueDetails_TruncatedSubIssueReadIsAnError(t *testing.T) {
 	}
 	if subIssues != nil || details != nil {
 		t.Fatalf("returned a plan input (%d sub-issues, %d details) alongside a truncated read", len(subIssues), len(details))
+	}
+}
+
+// TestEnsureEpicBranchForItem_EpicTitleReadSkipsRelationships: with no board
+// ParentTitle, the epic's title is read from GitHub to name its branch. Only
+// the title is used, so an epic whose sub-issue list cannot be read whole must
+// still get its branch. Reading that list failed the create at "fetch epic
+// title" and sent the sub-issue's run on without its epic base branch.
+func TestEnsureEpicBranchForItem_EpicTitleReadSkipsRelationships(t *testing.T) {
+	t.Setenv("NIGHTGAUGE_PIPELINE_AUTO_CREATE_EPIC_BRANCH", "true")
+	root := gitWorkspace(t)
+	remote := filepath.Join(t.TempDir(), "origin.git")
+	gitIn(t, root, "init", "--bare", remote)
+	gitIn(t, root, "remote", "add", "origin", remote)
+	gitIn(t, root, "push", "origin", "main")
+
+	mock := newMockIssueSvc()
+	mock.addIssue("Org", "repo", 2000, &types.Issue{Number: 2000, Title: "Big Epic", State: "OPEN"})
+	mock.truncated = map[string]gh.IssueRelations{"Org/repo#2000": gh.RelationSubIssues}
+	s := &Scheduler{issueSvc: mock}
+
+	failure := s.ensureEpicBranchForItem(context.Background(), root,
+		types.BoardItem{Number: 2001, ParentNumber: 2000, Repo: "Org/repo"})
+	if failure != "" {
+		t.Fatalf("epic branch failure = %q, want the branch created from the epic's title", failure)
+	}
+	out, err := gittest.Command(root, "ls-remote", "--heads", "origin").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git ls-remote: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "refs/heads/epic/2000-big-epic") {
+		t.Fatalf("remote heads:\n%s\nwant epic/2000-big-epic, named from the epic's title", out)
 	}
 }
 

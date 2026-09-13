@@ -10,22 +10,45 @@ import (
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
-// mockFetcher implements IssueFetcher for testing.
+// mockFetcher implements IssueFetcher for testing. It serves its fixtures the
+// way github.IssueService.GetIssueWithRelations does: a relationship list the
+// read does not name comes back empty, and IsEpic still reports sub-issues.
 type mockFetcher struct {
 	issues map[string]*types.Issue
-	// errs makes GetIssue fail for the keyed issue with the given error.
-	errs map[string]error
+	// truncated names, per issue, the relationship connections whose later
+	// pages cannot be read: a read naming any of them fails with
+	// ErrConnectionTruncated, and a read naming none is unaffected.
+	truncated map[string]gh.IssueRelations
+	// reads records the relations each read named, keyed by issue.
+	reads map[string][]gh.IssueRelations
 }
 
-func (m *mockFetcher) GetIssue(_ context.Context, owner, repo string, number int) (*types.Issue, error) {
+func (m *mockFetcher) GetIssueWithRelations(_ context.Context, owner, repo string, number int, rels gh.IssueRelations) (*types.Issue, error) {
 	key := fmt.Sprintf("%s/%s#%d", owner, repo, number)
-	if err, ok := m.errs[key]; ok {
-		return nil, err
+	if m.reads == nil {
+		m.reads = map[string][]gh.IssueRelations{}
 	}
-	if issue, ok := m.issues[key]; ok {
-		return issue, nil
+	m.reads[key] = append(m.reads[key], rels)
+	if m.truncated[key]&rels != 0 {
+		return nil, fmt.Errorf("fetch issue #%d: relationship of %s: %w: read page 2: status 502",
+			number, key, gh.ErrConnectionTruncated)
 	}
-	return nil, fmt.Errorf("issue not found: %s", key)
+	issue, ok := m.issues[key]
+	if !ok {
+		return nil, fmt.Errorf("issue not found: %s", key)
+	}
+	out := *issue
+	out.IsEpic = issue.IsEpic || len(issue.SubIssues) > 0
+	if rels&gh.RelationSubIssues == 0 {
+		out.SubIssues = nil
+	}
+	if rels&gh.RelationBlockedBy == 0 {
+		out.BlockedBy = nil
+	}
+	if rels&gh.RelationBlocking == 0 {
+		out.Blocking = nil
+	}
+	return &out, nil
 }
 
 func TestEvaluateIssueDeps_NoBlockers(t *testing.T) {
@@ -338,20 +361,66 @@ func TestEvaluateIssueDeps_BodyDeclaredNotDoubleCountedWithNative(t *testing.T) 
 	}
 }
 
-// TestEvaluateIssueDeps_TruncatedBodyDependencyIsAnError — a body-declared
-// dependency that exists but whose relationships could not be read whole is
-// not the typo the skip rule forgives. Skipping it let pickup proceed while
-// the dependency was OPEN; the evaluation must fail, which every caller
-// treats as a hold.
-func TestEvaluateIssueDeps_TruncatedBodyDependencyIsAnError(t *testing.T) {
+// TestEvaluateIssueDeps_DependencyListsCannotFailTheGate — #10 depends in its
+// body on OPEN #20, and none of #20's own relationship lists can be read to
+// its end. The gate judges #20 by its state alone, so it must not read those
+// lists: reading them failed the evaluation, and the skills treat a failed
+// check-deps as "no open dependencies", so #10 was picked up while #20 was
+// still open.
+func TestEvaluateIssueDeps_DependencyListsCannotFailTheGate(t *testing.T) {
 	mock := &mockFetcher{
 		issues: map[string]*types.Issue{
 			"nightgauge/nightgauge#10": {Number: 10, Body: "Depends on: #20"},
+			"nightgauge/nightgauge#20": {Number: 20, Title: "Prerequisite", State: "OPEN"},
 		},
-		errs: map[string]error{
-			"nightgauge/nightgauge#20": fmt.Errorf("fetch issue #20: blocking of nightgauge/nightgauge#20: %w: read page 2: 502",
-				gh.ErrConnectionTruncated),
+		truncated: map[string]gh.IssueRelations{"nightgauge/nightgauge#20": gh.AllRelations},
+	}
+
+	result, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v — the dependency's own lists are not the gate's to read", err)
+	}
+	if !result.ShouldBlock || result.OpenCount != 1 || result.OpenDependencies[0].Number != 20 {
+		t.Fatalf("result = %+v, want #10 held by its open body-declared dependency #20", result)
+	}
+	if got := mock.reads["nightgauge/nightgauge#20"]; len(got) != 1 || got[0] != gh.NoRelations {
+		t.Errorf("reads of #20 named %v, want one read naming no relationships", got)
+	}
+}
+
+// TestEvaluateIssueDeps_ReadsOnlyTheIssuesBlockedBy — the issue's sub-issues
+// and the issues it blocks are not its dependencies, so a list of either that
+// cannot be read whole must not fail the gate. Its blockedBy list is the one
+// the gate evaluates and still reads whole.
+func TestEvaluateIssueDeps_ReadsOnlyTheIssuesBlockedBy(t *testing.T) {
+	mock := &mockFetcher{
+		issues: map[string]*types.Issue{
+			"nightgauge/nightgauge#10": {
+				Number:    10,
+				BlockedBy: []types.BlockingRef{{Number: 9, State: "OPEN", Repo: "nightgauge/nightgauge"}},
+			},
 		},
+		truncated: map[string]gh.IssueRelations{
+			"nightgauge/nightgauge#10": gh.RelationSubIssues | gh.RelationBlocking,
+		},
+	}
+
+	result, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v — only the blockedBy list is the gate's to read", err)
+	}
+	if !result.ShouldBlock || result.OpenCount != 1 || result.OpenDependencies[0].Number != 9 {
+		t.Fatalf("result = %+v, want #10 held by its open blocker #9", result)
+	}
+}
+
+// TestEvaluateIssueDeps_TruncatedBlockedByIsAnError — a blockedBy list that
+// cannot be read to its end is the gate's own input, and a short one could
+// read as unblocked. The evaluation fails instead.
+func TestEvaluateIssueDeps_TruncatedBlockedByIsAnError(t *testing.T) {
+	mock := &mockFetcher{
+		issues:    map[string]*types.Issue{"nightgauge/nightgauge#10": {Number: 10}},
+		truncated: map[string]gh.IssueRelations{"nightgauge/nightgauge#10": gh.RelationBlockedBy},
 	}
 
 	result, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 10)

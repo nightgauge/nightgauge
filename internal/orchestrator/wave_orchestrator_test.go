@@ -11,6 +11,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/forge"
+	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/intelligence/batch"
 	"github.com/nightgauge/nightgauge/internal/intelligence/teams"
 	"github.com/nightgauge/nightgauge/pkg/types"
@@ -48,6 +49,14 @@ func (m *mockEpicIssueSvc) GetIssue(_ context.Context, owner, repo string, numbe
 		return issue, nil
 	}
 	return nil, fmt.Errorf("issue %s not found", key)
+}
+
+func (m *mockEpicIssueSvc) GetIssueWithRelations(ctx context.Context, owner, repo string, number int, rels gh.IssueRelations) (*types.Issue, error) {
+	issue, err := m.GetIssue(ctx, owner, repo, number)
+	if err != nil {
+		return nil, err
+	}
+	return withRelations(issue, rels), nil
 }
 
 func (m *mockEpicIssueSvc) GetIssuesByNumbers(_ context.Context, owner, repo string, numbers []int) (map[int]*types.Issue, error) {

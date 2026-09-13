@@ -1037,6 +1037,76 @@ func TestGetIssuesByNumbersWithoutRelations(t *testing.T) {
 	}
 }
 
+// TestGetIssueWithRelations covers the single-issue read for callers that use
+// some or none of an issue's relationships: the dependency gate reads only
+// blockedBy, and the post-merge hook and the epic-title reads read none. #700
+// has 60 sub-issues and 11 blockers and blocks 7 issues, each more than its
+// first page. Only the connections a read names are read past the first page
+// and returned. The others come back empty, never as a first page posing as
+// the list, and cannot fail the read. IsEpic comes from the first page.
+func TestGetIssueWithRelations(t *testing.T) {
+	ctx := context.Background()
+	setup := func(t *testing.T, mode followUpFailure) (*relationForge, *fakeIssue, *IssueService) {
+		f := newRelationForge(t)
+		f.failFollowUps = mode
+		iss := f.issue(700, "OPEN")
+		iss.subIssues = f.numbers(1001, 60, "CLOSED")
+		iss.blockedBy = f.numbers(301, 11, "CLOSED")
+		f.byNumber[311].state = "OPEN"
+		iss.blocks = f.numbers(401, 7, "OPEN")
+		return f, iss, NewIssueService(f.client())
+	}
+
+	t.Run("no relations", func(t *testing.T) {
+		f, _, svc := setup(t, followUpHTTP502)
+		got, err := svc.GetIssueWithRelations(ctx, "acme", "widgets", 700, NoRelations)
+		if err != nil {
+			t.Fatalf("GetIssueWithRelations: %v", err)
+		}
+		if got.NodeID != "I_700" || got.State != "OPEN" {
+			t.Fatalf("issue = %+v, want #700 OPEN with its node id", got)
+		}
+		if n := len(got.SubIssues) + len(got.BlockedBy) + len(got.Blocking); n != 0 {
+			t.Fatalf("returned %d relationships; the read names none", n)
+		}
+		if !got.IsEpic {
+			t.Error("IsEpic = false, want true: #700 has sub-issues")
+		}
+		if n := f.followUpRequestCount(); n != 0 {
+			t.Fatalf("follow-up requests = %d, want 0", n)
+		}
+	})
+
+	t.Run("blockedBy only", func(t *testing.T) {
+		f, iss, svc := setup(t, followUpsServed)
+		got, err := svc.GetIssueWithRelations(ctx, "acme", "widgets", 700, RelationBlockedBy)
+		if err != nil {
+			t.Fatalf("GetIssueWithRelations: %v", err)
+		}
+		assertNumbers(t, "blockedBy", blockingNumbers(got.BlockedBy), iss.blockedBy)
+		if !blockedByOpen(got.BlockedBy) {
+			t.Error("#700 reads as unblocked; its only open blocker is past the first page")
+		}
+		if n := len(got.SubIssues) + len(got.Blocking); n != 0 {
+			t.Fatalf("returned %d sub-issue and blocking refs; the read names only blockedBy", n)
+		}
+		if sub, blk := f.followUpCount("subIssues"), f.followUpCount("blocking"); sub+blk != 0 {
+			t.Fatalf("read on the unnamed connections: subIssues %d, blocking %d follow-up pages", sub, blk)
+		}
+	})
+
+	t.Run("a named connection that cannot be read whole is an error", func(t *testing.T) {
+		_, _, svc := setup(t, followUpHTTP502)
+		got, err := svc.GetIssueWithRelations(ctx, "acme", "widgets", 700, RelationBlockedBy)
+		if !errors.Is(err, ErrConnectionTruncated) {
+			t.Fatalf("err = %v, want ErrConnectionTruncated", err)
+		}
+		if got != nil {
+			t.Fatalf("returned %+v alongside a truncated read", got)
+		}
+	})
+}
+
 // TestBatchIssueReadsWaitOnRateLimitGate holds the aliased batch read to the
 // rate-limit floor gate that GetIssue's first request passes through. The
 // dependency graph's per-issue body fallback uses the batch read, so without

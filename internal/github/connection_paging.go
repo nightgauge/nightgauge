@@ -31,9 +31,11 @@ import (
 // page cannot be read. A caller never receives part of a connection as if it
 // were the whole: epic rollup would call an epic complete, and the blocker
 // check would call an issue unblocked, from the children and blockers it
-// never saw. Callers that read only an issue's body or state use
-// GetIssuesByNumbersWithoutRelations, which selects no connection and so can
-// neither pay for nor fail on pages it would discard.
+// never saw. A reader only walks the connections its caller uses, so it
+// neither pays for nor fails on pages the caller would discard: a single-issue
+// caller names its connections to GetIssueWithRelations, and a batch caller
+// that reads only bodies or states uses GetIssuesByNumbersWithoutRelations,
+// which selects no connection at all.
 
 const (
 	// maxRelationPages caps the pages read for one connection, the caller's

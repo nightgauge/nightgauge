@@ -89,13 +89,18 @@ changelog, and the release workflow refuses a tag that does not.
   the extra pages for every long list in one read come from one shared
   request, which waits on the rate-limit floor and retries a rate-limit error
   as the first page does. A list that cannot be read in full is an error, not
-  a short list: epic enqueue, wave planning and the dependency gate stop
-  instead of treating the issue as unblocked. Blocker-state refreshes and the
-  dependency graph's body fetch no longer read these lists at all. The batch
-  issue read that `epic validate`, the scheduler and the dependency graph use
-  now waits on the rate-limit floor too, so a failed body fetch below the
-  floor no longer falls back to one request per issue. `epic validate` also prints the number of sub-issues checked when it finds
-  gaps (#1682)
+  a short list: epic enqueue, wave planning, `epic assess` and the dependency
+  gate stop instead of treating the issue as unblocked. A read follows only
+  the lists its caller uses. The dependency gate reads only the issue's own
+  blockers and judges a dependency declared in the body by its state alone.
+  The post-merge hook, blocker-state refreshes, the dependency graph's body
+  fetch and the epic title reads for branches and pull requests follow no
+  list, and the spike follow-up lookup follows only the spike's sub-issues, so
+  a long list they do not use cannot fail them. The batch issue read that
+  `epic validate`, the scheduler and the dependency graph use now waits on the
+  rate-limit floor too, so a failed body fetch below the floor no longer falls
+  back to one request per issue. `epic validate` also prints the number of
+  sub-issues checked when it finds gaps (#1682)
 
 ### Removed
 

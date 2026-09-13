@@ -53,7 +53,11 @@ next page from one aliased request, up to 50 connections a request. The walk
 stops at 20 pages. A connection still reporting more, or whose next page
 fails, is `ErrConnectionTruncated`, never a short list: epic rollup, wave
 planning, epic enqueue and `epic validate` fail rather than decide from part
-of an epic. Readers that need only an issue's state or body
+of an epic. A read follows only the connections its caller uses, so a long
+list the caller would discard can neither cost it requests nor fail it: a
+single-issue caller names its connections to `GetIssueWithRelations` (the
+dependency gate names only `blockedBy`, the post-merge hook none), and batch
+readers that need only an issue's state or body
 (`GetIssuesByNumbersWithoutRelations`) select no relationship connection.
 
 **Risk**: Critical. Removing `subIssues` breaks epic tracking entirely. The
@@ -76,8 +80,9 @@ determine whether an issue is currently blocked (any open blocker = blocked).
 **Pagination**: a first page of 5, then the same shared `pageInfo` follow-ups
 and 20-page cap as `subIssues`. The scheduler's blocker check reads the whole
 list, so an issue with more than 5 blockers stays blocked while any one is
-open. A blocker list that cannot be read whole stops the enqueue, wave plan or
-dependency gate that asked for it instead of reading as no blockers.
+open. A blocker list that cannot be read whole stops the enqueue, wave plan,
+`epic assess` or dependency gate that asked for it instead of reading as no
+blockers.
 
 **Risk**: Critical. Without `blockedBy`, lock icons disappear and the pipeline
 cannot enforce sequential epic ordering based on blocking relationships.

@@ -601,6 +601,10 @@ func cliRunResultToStageResult(result *adapters.RunResult) *StageRunResult {
 // issueGetter abstracts issue operations used by the scheduler for testability.
 type issueGetter interface {
 	GetIssue(ctx context.Context, owner, repo string, number int) (*types.Issue, error)
+	// GetIssueWithRelations reads one issue with only the relationship
+	// connections in rels read whole: the read for callers that use some, or
+	// none, of an issue's relationships.
+	GetIssueWithRelations(ctx context.Context, owner, repo string, number int, rels gh.IssueRelations) (*types.Issue, error)
 	GetIssuesByNumbers(ctx context.Context, owner, repo string, numbers []int) (map[int]*types.Issue, error)
 	// GetIssuesByNumbersWithoutRelations reads issues without their
 	// subIssues, blockedBy and blocking connections: the read for callers
@@ -8889,11 +8893,12 @@ func (s *Scheduler) ensureEpicBranchForItem(ctx context.Context, workspaceRoot s
 		return logEpicBranchFailure(item.Number, fmt.Sprintf("git service unavailable: %v", err))
 	}
 
-	// Prefer ParentTitle from board data; fall back to GitHub API
+	// Prefer ParentTitle from board data; fall back to GitHub API. Only the
+	// title is used, so the epic's sub-issue list is not read.
 	epicTitle := item.ParentTitle
 	if epicTitle == "" {
 		owner, repo := splitOwnerRepo(item.Repo)
-		epicIssue, apiErr := s.issueSvc.GetIssue(ctx, owner, repo, item.ParentNumber)
+		epicIssue, apiErr := s.issueSvc.GetIssueWithRelations(ctx, owner, repo, item.ParentNumber, gh.NoRelations)
 		if apiErr != nil {
 			return logEpicBranchFailure(item.Number,
 				fmt.Sprintf("fetch epic #%d title: %v", item.ParentNumber, apiErr))

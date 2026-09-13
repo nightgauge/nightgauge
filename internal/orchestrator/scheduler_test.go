@@ -37,6 +37,11 @@ type mockIssueSvc struct {
 	batchCalls []mockBatchCall         // recorded GetIssuesByNumbers invocations
 	// getErrs makes GetIssue fail for the keyed issue with the given error.
 	getErrs map[string]error
+	// truncated names, per issue, the relationship connections whose later
+	// pages cannot be read: GetIssue, which reads every connection, fails
+	// with ErrConnectionTruncated, and so does a GetIssueWithRelations that
+	// names one of them.
+	truncated map[string]gh.IssueRelations
 	// relationReadErr, when set, fails every GetIssuesByNumbers call (the read
 	// that completes relationships) while GetIssuesByNumbersWithoutRelations
 	// still serves the fixtures: an issue whose relationships cannot be read
@@ -67,10 +72,48 @@ func (m *mockIssueSvc) GetIssue(_ context.Context, owner, repo string, number in
 	if err, ok := m.getErrs[key]; ok {
 		return nil, err
 	}
+	if m.truncated[key] != 0 {
+		return nil, truncatedRead(number)
+	}
 	if issue, ok := m.issues[key]; ok {
 		return issue, nil
 	}
 	return nil, fmt.Errorf("issue %s not found", key)
+}
+
+// GetIssueWithRelations serves the fixtures as the real read returns them
+// (see withRelations), failing only when rels names a truncated connection.
+func (m *mockIssueSvc) GetIssueWithRelations(_ context.Context, owner, repo string, number int, rels gh.IssueRelations) (*types.Issue, error) {
+	key := fmt.Sprintf("%s/%s#%d", owner, repo, number)
+	if err, ok := m.getErrs[key]; ok {
+		return nil, err
+	}
+	if m.truncated[key]&rels != 0 {
+		return nil, truncatedRead(number)
+	}
+	issue, ok := m.issues[key]
+	if !ok {
+		return nil, fmt.Errorf("issue %s not found", key)
+	}
+	return withRelations(issue, rels), nil
+}
+
+// withRelations is a copy of issue as github.IssueService.GetIssueWithRelations
+// returns it: the relationship lists rels does not name are empty, and IsEpic
+// still reports whether the issue has sub-issues.
+func withRelations(issue *types.Issue, rels gh.IssueRelations) *types.Issue {
+	out := *issue
+	out.IsEpic = issue.IsEpic || len(issue.SubIssues) > 0
+	if rels&gh.RelationSubIssues == 0 {
+		out.SubIssues = nil
+	}
+	if rels&gh.RelationBlockedBy == 0 {
+		out.BlockedBy = nil
+	}
+	if rels&gh.RelationBlocking == 0 {
+		out.Blocking = nil
+	}
+	return &out
 }
 
 func (m *mockIssueSvc) GetIssuesByNumbers(_ context.Context, owner, repo string, numbers []int) (map[int]*types.Issue, error) {

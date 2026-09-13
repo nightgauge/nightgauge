@@ -2322,32 +2322,9 @@ func epicAssessCmd() *cobra.Command {
 			ownerPart, repoPart := splitRepo(owner, repo)
 			issueSvc := gh.NewIssueService(client)
 
-			epic, err := issueSvc.GetIssue(cmd.Context(), ownerPart, repoPart, epicNumber)
+			inputs, err := epicAssessInputs(cmd.Context(), issueSvc, ownerPart, repoPart, epicNumber, cmd.ErrOrStderr())
 			if err != nil {
-				return fmt.Errorf("fetch epic #%d: %w", epicNumber, err)
-			}
-
-			inputs := make([]batch.IssueInput, 0, len(epic.SubIssues))
-			for _, ref := range epic.SubIssues {
-				if ref.State != "OPEN" {
-					continue
-				}
-				si, err := issueSvc.GetIssue(cmd.Context(), ownerPart, repoPart, ref.Number)
-				if err != nil {
-					fmt.Fprintf(cmd.ErrOrStderr(), "warning: skip #%d: %v\n", ref.Number, err)
-					continue
-				}
-				blockedBy := make([]int, 0, len(si.BlockedBy))
-				for _, b := range si.BlockedBy {
-					blockedBy = append(blockedBy, b.Number)
-				}
-				inputs = append(inputs, batch.IssueInput{
-					Number:    si.Number,
-					Title:     si.Title,
-					Body:      si.Body,
-					Labels:    si.Labels,
-					BlockedBy: blockedBy,
-				})
+				return err
 			}
 
 			result := batch.NewAssessor().Assess(inputs)
@@ -2378,6 +2355,55 @@ func epicAssessCmd() *cobra.Command {
 	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
+}
+
+// epicIssueReader is the single-issue read `epic assess` makes.
+type epicIssueReader interface {
+	GetIssueWithRelations(ctx context.Context, owner, repo string, number int, rels gh.IssueRelations) (*types.Issue, error)
+}
+
+// epicAssessInputs reads the open sub-issues of an epic as assessor inputs.
+// The strategy is computed from the epic's sub-issue list and each sub-issue's
+// blockers, so those two lists are read whole and no others are.
+//
+// A sub-issue that cannot be read is skipped with a warning on warn, except
+// one whose blocker list could not be read to its end
+// (github.ErrConnectionTruncated). Skipping that one would compute the
+// strategy without it and without the blockers that order it, and the
+// assess-epic skill discards stderr, where the warning goes, so it is an
+// error.
+func epicAssessInputs(ctx context.Context, issues epicIssueReader, owner, repo string, epicNumber int, warn io.Writer) ([]batch.IssueInput, error) {
+	epic, err := issues.GetIssueWithRelations(ctx, owner, repo, epicNumber, gh.RelationSubIssues)
+	if err != nil {
+		return nil, fmt.Errorf("fetch epic #%d: %w", epicNumber, err)
+	}
+
+	inputs := make([]batch.IssueInput, 0, len(epic.SubIssues))
+	for _, ref := range epic.SubIssues {
+		if ref.State != "OPEN" {
+			continue
+		}
+		si, err := issues.GetIssueWithRelations(ctx, owner, repo, ref.Number, gh.RelationBlockedBy)
+		if errors.Is(err, gh.ErrConnectionTruncated) {
+			return nil, fmt.Errorf("fetch sub-issue #%d of epic #%d: %w", ref.Number, epicNumber, err)
+		}
+		if err != nil {
+			fmt.Fprintf(warn, "warning: skip #%d: %v\n", ref.Number, err)
+			continue
+		}
+		blockedBy := make([]int, 0, len(si.BlockedBy))
+		for _, b := range si.BlockedBy {
+			blockedBy = append(blockedBy, b.Number)
+		}
+		inputs = append(inputs, batch.IssueInput{
+			Number:    si.Number,
+			Title:     si.Title,
+			Body:      si.Body,
+			Labels:    si.Labels,
+			BlockedBy: blockedBy,
+		})
+	}
+	return inputs, nil
 }
 
 func epicCheckCompletionCmd() *cobra.Command {
@@ -7800,8 +7826,10 @@ func gitBranchCreateCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
+				// Naming a branch reads an issue's labels, title and parent,
+				// never its relationship lists, so none is read whole here.
 				issueSvc := gh.NewIssueService(client)
-				fetched, err := issueSvc.GetIssue(cmd.Context(), owner, repo, issueFlag)
+				fetched, err := issueSvc.GetIssueWithRelations(cmd.Context(), owner, repo, issueFlag, gh.NoRelations)
 				if err != nil {
 					return err
 				}
@@ -7846,7 +7874,7 @@ func gitBranchCreateCmd() *cobra.Command {
 						return err
 					}
 					issueSvc = gh.NewIssueService(client)
-					issue, err = issueSvc.GetIssue(cmd.Context(), owner, repo, issueNumber)
+					issue, err = issueSvc.GetIssueWithRelations(cmd.Context(), owner, repo, issueNumber, gh.NoRelations)
 					if err != nil {
 						return err
 					}
@@ -7868,7 +7896,7 @@ func gitBranchCreateCmd() *cobra.Command {
 							}
 							issueSvc = gh.NewIssueService(client)
 						}
-						epic, epicErr := issueSvc.GetIssue(cmd.Context(), owner, repo, parentIssue)
+						epic, epicErr := issueSvc.GetIssueWithRelations(cmd.Context(), owner, repo, parentIssue, gh.NoRelations)
 						if epicErr != nil {
 							return epicErr
 						}

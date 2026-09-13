@@ -285,7 +285,12 @@ func EvaluatePostMerge(ctx context.Context, issueSvc IssueFetcher, issueCloser I
 	}
 	mergedSha, mergedAt := merge.SHA, merge.MergedAt
 
-	issue, err := issueSvc.GetIssue(ctx, input.RepositoryOwner, input.RepositoryName, input.IssueNumber)
+	// The hook uses the issue's node id, state and parent, and whether it has
+	// sub-issues at all, which IsEpic reports from the first page. It uses no
+	// relationship list, so it reads none whole: an epic with many children, or
+	// an issue that blocks many others, must not fail the close, the board
+	// sync and the epic rollup on a later page the hook would discard.
+	issue, err := issueSvc.GetIssueWithRelations(ctx, input.RepositoryOwner, input.RepositoryName, input.IssueNumber, gh.NoRelations)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: post-merge hook: failed to fetch issue #%d: %v\n", input.IssueNumber, err)
 		return PostMergeResult{
@@ -336,7 +341,7 @@ func EvaluatePostMerge(ctx context.Context, issueSvc IssueFetcher, issueCloser I
 	// closed, both breadcrumb fields were captured, and the merged issue is a
 	// single issue — NOT an epic-umbrella PR (whose N→1 attribution is ambiguous,
 	// so it is skipped, mirroring the orphan-sub close distinction below).
-	isEpicMerge := issue.IsEpic || len(issue.SubIssues) > 0
+	isEpicMerge := issue.IsEpic
 	out.SurvivalEligible = issueClosed && mergedSha != "" && mergedAt != "" && !isEpicMerge
 
 	// (#3981) Sync the merged issue's own board Status to Done. The board
@@ -359,7 +364,7 @@ func EvaluatePostMerge(ctx context.Context, issueSvc IssueFetcher, issueCloser I
 	// and (#4197) skips `type:spike` parents entirely — a spike's native
 	// sub-issues are traceability links to independently-scheduled follow-up
 	// work, not decomposition children that are "done" when the spike closes.
-	if issue.IsEpic || len(issue.SubIssues) > 0 {
+	if isEpicMerge {
 		if oc, ocErr := epicSvc.CloseOrphanSubs(ctx, input.RepositoryOwner, input.RepositoryName, input.IssueNumber, input.ProjectNumber); ocErr != nil {
 			fmt.Fprintf(os.Stderr, "Warning: post-merge orphan-sub close failed for epic #%d: %v\n", input.IssueNumber, ocErr)
 		} else if oc != nil && oc.Closed > 0 {

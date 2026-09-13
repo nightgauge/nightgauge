@@ -268,11 +268,12 @@ type pageInfo struct {
 
 // --- Issue Queries ---
 
-// issueQuery is used by GetIssue (single issue) and indirectly by
-// GetEpicProgressByNumber. The relationship sizes are first-page sizes:
-// GetIssue reads every later page through the follow-up queries in
-// connection_paging.go, so an epic with more than 25 sub-issues, or an issue
-// with more than 5 blockers, is returned whole.
+// issueQuery is used by GetIssue and GetIssueWithRelations (single issue) and
+// indirectly by GetEpicProgressByNumber. The relationship sizes are
+// first-page sizes: the read pages on, through the follow-up queries in
+// connection_paging.go, for each connection its caller names, so an epic with
+// more than 25 sub-issues, or an issue with more than 5 blockers, is returned
+// whole.
 type issueQuery struct {
 	Repository struct {
 		Issue struct {
