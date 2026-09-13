@@ -26,9 +26,9 @@ holds.
 The adapter ships **Experimental**. `Manager.RunStage` refuses every `opencode`
 dispatch before spawning anything unless `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1`
 is set in the environment, and every dispatch it allows prints the controls
-that are not enforced yet. An `anthropic/*` model is refused even with the
-switch set, until #1616 enforces § 17's credential policy. The gate stays until
-those controls exist and the beta decision in § 23 lifts it.
+that are not enforced yet. An `anthropic/*` model is refused while
+`ANTHROPIC_API_KEY` is unset, because § 17 gives it no other credential. The
+gate stays until those controls exist and the beta decision in § 23 lifts it.
 
 Three things are fixed by the change that carries this ADR:
 
@@ -99,6 +99,14 @@ capture script and the full observation table are in
 | The catalog a run loads is the one bundled in the binary; no run fetched one                                                                                                   | § Endpoints                |
 | A `--format json` `error` event for a failed model request carries the request's full URL                                                                                      | § Endpoints                |
 | `--print-logs` adds stderr but still writes `log/opencode.log` in the data directory, and an error goes to both                                                                | The command, § 22          |
+| The four XDG base variables move config, data, cache and state; `home` does not move, and `tmp` stays at `$TMPDIR/opencode`                                                    | § 8                        |
+| `$HOME/.opencode` is read as a config directory whatever the XDG variables, `OPENCODE_DISABLE_PROJECT_CONFIG` or `OPENCODE_PURE` say                                           | § 8                        |
+| `$HOME/.agents/skills` loads whatever the XDG variables say; `OPENCODE_DISABLE_EXTERNAL_SKILLS=1` stops it                                                                     | § 8, § 11                  |
+| Config precedence, lowest first: the XDG config directory's files, `OPENCODE_CONFIG`, `OPENCODE_CONFIG_DIR`, `OPENCODE_CONFIG_CONTENT`, then the machine's managed config      | § 8                        |
+| The catalog binds variables to 213 providers, and any one of a provider's variables makes OpenCode load it: `GROQ_API_KEY` adds groq's models, `AWS_REGION` amazon-bedrock's   | § 8                        |
+| `ANTHROPIC_BASE_URL` and `OPENAI_BASE_URL` send an `anthropic/` or `openai/` run, and its API key, to the server they name                                                     | § 8, § 17                  |
+| With no credentials at all, OpenCode's own hosted provider lists its free models                                                                                               | § 8, § 10                  |
+| Processes started together on a fresh data directory race its database migration, and all but one fail; once the database exists, concurrent runs share it                     | § 8                        |
 
 The first contradiction changes § 8: once project config is disabled, which it
 must be (a repository must not grant itself permissions, plugins or providers),
@@ -107,6 +115,14 @@ changes § 11: there is no switch that drops the operator's personal
 `~/.claude/CLAUDE.md` and keeps the repository's `CLAUDE.md`. Both lead to the
 same answer. Nightgauge hands OpenCode the repository's steering explicitly and
 lets OpenCode discover nothing.
+
+A third assumption failed when run isolation was built (#1616): moving the XDG
+base directories does not move everything OpenCode reads from the operator.
+It still reads `~/.opencode` as a config directory and `~/.agents/skills` for
+skills, from the home directory, which does not move, and the machine's
+managed config, which merges above every layer Nightgauge sets. Nor does it
+stop at OpenCode: every tool a stage starts sees the moved directories. § 8
+records what closes each.
 
 ## Decision
 
@@ -132,19 +148,18 @@ has opted in.
   gate, § 8) can join it.
 - **A refusal** names the controls that are missing, the switch, and the way
   out (`--adapter` or `NIGHTGAUGE_ADAPTER`).
-- **`anthropic/*` is refused with the switch set.** § 17 lets Anthropic through
-  OpenCode authenticate only with `ANTHROPIC_API_KEY`, never with a
-  subscription or OAuth login OpenCode has stored, and until #1616 enforces
-  that, nothing stops OpenCode using a stored login. `PreDispatch` therefore
-  refuses every model whose provider key is `anthropic` before spawn, whatever
-  the switch says. It checks this first, so the refusal states the one reason
-  the switch cannot lift and no warning precedes it. The remediation names the
-  `claude-headless` adapter, which also serves a Claude subscription, and says
-  that `anthropic/*` through OpenCode unlocks when #1616 enforces § 17. The
-  credential-policy row below stays until then, because the refusal covers only
-  the model a stage names: any OpenCode config the run reads, the target
-  repository's included, can name another `anthropic/` model that receives the
-  stage prompt (§ 17).
+- **`anthropic/*` needs `ANTHROPIC_API_KEY`.** § 17 lets Anthropic through
+  OpenCode authenticate only with that variable, never with a subscription or
+  OAuth login, and run isolation (§ 8) leaves a run no stored login to use.
+  `PreDispatch` refuses a model whose provider key is `anthropic` before spawn
+  while the variable is unset or empty, whatever the switch says. It checks
+  this first, so the refusal states the one reason the switch cannot lift and
+  no warning precedes it. The remediation names the `claude-headless` adapter,
+  which serves a Claude subscription.
+- **`~/.opencode` holding config, or the machine's managed OpenCode config,
+  refuses an enabled dispatch** unless the operator has opted into their own
+  OpenCode config (§ 8), because run isolation cannot keep either out of a
+  run.
 - **An allowed dispatch** prints a warning to stderr, one line per control
   that is not enforced yet. It is the operator's only disclosure of what the
   dispatch runs without, so it lists every control this ADR assigns to a later
@@ -157,13 +172,12 @@ has opted in.
 | -------------------------- | ------------- |
 | stream parsing             | #1624, #1630  |
 | failure classification     | #1624, #1631  |
-| run isolation              | #1616         |
-| output redaction           | #1616, #1624  |
+| output redaction           | #1624, #1678  |
 | project-config tamper gate | #1638         |
+| repository steering        | #1626         |
 | permission map             | #1638         |
 | safety plugin              | #1635, #1640  |
-| egress defaults            | #1616, #1625  |
-| credential policy          | #1616         |
+| egress defaults            | #1625         |
 | endpoint policy            | #1678, #1679  |
 | stage limits               | #1625, #1630  |
 | version policy             | #1613, #1627  |
@@ -411,26 +425,156 @@ adapter refuses anything else before spawning.
 
 - **XDG layout.** Each run gets one root, shared by its stages and outside
   every worktree and repository: `~/.nightgauge/opencode/runs/<run_id>/`,
-  created with mode 0700.
+  created with mode 0700, as are its four directories. A root or directory
+  that is a symbolic link is refused, so nothing is written through one.
   `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` and `XDG_STATE_HOME`
   point at its `config/`, `data/`, `cache/` and `state/`. OpenCode 1.18.30
   writes `config/opencode/` (a config file and its own `.gitignore`),
   `data/opencode/` (`opencode.db` with its WAL files, `log/`, `snapshot/`,
-  `repos/`), `cache/opencode/bin/` and `state/opencode/locks/`. A dispatch with
-  no run identity mints a root id of its own, which is never exported as
-  `NIGHTGAUGE_RUN_ID`.
+  `repos/`), `cache/opencode/bin/` and `state/opencode/locks/`. `home` does not
+  move, and OpenCode's `tmp` stays at `$TMPDIR/opencode`. A dispatch with no
+  run identity mints a root id of its own, which is never exported as
+  `NIGHTGAUGE_RUN_ID`, and deletes that root when it returns. § 22 decides when
+  every other root is deleted. Stages of one run share the session database,
+  which is safe once it exists. On a fresh data directory, processes started
+  together race its migration and all but one fail, so the first stage of a run
+  must start alone. The Go path runs a run's stages one at a time; a path that
+  starts them in parallel starts one first (#1648).
+- **Tools that move with XDG.** The move would also take from a stage's tools
+  what they read from the operator, so each is given back what it resolves to
+  outside the run, computed from the environment Nightgauge inherited. The
+  root's `config/` holds a symbolic link to every entry of the operator's XDG
+  config directory (`$XDG_CONFIG_HOME`, else `~/.config`) except `opencode/`,
+  the only entry of it OpenCode 1.18.30 loads config from, which stays the
+  run's. A tool that keeps its config there therefore reads the operator's:
+  git its XDG config, `ignore`, `attributes` and `credentials` files, beside
+  `~/.gitconfig` and in the same order, and uv, pip or podman the private
+  package index or registry that would otherwise fall back to a public
+  default. An inherited
+  `GIT_CONFIG_GLOBAL` passes through. `GIT_CONFIG_GLOBAL` holds one file, and
+  `git config --global` does not follow an `[include]`, so a link is the one
+  form that keeps all three layouts of an operator's git config identical.
+  Each stage links what the operator has added since and re-points a link
+  whose target moved; an entry the run created itself, while the operator had
+  none, is left as it is. `GH_CONFIG_DIR` is set as well, to the operator's gh
+  directory (`GH_CONFIG_DIR`, else `$XDG_CONFIG_HOME/gh`, else
+  `~/.config/gh`), where gh keeps its hosts and auth. `NIGHTGAUGE_CONFIG_HOME`
+  is the directory of the machine-tier config the nightgauge process reads,
+  the Linux legacy `~/.nightgauge` included, so a `nightgauge` command in a
+  stage keeps the machine tier. `GOCACHE`, when the operator has not set it, is
+  their Go build cache, which on Linux would otherwise move with
+  `XDG_CACHE_HOME`. Deleting the root unlinks every link and never touches a
+  target. The run's `data/`, `cache/` and `state/` are its own, so any other
+  tool that keeps state or a cache there starts empty.
 - **The per-run config.** Nightgauge writes
   `config/opencode/opencode.json` (mode 0600): the injected provider blocks
-  (§ 1, § 17, § Endpoints), the permission map (§ 9), the plugin list, the `instructions`
-  entries (below), MCP servers (#1626) and every locked key in § 15. Provider
-  URLs never go into the environment, where the process table would show them.
+  (§ 1, § 17, § Endpoints), the permission map (§ 9), the plugin list, the
+  `instructions` entries (below) and MCP servers (#1626). Provider URLs never
+  go into the environment, where the process table would show them. The locked
+  keys of § 15 go in `OPENCODE_CONFIG_CONTENT` instead (#1625). Observed on
+  1.18.30, OpenCode merges its config in this order, lowest first: the files in
+  the XDG config directory, `OPENCODE_CONFIG`, the repository's files, the
+  config directories (`OPENCODE_CONFIG_DIR` last among them),
+  `OPENCODE_CONFIG_CONTENT`, and then, read from the bundled source, an active
+  console organization's remote config and the machine's managed config
+  (below). `OPENCODE_CONFIG_CONTENT` sits above an inherited operator config
+  but not above those two. The organization's config needs a console account
+  in the session database, which starts empty in every run, and managed config
+  refuses a dispatch, so without the opt-in a run reads no layer above #1625's
+  locked keys.
 - **The environment.** Every inherited `OPENCODE_*` variable is removed, and
-  only the variables this ADR names are set. The operator's shell can then
-  never change a pipeline run's posture through an OpenCode variable.
+  only the variables this ADR names are set: the four XDG variables and the
+  pins above; the switches of § 10 and § 11, `OPENCODE_DISABLE_MODELS_FETCH`,
+  `_AUTOUPDATE`, `_LSP_DOWNLOAD`, `_DEFAULT_PLUGINS`, `_SHARE`,
+  `_CLAUDE_CODE_PROMPT`, `_CLAUDE_CODE_SKILLS` and `_EXTERNAL_SKILLS`, each
+  `1`; `OPENCODE_SERVER_PASSWORD` (§ 18); `OPENCODE_CONFIG_CONTENT` (#1625);
+  and `OPENCODE_CONFIG_DIR` under `inherit_user_config` only. An inherited
+  value of a name Nightgauge sets is replaced, never left beside it. The
+  operator's shell can then never change a pipeline run's posture through an
+  OpenCode variable. Also removed is every variable OpenCode's bundled catalog
+  binds to a model service other than the one the stage dispatches to,
+  because any one of a provider's variables makes OpenCode load it. The
+  snapshot is read from the 1.18.30 binary, 213 provider keys
+  (`internal/execution/adapters/opencode_catalog_env.go`): `ANTHROPIC_API_KEY`,
+  `OPENAI_API_KEY`, `XAI_API_KEY`, `OPENROUTER_API_KEY`, and `GOOGLE_API_KEY`,
+  `GOOGLE_GENERATIVE_AI_API_KEY` and `GEMINI_API_KEY` for `google`, and the
+  rest of the catalog's, such as `GROQ_API_KEY` and `DEEPSEEK_API_KEY`.
+  `ANTHROPIC_BASE_URL` and `OPENAI_BASE_URL` are removed whatever the
+  provider: the bundled Anthropic and OpenAI SDKs read them as the provider's
+  endpoint, and each was observed to send a run and its key to the server it
+  named, so a provider's endpoint comes from config only (§ Endpoints). A
+  stage's own tools share the environment, so they do not get the removed
+  variables either. A tool that needs one fails without it, or uses a login of
+  its own, so every enabled dispatch names on stderr each removed variable the
+  environment holds, never a value.
+- **Platform credentials stay.** Some catalog providers bind the variables of
+  a general-purpose platform account, which a stage's tools read for work that
+  is not a model request: the forge (`GITHUB_TOKEN` and `GITLAB_TOKEN`, bound
+  to `github-copilot` and `gitlab`), AWS (`amazon-bedrock`), Google Cloud
+  (`google-vertex` and `google-vertex-anthropic`), Cloudflare, Databricks,
+  DigitalOcean, Snowflake, Hugging Face, Weights & Biases and Vultr. Every
+  variable the catalog binds to one of them stays, whatever the provider.
+  Removing part of such a family does not leave a tool without credentials: it
+  moves the tool to the next source in the platform's credential chain, which
+  can be another account in another region, and nothing says so. With
+  `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_REGION` removed and
+  `AWS_SESSION_TOKEN` left, the AWS CLI reads `~/.aws/credentials` and
+  `~/.aws/config` instead. With `GOOGLE_APPLICATION_CREDENTIALS` removed and
+  `GOOGLE_CLOUD_PROJECT` left, Google's clients use the operator's own
+  application default credentials, and so does OpenCode's `google-vertex`,
+  which, read from the 1.18.30 bundled source, loads on `GOOGLE_CLOUD_PROJECT`
+  as well.
+- **What the environment does not decide.** A run on a local model holds no
+  hosted model service's catalog variable. That narrows which providers a run
+  can load; it does not decide it. OpenCode can load a platform provider on
+  the credentials the stage keeps, a provider's own loader can find
+  credentials elsewhere (`amazon-bedrock` also loads on `AWS_PROFILE` and the
+  AWS credentials file), and OpenCode's own hosted provider serves its free
+  models with no key. What closes those routes to another model is § 15's
+  pinning of every model a run uses (#1625); until then the egress-defaults
+  warning line names them.
+- **The home directory.** `home` does not move, and OpenCode 1.18.30 reads two
+  operator locations from it whatever the XDG variables say.
+  `OPENCODE_DISABLE_EXTERNAL_SKILLS=1` closes `~/.agents/skills` and
+  `~/.claude/skills`. `~/.opencode` is a config directory to OpenCode: it loads
+  its `opencode.json`, `opencode.jsonc`, and `agent`, `command`, `mode`,
+  `plugin`, `tool` and `skill` directories under either spelling. Neither
+  `OPENCODE_DISABLE_PROJECT_CONFIG` nor `OPENCODE_PURE` stops that read, and
+  moving `HOME` would move every other tool with it. So while `~/.opencode`
+  holds any of those entries, `PreDispatch` refuses an enabled dispatch, naming
+  the entries without reading them, unless `inherit_user_config` is on. What
+  an install leaves there (`bin/`, a `package.json` and its `node_modules`) is
+  not config. The remediation is to move the entries into the XDG config
+  directory, which the operator's own OpenCode reads and a pipeline run does
+  not.
+- **The machine's managed config.** Read from the 1.18.30 bundled source and
+  observed: OpenCode reads `opencode.json` and `opencode.jsonc` from a managed
+  config directory, `/etc/opencode` on Linux and
+  `/Library/Application Support/opencode` on macOS, and on macOS the
+  managed-preferences profile `ai.opencode.managed.plist` under
+  `/Library/Managed Preferences`, the user's and then the machine's. It merges
+  them above `OPENCODE_CONFIG_CONTENT`, so a key there wins over every key
+  Nightgauge sets, the locked keys of § 15 included, and nothing in a run's
+  environment moves them. While any of those files exists, `PreDispatch`
+  refuses an enabled dispatch, naming the files without reading them, unless
+  `inherit_user_config` is on, which accepts the machine's config with the
+  operator's own.
 - **`inherit_user_config`** defaults to `false`: the operator's global
-  OpenCode config is not read. When `true`, that config is layered under the
-  per-run config, and every locked key in § 15 still wins. Credentials are
-  never inherited either way (§ 17).
+  OpenCode config is not read. Until #1625 wires the machine-tier key, the one
+  way to turn it on is `NIGHTGAUGE_OPENCODE_INHERIT_USER_CONFIG=1` in the
+  environment, and every dispatch it applies to says so on stderr. It sets
+  `OPENCODE_CONFIG_DIR` to the operator's OpenCode config directory
+  (`$XDG_CONFIG_HOME/opencode`, else `~/.config/opencode`), which brings back
+  its `opencode.json`, `opencode.jsonc` and directories, and `~/.opencode` loads
+  as it does outside a run. That config is layered above the per-run file and
+  under `OPENCODE_CONFIG_CONTENT`, so every locked key in § 15 still wins over
+  it; a provider block in it merges over the per-run file's, and #1625 decides
+  what an inherited block may change of one Nightgauge injects. The opt-in also
+  lifts the managed-config refusal, and a managed config wins over the locked
+  keys, which the stderr line says. Stored logins are never inherited either
+  way, because they live in the data directory, which stays per run (§ 17).
+  An API key written into the operator's config is inherited, and the stderr
+  line says so.
 - **The target repository's `opencode.json`, `opencode.jsonc` and
   `.opencode/**`.** `OPENCODE_DISABLE_PROJECT_CONFIG=1` is set on every spawn,
   so OpenCode never loads them. Nightgauge reads them instead. Keys outside the
@@ -525,8 +669,17 @@ disabled (§ 8) drops it anyway.
   `~/.claude/CLAUDE.md` and `~/.claude/skills` never enter a pipeline run. The
   blanket switch is still not used: Nightgauge disables what it means to and no
   more.
-- The repository's `CLAUDE.md` fallback survives because Nightgauge injects it
-  (§ 8), not because OpenCode finds it.
+- `OPENCODE_DISABLE_EXTERNAL_SKILLS=1` is set as well. Observed on 1.18.30,
+  the operator's `~/.agents/skills` load into every run without it, the same
+  personal content as `~/.claude/skills` by another path. It also stops
+  OpenCode finding a repository's `.agents/skills` by itself, which is § 8's
+  rule anyway: Nightgauge renders a stage's skills (#1666), and OpenCode
+  discovers nothing.
+- The repository's `CLAUDE.md` fallback reaches a run only once Nightgauge
+  injects it (§ 8, #1626), never because OpenCode finds it. Until then
+  `_PROMPT` hides it, so a repository whose only steering is `CLAUDE.md` runs
+  without its rules, and the enabled-dispatch warning's repository-steering
+  line says so.
 - `@imports` are not followed; OpenCode never followed them in any
   configuration observed. Steering that depends on an import is inlined by
   #1626's injection, which already strips the `@AGENTS.md` import line.
@@ -604,28 +757,31 @@ This ADR adds **security** and **privacy** as reasons for a pipeline default to
 be off. Each is allowed only with its reason recorded in this table and beside
 the setting. A **locked** row cannot be turned back on from any config tier.
 
-| Feature disabled or overridden           | Pipeline setting                                                       | Reason    | Locked or overridable                        |
-| ---------------------------------------- | ---------------------------------------------------------------------- | --------- | -------------------------------------------- |
-| Dispatch itself                          | `NIGHTGAUGE_EXPERIMENTAL_OPENCODE` gate                                | security  | overridable by environment only, until #1643 |
-| Session share                            | `share: "disabled"`, `OPENCODE_DISABLE_SHARE=1`                        | privacy   | locked                                       |
-| Autoupdate                               | `autoupdate: false`, `OPENCODE_DISABLE_AUTOUPDATE=1`                   | security  | locked (§ 20 owns upgrades)                  |
-| Model-catalog fetch                      | `OPENCODE_DISABLE_MODELS_FETCH=1`                                      | privacy   | locked                                       |
-| LSP server download                      | `OPENCODE_DISABLE_LSP_DOWNLOAD=1`                                      | security  | locked                                       |
-| Default and third-party plugins          | `OPENCODE_DISABLE_DEFAULT_PLUGINS=1`; `plugin` lists Nightgauge's only | security  | locked                                       |
-| Repository project config                | `OPENCODE_DISABLE_PROJECT_CONFIG=1`; reviewed merge (§ 8)              | security  | locked                                       |
-| Operator's global OpenCode config        | `inherit_user_config: false`                                           | security  | overridable; locked keys still win           |
-| Session titles                           | `agent.title.disable: true` (§ 10)                                     | privacy   | locked                                       |
-| A model other than the dispatched one    | `small_model` and every agent's `model` pinned to the dispatched model | security  | locked                                       |
-| OAuth and subscription credentials       | never read (§ 17)                                                      | security  | locked                                       |
-| Operator's `~/.claude` prompt and skills | `OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1`, `_SKILLS=1`                   | privacy   | locked                                       |
-| Remote `instructions` and `skills.urls`  | refused                                                                | security  | locked                                       |
-| Inherited `OPENCODE_*` variables         | stripped                                                               | security  | locked                                       |
-| `webfetch`                               | `deny` unless the stage's allowed tools include it                     | privacy   | overridable per stage, through allowed tools |
-| `ask` permissions                        | never generated (§ 9)                                                  | security  | locked                                       |
-| Auto-approve flags                       | never emitted                                                          | security  | locked                                       |
-| Listener, mDNS and CORS                  | `--port`, `--mdns` and `--cors` never passed to `run`                  | security  | locked                                       |
-| Session import                           | not used                                                               | security  | locked                                       |
-| Snapshots                                | `snapshot: false`                                                      | footprint | overridable                                  |
+| Feature disabled or overridden           | Pipeline setting                                                                                                   | Reason    | Locked or overridable                                    |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | --------- | -------------------------------------------------------- |
+| Dispatch itself                          | `NIGHTGAUGE_EXPERIMENTAL_OPENCODE` gate                                                                            | security  | overridable by environment only, until #1643             |
+| Session share                            | `share: "disabled"`, `OPENCODE_DISABLE_SHARE=1`                                                                    | privacy   | locked                                                   |
+| Autoupdate                               | `autoupdate: false`, `OPENCODE_DISABLE_AUTOUPDATE=1`                                                               | security  | locked (§ 20 owns upgrades)                              |
+| Model-catalog fetch                      | `OPENCODE_DISABLE_MODELS_FETCH=1`                                                                                  | privacy   | locked                                                   |
+| LSP server download                      | `OPENCODE_DISABLE_LSP_DOWNLOAD=1`                                                                                  | security  | locked                                                   |
+| Default and third-party plugins          | `OPENCODE_DISABLE_DEFAULT_PLUGINS=1`; `plugin` lists Nightgauge's only                                             | security  | locked                                                   |
+| Repository project config                | `OPENCODE_DISABLE_PROJECT_CONFIG=1`; reviewed merge (§ 8)                                                          | security  | locked                                                   |
+| Operator's global OpenCode config        | `inherit_user_config: false`; `~/.opencode` and managed config refused (§ 8)                                       | security  | overridable; locked keys win over all but managed config |
+| Session titles                           | `agent.title.disable: true` (§ 10)                                                                                 | privacy   | locked                                                   |
+| A model other than the dispatched one    | `small_model` and every agent's `model` pinned to the dispatched model                                             | security  | locked                                                   |
+| OAuth and subscription credentials       | never read (§ 17)                                                                                                  | security  | locked                                                   |
+| Operator's `~/.claude` prompt and skills | `OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1`, `_SKILLS=1`                                                               | privacy   | locked                                                   |
+| Operator's `~/.agents/skills`            | `OPENCODE_DISABLE_EXTERNAL_SKILLS=1` (§ 11)                                                                        | privacy   | locked                                                   |
+| Other model services' credentials        | every variable the catalog binds to another model service removed; forge and cloud platform credentials kept (§ 8) | security  | locked                                                   |
+| Provider base URLs from the environment  | `ANTHROPIC_BASE_URL` and `OPENAI_BASE_URL` removed (§ 8)                                                           | security  | locked                                                   |
+| Remote `instructions` and `skills.urls`  | refused                                                                                                            | security  | locked                                                   |
+| Inherited `OPENCODE_*` variables         | stripped                                                                                                           | security  | locked                                                   |
+| `webfetch`                               | `deny` unless the stage's allowed tools include it                                                                 | privacy   | overridable per stage, through allowed tools             |
+| `ask` permissions                        | never generated (§ 9)                                                                                              | security  | locked                                                   |
+| Auto-approve flags                       | never emitted                                                                                                      | security  | locked                                                   |
+| Listener, mDNS and CORS                  | `--port`, `--mdns` and `--cors` never passed to `run`                                                              | security  | locked                                                   |
+| Session import                           | not used                                                                                                           | security  | locked                                                   |
+| Snapshots                                | `snapshot: false`                                                                                                  | footprint | overridable                                              |
 
 The pinned models are `small_model` and the `model` of every agent: the hidden
 `title`, `compaction` and `summary` agents and every subagent the `task` tool
@@ -655,32 +811,43 @@ A subscription or OAuth login is never used. OpenCode 1.18.30 has two sources
 of stored logins, and a run reads neither:
 
 - **`auth.json` in the data directory.** The per-run data directory starts
-  empty, and `inherit_user_config` never carries credentials.
+  empty, Nightgauge never writes or copies an `auth.json` into it, and
+  `inherit_user_config` never carries credentials. A dispatch whose run root
+  holds one, which only something an earlier stage ran could have written, is
+  refused before spawn without the file being read.
 - **`OPENCODE_AUTH_CONTENT`.** When it is set, OpenCode reads its JSON as the
   stored logins instead of `auth.json`, and OpenCode exports it, holding every
   login it has stored, to the processes it starts for a workspace (§ Context).
   An inherited value would hand a run the parent's logins however empty its
-  data directory is. The adapter therefore withholds it from every spawn
-  already: its `WithheldEnv` hook names it, and the manager removes it from the
-  inherited environment before adding the adapter's exports, without reading
-  or logging its value.
+  data directory is. The adapter withholds it with every other inherited
+  `OPENCODE_*` variable (§ 8), `OPENCODE_CONSOLE_TOKEN` included: its
+  `WithholdsEnv` hook decides on the name alone, and the manager removes each
+  variable it names from the inherited environment before adding the
+  adapter's exports, without reading or logging a value.
 
 This is not a pending default. A pipeline run is automated work billed per
 token against a key the operator can audit and revoke per machine, and
 reversing it takes a superseding ADR. Every other hosted provider likewise
 authenticates with its own API-key variable from the environment.
 
-Until #1616 enforces this section, `PreDispatch` refuses every `anthropic/*`
-dispatch before spawn, with the enable switch set or not (§ The enable gate).
-Nothing yet stops OpenCode using a login stored in the operator's own
-`auth.json`, because a run has no data directory of its own yet, and
-`ANTHROPIC_API_KEY` being set does not change that. The refusal sees only the
-model a stage names. Any OpenCode config the run reads can name another: the
-operator's own, and the target repository's `opencode.json`, `opencode.jsonc`
-and `.opencode/`, which load because the adapter does not set
-`OPENCODE_DISABLE_PROJECT_CONFIG` yet (§ 8). Read from the 1.18.30 bundled
-source, two keys send the stage prompt to the model they name, whatever its
-provider:
+#1616 enforces this section. `PreDispatch` refuses an `anthropic/*` dispatch
+before spawn while `ANTHROPIC_API_KEY` is unset or empty, with the enable
+switch set or not (§ The enable gate), and names `claude-headless` for a
+Claude subscription. The interim refusal of every `anthropic/*` dispatch was
+lifted only once both sources above were closed: the per-run data directory
+starts empty, and no inherited login-bearing `OPENCODE_*` variable reaches the
+run. A login-bearing variable a later version adds is removed with the rest.
+Nor can the environment redirect the stage: `ANTHROPIC_BASE_URL` is removed
+(§ 8), because it would send the stage and its key to whatever server it
+names, a proxy serving a subscription included. A config provider block can
+still name another `baseURL`, which the endpoint-policy warning line discloses
+until #1678, #1679 and #1638.
+
+The requirement sees only the model a stage names. The target repository's
+`opencode.json`, `opencode.jsonc` and `.opencode/` still load, because the
+adapter does not set `OPENCODE_DISABLE_PROJECT_CONFIG` yet (§ 8), and they can
+name another model. Read from the 1.18.30 bundled source, two keys send the
+stage prompt to the model they name, whatever its provider:
 
 - `small_model` titles every session. `opencode run` gives its session a
   default title, and OpenCode replaces it by sending the stage prompt to the
@@ -691,19 +858,16 @@ provider:
   stage starts through the `task` tool, which otherwise runs on the stage's
   model.
 
-Named as `anthropic/...`, either one reaches Anthropic on whatever credential
-OpenCode holds for it, a stored login included, and the repository, not the
-operator, may be what names it. Run isolation (#1616) closes the stored-login
-route, and #1616 lifts the refusal only when both sources are closed: the
-per-run data directory starts empty, and no inherited login-bearing
-`OPENCODE_*` variable reaches the run. The adapter withholds
-`OPENCODE_AUTH_CONTENT` now, and #1616 owns the full inherited-environment
-policy for `OPENCODE_*` (§ 8), so a login-bearing variable a later version
-adds is removed with the rest. § 15 pins both keys to the dispatched model
-(#1625), and the project-config merge drops a repository's value (#1638), so
-no config chooses where the prompt goes. Until #1616 lands, the
-enabled-dispatch warning's credential-policy line names both routes, and #1616
-replaces the refusal with the key requirement above.
+Run isolation leaves either one no stored login to use, so a model named that
+way reaches its provider only on credentials the run holds or needs none: the
+dispatched provider's own key, the forge tokens, the cloud platform
+credentials the stage keeps for its tools, credentials a provider's own loader
+finds that the catalog does not name, or nothing at all for OpenCode's own
+free models (§ 8). The repository, not the operator, may still be what
+names it. § 15 pins both keys to the dispatched model (#1625), and the
+project-config merge drops a repository's value (#1638), so no config chooses
+where the prompt goes. Until then the enabled-dispatch warning's
+egress-defaults line names both routes.
 
 `nightgauge doctor` reports a subscription or OAuth login for `anthropic` in
 either source of OpenCode's stored logins as a finding (#1627): `auth.json` in
@@ -799,16 +963,29 @@ removal.
   inside the per-run root. It holds the full prompt and transcript (observed
   in its `part` table). `snapshot/` and `log/` sit beside it.
 - **When deleted.** The whole per-run root is deleted when the run ends,
-  whether it succeeded, failed or was cancelled. Nothing from it outlives the
-  run, which is also why session resume (#1643) works only within a run.
+  whether it succeeded, failed or was cancelled: `Scheduler.runPipeline`'s
+  terminal defer deletes it beside the worktree, whatever adapter the run's
+  stages used, and a dispatch with no run identity deletes its own root when it
+  returns. Nothing from it outlives the run, which is also why session resume
+  (#1643) works only within a run. A run that crashes first leaves its root
+  behind, so creating a root also deletes every root no stage has used for 7
+  days; each stage dispatch refreshes its root's modification time, which is
+  what the sweep ages. Deletion refuses a root that is a symbolic link or does
+  not resolve directly under `~/.nightgauge/opencode/runs/`, and never follows
+  a link inside one.
 - **What is kept.** Usage only. The stream (#1624) is the source.
   `opencode export <session> --sanitize` is read for its `tokens` and `cost`
   fields only, as a cross-check; it was observed to redact prompts, replies and
   tool input while keeping those fields. Nothing else from an export is kept.
 - **Stderr.** `--print-logs --log-level ERROR` limits OpenCode's log to
-  errors. Captured stderr is redacted of every secret value Nightgauge placed
-  in the child's environment (the server password, API keys, `GITHUB_TOKEN`)
-  before it is persisted (#1616).
+  errors. Every line the child prints, stderr and stdout alike, is redacted of
+  the secrets Nightgauge lets the child hold before it is streamed or kept: the
+  server password, `GITHUB_TOKEN`, `GH_TOKEN`, `GITLAB_TOKEN` and every
+  variable the catalog binds to the dispatched provider, whichever provider it
+  is (§ 8), each become `[REDACTED:<name>]`. Every other secret the child
+  holds, inherited or read from a file, is #1624's pattern redaction, and until
+  then the output-redaction warning line says it stays; an endpoint's
+  `base_url` is #1678's.
 
 ### 23. Promotion criteria
 
@@ -905,7 +1082,7 @@ Studio beside Ollama. Each is a named **endpoint** in `opencode.endpoints[]`
   carries the request's full URL in `metadata.url`, while stderr and the log
   file did not name it. The parser (#1624) never copies a URL from an OpenCode
   event, and captured output is redacted of every endpoint's `base_url` before
-  it is persisted (#1616).
+  it is persisted (#1678, through the output redaction of § 22).
 - **Endpoints on the local network.** An endpoint is loopback by default. A
   `base_url` whose host resolves to anything other than loopback is refused
   unless the entry sets `allow_lan: true`. Even then the address must be a

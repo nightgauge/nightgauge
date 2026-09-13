@@ -67,7 +67,7 @@ const SUGGESTED_FIX: Record<NightgaugeAdapter, string> = {
     "(http://127.0.0.1:1234) with a model loaded, or start Ollama (`ollama serve`, " +
     "http://localhost:11434) and pull a model. For a hosted provider, set that provider's own " +
     "API-key variable: ANTHROPIC_API_KEY for anthropic/* models, OPENAI_API_KEY for openai/*, " +
-    "XAI_API_KEY for xai/*. anthropic/* through OpenCode stays refused until #1616.",
+    "XAI_API_KEY for xai/*. A Claude subscription runs on the claude-headless adapter instead.",
 };
 
 function suggestedFixFor(adapter: NightgaugeAdapter): string {

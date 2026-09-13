@@ -668,6 +668,53 @@ func TestReadMachineConfigBytesFallsBackToLegacyLinuxPath(t *testing.T) {
 	}
 }
 
+// TestMachineConfigDirIsTheDirectoryLoadReads: MachineConfigDir names the
+// directory whose config.yaml the loader actually reads, the Linux legacy
+// ~/.nightgauge included. A child given NIGHTGAUGE_CONFIG_HOME set to it must
+// read the same machine tier (ADR-022 § 8), and a pin to the canonical
+// directory while only the legacy file exists would lose it, because the
+// loader takes the legacy fallback only when neither override is set.
+func TestMachineConfigDirIsTheDirectoryLoadReads(t *testing.T) {
+	oldGOOS := machineGOOSFn
+	oldPathFn := machineConfigPathFn
+	machineConfigPathFn = defaultMachineConfigPath
+	t.Cleanup(func() { machineGOOSFn = oldGOOS; machineConfigPathFn = oldPathFn })
+
+	for _, tc := range []struct {
+		name, goos string
+		files      []string // relative to HOME
+		configHome string   // NIGHTGAUGE_CONFIG_HOME, relative to HOME
+		want       string   // relative to HOME
+	}{
+		{name: "darwin default", goos: "darwin", want: ".nightgauge"},
+		{name: "linux canonical present", goos: "linux", files: []string{".config/nightgauge/config.yaml", ".nightgauge/config.yaml"}, want: ".config/nightgauge"},
+		{name: "linux canonical absent, legacy present", goos: "linux", files: []string{".nightgauge/config.yaml"}, want: ".nightgauge"},
+		{name: "linux neither present", goos: "linux", want: ".config/nightgauge"},
+		{name: "override wins over legacy", goos: "linux", files: []string{".nightgauge/config.yaml"}, configHome: "custom", want: "custom"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("XDG_CONFIG_HOME", "")
+			t.Setenv("NIGHTGAUGE_CONFIG_HOME", "")
+			if tc.configHome != "" {
+				t.Setenv("NIGHTGAUGE_CONFIG_HOME", filepath.Join(home, tc.configHome))
+			}
+			machineGOOSFn = func() string { return tc.goos }
+			for _, f := range tc.files {
+				writeTierFile(t, filepath.Join(home, f), "github_user: fixture\n")
+			}
+			got, err := MachineConfigDir()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := filepath.Join(home, tc.want); got != want {
+				t.Errorf("MachineConfigDir() = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 // #1049 — the strip ran BEFORE the warning pass, so the one key the loader
 // deletes outright could never trigger its own warning.
 //

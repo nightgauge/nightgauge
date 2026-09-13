@@ -77,6 +77,37 @@ type RunOptions struct {
 	// as "" either: readers test presence, so an empty export would be adopted
 	// as an identity that names nothing.
 	RunID string
+
+	// RunRoot is the per-run root the manager prepared through the adapter's
+	// optional PrepareRunRoot hook, before BuildCommand. It is nil for every
+	// adapter without the hook. Only the opencode adapter has one (ADR-022
+	// § 8): every stage of a run shares it, and the run's end deletes it.
+	RunRoot *RunRoot
+}
+
+// RunRootRequest is what the manager hands an adapter's PrepareRunRoot hook.
+type RunRootRequest struct {
+	// ID names the root: the run identity when the dispatch has one, or an id
+	// the manager minted for this dispatch alone, which is never exported as
+	// RunIDEnvVar. It always passes runstate.IsIdentity.
+	ID string
+	// MachineConfigDir is the directory of the machine-tier Nightgauge config
+	// this process reads (config.MachineConfigDir). An adapter that moves
+	// XDG_CONFIG_HOME for its child pins NIGHTGAUGE_CONFIG_HOME to it, so a
+	// nightgauge command the stage runs reads the same machine tier.
+	MachineConfigDir string
+}
+
+// RunRoot is a directory private to one pipeline run, where an adapter whose
+// CLI keeps state of its own (config, sessions, transcripts, logs) keeps it
+// apart from the operator's.
+type RunRoot struct {
+	// Dir is the root directory.
+	Dir string
+	// Env points the CLI at Dir and re-pins the tools that move with it,
+	// resolved against the environment this process inherited when the root
+	// was prepared. BuildCommand merges it into its exports.
+	Env map[string]string
 }
 
 // RunResult captures the output of a skill execution.

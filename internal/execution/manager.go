@@ -12,15 +12,18 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
+	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -308,6 +311,43 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 		}
 	}
 
+	// Per-run root (ADR-022 § 8, § 22): an adapter whose CLI keeps state of
+	// its own exposes the optional PrepareRunRoot hook and gets a root private
+	// to the run, shared by every stage of it. Only the opencode adapter has
+	// one. It is prepared after every check above, so a refused dispatch
+	// creates nothing, and before BuildCommand, which points the CLI at it.
+	//
+	// The root is named by the run identity, and the run's end deletes it
+	// (Scheduler.runPipeline's terminal defer, CleanupOpenCodeRunRoot). A
+	// dispatch with no identity gets an id minted for it alone, never exported
+	// as NIGHTGAUGE_RUN_ID, and its root is deleted when this call returns.
+	if preparer, ok := adapter.(interface {
+		PrepareRunRoot(adapters.RunRootRequest) (*adapters.RunRoot, error)
+	}); ok {
+		id := runOpts.RunID
+		if !runstate.IsIdentity(id) {
+			minted, mintErr := runstate.NewRunID()
+			if mintErr != nil {
+				return nil, fmt.Errorf("per-run root for adapter %q: mint an id: %w", adapter.Name(), mintErr)
+			}
+			id = minted
+			defer func() {
+				if err := m.CleanupOpenCodeRunRoot(id); err != nil {
+					fmt.Fprintf(os.Stderr, "[opencode] could not delete the per-run root of a dispatch with no run identity: %v\n", err)
+				}
+			}()
+		}
+		machineDir, dirErr := config.MachineConfigDir()
+		if dirErr != nil {
+			return nil, fmt.Errorf("per-run root for adapter %q: resolve the machine-tier config directory: %w", adapter.Name(), dirErr)
+		}
+		root, prepErr := preparer.PrepareRunRoot(adapters.RunRootRequest{ID: id, MachineConfigDir: machineDir})
+		if prepErr != nil {
+			return nil, fmt.Errorf("dispatch refused for adapter %q: %w", adapter.Name(), prepErr)
+		}
+		runOpts.RunRoot = root
+	}
+
 	cmdName, args, env := adapter.BuildCommand(runOpts)
 
 	// Prepare OS command
@@ -334,14 +374,28 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	// Merge environment. An adapter whose CLI must not inherit some host
-	// variables names them through the optional WithheldEnv hook, found the
-	// same way as the hooks above (ADR-022 § 17: OpenCode reads stored logins
-	// from OPENCODE_AUTH_CONTENT).
-	var withheld []string
-	if w, ok := adapter.(interface{ WithheldEnv() []string }); ok {
-		withheld = w.WithheldEnv()
+	// variables decides which through the optional WithholdsEnv hook, found
+	// the same way as the hooks above, one variable name at a time (ADR-022
+	// § 8: OpenCode inherits no OPENCODE_* variable and no other model
+	// service's API key).
+	var withhold func(key string) bool
+	if w, ok := adapter.(interface {
+		WithholdsEnv(adapters.RunOptions, string) bool
+	}); ok {
+		withhold = func(key string) bool { return w.WithholdsEnv(runOpts, key) }
 	}
-	cmd.Env = composeStageEnv(os.Environ(), withheld, env, opts.SkillPath, runOpts.RunID)
+	cmd.Env = composeStageEnv(os.Environ(), withhold, env, opts.SkillPath, runOpts.RunID)
+
+	// Output redaction (ADR-022 § 22): an adapter that hands its child secrets
+	// through the environment names those variables through the optional
+	// RedactedEnv hook, and their values are removed from every line the child
+	// prints before it is streamed or kept.
+	var redact *strings.Replacer
+	if r, ok := adapter.(interface {
+		RedactedEnv(adapters.RunOptions) []string
+	}); ok {
+		redact = envValueRedactor(cmd.Env, r.RedactedEnv(runOpts))
+	}
 
 	// Set up stdin pipe for adapters that receive prompt via stdin
 	var stdinPipe io.WriteCloser
@@ -442,7 +496,7 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 		inferer := NewPhaseInferer(opts.Stage)
 		started := false
 		for scanner.Scan() {
-			line := scanner.Bytes()
+			line := redactLine(redact, scanner.Bytes())
 			stdoutBuf = append(stdoutBuf, line...)
 			stdoutBuf = append(stdoutBuf, '\n')
 			lineStr := string(line)
@@ -487,7 +541,7 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 		scanner := bufio.NewScanner(stderr)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
-			line := scanner.Bytes()
+			line := redactLine(redact, scanner.Bytes())
 			stderrBuf = append(stderrBuf, line...)
 			stderrBuf = append(stderrBuf, '\n')
 			if opts.Streamer != nil {
@@ -922,20 +976,33 @@ func buildRunOptions(opts StageOptions, worktreeDir string) adapters.RunOptions 
 // Extracted from RunStage for the same reason buildRunOptions was. This env IS
 // the interface between this process and the child; inline in a function whose
 // next statement spawns a process, it was assertable only by spawning one.
-func composeStageEnv(base, withheld []string, adapterEnv map[string]string, skillPath, runID string) []string {
+func composeStageEnv(base []string, withhold func(key string) bool, adapterEnv map[string]string, skillPath, runID string) []string {
 	// Deterministic Node for the stage subprocess (#3863): a non-interactive
 	// spawn does not inherit the login shell's nvm PATH, so resolve Node from
 	// the host's nvm `default` alias and prepend it. No-op when node is already
 	// on PATH (hosted runners) or unresolvable.
 	env, _ := applyNodeResolution(base)
 	// Withheld means not inherited: the host's value is removed before the
-	// adapter's exports are added, and none of them is read, so none is
-	// logged. Removal, not an empty value, because a reader may test presence.
-	for _, key := range withheld {
-		env = removeEnvVar(env, key)
+	// adapter's exports are added, and the decision reads only the name, so no
+	// value is read or logged. Removal, not an empty value, because a reader
+	// may test presence. The adapter's exports come after, so an export whose
+	// name the adapter withholds from the host still arrives.
+	if withhold != nil {
+		kept := env[:0:0]
+		for _, kv := range env {
+			key, _, _ := strings.Cut(kv, "=")
+			if !withhold(key) {
+				kept = append(kept, kv)
+			}
+		}
+		env = kept
 	}
+	// Upserted, not appended: an export replaces the host's value of the same
+	// name rather than landing beside it with precedence left to the reader.
+	// The opencode adapter re-points XDG_CONFIG_HOME, GH_CONFIG_DIR and
+	// NIGHTGAUGE_CONFIG_HOME, and a stale inherited copy must not survive.
 	for k, v := range adapterEnv {
-		env = append(env, fmt.Sprintf("%s=%s", k, v))
+		env = upsertEnvVar(env, k, v)
 	}
 
 	// Export the running binary so skill subprocesses discover it under any
@@ -975,6 +1042,75 @@ func composeStageEnv(base, withheld []string, adapterEnv map[string]string, skil
 	}
 
 	return env
+}
+
+// redactedSecretMinLen is the shortest environment value envValueRedactor
+// treats as a secret. Every secret it exists for is far longer (the opencode
+// server password is 26 characters, a GitHub token 40 or more), and a short
+// value, such as a variable set to "1", would redact every occurrence of an
+// ordinary string.
+const redactedSecretMinLen = 8
+
+// envValueRedactor returns a replacer that swaps the value of each variable
+// in names, as env holds it, for "[REDACTED:<name>]", or nil when none of
+// them holds a value worth redacting. Longer values are matched first, so a
+// secret that contains another is replaced whole.
+func envValueRedactor(env, names []string) *strings.Replacer {
+	type secret struct{ name, value string }
+	var secrets []secret
+	for _, name := range names {
+		if value, ok := lookupEnvList(env, name); ok && len(value) >= redactedSecretMinLen {
+			secrets = append(secrets, secret{name, value})
+		}
+	}
+	if len(secrets) == 0 {
+		return nil
+	}
+	sort.SliceStable(secrets, func(i, j int) bool { return len(secrets[i].value) > len(secrets[j].value) })
+	pairs := make([]string, 0, 2*len(secrets))
+	for _, s := range secrets {
+		pairs = append(pairs, s.value, "[REDACTED:"+s.name+"]")
+	}
+	return strings.NewReplacer(pairs...)
+}
+
+// lookupEnvList returns the value env, a KEY=VALUE list, holds for key: the
+// last entry wins, as it does for exec.Cmd.
+func lookupEnvList(env []string, key string) (string, bool) {
+	prefix := key + "="
+	value, found := "", false
+	for _, kv := range env {
+		if strings.HasPrefix(kv, prefix) {
+			value, found = strings.TrimPrefix(kv, prefix), true
+		}
+	}
+	return value, found
+}
+
+// redactLine applies redact to one line of child output. With no redactor the
+// scanner's bytes are returned as they are.
+func redactLine(redact *strings.Replacer, line []byte) []byte {
+	if redact == nil {
+		return line
+	}
+	return []byte(redact.Replace(string(line)))
+}
+
+// CleanupOpenCodeRunRoot deletes the OpenCode per-run root of the run runID
+// (ADR-022 § 22), and with it the run's session database, transcripts and
+// logs. Every terminal outcome of a run calls it, whatever adapter its stages
+// used, because any of them may have run on opencode. A run with no identity
+// has no root to delete, and a missing root is not an error.
+// adapters.RemoveOpenCodeRunRoot refuses anything that is not a root.
+func (m *Manager) CleanupOpenCodeRunRoot(runID string) error {
+	if runID == "" {
+		return nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("opencode run root: %w", err)
+	}
+	return adapters.RemoveOpenCodeRunRoot(home, runID)
 }
 
 // ExecutionInfo is a summary of a running execution (safe for serialization).

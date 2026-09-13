@@ -58,13 +58,12 @@ changelog, and the release workflow refuses a tag that does not.
   dispatch unless `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` is set in the
   environment, and each dispatch it allows warns which controls are not
   enforced yet. A stage names its model as `<provider>/<model>`, and the
-  adapter never infers a provider from a bare id. An `anthropic/*` model is
-  refused even with the switch set, until Anthropic through OpenCode is held
-  to `ANTHROPIC_API_KEY` and never uses a stored subscription or OAuth login;
-  run Anthropic models on `claude-headless` meanwhile. The prompt goes on
-  stdin, never argv, every spawn gets its own server password, and no spawn
-  inherits `OPENCODE_AUTH_CONTENT`, a variable OpenCode reads stored logins
-  from.
+  adapter never infers a provider from a bare id. An `anthropic/*` model needs
+  `ANTHROPIC_API_KEY` and never uses a stored subscription or OAuth login;
+  `claude-headless` runs Anthropic models on a Claude subscription. The prompt
+  goes on stdin, never argv, every spawn gets its own server password, and no
+  spawn inherits `OPENCODE_AUTH_CONTENT`, a variable OpenCode reads stored
+  logins from.
   [ADR-022](docs/decisions/022-opencode-multi-provider-adapter.md) records the
   design (#1612)
 - The model registry names the provider behind an `opencode` model from its
@@ -196,6 +195,28 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Security
 
+- OpenCode stages run in a private directory per pipeline run
+  (`~/.nightgauge/opencode/runs/<run>/`), deleted when the run ends: a run
+  reads none of your own OpenCode config, plugins, logins or `~/.agents/skills`,
+  and its transcripts never appear in your `opencode session list`. Every
+  other tool's config in your XDG config directory, gh's and git's included,
+  Go's build cache and Nightgauge's machine config still resolve to yours. A
+  stage inherits no `OPENCODE_*` variable, no `ANTHROPIC_BASE_URL` or
+  `OPENAI_BASE_URL`, and none of the variables OpenCode's provider catalog
+  binds to a model service other than its own; a stage's tools lose those
+  variables too, and each dispatch names the ones it withheld. The forge tokens
+  and your cloud platform credentials (AWS, Google Cloud, Cloudflare,
+  Databricks and others) are kept whole, so a stage's tools act as the identity
+  you chose instead of falling back to a credentials file or profile. That
+  does not stop every other provider: the dispatch warning lists what still
+  reaches one. The
+  server password, the forge tokens and the stage's own provider's variables
+  are redacted from its captured output, and no other secret is yet. Dispatch
+  is refused while `~/.opencode` or this machine's managed OpenCode config
+  holds config, which OpenCode reads whatever the run's directories; move
+  `~/.opencode`'s entries to `~/.config/opencode`, or set
+  `NIGHTGAUGE_OPENCODE_INHERIT_USER_CONFIG=1` to run with your OpenCode config
+  (#1616)
 - The VS Code extension's Grok and Codex setup now installs only the skills
   and Codex commands bundled with the extension. It no longer copies the open
   workspace's `skills/` or `.codex/commands/` folder into `~/.grok` or
