@@ -281,10 +281,18 @@ func TestOpenCodeGate(t *testing.T) {
 // can name another model that receives the prompt: session-title generation
 // sends it to small_model, and the title and compaction agents and every
 // subagent run on their agent's model (§ 10, § 15), on any provider whose API
-// key the run holds. And an endpoint can forward: a local Ollama serves its
-// cloud models from Ollama's hosted service (§ 3, § Endpoints). So the egress
-// line names the repository's config, both keys and the API key they need,
-// and the endpoint line names Ollama cloud models.
+// key the run holds. Withholding other providers' variables does not close
+// that: the stage keeps GITHUB_TOKEN and GITLAB_TOKEN for the forge, which the
+// catalog binds to github-copilot and gitlab, a provider's loader can find
+// credentials outside the environment, and OpenCode's own hosted provider
+// needs no key for its free models. And an endpoint can forward: a local
+// Ollama serves its cloud models from Ollama's hosted service (§ 3,
+// § Endpoints). So the egress line names the repository's config, both keys,
+// the API key they need and each way a run reaches a provider without one it
+// was given, and the endpoint line names Ollama cloud models. The warning is
+// also the only disclosure of what the output redaction leaves in place and
+// of a repository whose steering does not load, so those lines name exactly
+// what is redacted and which steering file is dropped.
 func TestOpenCodeWarningDisclosesWhereThePromptCanGo(t *testing.T) {
 	gaps := map[string]string{}
 	for _, c := range openCodeUnenforcedControls {
@@ -294,8 +302,14 @@ func TestOpenCodeWarningDisclosesWhereThePromptCanGo(t *testing.T) {
 		"egress defaults": {
 			"session-title generation", "stage prompt", "small_model",
 			"the target repository's opencode.json or .opencode/", "an agent's model", "subagent", "API key",
+			"GITHUB_TOKEN", "GITLAB_TOKEN", "github-copilot", "AWS profile", "OpenCode's own hosted provider",
 		},
 		"endpoint policy": {"Ollama cloud model", "Ollama's hosted service"},
+		"output redaction": {
+			"only the values of the server password, GITHUB_TOKEN, GH_TOKEN, GITLAB_TOKEN",
+			"the dispatched provider", "every other secret the child holds", "stays in it",
+		},
+		"repository steering": {"AGENTS.md", "not its CLAUDE.md", "runs without it"},
 	} {
 		gap, ok := gaps[name]
 		if !ok {

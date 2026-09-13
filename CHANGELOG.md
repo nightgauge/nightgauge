@@ -150,14 +150,21 @@ changelog, and the release workflow refuses a tag that does not.
 - OpenCode stages run in a private directory per pipeline run
   (`~/.nightgauge/opencode/runs/<run>/`), deleted when the run ends: a run
   reads none of your own OpenCode config, plugins, logins or `~/.agents/skills`,
-  and its transcripts never appear in your `opencode session list`. gh, git,
+  and its transcripts never appear in your `opencode session list`. Every
+  other tool's config in your XDG config directory, gh's and git's included,
   Go's build cache and Nightgauge's machine config still resolve to yours. A
-  stage inherits no `OPENCODE_*` variable and no API key but its own
-  provider's, and the secrets Nightgauge hands it are redacted from its
-  captured output. Dispatch is refused while `~/.opencode` holds config, which
-  OpenCode reads whatever the run's directories; move it to
-  `~/.config/opencode`, or set `NIGHTGAUGE_OPENCODE_INHERIT_USER_CONFIG=1` to
-  run with your OpenCode config (#1616)
+  stage inherits no `OPENCODE_*` variable, no `ANTHROPIC_BASE_URL` or
+  `OPENAI_BASE_URL`, and none of the variables OpenCode's provider catalog
+  binds to a provider other than its own, `GITHUB_TOKEN` and `GITLAB_TOKEN`
+  excepted; a stage's tools lose those variables too. That does not stop every
+  other provider: the dispatch warning lists what still reaches one. The
+  server password, the forge tokens and the stage's own provider's variables
+  are redacted from its captured output, and no other secret is yet. Dispatch
+  is refused while `~/.opencode` or this machine's managed OpenCode config
+  holds config, which OpenCode reads whatever the run's directories; move
+  `~/.opencode`'s entries to `~/.config/opencode`, or set
+  `NIGHTGAUGE_OPENCODE_INHERIT_USER_CONFIG=1` to run with your OpenCode config
+  (#1616)
 - The VS Code extension's Grok and Codex setup now installs only the skills
   and Codex commands bundled with the extension. It no longer copies the open
   workspace's `skills/` or `.codex/commands/` folder into `~/.grok` or

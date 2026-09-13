@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/user"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -35,6 +36,10 @@ import (
 //     scans; nothing but HOME stops the $HOME/.opencode read, so PreDispatch
 //     refuses a dispatch while that directory holds config
 //     (openCodeHomeConfigRefusal).
+//   - The machine's managed OpenCode config merges above every other layer,
+//     OPENCODE_CONFIG_CONTENT included, and nothing moves it, so PreDispatch
+//     refuses a dispatch while it exists as well
+//     (openCodeManagedConfigRefusal).
 
 // OpenCodeInheritUserConfigEnvVar layers the operator's own global OpenCode
 // config back into pipeline runs when it is exactly "1" (ADR-022 § 8).
@@ -69,7 +74,11 @@ var openCodeXDGDirs = []struct{ env, dir string }{
 // them: Nightgauge disables what it means to and no more. Nor is
 // OPENCODE_DISABLE_PROJECT_CONFIG yet: on 1.18.30 it also hides the
 // repository's AGENTS.md and CLAUDE.md, so it lands with the steering
-// injection that replaces them (#1626, #1638).
+// injection that replaces them (#1626, #1638). Until then
+// OPENCODE_DISABLE_CLAUDE_CODE_PROMPT already hides the repository's
+// CLAUDE.md, as well as ~/.claude/CLAUDE.md, so a repository whose only
+// steering is CLAUDE.md runs without it; the "repository steering" warning
+// line says so.
 var openCodeDisableFlags = []string{
 	"OPENCODE_DISABLE_MODELS_FETCH",
 	"OPENCODE_DISABLE_AUTOUPDATE",
@@ -83,29 +92,42 @@ var openCodeDisableFlags = []string{
 	"OPENCODE_DISABLE_EXTERNAL_SKILLS",
 }
 
-// openCodeProviderCredentialEnv maps an OpenCode provider key to the API-key
-// variables OpenCode 1.18.30's bundled catalog binds to it. A spawn keeps only
-// the variables of the provider it dispatches to and inherits none of the
-// others (OpenCodeWithholdsEnv), so a run on a local model sees no hosted
-// provider's key, and a hosted run sees only its own provider's.
-var openCodeProviderCredentialEnv = map[string][]string{
-	"anthropic":  {"ANTHROPIC_API_KEY"},
-	"openai":     {"OPENAI_API_KEY"},
-	"xai":        {"XAI_API_KEY"},
-	"google":     {"GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY", "GEMINI_API_KEY"},
-	"openrouter": {"OPENROUTER_API_KEY"},
-}
+// openCodeForgeEnv are the Git forge credentials a stage keeps whatever
+// provider it runs on: the stage's tools reach the forge with them, and the
+// adapter exports GITHUB_TOKEN itself. The bundled catalog also binds them,
+// GITHUB_TOKEN to github-copilot and GITLAB_TOKEN to gitlab, so OpenCode can
+// load those providers in any run that holds them; the egress-defaults warning
+// line says so until the per-run config pins every model a run uses (#1625).
+var openCodeForgeEnv = []string{"GITHUB_TOKEN", "GITLAB_TOKEN"}
 
-// openCodeCredentialEnv is every variable in openCodeProviderCredentialEnv,
-// sorted.
-var openCodeCredentialEnv = func() []string {
-	var names []string
-	for _, vars := range openCodeProviderCredentialEnv {
-		names = append(names, vars...)
+// openCodeEndpointEnv are the variables the Anthropic and OpenAI SDKs bundled
+// in OpenCode 1.18.30 read as the provider's base URL when no config gives
+// one. Observed: with ANTHROPIC_BASE_URL set, an anthropic/ run sent its
+// request, and the API key with it, to that server, and OPENAI_BASE_URL did
+// the same for an openai/ run. An inherited value could send a stage and its
+// key anywhere, a proxy that serves a subscription included, so no spawn
+// inherits one: a provider's endpoint comes from config only (ADR-022 § 8,
+// § 17, § Endpoints).
+var openCodeEndpointEnv = []string{"ANTHROPIC_BASE_URL", "OPENAI_BASE_URL"}
+
+// openCodeCatalogEnvNames is every variable openCodeCatalogEnv binds to any
+// provider.
+var openCodeCatalogEnvNames = func() map[string]bool {
+	names := map[string]bool{}
+	for _, vars := range openCodeCatalogEnv {
+		for _, v := range vars {
+			names[v] = true
+		}
 	}
-	slices.Sort(names)
 	return names
 }()
+
+// openCodeDispatchProvider is the provider key model names, parsed the way
+// openCodeModelArg parses it: trimmed, and cut at the first slash.
+func openCodeDispatchProvider(model string) string {
+	provider, _, _ := strings.Cut(strings.TrimSpace(model), "/")
+	return provider
+}
 
 // OpenCodeWithholdsEnv reports whether an inherited environment variable named
 // key must not reach an opencode child dispatched to model. It decides on the
@@ -120,18 +142,27 @@ var openCodeCredentialEnv = func() []string {
 //     the provider catalog. A variable a later version adds goes with them.
 //     The adapter's own OPENCODE_* exports are added after this filter, so
 //     they survive it.
-//   - Every hosted provider's API-key variable except those of the provider
-//     key model names (openCodeProviderCredentialEnv). A local model gets
-//     none of them.
+//   - The provider base-URL variables (openCodeEndpointEnv), whatever the
+//     provider.
+//   - Every variable the bundled catalog binds to a provider other than the
+//     one model names (openCodeCatalogEnv), except the forge credentials
+//     (openCodeForgeEnv). OpenCode loads a catalog provider when any one of
+//     its variables is set, so this keeps a run from holding another
+//     provider's credentials: a run on a local model keeps at most its own
+//     provider's (lmstudio's LMSTUDIO_API_KEY) and no hosted provider's. It
+//     does not decide every provider a run can reach: a provider's own loader
+//     can find credentials the catalog does not name, such as an AWS profile,
+//     and OpenCode's own hosted provider serves its free models with no key.
+//     The stage's tools share the environment, so they lose these variables
+//     too.
 func OpenCodeWithholdsEnv(model, key string) bool {
-	if strings.HasPrefix(key, "OPENCODE_") {
+	if strings.HasPrefix(key, "OPENCODE_") || slices.Contains(openCodeEndpointEnv, key) {
 		return true
 	}
-	if !slices.Contains(openCodeCredentialEnv, key) {
+	if !openCodeCatalogEnvNames[key] || slices.Contains(openCodeForgeEnv, key) {
 		return false
 	}
-	provider, _, _ := strings.Cut(strings.TrimSpace(model), "/")
-	return !slices.Contains(openCodeProviderCredentialEnv[provider], key)
+	return !slices.Contains(openCodeCatalogEnv[openCodeDispatchProvider(model)], key)
 }
 
 // OpenCodeRunsDir is the directory every OpenCode per-run root lives in.
@@ -163,13 +194,20 @@ func OpenCodeRunRoot(home, id string) (string, error) {
 // link planted in the root. Nothing else is created: in particular no
 // auth.json, so the data directory starts empty (ADR-022 § 17).
 //
-// When the operator has an XDG git config directory ($XDG_CONFIG_HOME/git,
-// else ~/.config/git, resolved from lookup), config/git is a symbolic link to
-// it. git reads its XDG config, ignore, attributes and credentials files from
-// $XDG_CONFIG_HOME/git, so with the link git inside the stage reads the same
-// files, in the same order beside ~/.gitconfig, as it does outside. With no
-// XDG git directory there is nothing to link: git reads ~/.gitconfig, which
-// XDG does not move. An inherited GIT_CONFIG_GLOBAL passes through untouched.
+// config/ holds a symbolic link to every entry of the operator's XDG config
+// directory ($XDG_CONFIG_HOME, else ~/.config, resolved from lookup) except
+// OpenCode's own, opencode/, which stays the run's. Every tool the stage
+// starts inherits the run's XDG_CONFIG_HOME, so without the links each would
+// lose the config it keeps there and fall back to its defaults: git its XDG
+// config, ignore, attributes and credentials files, uv and pip a private
+// package index, podman its registries. With them, each reads the operator's
+// files as it does outside, and git reads them in the same order beside
+// ~/.gitconfig; an inherited GIT_CONFIG_GLOBAL passes through untouched.
+// Of that directory, OpenCode 1.18.30 loads its config, plugins, agents and
+// skills from opencode/ alone. Every call links
+// the entries the operator has added since, and re-points a link whose
+// directory moved. An entry the run created itself, while the operator had
+// none, is not a link and is left as it is.
 //
 // Every call refreshes the root's modification time, which is what
 // SweepOpenCodeRunRoots ages.
@@ -189,7 +227,7 @@ func EnsureOpenCodeRunRoot(home, id string, lookup func(string) (string, bool)) 
 			return "", false, err
 		}
 	}
-	if err := linkOperatorGitDir(root, operatorXDGConfigHome(home, lookup)); err != nil {
+	if err := linkOperatorConfig(root, operatorXDGConfigHome(home, lookup)); err != nil {
 		return "", false, err
 	}
 	now := time.Now()
@@ -222,36 +260,61 @@ func ensurePrivateDir(path string) (bool, error) {
 	return mkErr == nil, nil
 }
 
-// linkOperatorGitDir points root/config/git at the operator's XDG git config
-// directory when there is one. See EnsureOpenCodeRunRoot.
-func linkOperatorGitDir(root, operatorConfigHome string) error {
-	target := filepath.Join(operatorConfigHome, "git")
-	if !filepath.IsAbs(target) {
+// linkOperatorConfig links every entry of the operator's XDG config directory
+// except OpenCode's own into root/config. See EnsureOpenCodeRunRoot.
+func linkOperatorConfig(root, operatorConfigHome string) error {
+	if !filepath.IsAbs(operatorConfigHome) {
 		return nil
 	}
-	if fi, err := os.Stat(target); err != nil || !fi.IsDir() {
+	if fi, err := os.Stat(operatorConfigHome); err != nil || !fi.IsDir() {
 		return nil
 	}
-	link := filepath.Join(root, "config", "git")
-	current, err := os.Readlink(link)
+	entries, err := os.ReadDir(operatorConfigHome)
+	if err != nil {
+		return fmt.Errorf("opencode run root: read the operator's XDG config directory: %w", err)
+	}
+	for _, e := range entries {
+		// EqualFold: on a case-insensitive filesystem a link named OpenCode
+		// would be the run's own opencode/ directory.
+		if strings.EqualFold(e.Name(), "opencode") {
+			continue
+		}
+		link := filepath.Join(root, "config", e.Name())
+		if err := linkOperatorConfigEntry(link, filepath.Join(operatorConfigHome, e.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// linkOperatorConfigEntry makes link a symbolic link to target, unless
+// something that is not a link is already there.
+func linkOperatorConfigEntry(link, target string) error {
+	fi, err := os.Lstat(link)
 	switch {
-	case err == nil && current == target:
+	case errors.Is(err, fs.ErrNotExist):
+	case err != nil:
+		return fmt.Errorf("opencode run root: %w", err)
+	case fi.Mode()&fs.ModeSymlink == 0:
+		// The run created it while the operator had no such entry.
 		return nil
-	case err == nil:
-		// The operator's XDG directory moved since an earlier stage linked it.
-		if err := os.Remove(link); err != nil {
+	default:
+		current, err := os.Readlink(link)
+		if err == nil && current == target {
+			return nil
+		}
+		// The operator's XDG config directory moved since an earlier stage
+		// linked it.
+		if err := os.Remove(link); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return fmt.Errorf("opencode run root: %w", err)
 		}
-	case errors.Is(err, fs.ErrNotExist):
-	default:
-		return fmt.Errorf("opencode run root: %s exists and is not a link to the operator's git config directory", link)
 	}
 	if err := os.Symlink(target, link); err != nil && !errors.Is(err, fs.ErrExist) {
 		return fmt.Errorf("opencode run root: %w", err)
 	}
 	// A parallel stage of the same run may have created it first.
 	if current, err := os.Readlink(link); err != nil || current != target {
-		return fmt.Errorf("opencode run root: %s does not link to the operator's git config directory", link)
+		return fmt.Errorf("opencode run root: %s does not link to the operator's %s", link, target)
 	}
 	return nil
 }
@@ -262,8 +325,8 @@ func linkOperatorGitDir(root, operatorConfigHome string) error {
 // It refuses an id that is not a run identity, a root that is itself a
 // symbolic link or not a directory, and a root that does not resolve to a
 // directory directly under OpenCodeRunsDir. Inside the root nothing is
-// followed: os.RemoveAll unlinks a symbolic link, such as config/git, and
-// never deletes what it points at.
+// followed: os.RemoveAll unlinks a symbolic link, such as a link in config/
+// to the operator's config, and never deletes what it points at.
 func RemoveOpenCodeRunRoot(home, id string) error {
 	root, err := OpenCodeRunRoot(home, id)
 	if err != nil {
@@ -366,13 +429,15 @@ type OpenCodeIsolation struct {
 //     NIGHTGAUGE_CONFIG_HOME to the machine-tier config directory; and, when
 //     the operator has not set GOCACHE, GOCACHE to the Go build cache the
 //     operator's go uses, so builds are not cold in every stage (the Linux
-//     default moves with XDG_CACHE_HOME). git needs no variable: see
+//     default moves with XDG_CACHE_HOME). git, and every other tool that
+//     reads its config from the XDG config directory, needs no variable: see
 //     EnsureOpenCodeRunRoot;
 //   - with InheritUserConfig, OPENCODE_CONFIG_DIR at the operator's own
 //     OpenCode config directory, which layers its opencode.json,
 //     opencode.jsonc, agents, commands, modes, plugins, tools and skills back
 //     in. Observed on 1.18.30, OpenCode merges that directory above the
-//     per-run config file and below OPENCODE_CONFIG_CONTENT.
+//     per-run config file and below OPENCODE_CONFIG_CONTENT, and the machine's
+//     managed config above both.
 //
 // An inherited value of any of these names is replaced by the manager, never
 // left beside the export.
@@ -464,6 +529,60 @@ func openCodeHomeConfigRefusal(home string) error {
 			"Move those entries into your XDG OpenCode config directory (%s), which your own OpenCode sessions still read and pipeline runs do not, "+
 			"or set %s=1 to run pipeline stages with your OpenCode config. See docs/decisions/022-opencode-multi-provider-adapter.md § 8",
 		dir, strings.Join(found, ", "), filepath.Join("~", ".config", "opencode"), OpenCodeInheritUserConfigEnvVar)
+}
+
+// openCodeManagedConfigFiles are the machine-wide managed config files
+// opencode 1.18.30 reads on goos, from its bundled source: opencode.json and
+// opencode.jsonc in the managed config directory, /etc/opencode on Linux and
+// /Library/Application Support/opencode on macOS, and on macOS the
+// managed-preferences profile, the user's and then the machine's. username is
+// the current user's name. OpenCode merges these after
+// OPENCODE_CONFIG_CONTENT, so a key in them wins over every key a run is
+// given, and no XDG or HOME variable moves them.
+func openCodeManagedConfigFiles(goos, username string) []string {
+	dir := "/etc/opencode"
+	if goos == "darwin" {
+		dir = "/Library/Application Support/opencode"
+	}
+	files := []string{filepath.Join(dir, "opencode.json"), filepath.Join(dir, "opencode.jsonc")}
+	if goos == "darwin" {
+		const profile = "ai.opencode.managed.plist"
+		files = append(files,
+			filepath.Join("/Library/Managed Preferences", username, profile),
+			filepath.Join("/Library/Managed Preferences", profile))
+	}
+	return files
+}
+
+// openCodeUsername is the user name OpenCode reads its per-user managed
+// preferences under: the current user's, or "user" when it has none.
+func openCodeUsername() string {
+	if u, err := user.Current(); err == nil && u.Username != "" {
+		return u.Username
+	}
+	return "user"
+}
+
+// openCodeManagedConfigRefusal refuses a dispatch while any of files, the
+// machine's managed OpenCode config (openCodeManagedConfigFiles), exists.
+// Observed on 1.18.30, a key in the managed config directory wins over the
+// same key in OPENCODE_CONFIG_CONTENT, the layer Nightgauge's locked keys go in
+// (ADR-022 § 8, § 15), so a run cannot be isolated from it. The refusal names
+// the files and never reads them.
+func openCodeManagedConfigRefusal(files []string) error {
+	var found []string
+	for _, f := range files {
+		if _, err := os.Lstat(f); err == nil {
+			found = append(found, f)
+		}
+	}
+	if len(found) == 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"this machine has managed OpenCode config (%s), which OpenCode merges above every config a pipeline run is given, Nightgauge's own included, whatever the run's directories are, so a pipeline run cannot be isolated from it. "+
+			"Remove it, or set %s=1 to run pipeline stages with it and the rest of your OpenCode config. See docs/decisions/022-opencode-multi-provider-adapter.md § 8",
+		strings.Join(found, ", "), OpenCodeInheritUserConfigEnvVar)
 }
 
 // openCodeStoredLoginRefusal refuses a dispatch whose run root holds an

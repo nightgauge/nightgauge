@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -154,22 +155,34 @@ func TestOpenCodeDisableFlags(t *testing.T) {
 
 // TestOpenCodeWithholdsEnv is the inherited-environment policy (ADR-022 § 8,
 // § 17). Every OPENCODE_* variable is withheld, a login-bearing one and a
-// name no version has yet alike. A local model inherits none of the hosted
-// providers' API keys; the list is literal here, so emptying the adapter's
-// strip list fails. A hosted model keeps its own provider's keys and no
-// other's. Everything else passes through.
+// name no version has yet alike, and so are the provider base-URL variables,
+// whatever the provider. A local model inherits none of the variables
+// OpenCode's catalog binds to a hosted provider: the issue's seven, and the
+// rest of the catalog's, each of which makes OpenCode load its provider
+// (GROQ_API_KEY adds groq's models, and AWS_REGION alone amazon-bedrock's).
+// The lists are literal here, so narrowing the adapter's fails. A hosted model
+// keeps its own provider's variables and no other's. The forge tokens, a
+// variable no catalog entry binds, and everything else pass through.
 func TestOpenCodeWithholdsEnv(t *testing.T) {
 	cloudKeys := []string{
 		"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "XAI_API_KEY", "GEMINI_API_KEY",
 		"GOOGLE_API_KEY", "OPENROUTER_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY",
+		"GROQ_API_KEY", "MISTRAL_API_KEY", "DEEPSEEK_API_KEY", "LMSTUDIO_API_KEY",
+		"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "AWS_BEARER_TOKEN_BEDROCK",
+		"GOOGLE_APPLICATION_CREDENTIALS", "HF_TOKEN", "CLOUDFLARE_API_TOKEN", "DATABRICKS_HOST",
 	}
+	endpointVars := []string{"ANTHROPIC_BASE_URL", "OPENAI_BASE_URL"}
 	openCodeVars := []string{
 		"OPENCODE_AUTH_CONTENT", "OPENCODE_CONSOLE_TOKEN", "OPENCODE_DB",
 		"OPENCODE_CONFIG_CONTENT", "OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR",
 		"OPENCODE_MODELS_PATH", "OPENCODE_PERMISSION", "OPENCODE_SERVER_PASSWORD",
-		"OPENCODE_A_VARIABLE_A_LATER_VERSION_ADDS",
+		"OPENCODE_API_KEY", "OPENCODE_A_VARIABLE_A_LATER_VERSION_ADDS",
 	}
-	passes := []string{"PATH", "HOME", "GITHUB_TOKEN", "NIGHTGAUGE_ISSUE_NUMBER", "opencode_config", "DEEPSEEK_API_KEY_NOT_LISTED"}
+	passes := []string{
+		"PATH", "HOME", "GITHUB_TOKEN", "GITLAB_TOKEN", "GH_TOKEN", "NIGHTGAUGE_ISSUE_NUMBER",
+		"opencode_config", "DEEPSEEK_API_KEY_NOT_LISTED", "NIGHTGAUGE_TEST_UNBOUND_API_KEY",
+	}
+	alwaysWithheld := slices.Concat(endpointVars, openCodeVars)
 
 	for _, model := range []string{"lmstudio/qwen/qwen3.8-27b", "ollama/qwen3-coder:30b"} {
 		provider, _, _ := models.ParseOpenCodeModel(model)
@@ -178,16 +191,22 @@ func TestOpenCodeWithholdsEnv(t *testing.T) {
 		}
 	}
 	for _, model := range []string{"lmstudio/qwen/qwen3.8-27b", "ollama/qwen3-coder:30b", "lmstudio-remote/qwen/qwen3.8-27b", ""} {
-		for _, key := range append(append([]string{}, cloudKeys...), openCodeVars...) {
+		for _, key := range slices.Concat(cloudKeys, alwaysWithheld) {
+			if key == "LMSTUDIO_API_KEY" && strings.HasPrefix(model, "lmstudio/") {
+				continue // lmstudio's own, checked below
+			}
 			if !OpenCodeWithholdsEnv(model, key) {
-				t.Errorf("model %q: %s reaches the child; a local run inherits no OpenCode variable and no hosted provider's key", model, key)
+				t.Errorf("model %q: %s reaches the child; a local run inherits no OpenCode or base-URL variable and no hosted provider's credentials", model, key)
 			}
 		}
 		for _, key := range passes {
 			if OpenCodeWithholdsEnv(model, key) {
-				t.Errorf("model %q: %s is withheld; only OPENCODE_* and the listed API keys are", model, key)
+				t.Errorf("model %q: %s is withheld; only OPENCODE_*, the base-URL variables and other providers' catalog variables are", model, key)
 			}
 		}
+	}
+	if OpenCodeWithholdsEnv("lmstudio/qwen/qwen3.8-27b", "LMSTUDIO_API_KEY") {
+		t.Error("an lmstudio/ run lost LMSTUDIO_API_KEY, its own provider's catalog variable")
 	}
 
 	for model, own := range map[string][]string{
@@ -197,20 +216,98 @@ func TestOpenCodeWithholdsEnv(t *testing.T) {
 		"google/gemini-2.5-pro":           {"GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY", "GEMINI_API_KEY"},
 		"openrouter/meta-llama/llama-4":   {"OPENROUTER_API_KEY"},
 		"openrouter/anthropic/claude-x-1": {"OPENROUTER_API_KEY"},
+		"groq/llama-4-scout":              {"GROQ_API_KEY"},
+		"deepseek/deepseek-chat":          {"DEEPSEEK_API_KEY"},
+		"amazon-bedrock/anthropic.claude": {"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "AWS_BEARER_TOKEN_BEDROCK"},
 	} {
 		for _, key := range cloudKeys {
 			if got, want := OpenCodeWithholdsEnv(model, key), !slices.Contains(own, key); got != want {
 				t.Errorf("model %q: withholds %s = %v, want %v", model, key, got, want)
 			}
 		}
-		if !OpenCodeWithholdsEnv(model, "OPENCODE_AUTH_CONTENT") {
-			t.Errorf("model %q: OPENCODE_AUTH_CONTENT reaches the child", model)
+		for _, key := range alwaysWithheld {
+			if !OpenCodeWithholdsEnv(model, key) {
+				t.Errorf("model %q: %s reaches the child", model, key)
+			}
+		}
+		for _, key := range passes {
+			if OpenCodeWithholdsEnv(model, key) {
+				t.Errorf("model %q: %s is withheld", model, key)
+			}
 		}
 	}
 
 	a := NewOpenCodeAdapter()
 	if !a.WithholdsEnv(RunOptions{Model: "lmstudio/q"}, "OPENAI_API_KEY") || a.WithholdsEnv(RunOptions{Model: "openai/gpt-5.5"}, "OPENAI_API_KEY") {
 		t.Error("the adapter's WithholdsEnv hook does not apply the dispatched model")
+	}
+}
+
+// TestOpenCodeRedactedEnv: the values removed from a child's captured output
+// are the secrets it is allowed to hold (ADR-022 § 22): the server password,
+// the forge tokens, and every variable the catalog binds to the dispatched
+// provider, whichever provider that is, not only the providers an earlier
+// list happened to name.
+func TestOpenCodeRedactedEnv(t *testing.T) {
+	always := []string{"OPENCODE_SERVER_PASSWORD", "GITHUB_TOKEN", "GH_TOKEN", "GITLAB_TOKEN"}
+	a := NewOpenCodeAdapter()
+	for model, own := range map[string][]string{
+		"openai/gpt-5.5":                  {"OPENAI_API_KEY"},
+		"deepseek/deepseek-chat":          {"DEEPSEEK_API_KEY"},
+		"groq/llama-4-scout":              {"GROQ_API_KEY"},
+		"google/gemini-2.5-pro":           {"GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY", "GEMINI_API_KEY"},
+		"amazon-bedrock/anthropic.claude": {"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_BEARER_TOKEN_BEDROCK"},
+		"lmstudio/qwen/qwen3.8-27b":       {"LMSTUDIO_API_KEY"},
+		"ollama/qwen3-coder:30b":          nil,
+	} {
+		got := a.RedactedEnv(RunOptions{Model: model})
+		for _, name := range slices.Concat(always, own) {
+			if !slices.Contains(got, name) {
+				t.Errorf("model %q: %s is not redacted from the captured output (redacted: %q)", model, name, got)
+			}
+		}
+	}
+}
+
+// TestOpenCodeCatalogEnvSnapshot guards the catalog snapshot the credential
+// policy stands on against an edit by hand. It is the bundled catalog of
+// opencode 1.18.30 as read from the binary (TestOpenCodeCatalogEnvMatchesTheBinary
+// re-reads it): 213 provider keys, with the bindings ADR-022 § 8 and the forge
+// exception name.
+func TestOpenCodeCatalogEnvSnapshot(t *testing.T) {
+	if n := len(openCodeCatalogEnv); n != 213 {
+		t.Errorf("the catalog snapshot holds %d provider keys; opencode 1.18.30 bundles 213", n)
+	}
+	for provider, want := range map[string][]string{
+		"anthropic":      {"ANTHROPIC_API_KEY"},
+		"openai":         {"OPENAI_API_KEY"},
+		"xai":            {"XAI_API_KEY"},
+		"google":         {"GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY", "GEMINI_API_KEY"},
+		"openrouter":     {"OPENROUTER_API_KEY"},
+		"lmstudio":       {"LMSTUDIO_API_KEY"},
+		"github-copilot": {"GITHUB_TOKEN"},
+		"gitlab":         {"GITLAB_TOKEN"},
+		"amazon-bedrock": {"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "AWS_BEARER_TOKEN_BEDROCK"},
+	} {
+		if got := openCodeCatalogEnv[provider]; !slices.Equal(got, want) {
+			t.Errorf("catalog[%q] = %q, want %q", provider, got, want)
+		}
+	}
+	for _, notInCatalog := range []string{"ollama", "lm-studio", "lmstudio-remote"} {
+		if _, ok := openCodeCatalogEnv[notInCatalog]; ok {
+			t.Errorf("%q is in the catalog snapshot; 1.18.30 bundles no such key", notInCatalog)
+		}
+	}
+	envName := regexp.MustCompile(`^[A-Z0-9][A-Z0-9_]*$`)
+	for provider, vars := range openCodeCatalogEnv {
+		if len(vars) == 0 {
+			t.Errorf("catalog[%q] binds no variable", provider)
+		}
+		for _, v := range vars {
+			if !envName.MatchString(v) {
+				t.Errorf("catalog[%q] binds %q, which is not an environment variable name", provider, v)
+			}
+		}
 	}
 }
 
@@ -644,6 +741,169 @@ func TestOpenCodeIsolationKeepsTheOperatorsGitAndGh(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestOpenCodeRunRootLinksTheOperatorsXDGConfig: moving XDG_CONFIG_HOME
+// moves it for every tool the stage starts, not only OpenCode, so a tool that
+// keeps a security setting there, such as uv's or pip's private package index,
+// would fall back to its public default without notice. config/ links every
+// entry of the operator's XDG config directory but OpenCode's own, files and
+// hidden entries included, and a tool reading $XDG_CONFIG_HOME/uv/uv.toml
+// inside the run reads the operator's. A later stage links what the operator
+// has added since and re-points a link whose directory moved; an entry the run
+// made itself is left alone; and an entry spelled OpenCode is never linked,
+// because on a case-insensitive filesystem it is the run's opencode/.
+func TestOpenCodeRunRootLinksTheOperatorsXDGConfig(t *testing.T) {
+	write := func(path, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	home := t.TempDir()
+	operator := filepath.Join(home, ".config")
+	const index = "index-url = \"https://pypi.example.invalid/simple\"\n"
+	write(filepath.Join(operator, "uv", "uv.toml"), index)
+	write(filepath.Join(operator, "pip", "pip.conf"), "[global]\nindex-url = https://pypi.example.invalid/simple\n")
+	write(filepath.Join(operator, "git", "config"), "[user]\n\tname = operator\n")
+	write(filepath.Join(operator, "starship.toml"), "format = \"$all\"\n")
+	write(filepath.Join(operator, ".bunfig.toml"), "[install]\n")
+	write(filepath.Join(operator, "opencode", "opencode.json"), `{"username":"operator"}`)
+
+	root, _, err := EnsureOpenCodeRunRoot(home, testRunID, envLookup(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	linked := func(name, want string) {
+		t.Helper()
+		if got, err := os.Readlink(filepath.Join(root, "config", name)); err != nil || got != want {
+			t.Errorf("config/%s = %q (%v); want a link to %s", name, got, err, want)
+		}
+	}
+	for _, name := range []string{"uv", "pip", "git", "starship.toml", ".bunfig.toml"} {
+		linked(name, filepath.Join(operator, name))
+	}
+	if _, err := os.Lstat(filepath.Join(root, "config", "opencode")); !os.IsNotExist(err) {
+		t.Errorf("config/opencode exists (%v); OpenCode's own config directory must stay the run's", err)
+	}
+
+	cat := exec.Command("sh", "-c", `cat "$XDG_CONFIG_HOME/uv/uv.toml"`)
+	cat.Env = []string{"PATH=/usr/bin:/bin", "XDG_CONFIG_HOME=" + filepath.Join(root, "config")}
+	if out, err := cat.Output(); err != nil || string(out) != index {
+		t.Errorf("a tool reading $XDG_CONFIG_HOME/uv/uv.toml in the run read %q (%v); want the operator's %q", out, err, index)
+	}
+
+	// The run made its own entry while the operator had none; the operator
+	// then made one, and added another.
+	write(filepath.Join(root, "config", "pnpm", "rc"), "the run's own\n")
+	write(filepath.Join(operator, "pnpm", "rc"), "the operator's\n")
+	write(filepath.Join(operator, "containers", "registries.conf"), "unqualified-search-registries = []\n")
+	if _, _, err := EnsureOpenCodeRunRoot(home, testRunID, envLookup(nil)); err != nil {
+		t.Fatalf("the next stage refused a root holding an entry the run made itself: %v", err)
+	}
+	linked("containers", filepath.Join(operator, "containers"))
+	if b, err := os.ReadFile(filepath.Join(root, "config", "pnpm", "rc")); err != nil || string(b) != "the run's own\n" {
+		t.Errorf("the run's own config/pnpm was replaced: %q, %v", b, err)
+	}
+
+	// The operator's XDG config directory moved.
+	moved := filepath.Join(home, "xdg-elsewhere")
+	write(filepath.Join(moved, "uv", "uv.toml"), index)
+	if _, _, err := EnsureOpenCodeRunRoot(home, testRunID, envLookup(map[string]string{"XDG_CONFIG_HOME": moved})); err != nil {
+		t.Fatal(err)
+	}
+	linked("uv", filepath.Join(moved, "uv"))
+
+	spelled := t.TempDir()
+	write(filepath.Join(spelled, ".config", "OpenCode", "opencode.json"), `{"username":"operator"}`)
+	spelledRoot, _, err := EnsureOpenCodeRunRoot(spelled, testRunID, envLookup(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(spelledRoot, "config")); len(entries) != 0 {
+		t.Errorf("an operator entry spelled OpenCode was linked into config/: %v", entries)
+	}
+}
+
+// TestOpenCodeManagedConfigFiles: the machine-wide managed config opencode
+// 1.18.30 reads, per platform, from its bundled source.
+func TestOpenCodeManagedConfigFiles(t *testing.T) {
+	for goos, want := range map[string][]string{
+		"linux": {"/etc/opencode/opencode.json", "/etc/opencode/opencode.jsonc"},
+		"darwin": {
+			"/Library/Application Support/opencode/opencode.json",
+			"/Library/Application Support/opencode/opencode.jsonc",
+			"/Library/Managed Preferences/op/ai.opencode.managed.plist",
+			"/Library/Managed Preferences/ai.opencode.managed.plist",
+		},
+	} {
+		if got := openCodeManagedConfigFiles(goos, "op"); !slices.Equal(got, want) {
+			t.Errorf("%s: managed config files = %q, want %q", goos, got, want)
+		}
+	}
+}
+
+// TestOpenCodeRefusesManagedOpenCodeConfig: observed on 1.18.30, the
+// machine's managed config merges above OPENCODE_CONFIG_CONTENT, the layer
+// Nightgauge's locked keys go in, and no XDG or HOME variable moves it
+// (ADR-022 § 8). An enabled dispatch is refused while any of its files
+// exists, naming the file without reading it, unless the operator has opted
+// into their own OpenCode config, which the stderr line then says includes it.
+func TestOpenCodeRefusesManagedOpenCodeConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // no ~/.opencode
+	t.Setenv(ExperimentalOpenCodeEnvVar, "1")
+	t.Setenv(OpenCodeInheritUserConfigEnvVar, "")
+	const sentinel = "managed-config-content-sentinel-1616"
+	dir := t.TempDir()
+	files := []string{
+		filepath.Join(dir, "opencode.json"), filepath.Join(dir, "opencode.jsonc"),
+		filepath.Join(dir, "user", "ai.opencode.managed.plist"), filepath.Join(dir, "ai.opencode.managed.plist"),
+	}
+	a := &OpenCodeAdapter{managedConfig: files}
+	model := RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"}
+	if err := a.PreDispatch(model); err != nil {
+		t.Fatalf("with no managed config the dispatch was refused: %v", err)
+	}
+	for _, f := range files {
+		if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(f, []byte(sentinel), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		err := a.PreDispatch(model)
+		if err == nil {
+			t.Errorf("%s: the dispatch was allowed", f)
+		} else {
+			for _, want := range []string{f, "managed OpenCode config", OpenCodeInheritUserConfigEnvVar + "=1"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("%s: the refusal does not say %q: %v", f, want, err)
+				}
+			}
+			if strings.Contains(err.Error(), sentinel) {
+				t.Errorf("%s: the refusal carries the file's content", f)
+			}
+		}
+		if err := os.Remove(f); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := os.WriteFile(files[0], []byte(sentinel), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(OpenCodeInheritUserConfigEnvVar, "1")
+	var err error
+	stderr := captureAdapterStderr(t, func() { err = a.PreDispatch(model) })
+	if err != nil {
+		t.Errorf("with %s=1 the dispatch was refused: %v", OpenCodeInheritUserConfigEnvVar, err)
+	}
+	if !strings.Contains(stderr, "managed OpenCode config") {
+		t.Errorf("the opt-in line does not say it takes in the machine's managed config:\n%s", stderr)
 	}
 }
 

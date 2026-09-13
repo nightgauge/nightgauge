@@ -1042,14 +1042,22 @@ func TestOpenCodeAnthropicDispatchNeedsTheAPIKey(t *testing.T) {
 	}
 
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-fake-key-for-the-test-1616")
+	// An inherited base URL would send the stage and its key to whatever
+	// server it names, a proxy serving a subscription included, so it never
+	// reaches the child: the endpoint is the catalog's or a config's.
+	t.Setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:9/v1")
 	if _, err := dispatch(); err != nil {
 		t.Fatalf("RunStage refused anthropic/claude-sonnet-5 with ANTHROPIC_API_KEY set: %v", err)
 	}
 	if n := fake.invocations(t); n != 1 {
 		t.Errorf("the opencode binary ran %d time(s) after the keyed dispatch; want exactly 1", n)
 	}
-	if env, _ := fake.env(t); env["ANTHROPIC_API_KEY"] != "sk-ant-fake-key-for-the-test-1616" {
+	env, _ := fake.env(t)
+	if env["ANTHROPIC_API_KEY"] != "sk-ant-fake-key-for-the-test-1616" {
 		t.Error("an anthropic/ dispatch did not hand the child its own provider's key")
+	}
+	if v, ok := env["ANTHROPIC_BASE_URL"]; ok {
+		t.Errorf("ANTHROPIC_BASE_URL reached an anthropic/ child (%q); the key could go to any server", v)
 	}
 }
 
@@ -1058,9 +1066,10 @@ func TestOpenCodeAnthropicDispatchNeedsTheAPIKey(t *testing.T) {
 // observable, the environment the child receives. Every inherited OPENCODE_*
 // variable is absent, the login-bearing ones included, and no value of one
 // reaches the child or anything the run printed. A local model receives none
-// of the hosted providers' API keys. The adapter's own OPENCODE_* exports
-// survive the filter, and an unrelated inherited variable arrives, so the
-// absences are not an empty dump.
+// of the variables OpenCode's catalog binds to a hosted provider, beyond the
+// issue's seven too, and no provider base URL. The adapter's own OPENCODE_*
+// exports survive the filter, and an unrelated inherited variable arrives, so
+// the absences are not an empty dump.
 func TestOpenCodeSpawnWithholdsInheritedOpenCodeVariablesAndForeignKeys(t *testing.T) {
 	isolateOpenCodeHome(t)
 	fake := installOpenCodeFake(t, "")
@@ -1080,7 +1089,11 @@ func TestOpenCodeSpawnWithholdsInheritedOpenCodeVariablesAndForeignKeys(t *testi
 	for k, v := range inherited {
 		t.Setenv(k, v)
 	}
-	keys := []string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "XAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENROUTER_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY"}
+	keys := []string{
+		"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "XAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENROUTER_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY",
+		"GROQ_API_KEY", "MISTRAL_API_KEY", "DEEPSEEK_API_KEY", "AWS_SECRET_ACCESS_KEY", "AWS_REGION",
+		"ANTHROPIC_BASE_URL", "OPENAI_BASE_URL",
+	}
 	for _, k := range keys {
 		t.Setenv(k, sentinel+"-"+strings.ToLower(k))
 	}
@@ -1116,7 +1129,7 @@ func TestOpenCodeSpawnWithholdsInheritedOpenCodeVariablesAndForeignKeys(t *testi
 	}
 	for _, k := range keys {
 		if _, ok := env[k]; ok {
-			t.Errorf("%s reached a local-model child; a local run inherits no hosted provider's key", k)
+			t.Errorf("%s reached a local-model child; a local run inherits no hosted provider's credentials and no base URL", k)
 		}
 	}
 	for _, kv := range entries {
@@ -1250,57 +1263,68 @@ func (r *redactionStreamer) OnComplete(adapters.RunResult) {}
 
 // TestOpenCodeCapturedOutputIsRedacted (ADR-022 § 22): a tool that prints its
 // environment must not put the secrets Nightgauge handed the child in a log.
-// The fake prints the server password, the GitHub tokens and the dispatched
+// The fake prints the server password, the forge tokens and the dispatched
 // provider's API key on stdout, inside a JSON event, and on stderr. None of
 // the values may reach the streamed output or the result; each becomes
 // [REDACTED:<name>], the JSON event stays valid, and an ordinary line is kept.
+// The dispatched provider's key is redacted whichever provider it is: openai,
+// and deepseek, which no hand-written list of providers named.
 func TestOpenCodeCapturedOutputIsRedacted(t *testing.T) {
-	isolateOpenCodeHome(t)
-	fake := installOpenCodeFake(t, `printf '{"type":"text","part":{"text":"pw=%s gh=%s ght=%s key=%s"}}\n' "$OPENCODE_SERVER_PASSWORD" "$GITHUB_TOKEN" "$GH_TOKEN" "$OPENAI_API_KEY"
+	for model, keyVar := range map[string]string{
+		"openai/gpt-5.5":         "OPENAI_API_KEY",
+		"deepseek/deepseek-chat": "DEEPSEEK_API_KEY",
+	} {
+		t.Run(keyVar, func(t *testing.T) {
+			isolateOpenCodeHome(t)
+			fake := installOpenCodeFake(t, `printf '{"type":"text","part":{"text":"pw=%s gh=%s ght=%s gl=%s key=%s%s"}}\n' "$OPENCODE_SERVER_PASSWORD" "$GITHUB_TOKEN" "$GH_TOKEN" "$GITLAB_TOKEN" "$OPENAI_API_KEY" "$DEEPSEEK_API_KEY"
 echo "an ordinary line"
-echo "ERROR leaked $GITHUB_TOKEN $OPENAI_API_KEY $OPENCODE_SERVER_PASSWORD $GH_TOKEN" >&2`)
-	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
-	t.Setenv("GITHUB_TOKEN", "ghs_fakeGitHubTokenForTheRedactionTest1616")
-	t.Setenv("GH_TOKEN", "gho_fakeGhTokenForTheRedactionTest1616")
-	t.Setenv("OPENAI_API_KEY", "sk-proj-fakeOpenAIKeyForTheRedactionTest1616")
+echo "ERROR leaked $GITHUB_TOKEN $OPENAI_API_KEY $DEEPSEEK_API_KEY $OPENCODE_SERVER_PASSWORD $GH_TOKEN $GITLAB_TOKEN" >&2`)
+			t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
+			t.Setenv("GITHUB_TOKEN", "fake-github-token-for-the-redaction-test-1616")
+			t.Setenv("GH_TOKEN", "gho_fakeGhTokenForTheRedactionTest1616")
+			t.Setenv("GITLAB_TOKEN", "fake-gitlab-token-for-the-redaction-test-1616")
+			t.Setenv("OPENAI_API_KEY", "sk-proj-fakeOpenAIKeyForTheRedactionTest1616")
+			t.Setenv("DEEPSEEK_API_KEY", "sk-fakeDeepSeekKeyForTheRedactionTest1616")
 
-	streamer := &redactionStreamer{}
-	opts := openCodeStageOptions("openai/gpt-5.5", nil)
-	opts.Streamer = streamer
-	var result *adapters.RunResult
-	var err error
-	captureStderr(t, func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		result, err = NewManager(openCodeWorkspace(t), adapters.NewOpenCodeAdapter()).RunStage(ctx, opts)
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	env, _ := fake.env(t)
-	secrets := map[string]string{}
-	for _, name := range []string{"OPENCODE_SERVER_PASSWORD", "GITHUB_TOKEN", "GH_TOKEN", "OPENAI_API_KEY"} {
-		if env[name] == "" {
-			t.Fatalf("%s did not reach the child, so its output proves nothing", name)
-		}
-		secrets[name] = env[name]
-	}
-	outputs := map[string]string{"streamed": streamer.out.String(), "result.Stdout": result.Stdout, "result.Stderr": result.Stderr}
-	for where, out := range outputs {
-		for name, value := range secrets {
-			if strings.Contains(out, value) {
-				t.Errorf("%s holds the value of %s", where, name)
+			streamer := &redactionStreamer{}
+			opts := openCodeStageOptions(model, nil)
+			opts.Streamer = streamer
+			var result *adapters.RunResult
+			var err error
+			captureStderr(t, func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				result, err = NewManager(openCodeWorkspace(t), adapters.NewOpenCodeAdapter()).RunStage(ctx, opts)
+			})
+			if err != nil {
+				t.Fatal(err)
 			}
-			if !strings.Contains(out, "[REDACTED:"+name+"]") {
-				t.Errorf("%s does not show where %s was redacted:\n%s", where, name, out)
+			env, _ := fake.env(t)
+			secrets := map[string]string{}
+			for _, name := range []string{"OPENCODE_SERVER_PASSWORD", "GITHUB_TOKEN", "GH_TOKEN", "GITLAB_TOKEN", keyVar} {
+				if env[name] == "" {
+					t.Fatalf("%s did not reach the child, so its output proves nothing", name)
+				}
+				secrets[name] = env[name]
 			}
-		}
-	}
-	if !strings.Contains(result.Stdout, "an ordinary line") {
-		t.Error("redaction removed an ordinary line")
-	}
-	if event, _, _ := strings.Cut(result.Stdout, "\n"); !json.Valid([]byte(event)) {
-		t.Errorf("the redacted JSON event is not valid JSON: %s", event)
+			outputs := map[string]string{"streamed": streamer.out.String(), "result.Stdout": result.Stdout, "result.Stderr": result.Stderr}
+			for where, out := range outputs {
+				for name, value := range secrets {
+					if strings.Contains(out, value) {
+						t.Errorf("%s holds the value of %s", where, name)
+					}
+					if !strings.Contains(out, "[REDACTED:"+name+"]") {
+						t.Errorf("%s does not show where %s was redacted:\n%s", where, name, out)
+					}
+				}
+			}
+			if !strings.Contains(result.Stdout, "an ordinary line") {
+				t.Error("redaction removed an ordinary line")
+			}
+			if event, _, _ := strings.Cut(result.Stdout, "\n"); !json.Valid([]byte(event)) {
+				t.Errorf("the redacted JSON event is not valid JSON: %s", event)
+			}
+		})
 	}
 }
 
