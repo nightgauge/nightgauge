@@ -3,6 +3,7 @@ package hooks
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -10,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/depgraph"
+	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
@@ -60,7 +62,9 @@ type OpenDependency struct {
 // A body-declared reference whose issue cannot be fetched is skipped rather
 // than treated as blocking: unlike a native relation, prose can name a
 // repository that does not exist, and a permanent un-clearable hold on a typo
-// is worse than the deferral it would buy.
+// is worse than the deferral it would buy. An issue that was found but whose
+// relationships could not be read whole (github.ErrConnectionTruncated) is
+// not a typo, so that read fails the evaluation instead.
 func EvaluateIssueDeps(ctx context.Context, fetcher IssueFetcher, owner, repo string, number int) (IssueDepsResult, error) {
 	result := IssueDepsResult{IssueNumber: number}
 
@@ -104,6 +108,9 @@ func EvaluateIssueDeps(ctx context.Context, fetcher IssueFetcher, owner, repo st
 			continue
 		}
 		dep, derr := fetcher.GetIssue(ctx, refOwner, refName, ref.Number)
+		if errors.Is(derr, gh.ErrConnectionTruncated) {
+			return result, fmt.Errorf("fetch dependency %s#%d of issue #%d: %w", ref.Repo, ref.Number, number, derr)
+		}
 		if derr != nil || dep == nil {
 			continue // unresolvable prose reference — see the doc comment
 		}

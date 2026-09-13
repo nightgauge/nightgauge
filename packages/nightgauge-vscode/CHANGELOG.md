@@ -15,6 +15,9 @@ and this project adheres to
   if the agent committed it, the stage's cleanup adds a commit removing it, and
   the steering summary now comes from `AGENTS.md` rather than `CLAUDE.md`
   (issue 1675)
+- Board views now show every sub-issue of an epic and every blocker of an
+  issue. They stopped at the first 12 sub-issues and 5 blockers, so an issue
+  whose only open blocker came later showed as unblocked (#1682)
 
 ### Security
 

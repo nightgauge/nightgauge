@@ -35,6 +35,13 @@ import (
 type mockIssueSvc struct {
 	issues     map[string]*types.Issue // keyed by "owner/repo#number"
 	batchCalls []mockBatchCall         // recorded GetIssuesByNumbers invocations
+	// getErrs makes GetIssue fail for the keyed issue with the given error.
+	getErrs map[string]error
+	// relationReadErr, when set, fails every GetIssuesByNumbers call (the read
+	// that completes relationships) while GetIssuesByNumbersWithoutRelations
+	// still serves the fixtures: an issue whose relationships cannot be read
+	// whole.
+	relationReadErr error
 	// removeBlockedByCalls records every RemoveBlockedBy invocation in the
 	// canonical "owner/repo#number" form of both refs, so assertions can pin
 	// which pair of issues the scheduler actually unlinked.
@@ -57,6 +64,9 @@ func (m *mockIssueSvc) addIssue(owner, repo string, number int, issue *types.Iss
 
 func (m *mockIssueSvc) GetIssue(_ context.Context, owner, repo string, number int) (*types.Issue, error) {
 	key := fmt.Sprintf("%s/%s#%d", owner, repo, number)
+	if err, ok := m.getErrs[key]; ok {
+		return nil, err
+	}
 	if issue, ok := m.issues[key]; ok {
 		return issue, nil
 	}
@@ -65,6 +75,20 @@ func (m *mockIssueSvc) GetIssue(_ context.Context, owner, repo string, number in
 
 func (m *mockIssueSvc) GetIssuesByNumbers(_ context.Context, owner, repo string, numbers []int) (map[int]*types.Issue, error) {
 	m.batchCalls = append(m.batchCalls, mockBatchCall{owner: owner, repo: repo, numbers: append([]int(nil), numbers...)})
+	if m.relationReadErr != nil {
+		return nil, m.relationReadErr
+	}
+	return m.batch(owner, repo, numbers), nil
+}
+
+// GetIssuesByNumbersWithoutRelations serves the same fixtures and records the
+// call alongside GetIssuesByNumbers, so batching assertions count both reads.
+func (m *mockIssueSvc) GetIssuesByNumbersWithoutRelations(_ context.Context, owner, repo string, numbers []int) (map[int]*types.Issue, error) {
+	m.batchCalls = append(m.batchCalls, mockBatchCall{owner: owner, repo: repo, numbers: append([]int(nil), numbers...)})
+	return m.batch(owner, repo, numbers), nil
+}
+
+func (m *mockIssueSvc) batch(owner, repo string, numbers []int) map[int]*types.Issue {
 	out := make(map[int]*types.Issue, len(numbers))
 	for _, n := range numbers {
 		key := fmt.Sprintf("%s/%s#%d", owner, repo, n)
@@ -73,7 +97,7 @@ func (m *mockIssueSvc) GetIssuesByNumbers(_ context.Context, owner, repo string,
 		}
 		// Missing issues silently omitted, matching production behavior.
 	}
-	return out, nil
+	return out
 }
 
 type mockBatchCall struct {

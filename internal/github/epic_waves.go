@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
@@ -24,6 +25,11 @@ func (e *EpicService) PlanWaves(ctx context.Context, owner, repo string, issueNu
 	issues := make([]types.Issue, 0, len(issueNumbers))
 	for _, num := range issueNumbers {
 		issue, err := issueSvc.GetIssue(ctx, owner, repo, num)
+		if errors.Is(err, ErrConnectionTruncated) {
+			// A blocker list read only in part would plan the issue into an
+			// earlier wave than its unseen blockers allow.
+			return nil, fmt.Errorf("plan waves: fetch issue #%d: %w", num, err)
+		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: fetch issue #%d: %v\n", num, err)
 			continue
