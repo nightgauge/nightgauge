@@ -21,7 +21,8 @@
   },
   "fixtures": [
     "internal/doctor/testdata/no-catalog-cli-probes/codex-help.txt",
-    "internal/execution/adapters/testdata/cli-help/codex-exec-0.145.0.txt"
+    "internal/execution/adapters/testdata/cli-help/codex-exec-0.145.0.txt",
+    "internal/execution/testdata/codex_stream_real_capture.jsonl"
   ],
   "config_schema_sha256": "",
   "plugin_api_version": "",

@@ -842,6 +842,67 @@ func TestParseGrokStreamRealCapture(t *testing.T) {
 	}
 }
 
+// Ground truth read off testdata/codex_stream_real_capture.jsonl — hand-computed
+// from its single `turn.completed` event's `usage` payload (see the README's
+// "codex_stream_real_capture.jsonl" section for the full table). The capture
+// has exactly one turn, so per-turn and total are the same numbers.
+const (
+	codexCaptureTurn1Input  = 67553
+	codexCaptureTurn1Cached = 56704
+	codexCaptureTurn1Output = 124
+
+	codexCaptureTotalInput     = codexCaptureTurn1Input - codexCaptureTurn1Cached
+	codexCaptureTotalOutput    = codexCaptureTurn1Output
+	codexCaptureTotalCacheRead = codexCaptureTurn1Cached
+)
+
+// TestParseCodexRealCapture runs a REAL `codex exec --json` transcript (#1620)
+// through ParseLine and checks the accumulator lands on the README's
+// hand-computed ground truth. It asserts nothing new about the parser — it
+// asserts that the shape ParseCodexStreamLine was written for is the shape the
+// CLI actually emits, the same purpose TestParseGrokStreamRealCapture serves
+// for grok (#166/#300 class: a parser tested only against hand-written lines
+// stays green while the runtime emits something else entirely).
+func TestParseCodexRealCapture(t *testing.T) {
+	data, err := os.ReadFile("testdata/codex_stream_real_capture.jsonl")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+
+	acc := &TokenAccumulator{}
+	sawCommandExecution := false
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		ev, _ := acc.ParseLine(StreamFormatCodex, line)
+		if ev == nil {
+			continue
+		}
+		if strings.Contains(line, `"type":"command_execution"`) {
+			sawCommandExecution = true
+		}
+	}
+
+	if acc.InputTokens != codexCaptureTotalInput {
+		t.Errorf("input = %d, want %d (input_tokens %d minus cached_input_tokens %d)",
+			acc.InputTokens, codexCaptureTotalInput, codexCaptureTurn1Input, codexCaptureTurn1Cached)
+	}
+	if acc.OutputTokens != codexCaptureTotalOutput {
+		t.Errorf("output = %d, want %d", acc.OutputTokens, codexCaptureTotalOutput)
+	}
+	if acc.CacheRead != codexCaptureTotalCacheRead {
+		t.Errorf("cache read = %d, want %d (cached_input_tokens)", acc.CacheRead, codexCaptureTotalCacheRead)
+	}
+	if acc.CacheCreated != 0 {
+		t.Errorf("cache created = %d, want 0 — codex has no cache-write usage field", acc.CacheCreated)
+	}
+
+	// The capture's prompt asked for two sequential shell commands specifically
+	// so the fixture pins codex's real item type for a tool call
+	// (`command_execution`) rather than a hand-guessed one.
+	if !sawCommandExecution {
+		t.Error("capture is missing a command_execution item — recapture with a tool-using prompt")
+	}
+}
+
 func TestStreamFormatForAdapter(t *testing.T) {
 	tests := []struct {
 		adapter  string
