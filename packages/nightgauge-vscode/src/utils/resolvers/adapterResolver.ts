@@ -953,10 +953,19 @@ function toRouterAdapter(adapter: ExecutionAdapter): RouterExecutionAdapter {
  * Inverse of {@link toRouterAdapter}: collapse the SDK's two Claude backends
  * back to the UI's bare `"claude"` so a router pick threads cleanly through the
  * `ExecutionAdapter`-typed precedence chain. Every other id passes through.
+ *
+ * `opencode` has no `ExecutionAdapter` yet (#1623 adds it), so a router pick of
+ * it is refused rather than mapped onto some other adapter. The extension's
+ * own candidate list comes from `ExecutionAdapter` ids, so it never offers one.
  */
 export function fromRouterAdapter(adapter: RouterExecutionAdapter): ExecutionAdapter {
   if (adapter === "claude-sdk" || adapter === "claude-headless") {
     return "claude";
+  }
+  if (adapter === "opencode") {
+    throw new Error(
+      'The auto-router picked "opencode", which the extension cannot run yet (#1623).'
+    );
   }
   return adapter;
 }
