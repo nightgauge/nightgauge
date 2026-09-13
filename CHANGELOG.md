@@ -88,6 +88,12 @@ changelog, and the release workflow refuses a tag that does not.
   it. Every arm now runs the installer in a `git archive` sandbox, and the
   suite fails if `git status --porcelain` changes or the mirror is rewritten
   (#1607)
+- Two `scripts/ci-local.sh` runs in different worktrees no longer break each
+  other in the publication-boundary hermeticity step. It used to delete every
+  sandbox under the shared root, including one another run was still using,
+  which then failed with `manifest.bak: No such file`. It now runs its suites
+  under a root of its own and reclaims a leftover root only when no process
+  that owns it is alive (#1697)
 
 ### Removed
 

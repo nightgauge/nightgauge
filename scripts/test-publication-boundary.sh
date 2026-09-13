@@ -102,6 +102,10 @@ MINIMAL="${NG_BOUNDARY_SUITE_MINIMAL:-}"
 # Prune structurally cannot fix that, so the only reliable moment is the START
 # of the NEXT run. Sandboxes therefore live under one known root with one known
 # prefix, and each records the PID that owns it.
+#
+# The root follows TMPDIR, and the hermeticity harness depends on that: it
+# points TMPDIR at a directory of its own so the sandboxes it deliberately
+# kills are invisible to every other gate's sweep (#1697).
 SANDBOX_ROOT="${TMPDIR:-/tmp}/nightgauge-pubboundary-sandboxes"
 SANDBOX_PREFIX="run."
 
@@ -144,32 +148,20 @@ trap 'trap - EXIT; cleanup; exit 143' TERM
 # `git worktree list` assertion in test-publication-boundary-hermeticity.sh
 # holds it to that).
 #
-# A sandbox is abandoned when the process that created it is gone. `kill -0`
-# treats another user's live process as alive, which is the conservative
-# direction. PID reuse could make a dead run look alive; the age fallback
-# bounds that, since no run of this suite lasts an hour.
+# A sandbox is abandoned when the process that created it is gone; the
+# predicate, and why it distrusts an unparseable owner.pid, is in
+# lib/boundary-sandbox.sh.
+# shellcheck source=lib/boundary-sandbox.sh
+. "$REPO/scripts/lib/boundary-sandbox.sh"
 sweep_abandoned_sandboxes() {
-  local swept=0 d pid
+  local swept=0 d
   [ -d "$SANDBOX_ROOT" ] || return 0
   for d in "$SANDBOX_ROOT/$SANDBOX_PREFIX"*; do
     [ -d "$d" ] || continue
     # Physical path: on macOS $TMPDIR is a symlink (/var -> /private/var) and
     # `git worktree` records the resolved form.
     d="$(cd "$d" && pwd -P)" || continue
-    pid=""
-    [ -f "$d/owner.pid" ] && pid="$(cat "$d/owner.pid" 2>/dev/null)"
-    # Only a plausible PID gets liveness credit. `kill -0 0` signals the CURRENT
-    # PROCESS GROUP and therefore SUCCEEDS, so an absent, empty, malformed or
-    # zero owner.pid would otherwise read as "a concurrent run owns this" and
-    # the sandbox would never be reclaimed. Anything unparseable means the run
-    # died before it could claim ownership: reclaim it.
-    case "$pid" in
-    "" | *[!0-9]* | 0) pid="" ;;
-    esac
-    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null &&
-      [ -z "$(find "$d" -maxdepth 0 -mmin +60 2>/dev/null)" ]; then
-      continue # a concurrent run owns it
-    fi
+    sandbox_owner_alive "$d" && continue # a concurrent run owns it
     # Unlock BEFORE removing. A SIGKILL landing inside `git worktree add`
     # leaves the entry marked `locked initializing`, and a locked worktree is
     # skipped by `prune` and refused by a single `--force`. Observed in CI:
