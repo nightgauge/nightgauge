@@ -85,9 +85,9 @@ var openCodeUnenforcedControls = []openCodeControl{
 	{"project-config tamper gate", "the target repository's opencode.json and .opencode/ load unchecked"},
 	{"permission map", "tool permissions come from OpenCode's config, not from the stage's allowed tools"},
 	{"safety plugin", "Nightgauge's careful-gate and stage-gate hooks do not run inside OpenCode"},
-	{"egress defaults", "share, autoupdate, the model-catalog fetch, LSP downloads, default plugins and webfetch follow OpenCode's own defaults"},
-	{"credential policy", "only an anthropic/ model is refused: any other provider can authenticate with a login OpenCode has stored instead of its own API-key variable, and a model named in the operator's own OpenCode config, which the run still reads, can reach anthropic on a stored login"},
-	{"endpoint policy", "the server behind a -m provider key is whatever OpenCode's own config and bundled catalog make it: a provider block named after a catalog provider can send that provider's API key to its base URL, and a LAN or public base URL is neither refused nor warned about"},
+	{"egress defaults", "share, autoupdate, the model-catalog fetch, LSP downloads, default plugins, webfetch and session-title generation follow OpenCode's own defaults, and the title request carries the stage prompt to small_model when a config names one, on whatever provider it names"},
+	{"credential policy", "only the anthropic/ model a stage names is refused: any other provider can authenticate with a login OpenCode has stored instead of its own API-key variable, and any OpenCode config the run reads, the operator's own or the target repository's opencode.json and .opencode/, can still send the stage prompt to an anthropic/ model on a stored login, as small_model, which titles every session, or as an agent's model, which the title and compaction agents and a subagent run on"},
+	{"endpoint policy", "the server behind a -m provider key is whatever OpenCode's own config and bundled catalog make it: a provider block named after a catalog provider can send that provider's API key to its base URL, a LAN or public base URL is neither refused nor warned about, and an Ollama cloud model, which a local Ollama forwards to Ollama's hosted service, is dispatched like a local one"},
 	{"stage limits", "the stage's turn cap, token cap and cost budget are not passed to OpenCode, so only the stage timeout bounds a run"},
 	{"version policy", "the opencode binary's version is not checked against the floor or the max-tested version"},
 }
@@ -111,6 +111,11 @@ func (a *OpenCodeAdapter) PreDispatch(opts RunOptions) error {
 // stored login, whether or not the key is set, so the interim enforcement is
 // not to dispatch the model at all. #1616 replaces this refusal with § 17's
 // key requirement.
+//
+// It sees only the model the stage names. A model an OpenCode config names,
+// small_model or an agent's model, in the operator's config or the target
+// repository's, is not refused here; the credential-policy warning line
+// discloses it until #1616, #1625 and #1638 close those routes.
 //
 // The model is parsed the way openCodeModelArg parses it (trimmed, split on
 // the first slash). The provider key is compared case-insensitively, so every

@@ -252,6 +252,44 @@ func TestOpenCodeGate(t *testing.T) {
 	}
 }
 
+// TestOpenCodeWarningDisclosesWhereThePromptCanGo: the model a stage names is
+// not the only place its prompt can go, and the warning is the operator's only
+// disclosure of the others. The anthropic refusal sees only the stage's model,
+// while any OpenCode config the run reads, the target repository's
+// opencode.json and .opencode/ as much as the operator's own, can name another
+// that receives the prompt: small_model titles every session, and the title and
+// compaction agents and every subagent run on their agent's model (ADR-022
+// § 10, § 17). And an endpoint can forward: a local Ollama serves its cloud
+// models from Ollama's hosted service (§ 3, § Endpoints). So the credential
+// line names both kinds of config and both keys, the egress line names
+// session-title generation, and the endpoint line names Ollama cloud models.
+func TestOpenCodeWarningDisclosesWhereThePromptCanGo(t *testing.T) {
+	gaps := map[string]string{}
+	for _, c := range openCodeUnenforcedControls {
+		gaps[c.name] = c.gap
+	}
+	for name, wants := range map[string][]string{
+		"credential policy": {
+			"only the anthropic/ model a stage names is refused",
+			"the operator's own", "the target repository's opencode.json and .opencode/",
+			"small_model", "titles every session", "an agent's model", "subagent", "stored login",
+		},
+		"egress defaults": {"session-title generation", "stage prompt", "small_model"},
+		"endpoint policy": {"Ollama cloud model", "Ollama's hosted service"},
+	} {
+		gap, ok := gaps[name]
+		if !ok {
+			t.Errorf("the warning has no %q control", name)
+			continue
+		}
+		for _, want := range wants {
+			if !strings.Contains(gap, want) {
+				t.Errorf("the %q warning line does not say %q:\n  %s", name, want, gap)
+			}
+		}
+	}
+}
+
 // openCodeADR is ADR-022, which the tests below keep the adapter in step with.
 const openCodeADR = "../../../docs/decisions/022-opencode-multi-provider-adapter.md"
 

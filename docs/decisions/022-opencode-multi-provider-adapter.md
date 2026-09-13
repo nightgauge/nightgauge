@@ -14,13 +14,14 @@ reasons for a pipeline default to be off)
 
 ## Executive Summary
 
-OpenCode is registered as the `opencode` adapter. One adapter id reaches local
-model servers (LM Studio, Ollama, any OpenAI-compatible server the operator
-runs) and hosted providers (Anthropic, OpenAI, xAI, Google). The provider is
-chosen per dispatch by the provider-qualified model id passed on `-m`, so the
-provider is a property of the dispatch, not of the adapter. That breaks an
-assumption the model layer makes everywhere, and this ADR decides how identity,
-cost, isolation and credentials work once it no longer holds.
+OpenCode is registered as the `opencode` adapter. One adapter id reaches model
+servers the operator runs (LM Studio, Ollama, or another server with an
+OpenAI-compatible API) and hosted providers (Anthropic, OpenAI, xAI, Google).
+The provider is chosen per dispatch by the provider-qualified model id passed
+on `-m`, so the provider is a property of the dispatch, not of the adapter.
+That breaks an assumption the model layer makes everywhere, and this ADR
+decides how identity, cost, isolation and credentials work once it no longer
+holds.
 
 The adapter ships **Experimental**. `Manager.RunStage` refuses every `opencode`
 dispatch before spawning anything unless `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1`
@@ -139,7 +140,9 @@ has opted in.
   `claude-headless` adapter, which also serves a Claude subscription, and says
   that `anthropic/*` through OpenCode unlocks when #1616 enforces § 17. The
   credential-policy row below stays until then, because the refusal covers only
-  the model a stage names (§ 17).
+  the model a stage names: any OpenCode config the run reads, the target
+  repository's included, can name another `anthropic/` model that receives the
+  stage prompt (§ 17).
 - **An allowed dispatch** prints a warning to stderr, one line per control
   that is not enforced yet. It is the operator's only disclosure of what the
   dispatch runs without, so it lists every control this ADR assigns to a later
@@ -159,7 +162,7 @@ has opted in.
 | safety plugin              | #1635, #1640  |
 | egress defaults            | #1616, #1625  |
 | credential policy          | #1616         |
-| endpoint policy            | #1678         |
+| endpoint policy            | #1678, #1679  |
 | stage limits               | #1625, #1630  |
 | version policy             | #1613, #1627  |
 
@@ -286,12 +289,26 @@ allowed, a host name or an address can never become one.
 
 ### 3. Cost
 
-- **Local records `cost_usd: 0`, stamped.** A stage served by a declared
-  endpoint or a built-in local key records `cost_usd: 0` with
-  `cost_unstamped: false`. The field is the per-token provider charge, and a
-  model the operator hosts has none. It is not a measure of what the stage
-  used: hardware, power and operator time are real costs, and Nightgauge does
-  not meter them.
+`cost_usd` is what a provider bills for the tokens a stage used. Nightgauge
+meters no other cost of a stage, so a stamped zero says only that no provider
+bills it.
+
+- **Stamped zero only where the model runs on the endpoint.** A stage records
+  `cost_usd: 0` with `cost_unstamped: false` only when its model is known to
+  run on the endpoint that served it. The stamp follows where the model runs,
+  not what kind of endpoint answered, because an endpoint can forward a request
+  and Nightgauge does not see past it (§ Endpoints). It is known in three
+  cases:
+  - an `lm-studio` endpoint, the `lmstudio` key of § 1 included;
+  - an `ollama` endpoint, the `ollama` key included, for a model Ollama runs
+    itself. Ollama serves its cloud models through the same local API from its
+    hosted service, so a model whose tag is `cloud` or ends in `-cloud`, or
+    for which Ollama reports a `remote_host`, is refused before spawn (#1679);
+  - an `openai-compatible` endpoint whose entry declares `self_hosted: true`
+    (#1678). The declaration is the operator's statement that the model runs
+    on that server, and Nightgauge cannot check it. Without it the server may
+    be a gateway to a hosted API, such as a LiteLLM proxy, and its stages are
+    unstamped.
 - **Re-priced from the registry, per step.** For a hosted model the registry
   knows, every `step_finish` is priced from the registry's rate card for the
   model that served that step: input, output and reasoning tokens, plus the
@@ -300,18 +317,20 @@ allowed, a host name or an address can never become one.
   (#1624). The USD watchdog (#1630) runs on this figure.
 - **OpenCode's own `cost` is never trusted.** It comes from OpenCode's catalog
   and not from the bill, and it read `0` for a provider it had no price for.
-- **Zero from a non-local provider is unstamped.** A hosted or `other` model
-  the registry cannot price records `cost_usd: 0` with `cost_unstamped: true`.
-  An unknown cost is never recorded as a stamped zero.
+- **Every other zero is unstamped.** A hosted or `other` model the registry
+  cannot price, and a stage on an `openai-compatible` endpoint not declared
+  `self_hosted`, records `cost_usd: 0` with `cost_unstamped: true`. An unknown
+  cost is never recorded as a stamped zero.
 
 ### 4. The `local` usage plan (amends ADR-018)
 
 ADR-018 gains a plan kind, `plan.kind: "local"`, with no windows. It is
-produced for an adapter whose attributed stages in the snapshot were all served
-by local providers: `opencode` on local endpoints, and the `lm-studio` and
-`ollama` bridges. There is no provider bill and no allowance to meter, and
-today those cases fall to `unknown`, which tells the user "cannot say" about a
-spend with no per-token charge. When any attributed stage was hosted, the
+produced for an adapter whose attributed stages in the snapshot all ran on
+models known to run on the operator's endpoints: `opencode` stages § 3 stamps
+at zero, and `lm-studio` and `ollama` bridge stages on a model § 3 would stamp.
+No provider bills those stages, so there is no allowance to meter, and today
+they fall to `unknown`, which tells the user "cannot say" about stages no
+provider bills. When any attributed stage was hosted or unstamped, the
 snapshot is the ordinary `pay-per-token` one over the priced stages. #1665
 records the amendment in ADR-018 and implements it.
 
@@ -324,8 +343,8 @@ closed-transport set exactly (`validateAdapterTransports`), so `opencode` is
 not listed there. Registry membership decides pricing (§ 3) and how a model is
 recorded (§ 2), never admission: a provider-qualified model is not refused for
 being unknown, and a bare id is not admitted for being known. Admission is the
-`-m` shape check now, and endpoint readiness (#1646, #1678) and the doctor
-(#1627) later.
+`-m` shape check now, and endpoint readiness (#1646, #1678), the refusal of an
+Ollama cloud model on an endpoint (§ 3, #1679) and the doctor (#1627) later.
 
 ### 6. The agentic gate and #521
 
@@ -441,29 +460,40 @@ the process **exits 0**. An `ask` is a silent stop that looks like success.
 
 ### 10. Egress defaults
 
-| Egress                                  | Pipeline default                                                         |
-| --------------------------------------- | ------------------------------------------------------------------------ |
-| Session share                           | `share: "disabled"`, `OPENCODE_DISABLE_SHARE=1`, `--share` never emitted |
-| Autoupdate                              | `autoupdate: false`, `OPENCODE_DISABLE_AUTOUPDATE=1`                     |
-| Model-catalog fetch                     | `OPENCODE_DISABLE_MODELS_FETCH=1`; the registry prices, not the catalog  |
-| LSP server download                     | `OPENCODE_DISABLE_LSP_DOWNLOAD=1`                                        |
-| Default plugins                         | `OPENCODE_DISABLE_DEFAULT_PLUGINS=1`                                     |
-| Remote `instructions` and `skills.urls` | refused: only absolute paths inside the worktree or the per-run root     |
-| `webfetch`                              | `deny` unless the stage's allowed tools include web fetch                |
-| Web search                              | off; its enabling variable is stripped with every inherited `OPENCODE_*` |
+| Egress                                  | Pipeline default                                                                      |
+| --------------------------------------- | ------------------------------------------------------------------------------------- |
+| Session share                           | `share: "disabled"`, `OPENCODE_DISABLE_SHARE=1`, `--share` never emitted              |
+| Autoupdate                              | `autoupdate: false`, `OPENCODE_DISABLE_AUTOUPDATE=1`                                  |
+| Model-catalog fetch                     | `OPENCODE_DISABLE_MODELS_FETCH=1`; the registry prices, not the catalog               |
+| LSP server download                     | `OPENCODE_DISABLE_LSP_DOWNLOAD=1`                                                     |
+| Default plugins                         | `OPENCODE_DISABLE_DEFAULT_PLUGINS=1`                                                  |
+| Remote `instructions` and `skills.urls` | refused: only absolute paths inside the worktree or the per-run root                  |
+| `webfetch`                              | `deny` unless the stage's allowed tools include web fetch                             |
+| Web search                              | off; its enabling variable is stripped with every inherited `OPENCODE_*`              |
+| Session-title generation                | `agent.title.disable: true`, so no title request is sent; `small_model` locked (§ 15) |
 
-Every variable named here appears in the 1.18.30 binary. Whether they stop the
-traffic they name is #1644's to prove.
+Every variable and config key named here appears in the 1.18.30 binary.
+Whether they stop the traffic they name is #1644's to prove.
 
-No Nightgauge document describes a run as offline or air-gapped, or as sending
-nothing off the machine, whatever the provider and whatever #1644 finds. Those
-descriptions are untrue by design: a stage talks to the Git forge, which is
-what the `GITHUB_TOKEN` in its environment is for, and an endpoint on the local
-network (§ Endpoints) is another machine, reached over plain HTTP. #1644 gates
-only a narrower statement: that the agent and its model traffic reach only
-loopback and the endpoints the operator configured, while Nightgauge still
-talks to the Git forge. No document makes even that statement until #1644 has
-verified it.
+Session-title generation is a second model request in every run, as read from
+the 1.18.30 bundled source rather than observed. `opencode run` gives its
+session a default title, and OpenCode replaces a default title by sending the
+stage prompt to the `title` agent's model, or else to `small_model` on whatever
+provider it names, or else to a small model of the dispatched provider, or
+else to the dispatched model. The title has no use in a run whose session
+database is deleted at the end (§ 22), so the per-run config removes the
+`title` agent, and § 15 locks `small_model` and every agent's model to the
+dispatched model as well.
+
+#1644 records the connections OpenCode's process tree opens during a run on a
+local provider. A pass verifies that OpenCode reached only loopback and the
+endpoints the operator configured, and it verifies nothing about the rest of
+the run or about where a model ran. Every stage also reaches the Git forge,
+which is what the `GITHUB_TOKEN` in its environment is for. An endpoint on the
+local network (§ Endpoints) is another machine, reached over plain HTTP. And an
+endpoint can forward a request to a hosted service that Nightgauge does not see
+(§ Endpoints). Nightgauge documents a run's network traffic only as far as
+#1644 has measured it, and only after it has (§ 23).
 
 ### 11. Claude compatibility
 
@@ -499,11 +529,12 @@ The registry's schema note in `internal/models/model-registry.json` says that
 local providers (ollama and lm-studio) have no entries by design, that the
 configured local model serves every band, and that an unknown id is priced at
 zero. #1633 amends it to say that local providers have no **committed**
-entries. A local model's descriptor (context length, tool support, and a zero
-rate card with `rate_provenance: local`) is discovered from the endpoint at run
-time, lives in machine-local state, and is keyed by normalized provider and
-model id, never by endpoint address. An unknown local id still records
-`cost_usd: 0` (no per-token provider charge), stamped. The committed file
+entries. A local model's descriptor (context length and tool support, and a
+zero rate card with `rate_provenance: local` only for a model § 3 stamps) is
+discovered from the endpoint at run time, lives in machine-local state, and is
+keyed by normalized provider and model id, never by endpoint address. A model
+on an endpoint is priced by § 3's rule: `cost_usd: 0` stamped where the model
+is known to run on the endpoint, unstamped otherwise. The committed file
 carries no local model and no endpoint.
 
 ### 14. Host overlay segment (amends ADR-016)
@@ -567,6 +598,8 @@ the setting. A **locked** row cannot be turned back on from any config tier.
 | Default and third-party plugins          | `OPENCODE_DISABLE_DEFAULT_PLUGINS=1`; `plugin` lists Nightgauge's only | security  | locked                                       |
 | Repository project config                | `OPENCODE_DISABLE_PROJECT_CONFIG=1`; reviewed merge (§ 8)              | security  | locked                                       |
 | Operator's global OpenCode config        | `inherit_user_config: false`                                           | security  | overridable; locked keys still win           |
+| Session titles                           | `agent.title.disable: true` (§ 10)                                     | privacy   | locked                                       |
+| A model other than the dispatched one    | `small_model` and every agent's `model` pinned to the dispatched model | security  | locked                                       |
 | OAuth and subscription credentials       | never read (§ 17)                                                      | security  | locked                                       |
 | Operator's `~/.claude` prompt and skills | `OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1`, `_SKILLS=1`                   | privacy   | locked                                       |
 | Remote `instructions` and `skills.urls`  | refused                                                                | security  | locked                                       |
@@ -578,6 +611,15 @@ the setting. A **locked** row cannot be turned back on from any config tier.
 | Session import                           | not used                                                               | security  | locked                                       |
 | Snapshots                                | `snapshot: false`                                                      | footprint | overridable                                  |
 
+The pinned models are `small_model` and the `model` of every agent: the hidden
+`title`, `compaction` and `summary` agents and every subagent the `task` tool
+starts. Each of them decides where a model request carrying the stage's prompt
+or transcript goes, so none may name a model other than the one the stage
+names (§ 17). #1625 writes them into the per-run config, and the
+project-config merge drops a value the repository sets, with a warning
+(#1638); a value in an inherited operator config loses to them like every
+other locked key (§ 8).
+
 ### 16. Orchestration capability
 
 `opencode` declares `sdk-fanout`, not `native-workflow`. OpenCode's `task`
@@ -588,11 +630,10 @@ declaration ships with the SDK adapter (#1637).
 
 ### 17. Anthropic credentials
 
-A pipeline run that reaches an `anthropic/*` model through OpenCode
-authenticates with `ANTHROPIC_API_KEY` from the environment and nothing else.
-Nightgauge injects the `anthropic` provider block with its key read from that
-variable. A dispatch to `anthropic/*` with the variable unset is refused before
-spawn, with remediation.
+An `anthropic/*` stage through OpenCode has exactly one credential: the
+`ANTHROPIC_API_KEY` variable. Nightgauge injects the `anthropic` provider block
+with its key read from that variable, and a dispatch to `anthropic/*` with the
+variable unset is refused before spawn, with remediation.
 
 A subscription or OAuth login is never used. OpenCode's stored credentials
 (`auth.json` in its data directory) are not read: the per-run data directory
@@ -605,18 +646,38 @@ own API-key variable from the environment.
 Until #1616 enforces this section, `PreDispatch` refuses every `anthropic/*`
 dispatch before spawn, with the enable switch set or not (§ The enable gate).
 Nothing yet stops OpenCode using a login it has stored, and `ANTHROPIC_API_KEY`
-being set does not change that. The refusal covers the model a stage names. A
-model named in the operator's own OpenCode config is covered once run
-isolation (#1616) keeps that config and its stored logins out of a run, and
-until then the enabled-dispatch warning says so. #1616 replaces the refusal
-with the key requirement above.
+being set does not change that. The refusal sees only the model a stage names.
+Any OpenCode config the run reads can name another: the operator's own, and
+the target repository's `opencode.json`, `opencode.jsonc` and `.opencode/`,
+which load because the adapter does not set `OPENCODE_DISABLE_PROJECT_CONFIG`
+yet (§ 8). Read from the 1.18.30 bundled source, two keys send the stage prompt
+to the model they name, whatever its provider:
+
+- `small_model` titles every session. `opencode run` gives its session a
+  default title, and OpenCode replaces it by sending the stage prompt to the
+  `title` agent's model or else to `small_model`, without checking that it is
+  on the dispatched provider (§ 10).
+- An agent's `model` is what that agent runs on: the `title` agent, the
+  `compaction` agent, which summarizes the whole transcript, and a subagent the
+  stage starts through the `task` tool, which otherwise runs on the stage's
+  model.
+
+Named as `anthropic/...`, either one reaches Anthropic on whatever credential
+OpenCode holds for it, a stored login included, and the repository, not the
+operator, may be what names it. Run isolation (#1616) closes the stored-login
+route: the per-run data directory starts empty, so no stored login exists to
+use. § 15 pins both keys to the dispatched model (#1625), and the
+project-config merge drops a repository's value (#1638), so no config chooses
+where the prompt goes. Until #1616 lands, the enabled-dispatch warning's
+credential-policy line names both routes, and #1616 replaces the refusal with
+the key requirement above.
 
 `nightgauge doctor` reports a subscription or OAuth login for `anthropic` in
 OpenCode's stored credentials (`auth.json`) as a finding (#1627). It reads only
 each entry's `type`, never a credential value. The finding says that a
-pipeline run never uses the login, that an `anthropic/*` stage through OpenCode
-needs `ANTHROPIC_API_KEY`, and that a Claude subscription belongs on the
-`claude-headless` adapter.
+pipeline run never uses the login and that an `anthropic/*` stage through
+OpenCode needs `ANTHROPIC_API_KEY`. Its remediation names `claude-headless`,
+the adapter that runs Claude Code under the login Claude Code itself holds.
 
 ### 18. Listener
 
@@ -751,10 +812,10 @@ Studio beside Ollama. Each is a named **endpoint** in `opencode.endpoints[]`
 - **Instance identity.** The operator-chosen endpoint `id` becomes the
   OpenCode provider key. Nightgauge injects one provider block per endpoint
   under that key, and a stage dispatches with `-m <id>/<model>`. `provider`
-  stays the normalized kind (`lm-studio`, `ollama` or `openai-compatible`), and
-  it alone drives cost (§ 3), overlays (§ 14) and records. Two LM Studio
-  instances are two endpoints of one kind. An id is lowercase letters, digits
-  and `-`, at most 32 characters, and unique.
+  stays the normalized kind (`lm-studio`, `ollama` or `openai-compatible`). It
+  drives overlays (§ 14) and records, and with § 3's test of where the model
+  runs, cost. Two LM Studio instances are two endpoints of one kind. An id is
+  lowercase letters, digits and `-`, at most 32 characters, and unique.
 - **Reserved ids.** An id is never a provider key in the catalog bundled with
   the max-tested OpenCode version (§ 20). 1.18.30 bundles 213: the four hosted keys
   of § 1 and every other service it knows, `deepseek`, `mistral`, `openrouter`,
@@ -765,8 +826,8 @@ Studio beside Ollama. Each is a named **endpoint** in `opencode.endpoints[]`
   value of `DEEPSEEK_API_KEY` from the environment to that URL as a bearer
   token, even with `enabled_providers` narrowed to that one key. An endpoint
   named after a hosted service would send that service's key to the machine the
-  endpoint names, in the LAN case over plain HTTP, and § 1 would record the
-  stage as local, stamped `cost_usd: 0`. The catalog binds `GITHUB_TOKEN`,
+  endpoint names, in the LAN case over plain HTTP, and § 1 and § 3 could record
+  the stage as local, stamped `cost_usd: 0`. The catalog binds `GITHUB_TOKEN`,
   which every spawn carries, to `github-copilot`. OpenCode also keys its custom
   provider loaders, some of which read credentials of their own, by provider
   key, and every key with a loader in 1.18.30 is a catalog key.
@@ -835,6 +896,21 @@ Studio beside Ollama. Each is a named **endpoint** in `opencode.endpoints[]`
   A documentation address such as `192.0.2.10` (RFC 5737) is neither loopback
   nor private-network, so an entry naming it is refused even with
   `allow_lan: true`, and the refusal names the endpoint id, not the address.
+
+- **An endpoint can forward.** The server at a `base_url` may pass a request
+  on: a gateway such as a LiteLLM proxy hands it to a hosted API, and Ollama
+  serves its cloud models through its local API from its hosted service.
+  Nightgauge sees the endpoint and nothing past it. The loopback and
+  private-network checks above say which machine OpenCode sends a prompt to,
+  not where the model runs, and #1644's egress check watches only OpenCode's
+  own connections (§ 10), so a pass does not say it either. § 3 therefore
+  stamps `cost_usd: 0` only for a model known to run on the endpoint. A stage
+  on an `openai-compatible` endpoint is stamped only when its entry declares
+  `self_hosted: true` (#1678). An Ollama cloud model is refused before spawn
+  (#1679), and the refusal's remediation is `ollama-cloud/<model>`, the
+  hosted provider key OpenCode's 1.18.30 catalog has for Ollama's service,
+  which § 1 records as `other` and § 3 leaves unstamped unless the registry
+  prices it.
 
 - **Failover.** A dispatch may move from one endpoint to another only when the
   second serves the same model id (#1679). That covers parallel stages spread
