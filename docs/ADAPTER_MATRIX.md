@@ -563,29 +563,16 @@ high-value; tracked as part of the broader adapter parity work.
 
 ---
 
-### Gap #5: Missing Minimum Version in claude-headless
-
-| Attribute       | Value                                                             |
-| --------------- | ----------------------------------------------------------------- |
-| Adapter         | `claude-headless`                                                 |
-| Capability      | Version detection                                                 |
-| Codex pattern   | `MIN_KNOWN_VERSION = "0.111.0"` with warning in `validateAuth`    |
-| Gemini pattern  | `MIN_KNOWN_VERSION = "0.29.0"` with warning in `validateAuth`     |
-| Claude headless | Version is detected, but no `MIN_KNOWN_VERSION` floor is compared |
-| Severity        | LOW                                                               |
-| Decision        | **DEFER**                                                         |
-
-**Evidence:** `ClaudeHeadlessAdapter.validateAuth()` calls `verifyCLIInstalled()`
-and `detectClaudeCliVersion()`, but the detected version is used only for the
-native-workflow floor (`>= v2.1.154`) — there is no general `MIN_KNOWN_VERSION`
-compatibility warning. Codex (`0.111.0`), Gemini (`0.29.0`) and Grok (`1.0.0`)
-all emit a non-blocking warning when the CLI is below their known minimum.
-
-**Recommended fix:** Add a `MIN_KNOWN_VERSION` constant and compare the version
-already returned by `detectClaudeCliVersion()` against it, warning (not blocking)
-when the CLI is below the floor — the same shape as Codex, Gemini and Grok.
-
----
+**Version floors:** every adapter's minimum known-compatible CLI version, the
+newest version anyone tested, and whether falling below the floor warns or
+disables the adapter, are generated from
+`internal/adaptercompat/manifests/*.json` into
+`packages/nightgauge-sdk/src/cli/adapters/adapterCompat.generated.ts`
+(`ADAPTER_COMPAT`, `cmd/adaptercompat-codegen`, #1621) — including
+claude-headless, which now compares its detected version against
+`ADAPTER_COMPAT["claude-headless"].minVersion` the same warn-don't-block way
+Codex, Gemini and Grok always have. Change a floor by editing the manifest and
+regenerating, not by editing an adapter's TypeScript.
 
 ## Follow-Up Issues
 
@@ -593,7 +580,6 @@ when the CLI is below the floor — the same shape as Codex, Gemini and Grok.
 | -------- | ----- | ------------------------------------------------- | --------------- | --------------------------------------------------------------------------------- |
 | HIGH     | #2589 | Sync Go Codex Adapter with TypeScript Adapter     | codex           | Session resume, ephemeral, sandbox                                                |
 | MEDIUM   | —     | Upgrade claude-headless TypeScript to stream-json | claude-headless | [Gap #4](#gap-4-claude-headless-typescript-plain-text-output-and-token-reporting) |
-| LOW      | —     | Add version check to claude-headless validateAuth | claude-headless | [Gap #5](#gap-5-missing-minimum-version-in-claude-headless)                       |
 
 ---
 

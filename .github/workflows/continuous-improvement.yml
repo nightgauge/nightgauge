@@ -164,7 +164,7 @@ jobs:
           PROPOSAL_FILE: ${{ runner.temp }}/proposals/proposals.json
         run: |
           set -euo pipefail
-          npm install --global --no-fund --no-audit @anthropic-ai/claude-code@2.1.258
+          npm install --global --no-fund --no-audit "$(scripts/adapter-cli-pin.sh claude-headless)"
 
           # Prompt on stdin with `-p`, matching the pipeline's own Claude
           # adapter (internal/execution/adapters/claude.go). Not the
