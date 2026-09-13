@@ -16,6 +16,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- The VS Code extension's `ExecutionAdapter` now includes `opencode` as a
+  first-class value: `ui.core.adapter`, `pipeline.stage_adapters.<stage>` and
+  `pipeline.adapter_fallback_chain` all accept it, and an auto-router pick of
+  `opencode` dispatches instead of being refused. `opencode` is still not
+  added to the built-in default fallback chain (#1623)
 - The SDK's eval spawn profile, pipeline cost estimate, fan-out usage
   reporting, and stage calibration now resolve an `opencode` run's provider
   from its model rather than the adapter name, so an `opencode` run against an

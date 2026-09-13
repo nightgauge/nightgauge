@@ -41,6 +41,7 @@ import {
   VALID_ADAPTERS,
   readAdapterFromFile,
 } from "./modelResolver";
+import { ADAPTER_ID_ALTERNATION } from "../../config/schema";
 import { resolveConfigPathSync, logDeprecationWarning } from "../configPathResolver";
 import { readEffectiveConfigTextSync } from "../mergedConfigReader";
 
@@ -327,7 +328,7 @@ function getStageAdapterFromYaml(
 
       if (inStageAdapters) {
         const match = trimmed.match(
-          /^([a-z][-a-z]*):\s*['"]?(claude|codex|gemini|gemini-sdk|lm-studio|ollama|copilot|grok)['"]?(?:\s+#.*)?$/
+          new RegExp(`^([a-z][-a-z]*):\\s*['"]?(${ADAPTER_ID_ALTERNATION})['"]?(?:\\s+#.*)?$`)
         );
         if (match && match[1] === stage) {
           const adapter = match[2];
@@ -426,7 +427,7 @@ export function readAdapterFallbackChainFromYaml(workspaceRoot?: string): Execut
 
       if (inFallbackChain) {
         const match = trimmed.match(
-          /^-\s+['"]?(claude|codex|gemini|gemini-sdk|lm-studio|ollama|copilot|grok)['"]?(?:\s+#.*)?$/
+          new RegExp(`^-\\s+['"]?(${ADAPTER_ID_ALTERNATION})['"]?(?:\\s+#.*)?$`)
         );
         if (match) {
           const adapter = match[1];
@@ -527,7 +528,7 @@ export function readStageAdapterFallbackFromYaml(
 
       if (inThisStage) {
         const match = trimmed.match(
-          /^-\s+['"]?(claude|codex|gemini|gemini-sdk|lm-studio|ollama|copilot|grok)['"]?(?:\s+#.*)?$/
+          new RegExp(`^-\\s+['"]?(${ADAPTER_ID_ALTERNATION})['"]?(?:\\s+#.*)?$`)
         );
         if (match) {
           const adapter = match[1];
@@ -952,20 +953,13 @@ function toRouterAdapter(adapter: ExecutionAdapter): RouterExecutionAdapter {
 /**
  * Inverse of {@link toRouterAdapter}: collapse the SDK's two Claude backends
  * back to the UI's bare `"claude"` so a router pick threads cleanly through the
- * `ExecutionAdapter`-typed precedence chain. Every other id passes through.
- *
- * `opencode` has no `ExecutionAdapter` yet (#1623 adds it), so a router pick of
- * it is refused rather than mapped onto some other adapter. The extension's
- * own candidate list comes from `ExecutionAdapter` ids, so it never offers one.
+ * `ExecutionAdapter`-typed precedence chain. Every other id — including
+ * `opencode`, now a first-class `ExecutionAdapter` (#1623) — passes through
+ * unchanged via the fallthrough.
  */
 export function fromRouterAdapter(adapter: RouterExecutionAdapter): ExecutionAdapter {
   if (adapter === "claude-sdk" || adapter === "claude-headless") {
     return "claude";
-  }
-  if (adapter === "opencode") {
-    throw new Error(
-      'The auto-router picked "opencode", which the extension cannot run yet (#1623).'
-    );
   }
   return adapter;
 }

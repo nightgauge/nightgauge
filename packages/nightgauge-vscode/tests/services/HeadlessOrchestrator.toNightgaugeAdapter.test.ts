@@ -76,4 +76,8 @@ describe("toNightgaugeAdapter", () => {
     expect(toNightgaugeAdapter("copilot", {})).toBe("copilot");
     expect(toNightgaugeAdapter("grok", {})).toBe("grok");
   });
+
+  it("maps opencode → opencode (identity, #1623)", () => {
+    expect(toNightgaugeAdapter("opencode", {})).toBe("opencode");
+  });
 });
