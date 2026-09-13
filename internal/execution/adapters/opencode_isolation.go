@@ -34,12 +34,12 @@ import (
 //   - OpenCode also reads $HOME/.opencode as a config directory and
 //     $HOME/.agents/skills (and $HOME/.claude/skills) for skills, whatever the
 //     XDG variables say. OPENCODE_DISABLE_EXTERNAL_SKILLS=1 stops the skill
-//     scans; nothing but HOME stops the $HOME/.opencode read, so PreDispatch
-//     refuses a dispatch while that directory holds config
+//     scans; nothing but HOME stops the $HOME/.opencode read, so
+//     PrepareOpenCodeRun refuses a dispatch while that directory holds config
 //     (openCodeHomeConfigRefusal).
 //   - The machine's managed OpenCode config merges above every other layer,
-//     OPENCODE_CONFIG_CONTENT included, and nothing moves it, so PreDispatch
-//     refuses a dispatch while it exists as well
+//     OPENCODE_CONFIG_CONTENT included, and nothing moves it, so
+//     PrepareOpenCodeRun refuses a dispatch while it exists as well
 //     (openCodeManagedConfigRefusal).
 
 // openCodeInheritSetting is the machine-tier setting that layers the
@@ -117,7 +117,9 @@ var openCodeForgeEnv = []string{"GITHUB_TOKEN", "GITLAB_TOKEN"}
 // dispatched provider key, is what keeps them out (BuildOpenCodeConfig):
 // observed on 1.18.30, with AWS_REGION, GITHUB_TOKEN, GITLAB_TOKEN and
 // GOOGLE_CLOUD_PROJECT set, a run loads amazon-bedrock, github-copilot, gitlab
-// and google-vertex without it and only the dispatched provider with it.
+// and google-vertex without it and only the dispatched provider with it. A
+// dispatch that names one of them is refused (openCodePlatformProviderRefusal),
+// so a stage never runs on the credentials it keeps for its tools.
 var openCodePlatformProviders = []string{
 	"amazon-bedrock",          // AWS
 	"cloudflare-ai-gateway",   // Cloudflare
@@ -155,6 +157,10 @@ var openCodePlatformEnvNames = func() map[string]bool {
 // inherits one: a provider's endpoint comes from config only (ADR-022 § 8,
 // § 17, § Endpoints).
 var openCodeEndpointEnv = []string{"ANTHROPIC_BASE_URL", "OPENAI_BASE_URL"}
+
+// openCodeWithheldPrefix is the prefix of OpenCode's own variables, every one
+// of which a spawn is kept from inheriting (OpenCodeWithholdsEnv).
+const openCodeWithheldPrefix = "OPENCODE_"
 
 // openCodeCatalogEnvNames is every variable openCodeCatalogEnv binds to any
 // provider.
@@ -210,7 +216,7 @@ func openCodeDispatchProvider(model string) string {
 // its own, and PreDispatch names every one the environment holds
 // (openCodeWithheldProviderEnv), so neither happens silently.
 func OpenCodeWithholdsEnv(model, key string) bool {
-	if strings.HasPrefix(key, "OPENCODE_") || slices.Contains(openCodeEndpointEnv, key) {
+	if strings.HasPrefix(key, openCodeWithheldPrefix) || slices.Contains(openCodeEndpointEnv, key) {
 		return true
 	}
 	if !openCodeCatalogEnvNames[key] || openCodePlatformEnvNames[key] {
@@ -229,7 +235,7 @@ func openCodeWithheldProviderEnv(model string, environ []string) []string {
 	var names []string
 	for _, kv := range environ {
 		key, value, _ := strings.Cut(kv, "=")
-		if value == "" || strings.HasPrefix(key, "OPENCODE_") || !OpenCodeWithholdsEnv(model, key) {
+		if value == "" || strings.HasPrefix(key, openCodeWithheldPrefix) || !OpenCodeWithholdsEnv(model, key) {
 			continue
 		}
 		names = append(names, key)

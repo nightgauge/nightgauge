@@ -291,12 +291,16 @@ opencode:
 
 - A dispatch to the endpoint is refused while `limit.context` or
   `limit.output` is 0 or missing: OpenCode never compacts a session whose
-  context limit is 0, which is what LM Studio reports.
+  context limit is 0, which is what LM Studio reports. The block declares one
+  endpoint, whose id is `lmstudio` or `ollama`; a model under any other id
+  OpenCode does not know, such as `lmstudio-remote/<model>`, is refused.
 - `base_url` must be `http` or `https` with no user name or password. A host
   that is not this machine is accepted and reported as `non_loopback: true`.
 - `inherit_user_config` is off by default for security: your OpenCode config
   can name plugins, MCP servers, providers and models. Every key the per-run
-  config sets still wins over it, except a managed OpenCode config's.
+  config sets still wins over it, except a managed OpenCode config's and the
+  `general` and `explore` subagents' model and steps cap, which a `mode` entry
+  of the same name replaces.
 - Timeouts are durations such as `3m`; a bare number is read as nanoseconds
   and refused.
 

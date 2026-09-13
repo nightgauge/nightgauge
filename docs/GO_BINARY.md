@@ -7064,29 +7064,39 @@ nightgauge opencode config --stage <stage> --worktree <path> --json \
 
 Prints what an `opencode` spawn for the stage is given, so a caller outside the
 Go path (the SDK) runs OpenCode under the same bytes as the Go adapter. It runs
-the adapter's own preparation (`adapters.PrepareOpenCodeRun`): the run's root
-is created, or reused for `--run-id`, and the endpoint's base URL is written to
-a 0600 file in it. Without `--run-id` a new root is minted, and a root no stage
+the adapter's own checks in the manager's order (`PreDispatch`, the model
+check) and its preparation (`adapters.PrepareOpenCodeRun`): the run's root is
+created, or reused for `--run-id`, and the endpoint's base URL is written to a
+0600 file in it. Without `--run-id` a new root is minted, and a root no stage
 uses for 7 days is swept. `--max-turns` becomes the steps cap of the build
 agent and each subagent, 200 when it is 0. The model defaults to
 `opencode.model` from the machine-tier config; see
-[SETTINGS_ARCHITECTURE.md](SETTINGS_ARCHITECTURE.md#the-opencode-block).
+[SETTINGS_ARCHITECTURE.md](SETTINGS_ARCHITECTURE.md#the-opencode-block). The
+adapter's warning and notices go to stderr.
 
-| Field            | Meaning                                                                    |
-| ---------------- | -------------------------------------------------------------------------- |
-| `schema_version` | Output version (`1.0`); a caller refuses an unknown major version          |
-| `config_content` | `OPENCODE_CONFIG_CONTENT`, the per-run OpenCode config                     |
-| `env`            | Every variable the spawn sets from the run, the config included; no secret |
-| `plugin_dir`     | Where OpenCode loads the run's plugins from                                |
-| `run_dir`        | The run's private root                                                     |
-| `non_loopback`   | `true` when the model server is not on this machine                        |
+| Field            | Meaning                                                                                                   |
+| ---------------- | --------------------------------------------------------------------------------------------------------- |
+| `schema_version` | Output version (`1.0`); a caller refuses an unknown major version                                         |
+| `config_content` | `OPENCODE_CONFIG_CONTENT`, the per-run OpenCode config                                                    |
+| `env`            | Every variable the spawn sets from the run, the config included; no secret                                |
+| `env_withhold`   | `prefixes` and `names` of the inherited variables the spawn must not get; remove them before adding `env` |
+| `plugin_dir`     | Where OpenCode loads the run's plugins from                                                               |
+| `run_dir`        | The run's private root                                                                                    |
+| `non_loopback`   | `false` only for a declared model server on this machine; `true` elsewhere and for any hosted provider    |
+
+A caller that removes the `env_withhold` variables from its environment, then
+adds `env`, gives the child what the Go path gives it, apart from the
+adapter's per-spawn exports (such as `OPENCODE_SERVER_PASSWORD`).
 
 It exits 1, with nothing on stdout, wherever the adapter refuses a dispatch
-before spawning: a model that is not `<provider>/<model>`, an `anthropic/`
-model while `ANTHROPIC_API_KEY` is unset, a local model with no declared
-endpoint, an endpoint limit that is 0 or missing, a `base_url` that is not
-`http`/`https` or carries credentials, or an `opencode:` block in the
-worktree's committed config.
+before spawning: without `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1`, a model that is
+not `<provider>/<model>`, an `anthropic/` model while `ANTHROPIC_API_KEY` is
+unset, a model on a forge or cloud platform provider (such as
+`github-copilot/*`), a provider key that is neither a declared endpoint nor
+one OpenCode knows, an endpoint limit that is 0 or missing, a `base_url` that
+is not `http`/`https` or carries credentials, an `opencode:` block in the
+worktree's committed config, and, unless `opencode.inherit_user_config` is on,
+a `~/.opencode` holding config or managed OpenCode config on the machine.
 
 ### knowledge — Knowledge Base Operations
 

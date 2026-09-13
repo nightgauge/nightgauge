@@ -6,7 +6,6 @@ import (
 	"io"
 	"maps"
 	"os"
-	"path/filepath"
 	"regexp"
 	"runtime"
 	"slices"
@@ -29,7 +28,8 @@ import (
 // built yet (openCodeUnenforcedControls), so PreDispatch refuses every dispatch
 // unless the operator sets ExperimentalOpenCodeEnvVar=1, and prints what is
 // missing on every dispatch it lets through. It refuses an anthropic/ model
-// while ANTHROPIC_API_KEY is unset (openCodeAnthropicRefusal).
+// while ANTHROPIC_API_KEY is unset, and a model on a provider that runs on the
+// forge's or a cloud platform's credentials (openCodeCredentialRefusal).
 //
 // Every spawn runs in a root private to its pipeline run
 // (opencode_isolation.go, ADR-022 § 8), under a per-run config built from the
@@ -40,7 +40,7 @@ import (
 // every other model service out of the child. The forge and cloud platform
 // credentials stay.
 type OpenCodeAdapter struct {
-	// managedConfig replaces the managed OpenCode config files PreDispatch
+	// managedConfig replaces the managed OpenCode config files PrepareRunRoot
 	// checks; nil means this machine's (openCodeManagedConfigFiles). Only
 	// tests set it, because the real files are outside any directory a test
 	// may write.
@@ -135,71 +135,87 @@ var openCodeUnenforcedControls = []openCodeControl{
 	{"stream parsing", "token usage, cost and the served model are not recorded, because OpenCode's JSON events reach the Claude stream parser"},
 	{"failure classification", "a permission request OpenCode rejects on its own ends the run with exit code 0, so a stage that stopped early reads as a success"},
 	{"output redaction", "only the values of the server password, GITHUB_TOKEN, GH_TOKEN, GITLAB_TOKEN and the variables OpenCode's catalog binds to the dispatched provider are removed from the captured output; every other secret the child holds, inherited from the environment or read by a tool from a file, stays in it, and an OpenCode error event carries the model endpoint's full URL"},
-	{"project-config tamper gate", "the target repository's opencode.json and .opencode/ load unchecked: they cannot change a key the per-run config sets, but they can add to it, such as an agent or subagent of their own, with its own model on the dispatched provider and no steps cap, a remote instructions URL OpenCode fetches, or a header on the provider block, which can carry a variable from the stage's environment, a forge token included, to the model server"},
+	{"project-config tamper gate", "the target repository's opencode.json and .opencode/ load unchecked: they cannot change a key the per-run config sets, except the model and steps cap of the general and explore subagents, which a mode entry of the same name replaces, but they can add to it, such as an agent or subagent of their own, with its own model on the dispatched provider and no steps cap, a remote instructions URL OpenCode fetches, or a header on the provider block, which can carry a variable from the stage's environment, a forge token included, to the model server"},
 	{"repository steering", "OpenCode loads the target repository's AGENTS.md but not its CLAUDE.md, so a repository whose only steering is CLAUDE.md runs without it"},
 	{"permission map", "tool permissions come from OpenCode's config, not from the stage's allowed tools"},
 	{"safety plugin", "Nightgauge's careful-gate and stage-gate hooks do not run inside OpenCode"},
-	{"endpoint policy", "the server behind a -m provider key is whatever OpenCode's own config and bundled catalog make it: a provider block named after a catalog provider can send that provider's API key to its base URL, a LAN or public base URL is neither refused nor warned about, and an Ollama cloud model, which a local Ollama forwards to Ollama's hosted service, is dispatched like a local one"},
+	{"endpoint policy", "the server behind a hosted provider key other than anthropic is whatever OpenCode's bundled catalog and a lower config layer make it: a provider block the repository or your OpenCode config names after that provider can send its API key to another base URL, a LAN or public base URL of the declared endpoint is neither refused nor warned about, and an Ollama cloud model, which a local Ollama forwards to Ollama's hosted service, is dispatched like a local one"},
 	{"stage limits", "the stage's cost budget is not passed to OpenCode, and neither is its token cap on a hosted model, whose limits come from OpenCode's catalog, so the steps cap and the stage timeout bound a run, but nothing stops it at its cost budget"},
 	{"version policy", "the opencode binary's version is not checked against the floor or the max-tested version"},
 }
 
 // PreDispatch implements the manager's optional pre-dispatch hook, which runs
 // after worktree setup and before BuildCommand, so a refusal spawns nothing.
+// `nightgauge opencode config` calls it too, so the SDK path meets the same
+// checks.
 //
-// The anthropic key requirement comes first: the switch cannot satisfy it, so
-// it is the reason to state, and no enabled-dispatch warning precedes it. Then
-// the gate. With the switch set, the machine-tier `opencode:` block is read
-// (config.LoadOpenCodeConfig, which refuses one the target repository
-// commits), and a $HOME/.opencode holding config, or the machine's managed
-// OpenCode config, refuses the dispatch unless the operator has opted into
-// their own OpenCode config with opencode.inherit_user_config; that opt-in is
-// announced on stderr after the warning. Last, a stderr line names every
-// provider variable the environment holds that the stage, and so every tool it
-// runs, will not get (openCodeWithheldProviderEnv), by name alone.
+// The credential refusals come first (openCodeCredentialRefusal): the switch
+// cannot satisfy them, so they are the reason to state, and no
+// enabled-dispatch warning precedes them. Then the gate. Last, a stderr line
+// names every provider variable the environment holds that the stage, and so
+// every tool it runs, will not get (openCodeWithheldProviderEnv), by name
+// alone.
 //
-// The per-run config's own refusals (a zero limit, an undeclared local
-// endpoint, a malformed base_url) come from PrepareRunRoot, which builds it
-// before it creates anything.
+// Every refusal that depends on the machine-tier `opencode:` block comes from
+// PrepareRunRoot, which reads the block once and builds the run's config and
+// environment from it before it creates anything: the block committed in the
+// target repository, a zero limit, an undeclared endpoint, a malformed
+// base_url, and, unless the operator opted into their own OpenCode config, a
+// $HOME/.opencode holding config or the machine's managed OpenCode config.
 func (a *OpenCodeAdapter) PreDispatch(opts RunOptions) error {
-	if err := openCodeAnthropicRefusal(opts.Model, os.LookupEnv); err != nil {
+	if err := openCodeCredentialRefusal(opts.Model, os.LookupEnv); err != nil {
 		return err
 	}
-	switchValue := os.Getenv(ExperimentalOpenCodeEnvVar)
-	inherit := false
-	if switchValue == "1" {
-		settings, err := a.loadSettings(opts.WorktreeDir)
-		if err != nil {
-			return err
-		}
-		inherit = settings.InheritUserConfig
-	}
-	if switchValue == "1" && !inherit {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return fmt.Errorf("the opencode adapter cannot check %s for OpenCode config without the home directory: %w", filepath.Join("~", ".opencode"), err)
-		}
-		if err := openCodeHomeConfigRefusal(home); err != nil {
-			return err
-		}
-		managed := a.managedConfig
-		if managed == nil {
-			managed = openCodeManagedConfigFiles(runtime.GOOS, openCodeUsername())
-		}
-		if err := openCodeManagedConfigRefusal(managed); err != nil {
-			return err
-		}
-	}
-	if err := openCodeGate(switchValue, os.Stderr); err != nil {
+	if err := openCodeGate(os.Getenv(ExperimentalOpenCodeEnvVar), os.Stderr); err != nil {
 		return err
-	}
-	if inherit {
-		fmt.Fprintf(os.Stderr, "[opencode] %s is on: this dispatch also reads your own OpenCode config (your XDG OpenCode config directory, ~/.opencode and any managed OpenCode config on this machine). Every key the per-run config sets still wins over it except a managed config's, which outranks them all; stored logins are not inherited, but an API key written in that config is\n",
-			openCodeInheritSetting)
 	}
 	if names := openCodeWithheldProviderEnv(opts.Model, os.Environ()); len(names) > 0 {
 		fmt.Fprintf(os.Stderr, "[opencode] withheld from this stage and every tool it runs: %s. Each is a provider base URL or a variable OpenCode's catalog binds to a model provider other than %q; a tool that needs one fails without it or uses a login of its own. The cloud platform and forge credentials in your environment are kept\n",
 			strings.Join(names, ", "), openCodeDispatchProvider(opts.Model))
+	}
+	return nil
+}
+
+// openCodeCredentialRefusal is ADR-022 § 17 at dispatch: an anthropic/ model
+// needs ANTHROPIC_API_KEY (openCodeAnthropicRefusal), and a model on a
+// provider whose credentials are the forge's or a cloud platform's is refused
+// (openCodePlatformProviderRefusal).
+func openCodeCredentialRefusal(model string, lookup func(string) (string, bool)) error {
+	if err := openCodeAnthropicRefusal(model, lookup); err != nil {
+		return err
+	}
+	return openCodePlatformProviderRefusal(model)
+}
+
+// openCodePlatformProviderRefusal refuses a dispatch to a platform provider
+// (openCodePlatformProviders), a provider whose credentials belong to a
+// general-purpose account the stage keeps for its tools: the forge's
+// GITHUB_TOKEN and GITLAB_TOKEN, and the cloud and data platforms'. OpenCode's
+// catalog binds them to github-copilot, gitlab, amazon-bedrock, google-vertex
+// and the rest, and those providers' loaders read the platforms' own
+// credential chains as well, so such a run would spend a login that may be a
+// subscription or OAuth one, such as the gh login behind GITHUB_TOKEN, on
+// which github-copilot serves Claude and other models. A pipeline run
+// authenticates only with a model provider's own API-key variable (ADR-022
+// § 17), so the refusal holds whatever the switch says.
+//
+// The provider key is parsed and compared the way openCodeAnthropicRefusal
+// compares it, case-insensitively.
+func openCodePlatformProviderRefusal(model string) error {
+	m := strings.TrimSpace(model)
+	provider, _, qualified := strings.Cut(m, "/")
+	if !qualified {
+		return nil
+	}
+	for _, p := range openCodePlatformProviders {
+		if !strings.EqualFold(provider, p) {
+			continue
+		}
+		return fmt.Errorf(
+			"model %q is refused: provider %q authenticates with the credentials of a platform account the stage keeps for its own tools (%s, and whatever else that platform's credential chain finds), which can be a subscription or OAuth login, and an OpenCode stage authenticates only with a model provider's own API-key variable, never with a subscription or OAuth login. "+
+				"Name a provider that has one, such as anthropic/<model> with ANTHROPIC_API_KEY, or run the model on another adapter (--adapter or NIGHTGAUGE_ADAPTER). "+
+				"See docs/decisions/022-opencode-multi-provider-adapter.md § 17",
+			m, p, strings.Join(openCodeCatalogEnv[p], ", "))
 	}
 	return nil
 }
@@ -387,10 +403,13 @@ func (a *OpenCodeAdapter) BuildCommand(opts RunOptions) (string, []string, map[s
 // runs after the pre-dispatch, model and effort checks and before
 // BuildCommand (ADR-022 § 8, § 22).
 //
-// It reads the machine-tier `opencode:` block and hands it, with the
+// It reads the machine-tier `opencode:` block once (config.LoadOpenCodeConfig,
+// which refuses one the target repository commits) and hands it, with the
 // dispatch, to PrepareOpenCodeRun, the path `nightgauge opencode config`
 // takes too: the per-run config is built first, and a refused one (a zero
-// limit, an undeclared local endpoint, a malformed base_url) creates nothing.
+// limit, an undeclared endpoint, a malformed base_url) creates nothing, nor
+// does a $HOME/.opencode holding config or the machine's managed OpenCode
+// config unless the block opts into the operator's own OpenCode config.
 // Then the root for req.ID is created, or the one an earlier stage of the run
 // created is reused, and the environment that points OpenCode at it, with the
 // config as OPENCODE_CONFIG_CONTENT, is resolved against the environment this
@@ -407,13 +426,14 @@ func (a *OpenCodeAdapter) PrepareRunRoot(req RunRootRequest) (*RunRoot, error) {
 		return nil, err
 	}
 	run, err := PrepareOpenCodeRun(OpenCodeRunRequest{
-		Home:             home,
-		ID:               req.ID,
-		MachineConfigDir: req.MachineConfigDir,
-		Run:              req.Run,
-		Settings:         settings,
-		Lookup:           os.LookupEnv,
-		GOOS:             runtime.GOOS,
+		Home:               home,
+		ID:                 req.ID,
+		MachineConfigDir:   req.MachineConfigDir,
+		Run:                req.Run,
+		Settings:           settings,
+		Lookup:             os.LookupEnv,
+		GOOS:               runtime.GOOS,
+		ManagedConfigFiles: a.managedConfig,
 	})
 	if err != nil {
 		return nil, err

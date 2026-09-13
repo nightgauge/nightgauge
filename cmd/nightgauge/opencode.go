@@ -30,10 +30,12 @@ func opencodeCmd() *cobra.Command {
 }
 
 // opencodeConfigCmd prints what an opencode spawn for a stage is given: the
-// per-run config, the isolation environment and the run's directories. It is
-// the one authority the SDK path reads (#1648), and it runs the same code as
-// the Go adapter's PrepareRunRoot, so both paths spawn OpenCode under the same
-// bytes. Every refusal the adapter makes before spawning is an error here.
+// per-run config, the isolation environment, the inherited variables the
+// spawn must not get, and the run's directories. It is the one authority the
+// SDK path reads (#1648): it runs the Go adapter's own pre-dispatch hook,
+// model check and PrepareRunRoot preparation, in the manager's order, so both
+// paths spawn OpenCode under the same bytes, and every refusal the adapter
+// makes before spawning is an error here.
 func opencodeConfigCmd() *cobra.Command {
 	var (
 		stage     string
@@ -53,20 +55,30 @@ func opencodeConfigCmd() *cobra.Command {
   config_content  OPENCODE_CONFIG_CONTENT, the per-run OpenCode config
   env             every variable the spawn sets from the run: the isolation
                   variables and OPENCODE_CONFIG_CONTENT (no credential)
+  env_withhold    the inherited variables the spawn must not get: remove every
+                  one whose name starts with one of prefixes or is one of
+                  names before adding env, as the Go adapter does
   plugin_dir      where OpenCode loads the run's plugins from
   run_dir         the run's private root
-  non_loopback    true when the model server is not on this machine
+  non_loopback    false only for a declared model server on this machine;
+                  true for one elsewhere and for every hosted provider
 
 The run's root is created, or reused when --run-id names a run that has one.
 Without --run-id a new root is minted; the caller owns it, and a root no stage
 uses for 7 days is swept.
 
 The model defaults to opencode.model in the machine-tier config. The command
-fails, and prints nothing on stdout, whenever the adapter would refuse the
-dispatch before spawning: a model it cannot dispatch, an anthropic/ model while
-ANTHROPIC_API_KEY is unset, a local model with no declared endpoint, an
-endpoint whose limit.context or limit.output is 0 or missing, or a base_url
-that is not http or https or that carries credentials.`,
+runs the adapter's own checks, so it fails, and prints nothing on stdout,
+wherever the adapter refuses a dispatch before spawning: without
+` + adapters.ExperimentalOpenCodeEnvVar + `=1, a model it cannot dispatch, an
+anthropic/ model while ANTHROPIC_API_KEY is unset, a model on a forge or cloud
+platform provider, a provider key that is neither a declared endpoint nor one
+OpenCode knows, an endpoint whose limit.context or limit.output is 0 or
+missing, a base_url that is not http or https or that carries credentials, an
+opencode: block in the worktree's committed config, and, unless
+opencode.inherit_user_config is on, a ~/.opencode holding config or managed
+OpenCode config on this machine. The adapter's warnings and notices go to
+stderr.`,
 		Example: `  nightgauge opencode config --stage feature-dev --worktree "$PWD" --json
   nightgauge opencode config --stage feature-dev --worktree "$PWD" --model lmstudio/qwen/qwen3.8-27b --max-turns 40 --json`,
 		Args:         cobra.NoArgs,
@@ -106,8 +118,10 @@ type openCodeConfigFlags struct {
 }
 
 // openCodeConfigForStage resolves the verb's inputs the way the manager
-// resolves a dispatch's, and prepares the run through
-// adapters.PrepareOpenCodeRun, the function the adapter's PrepareRunRoot calls.
+// resolves a dispatch's, runs the adapter's PreDispatch and ValidateModel as
+// the manager does, and prepares the run through adapters.PrepareOpenCodeRun,
+// the function the adapter's PrepareRunRoot calls, with the one machine-tier
+// block it read.
 func openCodeConfigForStage(f openCodeConfigFlags) (*adapters.OpenCodeRun, error) {
 	stage := strings.TrimSpace(f.stage)
 	if stage == "" {
@@ -135,7 +149,18 @@ func openCodeConfigForStage(f openCodeConfigFlags) (*adapters.OpenCodeRun, error
 	if model == "" {
 		return nil, errors.New("no model: pass --model <provider>/<model>, or set opencode.model in the machine-tier config (~/.nightgauge/config.yaml)")
 	}
-	if err := adapters.NewOpenCodeAdapter().ValidateModel(model); err != nil {
+	run := adapters.RunOptions{
+		Stage:       stage,
+		WorktreeDir: worktree,
+		Model:       model,
+		MaxTurns:    f.maxTurns,
+		MaxTokens:   f.maxTokens,
+	}
+	adapter := adapters.NewOpenCodeAdapter()
+	if err := adapter.PreDispatch(run); err != nil {
+		return nil, err
+	}
+	if err := adapter.ValidateModel(model); err != nil {
 		return nil, err
 	}
 
@@ -159,15 +184,9 @@ func openCodeConfigForStage(f openCodeConfigFlags) (*adapters.OpenCodeRun, error
 		Home:             home,
 		ID:               id,
 		MachineConfigDir: machineDir,
-		Run: adapters.RunOptions{
-			Stage:       stage,
-			WorktreeDir: worktree,
-			Model:       model,
-			MaxTurns:    f.maxTurns,
-			MaxTokens:   f.maxTokens,
-		},
-		Settings: settings,
-		Lookup:   os.LookupEnv,
-		GOOS:     runtime.GOOS,
+		Run:              run,
+		Settings:         settings,
+		Lookup:           os.LookupEnv,
+		GOOS:             runtime.GOOS,
 	})
 }

@@ -119,9 +119,11 @@ changelog, and the release workflow refuses a tag that does not.
   `release-watchdog.yml` and `continuous-improvement.yml` now use instead of a
   hardcoded `claude-code@` version (#1621)
 - `nightgauge opencode config --stage <s> --worktree <p> --json` prints the
-  per-run OpenCode config, isolation environment, plugin directory and run
-  directory a stage is spawned with, from the same code as the Go adapter, so
-  the SDK path can run OpenCode under identical bytes. The OpenCode adapter now
+  per-run OpenCode config, isolation environment, the inherited variables to
+  withhold, plugin directory and run directory a stage is spawned with, from
+  the same code as the Go adapter, and refuses every dispatch the adapter
+  refuses before spawning, so the SDK path can run OpenCode under identical
+  bytes. The OpenCode adapter now
   reads an `opencode:` block from `~/.nightgauge/config.yaml` alone (a
   committed one is refused): `provider` (`lm-studio` or `ollama`), `base_url`,
   `limit.context` and `limit.output`, `timeouts`, `model`, `binary`,
@@ -228,15 +230,26 @@ changelog, and the release workflow refuses a tag that does not.
   `~/.opencode`'s entries to `~/.config/opencode`, or set
   `opencode.inherit_user_config: true` in `~/.nightgauge/config.yaml` to run
   with your OpenCode config (#1616, #1625)
-- An OpenCode stage runs under a per-run config Nightgauge builds, and neither
-  the repository's nor an inherited OpenCode config can change a setting in
-  it: it loads only the provider the stage names, runs every built-in agent
-  (compaction, summaries, subagents) on the stage's model, turns session
-  sharing, autoupdate and session titles off, caps tool output, and caps the
-  build agent's and each built-in subagent's steps at the stage's turn cap
-  (200 when none is set). A local model server's URL stays in a private file,
-  never in the stage's environment, and credentials appear only as `{env:VAR}`
-  references (#1625)
+- An OpenCode stage runs under a per-run config Nightgauge builds: it loads
+  only the provider the stage names, runs every built-in agent (compaction,
+  summaries, subagents) on the stage's model, turns session sharing,
+  autoupdate and session titles off, caps tool output, and caps the build
+  agent's and each built-in subagent's steps at the stage's turn cap (200 when
+  none is set). The repository's and an inherited OpenCode config cannot
+  change what it sets: not the model, the local model's limits and compaction
+  threshold, the local server's or Anthropic's API address, titles or sharing.
+  They can still add settings, and a `mode` entry can still replace the
+  `general` or `explore` subagent's model (on the stage's provider) and steps
+  cap; the dispatch warning says so. A local model server's URL stays in a
+  private file, never in the stage's environment, and credentials appear only
+  as `{env:VAR}` references (#1625)
+- An OpenCode dispatch to a provider that runs on the forge's or a cloud
+  platform's credentials, such as `github-copilot/*` on `GITHUB_TOKEN` or
+  `google-vertex-anthropic/*`, is refused before spawn: those credentials can
+  be a subscription or OAuth login, and a pipeline run authenticates only with
+  a model provider's own API key. So is a provider key that is neither your
+  declared model server nor a provider OpenCode knows, such as a second LM
+  Studio only your own OpenCode config defines (#1625)
 - The VS Code extension's Grok and Codex setup now installs only the skills
   and Codex commands bundled with the extension. It no longer copies the open
   workspace's `skills/` or `.codex/commands/` folder into `~/.grok` or

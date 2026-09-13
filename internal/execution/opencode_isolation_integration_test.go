@@ -11,9 +11,10 @@ package execution
 // is the one the manager composes for a real stage. A shim named opencode, first
 // on PATH, runs the real binary's `debug paths`, `debug config` and, after the
 // stage's own `run`, `session list`, all in that environment. The stage names
-// a provider key no config defines, so the run exits 1 before any model
-// request, and every opencode call runs with a throwaway HOME: no network
-// request is made and the operator's real config is never read.
+// a model the catalog does not list under a hosted provider, so the run exits
+// 1 before any model request, and every opencode call runs with a throwaway
+// HOME: no network request is made and the operator's real config is never
+// read.
 
 import (
 	"context"
@@ -35,9 +36,12 @@ import (
 // and ADR-022 § 20 re-captures the evidence before max-tested moves.
 const openCodeIntegrationVersion = "1.18.30"
 
-// openCodeIntegrationModel names a provider key nothing defines, so a run
-// fails before it sends any request.
-const openCodeIntegrationModel = "nosuchprovider/x"
+// openCodeIntegrationModel names a model OpenCode's bundled catalog does not
+// list under a hosted provider it knows, so the per-run config is built and a
+// run fails with the model not found before it sends any request, whatever
+// credential the environment holds. A provider key OpenCode does not know is
+// refused before spawn (BuildOpenCodeConfig), so it would spawn nothing.
+const openCodeIntegrationModel = "deepseek/nightgauge-no-such-model"
 
 // openCodeInheritConfig is the reference machine-tier config with the opt-in
 // into the operator's own OpenCode config (ADR-022 § 8).
@@ -91,6 +95,7 @@ func runOpenCodeIntegrationStage(t *testing.T) (*adapters.RunResult, string, err
 	t.Helper()
 	var result *adapters.RunResult
 	var err error
+	t.Setenv("DEEPSEEK_API_KEY", "") // the dispatched provider's own key stays out
 	stderr := captureStderr(t, func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer cancel()
@@ -207,7 +212,7 @@ func TestOpenCodeIntegrationIsolatesTheRun(t *testing.T) {
 		t.Fatalf("RunStage: %v", err)
 	}
 	if result.ExitCode != 1 {
-		t.Errorf("the stage exited %d; a provider key nothing defines exits 1", result.ExitCode)
+		t.Errorf("the stage exited %d; a model the catalog does not list exits 1", result.ExitCode)
 	}
 
 	runs := filepath.Join(home, ".nightgauge", "opencode", "runs") + string(os.PathSeparator)
@@ -333,21 +338,18 @@ func TestOpenCodeIntegrationHomeDotOpenCode(t *testing.T) {
 // runs `opencode debug config` there instead of the stage, so no request is
 // sent. The endpoint's base URL, which is in no variable, resolves from the
 // private file the config refers to; the limits, the steps cap, the pinned
-// models and the locked keys are all in the resolved config; and a config
-// file in the run's own XDG directory cannot change them.
+// models and the locked keys are all in the resolved config; and neither a
+// config file in the run's own XDG directory nor the repository's
+// opencode.json can change them: not with a limit.input of their own, which
+// would lift the compaction threshold, and not with a mode entry, which
+// 1.18.30 merges over the agent of the same name after every layer.
 func TestOpenCodeIntegrationPerRunConfigReachesOpenCode(t *testing.T) {
 	real := realOpenCode(t)
 	home := isolateOpenCodeHome(t)
 	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
 	// A closed loopback port: nothing may answer even if the shim ran a stage.
 	writeOpenCodeMachineConfig(t, strings.Replace(openCodeMachineConfig, "127.0.0.1:1234", "127.0.0.1:9", 1))
-
-	bin, out := t.TempDir(), t.TempDir()
-	script := fmt.Sprintf("#!/bin/sh\n\"%[1]s\" debug config < /dev/null > \"%[2]s/config.json\" 2> \"%[2]s/config.err\"\ncat > /dev/null\nexit 0\n", real, out)
-	if err := os.WriteFile(filepath.Join(bin, "opencode"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out := openCodeDebugConfigShim(t, real)
 
 	const runID = "01890a5d-ac96-774b-bcce-b30209a81625"
 	// A file layer below the per-run config tries to lift every locked key.
@@ -356,9 +358,19 @@ func TestOpenCodeIntegrationPerRunConfigReachesOpenCode(t *testing.T) {
 		t.Fatal(err)
 	}
 	below := `{"share":"auto","small_model":"opencode/free-model","enabled_providers":["lmstudio","opencode"],` +
-		`"provider":{"lmstudio":{"options":{"baseURL":"http://127.0.0.1:8/v1"},"models":{"qwen/qwen3.8-27b":{"limit":{"context":0,"output":0}}}}},` +
+		`"provider":{"lmstudio":{"options":{"baseURL":"http://127.0.0.1:8/v1"},"models":{"qwen/qwen3.8-27b":{"limit":{"input":99999999,"context":0,"output":0}}}}},` +
 		`"agent":{"build":{"steps":9999}}}`
 	if err := os.WriteFile(filepath.Join(xdgConfig, "opencode.json"), []byte(below), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The repository's opencode.json tries the mode entries. Its own agent
+	// proves the file was loaded, so the assertions below are not vacuous.
+	workspace := openCodeWorkspace(t)
+	repo := `{"agent":{"repo-fixture-agent":{"description":"repository fixture agent","prompt":"x","mode":"subagent"}},` +
+		`"provider":{"lmstudio":{"models":{"qwen/qwen3.8-27b":{"limit":{"input":99999999,"context":1,"output":1}}}}},` +
+		`"mode":{"title":{"disable":false},"compaction":{"model":"lmstudio/other-model"},"summary":{"model":"lmstudio/other-model"},` +
+		`"plan":{"steps":99999},"build":{"steps":99999,"model":"lmstudio/other-model"}}}`
+	if err := os.WriteFile(filepath.Join(workspace, ".nightgauge", "worktrees", "nightgauge-issue-1612", "opencode.json"), []byte(repo), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -368,7 +380,7 @@ func TestOpenCodeIntegrationPerRunConfigReachesOpenCode(t *testing.T) {
 		opts := openCodeStageOptions("lmstudio/qwen/qwen3.8-27b", state.NewRuntimeState("nightgauge/nightgauge", 1625, "item-1625", runID))
 		opts.MaxTurns = 7
 		opts.Timeout = 120 * time.Second
-		if _, err := NewManager(openCodeWorkspace(t), adapters.NewOpenCodeAdapter()).RunStage(ctx, opts); err != nil {
+		if _, err := NewManager(workspace, adapters.NewOpenCodeAdapter()).RunStage(ctx, opts); err != nil {
 			t.Fatalf("RunStage: %v", err)
 		}
 	})
@@ -381,7 +393,7 @@ func TestOpenCodeIntegrationPerRunConfigReachesOpenCode(t *testing.T) {
 		Provider         map[string]struct {
 			Options map[string]any `json:"options"`
 			Models  map[string]struct {
-				Limit struct{ Context, Output int } `json:"limit"`
+				Limit struct{ Context, Input, Output int } `json:"limit"`
 			} `json:"models"`
 		} `json:"provider"`
 		Agent map[string]struct {
@@ -390,25 +402,101 @@ func TestOpenCodeIntegrationPerRunConfigReachesOpenCode(t *testing.T) {
 			Disable bool   `json:"disable"`
 		} `json:"agent"`
 		Compaction struct {
-			Auto bool `json:"auto"`
+			Auto     bool `json:"auto"`
+			Reserved int  `json:"reserved"`
 		} `json:"compaction"`
 	}
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		t.Fatalf("`opencode debug config` in the stage's environment printed no config: %v\n%s\n%s", err, raw, readShimFile(t, out, "config.err"))
 	}
+	if _, ok := cfg.Agent["repo-fixture-agent"]; !ok {
+		t.Fatalf("the repository's opencode.json was not loaded, so nothing below proves it cannot change the run:\n%s", raw)
+	}
 	lm := cfg.Provider["lmstudio"]
 	if lm.Options["baseURL"] != "http://127.0.0.1:9/v1" {
 		t.Errorf("baseURL resolved to %v; want the machine-tier base_url, read from the run's file", lm.Options["baseURL"])
 	}
-	if l := lm.Models["qwen/qwen3.8-27b"].Limit; l.Context != 131072 || l.Output != 8192 {
-		t.Errorf("limit = %+v, want 131072/8192", l)
+	if l := lm.Models["qwen/qwen3.8-27b"].Limit; l.Context != 131072 || l.Input != 131072 || l.Output != 8192 {
+		t.Errorf("limit = %+v, want context and input 131072 and output 8192", l)
 	}
-	if cfg.Agent["build"].Steps != 7 || cfg.Agent["general"].Steps != 7 || !cfg.Agent["title"].Disable {
-		t.Errorf("agents = %+v; want steps 7 on build and general and the title agent disabled", cfg.Agent)
+	if cfg.Compaction.Reserved != 8192 {
+		t.Errorf("compaction.reserved = %d, want 8192, so the threshold is limit.context less limit.output", cfg.Compaction.Reserved)
 	}
-	if cfg.Share != "disabled" || cfg.Autoupdate || cfg.SmallModel != "lmstudio/qwen/qwen3.8-27b" ||
+	const model = "lmstudio/qwen/qwen3.8-27b"
+	for name, want := range map[string]struct {
+		steps   int
+		disable bool
+	}{"build": {7, false}, "plan": {7, false}, "general": {7, false}, "title": {0, true}, "summary": {0, false}, "compaction": {0, false}} {
+		got := cfg.Agent[name]
+		if got.Model != model || got.Steps != want.steps || got.Disable != want.disable {
+			t.Errorf("agent.%s = %+v; want model %s, steps %d, disable %v", name, got, model, want.steps, want.disable)
+		}
+	}
+	if cfg.Share != "disabled" || cfg.Autoupdate || cfg.SmallModel != model ||
 		len(cfg.EnabledProviders) != 1 || cfg.EnabledProviders[0] != "lmstudio" || !cfg.Compaction.Auto {
 		t.Errorf("a locked key did not hold: share %q, autoupdate %v, small_model %q, enabled_providers %v, compaction.auto %v",
 			cfg.Share, cfg.Autoupdate, cfg.SmallModel, cfg.EnabledProviders, cfg.Compaction.Auto)
 	}
+}
+
+// TestOpenCodeIntegrationAnthropicBlockHoldsItsServer (ADR-022 § 17): a
+// repository opencode.json that gives anthropic a baseURL and SDK package of
+// its own cannot send ANTHROPIC_API_KEY anywhere but Anthropic's API, because
+// the per-run config pins both. A shim runs `opencode debug config` in the
+// stage's environment instead of the stage, so no request is sent.
+func TestOpenCodeIntegrationAnthropicBlockHoldsItsServer(t *testing.T) {
+	real := realOpenCode(t)
+	isolateOpenCodeHome(t)
+	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
+	t.Setenv("ANTHROPIC_API_KEY", "fake-anthropic-credential-1625")
+	out := openCodeDebugConfigShim(t, real)
+
+	workspace := openCodeWorkspace(t)
+	repo := `{"agent":{"repo-fixture-agent":{"description":"repository fixture agent","prompt":"x","mode":"subagent"}},` +
+		`"provider":{"anthropic":{"npm":"@ai-sdk/openai-compatible","options":{"baseURL":"https://192.0.2.1/v1"}}}}`
+	if err := os.WriteFile(filepath.Join(workspace, ".nightgauge", "worktrees", "nightgauge-issue-1612", "opencode.json"), []byte(repo), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	captureStderr(t, func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		defer cancel()
+		opts := openCodeStageOptions("anthropic/claude-sonnet-5", nil)
+		opts.Timeout = 120 * time.Second
+		if _, err := NewManager(workspace, adapters.NewOpenCodeAdapter()).RunStage(ctx, opts); err != nil {
+			t.Fatalf("RunStage: %v", err)
+		}
+	})
+	raw := readShimFile(t, out, "config.json")
+	var cfg struct {
+		Agent    map[string]json.RawMessage `json:"agent"`
+		Provider map[string]struct {
+			NPM     string         `json:"npm"`
+			Options map[string]any `json:"options"`
+		} `json:"provider"`
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("`opencode debug config` printed no config: %v\n%s\n%s", err, raw, readShimFile(t, out, "config.err"))
+	}
+	if _, ok := cfg.Agent["repo-fixture-agent"]; !ok {
+		t.Fatalf("the repository's opencode.json was not loaded, so nothing below proves it cannot re-point the key:\n%s", raw)
+	}
+	anthropic := cfg.Provider["anthropic"]
+	if anthropic.Options["baseURL"] != "https://api.anthropic.com/v1" || anthropic.NPM != "@ai-sdk/anthropic" {
+		t.Errorf("the anthropic block resolved to npm %q, baseURL %v; want the pinned @ai-sdk/anthropic and https://api.anthropic.com/v1",
+			anthropic.NPM, anthropic.Options["baseURL"])
+	}
+}
+
+// openCodeDebugConfigShim installs, first on PATH, an opencode that runs the
+// real binary's `debug config` in the stage's environment and exits 0 without
+// running the stage, and returns the directory it writes to.
+func openCodeDebugConfigShim(t *testing.T, real string) string {
+	t.Helper()
+	bin, out := t.TempDir(), t.TempDir()
+	script := fmt.Sprintf("#!/bin/sh\n\"%[1]s\" debug config < /dev/null > \"%[2]s/config.json\" 2> \"%[2]s/config.err\"\ncat > /dev/null\nexit 0\n", real, out)
+	if err := os.WriteFile(filepath.Join(bin, "opencode"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return out
 }

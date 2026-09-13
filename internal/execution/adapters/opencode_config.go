@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -26,11 +27,18 @@ import (
 // Everything Nightgauge sets goes in OPENCODE_CONFIG_CONTENT. Observed on
 // opencode 1.18.30, that layer is merged after the run's XDG config file, the
 // repository's opencode.json and an inherited OPENCODE_CONFIG_DIR, and wins
-// over each of them for every key it sets, so none of them can lift a limit,
-// re-point a provider or re-enable sharing. Only the machine's managed config
-// sits above it, and PreDispatch refuses a dispatch while one exists unless
-// the operator opted into their own config. A layer can still add keys this
-// config does not set; the project-config tamper-gate warning says which.
+// over each of them for every key it sets. So none of them can change the
+// dispatched model, a limit of a declared endpoint's model, the endpoint's or
+// the anthropic block's base URL, or sharing. Only the machine's managed
+// config sits above it, and PrepareOpenCodeRun refuses a dispatch while one
+// exists unless the operator opted into their own config. A lower layer can
+// still add keys this config does not set, and two of them matter: a
+// mode.general or mode.explore entry, which 1.18.30 merges over that
+// subagent's model and steps cap after every layer (the content cannot set
+// those two without making the subagents primary), and a block for a hosted
+// provider other than anthropic, which this config gives none, so the block
+// can re-point it. The project-config tamper-gate and endpoint-policy warning
+// lines say so.
 //
 // Two things are never in the content itself:
 //
@@ -81,13 +89,19 @@ const (
 )
 
 // Compaction settings. tail_turns keeps the stage prompt's turn and the one
-// after it verbatim. reserved and preserve_recent_tokens take the bounds
-// opencode 1.18.30 applies to its own defaults (reserved at most 20000,
-// preserve_recent_tokens between 2000 and 15000 and at most a quarter of the
-// usable window), computed from the limits Nightgauge knows, so the values are
-// explicit and do not move with the binary. On 1.18.30 reserved changes the
-// compaction threshold only for a model with a limit.input, which no block
-// here sets; the threshold is limit.context less limit.output.
+// after it verbatim. preserve_recent_tokens takes the bounds opencode 1.18.30
+// applies to its own default (between 2000 and 15000, and at most a quarter
+// of the usable window), computed from the limits Nightgauge knows, so the
+// value is explicit and does not move with the binary.
+//
+// On 1.18.30 the compaction threshold of a model with a limit.input is
+// limit.input less reserved, and of any other model limit.context less its
+// output limit (read from its bundled source). A lower config layer can give
+// a model a limit.input the per-run config does not set, and so move the
+// threshold past the loaded window. The block of a declared endpoint's model
+// therefore sets limit.input to limit.context, and reserved to the output
+// limit, which keeps the threshold at limit.context less limit.output. A
+// hosted model's reserved is 20000, the most OpenCode's own default reserves.
 const (
 	openCodeCompactionTailTurns     = 2
 	openCodeCompactionReservedCap   = 20000
@@ -102,6 +116,25 @@ const openCodeEndpointNPM = "@ai-sdk/openai-compatible"
 // openCodeAnthropicKey is the provider key whose one credential is
 // ANTHROPIC_API_KEY (ADR-022 § 17).
 const openCodeAnthropicKey = "anthropic"
+
+// The anthropic block pins the SDK package and the API root, the values the
+// 1.18.30 catalog and its bundled @ai-sdk/anthropic use, so no lower config
+// layer can send ANTHROPIC_API_KEY to another server by setting a baseURL of
+// its own (ADR-022 § 17).
+const (
+	openCodeAnthropicNPM     = "@ai-sdk/anthropic"
+	openCodeAnthropicBaseURL = "https://api.anthropic.com/v1"
+)
+
+// openCodePinnedModeAgents are the built-in agents whose legacy mode.<name>
+// entry the config sets beside agent.<name>. Observed on 1.18.30, every
+// mode.<name> of the merged config is merged over agent.<name> after every
+// layer, forced to mode "primary", so a lower layer's mode entry would win
+// over the content's agent entry. These agents are primary already, so the
+// content's own mode entry changes nothing about them and wins over a lower
+// layer's. The general and explore subagents are not here: a mode entry
+// would turn them into primary agents (ADR-022 § 8).
+var openCodePinnedModeAgents = []string{"build", "plan", "title", "summary", "compaction"}
 
 // openCodeRunFilesDir is the directory of the run root, outside all four XDG
 // directories, where Nightgauge keeps the files the config refers to.
@@ -287,8 +320,9 @@ type OpenCodeRunConfig struct {
 	// the dispatched endpoint's base URL. Each is written with mode 0600
 	// before the spawn.
 	Files map[string]string
-	// NonLoopback is true when the dispatched endpoint is not on this
-	// machine.
+	// NonLoopback is false only when the stage dispatches to a declared
+	// endpoint whose base URL is on this machine. A hosted provider's model
+	// runs elsewhere, so it is true for every other dispatch.
 	NonLoopback bool
 }
 
@@ -360,17 +394,25 @@ type openCodeModelJSON struct {
 	ToolCall bool              `json:"tool_call"`
 }
 
+// openCodeLimitJSON is a model's limits. Input is always set, to Context:
+// see the compaction settings for why.
 type openCodeLimitJSON struct {
 	Context int `json:"context"`
+	Input   int `json:"input"`
 	Output  int `json:"output"`
 }
 
-// openCodeKeyedBlockJSON is a hosted provider block whose only setting is the
-// reference its API key is read from.
-type openCodeKeyedBlockJSON struct {
-	Options struct {
-		APIKey string `json:"apiKey"`
-	} `json:"options"`
+// openCodeAnthropicBlockJSON is the anthropic provider block: the SDK package,
+// the API root and the reference the API key is read from, so a lower layer
+// can neither swap the package nor re-point the key.
+type openCodeAnthropicBlockJSON struct {
+	NPM     string                       `json:"npm"`
+	Options openCodeAnthropicOptionsJSON `json:"options"`
+}
+
+type openCodeAnthropicOptionsJSON struct {
+	BaseURL string `json:"baseURL"`
+	APIKey  string `json:"apiKey"`
 }
 
 // BuildOpenCodeConfig builds the per-run config for in.Run. It is pure: it
@@ -387,16 +429,20 @@ type openCodeKeyedBlockJSON struct {
 //     (the forge tokens, AWS and Google Cloud) and not its own free one;
 //   - the dispatched provider's block: a complete block for a declared
 //     endpoint, keyed by the endpoint's id, with its limits, timeouts and
-//     tool calls, or the anthropic key reference;
-//   - steps on the build, plan, general and explore agents, and the same on
-//     the legacy mode.build entry, which 1.18.30 applies over agent.build
-//     after every layer; subagent_depth; the title agent disabled;
+//     tool calls, or the anthropic block, with its SDK package, API root and
+//     key reference;
+//   - steps on the build, plan, general and explore agents; the legacy
+//     mode.<name> entry of every agent in openCodePinnedModeAgents, the same
+//     as its agent entry; subagent_depth; the title agent disabled;
 //   - compaction, tool_output, share "disabled", autoupdate false, snapshot,
 //     lsp and formatter, and empty instructions and skills.urls.
 //
-// It refuses a model the adapter cannot dispatch, an anthropic/ model while
-// ANTHROPIC_API_KEY is unset, a local provider key no endpoint declares, and
-// an endpoint whose limit.context or limit.output is 0 or missing.
+// It refuses a model the adapter cannot dispatch; an anthropic/ model while
+// ANTHROPIC_API_KEY is unset and a platform provider's model
+// (openCodeCredentialRefusal); a provider key that is neither a declared
+// endpoint nor a provider OpenCode's bundled catalog knows, a local one
+// included; and an endpoint whose limit.context or limit.output is 0 or
+// missing.
 func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 	if in.Lookup == nil {
 		return OpenCodeRunConfig{}, errors.New("opencode config: no environment to check the provider's credential against")
@@ -411,7 +457,7 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 	if strings.ContainsAny(model, "{}") {
 		return OpenCodeRunConfig{}, fmt.Errorf("model %q is refused: OpenCode substitutes {env:...} and {file:...} references in its config, so a model id may not contain a brace", model)
 	}
-	if err := openCodeAnthropicRefusal(model, in.Lookup); err != nil {
+	if err := openCodeCredentialRefusal(model, in.Lookup); err != nil {
 		return OpenCodeRunConfig{}, err
 	}
 	if err := openCodeCheckRunRoot(in.RunRoot); err != nil {
@@ -419,9 +465,12 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 	}
 	key, modelID, _ := strings.Cut(model, "/")
 
-	built := OpenCodeRunConfig{}
+	// A hosted provider's model runs on its servers; only a declared endpoint
+	// on this machine keeps the stage here.
+	built := OpenCodeRunConfig{NonLoopback: true}
 	providers := map[string]any{}
 	var known *config.OpenCodeLimit // the dispatched model's limits, when Nightgauge knows them
+	_, catalogKey := openCodeCatalogEnv[key]
 	switch ep, declared := findOpenCodeEndpoint(in.Endpoints, key); {
 	case declared:
 		limit, err := ep.effectiveLimit(in.Run.MaxTokens)
@@ -439,7 +488,7 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 				ChunkTimeout:  ep.ChunkTimeout.Milliseconds(),
 			},
 			Models: map[string]openCodeModelJSON{
-				modelID: {Limit: openCodeLimitJSON{Context: limit.Context, Output: limit.Output}, ToolCall: true},
+				modelID: {Limit: openCodeLimitJSON{Context: limit.Context, Input: limit.Context, Output: limit.Output}, ToolCall: true},
 			},
 		}
 		built.Files = map[string]string{file: ep.BaseURL}
@@ -450,43 +499,56 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 			"model %q names provider key %q, a model server you run, but the machine-tier opencode: config declares no endpoint with that id, so its limits are unknown: LM Studio reports a context limit of 0, and OpenCode never compacts a session whose limit is 0. "+
 				"Set opencode.provider, opencode.base_url, opencode.limit.context and opencode.limit.output in ~/.nightgauge/config.yaml. See docs/SETTINGS_ARCHITECTURE.md",
 			model, key)
+	case !catalogKey:
+		return OpenCodeRunConfig{}, fmt.Errorf(
+			"model %q names provider key %q, which is neither an endpoint the machine-tier opencode: config declares nor a provider OpenCode's bundled catalog knows, so only a config Nightgauge does not build (the repository's opencode.json or your own OpenCode config) could define it, with a base URL and limits Nightgauge never checked: a missing or 0 context limit means OpenCode never compacts the session. "+
+				"Dispatch to the endpoint your opencode: block declares (its id is lmstudio for provider lm-studio and ollama for provider ollama), or name a provider OpenCode knows. See docs/SETTINGS_ARCHITECTURE.md",
+			model, key)
 	case key == openCodeAnthropicKey:
-		block := openCodeKeyedBlockJSON{}
-		block.Options.APIKey = "{env:ANTHROPIC_API_KEY}"
-		providers[key] = block
+		providers[key] = openCodeAnthropicBlockJSON{
+			NPM: openCodeAnthropicNPM,
+			Options: openCodeAnthropicOptionsJSON{
+				BaseURL: openCodeAnthropicBaseURL,
+				APIKey:  "{env:ANTHROPIC_API_KEY}",
+			},
+		}
 	}
 
 	steps := in.Run.MaxTurns
 	if steps <= 0 {
 		steps = openCodeDefaultSteps
 	}
-	build := openCodeAgentJSON{Model: model, Steps: steps}
+	agents := map[string]openCodeAgentJSON{
+		"build":      {Model: model, Steps: steps},
+		"plan":       {Model: model, Steps: steps},
+		"general":    {Model: model, Steps: steps},
+		"explore":    {Model: model, Steps: steps},
+		"title":      {Model: model, Disable: true},
+		"summary":    {Model: model},
+		"compaction": {Model: model},
+	}
+	modes := map[string]openCodeAgentJSON{}
+	for _, name := range openCodePinnedModeAgents {
+		modes[name] = agents[name]
+	}
 	cfg := openCodeConfigJSON{
 		Model:            model,
 		SmallModel:       model,
 		DefaultAgent:     "build",
 		EnabledProviders: []string{key},
 		Provider:         providers,
-		Agent: map[string]openCodeAgentJSON{
-			"build":      build,
-			"plan":       {Model: model, Steps: steps},
-			"general":    {Model: model, Steps: steps},
-			"explore":    {Model: model, Steps: steps},
-			"title":      {Model: model, Disable: true},
-			"summary":    {Model: model},
-			"compaction": {Model: model},
-		},
-		Mode:          map[string]openCodeAgentJSON{"build": build},
-		SubagentDepth: openCodeSubagentDepth,
-		Compaction:    openCodeCompaction(known),
-		ToolOutput:    openCodeToolOutputJSON{MaxLines: openCodeToolOutputMaxLines, MaxBytes: openCodeToolOutputMaxBytes},
-		Share:         "disabled",
-		Autoupdate:    false,
-		Snapshot:      in.Snapshot,
-		LSP:           in.LSP,
-		Formatter:     in.Formatter,
-		Instructions:  []string{},
-		Skills:        openCodeSkillsJSON{URLs: []string{}},
+		Agent:            agents,
+		Mode:             modes,
+		SubagentDepth:    openCodeSubagentDepth,
+		Compaction:       openCodeCompaction(known),
+		ToolOutput:       openCodeToolOutputJSON{MaxLines: openCodeToolOutputMaxLines, MaxBytes: openCodeToolOutputMaxBytes},
+		Share:            "disabled",
+		Autoupdate:       false,
+		Snapshot:         in.Snapshot,
+		LSP:              in.LSP,
+		Formatter:        in.Formatter,
+		Instructions:     []string{},
+		Skills:           openCodeSkillsJSON{URLs: []string{}},
 	}
 	raw, err := json.Marshal(cfg)
 	if err != nil {
@@ -498,7 +560,9 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 
 // openCodeCompaction is the compaction policy for a model whose limits are
 // known, or OpenCode's own bounds when they are not (a hosted model, whose
-// limits come from OpenCode's catalog).
+// limits come from OpenCode's catalog). For a known model, reserved is the
+// output limit, so with the block's limit.input at limit.context the
+// threshold is limit.context less limit.output.
 func openCodeCompaction(known *config.OpenCodeLimit) openCodeCompactionJSON {
 	c := openCodeCompactionJSON{
 		Auto:                 true,
@@ -508,7 +572,7 @@ func openCodeCompaction(known *config.OpenCodeLimit) openCodeCompactionJSON {
 		PreserveRecentTokens: openCodeCompactionPreserveCap,
 	}
 	if known != nil {
-		c.Reserved = min(openCodeCompactionReservedCap, known.Output)
+		c.Reserved = known.Output
 		usable := known.Context - known.Output
 		c.PreserveRecentTokens = min(openCodeCompactionPreserveCap, max(openCodeCompactionPreserveFloor, usable/4))
 	}
@@ -553,7 +617,9 @@ func findOpenCodeEndpoint(endpoints []OpenCodeEndpoint, key string) (OpenCodeEnd
 
 // openCodeIsLocalKey reports whether model's provider key names a model
 // server the operator runs (lmstudio, ollama), which only a declared endpoint
-// can describe.
+// can describe. A key outside the normalization table, such as a second
+// endpoint's id, is not one; BuildOpenCodeConfig refuses it unless an
+// endpoint declares it, because it is not a catalog key either.
 func openCodeIsLocalKey(model string) bool {
 	provider, _, _ := models.ParseOpenCodeModel(model)
 	return models.IsLocalProvider(provider)
@@ -596,6 +662,10 @@ type OpenCodeRunRequest struct {
 	Lookup func(string) (string, bool)
 	// GOOS is runtime.GOOS.
 	GOOS string
+	// ManagedConfigFiles replaces the machine's managed OpenCode config files
+	// (openCodeManagedConfigFiles); nil means this machine's. Only tests set
+	// it, because the real files are outside any directory a test may write.
+	ManagedConfigFiles []string
 }
 
 // OpenCodeRun is everything an opencode spawn is given besides its argv and
@@ -609,25 +679,64 @@ type OpenCodeRun struct {
 	// variables (OpenCodeIsolationEnv) and OPENCODE_CONFIG_CONTENT. It holds
 	// no credential.
 	Env map[string]string `json:"env"`
+	// EnvWithhold is what the spawn must not inherit: a caller removes every
+	// inherited variable it names before it adds Env, as the manager does for
+	// the Go path (OpenCodeWithholdsEnv).
+	EnvWithhold OpenCodeEnvWithhold `json:"env_withhold"`
 	// PluginDir is the directory in the run's OpenCode config directory that
 	// OpenCode loads the run's plugins from.
 	PluginDir string `json:"plugin_dir"`
 	// RunDir is the run's root.
 	RunDir string `json:"run_dir"`
-	// NonLoopback is true when the dispatched endpoint is not on this
-	// machine, so a claim that the run stays offline does not hold.
+	// NonLoopback is false only when the stage dispatches to a declared
+	// endpoint on this machine. It is true for an endpoint elsewhere and for
+	// every hosted provider, so a claim that the run stays offline does not
+	// hold.
 	NonLoopback bool `json:"non_loopback"`
 }
 
+// OpenCodeEnvWithhold is OpenCodeWithholdsEnv for one dispatch, as data: an
+// inherited variable is withheld when its name starts with one of Prefixes
+// or is one of Names. Names are sorted.
+type OpenCodeEnvWithhold struct {
+	Prefixes []string `json:"prefixes"`
+	Names    []string `json:"names"`
+}
+
+// OpenCodeEnvWithholdFor is the withheld set of a dispatch to model. It holds
+// exactly the names OpenCodeWithholdsEnv withholds: every OPENCODE_* variable,
+// the provider base-URL variables, and every catalog variable of a model
+// service other than the dispatched one.
+func OpenCodeEnvWithholdFor(model string) OpenCodeEnvWithhold {
+	names := slices.Clone(openCodeEndpointEnv)
+	for name := range openCodeCatalogEnvNames {
+		if OpenCodeWithholdsEnv(model, name) {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	return OpenCodeEnvWithhold{Prefixes: []string{openCodeWithheldPrefix}, Names: slices.Compact(names)}
+}
+
 // PrepareOpenCodeRun builds the config for req.Run, and only when that
-// succeeds creates the run's root, or reuses it, writes the files the config
-// refers to and resolves the isolation environment. A refused config creates
-// nothing. Creating a root also sweeps the roots no stage has used for
-// OpenCodeOrphanMaxAge, and a root holding stored logins is refused
+// succeeds, and the machine holds no OpenCode config a run cannot be isolated
+// from, creates the run's root, or reuses it, writes the files the config
+// refers to and resolves the isolation environment. A refused dispatch
+// creates nothing. Creating a root also sweeps the roots no stage has used
+// for OpenCodeOrphanMaxAge, and a root holding stored logins is refused
 // (openCodeStoredLoginRefusal).
 //
+// Unless req.Settings opts into the operator's own OpenCode config, a
+// $HOME/.opencode holding config (openCodeHomeConfigRefusal) and the
+// machine's managed OpenCode config (openCodeManagedConfigRefusal) refuse
+// the dispatch; with the opt-in, stderr says what the run reads. Both follow
+// the same Settings the environment is built from, so a setting changed
+// between two reads can never leave a run with neither the refusal nor the
+// notice.
+//
 // The adapter's PrepareRunRoot and `nightgauge opencode config` both call it,
-// so the SDK path and the Go path run under the same bytes.
+// so the SDK path and the Go path run under the same bytes and the same
+// refusals.
 func PrepareOpenCodeRun(req OpenCodeRunRequest) (*OpenCodeRun, error) {
 	rootPath, err := OpenCodeRunRoot(req.Home, req.ID)
 	if err != nil {
@@ -640,6 +749,21 @@ func PrepareOpenCodeRun(req OpenCodeRunRequest) (*OpenCodeRun, error) {
 	built, err := BuildOpenCodeConfig(input)
 	if err != nil {
 		return nil, err
+	}
+	if req.Settings.InheritUserConfig {
+		fmt.Fprintf(os.Stderr, "[opencode] %s is on: this dispatch also reads your own OpenCode config (your XDG OpenCode config directory, ~/.opencode and any managed OpenCode config on this machine). Every key the per-run config sets still wins over it except a managed config's, which outranks them all; stored logins are not inherited, but an API key written in that config is\n",
+			openCodeInheritSetting)
+	} else {
+		if err := openCodeHomeConfigRefusal(req.Home); err != nil {
+			return nil, err
+		}
+		managed := req.ManagedConfigFiles
+		if managed == nil {
+			managed = openCodeManagedConfigFiles(req.GOOS, openCodeUsername())
+		}
+		if err := openCodeManagedConfigRefusal(managed); err != nil {
+			return nil, err
+		}
 	}
 
 	root, created, err := EnsureOpenCodeRunRoot(req.Home, req.ID, req.Lookup)
@@ -678,6 +802,7 @@ func PrepareOpenCodeRun(req OpenCodeRunRequest) (*OpenCodeRun, error) {
 		SchemaVersion: OpenCodeConfigSchemaVersion,
 		ConfigContent: built.Content,
 		Env:           env,
+		EnvWithhold:   OpenCodeEnvWithholdFor(req.Run.Model),
 		PluginDir:     filepath.Join(root, "config", "opencode", "plugin"),
 		RunDir:        root,
 		NonLoopback:   built.NonLoopback,

@@ -1005,21 +1005,25 @@ func TestOpenCodeManagedConfigFiles(t *testing.T) {
 // TestOpenCodeRefusesManagedOpenCodeConfig: observed on 1.18.30, the
 // machine's managed config merges above OPENCODE_CONFIG_CONTENT, the layer
 // Nightgauge's locked keys go in, and no XDG or HOME variable moves it
-// (ADR-022 § 8). An enabled dispatch is refused while any of its files
+// (ADR-022 § 8). A dispatch is refused before spawn while any of its files
 // exists, naming the file without reading it, unless the operator has opted
 // into their own OpenCode config, which the stderr line then says includes it.
+// The refusal is PrepareRunRoot's, the preparation `nightgauge opencode
+// config` shares, and it follows the block the run is built from.
 func TestOpenCodeRefusesManagedOpenCodeConfig(t *testing.T) {
 	t.Setenv("HOME", t.TempDir()) // no ~/.opencode
-	t.Setenv(ExperimentalOpenCodeEnvVar, "1")
+	for _, k := range []string{"XDG_CONFIG_HOME", "XDG_CACHE_HOME", "GH_CONFIG_DIR", "GOCACHE"} {
+		t.Setenv(k, "")
+	}
 	const sentinel = "managed-config-content-sentinel-1616"
 	dir := t.TempDir()
 	files := []string{
 		filepath.Join(dir, "opencode.json"), filepath.Join(dir, "opencode.jsonc"),
 		filepath.Join(dir, "user", "ai.opencode.managed.plist"), filepath.Join(dir, "ai.opencode.managed.plist"),
 	}
-	a := &OpenCodeAdapter{managedConfig: files, settings: fixedOpenCodeSettings(config.OpenCodeConfig{})}
-	model := RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"}
-	if err := a.PreDispatch(model); err != nil {
+	a := &OpenCodeAdapter{managedConfig: files, settings: fixedOpenCodeSettings(lmStudioSettings())}
+	req := RunRootRequest{ID: testRunID, MachineConfigDir: t.TempDir(), Run: RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"}}
+	if _, err := a.PrepareRunRoot(req); err != nil {
 		t.Fatalf("with no managed config the dispatch was refused: %v", err)
 	}
 	for _, f := range files {
@@ -1029,7 +1033,7 @@ func TestOpenCodeRefusesManagedOpenCodeConfig(t *testing.T) {
 		if err := os.WriteFile(f, []byte(sentinel), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		err := a.PreDispatch(model)
+		_, err := a.PrepareRunRoot(req)
 		if err == nil {
 			t.Errorf("%s: the dispatch was allowed", f)
 		} else {
@@ -1050,14 +1054,60 @@ func TestOpenCodeRefusesManagedOpenCodeConfig(t *testing.T) {
 	if err := os.WriteFile(files[0], []byte(sentinel), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	a.settings = fixedOpenCodeSettings(config.OpenCodeConfig{InheritUserConfig: true})
+	inherit := lmStudioSettings()
+	inherit.InheritUserConfig = true
+	a.settings = fixedOpenCodeSettings(inherit)
 	var err error
-	stderr := captureAdapterStderr(t, func() { err = a.PreDispatch(model) })
+	stderr := captureAdapterStderr(t, func() { _, err = a.PrepareRunRoot(req) })
 	if err != nil {
 		t.Errorf("with %s on the dispatch was refused: %v", openCodeInheritSetting, err)
 	}
 	if !strings.Contains(stderr, "managed OpenCode config") {
 		t.Errorf("the opt-in line does not say it takes in the machine's managed config:\n%s", stderr)
+	}
+}
+
+// TestOpenCodeIsolationRefusalFollowsTheBlockTheRunIsBuiltFrom: the
+// ~/.opencode and managed-config refusals and the environment that decides
+// whether the operator's config is layered in come from one read of the
+// machine-tier block. With a block that reads opted in first and opted out
+// after, a dispatch is never let through with ~/.opencode holding config and
+// the run built as opted out, which would load that config with neither the
+// refusal nor the stderr line.
+func TestOpenCodeIsolationRefusalFollowsTheBlockTheRunIsBuiltFrom(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	for _, k := range []string{"XDG_CONFIG_HOME", "XDG_CACHE_HOME", "GH_CONFIG_DIR", "GOCACHE"} {
+		t.Setenv(k, "")
+	}
+	t.Setenv(ExperimentalOpenCodeEnvVar, "1")
+	if err := os.MkdirAll(filepath.Join(home, ".opencode", "agent"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	reads := 0
+	a := &OpenCodeAdapter{managedConfig: []string{}, settings: func(string) (config.OpenCodeConfig, error) {
+		reads++
+		s := lmStudioSettings()
+		s.InheritUserConfig = reads == 1
+		return s, nil
+	}}
+	run := RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"}
+	var root *RunRoot
+	var err error
+	stderr := captureAdapterStderr(t, func() {
+		if err = a.PreDispatch(run); err == nil {
+			root, err = a.PrepareRunRoot(RunRootRequest{ID: testRunID, MachineConfigDir: t.TempDir(), Run: run})
+		}
+	})
+	switch {
+	case err != nil:
+		if !strings.Contains(err.Error(), filepath.Join(home, ".opencode")) {
+			t.Errorf("the dispatch was refused for another reason: %v", err)
+		}
+	case root.Env["OPENCODE_CONFIG_DIR"] == "":
+		t.Error("the dispatch went ahead with ~/.opencode holding config and the run built as opted out: that config loads with neither the refusal nor the opt-in")
+	case !strings.Contains(stderr, openCodeInheritSetting+" is on"):
+		t.Errorf("the run layers the operator's config in but stderr does not say so:\n%s", stderr)
 	}
 }
 
@@ -1084,18 +1134,24 @@ func captureAdapterStderr(t *testing.T, fn func()) string {
 
 // TestOpenCodeRefusesAHomeDotOpenCodeWithConfig: observed on 1.18.30,
 // OpenCode reads $HOME/.opencode as a config directory whatever the XDG
-// variables say, so the per-run root cannot keep it out (ADR-022 § 8). An
-// enabled dispatch is refused while it holds anything OpenCode loads from a
-// config directory, naming the entries without reading them. What an install
-// or OpenCode itself leaves there is not config. With the operator's opt-in
-// into their own OpenCode config, opencode.inherit_user_config in the machine
-// tier, the dispatch goes ahead and stderr says so.
+// variables say, so the per-run root cannot keep it out (ADR-022 § 8). A
+// dispatch is refused before spawn while it holds anything OpenCode loads
+// from a config directory, naming the entries without reading them, and
+// nothing is created. What an install or OpenCode itself leaves there is not
+// config. With the operator's opt-in into their own OpenCode config,
+// opencode.inherit_user_config in the machine tier, the dispatch goes ahead
+// and stderr says so. The refusal is PrepareRunRoot's, which the verb shares;
+// without the switch, PreDispatch's gate refuses first.
 func TestOpenCodeRefusesAHomeDotOpenCodeWithConfig(t *testing.T) {
 	// The name is what operators set and what ADR-022 § 8 documents.
 	if openCodeInheritSetting != "opencode.inherit_user_config" {
 		t.Fatalf("the opt-in setting is %q; ADR-022 § 8 names opencode.inherit_user_config", openCodeInheritSetting)
 	}
-	a := &OpenCodeAdapter{managedConfig: []string{}, settings: fixedOpenCodeSettings(config.OpenCodeConfig{})}
+	for _, k := range []string{"XDG_CONFIG_HOME", "XDG_CACHE_HOME", "GH_CONFIG_DIR", "GOCACHE"} {
+		t.Setenv(k, "")
+	}
+	a := &OpenCodeAdapter{managedConfig: []string{}, settings: fixedOpenCodeSettings(lmStudioSettings())}
+	req := RunRootRequest{ID: testRunID, MachineConfigDir: t.TempDir(), Run: RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"}}
 	t.Setenv(ExperimentalOpenCodeEnvVar, "1")
 	const sentinel = "home-config-content-sentinel-1616"
 	for _, entry := range []string{
@@ -1115,7 +1171,7 @@ func TestOpenCodeRefusesAHomeDotOpenCodeWithConfig(t *testing.T) {
 		} else if err := os.MkdirAll(path, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		err := a.PreDispatch(RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"})
+		_, err := a.PrepareRunRoot(req)
 		if err == nil {
 			t.Errorf("~/.opencode/%s: the dispatch was allowed", entry)
 			continue
@@ -1127,6 +1183,9 @@ func TestOpenCodeRefusesAHomeDotOpenCodeWithConfig(t *testing.T) {
 		}
 		if strings.Contains(err.Error(), sentinel) {
 			t.Errorf("~/.opencode/%s: the refusal carries the file's content", entry)
+		}
+		if _, err := os.Lstat(OpenCodeRunsDir(home)); !os.IsNotExist(err) {
+			t.Errorf("~/.opencode/%s: the refused dispatch created %s", entry, OpenCodeRunsDir(home))
 		}
 	}
 
@@ -1142,16 +1201,18 @@ func TestOpenCodeRefusesAHomeDotOpenCodeWithConfig(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := a.PreDispatch(RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"}); err != nil {
+	if _, err := a.PrepareRunRoot(req); err != nil {
 		t.Errorf("a ~/.opencode holding only bin/ and install files was refused: %v", err)
 	}
 
 	if err := os.MkdirAll(filepath.Join(home, ".opencode", "agent"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	a.settings = fixedOpenCodeSettings(config.OpenCodeConfig{InheritUserConfig: true})
+	inherit := lmStudioSettings()
+	inherit.InheritUserConfig = true
+	a.settings = fixedOpenCodeSettings(inherit)
 	var err error
-	stderr := captureAdapterStderr(t, func() { err = a.PreDispatch(RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"}) })
+	stderr := captureAdapterStderr(t, func() { _, err = a.PrepareRunRoot(req) })
 	if err != nil {
 		t.Errorf("with %s on the dispatch was refused: %v", openCodeInheritSetting, err)
 	}
@@ -1159,7 +1220,7 @@ func TestOpenCodeRefusesAHomeDotOpenCodeWithConfig(t *testing.T) {
 		t.Errorf("the opt-in was announced %d times on stderr, want once:\n%s", n, stderr)
 	}
 
-	a.settings = fixedOpenCodeSettings(config.OpenCodeConfig{})
+	a.settings = fixedOpenCodeSettings(lmStudioSettings())
 	t.Setenv(ExperimentalOpenCodeEnvVar, "")
 	if err := a.PreDispatch(RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"}); err == nil || !strings.Contains(err.Error(), "is experimental") {
 		t.Errorf("with the switch unset the refusal = %v; want the gate's", err)

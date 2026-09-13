@@ -539,6 +539,60 @@ func TestOpenCodePreDispatchRequiresTheAnthropicAPIKey(t *testing.T) {
 	}
 }
 
+// TestOpenCodePreDispatchRefusesPlatformProviders (ADR-022 § 17): a model on
+// a provider whose credentials are the forge's or a cloud platform's is
+// refused before spawn, with the switch set or not and whatever keys the
+// environment holds, and no enabled-dispatch warning precedes the refusal.
+// github-copilot runs on GITHUB_TOKEN, the forge's gh login, which every
+// stage keeps and which serves Claude on a Copilot subscription; the
+// platform providers that serve Claude, google-vertex-anthropic and
+// amazon-bedrock, would reach it without ANTHROPIC_API_KEY. Every spelling
+// of the key meets the refusal. Every other provider key passes this check.
+func TestOpenCodePreDispatchRefusesPlatformProviders(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("ANTHROPIC_API_KEY", "set-by-the-test")
+	t.Setenv("GITHUB_TOKEN", "fake-forge-credential-1625")
+	a := &OpenCodeAdapter{managedConfig: []string{}, settings: fixedOpenCodeSettings(config.OpenCodeConfig{})}
+	refused := []string{"GitHub-Copilot/claude-sonnet-5", " gitlab/duo-chat"}
+	for _, p := range openCodePlatformProviders {
+		refused = append(refused, p+"/claude-sonnet-5")
+	}
+	for _, sw := range []string{"1", ""} {
+		t.Setenv(ExperimentalOpenCodeEnvVar, sw)
+		for _, model := range refused {
+			var err error
+			stderr := captureAdapterStderr(t, func() { err = a.PreDispatch(RunOptions{Model: model}) })
+			if err == nil {
+				t.Errorf("switch %q: PreDispatch(%q) allowed the dispatch", sw, model)
+				continue
+			}
+			for _, want := range []string{"subscription or OAuth", "own API-key variable", "§ 17"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("switch %q: the refusal of %q does not say %q: %v", sw, model, want, err)
+				}
+			}
+			if strings.Contains(stderr, "WARNING") {
+				t.Errorf("switch %q: the refusal of %q was preceded by the enabled-dispatch warning:\n%s", sw, model, stderr)
+			}
+			if strings.Contains(err.Error()+stderr, "fake-forge-credential-1625") {
+				t.Errorf("switch %q: the refusal of %q carries the forge token's value", sw, model)
+			}
+		}
+	}
+	if err := a.PreDispatch(RunOptions{Model: "github-copilot/gpt-5.5"}); err == nil || !strings.Contains(err.Error(), "GITHUB_TOKEN") {
+		t.Errorf("the github-copilot refusal does not name the variable it would run on: %v", err)
+	}
+
+	t.Setenv(ExperimentalOpenCodeEnvVar, "1")
+	for _, model := range []string{"openai/gpt-5.5", "openrouter/anthropic/claude-sonnet-5", "lmstudio/qwen/qwen3.8-27b"} {
+		var err error
+		captureAdapterStderr(t, func() { err = a.PreDispatch(RunOptions{Model: model}) })
+		if err != nil {
+			t.Errorf("PreDispatch(%q) = %v; only a platform provider meets this refusal", model, err)
+		}
+	}
+}
+
 func TestOpenCodeValidateModel(t *testing.T) {
 	a := NewOpenCodeAdapter()
 	for _, ok := range []string{
