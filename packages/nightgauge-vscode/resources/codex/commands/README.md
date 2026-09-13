@@ -1,6 +1,6 @@
 # Nightgauge Codex Slash Commands
 
-Bundled fallback slash command definitions used by the VSIX installer flow.
-
-Primary source of truth remains repository-local `.codex/commands/` when
-available in the active workspace.
+The slash command definitions that `Nightgauge: Setup Codex Commands` installs
+into `~/.codex/commands`. The extension installs only these bundled copies. It
+never copies an open workspace's `.codex/commands/`, because every Codex
+session loads `~/.codex/commands`.
