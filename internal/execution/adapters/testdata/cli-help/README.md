@@ -3,7 +3,9 @@
 Each `.txt` file here is a **captured, real `--help`** of a coding CLI, at the
 version its compat manifest (`internal/adaptercompat/manifests/<adapter>.json`)
 pins as `max_tested`. `scripts/capture-cli-help.sh` writes them, and its header
-lists every isolation and redaction step. Nothing here is written by hand.
+lists every isolation and redaction step. No capture is written by hand. A
+`.hidden` sidecar records the result of the probes below, which are run by
+hand.
 
 ## Format and lookup
 
@@ -12,15 +14,28 @@ lists every isolation and redaction step. Nothing here is written by hand.
 - The first line is `# adapter=<id> version=<x.y.z> command=<command>`. The rest
   is the help text, redacted by the script.
 - Exactly one file matches each adapter. `NIGHTGAUGE_FLAG_CONTRACT_HELP_DIR`
-  points the tests at another directory in the same layout, such as captures
-  from the newest CLIs. Only this directory is held to `max_tested`.
+  points `TestFlagContract` at another directory in the same layout, such as
+  captures from the newest CLIs. Only this directory is held to `max_tested`.
+  The contract's self-tests always read this directory, so a wider `-run`
+  still passes with the override set.
+
+  ```bash
+  NIGHTGAUGE_FLAG_CONTRACT_HELP_DIR=<dir> go test ./internal/execution/adapters -run '^TestFlagContract$'
+  ```
+
+- `<capture>.hidden`, such as `claude-headless-2.1.258.txt.hidden`, lists the
+  flags that version accepts without listing them in its help, one per line.
+  Lines starting with `#` are comments. A sidecar holds only for the version
+  in its name: the contract reports one with no capture of that name, and it
+  reports a hidden flag in a capture of another version until the probe is
+  recorded for that version. Writing the sidecar needs no code edit.
 
 ## What reads them
 
 - `TestFlagContract` in `../../flag_contract_test.go`: every flag an adapter's
   `BuildCommand` emits, over the whole option product, must be an option of its
-  capture. The exceptions are the `knownBroken` and `hiddenAccepted` entries,
-  each backed by a probe below.
+  capture. The exceptions are the `knownBroken` entries and the `.hidden`
+  sidecars, each backed by a probe below.
 - `TestManifestRequiredFlagsMatch`: each manifest's `required_flags` is exactly
   the set of flags `BuildCommand` emits.
 - `TestHelpOptionParser`: what the parser reads from these files, and that a
@@ -66,7 +81,7 @@ removed afterwards, `env -i` with `HOME` and the XDG directories inside it, an
 empty working directory, stdin from `/dev/null`, and every call bounded to 60
 seconds. No credential was present, and no probe reached a model.
 
-### Accepted but not listed (`hiddenAccepted`)
+### Accepted but not listed (the `.hidden` sidecars)
 
 | Adapter and version     | Flag               | Probe                                                                                                                                                                                        | Control                                                                                 |
 | ----------------------- | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
@@ -101,10 +116,26 @@ The last row is the strict-mode guardrail #1617 asks for: `run` refuses a flag
 it does not define. If a later version accepts `--bogus-flag`, strict mode has
 changed; record it here and re-read ADR-022 § 9.
 
+yargs also takes an option under other spellings. These rows used npm
+`opencode-ai@1.18.30` as already installed on the capture machine, not a fresh
+install, in the same `env -i` isolation:
+
+| Flags                                                                  | Observed                                                                  |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `--dangerouslySkipPermissions`, `--yolo=true`, `--auto.x`, `--share.x` | Accepted as `--auto` is: `Error: You must provide a message or a command` |
+| `--Yolo`, `--dangerously_skip_permissions`                             | Refused like `--bogus-flag`: exit 1, the `run` help on stderr             |
+
+The forbidden-flag guard in the tests (`openCodeForbiddenFlagIn`) reduces every
+argv token to its kebab-case option name first, so it catches all of these,
+the refused ones included.
+
 ## Re-capturing
 
-When a manifest's `max_tested` changes, run the script, update the tables
-above, and probe each `hiddenAccepted` flag on the new version before giving it
-an entry: the table is keyed by version. The script replaces the adapter's
-previous capture. Keep the opencode capture on the version of
+When a manifest's `max_tested` changes, run the script and update the tables
+above. The script replaces the adapter's previous capture and leaves its
+sidecar alone. Probe each flag the sidecar lists on the new version, then
+rename the sidecar after the new capture. `TestFlagContract` fails until the
+sidecar has been renamed. A flag the new version refuses is a defect, not a
+hidden flag: take it out of the sidecar and give it a `knownBroken` entry and
+a bug. Keep the opencode capture on the version of
 `../opencode-cli/`, which ADR-022 § 20 re-captures in the same change.

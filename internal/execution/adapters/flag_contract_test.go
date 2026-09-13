@@ -1,13 +1,16 @@
 package adapters
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"testing"
+	"unicode"
 
 	"github.com/nightgauge/nightgauge/internal/adaptercompat"
 )
@@ -21,18 +24,24 @@ import (
 // instead of a live stage.
 
 // flagContractHelpDirEnv names a directory of captures to read instead of
-// testdata/cli-help, so the same test can run against help captured from the
-// newest CLIs without a code change (#1639). A capture is found by name,
-// <adapter>[-<sub>]-<version>.txt, and exactly one must match per adapter.
+// testdata/cli-help, so TestFlagContract can run against help captured from
+// the newest CLIs without a code change (#1639). A capture is found by name,
+// <adapter>[-<sub>]-<version>.txt, and exactly one must match per adapter; its
+// hidden-flag sidecar, if any, sits beside it (hiddenSidecarSuffix).
 const flagContractHelpDirEnv = "NIGHTGAUGE_FLAG_CONTRACT_HELP_DIR"
 
-// flagContractHelpDir is the directory the contract reads, and whether the
+// committedHelpDir holds the committed captures, each at its manifest's
+// max_tested. The contract's own self-tests read it whatever the override
+// says: they alter copies of these files and pin their versions.
+var committedHelpDir = filepath.Join("testdata", "cli-help")
+
+// flagContractHelpDir is the directory TestFlagContract reads, and whether the
 // override set it. Only the committed captures are pinned to max_tested.
 func flagContractHelpDir() (dir string, overridden bool) {
 	if d := os.Getenv(flagContractHelpDirEnv); d != "" {
 		return d, true
 	}
-	return filepath.Join("testdata", "cli-help"), false
+	return committedHelpDir, false
 }
 
 // flagContractAdapters are the CLI adapters with a compat manifest: the ones
@@ -69,16 +78,16 @@ var knownBroken = map[string]map[string]int{
 	"codex": {"--ask-for-approval": 1715},
 }
 
-// hiddenAccepted are flags a CLI accepts without listing them in its help,
-// per adapter and captured version. Each was probed on that version: the flag
-// was accepted where a made-up flag was refused with the CLI's unknown-option
-// error (testdata/cli-help/README.md). A capture of another version gets no
-// entry until the flag is probed on it again, so help captured from a newer
-// CLI (#1639) reports these flags until then.
-var hiddenAccepted = map[string]map[string][]string{
-	"claude-headless": {"2.1.258": {"--max-turns"}},
-	"grok":            {"1.0.4": {"--no-auto-update"}},
-}
+// hiddenSidecarSuffix names a capture's hidden-flag sidecar,
+// <capture>.hidden: the flags that CLI version accepts without listing them
+// in its help, one per line. Each was probed on the capture's version: the
+// flag was accepted where a made-up flag was refused with the CLI's
+// unknown-option error. The sidecar is data beside the capture, so recording
+// a probe of a newer CLI (#1639) needs no code edit. Until a flag is probed on
+// a capture's version, the contract reports it; a sidecar whose capture is
+// gone is reported too. The committed sidecars' probes are in
+// testdata/cli-help/README.md.
+const hiddenSidecarSuffix = ".hidden"
 
 // flagContractModel is a model each adapter's BuildCommand accepts: opencode
 // takes only <provider>/<model>; the others resolve a tier.
@@ -318,11 +327,46 @@ func readHelpCapture(path string) (helpCapture, error) {
 	return helpCapture{path: path, adapter: m[1], version: m[2], command: m[3], body: body, options: parseHelpOptions(body)}, nil
 }
 
+// readHiddenSidecar returns the flags the sidecar of the capture at
+// capturePath lists, or none when the capture has no sidecar. A blank line or
+// one starting with "#" is a comment; every other line is exactly one flag.
+func readHiddenSidecar(capturePath string) ([]string, error) {
+	path := capturePath + hiddenSidecarSuffix
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var flags []string
+	for i, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case line == "" || strings.HasPrefix(line, "#"):
+			continue
+		case !helpFlagRE.MatchString(line):
+			return nil, fmt.Errorf("%s:%d: %q is not a flag; each line is one flag, and # starts a comment", path, i+1, line)
+		case seen[line]:
+			return nil, fmt.Errorf("%s:%d: %s is listed twice", path, i+1, line)
+		}
+		seen[line] = true
+		flags = append(flags, line)
+	}
+	if len(flags) == 0 {
+		return nil, fmt.Errorf("%s lists no flag: remove it", path)
+	}
+	return flags, nil
+}
+
 // flagContractProblems checks every adapter's emitted flags against the
-// captures in dir. It returns the violations, and notes on what was not
-// checked or was accepted by a table entry. pinned holds the captures to the
-// manifests' max_tested, which only the committed captures are.
+// captures in dir and their sidecars. It returns the violations, and notes on
+// what was not checked or was accepted by a knownBroken entry or a sidecar.
+// pinned holds the captures to the manifests' max_tested, which only the
+// committed captures are.
 func flagContractProblems(dir string, pinned bool, emitted map[string]map[string]string) (problems, notes []string) {
+	captured := map[string]bool{}
 	for _, adapter := range flagContractAdapters {
 		m, ok := adaptercompat.Get(adapter)
 		if !ok {
@@ -352,6 +396,7 @@ func flagContractProblems(dir string, pinned bool, emitted map[string]map[string
 			}
 			continue
 		}
+		captured[filepath.Base(path)] = true
 		capture, err := readHelpCapture(path)
 		if err != nil {
 			problems = append(problems, err.Error())
@@ -379,11 +424,20 @@ func flagContractProblems(dir string, pinned bool, emitted map[string]map[string
 			continue
 		}
 
+		sidecar := path + hiddenSidecarSuffix
+		hiddenFlags, err := readHiddenSidecar(path)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("%s: %v", adapter, err))
+			continue
+		}
 		hidden := map[string]bool{}
-		for _, f := range hiddenAccepted[adapter][capture.version] {
+		for _, f := range hiddenFlags {
 			hidden[f] = true
+			if issue, broken := knownBroken[adapter][f]; broken {
+				problems = append(problems, fmt.Sprintf("%s: %s lists %s as accepted, but knownBroken has it refused (#%d): probe it again and correct one of them", adapter, sidecar, f, issue))
+			}
 			if _, ok := flags[f]; !ok {
-				problems = append(problems, fmt.Sprintf("%s: hiddenAccepted lists %s for %s, but BuildCommand no longer emits it: remove the entry", adapter, f, capture.version))
+				problems = append(problems, fmt.Sprintf("%s: %s lists %s, but BuildCommand no longer emits it: remove the line", adapter, sidecar, f))
 			}
 		}
 		for _, flag := range sortedKeys(flags) {
@@ -393,18 +447,36 @@ func flagContractProblems(dir string, pinned bool, emitted map[string]map[string
 			case defined && broken:
 				problems = append(problems, fmt.Sprintf("%s: %s defines %s now, so knownBroken's entry for #%d is not needed: remove it", adapter, path, flag, issue))
 			case defined && hidden[flag]:
-				problems = append(problems, fmt.Sprintf("%s: %s lists %s now, so its hiddenAccepted entry is not needed: remove it", adapter, path, flag))
+				problems = append(problems, fmt.Sprintf("%s: %s lists %s now, so %s need not: remove the line", adapter, path, flag, sidecar))
 			case defined:
 			case broken:
 				notes = append(notes, fmt.Sprintf("%s: %s is known broken (#%d); %s does not define it", adapter, flag, issue, path))
 			case hidden[flag]:
-				notes = append(notes, fmt.Sprintf("%s: %s is hidden in %s and was probed as accepted on %s", adapter, flag, path, capture.version))
+				notes = append(notes, fmt.Sprintf("%s: %s is hidden in %s; %s records it probed as accepted on %s", adapter, flag, path, sidecar, capture.version))
 			default:
 				problems = append(problems, fmt.Sprintf("%s: BuildCommand emits %s (with %s), which %s (`%s`, version %s) does not define", adapter, flag, flags[flag], path, capture.command, capture.version))
 			}
 		}
 	}
-	return problems, notes
+	return append(problems, orphanSidecars(dir, captured)...), notes
+}
+
+// orphanSidecars reports each sidecar in dir with no capture of its name
+// beside it. A sidecar records probes of one version, so after a re-capture
+// its flags are probed again on the new version and the sidecar renamed.
+func orphanSidecars(dir string, captured map[string]bool) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil // findHelpCapture has reported it.
+	}
+	var problems []string
+	for _, e := range entries {
+		capture, isSidecar := strings.CutSuffix(e.Name(), hiddenSidecarSuffix)
+		if isSidecar && !captured[capture] {
+			problems = append(problems, fmt.Sprintf("%s: there is no capture %s beside it, and its probes hold only for that version: probe its flags on the version captured and name the sidecar after that capture, or remove it", filepath.Join(dir, e.Name()), capture))
+		}
+	}
+	return problems
 }
 
 func sortedKeys[V any](m map[string]V) []string {
@@ -429,36 +501,102 @@ func TestFlagContract(t *testing.T) {
 	}
 }
 
-// TestFlagContractReadsTheHelpDirOverride runs the contract against altered
-// copies of the captures, in a directory named by
-// NIGHTGAUGE_FLAG_CONTRACT_HELP_DIR. An unaltered copy passes, a copy that
-// renames the opencode capture to a newer version passes too (another CLI's
-// help needs no code edit), and a copy missing one option's definition fails
-// with the adapter, the flag and the file.
-func TestFlagContractReadsTheHelpDirOverride(t *testing.T) {
-	emitted := emittedFlagsByAdapter(t)
-	committed, _ := flagContractHelpDir()
+// ignoreHelpDirOverride points NIGHTGAUGE_FLAG_CONTRACT_HELP_DIR at an empty
+// directory for the rest of t. The canary (#1639) runs `-run TestFlagContract`
+// with the override set, which also runs the contract's self-tests; they read
+// committedHelpDir, so one that read the override instead fails here too.
+func ignoreHelpDirOverride(t *testing.T) {
+	t.Helper()
+	t.Setenv(flagContractHelpDirEnv, t.TempDir())
+}
 
-	copyCaptures := func(t *testing.T) string {
-		t.Helper()
-		dir := t.TempDir()
-		entries, err := os.ReadDir(committed)
+// copyHelpDir copies every file in committedHelpDir, captures and sidecars
+// alike, into a new temporary directory.
+func copyHelpDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	entries, err := os.ReadDir(committedHelpDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if !e.Type().IsRegular() {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(committedHelpDir, e.Name()))
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, e := range entries {
-			if strings.HasSuffix(e.Name(), ".txt") {
-				data, err := os.ReadFile(filepath.Join(committed, e.Name()))
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(filepath.Join(dir, e.Name()), data, 0o644); err != nil {
-					t.Fatal(err)
-				}
+		if err := os.WriteFile(filepath.Join(dir, e.Name()), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+// recaptureAs turns adapter's capture in dir into one of version, header and
+// name alike, with the help text unchanged. With probed, its sidecar moves
+// with it, as recording that version's probes would; without, the sidecar
+// keeps the old version's name. It returns the sidecar's path, or "" when the
+// capture has none.
+func recaptureAs(t *testing.T, dir, adapter, version string, probed bool) (sidecar string) {
+	t.Helper()
+	old, found, problem := findHelpCapture(dir, adapter)
+	if !found || problem != "" {
+		t.Fatalf("no capture for %s in %s: %s", adapter, dir, problem)
+	}
+	c, err := readHelpCapture(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	renamed := strings.Replace(string(data), "version="+c.version+" ", "version="+version+" ", 1)
+	path := strings.TrimSuffix(old, c.version+".txt") + version + ".txt"
+	if err := os.Remove(old); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(renamed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sidecar = old + hiddenSidecarSuffix
+	if _, err := os.Stat(sidecar); errors.Is(err, fs.ErrNotExist) {
+		return ""
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	if !probed {
+		return sidecar
+	}
+	if err := os.Rename(sidecar, path+hiddenSidecarSuffix); err != nil {
+		t.Fatal(err)
+	}
+	return path + hiddenSidecarSuffix
+}
+
+// TestFlagContractReadsTheHelpDirOverride runs the contract against altered
+// copies of the captures, in a directory named by
+// NIGHTGAUGE_FLAG_CONTRACT_HELP_DIR. An unaltered copy passes. So does a copy
+// whose every capture is of a newer version, when the probes of that version
+// are recorded in its sidecars: other help text needs no code edit. Without
+// those probes, each hidden flag is reported, and so is each sidecar left
+// under the old version's name. A copy missing one option's definition fails
+// with the adapter, the flag and the file.
+func TestFlagContractReadsTheHelpDirOverride(t *testing.T) {
+	ignoreHelpDirOverride(t)
+	emitted := emittedFlagsByAdapter(t)
+	captured := func() []string {
+		var adapters []string
+		for _, adapter := range flagContractAdapters {
+			if _, skip := helpNotCaptured[adapter]; !skip {
+				adapters = append(adapters, adapter)
 			}
 		}
-		return dir
-	}
+		return adapters
+	}()
+
 	run := func(t *testing.T, dir string) []string {
 		t.Helper()
 		t.Setenv(flagContractHelpDirEnv, dir)
@@ -471,28 +609,58 @@ func TestFlagContractReadsTheHelpDirOverride(t *testing.T) {
 	}
 
 	t.Run("unaltered copy", func(t *testing.T) {
-		if problems := run(t, copyCaptures(t)); len(problems) != 0 {
+		if problems := run(t, copyHelpDir(t)); len(problems) != 0 {
 			t.Errorf("an unaltered copy of the captures failed the contract:\n%s", strings.Join(problems, "\n"))
 		}
 	})
 
-	t.Run("newer version", func(t *testing.T) {
-		dir := copyCaptures(t)
-		old, _, _ := findHelpCapture(dir, "opencode")
-		data, err := os.ReadFile(old)
-		if err != nil {
-			t.Fatal(err)
-		}
-		m, _ := adaptercompat.Get("opencode")
-		renamed := strings.Replace(string(data), "version="+m.MaxTested+" ", "version=99.0.0 ", 1)
-		if err := os.Remove(old); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, "opencode-run-99.0.0.txt"), []byte(renamed), 0o644); err != nil {
-			t.Fatal(err)
+	t.Run("newer versions with their probes recorded", func(t *testing.T) {
+		dir := copyHelpDir(t)
+		var sidecars []string
+		for _, adapter := range captured {
+			if sidecar := recaptureAs(t, dir, adapter, "99.0.0", true); sidecar != "" {
+				sidecars = append(sidecars, sidecar)
+			}
 		}
 		if problems := run(t, dir); len(problems) != 0 {
-			t.Errorf("an opencode capture of another version failed the contract:\n%s", strings.Join(problems, "\n"))
+			t.Errorf("captures of newer versions, their hidden flags probed and recorded, failed the contract:\n%s", strings.Join(problems, "\n"))
+		}
+		if len(sidecars) == 0 {
+			t.Error("no committed capture has a sidecar, so this case no longer shows a probe record reaching the contract without a code edit")
+		}
+	})
+
+	t.Run("newer versions without their probes", func(t *testing.T) {
+		dir := copyHelpDir(t)
+		var want []string
+		for _, adapter := range captured {
+			committedCapture, _, _ := findHelpCapture(committedHelpDir, adapter)
+			hidden, err := readHiddenSidecar(committedCapture)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if sidecar := recaptureAs(t, dir, adapter, "99.0.0", false); sidecar != "" {
+				want = append(want, sidecar+": there is no capture "+filepath.Base(strings.TrimSuffix(sidecar, hiddenSidecarSuffix)))
+			}
+			for _, f := range hidden {
+				want = append(want, adapter+": BuildCommand emits "+f+" ")
+			}
+		}
+		if len(want) == 0 {
+			t.Fatal("no committed capture has a sidecar, so this case shows nothing")
+		}
+		problems := run(t, dir)
+		if len(problems) != len(want) {
+			t.Errorf("want %d violations, got %d:\n%s", len(want), len(problems), strings.Join(problems, "\n"))
+		}
+		for _, w := range want {
+			found := false
+			for _, p := range problems {
+				found = found || strings.Contains(p, w)
+			}
+			if !found {
+				t.Errorf("no violation says %q:\n%s", w, strings.Join(problems, "\n"))
+			}
 		}
 	})
 
@@ -501,7 +669,7 @@ func TestFlagContractReadsTheHelpDirOverride(t *testing.T) {
 		{"opencode", "--dir"},
 	} {
 		t.Run("drops "+c.adapter+" "+c.flag, func(t *testing.T) {
-			dir := copyCaptures(t)
+			dir := copyHelpDir(t)
 			path, _, _ := findHelpCapture(dir, c.adapter)
 			removeOptionDefinition(t, path, c.flag)
 			problems := run(t, dir)
@@ -552,33 +720,43 @@ func definesFlag(list, flag string) bool {
 	return false
 }
 
-// TestFlagContractTablesFailWhenNotNeeded checks that a knownBroken or
-// hiddenAccepted entry fails the contract once it is not needed: when the
-// flag appears in the help, and when BuildCommand stops emitting it.
+// TestFlagContractTablesFailWhenNotNeeded checks that a knownBroken entry or a
+// sidecar line fails the contract once it is not needed: when the flag
+// appears in the help, and when BuildCommand stops emitting it. A sidecar
+// with no capture of its name, a sidecar line that is not a flag, and a flag
+// a sidecar accepts while knownBroken has it refused fail it too.
 func TestFlagContractTablesFailWhenNotNeeded(t *testing.T) {
+	ignoreHelpDirOverride(t)
 	emitted := emittedFlagsByAdapter(t)
-	committed, _ := flagContractHelpDir()
-
-	withDefinition := func(t *testing.T, adapter, line string) string {
+	committed := committedHelpDir
+	captureName := func(adapter string) string {
 		t.Helper()
-		dir := t.TempDir()
-		entries, err := os.ReadDir(committed)
-		if err != nil {
+		name, found := findHelpCaptureName(committed, adapter)
+		if !found {
+			t.Fatalf("no capture for %s in %s", adapter, committed)
+		}
+		return name
+	}
+	sidecarName := func(adapter string) string { return captureName(adapter) + hiddenSidecarSuffix }
+
+	// appended copies the committed directory and appends line to the file
+	// name in the copy, creating it if need be.
+	appended := func(t *testing.T, name, line string) string {
+		t.Helper()
+		dir := copyHelpDir(t)
+		path := filepath.Join(dir, name)
+		data, err := os.ReadFile(path)
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			t.Fatal(err)
 		}
-		for _, e := range entries {
-			data, err := os.ReadFile(filepath.Join(committed, e.Name()))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if name, _ := findHelpCaptureName(committed, adapter); e.Name() == name {
-				data = append(data, []byte(line+"\n")...)
-			}
-			if err := os.WriteFile(filepath.Join(dir, e.Name()), data, 0o644); err != nil {
-				t.Fatal(err)
-			}
+		if err := os.WriteFile(path, append(data, line+"\n"...), 0o644); err != nil {
+			t.Fatal(err)
 		}
 		return dir
+	}
+	withDefinition := func(t *testing.T, adapter, line string) string {
+		t.Helper()
+		return appended(t, captureName(adapter), line)
 	}
 	without := func(adapter, flag string) map[string]map[string]string {
 		out := map[string]map[string]string{}
@@ -601,8 +779,11 @@ func TestFlagContractTablesFailWhenNotNeeded(t *testing.T) {
 	}{
 		{"known broken flag now in help", withDefinition(t, "codex", "      --ask-for-approval <APPROVAL_POLICY>"), emitted, []string{"codex:", "--ask-for-approval", "#1715", "remove it"}},
 		{"known broken flag no longer emitted", committed, without("claude-headless", "--max-tokens"), []string{"claude-headless:", "--max-tokens", "#1716", "remove the entry"}},
-		{"hidden flag now in help", withDefinition(t, "claude-headless", "  --max-turns <turns>                   Maximum agentic turns"), emitted, []string{"claude-headless:", "--max-turns", "hiddenAccepted", "remove it"}},
-		{"hidden flag no longer emitted", committed, without("grok", "--no-auto-update"), []string{"grok:", "--no-auto-update", "hiddenAccepted", "remove the entry"}},
+		{"hidden flag now in help", withDefinition(t, "claude-headless", "  --max-turns <turns>                   Maximum agentic turns"), emitted, []string{"claude-headless:", "--max-turns", sidecarName("claude-headless"), "remove the line"}},
+		{"hidden flag no longer emitted", committed, without("grok", "--no-auto-update"), []string{"grok:", "--no-auto-update", sidecarName("grok"), "remove the line"}},
+		{"sidecar of another version", appended(t, "grok-0.0.1.txt"+hiddenSidecarSuffix, "--no-auto-update"), emitted, []string{"grok-0.0.1.txt" + hiddenSidecarSuffix, "no capture grok-0.0.1.txt", "probe its flags on the version captured"}},
+		{"sidecar line that is not a flag", appended(t, sidecarName("claude-headless"), "max-turns"), emitted, []string{"claude-headless:", sidecarName("claude-headless"), `"max-turns" is not a flag`}},
+		{"sidecar accepts a known broken flag", appended(t, sidecarName("claude-headless"), "--max-tokens"), emitted, []string{"claude-headless:", sidecarName("claude-headless"), "--max-tokens", "#1716", "knownBroken"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -630,7 +811,8 @@ func findHelpCaptureName(dir, adapter string) (string, bool) {
 // line, clap's [aliases: ...], and never a flag that description prose only
 // mentions.
 func TestHelpOptionParser(t *testing.T) {
-	dir, _ := flagContractHelpDir()
+	ignoreHelpDirOverride(t)
+	dir := committedHelpDir
 	cases := []struct {
 		adapter      string
 		defined      []string
@@ -673,7 +855,7 @@ func TestHelpOptionParser(t *testing.T) {
 // captures together: ADR-022's evidence (testdata/opencode-cli) and the
 // flag-contract capture are the same `opencode run --help` of the same version.
 func TestOpenCodeHelpCaptureMatchesTheOpenCodeEvidence(t *testing.T) {
-	dir := filepath.Join("testdata", "cli-help")
+	dir := committedHelpDir
 	path, found, problem := findHelpCapture(dir, "opencode")
 	if !found || problem != "" {
 		t.Fatalf("no opencode capture in %s: %s", dir, problem)
@@ -698,13 +880,89 @@ func TestOpenCodeHelpCaptureMatchesTheOpenCodeEvidence(t *testing.T) {
 	}
 }
 
+// openCodeForbiddenFlagIn returns the forbidden flag an argv token spells, if
+// any. opencode parses `run` with yargs, which takes an option under more
+// names than its kebab-case one: 1.18.30 accepts --dangerouslySkipPermissions,
+// --yolo=true and --auto.x as it accepts --auto (testdata/cli-help/README.md).
+// So the token is reduced to an option name before it is compared: leading
+// dashes stripped, cut at "=" and ".", camelCase split into kebab-case, "_"
+// read as "-", and lowercased. A name that matches once lowercased without the
+// split counts too. 1.18.30 refuses --Yolo and --dangerously_skip_permissions,
+// and they are caught all the same, should a later version accept them.
+func openCodeForbiddenFlagIn(arg string) (string, bool) {
+	name := strings.TrimLeft(arg, "-")
+	if name == arg || name == "" {
+		return "", false
+	}
+	name, _, _ = strings.Cut(name, "=")
+	name, _, _ = strings.Cut(name, ".")
+	name = strings.ReplaceAll(name, "_", "-")
+	var kebab strings.Builder
+	prev := rune(0)
+	for _, r := range name {
+		if unicode.IsUpper(r) && (unicode.IsLower(prev) || unicode.IsDigit(prev)) {
+			kebab.WriteByte('-')
+		}
+		kebab.WriteRune(unicode.ToLower(r))
+		prev = r
+	}
+	for _, f := range openCodeForbiddenFlags {
+		option := strings.TrimLeft(f, "-")
+		if kebab.String() == option || strings.ToLower(name) == option {
+			return f, true
+		}
+	}
+	return "", false
+}
+
+// TestOpenCodeForbiddenFlagSpellings pins the spellings the forbidden-flag
+// guard catches, among them the camelCase, dot-notation and =value forms
+// opencode 1.18.30's `run` accepts in place of the kebab-case option, and the
+// argv tokens it must leave alone.
+func TestOpenCodeForbiddenFlagSpellings(t *testing.T) {
+	for arg, want := range map[string]string{
+		"--auto":                            "--auto",
+		"--auto=true":                       "--auto",
+		"--auto.x":                          "--auto",
+		"-auto":                             "--auto",
+		"--Auto":                            "--auto",
+		"--yolo":                            "--yolo",
+		"--Yolo=1":                          "--yolo",
+		"--YOLO":                            "--yolo",
+		"--dangerously-skip-permissions":    "--dangerously-skip-permissions",
+		"--dangerouslySkipPermissions":      "--dangerously-skip-permissions",
+		"--dangerouslySkipPermissions=true": "--dangerously-skip-permissions",
+		"--dangerously-skip-permissions.x":  "--dangerously-skip-permissions",
+		"--dangerously_skip_permissions":    "--dangerously-skip-permissions",
+		"--DANGEROUSLY-SKIP-PERMISSIONS":    "--dangerously-skip-permissions",
+		"--share":                           "--share",
+		"--share.enabled=1":                 "--share",
+		"--mdns":                            "--mdns",
+		"--cors=*":                          "--cors",
+		"--Cors":                            "--cors",
+	} {
+		if got, ok := openCodeForbiddenFlagIn(arg); !ok || got != want {
+			t.Errorf("openCodeForbiddenFlagIn(%q) = %q, %v; want %q, true", arg, got, ok, want)
+		}
+	}
+	for _, arg := range []string{
+		"run", "--format", "json", "--print-logs", "--log-level", "ERROR", "-m",
+		"lmstudio/qwen/qwen3.8-27b", "--dir", "/work/--auto", "-", "--",
+		"--no-auto", "--autoupdate", "--sharex", "auto", "yolo",
+	} {
+		if got, ok := openCodeForbiddenFlagIn(arg); ok {
+			t.Errorf("openCodeForbiddenFlagIn(%q) = %q, true; it is not a forbidden flag", arg, got)
+		}
+	}
+}
+
 // TestOpenCodeNeverEmitsBypassFlags drives the opencode BuildCommand through
 // the whole option product, including every tool allowed, with hostile models
 // and prompts and an auto-approve variable in the environment. No argv token
 // may be a flag that approves tools without the permission map, publishes the
-// session or exposes a listener, alone or as flag=value. --yolo and
-// --dangerously-skip-permissions are hidden in opencode 1.18.30's help, so
-// only this explicit list catches them.
+// session or exposes a listener, in any spelling openCodeForbiddenFlagIn
+// catches. --yolo and --dangerously-skip-permissions are hidden in opencode
+// 1.18.30's help, so only this explicit list catches them.
 func TestOpenCodeNeverEmitsBypassFlags(t *testing.T) {
 	for _, f := range []string{"--auto", "--yolo", "--dangerously-skip-permissions", "--share", "--mdns", "--cors"} {
 		found := false
@@ -718,16 +976,14 @@ func TestOpenCodeNeverEmitsBypassFlags(t *testing.T) {
 
 	t.Setenv("NIGHTGAUGE_AUTO_APPROVE", "true")
 	a := NewOpenCodeAdapter()
-	models := []string{"", "lmstudio/qwen/qwen3.8-27b", "anthropic/claude-sonnet-5", "--auto/x", "lmstudio/--share"}
-	prompts := []string{"", "implement the issue", "--auto --yolo --dangerously-skip-permissions --share --mdns --cors"}
+	models := []string{"", "lmstudio/qwen/qwen3.8-27b", "anthropic/claude-sonnet-5", "--auto/x", "lmstudio/--share", "--dangerouslySkipPermissions/x"}
+	prompts := []string{"", "implement the issue", "--auto --yolo --dangerously-skip-permissions --dangerouslySkipPermissions --share --mdns --cors"}
 	options := flagContractOptions(models, prompts)
 	for _, o := range options {
 		_, args, _ := a.BuildCommand(o)
 		for _, arg := range args {
-			for _, f := range openCodeForbiddenFlags {
-				if arg == f || strings.HasPrefix(arg, f+"=") {
-					t.Errorf("opencode argv carries %s with %s: %q", f, describeOptions(o), args)
-				}
+			if f, ok := openCodeForbiddenFlagIn(arg); ok {
+				t.Errorf("opencode argv carries %s as %q with %s: %q", f, arg, describeOptions(o), args)
 			}
 		}
 	}

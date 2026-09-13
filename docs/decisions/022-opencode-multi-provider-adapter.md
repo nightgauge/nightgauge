@@ -208,7 +208,10 @@ is set, and each was accepted exactly as `--auto` was (#1617, observed
 list catches one. `--mdns` and `--cors` are not `run` options: `run` exits 1 on
 either and prints its help to stderr, as it does for any flag it does not
 define. All six stay forbidden, and `TestOpenCodeNeverEmitsBypassFlags` checks
-them against every option combination. The probes are recorded in
+them against every option combination. It catches each flag in the other
+spellings yargs takes for an option as well: 1.18.30 accepts
+`--dangerouslySkipPermissions`, `--yolo=true` and `--auto.x` as it accepts
+`--auto`. The probes are recorded in
 `internal/execution/adapters/testdata/cli-help/README.md`. An earlier version
 of this paragraph said `--yolo` and `--dangerously-skip-permissions` were not
 `run` options.
@@ -461,10 +464,9 @@ the process **exits 0**. An `ask` is a silent stop that looks like success.
   `ask`. That covers the permissions OpenCode defaults to `ask`, such as
   `external_directory`. `allow` was observed to run a tool with no
   auto-approve flag, and `deny` removes the tool from the model's tool list.
-- Auto-approve flags (`--auto`, and `--yolo` or
-  `--dangerously-skip-permissions` should a version add them) are never
-  emitted. Approval is the map's job, derived from the stage's allowed tools
-  (#1638).
+- `--auto` and its hidden aliases `--yolo` and `--dangerously-skip-permissions`
+  (§ The command) are never emitted. Approval is the map's job, derived from
+  the stage's allowed tools (#1638).
 - The parser classifies a rejected-permission tool event as a failure, exit
   code notwithstanding (#1624, #1631).
 - The project directory OpenCode uses is the resolved path, so an absolute

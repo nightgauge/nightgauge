@@ -13,20 +13,21 @@ import (
 )
 
 // openCodeForbiddenFlags are the flags the opencode adapter must never emit
-// (ADR-022 § 9, § 18): each one either approves tool calls without the
-// permission map, publishes the session, or exposes a listener to the network
-// or to other origins. TestOpenCodeNeverEmitsBypassFlags checks the full list.
+// (ADR-022 § The command, § 9, § 18): each one either approves tool calls
+// without the permission map, publishes the session, or exposes a listener to
+// the network or to other origins. TestOpenCodeNeverEmitsBypassFlags checks
+// the full list.
 var openCodeForbiddenFlags = []string{"--auto", "--yolo", "--dangerously-skip-permissions", "--share", "--mdns", "--cors"}
 
-// assertNoForbiddenFlag fails when any argv element is, or starts with, a
-// forbidden flag, which also catches the `--auto=true` spelling.
+// assertNoForbiddenFlag fails when any argv element spells a forbidden flag
+// in a form opencode accepts: `--auto=true`, `--auto.x` or
+// `--dangerouslySkipPermissions` as well as the plain flag
+// (openCodeForbiddenFlagIn).
 func assertNoForbiddenFlag(t *testing.T, args []string) {
 	t.Helper()
 	for _, a := range args {
-		for _, f := range openCodeForbiddenFlags {
-			if a == f || strings.HasPrefix(a, f+"=") {
-				t.Errorf("argv carries forbidden flag %q: %q", f, args)
-			}
+		if f, ok := openCodeForbiddenFlagIn(a); ok {
+			t.Errorf("argv carries forbidden flag %s as %q: %q", f, a, args)
 		}
 	}
 }

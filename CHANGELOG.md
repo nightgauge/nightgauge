@@ -83,9 +83,12 @@ changelog, and the release workflow refuses a tag that does not.
   drops or renames a flag now fails a unit test instead of a live stage. Each
   manifest's `required_flags` must equal the flags the adapter emits, and
   `NIGHTGAUGE_FLAG_CONTRACT_HELP_DIR` points the test at other captures, such
-  as the newest CLIs' help. `scripts/capture-cli-help.sh` makes the captures:
-  it installs each pinned CLI into a throwaway prefix with no credentials in
-  its environment, runs only `--help` under a timeout, and removes the prefix.
+  as the newest CLIs' help. A flag a CLI accepts without listing it is
+  recorded for one version in a `.hidden` file beside that version's capture,
+  so probing a newer CLI needs no code change. `scripts/capture-cli-help.sh`
+  makes the captures: it installs each pinned CLI into a throwaway prefix with
+  no credentials in its environment, runs only `--help` under a timeout, and
+  removes the prefix.
   The test found two adapter flags the CLIs refuse, now tracked as #1715
   (codex, sandbox-scoped stages) and #1716 (claude, `--max-tokens`) (#1617)
 
@@ -94,7 +97,9 @@ changelog, and the release workflow refuses a tag that does not.
 - ADR-022 no longer says `--yolo` and `--dangerously-skip-permissions` are not
   `opencode run` options. In 1.18.30 both are hidden options that switch on the
   same auto-approval as `--auto`. The adapter still never emits them, and
-  `--cors` joins the flags it must never emit (#1617)
+  `--cors` joins the flags it must never emit. The test that holds it to that
+  also catches the camelCase, `=value` and dot-notation spellings opencode
+  accepts, such as `--dangerouslySkipPermissions` (#1617)
 - Generated Codex steering no longer ends up in commits. The Go-direct path
   never removed it, and the agent could commit it mid-stage on every path;
   pipeline commits now strip it before committing, a commit that carried it is

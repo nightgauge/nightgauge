@@ -31,7 +31,8 @@
     "internal/execution/testdata/claude_stream_real_capture.jsonl",
     "internal/execution/testdata/claude_stream_subagent_multi_result.jsonl",
     "internal/doctor/testdata/no-catalog-cli-probes/claude-help.txt",
-    "internal/execution/adapters/testdata/cli-help/claude-headless-2.1.258.txt"
+    "internal/execution/adapters/testdata/cli-help/claude-headless-2.1.258.txt",
+    "internal/execution/adapters/testdata/cli-help/claude-headless-2.1.258.txt.hidden"
   ],
   "config_schema_sha256": "",
   "plugin_api_version": "",
