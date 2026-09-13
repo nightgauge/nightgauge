@@ -25,7 +25,7 @@
 # A third property belongs to the harness itself. #1697 -- other gate runs
 # share this machine's sandbox root, so the harness must never delete a sandbox
 # a live run owns, and what it deliberately leaks must stay out of their
-# sweeps. Step 0 plants live sandboxes for it to leave alone.
+# sweeps. The outer layer below plants live sandboxes for it to leave alone.
 #
 # Runtime is dominated by one full suite run (~3 minutes), which is what "the
 # NEXT run reclaims the leak" requires in order to mean anything.
@@ -33,6 +33,7 @@
 # Run: bash scripts/test-publication-boundary-hermeticity.sh
 
 set -uo pipefail
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
 REPO="$(git rev-parse --show-toplevel)"
 cd "$REPO"
 
@@ -49,8 +50,6 @@ RUN_SANDBOX_ROOT=""
 PASS=0
 FAIL=0
 SUITE_PID=""
-LIVE_SANDBOX=""
-LIVE_HARNESS=""
 
 # Claiming, ownership and both reclaimers, shared with the suite.
 # shellcheck source=lib/boundary-sandbox.sh
@@ -64,6 +63,140 @@ bad() {
   printf '  \033[31m✗\033[0m %s\n' "$1"
   FAIL=$((FAIL + 1))
 }
+
+# ── Outer layer: sandboxes a concurrent run owns (#1697) ─────────────────────
+# This harness used to open by deleting every sandbox under the shared root.
+# A second gate in another worktree that was inside its standalone suite step
+# at that moment lost its live sandbox and failed with "manifest.bak: No such
+# file".
+#
+# The victims have to exist before any line of the harness proper runs, or a
+# deletion in its preamble goes unseen. So the harness runs twice over: this
+# outer layer plants them in the shared root, runs the harness proper as a
+# child, and asserts afterwards that every one survived. The child knows it is
+# the child by NG_HERMETICITY_TALLY, the file it reports its counts in.
+#
+# The fakes are claimed by this outer shell, which stays alive for the whole
+# child run and is no helper process: a background process would hold the
+# harness's output open, and a harness killed outright would leave
+# `ci-local.sh` waiting on its pipe until that process exited. Killed outright
+# itself, this shell leaves fakes whose owner is dead, and the next suite
+# sweep and harness reclaim take them.
+#
+#   LIVE_SANDBOX  a standalone suite's run.* sandbox, with its manifest backup
+#                 and a registered worktree, as a concurrent gate has it.
+#   LIVE_HARNESS  another harness run's root, claimed by a live owner.
+#   NESTED_OWNER  a harness root whose own owner is dead but whose nested
+#                 suite is alive: a suite runs in its own process group and
+#                 can outlive a harness killed alone.
+if [ -z "${NG_HERMETICITY_TALLY:-}" ]; then
+  LIVE_SANDBOX=""
+  LIVE_HARNESS=""
+  NESTED_OWNER=""
+  NESTED_SANDBOX=""
+  CHILD_PID=""
+  TALLY=""
+  release_live_probes() {
+    local d
+    for d in "$LIVE_SANDBOX" "$LIVE_HARNESS" "$NESTED_OWNER"; do
+      [ -n "$d" ] && remove_run_root "$d"
+    done
+    LIVE_SANDBOX=""
+    LIVE_HARNESS=""
+    NESTED_OWNER=""
+    [ -n "$TALLY" ] && rm -f "$TALLY"
+    TALLY=""
+  }
+  # shellcheck disable=SC2329 # invoked by the traps below
+  outer_cleanup() {
+    if [ -n "$CHILD_PID" ]; then
+      kill -TERM "$CHILD_PID" 2>/dev/null
+      wait "$CHILD_PID" 2>/dev/null
+      CHILD_PID=""
+    fi
+    release_live_probes
+  }
+  trap outer_cleanup EXIT
+  trap 'trap - EXIT; outer_cleanup; exit 130' INT
+  trap 'trap - EXIT; outer_cleanup; exit 143' TERM
+
+  # A claim made by a shell that has exited: the owner of a harness killed
+  # outright.
+  claim_by_dead_owner() {
+    bash -c '. "$1" && claim_sandbox_dir "$2" "$3"' _ \
+      "$REPO/scripts/lib/boundary-sandbox.sh" "$1" "$2"
+  }
+
+  # --no-checkout: the registration and the tree's `.git` are what a sweep
+  # would remove, and a full checkout costs seconds for nothing.
+  if ! LIVE_SANDBOX="$(claim_sandbox_dir "$SANDBOX_ROOT" "$SANDBOX_PREFIX")" ||
+    ! : >"$LIVE_SANDBOX/manifest.bak" ||
+    ! git worktree add --detach --no-checkout --quiet "$LIVE_SANDBOX/tree" HEAD >/dev/null 2>&1 ||
+    ! LIVE_HARNESS="$(claim_sandbox_dir "$SANDBOX_ROOT" "$HARNESS_PREFIX")" ||
+    ! : >"$LIVE_HARNESS/manifest.bak" ||
+    ! NESTED_OWNER="$(claim_by_dead_owner "$SANDBOX_ROOT" "$HARNESS_PREFIX")" ||
+    ! NESTED_SANDBOX="$(claim_sandbox_dir \
+      "$NESTED_OWNER/nightgauge-pubboundary-sandboxes" "$SANDBOX_PREFIX")" ||
+    ! TALLY="$(mktemp "${TMPDIR:-/tmp}/ng-hermeticity-tally.XXXXXXXX")"; then
+    printf '\033[31msetup: cannot plant a live sandbox under %s.\033[0m\n' "$SANDBOX_ROOT" >&2
+    exit 2
+  fi
+
+  # In the background, so a TERM to this shell reaches outer_cleanup now and
+  # not when the child finishes.
+  NG_HERMETICITY_TALLY="$TALLY" bash "$SELF" &
+  CHILD_PID=$!
+  wait "$CHILD_PID"
+  CHILD_EXIT=$?
+  CHILD_PID=""
+  CHILD_PASS=0
+  CHILD_FAIL=0
+  if [ -s "$TALLY" ]; then
+    read -r CHILD_PASS CHILD_FAIL <"$TALLY"
+  fi
+
+  echo ""
+  echo "live sandboxes a concurrent run owns (#1697)"
+  if [ -f "$LIVE_SANDBOX/manifest.bak" ]; then
+    ok "a concurrent suite run's live sandbox survives the hermeticity step (#1697)"
+  else
+    bad "the hermeticity step deleted a live suite run's sandbox (#1697)"
+  fi
+  if [ -e "$LIVE_SANDBOX/tree/.git" ] &&
+    git worktree list --porcelain | grep -qxF "worktree $LIVE_SANDBOX/tree"; then
+    ok "a concurrent suite run's checkout and its registration survive too (#1697)"
+  else
+    bad "the hermeticity step removed a live suite run's worktree (#1697)"
+  fi
+  if [ -f "$LIVE_HARNESS/manifest.bak" ]; then
+    ok "a concurrent harness run's live root survives the reclaim (#1697)"
+  else
+    bad "the reclaim deleted a harness root whose owner is alive (#1697)"
+  fi
+  if [ -f "$NESTED_SANDBOX/owner.pid" ]; then
+    ok "a harness root survives the reclaim while a suite nested in it is alive (#1697)"
+  else
+    bad "the reclaim deleted a harness root whose nested suite is alive (#1697)"
+  fi
+  release_live_probes
+
+  PASS=$((PASS + CHILD_PASS))
+  FAIL=$((FAIL + CHILD_FAIL))
+
+  echo ""
+  if [ "$FAIL" -gt 0 ]; then
+    printf '\033[31m%s passed, %s FAILED\033[0m\n' "$PASS" "$FAIL"
+    exit 1
+  fi
+  if [ "$CHILD_EXIT" -ne 0 ]; then
+    printf '\033[31mthe harness exited %s before it finished\033[0m\n' "$CHILD_EXIT"
+    exit "$CHILD_EXIT"
+  fi
+  printf '\033[32mall %s hermeticity tests passed\033[0m\n' "$PASS"
+  exit 0
+fi
+
+# ── The harness proper, run as the outer layer's child ───────────────────────
 
 # Reap by process GROUP, and never by `jobs`: a `jobs`-based kill matches nothing
 # from any later shell, and killing the suite's bash alone leaves its in-flight
@@ -89,20 +222,11 @@ kill_suite_group() {
   return 1
 }
 
-# Step 0's fakes.
-release_live_probes() {
-  [ -n "$LIVE_SANDBOX" ] && rm -rf "$LIVE_SANDBOX"
-  [ -n "$LIVE_HARNESS" ] && rm -rf "$LIVE_HARNESS"
-  LIVE_SANDBOX=""
-  LIVE_HARNESS=""
-}
-
 cleanup() {
   if [ -n "$SUITE_PID" ]; then
     kill_suite_group "$SUITE_PID" >/dev/null 2>&1
     SUITE_PID=""
   fi
-  release_live_probes
   if [ -n "$RUN_ROOT" ]; then
     remove_run_root "$RUN_ROOT"
     RUN_ROOT=""
@@ -130,27 +254,6 @@ sandbox_dirs() {
 }
 
 echo "publication-boundary suite — hermeticity tests (#713, #722, #1697)"
-
-# ── 0. Sandboxes a concurrent run owns (#1697) ───────────────────────────────
-# This harness used to open by deleting every sandbox under the shared root.
-# A second gate in another worktree that was inside its standalone suite step
-# at that moment lost its live sandbox and failed with "manifest.bak: No such
-# file". Plant exactly that victim, and another harness run's live root, both
-# claimed by a process that stays alive for the whole exercise: this one. Step
-# 5 asserts they are untouched; the reclaim below and every suite run come in
-# between.
-#
-# The owner is this shell and no helper process, so the fakes live exactly as
-# long as the harness does. A background process would hold the harness's
-# output open, and a harness killed outright would then leave `ci-local.sh`
-# waiting on its pipe until that process exited.
-if ! LIVE_SANDBOX="$(claim_sandbox_dir "$SANDBOX_ROOT" "$SANDBOX_PREFIX")" ||
-  ! : >"$LIVE_SANDBOX/manifest.bak" ||
-  ! LIVE_HARNESS="$(claim_sandbox_dir "$SANDBOX_ROOT" "$HARNESS_PREFIX")" ||
-  ! : >"$LIVE_HARNESS/manifest.bak"; then
-  printf '\033[31msetup: cannot plant a live sandbox under %s.\033[0m\n' "$SANDBOX_ROOT" >&2
-  exit 2
-fi
 
 # ── This run's own root (#1697) ──────────────────────────────────────────────
 # Every suite this harness starts gets a root no other run can see: TMPDIR
@@ -215,6 +318,50 @@ for prefix in "$SANDBOX_PREFIX" "$HARNESS_PREFIX"; do
   fi
 done
 rm -rf "$RACE_ROOT"
+
+# ── 0c. #1697 — a reclaimer never follows a symlink out of its root ─────────
+# Anyone who can write the shared root can plant a run.* or harness.* symlink
+# in it. A reclaimer that resolved one removed whatever it pointed at, with
+# every worktree registered beneath it. Each reclaimer gets a symlink to a
+# victim of its own, so each is measured alone. The control is a real,
+# unclaimed directory beside them, which must be gone afterwards.
+LINK_ROOT="$RUN_ROOT/symlink-probe"
+mkdir -p "$LINK_ROOT/sandboxes" || exit 2
+for prefix in "$SANDBOX_PREFIX" "$HARNESS_PREFIX"; do
+  mkdir -p "$LINK_ROOT/victim-$prefix" "$LINK_ROOT/sandboxes/${prefix}unclaimedprobe" &&
+    : >"$LINK_ROOT/victim-$prefix/victim" &&
+    ln -s "$LINK_ROOT/victim-$prefix" "$LINK_ROOT/sandboxes/${prefix}planted" || exit 2
+done
+sweep_abandoned_sandboxes "$LINK_ROOT/sandboxes" "$SANDBOX_PREFIX" >/dev/null
+reclaim_abandoned_harness_roots "$LINK_ROOT/sandboxes" "$HARNESS_PREFIX" >/dev/null
+for pair in "suite's sweep:$SANDBOX_PREFIX" "harness reclaim:$HARNESS_PREFIX"; do
+  prefix="${pair#*:}"
+  if [ -d "$LINK_ROOT/sandboxes/${prefix}unclaimedprobe" ]; then
+    bad "setup: the ${pair%%:*} took nothing; the symlink arm measured nothing"
+  elif [ -f "$LINK_ROOT/victim-$prefix/victim" ]; then
+    ok "the ${pair%%:*} never follows a ${prefix}* symlink out of its root (#1697)"
+  else
+    bad "the ${pair%%:*} followed a ${prefix}* symlink and deleted its target (#1697)"
+  fi
+done
+
+# A run root's worktrees are the ones whose path STARTS with it. One whose path
+# only contains it, further along, is someone else's.
+PREFIX_VICTIM="$LINK_ROOT/decoy$LINK_ROOT/owned"
+mkdir -p "$LINK_ROOT/owned" "${PREFIX_VICTIM%/*}" || exit 2
+PREFIX_VICTIM="$(cd "${PREFIX_VICTIM%/*}" && pwd -P)/owned/tree"
+if git worktree add --detach --no-checkout --quiet "$PREFIX_VICTIM" HEAD >/dev/null 2>&1; then
+  remove_run_root "$LINK_ROOT/owned"
+  if git worktree list --porcelain | grep -qxF "worktree $PREFIX_VICTIM"; then
+    ok "removing a run root leaves a worktree whose path only contains it (#1697)"
+  else
+    bad "removing a run root removed a worktree outside it (#1697)"
+  fi
+  git worktree remove --force --force "$PREFIX_VICTIM" >/dev/null 2>&1
+else
+  bad "setup: could not register the decoy worktree"
+fi
+rm -rf "$LINK_ROOT"
 
 # Registrations whose directory is already gone go before the baseline is
 # taken. Every suite run prunes, so a stale entry left by some other session
@@ -288,7 +435,8 @@ fi
 # suite against the shared root, whose first act is to sweep every sandbox
 # there that no live process owns. Step 1's leak has no live owner, so were it
 # in the shared root this sweep would reclaim it and step 3 would measure
-# nothing. It must also leave step 0's live sandbox alone (asserted in step 5).
+# nothing. It must also leave the outer layer's live sandbox alone, which the
+# outer layer asserts once this run is over.
 # Minimal mode (#850): only the startup sweep is observed.
 TMPDIR="$SHARED_TMPDIR" NG_BOUNDARY_SUITE_MINIMAL=1 bash "$SUITE" >/dev/null 2>&1
 if [ -d "$KILLED_SANDBOX" ] && git worktree list --porcelain | grep -qF "$KILLED_SANDBOX/tree"; then
@@ -498,22 +646,6 @@ git worktree remove --force --force "$LOCKED_SANDBOX/tree" >/dev/null 2>&1
 rm -rf "$LOCKED_SANDBOX"
 git worktree prune >/dev/null 2>&1
 
-# ── 5. #1697 — step 0's live sandboxes survived all of the above ─────────────
-# Between planting and here: this harness's reclaim, step 2b's shared-root
-# sweep, and every suite run. Each fake is still claimed by a live process,
-# this one, so none of them could have taken it.
-if [ -f "$LIVE_SANDBOX/manifest.bak" ]; then
-  ok "a concurrent suite run's live sandbox survives the hermeticity step (#1697)"
-else
-  bad "the hermeticity step deleted a live suite run's sandbox (#1697)"
-fi
-if [ -f "$LIVE_HARNESS/manifest.bak" ]; then
-  ok "a concurrent harness run's live root survives the reclaim (#1697)"
-else
-  bad "the reclaim deleted a harness root whose owner is alive (#1697)"
-fi
-release_live_probes
-
 STATUS_AFTER="$(git status --porcelain --untracked-files=all)"
 FINAL_DIRT="$(new_owned_dirt "$STATUS_BEFORE" "$STATUS_AFTER")"
 if [ -z "$FINAL_DIRT" ]; then
@@ -523,9 +655,7 @@ else
   printf '    new entries on suite-owned paths:\n%s\n' "$FINAL_DIRT"
 fi
 
-echo ""
-if [ "$FAIL" -gt 0 ]; then
-  printf '\033[31m%s passed, %s FAILED\033[0m\n' "$PASS" "$FAIL"
-  exit 1
-fi
-printf '\033[32mall %s hermeticity tests passed\033[0m\n' "$PASS"
+# The outer layer checks its live sandboxes next and prints the summary.
+printf '%s %s\n' "$PASS" "$FAIL" >"$NG_HERMETICITY_TALLY"
+[ "$FAIL" -eq 0 ] || exit 1
+exit 0

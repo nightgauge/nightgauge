@@ -82,6 +82,30 @@ reap_stale_claims() {
     -exec rm -rf {} + 2>/dev/null
 }
 
+# reclaimable_entries <root> <prefix>
+#
+# Prints the physical path of every directory directly under <root> whose name
+# starts with <prefix>, one per line: the candidates both reclaimers consider.
+#
+# Physical, because on macOS $TMPDIR is a symlink (/var -> /private/var) and
+# `git worktree` records the resolved form.
+#
+# Real directories only. Anyone who can write the root can plant a symlink in
+# it, and a reclaimer that resolved one would remove whatever it points at,
+# the worktrees registered beneath it included (#1697). `find` without `-L`
+# never follows a symlink and `-type d` never matches one. An entry whose
+# physical path is not directly under the physical root, a directory swapped
+# for a symlink after the listing, is skipped as well.
+reclaimable_entries() {
+  local root="$1" prefix="$2" root_p d
+  root_p="$(cd "$root" 2>/dev/null && pwd -P)" || return 0
+  find "$root_p" -mindepth 1 -maxdepth 1 -type d -name "${prefix}*" 2>/dev/null |
+    while IFS= read -r d; do
+      d="$(cd "$d" 2>/dev/null && pwd -P)" || continue
+      [ "${d%/*}" = "$root_p" ] && printf '%s\n' "$d"
+    done
+}
+
 # sweep_abandoned_sandboxes <root> <prefix>
 #
 # The suite's startup sweep (#722). Scoped to one root and one prefix, so an
@@ -93,11 +117,7 @@ sweep_abandoned_sandboxes() {
   local root="$1" prefix="$2" swept=0 d
   [ -d "$root" ] || return 0
   reap_stale_claims "$root"
-  for d in "$root/$prefix"*; do
-    [ -d "$d" ] || continue
-    # Physical path: on macOS $TMPDIR is a symlink (/var -> /private/var) and
-    # `git worktree` records the resolved form.
-    d="$(cd "$d" && pwd -P)" || continue
+  while IFS= read -r d; do
     sandbox_owner_alive "$d" && continue # a concurrent run owns it
     # Unlock BEFORE removing. A SIGKILL landing inside `git worktree add`
     # leaves the entry marked `locked initializing`, and a locked worktree is
@@ -113,7 +133,7 @@ sweep_abandoned_sandboxes() {
     git worktree remove --force --force "$d/tree" >/dev/null 2>&1
     rm -rf "$d"
     swept=$((swept + 1))
-  done
+  done < <(reclaimable_entries "$root" "$prefix")
   if [ "$swept" -gt 0 ]; then
     git worktree prune >/dev/null 2>&1
     printf 'swept %s abandoned sandbox(es) from a previously killed run\n' "$swept"
@@ -125,10 +145,17 @@ sweep_abandoned_sandboxes() {
 # Remove a harness run directory and every worktree registered beneath it.
 # Unlock first: the harness constructs a locked registration on purpose, and a
 # locked worktree is skipped by `prune` and refused by a single `--force`.
+#
+# Beneath means the path starts with "<dir>/". A worktree whose path merely
+# contains it somewhere else belongs to someone else.
 remove_run_root() {
   local root="$1" wt
-  git worktree list --porcelain | sed -n 's/^worktree //p' | grep -F "$root/" |
+  git worktree list --porcelain | sed -n 's/^worktree //p' |
     while IFS= read -r wt; do
+      case "$wt" in
+      "$root"/*) ;;
+      *) continue ;;
+      esac
       git worktree unlock "$wt" >/dev/null 2>&1
       git worktree remove --force --force "$wt" >/dev/null 2>&1
     done
@@ -144,9 +171,7 @@ remove_run_root() {
 # runs in its own process group and can outlive a harness killed alone.
 reclaim_abandoned_harness_roots() {
   local root="$1" prefix="$2" d f live reclaimed=0
-  for d in "$root/$prefix"*; do
-    [ -d "$d" ] || continue
-    d="$(cd "$d" && pwd -P)" || continue
+  while IFS= read -r d; do
     live=""
     while IFS= read -r f; do
       if sandbox_owner_alive "$(dirname "$f")"; then
@@ -157,7 +182,7 @@ reclaim_abandoned_harness_roots() {
     [ -n "$live" ] && continue
     remove_run_root "$d"
     reclaimed=$((reclaimed + 1))
-  done
+  done < <(reclaimable_entries "$root" "$prefix")
   if [ "$reclaimed" -gt 0 ]; then
     printf 'reclaimed %s abandoned harness root(s) from a previously killed run\n' "$reclaimed"
   fi
