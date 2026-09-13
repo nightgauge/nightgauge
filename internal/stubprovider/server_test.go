@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"strings"
@@ -299,6 +300,94 @@ func TestMaxRequestsStopsServing(t *testing.T) {
 	// The third request must never be served: the listener is closed.
 	if _, err := http.Post(baseURL+"/v1/chat/completions", "application/json", bytes.NewReader([]byte("{}"))); err == nil {
 		t.Fatal("third request succeeded, want connection failure after max-requests")
+	}
+}
+
+// TestMaxRequestsIsHardCapUnderConcurrency drives handleChatCompletions
+// directly (no network hop, to remove dial/scheduling jitter) from many
+// goroutines released at once against a server configured with
+// MaxRequests: 1. The accept/reject decision and the request counter update
+// must be a single atomic step, so at most one of the concurrent calls may
+// be served; anything else means the cap was exceeded.
+func TestMaxRequestsIsHardCapUnderConcurrency(t *testing.T) {
+	srv, err := NewServer(Config{Script: "tool-edit-stop", MaxRequests: 1})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+
+	raw, err := json.Marshal(userTurnRequest("hi"))
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+
+	const concurrency = 64
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	statuses := make([]int, concurrency)
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(raw))
+		rec := httptest.NewRecorder()
+		go func(i int, req *http.Request, rec *httptest.ResponseRecorder) {
+			defer wg.Done()
+			<-start
+			srv.handleChatCompletions(rec, req)
+			statuses[i] = rec.Code
+		}(i, req, rec)
+	}
+	close(start)
+	wg.Wait()
+
+	served := 0
+	for _, s := range statuses {
+		if s == http.StatusOK {
+			served++
+		}
+	}
+	if served != 1 {
+		t.Fatalf("MaxRequests: 1 but %d of %d concurrent calls to handleChatCompletions were served (statuses=%v), want exactly 1", served, concurrency, statuses)
+	}
+}
+
+// TestNewServerRejectsScriptWithUnknownKind exercises NewServer's kind
+// validation against the real embedded scripts.json. "invalid-kind-fixture"
+// exists in scripts.json solely for this test: it has a kind that is none of
+// "turns", "overflow" or "error", so NewServer must fail fast at
+// construction time instead of the server later silently serving it as an
+// ordinary turns script.
+func TestNewServerRejectsScriptWithUnknownKind(t *testing.T) {
+	_, err := NewServer(Config{Script: "invalid-kind-fixture"})
+	if err == nil {
+		t.Fatal("NewServer succeeded for a script with an unknown kind, want an error")
+	}
+	if !strings.Contains(err.Error(), "unknown kind") {
+		t.Errorf("error = %v, want it to mention the unknown kind", err)
+	}
+}
+
+// TestHandleChatCompletionsRejectsUnknownScriptKind constructs a Server
+// directly (bypassing NewServer's validation) with a script Kind that is not
+// one of the known constants, to pin the handler's own dispatch as
+// fail-closed: an unrecognized kind must never fall through to being served
+// as an ordinary turns completion.
+func TestHandleChatCompletionsRejectsUnknownScriptKind(t *testing.T) {
+	srv := &Server{
+		cfg: Config{
+			Script:      "kind-typo",
+			MaxRequests: DefaultMaxRequests,
+			IdleTimeout: DefaultIdleTimeout,
+			Log:         log.New(io.Discard, "", 0),
+		},
+		script:     Script{Models: []string{"stub/stub-model"}, Kind: "eror"},
+		maxReached: make(chan struct{}, 1),
+	}
+
+	ts := httptest.NewServer(http.HandlerFunc(srv.handleChatCompletions))
+	defer ts.Close()
+
+	resp, body := postChatCompletion(t, ts.URL, userTurnRequest("hi"))
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, body = %s, want 500: an unknown script kind must fail closed, not silently serve as turns", resp.StatusCode, body)
 	}
 }
 

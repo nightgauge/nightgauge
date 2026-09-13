@@ -134,6 +134,12 @@ func NewServer(cfg Config) (*Server, error) {
 		sort.Strings(names)
 		return nil, fmt.Errorf("stubprovider: unknown script %q (available: %s)", cfg.Script, strings.Join(names, ", "))
 	}
+	switch script.Kind {
+	case scriptKindTurns, scriptKindOverflow, scriptKindError:
+	default:
+		return nil, fmt.Errorf("stubprovider: script %q has unknown kind %q (want one of %q, %q, %q)",
+			cfg.Script, script.Kind, scriptKindTurns, scriptKindOverflow, scriptKindError)
+	}
 
 	if cfg.MaxRequests <= 0 {
 		cfg.MaxRequests = DefaultMaxRequests
@@ -378,7 +384,12 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if int(s.requestCount.Load()) >= s.cfg.MaxRequests {
+	// A single atomic increment-then-compare: the accept/reject decision and
+	// the counter update are the same atomic step, so concurrent requests
+	// arriving while the counter is one below the cap cannot all pass the
+	// check before any of them has incremented it.
+	count := s.requestCount.Add(1)
+	if int(count) > s.cfg.MaxRequests {
 		http.Error(w, "stub-provider: max-requests reached", http.StatusServiceUnavailable)
 		return
 	}
@@ -400,7 +411,6 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	turnIndex := countAssistantMessages(req.Messages)
-	count := s.requestCount.Add(1)
 
 	// Only sizes and the derived turn index are ever logged — never the
 	// request body itself.
@@ -408,11 +418,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		s.cfg.Script, turnIndex, len(body), req.Stream, count)
 
 	switch s.script.Kind {
-	case scriptKindOverflow:
-		writeOverflowError(w)
-	case scriptKindError:
-		writeServerError(w)
-	default:
+	case scriptKindTurns:
 		if d := s.delay(); d > 0 {
 			time.Sleep(d)
 		}
@@ -422,6 +428,15 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		} else {
 			s.writeComplete(w, turnIndex, turn, req)
 		}
+	case scriptKindOverflow:
+		writeOverflowError(w)
+	case scriptKindError:
+		writeServerError(w)
+	default:
+		// Unreachable in practice: NewServer validates Kind against the
+		// known set before a Server is ever constructed. Kept as a
+		// defensive fail-closed branch rather than silently serving turns.
+		http.Error(w, fmt.Sprintf("stub-provider: unknown script kind %q", s.script.Kind), http.StatusInternalServerError)
 	}
 
 	if int(count) >= s.cfg.MaxRequests {

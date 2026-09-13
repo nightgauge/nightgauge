@@ -52,5 +52,9 @@
       }
     ],
     "first_token_delay_ms": 250
+  },
+  "invalid-kind-fixture": {
+    "models": ["stub/stub-model"],
+    "kind": "not-a-real-kind"
   }
 }
