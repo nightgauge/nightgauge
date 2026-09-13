@@ -143,51 +143,17 @@ trap cleanup EXIT
 trap 'trap - EXIT; cleanup; exit 130' INT
 trap 'trap - EXIT; cleanup; exit 143' TERM
 
-# Sweep sandboxes abandoned by an earlier run. Scoped to this suite's own root
-# and prefix, so an unrelated worktree is never a candidate (and the byte-level
-# `git worktree list` assertion in test-publication-boundary-hermeticity.sh
-# holds it to that).
-#
-# A sandbox is abandoned when the process that created it is gone; the
-# predicate, and why it distrusts an unparseable owner.pid, is in
-# lib/boundary-sandbox.sh.
+# Sweep sandboxes abandoned by an earlier run, then claim this run's own.
+# Both live in lib/boundary-sandbox.sh beside the harness's reclaim: the sweep,
+# the ownership predicate and why it distrusts an unparseable owner.pid, and
+# the claim that never lets a sandbox appear before its owner.pid does.
 # shellcheck source=lib/boundary-sandbox.sh
 . "$REPO/scripts/lib/boundary-sandbox.sh"
-sweep_abandoned_sandboxes() {
-  local swept=0 d
-  [ -d "$SANDBOX_ROOT" ] || return 0
-  for d in "$SANDBOX_ROOT/$SANDBOX_PREFIX"*; do
-    [ -d "$d" ] || continue
-    # Physical path: on macOS $TMPDIR is a symlink (/var -> /private/var) and
-    # `git worktree` records the resolved form.
-    d="$(cd "$d" && pwd -P)" || continue
-    sandbox_owner_alive "$d" && continue # a concurrent run owns it
-    # Unlock BEFORE removing. A SIGKILL landing inside `git worktree add`
-    # leaves the entry marked `locked initializing`, and a locked worktree is
-    # skipped by `prune` and refused by a single `--force`. Observed in CI:
-    # the directory went, the registration stayed.
-    #
-    # This is where a single `--force` is genuinely not enough, and it does not
-    # contradict the note on #722 -- that note is about `cleanup()`, whose
-    # sandbox is unclean but never locked because the run got far enough to
-    # finish creating it. The sweep exists precisely for the runs that did not.
-    git worktree unlock "$d/tree" >/dev/null 2>&1
-    git worktree remove --force --force "$d/tree" >/dev/null 2>&1
-    rm -rf "$d"
-    swept=$((swept + 1))
-  done
-  if [ "$swept" -gt 0 ]; then
-    git worktree prune >/dev/null 2>&1
-    printf 'swept %s abandoned sandbox(es) from a previously killed run\n' "$swept"
-  fi
-}
-sweep_abandoned_sandboxes
+sweep_abandoned_sandboxes "$SANDBOX_ROOT" "$SANDBOX_PREFIX"
 
-mkdir -p "$SANDBOX_ROOT" || exit 2
-SANDBOX="$(mktemp -d "$SANDBOX_ROOT/${SANDBOX_PREFIX}XXXXXXXX")" || exit 2
-# Written before the worktree is registered, so a kill between the two still
+# Claimed before the worktree is registered, so a kill between the two still
 # leaves the next run something to reclaim by.
-printf '%s\n' "$$" > "$SANDBOX/owner.pid"
+SANDBOX="$(claim_sandbox_dir "$SANDBOX_ROOT" "$SANDBOX_PREFIX")" || exit 2
 TREE="$SANDBOX/tree"
 if ! git worktree add --detach --quiet "$TREE" HEAD >/dev/null 2>&1; then
   printf '\033[31msetup: cannot create the sandbox worktree at HEAD.\033[0m\n' >&2

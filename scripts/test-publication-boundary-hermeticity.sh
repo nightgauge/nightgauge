@@ -49,9 +49,12 @@ RUN_SANDBOX_ROOT=""
 PASS=0
 FAIL=0
 SUITE_PID=""
-LIVE_OWNER=""
 LIVE_SANDBOX=""
 LIVE_HARNESS=""
+
+# Claiming, ownership and both reclaimers, shared with the suite.
+# shellcheck source=lib/boundary-sandbox.sh
+. "$REPO/scripts/lib/boundary-sandbox.sh"
 
 ok() {
   printf '  \033[32m✓\033[0m %s\n' "$1"
@@ -86,28 +89,12 @@ kill_suite_group() {
   return 1
 }
 
-# Remove a harness run directory and every worktree registered beneath it.
-# Unlock first: step 4 constructs a locked registration on purpose, and a
-# locked worktree is skipped by `prune` and refused by a single `--force`.
-remove_run_root() {
-  local root="$1" wt
-  git worktree list --porcelain | sed -n 's/^worktree //p' | grep -F "$root/" |
-    while IFS= read -r wt; do
-      git worktree unlock "$wt" >/dev/null 2>&1
-      git worktree remove --force --force "$wt" >/dev/null 2>&1
-    done
-  rm -rf "$root"
-  git worktree prune >/dev/null 2>&1
-}
-
-# Step 0's fakes and the process that keeps them live.
+# Step 0's fakes.
 release_live_probes() {
-  if [ -n "$LIVE_OWNER" ]; then
-    kill "$LIVE_OWNER" 2>/dev/null
-    wait "$LIVE_OWNER" 2>/dev/null
-  fi
   [ -n "$LIVE_SANDBOX" ] && rm -rf "$LIVE_SANDBOX"
   [ -n "$LIVE_HARNESS" ] && rm -rf "$LIVE_HARNESS"
+  LIVE_SANDBOX=""
+  LIVE_HARNESS=""
 }
 
 cleanup() {
@@ -142,9 +129,6 @@ sandbox_dirs() {
     while read -r d; do (cd "$d" && pwd -P); done | sort
 }
 
-# shellcheck source=lib/boundary-sandbox.sh
-. "$REPO/scripts/lib/boundary-sandbox.sh"
-
 echo "publication-boundary suite — hermeticity tests (#713, #722, #1697)"
 
 # ── 0. Sandboxes a concurrent run owns (#1697) ───────────────────────────────
@@ -152,19 +136,21 @@ echo "publication-boundary suite — hermeticity tests (#713, #722, #1697)"
 # A second gate in another worktree that was inside its standalone suite step
 # at that moment lost its live sandbox and failed with "manifest.bak: No such
 # file". Plant exactly that victim, and another harness run's live root, both
-# claimed by a process that stays alive for the whole exercise. Step 5 asserts
-# they are untouched; the reclaim below and every suite run come in between.
-sleep 3600 &
-LIVE_OWNER=$!
-LIVE_SANDBOX="$SANDBOX_ROOT/${SANDBOX_PREFIX}liveprobe.$$"
-LIVE_HARNESS="$SANDBOX_ROOT/${HARNESS_PREFIX}liveprobe.$$"
-for d in "$LIVE_SANDBOX" "$LIVE_HARNESS"; do
-  if ! { mkdir -p "$d" && printf '%s\n' "$LIVE_OWNER" > "$d/owner.pid" &&
-    : > "$d/manifest.bak"; }; then
-    printf '\033[31msetup: cannot plant a live sandbox at %s.\033[0m\n' "$d" >&2
-    exit 2
-  fi
-done
+# claimed by a process that stays alive for the whole exercise: this one. Step
+# 5 asserts they are untouched; the reclaim below and every suite run come in
+# between.
+#
+# The owner is this shell and no helper process, so the fakes live exactly as
+# long as the harness does. A background process would hold the harness's
+# output open, and a harness killed outright would then leave `ci-local.sh`
+# waiting on its pipe until that process exited.
+if ! LIVE_SANDBOX="$(claim_sandbox_dir "$SANDBOX_ROOT" "$SANDBOX_PREFIX")" ||
+  ! : >"$LIVE_SANDBOX/manifest.bak" ||
+  ! LIVE_HARNESS="$(claim_sandbox_dir "$SANDBOX_ROOT" "$HARNESS_PREFIX")" ||
+  ! : >"$LIVE_HARNESS/manifest.bak"; then
+  printf '\033[31msetup: cannot plant a live sandbox under %s.\033[0m\n' "$SANDBOX_ROOT" >&2
+  exit 2
+fi
 
 # ── This run's own root (#1697) ──────────────────────────────────────────────
 # Every suite this harness starts gets a root no other run can see: TMPDIR
@@ -176,46 +162,64 @@ done
 # reclaim them before this run asserts on them.
 #
 # A fresh root is empty by construction, so it is also the known start state
-# the byte-level comparisons below need.
-#
-# A harness killed outright leaves its directory behind. The next harness run
-# reclaims it, but only once EVERY owner recorded inside it is gone: its own,
-# and each nested suite's, since a suite runs in its own process group and can
-# outlive a harness killed alone.
-reclaim_abandoned_harness_roots() {
-  local d f live reclaimed=0
-  for d in "$SANDBOX_ROOT/$HARNESS_PREFIX"*; do
-    [ -d "$d" ] || continue
-    d="$(cd "$d" && pwd -P)" || continue
-    live=""
-    while IFS= read -r f; do
-      if sandbox_owner_alive "$(dirname "$f")"; then
-        live=1
-        break
-      fi
-    done < <(find "$d" -maxdepth 3 -name owner.pid 2>/dev/null)
-    [ -n "$live" ] && continue
-    remove_run_root "$d"
-    reclaimed=$((reclaimed + 1))
-  done
-  if [ "$reclaimed" -gt 0 ]; then
-    printf 'reclaimed %s abandoned harness root(s) from a previously killed run\n' "$reclaimed"
-  fi
-}
-reclaim_abandoned_harness_roots
-# Registrations whose directory is already gone go before the baseline is
-# taken. Every suite run prunes, so a stale entry left by some other session
-# would otherwise vanish mid-run and read as a worktree the sweep removed.
-git worktree prune >/dev/null 2>&1
-
-RUN_ROOT="$(mktemp -d "$SANDBOX_ROOT/${HARNESS_PREFIX}XXXXXXXX")" || exit 2
-RUN_ROOT="$(cd "$RUN_ROOT" && pwd -P)" || exit 2
-printf '%s\n' "$$" > "$RUN_ROOT/owner.pid"
+# the byte-level comparisons below need. A harness killed outright leaves its
+# root behind, and the next harness run reclaims it once no owner recorded in
+# it is alive.
+reclaim_abandoned_harness_roots "$SANDBOX_ROOT" "$HARNESS_PREFIX"
+RUN_ROOT="$(claim_sandbox_dir "$SANDBOX_ROOT" "$HARNESS_PREFIX")" || exit 2
 # Exported, so no suite invocation below can forget it. Step 2b alone runs a
 # suite the way a concurrent gate does, against the shared root.
 SHARED_TMPDIR="${TMPDIR:-/tmp}"
 export TMPDIR="$RUN_ROOT"
 RUN_SANDBOX_ROOT="$RUN_ROOT/nightgauge-pubboundary-sandboxes"
+
+# ── 0b. #1697 — no reclaimer sees a directory before it is claimed ───────────
+# A claim used to create its directory under the reclaimable name and write
+# owner.pid a moment later. Both reclaimers take an unclaimed directory on
+# sight, so one landing in between deleted a live run's directory, and the
+# run's own claim then failed or went on unclaimed. Land both reclaimers
+# exactly there: a mktemp that runs them the moment it has created the
+# directory. The race runs in a root of its own, so no other run is involved.
+#
+# The control: an unclaimed directory planted beforehand must be gone
+# afterwards, which proves the reclaimers ran inside the claim and took what
+# was theirs to take.
+RACE_ROOT="$RUN_ROOT/claim-race"
+RACE_SANDBOXES="$RACE_ROOT/sandboxes"
+mkdir -p "$RACE_ROOT/bin" "$RACE_SANDBOXES" || exit 2
+cat >"$RACE_ROOT/bin/mktemp" <<'SHIM'
+#!/usr/bin/env bash
+dir="$(PATH="$RACE_REAL_PATH" mktemp "$@")" || exit
+# shellcheck source=/dev/null
+. "$RACE_LIB"
+sweep_abandoned_sandboxes "$RACE_SANDBOXES" "$RACE_SANDBOX_PREFIX" >/dev/null
+reclaim_abandoned_harness_roots "$RACE_SANDBOXES" "$RACE_HARNESS_PREFIX" >/dev/null
+printf '%s\n' "$dir"
+SHIM
+chmod +x "$RACE_ROOT/bin/mktemp" || exit 2
+for prefix in "$SANDBOX_PREFIX" "$HARNESS_PREFIX"; do
+  mkdir -p "$RACE_SANDBOXES/${prefix}unclaimedprobe" || exit 2
+  claimed="$(
+    export RACE_REAL_PATH="$PATH" RACE_SANDBOXES \
+      RACE_LIB="$REPO/scripts/lib/boundary-sandbox.sh" \
+      RACE_SANDBOX_PREFIX="$SANDBOX_PREFIX" RACE_HARNESS_PREFIX="$HARNESS_PREFIX"
+    PATH="$RACE_ROOT/bin:$PATH"
+    claim_sandbox_dir "$RACE_SANDBOXES" "$prefix" 2>/dev/null
+  )"
+  if [ -d "$RACE_SANDBOXES/${prefix}unclaimedprobe" ]; then
+    bad "setup: no reclaimer ran inside the ${prefix}* claim; the race arm measured nothing"
+  elif [ -n "$claimed" ] && [ "$(cat "$claimed/owner.pid" 2>/dev/null)" = "$$" ]; then
+    ok "a ${prefix}* directory is claimed before a concurrent reclaim can see it (#1697)"
+  else
+    bad "a concurrent reclaim deleted a ${prefix}* directory between its creation and its claim (#1697)"
+  fi
+done
+rm -rf "$RACE_ROOT"
+
+# Registrations whose directory is already gone go before the baseline is
+# taken. Every suite run prunes, so a stale entry left by some other session
+# would otherwise vanish mid-run and read as a worktree the sweep removed.
+git worktree prune >/dev/null 2>&1
 
 # ── Attribution, not byte-identity (#832) ────────────────────────────────────
 # The helpers live in their own file so the attribution tests can exercise the
@@ -440,8 +444,8 @@ LOCKED_SANDBOX="$RUN_SANDBOX_ROOT/${SANDBOX_PREFIX}lockedprobe"
 rm -rf "$LOCKED_SANDBOX"
 mkdir -p "$LOCKED_SANDBOX"
 LOCKED_SANDBOX="$(cd "$LOCKED_SANDBOX" && pwd -P)"
-# No owner.pid: the state a run killed between creating its sandbox directory
-# and claiming it leaves behind. The sweep must treat an unclaimed sandbox as
+# No owner.pid: an unclaimed sandbox. A claim can no longer leave one (it
+# happens under another name, step 0b), but the sweep must still treat one as
 # abandoned, or nothing ever reclaims it.
 if git worktree add --detach --quiet "$LOCKED_SANDBOX/tree" HEAD >/dev/null 2>&1 &&
   git worktree lock "$LOCKED_SANDBOX/tree" >/dev/null 2>&1; then
@@ -451,6 +455,13 @@ if git worktree add --detach --quiet "$LOCKED_SANDBOX/tree" HEAD >/dev/null 2>&1
   else
     bad "expected a locked registration to survive prune; nothing to reclaim"
   fi
+
+  # A run killed in the middle of a claim leaves the claim's staging directory
+  # instead, and the same sweep reaps it once it is old enough that no claim
+  # can still be in progress. A young one may be a concurrent run's claim.
+  STALE_CLAIM="$RUN_SANDBOX_ROOT/${CLAIM_PREFIX}staleprobe"
+  YOUNG_CLAIM="$RUN_SANDBOX_ROOT/${CLAIM_PREFIX}youngprobe"
+  mkdir -p "$STALE_CLAIM" "$YOUNG_CLAIM" && touch -t 200001010000 "$STALE_CLAIM"
 
   # Minimal mode (#850): only the startup sweep is observed here — this run's
   # exit code is deliberately not captured at all.
@@ -467,6 +478,17 @@ if git worktree add --detach --quiet "$LOCKED_SANDBOX/tree" HEAD >/dev/null 2>&1
   else
     bad "the locked sandbox directory survived"
   fi
+  if [ ! -d "$STALE_CLAIM" ]; then
+    ok "the next suite run reaps a claim a killed run abandoned (#1697)"
+  else
+    bad "a claim a killed run abandoned survived the next suite run (#1697)"
+  fi
+  if [ -d "$YOUNG_CLAIM" ]; then
+    ok "a claim still in progress survives the sweep (#1697)"
+  else
+    bad "the sweep reaped a claim that may still be in progress (#1697)"
+  fi
+  rm -rf "$STALE_CLAIM" "$YOUNG_CLAIM"
 else
   bad "setup: could not construct a locked sandbox worktree"
 fi
@@ -478,27 +500,19 @@ git worktree prune >/dev/null 2>&1
 
 # ── 5. #1697 — step 0's live sandboxes survived all of the above ─────────────
 # Between planting and here: this harness's reclaim, step 2b's shared-root
-# sweep, and every suite run. Each fake is still claimed by a live process, so
-# none of them could have taken it.
-if kill -0 "$LIVE_OWNER" 2>/dev/null; then
-  if [ -f "$LIVE_SANDBOX/manifest.bak" ]; then
-    ok "a concurrent suite run's live sandbox survives the hermeticity step (#1697)"
-  else
-    bad "the hermeticity step deleted a live suite run's sandbox (#1697)"
-  fi
-  if [ -f "$LIVE_HARNESS/manifest.bak" ]; then
-    ok "a concurrent harness run's live root survives the reclaim (#1697)"
-  else
-    bad "the reclaim deleted a harness root whose owner is alive (#1697)"
-  fi
+# sweep, and every suite run. Each fake is still claimed by a live process,
+# this one, so none of them could have taken it.
+if [ -f "$LIVE_SANDBOX/manifest.bak" ]; then
+  ok "a concurrent suite run's live sandbox survives the hermeticity step (#1697)"
 else
-  bad "setup: step 0's owner process died early; the live-sandbox arm measured nothing"
+  bad "the hermeticity step deleted a live suite run's sandbox (#1697)"
+fi
+if [ -f "$LIVE_HARNESS/manifest.bak" ]; then
+  ok "a concurrent harness run's live root survives the reclaim (#1697)"
+else
+  bad "the reclaim deleted a harness root whose owner is alive (#1697)"
 fi
 release_live_probes
-if kill -0 "$LIVE_OWNER" 2>/dev/null; then
-  bad "step 0's owner process $LIVE_OWNER outlived its kill"
-fi
-LIVE_OWNER=""
 
 STATUS_AFTER="$(git status --porcelain --untracked-files=all)"
 FINAL_DIRT="$(new_owned_dirt "$STATUS_BEFORE" "$STATUS_AFTER")"
