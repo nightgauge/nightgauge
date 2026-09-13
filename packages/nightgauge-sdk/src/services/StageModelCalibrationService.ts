@@ -22,7 +22,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { TIER_BANDS } from "../eval/tierBands.js";
-import { getModelDescriptor } from "../eval/modelRegistry.js";
+import { getModelDescriptor, isLocalProvider, parseOpenCodeModel } from "../eval/modelRegistry.js";
 import { atomicWriteJSON } from "../context/ContextManager.js";
 
 /**
@@ -42,12 +42,32 @@ import { atomicWriteJSON } from "../context/ContextManager.js";
  * its own key rather than guess: a wrong band pollutes a cell the estimator
  * trusts, which is worse than a cell it never finds.
  *
+ * `opencode` samples are provider-prefixed (`<provider>/<model>`, ADR-022). A
+ * LOCAL provider's model (lm-studio, ollama) serves every band by design, so
+ * it keys on itself — `<nightgauge-provider>/<id>` — and NEVER collapses to a
+ * band, even when `bandHint` is given: the local model IS the cell, not a
+ * stand-in for a band-wide one, and every band would otherwise pollute the
+ * same cell. A prefixed CLOUD id strips its provider prefix to the bare
+ * registry id first, so an `opencode` Anthropic sample lands in the same cell
+ * a native `claude` sample for the same id would.
+ *
  * @see Issue #1213
+ * @see Issue #1622 - opencode model-aware calibration keys
  */
 export function normalizeCalibrationModelKey(idOrBand: string, bandHint?: string): string {
   const value = (idOrBand ?? "").trim();
   if (!value) return "";
   if (TIER_BANDS.includes(value as (typeof TIER_BANDS)[number])) return value;
+
+  if (value.includes("/")) {
+    const parsed = parseOpenCodeModel(value);
+    if (parsed.bareId) {
+      if (isLocalProvider(parsed.provider)) {
+        return `${parsed.provider}/${parsed.bareId}`;
+      }
+      return normalizeCalibrationModelKey(parsed.bareId, bandHint);
+    }
+  }
 
   const descriptor = getModelDescriptor(value);
   const tiers = descriptor?.tiers ?? [];

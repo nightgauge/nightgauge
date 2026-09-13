@@ -36,7 +36,7 @@ import {
   type ReasoningLevel,
   type TokenUsage,
 } from "./modelEvalSchemas.js";
-import { providerForAdapter } from "./modelRegistry.js";
+import { providerFor } from "./modelRegistry.js";
 import { summarizeCodexJsonOutput } from "../cli/adapterQuery.js";
 
 /** Token usage reported by the Claude CLI `result` object. */
@@ -405,10 +405,20 @@ export function resolveEvalAdapterProfile(provider: Provider): EvalAdapterProfil
 
 /**
  * The spawn profile for an execution-adapter name (any layer's vocabulary:
- * `claude`, `claude-headless`, `codex`, …), resolved through the registry's
- * adapter→provider mapping. Used when a caller pins the adapter explicitly rather
- * than deriving it from the model's provider.
+ * `claude`, `claude-headless`, `codex`, …) and the model it dispatches to,
+ * resolved through the registry's adapter+model→provider mapping
+ * ({@link providerFor}, ADR-022). `opencode` is multi-provider: the model
+ * decides the provider, so `model` is required — an empty model throws
+ * naming the missing model rather than guessing a provider.
  */
-export function resolveEvalAdapterProfileForAdapter(adapter: string): EvalAdapterProfile {
-  return resolveEvalAdapterProfile(providerForAdapter(adapter));
+export function resolveEvalAdapterProfileForAdapter(
+  adapter: string,
+  model: string
+): EvalAdapterProfile {
+  if (adapter === "opencode" && !model) {
+    throw new Error(
+      "resolveEvalAdapterProfileForAdapter: opencode requires a model to resolve its provider (ADR-022)"
+    );
+  }
+  return resolveEvalAdapterProfile(providerFor(adapter, model));
 }

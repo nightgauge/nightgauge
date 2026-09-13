@@ -5,6 +5,7 @@ import * as os from "node:os";
 import {
   StageModelCalibrationService,
   MIN_CALIBRATION_SAMPLES,
+  normalizeCalibrationModelKey,
   type StageModelCalibrationInput,
   type StageModelCalibrationTable,
 } from "../../src/services/StageModelCalibrationService.js";
@@ -246,5 +247,30 @@ describe("StageModelCalibrationService", () => {
     );
     expect(sample_count).toBe(6);
     expect(cell!.p75_cost_usd).toBeGreaterThan(cell!.median_cost_usd);
+  });
+
+  // --- opencode is provider-prefixed (ADR-022, #1622) ---
+
+  describe("normalizeCalibrationModelKey for opencode's provider-prefixed ids", () => {
+    it("keys a local opencode sample on <nightgauge-provider>/<id>, never a band", () => {
+      // A local model serves every band by design, so a band hint must never
+      // collapse it into a band-wide cell that pools every band's cost.
+      expect(normalizeCalibrationModelKey("lmstudio/qwen/qwen3.8-27b", "sonnet")).toBe(
+        "lm-studio/qwen/qwen3.8-27b"
+      );
+      expect(normalizeCalibrationModelKey("lmstudio/qwen/qwen3.8-27b")).toBe(
+        "lm-studio/qwen/qwen3.8-27b"
+      );
+      expect(normalizeCalibrationModelKey("ollama/llama3.2")).toBe("ollama/llama3.2");
+    });
+
+    it("strips a prefixed cloud opencode id to its bare registry id before band lookup", () => {
+      // A prefixed Anthropic sample must land in the SAME cell a native
+      // `claude` sample for the same id would.
+      expect(normalizeCalibrationModelKey("anthropic/claude-sonnet-5")).toBe(
+        normalizeCalibrationModelKey("claude-sonnet-5")
+      );
+      expect(normalizeCalibrationModelKey("anthropic/claude-sonnet-5")).toBe("sonnet");
+    });
   });
 });
