@@ -9,7 +9,7 @@
   "companion_feeds": [],
   "install": { "npm": "@google/gemini-cli" },
   "managed_install": "",
-  "required_flags": [],
+  "required_flags": ["--model", "--output-format"],
   "catalog": {
     "skip_reason": "No gemini CLI output has been captured to build a catalog parser against; see internal/doctor/testdata/no-catalog-cli-probes."
   },

@@ -196,11 +196,26 @@ to both (§ 22). `--dir` is the worktree; the manager also sets the process
 working directory to it.
 
 The adapter never emits `--auto`, `--yolo`, `--dangerously-skip-permissions`,
-`--share` or `--mdns`. In 1.18.30 `--auto` and `--share` are real `run`
-options, and a test fails if either stops being one, because the forbidden list
-would then be guarding a name that no longer exists. `--yolo`,
-`--dangerously-skip-permissions` and `--mdns` are not `run` options today, and
-they stay forbidden in case a later version adds them.
+`--share`, `--port`, `--mdns` or `--cors` (§ 15). In 1.18.30 `--auto` and
+`--share` are listed `run` options, and a test fails if either stops being
+one, because the forbidden list would then be guarding a name that no longer
+exists.
+
+`--yolo` and `--dangerously-skip-permissions` are hidden `run` options.
+`run --help` does not list them, but 1.18.30 defines both and treats either one
+as `--auto`: its bundled source switches on auto-approval when any of the three
+is set, and each was accepted exactly as `--auto` was (#1617, observed
+2026-09-13). A hidden option never appears in the help, so only the explicit
+list catches one. `--mdns` and `--cors` are not `run` options: `run` exits 1 on
+either and prints its help to stderr, as it does for any flag it does not
+define. All seven stay forbidden, and `TestOpenCodeNeverEmitsBypassFlags` checks
+them against every option combination. It catches each flag in the other
+spellings yargs takes for an option as well: 1.18.30 accepts
+`--dangerouslySkipPermissions`, `--yolo=true` and `--auto.x` as it accepts
+`--auto`. The probes are recorded in
+`internal/execution/adapters/testdata/cli-help/README.md`. An earlier version
+of this paragraph said `--yolo` and `--dangerously-skip-permissions` were not
+`run` options.
 
 The adapter exports the all-adapters environment contract: `NIGHTGAUGE_RUN_ID`
 and `NIGHTGAUGE_TARGET_REPO` when set and never as empty values,
@@ -450,10 +465,9 @@ the process **exits 0**. An `ask` is a silent stop that looks like success.
   `ask`. That covers the permissions OpenCode defaults to `ask`, such as
   `external_directory`. `allow` was observed to run a tool with no
   auto-approve flag, and `deny` removes the tool from the model's tool list.
-- Auto-approve flags (`--auto`, and `--yolo` or
-  `--dangerously-skip-permissions` should a version add them) are never
-  emitted. Approval is the map's job, derived from the stage's allowed tools
-  (#1638).
+- `--auto` and its hidden aliases `--yolo` and `--dangerously-skip-permissions`
+  (§ The command) are never emitted. Approval is the map's job, derived from
+  the stage's allowed tools (#1638).
 - The parser classifies a rejected-permission tool event as a failure, exit
   code notwithstanding (#1624, #1631).
 - The project directory OpenCode uses is the resolved path, so an absolute
