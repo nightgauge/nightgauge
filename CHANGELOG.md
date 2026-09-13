@@ -80,6 +80,14 @@ changelog, and the release workflow refuses a tag that does not.
   instead of sending the operator to fix a `main` that may be green. The
   post-merge hook likewise says it could not verify the branch, not that it is
   red (#1691)
+- `scripts/test-install-agent-skills-targets.sh` no longer rewrites the
+  committed plugin-skills mirror. It ran the real installer, which regenerates
+  that mirror first, six times per run: in `scripts/ci-local.sh` the
+  concurrent "Plugin skills mirror in sync" step could read it half-rebuilt,
+  and in CI the suite repaired a stale mirror just before that gate checked
+  it. Every arm now runs the installer in a `git archive` sandbox, and the
+  suite fails if `git status --porcelain` changes or the mirror is rewritten
+  (#1607)
 
 ### Removed
 
