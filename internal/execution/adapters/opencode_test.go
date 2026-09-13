@@ -3,6 +3,7 @@ package adapters
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -251,6 +252,159 @@ func TestOpenCodeGate(t *testing.T) {
 	}
 }
 
+// openCodeADR is ADR-022, which the tests below keep the adapter in step with.
+const openCodeADR = "../../../docs/decisions/022-opencode-multi-provider-adapter.md"
+
+// TestOpenCodeUnenforcedControlsMatchADR: the enabled-dispatch warning is the
+// operator's only disclosure of what an opencode dispatch runs without, so
+// openCodeUnenforcedControls lists exactly the rows of ADR-022's "Control not
+// yet enforced" table, in the same order, and every row names its owning
+// change. A control recorded in one and not the other fails here.
+func TestOpenCodeUnenforcedControlsMatchADR(t *testing.T) {
+	raw, err := os.ReadFile(openCodeADR)
+	if err != nil {
+		t.Fatalf("read %s: %v", openCodeADR, err)
+	}
+	owners := regexp.MustCompile(`^#\d+(, #\d+)*$`)
+	var rows []string
+	inTable := false
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "|") {
+			if inTable {
+				break
+			}
+			continue
+		}
+		cells := strings.Split(strings.Trim(line, "|"), "|")
+		for i := range cells {
+			cells[i] = strings.TrimSpace(cells[i])
+		}
+		switch {
+		case !inTable:
+			inTable = len(cells) == 2 && cells[0] == "Control not yet enforced"
+		case strings.Trim(cells[0], "-: ") == "":
+			// The header's separator row.
+		default:
+			if len(cells) != 2 || !owners.MatchString(cells[1]) {
+				t.Errorf("ADR-022 row %q does not name its owning change as #N[, #N]", line)
+			}
+			rows = append(rows, cells[0])
+		}
+	}
+	if len(rows) == 0 {
+		t.Fatalf("%s has no \"Control not yet enforced\" table", openCodeADR)
+	}
+
+	names := make([]string, len(openCodeUnenforcedControls))
+	for i, c := range openCodeUnenforcedControls {
+		names[i] = c.name
+		if strings.TrimSpace(c.gap) == "" {
+			t.Errorf("control %q does not say what the dispatch runs without", c.name)
+		}
+	}
+	if strings.Join(rows, "\n") != strings.Join(names, "\n") {
+		t.Errorf("the warning and ADR-022's \"Control not yet enforced\" table differ; they must match exactly, in order:\n  ADR-022: %q\n  warning: %q", rows, names)
+	}
+}
+
+// TestOpenCodeCaptureScriptWritesOnlyAClearedCapture runs capture.sh against a
+// fake opencode, from a copy of its directory. The fixtures it writes are
+// committed, so a capture naming an IPv4 address other than 127.0.0.1, on a
+// line of its own or beside 127.0.0.1, must fail and leave the fixtures exactly
+// as they were, with nothing left behind in staging. A clean capture replaces
+// them.
+func TestOpenCodeCaptureScriptWritesOnlyAClearedCapture(t *testing.T) {
+	for _, tool := range []string{"bash", "perl"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("%s is not on PATH", tool)
+		}
+	}
+	script, err := os.ReadFile(filepath.Join("testdata", "opencode-cli", "capture.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const oldVersion, oldHelp = "previous version\n", "previous help\n"
+
+	capture := func(t *testing.T, help string) (string, []byte, error) {
+		t.Helper()
+		dir := t.TempDir() // stands in for testdata/opencode-cli
+		for name, body := range map[string]string{"capture.sh": string(script), "version.txt": oldVersion, "run-help.txt": oldHelp} {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		bin := t.TempDir()
+		fake := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 9.9.9; else printf '%s' \"$FAKE_OPENCODE_HELP\"; fi\n"
+		if err := os.WriteFile(filepath.Join(bin, "opencode"), []byte(fake), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		staging := t.TempDir()
+		cmd := exec.Command("bash", filepath.Join(dir, "capture.sh"))
+		cmd.Env = append(os.Environ(),
+			"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+			"TMPDIR="+staging,
+			"FAKE_OPENCODE_HELP="+help)
+		out, runErr := cmd.CombinedOutput()
+
+		if left, err := os.ReadDir(staging); err != nil || len(left) != 0 {
+			t.Errorf("capture.sh left %d staging entries behind (%v)", len(left), err)
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 3 {
+			var names []string
+			for _, e := range entries {
+				names = append(names, e.Name())
+			}
+			t.Errorf("the fixture directory holds %q; want only capture.sh and the two fixtures", names)
+		}
+		return dir, out, runErr
+	}
+	fixtures := func(t *testing.T, dir string) map[string]string {
+		t.Helper()
+		got := map[string]string{}
+		for _, name := range []string{"version.txt", "run-help.txt"} {
+			b, err := os.ReadFile(filepath.Join(dir, name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got[name] = string(b)
+		}
+		return got
+	}
+
+	for name, help := range map[string]string{
+		"address on its own line":  "opencode run [message..]\n  --attach  e.g., http://192.0.2.10:4096\n",
+		"address beside 127.0.0.1": "opencode run [message..]\n  --attach  e.g., http://127.0.0.1:4096 or http://192.0.2.10:4096\n",
+	} {
+		t.Run("refused/"+name, func(t *testing.T) {
+			dir, out, err := capture(t, help)
+			if err == nil {
+				t.Errorf("capture.sh accepted a capture naming 192.0.2.10; want a non-zero exit\n%s", out)
+			}
+			got := fixtures(t, dir)
+			if got["version.txt"] != oldVersion || got["run-help.txt"] != oldHelp {
+				t.Errorf("a refused capture rewrote the committed fixtures: %q", got)
+			}
+		})
+	}
+
+	t.Run("clean", func(t *testing.T) {
+		const help = "opencode run [message..]\n  --attach  e.g., http://127.0.0.1:4096\n"
+		dir, out, err := capture(t, help)
+		if err != nil {
+			t.Fatalf("capture.sh refused a clean capture: %v\n%s", err, out)
+		}
+		got := fixtures(t, dir)
+		if got["version.txt"] != "9.9.9\n" || got["run-help.txt"] != help {
+			t.Errorf("a clean capture was not written as captured: %q", got)
+		}
+	})
+}
+
 // TestOpenCodePreDispatchReadsTheEnvironment checks the hook the manager calls
 // reads the switch from the process environment.
 func TestOpenCodePreDispatchReadsTheEnvironment(t *testing.T) {
@@ -281,6 +435,7 @@ func TestOpenCodeValidateModel(t *testing.T) {
 	for _, bad := range []string{
 		"",                // no model: OpenCode would use the operator's default
 		"sonnet",          // a tier names no provider
+		"claude-sonnet-5", // a registry id names no provider either
 		"not-a-model",     // unknown bare id
 		"/qwen",           // empty provider
 		"lmstudio/",       // empty model
@@ -298,36 +453,43 @@ func TestOpenCodeValidateModel(t *testing.T) {
 	}
 }
 
-// TestOpenCodeQualifiesRegistryIDs: a bare, non-deprecated registry id from a
-// hosted provider is qualified with that provider's OpenCode key; a deprecated
-// id, or one from a provider OpenCode is not wired to, is refused. Driven by
-// the registry so a model release does not break the test.
-func TestOpenCodeQualifiesRegistryIDs(t *testing.T) {
-	seen := map[string]bool{}
+// TestOpenCodeNeverInfersAProvider: every bare id is refused with remediation
+// to name the provider, however well the registry knows it. Qualifying a bare
+// registry id to its hosted provider would choose, for the operator, where the
+// repository's code goes and what the stage costs (ADR-022, The command).
+// Driven by the registry and the band vocabulary, so a model release adds
+// cases instead of breaking the test.
+func TestOpenCodeNeverInfersAProvider(t *testing.T) {
+	bare := append([]string{}, models.BandsAscending...)
 	for _, m := range models.All() {
-		got, err := openCodeModelArg(m.ID)
-		key, hosted := openCodeHostedProviderKeys[m.Provider]
-		switch {
-		case hosted && !m.Deprecated:
-			seen[m.Provider] = true
-			if err != nil || got != key+"/"+m.ID {
-				t.Errorf("openCodeModelArg(%q) = %q, %v; want %q", m.ID, got, err, key+"/"+m.ID)
-			}
-		default:
-			if err == nil {
-				t.Errorf("openCodeModelArg(%q) = %q; want a refusal (provider %q, deprecated %v)", m.ID, got, m.Provider, m.Deprecated)
-			}
+		if !strings.Contains(m.ID, "/") {
+			bare = append(bare, m.ID)
 		}
 	}
-	for p := range openCodeHostedProviderKeys {
-		if !seen[p] {
-			t.Errorf("no non-deprecated registry model exercised provider %q", p)
-		}
+	if len(bare) <= len(models.BandsAscending) {
+		t.Fatal("the model registry is empty; nothing exercises a bare registry id")
 	}
-
-	_, args, _ := NewOpenCodeAdapter().BuildCommand(RunOptions{Model: "claude-sonnet-5"})
-	if !containsPair(args, "-m", "anthropic/claude-sonnet-5") {
-		t.Errorf("a bare registry id did not reach -m qualified: %q", args)
+	a := NewOpenCodeAdapter()
+	for _, id := range bare {
+		got, err := openCodeModelArg(id)
+		if err == nil {
+			t.Errorf("openCodeModelArg(%q) = %q; a bare id must be refused, never qualified", id, got)
+			continue
+		}
+		for _, want := range []string{"names no provider", "<provider>/<model>"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("refusal of %q does not say %q: %v", id, want, err)
+			}
+		}
+		if err := a.ValidateModel(id); err == nil {
+			t.Errorf("ValidateModel(%q) = nil; the manager would spawn with no provider named", id)
+		}
+		_, args, _ := a.BuildCommand(RunOptions{Model: id})
+		for i, arg := range args {
+			if arg == "-m" || strings.HasSuffix(arg, "/"+id) {
+				t.Errorf("BuildCommand(%q) put a model on argv at %d: %q", id, i, args)
+			}
+		}
 	}
 }
 

@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"regexp"
-	"sort"
 	"strings"
 	"unicode"
 
@@ -71,18 +70,25 @@ type openCodeControl struct {
 }
 
 // openCodeUnenforcedControls is the list PreDispatch prints on every dispatch
-// it allows, and whose names the refusal cites. The change that implements a
-// control removes its entry; when the list is empty the gate goes with it.
+// it allows, and whose names the refusal cites. It is the operator's only
+// disclosure of what an enabled dispatch runs without, so it lists exactly the
+// rows of ADR-022's "Control not yet enforced" table, in the same order
+// (TestOpenCodeUnenforcedControlsMatchADR). The change that implements a
+// control removes its entry and its row; when the list is empty the gate goes
+// with it.
 var openCodeUnenforcedControls = []openCodeControl{
 	{"stream parsing", "token usage, cost and the served model are not recorded, because OpenCode's JSON events reach the Claude stream parser"},
 	{"failure classification", "a permission request OpenCode rejects on its own ends the run with exit code 0, so a stage that stopped early reads as a success"},
-	{"run isolation", "OpenCode reads the operator's own global config, credentials, plugins and session database"},
+	{"run isolation", "OpenCode reads the operator's own global config, credentials, plugins, ~/.claude/CLAUDE.md and ~/.claude/skills, and keeps the stage's full transcript in the operator's session database after the run"},
+	{"output redaction", "captured output is kept as OpenCode and its tools wrote it: a secret from the child's environment that a tool prints is not removed, and an OpenCode error event carries the model endpoint's full URL"},
 	{"project-config tamper gate", "the target repository's opencode.json and .opencode/ load unchecked"},
 	{"permission map", "tool permissions come from OpenCode's config, not from the stage's allowed tools"},
 	{"safety plugin", "Nightgauge's careful-gate and stage-gate hooks do not run inside OpenCode"},
-	{"egress defaults", "share, autoupdate, the model-catalog fetch, LSP downloads and webfetch follow OpenCode's own defaults"},
+	{"egress defaults", "share, autoupdate, the model-catalog fetch, LSP downloads, default plugins and webfetch follow OpenCode's own defaults"},
 	{"credential policy", "an OAuth login stored by OpenCode can be used, and ANTHROPIC_API_KEY is not required for anthropic models"},
-	{"version policy", "the opencode binary's version is not checked against a floor"},
+	{"endpoint policy", "the server behind a -m provider key is whatever OpenCode's own config and bundled catalog make it: a provider block named after a catalog provider can send that provider's API key to its base URL, and a LAN or public base URL is neither refused nor warned about"},
+	{"stage limits", "the stage's turn cap, token cap and cost budget are not passed to OpenCode, so only the stage timeout bounds a run"},
+	{"version policy", "the opencode binary's version is not checked against the floor or the max-tested version"},
 }
 
 // PreDispatch implements the manager's optional pre-dispatch hook, which runs
@@ -117,20 +123,10 @@ func openCodeGate(switchValue string, warn io.Writer) error {
 // ValidateModel implements the manager's optional pre-spawn model check. A
 // dispatch must name a model OpenCode can take on -m, because without -m
 // OpenCode falls back to the model its own config names — the operator's, not
-// the pipeline's. openCodeModelArg defines the accepted forms.
+// the pipeline's. openCodeModelArg defines the one accepted form.
 func (a *OpenCodeAdapter) ValidateModel(model string) error {
 	_, err := openCodeModelArg(model)
 	return err
-}
-
-// openCodeHostedProviderKeys maps a model-registry provider to the OpenCode
-// provider key that serves its registry ids. A bare registry id is qualified
-// with this key; ADR-022 § 1 gives the reverse table.
-var openCodeHostedProviderKeys = map[string]string{
-	"anthropic": "anthropic",
-	"google":    "google",
-	"openai":    "openai",
-	"xai":       "xai",
 }
 
 // openCodeProviderKeyRE is the shape of an OpenCode provider key, and of an
@@ -139,46 +135,35 @@ var openCodeHostedProviderKeys = map[string]string{
 // so a host name or an address can never be used as a key.
 var openCodeProviderKeyRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
-// openCodeModelArg returns the value for OpenCode's -m flag:
+// openCodeModelArg returns the value for OpenCode's -m flag. Only an explicit
+// "<provider>/<model>" is accepted, and it passes through unchanged. OpenCode
+// splits it on the FIRST slash, so "lmstudio/qwen/qwen3.8-27b" is model
+// "qwen/qwen3.8-27b" on provider "lmstudio".
 //
-//   - "<provider>/<model>" passes through unchanged. OpenCode splits it on the
-//     FIRST slash, so "lmstudio/qwen/qwen3.8-27b" is model "qwen/qwen3.8-27b"
-//     on provider "lmstudio".
-//   - A concrete, non-deprecated model-registry id from a hosted provider is
-//     qualified with that provider's key: "claude-sonnet-5" becomes
-//     "anthropic/claude-sonnet-5".
-//
-// Anything else is an error: an empty model, a tier band (it names no
-// provider, and provider resolution for a multi-provider adapter is not built
-// yet), an unknown bare id, or a value whose parts could read as a flag.
+// A bare id is refused, a model-registry id ("claude-sonnet-5") and a tier band
+// ("sonnet") alike. The adapter never infers a provider: the provider decides
+// where the repository's code goes and what the stage costs, so the operator
+// names it (ADR-022, The command). Also refused: an empty model, and a value
+// whose provider key or model id could read as a flag.
 func openCodeModelArg(model string) (string, error) {
 	m := strings.TrimSpace(model)
 	if m == "" {
 		return "", fmt.Errorf("the opencode adapter needs a model: set the stage model to <provider>/<model>, such as lmstudio/<model-id> or anthropic/<model-id>")
 	}
-	if provider, id, qualified := strings.Cut(m, "/"); qualified {
-		if !openCodeProviderKeyRE.MatchString(provider) {
-			return "", fmt.Errorf("model %q is not valid for the opencode adapter: the provider key %q must be lowercase letters, digits and '-', starting with a letter or digit", m, provider)
-		}
-		if id == "" || strings.HasPrefix(id, "-") || strings.IndexFunc(id, isSpaceOrControl) >= 0 {
-			return "", fmt.Errorf("model %q is not valid for the opencode adapter: the model id after %q/ must be non-empty, must not start with '-', and must not contain whitespace", m, provider)
-		}
-		return m, nil
+	provider, id, qualified := strings.Cut(m, "/")
+	if !qualified {
+		return "", fmt.Errorf(
+			"model %q names no provider, and the opencode adapter never infers one: set the stage model to <provider>/<model>, naming the provider that serves it, such as lmstudio/<model-id> or anthropic/<model-id>; "+
+				"a bare registry id and a tier (%s) are refused alike",
+			m, models.BandAlternation())
 	}
-	if d, ok := models.Resolve("", m); ok && d.ID == m && !d.Deprecated {
-		if key, ok := openCodeHostedProviderKeys[d.Provider]; ok {
-			return key + "/" + d.ID, nil
-		}
+	if !openCodeProviderKeyRE.MatchString(provider) {
+		return "", fmt.Errorf("model %q is not valid for the opencode adapter: the provider key %q must be lowercase letters, digits and '-', starting with a letter or digit", m, provider)
 	}
-	hosted := make([]string, 0, len(openCodeHostedProviderKeys))
-	for p := range openCodeHostedProviderKeys {
-		hosted = append(hosted, p)
+	if id == "" || strings.HasPrefix(id, "-") || strings.IndexFunc(id, isSpaceOrControl) >= 0 {
+		return "", fmt.Errorf("model %q is not valid for the opencode adapter: the model id after %q/ must be non-empty, must not start with '-', and must not contain whitespace", m, provider)
 	}
-	sort.Strings(hosted)
-	return "", fmt.Errorf(
-		"model %q is not valid for the opencode adapter: name it as <provider>/<model> (such as lmstudio/<model-id>), or use a concrete, non-deprecated registry id from %s; "+
-			"a tier (%s) names no provider, and the opencode adapter does not infer one",
-		m, strings.Join(hosted, ", "), models.BandAlternation())
+	return m, nil
 }
 
 func isSpaceOrControl(r rune) bool {

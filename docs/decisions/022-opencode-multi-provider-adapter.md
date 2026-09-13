@@ -129,20 +129,26 @@ has opted in.
 - **A refusal** names the controls that are missing, the switch, and the way
   out (`--adapter` or `NIGHTGAUGE_ADAPTER`).
 - **An allowed dispatch** prints a warning to stderr, one line per control
-  that is not enforced yet. The list is data (`openCodeUnenforcedControls` in
-  `internal/execution/adapters/opencode.go`). The change that implements a
-  control deletes its entry.
+  that is not enforced yet. It is the operator's only disclosure of what the
+  dispatch runs without, so it lists every control this ADR assigns to a later
+  change. The list is data (`openCodeUnenforcedControls` in
+  `internal/execution/adapters/opencode.go`) and holds exactly the rows below,
+  in order; `TestOpenCodeUnenforcedControlsMatchADR` fails when the two differ.
+  The change that implements a control deletes its entry and its row.
 
 | Control not yet enforced   | Owning change |
 | -------------------------- | ------------- |
 | stream parsing             | #1624, #1630  |
 | failure classification     | #1624, #1631  |
 | run isolation              | #1616         |
+| output redaction           | #1616, #1624  |
 | project-config tamper gate | #1638         |
 | permission map             | #1638         |
 | safety plugin              | #1635, #1640  |
 | egress defaults            | #1616, #1625  |
 | credential policy          | #1616         |
+| endpoint policy            | #1678         |
+| stage limits               | #1625, #1630  |
 | version policy             | #1613, #1627  |
 
 - **Removal.** #1643 deletes the enable check once the list is empty and
@@ -189,12 +195,16 @@ and `OPENCODE_SERVER_PASSWORD` (§ 18).
 
 A dispatch must name a model OpenCode can take on `-m`. Without `-m`, OpenCode
 falls back to whatever model its own config names, which is the operator's
-choice and not the pipeline's. `ValidateModel` accepts `<provider>/<model>`,
-and qualifies a bare, non-deprecated registry id from a hosted provider
-(`claude-sonnet-5` becomes `anthropic/claude-sonnet-5`). It refuses an empty
-model, a tier band (it names no provider; #1614 adds model-aware provider
-resolution), a bare id the registry does not know, and any value whose provider
-key or model id could read as a flag.
+choice and not the pipeline's. `ValidateModel` accepts only an explicit
+`<provider>/<model>`. It refuses an empty model, any bare id, and any value
+whose provider key or model id could read as a flag. A bare registry id
+(`claude-sonnet-5`) is refused exactly like a tier band (`sonnet`) or an id
+the registry does not know, with remediation to name the provider. The adapter
+never infers one: the provider decides where the repository's code goes and
+what the stage costs, and qualifying a bare id to a hosted provider would make
+that choice for the operator, the implicit crossing § Endpoints forbids for
+failover. #1614 resolves a band only against a provider the operator
+configured (§ 7).
 
 `RunOptions` fields OpenCode has no flag for are not mapped yet, and each has
 an owner: `AllowedTools` becomes the permission map (#1638), `Effort` becomes
@@ -296,8 +306,9 @@ amendment in ADR-018 and implements it.
 endpoints serve plus whatever OpenCode's hosted providers offer, and no
 finite registry set describes that. `adapter_transports` must equal the
 closed-transport set exactly (`validateAdapterTransports`), so `opencode` is
-not listed there. Registry membership decides pricing (§ 3) and how a bare id
-is qualified; it never refuses a provider-qualified model. Admission is the
+not listed there. Registry membership decides pricing (§ 3) and how a model is
+recorded (§ 2), never admission: a provider-qualified model is not refused for
+being unknown, and a bare id is not admitted for being known. Admission is the
 `-m` shape check now, and endpoint readiness (#1646, #1678) and the doctor
 (#1627) later.
 
@@ -620,8 +631,19 @@ max-tested version; the doctor (#1627) and `PreDispatch` enforce it.
   observation method above: a loopback stub provider checks stdin delivery,
   the `--format json` event types, `ask` auto-rejection, the absence of a TCP
   listener, and the project-config switch. A failed self-test refuses dispatch.
+- **Endpoints stop at max-tested.** The self-test cannot re-check the reserved
+  endpoint ids or the `lmstudio` exception (§ Endpoints). Which provider keys a
+  binary bundles and which keys its custom loaders claim are read from its
+  bundled catalog and source, and a stub provider observes neither.
+  Above max-tested, a dispatch to a model server the operator runs (a declared
+  endpoint, or the `lmstudio` or `ollama` key of § 1) is therefore refused
+  before spawn, and no endpoint block is written into any run's config. The
+  refusal names the installed version and max-tested, and its remediation is a
+  `binary` pin (§ 7) to a max-tested build. Hosted dispatch continues under the
+  warning and self-test above.
 - Raising max-tested re-captures `testdata/opencode-cli/`, the reserved
-  endpoint ids (§ Endpoints) included, in the same change.
+  endpoint ids and the `lmstudio` exception (§ Endpoints) included, in the same
+  change.
 
 ### 21. Capability spine
 
@@ -693,7 +715,7 @@ Studio beside Ollama. Each is a named **endpoint** in `opencode.endpoints[]`
   instances are two endpoints of one kind. An id is lowercase letters, digits
   and `-`, at most 32 characters, and unique.
 - **Reserved ids.** An id is never a provider key in the catalog bundled with
-  the pinned OpenCode version (§ 20). 1.18.30 bundles 213: the four hosted keys
+  the max-tested OpenCode version (§ 20). 1.18.30 bundles 213: the four hosted keys
   of § 1 and every other service it knows, `deepseek`, `mistral`, `openrouter`,
   `groq` and `opencode` among them. OpenCode merges a config provider block into
   the catalog provider with the same key, and whatever the block does not
@@ -715,13 +737,15 @@ Studio beside Ollama. Each is a named **endpoint** in `opencode.endpoints[]`
   `lm-studio` are not catalog keys.
 
   #1678 refuses a reserved id at config load, naming the catalog key it
-  collides with. The reserved set is captured from the pinned binary into
+  collides with. The reserved set is captured from the max-tested binary into
   `testdata/opencode-cli/`, and § 20 re-captures it whenever max-tested rises.
-  A run sees exactly that catalog. 1.18.30 loads the catalog from its cache
-  file and otherwise from the snapshot bundled in the binary (read from its
-  bundled source), the per-run cache starts empty, and `OPENCODE_MODELS_PATH`
-  goes with every inherited `OPENCODE_*` variable (§ 8). No observed run wrote
-  a catalog to its cache.
+  A run on the max-tested version sees exactly that catalog: 1.18.30 loads the
+  catalog from its cache file and otherwise from the snapshot bundled in the
+  binary (read from its bundled source), the per-run cache starts empty, and
+  `OPENCODE_MODELS_PATH` goes with every inherited `OPENCODE_*` variable (§ 8).
+  No observed run wrote a catalog to its cache. A newer binary can bundle a key
+  equal to an endpoint id, or give `lmstudio` a custom loader, and only a
+  re-capture shows it, so no endpoint is dispatched above max-tested (§ 20).
 
 - **Complete endpoint blocks.** Every provider block Nightgauge injects for a
   model server the operator runs, the `lmstudio` and `ollama` keys of § 1
@@ -747,12 +771,13 @@ Studio beside Ollama. Each is a named **endpoint** in `opencode.endpoints[]`
 - **Endpoints on the local network.** An endpoint is loopback by default. A
   `base_url` whose host resolves to anything other than loopback is refused
   unless the entry sets `allow_lan: true`. Even then the address must be a
-  private-network one, because the endpoint mechanism exists for servers the
-  operator runs, and a public host would make "local, `$0`, stamped" untrue
-  about where the code went. A LAN endpoint reached over `http://` sends
-  prompts and repository content across the network unencrypted, so the doctor
-  and the first dispatch of each run print a warning naming the endpoint id.
-  Loopback over `http://` does not warn.
+  private-network one (RFC 1918, or an IPv6 unique-local address), because the
+  endpoint mechanism exists for servers the operator runs, and a public host
+  would make "local, `$0`, stamped" untrue about where the code went. A LAN
+  endpoint reached over `http://` sends prompts and repository content across
+  the network unencrypted, so the doctor and the first dispatch of each run
+  print a warning naming the endpoint id. Loopback over `http://` does not
+  warn.
 
   ```yaml
   opencode:
@@ -762,9 +787,13 @@ Studio beside Ollama. Each is a named **endpoint** in `opencode.endpoints[]`
         base_url: http://127.0.0.1:1234/v1
       - id: lmstudio-remote
         provider: lm-studio
-        base_url: http://192.0.2.10:1234/v1 # RFC 5737 stand-in for a private-network address
+        base_url: http://<private-network-address>:1234/v1 # machine tier only
         allow_lan: true
   ```
+
+  A documentation address such as `192.0.2.10` (RFC 5737) is neither loopback
+  nor private-network, so an entry naming it is refused even with
+  `allow_lan: true`, and the refusal names the endpoint id, not the address.
 
 - **Failover.** A dispatch may move from one endpoint to another only when the
   second serves the same model id (#1679). That covers parallel stages spread
@@ -787,10 +816,11 @@ Studio beside Ollama. Each is a named **endpoint** in `opencode.endpoints[]`
 - Until the gate lifts, `opencode` is visible in `nightgauge adapter list` and
   in `--adapter` errors, but dispatching it takes a deliberate environment
   switch, and every such dispatch says what it lacks.
-- Two OpenCode behaviours contradicted the plan. The decisions follow what was
-  observed, and § 20's self-test re-checks the load-bearing ones on every
-  version above max-tested, so the next contradiction is caught before a
-  dispatch rather than after.
+- Two OpenCode behaviours contradicted the plan, and the decisions follow what
+  was observed. On a version above max-tested, § 20's self-test re-checks the
+  behaviours it lists before the first dispatch. It cannot re-check the
+  catalog behind the reserved endpoint ids, so endpoint dispatch stops at
+  max-tested until a re-capture raises it.
 - ADR-020 gains two reasons for a default to be off, security and privacy, each
   valid only when written down with its row.
 
