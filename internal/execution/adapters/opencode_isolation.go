@@ -22,8 +22,9 @@ import (
 // sessions, and the stage's transcript never lands in the operator's session
 // database. The functions here are pure apart from the filesystem they are
 // pointed at: home and the inherited environment are parameters, so a test
-// never touches the real home directory, and the per-run config builder
-// (#1625) and the SDK path (#1648) reuse them.
+// never touches the real home directory, and the per-run config
+// (PrepareOpenCodeRun), which the SDK path reaches through `nightgauge
+// opencode config`, reuses them.
 //
 // Observed on opencode 1.18.30 (testdata/opencode-cli/README.md):
 //
@@ -41,17 +42,11 @@ import (
 //     refuses a dispatch while it exists as well
 //     (openCodeManagedConfigRefusal).
 
-// OpenCodeInheritUserConfigEnvVar layers the operator's own global OpenCode
-// config back into pipeline runs when it is exactly "1" (ADR-022 § 8).
-//
-// Default OFF. ADR-020 requires every default-off switch to state its reason
-// beside the flag, and the reason is SECURITY: the operator's config can name
-// plugins, which run as in-process code, MCP servers, providers, permissions
-// and models, and a pipeline run must behave the same on every machine. It is
-// read from the process environment only, so a committed repository config can
-// never turn it on. Stored logins are never inherited either way: they live in
-// the data directory, which stays per run (§ 17).
-const OpenCodeInheritUserConfigEnvVar = "NIGHTGAUGE_OPENCODE_INHERIT_USER_CONFIG"
+// openCodeInheritSetting is the machine-tier setting that layers the
+// operator's own OpenCode config back into pipeline runs
+// (config.OpenCodeConfig.InheritUserConfig, ADR-022 § 8). It is off by
+// default, for the security reason recorded beside the field.
+const openCodeInheritSetting = "opencode.inherit_user_config"
 
 // OpenCodeOrphanMaxAge is the age past which SweepOpenCodeRunRoots deletes a
 // per-run root. A run deletes its own root when it ends (ADR-022 § 22); the
@@ -117,9 +112,12 @@ var openCodeForgeEnv = []string{"GITHUB_TOKEN", "GITLAB_TOKEN"}
 // and so does OpenCode's google-vertex provider, which still loads on
 // GOOGLE_CLOUD_PROJECT (read from the 1.18.30 bundled source).
 //
-// OpenCode can therefore load these providers in any run that holds their
-// variables; the egress-defaults warning line says so until the per-run config
-// pins every model a run uses (#1625).
+// OpenCode would therefore load these providers in any run that holds their
+// variables. The per-run config's enabled_providers, narrowed to the
+// dispatched provider key, is what keeps them out (BuildOpenCodeConfig):
+// observed on 1.18.30, with AWS_REGION, GITHUB_TOKEN, GITLAB_TOKEN and
+// GOOGLE_CLOUD_PROJECT set, a run loads amazon-bedrock, github-copilot, gitlab
+// and google-vertex without it and only the dispatched provider with it.
 var openCodePlatformProviders = []string{
 	"amazon-bedrock",          // AWS
 	"cloudflare-ai-gateway",   // Cloudflare
@@ -201,10 +199,11 @@ func openCodeDispatchProvider(model string) string {
 // The variables of a platform provider (openCodePlatformProviders) are never
 // withheld: the forge tokens, and the cloud and data platform credentials the
 // stage's tools read, AWS's among them. So none of this decides every provider
-// a run can reach. OpenCode can load a platform provider on the credentials
+// a run can reach: OpenCode could load a platform provider on the credentials
 // the stage keeps, a provider's own loader can find credentials the catalog
 // does not name, such as an AWS profile, and OpenCode's own hosted provider
-// serves its free models with no key.
+// serves its free models with no key. The per-run config's enabled_providers
+// decides it (BuildOpenCodeConfig).
 //
 // The stage's tools share the environment, so they lose the withheld
 // variables too. A tool that needs one fails without it, or uses a login of
@@ -487,7 +486,7 @@ type OpenCodeIsolation struct {
 	// MachineConfigDir is the directory of the operator's machine-tier
 	// Nightgauge config (config.MachineConfigDir).
 	MachineConfigDir string
-	// InheritUserConfig is OpenCodeInheritUserConfigEnvVar's value.
+	// InheritUserConfig is the machine-tier opencode.inherit_user_config.
 	InheritUserConfig bool
 }
 
@@ -601,8 +600,8 @@ func openCodeHomeConfigRefusal(home string) error {
 	return fmt.Errorf(
 		"%s holds OpenCode config (%s), and OpenCode reads that directory on every run whatever its XDG directories are, so a pipeline run cannot be isolated from it. "+
 			"Move those entries into your XDG OpenCode config directory (%s), which your own OpenCode sessions still read and pipeline runs do not, "+
-			"or set %s=1 to run pipeline stages with your OpenCode config. See docs/decisions/022-opencode-multi-provider-adapter.md § 8",
-		dir, strings.Join(found, ", "), filepath.Join("~", ".config", "opencode"), OpenCodeInheritUserConfigEnvVar)
+			"or set %s: true in your machine-tier config (~/.nightgauge/config.yaml) to run pipeline stages with your OpenCode config. See docs/decisions/022-opencode-multi-provider-adapter.md § 8",
+		dir, strings.Join(found, ", "), filepath.Join("~", ".config", "opencode"), openCodeInheritSetting)
 }
 
 // openCodeManagedConfigFiles are the machine-wide managed config files
@@ -655,8 +654,8 @@ func openCodeManagedConfigRefusal(files []string) error {
 	}
 	return fmt.Errorf(
 		"this machine has managed OpenCode config (%s), which OpenCode merges above every config a pipeline run is given, Nightgauge's own included, whatever the run's directories are, so a pipeline run cannot be isolated from it. "+
-			"Remove it, or set %s=1 to run pipeline stages with it and the rest of your OpenCode config. See docs/decisions/022-opencode-multi-provider-adapter.md § 8",
-		strings.Join(found, ", "), OpenCodeInheritUserConfigEnvVar)
+			"Remove it, or set %s: true in your machine-tier config (~/.nightgauge/config.yaml) to run pipeline stages with it and the rest of your OpenCode config. See docs/decisions/022-opencode-multi-provider-adapter.md § 8",
+		strings.Join(found, ", "), openCodeInheritSetting)
 }
 
 // openCodeStoredLoginRefusal refuses a dispatch whose run root holds an

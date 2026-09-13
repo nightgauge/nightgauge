@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
+	"github.com/nightgauge/nightgauge/internal/state"
 )
 
 // openCodeIntegrationVersion is the version every assertion here was observed
@@ -38,9 +39,12 @@ const openCodeIntegrationVersion = "1.18.30"
 // fails before it sends any request.
 const openCodeIntegrationModel = "nosuchprovider/x"
 
-// openCodeInheritVar is the opt-in into the operator's own OpenCode config, by
-// the name operators set (ADR-022 § 8).
-const openCodeInheritVar = "NIGHTGAUGE_OPENCODE_INHERIT_USER_CONFIG"
+// openCodeInheritConfig is the reference machine-tier config with the opt-in
+// into the operator's own OpenCode config (ADR-022 § 8).
+const openCodeInheritConfig = openCodeMachineConfig + "  inherit_user_config: true\n"
+
+// openCodeInheritNotice is the stderr line an opted-in dispatch prints.
+const openCodeInheritNotice = "opencode.inherit_user_config is on: this dispatch also reads your own OpenCode config"
 
 // realOpenCode resolves the opencode binary before any shim shadows it and
 // checks its version under a throwaway HOME.
@@ -240,15 +244,15 @@ func TestOpenCodeIntegrationIsolatesTheRun(t *testing.T) {
 }
 
 // TestOpenCodeIntegrationInheritUserConfigOptIn: with
-// NIGHTGAUGE_OPENCODE_INHERIT_USER_CONFIG=1, the operator's config is layered
-// back into the run, its agent and MCP server appear in `opencode debug
-// config`, one stderr line says so, and the run's data still lives in its own
-// root, so stored logins stay out.
+// opencode.inherit_user_config on in the machine tier, the operator's config is
+// layered back into the run, its agent and MCP server appear in `opencode
+// debug config`, one stderr line says so, and the run's data still lives in
+// its own root, so stored logins stay out.
 func TestOpenCodeIntegrationInheritUserConfigOptIn(t *testing.T) {
 	real := realOpenCode(t)
 	home := isolateOpenCodeHome(t)
 	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
-	t.Setenv(openCodeInheritVar, "1")
+	writeOpenCodeMachineConfig(t, openCodeInheritConfig)
 	writeOperatorOpenCodeConfig(t, home, false)
 
 	out := openCodeShim(t, real)
@@ -262,7 +266,7 @@ func TestOpenCodeIntegrationInheritUserConfigOptIn(t *testing.T) {
 			t.Errorf("with the opt-in, the run's config does not hold the operator's %s:\n%s", want, config)
 		}
 	}
-	if n := strings.Count(stderr, openCodeInheritVar+"=1: this dispatch also reads your own OpenCode config"); n != 1 {
+	if n := strings.Count(stderr, openCodeInheritNotice); n != 1 {
 		t.Errorf("the opt-in was announced %d times on stderr, want once:\n%s", n, stderr)
 	}
 	runs := filepath.Join(home, ".nightgauge", "opencode", "runs") + string(os.PathSeparator)
@@ -315,11 +319,96 @@ func TestOpenCodeIntegrationHomeDotOpenCode(t *testing.T) {
 		t.Error("the refused dispatch spawned opencode")
 	}
 
-	t.Setenv(openCodeInheritVar, "1")
+	writeOpenCodeMachineConfig(t, openCodeInheritConfig)
 	if _, _, err := runOpenCodeIntegrationStage(t); err != nil {
 		t.Fatalf("RunStage with the opt-in: %v", err)
 	}
 	if config := string(readShimFile(t, out, "config.json")); !strings.Contains(config, "home-dotdir-agent") {
 		t.Errorf("with the opt-in the ~/.opencode agent is not in the run's config:\n%s", config)
+	}
+}
+
+// TestOpenCodeIntegrationPerRunConfigReachesOpenCode: the per-run config is
+// what the real binary resolves in the environment a stage runs in. A shim
+// runs `opencode debug config` there instead of the stage, so no request is
+// sent. The endpoint's base URL, which is in no variable, resolves from the
+// private file the config refers to; the limits, the steps cap, the pinned
+// models and the locked keys are all in the resolved config; and a config
+// file in the run's own XDG directory cannot change them.
+func TestOpenCodeIntegrationPerRunConfigReachesOpenCode(t *testing.T) {
+	real := realOpenCode(t)
+	home := isolateOpenCodeHome(t)
+	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
+	// A closed loopback port: nothing may answer even if the shim ran a stage.
+	writeOpenCodeMachineConfig(t, strings.Replace(openCodeMachineConfig, "127.0.0.1:1234", "127.0.0.1:9", 1))
+
+	bin, out := t.TempDir(), t.TempDir()
+	script := fmt.Sprintf("#!/bin/sh\n\"%[1]s\" debug config < /dev/null > \"%[2]s/config.json\" 2> \"%[2]s/config.err\"\ncat > /dev/null\nexit 0\n", real, out)
+	if err := os.WriteFile(filepath.Join(bin, "opencode"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	const runID = "01890a5d-ac96-774b-bcce-b30209a81625"
+	// A file layer below the per-run config tries to lift every locked key.
+	xdgConfig := filepath.Join(home, ".nightgauge", "opencode", "runs", runID, "config", "opencode")
+	if err := os.MkdirAll(xdgConfig, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	below := `{"share":"auto","small_model":"opencode/free-model","enabled_providers":["lmstudio","opencode"],` +
+		`"provider":{"lmstudio":{"options":{"baseURL":"http://127.0.0.1:8/v1"},"models":{"qwen/qwen3.8-27b":{"limit":{"context":0,"output":0}}}}},` +
+		`"agent":{"build":{"steps":9999}}}`
+	if err := os.WriteFile(filepath.Join(xdgConfig, "opencode.json"), []byte(below), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	captureStderr(t, func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		defer cancel()
+		opts := openCodeStageOptions("lmstudio/qwen/qwen3.8-27b", state.NewRuntimeState("nightgauge/nightgauge", 1625, "item-1625", runID))
+		opts.MaxTurns = 7
+		opts.Timeout = 120 * time.Second
+		if _, err := NewManager(openCodeWorkspace(t), adapters.NewOpenCodeAdapter()).RunStage(ctx, opts); err != nil {
+			t.Fatalf("RunStage: %v", err)
+		}
+	})
+	raw := readShimFile(t, out, "config.json")
+	var cfg struct {
+		Share            string   `json:"share"`
+		Autoupdate       bool     `json:"autoupdate"`
+		SmallModel       string   `json:"small_model"`
+		EnabledProviders []string `json:"enabled_providers"`
+		Provider         map[string]struct {
+			Options map[string]any `json:"options"`
+			Models  map[string]struct {
+				Limit struct{ Context, Output int } `json:"limit"`
+			} `json:"models"`
+		} `json:"provider"`
+		Agent map[string]struct {
+			Model   string `json:"model"`
+			Steps   int    `json:"steps"`
+			Disable bool   `json:"disable"`
+		} `json:"agent"`
+		Compaction struct {
+			Auto bool `json:"auto"`
+		} `json:"compaction"`
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("`opencode debug config` in the stage's environment printed no config: %v\n%s\n%s", err, raw, readShimFile(t, out, "config.err"))
+	}
+	lm := cfg.Provider["lmstudio"]
+	if lm.Options["baseURL"] != "http://127.0.0.1:9/v1" {
+		t.Errorf("baseURL resolved to %v; want the machine-tier base_url, read from the run's file", lm.Options["baseURL"])
+	}
+	if l := lm.Models["qwen/qwen3.8-27b"].Limit; l.Context != 131072 || l.Output != 8192 {
+		t.Errorf("limit = %+v, want 131072/8192", l)
+	}
+	if cfg.Agent["build"].Steps != 7 || cfg.Agent["general"].Steps != 7 || !cfg.Agent["title"].Disable {
+		t.Errorf("agents = %+v; want steps 7 on build and general and the title agent disabled", cfg.Agent)
+	}
+	if cfg.Share != "disabled" || cfg.Autoupdate || cfg.SmallModel != "lmstudio/qwen/qwen3.8-27b" ||
+		len(cfg.EnabledProviders) != 1 || cfg.EnabledProviders[0] != "lmstudio" || !cfg.Compaction.Auto {
+		t.Errorf("a locked key did not hold: share %q, autoupdate %v, small_model %q, enabled_providers %v, compaction.auto %v",
+			cfg.Share, cfg.Autoupdate, cfg.SmallModel, cfg.EnabledProviders, cfg.Compaction.Auto)
 	}
 }

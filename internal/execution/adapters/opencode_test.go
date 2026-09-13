@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/models"
 )
 
@@ -227,7 +228,7 @@ func TestOpenCodeGate(t *testing.T) {
 			t.Errorf("gate value %q opened the gate; only exactly \"1\" may", v)
 			continue
 		}
-		for _, want := range []string{ExperimentalOpenCodeEnvVar + "=1", "--adapter", "NIGHTGAUGE_ADAPTER", "stream parsing", "egress defaults", "permission map", "safety plugin"} {
+		for _, want := range []string{ExperimentalOpenCodeEnvVar + "=1", "--adapter", "NIGHTGAUGE_ADAPTER", "stream parsing", "stage limits", "permission map", "safety plugin"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("refusal for %q does not mention %q: %v", v, want, err)
 			}
@@ -257,38 +258,37 @@ func TestOpenCodeGate(t *testing.T) {
 
 // TestOpenCodeWarningDisclosesWhereThePromptCanGo: the model a stage names is
 // not the only place its prompt can go, and the warning is the operator's only
-// disclosure of the others. Run isolation keeps the operator's own OpenCode
-// config and stored logins out of a run (ADR-022 § 8, § 17), but the target
-// repository's opencode.json and .opencode/ still load until #1638, and they
-// can name another model that receives the prompt: session-title generation
-// sends it to small_model, and the title and compaction agents and every
-// subagent run on their agent's model (§ 10, § 15), on any provider whose API
-// key the run holds. Withholding other model services' variables does not
-// close that: the stage keeps GITHUB_TOKEN and GITLAB_TOKEN for the forge,
-// which the catalog binds to github-copilot and gitlab, and the cloud and data
-// platform credentials its tools read, which the catalog binds to
-// amazon-bedrock, google-vertex and others; a provider's loader can find
-// credentials outside the environment; and OpenCode's own hosted provider
-// needs no key for its free models. And an endpoint can forward: a local
-// Ollama serves its cloud models from Ollama's hosted service (§ 3,
-// § Endpoints). So the egress line names the repository's config, both keys,
-// the API key they need and each way a run reaches a provider without one it
-// was given, and the endpoint line names Ollama cloud models. The warning is
-// also the only disclosure of what the output redaction leaves in place and
-// of a repository whose steering does not load, so those lines name exactly
-// what is redacted and which steering file is dropped.
+// disclosure of the others. The per-run config pins small_model and every
+// built-in agent's model to the dispatched one and narrows enabled_providers
+// to its provider, and no config layer below it can change a key it sets
+// (ADR-022 § 8, § 15), so the egress defaults are enforced and have no line.
+// But the target repository's opencode.json and .opencode/ still load until
+// #1638, and they can add what the per-run config does not set: an agent or
+// subagent of their own, with its own model on the dispatched provider and no
+// steps cap, a remote instructions URL, or a provider header that carries an
+// environment variable to the model server. And an endpoint can forward: a
+// local Ollama serves its cloud models from Ollama's hosted service (§ 3,
+// § Endpoints). So the tamper-gate line names what the repository can add,
+// and the endpoint line names Ollama cloud models. The warning is also the
+// only disclosure of what the output redaction leaves in place, of a
+// repository whose steering does not load, and of the stage limits a run
+// does not get, so those lines name exactly what is redacted, which steering
+// file is dropped and which limit is missing.
 func TestOpenCodeWarningDisclosesWhereThePromptCanGo(t *testing.T) {
 	gaps := map[string]string{}
 	for _, c := range openCodeUnenforcedControls {
 		gaps[c.name] = c.gap
 	}
+	if _, ok := gaps["egress defaults"]; ok {
+		t.Error("the warning still lists egress defaults, which the per-run config enforces")
+	}
 	for name, wants := range map[string][]string{
-		"egress defaults": {
-			"session-title generation", "stage prompt", "small_model",
-			"the target repository's opencode.json or .opencode/", "an agent's model", "subagent", "API key",
-			"GITHUB_TOKEN", "GITLAB_TOKEN", "github-copilot", "AWS profile", "OpenCode's own hosted provider",
-			"cloud and data platform credentials", "amazon-bedrock", "google-vertex",
+		"project-config tamper gate": {
+			"the target repository's opencode.json and .opencode/", "cannot change a key the per-run config sets",
+			"agent or subagent of their own", "no steps cap", "remote instructions URL", "header on the provider block",
+			"forge token",
 		},
+		"stage limits":    {"cost budget", "token cap on a hosted model", "steps cap"},
 		"endpoint policy": {"Ollama cloud model", "Ollama's hosted service"},
 		"output redaction": {
 			"only the values of the server password, GITHUB_TOKEN, GH_TOKEN, GITLAB_TOKEN",
@@ -466,8 +466,7 @@ func TestOpenCodeCaptureScriptWritesOnlyAClearedCapture(t *testing.T) {
 // reads the switch from the process environment.
 func TestOpenCodePreDispatchReadsTheEnvironment(t *testing.T) {
 	t.Setenv("HOME", t.TempDir()) // no ~/.opencode, whatever the real home holds
-	t.Setenv(OpenCodeInheritUserConfigEnvVar, "")
-	a := NewOpenCodeAdapter()
+	a := &OpenCodeAdapter{managedConfig: []string{}, settings: fixedOpenCodeSettings(config.OpenCodeConfig{})}
 	t.Setenv(ExperimentalOpenCodeEnvVar, "")
 	if err := a.PreDispatch(RunOptions{}); err == nil {
 		t.Error("PreDispatch allowed a dispatch with the switch unset")
@@ -489,8 +488,7 @@ func TestOpenCodePreDispatchReadsTheEnvironment(t *testing.T) {
 // cases. Any other provider key never meets this check.
 func TestOpenCodePreDispatchRequiresTheAnthropicAPIKey(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv(OpenCodeInheritUserConfigEnvVar, "")
-	a := NewOpenCodeAdapter()
+	a := &OpenCodeAdapter{managedConfig: []string{}, settings: fixedOpenCodeSettings(config.OpenCodeConfig{})}
 
 	anthropic := []string{" anthropic/claude-sonnet-5", "Anthropic/claude-sonnet-5"}
 	for _, m := range models.All() {

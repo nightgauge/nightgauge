@@ -107,6 +107,12 @@ capture script and the full observation table are in
 | `ANTHROPIC_BASE_URL` and `OPENAI_BASE_URL` send an `anthropic/` or `openai/` run, and its API key, to the server they name                                                     | § 8, § 17                  |
 | With no credentials at all, OpenCode's own hosted provider lists its free models                                                                                               | § 8, § 10                  |
 | Processes started together on a fresh data directory race its database migration, and all but one fail; once the database exists, concurrent runs share it                     | § 8                        |
+| `OPENCODE_CONFIG_CONTENT` wins over the XDG config file, the repository's `opencode.json` and `OPENCODE_CONFIG_DIR` for each key it sets; a lower layer can only add keys      | § 8                        |
+| A lower layer's deprecated `mode.build` is merged over `agent.build` after every layer, `OPENCODE_CONFIG_CONTENT`'s included, unless the content sets `mode.build` too         | § 8                        |
+| A `{file:path}` reference in `OPENCODE_CONFIG_CONTENT` resolves to the file's trimmed content, as it does in a config file                                                     | § 8                        |
+| `enabled_providers` narrowed to one key keeps out the providers the forge, AWS and Google Cloud variables would load, and OpenCode's own free models                           | § 8                        |
+| Read from the bundled source: a model whose `limit.context` is 0 is never compacted                                                                                            | § 7, § 8                   |
+| An unknown key in `OPENCODE_CONFIG_CONTENT` is dropped without a word                                                                                                          | § 8                        |
 
 The first contradiction changes § 8: once project config is disabled, which it
 must be (a repository must not grant itself permissions, plugins or providers),
@@ -177,9 +183,8 @@ has opted in.
 | repository steering        | #1626         |
 | permission map             | #1638         |
 | safety plugin              | #1635, #1640  |
-| egress defaults            | #1625         |
 | endpoint policy            | #1678, #1679  |
-| stage limits               | #1625, #1630  |
+| stage limits               | #1630         |
 | version policy             | #1613, #1627  |
 
 - **Removal.** #1643 deletes the enable check once the list is empty and
@@ -396,12 +401,14 @@ those entries and defines no second shape.
 ### 7. One config namespace
 
 All OpenCode configuration lives in a single `opencode:` block, and that block
-is read only from the **machine tier** (`~/.nightgauge/config.yaml` and the
-gitignored `.nightgauge/config.local.yaml`). An `opencode:` key in the
-committed project config fails config validation with a message naming the
-machine-tier files. Every value in the block is a fact about one machine: a
-binary path, endpoint URLs, local model limits. Endpoint URLs must never be
-committed.
+is read only from the **machine tier**, the file `~/.nightgauge/config.yaml`.
+An `opencode:` key in the committed project config refuses every `opencode`
+dispatch, and `nightgauge opencode config`, with a message naming the
+machine-tier file. The checkout's gitignored `.nightgauge/config.local.yaml`
+is not read for it either: a stage can write its own worktree, and the block
+decides where the next stage's code is sent. Every value in the block is a
+fact about one machine: a binary path, endpoint URLs, local model limits.
+Endpoint URLs must never be committed.
 
 ```yaml
 opencode:
@@ -420,6 +427,36 @@ opencode:
 `limits` apply to every model an endpoint serves and override discovered
 values. Until #1614 lands, a stage must name `<provider>/<model>` itself; the
 adapter refuses anything else before spawning.
+
+Until #1678 adds `endpoints[]`, the block describes one model server with flat
+keys, and its endpoint id follows from its kind: `lmstudio` for `lm-studio`
+and `ollama` for `ollama` (#1625). The per-run config is built per endpoint id
+all the same, so a second endpoint is a second block, not a new shape.
+
+```yaml
+opencode:
+  model: lmstudio/qwen/qwen3.8-27b
+  provider: lm-studio # lm-studio | ollama; the endpoint id is lmstudio
+  base_url: http://127.0.0.1:1234/v1
+  limit:
+    context: 131072 # at or below what the server has loaded
+    output: 8192
+  timeouts:
+    header: 3m # the default; a cold prefill took 76 s before the first byte
+    chunk: 3m
+  inherit_user_config: false
+  snapshot: false # § 12's defaults; lsp and formatter default to true
+```
+
+A stage's turn cap becomes the steps cap of the build agent and each
+subagent, and a stage with none gets 200 steps, room for a long stage on a
+local model that still ends a session caught in a loop. A dispatch to an
+endpoint whose `limit.context` or `limit.output` is 0 or missing is refused
+before spawn, as is a local provider key no endpoint declares: LM Studio reports a context limit of 0, and OpenCode never compacts
+a session whose limit is 0. A `base_url` must be `http` or `https` and carry no
+user name or password; one whose host is not this machine is accepted, and
+`nightgauge opencode config` reports it `non_loopback: true`. #1678 decides
+which non-loopback hosts are refused.
 
 ### 8. Isolation and project config
 
@@ -466,22 +503,42 @@ adapter refuses anything else before spawning.
   `XDG_CACHE_HOME`. Deleting the root unlinks every link and never touches a
   target. The run's `data/`, `cache/` and `state/` are its own, so any other
   tool that keeps state or a cache there starts empty.
-- **The per-run config.** Nightgauge writes
-  `config/opencode/opencode.json` (mode 0600): the injected provider blocks
-  (§ 1, § 17, § Endpoints), the permission map (§ 9), the plugin list, the
-  `instructions` entries (below) and MCP servers (#1626). Provider URLs never
-  go into the environment, where the process table would show them. The locked
-  keys of § 15 go in `OPENCODE_CONFIG_CONTENT` instead (#1625). Observed on
-  1.18.30, OpenCode merges its config in this order, lowest first: the files in
-  the XDG config directory, `OPENCODE_CONFIG`, the repository's files, the
-  config directories (`OPENCODE_CONFIG_DIR` last among them),
-  `OPENCODE_CONFIG_CONTENT`, and then, read from the bundled source, an active
-  console organization's remote config and the machine's managed config
-  (below). `OPENCODE_CONFIG_CONTENT` sits above an inherited operator config
-  but not above those two. The organization's config needs a console account
-  in the session database, which starts empty in every run, and managed config
-  refuses a dispatch, so without the opt-in a run reads no layer above #1625's
-  locked keys.
+- **The per-run config.** One builder (`BuildOpenCodeConfig`, #1625) makes
+  the config a stage runs under, and everything it sets goes in
+  `OPENCODE_CONFIG_CONTENT`: the provider block of the endpoint or hosted
+  provider the stage dispatches to (§ 1, § 17, § Endpoints), keyed by endpoint
+  id; the locked keys of § 15; `enabled_providers` narrowed to the dispatched
+  key; the limits, compaction policy, tool-output caps and steps cap; and
+  § 12's settings. The permission map (§ 9, #1638), the plugin list (#1635) and
+  the `instructions` entries and MCP servers (#1626) extend the same builder,
+  so there is no second writer. Observed on 1.18.30, OpenCode merges its
+  config in this order, lowest first: the files in the XDG config directory,
+  `OPENCODE_CONFIG`, the repository's files, the config directories
+  (`OPENCODE_CONFIG_DIR` last among them), `OPENCODE_CONFIG_CONTENT`, and then,
+  read from the bundled source, an active console organization's remote config
+  and the machine's managed config (below). `OPENCODE_CONFIG_CONTENT` wins
+  over every layer below it for each key it sets, an inherited operator config
+  included, so no lower layer can lift a limit, re-point a provider or turn
+  sharing back on; a lower layer can only add keys it does not set. Two merge
+  rules needed more than setting a key. The deprecated `mode.<agent>` is
+  merged over `agent.<agent>` after every layer, so a lower layer's
+  `mode.build` would win over the content's `agent.build`; the content sets
+  `mode.build` as well. And `instructions` are concatenated across layers, not
+  replaced, so the content's empty list removes none; the repository's are the
+  tamper gate's (#1638). The organization's config needs a console account in
+  the session database, which starts empty in every run, and managed config
+  refuses a dispatch, so without the opt-in a run reads no layer above the
+  per-run config.
+- **Provider URLs never go into the environment.** Every tool a stage runs
+  inherits the environment and many print it, so an endpoint's base URL is
+  written to a 0600 file in the run root's own `nightgauge/` directory (0700,
+  outside the four XDG directories), and the block's `baseURL` is a
+  `{file:...}` reference to it. Observed on 1.18.30, OpenCode resolves such a
+  reference in `OPENCODE_CONFIG_CONTENT` as it does in a config file. A
+  credential is never in the content either: the `anthropic` block's key is
+  the reference `{env:ANTHROPIC_API_KEY}` (§ 17). OpenCode substitutes both
+  kinds of reference in the config text before parsing it, so a model id with
+  a brace is refused.
 - **The environment.** Every inherited `OPENCODE_*` variable is removed, and
   only the variables this ADR names are set: the four XDG variables and the
   pins above; the switches of § 10 and § 11, `OPENCODE_DISABLE_MODELS_FETCH`,
@@ -530,9 +587,13 @@ adapter refuses anything else before spawning.
   the credentials the stage keeps, a provider's own loader can find
   credentials elsewhere (`amazon-bedrock` also loads on `AWS_PROFILE` and the
   AWS credentials file), and OpenCode's own hosted provider serves its free
-  models with no key. What closes those routes to another model is § 15's
-  pinning of every model a run uses (#1625); until then the egress-defaults
-  warning line names them.
+  models with no key. The per-run config closes those routes to another
+  model: `enabled_providers` holds the dispatched provider key alone, and every
+  model a run uses is pinned (§ 15, #1625). Observed on 1.18.30, a run holding
+  `AWS_REGION`, `GITHUB_TOKEN`, `GITLAB_TOKEN` and `GOOGLE_CLOUD_PROJECT`
+  loaded `amazon-bedrock`, `github-copilot`, `gitlab`, `google-vertex`,
+  `google-vertex-anthropic` and OpenCode's own free models beside the
+  dispatched provider without it, and the dispatched provider alone with it.
 - **The home directory.** `home` does not move, and OpenCode 1.18.30 reads two
   operator locations from it whatever the XDG variables say.
   `OPENCODE_DISABLE_EXTERNAL_SKILLS=1` closes `~/.agents/skills` and
@@ -560,21 +621,22 @@ adapter refuses anything else before spawning.
   `inherit_user_config` is on, which accepts the machine's config with the
   operator's own.
 - **`inherit_user_config`** defaults to `false`: the operator's global
-  OpenCode config is not read. Until #1625 wires the machine-tier key, the one
-  way to turn it on is `NIGHTGAUGE_OPENCODE_INHERIT_USER_CONFIG=1` in the
-  environment, and every dispatch it applies to says so on stderr. It sets
-  `OPENCODE_CONFIG_DIR` to the operator's OpenCode config directory
-  (`$XDG_CONFIG_HOME/opencode`, else `~/.config/opencode`), which brings back
-  its `opencode.json`, `opencode.jsonc` and directories, and `~/.opencode` loads
-  as it does outside a run. That config is layered above the per-run file and
-  under `OPENCODE_CONFIG_CONTENT`, so every locked key in § 15 still wins over
-  it; a provider block in it merges over the per-run file's, and #1625 decides
-  what an inherited block may change of one Nightgauge injects. The opt-in also
-  lifts the managed-config refusal, and a managed config wins over the locked
-  keys, which the stderr line says. Stored logins are never inherited either
-  way, because they live in the data directory, which stays per run (§ 17).
-  An API key written into the operator's config is inherited, and the stderr
-  line says so.
+  OpenCode config is not read. The way to turn it on is
+  `opencode.inherit_user_config: true` in the machine tier (§ 7), which a
+  committed repository config cannot set, and every dispatch it applies to
+  says so on stderr. The interim `NIGHTGAUGE_OPENCODE_INHERIT_USER_CONFIG`
+  variable is gone (#1625). The opt-in sets `OPENCODE_CONFIG_DIR` to the
+  operator's OpenCode config directory (`$XDG_CONFIG_HOME/opencode`, else
+  `~/.config/opencode`), which brings back its `opencode.json`,
+  `opencode.jsonc` and directories, and `~/.opencode` loads as it does outside
+  a run. That config is layered under `OPENCODE_CONFIG_CONTENT`, so every key
+  the per-run config sets still wins over it: an inherited provider block can
+  add to the one Nightgauge injects, such as a header, and can change nothing
+  Nightgauge sets in it. The opt-in also lifts the managed-config refusal, and
+  a managed config wins over the per-run config, which the stderr line says.
+  Stored logins are never inherited either way, because they live in the data
+  directory, which stays per run (§ 17). An API key written into the
+  operator's config is inherited, and the stderr line says so.
 - **The target repository's `opencode.json`, `opencode.jsonc` and
   `.opencode/**`.** `OPENCODE_DISABLE_PROJECT_CONFIG=1` is set on every spawn,
   so OpenCode never loads them. Nightgauge reads them instead. Keys outside the
@@ -691,6 +753,11 @@ disabled (§ 8) drops it anyway.
 | `snapshot`  | `false`                           | yes                                  | The worktree and its git history already undo anything; a snapshot is a second copy of the tree in the per-run data directory |
 | `lsp`       | on, for servers already installed | yes, off                             | Diagnostics after an edit add value; the download of new servers is locked off (§ 10)                                         |
 | `formatter` | on                                | yes, off                             | Formatting on edit adds value; turn it off where the repository's own hook formats                                            |
+
+The overrides are `opencode.snapshot`, `opencode.lsp` and `opencode.formatter`
+in the machine tier (§ 7). The config schema bundled in OpenCode 1.18.30
+documents an omitted `lsp` or `formatter` as off, so the per-run config always
+sets all three (#1625).
 
 ### 13. The registry's "local providers have no entries" note
 
@@ -864,10 +931,13 @@ dispatched provider's own key, the forge tokens, the cloud platform
 credentials the stage keeps for its tools, credentials a provider's own loader
 finds that the catalog does not name, or nothing at all for OpenCode's own
 free models (§ 8). The repository, not the operator, may still be what
-names it. § 15 pins both keys to the dispatched model (#1625), and the
-project-config merge drops a repository's value (#1638), so no config chooses
-where the prompt goes. Until then the enabled-dispatch warning's
-egress-defaults line names both routes.
+names it. The per-run config pins both keys, and every built-in agent's model,
+to the dispatched model and loads the dispatched provider alone (#1625), and
+it wins over the repository's files for every key it sets (§ 8). What the
+repository can still do is add an agent of its own, whose model can only be on
+the dispatched provider; the project-config merge drops that too (#1638), and
+until then the enabled-dispatch warning's project-config tamper-gate line
+names it.
 
 `nightgauge doctor` reports a subscription or OAuth login for `anthropic` in
 either source of OpenCode's stored logins as a finding (#1627): `auth.json` in

@@ -36,6 +36,7 @@ keys:
   notifications.discord.enabled: machine
   notifications.discord.webhook_url: machine
   lm_studio: machine
+  opencode: machine
   autonomous.enabled_repos: machine
   autonomous.allow_self_repo: machine
   autonomous.repositories.*: machine

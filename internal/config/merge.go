@@ -38,6 +38,11 @@ var MachineTierKeys = []string{
 	"github_auth",
 	"notifications.discord.enabled",
 	"lm_studio",
+	// opencode is the OpenCode adapter's block (ADR-022 § 7): the binary,
+	// the model server's URL and loaded limits, and the opt-in into the
+	// operator's own OpenCode config. LoadOpenCodeConfig reads it from the
+	// machine tier alone and refuses a committed project declaration.
+	"opencode",
 	"autonomous.enabled_repos",
 	// autonomous.allow_self_repo is a per-machine safety opt-out (#292):
 	// which binary is "self" is a property of the machine's checkout, and

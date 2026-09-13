@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/models"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 )
@@ -332,14 +333,13 @@ func TestOpenCodeKeepsPlatformCredentialFamiliesWhole(t *testing.T) {
 func TestOpenCodeDispatchNamesTheVariablesItWithholds(t *testing.T) {
 	t.Setenv("HOME", t.TempDir()) // no ~/.opencode
 	t.Setenv(ExperimentalOpenCodeEnvVar, "1")
-	t.Setenv(OpenCodeInheritUserConfigEnvVar, "")
 	for key := range openCodeCatalogEnvNames {
 		t.Setenv(key, "")
 	}
 	for _, key := range []string{"ANTHROPIC_BASE_URL", "OPENAI_BASE_URL"} {
 		t.Setenv(key, "")
 	}
-	a := &OpenCodeAdapter{managedConfig: []string{}}
+	a := &OpenCodeAdapter{managedConfig: []string{}, settings: fixedOpenCodeSettings(config.OpenCodeConfig{})}
 	model := RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"}
 	const phrase = "withheld from this stage and every tool it runs: "
 	dispatch := func() []string {
@@ -593,8 +593,13 @@ func TestOpenCodeRunStartsWithNoStoredLogin(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	a := NewOpenCodeAdapter()
-	run, err := a.PrepareRunRoot(RunRootRequest{ID: testRunID, MachineConfigDir: filepath.Join(home, ".nightgauge")})
+	a := &OpenCodeAdapter{settings: fixedOpenCodeSettings(lmStudioSettings())}
+	req := RunRootRequest{
+		ID:               testRunID,
+		MachineConfigDir: filepath.Join(home, ".nightgauge"),
+		Run:              RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b"},
+	}
+	run, err := a.PrepareRunRoot(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -615,7 +620,7 @@ func TestOpenCodeRunStartsWithNoStoredLogin(t *testing.T) {
 	if err := os.WriteFile(stored, []byte(sentinel), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, err = a.PrepareRunRoot(RunRootRequest{ID: testRunID, MachineConfigDir: filepath.Join(home, ".nightgauge")})
+	_, err = a.PrepareRunRoot(req)
 	if err == nil {
 		t.Fatal("a run root holding auth.json was prepared for the next stage")
 	}
@@ -1006,14 +1011,13 @@ func TestOpenCodeManagedConfigFiles(t *testing.T) {
 func TestOpenCodeRefusesManagedOpenCodeConfig(t *testing.T) {
 	t.Setenv("HOME", t.TempDir()) // no ~/.opencode
 	t.Setenv(ExperimentalOpenCodeEnvVar, "1")
-	t.Setenv(OpenCodeInheritUserConfigEnvVar, "")
 	const sentinel = "managed-config-content-sentinel-1616"
 	dir := t.TempDir()
 	files := []string{
 		filepath.Join(dir, "opencode.json"), filepath.Join(dir, "opencode.jsonc"),
 		filepath.Join(dir, "user", "ai.opencode.managed.plist"), filepath.Join(dir, "ai.opencode.managed.plist"),
 	}
-	a := &OpenCodeAdapter{managedConfig: files}
+	a := &OpenCodeAdapter{managedConfig: files, settings: fixedOpenCodeSettings(config.OpenCodeConfig{})}
 	model := RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"}
 	if err := a.PreDispatch(model); err != nil {
 		t.Fatalf("with no managed config the dispatch was refused: %v", err)
@@ -1029,7 +1033,7 @@ func TestOpenCodeRefusesManagedOpenCodeConfig(t *testing.T) {
 		if err == nil {
 			t.Errorf("%s: the dispatch was allowed", f)
 		} else {
-			for _, want := range []string{f, "managed OpenCode config", OpenCodeInheritUserConfigEnvVar + "=1"} {
+			for _, want := range []string{f, "managed OpenCode config", openCodeInheritSetting + ": true", "machine-tier config"} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("%s: the refusal does not say %q: %v", f, want, err)
 				}
@@ -1046,11 +1050,11 @@ func TestOpenCodeRefusesManagedOpenCodeConfig(t *testing.T) {
 	if err := os.WriteFile(files[0], []byte(sentinel), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv(OpenCodeInheritUserConfigEnvVar, "1")
+	a.settings = fixedOpenCodeSettings(config.OpenCodeConfig{InheritUserConfig: true})
 	var err error
 	stderr := captureAdapterStderr(t, func() { err = a.PreDispatch(model) })
 	if err != nil {
-		t.Errorf("with %s=1 the dispatch was refused: %v", OpenCodeInheritUserConfigEnvVar, err)
+		t.Errorf("with %s on the dispatch was refused: %v", openCodeInheritSetting, err)
 	}
 	if !strings.Contains(stderr, "managed OpenCode config") {
 		t.Errorf("the opt-in line does not say it takes in the machine's managed config:\n%s", stderr)
@@ -1084,15 +1088,15 @@ func captureAdapterStderr(t *testing.T, fn func()) string {
 // enabled dispatch is refused while it holds anything OpenCode loads from a
 // config directory, naming the entries without reading them. What an install
 // or OpenCode itself leaves there is not config. With the operator's opt-in
-// into their own OpenCode config, the dispatch goes ahead and stderr says so.
+// into their own OpenCode config, opencode.inherit_user_config in the machine
+// tier, the dispatch goes ahead and stderr says so.
 func TestOpenCodeRefusesAHomeDotOpenCodeWithConfig(t *testing.T) {
 	// The name is what operators set and what ADR-022 § 8 documents.
-	if OpenCodeInheritUserConfigEnvVar != "NIGHTGAUGE_OPENCODE_INHERIT_USER_CONFIG" {
-		t.Fatalf("the opt-in variable is %q; ADR-022 § 8 names NIGHTGAUGE_OPENCODE_INHERIT_USER_CONFIG", OpenCodeInheritUserConfigEnvVar)
+	if openCodeInheritSetting != "opencode.inherit_user_config" {
+		t.Fatalf("the opt-in setting is %q; ADR-022 § 8 names opencode.inherit_user_config", openCodeInheritSetting)
 	}
-	a := NewOpenCodeAdapter()
+	a := &OpenCodeAdapter{managedConfig: []string{}, settings: fixedOpenCodeSettings(config.OpenCodeConfig{})}
 	t.Setenv(ExperimentalOpenCodeEnvVar, "1")
-	t.Setenv(OpenCodeInheritUserConfigEnvVar, "")
 	const sentinel = "home-config-content-sentinel-1616"
 	for _, entry := range []string{
 		"opencode.json", "opencode.jsonc", "agent", "agents", "command", "commands",
@@ -1116,7 +1120,7 @@ func TestOpenCodeRefusesAHomeDotOpenCodeWithConfig(t *testing.T) {
 			t.Errorf("~/.opencode/%s: the dispatch was allowed", entry)
 			continue
 		}
-		for _, want := range []string{filepath.Join(home, ".opencode"), entry, OpenCodeInheritUserConfigEnvVar + "=1", filepath.Join("~", ".config", "opencode")} {
+		for _, want := range []string{filepath.Join(home, ".opencode"), entry, openCodeInheritSetting + ": true", filepath.Join("~", ".config", "opencode")} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("~/.opencode/%s: the refusal does not say %q: %v", entry, want, err)
 			}
@@ -1145,17 +1149,17 @@ func TestOpenCodeRefusesAHomeDotOpenCodeWithConfig(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(home, ".opencode", "agent"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv(OpenCodeInheritUserConfigEnvVar, "1")
+	a.settings = fixedOpenCodeSettings(config.OpenCodeConfig{InheritUserConfig: true})
 	var err error
 	stderr := captureAdapterStderr(t, func() { err = a.PreDispatch(RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"}) })
 	if err != nil {
-		t.Errorf("with %s=1 the dispatch was refused: %v", OpenCodeInheritUserConfigEnvVar, err)
+		t.Errorf("with %s on the dispatch was refused: %v", openCodeInheritSetting, err)
 	}
-	if n := strings.Count(stderr, OpenCodeInheritUserConfigEnvVar+"=1: this dispatch also reads your own OpenCode config"); n != 1 {
+	if n := strings.Count(stderr, openCodeInheritSetting+" is on: this dispatch also reads your own OpenCode config"); n != 1 {
 		t.Errorf("the opt-in was announced %d times on stderr, want once:\n%s", n, stderr)
 	}
 
-	t.Setenv(OpenCodeInheritUserConfigEnvVar, "")
+	a.settings = fixedOpenCodeSettings(config.OpenCodeConfig{})
 	t.Setenv(ExperimentalOpenCodeEnvVar, "")
 	if err := a.PreDispatch(RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"}); err == nil || !strings.Contains(err.Error(), "is experimental") {
 		t.Errorf("with the switch unset the refusal = %v; want the gate's", err)
@@ -1163,13 +1167,13 @@ func TestOpenCodeRefusesAHomeDotOpenCodeWithConfig(t *testing.T) {
 }
 
 // TestOpenCodePrepareRunRoot drives the hook the manager calls: the root is
-// created under the home directory, its environment points OpenCode at it,
-// a second stage of the run reuses it, and creating a root sweeps an orphan
-// a crashed run left behind.
+// created under the home directory, its environment points OpenCode at it and
+// carries the run's config, a second stage of the run reuses it, and creating
+// a root sweeps an orphan a crashed run left behind.
 func TestOpenCodePrepareRunRoot(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	for _, k := range []string{"XDG_CONFIG_HOME", "XDG_CACHE_HOME", "GH_CONFIG_DIR", "GOCACHE", OpenCodeInheritUserConfigEnvVar} {
+	for _, k := range []string{"XDG_CONFIG_HOME", "XDG_CACHE_HOME", "GH_CONFIG_DIR", "GOCACHE"} {
 		t.Setenv(k, "")
 	}
 	const orphan = "01890a5d-ac96-774b-bcce-0000000000ff"
@@ -1182,8 +1186,12 @@ func TestOpenCodePrepareRunRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	a := NewOpenCodeAdapter()
-	req := RunRootRequest{ID: testRunID, MachineConfigDir: filepath.Join(home, ".nightgauge")}
+	a := &OpenCodeAdapter{settings: fixedOpenCodeSettings(lmStudioSettings())}
+	req := RunRootRequest{
+		ID:               testRunID,
+		MachineConfigDir: filepath.Join(home, ".nightgauge"),
+		Run:              RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b"},
+	}
 	var first *RunRoot
 	stderr := captureAdapterStderr(t, func() { first, err = a.PrepareRunRoot(req) })
 	if err != nil {
@@ -1194,6 +1202,9 @@ func TestOpenCodePrepareRunRoot(t *testing.T) {
 	}
 	if first.Env["XDG_DATA_HOME"] != filepath.Join(first.Dir, "data") || first.Env["NIGHTGAUGE_CONFIG_HOME"] != req.MachineConfigDir {
 		t.Errorf("Env does not point OpenCode at the root: %v", first.Env)
+	}
+	if content := first.Env["OPENCODE_CONFIG_CONTENT"]; !strings.Contains(content, `"enabled_providers":["lmstudio"]`) {
+		t.Errorf("Env does not carry the run's config as OPENCODE_CONFIG_CONTENT: %q", content)
 	}
 	if _, err := os.Lstat(orphanRoot); !os.IsNotExist(err) {
 		t.Error("creating a root did not sweep the orphaned one")

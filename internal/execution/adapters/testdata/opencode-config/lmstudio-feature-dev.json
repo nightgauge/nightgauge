@@ -1,0 +1,89 @@
+{
+  "model": "lmstudio/qwen/qwen3.8-27b",
+  "small_model": "lmstudio/qwen/qwen3.8-27b",
+  "default_agent": "build",
+  "enabled_providers": ["lmstudio"],
+  "provider": {
+    "lmstudio": {
+      "npm": "@ai-sdk/openai-compatible",
+      "env": [],
+      "options": {
+        "baseURL": "{file:/nightgauge-test-home/.nightgauge/opencode/runs/01890a5d-ac96-774b-bcce-b302099a8057/nightgauge/lmstudio.base-url}",
+        "apiKey": "",
+        "headerTimeout": 180000,
+        "chunkTimeout": 180000
+      },
+      "models": {
+        "qwen/qwen3.8-27b": {
+          "limit": {
+            "context": 131072,
+            "output": 8192
+          },
+          "tool_call": true
+        }
+      }
+    }
+  },
+  "agent": {
+    "build": {
+      "model": "lmstudio/qwen/qwen3.8-27b",
+      "steps": 40,
+      "disable": false
+    },
+    "compaction": {
+      "model": "lmstudio/qwen/qwen3.8-27b",
+      "disable": false
+    },
+    "explore": {
+      "model": "lmstudio/qwen/qwen3.8-27b",
+      "steps": 40,
+      "disable": false
+    },
+    "general": {
+      "model": "lmstudio/qwen/qwen3.8-27b",
+      "steps": 40,
+      "disable": false
+    },
+    "plan": {
+      "model": "lmstudio/qwen/qwen3.8-27b",
+      "steps": 40,
+      "disable": false
+    },
+    "summary": {
+      "model": "lmstudio/qwen/qwen3.8-27b",
+      "disable": false
+    },
+    "title": {
+      "model": "lmstudio/qwen/qwen3.8-27b",
+      "disable": true
+    }
+  },
+  "mode": {
+    "build": {
+      "model": "lmstudio/qwen/qwen3.8-27b",
+      "steps": 40,
+      "disable": false
+    }
+  },
+  "subagent_depth": 1,
+  "compaction": {
+    "auto": true,
+    "prune": true,
+    "reserved": 8192,
+    "tail_turns": 2,
+    "preserve_recent_tokens": 15000
+  },
+  "tool_output": {
+    "max_lines": 1000,
+    "max_bytes": 32768
+  },
+  "share": "disabled",
+  "autoupdate": false,
+  "snapshot": false,
+  "lsp": true,
+  "formatter": true,
+  "instructions": [],
+  "skills": {
+    "urls": []
+  }
+}

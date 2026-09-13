@@ -96,6 +96,10 @@ type RunRootRequest struct {
 	// XDG_CONFIG_HOME for its child pins NIGHTGAUGE_CONFIG_HOME to it, so a
 	// nightgauge command the stage runs reads the same machine tier.
 	MachineConfigDir string
+	// Run is the dispatch the root is prepared for, after the pre-dispatch,
+	// model and effort checks. The opencode adapter builds the run's config
+	// from it (ADR-022 § 8).
+	Run RunOptions
 }
 
 // RunRoot is a directory private to one pipeline run, where an adapter whose
