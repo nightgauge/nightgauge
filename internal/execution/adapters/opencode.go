@@ -23,7 +23,8 @@ import (
 // The adapter is EXPERIMENTAL. The controls a pipeline stage relies on are not
 // built yet (openCodeUnenforcedControls), so PreDispatch refuses every dispatch
 // unless the operator sets ExperimentalOpenCodeEnvVar=1, and prints what is
-// missing on every dispatch it lets through.
+// missing on every dispatch it lets through. It refuses an anthropic/ model
+// even with the switch set (openCodeAnthropicRefusal).
 type OpenCodeAdapter struct{}
 
 // NewOpenCodeAdapter creates an OpenCode CLI adapter.
@@ -85,7 +86,7 @@ var openCodeUnenforcedControls = []openCodeControl{
 	{"permission map", "tool permissions come from OpenCode's config, not from the stage's allowed tools"},
 	{"safety plugin", "Nightgauge's careful-gate and stage-gate hooks do not run inside OpenCode"},
 	{"egress defaults", "share, autoupdate, the model-catalog fetch, LSP downloads, default plugins and webfetch follow OpenCode's own defaults"},
-	{"credential policy", "an OAuth login stored by OpenCode can be used, and ANTHROPIC_API_KEY is not required for anthropic models"},
+	{"credential policy", "only an anthropic/ model is refused: any other provider can authenticate with a login OpenCode has stored instead of its own API-key variable, and a model named in the operator's own OpenCode config, which the run still reads, can reach anthropic on a stored login"},
 	{"endpoint policy", "the server behind a -m provider key is whatever OpenCode's own config and bundled catalog make it: a provider block named after a catalog provider can send that provider's API key to its base URL, and a LAN or public base URL is neither refused nor warned about"},
 	{"stage limits", "the stage's turn cap, token cap and cost budget are not passed to OpenCode, so only the stage timeout bounds a run"},
 	{"version policy", "the opencode binary's version is not checked against the floor or the max-tested version"},
@@ -93,8 +94,40 @@ var openCodeUnenforcedControls = []openCodeControl{
 
 // PreDispatch implements the manager's optional pre-dispatch hook, which runs
 // after worktree setup and before BuildCommand, so a refusal spawns nothing.
-func (a *OpenCodeAdapter) PreDispatch(RunOptions) error {
+// The anthropic refusal comes first: the switch cannot lift it, so it is the
+// reason to state, and no enabled-dispatch warning precedes it.
+func (a *OpenCodeAdapter) PreDispatch(opts RunOptions) error {
+	if err := openCodeAnthropicRefusal(opts.Model); err != nil {
+		return err
+	}
 	return openCodeGate(os.Getenv(ExperimentalOpenCodeEnvVar), os.Stderr)
+}
+
+// openCodeAnthropicRefusal refuses a dispatch to an anthropic/ model, with the
+// enable switch set or not. ADR-022 § 17 lets Anthropic through OpenCode
+// authenticate only with ANTHROPIC_API_KEY from the environment, never with a
+// subscription or OAuth login OpenCode has stored. Until the credential policy
+// and run isolation are enforced (#1616), nothing stops OpenCode using a
+// stored login, whether or not the key is set, so the interim enforcement is
+// not to dispatch the model at all. #1616 replaces this refusal with § 17's
+// key requirement.
+//
+// The model is parsed the way openCodeModelArg parses it (trimmed, split on
+// the first slash). The provider key is compared case-insensitively, so every
+// spelling of it gets this refusal rather than the model check's.
+func openCodeAnthropicRefusal(model string) error {
+	m := strings.TrimSpace(model)
+	provider, _, qualified := strings.Cut(m, "/")
+	if !qualified || !strings.EqualFold(provider, "anthropic") {
+		return nil
+	}
+	return fmt.Errorf(
+		"model %q is refused: the opencode adapter does not dispatch anthropic/ models until the credential policy is enforced (#1616). "+
+			"Anthropic through OpenCode may authenticate only with ANTHROPIC_API_KEY from the environment, never with a subscription or OAuth login OpenCode has stored, "+
+			"and until then nothing stops OpenCode using a stored one, so %s=1 does not lift this refusal. "+
+			"Run an Anthropic model on the claude-headless adapter instead (--adapter claude-headless or NIGHTGAUGE_ADAPTER=claude-headless), which also serves a Claude subscription, "+
+			"or name a model on another provider as <provider>/<model>. See docs/decisions/022-opencode-multi-provider-adapter.md § 17",
+		m, ExperimentalOpenCodeEnvVar)
 }
 
 // openCodeGate refuses the dispatch unless switchValue is exactly "1", and

@@ -43,8 +43,11 @@ changelog, and the release workflow refuses a tag that does not.
   dispatch unless `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` is set in the
   environment, and each dispatch it allows warns which controls are not
   enforced yet. A stage names its model as `<provider>/<model>`, and the
-  adapter never infers a provider from a bare id. The prompt goes on stdin,
-  never argv, and every spawn gets its own server password.
+  adapter never infers a provider from a bare id. An `anthropic/*` model is
+  refused even with the switch set, until Anthropic through OpenCode is held
+  to `ANTHROPIC_API_KEY` and never uses a stored subscription or OAuth login;
+  run Anthropic models on `claude-headless` meanwhile. The prompt goes on
+  stdin, never argv, and every spawn gets its own server password.
   [ADR-022](docs/decisions/022-opencode-multi-provider-adapter.md) records the
   design (#1612)
 - `nightgauge preflight managed-steering` reports generated Nightgauge steering

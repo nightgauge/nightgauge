@@ -907,3 +907,76 @@ func TestOpenCodeDispatchRefusedUntilEnabled(t *testing.T) {
 		}
 	})
 }
+
+// TestOpenCodeAnthropicDispatchRefusedWithGateOpen: with the enable switch set
+// and ANTHROPIC_API_KEY present, RunStage still refuses an anthropic/ model
+// before spawn, because until the credential policy is enforced (#1616)
+// nothing stops OpenCode authenticating with a subscription or OAuth login it
+// has stored (ADR-022 § 17). A fake `opencode` first on PATH counts its
+// invocations: none for the anthropic/ model, and one for a local model under
+// the same switch, so the refusal is the anthropic rule and not the gate.
+func TestOpenCodeAnthropicDispatchRefusedWithGateOpen(t *testing.T) {
+	stubDir := t.TempDir()
+	invocations := filepath.Join(stubDir, "invocations.log")
+	script := fmt.Sprintf("#!/bin/sh\necho invoked >> %q\ncat > /dev/null\nexit 0\n", invocations)
+	if err := os.WriteFile(filepath.Join(stubDir, "opencode"), []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", stubDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
+	t.Setenv("ANTHROPIC_API_KEY", "set-by-the-test")
+
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".nightgauge", "worktrees", "nightgauge-issue-1612"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	dispatch := func(model string) (string, error) {
+		var err error
+		stderr := captureStderr(t, func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			_, err = NewManager(root, adapters.NewOpenCodeAdapter()).RunStage(ctx, StageOptions{
+				Repo:        "nightgauge/nightgauge",
+				IssueNumber: 1612,
+				Stage:       "feature-dev",
+				Model:       model,
+				Prompt:      "implement the issue",
+				Timeout:     30 * time.Second,
+			})
+		})
+		return stderr, err
+	}
+	invocationCount := func() int {
+		raw, err := os.ReadFile(invocations)
+		if os.IsNotExist(err) {
+			return 0
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Count(string(raw), "invoked\n")
+	}
+
+	stderr, err := dispatch("anthropic/claude-sonnet-5")
+	if n := invocationCount(); n != 0 {
+		t.Errorf("the opencode binary ran %d time(s) for an anthropic/ model; want 0", n)
+	}
+	if err == nil {
+		t.Fatal("RunStage dispatched anthropic/claude-sonnet-5 through opencode with the switch set; want a refusal until #1616")
+	}
+	for _, want := range []string{"dispatch refused", "ANTHROPIC_API_KEY", "claude-headless", "#1616"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal does not mention %q: %v", want, err)
+		}
+	}
+	if strings.Contains(stderr, "[opencode] WARNING") {
+		t.Errorf("a refused dispatch printed the enabled-dispatch warning:\n%s", stderr)
+	}
+
+	if _, err := dispatch("lmstudio/qwen/qwen3.8-27b"); err != nil {
+		t.Fatalf("RunStage refused a local model under the same switch: %v", err)
+	}
+	if n := invocationCount(); n != 1 {
+		t.Errorf("the opencode binary ran %d time(s) after the local-model dispatch; want exactly 1", n)
+	}
+}

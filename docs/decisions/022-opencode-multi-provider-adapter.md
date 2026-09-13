@@ -25,8 +25,9 @@ cost, isolation and credentials work once it no longer holds.
 The adapter ships **Experimental**. `Manager.RunStage` refuses every `opencode`
 dispatch before spawning anything unless `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1`
 is set in the environment, and every dispatch it allows prints the controls
-that are not enforced yet. The gate stays until those controls exist and the
-beta decision in § 23 lifts it.
+that are not enforced yet. An `anthropic/*` model is refused even with the
+switch set, until #1616 enforces § 17's credential policy. The gate stays until
+those controls exist and the beta decision in § 23 lifts it.
 
 Three things are fixed by the change that carries this ADR:
 
@@ -128,6 +129,17 @@ has opted in.
   gate, § 8) can join it.
 - **A refusal** names the controls that are missing, the switch, and the way
   out (`--adapter` or `NIGHTGAUGE_ADAPTER`).
+- **`anthropic/*` is refused with the switch set.** § 17 lets Anthropic through
+  OpenCode authenticate only with `ANTHROPIC_API_KEY`, never with a
+  subscription or OAuth login OpenCode has stored, and until #1616 enforces
+  that, nothing stops OpenCode using a stored login. `PreDispatch` therefore
+  refuses every model whose provider key is `anthropic` before spawn, whatever
+  the switch says. It checks this first, so the refusal states the one reason
+  the switch cannot lift and no warning precedes it. The remediation names the
+  `claude-headless` adapter, which also serves a Claude subscription, and says
+  that `anthropic/*` through OpenCode unlocks when #1616 enforces § 17. The
+  credential-policy row below stays until then, because the refusal covers only
+  the model a stage names (§ 17).
 - **An allowed dispatch** prints a warning to stderr, one line per control
   that is not enforced yet. It is the operator's only disclosure of what the
   dispatch runs without, so it lists every control this ADR assigns to a later
@@ -274,9 +286,12 @@ allowed, a host name or an address can never become one.
 
 ### 3. Cost
 
-- **Local is `$0`, stamped.** A stage served by a declared endpoint or a
-  built-in local key records `cost_usd: 0` with `cost_unstamped: false`. The
-  operator's hardware sends no bill.
+- **Local records `cost_usd: 0`, stamped.** A stage served by a declared
+  endpoint or a built-in local key records `cost_usd: 0` with
+  `cost_unstamped: false`. The field is the per-token provider charge, and a
+  model the operator hosts has none. It is not a measure of what the stage
+  used: hardware, power and operator time are real costs, and Nightgauge does
+  not meter them.
 - **Re-priced from the registry, per step.** For a hosted model the registry
   knows, every `step_finish` is priced from the registry's rate card for the
   model that served that step: input, output and reasoning tokens, plus the
@@ -287,18 +302,18 @@ allowed, a host name or an address can never become one.
   and not from the bill, and it read `0` for a provider it had no price for.
 - **Zero from a non-local provider is unstamped.** A hosted or `other` model
   the registry cannot price records `cost_usd: 0` with `cost_unstamped: true`.
-  An unknown cost is never reported as free.
+  An unknown cost is never recorded as a stamped zero.
 
 ### 4. The `local` usage plan (amends ADR-018)
 
 ADR-018 gains a plan kind, `plan.kind: "local"`, with no windows. It is
 produced for an adapter whose attributed stages in the snapshot were all served
 by local providers: `opencode` on local endpoints, and the `lm-studio` and
-`ollama` bridges. There is no bill and no allowance to meter, and today those
-cases fall to `unknown`, which tells the user "cannot say" about a spend that
-is known to be zero. When any attributed stage was hosted, the snapshot is the
-ordinary `pay-per-token` one over the priced stages. #1665 records the
-amendment in ADR-018 and implements it.
+`ollama` bridges. There is no provider bill and no allowance to meter, and
+today those cases fall to `unknown`, which tells the user "cannot say" about a
+spend with no per-token charge. When any attributed stage was hosted, the
+snapshot is the ordinary `pay-per-token` one over the priced stages. #1665
+records the amendment in ADR-018 and implements it.
 
 ### 5. Open model policy
 
@@ -438,9 +453,17 @@ the process **exits 0**. An `ask` is a silent stop that looks like success.
 | Web search                              | off; its enabling variable is stripped with every inherited `OPENCODE_*` |
 
 Every variable named here appears in the 1.18.30 binary. Whether they stop the
-traffic they name is #1644's to prove. No Nightgauge document describes a
-local-model run as offline or as sending nothing off the machine until #1644
-has verified zero non-loopback egress for OpenCode on a local provider.
+traffic they name is #1644's to prove.
+
+No Nightgauge document describes a run as offline or air-gapped, or as sending
+nothing off the machine, whatever the provider and whatever #1644 finds. Those
+descriptions are untrue by design: a stage talks to the Git forge, which is
+what the `GITHUB_TOKEN` in its environment is for, and an endpoint on the local
+network (§ Endpoints) is another machine, reached over plain HTTP. #1644 gates
+only a narrower statement: that the agent and its model traffic reach only
+loopback and the endpoints the operator configured, while Nightgauge still
+talks to the Git forge. No document makes even that statement until #1644 has
+verified it.
 
 ### 11. Claude compatibility
 
@@ -474,13 +497,14 @@ disabled (§ 8) drops it anyway.
 
 The registry's schema note in `internal/models/model-registry.json` says that
 local providers (ollama and lm-studio) have no entries by design, that the
-configured local model serves every band, and that unknown ids cost nothing.
-#1633 amends it to say that local providers have no **committed** entries. A
-local model's descriptor (context length, tool support, and a zero rate card
-with `rate_provenance: local`) is discovered from the endpoint at run time,
-lives in machine-local state, and is keyed by normalized provider and model id,
-never by endpoint address. An unknown local id still costs nothing and is
-stamped. The committed file carries no local model and no endpoint.
+configured local model serves every band, and that an unknown id is priced at
+zero. #1633 amends it to say that local providers have no **committed**
+entries. A local model's descriptor (context length, tool support, and a zero
+rate card with `rate_provenance: local`) is discovered from the endpoint at run
+time, lives in machine-local state, and is keyed by normalized provider and
+model id, never by endpoint address. An unknown local id still records
+`cost_usd: 0` (no per-token provider charge), stamped. The committed file
+carries no local model and no endpoint.
 
 ### 14. Host overlay segment (amends ADR-016)
 
@@ -577,6 +601,22 @@ a pending default. A pipeline run is automated work billed per token against a
 key the operator can audit and revoke per machine, and reversing it takes a
 superseding ADR. Every other hosted provider likewise authenticates with its
 own API-key variable from the environment.
+
+Until #1616 enforces this section, `PreDispatch` refuses every `anthropic/*`
+dispatch before spawn, with the enable switch set or not (§ The enable gate).
+Nothing yet stops OpenCode using a login it has stored, and `ANTHROPIC_API_KEY`
+being set does not change that. The refusal covers the model a stage names. A
+model named in the operator's own OpenCode config is covered once run
+isolation (#1616) keeps that config and its stored logins out of a run, and
+until then the enabled-dispatch warning says so. #1616 replaces the refusal
+with the key requirement above.
+
+`nightgauge doctor` reports a subscription or OAuth login for `anthropic` in
+OpenCode's stored credentials (`auth.json`) as a finding (#1627). It reads only
+each entry's `type`, never a credential value. The finding says that a
+pipeline run never uses the login, that an `anthropic/*` stage through OpenCode
+needs `ANTHROPIC_API_KEY`, and that a Claude subscription belongs on the
+`claude-headless` adapter.
 
 ### 18. Listener
 
@@ -682,11 +722,12 @@ removal.
 2. #1644 has verified zero non-loopback egress for OpenCode on a local
    provider.
 3. #1659 shows live six-stage pipeline runs on a local model through LM Studio
-   completing with usage and `$0` cost stamped.
+   completing with usage recorded and `cost_usd: 0` stamped.
 4. Hosted providers pass stub-provider contract tests: a loopback stub speaking
    each hosted provider's protocol checks argv, credential injection (§ 17),
    the per-step re-pricing (§ 3) and failure classification (#1631).
-5. The version policy (§ 20) and the doctor checks (#1627) are live.
+5. The version policy (§ 20) and the doctor checks (#1627) are live, the
+   stored-login finding of § 17 among them.
 6. Extension and SDK parity (#1615, #1623, #1637) ships, so both execution
    paths treat `opencode` the same way.
 
@@ -725,10 +766,10 @@ Studio beside Ollama. Each is a named **endpoint** in `opencode.endpoints[]`
   token, even with `enabled_providers` narrowed to that one key. An endpoint
   named after a hosted service would send that service's key to the machine the
   endpoint names, in the LAN case over plain HTTP, and § 1 would record the
-  stage as local and `$0`. The catalog binds `GITHUB_TOKEN`, which every spawn
-  carries, to `github-copilot`. OpenCode also keys its custom provider loaders,
-  some of which read credentials of their own, by provider key, and every key
-  with a loader in 1.18.30 is a catalog key.
+  stage as local, stamped `cost_usd: 0`. The catalog binds `GITHUB_TOKEN`,
+  which every spawn carries, to `github-copilot`. OpenCode also keys its custom
+  provider loaders, some of which read credentials of their own, by provider
+  key, and every key with a loader in 1.18.30 is a catalog key.
 
   The one exception is `lmstudio`, and only on an `lm-studio` endpoint. That
   catalog entry is LM Studio itself (`@ai-sdk/openai-compatible` on a loopback
@@ -773,11 +814,11 @@ Studio beside Ollama. Each is a named **endpoint** in `opencode.endpoints[]`
   unless the entry sets `allow_lan: true`. Even then the address must be a
   private-network one (RFC 1918, or an IPv6 unique-local address), because the
   endpoint mechanism exists for servers the operator runs, and a public host
-  would make "local, `$0`, stamped" untrue about where the code went. A LAN
-  endpoint reached over `http://` sends prompts and repository content across
-  the network unencrypted, so the doctor and the first dispatch of each run
-  print a warning naming the endpoint id. Loopback over `http://` does not
-  warn.
+  would make the stage's local record, stamped `cost_usd: 0`, untrue about
+  where the code went. A LAN endpoint reached over `http://` sends prompts and
+  repository content across the network unencrypted, so the doctor and the
+  first dispatch of each run print a warning naming the endpoint id. Loopback
+  over `http://` does not warn.
 
   ```yaml
   opencode:
@@ -826,8 +867,8 @@ Studio beside Ollama. Each is a named **endpoint** in `opencode.endpoints[]`
 
 ## Implementation
 
-This change (#1612) registers the adapter, adds the `PreDispatch` hook and the
-enable gate, pins the argv, the stdin prompt channel and the per-spawn password
-with tests, and captures `opencode run --help` for 1.18.30. The rest of epic
-#1609 implements the decisions above; the owning issue is named at each
-decision.
+This change (#1612) registers the adapter, adds the `PreDispatch` hook, the
+enable gate and the interim refusal of `anthropic/*` (§ 17), pins the argv,
+the stdin prompt channel and the per-spawn password with tests, and captures
+`opencode run --help` for 1.18.30. The rest of epic #1609 implements the
+decisions above; the owning issue is named at each decision.

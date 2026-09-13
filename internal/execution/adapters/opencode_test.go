@@ -419,6 +419,54 @@ func TestOpenCodePreDispatchReadsTheEnvironment(t *testing.T) {
 	}
 }
 
+// TestOpenCodePreDispatchRefusesAnthropicWithTheSwitchSet: until the credential
+// policy is enforced (#1616), nothing holds an anthropic/ stage to
+// ANTHROPIC_API_KEY, and OpenCode would use a subscription or OAuth login it
+// has stored. So PreDispatch refuses every anthropic/ model with the switch set
+// and the key present, and names the claude-headless adapter as the way out
+// (ADR-022 § 17). Driven by the registry, so a model release adds cases. Any
+// other provider key passes this check and meets the gate instead.
+func TestOpenCodePreDispatchRefusesAnthropicWithTheSwitchSet(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "set-by-the-test")
+	a := NewOpenCodeAdapter()
+
+	refused := []string{" anthropic/claude-sonnet-5", "Anthropic/claude-sonnet-5"}
+	for _, m := range models.All() {
+		if m.Provider == "anthropic" && !strings.Contains(m.ID, "/") {
+			refused = append(refused, "anthropic/"+m.ID)
+		}
+	}
+	if len(refused) == 2 {
+		t.Fatal("the model registry has no anthropic model; nothing exercises a registry id")
+	}
+
+	t.Setenv(ExperimentalOpenCodeEnvVar, "1")
+	for _, model := range refused {
+		err := a.PreDispatch(RunOptions{Model: model})
+		if err == nil {
+			t.Errorf("PreDispatch(%q) with %s=1 allowed the dispatch; an anthropic/ model is refused until #1616", model, ExperimentalOpenCodeEnvVar)
+			continue
+		}
+		for _, want := range []string{
+			"ANTHROPIC_API_KEY", "subscription or OAuth login", "#1616",
+			ExperimentalOpenCodeEnvVar + "=1 does not lift this refusal",
+			"--adapter claude-headless", "NIGHTGAUGE_ADAPTER=claude-headless",
+		} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("refusal of %q does not say %q: %v", model, want, err)
+			}
+		}
+	}
+
+	t.Setenv(ExperimentalOpenCodeEnvVar, "")
+	for _, model := range []string{"lmstudio/qwen/qwen3.8-27b", "openai/gpt-5.5", "openrouter/anthropic/claude-sonnet-5"} {
+		err := a.PreDispatch(RunOptions{Model: model})
+		if err == nil || strings.Contains(err.Error(), "claude-headless") || !strings.Contains(err.Error(), "is experimental") {
+			t.Errorf("PreDispatch(%q) with the switch unset = %v; want the gate's refusal, not the anthropic one", model, err)
+		}
+	}
+}
+
 func TestOpenCodeValidateModel(t *testing.T) {
 	a := NewOpenCodeAdapter()
 	for _, ok := range []string{
