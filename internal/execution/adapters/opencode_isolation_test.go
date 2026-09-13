@@ -157,19 +157,20 @@ func TestOpenCodeDisableFlags(t *testing.T) {
 // § 17). Every OPENCODE_* variable is withheld, a login-bearing one and a
 // name no version has yet alike, and so are the provider base-URL variables,
 // whatever the provider. A local model inherits none of the variables
-// OpenCode's catalog binds to a hosted provider: the issue's seven, and the
-// rest of the catalog's, each of which makes OpenCode load its provider
-// (GROQ_API_KEY adds groq's models, and AWS_REGION alone amazon-bedrock's).
-// The lists are literal here, so narrowing the adapter's fails. A hosted model
-// keeps its own provider's variables and no other's. The forge tokens, a
-// variable no catalog entry binds, and everything else pass through.
+// OpenCode's catalog binds to a hosted model service: the issue's seven, and
+// the rest of the catalog's, each of which makes OpenCode load its provider
+// (GROQ_API_KEY adds groq's models). The lists are literal here, so narrowing
+// the adapter's fails. A hosted model keeps its own provider's variables and
+// no other model service's. The forge tokens and the cloud platform
+// credentials a stage's tools read pass through whatever the provider
+// (TestOpenCodeKeepsPlatformCredentialFamiliesWhole), and so do a variable no
+// catalog entry binds and everything else.
 func TestOpenCodeWithholdsEnv(t *testing.T) {
 	cloudKeys := []string{
 		"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "XAI_API_KEY", "GEMINI_API_KEY",
 		"GOOGLE_API_KEY", "OPENROUTER_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY",
 		"GROQ_API_KEY", "MISTRAL_API_KEY", "DEEPSEEK_API_KEY", "LMSTUDIO_API_KEY",
-		"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "AWS_BEARER_TOKEN_BEDROCK",
-		"GOOGLE_APPLICATION_CREDENTIALS", "HF_TOKEN", "CLOUDFLARE_API_TOKEN", "DATABRICKS_HOST",
+		"AZURE_API_KEY", "AZURE_RESOURCE_NAME", "NVIDIA_API_KEY", "OLLAMA_API_KEY",
 	}
 	endpointVars := []string{"ANTHROPIC_BASE_URL", "OPENAI_BASE_URL"}
 	openCodeVars := []string{
@@ -181,6 +182,9 @@ func TestOpenCodeWithholdsEnv(t *testing.T) {
 	passes := []string{
 		"PATH", "HOME", "GITHUB_TOKEN", "GITLAB_TOKEN", "GH_TOKEN", "NIGHTGAUGE_ISSUE_NUMBER",
 		"opencode_config", "DEEPSEEK_API_KEY_NOT_LISTED", "NIGHTGAUGE_TEST_UNBOUND_API_KEY",
+		"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_REGION",
+		"GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT", "HF_TOKEN",
+		"CLOUDFLARE_API_TOKEN", "DATABRICKS_HOST",
 	}
 	alwaysWithheld := slices.Concat(endpointVars, openCodeVars)
 
@@ -196,12 +200,12 @@ func TestOpenCodeWithholdsEnv(t *testing.T) {
 				continue // lmstudio's own, checked below
 			}
 			if !OpenCodeWithholdsEnv(model, key) {
-				t.Errorf("model %q: %s reaches the child; a local run inherits no OpenCode or base-URL variable and no hosted provider's credentials", model, key)
+				t.Errorf("model %q: %s reaches the child; a local run inherits no OpenCode or base-URL variable and no hosted model service's credentials", model, key)
 			}
 		}
 		for _, key := range passes {
 			if OpenCodeWithholdsEnv(model, key) {
-				t.Errorf("model %q: %s is withheld; only OPENCODE_*, the base-URL variables and other providers' catalog variables are", model, key)
+				t.Errorf("model %q: %s is withheld; only OPENCODE_*, the base-URL variables and other model services' catalog variables are", model, key)
 			}
 		}
 	}
@@ -240,6 +244,152 @@ func TestOpenCodeWithholdsEnv(t *testing.T) {
 	a := NewOpenCodeAdapter()
 	if !a.WithholdsEnv(RunOptions{Model: "lmstudio/q"}, "OPENAI_API_KEY") || a.WithholdsEnv(RunOptions{Model: "openai/gpt-5.5"}, "OPENAI_API_KEY") {
 		t.Error("the adapter's WithholdsEnv hook does not apply the dispatched model")
+	}
+}
+
+// TestOpenCodeKeepsPlatformCredentialFamiliesWhole: removing part of a
+// platform's credentials does not leave a stage's tools without credentials.
+// It moves them to the next source in the platform's credential chain, which
+// can be another account in another region, and nothing says so. With
+// AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and AWS_REGION removed and
+// AWS_SESSION_TOKEN left, the AWS CLI reads ~/.aws/credentials and
+// ~/.aws/config instead. With GOOGLE_APPLICATION_CREDENTIALS and
+// GOOGLE_VERTEX_PROJECT removed and GOOGLE_CLOUD_PROJECT left, Google's
+// clients, and OpenCode's google-vertex provider, which still loads on
+// GOOGLE_CLOUD_PROJECT, use the operator's own application default
+// credentials (ADR-022 § 8). So no dispatch, to any provider, withholds a
+// variable of a platform family, whether the catalog lists it or not. The
+// families are literal here, and the catalog variables a run on an
+// uncatalogued provider keeps are exactly theirs, so the adapter's set can be
+// neither narrowed nor widened unnoticed.
+func TestOpenCodeKeepsPlatformCredentialFamiliesWhole(t *testing.T) {
+	families := map[string][]string{
+		"AWS": {
+			"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "AWS_BEARER_TOKEN_BEDROCK",
+			"AWS_SESSION_TOKEN", "AWS_DEFAULT_REGION", "AWS_PROFILE",
+		},
+		"Google Cloud": {
+			"GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_VERTEX_PROJECT", "GOOGLE_VERTEX_LOCATION",
+			"GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION",
+		},
+		"Cloudflare": {
+			"CLOUDFLARE_API_TOKEN", "CLOUDFLARE_API_KEY", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID",
+			"CLOUDFLARE_EMAIL",
+		},
+		"Databricks":       {"DATABRICKS_HOST", "DATABRICKS_TOKEN", "DATABRICKS_CONFIG_PROFILE"},
+		"DigitalOcean":     {"DIGITALOCEAN_ACCESS_TOKEN"},
+		"Snowflake":        {"SNOWFLAKE_ACCOUNT", "SNOWFLAKE_CORTEX_PAT", "SNOWFLAKE_USER"},
+		"Hugging Face":     {"HF_TOKEN", "HF_HOME"},
+		"Weights & Biases": {"WANDB_API_KEY"},
+		"Vultr":            {"VULTR_API_KEY"},
+		"the forge":        {"GITHUB_TOKEN", "GITLAB_TOKEN", "GH_TOKEN"},
+	}
+	dispatches := []string{"lmstudio/qwen/qwen3.8-27b", "ollama/qwen3-coder:30b", "lmstudio-remote/qwen/qwen3.8-27b", ""}
+	for _, provider := range slices.Sorted(maps.Keys(openCodeCatalogEnv)) {
+		dispatches = append(dispatches, provider+"/m")
+	}
+	var familyCatalogVars []string
+	for _, family := range slices.Sorted(maps.Keys(families)) {
+		for _, key := range families[family] {
+			if openCodeCatalogEnvNames[key] {
+				familyCatalogVars = append(familyCatalogVars, key)
+			}
+			var withheldFrom []string
+			for _, model := range dispatches {
+				if OpenCodeWithholdsEnv(model, key) {
+					withheldFrom = append(withheldFrom, model)
+				}
+			}
+			if len(withheldFrom) > 0 {
+				t.Errorf("%s (%s) is withheld from %d dispatches, %q among them; the rest of its family stays, so its tools fall back to another source of %s credentials",
+					key, family, len(withheldFrom), withheldFrom[0], family)
+			}
+		}
+	}
+
+	// A run on a provider the catalog does not know keeps no catalog
+	// variable of its own, so what it keeps is the platform families alone.
+	var kept []string
+	for key := range openCodeCatalogEnvNames {
+		if !OpenCodeWithholdsEnv("lmstudio-remote/qwen/qwen3.8-27b", key) {
+			kept = append(kept, key)
+		}
+	}
+	slices.Sort(kept)
+	slices.Sort(familyCatalogVars)
+	if !slices.Equal(kept, slices.Compact(familyCatalogVars)) {
+		t.Errorf("a run on an uncatalogued provider keeps the catalog variables %q; want exactly the platform families' %q", kept, familyCatalogVars)
+	}
+}
+
+// TestOpenCodeDispatchNamesTheVariablesItWithholds: a stage and every tool it
+// runs lose the variables the dispatch withholds, so the withholding is never
+// silent. An enabled dispatch prints one stderr line naming, by name alone and
+// sorted, each withheld provider variable the environment holds a value for,
+// and saying why. A variable the stage keeps is not named: a platform
+// credential, a forge token, or its own provider's key. Nor is an OPENCODE_*
+// variable, which only OpenCode reads. With nothing withheld there is no line.
+func TestOpenCodeDispatchNamesTheVariablesItWithholds(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // no ~/.opencode
+	t.Setenv(ExperimentalOpenCodeEnvVar, "1")
+	t.Setenv(OpenCodeInheritUserConfigEnvVar, "")
+	for key := range openCodeCatalogEnvNames {
+		t.Setenv(key, "")
+	}
+	for _, key := range []string{"ANTHROPIC_BASE_URL", "OPENAI_BASE_URL"} {
+		t.Setenv(key, "")
+	}
+	a := &OpenCodeAdapter{managedConfig: []string{}}
+	model := RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"}
+	const phrase = "withheld from this stage and every tool it runs: "
+	dispatch := func() []string {
+		t.Helper()
+		var err error
+		stderr := captureAdapterStderr(t, func() { err = a.PreDispatch(model) })
+		if err != nil {
+			t.Fatalf("PreDispatch refused: %v", err)
+		}
+		if strings.Contains(stderr, "sentinel-1616") {
+			t.Errorf("a variable's value was written to stderr:\n%s", stderr)
+		}
+		var lines []string
+		for _, line := range strings.Split(stderr, "\n") {
+			if strings.Contains(line, phrase) {
+				lines = append(lines, line)
+			}
+		}
+		return lines
+	}
+
+	if lines := dispatch(); len(lines) != 0 {
+		t.Errorf("with nothing withheld the dispatch printed %q", lines)
+	}
+
+	withheld := []string{"ANTHROPIC_BASE_URL", "GROQ_API_KEY", "OPENAI_API_KEY"}
+	kept := []string{
+		"AWS_ACCESS_KEY_ID", "AWS_SESSION_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS", "GITHUB_TOKEN",
+		"LMSTUDIO_API_KEY", "OPENCODE_CONFIG",
+	}
+	for _, key := range slices.Concat(withheld, kept) {
+		t.Setenv(key, "sentinel-1616-"+strings.ToLower(key))
+	}
+	lines := dispatch()
+	if len(lines) != 1 {
+		t.Fatalf("the dispatch printed %d lines naming withheld variables, want 1: %q", len(lines), lines)
+	}
+	line := lines[0]
+	if !strings.HasPrefix(line, "[opencode] ") || !strings.Contains(line, phrase+strings.Join(withheld, ", ")+".") {
+		t.Errorf("the line does not name %q in order:\n%s", withheld, line)
+	}
+	for _, want := range []string{`"lmstudio"`, "provider base URL", "OpenCode's catalog binds", "fails without it", "login of its own", "cloud platform and forge credentials"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the line does not say %q:\n%s", want, line)
+		}
+	}
+	for _, key := range kept {
+		if strings.Contains(line, key) {
+			t.Errorf("the line names %s, which the stage keeps:\n%s", key, line)
+		}
 	}
 }
 

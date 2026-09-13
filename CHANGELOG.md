@@ -155,9 +155,13 @@ changelog, and the release workflow refuses a tag that does not.
   Go's build cache and Nightgauge's machine config still resolve to yours. A
   stage inherits no `OPENCODE_*` variable, no `ANTHROPIC_BASE_URL` or
   `OPENAI_BASE_URL`, and none of the variables OpenCode's provider catalog
-  binds to a provider other than its own, `GITHUB_TOKEN` and `GITLAB_TOKEN`
-  excepted; a stage's tools lose those variables too. That does not stop every
-  other provider: the dispatch warning lists what still reaches one. The
+  binds to a model service other than its own; a stage's tools lose those
+  variables too, and each dispatch names the ones it withheld. The forge tokens
+  and your cloud platform credentials (AWS, Google Cloud, Cloudflare,
+  Databricks and others) are kept whole, so a stage's tools act as the identity
+  you chose instead of falling back to a credentials file or profile. That
+  does not stop every other provider: the dispatch warning lists what still
+  reaches one. The
   server password, the forge tokens and the stage's own provider's variables
   are redacted from its captured output, and no other secret is yet. Dispatch
   is refused while `~/.opencode` or this machine's managed OpenCode config

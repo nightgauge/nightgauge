@@ -92,13 +92,61 @@ var openCodeDisableFlags = []string{
 	"OPENCODE_DISABLE_EXTERNAL_SKILLS",
 }
 
-// openCodeForgeEnv are the Git forge credentials a stage keeps whatever
-// provider it runs on: the stage's tools reach the forge with them, and the
-// adapter exports GITHUB_TOKEN itself. The bundled catalog also binds them,
-// GITHUB_TOKEN to github-copilot and GITLAB_TOKEN to gitlab, so OpenCode can
-// load those providers in any run that holds them; the egress-defaults warning
-// line says so until the per-run config pins every model a run uses (#1625).
+// openCodeForgeEnv are the Git forge credentials: the stage's tools reach the
+// forge with them, and the adapter exports GITHUB_TOKEN itself. The bundled
+// catalog binds them to github-copilot and gitlab, two of the platform
+// providers (openCodePlatformProviders), so a stage keeps them whatever
+// provider it runs on, and the manager redacts their values from its output.
 var openCodeForgeEnv = []string{"GITHUB_TOKEN", "GITLAB_TOKEN"}
+
+// openCodePlatformProviders are the catalog providers whose variables belong
+// to a general-purpose platform account: the forge, and the cloud and data
+// platforms whose own CLIs, SDKs and infrastructure tools read the same
+// variables for work that is not a model request. A stage keeps every variable
+// the catalog binds to one of them, whatever provider it runs on, because its
+// tools share the environment.
+//
+// The whole family stays, because removing part of it does not leave a tool
+// without credentials: the tool moves to the next source in the platform's
+// credential chain, which can be another account in another region, and
+// nothing says so. With AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and
+// AWS_REGION removed and AWS_SESSION_TOKEN left, the AWS CLI reads
+// ~/.aws/credentials and ~/.aws/config instead. With
+// GOOGLE_APPLICATION_CREDENTIALS removed and GOOGLE_CLOUD_PROJECT left,
+// Google's clients use the operator's own application default credentials,
+// and so does OpenCode's google-vertex provider, which still loads on
+// GOOGLE_CLOUD_PROJECT (read from the 1.18.30 bundled source).
+//
+// OpenCode can therefore load these providers in any run that holds their
+// variables; the egress-defaults warning line says so until the per-run config
+// pins every model a run uses (#1625).
+var openCodePlatformProviders = []string{
+	"amazon-bedrock",          // AWS
+	"cloudflare-ai-gateway",   // Cloudflare
+	"cloudflare-workers-ai",   // Cloudflare
+	"databricks",              // Databricks
+	"digitalocean",            // DigitalOcean
+	"github-copilot",          // GITHUB_TOKEN, the forge
+	"gitlab",                  // GITLAB_TOKEN, the forge
+	"google-vertex",           // Google Cloud application default credentials
+	"google-vertex-anthropic", // Google Cloud application default credentials
+	"huggingface",             // the Hugging Face Hub
+	"snowflake-cortex",        // Snowflake
+	"vultr",                   // Vultr
+	"wandb",                   // Weights & Biases
+}
+
+// openCodePlatformEnvNames is every variable openCodeCatalogEnv binds to a
+// platform provider (openCodePlatformProviders).
+var openCodePlatformEnvNames = func() map[string]bool {
+	names := map[string]bool{}
+	for _, provider := range openCodePlatformProviders {
+		for _, v := range openCodeCatalogEnv[provider] {
+			names[v] = true
+		}
+	}
+	return names
+}()
 
 // openCodeEndpointEnv are the variables the Anthropic and OpenAI SDKs bundled
 // in OpenCode 1.18.30 read as the provider's base URL when no config gives
@@ -144,25 +192,51 @@ func openCodeDispatchProvider(model string) string {
 //     they survive it.
 //   - The provider base-URL variables (openCodeEndpointEnv), whatever the
 //     provider.
-//   - Every variable the bundled catalog binds to a provider other than the
-//     one model names (openCodeCatalogEnv), except the forge credentials
-//     (openCodeForgeEnv). OpenCode loads a catalog provider when any one of
-//     its variables is set, so this keeps a run from holding another
-//     provider's credentials: a run on a local model keeps at most its own
-//     provider's (lmstudio's LMSTUDIO_API_KEY) and no hosted provider's. It
-//     does not decide every provider a run can reach: a provider's own loader
-//     can find credentials the catalog does not name, such as an AWS profile,
-//     and OpenCode's own hosted provider serves its free models with no key.
-//     The stage's tools share the environment, so they lose these variables
-//     too.
+//   - Every variable the bundled catalog binds to a model service other than
+//     the one model names (openCodeCatalogEnv). OpenCode loads a catalog
+//     provider when any one of its variables is set, so a run on a local model
+//     holds no hosted model service's key, only its own provider's
+//     (lmstudio's LMSTUDIO_API_KEY).
+//
+// The variables of a platform provider (openCodePlatformProviders) are never
+// withheld: the forge tokens, and the cloud and data platform credentials the
+// stage's tools read, AWS's among them. So none of this decides every provider
+// a run can reach. OpenCode can load a platform provider on the credentials
+// the stage keeps, a provider's own loader can find credentials the catalog
+// does not name, such as an AWS profile, and OpenCode's own hosted provider
+// serves its free models with no key.
+//
+// The stage's tools share the environment, so they lose the withheld
+// variables too. A tool that needs one fails without it, or uses a login of
+// its own, and PreDispatch names every one the environment holds
+// (openCodeWithheldProviderEnv), so neither happens silently.
 func OpenCodeWithholdsEnv(model, key string) bool {
 	if strings.HasPrefix(key, "OPENCODE_") || slices.Contains(openCodeEndpointEnv, key) {
 		return true
 	}
-	if !openCodeCatalogEnvNames[key] || slices.Contains(openCodeForgeEnv, key) {
+	if !openCodeCatalogEnvNames[key] || openCodePlatformEnvNames[key] {
 		return false
 	}
 	return !slices.Contains(openCodeCatalogEnv[openCodeDispatchProvider(model)], key)
+}
+
+// openCodeWithheldProviderEnv returns, sorted, the name of every variable in
+// environ, a process environment of KEY=value entries, that holds a value and
+// that a dispatch to model withholds, other than OpenCode's own OPENCODE_*
+// variables: the other model services' catalog variables and the provider
+// base URLs, which a stage's tools could have read. It returns names only and
+// never a value.
+func openCodeWithheldProviderEnv(model string, environ []string) []string {
+	var names []string
+	for _, kv := range environ {
+		key, value, _ := strings.Cut(kv, "=")
+		if value == "" || strings.HasPrefix(key, "OPENCODE_") || !OpenCodeWithholdsEnv(model, key) {
+			continue
+		}
+		names = append(names, key)
+	}
+	slices.Sort(names)
+	return slices.Compact(names)
 }
 
 // OpenCodeRunsDir is the directory every OpenCode per-run root lives in.

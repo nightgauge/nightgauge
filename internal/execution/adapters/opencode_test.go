@@ -281,10 +281,12 @@ func TestOpenCodeGate(t *testing.T) {
 // can name another model that receives the prompt: session-title generation
 // sends it to small_model, and the title and compaction agents and every
 // subagent run on their agent's model (§ 10, § 15), on any provider whose API
-// key the run holds. Withholding other providers' variables does not close
-// that: the stage keeps GITHUB_TOKEN and GITLAB_TOKEN for the forge, which the
-// catalog binds to github-copilot and gitlab, a provider's loader can find
-// credentials outside the environment, and OpenCode's own hosted provider
+// key the run holds. Withholding other model services' variables does not
+// close that: the stage keeps GITHUB_TOKEN and GITLAB_TOKEN for the forge,
+// which the catalog binds to github-copilot and gitlab, and the cloud and data
+// platform credentials its tools read, which the catalog binds to
+// amazon-bedrock, google-vertex and others; a provider's loader can find
+// credentials outside the environment; and OpenCode's own hosted provider
 // needs no key for its free models. And an endpoint can forward: a local
 // Ollama serves its cloud models from Ollama's hosted service (§ 3,
 // § Endpoints). So the egress line names the repository's config, both keys,
@@ -303,6 +305,7 @@ func TestOpenCodeWarningDisclosesWhereThePromptCanGo(t *testing.T) {
 			"session-title generation", "stage prompt", "small_model",
 			"the target repository's opencode.json or .opencode/", "an agent's model", "subagent", "API key",
 			"GITHUB_TOKEN", "GITLAB_TOKEN", "github-copilot", "AWS profile", "OpenCode's own hosted provider",
+			"cloud and data platform credentials", "amazon-bedrock", "google-vertex",
 		},
 		"endpoint policy": {"Ollama cloud model", "Ollama's hosted service"},
 		"output redaction": {

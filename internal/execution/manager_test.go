@@ -1066,10 +1066,13 @@ func TestOpenCodeAnthropicDispatchNeedsTheAPIKey(t *testing.T) {
 // observable, the environment the child receives. Every inherited OPENCODE_*
 // variable is absent, the login-bearing ones included, and no value of one
 // reaches the child or anything the run printed. A local model receives none
-// of the variables OpenCode's catalog binds to a hosted provider, beyond the
-// issue's seven too, and no provider base URL. The adapter's own OPENCODE_*
-// exports survive the filter, and an unrelated inherited variable arrives, so
-// the absences are not an empty dump.
+// of the variables OpenCode's catalog binds to a hosted model service, beyond
+// the issue's seven too, and no provider base URL, and the dispatch names on
+// stderr the ones it withheld. A cloud platform's credentials arrive whole,
+// the catalog's and the companions it does not list alike, so the stage's
+// tools keep the identity the operator chose instead of falling back to
+// another. The adapter's own OPENCODE_* exports survive the filter, and an
+// unrelated inherited variable arrives, so the absences are not an empty dump.
 func TestOpenCodeSpawnWithholdsInheritedOpenCodeVariablesAndForeignKeys(t *testing.T) {
 	isolateOpenCodeHome(t)
 	fake := installOpenCodeFake(t, "")
@@ -1091,11 +1094,26 @@ func TestOpenCodeSpawnWithholdsInheritedOpenCodeVariablesAndForeignKeys(t *testi
 	}
 	keys := []string{
 		"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "XAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENROUTER_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY",
-		"GROQ_API_KEY", "MISTRAL_API_KEY", "DEEPSEEK_API_KEY", "AWS_SECRET_ACCESS_KEY", "AWS_REGION",
+		"GROQ_API_KEY", "MISTRAL_API_KEY", "DEEPSEEK_API_KEY",
 		"ANTHROPIC_BASE_URL", "OPENAI_BASE_URL",
 	}
 	for _, k := range keys {
 		t.Setenv(k, sentinel+"-"+strings.ToLower(k))
+	}
+	// Scoped cloud credentials, as a credential helper exports them. Fake
+	// values; the stage's tools must receive every one of them.
+	platform := map[string]string{
+		"AWS_ACCESS_KEY_ID":              "platform-kept-aws-access-key-id",
+		"AWS_SECRET_ACCESS_KEY":          "platform-kept-aws-secret-access-key",
+		"AWS_SESSION_TOKEN":              "platform-kept-aws-session-token",
+		"AWS_REGION":                     "platform-kept-aws-region",
+		"GOOGLE_APPLICATION_CREDENTIALS": "/tmp/platform-kept-service-account.json",
+		"GOOGLE_CLOUD_PROJECT":           "platform-kept-project",
+		"DATABRICKS_HOST":                "platform-kept-databricks-host",
+		"DATABRICKS_TOKEN":               "platform-kept-databricks-token",
+	}
+	for k, v := range platform {
+		t.Setenv(k, v)
 	}
 	t.Setenv("NIGHTGAUGE_TEST_INHERITED", "kept")
 
@@ -1129,7 +1147,32 @@ func TestOpenCodeSpawnWithholdsInheritedOpenCodeVariablesAndForeignKeys(t *testi
 	}
 	for _, k := range keys {
 		if _, ok := env[k]; ok {
-			t.Errorf("%s reached a local-model child; a local run inherits no hosted provider's credentials and no base URL", k)
+			t.Errorf("%s reached a local-model child; a local run inherits no hosted model service's credentials and no base URL", k)
+		}
+	}
+	for k, v := range platform {
+		if env[k] != v {
+			t.Errorf("%s did not reach the child intact; withholding part of a cloud platform's credentials moves the stage's tools to another identity", k)
+		}
+	}
+	var notice []string
+	for _, line := range strings.Split(stderr, "\n") {
+		if strings.Contains(line, "withheld from this stage and every tool it runs: ") {
+			notice = append(notice, line)
+		}
+	}
+	if len(notice) != 1 {
+		t.Errorf("stderr has %d lines naming the withheld variables, want 1:\n%s", len(notice), stderr)
+	} else {
+		for _, k := range []string{"OPENAI_API_KEY", "GROQ_API_KEY", "ANTHROPIC_BASE_URL"} {
+			if !strings.Contains(notice[0], k) {
+				t.Errorf("the withheld-variables line does not name %s:\n%s", k, notice[0])
+			}
+		}
+		for k := range platform {
+			if strings.Contains(notice[0], k) {
+				t.Errorf("the withheld-variables line names %s, which the stage keeps:\n%s", k, notice[0])
+			}
 		}
 	}
 	for _, kv := range entries {

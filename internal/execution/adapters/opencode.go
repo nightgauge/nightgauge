@@ -35,7 +35,8 @@ import (
 // (opencode_isolation.go, ADR-022 § 8): the manager prepares it through
 // PrepareRunRoot, BuildCommand points OpenCode at it, and WithholdsEnv keeps
 // the operator's OpenCode variables, the provider base-URL variables and the
-// variables OpenCode's catalog binds to every other provider out of the child.
+// variables OpenCode's catalog binds to every other model service out of the
+// child. The forge and cloud platform credentials stay.
 type OpenCodeAdapter struct {
 	// managedConfig replaces the managed OpenCode config files PreDispatch
 	// checks; nil means this machine's (openCodeManagedConfigFiles). Only
@@ -123,7 +124,7 @@ var openCodeUnenforcedControls = []openCodeControl{
 	{"repository steering", "OpenCode loads the target repository's AGENTS.md but not its CLAUDE.md, so a repository whose only steering is CLAUDE.md runs without it"},
 	{"permission map", "tool permissions come from OpenCode's config, not from the stage's allowed tools"},
 	{"safety plugin", "Nightgauge's careful-gate and stage-gate hooks do not run inside OpenCode"},
-	{"egress defaults", "the share, autoupdate and session-title settings, small_model, every agent's model, and webfetch follow OpenCode's own defaults and whatever config the run reads: session-title generation sends the stage prompt to small_model when a config names one, and the target repository's opencode.json or .opencode/ can name small_model or an agent's model, which the title and compaction agents and a subagent run on. That model can be on any provider whose API key the run holds, GITHUB_TOKEN and GITLAB_TOKEN included (the stage keeps them for the forge, and OpenCode's catalog binds them to github-copilot and gitlab), on one whose own loader finds credentials the catalog does not name, such as an AWS profile, or on OpenCode's own hosted provider, whose free models need no key"},
+	{"egress defaults", "the share, autoupdate and session-title settings, small_model, every agent's model, and webfetch follow OpenCode's own defaults and whatever config the run reads: session-title generation sends the stage prompt to small_model when a config names one, and the target repository's opencode.json or .opencode/ can name small_model or an agent's model, which the title and compaction agents and a subagent run on. That model can be on any provider whose API key or other credentials the run holds, among them GITHUB_TOKEN and GITLAB_TOKEN, which the stage keeps for the forge and OpenCode's catalog binds to github-copilot and gitlab, and the cloud and data platform credentials the stage keeps for its tools, such as AWS's and Google Cloud's, which the catalog binds to amazon-bedrock, google-vertex and other providers; on one whose own loader finds credentials the catalog does not name, such as an AWS profile; or on OpenCode's own hosted provider, whose free models need no key"},
 	{"endpoint policy", "the server behind a -m provider key is whatever OpenCode's own config and bundled catalog make it: a provider block named after a catalog provider can send that provider's API key to its base URL, a LAN or public base URL is neither refused nor warned about, and an Ollama cloud model, which a local Ollama forwards to Ollama's hosted service, is dispatched like a local one"},
 	{"stage limits", "the stage's turn cap, token cap and cost budget are not passed to OpenCode, so only the stage timeout bounds a run"},
 	{"version policy", "the opencode binary's version is not checked against the floor or the max-tested version"},
@@ -137,7 +138,9 @@ var openCodeUnenforcedControls = []openCodeControl{
 // the gate. With the switch set, a $HOME/.opencode holding config, or the
 // machine's managed OpenCode config, refuses the dispatch unless the operator
 // has opted into their own OpenCode config, and that opt-in is announced on
-// stderr after the warning.
+// stderr after the warning. Last, a stderr line names every provider variable
+// the environment holds that the stage, and so every tool it runs, will not
+// get (openCodeWithheldProviderEnv), by name alone.
 func (a *OpenCodeAdapter) PreDispatch(opts RunOptions) error {
 	if err := openCodeAnthropicRefusal(opts.Model, os.LookupEnv); err != nil {
 		return err
@@ -166,6 +169,10 @@ func (a *OpenCodeAdapter) PreDispatch(opts RunOptions) error {
 	if inherit {
 		fmt.Fprintf(os.Stderr, "[opencode] %s=1: this dispatch also reads your own OpenCode config (your XDG OpenCode config directory, ~/.opencode and any managed OpenCode config on this machine, which outranks every key Nightgauge sets); stored logins are not inherited, but an API key written in that config is\n",
 			OpenCodeInheritUserConfigEnvVar)
+	}
+	if names := openCodeWithheldProviderEnv(opts.Model, os.Environ()); len(names) > 0 {
+		fmt.Fprintf(os.Stderr, "[opencode] withheld from this stage and every tool it runs: %s. Each is a provider base URL or a variable OpenCode's catalog binds to a model provider other than %q; a tool that needs one fails without it or uses a login of its own. The cloud platform and forge credentials in your environment are kept\n",
+			strings.Join(names, ", "), openCodeDispatchProvider(opts.Model))
 	}
 	return nil
 }
@@ -397,8 +404,9 @@ func (a *OpenCodeAdapter) PrepareRunRoot(req RunRootRequest) (*RunRoot, error) {
 // every one it names from the host environment before it adds BuildCommand's
 // exports. It decides on the name alone (OpenCodeWithholdsEnv): every
 // OPENCODE_* variable, the provider base-URL variables, and every variable
-// OpenCode's catalog binds to a provider other than the dispatched one, the
-// forge tokens excepted.
+// OpenCode's catalog binds to a model service other than the dispatched one.
+// The forge tokens and the cloud platform credentials a stage's tools read
+// are kept (openCodePlatformProviders).
 func (a *OpenCodeAdapter) WithholdsEnv(opts RunOptions, key string) bool {
 	return OpenCodeWithholdsEnv(opts.Model, key)
 }

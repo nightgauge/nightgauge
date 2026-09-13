@@ -376,8 +376,8 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	// Merge environment. An adapter whose CLI must not inherit some host
 	// variables decides which through the optional WithholdsEnv hook, found
 	// the same way as the hooks above, one variable name at a time (ADR-022
-	// § 8: OpenCode inherits no OPENCODE_* variable and no other provider's
-	// API key).
+	// § 8: OpenCode inherits no OPENCODE_* variable and no other model
+	// service's API key).
 	var withhold func(key string) bool
 	if w, ok := adapter.(interface {
 		WithholdsEnv(adapters.RunOptions, string) bool

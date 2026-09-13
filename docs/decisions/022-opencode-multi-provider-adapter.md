@@ -477,30 +477,47 @@ adapter refuses anything else before spawning.
   value of a name Nightgauge sets is replaced, never left beside it. The
   operator's shell can then never change a pipeline run's posture through an
   OpenCode variable. Also removed is every variable OpenCode's bundled catalog
-  binds to a provider other than the one the stage dispatches to, because any
-  one of a provider's variables makes OpenCode load it. The snapshot is read
-  from the 1.18.30 binary, 213 provider keys
+  binds to a model service other than the one the stage dispatches to,
+  because any one of a provider's variables makes OpenCode load it. The
+  snapshot is read from the 1.18.30 binary, 213 provider keys
   (`internal/execution/adapters/opencode_catalog_env.go`): `ANTHROPIC_API_KEY`,
   `OPENAI_API_KEY`, `XAI_API_KEY`, `OPENROUTER_API_KEY`, and `GOOGLE_API_KEY`,
   `GOOGLE_GENERATIVE_AI_API_KEY` and `GEMINI_API_KEY` for `google`, and the
-  rest of the catalog's, such as `GROQ_API_KEY`, `DEEPSEEK_API_KEY` and the
-  AWS variables `amazon-bedrock` loads on, any one of which, `AWS_REGION`
-  included, is enough. The exceptions are `GITHUB_TOKEN` and `GITLAB_TOKEN`,
-  the forge credentials a stage uses, which the catalog also binds, to
-  `github-copilot` and `gitlab`.
+  rest of the catalog's, such as `GROQ_API_KEY` and `DEEPSEEK_API_KEY`.
   `ANTHROPIC_BASE_URL` and `OPENAI_BASE_URL` are removed whatever the
   provider: the bundled Anthropic and OpenAI SDKs read them as the provider's
   endpoint, and each was observed to send a run and its key to the server it
-  named, so a provider's endpoint comes from config only (§ Endpoints). A run
-  on a local model therefore holds no hosted provider's catalog variable. That
-  narrows which providers a run can load; it does not decide it. A provider's
-  own loader can find credentials elsewhere (`amazon-bedrock` also loads on
-  `AWS_PROFILE` and the AWS credentials file), OpenCode's own hosted provider
-  serves its free models with no key, and the forge tokens stay. What closes
-  those routes to another model is § 15's pinning of every model a run uses
-  (#1625); until then the egress-defaults warning line names them. A stage's
-  own tools share the environment, so they do not get the removed variables
-  either.
+  named, so a provider's endpoint comes from config only (§ Endpoints). A
+  stage's own tools share the environment, so they do not get the removed
+  variables either. A tool that needs one fails without it, or uses a login of
+  its own, so every enabled dispatch names on stderr each removed variable the
+  environment holds, never a value.
+- **Platform credentials stay.** Some catalog providers bind the variables of
+  a general-purpose platform account, which a stage's tools read for work that
+  is not a model request: the forge (`GITHUB_TOKEN` and `GITLAB_TOKEN`, bound
+  to `github-copilot` and `gitlab`), AWS (`amazon-bedrock`), Google Cloud
+  (`google-vertex` and `google-vertex-anthropic`), Cloudflare, Databricks,
+  DigitalOcean, Snowflake, Hugging Face, Weights & Biases and Vultr. Every
+  variable the catalog binds to one of them stays, whatever the provider.
+  Removing part of such a family does not leave a tool without credentials: it
+  moves the tool to the next source in the platform's credential chain, which
+  can be another account in another region, and nothing says so. With
+  `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_REGION` removed and
+  `AWS_SESSION_TOKEN` left, the AWS CLI reads `~/.aws/credentials` and
+  `~/.aws/config` instead. With `GOOGLE_APPLICATION_CREDENTIALS` removed and
+  `GOOGLE_CLOUD_PROJECT` left, Google's clients use the operator's own
+  application default credentials, and so does OpenCode's `google-vertex`,
+  which, read from the 1.18.30 bundled source, loads on `GOOGLE_CLOUD_PROJECT`
+  as well.
+- **What the environment does not decide.** A run on a local model holds no
+  hosted model service's catalog variable. That narrows which providers a run
+  can load; it does not decide it. OpenCode can load a platform provider on
+  the credentials the stage keeps, a provider's own loader can find
+  credentials elsewhere (`amazon-bedrock` also loads on `AWS_PROFILE` and the
+  AWS credentials file), and OpenCode's own hosted provider serves its free
+  models with no key. What closes those routes to another model is § 15's
+  pinning of every model a run uses (#1625); until then the egress-defaults
+  warning line names them.
 - **The home directory.** `home` does not move, and OpenCode 1.18.30 reads two
   operator locations from it whatever the XDG variables say.
   `OPENCODE_DISABLE_EXTERNAL_SKILLS=1` closes `~/.agents/skills` and
@@ -726,31 +743,31 @@ This ADR adds **security** and **privacy** as reasons for a pipeline default to
 be off. Each is allowed only with its reason recorded in this table and beside
 the setting. A **locked** row cannot be turned back on from any config tier.
 
-| Feature disabled or overridden           | Pipeline setting                                                                              | Reason    | Locked or overridable                                    |
-| ---------------------------------------- | --------------------------------------------------------------------------------------------- | --------- | -------------------------------------------------------- |
-| Dispatch itself                          | `NIGHTGAUGE_EXPERIMENTAL_OPENCODE` gate                                                       | security  | overridable by environment only, until #1643             |
-| Session share                            | `share: "disabled"`, `OPENCODE_DISABLE_SHARE=1`                                               | privacy   | locked                                                   |
-| Autoupdate                               | `autoupdate: false`, `OPENCODE_DISABLE_AUTOUPDATE=1`                                          | security  | locked (§ 20 owns upgrades)                              |
-| Model-catalog fetch                      | `OPENCODE_DISABLE_MODELS_FETCH=1`                                                             | privacy   | locked                                                   |
-| LSP server download                      | `OPENCODE_DISABLE_LSP_DOWNLOAD=1`                                                             | security  | locked                                                   |
-| Default and third-party plugins          | `OPENCODE_DISABLE_DEFAULT_PLUGINS=1`; `plugin` lists Nightgauge's only                        | security  | locked                                                   |
-| Repository project config                | `OPENCODE_DISABLE_PROJECT_CONFIG=1`; reviewed merge (§ 8)                                     | security  | locked                                                   |
-| Operator's global OpenCode config        | `inherit_user_config: false`; `~/.opencode` and managed config refused (§ 8)                  | security  | overridable; locked keys win over all but managed config |
-| Session titles                           | `agent.title.disable: true` (§ 10)                                                            | privacy   | locked                                                   |
-| A model other than the dispatched one    | `small_model` and every agent's `model` pinned to the dispatched model                        | security  | locked                                                   |
-| OAuth and subscription credentials       | never read (§ 17)                                                                             | security  | locked                                                   |
-| Operator's `~/.claude` prompt and skills | `OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1`, `_SKILLS=1`                                          | privacy   | locked                                                   |
-| Operator's `~/.agents/skills`            | `OPENCODE_DISABLE_EXTERNAL_SKILLS=1` (§ 11)                                                   | privacy   | locked                                                   |
-| Other providers' credentials             | every variable the catalog binds to another provider removed, the forge tokens excepted (§ 8) | security  | locked                                                   |
-| Provider base URLs from the environment  | `ANTHROPIC_BASE_URL` and `OPENAI_BASE_URL` removed (§ 8)                                      | security  | locked                                                   |
-| Remote `instructions` and `skills.urls`  | refused                                                                                       | security  | locked                                                   |
-| Inherited `OPENCODE_*` variables         | stripped                                                                                      | security  | locked                                                   |
-| `webfetch`                               | `deny` unless the stage's allowed tools include it                                            | privacy   | overridable per stage, through allowed tools             |
-| `ask` permissions                        | never generated (§ 9)                                                                         | security  | locked                                                   |
-| Auto-approve flags                       | never emitted                                                                                 | security  | locked                                                   |
-| Listener, mDNS and CORS                  | `--port`, `--mdns` and `--cors` never passed to `run`                                         | security  | locked                                                   |
-| Session import                           | not used                                                                                      | security  | locked                                                   |
-| Snapshots                                | `snapshot: false`                                                                             | footprint | overridable                                              |
+| Feature disabled or overridden           | Pipeline setting                                                                                                   | Reason    | Locked or overridable                                    |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | --------- | -------------------------------------------------------- |
+| Dispatch itself                          | `NIGHTGAUGE_EXPERIMENTAL_OPENCODE` gate                                                                            | security  | overridable by environment only, until #1643             |
+| Session share                            | `share: "disabled"`, `OPENCODE_DISABLE_SHARE=1`                                                                    | privacy   | locked                                                   |
+| Autoupdate                               | `autoupdate: false`, `OPENCODE_DISABLE_AUTOUPDATE=1`                                                               | security  | locked (§ 20 owns upgrades)                              |
+| Model-catalog fetch                      | `OPENCODE_DISABLE_MODELS_FETCH=1`                                                                                  | privacy   | locked                                                   |
+| LSP server download                      | `OPENCODE_DISABLE_LSP_DOWNLOAD=1`                                                                                  | security  | locked                                                   |
+| Default and third-party plugins          | `OPENCODE_DISABLE_DEFAULT_PLUGINS=1`; `plugin` lists Nightgauge's only                                             | security  | locked                                                   |
+| Repository project config                | `OPENCODE_DISABLE_PROJECT_CONFIG=1`; reviewed merge (§ 8)                                                          | security  | locked                                                   |
+| Operator's global OpenCode config        | `inherit_user_config: false`; `~/.opencode` and managed config refused (§ 8)                                       | security  | overridable; locked keys win over all but managed config |
+| Session titles                           | `agent.title.disable: true` (§ 10)                                                                                 | privacy   | locked                                                   |
+| A model other than the dispatched one    | `small_model` and every agent's `model` pinned to the dispatched model                                             | security  | locked                                                   |
+| OAuth and subscription credentials       | never read (§ 17)                                                                                                  | security  | locked                                                   |
+| Operator's `~/.claude` prompt and skills | `OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1`, `_SKILLS=1`                                                               | privacy   | locked                                                   |
+| Operator's `~/.agents/skills`            | `OPENCODE_DISABLE_EXTERNAL_SKILLS=1` (§ 11)                                                                        | privacy   | locked                                                   |
+| Other model services' credentials        | every variable the catalog binds to another model service removed; forge and cloud platform credentials kept (§ 8) | security  | locked                                                   |
+| Provider base URLs from the environment  | `ANTHROPIC_BASE_URL` and `OPENAI_BASE_URL` removed (§ 8)                                                           | security  | locked                                                   |
+| Remote `instructions` and `skills.urls`  | refused                                                                                                            | security  | locked                                                   |
+| Inherited `OPENCODE_*` variables         | stripped                                                                                                           | security  | locked                                                   |
+| `webfetch`                               | `deny` unless the stage's allowed tools include it                                                                 | privacy   | overridable per stage, through allowed tools             |
+| `ask` permissions                        | never generated (§ 9)                                                                                              | security  | locked                                                   |
+| Auto-approve flags                       | never emitted                                                                                                      | security  | locked                                                   |
+| Listener, mDNS and CORS                  | `--port`, `--mdns` and `--cors` never passed to `run`                                                              | security  | locked                                                   |
+| Session import                           | not used                                                                                                           | security  | locked                                                   |
+| Snapshots                                | `snapshot: false`                                                                                                  | footprint | overridable                                              |
 
 The pinned models are `small_model` and the `model` of every agent: the hidden
 `title`, `compaction` and `summary` agents and every subagent the `task` tool
@@ -829,9 +846,10 @@ stage prompt to the model they name, whatever its provider:
 
 Run isolation leaves either one no stored login to use, so a model named that
 way reaches its provider only on credentials the run holds or needs none: the
-dispatched provider's own key, the forge tokens, credentials a provider's own
-loader finds that the catalog does not name, or nothing at all for OpenCode's
-own free models (§ 8). The repository, not the operator, may still be what
+dispatched provider's own key, the forge tokens, the cloud platform
+credentials the stage keeps for its tools, credentials a provider's own loader
+finds that the catalog does not name, or nothing at all for OpenCode's own
+free models (§ 8). The repository, not the operator, may still be what
 names it. § 15 pins both keys to the dispatched model (#1625), and the
 project-config merge drops a repository's value (#1638), so no config chooses
 where the prompt goes. Until then the enabled-dispatch warning's
