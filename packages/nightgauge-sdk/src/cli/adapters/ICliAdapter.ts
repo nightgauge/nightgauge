@@ -37,7 +37,11 @@ export type NightgaugeAdapter =
   | "lm-studio" // Issue #2058 — LM Studio local inference
   | "ollama" // Issue #2591 — Ollama local LLM inference
   | "copilot" // Issue #1941 epic / #1942 implementation — GitHub Copilot CLI adapter
-  | "grok"; // Issue #522 / #524 — Grok Build CLI adapter
+  | "grok" // Issue #522 / #524 — Grok Build CLI adapter
+  // Issue #1612 / #1615 — OpenCode multi-provider adapter, experimental and
+  // gated (docs/decisions/022-opencode-multi-provider-adapter.md). The name
+  // exists here; the adapter class lands with #1637.
+  | "opencode";
 
 /**
  * Options passed to createQueryFunction.

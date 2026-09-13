@@ -58,6 +58,16 @@ const SUGGESTED_FIX: Record<NightgaugeAdapter, string> = {
   copilot:
     "Set COPILOT_GITHUB_TOKEN, or run `gh auth login` then `gh extension install github/gh-copilot`.",
   grok: "Run `grok login`, or set XAI_API_KEY (install via `curl -fsSL https://x.ai/cli/install.sh | bash`).",
+  // ADR-022 § 17: every hosted provider authenticates with its own API-key
+  // variable from the environment, and anthropic/* only with ANTHROPIC_API_KEY.
+  // Never suggest an interactive provider login here: a pipeline run does not
+  // use one.
+  opencode:
+    "Install OpenCode (`npm install -g opencode-ai`). For a local provider, start LM Studio " +
+    "(http://127.0.0.1:1234) with a model loaded, or start Ollama (`ollama serve`, " +
+    "http://localhost:11434) and pull a model. For a hosted provider, set that provider's own " +
+    "API-key variable: ANTHROPIC_API_KEY for anthropic/* models, OPENAI_API_KEY for openai/*, " +
+    "XAI_API_KEY for xai/*. anthropic/* through OpenCode stays refused until #1616.",
 };
 
 function suggestedFixFor(adapter: NightgaugeAdapter): string {

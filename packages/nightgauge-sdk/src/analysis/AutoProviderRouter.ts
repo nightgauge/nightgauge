@@ -71,6 +71,10 @@ const ADAPTER_CONTEXT_WINDOW_TOKENS: Record<RouterExecutionAdapter, number> = {
   ollama: 32_000,
   copilot: 64_000,
   grok: 500_000,
+  // Conservative placeholder: OpenCode's window is the resolved model's, which
+  // may be a small local model. #1645 replaces it with the window from the
+  // resolved model descriptor.
+  opencode: 32_000,
 };
 
 /**
@@ -112,6 +116,7 @@ const CAPABILITY_MATRIX: Record<RouterStageCategory, Record<RouterExecutionAdapt
     ollama: 0.4,
     copilot: 0.65,
     grok: 0.8,
+    opencode: 0.4,
   },
   planning: {
     "claude-sdk": 0.9,
@@ -123,6 +128,7 @@ const CAPABILITY_MATRIX: Record<RouterStageCategory, Record<RouterExecutionAdapt
     ollama: 0.45,
     copilot: 0.7,
     grok: 0.82,
+    opencode: 0.45,
   },
   dev: {
     "claude-sdk": 0.95,
@@ -134,6 +140,7 @@ const CAPABILITY_MATRIX: Record<RouterStageCategory, Record<RouterExecutionAdapt
     ollama: 0.55,
     copilot: 0.75,
     grok: 0.84,
+    opencode: 0.55,
   },
   validate: {
     "claude-sdk": 0.9,
@@ -145,6 +152,7 @@ const CAPABILITY_MATRIX: Record<RouterStageCategory, Record<RouterExecutionAdapt
     ollama: 0.5,
     copilot: 0.7,
     grok: 0.8,
+    opencode: 0.5,
   },
   lightweight: {
     // For lightweight stages capability matters less — flat scores keep cost
@@ -158,6 +166,7 @@ const CAPABILITY_MATRIX: Record<RouterStageCategory, Record<RouterExecutionAdapt
     ollama: 0.65,
     copilot: 0.7,
     grok: 0.7,
+    opencode: 0.65,
   },
   merge: {
     "claude-sdk": 0.88,
@@ -169,6 +178,7 @@ const CAPABILITY_MATRIX: Record<RouterStageCategory, Record<RouterExecutionAdapt
     ollama: 0.5,
     copilot: 0.7,
     grok: 0.78,
+    opencode: 0.5,
   },
 };
 

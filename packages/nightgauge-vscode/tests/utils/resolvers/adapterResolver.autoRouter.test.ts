@@ -218,4 +218,25 @@ describe("resolveStageAdapter Step 2.5 (auto-router) — Issue #3230", () => {
     expect(decision.adapter).toBe("claude");
     expect(decision.rationale).toBeUndefined();
   });
+
+  // #1615 adds "opencode" to the SDK union before the extension can run it
+  // (#1623). A router pick of it must be refused, not passed through as an
+  // adapter id the extension does not know.
+  it("refuses an opencode pick instead of passing it through", () => {
+    const stub = makeStubRouter({
+      adapter: "opencode",
+      model: "lmstudio/qwen/qwen3.8-27b",
+      rationale: "adapter=opencode selected for stage=feature-dev (test rationale)",
+      confidence: 0.8,
+    });
+    const options: AutoRouterOptions = {
+      enumerateAvailableAdapters: () => ["claude-headless", "opencode"],
+      complexity: "M",
+      mode: "automatic",
+      router: stub,
+    };
+    expect(() => resolveStageAdapter("feature-dev", tmpRoot, process.env, options)).toThrow(
+      /cannot run yet \(#1623\)/
+    );
+  });
 });

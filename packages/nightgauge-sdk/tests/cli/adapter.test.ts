@@ -5,9 +5,11 @@ import {
   isGeminiSdkAdapterEnabled,
   isLmStudioAdapterEnabled,
   isCopilotAdapterEnabled,
+  isOpenCodeAdapterEnabled,
   requiresDirectApiKey,
   resolveAdapter,
 } from "../../src/cli/adapter.js";
+import { AdapterError } from "../../src/cli/adapters/errors.js";
 
 describe("adapter resolution", () => {
   it("resolves codex adapter from explicit env", () => {
@@ -212,5 +214,107 @@ describe("resolveAdapter — canonical config rungs (#54)", () => {
     const cwd = mkdtempSync(join(tmpdir(), "ng-noconfig-"));
     expect(resolveAdapter({ ANTHROPIC_API_KEY: "sk-x" }, { cwd })).toBe("claude-sdk");
     expect(resolveAdapter({}, { cwd })).toBe("claude-headless");
+  });
+
+  // #1615 / ADR-022: the config rung is gated like the env rungs.
+  it("gates an opencode config value on the environment switch", () => {
+    const cwd = workspaceWith("ui:\n  core:\n    adapter: opencode\n");
+    expect(() => resolveAdapter({}, { cwd })).toThrow(/NIGHTGAUGE_EXPERIMENTAL_OPENCODE/);
+    expect(() => resolveAdapter({}, { stage: "feature-dev", cwd })).toThrow(AdapterError);
+    expect(resolveAdapter({ NIGHTGAUGE_EXPERIMENTAL_OPENCODE: "1" }, { cwd })).toBe("opencode");
+  });
+
+  it("gates a pipeline.stage_adapters opencode value on the environment switch", () => {
+    const cwd = workspaceWith("pipeline:\n  stage_adapters:\n    feature-dev: opencode\n");
+    expect(() => resolveAdapter({}, { stage: "feature-dev", cwd })).toThrow(
+      /NIGHTGAUGE_EXPERIMENTAL_OPENCODE/
+    );
+    expect(
+      resolveAdapter({ NIGHTGAUGE_EXPERIMENTAL_OPENCODE: "1" }, { stage: "feature-dev", cwd })
+    ).toBe("opencode");
+  });
+
+  // The switch is read from the environment only (ADR-022 § The enable gate):
+  // no config file, committed or local, can turn OpenCode on.
+  it("isOpenCodeAdapterEnabled ignores any config-file switch", () => {
+    const enabling =
+      "adapters:\n  opencode:\n    enabled: true\nui:\n  core:\n    adapter: opencode\n";
+    const cwd = workspaceWith(enabling, enabling);
+    expect(isOpenCodeAdapterEnabled({}, cwd)).toBe(false);
+    expect(isOpenCodeAdapterEnabled({ NIGHTGAUGE_EXPERIMENTAL_OPENCODE: "1" }, cwd)).toBe(true);
+  });
+
+  it("isOpenCodeAdapterEnabled is false when the switch is on but another adapter resolves", () => {
+    const cwd = workspaceWith("ui:\n  core:\n    adapter: codex\n");
+    expect(isOpenCodeAdapterEnabled({ NIGHTGAUGE_EXPERIMENTAL_OPENCODE: "1" }, cwd)).toBe(false);
+  });
+});
+
+describe("opencode adapter resolution and enable gate (#1615)", () => {
+  const ON = { NIGHTGAUGE_EXPERIMENTAL_OPENCODE: "1" };
+
+  it("resolves opencode in any case when the switch is on", () => {
+    expect(resolveAdapter({ NIGHTGAUGE_ADAPTER: "OpenCode", ...ON })).toBe("opencode");
+    expect(resolveAdapter({ NIGHTGAUGE_ADAPTER: "opencode", ...ON })).toBe("opencode");
+    expect(
+      resolveAdapter(
+        { NIGHTGAUGE_PIPELINE_STAGE_ADAPTER_FEATURE_DEV: "OPENCODE", ...ON },
+        { stage: "feature-dev" }
+      )
+    ).toBe("opencode");
+  });
+
+  // Regression guard: OpenCode is the agentic local path, but these aliases
+  // keep pointing at the non-agentic chat-completion bridges (ADR-022 § 6).
+  it("leaves the local chat-completion aliases on their own adapters", () => {
+    expect(resolveAdapter({ NIGHTGAUGE_ADAPTER: "lm_studio", ...ON })).toBe("lm-studio");
+    expect(resolveAdapter({ NIGHTGAUGE_ADAPTER: "lm-studio", ...ON })).toBe("lm-studio");
+    expect(resolveAdapter({ NIGHTGAUGE_ADAPTER: "ollama", ...ON })).toBe("ollama");
+  });
+
+  // Only the exact value "1" opens the switch, matching the Go gate.
+  for (const value of [undefined, "", "true", "yes", " 1", "1 ", "0", "TRUE"]) {
+    it(`refuses opencode with CONFIG_INVALID when the switch is ${JSON.stringify(value)}`, () => {
+      const env: NodeJS.ProcessEnv = { NIGHTGAUGE_ADAPTER: "opencode" };
+      if (value !== undefined) env.NIGHTGAUGE_EXPERIMENTAL_OPENCODE = value;
+      let thrown: unknown;
+      try {
+        resolveAdapter(env);
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toBeInstanceOf(AdapterError);
+      const error = thrown as AdapterError;
+      expect(error.category).toBe("CONFIG_INVALID");
+      expect(error.message).toContain("NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1");
+      expect(error.message).toContain("environment only");
+      expect(error.message).toContain("NIGHTGAUGE_ADAPTER");
+      expect(error.message).toContain("docs/decisions/022-opencode-multi-provider-adapter.md");
+      expect(isOpenCodeAdapterEnabled(env)).toBe(false);
+    });
+  }
+
+  it("gates the per-stage env rung too", () => {
+    expect(() =>
+      resolveAdapter(
+        { NIGHTGAUGE_PIPELINE_STAGE_ADAPTER_FEATURE_DEV: "opencode" },
+        { stage: "feature-dev" }
+      )
+    ).toThrow(/NIGHTGAUGE_EXPERIMENTAL_OPENCODE/);
+  });
+
+  it("never falls back to another adapter when the gate refuses", () => {
+    // An exported key would otherwise auto-select claude-sdk at a lower rung.
+    expect(() =>
+      resolveAdapter({ NIGHTGAUGE_ADAPTER: "opencode", ANTHROPIC_API_KEY: "sk-x" })
+    ).toThrow(/NIGHTGAUGE_EXPERIMENTAL_OPENCODE/);
+  });
+
+  it("isOpenCodeAdapterEnabled is true only with the switch on and opencode resolved", () => {
+    expect(isOpenCodeAdapterEnabled({ NIGHTGAUGE_ADAPTER: "opencode", ...ON })).toBe(true);
+    expect(isOpenCodeAdapterEnabled({ NIGHTGAUGE_ADAPTER: "codex", ...ON })).toBe(false);
+    expect(isOpenCodeAdapterEnabled({ NIGHTGAUGE_ADAPTER: "opencode" })).toBe(false);
+    // The switch alone changes nothing for another adapter.
+    expect(resolveAdapter({ NIGHTGAUGE_ADAPTER: "codex", ...ON })).toBe("codex");
   });
 });

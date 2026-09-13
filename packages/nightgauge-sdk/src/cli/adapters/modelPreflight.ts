@@ -287,6 +287,16 @@ export const ADAPTER_MODEL_POLICY: Record<NightgaugeAdapter, AdapterModelPolicy>
     validIds: () => [...GROK_MODELS],
     isValid: isValidGrokModel,
   },
+  // OPEN — OpenCode's catalog spans several providers, and local providers
+  // define their own models, so no finite set describes it (ADR-022 § 5).
+  // Nested-slash ids such as lmstudio/qwen/qwen3.8-27b pass through unchanged.
+  // No envVar: ADR-022 names none. #1614 turns bands into provider/model ids,
+  // and #1637 checks the id's syntax before it reaches argv.
+  opencode: {
+    kind: "open",
+    displayName: "OpenCode",
+    resolve: identityResolve,
+  },
 };
 
 // ---------------------------------------------------------------------------
