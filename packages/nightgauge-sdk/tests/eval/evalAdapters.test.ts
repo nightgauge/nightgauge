@@ -13,6 +13,7 @@ import {
   UnsupportedCellError,
   claudeEvalProfile,
   codexEvalProfile,
+  lmStudioEvalProfile,
   maybeResolveEvalAdapterProfile,
   parseClaudeResult,
   resolveEvalAdapterProfile,
@@ -53,6 +54,12 @@ describe("resolveEvalAdapterProfile", () => {
   it("resolves opencode by its model's provider (ADR-022)", () => {
     expect(resolveEvalAdapterProfileForAdapter("opencode", "anthropic/sonnet")).toBe(
       claudeEvalProfile
+    );
+  });
+
+  it("resolves opencode with a local model to the lm-studio profile (ADR-022)", () => {
+    expect(resolveEvalAdapterProfileForAdapter("opencode", "lmstudio/qwen/qwen3.8-27b")).toBe(
+      lmStudioEvalProfile
     );
   });
 
