@@ -82,6 +82,7 @@ export {
   getLmStudioBaseUrl,
   getLmStudioApiKey,
   getLmStudioTimeoutMs,
+  getOpenCodeModel,
   getCopilotModel,
   type ModelRoutingMode,
   type ComplexityThresholds,

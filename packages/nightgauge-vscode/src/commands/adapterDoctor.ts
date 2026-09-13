@@ -79,6 +79,7 @@ const SDK_ADAPTER_DISPLAY: Record<string, string> = {
   "lm-studio": "LM Studio",
   copilot: "GitHub Copilot",
   grok: "Grok",
+  opencode: "OpenCode",
 };
 
 function displayName(sdkAdapter: string): string {

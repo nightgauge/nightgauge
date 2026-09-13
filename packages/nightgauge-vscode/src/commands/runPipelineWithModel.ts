@@ -17,10 +17,12 @@ import type { StatusBarManager } from "../utils/statusBar";
 import {
   getExecutionAdapter,
   getCodexModel,
+  getOpenCodeModel,
   type PipelineModelOverride,
 } from "../utils/nightgaugeConfig";
 import { CODEX_RECOMMENDED_DEFAULT_MODEL } from "@nightgauge/sdk";
 import { CodexModelCatalogService } from "../services/CodexModelCatalogService";
+import { OpenCodeModelCatalogService } from "../services/OpenCodeModelCatalogService";
 
 interface ModelOption extends vscode.QuickPickItem {
   model: PipelineModelOverride;
@@ -72,19 +74,70 @@ function getCodexModelOptions(currentModel: string): ModelOption[] {
   }));
 }
 
-function getModelOptionsForAdapter(
+/** The result of resolving model options for the current adapter. */
+interface ModelOptionsResult {
+  /** `null` when the adapter has no model picker at all (unsupported). */
+  options: ModelOption[] | null;
+  /**
+   * Set when `options` is an empty array — i.e. the adapter has a picker but
+   * nothing selectable came back — so the caller can explain why instead of
+   * opening a blank QuickPick.
+   */
+  emptyMessage?: string;
+}
+
+/**
+ * OpenCode model options for "Run Pipeline with Model" (Issue #1628).
+ *
+ * Only `selectable` catalog entries become QuickPick items: the "could not
+ * list models" notice the catalog service returns on failure is informational
+ * and must never be offered or stored as a run override. When filtering
+ * leaves nothing selectable, surface that notice's own label as the reason
+ * instead of silently opening an empty picker.
+ */
+async function getOpenCodeModelOptions(workspaceRoot?: string): Promise<ModelOptionsResult> {
+  const configuredModel = getOpenCodeModel(workspaceRoot);
+  const catalog = await new OpenCodeModelCatalogService().listModels(configuredModel);
+
+  const options = catalog
+    .filter((entry) => entry.selectable)
+    .map((entry) => ({
+      label: entry.label,
+      model: entry.id,
+      displayLabel: entry.id,
+    }));
+
+  if (options.length > 0) {
+    return { options };
+  }
+
+  const notice = catalog.find((entry) => !entry.selectable);
+  return {
+    options,
+    emptyMessage:
+      notice?.label ??
+      "OpenCode has no models to select. Set opencode.model or check the opencode " +
+        "CLI, then try again.",
+  };
+}
+
+async function getModelOptionsForAdapter(
   adapter: ReturnType<typeof getExecutionAdapter>,
   workspaceRoot?: string
-): ModelOption[] | null {
+): Promise<ModelOptionsResult> {
   if (adapter === "claude") {
-    return CLAUDE_MODEL_OPTIONS;
+    return { options: CLAUDE_MODEL_OPTIONS };
   }
 
   if (adapter === "codex") {
-    return getCodexModelOptions(getCodexModel(workspaceRoot));
+    return { options: getCodexModelOptions(getCodexModel(workspaceRoot)) };
   }
 
-  return null;
+  if (adapter === "opencode") {
+    return getOpenCodeModelOptions(workspaceRoot);
+  }
+
+  return { options: null };
 }
 
 export function registerRunPipelineWithModelCommand(
@@ -102,11 +155,22 @@ export function registerRunPipelineWithModelCommand(
 
       const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
       const adapter = getExecutionAdapter(workspaceRoot);
-      const modelOptions = getModelOptionsForAdapter(adapter, workspaceRoot);
+      const { options: modelOptions, emptyMessage } = await getModelOptionsForAdapter(
+        adapter,
+        workspaceRoot
+      );
 
       if (!modelOptions) {
         vscode.window.showWarningMessage(
-          `Run Pipeline with Model currently supports Claude and Codex. Current adapter: ${adapter}.`
+          `Run Pipeline with Model currently supports Claude, Codex, and OpenCode. ` +
+            `Current adapter: ${adapter}.`
+        );
+        return;
+      }
+
+      if (modelOptions.length === 0) {
+        vscode.window.showWarningMessage(
+          emptyMessage ?? `No models are available to select for the ${adapter} adapter.`
         );
         return;
       }
@@ -116,7 +180,9 @@ export function registerRunPipelineWithModelCommand(
         placeHolder:
           adapter === "codex"
             ? "Select Codex model for this pipeline run"
-            : "Select Claude model for this pipeline run",
+            : adapter === "opencode"
+              ? "Select OpenCode model for this pipeline run"
+              : "Select Claude model for this pipeline run",
         title: "Nightgauge: Run Pipeline with Model",
       });
 
