@@ -41,6 +41,8 @@ REQUIRED_FILES=(
   scripts/test-post-merge-check.sh
   scripts/test-scrub-evidence.sh
   docker/clean-install/scrub-evidence.sh
+  scripts/test-capture-cli-help.sh
+  scripts/capture-cli-help.sh
   scripts/test-ci-change-class.sh
   scripts/npm-audit-check.js
   scripts/validate-skill-metadata.sh
@@ -381,6 +383,15 @@ run_group "post-merge-check.sh regression suite" \
 #      without this step the layer is unverified until the next incident.
 run_group "scrub-evidence.sh regression suite" \
   bash scripts/test-scrub-evidence.sh
+
+# 1b4. capture-cli-help.sh regression suite (#1617) — the capture script
+#      installs third-party CLIs and runs them. Its safeguards (no credential
+#      reaches a child, only --help runs, the mktemp prefix is removed, a call
+#      past its timeout is killed with everything it started) are exercised
+#      only here, against stubs: a real capture downloads every CLI, which no
+#      ordinary change does. It writes nothing outside its own temp dirs.
+run_group "capture-cli-help.sh regression suite" \
+  bash scripts/test-capture-cli-help.sh
 
 # 1c. CI change-class gate (#647) — drives scripts/ci-change-class.sh against
 #     real git fixtures AND asserts .github/workflows/ci.yml still consumes its

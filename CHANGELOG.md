@@ -77,9 +77,24 @@ changelog, and the release workflow refuses a tag that does not.
 - Each CLI adapter has a compat manifest (`internal/adaptercompat/manifests/`),
   the one validated record of its floor, newest tested version, release feeds,
   install recipe and fixtures; the doctor reads its floors from it (#1613)
+- A flag-contract test builds every CLI adapter's command over every
+  combination of stage options and checks each flag against that CLI's real
+  `--help`, captured at the manifest's newest tested version. An upstream that
+  drops or renames a flag now fails a unit test instead of a live stage. Each
+  manifest's `required_flags` must equal the flags the adapter emits, and
+  `NIGHTGAUGE_FLAG_CONTRACT_HELP_DIR` points the test at other captures, such
+  as the newest CLIs' help. `scripts/capture-cli-help.sh` makes the captures:
+  it installs each pinned CLI into a throwaway prefix with no credentials in
+  its environment, runs only `--help` under a timeout, and removes the prefix.
+  The test found two adapter flags the CLIs refuse, now tracked as #1715
+  (codex, sandbox-scoped stages) and #1716 (claude, `--max-tokens`) (#1617)
 
 ### Fixed
 
+- ADR-022 no longer says `--yolo` and `--dangerously-skip-permissions` are not
+  `opencode run` options. In 1.18.30 both are hidden options that switch on the
+  same auto-approval as `--auto`. The adapter still never emits them, and
+  `--cors` joins the flags it must never emit (#1617)
 - Generated Codex steering no longer ends up in commits. The Go-direct path
   never removed it, and the agent could commit it mid-stage on every path;
   pipeline commits now strip it before committing, a commit that carried it is
