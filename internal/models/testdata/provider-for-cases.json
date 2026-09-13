@@ -1,0 +1,477 @@
+{
+  "_comment": [
+    "THE provider-for contract (ADR-022 sections 1 and 7, #1614). One table, read",
+    "by both languages: internal/models TestProviderForOpenCode,",
+    "TestDispatchModelForOpenCode and TestIsLocalProvider, and the SDK's",
+    "tests/eval/modelRegistry.test.ts. A Go/SDK disagreement fails one side.",
+    "provider_for: providerFor(adapter, model). For opencode rows, bare_id is the",
+    "model id after the first slash, and upstream is always the model unchanged.",
+    "A malformed model is provider other with an empty bare_id.",
+    "dispatch_model_for: dispatchModelFor(adapter, band_or_id, configured_model),",
+    "where configured_model is the opencode.model default. A row has either",
+    "model (the -m value) or error: true."
+  ],
+  "provider_for": [
+    {
+      "name": "lmstudio normalizes to lm-studio; the id keeps its own slash",
+      "adapter": "opencode",
+      "model": "lmstudio/qwen/qwen3.8-27b",
+      "provider": "lm-studio",
+      "bare_id": "qwen/qwen3.8-27b"
+    },
+    {
+      "name": "ollama",
+      "adapter": "opencode",
+      "model": "ollama/qwen3:32b",
+      "provider": "ollama",
+      "bare_id": "qwen3:32b"
+    },
+    {
+      "name": "ollama, ADR-022 fixture row",
+      "adapter": "opencode",
+      "model": "ollama/qwen3-coder:30b",
+      "provider": "ollama",
+      "bare_id": "qwen3-coder:30b"
+    },
+    {
+      "name": "anthropic",
+      "adapter": "opencode",
+      "model": "anthropic/claude-sonnet-5",
+      "provider": "anthropic",
+      "bare_id": "claude-sonnet-5"
+    },
+    {
+      "name": "openai",
+      "adapter": "opencode",
+      "model": "openai/gpt-5.6-terra",
+      "provider": "openai",
+      "bare_id": "gpt-5.6-terra"
+    },
+    {
+      "name": "openai, ADR-022 fixture row",
+      "adapter": "opencode",
+      "model": "openai/gpt-5.5",
+      "provider": "openai",
+      "bare_id": "gpt-5.5"
+    },
+    {
+      "name": "a hosted model the registry does not know keeps its provider",
+      "adapter": "opencode",
+      "model": "openai/gpt-9-preview",
+      "provider": "openai",
+      "bare_id": "gpt-9-preview"
+    },
+    {
+      "name": "xai",
+      "adapter": "opencode",
+      "model": "xai/grok-4.6",
+      "provider": "xai",
+      "bare_id": "grok-4.6"
+    },
+    {
+      "name": "google",
+      "adapter": "opencode",
+      "model": "google/gemini-2.5-pro",
+      "provider": "google",
+      "bare_id": "gemini-2.5-pro"
+    },
+    {
+      "name": "an unknown key is other",
+      "adapter": "opencode",
+      "model": "unknown/x",
+      "provider": "other",
+      "bare_id": "x"
+    },
+    {
+      "name": "openrouter is other, ADR-022 fixture row",
+      "adapter": "opencode",
+      "model": "openrouter/meta-llama/llama-4",
+      "provider": "other",
+      "bare_id": "meta-llama/llama-4"
+    },
+    {
+      "name": "Ollama's hosted service key is other",
+      "adapter": "opencode",
+      "model": "ollama-cloud/gpt-oss:120b",
+      "provider": "other",
+      "bare_id": "gpt-oss:120b"
+    },
+    {
+      "name": "an endpoint id is other until endpoints are declared (#1678, #1679)",
+      "adapter": "opencode",
+      "model": "lmstudio-remote/qwen/qwen3.8-27b",
+      "provider": "other",
+      "bare_id": "qwen/qwen3.8-27b"
+    },
+    {
+      "name": "the provider name is not a key: lm-studio is other",
+      "adapter": "opencode",
+      "model": "lm-studio/qwen/qwen3.8-27b",
+      "provider": "other",
+      "bare_id": "qwen/qwen3.8-27b"
+    },
+    {
+      "name": "malformed: empty",
+      "adapter": "opencode",
+      "model": "",
+      "provider": "other",
+      "bare_id": ""
+    },
+    {
+      "name": "malformed: a lone slash",
+      "adapter": "opencode",
+      "model": "/",
+      "provider": "other",
+      "bare_id": ""
+    },
+    {
+      "name": "malformed: empty key",
+      "adapter": "opencode",
+      "model": "/x",
+      "provider": "other",
+      "bare_id": ""
+    },
+    {
+      "name": "malformed: empty model id",
+      "adapter": "opencode",
+      "model": "x/",
+      "provider": "other",
+      "bare_id": ""
+    },
+    {
+      "name": "malformed: a bare registry id is never qualified",
+      "adapter": "opencode",
+      "model": "claude-sonnet-5",
+      "provider": "other",
+      "bare_id": ""
+    },
+    {
+      "name": "malformed: a bare local id is never qualified",
+      "adapter": "opencode",
+      "model": "qwen3:32b",
+      "provider": "other",
+      "bare_id": ""
+    },
+    {
+      "name": "malformed: a band",
+      "adapter": "opencode",
+      "model": "sonnet",
+      "provider": "other",
+      "bare_id": ""
+    },
+    {
+      "name": "malformed: leading whitespace",
+      "adapter": "opencode",
+      "model": " anthropic/claude-sonnet-5",
+      "provider": "other",
+      "bare_id": ""
+    },
+    {
+      "name": "malformed: trailing whitespace",
+      "adapter": "opencode",
+      "model": "anthropic/claude-sonnet-5 ",
+      "provider": "other",
+      "bare_id": ""
+    },
+    {
+      "name": "malformed: surrounding tab and newline",
+      "adapter": "opencode",
+      "model": "\tlmstudio/qwen/qwen3.8-27b\n",
+      "provider": "other",
+      "bare_id": ""
+    },
+    {
+      "name": "malformed: whitespace inside the id",
+      "adapter": "opencode",
+      "model": "anthropic/claude sonnet",
+      "provider": "other",
+      "bare_id": ""
+    },
+    {
+      "name": "malformed: a non-ASCII space inside the id",
+      "adapter": "opencode",
+      "model": "anthropic/claude sonnet",
+      "provider": "other",
+      "bare_id": ""
+    },
+    {
+      "name": "malformed: a control character in the id",
+      "adapter": "opencode",
+      "model": "openai/gpt-5.6-terra",
+      "provider": "other",
+      "bare_id": ""
+    },
+    {
+      "name": "malformed: mixed-case key",
+      "adapter": "opencode",
+      "model": "Anthropic/claude-sonnet-5",
+      "provider": "other",
+      "bare_id": ""
+    },
+    {
+      "name": "malformed: upper-case key",
+      "adapter": "opencode",
+      "model": "LMSTUDIO/qwen/qwen3.8-27b",
+      "provider": "other",
+      "bare_id": ""
+    },
+    {
+      "name": "malformed: key starts with a dash",
+      "adapter": "opencode",
+      "model": "-m/x",
+      "provider": "other",
+      "bare_id": ""
+    },
+    {
+      "name": "malformed: id starts with a dash",
+      "adapter": "opencode",
+      "model": "openai/--auto",
+      "provider": "other",
+      "bare_id": ""
+    },
+    {
+      "name": "malformed: a dotted key",
+      "adapter": "opencode",
+      "model": "host.example/x",
+      "provider": "other",
+      "bare_id": ""
+    },
+    {
+      "name": "single-provider adapter ignores the model",
+      "adapter": "claude-headless",
+      "model": "lmstudio/qwen/qwen3.8-27b",
+      "provider": "anthropic"
+    },
+    {
+      "name": "single-provider adapter alias",
+      "adapter": "claude",
+      "model": "openai/gpt-5.6-terra",
+      "provider": "anthropic"
+    },
+    {
+      "name": "codex",
+      "adapter": "codex",
+      "model": "anthropic/claude-sonnet-5",
+      "provider": "openai"
+    },
+    {
+      "name": "gemini-sdk",
+      "adapter": "gemini-sdk",
+      "model": "sonnet",
+      "provider": "google"
+    },
+    {
+      "name": "grok",
+      "adapter": "grok",
+      "model": "",
+      "provider": "xai"
+    },
+    {
+      "name": "copilot",
+      "adapter": "copilot",
+      "model": "gpt-4o",
+      "provider": "copilot"
+    },
+    {
+      "name": "the lm-studio bridge",
+      "adapter": "lm-studio",
+      "model": "anthropic/claude-sonnet-5",
+      "provider": "lm-studio"
+    },
+    {
+      "name": "the ollama bridge",
+      "adapter": "ollama",
+      "model": "qwen3:32b",
+      "provider": "ollama"
+    },
+    {
+      "name": "an unknown adapter",
+      "adapter": "mystery",
+      "model": "anthropic/claude-sonnet-5",
+      "provider": "other"
+    }
+  ],
+  "dispatch_model_for": [
+    {
+      "name": "a band resolves against a hosted configured provider",
+      "adapter": "opencode",
+      "band_or_id": "sonnet",
+      "configured_model": "anthropic/claude-opus-5",
+      "model": "anthropic/claude-sonnet-5"
+    },
+    {
+      "name": "the configured model's own band",
+      "adapter": "opencode",
+      "band_or_id": "sonnet",
+      "configured_model": "anthropic/claude-sonnet-5",
+      "model": "anthropic/claude-sonnet-5"
+    },
+    {
+      "name": "openai opus",
+      "adapter": "opencode",
+      "band_or_id": "opus",
+      "configured_model": "openai/gpt-5.6-terra",
+      "model": "openai/gpt-5.6-sol"
+    },
+    {
+      "name": "openai haiku",
+      "adapter": "opencode",
+      "band_or_id": "haiku",
+      "configured_model": "openai/gpt-5.6-terra",
+      "model": "openai/gpt-5.6-luna"
+    },
+    {
+      "name": "xai serves every band with one model",
+      "adapter": "opencode",
+      "band_or_id": "haiku",
+      "configured_model": "xai/grok-4.6",
+      "model": "xai/grok-4.6"
+    },
+    {
+      "name": "google fable",
+      "adapter": "opencode",
+      "band_or_id": "fable",
+      "configured_model": "google/gemini-2.5-flash",
+      "model": "google/gemini-2.5-pro"
+    },
+    {
+      "name": "a local provider serves every band with the configured model",
+      "adapter": "opencode",
+      "band_or_id": "sonnet",
+      "configured_model": "lmstudio/qwen/qwen3.8-27b",
+      "model": "lmstudio/qwen/qwen3.8-27b"
+    },
+    {
+      "name": "ollama, strongest band",
+      "adapter": "opencode",
+      "band_or_id": "fable",
+      "configured_model": "ollama/qwen3:32b",
+      "model": "ollama/qwen3:32b"
+    },
+    {
+      "name": "no stage model uses the configured model",
+      "adapter": "opencode",
+      "band_or_id": "",
+      "configured_model": "lmstudio/qwen/qwen3.8-27b",
+      "model": "lmstudio/qwen/qwen3.8-27b"
+    },
+    {
+      "name": "a provider-qualified stage model passes through",
+      "adapter": "opencode",
+      "band_or_id": "openai/gpt-5.6-terra",
+      "configured_model": "lmstudio/qwen/qwen3.8-27b",
+      "model": "openai/gpt-5.6-terra"
+    },
+    {
+      "name": "a qualified stage model needs no configured model",
+      "adapter": "opencode",
+      "band_or_id": "openrouter/meta-llama/llama-4",
+      "configured_model": "",
+      "model": "openrouter/meta-llama/llama-4"
+    },
+    {
+      "name": "a prefix with no registry bands is an error",
+      "adapter": "opencode",
+      "band_or_id": "sonnet",
+      "configured_model": "openrouter/x",
+      "error": true
+    },
+    {
+      "name": "an unknown key has no bands",
+      "adapter": "opencode",
+      "band_or_id": "opus",
+      "configured_model": "unknown/x",
+      "error": true
+    },
+    {
+      "name": "a band with no configured model",
+      "adapter": "opencode",
+      "band_or_id": "sonnet",
+      "configured_model": "",
+      "error": true
+    },
+    {
+      "name": "a malformed configured model",
+      "adapter": "opencode",
+      "band_or_id": "sonnet",
+      "configured_model": " anthropic/claude-opus-5",
+      "error": true
+    },
+    {
+      "name": "a bare configured model",
+      "adapter": "opencode",
+      "band_or_id": "sonnet",
+      "configured_model": "claude-opus-5",
+      "error": true
+    },
+    {
+      "name": "no stage model and no configured model",
+      "adapter": "opencode",
+      "band_or_id": "",
+      "configured_model": "",
+      "error": true
+    },
+    {
+      "name": "a bare registry id is never qualified, even to the configured provider",
+      "adapter": "opencode",
+      "band_or_id": "claude-sonnet-5",
+      "configured_model": "anthropic/claude-opus-5",
+      "error": true
+    },
+    {
+      "name": "a bare id is never qualified to a local provider",
+      "adapter": "opencode",
+      "band_or_id": "qwen3:32b",
+      "configured_model": "ollama/qwen3-coder:30b",
+      "error": true
+    },
+    {
+      "name": "a mixed-case band is not a band",
+      "adapter": "opencode",
+      "band_or_id": "Sonnet",
+      "configured_model": "anthropic/claude-opus-5",
+      "error": true
+    },
+    {
+      "name": "a malformed qualified stage model",
+      "adapter": "opencode",
+      "band_or_id": "Anthropic/claude-sonnet-5",
+      "configured_model": "lmstudio/qwen/qwen3.8-27b",
+      "error": true
+    },
+    {
+      "name": "a stage model with an empty id",
+      "adapter": "opencode",
+      "band_or_id": "openai/",
+      "configured_model": "lmstudio/qwen/qwen3.8-27b",
+      "error": true
+    },
+    {
+      "name": "a single-provider adapter resolves bands itself",
+      "adapter": "claude-headless",
+      "band_or_id": "sonnet",
+      "configured_model": "",
+      "model": "sonnet"
+    },
+    {
+      "name": "a single-provider adapter ignores the configured model",
+      "adapter": "codex",
+      "band_or_id": "opus",
+      "configured_model": "lmstudio/qwen/qwen3.8-27b",
+      "model": "opus"
+    }
+  ],
+  "is_local_provider": {
+    "lm-studio": true,
+    "ollama": true,
+    "other": false,
+    "copilot": false,
+    "lmstudio": false,
+    "anthropic": false,
+    "openai": false,
+    "xai": false,
+    "google": false,
+    "": false,
+    "Ollama": false
+  }
+}

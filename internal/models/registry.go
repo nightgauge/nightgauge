@@ -14,7 +14,10 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"slices"
 	"strings"
+	"unicode"
 )
 
 //go:embed model-registry.json
@@ -425,6 +428,152 @@ func ProviderForAdapter(adapter string) string {
 	default:
 		return "other"
 	}
+}
+
+// openCodeAdapter is the one multi-provider adapter: the model it runs, not
+// its name, decides the provider (ADR-022).
+const openCodeAdapter = "opencode"
+
+// ProviderFor maps an execution adapter and the model it dispatches to the
+// provider that serves the model. For opencode the provider comes from the
+// model's provider key (ParseOpenCodeModel). Every other adapter serves one
+// provider, so its answer is ProviderForAdapter's, whatever the model. Callers
+// that need the serving provider rather than the executing adapter use this.
+// Mirrors providerFor in the SDK modelRegistry.ts.
+func ProviderFor(adapter, model string) string {
+	if adapter == openCodeAdapter {
+		provider, _, _ := ParseOpenCodeModel(model)
+		return provider
+	}
+	return ProviderForAdapter(adapter)
+}
+
+// IsLocalProvider reports whether p is a provider whose models run on a server
+// the operator runs (lm-studio, ollama). It is the single authority for that
+// question: "other" is never local, so an unrecognized provider can never be
+// priced as a local $0. Mirrors isLocalProvider in the SDK modelRegistry.ts.
+func IsLocalProvider(p string) bool {
+	return p == "lm-studio" || p == "ollama"
+}
+
+// openCodeProviders is ADR-022 § 1's normalization table: the OpenCode
+// provider keys Nightgauge recognizes and the registry provider each one
+// names. Every other key normalizes to "other". Declared endpoint ids
+// (#1678, #1679) are resolved to their endpoint's provider ahead of this
+// table; until then a key such as lmstudio-remote is "other".
+var openCodeProviders = map[string]string{
+	"lmstudio":  "lm-studio",
+	"ollama":    "ollama",
+	"anthropic": "anthropic",
+	"openai":    "openai",
+	"xai":       "xai",
+	"google":    "google",
+}
+
+// openCodeProviderKeyRE is the shape of an OpenCode provider key: lowercase
+// letters, digits and '-', never starting with '-'. It matches the opencode
+// adapter's pre-spawn model check, so the parser and the adapter agree on
+// what a well-formed model is.
+var openCodeProviderKeyRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
+// splitOpenCodeModel splits a model the way OpenCode reads -m: on the FIRST
+// slash, so "lmstudio/qwen/qwen3.8-27b" is key "lmstudio" and model id
+// "qwen/qwen3.8-27b". ok is false for a malformed model: no slash, a key that
+// is not a provider-key shape (surrounding whitespace and upper case
+// included), or a model id that is empty, starts with '-', or contains
+// whitespace or a control character. The input is never trimmed.
+func splitOpenCodeModel(raw string) (key, id string, ok bool) {
+	key, id, qualified := strings.Cut(raw, "/")
+	if !qualified || !openCodeProviderKeyRE.MatchString(key) {
+		return "", "", false
+	}
+	if id == "" || strings.HasPrefix(id, "-") || strings.IndexFunc(id, isSpaceOrControl) >= 0 {
+		return "", "", false
+	}
+	return key, id, true
+}
+
+func isSpaceOrControl(r rune) bool {
+	return unicode.IsSpace(r) || unicode.IsControl(r)
+}
+
+// ParseOpenCodeModel derives the provider of an opencode model id (ADR-022
+// § 1). provider is the normalized registry provider of the key before the
+// first slash, and "other" for any key outside the normalization table.
+// bareID is the model id after that slash. upstream is raw, unchanged.
+//
+// Malformed input (empty, no slash, an empty key or id, surrounding
+// whitespace, a mixed-case key) is provider "other" with an empty bareID. A
+// bare id is never qualified to a provider.
+//
+// upstream is a record of what was dispatched. It is never a pricing, overlay
+// or provider lookup key: those use provider and bareID.
+func ParseOpenCodeModel(raw string) (provider, bareID, upstream string) {
+	key, id, ok := splitOpenCodeModel(raw)
+	if !ok {
+		return "other", "", raw
+	}
+	if p, known := openCodeProviders[key]; known {
+		return p, id, raw
+	}
+	return "other", id, raw
+}
+
+// DispatchModelFor returns the model to pass on the adapter's -m flag for a
+// stage whose model is bandOrID. configuredModel is the operator's configured
+// default for a multi-provider adapter (opencode.model, ADR-022 § 7), a
+// "<provider>/<model>"; it may be empty.
+//
+// For opencode:
+//   - a "<provider>/<model>" stage model is returned unchanged;
+//   - an empty stage model returns configuredModel;
+//   - a band is resolved against configuredModel's provider: a local provider
+//     returns configuredModel, since the configured local model serves every
+//     band, and a hosted provider returns "<provider>/<id>" for the registry
+//     model serving that band;
+//   - anything else is an error: a bare id (a registry id included) is never
+//     qualified to a provider, a provider with no model in the band cannot
+//     serve it, and a band with no configured provider has none to resolve
+//     against.
+//
+// The result is never a band name or a bare id. Every other adapter serves
+// one provider and resolves bands itself, so bandOrID is returned unchanged.
+// Mirrors dispatchModelFor in the SDK modelRegistry.ts.
+func DispatchModelFor(adapter, bandOrID, configuredModel string) (string, error) {
+	if adapter != openCodeAdapter {
+		return bandOrID, nil
+	}
+	if strings.Contains(bandOrID, "/") {
+		if _, _, ok := splitOpenCodeModel(bandOrID); !ok {
+			return "", fmt.Errorf("model %q is not a valid <provider>/<model> for the %s adapter", bandOrID, adapter)
+		}
+		return bandOrID, nil
+	}
+	if bandOrID != "" && !slices.Contains(BandsAscending, bandOrID) {
+		return "", fmt.Errorf(
+			"model %q names no provider, and the %s adapter never infers one: name it as <provider>/<model>",
+			bandOrID, adapter)
+	}
+	key, _, ok := splitOpenCodeModel(configuredModel)
+	if !ok {
+		return "", fmt.Errorf(
+			"the %s adapter has no provider to resolve stage model %q against: "+
+				"name the stage model as <provider>/<model>, or configure a <provider>/<model> default (opencode.model)",
+			adapter, bandOrID)
+	}
+	if bandOrID == "" {
+		return configuredModel, nil
+	}
+	provider, _, _ := ParseOpenCodeModel(configuredModel)
+	if IsLocalProvider(provider) {
+		return configuredModel, nil
+	}
+	if m, found := Resolve(provider, bandOrID); found && m.Provider == provider {
+		return key + "/" + m.ID, nil
+	}
+	return "", fmt.Errorf(
+		"provider %q of the configured model %q has no registry model in band %q: name the stage model as <provider>/<model>",
+		provider, configuredModel, bandOrID)
 }
 
 // ServedByTransport reports the model's transports[transport].served fact.

@@ -274,6 +274,170 @@ export function providerForAdapter(adapter: string): Provider {
   return "other";
 }
 
+/** The one multi-provider adapter: the model it runs, not its name, decides the provider (ADR-022). */
+const OPENCODE_ADAPTER = "opencode";
+
+/**
+ * Map an execution adapter and the model it dispatches to the provider that
+ * serves the model. For `opencode` the provider comes from the model's
+ * provider key ({@link parseOpenCodeModel}). Every other adapter serves one
+ * provider, so its answer is {@link providerForAdapter}'s, whatever the
+ * model. Mirrors the Go `models.ProviderFor`.
+ */
+export function providerFor(adapter: string, model: string): Provider {
+  if (adapter === OPENCODE_ADAPTER) return parseOpenCodeModel(model).provider;
+  return providerForAdapter(adapter);
+}
+
+/**
+ * Whether `provider` runs its models on a server the operator runs
+ * (`lm-studio`, `ollama`). The single authority for that question: `other` is
+ * never local, so an unrecognized provider can never be priced as a local $0.
+ * Mirrors the Go `models.IsLocalProvider`.
+ */
+export function isLocalProvider(provider: string): boolean {
+  return provider === "lm-studio" || provider === "ollama";
+}
+
+/**
+ * ADR-022 § 1's normalization table: the OpenCode provider keys Nightgauge
+ * recognizes and the registry provider each one names. Every other key is
+ * `other`. Declared endpoint ids (#1678, #1679) are resolved to their
+ * endpoint's provider ahead of this table; until then a key such as
+ * `lmstudio-remote` is `other`.
+ */
+const OPENCODE_PROVIDERS: Readonly<Record<string, Provider>> = Object.freeze({
+  lmstudio: "lm-studio",
+  ollama: "ollama",
+  anthropic: "anthropic",
+  openai: "openai",
+  xai: "xai",
+  google: "google",
+});
+
+/**
+ * The shape of an OpenCode provider key: lowercase letters, digits and `-`,
+ * never starting with `-`. It matches the Go opencode adapter's pre-spawn
+ * model check, so the parser and the adapter agree on a well-formed model.
+ */
+const OPENCODE_PROVIDER_KEY_RE = /^[a-z0-9][a-z0-9-]*$/;
+
+/** Go's `unicode.IsSpace || unicode.IsControl`: the White_Space property and category Cc. */
+const SPACE_OR_CONTROL_RE = /[\p{White_Space}\p{Cc}]/u;
+
+/**
+ * Split a model the way OpenCode reads `-m`: on the FIRST slash, so
+ * `lmstudio/qwen/qwen3.8-27b` is key `lmstudio` and model id
+ * `qwen/qwen3.8-27b`. `undefined` for a malformed model: no slash, a key that
+ * is not a provider-key shape (surrounding whitespace and upper case
+ * included), or a model id that is empty, starts with `-`, or contains
+ * whitespace or a control character. The input is never trimmed.
+ */
+function splitOpenCodeModel(raw: string): { key: string; id: string } | undefined {
+  const slash = raw.indexOf("/");
+  if (slash < 0) return undefined;
+  const key = raw.slice(0, slash);
+  const id = raw.slice(slash + 1);
+  if (!OPENCODE_PROVIDER_KEY_RE.test(key)) return undefined;
+  if (id === "" || id.startsWith("-") || SPACE_OR_CONTROL_RE.test(id)) return undefined;
+  return { key, id };
+}
+
+/** The result of {@link parseOpenCodeModel}. */
+export interface OpenCodeModel {
+  /** The normalized registry provider; `other` for an unrecognized key or a malformed model. */
+  provider: Provider;
+  /** The model id after the first slash; empty for a malformed model. */
+  bareId: string;
+  /**
+   * The raw model, unchanged. A record of what was dispatched, never a
+   * pricing, overlay or provider lookup key: those use `provider` and `bareId`.
+   */
+  upstream: string;
+}
+
+/**
+ * Derive the provider of an `opencode` model id (ADR-022 § 1). Malformed
+ * input (empty, no slash, an empty key or id, surrounding whitespace, a
+ * mixed-case key) is provider `other` with an empty `bareId`. A bare id is
+ * never qualified to a provider. Mirrors the Go `models.ParseOpenCodeModel`.
+ */
+export function parseOpenCodeModel(raw: string): OpenCodeModel {
+  const split = splitOpenCodeModel(raw);
+  if (!split) return { provider: "other", bareId: "", upstream: raw };
+  const provider = Object.hasOwn(OPENCODE_PROVIDERS, split.key)
+    ? OPENCODE_PROVIDERS[split.key]
+    : "other";
+  return { provider, bareId: split.id, upstream: raw };
+}
+
+/** The result of {@link dispatchModelFor}: the `-m` value, or why there is none. */
+export type DispatchModelResult = { ok: true; model: string } | { ok: false; error: string };
+
+/**
+ * The model to pass on the adapter's `-m` flag for a stage whose model is
+ * `bandOrId`. `configuredModel` is the operator's configured default for a
+ * multi-provider adapter (`opencode.model`, ADR-022 § 7), a
+ * `<provider>/<model>`; it may be empty.
+ *
+ * For `opencode`: a `<provider>/<model>` stage model is returned unchanged;
+ * an empty one returns `configuredModel`; a band is resolved against
+ * `configuredModel`'s provider — a local provider returns `configuredModel`,
+ * since the configured local model serves every band, and a hosted provider
+ * returns `<provider>/<id>` for the registry model serving that band.
+ * Anything else is an error: a bare id (a registry id included) is never
+ * qualified to a provider, a provider with no model in the band cannot serve
+ * it, and a band with no configured provider has none to resolve against.
+ *
+ * The result is never a band name or a bare id. Every other adapter serves
+ * one provider and resolves bands itself, so `bandOrId` is returned
+ * unchanged. Mirrors the Go `models.DispatchModelFor`.
+ */
+export function dispatchModelFor(
+  adapter: string,
+  bandOrId: string,
+  configuredModel: string
+): DispatchModelResult {
+  if (adapter !== OPENCODE_ADAPTER) return { ok: true, model: bandOrId };
+  if (bandOrId.includes("/")) {
+    if (!splitOpenCodeModel(bandOrId)) {
+      return {
+        ok: false,
+        error: `model "${bandOrId}" is not a valid <provider>/<model> for the ${adapter} adapter`,
+      };
+    }
+    return { ok: true, model: bandOrId };
+  }
+  if (bandOrId !== "" && !(TIER_BANDS as readonly string[]).includes(bandOrId)) {
+    return {
+      ok: false,
+      error:
+        `model "${bandOrId}" names no provider, and the ${adapter} adapter never infers one: ` +
+        `name it as <provider>/<model>`,
+    };
+  }
+  const configured = splitOpenCodeModel(configuredModel);
+  if (!configured) {
+    return {
+      ok: false,
+      error:
+        `the ${adapter} adapter has no provider to resolve stage model "${bandOrId}" against: ` +
+        `name the stage model as <provider>/<model>, or configure a <provider>/<model> default (opencode.model)`,
+    };
+  }
+  if (bandOrId === "") return { ok: true, model: configuredModel };
+  const { provider } = parseOpenCodeModel(configuredModel);
+  if (isLocalProvider(provider)) return { ok: true, model: configuredModel };
+  const m = getModelDescriptor(bandOrId, provider);
+  if (m && m.provider === provider) return { ok: true, model: `${configured.key}/${m.id}` };
+  return {
+    ok: false,
+    error:
+      `provider "${provider}" of the configured model "${configuredModel}" has no registry model ` +
+      `in band "${bandOrId}": name the stage model as <provider>/<model>`,
+  };
+}
+
 /**
  * Resolve a model by concrete id (exact, provider-agnostic — ids are globally
  * unique) or, failing that, by tier band within `provider` → the current

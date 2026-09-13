@@ -52,6 +52,12 @@ changelog, and the release workflow refuses a tag that does not.
   from.
   [ADR-022](docs/decisions/022-opencode-multi-provider-adapter.md) records the
   design (#1612)
+- The model registry names the provider behind an `opencode` model from its
+  `<provider>/<model>` id, the same way in the Go binary (`ProviderFor`) and
+  the SDK (`providerFor`). LM Studio and Ollama models are local; an unknown or
+  malformed id is `other`, which is never priced as a local $0. A tier band
+  becomes a `<provider>/<model>` for the configured OpenCode model's provider,
+  and a provider with no model in that band is refused (#1614)
 - `nightgauge preflight managed-steering` reports generated Nightgauge steering
   committed in any tracked `AGENTS.md`, and `--fix` removes it from the working
   tree (issue 1675)

@@ -16,6 +16,10 @@ import {
   getModelDescriptor,
   resolveModelForAdapter,
   providerForAdapter,
+  providerFor,
+  isLocalProvider,
+  parseOpenCodeModel,
+  dispatchModelFor,
   isKnownModel,
   computeCostUsd,
   ratesForProviderTier,
@@ -202,6 +206,81 @@ describe("model registry — adapter resolution (#56)", () => {
       for (const tier of ["haiku", "sonnet", "opus", "fable"]) {
         expect(resolveModelForAdapter(adapter, tier)).toBeUndefined();
       }
+    }
+  });
+});
+
+/**
+ * The provider-for contract (ADR-022 § 1 and § 7, #1614). The table is the Go
+ * package's own fixture (internal/models/testdata/provider-for-cases.json),
+ * which TestProviderForOpenCode, TestDispatchModelForOpenCode and
+ * TestIsLocalProvider replay too, so the two languages cannot disagree.
+ */
+interface ProviderForCases {
+  provider_for: {
+    name: string;
+    adapter: string;
+    model: string;
+    provider: string;
+    bare_id?: string;
+  }[];
+  dispatch_model_for: {
+    name: string;
+    adapter: string;
+    band_or_id: string;
+    configured_model: string;
+    model?: string;
+    error?: boolean;
+  }[];
+  is_local_provider: Record<string, boolean>;
+}
+
+const PROVIDER_FOR_CASES: ProviderForCases = JSON.parse(
+  readFileSync(
+    resolve(__dirname, "../../../../internal/models/testdata/provider-for-cases.json"),
+    "utf-8"
+  )
+);
+
+describe("model registry — provider for a multi-provider adapter (ADR-022, #1614)", () => {
+  it("the shared table is not empty", () => {
+    expect(PROVIDER_FOR_CASES.provider_for.length).toBeGreaterThan(0);
+    expect(PROVIDER_FOR_CASES.dispatch_model_for.length).toBeGreaterThan(0);
+    expect(Object.keys(PROVIDER_FOR_CASES.is_local_provider).length).toBeGreaterThan(0);
+  });
+
+  it.each(PROVIDER_FOR_CASES.provider_for)("providerFor: $name", (tc) => {
+    expect(providerFor(tc.adapter, tc.model)).toBe(tc.provider);
+    if (tc.adapter !== "opencode") {
+      expect(providerFor(tc.adapter, tc.model)).toBe(providerForAdapter(tc.adapter));
+      return;
+    }
+    expect(tc.bare_id).toBeDefined();
+    expect(parseOpenCodeModel(tc.model)).toEqual({
+      provider: tc.provider,
+      bareId: tc.bare_id,
+      upstream: tc.model,
+    });
+  });
+
+  it.each(PROVIDER_FOR_CASES.dispatch_model_for)("dispatchModelFor: $name", (tc) => {
+    const got = dispatchModelFor(tc.adapter, tc.band_or_id, tc.configured_model);
+    if (tc.error) {
+      expect(got.ok).toBe(false);
+      return;
+    }
+    expect(got).toEqual({ ok: true, model: tc.model });
+    if (tc.adapter === "opencode" && got.ok) {
+      expect(parseOpenCodeModel(got.model).bareId).not.toBe("");
+    }
+  });
+
+  it("isLocalProvider is true only for lm-studio and ollama", () => {
+    for (const [provider, want] of Object.entries(PROVIDER_FOR_CASES.is_local_provider)) {
+      expect(isLocalProvider(provider), provider).toBe(want);
+    }
+    for (const p of ["lm-studio", "ollama", "other", "copilot", "lmstudio"]) {
+      expect(PROVIDER_FOR_CASES.is_local_provider).toHaveProperty([p]);
     }
   });
 });
