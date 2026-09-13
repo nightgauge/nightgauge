@@ -87,10 +87,6 @@ func (m *breadcrumbIssueSvc) GetIssueWithRelations(_ context.Context, _, _ strin
 	return withRelations(m.issue, rels), nil
 }
 
-func (m *breadcrumbIssueSvc) GetIssuesByNumbers(_ context.Context, _, _ string, _ []int) (map[int]*types.Issue, error) {
-	return nil, fmt.Errorf("not implemented")
-}
-
 func (m *breadcrumbIssueSvc) GetIssuesByNumbersWithoutRelations(_ context.Context, _, _ string, _ []int) (map[int]*types.Issue, error) {
 	return nil, fmt.Errorf("not implemented")
 }

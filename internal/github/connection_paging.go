@@ -31,13 +31,18 @@ import (
 // page cannot be read. A caller never receives part of a connection as if it
 // were the whole: epic rollup would call an epic complete, and the blocker
 // check would call an issue unblocked, from the children and blockers it
-// never saw. A reader only walks the connections its caller uses, so it
-// neither pays for nor fails on pages the caller would discard. A single-issue
-// caller names the connections it uses to GetIssueWithRelations, none when it
-// uses none; only a caller that returns the whole issue, such as `issue view`,
-// reads every connection through GetIssue. A batch caller that reads only
-// bodies or states uses GetIssuesByNumbersWithoutRelations, which selects no
-// connection at all.
+// never saw. So a read fails with any connection it completes.
+//
+// A read that returns whole issues or board items completes every connection
+// of every issue in it, and one unreadable page on any of them fails the whole
+// read: GetIssue, GetIssuesByNumbers, and the board reads ListItems,
+// ListOpenItems and GetItem. Every other reader completes only the
+// connections its caller names (IssueRelations), so it neither pays for nor
+// fails on pages the caller would discard: GetIssueWithRelations for one
+// issue, BoardService.ListItemsWithRelations and ListOpenItemsWithRelations
+// for a board, and GetIssuesByNumbersWithoutRelations for a batch that reads
+// only bodies or states, which selects no connection at all.
+// BoardService.GetItemFields reads one board item's fields and no issue.
 
 const (
 	// maxRelationPages caps the pages read for one connection, the caller's

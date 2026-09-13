@@ -207,13 +207,14 @@ func TestEnsureEpicBranchForItem_EpicTitleReadSkipsRelationships(t *testing.T) {
 // resolveIssueStatesByKey read only each issue's State. Reading it through the
 // relationship read meant a blocker's own long relationship list could fail
 // the refresh, leaving a closed blocker recorded OPEN, or an OPEN one
-// unresolved.
+// unresolved. The scheduler's issueGetter now offers no batch read that
+// completes relationships, so the compiler keeps them off it; this pins that
+// both still resolve every state through the one it offers.
 func TestBlockerStateReadsSkipRelationships(t *testing.T) {
 	newMock := func() *mockIssueSvc {
 		mock := newMockIssueSvc()
 		mock.addIssue("test", "repo-a", 50, &types.Issue{Number: 50, State: "CLOSED"})
 		mock.addIssue("test", "repo-a", 51, &types.Issue{Number: 51, State: "OPEN"})
-		mock.relationReadErr = fmt.Errorf("batch fetch issues: %w", gh.ErrConnectionTruncated)
 		return mock
 	}
 

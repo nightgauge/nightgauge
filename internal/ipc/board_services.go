@@ -78,7 +78,11 @@ func (s *Server) boardServicesFor(c *gh.Client, owner string, projectNumber int,
 // status writes outside any wrapper — and `board.updateStatus` is the single
 // most staleness-visible write the daemon makes. It now takes the service, so
 // the same interception covers it.
+//
+// Its reads are single-item field reads, which no snapshot serves (the cached
+// board passes GetItem through for the same reason), so the reader is the
+// board service itself, not the cached wrapper.
 func (s *Server) boardStateFor(c *gh.Client, owner string, projectNumber int, ownerType gh.OwnerType) *state.BoardStateService {
 	svcs := s.boardServicesFor(c, owner, projectNumber, ownerType)
-	return state.NewBoardStateService(svcs.Board, svcs.Project)
+	return state.NewBoardStateService(gh.NewBoardService(c, owner, projectNumber, ownerType), svcs.Project)
 }

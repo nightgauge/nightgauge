@@ -5001,7 +5001,7 @@ func TestPrioritize_OffBoardDependencyResolution(t *testing.T) {
 			name:           "direct dep: resolution error (resolver returns nil) -> blocked",
 			buildGraph:     buildDirectGraph,
 			candidateNum:   100,
-			resolved:       nil, // simulates GetIssuesByNumbers failure for this repo
+			resolved:       nil, // simulates a failed batch state read for this repo
 			wantCandidate:  false,
 			wantReason:     "blocked-by-offboard-dep",
 			wantReasonHits: 1,
@@ -5140,7 +5140,7 @@ func TestPrioritize_NoLookupWhenAllDepsPresent(t *testing.T) {
 
 // TestResolveIssueStatesByKey_BatchedPerRepo verifies the extracted batching
 // helper mirrors refreshBlockerStates' discipline (scheduler.go): N keys
-// spread across R repos cost exactly R GetIssuesByNumbers calls.
+// spread across R repos cost exactly R batch reads.
 func TestResolveIssueStatesByKey_BatchedPerRepo(t *testing.T) {
 	mock := newMockIssueSvc()
 	mock.addIssue("owner", "repo-a", 10, &types.Issue{Number: 10, State: "CLOSED"})

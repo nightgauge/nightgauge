@@ -104,11 +104,13 @@ func NewIssueService(client *Client) *IssueService {
 	}
 }
 
-// IssueRelations names the relationship connections of an issue that a
-// single-issue read returns. Each named connection is read to its end, and
-// one that cannot be is ErrConnectionTruncated. A connection that is not
-// named is returned empty and none of its later pages is read, so a long list
-// the caller would discard can neither cost it requests nor fail it.
+// IssueRelations names the relationship connections of an issue that a read
+// returns: one issue (GetIssueWithRelations) or every issue on a board
+// (BoardService.ListItemsWithRelations, ListOpenItemsWithRelations). Each
+// named connection is read to its end, and one that cannot be is
+// ErrConnectionTruncated. A connection that is not named is returned empty
+// and none of its later pages is read, so a long list the caller would
+// discard can neither cost it requests nor fail it.
 type IssueRelations uint8
 
 const (
@@ -127,10 +129,27 @@ const (
 	AllRelations = RelationSubIssues | RelationBlockedBy | RelationBlocking
 )
 
+// pages returns the pages of the connections r names and nil for the others:
+// relationWalk.add leaves a nil page alone, and a reader returns only the
+// lists it was given a page for.
+func (r IssueRelations) pages(subIssues *subIssuePage, blockedBy, blocking *blockingPage) (*subIssuePage, *blockingPage, *blockingPage) {
+	if r&RelationSubIssues == 0 {
+		subIssues = nil
+	}
+	if r&RelationBlockedBy == 0 {
+		blockedBy = nil
+	}
+	if r&RelationBlocking == 0 {
+		blocking = nil
+	}
+	return subIssues, blockedBy, blocking
+}
+
 // GetIssue fetches a single issue with its sub-issues and blocking
-// relationships, each read to its end. It is the read for callers that return
-// the whole issue, such as `issue view` and the IPC issue.view method; a
-// caller that uses only some of the lists, or none, reads through
+// relationships, each read to its end, and fails when any one of them cannot
+// be. It is the read for callers that return the whole issue, such as
+// `issue view`, `forge issue view` and the IPC issue.view method; a caller
+// that uses only some of the lists, or none, reads through
 // GetIssueWithRelations so a list it would discard cannot fail it.
 func (s *IssueService) GetIssue(ctx context.Context, owner, repo string, number int) (*types.Issue, error) {
 	return s.GetIssueWithRelations(ctx, owner, repo, number, AllRelations)
@@ -158,18 +177,7 @@ func (s *IssueService) GetIssueWithRelations(ctx context.Context, owner, repo st
 		return nil, fmt.Errorf("fetch issue #%d: %w", number, err)
 	}
 	qi := &q.Repository.Issue
-	// A nil page is one completeIssueRelations leaves alone.
-	var subIssues *subIssuePage
-	var blockedBy, blocking *blockingPage
-	if rels&RelationSubIssues != 0 {
-		subIssues = &qi.SubIssues
-	}
-	if rels&RelationBlockedBy != 0 {
-		blockedBy = &qi.BlockedBy
-	}
-	if rels&RelationBlocking != 0 {
-		blocking = &qi.Blocking
-	}
+	subIssues, blockedBy, blocking := rels.pages(&qi.SubIssues, &qi.BlockedBy, &qi.Blocking)
 	label := fmt.Sprintf("%s/%s#%d", owner, repo, number)
 	if err := s.client.completeIssueRelations(ctx, nodeIDString(qi.ID), label, subIssues, blockedBy, blocking); err != nil {
 		return nil, fmt.Errorf("fetch issue #%d: %w", number, err)
@@ -231,8 +239,10 @@ func (s *IssueService) GetIssueWithRelations(ctx context.Context, owner, repo st
 // *types.Issue. Issues that GitHub reports as null (deleted, inaccessible) are
 // silently omitted from the result.
 //
-// This avoids the per-issue round-trip pattern (N GetIssue calls) used on hot
-// paths such as EpicService.Validate and the IPC issue.viewMany method.
+// This avoids the per-issue round-trip pattern (N GetIssue calls). It is the
+// batch read for callers that return whole issues, such as the IPC
+// issue.viewMany method; a caller that needs only bodies or states uses
+// GetIssuesByNumbersWithoutRelations.
 //
 // The returned issues populate the same fields as GetIssue: Labels, Assignees,
 // SubIssues, BlockedBy, Blocking, Parent. Numbers are deduplicated. Every

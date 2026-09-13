@@ -136,6 +136,21 @@ type projectItemNode struct {
 	} `graphql:"fieldValues(first: 8)"`
 }
 
+// projectItemFieldsQuery reads one board item's field values by its item node
+// id (BoardService.GetItemFields), with the same fieldValues selection as the
+// board scan. It selects none of the item's content, so none of the issue's
+// relationship connections.
+type projectItemFieldsQuery struct {
+	Node struct {
+		TypeName      string `graphql:"__typename"`
+		ProjectV2Item struct {
+			FieldValues struct {
+				Nodes []fieldValueNode
+			} `graphql:"fieldValues(first: 8)"`
+		} `graphql:"... on ProjectV2Item"`
+	} `graphql:"node(id: $id)"`
+}
+
 // projectItemContent is the per-item fragment of the board scan query
 // (queryProjectItems / queryProjectItemsFiltered). All nested `first` values
 // here multiply by the page size (100), so each unit of `first` is 100 nodes

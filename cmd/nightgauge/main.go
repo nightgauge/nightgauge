@@ -1703,9 +1703,10 @@ issue number 0 — useful for tests.`,
 
 				// Look up board size/priority by listing items and matching number.
 				// Skipped silently when --size/--priority overrides are present, or
-				// when the project number cannot be resolved (offline orgs).
+				// when the project number cannot be resolved (offline orgs). Size
+				// and priority are all it reads, so no relationship list is read.
 				if sizeFlag == "" || priorityFlag == "" {
-					if items, ferr := gh.NewBoardService(client, ownerPart, projectNumber, getOwnerType(cmd)).ListItems(cmd.Context(), ""); ferr == nil {
+					if items, ferr := gh.NewBoardService(client, ownerPart, projectNumber, getOwnerType(cmd)).ListItemsWithRelations(cmd.Context(), "", gh.NoRelations); ferr == nil {
 						for _, item := range items {
 							if item.Number == number {
 								if input.BoardSize == "" {

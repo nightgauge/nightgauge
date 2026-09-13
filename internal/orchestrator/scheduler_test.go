@@ -34,7 +34,7 @@ import (
 // mockIssueSvc implements issueGetter for testing.
 type mockIssueSvc struct {
 	issues     map[string]*types.Issue // keyed by "owner/repo#number"
-	batchCalls []mockBatchCall         // recorded GetIssuesByNumbers invocations
+	batchCalls []mockBatchCall         // recorded GetIssuesByNumbersWithoutRelations invocations
 	// getErrs makes GetIssueWithRelations fail for the keyed issue with the
 	// given error.
 	getErrs map[string]error
@@ -42,11 +42,6 @@ type mockIssueSvc struct {
 	// pages cannot be read: a GetIssueWithRelations that names one of them
 	// fails with ErrConnectionTruncated.
 	truncated map[string]gh.IssueRelations
-	// relationReadErr, when set, fails every GetIssuesByNumbers call (the read
-	// that completes relationships) while GetIssuesByNumbersWithoutRelations
-	// still serves the fixtures: an issue whose relationships cannot be read
-	// whole.
-	relationReadErr error
 	// removeBlockedByCalls records every RemoveBlockedBy invocation in the
 	// canonical "owner/repo#number" form of both refs, so assertions can pin
 	// which pair of issues the scheduler actually unlinked.
@@ -102,16 +97,8 @@ func withRelations(issue *types.Issue, rels gh.IssueRelations) *types.Issue {
 	return &out
 }
 
-func (m *mockIssueSvc) GetIssuesByNumbers(_ context.Context, owner, repo string, numbers []int) (map[int]*types.Issue, error) {
-	m.batchCalls = append(m.batchCalls, mockBatchCall{owner: owner, repo: repo, numbers: append([]int(nil), numbers...)})
-	if m.relationReadErr != nil {
-		return nil, m.relationReadErr
-	}
-	return m.batch(owner, repo, numbers), nil
-}
-
-// GetIssuesByNumbersWithoutRelations serves the same fixtures and records the
-// call alongside GetIssuesByNumbers, so batching assertions count both reads.
+// GetIssuesByNumbersWithoutRelations serves the fixtures and records the call,
+// so batching assertions can count the reads.
 func (m *mockIssueSvc) GetIssuesByNumbersWithoutRelations(_ context.Context, owner, repo string, numbers []int) (map[int]*types.Issue, error) {
 	m.batchCalls = append(m.batchCalls, mockBatchCall{owner: owner, repo: repo, numbers: append([]int(nil), numbers...)})
 	return m.batch(owner, repo, numbers), nil

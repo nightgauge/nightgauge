@@ -52,7 +52,7 @@ func (m *mockEpicIssueSvc) GetIssueWithRelations(_ context.Context, owner, repo 
 	return nil, fmt.Errorf("issue %s not found", key)
 }
 
-func (m *mockEpicIssueSvc) GetIssuesByNumbers(_ context.Context, owner, repo string, numbers []int) (map[int]*types.Issue, error) {
+func (m *mockEpicIssueSvc) GetIssuesByNumbersWithoutRelations(_ context.Context, owner, repo string, numbers []int) (map[int]*types.Issue, error) {
 	out := make(map[int]*types.Issue, len(numbers))
 	for _, n := range numbers {
 		key := fmt.Sprintf("%s/%s#%d", owner, repo, n)
@@ -61,10 +61,6 @@ func (m *mockEpicIssueSvc) GetIssuesByNumbers(_ context.Context, owner, repo str
 		}
 	}
 	return out, nil
-}
-
-func (m *mockEpicIssueSvc) GetIssuesByNumbersWithoutRelations(ctx context.Context, owner, repo string, numbers []int) (map[int]*types.Issue, error) {
-	return m.GetIssuesByNumbers(ctx, owner, repo, numbers)
 }
 
 func (m *mockEpicIssueSvc) GetEpicProgress(_ context.Context, nodeID string) (*types.EpicProgress, error) {

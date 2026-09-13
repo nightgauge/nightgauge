@@ -605,10 +605,10 @@ type issueGetter interface {
 	// read, so every caller names the lists it uses and a list it would
 	// discard can neither cost it requests nor fail it.
 	GetIssueWithRelations(ctx context.Context, owner, repo string, number int, rels gh.IssueRelations) (*types.Issue, error)
-	GetIssuesByNumbers(ctx context.Context, owner, repo string, numbers []int) (map[int]*types.Issue, error)
 	// GetIssuesByNumbersWithoutRelations reads issues without their
 	// subIssues, blockedBy and blocking connections: the read for callers
-	// that need only an issue's state or body.
+	// that need only an issue's state or body. It is the scheduler's only
+	// batch read, so no batch read here can fail on a relationship list.
 	GetIssuesByNumbersWithoutRelations(ctx context.Context, owner, repo string, numbers []int) (map[int]*types.Issue, error)
 	GetEpicProgress(ctx context.Context, epicNodeID string) (*types.EpicProgress, error)
 	GetEpicProgressByNumber(ctx context.Context, owner, repo string, number int) (*types.EpicProgress, error)
@@ -2113,8 +2113,10 @@ func (s *Scheduler) runEpicBackstopSweep(ctx context.Context) {
 		return
 	}
 
-	// Collect unique repos from board items (all statuses).
-	items, err := s.boardSvc.ListItems(ctx, "")
+	// Collect unique repos from board items (all statuses). Only each item's
+	// repo is used, so no relationship list is read: a long list on any item
+	// would otherwise cost this sweep requests and could stop it.
+	items, err := s.boardSvc.ListItemsWithRelations(ctx, "", gh.NoRelations)
 	if err != nil {
 		log.Printf("backstop sweep: failed to list board items: %v", err)
 		return
@@ -4652,8 +4654,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		}
 
 		// Revert board status on failure so the autonomous scheduler can re-dispatch.
-		// Skips revert if issue is already "In Review" (PR was opened before failure)
-		// or if configured as "unchanged" (legacy behavior).
+		// Skips revert if issue is already "In Review" (PR was opened before failure),
+		// if its current status cannot be read (FailPipeline reports why), or if
+		// configured as "unchanged" (legacy behavior).
 		//
 		// Issue #3542: also skip the scheduler-side revert for the two
 		// recoverable terminal kinds. worktree_uncommitted means the work was

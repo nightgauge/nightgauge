@@ -64,8 +64,10 @@ Exit codes:
 
 			ownerPart, repoPart := splitRepo(owner, repo)
 
+			// The dependency-cycle check reads each item's blocker list; no
+			// check reads any other relationship list.
 			boardSvc := gh.NewBoardService(client, ownerPart, projectNumber, getOwnerType(cmd))
-			items, err := boardSvc.ListItems(cmd.Context(), status)
+			items, err := boardSvc.ListItemsWithRelations(cmd.Context(), status, gh.RelationBlockedBy)
 			if err != nil {
 				return fmt.Errorf("fetch board items (status=%q): %w", status, enrichError(err))
 			}

@@ -87,7 +87,9 @@ func (s *LifecycleAuditService) RunAudit(ctx context.Context, owner, repo string
 	projSvc := NewProjectService(s.client, s.owner, s.projectNumber, s.ownerType)
 
 	// Single board fetch shared by BOARD_STATUS_DRIFT, PREMATURE_DONE, ORPHANED_ISSUE, STALE_BLOCKER.
-	boardItems, err := boardSvc.ListItems(ctx, "")
+	// STALE_BLOCKER is the only one that reads a relationship list, blockedBy,
+	// so it is the only list read whole.
+	boardItems, err := boardSvc.ListItemsWithRelations(ctx, "", RelationBlockedBy)
 	if err != nil {
 		return nil, fmt.Errorf("fetch board items: %w", err)
 	}

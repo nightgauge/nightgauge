@@ -90,21 +90,32 @@ changelog, and the release workflow refuses a tag that does not.
   request, which waits on the rate-limit floor and retries a rate-limit error
   as the first page does. A list that cannot be read in full is an error, not
   a short list: epic enqueue, wave planning, `epic assess` and the dependency
-  gate stop instead of treating the issue as unblocked. A read follows only
-  the lists its caller uses, so a long list it does not use can neither cost
-  it requests nor fail it; only `issue view` and the IPC issue view read every
-  list. The dependency gate reads only the issue's own blockers and judges a
-  dependency declared in the body by its state alone. Epic enqueue, wave
-  planning, `epic validate`, `epic assess` and the ready-sub-issue check read
-  each sub-issue's blockers and no other list of it. Epic rollup, orphan
-  closing and the size gate read only the sub-issue list. The baseline gate,
+  gate stop instead of treating the issue as unblocked. A read that returns
+  whole issues or board items reads every list of every issue in it, and fails
+  when any one of them cannot be read in full: `issue view`,
+  `forge issue view`, the IPC `issue.view`, `issue.viewMany` and `board.list`
+  methods, and the board reads behind the scheduler's pick and queue,
+  `board list`, `forge project item-list` and `field-get`, the dependency
+  graph and the attention sweeps. Every other read names the lists it uses,
+  so a long list it does not use can neither cost it requests nor fail it. The
+  dependency gate reads only the issue's own blockers and judges a dependency
+  declared in the body by its state alone. Epic enqueue, wave planning,
+  `epic validate`, `epic assess` and the ready-sub-issue check read each
+  sub-issue's blockers and no other list of it. Epic rollup, orphan closing,
+  the size gate and board reconcile read only sub-issue lists; the lifecycle
+  audit and `backlog preflight` read only blocker lists. The baseline gate,
   the post-merge hook and its board repair, label updates, refinement's
-  `pipeline:refined` marker and every command that uses only an issue's title,
-  body, labels or state follow no list. The batch issue read that
-  `epic validate`, the scheduler and the dependency graph use now waits on the
-  rate-limit floor too, so a failed body fetch below the floor no longer falls
-  back to one request per issue. `epic validate` also prints the number of
-  sub-issues checked when it finds gaps (#1682)
+  `pipeline:refined` marker, the epic backstop sweep, the board drift check,
+  `doctor`, `issue route` and every other command that uses only an issue's
+  title, body, labels or state follow no list. After a failed run, the check
+  that keeps an In-review issue out of Ready, and the pipeline-stage read, now
+  read that one board item instead of the whole board, and a status the check
+  cannot read leaves the issue where it is instead of moving it to Ready,
+  where it would be re-dispatched on top of its own open PR. The batch issue
+  read that `epic validate`, the scheduler and the dependency graph use now
+  waits on the rate-limit floor too, so a failed body fetch below the floor no
+  longer falls back to one request per issue. `epic validate` also prints the
+  number of sub-issues checked when it finds gaps (#1682)
 
 ### Removed
 

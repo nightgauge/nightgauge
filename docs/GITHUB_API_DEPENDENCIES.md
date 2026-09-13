@@ -53,17 +53,30 @@ next page from one aliased request, up to 50 connections a request. The walk
 stops at 20 pages. A connection still reporting more, or whose next page
 fails, is `ErrConnectionTruncated`, never a short list: epic rollup, wave
 planning, epic enqueue and `epic validate` fail rather than decide from part
-of an epic. A read follows only the connections its caller uses, so a long
-list the caller would discard can neither cost it requests nor fail it. A
-single-issue caller names its connections to `GetIssueWithRelations`: the
-dependency gate, wave planning and epic enqueue name `blockedBy`, epic rollup
-and the size gate name `subIssues`, and the post-merge hook, the label writes
-and the baseline gate name none. Only a caller that returns the whole issue,
-such as `issue view`, reads every connection through `GetIssue`, and the
-scheduler's issue reader offers no such read. Batch readers that need only an
-issue's state or body (`GetIssuesByNumbersWithoutRelations`) select no
-relationship connection, and `epic validate` selects only its sub-issues'
-`blockedBy`.
+of an epic.
+
+A read that returns whole issues or board items follows every connection of
+every issue in it, and fails when any one of them cannot be read whole:
+`GetIssue` (`issue view`, `forge issue view`, IPC `issue.view`),
+`GetIssuesByNumbers` (IPC `issue.viewMany`), and the board reads
+`ListItems`, `ListOpenItems` and `GetItem` (the scheduler's pick and queue,
+`board list`, `forge project item-list` and `field-get`, the dependency graph,
+the attention sweeps, and IPC `board.list` with the board cache behind it).
+Every other caller names the connections it uses, so a long list it would
+discard can neither cost it requests nor fail it. A single-issue caller names
+them to `GetIssueWithRelations`: the dependency gate and the per-sub-issue
+reads of wave planning and epic enqueue name `blockedBy`, epic enqueue's read
+of the epic names `subIssues` and `blockedBy`, epic rollup and the size gate
+name `subIssues`, and the post-merge hook, the label writes and the baseline
+gate name none. A board caller names them to `ListItemsWithRelations` or
+`ListOpenItemsWithRelations`: board reconcile names `subIssues`, the lifecycle
+audit and `backlog preflight` name `blockedBy`, and the epic backstop sweep,
+the drift check, `issue route` and `doctor` name none. The failed-run status
+guard and the pipeline-stage read use `GetItemFields`, which reads one board
+item's fields and no issue at all. Batch readers that need only an issue's
+state or body (`GetIssuesByNumbersWithoutRelations`, the only batch read the
+scheduler's issue reader offers) select no relationship connection, and
+`epic validate` selects only its sub-issues' `blockedBy`.
 
 **Risk**: Critical. Removing `subIssues` breaks epic tracking entirely. The
 board would show epics with no sub-issues and 0% progress.
@@ -82,12 +95,12 @@ determine whether an issue is currently blocked (any open blocker = blocked).
 - `issueQuery` — fetching blocking state for a specific issue
 - `projectItemContent` — board item display (determines 🔒 lock icon)
 
-**Pagination**: a first page of 5, then the same shared `pageInfo` follow-ups
-and 20-page cap as `subIssues`. The scheduler's blocker check reads the whole
-list, so an issue with more than 5 blockers stays blocked while any one is
-open. A blocker list that cannot be read whole stops the enqueue, wave plan,
-`epic assess` or dependency gate that asked for it instead of reading as no
-blockers.
+**Pagination**: a first page of 5, then the same shared `pageInfo` follow-ups,
+20-page cap and per-caller selection as `subIssues`. The scheduler's blocker
+check reads the whole list, so an issue with more than 5 blockers stays
+blocked while any one is open. A blocker list that cannot be read whole stops
+the enqueue, wave plan, `epic assess` or dependency gate that asked for it
+instead of reading as no blockers.
 
 **Risk**: Critical. Without `blockedBy`, lock icons disappear and the pipeline
 cannot enforce sequential epic ordering based on blocking relationships.

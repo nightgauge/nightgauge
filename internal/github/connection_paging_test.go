@@ -1107,6 +1107,104 @@ func TestGetIssueWithRelations(t *testing.T) {
 	})
 }
 
+// TestBoardReadsWithRelations covers the board reads for callers that use
+// some or none of the items' relationships: the epic backstop sweep, the
+// drift check, `issue route` and `doctor` read none, the lifecycle audit and
+// backlog preflight read blockedBy, and board reconcile reads subIssues. #700,
+// on the board, has 60 sub-issues and 11 blockers and blocks 7 issues, each
+// more than the board scan's first page. Only the lists a read names are read
+// past the first page and returned. The others come back empty on the item,
+// never as a first page posing as the list, and cannot fail the read. IsEpic
+// comes from the first page.
+func TestBoardReadsWithRelations(t *testing.T) {
+	ctx := context.Background()
+	setup := func(t *testing.T, mode followUpFailure) (*relationForge, *fakeIssue, *BoardService) {
+		f := newRelationForge(t)
+		f.failFollowUps = mode
+		iss := f.issue(700, "OPEN")
+		iss.subIssues = f.numbers(1001, 60, "CLOSED")
+		iss.blockedBy = f.numbers(301, 11, "CLOSED")
+		f.byNumber[311].state = "OPEN"
+		iss.blocks = f.numbers(401, 7, "OPEN")
+		f.board = []int{700}
+		return f, iss, NewBoardService(f.client(), "acme", 1)
+	}
+	reads := []struct {
+		name string
+		read func(ctx context.Context, b *BoardService, rels IssueRelations) ([]types.BoardItem, error)
+	}{
+		{"ListItemsWithRelations all", func(ctx context.Context, b *BoardService, rels IssueRelations) ([]types.BoardItem, error) {
+			return b.ListItemsWithRelations(ctx, "", rels)
+		}},
+		{"ListItemsWithRelations Ready", func(ctx context.Context, b *BoardService, rels IssueRelations) ([]types.BoardItem, error) {
+			return b.ListItemsWithRelations(ctx, "Ready", rels)
+		}},
+		{"ListOpenItemsWithRelations", func(ctx context.Context, b *BoardService, rels IssueRelations) ([]types.BoardItem, error) {
+			items, _, err := b.ListOpenItemsWithRelations(ctx, rels)
+			return items, err
+		}},
+	}
+	only := func(t *testing.T, items []types.BoardItem) types.BoardItem {
+		t.Helper()
+		if len(items) != 1 || items[0].Number != 700 {
+			t.Fatalf("items = %+v, want #700 alone", items)
+		}
+		return items[0]
+	}
+
+	for _, r := range reads {
+		t.Run(r.name, func(t *testing.T) {
+			t.Run("no relations", func(t *testing.T) {
+				f, _, b := setup(t, followUpHTTP502)
+				items, err := r.read(ctx, b, NoRelations)
+				if err != nil {
+					t.Fatalf("read: %v", err)
+				}
+				got := only(t, items)
+				if n := len(got.SubIssues) + len(got.BlockedBy) + len(got.Blocking); n != 0 {
+					t.Fatalf("returned %d relationships; the read names none", n)
+				}
+				if !got.IsEpic {
+					t.Error("IsEpic = false, want true: #700 has sub-issues")
+				}
+				if n := f.followUpRequestCount(); n != 0 {
+					t.Fatalf("follow-up requests = %d, want 0", n)
+				}
+			})
+
+			t.Run("blockedBy only", func(t *testing.T) {
+				f, iss, b := setup(t, followUpsServed)
+				items, err := r.read(ctx, b, RelationBlockedBy)
+				if err != nil {
+					t.Fatalf("read: %v", err)
+				}
+				got := only(t, items)
+				assertNumbers(t, "blockedBy", blockingNumbers(got.BlockedBy), iss.blockedBy)
+				if !blockedByOpen(got.BlockedBy) {
+					t.Error("#700 reads as unblocked; its only open blocker is past the first page")
+				}
+				if n := len(got.SubIssues) + len(got.Blocking); n != 0 {
+					t.Fatalf("returned %d sub-issue and blocking refs; the read names only blockedBy", n)
+				}
+				if sub, blk := f.followUpCount("subIssues"), f.followUpCount("blocking"); sub+blk != 0 {
+					t.Fatalf("read on the unnamed lists: subIssues %d, blocking %d follow-up pages", sub, blk)
+				}
+			})
+
+			t.Run("a named list that cannot be read whole is an error", func(t *testing.T) {
+				_, _, b := setup(t, followUpHTTP502)
+				items, err := r.read(ctx, b, RelationSubIssues)
+				if !errors.Is(err, ErrConnectionTruncated) {
+					t.Fatalf("err = %v, want ErrConnectionTruncated", err)
+				}
+				if items != nil {
+					t.Fatalf("returned %+v alongside a truncated read", items)
+				}
+			})
+		})
+	}
+}
+
 // TestBatchIssueReadsWaitOnRateLimitGate holds the aliased batch read to the
 // rate-limit floor gate that GetIssue's first request passes through. The
 // dependency graph's per-issue body fallback uses the batch read, so without

@@ -3,6 +3,7 @@ package state
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -21,7 +22,7 @@ type mockConfig struct {
 	hasStatus        bool
 	hasPipelineStage bool
 	itemID           string
-	itemStatus       string // status returned by items query (for readItemStatus)
+	itemStatus       string // status the item-fields read returns (for readItemStatus)
 }
 
 type mockOpt func(*mockConfig)
@@ -68,8 +69,8 @@ func mockGQL(t *testing.T, opts ...mockOpt) *httptest.Server {
 			resp = mutationResp()
 		case strings.Contains(req.Query, "fields("):
 			resp = fieldsResp(cfg)
-		case strings.Contains(req.Query, "items("):
-			resp = itemsResp(cfg)
+		case strings.Contains(req.Query, "node(id: $id)"):
+			resp = itemFieldsResp(cfg, req.Variables["id"])
 		default:
 			http.Error(w, "unrecognized query", 400)
 			return
@@ -141,50 +142,24 @@ func fieldsResp(cfg *mockConfig) map[string]interface{} {
 	}
 }
 
-func itemsResp(cfg *mockConfig) map[string]interface{} {
+// itemFieldsResp answers the single-item field read (GetItemFields) for the
+// configured item, and GitHub's unresolved-node answer for any other id.
+func itemFieldsResp(cfg *mockConfig, id interface{}) map[string]interface{} {
+	if id != cfg.itemID {
+		return map[string]interface{}{
+			"data": map[string]interface{}{"node": nil},
+			"errors": []interface{}{map[string]interface{}{
+				"type":    "NOT_FOUND",
+				"message": "Could not resolve to a node with the global id of '" + fmt.Sprint(id) + "'",
+			}},
+		}
+	}
 	return map[string]interface{}{
 		"data": map[string]interface{}{
-			"organization": map[string]interface{}{
-				"projectV2": map[string]interface{}{
-					"id":    "PVT_test123",
-					"title": "Test Project",
-					"items": map[string]interface{}{
-						"pageInfo": map[string]interface{}{
-							"hasNextPage": false,
-							"endCursor":   "",
-						},
-						"nodes": []interface{}{
-							map[string]interface{}{
-								"id": cfg.itemID,
-								"content": map[string]interface{}{
-									"__typename": "Issue",
-									"number":     42,
-									"title":      "Test Issue",
-									"state":      "OPEN",
-									"url":        "https://github.com/test/test/issues/42",
-									"createdAt":  "2026-01-01T00:00:00Z",
-									"updatedAt":  "2026-01-01T00:00:00Z",
-									"labels":     map[string]interface{}{"nodes": []interface{}{}},
-									"repository": map[string]interface{}{"nameWithOwner": "test/test"},
-									"subIssues":  map[string]interface{}{"nodes": []interface{}{}},
-									"blockedBy":  map[string]interface{}{"nodes": []interface{}{}},
-									"blocking":   map[string]interface{}{"nodes": []interface{}{}},
-									"parent":     map[string]interface{}{"number": 0, "title": ""},
-								},
-								"fieldValues": map[string]interface{}{
-									"nodes": []interface{}{
-										map[string]interface{}{
-											"__typename": "ProjectV2ItemFieldSingleSelectValue",
-											"name":       cfg.itemStatus,
-											"field": map[string]interface{}{
-												"name": "Status",
-											},
-										},
-									},
-								},
-							},
-						},
-					},
+			"node": map[string]interface{}{
+				"__typename": "ProjectV2Item",
+				"fieldValues": map[string]interface{}{
+					"nodes": []interface{}{statusValue(cfg.itemStatus)},
 				},
 			},
 		},
@@ -207,8 +182,8 @@ func TestNewBoardStateServiceForClient_WiresBothServices(t *testing.T) {
 	if svc.projSvc == nil {
 		t.Error("projSvc is nil — every write would panic")
 	}
-	if svc.board == nil {
-		t.Error("board is nil — GetPipelineStage and readItemStatus would panic")
+	if svc.items == nil {
+		t.Error("items is nil — GetPipelineStage and readItemStatus would panic")
 	}
 }
 
@@ -218,23 +193,23 @@ func TestNewBoardStateServiceForClient_UserOwnerType(t *testing.T) {
 	if svc == nil {
 		t.Fatal("NewBoardStateServiceForClient returned nil")
 	}
-	if svc.projSvc == nil || svc.board == nil {
+	if svc.projSvc == nil || svc.items == nil {
 		t.Fatal("both services must be wired for a user-owned board too")
 	}
 }
 
-// The injecting constructor is what lets the IPC daemon hand in cache-wrapped
-// services. It must keep exactly what it was given — a constructor that
-// rebuilt either half would put the daemon's writes back outside the wrapper,
-// which is the defect #848 exists to close.
+// The injecting constructor is what lets the IPC daemon hand in a
+// cache-wrapped project service. It must keep exactly what it was given — a
+// constructor that rebuilt either half would put the daemon's writes back
+// outside the wrapper, which is the defect #848 exists to close.
 func TestNewBoardStateService_KeepsTheServicesItWasGiven(t *testing.T) {
 	client := gh.NewClientWithToken("test")
 	board := gh.NewBoardService(client, "nightgauge", 5)
 	proj := gh.NewProjectService(client, "nightgauge", 5)
 
 	svc := NewBoardStateService(board, proj)
-	if svc.board != forge.BoardService(board) {
-		t.Error("board service was replaced; wrapped services would be discarded")
+	if svc.items != ItemFieldReader(board) {
+		t.Error("item reader was replaced")
 	}
 	if svc.projSvc != forge.ProjectService(proj) {
 		t.Error("project service was replaced; wrapped services would be discarded")
