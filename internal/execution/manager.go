@@ -484,19 +484,42 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	modelTracker := &ServedModelTracker{}
 	streamFmt := StreamFormatForAdapter(adapter.Name())
 
+	// OpenCode (ADR-022): its own parser, whose run state also watches
+	// stderr for permissions OpenCode rejected on its own; every line is
+	// also redacted of credential shapes, not only of the variables above;
+	// and a line over the scanner's limit is dropped with a drift marker
+	// instead of ending the read.
+	redactOut := func(b []byte) []byte { return redactLine(redact, b) }
+	var openCode *openCodeRun
+	if streamFmt == StreamFormatOpenCode {
+		openCode = newOpenCodeRun(tokenAcc.OpenCode(), runOpts.AllowedTools)
+		redactOut = func(b []byte) []byte { return []byte(RedactCredentials(string(redactLine(redact, b)))) }
+	}
+	eachLine := func(r io.Reader, name string, onLine func([]byte)) {
+		if openCode != nil {
+			_ = forEachLine(r, streamLineLimit, onLine, func() {
+				openCode.stream.Drift("dropped a %s line longer than the %d-byte line limit", name, streamLineLimit)
+			})
+			return
+		}
+		scanner := bufio.NewScanner(r)
+		scanner.Buffer(make([]byte, 0, 64*1024), streamLineLimit)
+		for scanner.Scan() {
+			onLine(scanner.Bytes())
+		}
+	}
+
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		scanner := bufio.NewScanner(stdout)
-		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		// Deterministic phase inference (Issue #3760): some stages (notably the
 		// edit-heavy feature-dev) don't reliably emit phase markers, so infer
 		// progress from observed tool activity. No-op for self-reporting stages;
 		// monotonic; real markers take precedence via ObserveRealMarker.
 		inferer := NewPhaseInferer(opts.Stage)
 		started := false
-		for scanner.Scan() {
-			line := redactLine(redact, scanner.Bytes())
+		eachLine(stdout, "stdout", func(raw []byte) {
+			line := redactOut(raw)
 			stdoutBuf = append(stdoutBuf, line...)
 			stdoutBuf = append(stdoutBuf, '\n')
 			lineStr := string(line)
@@ -534,20 +557,21 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 			if opts.Streamer != nil {
 				opts.Streamer.OnOutput("stdout", append(line, '\n'))
 			}
-		}
+		})
 	}()
 	go func() {
 		defer wg.Done()
-		scanner := bufio.NewScanner(stderr)
-		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-		for scanner.Scan() {
-			line := redactLine(redact, scanner.Bytes())
+		eachLine(stderr, "stderr", func(raw []byte) {
+			line := redactOut(raw)
 			stderrBuf = append(stderrBuf, line...)
 			stderrBuf = append(stderrBuf, '\n')
+			if openCode != nil {
+				openCode.observeStderr(string(line))
+			}
 			if opts.Streamer != nil {
 				opts.Streamer.OnOutput("stderr", append(line, '\n'))
 			}
-		}
+		})
 	}()
 
 	// Wait for output to drain, then wait for process
@@ -585,7 +609,24 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 		m.publishStageChild(opts.Repo, opts.Runtime)
 	}
 
+	// OpenCode's usage fold reads its subagent sessions into tokenAcc before
+	// the result is built from it; the rest of what it learned is applied on
+	// top of the result. It runs under ctx rather than execCtx, so a stage
+	// that timed out still has its usage read.
+	var openCodeDone *openCodeOutcome
+	if openCode != nil {
+		exitCode := -1
+		if cmd.ProcessState != nil {
+			exitCode = cmd.ProcessState.ExitCode()
+		}
+		done := openCode.finish(ctx, cmd.Path, cmd.Env, cmd.Dir, exitCode, tokenAcc, runOpts.Model)
+		openCodeDone = &done
+	}
 	result := runResultFromAccumulator(string(stdoutBuf), string(stderrBuf), tokenAcc, modelTracker)
+	if openCodeDone != nil {
+		openCodeDone.apply(result)
+		openCodeDone.report(opts)
+	}
 	// #564: a graceful-stop CLI that traps SIGTERM and exits 0 is otherwise
 	// indistinguishable from a healthy stage — ExitCode is 0 and cmd.Wait()
 	// returns a nil error either way. execution.stopRequested is the ONLY
@@ -682,6 +723,7 @@ func runResultFromAccumulator(stdout, stderr string, tokenAcc *TokenAccumulator,
 		CacheCreation1hTokens: cacheCreation1h,
 		PremiumRequests:       tokenAcc.PremiumRequests,
 		ServedModel:           modelTracker.ServedModel,
+		PeakStepInputTokens:   tokenAcc.PeakStepInputTokens,
 	}
 }
 

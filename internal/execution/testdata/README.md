@@ -336,3 +336,115 @@ one. No fixture, README ground-truth table, manifest entry, or
 result — `ParseGeminiStreamLine` and `ParseCopilotStreamLine` remain untested
 against real output until a maintainer with those CLIs installed captures
 them.
+
+## OpenCode: `opencode_stream_research_sample.jsonl`, `opencode_auto_reject_stream.jsonl`, `opencode_auto_reject_stderr.txt`
+
+**Real** `opencode run --format json` transcripts (#1624), not hand-authored
+ones, captured by
+[`scripts/capture-opencode-fixture.sh`](../../../scripts/capture-opencode-fixture.sh)
+and redacted by [`redact-opencode.jq`](redact-opencode.jq). Each stage runs the
+argv the adapter emits, with the prompt on stdin:
+
+```bash
+opencode run --format json --print-logs --log-level ERROR \
+  -m lmstudio/qwen/qwen3.8-27b --dir <scratch git repository>
+```
+
+The model is this repository's stub provider (`cmd/stub-provider`), bound to
+`127.0.0.1`. The run's throwaway config points a complete `lmstudio` provider
+block at it (`env: []`, an empty `apiKey`), so no hosted provider, no model
+server on another machine and no API key takes part. OpenCode runs under
+`env -i` with a throwaway `HOME` and four throwaway XDG directories.
+
+| Field       | Value                                                     |
+| ----------- | --------------------------------------------------------- |
+| Captured at | 2026-09-13                                                |
+| CLI version | `1.18.30` (`opencode --version`)                          |
+| Host OS     | macOS 27.0 (Darwin 27.0.0, arm64)                         |
+| Research    | stub script `tool-edit-stop`, `edit` allowed; exit 0      |
+| Auto-reject | stub script `bash-then-stop`, `bash` set to `ask`; exit 0 |
+| Redaction   | sandbox paths and the session id; no credential was found |
+
+### Why it is captured rather than written
+
+Same reason as the claude, grok and codex captures (#166, #300): a parser
+tested only against hand-written lines stays green while the CLI emits
+something else. The capture pins these shapes, each of which the parser
+depends on:
+
+1. Every line is one event: `{type, timestamp, sessionID, part}`. The error
+   event carries `error` in place of `part` (observed against the stub's
+   `error` script; not committed, because OpenCode retries it for over a
+   minute).
+2. `step_finish` carries the step's usage in `part.tokens`
+   (`total`, `input`, `output`, `reasoning`, `cache.read`, `cache.write`),
+   the finish reason in `part.reason` (`tool-calls`, then `stop`) and
+   `part.cost`, which is `0` for a provider OpenCode holds no price for.
+   OpenCode subtracts both cache pools from `input` and the reasoning tokens
+   from `output`, so the five fields are disjoint.
+3. There is no final usage event, and no event names the model or the CLI
+   version.
+4. A permission that resolves to `ask` is rejected on its own: stderr gets
+   `! permission requested: bash (python3 calc.py); auto-rejecting`, with
+   terminal escape codes around the `!` although stderr is a file; the
+   `tool_use` event has `status: "error"` and OpenCode's rejection message;
+   the run ends after that step and exits 0. The line names the permission,
+   which for the write tools is `edit`, and the tool's input, which the
+   parser never reads.
+
+**Do not replace these files with synthesized equivalents.** Recapture them
+with the script, which refuses an OpenCode version other than the one it pins.
+
+### Ground truth encoded in the files
+
+`opencode_stream_research_sample.jsonl`, two steps:
+
+| step    | reason       | input | output | reasoning | cache read | cache write |
+| ------- | ------------ | ----: | -----: | --------: | ---------: | ----------: |
+| 1       | `tool-calls` |  1539 |      8 |         0 |          0 |           0 |
+| 2       | `stop`       |  1550 |      6 |         0 |          0 |           0 |
+| **sum** |              |  3089 |     14 |         0 |          0 |           0 |
+
+The stage's usage is the sum; a parser that kept only the last step would book
+1550 and 6. The peak step prompt (input plus both cache pools) is 1550.
+
+`opencode_auto_reject_stream.jsonl` is one step (`tool-calls`, 1533 input, 3
+output) whose `bash` call was rejected, and `opencode_auto_reject_stderr.txt`
+is the line OpenCode printed for it.
+
+The stub counts words rather than tokens and reports no reasoning or cache
+tokens, so `TestParseOpenCodeStream` also replays the two captured
+`step_finish` events carrying the research numbers (7550 and 7750 input, 101
+output and 54 reasoning) and cache pools, on the real event shape. Captures
+from a real model, with reasoning, cache and subagent sessions, are #1629's.
+
+### Observed on the same version, not committed
+
+- `opencode export <session> --sanitize` writes `Exporting session: <id>` to
+  stderr and `{info, messages}` to stdout. `info.tokens` is the session's
+  total (here equal to the stream's sum) and `info.cost` its cost; each
+  assistant message's `info` has `providerID` and `modelID`. Prompts, replies,
+  tool input, output and metadata are redacted.
+- `opencode session list` lists root sessions only, and its JSON has no parent
+  id; a sanitized export redacts the `task` tool's metadata, which names the
+  child session. The session table's `parent_id` column is the record of which
+  session started which, so the parser lists subagent sessions with
+  `opencode db` and walks the tree itself. #1629's subagent capture pins this.
+- A subagent may not start another subagent unless the config raises
+  `subagent_depth`, which defaults to 1.
+- `opencode --version` creates the XDG directories it finds missing, and
+  `export` of an unknown session creates a database and a config file. The
+  parser runs both in the stage's own environment, inside the run's root.
+
+### Redaction
+
+`redact-opencode.jq` is shape-preserving in the same sense as `redact.jq`: it
+only rewrites string values, and never adds, drops or reorders a key or an
+event, or touches a token count or cost. It rewrites the capture's sandbox
+paths to `/tmp/nightgauge-fixture`, gives each session id a stable
+`ses_fixture…` placeholder, replaces an error event's `url`, and removes the
+credential shapes `RedactCredentials` removes from a live stage's output. The
+stderr keeps its escape codes. The script then refuses any file that still
+holds a credential shape, an IPv4 address other than `127.0.0.1`, a sandbox
+path or the run's server password; `--self-test` proves the refusal by
+planting a credential, and `--check` runs it on existing files.

@@ -189,9 +189,11 @@ has opted in.
   refuse the dispatch. Today that holds because the doctor has no `opencode`
   spec; #1627 adds one and must keep the verdict `false` while the gate is
   closed. `TestOpenCodeIsNeverACapHopTargetWhileGated` pins it.
-- **Stream parsing.** Until #1624, `StreamFormatForAdapter("opencode")` falls
-  back to the Claude parser, which reads nothing from OpenCode's events. That
-  is harmless only because every dispatch is gated, and the warning says so.
+- **Stream parsing.** #1624 gives `opencode` its own parser: it sums every
+  `step_finish`'s tokens, folds in the usage of subagent sessions (§ 22), and
+  records the served model (§ 1, § 2), the CLI's version and drift markers.
+  Pricing a stage from the registry and the USD watchdog are #1630's (§ 3), so
+  the row stays until that change.
 - **ADR-020.** The switch is a default-off setting. ADR-020 requires its reason
   beside it, and the reason is security: a dispatch runs without controls every
   other adapter has.
@@ -604,6 +606,11 @@ automatically. OpenCode prints `! permission requested: <permission>
 (<pattern>); auto-rejecting`, the tool call fails with "The user rejected
 permission to use this specific tool call.", the run ends after that step, and
 the process **exits 0**. An `ask` is a silent stop that looks like success.
+#1624's capture adds three details (see
+`internal/execution/testdata/README.md`, § OpenCode): the line carries
+terminal escape codes around the `!` even when stderr is not a terminal; it
+names the permission, which is `edit` for the write tools, and not the tool;
+and it is printed for every subagent session as well as the run's own.
 
 - Permission maps Nightgauge generates contain only `allow` and `deny`, never
   `ask`. That covers the permissions OpenCode defaults to `ask`, such as
@@ -613,7 +620,12 @@ the process **exits 0**. An `ask` is a silent stop that looks like success.
   (§ The command) are never emitted. Approval is the map's job, derived from
   the stage's allowed tools (#1638).
 - The parser classifies a rejected-permission tool event as a failure, exit
-  code notwithstanding (#1624, #1631).
+  code notwithstanding (#1624, #1631). It reads the stderr line, never the
+  transcript, and ends the stage's stderr with
+  `[adapter-permission-rejected] tool=<permission>` when the stage's allowed
+  tools grant the permission and `[permission-denied] tool=<permission>`
+  otherwise; an exit-0 run with either reports exit code 1. #1631 owns the
+  failure kinds.
 - The project directory OpenCode uses is the resolved path, so an absolute
   path through a symlinked prefix (such as macOS `/tmp`) reads as an external
   directory. The permission map is built against resolved paths.
@@ -973,19 +985,28 @@ removal.
   what the sweep ages. Deletion refuses a root that is a symbolic link or does
   not resolve directly under `~/.nightgauge/opencode/runs/`, and never follows
   a link inside one.
-- **What is kept.** Usage only. The stream (#1624) is the source.
-  `opencode export <session> --sanitize` is read for its `tokens` and `cost`
-  fields only, as a cross-check; it was observed to redact prompts, replies and
-  tool input while keeping those fields. Nothing else from an export is kept.
+- **What is kept.** Usage only. The stream (#1624) is the source for the
+  run's own session, and it never carries a subagent's steps. After exit the
+  parser lists the stage's descendant sessions from the run's own session
+  table with `opencode db`, because `session list` lists only root sessions
+  and a sanitized export redacts the `task` tool metadata that names a child.
+  It reads each descendant's `info.tokens` and `info.cost` from
+  `opencode export <session> --sanitize`, at most 64 sessions, each process in
+  its own process group under a 10 s timeout. The stage's own export is read
+  only for its assistant messages' `providerID` and `modelID` (§ 1). Exports
+  are held in memory, and nothing else from one is kept; `--sanitize` was
+  observed to redact prompts, replies and tool input while keeping those
+  fields. A failed read marks the stage's usage partial and never fails it.
 - **Stderr.** `--print-logs --log-level ERROR` limits OpenCode's log to
   errors. Every line the child prints, stderr and stdout alike, is redacted of
   the secrets Nightgauge lets the child hold before it is streamed or kept: the
   server password, `GITHUB_TOKEN`, `GH_TOKEN`, `GITLAB_TOKEN` and every
   variable the catalog binds to the dispatched provider, whichever provider it
-  is (§ 8), each become `[REDACTED:<name>]`. Every other secret the child
-  holds, inherited or read from a file, is #1624's pattern redaction, and until
-  then the output-redaction warning line says it stays; an endpoint's
-  `base_url` is #1678's.
+  is (§ 8), each become `[REDACTED:<name>]`. #1624 then removes every
+  credential of a known shape, whatever its source: API keys by their issuers'
+  prefixes, GitHub and GitLab tokens, bearer and authorization credentials, a
+  URL's user and password, and a credential query parameter. A secret of no
+  recognizable shape stays, and an endpoint's `base_url` is #1678's.
 
 ### 23. Promotion criteria
 
