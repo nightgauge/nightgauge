@@ -75,6 +75,7 @@ type openCodeControl struct {
 // control removes its entry; when the list is empty the gate goes with it.
 var openCodeUnenforcedControls = []openCodeControl{
 	{"stream parsing", "token usage, cost and the served model are not recorded, because OpenCode's JSON events reach the Claude stream parser"},
+	{"failure classification", "a permission request OpenCode rejects on its own ends the run with exit code 0, so a stage that stopped early reads as a success"},
 	{"run isolation", "OpenCode reads the operator's own global config, credentials, plugins and session database"},
 	{"project-config tamper gate", "the target repository's opencode.json and .opencode/ load unchecked"},
 	{"permission map", "tool permissions come from OpenCode's config, not from the stage's allowed tools"},

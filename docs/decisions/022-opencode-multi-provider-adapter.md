@@ -90,6 +90,11 @@ observation table are in
 | `opencode export <session> --sanitize` redacts prompts, replies and tool input, and keeps per-message `tokens` and `cost`                                                      | § 22                       |
 | `OPENCODE_SERVER_PASSWORD` is written to no output and no file, even at `--log-level DEBUG`                                                                                    | § 18                       |
 | `step_finish` events carry per-step tokens (`input`, `output`, `reasoning`, `cache.read`, `cache.write`) and a `cost` that read `0` for a provider OpenCode holds no price for | § 3                        |
+| A config provider block whose key is in OpenCode's bundled catalog inherits that provider's API-key variables, and sends the key to the block's `baseURL`                      | § Endpoints                |
+| With `env: []` or an explicit `apiKey`, the same block sends no key; a key outside the catalog binds no variable                                                               | § Endpoints                |
+| The catalog a run loads is the one bundled in the binary; no run fetched one                                                                                                   | § Endpoints                |
+| A `--format json` `error` event for a failed model request carries the request's full URL                                                                                      | § Endpoints                |
+| `--print-logs` adds stderr but still writes `log/opencode.log` in the data directory, and an error goes to both                                                                | The command, § 22          |
 
 The first contradiction changes § 8: once project config is disabled, which it
 must be (a repository must not grant itself permissions, plugins or providers),
@@ -131,6 +136,7 @@ has opted in.
 | Control not yet enforced   | Owning change |
 | -------------------------- | ------------- |
 | stream parsing             | #1624, #1630  |
+| failure classification     | #1624, #1631  |
 | run isolation              | #1616         |
 | project-config tamper gate | #1638         |
 | permission map             | #1638         |
@@ -160,10 +166,11 @@ opencode run --format json --print-logs --log-level ERROR -m <provider/model> --
 ```
 
 The prompt goes on stdin (§ 19). `--format json` is the NDJSON event stream the
-parser reads. `--print-logs --log-level ERROR` sends OpenCode's own log to
-stderr, limited to errors, instead of a log file inside the run's data
-directory. `--dir` is the worktree; the manager also sets the process working
-directory to it.
+parser reads. `--print-logs --log-level ERROR` also prints OpenCode's own log to
+stderr, limited to errors. It does not replace the log file: observed, 1.18.30
+still writes `log/opencode.log` in the run's data directory, and an error goes
+to both (§ 22). `--dir` is the worktree; the manager also sets the process
+working directory to it.
 
 The adapter never emits `--auto`, `--yolo`, `--dangerously-skip-permissions`,
 `--share` or `--mdns`. In 1.18.30 `--auto` and `--share` are real `run`
@@ -352,7 +359,7 @@ adapter refuses anything else before spawning.
   `NIGHTGAUGE_RUN_ID`.
 - **The per-run config.** Nightgauge writes
   `config/opencode/opencode.json` (mode 0600): the injected provider blocks
-  (§ 1, § 17), the permission map (§ 9), the plugin list, the `instructions`
+  (§ 1, § 17, § Endpoints), the permission map (§ 9), the plugin list, the `instructions`
   entries (below), MCP servers (#1626) and every locked key in § 15. Provider
   URLs never go into the environment, where the process table would show them.
 - **The environment.** Every inherited `OPENCODE_*` variable is removed, and
@@ -613,7 +620,8 @@ max-tested version; the doctor (#1627) and `PreDispatch` enforce it.
   observation method above: a loopback stub provider checks stdin delivery,
   the `--format json` event types, `ask` auto-rejection, the absence of a TCP
   listener, and the project-config switch. A failed self-test refuses dispatch.
-- Raising max-tested re-captures `testdata/opencode-cli/` in the same change.
+- Raising max-tested re-captures `testdata/opencode-cli/`, the reserved
+  endpoint ids (§ Endpoints) included, in the same change.
 
 ### 21. Capability spine
 
@@ -683,17 +691,59 @@ Studio beside Ollama. Each is a named **endpoint** in `opencode.endpoints[]`
   stays the normalized kind (`lm-studio`, `ollama` or `openai-compatible`), and
   it alone drives cost (§ 3), overlays (§ 14) and records. Two LM Studio
   instances are two endpoints of one kind. An id is lowercase letters, digits
-  and `-`, at most 32 characters, unique, and never one of the hosted keys
-  (`anthropic`, `openai`, `xai`, `google`). Otherwise a local server could be
-  priced and recorded as a hosted provider, or hosted traffic could be
-  redirected to a machine on the network.
+  and `-`, at most 32 characters, and unique.
+- **Reserved ids.** An id is never a provider key in the catalog bundled with
+  the pinned OpenCode version (§ 20). 1.18.30 bundles 213: the four hosted keys
+  of § 1 and every other service it knows, `deepseek`, `mistral`, `openrouter`,
+  `groq` and `opencode` among them. OpenCode merges a config provider block into
+  the catalog provider with the same key, and whatever the block does not
+  override is kept, including the environment variables the provider reads its
+  API key from. Observed: a `deepseek` block that set only `baseURL` sent the
+  value of `DEEPSEEK_API_KEY` from the environment to that URL as a bearer
+  token, even with `enabled_providers` narrowed to that one key. An endpoint
+  named after a hosted service would send that service's key to the machine the
+  endpoint names, in the LAN case over plain HTTP, and § 1 would record the
+  stage as local and `$0`. The catalog binds `GITHUB_TOKEN`, which every spawn
+  carries, to `github-copilot`. OpenCode also keys its custom provider loaders,
+  some of which read credentials of their own, by provider key, and every key
+  with a loader in 1.18.30 is a catalog key.
+
+  The one exception is `lmstudio`, and only on an `lm-studio` endpoint. That
+  catalog entry is LM Studio itself (`@ai-sdk/openai-compatible` on a loopback
+  address, no custom loader), and the only thing it hands on, the
+  `LMSTUDIO_API_KEY` binding, is cut by the complete block below. `ollama` and
+  `lm-studio` are not catalog keys.
+
+  #1678 refuses a reserved id at config load, naming the catalog key it
+  collides with. The reserved set is captured from the pinned binary into
+  `testdata/opencode-cli/`, and § 20 re-captures it whenever max-tested rises.
+  A run sees exactly that catalog. 1.18.30 loads the catalog from its cache
+  file and otherwise from the snapshot bundled in the binary (read from its
+  bundled source), the per-run cache starts empty, and `OPENCODE_MODELS_PATH`
+  goes with every inherited `OPENCODE_*` variable (§ 8). No observed run wrote
+  a catalog to its cache.
+
+- **Complete endpoint blocks.** Every provider block Nightgauge injects for a
+  model server the operator runs, the `lmstudio` and `ollama` keys of § 1
+  included, sets `npm` for its kind, `env: []`, `options.baseURL` and
+  `options.apiKey`. `apiKey` is empty unless the endpoint entry supplies a key
+  of its own (#1678). No environment variable can then bind to an endpoint.
+  Observed: the `deepseek` and `lmstudio` blocks sent no key once complete. On
+  1.18.30 `env: []` alone and an empty `apiKey` alone each stop the binding;
+  both are set, so a version that changes how one of them takes precedence
+  still binds nothing.
 - **The `endpoint` wire label** is the endpoint id and nothing else. It is the
   nullable `endpoint` field of § 2, and it is how every log line, trace event,
   doctor finding and error names an endpoint ("endpoint `lmstudio-remote` is
   not answering"). The `base_url`, host, address and port never appear in any
   record, log, trace, telemetry field, fixture, test or committed file; they
   live only in the machine-tier config. An id cannot carry an address, because
-  a dot is not a legal id character.
+  a dot is not a legal id character. OpenCode itself does not keep to this.
+  Observed: when a model request fails, the `--format json` `error` event
+  carries the request's full URL in `metadata.url`, while stderr and the log
+  file did not name it. The parser (#1624) never copies a URL from an OpenCode
+  event, and captured output is redacted of every endpoint's `base_url` before
+  it is persisted (#1616).
 - **Endpoints on the local network.** An endpoint is loopback by default. A
   `base_url` whose host resolves to anything other than loopback is refused
   unless the entry sets `allow_lan: true`. Even then the address must be a
@@ -712,7 +762,7 @@ Studio beside Ollama. Each is a named **endpoint** in `opencode.endpoints[]`
         base_url: http://127.0.0.1:1234/v1
       - id: lmstudio-remote
         provider: lm-studio
-        base_url: http://192.0.2.10:1234/v1 # an RFC 5737 documentation address
+        base_url: http://192.0.2.10:1234/v1 # RFC 5737 stand-in for a private-network address
         allow_lan: true
   ```
 
