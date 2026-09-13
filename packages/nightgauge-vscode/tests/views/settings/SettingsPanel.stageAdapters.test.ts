@@ -338,3 +338,56 @@ describe("SettingsPanel OpenCode model catalog refresh (Issue #1628)", () => {
     expect(refreshOpenCodeModels).not.toHaveBeenCalled();
   });
 });
+
+describe("SettingsPanel OpenCode experimental-switch gate parity (Issue #1628)", () => {
+  const vscodeMockPath = "vscode";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    writeMock.mockResolvedValue({ success: true });
+    writeLocalMock.mockResolvedValue({ success: true });
+    delete process.env.NIGHTGAUGE_EXPERIMENTAL_OPENCODE;
+  });
+
+  it("gate off: refuses to persist ui.core.adapter = opencode and shows the enable-switch message", async () => {
+    const panel = makePanel();
+
+    panel.handleChange("ui.core.adapter", "opencode");
+
+    expect(panel.projectConfig.ui?.core?.adapter).toBeUndefined();
+    expect(panel.currentConfig.ui?.core?.adapter).toBeUndefined();
+    expect(panel.hasUnsavedChanges).toBe(false);
+
+    const vscode = await import(vscodeMockPath);
+    expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
+      expect.stringContaining("NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1")
+    );
+  });
+
+  it("gate off: refuses to persist pipeline.stage_adapters.<stage> = opencode", async () => {
+    const panel = makePanel();
+
+    panel.handleChange("pipeline.stage_adapters.feature-dev", "opencode");
+
+    expect(panel.projectConfig.pipeline?.stage_adapters?.["feature-dev"]).toBeUndefined();
+    expect(panel.hasUnsavedChanges).toBe(false);
+
+    const vscode = await import(vscodeMockPath);
+    expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
+      expect.stringContaining("NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1")
+    );
+  });
+
+  it("gate on: persists ui.core.adapter = opencode normally with no gate message", async () => {
+    process.env.NIGHTGAUGE_EXPERIMENTAL_OPENCODE = "1";
+    const panel = makePanel();
+
+    panel.handleChange("ui.core.adapter", "opencode");
+
+    expect(panel.projectConfig.ui.core.adapter).toBe("opencode");
+    expect(panel.hasUnsavedChanges).toBe(true);
+
+    const vscode = await import(vscodeMockPath);
+    expect(vscode.window.showInformationMessage).not.toHaveBeenCalled();
+  });
+});

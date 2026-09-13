@@ -18,6 +18,7 @@ import { resolveStageAdapter } from "../../utils/resolvers/adapterResolver";
 import { getModeStageAdapterModel } from "../../utils/modeProfiles";
 import { getPerformanceMode } from "../../utils/resolvers/monitoringResolver";
 import { toNightgaugeAdapter } from "../../services/HeadlessOrchestrator";
+import { isOpenCodeSwitchOn, openCodeGateMessage } from "../../utils/openCodeExperimentalGate";
 import { validateAdapterAuth } from "@nightgauge/sdk";
 import type { PipelineStage } from "@nightgauge/sdk";
 import type { ExecutionAdapter } from "../../utils/resolvers/modelResolver";
@@ -744,6 +745,19 @@ export class SettingsPanel implements vscode.Disposable {
     const numericSelectPaths = ["pipeline.max_concurrent"];
     const coerced =
       numericSelectPaths.includes(path) && typeof value === "string" ? parseInt(value, 10) : value;
+
+    // OpenCode does not dispatch at all without the experimental switch
+    // (ADR-022): persisting `opencode` here now would silently produce a
+    // pipeline that refuses to run, and only fail later with an AdapterError
+    // when a pipeline actually dispatches. Match the Switch Adapter quick
+    // pick's gate exactly (Issue #1628) so every adapter-selection surface
+    // behaves the same way: refuse to write it and explain how to enable it.
+    const isAdapterSelectionPath =
+      path === "ui.core.adapter" || path.startsWith("pipeline.stage_adapters.");
+    if (isAdapterSelectionPath && coerced === "opencode" && !isOpenCodeSwitchOn()) {
+      vscode.window.showInformationMessage(openCodeGateMessage());
+      return;
+    }
 
     // For pipeline.stage_adapters.<stage> and pipeline.stage_models.<stage>, an
     // empty string represents "(Use global default)" — delete the leaf rather

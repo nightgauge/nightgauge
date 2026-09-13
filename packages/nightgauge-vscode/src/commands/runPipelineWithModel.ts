@@ -74,43 +74,70 @@ function getCodexModelOptions(currentModel: string): ModelOption[] {
   }));
 }
 
+/** The result of resolving model options for the current adapter. */
+interface ModelOptionsResult {
+  /** `null` when the adapter has no model picker at all (unsupported). */
+  options: ModelOption[] | null;
+  /**
+   * Set when `options` is an empty array — i.e. the adapter has a picker but
+   * nothing selectable came back — so the caller can explain why instead of
+   * opening a blank QuickPick.
+   */
+  emptyMessage?: string;
+}
+
 /**
  * OpenCode model options for "Run Pipeline with Model" (Issue #1628).
  *
  * Only `selectable` catalog entries become QuickPick items: the "could not
  * list models" notice the catalog service returns on failure is informational
- * and must never be offered or stored as a run override.
+ * and must never be offered or stored as a run override. When filtering
+ * leaves nothing selectable, surface that notice's own label as the reason
+ * instead of silently opening an empty picker.
  */
-async function getOpenCodeModelOptions(workspaceRoot?: string): Promise<ModelOption[]> {
+async function getOpenCodeModelOptions(workspaceRoot?: string): Promise<ModelOptionsResult> {
   const configuredModel = getOpenCodeModel(workspaceRoot);
   const catalog = await new OpenCodeModelCatalogService().listModels(configuredModel);
 
-  return catalog
+  const options = catalog
     .filter((entry) => entry.selectable)
     .map((entry) => ({
       label: entry.label,
       model: entry.id,
       displayLabel: entry.id,
     }));
+
+  if (options.length > 0) {
+    return { options };
+  }
+
+  const notice = catalog.find((entry) => !entry.selectable);
+  return {
+    options,
+    emptyMessage:
+      notice?.label ??
+      "OpenCode has no models to select. Set opencode.model or check the opencode " +
+        "CLI, then try again.",
+  };
 }
 
 async function getModelOptionsForAdapter(
   adapter: ReturnType<typeof getExecutionAdapter>,
   workspaceRoot?: string
-): Promise<ModelOption[] | null> {
+): Promise<ModelOptionsResult> {
   if (adapter === "claude") {
-    return CLAUDE_MODEL_OPTIONS;
+    return { options: CLAUDE_MODEL_OPTIONS };
   }
 
   if (adapter === "codex") {
-    return getCodexModelOptions(getCodexModel(workspaceRoot));
+    return { options: getCodexModelOptions(getCodexModel(workspaceRoot)) };
   }
 
   if (adapter === "opencode") {
     return getOpenCodeModelOptions(workspaceRoot);
   }
 
-  return null;
+  return { options: null };
 }
 
 export function registerRunPipelineWithModelCommand(
@@ -128,12 +155,22 @@ export function registerRunPipelineWithModelCommand(
 
       const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
       const adapter = getExecutionAdapter(workspaceRoot);
-      const modelOptions = await getModelOptionsForAdapter(adapter, workspaceRoot);
+      const { options: modelOptions, emptyMessage } = await getModelOptionsForAdapter(
+        adapter,
+        workspaceRoot
+      );
 
       if (!modelOptions) {
         vscode.window.showWarningMessage(
           `Run Pipeline with Model currently supports Claude, Codex, and OpenCode. ` +
             `Current adapter: ${adapter}.`
+        );
+        return;
+      }
+
+      if (modelOptions.length === 0) {
+        vscode.window.showWarningMessage(
+          emptyMessage ?? `No models are available to select for the ${adapter} adapter.`
         );
         return;
       }

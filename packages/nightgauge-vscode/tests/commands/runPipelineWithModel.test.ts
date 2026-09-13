@@ -234,7 +234,7 @@ describe("runPipelineWithModel command", () => {
     disposable.dispose();
   });
 
-  it("never offers a non-selectable OpenCode notice entry in the QuickPick (#1628)", async () => {
+  it("never offers a non-selectable OpenCode notice entry, and warns instead of opening an empty QuickPick (#1628)", async () => {
     vi.mocked(getExecutionAdapter).mockReturnValue("opencode");
     listOpenCodeModelsMock.mockResolvedValueOnce([
       { id: "", label: "Could not list OpenCode models", selectable: false },
@@ -247,9 +247,14 @@ describe("runPipelineWithModel command", () => {
       statusBar as never
     );
 
+    const vscode = await import("vscode");
     await invokeCommand();
 
-    expect(quickPickCalls[0].items).toEqual([]);
+    // No QuickPick is ever opened — an empty picker gives the user nothing
+    // to act on.
+    expect(quickPickCalls).toEqual([]);
+    // The catalog's own "could not list models" notice explains why instead.
+    expect(vscode.window.showWarningMessage).toHaveBeenCalledWith("Could not list OpenCode models");
 
     disposable.dispose();
   });

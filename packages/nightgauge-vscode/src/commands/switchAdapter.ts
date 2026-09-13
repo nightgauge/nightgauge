@@ -4,24 +4,10 @@ import type { NightgaugeConfig } from "../views/settings/types";
 import { NightgaugeYamlService } from "../views/settings/NightgaugeYamlService";
 import { getExecutionAdapter, type ExecutionAdapter } from "../utils/nightgaugeConfig";
 import { ConfigBridge } from "../services/ConfigBridge";
+import { isOpenCodeSwitchOn, openCodeGateMessage } from "../utils/openCodeExperimentalGate";
 
 interface AdapterOption extends vscode.QuickPickItem {
   value: ExecutionAdapter;
-}
-
-/**
- * The OpenCode enable switch — the same env var name the Go gate and the SDK
- * resolver read (`EXPERIMENTAL_OPENCODE_ENV_VAR` in
- * packages/nightgauge-sdk/src/cli/adapter.ts). Only the exact value `1` opens
- * it, read from the process environment only, so a committed config file can
- * never turn it on.
- *
- * @see docs/decisions/022-opencode-multi-provider-adapter.md § The enable gate
- */
-const OPENCODE_ENABLE_SWITCH_ENV_VAR = "NIGHTGAUGE_EXPERIMENTAL_OPENCODE";
-
-function isOpenCodeSwitchOn(): boolean {
-  return process.env[OPENCODE_ENABLE_SWITCH_ENV_VAR] === "1";
 }
 
 /**
@@ -133,11 +119,7 @@ export function registerSwitchAdapterCommand(logger: Logger): vscode.Disposable 
       // all without the switch (ADR-022), so writing the adapter now would
       // silently produce a pipeline that refuses to run. Leave the config
       // untouched and name the way to actually enable it.
-      vscode.window.showInformationMessage(
-        `OpenCode is experimental and does not dispatch by default. Set ` +
-          `${OPENCODE_ENABLE_SWITCH_ENV_VAR}=1 in the environment that runs Nightgauge to enable ` +
-          `it, then switch adapters again.`
-      );
+      vscode.window.showInformationMessage(openCodeGateMessage());
       return;
     }
 
