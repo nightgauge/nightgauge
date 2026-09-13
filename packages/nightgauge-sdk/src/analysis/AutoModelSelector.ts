@@ -21,7 +21,11 @@
 
 import type { ComplexityModel, MatchedPattern } from "../context/schemas/complexity-model.js";
 import type { EffortLevel, Provider } from "../eval/modelEvalSchemas.js";
-import { ratesForProviderTier, type ProviderTierRates } from "../eval/modelRegistry.js";
+import {
+  isLocalProvider,
+  ratesForProviderTier,
+  type ProviderTierRates,
+} from "../eval/modelRegistry.js";
 import { TIER_BANDS, type TierBand } from "../eval/tierBands.js";
 import type { StageModelCalibrationTable } from "../services/StageModelCalibrationService.js";
 import { StageModelCalibrationService } from "../services/StageModelCalibrationService.js";
@@ -505,7 +509,10 @@ export interface PipelineCostEstimateOptions {
   stageModelCalibration?: StageModelCalibrationTable | null;
   envelope?: ModelEnvelope;
   /**
-   * The provider the run will dispatch to — `providerForAdapter(adapter)`.
+   * The provider the run will dispatch to — `providerFor(adapter, model)`.
+   * For `opencode`, whose adapter name never determines the provider, the
+   * model is what picks it (ADR-022); every other adapter's answer is the
+   * same one the adapter-only lookup would give.
    *
    * REQUIRED, with no default. The default WAS the bug: every band was priced
    * from `getModelDescriptor(tier, "anthropic")`, so a grok or codex run was
@@ -1089,10 +1096,14 @@ export class AutoModelSelector {
 
       const rates = ratesForProviderTier(provider, modelResult.model);
       if (!rates) {
-        // Unpriced, never substituted. A local provider (ollama, lm-studio) has
-        // no registry entries by design, and "free" and "unknown" are different
-        // answers — only one of them is safe to add into a total.
-        anyUnpriced = true;
+        // A local provider (ollama, lm-studio) has no registry entries BY
+        // DESIGN — the configured local model serves every band at $0 (the
+        // registry's own schema note) — so it prices at a confident, exact 0
+        // rather than joining the unpriced floor. Anything else with no rates
+        // is a genuine registry gap: "free" and "unknown" are different
+        // answers, and only the local case is the former.
+        const localZeroRate = isLocalProvider(provider);
+        if (!localZeroRate) anyUnpriced = true;
         stages.push({
           stage,
           model: modelResult.model,
@@ -1104,7 +1115,7 @@ export class AutoModelSelector {
           skipped: false,
           calibrated: false,
           provider,
-          unpriced: true,
+          unpriced: !localZeroRate,
         });
         continue;
       }

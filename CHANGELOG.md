@@ -16,6 +16,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- The SDK's eval spawn profile, pipeline cost estimate, fan-out usage
+  reporting, and stage calibration now resolve an `opencode` run's provider
+  from its model rather than the adapter name, so an `opencode` run against an
+  Anthropic model prices, resolves and calibrates the same way a native
+  `claude` run does, and one against a local model prices at an exact $0
+  instead of an unknown. System-prompt steering is unaffected: `opencode`
+  still never receives the Claude-only preset (#1622)
 - Agent guidance is now tool-neutral and docs-first: concise `AGENTS.md` files
   route to canonical documentation, `CLAUDE.md` is a thin adapter, and Smart
   Setup generates and validates the same portable structure (#1604)

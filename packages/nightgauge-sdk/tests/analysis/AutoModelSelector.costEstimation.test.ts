@@ -11,6 +11,7 @@ import {
   type IssueMetadata,
   type PipelineCostEstimate,
 } from "../../src/analysis/AutoModelSelector.js";
+import { providerFor } from "../../src/eval/modelRegistry.js";
 
 function makeMetadata(overrides: Partial<IssueMetadata> = {}): IssueMetadata {
   return {
@@ -175,20 +176,54 @@ describe("AutoModelSelector.estimatePipelineCost", () => {
     expect(xai.unpriced).toBe(false);
   });
 
-  it("reports an unpriceable provider as unpriced rather than pricing it at Anthropic rates", () => {
-    // ollama has no registry entries by design.
+  it("prices a local provider (ollama, lm-studio) at a confident, exact 0, not unrated", () => {
+    // Local providers have no registry entries by design — the configured
+    // local model serves every band at $0 (the registry's own schema note),
+    // so this is a known answer, not a gap (#1622).
     const result = selector.estimatePipelineCost(makeMetadata(), { provider: "ollama" });
-    expect(result.unpriced).toBe(true);
+    expect(result.unpriced).toBe(false);
     for (const s of result.stages) {
       if (s.skipped) continue;
-      expect(s.unpriced).toBe(true);
-      // The ABSENCE of a price, not a price of zero.
+      expect(s.unpriced).toBe(false);
       expect(s.estimatedCost).toBe(0);
     }
     expect(result.totalEstimatedCost).toBe(0);
     // And emphatically not the anthropic figure the old code produced.
     const anthropic = selector.estimatePipelineCost(makeMetadata(), { provider: "anthropic" });
     expect(result.totalEstimatedCost).not.toBe(anthropic.totalEstimatedCost);
+  });
+
+  it("reports a genuinely unrated provider as unpriced rather than a confident 0", () => {
+    // "other" has no registry entries and is never local — the single
+    // authority (isLocalProvider) says so — so it stays a floor, not a price.
+    const result = selector.estimatePipelineCost(makeMetadata(), { provider: "other" });
+    expect(result.unpriced).toBe(true);
+    for (const s of result.stages) {
+      if (s.skipped) continue;
+      expect(s.unpriced).toBe(true);
+      expect(s.estimatedCost).toBe(0);
+    }
+    expect(result.totalEstimatedCost).toBe(0);
+  });
+
+  // --- opencode is model-aware: the model decides the provider (ADR-022, #1622) ---
+
+  it("opencode dispatched to an Anthropic model prices at Anthropic registry rates", () => {
+    const md = makeMetadata({ labels: ["size:M", "type:feature"], title: "Add auth" });
+    const opencodeProvider = providerFor("opencode", "anthropic/claude-sonnet-5");
+    const opencode = selector.estimatePipelineCost(md, { provider: opencodeProvider });
+    const anthropic = selector.estimatePipelineCost(md, { provider: "anthropic" });
+    expect(opencodeProvider).toBe("anthropic");
+    expect(opencode.totalEstimatedCost).toBe(anthropic.totalEstimatedCost);
+    expect(opencode.unpriced).toBe(false);
+  });
+
+  it("opencode dispatched to a local model costs 0 and is not flagged unrated", () => {
+    const opencodeProvider = providerFor("opencode", "lmstudio/qwen/qwen3.8-27b");
+    const result = selector.estimatePipelineCost(makeMetadata(), { provider: opencodeProvider });
+    expect(opencodeProvider).toBe("lm-studio");
+    expect(result.unpriced).toBe(false);
+    expect(result.totalEstimatedCost).toBe(0);
   });
 
   it("prices copilot's zero-rate card as a real 0, distinct from unpriced", () => {

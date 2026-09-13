@@ -13,6 +13,7 @@ import {
   UnsupportedCellError,
   claudeEvalProfile,
   codexEvalProfile,
+  lmStudioEvalProfile,
   maybeResolveEvalAdapterProfile,
   parseClaudeResult,
   resolveEvalAdapterProfile,
@@ -43,9 +44,27 @@ describe("resolveEvalAdapterProfile", () => {
   });
 
   it("resolves by adapter name through the registry's adapter→provider map", () => {
-    expect(resolveEvalAdapterProfileForAdapter("codex")).toBe(codexEvalProfile);
-    expect(resolveEvalAdapterProfileForAdapter("claude-headless")).toBe(claudeEvalProfile);
-    expect(resolveEvalAdapterProfileForAdapter("claude")).toBe(claudeEvalProfile);
+    expect(resolveEvalAdapterProfileForAdapter("codex", "gpt-5-codex")).toBe(codexEvalProfile);
+    expect(resolveEvalAdapterProfileForAdapter("claude-headless", "sonnet")).toBe(
+      claudeEvalProfile
+    );
+    expect(resolveEvalAdapterProfileForAdapter("claude", "sonnet")).toBe(claudeEvalProfile);
+  });
+
+  it("resolves opencode by its model's provider (ADR-022)", () => {
+    expect(resolveEvalAdapterProfileForAdapter("opencode", "anthropic/sonnet")).toBe(
+      claudeEvalProfile
+    );
+  });
+
+  it("resolves opencode with a local model to the lm-studio profile (ADR-022)", () => {
+    expect(resolveEvalAdapterProfileForAdapter("opencode", "lmstudio/qwen/qwen3.8-27b")).toBe(
+      lmStudioEvalProfile
+    );
+  });
+
+  it("throws naming the missing model when opencode has no model", () => {
+    expect(() => resolveEvalAdapterProfileForAdapter("opencode", "")).toThrow(/model/i);
   });
 
   it("maybeResolveEvalAdapterProfile is total: undefined for unwired providers, never a throw", () => {

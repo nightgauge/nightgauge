@@ -20,8 +20,11 @@
  *      unsupported instead of running mislabeled;
  *   3. how the CLI's stdout is normalized to {usage, durationMs, isError}.
  *
- * Only the two adapters with a healthy local CLI today are wired — `claude`
- * (anthropic) and `codex` (openai). The **measurement** half of #107 (rerun the
+ * Only two adapters spawn a headless local CLI this way today — `claude`
+ * (anthropic) and `codex` (openai). `lm-studio` resolves to a profile too
+ * (#1622, ADR-022's `opencode` + local-model case), but it is an HTTP
+ * adapter, not a spawned CLI — its spawn/parse methods throw until the live
+ * spawn leg is wired (#1658). The **measurement** half of #107 (rerun the
  * preamble A/B on codex) is a separate follow-up that consumes this spawn.
  * Adding gemini/copilot/etc. is a new profile entry here, not an executor edit.
  *
@@ -36,7 +39,7 @@ import {
   type ReasoningLevel,
   type TokenUsage,
 } from "./modelEvalSchemas.js";
-import { providerForAdapter } from "./modelRegistry.js";
+import { providerFor } from "./modelRegistry.js";
 import { summarizeCodexJsonOutput } from "../cli/adapterQuery.js";
 
 /** Token usage reported by the Claude CLI `result` object. */
@@ -364,6 +367,48 @@ export const codexEvalProfile: EvalAdapterProfile = {
 };
 
 // ---------------------------------------------------------------------------
+// LM Studio (lm-studio) profile — resolution-only; the live spawn leg is #1658.
+// ---------------------------------------------------------------------------
+
+/**
+ * LM Studio has no local CLI process this executor spawns like Claude/Codex —
+ * it is an OpenAI-compatible HTTP server ({@link LmStudioAdapter}, fetch/SSE
+ * over `/chat/completions`), so there is no argv/stdout dialect to build or
+ * parse here. This profile exists so `resolveEvalAdapterProfileForAdapter`
+ * (#1622) can resolve `opencode` + a local model to a real, provider-correct
+ * profile object rather than throwing `other`/unwired — the exact case
+ * ADR-022 calls out. Wiring the executor to actually run an lm-studio cell
+ * (HTTP instead of spawn) is the eval leg tracked by #1658; until then both
+ * methods throw {@link UnsupportedCellError} so an accidental invocation
+ * fails loudly instead of shelling out to a CLI that does not exist.
+ */
+export const lmStudioEvalProfile: EvalAdapterProfile = {
+  adapter: "lm-studio",
+  provider: "lm-studio",
+  hasSeparateThinkingKnob: false,
+  defaultCommand: "lms",
+  commandEnvVar: "NIGHTGAUGE_LM_STUDIO_CLI_COMMAND",
+
+  resolveCommand(override) {
+    return override ?? process.env[this.commandEnvVar] ?? this.defaultCommand;
+  },
+
+  buildSpawnPlan(_model, _effort, _reasoning) {
+    throw new UnsupportedCellError(
+      "lm-studio live eval spawn is not wired yet — it is an HTTP adapter " +
+        "(LmStudioAdapter), not a spawned CLI process. Wiring the live spawn leg is #1658."
+    );
+  },
+
+  parseResult(_stdout) {
+    throw new UnsupportedCellError(
+      "lm-studio has no CLI stdout to parse — it is an HTTP adapter (LmStudioAdapter), " +
+        "not a spawned CLI process. Wiring the live spawn leg is #1658."
+    );
+  },
+};
+
+// ---------------------------------------------------------------------------
 // Resolution
 // ---------------------------------------------------------------------------
 
@@ -371,6 +416,7 @@ export const codexEvalProfile: EvalAdapterProfile = {
 const PROFILES_BY_PROVIDER: Partial<Record<Provider, EvalAdapterProfile>> = {
   anthropic: claudeEvalProfile,
   openai: codexEvalProfile,
+  "lm-studio": lmStudioEvalProfile,
 };
 
 /**
@@ -385,9 +431,11 @@ export function maybeResolveEvalAdapterProfile(provider: Provider): EvalAdapterP
 }
 
 /**
- * The spawn profile for a registry `provider`. Throws for a provider whose live
- * CLI is not yet wired (gemini/copilot/ollama/lm-studio/other) — an honest,
- * actionable error instead of silently spawning the wrong CLI.
+ * The spawn profile for a registry `provider`. Throws for a provider with no
+ * profile entry at all (gemini/copilot/ollama/other) — an honest, actionable
+ * error instead of silently spawning the wrong CLI. `lm-studio` resolves to
+ * {@link lmStudioEvalProfile}, whose spawn/parse methods throw separately
+ * because its live spawn leg is not wired yet (#1658).
  */
 export function resolveEvalAdapterProfile(provider: Provider): EvalAdapterProfile {
   const profile = PROFILES_BY_PROVIDER[provider];
@@ -405,10 +453,20 @@ export function resolveEvalAdapterProfile(provider: Provider): EvalAdapterProfil
 
 /**
  * The spawn profile for an execution-adapter name (any layer's vocabulary:
- * `claude`, `claude-headless`, `codex`, …), resolved through the registry's
- * adapter→provider mapping. Used when a caller pins the adapter explicitly rather
- * than deriving it from the model's provider.
+ * `claude`, `claude-headless`, `codex`, …) and the model it dispatches to,
+ * resolved through the registry's adapter+model→provider mapping
+ * ({@link providerFor}, ADR-022). `opencode` is multi-provider: the model
+ * decides the provider, so `model` is required — an empty model throws
+ * naming the missing model rather than guessing a provider.
  */
-export function resolveEvalAdapterProfileForAdapter(adapter: string): EvalAdapterProfile {
-  return resolveEvalAdapterProfile(providerForAdapter(adapter));
+export function resolveEvalAdapterProfileForAdapter(
+  adapter: string,
+  model: string
+): EvalAdapterProfile {
+  if (adapter === "opencode" && !model) {
+    throw new Error(
+      "resolveEvalAdapterProfileForAdapter: opencode requires a model to resolve its provider (ADR-022)"
+    );
+  }
+  return resolveEvalAdapterProfile(providerFor(adapter, model));
 }

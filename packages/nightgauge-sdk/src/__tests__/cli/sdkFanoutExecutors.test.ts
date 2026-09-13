@@ -355,5 +355,73 @@ describe("SdkFanoutExecutors (#3911)", () => {
       // Real tokens, but flat-rate subscription cost → still estimated.
       expect(agentResult.usage.estimated).toBe(true);
     });
+
+    it("flags opencode estimated:false for a local model, even with reported tokens (#1622)", async () => {
+      // opencode dispatched to a local model (ADR-022): a confident, exact $0,
+      // so real tokens are NOT overridden into an estimate the way Copilot's are.
+      async function* opencodeLocalLike(): AsyncGenerator<SDKMessage> {
+        yield { type: "assistant", content: "done" };
+        yield {
+          type: "result",
+          usage: {
+            input_tokens: 200,
+            output_tokens: 50,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+          },
+          total_cost_usd: 0,
+          model: "lmstudio/qwen/qwen3.8-27b",
+        };
+      }
+      const adapter = fakeAdapter("opencode", () => opencodeLocalLike());
+
+      const bindings = makeSdkFanoutBindings(adapter);
+      const agentResult = await bindings.runAgent({
+        agentId: "o0",
+        prompt: "do the thing",
+        provider: "opencode",
+        model: "lmstudio/qwen/qwen3.8-27b",
+      });
+
+      expect(agentResult.terminalKind).toBe("success");
+      expect(agentResult.usage.inputTokens).toBe(200);
+      expect(agentResult.usage.estimated).toBe(false);
+      expect(agentResult.usage.costUsd).toBe(0);
+    });
+
+    it("keeps opencode estimated:true for a cloud model that reported no cost (#1622)", async () => {
+      // opencode dispatched to an Anthropic model: real usage-based billing,
+      // but this module never sees a cost figure for it, so it stays flagged
+      // like Copilot's — the flag follows the resolved provider, not the host
+      // adapter name.
+      async function* opencodeCloudLike(): AsyncGenerator<SDKMessage> {
+        yield { type: "assistant", content: "done" };
+        yield {
+          type: "result",
+          usage: {
+            input_tokens: 400,
+            output_tokens: 120,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+          },
+          total_cost_usd: 0,
+          model: "anthropic/claude-sonnet-5",
+        };
+      }
+      const adapter = fakeAdapter("opencode", () => opencodeCloudLike());
+
+      const bindings = makeSdkFanoutBindings(adapter);
+      const agentResult = await bindings.runAgent({
+        agentId: "o1",
+        prompt: "do the thing",
+        provider: "opencode",
+        model: "anthropic/claude-sonnet-5",
+      });
+
+      expect(agentResult.terminalKind).toBe("success");
+      expect(agentResult.usage.inputTokens).toBe(400);
+      expect(agentResult.usage.estimated).toBe(true);
+      expect(agentResult.usage.costUsd).toBe(0);
+    });
   });
 });
