@@ -5,9 +5,11 @@
 // the redaction of credentials from every line the child prints.
 //
 // Every opencode process started here (--version, db, export) runs in its own
-// process group under a timeout, in the stage's own environment, so it reads
-// the run's per-run root and nothing of the operator's. A failure never fails
-// the stage: it marks usage partial and leaves a drift marker.
+// process group under a timeout, from the run's own root directory, with
+// --pure, and with only the variables that point it at the run's root
+// (openCodeHelperEnv): it reads the run's session database, loads no plugin,
+// and holds no credential. A failure never fails the stage: it marks usage
+// partial and leaves a drift marker.
 package execution
 
 import (
@@ -64,42 +66,65 @@ const (
 // "!" of an auto-reject line, even when stderr is not a terminal.
 var ansiEscapeRE = regexp.MustCompile(`\x1b\[[0-9;?]*[A-Za-z]`)
 
-// openCodeAutoRejectRE is the line opencode 1.18.30's run command prints to
-// stderr when it rejects a permission request, for its own session and for
-// every subagent session: `! permission requested: <permission> (<patterns>);
-// auto-rejecting`. The patterns are the tool's input, so only the permission
-// name is ever taken from the line.
-var openCodeAutoRejectRE = regexp.MustCompile(`^!\s*permission requested: (\S+) \(.*\); auto-rejecting$`)
+// openCodeAutoRejectStartRE is the start of the notice opencode 1.18.30's run
+// command prints to stderr when it rejects a permission request, for its own
+// session and for every subagent session:
+//
+//	! permission requested: <permission> (<patterns>); auto-rejecting
+//
+// The patterns are the tool's input, joined with ", " and printed unescaped,
+// so a call whose input holds a newline (a heredoc, a commit message with a
+// body, `python -c` over several lines) spreads the notice over several
+// lines, the last ending in openCodeAutoRejectEnd. The permission is taken
+// from the first line only, and nothing else of the notice is ever read.
+var openCodeAutoRejectStartRE = regexp.MustCompile(`^!\s*permission requested: (\S+) \(`)
+
+// openCodeAutoRejectEnd ends the notice's last line.
+const openCodeAutoRejectEnd = "); auto-rejecting"
 
 // openCodePermissionRE is the shape of an OpenCode permission name.
 var openCodePermissionRE = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 
-// OpenCodeAutoRejectMarker reads one stderr line. When it is OpenCode's
-// auto-reject line it returns the classification marker for the rejected
+// openCodeUnknownPermission stands for a rejected permission this parser
+// could not name.
+const openCodeUnknownPermission = "unknown"
+
+// OpenCodeAutoRejectMarker reads the first line of an auto-reject notice.
+// When it is one it returns the classification marker for the rejected
 // permission: PermissionRejectedMarker when allowedTools (Claude Code tool
 // names, as RunOptions.AllowedTools holds them) grant it, and
 // PermissionDeniedMarker otherwise. A line naming no recognizable permission
 // yields "tool=unknown".
 func OpenCodeAutoRejectMarker(line string, allowedTools []string) (string, bool) {
-	permission, ok := openCodeRejectedPermission(line)
+	permission, _, ok := openCodeRejectedPermission(line)
 	if !ok {
 		return "", false
 	}
 	return openCodeRejectionMarker(permission, adapters.OpenCodeToolsAllowed(allowedTools)), true
 }
 
-// openCodeRejectedPermission returns the permission an auto-reject line names,
-// "unknown" when it names none this parser recognizes.
-func openCodeRejectedPermission(line string) (string, bool) {
+// openCodeRejectedPermission reads a line that may start an auto-reject
+// notice. It returns the permission the notice names ("unknown" when it names
+// none this parser recognizes) and whether the notice also ends on this line.
+func openCodeRejectedPermission(line string) (permission string, closed, ok bool) {
 	plain := strings.TrimSpace(ansiEscapeRE.ReplaceAllString(line, ""))
-	m := openCodeAutoRejectRE.FindStringSubmatch(plain)
+	m := openCodeAutoRejectStartRE.FindStringSubmatch(plain)
 	if m == nil {
-		return "", false
+		return "", false, false
 	}
+	closed = strings.HasSuffix(plain, openCodeAutoRejectEnd)
 	if !openCodePermissionRE.MatchString(m[1]) {
-		return "unknown", true
+		return openCodeUnknownPermission, closed, true
 	}
-	return m[1], true
+	return m[1], closed, true
+}
+
+// openCodeKeptNotice is what an auto-reject notice becomes in the stderr the
+// stage keeps and streams: the permission, without the patterns. The patterns
+// are the call's input, authored by the model, and the stage's stderr is what
+// failure classification reads.
+func openCodeKeptNotice(permission string) string {
+	return "! permission requested: " + permission + " (..." + openCodeAutoRejectEnd
 }
 
 func openCodeRejectionMarker(permission string, allowed map[string]bool) string {
@@ -109,14 +134,25 @@ func openCodeRejectionMarker(permission string, allowed map[string]bool) string 
 	return PermissionDeniedMarker + " tool=" + permission
 }
 
+// credentialLeft is what may come right before a credential, captured so the
+// replacement keeps it: the start of the text; a character no credential
+// holds; a JSON escape whose last character is a letter or a digit (`\n`,
+// `\t`, `\u00e9`), which is what precedes a credential at the start of any
+// line but the first of a tool's output in a --format json event; or a
+// terminal escape sequence, raw or JSON-escaped, which precedes a credential
+// a tool prints in colour. A plain word boundary misses the last two, since
+// `n` and `m` are word characters.
+const credentialLeft = `(^|[^A-Za-z0-9_]|\\[bfnrt]|\\u[0-9A-Fa-f]{4}|(?:\x1b|\\u001[bB])\[[0-9;?]*[A-Za-z])`
+
 // credentialPatterns are the credential shapes removed from every line an
 // opencode child prints, after the values of the variables the adapter names
 // (envValueRedactor), so a secret the child read from a file or inherited is
 // removed too (ADR-022 § 22). Each shape is specific to credentials: a
 // provider's key prefix, a forge token prefix, a bearer or authorization
-// credential, a URL's user:password, a credential query parameter. No pattern
-// matches a quote or a backslash, and no replacement holds one, so a JSON
-// event stays valid JSON.
+// credential, a URL's user:password, a credential query parameter. What a
+// pattern replaces holds no quote and no backslash, beyond the left context
+// its replacement keeps, and no replacement adds one, so a JSON event stays
+// valid JSON.
 var credentialPatterns = []struct {
 	// hints are lower-case substrings at least one of which every match
 	// contains, so a line holding none skips the expression.
@@ -128,23 +164,105 @@ var credentialPatterns = []struct {
 	// OpenRouter, DeepSeek), xai- (xAI), AIza (Google), AKIA and ASIA (AWS
 	// access key ids), gsk_ (Groq), hf_ (Hugging Face).
 	{[]string{"sk-", "xai-", "aiza", "akia", "asia", "gsk_", "hf_"},
-		regexp.MustCompile(`\b(?:sk-[A-Za-z0-9_-]{20,}|xai-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{35}|(?:AKIA|ASIA)[0-9A-Z]{16}|gsk_[A-Za-z0-9]{20,}|hf_[A-Za-z0-9]{30,})`),
-		"[REDACTED:api-key]"},
+		regexp.MustCompile(credentialLeft + `(?:sk-[A-Za-z0-9_-]{20,}|xai-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{35}|(?:AKIA|ASIA)[0-9A-Z]{16}|gsk_[A-Za-z0-9]{20,}|hf_[A-Za-z0-9]{30,})`),
+		"${1}[REDACTED:api-key]"},
 	// GitHub tokens of every kind, and GitLab personal access tokens.
 	{[]string{"ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_", "glpat-"},
-		regexp.MustCompile(`\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,}|glpat-[A-Za-z0-9_-]{20,})`),
-		"[REDACTED:forge-token]"},
+		regexp.MustCompile(credentialLeft + `(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,}|glpat-[A-Za-z0-9_-]{20,})`),
+		"${1}[REDACTED:forge-token]"},
 	// A bearer credential, and the credential of an Authorization header.
-	{[]string{"bearer"}, regexp.MustCompile(`(?i)\b(bearer\s+)[A-Za-z0-9._~+/-]{16,}=*`), "${1}[REDACTED:bearer-token]"},
+	{[]string{"bearer"}, regexp.MustCompile(`(?i)` + credentialLeft + `(bearer\s+)[A-Za-z0-9._~+/-]{16,}=*`), "${1}${2}[REDACTED:bearer-token]"},
 	{[]string{"authorization"},
-		regexp.MustCompile(`(?i)\b(authorization\s*[:=]\s*(?:basic|token)\s+)[A-Za-z0-9._~+/-]{8,}=*`),
-		"${1}[REDACTED:authorization]"},
+		regexp.MustCompile(`(?i)` + credentialLeft + `(authorization\s*[:=]\s*(?:basic|token)\s+)[A-Za-z0-9._~+/-]{8,}=*`),
+		"${1}${2}[REDACTED:authorization]"},
 	// user:password in a URL.
-	{[]string{"://"}, regexp.MustCompile(`\b([A-Za-z][A-Za-z0-9+.-]*://)[^\s/@:"'\\]+:[^\s/@"'\\]+@`), "${1}[REDACTED:userinfo]@"},
+	{[]string{"://"}, regexp.MustCompile(credentialLeft + `([A-Za-z][A-Za-z0-9+.-]*://)[^\s/@:"'\\]+:[^\s/@"'\\]+@`), "${1}${2}[REDACTED:userinfo]@"},
 	// A credential in a query string.
 	{[]string{"key=", "token=", "secret=", "passw", "pwd=", "sig=", "signature=", "credential="},
 		regexp.MustCompile(`(?i)([?&](?:api[_-]?key|apikey|key|access[_-]?token|auth[_-]?token|token|client[_-]?secret|secret|password|passwd|pwd|sig|signature|x-amz-signature|x-amz-credential|x-amz-security-token|x-goog-signature|x-goog-credential)=)[^&#\s"'\\]+`),
 		"${1}[REDACTED:query-credential]"},
+}
+
+// openCodeOutputRedactor returns the redaction every line an opencode child
+// prints goes through (ADR-022 § 22), stdout and stderr alike. redact is the
+// replacer of the values of the variables the adapter names
+// (envValueRedactor), or nil.
+//
+// A --format json event carries a tool's output as a JSON string, so what the
+// tool printed is escaped there: its newlines are `\n`, its quotes `\"`. Each
+// string of a line that holds a JSON object is therefore decoded, redacted
+// and, only when that changed it, re-encoded in place, the way
+// redact-opencode.jq redacts a fixture. The whole line is then redacted as
+// text as well, which is all a line that is not JSON gets.
+func openCodeOutputRedactor(redact *strings.Replacer) func([]byte) []byte {
+	text := func(s string) string {
+		if redact != nil {
+			s = redact.Replace(s)
+		}
+		return RedactCredentials(s)
+	}
+	return func(line []byte) []byte {
+		return []byte(text(string(redactJSONStrings(line, text))))
+	}
+}
+
+// redactJSONStrings applies redact to the decoded value of every JSON string
+// in line, when line holds a JSON object, and returns line with each string
+// that redact changed re-encoded in place. Nothing else of the line changes:
+// no key is reordered and no number is re-formatted. A string that does not
+// decode is left as it is, and so is the rest of a line whose last string
+// does not end. The slice returned may be line itself.
+func redactJSONStrings(line []byte, redact func(string) string) []byte {
+	if first := bytes.TrimLeft(line, " \t"); len(first) == 0 || first[0] != '{' {
+		return line
+	}
+	var out []byte
+	last := 0
+	for i := 0; i < len(line); i++ {
+		if line[i] != '"' {
+			continue
+		}
+		end, escaped := i+1, false
+		for end < len(line) && line[end] != '"' {
+			if line[end] == '\\' {
+				escaped = true
+				end++
+			}
+			end++
+		}
+		if end >= len(line) {
+			break
+		}
+		literal := line[i : end+1]
+		var value string
+		if !escaped {
+			value = string(literal[1 : len(literal)-1])
+		} else if json.Unmarshal(literal, &value) != nil {
+			i = end
+			continue
+		}
+		if redacted := redact(value); redacted != value {
+			out = append(append(out, line[last:i]...), '"')
+			out = append(append(out, jsonEscaped(redacted)...), '"')
+			last = end + 1
+		}
+		i = end
+	}
+	if out == nil {
+		return line
+	}
+	return append(out, line[last:]...)
+}
+
+// jsonEscaped is s as the content of a JSON string, without its quotes, the
+// way OpenCode's JSON.stringify writes it: `<`, `>` and `&` are not escaped.
+func jsonEscaped(s string) string {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(s)
+	quoted := bytes.TrimSuffix(b.Bytes(), []byte{'\n'})
+	return string(quoted[1 : len(quoted)-1])
 }
 
 // RedactCredentials removes every credentialPatterns shape from s.
@@ -209,7 +327,7 @@ func forEachLine(r io.Reader, limit int, onLine func([]byte), onOversize func())
 }
 
 // openCodeRun is the opencode half of one stage in Manager.RunStage: it
-// watches the child's stderr for auto-reject lines and, once the child has
+// watches the child's stderr for auto-reject notices and, once the child has
 // exited, completes the RunResult.
 type openCodeRun struct {
 	stream  *OpenCodeStream
@@ -217,6 +335,10 @@ type openCodeRun struct {
 	// markers are the classification markers, one per rejected permission,
 	// in the order first seen. Only the stderr reader appends to it.
 	markers []string
+	// inNotice is set while an auto-reject notice spans lines: the lines up
+	// to the one ending in openCodeAutoRejectEnd are the rejected call's
+	// input. Only the stderr reader touches it.
+	inNotice bool
 	// fold starts the post-exit opencode processes; tests replace it.
 	fold openCodeFold
 }
@@ -233,16 +355,37 @@ func newOpenCodeRun(stream *OpenCodeStream, allowedTools []string) *openCodeRun 
 	}
 }
 
-// observeStderr reads one redacted stderr line.
-func (r *openCodeRun) observeStderr(line string) {
-	permission, ok := openCodeRejectedPermission(line)
-	if !ok {
-		return
+// observeStderr reads one redacted stderr line and returns what the stage
+// keeps and streams in its place, or false when it keeps nothing of it.
+//
+// An auto-reject notice yields a marker for its permission and is kept as
+// openCodeKeptNotice: the call's input never reaches the stage's stderr,
+// which failure classification reads. The lines a notice spans after its
+// first are that input, so they are dropped, and none of them is read as a
+// notice of its own, which is what a line of a rejected command could
+// otherwise forge. The input is printed unescaped, so a line inside it that
+// itself ends in openCodeAutoRejectEnd ends the notice early; the first line,
+// and with it the marker, is never in doubt.
+func (r *openCodeRun) observeStderr(line string) (string, bool) {
+	if r.inNotice {
+		plain := strings.TrimSpace(ansiEscapeRE.ReplaceAllString(line, ""))
+		r.inNotice = !strings.HasSuffix(plain, openCodeAutoRejectEnd)
+		return "", false
 	}
-	if permission == "unknown" {
+	permission, closed, ok := openCodeRejectedPermission(line)
+	if !ok {
+		return line, true
+	}
+	r.inNotice = !closed
+	if permission == openCodeUnknownPermission {
 		r.stream.Drift("an auto-reject line on stderr names no permission this parser recognizes")
 	}
-	marker := openCodeRejectionMarker(permission, r.allowed)
+	r.addMarker(openCodeRejectionMarker(permission, r.allowed))
+	return openCodeKeptNotice(permission), true
+}
+
+// addMarker records marker once.
+func (r *openCodeRun) addMarker(marker string) {
 	for _, m := range r.markers {
 		if m == marker {
 			return
@@ -262,31 +405,93 @@ type openCodeOutcome struct {
 	drift      []string
 }
 
+// openCodeExit is how an opencode stage's child ended, and what finish needs
+// to read the rest.
+type openCodeExit struct {
+	// bin is the stage's resolved binary, and env its environment, from
+	// which the fold keeps only openCodeHelperEnv.
+	bin string
+	env []string
+	// runRoot is the run's own root directory (ADR-022 § 8), the working
+	// directory of every process the fold starts; never the worktree.
+	runRoot string
+	// exitCode is -1 when the child did not exit on its own.
+	exitCode int
+	// dispatched is the model the stage was dispatched with (-m).
+	dispatched string
+	// stopped is set when the operator stopped the stage: then no process is
+	// started after it.
+	stopped bool
+}
+
 // finish runs once the child has exited, before the RunResult is built from
 // acc: it folds the subagent sessions' usage into acc, reads the served
-// model and the CLI version, and closes the stream's drift checks. bin, env
-// and dir are the stage's resolved binary, environment and working
-// directory; exitCode is -1 when the child did not exit on its own. ctx is
+// model and the CLI version, and closes the stream's drift checks. ctx is
 // the dispatch's own context, not the stage's: a stage that ran out of time
-// still has its usage read, and a cancelled dispatch stops the fold.
-func (r *openCodeRun) finish(ctx context.Context, bin string, env []string, dir string, exitCode int, acc *TokenAccumulator, dispatched string) openCodeOutcome {
-	f := r.fold
-	f.bin, f.env, f.dir = bin, env, dir
-	res := f.run(ctx, r.stream, dispatched)
-	acc.addOpenCodeTokens(res.children)
-	if r.stream.RejectedToolCalls > 0 && len(r.markers) == 0 {
-		r.stream.Drift("the stream shows a tool call OpenCode rejected, but stderr carried no auto-reject line")
+// still has its usage read, and a cancelled dispatch stops the fold. A stage
+// the operator stopped starts nothing: its usage is the stream's, marked
+// partial when it had a session whose subagents went unread.
+func (r *openCodeRun) finish(ctx context.Context, exit openCodeExit, acc *TokenAccumulator) openCodeOutcome {
+	var res openCodeFoldResult
+	if exit.stopped {
+		res.served = ResolveOpenCodeServedModel("", "", exit.dispatched)
+		if r.stream.SessionID != "" {
+			res.partial = true
+			r.stream.Drift("usage partial: the stage was stopped, so no opencode process was started to read its subagent sessions")
+		}
+	} else {
+		f := r.fold
+		f.bin, f.env, f.dir = exit.bin, openCodeHelperEnv(exit.env), exit.runRoot
+		res = f.run(ctx, r.stream, exit.dispatched)
 	}
-	r.stream.Finish(exitCode)
+	acc.addOpenCodeTokens(res.children)
+	if r.inNotice {
+		r.stream.Drift("an auto-reject notice on stderr did not end with %q", openCodeAutoRejectEnd)
+	}
+	markers := r.markers
+	if r.stream.RejectedToolCalls > 0 && len(markers) == 0 {
+		// OpenCode rejected the stage's own tool call, and stderr did not say
+		// which permission. The run still stopped there, so it still fails.
+		// The event names the tool, not the permission, and a rejection of
+		// external_directory or doom_loop is one the tool's name does not
+		// show, so the marker names none.
+		r.stream.Drift("the stream shows a tool call OpenCode rejected, but stderr carried no auto-reject line naming its permission")
+		markers = []string{openCodeRejectionMarker(openCodeUnknownPermission, r.allowed)}
+	}
+	r.stream.Finish(exit.exitCode)
 	return openCodeOutcome{
-		exitedZero: exitCode == 0,
-		markers:    r.markers,
+		exitedZero: exit.exitCode == 0,
+		markers:    markers,
 		version:    res.version,
 		served:     res.served,
 		cost:       r.stream.ReportedCostUSD + res.childCost,
 		partial:    res.partial,
 		drift:      r.stream.DriftMarkers(),
 	}
+}
+
+// openCodeHelperEnvNames are the variables every process the fold starts
+// keeps from the stage's environment: what finds the binary and its
+// temporary directory, and the four XDG directories that point it at the
+// run's own session database. No credential is among them: the forge token,
+// the provider's key and the server password stay with the stage.
+var openCodeHelperEnvNames = map[string]bool{
+	"PATH": true, "HOME": true, "TMPDIR": true,
+	"XDG_CONFIG_HOME": true, "XDG_DATA_HOME": true, "XDG_CACHE_HOME": true, "XDG_STATE_HOME": true,
+}
+
+// openCodeHelperEnv returns the entries of env, a stage's KEY=VALUE
+// environment, that a fold process keeps: openCodeHelperEnvNames and the
+// OPENCODE_DISABLE_* switches.
+func openCodeHelperEnv(env []string) []string {
+	var kept []string
+	for _, kv := range env {
+		key, _, _ := strings.Cut(kv, "=")
+		if openCodeHelperEnvNames[key] || strings.HasPrefix(key, "OPENCODE_DISABLE_") {
+			kept = append(kept, kv)
+		}
+	}
+	return kept
 }
 
 // apply writes the outcome onto the RunResult. A rejected permission ends
@@ -458,10 +663,19 @@ func (f openCodeFold) run(ctx context.Context, stream *OpenCodeStream, dispatche
 	return res
 }
 
+// openCodeExportArgs is the argv of a session's export. --sanitize redacts
+// the transcript; --pure loads no plugin. Observed on 1.18.30, `export`
+// bootstraps a project from its working directory, loading its .opencode/
+// config and plugins and installing their dependencies into it, so the fold
+// also runs it from the run's root rather than the worktree.
+func openCodeExportArgs(session string) []string {
+	return []string{"export", session, "--sanitize", "--pure"}
+}
+
 // servedModel reads the provider and model of the session's last assistant
 // message from its sanitized export. Nothing else of the export is read.
 func (f openCodeFold) servedModel(ctx context.Context, session string) (string, string, error) {
-	out, err := f.helper(ctx, "export", session, "--sanitize")
+	out, err := f.helper(ctx, openCodeExportArgs(session)...)
 	if err != nil {
 		return "", "", err
 	}
@@ -491,7 +705,7 @@ func (f openCodeFold) servedModel(ctx context.Context, session string) (string, 
 // the stage's own session, `session list` lists only root sessions, and a
 // sanitized export redacts the task tool's metadata that names a child.
 func (f openCodeFold) descendants(ctx context.Context, session string) ([]string, bool, error) {
-	out, err := f.helper(ctx, "db", openCodeSessionTreeQuery, "--format", "json")
+	out, err := f.helper(ctx, "db", openCodeSessionTreeQuery, "--format", "json", "--pure")
 	if err != nil {
 		return nil, false, err
 	}
@@ -533,7 +747,7 @@ func (f openCodeFold) descendants(ctx context.Context, session string) ([]string
 // sessionUsage reads a session's info.tokens and info.cost from its sanitized
 // export, and nothing else of it. The export is held in memory only.
 func (f openCodeFold) sessionUsage(ctx context.Context, session string) (OpenCodeTokens, float64, error) {
-	out, err := f.helper(ctx, "export", session, "--sanitize")
+	out, err := f.helper(ctx, openCodeExportArgs(session)...)
 	if err != nil {
 		return OpenCodeTokens{}, 0, err
 	}
@@ -602,8 +816,8 @@ var errHelperTimedOut = errors.New("timed out and was killed")
 
 // helper runs one opencode process: in its own process group, which is
 // killed whole when the timeout fires or the process exits leaving children;
-// with stdin closed; in the stage's environment and directory; its output
-// held in memory only, and capped.
+// with stdin closed; with the fold's environment (openCodeHelperEnv) and
+// directory (the run's root); its output held in memory only, and capped.
 func (f openCodeFold) helper(ctx context.Context, args ...string) ([]byte, error) {
 	timeout := f.timeout
 	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < timeout {

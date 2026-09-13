@@ -12,14 +12,20 @@
 
 def fixture_root: "/tmp/nightgauge-fixture";
 
+# What may come right before a credential, as credentialLeft in
+# opencode_usage.go: the start, a character no credential holds, a JSON escape
+# ending in a letter or digit, or a terminal escape sequence (the stderr keeps
+# its escape codes).
+def left: "(?<l>^|[^A-Za-z0-9_]|\\\\[bfnrt]|\\\\u[0-9A-Fa-f]{4}|(?:\\x1b|\\\\u001[bB])\\[[0-9;?]*[A-Za-z])";
+
 # The credential shapes RedactCredentials (opencode_usage.go) removes from a
 # live stage's output, so a fixture never holds what a stage's log would not.
 def redact_credentials:
-  gsub("\\b(?:sk-[A-Za-z0-9_-]{20,}|xai-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{35}|(?:AKIA|ASIA)[0-9A-Z]{16}|gsk_[A-Za-z0-9]{20,}|hf_[A-Za-z0-9]{30,})"; "[REDACTED:api-key]")
-  | gsub("\\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,}|glpat-[A-Za-z0-9_-]{20,})"; "[REDACTED:forge-token]")
-  | gsub("(?<p>\\bbearer\\s+)[A-Za-z0-9._~+/-]{16,}=*"; "\(.p)[REDACTED:bearer-token]"; "i")
-  | gsub("(?<p>\\bauthorization\\s*[:=]\\s*(?:basic|token)\\s+)[A-Za-z0-9._~+/-]{8,}=*"; "\(.p)[REDACTED:authorization]"; "i")
-  | gsub("(?<p>\\b[A-Za-z][A-Za-z0-9+.-]*://)[^\\s/@:\"'\\\\]+:[^\\s/@\"'\\\\]+@"; "\(.p)[REDACTED:userinfo]@")
+  gsub(left + "(?:sk-[A-Za-z0-9_-]{20,}|xai-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{35}|(?:AKIA|ASIA)[0-9A-Z]{16}|gsk_[A-Za-z0-9]{20,}|hf_[A-Za-z0-9]{30,})"; "\(.l)[REDACTED:api-key]")
+  | gsub(left + "(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,}|glpat-[A-Za-z0-9_-]{20,})"; "\(.l)[REDACTED:forge-token]")
+  | gsub(left + "(?<p>bearer\\s+)[A-Za-z0-9._~+/-]{16,}=*"; "\(.l)\(.p)[REDACTED:bearer-token]"; "i")
+  | gsub(left + "(?<p>authorization\\s*[:=]\\s*(?:basic|token)\\s+)[A-Za-z0-9._~+/-]{8,}=*"; "\(.l)\(.p)[REDACTED:authorization]"; "i")
+  | gsub(left + "(?<p>[A-Za-z][A-Za-z0-9+.-]*://)[^\\s/@:\"'\\\\]+:[^\\s/@\"'\\\\]+@"; "\(.l)\(.p)[REDACTED:userinfo]@")
   | gsub("(?<p>[?&](?:api[_-]?key|apikey|key|access[_-]?token|auth[_-]?token|token|client[_-]?secret|secret|password|passwd|pwd|sig|signature|x-amz-signature|x-amz-credential|x-amz-security-token|x-goog-signature|x-goog-credential)=)(?!\\[REDACTED)[^&#\\s\"'\\\\]+"; "\(.p)[REDACTED:query-credential]"; "i");
 
 # The capture's throwaway directories, as given and as the OS resolved them

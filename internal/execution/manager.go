@@ -485,15 +485,16 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	streamFmt := StreamFormatForAdapter(adapter.Name())
 
 	// OpenCode (ADR-022): its own parser, whose run state also watches
-	// stderr for permissions OpenCode rejected on its own; every line is
-	// also redacted of credential shapes, not only of the variables above;
-	// and a line over the scanner's limit is dropped with a drift marker
-	// instead of ending the read.
+	// stderr for permissions OpenCode rejected on its own and keeps no
+	// rejected call's input; every line is also redacted of credential
+	// shapes, not only of the variables above, and a JSON event's strings
+	// are redacted decoded as well as escaped; and a line over the scanner's
+	// limit is dropped with a drift marker instead of ending the read.
 	redactOut := func(b []byte) []byte { return redactLine(redact, b) }
 	var openCode *openCodeRun
 	if streamFmt == StreamFormatOpenCode {
 		openCode = newOpenCodeRun(tokenAcc.OpenCode(), runOpts.AllowedTools)
-		redactOut = func(b []byte) []byte { return []byte(RedactCredentials(string(redactLine(redact, b)))) }
+		redactOut = openCodeOutputRedactor(redact)
 	}
 	eachLine := func(r io.Reader, name string, onLine func([]byte)) {
 		if openCode != nil {
@@ -563,11 +564,15 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 		defer wg.Done()
 		eachLine(stderr, "stderr", func(raw []byte) {
 			line := redactOut(raw)
+			if openCode != nil {
+				kept, ok := openCode.observeStderr(string(line))
+				if !ok {
+					return
+				}
+				line = []byte(kept)
+			}
 			stderrBuf = append(stderrBuf, line...)
 			stderrBuf = append(stderrBuf, '\n')
-			if openCode != nil {
-				openCode.observeStderr(string(line))
-			}
 			if opts.Streamer != nil {
 				opts.Streamer.OnOutput("stderr", append(line, '\n'))
 			}
@@ -612,14 +617,25 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	// OpenCode's usage fold reads its subagent sessions into tokenAcc before
 	// the result is built from it; the rest of what it learned is applied on
 	// top of the result. It runs under ctx rather than execCtx, so a stage
-	// that timed out still has its usage read.
+	// that timed out still has its usage read, from the run's root rather
+	// than the worktree, and not at all once the operator stopped the stage.
 	var openCodeDone *openCodeOutcome
 	if openCode != nil {
-		exitCode := -1
-		if cmd.ProcessState != nil {
-			exitCode = cmd.ProcessState.ExitCode()
+		exit := openCodeExit{
+			bin:        cmd.Path,
+			env:        cmd.Env,
+			runRoot:    os.TempDir(),
+			exitCode:   -1,
+			dispatched: runOpts.Model,
+			stopped:    execution.stopRequested.Load(),
 		}
-		done := openCode.finish(ctx, cmd.Path, cmd.Env, cmd.Dir, exitCode, tokenAcc, runOpts.Model)
+		if runOpts.RunRoot != nil && runOpts.RunRoot.Dir != "" {
+			exit.runRoot = runOpts.RunRoot.Dir
+		}
+		if cmd.ProcessState != nil {
+			exit.exitCode = cmd.ProcessState.ExitCode()
+		}
+		done := openCode.finish(ctx, exit, tokenAcc)
 		openCodeDone = &done
 	}
 	result := runResultFromAccumulator(string(stdoutBuf), string(stderrBuf), tokenAcc, modelTracker)
@@ -1095,23 +1111,31 @@ const redactedSecretMinLen = 8
 
 // envValueRedactor returns a replacer that swaps the value of each variable
 // in names, as env holds it, for "[REDACTED:<name>]", or nil when none of
-// them holds a value worth redacting. Longer values are matched first, so a
-// secret that contains another is replaced whole.
+// them holds a value worth redacting. Each value is matched both as it is and
+// as the content of a JSON string (jsonEscaped), because a --format json
+// event escapes a tool's output: a value holding a quote or a backslash, such
+// as a JSON service key, is otherwise never found there. Longer forms are
+// matched first, so a secret that contains another is replaced whole.
 func envValueRedactor(env, names []string) *strings.Replacer {
-	type secret struct{ name, value string }
+	type secret struct{ form, name string }
 	var secrets []secret
 	for _, name := range names {
-		if value, ok := lookupEnvList(env, name); ok && len(value) >= redactedSecretMinLen {
-			secrets = append(secrets, secret{name, value})
+		value, ok := lookupEnvList(env, name)
+		if !ok || len(value) < redactedSecretMinLen {
+			continue
+		}
+		secrets = append(secrets, secret{value, name})
+		if escaped := jsonEscaped(value); escaped != value {
+			secrets = append(secrets, secret{escaped, name})
 		}
 	}
 	if len(secrets) == 0 {
 		return nil
 	}
-	sort.SliceStable(secrets, func(i, j int) bool { return len(secrets[i].value) > len(secrets[j].value) })
+	sort.SliceStable(secrets, func(i, j int) bool { return len(secrets[i].form) > len(secrets[j].form) })
 	pairs := make([]string, 0, 2*len(secrets))
 	for _, s := range secrets {
-		pairs = append(pairs, s.value, "[REDACTED:"+s.name+"]")
+		pairs = append(pairs, s.form, "[REDACTED:"+s.name+"]")
 	}
 	return strings.NewReplacer(pairs...)
 }

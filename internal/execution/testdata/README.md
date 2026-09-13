@@ -337,13 +337,17 @@ result — `ParseGeminiStreamLine` and `ParseCopilotStreamLine` remain untested
 against real output until a maintainer with those CLIs installed captures
 them.
 
-## OpenCode: `opencode_stream_research_sample.jsonl`, `opencode_auto_reject_stream.jsonl`, `opencode_auto_reject_stderr.txt`
+## OpenCode: `opencode_stream_research_sample.jsonl`, `opencode_auto_reject_*`
 
 **Real** `opencode run --format json` transcripts (#1624), not hand-authored
 ones, captured by
 [`scripts/capture-opencode-fixture.sh`](../../../scripts/capture-opencode-fixture.sh)
-and redacted by [`redact-opencode.jq`](redact-opencode.jq). Each stage runs the
-argv the adapter emits, with the prompt on stdin:
+and redacted by [`redact-opencode.jq`](redact-opencode.jq):
+`opencode_stream_research_sample.jsonl`, `opencode_auto_reject_stream.jsonl`
+with `opencode_auto_reject_stderr.txt`, and
+`opencode_auto_reject_heredoc_stream.jsonl` with
+`opencode_auto_reject_heredoc_stderr.txt`. Each stage runs the argv the
+adapter emits, with the prompt on stdin:
 
 ```bash
 opencode run --format json --print-logs --log-level ERROR \
@@ -354,16 +358,21 @@ The model is this repository's stub provider (`cmd/stub-provider`), bound to
 `127.0.0.1`. The run's throwaway config points a complete `lmstudio` provider
 block at it (`env: []`, an empty `apiKey`), so no hosted provider, no model
 server on another machine and no API key takes part. OpenCode runs under
-`env -i` with a throwaway `HOME` and four throwaway XDG directories.
+`env -i` with a throwaway `HOME` and four throwaway XDG directories. The
+heredoc capture's script, `bash-heredoc-then-stop`, is `bash-then-stop`
+calling `python3 - <<'PYEOF'`, `print(1)`, `PYEOF` on three lines; the stub
+embeds its scripts, so the capture script builds it from a staged copy whose
+`scripts.json` adds that one script.
 
-| Field       | Value                                                     |
-| ----------- | --------------------------------------------------------- |
-| Captured at | 2026-09-13                                                |
-| CLI version | `1.18.30` (`opencode --version`)                          |
-| Host OS     | macOS 27.0 (Darwin 27.0.0, arm64)                         |
-| Research    | stub script `tool-edit-stop`, `edit` allowed; exit 0      |
-| Auto-reject | stub script `bash-then-stop`, `bash` set to `ask`; exit 0 |
-| Redaction   | sandbox paths and the session id; no credential was found |
+| Field               | Value                                                             |
+| ------------------- | ----------------------------------------------------------------- |
+| Captured at         | 2026-09-13                                                        |
+| CLI version         | `1.18.30` (`opencode --version`)                                  |
+| Host OS             | macOS 27.0 (Darwin 27.0.0, arm64)                                 |
+| Research            | stub script `tool-edit-stop`, `edit` allowed; exit 0              |
+| Auto-reject         | stub script `bash-then-stop`, `bash` set to `ask`; exit 0         |
+| Auto-reject heredoc | stub script `bash-heredoc-then-stop`, `bash` set to `ask`; exit 0 |
+| Redaction           | sandbox paths and the session id; no credential was found         |
 
 ### Why it is captured rather than written
 
@@ -391,6 +400,11 @@ depends on:
    the run ends after that step and exits 0. The line names the permission,
    which for the write tools is `edit`, and the tool's input, which the
    parser never reads.
+5. The tool's input is printed unescaped, so the heredoc's notice spans three
+   stderr lines: the first names the permission and ends inside the command,
+   the last is the command's last line followed by `); auto-rejecting`. The
+   parser takes the permission from the first line and keeps none of the
+   command.
 
 **Do not replace these files with synthesized equivalents.** Recapture them
 with the script, which refuses an OpenCode version other than the one it pins.
@@ -410,7 +424,10 @@ The stage's usage is the sum; a parser that kept only the last step would book
 
 `opencode_auto_reject_stream.jsonl` is one step (`tool-calls`, 1533 input, 3
 output) whose `bash` call was rejected, and `opencode_auto_reject_stderr.txt`
-is the line OpenCode printed for it.
+is the line OpenCode printed for it. `opencode_auto_reject_heredoc_stream.jsonl`
+is one step (`tool-calls`, 1534 input, 4 output) whose heredoc `bash` call was
+rejected, and `opencode_auto_reject_heredoc_stderr.txt` the three lines
+OpenCode printed for it.
 
 The stub counts words rather than tokens and reports no reasoning or cache
 tokens, so `TestParseOpenCodeStream` also replays the two captured
@@ -433,8 +450,20 @@ from a real model, with reasoning, cache and subagent sessions, are #1629's.
 - A subagent may not start another subagent unless the config raises
   `subagent_depth`, which defaults to 1.
 - `opencode --version` creates the XDG directories it finds missing, and
-  `export` of an unknown session creates a database and a config file. The
-  parser runs both in the stage's own environment, inside the run's root.
+  `export` of an unknown session creates a database and a config file, both
+  in the XDG directories, which are inside the run's root.
+- `export` bootstraps a project from its working directory. Run without
+  `--pure` from a scratch repository holding `.opencode/`, it wrote
+  `.opencode/.gitignore` there and began installing that config's
+  dependencies (with the npm registry pointed at a closed loopback port, it
+  did not finish within 45 s). `--pure` ("run without external plugins") is
+  among the options `export` and `db` both list.
+  `export <session> --sanitize --pure` run from the run's root, with only
+  `PATH`, `HOME`, `TMPDIR`, the four XDG variables and the
+  `OPENCODE_DISABLE_*` switches set, returned `info.tokens` and each
+  assistant message's `providerID` and `modelID`, and a plugin planted in the
+  repository's `.opencode/plugin/` did not run; `db --pure` answered the same
+  way. The parser runs every one of its processes like that.
 
 ### Redaction
 

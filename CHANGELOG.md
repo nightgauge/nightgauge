@@ -86,14 +86,21 @@ changelog, and the release workflow refuses a tag that does not.
   `opencode run --format json` instead of handing it to the Claude parser,
   which booked zero tokens. It sums every step, keeps the largest single
   step's prompt, adds each subagent session's usage from its sanitized export
-  after the run (at most 64, each read under a 10-second timeout), and records
-  the model that served the stage and the `opencode --version` it ran. A stage
-  that stopped because OpenCode rejected a permission on its own now fails
-  with `[adapter-permission-rejected]` or `[permission-denied]` instead of
-  reading as a success on exit 0. Credentials of a known shape (API keys,
-  GitHub tokens, bearer tokens, a URL's user and password, credential query
-  parameters) are removed from its output before it is kept, and output that
-  no longer matches what OpenCode 1.18.30 printed leaves an `[opencode-drift]`
+  after the run (at most 64, each read under a 10-second timeout, from the
+  run's own directory with no plugins and no credentials, and not at all
+  after an operator stop), and records the model that served the stage. The
+  stage's result also carries the model's provider, the provider-qualified id
+  and the `opencode --version` it ran; the stage record gains the provider and
+  id with #1630. A stage that stopped because OpenCode rejected a permission
+  on its own now fails with `[adapter-permission-rejected]` or
+  `[permission-denied]` instead of reading as a success on exit 0, also when
+  the rejected command spans several lines, and the command itself is kept
+  out of the failure text. Credentials of a known shape (API keys, GitHub
+  tokens, bearer tokens, a URL's user and password, credential query
+  parameters) are removed from its output before it is kept, including where
+  a tool printed them at the start of a line or in colour, and so are the
+  secrets Nightgauge hands the stage, also in their JSON-escaped form. Output that no
+  longer matches what OpenCode 1.18.30 printed leaves an `[opencode-drift]`
   marker in the log instead of passing silently (#1624)
 - `nightgauge preflight managed-steering` reports generated Nightgauge steering
   committed in any tracked `AGENTS.md`, and `--fix` removes it from the working

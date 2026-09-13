@@ -9,15 +9,24 @@
 #
 # Capture writes, into internal/execution/testdata/ unless --out names another
 # directory:
-#   opencode_stream_research_sample.jsonl  a stage that edits a file: two steps
-#   opencode_auto_reject_stream.jsonl      a stage whose bash call resolves to
-#   opencode_auto_reject_stderr.txt        `ask` and is rejected, and its stderr
+#   opencode_stream_research_sample.jsonl     a stage that edits a file: two
+#                                             steps
+#   opencode_auto_reject_stream.jsonl         a stage whose bash call resolves
+#   opencode_auto_reject_stderr.txt           to `ask` and is rejected, and its
+#                                             stderr
+#   opencode_auto_reject_heredoc_stream.jsonl the same, for a bash command over
+#   opencode_auto_reject_heredoc_stderr.txt   several lines (a heredoc), whose
+#                                             notice spans several lines
 # Update internal/execution/testdata/README.md's tables in the same change.
 #
 # How a capture runs, and why:
 #   - The model is the repository's stub provider (cmd/stub-provider), bound
-#     to 127.0.0.1 and serving the scripts tool-edit-stop and bash-then-stop.
-#     No hosted provider and no model server on another machine takes part.
+#     to 127.0.0.1 and serving the scripts tool-edit-stop and bash-then-stop,
+#     and bash-heredoc-then-stop: bash-then-stop with a heredoc command. The
+#     stub embeds its scripts, so it is built from a staged copy of its
+#     sources whose scripts.json adds that one script; nothing in the
+#     repository changes. No hosted provider and no model server on another
+#     machine takes part.
 #   - OpenCode runs under `env -i` with a throwaway HOME and throwaway XDG
 #     config, data, cache and state directories, so it reads none of the
 #     operator's OpenCode state and writes nothing outside the sandbox. Its
@@ -46,7 +55,11 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TESTDATA="$REPO_ROOT/internal/execution/testdata"
 FILTER="$TESTDATA/redact-opencode.jq"
 PINNED_VERSION="1.18.30"
-FIXTURES=(opencode_stream_research_sample.jsonl opencode_auto_reject_stream.jsonl opencode_auto_reject_stderr.txt)
+FIXTURES=(opencode_stream_research_sample.jsonl opencode_auto_reject_stream.jsonl opencode_auto_reject_stderr.txt
+  opencode_auto_reject_heredoc_stream.jsonl opencode_auto_reject_heredoc_stderr.txt)
+# The command bash-heredoc-then-stop calls: a heredoc, so its input holds
+# newlines. OpenCode never runs it; the call is rejected.
+HEREDOC_COMMAND="python3 - <<'PYEOF'"$'\n'"print(1)"$'\n'"PYEOF"
 
 die() {
   echo "capture-opencode-fixture.sh: $*" >&2
@@ -76,11 +89,14 @@ new_staging() {
 # credential_shapes lists the shapes a fixture must not hold, one per line:
 # name, then "i" for a case-insensitive match or "-", then a POSIX ERE. They
 # are the shapes RedactCredentials (internal/execution/opencode_usage.go) and
-# redact-opencode.jq remove.
+# redact-opencode.jq remove. A fixture is checked as JSON text, so a key or a
+# token may follow a JSON escape (`\n` at the start of a line of tool output,
+# `[32m` before coloured output) as well as a character no credential
+# holds.
 credential_shapes() {
   cat <<'EOF'
-api-key	-	(^|[^A-Za-z0-9_])(sk-[A-Za-z0-9_-]{20,}|xai-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{35}|(AKIA|ASIA)[0-9A-Z]{16}|gsk_[A-Za-z0-9]{20,}|hf_[A-Za-z0-9]{30,})
-forge-token	-	(^|[^A-Za-z0-9_])(gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,}|glpat-[A-Za-z0-9_-]{20,})
+api-key	-	(^|[^A-Za-z0-9_]|\\[bfnrt]|\\u[0-9A-Fa-f]{4}|\[[0-9;?]*[A-Za-z])(sk-[A-Za-z0-9_-]{20,}|xai-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{35}|(AKIA|ASIA)[0-9A-Z]{16}|gsk_[A-Za-z0-9]{20,}|hf_[A-Za-z0-9]{30,})
+forge-token	-	(^|[^A-Za-z0-9_]|\\[bfnrt]|\\u[0-9A-Fa-f]{4}|\[[0-9;?]*[A-Za-z])(gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,}|glpat-[A-Za-z0-9_-]{20,})
 bearer-token	i	bearer[[:space:]]+[A-Za-z0-9._~+/-]{16,}
 authorization	i	authorization[[:space:]]*[:=][[:space:]]*(basic|token)[[:space:]]+[A-Za-z0-9._~+/-]{8,}
 userinfo	-	[A-Za-z][A-Za-z0-9+.-]*://[^[:space:]/@:"'\\]+:[^[:space:]/@"'\\]+@
@@ -252,6 +268,26 @@ capture_one() {
   jq -j -R -s --arg mode stderr --argjson roots "$roots" -f "$FILTER" "$box/raw.stderr" >"$STAGING/stage/$name.stderr"
 }
 
+# build_stub builds the stub provider into $STAGING from a staged copy of its
+# sources, whose scripts.json adds bash-heredoc-then-stop: bash-then-stop
+# calling HEREDOC_COMMAND. The stub needs nothing but the standard library.
+build_stub() {
+  local src="$STAGING/stub-src" f
+  mkdir -p "$src/cmd/stub-provider" "$src/internal/stubprovider"
+  for f in "$REPO_ROOT"/cmd/stub-provider/*.go "$REPO_ROOT"/internal/stubprovider/*.go; do
+    case "$f" in
+    *_test.go) ;;
+    */cmd/stub-provider/*) cp "$f" "$src/cmd/stub-provider/" ;;
+    *) cp "$f" "$src/internal/stubprovider/" ;;
+    esac
+  done
+  jq --arg cmd "$HEREDOC_COMMAND" \
+    '.["bash-heredoc-then-stop"] = (.["bash-then-stop"] | .turns[0].tool_call.arguments.command = $cmd)' \
+    "$REPO_ROOT/internal/stubprovider/scripts.json" >"$src/internal/stubprovider/scripts.json"
+  printf 'module github.com/nightgauge/nightgauge\n\n%s\n' "$(grep -m1 '^go ' "$REPO_ROOT/go.mod")" >"$src/go.mod"
+  (cd "$src" && GOWORK=off GOFLAGS=-mod=mod go build -o "$STAGING/stub-provider" ./cmd/stub-provider)
+}
+
 run_capture() {
   local out="$1" version
   for tool in opencode go jq git perl; do
@@ -265,25 +301,38 @@ run_capture() {
   [ "$version" = "$PINNED_VERSION" ] ||
     die "opencode $version is installed; the fixtures record $PINNED_VERSION. Re-verify ADR-022's observations, then raise PINNED_VERSION and the README together"
 
-  (cd "$REPO_ROOT" && go build -o "$STAGING/stub-provider" ./cmd/stub-provider)
+  build_stub
   SERVER_PASSWORD="fixture-$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
 
   capture_one tool-edit-stop '{"edit":"allow","bash":"deny","webfetch":"deny","external_directory":"deny"}' \
     edit "Change add so that it subtracts in calc.py."
   capture_one bash-then-stop '{"bash":"ask","edit":"deny","webfetch":"deny","external_directory":"deny"}' \
     reject "Run calc.py."
+  capture_one bash-heredoc-then-stop '{"bash":"ask","edit":"deny","webfetch":"deny","external_directory":"deny"}' \
+    heredoc "Run the script."
 
   # The shapes the tests are written against, checked before anything moves.
   [ "$(jq -s '[.[] | select(.type == "step_finish")] | length' "$STAGING/stage/edit.jsonl")" = 2 ] ||
     die "refused: the edit capture does not have exactly two step_finish events"
-  [ "$(jq -s '[.[] | select(.type == "tool_use" and .part.state.status == "error")] | length' "$STAGING/stage/reject.jsonl")" = 1 ] ||
-    die "refused: the reject capture does not have one rejected tool_use event"
+  local name
+  for name in reject heredoc; do
+    [ "$(jq -s '[.[] | select(.type == "tool_use" and .part.state.status == "error")] | length' "$STAGING/stage/$name.jsonl")" = 1 ] ||
+      die "refused: the $name capture does not have one rejected tool_use event"
+  done
   grep -F 'permission requested: bash (' "$STAGING/stage/reject.stderr" | grep -F 'auto-rejecting' >/dev/null ||
     die "refused: the reject capture's stderr has no auto-reject line"
+  # The heredoc's notice starts on one line and ends on a later one.
+  if ! { head -n 1 "$STAGING/stage/heredoc.stderr" | grep -F 'permission requested: bash (' | grep -vF 'auto-rejecting' >/dev/null &&
+    [ "$(grep -c '' "$STAGING/stage/heredoc.stderr")" -gt 1 ] &&
+    tail -n 1 "$STAGING/stage/heredoc.stderr" | grep -E '\); auto-rejecting$' >/dev/null; }; then
+    die "refused: the heredoc capture's stderr does not spread one auto-reject notice over several lines"
+  fi
 
   mv "$STAGING/stage/edit.jsonl" "$STAGING/stage/opencode_stream_research_sample.jsonl"
   mv "$STAGING/stage/reject.jsonl" "$STAGING/stage/opencode_auto_reject_stream.jsonl"
   mv "$STAGING/stage/reject.stderr" "$STAGING/stage/opencode_auto_reject_stderr.txt"
+  mv "$STAGING/stage/heredoc.jsonl" "$STAGING/stage/opencode_auto_reject_heredoc_stream.jsonl"
+  mv "$STAGING/stage/heredoc.stderr" "$STAGING/stage/opencode_auto_reject_heredoc_stderr.txt"
   rm -f "$STAGING/stage/edit.stderr"
   commit_staged "$STAGING/stage" "$out"
   echo "captured opencode $version into $out: ${FIXTURES[*]}"
