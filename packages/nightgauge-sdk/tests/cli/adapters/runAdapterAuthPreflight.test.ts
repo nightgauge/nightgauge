@@ -156,6 +156,32 @@ describe("runAdapterAuthPreflight", () => {
     }
   });
 
+  // #1615 / ADR-022 § 17: hosted providers behind OpenCode authenticate with
+  // their own API-key variable, anthropic/* only with ANTHROPIC_API_KEY. The
+  // hint must never steer anyone to an interactive provider login.
+  it("gives opencode an install, local-provider and API-key hint with no login", async () => {
+    const registry = buildRegistry([
+      fakeAdapter("opencode", async () => {
+        throw new AdapterError("missing", "AUTH_MISSING", "opencode");
+      }),
+    ]);
+
+    const result = await runAdapterAuthPreflight(["opencode"], { registry });
+
+    expect(result.failures).toHaveLength(1);
+    const fix = result.failures[0].suggestedFix;
+    expect(fix).toContain("opencode-ai");
+    expect(fix).toContain("http://127.0.0.1:1234");
+    expect(fix).toContain("http://localhost:11434");
+    expect(fix).toContain("ANTHROPIC_API_KEY");
+    expect(fix).toContain("OPENAI_API_KEY");
+    expect(fix).not.toMatch(/providers login|auth login/);
+    // Only loopback hosts: no LAN or remote model host in a hint.
+    for (const url of fix.match(/https?:\/\/[^\s),]+/g) ?? []) {
+      expect(new URL(url).hostname).toMatch(/^(127\.0\.0\.1|localhost)$/);
+    }
+  });
+
   it("all-pass aggregate yields ok=true and zero failures", async () => {
     const registry = buildRegistry([
       fakeAdapter("claude-sdk", async () => "passed"),

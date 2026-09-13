@@ -306,6 +306,51 @@ describe("AutoProviderRouter — confidence threshold abstain", () => {
   });
 });
 
+// ── #1615 — opencode never outranks a paid adapter on priors alone ───────────
+
+describe("AutoProviderRouter — opencode priors (#1615)", () => {
+  const router = new AutoProviderRouter();
+  const stages = [
+    "issue-pickup",
+    "feature-planning",
+    "feature-dev",
+    "feature-validate",
+    "pr-create",
+    "pr-merge",
+  ];
+
+  function pick(stage: string, weights?: AutoRouterContext["weights"]) {
+    return router.selectForStage(
+      stage,
+      makeCtx({
+        stage,
+        available_adapters: ["claude-headless", "opencode"],
+        confidence_threshold: 0,
+        weights,
+      })
+    );
+  }
+
+  for (const stage of stages) {
+    it(`picks claude-headless over opencode for ${stage} with default weights`, () => {
+      const result = pick(stage);
+      expect(result).not.toBeNull();
+      expect(result!.adapter).toBe("claude-headless");
+      // opencode is scored from real table entries, not a missing-key fallback.
+      expect(Number.isFinite(result!.scores!.opencode)).toBe(true);
+      expect(result!.confidence).toBeGreaterThan(0);
+    });
+
+    it(`picks claude-headless over opencode for ${stage} on capability alone`, () => {
+      const result = pick(stage, { cost: 0, capability: 1, context_window: 0 });
+      expect(result).not.toBeNull();
+      expect(result!.adapter).toBe("claude-headless");
+      expect(Number.isFinite(result!.scores!.opencode)).toBe(true);
+      expect(result!.confidence).toBeGreaterThan(0);
+    });
+  }
+});
+
 // ── #3912 — RouterExecutionAdapter derived from NightgaugeAdapter ────────────────
 
 describe("AutoProviderRouter — RouterExecutionAdapter derivation (#3912)", () => {

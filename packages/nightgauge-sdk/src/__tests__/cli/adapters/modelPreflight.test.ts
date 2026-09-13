@@ -120,6 +120,26 @@ describe("validateModelForAdapter — open adapters never reject", () => {
   });
 });
 
+// #1615 / ADR-022 § 5: OpenCode is OPEN. Its catalog spans several providers
+// and local providers define their own, so provider-qualified ids (nested
+// slashes included) pass through unchanged. #1614 maps bands; #1637 checks
+// id syntax before argv.
+describe("validateModelForAdapter — OpenCode (open)", () => {
+  it("has an open policy named OpenCode with no model env var", () => {
+    expect(ADAPTER_MODEL_POLICY.opencode.kind).toBe("open");
+    expect(ADAPTER_MODEL_POLICY.opencode.displayName).toBe("OpenCode");
+    expect(ADAPTER_MODEL_POLICY.opencode.envVar).toBeUndefined();
+  });
+
+  it("passes provider-qualified ids through unchanged, nested slashes included", () => {
+    for (const id of ["lmstudio/qwen/qwen3.8-27b", "anthropic/claude-sonnet-5"]) {
+      const result = validateModelForAdapter("opencode", id);
+      expect(result.model).toBe(id);
+      expect(resolveAndValidateModel("opencode", id)).toBe(id);
+    }
+  });
+});
+
 describe("validateModelForAdapter — empty input", () => {
   it("returns an empty model (no override) for undefined/empty across all adapters", () => {
     for (const adapter of Object.keys(ADAPTER_MODEL_POLICY) as NightgaugeAdapter[]) {
@@ -153,6 +173,7 @@ describe("ADAPTER_MODEL_POLICY invariant", () => {
       "ollama",
       "copilot",
       "grok",
+      "opencode",
     ];
     // The Record<NightgaugeAdapter, …> type guards this at compile time; assert at
     // runtime too so adding a union member forces a policy entry (a new adapter

@@ -35,7 +35,41 @@ const ADAPTER_ALIASES: Record<string, NightgaugeAdapter> = {
   grok: "grok",
   "grok-headless": "grok",
   xai: "grok",
+  // Issue #1615 — OpenCode (ADR-022). Resolving it is gated: see
+  // EXPERIMENTAL_OPENCODE_ENV_VAR. The lm-studio and ollama aliases above keep
+  // pointing at the non-agentic chat-completion bridges.
+  opencode: "opencode",
 };
+
+/**
+ * The OpenCode enable switch, the same name the Go gate reads
+ * (`ExperimentalOpenCodeEnvVar` in internal/execution/adapters/opencode.go).
+ *
+ * Default off, for security (ADR-020 requires the reason beside a default-off
+ * setting): an OpenCode dispatch runs without controls every other adapter
+ * has. Only the exact value `1` opens it, and it is read from the process
+ * environment only, so a committed repository config can never turn it on.
+ * There is deliberately no config-file switch. #1643 removes the gate.
+ *
+ * @see docs/decisions/022-opencode-multi-provider-adapter.md § The enable gate
+ */
+export const EXPERIMENTAL_OPENCODE_ENV_VAR = "NIGHTGAUGE_EXPERIMENTAL_OPENCODE";
+
+function isOpenCodeSwitchOn(env: NodeJS.ProcessEnv): boolean {
+  return env[EXPERIMENTAL_OPENCODE_ENV_VAR] === "1";
+}
+
+function openCodeGateError(): AdapterError {
+  return new AdapterError(
+    `Adapter "opencode" is experimental and does not dispatch by default. ` +
+      `To use it anyway, set ${EXPERIMENTAL_OPENCODE_ENV_VAR}=1 in the environment that runs ` +
+      `nightgauge (it is read from the environment only, so no config file can set it); ` +
+      `otherwise choose another adapter with --adapter or NIGHTGAUGE_ADAPTER. ` +
+      `See docs/decisions/022-opencode-multi-provider-adapter.md`,
+    "CONFIG_INVALID",
+    "opencode"
+  );
+}
 
 /** Options for {@link resolveAdapter}'s config-aware rungs (#54). */
 export interface ResolveAdapterOptions {
@@ -77,10 +111,25 @@ function aliasOrThrow(value: string, sourceLabel: string): NightgaugeAdapter {
  * An explicit adapter name (env or config) that matches no known alias
  * throws instead of silently falling back — pre-#53 a typo quietly ran
  * claude-sdk, surfacing later as a baffling ANTHROPIC_API_KEY error.
+ *
+ * Whichever rung names `opencode`, resolution throws `CONFIG_INVALID` unless
+ * {@link EXPERIMENTAL_OPENCODE_ENV_VAR} is exactly `1` (#1615, ADR-022). The
+ * refusal never falls through to a lower rung or to a default adapter.
  */
 export function resolveAdapter(
   env: NodeJS.ProcessEnv = process.env,
   options: ResolveAdapterOptions = {}
+): NightgaugeAdapter {
+  const adapter = resolveAdapterUngated(env, options);
+  if (adapter === "opencode" && !isOpenCodeSwitchOn(env)) {
+    throw openCodeGateError();
+  }
+  return adapter;
+}
+
+function resolveAdapterUngated(
+  env: NodeJS.ProcessEnv,
+  options: ResolveAdapterOptions
 ): NightgaugeAdapter {
   if (options.stage) {
     const stageEnvKey = `NIGHTGAUGE_PIPELINE_STAGE_ADAPTER_${options.stage.toUpperCase().replace(/-/g, "_")}`;
@@ -153,4 +202,17 @@ export function isCopilotAdapterEnabled(env: NodeJS.ProcessEnv = process.env): b
 
 export function isGrokAdapterEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return resolveAdapter(env) === "grok";
+}
+
+/**
+ * True only when {@link EXPERIMENTAL_OPENCODE_ENV_VAR} is exactly `1` and the
+ * adapter resolves to `opencode`. The switch is checked first, so with it off
+ * this returns false without throwing. No config file can make it true.
+ * #1643 removes the gate.
+ */
+export function isOpenCodeAdapterEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+  cwd?: string
+): boolean {
+  return isOpenCodeSwitchOn(env) && resolveAdapter(env, { cwd }) === "opencode";
 }

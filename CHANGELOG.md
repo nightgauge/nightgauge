@@ -61,6 +61,16 @@ changelog, and the release workflow refuses a tag that does not.
   malformed id is `other`, which is never priced as a local $0. A tier band
   becomes a `<provider>/<model>` for the configured OpenCode model's provider,
   and a provider with no model in that band is refused (#1614)
+- The TypeScript SDK knows the `opencode` adapter name, behind the same enable
+  gate as the Go binary: whether `opencode` comes from `NIGHTGAUGE_ADAPTER`, a
+  per-stage variable or config, resolving it fails with a configuration error
+  that names `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` unless that switch is set in
+  the environment. No config file can turn it on, and a refusal never falls
+  back to another adapter. The auth hint for `opencode` points at the install,
+  a local LM Studio or Ollama server, or the provider's own API-key variable
+  (`ANTHROPIC_API_KEY` for `anthropic/*`), never an interactive login. The
+  auto-router scores `opencode` like LM Studio, so a paid adapter still wins
+  every stage (#1615)
 - `nightgauge preflight managed-steering` reports generated Nightgauge steering
   committed in any tracked `AGENTS.md`, and `--fix` removes it from the working
   tree (issue 1675)
