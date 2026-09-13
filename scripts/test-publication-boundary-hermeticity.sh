@@ -203,6 +203,10 @@ reclaim_abandoned_harness_roots() {
   fi
 }
 reclaim_abandoned_harness_roots
+# Registrations whose directory is already gone go before the baseline is
+# taken. Every suite run prunes, so a stale entry left by some other session
+# would otherwise vanish mid-run and read as a worktree the sweep removed.
+git worktree prune >/dev/null 2>&1
 
 RUN_ROOT="$(mktemp -d "$SANDBOX_ROOT/${HARNESS_PREFIX}XXXXXXXX")" || exit 2
 RUN_ROOT="$(cd "$RUN_ROOT" && pwd -P)" || exit 2
