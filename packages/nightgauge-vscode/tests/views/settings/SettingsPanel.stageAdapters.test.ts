@@ -337,6 +337,34 @@ describe("SettingsPanel OpenCode model catalog refresh (Issue #1628)", () => {
 
     expect(refreshOpenCodeModels).not.toHaveBeenCalled();
   });
+
+  it("calls the catalog service once on open and once more per refresh action for adapter=opencode", async () => {
+    const panel = makePanel();
+    // Exercise the real show() open path rather than the injected fake panel.
+    panel.panel = undefined;
+    vi.spyOn(panel, "loadAllTiers").mockResolvedValue(undefined);
+    vi.spyOn(panel, "loadRepositoryProjectState").mockResolvedValue(undefined);
+    vi.spyOn(panel, "loadWorkspaceRepoState").mockResolvedValue(undefined);
+    panel.currentConfig = { ui: { core: { adapter: "opencode" } } };
+
+    const vscode = await import("vscode");
+    const fakeWebviewPanel = {
+      webview: { postMessage: vi.fn(), onDidReceiveMessage: vi.fn() },
+      reveal: vi.fn(),
+      onDidDispose: vi.fn(),
+    };
+    (vscode.window.createWebviewPanel as ReturnType<typeof vi.fn>).mockReturnValue(
+      fakeWebviewPanel
+    );
+
+    await panel.show();
+
+    expect(openCodeListModelsMock).toHaveBeenCalledTimes(1);
+
+    await panel.handleAction("opencode-refresh-models");
+
+    expect(openCodeListModelsMock).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("SettingsPanel OpenCode experimental-switch gate parity (Issue #1628)", () => {
