@@ -46,7 +46,8 @@ func sizePredictCmd() *cobra.Command {
 
 			ownerPart, repoPart := splitRepo(owner, repo)
 			svc := gh.NewIssueService(client)
-			issue, err := svc.GetIssue(cmd.Context(), ownerPart, repoPart, number)
+			// The estimate counts sub-issues, so only that list is read whole.
+			issue, err := svc.GetIssueWithRelations(cmd.Context(), ownerPart, repoPart, number, gh.RelationSubIssues)
 			if err != nil {
 				return err
 			}

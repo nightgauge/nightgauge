@@ -136,6 +136,21 @@ type projectItemNode struct {
 	} `graphql:"fieldValues(first: 8)"`
 }
 
+// projectItemFieldsQuery reads one board item's field values by its item node
+// id (BoardService.GetItemFields), with the same fieldValues selection as the
+// board scan. It selects none of the item's content, so none of the issue's
+// relationship connections.
+type projectItemFieldsQuery struct {
+	Node struct {
+		TypeName      string `graphql:"__typename"`
+		ProjectV2Item struct {
+			FieldValues struct {
+				Nodes []fieldValueNode
+			} `graphql:"fieldValues(first: 8)"`
+		} `graphql:"... on ProjectV2Item"`
+	} `graphql:"node(id: $id)"`
+}
+
 // projectItemContent is the per-item fragment of the board scan query
 // (queryProjectItems / queryProjectItemsFiltered). All nested `first` values
 // here multiply by the page size (100), so each unit of `first` is 100 nodes
@@ -150,9 +165,17 @@ type projectItemNode struct {
 // At 100 items/page that's a 16× drop in query cost. Sub-issue labels are
 // rarely consumed (board scan only uses sub-issue id/number/state), so the
 // reduction there is essentially free.
+//
+// The relationship sizes are FIRST-PAGE sizes, not limits: an item whose
+// subIssues, blockedBy or blocking connection reports a next page has the rest
+// read by node(id:) follow-up queries shared across the scan
+// (connection_paging.go), so only items larger than a first page pay for more.
 type projectItemContent struct {
 	TypeName    string `graphql:"__typename"`
 	IssueFields struct {
+		// ID is the issue's node id, the handle the relationship follow-up
+		// query pages from.
+		ID                graphql.ID
 		Number            graphql.Int
 		Title             graphql.String
 		State             graphql.String
@@ -167,19 +190,11 @@ type projectItemContent struct {
 		Repository struct {
 			NameWithOwner graphql.String
 		}
-		// Board scan only needs IsEpic detection (len > 0) and a short
-		// reference list for tree views. Full epic enumeration is the job
-		// of GetEpicProgress, which uses nodeQuery (kept at first: 50).
-		SubIssues struct {
-			Nodes []subIssueNode
-		} `graphql:"subIssues(first: 12)"`
-		BlockedBy struct {
-			Nodes []blockingNode
-		} `graphql:"blockedBy(first: 5)"`
-		Blocking struct {
-			Nodes []blockingNode
-		} `graphql:"blocking(first: 5)"`
-		Parent struct {
+		// First pages only; BoardService.itemsFromNodes reads the rest.
+		SubIssues subIssuePage `graphql:"subIssues(first: 12)"`
+		BlockedBy blockingPage `graphql:"blockedBy(first: 5)"`
+		Blocking  blockingPage `graphql:"blocking(first: 5)"`
+		Parent    struct {
 			Number graphql.Int
 			Title  graphql.String
 		}
@@ -268,11 +283,12 @@ type pageInfo struct {
 
 // --- Issue Queries ---
 
-// issueQuery is used by GetIssue (single issue) and indirectly by
-// GetEpicProgressByNumber. SubIssues is kept higher than the board scan (25
-// vs 12) because epic-progress-by-number relies on this path for accuracy.
-// Epics with > 25 sub-issues should be queried via the dedicated
-// GetEpicProgress (nodeQuery) which is paginated separately.
+// issueQuery is used by GetIssue and GetIssueWithRelations (single issue) and
+// indirectly by GetEpicProgressByNumber. The relationship sizes are
+// first-page sizes: the read pages on, through the follow-up queries in
+// connection_paging.go, for each connection its caller names, so an epic with
+// more than 25 sub-issues, or an issue with more than 5 blockers, is returned
+// whole.
 type issueQuery struct {
 	Repository struct {
 		Issue struct {
@@ -304,15 +320,9 @@ type issueQuery struct {
 			Assignees struct {
 				Nodes []assigneeNode
 			} `graphql:"assignees(first: 5)"`
-			SubIssues struct {
-				Nodes []subIssueNode
-			} `graphql:"subIssues(first: 25)"`
-			BlockedBy struct {
-				Nodes []blockingNode
-			} `graphql:"blockedBy(first: 5)"`
-			Blocking struct {
-				Nodes []blockingNode
-			} `graphql:"blocking(first: 5)"`
+			SubIssues subIssuePage `graphql:"subIssues(first: 25)"`
+			BlockedBy blockingPage `graphql:"blockedBy(first: 5)"`
+			Blocking  blockingPage `graphql:"blocking(first: 5)"`
 		} `graphql:"issue(number: $number)"`
 	} `graphql:"repository(owner: $owner, name: $name)"`
 }
@@ -994,6 +1004,8 @@ type userProjectV2ViewsQuery struct {
 
 // --- Node Query (for cross-repo lookups) ---
 
+// nodeQuery is GetEpicProgress's read of an epic by node id. subIssues is a
+// first page; GetEpicProgress reads the rest before counting.
 type nodeQuery struct {
 	Node struct {
 		TypeName string `graphql:"__typename"`
@@ -1005,9 +1017,7 @@ type nodeQuery struct {
 			Repository struct {
 				NameWithOwner graphql.String
 			}
-			SubIssues struct {
-				Nodes []subIssueNode
-			} `graphql:"subIssues(first: 50)"`
+			SubIssues subIssuePage `graphql:"subIssues(first: 50)"`
 		} `graphql:"... on Issue"`
 	} `graphql:"node(id: $id)"`
 }

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -8,6 +10,9 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/config"
+	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/github/githubtest"
+	"github.com/nightgauge/nightgauge/internal/intelligence/sizeGate"
 	"github.com/spf13/cobra"
 )
 
@@ -412,8 +417,51 @@ func TestResolveGateRepo(t *testing.T) {
 				t.Fatalf("resolveGateRepo(%q, %q) = %v, want (%q, %q)", tc.owner, tc.repo, err, tc.wantOwner, tc.wantRepo)
 			}
 			if gotOwner != tc.wantOwner || gotRepo != tc.wantRepo {
-				t.Errorf("resolveGateRepo(%q, %q) = (%q, %q), want (%q, %q) — these are the exact values forwarded to GetIssue", tc.owner, tc.repo, gotOwner, gotRepo, tc.wantOwner, tc.wantRepo)
+				t.Errorf("resolveGateRepo(%q, %q) = (%q, %q), want (%q, %q) — these are the exact values forwarded to the issue read", tc.owner, tc.repo, gotOwner, gotRepo, tc.wantOwner, tc.wantRepo)
 			}
 		})
+	}
+}
+
+// TestEvaluateSizeGate_LongListsItDoesNotUseCannotFailIt drives the gate's read
+// through the real issue service against a forge that fails every
+// relationship page after the first. #10 has 3 sub-issues and 3 blockers and
+// blocks 7 issues. The gate judges the issue's title, labels and sub-issue
+// count, so it must read no other list: when it read them all, the failed
+// page of the blocking list exited 1, which the issue-pickup skill records as
+// "Size gate: REJECTED" and the issue being too large.
+func TestEvaluateSizeGate_LongListsItDoesNotUseCannotFailIt(t *testing.T) {
+	forge := githubtest.New(t, map[int]githubtest.Issue{
+		10: {SubIssues: []int{11, 12, 13}, BlockedBy: githubtest.Numbers(300, 3), Blocking: githubtest.Numbers(400, 7)},
+	})
+
+	issue, result, err := evaluateSizeGate(context.Background(), gh.NewIssueService(forge.Client()),
+		githubtest.Owner, githubtest.Repo, 10, sizeGate.DefaultGateConfig())
+	if err != nil {
+		t.Fatalf("evaluateSizeGate: %v", err)
+	}
+	if len(issue.SubIssues) != 3 || !result.Allowed {
+		t.Fatalf("sub-issues = %d, allowed = %v (%s); want 3 and allowed", len(issue.SubIssues), result.Allowed, result.Reason)
+	}
+	if n := forge.FollowUps(); n != 0 {
+		t.Errorf("the gate read %d later page(s) of lists it does not use", n)
+	}
+}
+
+// TestEvaluateSizeGate_LongSubIssueListIsStillReadWhole: the gate judges the
+// whole sub-issue count, so a list longer than its first page is read past it,
+// and one whose later page cannot be read is an error, never a count of 25.
+func TestEvaluateSizeGate_LongSubIssueListIsStillReadWhole(t *testing.T) {
+	forge := githubtest.New(t, map[int]githubtest.Issue{
+		10: {SubIssues: githubtest.Numbers(100, 30)},
+	})
+
+	_, _, err := evaluateSizeGate(context.Background(), gh.NewIssueService(forge.Client()),
+		githubtest.Owner, githubtest.Repo, 10, sizeGate.DefaultGateConfig())
+	if !errors.Is(err, gh.ErrConnectionTruncated) {
+		t.Fatalf("err = %v, want ErrConnectionTruncated", err)
+	}
+	if n := forge.FollowUps(); n != 1 {
+		t.Errorf("later-page reads = %d, want 1: the sub-issue list must be read past its first page", n)
 	}
 }

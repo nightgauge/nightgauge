@@ -10,12 +10,16 @@ import (
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/depgraph"
+	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
-// IssueFetcher abstracts fetching a single issue for dependency checks.
+// IssueFetcher reads a single issue for the dependency and post-merge hooks.
+// Each hook names only the relationship connections it uses, and only those
+// are read to their end (github.IssueService.GetIssueWithRelations), so a long
+// list the hook would discard can neither cost it requests nor fail it.
 type IssueFetcher interface {
-	GetIssue(ctx context.Context, owner, repo string, number int) (*types.Issue, error)
+	GetIssueWithRelations(ctx context.Context, owner, repo string, number int, rels gh.IssueRelations) (*types.Issue, error)
 }
 
 // IssueDepsResult is the output of the issue dependency (blockedBy) check.
@@ -61,10 +65,17 @@ type OpenDependency struct {
 // than treated as blocking: unlike a native relation, prose can name a
 // repository that does not exist, and a permanent un-clearable hold on a typo
 // is worse than the deferral it would buy.
+//
+// The gate uses one relationship list, the issue's own blockedBy, and reads it
+// whole: a blockedBy list that cannot be read to its end fails the evaluation
+// (github.ErrConnectionTruncated). It reads no other list. The issue's
+// sub-issues and the issues it blocks are not its dependencies, and a
+// body-declared dependency is judged by its state alone, so however long any
+// of those lists is, it cannot fail the gate.
 func EvaluateIssueDeps(ctx context.Context, fetcher IssueFetcher, owner, repo string, number int) (IssueDepsResult, error) {
 	result := IssueDepsResult{IssueNumber: number}
 
-	issue, err := fetcher.GetIssue(ctx, owner, repo, number)
+	issue, err := fetcher.GetIssueWithRelations(ctx, owner, repo, number, gh.RelationBlockedBy)
 	if err != nil {
 		return result, fmt.Errorf("failed to fetch issue #%d: %w", number, err)
 	}
@@ -103,7 +114,7 @@ func EvaluateIssueDeps(ctx context.Context, fetcher IssueFetcher, owner, repo st
 		if !ok || refOwner == "" || refName == "" {
 			continue
 		}
-		dep, derr := fetcher.GetIssue(ctx, refOwner, refName, ref.Number)
+		dep, derr := fetcher.GetIssueWithRelations(ctx, refOwner, refName, ref.Number, gh.NoRelations)
 		if derr != nil || dep == nil {
 			continue // unresolvable prose reference — see the doc comment
 		}

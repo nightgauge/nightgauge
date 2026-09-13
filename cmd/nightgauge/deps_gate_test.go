@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/hooks"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/nightgauge/nightgauge/pkg/types"
@@ -16,7 +17,7 @@ type depsMockFetcher struct {
 	issues map[string]*types.Issue
 }
 
-func (m *depsMockFetcher) GetIssue(_ context.Context, owner, repo string, number int) (*types.Issue, error) {
+func (m *depsMockFetcher) GetIssueWithRelations(_ context.Context, owner, repo string, number int, _ gh.IssueRelations) (*types.Issue, error) {
 	key := fmt.Sprintf("%s/%s#%d", owner, repo, number)
 	if issue, ok := m.issues[key]; ok {
 		return issue, nil

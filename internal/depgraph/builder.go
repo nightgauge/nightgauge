@@ -115,11 +115,19 @@ func BuildGraphWithBoards(ctx context.Context, client *gh.Client, boards BoardPr
 	fetcher := func(ctx context.Context, repo RepoConfig) ([]types.BoardItem, int, error) {
 		return boards(repo).ListOpenItems(ctx)
 	}
+	// Both body readers skip relationships: the board read already carries
+	// every blockedBy edge, and a body fetch that also completed each issue's
+	// subIssues, blockedBy and blocking lists would pay a follow-up read per
+	// long list, and fail on one, for data it discards.
 	issueSvc := gh.NewIssueService(client)
 	bodyFetcher := func(ctx context.Context, owner, name string, number int) (string, error) {
-		issue, err := issueSvc.GetIssue(ctx, owner, name, number)
+		issues, err := issueSvc.GetIssuesByNumbersWithoutRelations(ctx, owner, name, []int{number})
 		if err != nil {
 			return "", err
+		}
+		issue, ok := issues[number]
+		if !ok || issue == nil {
+			return "", fmt.Errorf("issue %s/%s#%d not found", owner, name, number)
 		}
 		return issue.Body, nil
 	}
@@ -128,7 +136,7 @@ func BuildGraphWithBoards(ctx context.Context, client *gh.Client, boards BoardPr
 	// this drops the autonomous-startup graph build from ~2 minutes to a few
 	// seconds (Issue #3400).
 	bodiesBatch := func(ctx context.Context, owner, name string, numbers []int) (map[int]string, error) {
-		issues, err := issueSvc.GetIssuesByNumbers(ctx, owner, name, numbers)
+		issues, err := issueSvc.GetIssuesByNumbersWithoutRelations(ctx, owner, name, numbers)
 		if err != nil {
 			return nil, err
 		}

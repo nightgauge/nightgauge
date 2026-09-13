@@ -104,8 +104,64 @@ func NewIssueService(client *Client) *IssueService {
 	}
 }
 
-// GetIssue fetches a single issue with sub-issues and blocking relationships.
+// IssueRelations names the relationship connections of an issue that a read
+// returns: one issue (GetIssueWithRelations) or every issue on a board
+// (BoardService.ListItemsWithRelations, ListOpenItemsWithRelations). Each
+// named connection is read to its end, and one that cannot be is
+// ErrConnectionTruncated. A connection that is not named is returned empty
+// and none of its later pages is read, so a long list the caller would
+// discard can neither cost it requests nor fail it.
+type IssueRelations uint8
+
+const (
+	// RelationSubIssues is the issue's subIssues connection.
+	RelationSubIssues IssueRelations = 1 << iota
+	// RelationBlockedBy is the issue's blockedBy connection.
+	RelationBlockedBy
+	// RelationBlocking is the issue's blocking connection.
+	RelationBlocking
+)
+
+const (
+	// NoRelations reads an issue's own fields and none of its relationships.
+	NoRelations IssueRelations = 0
+	// AllRelations reads every relationship connection, as GetIssue does.
+	AllRelations = RelationSubIssues | RelationBlockedBy | RelationBlocking
+)
+
+// pages returns the pages of the connections r names and nil for the others:
+// relationWalk.add leaves a nil page alone, and a reader returns only the
+// lists it was given a page for.
+func (r IssueRelations) pages(subIssues *subIssuePage, blockedBy, blocking *blockingPage) (*subIssuePage, *blockingPage, *blockingPage) {
+	if r&RelationSubIssues == 0 {
+		subIssues = nil
+	}
+	if r&RelationBlockedBy == 0 {
+		blockedBy = nil
+	}
+	if r&RelationBlocking == 0 {
+		blocking = nil
+	}
+	return subIssues, blockedBy, blocking
+}
+
+// GetIssue fetches a single issue with its sub-issues and blocking
+// relationships, each read to its end, and fails when any one of them cannot
+// be. It is the read for callers that return the whole issue, such as
+// `issue view`, `forge issue view` and the IPC issue.view method; a caller
+// that uses only some of the lists, or none, reads through
+// GetIssueWithRelations so a list it would discard cannot fail it.
 func (s *IssueService) GetIssue(ctx context.Context, owner, repo string, number int) (*types.Issue, error) {
+	return s.GetIssueWithRelations(ctx, owner, repo, number, AllRelations)
+}
+
+// GetIssueWithRelations is GetIssue for a caller that uses only some of an
+// issue's relationships. Only the connections in rels are read to their end
+// and returned. SubIssues, BlockedBy and Blocking are empty for the others,
+// never a first page passed off as the whole list. IsEpic reports whether the
+// issue has sub-issues whatever rels holds, because the first page, which
+// every read selects, is enough to tell.
+func (s *IssueService) GetIssueWithRelations(ctx context.Context, owner, repo string, number int, rels IssueRelations) (*types.Issue, error) {
 	graphQLNumber, err := checkedGraphQLInt("issue number", number)
 	if err != nil {
 		return nil, err
@@ -118,6 +174,12 @@ func (s *IssueService) GetIssue(ctx context.Context, owner, repo string, number 
 	}
 
 	if err := s.client.query(ctx, &q, vars); err != nil {
+		return nil, fmt.Errorf("fetch issue #%d: %w", number, err)
+	}
+	qi := &q.Repository.Issue
+	subIssues, blockedBy, blocking := rels.pages(&qi.SubIssues, &qi.BlockedBy, &qi.Blocking)
+	label := fmt.Sprintf("%s/%s#%d", owner, repo, number)
+	if err := s.client.completeIssueRelations(ctx, nodeIDString(qi.ID), label, subIssues, blockedBy, blocking); err != nil {
 		return nil, fmt.Errorf("fetch issue #%d: %w", number, err)
 	}
 
@@ -146,41 +208,27 @@ func (s *IssueService) GetIssue(ctx context.Context, owner, repo string, number 
 		issue.Assignees = append(issue.Assignees, string(a.Login))
 	}
 
-	// Sub-issues
-	for _, si := range q.Repository.Issue.SubIssues.Nodes {
-		siRef := types.SubIssueRef{
-			NodeID: fmt.Sprintf("%v", si.ID),
-			Number: int(si.Number),
-			Title:  string(si.Title),
-			State:  string(si.State),
-			Repo:   string(si.Repository.NameWithOwner),
-		}
-		for _, l := range si.Labels.Nodes {
-			siRef.Labels = append(siRef.Labels, string(l.Name))
-		}
-		issue.SubIssues = append(issue.SubIssues, siRef)
-	}
+	issue.IsEpic = len(qi.SubIssues.Nodes) > 0
 
-	issue.IsEpic = len(issue.SubIssues) > 0
-
-	// Blocking relationships
-	for _, b := range q.Repository.Issue.BlockedBy.Nodes {
-		issue.BlockedBy = append(issue.BlockedBy, types.BlockingRef{
-			NodeID: fmt.Sprintf("%v", b.ID),
-			Number: int(b.Number),
-			Title:  string(b.Title),
-			State:  string(b.State),
-			Repo:   string(b.Repository.NameWithOwner),
-		})
+	// Relationships, only those read whole.
+	if subIssues != nil {
+		for _, si := range subIssues.Nodes {
+			siRef := subIssueRef(si)
+			for _, l := range si.Labels.Nodes {
+				siRef.Labels = append(siRef.Labels, string(l.Name))
+			}
+			issue.SubIssues = append(issue.SubIssues, siRef)
+		}
 	}
-	for _, b := range q.Repository.Issue.Blocking.Nodes {
-		issue.Blocking = append(issue.Blocking, types.BlockingRef{
-			NodeID: fmt.Sprintf("%v", b.ID),
-			Number: int(b.Number),
-			Title:  string(b.Title),
-			State:  string(b.State),
-			Repo:   string(b.Repository.NameWithOwner),
-		})
+	if blockedBy != nil {
+		for _, b := range blockedBy.Nodes {
+			issue.BlockedBy = append(issue.BlockedBy, blockingRef(b))
+		}
+	}
+	if blocking != nil {
+		for _, b := range blocking.Nodes {
+			issue.Blocking = append(issue.Blocking, blockingRef(b))
+		}
 	}
 
 	return issue, nil
@@ -191,13 +239,37 @@ func (s *IssueService) GetIssue(ctx context.Context, owner, repo string, number 
 // *types.Issue. Issues that GitHub reports as null (deleted, inaccessible) are
 // silently omitted from the result.
 //
-// This avoids the per-issue round-trip pattern (N GetIssue calls) used on hot
-// paths such as Scheduler.refreshBlockerStates, ProjectService.UpdateEpicEstimates,
-// and IssueService.ValidateEpic.
+// This avoids the per-issue round-trip pattern (N GetIssue calls). It is the
+// batch read for callers that return whole issues, such as the IPC
+// issue.viewMany method; a caller that needs only bodies or states uses
+// GetIssuesByNumbersWithoutRelations.
 //
 // The returned issues populate the same fields as GetIssue: Labels, Assignees,
-// SubIssues, BlockedBy, Blocking, Parent. Numbers are deduplicated.
+// SubIssues, BlockedBy, Blocking, Parent. Numbers are deduplicated. Every
+// relationship connection larger than the fragment's first page is read to
+// its end by follow-up queries shared across the batch; one that cannot be is
+// an ErrConnectionTruncated error for the whole call, never a short list.
 func (s *IssueService) GetIssuesByNumbers(ctx context.Context, owner, repo string, numbers []int) (map[int]*types.Issue, error) {
+	return s.getIssuesByNumbers(ctx, owner, repo, numbers, AllRelations)
+}
+
+// GetIssuesByNumbersWithoutRelations is GetIssuesByNumbers for callers that
+// read an issue's body, state, labels, assignees or parent and never its
+// relationships, such as the scheduler's blocker-state refresh and the
+// dependency graph's body fetch. It does not select the subIssues, blockedBy
+// or blocking connections, so SubIssues, BlockedBy and Blocking are empty and
+// IsEpic is false. Selecting none, it reads no follow-up pages: it neither
+// spends requests on relationships it would discard nor fails because one of
+// them could not be read.
+func (s *IssueService) GetIssuesByNumbersWithoutRelations(ctx context.Context, owner, repo string, numbers []int) (map[int]*types.Issue, error) {
+	return s.getIssuesByNumbers(ctx, owner, repo, numbers, NoRelations)
+}
+
+// getIssuesByNumbers is the aliased batch read behind GetIssuesByNumbers and
+// GetIssuesByNumbersWithoutRelations. It selects only the connections in rels,
+// reads each of those to its end, and leaves the others empty. IsEpic is set
+// only when rels names the sub-issue list.
+func (s *IssueService) getIssuesByNumbers(ctx context.Context, owner, repo string, numbers []int, rels IssueRelations) (map[int]*types.Issue, error) {
 	if len(numbers) == 0 {
 		return map[int]*types.Issue{}, nil
 	}
@@ -231,7 +303,8 @@ func (s *IssueService) GetIssuesByNumbers(ctx context.Context, owner, repo strin
 	// nested-first values mirror issueQuery in types.go — kept in sync because
 	// this batched aliased query is invoked once per repo from depgraph body
 	// fetching and aliases multiply per-issue cost by N. See #3587 for the
-	// cost-reduction rationale.
+	// cost-reduction rationale. The relationship sizes are first pages; the
+	// pageInfo on each is what tells completeRelations to read on.
 	sb.WriteString(`fragment IssueFields on Issue {
   id
   number
@@ -242,17 +315,31 @@ func (s *IssueService) GetIssuesByNumbers(ctx context.Context, owner, repo strin
   parent { id number title repository { nameWithOwner } }
   labels(first: 10) { nodes { name } }
   assignees(first: 5) { nodes { login } }
-  subIssues(first: 25) { nodes { id number title state repository { nameWithOwner } } }
-  blockedBy(first: 5) { nodes { id number title state repository { nameWithOwner } } }
-  blocking(first: 5) { nodes { id number title state repository { nameWithOwner } } }
-}
 `)
+	if rels&RelationSubIssues != 0 {
+		sb.WriteString(`  subIssues(first: 25) { pageInfo { hasNextPage endCursor } nodes { id number title state repository { nameWithOwner } } }
+`)
+	}
+	if rels&RelationBlockedBy != 0 {
+		sb.WriteString(`  blockedBy(first: 5) { pageInfo { hasNextPage endCursor } nodes { id number title state repository { nameWithOwner } } }
+`)
+	}
+	if rels&RelationBlocking != 0 {
+		sb.WriteString(`  blocking(first: 5) { pageInfo { hasNextPage endCursor } nodes { id number title state repository { nameWithOwner } } }
+`)
+	}
+	sb.WriteString("}\n")
 
 	vars := map[string]interface{}{
 		"owner": owner,
 		"name":  repo,
 	}
 
+	// queryRaw has no rate-limit floor gate, so wait on it here as Client.query
+	// does: below the floor a fail-fast client sends nothing.
+	if err := s.client.waitRateLimitGate(ctx); err != nil {
+		return nil, fmt.Errorf("batch fetch issues: %w", err)
+	}
 	raw, err := s.client.queryRaw(ctx, sb.String(), vars)
 	if err != nil {
 		return nil, fmt.Errorf("batch fetch issues: %w", err)
@@ -284,39 +371,11 @@ func (s *IssueService) GetIssuesByNumbers(ctx context.Context, owner, repo strin
 				Login string `json:"login"`
 			} `json:"nodes"`
 		} `json:"assignees"`
-		SubIssues struct {
-			Nodes []struct {
-				ID         string `json:"id"`
-				Number     int    `json:"number"`
-				Title      string `json:"title"`
-				State      string `json:"state"`
-				Repository struct {
-					NameWithOwner string `json:"nameWithOwner"`
-				} `json:"repository"`
-			} `json:"nodes"`
-		} `json:"subIssues"`
-		BlockedBy struct {
-			Nodes []struct {
-				ID         string `json:"id"`
-				Number     int    `json:"number"`
-				Title      string `json:"title"`
-				State      string `json:"state"`
-				Repository struct {
-					NameWithOwner string `json:"nameWithOwner"`
-				} `json:"repository"`
-			} `json:"nodes"`
-		} `json:"blockedBy"`
-		Blocking struct {
-			Nodes []struct {
-				ID         string `json:"id"`
-				Number     int    `json:"number"`
-				Title      string `json:"title"`
-				State      string `json:"state"`
-				Repository struct {
-					NameWithOwner string `json:"nameWithOwner"`
-				} `json:"repository"`
-			} `json:"nodes"`
-		} `json:"blocking"`
+		// The relationship pages decode into the same types the struct
+		// queries use, so completeRelations can read on from them.
+		SubIssues subIssuePage `json:"subIssues"`
+		BlockedBy blockingPage `json:"blockedBy"`
+		Blocking  blockingPage `json:"blocking"`
 	}
 
 	type envelope struct {
@@ -337,6 +396,21 @@ func (s *IssueService) GetIssuesByNumbers(ctx context.Context, owner, repo strin
 	// when there is no data at all.
 	if len(env.Data.Repository) == 0 && len(env.Errors) > 0 {
 		return nil, fmt.Errorf("batch fetch issues: %s", env.Errors[0].Message)
+	}
+
+	// Read every oversized connection in the batch to its end before any
+	// issue is built, sharing follow-up requests across the batch. A
+	// connection the fragment did not select decodes as an empty, final page,
+	// so it is never read on.
+	var walk relationWalk
+	for _, node := range env.Data.Repository {
+		if node == nil || node.Number == 0 {
+			continue
+		}
+		walk.add(node.ID, fmt.Sprintf("%s/%s#%d", owner, repo, node.Number), &node.SubIssues, &node.BlockedBy, &node.Blocking)
+	}
+	if err := s.client.completeRelations(ctx, &walk); err != nil {
+		return nil, fmt.Errorf("batch fetch issues: %w", err)
 	}
 
 	out := make(map[int]*types.Issue, len(ordered))
@@ -365,32 +439,14 @@ func (s *IssueService) GetIssuesByNumbers(ctx context.Context, owner, repo strin
 			issue.Assignees = append(issue.Assignees, a.Login)
 		}
 		for _, si := range node.SubIssues.Nodes {
-			issue.SubIssues = append(issue.SubIssues, types.SubIssueRef{
-				NodeID: si.ID,
-				Number: si.Number,
-				Title:  si.Title,
-				State:  si.State,
-				Repo:   si.Repository.NameWithOwner,
-			})
+			issue.SubIssues = append(issue.SubIssues, subIssueRef(si))
 		}
 		issue.IsEpic = len(issue.SubIssues) > 0
 		for _, b := range node.BlockedBy.Nodes {
-			issue.BlockedBy = append(issue.BlockedBy, types.BlockingRef{
-				NodeID: b.ID,
-				Number: b.Number,
-				Title:  b.Title,
-				State:  b.State,
-				Repo:   b.Repository.NameWithOwner,
-			})
+			issue.BlockedBy = append(issue.BlockedBy, blockingRef(b))
 		}
 		for _, b := range node.Blocking.Nodes {
-			issue.Blocking = append(issue.Blocking, types.BlockingRef{
-				NodeID: b.ID,
-				Number: b.Number,
-				Title:  b.Title,
-				State:  b.State,
-				Repo:   b.Repository.NameWithOwner,
-			})
+			issue.Blocking = append(issue.Blocking, blockingRef(b))
 		}
 		out[issue.Number] = issue
 	}
@@ -736,7 +792,7 @@ func (s *IssueService) RemoveLabels(ctx context.Context, issueID string, labelID
 // SyncStatusLabel atomically swaps the status label on an issue.
 // Removes all status:* labels and adds the specified one.
 func (s *IssueService) SyncStatusLabel(ctx context.Context, owner, repo string, number int, newStatus string) error {
-	issue, err := s.GetIssue(ctx, owner, repo, number)
+	issue, err := s.GetIssueWithRelations(ctx, owner, repo, number, NoRelations)
 	if err != nil {
 		return err
 	}
@@ -929,7 +985,7 @@ func (s *IssueService) ListIssuesExcludingLabels(ctx context.Context, owner, rep
 
 // HasLabel reports whether a specific issue has a given label by name.
 func (s *IssueService) HasLabel(ctx context.Context, owner, repo string, number int, label string) (bool, error) {
-	issue, err := s.GetIssue(ctx, owner, repo, number)
+	issue, err := s.GetIssueWithRelations(ctx, owner, repo, number, NoRelations)
 	if err != nil {
 		return false, err
 	}
@@ -945,7 +1001,7 @@ func (s *IssueService) HasLabel(ctx context.Context, owner, repo string, number 
 // Idempotent: GitHub's addLabelsToLabelable mutation silently ignores duplicate label additions,
 // so calling this on an already-refined issue is safe and produces no error.
 func (s *IssueService) MarkRefined(ctx context.Context, owner, repo string, number int) error {
-	issue, err := s.GetIssue(ctx, owner, repo, number)
+	issue, err := s.GetIssueWithRelations(ctx, owner, repo, number, NoRelations)
 	if err != nil {
 		return err
 	}
@@ -1199,6 +1255,10 @@ func (s *IssueService) GetEpicProgress(ctx context.Context, epicNodeID string) (
 	if q.Node.TypeName != "Issue" {
 		return nil, fmt.Errorf("node %s is not an Issue (got %s)", epicNodeID, q.Node.TypeName)
 	}
+	label := fmt.Sprintf("%s#%d", q.Node.Issue.Repository.NameWithOwner, q.Node.Issue.Number)
+	if err := s.client.completeIssueRelations(ctx, epicNodeID, label, &q.Node.Issue.SubIssues, nil, nil); err != nil {
+		return nil, fmt.Errorf("fetch epic node: %w", err)
+	}
 
 	epic := &types.EpicProgress{
 		EpicNodeID: epicNodeID,
@@ -1208,13 +1268,7 @@ func (s *IssueService) GetEpicProgress(ctx context.Context, epicNodeID string) (
 	}
 
 	for _, si := range q.Node.Issue.SubIssues.Nodes {
-		ref := types.SubIssueRef{
-			NodeID: fmt.Sprintf("%v", si.ID),
-			Number: int(si.Number),
-			Title:  string(si.Title),
-			State:  string(si.State),
-			Repo:   string(si.Repository.NameWithOwner),
-		}
+		ref := subIssueRef(si)
 		for _, l := range si.Labels.Nodes {
 			ref.Labels = append(ref.Labels, string(l.Name))
 		}
@@ -1236,7 +1290,7 @@ func (s *IssueService) GetEpicProgress(ctx context.Context, epicNodeID string) (
 
 // GetEpicProgressByNumber fetches an epic by owner/repo/number and returns progress.
 func (s *IssueService) GetEpicProgressByNumber(ctx context.Context, owner, repo string, number int) (*types.EpicProgress, error) {
-	issue, err := s.GetIssue(ctx, owner, repo, number)
+	issue, err := s.GetIssueWithRelations(ctx, owner, repo, number, RelationSubIssues)
 	if err != nil {
 		return nil, err
 	}

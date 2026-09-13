@@ -76,7 +76,7 @@ type OrphanCloseResult struct {
 // sub are recorded per-sub and do not abort the remaining subs.
 func (e *EpicService) CloseOrphanSubs(ctx context.Context, owner, repo string, epicNumber, projectNumber int, ownerType ...OwnerType) (*OrphanCloseResult, error) {
 	issueSvc := NewIssueService(e.client)
-	epic, err := issueSvc.GetIssue(ctx, owner, repo, epicNumber)
+	epic, err := issueSvc.GetIssueWithRelations(ctx, owner, repo, epicNumber, RelationSubIssues)
 	if err != nil {
 		return nil, fmt.Errorf("fetch epic #%d: %w", epicNumber, err)
 	}
@@ -185,8 +185,9 @@ type ReconcileResult struct {
 // IDs are global, so sub-issues and project items resolve regardless of which
 // repo they live in.
 func (e *EpicService) ReconcileBoard(ctx context.Context, owner string, projectNumber int, ownerType ...OwnerType) (*ReconcileResult, error) {
+	// The repairs decide from each item's sub-issue list and no other list.
 	boardSvc := NewBoardService(e.client, owner, projectNumber, ownerType...)
-	items, err := boardSvc.ListItems(ctx, "")
+	items, err := boardSvc.ListItemsWithRelations(ctx, "", RelationSubIssues)
 	if err != nil {
 		return nil, fmt.Errorf("list board items: %w", err)
 	}

@@ -119,9 +119,10 @@ func (s *Scheduler) FindReadySubIssues(ctx context.Context, epicOwner, epicRepo 
 			continue
 		}
 
-		// Check if this sub-issue is blocked
+		// Check if this sub-issue is blocked. Only its blocker list is read,
+		// whole; one that cannot be read whole skips the sub-issue.
 		siOwner, siRepo := splitOwnerRepo(si.Repo)
-		siIssue, err := s.issueSvc.GetIssue(ctx, siOwner, siRepo, si.Number)
+		siIssue, err := s.issueSvc.GetIssueWithRelations(ctx, siOwner, siRepo, si.Number, gh.RelationBlockedBy)
 		if err != nil {
 			log.Printf("warn: failed to check sub-issue #%d: %v", si.Number, err)
 			continue

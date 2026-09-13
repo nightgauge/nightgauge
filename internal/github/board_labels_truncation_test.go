@@ -33,7 +33,7 @@ func TestBoardScan_TruncatedLabelsMarkItem(t *testing.T) {
 		node.Content.IssueFields.Labels.TotalCount = 9
 		node.Content.IssueFields.Labels.Nodes = labelNodes(8)
 
-		item := b.nodeToItem(node)
+		item := b.nodeToItem(node, AllRelations)
 		if item == nil {
 			t.Fatal("nodeToItem returned nil for an Issue")
 		}
@@ -52,7 +52,7 @@ func TestBoardScan_TruncatedLabelsMarkItem(t *testing.T) {
 		node.Content.PRFields.Labels.TotalCount = 9
 		node.Content.PRFields.Labels.Nodes = labelNodes(8)
 
-		item := b.nodeToItem(node)
+		item := b.nodeToItem(node, AllRelations)
 		if item == nil {
 			t.Fatal("nodeToItem returned nil for a PullRequest")
 		}
@@ -67,7 +67,7 @@ func TestBoardScan_TruncatedLabelsMarkItem(t *testing.T) {
 		node.Content.IssueFields.Labels.TotalCount = 3
 		node.Content.IssueFields.Labels.Nodes = labelNodes(3)
 
-		item := b.nodeToItem(node)
+		item := b.nodeToItem(node, AllRelations)
 		if item.LabelsTruncated {
 			t.Fatal("complete label page flagged as truncated")
 		}

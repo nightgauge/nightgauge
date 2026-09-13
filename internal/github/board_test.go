@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/forge"
@@ -249,5 +250,92 @@ func TestBoardService_GetItem_ReturnsMatchingRow(t *testing.T) {
 	}
 	if item.ID != "PVTI_want" || item.Number != 1116 || item.Repo != "nightgauge/nightgauge" {
 		t.Fatalf("GetItem returned %+v, want the nightgauge/nightgauge#1116 row (PVTI_want)", item)
+	}
+}
+
+// TestBoardService_GetItemFields covers the single-item field read that the
+// failed-run revert guard and the pipeline-stage read use. It reads the one
+// item by its id and selects none of its issue, so no relationship list of
+// any item can cost it a request or fail it, and it returns the raw labels
+// the board holds.
+func TestBoardService_GetItemFields(t *testing.T) {
+	serve := func(t *testing.T, node interface{}) (*BoardService, *[]string, *[]interface{}) {
+		t.Helper()
+		var queries []string
+		var ids []interface{}
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var req struct {
+				Query     string                 `json:"query"`
+				Variables map[string]interface{} `json:"variables"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Errorf("decode request: %v", err)
+			}
+			queries = append(queries, req.Query)
+			ids = append(ids, req.Variables["id"])
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"data": map[string]interface{}{"node": node}})
+		}))
+		t.Cleanup(srv.Close)
+		return NewBoardService(NewClientWithURL("test-token", srv.URL), "nightgauge", 3), &queries, &ids
+	}
+	singleSelect := func(field, name string) map[string]interface{} {
+		return map[string]interface{}{
+			"__typename": "ProjectV2ItemFieldSingleSelectValue",
+			"name":       name,
+			"field":      map[string]interface{}{"name": field},
+		}
+	}
+
+	t.Run("reads the item's fields and nothing of its issue", func(t *testing.T) {
+		b, queries, ids := serve(t, map[string]interface{}{
+			"__typename": "ProjectV2Item",
+			"fieldValues": map[string]interface{}{"nodes": []interface{}{
+				singleSelect("Status", "In Review"),
+				singleSelect("Priority", "P1"),
+				singleSelect("Size", "M"),
+				map[string]interface{}{
+					"__typename": "ProjectV2ItemFieldTextValue",
+					"text":       "pr-merge",
+					"field":      map[string]interface{}{"name": "Pipeline Stage"},
+				},
+			}},
+		})
+		got, err := b.GetItemFields(context.Background(), "PVTI_1")
+		if err != nil {
+			t.Fatalf("GetItemFields: %v", err)
+		}
+		want := ItemFields{Status: "In Review", Priority: types.PriorityP1, Size: types.SizeM, PipelineStage: "pr-merge"}
+		if *got != want {
+			t.Fatalf("GetItemFields = %+v, want %+v", *got, want)
+		}
+		if len(*queries) != 1 || (*ids)[0] != "PVTI_1" {
+			t.Fatalf("sent %d requests for ids %v, want one for PVTI_1", len(*queries), *ids)
+		}
+		q := (*queries)[0]
+		for _, forbidden := range []string{"content", "items(", "subIssues", "blockedBy", "blocking"} {
+			if strings.Contains(q, forbidden) {
+				t.Fatalf("query selects %q; it reads one item's fields only:\n%s", forbidden, q)
+			}
+		}
+	})
+
+	for _, tc := range []struct {
+		name string
+		node interface{}
+	}{
+		{"an id that resolves to no node is not found", nil},
+		{"an id that is not a project item is not found", map[string]interface{}{"__typename": "Issue"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b, _, _ := serve(t, tc.node)
+			got, err := b.GetItemFields(context.Background(), "PVTI_1")
+			if !errors.Is(err, forge.ErrNotFound) {
+				t.Fatalf("err = %v, want ErrNotFound", err)
+			}
+			if got != nil {
+				t.Fatalf("returned %+v alongside ErrNotFound", got)
+			}
+		})
 	}
 }

@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
@@ -17,13 +18,20 @@ type EpicWaveResult = teams.EpicWaveResult
 
 // PlanWaves fetches each issue in issueNumbers, then delegates the
 // wave-planning computation to teams.PlanWavesFromIssues so the GitHub and
-// GitLab adapters share a single source of truth for the algorithm.
+// GitLab adapters share a single source of truth for the algorithm. The plan
+// is built from each issue's body and blocker list, so each issue is read with
+// its blocker list whole and no other list.
 func (e *EpicService) PlanWaves(ctx context.Context, owner, repo string, issueNumbers []int) (*EpicWaveResult, error) {
 	issueSvc := NewIssueService(e.client)
 
 	issues := make([]types.Issue, 0, len(issueNumbers))
 	for _, num := range issueNumbers {
-		issue, err := issueSvc.GetIssue(ctx, owner, repo, num)
+		issue, err := issueSvc.GetIssueWithRelations(ctx, owner, repo, num, RelationBlockedBy)
+		if errors.Is(err, ErrConnectionTruncated) {
+			// A blocker list read only in part would plan the issue into an
+			// earlier wave than its unseen blockers allow.
+			return nil, fmt.Errorf("plan waves: fetch issue #%d: %w", num, err)
+		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: fetch issue #%d: %v\n", num, err)
 			continue

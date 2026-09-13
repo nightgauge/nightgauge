@@ -600,8 +600,16 @@ func cliRunResultToStageResult(result *adapters.RunResult) *StageRunResult {
 
 // issueGetter abstracts issue operations used by the scheduler for testability.
 type issueGetter interface {
-	GetIssue(ctx context.Context, owner, repo string, number int) (*types.Issue, error)
-	GetIssuesByNumbers(ctx context.Context, owner, repo string, numbers []int) (map[int]*types.Issue, error)
+	// GetIssueWithRelations reads one issue with only the relationship
+	// connections in rels read whole. It is the scheduler's only single-issue
+	// read, so every caller names the lists it uses and a list it would
+	// discard can neither cost it requests nor fail it.
+	GetIssueWithRelations(ctx context.Context, owner, repo string, number int, rels gh.IssueRelations) (*types.Issue, error)
+	// GetIssuesByNumbersWithoutRelations reads issues without their
+	// subIssues, blockedBy and blocking connections: the read for callers
+	// that need only an issue's state or body. It is the scheduler's only
+	// batch read, so no batch read here can fail on a relationship list.
+	GetIssuesByNumbersWithoutRelations(ctx context.Context, owner, repo string, numbers []int) (map[int]*types.Issue, error)
 	GetEpicProgress(ctx context.Context, epicNodeID string) (*types.EpicProgress, error)
 	GetEpicProgressByNumber(ctx context.Context, owner, repo string, number int) (*types.EpicProgress, error)
 	CloseIssue(ctx context.Context, issueID string) error
@@ -1958,9 +1966,9 @@ func (s *Scheduler) PickNext(ctx context.Context) (*types.BoardItem, error) {
 		// fatal on its own:
 		//
 		//  1. THE PIPELINE'S FIRST STAGE RESOLVES AN ISSUE BY NUMBER. issue-pickup
-		//     runs `nightgauge git branch-create --issue <N>`, which calls
-		//     IssueService.GetIssue(owner, repo, N) to derive the branch prefix
-		//     and slug (cmd/nightgauge/main.go, `branch-create`). GraphQL's
+		//     runs `nightgauge git branch-create --issue <N>`, which reads the
+		//     issue by number (IssueService.GetIssueWithRelations) to derive the
+		//     branch prefix and slug (cmd/nightgauge/main.go, `branch-create`). GraphQL's
 		//     `repository.issue(number:)` returns null for a pull request number,
 		//     so the call errors, the skill exits 1, and the stage fails. Nothing
 		//     in the pipeline knows how to check out a PR's existing head branch
@@ -2105,8 +2113,10 @@ func (s *Scheduler) runEpicBackstopSweep(ctx context.Context) {
 		return
 	}
 
-	// Collect unique repos from board items (all statuses).
-	items, err := s.boardSvc.ListItems(ctx, "")
+	// Collect unique repos from board items (all statuses). Only each item's
+	// repo is used, so no relationship list is read: a long list on any item
+	// would otherwise cost this sweep requests and could stop it.
+	items, err := s.boardSvc.ListItemsWithRelations(ctx, "", gh.NoRelations)
 	if err != nil {
 		log.Printf("backstop sweep: failed to list board items: %v", err)
 		return
@@ -2709,8 +2719,12 @@ func (s *Scheduler) EnqueueEpic(ctx context.Context, owner, repo string, epicNum
 	// Resolve a client scoped to the epic's repo so private cross-repo epics use
 	// that repo's configured identity instead of the scheduler's startup client
 	// (which is tied to the primary repo's config). See #3700.
+	//
+	// The queue items are built from the epic's sub-issue list and blocker
+	// list and each sub-issue's blocker list, so those are the lists read
+	// whole; a blocking list, on the epic or on a sub-issue, is never read.
 	issueSvc := s.issueServiceFor(ctx, owner, repo)
-	issue, err := issueSvc.GetIssue(ctx, owner, repo, epicNumber)
+	issue, err := issueSvc.GetIssueWithRelations(ctx, owner, repo, epicNumber, gh.RelationSubIssues|gh.RelationBlockedBy)
 	if err != nil {
 		return fmt.Errorf("get epic #%d: %w", epicNumber, err)
 	}
@@ -2728,7 +2742,7 @@ func (s *Scheduler) EnqueueEpic(ctx context.Context, owner, repo string, epicNum
 
 	// Fetch per-sub-issue blockedBy relationships before taking the lock.
 	// The epic query only returns lightweight SubIssueRef (no blocking data),
-	// so we call GetIssue for each sub-issue to get its own blockedBy/blocking.
+	// so each sub-issue is read for its own blocker list, and only that list.
 	subIssueBlockedBy := make(map[int][]types.BlockingRef, len(issue.SubIssues))
 	for _, si := range issue.SubIssues {
 		if strings.EqualFold(si.State, "CLOSED") {
@@ -2745,7 +2759,13 @@ func (s *Scheduler) EnqueueEpic(ctx context.Context, owner, repo string, epicNum
 		// Resolve per sub-issue repo — a cross-repo sub-issue may need a
 		// different configured identity than the epic's repo (#3700). The
 		// resolver caches clients, so same-repo sub-issues reuse one client.
-		siIssue, err := s.issueServiceFor(ctx, siOwner, siRepo).GetIssue(ctx, siOwner, siRepo, si.Number)
+		siIssue, err := s.issueServiceFor(ctx, siOwner, siRepo).GetIssueWithRelations(ctx, siOwner, siRepo, si.Number, gh.RelationBlockedBy)
+		if errors.Is(err, gh.ErrConnectionTruncated) {
+			// The sub-issue's blocker list could not be read whole.
+			// Enqueuing it without the blockers past the part that was read
+			// would let DequeueIndependent dispatch it while one is still open.
+			return fmt.Errorf("enqueue epic #%d: blockers of sub-issue #%d: %w", epicNumber, si.Number, err)
+		}
 		if err != nil {
 			log.Printf("WARN: failed to fetch blockedBy for sub-issue #%d: %v", si.Number, err)
 			continue
@@ -4634,8 +4654,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		}
 
 		// Revert board status on failure so the autonomous scheduler can re-dispatch.
-		// Skips revert if issue is already "In Review" (PR was opened before failure)
-		// or if configured as "unchanged" (legacy behavior).
+		// Skips revert if issue is already "In Review" (PR was opened before failure),
+		// if its current status cannot be read (FailPipeline reports why), or if
+		// configured as "unchanged" (legacy behavior).
 		//
 		// Issue #3542: also skip the scheduler-side revert for the two
 		// recoverable terminal kinds. worktree_uncommitted means the work was
@@ -7287,9 +7308,11 @@ func (s *Scheduler) refreshBlockerStates(ctx context.Context) {
 	}
 
 	// Group targets by repo so each repo can be served by a single batched
-	// GraphQL query (issueSvc.GetIssuesByNumbers) instead of one round-trip
-	// per blocker. A queue of 10 items × 2 OPEN blockers in one repo collapses
-	// from 20 serial GetIssue calls to 1 aliased GraphQL request.
+	// GraphQL query instead of one round-trip per blocker. A queue of 10
+	// items × 2 OPEN blockers in one repo collapses from 20 serial GetIssue
+	// calls to 1 aliased GraphQL request. Only each blocker's State is read,
+	// so the batch skips relationships: a blocker's own long blocking list
+	// costs no follow-up read and cannot fail the refresh.
 	type result struct {
 		target refreshTarget
 		state  string
@@ -7302,7 +7325,7 @@ func (s *Scheduler) refreshBlockerStates(ctx context.Context) {
 	stateByRepoNumber := make(map[string]map[int]string, len(byRepo))
 	for repo, nums := range byRepo {
 		owner, name := splitOwnerRepo(repo)
-		issues, err := s.issueSvc.GetIssuesByNumbers(ctx, owner, name, nums)
+		issues, err := s.issueSvc.GetIssuesByNumbersWithoutRelations(ctx, owner, name, nums)
 		if err != nil {
 			// Per-repo failure is non-fatal: other repos still get refreshed.
 			log.Printf("WARN: refreshBlockerStates: batch fetch failed for %s: %v", repo, err)
@@ -7418,7 +7441,8 @@ func splitNodeKey(key string) (repo string, number int, ok bool) {
 
 // resolveIssueStatesByKey batch-resolves the current GitHub State ("OPEN" or
 // "CLOSED") of the given graph node keys ("owner/repo#number") via
-// issueSvc.GetIssuesByNumbers, grouped by repo so any number of keys sharing a
+// issueSvc.GetIssuesByNumbersWithoutRelations (State is all it reads), grouped
+// by repo so any number of keys sharing a
 // repo cost exactly ONE GraphQL round trip — the same batching discipline as
 // refreshBlockerStates above (a queue of N items spread across R repos
 // collapses from N calls to R). Used by the autonomous scheduler's
@@ -7448,7 +7472,7 @@ func resolveIssueStatesByKey(ctx context.Context, issueSvc issueGetter, keys []s
 	resolved := make(map[string]string, len(keys))
 	for repo, nums := range byRepo {
 		owner, name := splitOwnerRepo(repo)
-		issues, err := issueSvc.GetIssuesByNumbers(ctx, owner, name, nums)
+		issues, err := issueSvc.GetIssuesByNumbersWithoutRelations(ctx, owner, name, nums)
 		if err != nil {
 			log.Printf("WARN: resolveIssueStatesByKey: batch fetch failed for %s: %v", repo, err)
 			continue
@@ -7480,10 +7504,10 @@ func (s *Scheduler) captureIssueBody(ctx context.Context, item types.BoardItem) 
 	if issueSvc == nil {
 		return ""
 	}
-	issue, err := issueSvc.GetIssue(ctx, owner, repo, item.Number)
+	issue, err := issueSvc.GetIssueWithRelations(ctx, owner, repo, item.Number, gh.NoRelations)
 	if err != nil || issue == nil {
 		if err != nil {
-			log.Printf("#%d: issue-context capture (body): GetIssue failed (non-fatal): %v", item.Number, err)
+			log.Printf("#%d: issue-context capture (body): issue read failed (non-fatal): %v", item.Number, err)
 		}
 		return ""
 	}
@@ -8876,11 +8900,12 @@ func (s *Scheduler) ensureEpicBranchForItem(ctx context.Context, workspaceRoot s
 		return logEpicBranchFailure(item.Number, fmt.Sprintf("git service unavailable: %v", err))
 	}
 
-	// Prefer ParentTitle from board data; fall back to GitHub API
+	// Prefer ParentTitle from board data; fall back to GitHub API. Only the
+	// title is used, so the epic's sub-issue list is not read.
 	epicTitle := item.ParentTitle
 	if epicTitle == "" {
 		owner, repo := splitOwnerRepo(item.Repo)
-		epicIssue, apiErr := s.issueSvc.GetIssue(ctx, owner, repo, item.ParentNumber)
+		epicIssue, apiErr := s.issueSvc.GetIssueWithRelations(ctx, owner, repo, item.ParentNumber, gh.NoRelations)
 		if apiErr != nil {
 			return logEpicBranchFailure(item.Number,
 				fmt.Sprintf("fetch epic #%d title: %v", item.ParentNumber, apiErr))
@@ -9096,10 +9121,10 @@ func (s *Scheduler) verifyPRMerged(ctx context.Context, prURL string, issueNumbe
 	// here would revert a successful merge to Ready and read as a stall (#4070
 	// review: assert-before-close race).
 	if issueNumber > 0 {
-		issue, issErr := s.issueServiceFor(ctx, owner, repoName).GetIssue(ctx, owner, repoName, issueNumber)
+		issue, issErr := s.issueServiceFor(ctx, owner, repoName).GetIssueWithRelations(ctx, owner, repoName, issueNumber, gh.NoRelations)
 		switch {
 		case issErr != nil:
-			log.Printf("verifyPRMerged: PR %s/%s#%d is MERGED but GetIssue #%d failed (%v) — trusting MERGED (close owned by post-merge)",
+			log.Printf("verifyPRMerged: PR %s/%s#%d is MERGED but reading issue #%d failed (%v) — trusting MERGED (close owned by post-merge)",
 				owner, repoName, number, issueNumber, issErr)
 		case issue.State != "CLOSED":
 			log.Printf("verifyPRMerged: PR %s/%s#%d is MERGED but linked issue #%d is still %s — the post-merge close will reconcile it",

@@ -964,6 +964,7 @@ read, field read, field write, item add and item lookup must be GraphQL.
 | `ViewService.List`                                                                                                | `views.go`          |
 | `findProjectItemID`                                                                                               | `epic.go`           |
 | `ProjectNumbersForIssue`                                                                                          | `issue_projects.go` |
+| `BoardService.GetItemFields`                                                                                      | `board.go`          |
 
 This is where the GraphQL budget actually goes, and it is why #847's change
 probe — making the expensive board read _conditional_ rather than moving it —

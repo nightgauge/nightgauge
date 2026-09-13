@@ -11,6 +11,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/forge"
+	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/intelligence/batch"
 	"github.com/nightgauge/nightgauge/internal/intelligence/teams"
 	"github.com/nightgauge/nightgauge/pkg/types"
@@ -20,6 +21,9 @@ import (
 type mockEpicIssueSvc struct {
 	issues map[string]*types.Issue
 	epics  map[string]*types.EpicProgress
+	// errs makes GetIssueWithRelations fail for the keyed issue with the
+	// given error.
+	errs map[string]error
 }
 
 func newMockEpicIssueSvc() *mockEpicIssueSvc {
@@ -37,15 +41,18 @@ func (m *mockEpicIssueSvc) addEpic(owner, repo string, number int, epic *types.E
 	m.epics[fmt.Sprintf("%s/%s#%d", owner, repo, number)] = epic
 }
 
-func (m *mockEpicIssueSvc) GetIssue(_ context.Context, owner, repo string, number int) (*types.Issue, error) {
+func (m *mockEpicIssueSvc) GetIssueWithRelations(_ context.Context, owner, repo string, number int, rels gh.IssueRelations) (*types.Issue, error) {
 	key := fmt.Sprintf("%s/%s#%d", owner, repo, number)
+	if err, ok := m.errs[key]; ok {
+		return nil, err
+	}
 	if issue, ok := m.issues[key]; ok {
-		return issue, nil
+		return withRelations(issue, rels), nil
 	}
 	return nil, fmt.Errorf("issue %s not found", key)
 }
 
-func (m *mockEpicIssueSvc) GetIssuesByNumbers(_ context.Context, owner, repo string, numbers []int) (map[int]*types.Issue, error) {
+func (m *mockEpicIssueSvc) GetIssuesByNumbersWithoutRelations(_ context.Context, owner, repo string, numbers []int) (map[int]*types.Issue, error) {
 	out := make(map[int]*types.Issue, len(numbers))
 	for _, n := range numbers {
 		key := fmt.Sprintf("%s/%s#%d", owner, repo, n)

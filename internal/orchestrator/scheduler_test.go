@@ -34,7 +34,14 @@ import (
 // mockIssueSvc implements issueGetter for testing.
 type mockIssueSvc struct {
 	issues     map[string]*types.Issue // keyed by "owner/repo#number"
-	batchCalls []mockBatchCall         // recorded GetIssuesByNumbers invocations
+	batchCalls []mockBatchCall         // recorded GetIssuesByNumbersWithoutRelations invocations
+	// getErrs makes GetIssueWithRelations fail for the keyed issue with the
+	// given error.
+	getErrs map[string]error
+	// truncated names, per issue, the relationship connections whose later
+	// pages cannot be read: a GetIssueWithRelations that names one of them
+	// fails with ErrConnectionTruncated.
+	truncated map[string]gh.IssueRelations
 	// removeBlockedByCalls records every RemoveBlockedBy invocation in the
 	// canonical "owner/repo#number" form of both refs, so assertions can pin
 	// which pair of issues the scheduler actually unlinked.
@@ -55,16 +62,49 @@ func (m *mockIssueSvc) addIssue(owner, repo string, number int, issue *types.Iss
 	m.issues[fmt.Sprintf("%s/%s#%d", owner, repo, number)] = issue
 }
 
-func (m *mockIssueSvc) GetIssue(_ context.Context, owner, repo string, number int) (*types.Issue, error) {
+// GetIssueWithRelations serves the fixtures as the real read returns them
+// (see withRelations), failing only when rels names a truncated connection.
+func (m *mockIssueSvc) GetIssueWithRelations(_ context.Context, owner, repo string, number int, rels gh.IssueRelations) (*types.Issue, error) {
 	key := fmt.Sprintf("%s/%s#%d", owner, repo, number)
-	if issue, ok := m.issues[key]; ok {
-		return issue, nil
+	if err, ok := m.getErrs[key]; ok {
+		return nil, err
 	}
-	return nil, fmt.Errorf("issue %s not found", key)
+	if m.truncated[key]&rels != 0 {
+		return nil, truncatedRead(number)
+	}
+	issue, ok := m.issues[key]
+	if !ok {
+		return nil, fmt.Errorf("issue %s not found", key)
+	}
+	return withRelations(issue, rels), nil
 }
 
-func (m *mockIssueSvc) GetIssuesByNumbers(_ context.Context, owner, repo string, numbers []int) (map[int]*types.Issue, error) {
+// withRelations is a copy of issue as github.IssueService.GetIssueWithRelations
+// returns it: the relationship lists rels does not name are empty, and IsEpic
+// still reports whether the issue has sub-issues.
+func withRelations(issue *types.Issue, rels gh.IssueRelations) *types.Issue {
+	out := *issue
+	out.IsEpic = issue.IsEpic || len(issue.SubIssues) > 0
+	if rels&gh.RelationSubIssues == 0 {
+		out.SubIssues = nil
+	}
+	if rels&gh.RelationBlockedBy == 0 {
+		out.BlockedBy = nil
+	}
+	if rels&gh.RelationBlocking == 0 {
+		out.Blocking = nil
+	}
+	return &out
+}
+
+// GetIssuesByNumbersWithoutRelations serves the fixtures and records the call,
+// so batching assertions can count the reads.
+func (m *mockIssueSvc) GetIssuesByNumbersWithoutRelations(_ context.Context, owner, repo string, numbers []int) (map[int]*types.Issue, error) {
 	m.batchCalls = append(m.batchCalls, mockBatchCall{owner: owner, repo: repo, numbers: append([]int(nil), numbers...)})
+	return m.batch(owner, repo, numbers), nil
+}
+
+func (m *mockIssueSvc) batch(owner, repo string, numbers []int) map[int]*types.Issue {
 	out := make(map[int]*types.Issue, len(numbers))
 	for _, n := range numbers {
 		key := fmt.Sprintf("%s/%s#%d", owner, repo, n)
@@ -73,7 +113,7 @@ func (m *mockIssueSvc) GetIssuesByNumbers(_ context.Context, owner, repo string,
 		}
 		// Missing issues silently omitted, matching production behavior.
 	}
-	return out, nil
+	return out
 }
 
 type mockBatchCall struct {

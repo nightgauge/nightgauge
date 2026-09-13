@@ -2565,8 +2565,8 @@ func (s *Server) registerMethods() {
 			return nil, err
 		}
 
-		// Get epic title
-		epicIssue, err := gh.NewIssueService(c).GetIssue(ctx, p.Owner, p.Repo, p.EpicNumber)
+		// Get epic title; its sub-issue list is not read.
+		epicIssue, err := gh.NewIssueService(c).GetIssueWithRelations(ctx, p.Owner, p.Repo, p.EpicNumber, gh.NoRelations)
 		if err != nil {
 			return nil, fmt.Errorf("fetch epic: %w", err)
 		}
@@ -2656,9 +2656,9 @@ func (s *Server) registerMethods() {
 				return
 			}
 
-			// 2. Get epic title for PR
+			// 2. Get epic title for PR; its sub-issue list is not read.
 			issueSvc := gh.NewIssueService(s.client)
-			epicIssue, err := issueSvc.GetIssue(ctx, owner, repo, epicNumber)
+			epicIssue, err := issueSvc.GetIssueWithRelations(ctx, owner, repo, epicNumber, gh.NoRelations)
 			if err != nil {
 				log.Printf("epic #%d: failed to fetch issue: %v", epicNumber, err)
 				return
@@ -4444,7 +4444,7 @@ func (s *Server) registerMethods() {
 			return nil, err
 		}
 		svc := gh.NewIssueService(c)
-		issue, err := svc.GetIssue(ctx, p.Owner, p.Repo, p.Number)
+		issue, err := svc.GetIssueWithRelations(ctx, p.Owner, p.Repo, p.Number, gh.NoRelations)
 		if err != nil {
 			return nil, fmt.Errorf("fetch issue #%d: %w", p.Number, err)
 		}
@@ -4468,7 +4468,7 @@ func (s *Server) registerMethods() {
 			return nil, err
 		}
 		svc := gh.NewIssueService(c)
-		issue, err := svc.GetIssue(ctx, p.Owner, p.Repo, p.Number)
+		issue, err := svc.GetIssueWithRelations(ctx, p.Owner, p.Repo, p.Number, gh.NoRelations)
 		if err != nil {
 			return nil, fmt.Errorf("fetch issue #%d: %w", p.Number, err)
 		}

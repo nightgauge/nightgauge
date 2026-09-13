@@ -52,8 +52,8 @@ const (
 // above spell the labels the nightgauge provisioner writes, but a board's
 // actual option labels are whatever its creator typed — a hand-made board
 // commonly spells the same column "In Review". Reads return that raw label
-// verbatim (gh.BoardService.ListItems copies the option name straight into
-// BoardItem.Status), so an exact comparison silently answers "different
+// verbatim (gh.BoardService.ListItems and GetItemFields copy the option name
+// straight into Status), so an exact comparison silently answers "different
 // column" for a board that merely capitalizes differently, and the caller
 // takes the wrong branch. Writes already fold
 // (gh.ProjectService.SetSingleSelectField), so folding here keeps both
@@ -62,28 +62,40 @@ func (b BoardStatus) EqualFold(other BoardStatus) bool {
 	return strings.EqualFold(string(b), string(other))
 }
 
+// ItemFieldReader reads one board item's field values by its item id.
+// *gh.BoardService is one (GetItemFields).
+type ItemFieldReader interface {
+	GetItemFields(ctx context.Context, itemID string) (*gh.ItemFields, error)
+}
+
 // BoardStateService reads and writes pipeline state via GitHub Project Board fields.
 //
-// It holds its board and project services rather than constructing them, so a
-// caller that reads the board through a snapshot cache can hand in the wrapped
-// pair and have this service's writes invalidate the same snapshots (#848).
-// When it built its own, its status writes sat outside every wrapper — and
-// `board.updateStatus` is the most staleness-visible write the daemon makes.
+// It holds its reader and project services rather than constructing them, so
+// a caller that reads the board through a snapshot cache can hand in the
+// wrapped project service and have this service's writes invalidate the same
+// snapshots (#848). When it built its own, its status writes sat outside every
+// wrapper — and `board.updateStatus` is the most staleness-visible write the
+// daemon makes.
 type BoardStateService struct {
-	// board serves the two reads below. Not constructed here: see the type doc.
-	board forge.BoardService
+	// items serves the two reads below, one item's fields at a time. Not a
+	// board-wide list: that read also completes every item's relationship
+	// lists, so a list on an unrelated item could fail the status read the
+	// revert guard depends on, and a snapshot of it could be stale. Not
+	// constructed here: see the type doc.
+	items ItemFieldReader
 
 	// projSvc handles all write operations (single cache, single write path)
 	projSvc forge.ProjectService
 }
 
-// NewBoardStateService creates a board state service over the given board and
-// project services.
+// NewBoardStateService creates a board state service over the given item
+// reader and project service.
 //
 // Callers with nothing to cache use NewBoardStateServiceForClient, which builds
-// the plain pair. Callers that do — the IPC daemon — pass wrapped services.
-func NewBoardStateService(board forge.BoardService, projSvc forge.ProjectService) *BoardStateService {
-	return &BoardStateService{board: board, projSvc: projSvc}
+// the plain pair. Callers that do — the IPC daemon — pass a wrapped project
+// service; the item reader is never cached, as a single-item read is not.
+func NewBoardStateService(items ItemFieldReader, projSvc forge.ProjectService) *BoardStateService {
+	return &BoardStateService{items: items, projSvc: projSvc}
 }
 
 // NewBoardStateServiceForClient builds the uncached pair for a caller that has
@@ -115,20 +127,14 @@ func (s *BoardStateService) SetPipelineStage(ctx context.Context, itemID string,
 	return s.projSvc.SetTextFieldOptional(ctx, itemID, "Pipeline Stage", string(stage))
 }
 
-// GetPipelineStage reads the current pipeline stage from the board for crash recovery.
+// GetPipelineStage reads the current pipeline stage from the board for crash
+// recovery; "" when the item has no stage set.
 func (s *BoardStateService) GetPipelineStage(ctx context.Context, itemID string) (PipelineStage, error) {
-	items, err := s.board.ListItems(ctx, "")
+	fields, err := s.items.GetItemFields(ctx, itemID)
 	if err != nil {
 		return "", err
 	}
-
-	for _, item := range items {
-		if item.ID == itemID && item.PipelineStage != "" {
-			return PipelineStage(item.PipelineStage), nil
-		}
-	}
-
-	return "", nil // No stage set
+	return PipelineStage(fields.PipelineStage), nil
 }
 
 // StartPipeline sets the board status to "In progress" and records the initial stage.
@@ -155,16 +161,20 @@ func (s *BoardStateService) CompletePipeline(ctx context.Context, itemID string,
 // FailPipeline reverts an issue's board status after a pipeline failure.
 // targetStatus is the configured failure destination ("Ready" or "Backlog").
 // If the issue is already "In review" (a PR was opened before failure), the
-// status is left unchanged to avoid disrupting the review workflow.
-// Returns true if the status was actually changed.
+// status is left unchanged to avoid disrupting the review workflow. If the
+// current status cannot be read, the status is also left unchanged and the
+// error says why. Returns true if the status was actually changed.
 func (s *BoardStateService) FailPipeline(ctx context.Context, itemID string, targetStatus BoardStatus) (bool, error) {
 	// Read current status to guard against reverting an "In review" issue.
 	currentStatus, err := s.readItemStatus(ctx, itemID)
 	if err != nil {
-		// If we can't read current status, proceed with the revert — better to
-		// move an issue back to Ready than leave it stuck In progress.
-		_ = err // non-fatal: proceed with revert
-	} else if currentStatus.EqualFold(StatusInReview) {
+		// An unread status is not permission to revert. The issue may be In
+		// review, and the revert would put it in Ready, the only dispatchable
+		// status, to be re-dispatched on top of its own open PR. An issue
+		// left In progress is visible and recoverable; that one is not.
+		return false, fmt.Errorf("status left unchanged, current status unreadable: %w", err)
+	}
+	if currentStatus.EqualFold(StatusInReview) {
 		// PR is open; leave status as-is. Folded, not `==`: readItemStatus
 		// returns the board's raw option label, so a board spelling the column
 		// "In Review" must still trip this guard — otherwise the item drops
@@ -183,21 +193,17 @@ func (s *BoardStateService) FailPipeline(ctx context.Context, itemID string, tar
 	return true, nil
 }
 
-// readItemStatus fetches the current board status for a specific item.
+// readItemStatus fetches the current board status for a specific item, from
+// that item alone.
 //
 // The returned value is the board's RAW single-select option label, not a
 // canonicalized BoardStatus — normalizing it here would report a value the
 // board does not actually hold. Compare it with BoardStatus.EqualFold, never
 // with `==`.
 func (s *BoardStateService) readItemStatus(ctx context.Context, itemID string) (BoardStatus, error) {
-	items, err := s.board.ListItems(ctx, "")
+	fields, err := s.items.GetItemFields(ctx, itemID)
 	if err != nil {
-		return "", fmt.Errorf("fetch items for status check: %w", err)
+		return "", fmt.Errorf("read item %s status: %w", itemID, err)
 	}
-	for _, item := range items {
-		if item.ID == itemID {
-			return BoardStatus(item.Status), nil
-		}
-	}
-	return "", fmt.Errorf("item %s not found on board", itemID)
+	return BoardStatus(fields.Status), nil
 }

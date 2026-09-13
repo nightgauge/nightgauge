@@ -95,7 +95,7 @@ func depsGateCheckCmd() *cobra.Command {
 					fmt.Fprintf(os.Stderr, "warning: pause-deferred failed: %v\n", serr)
 				} else {
 					title := ""
-					if issue, ierr := issueSvc.GetIssue(cmd.Context(), ownerPart, repoPart, issueNum); ierr == nil {
+					if issue, ierr := issueSvc.GetIssueWithRelations(cmd.Context(), ownerPart, repoPart, issueNum, gh.NoRelations); ierr == nil {
 						title = issue.Title
 					}
 					pauseBlockedDependencyItem(sched, ownerPart, repoPart, issueNum, title, res)

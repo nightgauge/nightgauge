@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/intelligence/acparse"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
@@ -16,9 +17,10 @@ type boardLister interface {
 	ListItems(ctx context.Context, statusFilter string) ([]types.BoardItem, error)
 }
 
-// issueGetter is satisfied by *github.IssueService.
+// issueGetter is satisfied by *github.IssueService. The validator reads an
+// issue's body and none of its relationship lists.
 type issueGetter interface {
-	GetIssue(ctx context.Context, owner, repo string, number int) (*types.Issue, error)
+	GetIssueWithRelations(ctx context.Context, owner, repo string, number int, rels gh.IssueRelations) (*types.Issue, error)
 }
 
 // Validator runs deterministic preflight checks on board items.
@@ -116,11 +118,11 @@ const minCheckboxCount = 2
 
 // CheckAcceptanceCriteria fetches each item's body and returns findings for
 // issues with < 100 chars of body or fewer than 2 checkbox ACs.
-// Skips GetIssue calls when the focus flag indicates criteria checks are off.
+// Skips the issue reads when the focus flag indicates criteria checks are off.
 func (v *Validator) CheckAcceptanceCriteria(ctx context.Context, items []types.BoardItem) []BacklogFinding {
 	var findings []BacklogFinding
 	for _, item := range items {
-		issue, err := v.issues.GetIssue(ctx, v.owner, v.repo, item.Number)
+		issue, err := v.issues.GetIssueWithRelations(ctx, v.owner, v.repo, item.Number, gh.NoRelations)
 		if err != nil {
 			// Non-fatal: emit a finding noting the body could not be fetched.
 			findings = append(findings, BacklogFinding{

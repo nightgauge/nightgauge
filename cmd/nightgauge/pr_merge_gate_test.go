@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
@@ -13,7 +14,7 @@ type mergeGateIssueFetcher struct {
 	err   error
 }
 
-func (m mergeGateIssueFetcher) GetIssue(_ context.Context, owner, repo string, number int) (*types.Issue, error) {
+func (m mergeGateIssueFetcher) GetIssueWithRelations(_ context.Context, owner, repo string, number int, _ gh.IssueRelations) (*types.Issue, error) {
 	return m.issue, m.err
 }
 

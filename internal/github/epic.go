@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -45,12 +46,14 @@ type EpicValidationResult struct {
 
 // Validate checks an epic's sub-issue structure for circular blockers (sub-issue
 // blocked by its own parent epic) and stale blockers (blocked by a closed issue).
-// Sub-issues are fetched in one batched GraphQL request via
-// IssueService.GetIssuesByNumbers — replacing the previous per-sub-issue
-// GetIssue loop.
+// Sub-issues are fetched in one batched GraphQL request per repository.
+//
+// The check uses the epic's sub-issue list and each sub-issue's blocker list,
+// so it reads those whole and no other list: a sub-issue that blocks many
+// siblings, or has sub-issues of its own, cannot fail the validation.
 func (e *EpicService) Validate(ctx context.Context, owner, repo string, epicNumber int) (*EpicValidationResult, error) {
 	issueSvc := NewIssueService(e.client)
-	epic, err := issueSvc.GetIssue(ctx, owner, repo, epicNumber)
+	epic, err := issueSvc.GetIssueWithRelations(ctx, owner, repo, epicNumber, RelationSubIssues)
 	if err != nil {
 		return nil, fmt.Errorf("fetch epic #%d: %w", epicNumber, err)
 	}
@@ -86,7 +89,12 @@ func (e *EpicService) Validate(ctx context.Context, owner, repo string, epicNumb
 	fetched := make(map[int]*types.Issue, len(epic.SubIssues))
 	for repoKey, numbers := range byRepo {
 		on := repoOwnerName[repoKey]
-		issues, err := issueSvc.GetIssuesByNumbers(ctx, on[0], on[1], numbers)
+		issues, err := issueSvc.getIssuesByNumbers(ctx, on[0], on[1], numbers, RelationBlockedBy)
+		if errors.Is(err, ErrConnectionTruncated) {
+			// Validating from a blocker list read only in part would report
+			// the epic valid over gaps it never saw.
+			return nil, fmt.Errorf("validate epic #%d: sub-issues from %s: %w", epicNumber, repoKey, err)
+		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: batch fetch sub-issues from %s: %v\n", repoKey, err)
 			continue
@@ -170,10 +178,11 @@ func (r *EpicCompletionResult) HasSubIssue(repo string, number int) bool {
 }
 
 // CheckCompletion checks if all sub-issues of an epic are closed.
-// Uses a single GraphQL query (no N+1).
+// Uses a single GraphQL query (no N+1). Only the sub-issue list is read
+// whole, so a long blocking list on the epic cannot fail the rollup.
 func (e *EpicService) CheckCompletion(ctx context.Context, owner, repo string, epicNumber int) (*EpicCompletionResult, error) {
 	issueSvc := NewIssueService(e.client)
-	issue, err := issueSvc.GetIssue(ctx, owner, repo, epicNumber)
+	issue, err := issueSvc.GetIssueWithRelations(ctx, owner, repo, epicNumber, RelationSubIssues)
 	if err != nil {
 		return nil, fmt.Errorf("fetch epic #%d: %w", epicNumber, err)
 	}
@@ -328,7 +337,7 @@ func (e *EpicService) SyncClosedToDone(ctx context.Context, owner, repo string, 
 		ot = ownerType[0]
 	}
 	issueSvc := NewIssueService(e.client)
-	issue, err := issueSvc.GetIssue(ctx, owner, repo, epicNumber)
+	issue, err := issueSvc.GetIssueWithRelations(ctx, owner, repo, epicNumber, RelationSubIssues)
 	if err != nil {
 		return 0, fmt.Errorf("fetch epic #%d: %w", epicNumber, err)
 	}
@@ -466,7 +475,7 @@ func (e *EpicService) TransitionStatus(ctx context.Context, owner, repo string, 
 	}
 	_ = ot // used below
 	issueSvc := NewIssueService(e.client)
-	issue, err := issueSvc.GetIssue(ctx, owner, repo, epicNumber)
+	issue, err := issueSvc.GetIssueWithRelations(ctx, owner, repo, epicNumber, RelationSubIssues)
 	if err != nil {
 		return nil, fmt.Errorf("fetch epic #%d: %w", epicNumber, err)
 	}
@@ -558,9 +567,10 @@ func (e *EpicService) CompleteEpic(ctx context.Context, owner, repo string, epic
 		return result, nil
 	}
 
-	// Step 2: Close the epic issue
+	// Step 2: Close the epic issue. Its state, node id and title are all this
+	// uses; the sub-issues were counted by CheckCompletion.
 	issueSvc := NewIssueService(e.client)
-	epicIssue, err := issueSvc.GetIssue(ctx, owner, repo, epicNumber)
+	epicIssue, err := issueSvc.GetIssueWithRelations(ctx, owner, repo, epicNumber, NoRelations)
 	if err != nil {
 		return nil, fmt.Errorf("fetch epic #%d: %w", epicNumber, err)
 	}
@@ -825,8 +835,10 @@ func (e *EpicService) closeOneEpic(ctx context.Context, ref EpicRef, projectNumb
 		return "skipped", "has_open", nil
 	}
 
+	// Only the epic's state and node id are used here; completion already
+	// read its sub-issue list, so no list is read again.
 	issueSvc := NewIssueService(e.client)
-	epicIssue, err := issueSvc.GetIssue(ctx, owner, repo, epicNumber)
+	epicIssue, err := issueSvc.GetIssueWithRelations(ctx, owner, repo, epicNumber, NoRelations)
 	if err != nil {
 		return "", "fetch_failed", err
 	}

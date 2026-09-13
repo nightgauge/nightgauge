@@ -80,6 +80,12 @@ changelog, and the release workflow refuses a tag that does not.
   instead of sending the operator to fix a `main` that may be green. The
   post-merge hook likewise says it could not verify the branch, not that it is
   red (#1691)
+- Sub-issue, blocked-by and blocking reads now page to completion (up to a
+  20-page cap) instead of silently stopping at the first 12, 25 or 50 items,
+  so epic validate, rollup and wave planning no longer act on a truncated
+  list. A list that cannot be read in full is now an explicit error rather
+  than being treated as short. See `docs/GITHUB_API_DEPENDENCIES.md` for
+  which commands read which lists (#1682)
 - `scripts/test-install-agent-skills-targets.sh` no longer rewrites the
   committed plugin-skills mirror. It ran the real installer, which regenerates
   that mirror first, six times per run: in `scripts/ci-local.sh` the

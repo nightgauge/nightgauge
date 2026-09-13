@@ -767,7 +767,8 @@ func checkBoardPopulation(ctx context.Context, cfg *config.Config, client *gh.Cl
 	if strings.EqualFold(cfg.OwnerType, "user") {
 		ownerType = gh.OwnerTypeUser
 	}
-	items, _, err := gh.NewBoardService(client, cfg.Owner, cfg.ProjectNumber, ownerType).ListOpenItems(ctx)
+	// Membership only, so no item's relationship lists are read.
+	items, _, err := gh.NewBoardService(client, cfg.Owner, cfg.ProjectNumber, ownerType).ListOpenItemsWithRelations(ctx, gh.NoRelations)
 	if err != nil {
 		return pop, fmt.Errorf("list open items on project %d: %w", cfg.ProjectNumber, err)
 	}

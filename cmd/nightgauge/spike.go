@@ -230,7 +230,11 @@ func newGitHubMaterializer(client *gh.Client, owner, repo string, projectNumber 
 }
 
 func (g *githubMaterializer) FindExistingByID(ctx context.Context, spikeNumber int, id string) (int, string, error) {
-	spike, err := g.issueSvc.GetIssue(ctx, g.owner, g.repo, spikeNumber)
+	// The search needs the spike's whole sub-issue list and each sub-issue's
+	// body, so it reads only that list whole: a sub-issue's own long
+	// relationship list must not hide it from the search and let a duplicate
+	// follow-up be created.
+	spike, err := g.issueSvc.GetIssueWithRelations(ctx, g.owner, g.repo, spikeNumber, gh.RelationSubIssues)
 	if err != nil {
 		return 0, "", fmt.Errorf("fetch spike #%d: %w", spikeNumber, err)
 	}
@@ -240,7 +244,7 @@ func (g *githubMaterializer) FindExistingByID(ctx context.Context, spikeNumber i
 		if parts := strings.SplitN(sub.Repo, "/", 2); len(parts) == 2 && parts[0] != "" {
 			subOwner, subRepo = parts[0], parts[1]
 		}
-		fullSub, err := g.issueSvc.GetIssue(ctx, subOwner, subRepo, sub.Number)
+		fullSub, err := g.issueSvc.GetIssueWithRelations(ctx, subOwner, subRepo, sub.Number, gh.NoRelations)
 		if err != nil {
 			continue
 		}
