@@ -213,3 +213,126 @@ payloads included, and `ClassifyTerminalKind` is an ordered substring ladder —
 a `go test` line containing `hard cap` would read as a stall-kill. The stderr
 copy is sufficient, which is why the fixture pair exists: it proves the reason
 is on both channels and that taking the narrow one loses nothing.
+
+## `codex_stream_real_capture.jsonl`
+
+A **real** Codex CLI `exec --json` transcript (#1620), not a hand-authored
+one. Captured 2026-09-13 on `codex-cli 0.153.4`, logged in with the account
+already present on the capturing machine, with:
+
+```bash
+codex --ask-for-approval never --sandbox workspace-write exec --json - \
+  <<< 'Use a shell command to run "echo one", then again to run "echo two", then reply done.'
+```
+
+### Why the flags differ from `BuildCommand`'s literal argv
+
+`CodexAdapter.BuildCommand` ([codex.go](../adapters/codex.go)) emits
+`exec --dangerously-bypass-approvals-and-sandbox --json -` when a stage has no
+`AllowedTools` (the default), which is the path this capture set out to
+reproduce. That exact invocation is unavailable from this capture
+environment (a policy blocks spawning an unsandboxed sub-agent from an
+already-sandboxed session), so the capture instead exercises
+`BuildCommand`'s other real branch: `codexSandboxFlags` for a
+`workspace-write`-eligible stage, which is `--sandbox workspace-write
+--ask-for-approval never` appended **after** `exec`
+([codex_sandbox.go](../adapters/codex_sandbox.go)).
+
+Running that literal argv against the installed `codex-cli 0.153.4` fails:
+
+```
+error: unexpected argument '--ask-for-approval' found
+```
+
+`codex exec --help` on this version lists no `--ask-for-approval` flag at
+all; `-a`/`--ask-for-approval` only appears on the base `codex --help` (before
+the `exec` subcommand). This capture therefore places the two flags before
+`exec` instead, which is the same sandbox policy `BuildCommand` intends
+(workspace-write, never ask) reached through an argv order the real 0.153.4
+binary accepts. **This is a `BuildCommand`/CLI-version mismatch, not a stream
+parser mismatch** — `ParseCodexStreamLine`'s field-name and per-event
+assumptions all held against the real output below — so it is out of this
+issue's scope (`internal/execution/adapters/codex_sandbox.go` is not among
+this issue's owned files). It is recorded here as the reason this fixture's
+command differs from `BuildCommand`'s output, and is reported back rather
+than fixed in this PR.
+
+### CLI version note
+
+The `codex` manifest's `max_tested` ([codex.json](../../adaptercompat/manifests/codex.json))
+is `0.145.0`. The capturing machine has `0.153.4` installed — newer than
+`max_tested`, not older, so the manifest's floor policy is not implicated.
+Only the version number differs; nothing in the NDJSON shape or the
+`turn.completed` usage payload contradicts `ParseCodexStreamLine`, so the
+manifest's version fields are left unchanged, per this issue's scope.
+
+### Why it is captured rather than written
+
+Same reason as the claude and grok captures (#166/#300): a parser tested only
+against hand-written lines stays green while the runtime emits a different
+shape. This capture confirms `ParseCodexStreamLine`'s two shape assumptions
+against real output:
+
+1. Per-turn usage arrives on a single `type:"turn.completed"` event's `usage`
+   object, with `input_tokens` / `cached_input_tokens` / `output_tokens`
+   exactly where the parser reads them. The real payload also carries
+   `cache_write_input_tokens` and `reasoning_output_tokens`, which
+   `codexUsage` does not declare — `json.Unmarshal` ignores them silently,
+   which is correct today (codex reports 0 for both here) but is the first
+   place to look if a future capture shows nonzero reasoning tokens going
+   unbooked.
+2. A tool call is `type:"item.completed"` with `item.type:"command_execution"`
+   and the command/output on `item.command` / `item.aggregated_output` — not
+   `"agent_message"`, which is reserved for the assistant's own text turns.
+   `ParseCodexStreamLine` only special-cases `"agent_message"`
+   (event becomes `message`/`text`); `command_execution` items pass through
+   with `event.Type` left as `"item.completed"`, which is the parser's
+   intended default for anything it does not need to remap for token
+   purposes.
+
+**Do not replace this file with a synthesized equivalent.** Recapture it if
+the CLI's shape changes.
+
+### Ground truth encoded in the file
+
+One turn (`turn.completed`), its `usage` object:
+
+| turn      | input_tokens | cached_input_tokens | output_tokens |
+| --------- | ------------: | -------------------: | --------------: |
+| turn 1    |        67553 |                56704 |             124 |
+| **total** |        67553 |                56704 |             124 |
+
+`ParseCodexStreamLine` stores `input_tokens - cached_input_tokens` as input
+(the cached subset is disjoint from input, matching the Claude/SDK
+convention) and `cached_input_tokens` as cache-read:
+
+| accumulator field | value                  |
+| ------------------ | ---------------------: |
+| `InputTokens`       | 67553 − 56704 = 10849 |
+| `OutputTokens`       |                   124 |
+| `CacheRead`          |                 56704 |
+| `CacheCreated`       |                     0 |
+
+### Redaction
+
+`redact-cli.jq` (new, shared across the codex/gemini/copilot family of real
+captures this issue introduces) is shape-preserving in the same sense as
+`redact.jq` / `redact-grok.jq`: it only rewrites values, never adds, drops, or
+reorders a key or event, and never touches a token count. Run on this capture
+it changed exactly one value — `thread.started`'s `thread_id` — to a stable
+placeholder. The raw capture had no absolute path, email address, or other
+identifier to redact (the capture's scratch working directory never appears
+in any event; commands ran via `/bin/zsh -lc '<cmd>'` with no path argument).
+
+### gemini and copilot
+
+`gemini_stream_real_capture.jsonl` and `copilot_stream_real_capture.jsonl`
+are **skipped**: neither CLI is installed on the maintainer's machine that
+performed this capture (`gemini`, `copilot` both resolve to "not found"). The
+acceptance criteria for this issue allow recording a skip with that reason
+rather than installing a new CLI or authenticating a new account to produce
+one. No fixture, README ground-truth table, manifest entry, or
+`TestParse{Gemini,Copilot}RealCapture` test exists for either adapter as a
+result — `ParseGeminiStreamLine` and `ParseCopilotStreamLine` remain untested
+against real output until a maintainer with those CLIs installed captures
+them.
