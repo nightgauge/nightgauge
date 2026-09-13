@@ -9,13 +9,25 @@
   "companion_feeds": [],
   "install": { "installer": "https://x.ai/cli/install.sh" },
   "managed_install": "",
-  "required_flags": [],
+  "required_flags": [
+    "--always-approve",
+    "--cwd",
+    "--effort",
+    "--max-turns",
+    "--model",
+    "--no-auto-update",
+    "--output-format",
+    "--prompt-file",
+    "-p"
+  ],
   "catalog": { "command": "grok models" },
   "fixtures": [
     "internal/doctor/testdata/grok-catalog/grok-models.txt",
     "internal/execution/testdata/grok_stream_real_capture.jsonl",
     "internal/execution/testdata/grok_unknown_model_stdout.jsonl",
-    "internal/execution/testdata/grok_unknown_model_stderr.txt"
+    "internal/execution/testdata/grok_unknown_model_stderr.txt",
+    "internal/execution/adapters/testdata/cli-help/grok-1.0.4.txt",
+    "internal/execution/adapters/testdata/cli-help/grok-1.0.4.txt.hidden"
   ],
   "config_schema_sha256": "",
   "plugin_api_version": "",

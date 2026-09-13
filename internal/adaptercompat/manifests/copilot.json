@@ -10,7 +10,7 @@
   "companion_feeds": [],
   "install": { "npm": "@github/copilot" },
   "managed_install": "",
-  "required_flags": [],
+  "required_flags": ["--allow-all-tools", "--model"],
   "catalog": {
     "skip_reason": "No working standalone Copilot CLI output has been captured to build a catalog parser against; see internal/doctor/testdata/no-catalog-cli-probes."
   },
