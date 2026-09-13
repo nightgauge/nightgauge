@@ -12,6 +12,11 @@ import { EventEmitter } from "node:events";
 import { spawn } from "node:child_process";
 import { CodexAdapter, isEphemeralStage } from "../../../cli/adapters/CodexAdapter.js";
 import { AdapterError } from "../../../cli/adapters/errors.js";
+import { ADAPTER_COMPAT } from "../../../cli/adapters/adapterCompat.generated.js";
+import type {
+  PreflightCommandRunner,
+  PreflightCommandResult,
+} from "../../../cli/codexPreflight.js";
 
 // Module-level mock — hoisted by Vitest so createCliQueryFn's internal spawn call is intercepted.
 // ESM module-scope calls cannot be intercepted with vi.spyOn; mock the dependency directly.
@@ -176,6 +181,89 @@ describe("CodexAdapter identity", () => {
 
   it("requiresDirectApiKey returns false", () => {
     expect(adapter.requiresDirectApiKey()).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CodexAdapter.validateAuth() — version floor (#1621)
+// ---------------------------------------------------------------------------
+
+function makeCodexRunner(version: string): PreflightCommandRunner {
+  return async (command, args): Promise<PreflightCommandResult> => {
+    if (command === "codex" && args[0] === "--version") {
+      return { code: 0, stdout: `codex-cli ${version}\n`, stderr: "" };
+    }
+    if (command === "codex" && args[0] === "login" && args[1] === "status") {
+      return { code: 0, stdout: "", stderr: "" };
+    }
+    return { code: 1, stdout: "", stderr: "unexpected command" };
+  };
+}
+
+describe("CodexAdapter.validateAuth() — version floor", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.doUnmock("../../../cli/adapters/adapterCompat.generated.js");
+    vi.resetModules();
+  });
+
+  it("warns naming ADAPTER_COMPAT.codex.minVersion when the detected CLI is older", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const adapter = new CodexAdapter();
+
+    const result = await adapter.validateAuth({ runner: makeCodexRunner("0.100.0"), cwd: "/tmp" });
+
+    expect(result).toBe("passed");
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const [message] = warnSpy.mock.calls[0] as [string];
+    expect(message).toContain(ADAPTER_COMPAT.codex.minVersion);
+    expect(ADAPTER_COMPAT.codex.minVersion).toBe("0.111.0");
+  });
+
+  it("does not warn at or above ADAPTER_COMPAT.codex.minVersion", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const adapter = new CodexAdapter();
+
+    const result = await adapter.validateAuth({
+      runner: makeCodexRunner(ADAPTER_COMPAT.codex.minVersion),
+      cwd: "/tmp",
+    });
+
+    expect(result).toBe("passed");
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  // This is the discriminating regression test: it proves the floor comes
+  // from ADAPTER_COMPAT at read time rather than from a literal baked into
+  // CodexAdapter.ts. Replacing the generated module's codex.minVersion with a
+  // value the source file never mentions and seeing the warning name that
+  // value is something a hardcoded `MIN_KNOWN_VERSION = "0.111.0"` cannot do.
+  it("sources the floor from ADAPTER_COMPAT, not a literal in CodexAdapter.ts", async () => {
+    vi.resetModules();
+    vi.doMock("../../../cli/adapters/adapterCompat.generated.js", async () => {
+      const actual = await vi.importActual<
+        typeof import("../../../cli/adapters/adapterCompat.generated.js")
+      >("../../../cli/adapters/adapterCompat.generated.js");
+      return {
+        ADAPTER_COMPAT: {
+          ...actual.ADAPTER_COMPAT,
+          codex: { minVersion: "5.5.5", maxTested: "9.9.9", floorPolicy: "warn" },
+        },
+      };
+    });
+
+    const { CodexAdapter: RewiredCodexAdapter } =
+      await import("../../../cli/adapters/CodexAdapter.js");
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const adapter = new RewiredCodexAdapter();
+
+    const result = await adapter.validateAuth({ runner: makeCodexRunner("5.0.0"), cwd: "/tmp" });
+
+    expect(result).toBe("passed");
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const [message] = warnSpy.mock.calls[0] as [string];
+    expect(message).toContain("5.5.5");
+    expect(message).not.toContain("0.111.0");
   });
 });
 

@@ -256,7 +256,7 @@ jobs:
           RELEASES_FILE: ${{ runner.temp }}/releases.json
         run: |
           set -euo pipefail
-          npm install --global --no-fund --no-audit @anthropic-ai/claude-code@2.1.258
+          npm install --global --no-fund --no-audit "$(scripts/adapter-cli-pin.sh claude-headless)"
 
           # Prompt on stdin with `-p`, matching how the pipeline's own Claude
           # adapter invokes the CLI (internal/execution/adapters/claude.go).

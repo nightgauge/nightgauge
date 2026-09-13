@@ -24,6 +24,7 @@ import { verifyCLIInstalled } from "./validateCLIAuth.js";
 import { createCliQueryFn, parseCliArgs } from "./cliQueryHelper.js";
 import { AdapterError, throwTimeoutError } from "./errors.js";
 import { resolveAndValidateModel } from "./modelPreflight.js";
+import { ADAPTER_COMPAT } from "./adapterCompat.generated.js";
 
 const ADAPTER_NAME = "Gemini";
 const GEMINI_DOCS_URL = "https://ai.google.dev/gemini-api/docs";
@@ -31,12 +32,6 @@ const GEMINI_INSTALL_CMD = "npm install -g @google/gemini-cli";
 
 /** Timeout for gcloud auth check to prevent hangs (matches Claude adapter pattern). */
 const GCLOUD_AUTH_TIMEOUT_MS = 10_000;
-
-/**
- * Minimum Gemini CLI version known to be compatible with stream-json output.
- * Used for a preflight warning (not a hard block) when the version is unrecognized.
- */
-const MIN_KNOWN_VERSION = "0.29.0";
 
 function compareVersions(a: string, b: string): number {
   const pa = a.split(".").map(Number);
@@ -77,10 +72,11 @@ export class GeminiAdapter implements ICliAdapter {
     const versionMatch = versionResult.stdout.trim().match(/(\d+\.\d+\.\d+)/);
     if (versionMatch) {
       const detected = versionMatch[1];
-      if (compareVersions(detected, MIN_KNOWN_VERSION) < 0) {
+      const minVersion = ADAPTER_COMPAT.gemini.minVersion;
+      if (compareVersions(detected, minVersion) < 0) {
         console.warn(
           `[gemini-adapter] WARNING: Gemini CLI version ${detected} is older than ` +
-            `minimum known compatible version ${MIN_KNOWN_VERSION}. ` +
+            `minimum known compatible version ${minVersion}. ` +
             `Some features may not work as expected.`
         );
       }

@@ -18,6 +18,7 @@ import { validateCLIAuth, verifyCLIInstalled } from "./validateCLIAuth.js";
 import { createCliQueryFn, parseCliArgs } from "./cliQueryHelper.js";
 import { resolveAndValidateModel } from "./modelPreflight.js";
 import { codexReasoningEffortFlag } from "./codexEffort.js";
+import { ADAPTER_COMPAT } from "./adapterCompat.generated.js";
 
 // Re-export the canonical alias resolver so existing import sites (and the
 // adapter barrel) keep resolving it from CodexAdapter. The implementation now
@@ -92,12 +93,6 @@ export function isEphemeralStage(stage: string | undefined): boolean {
   return DEFAULT_EPHEMERAL_STAGES.has(stage);
 }
 
-/**
- * Minimum Codex CLI version known to be compatible.
- * Used for a preflight warning (not a hard block) when the version is unrecognized.
- */
-const MIN_KNOWN_VERSION = "0.111.0";
-
 function compareVersions(a: string, b: string): number {
   const pa = a.split(".").map(Number);
   const pb = b.split(".").map(Number);
@@ -137,11 +132,12 @@ export class CodexAdapter implements ICliAdapter {
     const versionMatch = versionResult.stdout.trim().match(/(\d+\.\d+\.\d+)/);
     if (versionMatch) {
       const detected = versionMatch[1];
-      if (compareVersions(detected, MIN_KNOWN_VERSION) < 0) {
+      const minVersion = ADAPTER_COMPAT.codex.minVersion;
+      if (compareVersions(detected, minVersion) < 0) {
         // Warning only — do not block, as newer compatible versions may also work
         console.warn(
           `[codex-adapter] WARNING: Codex CLI version ${detected} is older than ` +
-            `minimum known compatible version ${MIN_KNOWN_VERSION}. ` +
+            `minimum known compatible version ${minVersion}. ` +
             `Some features may not work as expected.`
         );
       }
