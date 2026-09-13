@@ -13,19 +13,21 @@ import (
 )
 
 // openCodeForbiddenFlags are the flags the opencode adapter must never emit
-// (ADR-022 § 9, § 18): each one either approves tool calls without the
-// permission map, publishes the session, or binds a discoverable listener.
-var openCodeForbiddenFlags = []string{"--auto", "--yolo", "--dangerously-skip-permissions", "--share", "--mdns"}
+// (ADR-022 § The command, § 9, § 18): each one either approves tool calls
+// without the permission map, publishes the session, or exposes a listener to
+// the network or to other origins. TestOpenCodeNeverEmitsBypassFlags checks
+// the full list.
+var openCodeForbiddenFlags = []string{"--auto", "--yolo", "--dangerously-skip-permissions", "--share", "--port", "--mdns", "--cors"}
 
-// assertNoForbiddenFlag fails when any argv element is, or starts with, a
-// forbidden flag, which also catches the `--auto=true` spelling.
+// assertNoForbiddenFlag fails when any argv element spells a forbidden flag
+// in a form opencode accepts: `--auto=true`, `--auto.x` or
+// `--dangerouslySkipPermissions` as well as the plain flag
+// (openCodeForbiddenFlagIn).
 func assertNoForbiddenFlag(t *testing.T, args []string) {
 	t.Helper()
 	for _, a := range args {
-		for _, f := range openCodeForbiddenFlags {
-			if a == f || strings.HasPrefix(a, f+"=") {
-				t.Errorf("argv carries forbidden flag %q: %q", f, args)
-			}
+		if f, ok := openCodeForbiddenFlagIn(a); ok {
+			t.Errorf("argv carries forbidden flag %s as %q: %q", f, a, args)
 		}
 	}
 }
@@ -67,26 +69,6 @@ func TestOpenCodeBuildCommandArgv(t *testing.T) {
 		t.Errorf("argv =\n  %q\nwant\n  %q", args, want)
 	}
 	assertNoForbiddenFlag(t, args)
-}
-
-// TestOpenCodeBuildCommandNeverEmitsForbiddenFlags drives BuildCommand through
-// every RunOptions field that could plausibly grow a flag mapping, and a
-// hostile environment, and checks no forbidden flag ever appears.
-func TestOpenCodeBuildCommandNeverEmitsForbiddenFlags(t *testing.T) {
-	t.Setenv("NIGHTGAUGE_AUTO_APPROVE", "true")
-	a := NewOpenCodeAdapter()
-	cases := []RunOptions{
-		{},
-		{Prompt: "--auto --share --mdns --yolo --dangerously-skip-permissions"},
-		{Model: "anthropic/claude-sonnet-5", WorktreeDir: "/w", MaxTurns: 3, Effort: "max"},
-		{Model: "lmstudio/q", AllowedTools: []string{"Bash", "Edit", "Write", "WebFetch"}, CostBudget: 1, MaxTokens: 1},
-		{Model: "--auto/x"},
-		{Model: "lmstudio/--share"},
-	}
-	for _, opts := range cases {
-		_, args, _ := a.BuildCommand(opts)
-		assertNoForbiddenFlag(t, args)
-	}
 }
 
 // TestOpenCodePromptNeverOnArgv is the prompt-channel contract (ADR-022 § 19):
@@ -648,10 +630,13 @@ func TestOpenCodeArgvMatchesCapturedHelp(t *testing.T) {
 		}
 	}
 
-	// The forbidden flags this version defines. --yolo,
-	// --dangerously-skip-permissions and --mdns are not `run` options in the
-	// capture; they stay forbidden against a future version adding them.
-	for _, f := range []string{"--auto", "--share"} {
+	// The forbidden flags this version's help lists. --yolo and
+	// --dangerously-skip-permissions are hidden `run` options in 1.18.30 that
+	// switch on the same auto-approval as --auto, so the help never shows them;
+	// --mdns and --cors are not `run` options, and `run` exits 1 on either
+	// (testdata/cli-help/README.md). All of them stay forbidden, and
+	// TestOpenCodeNeverEmitsBypassFlags checks the full list.
+	for _, f := range []string{"--auto", "--share", "--port"} {
 		if _, ok := options[f]; !ok {
 			t.Errorf("forbidden flag %s is no longer an option of opencode %s run; re-check ADR-022 § 9 before editing the list", f, ver)
 		}

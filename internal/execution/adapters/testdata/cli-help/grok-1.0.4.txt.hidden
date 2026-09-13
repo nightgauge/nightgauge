@@ -1,0 +1,3 @@
+# Flags grok 1.0.4 accepts that `grok --help` does not list, one per line.
+# Each was probed on 1.0.4; the probe and its control are in README.md § Probes.
+--no-auto-update

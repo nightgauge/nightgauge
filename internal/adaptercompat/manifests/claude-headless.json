@@ -13,14 +13,26 @@
   "companion_feeds": [],
   "install": { "npm": "@anthropic-ai/claude-code" },
   "managed_install": "",
-  "required_flags": [],
+  "required_flags": [
+    "--allowedTools",
+    "--max-budget-usd",
+    "--max-tokens",
+    "--max-turns",
+    "--model",
+    "--no-session-persistence",
+    "--output-format",
+    "--verbose",
+    "-p"
+  ],
   "catalog": {
     "skip_reason": "claude --help (2.1.233) lists --model to select a model and no command that lists them; see internal/doctor/testdata/no-catalog-cli-probes."
   },
   "fixtures": [
     "internal/execution/testdata/claude_stream_real_capture.jsonl",
     "internal/execution/testdata/claude_stream_subagent_multi_result.jsonl",
-    "internal/doctor/testdata/no-catalog-cli-probes/claude-help.txt"
+    "internal/doctor/testdata/no-catalog-cli-probes/claude-help.txt",
+    "internal/execution/adapters/testdata/cli-help/claude-headless-2.1.258.txt",
+    "internal/execution/adapters/testdata/cli-help/claude-headless-2.1.258.txt.hidden"
   ],
   "config_schema_sha256": "",
   "plugin_api_version": "",
