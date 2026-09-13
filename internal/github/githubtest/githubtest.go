@@ -211,10 +211,14 @@ func (f *Forge) issueFields(q string, n int) interface{} {
 	members := map[string][]int{"subIssues": iss.SubIssues, "blockedBy": iss.BlockedBy, "blocking": iss.Blocking}
 	for _, m := range reFirstPage.FindAllStringSubmatch(q, -1) {
 		conn := m[1]
-		first, _ := strconv.Atoi(m[2])
+		first, ok := f.pageSize(conn, m[2])
+		if !ok {
+			continue
+		}
 		all := members[conn]
-		nodes := make([]interface{}, 0, first)
-		for _, member := range all[:min(first, len(all))] {
+		page := all[:min(first, len(all))]
+		nodes := make([]interface{}, 0, len(page))
+		for _, member := range page {
 			nodes = append(nodes, map[string]interface{}{
 				"id":         nodeID(member),
 				"number":     member,
@@ -229,6 +233,22 @@ func (f *Forge) issueFields(q string, n int) interface{} {
 		}
 	}
 	return out
+}
+
+// maxPageSize is the largest page GitHub serves a connection; it rejects a
+// query that asks for more.
+const maxPageSize = 100
+
+// pageSize parses the page size a query asks of connection conn. GitHub
+// accepts 1 to maxPageSize, so the fake fails the test on anything else
+// rather than render a page of that size.
+func (f *Forge) pageSize(conn, s string) (int, bool) {
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 1 || n > maxPageSize {
+		f.t.Errorf("githubtest: %s(first: %s) is outside GitHub's page size range 1..%d", conn, s, maxPageSize)
+		return 0, false
+	}
+	return n, true
 }
 
 // serveLabels answers the REST repository label list with RepoLabels and

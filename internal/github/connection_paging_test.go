@@ -200,7 +200,10 @@ func (f *relationForge) serve(w http.ResponseWriter, r *http.Request) {
 		data = map[string]interface{}{}
 		for _, m := range reFollowUp.FindAllStringSubmatch(q, -1) {
 			alias, idVar, conn, afterVar := "r"+m[1], "id"+m[2], m[3], "after"+m[5]
-			first, _ := strconv.Atoi(m[4])
+			first, ok := f.pageSize(conn, m[4])
+			if !ok {
+				continue
+			}
 			f.followUps[conn]++
 			iss := f.byID[fmt.Sprint(vars[idVar])]
 			switch {
@@ -304,11 +307,30 @@ func (f *relationForge) issueFields(q string, iss *fakeIssue) map[string]interfa
 		if m == nil {
 			continue
 		}
-		first, _ := strconv.Atoi(m[1])
+		first, ok := f.pageSize(conn, m[1])
+		if !ok {
+			continue
+		}
 		withPageInfo := regexp.MustCompile(conn + `\([^)]*\)\s*\{\s*pageInfo`).MatchString(q)
 		out[conn] = f.page(conn, iss, 0, first, withPageInfo)
 	}
 	return out
+}
+
+// githubMaxPageSize is the largest page GitHub serves a connection; it rejects
+// a query that asks for more.
+const githubMaxPageSize = 100
+
+// pageSize parses the page size a query asks of connection conn. GitHub
+// accepts 1 to githubMaxPageSize, so the fake fails the test on anything else
+// rather than render a page of that size.
+func (f *relationForge) pageSize(conn, s string) (int, bool) {
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 1 || n > githubMaxPageSize {
+		f.t.Errorf("relationForge: %s(first: %s) is outside GitHub's page size range 1..%d", conn, s, githubMaxPageSize)
+		return 0, false
+	}
+	return n, true
 }
 
 // page renders nodes [start, start+first) of one connection.
@@ -335,12 +357,14 @@ func (f *relationForge) page(conn string, iss *fakeIssue, start, first int, with
 	case "blocking":
 		all = iss.blocks
 	}
-	end := start + first
-	if end > len(all) {
-		end = len(all)
+	if start < 0 || start > len(all) {
+		f.t.Errorf("relationForge: %s cursor after-%d is outside the connection's %d nodes", conn, start, len(all))
+		start = len(all)
 	}
-	nodes := make([]interface{}, 0, end-start)
-	for _, n := range all[start:end] {
+	end := min(start+first, len(all))
+	rows := all[start:end]
+	nodes := make([]interface{}, 0, len(rows))
+	for _, n := range rows {
 		state := "OPEN"
 		if rel := f.byNumber[n]; rel != nil {
 			state = rel.state
