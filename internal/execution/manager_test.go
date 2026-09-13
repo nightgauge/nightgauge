@@ -2,13 +2,14 @@ package execution
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -789,6 +790,7 @@ func captureStderr(t *testing.T, fn func()) string {
 // refusal comes from the adapter's PreDispatch hook, which RunStage calls
 // before BuildCommand; without that call the fake would run in every case.
 func TestOpenCodeDispatchRefusedUntilEnabled(t *testing.T) {
+	isolateOpenCodeHome(t)
 	stubDir := t.TempDir()
 	invocations := filepath.Join(stubDir, "invocations.log")
 	argvFile := filepath.Join(stubDir, "argv.txt")
@@ -879,7 +881,7 @@ func TestOpenCodeDispatchRefusedUntilEnabled(t *testing.T) {
 		if !strings.Contains(stderr, warningHeader) {
 			t.Errorf("stderr lacks the warning line %q:\n%s", warningHeader, stderr)
 		}
-		for _, control := range []string{"stream parsing", "run isolation", "permission map", "safety plugin"} {
+		for _, control := range []string{"stream parsing", "egress defaults", "permission map", "safety plugin"} {
 			if !strings.Contains(stderr, "[opencode]   - "+control+": ") {
 				t.Errorf("warning does not list the %q control:\n%s", control, stderr)
 			}
@@ -909,63 +911,128 @@ func TestOpenCodeDispatchRefusedUntilEnabled(t *testing.T) {
 	})
 }
 
-// TestOpenCodeAnthropicDispatchRefusedWithGateOpen: with the enable switch set
-// and ANTHROPIC_API_KEY present, RunStage still refuses an anthropic/ model
-// before spawn, because until the credential policy is enforced (#1616)
-// nothing stops OpenCode authenticating with a subscription or OAuth login it
-// has stored (ADR-022 § 17). A fake `opencode` first on PATH counts its
-// invocations: none for the anthropic/ model, and one for a local model under
-// the same switch, so the refusal is the anthropic rule and not the gate.
-func TestOpenCodeAnthropicDispatchRefusedWithGateOpen(t *testing.T) {
-	stubDir := t.TempDir()
-	invocations := filepath.Join(stubDir, "invocations.log")
-	script := fmt.Sprintf("#!/bin/sh\necho invoked >> %q\ncat > /dev/null\nexit 0\n", invocations)
-	if err := os.WriteFile(filepath.Join(stubDir, "opencode"), []byte(script), 0755); err != nil {
-		t.Fatal(err)
+// isolateOpenCodeHome points HOME at a fresh directory and clears every
+// variable the opencode run root is resolved from, so a test's run roots,
+// ~/.opencode check and machine-tier directory never touch the real home.
+func isolateOpenCodeHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	for _, k := range []string{
+		"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME",
+		// The inherit opt-in, by the name operators set (ADR-022 § 8).
+		"GH_CONFIG_DIR", "GOCACHE", "NIGHTGAUGE_CONFIG_HOME", "NIGHTGAUGE_OPENCODE_INHERIT_USER_CONFIG",
+	} {
+		t.Setenv(k, "")
 	}
-	t.Setenv("PATH", stubDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
-	t.Setenv("ANTHROPIC_API_KEY", "set-by-the-test")
+	return home
+}
 
-	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, ".nightgauge", "worktrees", "nightgauge-issue-1612"), 0755); err != nil {
+// openCodeFake is a fake `opencode` first on PATH. Each run records the
+// environment it received, NUL-separated, and the listing of its four XDG
+// directories, then runs extra, a shell fragment, and drains stdin.
+type openCodeFake struct{ dir string }
+
+func installOpenCodeFake(t *testing.T, extra string) *openCodeFake {
+	t.Helper()
+	dir := t.TempDir()
+	script := fmt.Sprintf(`#!/bin/sh
+echo invoked >> %[1]q/invocations.log
+env -0 > %[1]q/env.bin
+ls -ld "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME" "$XDG_STATE_HOME" > %[1]q/dirs.txt 2>&1
+%[2]s
+cat > /dev/null
+exit 0
+`, dir, extra)
+	if err := os.WriteFile(filepath.Join(dir, "opencode"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	dispatch := func(model string) (string, error) {
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return &openCodeFake{dir: dir}
+}
+
+func (f *openCodeFake) invocations(t *testing.T) int {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(f.dir, "invocations.log"))
+	if os.IsNotExist(err) {
+		return 0
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Count(string(raw), "invoked\n")
+}
+
+// env returns the last run's environment, and every entry of it, duplicates
+// included, as the child saw them.
+func (f *openCodeFake) env(t *testing.T) (map[string]string, []string) {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(f.dir, "env.bin"))
+	if err != nil {
+		t.Fatalf("the fake opencode did not record its environment: %v", err)
+	}
+	entries := strings.Split(strings.TrimSuffix(string(raw), "\x00"), "\x00")
+	env := map[string]string{}
+	for _, kv := range entries {
+		k, v, _ := strings.Cut(kv, "=")
+		env[k] = v
+	}
+	return env, entries
+}
+
+// openCodeStageOptions is a feature-dev dispatch of model for issue 1612.
+func openCodeStageOptions(model string, runtime *state.RuntimeState) StageOptions {
+	return StageOptions{
+		Repo:        "nightgauge/nightgauge",
+		IssueNumber: 1612,
+		Stage:       "feature-dev",
+		Model:       model,
+		Prompt:      "implement the issue",
+		Timeout:     30 * time.Second,
+		Runtime:     runtime,
+	}
+}
+
+// openCodeWorkspace is a workspace root whose issue-1612 worktree exists.
+func openCodeWorkspace(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".nightgauge", "worktrees", "nightgauge-issue-1612"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+// TestOpenCodeAnthropicDispatchNeedsTheAPIKey is ADR-022 § 17's key
+// requirement observed where it matters, whether RunStage spawns the CLI.
+// With the enable switch set and ANTHROPIC_API_KEY unset, an anthropic/ model
+// is refused before spawn and the fake never runs; with the key set, the
+// dispatch spawns once, because run isolation leaves OpenCode no stored login
+// to use in its place, and the child receives the key.
+func TestOpenCodeAnthropicDispatchNeedsTheAPIKey(t *testing.T) {
+	isolateOpenCodeHome(t)
+	fake := installOpenCodeFake(t, "")
+	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
+	root := openCodeWorkspace(t)
+	dispatch := func() (string, error) {
 		var err error
 		stderr := captureStderr(t, func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			_, err = NewManager(root, adapters.NewOpenCodeAdapter()).RunStage(ctx, StageOptions{
-				Repo:        "nightgauge/nightgauge",
-				IssueNumber: 1612,
-				Stage:       "feature-dev",
-				Model:       model,
-				Prompt:      "implement the issue",
-				Timeout:     30 * time.Second,
-			})
+			_, err = NewManager(root, adapters.NewOpenCodeAdapter()).RunStage(ctx, openCodeStageOptions("anthropic/claude-sonnet-5", nil))
 		})
 		return stderr, err
 	}
-	invocationCount := func() int {
-		raw, err := os.ReadFile(invocations)
-		if os.IsNotExist(err) {
-			return 0
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		return strings.Count(string(raw), "invoked\n")
-	}
 
-	stderr, err := dispatch("anthropic/claude-sonnet-5")
-	if n := invocationCount(); n != 0 {
-		t.Errorf("the opencode binary ran %d time(s) for an anthropic/ model; want 0", n)
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	stderr, err := dispatch()
+	if n := fake.invocations(t); n != 0 {
+		t.Errorf("the opencode binary ran %d time(s) with ANTHROPIC_API_KEY unset; want 0", n)
 	}
 	if err == nil {
-		t.Fatal("RunStage dispatched anthropic/claude-sonnet-5 through opencode with the switch set; want a refusal until #1616")
+		t.Fatal("RunStage dispatched anthropic/claude-sonnet-5 through opencode with ANTHROPIC_API_KEY unset")
 	}
-	for _, want := range []string{"dispatch refused", "ANTHROPIC_API_KEY", "claude-headless", "#1616"} {
+	for _, want := range []string{"dispatch refused", "ANTHROPIC_API_KEY is not set", "claude-headless"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("refusal does not mention %q: %v", want, err)
 		}
@@ -974,79 +1041,356 @@ func TestOpenCodeAnthropicDispatchRefusedWithGateOpen(t *testing.T) {
 		t.Errorf("a refused dispatch printed the enabled-dispatch warning:\n%s", stderr)
 	}
 
-	if _, err := dispatch("lmstudio/qwen/qwen3.8-27b"); err != nil {
-		t.Fatalf("RunStage refused a local model under the same switch: %v", err)
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-fake-key-for-the-test-1616")
+	// An inherited base URL would send the stage and its key to whatever
+	// server it names, a proxy serving a subscription included, so it never
+	// reaches the child: the endpoint is the catalog's or a config's.
+	t.Setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:9/v1")
+	if _, err := dispatch(); err != nil {
+		t.Fatalf("RunStage refused anthropic/claude-sonnet-5 with ANTHROPIC_API_KEY set: %v", err)
 	}
-	if n := invocationCount(); n != 1 {
-		t.Errorf("the opencode binary ran %d time(s) after the local-model dispatch; want exactly 1", n)
+	if n := fake.invocations(t); n != 1 {
+		t.Errorf("the opencode binary ran %d time(s) after the keyed dispatch; want exactly 1", n)
+	}
+	env, _ := fake.env(t)
+	if env["ANTHROPIC_API_KEY"] != "sk-ant-fake-key-for-the-test-1616" {
+		t.Error("an anthropic/ dispatch did not hand the child its own provider's key")
+	}
+	if v, ok := env["ANTHROPIC_BASE_URL"]; ok {
+		t.Errorf("ANTHROPIC_BASE_URL reached an anthropic/ child (%q); the key could go to any server", v)
 	}
 }
 
-// TestOpenCodeSpawnWithholdsInheritedAuthContent: opencode 1.18.30 takes its
-// stored logins from OPENCODE_AUTH_CONTENT in place of auth.json when the
-// variable is set, and exports it, holding every login it has stored, to the
-// processes it starts (ADR-022 § 17). A value the nightgauge process inherits
-// would hand the stage those logins however empty its data directory is. A
-// fake `opencode` first on PATH writes the environment it received: the
-// inherited variable must be absent from it and its value from everything the
-// run printed, while an unrelated inherited variable arrives, so the absence
-// is not an empty dump. Without the adapter's WithheldEnv hook, or without
-// composeStageEnv applying it, the variable reaches the child.
-func TestOpenCodeSpawnWithholdsInheritedAuthContent(t *testing.T) {
-	stubDir := t.TempDir()
-	envFile := filepath.Join(stubDir, "env.txt")
-	script := fmt.Sprintf("#!/bin/sh\nenv > %q\ncat > /dev/null\nexit 0\n", envFile)
-	if err := os.WriteFile(filepath.Join(stubDir, "opencode"), []byte(script), 0755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", stubDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+// TestOpenCodeSpawnWithholdsInheritedOpenCodeVariablesAndForeignKeys is the
+// inherited-environment policy (ADR-022 § 8, § 17) at the only place it is
+// observable, the environment the child receives. Every inherited OPENCODE_*
+// variable is absent, the login-bearing ones included, and no value of one
+// reaches the child or anything the run printed. A local model receives none
+// of the variables OpenCode's catalog binds to a hosted model service, beyond
+// the issue's seven too, and no provider base URL, and the dispatch names on
+// stderr the ones it withheld. A cloud platform's credentials arrive whole,
+// the catalog's and the companions it does not list alike, so the stage's
+// tools keep the identity the operator chose instead of falling back to
+// another. The adapter's own OPENCODE_* exports survive the filter, and an
+// unrelated inherited variable arrives, so the absences are not an empty dump.
+func TestOpenCodeSpawnWithholdsInheritedOpenCodeVariablesAndForeignKeys(t *testing.T) {
+	isolateOpenCodeHome(t)
+	fake := installOpenCodeFake(t, "")
 	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
-	// A fake login in the shape OpenCode stores, never a real credential.
-	const sentinel = "fake-login-sentinel-1612"
-	t.Setenv("OPENCODE_AUTH_CONTENT",
-		`{"anthropic":{"type":"oauth","refresh":"`+sentinel+`","access":"`+sentinel+`","expires":0}}`)
+	// Fake values in the shapes OpenCode reads, never real credentials.
+	const sentinel = "fake-login-sentinel-1616"
+	inherited := map[string]string{
+		"OPENCODE_AUTH_CONTENT":    `{"anthropic":{"type":"oauth","refresh":"` + sentinel + `"}}`,
+		"OPENCODE_CONSOLE_TOKEN":   sentinel + "-console",
+		"OPENCODE_DB":              "/tmp/" + sentinel + ".db",
+		"OPENCODE_CONFIG_CONTENT":  `{"small_model":"` + sentinel + `/x"}`,
+		"OPENCODE_CONFIG":          "/tmp/" + sentinel + ".json",
+		"OPENCODE_CONFIG_DIR":      "/tmp/" + sentinel,
+		"OPENCODE_MODELS_PATH":     "/tmp/" + sentinel + "-models.json",
+		"OPENCODE_SERVER_PASSWORD": sentinel + "-password",
+	}
+	for k, v := range inherited {
+		t.Setenv(k, v)
+	}
+	keys := []string{
+		"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "XAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENROUTER_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY",
+		"GROQ_API_KEY", "MISTRAL_API_KEY", "DEEPSEEK_API_KEY",
+		"ANTHROPIC_BASE_URL", "OPENAI_BASE_URL",
+	}
+	for _, k := range keys {
+		t.Setenv(k, sentinel+"-"+strings.ToLower(k))
+	}
+	// Scoped cloud credentials, as a credential helper exports them. Fake
+	// values; the stage's tools must receive every one of them.
+	platform := map[string]string{
+		"AWS_ACCESS_KEY_ID":              "platform-kept-aws-access-key-id",
+		"AWS_SECRET_ACCESS_KEY":          "platform-kept-aws-secret-access-key",
+		"AWS_SESSION_TOKEN":              "platform-kept-aws-session-token",
+		"AWS_REGION":                     "platform-kept-aws-region",
+		"GOOGLE_APPLICATION_CREDENTIALS": "/tmp/platform-kept-service-account.json",
+		"GOOGLE_CLOUD_PROJECT":           "platform-kept-project",
+		"DATABRICKS_HOST":                "platform-kept-databricks-host",
+		"DATABRICKS_TOKEN":               "platform-kept-databricks-token",
+	}
+	for k, v := range platform {
+		t.Setenv(k, v)
+	}
 	t.Setenv("NIGHTGAUGE_TEST_INHERITED", "kept")
 
-	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, ".nightgauge", "worktrees", "nightgauge-issue-1612"), 0755); err != nil {
-		t.Fatal(err)
-	}
 	var result *adapters.RunResult
 	var err error
 	stderr := captureStderr(t, func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		result, err = NewManager(root, adapters.NewOpenCodeAdapter()).RunStage(ctx, StageOptions{
-			Repo:        "nightgauge/nightgauge",
-			IssueNumber: 1612,
-			Stage:       "feature-dev",
-			Model:       "lmstudio/qwen/qwen3.8-27b",
-			Prompt:      "implement the issue",
-			Timeout:     30 * time.Second,
-		})
+		result, err = NewManager(openCodeWorkspace(t), adapters.NewOpenCodeAdapter()).RunStage(ctx, openCodeStageOptions("lmstudio/qwen/qwen3.8-27b", nil))
 	})
 	if err != nil {
 		t.Fatalf("RunStage refused a local model with %s=1: %v", adapters.ExperimentalOpenCodeEnvVar, err)
 	}
-	raw, err := os.ReadFile(envFile)
-	if err != nil {
-		t.Fatalf("the fake opencode did not record its environment: %v", err)
+	env, entries := fake.env(t)
+	if env["NIGHTGAUGE_TEST_INHERITED"] != "kept" {
+		t.Fatal("an unrelated inherited variable did not reach the child, so its recorded environment proves nothing")
 	}
-	childEnv := strings.Split(string(raw), "\n")
-	if !slices.Contains(childEnv, "NIGHTGAUGE_TEST_INHERITED=kept") {
-		t.Fatalf("an unrelated inherited variable did not reach the child, so its recorded environment proves nothing:\n%s", raw)
-	}
-	for _, kv := range childEnv {
-		if strings.HasPrefix(kv, "OPENCODE_AUTH_CONTENT=") {
-			t.Error("OPENCODE_AUTH_CONTENT reached the opencode child; an inherited login must never reach a stage")
+	for k := range inherited {
+		if k == "OPENCODE_SERVER_PASSWORD" {
+			continue // the adapter mints its own; checked below
+		}
+		if v, ok := env[k]; ok {
+			t.Errorf("%s reached the opencode child (%d bytes); no inherited OpenCode variable may", k, len(v))
 		}
 	}
-	if strings.Contains(string(raw), sentinel) {
-		t.Error("the inherited login's value reached the opencode child's environment")
+	if p := env["OPENCODE_SERVER_PASSWORD"]; p == "" || strings.Contains(p, sentinel) {
+		t.Error("the child did not get the adapter's own server password in place of the inherited one")
+	}
+	if env["OPENCODE_DISABLE_SHARE"] != "1" {
+		t.Error("the filter removed the adapter's own OPENCODE_* exports along with the inherited ones")
+	}
+	for _, k := range keys {
+		if _, ok := env[k]; ok {
+			t.Errorf("%s reached a local-model child; a local run inherits no hosted model service's credentials and no base URL", k)
+		}
+	}
+	for k, v := range platform {
+		if env[k] != v {
+			t.Errorf("%s did not reach the child intact; withholding part of a cloud platform's credentials moves the stage's tools to another identity", k)
+		}
+	}
+	var notice []string
+	for _, line := range strings.Split(stderr, "\n") {
+		if strings.Contains(line, "withheld from this stage and every tool it runs: ") {
+			notice = append(notice, line)
+		}
+	}
+	if len(notice) != 1 {
+		t.Errorf("stderr has %d lines naming the withheld variables, want 1:\n%s", len(notice), stderr)
+	} else {
+		for _, k := range []string{"OPENAI_API_KEY", "GROQ_API_KEY", "ANTHROPIC_BASE_URL"} {
+			if !strings.Contains(notice[0], k) {
+				t.Errorf("the withheld-variables line does not name %s:\n%s", k, notice[0])
+			}
+		}
+		for k := range platform {
+			if strings.Contains(notice[0], k) {
+				t.Errorf("the withheld-variables line names %s, which the stage keeps:\n%s", k, notice[0])
+			}
+		}
+	}
+	for _, kv := range entries {
+		if strings.Contains(kv, sentinel) {
+			t.Errorf("an inherited secret's value reached the child's environment in %.40q", kv)
+		}
 	}
 	for name, out := range map[string]string{"stderr": stderr, "result.Stdout": result.Stdout, "result.Stderr": result.Stderr} {
 		if strings.Contains(out, sentinel) {
-			t.Errorf("the inherited login's value was written to %s", name)
+			t.Errorf("an inherited secret's value was written to %s", name)
+		}
+	}
+}
+
+// TestOpenCodeStageRunsInItsOwnRunRoot: every opencode spawn runs with its
+// four XDG directories inside ~/.nightgauge/opencode/runs/<id>/, each a 0700
+// directory, and with the tools that move with XDG pinned back to the
+// operator's (ADR-022 § 8). A dispatch with no run identity gets a root id of
+// its own, never exported as NIGHTGAUGE_RUN_ID, and its root is gone when
+// RunStage returns. The stages of an identified run share one root, which
+// outlives each stage: the run's end deletes it (§ 22,
+// TestManagerCleanupOpenCodeRunRoot).
+func TestOpenCodeStageRunsInItsOwnRunRoot(t *testing.T) {
+	home := isolateOpenCodeHome(t)
+	operatorXDG := filepath.Join(home, "operator-xdg")
+	t.Setenv("XDG_CONFIG_HOME", operatorXDG)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "operator-data"))
+	fake := installOpenCodeFake(t, "")
+	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
+	runs := filepath.Join(home, ".nightgauge", "opencode", "runs")
+	workspace := openCodeWorkspace(t)
+
+	run := func(runtime *state.RuntimeState) map[string]string {
+		t.Helper()
+		var err error
+		captureStderr(t, func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			_, err = NewManager(workspace, adapters.NewOpenCodeAdapter()).RunStage(ctx, openCodeStageOptions("lmstudio/qwen/qwen3.8-27b", runtime))
+		})
+		if err != nil {
+			t.Fatalf("RunStage: %v", err)
+		}
+		env, entries := fake.env(t)
+		for _, k := range []string{"XDG_CONFIG_HOME", "XDG_DATA_HOME", "GH_CONFIG_DIR", "NIGHTGAUGE_CONFIG_HOME"} {
+			n := 0
+			for _, kv := range entries {
+				if strings.HasPrefix(kv, k+"=") {
+					n++
+				}
+			}
+			if n != 1 {
+				t.Errorf("%s appears %d times in the child's environment, want exactly 1", k, n)
+			}
+		}
+		return env
+	}
+
+	env := run(nil)
+	rootDir := filepath.Dir(env["XDG_DATA_HOME"])
+	if filepath.Dir(rootDir) != runs || !runstate.IsIdentity(filepath.Base(rootDir)) {
+		t.Fatalf("XDG_DATA_HOME = %q, want <home>/.nightgauge/opencode/runs/<run id>/data", env["XDG_DATA_HOME"])
+	}
+	for xdg, dir := range map[string]string{"XDG_CONFIG_HOME": "config", "XDG_DATA_HOME": "data", "XDG_CACHE_HOME": "cache", "XDG_STATE_HOME": "state"} {
+		if want := filepath.Join(rootDir, dir); env[xdg] != want {
+			t.Errorf("%s = %q, want %q", xdg, env[xdg], want)
+		}
+	}
+	listing, _ := os.ReadFile(filepath.Join(fake.dir, "dirs.txt"))
+	if lines := strings.Split(strings.TrimSpace(string(listing)), "\n"); len(lines) != 4 {
+		t.Errorf("the child did not find its four XDG directories:\n%s", listing)
+	} else {
+		for _, line := range lines {
+			if !strings.HasPrefix(line, "drwx------") {
+				t.Errorf("an XDG directory is not a 0700 directory: %s", line)
+			}
+		}
+	}
+	if _, ok := env[adapters.RunIDEnvVar]; ok {
+		t.Errorf("a dispatch with no run identity exported %s", adapters.RunIDEnvVar)
+	}
+	for k, want := range map[string]string{
+		"GH_CONFIG_DIR":                       filepath.Join(operatorXDG, "gh"),
+		"NIGHTGAUGE_CONFIG_HOME":              filepath.Join(operatorXDG, "nightgauge"),
+		"OPENCODE_DISABLE_CLAUDE_CODE_SKILLS": "1",
+		"OPENCODE_DISABLE_EXTERNAL_SKILLS":    "1",
+	} {
+		if env[k] != want {
+			t.Errorf("%s = %q, want %q", k, env[k], want)
+		}
+	}
+	if env["GOCACHE"] == "" || strings.HasPrefix(env["GOCACHE"], rootDir) {
+		t.Errorf("GOCACHE = %q; want the operator's build cache, outside the run root", env["GOCACHE"])
+	}
+	if _, ok := env["OPENCODE_DISABLE_CLAUDE_CODE"]; ok {
+		t.Error("the blanket OPENCODE_DISABLE_CLAUDE_CODE is set")
+	}
+	if left, _ := os.ReadDir(runs); len(left) != 0 {
+		t.Errorf("the root of a dispatch with no run identity survived RunStage: %d entries in %s", len(left), runs)
+	}
+
+	const runID = "01890a5d-ac96-774b-bcce-b302099a8057"
+	runtime := state.NewRuntimeState("nightgauge/nightgauge", 1612, "item-1612", runID)
+	first := run(runtime)
+	second := run(runtime)
+	want := filepath.Join(runs, runID, "data")
+	if first["XDG_DATA_HOME"] != want || second["XDG_DATA_HOME"] != want {
+		t.Errorf("the stages of run %s ran in %q and %q, want both in %q", runID, first["XDG_DATA_HOME"], second["XDG_DATA_HOME"], want)
+	}
+	if first[adapters.RunIDEnvVar] != runID {
+		t.Errorf("%s = %q, want the run's identity", adapters.RunIDEnvVar, first[adapters.RunIDEnvVar])
+	}
+	if _, err := os.Stat(filepath.Join(runs, runID)); err != nil {
+		t.Fatalf("an identified run's root did not outlive its stage: %v", err)
+	}
+}
+
+// redactionStreamer records everything the manager streams.
+type redactionStreamer struct {
+	mu  sync.Mutex
+	out strings.Builder
+}
+
+func (r *redactionStreamer) OnOutput(_ string, data []byte) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.out.Write(data)
+}
+
+func (r *redactionStreamer) OnComplete(adapters.RunResult) {}
+
+// TestOpenCodeCapturedOutputIsRedacted (ADR-022 § 22): a tool that prints its
+// environment must not put the secrets Nightgauge handed the child in a log.
+// The fake prints the server password, the forge tokens and the dispatched
+// provider's API key on stdout, inside a JSON event, and on stderr. None of
+// the values may reach the streamed output or the result; each becomes
+// [REDACTED:<name>], the JSON event stays valid, and an ordinary line is kept.
+// The dispatched provider's key is redacted whichever provider it is: openai,
+// and deepseek, which no hand-written list of providers named.
+func TestOpenCodeCapturedOutputIsRedacted(t *testing.T) {
+	for model, keyVar := range map[string]string{
+		"openai/gpt-5.5":         "OPENAI_API_KEY",
+		"deepseek/deepseek-chat": "DEEPSEEK_API_KEY",
+	} {
+		t.Run(keyVar, func(t *testing.T) {
+			isolateOpenCodeHome(t)
+			fake := installOpenCodeFake(t, `printf '{"type":"text","part":{"text":"pw=%s gh=%s ght=%s gl=%s key=%s%s"}}\n' "$OPENCODE_SERVER_PASSWORD" "$GITHUB_TOKEN" "$GH_TOKEN" "$GITLAB_TOKEN" "$OPENAI_API_KEY" "$DEEPSEEK_API_KEY"
+echo "an ordinary line"
+echo "ERROR leaked $GITHUB_TOKEN $OPENAI_API_KEY $DEEPSEEK_API_KEY $OPENCODE_SERVER_PASSWORD $GH_TOKEN $GITLAB_TOKEN" >&2`)
+			t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
+			t.Setenv("GITHUB_TOKEN", "fake-github-token-for-the-redaction-test-1616")
+			t.Setenv("GH_TOKEN", "fake-gh-token-for-the-redaction-test-1616")
+			t.Setenv("GITLAB_TOKEN", "fake-gitlab-token-for-the-redaction-test-1616")
+			t.Setenv("OPENAI_API_KEY", "sk-proj-fakeOpenAIKeyForTheRedactionTest1616")
+			t.Setenv("DEEPSEEK_API_KEY", "sk-fakeDeepSeekKeyForTheRedactionTest1616")
+
+			streamer := &redactionStreamer{}
+			opts := openCodeStageOptions(model, nil)
+			opts.Streamer = streamer
+			var result *adapters.RunResult
+			var err error
+			captureStderr(t, func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				result, err = NewManager(openCodeWorkspace(t), adapters.NewOpenCodeAdapter()).RunStage(ctx, opts)
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			env, _ := fake.env(t)
+			secrets := map[string]string{}
+			for _, name := range []string{"OPENCODE_SERVER_PASSWORD", "GITHUB_TOKEN", "GH_TOKEN", "GITLAB_TOKEN", keyVar} {
+				if env[name] == "" {
+					t.Fatalf("%s did not reach the child, so its output proves nothing", name)
+				}
+				secrets[name] = env[name]
+			}
+			outputs := map[string]string{"streamed": streamer.out.String(), "result.Stdout": result.Stdout, "result.Stderr": result.Stderr}
+			for where, out := range outputs {
+				for name, value := range secrets {
+					if strings.Contains(out, value) {
+						t.Errorf("%s holds the value of %s", where, name)
+					}
+					if !strings.Contains(out, "[REDACTED:"+name+"]") {
+						t.Errorf("%s does not show where %s was redacted:\n%s", where, name, out)
+					}
+				}
+			}
+			if !strings.Contains(result.Stdout, "an ordinary line") {
+				t.Error("redaction removed an ordinary line")
+			}
+			if event, _, _ := strings.Cut(result.Stdout, "\n"); !json.Valid([]byte(event)) {
+				t.Errorf("the redacted JSON event is not valid JSON: %s", event)
+			}
+		})
+	}
+}
+
+// TestComposeStageEnv_AdapterExportReplacesTheInheritedValue: an export
+// replaces the host's value of the same name instead of landing beside it,
+// which the opencode adapter relies on to re-point XDG_CONFIG_HOME,
+// GH_CONFIG_DIR and NIGHTGAUGE_CONFIG_HOME (ADR-022 § 8). A reader that takes
+// the first match, rather than the last, would otherwise see the operator's.
+func TestComposeStageEnv_AdapterExportReplacesTheInheritedValue(t *testing.T) {
+	inherited := []string{"PATH=/usr/bin", "XDG_CONFIG_HOME=/operator/xdg", "GH_CONFIG_DIR=/operator/gh"}
+	env := composeStageEnv(inherited, nil, map[string]string{
+		"XDG_CONFIG_HOME": "/run/config",
+		"GH_CONFIG_DIR":   "/operator/gh",
+	}, "", "")
+	for k, want := range map[string]string{"XDG_CONFIG_HOME": "/run/config", "GH_CONFIG_DIR": "/operator/gh"} {
+		n := 0
+		for _, kv := range env {
+			if strings.HasPrefix(kv, k+"=") {
+				n++
+			}
+		}
+		if v, _ := lookupEnv(env, k); n != 1 || v != want {
+			t.Errorf("%s appears %d times with final value %q; want once, %q", k, n, v, want)
 		}
 	}
 }

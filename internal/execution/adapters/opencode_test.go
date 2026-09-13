@@ -194,6 +194,27 @@ func TestOpenCodeEnvContract(t *testing.T) {
 	if v, ok := env["GITHUB_TOKEN"]; ok {
 		t.Errorf("GITHUB_TOKEN exported as %q with none in the host environment", v)
 	}
+	// With no run root prepared there is nothing to point OpenCode at, and
+	// BuildCommand invents none.
+	for k := range env {
+		if strings.HasPrefix(k, "XDG_") || strings.HasPrefix(k, "OPENCODE_DISABLE_") {
+			t.Errorf("BuildCommand exported %s with no run root prepared", k)
+		}
+	}
+
+	// The run root's environment, which PrepareRunRoot resolves, is exported
+	// exactly as prepared (ADR-022 § 8).
+	root := &RunRoot{Dir: "/r", Env: map[string]string{
+		"XDG_DATA_HOME":                       "/r/data",
+		"OPENCODE_DISABLE_CLAUDE_CODE_PROMPT": "1",
+		"GH_CONFIG_DIR":                       "/operator/gh",
+	}}
+	_, _, env = NewOpenCodeAdapter().BuildCommand(RunOptions{Model: "lmstudio/q", RunRoot: root})
+	for k, v := range root.Env {
+		if env[k] != v {
+			t.Errorf("env[%s] = %q, want the run root's %q", k, env[k], v)
+		}
+	}
 }
 
 // TestOpenCodeGate pins the enable switch: exactly "1" opens it, and an open
@@ -206,7 +227,7 @@ func TestOpenCodeGate(t *testing.T) {
 			t.Errorf("gate value %q opened the gate; only exactly \"1\" may", v)
 			continue
 		}
-		for _, want := range []string{ExperimentalOpenCodeEnvVar + "=1", "--adapter", "NIGHTGAUGE_ADAPTER", "stream parsing", "run isolation", "permission map", "safety plugin"} {
+		for _, want := range []string{ExperimentalOpenCodeEnvVar + "=1", "--adapter", "NIGHTGAUGE_ADAPTER", "stream parsing", "egress defaults", "permission map", "safety plugin"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("refusal for %q does not mention %q: %v", v, want, err)
 			}
@@ -236,28 +257,44 @@ func TestOpenCodeGate(t *testing.T) {
 
 // TestOpenCodeWarningDisclosesWhereThePromptCanGo: the model a stage names is
 // not the only place its prompt can go, and the warning is the operator's only
-// disclosure of the others. The anthropic refusal sees only the stage's model,
-// while any OpenCode config the run reads, the target repository's
-// opencode.json and .opencode/ as much as the operator's own, can name another
-// that receives the prompt: small_model titles every session, and the title and
-// compaction agents and every subagent run on their agent's model (ADR-022
-// § 10, § 17). And an endpoint can forward: a local Ollama serves its cloud
-// models from Ollama's hosted service (§ 3, § Endpoints). So the credential
-// line names both kinds of config and both keys, the egress line names
-// session-title generation, and the endpoint line names Ollama cloud models.
+// disclosure of the others. Run isolation keeps the operator's own OpenCode
+// config and stored logins out of a run (ADR-022 § 8, § 17), but the target
+// repository's opencode.json and .opencode/ still load until #1638, and they
+// can name another model that receives the prompt: session-title generation
+// sends it to small_model, and the title and compaction agents and every
+// subagent run on their agent's model (§ 10, § 15), on any provider whose API
+// key the run holds. Withholding other model services' variables does not
+// close that: the stage keeps GITHUB_TOKEN and GITLAB_TOKEN for the forge,
+// which the catalog binds to github-copilot and gitlab, and the cloud and data
+// platform credentials its tools read, which the catalog binds to
+// amazon-bedrock, google-vertex and others; a provider's loader can find
+// credentials outside the environment; and OpenCode's own hosted provider
+// needs no key for its free models. And an endpoint can forward: a local
+// Ollama serves its cloud models from Ollama's hosted service (§ 3,
+// § Endpoints). So the egress line names the repository's config, both keys,
+// the API key they need and each way a run reaches a provider without one it
+// was given, and the endpoint line names Ollama cloud models. The warning is
+// also the only disclosure of what the output redaction leaves in place and
+// of a repository whose steering does not load, so those lines name exactly
+// what is redacted and which steering file is dropped.
 func TestOpenCodeWarningDisclosesWhereThePromptCanGo(t *testing.T) {
 	gaps := map[string]string{}
 	for _, c := range openCodeUnenforcedControls {
 		gaps[c.name] = c.gap
 	}
 	for name, wants := range map[string][]string{
-		"credential policy": {
-			"only the anthropic/ model a stage names is refused",
-			"the operator's own", "the target repository's opencode.json and .opencode/",
-			"small_model", "titles every session", "an agent's model", "subagent", "stored login",
+		"egress defaults": {
+			"session-title generation", "stage prompt", "small_model",
+			"the target repository's opencode.json or .opencode/", "an agent's model", "subagent", "API key",
+			"GITHUB_TOKEN", "GITLAB_TOKEN", "github-copilot", "AWS profile", "OpenCode's own hosted provider",
+			"cloud and data platform credentials", "amazon-bedrock", "google-vertex",
 		},
-		"egress defaults": {"session-title generation", "stage prompt", "small_model"},
 		"endpoint policy": {"Ollama cloud model", "Ollama's hosted service"},
+		"output redaction": {
+			"only the values of the server password, GITHUB_TOKEN, GH_TOKEN, GITLAB_TOKEN",
+			"the dispatched provider", "every other secret the child holds", "stays in it",
+		},
+		"repository steering": {"AGENTS.md", "not its CLAUDE.md", "runs without it"},
 	} {
 		gap, ok := gaps[name]
 		if !ok {
@@ -428,6 +465,8 @@ func TestOpenCodeCaptureScriptWritesOnlyAClearedCapture(t *testing.T) {
 // TestOpenCodePreDispatchReadsTheEnvironment checks the hook the manager calls
 // reads the switch from the process environment.
 func TestOpenCodePreDispatchReadsTheEnvironment(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // no ~/.opencode, whatever the real home holds
+	t.Setenv(OpenCodeInheritUserConfigEnvVar, "")
 	a := NewOpenCodeAdapter()
 	t.Setenv(ExperimentalOpenCodeEnvVar, "")
 	if err := a.PreDispatch(RunOptions{}); err == nil {
@@ -439,50 +478,65 @@ func TestOpenCodePreDispatchReadsTheEnvironment(t *testing.T) {
 	}
 }
 
-// TestOpenCodePreDispatchRefusesAnthropicWithTheSwitchSet: until the credential
-// policy is enforced (#1616), nothing holds an anthropic/ stage to
-// ANTHROPIC_API_KEY, and OpenCode would use a subscription or OAuth login it
-// has stored. So PreDispatch refuses every anthropic/ model with the switch set
-// and the key present, and names the claude-headless adapter as the way out
-// (ADR-022 § 17). Driven by the registry, so a model release adds cases. Any
-// other provider key passes this check and meets the gate instead.
-func TestOpenCodePreDispatchRefusesAnthropicWithTheSwitchSet(t *testing.T) {
-	t.Setenv("ANTHROPIC_API_KEY", "set-by-the-test")
+// TestOpenCodePreDispatchRequiresTheAnthropicAPIKey is ADR-022 § 17's key
+// requirement. An anthropic/ stage through OpenCode authenticates only with
+// ANTHROPIC_API_KEY, so with the variable unset or empty PreDispatch refuses
+// every anthropic/ model before spawn, with the switch set, and names
+// claude-headless as the way to run a Claude subscription. With the variable
+// set the dispatch passes this check: run isolation leaves OpenCode no stored
+// login to use instead (TestOpenCodeRunStartsWithNoStoredLogin,
+// TestOpenCodeWithholdsEnv). Driven by the registry, so a model release adds
+// cases. Any other provider key never meets this check.
+func TestOpenCodePreDispatchRequiresTheAnthropicAPIKey(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv(OpenCodeInheritUserConfigEnvVar, "")
 	a := NewOpenCodeAdapter()
 
-	refused := []string{" anthropic/claude-sonnet-5", "Anthropic/claude-sonnet-5"}
+	anthropic := []string{" anthropic/claude-sonnet-5", "Anthropic/claude-sonnet-5"}
 	for _, m := range models.All() {
 		if m.Provider == "anthropic" && !strings.Contains(m.ID, "/") {
-			refused = append(refused, "anthropic/"+m.ID)
+			anthropic = append(anthropic, "anthropic/"+m.ID)
 		}
 	}
-	if len(refused) == 2 {
+	if len(anthropic) == 2 {
 		t.Fatal("the model registry has no anthropic model; nothing exercises a registry id")
 	}
 
 	t.Setenv(ExperimentalOpenCodeEnvVar, "1")
-	for _, model := range refused {
-		err := a.PreDispatch(RunOptions{Model: model})
-		if err == nil {
-			t.Errorf("PreDispatch(%q) with %s=1 allowed the dispatch; an anthropic/ model is refused until #1616", model, ExperimentalOpenCodeEnvVar)
-			continue
+	for _, key := range []string{"", "unset"} {
+		if key == "unset" {
+			os.Unsetenv("ANTHROPIC_API_KEY") // t.Setenv above restores it
+		} else {
+			t.Setenv("ANTHROPIC_API_KEY", key)
 		}
-		for _, want := range []string{
-			"ANTHROPIC_API_KEY", "subscription or OAuth login", "#1616",
-			ExperimentalOpenCodeEnvVar + "=1 does not lift this refusal",
-			"--adapter claude-headless", "NIGHTGAUGE_ADAPTER=claude-headless",
-		} {
-			if !strings.Contains(err.Error(), want) {
-				t.Errorf("refusal of %q does not say %q: %v", model, want, err)
+		for _, model := range anthropic {
+			err := a.PreDispatch(RunOptions{Model: model})
+			if err == nil {
+				t.Errorf("PreDispatch(%q) with ANTHROPIC_API_KEY %s allowed the dispatch", model, key)
+				continue
+			}
+			for _, want := range []string{
+				"ANTHROPIC_API_KEY is not set", "subscription or OAuth login",
+				"--adapter claude-headless", "NIGHTGAUGE_ADAPTER=claude-headless", "§ 17",
+			} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("refusal of %q does not say %q: %v", model, want, err)
+				}
 			}
 		}
 	}
 
-	t.Setenv(ExperimentalOpenCodeEnvVar, "")
+	t.Setenv("ANTHROPIC_API_KEY", "set-by-the-test")
+	for _, model := range anthropic[2:] {
+		if err := a.PreDispatch(RunOptions{Model: model}); err != nil {
+			t.Errorf("PreDispatch(%q) with ANTHROPIC_API_KEY set = %v; want the dispatch allowed", model, err)
+		}
+	}
+
+	t.Setenv("ANTHROPIC_API_KEY", "")
 	for _, model := range []string{"lmstudio/qwen/qwen3.8-27b", "openai/gpt-5.5", "openrouter/anthropic/claude-sonnet-5"} {
-		err := a.PreDispatch(RunOptions{Model: model})
-		if err == nil || strings.Contains(err.Error(), "claude-headless") || !strings.Contains(err.Error(), "is experimental") {
-			t.Errorf("PreDispatch(%q) with the switch unset = %v; want the gate's refusal, not the anthropic one", model, err)
+		if err := a.PreDispatch(RunOptions{Model: model}); err != nil {
+			t.Errorf("PreDispatch(%q) without ANTHROPIC_API_KEY = %v; only an anthropic/ model needs it", model, err)
 		}
 	}
 }

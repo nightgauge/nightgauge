@@ -4588,6 +4588,13 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			if err := s.execMgr.CleanupWorktree(item.Repo, item.Number); err != nil {
 				log.Printf("#%d: worktree cleanup failed: %v", item.Number, err)
 			}
+			// The run's OpenCode per-run root goes at every terminal outcome
+			// too, with the session database and transcripts in it (ADR-022
+			// § 22). Unlike the worktree nothing in it is worth keeping for
+			// inspection: the stage's output is already captured.
+			if err := s.execMgr.CleanupOpenCodeRunRoot(runtime.RunID); err != nil {
+				log.Printf("#%d: opencode per-run root cleanup failed: %v", item.Number, err)
+			}
 		}
 
 		// Clean up the feature branch after the pipeline completes.
