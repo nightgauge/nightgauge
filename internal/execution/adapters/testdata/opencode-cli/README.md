@@ -26,11 +26,12 @@ and update the table below in the same change.
 ## Behaviour observed on the same version
 
 ADR-022 rests on behaviour, not only on flags, so the observations it cites were
-made on this version the same day. Each run used a throwaway directory for all
-four XDG base directories, a scratch git repository as `--dir`, and a stub
-OpenAI-compatible model server on `127.0.0.1` that recorded every request and
-returned canned replies, so no hosted provider and no operator configuration
-was involved. Every invocation was bounded with `perl -e 'alarm 90; exec @ARGV'`.
+made on this version, the same day unless a row gives a later date. Each run
+used a throwaway directory for all four XDG base directories, a scratch git
+repository as `--dir`, and a stub OpenAI-compatible model server on
+`127.0.0.1` that recorded every request and returned canned replies, so no
+hosted provider and no operator configuration was involved. Every invocation
+was bounded with `perl -e 'alarm 90; exec @ARGV'`.
 The provider-block rows also used a throwaway `HOME` and an environment cleared
 with `env -i`, in which every API-key variable held a fake sentinel value, never
 a real key.
@@ -55,3 +56,5 @@ a real key.
 | The catalog a run loads is the one bundled in the binary                                                                                                                 | No run wrote a catalog to its empty cache, yet the `deepseek` block inherited its catalog entry's key variable                                                                                                                  |
 | An `error` event in the `--format json` stream carries the failed request's full URL                                                                                     | A block pointed at a closed loopback port produced an `error` event with `metadata.url`; stderr and `log/opencode.log` did not name the URL                                                                                     |
 | `--print-logs --log-level ERROR` still writes `log/opencode.log` in the data directory, and an error goes to it and to stderr                                            | Every run created the file; it stayed empty without an error, and held the same `ERROR` line as stderr with one                                                                                                                 |
+| `OPENCODE_AUTH_CONTENT`, when set, is read as the stored logins instead of `auth.json`, so a run whose data directory is empty still has logins                          | Four empty XDG directories and an empty `HOME` under `env -i`: `opencode auth list` read `0 credentials`, and listed `Anthropic oauth` once a fake `OPENCODE_AUTH_CONTENT` was set (2026-09-13)                                 |
+| OpenCode exports `OPENCODE_AUTH_CONTENT`, holding every login it has stored, to the processes it starts for a workspace                                                  | Read from the bundled source: creating a workspace sets it to every stored login in the new workspace's environment                                                                                                             |

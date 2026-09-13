@@ -63,6 +63,16 @@ const ExperimentalOpenCodeEnvVar = "NIGHTGAUGE_EXPERIMENTAL_OPENCODE"
 // that any listener a later version or an added flag opens is authenticated.
 const openCodeServerPasswordEnvVar = "OPENCODE_SERVER_PASSWORD"
 
+// openCodeAuthContentEnvVar is OpenCode's second source of stored logins.
+// Read from the 1.18.30 bundled source: when it is set, OpenCode parses it as
+// JSON and uses it in place of auth.json in the data directory, and OpenCode
+// exports it, holding every login it has stored, to the processes it starts
+// for a workspace. Observed: with all four XDG directories empty, setting it
+// alone makes `opencode auth list` report its logins (ADR-022 § 17). So an
+// inherited value would hand a stage the parent's logins however empty the
+// run's data directory is, and WithheldEnv keeps it from every spawn.
+const openCodeAuthContentEnvVar = "OPENCODE_AUTH_CONTENT"
+
 // openCodeControl is one control a pipeline stage relies on that the opencode
 // adapter does not enforce yet.
 type openCodeControl struct {
@@ -268,4 +278,16 @@ func (a *OpenCodeAdapter) BuildCommand(opts RunOptions) (string, []string, map[s
 	}
 
 	return "opencode", args, env
+}
+
+// WithheldEnv implements the manager's optional hook naming the inherited
+// environment variables a stage's child must not receive: the manager removes
+// them from the host environment before it adds BuildCommand's exports.
+//
+// It names openCodeAuthContentEnvVar only, so no login the parent holds reaches
+// a stage through the environment. The adapter never reads that variable's
+// value, so it cannot log it. The full inherited OPENCODE_* policy (ADR-022
+// § 8) is #1616's.
+func (a *OpenCodeAdapter) WithheldEnv() []string {
+	return []string{openCodeAuthContentEnvVar}
 }

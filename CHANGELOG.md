@@ -47,7 +47,9 @@ changelog, and the release workflow refuses a tag that does not.
   refused even with the switch set, until Anthropic through OpenCode is held
   to `ANTHROPIC_API_KEY` and never uses a stored subscription or OAuth login;
   run Anthropic models on `claude-headless` meanwhile. The prompt goes on
-  stdin, never argv, and every spawn gets its own server password.
+  stdin, never argv, every spawn gets its own server password, and no spawn
+  inherits `OPENCODE_AUTH_CONTENT`, a variable OpenCode reads stored logins
+  from.
   [ADR-022](docs/decisions/022-opencode-multi-provider-adapter.md) records the
   design (#1612)
 - `nightgauge preflight managed-steering` reports generated Nightgauge steering

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -318,7 +319,7 @@ func TestComposeStageEnv_RunIdentityIsReconciledNotInherited(t *testing.T) {
 	inherited := []string{"PATH=/usr/bin", adapters.RunIDEnvVar + "=" + outer}
 
 	t.Run("identity-less dispatch strips the inherited id", func(t *testing.T) {
-		env := composeStageEnv(inherited, map[string]string{"NIGHTGAUGE_STAGE": "issue-refine"}, "", "")
+		env := composeStageEnv(inherited, nil, map[string]string{"NIGHTGAUGE_STAGE": "issue-refine"}, "", "")
 
 		if v, ok := lookupEnv(env, adapters.RunIDEnvVar); ok {
 			t.Errorf("%s present as %q; a dispatch with no identity must leave the child with none — "+
@@ -337,7 +338,7 @@ func TestComposeStageEnv_RunIdentityIsReconciledNotInherited(t *testing.T) {
 
 	t.Run("identified dispatch overrides the inherited id", func(t *testing.T) {
 		adapterEnv := map[string]string{adapters.RunIDEnvVar: inner}
-		env := composeStageEnv(inherited, adapterEnv, "", inner)
+		env := composeStageEnv(inherited, nil, adapterEnv, "", inner)
 
 		if v, ok := lookupEnv(env, adapters.RunIDEnvVar); !ok || v != inner {
 			t.Errorf("%s = %q (present=%v), want this dispatch's id %q, not the inherited %q",
@@ -978,5 +979,74 @@ func TestOpenCodeAnthropicDispatchRefusedWithGateOpen(t *testing.T) {
 	}
 	if n := invocationCount(); n != 1 {
 		t.Errorf("the opencode binary ran %d time(s) after the local-model dispatch; want exactly 1", n)
+	}
+}
+
+// TestOpenCodeSpawnWithholdsInheritedAuthContent: opencode 1.18.30 takes its
+// stored logins from OPENCODE_AUTH_CONTENT in place of auth.json when the
+// variable is set, and exports it, holding every login it has stored, to the
+// processes it starts (ADR-022 § 17). A value the nightgauge process inherits
+// would hand the stage those logins however empty its data directory is. A
+// fake `opencode` first on PATH writes the environment it received: the
+// inherited variable must be absent from it and its value from everything the
+// run printed, while an unrelated inherited variable arrives, so the absence
+// is not an empty dump. Without the adapter's WithheldEnv hook, or without
+// composeStageEnv applying it, the variable reaches the child.
+func TestOpenCodeSpawnWithholdsInheritedAuthContent(t *testing.T) {
+	stubDir := t.TempDir()
+	envFile := filepath.Join(stubDir, "env.txt")
+	script := fmt.Sprintf("#!/bin/sh\nenv > %q\ncat > /dev/null\nexit 0\n", envFile)
+	if err := os.WriteFile(filepath.Join(stubDir, "opencode"), []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", stubDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
+	// A fake login in the shape OpenCode stores, never a real credential.
+	const sentinel = "fake-login-sentinel-1612"
+	t.Setenv("OPENCODE_AUTH_CONTENT",
+		`{"anthropic":{"type":"oauth","refresh":"`+sentinel+`","access":"`+sentinel+`","expires":0}}`)
+	t.Setenv("NIGHTGAUGE_TEST_INHERITED", "kept")
+
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".nightgauge", "worktrees", "nightgauge-issue-1612"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	var result *adapters.RunResult
+	var err error
+	stderr := captureStderr(t, func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		result, err = NewManager(root, adapters.NewOpenCodeAdapter()).RunStage(ctx, StageOptions{
+			Repo:        "nightgauge/nightgauge",
+			IssueNumber: 1612,
+			Stage:       "feature-dev",
+			Model:       "lmstudio/qwen/qwen3.8-27b",
+			Prompt:      "implement the issue",
+			Timeout:     30 * time.Second,
+		})
+	})
+	if err != nil {
+		t.Fatalf("RunStage refused a local model with %s=1: %v", adapters.ExperimentalOpenCodeEnvVar, err)
+	}
+	raw, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatalf("the fake opencode did not record its environment: %v", err)
+	}
+	childEnv := strings.Split(string(raw), "\n")
+	if !slices.Contains(childEnv, "NIGHTGAUGE_TEST_INHERITED=kept") {
+		t.Fatalf("an unrelated inherited variable did not reach the child, so its recorded environment proves nothing:\n%s", raw)
+	}
+	for _, kv := range childEnv {
+		if strings.HasPrefix(kv, "OPENCODE_AUTH_CONTENT=") {
+			t.Error("OPENCODE_AUTH_CONTENT reached the opencode child; an inherited login must never reach a stage")
+		}
+	}
+	if strings.Contains(string(raw), sentinel) {
+		t.Error("the inherited login's value reached the opencode child's environment")
+	}
+	for name, out := range map[string]string{"stderr": stderr, "result.Stdout": result.Stdout, "result.Stderr": result.Stderr} {
+		if strings.Contains(out, sentinel) {
+			t.Errorf("the inherited login's value was written to %s", name)
+		}
 	}
 }

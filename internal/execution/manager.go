@@ -333,8 +333,15 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	// reaches the daemon, and the daemon decides how to tear the stage down.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	// Merge environment
-	cmd.Env = composeStageEnv(os.Environ(), env, opts.SkillPath, runOpts.RunID)
+	// Merge environment. An adapter whose CLI must not inherit some host
+	// variables names them through the optional WithheldEnv hook, found the
+	// same way as the hooks above (ADR-022 § 17: OpenCode reads stored logins
+	// from OPENCODE_AUTH_CONTENT).
+	var withheld []string
+	if w, ok := adapter.(interface{ WithheldEnv() []string }); ok {
+		withheld = w.WithheldEnv()
+	}
+	cmd.Env = composeStageEnv(os.Environ(), withheld, env, opts.SkillPath, runOpts.RunID)
 
 	// Set up stdin pipe for adapters that receive prompt via stdin
 	var stdinPipe io.WriteCloser
@@ -909,18 +916,24 @@ func buildRunOptions(opts StageOptions, worktreeDir string) adapters.RunOptions 
 }
 
 // composeStageEnv builds the environment a stage subprocess actually receives:
-// the host environment, plus the adapter's own exports, plus the run-scoped
-// exports the manager owns.
+// the host environment less the variables the adapter withholds, plus the
+// adapter's own exports, plus the run-scoped exports the manager owns.
 //
 // Extracted from RunStage for the same reason buildRunOptions was. This env IS
 // the interface between this process and the child; inline in a function whose
 // next statement spawns a process, it was assertable only by spawning one.
-func composeStageEnv(base []string, adapterEnv map[string]string, skillPath, runID string) []string {
+func composeStageEnv(base, withheld []string, adapterEnv map[string]string, skillPath, runID string) []string {
 	// Deterministic Node for the stage subprocess (#3863): a non-interactive
 	// spawn does not inherit the login shell's nvm PATH, so resolve Node from
 	// the host's nvm `default` alias and prepend it. No-op when node is already
 	// on PATH (hosted runners) or unresolvable.
 	env, _ := applyNodeResolution(base)
+	// Withheld means not inherited: the host's value is removed before the
+	// adapter's exports are added, and none of them is read, so none is
+	// logged. Removal, not an empty value, because a reader may test presence.
+	for _, key := range withheld {
+		env = removeEnvVar(env, key)
+	}
 	for k, v := range adapterEnv {
 		env = append(env, fmt.Sprintf("%s=%s", k, v))
 	}

@@ -70,12 +70,12 @@ first agentic path to a model the operator hosts.
 ### What opencode 1.18.30 does
 
 Every behavioural claim in this ADR was observed on opencode 1.18.30 on
-2026-09-12, not taken from documentation. The method: throwaway directories for
-all four XDG base directories, a scratch git repository as `--dir`, and a stub
-OpenAI-compatible model server on `127.0.0.1` that recorded every request and
-returned canned replies, so no hosted provider and no operator configuration
-took part. The captured `opencode run --help`, the capture script and the full
-observation table are in
+2026-09-12 or 2026-09-13, not taken from documentation. The method: throwaway
+directories for all four XDG base directories, a scratch git repository as
+`--dir`, and a stub OpenAI-compatible model server on `127.0.0.1` that recorded
+every request and returned canned replies, so no hosted provider and no
+operator configuration took part. The captured `opencode run --help`, the
+capture script and the full observation table are in
 [`internal/execution/adapters/testdata/opencode-cli/`](../../internal/execution/adapters/testdata/opencode-cli/README.md).
 
 | Observation                                                                                                                                                                    | Where it decides something |
@@ -92,6 +92,8 @@ observation table are in
 | `opencode export <session> --sanitize` redacts prompts, replies and tool input, and keeps per-message `tokens` and `cost`                                                      | § 22                       |
 | `OPENCODE_SERVER_PASSWORD` is written to no output and no file, even at `--log-level DEBUG`                                                                                    | § 18                       |
 | `step_finish` events carry per-step tokens (`input`, `output`, `reasoning`, `cache.read`, `cache.write`) and a `cost` that read `0` for a provider OpenCode holds no price for | § 3                        |
+| `OPENCODE_AUTH_CONTENT`, when set, is read as the stored logins instead of `auth.json`, so a run whose data directory is empty still has logins                                | § 17                       |
+| Read from the bundled source: OpenCode exports `OPENCODE_AUTH_CONTENT`, holding every login it has stored, to the processes it starts for a workspace                          | § 17                       |
 | A config provider block whose key is in OpenCode's bundled catalog inherits that provider's API-key variables, and sends the key to the block's `baseURL`                      | § Endpoints                |
 | With `env: []` or an explicit `apiKey`, the same block sends no key; a key outside the catalog binds no variable                                                               | § Endpoints                |
 | The catalog a run loads is the one bundled in the binary; no run fetched one                                                                                                   | § Endpoints                |
@@ -635,23 +637,36 @@ An `anthropic/*` stage through OpenCode has exactly one credential: the
 with its key read from that variable, and a dispatch to `anthropic/*` with the
 variable unset is refused before spawn, with remediation.
 
-A subscription or OAuth login is never used. OpenCode's stored credentials
-(`auth.json` in its data directory) are not read: the per-run data directory
-starts empty, and `inherit_user_config` never carries credentials. This is not
-a pending default. A pipeline run is automated work billed per token against a
-key the operator can audit and revoke per machine, and reversing it takes a
-superseding ADR. Every other hosted provider likewise authenticates with its
-own API-key variable from the environment.
+A subscription or OAuth login is never used. OpenCode 1.18.30 has two sources
+of stored logins, and a run reads neither:
+
+- **`auth.json` in the data directory.** The per-run data directory starts
+  empty, and `inherit_user_config` never carries credentials.
+- **`OPENCODE_AUTH_CONTENT`.** When it is set, OpenCode reads its JSON as the
+  stored logins instead of `auth.json`, and OpenCode exports it, holding every
+  login it has stored, to the processes it starts for a workspace (§ Context).
+  An inherited value would hand a run the parent's logins however empty its
+  data directory is. The adapter therefore withholds it from every spawn
+  already: its `WithheldEnv` hook names it, and the manager removes it from the
+  inherited environment before adding the adapter's exports, without reading
+  or logging its value.
+
+This is not a pending default. A pipeline run is automated work billed per
+token against a key the operator can audit and revoke per machine, and
+reversing it takes a superseding ADR. Every other hosted provider likewise
+authenticates with its own API-key variable from the environment.
 
 Until #1616 enforces this section, `PreDispatch` refuses every `anthropic/*`
 dispatch before spawn, with the enable switch set or not (§ The enable gate).
-Nothing yet stops OpenCode using a login it has stored, and `ANTHROPIC_API_KEY`
-being set does not change that. The refusal sees only the model a stage names.
-Any OpenCode config the run reads can name another: the operator's own, and
-the target repository's `opencode.json`, `opencode.jsonc` and `.opencode/`,
-which load because the adapter does not set `OPENCODE_DISABLE_PROJECT_CONFIG`
-yet (§ 8). Read from the 1.18.30 bundled source, two keys send the stage prompt
-to the model they name, whatever its provider:
+Nothing yet stops OpenCode using a login stored in the operator's own
+`auth.json`, because a run has no data directory of its own yet, and
+`ANTHROPIC_API_KEY` being set does not change that. The refusal sees only the
+model a stage names. Any OpenCode config the run reads can name another: the
+operator's own, and the target repository's `opencode.json`, `opencode.jsonc`
+and `.opencode/`, which load because the adapter does not set
+`OPENCODE_DISABLE_PROJECT_CONFIG` yet (§ 8). Read from the 1.18.30 bundled
+source, two keys send the stage prompt to the model they name, whatever its
+provider:
 
 - `small_model` titles every session. `opencode run` gives its session a
   default title, and OpenCode replaces it by sending the stage prompt to the
@@ -665,19 +680,26 @@ to the model they name, whatever its provider:
 Named as `anthropic/...`, either one reaches Anthropic on whatever credential
 OpenCode holds for it, a stored login included, and the repository, not the
 operator, may be what names it. Run isolation (#1616) closes the stored-login
-route: the per-run data directory starts empty, so no stored login exists to
-use. § 15 pins both keys to the dispatched model (#1625), and the
-project-config merge drops a repository's value (#1638), so no config chooses
-where the prompt goes. Until #1616 lands, the enabled-dispatch warning's
-credential-policy line names both routes, and #1616 replaces the refusal with
-the key requirement above.
+route, and #1616 lifts the refusal only when both sources are closed: the
+per-run data directory starts empty, and no inherited login-bearing
+`OPENCODE_*` variable reaches the run. The adapter withholds
+`OPENCODE_AUTH_CONTENT` now, and #1616 owns the full inherited-environment
+policy for `OPENCODE_*` (§ 8), so a login-bearing variable a later version
+adds is removed with the rest. § 15 pins both keys to the dispatched model
+(#1625), and the project-config merge drops a repository's value (#1638), so
+no config chooses where the prompt goes. Until #1616 lands, the
+enabled-dispatch warning's credential-policy line names both routes, and #1616
+replaces the refusal with the key requirement above.
 
 `nightgauge doctor` reports a subscription or OAuth login for `anthropic` in
-OpenCode's stored credentials (`auth.json`) as a finding (#1627). It reads only
-each entry's `type`, never a credential value. The finding says that a
-pipeline run never uses the login and that an `anthropic/*` stage through
-OpenCode needs `ANTHROPIC_API_KEY`. Its remediation names `claude-headless`,
-the adapter that runs Claude Code under the login Claude Code itself holds.
+either source of OpenCode's stored logins as a finding (#1627): `auth.json` in
+the operator's OpenCode data directory, and `OPENCODE_AUTH_CONTENT` in the
+environment the doctor runs in. For both it reads only each entry's `type`,
+never a credential value, and it prints neither source's content. The finding
+says that a pipeline run never uses the login and that an `anthropic/*` stage
+through OpenCode needs `ANTHROPIC_API_KEY`. Its remediation names
+`claude-headless`, the adapter that runs Claude Code under the login Claude
+Code itself holds.
 
 ### 18. Listener
 
