@@ -251,6 +251,7 @@ export {
   resolveEvalAdapterProfileForAdapter,
   claudeEvalProfile,
   codexEvalProfile,
+  lmStudioEvalProfile,
   type EvalAdapterProfile,
   type SpawnTelemetry,
 } from "./evalAdapters.js";

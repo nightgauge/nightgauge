@@ -47,6 +47,7 @@ import {
   type WorkflowExecutorBindings,
 } from "./SdkFanoutRunner.js";
 import type { ICliAdapter, QueryFunctionOptions } from "../adapters/ICliAdapter.js";
+import { isLocalProvider, providerFor } from "../../eval/modelRegistry.js";
 
 /**
  * Raw outcome of running ONE ephemeral unit (agent or judge) through a provider.
@@ -114,10 +115,21 @@ export class EphemeralTimeoutError extends Error {
  *    basis is a flat per-request subscription estimate rather than priced tokens
  *    — so its record stays flagged even when token counts are present.
  *
+ * `opencode` dispatches to whichever provider its model names (ADR-022):
+ * usage is real exactly when step tokens were reported, same as any other
+ * adapter, but the COST estimate additionally follows the resolved provider
+ * — a local provider (lm-studio/ollama) is a confident, exact $0, so it never
+ * forces the flag; a cloud provider is real usage-based billing this module
+ * still never sees a cost figure for, so it stays flagged like Copilot's.
+ *
  * Token counts pass through when reported and stay zero otherwise — never
  * fabricated. @see Issue #4027
  */
-function usageFromExec(result: EphemeralExecResult, adapter: ICliAdapter): WorkflowAgentUsage {
+function usageFromExec(
+  result: EphemeralExecResult,
+  adapter: ICliAdapter,
+  model?: string
+): WorkflowAgentUsage {
   const t = result.tokens ?? {};
   const inputTokens = t.inputTokens ?? 0;
   const outputTokens = t.outputTokens ?? 0;
@@ -128,8 +140,13 @@ function usageFromExec(result: EphemeralExecResult, adapter: ICliAdapter): Workf
     result.tokens !== undefined &&
     (inputTokens > 0 || outputTokens > 0 || cacheReadTokens > 0 || cacheCreationTokens > 0);
   // Copilot prices by flat subscription request, not by token, so its cost is
-  // inherently an estimate even when token counts are present.
-  const costIsFlatRateEstimate = adapter.name === "copilot";
+  // inherently an estimate even when token counts are present. `opencode`'s
+  // cost estimate follows its resolved provider the same way: cloud stays
+  // estimated (unreported cost), local does not (a known, exact $0).
+  const resolvedModel = result.model ?? model ?? "";
+  const isOpencodeCloud =
+    adapter.name === "opencode" && !isLocalProvider(providerFor(adapter.name, resolvedModel));
+  const costIsFlatRateEstimate = adapter.name === "copilot" || isOpencodeCloud;
 
   return {
     inputTokens,
@@ -306,7 +323,7 @@ export function makeSdkFanoutBindings(
           cwd,
         });
         return {
-          usage: usageFromExec(result, adapter),
+          usage: usageFromExec(result, adapter, agent.model),
           terminalKind: "success",
           model: result.model ?? agent.model,
           outputRef: undefined,
@@ -335,6 +352,8 @@ export function makeSdkFanoutBindings(
         verdict: outcome.verdict,
         confidence: outcome.confidence,
         rationale: outcome.rationale,
+        // WorkflowJudgeSpec carries no model; result.model (when the provider
+        // echoes one) is the only source usageFromExec has for this call.
         usage: usageFromExec(result, adapter),
       };
     },

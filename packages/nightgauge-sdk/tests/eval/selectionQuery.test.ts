@@ -16,6 +16,7 @@ import {
   type EnvelopeRung,
 } from "../../src/eval/selectionQuery.js";
 import { TIER_BANDS, TIER_BANDS_STRONGEST_FIRST, isTierBand } from "../../src/eval/tierBands.js";
+import { providerFor, transportForAdapter } from "../../src/eval/modelRegistry.js";
 
 describe("tier band authority", () => {
   it("declares the one ascending order and derives strongest-first from it", () => {
@@ -132,6 +133,26 @@ describe("resolveBandEnvelope — the band-input query", () => {
     // the transport filter must be a no-op today — absent facts pass through.
     expect(candidateLadder("xai", "cli")).toEqual(candidateLadder("xai"));
     expect(candidateLadder("anthropic", "api")).toEqual(candidateLadder("anthropic"));
+  });
+});
+
+describe("candidateLadder — opencode is model-aware, no logic change needed (#1622)", () => {
+  it("is empty for opencode dispatched to a local model, same as the local providers directly", () => {
+    const provider = providerFor("opencode", "lmstudio/qwen/qwen3.8-27b");
+    expect(provider).toBe("lm-studio");
+    expect(candidateLadder(provider)).toEqual([]);
+  });
+
+  it("matches the Anthropic ladder for opencode dispatched to an Anthropic model, honoring #1614's registered transport", () => {
+    const provider = providerFor("opencode", "anthropic/claude-sonnet-5");
+    expect(provider).toBe("anthropic");
+    // opencode is an OPEN adapter (ADR-022 § 5) and deliberately absent from
+    // adapter_transports, so its registered transport is `undefined` — the
+    // fail-open, unexpressed state (#579) — and the ladder is unfiltered,
+    // identical to calling candidateLadder("anthropic") directly.
+    const transport = transportForAdapter("opencode");
+    expect(transport).toBeUndefined();
+    expect(candidateLadder(provider, transport)).toEqual(candidateLadder("anthropic"));
   });
 });
 
