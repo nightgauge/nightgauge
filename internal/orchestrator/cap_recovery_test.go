@@ -360,3 +360,24 @@ func TestClearDowngradesGivesTheHoppedProviderItsOwnLadder(t *testing.T) {
 		t.Fatalf("the ladder itself must be intact after a clear, got %+v", d)
 	}
 }
+
+// TestOpenCodeIsNeverACapHopTargetWhileGated pins ADR-022's cap-hop rule: while
+// the opencode adapter's enable gate is closed, the production probe must say
+// "not usable", so a capped run never hops onto an adapter that would refuse
+// the dispatch. Today it holds because the doctor has no opencode spec; the
+// change that adds one must keep this true while the gate is closed.
+//
+// The probe is called for real, not injected: the unknown-adapter branch
+// returns before any binary lookup, so this stays hermetic even on a machine
+// with opencode installed.
+func TestOpenCodeIsNeverACapHopTargetWhileGated(t *testing.T) {
+	t.Setenv("NIGHTGAUGE_EXPERIMENTAL_OPENCODE", "")
+	usable, reason := AdapterUsableForCapHop("opencode")
+	if usable {
+		t.Fatal("AdapterUsableForCapHop(\"opencode\") = true with the enable gate closed; " +
+			"a cap hop would land on an adapter whose dispatch is refused")
+	}
+	if strings.TrimSpace(reason) == "" {
+		t.Error("an unusable verdict must say why")
+	}
+}

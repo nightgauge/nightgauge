@@ -38,6 +38,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- An experimental `opencode` adapter runs stages through the OpenCode CLI, one
+  adapter for local (LM Studio, Ollama) and hosted models. It refuses to
+  dispatch unless `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` is set in the
+  environment, and each dispatch it allows warns which controls are not
+  enforced yet. The prompt goes on stdin, never argv, and every spawn gets its
+  own server password.
+  [ADR-022](docs/decisions/022-opencode-multi-provider-adapter.md) records the
+  design (#1612)
 - `nightgauge preflight managed-steering` reports generated Nightgauge steering
   committed in any tracked `AGENTS.md`, and `--fix` removes it from the working
   tree (issue 1675)

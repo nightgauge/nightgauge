@@ -273,6 +273,20 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	// Build command from adapter
 	runOpts := buildRunOptions(opts, worktreeDir)
 
+	// Pre-dispatch gate (ADR-022): an adapter that can refuse a dispatch for a
+	// reason other than its model or effort exposes the optional PreDispatch
+	// hook — the opencode adapter's experimental enable gate is the first. It
+	// runs after worktree setup, so a check that has to inspect the tree the
+	// stage will run in can join it, and ahead of the model and effort checks
+	// and BuildCommand, so a refusal states the real reason and spawns nothing.
+	if gate, ok := adapter.(interface {
+		PreDispatch(adapters.RunOptions) error
+	}); ok {
+		if err := gate.PreDispatch(runOpts); err != nil {
+			return nil, fmt.Errorf("dispatch refused for adapter %q: %w", adapter.Name(), err)
+		}
+	}
+
 	// Model↔provider validation (#4021): adapters exposing the optional
 	// ValidateModel hook (Codex, Gemini) fail fast on an invalid model BEFORE
 	// the command is built and the CLI is spawned. Adapters without the hook

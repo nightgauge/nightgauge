@@ -796,6 +796,7 @@ func TestRegistryGet(t *testing.T) {
 		{"ollama", "ollama"},
 		{"lm-studio", "lm-studio"},
 		{"copilot", "copilot"},
+		{"opencode", "opencode"},
 	}
 
 	for _, tt := range tests {
@@ -844,7 +845,7 @@ func TestRegistryNames(t *testing.T) {
 	registry := NewRegistry()
 	names := registry.Names()
 
-	expected := []string{"claude-headless", "claude-sdk", "codex", "copilot", "gemini", "gemini-sdk", "grok", "lm-studio", "ollama"}
+	expected := []string{"claude-headless", "claude-sdk", "codex", "copilot", "gemini", "gemini-sdk", "grok", "lm-studio", "ollama", "opencode"}
 	if len(names) != len(expected) {
 		t.Fatalf("Names() = %v, want %v", names, expected)
 	}
@@ -859,12 +860,13 @@ func TestRegistryList(t *testing.T) {
 	registry := NewRegistry()
 	infos := registry.List()
 
-	if len(infos) != 9 {
-		t.Fatalf("List() returned %d items, want 9", len(infos))
+	if len(infos) != 10 {
+		t.Fatalf("List() returned %d items, want 10", len(infos))
 	}
 
 	// Verify each info has the expected fields
-	for _, info := range infos {
+	var opencode *AdapterInfo
+	for i, info := range infos {
 		if info.Name == "" {
 			t.Error("empty adapter name in List()")
 		}
@@ -874,6 +876,18 @@ func TestRegistryList(t *testing.T) {
 		if info.Binary == "" {
 			t.Error("empty binary in List()")
 		}
+		if info.Name == "opencode" {
+			opencode = &infos[i]
+		}
+	}
+
+	// ADR-022: the OpenCode adapter is listed under its own display name and
+	// binary, experimental gate or not — listing is not dispatching.
+	if opencode == nil {
+		t.Fatalf("List() has no opencode entry: %+v", infos)
+	}
+	if opencode.DisplayName != "OpenCode" || opencode.Binary != "opencode" {
+		t.Errorf("opencode entry = %+v, want DisplayName %q and Binary %q", *opencode, "OpenCode", "opencode")
 	}
 }
 
@@ -970,6 +984,9 @@ func TestAdapterAgenticDeclarations(t *testing.T) {
 		// unlike its chat-only TypeScript namesake.
 		{NewGeminiSdkAdapter(), true},
 		{NewCopilotAdapter(), true},
+		// OpenCode drives a real tool loop against local and hosted models
+		// alike (ADR-022 § 6); the chat bridges below stay barred.
+		{NewOpenCodeAdapter(), true},
 		// The local bridges bottom out in the TypeScript fetch/SSE adapters
 		// with zero tool handling — barred from pipeline dispatch.
 		{NewOllamaAdapter(), false},
@@ -1063,8 +1080,8 @@ func TestRunIDEnvVar_AllAdapters(t *testing.T) {
 
 	registry := NewRegistry()
 	names := registry.Names()
-	if len(names) != 9 {
-		t.Fatalf("registry has %d adapters (%v), the run-identity contract was written against 9 — "+
+	if len(names) != 10 {
+		t.Fatalf("registry has %d adapters (%v), the run-identity contract was written against 10 — "+
 			"if an adapter was added, confirm it exports NIGHTGAUGE_RUN_ID and update this count",
 			len(names), names)
 	}
@@ -1127,8 +1144,8 @@ func TestTargetRepoEnvVar_AllAdapters(t *testing.T) {
 
 	registry := NewRegistry()
 	names := registry.Names()
-	if len(names) != 9 {
-		t.Fatalf("registry has %d adapters (%v), the target-repo contract was written against 9 — "+
+	if len(names) != 10 {
+		t.Fatalf("registry has %d adapters (%v), the target-repo contract was written against 10 — "+
 			"if an adapter was added, confirm it exports NIGHTGAUGE_TARGET_REPO and update this count",
 			len(names), names)
 	}
@@ -1206,6 +1223,8 @@ var outputFormatPosture = map[string]struct {
 		"`stream-json` constant here would misdescribe the stream; exporting `streaming-json` would make the " +
 		"variable's value adapter-dependent for a consumer set that does not branch on it. Left unexported until a " +
 		"consumer actually needs to distinguish the two"},
+	"opencode": {"json", "passes --format json; the env var mirrors the flag's value, which is also the value " +
+		"scripts/run-stage.sh exports for every non-Claude adapter on the extension path (ADR-022)"},
 }
 
 // TestOutputFormatEnvVar_AllAdapters pins the NIGHTGAUGE_OUTPUT_FORMAT posture
