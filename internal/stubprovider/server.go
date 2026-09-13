@@ -384,16 +384,6 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A single atomic increment-then-compare: the accept/reject decision and
-	// the counter update are the same atomic step, so concurrent requests
-	// arriving while the counter is one below the cap cannot all pass the
-	// check before any of them has incremented it.
-	count := s.requestCount.Add(1)
-	if int(count) > s.cfg.MaxRequests {
-		http.Error(w, "stub-provider: max-requests reached", http.StatusServiceUnavailable)
-		return
-	}
-
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	body, err := io.ReadAll(r.Body)
 	_ = r.Body.Close()
@@ -407,6 +397,19 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	var req chatRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		http.Error(w, "stub-provider: invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	// A single atomic increment-then-compare: the accept/reject decision and
+	// the counter update are the same atomic step, so concurrent requests
+	// arriving while the counter is one below the cap cannot all pass the
+	// check before any of them has incremented it. This runs only after the
+	// body has been read and parsed, so a malformed or oversized body never
+	// consumes a --max-requests slot: the budget tracks requests the stub
+	// actually serves.
+	count := s.requestCount.Add(1)
+	if int(count) > s.cfg.MaxRequests {
+		http.Error(w, "stub-provider: max-requests reached", http.StatusServiceUnavailable)
 		return
 	}
 

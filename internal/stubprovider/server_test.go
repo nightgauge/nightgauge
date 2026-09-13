@@ -349,6 +349,39 @@ func TestMaxRequestsIsHardCapUnderConcurrency(t *testing.T) {
 	}
 }
 
+// TestMaxRequestsOnlyCountsServedRequests drives handleChatCompletions
+// directly with malformed (non-JSON) bodies that never reach dispatch. Those
+// must not consume a --max-requests slot: the budget tracks requests the stub
+// actually serves, not every POST that reaches the handler. Regression test
+// for the case where the request counter was incremented before the body was
+// read and parsed.
+func TestMaxRequestsOnlyCountsServedRequests(t *testing.T) {
+	srv, err := NewServer(Config{Script: "tool-edit-stop", MaxRequests: 2})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("not json"))
+		rec := httptest.NewRecorder()
+		srv.handleChatCompletions(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("malformed request %d: status = %d, want %d", i+1, rec.Code, http.StatusBadRequest)
+		}
+	}
+
+	raw, err := json.Marshal(userTurnRequest("hi"))
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(raw))
+	rec := httptest.NewRecorder()
+	srv.handleChatCompletions(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("well-formed request after 2 malformed ones: status = %d, body = %s, want %d (malformed requests must not consume the --max-requests budget)", rec.Code, rec.Body.String(), http.StatusOK)
+	}
+}
+
 // TestNewServerRejectsScriptWithUnknownKind exercises NewServer's kind
 // validation against the real embedded scripts.json. "invalid-kind-fixture"
 // exists in scripts.json solely for this test: it has a kind that is none of
