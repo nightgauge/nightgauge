@@ -18,6 +18,7 @@ import {
   EFFORT_LEVELS,
   REASONING_EFFORT_LEVELS,
   TIER_BANDS,
+  type NightgaugeAdapter,
 } from "@nightgauge/sdk";
 import { PipelineStageSchema } from "../schemas/pipelineState";
 // Type-only: erased at emit, so this cannot form a runtime import cycle.
@@ -56,16 +57,17 @@ export const EnforcementModeSchema = z.enum(["warn", "block", "ignore"]);
 export type EnforcementMode = z.infer<typeof EnforcementModeSchema>;
 
 /**
- * Canonical execution-adapter ids for the typed pipeline schema.
- *
- * This list MUST stay in sync with `VALID_ADAPTERS` in
- * `src/utils/resolvers/modelResolver.ts` and the regex literal in
- * `src/utils/resolvers/adapterResolver.ts` near line 241 — the resolver still
- * reads `pipeline.stage_adapters.<stage>` via raw YAML for decoupling, so a
- * drift between these three locations would silently drop user selections.
+ * Canonical execution-adapter ids — the single source of truth for the whole
+ * package. `ExecutionAdapterSchema` (below), `ExecutionAdapter` (coreSettings.ts,
+ * modelResolver.ts) and `VALID_ADAPTERS` (modelResolver.ts) all derive from
+ * this enum rather than spelling their own copy, and the raw-YAML adapter
+ * regexes in `modelResolver.ts` / `adapterResolver.ts` are generated from
+ * `ADAPTER_ID_ALTERNATION` (below) — so a new adapter id lands everywhere by
+ * changing only this list (#1623; historically these drifted independently).
  *
  * @see Issue #3220 - typed schema for stage_adapters / adapter_fallback_chain
  * @see Issue #3225 - settings UI per-stage adapter selector
+ * @see Issue #1623 - Collapse the four hand-spelled adapter enums into one
  */
 export const AdapterEnumSchema = z.enum([
   "claude",
@@ -76,8 +78,29 @@ export const AdapterEnumSchema = z.enum([
   "ollama",
   "copilot",
   "grok",
+  "opencode",
 ]);
 export type AdapterEnum = z.infer<typeof AdapterEnumSchema>;
+
+/**
+ * Regex-escape a literal string for safe use inside a `RegExp` character
+ * alternation.
+ */
+function escapeRegExpLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Regex alternation of every canonical adapter id in `AdapterEnumSchema`,
+ * escaped and ready to drop into an anchored capture group — e.g.
+ * `` `^adapter:\\s*['"]?(${ADAPTER_ID_ALTERNATION})['"]?...$` ``.
+ *
+ * Generated from `AdapterEnumSchema.options` rather than hand-spelled so the
+ * four raw-YAML adapter regexes (`modelResolver.ts`, `adapterResolver.ts`)
+ * parse a new adapter id the moment it lands in the enum, instead of needing
+ * a fourth/fifth manually-updated regex literal (#1623).
+ */
+export const ADAPTER_ID_ALTERNATION = AdapterEnumSchema.options.map(escapeRegExpLiteral).join("|");
 
 /**
  * Custom field type for project board fields
@@ -1782,24 +1805,43 @@ export type AuthProvider = z.infer<typeof AuthProviderSchema>;
 /**
  * Execution adapter for pipeline stage orchestration (UI-facing).
  *
+ * Re-exports `AdapterEnumSchema` (the single canonical source, defined above)
+ * rather than spelling a second literal enum — the two used to drift
+ * independently until #1623 collapsed them.
+ *
  * Maps to SDK's NightgaugeAdapter type:
  * - 'claude' → 'claude-sdk' (with API key) or 'claude-headless' (CLI auth)
  * - 'codex'  → 'codex'
+ * - 'opencode' → 'opencode'
  *
  * @see packages/nightgauge-sdk/src/cli/adapters/ICliAdapter.ts - Canonical NightgaugeAdapter type
  * @see Issue #627 - Unify adapter type systems
+ * @see Issue #1623 - Collapse the four hand-spelled adapter enums into one
  */
-export const ExecutionAdapterSchema = z.enum([
-  "claude",
-  "codex",
-  "gemini",
-  "gemini-sdk",
-  "lm-studio",
-  "ollama",
-  "copilot",
-  "grok",
-]);
+export const ExecutionAdapterSchema = AdapterEnumSchema;
 export type ExecutionAdapter = z.infer<typeof ExecutionAdapterSchema>;
+
+/**
+ * Compile-time tie between the UI-facing `ExecutionAdapter` and the SDK's
+ * canonical `NightgaugeAdapter` union. `tsc` fails this file the moment the
+ * two diverge — e.g. the SDK adds a new adapter id and nobody widens
+ * `AdapterEnumSchema`, or the reverse.
+ *
+ * `claude` is the UI's single id for the SDK's two Claude backends
+ * (`claude-sdk` / `claude-headless`, disambiguated by `toNightgaugeAdapter`),
+ * so both sides of the assertion normalize that split back to `"claude"`
+ * before requiring mutual assignability.
+ *
+ * @see Issue #1623 - schema/SDK adapter-union drift guard
+ */
+type _SdkAdapterAsExecutionAdapter =
+  Exclude<NightgaugeAdapter, "claude-sdk" | "claude-headless"> | "claude";
+type _AssertAdapterUnionsMatch = [_SdkAdapterAsExecutionAdapter] extends [ExecutionAdapter]
+  ? [ExecutionAdapter] extends [_SdkAdapterAsExecutionAdapter]
+    ? true
+    : never
+  : never;
+const _adapterUnionsMatch: _AssertAdapterUnionsMatch = true;
 
 /**
  * Gemini authentication method

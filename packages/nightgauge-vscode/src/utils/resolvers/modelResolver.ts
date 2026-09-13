@@ -9,6 +9,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import type { z } from "zod";
 import type { PipelineStage } from "@nightgauge/sdk";
 import {
   CODEX_DEFAULT_BASE_MODEL,
@@ -23,7 +24,7 @@ import {
 } from "@nightgauge/sdk";
 import { resolveConfigPathSync, logDeprecationWarning } from "../configPathResolver";
 import { readEffectiveConfigTextSync } from "../mergedConfigReader";
-import { AdapterEnumSchema } from "../../config/schema";
+import { AdapterEnumSchema, ADAPTER_ID_ALTERNATION } from "../../config/schema";
 
 // ============================================================================
 // Core model types and selection
@@ -340,9 +341,13 @@ export function getCostBudget(workspaceRoot?: string): number | undefined {
 // Execution adapter
 // ============================================================================
 
-/** Execution adapter type for stage orchestration backend. */
-export type ExecutionAdapter =
-  "claude" | "codex" | "gemini" | "gemini-sdk" | "lm-studio" | "ollama" | "copilot" | "grok";
+/**
+ * Execution adapter type for stage orchestration backend.
+ *
+ * Derived from `AdapterEnumSchema` (schema.ts) — the single canonical
+ * source — rather than hand-spelled (#1623).
+ */
+export type ExecutionAdapter = z.infer<typeof AdapterEnumSchema>;
 
 /** Default execution adapter (Claude CLI). */
 export const DEFAULT_EXECUTION_ADAPTER: ExecutionAdapter = "claude";
@@ -436,7 +441,7 @@ export function readAdapterFromFile(filePath: string): ExecutionAdapter | null {
 
       if (inCore) {
         const match = trimmed.match(
-          /^adapter:\s*['"]?(claude|codex|gemini|gemini-sdk|lm-studio|ollama|copilot|grok)['"]?(?:\s+#.*)?$/
+          new RegExp(`^adapter:\\s*['"]?(${ADAPTER_ID_ALTERNATION})['"]?(?:\\s+#.*)?$`)
         );
         if (match) {
           return match[1] as ExecutionAdapter;
@@ -1295,6 +1300,105 @@ export function getLmStudioTimeoutMs(workspaceRoot?: string): number {
   } catch (error) {
     console.error("Failed to read LM Studio timeout from nightgauge config:", error);
     return 180_000;
+  }
+}
+
+// ============================================================================
+// OpenCode Configuration
+// ============================================================================
+
+/**
+ * Validate a raw `opencode.model` value read from config before it can reach
+ * argv. Defence in depth — this is a config-read-time sanity check, not the
+ * authoritative gate; #1637 validates the model string again immediately
+ * before it reaches the OpenCode CLI. Rejects:
+ *   - a leading `-` (would be read as a CLI flag, e.g. `--auto`)
+ *   - any whitespace (a single YAML scalar should never contain a space)
+ *   - control characters (defends against injection via a crafted config file)
+ *
+ * @see docs/decisions/022-opencode-multi-provider-adapter.md § 7
+ */
+function isValidOpenCodeModelValue(value: string): boolean {
+  if (value.startsWith("-")) {
+    return false;
+  }
+  // eslint-disable-next-line no-control-regex -- deliberately matching control chars
+  if (/[\s\x00-\x1f\x7f]/.test(value)) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Get the OpenCode model from `.nightgauge/config.yaml` / `config.local.yaml`.
+ *
+ * Per ADR-022 § 7, the `opencode:` block is machine-tier configuration; this
+ * reads it through the same merged-tier YAML text
+ * (`readEffectiveConfigTextSync`) the other adapter getters use. The raw
+ * value round-trips unchanged, including nested slashes (e.g.
+ * `lmstudio/qwen/qwen3.8-27b`) — no path segmentation is applied here.
+ *
+ * Returns `undefined` (and logs a warning) instead of a sanitized value when
+ * the raw string fails `isValidOpenCodeModelValue` — defence in depth; #1637
+ * validates again immediately before argv.
+ *
+ * @see docs/decisions/022-opencode-multi-provider-adapter.md § 7
+ * @see Issue #1623 - VS Code execution-adapter widening
+ */
+export function getOpenCodeModel(workspaceRoot?: string): string | undefined {
+  const root = workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!root) {
+    return undefined;
+  }
+
+  try {
+    const pathResult = resolveConfigPathSync(root);
+    if (!pathResult.exists) {
+      return undefined;
+    }
+
+    if (pathResult.isLegacy) {
+      logDeprecationWarning(pathResult.path);
+    }
+
+    const configContent = readEffectiveConfigTextSync(pathResult);
+    const lines = configContent.split("\n");
+    let inOpenCode = false;
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+
+      if (trimmed === "opencode:" && !line.startsWith(" ")) {
+        inOpenCode = true;
+        continue;
+      }
+
+      if (trimmed && !trimmed.startsWith("#") && /^[a-z_]+:/.test(trimmed)) {
+        if (!line.startsWith(" ")) {
+          inOpenCode = false;
+        }
+      }
+
+      if (inOpenCode) {
+        const match = trimmed.match(/^model:\s*['"]?([^'"#\s]+)['"]?(?:\s+#.*)?$/);
+        if (match) {
+          const value = match[1];
+          if (!isValidOpenCodeModelValue(value)) {
+            console.warn(
+              "Ignoring invalid opencode.model value in nightgauge config " +
+                `(leading '-', whitespace or control characters are rejected): ${JSON.stringify(value)}`
+            );
+            return undefined;
+          }
+          return value;
+        }
+      }
+    }
+
+    return undefined;
+  } catch (error) {
+    console.error("Failed to read OpenCode model from nightgauge config:", error);
+    return undefined;
   }
 }
 

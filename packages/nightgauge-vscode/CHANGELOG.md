@@ -11,6 +11,10 @@ and this project adheres to
 
 ### Changed
 
+- `opencode` is now a selectable execution adapter: `ui.core.adapter`,
+  per-stage `pipeline.stage_adapters` and `pipeline.adapter_fallback_chain`
+  entries all accept it, and picking it from the auto-router no longer
+  refuses to dispatch the stage (#1623)
 - The Adapter Doctor checks the claude CLI against a 2.1.223 floor. A claude
   below it shows its version as a warning and stays ready (#1613)
 

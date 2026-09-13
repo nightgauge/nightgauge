@@ -1052,6 +1052,10 @@ export const DEFAULT_COST_CAP_PROVIDER_SCALE: Record<ExecutionAdapter, number> =
   grok: 0.6,
   "lm-studio": 0.0,
   ollama: 0.0,
+  // opencode dispatches to whichever provider its configured model names, so
+  // there is no single opencode-specific cost ratio to calibrate yet — 1.0
+  // keeps it unscaled (same as claude) until per-provider data exists (#1657).
+  opencode: 1.0,
 };
 
 /**

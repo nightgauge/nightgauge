@@ -219,10 +219,10 @@ describe("resolveStageAdapter Step 2.5 (auto-router) — Issue #3230", () => {
     expect(decision.rationale).toBeUndefined();
   });
 
-  // #1615 adds "opencode" to the SDK union before the extension can run it
-  // (#1623). A router pick of it must be refused, not passed through as an
-  // adapter id the extension does not know.
-  it("refuses an opencode pick instead of passing it through", () => {
+  // #1623 widened ExecutionAdapter to include "opencode" as a first-class
+  // adapter id — a router pick of it now passes through `fromRouterAdapter`
+  // like any other adapter instead of being refused.
+  it("passes an opencode pick through instead of refusing it (#1623)", () => {
     const stub = makeStubRouter({
       adapter: "opencode",
       model: "lmstudio/qwen/qwen3.8-27b",
@@ -235,8 +235,8 @@ describe("resolveStageAdapter Step 2.5 (auto-router) — Issue #3230", () => {
       mode: "automatic",
       router: stub,
     };
-    expect(() => resolveStageAdapter("feature-dev", tmpRoot, process.env, options)).toThrow(
-      /cannot run yet \(#1623\)/
-    );
+    const decision = resolveStageAdapter("feature-dev", tmpRoot, process.env, options);
+    expect(decision.adapter).toBe("opencode");
+    expect(decision.source).toBe("auto-router");
   });
 });
