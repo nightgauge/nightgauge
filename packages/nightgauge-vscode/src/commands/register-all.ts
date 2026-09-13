@@ -352,6 +352,22 @@ export function registerAllCommands(deps: AllCommandDeps): void {
     await grokSetupService.showSetupPrompt();
   });
 
+  // Development only: install agent skills from this workspace's skills/.
+  // Codex and Grok setup above install only what the extension bundles: the
+  // workspace's skills/ and .codex/commands/ are never their source (#1683).
+  const setupCodexFromWorkspaceCommand = vscode.commands.registerCommand(
+    "nightgauge.setupCodexFromWorkspace",
+    async () => {
+      await codexSetupService.installSkillsFromWorkspace();
+    }
+  );
+  const setupGrokFromWorkspaceCommand = vscode.commands.registerCommand(
+    "nightgauge.setupGrokFromWorkspace",
+    async () => {
+      await grokSetupService.installSkillsFromWorkspace();
+    }
+  );
+
   // Reset session
   const resetSessionCommand = vscode.commands.registerCommand(
     "nightgauge.resetSession",
@@ -903,6 +919,8 @@ export function registerAllCommands(deps: AllCommandDeps): void {
     setupPluginsCommand,
     setupCodexCommand,
     setupGrokCommand,
+    setupCodexFromWorkspaceCommand,
+    setupGrokFromWorkspaceCommand,
     resetSessionCommand,
     showBrownfieldDashboardCommand,
     showKnowledgeValueDashboardCommand,

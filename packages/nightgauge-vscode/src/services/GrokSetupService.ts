@@ -3,7 +3,8 @@
  *
  * Installs the Nightgauge plugin via `grok plugin` when possible, and always
  * copies bundled skills into ~/.grok/skills so Grok works even if plugin
- * install is flaky.
+ * install is flaky. The workspace's `skills/` is used only by the separate
+ * development command, installSkillsFromWorkspace().
  */
 
 import * as vscode from "vscode";
@@ -15,7 +16,7 @@ import { promisify } from "util";
 import { ConfigBridge } from "./ConfigBridge";
 import { DEFAULT_CONFIG } from "../config/schema";
 import { getPrefixedMainChannel } from "../utils/logger";
-import { copySkillsTree, resolveBundledSkillsDir } from "./bundledSkills";
+import { copySkillsTree, installWorkspaceSkills, resolveBundledSkillsDir } from "./bundledSkills";
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -166,22 +167,27 @@ export class GrokSetupService implements vscode.Disposable {
     }
   }
 
+  /** The default install reads the VSIX bundle only, never the workspace. */
   private async copySkills(): Promise<void> {
     const dest = path.join(grokHome(), "skills");
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    const workspaceSkills = workspaceRoot ? path.join(workspaceRoot, "skills") : null;
-    const source =
-      workspaceSkills && fs.existsSync(workspaceSkills)
-        ? workspaceSkills
-        : resolveBundledSkillsDir(this.context.extensionPath);
+    const source = resolveBundledSkillsDir(this.context.extensionPath);
     if (!source) {
       throw new Error(
-        "No Grok skill source found (workspace skills/ or bundled dist/claude-plugins/nightgauge/skills)."
+        "No bundled Grok skills found (dist/claude-plugins/nightgauge/skills or dist/skills)."
       );
     }
-    await fs.promises.mkdir(dest, { recursive: true });
-    const count = await copySkillsTree(source, dest);
+    const count = await copySkillsTree(source, dest, (message) =>
+      this.outputChannel.appendLine(`WARNING: ${message}`)
+    );
     this.outputChannel.appendLine(`✓ Copied ${count} skill directories to ${dest}`);
+  }
+
+  /**
+   * Development only: install ~/.grok/skills from the open workspace's
+   * `skills/`, behind workspace trust and a modal confirmation.
+   */
+  async installSkillsFromWorkspace(): Promise<void> {
+    await installWorkspaceSkills("Grok", path.join(grokHome(), "skills"), this.outputChannel);
   }
 
   private async installAssets(): Promise<void> {

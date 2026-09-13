@@ -19,6 +19,24 @@ and this project adheres to
   issue. They stopped at the first 12 sub-issues and 5 blockers, so an issue
   whose only open blocker came later showed as unblocked (#1682)
 
+### Security
+
+- `Nightgauge: Setup Grok Skills` and `Nightgauge: Setup Codex Commands` now
+  install only the skills and Codex commands bundled with the extension, never
+  the open workspace's `skills/` or `.codex/commands/` folder. To install
+  skills from a checkout while developing them, run
+  `Nightgauge: Install Grok Skills from This Workspace (Development)` or its
+  Codex counterpart: it refuses an untrusted workspace or a destination that
+  contains or sits inside the source folder, and asks you to confirm the source
+  and destination paths it names. Linked files are copied only from inside the
+  skills folder and linked folders are skipped. An existing skill folder is
+  replaced only when it holds the `.nightgauge-installed` marker the extension
+  now writes. Any other folder is left untouched and named in a warning in the
+  output channel. That includes a folder an earlier version installed and one
+  `scripts/install-agent-skills.sh` installed or refreshed, because the script
+  writes no marker. Delete such a folder to let the extension install it
+  (#1683)
+
 ## [0.4.1] - 2026-09-11
 
 ### Fixed
