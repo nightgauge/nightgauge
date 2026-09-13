@@ -1,0 +1,56 @@
+{
+  "tool-edit-stop": {
+    "models": ["stub/stub-model"],
+    "kind": "turns",
+    "turns": [
+      {
+        "tool_call": {
+          "name": "edit",
+          "arguments": {
+            "filePath": "calc.py",
+            "oldString": "return a + b",
+            "newString": "return a - b"
+          }
+        }
+      },
+      {
+        "content": "Applied the requested edit to calc.py."
+      }
+    ]
+  },
+  "bash-then-stop": {
+    "models": ["stub/stub-model"],
+    "kind": "turns",
+    "turns": [
+      {
+        "tool_call": {
+          "name": "bash",
+          "arguments": {
+            "command": "python3 calc.py"
+          }
+        }
+      },
+      {
+        "content": "Ran calc.py."
+      }
+    ]
+  },
+  "overflow": {
+    "models": ["stub/stub-model"],
+    "kind": "overflow"
+  },
+  "error": {
+    "models": ["stub/stub-model"],
+    "kind": "error"
+  },
+  "slow": {
+    "models": ["stub/stub-model"],
+    "kind": "turns",
+    "turns": [
+      {
+        "content": "Completed after a deliberate delay."
+      }
+    ],
+    "first_token_delay_ms": 250
+  }
+}
