@@ -28,17 +28,22 @@ import (
 // opencode 1.18.30, that layer is merged after the run's XDG config file, the
 // repository's opencode.json and an inherited OPENCODE_CONFIG_DIR, and wins
 // over each of them for every key it sets. So none of them can change the
-// dispatched model, a limit of a declared endpoint's model, the endpoint's or
-// the anthropic block's base URL, or sharing. Only the machine's managed
-// config sits above it, and PrepareOpenCodeRun refuses a dispatch while one
-// exists unless the operator opted into their own config. A lower layer can
-// still add keys this config does not set, and two of them matter: a
-// mode.general or mode.explore entry, which 1.18.30 merges over that
-// subagent's model and steps cap after every layer (the content cannot set
-// those two without making the subagents primary), and a block for a hosted
-// provider other than anthropic, which this config gives none, so the block
-// can re-point it. The project-config tamper-gate and endpoint-policy warning
-// lines say so.
+// model a stage on a declared endpoint or on anthropic is sent as, or the SDK
+// package that sends it (the dispatched model's entry pins its id and
+// provider.npm, which 1.18.30 uses in place of the block's), a limit of a
+// declared endpoint's model, the endpoint's or the anthropic block's base
+// URL, or sharing. Only the machine's managed config sits above it, and
+// PrepareOpenCodeRun refuses a dispatch while one exists unless the operator
+// opted into their own config. A lower layer can still add keys this config
+// does not set, and three of them matter: a mode.general or mode.explore
+// entry, which 1.18.30 merges over that subagent's model and steps cap after
+// every layer (the content cannot set those two without making the subagents
+// primary); a block for a hosted provider other than anthropic, which this
+// config gives none, so the block can re-point that provider and send its
+// model as another; and a hosted model's limits, anthropic's included, which
+// come from OpenCode's catalog and which this config does not set. The
+// project-config tamper-gate, endpoint-policy and stage-limits warning lines
+// say so.
 //
 // Two things are never in the content itself:
 //
@@ -389,9 +394,28 @@ type openCodeEndpointOptionsJSON struct {
 	ChunkTimeout  int64  `json:"chunkTimeout"`
 }
 
+// openCodeModelJSON is a declared endpoint's model entry. On 1.18.30 a model
+// entry's id is the model name OpenCode sends, and its provider.npm is the SDK
+// package it loads for the model, both in place of the provider block's, so
+// the entry pins both: a lower layer's entry for the model cannot send the
+// stage to another model or package.
 type openCodeModelJSON struct {
-	Limit    openCodeLimitJSON `json:"limit"`
-	ToolCall bool              `json:"tool_call"`
+	ID       string                    `json:"id"`
+	Provider openCodeModelProviderJSON `json:"provider"`
+	Limit    openCodeLimitJSON         `json:"limit"`
+	ToolCall bool                      `json:"tool_call"`
+}
+
+type openCodeModelProviderJSON struct {
+	NPM string `json:"npm"`
+}
+
+// openCodeHostedModelJSON is the anthropic model entry: the same two pins and
+// nothing else, so the catalog's limits, options and headers for the model
+// still apply.
+type openCodeHostedModelJSON struct {
+	ID       string                    `json:"id"`
+	Provider openCodeModelProviderJSON `json:"provider"`
 }
 
 // openCodeLimitJSON is a model's limits. Input is always set, to Context:
@@ -403,11 +427,13 @@ type openCodeLimitJSON struct {
 }
 
 // openCodeAnthropicBlockJSON is the anthropic provider block: the SDK package,
-// the API root and the reference the API key is read from, so a lower layer
-// can neither swap the package nor re-point the key.
+// the API root, the reference the API key is read from, and the dispatched
+// model's entry, so a lower layer can neither swap the package, re-point the
+// key, nor send the stage to another model.
 type openCodeAnthropicBlockJSON struct {
-	NPM     string                       `json:"npm"`
-	Options openCodeAnthropicOptionsJSON `json:"options"`
+	NPM     string                             `json:"npm"`
+	Options openCodeAnthropicOptionsJSON       `json:"options"`
+	Models  map[string]openCodeHostedModelJSON `json:"models"`
 }
 
 type openCodeAnthropicOptionsJSON struct {
@@ -430,7 +456,8 @@ type openCodeAnthropicOptionsJSON struct {
 //   - the dispatched provider's block: a complete block for a declared
 //     endpoint, keyed by the endpoint's id, with its limits, timeouts and
 //     tool calls, or the anthropic block, with its SDK package, API root and
-//     key reference;
+//     key reference; in either, the dispatched model's entry pins the model
+//     id OpenCode sends and the SDK package that sends it;
 //   - steps on the build, plan, general and explore agents; the legacy
 //     mode.<name> entry of every agent in openCodePinnedModeAgents, the same
 //     as its agent entry; subagent_depth; the title agent disabled;
@@ -441,8 +468,9 @@ type openCodeAnthropicOptionsJSON struct {
 // ANTHROPIC_API_KEY is unset and a platform provider's model
 // (openCodeCredentialRefusal); a provider key that is neither a declared
 // endpoint nor a provider OpenCode's bundled catalog knows, a local one
-// included; and an endpoint whose limit.context or limit.output is 0 or
-// missing.
+// included; an anthropic model whose entry it cannot pin: one the bundled
+// catalog does not list, or a fast-mode entry (openCodeAnthropicModelRefusal);
+// and an endpoint whose limit.context or limit.output is 0 or missing.
 func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 	if in.Lookup == nil {
 		return OpenCodeRunConfig{}, errors.New("opencode config: no environment to check the provider's credential against")
@@ -488,7 +516,12 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 				ChunkTimeout:  ep.ChunkTimeout.Milliseconds(),
 			},
 			Models: map[string]openCodeModelJSON{
-				modelID: {Limit: openCodeLimitJSON{Context: limit.Context, Input: limit.Context, Output: limit.Output}, ToolCall: true},
+				modelID: {
+					ID:       modelID,
+					Provider: openCodeModelProviderJSON{NPM: openCodeEndpointNPM},
+					Limit:    openCodeLimitJSON{Context: limit.Context, Input: limit.Context, Output: limit.Output},
+					ToolCall: true,
+				},
 			},
 		}
 		built.Files = map[string]string{file: ep.BaseURL}
@@ -505,11 +538,17 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 				"Dispatch to the endpoint your opencode: block declares (its id is lmstudio for provider lm-studio and ollama for provider ollama), or name a provider OpenCode knows. See docs/SETTINGS_ARCHITECTURE.md",
 			model, key)
 	case key == openCodeAnthropicKey:
+		if err := openCodeAnthropicModelRefusal(model, modelID); err != nil {
+			return OpenCodeRunConfig{}, err
+		}
 		providers[key] = openCodeAnthropicBlockJSON{
 			NPM: openCodeAnthropicNPM,
 			Options: openCodeAnthropicOptionsJSON{
 				BaseURL: openCodeAnthropicBaseURL,
 				APIKey:  "{env:ANTHROPIC_API_KEY}",
+			},
+			Models: map[string]openCodeHostedModelJSON{
+				modelID: {ID: modelID, Provider: openCodeModelProviderJSON{NPM: openCodeAnthropicNPM}},
 			},
 		}
 	}
@@ -556,6 +595,38 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 	}
 	built.Content = string(raw)
 	return built, nil
+}
+
+// openCodeAnthropicModelRefusal refuses an anthropic model whose entry the
+// per-run config cannot pin (ADR-022 § 17). On 1.18.30 a model entry in any
+// config layer defines the model, and one the bundled catalog does not list
+// then has no limits, so OpenCode never compacts its session. A fast-mode
+// entry is one OpenCode derives from a base model and sends under the base
+// model's id with options and a header of its own: pinning the entry's own id
+// sends a model Anthropic does not serve, and pinning the base model's id
+// drops the options and the header, so it is refused for its base model.
+func openCodeAnthropicModelRefusal(model, modelID string) error {
+	served, listed := openCodeAnthropicModels[modelID]
+	switch {
+	case !listed:
+		var dispatchable []string
+		for id, s := range openCodeAnthropicModels {
+			if s == id {
+				dispatchable = append(dispatchable, id)
+			}
+		}
+		slices.Sort(dispatchable)
+		return fmt.Errorf(
+			"model %q is refused: the anthropic models of OpenCode's bundled catalog (opencode 1.18.30) do not include %q, so OpenCode knows no limits for it, and it never compacts a session whose context limit is 0. "+
+				"Dispatch a model the catalog lists: anthropic/ followed by %s",
+			model, modelID, strings.Join(dispatchable, ", "))
+	case served != modelID:
+		return fmt.Errorf(
+			"model %q is refused: it is the fast-mode entry OpenCode derives from anthropic/%s, which it sends under that model's id with options and a header of its own, and the per-run config cannot pin the model OpenCode sends for it without dropping them. "+
+				"Dispatch anthropic/%s instead",
+			model, served, served)
+	}
+	return nil
 }
 
 // openCodeCompaction is the compaction policy for a model whose limits are

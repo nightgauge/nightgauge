@@ -7091,7 +7091,10 @@ adapter's per-spawn exports (such as `OPENCODE_SERVER_PASSWORD`).
 It exits 1, with nothing on stdout, wherever the adapter refuses a dispatch
 before spawning: without `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1`, a model that is
 not `<provider>/<model>`, an `anthropic/` model while `ANTHROPIC_API_KEY` is
-unset, a model on a forge or cloud platform provider (such as
+unset, an `anthropic/` model OpenCode's bundled catalog does not list or one
+of its fast-mode entries (such as `anthropic/claude-opus-5-fast`, whose served
+model the per-run config cannot pin), a model on a forge or cloud platform
+provider (such as
 `github-copilot/*`), a provider key that is neither a declared endpoint nor
 one OpenCode knows, an endpoint limit that is 0 or missing, a `base_url` that
 is not `http`/`https` or carries credentials, an `opencode:` block in the

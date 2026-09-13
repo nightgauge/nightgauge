@@ -266,14 +266,18 @@ func TestOpenCodeGate(t *testing.T) {
 // #1638, and they can add what the per-run config does not set: an agent or
 // subagent of their own, with its own model on the dispatched provider and no
 // steps cap, a remote instructions URL, or a provider header that carries an
-// environment variable to the model server. And an endpoint can forward: a
-// local Ollama serves its cloud models from Ollama's hosted service (§ 3,
+// environment variable to the model server. They and an inherited operator
+// config can also set a hosted model's limits, which the per-run config
+// leaves to the catalog, and the model a hosted provider other than anthropic
+// is sent as, which it gives no block. And an endpoint can forward: a local
+// Ollama serves its cloud models from Ollama's hosted service (§ 3,
 // § Endpoints). So the tamper-gate line names what the repository can add,
-// and the endpoint line names Ollama cloud models. The warning is also the
-// only disclosure of what the output redaction leaves in place, of a
-// repository whose steering does not load, and of the stage limits a run
-// does not get, so those lines name exactly what is redacted, which steering
-// file is dropped and which limit is missing.
+// the endpoint line names the other model and Ollama cloud models, and the
+// stage-limits line names the limits. The warning is also the only disclosure
+// of what the output redaction leaves in place, of a repository whose
+// steering does not load, and of the stage limits a run does not get, so
+// those lines name exactly what is redacted, which steering file is dropped
+// and which limit is missing.
 func TestOpenCodeWarningDisclosesWhereThePromptCanGo(t *testing.T) {
 	gaps := map[string]string{}
 	for _, c := range openCodeUnenforcedControls {
@@ -288,8 +292,11 @@ func TestOpenCodeWarningDisclosesWhereThePromptCanGo(t *testing.T) {
 			"agent or subagent of their own", "no steps cap", "remote instructions URL", "header on the provider block",
 			"forge token",
 		},
-		"stage limits":    {"cost budget", "token cap on a hosted model", "steps cap"},
-		"endpoint policy": {"Ollama cloud model", "Ollama's hosted service"},
+		"stage limits": {
+			"cost budget", "token cap on a hosted model", "steps cap",
+			"anthropic's included", "the repository or your OpenCode config sets them", "never compacted",
+		},
+		"endpoint policy": {"Ollama cloud model", "Ollama's hosted service", "the stage to another model"},
 		"output redaction": {
 			"only the values of the server password, GITHUB_TOKEN, GH_TOKEN, GITLAB_TOKEN",
 			"the dispatched provider", "every other secret the child holds", "stays in it",

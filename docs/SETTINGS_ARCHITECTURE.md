@@ -298,9 +298,12 @@ opencode:
   that is not this machine is accepted and reported as `non_loopback: true`.
 - `inherit_user_config` is off by default for security: your OpenCode config
   can name plugins, MCP servers, providers and models. Every key the per-run
-  config sets still wins over it, except a managed OpenCode config's and the
+  config sets still wins over it, the model a stage on your endpoint or on
+  `anthropic` is sent as included, except a managed OpenCode config's and the
   `general` and `explore` subagents' model and steps cap, which a `mode` entry
-  of the same name replaces.
+  of the same name replaces. What the per-run config does not set, your
+  config still can: a hosted model's limits, and the server and model of a
+  hosted provider other than `anthropic`.
 - Timeouts are durations such as `3m`; a bare number is read as nanoseconds
   and refused.
 

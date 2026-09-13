@@ -345,6 +345,82 @@ func TestOpenCodeConfigAnthropicBlockPinsItsServer(t *testing.T) {
 	}
 }
 
+// TestOpenCodeConfigPinsTheServedModel: on opencode 1.18.30 a config model
+// entry's id is the model name OpenCode sends, and its provider.npm is the SDK
+// package that receives the key, whatever the provider block says. The
+// content's own entry for the dispatched model sets both, so a lower layer's
+// entry cannot send the stage to another model or package. The model is sent
+// under the id the stage names. The anthropic entry sets nothing else, so the
+// catalog's limits and options still apply.
+func TestOpenCodeConfigPinsTheServedModel(t *testing.T) {
+	anthropicKey := map[string]string{"ANTHROPIC_API_KEY": "fake-anthropic-credential-1625"}
+	for _, tc := range []struct {
+		model, key, modelID, servedID, npm string
+		keys                               []string
+	}{
+		{"lmstudio/qwen/qwen3.8-27b", "lmstudio", "qwen/qwen3.8-27b", "qwen/qwen3.8-27b", "@ai-sdk/openai-compatible", []string{"id", "limit", "provider", "tool_call"}},
+		{"anthropic/claude-sonnet-5", "anthropic", "claude-sonnet-5", "claude-sonnet-5", "@ai-sdk/anthropic", []string{"id", "provider"}},
+		{"anthropic/claude-haiku-4-5-20251001", "anthropic", "claude-haiku-4-5-20251001", "claude-haiku-4-5-20251001", "@ai-sdk/anthropic", []string{"id", "provider"}},
+	} {
+		built, err := buildOpenCodeConfigFor(t, lmStudioSettings(), RunOptions{Model: tc.model}, anthropicKey)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.model, err)
+		}
+		doc := decodeOpenCodeConfig(t, built.Content)
+		models, _ := jsonPath(doc, "provider", tc.key, "models").(map[string]any)
+		if len(models) != 1 || models[tc.modelID] == nil {
+			t.Errorf("%s: provider.%s.models = %v, want the dispatched model's entry alone", tc.model, tc.key, keysOf(models))
+			continue
+		}
+		entry, _ := models[tc.modelID].(map[string]any)
+		if got := entry["id"]; got != tc.servedID {
+			t.Errorf("%s: models.%s.id = %v, want %q, so a lower layer cannot send another model", tc.model, tc.modelID, got, tc.servedID)
+		}
+		if got := jsonPath(entry, "provider", "npm"); got != tc.npm {
+			t.Errorf("%s: models.%s.provider.npm = %v, want %q, the provider block's own package", tc.model, tc.modelID, got, tc.npm)
+		}
+		if got := jsonPath(doc, "provider", tc.key, "npm"); got != tc.npm {
+			t.Errorf("%s: provider.%s.npm = %v, want %q", tc.model, tc.key, got, tc.npm)
+		}
+		if got := keysOf(entry); !slices.Equal(got, tc.keys) {
+			t.Errorf("%s: models.%s sets %v, want %v", tc.model, tc.modelID, got, tc.keys)
+		}
+	}
+}
+
+// TestOpenCodeConfigRefusesAnAnthropicModelItCannotPin: the content's entry
+// for an anthropic model defines that model even where OpenCode's bundled
+// catalog does not list it, and such a model has no limits, so OpenCode would
+// never compact its session. A fast-mode entry cannot be pinned either:
+// OpenCode derives it from a base model and sends the base model's id with
+// options and a header of its own, so pinning the entry's own id sends a model
+// Anthropic does not serve, and pinning the base id drops the fast mode. Both
+// are refused before spawn, naming the model and a model to dispatch instead.
+func TestOpenCodeConfigRefusesAnAnthropicModelItCannotPin(t *testing.T) {
+	env := map[string]string{"ANTHROPIC_API_KEY": "fake-anthropic-credential-1625"}
+	for _, tc := range []struct {
+		model string
+		want  []string
+	}{
+		{"anthropic/claude-nightgauge-no-such-model", []string{"bundled catalog", "never compacts", "claude-sonnet-4-6"}},
+		{"anthropic/claude-sonnet-5-fast", []string{"bundled catalog", "never compacts", "claude-sonnet-4-6"}},
+		{"anthropic/qwen/qwen3.8-27b", []string{"bundled catalog", "never compacts", "claude-sonnet-4-6"}},
+		{"anthropic/claude-opus-5-fast", []string{"fast-mode", "anthropic/claude-opus-5 instead"}},
+		{"anthropic/claude-opus-4-8-fast", []string{"fast-mode", "anthropic/claude-opus-4-8 instead"}},
+	} {
+		built, err := buildOpenCodeConfigFor(t, lmStudioSettings(), RunOptions{Model: tc.model}, env)
+		if err == nil {
+			t.Errorf("%s: a config was built: %s", tc.model, built.Content)
+			continue
+		}
+		for _, want := range append([]string{strconv.Quote(tc.model)}, tc.want...) {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: the refusal does not say %q: %v", tc.model, want, err)
+			}
+		}
+	}
+}
+
 // TestOpenCodeConfigNonLoopbackUnlessALocalEndpoint: non_loopback is false
 // only for a declared endpoint on this machine. A hosted provider's model runs
 // on its servers, so an offline claim holds for none of them.

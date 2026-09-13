@@ -71,14 +71,15 @@ The model defaults to opencode.model in the machine-tier config. The command
 runs the adapter's own checks, so it fails, and prints nothing on stdout,
 wherever the adapter refuses a dispatch before spawning: without
 ` + adapters.ExperimentalOpenCodeEnvVar + `=1, a model it cannot dispatch, an
-anthropic/ model while ANTHROPIC_API_KEY is unset, a model on a forge or cloud
-platform provider, a provider key that is neither a declared endpoint nor one
-OpenCode knows, an endpoint whose limit.context or limit.output is 0 or
-missing, a base_url that is not http or https or that carries credentials, an
-opencode: block in the worktree's committed config, and, unless
-opencode.inherit_user_config is on, a ~/.opencode holding config or managed
-OpenCode config on this machine. The adapter's warnings and notices go to
-stderr.`,
+anthropic/ model while ANTHROPIC_API_KEY is unset, an anthropic/ model
+OpenCode's bundled catalog does not list or one of its fast-mode entries, a
+model on a forge or cloud platform provider, a provider key that is neither a
+declared endpoint nor one OpenCode knows, an endpoint whose limit.context or
+limit.output is 0 or missing, a base_url that is not http or https or that
+carries credentials, an opencode: block in the worktree's committed config,
+and, unless opencode.inherit_user_config is on, a ~/.opencode holding config
+or managed OpenCode config on this machine. The adapter's warnings and
+notices go to stderr.`,
 		Example: `  nightgauge opencode config --stage feature-dev --worktree "$PWD" --json
   nightgauge opencode config --stage feature-dev --worktree "$PWD" --model lmstudio/qwen/qwen3.8-27b --max-turns 40 --json`,
 		Args:         cobra.NoArgs,

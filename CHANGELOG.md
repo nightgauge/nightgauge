@@ -236,11 +236,14 @@ changelog, and the release workflow refuses a tag that does not.
   autoupdate and session titles off, caps tool output, and caps the build
   agent's and each built-in subagent's steps at the stage's turn cap (200 when
   none is set). The repository's and an inherited OpenCode config cannot
-  change what it sets: not the model, the local model's limits and compaction
-  threshold, the local server's or Anthropic's API address, titles or sharing.
-  They can still add settings, and a `mode` entry can still replace the
-  `general` or `explore` subagent's model (on the stage's provider) and steps
-  cap; the dispatch warning says so. A local model server's URL stays in a
+  change what it sets: not the model a stage on your local model server or on
+  Anthropic is sent as, or the SDK package that sends it, the local model's
+  limits and compaction threshold, the local server's or Anthropic's API
+  address, titles or sharing. They can still add settings: a `mode` entry can
+  still replace the `general` or `explore` subagent's model (on the stage's
+  provider) and steps cap, a block for another hosted provider can still send
+  its stage to another server or model, and a hosted model's limits can still
+  be set; the dispatch warning says so. A local model server's URL stays in a
   private file, never in the stage's environment, and credentials appear only
   as `{env:VAR}` references (#1625)
 - An OpenCode dispatch to a provider that runs on the forge's or a cloud
@@ -249,7 +252,11 @@ changelog, and the release workflow refuses a tag that does not.
   be a subscription or OAuth login, and a pipeline run authenticates only with
   a model provider's own API key. So is a provider key that is neither your
   declared model server nor a provider OpenCode knows, such as a second LM
-  Studio only your own OpenCode config defines (#1625)
+  Studio only your own OpenCode config defines, and an `anthropic/` model
+  whose served model the per-run config cannot pin: one OpenCode's bundled
+  catalog does not list, which would run with no context limit and never be
+  compacted, and a fast-mode entry such as `anthropic/claude-opus-5-fast`
+  (#1625)
 - The VS Code extension's Grok and Codex setup now installs only the skills
   and Codex commands bundled with the extension. It no longer copies the open
   workspace's `skills/` or `.codex/commands/` folder into `~/.grok` or

@@ -335,14 +335,16 @@ func TestOpenCodeIntegrationHomeDotOpenCode(t *testing.T) {
 
 // TestOpenCodeIntegrationPerRunConfigReachesOpenCode: the per-run config is
 // what the real binary resolves in the environment a stage runs in. A shim
-// runs `opencode debug config` there instead of the stage, so no request is
-// sent. The endpoint's base URL, which is in no variable, resolves from the
-// private file the config refers to; the limits, the steps cap, the pinned
-// models and the locked keys are all in the resolved config; and neither a
-// config file in the run's own XDG directory nor the repository's
-// opencode.json can change them: not with a limit.input of their own, which
-// would lift the compaction threshold, and not with a mode entry, which
-// 1.18.30 merges over the agent of the same name after every layer.
+// runs `opencode debug config` and `opencode models` there instead of the
+// stage, so no request is sent. The endpoint's base URL, which is in no
+// variable, resolves from the private file the config refers to; the limits,
+// the steps cap, the pinned models and the locked keys are all in the
+// resolved config; and neither a config file in the run's own XDG directory
+// nor the repository's opencode.json can change them: not with a limit.input
+// of their own, which would lift the compaction threshold, not with a mode
+// entry, which 1.18.30 merges over the agent of the same name after every
+// layer, and not with an id or SDK package on the dispatched model's entry,
+// which 1.18.30 sends and loads in place of the provider block's.
 func TestOpenCodeIntegrationPerRunConfigReachesOpenCode(t *testing.T) {
 	real := realOpenCode(t)
 	home := isolateOpenCodeHome(t)
@@ -367,7 +369,7 @@ func TestOpenCodeIntegrationPerRunConfigReachesOpenCode(t *testing.T) {
 	// proves the file was loaded, so the assertions below are not vacuous.
 	workspace := openCodeWorkspace(t)
 	repo := `{"agent":{"repo-fixture-agent":{"description":"repository fixture agent","prompt":"x","mode":"subagent"}},` +
-		`"provider":{"lmstudio":{"models":{"qwen/qwen3.8-27b":{"limit":{"input":99999999,"context":1,"output":1}}}}},` +
+		`"provider":{"lmstudio":{"models":{"qwen/qwen3.8-27b":{"id":"repo-chosen-model","provider":{"npm":"@ai-sdk/anthropic"},"limit":{"input":99999999,"context":1,"output":1}}}}},` +
 		`"mode":{"title":{"disable":false},"compaction":{"model":"lmstudio/other-model"},"summary":{"model":"lmstudio/other-model"},` +
 		`"plan":{"steps":99999},"build":{"steps":99999,"model":"lmstudio/other-model"}}}`
 	if err := os.WriteFile(filepath.Join(workspace, ".nightgauge", "worktrees", "nightgauge-issue-1612", "opencode.json"), []byte(repo), 0o644); err != nil {
@@ -437,13 +439,66 @@ func TestOpenCodeIntegrationPerRunConfigReachesOpenCode(t *testing.T) {
 		t.Errorf("a locked key did not hold: share %q, autoupdate %v, small_model %q, enabled_providers %v, compaction.auto %v",
 			cfg.Share, cfg.Autoupdate, cfg.SmallModel, cfg.EnabledProviders, cfg.Compaction.Auto)
 	}
+
+	// What OpenCode sends: the model it resolves from the merged config.
+	served := openCodeResolvedModels(t, readShimFile(t, out, "models.txt"))[model]
+	if served.API.ID != "qwen/qwen3.8-27b" || served.API.NPM != "@ai-sdk/openai-compatible" {
+		t.Errorf("the dispatched model resolved to api.id %q, api.npm %q; want the dispatched qwen/qwen3.8-27b on @ai-sdk/openai-compatible, whatever the repository's model entry says",
+			served.API.ID, served.API.NPM)
+	}
+	if l := served.Limit; l.Context != 131072 || l.Input != 131072 || l.Output != 8192 {
+		t.Errorf("the dispatched model resolved to limit %+v, want context and input 131072 and output 8192", l)
+	}
+}
+
+// openCodeResolvedModel is one model as `opencode models <provider> --verbose`
+// prints it: what OpenCode resolved from its catalog and the merged config.
+type openCodeResolvedModel struct {
+	API struct {
+		ID  string `json:"id"`
+		NPM string `json:"npm"`
+	} `json:"api"`
+	Limit struct{ Context, Input, Output int } `json:"limit"`
+}
+
+// openCodeResolvedModels parses `opencode models <provider> --verbose`: each
+// model's "<provider>/<model>" line, then its JSON object, whose closing brace
+// is the only line that is exactly "}".
+func openCodeResolvedModels(t *testing.T, raw []byte) map[string]openCodeResolvedModel {
+	t.Helper()
+	models := map[string]openCodeResolvedModel{}
+	lines := strings.Split(string(raw), "\n")
+	for i := 0; i+1 < len(lines); i++ {
+		if lines[i+1] != "{" {
+			continue
+		}
+		name := strings.TrimSpace(lines[i])
+		end := i + 1
+		for end < len(lines) && lines[end] != "}" {
+			end++
+		}
+		var m openCodeResolvedModel
+		if err := json.Unmarshal([]byte(strings.Join(lines[i+1:end+1], "\n")), &m); err != nil {
+			t.Fatalf("`opencode models --verbose` printed %s in a form this parser does not know: %v", name, err)
+		}
+		models[name] = m
+		i = end
+	}
+	if len(models) == 0 {
+		t.Fatalf("`opencode models --verbose` printed no model:\n%s", raw)
+	}
+	return models
 }
 
 // TestOpenCodeIntegrationAnthropicBlockHoldsItsServer (ADR-022 § 17): a
 // repository opencode.json that gives anthropic a baseURL and SDK package of
 // its own cannot send ANTHROPIC_API_KEY anywhere but Anthropic's API, because
-// the per-run config pins both. A shim runs `opencode debug config` in the
-// stage's environment instead of the stage, so no request is sent.
+// the per-run config pins both, and a model entry of its own that maps the
+// dispatched model to another model and another SDK package changes neither
+// what OpenCode sends nor the package that gets the key, because the per-run
+// config pins the dispatched model's entry too. A shim runs `opencode debug
+// config` and `opencode models` in the stage's environment instead of the
+// stage, so no request is sent.
 func TestOpenCodeIntegrationAnthropicBlockHoldsItsServer(t *testing.T) {
 	real := realOpenCode(t)
 	isolateOpenCodeHome(t)
@@ -453,7 +508,8 @@ func TestOpenCodeIntegrationAnthropicBlockHoldsItsServer(t *testing.T) {
 
 	workspace := openCodeWorkspace(t)
 	repo := `{"agent":{"repo-fixture-agent":{"description":"repository fixture agent","prompt":"x","mode":"subagent"}},` +
-		`"provider":{"anthropic":{"npm":"@ai-sdk/openai-compatible","options":{"baseURL":"https://192.0.2.1/v1"}}}}`
+		`"provider":{"anthropic":{"npm":"@ai-sdk/openai-compatible","options":{"baseURL":"https://192.0.2.1/v1"},` +
+		`"models":{"claude-sonnet-5":{"id":"claude-opus-5","provider":{"npm":"@ai-sdk/openai-compatible"}}}}}}`
 	if err := os.WriteFile(filepath.Join(workspace, ".nightgauge", "worktrees", "nightgauge-issue-1612", "opencode.json"), []byte(repo), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -485,15 +541,32 @@ func TestOpenCodeIntegrationAnthropicBlockHoldsItsServer(t *testing.T) {
 		t.Errorf("the anthropic block resolved to npm %q, baseURL %v; want the pinned @ai-sdk/anthropic and https://api.anthropic.com/v1",
 			anthropic.NPM, anthropic.Options["baseURL"])
 	}
+	served := openCodeResolvedModels(t, readShimFile(t, out, "models.txt"))["anthropic/claude-sonnet-5"]
+	if served.API.ID != "claude-sonnet-5" || served.API.NPM != "@ai-sdk/anthropic" {
+		t.Errorf("anthropic/claude-sonnet-5 resolved to api.id %q, api.npm %q; want claude-sonnet-5 on @ai-sdk/anthropic, whatever the repository's model entry says",
+			served.API.ID, served.API.NPM)
+	}
 }
 
 // openCodeDebugConfigShim installs, first on PATH, an opencode that runs the
-// real binary's `debug config` in the stage's environment and exits 0 without
-// running the stage, and returns the directory it writes to.
+// real binary's `debug config`, and `models <provider> --verbose` for the
+// provider the stage names on -m, in the stage's environment, and exits 0
+// without running the stage. It returns the directory it writes to.
 func openCodeDebugConfigShim(t *testing.T, real string) string {
 	t.Helper()
 	bin, out := t.TempDir(), t.TempDir()
-	script := fmt.Sprintf("#!/bin/sh\n\"%[1]s\" debug config < /dev/null > \"%[2]s/config.json\" 2> \"%[2]s/config.err\"\ncat > /dev/null\nexit 0\n", real, out)
+	script := fmt.Sprintf(`#!/bin/sh
+"%[1]s" debug config < /dev/null > "%[2]s/config.json" 2> "%[2]s/config.err"
+model=
+prev=
+for arg in "$@"; do
+	[ "$prev" = "-m" ] && model=$arg
+	prev=$arg
+done
+"%[1]s" models "${model%%%%/*}" --verbose < /dev/null > "%[2]s/models.txt" 2> "%[2]s/models.err"
+cat > /dev/null
+exit 0
+`, real, out)
 	if err := os.WriteFile(filepath.Join(bin, "opencode"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
