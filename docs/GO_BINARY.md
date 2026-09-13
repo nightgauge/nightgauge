@@ -5409,11 +5409,11 @@ unfinished one — `checkAdapter` surfaces it via `catalog_warning` (prefixed
 gap is always explained rather than silently indistinguishable from a probe
 nobody got around to wiring. It never affects `ok`.
 
-Only runs once the adapter's baseline (binary present, version floor met)
-already passed — a CLI that is missing or stale is already reported for that
-reason. Any failure to run or parse the catalog (spawn error, not
-authenticated, unrecognized output shape) degrades to `catalog_warning` and
-never fails the adapter — only a confirmed drift does:
+Only runs on an adapter that is usable (binary present, and its version floor
+met or, for claude, one it stays usable below) — a CLI that is not usable
+already fails for that reason. Any failure to run or parse the catalog (spawn
+error, not authenticated, unrecognized output shape) degrades to
+`catalog_warning` and never fails the adapter — only a confirmed drift does:
 
 | Field             | Meaning                                                                            |
 | ----------------- | ----------------------------------------------------------------------------------- |
@@ -5457,11 +5457,14 @@ Each CLI adapter's `min_version` floor and its floor policy come from its
 compat manifest, `internal/adaptercompat/manifests/<adapter>.json`, which also
 records the newest tested version, the upstream release feeds, the install
 recipe and the captured fixtures. A Go test holds the doctor to the manifest.
-Under the `warn` policy (claude, codex, gemini and grok today), a CLI below its
-floor gets `version_ok: false`, a remediation naming the floor and a `⚠` row,
-and keeps `ok: true`, so it adds no warning. Under `fail_closed`, it gets
-`ok: false`. If the embedded manifests fail to load, a failing
-`compat-manifests` row leads the section and names the manifest and field.
+A CLI below its floor gets `version_ok: false` and a remediation naming the
+floor. Codex, gemini and grok also get `ok: false`. Claude's floor
+is the oldest version a captured fixture backs, not a known break, so a claude
+below it keeps `ok: true`, gets a `⚠` row and adds no warning; it still gets
+the model probe. That holds only under the `warn` policy: under `fail_closed`,
+any CLI below its floor gets `ok: false`. If the embedded manifests fail to
+load, a failing `compat-manifests` row leads the section and names the
+manifest and field.
 
 ```json
 {

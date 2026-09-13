@@ -339,8 +339,8 @@ func capDescentReason(reason, fromModel, toModel string) string {
 // AdapterUsableForCapHop is the production CapRecoveryInput.AdapterUsable
 // probe: the adapter doctor's own health check, which is the single place that
 // already knows what "installed and authenticated" means per adapter kind (a
-// CLI on PATH at or above its version floor, an SDK adapter's API key, a local
-// HTTP server actually answering).
+// CLI on PATH at or above its version floor, or below one it stays usable
+// under; an SDK adapter's API key; a local HTTP server actually answering).
 //
 // Reusing the doctor rather than writing a second, cheaper check is deliberate.
 // The cheap version — "is the binary on PATH" — is exactly the check that would

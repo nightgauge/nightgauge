@@ -11,9 +11,8 @@ and this project adheres to
 
 ### Changed
 
-- The Adapter Doctor checks the claude CLI against a 2.1.223 floor. A claude,
-  codex, gemini or grok CLI below its floor now shows its version as a warning
-  and stays ready, instead of marking the adapter not ready (#1613)
+- The Adapter Doctor checks the claude CLI against a 2.1.223 floor. A claude
+  below it shows its version as a warning and stays ready (#1613)
 
 ### Fixed
 

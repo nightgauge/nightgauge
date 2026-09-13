@@ -11854,7 +11854,8 @@ func parseAdaptersFlag(raw string) []string {
 
 // writeAdapterRows prints one row per adapter. The mark is ✗ for an adapter
 // that is not usable and ⚠ for one that is usable but below its version floor
-// (a floor under the warn policy); either prints the remediation beneath it.
+// (claude, which stays usable below its floor); either prints the remediation
+// beneath it.
 func writeAdapterRows(w io.Writer, adapters []doctor.AdapterHealth) {
 	for _, a := range adapters {
 		status := "✓"

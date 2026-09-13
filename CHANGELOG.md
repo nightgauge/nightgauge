@@ -35,9 +35,9 @@ changelog, and the release workflow refuses a tag that does not.
 - Codex and Gemini steering now summarizes the repository's `AGENTS.md`, falling
   back to `CLAUDE.md` (without its `@AGENTS.md` import) only when `AGENTS.md`
   has no content of its own (issue 1675)
-- `nightgauge doctor --adapters` checks claude against a 2.1.223 floor. A CLI
-  below a `warn` floor (claude, codex, gemini, grok) now gets a `⚠` row naming
-  the floor and stays usable, instead of being marked not ready (#1613)
+- `nightgauge doctor --adapters` checks claude against a 2.1.223 floor. A
+  claude below it gets a `⚠` row naming the floor and stays usable, so the
+  doctor does not mark it not ready (#1613)
 
 ### Added
 

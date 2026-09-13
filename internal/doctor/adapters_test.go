@@ -11,6 +11,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/adaptercompat"
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/models"
 )
 
 // fakeProbe builds an adapterProbe whose side effects are driven by in-memory
@@ -108,24 +109,21 @@ func TestCheckAdapter_CodexInstalledHealthy(t *testing.T) {
 	}
 }
 
-// TestCheckAdapter_CodexBelowWarnFloor: codex's floor is under the warn
-// policy, so a codex below it is reported (VersionOK false, a remediation
-// naming the floor) and stays usable.
-func TestCheckAdapter_CodexBelowWarnFloor(t *testing.T) {
+func TestCheckAdapter_CodexBelowMinVersion(t *testing.T) {
 	fp := fakeProbe{
 		paths:    map[string]string{"codex": "/bin/codex"},
 		versions: map[string]string{"/bin/codex": "codex 0.110.0\n"},
 		codex:    t.TempDir(),
 	}
 	h := checkAdapter("codex", fp.toProbe())
+	if h.OK {
+		t.Fatal("expected codex !OK when below min version")
+	}
 	if h.VersionOK {
 		t.Error("expected VersionOK=false for 0.110.0 < 0.111.0")
 	}
 	if !strings.Contains(h.Remediation, "0.111.0") {
 		t.Errorf("expected a remediation naming the 0.111.0 floor, got %q", h.Remediation)
-	}
-	if !h.OK {
-		t.Error("a warn-policy floor must not make codex unusable")
 	}
 }
 
@@ -399,14 +397,14 @@ func TestCheckCodexMcp_PresentNoBlock(t *testing.T) {
 // TestCheckAdapter_GeminiAndCopilot exercises the remaining CLI adapters
 // end-to-end so their spec floor/binary are tied to observed behavior.
 func TestCheckAdapter_GeminiAndCopilot(t *testing.T) {
-	// gemini below its 0.29.0 warn floor → reported, still usable.
+	// gemini below its 0.29.0 floor → not OK.
 	geminiOld := fakeProbe{
 		paths:    map[string]string{"gemini": "/bin/gemini"},
 		versions: map[string]string{"/bin/gemini": "gemini 0.28.9"},
 	}
 	g := checkAdapter("gemini", geminiOld.toProbe())
-	if g.VersionOK || !g.OK {
-		t.Errorf("expected gemini VersionOK=false and OK below its 0.29.0 warn floor, got %+v", g)
+	if g.OK || g.VersionOK {
+		t.Errorf("expected gemini !OK below 0.29.0 floor, got %+v", g)
 	}
 	if !strings.Contains(g.Remediation, "0.29.0") {
 		t.Errorf("expected gemini remediation to mention 0.29.0, got %q", g.Remediation)
@@ -432,8 +430,9 @@ func TestCheckAdapter_GeminiAndCopilot(t *testing.T) {
 }
 
 // TestCheckAdapter_VersionSpawnError: binary present but `--version` errors →
-// the floor is reported unmet with an "unknown" hint; under the warn policy
-// the adapter stays usable, and a floor-less adapter is untouched.
+// the adapter is reported not ready against a floor with an "unknown" hint;
+// claude, usable below its floor, stays OK, and a floor-less adapter is
+// untouched.
 func TestCheckAdapter_VersionSpawnError(t *testing.T) {
 	codexErr := fakeProbe{
 		paths:   map[string]string{"codex": "/bin/codex"},
@@ -444,11 +443,21 @@ func TestCheckAdapter_VersionSpawnError(t *testing.T) {
 	if !h.Installed {
 		t.Error("expected Installed=true when the binary is on PATH")
 	}
-	if h.Version != "" || h.VersionOK || !h.OK {
-		t.Errorf("expected unknown version → VersionOK false, OK under the warn floor, got %+v", h)
+	if h.Version != "" || h.VersionOK || h.OK {
+		t.Errorf("expected unknown version → VersionOK/OK false, got %+v", h)
 	}
 	if !strings.Contains(h.Remediation, "unknown") {
 		t.Errorf("expected 'unknown' in remediation, got %q", h.Remediation)
+	}
+
+	// claude is usable below its floor → an unknown version is reported
+	// against the floor and still leaves it OK.
+	claudeErr := fakeProbe{
+		paths:   map[string]string{"claude": "/bin/claude"},
+		verErrs: map[string]error{"/bin/claude": errors.New("boom")},
+	}
+	if c := checkAdapter("claude", claudeErr.toProbe()); !c.OK || c.VersionOK || !strings.Contains(c.Remediation, "unknown") {
+		t.Errorf("expected claude OK with an unmet floor and an 'unknown' hint despite version error, got %+v", c)
 	}
 
 	// copilot has no floor → a version-spawn error leaves it OK and VersionOK.
@@ -553,6 +562,13 @@ func TestAdapterSpecConstants(t *testing.T) {
 			t.Errorf("%s floorPolicy = %q, want %q", name, adapterSpecs[name].floorPolicy, adaptercompat.FloorWarn)
 		}
 	}
+	// Only claude stays usable below its floor. Codex, gemini and grok keep
+	// the floor they had before the manifest: below it they are not usable.
+	for name, spec := range adapterSpecs {
+		if want := name == "claude-headless"; spec.usableBelowFloor != want {
+			t.Errorf("%s usableBelowFloor = %v, want %v", name, spec.usableBelowFloor, want)
+		}
+	}
 	if !adapterSpecs["codex"].mcp {
 		t.Error("codex must be flagged as MCP-provisioning")
 	}
@@ -563,8 +579,9 @@ func TestAdapterSpecConstants(t *testing.T) {
 
 // TestCheckAdapter_ClaudeBelowManifestFloorWarns: claude-headless has a floor
 // from its compat manifest (the oldest version a captured fixture backs), under
-// the warn policy. A claude below it is reported with a remediation naming the
-// floor, and the adapter stays usable, so the doctor adds no warning for it.
+// the warn policy, and its spec keeps it usable below that floor. A claude
+// below it is reported with a remediation naming the floor, and the adapter
+// stays usable, so the doctor adds no warning for it.
 func TestCheckAdapter_ClaudeBelowManifestFloorWarns(t *testing.T) {
 	m, ok := adaptercompat.Get("claude-headless")
 	if !ok || m.MinVersion != "2.1.223" {
@@ -585,23 +602,69 @@ func TestCheckAdapter_ClaudeBelowManifestFloorWarns(t *testing.T) {
 		t.Errorf("remediation %q does not name the 2.1.223 floor", h.Remediation)
 	}
 	if !h.OK {
-		t.Errorf("a warn-policy floor failed the adapter: %+v", h)
+		t.Errorf("claude below its floor failed the adapter: %+v", h)
+	}
+}
+
+// TestCheckAdapter_ClaudeBelowFloorKeepsItsProbes: a claude below its floor is
+// still usable, so it still gets the deeper checks every usable claude gets:
+// the catalog-skip note and the model probe (the data-retention check). The
+// probe's remediation follows the floor's rather than replacing it.
+func TestCheckAdapter_ClaudeBelowFloorKeepsItsProbes(t *testing.T) {
+	base := func(probe func(string, []string) (string, error)) fakeProbe {
+		return fakeProbe{
+			paths:      map[string]string{"claude": "/opt/claude"},
+			versions:   map[string]string{"/opt/claude": "2.1.100 (Claude Code)\n"},
+			modelProbe: probe,
+		}
+	}
+
+	served := checkAdapter("claude-headless", base(func(string, []string) (string, error) {
+		return "ok\n", nil
+	}).toProbe())
+	if served.VersionOK || !served.OK {
+		t.Fatalf("want claude 2.1.100 below its floor and usable, got %+v", served)
+	}
+	if served.ModelOK == nil || !*served.ModelOK {
+		t.Errorf("ModelOK = %v, want true: the model probe must run below the floor", served.ModelOK)
+	}
+	if !strings.HasPrefix(served.CatalogWarning, "no catalog probe: ") {
+		t.Errorf("CatalogWarning = %q, want the no-catalog note", served.CatalogWarning)
+	}
+
+	barred := checkAdapter("claude-headless", base(func(string, []string) (string, error) {
+		return retentionRejectionOutput, errors.New("exit status 1")
+	}).toProbe())
+	if barred.ModelOK == nil || *barred.ModelOK {
+		t.Errorf("ModelOK = %v, want false: the model was rejected", barred.ModelOK)
+	}
+	for _, want := range []string{"2.1.223", "30-day data retention"} {
+		if !strings.Contains(barred.Remediation, want) {
+			t.Errorf("remediation %q does not name %q", barred.Remediation, want)
+		}
 	}
 }
 
 // TestCheckAdapter_FailClosedFloorFailsTheAdapter is the other policy: below
-// a fail_closed floor the adapter is not usable. No doctor adapter carries one
-// today, so a spec is registered for the test.
+// a fail_closed floor the adapter is not usable, even with usableBelowFloor
+// set, and it gets no probe. No doctor adapter carries such a floor today, so
+// a spec is registered for the test.
 func TestCheckAdapter_FailClosedFloorFailsTheAdapter(t *testing.T) {
 	const name = "test-fail-closed"
 	adapterSpecs[name] = adapterSpec{binary: "fc", kind: kindCLI, minVersion: "1.2.3",
-		floorPolicy: adaptercompat.FloorFailClosed, catalogSkipReason: "test spec"}
+		floorPolicy: adaptercompat.FloorFailClosed, usableBelowFloor: true, catalogSkipReason: "test spec",
+		modelProbeBand: models.BandFable, modelProbeArgs: claudeModelProbeArgs}
 	t.Cleanup(func() { delete(adapterSpecs, name) })
 
-	below := fakeProbe{paths: map[string]string{"fc": "/bin/fc"}, versions: map[string]string{"/bin/fc": "fc 1.2.2"}}
+	spawned := false
+	below := fakeProbe{paths: map[string]string{"fc": "/bin/fc"}, versions: map[string]string{"/bin/fc": "fc 1.2.2"},
+		modelProbe: func(string, []string) (string, error) { spawned = true; return "ok", nil }}
 	h := checkAdapter(name, below.toProbe())
 	if h.OK || h.VersionOK || !strings.Contains(h.Remediation, "1.2.3") {
 		t.Errorf("below a fail_closed floor: want !OK, !VersionOK and the floor named, got %+v", h)
+	}
+	if spawned || h.ModelOK != nil || h.CatalogWarning != "" {
+		t.Errorf("an adapter that is not usable was probed: spawned=%v %+v", spawned, h)
 	}
 	at := fakeProbe{paths: map[string]string{"fc": "/bin/fc"}, versions: map[string]string{"/bin/fc": "fc 1.2.3"}}
 	if h := checkAdapter(name, at.toProbe()); !h.OK || !h.VersionOK {
@@ -1096,7 +1159,7 @@ func TestCheckAdapter_GrokCatalogSkippedWhenNotInstalled(t *testing.T) {
 
 // TestCheckAdapter_GrokCatalogSkippedBelowVersionFloor: same skip rule when
 // the binary is present but below the version floor — no redundant second
-// complaint layered on an adapter already reported for another reason.
+// complaint layered on an adapter that already fails for another reason.
 func TestCheckAdapter_GrokCatalogSkippedBelowVersionFloor(t *testing.T) {
 	fp := fakeProbe{
 		paths:    map[string]string{"grok": "/bin/grok"},
@@ -1105,8 +1168,8 @@ func TestCheckAdapter_GrokCatalogSkippedBelowVersionFloor(t *testing.T) {
 		catalogOutputs: map[string]string{"/bin/grok": readGrokCatalogFixture(t)},
 	}
 	h := checkAdapter("grok", fp.toProbe())
-	if h.VersionOK {
-		t.Fatal("expected grok VersionOK=false below its version floor")
+	if h.OK || h.VersionOK {
+		t.Fatal("expected grok !OK below its version floor")
 	}
 	if h.Catalog != nil {
 		t.Errorf("expected no catalog probe below the version floor, got %+v", h.Catalog)
@@ -1240,8 +1303,8 @@ func TestCheckAdapter_CatalogSkipReasonSkippedWhenBaselineFails(t *testing.T) {
 		paths:    map[string]string{"gemini": "/bin/gemini"},
 		versions: map[string]string{"/bin/gemini": "gemini 0.28.9"},
 	}.toProbe())
-	if belowFloor.VersionOK {
-		t.Fatal("expected gemini VersionOK=false below its version floor")
+	if belowFloor.OK || belowFloor.VersionOK {
+		t.Fatal("expected gemini !OK below its version floor")
 	}
 	if belowFloor.CatalogWarning != "" {
 		t.Errorf("expected no catalog-skip note below the version floor, got %q", belowFloor.CatalogWarning)
