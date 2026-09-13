@@ -17,10 +17,12 @@ import type { StatusBarManager } from "../utils/statusBar";
 import {
   getExecutionAdapter,
   getCodexModel,
+  getOpenCodeModel,
   type PipelineModelOverride,
 } from "../utils/nightgaugeConfig";
 import { CODEX_RECOMMENDED_DEFAULT_MODEL } from "@nightgauge/sdk";
 import { CodexModelCatalogService } from "../services/CodexModelCatalogService";
+import { OpenCodeModelCatalogService } from "../services/OpenCodeModelCatalogService";
 
 interface ModelOption extends vscode.QuickPickItem {
   model: PipelineModelOverride;
@@ -72,16 +74,40 @@ function getCodexModelOptions(currentModel: string): ModelOption[] {
   }));
 }
 
-function getModelOptionsForAdapter(
+/**
+ * OpenCode model options for "Run Pipeline with Model" (Issue #1628).
+ *
+ * Only `selectable` catalog entries become QuickPick items: the "could not
+ * list models" notice the catalog service returns on failure is informational
+ * and must never be offered or stored as a run override.
+ */
+async function getOpenCodeModelOptions(workspaceRoot?: string): Promise<ModelOption[]> {
+  const configuredModel = getOpenCodeModel(workspaceRoot);
+  const catalog = await new OpenCodeModelCatalogService().listModels(configuredModel);
+
+  return catalog
+    .filter((entry) => entry.selectable)
+    .map((entry) => ({
+      label: entry.label,
+      model: entry.id,
+      displayLabel: entry.id,
+    }));
+}
+
+async function getModelOptionsForAdapter(
   adapter: ReturnType<typeof getExecutionAdapter>,
   workspaceRoot?: string
-): ModelOption[] | null {
+): Promise<ModelOption[] | null> {
   if (adapter === "claude") {
     return CLAUDE_MODEL_OPTIONS;
   }
 
   if (adapter === "codex") {
     return getCodexModelOptions(getCodexModel(workspaceRoot));
+  }
+
+  if (adapter === "opencode") {
+    return getOpenCodeModelOptions(workspaceRoot);
   }
 
   return null;
@@ -102,11 +128,12 @@ export function registerRunPipelineWithModelCommand(
 
       const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
       const adapter = getExecutionAdapter(workspaceRoot);
-      const modelOptions = getModelOptionsForAdapter(adapter, workspaceRoot);
+      const modelOptions = await getModelOptionsForAdapter(adapter, workspaceRoot);
 
       if (!modelOptions) {
         vscode.window.showWarningMessage(
-          `Run Pipeline with Model currently supports Claude and Codex. Current adapter: ${adapter}.`
+          `Run Pipeline with Model currently supports Claude, Codex, and OpenCode. ` +
+            `Current adapter: ${adapter}.`
         );
         return;
       }
@@ -116,7 +143,9 @@ export function registerRunPipelineWithModelCommand(
         placeHolder:
           adapter === "codex"
             ? "Select Codex model for this pipeline run"
-            : "Select Claude model for this pipeline run",
+            : adapter === "opencode"
+              ? "Select OpenCode model for this pipeline run"
+              : "Select Claude model for this pipeline run",
         title: "Nightgauge: Run Pipeline with Model",
       });
 

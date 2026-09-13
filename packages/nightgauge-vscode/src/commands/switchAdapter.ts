@@ -10,6 +10,21 @@ interface AdapterOption extends vscode.QuickPickItem {
 }
 
 /**
+ * The OpenCode enable switch — the same env var name the Go gate and the SDK
+ * resolver read (`EXPERIMENTAL_OPENCODE_ENV_VAR` in
+ * packages/nightgauge-sdk/src/cli/adapter.ts). Only the exact value `1` opens
+ * it, read from the process environment only, so a committed config file can
+ * never turn it on.
+ *
+ * @see docs/decisions/022-opencode-multi-provider-adapter.md § The enable gate
+ */
+const OPENCODE_ENABLE_SWITCH_ENV_VAR = "NIGHTGAUGE_EXPERIMENTAL_OPENCODE";
+
+function isOpenCodeSwitchOn(): boolean {
+  return process.env[OPENCODE_ENABLE_SWITCH_ENV_VAR] === "1";
+}
+
+/**
  * Build a minimal config delta containing only the adapter field.
  * writeLocal() merges this onto the existing local config file, so all
  * other keys are preserved as-is.
@@ -66,6 +81,17 @@ export function registerSwitchAdapterCommand(logger: Logger): vscode.Disposable 
               : "Experimental agentic pipeline adapter",
           value: "grok",
         },
+        {
+          label: "OpenCode",
+          detail:
+            "Experimental; requires the opencode CLI and either a local model server " +
+            "(LM Studio, Ollama) or a hosted provider API key",
+          description:
+            current === "opencode"
+              ? "Current adapter (experimental)"
+              : "Experimental agentic pipeline adapter",
+          value: "opencode",
+        },
       ],
       {
         title: "Nightgauge: Switch Execution Adapter",
@@ -100,6 +126,19 @@ export function registerSwitchAdapterCommand(logger: Logger): vscode.Disposable 
             "Run `gcloud auth application-default login` if authentication fails."
         );
       }
+    }
+
+    if (adapterSelection.value === "opencode" && !isOpenCodeSwitchOn()) {
+      // Blocking: unlike the warnings above, OpenCode does not dispatch at
+      // all without the switch (ADR-022), so writing the adapter now would
+      // silently produce a pipeline that refuses to run. Leave the config
+      // untouched and name the way to actually enable it.
+      vscode.window.showInformationMessage(
+        `OpenCode is experimental and does not dispatch by default. Set ` +
+          `${OPENCODE_ENABLE_SWITCH_ENV_VAR}=1 in the environment that runs Nightgauge to enable ` +
+          `it, then switch adapters again.`
+      );
+      return;
     }
 
     // Always write to local config (config.local.yaml, gitignored).

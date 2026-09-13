@@ -87,6 +87,23 @@ vi.mock("../../../src/services/CodexModelCatalogService", () => ({
   },
 }));
 
+const { openCodeListModelsMock } = vi.hoisted(() => ({
+  openCodeListModelsMock: vi.fn(async () => [
+    { id: "lmstudio/qwen/qwen3.8-27b", label: "lmstudio/qwen/qwen3.8-27b", selectable: true },
+  ]),
+}));
+
+vi.mock("../../../src/services/OpenCodeModelCatalogService", () => ({
+  OpenCodeModelCatalogService: class OpenCodeModelCatalogServiceMock {
+    listModels = openCodeListModelsMock;
+  },
+}));
+
+vi.mock("../../../src/utils/resolvers/modelResolver", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../src/utils/resolvers/modelResolver")>()),
+  getOpenCodeModel: vi.fn(() => undefined),
+}));
+
 vi.mock("../../../src/utils/logger", () => ({
   Logger: class LoggerMock {
     info = vi.fn();
@@ -293,5 +310,31 @@ describe("SettingsPanel per-stage adapter handling (Issue #3225)", () => {
     expect(writeLocalMock).toHaveBeenCalledTimes(1);
     const writtenConfig = writeLocalMock.mock.calls[0][0];
     expect(writtenConfig.pipeline.stage_adapters["feature-dev"]).toBe("copilot");
+  });
+});
+
+describe("SettingsPanel OpenCode model catalog refresh (Issue #1628)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    writeMock.mockResolvedValue({ success: true });
+    writeLocalMock.mockResolvedValue({ success: true });
+    openCodeListModelsMock.mockClear();
+  });
+
+  it("refreshes the OpenCode catalog once via the refresh action", async () => {
+    const panel = makePanel();
+
+    await panel.handleAction("opencode-refresh-models");
+
+    expect(openCodeListModelsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not auto-refresh OpenCode models when the adapter changes", () => {
+    const panel = makePanel();
+    const refreshOpenCodeModels = vi.spyOn(panel, "refreshOpenCodeModels");
+
+    panel.handleChange("ui.core.adapter", "opencode");
+
+    expect(refreshOpenCodeModels).not.toHaveBeenCalled();
   });
 });

@@ -7,6 +7,16 @@ const executeCommandSpy = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 const listModelsMock = vi.hoisted(() =>
   vi.fn(() => ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"])
 );
+const listOpenCodeModelsMock = vi.hoisted(() =>
+  vi.fn(async (_configuredModel?: string) => [
+    {
+      id: "lmstudio/qwen/qwen3.8-27b",
+      label: "lmstudio/qwen/qwen3.8-27b (Configured)",
+      selectable: true,
+    },
+    { id: "anthropic/claude-sonnet-5", label: "anthropic/claude-sonnet-5", selectable: true },
+  ])
+);
 
 vi.mock("vscode", () => {
   return {
@@ -54,6 +64,7 @@ vi.mock("vscode", () => {
 vi.mock("../../src/utils/nightgaugeConfig", () => ({
   getExecutionAdapter: vi.fn(() => "claude"),
   getCodexModel: vi.fn(() => "gpt-5.4"),
+  getOpenCodeModel: vi.fn(() => "lmstudio/qwen/qwen3.8-27b"),
 }));
 
 vi.mock("../../src/services/CodexModelCatalogService", () => ({
@@ -64,8 +75,20 @@ vi.mock("../../src/services/CodexModelCatalogService", () => ({
   },
 }));
 
+vi.mock("../../src/services/OpenCodeModelCatalogService", () => ({
+  OpenCodeModelCatalogService: class OpenCodeModelCatalogService {
+    listModels(configuredModel?: string) {
+      return listOpenCodeModelsMock(configuredModel);
+    }
+  },
+}));
+
 import { registerRunPipelineWithModelCommand } from "../../src/commands/runPipelineWithModel";
-import { getExecutionAdapter, getCodexModel } from "../../src/utils/nightgaugeConfig";
+import {
+  getExecutionAdapter,
+  getCodexModel,
+  getOpenCodeModel,
+} from "../../src/utils/nightgaugeConfig";
 
 describe("runPipelineWithModel command", () => {
   const logger = {
@@ -186,6 +209,69 @@ describe("runPipelineWithModel command", () => {
     expect(orchestrator.setNextRunModelOverride).toHaveBeenCalledWith("gpt-5.4");
     expect(statusBar.setModelOverrideLabel).toHaveBeenCalledWith("gpt-5.4");
     expect(executeCommandSpy).toHaveBeenCalledWith("nightgauge.pickupIssue", undefined);
+
+    disposable.dispose();
+  });
+
+  it("shows OpenCode catalog options, configured model first, when adapter is opencode (#1628)", async () => {
+    vi.mocked(getExecutionAdapter).mockReturnValue("opencode");
+    vi.mocked(getOpenCodeModel).mockReturnValue("lmstudio/qwen/qwen3.8-27b");
+    quickPickResponse = undefined;
+
+    const disposable = registerRunPipelineWithModelCommand(
+      logger as never,
+      orchestrator as never,
+      statusBar as never
+    );
+
+    await invokeCommand();
+
+    expect(listOpenCodeModelsMock).toHaveBeenCalledWith("lmstudio/qwen/qwen3.8-27b");
+    const items = quickPickCalls[0].items;
+    expect(items[0].label).toBe("lmstudio/qwen/qwen3.8-27b (Configured)");
+    expect(items.map((item) => item.label)).toContain("anthropic/claude-sonnet-5");
+
+    disposable.dispose();
+  });
+
+  it("never offers a non-selectable OpenCode notice entry in the QuickPick (#1628)", async () => {
+    vi.mocked(getExecutionAdapter).mockReturnValue("opencode");
+    listOpenCodeModelsMock.mockResolvedValueOnce([
+      { id: "", label: "Could not list OpenCode models", selectable: false },
+    ]);
+    quickPickResponse = undefined;
+
+    const disposable = registerRunPipelineWithModelCommand(
+      logger as never,
+      orchestrator as never,
+      statusBar as never
+    );
+
+    await invokeCommand();
+
+    expect(quickPickCalls[0].items).toEqual([]);
+
+    disposable.dispose();
+  });
+
+  it("stores the selected OpenCode override and starts the pipeline (#1628)", async () => {
+    vi.mocked(getExecutionAdapter).mockReturnValue("opencode");
+    quickPickResponse = {
+      label: "anthropic/claude-sonnet-5",
+      model: "anthropic/claude-sonnet-5",
+      displayLabel: "anthropic/claude-sonnet-5",
+    } as QuickPickItem;
+
+    const disposable = registerRunPipelineWithModelCommand(
+      logger as never,
+      orchestrator as never,
+      statusBar as never
+    );
+
+    await invokeCommand();
+
+    expect(orchestrator.setNextRunModelOverride).toHaveBeenCalledWith("anthropic/claude-sonnet-5");
+    expect(statusBar.setModelOverrideLabel).toHaveBeenCalledWith("anthropic/claude-sonnet-5");
 
     disposable.dispose();
   });

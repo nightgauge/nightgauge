@@ -179,6 +179,12 @@ describe("mergeAdapterRows (#4031)", () => {
     expect(rows[0].ok).toBe(false);
     expect(rows[0].remediations.join(" ")).toMatch(/lms get/);
   });
+
+  it("shows the display name 'OpenCode' for the opencode SDK adapter (#1628)", () => {
+    const rows = mergeAdapterRows(["opencode"], [], authResult({ opencode: { ok: true } }), false);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].displayName).toBe("OpenCode");
+  });
 });
 
 describe("finalizeStageRows (#4031)", () => {

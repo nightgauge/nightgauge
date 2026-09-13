@@ -11,6 +11,15 @@ and this project adheres to
 
 ### Changed
 
+- OpenCode now appears, labeled Experimental, in the switch-adapter
+  quick-pick, the per-stage and global adapter dropdowns, and the Adapter
+  Doctor view. Choosing it from the quick-pick while
+  `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` is unset shows how to enable it instead
+  of writing the adapter. A new `OpenCodeModelCatalogService` lists
+  `provider/model` ids from `opencode models` (bounded `execFile`, 10s
+  timeout) for "Run Pipeline with Model" and the settings panel, with the
+  configured model first and a non-throwing fallback when the CLI is missing
+  or times out (#1628)
 - `opencode` is now a selectable execution adapter: `ui.core.adapter`,
   per-stage `pipeline.stage_adapters` and `pipeline.adapter_fallback_chain`
   entries all accept it, and picking it from the auto-router no longer
