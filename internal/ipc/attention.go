@@ -618,7 +618,7 @@ func (s *Server) closeIssueBestEffort(ctx context.Context, owner, repo string, n
 		return err
 	}
 	svc := gh.NewIssueService(c)
-	iss, err := svc.GetIssue(ctx, owner, repo, number)
+	iss, err := svc.GetIssueWithRelations(ctx, owner, repo, number, gh.NoRelations)
 	if err != nil {
 		return fmt.Errorf("fetch issue #%d: %w", number, err)
 	}
@@ -666,7 +666,7 @@ func (s *Server) approveArchitecture(ctx context.Context, key, repo, owner, name
 	}
 
 	svc := gh.NewIssueService(c)
-	iss, err := svc.GetIssue(ctx, owner, name, issue)
+	iss, err := svc.GetIssueWithRelations(ctx, owner, name, issue, gh.NoRelations)
 	if err != nil {
 		return fmt.Errorf("fetch issue #%d: %w", issue, err)
 	}

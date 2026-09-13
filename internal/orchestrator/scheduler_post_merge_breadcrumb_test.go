@@ -83,10 +83,6 @@ func mergedPRServer(t *testing.T) *httptest.Server {
 // without an epic auto-close round trip.
 type breadcrumbIssueSvc struct{ issue *types.Issue }
 
-func (m *breadcrumbIssueSvc) GetIssue(_ context.Context, _, _ string, _ int) (*types.Issue, error) {
-	return m.issue, nil
-}
-
 func (m *breadcrumbIssueSvc) GetIssueWithRelations(_ context.Context, _, _ string, _ int, rels gh.IssueRelations) (*types.Issue, error) {
 	return withRelations(m.issue, rels), nil
 }

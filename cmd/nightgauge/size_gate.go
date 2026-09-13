@@ -10,6 +10,7 @@ import (
 
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/intelligence/sizeGate"
+	"github.com/nightgauge/nightgauge/pkg/types"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -64,14 +65,10 @@ func sizeGateCheckCmd() *cobra.Command {
 				return fmt.Errorf("create GitHub client: %w", err)
 			}
 
-			svc := gh.NewIssueService(client)
-			issue, err := svc.GetIssue(cmd.Context(), ownerPart, repoPart, issueNum)
+			issue, result, err := evaluateSizeGate(cmd.Context(), gh.NewIssueService(client), ownerPart, repoPart, issueNum, cfg)
 			if err != nil {
 				return fmt.Errorf("fetch issue #%d: %w", issueNum, enrichError(err))
 			}
-
-			evaluator := sizeGate.NewGateEvaluator(cfg)
-			result := evaluator.Evaluate(issue.Title, issue.Labels, len(issue.SubIssues))
 
 			if outputJSON {
 				type jsonResult struct {
@@ -118,6 +115,20 @@ func sizeGateCheckCmd() *cobra.Command {
 	_ = cmd.MarkFlagRequired("issue")
 
 	return cmd
+}
+
+// evaluateSizeGate reads an issue and runs the size gate over it. The gate
+// judges the issue's title, labels and number of sub-issues, so the read
+// follows the sub-issue list to its end and no other list. A long blocking or
+// blocked-by list must not fail the read: the issue-pickup skill records any
+// failure of `size-gate check` as the issue being too large.
+func evaluateSizeGate(ctx context.Context, issues issueReader, owner, repo string, number int, cfg sizeGate.GateConfig) (*types.Issue, *sizeGate.GateResult, error) {
+	issue, err := issues.GetIssueWithRelations(ctx, owner, repo, number, gh.RelationSubIssues)
+	if err != nil {
+		return nil, nil, err
+	}
+	result := sizeGate.NewGateEvaluator(cfg).Evaluate(issue.Title, issue.Labels, len(issue.SubIssues))
+	return issue, result, nil
 }
 
 // repoBackfillConfigPath returns the project-tier config.yaml path that
@@ -185,7 +196,7 @@ var fetchGateIssueLabels = func(ctx context.Context, owner, repo string, issueNu
 	if err != nil {
 		return nil, fmt.Errorf("create GitHub client: %w", err)
 	}
-	issue, err := gh.NewIssueService(client).GetIssue(ctx, owner, repo, issueNum)
+	issue, err := gh.NewIssueService(client).GetIssueWithRelations(ctx, owner, repo, issueNum, gh.NoRelations)
 	if err != nil {
 		return nil, fmt.Errorf("fetch issue #%d: %w", issueNum, enrichError(err))
 	}

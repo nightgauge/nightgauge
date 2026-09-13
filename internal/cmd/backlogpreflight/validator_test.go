@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
@@ -16,9 +17,12 @@ import (
 type stubIssueGetter struct {
 	issues map[int]*types.Issue
 	err    error
+	// rels records the relationship lists each read named.
+	rels []gh.IssueRelations
 }
 
-func (s *stubIssueGetter) GetIssue(_ context.Context, _, _ string, number int) (*types.Issue, error) {
+func (s *stubIssueGetter) GetIssueWithRelations(_ context.Context, _, _ string, number int, rels gh.IssueRelations) (*types.Issue, error) {
+	s.rels = append(s.rels, rels)
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -163,13 +167,20 @@ func makeIssueGetter(issues map[int]*types.Issue) *stubIssueGetter {
 
 func TestCheckAcceptanceCriteria_GoodBody(t *testing.T) {
 	body := "This feature adds the ability to create a new widget with full CRUD operations.\n\n## Acceptance Criteria\n- [ ] Widget can be created via the API\n- [ ] Widget can be deleted via the API\n- [ ] Widget creation requires authentication\n"
-	v := New(nil, makeIssueGetter(map[int]*types.Issue{
+	getter := makeIssueGetter(map[int]*types.Issue{
 		1: {Number: 1, Title: "good issue", Body: body},
-	}), "owner", "repo")
+	})
+	v := New(nil, getter, "owner", "repo")
 	items := []types.BoardItem{item(1, "good issue")}
 	findings := v.CheckAcceptanceCriteria(context.Background(), items)
 	if len(findings) != 0 {
 		t.Fatalf("expected 0 findings, got %d: %v", len(findings), findings)
+	}
+	// The check reads only the body, so a long relationship list on the
+	// issue must not be read, and cannot turn into a "body could not be
+	// fetched" finding.
+	if len(getter.rels) != 1 || getter.rels[0] != gh.NoRelations {
+		t.Fatalf("reads named lists %v, want one read naming none", getter.rels)
 	}
 }
 

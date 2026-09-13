@@ -21,7 +21,8 @@ import (
 type mockEpicIssueSvc struct {
 	issues map[string]*types.Issue
 	epics  map[string]*types.EpicProgress
-	// errs makes GetIssue fail for the keyed issue with the given error.
+	// errs makes GetIssueWithRelations fail for the keyed issue with the
+	// given error.
 	errs map[string]error
 }
 
@@ -40,23 +41,15 @@ func (m *mockEpicIssueSvc) addEpic(owner, repo string, number int, epic *types.E
 	m.epics[fmt.Sprintf("%s/%s#%d", owner, repo, number)] = epic
 }
 
-func (m *mockEpicIssueSvc) GetIssue(_ context.Context, owner, repo string, number int) (*types.Issue, error) {
+func (m *mockEpicIssueSvc) GetIssueWithRelations(_ context.Context, owner, repo string, number int, rels gh.IssueRelations) (*types.Issue, error) {
 	key := fmt.Sprintf("%s/%s#%d", owner, repo, number)
 	if err, ok := m.errs[key]; ok {
 		return nil, err
 	}
 	if issue, ok := m.issues[key]; ok {
-		return issue, nil
+		return withRelations(issue, rels), nil
 	}
 	return nil, fmt.Errorf("issue %s not found", key)
-}
-
-func (m *mockEpicIssueSvc) GetIssueWithRelations(ctx context.Context, owner, repo string, number int, rels gh.IssueRelations) (*types.Issue, error) {
-	issue, err := m.GetIssue(ctx, owner, repo, number)
-	if err != nil {
-		return nil, err
-	}
-	return withRelations(issue, rels), nil
 }
 
 func (m *mockEpicIssueSvc) GetIssuesByNumbers(_ context.Context, owner, repo string, numbers []int) (map[int]*types.Issue, error) {

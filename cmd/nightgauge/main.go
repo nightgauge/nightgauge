@@ -1048,7 +1048,7 @@ func issueCloseCmd() *cobra.Command {
 			ownerPart, repoPart := splitRepo(owner, repo)
 			svc := gh.NewIssueService(client)
 
-			issue, err := svc.GetIssue(cmd.Context(), ownerPart, repoPart, number)
+			issue, err := svc.GetIssueWithRelations(cmd.Context(), ownerPart, repoPart, number, gh.NoRelations)
 			if err != nil {
 				return err
 			}
@@ -1112,7 +1112,7 @@ func issueEditCmd() *cobra.Command {
 			svc := gh.NewIssueService(client)
 
 			// Fetch the issue to get node ID (and existing body for append)
-			issue, err := svc.GetIssue(cmd.Context(), ownerPart, repoPart, number)
+			issue, err := svc.GetIssueWithRelations(cmd.Context(), ownerPart, repoPart, number, gh.NoRelations)
 			if err != nil {
 				return err
 			}
@@ -1693,7 +1693,7 @@ issue number 0 — useful for tests.`,
 				}
 				ownerPart, repoPart := splitRepo(owner, repo)
 
-				issue, err := gh.NewIssueService(client).GetIssue(cmd.Context(), ownerPart, repoPart, number)
+				issue, err := gh.NewIssueService(client).GetIssueWithRelations(cmd.Context(), ownerPart, repoPart, number, gh.NoRelations)
 				if err != nil {
 					return fmt.Errorf("get issue #%d: %w", number, enrichError(err))
 				}
@@ -1849,7 +1849,7 @@ apply step is skipped unless --apply-default is also passed.`,
 					return err
 				}
 				svc = gh.NewIssueService(client)
-				issue, err := svc.GetIssue(cmd.Context(), ownerPart, repoPart, number)
+				issue, err := svc.GetIssueWithRelations(cmd.Context(), ownerPart, repoPart, number, gh.NoRelations)
 				if err != nil {
 					return fmt.Errorf("get issue #%d: %w", number, enrichError(err))
 				}
@@ -1992,7 +1992,7 @@ fence-toggle approach in internal/docs/checklinks.go.`,
 				}
 				svc := gh.NewIssueService(client)
 				ownerPart, repoPart := splitRepo(owner, repo)
-				issue, err := svc.GetIssue(cmd.Context(), ownerPart, repoPart, number)
+				issue, err := svc.GetIssueWithRelations(cmd.Context(), ownerPart, repoPart, number, gh.NoRelations)
 				if err != nil {
 					return fmt.Errorf("get issue #%d: %w", number, enrichError(err))
 				}
@@ -2094,7 +2094,7 @@ Offline mode (number 0): pass --body; the rewritten body is printed, never sent.
 				}
 				svc := gh.NewIssueService(client)
 				ownerPart, repoPart := splitRepo(owner, repo)
-				issue, gErr := svc.GetIssue(cmd.Context(), ownerPart, repoPart, number)
+				issue, gErr := svc.GetIssueWithRelations(cmd.Context(), ownerPart, repoPart, number, gh.NoRelations)
 				if gErr != nil {
 					return fmt.Errorf("get issue #%d: %w", number, enrichError(gErr))
 				}
@@ -2357,8 +2357,9 @@ func epicAssessCmd() *cobra.Command {
 	return cmd
 }
 
-// epicIssueReader is the single-issue read `epic assess` makes.
-type epicIssueReader interface {
+// issueReader is the single-issue read of a command that names the
+// relationship lists it uses, such as `epic assess` and `size-gate check`.
+type issueReader interface {
 	GetIssueWithRelations(ctx context.Context, owner, repo string, number int, rels gh.IssueRelations) (*types.Issue, error)
 }
 
@@ -2372,7 +2373,7 @@ type epicIssueReader interface {
 // strategy without it and without the blockers that order it, and the
 // assess-epic skill discards stderr, where the warning goes, so it is an
 // error.
-func epicAssessInputs(ctx context.Context, issues epicIssueReader, owner, repo string, epicNumber int, warn io.Writer) ([]batch.IssueInput, error) {
+func epicAssessInputs(ctx context.Context, issues issueReader, owner, repo string, epicNumber int, warn io.Writer) ([]batch.IssueInput, error) {
 	epic, err := issues.GetIssueWithRelations(ctx, owner, repo, epicNumber, gh.RelationSubIssues)
 	if err != nil {
 		return nil, fmt.Errorf("fetch epic #%d: %w", epicNumber, err)
@@ -3046,7 +3047,8 @@ This is idempotent: if the epic branch already exists, the command exits success
 
 			ownerPart, repoPart := splitRepo(owner, repo)
 			issueSvc := gh.NewIssueService(client)
-			epicIssue, err := issueSvc.GetIssue(cmd.Context(), ownerPart, repoPart, epicNumber)
+			// Only the title names the branch, so no list is read.
+			epicIssue, err := issueSvc.GetIssueWithRelations(cmd.Context(), ownerPart, repoPart, epicNumber, gh.NoRelations)
 			if err != nil {
 				return fmt.Errorf("fetch epic #%d: %w", epicNumber, err)
 			}
@@ -3671,7 +3673,7 @@ Override via project.size_to_estimate in .nightgauge/config.yaml.`,
 
 			// Fetch issue labels, then set estimate
 			issueSvc := gh.NewIssueService(client)
-			issue, err := issueSvc.GetIssue(cmd.Context(), ownerPart, repoPart, number)
+			issue, err := issueSvc.GetIssueWithRelations(cmd.Context(), ownerPart, repoPart, number, gh.NoRelations)
 			if err != nil {
 				return fmt.Errorf("fetch issue #%d: %w", number, err)
 			}
@@ -4427,7 +4429,9 @@ func queueAddCmd() *cobra.Command {
 					return fmt.Errorf("invalid issue number: %s", arg)
 				}
 
-				issue, err := issueSvc.GetIssue(ctx, repoOwner, repoName, num)
+				// Labels and title decide how to queue it; EnqueueEpic reads
+				// an epic's lists itself.
+				issue, err := issueSvc.GetIssueWithRelations(ctx, repoOwner, repoName, num, gh.NoRelations)
 				if err != nil {
 					return fmt.Errorf("fetch issue #%d: %w", num, err)
 				}
@@ -5310,7 +5314,8 @@ type issueGetterAdapter struct {
 }
 
 func (a *issueGetterAdapter) GetIssue(ctx context.Context, owner, repo string, number int) (interface{}, error) {
-	issue, err := a.svc.GetIssue(ctx, owner, repo, number)
+	// pipeline.run only checks that the issue exists, so no list is read.
+	issue, err := a.svc.GetIssueWithRelations(ctx, owner, repo, number, gh.NoRelations)
 	if err != nil {
 		return nil, err
 	}
@@ -8391,7 +8396,7 @@ such as wip/ are never candidates.`,
 				}
 
 				// Check issue state
-				issue, err := issueSvc.GetIssue(ctx, o, r, issueNum)
+				issue, err := issueSvc.GetIssueWithRelations(ctx, o, r, issueNum, gh.NoRelations)
 				if err != nil {
 					results = append(results, cleanupResult{
 						Branch: branch, IssueNumber: issueNum,

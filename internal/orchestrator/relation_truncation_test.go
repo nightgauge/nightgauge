@@ -10,77 +10,164 @@ import (
 	"testing"
 
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/github/githubtest"
 	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
 // These tests pin how the scheduler treats an issue whose relationship
 // connections could not be read whole (github.ErrConnectionTruncated). Where
-// blockers decide dispatch the read is a hard error; where only an issue's
-// state is needed the read skips relationships, so it can never fail on them.
+// blockers decide dispatch the blocker list is read whole and a truncated one
+// is a hard error; a list the scheduler does not use is never read, so it can
+// never fail the read.
 
-// truncatedRead is the error GetIssue returns when a follow-up page of one of
-// the issue's connections could not be read.
+// truncatedRead is the error the real read returns when a follow-up page of
+// one of the issue's connections could not be read.
 func truncatedRead(number int) error {
-	return fmt.Errorf("fetch issue #%d: blocking of Org/repo#%d: %w: read page 2: status 502",
+	return fmt.Errorf("fetch issue #%d: a relationship list of Org/repo#%d: %w: read page 2: status 502",
 		number, number, gh.ErrConnectionTruncated)
 }
 
-// TestEnqueueEpic_TruncatedSubIssueReadIsAnError: epic #100 has sub-issues
-// #201 and #202, and #202's relationships cannot be read whole. Enqueuing
-// #202 anyway gave it no sub-issue blockers, so DequeueIndependent could
-// dispatch it beside a blocker that is still open.
-func TestEnqueueEpic_TruncatedSubIssueReadIsAnError(t *testing.T) {
-	mock := newMockIssueSvc()
-	mock.addIssue("Org", "repo", 100, &types.Issue{
-		NodeID: "I_100", Number: 100, Title: "Epic", State: "OPEN", Repo: "Org/repo",
-		SubIssues: []types.SubIssueRef{
-			{NodeID: "I_201", Number: 201, Title: "X", State: "OPEN", Repo: "Org/repo"},
-			{NodeID: "I_202", Number: 202, Title: "Y", State: "OPEN", Repo: "Org/repo"},
-		},
-	})
-	mock.addIssue("Org", "repo", 201, &types.Issue{NodeID: "I_201", Number: 201, Title: "X", State: "OPEN", Repo: "Org/repo"})
-	mock.getErrs = map[string]error{"Org/repo#202": truncatedRead(202)}
-	s := &Scheduler{
-		issueSvc:    mock,
+// forgeScheduler returns a scheduler whose issue reads go through the real
+// IssueService to forge, which fails every relationship page after the first.
+func forgeScheduler(forge *githubtest.Forge) *Scheduler {
+	return &Scheduler{
+		issueSvc:    gh.NewIssueService(forge.Client()),
 		repoRunning: make(map[string]int),
 		mergeLocks:  make(map[string]*sync.Mutex),
 	}
+}
 
-	err := s.EnqueueEpic(context.Background(), "Org", "repo", 100, "Epic", nil, nil)
+// TestEnqueueEpic_TruncatedBlockerListIsAnError: epic #100 has sub-issues #201
+// and #202, and #202 has 11 blockers, more than the first page holds, whose
+// later page cannot be read. Enqueuing #202 with only the blockers on the
+// first page would let DequeueIndependent dispatch it beside one that is still
+// open.
+func TestEnqueueEpic_TruncatedBlockerListIsAnError(t *testing.T) {
+	forge := githubtest.New(t, map[int]githubtest.Issue{
+		100: {SubIssues: []int{201, 202}},
+		201: {},
+		202: {BlockedBy: githubtest.Numbers(300, 11)},
+	})
+	s := forgeScheduler(forge)
+
+	err := s.EnqueueEpic(context.Background(), githubtest.Owner, githubtest.Repo, 100, "Epic", nil, nil)
 	if !errors.Is(err, gh.ErrConnectionTruncated) {
 		t.Fatalf("EnqueueEpic err = %v, want ErrConnectionTruncated", err)
+	}
+	if !strings.Contains(err.Error(), "blockedBy of acme/widgets#202") {
+		t.Errorf("err = %v, want it to name #202's blocker list", err)
 	}
 	if len(s.queue) != 0 {
 		t.Fatalf("queue = %+v, want nothing enqueued from a truncated read", s.queue)
 	}
 }
 
-// TestFetchSubIssueDetails_TruncatedSubIssueReadIsAnError: leaving a sub-issue
-// out of the wave plan also drops its siblings' edges to it, so they would run
-// in an earlier wave than it allows.
-func TestFetchSubIssueDetails_TruncatedSubIssueReadIsAnError(t *testing.T) {
-	issueSvc := newMockEpicIssueSvc()
-	issueSvc.addEpic("Org", "repo", 100, &types.EpicProgress{
-		Number: 100, Repo: "Org/repo", Total: 2, Open: 2,
-		SubIssues: []types.SubIssueRef{
-			{Number: 101, Title: "A", State: "OPEN", Repo: "Org/repo"},
-			{Number: 102, Title: "B", State: "OPEN", Repo: "Org/repo"},
-		},
+// TestEnqueueEpic_LongListsItDoesNotUseCannotAbortIt: the epic and both of its
+// sub-issues each block 7 issues, more than the first page holds, and every
+// later page fails. Enqueuing uses only the epic's sub-issue and blocker lists
+// and each sub-issue's blocker list, all of which fit their first page, so it
+// must read no later page and enqueue both sub-issues with their blockers.
+// When it read every list, one failed page of a blocking list enqueued
+// nothing and reported a blocker problem on a sub-issue whose blockers were
+// complete.
+func TestEnqueueEpic_LongListsItDoesNotUseCannotAbortIt(t *testing.T) {
+	forge := githubtest.New(t, map[int]githubtest.Issue{
+		100: {SubIssues: []int{201, 202}, Blocking: githubtest.Numbers(900, 7)},
+		201: {Blocking: githubtest.Numbers(910, 7)},
+		202: {BlockedBy: []int{201, 301, 302}, Blocking: githubtest.Numbers(920, 7)},
 	})
-	issueSvc.addIssue("Org", "repo", 101, &types.Issue{Number: 101, Title: "A",
-		BlockedBy: []types.BlockingRef{{Number: 102, State: "OPEN"}}})
-	issueSvc.errs = map[string]error{"Org/repo#102": truncatedRead(102)}
-	s := buildWaveTestScheduler(t, t.TempDir(), issueSvc, &trackingStageRunner{behavior: "succeed"})
-	wo := newWaveOrchestrator(s, 100, "Org/repo", 4, 0)
+	s := forgeScheduler(forge)
 
-	subIssues, details, err := wo.fetchSubIssueDetails(context.Background(), "Org", "repo",
-		types.BoardItem{Number: 100, Repo: "Org/repo"})
+	if err := s.EnqueueEpic(context.Background(), githubtest.Owner, githubtest.Repo, 100, "Epic", nil, nil); err != nil {
+		t.Fatalf("EnqueueEpic: %v", err)
+	}
+	if len(s.queue) != 2 || s.queue[0].IssueNumber != 201 || s.queue[1].IssueNumber != 202 {
+		t.Fatalf("queue = %+v, want #201 and #202 enqueued", s.queue)
+	}
+	var blockers []int
+	for _, b := range s.queue[1].BlockedBy {
+		blockers = append(blockers, b.Number)
+	}
+	if fmt.Sprint(blockers) != "[201 301 302]" {
+		t.Errorf("#202 blockers = %v, want [201 301 302]", blockers)
+	}
+	if n := forge.FollowUps(); n != 0 {
+		t.Errorf("EnqueueEpic read %d later page(s) of lists it does not use", n)
+	}
+}
+
+// TestFetchSubIssueDetails_TruncatedBlockerListIsAnError: a sub-issue's
+// blocker list read only in part would plan it into an earlier wave than its
+// unseen blockers allow, and leaving the sub-issue out of the plan would drop
+// its siblings' edges to it as well.
+func TestFetchSubIssueDetails_TruncatedBlockerListIsAnError(t *testing.T) {
+	forge := githubtest.New(t, map[int]githubtest.Issue{
+		100: {SubIssues: []int{101, 102}},
+		101: {BlockedBy: []int{102}},
+		102: {BlockedBy: githubtest.Numbers(300, 11)},
+	})
+	wo := newWaveOrchestrator(forgeScheduler(forge), 100, "acme/widgets", 4, 0)
+
+	subIssues, details, err := wo.fetchSubIssueDetails(context.Background(), githubtest.Owner, githubtest.Repo,
+		types.BoardItem{Number: 100, Repo: "acme/widgets"})
 	if !errors.Is(err, gh.ErrConnectionTruncated) {
 		t.Fatalf("fetchSubIssueDetails err = %v, want ErrConnectionTruncated", err)
 	}
 	if subIssues != nil || details != nil {
 		t.Fatalf("returned a plan input (%d sub-issues, %d details) alongside a truncated read", len(subIssues), len(details))
+	}
+}
+
+// TestFetchSubIssueDetails_LongListsItDoesNotUseCannotFailIt: both sub-issues
+// block 7 issues and every later page fails. The wave plan uses each
+// sub-issue's body, labels and blocker list, so the blocking lists must not be
+// read and cannot fail the plan.
+func TestFetchSubIssueDetails_LongListsItDoesNotUseCannotFailIt(t *testing.T) {
+	forge := githubtest.New(t, map[int]githubtest.Issue{
+		100: {SubIssues: []int{101, 102}},
+		101: {BlockedBy: []int{102}, Blocking: githubtest.Numbers(900, 7)},
+		102: {Blocking: githubtest.Numbers(910, 7)},
+	})
+	wo := newWaveOrchestrator(forgeScheduler(forge), 100, "acme/widgets", 4, 0)
+
+	subIssues, details, err := wo.fetchSubIssueDetails(context.Background(), githubtest.Owner, githubtest.Repo,
+		types.BoardItem{Number: 100, Repo: "acme/widgets"})
+	if err != nil {
+		t.Fatalf("fetchSubIssueDetails: %v", err)
+	}
+	if len(subIssues) != 2 || len(details) != 2 {
+		t.Fatalf("plan input = %d sub-issues, %d details; want 2 and 2", len(subIssues), len(details))
+	}
+	if fmt.Sprint(details[0].BlockedBy) != "[102]" {
+		t.Errorf("#101 blockers = %v, want [102]", details[0].BlockedBy)
+	}
+	if n := forge.FollowUps(); n != 0 {
+		t.Errorf("the plan read %d later page(s) of lists it does not use", n)
+	}
+}
+
+// TestFindReadySubIssues_LongListsItDoesNotUseCannotHideAReadySubIssue: #101
+// is open with no blockers and blocks 7 issues; #102 is blocked by #101. Only
+// each sub-issue's blocker list decides readiness, so #101's blocking list
+// must not be read: when it was, its failed later page skipped #101 and the
+// epic reported no ready sub-issue.
+func TestFindReadySubIssues_LongListsItDoesNotUseCannotHideAReadySubIssue(t *testing.T) {
+	forge := githubtest.New(t, map[int]githubtest.Issue{
+		100: {SubIssues: []int{101, 102}},
+		101: {Blocking: githubtest.Numbers(900, 7)},
+		102: {BlockedBy: []int{101}},
+	})
+
+	ready, err := forgeScheduler(forge).FindReadySubIssues(context.Background(), githubtest.Owner, githubtest.Repo, 100)
+	if err != nil {
+		t.Fatalf("FindReadySubIssues: %v", err)
+	}
+	if len(ready) != 1 || ready[0].Number != 101 {
+		t.Fatalf("ready = %+v, want only #101", ready)
+	}
+	if n := forge.FollowUps(); n != 0 {
+		t.Errorf("FindReadySubIssues read %d later page(s) of lists it does not use", n)
 	}
 }
 

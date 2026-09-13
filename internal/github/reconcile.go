@@ -76,7 +76,7 @@ type OrphanCloseResult struct {
 // sub are recorded per-sub and do not abort the remaining subs.
 func (e *EpicService) CloseOrphanSubs(ctx context.Context, owner, repo string, epicNumber, projectNumber int, ownerType ...OwnerType) (*OrphanCloseResult, error) {
 	issueSvc := NewIssueService(e.client)
-	epic, err := issueSvc.GetIssue(ctx, owner, repo, epicNumber)
+	epic, err := issueSvc.GetIssueWithRelations(ctx, owner, repo, epicNumber, RelationSubIssues)
 	if err != nil {
 		return nil, fmt.Errorf("fetch epic #%d: %w", epicNumber, err)
 	}

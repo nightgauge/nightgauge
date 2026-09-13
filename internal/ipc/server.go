@@ -4444,7 +4444,7 @@ func (s *Server) registerMethods() {
 			return nil, err
 		}
 		svc := gh.NewIssueService(c)
-		issue, err := svc.GetIssue(ctx, p.Owner, p.Repo, p.Number)
+		issue, err := svc.GetIssueWithRelations(ctx, p.Owner, p.Repo, p.Number, gh.NoRelations)
 		if err != nil {
 			return nil, fmt.Errorf("fetch issue #%d: %w", p.Number, err)
 		}
@@ -4468,7 +4468,7 @@ func (s *Server) registerMethods() {
 			return nil, err
 		}
 		svc := gh.NewIssueService(c)
-		issue, err := svc.GetIssue(ctx, p.Owner, p.Repo, p.Number)
+		issue, err := svc.GetIssueWithRelations(ctx, p.Owner, p.Repo, p.Number, gh.NoRelations)
 		if err != nil {
 			return nil, fmt.Errorf("fetch issue #%d: %w", p.Number, err)
 		}

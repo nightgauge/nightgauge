@@ -155,10 +155,11 @@ func (p *ProjectService) AddItem(ctx context.Context, contentNodeID string) (str
 }
 
 // AddIssueByNumber looks up an issue's node ID and adds it to the project board.
-// Returns the project item ID.
+// Returns the project item ID. It uses the issue's node id and labels, so it
+// reads none of the issue's relationship lists.
 func (p *ProjectService) AddIssueByNumber(ctx context.Context, owner, repo string, number int) (string, error) {
 	issueSvc := NewIssueService(p.client)
-	issue, err := issueSvc.GetIssue(ctx, owner, repo, number)
+	issue, err := issueSvc.GetIssueWithRelations(ctx, owner, repo, number, NoRelations)
 	if err != nil {
 		return "", fmt.Errorf("fetch issue #%d: %w", number, err)
 	}

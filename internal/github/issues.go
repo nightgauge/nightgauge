@@ -128,7 +128,10 @@ const (
 )
 
 // GetIssue fetches a single issue with its sub-issues and blocking
-// relationships, each read to its end.
+// relationships, each read to its end. It is the read for callers that return
+// the whole issue, such as `issue view` and the IPC issue.view method; a
+// caller that uses only some of the lists, or none, reads through
+// GetIssueWithRelations so a list it would discard cannot fail it.
 func (s *IssueService) GetIssue(ctx context.Context, owner, repo string, number int) (*types.Issue, error) {
 	return s.GetIssueWithRelations(ctx, owner, repo, number, AllRelations)
 }
@@ -237,7 +240,7 @@ func (s *IssueService) GetIssueWithRelations(ctx context.Context, owner, repo st
 // its end by follow-up queries shared across the batch; one that cannot be is
 // an ErrConnectionTruncated error for the whole call, never a short list.
 func (s *IssueService) GetIssuesByNumbers(ctx context.Context, owner, repo string, numbers []int) (map[int]*types.Issue, error) {
-	return s.getIssuesByNumbers(ctx, owner, repo, numbers, true)
+	return s.getIssuesByNumbers(ctx, owner, repo, numbers, AllRelations)
 }
 
 // GetIssuesByNumbersWithoutRelations is GetIssuesByNumbers for callers that
@@ -249,12 +252,14 @@ func (s *IssueService) GetIssuesByNumbers(ctx context.Context, owner, repo strin
 // spends requests on relationships it would discard nor fails because one of
 // them could not be read.
 func (s *IssueService) GetIssuesByNumbersWithoutRelations(ctx context.Context, owner, repo string, numbers []int) (map[int]*types.Issue, error) {
-	return s.getIssuesByNumbers(ctx, owner, repo, numbers, false)
+	return s.getIssuesByNumbers(ctx, owner, repo, numbers, NoRelations)
 }
 
-// getIssuesByNumbers is the aliased batch read behind GetIssuesByNumbers and,
-// with withRelations false, GetIssuesByNumbersWithoutRelations.
-func (s *IssueService) getIssuesByNumbers(ctx context.Context, owner, repo string, numbers []int, withRelations bool) (map[int]*types.Issue, error) {
+// getIssuesByNumbers is the aliased batch read behind GetIssuesByNumbers and
+// GetIssuesByNumbersWithoutRelations. It selects only the connections in rels,
+// reads each of those to its end, and leaves the others empty. IsEpic is set
+// only when rels names the sub-issue list.
+func (s *IssueService) getIssuesByNumbers(ctx context.Context, owner, repo string, numbers []int, rels IssueRelations) (map[int]*types.Issue, error) {
 	if len(numbers) == 0 {
 		return map[int]*types.Issue{}, nil
 	}
@@ -301,10 +306,16 @@ func (s *IssueService) getIssuesByNumbers(ctx context.Context, owner, repo strin
   labels(first: 10) { nodes { name } }
   assignees(first: 5) { nodes { login } }
 `)
-	if withRelations {
+	if rels&RelationSubIssues != 0 {
 		sb.WriteString(`  subIssues(first: 25) { pageInfo { hasNextPage endCursor } nodes { id number title state repository { nameWithOwner } } }
-  blockedBy(first: 5) { pageInfo { hasNextPage endCursor } nodes { id number title state repository { nameWithOwner } } }
-  blocking(first: 5) { pageInfo { hasNextPage endCursor } nodes { id number title state repository { nameWithOwner } } }
+`)
+	}
+	if rels&RelationBlockedBy != 0 {
+		sb.WriteString(`  blockedBy(first: 5) { pageInfo { hasNextPage endCursor } nodes { id number title state repository { nameWithOwner } } }
+`)
+	}
+	if rels&RelationBlocking != 0 {
+		sb.WriteString(`  blocking(first: 5) { pageInfo { hasNextPage endCursor } nodes { id number title state repository { nameWithOwner } } }
 `)
 	}
 	sb.WriteString("}\n")
@@ -378,9 +389,9 @@ func (s *IssueService) getIssuesByNumbers(ctx context.Context, owner, repo strin
 	}
 
 	// Read every oversized connection in the batch to its end before any
-	// issue is built, sharing follow-up requests across the batch. Without
-	// relationships selected every page is empty and final, so this reads
-	// nothing.
+	// issue is built, sharing follow-up requests across the batch. A
+	// connection the fragment did not select decodes as an empty, final page,
+	// so it is never read on.
 	var walk relationWalk
 	for _, node := range env.Data.Repository {
 		if node == nil || node.Number == 0 {
@@ -771,7 +782,7 @@ func (s *IssueService) RemoveLabels(ctx context.Context, issueID string, labelID
 // SyncStatusLabel atomically swaps the status label on an issue.
 // Removes all status:* labels and adds the specified one.
 func (s *IssueService) SyncStatusLabel(ctx context.Context, owner, repo string, number int, newStatus string) error {
-	issue, err := s.GetIssue(ctx, owner, repo, number)
+	issue, err := s.GetIssueWithRelations(ctx, owner, repo, number, NoRelations)
 	if err != nil {
 		return err
 	}
@@ -964,7 +975,7 @@ func (s *IssueService) ListIssuesExcludingLabels(ctx context.Context, owner, rep
 
 // HasLabel reports whether a specific issue has a given label by name.
 func (s *IssueService) HasLabel(ctx context.Context, owner, repo string, number int, label string) (bool, error) {
-	issue, err := s.GetIssue(ctx, owner, repo, number)
+	issue, err := s.GetIssueWithRelations(ctx, owner, repo, number, NoRelations)
 	if err != nil {
 		return false, err
 	}
@@ -980,7 +991,7 @@ func (s *IssueService) HasLabel(ctx context.Context, owner, repo string, number 
 // Idempotent: GitHub's addLabelsToLabelable mutation silently ignores duplicate label additions,
 // so calling this on an already-refined issue is safe and produces no error.
 func (s *IssueService) MarkRefined(ctx context.Context, owner, repo string, number int) error {
-	issue, err := s.GetIssue(ctx, owner, repo, number)
+	issue, err := s.GetIssueWithRelations(ctx, owner, repo, number, NoRelations)
 	if err != nil {
 		return err
 	}
@@ -1269,7 +1280,7 @@ func (s *IssueService) GetEpicProgress(ctx context.Context, epicNodeID string) (
 
 // GetEpicProgressByNumber fetches an epic by owner/repo/number and returns progress.
 func (s *IssueService) GetEpicProgressByNumber(ctx context.Context, owner, repo string, number int) (*types.EpicProgress, error) {
-	issue, err := s.GetIssue(ctx, owner, repo, number)
+	issue, err := s.GetIssueWithRelations(ctx, owner, repo, number, RelationSubIssues)
 	if err != nil {
 		return nil, err
 	}

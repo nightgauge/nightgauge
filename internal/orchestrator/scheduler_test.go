@@ -35,12 +35,12 @@ import (
 type mockIssueSvc struct {
 	issues     map[string]*types.Issue // keyed by "owner/repo#number"
 	batchCalls []mockBatchCall         // recorded GetIssuesByNumbers invocations
-	// getErrs makes GetIssue fail for the keyed issue with the given error.
+	// getErrs makes GetIssueWithRelations fail for the keyed issue with the
+	// given error.
 	getErrs map[string]error
 	// truncated names, per issue, the relationship connections whose later
-	// pages cannot be read: GetIssue, which reads every connection, fails
-	// with ErrConnectionTruncated, and so does a GetIssueWithRelations that
-	// names one of them.
+	// pages cannot be read: a GetIssueWithRelations that names one of them
+	// fails with ErrConnectionTruncated.
 	truncated map[string]gh.IssueRelations
 	// relationReadErr, when set, fails every GetIssuesByNumbers call (the read
 	// that completes relationships) while GetIssuesByNumbersWithoutRelations
@@ -65,20 +65,6 @@ func newMockIssueSvc() *mockIssueSvc {
 
 func (m *mockIssueSvc) addIssue(owner, repo string, number int, issue *types.Issue) {
 	m.issues[fmt.Sprintf("%s/%s#%d", owner, repo, number)] = issue
-}
-
-func (m *mockIssueSvc) GetIssue(_ context.Context, owner, repo string, number int) (*types.Issue, error) {
-	key := fmt.Sprintf("%s/%s#%d", owner, repo, number)
-	if err, ok := m.getErrs[key]; ok {
-		return nil, err
-	}
-	if m.truncated[key] != 0 {
-		return nil, truncatedRead(number)
-	}
-	if issue, ok := m.issues[key]; ok {
-		return issue, nil
-	}
-	return nil, fmt.Errorf("issue %s not found", key)
 }
 
 // GetIssueWithRelations serves the fixtures as the real read returns them

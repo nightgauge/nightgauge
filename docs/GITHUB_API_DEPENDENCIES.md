@@ -54,11 +54,16 @@ stops at 20 pages. A connection still reporting more, or whose next page
 fails, is `ErrConnectionTruncated`, never a short list: epic rollup, wave
 planning, epic enqueue and `epic validate` fail rather than decide from part
 of an epic. A read follows only the connections its caller uses, so a long
-list the caller would discard can neither cost it requests nor fail it: a
-single-issue caller names its connections to `GetIssueWithRelations` (the
-dependency gate names only `blockedBy`, the post-merge hook none), and batch
-readers that need only an issue's state or body
-(`GetIssuesByNumbersWithoutRelations`) select no relationship connection.
+list the caller would discard can neither cost it requests nor fail it. A
+single-issue caller names its connections to `GetIssueWithRelations`: the
+dependency gate, wave planning and epic enqueue name `blockedBy`, epic rollup
+and the size gate name `subIssues`, and the post-merge hook, the label writes
+and the baseline gate name none. Only a caller that returns the whole issue,
+such as `issue view`, reads every connection through `GetIssue`, and the
+scheduler's issue reader offers no such read. Batch readers that need only an
+issue's state or body (`GetIssuesByNumbersWithoutRelations`) select no
+relationship connection, and `epic validate` selects only its sub-issues'
+`blockedBy`.
 
 **Risk**: Critical. Removing `subIssues` breaks epic tracking entirely. The
 board would show epics with no sub-issues and 0% progress.

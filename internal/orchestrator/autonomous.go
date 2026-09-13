@@ -8023,7 +8023,7 @@ func (as *AutonomousScheduler) refineIssue(ctx context.Context, owner, repo stri
 
 	// Remove auto-process label if present (consumed, not permanent)
 	if hasAutoProcess {
-		issueDetail, err := issueSvc.GetIssue(ctx, owner, repo, issue.Number)
+		issueDetail, err := issueSvc.GetIssueWithRelations(ctx, owner, repo, issue.Number, gh.NoRelations)
 		if err == nil {
 			repoLabels, err := issueSvc.GetRepoLabels(ctx, owner, repo)
 			if err == nil {

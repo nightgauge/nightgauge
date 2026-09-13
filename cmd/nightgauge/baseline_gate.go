@@ -75,8 +75,10 @@ func baselineGateCheckCmd() *cobra.Command {
 				return fmt.Errorf("create GitHub client: %w", err)
 			}
 			ownerPart, repoPart := splitRepo(owner, repo)
+			// The gate reads the issue's body and title and none of its
+			// relationship lists, so a long list cannot fail it into a DEFER.
 			issueSvc := gh.NewIssueService(client)
-			issue, err := issueSvc.GetIssue(cmd.Context(), ownerPart, repoPart, issueNum)
+			issue, err := issueSvc.GetIssueWithRelations(cmd.Context(), ownerPart, repoPart, issueNum, gh.NoRelations)
 			if err != nil {
 				return fmt.Errorf("fetch issue #%d: %w", issueNum, enrichError(err))
 			}

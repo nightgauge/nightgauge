@@ -383,10 +383,13 @@ func (wo *WaveOrchestrator) fetchSubIssueDetails(ctx context.Context, owner, rep
 			}
 		}
 
-		issue, err := wo.scheduler.issueSvc.GetIssue(ctx, siOwner, siRepo, si.Number)
+		// The plan uses the sub-issue's body, labels and blocker list, so only
+		// the blocker list is read whole.
+		issue, err := wo.scheduler.issueSvc.GetIssueWithRelations(ctx, siOwner, siRepo, si.Number, gh.RelationBlockedBy)
 		if errors.Is(err, gh.ErrConnectionTruncated) {
-			// Planning without this sub-issue would also drop its siblings'
-			// edges to it and run them in an earlier wave than it allows.
+			// A blocker list read only in part would plan the sub-issue into
+			// an earlier wave than its unseen blockers allow, and leaving it
+			// out would drop its siblings' edges to it as well.
 			return nil, nil, fmt.Errorf("fetch sub-issue #%d: %w", si.Number, err)
 		}
 		if err != nil {

@@ -32,10 +32,12 @@ import (
 // were the whole: epic rollup would call an epic complete, and the blocker
 // check would call an issue unblocked, from the children and blockers it
 // never saw. A reader only walks the connections its caller uses, so it
-// neither pays for nor fails on pages the caller would discard: a single-issue
-// caller names its connections to GetIssueWithRelations, and a batch caller
-// that reads only bodies or states uses GetIssuesByNumbersWithoutRelations,
-// which selects no connection at all.
+// neither pays for nor fails on pages the caller would discard. A single-issue
+// caller names the connections it uses to GetIssueWithRelations, none when it
+// uses none; only a caller that returns the whole issue, such as `issue view`,
+// reads every connection through GetIssue. A batch caller that reads only
+// bodies or states uses GetIssuesByNumbersWithoutRelations, which selects no
+// connection at all.
 
 const (
 	// maxRelationPages caps the pages read for one connection, the caller's

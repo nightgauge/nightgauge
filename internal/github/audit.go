@@ -130,7 +130,7 @@ func (s *LifecycleAuditService) RunAudit(ctx context.Context, owner, repo string
 	// --- STALE_EPIC ---
 	// Open epics whose every sub-issue is already closed.
 	for _, epic := range openEpics {
-		fullEpic, err := issueSvc.GetIssue(ctx, owner, repo, epic.Number)
+		fullEpic, err := issueSvc.GetIssueWithRelations(ctx, owner, repo, epic.Number, RelationSubIssues)
 		if err != nil {
 			continue // Skip inaccessible epics
 		}
@@ -467,7 +467,7 @@ func (s *LifecycleAuditService) detectClosedWithOpenPR(
 				// Resolve against the item's OWN repo (N:1 boards aggregate
 				// cross-repo issues) so a cross-repo item is not left unfixed. #3792.
 				itemOwner, itemRepo := resolveItemRepo(item.Repo, owner, repo)
-				fullIssue, fetchErr := issueSvc.GetIssue(ctx, itemOwner, itemRepo, item.Number)
+				fullIssue, fetchErr := issueSvc.GetIssueWithRelations(ctx, itemOwner, itemRepo, item.Number, NoRelations)
 				if fetchErr != nil {
 					f.FixError = fmt.Sprintf("fetch issue node ID: %v", fetchErr)
 				} else if reopenErr := issueSvc.ReopenIssue(ctx, fullIssue.NodeID); reopenErr != nil {
@@ -505,7 +505,7 @@ func detectOpenPRClosedIssue(
 			continue
 		}
 
-		issue, err := issueSvc.GetIssue(ctx, owner, repo, issueNum)
+		issue, err := issueSvc.GetIssueWithRelations(ctx, owner, repo, issueNum, NoRelations)
 		if err != nil || !strings.EqualFold(issue.State, "CLOSED") {
 			continue
 		}
