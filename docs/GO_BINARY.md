@@ -5410,7 +5410,7 @@ gap is always explained rather than silently indistinguishable from a probe
 nobody got around to wiring. It never affects `ok`.
 
 Only runs once the adapter's baseline (binary present, version floor met)
-already passed — a CLI that is missing or stale already fails for that
+already passed — a CLI that is missing or stale is already reported for that
 reason. Any failure to run or parse the catalog (spawn error, not
 authenticated, unrecognized output shape) degrades to `catalog_warning` and
 never fails the adapter — only a confirmed drift does:
@@ -5453,9 +5453,15 @@ Auth status (`codex login status`, `claude auth status`, …) is intentionally
 VSCode **Adapter Doctor** (see [ADAPTER_DOCTOR.md](ADAPTER_DOCTOR.md)). The
 `adapters[]` section is the deterministic half; the extension adds auth + a UI.
 
-The `version`/`min_version` floors **mirror** the SDK `MIN_KNOWN_VERSION`
-constants (`packages/nightgauge-sdk/src/cli/adapters/*Adapter.ts`); a Go
-test guards them against drift.
+Each CLI adapter's `min_version` floor and its floor policy come from its
+compat manifest, `internal/adaptercompat/manifests/<adapter>.json`, which also
+records the newest tested version, the upstream release feeds, the install
+recipe and the captured fixtures. A Go test holds the doctor to the manifest.
+Under the `warn` policy (claude, codex, gemini and grok today), a CLI below its
+floor gets `version_ok: false`, a remediation naming the floor and a `⚠` row,
+and keeps `ok: true`, so it adds no warning. Under `fail_closed`, it gets
+`ok: false`. If the embedded manifests fail to load, a failing
+`compat-manifests` row leads the section and names the manifest and field.
 
 ```json
 {

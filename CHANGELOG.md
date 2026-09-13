@@ -35,6 +35,9 @@ changelog, and the release workflow refuses a tag that does not.
 - Codex and Gemini steering now summarizes the repository's `AGENTS.md`, falling
   back to `CLAUDE.md` (without its `@AGENTS.md` import) only when `AGENTS.md`
   has no content of its own (issue 1675)
+- `nightgauge doctor --adapters` checks claude against a 2.1.223 floor. A CLI
+  below a `warn` floor (claude, codex, gemini, grok) now gets a `⚠` row naming
+  the floor and stays usable, instead of being marked not ready (#1613)
 
 ### Added
 
@@ -61,6 +64,9 @@ changelog, and the release workflow refuses a tag that does not.
 - `nightgauge preflight managed-steering` reports generated Nightgauge steering
   committed in any tracked `AGENTS.md`, and `--fix` removes it from the working
   tree (issue 1675)
+- Each CLI adapter has a compat manifest (`internal/adaptercompat/manifests/`),
+  the one validated record of its floor, newest tested version, release feeds,
+  install recipe and fixtures; the doctor reads its floors from it (#1613)
 
 ### Fixed
 

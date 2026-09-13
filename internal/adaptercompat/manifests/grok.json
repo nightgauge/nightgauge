@@ -1,0 +1,23 @@
+{
+  "adapter": "grok",
+  "binary": "grok",
+  "min_version": "1.0.0",
+  "floor_policy": "warn",
+  "max_tested": "1.0.4",
+  "max_tested_reason": "The version every grok capture in the tree was taken on (internal/doctor/testdata/grok-catalog, internal/execution/testdata).",
+  "feeds": [{ "kind": "installer", "ref": "https://x.ai/cli/install.sh" }],
+  "companion_feeds": [],
+  "install": { "installer": "https://x.ai/cli/install.sh" },
+  "managed_install": "",
+  "required_flags": [],
+  "catalog": { "command": "grok models" },
+  "fixtures": [
+    "internal/doctor/testdata/grok-catalog/grok-models.txt",
+    "internal/execution/testdata/grok_stream_real_capture.jsonl",
+    "internal/execution/testdata/grok_unknown_model_stdout.jsonl",
+    "internal/execution/testdata/grok_unknown_model_stderr.txt"
+  ],
+  "config_schema_sha256": "",
+  "plugin_api_version": "",
+  "experimental_hooks": []
+}

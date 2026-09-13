@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/adaptercompat"
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/models"
 	yaml "gopkg.in/yaml.v3"
@@ -128,13 +129,14 @@ const (
 const codexManagedMcpBegin = "# >>> BEGIN NIGHTGAUGE MANAGED MCP >>>"
 
 // adapterSpec is the declarative description of an adapter's health
-// requirements. Min versions MIRROR the canonical SDK constants
-// (packages/nightgauge-sdk/src/cli/adapters/*Adapter.ts MIN_KNOWN_VERSION);
-// TestAdapterSpecConstants guards the values so a drift is a deliberate edit.
+// requirements. A kindCLI adapter's version floor and floor policy come from
+// its compat manifest (internal/adaptercompat/manifests/<adapter>.json), never
+// from a literal here; TestAdapterSpecConstants holds the two together.
 type adapterSpec struct {
 	binary         string      // CLI binary name (kindCLI only)
 	kind           adapterKind //
 	minVersion     string      // "" when no floor is enforced
+	floorPolicy    string      // adaptercompat.FloorWarn keeps a CLI below minVersion usable
 	apiKeyEnvs     []string    // kindSDK: any one present satisfies "configured"
 	modelEnv       string      // kindHTTP: env var carrying the required local model id
 	modelConfigKey string      // kindHTTP: machine-tier dotted key (e.g. lm_studio.model)
@@ -177,17 +179,51 @@ type adapterSpec struct {
 // the VSCode extension (claude, codex, gemini, gemini-sdk, lm-studio, ollama,
 // copilot) all resolve here after normalizeAdapterName.
 var adapterSpecs = map[string]adapterSpec{
-	"claude-headless": {binary: "claude", kind: kindCLI, catalogSkipReason: claudeNoCatalogReason,
-		modelProbeBand: models.BandFable, modelProbeArgs: claudeModelProbeArgs},
+	"claude-headless": {binary: "claude", kind: kindCLI,
+		minVersion: compatMinVersion("claude-headless"), floorPolicy: compatFloorPolicy("claude-headless"),
+		catalogSkipReason: claudeNoCatalogReason, modelProbeBand: models.BandFable, modelProbeArgs: claudeModelProbeArgs},
 	"claude-sdk": {kind: kindSDK, apiKeyEnvs: []string{"ANTHROPIC_API_KEY"}},
-	"codex":      {binary: "codex", kind: kindCLI, minVersion: "0.111.0", mcp: true, catalogSkipReason: codexNoCatalogReason},
-	"gemini":     {binary: "gemini", kind: kindCLI, minVersion: "0.29.0", catalogSkipReason: geminiNoCatalogReason},
+	"codex": {binary: "codex", kind: kindCLI,
+		minVersion: compatMinVersion("codex"), floorPolicy: compatFloorPolicy("codex"),
+		mcp: true, catalogSkipReason: codexNoCatalogReason},
+	"gemini": {binary: "gemini", kind: kindCLI,
+		minVersion: compatMinVersion("gemini"), floorPolicy: compatFloorPolicy("gemini"),
+		catalogSkipReason: geminiNoCatalogReason},
 	"gemini-sdk": {kind: kindSDK, apiKeyEnvs: []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"}},
 	"ollama":     {kind: kindHTTP, modelEnv: "NIGHTGAUGE_OLLAMA_MODEL", modelConfigKey: "ollama.model", pullHint: "ollama pull", bridgeBinary: "claude", baseURLEnv: "NIGHTGAUGE_OLLAMA_BASE_URL", defaultBaseURL: "http://localhost:11434/v1"},
 	"lm-studio":  {kind: kindHTTP, modelEnv: "NIGHTGAUGE_LM_STUDIO_MODEL", modelConfigKey: "lm_studio.model", pullHint: "lms get", bridgeBinary: "claude", baseURLEnv: "NIGHTGAUGE_LM_STUDIO_BASE_URL", defaultBaseURL: "http://localhost:1234/v1"},
-	"copilot":    {binary: "copilot", kind: kindCLI, catalogSkipReason: copilotNoCatalogReason},
-	"grok":       {binary: "grok", kind: kindCLI, minVersion: "1.0.0", catalogArgs: []string{"models"}, catalogParser: parseGrokCatalog},
+	"copilot": {binary: "copilot", kind: kindCLI,
+		minVersion: compatMinVersion("copilot"), floorPolicy: compatFloorPolicy("copilot"),
+		catalogSkipReason: copilotNoCatalogReason},
+	"grok": {binary: "grok", kind: kindCLI,
+		minVersion: compatMinVersion("grok"), floorPolicy: compatFloorPolicy("grok"),
+		catalogArgs: []string{"models"}, catalogParser: parseGrokCatalog},
 }
+
+// compatMinVersion and compatFloorPolicy read a CLI adapter's floor from its
+// embedded compat manifest. When the embedded set fails to load they return
+// "", so no floor is enforced and loadCompatManifests reports the failure as
+// one failing row instead of the doctor panicking at package init.
+func compatMinVersion(adapter string) string {
+	m, _ := adaptercompat.Get(adapter)
+	return m.MinVersion
+}
+
+func compatFloorPolicy(adapter string) string {
+	m, _ := adaptercompat.Get(adapter)
+	return m.FloorPolicy
+}
+
+// loadCompatManifests is the check behind that row; a variable so a test can
+// stand in a failing load.
+var loadCompatManifests = func() error {
+	_, err := adaptercompat.Load()
+	return err
+}
+
+// compatManifestRowName labels the row reporting a compat manifest that
+// failed to load. It is not an adapter name.
+const compatManifestRowName = "compat-manifests"
 
 // No-catalog skip reasons (#604): each names the captured, real evidence
 // backing the "no catalog probe" decision — never a guess. Full provenance
@@ -371,7 +407,16 @@ func CheckAdapters(names []string) []AdapterHealth {
 }
 
 func checkAdaptersWithProbe(names []string, probe adapterProbe) []AdapterHealth {
-	out := make([]AdapterHealth, 0, len(names))
+	out := make([]AdapterHealth, 0, len(names)+1)
+	if err := loadCompatManifests(); err != nil {
+		// The error names the manifest file and the field. Every CLI floor is
+		// unset while it stands, which is why it leads the report.
+		out = append(out, AdapterHealth{
+			Adapter:     compatManifestRowName,
+			OK:          false,
+			Remediation: "Version floors are not enforced: " + err.Error(),
+		})
+	}
 	for _, name := range names {
 		out = append(out, checkAdapter(name, probe))
 	}
@@ -411,7 +456,10 @@ func checkAdapter(name string, probe adapterProbe) AdapterHealth {
 				h.Remediation = "Update " + spec.binary + " to >= " + spec.minVersion + " (current " + cur + ")."
 			}
 		}
-		h.OK = h.Installed && h.VersionOK
+		// A floor under the warn policy reports a CLI below it (VersionOK
+		// false, the remediation above) and leaves it usable; only a
+		// fail_closed floor makes it unusable.
+		h.OK = h.Installed && (h.VersionOK || spec.floorPolicy == adaptercompat.FloorWarn)
 		switch {
 		case spec.catalogParser != nil:
 			applyCatalogProbe(&h, spec, canonical, probe)
