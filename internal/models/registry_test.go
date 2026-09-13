@@ -234,24 +234,116 @@ func TestResolveExactIDIsProviderAgnostic(t *testing.T) {
 	}
 }
 
-func TestProviderForAdapter(t *testing.T) {
-	cases := map[string]string{
-		"claude":          "anthropic",
-		"claude-sdk":      "anthropic",
-		"claude-headless": "anthropic",
-		"codex":           "openai",
-		"gemini":          "google",
-		"gemini-sdk":      "google",
-		"copilot":         "copilot",
-		"grok":            "xai",
-		"grok-headless":   "xai",
-		"ollama":          "ollama",
-		"lm-studio":       "lm-studio",
-		"mystery":         "other",
+// providerForCases mirrors testdata/provider-for-cases.json, the table the SDK's
+// modelRegistry.test.ts replays, so the two languages cannot disagree.
+type providerForCases struct {
+	ProviderFor []struct {
+		Name     string  `json:"name"`
+		Adapter  string  `json:"adapter"`
+		Model    string  `json:"model"`
+		Provider string  `json:"provider"`
+		BareID   *string `json:"bare_id"`
+	} `json:"provider_for"`
+	DispatchModelFor []struct {
+		Name            string `json:"name"`
+		Adapter         string `json:"adapter"`
+		BandOrID        string `json:"band_or_id"`
+		ConfiguredModel string `json:"configured_model"`
+		Model           string `json:"model"`
+		Error           bool   `json:"error"`
+	} `json:"dispatch_model_for"`
+	IsLocalProvider map[string]bool `json:"is_local_provider"`
+}
+
+func loadProviderForCases(t *testing.T) providerForCases {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", "provider-for-cases.json"))
+	if err != nil {
+		t.Fatalf("reading provider-for cases: %v", err)
 	}
-	for adapter, want := range cases {
-		if got := ProviderForAdapter(adapter); got != want {
-			t.Errorf("ProviderForAdapter(%s) = %s, want %s", adapter, got, want)
+	var c providerForCases
+	if err := json.Unmarshal(raw, &c); err != nil {
+		t.Fatalf("parsing provider-for cases: %v", err)
+	}
+	if len(c.ProviderFor) == 0 || len(c.DispatchModelFor) == 0 || len(c.IsLocalProvider) == 0 {
+		t.Fatal("provider-for cases parsed to an empty table; an empty table passes against anything")
+	}
+	return c
+}
+
+// TestProviderForOpenCode pins ADR-022 § 1: an opencode model's provider is its
+// normalized key, split on the first slash, and every malformed model is
+// "other" with no bare id. upstream is always the raw model, unchanged.
+func TestProviderForOpenCode(t *testing.T) {
+	opencodeRows := 0
+	for _, tc := range loadProviderForCases(t).ProviderFor {
+		t.Run(tc.Name, func(t *testing.T) {
+			if got := ProviderFor(tc.Adapter, tc.Model); got != tc.Provider {
+				t.Errorf("ProviderFor(%q, %q) = %q, want %q", tc.Adapter, tc.Model, got, tc.Provider)
+			}
+			if tc.Adapter != "opencode" {
+				return
+			}
+			if tc.BareID == nil {
+				t.Fatalf("opencode case %q declares no bare_id", tc.Name)
+			}
+			provider, bareID, upstream := ParseOpenCodeModel(tc.Model)
+			if provider != tc.Provider || bareID != *tc.BareID || upstream != tc.Model {
+				t.Errorf("ParseOpenCodeModel(%q) = (%q, %q, %q), want (%q, %q, %q)",
+					tc.Model, provider, bareID, upstream, tc.Provider, *tc.BareID, tc.Model)
+			}
+		})
+		if tc.Adapter == "opencode" {
+			opencodeRows++
+		}
+	}
+	if opencodeRows == 0 {
+		t.Fatal("the table has no opencode rows")
+	}
+}
+
+// TestDispatchModelForOpenCode pins the band translation for opencode's -m: a
+// hosted configured provider resolves the band to "<provider>/<registry id>",
+// a local one serves every band with the configured model, and a provider
+// with no registry bands, a bare id, or no provider at all is an error. The
+// result is never a band name or a bare id.
+func TestDispatchModelForOpenCode(t *testing.T) {
+	for _, tc := range loadProviderForCases(t).DispatchModelFor {
+		t.Run(tc.Name, func(t *testing.T) {
+			got, err := DispatchModelFor(tc.Adapter, tc.BandOrID, tc.ConfiguredModel)
+			if tc.Error {
+				if err == nil {
+					t.Fatalf("DispatchModelFor(%q, %q, %q) = %q, want an error",
+						tc.Adapter, tc.BandOrID, tc.ConfiguredModel, got)
+				}
+				return
+			}
+			if err != nil || got != tc.Model {
+				t.Fatalf("DispatchModelFor(%q, %q, %q) = %q, %v; want %q",
+					tc.Adapter, tc.BandOrID, tc.ConfiguredModel, got, err, tc.Model)
+			}
+			if tc.Adapter == "opencode" {
+				if _, bareID, _ := ParseOpenCodeModel(got); bareID == "" {
+					t.Errorf("DispatchModelFor returned %q, which is not a <provider>/<model>", got)
+				}
+			}
+		})
+	}
+}
+
+// TestIsLocalProvider pins the one authority on which providers run on the
+// operator's own servers. "other" is never local, so an unknown provider can
+// never be priced as a local $0.
+func TestIsLocalProvider(t *testing.T) {
+	table := loadProviderForCases(t).IsLocalProvider
+	for p, want := range table {
+		if got := IsLocalProvider(p); got != want {
+			t.Errorf("IsLocalProvider(%q) = %v, want %v", p, got, want)
+		}
+	}
+	for _, p := range []string{"lm-studio", "ollama", "other", "copilot", "lmstudio"} {
+		if _, listed := table[p]; !listed {
+			t.Errorf("the is_local_provider table must list %q", p)
 		}
 	}
 }
