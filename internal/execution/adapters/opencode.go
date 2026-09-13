@@ -4,9 +4,14 @@ import (
 	"crypto/rand"
 	"fmt"
 	"io"
+	"maps"
 	"os"
+	"path/filepath"
 	"regexp"
+	"runtime"
+	"slices"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/nightgauge/nightgauge/internal/models"
@@ -24,8 +29,21 @@ import (
 // built yet (openCodeUnenforcedControls), so PreDispatch refuses every dispatch
 // unless the operator sets ExperimentalOpenCodeEnvVar=1, and prints what is
 // missing on every dispatch it lets through. It refuses an anthropic/ model
-// even with the switch set (openCodeAnthropicRefusal).
-type OpenCodeAdapter struct{}
+// while ANTHROPIC_API_KEY is unset (openCodeAnthropicRefusal).
+//
+// Every spawn runs in a root private to its pipeline run
+// (opencode_isolation.go, ADR-022 § 8): the manager prepares it through
+// PrepareRunRoot, BuildCommand points OpenCode at it, and WithholdsEnv keeps
+// the operator's OpenCode variables, the provider base-URL variables and the
+// variables OpenCode's catalog binds to every other model service out of the
+// child. The forge and cloud platform credentials stay.
+type OpenCodeAdapter struct {
+	// managedConfig replaces the managed OpenCode config files PreDispatch
+	// checks; nil means this machine's (openCodeManagedConfigFiles). Only
+	// tests set it, because the real files are outside any directory a test
+	// may write.
+	managedConfig []string
+}
 
 // NewOpenCodeAdapter creates an OpenCode CLI adapter.
 func NewOpenCodeAdapter() *OpenCodeAdapter {
@@ -63,15 +81,26 @@ const ExperimentalOpenCodeEnvVar = "NIGHTGAUGE_EXPERIMENTAL_OPENCODE"
 // that any listener a later version or an added flag opens is authenticated.
 const openCodeServerPasswordEnvVar = "OPENCODE_SERVER_PASSWORD"
 
-// openCodeAuthContentEnvVar is OpenCode's second source of stored logins.
-// Read from the 1.18.30 bundled source: when it is set, OpenCode parses it as
-// JSON and uses it in place of auth.json in the data directory, and OpenCode
-// exports it, holding every login it has stored, to the processes it starts
-// for a workspace. Observed: with all four XDG directories empty, setting it
-// alone makes `opencode auth list` report its logins (ADR-022 § 17). So an
-// inherited value would hand a stage the parent's logins however empty the
-// run's data directory is, and WithheldEnv keeps it from every spawn.
-const openCodeAuthContentEnvVar = "OPENCODE_AUTH_CONTENT"
+// openCodeRedactedEnv names the child-environment variables, for a dispatch to
+// model, whose values are secrets Nightgauge lets the child have: the
+// per-spawn server password, the forge tokens (openCodeForgeEnv and GH_TOKEN),
+// and every variable the bundled catalog binds to the dispatched provider,
+// whichever provider it is. The manager removes their values from everything
+// the child prints before it is streamed or kept (ADR-022 § 22), so a tool
+// that prints its environment does not put them in a log. The catalog
+// variables of every other provider never reach the child
+// (OpenCodeWithholdsEnv). Any other secret the child holds is not named here,
+// and the output-redaction warning line says so.
+func openCodeRedactedEnv(model string) []string {
+	names := []string{openCodeServerPasswordEnvVar, "GH_TOKEN"}
+	names = append(names, openCodeForgeEnv...)
+	for _, v := range openCodeCatalogEnv[openCodeDispatchProvider(model)] {
+		if !slices.Contains(names, v) {
+			names = append(names, v)
+		}
+	}
+	return names
+}
 
 // openCodeControl is one control a pipeline stage relies on that the opencode
 // adapter does not enforce yet.
@@ -90,13 +119,12 @@ type openCodeControl struct {
 var openCodeUnenforcedControls = []openCodeControl{
 	{"stream parsing", "token usage, cost and the served model are not recorded, because OpenCode's JSON events reach the Claude stream parser"},
 	{"failure classification", "a permission request OpenCode rejects on its own ends the run with exit code 0, so a stage that stopped early reads as a success"},
-	{"run isolation", "OpenCode reads the operator's own global config, credentials, plugins, ~/.claude/CLAUDE.md and ~/.claude/skills, and keeps the stage's full transcript in the operator's session database after the run"},
-	{"output redaction", "captured output is kept as OpenCode and its tools wrote it: a secret from the child's environment that a tool prints is not removed, and an OpenCode error event carries the model endpoint's full URL"},
+	{"output redaction", "only the values of the server password, GITHUB_TOKEN, GH_TOKEN, GITLAB_TOKEN and the variables OpenCode's catalog binds to the dispatched provider are removed from the captured output; every other secret the child holds, inherited from the environment or read by a tool from a file, stays in it, and an OpenCode error event carries the model endpoint's full URL"},
 	{"project-config tamper gate", "the target repository's opencode.json and .opencode/ load unchecked"},
+	{"repository steering", "OpenCode loads the target repository's AGENTS.md but not its CLAUDE.md, so a repository whose only steering is CLAUDE.md runs without it"},
 	{"permission map", "tool permissions come from OpenCode's config, not from the stage's allowed tools"},
 	{"safety plugin", "Nightgauge's careful-gate and stage-gate hooks do not run inside OpenCode"},
-	{"egress defaults", "share, autoupdate, the model-catalog fetch, LSP downloads, default plugins, webfetch and session-title generation follow OpenCode's own defaults, and the title request carries the stage prompt to small_model when a config names one, on whatever provider it names"},
-	{"credential policy", "only the anthropic/ model a stage names is refused: any other provider can authenticate with a login OpenCode has stored instead of its own API-key variable, and any OpenCode config the run reads, the operator's own or the target repository's opencode.json and .opencode/, can still send the stage prompt to an anthropic/ model on a stored login, as small_model, which titles every session, or as an agent's model, which the title and compaction agents and a subagent run on"},
+	{"egress defaults", "the share, autoupdate and session-title settings, small_model, every agent's model, and webfetch follow OpenCode's own defaults and whatever config the run reads: session-title generation sends the stage prompt to small_model when a config names one, and the target repository's opencode.json or .opencode/ can name small_model or an agent's model, which the title and compaction agents and a subagent run on. That model can be on any provider whose API key or other credentials the run holds, among them GITHUB_TOKEN and GITLAB_TOKEN, which the stage keeps for the forge and OpenCode's catalog binds to github-copilot and gitlab, and the cloud and data platform credentials the stage keeps for its tools, such as AWS's and Google Cloud's, which the catalog binds to amazon-bedrock, google-vertex and other providers; on one whose own loader finds credentials the catalog does not name, such as an AWS profile; or on OpenCode's own hosted provider, whose free models need no key"},
 	{"endpoint policy", "the server behind a -m provider key is whatever OpenCode's own config and bundled catalog make it: a provider block named after a catalog provider can send that provider's API key to its base URL, a LAN or public base URL is neither refused nor warned about, and an Ollama cloud model, which a local Ollama forwards to Ollama's hosted service, is dispatched like a local one"},
 	{"stage limits", "the stage's turn cap, token cap and cost budget are not passed to OpenCode, so only the stage timeout bounds a run"},
 	{"version policy", "the opencode binary's version is not checked against the floor or the max-tested version"},
@@ -104,45 +132,82 @@ var openCodeUnenforcedControls = []openCodeControl{
 
 // PreDispatch implements the manager's optional pre-dispatch hook, which runs
 // after worktree setup and before BuildCommand, so a refusal spawns nothing.
-// The anthropic refusal comes first: the switch cannot lift it, so it is the
-// reason to state, and no enabled-dispatch warning precedes it.
+//
+// The anthropic key requirement comes first: the switch cannot satisfy it, so
+// it is the reason to state, and no enabled-dispatch warning precedes it. Then
+// the gate. With the switch set, a $HOME/.opencode holding config, or the
+// machine's managed OpenCode config, refuses the dispatch unless the operator
+// has opted into their own OpenCode config, and that opt-in is announced on
+// stderr after the warning. Last, a stderr line names every provider variable
+// the environment holds that the stage, and so every tool it runs, will not
+// get (openCodeWithheldProviderEnv), by name alone.
 func (a *OpenCodeAdapter) PreDispatch(opts RunOptions) error {
-	if err := openCodeAnthropicRefusal(opts.Model); err != nil {
+	if err := openCodeAnthropicRefusal(opts.Model, os.LookupEnv); err != nil {
 		return err
 	}
-	return openCodeGate(os.Getenv(ExperimentalOpenCodeEnvVar), os.Stderr)
+	switchValue := os.Getenv(ExperimentalOpenCodeEnvVar)
+	inherit := os.Getenv(OpenCodeInheritUserConfigEnvVar) == "1"
+	if switchValue == "1" && !inherit {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("the opencode adapter cannot check %s for OpenCode config without the home directory: %w", filepath.Join("~", ".opencode"), err)
+		}
+		if err := openCodeHomeConfigRefusal(home); err != nil {
+			return err
+		}
+		managed := a.managedConfig
+		if managed == nil {
+			managed = openCodeManagedConfigFiles(runtime.GOOS, openCodeUsername())
+		}
+		if err := openCodeManagedConfigRefusal(managed); err != nil {
+			return err
+		}
+	}
+	if err := openCodeGate(switchValue, os.Stderr); err != nil {
+		return err
+	}
+	if inherit {
+		fmt.Fprintf(os.Stderr, "[opencode] %s=1: this dispatch also reads your own OpenCode config (your XDG OpenCode config directory, ~/.opencode and any managed OpenCode config on this machine, which outranks every key Nightgauge sets); stored logins are not inherited, but an API key written in that config is\n",
+			OpenCodeInheritUserConfigEnvVar)
+	}
+	if names := openCodeWithheldProviderEnv(opts.Model, os.Environ()); len(names) > 0 {
+		fmt.Fprintf(os.Stderr, "[opencode] withheld from this stage and every tool it runs: %s. Each is a provider base URL or a variable OpenCode's catalog binds to a model provider other than %q; a tool that needs one fails without it or uses a login of its own. The cloud platform and forge credentials in your environment are kept\n",
+			strings.Join(names, ", "), openCodeDispatchProvider(opts.Model))
+	}
+	return nil
 }
 
-// openCodeAnthropicRefusal refuses a dispatch to an anthropic/ model, with the
-// enable switch set or not. ADR-022 § 17 lets Anthropic through OpenCode
-// authenticate only with ANTHROPIC_API_KEY from the environment, never with a
-// subscription or OAuth login OpenCode has stored. Until the credential policy
-// and run isolation are enforced (#1616), nothing stops OpenCode using a
-// stored login, whether or not the key is set, so the interim enforcement is
-// not to dispatch the model at all. #1616 replaces this refusal with § 17's
-// key requirement.
-//
-// It sees only the model the stage names. A model an OpenCode config names,
-// small_model or an agent's model, in the operator's config or the target
-// repository's, is not refused here; the credential-policy warning line
-// discloses it until #1616, #1625 and #1638 close those routes.
+// openCodeAnthropicRefusal is ADR-022 § 17's key requirement: an anthropic/
+// stage through OpenCode has exactly one credential, the ANTHROPIC_API_KEY
+// variable, so a dispatch to an anthropic/ model is refused before spawn while
+// that variable is unset or empty, with the enable switch set or not. A
+// subscription or OAuth login is never used, because a run reads neither of
+// OpenCode's two sources of stored logins: the per-run data directory starts
+// empty and never holds an auth.json (EnsureOpenCodeRunRoot,
+// openCodeStoredLoginRefusal), and no inherited OPENCODE_* variable, the
+// login-bearing OPENCODE_AUTH_CONTENT and OPENCODE_CONSOLE_TOKEN among them,
+// reaches the child (OpenCodeWithholdsEnv). Nor does an inherited
+// ANTHROPIC_BASE_URL, which would send the stage and its key to whatever
+// server it names, a proxy serving a subscription included
+// (openCodeEndpointEnv).
 //
 // The model is parsed the way openCodeModelArg parses it (trimmed, split on
 // the first slash). The provider key is compared case-insensitively, so every
-// spelling of it gets this refusal rather than the model check's.
-func openCodeAnthropicRefusal(model string) error {
+// spelling of it meets this requirement rather than only the model check.
+func openCodeAnthropicRefusal(model string, lookup func(string) (string, bool)) error {
 	m := strings.TrimSpace(model)
 	provider, _, qualified := strings.Cut(m, "/")
 	if !qualified || !strings.EqualFold(provider, "anthropic") {
 		return nil
 	}
+	if key, ok := lookup("ANTHROPIC_API_KEY"); ok && key != "" {
+		return nil
+	}
 	return fmt.Errorf(
-		"model %q is refused: the opencode adapter does not dispatch anthropic/ models until the credential policy is enforced (#1616). "+
-			"Anthropic through OpenCode may authenticate only with ANTHROPIC_API_KEY from the environment, never with a subscription or OAuth login OpenCode has stored, "+
-			"and until then nothing stops OpenCode using a stored one, so %s=1 does not lift this refusal. "+
-			"Run an Anthropic model on the claude-headless adapter instead (--adapter claude-headless or NIGHTGAUGE_ADAPTER=claude-headless), which also serves a Claude subscription, "+
-			"or name a model on another provider as <provider>/<model>. See docs/decisions/022-opencode-multi-provider-adapter.md § 17",
-		m, ExperimentalOpenCodeEnvVar)
+		"model %q is refused: ANTHROPIC_API_KEY is not set, and an anthropic/ stage through OpenCode authenticates only with that variable, never with a subscription or OAuth login. "+
+			"Set ANTHROPIC_API_KEY in the environment that runs nightgauge, or run the Anthropic model on the claude-headless adapter (--adapter claude-headless or NIGHTGAUGE_ADAPTER=claude-headless), which serves a Claude subscription. "+
+			"See docs/decisions/022-opencode-multi-provider-adapter.md § 17",
+		m)
 }
 
 // openCodeGate refuses the dispatch unless switchValue is exactly "1", and
@@ -231,6 +296,11 @@ func isSpaceOrControl(r rune) bool {
 // never shared, and nothing binds a discoverable listener. RunOptions fields
 // OpenCode has no flag for (MaxTurns, Effort, AllowedTools, CostBudget,
 // MaxTokens) are not mapped yet; ADR-022 names the change that maps each.
+//
+// The environment includes opts.RunRoot's, which points OpenCode at the
+// run's own root (PrepareRunRoot). The manager always prepares one; a caller
+// that skips it gets no isolation variables, the way a model the manager's
+// check would refuse gets no -m.
 func (a *OpenCodeAdapter) BuildCommand(opts RunOptions) (string, []string, map[string]string) {
 	args := []string{"run", "--format", "json", "--print-logs", "--log-level", "ERROR"}
 	// The manager's ValidateModel call has already rejected a model this
@@ -276,18 +346,74 @@ func (a *OpenCodeAdapter) BuildCommand(opts RunOptions) (string, []string, map[s
 	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
 		env["GITHUB_TOKEN"] = token
 	}
+	if opts.RunRoot != nil {
+		maps.Copy(env, opts.RunRoot.Env)
+	}
 
 	return "opencode", args, env
 }
 
-// WithheldEnv implements the manager's optional hook naming the inherited
-// environment variables a stage's child must not receive: the manager removes
-// them from the host environment before it adds BuildCommand's exports.
+// PrepareRunRoot implements the manager's optional per-run root hook, which
+// runs after the pre-dispatch, model and effort checks and before
+// BuildCommand (ADR-022 § 8, § 22).
 //
-// It names openCodeAuthContentEnvVar only, so no login the parent holds reaches
-// a stage through the environment. The adapter never reads that variable's
-// value, so it cannot log it. The full inherited OPENCODE_* policy (ADR-022
-// § 8) is #1616's.
-func (a *OpenCodeAdapter) WithheldEnv() []string {
-	return []string{openCodeAuthContentEnvVar}
+// It creates the root for req.ID, or reuses the one an earlier stage of the
+// run created, and resolves the environment that points OpenCode at it
+// against the environment this process inherited. Creating a root also sweeps
+// the roots no stage has used for OpenCodeOrphanMaxAge, which a crashed run
+// leaves behind. A root holding stored logins refuses the dispatch
+// (openCodeStoredLoginRefusal).
+func (a *OpenCodeAdapter) PrepareRunRoot(req RunRootRequest) (*RunRoot, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("the opencode per-run root needs the home directory: %w", err)
+	}
+	root, created, err := EnsureOpenCodeRunRoot(home, req.ID, os.LookupEnv)
+	if err != nil {
+		return nil, err
+	}
+	if created {
+		removed, sweepErr := SweepOpenCodeRunRoots(home, OpenCodeOrphanMaxAge, time.Now())
+		if len(removed) > 0 {
+			fmt.Fprintf(os.Stderr, "[opencode] deleted %d per-run root(s) no stage had used for %s: %s\n",
+				len(removed), OpenCodeOrphanMaxAge, strings.Join(removed, ", "))
+		}
+		if sweepErr != nil {
+			fmt.Fprintf(os.Stderr, "[opencode] orphaned per-run root sweep (non-fatal): %v\n", sweepErr)
+		}
+	}
+	if err := openCodeStoredLoginRefusal(root); err != nil {
+		return nil, err
+	}
+	env, err := OpenCodeIsolationEnv(OpenCodeIsolation{
+		Root:              root,
+		Home:              home,
+		Lookup:            os.LookupEnv,
+		GOOS:              runtime.GOOS,
+		MachineConfigDir:  req.MachineConfigDir,
+		InheritUserConfig: os.Getenv(OpenCodeInheritUserConfigEnvVar) == "1",
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &RunRoot{Dir: root, Env: env}, nil
+}
+
+// WithholdsEnv implements the manager's optional hook deciding which inherited
+// environment variables a stage's child must not receive: the manager removes
+// every one it names from the host environment before it adds BuildCommand's
+// exports. It decides on the name alone (OpenCodeWithholdsEnv): every
+// OPENCODE_* variable, the provider base-URL variables, and every variable
+// OpenCode's catalog binds to a model service other than the dispatched one.
+// The forge tokens and the cloud platform credentials a stage's tools read
+// are kept (openCodePlatformProviders).
+func (a *OpenCodeAdapter) WithholdsEnv(opts RunOptions, key string) bool {
+	return OpenCodeWithholdsEnv(opts.Model, key)
+}
+
+// RedactedEnv implements the manager's optional hook naming the variables of
+// the child's environment whose values the manager removes from the child's
+// captured output (openCodeRedactedEnv).
+func (a *OpenCodeAdapter) RedactedEnv(opts RunOptions) []string {
+	return openCodeRedactedEnv(opts.Model)
 }

@@ -176,6 +176,9 @@ describe("runAdapterAuthPreflight", () => {
     expect(fix).toContain("ANTHROPIC_API_KEY");
     expect(fix).toContain("OPENAI_API_KEY");
     expect(fix).not.toMatch(/providers login|auth login/);
+    // anthropic/* dispatches on ANTHROPIC_API_KEY (ADR-022 § 17), so the hint
+    // must not tell the operator it is refused.
+    expect(fix).not.toMatch(/refused/);
     // Only loopback hosts: no LAN or remote model host in a hint.
     for (const url of fix.match(/https?:\/\/[^\s),]+/g) ?? []) {
       expect(new URL(url).hostname).toMatch(/^(127\.0\.0\.1|localhost)$/);
