@@ -1085,6 +1085,8 @@ export function toNightgaugeAdapter(
       return "copilot";
     case "grok":
       return "grok";
+    case "opencode":
+      return "opencode";
   }
 }
 

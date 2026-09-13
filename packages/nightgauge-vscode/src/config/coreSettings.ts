@@ -15,8 +15,10 @@ import {
   type GeminiModel,
   type CopilotConfig,
   type LmStudioConfig,
+  type AdapterEnumSchema,
   DEFAULT_CONFIG,
 } from "./schema";
+import type { z } from "zod";
 
 /**
  * Authentication provider options
@@ -26,15 +28,20 @@ export type AuthProvider = "max" | "bedrock" | "vertex";
 /**
  * Execution adapter options (UI-facing).
  *
+ * Derived from `AdapterEnumSchema` (the single canonical source in
+ * `schema.ts`) rather than hand-spelled — a fifth copy of this union used to
+ * drift independently of the other four (#1623).
+ *
  * Maps to SDK's NightgaugeAdapter:
  * - 'claude' → 'claude-sdk' or 'claude-headless'
  * - 'codex'  → 'codex'
+ * - 'opencode' → 'opencode'
  *
  * @see packages/nightgauge-sdk/src/cli/adapters/ICliAdapter.ts
  * @see Issue #627
+ * @see Issue #1623 - Collapse the four hand-spelled adapter enums into one
  */
-export type ExecutionAdapter =
-  "claude" | "codex" | "gemini" | "gemini-sdk" | "lm-studio" | "ollama" | "copilot" | "grok";
+export type ExecutionAdapter = z.infer<typeof AdapterEnumSchema>;
 
 /**
  * Model selection options — derived from the `TIER_BANDS` authority (#581),
