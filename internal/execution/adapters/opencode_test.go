@@ -17,7 +17,7 @@ import (
 // without the permission map, publishes the session, or exposes a listener to
 // the network or to other origins. TestOpenCodeNeverEmitsBypassFlags checks
 // the full list.
-var openCodeForbiddenFlags = []string{"--auto", "--yolo", "--dangerously-skip-permissions", "--share", "--mdns", "--cors"}
+var openCodeForbiddenFlags = []string{"--auto", "--yolo", "--dangerously-skip-permissions", "--share", "--port", "--mdns", "--cors"}
 
 // assertNoForbiddenFlag fails when any argv element spells a forbidden flag
 // in a form opencode accepts: `--auto=true`, `--auto.x` or
@@ -636,7 +636,7 @@ func TestOpenCodeArgvMatchesCapturedHelp(t *testing.T) {
 	// --mdns and --cors are not `run` options, and `run` exits 1 on either
 	// (testdata/cli-help/README.md). All of them stay forbidden, and
 	// TestOpenCodeNeverEmitsBypassFlags checks the full list.
-	for _, f := range []string{"--auto", "--share"} {
+	for _, f := range []string{"--auto", "--share", "--port"} {
 		if _, ok := options[f]; !ok {
 			t.Errorf("forbidden flag %s is no longer an option of opencode %s run; re-check ADR-022 § 9 before editing the list", f, ver)
 		}

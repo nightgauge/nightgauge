@@ -113,9 +113,9 @@ changelog, and the release workflow refuses a tag that does not.
 - ADR-022 no longer says `--yolo` and `--dangerously-skip-permissions` are not
   `opencode run` options. In 1.18.30 both are hidden options that switch on the
   same auto-approval as `--auto`. The adapter still never emits them, and
-  `--cors` joins the flags it must never emit. The test that holds it to that
-  also catches the camelCase, `=value` and dot-notation spellings opencode
-  accepts, such as `--dangerouslySkipPermissions` (#1617)
+  `--cors` and `--port` join the flags it must never emit. The test that holds
+  it to that also catches the camelCase, `=value` and dot-notation spellings
+  opencode accepts, such as `--dangerouslySkipPermissions` (#1617)
 - Generated Codex steering no longer ends up in commits. The Go-direct path
   never removed it, and the agent could commit it mid-stage on every path;
   pipeline commits now strip it before committing, a commit that carried it is

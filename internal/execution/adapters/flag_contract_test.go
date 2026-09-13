@@ -822,7 +822,7 @@ func TestHelpOptionParser(t *testing.T) {
 		{"claude-headless", []string{"-p", "--print", "--allowedTools", "--allowed-tools", "--exclude-dynamic-system-prompt-sections", "--max-budget-usd", "--no-session-persistence", "--output-format"}, nil, 50},
 		{"codex", []string{"-s", "--sandbox", "-m", "--model", "--json", "--dangerously-bypass-approvals-and-sandbox", "-i", "--image"}, []string{"--last"}, 20},
 		{"grok", []string{"-p", "--single", "--prompt-file", "--reasoning-effort", "--effort", "--worktree-ref", "--ref", "-r", "--resume"}, []string{"--allowedTools", "--disallowedTools", "--system-prompt"}, 40},
-		{"opencode", []string{"-m", "--model", "--format", "--print-logs", "--log-level", "--dir", "--auto", "--share"}, []string{"--yolo", "--dangerously-skip-permissions"}, 20},
+		{"opencode", []string{"-m", "--model", "--format", "--print-logs", "--log-level", "--dir", "--auto", "--share", "--port"}, []string{"--yolo", "--dangerously-skip-permissions"}, 20},
 	}
 	for _, c := range cases {
 		t.Run(c.adapter, func(t *testing.T) {
@@ -964,7 +964,7 @@ func TestOpenCodeForbiddenFlagSpellings(t *testing.T) {
 // catches. --yolo and --dangerously-skip-permissions are hidden in opencode
 // 1.18.30's help, so only this explicit list catches them.
 func TestOpenCodeNeverEmitsBypassFlags(t *testing.T) {
-	for _, f := range []string{"--auto", "--yolo", "--dangerously-skip-permissions", "--share", "--mdns", "--cors"} {
+	for _, f := range []string{"--auto", "--yolo", "--dangerously-skip-permissions", "--share", "--port", "--mdns", "--cors"} {
 		found := false
 		for _, g := range openCodeForbiddenFlags {
 			found = found || g == f
@@ -977,7 +977,7 @@ func TestOpenCodeNeverEmitsBypassFlags(t *testing.T) {
 	t.Setenv("NIGHTGAUGE_AUTO_APPROVE", "true")
 	a := NewOpenCodeAdapter()
 	models := []string{"", "lmstudio/qwen/qwen3.8-27b", "anthropic/claude-sonnet-5", "--auto/x", "lmstudio/--share", "--dangerouslySkipPermissions/x"}
-	prompts := []string{"", "implement the issue", "--auto --yolo --dangerously-skip-permissions --dangerouslySkipPermissions --share --mdns --cors"}
+	prompts := []string{"", "implement the issue", "--auto --yolo --dangerously-skip-permissions --dangerouslySkipPermissions --share --port --mdns --cors"}
 	options := flagContractOptions(models, prompts)
 	for _, o := range options {
 		_, args, _ := a.BuildCommand(o)

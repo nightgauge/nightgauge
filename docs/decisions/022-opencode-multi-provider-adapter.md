@@ -196,9 +196,10 @@ to both (§ 22). `--dir` is the worktree; the manager also sets the process
 working directory to it.
 
 The adapter never emits `--auto`, `--yolo`, `--dangerously-skip-permissions`,
-`--share`, `--mdns` or `--cors`. In 1.18.30 `--auto` and `--share` are listed
-`run` options, and a test fails if either stops being one, because the
-forbidden list would then be guarding a name that no longer exists.
+`--share`, `--port`, `--mdns` or `--cors` (§ 15). In 1.18.30 `--auto` and
+`--share` are listed `run` options, and a test fails if either stops being
+one, because the forbidden list would then be guarding a name that no longer
+exists.
 
 `--yolo` and `--dangerously-skip-permissions` are hidden `run` options.
 `run --help` does not list them, but 1.18.30 defines both and treats either one
@@ -207,7 +208,7 @@ is set, and each was accepted exactly as `--auto` was (#1617, observed
 2026-09-13). A hidden option never appears in the help, so only the explicit
 list catches one. `--mdns` and `--cors` are not `run` options: `run` exits 1 on
 either and prints its help to stderr, as it does for any flag it does not
-define. All six stay forbidden, and `TestOpenCodeNeverEmitsBypassFlags` checks
+define. All seven stay forbidden, and `TestOpenCodeNeverEmitsBypassFlags` checks
 them against every option combination. It catches each flag in the other
 spellings yargs takes for an option as well: 1.18.30 accepts
 `--dangerouslySkipPermissions`, `--yolo=true` and `--auto.x` as it accepts
