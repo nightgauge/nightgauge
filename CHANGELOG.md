@@ -118,6 +118,17 @@ changelog, and the release workflow refuses a tag that does not.
   reads a manifest's `max_tested` to print an npm install pin, which
   `release-watchdog.yml` and `continuous-improvement.yml` now use instead of a
   hardcoded `claude-code@` version (#1621)
+- `nightgauge opencode config --stage <s> --worktree <p> --json` prints the
+  per-run OpenCode config, isolation environment, plugin directory and run
+  directory a stage is spawned with, from the same code as the Go adapter, so
+  the SDK path can run OpenCode under identical bytes. The OpenCode adapter now
+  reads an `opencode:` block from `~/.nightgauge/config.yaml` alone (a
+  committed one is refused): `provider` (`lm-studio` or `ollama`), `base_url`,
+  `limit.context` and `limit.output`, `timeouts`, `model`, `binary`,
+  `inherit_user_config`, and `snapshot`, `lsp` and `formatter`. A dispatch to a
+  local model is refused before spawn unless the block declares its server
+  with nonzero limits, because OpenCode never compacts a session whose context
+  limit is 0, which is what LM Studio reports (#1625)
 
 ### Fixed
 
@@ -215,8 +226,17 @@ changelog, and the release workflow refuses a tag that does not.
   is refused while `~/.opencode` or this machine's managed OpenCode config
   holds config, which OpenCode reads whatever the run's directories; move
   `~/.opencode`'s entries to `~/.config/opencode`, or set
-  `NIGHTGAUGE_OPENCODE_INHERIT_USER_CONFIG=1` to run with your OpenCode config
-  (#1616)
+  `opencode.inherit_user_config: true` in `~/.nightgauge/config.yaml` to run
+  with your OpenCode config (#1616, #1625)
+- An OpenCode stage runs under a per-run config Nightgauge builds, and neither
+  the repository's nor an inherited OpenCode config can change a setting in
+  it: it loads only the provider the stage names, runs every built-in agent
+  (compaction, summaries, subagents) on the stage's model, turns session
+  sharing, autoupdate and session titles off, caps tool output, and caps the
+  build agent's and each built-in subagent's steps at the stage's turn cap
+  (200 when none is set). A local model server's URL stays in a private file,
+  never in the stage's environment, and credentials appear only as `{env:VAR}`
+  references (#1625)
 - The VS Code extension's Grok and Codex setup now installs only the skills
   and Codex commands bundled with the extension. It no longer copies the open
   workspace's `skills/` or `.codex/commands/` folder into `~/.grok` or
