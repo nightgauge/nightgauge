@@ -117,6 +117,11 @@ type RunRoot struct {
 	// resolved against the environment this process inherited when the root
 	// was prepared. BuildCommand merges it into its exports.
 	Env map[string]string
+	// Endpoints are the ids of the model servers the operator declared for
+	// the run (the opencode adapter's OpenCodeEndpoints), each the provider
+	// key a stage names on -m to reach it. The stage result's Endpoint is
+	// read against them.
+	Endpoints []string
 }
 
 // RunResult captures the output of a skill execution.
@@ -165,10 +170,13 @@ type RunResult struct {
 	// ModelProvider is the normalized provider of ServedModel (ADR-022 § 1),
 	// which then holds the recorded form of § 2. UpstreamModel is the raw -m
 	// value exactly as dispatched ("lmstudio/qwen/qwen3.8-27b"), also when
-	// another model served the stage. Only a multi-provider adapter
-	// (opencode) sets them.
+	// another model served the stage. Endpoint is the id of the declared
+	// endpoint that served the model (RunRoot.Endpoints), or "" when its
+	// provider key names none. Only a multi-provider adapter (opencode) sets
+	// them.
 	ModelProvider string
 	UpstreamModel string
+	Endpoint      string
 	// AdapterVersion is the version the adapter's CLI reports for itself
 	// (`opencode --version`), or "" when it was not read.
 	AdapterVersion string

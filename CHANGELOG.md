@@ -72,6 +72,31 @@ changelog, and the release workflow refuses a tag that does not.
   override is still refused before spawn. `nightgauge doctor` checks and
   reports the context limit a dispatch resolves this way, not the override
   alone (#1633)
+- An OpenCode stage with a cost budget is stopped once the cost of its own
+  steps, priced from the model registry at every `step_finish`, passes the
+  budget: its process group gets SIGTERM, then SIGKILL after 10 seconds, and
+  the stage fails as `budget_exceeded` with `[cost-cap-exceeded]` ending its
+  stderr. A subagent's steps are not in the stream, so its usage is priced
+  only once the stage has ended: a stage its subagents took past the budget
+  is not stopped while they run, but fails as `budget_exceeded` then, and the
+  enabled-dispatch warning says so. A stage that would otherwise succeed but
+  whose subagent usage was only partly read also fails as `budget_exceeded`,
+  since its budget cannot be verified, unless its model is priced at zero.
+  The budget prices every step, a subagent's included, at the dispatched
+  model's rates, so a subagent on a pricier model of the same provider is
+  under-counted. OpenCode's own reported cost is never used. A hosted model
+  the registry cannot price logs one `[opencode-cost]` warning and runs
+  without a cost cap (#1630)
+
+- An OpenCode stage's run record now carries the identity of the model that
+  served it on its `model_selection`: `model_provider`, `upstream_model` (the
+  `-m` value it was dispatched with, kept when another model served it) and
+  `endpoint` (the declared endpoint that served it). The Go scheduler's
+  platform telemetry sends the recorded provider as `modelProvider` beside
+  the stage's ADR-022 model identity, the VS Code extension's history reader
+  keeps the three fields, and a stage re-run on another adapter keeps none of
+  the identity of the run it replaced (#1630)
+
 - The OpenCode stream parser is now tested against real opencode 1.18.30
   runs: a local LM Studio model on two endpoints, `lmstudio` and
   `lmstudio-remote`, a run whose model started two subagents, and a
@@ -239,6 +264,16 @@ changelog, and the release workflow refuses a tag that does not.
   usable, so cap recovery never hops onto it (#1627)
 
 ### Fixed
+
+- An OpenCode stage's cost is now priced by the provider that served its
+  model, not by the adapter name: a stage on an LM Studio or Ollama model
+  records a stamped zero cost instead of an unstamped one, and a stage on a
+  hosted model the registry lists is priced at that model's registry rates.
+  A hosted model the registry does not list stays unstamped.
+  `CalculateCostFor` replaces `CalculateCostForAdapter`; every other adapter
+  prices as before. The Go scheduler's platform telemetry now sends a stamped
+  zero stage cost, and the run total of a run whose every stage is a stamped
+  zero, as `0` instead of `null` (#1630)
 
 - A stage the operator stops is reported as stopped, not as a
   `wait: context canceled` failure, when its CLI exits on the stop but a
