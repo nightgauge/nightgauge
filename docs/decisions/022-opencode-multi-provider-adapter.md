@@ -488,8 +488,9 @@ opencode:
 A stage's turn cap becomes the steps cap of the build agent and each
 subagent, and a stage with none gets 200 steps, room for a long stage on a
 local model that still ends a session caught in a loop. A dispatch to an
-endpoint whose `limit.context` or `limit.output` is 0 or missing is refused
-before spawn, as is a local provider key no endpoint declares, and any other
+endpoint model whose `limit.context` or `limit.output` neither the machine-tier
+`limit` nor discovery from the server (§ 13) gives is refused before spawn, as
+is a local provider key no endpoint declares, and any other
 key that is neither a declared endpoint id nor a key in OpenCode's bundled
 catalog (a second LM Studio's id until #1678 lets it be declared): LM Studio
 reports a context limit of 0, OpenCode never compacts a session whose limit is
@@ -1026,6 +1027,35 @@ keyed by normalized provider and model id, never by endpoint address. A model
 on an endpoint is priced by § 3's rule: `cost_usd: 0` stamped where the model
 is known to run on the endpoint, unstamped otherwise. The committed file
 carries no local model and no endpoint.
+
+_Amendment 2026-09-14 (#1633, as implemented)._ The descriptor is discovered
+from the endpoint's server once per process, kept in memory keyed by endpoint
+id and model id, and never written to disk; a failed discovery is kept too,
+not retried. LM Studio is read from `GET /api/v0/models` and Ollama from
+`POST /api/show`. The per-run config (§ 7) takes each limit from the
+machine-tier `limit` where it sets one, and otherwise from the descriptor; a
+`limit.context` above the discovered loaded window is clamped to it with a
+warning, because the server fails a request past it. Observed on LM Studio
+0.4.24 and Ollama 0.32.11 (the captures, their field names and their
+provenance are in `internal/models/testdata/local-discovery/`), three facts
+differ from what #1633 assumed:
+
+- LM Studio's `/api/v0/models` reports the loaded window
+  (`loaded_context_length`, never `max_context_length`) and tool use
+  (`capabilities: ["tool_use"]`), but no output cap and no reasoning flag. An
+  LM Studio descriptor therefore has no `max_output` and no `reasoning`, and
+  the per-run output limit for it is the smaller of OpenCode's own
+  32 000-token reply cap (what 1.18.30 asks for when `limit.output` is 0) and
+  a quarter of the window, unless the machine-tier `limit.output` sets one.
+- Ollama's `/api/show` carries `num_ctx` only when the model's Modelfile sets
+  it. Without one, Ollama loads the model with a default derived from the
+  machine's memory and capped at the trained context, which `/api/show` does
+  not report and `/api/ps` reports only while the model is loaded. Such a
+  model is unresolved: the operator sets `num_ctx` in its Modelfile, or
+  `opencode.limit.context`.
+- Ollama reports reasoning (`capabilities` includes `thinking`) and an output
+  cap (`num_predict` in `parameters`, when the Modelfile sets one); its
+  descriptor carries both.
 
 ### 14. Host overlay segment (amends ADR-016)
 

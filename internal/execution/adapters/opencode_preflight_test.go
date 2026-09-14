@@ -17,6 +17,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/adaptercompat"
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/hometest"
+	"github.com/nightgauge/nightgauge/internal/models"
 )
 
 // openCodeIntegrationBuild is set when the package is built with the
@@ -33,7 +34,10 @@ var openCodeIntegrationBuild bool
 //
 // It also makes the forge an OpenCode dispatch reads its MCP servers from
 // refuse every read for the whole test binary, so no test reaches GitHub; a
-// test that reads servers sets req.McpForge itself (withMcpForge).
+// test that reads servers sets req.McpForge itself (withMcpForge). And it
+// makes discovery of a local model's limits find nothing, so no test asks
+// whatever model server this machine runs; a test that discovers swaps in a
+// discovery of its own.
 func TestMain(m *testing.M) {
 	cleanup := hometest.Isolate()
 	restorePath := func() {}
@@ -41,7 +45,11 @@ func TestMain(m *testing.M) {
 		restorePath = installPackageOpenCodeFake()
 	}
 	restoreForge := SwapOpenCodeMcpForgeForTest(mapForge{err: errors.New("the adapters test binary reads no forge: set OpenCodeRunRequest.McpForge")})
+	restoreDiscovery := SwapOpenCodeLocalDiscoveryForTest(func(OpenCodeEndpoint, string) (models.LocalDescriptor, error) {
+		return models.LocalDescriptor{}, errors.New("the adapters test binary asks no model server: swap in a discovery")
+	})
 	code := m.Run()
+	restoreDiscovery()
 	restoreForge()
 	restorePath()
 	cleanup()
