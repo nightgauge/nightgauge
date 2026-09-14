@@ -1618,6 +1618,46 @@ Studio beside Ollama. Each is a named **endpoint** in `opencode.endpoints[]`
   chain entry the operator configured (#1643), and it is recorded as a
   provider change, not an endpoint change.
 
+## Failure wording (amendment 2026-09-14)
+
+#1631 assumed that OpenCode reports a failed model request on stderr in the
+model server's own words, so that a down local server reads
+`ECONNREFUSED 127.0.0.1:1234` and a missing model reads as the server's
+not-found error. Observed on 1.18.30 with `--print-logs --log-level ERROR`,
+against the stub provider (#1618) and one-status servers on `127.0.0.1`, two
+of those assumptions do not hold. The captures, their capture script and the
+source of every wording are in
+[`internal/terminalkind/testdata/opencode/`](../../internal/terminalkind/testdata/opencode/README.md).
+
+| Failure                                 | What 1.18.30 prints on stderr                                                                                                                                   | Exit |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
+| A request the server refuses (any 4xx)  | A `level=ERROR` logfmt line, `message="stream error"`, `error.error="AI_APICallError: <message>"`, where the message is the server's own `error.message`        | 1    |
+| An overflow the server reports          | The same line. OpenCode then tries one compaction, which overflows as well, and the stream's `error` event names the failure `ContextOverflowError`             | 1    |
+| A 401 with no body                      | `AI_APICallError: Unauthorized`, the HTTP reason phrase                                                                                                         | 1    |
+| A server that is not listening          | `AI_APICallError: Cannot connect to API: Unable to connect. Is the computer able to access the url?`, after about 60 s of retries. `ECONNREFUSED` never appears | 1    |
+| A 500                                   | `AI_APICallError: <message>`, after about 70 s of retries                                                                                                       | 1    |
+| `-m` naming a model the config lacks    | `ProviderModelNotFoundError: Model not found: <provider>/<model>`, before any request                                                                           | 1    |
+| A model id the loopback LM Studio lacks | Nothing: with one model loaded, LM Studio answered the request with the loaded model                                                                            | 0    |
+
+The last line of stderr is always a `message=process` line whose `stack`
+repeats `AI_APICallError: <message>`, so the last lines a stage's reason keeps
+hold both the wrapper and the server's words. The model's own text is on the
+stream, never on stderr.
+
+What changes:
+
+- The OpenCode clauses of the terminal-kind table key on
+  `AI_APICallError` together with the server's words, never on the words
+  alone, so model prose that says "context length exceeded" matches nothing
+  (#1631). The overflow fragments are the ones OpenCode's own recogniser
+  matches, and its source names the server each belongs to.
+- A down local server classifies on `Cannot connect to API`, not on
+  `ECONNREFUSED`.
+- A model id the server lacks is a failure only where the server says so. A
+  loopback LM Studio with one model loaded does not, so the stage runs on
+  another model and nothing classifies. Whether the served-model record (§ 1,
+  § 2) shows the substitution was not checked here.
+
 ## Consequences
 
 - The model layer's one-adapter-one-provider assumption becomes a special
