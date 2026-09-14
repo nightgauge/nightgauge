@@ -103,14 +103,15 @@ type OpenCodeProvision struct {
 // ProvisionOpenCode reads what an OpenCode stage running in worktree is
 // given from its repository. Every file it reads there is read through a
 // worktreeReader, so nothing outside the worktree is read, and a warning
-// names each file refused. The MCP servers come from the base branch
-// (ReadBaseBranchMcpServers): one the working tree alone defines, or defines
+// names each file refused. The MCP servers come from the base branch,
+// origin's default branch as origin names it (ReadBaseBranchMcpServers),
+// which asks origin: one the working tree alone defines, or defines
 // differently, is not given, and a warning names it, as it names one only the
 // base defines. lookup reads the environment OpenCode inherits, in which a
 // server's variables are checked (openCodePastableMcpServers) and never
-// recorded. When the servers cannot be read, the stage runs with none and a
-// warning says why. An error means the worktree is not a directory or there
-// is no environment to check.
+// recorded. When the servers cannot be read, as when origin cannot be asked,
+// the stage runs with none and a warning says why. An error means the
+// worktree is not a directory or there is no environment to check.
 func ProvisionOpenCode(ctx context.Context, worktree string, lookup func(string) (string, bool)) (OpenCodeProvision, error) {
 	var p OpenCodeProvision
 	if worktree == "" {
@@ -134,13 +135,14 @@ func ProvisionOpenCode(ctx context.Context, worktree string, lookup func(string)
 	worktreeServers := readPipelineMcpServers(root, files.read)
 	p.Warnings = append(append(p.Warnings, files.warnings...), walkWarnings...)
 
-	base, source, err := ReadBaseBranchMcpServers(ctx, root)
+	base, source, baseWarnings, err := ReadBaseBranchMcpServers(ctx, root)
 	if err != nil {
-		p.Warnings = append(p.Warnings, fmt.Sprintf("MCP servers: none are started, because they are read from the base branch and %v", err))
+		p.Warnings = append(p.Warnings, fmt.Sprintf("MCP servers: none are started, because they are read from origin's default branch and %v", err))
 		p.MCP = map[string]OpenCodeMcpServer{}
 		return p, nil
 	}
 	p.McpSource = source
+	p.Warnings = append(p.Warnings, baseWarnings...)
 	worktreeOnly, changed, baseOnly := compareMcpServers(worktreeServers, base)
 	if len(worktreeOnly) > 0 {
 		p.Warnings = append(p.Warnings, fmt.Sprintf("MCP servers only the worktree defines, not %s, are not started: %s", source, strings.Join(worktreeOnly, ", ")))

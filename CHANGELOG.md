@@ -70,11 +70,15 @@ changelog, and the release workflow refuses a tag that does not.
   with the baseline steering Codex stages get. Nightgauge reads none of it
   through a link out of the worktree, and writes nothing into the worktree.
   The MCP servers come from `.mcp.json` and `.claude/settings.json` on
-  `origin/main` or `origin/master`, so a server one stage adds to those files
-  is not started by the next; until #1638, a repository's `opencode.json` can
+  origin's default branch, as origin names it, at the tip origin reports, so a
+  server one stage adds to those files is not started by the next, even when
+  the stage repoints the repository's refs; a stage whose origin cannot be
+  reached gets none. Until #1638, a repository's `opencode.json` can
   still add one. Their credentials reach OpenCode only as `{env:VAR}`
-  references, and a server is left out, with a warning, when one of its
-  variables holds a value OpenCode cannot paste into its config (#1626)
+  references. A server is left out, with a warning, when one of its variables
+  holds a value OpenCode cannot paste into its config, and a dispatch whose
+  `ANTHROPIC_API_KEY` holds one, such as a key ending in a carriage return, is
+  refused (#1626)
 - An experimental `opencode` adapter runs stages through the OpenCode CLI, one
   adapter for local (LM Studio, Ollama) and hosted models. It refuses to
   dispatch unless `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` is set in the

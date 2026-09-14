@@ -72,7 +72,9 @@ import (
 //
 //   - A credential. The anthropic block reads its key as the reference
 //     {env:ANTHROPIC_API_KEY}, and an MCP server's variables are {env:VAR}
-//     references too, which OpenCode resolves in its own process.
+//     references too, which OpenCode resolves in its own process by pasting
+//     each value into the text unescaped, so a reference to a value it
+//     cannot paste refuses the dispatch (openCodeUnpastableRefs).
 //   - A model server's base URL. The environment reaches every tool a stage
 //     runs, so the URL is written to a 0600 file in the run's root, and the
 //     content names that file with a {file:...} reference, which 1.18.30
@@ -519,8 +521,11 @@ type openCodeAnthropicOptionsJSON struct {
 // endpoint nor a provider OpenCode's bundled catalog knows, a local one
 // included; an anthropic model whose entry it cannot pin: one the bundled
 // catalog does not list, or a fast-mode entry (openCodeAnthropicModelRefusal);
-// an endpoint whose limit.context or limit.output is 0 or missing; and a
-// repository instructions entry or MCP server it cannot write safely.
+// an endpoint whose limit.context or limit.output is 0 or missing; a
+// repository instructions entry or MCP server it cannot write safely; and
+// content holding a {env:NAME} whose variable holds a value OpenCode cannot
+// paste into its config text (openCodeUnpastableRefs), ANTHROPIC_API_KEY's
+// included.
 func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 	if in.Lookup == nil {
 		return OpenCodeRunConfig{}, errors.New("opencode config: no environment to check the provider's credential against")
@@ -659,8 +664,38 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 	if err != nil {
 		return OpenCodeRunConfig{}, fmt.Errorf("opencode config: %w", err)
 	}
+	if names := openCodeUnpastableRefs(string(raw), in.Lookup); len(names) > 0 {
+		return OpenCodeRunConfig{}, fmt.Errorf(
+			"opencode config: refused, because the value of %s holds a quote, a backslash, a control character or {file:, and OpenCode pastes a variable's value into its config text unescaped: the config would not parse, and OpenCode's error would print it with every credential it resolved in it, the MCP servers' included. "+
+				"Correct the value; one read from a file with CRLF line endings ends in a carriage return",
+			strings.Join(names, ", "))
+	}
 	built.Content = string(raw)
 	return built, nil
+}
+
+// openCodeEnvSubstitutionRE is the reference OpenCode 1.18.30 replaces with a
+// variable's value in its config text before it parses it (read from its
+// bundled source: /\{env:([^}]+)\}/g).
+var openCodeEnvSubstitutionRE = regexp.MustCompile(`\{env:([^}]+)\}`)
+
+// openCodeUnpastableRefs names, sorted, each variable a {env:NAME} in content
+// refers to whose value, as lookup reads the environment OpenCode inherits,
+// OpenCode cannot paste into the text (codexprovision.OpenCodeUnpastable).
+// One such value fails the parse of the whole config, and OpenCode's error
+// prints the text it substituted, with every value it resolved, so the
+// content is checked as a whole: ANTHROPIC_API_KEY as well as every MCP
+// server's variables, which ProvisionOpenCode has already checked server by
+// server.
+func openCodeUnpastableRefs(content string, lookup func(string) (string, bool)) []string {
+	var names []string
+	for _, m := range openCodeEnvSubstitutionRE.FindAllStringSubmatch(content, -1) {
+		if value, ok := lookup(m[1]); ok && codexprovision.OpenCodeUnpastable(value) {
+			names = append(names, m[1])
+		}
+	}
+	slices.Sort(names)
+	return slices.Compact(names)
 }
 
 // openCodeAnthropicModelRefusal refuses an anthropic model whose entry the
@@ -945,11 +980,12 @@ func OpenCodeEnvWithholdFor(model string) OpenCodeEnvWithhold {
 //
 // The config carries what the stage is given from the repository in
 // req.Run.WorktreeDir (codexprovision.ProvisionOpenCode): its steering as
-// instructions and the base branch's MCP servers, less any server a variable
-// of which holds, in req.Lookup, a value OpenCode cannot paste into its
-// config text. A dispatch without a worktree is refused, because it would run
-// with neither. A prepared run says on stderr what it is given and what it is
-// not.
+// instructions and the MCP servers of origin's default branch, less any
+// server a variable of which holds, in req.Lookup, a value OpenCode cannot
+// paste into its config text; a dispatch whose ANTHROPIC_API_KEY holds one is
+// refused (BuildOpenCodeConfig). A dispatch without a worktree is refused,
+// because it would run with neither. A prepared run says on stderr what it is
+// given and what it is not.
 //
 // Unless req.Settings opts into the operator's own OpenCode config, a
 // $HOME/.opencode holding config (openCodeHomeConfigRefusal) and the

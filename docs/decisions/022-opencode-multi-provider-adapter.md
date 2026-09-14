@@ -755,23 +755,34 @@ reports it `non_loopback: true`, as it does every hosted provider's model.
 - **MCP servers.** The per-run config's `mcp` holds the pipeline's MCP
   servers, the ones a Claude stage gets from `.mcp.json` and
   `.claude/settings.json`, and no others (#1626). They are read from the base
-  branch, `origin/main` or `origin/master`, not from the worktree: a server is
-  a command OpenCode runs or a URL it sends tool calls to, and a stage can
-  write its worktree, so a server one stage added to `.mcp.json` would
-  otherwise start in the next without review. A warning on stderr names a
-  server only the worktree defines, one it defines differently, and one only
-  the base branch defines. The read trusts the repository's refs, which every
-  worktree of the repository shares, not only the stages of one run, and
-  which a stage can write. `origin/HEAD`, which no fetch resets, is therefore
-  followed only to `origin/main` or `origin/master`: when it names another
-  branch, the stage gets no MCP server and the warning says why, so a
-  repository whose default branch has another name runs its OpenCode stages
-  without them. A stage that moves `origin/main` itself changes what every
-  later stage reads until a fetch resets it, and the warning naming a server
-  only the base branch defines is how that shows. Each `${VAR}` becomes
-  OpenCode's `{env:VAR}`, so no variable's value is in the content, and a
-  value already holding OpenCode's `{env:...}` or `{file:...}` syntax refuses
-  its server, because OpenCode would substitute it. OpenCode resolves a
+  branch, origin's default branch, not from the worktree: a server is a
+  command OpenCode runs or a URL it sends tool calls to, and a stage can write
+  its worktree, so a server one stage added to `.mcp.json` would otherwise
+  start in the next without review. A warning on stderr names a server only
+  the worktree defines, one it defines differently, and one only the base
+  branch defines. A stage can write the repository's refs as well, which
+  every worktree of the repository shares, not only the stages of one run, so
+  no ref of the repository names the base branch: origin does, asked the way
+  `git remote set-head origin --auto` asks it
+  (`git ls-remote --symref origin HEAD`), for at most 15 seconds. Neither
+  `origin/HEAD`, nor a remote-tracking ref for a branch origin does not have,
+  nor a local branch is read, because no fetch resets any of them, and each
+  would let one stage choose the servers of every later one; a warning names
+  an `origin/HEAD` that names another branch. The servers are read at the
+  commit origin reports as the branch's tip whenever the repository holds it,
+  with git's replacement objects (`refs/replace/`) off, so a stage that moves
+  `origin/main`, or replaces that commit, changes nothing. When origin has
+  moved on since the last fetch, they are read from the branch's
+  remote-tracking ref as last fetched, and a warning says it is behind; a
+  stage that moved that ref chooses them until a fetch resets it. A stage
+  whose origin cannot be asked, or whose repository has not fetched that
+  branch, gets no MCP server, and the warning says why without quoting
+  origin's URL, which can carry a credential. The read trusts the origin the repository's config names: a
+  stage can rewrite that too, and would change what every later fetch brings
+  with it. Each `${VAR}` becomes OpenCode's `{env:VAR}`, so no variable's
+  value is in the content, and a value already holding OpenCode's `{env:...}`
+  or `{file:...}` syntax refuses its server, because OpenCode would
+  substitute it. OpenCode resolves a
   `{env:VAR}` in its own process by pasting the variable's value into its
   config text before parsing it, unescaped (read from the 1.18.30 bundled
   source, and observed): a quote, a backslash or a control character in the
@@ -780,9 +791,14 @@ reports it `non_loopback: true`, as it does every hosted provider's model.
   the value is read as a file reference. So each variable a server names is
   checked in the environment the stage inherits, its value never recorded,
   and a server one of whose variables holds such a value is left out with a
-  warning naming the variable. A remote server is given `oauth: false`:
-  OpenCode's OAuth flow needs a browser login and a callback server on the
-  machine, which a headless stage cannot complete. The operator's own servers
+  warning naming the variable. The builder then checks every `{env:VAR}` the
+  finished content holds the same way, `{env:ANTHROPIC_API_KEY}` included,
+  and refuses the dispatch, naming the variable, when one holds such a value:
+  a key read from a file with CRLF line endings ends in a carriage return, and
+  would otherwise fail the parse and print every MCP credential beside it. A
+  remote server is given `oauth: false`: OpenCode's OAuth flow needs a browser
+  login and a callback server on the machine, which a headless stage cannot
+  complete. The operator's own servers
   stay out with the rest of their OpenCode config (`inherit_user_config`,
   below); a repository's `opencode.json` can still add a server of its own,
   which OpenCode starts beside these, until the tamper gate closes that route

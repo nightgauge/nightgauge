@@ -638,6 +638,50 @@ func TestOpenCodeConfigRefusesAnMcpServerItCannotWriteSafely(t *testing.T) {
 	}
 }
 
+// TestOpenCodeConfigRefusesAValueOpenCodeCannotPaste: OpenCode pastes each
+// {env:NAME}'s value into the config text unescaped before it parses it, so
+// one value it cannot paste fails the whole config, and its error prints the
+// text with every credential it resolved, the MCP servers' included. The
+// builder is the one writer of the content, so it refuses a dispatch while
+// any reference the content holds names such a value: ANTHROPIC_API_KEY ending
+// in a carriage return, as one read from a file with CRLF line endings does,
+// holding a quote, a backslash or {file:, or an MCP server's variable. The
+// refusal names the variable, never the value.
+func TestOpenCodeConfigRefusesAValueOpenCodeCannotPaste(t *testing.T) {
+	const value = "fixture-anthropic-value-1626"
+	run := RunOptions{Model: "anthropic/claude-sonnet-5", MaxTurns: 40}
+	for _, bad := range []string{value + "\r", value + `"`, value + `\x`, value + "{file:/nonexistent}"} {
+		built, err := buildOpenCodeConfigFor(t, config.OpenCodeConfig{}, run, map[string]string{"ANTHROPIC_API_KEY": bad})
+		switch {
+		case err == nil:
+			t.Errorf("ANTHROPIC_API_KEY %q: a config was built:\n%s", bad, built.Content)
+		case !strings.Contains(err.Error(), "ANTHROPIC_API_KEY") || strings.Contains(err.Error(), value):
+			t.Errorf("ANTHROPIC_API_KEY %q: the refusal should name the variable and not its value: %v", bad, err)
+		}
+	}
+
+	off := false
+	build := func(token string) (OpenCodeRunConfig, error) {
+		in, err := OpenCodeConfigInputFor(lmStudioSettings(), RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"}, goldenRunRoot,
+			envLookup(map[string]string{"MCP_FIXTURE_TOKEN": token}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		in.Repository = codexprovision.OpenCodeProvision{MCP: map[string]codexprovision.OpenCodeMcpServer{
+			"r": {Type: "remote", URL: "https://mcp.example.test/mcp", Headers: map[string]string{"Authorization": "Bearer {env:MCP_FIXTURE_TOKEN}"}, OAuth: &off, Enabled: true},
+		}}
+		return BuildOpenCodeConfig(in)
+	}
+	if built, err := build(value + "\n"); err == nil {
+		t.Errorf("an MCP server's variable holding a newline was written:\n%s", built.Content)
+	} else if !strings.Contains(err.Error(), "MCP_FIXTURE_TOKEN") || strings.Contains(err.Error(), value) {
+		t.Errorf("the refusal should name the variable and not its value: %v", err)
+	}
+	if _, err := build(value); err != nil {
+		t.Errorf("a value OpenCode can paste was refused: %v", err)
+	}
+}
+
 // TestOpenCodeAnthropicRequiresAPIKey: the builder refuses an anthropic/ model
 // while ANTHROPIC_API_KEY is unset or empty, naming the variable, the same
 // refusal PreDispatch makes, so the verb, which never calls PreDispatch,

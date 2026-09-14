@@ -6,9 +6,10 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
-	"slices"
 	"sort"
 	"strings"
+	"time"
+	"unicode"
 )
 
 // OpenCode MCP servers (ADR-022 § 15, #1626).
@@ -18,15 +19,15 @@ import (
 // per-run config (adapters.BuildOpenCodeConfig). Two things differ from the
 // Codex path, which reads the working tree and writes the servers verbatim:
 //
-//   - The servers come from the base branch, origin/main or origin/master. A
+//   - The servers come from the base branch, origin's default branch. A
 //     server is a command OpenCode runs or a URL it sends the stage's tool
 //     calls to, and a stage can write its own worktree, so a server one stage
 //     added to .mcp.json would otherwise run in the next stage without review.
-//     The refs are shared by every worktree of the repository, and a stage
-//     can write them too: origin/HEAD, which no fetch resets, is followed to
-//     origin/main or origin/master only (baseBranchRef), and a warning names
-//     each server the base defines and the worktree does not, which is how a
-//     moved origin/main shows until a fetch resets it.
+//     A stage can write the repository's refs too, which every worktree
+//     shares, so no ref of the repository names the branch: origin itself
+//     does (baseBranchRef), and the servers are read at the tip origin
+//     reports whenever the repository holds that commit, with git's
+//     replacement objects off (baseReadEnv).
 //   - Variable references are translated, never written as values. Claude
 //     expands ${VAR} and ${VAR:-default} in a server's command, args, env, url
 //     and headers, value by value; OpenCode 1.18.30 replaces each {env:VAR} in
@@ -37,10 +38,12 @@ import (
 //     holds OpenCode's own {env:...} or {file:...} syntax refuses its server:
 //     Claude passes such a value through as text, while OpenCode would read
 //     the variable, or the file, it names. And a server one of whose variables
-//     holds a value OpenCode cannot paste (openCodeUnpastable) is left out
+//     holds a value OpenCode cannot paste (OpenCodeUnpastable) is left out
 //     (openCodePastableMcpServers): that value would make the whole config
 //     fail to parse, and OpenCode's error prints the config it substituted,
-//     every other server's credentials in it.
+//     every other server's credentials in it. BuildOpenCodeConfig checks every
+//     {env:...} of the finished content the same way, the anthropic key's
+//     included, and refuses the dispatch when one names such a value.
 
 // OpenCodeMcpServer is one MCP server in opencode 1.18.30's config shape:
 // McpLocalConfig (type "local": command, cwd, environment) or McpRemoteConfig
@@ -180,20 +183,20 @@ func toOpenCodeMcpServer(s PipelineMcpServer) (OpenCodeMcpServer, []string, bool
 // openCodeEnvRefRE is a {env:VAR} reference as openCodeVarRefs writes it.
 var openCodeEnvRefRE = regexp.MustCompile(`\{env:([A-Za-z_][A-Za-z0-9_]*)\}`)
 
-// openCodeUnpastable reports whether OpenCode 1.18.30 cannot paste v, a
+// OpenCodeUnpastable reports whether OpenCode 1.18.30 cannot paste v, a
 // variable's value, into its config text in place of a {env:VAR}: a quote or
 // a backslash would end or escape the JSON string it lands in, a control
 // character cannot stand in one, and each makes the whole config fail to
 // parse; a {file:...} in it would be read as a file reference by the pass
 // that follows. A {env:...} in it is not substituted again, so it is text.
-func openCodeUnpastable(v string) bool {
+func OpenCodeUnpastable(v string) bool {
 	return strings.ContainsAny(v, `"\`) || strings.Contains(v, "{file:") ||
 		strings.IndexFunc(v, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0
 }
 
 // openCodePastableMcpServers leaves out each server with a {env:VAR} whose
 // variable, as lookup reads the environment OpenCode inherits, holds a value
-// OpenCode cannot paste into its config text (openCodeUnpastable). An unset
+// OpenCode cannot paste into its config text (OpenCodeUnpastable). An unset
 // variable reads as empty in OpenCode and keeps its server. The warnings name
 // the server and the variables, never a value.
 func openCodePastableMcpServers(servers map[string]OpenCodeMcpServer, lookup func(string) (string, bool)) (map[string]OpenCodeMcpServer, []string) {
@@ -216,7 +219,7 @@ func openCodePastableMcpServers(servers map[string]OpenCodeMcpServer, lookup fun
 		var unpastable []string
 		for _, v := range values {
 			for _, m := range openCodeEnvRefRE.FindAllStringSubmatch(v, -1) {
-				if value, ok := lookup(m[1]); ok && openCodeUnpastable(value) {
+				if value, ok := lookup(m[1]); ok && OpenCodeUnpastable(value) {
 					unpastable = append(unpastable, m[1])
 				}
 			}
@@ -259,33 +262,112 @@ func uniqueSorted(names []string) []string {
 	return out
 }
 
-// openCodeBaseBranches are the branches origin/HEAD may name for the MCP
-// servers to be read from it.
-var openCodeBaseBranches = []string{"refs/remotes/origin/main", "refs/remotes/origin/master"}
+// openCodeOriginTimeout bounds the question to origin about its default
+// branch, so an origin that does not answer holds a stage up no longer.
+const openCodeOriginTimeout = 15 * time.Second
 
-// baseBranchRef resolves the branch the MCP servers are read from: origin's
-// default branch as the repository records it (refs/remotes/origin/HEAD),
-// else origin/main or origin/master, else a local main or master. It returns
-// the full ref and a short name for messages. The refs are shared by every
-// worktree of the repository and no fetch resets origin/HEAD, so a stage in
-// any worktree could point it at a branch of its own for every later stage:
-// an origin/HEAD naming a branch other than origin/main or origin/master is
-// an error, and the stage gets no server.
-func baseBranchRef(ctx context.Context, top string) (ref, short string, err error) {
-	candidates := []string{"refs/remotes/origin/main", "refs/remotes/origin/master", "refs/heads/main", "refs/heads/master"}
+// baseReadEnv is the environment of every git command that reads the base:
+// git would otherwise read a replacement object (refs/replace/) in place of
+// the commit, tree or blob it replaces, and those refs, which every worktree
+// shares and no fetch resets, are a stage's to write as well.
+var baseReadEnv = []string{"GIT_NO_REPLACE_OBJECTS=1"}
+
+// baseBranch is where the MCP servers are read from.
+type baseBranch struct {
+	// rev is what the blobs are read at: origin's tip when the repository
+	// holds that commit, else the branch's remote-tracking ref.
+	rev string
+	// short names the branch for messages: origin/<branch>.
+	short string
+	// warnings are what the stage is told about the read, one line each.
+	warnings []string
+}
+
+// originDefaultBranch asks origin which branch its HEAD names, the question
+// `git remote set-head origin --auto` asks, and returns that branch and the
+// commit origin reports at its tip. Git's own error is not passed on, because
+// it can quote origin's URL, which can carry a credential.
+func originDefaultBranch(ctx context.Context, top string) (branch, tip string, err error) {
+	ctx, cancel := context.WithTimeout(ctx, openCodeOriginTimeout)
+	defer cancel()
+	out, err := gitOut(ctx, top, []string{"GIT_TERMINAL_PROMPT=0"}, "", "ls-remote", "--symref", "origin", "HEAD")
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", "", fmt.Errorf("origin could not be asked which branch that is: it did not answer within %s", openCodeOriginTimeout)
+		}
+		return "", "", errors.New("origin could not be asked which branch that is (`git ls-remote --symref origin HEAD` failed, and running it shows why)")
+	}
+	// The answer is "ref: refs/heads/<branch>\tHEAD" and "<commit>\tHEAD".
+	for _, line := range strings.Split(out, "\n") {
+		line, isSymref := strings.CutPrefix(line, "ref: ")
+		value, name, ok := strings.Cut(line, "\t")
+		switch {
+		case !ok || name != "HEAD":
+		case isSymref:
+			if b, isBranch := strings.CutPrefix(value, "refs/heads/"); isBranch {
+				branch = b
+			}
+		default:
+			tip = value
+		}
+	}
+	if branch == "" || strings.IndexFunc(branch, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 {
+		return "", "", errors.New("origin's HEAD names no branch")
+	}
+	if !isObjectID(tip) {
+		return "", "", fmt.Errorf("origin reports no commit at the tip of %s", branch)
+	}
+	return branch, tip, nil
+}
+
+// isObjectID reports whether s is a full SHA-1 or SHA-256 object id.
+func isObjectID(s string) bool {
+	if len(s) != 40 && len(s) != 64 {
+		return false
+	}
+	return strings.IndexFunc(s, func(r rune) bool { return !strings.ContainsRune("0123456789abcdef", r) }) < 0
+}
+
+// baseBranchRef resolves where the MCP servers are read from: origin's
+// default branch, as origin names it (originDefaultBranch), at the tip origin
+// reports when the repository holds that commit, else at the branch's
+// remote-tracking ref, with a warning that it is behind origin. No ref of the
+// repository chooses the branch: every worktree shares them and a stage can
+// write them, and neither origin/HEAD, a remote-tracking ref for a branch
+// origin does not have, nor a local branch is ever reset by a fetch, so any
+// of them would let one stage choose the servers of every later one. An
+// origin/HEAD that names another branch is named in a warning. A repository
+// whose origin cannot be asked gets no server.
+func baseBranchRef(ctx context.Context, top string) (baseBranch, error) {
+	branch, tip, err := originDefaultBranch(ctx, top)
+	if err != nil {
+		return baseBranch{}, err
+	}
+	b := baseBranch{short: "origin/" + branch}
+	tracking := "refs/remotes/origin/" + branch
 	if out, err := gitOut(ctx, top, nil, "", "symbolic-ref", "-q", "refs/remotes/origin/HEAD"); err == nil {
-		head := strings.TrimSpace(out)
-		if !slices.Contains(openCodeBaseBranches, head) {
-			return "", "", fmt.Errorf("origin/HEAD names %s, not origin/main or origin/master, the only branches they are read from, because any worktree of the repository can repoint origin/HEAD and no fetch resets it (`git remote set-head origin --auto` restores it)", strings.TrimPrefix(head, "refs/remotes/"))
-		}
-		candidates = append([]string{head}, candidates...)
-	}
-	for _, c := range candidates {
-		if _, err := gitOut(ctx, top, nil, "", "rev-parse", "-q", "--verify", c+"^{commit}"); err == nil {
-			return c, strings.TrimPrefix(strings.TrimPrefix(c, "refs/remotes/"), "refs/heads/"), nil
+		if head := strings.TrimSpace(out); head != tracking {
+			b.warnings = append(b.warnings, fmt.Sprintf(
+				"MCP servers: origin/HEAD names %s, but origin names %s as its default branch, so they are read from %s (`git remote set-head origin --auto` records origin's)",
+				strings.TrimPrefix(head, "refs/remotes/"), branch, b.short))
 		}
 	}
-	return "", "", errors.New("the repository has no origin/HEAD, origin/main, origin/master, main or master to read them from")
+	isCommit := func(rev string) bool {
+		_, err := gitOut(ctx, top, baseReadEnv, "", "rev-parse", "-q", "--verify", rev+"^{commit}")
+		return err == nil
+	}
+	switch {
+	case isCommit(tip):
+		b.rev = tip
+	case isCommit(tracking):
+		b.rev = tracking
+		b.warnings = append(b.warnings, fmt.Sprintf(
+			"MCP servers: %s is behind origin, whose tip the repository does not hold yet, so they are read from %s as it was last fetched (`git fetch origin %s` brings them up to date)",
+			b.short, b.short, branch))
+	default:
+		return baseBranch{}, fmt.Errorf("the repository has not fetched %s (`git fetch origin %s`)", b.short, branch)
+	}
+	return b, nil
 }
 
 // mcpSourceFiles are the files the pipeline's MCP servers come from, in the
@@ -295,39 +377,40 @@ var mcpSourceFiles = []string{".claude/settings.json", ".mcp.json"}
 // ReadBaseBranchMcpServers reads the pipeline's MCP servers as
 // ReadPipelineMcpServers does, .mcp.json over .claude/settings.json's
 // mcpServers, from the base branch's blobs (baseBranchRef) instead of the
-// working tree, and returns the short name of the branch it read. A file the
-// branch does not track, or tracks as anything but a regular file (a symbolic
-// link is never followed), contributes nothing. An error means the servers
-// could not be read at all.
-func ReadBaseBranchMcpServers(ctx context.Context, worktree string) (map[string]PipelineMcpServer, string, error) {
+// working tree, and returns the short name of the branch it read, such as
+// origin/main, and the warnings the read gives. A file the branch does not
+// track, or tracks as anything but a regular file (a symbolic link is never
+// followed), contributes nothing. An error means the servers could not be
+// read at all.
+func ReadBaseBranchMcpServers(ctx context.Context, worktree string) (servers map[string]PipelineMcpServer, source string, warnings []string, err error) {
 	top, err := gitOut(ctx, worktree, nil, "", "rev-parse", "--show-toplevel")
 	if err != nil {
-		return nil, "", fmt.Errorf("%s is not a git working tree", worktree)
+		return nil, "", nil, fmt.Errorf("%s is not a git working tree", worktree)
 	}
 	top = strings.TrimSpace(top)
-	ref, short, err := baseBranchRef(ctx, top)
+	base, err := baseBranchRef(ctx, top)
 	if err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
 	merged := map[string]PipelineMcpServer{}
 	for _, path := range mcpSourceFiles {
-		listing, err := gitOut(ctx, top, nil, "", "ls-tree", "-z", "--full-tree", ref, "--", path)
+		listing, err := gitOut(ctx, top, baseReadEnv, "", "ls-tree", "-z", "--full-tree", base.rev, "--", path)
 		if err != nil {
-			return nil, short, fmt.Errorf("list %s on %s: %w", path, short, err)
+			return nil, base.short, nil, fmt.Errorf("list %s on %s: %w", path, base.short, err)
 		}
 		oid, ok := regularBlob(listing, path)
 		if !ok {
 			continue
 		}
-		raw, err := gitOut(ctx, top, nil, "", "cat-file", "blob", oid)
+		raw, err := gitOut(ctx, top, baseReadEnv, "", "cat-file", "blob", oid)
 		if err != nil {
-			return nil, short, fmt.Errorf("read %s on %s: %w", path, short, err)
+			return nil, base.short, nil, fmt.Errorf("read %s on %s: %w", path, base.short, err)
 		}
 		for k, v := range extractServersFromJSON([]byte(raw)) {
 			merged[k] = v
 		}
 	}
-	return merged, short, nil
+	return merged, base.short, base.warnings, nil
 }
 
 // regularBlob returns the object id `git ls-tree -z` lists for path when it is
