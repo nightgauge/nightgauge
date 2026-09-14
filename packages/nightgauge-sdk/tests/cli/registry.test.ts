@@ -148,10 +148,11 @@ describe("defaultRegistry completeness", () => {
     "ollama",
     "copilot",
     "grok",
+    "opencode",
   ];
 
   it("contains exactly the registered adapters", () => {
-    expect(defaultRegistry.getAll()).toHaveLength(9);
+    expect(defaultRegistry.getAll()).toHaveLength(10);
   });
 
   it("has() returns true for every NightgaugeAdapter name", () => {
@@ -232,12 +233,13 @@ describe("multi-tool adapter lookup", () => {
     }
 
     // Verify the matrix has entries for all adapters
-    expect(Object.keys(matrix)).toHaveLength(9);
+    expect(Object.keys(matrix)).toHaveLength(10);
 
     // Claude adapters offload to native workflows; everything else fans out.
     expect(matrix["claude-sdk"]).toBe("native-workflow");
     expect(matrix["claude-headless"]).toBe("native-workflow");
     expect(matrix["codex"]).toBe("sdk-fanout");
     expect(matrix["lm-studio"]).toBe("sdk-fanout");
+    expect(matrix["opencode"]).toBe("sdk-fanout");
   });
 });

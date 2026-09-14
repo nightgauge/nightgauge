@@ -662,6 +662,7 @@ export class PipelineOrchestrator {
     if (!this.isRunning) {
       this.newEmitter(issueNumber);
     }
+    const { signal: abortSignal, release } = this.stageAbort();
 
     try {
       // The ONE selection point: fan-out via the WorkflowExecutor, or the
@@ -690,6 +691,7 @@ export class PipelineOrchestrator {
         cwd: this.config.cwd,
         timeoutMs: this.config.stageTimeoutMs,
         resumeSessionId: options?.resumeSessionId,
+        abortSignal,
       })) {
         messages.push(message);
       }
@@ -710,6 +712,8 @@ export class PipelineOrchestrator {
         messages,
         error: error instanceof Error ? error : new Error(String(error)),
       };
+    } finally {
+      release();
     }
   }
 
@@ -733,16 +737,42 @@ export class PipelineOrchestrator {
 
     const prompt = await buildStagePrompt(stage, issueNumber, this.config.skillsPath);
 
-    yield* this.executor.execute({
-      stage,
-      issueNumber,
-      prompt,
-      model: this.config.defaultModel,
-      adapter: this.config.adapter,
-      maxTurns: this.config.maxTurnsPerStage,
-      cwd: this.config.cwd,
-      timeoutMs: this.config.stageTimeoutMs,
-    });
+    const { signal: abortSignal, release } = this.stageAbort();
+    try {
+      yield* this.executor.execute({
+        stage,
+        issueNumber,
+        prompt,
+        model: this.config.defaultModel,
+        adapter: this.config.adapter,
+        maxTurns: this.config.maxTurnsPerStage,
+        cwd: this.config.cwd,
+        timeoutMs: this.config.stageTimeoutMs,
+        abortSignal,
+      });
+    } finally {
+      release();
+    }
+  }
+
+  /**
+   * The signal {@link stop} fires for a stage: the run's, or, for a stage run
+   * on its own, one of the stage's own that `release` drops again. The
+   * executor hands it to the query, so stop() reaches a query that honours
+   * it, such as the opencode adapter's process group. @see Issue #1637
+   */
+  private stageAbort(): { signal: AbortSignal; release: () => void } {
+    if (this.abortController) {
+      return { signal: this.abortController.signal, release: () => {} };
+    }
+    const controller = new AbortController();
+    this.abortController = controller;
+    return {
+      signal: controller.signal,
+      release: () => {
+        if (this.abortController === controller) this.abortController = null;
+      },
+    };
   }
 
   /**

@@ -102,12 +102,13 @@ describe("defaultRegistry", () => {
     "ollama",
     "copilot",
     "grok",
+    "opencode",
   ];
 
   it("should contain all built-in adapters", () => {
     const names = defaultRegistry.getNames();
 
-    expect(names).toHaveLength(9);
+    expect(names).toHaveLength(10);
     for (const name of expectedNames) {
       expect(names).toContain(name);
     }

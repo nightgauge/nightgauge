@@ -1683,3 +1683,169 @@ func TestParseOpenCodeRealCaptureSubagent(t *testing.T) {
 		}
 	}
 }
+
+// ── #1637 shared Go/TS expectations ──────────────────────────────────────
+
+// openCodeExpectedTokens is one usage record of opencode_stream_expected.json,
+// with OpenCode's five disjoint pools.
+type openCodeExpectedTokens struct {
+	Input      int `json:"input"`
+	Output     int `json:"output"`
+	Reasoning  int `json:"reasoning"`
+	CacheRead  int `json:"cache_read"`
+	CacheWrite int `json:"cache_write"`
+}
+
+// openCodeExpectedFixture is one capture's entry of
+// testdata/opencode_stream_expected.json: what the stream parser reports, the
+// failure marker each set of allowed tools gets, and, for a capture whose
+// session exports were recorded, what the subagent fold, the served model and
+// the stage's cost come to. The SDK parser
+// (packages/nightgauge-sdk/src/cli/adapters/opencodeStream.ts) asserts the
+// same file, so both languages check one set of numbers.
+type openCodeExpectedFixture struct {
+	Dispatched string `json:"dispatched"`
+	Stream     struct {
+		SessionID         string                 `json:"session_id"`
+		StepFinishes      int                    `json:"step_finishes"`
+		Tokens            openCodeExpectedTokens `json:"tokens"`
+		PeakStepInput     int                    `json:"peak_step_input"`
+		ReportedCostUSD   float64                `json:"reported_cost_usd"`
+		RejectedToolCalls int                    `json:"rejected_tool_calls"`
+	} `json:"stream"`
+	Stderr   *string `json:"stderr"`
+	Failures []struct {
+		AllowedTools []string `json:"allowed_tools"`
+		Marker       string   `json:"marker"`
+	} `json:"failures"`
+	Fold *struct {
+		Sessions []struct {
+			ID       string                 `json:"id"`
+			Parent   string                 `json:"parent"`
+			Tokens   openCodeExpectedTokens `json:"tokens"`
+			Cost     float64                `json:"cost"`
+			Provider string                 `json:"provider"`
+			Model    string                 `json:"model"`
+		} `json:"sessions"`
+		Tokens openCodeExpectedTokens `json:"tokens"`
+		Served struct {
+			Provider string `json:"provider"`
+			Model    string `json:"model"`
+			Upstream string `json:"upstream"`
+		} `json:"served"`
+		// StageCostUSD is null for an unstamped stage.
+		StageCostUSD *float64 `json:"stage_cost_usd"`
+	} `json:"fold"`
+}
+
+// TestOpenCodeSharedExpectations holds the Go parser to
+// testdata/opencode_stream_expected.json, which the SDK's opencodeStream
+// tests read too: every opencode capture in testdata has an entry, and for
+// each the parser's totals, peak step prompt, session and OpenCode's reported
+// cost, the classification marker of its auto-reject notice, and the folded
+// usage, served model and ADR-022 § 3 cost of the stage are the file's.
+func TestOpenCodeSharedExpectations(t *testing.T) {
+	var expected struct {
+		OpenCodeVersion string                             `json:"opencode_version"`
+		Fixtures        map[string]openCodeExpectedFixture `json:"fixtures"`
+	}
+	if err := json.Unmarshal([]byte(readTestdata(t, "opencode_stream_expected.json")), &expected); err != nil {
+		t.Fatal(err)
+	}
+	if expected.OpenCodeVersion != "1.18.30" {
+		t.Errorf("expectations are for opencode %q; the captures are 1.18.30's", expected.OpenCodeVersion)
+	}
+	captures, err := filepath.Glob(filepath.Join("testdata", "opencode_*.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(captures) == 0 {
+		t.Fatal("no opencode capture in testdata")
+	}
+	for _, path := range captures {
+		if _, ok := expected.Fixtures[filepath.Base(path)]; !ok {
+			t.Errorf("%s has no entry in opencode_stream_expected.json", filepath.Base(path))
+		}
+	}
+
+	for name, fx := range expected.Fixtures {
+		t.Run(name, func(t *testing.T) {
+			acc := parseOpenCode(openCodeFixtureLines(t, name))
+			s := acc.OpenCode()
+			want := fx.Stream
+			if s.SessionID != want.SessionID || s.StepFinishes != want.StepFinishes {
+				t.Errorf("session/steps = %q/%d, want %q/%d", s.SessionID, s.StepFinishes, want.SessionID, want.StepFinishes)
+			}
+			if acc.InputTokens != want.Tokens.Input || acc.OutputTokens != want.Tokens.Output+want.Tokens.Reasoning ||
+				acc.CacheRead != want.Tokens.CacheRead || acc.CacheCreated != want.Tokens.CacheWrite {
+				t.Errorf("input/output+reasoning/cache read/cache write = %d/%d/%d/%d, want %d/%d/%d/%d",
+					acc.InputTokens, acc.OutputTokens, acc.CacheRead, acc.CacheCreated,
+					want.Tokens.Input, want.Tokens.Output+want.Tokens.Reasoning, want.Tokens.CacheRead, want.Tokens.CacheWrite)
+			}
+			if acc.PeakStepInputTokens != want.PeakStepInput {
+				t.Errorf("peak step prompt = %d, want %d", acc.PeakStepInputTokens, want.PeakStepInput)
+			}
+			if !closeUSD(s.ReportedCostUSD, want.ReportedCostUSD) || s.RejectedToolCalls != want.RejectedToolCalls {
+				t.Errorf("reported cost/rejected calls = %v/%d, want %v/%d",
+					s.ReportedCostUSD, s.RejectedToolCalls, want.ReportedCostUSD, want.RejectedToolCalls)
+			}
+			s.Finish(0)
+			if markers := s.DriftMarkers(); len(markers) != 0 {
+				t.Errorf("a real capture produced drift markers: %q", markers)
+			}
+
+			stdout := readTestdata(t, name)
+			if fx.Stderr == nil {
+				if len(fx.Failures) != 0 {
+					t.Fatalf("failures without a stderr capture: %+v", fx.Failures)
+				}
+				staged, _ := openCodeStageRun(t, stdout, "", 0, nil, nil)
+				if staged.ExitCode != 0 {
+					t.Errorf("exit %d, stderr %q; the capture is a clean run", staged.ExitCode, staged.Stderr)
+				}
+			}
+			for _, f := range fx.Failures {
+				staged, _ := openCodeStageRun(t, stdout, readTestdata(t, *fx.Stderr), 0, f.AllowedTools, nil)
+				if staged.ExitCode != 1 || !strings.HasSuffix(staged.Stderr, f.Marker+"\n") {
+					t.Errorf("allowed %q: exit %d, stderr %q; want exit 1 ending in %q", f.AllowedTools, staged.ExitCode, staged.Stderr, f.Marker)
+				}
+			}
+
+			if fx.Fold == nil {
+				return
+			}
+			var sessions []openCodeCaptureSession
+			for _, sess := range fx.Fold.Sessions {
+				tk := sess.Tokens
+				sessions = append(sessions, openCodeCaptureSession{
+					id: sess.ID, parent: sess.Parent, cost: sess.Cost, provider: sess.Provider, model: sess.Model,
+					tokens: openCodeTokens(tk.Input, tk.Output, tk.Reasoning, tk.CacheRead, tk.CacheWrite),
+				})
+			}
+			_, result, _ := replayOpenCodeFold(t, name, fx.Dispatched, sessions)
+			fold := fx.Fold
+			if result.InputTokens != fold.Tokens.Input || result.OutputTokens != fold.Tokens.Output+fold.Tokens.Reasoning ||
+				result.CacheReadTokens != fold.Tokens.CacheRead {
+				t.Errorf("folded input/output/cache read = %d/%d/%d, want %d/%d/%d", result.InputTokens, result.OutputTokens,
+					result.CacheReadTokens, fold.Tokens.Input, fold.Tokens.Output+fold.Tokens.Reasoning, fold.Tokens.CacheRead)
+			}
+			if result.ModelProvider != fold.Served.Provider || result.ServedModel != fold.Served.Model ||
+				result.UpstreamModel != fold.Served.Upstream {
+				t.Errorf("provider/served/upstream = %q/%q/%q, want %q/%q/%q", result.ModelProvider, result.ServedModel,
+					result.UpstreamModel, fold.Served.Provider, fold.Served.Model, fold.Served.Upstream)
+			}
+			// The production stamp: the adapter, opencode, with the served
+			// model's recorded form (ADR-022 § 3).
+			cost, stamped := tokens.CalculateCostFor("opencode", result.ServedModel, tokens.TokenCounts{
+				Input: result.InputTokens, Output: result.OutputTokens, CacheRead: result.CacheReadTokens,
+				CacheCreation5m: result.CacheCreation5mTokens, CacheCreation1h: result.CacheCreation1hTokens,
+			})
+			switch {
+			case fold.StageCostUSD == nil && stamped:
+				t.Errorf("cost = %v stamped; the file says the stage is unstamped", cost)
+			case fold.StageCostUSD != nil && (!stamped || !closeUSD(cost, *fold.StageCostUSD)):
+				t.Errorf("cost = %v, stamped = %v; want the stamped %v", cost, stamped, *fold.StageCostUSD)
+			}
+		})
+	}
+}
