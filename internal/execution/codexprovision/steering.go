@@ -118,21 +118,32 @@ func extractSummary(content string, maxLines int) string {
 	return strings.TrimSpace(strings.Join(result, "\n"))
 }
 
-// readProjectDescription summarises the repository's canonical agent contract:
-// the user part of AGENTS.md (the managed steering block is stripped first so
-// generated steering is never read back). CLAUDE.md is only a fallback, for a
-// repository with no usable AGENTS.md; a leading `@AGENTS.md` import is skipped
-// there because it is an adapter line, not a description (issue 1675).
-func readProjectDescription(projectRoot string) string {
+// repositorySteering picks the file that holds the repository's own agent
+// contract, by the rule every host's steering follows (issue 1675, ADR-022
+// § 8): AGENTS.md when it has content of its own once the managed steering
+// block is stripped, so generated steering is never read back; otherwise
+// CLAUDE.md, when anything is left of it without a leading `@AGENTS.md`
+// import, which is an adapter line and not a contract. It returns the file's
+// name and that content, trimmed, or two empty strings when neither applies.
+func repositorySteering(projectRoot string) (name, body string) {
 	if agentsMd, ok := readFileGracefully(filepath.Join(projectRoot, "AGENTS.md")); ok {
 		if userPart := strings.TrimSpace(stripManagedSteeringBlock(agentsMd)); userPart != "" {
-			return extractSummary(userPart, 50)
+			return "AGENTS.md", userPart
 		}
 	}
 	if claudeMd, ok := readFileGracefully(filepath.Join(projectRoot, "CLAUDE.md")); ok {
 		if body := strings.TrimSpace(stripLeadingAgentsImport(claudeMd)); body != "" {
-			return extractSummary(body, 50)
+			return "CLAUDE.md", body
 		}
+	}
+	return "", ""
+}
+
+// readProjectDescription summarises the repository's canonical agent contract
+// (repositorySteering).
+func readProjectDescription(projectRoot string) string {
+	if _, body := repositorySteering(projectRoot); body != "" {
+		return extractSummary(body, 50)
 	}
 	return ""
 }
@@ -184,17 +195,42 @@ func readGitWorkflow(projectRoot string) string {
 	return readFirstAvailable(40, filepath.Join(projectRoot, "docs", "GIT_WORKFLOW.md"))
 }
 
-// assembleSteeringContent builds the inner content of the AGENTS.md managed
-// block: provider-neutral baseline steering (project, standards, security, git
-// workflow, key rules). Mirrors CodexContextGenerator.assembleContent — stable
-// (no per-issue task; that arrives via the prompt) so regeneration is
+// steeringHost is a CLI the baseline steering is written for: its name for
+// the title, and the notice that says where the content lives.
+type steeringHost struct {
+	name   string
+	notice string
+}
+
+// codexSteering is written as a managed block into the working tree's
+// AGENTS.md (Provision); openCodeSteering is written to a file in the run's
+// own root and handed to OpenCode as an instructions entry
+// (ProvisionOpenCode), so it never enters the worktree.
+var (
+	codexSteering = steeringHost{
+		name: "Codex",
+		notice: "_This block is managed by the Nightgauge pipeline. Edits inside the_\n" +
+			"_markers are overwritten; add your own guidance outside them._\n",
+	}
+	openCodeSteering = steeringHost{
+		name: "OpenCode",
+		notice: "_Nightgauge writes this for every OpenCode stage from the repository's_\n" +
+			"_own documents. It is not a file in the repository._\n",
+	}
+)
+
+// assembleSteeringContent builds the provider-neutral baseline steering
+// (project, standards, security, git workflow, key rules) every host gets:
+// the inner content of Codex's AGENTS.md managed block, and the steering file
+// of an OpenCode run. It is the one source for both (#1626); only the title
+// and the notice name the host. Mirrors CodexContextGenerator.assembleContent
+// — stable (no per-issue task; that arrives via the prompt) so regeneration is
 // idempotent. It is never committed: see guard.go (issue 1675).
-func assembleSteeringContent(projectRoot string) string {
+func assembleSteeringContent(projectRoot string, host steeringHost) string {
 	var sections []string
 	sections = append(sections,
-		"# Nightgauge Pipeline Steering (Codex)\n",
-		"_This block is managed by the Nightgauge pipeline. Edits inside the_\n"+
-			"_markers are overwritten; add your own guidance outside them._\n",
+		"# Nightgauge Pipeline Steering ("+host.name+")\n",
+		host.notice,
 	)
 	if desc := readProjectDescription(projectRoot); desc != "" {
 		sections = append(sections, "## Project\n", desc+"\n")
@@ -279,5 +315,5 @@ func IsOnlyManagedSteeringChange(committed, working string) bool {
 // computeNextAgentsMd is the pure transform: given the existing AGENTS.md text
 // (hasExisting=false ≈ no file) and the project root, return the next AGENTS.md.
 func computeNextAgentsMd(existing string, hasExisting bool, projectRoot string) string {
-	return upsertManagedSteeringBlock(existing, hasExisting, assembleSteeringContent(projectRoot))
+	return upsertManagedSteeringBlock(existing, hasExisting, assembleSteeringContent(projectRoot, codexSteering))
 }

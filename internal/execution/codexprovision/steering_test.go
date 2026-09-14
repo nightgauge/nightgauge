@@ -90,7 +90,7 @@ func TestExtractSummary_CapsAtMaxLines(t *testing.T) {
 // --- assembleSteeringContent ---
 
 func TestAssembleSteeringContent_AlwaysHasHeaderAndRules(t *testing.T) {
-	got := assembleSteeringContent(t.TempDir()) // empty project — no source docs
+	got := assembleSteeringContent(t.TempDir(), codexSteering) // empty project — no source docs
 	assertContains(t, got, "# Nightgauge Pipeline Steering (Codex)")
 	assertContains(t, got, "## Key Rules")
 	assertContains(t, got, "Never push directly to main")
@@ -104,7 +104,7 @@ func TestAssembleSteeringContent_IncludesProjectAndStandards(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "standards", "security.md"), "# Security\nNo secrets.\n")
 	writeFile(t, filepath.Join(dir, "docs", "GIT_WORKFLOW.md"), "# Git\nBranch first.\n")
 
-	got := assembleSteeringContent(dir)
+	got := assembleSteeringContent(dir, codexSteering)
 	assertContains(t, got, "## Project")
 	assertContains(t, got, "My Project")
 	assertContains(t, got, "## Coding Standards")

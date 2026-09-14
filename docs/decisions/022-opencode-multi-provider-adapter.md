@@ -115,6 +115,8 @@ capture script and the full observation table are in
 | Read from the bundled source: a model with a `limit.input` compacts at `limit.input` less `compaction.reserved`, so a lower layer's `limit.input` moves the threshold          | § 7, § 8                   |
 | A repository `opencode.json` that gives `anthropic` a `baseURL` re-points `ANTHROPIC_API_KEY` to it unless `OPENCODE_CONFIG_CONTENT` sets one                                  | § 17                       |
 | An unknown key in `OPENCODE_CONFIG_CONTENT` is dropped without a word                                                                                                          | § 8                        |
+| An `instructions` entry naming the resolved path of the `AGENTS.md` OpenCode finds itself loads it once; read from the bundled source, the entry's name is a glob              | § 8                        |
+| `mcp` entries of the `local` and `remote` shapes parse in `OPENCODE_CONFIG_CONTENT`, and OpenCode resolves an `{env:VAR}` in them in its own process                           | § 8                        |
 
 The first contradiction changes § 8: once project config is disabled, which it
 must be (a repository must not grant itself permissions, plugins or providers),
@@ -193,7 +195,6 @@ has opted in.
 | failure classification     | #1624, #1631  |
 | output redaction           | #1624, #1678  |
 | project-config tamper gate | #1638         |
-| repository steering        | #1626         |
 | permission map             | #1638         |
 | safety plugin              | #1635, #1640  |
 | endpoint policy            | #1678, #1679  |
@@ -535,9 +536,10 @@ reports it `non_loopback: true`, as it does every hosted provider's model.
   provider the stage dispatches to (§ 1, § 17, § Endpoints), keyed by endpoint
   id; the locked keys of § 15; `enabled_providers` narrowed to the dispatched
   key; the limits, compaction policy, tool-output caps and steps cap; and
-  § 12's settings. The permission map (§ 9, #1638), the plugin list (#1635) and
-  the `instructions` entries and MCP servers (#1626) extend the same builder,
-  so there is no second writer. Observed on 1.18.30, OpenCode merges its
+  § 12's settings; and the repository's steering as `instructions` entries and
+  the pipeline's MCP servers (below, #1626). The permission map (§ 9, #1638)
+  and the plugin list (#1635) extend the same builder, so there is no second
+  writer. Observed on 1.18.30, OpenCode merges its
   config in this order, lowest first: the files in the XDG config directory,
   `OPENCODE_CONFIG`, the repository's files, the config directories
   (`OPENCODE_CONFIG_DIR` last among them), `OPENCODE_CONFIG_CONTENT`, and then,
@@ -562,8 +564,8 @@ reports it `non_loopback: true`, as it does every hosted provider's model.
   (#1638), and until then its warning line says so. Second, a model's
   `limit.input` decides its compaction threshold, so the endpoint's model
   block sets it (§ 7). Third, `instructions` are concatenated across layers,
-  not replaced, so the content's empty list removes none; the repository's
-  are the tamper gate's (#1638). Fourth, read from the 1.18.30 bundled source
+  not replaced, so the content's list removes none; the repository's are the
+  tamper gate's (#1638). Fourth, read from the 1.18.30 bundled source
   and observed, a model entry's `id` is the model name OpenCode sends and its
   `provider.npm` the SDK package it loads, both in place of the provider
   block's: with a repository entry giving the dispatched model an `id` of its
@@ -719,11 +721,44 @@ reports it `non_loopback: true`, as it does every hosted provider's model.
   when they have changed since, because a stage must not rewrite the config the
   next stage runs under (#1638).
 - **Steering.** Observed: that switch also hides the repository's `AGENTS.md`
-  and `CLAUDE.md`. The repository's steering therefore reaches OpenCode only as
-  an `instructions` entry with an absolute path into the worktree, which was
-  observed to load. #1626 applies the rule Codex and Gemini steering already
-  use: `AGENTS.md`, or `CLAUDE.md` without its `@AGENTS.md` import only when
-  `AGENTS.md` has no content of its own.
+  and `CLAUDE.md`. The repository's steering therefore reaches OpenCode only
+  as `instructions` entries, never because OpenCode finds it, and the per-run
+  config carries them whether the switch is set or not (#1626). Each is an
+  absolute path, the form observed to load in every configuration: the
+  repository's steering file, by the rule Codex and Gemini steering already
+  use (`AGENTS.md`, or `CLAUDE.md` without its `@AGENTS.md` import only when
+  `AGENTS.md` has no content of its own); every file it imports; and a file in
+  the run root's `nightgauge/` directory holding the baseline steering that
+  Codex's managed `AGENTS.md` block comes from, the one function both use.
+  Nothing is written into the worktree. Imports resolve as Claude Code
+  resolves them, relative to the importing file, up to three deep, and no
+  file is given twice, so a cycle ends. They stay inside the worktree: a URL,
+  a path in the home directory, an absolute path, one whose `..` leaves the
+  worktree and a symbolic link out of it are each left out with a warning on
+  stderr, so no file outside the repository reaches the model's prompt. Read
+  from the 1.18.30 bundled source, OpenCode loads an absolute entry by
+  globbing its last element in its directory, so an entry whose name holds a
+  character a pattern could read is left out too. Every path is written with
+  its symbolic links resolved, the form of the paths OpenCode finds itself,
+  so a file both name loads once.
+- **MCP servers.** The per-run config's `mcp` holds the pipeline's MCP
+  servers, the ones a Claude stage gets from `.mcp.json` and
+  `.claude/settings.json`, and no others (#1626). They are read from the base
+  branch, origin's default branch, not from the worktree: a server is a
+  command OpenCode runs or a URL it sends tool calls to, and a stage can write
+  its worktree, so a server one stage added would otherwise start in the next
+  without review. A warning on stderr names a server only the worktree
+  defines. The read trusts the repository's refs, which the stages of a run
+  share: a stage that moves origin's default branch there changes what the
+  next one reads. Each `${VAR}` becomes OpenCode's `{env:VAR}`, which OpenCode
+  resolves in its own process, so no variable's value is in the content, and
+  a value already holding OpenCode's `{env:...}` or `{file:...}` syntax
+  refuses its server, because OpenCode would substitute it. A remote server
+  is given `oauth: false`: OpenCode's OAuth flow needs a browser login and a
+  callback server on the machine, which a headless stage cannot complete. The
+  operator's own servers stay out with the rest of their OpenCode config
+  (`inherit_user_config`, below); a repository's `opencode.json` can still
+  add a server of its own, which the tamper gate closes (#1638).
 - **`--pure` is never passed.** It would also drop the Nightgauge plugin.
   Plugins are controlled by the per-run `plugin` list (the Nightgauge plugin
   and nothing else) and `OPENCODE_DISABLE_DEFAULT_PLUGINS=1`.
@@ -810,14 +845,12 @@ disabled (§ 8) drops it anyway.
   OpenCode finding a repository's `.agents/skills` by itself, which is § 8's
   rule anyway: Nightgauge renders a stage's skills (#1666), and OpenCode
   discovers nothing.
-- The repository's `CLAUDE.md` fallback reaches a run only once Nightgauge
-  injects it (§ 8, #1626), never because OpenCode finds it. Until then
-  `_PROMPT` hides it, so a repository whose only steering is `CLAUDE.md` runs
-  without its rules, and the enabled-dispatch warning's repository-steering
-  line says so.
-- `@imports` are not followed; OpenCode never followed them in any
-  configuration observed. Steering that depends on an import is inlined by
-  #1626's injection, which already strips the `@AGENTS.md` import line.
+- The repository's `CLAUDE.md` fallback reaches a run because Nightgauge
+  injects it (§ 8, #1626), never because OpenCode finds it: `_PROMPT` hides it
+  from OpenCode's own search.
+- OpenCode never followed an `@import` in any configuration observed.
+  Nightgauge resolves each into an `instructions` entry of its own (§ 8), and
+  skips the `@AGENTS.md` import line of a `CLAUDE.md` it gives.
 
 ### 12. Pipeline defaults for `snapshot`, `lsp` and `formatter`
 

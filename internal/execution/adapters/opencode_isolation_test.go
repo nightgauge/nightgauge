@@ -125,9 +125,8 @@ func TestOpenCodeIsolationEnv(t *testing.T) {
 // ~/.agents/skills out, are "1" on every spawn. The blanket
 // OPENCODE_DISABLE_CLAUDE_CODE is never set, because it would also drop what
 // ADR-022 § 11 keeps, and OPENCODE_DISABLE_PROJECT_CONFIG waits for the
-// steering injection (#1626, #1638), because it hides the repository's
-// AGENTS.md and CLAUDE.md. The names are literal here, so dropping one from
-// the adapter's list fails.
+// reviewed merge of the repository's opencode.json (#1638). The names are
+// literal here, so dropping one from the adapter's list fails.
 func TestOpenCodeDisableFlags(t *testing.T) {
 	env, err := OpenCodeIsolationEnv(OpenCodeIsolation{Root: "/r", Home: "/h", Lookup: envLookup(nil), GOOS: "linux", MachineConfigDir: "/m"})
 	if err != nil {
@@ -597,7 +596,7 @@ func TestOpenCodeRunStartsWithNoStoredLogin(t *testing.T) {
 	req := RunRootRequest{
 		ID:               testRunID,
 		MachineConfigDir: filepath.Join(home, ".nightgauge"),
-		Run:              RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b"},
+		Run:              RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b", WorktreeDir: t.TempDir()},
 	}
 	run, err := a.PrepareRunRoot(req)
 	if err != nil {
@@ -1022,7 +1021,7 @@ func TestOpenCodeRefusesManagedOpenCodeConfig(t *testing.T) {
 		filepath.Join(dir, "user", "ai.opencode.managed.plist"), filepath.Join(dir, "ai.opencode.managed.plist"),
 	}
 	a := &OpenCodeAdapter{managedConfig: files, settings: fixedOpenCodeSettings(lmStudioSettings())}
-	req := RunRootRequest{ID: testRunID, MachineConfigDir: t.TempDir(), Run: RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"}}
+	req := RunRootRequest{ID: testRunID, MachineConfigDir: t.TempDir(), Run: RunOptions{Model: "lmstudio/qwen/qwen3.8-27b", WorktreeDir: t.TempDir()}}
 	if _, err := a.PrepareRunRoot(req); err != nil {
 		t.Fatalf("with no managed config the dispatch was refused: %v", err)
 	}
@@ -1091,7 +1090,7 @@ func TestOpenCodeIsolationRefusalFollowsTheBlockTheRunIsBuiltFrom(t *testing.T) 
 		s.InheritUserConfig = reads == 1
 		return s, nil
 	}}
-	run := RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"}
+	run := RunOptions{Model: "lmstudio/qwen/qwen3.8-27b", WorktreeDir: t.TempDir()}
 	var root *RunRoot
 	var err error
 	stderr := captureAdapterStderr(t, func() {
@@ -1151,7 +1150,7 @@ func TestOpenCodeRefusesAHomeDotOpenCodeWithConfig(t *testing.T) {
 		t.Setenv(k, "")
 	}
 	a := &OpenCodeAdapter{managedConfig: []string{}, settings: fixedOpenCodeSettings(lmStudioSettings())}
-	req := RunRootRequest{ID: testRunID, MachineConfigDir: t.TempDir(), Run: RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"}}
+	req := RunRootRequest{ID: testRunID, MachineConfigDir: t.TempDir(), Run: RunOptions{Model: "lmstudio/qwen/qwen3.8-27b", WorktreeDir: t.TempDir()}}
 	t.Setenv(ExperimentalOpenCodeEnvVar, "1")
 	const sentinel = "home-config-content-sentinel-1616"
 	for _, entry := range []string{
@@ -1251,7 +1250,7 @@ func TestOpenCodePrepareRunRoot(t *testing.T) {
 	req := RunRootRequest{
 		ID:               testRunID,
 		MachineConfigDir: filepath.Join(home, ".nightgauge"),
-		Run:              RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b"},
+		Run:              RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b", WorktreeDir: t.TempDir()},
 	}
 	var first *RunRoot
 	stderr := captureAdapterStderr(t, func() { first, err = a.PrepareRunRoot(req) })

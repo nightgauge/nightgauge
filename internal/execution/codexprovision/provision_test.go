@@ -1,8 +1,13 @@
 package codexprovision
 
 import (
+	"context"
+	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -165,6 +170,98 @@ func TestProvision_CodexGolden(t *testing.T) {
 		if want := readFileOrFail(t, golden); got != want {
 			t.Errorf("%s differs from %s\n--- got ---\n%s\n--- want ---\n%s", c.got, golden, got, want)
 		}
+	}
+}
+
+// snapshotTree maps every path under dir, apart from the repository's .git,
+// to its mode and, for a file, its content, so a test can show that a call
+// wrote nothing there.
+func snapshotTree(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.Name() == ".git" {
+			return filepath.SkipDir
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		entry := info.Mode().String()
+		if info.Mode().IsRegular() {
+			b, err := os.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			entry += "\n" + string(b)
+		}
+		rel, _ := filepath.Rel(dir, p)
+		out[rel] = entry
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// TestProvisionOpenCode_SharesSteeringAndWritesNothing: an OpenCode stage's
+// steering comes from the function Codex's managed AGENTS.md block comes
+// from, under its own title and notice, and its delivery writes nothing into
+// the worktree: Provision, which the manager calls for every adapter, is a
+// no-op for opencode, and ProvisionOpenCode only reads. The repository's
+// steering reaches OpenCode as an instructions path instead.
+func TestProvisionOpenCode_SharesSteeringAndWritesNothing(t *testing.T) {
+	wt := openCodeRepo(t, nil)
+	writeSteeringFixture(t, wt)
+	t.Setenv("CODEX_HOME", filepath.Join(t.TempDir(), "codex-home"))
+	before := snapshotTree(t, wt)
+
+	if res, err := Provision("opencode", wt); err != nil || res.AgentsMdPath != "" || res.ConfigTomlPath != "" {
+		t.Fatalf("Provision(opencode) = %+v, %v; want a no-op", res, err)
+	}
+	p, err := ProvisionOpenCode(context.Background(), wt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after := snapshotTree(t, wt); !maps.Equal(before, after) {
+		for path, entry := range after {
+			if before[path] != entry {
+				t.Errorf("the worktree changed at %s", path)
+			}
+		}
+		for path := range before {
+			if _, ok := after[path]; !ok {
+				t.Errorf("the worktree lost %s", path)
+			}
+		}
+	}
+
+	root, err := filepath.EvalSymlinks(wt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(p.Instructions, []string{filepath.Join(root, "AGENTS.md")}) {
+		t.Errorf("Instructions = %v, want the worktree's AGENTS.md", p.Instructions)
+	}
+	head := func(h steeringHost) string {
+		return "# Nightgauge Pipeline Steering (" + h.name + ")\n\n" + h.notice + "\n"
+	}
+	codex := assembleSteeringContent(root, codexSteering)
+	if !strings.HasPrefix(p.Steering, head(openCodeSteering)) || !strings.HasPrefix(codex, head(codexSteering)) {
+		t.Fatalf("a steering does not open with its host's title and notice:\n%s", p.Steering)
+	}
+	if strings.TrimPrefix(p.Steering, head(openCodeSteering)) != strings.TrimPrefix(codex, head(codexSteering)) {
+		t.Errorf("the OpenCode steering's body differs from Codex's:\n--- opencode ---\n%s\n--- codex ---\n%s", p.Steering, codex)
+	}
+	for _, want := range []string{"Fixture Contract", "Use tabs.", "No secrets in code.", "Branch first.", "Never push directly to main"} {
+		assertContains(t, p.Steering, want)
+	}
+	if strings.Contains(p.Steering, "markers") {
+		t.Error("the OpenCode steering speaks of a managed block's markers, which it has none of")
 	}
 }
 

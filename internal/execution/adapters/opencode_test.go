@@ -280,17 +280,19 @@ func TestOpenCodeGate(t *testing.T) {
 // repository can add, including the three routes #1638 has yet to close, the
 // endpoint line names the other model and Ollama cloud models, and the
 // stage-limits line names the limits. The warning is also the only disclosure
-// of what the output redaction leaves in place, of a repository whose
-// steering does not load, and of the stage limits a run does not get, so
-// those lines name exactly what is redacted, which steering file is dropped
-// and which limit is missing.
+// of what the output redaction leaves in place and of the stage limits a run
+// does not get, so those lines name exactly what is redacted and which limit
+// is missing. Repository steering is no longer on it: the per-run config
+// names the repository's steering files as instructions (#1626).
 func TestOpenCodeWarningDisclosesWhereThePromptCanGo(t *testing.T) {
 	gaps := map[string]string{}
 	for _, c := range openCodeUnenforcedControls {
 		gaps[c.name] = c.gap
 	}
-	if _, ok := gaps["egress defaults"]; ok {
-		t.Error("the warning still lists egress defaults, which the per-run config enforces")
+	for _, enforced := range []string{"egress defaults", "repository steering"} {
+		if _, ok := gaps[enforced]; ok {
+			t.Errorf("the warning still lists %s, which the per-run config enforces", enforced)
+		}
 	}
 	for name, wants := range map[string][]string{
 		"project-config tamper gate": {
@@ -308,7 +310,6 @@ func TestOpenCodeWarningDisclosesWhereThePromptCanGo(t *testing.T) {
 			"only the values of the server password, GITHUB_TOKEN, GH_TOKEN, GITLAB_TOKEN",
 			"the dispatched provider", "every other secret the child holds", "stays in it",
 		},
-		"repository steering": {"AGENTS.md", "not its CLAUDE.md", "runs without it"},
 	} {
 		gap, ok := gaps[name]
 		if !ok {

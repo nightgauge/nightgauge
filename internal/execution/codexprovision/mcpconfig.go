@@ -11,6 +11,13 @@
 // The TypeScript modules are the reference behavior to mirror: managed-block
 // markers, user-wins-on-collision, control-char escaping, and the idempotent /
 // non-destructive merge semantics are kept byte-for-byte compatible. #4041
+//
+// OpenCode stages share the steering and the MCP sources (#1626) but are
+// provisioned without writing anything: ProvisionOpenCode reads the steering,
+// the repository's own steering files and the base branch's MCP servers, and
+// the opencode adapter's per-run config delivers them (opencode_steering.go,
+// opencode_mcp.go). The package keeps its name because the scheduler imports
+// it.
 package codexprovision
 
 import (
@@ -77,6 +84,14 @@ func extractServers(filePath string) map[string]PipelineMcpServer {
 	if err != nil {
 		return nil
 	}
+	return extractServersFromJSON(raw)
+}
+
+// extractServersFromJSON returns the `mcpServers` map of a JSON document, the
+// content of a file in the working tree (extractServers) or of a blob on the
+// base branch (ReadBaseBranchMcpServers), tolerating malformed JSON and
+// non-string env/header values.
+func extractServersFromJSON(raw []byte) map[string]PipelineMcpServer {
 	// Decode loosely so non-string env/header values (JSON numbers/booleans) are
 	// coerced rather than failing the whole parse (#4025 review #2/#8).
 	var root struct {

@@ -64,6 +64,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- An OpenCode stage now gets its repository's steering and the pipeline's MCP
+  servers. Its `AGENTS.md`, or the `CLAUDE.md` of a repository that has only
+  that, and the files it `@`-imports from inside the worktree reach the model
+  with the baseline steering Codex stages get, and nothing is written into the
+  worktree. The MCP servers come from the base branch's `.mcp.json` and
+  `.claude/settings.json`, so a server one stage adds is never started by the
+  next, and their credentials reach OpenCode only as `{env:VAR}` references
+  (#1626)
 - An experimental `opencode` adapter runs stages through the OpenCode CLI, one
   adapter for local (LM Studio, Ollama) and hosted models. It refuses to
   dispatch unless `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` is set in the

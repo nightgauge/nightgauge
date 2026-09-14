@@ -67,13 +67,13 @@ var openCodeXDGDirs = []struct{ env, dir string }{
 // openCodeDisableFlags are set to "1" on every spawn (ADR-022 § 10, § 11,
 // § 15). The blanket OPENCODE_DISABLE_CLAUDE_CODE is deliberately not one of
 // them: Nightgauge disables what it means to and no more. Nor is
-// OPENCODE_DISABLE_PROJECT_CONFIG yet: on 1.18.30 it also hides the
-// repository's AGENTS.md and CLAUDE.md, so it lands with the steering
-// injection that replaces them (#1626, #1638). Until then
-// OPENCODE_DISABLE_CLAUDE_CODE_PROMPT already hides the repository's
-// CLAUDE.md, as well as ~/.claude/CLAUDE.md, so a repository whose only
-// steering is CLAUDE.md runs without it; the "repository steering" warning
-// line says so.
+// OPENCODE_DISABLE_PROJECT_CONFIG yet: it lands with the reviewed merge of
+// the repository's opencode.json (#1638). On 1.18.30 it also hides the
+// repository's AGENTS.md and CLAUDE.md, which no longer matters, because the
+// per-run config names the repository's steering files as instructions
+// (#1626), which load either way; OPENCODE_DISABLE_CLAUDE_CODE_PROMPT hides
+// the CLAUDE.md fallback and ~/.claude/CLAUDE.md, and the injection brings the
+// repository's CLAUDE.md back.
 var openCodeDisableFlags = []string{
 	"OPENCODE_DISABLE_MODELS_FETCH",
 	"OPENCODE_DISABLE_AUTOUPDATE",
