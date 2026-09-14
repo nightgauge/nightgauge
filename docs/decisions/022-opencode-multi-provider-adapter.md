@@ -544,10 +544,12 @@ reports it `non_loopback: true`, as it does every hosted provider's model.
   read from the bundled source, an active console organization's remote config
   and the machine's managed config (below). `OPENCODE_CONFIG_CONTENT` wins
   over every layer below it for each key it sets, an inherited operator config
-  included, so no lower layer can change the model a stage on a declared
-  endpoint or on `anthropic` is sent as (the fourth rule below), a declared
-  endpoint's limits or base URL, the `anthropic` block's API root, or turn
-  sharing back on. A lower layer can add keys the content does not set, and
+  included, so no lower layer can change the `id` or `provider.npm` a
+  declared endpoint's or `anthropic`'s dispatched-model entry sets (the
+  fourth rule below), a declared endpoint's limits or base URL, the
+  `anthropic` block's API root, or turn sharing back on. Pinning those keys
+  does not pin the model actually served (see the fourth rule and § 15, § 17,
+  #1638). A lower layer can add keys the content does not set, and
   four merge rules needed more than setting a key. First, every merged
   `mode.<agent>` is merged over `agent.<agent>` after every layer and forced
   to `mode: "primary"`, so a lower layer's mode entry would win over the
@@ -567,12 +569,26 @@ reports it `non_loopback: true`, as it does every hosted provider's model.
   block's: with a repository entry giving the dispatched model an `id` of its
   own, a run sent that id to the endpoint. So the content's entry for the
   dispatched model sets both, to the model the stage names and the block's
-  package, for a declared endpoint and for `anthropic` (§ 17). A hosted
-  provider other than `anthropic` gets no block, so a lower layer's block for
-  it can still set its `baseURL` and the model its stage is sent as, which the
-  endpoint-policy warning line discloses. A hosted model's limits,
-  `anthropic`'s included, come from OpenCode's catalog, and a lower layer's
-  model entry can replace them, which the stage-limits warning line
+  package, for a declared endpoint and for `anthropic` (§ 17). Pinning `id`
+  and `provider.npm` does not pin the request `@ai-sdk/openai-compatible`
+  and the Anthropic SDK actually send: reproduced on 1.18.30, a repository
+  can add `options.model` to the same model entry
+  (`provider.<key>.models.<id>.options.model`) or to an agent's own options
+  (`agent.<name>.options.model`), or a variant, which merges last, and the
+  SDK spreads an unknown `providerOptions` key into the request body after
+  the pinned `id`, so the served model still changes. On `anthropic`, the
+  same options object can set `speed` or `fallbacks`, which the SDK turns
+  into its own beta headers. An agent's own `options.mcpServers` can also
+  give an MCP server an `authorizationToken` of `{env:ANTHROPIC_API_KEY}` (or
+  any other variable the run holds), which OpenCode resolves and sends to a
+  URL the repository names. None of these three routes touches a key this
+  config sets, so the fourth rule does not close them; #1638 is the control
+  that does, and until then the tamper-gate warning line discloses them. A
+  hosted provider other than `anthropic` gets no block, so a lower layer's
+  block for it can still set its `baseURL` and the model its stage is sent
+  as, which the endpoint-policy warning line discloses. A hosted model's
+  limits, `anthropic`'s included, come from OpenCode's catalog, and a lower
+  layer's model entry can replace them, which the stage-limits warning line
   discloses. The organization's config needs a console account in the session
   database, which starts empty in every run, and managed config refuses a
   dispatch, so without the opt-in a run reads no layer above the per-run
@@ -881,31 +897,31 @@ This ADR adds **security** and **privacy** as reasons for a pipeline default to
 be off. Each is allowed only with its reason recorded in this table and beside
 the setting. A **locked** row cannot be turned back on from any config tier.
 
-| Feature disabled or overridden           | Pipeline setting                                                                                                   | Reason    | Locked or overridable                                    |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | --------- | -------------------------------------------------------- |
-| Dispatch itself                          | `NIGHTGAUGE_EXPERIMENTAL_OPENCODE` gate                                                                            | security  | overridable by environment only, until #1643             |
-| Session share                            | `share: "disabled"`, `OPENCODE_DISABLE_SHARE=1`                                                                    | privacy   | locked                                                   |
-| Autoupdate                               | `autoupdate: false`, `OPENCODE_DISABLE_AUTOUPDATE=1`                                                               | security  | locked (§ 20 owns upgrades)                              |
-| Model-catalog fetch                      | `OPENCODE_DISABLE_MODELS_FETCH=1`                                                                                  | privacy   | locked                                                   |
-| LSP server download                      | `OPENCODE_DISABLE_LSP_DOWNLOAD=1`                                                                                  | security  | locked                                                   |
-| Default and third-party plugins          | `OPENCODE_DISABLE_DEFAULT_PLUGINS=1`; `plugin` lists Nightgauge's only                                             | security  | locked                                                   |
-| Repository project config                | `OPENCODE_DISABLE_PROJECT_CONFIG=1`; reviewed merge (§ 8)                                                          | security  | locked                                                   |
-| Operator's global OpenCode config        | `inherit_user_config: false`; `~/.opencode` and managed config refused (§ 8)                                       | security  | overridable; locked keys win over all but managed config |
-| Session titles                           | `agent.title.disable: true` (§ 10)                                                                                 | privacy   | locked                                                   |
-| A model other than the dispatched one    | `small_model`, every agent's `model`, and on an endpoint or `anthropic` the model's `id` and package, pinned       | security  | locked                                                   |
-| OAuth and subscription credentials       | never read (§ 17)                                                                                                  | security  | locked                                                   |
-| Operator's `~/.claude` prompt and skills | `OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1`, `_SKILLS=1`                                                               | privacy   | locked                                                   |
-| Operator's `~/.agents/skills`            | `OPENCODE_DISABLE_EXTERNAL_SKILLS=1` (§ 11)                                                                        | privacy   | locked                                                   |
-| Other model services' credentials        | every variable the catalog binds to another model service removed; forge and cloud platform credentials kept (§ 8) | security  | locked                                                   |
-| Provider base URLs from the environment  | `ANTHROPIC_BASE_URL` and `OPENAI_BASE_URL` removed (§ 8)                                                           | security  | locked                                                   |
-| Remote `instructions` and `skills.urls`  | refused                                                                                                            | security  | locked                                                   |
-| Inherited `OPENCODE_*` variables         | stripped                                                                                                           | security  | locked                                                   |
-| `webfetch`                               | `deny` unless the stage's allowed tools include it                                                                 | privacy   | overridable per stage, through allowed tools             |
-| `ask` permissions                        | never generated (§ 9)                                                                                              | security  | locked                                                   |
-| Auto-approve flags                       | never emitted                                                                                                      | security  | locked                                                   |
-| Listener, mDNS and CORS                  | `--port`, `--mdns` and `--cors` never passed to `run`                                                              | security  | locked                                                   |
-| Session import                           | not used                                                                                                           | security  | locked                                                   |
-| Snapshots                                | `snapshot: false`                                                                                                  | footprint | overridable                                              |
+| Feature disabled or overridden           | Pipeline setting                                                                                                   | Reason    | Locked or overridable                                                                                                 |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | --------- | --------------------------------------------------------------------------------------------------------------------- |
+| Dispatch itself                          | `NIGHTGAUGE_EXPERIMENTAL_OPENCODE` gate                                                                            | security  | overridable by environment only, until #1643                                                                          |
+| Session share                            | `share: "disabled"`, `OPENCODE_DISABLE_SHARE=1`                                                                    | privacy   | locked                                                                                                                |
+| Autoupdate                               | `autoupdate: false`, `OPENCODE_DISABLE_AUTOUPDATE=1`                                                               | security  | locked (§ 20 owns upgrades)                                                                                           |
+| Model-catalog fetch                      | `OPENCODE_DISABLE_MODELS_FETCH=1`                                                                                  | privacy   | locked                                                                                                                |
+| LSP server download                      | `OPENCODE_DISABLE_LSP_DOWNLOAD=1`                                                                                  | security  | locked                                                                                                                |
+| Default and third-party plugins          | `OPENCODE_DISABLE_DEFAULT_PLUGINS=1`; `plugin` lists Nightgauge's only                                             | security  | locked                                                                                                                |
+| Repository project config                | `OPENCODE_DISABLE_PROJECT_CONFIG=1`; reviewed merge (§ 8)                                                          | security  | locked                                                                                                                |
+| Operator's global OpenCode config        | `inherit_user_config: false`; `~/.opencode` and managed config refused (§ 8)                                       | security  | overridable; locked keys win over all but managed config                                                              |
+| Session titles                           | `agent.title.disable: true` (§ 10)                                                                                 | privacy   | locked                                                                                                                |
+| A model other than the dispatched one    | `small_model`, every agent's `model`, and on an endpoint or `anthropic` the model's `id` and package, pinned       | security  | locked (`id`/`provider.npm`); `options.model`, `speed`/`fallbacks` and `mcpServers` still route around it until #1638 |
+| OAuth and subscription credentials       | never read (§ 17)                                                                                                  | security  | locked                                                                                                                |
+| Operator's `~/.claude` prompt and skills | `OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1`, `_SKILLS=1`                                                               | privacy   | locked                                                                                                                |
+| Operator's `~/.agents/skills`            | `OPENCODE_DISABLE_EXTERNAL_SKILLS=1` (§ 11)                                                                        | privacy   | locked                                                                                                                |
+| Other model services' credentials        | every variable the catalog binds to another model service removed; forge and cloud platform credentials kept (§ 8) | security  | locked                                                                                                                |
+| Provider base URLs from the environment  | `ANTHROPIC_BASE_URL` and `OPENAI_BASE_URL` removed (§ 8)                                                           | security  | locked                                                                                                                |
+| Remote `instructions` and `skills.urls`  | refused                                                                                                            | security  | locked                                                                                                                |
+| Inherited `OPENCODE_*` variables         | stripped                                                                                                           | security  | locked                                                                                                                |
+| `webfetch`                               | `deny` unless the stage's allowed tools include it                                                                 | privacy   | overridable per stage, through allowed tools                                                                          |
+| `ask` permissions                        | never generated (§ 9)                                                                                              | security  | locked                                                                                                                |
+| Auto-approve flags                       | never emitted                                                                                                      | security  | locked                                                                                                                |
+| Listener, mDNS and CORS                  | `--port`, `--mdns` and `--cors` never passed to `run`                                                              | security  | locked                                                                                                                |
+| Session import                           | not used                                                                                                           | security  | locked                                                                                                                |
+| Snapshots                                | `snapshot: false`                                                                                                  | footprint | overridable                                                                                                           |
 
 The pinned models are `small_model` and the `model` of every agent: the hidden
 `title`, `compaction` and `summary` agents and every subagent the `task` tool
@@ -913,17 +929,25 @@ starts. Each of them decides where a model request carrying the stage's prompt
 or transcript goes, so none may name a model other than the one the stage
 names (§ 17). #1625 writes them into the per-run config, with the mode entry
 of every built-in primary agent and, for a declared endpoint or `anthropic`,
-the dispatched model's entry, whose `id` and `provider.npm` decide the model
-OpenCode sends and the package that sends it (§ 8). The project-config merge
+the dispatched model's entry, whose `id` and `provider.npm` pin the model
+name OpenCode looks up and the package that sends it, when nothing else sets
+`options.model` on that same entry (§ 8, § 17). The project-config merge
 drops a value the repository sets, with a warning (#1638); a value in an
 inherited operator config loses to them like every other locked key (§ 8).
-Until #1638, two gaps are disclosed rather than closed: a lower layer's
+Until #1638, several gaps are disclosed rather than closed: a lower layer's
 `mode.general` or `mode.explore` replaces that subagent's model, on the
 dispatched provider only, because the content cannot set those two mode
-entries without making the subagents primary agents; and a lower layer's
-block for a hosted provider other than `anthropic`, which the content gives
-no block, can send that provider's stage to another model, which the
-endpoint-policy warning line names (§ 8).
+entries without making the subagents primary agents; a lower layer's block
+for a hosted provider other than `anthropic`, which the content gives no
+block, can send that provider's stage to another model, which the
+endpoint-policy warning line names; and, without needing a block or mode
+entry at all, a repository can add `options.model` to the dispatched model's
+own entry or to an agent's own options, or a variant, and still change the
+served model without touching the pinned `id`, can add `options.speed` or
+`options.fallbacks` to the same entry on `anthropic` to turn fast mode or a
+server-side fallback on, and can give an agent `options.mcpServers` with an
+`authorizationToken` of `{env:ANTHROPIC_API_KEY}` to send that key to a URL
+of its own choosing — the tamper-gate warning line names all three (§ 8).
 
 ### 16. Orchestration capability
 
@@ -990,13 +1014,18 @@ starts empty, and no inherited login-bearing `OPENCODE_*` variable reaches the
 run. A login-bearing variable a later version adds is removed with the rest.
 Nor can the environment redirect the stage: `ANTHROPIC_BASE_URL` is removed
 (§ 8), because it would send the stage and its key to whatever server it
-names, a proxy serving a subscription included. Nor can a config: the
-`anthropic` block pins its SDK package and `baseURL` to Anthropic's API root,
-and its entry for the dispatched model pins the `id` OpenCode sends and the
-`provider.npm` it loads (#1625), so a repository or inherited provider block
-or model entry that names another server, model or package loses to it
-(§ 8). Observed on 1.18.30, a repository entry mapping `claude-sonnet-5` to
-another model id and package resolved to both without that pin.
+names, a proxy serving a subscription included. Nor can a config change the
+`baseURL` or the `id`/`provider.npm` it pins: the `anthropic` block pins its
+SDK package and `baseURL` to Anthropic's API root, and its entry for the
+dispatched model pins the `id` OpenCode sends and the `provider.npm` it loads
+(#1625), so a repository or inherited provider block or model entry that sets
+those same keys to another server, model or package loses to it (§ 8).
+Observed on 1.18.30, a repository entry mapping `claude-sonnet-5` to another
+model id and package resolved to both without that pin. Pinning those keys
+does not close every route to another model or server: see the fourth merge
+rule of § 8 and the `options.model`, `options.speed`/`options.fallbacks` and
+`options.mcpServers` gaps below, none of which sets `id`, `provider.npm` or
+`baseURL`.
 
 An entry in any config layer defines its model, so an `anthropic` model the
 per-run config cannot pin is refused before spawn, by the config builder and
@@ -1007,8 +1036,14 @@ OpenCode never compacts. The other is a fast-mode entry, such as
 under the base model's `id` with a `speed` option and an `anthropic-beta`
 header. Pinning the entry's own `id` sends a model Anthropic does not serve,
 and pinning the base model's `id` drops the option and the header, so the
-refusal names the base model. The catalog's `anthropic` models, and the `id`
-sent for each, are a snapshot read from the binary
+refusal names the base model. This is a naming refusal, not a control against
+fast mode itself: it blocks only a dispatch that names the fast-mode entry
+directly. A repository config can still add `options.speed` (or
+`options.fallbacks`) to the dispatched base model's own entry and get the
+same beta headers without naming a fast-mode entry at all; #1638 is what
+closes that route, and until then the tamper-gate warning line names it. The
+catalog's `anthropic` models, and the `id` sent for each, are a snapshot read
+from the binary
 (`internal/execution/adapters/opencode_catalog_anthropic.go`), which
 `TestOpenCodeAnthropicModelsMatchTheBinary` re-reads, checking as well that
 the pinned entry resolves every other model exactly as the catalog does. The
@@ -1016,7 +1051,11 @@ dispatched model's limits still come from the catalog, and a lower layer's
 entry can replace them, which the stage-limits warning line discloses. A
 block for another hosted provider can still name another `baseURL`, and send
 its stage to another model, which the endpoint-policy warning line discloses
-until #1678, #1679 and #1638.
+until #1678, #1679 and #1638. An agent's own `options.mcpServers` can give an
+MCP server an `authorizationToken` of `{env:ANTHROPIC_API_KEY}` (or any other
+variable the run holds), which OpenCode resolves and sends to a URL the
+repository names, a route the tamper-gate warning line also discloses until
+#1638.
 
 The requirement sees only the model a stage names. The target repository's
 `opencode.json`, `opencode.jsonc` and `.opencode/` still load, because the
@@ -1044,9 +1083,13 @@ to the dispatched model and loads the dispatched provider alone (#1625), and
 it wins over the repository's files for every key it sets (§ 8). What the
 repository can still do is add an agent of its own, or replace the `general`
 or `explore` subagent's model through a mode entry, and either model can only
-be on the dispatched provider; the project-config merge drops both (#1638),
-and until then the enabled-dispatch warning's project-config tamper-gate line
-names them.
+be on the dispatched provider; add `options.model` to the dispatched model's
+own entry or to an agent's own options, or a variant, and change the served
+model without touching the pinned `id`; and, on `anthropic`, add
+`options.speed` or `options.fallbacks` to that entry, or `options.mcpServers`
+with an `authorizationToken` referencing an environment variable the run
+holds. The project-config merge drops all of these (#1638), and until then
+the enabled-dispatch warning's project-config tamper-gate line names them.
 
 `nightgauge doctor` reports a subscription or OAuth login for `anthropic` in
 either source of OpenCode's stored logins as a finding (#1627): `auth.json` in

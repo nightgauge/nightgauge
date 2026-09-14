@@ -27,21 +27,40 @@ import (
 // Everything Nightgauge sets goes in OPENCODE_CONFIG_CONTENT. Observed on
 // opencode 1.18.30, that layer is merged after the run's XDG config file, the
 // repository's opencode.json and an inherited OPENCODE_CONFIG_DIR, and wins
-// over each of them for every key it sets. So none of them can change the
-// model a stage on a declared endpoint or on anthropic is sent as, or the SDK
-// package that sends it (the dispatched model's entry pins its id and
-// provider.npm, which 1.18.30 uses in place of the block's), a limit of a
-// declared endpoint's model, the endpoint's or the anthropic block's base
-// URL, or sharing. Only the machine's managed config sits above it, and
+// over each of them for every key it sets: the dispatched model's entry pins
+// its id and provider.npm (which 1.18.30 uses in place of the block's), a
+// declared endpoint's or the anthropic block's base URL and, for a declared
+// endpoint, its limits. None of them can change those fields, or turn
+// sharing back on. Only the machine's managed config sits above it, and
 // PrepareOpenCodeRun refuses a dispatch while one exists unless the operator
-// opted into their own config. A lower layer can still add keys this config
-// does not set, and three of them matter: a mode.general or mode.explore
-// entry, which 1.18.30 merges over that subagent's model and steps cap after
-// every layer (the content cannot set those two without making the subagents
-// primary); a block for a hosted provider other than anthropic, which this
-// config gives none, so the block can re-point that provider and send its
-// model as another; and a hosted model's limits, anthropic's included, which
-// come from OpenCode's catalog and which this config does not set. The
+// opted into their own config.
+//
+// Pinning those fields does not pin the model actually served, because a
+// lower layer can add keys this config does not set without touching the id
+// or provider.npm pins. Reproduced on opencode 1.18.30, a repository
+// opencode.json or .opencode/agent/*.md can still: set options.model on the
+// dispatched model's own entry (provider.<key>.models.<id>.options.model) or
+// on an agent (agent.<name>.options.model), or add a variant, which merges
+// last — @ai-sdk/openai-compatible spreads an unknown providerOptions key,
+// options.model included, into the request body after the pinned id, so the
+// request can still name another model; on anthropic, set options.speed or
+// options.fallbacks in the same place, which the SDK turns into its own beta
+// headers, turning on fast mode or a server-side fallback for the dispatched
+// model (openCodeAnthropicModelRefusal below only refuses naming a fast-mode
+// entry directly; it is not a control against options.speed on the base
+// model); and give an agent options.mcpServers with an authorizationToken of
+// "{env:ANTHROPIC_API_KEY}" (or another variable the run holds), which
+// OpenCode resolves and sends as an MCP authorization token to a URL the
+// repository names. #1638, the project-config tamper gate, is the control
+// that closes these three routes.
+//
+// A lower layer can also add a mode.general or mode.explore entry, which
+// 1.18.30 merges over that subagent's model and steps cap after every layer
+// (the content cannot set those two without making the subagents primary); a
+// block for a hosted provider other than anthropic, which this config gives
+// none, so the block can re-point that provider and send its model as
+// another; and a hosted model's limits, anthropic's included, which come
+// from OpenCode's catalog and which this config does not set. The
 // project-config tamper-gate, endpoint-policy and stage-limits warning lines
 // say so.
 //
@@ -397,8 +416,10 @@ type openCodeEndpointOptionsJSON struct {
 // openCodeModelJSON is a declared endpoint's model entry. On 1.18.30 a model
 // entry's id is the model name OpenCode sends, and its provider.npm is the SDK
 // package it loads for the model, both in place of the provider block's, so
-// the entry pins both: a lower layer's entry for the model cannot send the
-// stage to another model or package.
+// the entry pins both: a lower layer's own id or provider.npm for the model
+// loses to this one. That does not close the entry's own options.model (see
+// the file header comment and #1638): a lower layer can still add that key
+// without touching id or provider.npm.
 type openCodeModelJSON struct {
 	ID       string                    `json:"id"`
 	Provider openCodeModelProviderJSON `json:"provider"`
@@ -428,8 +449,10 @@ type openCodeLimitJSON struct {
 
 // openCodeAnthropicBlockJSON is the anthropic provider block: the SDK package,
 // the API root, the reference the API key is read from, and the dispatched
-// model's entry, so a lower layer can neither swap the package, re-point the
-// key, nor send the stage to another model.
+// model's entry, so a lower layer's own npm, baseURL or model id/provider.npm
+// for anthropic loses to these. It does not close the model entry's own
+// options (speed, fallbacks) or an agent's options.mcpServers; see the file
+// header comment and #1638.
 type openCodeAnthropicBlockJSON struct {
 	NPM     string                             `json:"npm"`
 	Options openCodeAnthropicOptionsJSON       `json:"options"`
@@ -449,7 +472,9 @@ type openCodeAnthropicOptionsJSON struct {
 //
 //   - model and small_model, and every agent's model, to the dispatched model,
 //     and default_agent to build, so no request carrying the stage's prompt or
-//     transcript goes to another model (ADR-022 § 15);
+//     transcript names another model (ADR-022 § 15). That pins the model
+//     string OpenCode looks up; it does not pin what is sent over the wire
+//     for it (see the file header comment and #1638);
 //   - enabled_providers to the dispatched provider key alone, so OpenCode
 //     loads no other provider from credentials the stage keeps for its tools
 //     (the forge tokens, AWS and Google Cloud) and not its own free one;
@@ -604,7 +629,12 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 // entry is one OpenCode derives from a base model and sends under the base
 // model's id with options and a header of its own: pinning the entry's own id
 // sends a model Anthropic does not serve, and pinning the base model's id
-// drops the options and the header, so it is refused for its base model.
+// drops the options and the header, so it is refused for its base model. This
+// is a naming refusal, not a control: it only blocks dispatching a model id
+// that names a fast-mode entry. A repository config can still set
+// options.speed or options.fallbacks on the dispatched base model's own
+// entry and turn the same beta headers on without naming the fast-mode entry
+// at all; #1638 is what closes that route.
 func openCodeAnthropicModelRefusal(model, modelID string) error {
 	served, listed := openCodeAnthropicModels[modelID]
 	switch {

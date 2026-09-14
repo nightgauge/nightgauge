@@ -236,16 +236,22 @@ changelog, and the release workflow refuses a tag that does not.
   autoupdate and session titles off, caps tool output, and caps the build
   agent's and each built-in subagent's steps at the stage's turn cap (200 when
   none is set). The repository's and an inherited OpenCode config cannot
-  change what it sets: not the model a stage on your local model server or on
-  Anthropic is sent as, or the SDK package that sends it, the local model's
-  limits and compaction threshold, the local server's or Anthropic's API
-  address, titles or sharing. They can still add settings: a `mode` entry can
-  still replace the `general` or `explore` subagent's model (on the stage's
-  provider) and steps cap, a block for another hosted provider can still send
-  its stage to another server or model, and a hosted model's limits can still
-  be set; the dispatch warning says so. A local model server's URL stays in a
-  private file, never in the stage's environment, and credentials appear only
-  as `{env:VAR}` references (#1625)
+  change the pinned `id`/`provider.npm` of the model entry a stage on your
+  local model server or on Anthropic uses, or the SDK package that sends it,
+  the local model's limits and compaction threshold, the local server's or
+  Anthropic's API address, titles or sharing. They can still add settings: a
+  `mode` entry can still replace the `general` or `explore` subagent's model
+  (on the stage's provider) and steps cap, a block for another hosted
+  provider can still send its stage to another server or model, a hosted
+  model's limits can still be set, and — without touching the pinned `id` —
+  an `options.model` on the dispatched model's own entry or an agent's own
+  options, or a variant, can still change the model actually served,
+  `options.speed`/`options.fallbacks` can still turn Anthropic's fast mode or
+  a server-side fallback on, and an agent's `options.mcpServers` can still
+  send `ANTHROPIC_API_KEY` as an MCP authorization token to a server it
+  names; the dispatch warning says so, and #1638 is what closes those three.
+  A local model server's URL stays in a private file, never in the stage's
+  environment, and credentials appear only as `{env:VAR}` references (#1625)
 - An OpenCode dispatch to a provider that runs on the forge's or a cloud
   platform's credentials, such as `github-copilot/*` on `GITHUB_TOKEN` or
   `google-vertex-anthropic/*`, is refused before spawn: those credentials can

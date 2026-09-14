@@ -266,13 +266,19 @@ func TestOpenCodeGate(t *testing.T) {
 // #1638, and they can add what the per-run config does not set: an agent or
 // subagent of their own, with its own model on the dispatched provider and no
 // steps cap, a remote instructions URL, or a provider header that carries an
-// environment variable to the model server. They and an inherited operator
-// config can also set a hosted model's limits, which the per-run config
-// leaves to the catalog, and the model a hosted provider other than anthropic
-// is sent as, which it gives no block. And an endpoint can forward: a local
-// Ollama serves its cloud models from Ollama's hosted service (§ 3,
-// § Endpoints). So the tamper-gate line names what the repository can add,
-// the endpoint line names the other model and Ollama cloud models, and the
+// environment variable to the model server. They can also add options.model
+// to the dispatched model's own entry or an agent's own options, or a
+// variant, and change the model actually served without touching the pinned
+// id; on anthropic, options.speed or options.fallbacks the same way; and an
+// agent's options.mcpServers can send ANTHROPIC_API_KEY, or another variable
+// the run holds, as an authorization token to a URL of their choosing. They
+// and an inherited operator config can also set a hosted model's limits,
+// which the per-run config leaves to the catalog, and the model a hosted
+// provider other than anthropic is sent as, which it gives no block. And an
+// endpoint can forward: a local Ollama serves its cloud models from Ollama's
+// hosted service (§ 3, § Endpoints). So the tamper-gate line names what the
+// repository can add, including the three routes #1638 has yet to close, the
+// endpoint line names the other model and Ollama cloud models, and the
 // stage-limits line names the limits. The warning is also the only disclosure
 // of what the output redaction leaves in place, of a repository whose
 // steering does not load, and of the stage limits a run does not get, so
@@ -290,7 +296,8 @@ func TestOpenCodeWarningDisclosesWhereThePromptCanGo(t *testing.T) {
 		"project-config tamper gate": {
 			"the target repository's opencode.json and .opencode/", "cannot change a key the per-run config sets",
 			"agent or subagent of their own", "no steps cap", "remote instructions URL", "header on the provider block",
-			"forge token",
+			"forge token", "options.model", "without touching the pinned id", "options.speed", "options.fallbacks",
+			"options.mcpServers", "ANTHROPIC_API_KEY",
 		},
 		"stage limits": {
 			"cost budget", "token cap on a hosted model", "steps cap",
