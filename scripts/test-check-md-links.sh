@@ -170,6 +170,10 @@ run_gate() { # run_gate <fixture> -> writes $TMP/out, returns the gate's exit
   MD_LINK_CHECK_FILES="$FIX/$1" bash "$GATE" > "$TMP/out" 2>&1
 }
 
+run_gate_with_config() { # run_gate_with_config <config> <fixture>
+  MD_LINK_CHECK_CONFIG="$1" MD_LINK_CHECK_FILES="$FIX/$2" bash "$GATE" > "$TMP/out" 2>&1
+}
+
 # --- Case 1: a dead relative link is fatal -----------------------------------
 run_gate dead-relative.md
 RC=$?
@@ -232,6 +236,82 @@ run_gate not-found.md
 RC=$?
 check "a 404 STILL fails the gate" "$([ "$RC" -ne 0 ] && echo 0 || echo 1)"
 check "a 404 is still classed dead" \
+  "$(grep -qE 'Link classes: [1-9]' "$TMP/out" && echo 0 || echo 1)"
+
+# --- Case 8: the Marketplace ignore entry is present and correctly scoped
+# (#1767) -----------------------------------------------------------------
+#
+# This suite must never request marketplace.visualstudio.com -- in ANY state,
+# including the regression state where the ignore entry has been removed,
+# because that removal is exactly what this test exists to catch, and a test
+# that only avoids the real host while the fix is intact would perform the
+# forbidden request the moment the regression it is guarding against actually
+# happens. So the pattern is checked statically: pure regex matching, against
+# the real listing URL (README.md) and a lookalike host that must NOT match,
+# never by handing the real hostname to markdown-link-check's network-checking
+# code path.
+MARKETPLACE_URL='https://marketplace.visualstudio.com/items?itemName=nightgauge.nightgauge-vscode'
+MARKETPLACE_LOOKALIKE='https://marketplace.visualstudio.com.evil-nxdomain.invalid/items'
+PATTERN_CHECK="$(python3 - "$REPO_ROOT/.markdown-link-check.json" \
+  "$MARKETPLACE_URL" "$MARKETPLACE_LOOKALIKE" <<'PYEOF'
+import json, re, sys
+config_path, real_url, lookalike_url = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(config_path) as f:
+    entries = json.load(f).get("ignorePatterns", [])
+matching = [e for e in entries if re.search(e["pattern"], real_url)]
+matches_real = bool(matching)
+matches_lookalike = any(re.search(e["pattern"], lookalike_url) for e in entries)
+has_comment = any(bool(e.get("comment")) for e in matching)
+print("real=%s lookalike=%s comment=%s" % (matches_real, matches_lookalike, has_comment))
+PYEOF
+)"
+check "the config ignores the real Marketplace listing URL" \
+  "$(printf '%s' "$PATTERN_CHECK" | grep -q 'real=True' && echo 0 || echo 1)"
+check "the ignore is host-scoped: a lookalike host does NOT match" \
+  "$(printf '%s' "$PATTERN_CHECK" | grep -q 'lookalike=False' && echo 0 || echo 1)"
+check "the matching ignore entry documents why, with a comment" \
+  "$(printf '%s' "$PATTERN_CHECK" | grep -q 'comment=True' && echo 0 || echo 1)"
+
+# --- Case 9: the ignore mechanism itself is never-requested, end-to-end -----
+#
+# Case 8 proves the shipped pattern is correct; this proves that a URL an
+# ignorePatterns entry matches is genuinely never handed to the network layer
+# at all (not merely "happens not to fail"), and that the SAME URL without a
+# matching entry is still checked and still fails -- entirely with local,
+# hermetic infrastructure, mirroring the shape of the real Marketplace ignore
+# without ever using its hostname. Reuses the case 5-7 stub's /status/404,
+# which answers a real, deterministic 404 to any client that reaches it.
+MARKETPLACE_STAND_IN_URL="http://127.0.0.1:${PORT}/status/404"
+printf '# case 9\n\n[a marketplace-shaped local listing](%s)\n' "$MARKETPLACE_STAND_IN_URL" \
+  > "$FIX/marketplace-stand-in.md"
+python3 - "$TMP/ignored-marketplace.json" "$PORT" <<'PYEOF'
+import json, sys
+path, port = sys.argv[1], sys.argv[2]
+config = {
+    "ignorePatterns": [
+        {
+            "pattern": r"^http://127\.0\.0\.1:%s/status/404$" % port,
+            "comment": "Test stand-in for a host-scoped ignore, mirroring #1767's Marketplace pattern shape."
+        }
+    ],
+    "aliveStatusCodes": [200, 206, 301, 302, 307, 308, 401, 403, 429]
+}
+with open(path, "w") as f:
+    json.dump(config, f)
+PYEOF
+
+run_gate_with_config "$TMP/ignored-marketplace.json" marketplace-stand-in.md
+RC=$?
+check "a URL matching a host-scoped ignore entry does not fail the gate" \
+  "$([ "$RC" -eq 0 ] && echo 0 || echo 1)"
+check "it is never classed dead/unreachable/alive (never requested, not just not-fatal)" \
+  "$(grep -qF 'Link classes: 0 dead, 0 unreachable-from-runner, 0 alive-after-reprobe' "$TMP/out" && echo 0 || echo 1)"
+
+run_gate marketplace-stand-in.md
+RC=$?
+check "the SAME URL without a matching ignore entry still fails the gate" \
+  "$([ "$RC" -ne 0 ] && echo 0 || echo 1)"
+check "and is classed dead -- the ignore is host-scoped, not a blanket exemption" \
   "$(grep -qE 'Link classes: [1-9]' "$TMP/out" && echo 0 || echo 1)"
 
 echo ""
