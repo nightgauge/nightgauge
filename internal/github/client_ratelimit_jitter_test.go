@@ -142,9 +142,19 @@ func TestRateLimitGate_GovernorSpreadsBurst(t *testing.T) {
 			last = ts
 		}
 	}
-	if spread := last.Sub(first); spread < (n-1)*interval {
-		t.Errorf("%d gated callers released within %s; want ≥ %s — they left the gate as one wave",
-			n, spread, (n-1)*interval)
+	// The governor schedules the nth release at slot = first-caller-time +
+	// (n-1)*interval and this goroutine measures both ends of that schedule
+	// with its own calls to time.Now(), so the measured spread carries the
+	// wall-clock's real granularity on top of the nominal schedule — observed
+	// short by up to ~150µs under -race load (nightgauge/nightgauge#1535).
+	// spreadTolerance absorbs that without weakening the assertion: a governor
+	// that fails to pace releases lands short by whole intervals (hundreds of
+	// milliseconds here), not by a couple of milliseconds.
+	const spreadTolerance = 5 * time.Millisecond
+	want := (n-1)*interval - spreadTolerance
+	if spread := last.Sub(first); spread < want {
+		t.Errorf("%d gated callers released within %s; want ≥ %s (≥ %s nominal, %s tolerance) — they left the gate as one wave",
+			n, spread, want, (n-1)*interval, spreadTolerance)
 	}
 
 	var opened []string
