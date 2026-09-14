@@ -1,0 +1,295 @@
+{
+  "opencode_version": "1.18.30",
+  "fixtures": {
+    "opencode_auto_reject_heredoc_stream.jsonl": {
+      "dispatched": "lmstudio/qwen/qwen3.8-27b",
+      "stream": {
+        "session_id": "ses_fixture0000000000000000001",
+        "step_finishes": 1,
+        "tokens": { "input": 1534, "output": 4, "reasoning": 0, "cache_read": 0, "cache_write": 0 },
+        "peak_step_input": 1534,
+        "reported_cost_usd": 0,
+        "rejected_tool_calls": 1
+      },
+      "stderr": "opencode_auto_reject_heredoc_stderr.txt",
+      "failures": [
+        {
+          "allowed_tools": ["Read", "Edit", "Bash"],
+          "marker": "[adapter-permission-rejected] tool=bash"
+        },
+        { "allowed_tools": ["Read"], "marker": "[permission-denied] tool=bash" }
+      ],
+      "fold": null
+    },
+    "opencode_auto_reject_stream.jsonl": {
+      "dispatched": "lmstudio/qwen/qwen3.8-27b",
+      "stream": {
+        "session_id": "ses_fixture0000000000000000001",
+        "step_finishes": 1,
+        "tokens": { "input": 1533, "output": 3, "reasoning": 0, "cache_read": 0, "cache_write": 0 },
+        "peak_step_input": 1533,
+        "reported_cost_usd": 0,
+        "rejected_tool_calls": 1
+      },
+      "stderr": "opencode_auto_reject_stderr.txt",
+      "failures": [
+        {
+          "allowed_tools": ["Read", "Edit", "Bash"],
+          "marker": "[adapter-permission-rejected] tool=bash"
+        },
+        { "allowed_tools": ["Read"], "marker": "[permission-denied] tool=bash" }
+      ],
+      "fold": null
+    },
+    "opencode_stream_cloud_capture.jsonl": {
+      "dispatched": "xai/grok-4.6",
+      "stream": {
+        "session_id": "ses_fixture0000000000000000001",
+        "step_finishes": 2,
+        "tokens": {
+          "input": 3089,
+          "output": 14,
+          "reasoning": 0,
+          "cache_read": 0,
+          "cache_write": 0
+        },
+        "peak_step_input": 1550,
+        "reported_cost_usd": 0.006262,
+        "rejected_tool_calls": 0
+      },
+      "stderr": null,
+      "failures": [],
+      "fold": {
+        "sessions": [
+          {
+            "id": "ses_fixture0000000000000000001",
+            "parent": "",
+            "tokens": {
+              "input": 3089,
+              "output": 14,
+              "reasoning": 0,
+              "cache_read": 0,
+              "cache_write": 0
+            },
+            "cost": 0.006262,
+            "provider": "xai",
+            "model": "grok-4.6"
+          }
+        ],
+        "tokens": {
+          "input": 3089,
+          "output": 14,
+          "reasoning": 0,
+          "cache_read": 0,
+          "cache_write": 0
+        },
+        "served": { "provider": "xai", "model": "grok-4.6", "upstream": "xai/grok-4.6" },
+        "stage_cost_usd": 0.00106454
+      }
+    },
+    "opencode_stream_local_capture.jsonl": {
+      "dispatched": "lmstudio/qwen/qwen3.8-27b",
+      "stream": {
+        "session_id": "ses_fixture0000000000000000001",
+        "step_finishes": 3,
+        "tokens": {
+          "input": 17365,
+          "output": 144,
+          "reasoning": 47,
+          "cache_read": 0,
+          "cache_write": 0
+        },
+        "peak_step_input": 5916,
+        "reported_cost_usd": 0,
+        "rejected_tool_calls": 0
+      },
+      "stderr": null,
+      "failures": [],
+      "fold": {
+        "sessions": [
+          {
+            "id": "ses_fixture0000000000000000001",
+            "parent": "",
+            "tokens": {
+              "input": 17365,
+              "output": 144,
+              "reasoning": 47,
+              "cache_read": 0,
+              "cache_write": 0
+            },
+            "cost": 0,
+            "provider": "lmstudio",
+            "model": "qwen/qwen3.8-27b"
+          }
+        ],
+        "tokens": {
+          "input": 17365,
+          "output": 144,
+          "reasoning": 47,
+          "cache_read": 0,
+          "cache_write": 0
+        },
+        "served": {
+          "provider": "lm-studio",
+          "model": "lm-studio/qwen/qwen3.8-27b",
+          "upstream": "lmstudio/qwen/qwen3.8-27b"
+        },
+        "stage_cost_usd": 0
+      }
+    },
+    "opencode_stream_remote_capture.jsonl": {
+      "dispatched": "lmstudio-remote/qwen/qwen3.8-27b",
+      "stream": {
+        "session_id": "ses_fixture0000000000000000001",
+        "step_finishes": 5,
+        "tokens": {
+          "input": 29642,
+          "output": 218,
+          "reasoning": 137,
+          "cache_read": 0,
+          "cache_write": 0
+        },
+        "peak_step_input": 6208,
+        "reported_cost_usd": 0,
+        "rejected_tool_calls": 0
+      },
+      "stderr": null,
+      "failures": [],
+      "fold": {
+        "sessions": [
+          {
+            "id": "ses_fixture0000000000000000001",
+            "parent": "",
+            "tokens": {
+              "input": 29642,
+              "output": 218,
+              "reasoning": 137,
+              "cache_read": 0,
+              "cache_write": 0
+            },
+            "cost": 0,
+            "provider": "lmstudio-remote",
+            "model": "qwen/qwen3.8-27b"
+          }
+        ],
+        "tokens": {
+          "input": 29642,
+          "output": 218,
+          "reasoning": 137,
+          "cache_read": 0,
+          "cache_write": 0
+        },
+        "served": {
+          "provider": "other",
+          "model": "lmstudio-remote/qwen/qwen3.8-27b",
+          "upstream": "lmstudio-remote/qwen/qwen3.8-27b"
+        },
+        "stage_cost_usd": null
+      }
+    },
+    "opencode_stream_research_sample.jsonl": {
+      "dispatched": "lmstudio/qwen/qwen3.8-27b",
+      "stream": {
+        "session_id": "ses_fixture0000000000000000001",
+        "step_finishes": 2,
+        "tokens": {
+          "input": 3089,
+          "output": 14,
+          "reasoning": 0,
+          "cache_read": 0,
+          "cache_write": 0
+        },
+        "peak_step_input": 1550,
+        "reported_cost_usd": 0,
+        "rejected_tool_calls": 0
+      },
+      "stderr": null,
+      "failures": [],
+      "fold": null
+    },
+    "opencode_stream_subagent_capture.jsonl": {
+      "dispatched": "lmstudio/qwen/qwen3.8-27b",
+      "stream": {
+        "session_id": "ses_fixture0000000000000000001",
+        "step_finishes": 5,
+        "tokens": {
+          "input": 30632,
+          "output": 439,
+          "reasoning": 250,
+          "cache_read": 0,
+          "cache_write": 0
+        },
+        "peak_step_input": 6510,
+        "reported_cost_usd": 0,
+        "rejected_tool_calls": 0
+      },
+      "stderr": "opencode_stream_subagent_stderr.txt",
+      "failures": [
+        {
+          "allowed_tools": ["Read", "Edit", "Task", "Bash"],
+          "marker": "[adapter-permission-rejected] tool=bash"
+        },
+        { "allowed_tools": ["Read", "Edit", "Task"], "marker": "[permission-denied] tool=bash" }
+      ],
+      "fold": {
+        "sessions": [
+          {
+            "id": "ses_fixture0000000000000000001",
+            "parent": "",
+            "tokens": {
+              "input": 30632,
+              "output": 439,
+              "reasoning": 250,
+              "cache_read": 0,
+              "cache_write": 0
+            },
+            "cost": 0,
+            "provider": "lmstudio",
+            "model": "qwen/qwen3.8-27b"
+          },
+          {
+            "id": "ses_fixture0000000000000000002",
+            "parent": "ses_fixture0000000000000000001",
+            "tokens": {
+              "input": 12832,
+              "output": 95,
+              "reasoning": 18,
+              "cache_read": 0,
+              "cache_write": 0
+            },
+            "cost": 0,
+            "provider": "lmstudio",
+            "model": "qwen/qwen3.8-27b"
+          },
+          {
+            "id": "ses_fixture0000000000000000003",
+            "parent": "ses_fixture0000000000000000001",
+            "tokens": {
+              "input": 6330,
+              "output": 49,
+              "reasoning": 15,
+              "cache_read": 0,
+              "cache_write": 0
+            },
+            "cost": 0,
+            "provider": "lmstudio",
+            "model": "qwen/qwen3.8-27b"
+          }
+        ],
+        "tokens": {
+          "input": 49794,
+          "output": 583,
+          "reasoning": 283,
+          "cache_read": 0,
+          "cache_write": 0
+        },
+        "served": {
+          "provider": "lm-studio",
+          "model": "lm-studio/qwen/qwen3.8-27b",
+          "upstream": "lmstudio/qwen/qwen3.8-27b"
+        },
+        "stage_cost_usd": 0
+      }
+    }
+  }
+}

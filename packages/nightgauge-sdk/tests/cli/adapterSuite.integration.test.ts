@@ -16,6 +16,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { defaultRegistry } from "../../src/cli/adapters/AdapterRegistry.js";
 import type { ICliAdapter, NightgaugeAdapter } from "../../src/cli/adapters/ICliAdapter.js";
 import { AdapterError } from "../../src/cli/adapters/errors.js";
+import { OPENCODE_MIN_KNOWN_VERSION } from "../../src/cli/adapters/OpenCodeAdapter.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -32,6 +33,7 @@ const ALL_ADAPTER_NAMES: NightgaugeAdapter[] = [
   "ollama",
   "copilot",
   "grok",
+  "opencode",
 ];
 
 /** Retrieve all registered adapters from defaultRegistry. */
@@ -80,7 +82,7 @@ const ALL_AUTH_ENV_KEYS = [
 describe("defaultRegistry: registration", () => {
   it("contains all built-in adapters", () => {
     const names = defaultRegistry.getNames();
-    expect(names).toHaveLength(9);
+    expect(names).toHaveLength(10);
     for (const name of ALL_ADAPTER_NAMES) {
       expect(names, `missing adapter '${name}'`).toContain(name);
     }
@@ -240,7 +242,16 @@ describe.each(ALL_ADAPTER_NAMES)("validateAuth() with runner — %s", (name) => 
   });
 
   it("resolves to 'passed' when runner reports CLI installed and authenticated", async () => {
-    const runner = vi.fn().mockResolvedValue({ code: 0, stdout: "Logged in", stderr: "" });
+    // opencode fails closed on a `--version` it cannot read (#1637), so its
+    // probe answers with the compat manifest's floor.
+    const runner = vi.fn().mockImplementation(async (_command: string, args: string[]) => ({
+      code: 0,
+      stdout:
+        name === "opencode" && args[0] === "--version"
+          ? `${OPENCODE_MIN_KNOWN_VERSION}\n`
+          : "Logged in",
+      stderr: "",
+    }));
     await expect(adapter.validateAuth({ runner })).resolves.toBe("passed");
   });
 });

@@ -16,6 +16,7 @@ import { LmStudioAdapter } from "./LmStudioAdapter.js";
 import { OllamaAdapter } from "./OllamaAdapter.js";
 import { CopilotCliAdapter } from "./CopilotCliAdapter.js";
 import { GrokAdapter } from "./GrokAdapter.js";
+import { OpenCodeAdapter } from "./OpenCodeAdapter.js";
 
 /**
  * Registry that maps adapter names to their implementations.
@@ -68,6 +69,7 @@ function createDefaultRegistry(): AdapterRegistry {
   registry.register(new OllamaAdapter()); // Issue #2591
   registry.register(new CopilotCliAdapter());
   registry.register(new GrokAdapter());
+  registry.register(new OpenCodeAdapter()); // Issue #1637, ADR-022
   return registry;
 }
 

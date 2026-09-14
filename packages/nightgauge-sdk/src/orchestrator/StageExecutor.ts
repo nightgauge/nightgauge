@@ -82,6 +82,11 @@ export interface SDKQueryOptions {
     cwd?: string;
     /** Codex thread ID for `exec resume` on backtrack retry. @see Issue #1659 */
     resumeSessionId?: string;
+    /**
+     * Aborts the query. The opencode adapter kills the whole process group of
+     * the run it spawned when this fires. @see Issue #1637
+     */
+    abortSignal?: AbortSignal;
   };
 }
 

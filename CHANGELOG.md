@@ -64,6 +64,18 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- The SDK now has an `OpenCodeAdapter`, registered under `opencode`, so an SDK
+  or extension caller gets an agentic, `sdk-fanout` adapter instead of
+  `Unknown adapter 'opencode'`. It runs the Go adapter's exact argv with the
+  prompt on stdin. It refuses a malformed model id, an `anthropic/` model
+  without `ANTHROPIC_API_KEY`, and an `opencode` binary below the compat
+  manifest's floor. The child environment it spawns carries only the
+  dispatched provider's key and none of your own `OPENCODE_*` or XDG state. Its
+  stream parser reports the same totals, peak input, served model, cost and
+  permission-rejection failures as the Go parser. Both are checked against
+  one expectations file. Aborting a query (the new `abortSignal` query option)
+  kills the run's whole process group. The adapter spawns nothing until the
+  per-run config is wired into the SDK (#1648) (#1637)
 - An OpenCode stage with a cost budget is stopped once the cost of its own
   steps, priced from the model registry at every `step_finish`, passes the
   budget: its process group gets SIGTERM, then SIGKILL after 10 seconds, and
