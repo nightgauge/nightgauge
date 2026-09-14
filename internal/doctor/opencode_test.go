@@ -341,7 +341,8 @@ func lmStudioListing(state string, loaded int) string {
 
 // TestOpenCodeEndpointReadinessLMStudio: reachability, whether the model is
 // loaded, the context it is loaded with, and the warning when the injected
-// limit.context is 0 or larger than that.
+// limit.context is larger than that. An injected context of 0 is one the
+// caller does not know, which the probe does not compare.
 func TestOpenCodeEndpointReadinessLMStudio(t *testing.T) {
 	target := func(srv *httptest.Server) adapters.OpenCodeEndpointTarget {
 		return adapters.OpenCodeEndpointTarget{ID: "lmstudio", Kind: "lm-studio", BaseURL: srv.URL + "/v1"}
@@ -352,8 +353,8 @@ func TestOpenCodeEndpointReadinessLMStudio(t *testing.T) {
 	if !r.Reachable || !r.Ready || r.Loaded == nil || !*r.Loaded || r.LoadedContext != 131072 {
 		t.Errorf("loaded model: %+v, want reachable, ready and loaded at 131072", r)
 	}
-	if !strings.Contains(r.Warning, "limit.context is 0") {
-		t.Errorf("injected 0 against 131072 loaded: warning %q, want the zero-limit warning", r.Warning)
+	if r.Warning != "" {
+		t.Errorf("injected 0, unknown, against 131072 loaded: warning %q, want none", r.Warning)
 	}
 	if r := adapters.ProbeOpenCodeEndpoint(nil, target(loaded), "qwen/qwen3.8-27b", 131072); r.Warning != "" || !r.Ready {
 		t.Errorf("injected 131072 against 131072 loaded: %+v, want ready with no warning", r)
@@ -384,7 +385,9 @@ func TestOpenCodeEndpointReadinessLMStudio(t *testing.T) {
 }
 
 // TestOpenCodeEndpointReadinessOllama: /api/show gives the model's num_ctx,
-// and /api/ps whether it is loaded; a model Ollama lacks is not ready.
+// and /api/ps whether it is loaded; a model Ollama lacks is not ready. A
+// model with no num_ctx warns that Ollama picks its own context, naming the
+// injected limit only when the caller knows one.
 func TestOpenCodeEndpointReadinessOllama(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -393,6 +396,10 @@ func TestOpenCodeEndpointReadinessOllama(t *testing.T) {
 				Model string `json:"model"`
 			}
 			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body.Model == "llama3:8b" {
+				_, _ = fmt.Fprint(w, `{"parameters":"stop                           \"<|eot_id|>\"","details":{"family":"llama"}}`)
+				return
+			}
 			if body.Model != "qwen3:8b" {
 				http.Error(w, `{"error":"model not found"}`, http.StatusNotFound)
 				return
@@ -417,6 +424,14 @@ func TestOpenCodeEndpointReadinessOllama(t *testing.T) {
 	if r := adapters.ProbeOpenCodeEndpoint(nil, target, "llama9:70b", 131072); r.Ready || !strings.Contains(r.Problem, "ollama pull llama9:70b") {
 		t.Errorf("a model Ollama lacks: %+v, want not ready with the pull command", r)
 	}
+	if r := adapters.ProbeOpenCodeEndpoint(nil, target, "llama3:8b", 131072); !r.Ready || !strings.Contains(r.Warning, "sets no num_ctx for llama3:8b") ||
+		!strings.Contains(r.Warning, "the 131072-token context limit") {
+		t.Errorf("no num_ctx, injected 131072: %+v, want ready with the no-num_ctx warning naming 131072", r)
+	}
+	if r := adapters.ProbeOpenCodeEndpoint(nil, target, "llama3:8b", 0); !strings.Contains(r.Warning, "sets no num_ctx for llama3:8b") ||
+		strings.Contains(r.Warning, "(0)") || strings.Contains(r.Warning, " 0-token") {
+		t.Errorf("no num_ctx, injected unknown: warning %q, want the no-num_ctx warning with no limit of 0", r.Warning)
+	}
 }
 
 // TestOpenCodeRowEndpointNotReadyBlocks: a server that is not ready blocks
@@ -435,6 +450,64 @@ func TestOpenCodeRowEndpointNotReadyBlocks(t *testing.T) {
 	}
 	if len(h.OpenCode.Endpoints) != 1 || h.OpenCode.Endpoints[0].Endpoint != "lmstudio" {
 		t.Errorf("endpoints = %+v, want the one declared, by id", h.OpenCode.Endpoints)
+	}
+}
+
+// TestOpenCodeRowReportsTheContextADispatchInjects: the endpoint row compares
+// the context limit the per-run config actually gives OpenCode, not the
+// machine-tier override alone, through the real discovery and readiness probe
+// against a local LM Studio. With no opencode.limit the limits come from the
+// server, so nothing is refused; an override above the loaded window is
+// clamped to it, and the row says so; with neither, the dispatch's own
+// refusal is the finding.
+func TestOpenCodeRowReportsTheContextADispatchInjects(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		state    string
+		limit    config.OpenCodeLimit
+		ok       bool
+		injected int
+		warning  string // a warning the row gives; "" for none at all
+		block    string
+	}{
+		{"no limit, discovered", "loaded", config.OpenCodeLimit{}, true, 131072, "", ""},
+		{"override above the window", "loaded", config.OpenCodeLimit{Context: 262144, Output: 8192}, true, 131072,
+			"opencode.limit.context (262144) is larger than the 131072 tokens endpoint lmstudio has loaded qwen/qwen3.8-27b with, and the server fails a request past its loaded window: this dispatch uses 131072", ""},
+		{"no limit, not discovered", "not-loaded", config.OpenCodeLimit{}, false, 0, "",
+			"opencode.limit.context is not set for endpoint lmstudio"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			srv := lmStudioServer(t, lmStudioListing(c.state, map[string]int{"loaded": 131072}[c.state]))
+			settings := openCodeLMStudio()
+			settings.BaseURL = srv.URL + "/v1"
+			settings.Limit = c.limit
+			f := newOpenCodeFixture(t, settings)
+			f.probe.endpoint = func(target adapters.OpenCodeEndpointTarget, model string, injected int) adapters.OpenCodeEndpointReadiness {
+				return adapters.ProbeOpenCodeEndpoint(nil, target, model, injected)
+			}
+			h := f.check()
+			warnings := strings.Join(h.Warnings, "\n")
+			if h.OK != c.ok {
+				t.Errorf("OK = %v, want %v\nremediation: %s\nwarnings: %s", h.OK, c.ok, h.Remediation, warnings)
+			}
+			if len(h.OpenCode.Endpoints) != 1 || h.OpenCode.Endpoints[0].InjectedContext != c.injected {
+				t.Errorf("endpoints = %+v, want injected_context %d, what the dispatch gives OpenCode", h.OpenCode.Endpoints, c.injected)
+			}
+			if c.warning == "" && len(h.Warnings) != 0 {
+				t.Errorf("the row warned: %q", h.Warnings)
+			}
+			if c.warning != "" && !strings.Contains(warnings, c.warning) {
+				t.Errorf("warnings %q do not say the dispatch clamps: %q", warnings, c.warning)
+			}
+			for _, never := range []string{"is 0 or unset", "a dispatch to it is refused", "runs out of context first", "(0)"} {
+				if strings.Contains(warnings, never) {
+					t.Errorf("the row warns %q, which this dispatch contradicts:\n%s", never, warnings)
+				}
+			}
+			if c.block != "" && !strings.Contains(h.Remediation, c.block) {
+				t.Errorf("remediation %q does not give the dispatch's refusal %q", h.Remediation, c.block)
+			}
+		})
 	}
 }
 

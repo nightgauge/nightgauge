@@ -69,7 +69,9 @@ changelog, and the release workflow refuses a tag that does not.
   `num_ctx`), once per process, so `opencode.limit` becomes an optional
   override: a context limit above the server's loaded window is clamped to it
   with a warning, and a model whose window cannot be discovered and has no
-  override is still refused before spawn (#1633)
+  override is still refused before spawn. `nightgauge doctor` checks and
+  reports the context limit a dispatch resolves this way, not the override
+  alone (#1633)
 - The OpenCode stream parser is now tested against real opencode 1.18.30
   runs: a local LM Studio model on two endpoints, `lmstudio` and
   `lmstudio-remote`, a run whose model started two subagents, and a
