@@ -319,6 +319,66 @@ reports each one as a drift liability so the count stays visible and near zero.
 
 ---
 
+## Amendment (2026-09-14, #1636) — host overlay segment
+
+[ADR-022](022-opencode-multi-provider-adapter.md) §14 amends Decision 2's
+cascade with a third, more general segment: the **host**, keyed by the
+execution adapter itself rather than by anything the model registry resolves.
+
+```text
+_shared/_overlays/hosts/<adapter>.md → _shared/_overlays/<provider>.md → _shared/_overlays/<id>.md
+  → <skill>/_overlays/hosts/<adapter>.md → <skill>/_overlays/<provider>.md → <skill>/_overlays/<id>.md
+```
+
+The host key is the adapter argument, unchanged, and — unlike provider and
+concrete id — it is knowable independently of whether the model below it
+resolves: an unknown model, a local provider (no registry entry, by design),
+or no model at all all still report which adapter is executing. This is what
+makes an overlay reachable at all for an adapter that names no registry
+provider of its own: `opencode` is not a provider (ADR-022 §1), so nothing in
+the pre-amendment two-segment cascade could ever key an overlay to "every
+opencode run, whatever the model".
+
+Host fragments live in their own `hosts/` subdirectory — plural, correcting
+ADR-022 §14's provisional singular `host/` to what shipped — because an
+adapter name and a provider name can collide (`lm-studio` is both an adapter
+and, for every other adapter, `ProviderForAdapter`'s answer). Nesting the host
+position under its own directory means the two never contend for the same
+file: `_overlays/lm-studio.md` and `_overlays/hosts/lm-studio.md` are
+independent, and applying one never means applying the other's namesake by
+accident.
+
+An overlay key becomes a literal path segment, and not every key reaching that
+point is operator-typed — a model string can arrive remotely (#1656). A key
+containing `..` or a NUL byte is refused outright, with a warning, rather than
+attempting to encode it; a key containing `/` or `\` is encoded (`/` → `__`)
+so a key that legitimately contains one — an OpenCode local model's bare id
+keeps its own slash after the ADR-022 provider-key split strips only the
+first one (`qwen/qwen3.8-27b`, from `lmstudio/qwen/qwen3.8-27b`) — stays a
+single path segment instead of reaching into a subdirectory. No read this
+composer issues ever resolves outside `_overlays/`.
+
+Two shared overlays move or ship as part of this amendment:
+
+- The Grok-Build-execution-host prose that lived in the provider-keyed
+  `_shared/_overlays/xai.md` (deleted) moves to `_shared/_overlays/hosts/grok.md`,
+  along with the host- and CLI-bound sentences that lived in
+  `grok-4.6.md` ("Grok 4.6 is the default Grok Build model", the `--effort`
+  flag instruction). `grok-4.6.md` keeps the remaining model-disposition
+  prose (thinking-on-by-default, verification/delegation propensity), which
+  applies under any adapter running that model, not only `grok`.
+- `_shared/_overlays/hosts/opencode.md` ships new: OpenCode's lowercase tool
+  ids, its silent-rejection-not-retry posture for an unpermitted tool call, no
+  interactive user and no `AskUserQuestion`, `_includes` read at the absolute
+  paths the render already resolved, and never touching `opencode.json` or
+  `.opencode/`.
+
+`preflight skill-overlays` (#80) does not exist yet (Decision 5's status is
+unchanged by this amendment); the namespace this section adds is recorded on
+that issue for when it does.
+
+---
+
 ## Consequences
 
 **Portability.** Overlays are additive and host-resolved, so the

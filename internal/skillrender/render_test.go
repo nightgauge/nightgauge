@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -216,19 +217,22 @@ func TestOverlayKeysCascade(t *testing.T) {
 		// they resolve through the registry to a concrete model — but no
 		// band-keyed overlay file is consulted anymore (none ever existed on
 		// disk, so rendered output is unchanged).
+		// No adapter, no host segment: unchanged from before ADR-022 §14.
 		{"concrete anthropic id", "claude-opus-5", "", []string{"anthropic", "claude-opus-5"}},
 		{"tier alias", "opus", "", []string{"anthropic", "claude-opus-5"}},
+		// A non-empty adapter is now also the HOST segment, most general of
+		// all (ADR-016 amendment / ADR-022 §14): it leads the cascade.
 		{"multi-band model keys off the concrete id", "gpt-5.6-sol", "codex",
-			[]string{"openai", "gpt-5.6-sol"}},
+			[]string{"codex", "openai", "gpt-5.6-sol"}},
 		{"adapter selects provider", "sonnet", "codex",
-			[]string{"openai", "gpt-5.6-terra"}},
+			[]string{"codex", "openai", "gpt-5.6-terra"}},
 		// #532 moved the xai haiku band from grok-build-0.1 (which the Grok
 		// Build CLI does not serve) to grok-4.6. Post-#582 the cascade keys
 		// off the RESOLVED model, so a haiku-band grok run renders the same
-		// overlay set as any other grok-4.6 run: the provider and the
-		// concrete id.
+		// overlay set as any other grok-4.6 run: the host, the provider and
+		// the concrete id.
 		{"xai haiku cascade", "haiku", "grok",
-			[]string{"xai", "grok-4.6"}},
+			[]string{"grok", "xai", "grok-4.6"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got, _, ok := OverlayKeys(tt.model, tt.adapter)
@@ -243,19 +247,78 @@ func TestOverlayKeysCascade(t *testing.T) {
 }
 
 func TestOverlayKeysFailOpen(t *testing.T) {
-	// Unknown ids and local providers have no registry entry by design. They
-	// must resolve NO keys and render base-only — never error, or every local
-	// run breaks.
+	// With no adapter, there is no host segment either: an unknown id and no
+	// model at all must resolve NO keys and render base-only — never error, or
+	// every local run breaks.
 	for _, tt := range []struct{ model, adapter string }{
 		{"", ""},
 		{"llama-3-70b-local", ""},
-		{"opus", "ollama"},
-		{"sonnet", "lm-studio"},
 	} {
 		if keys, _, ok := OverlayKeys(tt.model, tt.adapter); ok || len(keys) > 0 {
 			t.Errorf("OverlayKeys(%q, %q) = %v ok=%v, want no keys", tt.model, tt.adapter, keys, ok)
 		}
 	}
+}
+
+// TestOverlayKeysHostSegment is the ADR-016 amendment's central claim
+// (ADR-022 §14): the host key is the execution adapter itself, and it
+// survives even when the model below it does not resolve — an unknown model,
+// a local provider (no registry entry, by design), or no model at all. That
+// is what makes an `opencode` host overlay reachable in the first place:
+// `opencode` is not a provider, so nothing in the pre-amendment two-segment
+// cascade could ever key an overlay to "every opencode run, whatever the
+// model". Reverting OverlayKeys to the old `[m.Provider, m.ID]` cascade turns
+// every one of these red, because none of them would resolve any key at all.
+func TestOverlayKeysHostSegment(t *testing.T) {
+	t.Run("host key leads and survives an unresolved local model", func(t *testing.T) {
+		for _, tt := range []struct {
+			name, model, adapter string
+		}{
+			{"ollama, tier band", "opus", "ollama"},
+			{"lm-studio, tier band", "sonnet", "lm-studio"},
+			{"opencode, no model at all", "", "opencode"},
+			{"opencode, local lmstudio provider key", "lmstudio/qwen/qwen3.8-27b", "opencode"},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				keys, _, ok := OverlayKeys(tt.model, tt.adapter)
+				if ok {
+					t.Fatalf("OverlayKeys(%q, %q) resolved a descriptor, want unresolved", tt.model, tt.adapter)
+				}
+				if len(keys) != 1 || keys[0] != tt.adapter {
+					t.Errorf("keys = %v, want exactly [%q] (the host key alone)", keys, tt.adapter)
+				}
+			})
+		}
+	})
+
+	t.Run("opencode resolves provider and id from the dispatch string, not the raw model", func(t *testing.T) {
+		keys, descriptor, ok := OverlayKeys("xai/grok-4.6", "opencode")
+		if !ok {
+			t.Fatalf("OverlayKeys(%q, %q) did not resolve", "xai/grok-4.6", "opencode")
+		}
+		want := []string{"opencode", "xai", "grok-4.6"}
+		if strings.Join(keys, ",") != strings.Join(want, ",") {
+			t.Errorf("keys = %v, want %v", keys, want)
+		}
+		if descriptor.ID != "grok-4.6" || descriptor.Provider != "xai" {
+			t.Errorf("descriptor = %+v, want provider xai id grok-4.6", descriptor)
+		}
+	})
+
+	t.Run("host and a same-named provider are independent, not merged", func(t *testing.T) {
+		// adapter "lm-studio" IS ALSO a provider name for every other adapter
+		// (ProviderForAdapter("lm-studio") == "lm-studio"), but lm-studio never
+		// has a registry row, so the provider position can never be populated
+		// from a real resolution — the host position is the only way this
+		// string ever appears as a key. Dedup must not lose it.
+		keys, _, ok := OverlayKeys("", "lm-studio")
+		if ok {
+			t.Fatalf("OverlayKeys(%q, %q) resolved, want unresolved (empty model)", "", "lm-studio")
+		}
+		if len(keys) != 1 || keys[0] != "lm-studio" {
+			t.Errorf("keys = %v, want exactly [\"lm-studio\"]", keys)
+		}
+	})
 }
 
 // ─── Composition ─────────────────────────────────────────────────────────────
@@ -999,6 +1062,332 @@ func TestFableBatchingNudgeIsStageScoped(t *testing.T) {
 		}
 		if got := strings.Count(res.Content, nudge); got != want {
 			t.Errorf("%s: rendered prompt carries the batching nudge %d time(s), want %d", stage, got, want)
+		}
+	}
+}
+
+// ─── Host overlay segment (#1636, ADR-016 amendment / ADR-022 §14) ──────────
+
+// realSkillsRoot is the real skills/ tree, or "" with the test skipped when it
+// is not present (a `go build` of just this package, outside the repo).
+func realSkillsRoot(t *testing.T) string {
+	t.Helper()
+	root := filepath.Join("..", "..", "skills")
+	if _, err := os.Stat(root); err != nil {
+		t.Skipf("skills/ not present: %v", err)
+	}
+	return root
+}
+
+// TestOpenCodeHostOverlayApplies is the AC's golden render: an opencode
+// dispatch to a local model with no registry entry still gets the opencode
+// host overlay, and the envelope's resolved keys start with the host key.
+func TestOpenCodeHostOverlayApplies(t *testing.T) {
+	root := realSkillsRoot(t)
+	res := mustRender(t, Options{
+		Stage:       "feature-dev",
+		Model:       "lmstudio/qwen/qwen3.8-27b",
+		Adapter:     "opencode",
+		SkillsRoots: []string{root},
+	})
+	if len(res.Keys) == 0 || res.Keys[0] != "opencode" {
+		t.Fatalf("resolved_keys = %v, want it to start with the host key %q", res.Keys, "opencode")
+	}
+	var gotHostsFragment bool
+	for _, f := range res.Fragments {
+		if f.Key == "opencode" && strings.Contains(filepath.ToSlash(f.Path), "_overlays/hosts/opencode.md") {
+			gotHostsFragment = true
+		}
+	}
+	if !gotHostsFragment {
+		t.Errorf("fragments = %v, want one sourced from _overlays/hosts/opencode.md", res.Fragments)
+	}
+	if !strings.Contains(res.Content, "OpenCode is the execution host") {
+		t.Error("composed content is missing the opencode host overlay text")
+	}
+}
+
+// TestOpenCodeXaiGrokDoesNotGetGrokHostOverlay is the AC's negative golden
+// render: opencode dispatching an xai model must not pick up the Grok-Build
+// host prose or the --effort flag instruction, both of which now live only in
+// hosts/grok.md, keyed to the "grok" adapter — never to "opencode".
+func TestOpenCodeXaiGrokDoesNotGetGrokHostOverlay(t *testing.T) {
+	root := realSkillsRoot(t)
+	res := mustRender(t, Options{
+		Stage:       "feature-dev",
+		Model:       "xai/grok-4.6",
+		Adapter:     "opencode",
+		SkillsRoots: []string{root},
+	})
+	if res.ResolvedModel != "grok-4.6" || res.Provider != "xai" {
+		t.Fatalf("resolved model/provider = %q/%q, want grok-4.6/xai", res.ResolvedModel, res.Provider)
+	}
+	for _, forbidden := range []string{"Grok Build is the execution host", "piped stdin", "--effort"} {
+		if strings.Contains(res.Content, forbidden) {
+			t.Errorf("opencode+xai/grok-4.6 render leaked grok-host text %q:\n%s", forbidden, res.Content)
+		}
+	}
+	// The opencode host overlay still applies — this is a different adapter,
+	// not "no host overlay at all".
+	if !strings.Contains(res.Content, "OpenCode is the execution host") {
+		t.Error("opencode host overlay missing from an opencode dispatch")
+	}
+	// The model-level grok-4.6 fragment (now host-prose-free) still applies:
+	// it is keyed to the concrete id, not the host.
+	if !strings.Contains(res.Content, "Thinking is on by default") {
+		t.Error("grok-4.6 model-level overlay missing from an opencode dispatch of that model")
+	}
+}
+
+// TestGrokAdapterCarriesEverySentenceFromBeforeTheSplit is the AC's positive
+// golden render for the adapter the prose used to be keyed to directly: every
+// sentence xai.md and the pre-split grok-4.6.md carried is still present,
+// just sourced from hosts/grok.md plus the trimmed grok-4.6.md. Captured from
+// a real `nightgauge skill render --stage feature-dev --adapter grok --model
+// grok-4.6` run before this change (see red_green in the PR description).
+func TestGrokAdapterCarriesEverySentenceFromBeforeTheSplit(t *testing.T) {
+	root := realSkillsRoot(t)
+	res := mustRender(t, Options{
+		Stage:       "feature-dev",
+		Model:       "grok-4.6",
+		Adapter:     "grok",
+		SkillsRoots: []string{root},
+	})
+	// Every sentence (or, where a sentence was split at a clause boundary,
+	// every clause) the pre-split xai.md + grok-4.6.md pair carried.
+	wantSubstrings := []string{
+		"Grok Build is the execution host",
+		"Prefer the deterministic `nightgauge`\nbinary for board, state, and forge operations",
+		"Headless Grok does not\nread piped stdin as the prompt",
+		"Do not depend on Claude Stop hooks or\n`AskUserQuestion`",
+		"If a decision is\nundecidable without the operator, fail the stage with a clear reason",
+		"Subagent fan-out is optional",
+		"Grok 4.6 is the default Grok Build model",
+		"Thinking is on by default",
+		"Keep `--effort` at the\nresolved Nightgauge envelope",
+		"Verification and delegation propensity are\nhigh",
+		"Prefer one thorough\npass over narrating every tool call",
+	}
+	for _, want := range wantSubstrings {
+		if !strings.Contains(res.Content, want) {
+			t.Errorf("grok+grok-4.6 render is missing pre-split text %q", want)
+		}
+	}
+	var fromHosts, fromModel bool
+	for _, f := range res.Fragments {
+		p := filepath.ToSlash(f.Path)
+		if f.Key == "grok" && strings.Contains(p, "_overlays/hosts/grok.md") {
+			fromHosts = true
+		}
+		if f.Key == "grok-4.6" && strings.Contains(p, "_overlays/grok-4.6.md") && !strings.Contains(p, "/hosts/") {
+			fromModel = true
+		}
+	}
+	if !fromHosts {
+		t.Errorf("fragments = %v, want one sourced from _overlays/hosts/grok.md", res.Fragments)
+	}
+	if !fromModel {
+		t.Errorf("fragments = %v, want one sourced from _overlays/grok-4.6.md", res.Fragments)
+	}
+	// The old provider-keyed xai.md is gone — nothing should be sourced from
+	// a plain (non-hosts) xai.md any more.
+	for _, f := range res.Fragments {
+		if f.Key == "xai" {
+			t.Errorf("fragment %v still resolves a provider-keyed xai overlay, which #1636 deleted", f)
+		}
+	}
+}
+
+// TestClaudeCodexGeminiRendersUnchanged pins byte-for-byte captures taken
+// from this exact tree BEFORE #1636's change (see red_green in the PR
+// description), for the three adapters that ship no host overlay file. The
+// host segment now resolves an extra key for each of them, but since no
+// hosts/<adapter>.md exists, nothing new is collected and the composed text
+// must be identical to the pre-change capture.
+func TestClaudeCodexGeminiRendersUnchanged(t *testing.T) {
+	root := realSkillsRoot(t)
+	// Render resolves _includes paths to their absolute filesystem form, which
+	// bakes the checkout's own absolute path into the composed text. The
+	// golden captures below are pinned against a portable placeholder instead
+	// of a literal machine path, so this test passes on any checkout (a
+	// contributor's machine or a CI runner) rather than only the one it was
+	// captured on.
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		t.Fatalf("abs skills root: %v", err)
+	}
+	repoRoot := filepath.Dir(absRoot)
+	const placeholder = "<REPO_ROOT>"
+	for _, tt := range []struct {
+		stage, adapter, model, golden string
+	}{
+		{"feature-dev", "claude-headless", "claude-sonnet-5", "testdata/host-overlay/feature-dev_claude-headless_claude-sonnet-5.pre-1636.txt"},
+		{"feature-dev", "codex", "gpt-5.6-sol", "testdata/host-overlay/feature-dev_codex_gpt-5.6-sol.pre-1636.txt"},
+		{"feature-dev", "gemini", "", "testdata/host-overlay/feature-dev_gemini_none.pre-1636.txt"},
+		{"pr-merge", "claude-headless", "claude-sonnet-5", "testdata/host-overlay/pr-merge_claude-headless_claude-sonnet-5.pre-1636.txt"},
+	} {
+		t.Run(tt.golden, func(t *testing.T) {
+			want, err := os.ReadFile(tt.golden)
+			if err != nil {
+				t.Fatalf("read golden capture: %v", err)
+			}
+			res := mustRender(t, Options{
+				Stage: tt.stage, Model: tt.model, Adapter: tt.adapter, SkillsRoots: []string{root},
+			})
+			got := strings.ReplaceAll(res.Content, repoRoot, placeholder)
+			if got != string(want) {
+				t.Errorf("%s/%s/%s render changed after the host segment landed:\n--- got ---\n%s", tt.stage, tt.adapter, tt.model, got)
+			}
+			if len(res.Fragments) != 0 {
+				t.Errorf("%s/%s/%s: unexpected fragments applied: %v", tt.stage, tt.adapter, tt.model, res.Fragments)
+			}
+		})
+	}
+}
+
+// TestHostAndProviderNamespacesDoNotCollide proves the AC's namespace claim:
+// an overlay key that names a host is resolved from _overlays/hosts/, never
+// from the plain _overlays/ a same-named provider would use, and vice versa.
+// "lm-studio" is deliberately both: an adapter name (a real, registered
+// execution adapter) and, for every OTHER adapter, the provider name
+// ProviderForAdapter resolves it to.
+func TestHostAndProviderNamespacesDoNotCollide(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, "nightgauge-feature-dev", bodyWithContextIncludes)
+	write(t, filepath.Join(root, "_shared", "_overlays", "lm-studio.md"), "PLAIN-PROVIDER-LMSTUDIO\n")
+	write(t, filepath.Join(root, "_shared", "_overlays", "hosts", "lm-studio.md"), "HOST-LMSTUDIO\n")
+
+	// adapter="lm-studio" makes "lm-studio" the HOST key. It must read only
+	// the hosts/ copy, never the plain provider-styled file of the same name.
+	res := mustRender(t, Options{Stage: "feature-dev", Adapter: "lm-studio", SkillsRoots: []string{root}})
+	if !strings.Contains(res.Content, "HOST-LMSTUDIO") {
+		t.Error("host-keyed render did not apply _overlays/hosts/lm-studio.md")
+	}
+	if strings.Contains(res.Content, "PLAIN-PROVIDER-LMSTUDIO") {
+		t.Error("host-keyed render leaked the plain, non-host _overlays/lm-studio.md — namespaces collided")
+	}
+	if len(res.Fragments) != 1 || !strings.Contains(filepath.ToSlash(res.Fragments[0].Path), "_overlays/hosts/lm-studio.md") {
+		t.Errorf("fragments = %v, want exactly one from _overlays/hosts/lm-studio.md", res.Fragments)
+	}
+}
+
+// TestOverlayKeyPathSafety is the AC's security bullet: an overlay key never
+// becomes a path segment verbatim. ".." is refused outright (with a warning)
+// rather than encoded — there is no encoding that makes it safe — and "/" is
+// encoded so a key that legitimately contains one (an OpenCode local model's
+// bare id can: "qwen/qwen3.8-27b") stays a single path segment instead of
+// reaching into a subdirectory.
+func TestOverlayKeyPathSafety(t *testing.T) {
+	t.Run("directory traversal is refused, not encoded, and reads nothing outside _overlays/", func(t *testing.T) {
+		root := t.TempDir()
+		writeSkill(t, root, "nightgauge-feature-dev", bodyWithContextIncludes)
+		// A file that WOULD be read if ".." ever reached the filesystem call
+		// unsanitized: _overlays/../../../etc/passwd.md relative to _shared,
+		// i.e. something outside the skills root entirely.
+		outside := filepath.Join(filepath.Dir(root), "outside-the-root.md")
+		write(t, outside, "SHOULD-NEVER-BE-READ\n")
+		defer os.Remove(outside)
+
+		var warnings []string
+		res, err := Render(Options{
+			Stage: "feature-dev", Adapter: "../../../" + filepath.Base(filepath.Dir(root)) + "/outside-the-root",
+			SkillsRoots: []string{root},
+			Warn:        func(msg string) { warnings = append(warnings, msg) },
+		})
+		if err != nil {
+			t.Fatalf("Render: %v", err)
+		}
+		if strings.Contains(res.Content, "SHOULD-NEVER-BE-READ") {
+			t.Fatal("a \"..\"-carrying key reached outside _overlays/ and was read")
+		}
+		if len(res.Fragments) != 0 {
+			t.Errorf("fragments = %v, want none — the key must be refused before any read", res.Fragments)
+		}
+		if len(warnings) == 0 {
+			t.Error("a refused \"..\"-carrying key should be warned about, not silently dropped")
+		}
+	})
+
+	t.Run("a slash in a key is encoded to a single path segment, not a subdirectory", func(t *testing.T) {
+		safe, ok := overlayKeySafe("qwen/qwen3.8-27b", func(string) {})
+		if !ok {
+			t.Fatal("overlayKeySafe should accept a key containing a slash")
+		}
+		if strings.Contains(safe, "/") || strings.Contains(safe, string(filepath.Separator)) {
+			t.Errorf("overlayKeySafe(%q) = %q, want no remaining path separator", "qwen/qwen3.8-27b", safe)
+		}
+		if safe != "qwen__qwen3.8-27b" {
+			t.Errorf("overlayKeySafe(%q) = %q, want %q", "qwen/qwen3.8-27b", safe, "qwen__qwen3.8-27b")
+		}
+	})
+
+	t.Run("a NUL byte is refused like \"..\"", func(t *testing.T) {
+		var warned bool
+		if _, ok := overlayKeySafe("bad\x00key", func(string) { warned = true }); ok {
+			t.Error("overlayKeySafe should refuse a key containing a NUL byte")
+		}
+		if !warned {
+			t.Error("refusing a NUL-carrying key should warn")
+		}
+	})
+}
+
+// TestADR016DocumentsTheHostSegment is the AC's doc check: ADR-016 must carry
+// an "Amendment" heading citing ADR-022, and docs/MODEL_ADAPTATION.md must
+// mention the hosts/ directory. Deleting either turns this red.
+func TestADR016DocumentsTheHostSegment(t *testing.T) {
+	adr, err := os.ReadFile(filepath.Join("..", "..", "docs", "decisions", "016-model-aware-skill-overlays.md"))
+	if err != nil {
+		t.Fatalf("read ADR-016: %v", err)
+	}
+	headingRE := regexp.MustCompile(`(?m)^#+.*Amendment.*$`)
+	if !headingRE.MatchString(string(adr)) {
+		t.Error("ADR-016 has no heading containing \"Amendment\"")
+	}
+	if !strings.Contains(string(adr), "ADR-022") {
+		t.Error("ADR-016 does not cite ADR-022")
+	}
+
+	guide, err := os.ReadFile(filepath.Join("..", "..", "docs", "MODEL_ADAPTATION.md"))
+	if err != nil {
+		t.Fatalf("read docs/MODEL_ADAPTATION.md: %v", err)
+	}
+	if !strings.Contains(string(guide), "hosts/") {
+		t.Error("docs/MODEL_ADAPTATION.md does not mention hosts/")
+	}
+}
+
+// TestOpenCodeHostOverlayToolIDsArePinned is the AC's guardrail: every
+// backticked, single-word tool id named in hosts/opencode.md must be one the
+// `build` agent actually exposes. The pinned list below is a literal capture
+// of `opencode debug agent build` on opencode 1.18.30 (the version ADR-022
+// records as observed) — its "tools" object's keys, exactly. If the assumption
+// in #1636 (that the tool ids named in hosts/opencode.md are the ones the
+// build agent exposes) ever stops holding, this test goes red and ADR-022
+// needs the finding recorded before hosts/opencode.md changes again.
+func TestOpenCodeHostOverlayToolIDsArePinned(t *testing.T) {
+	// `opencode debug agent build` (opencode 1.18.30), `.tools` object keys.
+	pinned := map[string]bool{
+		"invalid": true, "question": true, "bash": true, "read": true,
+		"glob": true, "grep": true, "edit": true, "write": true,
+		"task": true, "webfetch": true, "todowrite": true, "skill": true,
+	}
+	data, err := os.ReadFile(filepath.Join("..", "..", "skills", "_shared", "_overlays", "hosts", "opencode.md"))
+	if err != nil {
+		t.Fatalf("read hosts/opencode.md: %v", err)
+	}
+	// A backticked, all-lowercase-letters token is a candidate tool id; this
+	// deliberately excludes `opencode.json`, `.opencode/` and `AskUserQuestion`
+	// — a dot, a slash or a capital letter is never a bare tool id.
+	toolIDRE := regexp.MustCompile("`([a-z]+)`")
+	found := toolIDRE.FindAllStringSubmatch(string(data), -1)
+	if len(found) == 0 {
+		t.Fatal("no backticked tool ids found in hosts/opencode.md — the guardrail has nothing to check")
+	}
+	for _, m := range found {
+		if !pinned[m[1]] {
+			t.Errorf("hosts/opencode.md names tool id %q, which opencode 1.18.30's build agent does not expose — "+
+				"record the finding and amend ADR-022 before changing the overlay", m[1])
 		}
 	}
 }

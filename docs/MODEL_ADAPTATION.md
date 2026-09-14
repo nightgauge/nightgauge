@@ -34,9 +34,11 @@ the composer is
 ## 2. Where overlays live
 
 ```text
-skills/_shared/_overlays/<key>.md          # applies to every skill
-skills/<skill>/_overlays/<key>.md          # applies to one skill
-skills/<skill>/_overlays/<key>.SKILL.md    # whole-file override (discouraged)
+skills/_shared/_overlays/hosts/<adapter>.md  # applies to every skill, this execution host
+skills/_shared/_overlays/<key>.md            # applies to every skill
+skills/<skill>/_overlays/hosts/<adapter>.md  # applies to one skill, this execution host
+skills/<skill>/_overlays/<key>.md            # applies to one skill
+skills/<skill>/_overlays/<key>.SKILL.md      # whole-file override (discouraged)
 ```
 
 `<key>` is derived from the **resolved** model descriptor, never from the string
@@ -44,18 +46,26 @@ a caller typed. Tier bands are still valid `--model` inputs — they resolve
 through the registry to a concrete id — but no band-keyed file is ever consulted
 (the band segment was retired with the band vocabulary in #582).
 
+The `hosts/` segment is the exception: it is keyed by the **adapter** argument
+itself, unchanged, so it resolves even when the model below it does not — see
+[ADR 016's amendment](decisions/016-model-aware-skill-overlays.md#amendment-2026-09-14-1636--host-overlay-segment)
+(ADR-022 §14) for why, and why `hosts/` has its own subdirectory rather than
+sharing `_overlays/` with provider and model keys.
+
 ### The corpus today
 
-Four shared-scope overlays ship, alongside two skill-specific fragments; no
-whole-file override exists. All six land at the `after-context-includes` site
-(§4) because no base skill carries an `<!-- overlay -->` anchor.
+Five shared-scope overlays ship — one of them host-keyed — alongside two
+skill-specific fragments; no whole-file override exists. All land at the
+`after-context-includes` site (§4) because no base skill carries an
+`<!-- overlay -->` anchor.
 
-| Key                | Carries                                                                                         |
-| ------------------ | ----------------------------------------------------------------------------------------------- |
-| `xai`              | Grok Build as execution host: no Stop hooks, no `AskUserQuestion`, optional subagent fan-out.   |
-| `grok-4.6`         | Thinking-on-by-default; drop redundant verify-your-work scaffolding and extra review subagents. |
-| `grok-build-0.1`   | The cheaper Grok coding model: stay inside the stage contract, no extra research loops.         |
-| `claude-fable-5-1` | The Fable 5.1 behavioral shifts (#1276), one named block each — see below.                      |
+| Key                | Carries                                                                                                                                   |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `hosts/grok`       | Grok Build as execution host: no Stop hooks, no `AskUserQuestion`, the `--effort` flag, optional subagent fan-out.                        |
+| `hosts/opencode`   | OpenCode as execution host: lowercase tool ids, silent-reject-don't-retry, no `AskUserQuestion`, never edit `opencode.json`/`.opencode/`. |
+| `grok-4.6`         | Thinking-on-by-default; drop redundant verify-your-work scaffolding and extra review subagents.                                           |
+| `grok-build-0.1`   | The cheaper Grok coding model: stay inside the stage contract, no extra research loops.                                                   |
+| `claude-fable-5-1` | The Fable 5.1 behavioral shifts (#1276), one named block each — see below.                                                                |
 
 Both skill-specific fragments are keyed `claude-fable-5-1`, and each carries the
 batching-nudge block and nothing else:
@@ -133,24 +143,27 @@ not on a number.
 
 ## 3. The cascade and precedence
 
-Two specificities (provider, concrete id) across two scopes (shared,
+Three specificities (host, provider, concrete id) across two scopes (shared,
 skill-specific), general before specific and shared before skill-specific:
 
 ```text
-_shared/anthropic → _shared/claude-opus-5
-  → <skill>/anthropic → <skill>/claude-opus-5
+_shared/hosts/grok → _shared/xai → _shared/claude-opus-5
+  → <skill>/hosts/grok → <skill>/xai → <skill>/claude-opus-5
 ```
 
 Every matching fragment contributes; fragments are **composed, not replaced**.
 Later fragments may explicitly countermand earlier ones, so a skill-specific
 overlay outranks a shared one and a concrete-id overlay outranks its provider
-overlay — by being read last, not by suppressing the others. Missing fragments
-are skipped silently: **absence is the norm, not an error.**
+overlay, which outranks its host overlay — by being read last, not by
+suppressing the others. Missing fragments are skipped silently: **absence is
+the norm, not an error.**
 
 The provider used for the cascade is the one on the _resolved_ descriptor, not
 the one implied by `--adapter`. Concrete ids are globally unique, so an exact-id
 lookup legitimately crosses providers and must key off where the model actually
-lives.
+lives. The **host** key is the one exception: it is the `--adapter` argument
+itself, always, because it names the execution host rather than anything the
+model resolves to — see §2.
 
 The whole-file override is the one exception to "composed, not replaced": if
 `<skill>/_overlays/<key>.SKILL.md` exists it replaces the base entirely, most
@@ -228,10 +241,15 @@ that expansion would otherwise have erased.
 ## 7. Fail-open, everywhere
 
 Unknown model, local provider with no registry entry (ollama, lm-studio — by
-design), unreadable fragment: every one of these renders base-only and exits 0.
-A malformed overlay must never take down a run. Unreadable-but-present fragments
-are reported in `warnings` rather than swallowed, because that case is a typo,
-not an absence.
+design), unreadable fragment: every one of these renders base-only for the
+provider and model segments, and exits 0. A malformed overlay must never take
+down a run. Unreadable-but-present fragments are reported in `warnings` rather
+than swallowed, because that case is a typo, not an absence.
+
+The host segment is the one exception to "base-only": it is the `--adapter`
+argument itself, so it resolves even when the model fails to — an `opencode`
+dispatch of a local model with no registry entry still gets `hosts/opencode.md`
+if it exists. There is no adapter for which that is not knowable.
 
 ## 8. Not yet enforced
 
