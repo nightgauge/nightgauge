@@ -15,6 +15,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
+	"github.com/nightgauge/nightgauge/internal/models"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/internal/terminalkind"
 )
@@ -155,19 +156,27 @@ func processGone(pid int) bool {
 // cancelled, because nobody stopped it; and no process of its group survives.
 func TestOpenCodeCostWatchdog(t *testing.T) {
 	const model, budget = "anthropic/claude-sonnet-5", 0.01
-	// The step that crosses the budget, from the capture's own numbers.
+	// The step that crosses the budget, from the capture's own numbers at
+	// the model's registry rates. The capture has no cache pools.
+	rates, ok := models.Get("claude-sonnet-5")
+	if !ok {
+		t.Fatal("the registry has no claude-sonnet-5")
+	}
 	steps := capturedSteps(t)
-	var running tokens.TokenCounts
-	crossing, inputAtCrossing := 0, 0
-	for n := 1; crossing == 0; n++ {
+	crossing, inputAtCrossing, cost := 0, 0, 0.0
+	for n := 1; crossing == 0 && n <= 100; n++ {
 		s := steps[(n-1)%len(steps)]
-		running.Input += s.Input
-		running.Output += s.Output
-		running.CacheRead += s.CacheRead
-		running.CacheCreation5m += s.CacheCreation5m
-		if cost, _ := tokens.CalculateCostFor("opencode", model, running); cost > budget {
-			crossing, inputAtCrossing = n, running.Input
+		if s.CacheRead != 0 || s.CacheCreation5m != 0 {
+			t.Fatal("the capture has cache pools; price them too")
 		}
+		cost += (float64(s.Input)*rates.Rates.Input + float64(s.Output)*rates.Rates.Output) / 1e6
+		inputAtCrossing += s.Input
+		if cost > budget {
+			crossing = n
+		}
+	}
+	if crossing == 0 {
+		t.Fatal("100 captured steps do not cross the budget")
 	}
 	nextStep := steps[crossing%len(steps)].Input
 
