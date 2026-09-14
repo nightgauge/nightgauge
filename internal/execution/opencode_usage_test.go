@@ -1112,17 +1112,22 @@ func TestOpenCodeRedactsCredentialsNotProviderSettings(t *testing.T) {
 		t.Errorf("a vertex project named after the organization redacted %q to %q", url, got)
 	}
 
-	// Through an amazon-bedrock stage, whose region is a setting and whose
-	// secret access key is a credential.
+	// Through an azure stage, whose resource name is a setting and whose API
+	// key is a credential. amazon-bedrock cannot be dispatched here: it is a
+	// platform provider and is refused before spawn
+	// (openCodePlatformProviderRefusal, ADR-022 § 17); azure is a model
+	// provider's own API-key variable and is not on that list, so the run
+	// reaches the child and this test can still check that a setting
+	// survives redaction next to a credential that does not.
 	secret := strings.Repeat("wJa1r", 8)
-	t.Setenv("AWS_REGION", "us-east-1")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", secret)
+	t.Setenv("AZURE_RESOURCE_NAME", "nightgauge-fixture")
+	t.Setenv("AZURE_API_KEY", secret)
 	out := openCodeStageRunWith(t, openCodeStage{
-		model:  "amazon-bedrock/fixture-model",
+		model:  "azure/fixture-model",
 		stdout: readTestdata(t, "opencode_stream_research_sample.jsonl"),
-		stderr: "ERROR deployed to us-east-1: https://s3.us-east-1.amazonaws.com/bucket signed with " + secret + "\n",
+		stderr: "ERROR deployed to nightgauge-fixture: https://nightgauge-fixture.openai.azure.com/ signed with " + secret + "\n",
 	})
-	want := "ERROR deployed to us-east-1: https://s3.us-east-1.amazonaws.com/bucket signed with [REDACTED:AWS_SECRET_ACCESS_KEY]\n"
+	want := "ERROR deployed to nightgauge-fixture: https://nightgauge-fixture.openai.azure.com/ signed with [REDACTED:AZURE_API_KEY]\n"
 	if out.result.Stderr != want {
 		t.Errorf("stderr = %q, want %q", out.result.Stderr, want)
 	}
