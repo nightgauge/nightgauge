@@ -485,21 +485,26 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	streamFmt := StreamFormatForAdapter(adapter.Name())
 
 	// OpenCode (ADR-022): its own parser, whose run state also watches
-	// stderr for permissions OpenCode rejected on its own and keeps no
-	// rejected call's input; every line is also redacted of credential
+	// stderr, before redaction, for permissions OpenCode rejected on its own,
+	// and keeps no rejected call's input and no line after the first such
+	// notice but the parser's own; every line is also redacted of credential
 	// shapes, not only of the variables above, and a JSON event's strings
 	// are redacted decoded as well as escaped; and a line over the scanner's
-	// limit is dropped with a drift marker instead of ending the read.
+	// limit is dropped with a drift marker instead of ending the read, its
+	// ends still read for a notice.
 	redactOut := func(b []byte) []byte { return redactLine(redact, b) }
 	var openCode *openCodeRun
 	if streamFmt == StreamFormatOpenCode {
 		openCode = newOpenCodeRun(tokenAcc.OpenCode(), runOpts.AllowedTools)
 		redactOut = openCodeOutputRedactor(redact)
 	}
-	eachLine := func(r io.Reader, name string, onLine func([]byte)) {
+	eachLine := func(r io.Reader, name string, onLine func([]byte), onOversize func(head, tail []byte)) {
 		if openCode != nil {
-			_ = forEachLine(r, streamLineLimit, onLine, func() {
+			_ = forEachLine(r, streamLineLimit, onLine, func(head, tail []byte) {
 				openCode.stream.Drift("dropped a %s line longer than the %d-byte line limit", name, streamLineLimit)
+				if onOversize != nil {
+					onOversize(head, tail)
+				}
 			})
 			return
 		}
@@ -507,6 +512,14 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 		scanner.Buffer(make([]byte, 0, 64*1024), streamLineLimit)
 		for scanner.Scan() {
 			onLine(scanner.Bytes())
+		}
+	}
+	keepStderr := func(line []byte) {
+		line = redactOut(line)
+		stderrBuf = append(stderrBuf, line...)
+		stderrBuf = append(stderrBuf, '\n')
+		if opts.Streamer != nil {
+			opts.Streamer.OnOutput("stderr", append(line, '\n'))
 		}
 	}
 
@@ -558,25 +571,31 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 			if opts.Streamer != nil {
 				opts.Streamer.OnOutput("stdout", append(line, '\n'))
 			}
-		})
+		}, nil)
 	}()
 	go func() {
 		defer wg.Done()
-		eachLine(stderr, "stderr", func(raw []byte) {
-			line := redactOut(raw)
-			if openCode != nil {
-				kept, ok := openCode.observeStderr(string(line))
-				if !ok {
-					return
+		var onOversize func(head, tail []byte)
+		if openCode != nil {
+			onOversize = func(head, tail []byte) {
+				if notice, kind := openCode.observeStderr(string(head), string(tail)); kind == stderrNotice {
+					keepStderr([]byte(notice))
 				}
-				line = []byte(kept)
 			}
-			stderrBuf = append(stderrBuf, line...)
-			stderrBuf = append(stderrBuf, '\n')
-			if opts.Streamer != nil {
-				opts.Streamer.OnOutput("stderr", append(line, '\n'))
+		}
+		eachLine(stderr, "stderr", func(raw []byte) {
+			if openCode != nil {
+				// The notice is read on the line as printed: redaction can
+				// rewrite the end it is recognized by.
+				switch notice, kind := openCode.observeStderr(string(raw), string(raw)); kind {
+				case stderrDropped:
+					return
+				case stderrNotice:
+					raw = []byte(notice)
+				}
 			}
-		})
+			keepStderr(raw)
+		}, onOversize)
 	}()
 
 	// Wait for output to drain, then wait for process
@@ -1111,17 +1130,19 @@ const redactedSecretMinLen = 8
 
 // envValueRedactor returns a replacer that swaps the value of each variable
 // in names, as env holds it, for "[REDACTED:<name>]", or nil when none of
-// them holds a value worth redacting. Each value is matched both as it is and
-// as the content of a JSON string (jsonEscaped), because a --format json
-// event escapes a tool's output: a value holding a quote or a backslash, such
-// as a JSON service key, is otherwise never found there. Longer forms are
-// matched first, so a secret that contains another is replaced whole.
+// them holds a value worth redacting. A variable whose name says it holds a
+// setting rather than a credential (isProviderSetting) is not redacted. Each
+// value is matched both as it is and as the content of a JSON string
+// (jsonEscaped), because a --format json event escapes a tool's output: a
+// value holding a quote or a backslash, such as a JSON service key, is
+// otherwise never found there. Longer forms are matched first, so a secret
+// that contains another is replaced whole.
 func envValueRedactor(env, names []string) *strings.Replacer {
 	type secret struct{ form, name string }
 	var secrets []secret
 	for _, name := range names {
 		value, ok := lookupEnvList(env, name)
-		if !ok || len(value) < redactedSecretMinLen {
+		if !ok || len(value) < redactedSecretMinLen || isProviderSetting(name) {
 			continue
 		}
 		secrets = append(secrets, secret{value, name})
@@ -1138,6 +1159,34 @@ func envValueRedactor(env, names []string) *strings.Replacer {
 		pairs = append(pairs, s.form, "[REDACTED:"+s.name+"]")
 	}
 	return strings.NewReplacer(pairs...)
+}
+
+// isProviderSetting reports whether the variable name holds a provider setting
+// rather than a credential: OpenCode's catalog binds a provider's region,
+// project, account, host and endpoint to it beside its key (AWS_REGION,
+// GOOGLE_VERTEX_PROJECT, DATABRICKS_HOST), and redacting their values would
+// strip every "us-east-1", or an organization's name, from a stage's output.
+// A name with a credential segment (KEY, APIKEY, TOKEN, SECRET, PASSWORD,
+// PASSWD, PAT) is never a setting, so AWS_ACCESS_KEY_ID stays redacted; nor is
+// a name of any shape not listed here, so a variable a later catalog adds is
+// redacted until it is recognized. GOOGLE_APPLICATION_CREDENTIALS holds the
+// path of a credential file, not the credential.
+func isProviderSetting(name string) bool {
+	segments := strings.Split(name, "_")
+	for _, s := range segments {
+		switch s {
+		case "KEY", "APIKEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "PAT":
+			return false
+		}
+	}
+	if name == "GOOGLE_APPLICATION_CREDENTIALS" {
+		return true
+	}
+	switch segments[len(segments)-1] {
+	case "REGION", "LOCATION", "PROJECT", "ACCOUNT", "HOST", "ENDPOINT", "URL", "NAME", "ID":
+		return true
+	}
+	return false
 }
 
 // lookupEnvList returns the value env, a KEY=VALUE list, holds for key: the

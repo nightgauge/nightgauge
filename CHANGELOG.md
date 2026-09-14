@@ -89,19 +89,24 @@ changelog, and the release workflow refuses a tag that does not.
   after the run (at most 64, each read under a 10-second timeout, from the
   run's own directory with no plugins and no credentials, and not at all
   after an operator stop), and records the model that served the stage. The
-  stage's result also carries the model's provider, the provider-qualified id
-  and the `opencode --version` it ran; the stage record gains the provider and
-  id with #1630. A stage that stopped because OpenCode rejected a permission
-  on its own now fails with `[adapter-permission-rejected]` or
-  `[permission-denied]` instead of reading as a success on exit 0, also when
-  the rejected command spans several lines, and the command itself is kept
-  out of the failure text. Credentials of a known shape (API keys, GitHub
-  tokens, bearer tokens, a URL's user and password, credential query
-  parameters) are removed from its output before it is kept, including where
-  a tool printed them at the start of a line or in colour, and so are the
-  secrets Nightgauge hands the stage, also in their JSON-escaped form. Output that no
-  longer matches what OpenCode 1.18.30 printed leaves an `[opencode-drift]`
-  marker in the log instead of passing silently (#1624)
+  stage's result also carries that model's provider, the `-m` value it was
+  dispatched with and the `opencode --version` it ran; the stage record gains
+  the provider and the `-m` value with #1630. A stage that stopped because
+  OpenCode rejected a permission on its own now fails with
+  `[adapter-permission-rejected]` or `[permission-denied]` instead of reading
+  as a success on exit 0, also when the rejected command spans several lines.
+  OpenCode prints the command unescaped, so after the first rejection the
+  stage keeps no stderr line but the rejections and the markers, and the
+  markers name only OpenCode's own permissions: nothing in the command, even
+  a line that fakes the end of the rejection, reaches the failure reason.
+  Credentials of a known shape (API keys, GitHub tokens, bearer tokens, a
+  URL's user and password, credential query parameters) are removed from its
+  output before it is kept, including where a tool printed them at the start
+  of a line or in colour, and so are the credentials Nightgauge hands the
+  stage, also in their JSON-escaped form; provider settings such as
+  `AWS_REGION` or a Vertex project are not redacted as secrets. Output
+  that no longer matches what OpenCode 1.18.30 printed leaves an
+  `[opencode-drift]` marker in the log instead of passing silently (#1624)
 - `nightgauge preflight managed-steering` reports generated Nightgauge steering
   committed in any tracked `AGENTS.md`, and `--fix` removes it from the working
   tree (issue 1675)
@@ -230,8 +235,9 @@ changelog, and the release workflow refuses a tag that does not.
   you chose instead of falling back to a credentials file or profile. That
   does not stop every other provider: the dispatch warning lists what still
   reaches one. The
-  server password, the forge tokens and the stage's own provider's variables
-  are redacted from its captured output, and no other secret is yet. Dispatch
+  server password, the forge tokens and the stage's own provider's credentials
+  are redacted from its captured output, and other secrets only by their shape
+  (#1624). Dispatch
   is refused while `~/.opencode` or this machine's managed OpenCode config
   holds config, which OpenCode reads whatever the run's directories; move
   `~/.opencode`'s entries to `~/.config/opencode`, or set

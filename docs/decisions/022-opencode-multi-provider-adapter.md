@@ -310,7 +310,10 @@ allowed, a host name or an address can never become one.
   can never collide with a registry id. An `other` model is recorded as its raw
   `-m` value.
 - `upstream_model`: the raw `-m` value exactly as dispatched. It is a field of
-  the local record.
+  the local record. When the session export shows that another model served
+  the stage, such as an agent's model from a config the run read (§ 10),
+  `model` and `model_provider` are the served model's and `upstream_model`
+  stays the `-m` value, the only record of what was dispatched.
 - `provider` on the V5 stage metric keeps its current meaning, the executing
   adapter, so it reads `opencode`.
 - **Yes, the V5 stage metric gains nullable fields**: `model_provider` (§ 1)
@@ -625,20 +628,29 @@ several lines, only the last ending in `); auto-rejecting`.
   (§ The command) are never emitted. Approval is the map's job, derived from
   the stage's allowed tools (#1638).
 - The parser classifies a rejected-permission tool event as a failure, exit
-  code notwithstanding (#1624, #1631). It takes the permission from the first
-  line of the stderr notice and ends the stage's stderr with
-  `[adapter-permission-rejected] tool=<permission>` when the stage's allowed
-  tools grant the permission and `[permission-denied] tool=<permission>`
-  otherwise; an exit-0 run with either reports exit code 1. The patterns are
+  code notwithstanding (#1624, #1631). It reads the stderr notice as OpenCode
+  printed it, before redaction, takes the permission from its first line, and
+  ends the stage's stderr with `[adapter-permission-rejected] tool=<permission>`
+  when the stage's allowed tools grant the permission and
+  `[permission-denied] tool=<permission>` otherwise; an exit-0 run with either
+  reports exit code 1. A marker names only a permission 1.18.30 asks for
+  itself, and `unknown` for any other, such as an MCP tool's. The patterns are
   the model's own text, and the stage's stderr is what classification reads,
   so the stderr the stage keeps holds the notice without them, and none of the
-  lines they span; none of those lines is read as a notice of its own. When
-  the stream shows OpenCode's rejection error on the stage's own tool call and
-  stderr named no permission, the run still fails, with
-  `[permission-denied] tool=unknown` and a drift marker: the event names the
-  tool, and a rejection of `external_directory` or `doom_loop` is one the
-  tool's name does not show. Nothing else of the transcript is read. #1631
-  owns the failure kinds.
+  lines they span; none of those lines is read as a notice of its own. Being
+  unescaped, the patterns decide where the notice seems to end: a line of them
+  that itself ends in `); auto-rejecting` ends it early, and nothing tells
+  their later lines from what OpenCode prints next. So from the first notice
+  on, the stage keeps no stderr line but the parser's own, and a drift marker
+  counts the lines it dropped. A later line that reads as a notice still
+  yields a marker, and one the patterns forged can add a marker naming one of
+  OpenCode's own permissions, but nothing they chose reaches what
+  classification reads. When the stream shows OpenCode's rejection error on
+  the stage's own tool call and stderr named no permission, the run still
+  fails, with `[permission-denied] tool=unknown` and a drift marker: the event
+  names the tool, and a rejection of `external_directory` or `doom_loop` is
+  one the tool's name does not show. Nothing else of the transcript is read.
+  #1631 owns the failure kinds.
 - The project directory OpenCode uses is the resolved path, so an absolute
   path through a symlinked prefix (such as macOS `/tmp`) reads as an external
   directory. The permission map is built against resolved paths.
@@ -1025,13 +1037,20 @@ removal.
   errors. Every line the child prints, stderr and stdout alike, is redacted of
   the secrets Nightgauge lets the child hold before it is streamed or kept: the
   server password, `GITHUB_TOKEN`, `GH_TOKEN`, `GITLAB_TOKEN` and every
-  variable the catalog binds to the dispatched provider, whichever provider it
-  is (§ 8), each become `[REDACTED:<name>]`, matched as they are and as the
+  credential the catalog binds to the dispatched provider, whichever provider
+  it is (§ 8), each become `[REDACTED:<name>]`, matched as they are and as the
   content of a JSON string, since a `--format json` event escapes a tool's
-  output. #1624 then removes every credential of a known shape, whatever its
-  source: API keys by their issuers' prefixes, GitHub and GitLab tokens,
-  bearer and authorization credentials, a URL's user and password, and a
-  credential query parameter, also where a JSON escape or a terminal colour
+  output. The catalog also binds settings to a provider, and those are not
+  secrets: a region, project, location, account, host, endpoint, resource
+  name or id (`AWS_REGION`, `GOOGLE_VERTEX_PROJECT`, `DATABRICKS_HOST`), and
+  `GOOGLE_APPLICATION_CREDENTIALS`, the path of a credential file. Their
+  values stay, so a stage's output keeps every `us-east-1` and an
+  organization's name. A variable named as a key, token, secret, password or
+  personal access token is always a credential, and one of any other shape is
+  treated as one. #1624 then removes every credential of a known shape,
+  whatever its source: API keys by their issuers' prefixes, GitHub and GitLab
+  tokens, bearer and authorization credentials, a URL's user and password, and
+  a credential query parameter, also where a JSON escape or a terminal colour
   code comes right before one. Each string of a JSON event is redacted decoded
   as well as escaped. A secret of no recognizable shape stays, and an
   endpoint's `base_url` is #1678's.

@@ -82,8 +82,18 @@ var openCodeAutoRejectStartRE = regexp.MustCompile(`^!\s*permission requested: (
 // openCodeAutoRejectEnd ends the notice's last line.
 const openCodeAutoRejectEnd = "); auto-rejecting"
 
-// openCodePermissionRE is the shape of an OpenCode permission name.
-var openCodePermissionRE = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
+// openCodePermissions are the permissions opencode 1.18.30 asks for itself,
+// read from its bundled source. A notice naming any other, such as an MCP
+// tool's, which a config names, or one the rejected input of an earlier
+// notice forged, is recorded as openCodeUnknownPermission: a marker is what
+// failure classification reads, so no name the model or a config chose may
+// reach it.
+var openCodePermissions = map[string]bool{
+	"bash": true, "read": true, "edit": true, "glob": true, "grep": true,
+	"task": true, "webfetch": true, "websearch": true, "todowrite": true,
+	"skill": true, "lsp": true, "external_directory": true, "doom_loop": true,
+	"workflow_tool_approval": true,
+}
 
 // openCodeUnknownPermission stands for a rejected permission this parser
 // could not name.
@@ -93,30 +103,34 @@ const openCodeUnknownPermission = "unknown"
 // When it is one it returns the classification marker for the rejected
 // permission: PermissionRejectedMarker when allowedTools (Claude Code tool
 // names, as RunOptions.AllowedTools holds them) grant it, and
-// PermissionDeniedMarker otherwise. A line naming no recognizable permission
-// yields "tool=unknown".
+// PermissionDeniedMarker otherwise. A line naming no permission of
+// openCodePermissions yields "tool=unknown".
 func OpenCodeAutoRejectMarker(line string, allowedTools []string) (string, bool) {
-	permission, _, ok := openCodeRejectedPermission(line)
+	permission, ok := openCodeRejectedPermission(openCodePlain(line))
 	if !ok {
 		return "", false
 	}
 	return openCodeRejectionMarker(permission, adapters.OpenCodeToolsAllowed(allowedTools)), true
 }
 
-// openCodeRejectedPermission reads a line that may start an auto-reject
-// notice. It returns the permission the notice names ("unknown" when it names
-// none this parser recognizes) and whether the notice also ends on this line.
-func openCodeRejectedPermission(line string) (permission string, closed, ok bool) {
-	plain := strings.TrimSpace(ansiEscapeRE.ReplaceAllString(line, ""))
+// openCodePlain is a stderr line as the notice checks read it: without
+// terminal escapes and surrounding space.
+func openCodePlain(line string) string {
+	return strings.TrimSpace(ansiEscapeRE.ReplaceAllString(line, ""))
+}
+
+// openCodeRejectedPermission reads a plain line that may start an auto-reject
+// notice, and returns the permission the notice names ("unknown" when it is
+// none of openCodePermissions).
+func openCodeRejectedPermission(plain string) (string, bool) {
 	m := openCodeAutoRejectStartRE.FindStringSubmatch(plain)
 	if m == nil {
-		return "", false, false
+		return "", false
 	}
-	closed = strings.HasSuffix(plain, openCodeAutoRejectEnd)
-	if !openCodePermissionRE.MatchString(m[1]) {
-		return openCodeUnknownPermission, closed, true
+	if !openCodePermissions[m[1]] {
+		return openCodeUnknownPermission, true
 	}
-	return m[1], closed, true
+	return m[1], true
 }
 
 // openCodeKeptNotice is what an auto-reject notice becomes in the stderr the
@@ -281,15 +295,19 @@ func RedactCredentials(s string) string {
 	return s
 }
 
+// oversizeEdge is how many bytes of each end of an oversized line forEachLine
+// hands onOversize: enough for the start and the end of an auto-reject notice.
+const oversizeEdge = 256
+
 // forEachLine calls onLine with every line r holds, without its line ending,
 // the way bufio.Scanner splits lines. A line longer than limit bytes is not
-// delivered: it is read to its end and discarded, and onOversize is called,
-// so one oversized line costs a marker instead of ending the read and
-// leaving the child blocked on a full pipe. The slice onLine receives is
-// valid only until it returns.
-func forEachLine(r io.Reader, limit int, onLine func([]byte), onOversize func()) error {
+// delivered: it is read to its end and discarded, and onOversize is called
+// with its first and last oversizeEdge bytes, so one oversized line costs a
+// marker instead of ending the read and leaving the child blocked on a full
+// pipe. The slices a callback receives are valid only until it returns.
+func forEachLine(r io.Reader, limit int, onLine func([]byte), onOversize func(head, tail []byte)) error {
 	br := bufio.NewReaderSize(r, 64*1024)
-	var line []byte
+	var line, head, tail []byte
 	size, over := 0, false
 	for {
 		chunk, err := br.ReadSlice('\n')
@@ -299,19 +317,28 @@ func forEachLine(r io.Reader, limit int, onLine func([]byte), onOversize func())
 			data = chunk[:len(chunk)-1]
 		}
 		size += len(data)
-		if !over {
-			if size > limit {
-				over, line = true, line[:0]
-			} else {
-				line = append(line, data...)
+		if !over && size > limit {
+			over = true
+			head = append(head[:0], line[:min(len(line), oversizeEdge)]...)
+			if room := oversizeEdge - len(head); room > 0 {
+				head = append(head, data[:min(len(data), room)]...)
 			}
+			// One byte more than the edge, for a '\r' ending the line.
+			tail = appendTail(tail[:0], line, oversizeEdge+1)
+			line = line[:0]
+		}
+		if over {
+			tail = appendTail(tail, data, oversizeEdge+1)
+		} else {
+			line = append(line, data...)
 		}
 		if errors.Is(err, bufio.ErrBufferFull) {
 			continue
 		}
 		if complete || size > 0 {
 			if over {
-				onOversize()
+				end := bytes.TrimSuffix(tail, []byte{'\r'})
+				onOversize(head, end[max(0, len(end)-oversizeEdge):])
 			} else {
 				onLine(bytes.TrimSuffix(line, []byte{'\r'}))
 			}
@@ -326,6 +353,18 @@ func forEachLine(r io.Reader, limit int, onLine func([]byte), onOversize func())
 	}
 }
 
+// appendTail appends data to tail and keeps only its last n bytes.
+func appendTail(tail, data []byte, n int) []byte {
+	if len(data) >= n {
+		return append(tail[:0], data[len(data)-n:]...)
+	}
+	tail = append(tail, data...)
+	if len(tail) > n {
+		tail = append(tail[:0], tail[len(tail)-n:]...)
+	}
+	return tail
+}
+
 // openCodeRun is the opencode half of one stage in Manager.RunStage: it
 // watches the child's stderr for auto-reject notices and, once the child has
 // exited, completes the RunResult.
@@ -337,8 +376,9 @@ type openCodeRun struct {
 	markers []string
 	// inNotice is set while an auto-reject notice spans lines: the lines up
 	// to the one ending in openCodeAutoRejectEnd are the rejected call's
-	// input. Only the stderr reader touches it.
-	inNotice bool
+	// input. noticed is set once any notice started. Only the stderr reader
+	// touches them.
+	inNotice, noticed bool
 	// fold starts the post-exit opencode processes; tests replace it.
 	fold openCodeFold
 }
@@ -355,33 +395,58 @@ func newOpenCodeRun(stream *OpenCodeStream, allowedTools []string) *openCodeRun 
 	}
 }
 
-// observeStderr reads one redacted stderr line and returns what the stage
-// keeps and streams in its place, or false when it keeps nothing of it.
+// stderrLine is what observeStderr made of one stderr line.
+type stderrLine int
+
+const (
+	// stderrKept is an ordinary line, kept as it is.
+	stderrKept stderrLine = iota
+	// stderrNotice is the first line of an auto-reject notice, kept as
+	// openCodeKeptNotice.
+	stderrNotice
+	// stderrDropped is a line nothing of which is kept.
+	stderrDropped
+)
+
+// observeStderr reads one stderr line exactly as the child printed it, before
+// redaction, which may rewrite the end a notice is recognized by. start and
+// end are the whole line, or the first and last bytes of a line forEachLine
+// dropped for its length. It returns the kept notice for a stderrNotice line.
+// Nothing of the line is stored here: the caller redacts what it keeps.
 //
 // An auto-reject notice yields a marker for its permission and is kept as
 // openCodeKeptNotice: the call's input never reaches the stage's stderr,
 // which failure classification reads. The lines a notice spans after its
 // first are that input, so they are dropped, and none of them is read as a
-// notice of its own, which is what a line of a rejected command could
-// otherwise forge. The input is printed unescaped, so a line inside it that
-// itself ends in openCodeAutoRejectEnd ends the notice early; the first line,
-// and with it the marker, is never in doubt.
-func (r *openCodeRun) observeStderr(line string) (string, bool) {
+// notice of its own. The input is printed unescaped, so a line of it that
+// itself ends in openCodeAutoRejectEnd ends the notice early, and nothing
+// tells the input's later lines from what OpenCode prints next. So from the
+// first notice on, no other line is kept, with a drift marker counting them;
+// a later notice still yields its own marker. One the rejected input forged
+// can name nothing outside openCodePermissions.
+func (r *openCodeRun) observeStderr(start, end string) (string, stderrLine) {
 	if r.inNotice {
-		plain := strings.TrimSpace(ansiEscapeRE.ReplaceAllString(line, ""))
-		r.inNotice = !strings.HasSuffix(plain, openCodeAutoRejectEnd)
-		return "", false
+		r.inNotice = !strings.HasSuffix(openCodePlain(end), openCodeAutoRejectEnd)
+		return "", stderrDropped
 	}
-	permission, closed, ok := openCodeRejectedPermission(line)
-	if !ok {
-		return line, true
+	plain := openCodePlain(start)
+	permission, ok := openCodeRejectedPermission(plain)
+	switch {
+	case !ok && !r.noticed:
+		return "", stderrKept
+	case !ok:
+		if plain != "" {
+			r.stream.Drift("a stderr line after an auto-reject notice was not kept: OpenCode prints the rejected call's input unescaped, so it cannot be told from that input")
+		}
+		return "", stderrDropped
 	}
-	r.inNotice = !closed
+	r.noticed = true
+	r.inNotice = !strings.HasSuffix(openCodePlain(end), openCodeAutoRejectEnd)
 	if permission == openCodeUnknownPermission {
 		r.stream.Drift("an auto-reject line on stderr names no permission this parser recognizes")
 	}
 	r.addMarker(openCodeRejectionMarker(permission, r.allowed))
-	return openCodeKeptNotice(permission), true
+	return openCodeKeptNotice(permission), stderrNotice
 }
 
 // addMarker records marker once.
@@ -540,16 +605,19 @@ type OpenCodeServedModel struct {
 	// "other" for a key Nightgauge does not recognize.
 	Provider string
 	// Model is the recorded model: a registry model's bare id, any other
-	// model as "<provider>/<id>", and an "other" model as Upstream.
+	// model as "<provider>/<id>", and an "other" model as its raw
+	// provider-qualified id.
 	Model string
-	// Upstream is the provider-qualified id as OpenCode names it.
+	// Upstream is the raw -m value exactly as dispatched (ADR-022 § 2), also
+	// when the export shows that another model served the stage.
 	Upstream string
 }
 
 // ResolveOpenCodeServedModel records the model that served a stage. The
-// stream names no model, so it comes from the session export's assistant
-// message (providerID and modelID) when there is one, and otherwise from the
-// model the stage was dispatched with (-m).
+// stream names no model, so Provider and Model come from the session export's
+// assistant message (providerID and modelID) when there is one, and otherwise
+// from the model the stage was dispatched with (-m). Upstream is always the
+// dispatched -m.
 func ResolveOpenCodeServedModel(providerID, modelID, dispatched string) OpenCodeServedModel {
 	raw := dispatched
 	if providerID != "" && modelID != "" {
@@ -558,8 +626,8 @@ func ResolveOpenCodeServedModel(providerID, modelID, dispatched string) OpenCode
 	if raw == "" {
 		return OpenCodeServedModel{}
 	}
-	provider, bareID, upstream := models.ParseOpenCodeModel(raw)
-	served := OpenCodeServedModel{Provider: provider, Model: raw, Upstream: upstream}
+	provider, bareID, _ := models.ParseOpenCodeModel(raw)
+	served := OpenCodeServedModel{Provider: provider, Model: raw, Upstream: dispatched}
 	if provider == "other" || bareID == "" {
 		return served
 	}

@@ -155,9 +155,10 @@ type RunResult struct {
 	// adapter but opencode).
 	PeakStepInputTokens int
 	// ModelProvider is the normalized provider of ServedModel (ADR-022 § 1),
-	// and UpstreamModel the provider-qualified id exactly as OpenCode named
-	// it ("lmstudio/qwen/qwen3.8-27b"); ServedModel then holds the recorded
-	// form of § 2. Only a multi-provider adapter (opencode) sets them.
+	// which then holds the recorded form of § 2. UpstreamModel is the raw -m
+	// value exactly as dispatched ("lmstudio/qwen/qwen3.8-27b"), also when
+	// another model served the stage. Only a multi-provider adapter
+	// (opencode) sets them.
 	ModelProvider string
 	UpstreamModel string
 	// AdapterVersion is the version the adapter's CLI reports for itself

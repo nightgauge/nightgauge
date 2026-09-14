@@ -76,18 +76,24 @@ func treeListing(t *testing.T, dir string) []string {
 
 // TestOpenCodeServedModel: the stream names no model, so the served model
 // comes from the session export's assistant message, recorded as ADR-022 § 1
-// and § 2 decide, and from the dispatched -m when there is no export.
+// and § 2 decide, and from the dispatched -m when there is no export. The
+// upstream model is the -m value exactly as dispatched (§ 2), also when the
+// export shows that another model served the stage, such as an agent's model
+// from a config the run read: then it is the only record of what was
+// dispatched.
 func TestOpenCodeServedModel(t *testing.T) {
 	for _, tc := range []struct {
 		providerID, modelID, dispatched string
 		want                            OpenCodeServedModel
 	}{
-		{"lmstudio", "qwen/qwen3.8-27b", "", OpenCodeServedModel{"lm-studio", "lm-studio/qwen/qwen3.8-27b", "lmstudio/qwen/qwen3.8-27b"}},
+		{"lmstudio", "qwen/qwen3.8-27b", "lmstudio/qwen/qwen3.8-27b", OpenCodeServedModel{"lm-studio", "lm-studio/qwen/qwen3.8-27b", "lmstudio/qwen/qwen3.8-27b"}},
 		{"", "", "lmstudio/qwen/qwen3.8-27b", OpenCodeServedModel{"lm-studio", "lm-studio/qwen/qwen3.8-27b", "lmstudio/qwen/qwen3.8-27b"}},
-		{"ollama", "qwen3-coder:30b", "lmstudio/qwen/qwen3.8-27b", OpenCodeServedModel{"ollama", "ollama/qwen3-coder:30b", "ollama/qwen3-coder:30b"}},
-		{"anthropic", "claude-sonnet-5", "", OpenCodeServedModel{"anthropic", "claude-sonnet-5", "anthropic/claude-sonnet-5"}},
-		{"openai", "gpt-9-preview", "", OpenCodeServedModel{"openai", "openai/gpt-9-preview", "openai/gpt-9-preview"}},
-		{"openrouter", "meta-llama/llama-4", "", OpenCodeServedModel{"other", "openrouter/meta-llama/llama-4", "openrouter/meta-llama/llama-4"}},
+		{"ollama", "qwen3-coder:30b", "lmstudio/qwen/qwen3.8-27b", OpenCodeServedModel{"ollama", "ollama/qwen3-coder:30b", "lmstudio/qwen/qwen3.8-27b"}},
+		{"lmstudio", "qwen/qwen3.8-27b", "ollama/qwen3-coder:30b", OpenCodeServedModel{"lm-studio", "lm-studio/qwen/qwen3.8-27b", "ollama/qwen3-coder:30b"}},
+		{"anthropic", "claude-sonnet-5", "anthropic/claude-sonnet-5", OpenCodeServedModel{"anthropic", "claude-sonnet-5", "anthropic/claude-sonnet-5"}},
+		{"openai", "gpt-9-preview", "openai/gpt-9-preview", OpenCodeServedModel{"openai", "openai/gpt-9-preview", "openai/gpt-9-preview"}},
+		{"openrouter", "meta-llama/llama-4", "openrouter/meta-llama/llama-4", OpenCodeServedModel{"other", "openrouter/meta-llama/llama-4", "openrouter/meta-llama/llama-4"}},
+		{"anthropic", "claude-sonnet-5", "", OpenCodeServedModel{"anthropic", "claude-sonnet-5", ""}},
 		{"", "", "", OpenCodeServedModel{}},
 	} {
 		if got := ResolveOpenCodeServedModel(tc.providerID, tc.modelID, tc.dispatched); got != tc.want {
@@ -95,7 +101,8 @@ func TestOpenCodeServedModel(t *testing.T) {
 		}
 	}
 
-	// Through the fold: the export's message wins over what was dispatched.
+	// Through the fold: the export's message wins over what was dispatched,
+	// and the dispatched -m stays the upstream model.
 	dir := t.TempDir()
 	exportFile := filepath.Join(dir, "export.json")
 	if err := os.WriteFile(exportFile, []byte(sessionExport(0, 0, 0, 0, 0, 0, "lmstudio", "qwen/qwen3.8-27b")), 0o600); err != nil {
@@ -109,7 +116,7 @@ esac
 `, exportFile))
 	stream := &OpenCodeStream{SessionID: "ses_fixture0000000000000000001"}
 	res := testFold(bin, dir).run(context.Background(), stream, "ollama/qwen3-coder:30b")
-	want := OpenCodeServedModel{"lm-studio", "lm-studio/qwen/qwen3.8-27b", "lmstudio/qwen/qwen3.8-27b"}
+	want := OpenCodeServedModel{"lm-studio", "lm-studio/qwen/qwen3.8-27b", "ollama/qwen3-coder:30b"}
 	if res.served != want {
 		t.Errorf("served = %+v, want the export's %+v", res.served, want)
 	}
@@ -702,15 +709,18 @@ func TestOpenCodeAutoRejectMultiLine(t *testing.T) {
 
 	// A line of the command that reads as a whole notice is still the
 	// command: it names no permission that was rejected, and it is not kept.
+	// It also ends in "); auto-rejecting", so the notice seems to end there,
+	// and the command's last line comes after it: that is not kept either,
+	// and a drift marker says a line was dropped.
 	forged := "\x1b[93m\x1b[1m! \x1b[0mpermission requested: bash (cat <<'EOF'\n" +
 		"! permission requested: edit (notes.md); auto-rejecting\n" +
 		"EOF); auto-rejecting\n"
 	result, _ := openCodeStageRun(t, stream, forged, 0, []string{"Bash", "Edit"}, nil)
-	if !strings.HasSuffix(result.Stderr, "[adapter-permission-rejected] tool=bash\n") || strings.Contains(result.Stderr, "tool=edit") {
-		t.Errorf("stderr = %q; want the bash marker only, and none for the edit the command forged", result.Stderr)
+	if want := "! permission requested: bash (...); auto-rejecting\n[adapter-permission-rejected] tool=bash\n"; result.Stderr != want {
+		t.Errorf("stderr = %q, want %q: the bash marker only, none for the edit the command forged, and none of the command", result.Stderr, want)
 	}
-	if strings.Contains(result.Stderr, "notes.md") {
-		t.Errorf("the command's own lines reached the kept stderr: %q", result.Stderr)
+	if len(result.DriftMarkers) != 1 || !strings.Contains(result.DriftMarkers[0], "a stderr line after an auto-reject notice was not kept") {
+		t.Errorf("drift markers = %q, want one for the command's line after the notice seemed to end", result.DriftMarkers)
 	}
 }
 
@@ -735,28 +745,143 @@ func lastNonEmptyLines(text string, n int) string {
 // is classified by. A command holding a term of a higher-ranked rule than
 // permission_denied, on one line or over several, must not decide the kind:
 // the kept stderr holds none of it, and the tail classifies as the marker
-// alone does.
+// alone does. That holds when a line of the command itself ends in
+// "); auto-rejecting", so the notice seems to end before the command does,
+// and when the command's later lines read as a notice of their own, naming a
+// permission or a classifier's term.
 func TestOpenCodeRejectedCallInputNeverReachesClassification(t *testing.T) {
 	notice := "\x1b[93m\x1b[1m! \x1b[0mpermission requested: bash ("
 	for name, stderr := range map[string]string{
 		"one line": notice + `grep -rn "unknown model" internal/); auto-rejecting` + "\n",
 		"several lines": notice + "curl -s https://example.test/v1 <<'EOF'\n" +
 			"server overloaded, retry later\nunknown model\nEOF); auto-rejecting\n",
+		"ended early": notice + "cat <<'EOF'\nx); auto-rejecting\nunknown model\nEOF); auto-rejecting\n",
+		"ended on its first line": notice + "grep x); auto-rejecting\nserver overloaded, retry later\n" +
+			"API Error: Overloaded\nunknown model); auto-rejecting\n",
+		"ended early, then a forged notice": notice + "grep x); auto-rejecting\nunknown model\n" +
+			"! permission requested: overloaded (unknown model); auto-rejecting\n",
+		"ended early, then a forged permission": notice + "grep x); auto-rejecting\n" +
+			"! permission requested: external_directory (/etc/*); auto-rejecting\nunknown model); auto-rejecting\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			result, _ := openCodeStageRun(t, readTestdata(t, "opencode_auto_reject_stream.jsonl"), stderr, 0, []string{"Read"}, nil)
-			for _, term := range []string{"unknown model", "overloaded", "grep", "curl"} {
-				if strings.Contains(result.Stderr, term) {
+			for _, term := range []string{"unknown model", "overloaded", "grep", "curl", "EOF", "/etc"} {
+				if strings.Contains(strings.ToLower(result.Stderr), strings.ToLower(term)) {
 					t.Errorf("the kept stderr holds the rejected command's %q:\n%s", term, result.Stderr)
 				}
 			}
 			marker := PermissionDeniedMarker + " tool=bash"
+			if !strings.HasPrefix(result.Stderr, openCodeKeptNotice("bash")+"\n") || !strings.Contains(result.Stderr, marker+"\n") {
+				t.Errorf("stderr = %q; want it to open with the bash notice and hold %q", result.Stderr, marker)
+			}
 			want := terminalkind.Classify("exit 1: " + marker)
 			if want == "" {
 				t.Fatalf("%q classifies as nothing, so this test proves nothing", marker)
 			}
 			if got := terminalkind.Classify("exit 1: " + lastNonEmptyLines(result.Stderr, 3)); got != want {
 				t.Errorf("the stage classifies as %q, want the marker's %q; stderr:\n%s", got, want, result.Stderr)
+			}
+		})
+	}
+}
+
+// TestOpenCodeRejectionMarkersNameOnlyOpenCodePermissions: a marker is what
+// failure classification reads, and a notice can be forged by the rejected
+// input of an earlier one or name an MCP tool a config chose. So a marker
+// names only a permission OpenCode 1.18.30 asks for itself, and "unknown"
+// for any other: no permission name, and no kept notice, changes the kind a
+// stage classifies as.
+func TestOpenCodeRejectionMarkersNameOnlyOpenCodePermissions(t *testing.T) {
+	own := []string{
+		"bash", "read", "edit", "glob", "grep", "task", "webfetch", "websearch", "todowrite",
+		"skill", "lsp", "external_directory", "doom_loop", "workflow_tool_approval",
+	}
+	for _, permission := range own {
+		line := "\x1b[93m\x1b[1m! \x1b[0mpermission requested: " + permission + " (*); auto-rejecting"
+		if got, ok := OpenCodeAutoRejectMarker(line, nil); !ok || got != PermissionDeniedMarker+" tool="+permission {
+			t.Errorf("OpenCodeAutoRejectMarker(%q) = %q, %v; want it to name %s", line, got, ok, permission)
+		}
+		for _, prefix := range []string{PermissionRejectedMarker, PermissionDeniedMarker} {
+			want := terminalkind.Classify("exit 1: " + prefix + " tool=unknown")
+			tail := openCodeKeptNotice(permission) + "\n" + prefix + " tool=" + permission
+			if got := terminalkind.Classify("exit 1: " + tail); got != want {
+				t.Errorf("%q classifies as %q, want the unnamed marker's %q", tail, got, want)
+			}
+		}
+	}
+	for _, other := range []string{"github_create_issue", "overloaded", "rate_limit", "context_length_exceeded"} {
+		line := "! permission requested: " + other + " (*); auto-rejecting"
+		if got, ok := OpenCodeAutoRejectMarker(line, []string{"Bash"}); !ok || got != PermissionDeniedMarker+" tool=unknown" {
+			t.Errorf("OpenCodeAutoRejectMarker(%q) = %q, %v; want %q", line, got, ok, PermissionDeniedMarker+" tool=unknown")
+		}
+	}
+}
+
+// TestOpenCodeNoticeReadBeforeRedaction: a notice is read on the line as
+// OpenCode printed it. Redaction replaces a credential query parameter up to
+// the next space, which takes the notice's closing "); " with it when the
+// parameter ends the patterns: read after redaction, the notice never ended,
+// and every later stderr line, the next notice among them, was dropped as its
+// input, with its marker and no drift marker. One-line and multi-line notices
+// alike, for bash and for webfetch, whose pattern is the URL.
+func TestOpenCodeNoticeReadBeforeRedaction(t *testing.T) {
+	value := strings.Repeat("q7", 6)
+	notice := "\x1b[93m\x1b[1m! \x1b[0mpermission requested: "
+	for name, tc := range map[string]struct{ permission, first string }{
+		"one line": {"bash", notice + "bash (curl -s https://api.example.test/v1/items?access_token=" + value + "); auto-rejecting\n"},
+		"several lines": {"bash", notice + "bash (curl -s -K - <<'EOF'\nurl = api.example.test\n" +
+			"https://api.example.test/v1/items?token=" + value + "); auto-rejecting\n"},
+		"webfetch": {"webfetch", notice + "webfetch (https://bucket.example.test/o?X-Amz-Signature=" + value + "); auto-rejecting\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stderr := tc.first + notice + "edit (notes.md); auto-rejecting\n"
+			result, _ := openCodeStageRun(t, readTestdata(t, "opencode_auto_reject_stream.jsonl"), stderr, 0, []string{"Read"}, nil)
+			want := openCodeKeptNotice(tc.permission) + "\n" + openCodeKeptNotice("edit") + "\n" +
+				PermissionDeniedMarker + " tool=" + tc.permission + "\n" + PermissionDeniedMarker + " tool=edit\n"
+			if result.Stderr != want {
+				t.Errorf("stderr = %q, want %q", result.Stderr, want)
+			}
+			if len(result.DriftMarkers) != 0 {
+				t.Errorf("drift markers = %q, want none", result.DriftMarkers)
+			}
+		})
+	}
+
+	// A line OpenCode prints after the notice is not kept, since nothing
+	// tells it from the rejected input, but it is not lost silently.
+	stderr := notice + "bash (curl -s https://api.example.test/v1/items?access_token=" + value + "); auto-rejecting\n" +
+		"ERROR 2026-09-13T20:00:00 service=provider ProviderModelNotFoundError: model not found\n" +
+		notice + "edit (notes.md); auto-rejecting\n"
+	result, _ := openCodeStageRun(t, readTestdata(t, "opencode_auto_reject_stream.jsonl"), stderr, 0, []string{"Read"}, nil)
+	if want := PermissionDeniedMarker + " tool=bash\n" + PermissionDeniedMarker + " tool=edit\n"; !strings.HasSuffix(result.Stderr, want) {
+		t.Errorf("stderr = %q; want it to end with both markers %q", result.Stderr, want)
+	}
+	if len(result.DriftMarkers) != 1 || !strings.Contains(result.DriftMarkers[0], "a stderr line after an auto-reject notice was not kept") {
+		t.Errorf("drift markers = %q, want one for the line after the notice", result.DriftMarkers)
+	}
+}
+
+// TestOpenCodeOversizeNoticeLine: a notice line longer than the 1 MiB line
+// limit is dropped like any other, but its first and last bytes are still
+// read: its first line still yields its marker, and its last line still ends
+// it, so the next notice is read as one.
+func TestOpenCodeOversizeNoticeLine(t *testing.T) {
+	notice := "\x1b[93m\x1b[1m! \x1b[0mpermission requested: "
+	huge := strings.Repeat("x", streamLineLimit+1)
+	next := notice + "edit (notes.md); auto-rejecting\n"
+	for name, stderr := range map[string]string{
+		"its only line": notice + "bash (echo " + huge + "); auto-rejecting\n" + next,
+		"its last line": notice + "bash (cat <<'EOF'\n" + huge + "EOF); auto-rejecting\n" + next,
+	} {
+		t.Run(name, func(t *testing.T) {
+			result, _ := openCodeStageRun(t, readTestdata(t, "opencode_auto_reject_stream.jsonl"), stderr, 0, []string{"Read"}, nil)
+			want := openCodeKeptNotice("bash") + "\n" + openCodeKeptNotice("edit") + "\n" +
+				PermissionDeniedMarker + " tool=bash\n" + PermissionDeniedMarker + " tool=edit\n"
+			if result.Stderr != want {
+				t.Errorf("stderr = %.300q, want %q", result.Stderr, want)
+			}
+			if len(result.DriftMarkers) != 1 || !strings.Contains(result.DriftMarkers[0], "dropped a stderr line longer than") {
+				t.Errorf("drift markers = %q, want only the one for the long line", result.DriftMarkers)
 			}
 		})
 	}
@@ -936,6 +1061,73 @@ func TestOpenCodeRedactsQuoteBearingValue(t *testing.T) {
 	}
 }
 
+// TestOpenCodeRedactsCredentialsNotProviderSettings: of the variables the
+// adapter names for a dispatch, only the credentials are redacted. OpenCode's
+// catalog also binds a provider's region, project, account, host and endpoint
+// to it, and redacting those would strip every "us-east-1", or an
+// organization's name, from a stage's output and failure text.
+func TestOpenCodeRedactsCredentialsNotProviderSettings(t *testing.T) {
+	adapter := adapters.NewOpenCodeAdapter()
+	for provider, settings := range map[string][]string{
+		"amazon-bedrock":           {"AWS_REGION"},
+		"google-vertex":            {"GOOGLE_VERTEX_PROJECT", "GOOGLE_VERTEX_LOCATION", "GOOGLE_APPLICATION_CREDENTIALS"},
+		"azure":                    {"AZURE_RESOURCE_NAME"},
+		"azure-cognitive-services": {"AZURE_COGNITIVE_SERVICES_RESOURCE_NAME"},
+		"databricks":               {"DATABRICKS_HOST"},
+		"cloudflare-ai-gateway":    {"CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID"},
+		"snowflake-cortex":         {"SNOWFLAKE_ACCOUNT"},
+		"watsonx":                  {"WATSONX_AI_PROJECT_ID"},
+		"privatemode-ai":           {"PRIVATEMODE_ENDPOINT"},
+		"neon":                     {"NEON_AI_GATEWAY_BASE_URL"},
+		"infomaniak":               {"INFOMANIAK_PRODUCT_ID"},
+		"sap-ai-core":              nil,
+	} {
+		names := adapter.RedactedEnv(adapters.RunOptions{Model: provider + "/fixture-model"})
+		for _, setting := range settings {
+			if !slices.Contains(names, setting) {
+				t.Fatalf("%s: the adapter does not name %s, so this test proves nothing about it: %q", provider, setting, names)
+			}
+		}
+		env := make([]string, 0, len(names))
+		for i, name := range names {
+			env = append(env, fmt.Sprintf("%s=fixture-value-%02d", name, i))
+		}
+		redactor := envValueRedactor(env, names)
+		for i, name := range names {
+			got := string(redactLine(redactor, []byte(fmt.Sprintf("value: fixture-value-%02d", i))))
+			switch redacted := got == "value: [REDACTED:"+name+"]"; {
+			case slices.Contains(settings, name) && redacted:
+				t.Errorf("%s: the setting %s was redacted as a secret", provider, name)
+			case !slices.Contains(settings, name) && !redacted:
+				t.Errorf("%s: the credential %s was not redacted: %q", provider, name, got)
+			}
+		}
+	}
+
+	// A google-vertex project named after the organization leaves its pull
+	// request URLs alone.
+	names := adapter.RedactedEnv(adapters.RunOptions{Model: "google-vertex/fixture-model"})
+	url := "https://github.com/nightgauge/nightgauge/pull/1624"
+	if got := string(redactLine(envValueRedactor([]string{"GOOGLE_VERTEX_PROJECT=nightgauge"}, names), []byte(url))); got != url {
+		t.Errorf("a vertex project named after the organization redacted %q to %q", url, got)
+	}
+
+	// Through an amazon-bedrock stage, whose region is a setting and whose
+	// secret access key is a credential.
+	secret := strings.Repeat("wJa1r", 8)
+	t.Setenv("AWS_REGION", "us-east-1")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", secret)
+	out := openCodeStageRunWith(t, openCodeStage{
+		model:  "amazon-bedrock/fixture-model",
+		stdout: readTestdata(t, "opencode_stream_research_sample.jsonl"),
+		stderr: "ERROR deployed to us-east-1: https://s3.us-east-1.amazonaws.com/bucket signed with " + secret + "\n",
+	})
+	want := "ERROR deployed to us-east-1: https://s3.us-east-1.amazonaws.com/bucket signed with [REDACTED:AWS_SECRET_ACCESS_KEY]\n"
+	if out.result.Stderr != want {
+		t.Errorf("stderr = %q, want %q", out.result.Stderr, want)
+	}
+}
+
 // TestOpenCodeFoldHelpersRunPureFromTheRunRoot: the opencode processes the
 // parser starts after a stage (--version, db, export) run from the run's own
 // root with --pure, and with only the variables that point them at the run's
@@ -1039,15 +1231,22 @@ func TestOpenCodeStoppedStageStartsNoProcess(t *testing.T) {
 // was lost.
 func TestOpenCodeLongLine(t *testing.T) {
 	huge := strings.Repeat("x", 20<<20)
-	var got []string
-	oversize := 0
-	err := forEachLine(strings.NewReader("a\n"+huge+"\nb\r\nc"), streamLineLimit,
-		func(line []byte) { got = append(got, string(line)) }, func() { oversize++ })
+	var got, edges []string
+	err := forEachLine(strings.NewReader("a\n"+"H"+huge+"T\r\nb\r\nc"), streamLineLimit,
+		func(line []byte) { got = append(got, string(line)) },
+		func(head, tail []byte) { edges = append(edges, string(head), string(tail)) })
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(got, "|") != "a|b|c" || oversize != 1 {
-		t.Errorf("lines = %q, oversize = %d; want a, b, c and one oversized line", got, oversize)
+	if strings.Join(got, "|") != "a|b|c" || len(edges) != 2 {
+		t.Fatalf("lines = %q, %d oversized; want a, b, c and one oversized line", got, len(edges)/2)
+	}
+	// Its ends are handed over, so a notice it starts or ends is still read.
+	if want := "H" + strings.Repeat("x", oversizeEdge-1); edges[0] != want {
+		t.Errorf("head = %q, want the line's first %d bytes", edges[0], oversizeEdge)
+	}
+	if want := strings.Repeat("x", oversizeEdge-1) + "T"; edges[1] != want {
+		t.Errorf("tail = %q, want the line's last %d bytes without its line ending", edges[1], oversizeEdge)
 	}
 
 	sample := openCodeFixtureLines(t, "opencode_stream_research_sample.jsonl")
