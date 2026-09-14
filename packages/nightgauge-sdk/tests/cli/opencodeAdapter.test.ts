@@ -1,8 +1,9 @@
 /**
  * OpenCodeAdapter (#1637): registration, the argv the Go adapter emits, the
  * inert-until-#1648 run config, the fail-closed version floor, the model and
- * credential checks, the child environment a real spawn gets, stderr
- * redaction, and killing the run's process group on abort.
+ * credential checks, the child environment a real spawn gets, the redaction
+ * of stderr and of the model's text, and killing the run's process group on
+ * abort and when this process exits or is interrupted.
  */
 import {
   chmodSync,
@@ -14,9 +15,10 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { spawn as spawnProcess } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -445,6 +447,27 @@ describe("OpenCodeAdapter spawn (#1637)", () => {
     expect(message).not.toContain("https://u:p@h");
   });
 
+  it("redacts the model's text before it is yielded, as Go redacts every stdout line", async () => {
+    const research = join(TESTDATA, "opencode_stream_research_sample.jsonl");
+    // A model that ran `env` and repeated it: the forge token and the run's password.
+    const { dir, query } = await runStage(
+      LOCAL_MODEL,
+      `  printf '{"type":"text","timestamp":1,"sessionID":"ses_fixture0000000000000000001","part":{"type":"text","text":"token %s password %s"}}\\n' "$GH_TOKEN" "$OPENCODE_SERVER_PASSWORD"
+  cat '${research}'`
+    );
+    const messages = await drain(query({ prompt: "p" }));
+    const password = readEnvFile(join(dir, "env")).OPENCODE_SERVER_PASSWORD;
+    const text = messages
+      .filter((m) => m.type === "assistant")
+      .map((m) => String(m.text))
+      .join("\n");
+    expect(text).toContain(
+      "token [REDACTED:GH_TOKEN] password [REDACTED:OPENCODE_SERVER_PASSWORD]"
+    );
+    expect(text).not.toContain(PARENT.GH_TOKEN);
+    expect(text).not.toContain(password);
+  });
+
   it("an auto-rejected permission fails the exit-0 run", async () => {
     const stream = join(TESTDATA, "opencode_auto_reject_stream.jsonl");
     const notice = join(TESTDATA, "opencode_auto_reject_stderr.txt");
@@ -484,4 +507,130 @@ describe("OpenCodeAdapter spawn (#1637)", () => {
     if (alive) process.kill(pid, "SIGKILL");
     expect(alive).toBe(false);
   });
+});
+
+/**
+ * An opencode run is detached into its own process group, out of the
+ * terminal's, so neither Ctrl-C nor this process's exit reaches it on its own.
+ * Each case runs the adapter in a separate Node process that then exits or is
+ * interrupted, and checks that nothing of the run survives it.
+ */
+describe("OpenCodeAdapter when its own process ends (#1637)", () => {
+  const TSX_LOADER = pathToFileURL(join(REPO_ROOT, "node_modules/tsx/dist/loader.mjs")).href;
+  const ADAPTER_URL = pathToFileURL(
+    join(REPO_ROOT, "packages/nightgauge-sdk/src/cli/adapters/OpenCodeAdapter.ts")
+  ).href;
+
+  const DRIVER = `
+import { existsSync } from "node:fs";
+const { OpenCodeAdapter } = await import(process.env.ADAPTER_URL);
+const [mode, pidFile, worktree] = process.argv.slice(2);
+const config = JSON.parse(process.env.RUN_CONFIG);
+const adapter = new OpenCodeAdapter({
+  env: { PATH: process.env.STUB_PATH, HOME: process.env.HOME },
+  model: ${JSON.stringify(LOCAL_MODEL)},
+  runConfigProvider: async () => config,
+});
+const query = await adapter.createQueryFunction({ cwd: worktree, stage: "feature-dev" });
+if (mode === "handled") process.on("SIGINT", () => {});
+(async () => {
+  for await (const _ of query({ prompt: "p" })) {
+  }
+})().then(
+  () => process.exit(0),
+  (err) => {
+    console.log(err.message);
+    process.exit(3);
+  }
+);
+for (let i = 0; i < 500 && !existsSync(pidFile); i++) await new Promise((r) => setTimeout(r, 20));
+if (mode === "exit") process.exit(130);
+// Bounded: a run the signal did not stop ends the driver after 5 s, not the test's budget.
+setTimeout(() => {
+  console.log("the query was still running");
+  process.exit(4);
+}, 5000).unref();
+process.kill(process.pid, "SIGINT");
+`;
+
+  function isAlive(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function runDriver(mode: "exit" | "unhandled" | "handled") {
+    const dir = tmp("oc-parent-");
+    const pidFile = join(dir, "grandchild.pid");
+    const stubPidFile = join(dir, "stub.pid");
+    const bin = writeStub(
+      dir,
+      `  echo $$ > '${stubPidFile}'
+  sleep 30 &
+  echo $! > '${pidFile}.tmp'
+  mv '${pidFile}.tmp' '${pidFile}'
+  wait`
+    );
+    const driver = join(dir, "driver.mjs");
+    writeFileSync(driver, DRIVER);
+    const worktree = tmp("oc-wt-");
+    const child = spawnProcess(
+      process.execPath,
+      ["--import", TSX_LOADER, driver, mode, pidFile, worktree],
+      {
+        env: {
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          ADAPTER_URL,
+          STUB_PATH: `${bin}:${process.env.PATH}`,
+          RUN_CONFIG: JSON.stringify(runConfig(tmp("oc-run-"))),
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      }
+    );
+    let output = "";
+    child.stdout.on("data", (c) => (output += String(c)));
+    child.stderr.on("data", (c) => (output += String(c)));
+    const killer = setTimeout(() => child.kill("SIGKILL"), 15_000);
+    const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((r) =>
+      child.on("close", (code, signal) => r({ code, signal }))
+    );
+    clearTimeout(killer);
+    const pids = [pidFile, stubPidFile]
+      .filter((f) => existsSync(f))
+      .map((f) => Number(readFileSync(f, "utf-8").trim()));
+    // Give a killed group a moment to be reaped, then clean up whatever survived.
+    const deadline = Date.now() + 3000;
+    while (pids.some(isAlive) && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    const survivors = pids.filter(isAlive);
+    for (const pid of survivors) process.kill(pid, "SIGKILL");
+    return { exit, output, pids, survivors };
+  }
+
+  it("kills the run's process group when this process exits", async () => {
+    const r = await runDriver("exit");
+    expect(r.exit.code, r.output).toBe(130);
+    expect(r.pids).toHaveLength(2);
+    expect(r.survivors).toEqual([]);
+  }, 20_000);
+
+  it("kills it when SIGINT ends this process, and the process still ends by SIGINT", async () => {
+    const r = await runDriver("unhandled");
+    expect(r.exit.signal, r.output).toBe("SIGINT");
+    expect(r.pids).toHaveLength(2);
+    expect(r.survivors).toEqual([]);
+  }, 20_000);
+
+  it("aborts the run on SIGINT when another handler keeps this process alive", async () => {
+    const r = await runDriver("handled");
+    expect(r.exit.code, r.output).toBe(3);
+    expect(r.output).toMatch(/opencode query aborted/);
+    expect(r.pids).toHaveLength(2);
+    expect(r.survivors).toEqual([]);
+  }, 20_000);
 });

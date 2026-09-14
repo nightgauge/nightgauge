@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   StageExecutor,
+  StageTimeoutError,
   buildStagePrompt,
   loadStageSkill,
   type SDKQueryFunction,
@@ -201,6 +202,69 @@ describe("StageExecutor", () => {
 
       // init + 2 custom messages + result
       expect(messages.length).toBeGreaterThanOrEqual(4);
+    });
+  });
+
+  describe("the query's abort signal (#1637)", () => {
+    /**
+     * A query that runs until its abort signal fires, as the opencode adapter's
+     * process does, and throws then; without a signal it ends after `fallbackMs`.
+     */
+    function abortableQuery(fallbackMs: number): {
+      query: SDKQueryFunction;
+      state: { sawAbort: boolean };
+    } {
+      const state = { sawAbort: false };
+      const query: SDKQueryFunction = async function* (opts: SDKQueryOptions) {
+        const signal = opts.options?.abortSignal;
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, fallbackMs);
+          signal?.addEventListener("abort", () => {
+            clearTimeout(timer);
+            state.sawAbort = true;
+            resolve();
+          });
+        });
+        if (state.sawAbort) throw new Error("query aborted: its process group was killed");
+        yield createMockResult();
+      };
+      return { query, state };
+    }
+
+    it("fires on the stage's timeout, and the stage still fails as a timeout", async () => {
+      const { query, state } = abortableQuery(3000);
+      executor = new StageExecutor(tokenTracker, emitter, query);
+      const agents: WorkflowEvent[] = [];
+      eventBus.on("agent", (n) => agents.push(n));
+
+      const started = Date.now();
+      await expect(
+        executor.executeCollect({
+          stage: "issue-pickup",
+          issueNumber: 42,
+          prompt: "p",
+          timeoutMs: 50,
+        })
+      ).rejects.toBeInstanceOf(StageTimeoutError);
+      expect(state.sawAbort).toBe(true);
+      expect(Date.now() - started).toBeLessThan(2000);
+      expect(agents.at(-1)).toMatchObject({ status: "failed", terminalKind: "timeout" });
+    });
+
+    it("fires when the caller's own abort signal does", async () => {
+      const { query, state } = abortableQuery(3000);
+      executor = new StageExecutor(tokenTracker, emitter, query);
+      const stop = new AbortController();
+
+      const pending = executor.executeCollect({
+        stage: "issue-pickup",
+        issueNumber: 42,
+        prompt: "p",
+        abortSignal: stop.signal,
+      });
+      setTimeout(() => stop.abort(), 20);
+      await expect(pending).rejects.toThrow(/aborted/);
+      expect(state.sawAbort).toBe(true);
     });
   });
 

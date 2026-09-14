@@ -485,10 +485,41 @@ export function redactOpenCodeCredentials(s: string): string {
 const REDACTED_SECRET_MIN_LEN = 8;
 
 /**
+ * Whether a variable holds a provider setting rather than a credential
+ * (`isProviderSetting` in internal/execution/manager.go): OpenCode's catalog
+ * binds a provider's region, project, account, host and endpoint beside its
+ * key, and redacting their values would strip every "us-east-1" from a
+ * stage's output. A name with a credential segment is never a setting.
+ */
+function isProviderSetting(name: string): boolean {
+  const segments = name.split("_");
+  if (
+    segments.some((s) =>
+      ["KEY", "APIKEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "PAT"].includes(s)
+    )
+  ) {
+    return false;
+  }
+  if (name === "GOOGLE_APPLICATION_CREDENTIALS") return true;
+  return [
+    "REGION",
+    "LOCATION",
+    "PROJECT",
+    "ACCOUNT",
+    "HOST",
+    "ENDPOINT",
+    "URL",
+    "NAME",
+    "ID",
+  ].includes(segments[segments.length - 1]);
+}
+
+/**
  * A redactor for text an opencode child printed: first the values of the
  * named secret variables the child held (longest first, each also in its JSON
  * escaped form), each replaced by `[REDACTED:<NAME>]`, then every credential
- * shape. The value step is the Go manager's `envValueRedactor`.
+ * shape. The value step is the Go manager's `envValueRedactor`, which skips a
+ * variable holding a provider setting.
  */
 export function openCodeRedactor(
   secrets: Readonly<Record<string, string | undefined>> = {}
@@ -496,6 +527,7 @@ export function openCodeRedactor(
   const forms: Array<{ form: string; name: string }> = [];
   for (const [name, value] of Object.entries(secrets)) {
     if (value === undefined || value.length < REDACTED_SECRET_MIN_LEN) continue;
+    if (isProviderSetting(name)) continue;
     forms.push({ form: value, name });
     const escaped = JSON.stringify(value).slice(1, -1);
     if (escaped !== value) forms.push({ form: escaped, name });
@@ -506,6 +538,61 @@ export function openCodeRedactor(
     for (const { form, name } of forms) out = out.split(form).join(`[REDACTED:${name}]`);
     return redactOpenCodeCredentials(out);
   };
+}
+
+/**
+ * Redact one line an opencode child printed, stdout or stderr, the way the Go
+ * manager does before it streams or keeps the line (`openCodeOutputRedactor`
+ * in opencode_usage.go, ADR-022 § 22). A `--format json` event carries what a
+ * tool printed as a JSON string, escaped, so each string of a line holding a
+ * JSON object is decoded, redacted and, only when that changed it, re-encoded
+ * in place; the whole line is then redacted as text as well, which is all a
+ * line that is not JSON gets.
+ */
+export function redactOpenCodeLine(line: string, redact: (s: string) => string): string {
+  return redact(redactJsonStrings(line, redact));
+}
+
+/** `redactJSONStrings` in opencode_usage.go: every JSON string of an object line, redacted in place. */
+function redactJsonStrings(line: string, redact: (s: string) => string): string {
+  const first = line.replace(/^[ \t]+/, "");
+  if (first === "" || first[0] !== "{") return line;
+  let out = "";
+  let changed = false;
+  let last = 0;
+  for (let i = 0; i < line.length; i++) {
+    if (line[i] !== '"') continue;
+    let end = i + 1;
+    let escaped = false;
+    while (end < line.length && line[end] !== '"') {
+      if (line[end] === "\\") {
+        escaped = true;
+        end++;
+      }
+      end++;
+    }
+    if (end >= line.length) break;
+    const literal = line.slice(i, end + 1);
+    let value: string;
+    if (!escaped) {
+      value = literal.slice(1, -1);
+    } else {
+      try {
+        value = JSON.parse(literal) as string;
+      } catch {
+        i = end;
+        continue;
+      }
+    }
+    const redacted = redact(value);
+    if (redacted !== value) {
+      out += line.slice(last, i) + JSON.stringify(redacted);
+      last = end + 1;
+      changed = true;
+    }
+    i = end;
+  }
+  return changed ? out + line.slice(last) : line;
 }
 
 // ---------------------------------------------------------------------------
@@ -822,12 +909,17 @@ export interface OpenCodeRunInput {
   dispatched: string;
   /** The subagent roll-up; omitted, the served model is the dispatched one and no child is read. */
   fold?: OpenCodeHelper;
-  /** Redacts child output before it reaches any error text; credential shapes only when omitted. */
+  /**
+   * Redacts every line of the child's output, stdout and stderr alike, before
+   * anything is read from it ({@link redactOpenCodeLine}); credential shapes
+   * only when omitted.
+   */
   redact?: (s: string) => string;
 }
 
 /** The completed result of one opencode run. */
 export interface OpenCodeRunSummary {
+  /** What the redacted stdout says: its display text holds no secret the child held. */
   stream: OpenCodeStreamState;
   /** Stage usage: the stream's steps plus every subagent session read. */
   tokens: OpenCodeTokens;
@@ -848,7 +940,10 @@ export interface OpenCodeRunSummary {
 const STDERR_TAIL_CHARS = 4000;
 
 function stderrTail(kept: readonly string[], redact: (s: string) => string): string {
-  const text = redact(kept.join("\n")).trim();
+  const text = kept
+    .map((line) => redactOpenCodeLine(line, redact))
+    .join("\n")
+    .trim();
   return text.length > STDERR_TAIL_CHARS ? `...${text.slice(-STDERR_TAIL_CHARS)}` : text;
 }
 
@@ -867,12 +962,21 @@ function stderrTail(kept: readonly string[], redact: (s: string) => string): str
  *   - it exited 0 without a single step_finish, which recorded no usage.
  *
  * Every failure text is redacted, and holds OpenCode's own stderr, never the
- * model's text or a rejected call's input.
+ * model's text or a rejected call's input. Stdout is redacted line by line
+ * before it is parsed, as the Go manager redacts it before streaming it, so
+ * nothing read from it (the display text, an error event's name, an unknown
+ * event type) carries a secret the child held or a credential it printed.
  */
 export async function classifyOpenCodeRun(input: OpenCodeRunInput): Promise<OpenCodeRunSummary> {
   const redact = input.redact ?? redactOpenCodeCredentials;
   const drift = new OpenCodeDriftLog();
-  const stream = parseOpenCodeStream(input.stdout, drift);
+  const stdout = input.stdout
+    .split("\n")
+    .map((line) => redactOpenCodeLine(line, redact))
+    .join("\n");
+  const stream = parseOpenCodeStream(stdout, drift);
+  // Once more over the joined text, for a secret split across two text parts.
+  stream.displayText = redact(stream.displayText);
   const stderr = observeOpenCodeStderr(input.stderr, input.allowedTools, drift);
 
   const fold: OpenCodeFoldResult = input.fold

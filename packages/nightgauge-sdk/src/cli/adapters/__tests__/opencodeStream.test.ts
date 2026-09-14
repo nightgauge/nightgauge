@@ -34,6 +34,7 @@ import {
   openCodeRedactor,
   openCodeStageCostUsd,
   parseOpenCodeStream,
+  redactOpenCodeLine,
   type OpenCodeHelper,
   type OpenCodeTokens,
 } from "../opencodeStream.js";
@@ -508,5 +509,83 @@ describe("opencode stderr redaction (ADR-022 § 22, #1637)", () => {
     expect(summary.failure).not.toContain(longKey);
     expect(summary.failure).toContain("[REDACTED:OPENAI_API_KEY]");
     expect(summary.failure).toContain("https://[REDACTED:userinfo]@h");
+  });
+});
+
+describe("opencode stdout redaction (ADR-022 § 22, #1637)", () => {
+  const sample = testdata("opencode_stream_research_sample.jsonl").trim();
+  const SESSION = "ses_fixture0000000000000000001";
+  // The child's own key, as a model that ran `env` in its bash tool could print it.
+  const KEY = `sk-ant-api03-${"AbCdEfGh12".repeat(4)}`;
+  const OTHER_KEY = `sk-proj-${"Zy9Xw8Vu7T".repeat(3)}`;
+  const BEARER = "abcdefghijklmnop0123456789";
+
+  function event(type: string, fields: Record<string, unknown>): string {
+    return JSON.stringify({ type, timestamp: 1789336543200, sessionID: SESSION, ...fields });
+  }
+
+  it("removes a secret the child held and a credential shape from the model's text", async () => {
+    const text = event("text", {
+      part: {
+        type: "text",
+        text: `the key is ${KEY}, another is ${OTHER_KEY}\nAuthorization:\tBearer\t${BEARER}`,
+      },
+    });
+    const summary = await classifyOpenCodeRun({
+      stdout: `${sample}\n${text}\n`,
+      stderr: "",
+      exitCode: 0,
+      dispatched: "anthropic/claude-sonnet-5",
+      redact: openCodeRedactor({ ANTHROPIC_API_KEY: KEY }),
+    });
+    expect(summary.failure).toBeUndefined();
+    const shown = summary.stream.displayText;
+    expect(shown).not.toContain(KEY);
+    expect(shown).not.toContain(OTHER_KEY);
+    // A tab is `\t` in the event: only the decoded string shows the bearer shape.
+    expect(shown).not.toContain(BEARER);
+    expect(shown).toContain("the key is [REDACTED:ANTHROPIC_API_KEY]");
+    expect(shown).toContain("[REDACTED:api-key]");
+    expect(shown).toContain("[REDACTED:bearer-token]");
+  });
+
+  it("removes them from an error event's name and an unknown event type too", async () => {
+    const stdout = [
+      sample,
+      event("error", { error: { name: `ProviderAuthError ${KEY}` } }),
+      event(`step:${OTHER_KEY}`, { part: {} }),
+    ].join("\n");
+    const summary = await classifyOpenCodeRun({
+      stdout,
+      stderr: "",
+      exitCode: 0,
+      dispatched: "anthropic/claude-sonnet-5",
+      redact: openCodeRedactor({ ANTHROPIC_API_KEY: KEY }),
+    });
+    expect(summary.failure).toContain("ProviderAuthError [REDACTED:ANTHROPIC_API_KEY]");
+    expect(summary.failure).not.toContain(KEY);
+    expect(summary.driftMarkers.join("\n")).not.toContain(OTHER_KEY.slice(0, 20));
+    expect(summary.driftMarkers.join("\n")).toContain("[REDACTED:api-key]");
+  });
+
+  it("re-encodes only the strings it changed, so the line stays the same JSON event", () => {
+    const line = event("text", { part: { type: "text", text: `a "quoted" ${KEY}`, n: 1.5 } });
+    const out = redactOpenCodeLine(line, openCodeRedactor({ ANTHROPIC_API_KEY: KEY }));
+    expect(JSON.parse(out)).toEqual({
+      ...(JSON.parse(line) as object),
+      part: { type: "text", text: 'a "quoted" [REDACTED:ANTHROPIC_API_KEY]', n: 1.5 },
+    });
+    // A line with nothing to redact is returned as it was.
+    expect(redactOpenCodeLine(sample.split("\n")[0], openCodeRedactor({}))).toBe(
+      sample.split("\n")[0]
+    );
+  });
+
+  it("keeps a provider setting's value, as the Go manager does, and redacts its credential", () => {
+    const secret = "fixture-aws-secret-access-value";
+    const redact = openCodeRedactor({ AWS_REGION: "us-east-1", AWS_SECRET_ACCESS_KEY: secret });
+    expect(redact(`region us-east-1 secret ${secret}`)).toBe(
+      "region us-east-1 secret [REDACTED:AWS_SECRET_ACCESS_KEY]"
+    );
   });
 });

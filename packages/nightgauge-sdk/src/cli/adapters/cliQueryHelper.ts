@@ -441,11 +441,68 @@ function killGroup(pid: number | undefined, signal: NodeJS.Signals): void {
 }
 
 /**
+ * The opencode processes this process has running, by pid, each with what
+ * aborts it. Each runs detached, in its own process group, so the terminal's
+ * Ctrl-C never reaches it the way it reaches every other adapter's child, and
+ * nothing would end it once this process has gone. So while any is live this
+ * process's exit kills every group, and SIGINT, SIGTERM or SIGHUP aborts each
+ * run as its abort signal would.
+ */
+const liveOpenCodeProcesses = new Map<number, () => void>();
+
+/** The signals that end this process by default, and that a group outside the terminal's misses. */
+const PARENT_SIGNALS: readonly NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
+
+function killLiveOpenCodeGroups(): void {
+  for (const pid of liveOpenCodeProcesses.keys()) killGroup(pid, "SIGKILL");
+}
+
+function onParentSignal(signal: NodeJS.Signals): void {
+  if (process.listenerCount(signal) > 1) {
+    // Another handler owns the signal, and this process may live on: stop
+    // each run as its abort would, and let the handler decide the rest.
+    for (const abort of [...liveOpenCodeProcesses.values()]) abort();
+    return;
+  }
+  // Nothing else handles it, so its default action, ending this process,
+  // follows; no exit handler runs on that. Kill every group first, then raise
+  // the signal again with no handler left.
+  killLiveOpenCodeGroups();
+  unwatchParent();
+  process.kill(process.pid, signal);
+}
+
+const parentSignalHandlers = new Map(
+  PARENT_SIGNALS.map((signal) => [signal, () => onParentSignal(signal)] as const)
+);
+
+function watchParent(): void {
+  process.on("exit", killLiveOpenCodeGroups);
+  for (const [signal, handler] of parentSignalHandlers) process.on(signal, handler);
+}
+
+function unwatchParent(): void {
+  process.off("exit", killLiveOpenCodeGroups);
+  for (const [signal, handler] of parentSignalHandlers) process.off(signal, handler);
+}
+
+/** Track one live opencode process; the function returned stops tracking it. */
+function trackOpenCodeProcess(pid: number, abort: () => void): () => void {
+  if (liveOpenCodeProcesses.size === 0) watchParent();
+  liveOpenCodeProcesses.set(pid, abort);
+  return () => {
+    if (liveOpenCodeProcesses.delete(pid) && liveOpenCodeProcesses.size === 0) unwatchParent();
+  };
+}
+
+/**
  * Run one opencode process in its own process group, with an argv array and
  * never a shell. `signal` aborting, or `timeoutMs` passing, kills the group:
  * SIGTERM, then SIGKILL after a grace period. Once the process exits, whatever
  * is left of its group is killed too, so no opencode child outlives the run.
- * Output is held in memory only; `maxOutput` caps stdout.
+ * While it runs, this process's exit or a terminating signal ends it too
+ * ({@link liveOpenCodeProcesses}). Output is held in memory only; `maxOutput`
+ * caps stdout.
  */
 function runOpenCodeProcess(
   spawnFn: SpawnFn,
@@ -478,9 +535,11 @@ function runOpenCodeProcess(
       grace = setTimeout(() => killGroup(child.pid, "SIGKILL"), OPENCODE_ABORT_GRACE_MS);
     };
     const onAbort = () => {
+      if (aborted) return;
       aborted = true;
       stop();
     };
+    const untrack = child.pid === undefined ? () => {} : trackOpenCodeProcess(child.pid, onAbort);
     const timer =
       opts.timeoutMs === undefined
         ? undefined
@@ -508,12 +567,14 @@ function runOpenCodeProcess(
       if (timer) clearTimeout(timer);
       if (grace) clearTimeout(grace);
       opts.signal?.removeEventListener("abort", onAbort);
+      untrack();
       reject(err);
     });
     child.on("close", (code) => {
       if (timer) clearTimeout(timer);
       if (grace) clearTimeout(grace);
       opts.signal?.removeEventListener("abort", onAbort);
+      untrack();
       resolvePromise({ code: code ?? 1, stdout, stderr, aborted, timedOut, overflow });
     });
     if (child.stdin) {
@@ -550,9 +611,10 @@ function helperEnv(stageEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
  * One opencode stage: spawn `opencode run` with the prompt on stdin, in its
  * own process group, under the child environment curated to the dispatched
  * provider plus the run's isolation variables and per-run config; then
- * classify the run (opencodeStream.ts) and yield its drift warnings, its text
- * and its result, or throw its redacted failure. `abortSignal` kills the
- * run's whole process group.
+ * classify the run (opencodeStream.ts) and yield its drift warnings, its
+ * redacted text and its result, or throw its redacted failure. `abortSignal`
+ * (StageExecutor ties it to the stage's timeout and to the orchestrator's
+ * stop) kills the run's whole process group, and so does this process exiting.
  */
 async function* openCodeQuery(
   command: string,
@@ -594,8 +656,10 @@ async function* openCodeQuery(
     throw new Error("opencode query aborted: its process group was killed");
   }
 
-  // The values of the secrets the child held are removed from everything it
-  // printed before any of it reaches an error message (ADR-022 § 22).
+  // The values of the secrets the child held are removed from every line it
+  // printed, stdout and stderr alike, before anything is read from it: the
+  // model's text is yielded, so it is redacted as the failure text is
+  // (ADR-022 § 22).
   const secrets: Record<string, string | undefined> = {
     [OPENCODE_SERVER_PASSWORD_ENV]: password,
     GH_TOKEN: env.GH_TOKEN,

@@ -4,7 +4,8 @@ import {
   DEFAULT_STAGES,
   APPROVAL_STAGES,
 } from "../../src/orchestrator/PipelineOrchestrator.js";
-import { createMockQuery, createFailingQuery } from "../mocks/agent-sdk.js";
+import { createMockQuery, createFailingQuery, createMockResult } from "../mocks/agent-sdk.js";
+import type { SDKQueryFunction } from "../../src/orchestrator/StageExecutor.js";
 
 /**
  * Wait until the orchestrator is parked on its approval gate (#1423).
@@ -274,6 +275,51 @@ describe("PipelineOrchestrator", () => {
 
       const result = await runPromise;
       expect(result.stagesCompleted).toHaveLength(0);
+    });
+  });
+
+  describe("stop reaches the running stage's query (#1637)", () => {
+    /** A query that runs until its abort signal fires; without one it succeeds after 3 s. */
+    function abortableQuery(): { query: SDKQueryFunction; started: Promise<void> } {
+      let markStarted!: () => void;
+      const started = new Promise<void>((r) => (markStarted = r));
+      const query: SDKQueryFunction = async function* (opts) {
+        const signal = opts.options?.abortSignal;
+        markStarted();
+        let aborted = false;
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 3000);
+          signal?.addEventListener("abort", () => {
+            clearTimeout(timer);
+            aborted = true;
+            resolve();
+          });
+        });
+        if (aborted) throw new Error("query aborted");
+        yield createMockResult();
+      };
+      return { query, started };
+    }
+
+    it("for a stage run on its own", async () => {
+      const { query, started } = abortableQuery();
+      const orchestrator = new PipelineOrchestrator(query);
+      const pending = orchestrator.runStage("issue-pickup", 42);
+      await started;
+      await orchestrator.stop();
+      const result = await pending;
+      expect(result.success).toBe(false);
+      expect(result.error?.message).toBe("query aborted");
+    });
+
+    it("for a stage of a full run", async () => {
+      const { query, started } = abortableQuery();
+      const orchestrator = new PipelineOrchestrator(query, { stages: ["issue-pickup"] });
+      const pending = orchestrator.run(42);
+      await started;
+      await orchestrator.stop();
+      const result = await pending;
+      expect(result.stagesFailed).toEqual(["issue-pickup"]);
     });
   });
 
