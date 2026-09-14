@@ -153,13 +153,17 @@ has opted in.
   environment and nowhere else, so a committed repository config can never turn
   it on for the operator. There is no `adapters:` config namespace and none is
   added.
-- **The hook** is a new optional adapter method, `PreDispatch(RunOptions) error`,
-  found by interface assertion the same way `ValidateModel` and `ValidateEffort`
-  are. `Manager.RunStage` calls it after worktree setup and ahead of the model
+- **The hook** is a new optional adapter method,
+  `PreDispatch(context.Context, RunOptions) error`, found by interface
+  assertion the same way `ValidateModel` and `ValidateEffort` are.
+  `Manager.RunStage` calls it after worktree setup and ahead of the model
   check, the effort check and `BuildCommand`. A refusal therefore states the
   real reason and spawns nothing. It runs after worktree setup so that a check
   which has to read the tree the stage will run in (the project-config tamper
-  gate, § 8) can join it.
+  gate, § 8) can join it. It gets the stage's context, and a stage whose
+  context is already done is not dispatched and never reaches it, so the
+  version policy's probes (§ 20) start nothing for a cancelled stage and are
+  killed with one cancelled while they run.
 - **A refusal** names the controls that are missing, the switch, and the way
   out (`--adapter` or `NIGHTGAUGE_ADAPTER`).
 - **`anthropic/*` needs `ANTHROPIC_API_KEY`.** § 17 lets Anthropic through

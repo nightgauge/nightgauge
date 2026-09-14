@@ -411,11 +411,22 @@ type openCodeStage struct {
 	streamer       adapters.OutputStreamer
 	// worktree, when set, prepares the stage's worktree before dispatch.
 	worktree func(dir string)
-	// hold keeps the stage running after its output until it is signalled,
-	// and during then runs with the manager running it.
-	hold   bool
-	during func(m *Manager)
+	// hold, when set, is the shell the stage runs after its output to keep
+	// running until it is stopped (holdUntilStopped). It touches "$READY"
+	// once it holds, and during then runs with the manager running it and
+	// that path.
+	hold   string
+	during func(m *Manager, ready string)
 }
+
+// holdUntilStopped holds a stage until the stop's SIGTERM, which the stop
+// sends to the stage's process group. dash, the /bin/sh of CI's runners, runs
+// a trap only between commands, so a SIGTERM that landed after `touch` and
+// before the next command forked its child was handled after the fork, and
+// that child never saw the group's signal: it held the stage's stdout open for
+// 30 s, past the stop's 5 s grace (#1627). So the child is started before
+// ready is touched, and the trap SIGKILLs it.
+const holdUntilStopped = "trap 'kill -KILL $! 2>/dev/null; exit 0' TERM\nsleep 30 &\ntouch \"$READY\"\nwait"
 
 // openCodeStageOutcome is what one stage left behind.
 type openCodeStageOutcome struct {
@@ -470,9 +481,9 @@ func openCodeStageRunWith(t *testing.T, stage openCodeStage) openCodeStageOutcom
 	// A held stage has printed everything, and traps the stop, once ready
 	// exists; during waits for it, or for the stage's pid otherwise.
 	readyFile, hold := pidFile, ""
-	if stage.hold {
+	if stage.hold != "" {
 		readyFile = filepath.Join(dir, "ready")
-		hold = fmt.Sprintf("trap 'exit 0' TERM\ntouch %q\nsleep 30 &\nwait", readyFile)
+		hold = fmt.Sprintf("READY=%q\n%s", readyFile, stage.hold)
 	}
 	script := fmt.Sprintf(`#!/bin/sh
 case "$1" in
@@ -536,7 +547,7 @@ exit %[4]d
 					break
 				}
 			}
-			stage.during(manager)
+			stage.during(manager, readyFile)
 		}
 		select {
 		case <-done:
@@ -1329,8 +1340,8 @@ func TestOpenCodeFoldHelpersRunPureFromTheRunRoot(t *testing.T) {
 func TestOpenCodeStoppedStageStartsNoProcess(t *testing.T) {
 	out := openCodeStageRunWith(t, openCodeStage{
 		stdout: readTestdata(t, "opencode_stream_research_sample.jsonl"),
-		hold:   true,
-		during: func(m *Manager) {
+		hold:   holdUntilStopped,
+		during: func(m *Manager, _ string) {
 			if err := m.StopExecution("nightgauge/nightgauge", 1612); err != nil {
 				t.Errorf("StopExecution: %v", err)
 			}
@@ -1348,6 +1359,79 @@ func TestOpenCodeStoppedStageStartsNoProcess(t *testing.T) {
 	}
 	if out.result.InputTokens != 3089 || !out.result.UsagePartial {
 		t.Errorf("input = %d, partial = %v; want the stream's 3089, marked partial", out.result.InputTokens, out.result.UsagePartial)
+	}
+}
+
+// TestOpenCodeStopOutlivedByItsOutputIsAStop: a stage that exits 0 on the
+// stop's SIGTERM while a process it started holds its output past the grace
+// is reported stopped, with its exit code, not as a wait error (#1627). The
+// stop cancels the stage's context once the grace expires, while the stage is
+// an unreaped zombie, and os/exec then answers cmd.Wait with the context's
+// error. The scheduler's runner drops the result on an error, so the stop was
+// classified as the stage's own failure.
+func TestOpenCodeStopOutlivedByItsOutputIsAStop(t *testing.T) {
+	if _, err := exec.LookPath("perl"); err != nil {
+		t.Fatalf("perl holds the stage's output from outside its process group: %v", err)
+	}
+	// The holder leaves the stage's process group, so neither the stop's
+	// SIGTERM nor its SIGKILL reaches it, and only then touches ready. It
+	// holds the stage's stdout until the test releases it, or for 20 s.
+	holder := `perl -e 'setpgrp(0, 0); open(my $r, ">", $ARGV[0]) or die; close($r); ` +
+		`for (1 .. 1000) { last if -e "$ARGV[0].release"; select(undef, undef, undef, 0.02) }' "$READY" &`
+	graceful := true
+	out := openCodeStageRunWith(t, openCodeStage{
+		stdout: readTestdata(t, "opencode_stream_research_sample.jsonl"),
+		hold:   "trap 'exit 0' TERM\n" + holder + "\nwait",
+		during: func(m *Manager, ready string) {
+			var err error
+			graceful, err = m.CancelWithGrace("nightgauge/nightgauge#1612", 50*time.Millisecond)
+			if err != nil {
+				t.Errorf("CancelWithGrace: %v", err)
+			}
+			// The grace has expired and the stage's context is cancelled, so
+			// its output closes only now.
+			if err := os.WriteFile(ready+".release", nil, 0o600); err != nil {
+				t.Error(err)
+			}
+		},
+	})
+	if graceful {
+		t.Fatal("the stage's output closed within the grace, so this test proves nothing")
+	}
+	if !out.result.Cancelled || out.result.ExitCode != 0 {
+		t.Errorf("cancelled = %v, exit = %d; want the stop, with the stage's own exit 0", out.result.Cancelled, out.result.ExitCode)
+	}
+	if len(out.helpers) != 0 {
+		t.Errorf("after the operator stopped the stage the parser started opencode %d time(s)", len(out.helpers))
+	}
+}
+
+// TestOpenCodeCancelledStageStartsNoProcess: a stage whose context is done
+// before it is dispatched starts no process, the version policy's probe
+// included, and returns at once with the context's error (#1627).
+func TestOpenCodeCancelledStageStartsNoProcess(t *testing.T) {
+	isolateOpenCodeHome(t)
+	calls := filepath.Join(t.TempDir(), "calls")
+	bin := writeFakeOpenCode(t, fmt.Sprintf("echo \"$*\" >> %q\necho 1.18.30\n", calls))
+	t.Setenv("PATH", filepath.Dir(bin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
+	opts := openCodeStageOptions("lmstudio/qwen/qwen3.8-27b", nil)
+	manager := NewManager(openCodeWorkspace(t), adapters.NewOpenCodeAdapter())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var result *adapters.RunResult
+	var err error
+	start := time.Now()
+	captureStderr(t, func() { result, err = manager.RunStage(ctx, opts) })
+	if !errors.Is(err, context.Canceled) || result != nil {
+		t.Fatalf("RunStage under a done context = %v, %v; want no result and the context's error", result, err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("RunStage took %s to refuse a done context", elapsed)
+	}
+	if raw, readErr := os.ReadFile(calls); readErr == nil {
+		t.Errorf("a stage whose context was done started opencode: %q", raw)
 	}
 }
 

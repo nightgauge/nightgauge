@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"context"
 	"crypto/rand"
 	"fmt"
 	"io"
@@ -154,6 +155,7 @@ var openCodeUnenforcedControls = []openCodeControl{
 
 // PreDispatch implements the manager's optional pre-dispatch hook, which runs
 // after worktree setup and before BuildCommand, so a refusal spawns nothing.
+// ctx is the stage's: the version policy's probes run under it.
 // `nightgauge opencode config` calls it too, so the SDK path meets the same
 // checks.
 //
@@ -176,14 +178,14 @@ var openCodeUnenforcedControls = []openCodeControl{
 // $HOME/.opencode holding config or the machine's managed OpenCode config.
 // The version policy reads the block for its binary pin and, above
 // max-tested, for the self-test's per-run config.
-func (a *OpenCodeAdapter) PreDispatch(opts RunOptions) error {
+func (a *OpenCodeAdapter) PreDispatch(ctx context.Context, opts RunOptions) error {
 	if err := openCodeCredentialRefusal(opts.Model, os.LookupEnv); err != nil {
 		return err
 	}
 	if err := openCodeGate(os.Getenv(ExperimentalOpenCodeEnvVar), os.Stderr); err != nil {
 		return err
 	}
-	if err := a.checkVersionPolicy(opts); err != nil {
+	if err := a.checkVersionPolicy(ctx, opts); err != nil {
 		return err
 	}
 	if names := openCodeWithheldProviderEnv(opts.Model, os.Environ()); len(names) > 0 {
