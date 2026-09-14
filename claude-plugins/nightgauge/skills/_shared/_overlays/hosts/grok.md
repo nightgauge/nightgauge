@@ -5,3 +5,7 @@ read piped stdin as the prompt. Do not depend on Claude Stop hooks or
 undecidable without the operator, fail the stage with a clear reason.
 Subagent fan-out is optional; if a subagent cannot be launched, do the
 work in the main context.
+
+Grok 4.6 is the default Grok Build model. Keep `--effort` at the
+resolved Nightgauge envelope rather than stacking extra "think harder"
+instructions.

@@ -1,0 +1,1003 @@
+
+
+## System Context
+
+**Product**: Nightgauge — AI-powered Issue-to-PR pipeline.
+
+**Architecture**: Three-layer stack: portable Skills (SKILL.md), TypeScript SDK
+(`packages/nightgauge-sdk/`), and VSCode Extension
+(`packages/nightgauge-vscode/`). Six pipeline stages execute as isolated
+subagents with JSON context handoff files.
+
+**Execution model**: Each pipeline stage runs in a fresh conversation. Context
+is passed exclusively through `.nightgauge/pipeline/*.json` files — never
+through conversation history. Every stage reads its predecessor's context file
+and writes its own.
+
+**Configuration**: 6-tier config system — built-in defaults → global config →
+project config → local config → env vars → CLI flags. Schema defined in
+`packages/nightgauge-vscode/src/config/schema.ts`. Documentation in
+`docs/CONFIGURATION.md`.
+
+**Standards**: Code standards in `docs/CODE_STANDARDS.md`. Security rules in
+`standards/security.md`. Testing patterns in `docs/TESTING.md`. Git workflow in
+`docs/GIT_WORKFLOW.md`.
+
+**Critical rules**: Never push to main. Never hardcode secrets. Never downgrade
+versions. Pre-submission validation is mandatory.
+
+## Autonomy Contract
+
+This run is autonomous. No human is watching, and nobody can answer a
+question mid-stage. `AskUserQuestion` is disabled — and _behaving_ as if it
+were available is the same failure.
+
+- **Proceed without asking** for any reversible action that follows from the
+  stage's task. If a decision is genuinely undecidable from the issue, the
+  context files, and the repo, fail fast with a clear error — never pause to
+  ask, and never silently pick between materially different product
+  directions.
+- **Never end a turn on a promise.** Before ending your turn, check your last
+  paragraph: if it is a plan, a question, a list of next steps, or a promise
+  about work not yet done ("I'll now…", "Next, I will…"), do that work now
+  with tool calls instead of describing it. A turn that ends on stated intent
+  with no corresponding tool call is recorded as a `premature_turn_end` stage
+  failure, not a success.
+- **Do not stop because the session feels long.** End the turn only when the
+  stage's output contract is satisfied (its context file and phase markers
+  are written) or you are genuinely blocked — and a genuine block is reported
+  as an explicit failure, never as an open question.
+- **Never end a turn with background work outstanding.** There is no "await
+  and resume" — your turn ending IS stage completion, and the pipeline
+  advances immediately. If you started something in the background, block on
+  it and read its result before you finish. "I'll wait for that to complete
+  rather than poll, and pick the pipeline back up once it lands" is not a
+  handoff; it is the stage reporting success on work it never saw (#202).
+- **Work only inside the worktree you were given.** Never delegate the
+  stage's implementation to a subagent running under worktree isolation, and
+  never `cd` outside your workspace to edit files. Only your own worktree is
+  read by later stages: on #202 a subagent wrote the entire fix into
+  `.claude/worktrees/agent-<id>`, so the stage passed, the branch stayed
+  empty, and the work was invisible to every stage after it. A gate now fails
+  the stage when this happens — but the run is dead either way, so do the work
+  where you stand.
+
+## Batch Mode
+
+**Batch mode is additive.** Every stage has a single-issue path that is the
+default and is never modified by this section. A batch context file is an
+_optional overlay_: when the file this stage looks for is absent — the normal
+case — continue the single-issue path unchanged and do not mention batch mode
+again. Never invent, guess at, or synthesize a batch context file that is not
+on disk.
+
+### What batch mode is
+
+An epic whose sub-issues touch overlapping files can be run once instead of N
+times. `/nightgauge-assess-epic` makes that call and writes
+`.nightgauge/pipeline/epic-assessment-{E}.json` with a `strategy` of
+`parallel`, `mixed`, or `sequential`. When the pipeline acts on a `parallel`
+(or the independent part of a `mixed`) assessment, it carries **one shared
+feature branch and one PR for the whole group**, and each stage writes a batch
+context file alongside — never instead of — its normal single-issue output.
+
+**The batch key is the EPIC number `E`, never a sub-issue number.** Every batch
+context file is keyed on it and the shared branch is named for it. A stage that
+keys a batch file on a sub-issue number produces a file the next stage will
+never look for, and the batch silently degrades to a single issue.
+
+### The per-stage contract
+
+| Stage              | Batch input                         | Batch output                      |
+| ------------------ | ----------------------------------- | --------------------------------- |
+| `issue-pickup`     | — (no producer; see below)          | `batch-{E}.json`                  |
+| `feature-planning` | `batch-{E}.json`                    | `planning-batch-{E}.json`         |
+| `feature-dev`      | `planning-batch-{E}.json`           | `dev-batch-{E}.json`              |
+| `feature-validate` | `dev-batch-{E}.json`                | `validate-{E}.json`               |
+| `pr-create`        | `dev-batch-{E}.json`                | `pr-{E}.json`                     |
+| `pr-merge`         | `dev-batch-{E}.json`, `pr-{E}.json` | — (removes all five, in Step 7.8) |
+
+All paths are relative to `.nightgauge/pipeline/`. `batch-{E}.json`,
+`planning-batch-{E}.json` and `dev-batch-{E}.json` have explicit schemas — every
+field, every required key, worked examples — in `docs/CONTEXT_ARCHITECTURE.md`
+under the batch context file sections. `validate-{E}.json` and `pr-{E}.json`
+have no separate batch schema: they reuse the single-issue `validate-{N}` /
+`pr-{N}` shapes with the epic number in the key slot, which also means
+`pr-{E}.json` shares a namespace with a later single-issue run for issue #E —
+one more reason `pr-merge` must remove it. Do not improvise a shape: a batch
+file that does not match its schema is not detected by the next stage, which
+degrades to the single-issue path and silently drops the rest of the batch.
+
+**Nothing writes `batch-{E}.json` today.** `issue-pickup` has no batch producer
+step, so the first input in the chain never reaches disk, every later stage's
+file test fails, and the batch path is dormant end-to-end. That is the current
+expected state, not a gap to route around mid-run: the table is the contract a
+producer would have to satisfy, not a licence to synthesize the file. Adding
+that producer is a deliberate change to `issue-pickup` — it has to resolve the
+shared epic branch every later stage keys off, and derive `groups` from real
+dependency and file-overlap data rather than from the strategy string in
+`epic-assessment-{E}.json`, which carries neither.
+
+### Detection is a file test, nothing more
+
+Resolve `E`, test for this stage's batch input, and branch:
+
+```bash
+# E is the epic number: `.parent_issue` from the issue context when this stage
+# has one, otherwise the leading number in the branch name.
+BATCH_INPUT=".nightgauge/pipeline/<this stage's batch input, from the table above>"
+if [ -f "$BATCH_INPUT" ]; then
+  BATCH_MODE=true
+else
+  BATCH_MODE=false # single-issue path, unchanged — the common case
+fi
+```
+
+A stage that has a batch phase gives the concrete detection block, the batch
+procedure, and its output schema in that phase. This section is the contract
+those phases share, not a substitute for any of them.
+
+### Invariants that hold in both paths
+
+- **One PR per batch, not per issue.** The PR body carries an explicit
+  `Closes #N` line for every issue in the batch, so no sub-issue is left open
+  after the merge.
+- **Every gate still runs.** Batch mode changes how many issues a run covers,
+  never which validations execute. Build, tests, and stage gates run once over
+  the combined change set — they are not skipped or sampled.
+- **A batch failure is not a batch-wide abort by default.** When validation
+  fails the options are: retry the batch, split it into single-issue runs, or
+  stop for a human. Splitting is preferred over discarding completed work.
+- **Batch context files are pipeline exhaust.** `pr-merge` removes them in Step
+  7.8, after outcome recording has read them — the epic-keyed files have no
+  `pipeline-finish` owner the way single-issue files do. Leaving them behind
+  makes the next, unrelated run for that epic number detect a stale batch.
+
+
+# Feature Development
+
+> Implement features following approved plans and documented standards
+
+## Description
+
+This skill implements features by:
+
+1. Reading the approved `PLAN.md` from `/feature-planning`
+2. Reading knowledge base files (`PRD.md`, `decisions.md`) when `knowledge_path`
+   is set
+3. Following documented standards from `docs/`
+4. Writing code, tests, and documentation
+5. Running quality review against documented standards
+6. Writing dev context for downstream validation
+7. Generating E2E test suggestions for UI-touching changes and setting
+   `includes_e2e` in dev context for downstream validation
+
+## Invocation
+
+| Tool           | Command                                |
+| -------------- | -------------------------------------- |
+| Claude Code    | `/nightgauge-feature-dev` (via plugin) |
+| OpenAI Codex   | `$nightgauge-feature-dev`              |
+| GitHub Copilot | Invoke via Agent Skills                |
+| Cursor         | Invoke via Agent Skills                |
+
+## Arguments
+
+```bash
+# Implement using PLAN.md from /feature-planning
+/nightgauge-feature-dev
+
+# Implement specific plan file
+/nightgauge-feature-dev --plan .nightgauge/plans/42-photo-upload.md
+
+# Force sequential implementation (disable parallel file creation)
+/nightgauge-feature-dev --sequential
+
+# Skip quality review (not recommended)
+/nightgauge-feature-dev --skip-review
+```
+
+## Prerequisites
+
+- **PLAN.md**: Should exist from `/feature-planning` (or provide one)
+- **docs/ folder**: Used for standards compliance
+- **Feature branch**: Should be on appropriate branch (from `/issue-pickup`)
+
+## Philosophy
+
+- **Plan-driven implementation** — Follow the approved plan exactly
+- **Standards compliance** — Code must match docs/CODE_STANDARDS.md
+- **Test-alongside** — Write tests as you implement, not after
+- **Security-first** — Apply rules from docs/SECURITY.md automatically
+- **Quality gates** — Review before committing
+- **Observe before you mitigate** — no retry, fallback or widened tolerance for a
+  mechanism nobody has seen (UNOBSERVED-MECHANISM RULE, below)
+- **Parallel execution** — Independent files created simultaneously for faster
+  implementation
+
+## Spike Issues (`type:spike`)
+
+For `type:spike` issues, the deliverable is a Markdown research artifact at
+`docs/spikes/<N>-*.md` containing a `## Recommendations` section with a
+fenced `yaml recommendations` block per
+[docs/SPIKE_CONTRACT.md](../../docs/SPIKE_CONTRACT.md). No production code
+changes are expected. Author each recommendation with a stable kebab-case `id`
+field — these ids are the idempotency key for the post-merge spike-materialize
+stage.
+
+---
+
+## Configuration
+
+This skill reads configuration from `.nightgauge/config.yaml`. See
+[docs/CONFIGURATION.md](../../docs/CONFIGURATION.md) for full schema reference.
+
+| Config Key           | Default | Description                            |
+| -------------------- | ------- | -------------------------------------- |
+| `pipeline.auto_fix`  | `true`  | Auto-fix linting issues during feature |
+| `commands.test`      | auto    | Test command override                  |
+| `commands.lint`      | auto    | Lint command override                  |
+| `commands.typecheck` | auto    | Type check command override            |
+| `commands.build`     | auto    | Build command override                 |
+| `project.number`     | -       | GitHub Project number for status sync  |
+
+**Environment overrides:**
+
+```bash
+export NIGHTGAUGE_PIPELINE_AUTO_FIX=false
+export NIGHTGAUGE_COMMANDS_TEST="pnpm test"
+export NIGHTGAUGE_COMMANDS_LINT="pnpm lint"
+```
+
+---
+
+## Input Contract
+
+This skill requires `.nightgauge/pipeline/planning-{N}.json` from
+`/nightgauge-feature-planning`.
+
+**Schema**: See
+[docs/CONTEXT_ARCHITECTURE.md](../../docs/CONTEXT_ARCHITECTURE.md) for full
+schema documentation.
+
+---
+
+## Supporting files (load on demand)
+
+- `/Users/markmccorkle/Repositories/nightgauge/nightgauge/.nightgauge/worktrees/program-a20-1636/skills/nightgauge-feature-dev/_includes/context-and-feedback-intake.md` (same directory as this SKILL.md) — read in Phases 0, 0.5, 0.7 (planning context, batch detection, feedback intake)
+- `/Users/markmccorkle/Repositories/nightgauge/nightgauge/.nightgauge/worktrees/program-a20-1636/skills/nightgauge-feature-dev/_includes/plan-knowledge-and-standards.md` (same directory as this SKILL.md) — read in Phases 1, 1.5, 1.6, 2 (plan verification, knowledge base, recall, standards)
+- `/Users/markmccorkle/Repositories/nightgauge/nightgauge/.nightgauge/worktrees/program-a20-1636/skills/nightgauge-feature-dev/_includes/implementation-and-testing.md` (same directory as this SKILL.md) — read in Phases 3, 4, 4.5, 4b (implementation, testing, E2E)
+- `/Users/markmccorkle/Repositories/nightgauge/nightgauge/.nightgauge/worktrees/program-a20-1636/skills/nightgauge-feature-dev/_includes/review-and-correction.md` (same directory as this SKILL.md) — read in Phases 5, 6, 6.5 (quality review, self-correction, feedback signals)
+- `/Users/markmccorkle/Repositories/nightgauge/nightgauge/.nightgauge/worktrees/program-a20-1636/skills/nightgauge-feature-dev/_includes/context-and-epilogue.md` (same directory as this SKILL.md) — read in Phases 7, 8, 9 (write dev context, sync board, output summary)
+
+---
+
+## Gotchas
+
+- **Never run bare `vitest`.** Use `npx -w nightgauge-vscode vitest run` —
+  bare `vitest` mis-resolves the workspace and can hang in watch mode.
+- **Build before tests.** A build step MUST run before the suite — unit tests can
+  pass while the build is broken, masking a defect feature-validate would catch
+  later.
+- **Never report success when a check failed (#2779).** Swallowing a failed
+  build/test ships a broken change to pr-create where CI blocks the merge — fail
+  loudly with the output instead.
+- **Leave the changes on disk in THIS worktree (#202).** The gate now verifies
+  with git, not with your `files_changed` report: a clean workspace whose branch
+  is level with base fails the stage as `dev_produced_no_changes` no matter what
+  the context file says. Both ways to trip it look like success from inside the
+  stage — delegating the implementation to a worktree-isolated subagent, or
+  ending the turn while a background command is still running.
+- **UNOBSERVED-MECHANISM RULE (#1263)** — do not land a retry, a fallback, a
+  widened timeout, or added tolerance for a failure whose mechanism you have not
+  directly observed. Framing it as instrumentation does not exempt it: a
+  redelivery retry shipped as "diagnostic" would have re-hidden the real bug the
+  moment anyone fixed it, and a read-only probe shipped as "harmless" reported
+  the exact opposite of the truth and cost the next session its entire duration.
+  A diagnostic you add to a harness must be exercised against a known-good and a
+  known-bad case before you trust a word it says; if that is impractical, do not
+  ship it. Deliberate mitigation carries
+  `NIGHTGAUGE-MITIGATION: issue=<owner/repo#N> mechanism=unobserved` beside the
+  code, never prose in a doc comment. See
+  [`_shared/UNOBSERVED_MECHANISM.md`](../_shared/UNOBSERVED_MECHANISM.md).
+- **Never run the repo's full pre-submission suite here (#223).** `bash
+scripts/ci-local.sh` and its equivalents belong to feature-validate, which is
+  the stage that commits and pushes (#1608). `AGENTS.md`'s "run the complete local gate
+  once before pushing" rule is scoped to pushing — you do not push. On #221 this stage spent
+  the back half of its budget backgrounding, losing, polling for, and killing
+  `ci-local.sh`, then ended its turn on `echo waiting-for-notification` having
+  written a correct implementation it never handed off. Verify what you changed;
+  the suite runs once, later, in the stage that owns it.
+- See also the cross-cutting gotchas in
+  [`_shared/GOTCHAS.md`](../_shared/GOTCHAS.md).
+
+## Workflow
+
+### Phase Marker Protocol
+
+At the start of each phase, emit a structured phase marker as an HTML comment on
+its own line. Format:
+
+`<!-- phase:start name="{phase-name}" index={N} total={T} stage="feature-dev" -->`
+
+This enables the orchestrator to track phase progress. Emit the marker BEFORE
+any other output for that phase.
+
+### SKIP_TO_PHASE Protocol
+
+If the environment variable `SKIP_TO_PHASE` is set, skip all phases up to and
+including the named phase. Begin execution from the NEXT phase after the one
+specified. This enables retry-from-failed-phase without re-running completed
+work.
+
+**Detection:** Check `process.env.SKIP_TO_PHASE` at the start of each phase. If
+the current phase name matches (case-insensitive, kebab-case), mark it as the
+resume point and begin executing from the next phase.
+
+**Example:** `SKIP_TO_PHASE=load-context` → skip phases 0 through load-context,
+resume from the phase after load-context.
+
+### Phase -1: Validate Environment
+
+### Phase 0: Environment Preflight
+
+**PURPOSE**: Verify the nightgauge binary is available and the environment
+is healthy before executing any pipeline stage. Skills halt immediately with
+actionable instructions when this check fails.
+
+Two-layer check:
+
+1. **Binary discovery** — shell-level, runs before invoking the binary
+2. **Doctor check** — binary-level, full environment health via `doctor --json`
+
+The binary discovery cascade below is **provider-neutral** (#4029): it works
+identically under every adapter (Claude, Codex, Gemini, …) and references no
+VSCode-extension-specific path. The host that spawns the skill (the VSCode
+extension's `skillRunner`, or the Go `nightgauge` binary in auto/CLI mode)
+resolves the binary authoritatively and exports `NIGHTGAUGE_BIN`, which
+this cascade honors first. The remaining steps (PATH, repo `bin/`, the
+worktree's canonical-repo `bin/`, `~/go/bin`) are fallbacks for direct or
+terminal invocation.
+
+This intentionally **diverges** from
+`claude-plugins/nightgauge/hooks/lib/guard.sh` (#3262 → #4029): guard.sh is
+Claude-Code-only and retains a trailing `~/.vscode/extensions/...` glob to serve
+the standalone-terminal-Claude case (where no host exports `NIGHTGAUGE_BIN`).
+Skills must stay portable Markdown and cannot reference that VSCode-only path —
+so the shared resolution order (`NIGHTGAUGE_BIN` → PATH → repo → canonical
+→ `~/go/bin`) stays in sync, and only guard.sh carries the extra Claude-only
+fallback. The `nightgauge preflight skill-portability` gate enforces that
+no skill reintroduces a `.vscode/extensions` path.
+
+After the cascade resolves `$BINARY`, the preflight prepends
+`dirname($BINARY)` to `PATH` so subsequent bare `nightgauge ...`
+invocations later in the same skill body resolve through PATH rather than
+failing with "command not found" (#3262).
+
+```bash
+# Layer 1: provider-neutral binary discovery (NIGHTGAUGE_BIN → PATH → repo
+# bin → canonical-repo bin → ~/go/bin). No VSCode-extension path — see #4029.
+BINARY="${NIGHTGAUGE_BIN:-}"
+[ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
+[ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
+if [ -z "$BINARY" ]; then
+  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+  [ -x "$REPO_ROOT/bin/nightgauge" ] && BINARY="$REPO_ROOT/bin/nightgauge"
+fi
+if [ -z "$BINARY" ]; then
+  GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
+  if [ -n "$GIT_COMMON_DIR" ]; then
+    CANONICAL_REPO="$(cd "$GIT_COMMON_DIR/.." 2>/dev/null && pwd)"
+    [ -n "$CANONICAL_REPO" ] && [ -x "$CANONICAL_REPO/bin/nightgauge" ] && BINARY="$CANONICAL_REPO/bin/nightgauge"
+  fi
+fi
+[ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
+if [ -z "$BINARY" ]; then
+  echo "ERROR: nightgauge binary not found via NIGHTGAUGE_BIN, PATH, bin/nightgauge, canonical-repo bin, or ~/go/bin" >&2
+  echo "" >&2
+  echo "Install via: go install github.com/nightgauge/nightgauge/cmd/nightgauge@latest" >&2
+  echo "Or download from: https://github.com/nightgauge/nightgauge/releases" >&2
+  echo "Run \`nightgauge doctor\` after installing to verify your environment." >&2
+  exit 1
+fi
+# Make the resolved binary callable via bare `nightgauge ...` later in this skill body (#3262).
+export PATH="$(dirname "$BINARY"):$PATH"
+
+# Per-repo GitHub token: export GH_TOKEN so every `gh` call in this skill
+# authenticates as the *current repo's* configured user instead of the machine-
+# global `gh auth` active account. `forge auth token` resolves per-repo (config
+# github_user/token → GITHUB_TOKEN → `gh auth token --user <github_user>`), so
+# concurrent sessions/workspaces owned by different GitHub users each use their
+# own token. GH_TOKEN outranks GITHUB_TOKEN and the gh keyring. Only resolve when
+# unset (an upstream env value — e.g. the VSCode extension's terminal env —
+# wins); never fail preflight over it. Mirrors hooks/lib/guard.sh (sync, #3262).
+if [ -z "${GH_TOKEN:-}" ]; then
+  IB_REPO_TOKEN="$("$BINARY" forge auth token 2>/dev/null || true)"
+  if [ -n "$IB_REPO_TOKEN" ]; then
+    export GH_TOKEN="$IB_REPO_TOKEN"
+    export GITHUB_TOKEN="${GITHUB_TOKEN:-$IB_REPO_TOKEN}"
+  fi
+  unset IB_REPO_TOKEN
+fi
+
+# Layer 2: full environment health check via doctor --json
+DOCTOR_RESULT=$("$BINARY" doctor --json 2>/dev/null)
+DOCTOR_EXIT=$?
+if [ "$DOCTOR_EXIT" -eq 2 ]; then
+  echo "ERROR: Environment check failed — nightgauge doctor reports broken environment." >&2
+  FAILED_CHECKS=$(printf '%s\n' "$DOCTOR_RESULT" | jq -r '.failed_checks[]? // empty' 2>/dev/null)
+  if [ -n "$FAILED_CHECKS" ]; then
+    echo "Failing check(s): $(echo "$FAILED_CHECKS" | tr '\n' ',' | sed 's/,$//')" >&2
+  fi
+  printf '%s\n' "$DOCTOR_RESULT" | jq -r '.errors[]' >&2 2>/dev/null || true
+  INSTALL_MSG=$(printf '%s\n' "$DOCTOR_RESULT" | jq -r '.install_instructions // empty' 2>/dev/null)
+  [ -n "$INSTALL_MSG" ] && echo "$INSTALL_MSG" >&2
+  exit 1
+fi
+if [ "$DOCTOR_EXIT" -eq 1 ]; then
+  echo "WARNING: Environment has non-critical issues:" >&2
+  printf '%s\n' "$DOCTOR_RESULT" | jq -r '.warnings[]' >&2 2>/dev/null || true
+  # Continue — warnings do not block skill execution
+fi
+```
+
+**Exit codes from `nightgauge doctor`**:
+
+| Code | Meaning                         | Skill behavior                          |
+| ---- | ------------------------------- | --------------------------------------- |
+| 0    | Healthy                         | Continue                                |
+| 1    | Degraded (warnings only)        | Continue with warning printed to stderr |
+| 2    | Broken (required checks failed) | Halt immediately with error details     |
+
+Do not theorize about the cause beyond what is printed here — the failing
+check name (`failed_checks`) and its `.errors[]` message are the complete
+diagnosis (#277).
+
+
+---
+
+```bash
+printf '<!-- phase:start name="validate-environment" index=0 total=18 stage="feature-dev" -->\n'
+```
+
+**PURPOSE**: Verify the skill is running in the correct repository before
+loading context or doing any work.
+
+### Repo Identity Assertion (HARD GATE — non-recoverable)
+
+If the `NIGHTGAUGE_TARGET_REPO` environment variable is set, the orchestrator
+has pinned the exact repo this stage must run in. Verify the current repository
+matches **before doing any work**:
+
+```bash
+if [ -n "$NIGHTGAUGE_TARGET_REPO" ]; then
+  ACTUAL_REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)
+  if [ -n "$ACTUAL_REPO" ] && [ "$ACTUAL_REPO" != "$NIGHTGAUGE_TARGET_REPO" ]; then
+    echo "[repo-mismatch] FATAL: repository identity assertion failed"
+    echo "  Expected: $NIGHTGAUGE_TARGET_REPO"
+    echo "  Actual:   $ACTUAL_REPO"
+    echo "  CWD:      $(pwd)"
+    echo ""
+    echo "The orchestrator expected this stage to run in $NIGHTGAUGE_TARGET_REPO"
+    echo "but the working directory belongs to $ACTUAL_REPO."
+    exit 1
+  fi
+fi
+```
+
+**This is a terminal, non-recoverable stop condition. If the check prints
+`[repo-mismatch]` and exits 1, you MUST immediately end the stage with a failure.**
+
+Specifically, on a mismatch you must NOT:
+
+- `cd` into a different directory, switch worktrees, or `gh repo set-default` to
+  "make it match" — the orchestrator owns CWD; second-guessing it corrupts state.
+- Continue to later phases, create or push a branch, or open a PR — every
+  downstream artifact would land in the wrong repo.
+- Ask the user a question (`AskUserQuestion`) — autonomous runs have no human at
+  the prompt; the question is auto-dismissed and you would proceed on a guess.
+- Write a context/assessment file that claims success.
+
+The correct and ONLY action is to stop now and let the stage exit non-zero. This
+is a configuration fault in repo routing (the orchestrator set the wrong
+`NIGHTGAUGE_TARGET_REPO` for this worktree); it is fixed upstream in the
+orchestrator, never worked around inside the stage. The `[repo-mismatch]` marker
+is how the pipeline classifies and surfaces it.
+
+This check is a no-op — and the stage proceeds normally — when
+`NIGHTGAUGE_TARGET_REPO` is unset (e.g. manual single-stage CLI
+invocations) or already matches the current repo.
+
+
+**Grounding gate (#4099)** — before loading context or editing anything, confirm
+you are grounded: on **this** issue's feature branch (not the base) with the
+issue context present. Closes the #3863 "am I on the right issue/branch?" gap.
+ON by default (`pipeline.grounding_gate.enabled: false` disables it).
+
+```bash
+# Full PREFLIGHT.md discovery cascade (#55 — this block had diverged to a
+# 3-rung variant, missing the canonical-repo and ~/go/bin fallbacks).
+BINARY="${NIGHTGAUGE_BIN:-}"
+[ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
+[ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
+if [ -z "$BINARY" ]; then
+  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+  [ -x "$REPO_ROOT/bin/nightgauge" ] && BINARY="$REPO_ROOT/bin/nightgauge"
+fi
+if [ -z "$BINARY" ]; then
+  GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
+  if [ -n "$GIT_COMMON_DIR" ]; then
+    CANONICAL_REPO="$(cd "$GIT_COMMON_DIR/.." 2>/dev/null && pwd)"
+    [ -n "$CANONICAL_REPO" ] && [ -x "$CANONICAL_REPO/bin/nightgauge" ] && BINARY="$CANONICAL_REPO/bin/nightgauge"
+  fi
+fi
+[ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
+if [ -n "$BINARY" ]; then
+  "$BINARY" ground "$ISSUE_NUMBER" || {
+    echo "GROUNDING FAILED — do NOT edit files. Switch to the issue's feature branch / re-run issue-pickup, or stop and surface the mismatch (#4099, #3863)."
+    exit 1
+  }
+fi
+```
+
+When the gate prints `recommendation=pull-human` (grounded but no acceptance
+criteria), pause and request the missing context rather than guessing the premise.
+
+**Architecture-approval gate (#4098, #4135)** — a high-impact decision stays
+human-owned: it must be approved by a human before feature-dev implements it. A
+decision is high-impact when ANY of these hold: ≥2 distinct architectural
+trade-off signals in the issue/ADR; a high-risk issue (`routing.risk_high`); a
+dependency **major-version** bump (`dependency_analysis.major_bumps_count > 0`,
+emitted by feature-planning); or a production-touching change
+(`dependency_analysis.production_area`). The gate is **on by default** — set
+`pipeline.architecture_approval.enabled: false` to turn it off. This is a hard
+gate, **not** an auto-acceptable stage prompt — so it holds even under
+`auto_accept_stages: true`.
+
+```bash
+if [ -n "$BINARY" ]; then
+  "$BINARY" approval-gate "$ISSUE_NUMBER" || {
+    echo "ARCHITECTURE APPROVAL REQUIRED — do NOT implement. A human must review the"
+    echo "decision (the plan / decisions.md ADR) and add the approval label, or write"
+    echo ".nightgauge/pipeline/approval-${ISSUE_NUMBER}.json with {\"approved\": true}."
+    exit 1
+  }
+fi
+```
+
+---
+
+### Phase 0: Read Planning Context
+
+```bash
+printf '<!-- phase:start name="read-planning-context" index=1 total=18 stage="feature-dev" -->\n'
+```
+
+**PURPOSE**: Load context from previous pipeline stage.
+
+> **Read `/Users/markmccorkle/Repositories/nightgauge/nightgauge/.nightgauge/worktrees/program-a20-1636/skills/nightgauge-feature-dev/_includes/context-and-feedback-intake.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
+
+---
+
+### Phase 0.5: Batch Plan Detection
+
+```bash
+printf '<!-- phase:start name="batch-plan-detection" index=2 total=18 stage="feature-dev" -->\n'
+```
+
+**PURPOSE**: Detect batch mode and route to consolidated development when
+`planning-batch-{E}.json` exists.
+
+> **Read `/Users/markmccorkle/Repositories/nightgauge/nightgauge/.nightgauge/worktrees/program-a20-1636/skills/nightgauge-feature-dev/_includes/context-and-feedback-intake.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
+
+---
+
+### Phase 0.7: Feedback Context Check
+
+```bash
+printf '<!-- phase:start name="feedback-context-check" index=3 total=18 stage="feature-dev" -->\n'
+```
+
+**PURPOSE**: Detect whether this is a retry run triggered by validate feedback
+and load prior failure evidence so the agent avoids repeating the same mistakes.
+
+> **Read `/Users/markmccorkle/Repositories/nightgauge/nightgauge/.nightgauge/worktrees/program-a20-1636/skills/nightgauge-feature-dev/_includes/context-and-feedback-intake.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
+
+---
+
+### Phase 1: Plan Verification
+
+```bash
+printf '<!-- phase:start name="plan-verification" index=4 total=18 stage="feature-dev" -->\n'
+```
+
+**PURPOSE**: Pre-load context files, locate and validate the plan, and confirm
+branch alignment before implementing.
+
+> **Read `/Users/markmccorkle/Repositories/nightgauge/nightgauge/.nightgauge/worktrees/program-a20-1636/skills/nightgauge-feature-dev/_includes/plan-knowledge-and-standards.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
+
+---
+
+#### Backstop: the issue is not pipeline work at all
+
+feature-planning is supposed to catch this and stop before you are dispatched
+(see its _Not-Pipeline-Actionable Signal_ section), but it can miss — and when
+it does, you are the last stage that can end the run honestly.
+
+If, having read the issue and the plan, the deliverable turns out to be
+something **no agent can produce** — a sign-off reserved to a licensed
+professional, an act only the operator can perform (rotate a credential, accept
+terms, pay an invoice, provision hardware), a physical-world step, or a decision
+that is the owner's to make — then there is no implementation to write, and
+writing one anyway would be a fabrication dressed as progress.
+
+**Stop here and declare it.** Do not implement, do not commit, and do not simply
+end your turn with an explanation: prose in a final message is invisible to
+every gate downstream. What the pipeline reads is the deliverable, so write
+`.nightgauge/pipeline/dev-{N}.json` with empty `files_changed` and this signal:
+
+```json
+{
+  "files_changed": { "created": [], "modified": [], "deleted": [] },
+  "feedback": [
+    {
+      "signal_type": "NOT_PIPELINE_ACTIONABLE",
+      "emitted_by_stage": "feature-dev",
+      "backtrack_target_stage": null,
+      "severity": "blocking",
+      "rationale": "<what the deliverable actually is, and why no code satisfies it>",
+      "evidence": ["<quoted issue text or owner comment that establishes it>"]
+    }
+  ]
+}
+```
+
+Ending the turn without this file is the failure mode that made #1241 worth
+fixing. In the specimen run, feature-dev refused a privacy-policy legal review,
+explained itself accurately and at length, and wrote nothing — so the gate saw
+only an empty workspace, the deterministic fallback stamped a handoff claiming
+six files it had picked up from a stale base ref, and the run was booked
+`dev_produced_no_changes`: an agent-class failure that halted the whole
+repository over a stage that had behaved correctly.
+
+With the signal, the same refusal ends the run `blocked`: the finding is
+persisted, the issue is commented and labelled `owner-action` so nothing
+dispatches it again, its board row parks in Backlog, an Action Center card goes
+to the operator, and no failure is charged to the issue or the pipeline.
+
+**The bar is "no agent could produce this artifact"** — not "this is hard",
+"the criteria are vague" (that is `ACCEPTANCE_CRITERIA_AMBIGUOUS`), or "this is
+bigger than planned" (`COMPLEXITY_UNDERESTIMATED`).
+
+@see Issue #1241
+
+---
+
+### Phase 1.5: Knowledge Base Read
+
+```bash
+printf '<!-- phase:start name="knowledge-base-read" index=5 total=18 stage="feature-dev" -->\n'
+```
+
+**PURPOSE**: When `knowledge_path` is set in the planning context (or issue
+context), read the scaffolded knowledge files (`PRD.md`, `decisions.md`) to
+pre-load requirements and design decisions before implementing. This ensures the
+agent builds on prior knowledge rather than re-deriving it.
+
+> **Read `/Users/markmccorkle/Repositories/nightgauge/nightgauge/.nightgauge/worktrees/program-a20-1636/skills/nightgauge-feature-dev/_includes/plan-knowledge-and-standards.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
+
+---
+
+### Phase 1.6: Recall Architectural Constraints
+
+```bash
+printf '<!-- phase:start name="recall-architectural-constraints" index=6 total=18 stage="feature-dev" -->\n'
+```
+
+**PURPOSE**: Query the knowledge recall index using the files being modified as
+the search signal. When the codebase has recorded prior architectural decisions
+that reference those files, inject them as an "Architectural Constraints" block
+above the implementation prompt so the agent cannot inadvertently violate them.
+
+> **Read `/Users/markmccorkle/Repositories/nightgauge/nightgauge/.nightgauge/worktrees/program-a20-1636/skills/nightgauge-feature-dev/_includes/plan-knowledge-and-standards.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
+
+---
+
+### Phase 2: Standards Loading
+
+```bash
+printf '<!-- phase:start name="standards-loading" index=7 total=18 stage="feature-dev" -->\n'
+```
+
+**PURPOSE**: Load code, security, and testing standards (with graceful greenfield
+fallbacks) so implementation follows documented conventions.
+
+> **Read `/Users/markmccorkle/Repositories/nightgauge/nightgauge/.nightgauge/worktrees/program-a20-1636/skills/nightgauge-feature-dev/_includes/plan-knowledge-and-standards.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
+
+---
+
+### Phase 3: Implementation
+
+```bash
+printf '<!-- phase:start name="implementation" index=8 total=18 stage="feature-dev" -->\n'
+```
+
+**PERFORMANCE**: This phase uses parallel execution when multiple independent
+files need to be created. Files with dependencies are created sequentially after
+their dependencies are complete.
+
+> **Read `/Users/markmccorkle/Repositories/nightgauge/nightgauge/.nightgauge/worktrees/program-a20-1636/skills/nightgauge-feature-dev/_includes/implementation-and-testing.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
+
+---
+
+### Phase 4: Testing
+
+```bash
+printf '<!-- phase:start name="testing" index=9 total=18 stage="feature-dev" -->\n'
+```
+
+**PURPOSE**: Write unit tests, run a build-before-tests gate, run the suite,
+check coverage, and fix failures.
+
+> **Read `/Users/markmccorkle/Repositories/nightgauge/nightgauge/.nightgauge/worktrees/program-a20-1636/skills/nightgauge-feature-dev/_includes/implementation-and-testing.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
+
+### Phase 4b: E2E Testing (Conditional)
+
+```bash
+printf '<!-- phase:start name="e2e-testing" index=10 total=18 stage="feature-dev" -->\n'
+```
+
+**PURPOSE**: Generate and, when a framework is configured (Playwright, Cypress,
+Selenium), run end-to-end / integration tests for UI-touching changes; set
+`INCLUDES_E2E` accordingly. Backend-only changes with no framework skip
+gracefully.
+
+> **Read `/Users/markmccorkle/Repositories/nightgauge/nightgauge/.nightgauge/worktrees/program-a20-1636/skills/nightgauge-feature-dev/_includes/implementation-and-testing.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
+
+---
+
+### Phase 5: Quality Review
+
+```bash
+printf '<!-- phase:start name="quality-review" index=11 total=18 stage="feature-dev" -->\n'
+```
+
+**PURPOSE**: Run the 6 reviewer units declared in this skill's `orchestration:`
+frontmatter (code quality, security, test, documentation, performance,
+accessibility), aggregate findings, and set the quality-check result variables.
+On a provider with an orchestration capability the `WorkflowEngine` fans the six
+units out concurrently and a judge unit merges their verdicts; on a provider
+without one, run the same six reviews sequentially in this agent — the prose
+below is the portability floor. See
+[docs/WORKFLOW_ORCHESTRATION.md](../../docs/WORKFLOW_ORCHESTRATION.md).
+
+> **Read `/Users/markmccorkle/Repositories/nightgauge/nightgauge/.nightgauge/worktrees/program-a20-1636/skills/nightgauge-feature-dev/_includes/review-and-correction.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
+
+---
+
+### Phase 6: Self-Correction
+
+```bash
+printf '<!-- phase:start name="self-correction" index=12 total=18 stage="feature-dev" -->\n'
+```
+
+**PURPOSE**: Address review findings, re-run tests, run the formatter, and pass
+the Step 6.4 CI-parity HARD GATE before proceeding.
+
+**Step 6.4 — Verify All Checks Pass (HARD GATE)**: The full CI validation suite
+MUST pass locally before proceeding. These checks are **blocking** — feature-dev
+MUST NOT report success if any of them fail. Swallowing failures here lets a
+broken PR through to `pr-create`, where CI catches it and blocks the merge. See
+issue #2779 for the incident that motivated this gate.
+
+> **Read `/Users/markmccorkle/Repositories/nightgauge/nightgauge/.nightgauge/worktrees/program-a20-1636/skills/nightgauge-feature-dev/_includes/review-and-correction.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
+
+---
+
+### Phase 6.5: Feedback Signal Evaluation
+
+```bash
+printf '<!-- phase:start name="feedback-signal-evaluation" index=13 total=18 stage="feature-dev" -->\n'
+```
+
+**PURPOSE**: Evaluate whether implementation encountered structural mismatches
+between the plan and the actual codebase. Emit structured backward signals so
+the orchestrator can route replanning to the right stage instead of committing a
+fragile half-finished implementation.
+
+> **Key principle**: Feedback signals are reserved for **upstream structural
+> problems**. Minor adaptations (renaming a parameter, using an alternative
+> method with the same purpose) do NOT warrant a signal. Ask: "Would a
+> reasonable developer throw away the current approach and start over?"
+
+> **Read `/Users/markmccorkle/Repositories/nightgauge/nightgauge/.nightgauge/worktrees/program-a20-1636/skills/nightgauge-feature-dev/_includes/review-and-correction.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
+
+---
+
+### Phase 7: Write Dev Context
+
+```bash
+printf '<!-- phase:start name="write-dev-context" index=14 total=18 stage="feature-dev" -->\n'
+```
+
+> **No commit or push in feature-dev.** Code is committed and pushed by
+> `/nightgauge-feature-validate` after validation passes. This ensures only
+> validated code reaches the remote branch and RALPH loop fixes are included.
+> See Issue #1608. When routing SKIPS `feature-validate` (the fast-track
+> trivial route), the commit is still made — by the compiled commit owner at
+> the head of the `pr-create` deterministic runner (`stages.DecideCommit`,
+> #1179), never by this stage.
+
+**PURPOSE**: Write structured context file for downstream pipeline skills.
+
+**CRITICAL**: This phase MUST execute before the output summary. Moving this
+after the "IMPLEMENTATION COMPLETE" message causes the AI to stop executing
+before the context file is written.
+
+> **Read `/Users/markmccorkle/Repositories/nightgauge/nightgauge/.nightgauge/worktrees/program-a20-1636/skills/nightgauge-feature-dev/_includes/context-and-epilogue.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
+
+---
+
+### Phase 8: Sync Project Board Status
+
+```bash
+printf '<!-- phase:start name="sync-project-status" index=15 total=18 stage="feature-dev" -->\n'
+```
+
+Sync project board to "In progress" via Go binary `project sync-status`
+(idempotent).
+
+> **Read `/Users/markmccorkle/Repositories/nightgauge/nightgauge/.nightgauge/worktrees/program-a20-1636/skills/nightgauge-feature-dev/_includes/context-and-epilogue.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
+
+---
+
+### Phase 9: Output Summary
+
+```bash
+printf '<!-- phase:start name="output-summary" index=16 total=18 stage="feature-dev" -->\n'
+```
+
+Report implementation results: branch, files changed, quality check results,
+context file path, and next step (`/nightgauge-feature-validate`).
+
+> **Note**: No commit SHA is reported because code is not committed until
+> feature-validate passes. The output summary should report files on disk, not a
+> commit.
+
+> **Read `/Users/markmccorkle/Repositories/nightgauge/nightgauge/.nightgauge/worktrees/program-a20-1636/skills/nightgauge-feature-dev/_includes/context-and-epilogue.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
+
+---
+
+## Output Contract
+
+This skill outputs:
+
+1. **Code changes** - Committed to feature branch
+2. **`.nightgauge/pipeline/dev-{N}.json`** - Structured context for
+   pipeline
+
+**Schema**: See
+[docs/CONTEXT_ARCHITECTURE.md](../../docs/CONTEXT_ARCHITECTURE.md) for full
+schema documentation.
+
+**Next stage**: `/nightgauge-feature-validate`
+
+---
+
+### Phase 10: Self-Assessment Epilogue
+
+```bash
+printf '<!-- phase:start name="self-assessment" index=17 total=18 stage="feature-dev" -->\n'
+```
+
+### Self-Assessment Epilogue
+
+**PURPOSE**: Evaluate whether this skill's instructions matched reality during
+this execution. This phase is **non-blocking** — skip entirely if any main phase
+failed. A perfectly working skill produces **no output** from this phase.
+
+> See [docs/SKILL_SELF_ASSESSMENT.md](../../docs/SKILL_SELF_ASSESSMENT.md) for
+> the full strategy, synthesis algorithm, and integration architecture.
+
+#### When to Skip
+
+- Any prior phase exited with an error before completing
+- The skill was cancelled or timed out
+- Running in `--dry-run` mode
+
+#### Step 1: Evaluate Execution Friction
+
+Review the execution that just completed. Answer these questions honestly:
+
+1. **Command failures**: Did any command, script, or binary call in the skill
+   instructions fail? (e.g., script not found, wrong flags, missing binary)
+2. **Workarounds**: Did you have to deviate from the skill instructions to
+   accomplish the goal? (e.g., used `gh` directly because a referenced script
+   didn't exist, skipped a step that referenced a nonexistent file)
+3. **Stale references**: Did any file path, function name, API endpoint, or tool
+   referenced in the instructions not exist in the current codebase?
+4. **Unclear instructions**: Were any instructions ambiguous enough that you had
+   to guess at the intended behavior?
+5. **Missing instructions**: Was there a significant step you had to figure out
+   on your own that should have been documented in this skill?
+
+**If ALL answers are "no" — write nothing and complete the skill normally.** The
+goal is silence when everything works.
+
+#### Step 2: Write Assessment Record
+
+Only if friction was detected in Step 1. Write a single JSON file:
+
+```bash
+ASSESSMENT_DIR=".nightgauge/pipeline/assessments"
+mkdir -p "$ASSESSMENT_DIR"
+```
+
+**File**: `$ASSESSMENT_DIR/{STAGE_NAME}-${ISSUE_NUMBER}.json`
+
+The assessment record MUST follow this schema:
+
+```json
+{
+  "schema_version": "1",
+  "skill": "{STAGE_NAME}",
+  "skill_file": "skills/nightgauge-{STAGE_NAME}/SKILL.md",
+  "issue_number": 42,
+  "timestamp": "2026-03-10T14:30:00Z",
+  "friction": [
+    {
+      "type": "command_failure",
+      "severity": "high",
+      "description": "hooks/lib/add-to-project.sh not found — script was deleted",
+      "skill_line_hint": "claude-plugins/nightgauge/hooks/lib/add-to-project.sh <issue-number>",
+      "actual_resolution": "Used gh api graphql to add issue to project board directly",
+      "suggested_fix": "Replace with: nightgauge project add <issue-number>"
+    }
+  ]
+}
+```
+
+**Friction types**: `command_failure`, `workaround`, `stale_reference`,
+`unclear_instruction`, `missing_instruction`
+
+**Severity levels**:
+
+- `high` — instruction is **broken**. Required manual workaround to complete.
+- `medium` — instruction is **misleading**. Agent adapted without user help.
+- `low` — instruction is **suboptimal**. No functional impact.
+
+**Rules**:
+
+- **One record per execution** — multiple friction items go in the `friction`
+  array, not separate files.
+- **Be specific** — quote the exact instruction text that was wrong. Not "some
+  commands didn't work" but "Step 5.2 calls `hooks/lib/add-to-project.sh` but
+  this script was deleted in commit 65915701."
+- **Suggest the fix** — every finding MUST include `suggested_fix` with the
+  concrete SKILL.md change needed. Not "update the docs" but "replace
+  `hooks/lib/add-to-project.sh <N>` with `nightgauge project add <N>`."
+- **Don't invent friction** — only report issues you actually encountered during
+  this execution. Do not speculate about potential problems.
+
+#### Step 3: Validate and Complete
+
+```bash
+# Validate JSON if written
+if [ -f "$ASSESSMENT_FILE" ]; then
+  python3 -m json.tool "$ASSESSMENT_FILE" > /dev/null 2>&1 || \
+    echo "WARNING: Assessment record is not valid JSON" >&2
+fi
+```
+
+
+---
+
+## Error Handling
+
+| Condition             | Action                                                                         |
+| --------------------- | ------------------------------------------------------------------------------ |
+| Tests failing         | Show failing test output, fix implementation, re-run until pass                |
+| Security issue found  | Auto-fix validated input/secrets issues, block commit until resolved           |
+| Plan mismatch         | Continue with modified approach if reasonable, otherwise fail with explanation |
+| Context file missing  | Exit 1 with error listing expected pipeline order                              |
+| Parallel exec failure | Fall back to sequential implementation                                         |

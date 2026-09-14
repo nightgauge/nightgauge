@@ -16,6 +16,19 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- `nightgauge skill render`'s overlay cascade gains a host segment ahead of
+  provider (`OverlayKeys` now returns host → provider → id), keyed by the
+  execution adapter itself so it resolves even when the model does not — an
+  `opencode` dispatch of a local model with no registry entry still applies
+  its host overlay. Host fragments live in their own `_overlays/hosts/`
+  subdirectory so an adapter and a provider that share a name (`lm-studio`)
+  never contend for the same file. The Grok-Build-execution-host prose moves
+  from the provider-keyed `xai.md` (deleted) to `hosts/grok.md`, and a new
+  `hosts/opencode.md` ships OpenCode's lowercase tool ids, its
+  silent-reject-don't-retry posture, and its no-`AskUserQuestion` posture.
+  Every overlay key is now sanitized before it becomes a path segment: `..`
+  and a NUL byte are refused with a warning, and `/` is encoded rather than
+  read as a subdirectory (#1636, ADR-022 §14)
 - `runPipelineWithModel.test.ts` now drives the real
   `OpenCodeModelCatalogService` (child_process mocked, catalog service
   unmocked) for the "Run Pipeline with Model" OpenCode picker, closing the gap

@@ -162,41 +162,109 @@ func Locate(stage string, roots []string) (string, error) {
 	return "", fmt.Errorf("SKILL.md not found for stage %q (tried %s)", stage, strings.Join(tried, ", "))
 }
 
-// OverlayKeys derives the overlay cascade for a model, most general first:
-// provider, then the concrete id (ADR 016 §2 as amended by #582 — the band
-// segment is retired with the band vocabulary; no band-named overlay file
-// ever existed on disk, so the cascade is provider → concrete id. A
+// opencodeHostAdapter is the one adapter whose model string is not a plain
+// registry id or tier: it is a "<provider>/<id>" ADR-022 dispatch string, so
+// the provider and the id OverlayKeys looks up in the registry come from
+// splitting it (models.ParseOpenCodeModel), never from the raw string.
+const opencodeHostAdapter = "opencode"
+
+// OverlayKeys derives the overlay cascade for a model and its execution host,
+// most general first: the host, then the provider, then the concrete id
+// (ADR 016 §2 as amended by #582 — the band segment is retired with the band
+// vocabulary; no band-named overlay file ever existed on disk — and by
+// ADR-016's amendment / ADR-022 §14, which adds the host segment. A
 // rank-keyed middle segment is deliberately NOT added back: no overlay needs
 // it, and pre-customer we delete paths rather than speculate).
 //
+// The host segment is the execution adapter itself, most general of all.
+// Unlike provider and concrete id it is knowable independently of whether the
+// model below it resolves — "what adapter is running this" does not depend on
+// "what did it resolve the model to" — so it survives an unknown model, a
+// local provider (which has no registry entry by design), or no model at all.
+// It is what makes an `opencode` host overlay reachable in the first place:
+// `opencode` is not a provider, so nothing below it in the old two-segment
+// cascade could ever key an overlay to "every opencode run, whatever the
+// model".
+//
 // Returns nil for an unknown model and for every local provider, which have no
-// registry entries by design — those render base-only, which is the documented
-// fail-open behavior and exactly what happens today.
+// registry entries by design — those render base-only for provider and model,
+// which is the documented fail-open behavior and exactly what happened before
+// the host segment; ok reports whether a ModelDescriptor resolved, which the
+// host key alone never does.
 func OverlayKeys(model, adapter string) (keys []string, descriptor models.ModelDescriptor, ok bool) {
-	if strings.TrimSpace(model) == "" {
-		return nil, models.ModelDescriptor{}, false
-	}
-	provider := "anthropic"
-	if adapter != "" {
-		provider = models.ProviderForAdapter(adapter)
-	}
-	m, found := models.Resolve(provider, model)
-	if !found {
-		return nil, models.ModelDescriptor{}, false
-	}
-	// Use the RESOLVED descriptor's provider, not the requested one: concrete
-	// ids are globally unique, so an exact-id lookup legitimately crosses
-	// providers and must key off where the model actually lives.
-	ordered := []string{m.Provider, m.ID}
-	seen := make(map[string]bool, len(ordered))
-	for _, k := range ordered {
-		if k == "" || seen[k] {
-			continue
+	var seen map[string]bool
+	add := func(k string) {
+		if k == "" {
+			return
+		}
+		if seen == nil {
+			seen = make(map[string]bool, 3)
+		}
+		if seen[k] {
+			return
 		}
 		seen[k] = true
 		keys = append(keys, k)
 	}
+	add(adapter) // host: most general, survives everything below it failing.
+
+	if strings.TrimSpace(model) == "" {
+		return keys, models.ModelDescriptor{}, false
+	}
+	provider := "anthropic"
+	lookupID := model
+	if adapter != "" {
+		provider = models.ProviderFor(adapter, model)
+	}
+	if adapter == opencodeHostAdapter {
+		_, bareID, _ := models.ParseOpenCodeModel(model)
+		lookupID = bareID
+	}
+	m, found := models.Resolve(provider, lookupID)
+	if !found {
+		return keys, models.ModelDescriptor{}, false
+	}
+	// Use the RESOLVED descriptor's provider, not the requested one: concrete
+	// ids are globally unique, so an exact-id lookup legitimately crosses
+	// providers and must key off where the model actually lives.
+	add(m.Provider)
+	add(m.ID)
 	return keys, m, true
+}
+
+// overlaySubdir returns the directory an overlay key's fragments live under,
+// relative to a skill's or _shared's own _overlays/ directory. The host
+// segment gets its own hosts/ subdirectory (ADR-016 amendment, ADR-022 §14)
+// because an adapter name and a provider name can be the same string
+// (lm-studio is both an adapter and, for every other adapter, a provider) —
+// nesting the host position under its own directory means the two never
+// contend for the same file, and applying one never means applying the
+// other's namesake by accident.
+func overlaySubdir(key, hostKey string) string {
+	if hostKey != "" && key == hostKey {
+		return filepath.Join("_overlays", "hosts")
+	}
+	return "_overlays"
+}
+
+// overlayKeySafe returns key's filesystem-safe form, or ("", false) when key
+// must never become a path segment at all.
+//
+// A key becomes a literal path segment below _overlays/, and not every key
+// reaching this function is operator-typed: --model can arrive from a remote
+// source (#1656). "/" and "\" are ENCODED rather than rejected, because a
+// legitimate key can contain one — an OpenCode local model's bare id keeps its
+// own slash after the ADR-022 provider-key split strips only the first one
+// (`qwen/qwen3.8-27b`, split from `lmstudio/qwen/qwen3.8-27b`). ".." and a NUL
+// byte are refused outright, with a warning: there is no encoding that makes
+// ".." safe, so the key is dropped — never read, verbatim or otherwise —
+// rather than risking a read outside _overlays/.
+func overlayKeySafe(key string, warn func(string)) (string, bool) {
+	if strings.Contains(key, "..") || strings.ContainsRune(key, 0) {
+		warn(fmt.Sprintf("overlay key %q is not a safe path segment (contains .. or a NUL byte), skipping", key))
+		return "", false
+	}
+	return strings.NewReplacer("/", "__", "\\", "__").Replace(key), true
 }
 
 // Render composes the executable skill text for (stage, model, roots).
@@ -234,11 +302,16 @@ func Render(opts Options) (*Result, error) {
 		res.ResolvedModel = descriptor.ID
 	}
 	res.Keys = append(res.Keys, keys...)
+	hostKey := opts.Adapter
 
 	// The whole-file escape hatch replaces the base entirely (ADR 016 §8).
 	// Most specific match wins, so walk the cascade backwards.
 	for i := len(keys) - 1; i >= 0; i-- {
-		override := filepath.Join(skillDir, "_overlays", keys[i]+".SKILL.md")
+		safe, ok := overlayKeySafe(keys[i], warn)
+		if !ok {
+			continue
+		}
+		override := filepath.Join(skillDir, overlaySubdir(keys[i], hostKey), safe+".SKILL.md")
 		raw, err := os.ReadFile(override)
 		if err != nil {
 			continue
@@ -265,7 +338,11 @@ func Render(opts Options) (*Result, error) {
 	// contributing nothing to the output.
 	var texts []string
 	collect := func(dir, key, scope string) {
-		p := filepath.Join(dir, "_overlays", key+".md")
+		safe, ok := overlayKeySafe(key, warn)
+		if !ok {
+			return
+		}
+		p := filepath.Join(dir, overlaySubdir(key, hostKey), safe+".md")
 		text, ok := readFragment(p, warn)
 		if !ok {
 			return
