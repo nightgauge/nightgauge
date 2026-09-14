@@ -22,9 +22,6 @@ import (
 	"testing"
 )
 
-// openCodeCatalogVersion is the version openCodeCatalogEnv was read from.
-const openCodeCatalogVersion = "1.18.30"
-
 // openCodeCatalogEntryRE matches one provider entry of the catalog bundled in
 // the binary, as its source is minified: id:"<key>",env:["<VAR>",...].
 var openCodeCatalogEntryRE = regexp.MustCompile(`id:"([a-z0-9._-]+)",env:\[([^\]]*)\]`)

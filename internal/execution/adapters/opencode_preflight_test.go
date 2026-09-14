@@ -166,14 +166,16 @@ func capturedRunHelp(t *testing.T) string {
 	return string(b)
 }
 
-// helpScript is a `run --help` fragment that prints help, from a file.
+// helpScript is a `run --help` fragment that prints help, from a file, on
+// stderr with nothing on stdout, as 1.18.30 does
+// (testdata/opencode-cli/README.md).
 func helpScript(t *testing.T, help string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "help.txt")
 	if err := os.WriteFile(path, []byte(help), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return fmt.Sprintf("cat %q; exit 0", path)
+	return fmt.Sprintf("cat %q >&2; exit 0", path)
 }
 
 // preflightEnv opens the gate and isolates HOME for one test, and returns
@@ -442,13 +444,19 @@ func TestOpenCodeRejectsARelativeOrUnrunnablePin(t *testing.T) {
 
 // TestCheckOpenCodeRunHelpAgainstTheCapture: the captured 1.18.30 `run
 // --help` defines every flag BuildCommand emits with a value among its
-// choices; a help without a flag, or without a choice the adapter passes,
-// does not.
+// choices, read from stderr, where 1.18.30 prints it, or from stdout; a help
+// without a flag, or without a choice the adapter passes, does not.
 func TestCheckOpenCodeRunHelpAgainstTheCapture(t *testing.T) {
 	help := capturedRunHelp(t)
 	_, argv, _ := NewOpenCodeAdapter().BuildCommand(RunOptions{Model: "lmstudio/qwen/qwen3.8-27b", WorktreeDir: openCodeSelfTestWorktree})
+	if err := CheckOpenCodeRunHelp(OpenCodeProbeResult{Stderr: []byte(help)}, argv); err != nil {
+		t.Fatalf("the captured help, on stderr as 1.18.30 prints it, fails the flag probe: %v", err)
+	}
 	if err := CheckOpenCodeRunHelp(OpenCodeProbeResult{Stdout: []byte(help)}, argv); err != nil {
-		t.Fatalf("the captured help fails the flag probe: %v", err)
+		t.Fatalf("the captured help, on stdout, fails the flag probe: %v", err)
+	}
+	if err := CheckOpenCodeRunHelp(OpenCodeProbeResult{Stdout: []byte("\n"), Stderr: []byte("Error: something went wrong\n")}, argv); err == nil || !strings.Contains(err.Error(), "printed no options") {
+		t.Errorf("a help with no options on either stream = %v, want it refused", err)
 	}
 	options := parseOpenCodeRunHelp(help)
 	if got := strings.Join(options["--format"], ","); got != "default,json" {
@@ -462,10 +470,10 @@ func TestCheckOpenCodeRunHelpAgainstTheCapture(t *testing.T) {
 	}
 
 	noJSON := strings.Replace(help, `[choices: "default", "json"]`, `[choices: "default", "ndjson"]`, 1)
-	if err := CheckOpenCodeRunHelp(OpenCodeProbeResult{Stdout: []byte(noJSON)}, argv); err == nil || !strings.Contains(err.Error(), "--format json") {
+	if err := CheckOpenCodeRunHelp(OpenCodeProbeResult{Stderr: []byte(noJSON)}, argv); err == nil || !strings.Contains(err.Error(), "--format json") {
 		t.Errorf("a help whose --format lacks json = %v, want it refused", err)
 	}
-	if err := CheckOpenCodeRunHelp(OpenCodeProbeResult{ExitCode: 1, Stdout: []byte(help)}, argv); err == nil {
+	if err := CheckOpenCodeRunHelp(OpenCodeProbeResult{ExitCode: 1, Stderr: []byte(help)}, argv); err == nil {
 		t.Error("a `run --help` that exited 1 passed")
 	}
 }
@@ -485,8 +493,8 @@ func TestOpenCodeCatalogSnapshotIsTheMaxTestedVersion(t *testing.T) {
 
 // TestOpenCodeProbeRunsInItsOwnDirectory: a probe spawn gets HOME, TMPDIR and
 // the four XDG directories inside its own directory, the switches every spawn
-// sets, and nothing else of the environment but PATH, a credential least of
-// all.
+// sets, project config off, and nothing else of the environment but PATH, a
+// credential least of all.
 func TestOpenCodeProbeRunsInItsOwnDirectory(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "set-by-the-test")
 	t.Setenv("OPENCODE_AUTH_CONTENT", "set-by-the-test")
@@ -518,6 +526,12 @@ func TestOpenCodeProbeRunsInItsOwnDirectory(t *testing.T) {
 			t.Errorf("%s = %q, want 1", flag, env[flag])
 		}
 	}
+	// The probe's directory is in no git repository, so without the switch
+	// OpenCode reads opencode.json and .opencode, and loads their plugins,
+	// from every directory above it.
+	if env["OPENCODE_DISABLE_PROJECT_CONFIG"] != "1" {
+		t.Errorf("OPENCODE_DISABLE_PROJECT_CONFIG = %q, want 1", env["OPENCODE_DISABLE_PROJECT_CONFIG"])
+	}
 	if env[openCodeConfigContentEnvVar] != `{"share":"disabled"}` {
 		t.Errorf("OPENCODE_CONFIG_CONTENT = %q", env[openCodeConfigContentEnvVar])
 	}
@@ -532,6 +546,63 @@ func TestOpenCodeProbeRunsInItsOwnDirectory(t *testing.T) {
 	}
 	if _, err := os.Stat(root); !os.IsNotExist(err) {
 		t.Errorf("Close left the probe directory %s", root)
+	}
+}
+
+// TestOpenCodeProbeSetsProviderVarsToAPlaceholder: a probe given a model
+// provider's variables sets each to a placeholder, never to the value the
+// environment holds, and refuses any other name: OpenCode's own variables, a
+// provider base URL, a platform account's credentials. OpenCodeProviderVars
+// names the dispatched provider's variables by whether the environment holds
+// a value, and never one a dispatch withholds or a platform account's.
+func TestOpenCodeProbeSetsProviderVarsToAPlaceholder(t *testing.T) {
+	const value = "set-by-the-test"
+	t.Setenv("OPENAI_API_KEY", value)
+	bin := filepath.Join(t.TempDir(), "opencode")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nenv\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	probe, err := NewOpenCodeProbe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = probe.Close() }()
+	res, err := probe.Run(bin, nil, "", nil, "OPENAI_API_KEY")
+	if err != nil || res.ExitCode != 0 {
+		t.Fatalf("Run = %+v, %v", res, err)
+	}
+	if !strings.Contains(string(res.Stdout), "\nOPENAI_API_KEY="+openCodeProbePlaceholder+"\n") || strings.Contains(string(res.Stdout), value) {
+		t.Errorf("the probe did not set OPENAI_API_KEY to the placeholder alone:\n%s", res.Stdout)
+	}
+	for _, name := range []string{"OPENCODE_CONFIG", "OPENCODE_API_KEY", "ANTHROPIC_BASE_URL", "GITHUB_TOKEN", "AWS_REGION", "PATH", "NOT_A_PROVIDER_VARIABLE"} {
+		if _, err := probe.Run(bin, nil, "", nil, name); err == nil || !strings.Contains(err.Error(), "catalog variables") {
+			t.Errorf("a probe setting %s = %v, want it refused", name, err)
+		}
+	}
+
+	lookup := func(env map[string]string) func(string) (string, bool) {
+		return func(k string) (string, bool) { v, ok := env[k]; return v, ok }
+	}
+	for _, c := range []struct {
+		model      string
+		env        map[string]string
+		set, unset string
+	}{
+		{"openai/gpt-4.1", map[string]string{"OPENAI_API_KEY": value}, "OPENAI_API_KEY", ""},
+		{"openai/gpt-4.1", map[string]string{"OPENAI_API_KEY": ""}, "", "OPENAI_API_KEY"},
+		{"google/gemini-3-pro", map[string]string{"GEMINI_API_KEY": value}, "GEMINI_API_KEY", "GOOGLE_API_KEY,GOOGLE_GENERATIVE_AI_API_KEY"},
+		// OpenCode's own provider: every OPENCODE_* variable is withheld from
+		// a dispatch, so a dispatch lists its free models only, and so does
+		// the probe.
+		{"opencode/some-model", map[string]string{"OPENCODE_API_KEY": value}, "", ""},
+		// A platform provider's variables are the stage's tools', never a
+		// probe's.
+		{"github-copilot/some-model", map[string]string{"GITHUB_TOKEN": value}, "", ""},
+	} {
+		set, unset := OpenCodeProviderVars(c.model, lookup(c.env))
+		if strings.Join(set, ",") != c.set || strings.Join(unset, ",") != c.unset {
+			t.Errorf("OpenCodeProviderVars(%s) = set %q, unset %q; want %q, %q", c.model, set, unset, c.set, c.unset)
+		}
 	}
 }
 

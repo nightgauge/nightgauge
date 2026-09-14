@@ -134,6 +134,12 @@ func TestOpenCodeHealthyRow(t *testing.T) {
 	if len(h.Warnings) != 0 {
 		t.Errorf("a healthy row warned: %q", h.Warnings)
 	}
+	// The per-run config declares an endpoint's model, so its presence says
+	// the binary loaded the config, not that the server has the model; the
+	// row must not claim more.
+	if notes := strings.Join(h.Notes, "\n"); !strings.Contains(notes, "because the per-run config declares it") {
+		t.Errorf("the row does not say a declared model is listed by construction:\n%s", notes)
+	}
 }
 
 // TestOpenCodeRowWithTheGateClosedRunsNothing: while the enable gate is
@@ -170,7 +176,9 @@ func TestOpenCodeRowWithTheGateClosedRunsNothing(t *testing.T) {
 
 // TestOpenCodeCatalogProbe: the captured `opencode models` output lists the
 // configured provider/model or does not, and the row says so; a missing model
-// blocks, with remediation.
+// blocks, with remediation. A config the doctor builds for a declared model
+// always lists it, so models-other, built for another model, stands for a
+// listing that lacks it.
 func TestOpenCodeCatalogProbe(t *testing.T) {
 	for _, c := range []struct {
 		fixture string
@@ -199,6 +207,69 @@ func TestOpenCodeCatalogProbe(t *testing.T) {
 	if _, _, ok := parseOpenCodeCatalog("Error: something went wrong\n"); ok {
 		t.Error("an output with no provider/model line parsed as a catalog")
 	}
+}
+
+// TestOpenCodeCatalogProbeHostedProvider: the per-run config declares no
+// block for a hosted provider other than anthropic, and OpenCode loads such a
+// provider only when one of its variables is set. With none of openai's set,
+// `opencode models` lists nothing, and the row blocks on the credential a
+// stage would lack too, never reporting output it could not parse. With one
+// set, the listing decides, and the value is never printed.
+func TestOpenCodeCatalogProbeHostedProvider(t *testing.T) {
+	settings := openCodeLMStudio()
+	settings.Model = "openai/gpt-4.1"
+	const key = "set-by-the-test"
+	for _, c := range []struct {
+		name       string
+		credential bool
+		listing    string
+		ok         bool
+		modelOK    *bool
+		want       string
+	}{
+		{"no credential", false, "", false, boolPtr(false), "OPENAI_API_KEY"},
+		{"listed", true, "openai/gpt-4.1\nopenai/gpt-5\n", true, boolPtr(true), ""},
+		{"not listed", true, "openai/gpt-5\n", false, boolPtr(false), "`opencode models` does not list opencode.model openai/gpt-4.1"},
+		{"credential set, nothing listed", true, "", true, nil, "listed no openai model"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newOpenCodeFixture(t, settings)
+			if c.credential {
+				f.env["OPENAI_API_KEY"] = key
+			}
+			f.probe.models = func(string, config.OpenCodeConfig, string) (string, error) { return c.listing, nil }
+			h := f.check()
+			text := rowText(t, h)
+			said := "remediation: " + h.Remediation + "\nwarnings: " + strings.Join(h.Warnings, "\n")
+			if h.OK != c.ok {
+				t.Errorf("OK = %v, want %v\n%s", h.OK, c.ok, said)
+			}
+			if got, want := derefBool(h.ModelOK), derefBool(c.modelOK); got != want {
+				t.Errorf("ModelOK = %s, want %s", got, want)
+			}
+			if c.want != "" && !strings.Contains(said, c.want) {
+				t.Errorf("the row does not say %q\n%s", c.want, said)
+			}
+			if strings.Contains(text, "could not parse") {
+				t.Errorf("an empty listing for a hosted provider was reported as unparseable\n%s", said)
+			}
+			if strings.Contains(text, key) {
+				t.Error("the row prints the credential's value")
+			}
+			if strings.Contains(text, "because the per-run config declares it") {
+				t.Error("a model the per-run config does not declare was reported as listed by construction")
+			}
+		})
+	}
+}
+
+// derefBool is "unset" for nil and the value otherwise, for comparing and
+// printing a *bool.
+func derefBool(b *bool) string {
+	if b == nil {
+		return "unset"
+	}
+	return fmt.Sprint(*b)
 }
 
 // TestOpenCodeCatalogProbeRefusalBlocks: a configured model the adapter

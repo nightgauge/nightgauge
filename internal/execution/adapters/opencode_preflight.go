@@ -39,9 +39,10 @@ import (
 //
 // Every opencode process started here is a probe: it runs in a throwaway
 // directory that is its HOME, TMPDIR and four XDG base directories, with an
-// environment built from nothing but PATH and the switches every spawn sets,
-// in its own process group, under openCodeProbeTimeout. It reads and writes
-// none of the operator's OpenCode state and none of a pipeline run's.
+// environment built from nothing but PATH, the switches every spawn sets and
+// project config off, in its own process group, under openCodeProbeTimeout.
+// It reads and writes none of the operator's OpenCode state, none of a
+// pipeline run's, and no config in a directory above its own.
 
 // OpenCodeIncompatible is the kind of a dispatch refused because the opencode
 // binary it would spawn cannot serve it (ADR-022 § 20).
@@ -182,6 +183,25 @@ var openCodeProbeTimeout = 20 * time.Second
 // config` prints a few kilobytes, and `models` a few hundred lines.
 const openCodeProbeMaxOutput = 4 << 20
 
+// openCodeDisableProjectConfig turns off OpenCode's project config: the
+// opencode.json, opencode.jsonc and .opencode directories it looks for from
+// the working directory up to the repository's root, and the plugins they
+// name. A probe's directory is in no repository, so without it OpenCode 1.18.30
+// looks in every directory above the probe's up to /, a world-writable /tmp
+// included, and loads what it finds there as the operator
+// (testdata/opencode-cli/README.md). A probe checks the per-run config alone,
+// so every probe sets it. A stage run does not yet (openCodeDisableFlags),
+// because it also hides the repository's AGENTS.md, and a probe has no
+// repository.
+const openCodeDisableProjectConfig = "OPENCODE_DISABLE_PROJECT_CONFIG"
+
+// openCodeProbePlaceholder is the value a probe gives a provider variable in
+// place of the credential (OpenCodeProviderVars). OpenCode loads a catalog
+// provider when any one of its variables is set, whatever the value, and
+// `opencode models` sends no request, so the listing is the one a dispatch
+// holding the real value gets.
+const openCodeProbePlaceholder = "nightgauge-probe-placeholder"
+
 // OpenCodeProbe is the throwaway directory an opencode probe spawn runs in.
 type OpenCodeProbe struct{ root string }
 
@@ -221,17 +241,25 @@ type OpenCodeProbeResult struct {
 // content, when set, is OPENCODE_CONFIG_CONTENT, and files are the files it
 // refers to (OpenCodeRunConfig.Files), written into the probe's directory
 // first. The environment is built from nothing: PATH, the probe's HOME,
-// TMPDIR and four XDG directories, and the switches every spawn sets
-// (openCodeDisableFlags), OPENCODE_DISABLE_MODELS_FETCH among them. No
-// credential and no inherited OPENCODE_* variable reaches it. It runs in its
-// own process group with stdin closed, and the whole group is killed at
-// openCodeProbeTimeout and again once it exits, so nothing it started
-// outlives it.
+// TMPDIR and four XDG directories, the switches every spawn sets
+// (openCodeDisableFlags), OPENCODE_DISABLE_MODELS_FETCH among them, and
+// OPENCODE_DISABLE_PROJECT_CONFIG (openCodeDisableProjectConfig). No
+// credential and no inherited OPENCODE_* variable reaches it.
+// providerVars, when given, are variables OpenCode's catalog binds to a model
+// provider (OpenCodeProviderVars), each set to a placeholder and never to its
+// value; any other name is refused. It runs in its own process group with
+// stdin closed, and the whole group is killed at openCodeProbeTimeout and
+// again once it exits, so nothing it started outlives it.
 //
 // A non-zero exit is a result, not an error; an error is a process that could
 // not start, ran past the timeout, or printed more than openCodeProbeMaxOutput.
-func (p *OpenCodeProbe) Run(bin string, args []string, content string, files map[string]string) (OpenCodeProbeResult, error) {
+func (p *OpenCodeProbe) Run(bin string, args []string, content string, files map[string]string, providerVars ...string) (OpenCodeProbeResult, error) {
 	label := "`" + strings.Join(append([]string{openCodeBinaryName}, args...), " ") + "`"
+	for _, name := range providerVars {
+		if !openCodeProbeMaySet(name) {
+			return OpenCodeProbeResult{ExitCode: -1}, fmt.Errorf("%s: a probe sets only a model provider's catalog variables, and %q is not one", label, name)
+		}
+	}
 	if err := writeOpenCodeRunFiles(p.root, files); err != nil {
 		return OpenCodeProbeResult{ExitCode: -1}, err
 	}
@@ -245,6 +273,10 @@ func (p *OpenCodeProbe) Run(bin string, args []string, content string, files map
 	}
 	for _, flag := range openCodeDisableFlags {
 		env = append(env, flag+"=1")
+	}
+	env = append(env, openCodeDisableProjectConfig+"=1")
+	for _, name := range providerVars {
+		env = append(env, name+"="+openCodeProbePlaceholder)
 	}
 	if content != "" {
 		env = append(env, openCodeConfigContentEnvVar+"="+content)
@@ -281,6 +313,40 @@ func (p *OpenCodeProbe) Run(bin string, args []string, content string, files map
 		return res, fmt.Errorf("%s could not run: %w", label, err)
 	}
 	return res, nil
+}
+
+// openCodeProbeMaySet reports whether a probe may set name to the
+// placeholder: a variable the bundled catalog binds to a model provider, and
+// none of OpenCode's own, a provider base URL or a platform account's
+// (openCodePlatformProviders), whose providers' loaders follow a credential
+// chain of their own.
+func openCodeProbeMaySet(name string) bool {
+	return openCodeCatalogEnvNames[name] && !openCodePlatformEnvNames[name] &&
+		!strings.HasPrefix(name, openCodeWithheldPrefix) && !slices.Contains(openCodeEndpointEnv, name)
+}
+
+// OpenCodeProviderVars returns, sorted, the variables OpenCode's bundled
+// catalog binds to the provider model names that a dispatch to model keeps
+// (those OpenCodeWithholdsEnv lets through, other than a platform account's),
+// split into those lookup holds a non-empty value for and those it does not.
+// OpenCode loads a catalog provider only when one of its variables is set, so
+// a stage on a provider that has variables, none of them set, finds none of
+// its models unless the per-run config declares the provider's block. It
+// returns names only and reads no value beyond whether it is empty.
+func OpenCodeProviderVars(model string, lookup func(string) (string, bool)) (set, unset []string) {
+	for _, name := range openCodeCatalogEnv[openCodeDispatchProvider(model)] {
+		if OpenCodeWithholdsEnv(model, name) || !openCodeProbeMaySet(name) {
+			continue
+		}
+		if v, ok := lookup(name); ok && v != "" {
+			set = append(set, name)
+		} else {
+			unset = append(unset, name)
+		}
+	}
+	slices.Sort(set)
+	slices.Sort(unset)
+	return set, unset
 }
 
 // openCodeProbeBuffer keeps at most max bytes and notes that more arrived.
@@ -725,13 +791,20 @@ func parseOpenCodeRunHelp(help string) map[string][]string {
 // holds, and list each value argv gives an option with declared choices among
 // them. A flag the binary no longer defines would make `run` exit 1 and print
 // its help instead of running the stage.
+//
+// 1.18.30 prints its help on stderr and nothing on stdout
+// (testdata/opencode-cli/README.md), so the options are read from stdout when
+// it holds them, and otherwise from stderr.
 func CheckOpenCodeRunHelp(res OpenCodeProbeResult, argv []string) error {
 	if res.ExitCode != 0 {
 		return fmt.Errorf("`opencode run --help` exited %d", res.ExitCode)
 	}
 	options := parseOpenCodeRunHelp(string(res.Stdout))
 	if len(options) == 0 {
-		return errors.New("`opencode run --help` printed no options")
+		options = parseOpenCodeRunHelp(string(res.Stderr))
+	}
+	if len(options) == 0 {
+		return errors.New("`opencode run --help` printed no options on stdout or stderr")
 	}
 	var missing, refused []string
 	for i, arg := range argv {

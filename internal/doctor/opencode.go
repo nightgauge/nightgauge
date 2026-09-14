@@ -103,7 +103,9 @@ type openCodeProbe struct {
 	// version is the binary's `--version` (adapters.OpenCodeVersionOf).
 	version func(bin string) (string, error)
 	// models is the stdout of `opencode models` under the per-run config a
-	// dispatch of model gets on a machine whose block is settings.
+	// dispatch of model gets on a machine whose block is settings, with each
+	// of the provider's variables this environment holds set to a
+	// placeholder (runOpenCodeModels).
 	models func(bin string, settings config.OpenCodeConfig, model string) (string, error)
 	// endpoint is the readiness probe (adapters.ProbeOpenCodeEndpoint).
 	endpoint func(target adapters.OpenCodeEndpointTarget, model string, injectedContext int) adapters.OpenCodeEndpointReadiness
@@ -142,6 +144,12 @@ func defaultOpenCodeProbe() openCodeProbe {
 // written to and which is removed afterwards. OpenCode lists a configured
 // endpoint's model without asking the server (observed on 1.18.30,
 // testdata/opencode-capture), so the probe needs no server.
+//
+// OpenCode lists a hosted provider's models only when one of the provider's
+// variables is set, and a probe inherits none. So each of the dispatched
+// provider's variables that this environment holds, and a dispatch keeps
+// (adapters.OpenCodeProviderVars), is set in the probe to a placeholder: the
+// probe lists what a dispatch from here would, and never holds a credential.
 func runOpenCodeModels(bin string, settings config.OpenCodeConfig, model string) (string, error) {
 	probe, err := adapters.NewOpenCodeProbe()
 	if err != nil {
@@ -156,7 +164,8 @@ func runOpenCodeModels(bin string, settings config.OpenCodeConfig, model string)
 	if err != nil {
 		return "", err
 	}
-	res, err := probe.Run(bin, []string{"models"}, built.Content, built.Files)
+	set, _ := adapters.OpenCodeProviderVars(model, os.LookupEnv)
+	res, err := probe.Run(bin, []string{"models"}, built.Content, built.Files, set...)
 	if err != nil {
 		return "", err
 	}
@@ -344,16 +353,47 @@ func checkOpenCodeDrift(p openCodeProbe, home string, bin adapters.OpenCodeBinar
 // opencode.model and reports whether the model is in it. A config the
 // adapter would refuse to build is a blocking finding (the dispatch would be
 // refused the same way); a probe that could not run is a warning.
+//
+// What the listing shows depends on whether the per-run config declares the
+// model:
+//
+//   - A declared endpoint's model and an anthropic model are declared: the
+//     config writes the model's own entry into the provider's block, so the
+//     listing holds it by construction. It shows that this opencode loads the
+//     per-run config, not that the provider serves the model; the endpoint
+//     check asks the server, and the adapter dispatches only anthropic models
+//     the bundled catalog lists. The row says so in a note.
+//   - Any other hosted provider's model is not: OpenCode lists it only when
+//     the bundled catalog does and one of the provider's variables is set.
+//     The probe sets the ones this environment holds to a placeholder
+//     (runOpenCodeModels), so the listing is a dispatch's. When the provider
+//     has variables and this environment holds none, OpenCode lists nothing
+//     for it, and a stage would find no model, which blocks and names them.
 func checkOpenCodeCatalog(h *AdapterHealth, p openCodeProbe, bin adapters.OpenCodeBinary, settings config.OpenCodeConfig, block, warn func(string)) {
 	model := settings.Model
 	h.Model = model
-	if err := openCodeConfigBuildable(p, settings, model); err != nil {
+	built, err := openCodePerRunConfig(p, settings, model)
+	if err != nil {
 		block(err.Error())
 		return
 	}
 	out, err := p.models(bin.Path, settings, model)
 	if err != nil {
 		warn("the catalog probe `opencode models` could not run: " + err.Error())
+		return
+	}
+	key, _, _ := strings.Cut(strings.TrimSpace(model), "/")
+	declared := openCodeDeclaresModel(built.Content, model)
+	if strings.TrimSpace(out) == "" {
+		// `opencode models` exited 0 and listed nothing: the one provider
+		// the per-run config enables did not load.
+		if set, unset := adapters.OpenCodeProviderVars(model, p.lookupEnv); !declared && len(set) == 0 && len(unset) > 0 {
+			h.ModelOK = boolPtr(false)
+			block(fmt.Sprintf("`opencode models` lists no %s model under the per-run config: OpenCode loads provider %s only when one of its variables (%s) is set, and none is set in this environment, so a stage on opencode.model %s would find no model. Set %s where the pipeline runs",
+				key, key, strings.Join(unset, ", "), model, strings.Join(unset, " or ")))
+			return
+		}
+		warn(fmt.Sprintf("`opencode models` listed no %s model under the per-run config, so provider %s did not load and the model check did not run", key, key))
 		return
 	}
 	ids, _, ok := parseOpenCodeCatalog(out)
@@ -364,24 +404,42 @@ func checkOpenCodeCatalog(h *AdapterHealth, p openCodeProbe, bin adapters.OpenCo
 	present := catalogContains(ids, model)
 	h.ModelOK = boolPtr(present)
 	if present {
+		if declared {
+			h.Notes = append(h.Notes, fmt.Sprintf("`opencode models` lists opencode.model %s because the per-run config declares it: that shows this opencode loads the per-run config, not that provider %s serves the model",
+				model, key))
+		}
 		return
 	}
-	key, _, _ := strings.Cut(model, "/")
 	block(fmt.Sprintf("`opencode models` does not list opencode.model %s under the per-run config, so a stage on it would fail: name a model `opencode models %s` lists, or set opencode.model to one",
 		model, key))
 }
 
-// openCodeConfigBuildable builds the per-run config a dispatch of model would
+// openCodePerRunConfig builds the per-run config a dispatch of model would
 // get, into a root that is never created, and returns the adapter's refusal
 // when it would not build.
-func openCodeConfigBuildable(p openCodeProbe, settings config.OpenCodeConfig, model string) error {
+func openCodePerRunConfig(p openCodeProbe, settings config.OpenCodeConfig, model string) (adapters.OpenCodeRunConfig, error) {
 	root := filepath.Join(os.TempDir(), "nightgauge-doctor-opencode")
 	input, err := adapters.OpenCodeConfigInputFor(settings, adapters.RunOptions{Model: model, Stage: "doctor"}, root, p.lookupEnv)
 	if err != nil {
-		return err
+		return adapters.OpenCodeRunConfig{}, err
 	}
-	_, err = adapters.BuildOpenCodeConfig(input)
-	return err
+	return adapters.BuildOpenCodeConfig(input)
+}
+
+// openCodeDeclaresModel reports whether content, a per-run config, declares
+// model: its provider block holds the model's own entry.
+func openCodeDeclaresModel(content, model string) bool {
+	key, id, _ := strings.Cut(strings.TrimSpace(model), "/")
+	var cfg struct {
+		Provider map[string]struct {
+			Models map[string]json.RawMessage `json:"models"`
+		} `json:"provider"`
+	}
+	if json.Unmarshal([]byte(content), &cfg) != nil {
+		return false
+	}
+	_, ok := cfg.Provider[key].Models[id]
+	return ok
 }
 
 // checkOpenCodeEndpoints probes every model server the block declares. A

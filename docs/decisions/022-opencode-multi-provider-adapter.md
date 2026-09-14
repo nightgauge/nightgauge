@@ -117,6 +117,9 @@ capture script and the full observation table are in
 | An unknown key in `OPENCODE_CONFIG_CONTENT` is dropped without a word                                                                                                          | § 8                        |
 | `opencode debug config` exits 1 on a value of the wrong type in `OPENCODE_CONFIG_CONTENT`, 0 on an unknown key, and prints every other key the content sets                    | § 20                       |
 | `opencode models` lists a configured endpoint's model with the endpoint's server stopped                                                                                       | § 20                       |
+| `opencode run --help` prints its help on stderr and nothing on stdout                                                                                                          | § 20                       |
+| Outside a git repository, OpenCode reads `opencode.json` from the directories above the working directory; `OPENCODE_DISABLE_PROJECT_CONFIG=1` stops it                        | § 20                       |
+| `opencode models` lists a hosted provider the config declares no block for only when one of its variables is set, whatever the value                                           | § 20                       |
 
 The first contradiction changes § 8: once project config is disabled, which it
 must be (a repository must not grant itself permissions, plugins or providers),
@@ -1201,7 +1204,11 @@ manifest's, and its remediation is the managed install,
   so the binary cannot move under the pipeline, as a PATH install does when
   OpenCode's TUI updates itself. Every probe of the binary runs in a throwaway
   directory that is its `HOME`, `TMPDIR` and four XDG directories, with no
-  credential, under a 20 s timeout that kills its process group.
+  credential, under a 20 s timeout that kills its process group. The directory
+  is in no git repository, so OpenCode would read `opencode.json`, `.opencode`
+  and their plugins from every directory above it, a world-writable `/tmp`
+  included. A probe checks the per-run config alone, so every probe sets
+  `OPENCODE_DISABLE_PROJECT_CONFIG=1`.
 - **Floor: 1.18.30**, the version every observation here was made on. Below
   it, or with a version that cannot be read, dispatch fails closed before
   anything is created.
@@ -1211,13 +1218,14 @@ manifest's, and its remediation is the managed install,
   The self-test checks the per-run config and the argv without a model call:
   `opencode debug config` under the `OPENCODE_CONFIG_CONTENT` the builder makes
   for the stage must exit 0 and print a merged config that holds every key the
-  content sets, with its value, and `opencode run --help` must define every
-  flag `BuildCommand` emits and list each value it passes among the option's
-  choices. A failure refuses the stage. The behavioural checks of the
-  observation method above (stdin delivery, the `--format json` event types,
-  `ask` auto-rejection, the absence of a TCP listener and the project-config
-  switch) need a model endpoint, so they are #1639's scheduled canary against
-  the newest release rather than a dispatch-time check.
+  content sets, with its value, and `opencode run --help`, which 1.18.30
+  prints on stderr, must define every flag `BuildCommand` emits and list each
+  value it passes among the option's choices. A failure refuses the stage.
+  The behavioural checks of the observation method above (stdin delivery, the
+  `--format json` event types, `ask` auto-rejection, the absence of a TCP
+  listener and the project-config switch) need a model endpoint, so they are
+  #1639's scheduled canary against the newest release rather than a
+  dispatch-time check.
 - **Why the self-test compares keys.** #1627 assumed that `debug config` exits
   non-zero on an unknown key. Observed on 1.18.30
   (`internal/doctor/testdata/opencode-capture/`), it exits 1 on a value of the
@@ -1238,6 +1246,15 @@ manifest's, and its remediation is the managed install,
 - **Drift.** Every dispatch that passes records the binary and version it was
   checked against in `~/.nightgauge/opencode/last-dispatch.json`, and the
   doctor warns when the binary it resolves now reports another version.
+- **The doctor's catalog probe.** The doctor runs `opencode models` under the
+  per-run config for `opencode.model`. For a declared endpoint's model and an
+  `anthropic` model the config writes the model's own entry, so the listing
+  holds it by construction and shows only that the binary loads the config;
+  the row says so. Any other hosted provider is listed only when one of its
+  variables is set, so the probe sets each one the doctor's environment
+  holds, and a dispatch keeps, to a placeholder, never to the credential, and
+  lists what a dispatch would. When the environment holds none of them, the
+  row blocks and names them, because a stage would find no model either.
 - Raising max-tested re-captures `testdata/opencode-cli/`, the reserved
   endpoint ids and the `lmstudio` exception (§ Endpoints) included, and
   `internal/doctor/testdata/opencode-capture/`, in the same change, and

@@ -34,6 +34,12 @@ in the same change.
 | A value of the wrong type (`share: 42`) exits **1** with `Configuration is invalid at OPENCODE_CONFIG_CONTENT` and the expected values                         | The self-test refuses a non-zero exit                                  |
 | `opencode models` lists the configured endpoint's model beside the catalog's own `lmstudio` models, and sends the endpoint no request                          | The doctor's catalog probe runs offline                                |
 
+A config the doctor builds for a declared endpoint's model always lists that
+model, because the config writes the model's own entry. `models-other` is a
+config built for another model, and stands for a listing that lacks the
+configured one, which for a declared model only a binary that did not load the
+per-run config would print.
+
 The issue that asked for these checks assumed `debug config` exits non-zero on
 an unknown key. On 1.18.30 it does not, so the self-test does not rely on the
 exit code alone: it also requires the merged config to hold every key the

@@ -180,10 +180,14 @@ changelog, and the release workflow refuses a tag that does not.
   config: `opencode debug config` on the stage's config must exit 0 and keep
   every key it sets, and `opencode run --help` must accept every flag the
   adapter passes. `opencode.binary` pins the binary for the doctor and the
-  spawn alike, and must be an absolute path. The doctor row also runs
-  `opencode models` for `opencode.model`; probes each LM Studio or Ollama
-  endpoint, named by id and never by address, for reachability, whether the
-  model is loaded and the context it is loaded with, warning when
+  spawn alike, and must be an absolute path. Every probe of the binary runs in
+  a throwaway directory with project config off, so no `opencode.json` or
+  plugin in a directory above it loads. The doctor row also runs
+  `opencode models` for `opencode.model`, setting a hosted provider's
+  variables that your environment holds to a placeholder, never the
+  credential, and names them when it holds none; probes each LM Studio or
+  Ollama endpoint, named by id and never by address, for reachability, whether
+  the model is loaded and the context it is loaded with, warning when
   `limit.context` is 0 or larger; prints the run's OpenCode directories and an
   offline posture that says egress is unverified until #1644; flags an OAuth
   `anthropic` login in OpenCode's stored logins, reading only its type; and
