@@ -4,6 +4,9 @@
 # Captured evidence — the fixture's whole justification is that the file holds
 # the exact byte sequence the Go writer emitted, so no EOL normalization (#397).
 packages/nightgauge-vscode/tests/fixtures/undetermined-branch/*.jsonl -text
+# The pinned OpenCode config schema is identified by its SHA-256 (#1634), so
+# its bytes are never normalized.
+internal/execution/adapters/testdata/opencode-config-schema/opencode-config.schema.json -text
 
 # Generated files — collapse in PR diffs
 api/generated/**                linguist-generated=true
