@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -209,7 +210,7 @@ func TestOpenCodeDispatchBelowMinTestedIsIncompatible(t *testing.T) {
 	fake := installFakeOpenCode(t, fakeOpenCodeBehavior{version: below})
 	a := pinnedAdapter(lmStudioSettings(), fake.path)
 
-	err := a.PreDispatch(RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b"})
+	err := a.PreDispatch(context.Background(), RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b"})
 	var incompatible *OpenCodeIncompatibleError
 	if !errors.As(err, &incompatible) || incompatible.Kind() != "adapter_incompatible" {
 		t.Fatalf("PreDispatch = %v, want an adapter_incompatible refusal", err)
@@ -236,7 +237,7 @@ func TestOpenCodeDispatchBelowMinTestedIsIncompatible(t *testing.T) {
 func TestOpenCodeUnreadableVersionIsIncompatible(t *testing.T) {
 	preflightEnv(t)
 	fake := installFakeOpenCode(t, fakeOpenCodeBehavior{version: "not-a-version"})
-	err := pinnedAdapter(lmStudioSettings(), fake.path).PreDispatch(RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"})
+	err := pinnedAdapter(lmStudioSettings(), fake.path).PreDispatch(context.Background(), RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"})
 	if err == nil || !strings.Contains(err.Error(), "adapter_incompatible") || !strings.Contains(err.Error(), "could not be read") {
 		t.Fatalf("PreDispatch = %v, want an adapter_incompatible refusal for an unreadable version", err)
 	}
@@ -265,7 +266,7 @@ func TestOpenCodeSelfTestRefusesAConfigDebugConfigRejects(t *testing.T) {
 		debugConfig: `echo 'Error: Configuration is invalid at OPENCODE_CONFIG_CONTENT' >&2; exit 1`,
 	})
 	var err error
-	stderr := captureAdapterStderr(t, func() { err = a.PreDispatch(run) })
+	stderr := captureAdapterStderr(t, func() { err = a.PreDispatch(context.Background(), run) })
 	if err == nil || !strings.Contains(err.Error(), "adapter_incompatible") ||
 		!strings.Contains(err.Error(), "`opencode debug config` exited 1") ||
 		!strings.Contains(err.Error(), "Configuration is invalid") {
@@ -291,7 +292,7 @@ func TestOpenCodeSelfTestRefusesAConfigDebugConfigDrops(t *testing.T) {
 		debugConfig: `printf '%s' "$OPENCODE_CONFIG_CONTENT" | sed 's/"share":"disabled",//'; exit 0`,
 	})
 	var err error
-	captureAdapterStderr(t, func() { err = a.PreDispatch(run) })
+	captureAdapterStderr(t, func() { err = a.PreDispatch(context.Background(), run) })
 	if err == nil || !strings.Contains(err.Error(), "dropped or changed 1 key(s)") || !strings.Contains(err.Error(), "share") {
 		t.Fatalf("PreDispatch = %v, want a refusal naming the dropped key share", err)
 	}
@@ -313,7 +314,7 @@ func TestOpenCodeSelfTestRefusesARunHelpWithoutAFlag(t *testing.T) {
 		runHelp:     helpScript(t, strings.Join(kept, "\n")),
 	})
 	var err error
-	captureAdapterStderr(t, func() { err = a.PreDispatch(run) })
+	captureAdapterStderr(t, func() { err = a.PreDispatch(context.Background(), run) })
 	if err == nil || !strings.Contains(err.Error(), "adapter_incompatible") || !strings.Contains(err.Error(), "does not define --dir") {
 		t.Fatalf("PreDispatch = %v, want a refusal naming --dir", err)
 	}
@@ -334,7 +335,7 @@ func TestOpenCodeSelfTestPassRunsOnceAcrossStages(t *testing.T) {
 	for _, stage := range []string{"feature-planning", "feature-dev"} {
 		run.Stage = stage
 		var err error
-		stderr := captureAdapterStderr(t, func() { err = a.PreDispatch(run) })
+		stderr := captureAdapterStderr(t, func() { err = a.PreDispatch(context.Background(), run) })
 		if err != nil {
 			t.Fatalf("stage %s: PreDispatch = %v, want the dispatch allowed", stage, err)
 		}
@@ -362,7 +363,7 @@ func TestOpenCodeAboveMaxTestedRefusesAnEndpoint(t *testing.T) {
 	m := openCodeManifestForTest(t)
 	above := patchStep(t, m.MaxTested, 1)
 	fake := installFakeOpenCode(t, fakeOpenCodeBehavior{version: above, debugConfig: echoContent})
-	err := pinnedAdapter(lmStudioSettings(), fake.path).PreDispatch(RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"})
+	err := pinnedAdapter(lmStudioSettings(), fake.path).PreDispatch(context.Background(), RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"})
 	if err == nil {
 		t.Fatal("an endpoint dispatch above max-tested was allowed")
 	}
@@ -385,7 +386,7 @@ func TestOpenCodePinnedBinaryIsCheckedSpawnedAndRecorded(t *testing.T) {
 	fake := installFakeOpenCode(t, fakeOpenCodeBehavior{version: m.MaxTested})
 	a := pinnedAdapter(lmStudioSettings(), fake.path)
 	run := RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b"}
-	if err := a.PreDispatch(run); err != nil {
+	if err := a.PreDispatch(context.Background(), run); err != nil {
 		t.Fatalf("PreDispatch = %v", err)
 	}
 	if got := fake.invocations(t); len(got) != 1 || got[0] != "--version" {
@@ -434,7 +435,7 @@ func TestOpenCodeRejectsARelativeOrUnrunnablePin(t *testing.T) {
 	for pin, want := range cases {
 		a := pinnedAdapter(lmStudioSettings(), pin)
 		run := RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"}
-		if err := a.PreDispatch(run); err == nil || !strings.Contains(err.Error(), want) {
+		if err := a.PreDispatch(context.Background(), run); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("PreDispatch with opencode.binary %q = %v, want %q", pin, err, want)
 		}
 		if _, err := a.PrepareRunRoot(RunRootRequest{ID: testRunID, MachineConfigDir: filepath.Join(home, ".nightgauge"), Run: run}); err == nil || !strings.Contains(err.Error(), want) {
@@ -508,7 +509,7 @@ func TestOpenCodeProbeRunsInItsOwnDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := probe.Run(bin, nil, `{"share":"disabled"}`, nil)
+	res, err := probe.Run(context.Background(), bin, nil, `{"share":"disabled"}`, nil)
 	if err != nil || res.ExitCode != 0 {
 		t.Fatalf("Run = %+v, %v", res, err)
 	}
@@ -568,7 +569,7 @@ func TestOpenCodeProbeSetsProviderVarsToAPlaceholder(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = probe.Close() }()
-	res, err := probe.Run(bin, nil, "", nil, "OPENAI_API_KEY")
+	res, err := probe.Run(context.Background(), bin, nil, "", nil, "OPENAI_API_KEY")
 	if err != nil || res.ExitCode != 0 {
 		t.Fatalf("Run = %+v, %v", res, err)
 	}
@@ -576,7 +577,7 @@ func TestOpenCodeProbeSetsProviderVarsToAPlaceholder(t *testing.T) {
 		t.Errorf("the probe did not set OPENAI_API_KEY to the placeholder alone:\n%s", res.Stdout)
 	}
 	for _, name := range []string{"OPENCODE_CONFIG", "OPENCODE_API_KEY", "ANTHROPIC_BASE_URL", "GITHUB_TOKEN", "AWS_REGION", "PATH", "NOT_A_PROVIDER_VARIABLE"} {
-		if _, err := probe.Run(bin, nil, "", nil, name); err == nil || !strings.Contains(err.Error(), "catalog variables") {
+		if _, err := probe.Run(context.Background(), bin, nil, "", nil, name); err == nil || !strings.Contains(err.Error(), "catalog variables") {
 			t.Errorf("a probe setting %s = %v, want it refused", name, err)
 		}
 	}
@@ -628,7 +629,7 @@ func TestOpenCodeProbeKillsItsProcessGroup(t *testing.T) {
 
 	// Exits at once, leaving a background child in its group.
 	leaves := write("leaves", fmt.Sprintf("sleep 30 >/dev/null 2>&1 &\necho $! > %q\nexit 0\n", pidFile))
-	if _, err := probe.Run(leaves, nil, "", nil); err != nil {
+	if _, err := probe.Run(context.Background(), leaves, nil, "", nil); err != nil {
 		t.Fatalf("Run = %v", err)
 	}
 	raw, err := os.ReadFile(pidFile)
@@ -650,12 +651,107 @@ func TestOpenCodeProbeKillsItsProcessGroup(t *testing.T) {
 	t.Cleanup(func() { openCodeProbeTimeout = prev })
 	hangs := write("hangs", "sleep 30\n")
 	start := time.Now()
-	_, err = probe.Run(hangs, nil, "", nil)
+	_, err = probe.Run(context.Background(), hangs, nil, "", nil)
 	if err == nil || !strings.Contains(err.Error(), "ran past") {
 		t.Fatalf("Run of a process that does not exit = %v, want the timeout", err)
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Errorf("the timeout took %s", elapsed)
+	}
+}
+
+// TestOpenCodeProbeHonoursItsContext: a probe whose context is done starts
+// nothing, and one whose context is cancelled while it runs is killed with
+// its group at once, its error wrapping the context's instead of naming the
+// timeout (#1627).
+func TestOpenCodeProbeHonoursItsContext(t *testing.T) {
+	dir := t.TempDir()
+	started := filepath.Join(dir, "started")
+	bin := filepath.Join(dir, "hangs")
+	if err := os.WriteFile(bin, []byte(fmt.Sprintf("#!/bin/sh\ntouch %q\nsleep 30\n", started)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	probe, err := NewOpenCodeProbe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = probe.Close() }()
+
+	done, cancelDone := context.WithCancel(context.Background())
+	cancelDone()
+	if _, err := probe.Run(done, bin, nil, "", nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run under a done context = %v, want its error", err)
+	}
+	if _, err := os.Stat(started); err == nil {
+		t.Fatal("a probe whose context was done started its binary")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+			if _, err := os.Stat(started); err == nil {
+				break
+			}
+		}
+		cancel()
+	}()
+	start := time.Now()
+	_, err = probe.Run(ctx, bin, nil, "", nil)
+	if !errors.Is(err, context.Canceled) || strings.Contains(err.Error(), "ran past") {
+		t.Fatalf("Run cancelled while it ran = %v, want the context's error", err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("the cancelled probe took %s to return", elapsed)
+	}
+}
+
+// TestOpenCodeStoppedDispatchIsNotIncompatible: a dispatch whose context is
+// done runs no probe, and one stopped during its self-test is refused with
+// the context's error. Neither calls the binary incompatible, and neither
+// records a self-test pass or the dispatch (#1627).
+func TestOpenCodeStoppedDispatchIsNotIncompatible(t *testing.T) {
+	home := preflightEnv(t)
+	var incompatible *OpenCodeIncompatibleError
+
+	fake := installFakeOpenCode(t, fakeOpenCodeBehavior{version: openCodeManifestForTest(t).MaxTested})
+	done, cancelDone := context.WithCancel(context.Background())
+	cancelDone()
+	var err error
+	captureAdapterStderr(t, func() {
+		err = pinnedAdapter(lmStudioSettings(), fake.path).PreDispatch(done, RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"})
+	})
+	if !errors.Is(err, context.Canceled) || errors.As(err, &incompatible) {
+		t.Fatalf("PreDispatch under a done context = %v, want the context's error and no adapter_incompatible", err)
+	}
+	if got := fake.invocations(t); len(got) != 0 {
+		t.Errorf("a dispatch whose context was done ran the binary: %q", got)
+	}
+
+	started := filepath.Join(t.TempDir(), "started")
+	a, selfTested, run := aboveMaxTestedAnthropic(t, fakeOpenCodeBehavior{debugConfig: fmt.Sprintf("touch %q; sleep 30", started)})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+			if _, err := os.Stat(started); err == nil {
+				break
+			}
+		}
+		cancel()
+	}()
+	captureAdapterStderr(t, func() { err = a.PreDispatch(ctx, run) })
+	if !errors.Is(err, context.Canceled) || errors.As(err, &incompatible) {
+		t.Fatalf("PreDispatch stopped during the self-test = %v, want the context's error and no adapter_incompatible", err)
+	}
+	if selfTested.count(t, "run --help") != 0 {
+		t.Error("the self-test went on after its context was cancelled")
+	}
+	if passes, _ := filepath.Glob(filepath.Join(openCodeSelfTestDir(home), "*.pass")); len(passes) != 0 {
+		t.Errorf("a stopped self-test recorded a pass: %q", passes)
+	}
+	if _, ok, _ := ReadOpenCodeDispatchRecord(home); ok {
+		t.Error("a stopped dispatch was recorded as the last dispatch")
 	}
 }
 

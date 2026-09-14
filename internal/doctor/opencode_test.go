@@ -554,7 +554,7 @@ func TestOpenCodePinnedBinaryVersionAndDrift(t *testing.T) {
 	settings := openCodeLMStudio()
 	settings.Binary = pin
 	f := newOpenCodeFixture(t, settings)
-	f.probe.version = adapters.OpenCodeVersionOf
+	f.probe.version = defaultOpenCodeProbe().version
 	f.probe.lookPath = func(string) (string, error) {
 		t.Error("a pinned binary was looked up on PATH")
 		return "", nil

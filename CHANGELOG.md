@@ -202,6 +202,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A stage the operator stops is reported as stopped, not as a
+  `wait: context canceled` failure, when its CLI exits on the stop but a
+  process it started holds its output past the grace period. OpenCode's
+  version-policy probes now run under the stage's context: a stage whose
+  context is done starts none of them, and a probe it stops is not reported
+  as an incompatible binary (#1627)
 - ADR-022 no longer says `--yolo` and `--dangerously-skip-permissions` are not
   `opencode run` options. In 1.18.30 both are hidden options that switch on the
   same auto-approval as `--auto`. The adapter still never emits them, and

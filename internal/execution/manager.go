@@ -282,10 +282,18 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	// runs after worktree setup, so a check that has to inspect the tree the
 	// stage will run in can join it, and ahead of the model and effort checks
 	// and BuildCommand, so a refusal states the real reason and spawns nothing.
+	//
+	// A stage whose context is done by now is not dispatched: the hook is not
+	// called, so none of its probes starts, and nothing below runs. The hook
+	// gets the stage's context, so a probe it starts is killed when the stage
+	// is (#1627).
+	if err := execCtx.Err(); err != nil {
+		return nil, fmt.Errorf("stage not dispatched: %w", err)
+	}
 	if gate, ok := adapter.(interface {
-		PreDispatch(adapters.RunOptions) error
+		PreDispatch(context.Context, adapters.RunOptions) error
 	}); ok {
-		if err := gate.PreDispatch(runOpts); err != nil {
+		if err := gate.PreDispatch(execCtx, runOpts); err != nil {
 			return nil, fmt.Errorf("dispatch refused for adapter %q: %w", adapter.Name(), err)
 		}
 	}
@@ -683,9 +691,13 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	}
 
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		var exitErr *exec.ExitError
+		switch {
+		case errors.As(err, &exitErr):
 			result.ExitCode = exitErr.ExitCode()
-		} else {
+		case stoppedStageExited(result.Cancelled, cmd.ProcessState, err):
+			result.ExitCode = cmd.ProcessState.ExitCode()
+		default:
 			return result, fmt.Errorf("wait: %w", err)
 		}
 	}
@@ -695,6 +707,25 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	}
 
 	return result, nil
+}
+
+// stoppedStageExited reports whether cmd.Wait's error is only the stop's own
+// context cancellation, on a stage the operator stopped whose process has
+// been reaped (#1627).
+//
+// A stop signals the stage's group, waits out its grace, and only then
+// cancels the stage's context (StopExecution, CancelWithGrace). When the
+// stage traps the SIGTERM and exits 0 while something it started still holds
+// its output past the grace, the stage is an unreaped zombie when the context
+// is cancelled: os/exec's context watcher signals it, the signal succeeds,
+// and cmd.Wait then returns the context's error instead of the exit status it
+// reaped. The stage did not fail to be waited for. It was stopped, which
+// RunResult.Cancelled already says (#564). Reported as a wait error it was
+// lost: the scheduler's runner drops the result on an error return, so the
+// operator's stop was classified as the stage's own failure.
+func stoppedStageExited(stopped bool, state *os.ProcessState, err error) bool {
+	return stopped && state != nil &&
+		(errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded))
 }
 
 // stageStateDir is the directory the run's runtime-{issue}-{runId}.json lives

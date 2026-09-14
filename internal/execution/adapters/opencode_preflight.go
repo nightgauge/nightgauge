@@ -249,13 +249,18 @@ type OpenCodeProbeResult struct {
 // providerVars, when given, are variables OpenCode's catalog binds to a model
 // provider (OpenCodeProviderVars), each set to a placeholder and never to its
 // value; any other name is refused. It runs in its own process group with
-// stdin closed, and the whole group is killed at openCodeProbeTimeout and
-// again once it exits, so nothing it started outlives it.
+// stdin closed, and the whole group is killed at openCodeProbeTimeout, when
+// ctx is done, and again once it exits, so nothing it started outlives it.
+// Once ctx is done it starts nothing (#1627).
 //
 // A non-zero exit is a result, not an error; an error is a process that could
-// not start, ran past the timeout, or printed more than openCodeProbeMaxOutput.
-func (p *OpenCodeProbe) Run(bin string, args []string, content string, files map[string]string, providerVars ...string) (OpenCodeProbeResult, error) {
+// not start, ran past the timeout, was stopped by ctx, or printed more than
+// openCodeProbeMaxOutput. An error ctx caused wraps ctx's error.
+func (p *OpenCodeProbe) Run(ctx context.Context, bin string, args []string, content string, files map[string]string, providerVars ...string) (OpenCodeProbeResult, error) {
 	label := "`" + strings.Join(append([]string{openCodeBinaryName}, args...), " ") + "`"
+	if err := ctx.Err(); err != nil {
+		return OpenCodeProbeResult{ExitCode: -1}, fmt.Errorf("%s not started: %w", label, err)
+	}
 	for _, name := range providerVars {
 		if !openCodeProbeMaySet(name) {
 			return OpenCodeProbeResult{ExitCode: -1}, fmt.Errorf("%s: a probe sets only a model provider's catalog variables, and %q is not one", label, name)
@@ -283,9 +288,9 @@ func (p *OpenCodeProbe) Run(bin string, args []string, content string, files map
 		env = append(env, openCodeConfigContentEnvVar+"="+content)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), openCodeProbeTimeout)
+	runCtx, cancel := context.WithTimeout(ctx, openCodeProbeTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd := exec.CommandContext(runCtx, bin, args...)
 	cmd.Dir = p.root
 	cmd.Env = env
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -304,7 +309,9 @@ func (p *OpenCodeProbe) Run(bin string, args []string, content string, files map
 	}
 	var exitErr *exec.ExitError
 	switch {
-	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+	case ctx.Err() != nil:
+		return res, fmt.Errorf("%s was stopped: %w", label, ctx.Err())
+	case errors.Is(runCtx.Err(), context.DeadlineExceeded):
 		return res, fmt.Errorf("%s ran past %s and was killed", label, openCodeProbeTimeout)
 	case stdout.overflow || stderr.overflow:
 		return res, fmt.Errorf("%s printed more than %d bytes", label, openCodeProbeMaxOutput)
@@ -371,16 +378,16 @@ func (b *openCodeProbeBuffer) Write(p []byte) (int, error) {
 // openCodeVersionRE is the shape of what `opencode --version` prints.
 var openCodeVersionRE = regexp.MustCompile(`^v?([0-9]+)\.([0-9]+)\.([0-9]+)[0-9A-Za-z.+-]*$`)
 
-// OpenCodeVersionOf runs `bin --version` as a probe and returns the version it
-// prints. The output is never quoted back: a binary that prints something
-// else is reported as printing no version.
-func OpenCodeVersionOf(bin string) (string, error) {
+// OpenCodeVersionOf runs `bin --version` as a probe under ctx and returns the
+// version it prints. The output is never quoted back: a binary that prints
+// something else is reported as printing no version.
+func OpenCodeVersionOf(ctx context.Context, bin string) (string, error) {
 	probe, err := NewOpenCodeProbe()
 	if err != nil {
 		return "", err
 	}
 	defer func() { _ = probe.Close() }()
-	res, err := probe.Run(bin, []string{"--version"}, "", nil)
+	res, err := probe.Run(ctx, bin, []string{"--version"}, "", nil)
 	if err != nil {
 		return "", err
 	}
@@ -544,8 +551,9 @@ func openCodeSelfTestPassed(home, key string) bool {
 //
 // A pass is recorded under home and not repeated for the same binary,
 // version and per-run config; a failure is an *OpenCodeIncompatibleError and
-// is tried again on the next dispatch.
-func (a *OpenCodeAdapter) runOpenCodeSelfTest(home string, p OpenCodeVersionPolicy, opts RunOptions, settings config.OpenCodeConfig) error {
+// is tried again on the next dispatch. A probe ctx stopped is neither: its
+// error wraps ctx's, and nothing is recorded.
+func (a *OpenCodeAdapter) runOpenCodeSelfTest(ctx context.Context, home string, p OpenCodeVersionPolicy, opts RunOptions, settings config.OpenCodeConfig) error {
 	probe, err := NewOpenCodeProbe()
 	if err != nil {
 		return err
@@ -573,18 +581,24 @@ func (a *OpenCodeAdapter) runOpenCodeSelfTest(home string, p OpenCodeVersionPoli
 			Remediation: openCodeInstallRemedy(m, home),
 		}
 	}
-	redact := slices.Collect(maps.Values(built.Files))
-	res, err := probe.Run(p.Binary.Path, []string{"debug", "config"}, built.Content, built.Files)
-	if err != nil {
+	probeFailed := func(err error) error {
+		if ctx.Err() != nil {
+			return err
+		}
 		return failed(err.Error())
+	}
+	redact := slices.Collect(maps.Values(built.Files))
+	res, err := probe.Run(ctx, p.Binary.Path, []string{"debug", "config"}, built.Content, built.Files)
+	if err != nil {
+		return probeFailed(err)
 	}
 	if err := EvaluateOpenCodeDebugConfig(built.Content, res, redact); err != nil {
 		return failed(err.Error())
 	}
 	_, argv, _ := a.BuildCommand(RunOptions{Model: opts.Model, WorktreeDir: openCodeSelfTestWorktree})
-	help, err := probe.Run(p.Binary.Path, []string{"run", "--help"}, "", nil)
+	help, err := probe.Run(ctx, p.Binary.Path, []string{"run", "--help"}, "", nil)
 	if err != nil {
-		return failed(err.Error())
+		return probeFailed(err)
 	}
 	if err := CheckOpenCodeRunHelp(help, argv); err != nil {
 		return failed(err.Error())
@@ -952,7 +966,11 @@ func writeOpenCodeStateJSON(path string, v any) error {
 //     self-test has passed for this binary, version and per-run config;
 //   - the binary and version the dispatch passed with are recorded for the
 //     doctor's drift check.
-func (a *OpenCodeAdapter) checkVersionPolicy(opts RunOptions) error {
+//
+// Every probe runs under ctx, the stage's context: once it is done no probe
+// starts, a running one is killed, and the error wraps ctx's rather than
+// calling the binary incompatible (#1627).
+func (a *OpenCodeAdapter) checkVersionPolicy(ctx context.Context, opts RunOptions) error {
 	settings, err := a.loadSettings(opts.WorktreeDir)
 	if err != nil {
 		return err
@@ -965,7 +983,10 @@ func (a *OpenCodeAdapter) checkVersionPolicy(opts RunOptions) error {
 	// the dispatch record, so the self-test runs every time and nothing is
 	// recorded; neither is a reason to refuse the dispatch.
 	home, _ := os.UserHomeDir()
-	version, versionErr := OpenCodeVersionOf(bin.Path)
+	version, versionErr := OpenCodeVersionOf(ctx, bin.Path)
+	if versionErr != nil && ctx.Err() != nil {
+		return versionErr
+	}
 	p, err := CheckOpenCodeVersion(bin, version, versionErr, home)
 	if err != nil {
 		return err
@@ -983,7 +1004,7 @@ func (a *OpenCodeAdapter) checkVersionPolicy(opts RunOptions) error {
 		}
 		fmt.Fprintf(os.Stderr, "[opencode] WARNING: opencode %s (%s) is newer than the max-tested %s: a stage runs on it only once a self-test of its per-run config and run flags has passed on this version\n",
 			p.Version, bin.Path, p.MaxTested)
-		if err := a.runOpenCodeSelfTest(home, p, opts, settings); err != nil {
+		if err := a.runOpenCodeSelfTest(ctx, home, p, opts, settings); err != nil {
 			return err
 		}
 	}

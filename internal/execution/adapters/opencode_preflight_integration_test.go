@@ -11,6 +11,7 @@ package adapters
 //	go test -tags opencode_integration ./internal/execution/adapters/ -run 'OnTheBinary' -count=1
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -39,7 +40,7 @@ func realOpenCode(t *testing.T) OpenCodeBinary {
 // stderr, defines every flag BuildCommand emits.
 func TestOpenCodeSelfTestPassesOnTheBinary(t *testing.T) {
 	bin := realOpenCode(t)
-	version, err := OpenCodeVersionOf(bin.Path)
+	version, err := OpenCodeVersionOf(context.Background(), bin.Path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +52,7 @@ func TestOpenCodeSelfTestPassesOnTheBinary(t *testing.T) {
 
 	var selfTestErr error
 	captureAdapterStderr(t, func() {
-		selfTestErr = NewOpenCodeAdapter().runOpenCodeSelfTest(home, p, run, config.OpenCodeConfig{})
+		selfTestErr = NewOpenCodeAdapter().runOpenCodeSelfTest(context.Background(), home, p, run, config.OpenCodeConfig{})
 	})
 	if selfTestErr != nil {
 		t.Fatalf("the self-test failed on opencode %s (%s): %v", version, bin.Path, selfTestErr)
@@ -83,7 +84,7 @@ func TestOpenCodeProbeIgnoresProjectConfigAboveItOnTheBinary(t *testing.T) {
 		t.Fatalf("the probe's directory %s is not in %s, where the config was planted", probe.Root(), parent)
 	}
 
-	res, err := probe.Run(bin.Path, []string{"debug", "config"}, "", nil)
+	res, err := probe.Run(context.Background(), bin.Path, []string{"debug", "config"}, "", nil)
 	if err != nil || res.ExitCode != 0 {
 		t.Fatalf("`opencode debug config` in the probe = exit %d, %v", res.ExitCode, err)
 	}
