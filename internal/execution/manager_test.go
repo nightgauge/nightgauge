@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/state"
@@ -881,7 +882,7 @@ func TestOpenCodeDispatchRefusedUntilEnabled(t *testing.T) {
 		if !strings.Contains(stderr, warningHeader) {
 			t.Errorf("stderr lacks the warning line %q:\n%s", warningHeader, stderr)
 		}
-		for _, control := range []string{"stream parsing", "egress defaults", "permission map", "safety plugin"} {
+		for _, control := range []string{"stream parsing", "stage limits", "permission map", "safety plugin"} {
 			if !strings.Contains(stderr, "[opencode]   - "+control+": ") {
 				t.Errorf("warning does not list the %q control:\n%s", control, stderr)
 			}
@@ -913,19 +914,48 @@ func TestOpenCodeDispatchRefusedUntilEnabled(t *testing.T) {
 
 // isolateOpenCodeHome points HOME at a fresh directory and clears every
 // variable the opencode run root is resolved from, so a test's run roots,
-// ~/.opencode check and machine-tier directory never touch the real home.
+// ~/.opencode check and machine-tier directory never touch the real home. It
+// writes openCodeMachineConfig as the machine-tier config, so a stage on the
+// reference LM Studio has the endpoint its per-run config needs.
 func isolateOpenCodeHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	for _, k := range []string{
 		"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME",
-		// The inherit opt-in, by the name operators set (ADR-022 § 8).
-		"GH_CONFIG_DIR", "GOCACHE", "NIGHTGAUGE_CONFIG_HOME", "NIGHTGAUGE_OPENCODE_INHERIT_USER_CONFIG",
+		"GH_CONFIG_DIR", "GOCACHE", "NIGHTGAUGE_CONFIG_HOME",
 	} {
 		t.Setenv(k, "")
 	}
+	writeOpenCodeMachineConfig(t, openCodeMachineConfig)
 	return home
+}
+
+// openCodeMachineConfig is the reference machine's `opencode:` block: one LM
+// Studio on loopback, with a 131072-token window loaded.
+const openCodeMachineConfig = `opencode:
+  provider: lm-studio
+  base_url: http://127.0.0.1:1234/v1
+  limit:
+    context: 131072
+    output: 8192
+`
+
+// writeOpenCodeMachineConfig writes contents as the machine-tier config at
+// the path the environment resolves it to now, and returns the path.
+func writeOpenCodeMachineConfig(t *testing.T, contents string) string {
+	t.Helper()
+	path, err := config.MachineConfigPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 // openCodeFake is a fake `opencode` first on PATH. Each run records the
@@ -1132,8 +1162,8 @@ func TestOpenCodeSpawnWithholdsInheritedOpenCodeVariablesAndForeignKeys(t *testi
 		t.Fatal("an unrelated inherited variable did not reach the child, so its recorded environment proves nothing")
 	}
 	for k := range inherited {
-		if k == "OPENCODE_SERVER_PASSWORD" {
-			continue // the adapter mints its own; checked below
+		if k == "OPENCODE_SERVER_PASSWORD" || k == "OPENCODE_CONFIG_CONTENT" {
+			continue // the adapter sets its own; checked below
 		}
 		if v, ok := env[k]; ok {
 			t.Errorf("%s reached the opencode child (%d bytes); no inherited OpenCode variable may", k, len(v))
@@ -1141,6 +1171,9 @@ func TestOpenCodeSpawnWithholdsInheritedOpenCodeVariablesAndForeignKeys(t *testi
 	}
 	if p := env["OPENCODE_SERVER_PASSWORD"]; p == "" || strings.Contains(p, sentinel) {
 		t.Error("the child did not get the adapter's own server password in place of the inherited one")
+	}
+	if c := env["OPENCODE_CONFIG_CONTENT"]; strings.Contains(c, sentinel) || !strings.Contains(c, `"small_model":"lmstudio/qwen/qwen3.8-27b"`) {
+		t.Errorf("the child did not get the per-run config in place of the inherited one: %.120q", c)
 	}
 	if env["OPENCODE_DISABLE_SHARE"] != "1" {
 		t.Error("the filter removed the adapter's own OPENCODE_* exports along with the inherited ones")
@@ -1200,6 +1233,7 @@ func TestOpenCodeStageRunsInItsOwnRunRoot(t *testing.T) {
 	operatorXDG := filepath.Join(home, "operator-xdg")
 	t.Setenv("XDG_CONFIG_HOME", operatorXDG)
 	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "operator-data"))
+	writeOpenCodeMachineConfig(t, openCodeMachineConfig) // the machine tier moved with XDG_CONFIG_HOME
 	fake := installOpenCodeFake(t, "")
 	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
 	runs := filepath.Join(home, ".nightgauge", "opencode", "runs")
@@ -1287,6 +1321,84 @@ func TestOpenCodeStageRunsInItsOwnRunRoot(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(runs, runID)); err != nil {
 		t.Fatalf("an identified run's root did not outlive its stage: %v", err)
+	}
+}
+
+// TestOpenCodeZeroContextLimitRefusesBeforeSpawn: LM Studio reports a context
+// limit of 0, and OpenCode never compacts a session whose limit is 0, so a
+// dispatch to an endpoint whose machine-tier limit.context is 0 is refused
+// with an error naming the key, before the CLI is spawned and before the
+// run's root is created. With the limit set, the same dispatch spawns once,
+// the child's OPENCODE_CONFIG_CONTENT is the per-run config with the stage's
+// steps cap, and the endpoint's base URL is in no variable of its environment,
+// only in the private file the config refers to.
+func TestOpenCodeZeroContextLimitRefusesBeforeSpawn(t *testing.T) {
+	home := isolateOpenCodeHome(t)
+	fake := installOpenCodeFake(t, "")
+	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
+	workspace := openCodeWorkspace(t)
+	const runID = "01890a5d-ac96-774b-bcce-b30209a81625"
+	root := filepath.Join(home, ".nightgauge", "opencode", "runs", runID)
+	dispatch := func() error {
+		var err error
+		captureStderr(t, func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			opts := openCodeStageOptions("lmstudio/qwen/qwen3.8-27b", state.NewRuntimeState("nightgauge/nightgauge", 1625, "item-1625", runID))
+			opts.MaxTurns = 40
+			_, err = NewManager(workspace, adapters.NewOpenCodeAdapter()).RunStage(ctx, opts)
+		})
+		return err
+	}
+
+	writeOpenCodeMachineConfig(t, strings.Replace(openCodeMachineConfig, "context: 131072", "context: 0", 1))
+	err := dispatch()
+	if err == nil {
+		t.Fatal("RunStage dispatched to an endpoint whose context limit is 0")
+	}
+	for _, want := range []string{"dispatch refused", "opencode.limit.context", "never"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not say %q: %v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "127.0.0.1:1234") {
+		t.Errorf("the refusal quotes the endpoint's base URL: %v", err)
+	}
+	if n := fake.invocations(t); n != 0 {
+		t.Errorf("the opencode binary ran %d time(s) for a refused config; want 0", n)
+	}
+	if _, statErr := os.Lstat(root); !os.IsNotExist(statErr) {
+		t.Errorf("a refused config created the run's root %s", root)
+	}
+
+	writeOpenCodeMachineConfig(t, openCodeMachineConfig)
+	if err := dispatch(); err != nil {
+		t.Fatalf("RunStage refused the reference endpoint: %v", err)
+	}
+	if n := fake.invocations(t); n != 1 {
+		t.Fatalf("the opencode binary ran %d time(s); want 1", n)
+	}
+	env, entries := fake.env(t)
+	var cfg struct {
+		EnabledProviders []string `json:"enabled_providers"`
+		Agent            map[string]struct {
+			Steps int `json:"steps"`
+		} `json:"agent"`
+	}
+	if err := json.Unmarshal([]byte(env["OPENCODE_CONFIG_CONTENT"]), &cfg); err != nil {
+		t.Fatalf("the child's OPENCODE_CONFIG_CONTENT is not the per-run config: %v", err)
+	}
+	if len(cfg.EnabledProviders) != 1 || cfg.EnabledProviders[0] != "lmstudio" || cfg.Agent["build"].Steps != 40 {
+		t.Errorf("the child's config does not pin the provider and the steps cap: %+v", cfg)
+	}
+	for _, kv := range entries {
+		if strings.Contains(kv, "127.0.0.1:1234") {
+			k, _, _ := strings.Cut(kv, "=")
+			t.Errorf("%s carries the endpoint's base URL into the child's environment", k)
+		}
+	}
+	if got, err := os.ReadFile(filepath.Join(root, "nightgauge", "lmstudio.base-url")); err != nil || string(got) != "http://127.0.0.1:1234/v1" {
+		t.Errorf("the endpoint's base URL file holds %q (%v)", got, err)
 	}
 }
 

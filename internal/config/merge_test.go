@@ -506,6 +506,7 @@ func TestMachineTierKeysSnapshot(t *testing.T) {
 		"github_auth",
 		"notifications.discord.enabled",
 		"lm_studio",
+		"opencode",
 		"autonomous.enabled_repos",
 		"autonomous.allow_self_repo",
 		"ui.core.adapter",

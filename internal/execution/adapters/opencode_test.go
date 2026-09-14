@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/models"
 )
 
@@ -227,7 +228,7 @@ func TestOpenCodeGate(t *testing.T) {
 			t.Errorf("gate value %q opened the gate; only exactly \"1\" may", v)
 			continue
 		}
-		for _, want := range []string{ExperimentalOpenCodeEnvVar + "=1", "--adapter", "NIGHTGAUGE_ADAPTER", "stream parsing", "egress defaults", "permission map", "safety plugin"} {
+		for _, want := range []string{ExperimentalOpenCodeEnvVar + "=1", "--adapter", "NIGHTGAUGE_ADAPTER", "stream parsing", "stage limits", "permission map", "safety plugin"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("refusal for %q does not mention %q: %v", v, want, err)
 			}
@@ -257,39 +258,52 @@ func TestOpenCodeGate(t *testing.T) {
 
 // TestOpenCodeWarningDisclosesWhereThePromptCanGo: the model a stage names is
 // not the only place its prompt can go, and the warning is the operator's only
-// disclosure of the others. Run isolation keeps the operator's own OpenCode
-// config and stored logins out of a run (ADR-022 § 8, § 17), but the target
-// repository's opencode.json and .opencode/ still load until #1638, and they
-// can name another model that receives the prompt: session-title generation
-// sends it to small_model, and the title and compaction agents and every
-// subagent run on their agent's model (§ 10, § 15), on any provider whose API
-// key the run holds. Withholding other model services' variables does not
-// close that: the stage keeps GITHUB_TOKEN and GITLAB_TOKEN for the forge,
-// which the catalog binds to github-copilot and gitlab, and the cloud and data
-// platform credentials its tools read, which the catalog binds to
-// amazon-bedrock, google-vertex and others; a provider's loader can find
-// credentials outside the environment; and OpenCode's own hosted provider
-// needs no key for its free models. And an endpoint can forward: a local
-// Ollama serves its cloud models from Ollama's hosted service (§ 3,
-// § Endpoints). So the egress line names the repository's config, both keys,
-// the API key they need and each way a run reaches a provider without one it
-// was given, and the endpoint line names Ollama cloud models. The warning is
-// also the only disclosure of what the output redaction leaves in place and
-// of a repository whose steering does not load, so those lines name exactly
-// what is redacted and which steering file is dropped.
+// disclosure of the others. The per-run config pins small_model and every
+// built-in agent's model to the dispatched one and narrows enabled_providers
+// to its provider, and no config layer below it can change a key it sets
+// (ADR-022 § 8, § 15), so the egress defaults are enforced and have no line.
+// But the target repository's opencode.json and .opencode/ still load until
+// #1638, and they can add what the per-run config does not set: an agent or
+// subagent of their own, with its own model on the dispatched provider and no
+// steps cap, a remote instructions URL, or a provider header that carries an
+// environment variable to the model server. They can also add options.model
+// to the dispatched model's own entry or an agent's own options, or a
+// variant, and change the model actually served without touching the pinned
+// id; on anthropic, options.speed or options.fallbacks the same way; and an
+// agent's options.mcpServers can send ANTHROPIC_API_KEY, or another variable
+// the run holds, as an authorization token to a URL of their choosing. They
+// and an inherited operator config can also set a hosted model's limits,
+// which the per-run config leaves to the catalog, and the model a hosted
+// provider other than anthropic is sent as, which it gives no block. And an
+// endpoint can forward: a local Ollama serves its cloud models from Ollama's
+// hosted service (§ 3, § Endpoints). So the tamper-gate line names what the
+// repository can add, including the three routes #1638 has yet to close, the
+// endpoint line names the other model and Ollama cloud models, and the
+// stage-limits line names the limits. The warning is also the only disclosure
+// of what the output redaction leaves in place, of a repository whose
+// steering does not load, and of the stage limits a run does not get, so
+// those lines name exactly what is redacted, which steering file is dropped
+// and which limit is missing.
 func TestOpenCodeWarningDisclosesWhereThePromptCanGo(t *testing.T) {
 	gaps := map[string]string{}
 	for _, c := range openCodeUnenforcedControls {
 		gaps[c.name] = c.gap
 	}
+	if _, ok := gaps["egress defaults"]; ok {
+		t.Error("the warning still lists egress defaults, which the per-run config enforces")
+	}
 	for name, wants := range map[string][]string{
-		"egress defaults": {
-			"session-title generation", "stage prompt", "small_model",
-			"the target repository's opencode.json or .opencode/", "an agent's model", "subagent", "API key",
-			"GITHUB_TOKEN", "GITLAB_TOKEN", "github-copilot", "AWS profile", "OpenCode's own hosted provider",
-			"cloud and data platform credentials", "amazon-bedrock", "google-vertex",
+		"project-config tamper gate": {
+			"the target repository's opencode.json and .opencode/", "cannot change a key the per-run config sets",
+			"agent or subagent of their own", "no steps cap", "remote instructions URL", "header on the provider block",
+			"forge token", "options.model", "without touching the pinned id", "options.speed", "options.fallbacks",
+			"options.mcpServers", "ANTHROPIC_API_KEY",
 		},
-		"endpoint policy": {"Ollama cloud model", "Ollama's hosted service"},
+		"stage limits": {
+			"cost budget", "token cap on a hosted model", "steps cap",
+			"anthropic's included", "the repository or your OpenCode config sets them", "never compacted",
+		},
+		"endpoint policy": {"Ollama cloud model", "Ollama's hosted service", "the stage to another model"},
 		"output redaction": {
 			"only the values of the server password, GITHUB_TOKEN, GH_TOKEN, GITLAB_TOKEN",
 			"the dispatched provider", "every other secret the child holds", "stays in it",
@@ -466,8 +480,7 @@ func TestOpenCodeCaptureScriptWritesOnlyAClearedCapture(t *testing.T) {
 // reads the switch from the process environment.
 func TestOpenCodePreDispatchReadsTheEnvironment(t *testing.T) {
 	t.Setenv("HOME", t.TempDir()) // no ~/.opencode, whatever the real home holds
-	t.Setenv(OpenCodeInheritUserConfigEnvVar, "")
-	a := NewOpenCodeAdapter()
+	a := &OpenCodeAdapter{managedConfig: []string{}, settings: fixedOpenCodeSettings(config.OpenCodeConfig{})}
 	t.Setenv(ExperimentalOpenCodeEnvVar, "")
 	if err := a.PreDispatch(RunOptions{}); err == nil {
 		t.Error("PreDispatch allowed a dispatch with the switch unset")
@@ -489,8 +502,7 @@ func TestOpenCodePreDispatchReadsTheEnvironment(t *testing.T) {
 // cases. Any other provider key never meets this check.
 func TestOpenCodePreDispatchRequiresTheAnthropicAPIKey(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv(OpenCodeInheritUserConfigEnvVar, "")
-	a := NewOpenCodeAdapter()
+	a := &OpenCodeAdapter{managedConfig: []string{}, settings: fixedOpenCodeSettings(config.OpenCodeConfig{})}
 
 	anthropic := []string{" anthropic/claude-sonnet-5", "Anthropic/claude-sonnet-5"}
 	for _, m := range models.All() {
@@ -537,6 +549,60 @@ func TestOpenCodePreDispatchRequiresTheAnthropicAPIKey(t *testing.T) {
 	for _, model := range []string{"lmstudio/qwen/qwen3.8-27b", "openai/gpt-5.5", "openrouter/anthropic/claude-sonnet-5"} {
 		if err := a.PreDispatch(RunOptions{Model: model}); err != nil {
 			t.Errorf("PreDispatch(%q) without ANTHROPIC_API_KEY = %v; only an anthropic/ model needs it", model, err)
+		}
+	}
+}
+
+// TestOpenCodePreDispatchRefusesPlatformProviders (ADR-022 § 17): a model on
+// a provider whose credentials are the forge's or a cloud platform's is
+// refused before spawn, with the switch set or not and whatever keys the
+// environment holds, and no enabled-dispatch warning precedes the refusal.
+// github-copilot runs on GITHUB_TOKEN, the forge's gh login, which every
+// stage keeps and which serves Claude on a Copilot subscription; the
+// platform providers that serve Claude, google-vertex-anthropic and
+// amazon-bedrock, would reach it without ANTHROPIC_API_KEY. Every spelling
+// of the key meets the refusal. Every other provider key passes this check.
+func TestOpenCodePreDispatchRefusesPlatformProviders(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("ANTHROPIC_API_KEY", "set-by-the-test")
+	t.Setenv("GITHUB_TOKEN", "fake-forge-credential-1625")
+	a := &OpenCodeAdapter{managedConfig: []string{}, settings: fixedOpenCodeSettings(config.OpenCodeConfig{})}
+	refused := []string{"GitHub-Copilot/claude-sonnet-5", " gitlab/duo-chat"}
+	for _, p := range openCodePlatformProviders {
+		refused = append(refused, p+"/claude-sonnet-5")
+	}
+	for _, sw := range []string{"1", ""} {
+		t.Setenv(ExperimentalOpenCodeEnvVar, sw)
+		for _, model := range refused {
+			var err error
+			stderr := captureAdapterStderr(t, func() { err = a.PreDispatch(RunOptions{Model: model}) })
+			if err == nil {
+				t.Errorf("switch %q: PreDispatch(%q) allowed the dispatch", sw, model)
+				continue
+			}
+			for _, want := range []string{"subscription or OAuth", "own API-key variable", "§ 17"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("switch %q: the refusal of %q does not say %q: %v", sw, model, want, err)
+				}
+			}
+			if strings.Contains(stderr, "WARNING") {
+				t.Errorf("switch %q: the refusal of %q was preceded by the enabled-dispatch warning:\n%s", sw, model, stderr)
+			}
+			if strings.Contains(err.Error()+stderr, "fake-forge-credential-1625") {
+				t.Errorf("switch %q: the refusal of %q carries the forge token's value", sw, model)
+			}
+		}
+	}
+	if err := a.PreDispatch(RunOptions{Model: "github-copilot/gpt-5.5"}); err == nil || !strings.Contains(err.Error(), "GITHUB_TOKEN") {
+		t.Errorf("the github-copilot refusal does not name the variable it would run on: %v", err)
+	}
+
+	t.Setenv(ExperimentalOpenCodeEnvVar, "1")
+	for _, model := range []string{"openai/gpt-5.5", "openrouter/anthropic/claude-sonnet-5", "lmstudio/qwen/qwen3.8-27b"} {
+		var err error
+		captureAdapterStderr(t, func() { err = a.PreDispatch(RunOptions{Model: model}) })
+		if err != nil {
+			t.Errorf("PreDispatch(%q) = %v; only a platform provider meets this refusal", model, err)
 		}
 	}
 }

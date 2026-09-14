@@ -129,6 +129,19 @@ changelog, and the release workflow refuses a tag that does not.
   reads a manifest's `max_tested` to print an npm install pin, which
   `release-watchdog.yml` and `continuous-improvement.yml` now use instead of a
   hardcoded `claude-code@` version (#1621)
+- `nightgauge opencode config --stage <s> --worktree <p> --json` prints the
+  per-run OpenCode config, isolation environment, the inherited variables to
+  withhold, plugin directory and run directory a stage is spawned with, from
+  the same code as the Go adapter, and refuses every dispatch the adapter
+  refuses before spawning, so the SDK path can run OpenCode under identical
+  bytes. The OpenCode adapter now
+  reads an `opencode:` block from `~/.nightgauge/config.yaml` alone (a
+  committed one is refused): `provider` (`lm-studio` or `ollama`), `base_url`,
+  `limit.context` and `limit.output`, `timeouts`, `model`, `binary`,
+  `inherit_user_config`, and `snapshot`, `lsp` and `formatter`. A dispatch to a
+  local model is refused before spawn unless the block declares its server
+  with nonzero limits, because OpenCode never compacts a session whose context
+  limit is 0, which is what LM Studio reports (#1625)
 
 ### Fixed
 
@@ -226,8 +239,41 @@ changelog, and the release workflow refuses a tag that does not.
   is refused while `~/.opencode` or this machine's managed OpenCode config
   holds config, which OpenCode reads whatever the run's directories; move
   `~/.opencode`'s entries to `~/.config/opencode`, or set
-  `NIGHTGAUGE_OPENCODE_INHERIT_USER_CONFIG=1` to run with your OpenCode config
-  (#1616)
+  `opencode.inherit_user_config: true` in `~/.nightgauge/config.yaml` to run
+  with your OpenCode config (#1616, #1625)
+- An OpenCode stage runs under a per-run config Nightgauge builds: it loads
+  only the provider the stage names, runs every built-in agent (compaction,
+  summaries, subagents) on the stage's model, turns session sharing,
+  autoupdate and session titles off, caps tool output, and caps the build
+  agent's and each built-in subagent's steps at the stage's turn cap (200 when
+  none is set). The repository's and an inherited OpenCode config cannot
+  change the pinned `id`/`provider.npm` of the model entry a stage on your
+  local model server or on Anthropic uses, or the SDK package that sends it,
+  the local model's limits and compaction threshold, the local server's or
+  Anthropic's API address, titles or sharing. They can still add settings: a
+  `mode` entry can still replace the `general` or `explore` subagent's model
+  (on the stage's provider) and steps cap, a block for another hosted
+  provider can still send its stage to another server or model, a hosted
+  model's limits can still be set, and — without touching the pinned `id` —
+  an `options.model` on the dispatched model's own entry or an agent's own
+  options, or a variant, can still change the model actually served,
+  `options.speed`/`options.fallbacks` can still turn Anthropic's fast mode or
+  a server-side fallback on, and an agent's `options.mcpServers` can still
+  send `ANTHROPIC_API_KEY` as an MCP authorization token to a server it
+  names; the dispatch warning says so, and #1638 is what closes those three.
+  A local model server's URL stays in a private file, never in the stage's
+  environment, and credentials appear only as `{env:VAR}` references (#1625)
+- An OpenCode dispatch to a provider that runs on the forge's or a cloud
+  platform's credentials, such as `github-copilot/*` on `GITHUB_TOKEN` or
+  `google-vertex-anthropic/*`, is refused before spawn: those credentials can
+  be a subscription or OAuth login, and a pipeline run authenticates only with
+  a model provider's own API key. So is a provider key that is neither your
+  declared model server nor a provider OpenCode knows, such as a second LM
+  Studio only your own OpenCode config defines, and an `anthropic/` model
+  whose served model the per-run config cannot pin: one OpenCode's bundled
+  catalog does not list, which would run with no context limit and never be
+  compacted, and a fast-mode entry such as `anthropic/claude-opus-5-fast`
+  (#1625)
 - The VS Code extension's Grok and Codex setup now installs only the skills
   and Codex commands bundled with the extension. It no longer copies the open
   workspace's `skills/` or `.codex/commands/` folder into `~/.grok` or

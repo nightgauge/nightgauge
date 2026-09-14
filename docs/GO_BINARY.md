@@ -7055,6 +7055,52 @@ nightgauge config init --owner nightgauge --project 1 --out -
 > diff-and-merge mode in the verb is tracked under audit row B9
 > (`config sync-fields`).
 
+### OpenCode — Per-Run Config (ADR-022)
+
+```bash
+nightgauge opencode config --stage <stage> --worktree <path> --json \
+  [--model <provider>/<model>] [--max-turns <n>] [--max-tokens <n>] [--run-id <uuid>]
+```
+
+Prints what an `opencode` spawn for the stage is given, so a caller outside the
+Go path (the SDK) runs OpenCode under the same bytes as the Go adapter. It runs
+the adapter's own checks in the manager's order (`PreDispatch`, the model
+check) and its preparation (`adapters.PrepareOpenCodeRun`): the run's root is
+created, or reused for `--run-id`, and the endpoint's base URL is written to a
+0600 file in it. Without `--run-id` a new root is minted, and a root no stage
+uses for 7 days is swept. `--max-turns` becomes the steps cap of the build
+agent and each subagent, 200 when it is 0. The model defaults to
+`opencode.model` from the machine-tier config; see
+[SETTINGS_ARCHITECTURE.md](SETTINGS_ARCHITECTURE.md#the-opencode-block). The
+adapter's warning and notices go to stderr.
+
+| Field            | Meaning                                                                                                   |
+| ---------------- | --------------------------------------------------------------------------------------------------------- |
+| `schema_version` | Output version (`1.0`); a caller refuses an unknown major version                                         |
+| `config_content` | `OPENCODE_CONFIG_CONTENT`, the per-run OpenCode config                                                    |
+| `env`            | Every variable the spawn sets from the run, the config included; no secret                                |
+| `env_withhold`   | `prefixes` and `names` of the inherited variables the spawn must not get; remove them before adding `env` |
+| `plugin_dir`     | Where OpenCode loads the run's plugins from                                                               |
+| `run_dir`        | The run's private root                                                                                    |
+| `non_loopback`   | `false` only for a declared model server on this machine; `true` elsewhere and for any hosted provider    |
+
+A caller that removes the `env_withhold` variables from its environment, then
+adds `env`, gives the child what the Go path gives it, apart from the
+adapter's per-spawn exports (such as `OPENCODE_SERVER_PASSWORD`).
+
+It exits 1, with nothing on stdout, wherever the adapter refuses a dispatch
+before spawning: without `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1`, a model that is
+not `<provider>/<model>`, an `anthropic/` model while `ANTHROPIC_API_KEY` is
+unset, an `anthropic/` model OpenCode's bundled catalog does not list or one
+of its fast-mode entries (such as `anthropic/claude-opus-5-fast`, whose served
+model the per-run config cannot pin), a model on a forge or cloud platform
+provider (such as
+`github-copilot/*`), a provider key that is neither a declared endpoint nor
+one OpenCode knows, an endpoint limit that is 0 or missing, a `base_url` that
+is not `http`/`https` or carries credentials, an `opencode:` block in the
+worktree's committed config, and, unless `opencode.inherit_user_config` is on,
+a `~/.opencode` holding config or managed OpenCode config on the machine.
+
 ### knowledge — Knowledge Base Operations
 
 ```bash
