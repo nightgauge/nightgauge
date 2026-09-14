@@ -249,18 +249,19 @@ jobs:
           [ "$skips_rc" -eq 0 ] || echo "::error::skip accounting failed (exit $skips_rc)"
           [ "$plain_rc" -eq 0 ] && [ "$race_rc" -eq 0 ] && [ "$skips_rc" -eq 0 ]
       # The opencode_integration tag against the real OpenCode binary (#1632):
-      # the adversarial config-merge and plugin-loading suite, and the catalog
-      # snapshots. The install is an exact pin, the version the tests assert,
-      # into a temp prefix. With CI=true a missing binary fails the suite
-      # rather than skipping it, and -v lists every test that ran.
+      # the adversarial config-merge and plugin-loading suite, the catalog
+      # snapshots, and run isolation (#1616). The install is an exact pin, the
+      # version the tests assert, into a temp prefix. With CI=true a missing
+      # binary fails every test rather than skipping it, and -v lists every
+      # test that ran.
       - name: OpenCode integration (opencode-ai@1.18.30)
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         run: |
           prefix="$RUNNER_TEMP/opencode-cli"
           npm install --prefix "$prefix" --no-fund --no-audit opencode-ai@1.18.30
           PATH="$prefix/node_modules/.bin:$PATH" timeout 10m go test -tags opencode_integration -count=1 -v \
-            -run '^TestOpenCode(PurePluginLoading|InlineDenyBeatsProjectAllow|ArrayMerge|ProviderBaseURLPrecedence|ConfigDiscoveryAboveWorktree|DisableProjectConfig|MergeHarnessReapsEveryProcess|CatalogEnvMatchesTheBinary|AnthropicModelsMatchTheBinary)$' \
-            ./internal/execution/adapters/
+            -run '^TestOpenCode(Integration.*|PurePluginLoading|InlineDenyBeatsProjectAllow|ArrayMerge|ProviderBaseURLPrecedence|ConfigDiscoveryAboveWorktree|DisableProjectConfig|MergeHarnessReapsEveryProcess|CatalogEnvMatchesTheBinary|AnthropicModelsMatchTheBinary)$' \
+            ./internal/execution/ ./internal/execution/adapters/
       # Evidence that outlives the runner. Both passes write to files, so if the
       # step is cancelled (job timeout, a runner OOM-kill) the replay groups
       # never happen and the only record of how far each pass got is these three
