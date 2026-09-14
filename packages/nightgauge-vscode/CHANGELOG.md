@@ -29,6 +29,12 @@ and this project adheres to
 
 ### Fixed
 
+- Run records with the `permission_denied`, `context_window_exceeded`,
+  `adapter_permission_rejected` or `adapter_incompatible` terminal kinds keep
+  their kind instead of falling back to the V2 schema, and the auto-retro
+  names a remediation for the three new kinds: a larger context, another
+  model or a split issue; a fix to the generated permission map; the
+  max-tested OpenCode build, pinned (#1631)
 - Codex stages no longer leave generated `AGENTS.md` steering in your commits:
   if the agent committed it, the stage's cleanup adds a commit removing it, and
   the steering summary now comes from `AGENTS.md` rather than `CLAUDE.md`

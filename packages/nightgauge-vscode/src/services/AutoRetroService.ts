@@ -151,6 +151,9 @@ export type RetroFailureCategory =
   | "containment-breach"
   | "validation-inconclusive"
   | "credential-failure"
+  | "context-window-exceeded"
+  | "adapter-permission-rejected"
+  | "adapter-incompatible"
   | "unknown";
 
 export interface RetroFinding {
@@ -562,6 +565,17 @@ const TERMINAL_KIND_CATEGORY: Record<TerminalFailureKind, RetroFailureCategory> 
 
   // The harness refused a tool call. Not a defect — a "not that way".
   permission_denied: "permission-denied",
+  // The adapter refused a tool the stage IS allowed: Nightgauge's own
+  // permission map is wrong, so the remedy is a fix to it, not a retry (#1631).
+  adapter_permission_rejected: "adapter-permission-rejected",
+
+  // The prompt outgrew the model's loaded context. Its own category: the
+  // remedy is a bigger window, a model with one, or a smaller issue (#1631).
+  context_window_exceeded: "context-window-exceeded",
+
+  // The adapter's binary cannot serve the dispatch; pin or install the build
+  // the refusal names (#1631).
+  adapter_incompatible: "adapter-incompatible",
   git_transport_auth_failed: "credential-failure",
 
   // A person owns the next move.
@@ -1854,6 +1868,12 @@ export class AutoRetroService {
         "A validation tier ran and executed zero tests — nothing failed, so nothing was actually verified",
       "credential-failure":
         "A git or forge transport refused the credentials the machine offered — the run could not authenticate, and no rerun, stronger model or better plan changes that",
+      "context-window-exceeded":
+        "The prompt outgrew the context the model server has the model loaded with — the model server rejected the request before the stage could run",
+      "adapter-permission-rejected":
+        "The adapter rejected a tool the stage is allowed to use — Nightgauge's generated permission map is wrong, not the work",
+      "adapter-incompatible":
+        "The adapter's binary cannot serve the dispatch — its version is below the tested floor, unreadable, or above max-tested and failed its self-test",
       unknown: "Pipeline failure detected but category could not be determined",
     };
 
@@ -1910,6 +1930,12 @@ export class AutoRetroService {
         "A validation tier ran and executed zero tests, so the suite proved nothing while reporting no failures. There is no failing test to open. Check the tier's target paths and tag filters (`exclude-tags`, the test-execution record under `.nightgauge/pipeline/`) against where the change actually landed — a green suite that ran nothing is the failure mode this kind exists to name.",
       "credential-failure":
         "Fix the machine's git/forge credentials, then re-queue — the work itself was never attempted. Check the remote's scheme against what is configured (`git remote -v`): an SSH remote needs a loaded agent key, an HTTPS remote needs a credential helper or a token the forge still accepts. `Bad credentials` / HTTP 401 from the API means the token is present but rejected, so every board read, PR create and merge in the run would have failed the same way. Do NOT re-run at a higher model tier: no model can supply a credential, which is why the escalation gate declines this class (#878).",
+      "context-window-exceeded":
+        "The issue is parked, not retried: the same prompt on the same model and adapter meets the same limit. Reload the model with a larger context (for LM Studio, `lms load <model> --context-length <n>`), route the stage to a model with a larger window, or split the issue into smaller ones, then resume (`nightgauge autonomous resume`). Model text never produces this category: it is read only from the adapter's own failed-request line.",
+      "adapter-permission-rejected":
+        "The adapter auto-rejected a tool the stage's allowed tools grant, so the permission map Nightgauge generated for the stage is wrong. Retrying runs under the same map and is rejected identically, so the issue is parked and charged nothing. File the stage's stderr (the `[adapter-permission-rejected] tool=<permission>` line names the permission) against the permission map, and resume once it is fixed.",
+      "adapter-incompatible":
+        "The dispatch was refused before anything ran: the adapter's binary is below the compat manifest's floor, its version could not be read, or it is newer than max-tested and failed the self-test. Install the max-tested build the refusal names and pin the adapter's binary to it (for OpenCode, `opencode.binary` in ~/.nightgauge/config.yaml; see `nightgauge doctor`), then resume. A retry on the same binary is refused the same way.",
       unknown: "Review logs manually. Run /nightgauge:retro for AI-powered root cause analysis.",
     };
 
@@ -1945,6 +1971,12 @@ export class AutoRetroService {
       "containment-breach": "high",
       "validation-inconclusive": "medium",
       "credential-failure": "high",
+      // A limit of the loaded model, not of this repository; the re-route and
+      // decomposition that clear it on their own are #1645 and #1655.
+      "context-window-exceeded": "medium",
+      // Nightgauge's own permission map is wrong: that is an issue to file.
+      "adapter-permission-rejected": "high",
+      "adapter-incompatible": "high",
       unknown: "low",
     };
 

@@ -688,6 +688,47 @@ describe("AutoRetroService", () => {
       expect(findings[0].recommendation).toContain("credentials");
     });
 
+    it.each([
+      [
+        "context_window_exceeded",
+        "context-window-exceeded",
+        'exit 1: timestamp=2026-01-01T00:00:00.000Z level=ERROR message=process error="The prompt is greater than the context length of the loaded model."',
+        "larger context",
+      ],
+      [
+        "adapter_permission_rejected",
+        "adapter-permission-rejected",
+        "exit 1: ! permission requested: bash (...); auto-rejecting\n[adapter-permission-rejected] tool=bash",
+        "permission map",
+      ],
+      [
+        "adapter_incompatible",
+        "adapter-incompatible",
+        'exit 0: dispatch refused for adapter "opencode": adapter_incompatible: opencode 1.17.2 is below the minimum tested version 1.18.30',
+        "max-tested",
+      ],
+    ])(
+      "names the remediation for the parked kind %s (Issue #1631)",
+      (kind, category, reason, remedy) => {
+        // A parked kind is never retried, so the retro's recommendation is the
+        // only place an operator learns what to change: it must name the cause
+        // and must not suggest the re-run that the scheduler refuses.
+        const findings = AutoRetroService.classifyFailure(
+          {
+            text: reason,
+            sourcesAnalyzed: ["session_log"],
+            terminalKind: kind as "context_window_exceeded",
+            terminalReason: reason,
+          },
+          "feature-dev"
+        );
+        expect(findings[0].category).toBe(category);
+        expect(findings[0].evidence[0]).toContain(kind);
+        expect(findings[0].recommendation).toContain(remedy);
+        expect(findings[0].recommendation).toContain("resume");
+      }
+    );
+
     it('classifies as "stop-hook-error" on Claude CLI stop-hook notification (no terminal result event)', () => {
       // Genuine #3204 case: stop-hook fires and the subagent goes silent —
       // no terminal result event ever lands. The time-gate (#3275) treats

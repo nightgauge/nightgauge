@@ -465,12 +465,16 @@ export type HistoryStageDetail = z.infer<typeof HistoryStageDetailSchema>;
  *  - `no_changes_produced` — pr-create's deterministic fallback confirmed zero commits ahead of base; genuinely nothing to open a PR for, e.g. a dispatched human-only issue (#317)
  *  - `validation_failed` — feature-validate honestly failed its quality gates (validation_status="failed"); organic implementation failure, not a subagent crash (#326)
  *  - `branch_forked` — the run's branch diverged from its remote (killed mid-push, or an operator pushed to it); every push is rejected non-fast-forward and no retry clears it (#163)
+ *  - `permission_denied` — the harness denied a tool call outright (e.g. a foreground `sleep` wait loop); retried with a short backoff (#289)
  *  - `commit_orphaned` — a killed stage's commit landed on the wrong branch (a stray `temp-pre-push-<n>` left by a SIGKILL bypassing the pre-push restore-defer) and feature-validate's branch-identity self-heal could not recover it; unrecoverable by retry, needs human action (#266)
  *  - `stage_context_unreadable` — a gate could not read a file the stage's contract says it wrote (context, plan_file, gate-metrics.jsonl) for a reason other than absence; filesystem fault (#1237)
  *  - `dev_build_verification_missing` — feature-dev's context has no build_verification object; the skill skipped its verification step (#1237)
  *  - `dev_build_verification_failed` — feature-dev ran its build and recorded status=failed; organic (#1237)
  *  - `dev_tests_failed` — feature-dev's own test run recorded failures; organic (#1237)
  *  - `pr_merge_lookup_failed` — pr-merge's gate could not establish the PR's state; infrastructure (#1237)
+ *  - `context_window_exceeded` — the prompt outgrew the model server's loaded context; parked, never retried on the same model and adapter (#1631)
+ *  - `adapter_permission_rejected` — the adapter auto-rejected a tool the stage's allowed tools grant; a permission-map defect, parked (#1631)
+ *  - `adapter_incompatible` — the adapter's binary cannot serve the dispatch (version floor, max-tested self-test); parked (#1631)
  *
  * MUST stay in lockstep with the Go constants in
  * internal/orchestrator/failure_handler.go and the SDK `TerminalFailureKind`
@@ -516,6 +520,7 @@ export const TerminalFailureKindSchema = z.enum([
   "abandoned_commit", // Issue #191 — a stage committed valid, unmerged work but was killed/crashed before pr-create ran
   "operator_stop", // Issue #1487 — the scheduler killed the stage (an operator pressed Stop, or a cancel tore the run down); derived from execution.Manager's own Cancelled flag and the scheduler's stopRequested, never from error text, and exempt from the lifetime failure cap and the cascade breaker
   "commit_orphaned", // Issue #266 — a killed stage's commit landed on the wrong branch and self-heal could not recover it; unrecoverable by retry
+  "permission_denied", // Issue #289 — the harness denied a tool call outright (commonly a foreground `sleep` wait loop); retried with a short backoff. Missing here until #1631's parity test found it, so a V3 record carrying it fell through to the V2 schema
   // Gate-sourced kinds from the #1237 sweep — every KindFail site in the stage
   // gates classifies itself instead of falling through to subagent_crash.
   "stage_context_unreadable", // Issue #1237 — a gate could not read a file the stage's contract says it wrote, for a reason other than absence; filesystem fault
@@ -523,6 +528,12 @@ export const TerminalFailureKindSchema = z.enum([
   "dev_build_verification_failed", // Issue #1237 — feature-dev ran its build and recorded status=failed; organic
   "dev_tests_failed", // Issue #1237 — feature-dev's own test run recorded failures; organic
   "pr_merge_lookup_failed", // Issue #1237 — pr-merge's gate could not establish the PR's state (gh failed on every attempt, local git found no merge commit); infrastructure
+  // Parked kinds (#1631) — the next attempt on the same model and adapter
+  // meets the same condition; no retry, no lifetime-cap increment, held for
+  // an operator.
+  "context_window_exceeded", // Issue #1631 — the prompt outgrew the context the model server has the model loaded with; classified only from the adapter's failed-request line, never from model text
+  "adapter_permission_rejected", // Issue #1631 — the adapter auto-rejected a tool the stage's allowed tools grant (#1624's marker); a permission-map defect, distinct from permission_denied
+  "adapter_incompatible", // Issue #1631 — the adapter's binary cannot serve the dispatch (#1627's version floor / max-tested self-test)
 ]);
 export type TerminalFailureKind = z.infer<typeof TerminalFailureKindSchema>;
 

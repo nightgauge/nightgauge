@@ -41,6 +41,46 @@
       "signal": ""
     },
     {
+      "input": "ai_apicallerror cannot connect to api",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: ai_apicallerror cannot connect to api",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "AI_APICALLERROR CANNOT CONNECT TO API",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror",
+      "kind": "",
+      "signal": ""
+    },
+    {
+      "input": "cannot connect to api",
+      "kind": "",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "ADAPTER_INCOMPATIBLE",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -419,6 +459,126 @@
       "input": "NOT SIGNED IN",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "ai_apicallerror unauthorized",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "exit 1: ai_apicallerror unauthorized",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "AI_APICALLERROR UNAUTHORIZED",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "unauthorized",
+      "kind": "",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "AI_APICALLERROR CONTEXT_LENGTH_EXCEEDED",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "context_length_exceeded",
+      "kind": "",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror maximum context length is",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: ai_apicallerror maximum context length is",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "AI_APICALLERROR MAXIMUM CONTEXT LENGTH IS",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "maximum context length is",
+      "kind": "",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror greater than the context length",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: ai_apicallerror greater than the context length",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "AI_APICALLERROR GREATER THAN THE CONTEXT LENGTH",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "greater than the context length",
+      "kind": "",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror prompt too long; exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: ai_apicallerror prompt too long; exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "AI_APICALLERROR PROMPT TOO LONG; EXCEEDED",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "prompt too long; exceeded",
+      "kind": "",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror exceeds the available context size",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: ai_apicallerror exceeds the available context size",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "AI_APICALLERROR EXCEEDS THE AVAILABLE CONTEXT SIZE",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "exceeds the available context size",
+      "kind": "",
+      "signal": ""
     },
     {
       "input": "not_found_error model",
@@ -1991,6 +2151,21 @@
       "signal": ""
     },
     {
+      "input": "[adapter-permission-rejected]",
+      "kind": "adapter_permission_rejected",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: [adapter-permission-rejected]",
+      "kind": "adapter_permission_rejected",
+      "signal": ""
+    },
+    {
+      "input": "[ADAPTER-PERMISSION-REJECTED]",
+      "kind": "adapter_permission_rejected",
+      "signal": ""
+    },
+    {
       "input": "[permission-denied]",
       "kind": "permission_denied",
       "signal": ""
@@ -2316,6 +2491,11 @@
       "signal": ""
     },
     {
+      "input": "network unavailable: extended github connectivity loss | adapter_incompatible",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
       "input": "network unavailable: extended github connectivity loss | stream idle timeout",
       "kind": "network_unavailable",
       "signal": ""
@@ -2337,6 +2517,11 @@
     },
     {
       "input": "network unavailable: extended github connectivity loss | [adapter-auth-failed]",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "network unavailable: extended github connectivity loss | ai_apicallerror context_length_exceeded",
       "kind": "network_unavailable",
       "signal": ""
     },
@@ -2481,6 +2666,11 @@
       "signal": ""
     },
     {
+      "input": "network unavailable: extended github connectivity loss | [adapter-permission-rejected]",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
       "input": "network unavailable: extended github connectivity loss | [permission-denied]",
       "kind": "network_unavailable",
       "signal": ""
@@ -2516,8 +2706,228 @@
       "signal": ""
     },
     {
+      "input": "adapter_incompatible | network unavailable: extended github connectivity loss",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | stream idle timeout",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | overloaded",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | socket connection was closed",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | [rate-limit-quota-exhausted]",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | [adapter-auth-failed]",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | ai_apicallerror context_length_exceeded",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | not_found_error model",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | pipeline-start-failure issue-closed",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | [blocked-dependency]",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | architecture approval required",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | github-quota-low",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | github-network-outage",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | secondary rate limit",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | [pr-merge-unmerged",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | [stage:worktree-containment]",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | [not-pipeline-actionable]",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | [dev-produced-no-changes]",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | [dev-handoff-missing]",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | invalid auth method",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | premature turn end",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | worktree_uncommitted",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | budget_ceiling_hit",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | [runaway-progress-exceeded]",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | [runaway-ceiling-exceeded]",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | [cost-cap-exceeded]",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | stage-no-output-timeout",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | [stall-killed]",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | pipeline_budget_exceeded",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | schema validation",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | [no-changes-produced]",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | [validation-failed]",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | [validation-inconclusive]",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | [branch-forked]",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | [commit-orphaned]",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | [adapter-permission-rejected]",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | [permission-denied]",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | stage_context_unreadable",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | dev_build_verification_missing",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | dev_build_verification_failed",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | dev_tests_failed",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | pr_merge_lookup_failed",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | subagent crash",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "stream idle timeout | network unavailable: extended github connectivity loss",
       "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "stream idle timeout | adapter_incompatible",
+      "kind": "adapter_incompatible",
       "signal": ""
     },
     {
@@ -2537,6 +2947,11 @@
     },
     {
       "input": "stream idle timeout | [adapter-auth-failed]",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "stream idle timeout | ai_apicallerror context_length_exceeded",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
     },
@@ -2681,6 +3096,11 @@
       "signal": "stream_idle_timeout"
     },
     {
+      "input": "stream idle timeout | [adapter-permission-rejected]",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
       "input": "stream idle timeout | [permission-denied]",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -2721,6 +3141,11 @@
       "signal": ""
     },
     {
+      "input": "overloaded | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "overloaded | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -2737,6 +3162,11 @@
     },
     {
       "input": "overloaded | [adapter-auth-failed]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "overloaded | ai_apicallerror context_length_exceeded",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
     },
@@ -2881,6 +3311,11 @@
       "signal": "api_overloaded"
     },
     {
+      "input": "overloaded | [adapter-permission-rejected]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
       "input": "overloaded | [permission-denied]",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
@@ -2921,6 +3356,11 @@
       "signal": ""
     },
     {
+      "input": "socket connection was closed | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "socket connection was closed | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -2937,6 +3377,11 @@
     },
     {
       "input": "socket connection was closed | [adapter-auth-failed]",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "socket connection was closed | ai_apicallerror context_length_exceeded",
       "kind": "api_connection_lost",
       "signal": "api_connection_lost"
     },
@@ -3081,6 +3526,11 @@
       "signal": "api_connection_lost"
     },
     {
+      "input": "socket connection was closed | [adapter-permission-rejected]",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
       "input": "socket connection was closed | [permission-denied]",
       "kind": "api_connection_lost",
       "signal": "api_connection_lost"
@@ -3121,6 +3571,11 @@
       "signal": ""
     },
     {
+      "input": "[rate-limit-quota-exhausted] | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "[rate-limit-quota-exhausted] | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -3137,6 +3592,11 @@
     },
     {
       "input": "[rate-limit-quota-exhausted] | [adapter-auth-failed]",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[rate-limit-quota-exhausted] | ai_apicallerror context_length_exceeded",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
     },
@@ -3281,6 +3741,11 @@
       "signal": "rate_limit_quota_exhausted"
     },
     {
+      "input": "[rate-limit-quota-exhausted] | [adapter-permission-rejected]",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
       "input": "[rate-limit-quota-exhausted] | [permission-denied]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
@@ -3321,6 +3786,11 @@
       "signal": ""
     },
     {
+      "input": "[adapter-auth-failed] | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "[adapter-auth-failed] | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -3339,6 +3809,11 @@
       "input": "[adapter-auth-failed] | [rate-limit-quota-exhausted]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[adapter-auth-failed] | ai_apicallerror context_length_exceeded",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
     },
     {
       "input": "[adapter-auth-failed] | not_found_error model",
@@ -3481,6 +3956,11 @@
       "signal": "adapter_auth_failed"
     },
     {
+      "input": "[adapter-auth-failed] | [adapter-permission-rejected]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
       "input": "[adapter-auth-failed] | [permission-denied]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
@@ -3516,8 +3996,228 @@
       "signal": "adapter_auth_failed"
     },
     {
+      "input": "ai_apicallerror context_length_exceeded | network unavailable: extended github connectivity loss",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | stream idle timeout",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | overloaded",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | socket connection was closed",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | [rate-limit-quota-exhausted]",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | not_found_error model",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | pipeline-start-failure issue-closed",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | [blocked-dependency]",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | architecture approval required",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | github-quota-low",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | github-network-outage",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | secondary rate limit",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | [pr-merge-unmerged",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | [stage:worktree-containment]",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | [not-pipeline-actionable]",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | [dev-produced-no-changes]",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | [dev-handoff-missing]",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | invalid auth method",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | premature turn end",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | worktree_uncommitted",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | budget_ceiling_hit",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | [runaway-progress-exceeded]",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | [runaway-ceiling-exceeded]",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | [cost-cap-exceeded]",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | stage-no-output-timeout",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | [stall-killed]",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | pipeline_budget_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | schema validation",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | [no-changes-produced]",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | [validation-failed]",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | [validation-inconclusive]",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | [branch-forked]",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | [commit-orphaned]",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | [adapter-permission-rejected]",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | [permission-denied]",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | stage_context_unreadable",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | dev_build_verification_missing",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | dev_build_verification_failed",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | dev_tests_failed",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | pr_merge_lookup_failed",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | subagent crash",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
       "input": "not_found_error model | network unavailable: extended github connectivity loss",
       "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "not_found_error model | adapter_incompatible",
+      "kind": "adapter_incompatible",
       "signal": ""
     },
     {
@@ -3544,6 +4244,11 @@
       "input": "not_found_error model | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "not_found_error model | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
     },
     {
       "input": "not_found_error model | pipeline-start-failure issue-closed",
@@ -3681,6 +4386,11 @@
       "signal": ""
     },
     {
+      "input": "not_found_error model | [adapter-permission-rejected]",
+      "kind": "model_unavailable",
+      "signal": ""
+    },
+    {
       "input": "not_found_error model | [permission-denied]",
       "kind": "model_unavailable",
       "signal": ""
@@ -3721,6 +4431,11 @@
       "signal": ""
     },
     {
+      "input": "pipeline-start-failure issue-closed | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "pipeline-start-failure issue-closed | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -3744,6 +4459,11 @@
       "input": "pipeline-start-failure issue-closed | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "pipeline-start-failure issue-closed | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
     },
     {
       "input": "pipeline-start-failure issue-closed | not_found_error model",
@@ -3881,6 +4601,11 @@
       "signal": ""
     },
     {
+      "input": "pipeline-start-failure issue-closed | [adapter-permission-rejected]",
+      "kind": "issue_closed",
+      "signal": ""
+    },
+    {
       "input": "pipeline-start-failure issue-closed | [permission-denied]",
       "kind": "issue_closed",
       "signal": ""
@@ -3921,6 +4646,11 @@
       "signal": ""
     },
     {
+      "input": "[blocked-dependency] | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "[blocked-dependency] | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -3944,6 +4674,11 @@
       "input": "[blocked-dependency] | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[blocked-dependency] | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
     },
     {
       "input": "[blocked-dependency] | not_found_error model",
@@ -4081,6 +4816,11 @@
       "signal": ""
     },
     {
+      "input": "[blocked-dependency] | [adapter-permission-rejected]",
+      "kind": "blocked_dependency",
+      "signal": ""
+    },
+    {
       "input": "[blocked-dependency] | [permission-denied]",
       "kind": "blocked_dependency",
       "signal": ""
@@ -4121,6 +4861,11 @@
       "signal": ""
     },
     {
+      "input": "architecture approval required | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "architecture approval required | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -4144,6 +4889,11 @@
       "input": "architecture approval required | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "architecture approval required | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
     },
     {
       "input": "architecture approval required | not_found_error model",
@@ -4281,6 +5031,11 @@
       "signal": "architecture_approval_required"
     },
     {
+      "input": "architecture approval required | [adapter-permission-rejected]",
+      "kind": "architecture_approval_required",
+      "signal": "architecture_approval_required"
+    },
+    {
       "input": "architecture approval required | [permission-denied]",
       "kind": "architecture_approval_required",
       "signal": "architecture_approval_required"
@@ -4321,6 +5076,11 @@
       "signal": ""
     },
     {
+      "input": "github-quota-low | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "github-quota-low | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -4344,6 +5104,11 @@
       "input": "github-quota-low | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "github-quota-low | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
     },
     {
       "input": "github-quota-low | not_found_error model",
@@ -4481,6 +5246,11 @@
       "signal": "github_quota_low"
     },
     {
+      "input": "github-quota-low | [adapter-permission-rejected]",
+      "kind": "github_quota_low",
+      "signal": "github_quota_low"
+    },
+    {
       "input": "github-quota-low | [permission-denied]",
       "kind": "github_quota_low",
       "signal": "github_quota_low"
@@ -4521,6 +5291,11 @@
       "signal": ""
     },
     {
+      "input": "github-network-outage | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "github-network-outage | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -4544,6 +5319,11 @@
       "input": "github-network-outage | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "github-network-outage | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
     },
     {
       "input": "github-network-outage | not_found_error model",
@@ -4681,6 +5461,11 @@
       "signal": "github_network_outage"
     },
     {
+      "input": "github-network-outage | [adapter-permission-rejected]",
+      "kind": "github_network_outage",
+      "signal": "github_network_outage"
+    },
+    {
       "input": "github-network-outage | [permission-denied]",
       "kind": "github_network_outage",
       "signal": "github_network_outage"
@@ -4721,6 +5506,11 @@
       "signal": ""
     },
     {
+      "input": "secondary rate limit | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "secondary rate limit | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -4744,6 +5534,11 @@
       "input": "secondary rate limit | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "secondary rate limit | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
     },
     {
       "input": "secondary rate limit | not_found_error model",
@@ -4881,6 +5676,11 @@
       "signal": ""
     },
     {
+      "input": "secondary rate limit | [adapter-permission-rejected]",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
       "input": "secondary rate limit | [permission-denied]",
       "kind": "github_rate_limited",
       "signal": ""
@@ -4921,6 +5721,11 @@
       "signal": ""
     },
     {
+      "input": "[pr-merge-unmerged | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "[pr-merge-unmerged | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -4944,6 +5749,11 @@
       "input": "[pr-merge-unmerged | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[pr-merge-unmerged | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
     },
     {
       "input": "[pr-merge-unmerged | not_found_error model",
@@ -5081,6 +5891,11 @@
       "signal": ""
     },
     {
+      "input": "[pr-merge-unmerged | [adapter-permission-rejected]",
+      "kind": "pr_merge_unmerged",
+      "signal": ""
+    },
+    {
       "input": "[pr-merge-unmerged | [permission-denied]",
       "kind": "pr_merge_unmerged",
       "signal": ""
@@ -5121,6 +5936,11 @@
       "signal": ""
     },
     {
+      "input": "[stage:worktree-containment] | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "[stage:worktree-containment] | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -5144,6 +5964,11 @@
       "input": "[stage:worktree-containment] | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[stage:worktree-containment] | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
     },
     {
       "input": "[stage:worktree-containment] | not_found_error model",
@@ -5281,6 +6106,11 @@
       "signal": ""
     },
     {
+      "input": "[stage:worktree-containment] | [adapter-permission-rejected]",
+      "kind": "containment_breach",
+      "signal": ""
+    },
+    {
       "input": "[stage:worktree-containment] | [permission-denied]",
       "kind": "containment_breach",
       "signal": ""
@@ -5321,6 +6151,11 @@
       "signal": ""
     },
     {
+      "input": "[not-pipeline-actionable] | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "[not-pipeline-actionable] | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -5344,6 +6179,11 @@
       "input": "[not-pipeline-actionable] | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[not-pipeline-actionable] | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
     },
     {
       "input": "[not-pipeline-actionable] | not_found_error model",
@@ -5481,6 +6321,11 @@
       "signal": ""
     },
     {
+      "input": "[not-pipeline-actionable] | [adapter-permission-rejected]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
       "input": "[not-pipeline-actionable] | [permission-denied]",
       "kind": "not_pipeline_actionable",
       "signal": ""
@@ -5521,6 +6366,11 @@
       "signal": ""
     },
     {
+      "input": "[dev-produced-no-changes] | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "[dev-produced-no-changes] | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -5544,6 +6394,11 @@
       "input": "[dev-produced-no-changes] | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[dev-produced-no-changes] | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
     },
     {
       "input": "[dev-produced-no-changes] | not_found_error model",
@@ -5681,6 +6536,11 @@
       "signal": ""
     },
     {
+      "input": "[dev-produced-no-changes] | [adapter-permission-rejected]",
+      "kind": "dev_produced_no_changes",
+      "signal": ""
+    },
+    {
       "input": "[dev-produced-no-changes] | [permission-denied]",
       "kind": "dev_produced_no_changes",
       "signal": ""
@@ -5721,6 +6581,11 @@
       "signal": ""
     },
     {
+      "input": "[dev-handoff-missing] | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "[dev-handoff-missing] | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -5744,6 +6609,11 @@
       "input": "[dev-handoff-missing] | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[dev-handoff-missing] | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
     },
     {
       "input": "[dev-handoff-missing] | not_found_error model",
@@ -5881,6 +6751,11 @@
       "signal": ""
     },
     {
+      "input": "[dev-handoff-missing] | [adapter-permission-rejected]",
+      "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
       "input": "[dev-handoff-missing] | [permission-denied]",
       "kind": "dev_handoff_missing",
       "signal": ""
@@ -5921,6 +6796,11 @@
       "signal": ""
     },
     {
+      "input": "invalid auth method | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "invalid auth method | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -5944,6 +6824,11 @@
       "input": "invalid auth method | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "invalid auth method | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
     },
     {
       "input": "invalid auth method | not_found_error model",
@@ -6081,6 +6966,11 @@
       "signal": ""
     },
     {
+      "input": "invalid auth method | [adapter-permission-rejected]",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
       "input": "invalid auth method | [permission-denied]",
       "kind": "git_transport_auth_failed",
       "signal": ""
@@ -6121,6 +7011,11 @@
       "signal": ""
     },
     {
+      "input": "premature turn end | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "premature turn end | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -6144,6 +7039,11 @@
       "input": "premature turn end | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "premature turn end | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
     },
     {
       "input": "premature turn end | not_found_error model",
@@ -6281,6 +7181,11 @@
       "signal": ""
     },
     {
+      "input": "premature turn end | [adapter-permission-rejected]",
+      "kind": "premature_turn_end",
+      "signal": ""
+    },
+    {
       "input": "premature turn end | [permission-denied]",
       "kind": "premature_turn_end",
       "signal": ""
@@ -6321,6 +7226,11 @@
       "signal": ""
     },
     {
+      "input": "worktree_uncommitted | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "worktree_uncommitted | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -6344,6 +7254,11 @@
       "input": "worktree_uncommitted | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "worktree_uncommitted | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
     },
     {
       "input": "worktree_uncommitted | not_found_error model",
@@ -6481,6 +7396,11 @@
       "signal": ""
     },
     {
+      "input": "worktree_uncommitted | [adapter-permission-rejected]",
+      "kind": "worktree_uncommitted",
+      "signal": ""
+    },
+    {
       "input": "worktree_uncommitted | [permission-denied]",
       "kind": "worktree_uncommitted",
       "signal": ""
@@ -6521,6 +7441,11 @@
       "signal": ""
     },
     {
+      "input": "budget_ceiling_hit | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "budget_ceiling_hit | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -6544,6 +7469,11 @@
       "input": "budget_ceiling_hit | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "budget_ceiling_hit | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
     },
     {
       "input": "budget_ceiling_hit | not_found_error model",
@@ -6681,6 +7611,11 @@
       "signal": ""
     },
     {
+      "input": "budget_ceiling_hit | [adapter-permission-rejected]",
+      "kind": "budget_ceiling_hit",
+      "signal": ""
+    },
+    {
       "input": "budget_ceiling_hit | [permission-denied]",
       "kind": "budget_ceiling_hit",
       "signal": ""
@@ -6721,6 +7656,11 @@
       "signal": ""
     },
     {
+      "input": "[runaway-progress-exceeded] | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "[runaway-progress-exceeded] | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -6744,6 +7684,11 @@
       "input": "[runaway-progress-exceeded] | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[runaway-progress-exceeded] | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
     },
     {
       "input": "[runaway-progress-exceeded] | not_found_error model",
@@ -6881,6 +7826,11 @@
       "signal": ""
     },
     {
+      "input": "[runaway-progress-exceeded] | [adapter-permission-rejected]",
+      "kind": "runaway_progress",
+      "signal": ""
+    },
+    {
       "input": "[runaway-progress-exceeded] | [permission-denied]",
       "kind": "runaway_progress",
       "signal": ""
@@ -6921,6 +7871,11 @@
       "signal": ""
     },
     {
+      "input": "[runaway-ceiling-exceeded] | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "[runaway-ceiling-exceeded] | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -6944,6 +7899,11 @@
       "input": "[runaway-ceiling-exceeded] | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[runaway-ceiling-exceeded] | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
     },
     {
       "input": "[runaway-ceiling-exceeded] | not_found_error model",
@@ -7081,6 +8041,11 @@
       "signal": ""
     },
     {
+      "input": "[runaway-ceiling-exceeded] | [adapter-permission-rejected]",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
       "input": "[runaway-ceiling-exceeded] | [permission-denied]",
       "kind": "stall_kill",
       "signal": ""
@@ -7121,6 +8086,11 @@
       "signal": ""
     },
     {
+      "input": "[cost-cap-exceeded] | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "[cost-cap-exceeded] | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -7144,6 +8114,11 @@
       "input": "[cost-cap-exceeded] | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[cost-cap-exceeded] | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
     },
     {
       "input": "[cost-cap-exceeded] | not_found_error model",
@@ -7281,6 +8256,11 @@
       "signal": ""
     },
     {
+      "input": "[cost-cap-exceeded] | [adapter-permission-rejected]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
       "input": "[cost-cap-exceeded] | [permission-denied]",
       "kind": "budget_exceeded",
       "signal": ""
@@ -7321,6 +8301,11 @@
       "signal": ""
     },
     {
+      "input": "stage-no-output-timeout | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "stage-no-output-timeout | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -7344,6 +8329,11 @@
       "input": "stage-no-output-timeout | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "stage-no-output-timeout | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
     },
     {
       "input": "stage-no-output-timeout | not_found_error model",
@@ -7481,6 +8471,11 @@
       "signal": ""
     },
     {
+      "input": "stage-no-output-timeout | [adapter-permission-rejected]",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
       "input": "stage-no-output-timeout | [permission-denied]",
       "kind": "stall_kill",
       "signal": ""
@@ -7521,6 +8516,11 @@
       "signal": ""
     },
     {
+      "input": "[stall-killed] | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "[stall-killed] | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -7544,6 +8544,11 @@
       "input": "[stall-killed] | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[stall-killed] | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
     },
     {
       "input": "[stall-killed] | not_found_error model",
@@ -7681,6 +8686,11 @@
       "signal": ""
     },
     {
+      "input": "[stall-killed] | [adapter-permission-rejected]",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
       "input": "[stall-killed] | [permission-denied]",
       "kind": "stall_kill",
       "signal": ""
@@ -7721,6 +8731,11 @@
       "signal": ""
     },
     {
+      "input": "pipeline_budget_exceeded | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "pipeline_budget_exceeded | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -7744,6 +8759,11 @@
       "input": "pipeline_budget_exceeded | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "pipeline_budget_exceeded | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
     },
     {
       "input": "pipeline_budget_exceeded | not_found_error model",
@@ -7881,6 +8901,11 @@
       "signal": ""
     },
     {
+      "input": "pipeline_budget_exceeded | [adapter-permission-rejected]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
       "input": "pipeline_budget_exceeded | [permission-denied]",
       "kind": "budget_exceeded",
       "signal": ""
@@ -7921,6 +8946,11 @@
       "signal": ""
     },
     {
+      "input": "schema validation | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "schema validation | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -7944,6 +8974,11 @@
       "input": "schema validation | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "schema validation | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
     },
     {
       "input": "schema validation | not_found_error model",
@@ -8081,6 +9116,11 @@
       "signal": ""
     },
     {
+      "input": "schema validation | [adapter-permission-rejected]",
+      "kind": "validation_error",
+      "signal": ""
+    },
+    {
       "input": "schema validation | [permission-denied]",
       "kind": "validation_error",
       "signal": ""
@@ -8121,6 +9161,11 @@
       "signal": ""
     },
     {
+      "input": "[no-changes-produced] | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "[no-changes-produced] | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -8144,6 +9189,11 @@
       "input": "[no-changes-produced] | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[no-changes-produced] | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
     },
     {
       "input": "[no-changes-produced] | not_found_error model",
@@ -8281,6 +9331,11 @@
       "signal": ""
     },
     {
+      "input": "[no-changes-produced] | [adapter-permission-rejected]",
+      "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
       "input": "[no-changes-produced] | [permission-denied]",
       "kind": "no_changes_produced",
       "signal": ""
@@ -8321,6 +9376,11 @@
       "signal": ""
     },
     {
+      "input": "[validation-failed] | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "[validation-failed] | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -8344,6 +9404,11 @@
       "input": "[validation-failed] | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[validation-failed] | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
     },
     {
       "input": "[validation-failed] | not_found_error model",
@@ -8481,6 +9546,11 @@
       "signal": ""
     },
     {
+      "input": "[validation-failed] | [adapter-permission-rejected]",
+      "kind": "validation_failed",
+      "signal": ""
+    },
+    {
       "input": "[validation-failed] | [permission-denied]",
       "kind": "validation_failed",
       "signal": ""
@@ -8521,6 +9591,11 @@
       "signal": ""
     },
     {
+      "input": "[validation-inconclusive] | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "[validation-inconclusive] | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -8544,6 +9619,11 @@
       "input": "[validation-inconclusive] | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[validation-inconclusive] | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
     },
     {
       "input": "[validation-inconclusive] | not_found_error model",
@@ -8681,6 +9761,11 @@
       "signal": ""
     },
     {
+      "input": "[validation-inconclusive] | [adapter-permission-rejected]",
+      "kind": "validation_inconclusive",
+      "signal": ""
+    },
+    {
       "input": "[validation-inconclusive] | [permission-denied]",
       "kind": "validation_inconclusive",
       "signal": ""
@@ -8721,6 +9806,11 @@
       "signal": ""
     },
     {
+      "input": "[branch-forked] | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "[branch-forked] | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -8744,6 +9834,11 @@
       "input": "[branch-forked] | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[branch-forked] | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
     },
     {
       "input": "[branch-forked] | not_found_error model",
@@ -8881,6 +9976,11 @@
       "signal": ""
     },
     {
+      "input": "[branch-forked] | [adapter-permission-rejected]",
+      "kind": "branch_forked",
+      "signal": ""
+    },
+    {
       "input": "[branch-forked] | [permission-denied]",
       "kind": "branch_forked",
       "signal": ""
@@ -8921,6 +10021,11 @@
       "signal": ""
     },
     {
+      "input": "[commit-orphaned] | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "[commit-orphaned] | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -8944,6 +10049,11 @@
       "input": "[commit-orphaned] | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[commit-orphaned] | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
     },
     {
       "input": "[commit-orphaned] | not_found_error model",
@@ -9081,6 +10191,11 @@
       "signal": ""
     },
     {
+      "input": "[commit-orphaned] | [adapter-permission-rejected]",
+      "kind": "commit_orphaned",
+      "signal": ""
+    },
+    {
       "input": "[commit-orphaned] | [permission-denied]",
       "kind": "commit_orphaned",
       "signal": ""
@@ -9116,8 +10231,228 @@
       "signal": ""
     },
     {
+      "input": "[adapter-permission-rejected] | network unavailable: extended github connectivity loss",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | stream idle timeout",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "[adapter-permission-rejected] | overloaded",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "[adapter-permission-rejected] | socket connection was closed",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "[adapter-permission-rejected] | [rate-limit-quota-exhausted]",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[adapter-permission-rejected] | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-permission-rejected] | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | not_found_error model",
+      "kind": "model_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | pipeline-start-failure issue-closed",
+      "kind": "issue_closed",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | [blocked-dependency]",
+      "kind": "blocked_dependency",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | architecture approval required",
+      "kind": "architecture_approval_required",
+      "signal": "architecture_approval_required"
+    },
+    {
+      "input": "[adapter-permission-rejected] | github-quota-low",
+      "kind": "github_quota_low",
+      "signal": "github_quota_low"
+    },
+    {
+      "input": "[adapter-permission-rejected] | github-network-outage",
+      "kind": "github_network_outage",
+      "signal": "github_network_outage"
+    },
+    {
+      "input": "[adapter-permission-rejected] | secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | [pr-merge-unmerged",
+      "kind": "pr_merge_unmerged",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | [stage:worktree-containment]",
+      "kind": "containment_breach",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | [not-pipeline-actionable]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | [dev-produced-no-changes]",
+      "kind": "dev_produced_no_changes",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | [dev-handoff-missing]",
+      "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | invalid auth method",
+      "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | premature turn end",
+      "kind": "premature_turn_end",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | worktree_uncommitted",
+      "kind": "worktree_uncommitted",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | budget_ceiling_hit",
+      "kind": "budget_ceiling_hit",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | [runaway-progress-exceeded]",
+      "kind": "runaway_progress",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | [runaway-ceiling-exceeded]",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | [cost-cap-exceeded]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | stage-no-output-timeout",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | [stall-killed]",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | pipeline_budget_exceeded",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | schema validation",
+      "kind": "validation_error",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | [no-changes-produced]",
+      "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | [validation-failed]",
+      "kind": "validation_failed",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | [validation-inconclusive]",
+      "kind": "validation_inconclusive",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | [branch-forked]",
+      "kind": "branch_forked",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | [commit-orphaned]",
+      "kind": "commit_orphaned",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | [permission-denied]",
+      "kind": "adapter_permission_rejected",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | stage_context_unreadable",
+      "kind": "adapter_permission_rejected",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | dev_build_verification_missing",
+      "kind": "adapter_permission_rejected",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | dev_build_verification_failed",
+      "kind": "adapter_permission_rejected",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | dev_tests_failed",
+      "kind": "adapter_permission_rejected",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | pr_merge_lookup_failed",
+      "kind": "adapter_permission_rejected",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | subagent crash",
+      "kind": "adapter_permission_rejected",
+      "signal": ""
+    },
+    {
       "input": "[permission-denied] | network unavailable: extended github connectivity loss",
       "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "[permission-denied] | adapter_incompatible",
+      "kind": "adapter_incompatible",
       "signal": ""
     },
     {
@@ -9144,6 +10479,11 @@
       "input": "[permission-denied] | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[permission-denied] | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
     },
     {
       "input": "[permission-denied] | not_found_error model",
@@ -9286,6 +10626,11 @@
       "signal": ""
     },
     {
+      "input": "[permission-denied] | [adapter-permission-rejected]",
+      "kind": "adapter_permission_rejected",
+      "signal": ""
+    },
+    {
       "input": "[permission-denied] | stage_context_unreadable",
       "kind": "permission_denied",
       "signal": ""
@@ -9321,6 +10666,11 @@
       "signal": ""
     },
     {
+      "input": "stage_context_unreadable | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "stage_context_unreadable | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -9344,6 +10694,11 @@
       "input": "stage_context_unreadable | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "stage_context_unreadable | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
     },
     {
       "input": "stage_context_unreadable | not_found_error model",
@@ -9486,6 +10841,11 @@
       "signal": ""
     },
     {
+      "input": "stage_context_unreadable | [adapter-permission-rejected]",
+      "kind": "adapter_permission_rejected",
+      "signal": ""
+    },
+    {
       "input": "stage_context_unreadable | [permission-denied]",
       "kind": "permission_denied",
       "signal": ""
@@ -9521,6 +10881,11 @@
       "signal": ""
     },
     {
+      "input": "dev_build_verification_missing | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "dev_build_verification_missing | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -9544,6 +10909,11 @@
       "input": "dev_build_verification_missing | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "dev_build_verification_missing | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
     },
     {
       "input": "dev_build_verification_missing | not_found_error model",
@@ -9686,6 +11056,11 @@
       "signal": ""
     },
     {
+      "input": "dev_build_verification_missing | [adapter-permission-rejected]",
+      "kind": "adapter_permission_rejected",
+      "signal": ""
+    },
+    {
       "input": "dev_build_verification_missing | [permission-denied]",
       "kind": "permission_denied",
       "signal": ""
@@ -9721,6 +11096,11 @@
       "signal": ""
     },
     {
+      "input": "dev_build_verification_failed | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "dev_build_verification_failed | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -9744,6 +11124,11 @@
       "input": "dev_build_verification_failed | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "dev_build_verification_failed | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
     },
     {
       "input": "dev_build_verification_failed | not_found_error model",
@@ -9886,6 +11271,11 @@
       "signal": ""
     },
     {
+      "input": "dev_build_verification_failed | [adapter-permission-rejected]",
+      "kind": "adapter_permission_rejected",
+      "signal": ""
+    },
+    {
       "input": "dev_build_verification_failed | [permission-denied]",
       "kind": "permission_denied",
       "signal": ""
@@ -9921,6 +11311,11 @@
       "signal": ""
     },
     {
+      "input": "dev_tests_failed | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "dev_tests_failed | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -9944,6 +11339,11 @@
       "input": "dev_tests_failed | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "dev_tests_failed | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
     },
     {
       "input": "dev_tests_failed | not_found_error model",
@@ -10086,6 +11486,11 @@
       "signal": ""
     },
     {
+      "input": "dev_tests_failed | [adapter-permission-rejected]",
+      "kind": "adapter_permission_rejected",
+      "signal": ""
+    },
+    {
       "input": "dev_tests_failed | [permission-denied]",
       "kind": "permission_denied",
       "signal": ""
@@ -10121,6 +11526,11 @@
       "signal": ""
     },
     {
+      "input": "pr_merge_lookup_failed | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "pr_merge_lookup_failed | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -10144,6 +11554,11 @@
       "input": "pr_merge_lookup_failed | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "pr_merge_lookup_failed | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
     },
     {
       "input": "pr_merge_lookup_failed | not_found_error model",
@@ -10286,6 +11701,11 @@
       "signal": ""
     },
     {
+      "input": "pr_merge_lookup_failed | [adapter-permission-rejected]",
+      "kind": "adapter_permission_rejected",
+      "signal": ""
+    },
+    {
       "input": "pr_merge_lookup_failed | [permission-denied]",
       "kind": "permission_denied",
       "signal": ""
@@ -10321,6 +11741,11 @@
       "signal": ""
     },
     {
+      "input": "subagent crash | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "subagent crash | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -10344,6 +11769,11 @@
       "input": "subagent crash | [adapter-auth-failed]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "subagent crash | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
     },
     {
       "input": "subagent crash | not_found_error model",
@@ -10483,6 +11913,11 @@
     {
       "input": "subagent crash | [commit-orphaned]",
       "kind": "commit_orphaned",
+      "signal": ""
+    },
+    {
+      "input": "subagent crash | [adapter-permission-rejected]",
+      "kind": "adapter_permission_rejected",
       "signal": ""
     },
     {

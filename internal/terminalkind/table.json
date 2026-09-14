@@ -74,8 +74,18 @@
       "id": "network-unavailable",
       "kind": "network_unavailable",
       "signal": false,
-      "clauses": [["network unavailable: extended github connectivity loss"]],
-      "why": "The TS stall watchdog observed N consecutive connectivity failures and the Go scheduler cancelled the active stage with cause ErrNetworkUnavailable. First in the ladder because the message surfaces from context.Cause and must not be claimed by a generic `exit`/`stall` rule below."
+      "clauses": [
+        ["network unavailable: extended github connectivity loss"],
+        ["ai_apicallerror", "cannot connect to api"]
+      ],
+      "why": "The TS stall watchdog observed N consecutive connectivity failures and the Go scheduler cancelled the active stage with cause ErrNetworkUnavailable. First in the ladder because the message surfaces from context.Cause and must not be claimed by a generic `exit`/`stall` rule below. The second clause is a model server that is not listening, as opencode 1.18.30 reports it after about 60 s of its own retries (#1631): `AI_APICallError: Cannot connect to API: Unable to connect. Is the computer able to access the url?` (internal/terminalkind/testdata/opencode/server-down.stderr). #1631 expected `ECONNREFUSED 127.0.0.1:1234`, and OpenCode never prints it (ADR-022 § Failure wording). Both terms are required: `AI_APICallError` is the wrapper OpenCode's log puts around a failed MODEL request and nothing else, so neither a stage's own `cannot connect to api` prose nor an unrelated provider error takes this kind. network_unavailable rather than api_connection_lost because nothing reached a server at all, and because its routing suits a down local server: outcome recording skips the run as environmental noise, and the retry backs off without a global cooldown, since the only connectivity cooldown is the extension's GitHub probe, which a down local server never trips."
+    },
+    {
+      "id": "adapter-incompatible",
+      "kind": "adapter_incompatible",
+      "signal": false,
+      "clauses": [["adapter_incompatible"]],
+      "why": "The adapter's binary cannot serve the dispatch (#1627, ADR-022 § 20): opencode below the compat manifest's floor, a version that could not be read, a version above max-tested whose self-test failed, or one above max-tested asked to run a model server the operator runs. `*OpenCodeIncompatibleError` stamps its kind first — `adapter_incompatible: <reason>. <remediation>` — and execution.Manager wraps it as `dispatch refused for adapter \"opencode\": …`. Before this rule every such refusal satisfied only the `exit ` fallback, so a refusal that no retry can clear was booked subagent_crash and retried. Second in the ladder, above everything that reads free text: the reason quotes a failed self-test's probe output and the binary's path, either of which can carry a word a generic rule below keys on, and the stamp is the adapter's own verdict."
     },
     {
       "id": "stream-idle-timeout",
@@ -131,9 +141,23 @@
         ["[adapter-auth-failed]"],
         ["adapter-auth-failed"],
         ["adapter_auth_failed"],
-        ["not signed in"]
+        ["not signed in"],
+        ["ai_apicallerror", "unauthorized"]
       ],
-      "why": "The pipeline-start auth gate refused to launch (#312) — an adapter probe timed out after a retry (transient starvation under a concurrent dispatch burst) or the adapter CLI is logged out. Above the subagent-crash fallback, whose `exit ` substring would otherwise feed the cascade breaker a false crash. All three spellings: the wrapped pipeline-start form carries the marker BARE, which the SDK mirror missed on a real observed failure (#306). `not signed in` is the FOURTH producer of this same taxonomy kind (#591): the grok Build CLI's own vendor text — `Error: Not signed in. To authenticate without a browser, run: grok login --device-code…` — when credentials are absent. That text carries none of the three markers above; it never passes through the pipeline-start probe at all because the CLI fails too fast for the probe to run, so it reaches the classifier only as the adapter's raw stderr reason (#533's cliFailureText carry) and fell all the way through to subagent_crash before this clause existed. MOVED HERE FROM BELOW model-unavailable/issue-closed/…/stall-kill BY #565: adapter-auth-failed and rate-limit-quota-exhausted are the two rules that exist specifically to classify RAW, unmarked vendor CLI stderr (#560/#591 are the same fix for two different grok failures) rather than a pipeline-stamped marker, and every rule between the old and new position matches on bare, generic-sounding literals (`hard cap`, `budget ceiling`, `premature turn end`, …) that a vendor CLI's own unrelated log chatter can satisfy incidentally. #565's negative-control corpus row (multiline-grok-hard-cap-notice-then-not-signed-in) pins the concrete case this closes: a retry-configuration line mentioning `hard cap` printed before the real `Not signed in` failure used to win under stall-kill's old higher position, sending an unauthenticated CLI through backoff-and-retry recovery for a failure retrying can never fix. Matching is over the WHOLE joined string, not per line, so position IN THE TEXT never protected this — only position in the RULE TABLE does."
+      "why": "The pipeline-start auth gate refused to launch (#312) — an adapter probe timed out after a retry (transient starvation under a concurrent dispatch burst) or the adapter CLI is logged out. Above the subagent-crash fallback, whose `exit ` substring would otherwise feed the cascade breaker a false crash. All three spellings: the wrapped pipeline-start form carries the marker BARE, which the SDK mirror missed on a real observed failure (#306). `not signed in` is the FOURTH producer of this same taxonomy kind (#591): the grok Build CLI's own vendor text — `Error: Not signed in. To authenticate without a browser, run: grok login --device-code…` — when credentials are absent. That text carries none of the three markers above; it never passes through the pipeline-start probe at all because the CLI fails too fast for the probe to run, so it reaches the classifier only as the adapter's raw stderr reason (#533's cliFailureText carry) and fell all the way through to subagent_crash before this clause existed. MOVED HERE FROM BELOW model-unavailable/issue-closed/…/stall-kill BY #565: adapter-auth-failed and rate-limit-quota-exhausted are the two rules that exist specifically to classify RAW, unmarked vendor CLI stderr (#560/#591 are the same fix for two different grok failures) rather than a pipeline-stamped marker, and every rule between the old and new position matches on bare, generic-sounding literals (`hard cap`, `budget ceiling`, `premature turn end`, …) that a vendor CLI's own unrelated log chatter can satisfy incidentally. #565's negative-control corpus row (multiline-grok-hard-cap-notice-then-not-signed-in) pins the concrete case this closes: a retry-configuration line mentioning `hard cap` printed before the real `Not signed in` failure used to win under stall-kill's old higher position, sending an unauthenticated CLI through backoff-and-retry recovery for a failure retrying can never fix. Matching is over the WHOLE joined string, not per line, so position IN THE TEXT never protected this — only position in the RULE TABLE does. The `ai_apicallerror`+`unauthorized` clause is the FIFTH producer (#1631): a model server that refused OpenCode's credentials with a 401, which opencode 1.18.30 reports as `AI_APICallError: Unauthorized` — the HTTP reason phrase, since the capture's 401 had no body (internal/terminalkind/testdata/opencode/auth.stderr). A conjunction because each half alone belongs to someone else: bare `unauthorized` is a forge refusal's word too, which git-transport-auth-failed below claims in its `401 unauthorized` form, and a bare `AI_APICallError` is any failed model request."
+    },
+    {
+      "id": "context-window-exceeded",
+      "kind": "context_window_exceeded",
+      "signal": false,
+      "clauses": [
+        ["ai_apicallerror", "context_length_exceeded"],
+        ["ai_apicallerror", "maximum context length is"],
+        ["ai_apicallerror", "greater than the context length"],
+        ["ai_apicallerror", "prompt too long; exceeded"],
+        ["ai_apicallerror", "exceeds the available context size"]
+      ],
+      "why": "The prompt outgrew the context the model server has the model loaded with (#1631) — the most common small-context failure, and one no same-configuration retry can clear: the next attempt sends the same prompt to the same window. Before this rule it satisfied only the `exit ` fallback, so it was booked subagent_crash, fed the cascade breaker and was retried into the same wall. The server words are the five fragments OpenCode's own overflow recogniser matches for the servers a local model runs on — the OpenAI-compatible `context_length_exceeded` code and `maximum context length is N tokens`, LM Studio's `greater than the context length`, Ollama's `prompt too long; exceeded (max) context length`, and the llama.cpp server's `exceeds the available context size` — as OpenCode's source attributes them; opencode 1.18.30 names each of those failures ContextOverflowError itself (internal/terminalkind/testdata/opencode/overflow-*.jsonl). EVERY CLAUSE REQUIRES `ai_apicallerror`, and that is the security property, not a formality: the fleet parks an issue on this kind, so model-authored text must not reach it. `AI_APICallError: <message>` is the line opencode's log writes when a MODEL REQUEST fails, carrying the server's own error message, and the model's own output is on the stream, never on stderr; a model that writes `context length exceeded` into its reply produces the words without the wrapper and matches nothing (corpus row opencode-text-part-overflow-wording-does-not-classify, TestOpenCodeTextPartDoesNotClassify). Above model-unavailable and every rule that reads bare generic literals, because the line is raw adapter stderr, the same reason adapter-auth-failed sits high (#565)."
     },
     {
       "id": "model-unavailable",
@@ -410,6 +434,13 @@
       "signal": false,
       "clauses": [["[commit-orphaned]"], ["commit_orphaned"]],
       "why": "A commit stranded on the wrong branch after a SIGKILL bypassed pre_push.go's restore-defer (#266). Emitted by feature-validate's branch-identity guard when HEAD is not on the issue's expected feature branch and self-heal cannot recover it. Unrecoverable by retry."
+    },
+    {
+      "id": "adapter-permission-rejected",
+      "kind": "adapter_permission_rejected",
+      "signal": false,
+      "clauses": [["[adapter-permission-rejected]"]],
+      "why": "The adapter rejected, by itself, a tool the stage's allowed tools GRANT (#1624, #1631): opencode resolved the permission to `ask`, auto-rejected it headless, and the parser (internal/execution/opencode_usage.go) ended the stage's stderr with `[adapter-permission-rejected] tool=<permission>`. That is a defect in the permission map Nightgauge generated, not in the work and not in the issue — the next attempt runs under the same map and is rejected identically — so the kind is parked, not retried, and not charged to the issue. MUST precede permission-denied: that rule is the harness saying `not that way` to a tool the stage was NOT allowed, which a short backoff and a different approach can clear. The parser gives one stage one marker, but a reason can join text from more than one source (a stage's error and its tail, a composed first-cause reason), and where both appear the configuration defect is the one no retry clears, so it names the failure. The marker, not the notice, is matched: the notice's patterns are the model's own tool input, which the parser strips before anything is kept (ADR-022 § 9)."
     },
     {
       "id": "permission-denied",

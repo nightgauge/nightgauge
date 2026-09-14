@@ -64,6 +64,23 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- Three terminal kinds for OpenCode and local-model failures, in the rule
+  table, the Go constants, the SDK union, the extension schema and
+  `docs/FAILURE_TAXONOMY.md`. `context_window_exceeded` is a prompt that
+  outgrew the model's loaded context; `adapter_permission_rejected` is
+  OpenCode rejecting a tool the stage is allowed (a permission-map defect,
+  classified ahead of `permission_denied`); `adapter_incompatible` is a
+  version-policy refusal of the OpenCode binary. All three are parked: no
+  model escalation, no retry, no lifetime-failure charge, no cascade feed, and
+  held until an operator resumes, with a remediation on the failed entry and
+  in the auto-retro. OpenCode's own wording now also maps a down local server
+  to `network_unavailable`, `ProviderModelNotFoundError` to
+  `model_unavailable` and a provider 401 to `adapter_auth_failed`. Every
+  OpenCode clause requires OpenCode's `AI_APICallError` wrapper, so model text
+  quoting overflow wording classifies as nothing. The wording comes from real
+  opencode 1.18.30 captures (`scripts/capture-opencode-failure-fixture.sh`),
+  and ADR-022 § Failure wording records where it differed from the plan: a
+  down server never prints `ECONNREFUSED` (#1631)
 - An OpenCode stage now gets its repository's steering and the pipeline's MCP
   servers. Its `AGENTS.md`, or the `CLAUDE.md` of a repository that has only
   that, and the files it `@`-imports from inside the worktree reach the model
@@ -219,6 +236,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The VS Code extension's run-record schema now accepts a `permission_denied`
+  terminal kind, which the Go scheduler has written since #289: such a record
+  used to fall through to the V2 schema and lose its kind. A parity test now
+  holds the schema to the Go constants (#1631)
 - A stage the operator stops is reported as stopped, not as a
   `wait: context canceled` failure, when its CLI exits on the stop but a
   process it started holds its output past the grace period. OpenCode's
