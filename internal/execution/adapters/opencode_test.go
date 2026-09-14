@@ -313,6 +313,7 @@ func TestOpenCodeWarningDisclosesWhereThePromptCanGo(t *testing.T) {
 		},
 		"subagent cost": {
 			"a subagent's steps never reach", "once the stage has ended", "not stopped while they run", "budget_exceeded",
+			"only partly read", "cannot be verified", "the dispatched model's rates", "under-counted",
 		},
 		"endpoint policy": {"Ollama cloud model", "Ollama's hosted service", "the stage to another model"},
 		"output redaction": {

@@ -271,8 +271,9 @@ type RuntimeState struct {
 
 	// StageModelIdentities captures, for each stage of a multi-provider
 	// adapter, the ADR-022 § 2 identity of the model that served it, as the
-	// executor reported it (adapters.RunResult.ModelProvider, UpstreamModel
-	// and Endpoint). BuildV2Record projects it onto V2ModelSelect.
+	// executor reported it for the stage's latest result
+	// (adapters.RunResult.ModelProvider, UpstreamModel and Endpoint).
+	// BuildV2Record projects it onto V2ModelSelect.
 	StageModelIdentities map[string]StageModelIdentity `json:"stageModelIdentities,omitempty"`
 
 	// StageEfforts captures the EFFORT_LEVELS rung actually in force for each
@@ -1822,14 +1823,17 @@ type StageModelIdentity struct {
 }
 
 // RecordStageModelIdentity records the identity the executor reported for a
-// stage. A zero identity, which every single-provider adapter reports, is
-// ignored, so the stage records none.
+// stage's latest result, replacing any earlier one. A zero identity, which
+// every single-provider adapter reports, clears it, so a stage re-run on
+// another adapter, as cap recovery does, never keeps the identity of the
+// adapter it left.
 func (rs *RuntimeState) RecordStageModelIdentity(stage PipelineStage, id StageModelIdentity) {
-	if id == (StageModelIdentity{}) {
-		return
-	}
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
+	if id == (StageModelIdentity{}) {
+		delete(rs.StageModelIdentities, string(stage))
+		return
+	}
 	if rs.StageModelIdentities == nil {
 		rs.StageModelIdentities = make(map[string]StageModelIdentity)
 	}

@@ -689,8 +689,12 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 		done := openCode.finish(ctx, exit, tokenAcc)
 		openCodeDone = &done
 		// The fold added the subagent sessions' usage, which the stream never
-		// carried: a stage they took past its cost budget fails too.
-		if costCap.settle(tokenAcc) {
+		// carried: a stage they took past its cost budget fails too. So does a
+		// stage that would otherwise succeed but whose subagent usage was only
+		// partly read, since its budget cannot be verified; one the operator
+		// stopped read none of it by design and is cancelled, not failed.
+		unread := done.partial && !exit.stopped && exit.exitCode == 0 && done.marker == ""
+		if costCap.settle(tokenAcc, unread) {
 			fmt.Fprintf(os.Stderr, "%s#%d %s: %s\n", opts.Repo, opts.IssueNumber, opts.Stage, costCap.notice())
 			keepStderr([]byte(costCap.notice()))
 		}
@@ -729,7 +733,8 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 		}
 	}
 	// A stage stopped at its cost budget failed, even when it exited 0 on the
-	// SIGTERM, and so did one its subagents took past it.
+	// SIGTERM, and so did one its subagents took past it or whose subagent
+	// usage was only partly read.
 	if costCap != nil && costCap.fired && result.ExitCode == 0 {
 		result.ExitCode = 1
 	}

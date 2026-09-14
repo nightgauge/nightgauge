@@ -71,16 +71,23 @@ changelog, and the release workflow refuses a tag that does not.
   stderr. A subagent's steps are not in the stream, so its usage is priced
   only once the stage has ended: a stage its subagents took past the budget
   is not stopped while they run, but fails as `budget_exceeded` then, and the
-  enabled-dispatch warning says so. OpenCode's own reported cost is never
-  used. A hosted model the registry cannot price logs one `[opencode-cost]`
-  warning and runs without a cost cap (#1630)
+  enabled-dispatch warning says so. A stage that would otherwise succeed but
+  whose subagent usage was only partly read also fails as `budget_exceeded`,
+  since its budget cannot be verified, unless its model is priced at zero.
+  The budget prices every step, a subagent's included, at the dispatched
+  model's rates, so a subagent on a pricier model of the same provider is
+  under-counted. OpenCode's own reported cost is never used. A hosted model
+  the registry cannot price logs one `[opencode-cost]` warning and runs
+  without a cost cap (#1630)
 
 - An OpenCode stage's run record now carries the identity of the model that
   served it on its `model_selection`: `model_provider`, `upstream_model` (the
   `-m` value it was dispatched with, kept when another model served it) and
   `endpoint` (the declared endpoint that served it). The Go scheduler's
   platform telemetry sends the recorded provider as `modelProvider` beside
-  the stage's ADR-022 model identity (#1630)
+  the stage's ADR-022 model identity, the VS Code extension's history reader
+  keeps the three fields, and a stage re-run on another adapter keeps none of
+  the identity of the run it replaced (#1630)
 
 - An OpenCode stage now gets its repository's steering and the pipeline's MCP
   servers. Its `AGENTS.md`, or the `CLAUDE.md` of a repository that has only

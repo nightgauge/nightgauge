@@ -843,6 +843,46 @@ func TestBuildV2Record_ModelIdentity(t *testing.T) {
 	}
 }
 
+// TestRecordStageModelIdentity_ClearedByAdapterHop: an opencode stage that
+// cap recovery re-runs on claude reports a zero identity, and the stage's
+// record then carries none: the lm-studio provider of the run it replaced
+// is not kept beside claude's model.
+func TestRecordStageModelIdentity_ClearedByAdapterHop(t *testing.T) {
+	rs := NewRuntimeState("nightgauge/nightgauge", 1630, "item-1630", testRunID())
+	rs.BeginStage(StageFeatureDev)
+	rs.RecordStageAdapter(StageFeatureDev, "opencode")
+	rs.RecordStageModelIdentity(StageFeatureDev, StageModelIdentity{
+		Provider: "lm-studio", Upstream: "lmstudio/qwen/qwen3.8-27b", Endpoint: "lmstudio",
+	})
+	rs.RecordStageAdapter(StageFeatureDev, "claude")
+	rs.RecordStageModel(StageFeatureDev, "claude-sonnet-5")
+	rs.RecordStageModelIdentity(StageFeatureDev, StageModelIdentity{})
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 50}, "claude-sonnet-5", "claude")
+
+	if got := rs.StageModelIdentityOf(StageFeatureDev); got != (StageModelIdentity{}) {
+		t.Errorf("identity after the hop = %+v, want none", got)
+	}
+	record := NewHistoryWriter(t.TempDir()).BuildV2Record(rs, true, "", V2RunInput{}, time.Now())
+	data, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw struct {
+		Stages map[string]struct {
+			ModelSelection map[string]any `json:"model_selection"`
+		} `json:"stages"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	dev := raw.Stages[string(StageFeatureDev)].ModelSelection
+	for _, key := range []string{"model_provider", "upstream_model", "endpoint"} {
+		if v, ok := dev[key]; ok {
+			t.Errorf("feature-dev model_selection carries %s = %v after the hop to claude, want no key", key, v)
+		}
+	}
+}
+
 // TestBuildV2Record_ServedEffortOpenVocabulary pins the PRODUCER half of the
 // served-envelope vocabulary contract (#612's "minor asymmetries" gap): Go
 // records and emits whatever rung the executor actually reported, verbatim,

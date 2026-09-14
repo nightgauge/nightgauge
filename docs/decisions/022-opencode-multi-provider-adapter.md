@@ -210,7 +210,7 @@ has opted in.
 | safety plugin              | #1635, #1640  |
 | endpoint policy            | #1678, #1679  |
 | stage limits               | #1652         |
-| subagent cost              | #1734         |
+| subagent cost              | #1748         |
 
 - **Removal.** #1643 deletes the enable check once the list is empty and
   § 23's beta criteria hold. Nothing else removes it.
@@ -228,7 +228,7 @@ has opted in.
 - **Stage limits and subagent cost.** The stage's token cap on a hosted model
   is not passed to OpenCode; that row stays with #1652's per-stage token
   ceiling. The USD watchdog cannot stop a stage while its subagents spend,
-  because their steps never reach the stream (§ 3); that row stays with #1734
+  because their steps never reach the stream (§ 3); that row stays with #1748
   until a change bounds them while the stage runs.
 - **ADR-020.** The switch is a default-off setting. ADR-020 requires its reason
   beside it, and the reason is security: a dispatch runs without controls every
@@ -384,22 +384,36 @@ bills it.
     on that server, and Nightgauge cannot check it. Without it the server may
     be a gateway to a hosted API, such as a LiteLLM proxy, and its stages are
     unstamped.
-- **Re-priced from the registry, per step.** For a hosted model the registry
-  knows, every `step_finish` is priced from the registry's rate card for the
-  model that served that step: input, output and reasoning tokens, plus the
-  cache read and cache write pools at the registry's cache rates. A stage's cost
-  is the sum. Subagent sessions (the `task` tool) are rolled up the same way
-  (#1624), once the stage has ended, because their steps never reach the
-  stream.
+- **Re-priced from the registry, at one model's rates.** For a hosted model
+  the registry knows, the stage's usage is priced from the registry's rate
+  card: input, output and reasoning tokens, plus the cache read and cache
+  write pools at the registry's cache rates. No stream event names the model
+  that served a step, so every step is priced at one model's rates, never its
+  own: the recorded cost at the rates of the model § 2 records as having
+  served the stage, which is the dispatched model unless the session export
+  names another, and the watchdog below at the dispatched model's. Subagent
+  sessions (the `task` tool) are rolled up at the same rates (#1624), once the
+  stage has ended, because their steps never reach the stream; a subagent on
+  a pricier model of the same provider is therefore under-counted, and the
+  `subagent cost` row says so.
 - **The USD watchdog bounds the stage's own steps.** The watchdog (#1630)
   prices the stream's steps as they arrive, at the registry rates of the
   dispatched model because no stream event names the model that served a
   step, and stops the stage at the `step_finish` that takes it past its cost
   budget. Once the stage has ended it prices the stage again with its
   subagent sessions folded in, and a stage they took past its budget fails as
-  `budget_exceeded` then, so it is never recorded as a success. It cannot
-  stop a stage while its subagents spend, and the enabled-dispatch warning
-  says so (the `subagent cost` row).
+  `budget_exceeded` then, so it is never recorded as a success. A partial
+  read of that usage (§ 22: more than 64 subagent sessions, an export that
+  fails, times out or prints more than 64 MB, the fold's 2-minute budget
+  spent, the session list failing, or a stage session id of an unrecognized
+  shape) is priced only on what was read, so the budget cannot be verified:
+  a stage with a cost budget on a model the registry prices above zero, not
+  stopped by the operator, that would otherwise succeed then fails as
+  `budget_exceeded`, its `[cost-cap-exceeded]` line saying the budget could
+  not be verified because its subagent usage was only partly read. A model priced at zero has no unread usage that could
+  cost it anything, and a stage that already failed keeps its own failure.
+  The watchdog cannot stop a stage while its subagents spend, and the
+  enabled-dispatch warning says so (the `subagent cost` row).
 - **OpenCode's own `cost` is never trusted.** It comes from OpenCode's catalog
   and not from the bill, and it read `0` for a provider it had no price for.
 - **Every other zero is unstamped.** A hosted or `other` model the registry
@@ -1454,8 +1468,8 @@ removal.
   export is read only for its assistant messages' `providerID` and `modelID`
   (§ 1). Exports are held in memory, and nothing else from one is kept;
   `--sanitize` was observed to redact prompts, replies and tool input while
-  keeping those fields. A failed read marks the stage's usage partial and
-  never fails it.
+  keeping those fields. A failed read marks the stage's usage partial; it
+  fails the stage only when that leaves its cost budget unverified (§ 3).
 - **What those processes run with.** Observed on 1.18.30, `export`
   bootstraps a project from its working directory: from a directory holding
   `.opencode/` it writes there and installs that config's dependencies, and it

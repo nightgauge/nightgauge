@@ -35,6 +35,8 @@ type costStage struct {
 	// childInput, when set, gives the stage's session one subagent session
 	// whose export reports that many input tokens.
 	childInput int
+	// exportFails makes every export exit 1, so no session's usage is read.
+	exportFails bool
 }
 
 // costStageOutcome is what one stage left behind.
@@ -77,18 +79,22 @@ func runCostStage(t *testing.T, stage costStage) costStageOutcome {
 	if stage.childInput > 0 {
 		rows = `[{"id":"ses_childA","parent_id":"ses_fixture0000000000000000001"}]`
 	}
+	exportRun := fmt.Sprintf("cat %q; exit 0", export)
+	if stage.exportFails {
+		exportRun = "echo 'export failed' >&2; exit 1"
+	}
 	pidFile := filepath.Join(dir, "stage.pid")
 	script := fmt.Sprintf(`#!/bin/sh
 case "$1" in
 --version) echo 1.18.30; exit 0 ;;
 db) echo '%s'; exit 0 ;;
-export) cat %q; exit 0 ;;
+export) %s ;;
 esac
 echo $$ > %q
 cat > /dev/null
 STEPS=%q
 %s
-`, rows, export, pidFile, steps, stage.run)
+`, rows, exportRun, pidFile, steps, stage.run)
 	if err := os.WriteFile(filepath.Join(dir, "opencode"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -321,6 +327,59 @@ func TestOpenCodeCostWatchdogCountsSubagentSpend(t *testing.T) {
 			lines := strings.Split(strings.TrimRight(res.Stderr, "\n"), "\n")
 			if last := lines[len(lines)-1]; !strings.HasPrefix(last, CostCapExceededMarker+" ") || !strings.Contains(last, "subagent") {
 				t.Errorf("the stage's stderr does not end with a %s line naming its subagent sessions:\n%s", CostCapExceededMarker, res.Stderr)
+			}
+			if kind := terminalkind.Classify(fmt.Sprintf("exit %d: %s", res.ExitCode, res.Stderr)); kind != "budget_exceeded" {
+				t.Errorf("the stage classifies as %q, want budget_exceeded:\n%s", kind, res.Stderr)
+			}
+			if n := strings.Count(out.logged, CostCapExceededMarker); n != 1 {
+				t.Errorf("the manager logged %s %d times, want once:\n%s", CostCapExceededMarker, n, out.logged)
+			}
+		})
+	}
+}
+
+// TestOpenCodeCostWatchdogFailsAnUnverifiedBudget: a stage whose subagent
+// usage was only partly read is priced only on what was read, so its cost
+// budget cannot be verified. With a cost budget on a model the registry
+// prices, such a stage never ends as a success: it fails with a
+// [cost-cap-exceeded] line ending its stderr that says the budget could not
+// be verified, which classifies as budget_exceeded, and is not cancelled. A
+// local model, priced at zero, has no unread usage that could cost it
+// anything, and a stage with no cost budget has none to verify: both succeed.
+func TestOpenCodeCostWatchdogFailsAnUnverifiedBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name, model string
+		budget      float64
+		fails       bool
+	}{
+		{"priced", "anthropic/claude-sonnet-5", 0.5, true},
+		{"local", "lmstudio/qwen/qwen3.8-27b", 0.5, false},
+		{"no budget", "anthropic/claude-sonnet-5", 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := runCostStage(t, costStage{
+				model: tc.model, budget: tc.budget, childInput: 1_000_000, exportFails: true, run: `cat "$STEPS"`,
+			})
+			res := out.result
+			if !res.UsagePartial {
+				t.Fatal("the subagent's export failed, but the stage's usage is not marked partial")
+			}
+			if res.Cancelled {
+				t.Error("RunResult.Cancelled = true: nobody stopped the stage")
+			}
+			if !tc.fails {
+				if res.ExitCode != 0 || strings.Contains(res.Stderr+out.logged, CostCapExceededMarker) {
+					t.Errorf("exit %d, stderr:\n%s\nlogged:\n%s\nwant the stage to succeed", res.ExitCode, res.Stderr, out.logged)
+				}
+				return
+			}
+			if res.ExitCode == 0 {
+				t.Error("the stage exited 0 with a cost budget it could not verify; it must fail")
+			}
+			lines := strings.Split(strings.TrimRight(res.Stderr, "\n"), "\n")
+			if last := lines[len(lines)-1]; !strings.HasPrefix(last, CostCapExceededMarker+" ") ||
+				!strings.Contains(last, "could not be verified because its subagent usage was only partly read") {
+				t.Errorf("the stage's stderr does not end with a %s line saying its budget could not be verified:\n%s", CostCapExceededMarker, res.Stderr)
 			}
 			if kind := terminalkind.Classify(fmt.Sprintf("exit %d: %s", res.ExitCode, res.Stderr)); kind != "budget_exceeded" {
 				t.Errorf("the stage classifies as %q, want budget_exceeded:\n%s", kind, res.Stderr)
