@@ -69,6 +69,15 @@ type AdapterHealth struct {
 	CatalogWarning string `json:"catalog_warning,omitempty"`
 	OK             bool   `json:"ok"` // adapter is usable for its kind's primary requirement
 	Remediation    string `json:"remediation,omitempty"`
+	// Warnings are findings that do not make the adapter unusable but that
+	// the operator should act on. Each degrades the doctor's verdict.
+	Warnings []string `json:"warnings,omitempty"`
+	// Notes are facts a reader of the row needs, such as the directories a
+	// run uses. They never change the verdict.
+	Notes []string `json:"notes,omitempty"`
+	// OpenCode is the opencode adapter's own section (#1627); nil for every
+	// other adapter.
+	OpenCode *OpenCodeHealth `json:"opencode,omitempty"`
 }
 
 // CatalogHealth is the live-vs-registry model catalog comparison for a
@@ -207,6 +216,13 @@ var adapterSpecs = map[string]adapterSpec{
 	"grok": {binary: "grok", kind: kindCLI,
 		minVersion: compatMinVersion("grok"), floorPolicy: compatFloorPolicy("grok"),
 		catalogArgs: []string{"models"}, catalogParser: parseGrokCatalog},
+	// opencode is one adapter over many providers, so its row is its own
+	// (checkOpenCode, opencode.go): the catalog probe runs `opencode models`
+	// under the per-run config and looks for the configured provider/model,
+	// rather than diffing against one registry provider's served models.
+	"opencode": {binary: "opencode", kind: kindCLI,
+		minVersion: compatMinVersion("opencode"), floorPolicy: compatFloorPolicy("opencode"),
+		catalogArgs: []string{"models"}, catalogParser: parseOpenCodeCatalog},
 }
 
 // compatMinVersion and compatFloorPolicy read a CLI adapter's floor from its
@@ -281,6 +297,7 @@ func AllAdapterNames() []string {
 		"gemini",
 		"copilot",
 		"grok",
+		"opencode",
 		"claude-sdk",
 		"gemini-sdk",
 		"ollama",
@@ -314,6 +331,10 @@ type adapterProbe struct {
 	httpProbe     func(baseURL string) localServerProbeResult // kindHTTP: reachability + /models catalog (#520)
 	machineModel  func(adapter string) string                 // kindHTTP: machine-tier model fallback
 	codexHome     string                                      // resolved $CODEX_HOME (or ~/.codex); injectable for tests
+	// opencode is the opencode row's dependencies (checkOpenCode). Its zero
+	// value reads the enable gate as closed, so a probe that does not wire it
+	// runs no OpenCode check.
+	opencode openCodeProbe
 }
 
 // catalogProbeTimeout bounds the live catalog-listing spawn (#551), mirroring
@@ -339,6 +360,7 @@ func defaultAdapterProbe() adapterProbe {
 		httpProbe:    probeLocalServer,
 		machineModel: readMachineHTTPModel,
 		codexHome:    resolveCodexHome(),
+		opencode:     newOpenCodeProbe(),
 	}
 }
 
@@ -438,8 +460,11 @@ func checkAdapter(name string, probe adapterProbe) AdapterHealth {
 	h := AdapterHealth{Adapter: strings.TrimSpace(name)}
 	if !ok {
 		h.OK = false
-		h.Remediation = "Unknown adapter; valid: claude, claude-sdk, codex, gemini, gemini-sdk, ollama, lm-studio, copilot."
+		h.Remediation = "Unknown adapter; valid: " + strings.Join(AllAdapterNames(), ", ") + "."
 		return h
+	}
+	if canonical == "opencode" {
+		return checkOpenCode(name, spec, probe)
 	}
 	h.Kind = string(spec.kind)
 

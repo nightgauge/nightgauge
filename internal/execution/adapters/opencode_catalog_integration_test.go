@@ -22,8 +22,8 @@ import (
 	"testing"
 )
 
-// openCodeCatalogVersion is the version openCodeCatalogEnv was read from.
-const openCodeCatalogVersion = "1.18.30"
+// openCodeCatalogVersion (const, "1.18.30") now lives in opencode_preflight.go
+// (non-test), shared with the runtime preflight checks it also pins.
 
 // openCodeCatalogBinary resolves the installed opencode binary. On CI a
 // missing binary fails the test rather than skipping it: CI installs the

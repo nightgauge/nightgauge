@@ -1,0 +1,4 @@
+lmstudio/openai/gpt-oss-20b
+lmstudio/qwen/qwen3-30b-a3b-2507
+lmstudio/qwen/qwen3-coder-30b
+lmstudio/stub/stub-model

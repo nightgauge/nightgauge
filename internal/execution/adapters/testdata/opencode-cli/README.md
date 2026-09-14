@@ -13,15 +13,16 @@ and update the table below in the same change.
 
 ## What was captured
 
-| Field       | Value                                           |
-| ----------- | ----------------------------------------------- |
-| Host OS     | macOS 27.0 (Darwin 27.0.0, arm64)               |
-| Captured at | 2026-09-12                                      |
-| Command     | `opencode run --help`, stdin from `/dev/null`   |
-| CLI version | `1.18.30` (`opencode --version`, `version.txt`) |
-| Install     | npm package `opencode-ai`                       |
-| Exit code   | 0                                               |
-| Redaction   | `capture.sh`; nothing needed redacting          |
+| Field       | Value                                            |
+| ----------- | ------------------------------------------------ |
+| Host OS     | macOS 27.0 (Darwin 27.0.0, arm64)                |
+| Captured at | 2026-09-12                                       |
+| Command     | `opencode run --help`, stdin from `/dev/null`    |
+| Stream      | stderr; stdout is empty. `capture.sh` keeps both |
+| CLI version | `1.18.30` (`opencode --version`, `version.txt`)  |
+| Install     | npm package `opencode-ai`                        |
+| Exit code   | 0                                                |
+| Redaction   | `capture.sh`; nothing needed redacting           |
 
 ## Behaviour observed on the same version
 
@@ -90,3 +91,5 @@ model request was sent.
 | A model entry defines its model even where the catalog lists none, with a context and output limit of 0                                                                                                                              | An `anthropic` entry for an id the catalog does not list resolved in `opencode models anthropic --verbose` with both limits 0 (2026-09-13)                                                                                                                                                                                                                                     |
 | The bundled catalog lists 16 `anthropic` models; its two fast-mode entries are sent under the base model's `id` with a `speed` option and an `anthropic-beta` header; `opencode_catalog_anthropic.go` holds each model's sent id     | `opencode models anthropic --verbose` with the model fetch off; pinning a fast-mode entry's own `id` resolved to that id, and pinning the base `id` dropped the option and header. `TestOpenCodeAnthropicModelsMatchTheBinary` (build tag `opencode_integration`) re-reads it (2026-09-13)                                                                                     |
 | An unknown key in `OPENCODE_CONFIG_CONTENT` is dropped without a word                                                                                                                                                                | `debug config` exited 0 with an unknown top-level key in the content, and the key was not in its output (2026-09-13)                                                                                                                                                                                                                                                           |
+| `opencode run --help` prints its help on stderr and nothing on stdout, and exits 0; an unknown `run` flag prints the same help on stderr and exits 1                                                                                 | 3053 bytes on stderr and none on stdout under a throwaway `HOME` and XDG directories; the self-test reads the options from either stream (2026-09-13)                                                                                                                                                                                                                          |
+| Outside a git repository, OpenCode reads `opencode.json` from the directories above the working directory; `OPENCODE_DISABLE_PROJECT_CONFIG=1` stops it                                                                              | A `username` in an `opencode.json` one directory above a working directory outside any repository appeared in `debug config`, and a `share: 42` there made it exit 1; with the switch, neither had any effect. Every probe sets it (2026-09-13)                                                                                                                                |

@@ -273,7 +273,7 @@ block is an error.
 
 ```yaml
 opencode:
-  binary: opencode # a command on PATH or an absolute path (the doctor's version check)
+  binary: /home/you/.nightgauge/tools/opencode/node_modules/.bin/opencode # optional pin; see below
   inherit_user_config: false # true layers your own OpenCode config into runs
   model: lmstudio/qwen/qwen3.8-27b # used when a caller names no model
   provider: lm-studio # lm-studio | ollama; the endpoint id is lmstudio | ollama
@@ -289,6 +289,14 @@ opencode:
   formatter: true # default true
 ```
 
+- `binary` pins the opencode binary a dispatch spawns and `nightgauge doctor`
+  checks. It must be the absolute path of an executable file: a relative path,
+  a bare command name such as `opencode` included, is refused and never
+  looked up on PATH. Leave it unset to run the `opencode` on PATH. The managed
+  install,
+  `npm i --prefix ~/.nightgauge/tools/opencode opencode-ai@<max-tested>`,
+  puts the binary at `.nightgauge/tools/opencode/node_modules/.bin/opencode`
+  in your home directory; pin the absolute form of that path.
 - A dispatch to the endpoint is refused while `limit.context` or
   `limit.output` is 0 or missing: OpenCode never compacts a session whose
   context limit is 0, which is what LM Studio reports. The block declares one

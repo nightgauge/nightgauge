@@ -70,9 +70,13 @@ uses for 7 days is swept.
 The model defaults to opencode.model in the machine-tier config. The command
 runs the adapter's own checks, so it fails, and prints nothing on stdout,
 wherever the adapter refuses a dispatch before spawning: without
-` + adapters.ExperimentalOpenCodeEnvVar + `=1, a model it cannot dispatch, an
-anthropic/ model while ANTHROPIC_API_KEY is unset, an anthropic/ model
-OpenCode's bundled catalog does not list or one of its fast-mode entries, a
+` + adapters.ExperimentalOpenCodeEnvVar + `=1, an opencode binary below the compat
+manifest's floor or whose version cannot be read, one newer than max-tested
+that fails its self-test or would run a model server you run, an
+opencode.binary that is not the absolute path of an executable, a model it
+cannot dispatch, an anthropic/ model while ANTHROPIC_API_KEY is unset, an
+anthropic/ model OpenCode's bundled catalog does not list or one of its
+fast-mode entries, a
 model on a forge or cloud platform provider, a provider key that is neither a
 declared endpoint nor one OpenCode knows, an endpoint whose limit.context or
 limit.output is 0 or missing, a base_url that is not http or https or that

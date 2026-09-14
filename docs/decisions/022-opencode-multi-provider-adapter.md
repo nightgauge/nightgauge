@@ -115,6 +115,12 @@ capture script and the full observation table are in
 | Read from the bundled source: a model with a `limit.input` compacts at `limit.input` less `compaction.reserved`, so a lower layer's `limit.input` moves the threshold          | § 7, § 8                   |
 | A repository `opencode.json` that gives `anthropic` a `baseURL` re-points `ANTHROPIC_API_KEY` to it unless `OPENCODE_CONFIG_CONTENT` sets one                                  | § 17                       |
 | An unknown key in `OPENCODE_CONFIG_CONTENT` is dropped without a word                                                                                                          | § 8                        |
+| `opencode debug config` exits 1 on a value of the wrong type in `OPENCODE_CONFIG_CONTENT`, 0 on an unknown key, and prints every other key the content sets                    | § 20                       |
+| `opencode models` lists a configured endpoint's model with the endpoint's server stopped                                                                                       | § 20                       |
+| `opencode run --help` prints its help on stderr and nothing on stdout                                                                                                          | § 20                       |
+| Outside a git repository, OpenCode reads `opencode.json` from the directories above the working directory; `OPENCODE_DISABLE_PROJECT_CONFIG=1` stops it                        | § 20                       |
+| `opencode models` lists a hosted provider the config declares no block for only when one of its variables is set, whatever the value                                           | § 20                       |
+| `OPENCODE_CONFIG_DIR` holding a hosted provider's `options.apiKey` loads it with none of its variables set; a model entry there adds the model to `opencode models`            | § 20                       |
 
 The first contradiction changes § 8: once project config is disabled, which it
 must be (a repository must not grant itself permissions, plugins or providers),
@@ -198,15 +204,14 @@ has opted in.
 | safety plugin              | #1635, #1640  |
 | endpoint policy            | #1678, #1679  |
 | stage limits               | #1630         |
-| version policy             | #1613, #1627  |
 
 - **Removal.** #1643 deletes the enable check once the list is empty and
   § 23's beta criteria hold. Nothing else removes it.
 - **Cap recovery.** `AdapterUsableForCapHop("opencode")` stays `false` while
   the gate is closed, so a capped run never hops onto an adapter that would
-  refuse the dispatch. Today that holds because the doctor has no `opencode`
-  spec; #1627 adds one and must keep the verdict `false` while the gate is
-  closed. `TestOpenCodeIsNeverACapHopTargetWhileGated` pins it.
+  refuse the dispatch. The doctor's `opencode` row (#1627) reports the closed
+  gate as its one blocking finding and runs no other check.
+  `TestOpenCodeIsNeverACapHopTargetWhileGated` pins it.
 - **Stream parsing.** #1624 gives `opencode` its own parser: it sums every
   `step_finish`'s tokens, folds in the usage of subagent sessions (§ 22), and
   puts the served model (§ 1, § 2), the CLI's version and drift markers on the
@@ -403,8 +408,9 @@ Admission is the `-m` shape check and the provider key (#1625): a key must be
 a declared endpoint id or a provider in OpenCode's bundled catalog, because
 any other key could only be defined by a config Nightgauge does not build
 (§ 1, § 7), and a platform provider's key is refused (§ 17). Endpoint
-readiness (#1646, #1678), the refusal of an Ollama cloud model on an endpoint
-(§ 3, #1679) and the doctor (#1627) come later.
+readiness at dispatch (#1646) and per declared endpoint (#1678), and the
+refusal of an Ollama cloud model on an endpoint (§ 3, #1679), come later; the
+doctor (#1627) probes one endpoint per call so both can reuse it.
 
 ### 6. The agentic gate and #521
 
@@ -436,7 +442,7 @@ Endpoint URLs must never be committed.
 
 ```yaml
 opencode:
-  binary: opencode # binary pin: a command on PATH or an absolute path; § 20 checks it
+  binary: /opt/opencode/bin/opencode # binary pin: an absolute path, never looked up on PATH; § 20
   inherit_user_config: false # the default; § 8
   model: lmstudio/qwen/qwen3.8-27b # used when a stage's model names no provider (#1614)
   endpoints:
@@ -703,7 +709,10 @@ reports it `non_loopback: true`, as it does every hosted provider's model.
   `PrepareOpenCodeRun`, which builds the run's config and environment from
   the same read of the machine-tier block, so the opt-in can never read as on
   for the refusal and off for the environment; `nightgauge opencode config`
-  runs it too.
+  runs it too. The doctor's `opencode` row blocks on each, naming what it
+  found, through `OpenCodeMachineConfigRefusals`, which makes the same two
+  checks on the same inputs, so cap recovery never hops onto a machine that
+  refuses every dispatch (#1627).
 - **`inherit_user_config`** defaults to `false`: the operator's global
   OpenCode config is not read. The way to turn it on is
   `opencode.inherit_user_config: true` in the machine tier (§ 7), which a
@@ -1173,9 +1182,10 @@ the enabled-dispatch warning's project-config tamper-gate line names them.
 
 `nightgauge doctor` reports a subscription or OAuth login for `anthropic` in
 either source of OpenCode's stored logins as a finding (#1627): `auth.json` in
-the operator's OpenCode data directory, and `OPENCODE_AUTH_CONTENT` in the
-environment the doctor runs in. For both it reads only each entry's `type`,
-never a credential value, and it prints neither source's content. The finding
+the operator's OpenCode data directory and `OPENCODE_AUTH_CONTENT` in the
+environment the doctor runs in, and also the `auth.json` of any run root that
+holds one. For each it reads only each entry's `type`, never a credential
+value, and it prints no source's content. The finding
 says that a pipeline run never uses the login and that an `anthropic/*` stage
 through OpenCode needs `ANTHROPIC_API_KEY`. Its remediation names
 `claude-headless`, the adapter that runs Claude Code under the login Claude
@@ -1225,15 +1235,49 @@ allowed is not needed.
 ### 20. Version policy
 
 The compat manifest (#1613) is the single source for the floor and the
-max-tested version; the doctor (#1627) and `PreDispatch` enforce it.
+max-tested version; the doctor (#1627) and `PreDispatch` enforce it, through
+the same functions (`internal/execution/adapters/opencode_preflight.go`). A
+refusal is `adapter_incompatible`: it names the installed version and the
+manifest's, and its remediation is the managed install,
+`npm i --prefix ~/.nightgauge/tools/opencode opencode-ai@<max-tested>`, with a
+`binary` pin (§ 7) to what it installs.
 
+- **The binary.** `opencode.binary` pins the binary a dispatch checks and
+  spawns and the doctor checks; without it the `opencode` on PATH is used. A
+  pin is the absolute path of an executable file. A relative one, a bare
+  command name included, is refused and never looked up on PATH: a pin exists
+  so the binary cannot move under the pipeline, as a PATH install does when
+  OpenCode's TUI updates itself. Every probe of the binary runs in a throwaway
+  directory that is its `HOME`, `TMPDIR` and four XDG directories, with no
+  credential, under a 20 s timeout that kills its process group. The directory
+  is in no git repository, so OpenCode would read `opencode.json`, `.opencode`
+  and their plugins from every directory above it, a world-writable `/tmp`
+  included. A probe checks the per-run config alone, so every probe sets
+  `OPENCODE_DISABLE_PROJECT_CONFIG=1`.
 - **Floor: 1.18.30**, the version every observation here was made on. Below
-  it, dispatch fails closed with remediation.
-- **Max-tested: 1.18.30.** Above it, dispatch warns and runs a self-test once
-  per machine and version before the first dispatch. The self-test is the
-  observation method above: a loopback stub provider checks stdin delivery,
-  the `--format json` event types, `ask` auto-rejection, the absence of a TCP
-  listener, and the project-config switch. A failed self-test refuses dispatch.
+  it, or with a version that cannot be read, dispatch fails closed before
+  anything is created.
+- **Max-tested: 1.18.30.** Above it, dispatch warns and runs a self-test before
+  the first stage on each binary, version and per-run config, and records a
+  pass under `~/.nightgauge/opencode/self-test/`, so no later stage repeats it.
+  The self-test checks the per-run config and the argv without a model call:
+  `opencode debug config` under the `OPENCODE_CONFIG_CONTENT` the builder makes
+  for the stage must exit 0 and print a merged config that holds every key the
+  content sets, with its value, and `opencode run --help`, which 1.18.30
+  prints on stderr, must define every flag `BuildCommand` emits and list each
+  value it passes among the option's choices. A failure refuses the stage.
+  The behavioural checks of the observation method above (stdin delivery, the
+  `--format json` event types, `ask` auto-rejection, the absence of a TCP
+  listener and the project-config switch) need a model endpoint, so they are
+  #1639's scheduled canary against the newest release rather than a
+  dispatch-time check.
+- **Why the self-test compares keys.** #1627 assumed that `debug config` exits
+  non-zero on an unknown key. Observed on 1.18.30
+  (`internal/doctor/testdata/opencode-capture/`), it exits 1 on a value of the
+  wrong type in `OPENCODE_CONFIG_CONTENT`, and exits 0 on an unknown top-level
+  key, which it drops without a word. A version that stopped accepting a key
+  Nightgauge sets would pass on the exit code alone, so the self-test also
+  requires every key in the merged output.
 - **Endpoints stop at max-tested.** The self-test cannot re-check the reserved
   endpoint ids or the `lmstudio` exception (§ Endpoints). Which provider keys a
   binary bundles and which keys its custom loaders claim are read from its
@@ -1242,11 +1286,32 @@ max-tested version; the doctor (#1627) and `PreDispatch` enforce it.
   endpoint, or the `lmstudio` or `ollama` key of § 1) is therefore refused
   before spawn, and no endpoint block is written into any run's config. The
   refusal names the installed version and max-tested, and its remediation is a
-  `binary` pin (§ 7) to a max-tested build. Hosted dispatch continues under the
+  `binary` pin to a max-tested build. Hosted dispatch continues under the
   warning and self-test above.
+- **Drift.** Every dispatch that passes records the binary and version it was
+  checked against in `~/.nightgauge/opencode/last-dispatch.json`, and the
+  doctor warns when the binary it resolves now reports another version.
+- **The doctor's catalog probe.** The doctor runs `opencode models` under the
+  per-run config for `opencode.model`. For a declared endpoint's model and an
+  `anthropic` model the config writes the model's own entry, so the listing
+  holds it by construction and shows only that the binary loads the config;
+  the row says so. Any other hosted provider is listed only when one of its
+  variables is set, so the probe sets each one the doctor's environment
+  holds, and a dispatch keeps, to a placeholder, never to the credential, and
+  lists what a dispatch would. When the environment holds none of them, the
+  row blocks and names them, because a stage would find no model either.
+  With `inherit_user_config` on (§ 8) the listing is not a dispatch's: a
+  dispatch also reads the operator's own OpenCode config, and a probe reads
+  none of the operator's OpenCode state. Observed on 1.18.30, a lower config
+  layer holding such a provider's `options.apiKey` loads it with none of its
+  variables set, and one holding a model entry for it adds the model to the
+  listing. So with the opt-in, a listing that lacks the model, empty or not,
+  is a warning that says the probe left that config out, never a block.
 - Raising max-tested re-captures `testdata/opencode-cli/`, the reserved
-  endpoint ids and the `lmstudio` exception (§ Endpoints) included, in the same
-  change.
+  endpoint ids and the `lmstudio` exception (§ Endpoints) included, and
+  `internal/doctor/testdata/opencode-capture/`, in the same change, and
+  re-reads the catalog snapshots `openCodeCatalogVersion` names:
+  `TestOpenCodeCatalogSnapshotIsTheMaxTestedVersion` fails until it matches.
 
 ### 21. Capability spine
 
