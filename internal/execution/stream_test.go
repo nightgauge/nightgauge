@@ -1397,16 +1397,16 @@ esac
 	return acc, result, string(calls)
 }
 
-// openCodeStageCost models ADR-022 § 3's intended stamp: it prices a replayed
-// stage by the provider its RunResult records (ModelProvider, ServedModel),
-// never by the adapter (ADR-022 § 1). Under that rule a local provider's model
-// the registry holds no rate for is a stamped zero, and a registry id is
-// priced from the registry's rate card. It is not the production call: the
-// scheduler prices by the adapter, "opencode", which leaves a local model's
-// stage record unstamped. The record is stamped this way only once #1630
-// lands.
+// openCodeStageCost models ADR-022 § 3's stamp: it prices a replayed stage by
+// the provider its RunResult records (ModelProvider, ServedModel), never by
+// the adapter (ADR-022 § 1). Under that rule a local provider's model the
+// registry holds no rate for is a stamped zero, and a registry id is priced
+// from the registry's rate card. It is not the production call: the scheduler
+// passes the adapter, "opencode", with the served model's recorded form, and
+// reads the serving provider from that form. Asserting the production stamp
+// against these captures is #1745.
 func openCodeStageCost(r *adapters.RunResult) (float64, bool) {
-	return tokens.CalculateCostForAdapter(r.ModelProvider, r.ServedModel, tokens.TokenCounts{
+	return tokens.CalculateCostFor(r.ModelProvider, r.ServedModel, tokens.TokenCounts{
 		Input: r.InputTokens, Output: r.OutputTokens, CacheRead: r.CacheReadTokens,
 		CacheCreation5m: r.CacheCreation5mTokens, CacheCreation1h: r.CacheCreation1hTokens,
 	})
@@ -1426,8 +1426,7 @@ var openCodeLocalSteps = []openCodeStepTruth{
 // parser's totals are the README's sums of the three step_finish events,
 // reasoning folded into output; the session's export total equals them; and
 // the stage, served by provider lm-studio, is a stamped zero under ADR-022
-// § 3's rule (openCodeStageCost; the stage record is stamped only once #1630
-// lands).
+// § 3's rule (openCodeStageCost).
 func TestParseOpenCodeRealCaptureLocal(t *testing.T) {
 	const name = "opencode_stream_local_capture.jsonl"
 	checkOpenCodeCapture(t, name, openCodeLocalSteps)
