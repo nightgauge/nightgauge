@@ -177,6 +177,14 @@ type StageRunResult struct {
 	// never feed routing, sticky downgrades, or retries.
 	// See docs/FAILURE_TAXONOMY.md § Model Refusal Fallback.
 	ServedModel string
+	// ModelProvider, UpstreamModel and Endpoint are the ADR-022 § 2 identity
+	// a multi-provider adapter (opencode) reports beside ServedModel, which
+	// is then the served model's recorded form: the provider that served it,
+	// the model dispatched on -m, and the id of the declared endpoint that
+	// served it (adapters.RunResult). Attribution only, like ServedModel.
+	ModelProvider string
+	UpstreamModel string
+	Endpoint      string
 	// ServedEffort/ServedThinking are the envelope analogues of ServedModel
 	// (#606, mirroring the #91 flow): what the executor's last-mile
 	// translation ACTUALLY dispatched — the codex reasoning vocabulary value,
@@ -588,8 +596,11 @@ func cliRunResultToStageResult(result *adapters.RunResult) *StageRunResult {
 		InputTokens:  result.InputTokens,
 		OutputTokens: result.OutputTokens,
 		// #91 served-model attribution, tracked by the execution manager's
-		// stream reader.
+		// stream reader, and a multi-provider adapter's ADR-022 § 2 identity.
 		ServedModel:             result.ServedModel,
+		ModelProvider:           result.ModelProvider,
+		UpstreamModel:           result.UpstreamModel,
+		Endpoint:                result.Endpoint,
 		RefusalFallbackFrom:     result.RefusalFallbackFrom,
 		RefusalFallbackTo:       result.RefusalFallbackTo,
 		RefusalFallbackCategory: result.RefusalFallbackCategory,
@@ -5634,6 +5645,13 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// request-or-served value servedModel computes.
 		if result != nil {
 			runtime.RecordStageServedModel(stage, result.ServedModel)
+			// A multi-provider adapter's stage also records the provider that
+			// served it, the -m it was dispatched with and its endpoint
+			// (ADR-022 § 2): once servedModel re-records the model below, the
+			// upstream model is the only record of what was dispatched.
+			runtime.RecordStageModelIdentity(stage, state.StageModelIdentity{
+				Provider: result.ModelProvider, Upstream: result.UpstreamModel, Endpoint: result.Endpoint,
+			})
 			// #606 served-envelope attribution, mirroring the servedModel flow
 			// exactly: the raw executor report lands on the served_* fields,
 			// and the requested-value fields are re-recorded onto the served
@@ -5867,7 +5885,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 						// 5m per the CalculateCost convention. Per-stage 5m/1h split
 						// is #390. Adapter-aware (#585): prices at the serving
 						// provider's rates, not an anthropic default.
-						anomalyCost, _ = tokens.CalculateCostForAdapter(adapterName, servedModel, tokens.TokenCounts{
+						anomalyCost, _ = tokens.CalculateCostFor(adapterName, servedModel, tokens.TokenCounts{
 							Input: inputTokens, Output: outputTokens, CacheRead: cacheReadTokens,
 							CacheCreation5m: cacheCreationTokens,
 						})
@@ -6109,7 +6127,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				// per the CalculateCost convention. Per-stage 5m/1h split is #390.
 				// Adapter-aware (#585): prices at the serving provider's rates,
 				// not an anthropic default.
-				stageCostForCb, _ = tokens.CalculateCostForAdapter(adapterName, servedModel, tokens.TokenCounts{
+				stageCostForCb, _ = tokens.CalculateCostFor(adapterName, servedModel, tokens.TokenCounts{
 					Input: inputTokens, Output: outputTokens, CacheRead: cacheReadTokens,
 					CacheCreation5m: cacheCreationTokens,
 				})
@@ -7106,7 +7124,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// the CalculateCost convention. Per-stage 5m/1h split is #390.
 			// Adapter-aware (#585): prices at the serving provider's rates, not
 			// an anthropic default.
-			stageCost, _ = tokens.CalculateCostForAdapter(adapterName, model, tokens.TokenCounts{
+			stageCost, _ = tokens.CalculateCostFor(adapterName, model, tokens.TokenCounts{
 				Input: inputTokens, Output: outputTokens, CacheRead: cacheReadTokens,
 				CacheCreation5m: cacheCreationTokens,
 			})

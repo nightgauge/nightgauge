@@ -1089,4 +1089,29 @@ describe("ExecutionHistory Schemas", () => {
       expect(badThinking.success).toBe(false);
     });
   });
+
+  // Go's V2ModelSelect writes the ADR-022 § 2 identity of an opencode stage's
+  // served model beside `model`; the reader keeps all three instead of
+  // stripping them.
+  describe("model_selection multi-provider identity (#1630)", () => {
+    it("keeps model_provider, upstream_model and endpoint", () => {
+      const result = HistoryStageDetailSchema.safeParse({
+        status: "complete",
+        model_selection: {
+          model: "lm-studio/qwen/qwen3.8-27b",
+          source: "scheduler",
+          adapter: "opencode",
+          model_provider: "lm-studio",
+          upstream_model: "lmstudio/qwen/qwen3.8-27b",
+          endpoint: "lmstudio",
+        },
+      });
+      expect(result.success ? null : result.error.issues).toBeNull();
+      expect(result.success && result.data.model_selection).toMatchObject({
+        model_provider: "lm-studio",
+        upstream_model: "lmstudio/qwen/qwen3.8-27b",
+        endpoint: "lmstudio",
+      });
+    });
+  });
 });

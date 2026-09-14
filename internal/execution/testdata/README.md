@@ -591,10 +591,10 @@ The session's export: `info.tokens` 17365 input, 144 output, 47 reasoning,
 no cache; `info.cost` 0; served by `lmstudio` / `qwen/qwen3.8-27b`. The stage
 records 17365 input and 191 output (reasoning folded in), provider
 `lm-studio`. Priced from that provider and served model, as ADR-022 § 3
-intends, the stage is a stamped zero. The stage record is not stamped yet: the
-scheduler still prices by the adapter, `opencode`, which resolves no rate for
-this model, so the record stays unstamped until #1630 lands. The tests check
-ADR-022 § 3's rule, not the record.
+requires, the stage is a stamped zero. The scheduler reads the same provider
+from the served model's recorded form, so the stage record is stamped the same
+way. The tests check ADR-022 § 3's rule; asserting the record against these
+captures is #1745.
 
 `opencode_stream_remote_capture.jsonl` (glob, read, edit, grep, stop),
 captured 2026-09-14 on the `lmstudio-remote` endpoint:

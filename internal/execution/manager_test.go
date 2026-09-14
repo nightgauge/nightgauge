@@ -889,7 +889,7 @@ func TestOpenCodeDispatchRefusedUntilEnabled(t *testing.T) {
 		if !strings.Contains(stderr, warningHeader) {
 			t.Errorf("stderr lacks the warning line %q:\n%s", warningHeader, stderr)
 		}
-		for _, control := range []string{"stream parsing", "stage limits", "permission map", "safety plugin"} {
+		for _, control := range []string{"subagent cost", "stage limits", "permission map", "safety plugin"} {
 			if !strings.Contains(stderr, "[opencode]   - "+control+": ") {
 				t.Errorf("warning does not list the %q control:\n%s", control, stderr)
 			}

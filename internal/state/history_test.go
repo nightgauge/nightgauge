@@ -794,6 +794,95 @@ func TestBuildV2Record_ModelSelectionEffortEnvelope(t *testing.T) {
 	}
 }
 
+// TestBuildV2Record_ModelIdentity: a stage of a multi-provider adapter
+// records the ADR-022 § 2 identity of the model that served it on its
+// model_selection, as model_provider, upstream_model and endpoint, so a
+// local consumer reads the provider from the record. A stage with no
+// identity carries none of the three keys.
+func TestBuildV2Record_ModelIdentity(t *testing.T) {
+	rs := NewRuntimeState("nightgauge/nightgauge", 1630, "item-1630", testRunID())
+	rs.BeginStage(StageFeaturePlanning)
+	rs.RecordStageModel(StageFeaturePlanning, "claude-sonnet-5")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 50}, "claude-sonnet-5", "claude")
+	rs.BeginStage(StageFeatureDev)
+	rs.RecordStageModel(StageFeatureDev, "lm-studio/qwen/qwen3.8-27b")
+	rs.RecordStageAdapter(StageFeatureDev, "opencode")
+	rs.RecordStageModelIdentity(StageFeatureDev, StageModelIdentity{})
+	rs.RecordStageModelIdentity(StageFeatureDev, StageModelIdentity{
+		Provider: "lm-studio", Upstream: "lmstudio/qwen/qwen3.8-27b", Endpoint: "lmstudio",
+	})
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 50}, "lm-studio/qwen/qwen3.8-27b", "opencode")
+
+	record := NewHistoryWriter(t.TempDir()).BuildV2Record(rs, true, "", V2RunInput{}, time.Now())
+	data, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw struct {
+		Stages map[string]struct {
+			ModelSelection map[string]any `json:"model_selection"`
+		} `json:"stages"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	dev := raw.Stages[string(StageFeatureDev)].ModelSelection
+	for key, want := range map[string]string{
+		"model": "lm-studio/qwen/qwen3.8-27b", "model_provider": "lm-studio",
+		"upstream_model": "lmstudio/qwen/qwen3.8-27b", "endpoint": "lmstudio",
+	} {
+		if got, _ := dev[key].(string); got != want {
+			t.Errorf("feature-dev model_selection.%s = %q, want %q", key, got, want)
+		}
+	}
+	planning := raw.Stages[string(StageFeaturePlanning)].ModelSelection
+	for _, key := range []string{"model_provider", "upstream_model", "endpoint"} {
+		if v, ok := planning[key]; ok {
+			t.Errorf("feature-planning model_selection carries %s = %v, want no key", key, v)
+		}
+	}
+}
+
+// TestRecordStageModelIdentity_ClearedByAdapterHop: an opencode stage that
+// cap recovery re-runs on claude reports a zero identity, and the stage's
+// record then carries none: the lm-studio provider of the run it replaced
+// is not kept beside claude's model.
+func TestRecordStageModelIdentity_ClearedByAdapterHop(t *testing.T) {
+	rs := NewRuntimeState("nightgauge/nightgauge", 1630, "item-1630", testRunID())
+	rs.BeginStage(StageFeatureDev)
+	rs.RecordStageAdapter(StageFeatureDev, "opencode")
+	rs.RecordStageModelIdentity(StageFeatureDev, StageModelIdentity{
+		Provider: "lm-studio", Upstream: "lmstudio/qwen/qwen3.8-27b", Endpoint: "lmstudio",
+	})
+	rs.RecordStageAdapter(StageFeatureDev, "claude")
+	rs.RecordStageModel(StageFeatureDev, "claude-sonnet-5")
+	rs.RecordStageModelIdentity(StageFeatureDev, StageModelIdentity{})
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 50}, "claude-sonnet-5", "claude")
+
+	if got := rs.StageModelIdentityOf(StageFeatureDev); got != (StageModelIdentity{}) {
+		t.Errorf("identity after the hop = %+v, want none", got)
+	}
+	record := NewHistoryWriter(t.TempDir()).BuildV2Record(rs, true, "", V2RunInput{}, time.Now())
+	data, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw struct {
+		Stages map[string]struct {
+			ModelSelection map[string]any `json:"model_selection"`
+		} `json:"stages"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	dev := raw.Stages[string(StageFeatureDev)].ModelSelection
+	for _, key := range []string{"model_provider", "upstream_model", "endpoint"} {
+		if v, ok := dev[key]; ok {
+			t.Errorf("feature-dev model_selection carries %s = %v after the hop to claude, want no key", key, v)
+		}
+	}
+}
+
 // TestBuildV2Record_ServedEffortOpenVocabulary pins the PRODUCER half of the
 // served-envelope vocabulary contract (#612's "minor asymmetries" gap): Go
 // records and emits whatever rung the executor actually reported, verbatim,
@@ -1251,12 +1340,12 @@ func TestBuildV2Record_StampedStageDoesNotCarryCostUnstamped(t *testing.T) {
 
 // TestCompleteStage_CostSourceMatchesStampedness (Issue #682) pins
 // RuntimeState.CompleteStage's cost_source decision directly against the
-// exact stamped bool CalculateCostForAdapter returned — the same value that
+// exact stamped bool CalculateCostFor returned — the same value that
 // already decides CostUnstamped, so the two fields can never disagree about
 // whether an occurrence was priced.
 func TestCompleteStage_CostSourceMatchesStampedness(t *testing.T) {
 	// grok/sonnet resolves against the pricing registry for a NON-Claude
-	// adapter (see TestCalculateCostForAdapter_PinsRun01a007d5Regression) —
+	// adapter (see TestCalculateCostFor_PinsRun01a007d5Regression) —
 	// exactly the case #682 exists to make reachable: a rate-card-derived,
 	// not vendor-reported, cost.
 	rs := NewRuntimeState("nightgauge/nightgauge", 682, "item-682-computed", testRunID())
@@ -1271,7 +1360,7 @@ func TestCompleteStage_CostSourceMatchesStampedness(t *testing.T) {
 		t.Error("CostUnstamped = true, want false — grok/sonnet resolves cleanly")
 	}
 
-	// An unresolvable (provider, model) pair: CalculateCostForAdapter returns
+	// An unresolvable (provider, model) pair: CalculateCostFor returns
 	// stamped=false, so CostSource must read "unknown", not "computed".
 	rs2 := NewRuntimeState("nightgauge/nightgauge", 682, "item-682-unknown", testRunID())
 	rs2.BeginStage(StageFeatureDev)

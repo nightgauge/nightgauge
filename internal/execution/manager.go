@@ -500,11 +500,23 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	// are redacted decoded as well as escaped; and a line over the scanner's
 	// limit is dropped with a drift marker instead of ending the read, its
 	// ends still read for a notice.
+	//
+	// Its cost watchdog (ADR-022 § 3) re-prices the stage from the model
+	// registry on every step_finish and stops the stage once that passes
+	// RunOptions.CostBudget, since OpenCode takes no cost cap of its own; the
+	// subagent sessions the stream never carries are priced in once the stage
+	// has ended. The model is the value BuildCommand passed as -m: the model
+	// check before dispatch refused any model it would not pass.
 	redactOut := func(b []byte) []byte { return redactLine(redact, b) }
 	var openCode *openCodeRun
+	var openCodeModel string
+	var costCap *openCodeCostWatchdog
 	if streamFmt == StreamFormatOpenCode {
 		openCode = newOpenCodeRun(tokenAcc.OpenCode(), runOpts.AllowedTools)
 		redactOut = openCodeOutputRedactor(redact)
+		openCodeModel, _ = adapters.OpenCodeModelArg(runOpts.Model)
+		costCap = newOpenCodeCostWatchdog(openCodeModel, runOpts.CostBudget, os.Stderr,
+			fmt.Sprintf("%s#%d %s", opts.Repo, opts.IssueNumber, opts.Stage))
 	}
 	eachLine := func(r io.Reader, name string, onLine func([]byte), onOversize func(head, tail []byte)) {
 		if openCode != nil {
@@ -546,7 +558,11 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 			stdoutBuf = append(stdoutBuf, '\n')
 			lineStr := string(line)
 			// Parse NDJSON for token usage (adapter-specific format)
-			event, _ := tokenAcc.ParseLine(streamFmt, lineStr)
+			event, stepAdded := tokenAcc.ParseLine(streamFmt, lineStr)
+			if stepAdded && costCap.observe(tokenAcc) {
+				fmt.Fprintf(os.Stderr, "%s#%d %s: %s\n", opts.Repo, opts.IssueNumber, opts.Stage, costCap.notice())
+				costCap.stop(cmd.Process, execution.done)
+			}
 			// Track the serving model; a refusal fallback gets one observable
 			// log line the moment it fires (#91).
 			if fb := modelTracker.Observe(event); fb != nil {
@@ -608,6 +624,11 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 
 	// Wait for output to drain, then wait for process
 	wg.Wait()
+	// A stage the cost watchdog stopped ends its stderr with the marker
+	// failure classification reads, added once both readers are done.
+	if costCap != nil && costCap.fired {
+		keepStderr([]byte(costCap.notice()))
+	}
 	err = cmd.Wait()
 	// Signal waitForExit callers (CancelWithGrace/StopExecution) that the
 	// process is reaped, THIS function is the one that reaped it — closing
@@ -648,25 +669,35 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	// than the worktree, and not at all once the operator stopped the stage.
 	var openCodeDone *openCodeOutcome
 	if openCode != nil {
-		// The value BuildCommand passed as -m; the model check before
-		// dispatch refused any model it would not pass.
-		dispatched, _ := adapters.OpenCodeModelArg(runOpts.Model)
 		exit := openCodeExit{
 			bin:        cmd.Path,
 			env:        cmd.Env,
 			runRoot:    os.TempDir(),
 			exitCode:   -1,
-			dispatched: dispatched,
+			dispatched: openCodeModel,
 			stopped:    execution.stopRequested.Load(),
 		}
 		if runOpts.RunRoot != nil && runOpts.RunRoot.Dir != "" {
 			exit.runRoot = runOpts.RunRoot.Dir
+		}
+		if runOpts.RunRoot != nil {
+			exit.endpoints = runOpts.RunRoot.Endpoints
 		}
 		if cmd.ProcessState != nil {
 			exit.exitCode = cmd.ProcessState.ExitCode()
 		}
 		done := openCode.finish(ctx, exit, tokenAcc)
 		openCodeDone = &done
+		// The fold added the subagent sessions' usage, which the stream never
+		// carried: a stage they took past its cost budget fails too. So does a
+		// stage that would otherwise succeed but whose subagent usage was only
+		// partly read, since its budget cannot be verified; one the operator
+		// stopped read none of it by design and is cancelled, not failed.
+		unread := done.partial && !exit.stopped && exit.exitCode == 0 && done.marker == ""
+		if costCap.settle(tokenAcc, unread) {
+			fmt.Fprintf(os.Stderr, "%s#%d %s: %s\n", opts.Repo, opts.IssueNumber, opts.Stage, costCap.notice())
+			keepStderr([]byte(costCap.notice()))
+		}
 	}
 	result := runResultFromAccumulator(string(stdoutBuf), string(stderrBuf), tokenAcc, modelTracker)
 	if openCodeDone != nil {
@@ -700,6 +731,12 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 		default:
 			return result, fmt.Errorf("wait: %w", err)
 		}
+	}
+	// A stage stopped at its cost budget failed, even when it exited 0 on the
+	// SIGTERM, and so did one its subagents took past it or whose subagent
+	// usage was only partly read.
+	if costCap != nil && costCap.fired && result.ExitCode == 0 {
+		result.ExitCode = 1
 	}
 
 	if opts.Streamer != nil {

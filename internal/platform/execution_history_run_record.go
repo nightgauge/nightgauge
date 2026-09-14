@@ -114,6 +114,13 @@ type ExecutionHistoryStageMetric struct {
 	// no omitempty — a nil pointer must still serialize the key as `null`
 	// ("provider unknown"), never be dropped.
 	Provider *string `json:"provider"`
+	// ModelProvider is the provider that served the stage's model, for a
+	// multi-provider adapter whose Provider is the adapter on every run
+	// (ADR-022 § 2): "lm-studio", "anthropic", "other". It is set for an
+	// opencode stage only. The platform's strict stage schema accepts it as
+	// optional and nullable, so it is omitted when unset and a stage of any
+	// other adapter is sent unchanged.
+	ModelProvider *string `json:"modelProvider,omitempty"`
 	// ExecutionPath, ModelEffort, and ModelReasoning mirror V2StageDetail's
 	// fields of the same name (internal/state/history.go) verbatim — no
 	// fallback to Model/Provider when absent. Like Provider they are

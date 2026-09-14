@@ -269,6 +269,13 @@ type RuntimeState struct {
 	// #299/#397 empty-means-undetermined convention — never a guess.
 	StageServedModels map[string]string `json:"stageServedModels,omitempty"`
 
+	// StageModelIdentities captures, for each stage of a multi-provider
+	// adapter, the ADR-022 § 2 identity of the model that served it, as the
+	// executor reported it for the stage's latest result
+	// (adapters.RunResult.ModelProvider, UpstreamModel and Endpoint).
+	// BuildV2Record projects it onto V2ModelSelect.
+	StageModelIdentities map[string]StageModelIdentity `json:"stageModelIdentities,omitempty"`
+
 	// StageEfforts captures the EFFORT_LEVELS rung actually in force for each
 	// stage's dispatch, when Go has direct, first-party evidence of it (Issue
 	// #580). Today that evidence exists only for the grok-family adapters'
@@ -503,7 +510,7 @@ type StageResult struct {
 	// adapter's provider/model could not be resolved against the registry, so
 	// CostUSD is a placeholder 0 rather than a fabricated price (#585). Never
 	// set for the local-provider (ollama/lm-studio) $0, which is a genuine,
-	// intentional cost — see tokens.CalculateCostForAdapter — and never for
+	// intentional cost — see tokens.CalculateCostFor — and never for
 	// the deterministic $0 of a stage that dispatched no model at all (#890),
 	// which is genuine in exactly the same sense and is labeled
 	// CostSourceDeterministic instead.
@@ -854,7 +861,7 @@ func (rs *RuntimeState) BeginStage(stage PipelineStage) {
 // pricing, byte-identical for any caller not yet carrying adapter context.
 // If the (adapter's provider, model) pair cannot be resolved, cost is
 // recorded as explicitly unstamped rather than a fabricated $0 or another
-// provider's rate — see tokens.CalculateCostForAdapter.
+// provider's rate — see tokens.CalculateCostFor.
 //
 // counts carries every billable pool (#358): taking input/output alone here
 // while the caller's other cost path prices cache would produce two different
@@ -875,9 +882,9 @@ func (rs *RuntimeState) CompleteStage(exitCode int, counts tokens.TokenCounts, m
 	rs.closeRunningPhasesLocked(rs.Stage)
 
 	counts = rs.consumeCurrentStageTokenCountsLocked(counts)
-	cost, stamped := tokens.CalculateCostForAdapter(adapter, model, counts)
+	cost, stamped := tokens.CalculateCostFor(adapter, model, counts)
 	// stamped mirrors !CostUnstamped exactly (both come from the same
-	// CalculateCostForAdapter call) — so CostSource and CostUnstamped can
+	// CalculateCostFor call) — so CostSource and CostUnstamped can
 	// never disagree about whether this occurrence was priced (#682).
 	costSource := CostSourceComputed
 	if !stamped {
@@ -886,7 +893,7 @@ func (rs *RuntimeState) CompleteStage(exitCode int, counts tokens.TokenCounts, m
 	// A stage that dispatched NO model is not an unpriceable stage (#890).
 	// No model name and not one billable token means nothing was sent to any
 	// provider: the deterministic bookends and the deterministic execution
-	// paths of pr-create / pr-merge all land here. CalculateCostForAdapter
+	// paths of pr-create / pr-merge all land here. CalculateCostFor
 	// still reports stamped=false for them, because ("", "") resolves against
 	// no rate card — but that is a lookup that never had anything TO find,
 	// not the registry miss CostUnstamped was built to flag. With every pool
@@ -1806,6 +1813,41 @@ func (rs *RuntimeState) RecordStageServedModel(stage PipelineStage, model string
 	rs.StageServedModels[string(stage)] = model
 }
 
+// StageModelIdentity is the ADR-022 § 2 identity of the model that served a
+// stage of a multi-provider adapter: the provider that served it, the model
+// dispatched on -m, and the id of the declared endpoint that served it.
+type StageModelIdentity struct {
+	Provider string `json:"provider,omitempty"`
+	Upstream string `json:"upstream,omitempty"`
+	Endpoint string `json:"endpoint,omitempty"`
+}
+
+// RecordStageModelIdentity records the identity the executor reported for a
+// stage's latest result, replacing any earlier one. A zero identity, which
+// every single-provider adapter reports, clears it, so a stage re-run on
+// another adapter, as cap recovery does, never keeps the identity of the
+// adapter it left.
+func (rs *RuntimeState) RecordStageModelIdentity(stage PipelineStage, id StageModelIdentity) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if id == (StageModelIdentity{}) {
+		delete(rs.StageModelIdentities, string(stage))
+		return
+	}
+	if rs.StageModelIdentities == nil {
+		rs.StageModelIdentities = make(map[string]StageModelIdentity)
+	}
+	rs.StageModelIdentities[string(stage)] = id
+}
+
+// StageModelIdentityOf returns the recorded identity of a stage, or the zero
+// identity when none was reported.
+func (rs *RuntimeState) StageModelIdentityOf(stage PipelineStage) StageModelIdentity {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	return rs.StageModelIdentities[string(stage)]
+}
+
 // StageServedModel returns the recorded served model id for a stage, or ""
 // when the stream never reported one.
 func (rs *RuntimeState) StageServedModel(stage PipelineStage) string {
@@ -2664,6 +2706,12 @@ func (rs *RuntimeState) snapshotLocked() *RuntimeState {
 		snap.StageServedModels = make(map[string]string, len(rs.StageServedModels))
 		for k, v := range rs.StageServedModels {
 			snap.StageServedModels[k] = v
+		}
+	}
+	if len(rs.StageModelIdentities) > 0 {
+		snap.StageModelIdentities = make(map[string]StageModelIdentity, len(rs.StageModelIdentities))
+		for k, v := range rs.StageModelIdentities {
+			snap.StageModelIdentities[k] = v
 		}
 	}
 	if len(rs.StageEfforts) > 0 {

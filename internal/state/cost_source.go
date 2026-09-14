@@ -19,9 +19,9 @@ const (
 	CostSourceNative = "native"
 
 	// CostSourceComputed is a cost derived from the rate-card pricing
-	// registry (tokens.CalculateCostForAdapter resolved the (provider, model)
+	// registry (tokens.CalculateCostFor resolved the (provider, model)
 	// pair). Written by RuntimeState.CompleteStage whenever
-	// CalculateCostForAdapter reports `stamped == true` — including the
+	// CalculateCostFor reports `stamped == true` — including the
 	// legitimate $0 for a local provider (ollama/lm-studio), which IS priced,
 	// just at a zero rate.
 	CostSourceComputed = "computed"
@@ -29,7 +29,7 @@ const (
 	// CostSourceUnknown marks a cost that could not be priced at all: the
 	// (provider, model) pair has no pricing-registry entry, so CostUSD is a
 	// placeholder 0 rather than a fabricated figure. Written by
-	// RuntimeState.CompleteStage whenever CalculateCostForAdapter reports
+	// RuntimeState.CompleteStage whenever CalculateCostFor reports
 	// `stamped == false` — mirrors CostUnstamped, which is set true on the
 	// same condition.
 	CostSourceUnknown = "unknown"
