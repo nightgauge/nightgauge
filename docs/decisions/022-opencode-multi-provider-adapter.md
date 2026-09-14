@@ -566,7 +566,12 @@ reports it `non_loopback: true`, as it does every hosted provider's model.
   fourth rule below), a declared endpoint's limits or base URL, the
   `anthropic` block's API root, or turn sharing back on. Pinning those keys
   does not pin the model actually served (see the fourth rule and § 15, § 17,
-  #1638). A lower layer can add keys the content does not set, and
+  #1638). Nor does winning a key pin a permission pattern map: observed by
+  #1632, the content wins each pattern's action but not its position, the
+  merged map keeps the key order of the lowest layer that has the key, and the
+  last matching rule wins, so a lower layer that lists the content's patterns
+  in another order changes what they resolve to (the results table below).
+  A lower layer can add keys the content does not set, and
   four merge rules needed more than setting a key. First, every merged
   `mode.<agent>` is merged over `agent.<agent>` after every layer and forced
   to `mode: "primary"`, so a lower layer's mode entry would win over the
@@ -731,13 +736,16 @@ reports it `non_loopback: true`, as it does every hosted provider's model.
   directory, which stays per run (§ 17). An API key written into the
   operator's config is inherited, and the stderr line says so.
 - **The target repository's `opencode.json`, `opencode.jsonc` and
-  `.opencode/**`.** `OPENCODE_DISABLE_PROJECT_CONFIG=1` is set on every spawn,
-  so OpenCode never loads them. Nightgauge reads them instead. Keys outside the
-  locked set are merged into the per-run config, and a locked key the
-  repository sets is dropped with a warning. The tamper gate records the files'
-  hashes when the worktree is created, and `PreDispatch` refuses a dispatch
-  when they have changed since, because a stage must not rewrite the config the
-  next stage runs under (#1638).
+  `.opencode/**`.** `OPENCODE_DISABLE_PROJECT_CONFIG=1` is the intended
+  control, so that OpenCode never loads them and Nightgauge reads them
+  instead, but it is not set on any spawn yet, so the repository's files
+  still load (see the adversarial results below). Keys outside the locked set
+  are meant to merge into the per-run config, and a locked key the repository
+  sets is meant to be dropped with a warning, once the switch is set. The
+  tamper gate records the files' hashes when the worktree is created, and
+  `PreDispatch` refuses a dispatch when they have changed since, because a
+  stage must not rewrite the config the next stage runs under. #1638 (with
+  #1626) sets the switch.
 - **Steering.** Observed: that switch also hides the repository's `AGENTS.md`
   and `CLAUDE.md`. The repository's steering therefore reaches OpenCode only as
   an `instructions` entry with an absolute path into the worktree, which was
@@ -746,11 +754,43 @@ reports it `non_loopback: true`, as it does every hosted provider's model.
   `AGENTS.md` has no content of its own.
 - **`--pure` is never passed.** It would also drop the Nightgauge plugin.
   Plugins are controlled by the per-run `plugin` list (the Nightgauge plugin
-  and nothing else) and `OPENCODE_DISABLE_DEFAULT_PLUGINS=1`.
+  and nothing else) and `OPENCODE_DISABLE_DEFAULT_PLUGINS=1`. Observed by
+  #1632, the per-run list controls them only while project config is
+  disabled: it is concatenated with the repository's list, and an empty
+  per-run list removes none of the repository's plugins, although
+  `opencode debug config` then reports `plugin: []`. Separately, and whatever
+  the plugin list or `--pure` says, every run starts a background npm install
+  of `@opencode-ai/plugin` into each config directory it loads, the run's own
+  XDG config directory always among them, and a run that loads a plugin waits
+  for it; § 10 lists the request.
 
-#1632's adversarial suite proves the merge: a repository config that sets
-permissions, plugins, providers, MCP servers or remote instructions changes
-nothing about a run.
+#### Adversarial results (#1632)
+
+`internal/execution/adapters/opencode_merge_contract_test.go` (build tag
+`opencode_integration`, run in CI against an exact install of 1.18.30) drives
+the binary with the repository-supplied fixtures in
+[`internal/execution/adapters/testdata/opencode-adversarial/`](../../internal/execution/adapters/testdata/opencode-adversarial/README.md)
+and asserts these answers. "Inline" is `OPENCODE_CONFIG_CONTENT`, the layer the
+per-run config uses; "project" is the repository's `opencode.json` and
+`.opencode/`.
+
+| #   | Question                                                                         | Observed on 1.18.30                                                                                                                                                                                                                                                                                                           |
+| --- | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Does `--pure` skip a project `.opencode/plugins/*.ts` file and `plugin[]` entry? | Yes, both: neither loads, and the npm plugin is never requested. Without it both load. `--pure` does not stop the background install of `@opencode-ai/plugin` every run starts (§ 10): a run with no plugin at all makes that registry request once it lives a few seconds.                                                   |
+| 2   | Does an inline `permission.bash` deny beat a project allow?                      | Yes for `bash: deny` over `bash: allow`, and for `{"rm -rf *": "deny"}` inline over `{"*": "allow"}`. No when the project lists the same patterns first: with `{"rm -rf *": "allow", "*": "allow"}` in the project and `{"*": "allow", "rm -rf *": "deny"}` inline, the merged order puts the deny first and `rm -rf x` runs. |
+| 3   | Do `plugin`, `instructions` and `mcp` concatenate or get replaced?               | `instructions` and `plugin` concatenate, the project's first; `mcp` merges by server name, the inline entry winning a name both set. An empty inline list removes nothing. A project `instructions` URL is fetched: with an empty inline list, the run requested it from a loopback stub before its model request.            |
+| 4   | Does a project `provider.<key>.options.baseURL` override the injected one?       | No: the inline `baseURL` wins, in the resolved config and in the request. A key the inline block does not set, such as a header, still comes from the project and is sent.                                                                                                                                                    |
+| 5   | Does config and rules discovery walk above the worktree root?                    | No. From a worktree at `<checkout>/.nightgauge/worktrees/<repo>-issue-<N>`, neither the checkout's `opencode.json`, `.opencode/` or `AGENTS.md` nor anything above it loads: discovery stops at the git root of its starting directory. Outside any git repository it walks up.                                               |
+| 6   | What does `OPENCODE_DISABLE_PROJECT_CONFIG` disable?                             | Every project key the fixture sets (`agent`, `permission`, `instructions`, `plugin`, `mcp`, `provider`), all of `.opencode/` (config, agents, commands, skills, plugins), the repository's `AGENTS.md`, and the loading of those plugins. An inline `instructions` entry with an absolute path still loads.                   |
+
+So a repository config that sets permissions, plugins, providers, MCP servers
+or instructions changes nothing about a run only while
+`OPENCODE_DISABLE_PROJECT_CONFIG=1` is set (row 6). Until every spawn sets it
+(#1626, #1638), the repository's config loads, and rows 2 to 4 are what it can
+do: reorder the per-run permission patterns; add plugins, MCP servers and
+instructions the per-run lists cannot remove, a remote `instructions` URL among
+them, which a run fetches before its model request; and add keys to an injected
+provider block. #1638 and #1635 build on these answers.
 
 ### 9. Headless posture
 
@@ -807,17 +847,18 @@ several lines, only the last ending in `); auto-rejecting`.
 
 ### 10. Egress defaults
 
-| Egress                                  | Pipeline default                                                                      |
-| --------------------------------------- | ------------------------------------------------------------------------------------- |
-| Session share                           | `share: "disabled"`, `OPENCODE_DISABLE_SHARE=1`, `--share` never emitted              |
-| Autoupdate                              | `autoupdate: false`, `OPENCODE_DISABLE_AUTOUPDATE=1`                                  |
-| Model-catalog fetch                     | `OPENCODE_DISABLE_MODELS_FETCH=1`; the registry prices, not the catalog               |
-| LSP server download                     | `OPENCODE_DISABLE_LSP_DOWNLOAD=1`                                                     |
-| Default plugins                         | `OPENCODE_DISABLE_DEFAULT_PLUGINS=1`                                                  |
-| Remote `instructions` and `skills.urls` | refused: only absolute paths inside the worktree or the per-run root                  |
-| `webfetch`                              | `deny` unless the stage's allowed tools include web fetch                             |
-| Web search                              | off; its enabling variable is stripped with every inherited `OPENCODE_*`              |
-| Session-title generation                | `agent.title.disable: true`, so no title request is sent; `small_model` locked (§ 15) |
+| Egress                                  | Pipeline default                                                                                                                                                       |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Session share                           | `share: "disabled"`, `OPENCODE_DISABLE_SHARE=1`, `--share` never emitted                                                                                               |
+| Autoupdate                              | `autoupdate: false`, `OPENCODE_DISABLE_AUTOUPDATE=1`                                                                                                                   |
+| Model-catalog fetch                     | `OPENCODE_DISABLE_MODELS_FETCH=1`; the registry prices, not the catalog                                                                                                |
+| LSP server download                     | `OPENCODE_DISABLE_LSP_DOWNLOAD=1`                                                                                                                                      |
+| Default plugins                         | `OPENCODE_DISABLE_DEFAULT_PLUGINS=1`                                                                                                                                   |
+| Remote `instructions` and `skills.urls` | refused: only absolute paths inside the worktree or the per-run root; until project config is disabled, a repository `instructions` URL is fetched (§ 8, #1638, #1644) |
+| `webfetch`                              | `deny` unless the stage's allowed tools include web fetch                                                                                                              |
+| Web search                              | off; its enabling variable is stripped with every inherited `OPENCODE_*`                                                                                               |
+| Session-title generation                | `agent.title.disable: true`, so no title request is sent; `small_model` locked (§ 15)                                                                                  |
+| Plugin dependency install               | none: every run starts an npm install of `@opencode-ai/plugin` (§ 8, #1644)                                                                                            |
 
 Every variable and config key named here appears in the 1.18.30 binary.
 Whether they stop the traffic they name is #1644's to prove.
@@ -957,7 +998,7 @@ the setting. A **locked** row cannot be turned back on from any config tier.
 | Model-catalog fetch                      | `OPENCODE_DISABLE_MODELS_FETCH=1`                                                                                  | privacy   | locked                                                                                                                |
 | LSP server download                      | `OPENCODE_DISABLE_LSP_DOWNLOAD=1`                                                                                  | security  | locked                                                                                                                |
 | Default and third-party plugins          | `OPENCODE_DISABLE_DEFAULT_PLUGINS=1`; `plugin` lists Nightgauge's only                                             | security  | locked                                                                                                                |
-| Repository project config                | `OPENCODE_DISABLE_PROJECT_CONFIG=1`; reviewed merge (§ 8)                                                          | security  | locked                                                                                                                |
+| Repository project config                | `OPENCODE_DISABLE_PROJECT_CONFIG=1`; reviewed merge (§ 8)                                                          | security  | locked; not set yet, so the repository's config still loads until #1638 (with #1626) (§ 8)                            |
 | Operator's global OpenCode config        | `inherit_user_config: false`; `~/.opencode` and managed config refused (§ 8)                                       | security  | overridable; locked keys win over all but managed config                                                              |
 | Session titles                           | `agent.title.disable: true` (§ 10)                                                                                 | privacy   | locked                                                                                                                |
 | A model other than the dispatched one    | `small_model`, every agent's `model`, and on an endpoint or `anthropic` the model's `id` and package, pinned       | security  | locked (`id`/`provider.npm`); `options.model`, `speed`/`fallbacks` and `mcpServers` still route around it until #1638 |
@@ -966,7 +1007,7 @@ the setting. A **locked** row cannot be turned back on from any config tier.
 | Operator's `~/.agents/skills`            | `OPENCODE_DISABLE_EXTERNAL_SKILLS=1` (§ 11)                                                                        | privacy   | locked                                                                                                                |
 | Other model services' credentials        | every variable the catalog binds to another model service removed; forge and cloud platform credentials kept (§ 8) | security  | locked                                                                                                                |
 | Provider base URLs from the environment  | `ANTHROPIC_BASE_URL` and `OPENAI_BASE_URL` removed (§ 8)                                                           | security  | locked                                                                                                                |
-| Remote `instructions` and `skills.urls`  | refused                                                                                                            | security  | locked                                                                                                                |
+| Remote `instructions` and `skills.urls`  | refused                                                                                                            | security  | locked; a repository `instructions` URL is still fetched until project config is disabled (§ 8, #1638)                |
 | Inherited `OPENCODE_*` variables         | stripped                                                                                                           | security  | locked                                                                                                                |
 | `webfetch`                               | `deny` unless the stage's allowed tools include it                                                                 | privacy   | overridable per stage, through allowed tools                                                                          |
 | `ask` permissions                        | never generated (§ 9)                                                                                              | security  | locked                                                                                                                |

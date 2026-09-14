@@ -10,11 +10,15 @@ package execution
 // Each case dispatches through Manager.RunStage, so the environment under test
 // is the one the manager composes for a real stage. A shim named opencode, first
 // on PATH, runs the real binary's `debug paths`, `debug config` and, after the
-// stage's own `run`, `session list`, all in that environment. The stage names
-// a model the catalog does not list under a hosted provider, so the run exits
-// 1 before any model request, and every opencode call runs with a throwaway
-// HOME: no network request is made and the operator's real config is never
-// read.
+// stage's own `run`, `session list`, all in that environment. Every other
+// call, such as the usage fold's `--version` after the stage, goes straight to
+// the real binary, so it cannot overwrite what the stage's environment
+// resolved. The stage names a model the catalog does not list under a hosted
+// provider, so the run exits 1 before any model request, and every opencode
+// call runs with a throwaway HOME and npm pointed at a closed loopback port,
+// because OpenCode installs plugin dependencies with npm: no request leaves
+// the machine and the operator's real config is never read. With CI=true a
+// missing binary fails every case rather than skipping it.
 
 import (
 	"context"
@@ -50,16 +54,25 @@ const openCodeInheritConfig = openCodeMachineConfig + "  inherit_user_config: tr
 // openCodeInheritNotice is the stderr line an opted-in dispatch prints.
 const openCodeInheritNotice = "opencode.inherit_user_config is on: this dispatch also reads your own OpenCode config"
 
+// openCodeNoRegistry points npm, which OpenCode runs to install plugin
+// dependencies, at a loopback port nothing listens on. Every opencode call
+// here carries it, so none can reach a public registry.
+const openCodeNoRegistry = "npm_config_registry=http://127.0.0.1:9/"
+
 // realOpenCode resolves the opencode binary before any shim shadows it and
-// checks its version under a throwaway HOME.
+// checks its version under a throwaway HOME. On CI a missing binary fails the
+// case: CI installs the pinned version to run these cases.
 func realOpenCode(t *testing.T) string {
 	t.Helper()
 	path, err := exec.LookPath("opencode")
 	if err != nil {
+		if os.Getenv("CI") == "true" {
+			t.Fatalf("opencode is not on PATH, and CI must run these cases: install opencode-ai@%s", openCodeIntegrationVersion)
+		}
 		t.Skip("opencode is not on PATH")
 	}
 	cmd := exec.Command(path, "--version")
-	cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=/usr/bin:/bin"}
+	cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=/usr/bin:/bin", openCodeNoRegistry}
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("opencode --version: %v", err)
@@ -70,18 +83,22 @@ func realOpenCode(t *testing.T) string {
 	return path
 }
 
-// openCodeShim installs the shim and returns the directory it writes to.
+// openCodeShim installs the shim and returns the directory it writes to. It
+// records only around the stage's own `run`; any other call is the real
+// binary's.
 func openCodeShim(t *testing.T, real string) string {
 	t.Helper()
 	bin, out := t.TempDir(), t.TempDir()
 	script := fmt.Sprintf(`#!/bin/sh
+export %[3]s
+[ "$1" = run ] || exec "%[1]s" "$@"
 "%[1]s" debug paths < /dev/null > "%[2]s/paths.txt" 2>&1
 "%[1]s" debug config < /dev/null > "%[2]s/config.json" 2> "%[2]s/config.err"
 "%[1]s" "$@"
 code=$?
 "%[1]s" session list < /dev/null > "%[2]s/sessions.txt" 2>&1
 exit $code
-`, real, out)
+`, real, out, openCodeNoRegistry)
 	if err := os.WriteFile(filepath.Join(bin, "opencode"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +132,7 @@ func operatorOpenCode(t *testing.T, real, home string, args ...string) string {
 	cmd := exec.CommandContext(ctx, real, args...)
 	cmd.Dir = t.TempDir()
 	cmd.Stdin = nil
-	cmd.Env = []string{"HOME=" + home, "PATH=/usr/bin:/bin", "OPENCODE_DISABLE_MODELS_FETCH=1", "OPENCODE_DISABLE_AUTOUPDATE=1"}
+	cmd.Env = []string{"HOME=" + home, "PATH=/usr/bin:/bin", "OPENCODE_DISABLE_MODELS_FETCH=1", "OPENCODE_DISABLE_AUTOUPDATE=1", openCodeNoRegistry}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("opencode %s as the operator: %v\n%s", strings.Join(args, " "), err, out)
@@ -303,7 +320,7 @@ func TestOpenCodeIntegrationHomeDotOpenCode(t *testing.T) {
 	root := t.TempDir()
 	cmd := exec.Command(real, "debug", "config")
 	cmd.Dir = t.TempDir()
-	cmd.Env = []string{"HOME=" + home, "PATH=/usr/bin:/bin", "OPENCODE_DISABLE_PROJECT_CONFIG=1", "OPENCODE_DISABLE_MODELS_FETCH=1"}
+	cmd.Env = []string{"HOME=" + home, "PATH=/usr/bin:/bin", "OPENCODE_DISABLE_PROJECT_CONFIG=1", "OPENCODE_DISABLE_MODELS_FETCH=1", openCodeNoRegistry}
 	for _, x := range []string{"CONFIG", "DATA", "CACHE", "STATE"} {
 		cmd.Env = append(cmd.Env, "XDG_"+x+"_HOME="+filepath.Join(root, strings.ToLower(x)))
 	}
@@ -551,11 +568,14 @@ func TestOpenCodeIntegrationAnthropicBlockHoldsItsServer(t *testing.T) {
 // openCodeDebugConfigShim installs, first on PATH, an opencode that runs the
 // real binary's `debug config`, and `models <provider> --verbose` for the
 // provider the stage names on -m, in the stage's environment, and exits 0
-// without running the stage. It returns the directory it writes to.
+// without running the stage. Any call other than `run` is the real binary's.
+// It returns the directory it writes to.
 func openCodeDebugConfigShim(t *testing.T, real string) string {
 	t.Helper()
 	bin, out := t.TempDir(), t.TempDir()
 	script := fmt.Sprintf(`#!/bin/sh
+export %[3]s
+[ "$1" = run ] || exec "%[1]s" "$@"
 "%[1]s" debug config < /dev/null > "%[2]s/config.json" 2> "%[2]s/config.err"
 model=
 prev=
@@ -566,7 +586,7 @@ done
 "%[1]s" models "${model%%%%/*}" --verbose < /dev/null > "%[2]s/models.txt" 2> "%[2]s/models.err"
 cat > /dev/null
 exit 0
-`, real, out)
+`, real, out, openCodeNoRegistry)
 	if err := os.WriteFile(filepath.Join(bin, "opencode"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
