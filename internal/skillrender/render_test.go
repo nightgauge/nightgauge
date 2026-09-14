@@ -1206,6 +1206,18 @@ func TestGrokAdapterCarriesEverySentenceFromBeforeTheSplit(t *testing.T) {
 // must be identical to the pre-change capture.
 func TestClaudeCodexGeminiRendersUnchanged(t *testing.T) {
 	root := realSkillsRoot(t)
+	// Render resolves _includes paths to their absolute filesystem form, which
+	// bakes the checkout's own absolute path into the composed text. The
+	// golden captures below are pinned against a portable placeholder instead
+	// of a literal machine path, so this test passes on any checkout (a
+	// contributor's machine or a CI runner) rather than only the one it was
+	// captured on.
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		t.Fatalf("abs skills root: %v", err)
+	}
+	repoRoot := filepath.Dir(absRoot)
+	const placeholder = "<REPO_ROOT>"
 	for _, tt := range []struct {
 		stage, adapter, model, golden string
 	}{
@@ -1222,8 +1234,9 @@ func TestClaudeCodexGeminiRendersUnchanged(t *testing.T) {
 			res := mustRender(t, Options{
 				Stage: tt.stage, Model: tt.model, Adapter: tt.adapter, SkillsRoots: []string{root},
 			})
-			if res.Content != string(want) {
-				t.Errorf("%s/%s/%s render changed after the host segment landed:\n--- got ---\n%s", tt.stage, tt.adapter, tt.model, res.Content)
+			got := strings.ReplaceAll(res.Content, repoRoot, placeholder)
+			if got != string(want) {
+				t.Errorf("%s/%s/%s render changed after the host segment landed:\n--- got ---\n%s", tt.stage, tt.adapter, tt.model, got)
 			}
 			if len(res.Fragments) != 0 {
 				t.Errorf("%s/%s/%s: unexpected fragments applied: %v", tt.stage, tt.adapter, tt.model, res.Fragments)
