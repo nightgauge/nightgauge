@@ -78,6 +78,13 @@ const mcSentinelEnv = "ADVERSARIAL_FIXTURE_SENTINEL"
 // its project copy.
 const mcProjectDir = "@PROJECT_DIR@"
 
+// mcRemoteURL is the placeholder the remote-instructions fixture uses for the
+// loopback stub's URL, and mcRemoteInstructionPath the path it names there.
+const (
+	mcRemoteURL             = "@REMOTE_URL@"
+	mcRemoteInstructionPath = "/repo-remote-instruction.md"
+)
+
 // mcPluginSDKPath is the registry request for the package OpenCode installs
 // into a config directory before it loads a plugin.
 const mcPluginSDKPath = "/@opencode-ai%2fplugin"
@@ -830,7 +837,8 @@ func TestOpenCodeInlineDenyBeatsProjectAllow(t *testing.T) {
 // concatenate, the lower layer first, and mcp merges by server name with the
 // inline entry winning for a name both set. An empty inline list removes
 // nothing (KNOWN): `debug config` then reports `plugin: []`, but its
-// plugin_origins still lists the project's plugin, and the plugin loads.
+// plugin_origins still lists the project's plugin, and the plugin loads; and
+// a project's remote instructions URL is fetched.
 func TestOpenCodeArrayMerge(t *testing.T) {
 	t.Parallel()
 	h := newMCHarness(t, nil)
@@ -883,6 +891,34 @@ func TestOpenCodeArrayMerge(t *testing.T) {
 	}
 	if lines := h.runUnknownModel(proj, empty, nil); !slices.Equal(lines, []string{"project-list-plugin"}) {
 		t.Errorf("KNOWN: with an empty inline plugin list the project's plugin was expected to load anyway; plugins loaded = %q", lines)
+	}
+
+	// A remote instructions entry concatenates too, and is fetched (KNOWN): a
+	// project that names a URL, here the loopback model stub's, makes the run
+	// request it before its model request, whatever the inline list says.
+	remote := newMCModelStub(t, nil)
+	remoteProj := h.project("q3-array-merge/remote-project")
+	remoteCfg := filepath.Join(remoteProj, "opencode.json")
+	raw, err := os.ReadFile(remoteCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(remoteCfg, []byte(strings.ReplaceAll(string(raw), mcRemoteURL, remote.URL)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	remoteURL := remote.URL + mcRemoteInstructionPath
+	remoteEmpty := h.inline("q3-array-merge/inline-empty.json", remoteProj)
+	if got := mcStrings(h.debugConfig(remoteProj, remoteEmpty, nil)["instructions"]); !slices.Equal(got, []string{remoteURL}) {
+		t.Errorf("KNOWN: with an empty inline list, instructions = %q, want the project's %q", got, remoteURL)
+	}
+	h.runStubModel(remoteProj, remoteEmpty, remote, nil)
+	var paths []string
+	for _, r := range remote.requests() {
+		paths = append(paths, r.path)
+	}
+	fetched := slices.Index(paths, mcRemoteInstructionPath)
+	if model := slices.Index(paths, "/v1/chat/completions"); fetched < 0 || (model >= 0 && model < fetched) {
+		t.Errorf("KNOWN: the project's remote instructions entry was expected to be fetched before the model request; the stub saw %q", paths)
 	}
 }
 
