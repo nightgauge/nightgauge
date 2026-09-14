@@ -151,7 +151,7 @@ func openCodeRejectionMarker(permission string, allowed map[string]bool) string 
 // credentialLeft is what may come right before a credential, captured so the
 // replacement keeps it: the start of the text; a character no credential
 // holds; a JSON escape whose last character is a letter or a digit (`\n`,
-// `\t`, `\u00e9`), which is what precedes a credential at the start of any
+// `\t`, a four-hex-digit unicode escape), which is what precedes a credential at the start of any
 // line but the first of a tool's output in a --format json event; or a
 // terminal escape sequence, raw or JSON-escaped, which precedes a credential
 // a tool prints in colour. A plain word boundary misses the last two, since
