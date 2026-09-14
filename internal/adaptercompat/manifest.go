@@ -85,7 +85,10 @@ type Manifest struct {
 	// the parsers reading this CLI's output.
 	Fixtures []string `json:"fixtures"`
 
-	// OpenCode-only; empty until the config-schema contract, the plugin
+	// OpenCode-only. ConfigSchemaSHA256 is the SHA-256 of the OpenCode config
+	// schema pinned for max_tested, which every generated per-run config is
+	// validated against (internal/execution/adapters/schema_contract_test.go).
+	// PluginAPIVersion and ExperimentalHooks stay empty until the plugin
 	// scaffold and the plugin events fill them.
 	ConfigSchemaSHA256 string   `json:"config_schema_sha256"`
 	PluginAPIVersion   string   `json:"plugin_api_version"`
