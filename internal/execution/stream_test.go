@@ -1,12 +1,18 @@
 package execution
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"math"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/execution/adapters"
+	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -1221,5 +1227,460 @@ func TestParseOpenCodeStreamDriftMarkers(t *testing.T) {
 	s := parseOpenCode([]string{"x", "y", "z"}).OpenCode()
 	if got := s.DriftMarkers(); len(got) != 1 || !strings.HasSuffix(got[0], "(3 times)") {
 		t.Errorf("markers = %q, want one marker counted 3 times", got)
+	}
+}
+
+// ── #1629 real-model OpenCode captures ────────────────────────────────────
+
+// openCodeCaptureParent is the redacted id of every capture's own session.
+const openCodeCaptureParent = "ses_fixture0000000000000000001"
+
+// openCodeStepTruth is one step_finish of a real capture, as its ground-truth
+// table in testdata/README.md (§ OpenCode: real-model captures) records it.
+type openCodeStepTruth struct {
+	reason                                string
+	input, output, reasoning, read, write int
+	cost                                  float64
+}
+
+// openCodeCaptureSession is one session of a captured run, with the
+// info.tokens and info.cost its sanitized export held at capture time
+// (testdata/README.md). The export itself was never kept.
+type openCodeCaptureSession struct {
+	id, parent      string
+	tokens          OpenCodeTokens
+	cost            float64
+	provider, model string
+}
+
+func openCodeTokens(input, output, reasoning, read, write int) OpenCodeTokens {
+	t := OpenCodeTokens{Input: input, Output: output, Reasoning: reasoning}
+	t.Cache.Read, t.Cache.Write = read, write
+	return t
+}
+
+// sumOpenCodeSteps is a ground-truth table's sum row.
+func sumOpenCodeSteps(steps []openCodeStepTruth) (sum openCodeStepTruth, peak int) {
+	for _, s := range steps {
+		sum.input += s.input
+		sum.output += s.output
+		sum.reasoning += s.reasoning
+		sum.read += s.read
+		sum.write += s.write
+		sum.cost += s.cost
+		peak = max(peak, s.input+s.read+s.write)
+	}
+	return sum, peak
+}
+
+func closeUSD(a, b float64) bool { return math.Abs(a-b) < 1e-12 }
+
+// checkOpenCodeCapture parses a real capture and checks it against its
+// ground-truth table: each step_finish, then the parser's totals against the
+// table's sum, the peak step prompt and OpenCode's own reported cost. It also
+// checks the guardrail every capture shares: only the six event types
+// opencode 1.18.30 writes, every event on the run's own session, and no drift
+// marker.
+func checkOpenCodeCapture(t *testing.T, name string, steps []openCodeStepTruth) *TokenAccumulator {
+	t.Helper()
+	lines := openCodeFixtureLines(t, name)
+	var got []openCodeStepTruth
+	for i, line := range lines {
+		var ev openCodeEvent
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatalf("%s line %d is not a JSON event: %v", name, i+1, err)
+		}
+		if !openCodeKnownEvents[ev.Type] {
+			t.Errorf("%s line %d: event type %q is not one opencode 1.18.30 writes", name, i+1, ev.Type)
+		}
+		if ev.SessionID != openCodeCaptureParent {
+			t.Errorf("%s line %d: event on session %q; the stream carries the run's own session %q only",
+				name, i+1, ev.SessionID, openCodeCaptureParent)
+		}
+		if ev.Type == "step_finish" && ev.Part != nil && ev.Part.Tokens != nil && ev.Part.Reason != nil && ev.Part.Cost != nil {
+			tk := ev.Part.Tokens
+			got = append(got, openCodeStepTruth{*ev.Part.Reason, tk.Input, tk.Output, tk.Reasoning, tk.Cache.Read, tk.Cache.Write, *ev.Part.Cost})
+		}
+	}
+	if len(got) != len(steps) {
+		t.Fatalf("%s has %d complete step_finish events, want the README's %d", name, len(got), len(steps))
+	}
+	for i := range steps {
+		if got[i] != steps[i] {
+			t.Errorf("%s step %d = %+v, want the README's %+v", name, i+1, got[i], steps[i])
+		}
+	}
+
+	acc := parseOpenCode(lines)
+	s := acc.OpenCode()
+	want, peak := sumOpenCodeSteps(steps)
+	if s.StepFinishes != len(steps) {
+		t.Errorf("%s: step_finish events = %d, want %d", name, s.StepFinishes, len(steps))
+	}
+	if acc.InputTokens != want.input {
+		t.Errorf("%s: input = %d, want the README's sum %d", name, acc.InputTokens, want.input)
+	}
+	if acc.OutputTokens != want.output+want.reasoning {
+		t.Errorf("%s: output = %d, want the README's output plus reasoning, %d+%d = %d",
+			name, acc.OutputTokens, want.output, want.reasoning, want.output+want.reasoning)
+	}
+	if acc.CacheRead != want.read || acc.CacheCreated != want.write {
+		t.Errorf("%s: cache read/write = %d/%d, want the README's %d/%d", name, acc.CacheRead, acc.CacheCreated, want.read, want.write)
+	}
+	if acc.PeakStepInputTokens != peak {
+		t.Errorf("%s: peak step prompt = %d, want the README's largest step, %d", name, acc.PeakStepInputTokens, peak)
+	}
+	if !closeUSD(s.ReportedCostUSD, want.cost) {
+		t.Errorf("%s: OpenCode's reported cost = %v, want the README's sum %v", name, s.ReportedCostUSD, want.cost)
+	}
+	if s.SessionID != openCodeCaptureParent {
+		t.Errorf("%s: session = %q, want %q", name, s.SessionID, openCodeCaptureParent)
+	}
+	s.Finish(0)
+	if markers := s.DriftMarkers(); len(markers) != 0 {
+		t.Errorf("%s: a real capture produced drift markers: %q", name, markers)
+	}
+	return acc
+}
+
+// replayOpenCodeFold runs a capture through the opencode half of
+// Manager.RunStage (parse, finish, apply) with a fake opencode that answers
+// the fold's --version, db and export from the session tree and the per-session
+// export totals recorded at capture time: the export-reader seam of #1624. It
+// returns the accumulator, the RunResult, and the fake's argv log.
+func replayOpenCodeFold(t *testing.T, name, dispatched string, sessions []openCodeCaptureSession) (*TokenAccumulator, *adapters.RunResult, string) {
+	t.Helper()
+	dir := t.TempDir()
+	var rows []string
+	for _, s := range sessions {
+		body := sessionExport(s.tokens.Input, s.tokens.Output, s.tokens.Reasoning, s.tokens.Cache.Read, s.tokens.Cache.Write,
+			s.cost, s.provider, s.model)
+		if err := os.WriteFile(filepath.Join(dir, s.id+".json"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if s.parent != "" {
+			rows = append(rows, fmt.Sprintf(`{"id":%q,"parent_id":%q}`, s.id, s.parent))
+		}
+	}
+	listing := filepath.Join(dir, "rows.json")
+	if err := os.WriteFile(listing, []byte("["+strings.Join(rows, ",")+"]"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	log := filepath.Join(dir, "calls.log")
+	bin := writeFakeOpenCode(t, fmt.Sprintf(`echo "$*" >> %[1]q
+case "$1" in
+--version) echo 1.18.30 ;;
+db) cat %[2]q ;;
+export) cat %[3]q/"$2".json ;;
+esac
+`, log, listing, dir))
+
+	lines := openCodeFixtureLines(t, name)
+	acc := parseOpenCode(lines)
+	run := newOpenCodeRun(acc.OpenCode(), nil)
+	runRoot := t.TempDir()
+	run.fold = testFold(bin, runRoot)
+	outcome := run.finish(context.Background(), openCodeExit{bin: bin, env: run.fold.env, runRoot: runRoot,
+		exitCode: 0, dispatched: dispatched}, acc)
+	result := runResultFromAccumulator(strings.Join(lines, "\n")+"\n", "", acc, &ServedModelTracker{})
+	outcome.apply(result)
+	calls, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.UsagePartial || len(result.DriftMarkers) != 0 {
+		t.Errorf("%s: partial = %v, drift = %q; want a complete fold", name, result.UsagePartial, result.DriftMarkers)
+	}
+	if result.AdapterVersion != "1.18.30" {
+		t.Errorf("%s: adapter version = %q, want 1.18.30", name, result.AdapterVersion)
+	}
+	return acc, result, string(calls)
+}
+
+// openCodeStageCost models ADR-022 § 3's intended stamp: it prices a replayed
+// stage by the provider its RunResult records (ModelProvider, ServedModel),
+// never by the adapter (ADR-022 § 1). Under that rule a local provider's model
+// the registry holds no rate for is a stamped zero, and a registry id is
+// priced from the registry's rate card. It is not the production call: the
+// scheduler prices by the adapter, "opencode", which leaves a local model's
+// stage record unstamped. The record is stamped this way only once #1630
+// lands.
+func openCodeStageCost(r *adapters.RunResult) (float64, bool) {
+	return tokens.CalculateCostForAdapter(r.ModelProvider, r.ServedModel, tokens.TokenCounts{
+		Input: r.InputTokens, Output: r.OutputTokens, CacheRead: r.CacheReadTokens,
+		CacheCreation5m: r.CacheCreation5mTokens, CacheCreation1h: r.CacheCreation1hTokens,
+	})
+}
+
+// openCodeLocalSteps is opencode_stream_local_capture.jsonl's ground truth:
+// qwen/qwen3.8-27b on LM Studio, three steps (read, edit, stop). The model
+// reports reasoning tokens, OpenCode prices the local provider at 0, and
+// there is no cache pool.
+var openCodeLocalSteps = []openCodeStepTruth{
+	{"tool-calls", 5640, 44, 10, 0, 0, 0},
+	{"tool-calls", 5809, 78, 7, 0, 0, 0},
+	{"stop", 5916, 22, 30, 0, 0, 0},
+}
+
+// TestParseOpenCodeRealCaptureLocal: a real run on the lmstudio endpoint. The
+// parser's totals are the README's sums of the three step_finish events,
+// reasoning folded into output; the session's export total equals them; and
+// the stage, served by provider lm-studio, is a stamped zero under ADR-022
+// § 3's rule (openCodeStageCost; the stage record is stamped only once #1630
+// lands).
+func TestParseOpenCodeRealCaptureLocal(t *testing.T) {
+	const name = "opencode_stream_local_capture.jsonl"
+	checkOpenCodeCapture(t, name, openCodeLocalSteps)
+
+	exported := openCodeTokens(17365, 144, 47, 0, 0)
+	if sum, _ := sumOpenCodeSteps(openCodeLocalSteps); exported != openCodeTokens(sum.input, sum.output, sum.reasoning, sum.read, sum.write) {
+		t.Errorf("the README's export total %+v is not its step sum %+v", exported, sum)
+	}
+	_, result, _ := replayOpenCodeFold(t, name, "lmstudio/qwen/qwen3.8-27b", []openCodeCaptureSession{
+		{id: openCodeCaptureParent, tokens: exported, provider: "lmstudio", model: "qwen/qwen3.8-27b"},
+	})
+	if result.InputTokens != 17365 || result.OutputTokens != 144+47 {
+		t.Errorf("RunResult input/output = %d/%d, want 17365/191", result.InputTokens, result.OutputTokens)
+	}
+	if result.ModelProvider != "lm-studio" || result.ServedModel != "lm-studio/qwen/qwen3.8-27b" ||
+		result.UpstreamModel != "lmstudio/qwen/qwen3.8-27b" {
+		t.Errorf("provider/served/upstream = %q/%q/%q, want lm-studio/lm-studio/qwen/qwen3.8-27b/lmstudio/qwen/qwen3.8-27b",
+			result.ModelProvider, result.ServedModel, result.UpstreamModel)
+	}
+	if result.AdapterReportedCostUSD != 0 {
+		t.Errorf("OpenCode's reported cost = %v, want the capture's 0", result.AdapterReportedCostUSD)
+	}
+	if cost, stamped := openCodeStageCost(result); cost != 0 || !stamped {
+		t.Errorf("cost = %v, stamped = %v; ADR-022 § 3 stamps a local provider's stage at zero", cost, stamped)
+	}
+}
+
+// openCodeRemoteSteps is opencode_stream_remote_capture.jsonl's ground truth:
+// the same model and quant as the local capture, served by a second LM Studio
+// endpoint under provider key lmstudio-remote, five steps (glob, read, edit,
+// grep, stop). As on the lmstudio endpoint, OpenCode prices each step at 0
+// and there is no cache pool.
+var openCodeRemoteSteps = []openCodeStepTruth{
+	{"tool-calls", 5678, 31, 23, 0, 0, 0},
+	{"tool-calls", 5767, 43, 7, 0, 0, 0},
+	{"tool-calls", 5931, 77, 28, 0, 0, 0},
+	{"tool-calls", 6058, 41, 15, 0, 0, 0},
+	{"stop", 6208, 26, 64, 0, 0, 0},
+}
+
+// TestParseOpenCodeRealCaptureRemote: a real run on the second local
+// endpoint, lmstudio-remote. The stream names no provider, so the parser's
+// totals are the README's step sums exactly as on the lmstudio endpoint; the
+// label comes from the dispatched -m and the export's providerID, and the
+// stage records the endpoint id: served and upstream model
+// lmstudio-remote/qwen/qwen3.8-27b, never the lmstudio endpoint's
+// lm-studio/qwen/qwen3.8-27b. Until declared endpoints resolve an id to its
+// provider (#1678), the key normalizes to "other" (ADR-022 § 1), and "other"
+// is never priced as a local zero: the stage stays unstamped.
+func TestParseOpenCodeRealCaptureRemote(t *testing.T) {
+	const name = "opencode_stream_remote_capture.jsonl"
+	checkOpenCodeCapture(t, name, openCodeRemoteSteps)
+	for i, line := range openCodeFixtureLines(t, name) {
+		if strings.Contains(line, "lmstudio") {
+			t.Errorf("%s line %d names a provider key; the stream carries none, so the label is the dispatch's", name, i+1)
+		}
+	}
+
+	exported := openCodeTokens(29642, 218, 137, 0, 0)
+	if sum, _ := sumOpenCodeSteps(openCodeRemoteSteps); exported != openCodeTokens(sum.input, sum.output, sum.reasoning, sum.read, sum.write) {
+		t.Errorf("the README's export total %+v is not its step sum %+v", exported, sum)
+	}
+	_, result, _ := replayOpenCodeFold(t, name, "lmstudio-remote/qwen/qwen3.8-27b", []openCodeCaptureSession{
+		{id: openCodeCaptureParent, tokens: exported, provider: "lmstudio-remote", model: "qwen/qwen3.8-27b"},
+	})
+	if result.InputTokens != 29642 || result.OutputTokens != 218+137 {
+		t.Errorf("RunResult input/output = %d/%d, want 29642/355", result.InputTokens, result.OutputTokens)
+	}
+	if result.ModelProvider != "other" || result.ServedModel != "lmstudio-remote/qwen/qwen3.8-27b" ||
+		result.UpstreamModel != "lmstudio-remote/qwen/qwen3.8-27b" {
+		t.Errorf("provider/served/upstream = %q/%q/%q, want other/lmstudio-remote/qwen/qwen3.8-27b/lmstudio-remote/qwen/qwen3.8-27b",
+			result.ModelProvider, result.ServedModel, result.UpstreamModel)
+	}
+	if result.AdapterReportedCostUSD != 0 {
+		t.Errorf("OpenCode's reported cost = %v, want the capture's 0", result.AdapterReportedCostUSD)
+	}
+	if cost, stamped := openCodeStageCost(result); cost != 0 || stamped {
+		t.Errorf("cost = %v, stamped = %v; an undeclared endpoint id is other, never a stamped local zero", cost, stamped)
+	}
+}
+
+// openCodeCloudSteps is opencode_stream_cloud_capture.jsonl's ground truth:
+// the repository's stub provider on 127.0.0.1, dispatched as xai/grok-4.6, so
+// OpenCode prices each step from its bundled catalog. It stands in for a
+// hosted provider's shape until #1680 captures one; the stub reports no cache
+// pools.
+var openCodeCloudSteps = []openCodeStepTruth{
+	{"tool-calls", 1539, 8, 0, 0, 0, 0.003126},
+	{"stop", 1550, 6, 0, 0, 0, 0.003136},
+}
+
+// TestParseOpenCodeRealCaptureCloud: the hosted shape, from the stub under a
+// hosted provider key. OpenCode reports a non-zero cost per step; the parser
+// keeps it only as the CLI's figure. The stage, served by a registry model,
+// is priced from the registry, and that price is not OpenCode's.
+func TestParseOpenCodeRealCaptureCloud(t *testing.T) {
+	const name = "opencode_stream_cloud_capture.jsonl"
+	acc := checkOpenCodeCapture(t, name, openCodeCloudSteps)
+	if acc.OpenCode().ReportedCostUSD <= 0 {
+		t.Fatalf("the cloud-shape capture reports no cost, so it no longer shows a priced provider")
+	}
+
+	_, result, _ := replayOpenCodeFold(t, name, "xai/grok-4.6", []openCodeCaptureSession{
+		{id: openCodeCaptureParent, tokens: openCodeTokens(3089, 14, 0, 0, 0), cost: 0.006262, provider: "xai", model: "grok-4.6"},
+	})
+	if result.ModelProvider != "xai" || result.ServedModel != "grok-4.6" || result.UpstreamModel != "xai/grok-4.6" {
+		t.Errorf("provider/served/upstream = %q/%q/%q, want xai/grok-4.6/xai/grok-4.6",
+			result.ModelProvider, result.ServedModel, result.UpstreamModel)
+	}
+	if !closeUSD(result.AdapterReportedCostUSD, 0.006262) {
+		t.Errorf("OpenCode's reported cost = %v, want the capture's 0.006262", result.AdapterReportedCostUSD)
+	}
+	cost, stamped := openCodeStageCost(result)
+	if !stamped || cost <= 0 {
+		t.Errorf("cost = %v, stamped = %v; a registry model's stage is priced, never unstamped", cost, stamped)
+	}
+	if closeUSD(cost, result.AdapterReportedCostUSD) {
+		t.Errorf("the stage's price %v is OpenCode's catalog figure; ADR-022 § 3 re-prices from the registry", cost)
+	}
+}
+
+// openCodeSubagentSteps is opencode_stream_subagent_capture.jsonl's ground
+// truth: the run's own five steps. Its two subagent sessions' steps are not
+// in the stream.
+var openCodeSubagentSteps = []openCodeStepTruth{
+	{"tool-calls", 5681, 110, 12, 0, 0, 0},
+	{"tool-calls", 5915, 108, 60, 0, 0, 0},
+	{"tool-calls", 6140, 45, 85, 0, 0, 0},
+	{"tool-calls", 6386, 79, 23, 0, 0, 0},
+	{"stop", 6510, 97, 70, 0, 0, 0},
+}
+
+// openCodeSubagentSessions is the subagent run's session tree and each
+// session's export total, as recorded at capture time.
+var openCodeSubagentSessions = []openCodeCaptureSession{
+	{id: openCodeCaptureParent, tokens: openCodeTokens(30632, 439, 250, 0, 0), provider: "lmstudio", model: "qwen/qwen3.8-27b"},
+	{id: "ses_fixture0000000000000000002", parent: openCodeCaptureParent, tokens: openCodeTokens(12832, 95, 18, 0, 0),
+		provider: "lmstudio", model: "qwen/qwen3.8-27b"},
+	{id: "ses_fixture0000000000000000003", parent: openCodeCaptureParent, tokens: openCodeTokens(6330, 49, 15, 0, 0),
+		provider: "lmstudio", model: "qwen/qwen3.8-27b"},
+}
+
+// TestParseOpenCodeRealCaptureSubagent: a real run whose model used the task
+// tool twice. The stream carries only the run's own session, so its sum is
+// the parent's export total; the fold adds both subagent sessions, found in
+// the session table, and the stage's usage equals the three recorded export
+// totals. The second subagent's bash call was auto-rejected: the parent's
+// task call failed with that rejection inside its own message, the parent
+// went on to fix the bug, and the process exited 0. The notice on stderr is
+// the subagent's, and it still decides the stage's marker (ADR-022 § 9).
+func TestParseOpenCodeRealCaptureSubagent(t *testing.T) {
+	const name = "opencode_stream_subagent_capture.jsonl"
+	acc := checkOpenCodeCapture(t, name, openCodeSubagentSteps)
+	if sum, _ := sumOpenCodeSteps(openCodeSubagentSteps); openCodeSubagentSessions[0].tokens !=
+		openCodeTokens(sum.input, sum.output, sum.reasoning, sum.read, sum.write) {
+		t.Errorf("the README's parent export total %+v is not the stream's step sum %+v", openCodeSubagentSessions[0].tokens, sum)
+	}
+
+	// The subagent sessions are named only inside the parent's task tool
+	// events, never as an event's session, and the parser reads none of
+	// those names: it finds the sessions in the session table.
+	var tasks []string // each task call's status
+	stepsAfterFailedTask := 0
+	for _, line := range openCodeFixtureLines(t, name) {
+		var ev struct {
+			Type string `json:"type"`
+			Part struct {
+				Tool  string `json:"tool"`
+				State struct {
+					Status string `json:"status"`
+					Error  string `json:"error"`
+				} `json:"state"`
+			} `json:"part"`
+		}
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatal(err)
+		}
+		for _, child := range openCodeSubagentSessions[1:] {
+			if strings.Contains(line, child.id) && (ev.Type != "tool_use" || ev.Part.Tool != "task") {
+				t.Errorf("subagent session %s is named outside a task tool event: %s", child.id, line)
+			}
+		}
+		if ev.Type == "tool_use" && ev.Part.Tool == "task" {
+			tasks = append(tasks, ev.Part.State.Status)
+			if ev.Part.State.Status == "error" {
+				want := "Subagent failed (task_id: " + openCodeSubagentSessions[2].id + "): " + openCodeRejectedToolError
+				if ev.Part.State.Error != want {
+					t.Errorf("the failed task's error = %q, want %q", ev.Part.State.Error, want)
+				}
+			}
+		}
+		if ev.Type == "step_finish" && len(tasks) == 2 {
+			stepsAfterFailedTask++
+		}
+	}
+	if len(tasks) != 2 || tasks[0] != "completed" || tasks[1] != "error" {
+		t.Fatalf("task tool events = %q, want one completed then one failed", tasks)
+	}
+	if stepsAfterFailedTask != 4 {
+		t.Errorf("step_finish events from the failed task on = %d, want 4: the parent continued after its subagent's rejection", stepsAfterFailedTask)
+	}
+	if n := acc.OpenCode().RejectedToolCalls; n != 0 {
+		t.Errorf("rejected tool calls = %d; the task call failed on its subagent's rejection, not OpenCode's own", n)
+	}
+
+	// The fold: every descendant exported, and the stage's usage the sum of
+	// the three sessions' export totals.
+	folded, result, calls := replayOpenCodeFold(t, name, "lmstudio/qwen/qwen3.8-27b", openCodeSubagentSessions)
+	var want OpenCodeTokens
+	for _, s := range openCodeSubagentSessions {
+		want.Input += s.tokens.Input
+		want.Output += s.tokens.Output
+		want.Reasoning += s.tokens.Reasoning
+		want.Cache.Read += s.tokens.Cache.Read
+		want.Cache.Write += s.tokens.Cache.Write
+	}
+	if folded.InputTokens != want.Input || folded.OutputTokens != want.Output+want.Reasoning {
+		t.Errorf("folded input/output = %d/%d, want the export totals' %d/%d (the parent alone is 30632/689)",
+			folded.InputTokens, folded.OutputTokens, want.Input, want.Output+want.Reasoning)
+	}
+	if folded.CacheRead != want.Cache.Read || folded.CacheCreated != want.Cache.Write {
+		t.Errorf("folded cache read/write = %d/%d, want %d/%d", folded.CacheRead, folded.CacheCreated, want.Cache.Read, want.Cache.Write)
+	}
+	if result.InputTokens != want.Input || result.PeakStepInputTokens != 6510 {
+		t.Errorf("RunResult input/peak = %d/%d, want %d/6510: a subagent's session total is not a step",
+			result.InputTokens, result.PeakStepInputTokens, want.Input)
+	}
+	if cost, stamped := openCodeStageCost(result); cost != 0 || !stamped || result.AdapterReportedCostUSD != 0 {
+		t.Errorf("cost = %v, stamped = %v, reported = %v; want ADR-022 § 3's stamped local zero", cost, stamped, result.AdapterReportedCostUSD)
+	}
+	for _, child := range openCodeSubagentSessions[1:] {
+		if !strings.Contains(calls, "export "+child.id+" --sanitize --pure") {
+			t.Errorf("subagent session %s was not exported:\n%s", child.id, calls)
+		}
+	}
+
+	// Through a stage: the subagent's notice on stderr fails the exit-0 run,
+	// with the marker for bash, and the parent's usage is kept.
+	stream := readTestdata(t, name)
+	stderr := readTestdata(t, "opencode_stream_subagent_stderr.txt")
+	for _, tc := range []struct {
+		allowed []string
+		marker  string
+	}{
+		{[]string{"Read", "Edit", "Task", "Bash"}, PermissionRejectedMarker + " tool=bash"},
+		{[]string{"Read", "Edit", "Task"}, PermissionDeniedMarker + " tool=bash"},
+	} {
+		staged, _ := openCodeStageRun(t, stream, stderr, 0, tc.allowed, nil)
+		if staged.ExitCode != 1 || !strings.HasSuffix(staged.Stderr, tc.marker+"\n") {
+			t.Errorf("allowed %q: exit %d, stderr %q; want exit 1 ending in %q", tc.allowed, staged.ExitCode, staged.Stderr, tc.marker)
+		}
+		if staged.InputTokens != 30632 || len(staged.DriftMarkers) != 0 {
+			t.Errorf("allowed %q: input %d, drift %q; want the parent's 30632 and no drift", tc.allowed, staged.InputTokens, staged.DriftMarkers)
+		}
 	}
 }
