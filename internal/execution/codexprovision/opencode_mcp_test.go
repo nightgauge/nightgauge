@@ -3,6 +3,7 @@ package codexprovision
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -33,6 +34,20 @@ func openCodeRepo(t *testing.T, files map[string]string) string {
 	return filepath.Join(parent, "wt")
 }
 
+// provision runs ProvisionOpenCode on wt in the test's environment.
+func provision(wt string) (OpenCodeProvision, error) {
+	return ProvisionOpenCode(context.Background(), wt, os.LookupEnv)
+}
+
+func provisionOpenCode(t *testing.T, wt string) OpenCodeProvision {
+	t.Helper()
+	p, err := provision(wt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
 func mcpNames(m map[string]OpenCodeMcpServer) []string {
 	names := make([]string, 0, len(m))
 	for n := range m {
@@ -57,7 +72,7 @@ func TestOpenCodeMcpFromBaseBranch(t *testing.T) {
 	gittest.Run(t, wt, "branch", "-f", "main", "HEAD")
 	writeFile(t, filepath.Join(wt, ".mcp.json"), `{"mcpServers": {"a": {"command": "/usr/bin/true", "args": ["changed"]}, "evil": {"command": "/bin/sh"}, "evil2": {"url": "https://mcp.example.test/x"}}}`)
 
-	p, err := ProvisionOpenCode(context.Background(), wt)
+	p, err := ProvisionOpenCode(context.Background(), wt, os.LookupEnv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +132,7 @@ func TestReadBaseBranchMcpServersMergesBothSources(t *testing.T) {
 func TestOpenCodeMcpWithoutABaseBranch(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, ".mcp.json"), `{"mcpServers": {"evil": {"command": "/bin/sh"}}}`)
-	p, err := ProvisionOpenCode(context.Background(), dir)
+	p, err := ProvisionOpenCode(context.Background(), dir, os.LookupEnv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,6 +252,94 @@ func TestOpenCodeMcpRefusesOpenCodeSyntax(t *testing.T) {
 	for _, secret := range []string{"id_rsa", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"} {
 		if strings.Contains(w, secret) {
 			t.Errorf("a warning quotes the refused value %q:\n%s", secret, w)
+		}
+	}
+}
+
+// TestOpenCodeMcpBaseIsNotRepointedByAWorktree: remote-tracking refs are
+// shared by every worktree of a repository, and a fetch never resets
+// origin/HEAD, so a stage in one worktree could otherwise choose the base
+// every later OpenCode stage, in every worktree, reads its MCP servers from.
+// A stage in worktree A commits a server, publishes the commit as
+// origin/zz-base and points origin/HEAD at it: an OpenCode stage in worktree
+// B reads no server from it, and a warning says why. When the stage moves
+// origin/main itself instead, which a fetch resets, B's warnings name the
+// server origin/main defines and B's worktree does not.
+func TestOpenCodeMcpBaseIsNotRepointedByAWorktree(t *testing.T) {
+	wt := openCodeRepo(t, map[string]string{".mcp.json": `{"mcpServers": {"a": {"command": "/usr/bin/true"}}}`})
+	b := filepath.Join(t.TempDir(), "b")
+	gittest.Run(t, wt, "worktree", "add", "-q", "-b", "feat/b", b, "origin/main")
+	gittest.Run(t, wt, "checkout", "-qb", "feat/a")
+	writeFile(t, filepath.Join(wt, ".mcp.json"), `{"mcpServers": {"a": {"command": "/usr/bin/true"}, "evil": {"command": "/bin/sh"}}}`)
+	gittest.Run(t, wt, "commit", "-qam", "a stage adds a server")
+	gittest.Run(t, wt, "update-ref", "refs/remotes/origin/zz-base", "HEAD")
+	gittest.Run(t, wt, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/zz-base")
+
+	p := provisionOpenCode(t, b)
+	if _, ok := p.MCP["evil"]; ok || p.McpSource == "origin/zz-base" {
+		t.Errorf("worktree b gets MCP servers %v from %q, a ref another worktree pointed origin/HEAD at", mcpNames(p.MCP), p.McpSource)
+	}
+	if w := strings.Join(p.Warnings, "\n"); !strings.Contains(w, "origin/HEAD names origin/zz-base") {
+		t.Errorf("no warning says origin/HEAD names another branch:\n%s", w)
+	}
+
+	gittest.Run(t, wt, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+	gittest.Run(t, wt, "update-ref", "refs/remotes/origin/main", "HEAD")
+	p = provisionOpenCode(t, b)
+	if w := strings.Join(p.Warnings, "\n"); !strings.Contains(w, "only origin/main defines, not the worktree, are started: evil") {
+		t.Errorf("no warning names the server origin/main defines and worktree b does not:\n%s", w)
+	}
+}
+
+// TestOpenCodeMcpLeavesOutValuesOpenCodeCannotPaste: OpenCode pastes a
+// {env:VAR}'s value into its config text unescaped, then reads every
+// {file:...} the text holds (read from its 1.18.30 bundled source, and
+// observed). A value holding a quote, a backslash or a control character
+// makes the whole config fail to parse, and OpenCode's error prints the
+// config with every resolved credential in it; a {file:...} in a value reads
+// that file into the config. So a server one of whose variables holds any of
+// these is left out, and the warning names the server and the variable, never
+// the value. An unset variable, a plain value, and a {env:...} in a value,
+// which OpenCode does not substitute again, keep their server.
+func TestOpenCodeMcpLeavesOutValuesOpenCodeCannotPaste(t *testing.T) {
+	values := map[string]string{
+		"FIXTURE_QUOTE":     `pass"word-fixture`,
+		"FIXTURE_BACKSLASH": `C:\Users\fixture`,
+		"FIXTURE_NEWLINE":   "line-one-fixture\nline-two",
+		"FIXTURE_FILE":      "{file:/nonexistent/fixture}",
+		"FIXTURE_BEARER":    `bearer"fixture`,
+		"FIXTURE_PLAIN":     "plain-fixture-value",
+		"FIXTURE_ENVREF":    "{env:FIXTURE_PLAIN}",
+	}
+	for k, v := range values {
+		t.Setenv(k, v)
+	}
+	wt := openCodeRepo(t, map[string]string{".mcp.json": `{"mcpServers": {
+  "quote":     {"command": "srv", "env": {"P": "${FIXTURE_QUOTE}"}},
+  "backslash": {"command": "srv", "args": ["--home=${FIXTURE_BACKSLASH}", "${FIXTURE_PLAIN}"]},
+  "newline":   {"url": "https://mcp.example.test/mcp", "headers": {"X-Key": "${FIXTURE_NEWLINE}"}},
+  "file":      {"command": "srv", "env": {"K": "${FIXTURE_FILE}"}},
+  "bearer":    {"url": "https://mcp.example.test/mcp", "headers": {"Authorization": "Bearer $FIXTURE_BEARER"}},
+  "plain":     {"command": "srv", "env": {"T": "${FIXTURE_PLAIN}", "U": "${FIXTURE_UNSET_1626}"}},
+  "envref":    {"command": "srv", "args": ["${FIXTURE_ENVREF}"]}
+}}`})
+
+	p := provisionOpenCode(t, wt)
+	if got := mcpNames(p.MCP); !slices.Equal(got, []string{"envref", "plain"}) {
+		t.Errorf("MCP servers = %v, want envref and plain", got)
+	}
+	w := strings.Join(p.Warnings, "\n")
+	for server, variable := range map[string]string{
+		"quote": "FIXTURE_QUOTE", "backslash": "FIXTURE_BACKSLASH", "newline": "FIXTURE_NEWLINE",
+		"file": "FIXTURE_FILE", "bearer": "FIXTURE_BEARER",
+	} {
+		if want := fmt.Sprintf("MCP server %q is not started: the value of %s holds", server, variable); !strings.Contains(w, want) {
+			t.Errorf("no warning says %s:\n%s", want, w)
+		}
+	}
+	for name, v := range values {
+		if strings.Contains(w, v) {
+			t.Errorf("a warning quotes the value of %s:\n%s", name, w)
 		}
 	}
 }

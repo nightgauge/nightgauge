@@ -196,3 +196,50 @@ func TestPrepareOpenCodeRunRefusesADispatchWithoutAWorktree(t *testing.T) {
 		t.Errorf("the refused dispatch created %s", OpenCodeRunsDir(home))
 	}
 }
+
+// TestPrepareOpenCodeRunLeavesOutAnMcpValueOpenCodeCannotPaste: OpenCode
+// pastes a {env:VAR}'s value into its config text unescaped, so the value of
+// every variable an MCP server names is checked in the environment the
+// dispatch is prepared against (req.Lookup). A remote server whose credential
+// variable holds a backslash is left out of the config, which would otherwise
+// fail to parse and print the credentials in it, and stderr names the server
+// and the variable, never the value.
+func TestPrepareOpenCodeRunLeavesOutAnMcpValueOpenCodeCannotPaste(t *testing.T) {
+	const value = `fixture\credential`
+	wt := openCodeFixtureRepo(t, map[string]string{
+		".mcp.json": `{"mcpServers": {"a": {"command": "/usr/bin/true"}, "r": {"type": "http", "url": "https://mcp.example.test/mcp", "headers": {"Authorization": "Bearer ${MCP_FIXTURE_TOKEN}"}}}}`,
+	})
+	home := t.TempDir()
+	var run *OpenCodeRun
+	var err error
+	stderr := captureAdapterStderr(t, func() {
+		run, err = PrepareOpenCodeRun(OpenCodeRunRequest{
+			Home:               home,
+			ID:                 testRunID,
+			MachineConfigDir:   filepath.Join(home, ".nightgauge"),
+			Run:                RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b", WorktreeDir: wt},
+			Settings:           lmStudioSettings(),
+			Lookup:             envLookup(map[string]string{"MCP_FIXTURE_TOKEN": value}),
+			GOOS:               "linux",
+			ManagedConfigFiles: []string{},
+		})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		MCP map[string]any `json:"mcp"`
+	}
+	if err := json.Unmarshal([]byte(run.ConfigContent), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if names := slices.Sorted(maps.Keys(cfg.MCP)); !slices.Equal(names, []string{"a"}) {
+		t.Errorf("mcp servers = %v, want a alone: r's variable holds a backslash", names)
+	}
+	if !strings.Contains(stderr, `MCP server "r" is not started: the value of MCP_FIXTURE_TOKEN holds`) {
+		t.Errorf("stderr does not name the server and the variable:\n%s", stderr)
+	}
+	if strings.Contains(stderr, value) {
+		t.Errorf("stderr quotes the variable's value:\n%s", stderr)
+	}
+}

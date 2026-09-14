@@ -945,9 +945,11 @@ func OpenCodeEnvWithholdFor(model string) OpenCodeEnvWithhold {
 //
 // The config carries what the stage is given from the repository in
 // req.Run.WorktreeDir (codexprovision.ProvisionOpenCode): its steering as
-// instructions and the base branch's MCP servers. A dispatch without a
-// worktree is refused, because it would run with neither. A prepared run
-// says on stderr what it is given and what it is not.
+// instructions and the base branch's MCP servers, less any server a variable
+// of which holds, in req.Lookup, a value OpenCode cannot paste into its
+// config text. A dispatch without a worktree is refused, because it would run
+// with neither. A prepared run says on stderr what it is given and what it is
+// not.
 //
 // Unless req.Settings opts into the operator's own OpenCode config, a
 // $HOME/.opencode holding config (openCodeHomeConfigRefusal) and the
@@ -969,7 +971,9 @@ func PrepareOpenCodeRun(req OpenCodeRunRequest) (*OpenCodeRun, error) {
 	if err != nil {
 		return nil, err
 	}
-	if input.Repository, err = codexprovision.ProvisionOpenCode(context.Background(), req.Run.WorktreeDir); err != nil {
+	// The MCP servers' variables are checked in the environment the spawn
+	// inherits from this process, which is what OpenCode resolves them in.
+	if input.Repository, err = codexprovision.ProvisionOpenCode(context.Background(), req.Run.WorktreeDir, req.Lookup); err != nil {
 		return nil, fmt.Errorf("opencode: %w", err)
 	}
 	built, err := BuildOpenCodeConfig(input)

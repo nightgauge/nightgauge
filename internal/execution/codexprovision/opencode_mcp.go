@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -17,18 +18,29 @@ import (
 // per-run config (adapters.BuildOpenCodeConfig). Two things differ from the
 // Codex path, which reads the working tree and writes the servers verbatim:
 //
-//   - The servers come from the base branch. A server is a command OpenCode
-//     runs or a URL it sends the stage's tool calls to, and a stage can write
-//     its own worktree, so a server one stage added to .mcp.json would
-//     otherwise run in the next stage without review.
-//   - Variable references are translated, never resolved. Claude expands
-//     ${VAR} and ${VAR:-default} in a server's command, args, env, url and
-//     headers; OpenCode substitutes {env:VAR} anywhere in its config text, in
-//     its own process. Each ${VAR} becomes {env:VAR}, so Nightgauge reads no
-//     variable's value and none is written into the config. A value that
-//     already holds OpenCode's own {env:...} or {file:...} syntax refuses its
-//     server: Claude passes such a value through as text, while OpenCode would
-//     read the variable, or the file, it names.
+//   - The servers come from the base branch, origin/main or origin/master. A
+//     server is a command OpenCode runs or a URL it sends the stage's tool
+//     calls to, and a stage can write its own worktree, so a server one stage
+//     added to .mcp.json would otherwise run in the next stage without review.
+//     The refs are shared by every worktree of the repository, and a stage
+//     can write them too: origin/HEAD, which no fetch resets, is followed to
+//     origin/main or origin/master only (baseBranchRef), and a warning names
+//     each server the base defines and the worktree does not, which is how a
+//     moved origin/main shows until a fetch resets it.
+//   - Variable references are translated, never written as values. Claude
+//     expands ${VAR} and ${VAR:-default} in a server's command, args, env, url
+//     and headers, value by value; OpenCode 1.18.30 replaces each {env:VAR} in
+//     its config text with the variable's value before it parses the text,
+//     and escapes nothing, then reads each {file:...} the result holds (read
+//     from its bundled source, and observed). Each ${VAR} becomes {env:VAR},
+//     so no variable's value is written into the config. A value that already
+//     holds OpenCode's own {env:...} or {file:...} syntax refuses its server:
+//     Claude passes such a value through as text, while OpenCode would read
+//     the variable, or the file, it names. And a server one of whose variables
+//     holds a value OpenCode cannot paste (openCodeUnpastable) is left out
+//     (openCodePastableMcpServers): that value would make the whole config
+//     fail to parse, and OpenCode's error prints the config it substituted,
+//     every other server's credentials in it.
 
 // OpenCodeMcpServer is one MCP server in opencode 1.18.30's config shape:
 // McpLocalConfig (type "local": command, cwd, environment) or McpRemoteConfig
@@ -165,6 +177,60 @@ func toOpenCodeMcpServer(s PipelineMcpServer) (OpenCodeMcpServer, []string, bool
 	return OpenCodeMcpServer{}, nil, false
 }
 
+// openCodeEnvRefRE is a {env:VAR} reference as openCodeVarRefs writes it.
+var openCodeEnvRefRE = regexp.MustCompile(`\{env:([A-Za-z_][A-Za-z0-9_]*)\}`)
+
+// openCodeUnpastable reports whether OpenCode 1.18.30 cannot paste v, a
+// variable's value, into its config text in place of a {env:VAR}: a quote or
+// a backslash would end or escape the JSON string it lands in, a control
+// character cannot stand in one, and each makes the whole config fail to
+// parse; a {file:...} in it would be read as a file reference by the pass
+// that follows. A {env:...} in it is not substituted again, so it is text.
+func openCodeUnpastable(v string) bool {
+	return strings.ContainsAny(v, `"\`) || strings.Contains(v, "{file:") ||
+		strings.IndexFunc(v, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0
+}
+
+// openCodePastableMcpServers leaves out each server with a {env:VAR} whose
+// variable, as lookup reads the environment OpenCode inherits, holds a value
+// OpenCode cannot paste into its config text (openCodeUnpastable). An unset
+// variable reads as empty in OpenCode and keeps its server. The warnings name
+// the server and the variables, never a value.
+func openCodePastableMcpServers(servers map[string]OpenCodeMcpServer, lookup func(string) (string, bool)) (map[string]OpenCodeMcpServer, []string) {
+	names := make([]string, 0, len(servers))
+	for name := range servers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	out := map[string]OpenCodeMcpServer{}
+	var warnings []string
+	for _, name := range names {
+		s := servers[name]
+		values := append([]string{s.Cwd, s.URL}, s.Command...)
+		for k, v := range s.Environment {
+			values = append(values, k, v)
+		}
+		for k, v := range s.Headers {
+			values = append(values, k, v)
+		}
+		var unpastable []string
+		for _, v := range values {
+			for _, m := range openCodeEnvRefRE.FindAllStringSubmatch(v, -1) {
+				if value, ok := lookup(m[1]); ok && openCodeUnpastable(value) {
+					unpastable = append(unpastable, m[1])
+				}
+			}
+		}
+		if unpastable = uniqueSorted(unpastable); len(unpastable) > 0 {
+			warnings = append(warnings, fmt.Sprintf(
+				"MCP server %q is not started: the value of %s holds a quote, a backslash, a control character or {file:, which OpenCode would paste into its config text unescaped, so the config would not parse", name, strings.Join(unpastable, ", ")))
+			continue
+		}
+		out[name] = s
+	}
+	return out, warnings
+}
+
 // openCodeVarRefs rewrites every Claude variable reference in v as OpenCode's
 // {env:VAR}, and returns the names whose default it dropped.
 func openCodeVarRefs(v string) (string, []string) {
@@ -193,16 +259,26 @@ func uniqueSorted(names []string) []string {
 	return out
 }
 
+// openCodeBaseBranches are the branches origin/HEAD may name for the MCP
+// servers to be read from it.
+var openCodeBaseBranches = []string{"refs/remotes/origin/main", "refs/remotes/origin/master"}
+
 // baseBranchRef resolves the branch the MCP servers are read from: origin's
 // default branch as the repository records it (refs/remotes/origin/HEAD),
 // else origin/main or origin/master, else a local main or master. It returns
-// the full ref and a short name for messages.
+// the full ref and a short name for messages. The refs are shared by every
+// worktree of the repository and no fetch resets origin/HEAD, so a stage in
+// any worktree could point it at a branch of its own for every later stage:
+// an origin/HEAD naming a branch other than origin/main or origin/master is
+// an error, and the stage gets no server.
 func baseBranchRef(ctx context.Context, top string) (ref, short string, err error) {
 	candidates := []string{"refs/remotes/origin/main", "refs/remotes/origin/master", "refs/heads/main", "refs/heads/master"}
 	if out, err := gitOut(ctx, top, nil, "", "symbolic-ref", "-q", "refs/remotes/origin/HEAD"); err == nil {
-		if head := strings.TrimSpace(out); strings.HasPrefix(head, "refs/remotes/origin/") {
-			candidates = append([]string{head}, candidates...)
+		head := strings.TrimSpace(out)
+		if !slices.Contains(openCodeBaseBranches, head) {
+			return "", "", fmt.Errorf("origin/HEAD names %s, not origin/main or origin/master, the only branches they are read from, because any worktree of the repository can repoint origin/HEAD and no fetch resets it (`git remote set-head origin --auto` restores it)", strings.TrimPrefix(head, "refs/remotes/"))
 		}
+		candidates = append([]string{head}, candidates...)
 	}
 	for _, c := range candidates {
 		if _, err := gitOut(ctx, top, nil, "", "rev-parse", "-q", "--verify", c+"^{commit}"); err == nil {
@@ -270,20 +346,27 @@ func regularBlob(listing, path string) (string, bool) {
 	return "", false
 }
 
-// worktreeOnlyServers names what the working tree's MCP sources define that
-// OpenCode is not given: a server the base branch does not define, and one
-// whose definition there differs.
-func worktreeOnlyServers(worktree, base map[string]PipelineMcpServer) (added, changed []string) {
+// compareMcpServers names where the working tree's MCP sources and the base
+// branch's differ: a server only the worktree defines, which OpenCode is not
+// given; one the worktree defines differently, which it is given as the base
+// defines it; and one only the base defines, which it is given all the same.
+func compareMcpServers(worktree, base map[string]PipelineMcpServer) (worktreeOnly, changed, baseOnly []string) {
 	for name, s := range worktree {
 		b, ok := base[name]
 		switch {
 		case !ok:
-			added = append(added, name)
+			worktreeOnly = append(worktreeOnly, name)
 		case !reflect.DeepEqual(b, s):
 			changed = append(changed, name)
 		}
 	}
-	sort.Strings(added)
+	for name := range base {
+		if _, ok := worktree[name]; !ok {
+			baseOnly = append(baseOnly, name)
+		}
+	}
+	sort.Strings(worktreeOnly)
 	sort.Strings(changed)
-	return added, changed
+	sort.Strings(baseOnly)
+	return worktreeOnly, changed, baseOnly
 }

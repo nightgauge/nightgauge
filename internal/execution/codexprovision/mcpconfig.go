@@ -23,7 +23,6 @@ package codexprovision
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -67,29 +66,29 @@ type codexMcpServer struct {
 // `.claude/settings.json` `mcpServers` (secondary). `.mcp.json` wins on a name
 // clash. Malformed/non-string env+header values are coerced (never crash).
 func ReadPipelineMcpServers(workspaceRoot string) map[string]PipelineMcpServer {
+	return readPipelineMcpServers(workspaceRoot, readFileGracefully)
+}
+
+// readPipelineMcpServers is ReadPipelineMcpServers reading each source file
+// (mcpSourceFiles, in merge order) through read, which returns false for a
+// missing file. An OpenCode stage reads through a worktreeReader.
+func readPipelineMcpServers(workspaceRoot string, read readFunc) map[string]PipelineMcpServer {
 	merged := map[string]PipelineMcpServer{}
-	for k, v := range extractServers(filepath.Join(workspaceRoot, ".claude", "settings.json")) {
-		merged[k] = v
-	}
-	for k, v := range extractServers(filepath.Join(workspaceRoot, ".mcp.json")) {
-		merged[k] = v // .mcp.json takes precedence
+	for _, path := range mcpSourceFiles {
+		raw, ok := read(filepath.Join(workspaceRoot, filepath.FromSlash(path)))
+		if !ok {
+			continue
+		}
+		for k, v := range extractServersFromJSON([]byte(raw)) {
+			merged[k] = v // a later file, .mcp.json, takes precedence
+		}
 	}
 	return merged
 }
 
-// extractServers reads a JSON file and returns its `mcpServers` map, tolerating
-// missing files, malformed JSON, and non-string env/header values.
-func extractServers(filePath string) map[string]PipelineMcpServer {
-	raw, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil
-	}
-	return extractServersFromJSON(raw)
-}
-
 // extractServersFromJSON returns the `mcpServers` map of a JSON document, the
-// content of a file in the working tree (extractServers) or of a blob on the
-// base branch (ReadBaseBranchMcpServers), tolerating malformed JSON and
+// content of a file in the working tree (readPipelineMcpServers) or of a blob
+// on the base branch (ReadBaseBranchMcpServers), tolerating malformed JSON and
 // non-string env/header values.
 func extractServersFromJSON(raw []byte) map[string]PipelineMcpServer {
 	// Decode loosely so non-string env/header values (JSON numbers/booleans) are

@@ -224,19 +224,23 @@ func TestOpenCodeClaudeMdReachesSystemPrompt(t *testing.T) {
 // schema defines: a server the stage added to its worktree's .mcp.json is
 // absent. OpenCode resolves the remote server's {env:VAR} credential in its
 // own process, while OPENCODE_CONFIG_CONTENT, which every tool of the stage
-// can read, holds only the reference. A shim runs `opencode debug config` in
-// the stage's environment instead of the stage, so no server is started and
-// no request is sent.
+// can read, holds only the reference. A server whose variable holds a
+// backslash, which OpenCode would paste into the config text unescaped, is
+// left out: with it the config would not parse, and OpenCode's error would
+// print the credential. A shim runs `opencode debug config` in the stage's
+// environment instead of the stage, so no server is started and no request
+// is sent.
 func TestOpenCodeIntegrationMcpFromBaseBranchReachesOpenCode(t *testing.T) {
 	real := realOpenCode(t)
 	isolateOpenCodeHome(t)
 	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
 	const token = "fake-mcp-credential-1626"
 	t.Setenv("MCP_FIXTURE_TOKEN", token)
+	t.Setenv("MCP_FIXTURE_PATH", `C:\fixture\home`)
 	writeOpenCodeMachineConfig(t, strings.Replace(openCodeMachineConfig, "127.0.0.1:1234", "127.0.0.1:9", 1))
 	out := openCodeMcpShim(t, real)
 
-	servers := `{"mcpServers": {"a": {"command": "/usr/bin/true", "args": ["base"], "env": {"LEVEL": "debug"}}, "r": {"type": "http", "url": "http://127.0.0.1:9/mcp", "headers": {"Authorization": "Bearer ${MCP_FIXTURE_TOKEN}"}}}}`
+	servers := `{"mcpServers": {"a": {"command": "/usr/bin/true", "args": ["base"], "env": {"LEVEL": "debug"}}, "p": {"command": "/usr/bin/true", "env": {"HOME_DIR": "${MCP_FIXTURE_PATH}"}}, "r": {"type": "http", "url": "http://127.0.0.1:9/mcp", "headers": {"Authorization": "Bearer ${MCP_FIXTURE_TOKEN}"}}}}`
 	workspace, worktree := openCodeGitWorktree(t, map[string]string{".mcp.json": servers})
 	if err := os.WriteFile(filepath.Join(worktree, ".mcp.json"), []byte(strings.Replace(servers, `"r":`, `"evil": {"command": "/bin/sh"}, "r":`, 1)), 0o644); err != nil {
 		t.Fatal(err)
@@ -285,6 +289,12 @@ func TestOpenCodeIntegrationMcpFromBaseBranchReachesOpenCode(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "not started: evil") {
 		t.Errorf("stderr does not name the server left out:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, `MCP server "p" is not started: the value of MCP_FIXTURE_PATH holds`) {
+		t.Errorf("stderr does not name the server whose value OpenCode cannot paste:\n%s", stderr)
+	}
+	if strings.Contains(string(readShimFile(t, out, "config.err")), token) {
+		t.Error("OpenCode's stderr holds the credential's value")
 	}
 	content := string(readShimFile(t, out, "content.json"))
 	if !strings.Contains(content, `"Authorization":"Bearer {env:MCP_FIXTURE_TOKEN}"`) || strings.Contains(content, token) {

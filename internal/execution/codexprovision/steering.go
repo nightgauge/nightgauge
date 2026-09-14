@@ -21,6 +21,12 @@ var (
 	leadNLSteer  = regexp.MustCompile(`^\n+`)
 )
 
+// readFunc reads one steering or MCP source: its content, or false when it is
+// absent or refused. The Codex path reads with readFileGracefully, as it
+// always has; an OpenCode stage reads through a worktreeReader, which reads
+// nothing outside the worktree (#1626).
+type readFunc func(path string) (string, bool)
+
 // readFileGracefully returns a file's contents, or ("", false) if absent.
 func readFileGracefully(filePath string) (string, bool) {
 	b, err := os.ReadFile(filePath)
@@ -123,15 +129,16 @@ func extractSummary(content string, maxLines int) string {
 // § 8): AGENTS.md when it has content of its own once the managed steering
 // block is stripped, so generated steering is never read back; otherwise
 // CLAUDE.md, when anything is left of it without a leading `@AGENTS.md`
-// import, which is an adapter line and not a contract. It returns the file's
-// name and that content, trimmed, or two empty strings when neither applies.
-func repositorySteering(projectRoot string) (name, body string) {
-	if agentsMd, ok := readFileGracefully(filepath.Join(projectRoot, "AGENTS.md")); ok {
+// import, which is an adapter line and not a contract. A file read refuses is
+// absent. It returns the file's name and that content, trimmed, or two empty
+// strings when neither applies.
+func repositorySteering(projectRoot string, read readFunc) (name, body string) {
+	if agentsMd, ok := read(filepath.Join(projectRoot, "AGENTS.md")); ok {
 		if userPart := strings.TrimSpace(stripManagedSteeringBlock(agentsMd)); userPart != "" {
 			return "AGENTS.md", userPart
 		}
 	}
-	if claudeMd, ok := readFileGracefully(filepath.Join(projectRoot, "CLAUDE.md")); ok {
+	if claudeMd, ok := read(filepath.Join(projectRoot, "CLAUDE.md")); ok {
 		if body := strings.TrimSpace(stripLeadingAgentsImport(claudeMd)); body != "" {
 			return "CLAUDE.md", body
 		}
@@ -141,8 +148,8 @@ func repositorySteering(projectRoot string) (name, body string) {
 
 // readProjectDescription summarises the repository's canonical agent contract
 // (repositorySteering).
-func readProjectDescription(projectRoot string) string {
-	if _, body := repositorySteering(projectRoot); body != "" {
+func readProjectDescription(projectRoot string, read readFunc) string {
+	if _, body := repositorySteering(projectRoot, read); body != "" {
 		return extractSummary(body, 50)
 	}
 	return ""
@@ -166,33 +173,34 @@ func stripLeadingAgentsImport(content string) string {
 	return content
 }
 
-// readFirstAvailable reads the first existing file from candidates, returning
-// its summary at maxLines, or "".
-func readFirstAvailable(maxLines int, candidates ...string) string {
+// readFirstAvailable reads the first file of candidates that read returns,
+// returning its summary at maxLines, or "". A candidate read refuses is
+// passed over like an absent one.
+func readFirstAvailable(read readFunc, maxLines int, candidates ...string) string {
 	for _, c := range candidates {
-		if content, ok := readFileGracefully(c); ok {
+		if content, ok := read(c); ok {
 			return extractSummary(content, maxLines)
 		}
 	}
 	return ""
 }
 
-func readStandards(projectRoot string) string {
-	return readFirstAvailable(80,
+func readStandards(projectRoot string, read readFunc) string {
+	return readFirstAvailable(read, 80,
 		filepath.Join(projectRoot, "standards", "code-standards.md"),
 		filepath.Join(projectRoot, "docs", "CODE_STANDARDS.md"),
 	)
 }
 
-func readSecurity(projectRoot string) string {
-	return readFirstAvailable(60,
+func readSecurity(projectRoot string, read readFunc) string {
+	return readFirstAvailable(read, 60,
 		filepath.Join(projectRoot, "standards", "security.md"),
 		filepath.Join(projectRoot, "docs", "SECURITY_AND_ERROR_HANDLING.md"),
 	)
 }
 
-func readGitWorkflow(projectRoot string) string {
-	return readFirstAvailable(40, filepath.Join(projectRoot, "docs", "GIT_WORKFLOW.md"))
+func readGitWorkflow(projectRoot string, read readFunc) string {
+	return readFirstAvailable(read, 40, filepath.Join(projectRoot, "docs", "GIT_WORKFLOW.md"))
 }
 
 // steeringHost is a CLI the baseline steering is written for: its name for
@@ -223,25 +231,26 @@ var (
 // (project, standards, security, git workflow, key rules) every host gets:
 // the inner content of Codex's AGENTS.md managed block, and the steering file
 // of an OpenCode run. It is the one source for both (#1626); only the title
-// and the notice name the host. Mirrors CodexContextGenerator.assembleContent
-// — stable (no per-issue task; that arrives via the prompt) so regeneration is
-// idempotent. It is never committed: see guard.go (issue 1675).
-func assembleSteeringContent(projectRoot string, host steeringHost) string {
+// and the notice name the host, and read reads each source (readFunc).
+// Mirrors CodexContextGenerator.assembleContent — stable (no per-issue task;
+// that arrives via the prompt) so regeneration is idempotent. It is never
+// committed: see guard.go (issue 1675).
+func assembleSteeringContent(projectRoot string, host steeringHost, read readFunc) string {
 	var sections []string
 	sections = append(sections,
 		"# Nightgauge Pipeline Steering ("+host.name+")\n",
 		host.notice,
 	)
-	if desc := readProjectDescription(projectRoot); desc != "" {
+	if desc := readProjectDescription(projectRoot, read); desc != "" {
 		sections = append(sections, "## Project\n", desc+"\n")
 	}
-	if std := readStandards(projectRoot); std != "" {
+	if std := readStandards(projectRoot, read); std != "" {
 		sections = append(sections, "## Coding Standards\n", std+"\n")
 	}
-	if sec := readSecurity(projectRoot); sec != "" {
+	if sec := readSecurity(projectRoot, read); sec != "" {
 		sections = append(sections, "## Security\n", sec+"\n")
 	}
-	if git := readGitWorkflow(projectRoot); git != "" {
+	if git := readGitWorkflow(projectRoot, read); git != "" {
 		sections = append(sections, "## Git Workflow\n", git+"\n")
 	}
 	sections = append(sections,
@@ -315,5 +324,5 @@ func IsOnlyManagedSteeringChange(committed, working string) bool {
 // computeNextAgentsMd is the pure transform: given the existing AGENTS.md text
 // (hasExisting=false ≈ no file) and the project root, return the next AGENTS.md.
 func computeNextAgentsMd(existing string, hasExisting bool, projectRoot string) string {
-	return upsertManagedSteeringBlock(existing, hasExisting, assembleSteeringContent(projectRoot, codexSteering))
+	return upsertManagedSteeringBlock(existing, hasExisting, assembleSteeringContent(projectRoot, codexSteering, readFileGracefully))
 }

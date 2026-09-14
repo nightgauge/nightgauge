@@ -82,7 +82,8 @@ type OpenCodeProvision struct {
 	// Instructions is inside it.
 	Root string
 	// Steering is the baseline steering, from the function Codex's managed
-	// AGENTS.md block comes from (assembleSteeringContent).
+	// AGENTS.md block comes from (assembleSteeringContent), its sources read
+	// only inside the worktree (worktreeReader).
 	Steering string
 	// Instructions are the absolute paths, symbolic links resolved, of the
 	// repository's steering file (repositorySteering) and of every file it
@@ -100,15 +101,23 @@ type OpenCodeProvision struct {
 }
 
 // ProvisionOpenCode reads what an OpenCode stage running in worktree is
-// given from its repository. The MCP servers come from the base branch
+// given from its repository. Every file it reads there is read through a
+// worktreeReader, so nothing outside the worktree is read, and a warning
+// names each file refused. The MCP servers come from the base branch
 // (ReadBaseBranchMcpServers): one the working tree alone defines, or defines
-// differently, is not given, and a warning names it. When the servers cannot
-// be read, the stage runs with none and a warning says why. An error means
-// the worktree is not a directory.
-func ProvisionOpenCode(ctx context.Context, worktree string) (OpenCodeProvision, error) {
+// differently, is not given, and a warning names it, as it names one only the
+// base defines. lookup reads the environment OpenCode inherits, in which a
+// server's variables are checked (openCodePastableMcpServers) and never
+// recorded. When the servers cannot be read, the stage runs with none and a
+// warning says why. An error means the worktree is not a directory or there
+// is no environment to check.
+func ProvisionOpenCode(ctx context.Context, worktree string, lookup func(string) (string, bool)) (OpenCodeProvision, error) {
 	var p OpenCodeProvision
 	if worktree == "" {
 		return p, errors.New("the stage has no worktree to read the repository's steering and MCP servers from")
+	}
+	if lookup == nil {
+		return p, errors.New("no environment to check the MCP servers' variables against")
 	}
 	root, err := filepath.EvalSymlinks(worktree)
 	if err != nil {
@@ -118,8 +127,12 @@ func ProvisionOpenCode(ctx context.Context, worktree string) (OpenCodeProvision,
 		return p, fmt.Errorf("the stage's worktree %s is not a directory", worktree)
 	}
 	p.Root = root
-	p.Steering = assembleSteeringContent(root, openCodeSteering)
-	p.Instructions, p.Warnings = openCodeInstructions(root)
+	files := newWorktreeReader(root)
+	p.Steering = assembleSteeringContent(root, openCodeSteering, files.read)
+	instructions, walkWarnings := openCodeInstructions(root, files.read)
+	p.Instructions = instructions
+	worktreeServers := readPipelineMcpServers(root, files.read)
+	p.Warnings = append(append(p.Warnings, files.warnings...), walkWarnings...)
 
 	base, source, err := ReadBaseBranchMcpServers(ctx, root)
 	if err != nil {
@@ -128,15 +141,19 @@ func ProvisionOpenCode(ctx context.Context, worktree string) (OpenCodeProvision,
 		return p, nil
 	}
 	p.McpSource = source
-	added, changed := worktreeOnlyServers(ReadPipelineMcpServers(root), base)
-	if len(added) > 0 {
-		p.Warnings = append(p.Warnings, fmt.Sprintf("MCP servers only the worktree defines, not %s, are not started: %s", source, strings.Join(added, ", ")))
+	worktreeOnly, changed, baseOnly := compareMcpServers(worktreeServers, base)
+	if len(worktreeOnly) > 0 {
+		p.Warnings = append(p.Warnings, fmt.Sprintf("MCP servers only the worktree defines, not %s, are not started: %s", source, strings.Join(worktreeOnly, ", ")))
 	}
 	if len(changed) > 0 {
 		p.Warnings = append(p.Warnings, fmt.Sprintf("MCP servers the worktree defines differently are started as %s defines them: %s", source, strings.Join(changed, ", ")))
 	}
-	var warnings []string
-	p.MCP, warnings = OpenCodeMcpServers(base)
+	if len(baseOnly) > 0 {
+		p.Warnings = append(p.Warnings, fmt.Sprintf("MCP servers only %s defines, not the worktree, are started: %s", source, strings.Join(baseOnly, ", ")))
+	}
+	servers, warnings := OpenCodeMcpServers(base)
+	p.Warnings = append(p.Warnings, warnings...)
+	p.MCP, warnings = openCodePastableMcpServers(servers, lookup)
 	p.Warnings = append(p.Warnings, warnings...)
 	return p, nil
 }

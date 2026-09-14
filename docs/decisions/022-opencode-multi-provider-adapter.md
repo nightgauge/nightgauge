@@ -117,6 +117,8 @@ capture script and the full observation table are in
 | An unknown key in `OPENCODE_CONFIG_CONTENT` is dropped without a word                                                                                                          | § 8                        |
 | An `instructions` entry naming the resolved path of the `AGENTS.md` OpenCode finds itself loads it once; read from the bundled source, the entry's name is a glob              | § 8                        |
 | `mcp` entries of the `local` and `remote` shapes parse in `OPENCODE_CONFIG_CONTENT`, and OpenCode resolves an `{env:VAR}` in them in its own process                           | § 8                        |
+| An `{env:VAR}` value is pasted unescaped: a quote, backslash or control character in it fails the parse, whose error prints the config; a `{file:...}` in it is read           | § 8                        |
+| While project config loads, OpenCode's own search loads an `AGENTS.md` that is a symbolic link to a file outside the worktree                                                  | § 8                        |
 
 The first contradiction changes § 8: once project config is disabled, which it
 must be (a repository must not grant itself permissions, plugins or providers),
@@ -735,7 +737,16 @@ reports it `non_loopback: true`, as it does every hosted provider's model.
   file is given twice, so a cycle ends. They stay inside the worktree: a URL,
   a path in the home directory, an absolute path, one whose `..` leaves the
   worktree and a symbolic link out of it are each left out with a warning on
-  stderr, so no file outside the repository reaches the model's prompt. Read
+  stderr. Every file Nightgauge reads for the stage, the baseline steering's
+  sources and the worktree's MCP files included, is read only when it is a
+  regular file inside the worktree once its symbolic links are resolved, and
+  only its first MiB. A link out of the worktree, a FIFO or a device is passed
+  over with a warning, and the rule falls through to the next source, such as
+  `CLAUDE.md` for an `AGENTS.md` linked out of the worktree. So nothing
+  Nightgauge gives OpenCode comes from outside the repository. OpenCode's own
+  search, which reads the repository's `AGENTS.md` while project config loads,
+  is not confined by this: observed, it loads an `AGENTS.md` linked out of the
+  worktree, and switching project config off (#1638) ends it. Read
   from the 1.18.30 bundled source, OpenCode loads an absolute entry by
   globbing its last element in its directory, so an entry whose name holds a
   character a pattern could read is left out too. Every path is written with
@@ -744,21 +755,38 @@ reports it `non_loopback: true`, as it does every hosted provider's model.
 - **MCP servers.** The per-run config's `mcp` holds the pipeline's MCP
   servers, the ones a Claude stage gets from `.mcp.json` and
   `.claude/settings.json`, and no others (#1626). They are read from the base
-  branch, origin's default branch, not from the worktree: a server is a
-  command OpenCode runs or a URL it sends tool calls to, and a stage can write
-  its worktree, so a server one stage added would otherwise start in the next
-  without review. A warning on stderr names a server only the worktree
-  defines. The read trusts the repository's refs, which the stages of a run
-  share: a stage that moves origin's default branch there changes what the
-  next one reads. Each `${VAR}` becomes OpenCode's `{env:VAR}`, which OpenCode
-  resolves in its own process, so no variable's value is in the content, and
-  a value already holding OpenCode's `{env:...}` or `{file:...}` syntax
-  refuses its server, because OpenCode would substitute it. A remote server
-  is given `oauth: false`: OpenCode's OAuth flow needs a browser login and a
-  callback server on the machine, which a headless stage cannot complete. The
-  operator's own servers stay out with the rest of their OpenCode config
-  (`inherit_user_config`, below); a repository's `opencode.json` can still
-  add a server of its own, which the tamper gate closes (#1638).
+  branch, `origin/main` or `origin/master`, not from the worktree: a server is
+  a command OpenCode runs or a URL it sends tool calls to, and a stage can
+  write its worktree, so a server one stage added to `.mcp.json` would
+  otherwise start in the next without review. A warning on stderr names a
+  server only the worktree defines, one it defines differently, and one only
+  the base branch defines. The read trusts the repository's refs, which every
+  worktree of the repository shares, not only the stages of one run, and
+  which a stage can write. `origin/HEAD`, which no fetch resets, is therefore
+  followed only to `origin/main` or `origin/master`: when it names another
+  branch, the stage gets no MCP server and the warning says why, so a
+  repository whose default branch has another name runs its OpenCode stages
+  without them. A stage that moves `origin/main` itself changes what every
+  later stage reads until a fetch resets it, and the warning naming a server
+  only the base branch defines is how that shows. Each `${VAR}` becomes
+  OpenCode's `{env:VAR}`, so no variable's value is in the content, and a
+  value already holding OpenCode's `{env:...}` or `{file:...}` syntax refuses
+  its server, because OpenCode would substitute it. OpenCode resolves a
+  `{env:VAR}` in its own process by pasting the variable's value into its
+  config text before parsing it, unescaped (read from the 1.18.30 bundled
+  source, and observed): a quote, a backslash or a control character in the
+  value makes the whole config fail to parse, and OpenCode's error prints the
+  substituted config, every resolved credential in it, and a `{file:...}` in
+  the value is read as a file reference. So each variable a server names is
+  checked in the environment the stage inherits, its value never recorded,
+  and a server one of whose variables holds such a value is left out with a
+  warning naming the variable. A remote server is given `oauth: false`:
+  OpenCode's OAuth flow needs a browser login and a callback server on the
+  machine, which a headless stage cannot complete. The operator's own servers
+  stay out with the rest of their OpenCode config (`inherit_user_config`,
+  below); a repository's `opencode.json` can still add a server of its own,
+  which OpenCode starts beside these, until the tamper gate closes that route
+  (#1638), and until then the tamper-gate warning line says so.
 - **`--pure` is never passed.** It would also drop the Nightgauge plugin.
   Plugins are controlled by the per-run `plugin` list (the Nightgauge plugin
   and nothing else) and `OPENCODE_DISABLE_DEFAULT_PLUGINS=1`.

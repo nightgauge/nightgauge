@@ -34,6 +34,14 @@ func relEntries(t *testing.T, root string, entries []string) []string {
 	return out
 }
 
+// instructionsIn is the instructions entries of root and every warning
+// reading them gave.
+func instructionsIn(root string) ([]string, []string) {
+	files := newWorktreeReader(root)
+	entries, warnings := openCodeInstructions(root, files.read)
+	return entries, append(files.warnings, warnings...)
+}
+
 // TestOpenCodeImports: an `@path` import in the repository's steering file
 // resolves, relative to the importing file, to an instructions entry of its
 // own inside the worktree. An absolute path, a path in the home directory, a
@@ -74,7 +82,7 @@ func TestOpenCodeImports(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	entries, warnings := openCodeInstructions(root)
+	entries, warnings := instructionsIn(root)
 	want := []string{"AGENTS.md", "docs/x.md", "docs/chain1.md", "docs/chain2.md", "docs/chain3.md", "docs/cycle-a.md", "docs/cycle-b.md"}
 	if got := relEntries(t, root, entries); !slices.Equal(got, want) {
 		t.Errorf("instructions = %v\nwant           %v", got, want)
@@ -111,7 +119,7 @@ func TestOpenCodeInstructionsNeverHoldAURL(t *testing.T) {
 	root := resolvedTempDir(t)
 	writeFile(t, filepath.Join(root, "CLAUDE.md"), "@https://example.test/a.md\n@http://127.0.0.1:9/b.md @file:///etc/passwd @HTTPS://example.test/c.md @docs/ok.md\n")
 	writeFile(t, filepath.Join(root, "docs", "ok.md"), "ok @ftp://example.test/d.md\n")
-	entries, warnings := openCodeInstructions(root)
+	entries, warnings := instructionsIn(root)
 	url := regexp.MustCompile(`^[a-z]+://`)
 	for _, e := range entries {
 		if url.MatchString(strings.ToLower(e)) || !filepath.IsAbs(e) {
@@ -134,15 +142,15 @@ func TestOpenCodeInstructionsNeverHoldAURL(t *testing.T) {
 // TestOpenCodeSteeringFileFollowsTheSharedRule: the repository's steering file
 // is AGENTS.md when it has content of its own, and then CLAUDE.md is not
 // given, nor followed; otherwise CLAUDE.md, whose leading @AGENTS.md import
-// is skipped. A steering file that is a symbolic link out of the worktree is
-// left out with a warning.
+// is skipped. An AGENTS.md that is a symbolic link out of the worktree is left
+// out with a warning, and the rule falls through to CLAUDE.md.
 func TestOpenCodeSteeringFileFollowsTheSharedRule(t *testing.T) {
 	t.Run("AGENTS.md with content", func(t *testing.T) {
 		root := resolvedTempDir(t)
 		writeFile(t, filepath.Join(root, "AGENTS.md"), "# Contract\nRules.\n")
 		writeFile(t, filepath.Join(root, "CLAUDE.md"), "@AGENTS.md\n\n@docs/claude-only.md\n")
 		writeFile(t, filepath.Join(root, "docs", "claude-only.md"), "CLAUDE ONLY\n")
-		entries, _ := openCodeInstructions(root)
+		entries, _ := instructionsIn(root)
 		if got := relEntries(t, root, entries); !slices.Equal(got, []string{"AGENTS.md"}) {
 			t.Errorf("instructions = %v, want AGENTS.md alone", got)
 		}
@@ -151,7 +159,7 @@ func TestOpenCodeSteeringFileFollowsTheSharedRule(t *testing.T) {
 		root := resolvedTempDir(t)
 		writeFile(t, filepath.Join(root, "CLAUDE.md"), "@AGENTS.md\n\n# Rules\nSENTINEL-7Q\n@docs/more.md\n")
 		writeFile(t, filepath.Join(root, "docs", "more.md"), "MORE\n")
-		entries, warnings := openCodeInstructions(root)
+		entries, warnings := instructionsIn(root)
 		if got := relEntries(t, root, entries); !slices.Equal(got, []string{"CLAUDE.md", "docs/more.md"}) {
 			t.Errorf("instructions = %v, want CLAUDE.md and its import", got)
 		}
@@ -163,7 +171,7 @@ func TestOpenCodeSteeringFileFollowsTheSharedRule(t *testing.T) {
 		root := resolvedTempDir(t)
 		writeFile(t, filepath.Join(root, "AGENTS.md"), steeringManagedBegin+"\ngenerated\n"+steeringManagedEnd+"\n")
 		writeFile(t, filepath.Join(root, "CLAUDE.md"), "# Rules\nSee @AGENTS.md for the rest.\n")
-		entries, _ := openCodeInstructions(root)
+		entries, _ := instructionsIn(root)
 		if got := relEntries(t, root, entries); !slices.Equal(got, []string{"CLAUDE.md"}) {
 			t.Errorf("instructions = %v, want CLAUDE.md alone: AGENTS.md has nothing of the repository's own", got)
 		}
@@ -175,14 +183,83 @@ func TestOpenCodeSteeringFileFollowsTheSharedRule(t *testing.T) {
 		if err := os.Symlink(outside, filepath.Join(root, "AGENTS.md")); err != nil {
 			t.Fatal(err)
 		}
-		entries, warnings := openCodeInstructions(root)
-		if len(entries) != 0 || !strings.Contains(strings.Join(warnings, "\n"), "AGENTS.md is a symbolic link to a file outside the worktree") {
-			t.Errorf("instructions = %v, warnings = %v", entries, warnings)
+		writeFile(t, filepath.Join(root, "CLAUDE.md"), "# Rules\nCLAUDE RULES\n")
+		entries, warnings := instructionsIn(root)
+		if got := relEntries(t, root, entries); !slices.Equal(got, []string{"CLAUDE.md"}) {
+			t.Errorf("instructions = %v, want CLAUDE.md: an AGENTS.md linked out of the worktree holds nothing of the repository's own", got)
+		}
+		if w := strings.Join(warnings, "\n"); !strings.Contains(w, "AGENTS.md is a symbolic link to a file outside the worktree") {
+			t.Errorf("no warning names the linked AGENTS.md: %v", warnings)
 		}
 	})
 	t.Run("no steering", func(t *testing.T) {
-		if entries, warnings := openCodeInstructions(resolvedTempDir(t)); len(entries) != 0 || len(warnings) != 0 {
+		if entries, warnings := instructionsIn(resolvedTempDir(t)); len(entries) != 0 || len(warnings) != 0 {
 			t.Errorf("an empty repository gave %v, %v", entries, warnings)
 		}
 	})
+}
+
+// TestOpenCodeBaselineSteeringReadsNothingOutsideTheWorktree: the baseline
+// steering an OpenCode stage is given reads its sources only inside the
+// worktree, as its instructions entries do, because it reaches the model's
+// system prompt too. A stage can leave a symbolic link at any source's name:
+// AGENTS.md, standards/code-standards.md and docs/GIT_WORKFLOW.md here, each
+// linked to a file outside the worktree. None of their content reaches the
+// steering, a warning names each once, and the rule falls through to the
+// next source: CLAUDE.md for the steering file and the summary of it,
+// docs/CODE_STANDARDS.md for the standards.
+func TestOpenCodeBaselineSteeringReadsNothingOutsideTheWorktree(t *testing.T) {
+	wt := openCodeRepo(t, map[string]string{
+		"CLAUDE.md":              "# Rules\n\nCLAUDE-SENTINEL-4M\n",
+		"docs/CODE_STANDARDS.md": "# Standards\n\nIN-TREE-STANDARDS-8P\n",
+	})
+	outside := resolvedTempDir(t)
+	for name, sentinel := range map[string]string{
+		"AGENTS.md":                   "OUTSIDE-AGENTS-2V",
+		"standards/code-standards.md": "OUTSIDE-STANDARDS-5J",
+		"docs/GIT_WORKFLOW.md":        "OUTSIDE-WORKFLOW-9R",
+	} {
+		target := filepath.Join(outside, strings.ReplaceAll(name, "/", "-"))
+		writeFile(t, target, "# Outside\n\n"+sentinel+"\n")
+		link := filepath.Join(wt, name)
+		if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	p := provisionOpenCode(t, wt)
+	for _, sentinel := range []string{"OUTSIDE-AGENTS-2V", "OUTSIDE-STANDARDS-5J", "OUTSIDE-WORKFLOW-9R"} {
+		if strings.Contains(p.Steering, sentinel) {
+			t.Errorf("the steering holds %s, from a file outside the worktree:\n%s", sentinel, p.Steering)
+		}
+	}
+	for _, want := range []string{"CLAUDE-SENTINEL-4M", "IN-TREE-STANDARDS-8P"} {
+		if !strings.Contains(p.Steering, want) {
+			t.Errorf("the steering does not fall through to %s:\n%s", want, p.Steering)
+		}
+	}
+	root, err := filepath.EvalSymlinks(wt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(p.Instructions, []string{filepath.Join(root, "CLAUDE.md")}) {
+		t.Errorf("Instructions = %v, want the worktree's CLAUDE.md", p.Instructions)
+	}
+	w := strings.Join(p.Warnings, "\n")
+	for _, want := range []string{
+		"AGENTS.md is a symbolic link to a file outside the worktree",
+		"standards/code-standards.md is a symbolic link to a file outside the worktree",
+		"docs/GIT_WORKFLOW.md is a symbolic link to a file outside the worktree",
+		"OpenCode's own search still loads it",
+	} {
+		if !strings.Contains(w, want) {
+			t.Errorf("no warning says %q:\n%s", want, w)
+		}
+	}
+	if n := strings.Count(w, "AGENTS.md is a symbolic link"); n != 1 {
+		t.Errorf("AGENTS.md is warned about %d times, want once:\n%s", n, w)
+	}
 }

@@ -22,11 +22,13 @@ import (
 // Imports resolve the way Claude Code resolves them in a CLAUDE.md, relative
 // to the importing file, and are confined to the worktree: a URL, a path in
 // the home directory, an absolute path, one whose `..` leaves the worktree and
-// a symbolic link out of it are each left out with a warning, so no file
-// outside the repository and nothing remote reaches the model's prompt. Imports
-// are followed openCodeImportDepth deep, and a file already given is never
-// given twice, so a cycle ends. An `@name` that names no file in the worktree,
-// such as a person's handle, is ignored, as Claude Code ignores it.
+// a symbolic link out of it are each left out with a warning. Every file
+// Nightgauge reads for the stage, the baseline steering's sources included,
+// is read through a worktreeReader, so none of the steering it gives OpenCode
+// comes from outside the repository or from anywhere remote. Imports are
+// followed openCodeImportDepth deep, and a file already given is never given
+// twice, so a cycle ends. An `@name` that names no file in the worktree, such
+// as a person's handle, is ignored, as Claude Code ignores it.
 
 // openCodeImportDepth is how many imports deep the steering is followed from
 // the repository's steering file.
@@ -137,6 +139,7 @@ func withoutCodeSpans(line string) string {
 // steeringWalk collects a repository's steering files as instructions entries.
 type steeringWalk struct {
 	root     string // the worktree, symbolic links resolved
+	read     readFunc
 	seen     map[string]bool
 	paths    []string
 	warnings []string
@@ -157,26 +160,27 @@ func (w *steeringWalk) warnf(format string, args ...any) {
 // own steering in root, a worktree whose symbolic links are resolved: the
 // file repositorySteering picks, then every file it imports, depth first, in
 // the order they appear. Each is an absolute path inside root with its
-// symbolic links resolved. Warnings say what was left out.
-func openCodeInstructions(root string) (paths, warnings []string) {
-	w := &steeringWalk{root: root, seen: map[string]bool{}}
-	name, _ := repositorySteering(root)
+// symbolic links resolved. Every file is read through read, a worktreeReader's
+// in production, so a steering file it refuses is passed over as absent, and
+// the rule falls through to CLAUDE.md; the reader's own warnings name it.
+// These warnings say what else was left out.
+func openCodeInstructions(root string, read readFunc) (paths, warnings []string) {
+	w := &steeringWalk{root: root, read: read, seen: map[string]bool{}}
+	name, _ := repositorySteering(root, read)
 	if name == "" {
 		return nil, nil
 	}
 	file, err := filepath.EvalSymlinks(filepath.Join(root, name))
-	if err != nil {
-		return nil, nil
-	}
-	if !within(root, file) {
-		w.warnf("%s is a symbolic link to a file outside the worktree, so it is not given to OpenCode", name)
+	if err != nil || !within(root, file) {
+		// read has just found it inside the worktree; it changed since.
+		w.warnf("%s changed while it was read, so it is not named in instructions", name)
 		return nil, w.warnings
 	}
 	if err := OpenCodeInstructionPathError(file); err != nil {
 		w.warnf("%s is not given to OpenCode: %v", name, err)
 		return nil, w.warnings
 	}
-	raw, _ := readFileGracefully(file)
+	raw, _ := read(file)
 	scan := stripManagedSteeringBlock(raw)
 	if name == "CLAUDE.md" {
 		// The rule picked CLAUDE.md because AGENTS.md has no content of its
@@ -240,7 +244,7 @@ func (w *steeringWalk) visit(file, content string, depth int) {
 			continue
 		}
 		w.seen[target] = true
-		raw, _ := readFileGracefully(target)
+		raw, _ := w.read(target)
 		if strings.TrimSpace(StripManagedSteering(raw)) == "" {
 			continue // nothing of the repository's own to give
 		}

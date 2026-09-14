@@ -223,7 +223,7 @@ func TestProvisionOpenCode_SharesSteeringAndWritesNothing(t *testing.T) {
 	if res, err := Provision("opencode", wt); err != nil || res.AgentsMdPath != "" || res.ConfigTomlPath != "" {
 		t.Fatalf("Provision(opencode) = %+v, %v; want a no-op", res, err)
 	}
-	p, err := ProvisionOpenCode(context.Background(), wt)
+	p, err := ProvisionOpenCode(context.Background(), wt, os.LookupEnv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +250,7 @@ func TestProvisionOpenCode_SharesSteeringAndWritesNothing(t *testing.T) {
 	head := func(h steeringHost) string {
 		return "# Nightgauge Pipeline Steering (" + h.name + ")\n\n" + h.notice + "\n"
 	}
-	codex := assembleSteeringContent(root, codexSteering)
+	codex := assembleSteeringContent(root, codexSteering, readFileGracefully)
 	if !strings.HasPrefix(p.Steering, head(openCodeSteering)) || !strings.HasPrefix(codex, head(codexSteering)) {
 		t.Fatalf("a steering does not open with its host's title and notice:\n%s", p.Steering)
 	}
