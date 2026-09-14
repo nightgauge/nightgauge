@@ -780,6 +780,11 @@ func captureStderr(t *testing.T, fn func()) string {
 	return string(<-out)
 }
 
+// openCodeFakeVersion is the first line of every fake `opencode`: it answers
+// the `opencode --version` the stream parser runs after a stage (#1624) and
+// exits, so the invocation is never recorded as the stage's own run.
+const openCodeFakeVersion = `[ "$1" = --version ] && { echo 1.18.30; exit 0; }`
+
 // TestOpenCodeDispatchRefusedUntilEnabled is ADR-022's enable gate, observed at
 // the only place it matters: whether RunStage spawns the CLI. A fake `opencode`
 // first on PATH records every invocation, its argv and its stdin.
@@ -796,8 +801,10 @@ func TestOpenCodeDispatchRefusedUntilEnabled(t *testing.T) {
 	invocations := filepath.Join(stubDir, "invocations.log")
 	argvFile := filepath.Join(stubDir, "argv.txt")
 	stdinFile := filepath.Join(stubDir, "stdin.txt")
-	script := fmt.Sprintf("#!/bin/sh\necho invoked >> %q\nprintf '%%s\\n' \"$@\" > %q\ncat > %q\nexit 0\n",
-		invocations, argvFile, stdinFile)
+	// The version the stream parser reads after the run is answered and not
+	// counted: only the stage's own `run` is an invocation here.
+	script := fmt.Sprintf("#!/bin/sh\n%s\necho invoked >> %q\nprintf '%%s\\n' \"$@\" > %q\ncat > %q\nexit 0\n",
+		openCodeFakeVersion, invocations, argvFile, stdinFile)
 	if err := os.WriteFile(filepath.Join(stubDir, "opencode"), []byte(script), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -967,6 +974,7 @@ func installOpenCodeFake(t *testing.T, extra string) *openCodeFake {
 	t.Helper()
 	dir := t.TempDir()
 	script := fmt.Sprintf(`#!/bin/sh
+`+openCodeFakeVersion+`
 echo invoked >> %[1]q/invocations.log
 env -0 > %[1]q/env.bin
 ls -ld "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME" "$XDG_STATE_HOME" > %[1]q/dirs.txt 2>&1

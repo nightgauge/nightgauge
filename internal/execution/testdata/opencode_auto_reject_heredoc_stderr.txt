@@ -1,0 +1,3 @@
+[93m[1m! [0mpermission requested: bash (python3 - <<'PYEOF'
+print(1)
+PYEOF); auto-rejecting

@@ -1,13 +1,15 @@
-// stream.go parses NDJSON output from AI CLI adapters (Claude, Codex, Gemini)
-// to extract token usage, tool calls, and other events. Supports multiple
-// output formats with a unified TokenAccumulator.
+// stream.go parses NDJSON output from AI CLI adapters (Claude, Codex, Gemini,
+// Grok, OpenCode) to extract token usage, tool calls, and other events.
+// Supports multiple output formats with a unified TokenAccumulator.
 package execution
 
 import (
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 )
@@ -128,6 +130,16 @@ type TokenAccumulator struct {
 	// which is the asymmetry #256 was booked against. Matches the TS
 	// TokenAccumulator.add(), which likewise sums envelope token counts.
 	resultTotal TokenUsage
+
+	// PeakStepInputTokens is the largest prompt one model step sent: its
+	// input plus its cache-read and cache-write tokens. The summed pools grow
+	// with every turn, so only this says how close a stage came to its
+	// context window. Only the opencode parser sees per-step usage; 0 means
+	// not observed.
+	PeakStepInputTokens int
+
+	// openCode is the opencode parser's per-run state (OpenCode).
+	openCode *OpenCodeStream
 }
 
 // ParseStreamLine parses a single NDJSON line from Claude's stream-json output.
@@ -638,15 +650,247 @@ func (acc *TokenAccumulator) ParseGrokStreamLine(line string) (*StreamEvent, boo
 	return event, tokenUpdated
 }
 
+// --- OpenCode `run --format json` parsing ---
+//
+// Shapes observed on opencode 1.18.30 (testdata/README.md, § OpenCode). Every
+// line is one event: {type, timestamp, sessionID} plus `part`, or `error` for
+// an error event. The types are step_start, step_finish, tool_use (emitted
+// only once a tool call completed or failed), text, reasoning (only with
+// --thinking) and error. The stream carries events of the run's own session
+// only: a subagent's steps never appear in it, which is why the manager folds
+// child-session usage from `opencode export` after exit (opencode_usage.go).
+// There is no final usage event and no model or version field.
+
+// openCodeEvent is one event of the stream.
+type openCodeEvent struct {
+	Type      string          `json:"type"`
+	SessionID string          `json:"sessionID"`
+	Part      *openCodePart   `json:"part"`
+	Error     json.RawMessage `json:"error"`
+}
+
+// openCodePart is the subset of an event's part the parser reads. The
+// transcript fields (text, tool input and output) are deliberately not
+// declared: nothing here may classify on them.
+type openCodePart struct {
+	Tool   string             `json:"tool"`
+	Reason *string            `json:"reason"`
+	Tokens *OpenCodeTokens    `json:"tokens"`
+	Cost   *float64           `json:"cost"`
+	State  *openCodeToolState `json:"state"`
+}
+
+// openCodeToolState is a tool_use part's outcome. Error is compared with
+// OpenCode's own rejection message only; it is never copied anywhere.
+type openCodeToolState struct {
+	Status string `json:"status"`
+	Error  string `json:"error"`
+}
+
+// OpenCodeTokens is OpenCode's per-step (step_finish part.tokens) and
+// per-session (export info.tokens) usage. OpenCode derives Input with both
+// cache pools subtracted and Output with Reasoning subtracted, so the five
+// fields are disjoint and each sums on its own.
+type OpenCodeTokens struct {
+	Input     int `json:"input"`
+	Output    int `json:"output"`
+	Reasoning int `json:"reasoning"`
+	Cache     struct {
+		Read  int `json:"read"`
+		Write int `json:"write"`
+	} `json:"cache"`
+}
+
+// openCodeRejectedToolError is the error OpenCode 1.18.30 gives a tool call
+// whose permission request it rejected.
+const openCodeRejectedToolError = "The user rejected permission to use this specific tool call."
+
+// openCodeKnownEvents are the event types opencode 1.18.30 writes.
+var openCodeKnownEvents = map[string]bool{
+	"step_start": true, "step_finish": true, "tool_use": true,
+	"text": true, "reasoning": true, "error": true,
+}
+
+// OpenCodeDriftMarker prefixes every drift marker: evidence that OpenCode's
+// output did not have the shape this parser was written against. A marker is
+// logged and kept on the RunResult. It is never success evidence, and a run
+// with one is not a clean run (#1639 asserts there are none).
+const OpenCodeDriftMarker = "[opencode-drift]"
+
+// OpenCodeStream is what ParseOpenCodeStreamLine learns from one run's stream
+// besides the token pools it adds to the accumulator. Get it with
+// TokenAccumulator.OpenCode.
+type OpenCodeStream struct {
+	// SessionID is the run's own session, from the first event naming one.
+	SessionID string
+	// StepFinishes counts step_finish events: one per model step.
+	StepFinishes int
+	// ReportedCostUSD sums step_finish part.cost. It is OpenCode's figure
+	// from its bundled catalog, not a bill (ADR-022 § 3).
+	ReportedCostUSD float64
+	// RejectedToolCalls counts tool_use events OpenCode failed with its
+	// permission-rejection error. Stderr, not this count, names the
+	// permission: this is only the cross-check that stderr said so.
+	RejectedToolCalls int
+
+	drift driftLog
+}
+
+// OpenCode returns the accumulator's opencode stream state.
+func (acc *TokenAccumulator) OpenCode() *OpenCodeStream {
+	if acc.openCode == nil {
+		acc.openCode = &OpenCodeStream{}
+	}
+	return acc.openCode
+}
+
+// Drift records a drift marker from outside the stream, such as a line the
+// reader had to drop or a usage fold that failed. Safe for concurrent use.
+func (s *OpenCodeStream) Drift(format string, args ...any) {
+	s.drift.add(format, args...)
+}
+
+// Finish closes the stream once the process has exited. A run that exits 0
+// without a single step_finish recorded no usage at all, which on 1.18.30
+// only a format change explains.
+func (s *OpenCodeStream) Finish(exitCode int) {
+	if exitCode == 0 && s.StepFinishes == 0 {
+		s.Drift("the run exited 0 without a step_finish event, so it recorded no token usage")
+	}
+}
+
+// DriftMarkers returns the run's drift markers, each once, in the order first
+// seen. A marker seen more than once says how often.
+func (s *OpenCodeStream) DriftMarkers() []string {
+	return s.drift.list()
+}
+
+// ParseOpenCodeStreamLine parses one line of `opencode run --format json`.
+//
+// Every step_finish adds its part.tokens to the pools: input, output with
+// reasoning folded in (as the grok parser does), cache read and cache write.
+// The stream has no final usage event, so the sum over steps is the run's
+// usage, and PeakStepInputTokens keeps the largest single step's prompt.
+// Anything this version did not emit is a drift marker: a line that is not a
+// JSON event, an unknown event type, and a step_finish without part.tokens or
+// part.reason. Text and tool output are never inspected.
+func (acc *TokenAccumulator) ParseOpenCodeStreamLine(line string) (*StreamEvent, bool) {
+	s := acc.OpenCode()
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return nil, false
+	}
+	var ev openCodeEvent
+	if line[0] != '{' || json.Unmarshal([]byte(line), &ev) != nil {
+		s.Drift("a stdout line is not a JSON event")
+		return nil, false
+	}
+	if s.SessionID == "" {
+		s.SessionID = ev.SessionID
+	}
+	event := &StreamEvent{Type: ev.Type, SessionID: ev.SessionID}
+	if !openCodeKnownEvents[ev.Type] {
+		s.Drift("unknown event type %s", quotedEventType(ev.Type))
+		return event, false
+	}
+	switch ev.Type {
+	case "tool_use":
+		if ev.Part != nil && ev.Part.State != nil && ev.Part.State.Status == "error" &&
+			ev.Part.State.Error == openCodeRejectedToolError {
+			s.RejectedToolCalls++
+		}
+	case "step_finish":
+		s.StepFinishes++
+		if ev.Part == nil || ev.Part.Reason == nil {
+			s.Drift("a step_finish event has no part.reason")
+		}
+		if ev.Part == nil || ev.Part.Tokens == nil {
+			s.Drift("a step_finish event has no part.tokens")
+			return event, false
+		}
+		if ev.Part.Cost != nil && *ev.Part.Cost > 0 {
+			s.ReportedCostUSD += *ev.Part.Cost
+		}
+		acc.addOpenCodeTokens(*ev.Part.Tokens)
+		if prompt := nonNegative(ev.Part.Tokens.Input) + nonNegative(ev.Part.Tokens.Cache.Read) +
+			nonNegative(ev.Part.Tokens.Cache.Write); prompt > acc.PeakStepInputTokens {
+			acc.PeakStepInputTokens = prompt
+		}
+		return event, true
+	}
+	return event, false
+}
+
+// addOpenCodeTokens adds one step's or one session's usage to the pools.
+// OpenCode reports the five fields disjoint, so each adds to its own pool.
+func (acc *TokenAccumulator) addOpenCodeTokens(t OpenCodeTokens) {
+	acc.InputTokens += nonNegative(t.Input)
+	acc.OutputTokens += nonNegative(t.Output) + nonNegative(t.Reasoning)
+	acc.CacheRead += nonNegative(t.Cache.Read)
+	acc.CacheCreated += nonNegative(t.Cache.Write)
+}
+
+func nonNegative(n int) int {
+	if n < 0 {
+		return 0
+	}
+	return n
+}
+
+// quotedEventType renders an unknown event type for a marker: quoted, and
+// cut short, so a marker line stays one bounded line whatever the stream held.
+func quotedEventType(t string) string {
+	const max = 40
+	if len(t) > max {
+		t = t[:max] + "..."
+	}
+	return strconv.Quote(t)
+}
+
+// driftLog collects drift markers: each distinct one once, with a count.
+type driftLog struct {
+	mu     sync.Mutex
+	order  []string
+	counts map[string]int
+}
+
+func (d *driftLog) add(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.counts == nil {
+		d.counts = map[string]int{}
+	}
+	if d.counts[msg] == 0 {
+		d.order = append(d.order, msg)
+	}
+	d.counts[msg]++
+}
+
+func (d *driftLog) list() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := make([]string, 0, len(d.order))
+	for _, msg := range d.order {
+		marker := OpenCodeDriftMarker + " " + msg
+		if n := d.counts[msg]; n > 1 {
+			marker += fmt.Sprintf(" (%d times)", n)
+		}
+		out = append(out, marker)
+	}
+	return out
+}
+
 // AdapterStreamFormat identifies which stream parser to use.
 type AdapterStreamFormat string
 
 const (
-	StreamFormatClaude  AdapterStreamFormat = "claude"
-	StreamFormatCodex   AdapterStreamFormat = "codex"
-	StreamFormatGemini  AdapterStreamFormat = "gemini"
-	StreamFormatCopilot AdapterStreamFormat = "copilot"
-	StreamFormatGrok    AdapterStreamFormat = "grok"
+	StreamFormatClaude   AdapterStreamFormat = "claude"
+	StreamFormatCodex    AdapterStreamFormat = "codex"
+	StreamFormatGemini   AdapterStreamFormat = "gemini"
+	StreamFormatCopilot  AdapterStreamFormat = "copilot"
+	StreamFormatGrok     AdapterStreamFormat = "grok"
+	StreamFormatOpenCode AdapterStreamFormat = "opencode"
 )
 
 // ParseLine dispatches to the correct stream parser based on adapter format.
@@ -660,6 +904,8 @@ func (acc *TokenAccumulator) ParseLine(format AdapterStreamFormat, line string) 
 		return acc.ParseCopilotStreamLine(line)
 	case StreamFormatGrok:
 		return acc.ParseGrokStreamLine(line)
+	case StreamFormatOpenCode:
+		return acc.ParseOpenCodeStreamLine(line)
 	default:
 		return acc.ParseStreamLine(line)
 	}
@@ -676,6 +922,8 @@ func StreamFormatForAdapter(adapterName string) AdapterStreamFormat {
 		return StreamFormatCopilot
 	case adapterName == "grok" || strings.HasPrefix(adapterName, "grok-"):
 		return StreamFormatGrok
+	case adapterName == "opencode":
+		return StreamFormatOpenCode
 	default:
 		return StreamFormatClaude
 	}

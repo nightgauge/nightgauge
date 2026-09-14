@@ -234,7 +234,7 @@ func openCodePlatformProviderRefusal(model string) error {
 // server it names, a proxy serving a subscription included
 // (openCodeEndpointEnv).
 //
-// The model is parsed the way openCodeModelArg parses it (trimmed, split on
+// The model is parsed the way OpenCodeModelArg parses it (trimmed, split on
 // the first slash). The provider key is compared case-insensitively, so every
 // spelling of it meets this requirement rather than only the model check.
 func openCodeAnthropicRefusal(model string, lookup func(string) (string, bool)) error {
@@ -279,9 +279,9 @@ func openCodeGate(switchValue string, warn io.Writer) error {
 // ValidateModel implements the manager's optional pre-spawn model check. A
 // dispatch must name a model OpenCode can take on -m, because without -m
 // OpenCode falls back to the model its own config names — the operator's, not
-// the pipeline's. openCodeModelArg defines the one accepted form.
+// the pipeline's. OpenCodeModelArg defines the one accepted form.
 func (a *OpenCodeAdapter) ValidateModel(model string) error {
-	_, err := openCodeModelArg(model)
+	_, err := OpenCodeModelArg(model)
 	return err
 }
 
@@ -291,8 +291,10 @@ func (a *OpenCodeAdapter) ValidateModel(model string) error {
 // so a host name or an address can never be used as a key.
 var openCodeProviderKeyRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
-// openCodeModelArg returns the value for OpenCode's -m flag. Only an explicit
-// "<provider>/<model>" is accepted, and it passes through unchanged. OpenCode
+// OpenCodeModelArg returns the value for OpenCode's -m flag. Only an explicit
+// "<provider>/<model>" is accepted, and it passes through with only its
+// surrounding space trimmed; the manager records that value as the stage's
+// upstream model (ADR-022 § 2). OpenCode
 // splits it on the FIRST slash, so "lmstudio/qwen/qwen3.8-27b" is model
 // "qwen/qwen3.8-27b" on provider "lmstudio".
 //
@@ -301,7 +303,7 @@ var openCodeProviderKeyRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 // where the repository's code goes and what the stage costs, so the operator
 // names it (ADR-022, The command). Also refused: an empty model, and a value
 // whose provider key or model id could read as a flag.
-func openCodeModelArg(model string) (string, error) {
+func OpenCodeModelArg(model string) (string, error) {
 	m := strings.TrimSpace(model)
 	if m == "" {
 		return "", fmt.Errorf("the opencode adapter needs a model: set the stage model to <provider>/<model>, such as lmstudio/<model-id> or anthropic/<model-id>")
@@ -353,7 +355,7 @@ func (a *OpenCodeAdapter) BuildCommand(opts RunOptions) (string, []string, map[s
 	// cannot express, so -m is always present on a real dispatch. Omitting it
 	// here, rather than guessing, keeps BuildCommand total for callers that
 	// skip validation.
-	if model, err := openCodeModelArg(opts.Model); err == nil {
+	if model, err := OpenCodeModelArg(opts.Model); err == nil {
 		args = append(args, "-m", model)
 	}
 	if opts.WorktreeDir != "" {

@@ -207,9 +207,12 @@ has opted in.
   refuse the dispatch. Today that holds because the doctor has no `opencode`
   spec; #1627 adds one and must keep the verdict `false` while the gate is
   closed. `TestOpenCodeIsNeverACapHopTargetWhileGated` pins it.
-- **Stream parsing.** Until #1624, `StreamFormatForAdapter("opencode")` falls
-  back to the Claude parser, which reads nothing from OpenCode's events. That
-  is harmless only because every dispatch is gated, and the warning says so.
+- **Stream parsing.** #1624 gives `opencode` its own parser: it sums every
+  `step_finish`'s tokens, folds in the usage of subagent sessions (§ 22), and
+  puts the served model (§ 1, § 2), the CLI's version and drift markers on the
+  stage's run result. Pricing a stage from the registry, the USD watchdog and
+  writing `model_provider` and `upstream_model` to the stage record are
+  #1630's (§ 2, § 3), so the row stays until that change.
 - **ADR-020.** The switch is a default-off setting. ADR-020 requires its reason
   beside it, and the reason is security: a dispatch runs without controls every
   other adapter has.
@@ -325,16 +328,20 @@ allowed, a host name or an address can never become one.
   can never collide with a registry id. An `other` model is recorded as its raw
   `-m` value.
 - `upstream_model`: the raw `-m` value exactly as dispatched. It is a field of
-  the local record.
+  the local record. When the session export shows that another model served
+  the stage, such as an agent's model from a config the run read (§ 10),
+  `model` and `model_provider` are the served model's and `upstream_model`
+  stays the `-m` value, the only record of what was dispatched.
 - `provider` on the V5 stage metric keeps its current meaning, the executing
   adapter, so it reads `opencode`.
 - **Yes, the V5 stage metric gains nullable fields**: `model_provider` (§ 1)
-  and `endpoint` (§ Endpoints). Both are written to the local V2 record from
-  the first parser change (#1624). The platform mapper emits them only after
-  the platform's strict stage-metric schema accepts them, because that schema
-  rejects unknown keys and an early emission would fail the whole upload. This
-  is the same local-first pattern `cost_unstamped` follows in
-  `internal/platform/execution_history_mapper.go`.
+  and `endpoint` (§ Endpoints). The parser (#1624) puts `model_provider` and
+  `upstream_model` on the stage's run result, beside the recorded `model`;
+  #1630 writes them, and `endpoint`, to the local V2 record. The platform
+  mapper emits them only after the platform's strict stage-metric schema
+  accepts them, because that schema rejects unknown keys and an early emission
+  would fail the whole upload. This is the same local-first pattern
+  `cost_unstamped` follows in `internal/platform/execution_history_mapper.go`.
 
 ### 3. Cost
 
@@ -739,6 +746,14 @@ automatically. OpenCode prints `! permission requested: <permission>
 (<pattern>); auto-rejecting`, the tool call fails with "The user rejected
 permission to use this specific tool call.", the run ends after that step, and
 the process **exits 0**. An `ask` is a silent stop that looks like success.
+#1624's captures add four details (see
+`internal/execution/testdata/README.md`, § OpenCode): the line carries
+terminal escape codes around the `!` even when stderr is not a terminal; it
+names the permission, which is `edit` for the write tools, and not the tool;
+it is printed for every subagent session as well as the run's own; and the
+patterns are the call's input printed unescaped, so a call whose input holds
+a newline (a heredoc, a commit message with a body) spreads the notice over
+several lines, only the last ending in `); auto-rejecting`.
 
 - Permission maps Nightgauge generates contain only `allow` and `deny`, never
   `ask`. That covers the permissions OpenCode defaults to `ask`, such as
@@ -748,7 +763,31 @@ the process **exits 0**. An `ask` is a silent stop that looks like success.
   (§ The command) are never emitted. Approval is the map's job, derived from
   the stage's allowed tools (#1638).
 - The parser classifies a rejected-permission tool event as a failure, exit
-  code notwithstanding (#1624, #1631).
+  code notwithstanding (#1624, #1631). It reads the stderr notice as OpenCode
+  printed it, before redaction, takes the permission from its first line, and
+  ends the stage's stderr with `[adapter-permission-rejected] tool=<permission>`
+  when the stage's allowed tools grant the permission and
+  `[permission-denied] tool=<permission>` otherwise; an exit-0 run with either
+  reports exit code 1. A marker names only a permission 1.18.30 asks for
+  itself, and `unknown` for any other, such as an MCP tool's. The patterns are
+  the model's own text, and the stage's stderr is what classification reads,
+  so the stderr the stage keeps holds the notice without them, and none of the
+  lines they span; none of those lines is read as a notice of its own. Being
+  unescaped, the patterns decide where the notice seems to end: a line of them
+  that itself ends in `); auto-rejecting` ends it early, and nothing tells
+  their later lines from what OpenCode prints next. So from the first notice
+  on, the stage keeps no stderr line but the parser's own, and a drift marker
+  counts the lines it dropped. The first notice decides: OpenCode printed it
+  before any rejected input, so its permission alone yields the stage's one
+  marker, which is the last line of the stage's stderr. A later notice,
+  whether a subagent's or one the patterns forged, is drift only: a drift
+  marker counts it, and it yields no marker, so it cannot change the kind the
+  last lines of stderr classify as. When the stream shows OpenCode's
+  rejection error on the stage's own tool call and stderr named no
+  permission, the run still fails, with `[permission-denied] tool=unknown`
+  and a drift marker: the event names the tool, and a rejection of
+  `external_directory` or `doom_loop` is one the tool's name does not show.
+  Nothing else of the transcript is read. #1631 owns the failure kinds.
 - The project directory OpenCode uses is the resolved path, so an absolute
   path through a symlinked prefix (such as macOS `/tmp`) reads as an external
   directory. The permission map is built against resolved paths.
@@ -1195,19 +1234,50 @@ removal.
   what the sweep ages. Deletion refuses a root that is a symbolic link or does
   not resolve directly under `~/.nightgauge/opencode/runs/`, and never follows
   a link inside one.
-- **What is kept.** Usage only. The stream (#1624) is the source.
-  `opencode export <session> --sanitize` is read for its `tokens` and `cost`
-  fields only, as a cross-check; it was observed to redact prompts, replies and
-  tool input while keeping those fields. Nothing else from an export is kept.
+- **What is kept.** Usage only. The stream (#1624) is the source for the
+  run's own session, and it never carries a subagent's steps. After exit the
+  parser lists the stage's descendant sessions from the run's own session
+  table with `opencode db`, because `session list` lists only root sessions
+  and a sanitized export redacts the `task` tool metadata that names a child.
+  It reads each descendant's `info.tokens` and `info.cost` from
+  `opencode export <session> --sanitize --pure`, at most 64 sessions, each
+  process in its own process group under a 10 s timeout. The stage's own
+  export is read only for its assistant messages' `providerID` and `modelID`
+  (§ 1). Exports are held in memory, and nothing else from one is kept;
+  `--sanitize` was observed to redact prompts, replies and tool input while
+  keeping those fields. A failed read marks the stage's usage partial and
+  never fails it.
+- **What those processes run with.** Observed on 1.18.30, `export`
+  bootstraps a project from its working directory: from a directory holding
+  `.opencode/` it writes there and installs that config's dependencies, and it
+  loads that directory's plugins, which a stage can write into its worktree
+  with the edit tool alone. Every process the parser starts (`--version`,
+  `db`, `export`) therefore runs from the run's root, never the worktree, with
+  `--pure`, and with only `PATH`, `HOME`, `TMPDIR`, the four XDG variables
+  and the `OPENCODE_DISABLE_*` switches in its environment: no forge token,
+  provider key or server password. A stage the operator stopped starts none of
+  them; its usage is the stream's, marked partial.
 - **Stderr.** `--print-logs --log-level ERROR` limits OpenCode's log to
   errors. Every line the child prints, stderr and stdout alike, is redacted of
   the secrets Nightgauge lets the child hold before it is streamed or kept: the
   server password, `GITHUB_TOKEN`, `GH_TOKEN`, `GITLAB_TOKEN` and every
-  variable the catalog binds to the dispatched provider, whichever provider it
-  is (§ 8), each become `[REDACTED:<name>]`. Every other secret the child
-  holds, inherited or read from a file, is #1624's pattern redaction, and until
-  then the output-redaction warning line says it stays; an endpoint's
-  `base_url` is #1678's.
+  credential the catalog binds to the dispatched provider, whichever provider
+  it is (§ 8), each become `[REDACTED:<name>]`, matched as they are and as the
+  content of a JSON string, since a `--format json` event escapes a tool's
+  output. The catalog also binds settings to a provider, and those are not
+  secrets: a region, project, location, account, host, endpoint, resource
+  name or id (`AWS_REGION`, `GOOGLE_VERTEX_PROJECT`, `DATABRICKS_HOST`), and
+  `GOOGLE_APPLICATION_CREDENTIALS`, the path of a credential file. Their
+  values stay, so a stage's output keeps every `us-east-1` and an
+  organization's name. A variable named as a key, token, secret, password or
+  personal access token is always a credential, and one of any other shape is
+  treated as one. #1624 then removes every credential of a known shape,
+  whatever its source: API keys by their issuers' prefixes, GitHub and GitLab
+  tokens, bearer and authorization credentials, a URL's user and password, and
+  a credential query parameter, also where a JSON escape or a terminal colour
+  code comes right before one. Each string of a JSON event is redacted decoded
+  as well as escaped. A secret of no recognizable shape stays, and an
+  endpoint's `base_url` is #1678's.
 
 ### 23. Promotion criteria
 
