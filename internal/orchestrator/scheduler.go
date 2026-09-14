@@ -6699,6 +6699,15 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			if authFailed {
 				terminalFailureKind = TerminalKindAdapterAuthFailed
 			}
+			// Parked kinds (#1631): an overflowed context window, a permission
+			// rule that rejects an allowed tool, a binary that cannot serve the
+			// dispatch. Re-running the stage on a stronger model sends the same
+			// prompt to the same window under the same rule and binary, so
+			// escalation is skipped below and the kind is recorded as is.
+			parked := TerminalKindParks(resolvedFailureKind)
+			if parked {
+				terminalFailureKind = resolvedFailureKind
+			}
 			// USAGE-CAP RECOVERY (#42 descent, #1545 attribution + provider
 			// walk). One decision covers both cap kinds and both dispatch
 			// paths — see DecideCapRecovery for why the order is tier ladder →
@@ -6812,7 +6821,11 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// tier walks toward the caps that fill first, which is the opposite
 			// of the descent the cap called for.
 			capRejected := capDecision.Verdict != CapRecoveryNotApplicable
-			if !modelRejected && !capRejected && !authFailed && !catBlocked {
+			if parked {
+				log.Printf("#%d: stage %s failed — NOT escalating model: %s is parked, not retried (%s)",
+					item.Number, stage, resolvedFailureKind, TerminalKindRemediation(resolvedFailureKind))
+			}
+			if !modelRejected && !capRejected && !authFailed && !catBlocked && !parked {
 				escalation := s.retryEngine.EvaluateEscalation(string(stage), model)
 				if escalation.ShouldEscalate {
 					log.Printf("#%d: stage %s failed — escalating model to %s",

@@ -97,6 +97,29 @@ changelog, and the release workflow refuses a tag that does not.
   keeps the three fields, and a stage re-run on another adapter keeps none of
   the identity of the run it replaced (#1630)
 
+- Three terminal kinds for OpenCode (Experimental) and local-model failures,
+  in the rule table, the Go constants, the SDK union, the extension schema and
+  `docs/FAILURE_TAXONOMY.md`. `context_window_exceeded` is a prompt that
+  outgrew the model's loaded context; `adapter_permission_rejected` is
+  OpenCode rejecting a tool the stage is allowed under an `ask` rule, either
+  its own default guard on reading `.env` files or a rule in a repository's or
+  the user's config (classified ahead of `permission_denied`, whatever tool
+  the rejection names); `adapter_incompatible` is a version-policy refusal of
+  the OpenCode binary. All three are parked: no model escalation, no retry, no
+  lifetime-failure charge, no cascade feed, and held until an operator clears
+  the issue's failures, the command the remediation on the failed entry and in
+  the auto-retro names
+  (`nightgauge autonomous clear-failures <owner/repo#N>`). OpenCode's own
+  wording now also maps a down local server to `network_unavailable`,
+  `ProviderModelNotFoundError` and an Ollama model that is not pulled to
+  `model_unavailable`, and a provider 401 to `adapter_auth_failed`. Every
+  OpenCode wording clause requires OpenCode's `AI_APICallError` wrapper, so
+  model text quoting overflow wording classifies as nothing. The wording comes
+  from real opencode 1.18.30 captures
+  (`scripts/capture-opencode-failure-fixture.sh`), and ADR-022 § Failure
+  wording records where it differed from the plan: a down server never prints
+  `ECONNREFUSED` (#1631)
+
 - The OpenCode stream parser is now tested against real opencode 1.18.30
   runs: a local LM Studio model on two endpoints, `lmstudio` and
   `lmstudio-remote`, a run whose model started two subagents, and a
@@ -274,6 +297,11 @@ changelog, and the release workflow refuses a tag that does not.
   prices as before. The Go scheduler's platform telemetry now sends a stamped
   zero stage cost, and the run total of a run whose every stage is a stamped
   zero, as `0` instead of `null` (#1630)
+
+- The VS Code extension's run-record schema now accepts a `permission_denied`
+  terminal kind, which the Go scheduler has written since #289: such a record
+  used to fall through to the V2 schema and lose its kind. A parity test now
+  holds the schema to the Go constants (#1631)
 
 - A stage the operator stops is reported as stopped, not as a
   `wait: context canceled` failure, when its CLI exits on the stop but a

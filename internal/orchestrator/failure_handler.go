@@ -554,7 +554,83 @@ const (
 	// AND the local-git fallback found no merge commit. The merge may well have
 	// happened; the gate simply could not see it. Infrastructure.
 	TerminalKindPrMergeLookupFailed = "pr_merge_lookup_failed"
+	// The three kinds below (#1631) are the ones the scheduler PARKS: no
+	// retry of any shape, no LifetimeIssueFailures increment, no cascade
+	// feed, and a hold only an operator releases (HoldForTerminalKind). Each
+	// names a condition the next attempt would meet unchanged — the same
+	// prompt against the same context window, the same permission rule, the
+	// same binary — and each is a fault of the configuration, not of the
+	// issue. TerminalKindParks and TerminalKindRemediation are their one
+	// definition; docs/FAILURE_TAXONOMY.md carries the prose.
+	//
+	// TerminalKindContextWindowExceeded: the prompt outgrew the context the
+	// model server has the model loaded with. Classified only from the model
+	// request's own failure (opencode's `AI_APICallError: <server message>`),
+	// never from model text. Not an agent failure. Re-routing to a model that
+	// fits (#1645) and decomposing the issue (#1655) are the recoveries this
+	// record exists for; until they land the issue is parked with the
+	// remediation.
+	TerminalKindContextWindowExceeded = "context_window_exceeded"
+	// TerminalKindAdapterPermissionRejected: the adapter auto-rejected a tool
+	// the stage's allowed tools grant (#1624's
+	// `[adapter-permission-rejected]` marker) under an `ask` rule: OpenCode's
+	// own default guard on reading `*.env` and `*.env.*`, or a rule in a
+	// repository's or the user's opencode.json. Nightgauge generates no
+	// OpenCode permission map yet (#1638). Whatever permission the marker
+	// names, the kind is the same and parks: a `read` rejection retried would
+	// let the model or the issue text that sent it to a secret file loop the
+	// issue. Distinct from TerminalKindPermissionDenied, the harness refusing
+	// a tool the stage was NOT allowed, which retries.
+	TerminalKindAdapterPermissionRejected = "adapter_permission_rejected"
+	// TerminalKindAdapterIncompatible: the adapter's binary cannot serve the
+	// dispatch — below the compat manifest's floor, unreadable, or above
+	// max-tested with a failed self-test (#1627, ADR-022 § 20). Mirrors
+	// adapters.OpenCodeIncompatible, the kind the refusal itself carries.
+	TerminalKindAdapterIncompatible = "adapter_incompatible"
 )
+
+// TerminalKindParks reports whether the scheduler parks a failure of this
+// kind rather than retrying it (#1631): the in-run model escalation is
+// skipped, the autonomous scheduler schedules no retry, charges no lifetime
+// failure and feeds no cascade breaker, and HoldForTerminalKind holds the
+// entry for an operator.
+func TerminalKindParks(kind string) bool {
+	switch kind {
+	case TerminalKindContextWindowExceeded, TerminalKindAdapterPermissionRejected, TerminalKindAdapterIncompatible:
+		return true
+	}
+	return false
+}
+
+// parkedReleaseStep ends every parked kind's remediation. It names
+// clear-failures, not `autonomous resume`: a park pauses nothing, so the fleet
+// stays running, and Resume and ResumeRepo act only on a pause. Clearing the
+// issue's failures releases the hold whatever the fleet's status is.
+const parkedReleaseStep = "then release the issue with `nightgauge autonomous clear-failures <owner/repo#N>`"
+
+// TerminalKindRemediation is the operator's next step for a parked kind, ""
+// for every other kind. It reaches the failed entry's reason and the log line.
+func TerminalKindRemediation(kind string) string {
+	switch kind {
+	case TerminalKindContextWindowExceeded:
+		return "the prompt outgrew the context the model server has the model loaded with; " +
+			"reload the model with a larger context, route the stage to a model with a larger one, " +
+			"or split the issue, " + parkedReleaseStep +
+			" — a retry on the same model and adapter meets the same limit"
+	case TerminalKindAdapterPermissionRejected:
+		return "OpenCode asked before a tool the stage's allowed tools grant and rejected it headless; " +
+			"Nightgauge generates no OpenCode permission map yet, so the `ask` rule is OpenCode's own default " +
+			"guard on reading `*.env` and `*.env.*` files or a rule in the repository's or the user's " +
+			"opencode.json. Find the rule for the permission the stage's stderr names (`tool=<permission>`); " +
+			"for `tool=read`, check whether the issue text asks the stage to read secret files and remove that " +
+			"ask. Change a rule only if the stage should have that tool, never by loosening a rule that guards " +
+			"secret files, " + parkedReleaseStep
+	case TerminalKindAdapterIncompatible:
+		return "the adapter's binary cannot serve this dispatch; install the max-tested version the refusal names " +
+			"or pin the adapter's binary to it, " + parkedReleaseStep
+	}
+	return ""
+}
 
 // Hold* name the human action that releases a Failed entry whose terminal kind
 // records a human DECISION POINT rather than a fault. They answer the question
@@ -597,11 +673,25 @@ const (
 // Each has an automatic reclamation path that resolves it without a person, and
 // holding them would strand work waiting for an operator act that the taxonomy
 // never asks for.
+//
+// The kinds TerminalKindParks names (#1631) are held for an operator too: a
+// context window, a permission rule or a binary that the pipeline cannot
+// change and a re-dispatch would meet unchanged. A park does not pause the
+// fleet, so of the release paths only clearing the issue's failures applies
+// while the fleet runs; TerminalKindRemediation names it.
 func HoldForTerminalKind(kind string) string {
 	switch kind {
 	case TerminalKindArchitectureApprovalRequired:
 		return HoldArchitectureApproval
 	case TerminalKindNotPipelineActionable:
+		return HoldOperatorResume
+	}
+	// The parked kinds (#1631) are faults of the configuration, not decisions
+	// reserved to a person, but nothing the pipeline observes changes that
+	// configuration either: re-admitting one re-dispatches into the same
+	// window, rule or binary. An operator changes it and clears the issue's
+	// failures.
+	if TerminalKindParks(kind) {
 		return HoldOperatorResume
 	}
 	return HoldNone

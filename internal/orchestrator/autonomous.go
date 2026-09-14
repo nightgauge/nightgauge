@@ -5459,6 +5459,40 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			return
 		}
 
+		// #1631: a context window the prompt outgrew, a permission rule that
+		// rejects a tool the stage is allowed, a binary that cannot serve the
+		// dispatch. The next attempt meets each unchanged, so a retry is the
+		// defect: no retry schedule, no LifetimeIssueFailures increment (the
+		// issue is not at fault), no cascade feed (the configuration is, and
+		// pausing the fleet does not change it), no pause. The Failed entry
+		// carries the kind, so HoldForTerminalKind keeps the graph reconcile
+		// from re-admitting it until an operator changes the configuration
+		// and clears the issue's failures; its reason names what to change
+		// and that command. With no pause, `autonomous resume` has nothing to
+		// act on and would leave the entry held.
+		if TerminalKindParks(terminalFailureKind) {
+			detail := failureDetail
+			if detail == "" {
+				detail = "no failure text"
+			}
+			reason := fmt.Sprintf("%s (parked, no retry) — %s — %s",
+				terminalFailureKind, TerminalKindRemediation(terminalFailureKind), detail)
+			as.recordFailureLocked(repo, issue, title, now, reason, terminalFailureKind)
+			log.Printf("autonomous: %s#%d %s — parked for an operator: no retry, no lifetime-cap increment, no cascade feed, no pause — %s",
+				repo, issue, terminalFailureKind, TerminalKindRemediation(terminalFailureKind))
+			if as.safetyRails != nil {
+				as.safetyRails.RecordNonFaultOutcome(0)
+				safetySnap := as.safetyRails.State()
+				as.state.Safety = &safetySnap
+			}
+			as.persistStateLocked()
+			select {
+			case as.rescanCh <- struct{}{}:
+			default:
+			}
+			return
+		}
+
 		// #1241: the issue is not pipeline work at all. A stage read it and
 		// declared its deliverable unproducible by any lap of this pipeline —
 		// counsel sign-off, a credential only the operator holds, a decision

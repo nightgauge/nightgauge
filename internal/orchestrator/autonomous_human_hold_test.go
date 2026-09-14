@@ -283,6 +283,10 @@ func TestHoldForTerminalKind(t *testing.T) {
 		TerminalKindBranchForked:                 HoldNone,
 		TerminalKindCommitOrphaned:               HoldNone,
 		TerminalKindPrMergeUnmerged:              HoldNone,
+		TerminalKindPermissionDenied:             HoldNone,
+		TerminalKindContextWindowExceeded:        HoldOperatorResume,
+		TerminalKindAdapterPermissionRejected:    HoldOperatorResume,
+		TerminalKindAdapterIncompatible:          HoldOperatorResume,
 		"":                                       HoldNone,
 	}
 	for kind, want := range cases {

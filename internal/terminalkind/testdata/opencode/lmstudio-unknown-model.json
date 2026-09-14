@@ -1,0 +1,5 @@
+{
+  "requested": "qwen/nightgauge-missing-model",
+  "served": "qwen/qwen3.8-27b",
+  "error": null
+}

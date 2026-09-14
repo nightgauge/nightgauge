@@ -1,0 +1,1 @@
+{"type":"error","timestamp":1767225600000,"sessionID":"ses_fixture0000000000000000001","error":{"name":"APIError","data":{"message":"Unauthorized","statusCode":401,"isRetryable":false,"responseHeaders":{"content-length":"0","date":"Thu, 01 Jan 2026 00:00:00 GMT","server":"fixture"},"responseBody":"","metadata":{"url":"[REDACTED:url]"}}}}
