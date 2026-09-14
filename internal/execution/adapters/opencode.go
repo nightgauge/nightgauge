@@ -142,14 +142,14 @@ type openCodeControl struct {
 // control removes its entry and its row; when the list is empty the gate goes
 // with it.
 var openCodeUnenforcedControls = []openCodeControl{
-	{"stream parsing", "token usage, cost and the served model are not recorded, because OpenCode's JSON events reach the Claude stream parser"},
 	{"failure classification", "a permission request OpenCode rejects on its own ends the run with exit code 0, so a stage that stopped early reads as a success"},
 	{"output redaction", "only the values of the server password, GITHUB_TOKEN, GH_TOKEN, GITLAB_TOKEN and the variables OpenCode's catalog binds to the dispatched provider are removed from the captured output; every other secret the child holds, inherited from the environment or read by a tool from a file, stays in it, and an OpenCode error event carries the model endpoint's full URL"},
 	{"project-config tamper gate", "the target repository's opencode.json and .opencode/ load unchecked: they cannot change a key the per-run config sets, such as the dispatched model's id or SDK package, except the model and steps cap of the general and explore subagents, which a mode entry of the same name replaces, but they can add to it, such as an agent or subagent of their own, with its own model on the dispatched provider and no steps cap, an MCP server of their own, which OpenCode starts beside the default branch's, a remote instructions URL OpenCode fetches, or a header on the provider block, which can carry a variable from the stage's environment, a forge token included, to the model server; they can also add options.model to the dispatched model's own entry or an agent's own options, or a variant, and still change the model actually served without touching the pinned id; on anthropic they can add options.speed or options.fallbacks to the dispatched model's entry and turn on fast mode or a server-side fallback the same way; and an agent's options.mcpServers can send ANTHROPIC_API_KEY, or another variable the run holds, as an authorization token to a URL of their choosing"},
 	{"permission map", "tool permissions come from OpenCode's config, not from the stage's allowed tools"},
 	{"safety plugin", "Nightgauge's careful-gate and stage-gate hooks do not run inside OpenCode"},
 	{"endpoint policy", "the server behind a hosted provider key other than anthropic is whatever OpenCode's bundled catalog and a lower config layer make it: a provider block the repository or your OpenCode config names after that provider can send its API key to another base URL and the stage to another model, a LAN or public base URL of the declared endpoint is neither refused nor warned about, and an Ollama cloud model, which a local Ollama forwards to Ollama's hosted service, is dispatched like a local one"},
-	{"stage limits", "the stage's cost budget is not passed to OpenCode, and neither is its token cap on a hosted model, anthropic's included, whose limits come from OpenCode's catalog unless the repository or your OpenCode config sets them, and a context limit of 0 set there means the session is never compacted; the steps cap and the stage timeout bound a run, but nothing stops it at its cost budget"},
+	{"stage limits", "the stage's token cap on a hosted model, anthropic's included, is not passed to OpenCode: its limits come from OpenCode's catalog unless the repository or your OpenCode config sets them, and a context limit of 0 set there means the session is never compacted; the steps cap, the stage timeout and, on a model the registry prices, the cost budget bound a run"},
+	{"subagent cost", "the cost budget stops the stage at its own steps only: a subagent's steps never reach OpenCode's JSON events, so its usage is read once the stage has ended, and a stage whose subagents take it past its cost budget is not stopped while they run; it fails as budget_exceeded when it ends, and so does a stage that would otherwise succeed whose subagent usage was only partly read, since its budget cannot be verified; the cost budget prices every step, a subagent's included, at the dispatched model's rates, so a subagent on a pricier model of the same provider is under-counted"},
 }
 
 // PreDispatch implements the manager's optional pre-dispatch hook, which runs
@@ -482,7 +482,7 @@ func (a *OpenCodeAdapter) PrepareRunRoot(req RunRootRequest) (*RunRoot, error) {
 	if err != nil {
 		return nil, err
 	}
-	root := &RunRoot{Dir: run.RunDir, Env: run.Env}
+	root := &RunRoot{Dir: run.RunDir, Env: run.Env, Endpoints: run.Endpoints}
 	if pin != "" {
 		a.pinned.Store(root, pin)
 	}

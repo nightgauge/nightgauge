@@ -24,6 +24,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -462,9 +463,12 @@ type openCodeOutcome struct {
 	marker  string
 	version string
 	served  OpenCodeServedModel
-	cost    float64
-	partial bool
-	drift   []string
+	// endpoint is the id of the declared endpoint that served the model, or
+	// empty when the served model's provider key names none.
+	endpoint string
+	cost     float64
+	partial  bool
+	drift    []string
 }
 
 // openCodeExit is how an opencode stage's child ended, and what finish needs
@@ -484,6 +488,9 @@ type openCodeExit struct {
 	// stopped is set when the operator stopped the stage: then no process is
 	// started after it.
 	stopped bool
+	// endpoints are the ids of the endpoints the run's config declares
+	// (adapters.RunRoot.Endpoints).
+	endpoints []string
 }
 
 // finish runs once the child has exited, before the RunResult is built from
@@ -521,11 +528,16 @@ func (r *openCodeRun) finish(ctx context.Context, exit openCodeExit, acc *TokenA
 		marker = openCodeRejectionMarker(openCodeUnknownPermission, r.allowed)
 	}
 	r.stream.Finish(exit.exitCode)
+	var endpoint string
+	if res.served.Key != "" && slices.Contains(exit.endpoints, res.served.Key) {
+		endpoint = res.served.Key
+	}
 	return openCodeOutcome{
 		exitedZero: exit.exitCode == 0,
 		marker:     marker,
 		version:    res.version,
 		served:     res.served,
+		endpoint:   endpoint,
 		cost:       r.stream.ReportedCostUSD + res.childCost,
 		partial:    res.partial,
 		drift:      r.stream.DriftMarkers(),
@@ -564,6 +576,7 @@ func (o openCodeOutcome) apply(result *adapters.RunResult) {
 	result.ServedModel = o.served.Model
 	result.ModelProvider = o.served.Provider
 	result.UpstreamModel = o.served.Upstream
+	result.Endpoint = o.endpoint
 	result.AdapterVersion = o.version
 	result.AdapterReportedCostUSD = o.cost
 	result.UsagePartial = o.partial
@@ -613,6 +626,10 @@ type OpenCodeServedModel struct {
 	// § 2), the dispatched model trimmed of surrounding space, also when the
 	// export shows that another model served the stage.
 	Upstream string
+	// Key is the OpenCode provider key of the model that served the stage,
+	// as the export or -m spells it ("lmstudio"), before § 1 normalizes it.
+	// It is what names a declared endpoint.
+	Key string
 }
 
 // ResolveOpenCodeServedModel records the model that served a stage. The
@@ -630,6 +647,9 @@ func ResolveOpenCodeServedModel(providerID, modelID, dispatched string) OpenCode
 	}
 	provider, bareID, _ := models.ParseOpenCodeModel(raw)
 	served := OpenCodeServedModel{Provider: provider, Model: raw, Upstream: dispatched}
+	if key, _, ok := strings.Cut(raw, "/"); ok {
+		served.Key = key
+	}
 	if provider == "other" || bareID == "" {
 		return served
 	}

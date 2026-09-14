@@ -419,6 +419,17 @@ type V2ModelSelect struct {
 	// (automatic/hybrid) — under `model_routing.mode: manual`, Source alone
 	// always read "scheduler" and could not tell the two apart.
 	Mode string `json:"mode,omitempty"`
+	// ModelProvider, UpstreamModel and Endpoint are the ADR-022 § 2 identity
+	// of the model that served a stage of a multi-provider adapter
+	// (opencode), whose Adapter names no provider: the provider that served
+	// Model ("lm-studio", "anthropic", "other"), the model the stage was
+	// dispatched with, exactly as passed on -m, and the id of the declared
+	// endpoint that served it. When another model served the stage, Model
+	// and ModelProvider are the served model's and UpstreamModel is the only
+	// record of what was dispatched. Each is absent when not reported.
+	ModelProvider string `json:"model_provider,omitempty"`
+	UpstreamModel string `json:"upstream_model,omitempty"`
+	Endpoint      string `json:"endpoint,omitempty"`
 }
 
 // V2Tokens matches TokensSchema.
@@ -1378,6 +1389,10 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 				ServedEffort:   snap.StageServedEfforts[stageName],
 				ServedThinking: snap.StageServedThinking[stageName],
 				Mode:           snap.StageModelSelectionModes[stageName],
+				// ADR-022 § 2 identity of a multi-provider adapter's stage.
+				ModelProvider: snap.StageModelIdentities[stageName].Provider,
+				UpstreamModel: snap.StageModelIdentities[stageName].Upstream,
+				Endpoint:      snap.StageModelIdentities[stageName].Endpoint,
 			}
 		}
 

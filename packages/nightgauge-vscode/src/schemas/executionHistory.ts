@@ -328,6 +328,20 @@ export const HistoryStageDetailSchema = z.object({
       served_thinking: z.string().optional(),
       /** The model that was active before escalation (Issue #1343) */
       escalated_from: z.string().optional(),
+      /**
+       * The ADR-022 § 2 identity of the model that served a stage of a
+       * multi-provider adapter (opencode), mirroring Go's `V2ModelSelect`
+       * (internal/state/history.go): the provider that served `model`
+       * ("lm-studio", "anthropic", "other"), the model the stage was
+       * dispatched with, exactly as passed on `-m`, and the id of the declared
+       * endpoint that served it. When another model served the stage, `model`
+       * and `model_provider` are the served model's and `upstream_model` is
+       * the only record of what was dispatched. Each is absent when not
+       * reported, which is every single-provider adapter's stage.
+       */
+      model_provider: z.string().optional(),
+      upstream_model: z.string().optional(),
+      endpoint: z.string().optional(),
     })
     .optional(),
   /** Context handoff file size in bytes (Issue #1009) */

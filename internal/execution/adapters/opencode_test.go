@@ -229,7 +229,7 @@ func TestOpenCodeGate(t *testing.T) {
 			t.Errorf("gate value %q opened the gate; only exactly \"1\" may", v)
 			continue
 		}
-		for _, want := range []string{ExperimentalOpenCodeEnvVar + "=1", "--adapter", "NIGHTGAUGE_ADAPTER", "stream parsing", "stage limits", "permission map", "safety plugin"} {
+		for _, want := range []string{ExperimentalOpenCodeEnvVar + "=1", "--adapter", "NIGHTGAUGE_ADAPTER", "subagent cost", "stage limits", "permission map", "safety plugin"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("refusal for %q does not mention %q: %v", v, want, err)
 			}
@@ -284,16 +284,19 @@ func TestOpenCodeGate(t *testing.T) {
 // stage-limits line names the limits. The warning is also the only disclosure
 // of what the output redaction leaves in place and of the stage limits a run
 // does not get, so those lines name exactly what is redacted and which limit
-// is missing. Repository steering is no longer on it: the per-run config
-// names the repository's steering files as instructions (#1626).
+// is missing, and the subagent-cost line says a stage's subagents can take
+// it past its cost budget before it is stopped. Repository steering is no
+// longer on it: the per-run config names the repository's steering files as
+// instructions (#1626). Nor is stream parsing: usage, cost and the served
+// model's identity are recorded (#1624, #1630).
 func TestOpenCodeWarningDisclosesWhereThePromptCanGo(t *testing.T) {
 	gaps := map[string]string{}
 	for _, c := range openCodeUnenforcedControls {
 		gaps[c.name] = c.gap
 	}
-	for _, enforced := range []string{"egress defaults", "repository steering"} {
+	for _, enforced := range []string{"egress defaults", "repository steering", "stream parsing"} {
 		if _, ok := gaps[enforced]; ok {
-			t.Errorf("the warning still lists %s, which the per-run config enforces", enforced)
+			t.Errorf("the warning still lists %s, which is enforced now", enforced)
 		}
 	}
 	for name, wants := range map[string][]string{
@@ -305,8 +308,12 @@ func TestOpenCodeWarningDisclosesWhereThePromptCanGo(t *testing.T) {
 			"options.mcpServers", "ANTHROPIC_API_KEY",
 		},
 		"stage limits": {
-			"cost budget", "token cap on a hosted model", "steps cap",
+			"token cap on a hosted model", "is not passed to OpenCode", "steps cap",
 			"anthropic's included", "the repository or your OpenCode config sets them", "never compacted",
+		},
+		"subagent cost": {
+			"a subagent's steps never reach", "once the stage has ended", "not stopped while they run", "budget_exceeded",
+			"only partly read", "cannot be verified", "the dispatched model's rates", "under-counted",
 		},
 		"endpoint policy": {"Ollama cloud model", "Ollama's hosted service", "the stage to another model"},
 		"output redaction": {
