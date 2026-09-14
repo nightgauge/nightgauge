@@ -246,6 +246,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Security
 
+- CI now checks the experimental `opencode` adapter's config-merge and
+  plugin-loading assumptions against an exact install of opencode 1.18.30, so
+  an OpenCode upgrade that changes them fails the build. ADR-022 § 8 records
+  the results: until a stage stops OpenCode loading the target repository's
+  `opencode.json` and `.opencode/` (#1638), that config can reorder a run's
+  permission patterns so a denied command runs, and add plugins and MCP
+  servers the run's own lists cannot remove (#1632)
 - OpenCode stages run in a private directory per pipeline run
   (`~/.nightgauge/opencode/runs/<run>/`), deleted when the run ends: a run
   reads none of your own OpenCode config, plugins, logins or `~/.agents/skills`,

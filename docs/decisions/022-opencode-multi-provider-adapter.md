@@ -556,7 +556,12 @@ reports it `non_loopback: true`, as it does every hosted provider's model.
   fourth rule below), a declared endpoint's limits or base URL, the
   `anthropic` block's API root, or turn sharing back on. Pinning those keys
   does not pin the model actually served (see the fourth rule and § 15, § 17,
-  #1638). A lower layer can add keys the content does not set, and
+  #1638). Nor does winning a key pin a permission pattern map: observed by
+  #1632, the content wins each pattern's action but not its position, the
+  merged map keeps the key order of the lowest layer that has the key, and the
+  last matching rule wins, so a lower layer that lists the content's patterns
+  in another order changes what they resolve to (the results table below).
+  A lower layer can add keys the content does not set, and
   four merge rules needed more than setting a key. First, every merged
   `mode.<agent>` is merged over `agent.<agent>` after every layer and forced
   to `mode: "primary"`, so a lower layer's mode entry would win over the
@@ -733,11 +738,42 @@ reports it `non_loopback: true`, as it does every hosted provider's model.
   `AGENTS.md` has no content of its own.
 - **`--pure` is never passed.** It would also drop the Nightgauge plugin.
   Plugins are controlled by the per-run `plugin` list (the Nightgauge plugin
-  and nothing else) and `OPENCODE_DISABLE_DEFAULT_PLUGINS=1`.
+  and nothing else) and `OPENCODE_DISABLE_DEFAULT_PLUGINS=1`. Observed by
+  #1632, the per-run list controls them only while project config is
+  disabled: it is concatenated with the repository's list, and an empty
+  per-run list removes none of the repository's plugins, although
+  `opencode debug config` then reports `plugin: []`. Separately, and whatever
+  the plugin list or `--pure` says, every run starts a background npm install
+  of `@opencode-ai/plugin` into each config directory it loads, the run's own
+  XDG config directory always among them, and a run that loads a plugin waits
+  for it; § 10 lists the request.
 
-#1632's adversarial suite proves the merge: a repository config that sets
-permissions, plugins, providers, MCP servers or remote instructions changes
-nothing about a run.
+#### Adversarial results (#1632)
+
+`internal/execution/adapters/opencode_merge_contract_test.go` (build tag
+`opencode_integration`, run in CI against an exact install of 1.18.30) drives
+the binary with the repository-supplied fixtures in
+[`internal/execution/adapters/testdata/opencode-adversarial/`](../../internal/execution/adapters/testdata/opencode-adversarial/README.md)
+and asserts these answers. "Inline" is `OPENCODE_CONFIG_CONTENT`, the layer the
+per-run config uses; "project" is the repository's `opencode.json` and
+`.opencode/`.
+
+| #   | Question                                                                         | Observed on 1.18.30                                                                                                                                                                                                                                                                                                           |
+| --- | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Does `--pure` skip a project `.opencode/plugins/*.ts` file and `plugin[]` entry? | Yes, both: neither loads, and the npm plugin is never requested. Without it both load. `--pure` does not stop the background install of `@opencode-ai/plugin` every run starts (§ 10): a run with no plugin at all makes that registry request once it lives a few seconds.                                                   |
+| 2   | Does an inline `permission.bash` deny beat a project allow?                      | Yes for `bash: deny` over `bash: allow`, and for `{"rm -rf *": "deny"}` inline over `{"*": "allow"}`. No when the project lists the same patterns first: with `{"rm -rf *": "allow", "*": "allow"}` in the project and `{"*": "allow", "rm -rf *": "deny"}` inline, the merged order puts the deny first and `rm -rf x` runs. |
+| 3   | Do `plugin`, `instructions` and `mcp` concatenate or get replaced?               | `instructions` and `plugin` concatenate, the project's first; `mcp` merges by server name, the inline entry winning a name both set. An empty inline list removes nothing.                                                                                                                                                    |
+| 4   | Does a project `provider.<key>.options.baseURL` override the injected one?       | No: the inline `baseURL` wins, in the resolved config and in the request. A key the inline block does not set, such as a header, still comes from the project and is sent.                                                                                                                                                    |
+| 5   | Does config and rules discovery walk above the worktree root?                    | No. From a worktree at `<checkout>/.nightgauge/worktrees/<repo>-issue-<N>`, neither the checkout's `opencode.json`, `.opencode/` or `AGENTS.md` nor anything above it loads: discovery stops at the git root of its starting directory. Outside any git repository it walks up.                                               |
+| 6   | What does `OPENCODE_DISABLE_PROJECT_CONFIG` disable?                             | Every project key the fixture sets (`agent`, `permission`, `instructions`, `plugin`, `mcp`, `provider`), all of `.opencode/` (config, agents, commands, skills, plugins), the repository's `AGENTS.md`, and the loading of those plugins. An inline `instructions` entry with an absolute path still loads.                   |
+
+So a repository config that sets permissions, plugins, providers, MCP servers
+or instructions changes nothing about a run only while
+`OPENCODE_DISABLE_PROJECT_CONFIG=1` is set (row 6). Until every spawn sets it
+(#1626, #1638), the repository's config loads, and rows 2 to 4 are what it can
+do: reorder the per-run permission patterns, add plugins and MCP servers the
+per-run lists cannot remove, and add keys to an injected provider block. #1638
+and #1635 build on these answers.
 
 ### 9. Headless posture
 
@@ -805,6 +841,7 @@ several lines, only the last ending in `); auto-rejecting`.
 | `webfetch`                              | `deny` unless the stage's allowed tools include web fetch                             |
 | Web search                              | off; its enabling variable is stripped with every inherited `OPENCODE_*`              |
 | Session-title generation                | `agent.title.disable: true`, so no title request is sent; `small_model` locked (§ 15) |
+| Plugin dependency install               | none: every run starts an npm install of `@opencode-ai/plugin` (§ 8, #1644)           |
 
 Every variable and config key named here appears in the 1.18.30 binary.
 Whether they stop the traffic they name is #1644's to prove.
