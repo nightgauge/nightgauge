@@ -5456,7 +5456,11 @@ VSCode **Adapter Doctor** (see [ADAPTER_DOCTOR.md](ADAPTER_DOCTOR.md)). The
 Each CLI adapter's `min_version` floor and its floor policy come from its
 compat manifest, `internal/adaptercompat/manifests/<adapter>.json`, which also
 records the newest tested version, the upstream release feeds, the install
-recipe and the captured fixtures. A Go test holds the doctor to the manifest.
+recipe and the captured fixtures. For OpenCode it also records
+`config_schema_sha256`, the SHA-256 of the config schema pinned for the newest
+tested version in `internal/execution/adapters/testdata/opencode-config-schema/`,
+which a contract test validates every generated per-run config against.
+A Go test holds the doctor to the manifest.
 Its `required_flags` are exactly the flags the adapter's `BuildCommand` emits,
 and the flag-contract tests (`internal/execution/adapters/flag_contract_test.go`)
 check each of them against the CLI's own `--help`, captured at the newest

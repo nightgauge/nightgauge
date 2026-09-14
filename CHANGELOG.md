@@ -73,6 +73,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- The OpenCode config schema published for the newest tested OpenCode
+  (1.18.30) is now pinned in the repository, and a contract test validates
+  every per-run config the builder generates against it, across LM Studio,
+  Ollama and Anthropic dispatches, with and without MCP servers. The test fails
+  when a config sets a key the schema does not define or marks deprecated,
+  since OpenCode silently drops an unknown key. It also fails when a safety key
+  (`share`, `autoupdate`, `enabled_providers`, `instructions`, `mcp`) is
+  missing. The OpenCode compat manifest's `config_schema_sha256` records the
+  pinned schema's SHA-256 (#1634)
 - The SDK now has an `OpenCodeAdapter`, registered under `opencode`, so an SDK
   or extension caller gets an agentic, `sdk-fanout` adapter instead of
   `Unknown adapter 'opencode'`. It runs the Go adapter's exact argv with the
