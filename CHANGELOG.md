@@ -83,11 +83,12 @@ changelog, and the release workflow refuses a tag that does not.
   stream parser reports the same totals, peak input, served model, cost and
   permission-rejection failures as the Go parser. Both are checked against
   one expectations file. Every line the child prints, stdout included, is
-  redacted as the Go manager redacts it, so the model's text never carries the
-  provider key, the forge token or the run's password. A stage's timeout,
-  `PipelineOrchestrator.stop()`, Ctrl-C and the SDK process exiting each kill
-  the run's whole process group. The adapter spawns nothing until the per-run
-  config is wired into the SDK (#1648) (#1637)
+  redacted of the provider key, the forge token and the run's password as the
+  Go manager redacts them. A `StageExecutor` stage's timeout, Ctrl-C and the
+  SDK process exiting each kill the run's whole process group;
+  `PipelineOrchestrator.stop()` does not reach fan-out units (#1765). The
+  adapter spawns nothing until the per-run config is wired into the SDK
+  (#1648) (#1637)
 - An OpenCode dispatch to a local model now discovers the model's context
   window from the server itself (LM Studio's loaded context, Ollama's
   `num_ctx`), once per process, so `opencode.limit` becomes an optional
