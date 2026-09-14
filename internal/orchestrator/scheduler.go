@@ -6682,9 +6682,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				terminalFailureKind = TerminalKindAdapterAuthFailed
 			}
 			// Parked kinds (#1631): an overflowed context window, a permission
-			// map that rejects an allowed tool, a binary that cannot serve the
+			// rule that rejects an allowed tool, a binary that cannot serve the
 			// dispatch. Re-running the stage on a stronger model sends the same
-			// prompt to the same window through the same map and binary, so
+			// prompt to the same window under the same rule and binary, so
 			// escalation is skipped below and the kind is recorded as is.
 			parked := TerminalKindParks(resolvedFailureKind)
 			if parked {

@@ -699,7 +699,7 @@ describe("AutoRetroService", () => {
         "adapter_permission_rejected",
         "adapter-permission-rejected",
         "exit 1: ! permission requested: bash (...); auto-rejecting\n[adapter-permission-rejected] tool=bash",
-        "permission map",
+        "opencode.json",
       ],
       [
         "adapter_incompatible",
@@ -725,9 +725,36 @@ describe("AutoRetroService", () => {
         expect(findings[0].category).toBe(category);
         expect(findings[0].evidence[0]).toContain(kind);
         expect(findings[0].recommendation).toContain(remedy);
-        expect(findings[0].recommendation).toContain("resume");
+        // A park never pauses the fleet, and `autonomous resume` acts only on
+        // a pause, so it would leave the issue held. The release that works on
+        // a running fleet is clearing the issue's failures.
+        expect(findings[0].recommendation).toContain(
+          "nightgauge autonomous clear-failures <owner/repo#N>"
+        );
+        expect(findings[0].recommendation).not.toContain("autonomous resume");
       }
     );
+
+    it("does not blame a Nightgauge permission map for an adapter permission rejection (Issue #1631)", () => {
+      // Nightgauge generates no OpenCode permission map yet, so the `ask` that
+      // was rejected came from a repository's or the user's opencode.json.
+      // The retro must say so, and must not steer the operator toward
+      // loosening a rule that guards secret files.
+      const reason =
+        "exit 1: ! permission requested: edit (...); auto-rejecting\n[adapter-permission-rejected] tool=edit";
+      const findings = AutoRetroService.classifyFailure(
+        {
+          text: reason,
+          sourcesAnalyzed: ["session_log"],
+          terminalKind: "adapter_permission_rejected",
+          terminalReason: reason,
+        },
+        "feature-dev"
+      );
+      expect(findings[0].summary).not.toMatch(/Nightgauge's (generated|own) permission map/);
+      expect(findings[0].recommendation).not.toMatch(/permission map Nightgauge generated/);
+      expect(findings[0].recommendation).toContain("secret files");
+    });
 
     it('classifies as "stop-hook-error" on Claude CLI stop-hook notification (no terminal result event)', () => {
       // Genuine #3204 case: stop-hook fires and the subagent goes silent —

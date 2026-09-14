@@ -51,6 +51,9 @@ func TestOpenCodeCapturedFailuresClassify(t *testing.T) {
 		{"auth", TerminalKindAdapterAuthFailed},
 		{"server-down", TerminalKindNetworkUnavailable},
 		{"model-not-configured", TerminalKindModelUnavailable},
+		// A real `ollama serve` asked for a model it has not pulled: its 404,
+		// in OpenCode's AI_APICallError wrapper.
+		{"ollama-model-not-pulled", TerminalKindModelUnavailable},
 		// The negative control: a failed model request that is none of the
 		// above keeps the generic kind, the `exit ` fallback's.
 		{"provider-error", TerminalKindSubagentCrash},
@@ -60,6 +63,38 @@ func TestOpenCodeCapturedFailuresClassify(t *testing.T) {
 			reason := openCodeStageReason(t, c.leg)
 			if got := ClassifyTerminalKind(reason); got != c.want {
 				t.Errorf("the %s capture classifies %q, want %q; the reason the scheduler built:\n%s", c.leg, got, c.want, reason)
+			}
+		})
+	}
+}
+
+// TestOpenCodeReadRejectionIsNotParked: opencode 1.18.30's own default
+// ruleset asks before reading `*.env` and `*.env.*`, and a headless run
+// auto-rejects the ask. A stage allowed Read that reaches for `.env`, on its
+// own or because the issue asked it to, therefore ends with
+// `[adapter-permission-rejected] tool=read`. That is OpenCode's secret-file
+// guard working, and the model chose the path, so it must not park the issue:
+// it takes permission_denied's short-backoff retry, where an attempt that
+// leaves the file alone succeeds. Every other granted permission still parks.
+func TestOpenCodeReadRejectionIsNotParked(t *testing.T) {
+	for _, c := range []struct {
+		tool string
+		want string
+	}{
+		{"read", TerminalKindPermissionDenied},
+		{"bash", TerminalKindAdapterPermissionRejected},
+		{"edit", TerminalKindAdapterPermissionRejected},
+	} {
+		t.Run(c.tool, func(t *testing.T) {
+			stderr := "! permission requested: " + c.tool + " (...); auto-rejecting\n[adapter-permission-rejected] tool=" + c.tool + "\n"
+			text, _ := cliFailureText("", stderr)
+			reason := terminalFailureReason(1, nil, text)
+			got := ClassifyTerminalKind(reason)
+			if got != c.want {
+				t.Fatalf("a %s rejection classifies %q, want %q:\n%s", c.tool, got, c.want, reason)
+			}
+			if parks := TerminalKindParks(got); parks != (c.want == TerminalKindAdapterPermissionRejected) {
+				t.Errorf("TerminalKindParks(%q) = %v for a %s rejection", got, parks, c.tool)
 			}
 		})
 	}
@@ -98,7 +133,7 @@ func TestOpenCodeIncompatibleRefusalsClassify(t *testing.T) {
 // the scheduler's real stage-failure path with escalation enabled, exactly as
 // TestCLIAdapterAuthFailedExcludedFromEscalation_NotSubagentCrash does for an
 // auth failure. A stronger model on the same adapter meets the same context
-// window, permission map and binary, so the stage must be dispatched once and
+// window, permission rule and binary, so the stage must be dispatched once and
 // the run recorded with the parked kind.
 func TestOpenCodeParkedFailuresAreNotEscalated(t *testing.T) {
 	overflow, err := os.ReadFile(filepath.Join(openCodeCaptureDir, "overflow-lmstudio.stderr"))

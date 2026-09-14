@@ -68,14 +68,18 @@ changelog, and the release workflow refuses a tag that does not.
   table, the Go constants, the SDK union, the extension schema and
   `docs/FAILURE_TAXONOMY.md`. `context_window_exceeded` is a prompt that
   outgrew the model's loaded context; `adapter_permission_rejected` is
-  OpenCode rejecting a tool the stage is allowed (a permission-map defect,
-  classified ahead of `permission_denied`); `adapter_incompatible` is a
+  OpenCode rejecting, under an `ask` rule in a repository's or the user's
+  config, a tool the stage is allowed (classified ahead of
+  `permission_denied`; a `read` rejection, OpenCode's own `.env` guard, stays
+  `permission_denied` and retries); `adapter_incompatible` is a
   version-policy refusal of the OpenCode binary. All three are parked: no
   model escalation, no retry, no lifetime-failure charge, no cascade feed, and
-  held until an operator resumes, with a remediation on the failed entry and
-  in the auto-retro. OpenCode's own wording now also maps a down local server
-  to `network_unavailable`, `ProviderModelNotFoundError` to
-  `model_unavailable` and a provider 401 to `adapter_auth_failed`. Every
+  held until an operator clears the issue's failures, the command the
+  remediation on the failed entry and in the auto-retro names
+  (`nightgauge autonomous clear-failures <owner/repo#N>`). OpenCode's own
+  wording now also maps a down local server to `network_unavailable`,
+  `ProviderModelNotFoundError` and an Ollama model that is not pulled to
+  `model_unavailable`, and a provider 401 to `adapter_auth_failed`. Every
   OpenCode clause requires OpenCode's `AI_APICallError` wrapper, so model text
   quoting overflow wording classifies as nothing. The wording comes from real
   opencode 1.18.30 captures (`scripts/capture-opencode-failure-fixture.sh`),

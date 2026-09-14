@@ -565,8 +565,9 @@ const TERMINAL_KIND_CATEGORY: Record<TerminalFailureKind, RetroFailureCategory> 
 
   // The harness refused a tool call. Not a defect — a "not that way".
   permission_denied: "permission-denied",
-  // The adapter refused a tool the stage IS allowed: Nightgauge's own
-  // permission map is wrong, so the remedy is a fix to it, not a retry (#1631).
+  // The adapter refused a tool the stage IS allowed under an `ask` rule from
+  // a repository's or the user's opencode.json, so the remedy is a change to
+  // that rule, not a retry (#1631).
   adapter_permission_rejected: "adapter-permission-rejected",
 
   // The prompt outgrew the model's loaded context. Its own category: the
@@ -1871,7 +1872,7 @@ export class AutoRetroService {
       "context-window-exceeded":
         "The prompt outgrew the context the model server has the model loaded with — the model server rejected the request before the stage could run",
       "adapter-permission-rejected":
-        "The adapter rejected a tool the stage is allowed to use — Nightgauge's generated permission map is wrong, not the work",
+        "The adapter rejected a tool the stage is allowed to use — an `ask` rule in the repository's or the user's OpenCode configuration refused it headless, not the work",
       "adapter-incompatible":
         "The adapter's binary cannot serve the dispatch — its version is below the tested floor, unreadable, or above max-tested and failed its self-test",
       unknown: "Pipeline failure detected but category could not be determined",
@@ -1931,11 +1932,11 @@ export class AutoRetroService {
       "credential-failure":
         "Fix the machine's git/forge credentials, then re-queue — the work itself was never attempted. Check the remote's scheme against what is configured (`git remote -v`): an SSH remote needs a loaded agent key, an HTTPS remote needs a credential helper or a token the forge still accepts. `Bad credentials` / HTTP 401 from the API means the token is present but rejected, so every board read, PR create and merge in the run would have failed the same way. Do NOT re-run at a higher model tier: no model can supply a credential, which is why the escalation gate declines this class (#878).",
       "context-window-exceeded":
-        "The issue is parked, not retried: the same prompt on the same model and adapter meets the same limit. Reload the model with a larger context (for LM Studio, `lms load <model> --context-length <n>`), route the stage to a model with a larger window, or split the issue into smaller ones, then resume (`nightgauge autonomous resume`). Model text never produces this category: it is read only from the adapter's own failed-request line.",
+        "The issue is parked, not retried: the same prompt on the same model and adapter meets the same limit. Reload the model with a larger context (for LM Studio, `lms load <model> --context-length <n>`), route the stage to a model with a larger window, or split the issue into smaller ones, then release it with `nightgauge autonomous clear-failures <owner/repo#N>`. A park never pauses the fleet, so a resume has nothing to act on and leaves the issue held. Model text never produces this category: it is read only from the adapter's own failed-request line.",
       "adapter-permission-rejected":
-        "The adapter auto-rejected a tool the stage's allowed tools grant, so the permission map Nightgauge generated for the stage is wrong. Retrying runs under the same map and is rejected identically, so the issue is parked and charged nothing. File the stage's stderr (the `[adapter-permission-rejected] tool=<permission>` line names the permission) against the permission map, and resume once it is fixed.",
+        "OpenCode asked before a tool the stage's allowed tools grant, and a headless run rejects every ask. Nightgauge generates no OpenCode permission map yet, so the `ask` rule is in the repository's or the user's opencode.json; OpenCode's own default asks on a granted tool are only its secret-file read guard, which is recorded as permission_denied and retried instead. Retrying under the same rule is rejected identically, so the issue is parked and charged nothing. Find the rule for the permission the `[adapter-permission-rejected] tool=<permission>` line names and change it there if the stage should have that tool, never by loosening a rule that guards secret files, then release the issue with `nightgauge autonomous clear-failures <owner/repo#N>`.",
       "adapter-incompatible":
-        "The dispatch was refused before anything ran: the adapter's binary is below the compat manifest's floor, its version could not be read, or it is newer than max-tested and failed the self-test. Install the max-tested build the refusal names and pin the adapter's binary to it (for OpenCode, `opencode.binary` in ~/.nightgauge/config.yaml; see `nightgauge doctor`), then resume. A retry on the same binary is refused the same way.",
+        "The dispatch was refused before anything ran: the adapter's binary is below the compat manifest's floor, its version could not be read, or it is newer than max-tested and failed the self-test. Install the max-tested build the refusal names and pin the adapter's binary to it (for OpenCode, `opencode.binary` in ~/.nightgauge/config.yaml; see `nightgauge doctor`), then release the issue with `nightgauge autonomous clear-failures <owner/repo#N>`. A retry on the same binary is refused the same way.",
       unknown: "Review logs manually. Run /nightgauge:retro for AI-powered root cause analysis.",
     };
 
@@ -1974,7 +1975,8 @@ export class AutoRetroService {
       // A limit of the loaded model, not of this repository; the re-route and
       // decomposition that clear it on their own are #1645 and #1655.
       "context-window-exceeded": "medium",
-      // Nightgauge's own permission map is wrong: that is an issue to file.
+      // A configured `ask` rule rejects a tool the stage needs: every attempt
+      // on that repository fails the same way until someone changes it.
       "adapter-permission-rejected": "high",
       "adapter-incompatible": "high",
       unknown: "low",

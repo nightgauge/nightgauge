@@ -22,6 +22,10 @@
 #   auth                   a 401 with an empty body
 #   server-down            a provider block pointed at a closed loopback port
 #   model-not-configured   `-m` naming a model the provider block does not list
+#   ollama-model-not-pulled
+#                          a real `ollama serve` with an empty model directory,
+#                          asked for a model it has not pulled; skipped when
+#                          `ollama` is not on PATH
 #
 # and `lmstudio-unknown-model.json` when an LM Studio answers on
 # 127.0.0.1:1234: the model id a one-token request named and the model id that
@@ -38,9 +42,10 @@
 # How a capture runs, and why (the same sandbox as
 # scripts/capture-opencode-fixture.sh):
 #   - Every model server is on 127.0.0.1: the repository's stub provider
-#     (cmd/stub-provider), or a one-status loopback server this script starts
-#     with python3. No hosted provider and no model server on another machine
-#     takes part.
+#     (cmd/stub-provider), a one-status loopback server this script starts
+#     with python3, or an `ollama serve` this script starts on a loopback port
+#     with a throwaway HOME and an empty model directory. No hosted provider
+#     and no model server on another machine takes part.
 #   - OpenCode runs under `env -i` with a throwaway HOME and throwaway XDG
 #     config, data, cache and state directories, and a config naming only that
 #     server as a complete provider block that binds no API-key variable.
@@ -187,10 +192,36 @@ closed_port() {
   python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
 }
 
-# capture NAME BASE_URL MODEL: one `opencode run` against BASE_URL, staged,
-# redacted, as NAME.stderr and NAME.jsonl. The run must exit 1.
+# start_ollama: a real `ollama serve` on a loopback port, under `env -i` with a
+# throwaway HOME and an empty model directory, so every model is one it has
+# not pulled. Sets BASE_URL and OLLAMA_VERSION.
+OLLAMA_VERSION=""
+start_ollama() {
+  local port box="$STAGING/ollama-server"
+  port="$(closed_port)"
+  mkdir -p "$box/home" "$box/models"
+  env -i PATH="/usr/bin:/bin" HOME="$box/home" OLLAMA_MODELS="$box/models" \
+    OLLAMA_HOST="127.0.0.1:$port" "$(command -v ollama)" serve >"$box/serve.log" 2>&1 &
+  SERVER_PID=$!
+  for _ in $(seq 1 100); do
+    if OLLAMA_VERSION="$(curl -s -m 1 "http://127.0.0.1:$port/api/version" | jq -r .version 2>/dev/null)" &&
+      [ -n "$OLLAMA_VERSION" ] && [ "$OLLAMA_VERSION" != null ]; then
+      BASE_URL="http://127.0.0.1:$port/v1"
+      return 0
+    fi
+    kill -0 "$SERVER_PID" 2>/dev/null || die "ollama serve exited before it bound"
+    sleep 0.1
+  done
+  die "ollama serve did not answer within 10 s"
+}
+
+# capture NAME BASE_URL MODEL [CONFIGURED]: one `opencode run` against
+# BASE_URL, staged, redacted, as NAME.stderr and NAME.jsonl. MODEL is `-m`'s
+# provider/model; the provider block is named for its provider and lists
+# CONFIGURED (MODEL_ID unless given). The run must exit 1.
 capture() {
-  local name="$1" url="$2" model="$3" box="$STAGING/$1" rc opencode_dir
+  local name="$1" url="$2" model="$3" configured="${4:-$MODEL_ID}" box="$STAGING/$1" rc opencode_dir
+  local provider="${model%%/*}"
   mkdir -p "$box"/{home,config/opencode,data,cache,state,tmp,repo}
   (
     cd "$box/repo"
@@ -199,12 +230,12 @@ capture() {
     git add README.md
     git -c user.name=fixture -c user.email=fixture@example.invalid commit -qm init
   )
-  jq -n --arg url "$url" --arg model "$MODEL_ID" '{
+  jq -n --arg url "$url" --arg model "$configured" --arg provider "$provider" '{
     "$schema": "https://opencode.ai/config.json",
     share: "disabled",
     autoupdate: false,
-    enabled_providers: ["lmstudio"],
-    provider: {lmstudio: {
+    enabled_providers: [$provider],
+    provider: {($provider): {
       npm: "@ai-sdk/openai-compatible",
       env: [],
       options: {baseURL: $url, apiKey: ""},
@@ -269,6 +300,15 @@ capture auth "$BASE_URL" "lmstudio/$MODEL_ID"
 capture server-down "http://127.0.0.1:$(closed_port)/v1" "lmstudio/$MODEL_ID"
 start_stub bash-then-stop
 capture model-not-configured "$BASE_URL" "lmstudio/qwen/not-a-configured-model"
+OLLAMA_LEG=""
+if command -v ollama >/dev/null 2>&1; then
+  start_ollama
+  capture ollama-model-not-pulled "$BASE_URL" "ollama/qwen3:8b" "qwen3:8b"
+  OLLAMA_LEG=ollama-model-not-pulled
+  echo "  (ollama serve $OLLAMA_VERSION)"
+else
+  echo "no ollama on PATH: ollama-model-not-pulled not captured" >&2
+fi
 
 # The shapes the tests are written against, checked before anything moves.
 for name in overflow-openai overflow-lmstudio overflow-ollama overflow-llamacpp; do
@@ -284,6 +324,12 @@ done
 grep -F 'ProviderModelNotFoundError: Model not found: lmstudio/qwen/not-a-configured-model' \
   "$STAGING/stage/model-not-configured.stderr" >/dev/null ||
   die "refused: the model-not-configured stderr has no ProviderModelNotFoundError"
+if [ -n "$OLLAMA_LEG" ]; then
+  [ "$(jq -s '[.[] | select(.type == "error" and .error.data.statusCode == 404)] | length > 0' "$STAGING/stage/$OLLAMA_LEG.jsonl")" = true ] ||
+    die "refused: Ollama did not answer the model it has not pulled with a 404"
+  grep -E 'AI_APICallError: model .qwen3:8b. not found' "$STAGING/stage/$OLLAMA_LEG.stderr" >/dev/null ||
+    die "refused: the $OLLAMA_LEG stderr has no AI_APICallError naming the missing model"
+fi
 
 # LM Studio's answer to a model id it does not have, when one is listening.
 if curl -s -m 5 -o /dev/null http://127.0.0.1:1234/v1/models; then

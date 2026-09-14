@@ -96,24 +96,50 @@ func TestParkedKinds_NoRetryNoLifetimeIncrementNoCascade(t *testing.T) {
 	}
 }
 
-// TestParkedKinds_ReleasedByExplicitResume — an operator who has changed the
-// configuration resumes, and the issue is a candidate again.
-func TestParkedKinds_ReleasedByExplicitResume(t *testing.T) {
+// TestParkedKinds_ReleasedByTheCommandTheReasonNames parks each kind through
+// the real completion path, which leaves the fleet running, and then does
+// what the failed entry's reason tells the operator to do. The park never
+// pauses the fleet, so `autonomous resume` (which acts only on a pause) would
+// leave the entry held; the reason must name the act that releases it from a
+// running fleet, clearing the issue's failures, and that act must make the
+// issue a candidate again.
+func TestParkedKinds_ReleasedByTheCommandTheReasonNames(t *testing.T) {
 	for _, kind := range parkedKinds {
 		t.Run(kind, func(t *testing.T) {
-			as := heldTestScheduler(t)
-			as.state.Status = "paused"
-			as.state.Failed = []FailedItem{{Repo: "acme/app", Number: 7, FailedAt: "2026-09-14T10:00:00Z", Kind: kind}}
+			stubReconcileGhUnreachable(t)
+			as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
+			as.workspaceRoot = t.TempDir()
+			as.state.LifetimeIssueFailures = map[string]int{}
+			as.perIssueFailureCount = map[string]int{}
+			as.retryBackoff = map[string]retryPlan{}
 
-			as.Resume()
+			const repo, n = "acme/app", 7
+			key := fmt.Sprintf("%s#%d", repo, n)
+			addRunning(as, repo, n, "a stage on a local model")
+			as.onPipelineComplete(repo, n, false, false, kind, "exit 1: the adapter's own failure text")
 			as.drainBackground()
 
-			if len(as.state.Failed) != 0 {
-				t.Fatalf("resume left the %s park in place", kind)
+			if as.state.Status != "running" {
+				t.Fatalf("status = %q after a %s park, want running — the park does not pause", as.state.Status, kind)
 			}
-			g := holdTestGraph(&depgraph.Node{Repo: "acme/app", Number: 7, State: "OPEN", BoardStatus: "Ready"})
-			if !isCandidate(as.prioritize(context.Background(), g), "acme/app", 7) {
-				t.Errorf("the resumed issue is not a dispatch candidate")
+			if len(as.state.Failed) != 1 {
+				t.Fatalf("state.Failed has %d entries, want the one park", len(as.state.Failed))
+			}
+			const release = "nightgauge autonomous clear-failures"
+			if !strings.Contains(as.state.Failed[0].Reason, release) {
+				t.Fatalf("the %s reason does not name `%s`, the act that releases a park from a running fleet:\n%s",
+					kind, release, as.state.Failed[0].Reason)
+			}
+
+			if cleared, _ := as.ClearIssueFailures(key); cleared != 1 {
+				t.Errorf("ClearIssueFailures(%s) cleared %d issues, want 1", key, cleared)
+			}
+			if len(as.state.Failed) != 0 {
+				t.Fatalf("clearing %s's failures left the %s park in place", key, kind)
+			}
+			g := holdTestGraph(&depgraph.Node{Repo: repo, Number: n, State: "OPEN", BoardStatus: "Ready"})
+			if !isCandidate(as.prioritize(context.Background(), g), repo, n) {
+				t.Errorf("the released issue is not a dispatch candidate")
 			}
 		})
 	}

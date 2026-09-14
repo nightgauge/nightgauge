@@ -5459,7 +5459,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			return
 		}
 
-		// #1631: a context window the prompt outgrew, a permission map that
+		// #1631: a context window the prompt outgrew, a permission rule that
 		// rejects a tool the stage is allowed, a binary that cannot serve the
 		// dispatch. The next attempt meets each unchanged, so a retry is the
 		// defect: no retry schedule, no LifetimeIssueFailures increment (the
@@ -5467,7 +5467,9 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		// pausing the fleet does not change it), no pause. The Failed entry
 		// carries the kind, so HoldForTerminalKind keeps the graph reconcile
 		// from re-admitting it until an operator changes the configuration
-		// and resumes; its reason names what to change.
+		// and clears the issue's failures; its reason names what to change
+		// and that command. With no pause, `autonomous resume` has nothing to
+		// act on and would leave the entry held.
 		if TerminalKindParks(terminalFailureKind) {
 			detail := failureDetail
 			if detail == "" {

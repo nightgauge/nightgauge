@@ -168,6 +168,8 @@
         ["model not found"],
         ["invalid model"],
         ["unknown model"],
+        ["ai_apicallerror", "model '", "' not found"],
+        ["ai_apicallerror", "not found, try pulling it"],
         ["not available on your", "@mentions_registry_model"],
         ["not included in your", "@mentions_registry_model"],
         ["not offered on your", "@mentions_registry_model"],
@@ -177,7 +179,7 @@
         ["usage cap", "@mentions_registry_model"],
         ["weekly limit", "@mentions_registry_model"]
       ],
-      "why": "The API rejected the model (#42). BELOW the explicit quota marker — an explicit stamp beats a heuristic — and above the generic rules. The plan-restriction and usage-cap wordings are each gated on the mentions_registry_model predicate so an unrelated failure that merely says `limit` or `not found` does not misclassify; the 404 `not_found_error` shape and the invalid/unknown-model wordings are specific enough to stand alone. The `reached your` clause is the CURRENT Anthropic CLI's own cap wording (#1556) — `You've reached your Fable limit. Switch to another model, …` — and carries the same registry-model gate as its siblings, which is what keeps it off the account-level `You've hit your weekly limit` envelopes that name no model and must stay on the quota path. Its verb differs from those captured rows (`reached` vs `hit`), so it could not reach them even with the gate removed."
+      "why": "The API rejected the model (#42). BELOW the explicit quota marker — an explicit stamp beats a heuristic — and above the generic rules. The plan-restriction and usage-cap wordings are each gated on the mentions_registry_model predicate so an unrelated failure that merely says `limit` or `not found` does not misclassify; the 404 `not_found_error` shape and the invalid/unknown-model wordings are specific enough to stand alone. The `reached your` clause is the CURRENT Anthropic CLI's own cap wording (#1556) — `You've reached your Fable limit. Switch to another model, …` — and carries the same registry-model gate as its siblings, which is what keeps it off the account-level `You've hit your weekly limit` envelopes that name no model and must stay on the quota path. Its verb differs from those captured rows (`reached` vs `hit`), so it could not reach them even with the gate removed. The two `ai_apicallerror` clauses are an Ollama server asked for a model it has not pulled (#1631), which it answers with a 404 that opencode 1.18.30 prints as `AI_APICallError: <server message>`. Ollama 0.32.11's chat handler says `model '<name>' not found` (captured from a real `ollama serve`: internal/terminalkind/testdata/opencode/ollama-model-not-pulled.stderr), and its scheduler says `model \"<name>\" not found, try pulling it first` when a model's files are missing (server/routes.go handleScheduleError at v0.32.11). The quoted name splits `model not found`, and the `not_found_error` type is only in the response body on the stream, so before these clauses the line fell to the `exit ` fallback and was booked subagent_crash. Each requires OpenCode's wrapper, so a stage's own prose saying a model was not found matches neither."
     },
     {
       "id": "issue-closed",
@@ -436,11 +438,18 @@
       "why": "A commit stranded on the wrong branch after a SIGKILL bypassed pre_push.go's restore-defer (#266). Emitted by feature-validate's branch-identity guard when HEAD is not on the issue's expected feature branch and self-heal cannot recover it. Unrecoverable by retry."
     },
     {
+      "id": "opencode-read-guard-rejected",
+      "kind": "permission_denied",
+      "signal": false,
+      "clauses": [["[adapter-permission-rejected] tool=read"]],
+      "why": "OpenCode's own secret-file guard, not a configuration defect (#1631). opencode 1.18.30's default ruleset asks before `read` on `*.env` and `*.env.*` (allowing `*.env.example`), and a headless run auto-rejects every ask, so a stage allowed Read that reaches for `.env` — on its own, or because the issue body asked it to — ends with `[adapter-permission-rejected] tool=read`. The model chose that path, and the next attempt need not take it, so it must not park the issue: that would let issue text or model behaviour hold work for an operator, and the remedy the park names would invite widening access to secret files. It takes permission_denied's short-backoff retry instead, whose consecutive-denial cap still stops a read rule that rejects every attempt. `read` is the only permission a stage can be granted on which OpenCode's defaults ask (their other asks, `external_directory` and `doom_loop`, map to no allowed tool and already carry `[permission-denied]`). MUST precede adapter-permission-rejected, whose bare marker would otherwise claim it; no other permission name begins `read`."
+    },
+    {
       "id": "adapter-permission-rejected",
       "kind": "adapter_permission_rejected",
       "signal": false,
       "clauses": [["[adapter-permission-rejected]"]],
-      "why": "The adapter rejected, by itself, a tool the stage's allowed tools GRANT (#1624, #1631): opencode resolved the permission to `ask`, auto-rejected it headless, and the parser (internal/execution/opencode_usage.go) ended the stage's stderr with `[adapter-permission-rejected] tool=<permission>`. That is a defect in the permission map Nightgauge generated, not in the work and not in the issue — the next attempt runs under the same map and is rejected identically — so the kind is parked, not retried, and not charged to the issue. MUST precede permission-denied: that rule is the harness saying `not that way` to a tool the stage was NOT allowed, which a short backoff and a different approach can clear. The parser gives one stage one marker, but a reason can join text from more than one source (a stage's error and its tail, a composed first-cause reason), and where both appear the configuration defect is the one no retry clears, so it names the failure. The marker, not the notice, is matched: the notice's patterns are the model's own tool input, which the parser strips before anything is kept (ADR-022 § 9)."
+      "why": "The adapter rejected, by itself, a tool the stage's allowed tools GRANT (#1624, #1631): opencode resolved the permission to `ask`, auto-rejected it headless, and the parser (internal/execution/opencode_usage.go) ended the stage's stderr with `[adapter-permission-rejected] tool=<permission>`. Nightgauge does not generate an OpenCode permission map yet (#1638), so the `ask` comes from a repository's or the user's opencode.json; OpenCode's own default asks on a granted permission are only the `read` secret-file guard, which opencode-read-guard-rejected above takes first. The next attempt runs under the same rule and is rejected identically, so the kind is parked, not retried, and not charged to the issue. MUST precede permission-denied: that rule is the harness saying `not that way` to a tool the stage was NOT allowed, which a short backoff and a different approach can clear. The parser gives one stage one marker, but a reason can join text from more than one source (a stage's error and its tail, a composed first-cause reason), and where both appear the configuration defect is the one no retry clears, so it names the failure. The marker, not the notice, is matched: the notice's patterns are the model's own tool input, which the parser strips before anything is kept (ADR-022 § 9)."
     },
     {
       "id": "permission-denied",

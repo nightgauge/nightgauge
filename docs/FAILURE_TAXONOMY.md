@@ -248,7 +248,7 @@ record may carry both fields, neither, or only one.
 | `dev_tests_failed`               | feature-dev's own test run recorded `tests_status.failed > 0` (Issue #1237) — organic implementation failure                                                                                                                                                                                                                                                                                                                         |
 | `pr_merge_lookup_failed`         | pr-merge's gate could not establish the PR's state: `gh pr view` failed or was rate-limited on every attempt and the local-git fallback found no merge commit (Issue #1237) — infrastructure; the merge may have landed unseen                                                                                                                                                                                                       |
 | `context_window_exceeded`        | The prompt outgrew the context the model server has the model loaded with (Issue #1631) — read only from the adapter's own failed-request line, never from model text; parked, never retried on the same model and adapter                                                                                                                                                                                                           |
-| `adapter_permission_rejected`    | The adapter auto-rejected a tool the stage's allowed tools grant, #1624's `[adapter-permission-rejected]` marker (Issue #1631) — a defect in Nightgauge's generated permission map; parked, not retried, not charged to the issue                                                                                                                                                                                                    |
+| `adapter_permission_rejected`    | The adapter auto-rejected a tool the stage's allowed tools grant, #1624's `[adapter-permission-rejected]` marker (Issue #1631) — an `ask` rule in a repository's or the user's OpenCode config; parked, not retried, not charged to the issue. A `read` rejection is `permission_denied`                                                                                                                                             |
 | `adapter_incompatible`           | The adapter's binary cannot serve the dispatch: below the compat floor, unreadable, or above max-tested with a failed self-test (Issues #1627, #1631) — parked; pin or install the max-tested build                                                                                                                                                                                                                                  |
 
 `permission_denied` (Issue #289) is a **harness-fault** kind, distinct from a
@@ -292,18 +292,23 @@ from the captures in `internal/terminalkind/testdata/opencode/`.
 | The binary cannot serve the dispatch     | `adapter_incompatible`        | Parked                                                  |
 | The model server is not listening        | `network_unavailable`         | Generic backoff; outcome recording skipped              |
 | `ProviderModelNotFoundError`             | `model_unavailable`           | Cap recovery (below)                                    |
+| An Ollama model that is not pulled       | `model_unavailable`           | Cap recovery (below)                                    |
+| The `.env` read guard rejected a `read`  | `permission_denied`           | Short backoff, bounded retries                          |
 | The server refused the credentials (401) | `adapter_auth_failed`         | Short backoff, no lifetime-cap increment, not escalated |
 
 **The parked kinds.** `context_window_exceeded`, `adapter_permission_rejected`
 and `adapter_incompatible` each name a condition the next attempt on the same
 model and adapter meets unchanged: the same prompt against the same window,
-the same permission map, the same binary. None is the issue's fault. So
+the same permission rule, the same binary. None is the issue's fault. So
 `TerminalKindParks` routes all three the same way: the in-run model
 escalation is skipped, the autonomous scheduler schedules no retry, charges no
 `LifetimeIssueFailures`, feeds no cascade breaker and does not pause, and
 `HoldForTerminalKind` holds the entry for an operator (below), so the graph
 reconcile does not re-admit it either. The failed entry's reason carries the
-remediation from `TerminalKindRemediation`:
+remediation from `TerminalKindRemediation`, which ends with the release:
+`nightgauge autonomous clear-failures <owner/repo#N>`. A park does not pause
+the fleet, and `autonomous resume` acts only on a pause, so a resume leaves a
+park held while the fleet runs.
 
 - `context_window_exceeded`: reload the model with a larger context, route the
   stage to a model with a larger window, or split the issue. It is not an
@@ -313,9 +318,17 @@ remediation from `TerminalKindRemediation`:
   `ContextOverflowError`, and the table's five overflow fragments are the ones
   its recogniser matches for OpenAI-compatible servers, LM Studio, Ollama and
   the llama.cpp server.
-- `adapter_permission_rejected`: a defect in the permission map Nightgauge
-  generated. It sits above `permission_denied` (#289), the harness refusing a
-  tool the stage was not allowed, which retries with a short backoff.
+- `adapter_permission_rejected`: an `ask` rule rejected, headless, a tool the
+  stage's allowed tools grant. Nightgauge generates no OpenCode permission map
+  yet (#1638), so the rule is in a repository's or the user's `opencode.json`:
+  change it there if the stage should have the tool, never by loosening a rule
+  that guards secret files. It sits above `permission_denied` (#289), the
+  harness refusing a tool the stage was not allowed, which retries with a
+  short backoff. One rejection is not parked: OpenCode's own default ruleset
+  asks before reading `*.env` and `*.env.*` files, so a stage that reaches for
+  one ends with `[adapter-permission-rejected] tool=read`. The model chose that
+  path, so the table records it `permission_denied` and it retries; parking it
+  would let issue text hold the issue for an operator.
 - `adapter_incompatible`: install the max-tested build the refusal names and
   pin the adapter's binary to it. The refusal stamps the kind itself
   (`*OpenCodeIncompatibleError`), before anything is spawned.
@@ -331,11 +344,15 @@ fleet from dispatching every issue into a server that is down.
 
 **A missing model.** OpenCode's `ProviderModelNotFoundError: Model not found`
 classifies `model_unavailable`, which enters cap recovery: the tier ladder,
-then a hop along `pipeline.adapter_fallback_chain`. Whether a failure on a
-model the operator hosts may hop to a hosted entry of that chain is an open
-question, decided by #1643 and not here. A loopback LM Studio with one model
-loaded does not fail on an unknown model id at all: it answers with the loaded
-model, so nothing classifies.
+then a hop along `pipeline.adapter_fallback_chain`. So does an Ollama server
+asked for a model it has not pulled: it answers 404, and OpenCode prints
+`AI_APICallError: model '<name>' not found` (Ollama's scheduler says
+`model "<name>" not found, try pulling it first` for a model whose files are
+missing, which classifies the same way). Whether a failure on a model the
+operator hosts may hop to a hosted entry of that chain is an open question,
+decided by #1643 and not here. A loopback LM Studio with one model loaded does
+not fail on an unknown model id at all: it answers with the loaded model, so
+nothing classifies.
 
 `branch_forked` (Issue #163) is the one kind that is **strictly harmful to
 retry**. The remote branch head is not reachable from the run's local tip, so
@@ -500,9 +517,9 @@ kinds that halt on purpose and say so, and the three parked kinds (#1631):
 | -------------------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------- |
 | `architecture_approval_required` | A human approving a high-impact decision    | The approval label (`approved:architecture` by default) or `.nightgauge/pipeline/approval-<n>.json` |
 | `not_pipeline_actionable`        | A human doing the thing the pipeline cannot | An explicit `autonomous resume` (fleet or repo), or clearing the issue's failures                   |
-| `context_window_exceeded`        | A larger context, another model, or a split | An explicit `autonomous resume` (fleet or repo), or clearing the issue's failures                   |
-| `adapter_permission_rejected`    | A fix to the generated permission map       | An explicit `autonomous resume` (fleet or repo), or clearing the issue's failures                   |
-| `adapter_incompatible`           | The max-tested binary, installed and pinned | An explicit `autonomous resume` (fleet or repo), or clearing the issue's failures                   |
+| `context_window_exceeded`        | A larger context, another model, or a split | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause |
+| `adapter_permission_rejected`    | A change to the configured `ask` rule       | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause |
+| `adapter_incompatible`           | The max-tested binary, installed and pinned | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause |
 
 The scheduler records the kind on the `failed` entry (`FailedItem.Kind`) and
 derives the hold from it via `HoldForTerminalKind`, so retryability has one
@@ -613,7 +630,7 @@ construction (`classifyTerminalKind` / `resolveTerminalKind` in
 | `dev_tests_failed`               | `organic` — the stage's own tests failed                                                    |
 | `pr_merge_lookup_failed`         | `infrastructure` — gh / local git could not answer, not the issue                           |
 | `context_window_exceeded`        | parked — the loaded model's limit, not the issue; no lifetime-cap increment, no cascade     |
-| `adapter_permission_rejected`    | parked — Nightgauge's permission map, not the issue; no lifetime-cap increment, no cascade  |
+| `adapter_permission_rejected`    | parked — a configured `ask` rule, not the issue; no lifetime-cap increment, no cascade      |
 | `adapter_incompatible`           | parked — the adapter's binary, not the issue; no lifetime-cap increment, no cascade         |
 
 **The sweep (#1237).** #9 built the mechanism but left eleven `KindFail`
@@ -1254,7 +1271,7 @@ operators.
 | `validation-inconclusive`     | medium   | run record kind (#1448)                         | A validation tier ran and executed zero tests — nothing failed, so nothing was verified (#221).                         |
 | `credential-failure`          | high     | run record `terminal_failure_kind`              | `git_transport_auth_failed` — a git or forge transport refused the machine's credentials (#878).                        |
 | `context-window-exceeded`     | medium   | run record `terminal_failure_kind`              | The prompt outgrew the model's loaded context. Parked; the remedy is a larger window, another model or a split (#1631). |
-| `adapter-permission-rejected` | high     | run record `terminal_failure_kind`              | The adapter rejected a tool the stage is allowed: Nightgauge's permission map is wrong (#1631).                         |
+| `adapter-permission-rejected` | high     | run record `terminal_failure_kind`              | The adapter rejected a tool the stage is allowed under a configured `ask` rule (#1631).                                 |
 | `adapter-incompatible`        | high     | run record `terminal_failure_kind`              | The adapter's binary cannot serve the dispatch; install and pin the max-tested build (#1631).                           |
 | `unknown`                     | low      | fallback                                        | No structured signal or keyword match.                                                                                  |
 

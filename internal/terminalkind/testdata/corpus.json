@@ -1613,7 +1613,7 @@
     },
     {
       "id": "opencode-text-part-overflow-wording-does-not-classify",
-      "input": "{\"type\":\"text\",\"timestamp\":1789336540710,\"sessionID\":\"ses_fixture0000000000000000001\",\"part\":{\"id\":\"prt_09cc4d623001ox8z7hvDbvJXh7\",\"messageID\":\"msg_09cc4d5ad001QaZ82wsnecKlQN\",\"sessionID\":\"ses_fixture0000000000000000001\",\"type\":\"text\",\"text\":\"If the build fails with context_length_exceeded (the maximum context length is 8192 tokens, or the prompt is greater than the context length, or prompt too long; exceeded max context length, or the request exceeds the available context size), or if it cannot connect to API because the key was unauthorized, I will split the change.\",\"time\":{\"start\":1789336540707,\"end\":1789336540709}}}",
+      "input": "{\"type\":\"text\",\"timestamp\":1789336540710,\"sessionID\":\"ses_fixture0000000000000000001\",\"part\":{\"id\":\"prt_09cc4d623001ox8z7hvDbvJXh7\",\"messageID\":\"msg_09cc4d5ad001QaZ82wsnecKlQN\",\"sessionID\":\"ses_fixture0000000000000000001\",\"type\":\"text\",\"text\":\"If the build fails with context_length_exceeded (the maximum context length is 8192 tokens, or the prompt is greater than the context length, or prompt too long; exceeded max context length, or the request exceeds the available context size), or if it cannot connect to API because the key was unauthorized, or the model 'qwen3:8b' not found, try pulling it first, I will split the change.\",\"time\":{\"start\":1789336540707,\"end\":1789336540709}}}",
       "expected": "",
       "expected_signal": "",
       "source": "synthetic",
@@ -1672,7 +1672,7 @@
       "expected_signal": "",
       "source": "synthetic",
       "producer": "The marker internal/execution/opencode_usage.go appends as the last line of an opencode stage's stderr when OpenCode auto-rejected a permission the stage's allowed tools grant (#1624, ADR-022 § 9).",
-      "rationale": "The marker alone, as #1631's verification names it. It means Nightgauge's generated permission map rejected a tool the stage is allowed, a configuration defect the next attempt meets unchanged, so it parks without a retry and without charging the issue."
+      "rationale": "The marker alone, as #1631's verification names it. It means an `ask` rule rejected a tool the stage is allowed, for any permission but `read`: a repository's or the user's opencode.json, since Nightgauge generates no permission map yet (#1638). The next attempt meets that rule unchanged, so it parks without a retry and without charging the issue."
     },
     {
       "id": "adapter-permission-rejected-as-the-stage-reports-it",
@@ -1690,7 +1690,34 @@
       "expected_signal": "",
       "source": "synthetic",
       "producer": "Both of #1624's markers in one reason: internal/execution/opencode_usage.go emits `[permission-denied] tool=<p>` for a permission the stage's allowed tools do not grant and `[adapter-permission-rejected] tool=<p>` for one they do.",
-      "rationale": "ORDERING. #1631 requires the adapter rule ahead of permission-denied: the harness refusing a forbidden tool is retried with a short backoff, the adapter rejecting an allowed one is a permission-map defect no retry clears. Moving adapter-permission-rejected below permission-denied turns this row red."
+      "rationale": "ORDERING. #1631 requires the adapter rule ahead of permission-denied: the harness refusing a forbidden tool is retried with a short backoff, the adapter rejecting an allowed one is an `ask` rule in the configuration that no retry clears. Moving adapter-permission-rejected below permission-denied turns this row red."
+    },
+    {
+      "id": "opencode-ollama-model-not-pulled",
+      "input": "exit 1: timestamp=2026-01-01T00:00:00.000Z level=ERROR run=00000000 message=process session.id=ses_fixture0000000000000000001 messageID=msg_fixture0000000000000000001 error=\"model 'qwen3:8b' not found\" stack=\"AI_APICallError: model 'qwen3:8b' not found\\n    at <anonymous> (/$bunfs/root/chunk-4jmjcj2v.js:6:14582)\\n    at async <anonymous> (/$bunfs/root/chunk-4jmjcj2v.js:6:12790)\\n    at processTicksAndRejections (native:7:39)\"",
+      "expected": "model_unavailable",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "opencode 1.18.30 run with --print-logs --log-level ERROR against a real `ollama serve` 0.32.11 on 127.0.0.1 with an empty model directory, `-m ollama/qwen3:8b`, captured by scripts/capture-opencode-failure-fixture.sh (#1631): the last stderr line of internal/terminalkind/testdata/opencode/ollama-model-not-pulled.stderr, verbatim after redaction, behind the `exit 1: ` the scheduler's terminalFailureReason adds. Ollama answered 404 with `model 'qwen3:8b' not found` (type not_found_error, on the stream only).",
+      "rationale": "#1631's acceptance criterion names a missing or unloaded model on Ollama as model_unavailable. Ollama fails on a model it has not pulled, and the quoted name splits the `model not found` literal, so before the `ai_apicallerror` + `model '` + `' not found` clause this line fell to the `exit ` fallback and was booked subagent_crash, retried, charged to the issue and fed to the cascade breaker. As model_unavailable it enters cap recovery, whose tier walk reaches a model the server does have."
+    },
+    {
+      "id": "opencode-ollama-model-not-found-try-pulling",
+      "input": "exit 1: timestamp=2026-01-01T00:00:00.000Z level=ERROR run=00000000 message=process session.id=ses_fixture0000000000000000001 messageID=msg_fixture0000000000000000001 error=\"model \\\"qwen3:8b\\\" not found, try pulling it first\" stack=\"AI_APICallError: model \\\"qwen3:8b\\\" not found, try pulling it first\\n    at <anonymous> (/$bunfs/root/chunk-4jmjcj2v.js:6:14582)\\n    at async <anonymous> (/$bunfs/root/chunk-4jmjcj2v.js:6:12790)\\n    at processTicksAndRejections (native:7:39)\"",
+      "expected": "model_unavailable",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "Ollama's other not-found wording, `model %q not found, try pulling it first` (server/routes.go handleScheduleError at v0.32.11, commit 39df91c9826b), which it returns when the scheduler cannot find a model's files, placed in the line opencode 1.18.30 printed for the captured Ollama 404 (internal/terminalkind/testdata/opencode/ollama-model-not-pulled.stderr) with the message replaced, and `\"` escaped as that line escapes a quote.",
+      "rationale": "The same failure on Ollama's scheduler path: a model the server lists but cannot load from disk. Pins the `ai_apicallerror` + `not found, try pulling it` clause, because `%q` quotes the name in double quotes and the model-name quote clause keys on single ones."
+    },
+    {
+      "id": "opencode-read-guard-rejection-retries",
+      "input": "exit 1: ! permission requested: read (...); auto-rejecting\n[adapter-permission-rejected] tool=read",
+      "expected": "permission_denied",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "An opencode stage's stderr after #1624's parser, for a stage allowed Read that tried to read a `.env` file: opencode 1.18.30's default ruleset asks on `read` for `*.env` and `*.env.*`, the headless run auto-rejects the ask, and the parser emits `[adapter-permission-rejected] tool=read` because Read maps to `read` (internal/execution/adapters/adapter.go OpenCodeToolsAllowed).",
+      "rationale": "OpenCode's secret-file guard doing its job. The model picked the path, so a retry that does not reach for the file succeeds, and parking would let issue text or model behaviour hold the issue for an operator while the park's remedy invited loosening the guard. It must take permission_denied's bounded short-backoff retry. Deleting opencode-read-guard-rejected, or moving it below adapter-permission-rejected, turns this row adapter_permission_rejected."
     }
   ]
 }

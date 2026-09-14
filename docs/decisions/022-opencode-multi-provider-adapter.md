@@ -1624,9 +1624,9 @@ Studio beside Ollama. Each is a named **endpoint** in `opencode.endpoints[]`
 model server's own words, so that a down local server reads
 `ECONNREFUSED 127.0.0.1:1234` and a missing model reads as the server's
 not-found error. Observed on 1.18.30 with `--print-logs --log-level ERROR`,
-against the stub provider (#1618) and one-status servers on `127.0.0.1`, two
-of those assumptions do not hold. The captures, their capture script and the
-source of every wording are in
+against the stub provider (#1618), one-status servers and an `ollama serve`
+on `127.0.0.1`, two of those assumptions do not hold. The captures, their
+capture script and the source of every wording are in
 [`internal/terminalkind/testdata/opencode/`](../../internal/terminalkind/testdata/opencode/README.md).
 
 | Failure                                 | What 1.18.30 prints on stderr                                                                                                                                   | Exit |
@@ -1638,6 +1638,7 @@ source of every wording are in
 | A 500                                   | `AI_APICallError: <message>`, after about 70 s of retries                                                                                                       | 1    |
 | `-m` naming a model the config lacks    | `ProviderModelNotFoundError: Model not found: <provider>/<model>`, before any request                                                                           | 1    |
 | A model id the loopback LM Studio lacks | Nothing: with one model loaded, LM Studio answered the request with the loaded model                                                                            | 0    |
+| A model Ollama 0.32.11 has not pulled   | `AI_APICallError: model '<name>' not found`, Ollama's 404 message, at once                                                                                      | 1    |
 
 The last line of stderr is always a `message=process` line whose `stack`
 repeats `AI_APICallError: <message>`, so the last lines a stage's reason keeps
@@ -1653,7 +1654,8 @@ What changes:
   matches, and its source names the server each belongs to.
 - A down local server classifies on `Cannot connect to API`, not on
   `ECONNREFUSED`.
-- A model id the server lacks is a failure only where the server says so. A
+- A model id the server lacks is a failure only where the server says so.
+  Ollama does, and its not-found wording classifies `model_unavailable`. A
   loopback LM Studio with one model loaded does not, so the stage runs on
   another model and nothing classifies. Whether the served-model record (§ 1,
   § 2) shows the substitution was not checked here.

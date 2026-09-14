@@ -473,7 +473,7 @@ export type HistoryStageDetail = z.infer<typeof HistoryStageDetailSchema>;
  *  - `dev_tests_failed` — feature-dev's own test run recorded failures; organic (#1237)
  *  - `pr_merge_lookup_failed` — pr-merge's gate could not establish the PR's state; infrastructure (#1237)
  *  - `context_window_exceeded` — the prompt outgrew the model server's loaded context; parked, never retried on the same model and adapter (#1631)
- *  - `adapter_permission_rejected` — the adapter auto-rejected a tool the stage's allowed tools grant; a permission-map defect, parked (#1631)
+ *  - `adapter_permission_rejected` — the adapter auto-rejected a tool the stage's allowed tools grant under a configured `ask` rule; parked (#1631)
  *  - `adapter_incompatible` — the adapter's binary cannot serve the dispatch (version floor, max-tested self-test); parked (#1631)
  *
  * MUST stay in lockstep with the Go constants in
@@ -532,7 +532,7 @@ export const TerminalFailureKindSchema = z.enum([
   // meets the same condition; no retry, no lifetime-cap increment, held for
   // an operator.
   "context_window_exceeded", // Issue #1631 — the prompt outgrew the context the model server has the model loaded with; classified only from the adapter's failed-request line, never from model text
-  "adapter_permission_rejected", // Issue #1631 — the adapter auto-rejected a tool the stage's allowed tools grant (#1624's marker); a permission-map defect, distinct from permission_denied
+  "adapter_permission_rejected", // Issue #1631 — the adapter auto-rejected a tool the stage's allowed tools grant (#1624's marker) under a configured `ask` rule, distinct from permission_denied
   "adapter_incompatible", // Issue #1631 — the adapter's binary cannot serve the dispatch (#1627's version floor / max-tested self-test)
 ]);
 export type TerminalFailureKind = z.infer<typeof TerminalFailureKindSchema>;

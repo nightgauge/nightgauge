@@ -263,7 +263,7 @@ export type TerminalFailureKind =
   // meets the same condition, so there is no retry, no lifetime-cap
   // increment, no cascade feed, and the entry is held for an operator.
   | "context_window_exceeded" // Issue #1631 — the prompt outgrew the context the model server has the model loaded with; classified only from the adapter's own failed-request line (`AI_APICallError: …`), never from model text. Not an agent failure; parked with remediation until re-route (#1645) and decomposition (#1655) land
-  | "adapter_permission_rejected" // Issue #1631 — the adapter auto-rejected a tool the stage's allowed tools grant (#1624's `[adapter-permission-rejected]` marker): a defect in Nightgauge's generated permission map. Distinct from permission_denied, which retries
+  | "adapter_permission_rejected" // Issue #1631 — the adapter auto-rejected a tool the stage's allowed tools grant (#1624's `[adapter-permission-rejected]` marker): an `ask` rule from a repository's or the user's opencode.json (a `read` rejection, OpenCode's own secret-file guard, is permission_denied instead). Distinct from permission_denied, which retries
   | "adapter_incompatible"; // Issue #1631 — the adapter's binary cannot serve the dispatch (below the compat floor, unreadable, or above max-tested with a failed self-test; #1627); pin or install the max-tested build
 
 /**
