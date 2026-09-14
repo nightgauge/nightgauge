@@ -43,6 +43,11 @@ export interface StageExecutorOptions {
   adapter?: string;
   /** Codex thread ID for `exec resume` on backtrack retry. @see Issue #1659 */
   resumeSessionId?: string;
+  /**
+   * Stops the stage: the query's own abort signal fires with it, as it fires
+   * on the stage's timeout. @see Issue #1637
+   */
+  abortSignal?: AbortSignal;
 }
 
 /**
@@ -82,6 +87,12 @@ export interface SDKQueryOptions {
     cwd?: string;
     /** Codex thread ID for `exec resume` on backtrack retry. @see Issue #1659 */
     resumeSessionId?: string;
+    /**
+     * Aborts the query. StageExecutor fires it on the stage's timeout and on
+     * the stage's own abort signal; the opencode adapter kills the whole
+     * process group of the run it spawned when it fires. @see Issue #1637
+     */
+    abortSignal?: AbortSignal;
   };
 }
 
@@ -151,6 +162,13 @@ export class StageExecutor {
     const timeoutMs = options.timeoutMs ?? 0;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
     let isTimedOut = false;
+    // The query's abort signal (#1637): fired by the stage's timeout and by the
+    // caller's own stop, so a query that honours it, the opencode adapter's,
+    // ends its process instead of running on past the stage.
+    const abort = new AbortController();
+    const onStop = () => abort.abort();
+    if (options.abortSignal?.aborted) abort.abort();
+    else options.abortSignal?.addEventListener("abort", onStop, { once: true });
 
     this.emitter.stageStarted(options.stage);
 
@@ -159,6 +177,7 @@ export class StageExecutor {
     if (timeoutMs > 0) {
       timeoutId = setTimeout(() => {
         isTimedOut = true;
+        abort.abort();
       }, timeoutMs);
     }
 
@@ -203,6 +222,7 @@ export class StageExecutor {
           systemPrompt: systemPromptPresetForAdapter(options.adapter),
           cwd: options.cwd,
           resumeSessionId: options.resumeSessionId,
+          abortSignal: abort.signal,
         },
       };
 
@@ -258,21 +278,28 @@ export class StageExecutor {
       // zeros when real usage exists (#3914).
       this.emitter.stageCompleted(options.stage, this.tokenTracker.getWorkflowUsage(options.stage));
     } catch (error) {
+      // A query the timeout aborted throws its own abort error: the stage
+      // still failed by timing out.
+      const failure =
+        isTimedOut && !(error instanceof StageTimeoutError)
+          ? new StageTimeoutError(options.stage, timeoutMs)
+          : error;
       // A stage can throw AFTER burning tokens (e.g. a timeout fires once the
       // result message already recorded usage, or a downstream error). Carry the
       // tracker's real usage onto the failed terminal node so a failed stage
       // never reports zeros, and classify the terminal kind from the outcome.
       this.emitter.stageFailed(
         options.stage,
-        error instanceof StageTimeoutError ? "timeout" : "error",
+        failure instanceof StageTimeoutError ? "timeout" : "error",
         this.tokenTracker.getWorkflowUsage(options.stage)
       );
-      throw error;
+      throw failure;
     } finally {
       // Clear timeout on completion or error
       if (timeoutId !== null) {
         clearTimeout(timeoutId);
       }
+      options.abortSignal?.removeEventListener("abort", onStop);
 
       // Cleanup provider-aware steering after stage completion. GEMINI.md is
       // fully generated so it is removed (#1055); AGENTS.md may be a committed

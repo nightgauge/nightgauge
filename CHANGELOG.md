@@ -82,6 +82,22 @@ changelog, and the release workflow refuses a tag that does not.
   (`share`, `autoupdate`, `enabled_providers`, `instructions`, `mcp`) is
   missing. The OpenCode compat manifest's `config_schema_sha256` records the
   pinned schema's SHA-256 (#1634)
+- The SDK now has an `OpenCodeAdapter`, registered under `opencode`, so an SDK
+  or extension caller gets an agentic, `sdk-fanout` adapter instead of
+  `Unknown adapter 'opencode'`. It runs the Go adapter's exact argv with the
+  prompt on stdin. It refuses a malformed model id, an `anthropic/` model
+  without `ANTHROPIC_API_KEY`, and an `opencode` binary below the compat
+  manifest's floor. The child environment it spawns carries only the
+  dispatched provider's key and none of your own `OPENCODE_*` or XDG state. Its
+  stream parser reports the same totals, peak input, served model, cost and
+  permission-rejection failures as the Go parser. Both are checked against
+  one expectations file. Every line the child prints, stdout included, is
+  redacted of the provider key, the forge token and the run's password as the
+  Go manager redacts them. A `StageExecutor` stage's timeout, Ctrl-C and the
+  SDK process exiting each kill the run's whole process group;
+  `PipelineOrchestrator.stop()` does not reach fan-out units (#1765). The
+  adapter spawns nothing until the per-run config is wired into the SDK
+  (#1648) (#1637)
 - An OpenCode dispatch to a local model now discovers the model's context
   window from the server itself (LM Studio's loaded context, Ollama's
   `num_ctx`), once per process, so `opencode.limit` becomes an optional

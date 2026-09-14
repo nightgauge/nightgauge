@@ -21,6 +21,43 @@ export { CopilotCliAdapter } from "./CopilotCliAdapter.js";
 export { GrokAdapter, GROK_MIN_KNOWN_VERSION } from "./GrokAdapter.js";
 export { summarizeGrokStream, isGrokQuotaMessage, isGrokAuthMessage } from "./grokStream.js";
 export { mapGrokEffortToNightgauge, grokCliEffortFlag, GROK_CLI_EFFORTS } from "./grokEffort.js";
+export {
+  OpenCodeAdapter,
+  OPENCODE_MIN_KNOWN_VERSION,
+  OPENCODE_MODEL_ID_RE,
+  OPENCODE_FORBIDDEN_FLAGS,
+  buildOpenCodeArgv,
+  validateOpenCodeModel,
+  openCodeCredentialRefusal,
+  unwiredOpenCodeRunConfigProvider,
+} from "./OpenCodeAdapter.js";
+export type {
+  OpenCodeAdapterOptions,
+  OpenCodeRunConfig,
+  OpenCodeRunConfigProvider,
+  OpenCodeRunConfigRequest,
+} from "./OpenCodeAdapter.js";
+export {
+  classifyOpenCodeRun,
+  parseOpenCodeStream,
+  observeOpenCodeStderr,
+  foldOpenCodeSessions,
+  resolveOpenCodeServedModel,
+  openCodeStageCostUsd,
+  openCodeRedactor,
+  redactOpenCodeCredentials,
+  OPENCODE_DRIFT_MARKER,
+  OPENCODE_ERROR_EVENT_MARKER,
+  OPENCODE_PERMISSION_DENIED_MARKER,
+  OPENCODE_PERMISSION_REJECTED_MARKER,
+} from "./opencodeStream.js";
+export type {
+  OpenCodeHelper,
+  OpenCodeRunSummary,
+  OpenCodeServedModel,
+  OpenCodeStreamState,
+  OpenCodeTokens,
+} from "./opencodeStream.js";
 export { codexReasoningEffortFlag, CODEX_REASONING_EFFORTS } from "./codexEffort.js";
 export { AdapterRegistry, defaultRegistry, isAgenticAdapter } from "./AdapterRegistry.js";
 

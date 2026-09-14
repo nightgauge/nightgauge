@@ -17,7 +17,10 @@
  *
  * @see docs/security/WORKFLOW_FANOUT_SECURITY.md — F4 scoped permissions
  * @see Issue #4094 - Scope spawned/fanned-out agent env to a least-privilege allowlist
+ * @see Issue #1637 - the OpenCode curation, {@link curateOpenCodeChildEnv}
  */
+
+import { openCodeProviderEnv } from "./opencodeCatalog.js";
 
 /**
  * System/runtime variables a spawned CLI needs to function. Notably PATH (to
@@ -127,6 +130,142 @@ export function curateChildEnv(
     if (isChildEnvAllowed(key, extra)) {
       curated[key] = value;
     }
+  }
+  return curated;
+}
+
+// ---------------------------------------------------------------------------
+// OpenCode (#1637, ADR-022 § 8, § 17)
+// ---------------------------------------------------------------------------
+//
+// `curateChildEnv` is one allowlist for every adapter, so a local OpenCode run
+// would still see OPENAI_API_KEY, and OpenCode loads every catalog provider
+// whose variable is set. OpenCode also reads its own state from the XDG
+// directories and takes config, logins and a session-sharing switch from
+// OPENCODE_* variables. So an opencode child gets its own curation, the
+// allowlist twin of the Go adapter's withhold rule (OpenCodeWithholdsEnv in
+// internal/execution/adapters/opencode_isolation.go):
+//
+//   - the system essentials, without the operator's XDG directories: the run's
+//     own four replace them, so OpenCode reads none of the operator's config,
+//     logins, plugins or sessions;
+//   - the forge variables the bash tool's `gh` and `git` need;
+//   - the variables OpenCode's catalog binds to the dispatched provider, and
+//     no other provider's;
+//   - the pipeline's own NIGHTGAUGE_* configuration;
+//   - no inherited OPENCODE_* variable at all. The OPENCODE_* names a spawn
+//     carries are the ones Nightgauge sets, from the run's config or the
+//     adapter, never the operator's OPENCODE_PERMISSION, OPENCODE_AUTO_SHARE,
+//     OPENCODE_CONFIG*, OPENCODE_SERVER_PASSWORD or OPENCODE_AUTH_CONTENT.
+//
+// CLAUDE_CODE_* is not forwarded: it is the Claude CLI's namespace, which
+// holds a subscription login, and an OpenCode stage authenticates with a
+// provider's API-key variable only (ADR-022 § 17).
+
+/** The XDG base directories the per-run root replaces (ADR-022 § 8). */
+export const OPENCODE_ISOLATION_XDG = Object.freeze([
+  "XDG_CONFIG_HOME",
+  "XDG_DATA_HOME",
+  "XDG_CACHE_HOME",
+  "XDG_STATE_HOME",
+] as const);
+
+/**
+ * The OpenCode switches every spawn sets to "1" (ADR-022 § 10, § 11, § 15), a
+ * copy of `openCodeDisableFlags` in internal/execution/adapters/opencode_isolation.go.
+ */
+export const OPENCODE_DISABLE_FLAGS = Object.freeze([
+  "OPENCODE_DISABLE_MODELS_FETCH",
+  "OPENCODE_DISABLE_AUTOUPDATE",
+  "OPENCODE_DISABLE_LSP_DOWNLOAD",
+  "OPENCODE_DISABLE_DEFAULT_PLUGINS",
+  "OPENCODE_DISABLE_SHARE",
+  "OPENCODE_DISABLE_CLAUDE_CODE_PROMPT",
+  "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS",
+  "OPENCODE_DISABLE_EXTERNAL_SKILLS",
+] as const);
+
+/**
+ * The per-spawn server password (ADR-022 § 18). The adapter mints a fresh
+ * value for every spawn; an inherited one never reaches the child.
+ */
+export const OPENCODE_SERVER_PASSWORD_ENV = "OPENCODE_SERVER_PASSWORD";
+
+/** The per-run OpenCode config, as the run's config provider builds it (ADR-022 § 8). */
+export const OPENCODE_CONFIG_CONTENT_ENV = "OPENCODE_CONFIG_CONTENT";
+
+/**
+ * Every variable the run's own environment may set on an opencode spawn: the
+ * isolation variables `nightgauge opencode config` prints as `env` (ADR-022
+ * § 8, OpenCodeIsolationEnv in the Go adapter) and the per-run config. These
+ * are the only OPENCODE_* names a spawn carries besides the adapter's own
+ * {@link OPENCODE_SERVER_PASSWORD_ENV}; OPENCODE_CONFIG_DIR is set only when
+ * the operator opted into their own OpenCode config (opencode.inherit_user_config).
+ */
+const OPENCODE_RUN_ENV_NAMES: ReadonlySet<string> = new Set<string>([
+  ...OPENCODE_ISOLATION_XDG,
+  ...OPENCODE_DISABLE_FLAGS,
+  OPENCODE_CONFIG_CONTENT_ENV,
+  "OPENCODE_CONFIG_DIR",
+  "GH_CONFIG_DIR",
+  "NIGHTGAUGE_CONFIG_HOME",
+  "GOCACHE",
+]);
+
+/** Whether the run's own environment may set `name` on an opencode spawn. */
+export function isOpenCodeRunEnvName(name: string): boolean {
+  return OPENCODE_RUN_ENV_NAMES.has(name);
+}
+
+/** The forge variables an opencode stage keeps: its bash tool runs `gh` and `git`. */
+const OPENCODE_FORGE_ALLOW: ReadonlySet<string> = new Set(["GH_TOKEN", "GITHUB_TOKEN", "GH_HOST"]);
+
+/**
+ * Inherited tool settings the per-run root must not take from a stage's tools
+ * (ADR-022 § 8): an inherited GIT_CONFIG_GLOBAL passes through, and so does
+ * the operator's own GOCACHE, which the run's environment sets only when the
+ * operator has not.
+ */
+const OPENCODE_TOOL_ALLOW: ReadonlySet<string> = new Set(["GIT_CONFIG_GLOBAL", "GOCACHE"]);
+
+const OPENCODE_ISOLATION_XDG_SET: ReadonlySet<string> = new Set(OPENCODE_ISOLATION_XDG);
+
+/**
+ * Whether an inherited variable named `key` may reach an opencode child
+ * dispatched to `model` (a `<provider>/<model>` value). Decided on the name
+ * alone, so nothing it withholds can be logged. Exported for the drift guard.
+ */
+export function isOpenCodeChildEnvAllowed(key: string, model: string): boolean {
+  if (key.startsWith("OPENCODE_") || OPENCODE_ISOLATION_XDG_SET.has(key)) return false;
+  return (
+    SYSTEM_ALLOW.has(key) ||
+    OPENCODE_FORGE_ALLOW.has(key) ||
+    OPENCODE_TOOL_ALLOW.has(key) ||
+    key.startsWith("NIGHTGAUGE_") ||
+    openCodeProviderEnv(model).includes(key)
+  );
+}
+
+/**
+ * The environment of an opencode child dispatched to `model`: the inherited
+ * variables {@link isOpenCodeChildEnvAllowed} keeps, then `runEnv`, the run's
+ * own isolation variables and per-run config, which replace any inherited
+ * value of the same name. A `runEnv` name outside the run's variables
+ * ({@link isOpenCodeRunEnvName}) is not applied; the adapter refuses such a
+ * run config before it gets here. Pure: mutates neither input.
+ */
+export function curateOpenCodeChildEnv(
+  parentEnv: NodeJS.ProcessEnv,
+  model: string,
+  runEnv: Readonly<Record<string, string>>
+): NodeJS.ProcessEnv {
+  const curated: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(parentEnv)) {
+    if (value === undefined) continue;
+    if (isOpenCodeChildEnvAllowed(key, model)) curated[key] = value;
+  }
+  for (const [key, value] of Object.entries(runEnv)) {
+    if (isOpenCodeRunEnvName(key)) curated[key] = value;
   }
   return curated;
 }

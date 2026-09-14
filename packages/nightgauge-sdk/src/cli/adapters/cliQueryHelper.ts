@@ -7,17 +7,32 @@
  *
  * @see Issue #627 - Extract ICliAdapter interface & unify types
  * @see Issue #1051 - Add positional prompt delivery and Gemini stream-json support
+ * @see Issue #1637 - The opencode branch: process group, curated env, stream classification
  */
 
 import { spawn } from "node:child_process";
 import { readFile, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { randomUUID } from "node:crypto";
-import type { SDKMessage, SDKQueryFunction } from "../../orchestrator/StageExecutor.js";
+import { join, resolve as resolvePath } from "node:path";
+import { randomBytes, randomUUID } from "node:crypto";
+import type {
+  SDKMessage,
+  SDKQueryFunction,
+  SDKQueryOptions,
+} from "../../orchestrator/StageExecutor.js";
 import type { NightgaugeAdapter } from "./ICliAdapter.js";
+import type { OpenCodeRunConfig } from "./OpenCodeAdapter.js";
 import { applyCodexSandboxProfile } from "./codexSandbox.js";
-import { curateChildEnv } from "./childEnv.js";
+import {
+  OPENCODE_CONFIG_CONTENT_ENV,
+  OPENCODE_ISOLATION_XDG,
+  OPENCODE_SERVER_PASSWORD_ENV,
+  curateChildEnv,
+  curateOpenCodeChildEnv,
+} from "./childEnv.js";
+import { AdapterError } from "./errors.js";
+import { openCodeProviderEnv } from "./opencodeCatalog.js";
+import { classifyOpenCodeRun, openCodeRedactor, type OpenCodeHelper } from "./opencodeStream.js";
 import {
   summarizeCodexJsonOutput,
   summarizeGeminiStreamJsonOutput,
@@ -125,10 +140,21 @@ export function createCliQueryFn(options: {
   args: string[];
   adapter: NightgaugeAdapter;
   promptDelivery?: PromptDelivery;
+  /** The opencode adapter's run: required for, and only read by, `adapter: "opencode"`. */
+  openCode?: OpenCodeQueryContext;
 }): SDKQueryFunction {
   const delivery = options.promptDelivery ?? "stdin";
 
   return async function* query(queryOptions): AsyncGenerator<SDKMessage> {
+    if (options.adapter === "opencode") {
+      if (!options.openCode) {
+        throw new Error(
+          "the opencode query needs its run context: build it with OpenCodeAdapter.createQueryFunction"
+        );
+      }
+      yield* openCodeQuery(options.command, options.args, options.openCode, queryOptions);
+      return;
+    }
     const cwd = queryOptions.options?.cwd ?? process.cwd();
     // Least-privilege (#4094, F4): the spawned CLI — and every fan-out worker
     // routed through here — receives only the curated allowlist, never the full
@@ -362,5 +388,358 @@ export function createCliQueryFn(options: {
       // Set by codex (thread.started) or copilot (Session ID footer). @see #1659, #52
       ...(sessionId !== undefined && { session_id: sessionId }),
     };
+  };
+}
+
+// ---------------------------------------------------------------------------
+// opencode (#1637, ADR-022)
+// ---------------------------------------------------------------------------
+
+/** What an opencode query needs besides its command and argv; built by OpenCodeAdapter. */
+export interface OpenCodeQueryContext {
+  /** The dispatched `<provider>/<model>`, already checked. */
+  model: string;
+  /** The absolute worktree the run config was built for, and the run's --dir and cwd. */
+  worktree: string;
+  stage?: string;
+  runConfig: OpenCodeRunConfig;
+  /** The environment the child's is curated from. */
+  parentEnv: NodeJS.ProcessEnv;
+  /** Spawns processes; default `node:child_process` spawn. */
+  spawn?: SpawnFn;
+}
+
+/** How long a post-run `opencode` helper (export, db) may run. */
+const OPENCODE_HELPER_TIMEOUT_MS = 10_000;
+/** How long the whole subagent roll-up of one stage may take. */
+const OPENCODE_FOLD_BUDGET_MS = 120_000;
+/** The most a helper may print; its output is held in memory only. */
+const OPENCODE_HELPER_MAX_OUTPUT = 64 * 1024 * 1024;
+/** How long an aborted run has after SIGTERM before its process group is killed. */
+const OPENCODE_ABORT_GRACE_MS = 2_000;
+
+type SpawnFn = typeof spawn;
+
+interface ProcessResult {
+  code: number;
+  stdout: string;
+  stderr: string;
+  aborted: boolean;
+  timedOut: boolean;
+  overflow: boolean;
+}
+
+/** Signal a whole process group, falling back to the process alone where groups do not exist. */
+function killGroup(pid: number | undefined, signal: NodeJS.Signals): void {
+  if (pid === undefined) return;
+  try {
+    if (process.platform === "win32") process.kill(pid, signal);
+    else process.kill(-pid, signal);
+  } catch {
+    // ESRCH: the group is already gone.
+  }
+}
+
+/**
+ * The opencode processes this process has running, by pid, each with what
+ * aborts it. Each runs detached, in its own process group, so the terminal's
+ * Ctrl-C never reaches it the way it reaches every other adapter's child, and
+ * nothing would end it once this process has gone. So while any is live this
+ * process's exit kills every group, and SIGINT, SIGTERM or SIGHUP aborts each
+ * run as its abort signal would.
+ */
+const liveOpenCodeProcesses = new Map<number, () => void>();
+
+/** The signals that end this process by default, and that a group outside the terminal's misses. */
+const PARENT_SIGNALS: readonly NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
+
+function killLiveOpenCodeGroups(): void {
+  for (const pid of liveOpenCodeProcesses.keys()) killGroup(pid, "SIGKILL");
+}
+
+function onParentSignal(signal: NodeJS.Signals): void {
+  if (process.listenerCount(signal) > 1) {
+    // Another handler owns the signal, and this process may live on: stop
+    // each run as its abort would, and let the handler decide the rest.
+    for (const abort of [...liveOpenCodeProcesses.values()]) abort();
+    return;
+  }
+  // Nothing else handles it, so its default action, ending this process,
+  // follows; no exit handler runs on that. Kill every group first, then raise
+  // the signal again with no handler left.
+  killLiveOpenCodeGroups();
+  unwatchParent();
+  process.kill(process.pid, signal);
+}
+
+const parentSignalHandlers = new Map(
+  PARENT_SIGNALS.map((signal) => [signal, () => onParentSignal(signal)] as const)
+);
+
+function watchParent(): void {
+  process.on("exit", killLiveOpenCodeGroups);
+  for (const [signal, handler] of parentSignalHandlers) process.on(signal, handler);
+}
+
+function unwatchParent(): void {
+  process.off("exit", killLiveOpenCodeGroups);
+  for (const [signal, handler] of parentSignalHandlers) process.off(signal, handler);
+}
+
+/** Track one live opencode process; the function returned stops tracking it. */
+function trackOpenCodeProcess(pid: number, abort: () => void): () => void {
+  if (liveOpenCodeProcesses.size === 0) watchParent();
+  liveOpenCodeProcesses.set(pid, abort);
+  return () => {
+    if (liveOpenCodeProcesses.delete(pid) && liveOpenCodeProcesses.size === 0) unwatchParent();
+  };
+}
+
+/**
+ * Run one opencode process in its own process group, with an argv array and
+ * never a shell. `signal` aborting, or `timeoutMs` passing, kills the group:
+ * SIGTERM, then SIGKILL after a grace period. Once the process exits, whatever
+ * is left of its group is killed too, so no opencode child outlives the run.
+ * While it runs, this process's exit or a terminating signal ends it too
+ * ({@link liveOpenCodeProcesses}). Output is held in memory only; `maxOutput`
+ * caps stdout.
+ */
+function runOpenCodeProcess(
+  spawnFn: SpawnFn,
+  command: string,
+  args: readonly string[],
+  opts: {
+    cwd: string;
+    env: NodeJS.ProcessEnv;
+    stdin?: string;
+    signal?: AbortSignal;
+    timeoutMs?: number;
+    maxOutput?: number;
+  }
+): Promise<ProcessResult> {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawnFn(command, [...args], {
+      cwd: opts.cwd,
+      env: opts.env,
+      stdio: [opts.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+      detached: process.platform !== "win32",
+    });
+    let stdout = "";
+    let stderr = "";
+    let aborted = false;
+    let timedOut = false;
+    let overflow = false;
+    let grace: ReturnType<typeof setTimeout> | undefined;
+    const stop = () => {
+      killGroup(child.pid, "SIGTERM");
+      grace = setTimeout(() => killGroup(child.pid, "SIGKILL"), OPENCODE_ABORT_GRACE_MS);
+    };
+    const onAbort = () => {
+      if (aborted) return;
+      aborted = true;
+      stop();
+    };
+    const untrack = child.pid === undefined ? () => {} : trackOpenCodeProcess(child.pid, onAbort);
+    const timer =
+      opts.timeoutMs === undefined
+        ? undefined
+        : setTimeout(() => {
+            timedOut = true;
+            killGroup(child.pid, "SIGKILL");
+          }, opts.timeoutMs);
+    if (opts.signal?.aborted) onAbort();
+    else opts.signal?.addEventListener("abort", onAbort, { once: true });
+
+    child.stdout?.setEncoding("utf-8");
+    child.stderr?.setEncoding("utf-8");
+    child.stdout?.on("data", (chunk: string) => {
+      if (opts.maxOutput !== undefined && stdout.length + chunk.length > opts.maxOutput) {
+        overflow = true;
+        return;
+      }
+      stdout += chunk;
+    });
+    child.stderr?.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.on("exit", () => killGroup(child.pid, "SIGKILL"));
+    child.on("error", (err) => {
+      if (timer) clearTimeout(timer);
+      if (grace) clearTimeout(grace);
+      opts.signal?.removeEventListener("abort", onAbort);
+      untrack();
+      reject(err);
+    });
+    child.on("close", (code) => {
+      if (timer) clearTimeout(timer);
+      if (grace) clearTimeout(grace);
+      opts.signal?.removeEventListener("abort", onAbort);
+      untrack();
+      resolvePromise({ code: code ?? 1, stdout, stderr, aborted, timedOut, overflow });
+    });
+    if (child.stdin) {
+      child.stdin.on("error", () => {});
+      child.stdin.end(opts.stdin ?? "");
+    }
+  });
+}
+
+/** The variables every post-run helper keeps: what finds the binary and the run's own database. */
+const OPENCODE_HELPER_ENV_NAMES: ReadonlySet<string> = new Set([
+  "PATH",
+  "HOME",
+  "TMPDIR",
+  ...OPENCODE_ISOLATION_XDG,
+]);
+
+/**
+ * The environment of a post-run helper, from the stage's: no credential, not
+ * the forge token, the provider's key or the server password
+ * (`openCodeHelperEnv` in Go).
+ */
+function helperEnv(stageEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(stageEnv)) {
+    if (OPENCODE_HELPER_ENV_NAMES.has(name) || name.startsWith("OPENCODE_DISABLE_")) {
+      env[name] = value;
+    }
+  }
+  return env;
+}
+
+/**
+ * One opencode stage: spawn `opencode run` with the prompt on stdin, in its
+ * own process group, under the child environment curated to the dispatched
+ * provider plus the run's isolation variables and per-run config; then
+ * classify the run (opencodeStream.ts) and yield its drift warnings, its
+ * redacted text and its result, or throw its redacted failure. `abortSignal`
+ * (StageExecutor ties it to the stage's timeout and to the orchestrator's
+ * stop) kills the run's whole process group, and so does this process exiting.
+ */
+async function* openCodeQuery(
+  command: string,
+  args: readonly string[],
+  run: OpenCodeQueryContext,
+  queryOptions: SDKQueryOptions
+): AsyncGenerator<SDKMessage> {
+  const { model, worktree, stage, runConfig } = run;
+  const spawnFn = run.spawn ?? spawn;
+  const cwd = queryOptions.options?.cwd;
+  if (cwd !== undefined && resolvePath(cwd) !== worktree) {
+    throw new AdapterError(
+      `the OpenCode run config was built for ${worktree}, not ${resolvePath(cwd)}: create the ` +
+        "query function for the worktree the stage runs in",
+      "CONFIG_INVALID",
+      "OpenCode"
+    );
+  }
+  const signal = queryOptions.options?.abortSignal;
+  // A fresh value per spawn, never logged and never on argv (ADR-022 § 18).
+  const password = randomBytes(24).toString("base64url");
+  const env: NodeJS.ProcessEnv = {
+    ...curateOpenCodeChildEnv(run.parentEnv, model, runConfig.env),
+    [OPENCODE_CONFIG_CONTENT_ENV]: runConfig.configContent,
+    [OPENCODE_SERVER_PASSWORD_ENV]: password,
+    NIGHTGAUGE_ADAPTER: "opencode",
+    NIGHTGAUGE_OUTPUT_FORMAT: "json",
+    NIGHTGAUGE_DISPATCH_MODEL: model,
+    ...(stage !== undefined && { NIGHTGAUGE_STAGE: stage }),
+  };
+
+  const result = await runOpenCodeProcess(spawnFn, command, args, {
+    cwd: worktree,
+    env,
+    stdin: queryOptions.prompt,
+    signal,
+  });
+  if (result.aborted) {
+    throw new Error("opencode query aborted: its process group was killed");
+  }
+
+  // The values of the secrets the child held are removed from every line it
+  // printed, stdout and stderr alike, before anything is read from it: the
+  // model's text is yielded, so it is redacted as the failure text is
+  // (ADR-022 § 22).
+  const secrets: Record<string, string | undefined> = {
+    [OPENCODE_SERVER_PASSWORD_ENV]: password,
+    GH_TOKEN: env.GH_TOKEN,
+    GITHUB_TOKEN: env.GITHUB_TOKEN,
+  };
+  for (const name of openCodeProviderEnv(model)) secrets[name] = env[name];
+
+  const summary = await classifyOpenCodeRun({
+    stdout: result.stdout,
+    stderr: result.stderr,
+    exitCode: result.code,
+    allowedTools: queryOptions.options?.allowedTools,
+    dispatched: model,
+    fold: openCodeHelper(spawnFn, command, runConfig.runDir, env, signal),
+    redact: openCodeRedactor(secrets),
+  });
+
+  for (const marker of summary.driftMarkers) {
+    yield { type: "warning", subtype: "opencode-drift", text: marker };
+  }
+  if (summary.failure !== undefined) {
+    throw new Error(summary.failure);
+  }
+  const text = summary.stream.displayText.trim();
+  if (text.length > 0) {
+    yield { type: "assistant", subtype: "text", text };
+  }
+  yield {
+    type: "result",
+    usage: {
+      input_tokens: summary.tokens.input,
+      output_tokens: summary.tokens.output + summary.tokens.reasoning,
+      cache_read_input_tokens: summary.tokens.cacheRead,
+      cache_creation_input_tokens: summary.tokens.cacheWrite,
+    },
+    // ADR-022 § 3: a number only when stamped; an unpriced hosted stage is
+    // undefined, never a fabricated 0.
+    total_cost_usd: summary.costUsd,
+    ...(summary.served !== undefined && {
+      model: summary.served.model,
+      model_provider: summary.served.provider,
+      upstream_model: summary.served.upstream,
+    }),
+    peak_step_input_tokens: summary.peakStepInputTokens,
+    usage_partial: summary.usagePartial,
+    ...(summary.sessionId !== undefined && { session_id: summary.sessionId }),
+  };
+}
+
+/**
+ * The post-run helper: one `opencode` process per call, in its own process
+ * group, from the run's root rather than the worktree, with only the
+ * variables that point it at the run's database, under a per-call timeout and
+ * one budget for the whole roll-up. Its output stays in memory.
+ */
+function openCodeHelper(
+  spawnFn: SpawnFn,
+  command: string,
+  runDir: string,
+  stageEnv: NodeJS.ProcessEnv,
+  signal?: AbortSignal
+): OpenCodeHelper {
+  const env = helperEnv(stageEnv);
+  const deadline = Date.now() + OPENCODE_FOLD_BUDGET_MS;
+  return async (args) => {
+    if (signal?.aborted) throw new Error(`opencode ${args[0]}: the query was aborted`);
+    const timeoutMs = Math.min(OPENCODE_HELPER_TIMEOUT_MS, deadline - Date.now());
+    if (timeoutMs <= 0) throw new Error(`opencode ${args[0]}: the fold's time budget is spent`);
+    const r = await runOpenCodeProcess(spawnFn, command, args, {
+      cwd: runDir,
+      env,
+      signal,
+      timeoutMs,
+      maxOutput: OPENCODE_HELPER_MAX_OUTPUT,
+    });
+    if (r.timedOut) throw new Error(`opencode ${args[0]} timed out and was killed`);
+    if (r.overflow) {
+      throw new Error(`opencode ${args[0]} printed more than ${OPENCODE_HELPER_MAX_OUTPUT} bytes`);
+    }
+    if (r.code !== 0) throw new Error(`opencode ${args[0]}: exit code ${r.code}`);
+    return r.stdout;
   };
 }
