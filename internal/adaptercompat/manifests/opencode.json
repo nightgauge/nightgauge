@@ -37,7 +37,7 @@
     "internal/execution/testdata/opencode_stream_subagent_capture.jsonl",
     "internal/execution/testdata/opencode_stream_subagent_stderr.txt"
   ],
-  "config_schema_sha256": "",
+  "config_schema_sha256": "e8cb6e287a3852ee3403f4803be5ad6b19db94948037eaa9672125c333427922",
   "plugin_api_version": "",
   "experimental_hooks": []
 }

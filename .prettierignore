@@ -43,6 +43,10 @@ internal/terminalkind/testdata/captured-shapes.json
 # `make generate-terminal-kind-table` (#306). Reformatting it would make every
 # regeneration show a spurious drift, and the drift check compares bytes.
 internal/terminalkind/testdata/stress-golden.json
+# The pinned OpenCode config schema (#1634) is the published document byte for
+# byte: its SHA-256 is recorded in the opencode compat manifest and compared
+# with the live schema, so reformatting it would break both.
+internal/execution/adapters/testdata/opencode-config-schema/opencode-config.schema.json
 
 # Clean-install gate run directories
 .clean-install-e2e/
