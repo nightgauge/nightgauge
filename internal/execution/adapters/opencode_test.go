@@ -266,7 +266,7 @@ func TestOpenCodeGate(t *testing.T) {
 // #1638, and they can add what the per-run config does not set: an agent or
 // subagent of their own, with its own model on the dispatched provider and no
 // steps cap, an MCP server of their own, which OpenCode starts beside the
-// base branch's (#1626), a remote instructions URL, or a provider header that
+// default branch's (#1626), a remote instructions URL, or a provider header that
 // carries an environment variable to the model server. They can also add options.model
 // to the dispatched model's own entry or an agent's own options, or a
 // variant, and change the model actually served without touching the pinned

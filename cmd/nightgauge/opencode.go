@@ -40,6 +40,7 @@ func opencodeConfigCmd() *cobra.Command {
 	var (
 		stage     string
 		worktree  string
+		repo      string
 		model     string
 		runID     string
 		maxTurns  int
@@ -63,6 +64,11 @@ func opencodeConfigCmd() *cobra.Command {
   non_loopback    false only for a declared model server on this machine;
                   true for one elsewhere and for every hosted provider
 
+The MCP servers are read from the head of --repo's default branch as GitHub
+serves it, never from the worktree or its git refs or config. Without --repo,
+or when GitHub cannot be read within 15 seconds, the stage is given no MCP
+server and stderr says why.
+
 The run's root is created, or reused when --run-id names a run that has one.
 Without --run-id a new root is minted; the caller owns it, and a root no stage
 uses for 7 days is swept.
@@ -80,7 +86,7 @@ carries credentials, an opencode: block in the worktree's committed config,
 and, unless opencode.inherit_user_config is on, a ~/.opencode holding config
 or managed OpenCode config on this machine. The adapter's warnings and
 notices go to stderr.`,
-		Example: `  nightgauge opencode config --stage feature-dev --worktree "$PWD" --json
+		Example: `  nightgauge opencode config --stage feature-dev --worktree "$PWD" --repo nightgauge/nightgauge --json
   nightgauge opencode config --stage feature-dev --worktree "$PWD" --model lmstudio/qwen/qwen3.8-27b --max-turns 40 --json`,
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
@@ -89,7 +95,7 @@ notices go to stderr.`,
 				return errors.New("pass --json: the command prints JSON only")
 			}
 			run, err := openCodeConfigForStage(openCodeConfigFlags{
-				stage: stage, worktree: worktree, model: model, runID: runID,
+				stage: stage, worktree: worktree, repo: repo, model: model, runID: runID,
 				maxTurns: maxTurns, maxTokens: maxTokens,
 			})
 			if err != nil {
@@ -103,6 +109,7 @@ notices go to stderr.`,
 	}
 	cmd.Flags().StringVar(&stage, "stage", "", "Pipeline stage the config is for (required)")
 	cmd.Flags().StringVar(&worktree, "worktree", "", "Worktree the stage runs in (required)")
+	cmd.Flags().StringVar(&repo, "repo", "", "Repository the stage works on, as owner/name: its MCP servers are read from the head of its default branch on GitHub (without it, the stage is given no MCP server)")
 	cmd.Flags().StringVar(&model, "model", "", "Model as <provider>/<model> (default: opencode.model in the machine-tier config)")
 	cmd.Flags().StringVar(&runID, "run-id", "", "Run identity whose root to use (default: a new root)")
 	cmd.Flags().IntVar(&maxTurns, "max-turns", 0, "Stage turn cap, set as the steps cap of the build agent and each subagent (0: the adapter's default of 200)")
@@ -114,8 +121,8 @@ notices go to stderr.`,
 }
 
 type openCodeConfigFlags struct {
-	stage, worktree, model, runID string
-	maxTurns, maxTokens           int
+	stage, worktree, repo, model, runID string
+	maxTurns, maxTokens                 int
 }
 
 // openCodeConfigForStage resolves the verb's inputs the way the manager
@@ -153,6 +160,7 @@ func openCodeConfigForStage(f openCodeConfigFlags) (*adapters.OpenCodeRun, error
 	run := adapters.RunOptions{
 		Stage:       stage,
 		WorktreeDir: worktree,
+		TargetRepo:  strings.TrimSpace(f.repo),
 		Model:       model,
 		MaxTurns:    f.maxTurns,
 		MaxTokens:   f.maxTokens,
@@ -181,6 +189,11 @@ func openCodeConfigForStage(f openCodeConfigFlags) (*adapters.OpenCodeRun, error
 	if err != nil {
 		return nil, fmt.Errorf("resolve the machine-tier config directory: %w", err)
 	}
+	// The GitHub identity of the MCP servers' forge read is the one every
+	// nightgauge command resolves from the directory it runs in
+	// (clientFromConfig). It decides who asks, not what is read: the files
+	// are what GitHub serves for --repo.
+	cwd, _ := os.Getwd()
 	return adapters.PrepareOpenCodeRun(adapters.OpenCodeRunRequest{
 		Home:             home,
 		ID:               id,
@@ -189,5 +202,6 @@ func openCodeConfigForStage(f openCodeConfigFlags) (*adapters.OpenCodeRun, error
 		Settings:         settings,
 		Lookup:           os.LookupEnv,
 		GOOS:             runtime.GOOS,
+		McpForge:         adapters.OpenCodeMcpForge(cwd),
 	})
 }

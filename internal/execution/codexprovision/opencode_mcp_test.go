@@ -1,25 +1,34 @@
 package codexprovision
 
 import (
-	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
 	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
-// openCodeRepo commits files as the base branch of a repository, publishes it
-// as origin, and returns a clone of it: the worktree a stage runs in, whose
-// origin/HEAD names origin/main, as a clone's does.
+// openCodeRepo commits files as the default branch of a repository,
+// publishes it as origin, and returns a clone of it: the worktree a stage
+// runs in.
 func openCodeRepo(t *testing.T, files map[string]string) string {
 	t.Helper()
 	wt, _ := openCodeRepoOn(t, "main", files)
 	return wt
+}
+
+// openCodeRepoForge is openCodeRepo, and the forge serving origin.
+func openCodeRepoForge(t *testing.T, files map[string]string) (string, *gitForge) {
+	t.Helper()
+	wt, origin := openCodeRepoOn(t, "main", files)
+	return wt, forgeOf(origin)
 }
 
 // openCodeRepoOn commits files on branch, publishes them as origin, whose
@@ -42,14 +51,47 @@ func openCodeRepoOn(t *testing.T, branch string, files map[string]string) (wt, o
 	return filepath.Join(parent, "wt"), origin
 }
 
-// provision runs ProvisionOpenCode on wt in the test's environment.
-func provision(wt string) (OpenCodeProvision, error) {
-	return ProvisionOpenCode(context.Background(), wt, os.LookupEnv)
+// evilOrigin publishes a repository whose default branch main defines the
+// server evil, as a stage could, and returns its path.
+func evilOrigin(t *testing.T) string {
+	t.Helper()
+	seed := gittest.InitRepo(t, t.TempDir(), "-b", "main")
+	writeFile(t, filepath.Join(seed, ".mcp.json"), `{"mcpServers": {"evil": {"command": "/bin/sh"}}}`)
+	gittest.Run(t, seed, "add", "-A")
+	gittest.Run(t, seed, "commit", "-qm", "a stage's own servers")
+	evil := filepath.Join(t.TempDir(), "evil.git")
+	gittest.Run(t, seed, "clone", "-q", "--bare", seed, evil)
+	return evil
 }
 
+// moveOriginOn commits servers to origin's main from another clone, so the
+// repository a stage runs in no longer holds origin's head.
+func moveOriginOn(t *testing.T, origin, servers string) {
+	t.Helper()
+	parent := t.TempDir()
+	gittest.Run(t, parent, "clone", "-q", origin, "other")
+	other := filepath.Join(parent, "other")
+	writeFile(t, filepath.Join(other, ".mcp.json"), servers)
+	gittest.Run(t, other, "commit", "-qam", "origin moves on")
+	gittest.Run(t, other, "push", "-q", "origin", "HEAD:main")
+}
+
+// provisionOpenCode runs ProvisionOpenCode on wt for a run that records no
+// repository, so the stage is given its steering and no MCP server.
 func provisionOpenCode(t *testing.T, wt string) OpenCodeProvision {
 	t.Helper()
 	p, err := provision(wt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// provisionMcp runs ProvisionOpenCode on wt with its MCP servers read from
+// forge for fixtureRepo.
+func provisionMcp(t *testing.T, wt string, forge *gitForge) OpenCodeProvision {
+	t.Helper()
+	p, err := provisionFrom(wt, forge)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,32 +108,30 @@ func mcpNames(m map[string]OpenCodeMcpServer) []string {
 }
 
 // TestOpenCodeMcpFromBaseBranch: an OpenCode stage gets the MCP servers the
-// base branch defines and no others. The fixture's base branch defines a;
-// the stage's branch commits evil, moves the local main to that commit, and
-// leaves evil2 in the working tree's .mcp.json and a changed a. The config
-// gets a, as origin/main defines it, and the warning names what was left out.
-// Reading the working tree's .mcp.json, as the Codex path does, gives evil.
+// default branch defines on the forge and no others. The fixture's default
+// branch defines a; the stage's branch commits evil, moves the local main to
+// that commit, and leaves evil2 in the working tree's .mcp.json and a changed
+// a. The config gets a, as the forge serves it, and the warning names what
+// was left out. Reading the working tree's .mcp.json, as the Codex path does,
+// gives evil.
 func TestOpenCodeMcpFromBaseBranch(t *testing.T) {
 	base := `{"mcpServers": {"a": {"command": "/usr/bin/true", "args": ["base"]}}}`
-	wt := openCodeRepo(t, map[string]string{".mcp.json": base})
+	wt, forge := openCodeRepoForge(t, map[string]string{".mcp.json": base})
 	gittest.Run(t, wt, "checkout", "-qb", "feat/1626-stage")
 	writeFile(t, filepath.Join(wt, ".mcp.json"), `{"mcpServers": {"a": {"command": "/usr/bin/true", "args": ["base"]}, "evil": {"command": "/bin/sh", "args": ["-c", "exit 0"]}}}`)
 	gittest.Run(t, wt, "commit", "-qam", "a stage adds a server")
 	gittest.Run(t, wt, "branch", "-f", "main", "HEAD")
 	writeFile(t, filepath.Join(wt, ".mcp.json"), `{"mcpServers": {"a": {"command": "/usr/bin/true", "args": ["changed"]}, "evil": {"command": "/bin/sh"}, "evil2": {"url": "https://mcp.example.test/x"}}}`)
 
-	p, err := ProvisionOpenCode(context.Background(), wt, os.LookupEnv)
-	if err != nil {
-		t.Fatal(err)
-	}
+	p := provisionMcp(t, wt, forge)
 	if got := mcpNames(p.MCP); !slices.Equal(got, []string{"a"}) {
-		t.Fatalf("MCP servers = %v, want [a], the base branch's only server", got)
+		t.Fatalf("MCP servers = %v, want [a], the default branch's only server", got)
 	}
 	if got := p.MCP["a"].Command; !slices.Equal(got, []string{"/usr/bin/true", "base"}) {
-		t.Errorf("a's command = %v, want the base branch's /usr/bin/true base", got)
+		t.Errorf("a's command = %v, want the default branch's /usr/bin/true base", got)
 	}
-	if p.McpSource != "origin/main" {
-		t.Errorf("McpSource = %q, want origin/main", p.McpSource)
+	if !strings.HasPrefix(p.McpSource, fixtureRepo+"@main (") {
+		t.Errorf("McpSource = %q, want %s@main and its commit", p.McpSource, fixtureRepo)
 	}
 	warnings := strings.Join(p.Warnings, "\n")
 	for _, want := range []string{"evil, evil2", "not started", "differently", "a"} {
@@ -99,63 +139,86 @@ func TestOpenCodeMcpFromBaseBranch(t *testing.T) {
 			t.Errorf("the warnings do not say %q:\n%s", want, warnings)
 		}
 	}
+	if got := forge.askedFor(); !slices.Equal(got, []string{fixtureRepo}) {
+		t.Errorf("the forge was asked for %v, want the run's repository %s", got, fixtureRepo)
+	}
 }
 
-// TestReadBaseBranchMcpServersMergesBothSources: as ReadPipelineMcpServers
-// does, .mcp.json wins over .claude/settings.json on a name. A source the
-// base branch tracks as a symbolic link is not followed.
-func TestReadBaseBranchMcpServersMergesBothSources(t *testing.T) {
-	wt := openCodeRepo(t, map[string]string{
-		".claude/settings.json": `{"mcpServers": {"shared": {"command": "from-settings"}, "settings-only": {"command": "s"}}}`,
-		".mcp.json":             `{"mcpServers": {"shared": {"command": "from-mcp-json"}}}`,
-	})
-	servers, source, warnings, err := ReadBaseBranchMcpServers(context.Background(), wt)
+// TestReadForgeMcpServersMergesBothSources: as ReadPipelineMcpServers does,
+// .mcp.json wins over .claude/settings.json on a name. A file the commit has
+// as a symbolic link is not followed, and one it does not have gives nothing
+// and is not a failure.
+func TestReadForgeMcpServersMergesBothSources(t *testing.T) {
+	const commit = "0123456789abcdef0123456789abcdef01234567"
+	both := fixedForge{&forgetypes.DefaultBranchFiles{Branch: "main", Commit: commit, Files: map[string]forgetypes.RepoFile{
+		".claude/settings.json": {Regular: true, Content: []byte(`{"mcpServers": {"shared": {"command": "from-settings"}, "settings-only": {"command": "s"}}}`)},
+		".mcp.json":             {Regular: true, Content: []byte(`{"mcpServers": {"shared": {"command": "from-mcp-json"}}}`)},
+	}}}
+	servers, source, err := readForge(McpSource{Repo: fixtureRepo, Forge: both})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if source != "origin/main" || servers["shared"].Command != "from-mcp-json" || servers["settings-only"].Command != "s" || len(servers) != 2 {
+	if source != fixtureRepo+"@main (0123456)" || servers["shared"].Command != "from-mcp-json" || servers["settings-only"].Command != "s" || len(servers) != 2 {
 		t.Errorf("servers from %s = %+v; want .mcp.json's shared and settings' settings-only", source, servers)
 	}
-	if len(warnings) != 0 {
-		t.Errorf("a clone read at origin's tip gave warnings: %v", warnings)
+
+	linked := fixedForge{&forgetypes.DefaultBranchFiles{Branch: "main", Commit: commit, Files: map[string]forgetypes.RepoFile{
+		".mcp.json": {Regular: false},
+	}}}
+	servers, _, err = readForge(McpSource{Repo: fixtureRepo, Forge: linked})
+	if err != nil || len(servers) != 0 {
+		t.Errorf("a .mcp.json the commit has as a symbolic link gave %+v, %v; want nothing and no error", servers, err)
 	}
 
-	outside := filepath.Join(t.TempDir(), "outside.json")
-	writeFile(t, outside, `{"mcpServers": {"linked": {"command": "x"}}}`)
-	seed := gittest.InitRepo(t, t.TempDir(), "-b", "main")
-	if err := os.Symlink(outside, filepath.Join(seed, ".mcp.json")); err != nil {
-		t.Fatal(err)
-	}
-	gittest.Run(t, seed, "add", "-A")
-	gittest.Run(t, seed, "commit", "-qm", "a linked .mcp.json")
-	origin := filepath.Join(t.TempDir(), "origin.git")
-	gittest.Run(t, seed, "clone", "-q", "--bare", seed, origin)
-	parent := t.TempDir()
-	gittest.Run(t, parent, "clone", "-q", origin, "linked")
-	servers, _, _, err = ReadBaseBranchMcpServers(context.Background(), filepath.Join(parent, "linked"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(servers) != 0 {
-		t.Errorf("a .mcp.json the branch tracks as a symbolic link was followed: %+v", servers)
+	missing := fixedForge{&forgetypes.DefaultBranchFiles{Branch: "main", Commit: commit, Files: map[string]forgetypes.RepoFile{}}}
+	servers, source, err = readForge(McpSource{Repo: fixtureRepo, Forge: missing})
+	if err != nil || len(servers) != 0 || source == "" {
+		t.Errorf("a commit with neither file gave %+v from %q, %v; want no server from the forge and no error", servers, source, err)
 	}
 }
 
-// TestOpenCodeMcpWithoutABaseBranch: a worktree git cannot read a base branch
-// from gives the stage no MCP server, and a warning says why; it is not an
-// error, because the stage runs without the servers.
-func TestOpenCodeMcpWithoutABaseBranch(t *testing.T) {
+// TestOpenCodeMcpWithoutARecordedRepository: the servers are read from the
+// repository the pipeline records for the run, so a run that records none,
+// or one that is not owner/name, or has no forge to read it from, gives the
+// stage no MCP server, and a warning says why; it is not an error, because
+// the stage runs without the servers. Nothing is read from the worktree's
+// repository in its place.
+func TestOpenCodeMcpWithoutARecordedRepository(t *testing.T) {
+	wt, forge := openCodeRepoForge(t, map[string]string{".mcp.json": `{"mcpServers": {"a": {"command": "/usr/bin/true"}}}`})
+	for name, tc := range map[string]struct {
+		src  McpSource
+		want string
+	}{
+		"no repository":   {McpSource{Forge: forge}, "records no repository"},
+		"a bare name":     {McpSource{Repo: "fixture-repo", Forge: forge}, "is not owner/name"},
+		"a path":          {McpSource{Repo: "../fixture/repo", Forge: forge}, "is not owner/name"},
+		"no forge to ask": {McpSource{Repo: fixtureRepo}, "no forge"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p, err := provisionSource(wt, tc.src)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(p.MCP) != 0 || p.McpSource != "" {
+				t.Errorf("MCP servers %v from %q", mcpNames(p.MCP), p.McpSource)
+			}
+			if w := strings.Join(p.Warnings, "\n"); !strings.Contains(w, "none are started") || !strings.Contains(w, tc.want) {
+				t.Errorf("the warnings do not say %q:\n%s", tc.want, w)
+			}
+		})
+	}
+	if got := forge.askedFor(); len(got) != 0 {
+		t.Errorf("the forge was asked for %v", got)
+	}
+
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, ".mcp.json"), `{"mcpServers": {"evil": {"command": "/bin/sh"}}}`)
-	p, err := ProvisionOpenCode(context.Background(), dir, os.LookupEnv)
+	p, err := provisionFrom(dir, forge)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(p.MCP) != 0 || p.McpSource != "" {
-		t.Errorf("a worktree with no base branch gave MCP servers %v from %q", mcpNames(p.MCP), p.McpSource)
-	}
-	if w := strings.Join(p.Warnings, "\n"); !strings.Contains(w, "none are started") || !strings.Contains(w, "not a git working tree") {
-		t.Errorf("the warnings do not say why no server is started:\n%s", w)
+	if got := mcpNames(p.MCP); !slices.Equal(got, []string{"a"}) {
+		t.Errorf("a worktree that is no git working tree gets MCP servers %v, want the forge's [a]", got)
 	}
 }
 
@@ -273,71 +336,60 @@ func TestOpenCodeMcpRefusesOpenCodeSyntax(t *testing.T) {
 
 // TestOpenCodeMcpBaseIsNotRepointedByAWorktree: remote-tracking refs are
 // shared by every worktree of a repository, and a stage can write them. A
-// stage in worktree A commits a server, then points origin/HEAD, which no
-// fetch resets, at a ref of its own: origin/zz-base, or origin/master beside
-// origin/main, a branch origin does not have, so no fetch resets that ref
-// either. Last it moves origin/main itself. The base is the branch origin
-// names as its HEAD, read at the tip origin reports, so an OpenCode stage in
-// worktree B reads its servers from origin/main every time and never gets
-// A's server, and a warning names an origin/HEAD that names another branch.
+// stage in worktree A commits a server, then points origin/HEAD at a ref of
+// its own, then moves origin/main itself, then replaces origin's head with a
+// replacement object (refs/replace/). None of it is read: an OpenCode stage in
+// worktree B reads its servers from the forge every time and never gets A's
+// server.
 func TestOpenCodeMcpBaseIsNotRepointedByAWorktree(t *testing.T) {
-	wt := openCodeRepo(t, map[string]string{".mcp.json": `{"mcpServers": {"a": {"command": "/usr/bin/true"}}}`})
+	wt, forge := openCodeRepoForge(t, map[string]string{".mcp.json": `{"mcpServers": {"a": {"command": "/usr/bin/true"}}}`})
 	b := filepath.Join(t.TempDir(), "b")
 	gittest.Run(t, wt, "worktree", "add", "-q", "-b", "feat/b", b, "origin/main")
 	gittest.Run(t, wt, "checkout", "-qb", "feat/a")
 	writeFile(t, filepath.Join(wt, ".mcp.json"), `{"mcpServers": {"a": {"command": "/usr/bin/true"}, "evil": {"command": "/bin/sh"}}}`)
 	gittest.Run(t, wt, "commit", "-qam", "a stage adds a server")
 
+	check := func(what string) {
+		t.Helper()
+		p := provisionMcp(t, b, forge)
+		if got := mcpNames(p.MCP); !slices.Equal(got, []string{"a"}) || !strings.HasPrefix(p.McpSource, fixtureRepo+"@main") {
+			t.Errorf("with %s, worktree b gets MCP servers %v from %q, want [a] from %s@main", what, got, p.McpSource, fixtureRepo)
+		}
+	}
 	for _, fake := range []string{"origin/zz-base", "origin/master"} {
 		gittest.Run(t, wt, "update-ref", "refs/remotes/"+fake, "HEAD")
 		gittest.Run(t, wt, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/"+fake)
-		p := provisionOpenCode(t, b)
-		if got := mcpNames(p.MCP); !slices.Equal(got, []string{"a"}) || p.McpSource != "origin/main" {
-			t.Errorf("with origin/HEAD pointed at %s, worktree b gets MCP servers %v from %q, want [a] from origin/main", fake, got, p.McpSource)
-		}
-		if w := strings.Join(p.Warnings, "\n"); !strings.Contains(w, "origin/HEAD names "+fake) {
-			t.Errorf("no warning says origin/HEAD names %s:\n%s", fake, w)
-		}
+		check("origin/HEAD pointed at " + fake)
 	}
-
 	gittest.Run(t, wt, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
 	tip := gittest.Run(t, wt, "rev-parse", "refs/remotes/origin/main")
 	gittest.Run(t, wt, "update-ref", "refs/remotes/origin/main", "HEAD")
-	p := provisionOpenCode(t, b)
-	if got := mcpNames(p.MCP); !slices.Equal(got, []string{"a"}) || p.McpSource != "origin/main" {
-		t.Errorf("with origin/main moved to a stage's commit, worktree b gets MCP servers %v from %q, want [a], origin's own tip", got, p.McpSource)
-	}
-
-	// A replacement object (refs/replace/), which git reads in place of the
-	// object it replaces and no fetch resets, does not stand in for origin's
-	// tip either.
+	check("origin/main moved to a stage's commit")
 	gittest.Run(t, wt, "update-ref", "refs/remotes/origin/main", tip)
 	gittest.Run(t, wt, "replace", tip, "HEAD")
-	p = provisionOpenCode(t, b)
-	if got := mcpNames(p.MCP); !slices.Equal(got, []string{"a"}) {
-		t.Errorf("with origin's tip replaced by a stage's commit, worktree b gets MCP servers %v, want [a]", got)
-	}
+	check("origin's head replaced by a stage's commit")
 }
 
-// TestOpenCodeMcpFromADefaultBranchOfAnotherName: the base branch is the one
-// origin names as its HEAD, whatever it is called, so a clone of a repository
-// whose default branch is develop gets develop's servers.
+// TestOpenCodeMcpFromADefaultBranchOfAnotherName: the branch is the one the
+// forge names as the repository's default, whatever it is called, so a
+// repository whose default branch is develop gets develop's servers.
 func TestOpenCodeMcpFromADefaultBranchOfAnotherName(t *testing.T) {
-	wt, _ := openCodeRepoOn(t, "develop", map[string]string{".mcp.json": `{"mcpServers": {"a": {"command": "/usr/bin/true"}}}`})
-	p := provisionOpenCode(t, wt)
-	if got := mcpNames(p.MCP); !slices.Equal(got, []string{"a"}) || p.McpSource != "origin/develop" {
-		t.Errorf("MCP servers %v from %q, want [a] from origin/develop:\n%s", got, p.McpSource, strings.Join(p.Warnings, "\n"))
+	wt, origin := openCodeRepoOn(t, "develop", map[string]string{".mcp.json": `{"mcpServers": {"a": {"command": "/usr/bin/true"}}}`})
+	p := provisionMcp(t, wt, forgeOf(origin))
+	if got := mcpNames(p.MCP); !slices.Equal(got, []string{"a"}) || !strings.HasPrefix(p.McpSource, fixtureRepo+"@develop (") {
+		t.Errorf("MCP servers %v from %q, want [a] from %s@develop:\n%s", got, p.McpSource, fixtureRepo, strings.Join(p.Warnings, "\n"))
 	}
 }
 
 // TestOpenCodeMcpNeverReadsALocalBranch: no fetch resets a local branch, so a
 // stage that deletes origin/HEAD and points a local main at a commit of its
 // own would otherwise choose the servers of every later stage, in a
-// repository whose default branch is not main. The servers come from origin's
-// default branch still. A repository without an origin gets none, whatever
-// its local main defines.
+// repository whose default branch is not main. The servers come from the
+// forge's default branch still, and a repository without an origin gets the
+// forge's servers, not its local main's.
 func TestOpenCodeMcpNeverReadsALocalBranch(t *testing.T) {
-	wt, _ := openCodeRepoOn(t, "develop", map[string]string{".mcp.json": `{"mcpServers": {"a": {"command": "/usr/bin/true"}}}`})
+	wt, origin := openCodeRepoOn(t, "develop", map[string]string{".mcp.json": `{"mcpServers": {"a": {"command": "/usr/bin/true"}}}`})
+	forge := forgeOf(origin)
 	stage := filepath.Join(t.TempDir(), "stage")
 	gittest.Run(t, wt, "worktree", "add", "-q", "-b", "feat/stage", stage, "origin/develop")
 	writeFile(t, filepath.Join(stage, ".mcp.json"), `{"mcpServers": {"a": {"command": "/usr/bin/true"}, "evil": {"command": "/bin/sh"}}}`)
@@ -345,72 +397,171 @@ func TestOpenCodeMcpNeverReadsALocalBranch(t *testing.T) {
 	gittest.Run(t, stage, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD")
 	gittest.Run(t, stage, "update-ref", "refs/heads/main", "HEAD")
 
-	p := provisionOpenCode(t, wt)
-	if got := mcpNames(p.MCP); !slices.Equal(got, []string{"a"}) || p.McpSource != "origin/develop" {
-		t.Errorf("MCP servers %v from %q, want [a] from origin/develop, not the local main a stage pointed at its own commit", got, p.McpSource)
+	p := provisionMcp(t, wt, forge)
+	if got := mcpNames(p.MCP); !slices.Equal(got, []string{"a"}) || !strings.HasPrefix(p.McpSource, fixtureRepo+"@develop") {
+		t.Errorf("MCP servers %v from %q, want [a] from %s@develop, not the local main a stage pointed at its own commit", got, p.McpSource, fixtureRepo)
 	}
 
 	seed := gittest.InitRepo(t, t.TempDir(), "-b", "main")
 	writeFile(t, filepath.Join(seed, ".mcp.json"), `{"mcpServers": {"local": {"command": "/usr/bin/true"}}}`)
 	gittest.Run(t, seed, "add", "-A")
 	gittest.Run(t, seed, "commit", "-qm", "a repository without an origin")
-	p = provisionOpenCode(t, seed)
-	if len(p.MCP) != 0 || p.McpSource != "" {
-		t.Errorf("a repository without an origin gave MCP servers %v from %q", mcpNames(p.MCP), p.McpSource)
-	}
-	if w := strings.Join(p.Warnings, "\n"); !strings.Contains(w, "none are started") {
-		t.Errorf("no warning says why no server is started:\n%s", w)
+	p = provisionMcp(t, seed, forge)
+	if got := mcpNames(p.MCP); !slices.Equal(got, []string{"a"}) {
+		t.Errorf("a repository without an origin gave MCP servers %v, want the forge's [a]", got)
 	}
 }
 
-// TestOpenCodeMcpBehindOrigin: when origin's tip is not in the repository,
-// because origin has moved on since the last fetch, the servers are read from
-// origin/main as the repository last fetched it, and a warning says so. A
-// fetch brings them up to date.
-func TestOpenCodeMcpBehindOrigin(t *testing.T) {
+// TestOpenCodeMcpReadsTheForgesHeadNotTheLastFetch inverts the round-2
+// behaviour: when origin has moved on since the last fetch, the servers are
+// what the forge serves at its head now, not origin/main as the repository
+// last fetched it, and no warning says the repository is behind, because the
+// repository is not read.
+func TestOpenCodeMcpReadsTheForgesHeadNotTheLastFetch(t *testing.T) {
 	wt, origin := openCodeRepoOn(t, "main", map[string]string{".mcp.json": `{"mcpServers": {"a": {"command": "/usr/bin/true"}}}`})
-	parent := t.TempDir()
-	gittest.Run(t, parent, "clone", "-q", origin, "other")
-	other := filepath.Join(parent, "other")
-	writeFile(t, filepath.Join(other, ".mcp.json"), `{"mcpServers": {"a": {"command": "/usr/bin/true"}, "b": {"command": "/usr/bin/true"}}}`)
-	gittest.Run(t, other, "commit", "-qam", "origin moves on")
-	gittest.Run(t, other, "push", "-q", "origin", "HEAD:main")
+	moveOriginOn(t, origin, `{"mcpServers": {"a": {"command": "/usr/bin/true"}, "b": {"command": "/usr/bin/true"}}}`)
+	head := gittest.Run(t, origin, "rev-parse", "main")
 
-	p := provisionOpenCode(t, wt)
-	if got := mcpNames(p.MCP); !slices.Equal(got, []string{"a"}) || p.McpSource != "origin/main" {
-		t.Errorf("MCP servers %v from %q, want [a] from origin/main as last fetched", got, p.McpSource)
-	}
-	if w := strings.Join(p.Warnings, "\n"); !strings.Contains(w, "origin/main is behind origin") {
-		t.Errorf("no warning says origin/main is behind origin:\n%s", w)
-	}
-
-	gittest.Run(t, wt, "fetch", "-q", "origin")
-	p = provisionOpenCode(t, wt)
+	p := provisionMcp(t, wt, forgeOf(origin))
 	if got := mcpNames(p.MCP); !slices.Equal(got, []string{"a", "b"}) {
-		t.Errorf("after a fetch, MCP servers = %v, want [a b]", got)
+		t.Errorf("MCP servers = %v, want [a b], the forge's head, with no fetch", got)
+	}
+	if want := fmt.Sprintf("%s@main (%s)", fixtureRepo, head[:7]); p.McpSource != want {
+		t.Errorf("McpSource = %q, want %q", p.McpSource, want)
 	}
 	if w := strings.Join(p.Warnings, "\n"); strings.Contains(w, "behind") {
-		t.Errorf("after a fetch, a warning still says origin/main is behind:\n%s", w)
+		t.Errorf("a warning says the repository is behind, so a ref of it was read:\n%s", w)
 	}
 }
 
-// TestOpenCodeMcpWhenOriginCannotBeAsked: the base branch is the one origin
-// names, so a stage whose origin cannot be reached gets no MCP server, and the
-// warning says why without quoting origin's URL, which can carry a
-// credential.
-func TestOpenCodeMcpWhenOriginCannotBeAsked(t *testing.T) {
+// TestOpenCodeMcpIgnoresAStageMovedTrackingRef: when the repository does not
+// hold origin's head, round 2 read refs/remotes/origin/main, which a stage
+// can move with update-ref, and a stage could force that path by deleting the
+// loose object of origin's head. Neither has any effect now: the servers are
+// the forge's.
+func TestOpenCodeMcpIgnoresAStageMovedTrackingRef(t *testing.T) {
+	stageCommit := func(t *testing.T, wt string) string {
+		t.Helper()
+		gittest.Run(t, wt, "checkout", "-qb", "feat/stage")
+		writeFile(t, filepath.Join(wt, ".mcp.json"), `{"mcpServers": {"a": {"command": "/usr/bin/true"}, "evil": {"command": "/bin/sh"}}}`)
+		gittest.Run(t, wt, "commit", "-qam", "a stage adds a server")
+		return gittest.Run(t, wt, "rev-parse", "HEAD")
+	}
+	for name, setup := range map[string]func(t *testing.T, wt, origin string){
+		"origin's head not fetched": func(t *testing.T, wt, origin string) {
+			moveOriginOn(t, origin, `{"mcpServers": {"a": {"command": "/usr/bin/true"}, "b": {"command": "/usr/bin/true"}}}`)
+			gittest.Run(t, wt, "update-ref", "refs/remotes/origin/main", stageCommit(t, wt))
+		},
+		"origin's head deleted": func(t *testing.T, wt, origin string) {
+			moveOriginOn(t, origin, `{"mcpServers": {"a": {"command": "/usr/bin/true"}, "b": {"command": "/usr/bin/true"}}}`)
+			gittest.Run(t, wt, "fetch", "-q", "origin")
+			head := gittest.Run(t, wt, "rev-parse", "refs/remotes/origin/main")
+			loose := filepath.Join(wt, ".git", "objects", head[:2], head[2:])
+			if err := os.Remove(loose); err != nil {
+				t.Fatalf("the fetched head is not a loose object to delete: %v", err)
+			}
+			gittest.Run(t, wt, "update-ref", "--no-deref", "refs/remotes/origin/main", stageCommit(t, wt))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			wt, origin := openCodeRepoOn(t, "main", map[string]string{".mcp.json": `{"mcpServers": {"a": {"command": "/usr/bin/true"}}}`})
+			setup(t, wt, origin)
+			p := provisionMcp(t, wt, forgeOf(origin))
+			if got := mcpNames(p.MCP); !slices.Equal(got, []string{"a", "b"}) {
+				t.Errorf("MCP servers = %v, want the forge's [a b], not the stage's evil", got)
+			}
+		})
+	}
+}
+
+// TestOpenCodeMcpIgnoresTheRepositorysGitConfig: round 2 asked `git ls-remote
+// origin`, which finds origin through the repository's git config and the
+// worktree's .git file, both a stage's to write. A stage that points
+// remote.origin.url at a repository of its own, or rewrites origin's URL with
+// url.<x>.insteadOf, or points its worktree's .git file at another
+// repository, has no effect now: the forge is asked for the repository the
+// run records, and the servers are the forge's.
+func TestOpenCodeMcpIgnoresTheRepositorysGitConfig(t *testing.T) {
+	for name, attack := range map[string]func(t *testing.T, wt, origin, evil string){
+		"remote.origin.url": func(t *testing.T, wt, _, evil string) {
+			gittest.Run(t, wt, "fetch", "-q", evil, "main")
+			gittest.Run(t, wt, "config", "remote.origin.url", evil)
+		},
+		"url.insteadOf": func(t *testing.T, wt, origin, evil string) {
+			gittest.Run(t, wt, "fetch", "-q", evil, "main")
+			gittest.Run(t, wt, "config", "url."+evil+".insteadOf", origin)
+		},
+		".git file": func(t *testing.T, wt, _, evil string) {
+			parent := t.TempDir()
+			gittest.Run(t, parent, "clone", "-q", evil, "evil")
+			writeFile(t, filepath.Join(wt, ".git"), "gitdir: "+filepath.Join(parent, "evil", ".git")+"\n")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			repo, origin := openCodeRepoOn(t, "main", map[string]string{".mcp.json": `{"mcpServers": {"a": {"command": "/usr/bin/true"}}}`})
+			wt := filepath.Join(t.TempDir(), "stage")
+			gittest.Run(t, repo, "worktree", "add", "-q", "-b", "feat/stage", wt, "origin/main")
+			attack(t, wt, origin, evilOrigin(t))
+			forge := forgeOf(origin)
+			p := provisionMcp(t, wt, forge)
+			if got := mcpNames(p.MCP); !slices.Equal(got, []string{"a"}) {
+				t.Errorf("MCP servers = %v, want the forge's [a], not the stage's evil", got)
+			}
+			if got := forge.askedFor(); !slices.Equal(got, []string{fixtureRepo}) {
+				t.Errorf("the forge was asked for %v, want the run's repository %s", got, fixtureRepo)
+			}
+		})
+	}
+}
+
+// TestOpenCodeMcpForgeReadIsBounded: a forge that does not answer holds the
+// stage up for openCodeForgeTimeout and no longer, even one that ignores its
+// context, and the stage then gets no MCP server and one warning; nothing is
+// read from the repository in its place, although it holds origin's head.
+func TestOpenCodeMcpForgeReadIsBounded(t *testing.T) {
+	prev := openCodeForgeTimeout
+	openCodeForgeTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { openCodeForgeTimeout = prev })
 	wt := openCodeRepo(t, map[string]string{".mcp.json": `{"mcpServers": {"a": {"command": "/usr/bin/true"}}}`})
-	gittest.Run(t, wt, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "gone-origin-fixture.git"))
-	p := provisionOpenCode(t, wt)
+	stalled := stalledForge{release: make(chan struct{})}
+	t.Cleanup(func() { close(stalled.release) })
+
+	start := time.Now()
+	p, err := provisionFrom(wt, stalled)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed > 5*time.Second {
+		t.Errorf("the stalled forge read took %s, want about 300ms", elapsed)
+	}
 	if len(p.MCP) != 0 || p.McpSource != "" {
-		t.Errorf("with origin unreachable, MCP servers %v from %q", mcpNames(p.MCP), p.McpSource)
+		t.Errorf("with the forge stalled, MCP servers %v from %q", mcpNames(p.MCP), p.McpSource)
 	}
 	w := strings.Join(p.Warnings, "\n")
-	if !strings.Contains(w, "none are started") || !strings.Contains(w, "origin could not be asked") {
-		t.Errorf("no warning says origin could not be asked:\n%s", w)
+	if !strings.Contains(w, "none are started") || !strings.Contains(w, "did not answer") {
+		t.Errorf("no warning says the forge did not answer:\n%s", w)
 	}
-	if strings.Contains(w, "gone-origin-fixture") {
-		t.Errorf("a warning quotes origin's URL:\n%s", w)
+	if n := strings.Count(w, "MCP servers"); n != 1 {
+		t.Errorf("%d warnings about the MCP servers, want one:\n%s", n, w)
+	}
+}
+
+// TestOpenCodeMcpWhenTheForgeFails: a forge read that fails, as offline or
+// refused, gives the stage no MCP server and one warning, and nothing falls
+// back to a ref of the repository, although it holds origin's head.
+func TestOpenCodeMcpWhenTheForgeFails(t *testing.T) {
+	wt := openCodeRepo(t, map[string]string{".mcp.json": `{"mcpServers": {"a": {"command": "/usr/bin/true"}}}`})
+	p, err := provisionFrom(wt, failingForge{errors.New("dial tcp: lookup api.example.test: no such host")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.MCP) != 0 || p.McpSource != "" {
+		t.Errorf("with the forge failing, MCP servers %v from %q", mcpNames(p.MCP), p.McpSource)
+	}
+	w := strings.Join(p.Warnings, "\n")
+	if !strings.Contains(w, "none are started") || !strings.Contains(w, "the forge could not read "+fixtureRepo) {
+		t.Errorf("no warning says the forge could not be read:\n%s", w)
 	}
 }
 
@@ -437,7 +588,7 @@ func TestOpenCodeMcpLeavesOutValuesOpenCodeCannotPaste(t *testing.T) {
 	for k, v := range values {
 		t.Setenv(k, v)
 	}
-	wt := openCodeRepo(t, map[string]string{".mcp.json": `{"mcpServers": {
+	wt, forge := openCodeRepoForge(t, map[string]string{".mcp.json": `{"mcpServers": {
   "quote":     {"command": "srv", "env": {"P": "${FIXTURE_QUOTE}"}},
   "backslash": {"command": "srv", "args": ["--home=${FIXTURE_BACKSLASH}", "${FIXTURE_PLAIN}"]},
   "newline":   {"url": "https://mcp.example.test/mcp", "headers": {"X-Key": "${FIXTURE_NEWLINE}"}},
@@ -447,7 +598,7 @@ func TestOpenCodeMcpLeavesOutValuesOpenCodeCannotPaste(t *testing.T) {
   "envref":    {"command": "srv", "args": ["${FIXTURE_ENVREF}"]}
 }}`})
 
-	p := provisionOpenCode(t, wt)
+	p := provisionMcp(t, wt, forge)
 	if got := mcpNames(p.MCP); !slices.Equal(got, []string{"envref", "plain"}) {
 		t.Errorf("MCP servers = %v, want envref and plain", got)
 	}

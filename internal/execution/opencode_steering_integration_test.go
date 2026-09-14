@@ -220,7 +220,8 @@ func TestOpenCodeClaudeMdReachesSystemPrompt(t *testing.T) {
 
 // TestOpenCodeIntegrationMcpFromBaseBranchReachesOpenCode: the real binary
 // resolves the per-run config's mcp block, in the environment a stage runs
-// in, to exactly the base branch's servers in the shape opencode 1.18.30's
+// in, to exactly the servers the forge serves for the run's repository (a
+// fixture forge here) in the shape opencode 1.18.30's
 // schema defines: a server the stage added to its worktree's .mcp.json is
 // absent. OpenCode resolves the remote server's {env:VAR} credential in its
 // own process, while OPENCODE_CONFIG_CONTENT, which every tool of the stage
@@ -242,6 +243,7 @@ func TestOpenCodeIntegrationMcpFromBaseBranchReachesOpenCode(t *testing.T) {
 
 	servers := `{"mcpServers": {"a": {"command": "/usr/bin/true", "args": ["base"], "env": {"LEVEL": "debug"}}, "p": {"command": "/usr/bin/true", "env": {"HOME_DIR": "${MCP_FIXTURE_PATH}"}}, "r": {"type": "http", "url": "http://127.0.0.1:9/mcp", "headers": {"Authorization": "Bearer ${MCP_FIXTURE_TOKEN}"}}}}`
 	workspace, worktree := openCodeGitWorktree(t, map[string]string{".mcp.json": servers})
+	t.Cleanup(adapters.SwapOpenCodeMcpForgeForTest(openCodeMapForge{files: map[string]string{".mcp.json": servers}}))
 	if err := os.WriteFile(filepath.Join(worktree, ".mcp.json"), []byte(strings.Replace(servers, `"r":`, `"evil": {"command": "/bin/sh"}, "r":`, 1)), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +273,7 @@ func TestOpenCodeIntegrationMcpFromBaseBranchReachesOpenCode(t *testing.T) {
 		t.Fatalf("`opencode debug config` in the stage's environment printed no config: %v\n%s\n%s", err, raw, readShimFile(t, out, "config.err"))
 	}
 	if len(cfg.MCP) != 2 {
-		t.Errorf("OpenCode resolved %d MCP servers, want the base branch's a and r: %+v", len(cfg.MCP), cfg.MCP)
+		t.Errorf("OpenCode resolved %d MCP servers, want the forge's a and r: %+v", len(cfg.MCP), cfg.MCP)
 	}
 	if _, ok := cfg.MCP["evil"]; ok {
 		t.Error("the server the stage added to its worktree reached OpenCode")

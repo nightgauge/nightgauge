@@ -1,0 +1,43 @@
+package execution
+
+import (
+	"context"
+	"errors"
+	"os"
+	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/execution/adapters"
+	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
+)
+
+// TestMain makes the forge an OpenCode stage reads its MCP servers from
+// refuse every read for the whole test binary: the manager's OpenCode
+// dispatches record a repository, and none of them may reach GitHub. A test
+// that reads servers swaps in a forge of its own (adapters.
+// SwapOpenCodeMcpForgeForTest).
+func TestMain(m *testing.M) {
+	restore := adapters.SwapOpenCodeMcpForgeForTest(openCodeMapForge{err: errors.New("the execution test binary reads no forge")})
+	code := m.Run()
+	restore()
+	os.Exit(code)
+}
+
+// openCodeMapForge serves files as the head of main on a forge, or fails with
+// err.
+type openCodeMapForge struct {
+	files map[string]string
+	err   error
+}
+
+func (f openCodeMapForge) DefaultBranchFiles(_ context.Context, _, _ string, paths []string) (*forgetypes.DefaultBranchFiles, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	out := &forgetypes.DefaultBranchFiles{Branch: "main", Commit: "0123456789abcdef0123456789abcdef01234567", Files: map[string]forgetypes.RepoFile{}}
+	for _, p := range paths {
+		if content, ok := f.files[p]; ok {
+			out.Files[p] = forgetypes.RepoFile{Regular: true, Content: []byte(content)}
+		}
+	}
+	return out, nil
+}

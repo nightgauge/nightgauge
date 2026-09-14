@@ -18,6 +18,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
+	"github.com/nightgauge/nightgauge/internal/forge"
 	"github.com/nightgauge/nightgauge/internal/models"
 )
 
@@ -918,6 +919,11 @@ type OpenCodeRunRequest struct {
 	// (openCodeManagedConfigFiles); nil means this machine's. Only tests set
 	// it, because the real files are outside any directory a test may write.
 	ManagedConfigFiles []string
+	// McpForge is the forge the MCP servers are read from, for the
+	// repository Run records (RunOptions.TargetRepo, else RunOptions.Repo):
+	// OpenCodeMcpForge on the adapter's path and the verb's. nil starts no
+	// server.
+	McpForge forge.DefaultBranchFileService
 }
 
 // OpenCodeRun is everything an opencode spawn is given besides its argv and
@@ -980,10 +986,13 @@ func OpenCodeEnvWithholdFor(model string) OpenCodeEnvWithhold {
 //
 // The config carries what the stage is given from the repository in
 // req.Run.WorktreeDir (codexprovision.ProvisionOpenCode): its steering as
-// instructions and the MCP servers of origin's default branch, less any
-// server a variable of which holds, in req.Lookup, a value OpenCode cannot
-// paste into its config text; a dispatch whose ANTHROPIC_API_KEY holds one is
-// refused (BuildOpenCodeConfig). A dispatch without a worktree is refused,
+// instructions, and the MCP servers of the default branch of the repository
+// req.Run records, as req.McpForge serves them, less any server a variable of
+// which holds a value OpenCode cannot paste into its config text; a dispatch
+// whose ANTHROPIC_API_KEY holds one is refused (BuildOpenCodeConfig). Each
+// value is read in the environment OpenCode is spawned with
+// (openCodeSpawnLookup): the run's isolation variables laid over req.Lookup,
+// less what the spawn withholds. A dispatch without a worktree is refused,
 // because it would run with neither. A prepared run says on stderr what it is
 // given and what it is not.
 //
@@ -1003,13 +1012,25 @@ func PrepareOpenCodeRun(req OpenCodeRunRequest) (*OpenCodeRun, error) {
 	if err != nil {
 		return nil, err
 	}
-	input, err := OpenCodeConfigInputFor(req.Settings, req.Run, rootPath, req.Lookup)
+	if req.Lookup == nil {
+		return nil, errors.New("opencode: no inherited environment to prepare the run against")
+	}
+	// OpenCode resolves each {env:NAME} of its config in the environment it is
+	// spawned with, so every value is checked there: the isolation variables
+	// the run sets over what this process inherited, less what the spawn
+	// withholds. They depend on the root's path alone, and nothing is created
+	// yet.
+	isolation, err := OpenCodeIsolationEnv(openCodeIsolationFor(req, rootPath))
 	if err != nil {
 		return nil, err
 	}
-	// The MCP servers' variables are checked in the environment the spawn
-	// inherits from this process, which is what OpenCode resolves them in.
-	if input.Repository, err = codexprovision.ProvisionOpenCode(context.Background(), req.Run.WorktreeDir, req.Lookup); err != nil {
+	spawnLookup := openCodeSpawnLookup(req.Lookup, isolation, req.Run.Model)
+	input, err := OpenCodeConfigInputFor(req.Settings, req.Run, rootPath, spawnLookup)
+	if err != nil {
+		return nil, err
+	}
+	mcp := codexprovision.McpSource{Repo: openCodeRunRepo(req.Run), Forge: req.McpForge}
+	if input.Repository, err = codexprovision.ProvisionOpenCode(context.Background(), req.Run.WorktreeDir, mcp, spawnLookup); err != nil {
 		return nil, fmt.Errorf("opencode: %w", err)
 	}
 	built, err := BuildOpenCodeConfig(input)
@@ -1052,14 +1073,7 @@ func PrepareOpenCodeRun(req OpenCodeRunRequest) (*OpenCodeRun, error) {
 	if err := writeOpenCodeRunFiles(root, built.Files); err != nil {
 		return nil, err
 	}
-	env, err := OpenCodeIsolationEnv(OpenCodeIsolation{
-		Root:              root,
-		Home:              req.Home,
-		Lookup:            req.Lookup,
-		GOOS:              req.GOOS,
-		MachineConfigDir:  req.MachineConfigDir,
-		InheritUserConfig: req.Settings.InheritUserConfig,
-	})
+	env, err := OpenCodeIsolationEnv(openCodeIsolationFor(req, root))
 	if err != nil {
 		return nil, err
 	}
@@ -1074,6 +1088,18 @@ func PrepareOpenCodeRun(req OpenCodeRunRequest) (*OpenCodeRun, error) {
 		RunDir:        root,
 		NonLoopback:   built.NonLoopback,
 	}, nil
+}
+
+// openCodeIsolationFor is the isolation a dispatch of req gets in root.
+func openCodeIsolationFor(req OpenCodeRunRequest, root string) OpenCodeIsolation {
+	return OpenCodeIsolation{
+		Root:              root,
+		Home:              req.Home,
+		Lookup:            req.Lookup,
+		GOOS:              req.GOOS,
+		MachineConfigDir:  req.MachineConfigDir,
+		InheritUserConfig: req.Settings.InheritUserConfig,
+	}
 }
 
 // reportOpenCodeRepository says on w what a prepared run is given from its

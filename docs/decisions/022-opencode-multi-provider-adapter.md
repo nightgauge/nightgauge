@@ -754,45 +754,50 @@ reports it `non_loopback: true`, as it does every hosted provider's model.
   so a file both name loads once.
 - **MCP servers.** The per-run config's `mcp` holds the pipeline's MCP
   servers, the ones a Claude stage gets from `.mcp.json` and
-  `.claude/settings.json`, and no others (#1626). They are read from the base
-  branch, origin's default branch, not from the worktree: a server is a
-  command OpenCode runs or a URL it sends tool calls to, and a stage can write
-  its worktree, so a server one stage added to `.mcp.json` would otherwise
-  start in the next without review. A warning on stderr names a server only
-  the worktree defines, one it defines differently, and one only the base
-  branch defines. A stage can write the repository's refs as well, which
-  every worktree of the repository shares, not only the stages of one run, so
-  no ref of the repository names the base branch: origin does, asked the way
-  `git remote set-head origin --auto` asks it
-  (`git ls-remote --symref origin HEAD`), for at most 15 seconds. Neither
-  `origin/HEAD`, nor a remote-tracking ref for a branch origin does not have,
-  nor a local branch is read, because no fetch resets any of them, and each
-  would let one stage choose the servers of every later one; a warning names
-  an `origin/HEAD` that names another branch. The servers are read at the
-  commit origin reports as the branch's tip whenever the repository holds it,
-  with git's replacement objects (`refs/replace/`) off, so a stage that moves
-  `origin/main`, or replaces that commit, changes nothing. When origin has
-  moved on since the last fetch, they are read from the branch's
-  remote-tracking ref as last fetched, and a warning says it is behind; a
-  stage that moved that ref chooses them until a fetch resets it. A stage
-  whose origin cannot be asked, or whose repository has not fetched that
-  branch, gets no MCP server, and the warning says why without quoting
-  origin's URL, which can carry a credential. The read trusts the origin the repository's config names: a
-  stage can rewrite that too, and would change what every later fetch brings
-  with it. Each `${VAR}` becomes OpenCode's `{env:VAR}`, so no variable's
-  value is in the content, and a value already holding OpenCode's `{env:...}`
-  or `{file:...}` syntax refuses its server, because OpenCode would
-  substitute it. OpenCode resolves a
+  `.claude/settings.json`, and no others (#1626). They are read from the
+  forge, not from the worktree and not from the repository on the machine: a
+  server is a command OpenCode runs or a URL it sends tool calls to, and a
+  stage can write its worktree, so a server one stage added to `.mcp.json`
+  would otherwise start in the next without review. A stage can write the
+  rest of the repository too, and every worktree of it shares that: the refs
+  and objects (a moved `origin/main`, a deleted object, a `refs/replace/`
+  entry), the git config that says where origin is and how git reaches it
+  (`remote.origin.url`, `url.<x>.insteadOf`, transport settings git would run
+  in the orchestrator's environment), and its worktree's `.git` file. So none
+  of it is read and no `git` command runs for the servers. The repository is
+  the one the pipeline records for the run (the dispatch's target repository,
+  `owner/name`; `nightgauge opencode config` takes it as `--repo`), never one
+  parsed from the worktree's git config. One GitHub GraphQL query, through
+  the pipeline's GitHub client and the identity the workspace config names for
+  the repository's owner, returns the default branch, the commit at its head
+  and `.claude/settings.json` and `.mcp.json` at that commit, so both files
+  come from the commit the answer names; a file that commit does not have
+  gives no server, and one it has as a symbolic link is not followed. The
+  read, the identity's token included, is bounded to 15 seconds, and a `gh`
+  it runs for the token is killed at the deadline. When the read fails, times
+  out, or the run records no repository, the stage gets no MCP server and one
+  warning on stderr says why; nothing falls back to a local ref. A warning
+  names a server only the worktree defines, one it defines differently, and
+  one only the default branch defines, and stderr names the repository,
+  branch and commit the servers were read at. The servers are what GitHub
+  serves for that repository's default branch, and no write a stage makes on
+  the machine changes them. Each `${VAR}` becomes OpenCode's `{env:VAR}`, so
+  no variable's value is in the content, and a value already holding
+  OpenCode's `{env:...}` or `{file:...}` syntax refuses its server, because
+  OpenCode would substitute it. OpenCode resolves a
   `{env:VAR}` in its own process by pasting the variable's value into its
   config text before parsing it, unescaped (read from the 1.18.30 bundled
   source, and observed): a quote, a backslash or a control character in the
   value makes the whole config fail to parse, and OpenCode's error prints the
   substituted config, every resolved credential in it, and a `{file:...}` in
   the value is read as a file reference. So each variable a server names is
-  checked in the environment the stage inherits, its value never recorded,
-  and a server one of whose variables holds such a value is left out with a
-  warning naming the variable. The builder then checks every `{env:VAR}` the
-  finished content holds the same way, `{env:ANTHROPIC_API_KEY}` included,
+  checked in the environment OpenCode is spawned with, its value never
+  recorded: the run's isolation variables (and `OPENCODE_CONFIG_CONTENT`,
+  which always holds a quote) laid over the inherited environment, less the
+  variables the spawn withholds. A server one of whose variables holds such a
+  value is left out with a warning naming the variable. The builder then
+  checks every `{env:VAR}` the finished content holds the same way,
+  `{env:ANTHROPIC_API_KEY}` included,
   and refuses the dispatch, naming the variable, when one holds such a value:
   a key read from a file with CRLF line endings ends in a carriage return, and
   would otherwise fail the parse and print every MCP credential beside it. A

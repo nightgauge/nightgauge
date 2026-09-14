@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/shurcooL/graphql"
 
@@ -115,6 +116,147 @@ func (r *RepoService) RepoMetadata(ctx context.Context, owner, name string) (*fo
 		out.DefaultBranch = string(ref.Name)
 	}
 	return out, nil
+}
+
+// defaultBranchFilesLimit caps how many paths one DefaultBranchFiles query
+// asks for, each an alias of its own in the query.
+const defaultBranchFilesLimit = 16
+
+// treeEntryModeRegular and treeEntryModeExecutable are the modes GraphQL's
+// TreeEntry.mode reports for a regular file (0100644 and 0100755); a symbolic
+// link is 0120000.
+const (
+	treeEntryModeRegular    = 0o100644
+	treeEntryModeExecutable = 0o100755
+)
+
+// DefaultBranchFiles satisfies forge.DefaultBranchFileService: one GraphQL
+// query reads the default branch's name, the commit at its head and each of
+// paths at that commit (Commit.file), so every file comes from the commit the
+// answer names. A path the commit does not have comes back null with a
+// NOT_FOUND error on that path alone, and is left out of Files. A file GitHub
+// serves truncated is an error, because it cannot be read whole; a binary
+// file is Regular with no Content.
+func (r *RepoService) DefaultBranchFiles(ctx context.Context, owner, name string, paths []string) (*forgetypes.DefaultBranchFiles, error) {
+	if owner == "" || name == "" {
+		return nil, fmt.Errorf("default branch files: owner and name are required")
+	}
+	if len(paths) == 0 || len(paths) > defaultBranchFilesLimit {
+		return nil, fmt.Errorf("default branch files: %d paths asked for, want 1 to %d", len(paths), defaultBranchFilesLimit)
+	}
+	var decl, fields strings.Builder
+	vars := map[string]interface{}{"owner": owner, "name": name}
+	for i, p := range paths {
+		fmt.Fprintf(&decl, ", $p%d: String!", i)
+		fmt.Fprintf(&fields, " f%d: file(path: $p%d) { mode type object { ... on Blob { text isBinary isTruncated } } }", i, i)
+		vars[fmt.Sprintf("p%d", i)] = p
+	}
+	query := "query($owner: String!, $name: String!" + decl.String() + ") { repository(owner: $owner, name: $name) { defaultBranchRef { name target { oid ... on Commit {" + fields.String() + " } } } } }"
+	raw, err := r.client.queryRaw(ctx, query, vars)
+	if err != nil {
+		return nil, fmt.Errorf("default branch files of %s/%s: %w", owner, name, err)
+	}
+	var resp struct {
+		Data struct {
+			Repository *struct {
+				DefaultBranchRef *struct {
+					Name   string                     `json:"name"`
+					Target map[string]json.RawMessage `json:"target"`
+				} `json:"defaultBranchRef"`
+			} `json:"repository"`
+		} `json:"data"`
+		Errors []struct {
+			Type    string        `json:"type"`
+			Path    []interface{} `json:"path"`
+			Message string        `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, fmt.Errorf("default branch files of %s/%s: decode: %w", owner, name, err)
+	}
+	absent := map[string]bool{}
+	for _, e := range resp.Errors {
+		if alias, ok := missingFileAlias(e.Type, e.Path); ok {
+			absent[alias] = true
+			continue
+		}
+		return nil, fmt.Errorf("default branch files of %s/%s: %s", owner, name, e.Message)
+	}
+	repo := resp.Data.Repository
+	if repo == nil {
+		return nil, fmt.Errorf("default branch files of %s/%s: the repository is not visible", owner, name)
+	}
+	ref := repo.DefaultBranchRef
+	if ref == nil || ref.Name == "" {
+		return nil, fmt.Errorf("default branch files of %s/%s: the repository has no default branch", owner, name)
+	}
+	var oid string
+	if err := json.Unmarshal(ref.Target["oid"], &oid); err != nil || oid == "" {
+		return nil, fmt.Errorf("default branch files of %s/%s: no commit at the head of %s", owner, name, ref.Name)
+	}
+	out := &forgetypes.DefaultBranchFiles{Branch: ref.Name, Commit: oid, Files: map[string]forgetypes.RepoFile{}}
+	for i, p := range paths {
+		alias := fmt.Sprintf("f%d", i)
+		entryRaw, ok := ref.Target[alias]
+		if !ok {
+			return nil, fmt.Errorf("default branch files of %s/%s: the answer has no entry for %s", owner, name, p)
+		}
+		var entry *struct {
+			Mode   int    `json:"mode"`
+			Type   string `json:"type"`
+			Object *struct {
+				Text        *string `json:"text"`
+				IsBinary    bool    `json:"isBinary"`
+				IsTruncated bool    `json:"isTruncated"`
+			} `json:"object"`
+		}
+		if err := json.Unmarshal(entryRaw, &entry); err != nil {
+			return nil, fmt.Errorf("default branch files of %s/%s: decode %s: %w", owner, name, p, err)
+		}
+		if entry == nil {
+			if !absent[alias] {
+				return nil, fmt.Errorf("default branch files of %s/%s: %s came back empty without saying it is absent", owner, name, p)
+			}
+			continue
+		}
+		regular := entry.Type == "blob" && (entry.Mode == treeEntryModeRegular || entry.Mode == treeEntryModeExecutable)
+		if !regular {
+			out.Files[p] = forgetypes.RepoFile{}
+			continue
+		}
+		if entry.Object == nil {
+			return nil, fmt.Errorf("default branch files of %s/%s: %s has no blob", owner, name, p)
+		}
+		if entry.Object.IsTruncated {
+			return nil, fmt.Errorf("default branch files of %s/%s: GitHub serves %s truncated", owner, name, p)
+		}
+		file := forgetypes.RepoFile{Regular: true}
+		if entry.Object.Text != nil && !entry.Object.IsBinary {
+			file.Content = []byte(*entry.Object.Text)
+		}
+		out.Files[p] = file
+	}
+	return out, nil
+}
+
+// missingFileAlias reports the alias of a DefaultBranchFiles query's file
+// field that a GraphQL error says is absent: a NOT_FOUND at
+// repository.defaultBranchRef.target.<alias>.
+func missingFileAlias(errType string, path []interface{}) (string, bool) {
+	if errType != "NOT_FOUND" || len(path) != 4 {
+		return "", false
+	}
+	want := []string{"repository", "defaultBranchRef", "target"}
+	for i, w := range want {
+		if s, ok := path[i].(string); !ok || s != w {
+			return "", false
+		}
+	}
+	alias, ok := path[3].(string)
+	if !ok || !strings.HasPrefix(alias, "f") {
+		return "", false
+	}
+	return alias, true
 }
 
 // ExecuteGraphQL satisfies forge.GraphQLService — the github adapter

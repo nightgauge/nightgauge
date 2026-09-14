@@ -89,11 +89,12 @@ type OpenCodeProvision struct {
 	// repository's steering file (repositorySteering) and of every file it
 	// imports (openCodeInstructions).
 	Instructions []string
-	// MCP are the pipeline's MCP servers read from the base branch, in
-	// OpenCode's shape.
+	// MCP are the pipeline's MCP servers read from the run's repository on
+	// its forge (ReadForgeMcpServers), in OpenCode's shape.
 	MCP map[string]OpenCodeMcpServer
-	// McpSource is the branch the servers were read from, such as
-	// origin/main, or "" when none could be read.
+	// McpSource is where the servers were read from, the repository, its
+	// default branch and the commit at its head, such as owner/name@main
+	// (0123abc), or "" when none could be read.
 	McpSource string
 	// Warnings say what the stage is not given and why, one line each. They
 	// name files and servers, never a value.
@@ -103,16 +104,17 @@ type OpenCodeProvision struct {
 // ProvisionOpenCode reads what an OpenCode stage running in worktree is
 // given from its repository. Every file it reads there is read through a
 // worktreeReader, so nothing outside the worktree is read, and a warning
-// names each file refused. The MCP servers come from the base branch,
-// origin's default branch as origin names it (ReadBaseBranchMcpServers),
-// which asks origin: one the working tree alone defines, or defines
+// names each file refused. The MCP servers are read from mcp.Repo's default
+// branch as its forge serves it (ReadForgeMcpServers), never from the
+// repository on this machine: one the working tree alone defines, or defines
 // differently, is not given, and a warning names it, as it names one only the
-// base defines. lookup reads the environment OpenCode inherits, in which a
-// server's variables are checked (openCodePastableMcpServers) and never
-// recorded. When the servers cannot be read, as when origin cannot be asked,
-// the stage runs with none and a warning says why. An error means the
-// worktree is not a directory or there is no environment to check.
-func ProvisionOpenCode(ctx context.Context, worktree string, lookup func(string) (string, bool)) (OpenCodeProvision, error) {
+// default branch defines. lookup reads the environment OpenCode is spawned
+// with, in which a server's variables are checked (openCodePastableMcpServers)
+// and never recorded. When the servers cannot be read, as when the forge does
+// not answer, the stage runs with none and one warning says why; nothing
+// falls back to a ref of the repository. An error means the worktree is not a
+// directory or there is no environment to check.
+func ProvisionOpenCode(ctx context.Context, worktree string, mcp McpSource, lookup func(string) (string, bool)) (OpenCodeProvision, error) {
 	var p OpenCodeProvision
 	if worktree == "" {
 		return p, errors.New("the stage has no worktree to read the repository's steering and MCP servers from")
@@ -135,14 +137,13 @@ func ProvisionOpenCode(ctx context.Context, worktree string, lookup func(string)
 	worktreeServers := readPipelineMcpServers(root, files.read)
 	p.Warnings = append(append(p.Warnings, files.warnings...), walkWarnings...)
 
-	base, source, baseWarnings, err := ReadBaseBranchMcpServers(ctx, root)
+	base, source, err := ReadForgeMcpServers(ctx, mcp)
 	if err != nil {
-		p.Warnings = append(p.Warnings, fmt.Sprintf("MCP servers: none are started, because they are read from origin's default branch and %v", err))
+		p.Warnings = append(p.Warnings, fmt.Sprintf("MCP servers: none are started, because they are read from the repository's default branch on its forge and %v", err))
 		p.MCP = map[string]OpenCodeMcpServer{}
 		return p, nil
 	}
 	p.McpSource = source
-	p.Warnings = append(p.Warnings, baseWarnings...)
 	worktreeOnly, changed, baseOnly := compareMcpServers(worktreeServers, base)
 	if len(worktreeOnly) > 0 {
 		p.Warnings = append(p.Warnings, fmt.Sprintf("MCP servers only the worktree defines, not %s, are not started: %s", source, strings.Join(worktreeOnly, ", ")))

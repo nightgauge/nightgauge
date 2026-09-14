@@ -1,7 +1,6 @@
 package codexprovision
 
 import (
-	"context"
 	"io/fs"
 	"maps"
 	"os"
@@ -223,7 +222,7 @@ func TestProvisionOpenCode_SharesSteeringAndWritesNothing(t *testing.T) {
 	if res, err := Provision("opencode", wt); err != nil || res.AgentsMdPath != "" || res.ConfigTomlPath != "" {
 		t.Fatalf("Provision(opencode) = %+v, %v; want a no-op", res, err)
 	}
-	p, err := ProvisionOpenCode(context.Background(), wt, os.LookupEnv)
+	p, err := provision(wt)
 	if err != nil {
 		t.Fatal(err)
 	}

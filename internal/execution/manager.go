@@ -341,7 +341,7 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 		if dirErr != nil {
 			return nil, fmt.Errorf("per-run root for adapter %q: resolve the machine-tier config directory: %w", adapter.Name(), dirErr)
 		}
-		root, prepErr := preparer.PrepareRunRoot(adapters.RunRootRequest{ID: id, MachineConfigDir: machineDir, Run: runOpts})
+		root, prepErr := preparer.PrepareRunRoot(adapters.RunRootRequest{ID: id, MachineConfigDir: machineDir, Run: runOpts, WorkspaceRoot: m.workspaceRoot})
 		if prepErr != nil {
 			return nil, fmt.Errorf("dispatch refused for adapter %q: %w", adapter.Name(), prepErr)
 		}

@@ -30,3 +30,16 @@ type RepoService interface {
 type GraphQLService interface {
 	ExecuteGraphQL(ctx context.Context, query string, variables map[string]interface{}) ([]byte, error)
 }
+
+// DefaultBranchFileService is an optional surface, not part of ForgeClient,
+// that reads files of a repository at the head of its default branch, as the
+// forge serves them. The branch, its head and every file come from one
+// answer, so no file is read at another commit. The GitHub adapter's
+// RepoService implements it.
+type DefaultBranchFileService interface {
+	// DefaultBranchFiles returns the head of owner/name's default branch and
+	// each of paths at that commit. A path the commit does not have is absent
+	// from Files and is not an error; a repository the forge does not show,
+	// or one with no default branch, is.
+	DefaultBranchFiles(ctx context.Context, owner, name string, paths []string) (*forgetypes.DefaultBranchFiles, error)
+}

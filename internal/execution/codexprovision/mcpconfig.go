@@ -14,10 +14,10 @@
 //
 // OpenCode stages share the steering and the MCP sources (#1626) but are
 // provisioned without writing anything: ProvisionOpenCode reads the steering,
-// the repository's own steering files and the base branch's MCP servers, and
-// the opencode adapter's per-run config delivers them (opencode_steering.go,
-// opencode_mcp.go). The package keeps its name because the scheduler imports
-// it.
+// the repository's own steering files and the MCP servers of the run's
+// repository's default branch on its forge, and the opencode adapter's
+// per-run config delivers them (opencode_steering.go, opencode_mcp.go). The
+// package keeps its name because the scheduler imports it.
 package codexprovision
 
 import (
@@ -88,7 +88,7 @@ func readPipelineMcpServers(workspaceRoot string, read readFunc) map[string]Pipe
 
 // extractServersFromJSON returns the `mcpServers` map of a JSON document, the
 // content of a file in the working tree (readPipelineMcpServers) or of a blob
-// on the base branch (ReadBaseBranchMcpServers), tolerating malformed JSON and
+// on the forge (ReadForgeMcpServers), tolerating malformed JSON and
 // non-string env/header values.
 func extractServersFromJSON(raw []byte) map[string]PipelineMcpServer {
 	// Decode loosely so non-string env/header values (JSON numbers/booleans) are

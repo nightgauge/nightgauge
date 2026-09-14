@@ -135,7 +135,7 @@ var openCodeUnenforcedControls = []openCodeControl{
 	{"stream parsing", "token usage, cost and the served model are not recorded, because OpenCode's JSON events reach the Claude stream parser"},
 	{"failure classification", "a permission request OpenCode rejects on its own ends the run with exit code 0, so a stage that stopped early reads as a success"},
 	{"output redaction", "only the values of the server password, GITHUB_TOKEN, GH_TOKEN, GITLAB_TOKEN and the variables OpenCode's catalog binds to the dispatched provider are removed from the captured output; every other secret the child holds, inherited from the environment or read by a tool from a file, stays in it, and an OpenCode error event carries the model endpoint's full URL"},
-	{"project-config tamper gate", "the target repository's opencode.json and .opencode/ load unchecked: they cannot change a key the per-run config sets, such as the dispatched model's id or SDK package, except the model and steps cap of the general and explore subagents, which a mode entry of the same name replaces, but they can add to it, such as an agent or subagent of their own, with its own model on the dispatched provider and no steps cap, an MCP server of their own, which OpenCode starts beside the base branch's, a remote instructions URL OpenCode fetches, or a header on the provider block, which can carry a variable from the stage's environment, a forge token included, to the model server; they can also add options.model to the dispatched model's own entry or an agent's own options, or a variant, and still change the model actually served without touching the pinned id; on anthropic they can add options.speed or options.fallbacks to the dispatched model's entry and turn on fast mode or a server-side fallback the same way; and an agent's options.mcpServers can send ANTHROPIC_API_KEY, or another variable the run holds, as an authorization token to a URL of their choosing"},
+	{"project-config tamper gate", "the target repository's opencode.json and .opencode/ load unchecked: they cannot change a key the per-run config sets, such as the dispatched model's id or SDK package, except the model and steps cap of the general and explore subagents, which a mode entry of the same name replaces, but they can add to it, such as an agent or subagent of their own, with its own model on the dispatched provider and no steps cap, an MCP server of their own, which OpenCode starts beside the default branch's, a remote instructions URL OpenCode fetches, or a header on the provider block, which can carry a variable from the stage's environment, a forge token included, to the model server; they can also add options.model to the dispatched model's own entry or an agent's own options, or a variant, and still change the model actually served without touching the pinned id; on anthropic they can add options.speed or options.fallbacks to the dispatched model's entry and turn on fast mode or a server-side fallback the same way; and an agent's options.mcpServers can send ANTHROPIC_API_KEY, or another variable the run holds, as an authorization token to a URL of their choosing"},
 	{"permission map", "tool permissions come from OpenCode's config, not from the stage's allowed tools"},
 	{"safety plugin", "Nightgauge's careful-gate and stage-gate hooks do not run inside OpenCode"},
 	{"endpoint policy", "the server behind a hosted provider key other than anthropic is whatever OpenCode's bundled catalog and a lower config layer make it: a provider block the repository or your OpenCode config names after that provider can send its API key to another base URL and the stage to another model, a LAN or public base URL of the declared endpoint is neither refused nor warned about, and an Ollama cloud model, which a local Ollama forwards to Ollama's hosted service, is dispatched like a local one"},
@@ -409,6 +409,8 @@ func (a *OpenCodeAdapter) BuildCommand(opts RunOptions) (string, []string, map[s
 // limit, an undeclared endpoint, a malformed base_url) creates nothing, nor
 // does a $HOME/.opencode holding config or the machine's managed OpenCode
 // config unless the block opts into the operator's own OpenCode config.
+// The MCP servers are read from GitHub (OpenCodeMcpForge), as the identity the
+// config in req.WorkspaceRoot names for the repository's owner.
 // Then the root for req.ID is created, or the one an earlier stage of the run
 // created is reused, and the environment that points OpenCode at it, with the
 // config as OPENCODE_CONFIG_CONTENT, is resolved against the environment this
@@ -433,6 +435,7 @@ func (a *OpenCodeAdapter) PrepareRunRoot(req RunRootRequest) (*RunRoot, error) {
 		Lookup:             os.LookupEnv,
 		GOOS:               runtime.GOOS,
 		ManagedConfigFiles: a.managedConfig,
+		McpForge:           OpenCodeMcpForge(req.WorkspaceRoot),
 	})
 	if err != nil {
 		return nil, err

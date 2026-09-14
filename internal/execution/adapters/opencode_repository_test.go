@@ -78,10 +78,11 @@ func worktreeFiles(t *testing.T, dir string) map[string]string {
 }
 
 // TestPrepareOpenCodeRunGivesTheRepositorysSteeringAndMcp: in a repository
-// whose only steering is a CLAUDE.md that imports a file, and whose base
-// branch defines a local and a remote MCP server, a prepared run's config
-// names CLAUDE.md, the file it imports and the run's own steering file as
-// instructions, none a URL, and holds exactly the base branch's servers: a
+// whose only steering is a CLAUDE.md that imports a file, and whose default
+// branch on the forge defines a local and a remote MCP server, a prepared
+// run's config names CLAUDE.md, the file it imports and the run's own
+// steering file as instructions, none a URL, and holds exactly the forge's
+// servers: a
 // server the stage added to its worktree's .mcp.json is not there, and the
 // remote server's credential is the reference {env:MCP_FIXTURE_TOKEN}, whose
 // value is in neither the config nor the verb's JSON. Nothing is written into
@@ -89,10 +90,11 @@ func worktreeFiles(t *testing.T, dir string) map[string]string {
 func TestPrepareOpenCodeRunGivesTheRepositorysSteeringAndMcp(t *testing.T) {
 	const token = "fake-mcp-credential-1626"
 	t.Setenv("MCP_FIXTURE_TOKEN", token)
+	base := map[string]string{".mcp.json": `{"mcpServers": {"a": {"command": "/usr/bin/true"}, "r": {"type": "http", "url": "https://mcp.example.test/mcp", "headers": {"Authorization": "Bearer ${MCP_FIXTURE_TOKEN}"}}}}`}
 	wt := openCodeFixtureRepo(t, map[string]string{
 		"CLAUDE.md":        "@AGENTS.md\n\n# Rules\n\nSENTINEL-7Q: every change carries a changelog entry. See @docs/imported.md for more\n",
 		"docs/imported.md": "IMPORTED-RULE\n",
-		".mcp.json":        `{"mcpServers": {"a": {"command": "/usr/bin/true"}, "r": {"type": "http", "url": "https://mcp.example.test/mcp", "headers": {"Authorization": "Bearer ${MCP_FIXTURE_TOKEN}"}}}}`,
+		".mcp.json":        base[".mcp.json"],
 	})
 	writeRepoFile(t, filepath.Join(wt, ".mcp.json"), `{"mcpServers": {"a": {"command": "/usr/bin/true"}, "r": {"type": "http", "url": "https://mcp.example.test/mcp", "headers": {"Authorization": "Bearer ${MCP_FIXTURE_TOKEN}"}}, "evil": {"command": "/bin/sh", "args": ["-c", "exit 0"]}}}`)
 	before := worktreeFiles(t, wt)
@@ -101,7 +103,7 @@ func TestPrepareOpenCodeRunGivesTheRepositorysSteeringAndMcp(t *testing.T) {
 	var run *OpenCodeRun
 	var err error
 	stderr := captureAdapterStderr(t, func() {
-		run, err = PrepareOpenCodeRun(OpenCodeRunRequest{
+		run, err = PrepareOpenCodeRun(withMcpForge(OpenCodeRunRequest{
 			Home:               home,
 			ID:                 testRunID,
 			MachineConfigDir:   filepath.Join(home, ".nightgauge"),
@@ -110,7 +112,7 @@ func TestPrepareOpenCodeRunGivesTheRepositorysSteeringAndMcp(t *testing.T) {
 			Lookup:             envLookup(nil),
 			GOOS:               "linux",
 			ManagedConfigFiles: []string{},
-		})
+		}, base))
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -150,7 +152,7 @@ func TestPrepareOpenCodeRunGivesTheRepositorysSteeringAndMcp(t *testing.T) {
 	}
 
 	if names := slices.Sorted(maps.Keys(cfg.MCP)); !slices.Equal(names, []string{"a", "r"}) {
-		t.Errorf("mcp servers = %v, want exactly the base branch's a and r", names)
+		t.Errorf("mcp servers = %v, want exactly the forge's a and r", names)
 	}
 	if got := cfg.MCP["r"]["headers"].(map[string]any)["Authorization"]; got != "Bearer {env:MCP_FIXTURE_TOKEN}" {
 		t.Errorf("r's Authorization = %v, want the reference Bearer {env:MCP_FIXTURE_TOKEN}", got)
@@ -166,7 +168,8 @@ func TestPrepareOpenCodeRunGivesTheRepositorysSteeringAndMcp(t *testing.T) {
 	if after := worktreeFiles(t, wt); !maps.Equal(before, after) {
 		t.Errorf("preparing the run changed the worktree:\nbefore %v\nafter  %v", slices.Sorted(maps.Keys(before)), slices.Sorted(maps.Keys(after)))
 	}
-	for _, w := range []string{"the repository's CLAUDE.md and 1 file(s) it imports", "the MCP servers origin/main defines: a, r", "only the worktree defines, not origin/main, are not started: evil"} {
+	source := fixtureRepo + "@main (0123456)"
+	for _, w := range []string{"the repository's CLAUDE.md and 1 file(s) it imports", "the MCP servers " + source + " defines: a, r", "only the worktree defines, not " + source + ", are not started: evil"} {
 		if !strings.Contains(stderr, w) {
 			t.Errorf("stderr does not say %q:\n%s", w, stderr)
 		}
@@ -199,21 +202,22 @@ func TestPrepareOpenCodeRunRefusesADispatchWithoutAWorktree(t *testing.T) {
 
 // TestPrepareOpenCodeRunLeavesOutAnMcpValueOpenCodeCannotPaste: OpenCode
 // pastes a {env:VAR}'s value into its config text unescaped, so the value of
-// every variable an MCP server names is checked in the environment the
-// dispatch is prepared against (req.Lookup). A remote server whose credential
+// every variable an MCP server names is checked in the environment OpenCode
+// is spawned with, here req.Lookup's. A remote server whose credential
 // variable holds a backslash is left out of the config, which would otherwise
 // fail to parse and print the credentials in it, and stderr names the server
 // and the variable, never the value.
 func TestPrepareOpenCodeRunLeavesOutAnMcpValueOpenCodeCannotPaste(t *testing.T) {
 	const value = `fixture\credential`
-	wt := openCodeFixtureRepo(t, map[string]string{
+	base := map[string]string{
 		".mcp.json": `{"mcpServers": {"a": {"command": "/usr/bin/true"}, "r": {"type": "http", "url": "https://mcp.example.test/mcp", "headers": {"Authorization": "Bearer ${MCP_FIXTURE_TOKEN}"}}}}`,
-	})
+	}
+	wt := openCodeFixtureRepo(t, base)
 	home := t.TempDir()
 	var run *OpenCodeRun
 	var err error
 	stderr := captureAdapterStderr(t, func() {
-		run, err = PrepareOpenCodeRun(OpenCodeRunRequest{
+		run, err = PrepareOpenCodeRun(withMcpForge(OpenCodeRunRequest{
 			Home:               home,
 			ID:                 testRunID,
 			MachineConfigDir:   filepath.Join(home, ".nightgauge"),
@@ -222,7 +226,7 @@ func TestPrepareOpenCodeRunLeavesOutAnMcpValueOpenCodeCannotPaste(t *testing.T) 
 			Lookup:             envLookup(map[string]string{"MCP_FIXTURE_TOKEN": value}),
 			GOOS:               "linux",
 			ManagedConfigFiles: []string{},
-		})
+		}, base))
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -241,5 +245,66 @@ func TestPrepareOpenCodeRunLeavesOutAnMcpValueOpenCodeCannotPaste(t *testing.T) 
 	}
 	if strings.Contains(stderr, value) {
 		t.Errorf("stderr quotes the variable's value:\n%s", stderr)
+	}
+}
+
+// TestPrepareOpenCodeRunChecksMcpValuesInTheSpawnEnvironment: OpenCode
+// resolves each {env:NAME} in the environment it is spawned with, which is
+// not the one this process inherited: the run sets the isolation variables
+// over it, sets OPENCODE_CONFIG_CONTENT, and withholds every OPENCODE_*
+// variable, among others. So a value is checked there.
+//
+//   - gh names GH_CONFIG_DIR, unset here, which the run sets from
+//     XDG_CONFIG_HOME, whose value holds a quote: OpenCode would paste a
+//     quote, so gh is left out.
+//   - content names OPENCODE_CONFIG_CONTENT, unset here, which the run sets
+//     to the config itself, JSON: left out.
+//   - xdg names XDG_CONFIG_HOME, whose inherited value holds a quote but
+//     which the run replaces with a path in its root: kept.
+//   - withheld names OPENCODE_FIXTURE_1626, whose inherited value holds a
+//     quote but which the spawn never gets: kept, as unset.
+func TestPrepareOpenCodeRunChecksMcpValuesInTheSpawnEnvironment(t *testing.T) {
+	const quoted = `/tmp/fixture"config-1626`
+	base := map[string]string{".mcp.json": `{"mcpServers": {
+  "gh":       {"command": "srv", "env": {"D": "${GH_CONFIG_DIR}"}},
+  "content":  {"command": "srv", "args": ["${OPENCODE_CONFIG_CONTENT}"]},
+  "xdg":      {"command": "srv", "env": {"X": "${XDG_CONFIG_HOME}"}},
+  "withheld": {"command": "srv", "env": {"O": "${OPENCODE_FIXTURE_1626}"}}
+}}`}
+	wt := openCodeFixtureRepo(t, base)
+	home := t.TempDir()
+	var run *OpenCodeRun
+	var err error
+	stderr := captureAdapterStderr(t, func() {
+		run, err = PrepareOpenCodeRun(withMcpForge(OpenCodeRunRequest{
+			Home:               home,
+			ID:                 testRunID,
+			MachineConfigDir:   filepath.Join(home, ".nightgauge"),
+			Run:                RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b", WorktreeDir: wt},
+			Settings:           lmStudioSettings(),
+			Lookup:             envLookup(map[string]string{"XDG_CONFIG_HOME": quoted, "OPENCODE_FIXTURE_1626": quoted}),
+			GOOS:               "linux",
+			ManagedConfigFiles: []string{},
+		}, base))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		MCP map[string]any `json:"mcp"`
+	}
+	if err := json.Unmarshal([]byte(run.ConfigContent), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if names := slices.Sorted(maps.Keys(cfg.MCP)); !slices.Equal(names, []string{"withheld", "xdg"}) {
+		t.Errorf("mcp servers = %v, want withheld and xdg: gh's and content's values in the spawn hold a quote\n%s", names, stderr)
+	}
+	for server, variable := range map[string]string{"gh": "GH_CONFIG_DIR", "content": "OPENCODE_CONFIG_CONTENT"} {
+		if want := `MCP server "` + server + `" is not started: the value of ` + variable + ` holds`; !strings.Contains(stderr, want) {
+			t.Errorf("stderr does not say %s:\n%s", want, stderr)
+		}
+	}
+	if strings.Contains(stderr, quoted) {
+		t.Errorf("stderr quotes a value:\n%s", stderr)
 	}
 }

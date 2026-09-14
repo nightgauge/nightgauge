@@ -69,16 +69,18 @@ changelog, and the release workflow refuses a tag that does not.
   that, and the files it `@`-imports from inside the worktree reach the model
   with the baseline steering Codex stages get. Nightgauge reads none of it
   through a link out of the worktree, and writes nothing into the worktree.
-  The MCP servers come from `.mcp.json` and `.claude/settings.json` on
-  origin's default branch, as origin names it, at the tip origin reports, so a
-  server one stage adds to those files is not started by the next, even when
-  the stage repoints the repository's refs; a stage whose origin cannot be
-  reached gets none. Until #1638, a repository's `opencode.json` can
-  still add one. Their credentials reach OpenCode only as `{env:VAR}`
-  references. A server is left out, with a warning, when one of its variables
-  holds a value OpenCode cannot paste into its config, and a dispatch whose
-  `ANTHROPIC_API_KEY` holds one, such as a key ending in a carriage return, is
-  refused (#1626)
+  The MCP servers come from `.mcp.json` and `.claude/settings.json` at the
+  head of the run's repository's default branch as GitHub serves it, read in
+  one bounded query and never from the worktree, its git refs or its git
+  config, so a server one stage adds, or points origin at, is not started by
+  the next; a stage whose repository GitHub cannot be read for in 15 seconds
+  gets none. `nightgauge opencode config` takes the repository as `--repo`.
+  Until #1638, a repository's `opencode.json` can still add one. Their
+  credentials reach OpenCode only as `{env:VAR}` references. A server is left
+  out, with a warning, when one of its variables holds a value OpenCode cannot
+  paste into its config, checked in the environment OpenCode is spawned with,
+  and a dispatch whose `ANTHROPIC_API_KEY` holds one, such as a key ending in
+  a carriage return, is refused (#1626)
 - An experimental `opencode` adapter runs stages through the OpenCode CLI, one
   adapter for local (LM Studio, Ollama) and hosted models. It refuses to
   dispatch unless `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` is set in the
