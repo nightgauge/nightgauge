@@ -122,7 +122,7 @@ func TestCalculateCost_NonAnthropicRegistryRates(t *testing.T) {
 	}
 }
 
-// TestCalculateCostForAdapter_PinsRun01a007d5Regression pins the exact-match
+// TestCalculateCostFor_PinsRun01a007d5Regression pins the exact-match
 // arithmetic observed live on run 01a007d5 (issue #583, adapter grok) —
 // feature-planning: 484,709 in / 96,317 out. Before #585 this stamped
 // $2.8989, exactly claude-sonnet's $3/$15 rate, because the cost call had no
@@ -131,10 +131,10 @@ func TestCalculateCost_NonAnthropicRegistryRates(t *testing.T) {
 // out per MTok ≈ $0.263), and the SAME tokens on adapter claude must still
 // stamp the pre-existing $2.8989-equivalent anthropic-rate figure — proving
 // the fix is adapter-scoped, not a blanket rate change.
-func TestCalculateCostForAdapter_PinsRun01a007d5Regression(t *testing.T) {
+func TestCalculateCostFor_PinsRun01a007d5Regression(t *testing.T) {
 	counts := TokenCounts{Input: 484709, Output: 96317}
 
-	grokCost, grokStamped := CalculateCostForAdapter("grok", "sonnet", counts)
+	grokCost, grokStamped := CalculateCostFor("grok", "sonnet", counts)
 	if !grokStamped {
 		t.Fatal("grok/sonnet should resolve to a stamped cost (grok-4.6 serves the sonnet band)")
 	}
@@ -146,7 +146,7 @@ func TestCalculateCostForAdapter_PinsRun01a007d5Regression(t *testing.T) {
 		t.Errorf("grok/sonnet cost = %.4f looks priced at anthropic rates ($2.8989), not grok's (~$0.26)", grokCost)
 	}
 
-	claudeCost, claudeStamped := CalculateCostForAdapter("claude", "sonnet", counts)
+	claudeCost, claudeStamped := CalculateCostFor("claude", "sonnet", counts)
 	if !claudeStamped {
 		t.Fatal("claude/sonnet should resolve to a stamped cost")
 	}
@@ -156,34 +156,34 @@ func TestCalculateCostForAdapter_PinsRun01a007d5Regression(t *testing.T) {
 	}
 }
 
-// TestCalculateCostForAdapter_EmptyAdapterMatchesCalculateCost pins the
+// TestCalculateCostFor_EmptyAdapterMatchesCalculateCost pins the
 // no-regression requirement: a caller that has not been updated to pass
 // adapter context (adapter == "") must price EXACTLY like the pre-#585
 // CalculateCost anthropic-default path — byte-identical, not merely close.
-func TestCalculateCostForAdapter_EmptyAdapterMatchesCalculateCost(t *testing.T) {
+func TestCalculateCostFor_EmptyAdapterMatchesCalculateCost(t *testing.T) {
 	counts := TokenCounts{Input: 484709, Output: 96317}
 	for _, model := range []string{"sonnet", "claude-sonnet-4-6", "claude-opus-4-8", "unknown-model-xyz"} {
 		want := CalculateCost(model, counts)
-		got, stamped := CalculateCostForAdapter("", model, counts)
+		got, stamped := CalculateCostFor("", model, counts)
 		if got != want {
-			t.Errorf("CalculateCostForAdapter(%q, %q) = %v, want CalculateCost's %v (byte-identical anthropic default)",
+			t.Errorf("CalculateCostFor(%q, %q) = %v, want CalculateCost's %v (byte-identical anthropic default)",
 				"", model, got, want)
 		}
 		if model == "unknown-model-xyz" && stamped {
-			t.Errorf("CalculateCostForAdapter(%q) unresolvable model should be unstamped", model)
+			t.Errorf("CalculateCostFor(%q) unresolvable model should be unstamped", model)
 		}
 	}
 }
 
-// TestCalculateCostForAdapter_LocalProviderStaysIntentionalZero pins the
+// TestCalculateCostFor_LocalProviderStaysIntentionalZero pins the
 // pre-existing local-model convention (#56): ollama/lm-studio have no
 // registry rows by design because their marginal cost genuinely IS zero.
 // That must remain a STAMPED $0 — not get reclassified as "unstamped" now
 // that unstamped exists for a different reason (an unresolved REAL provider).
-func TestCalculateCostForAdapter_LocalProviderStaysIntentionalZero(t *testing.T) {
+func TestCalculateCostFor_LocalProviderStaysIntentionalZero(t *testing.T) {
 	counts := TokenCounts{Input: 1_000_000, Output: 1_000_000}
 	for _, adapter := range []string{"ollama", "lm-studio"} {
-		cost, stamped := CalculateCostForAdapter(adapter, "qwen3-coder:32b", counts)
+		cost, stamped := CalculateCostFor(adapter, "qwen3-coder:32b", counts)
 		if !stamped {
 			t.Errorf("adapter %q: local-model $0 should be stamped=true (intentional, not a gap)", adapter)
 		}
@@ -193,14 +193,14 @@ func TestCalculateCostForAdapter_LocalProviderStaysIntentionalZero(t *testing.T)
 	}
 }
 
-// TestCalculateCostForAdapter_UnresolvedRealProviderIsUnstamped is the
+// TestCalculateCostFor_UnresolvedRealProviderIsUnstamped is the
 // explicit-unstamped semantic the issue's acceptance criteria requires: when
 // the serving provider is a REAL (billed) provider but the concrete model
 // cannot be resolved against it, the result must be unstamped/incomplete —
 // never a fabricated $0 and never another provider's rate.
-func TestCalculateCostForAdapter_UnresolvedRealProviderIsUnstamped(t *testing.T) {
+func TestCalculateCostFor_UnresolvedRealProviderIsUnstamped(t *testing.T) {
 	counts := TokenCounts{Input: 1_000_000, Output: 1_000_000}
-	cost, stamped := CalculateCostForAdapter("grok", "nonexistent-band-xyz", counts)
+	cost, stamped := CalculateCostFor("grok", "nonexistent-band-xyz", counts)
 	if stamped {
 		t.Error("unresolvable (xai, nonexistent-band-xyz) should be unstamped, not a priced figure")
 	}
@@ -254,3 +254,96 @@ func TestModelForProviderBand(t *testing.T) {
 // packages/nightgauge-sdk/tests/analysis/AutoModelSelector.costEstimation.test.ts.
 // The Go forecast they covered priced feature-dev at 8k input tokens against a
 // measured 5.65M, so keeping it green would have pinned a wrong answer.
+
+// TestCalculateCostForOpenCodeLocal: an opencode stage on a model a local
+// provider serves is a stamped zero (ADR-022 § 3), in the -m form the stage
+// was dispatched with and in the form its record carries (§ 2). Before #1630
+// the adapter name priced it, and "opencode" maps to "other", so every local
+// stage was unstamped.
+func TestCalculateCostForOpenCodeLocal(t *testing.T) {
+	counts := TokenCounts{Input: 1_000_000, Output: 1_000_000, CacheRead: 500_000, CacheCreation5m: 10_000}
+	for _, model := range []string{
+		"lmstudio/qwen/qwen3.8-27b",
+		"ollama/qwen3-coder:30b",
+		"lm-studio/qwen/qwen3.8-27b",
+	} {
+		cost, stamped := CalculateCostFor("opencode", model, counts)
+		if cost != 0 || !stamped {
+			t.Errorf("CalculateCostFor(opencode, %q) = (%v, %v), want (0, true): no provider bills a local model", model, cost, stamped)
+		}
+	}
+}
+
+// TestCalculateCostForOpenCodeCloudPriced: an opencode stage on a hosted
+// model the registry lists is priced at that model's registry rates, exactly
+// as the model's own vendor adapter prices it, whether the stage carries the
+// -m value or the recorded bare id.
+func TestCalculateCostForOpenCodeCloudPriced(t *testing.T) {
+	counts := TokenCounts{Input: 1_000_000, Output: 1_000_000}
+	want, wantStamped := CalculateCostFor("claude", "claude-sonnet-5", counts)
+	if !wantStamped || want != 18.0 {
+		t.Fatalf("CalculateCostFor(claude, claude-sonnet-5) = (%v, %v), want the registry's $3 + $15 per MTok", want, wantStamped)
+	}
+	for _, model := range []string{"anthropic/claude-sonnet-5", "claude-sonnet-5"} {
+		got, stamped := CalculateCostFor("opencode", model, counts)
+		if got != want || !stamped {
+			t.Errorf("CalculateCostFor(opencode, %q) = (%v, %v), want (%v, true)", model, got, stamped, want)
+		}
+	}
+	all := TokenCounts{Input: 1000, Output: 2000, CacheRead: 3000, CacheCreation5m: 4000, CacheCreation1h: 5000}
+	got, _ := CalculateCostFor("opencode", "anthropic/claude-sonnet-5", all)
+	if want, _ := CalculateCostFor("claude", "claude-sonnet-5", all); got != want {
+		t.Errorf("cache pools priced %v through opencode, want %v as through claude", got, want)
+	}
+}
+
+// TestCalculateCostForOpenCodeUnstamped: a hosted model the registry cannot
+// price is unstamped, never a zero that reads as priced. That covers a model
+// the registry does not list, a provider key Nightgauge does not recognize
+// (which bills by its own rates even for an id the registry knows), and a
+// tier band, which OpenCode never serves.
+func TestCalculateCostForOpenCodeUnstamped(t *testing.T) {
+	counts := TokenCounts{Input: 1_000_000, Output: 1_000_000}
+	for _, model := range []string{
+		"openrouter/x",
+		"openrouter/meta-llama/llama-4",
+		"openrouter/claude-sonnet-5",
+		"openai/gpt-9-preview",
+		"lmstudio-remote/qwen/qwen3.8-27b",
+		"anthropic/sonnet",
+		"sonnet",
+		"",
+	} {
+		cost, stamped := CalculateCostFor("opencode", model, counts)
+		if stamped || cost != 0 {
+			t.Errorf("CalculateCostFor(opencode, %q) = (%v, %v), want (0, false)", model, cost, stamped)
+		}
+	}
+}
+
+// TestOpenCodeModelIdentity is ADR-022 § 1's fixture table: the model a
+// stage record carries and its provider, from the -m value and from the
+// recorded form alike. The endpoint rows wait for declared endpoints (#1679),
+// so lmstudio-remote is an "other" key until then.
+func TestOpenCodeModelIdentity(t *testing.T) {
+	for _, tc := range []struct{ in, recorded, provider string }{
+		{"lmstudio/qwen/qwen3.8-27b", "lm-studio/qwen/qwen3.8-27b", "lm-studio"},
+		{"lm-studio/qwen/qwen3.8-27b", "lm-studio/qwen/qwen3.8-27b", "lm-studio"},
+		{"ollama/qwen3-coder:30b", "ollama/qwen3-coder:30b", "ollama"},
+		{"anthropic/claude-sonnet-5", "claude-sonnet-5", "anthropic"},
+		{"claude-sonnet-5", "claude-sonnet-5", "anthropic"},
+		{"openai/gpt-5.5", "gpt-5.5", "openai"},
+		{"xai/grok-4.6", "grok-4.6", "xai"},
+		{"google/gemini-2.5-pro", "gemini-2.5-pro", "google"},
+		{"openai/gpt-9-preview", "openai/gpt-9-preview", "openai"},
+		{"openrouter/meta-llama/llama-4", "openrouter/meta-llama/llama-4", "other"},
+		{"lmstudio-remote/qwen/qwen3.8-27b", "lmstudio-remote/qwen/qwen3.8-27b", "other"},
+		{"sonnet", "", ""},
+		{"", "", ""},
+	} {
+		recorded, provider := OpenCodeModelIdentity(tc.in)
+		if recorded != tc.recorded || provider != tc.provider {
+			t.Errorf("OpenCodeModelIdentity(%q) = (%q, %q), want (%q, %q)", tc.in, recorded, provider, tc.recorded, tc.provider)
+		}
+	}
+}

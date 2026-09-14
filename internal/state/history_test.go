@@ -1251,12 +1251,12 @@ func TestBuildV2Record_StampedStageDoesNotCarryCostUnstamped(t *testing.T) {
 
 // TestCompleteStage_CostSourceMatchesStampedness (Issue #682) pins
 // RuntimeState.CompleteStage's cost_source decision directly against the
-// exact stamped bool CalculateCostForAdapter returned — the same value that
+// exact stamped bool CalculateCostFor returned — the same value that
 // already decides CostUnstamped, so the two fields can never disagree about
 // whether an occurrence was priced.
 func TestCompleteStage_CostSourceMatchesStampedness(t *testing.T) {
 	// grok/sonnet resolves against the pricing registry for a NON-Claude
-	// adapter (see TestCalculateCostForAdapter_PinsRun01a007d5Regression) —
+	// adapter (see TestCalculateCostFor_PinsRun01a007d5Regression) —
 	// exactly the case #682 exists to make reachable: a rate-card-derived,
 	// not vendor-reported, cost.
 	rs := NewRuntimeState("nightgauge/nightgauge", 682, "item-682-computed", testRunID())
@@ -1271,7 +1271,7 @@ func TestCompleteStage_CostSourceMatchesStampedness(t *testing.T) {
 		t.Error("CostUnstamped = true, want false — grok/sonnet resolves cleanly")
 	}
 
-	// An unresolvable (provider, model) pair: CalculateCostForAdapter returns
+	// An unresolvable (provider, model) pair: CalculateCostFor returns
 	// stamped=false, so CostSource must read "unknown", not "computed".
 	rs2 := NewRuntimeState("nightgauge/nightgauge", 682, "item-682-unknown", testRunID())
 	rs2.BeginStage(StageFeatureDev)

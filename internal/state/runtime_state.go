@@ -503,7 +503,7 @@ type StageResult struct {
 	// adapter's provider/model could not be resolved against the registry, so
 	// CostUSD is a placeholder 0 rather than a fabricated price (#585). Never
 	// set for the local-provider (ollama/lm-studio) $0, which is a genuine,
-	// intentional cost — see tokens.CalculateCostForAdapter — and never for
+	// intentional cost — see tokens.CalculateCostFor — and never for
 	// the deterministic $0 of a stage that dispatched no model at all (#890),
 	// which is genuine in exactly the same sense and is labeled
 	// CostSourceDeterministic instead.
@@ -854,7 +854,7 @@ func (rs *RuntimeState) BeginStage(stage PipelineStage) {
 // pricing, byte-identical for any caller not yet carrying adapter context.
 // If the (adapter's provider, model) pair cannot be resolved, cost is
 // recorded as explicitly unstamped rather than a fabricated $0 or another
-// provider's rate — see tokens.CalculateCostForAdapter.
+// provider's rate — see tokens.CalculateCostFor.
 //
 // counts carries every billable pool (#358): taking input/output alone here
 // while the caller's other cost path prices cache would produce two different
@@ -875,9 +875,9 @@ func (rs *RuntimeState) CompleteStage(exitCode int, counts tokens.TokenCounts, m
 	rs.closeRunningPhasesLocked(rs.Stage)
 
 	counts = rs.consumeCurrentStageTokenCountsLocked(counts)
-	cost, stamped := tokens.CalculateCostForAdapter(adapter, model, counts)
+	cost, stamped := tokens.CalculateCostFor(adapter, model, counts)
 	// stamped mirrors !CostUnstamped exactly (both come from the same
-	// CalculateCostForAdapter call) — so CostSource and CostUnstamped can
+	// CalculateCostFor call) — so CostSource and CostUnstamped can
 	// never disagree about whether this occurrence was priced (#682).
 	costSource := CostSourceComputed
 	if !stamped {
@@ -886,7 +886,7 @@ func (rs *RuntimeState) CompleteStage(exitCode int, counts tokens.TokenCounts, m
 	// A stage that dispatched NO model is not an unpriceable stage (#890).
 	// No model name and not one billable token means nothing was sent to any
 	// provider: the deterministic bookends and the deterministic execution
-	// paths of pr-create / pr-merge all land here. CalculateCostForAdapter
+	// paths of pr-create / pr-merge all land here. CalculateCostFor
 	// still reports stamped=false for them, because ("", "") resolves against
 	// no rate card — but that is a lookup that never had anything TO find,
 	// not the registry miss CostUnstamped was built to flag. With every pool

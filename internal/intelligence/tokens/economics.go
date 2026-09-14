@@ -3,6 +3,7 @@ package tokens
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/nightgauge/nightgauge/internal/models"
@@ -173,59 +174,148 @@ func CalculateCost(model string, t TokenCounts) float64 {
 	return priceCounts(d, t)
 }
 
-// CalculateCostForAdapter prices a stage's tokens using the concrete model's
-// rates, resolved through the PROVIDER the serving adapter maps to (#585) —
-// not through CalculateCost's anthropic-default lookup.
+// CalculateCostFor prices a stage's tokens at the rates of the provider that
+// served its model, and reports whether the figure is a priced one.
 //
-// CalculateCost's models.Get(model) == models.Resolve("anthropic", model) is
-// only correct when the serving adapter genuinely IS Anthropic's. Every other
-// caller in the pipeline dispatches a bare routing-tier alias ("haiku",
-// "sonnet", "opus") whenever the CLI's own stream never reported a served
-// model back — and Get/Resolve's provider default silently priced that alias
-// at claude-sonnet's $3/$15 (or claude-haiku's $1/$5) even when the stage was
+// For every adapter but opencode the provider is the one the adapter maps to
+// (#585), not CalculateCost's anthropic default. CalculateCost's
+// models.Get(model) == models.Resolve("anthropic", model) is only correct
+// when the serving adapter genuinely IS Anthropic's. Every other caller in
+// the pipeline dispatches a bare routing-tier alias ("haiku", "sonnet",
+// "opus") whenever the CLI's own stream never reported a served model back,
+// and Get/Resolve's provider default silently priced that alias at
+// claude-sonnet's $3/$15 (or claude-haiku's $1/$5) even when the stage was
 // actually served by grok-4.6 at $0.34/$1.02. Observed live on run 01a007d5
 // (issue #583): feature-planning stamped $2.8989 (exactly the anthropic
-// sonnet rate) for tokens that price at ~$0.26 under grok's own rates — an
+// sonnet rate) for tokens that price at ~$0.26 under grok's own rates, an
 // ~11x overstatement that poisons cost-per-success history and makes grok
 // look an order of magnitude more expensive than it is.
 //
-// adapter == "" keeps CalculateCost's existing anthropic default — a caller
-// that has not been updated to carry adapter context gets byte-identical
-// behavior rather than silently degrading to the providerless "other" path.
+// adapter == "" keeps CalculateCost's existing anthropic default: a caller
+// that carries no adapter context gets byte-identical behavior rather than
+// silently degrading to the providerless "other" path.
+//
+// opencode serves many providers, so its model, not its name, decides the
+// provider (ADR-022 § 3, openCodeCost).
 //
 // stamped reports whether cost is a priced figure:
 //   - true when (provider, model) resolved a registry rate.
-//   - true, cost 0, for the local providers (ollama/lm-studio): they carry no
-//     registry rows BY DESIGN because their marginal cost genuinely IS zero
-//     (#56) — that $0 is an honest answer, not a gap.
-//   - false for every other unresolved (provider, model) pair — a REAL
+//   - true, cost 0, for the local providers (models.IsLocalProvider): they
+//     carry no registry rows BY DESIGN because no provider bills them (#56),
+//     so that zero is an honest answer, not a gap.
+//   - false for every other unresolved (provider, model) pair: a REAL
 //     (billed) provider whose concrete model this call could not price. The
 //     caller MUST record this as explicitly unstamped/incomplete: never
-//     fabricate $0 as if it were a priced answer, and never fall back to
+//     fabricate a zero as if it were a priced answer, and never fall back to
 //     another provider's rates (matches #528's cost criterion).
-func CalculateCostForAdapter(adapter, model string, t TokenCounts) (cost float64, stamped bool) {
-	provider := pricingProvider(adapter)
+func CalculateCostFor(adapter, model string, t TokenCounts) (cost float64, stamped bool) {
+	if adapter == openCodeAdapter {
+		return openCodeCost(model, t)
+	}
+	provider := pricingProvider(adapter, model)
 	if d, ok := models.Resolve(provider, model); ok {
 		return priceCounts(d, t), true
 	}
-	if provider == "ollama" || provider == "lm-studio" {
+	if models.IsLocalProvider(provider) {
 		return 0, true
 	}
 	return 0, false
 }
 
+// openCodeAdapter is the one multi-provider adapter (ADR-022).
+const openCodeAdapter = "opencode"
+
+// openCodeCost prices an opencode stage (ADR-022 § 3). A model served by a
+// local provider is a stamped zero. A hosted model is priced at the registry
+// rates of its bare id, and only when the registry lists that id under the
+// same provider: an "other" key such as openrouter bills by its own rates,
+// even for a model id the registry knows. Everything else is unstamped, and
+// OpenCode's own part.cost never enters: it comes from OpenCode's catalog,
+// not from the bill, and reads 0 for a provider it holds no price for.
+func openCodeCost(model string, t TokenCounts) (float64, bool) {
+	provider, id := openCodeServing(model)
+	if models.IsLocalProvider(provider) {
+		return 0, true
+	}
+	if d, ok := registryModel(provider, id); ok {
+		return priceCounts(d, t), true
+	}
+	return 0, false
+}
+
+// OpenCodeModelIdentity returns an opencode stage's model as ADR-022 § 2
+// records it, and the provider that served it (§ 1): a registry model as its
+// bare id ("claude-sonnet-5", "anthropic"), any other model of a known
+// provider as "<provider>/<id>" ("lm-studio/qwen/qwen3.8-27b", "lm-studio"),
+// and a model of an unrecognized provider key as the raw value, with provider
+// "other". model may be either form a stage carries: the -m value OpenCode
+// was dispatched with, or the recorded form. Both are empty for a value that
+// is neither, such as a tier band or an unknown bare id.
+func OpenCodeModelIdentity(model string) (recorded, provider string) {
+	provider, id := openCodeServing(model)
+	switch {
+	case provider == "":
+		return "", ""
+	case provider == "other":
+		return model, provider
+	}
+	if d, ok := registryModel(provider, id); ok {
+		return d.ID, provider
+	}
+	return provider + "/" + id, provider
+}
+
+// openCodeServing reads an opencode model in either form a stage carries and
+// returns the provider that serves it and the model id under that provider.
+//
+//   - The -m value is "<key>/<id>", split on the first slash, whose key
+//     models.ProviderFor normalizes ("lmstudio" is "lm-studio").
+//   - The recorded form (ADR-022 § 2) writes a registry model as its bare id,
+//     which is never a valid -m, and a local model under its normalized
+//     provider ("lm-studio/<id>"), which is never a key Nightgauge injects.
+//
+// A bare id the registry does not list returns "", "".
+func openCodeServing(model string) (provider, id string) {
+	if !strings.Contains(model, "/") {
+		for _, d := range models.All() {
+			if d.ID == model {
+				return d.Provider, d.ID
+			}
+		}
+		return "", ""
+	}
+	if key, rest, _ := strings.Cut(model, "/"); models.IsLocalProvider(key) && rest != "" {
+		return key, rest
+	}
+	provider = models.ProviderFor(openCodeAdapter, model)
+	_, id, _ = models.ParseOpenCodeModel(model)
+	return provider, id
+}
+
+// registryModel is the registry entry whose id is exactly id and whose
+// provider is provider. A tier band never matches, and neither does an id the
+// registry lists under another provider.
+func registryModel(provider, id string) (models.ModelDescriptor, bool) {
+	if provider == "" || id == "" {
+		return models.ModelDescriptor{}, false
+	}
+	d, ok := models.Resolve(provider, id)
+	if !ok || d.ID != id || d.Provider != provider {
+		return models.ModelDescriptor{}, false
+	}
+	return d, true
+}
+
 // pricingProvider is the single adapter→rate-card mapping this package prices
-// through — shared by CalculateCostForAdapter (recording) and EstimateCost
-// (forecasting) so the two halves of one run cannot resolve to two different
-// providers, which is exactly the asymmetry #696 reported. "" is the anthropic
-// default: the Go layer's own default adapter (claude-headless) is an
-// anthropic one, so a caller carrying no adapter context keeps the historical
-// behavior instead of silently degrading to the providerless "other" path.
-func pricingProvider(adapter string) string {
+// a single-provider adapter through. "" is the anthropic default: the Go
+// layer's own default adapter (claude-headless) is an anthropic one, so a
+// caller carrying no adapter context keeps the historical behavior instead of
+// silently degrading to the providerless "other" path.
+func pricingProvider(adapter, model string) string {
 	if adapter == "" {
 		return "anthropic"
 	}
-	return models.ProviderForAdapter(adapter)
+	return models.ProviderFor(adapter, model)
 }
 
 // ModelForProviderBand translates a model id chosen by a PROVIDER-BLIND caller
@@ -262,8 +352,8 @@ func ModelForProviderBand(provider, model string) (string, bool) {
 }
 
 // priceCounts prices every billable pool for an already-resolved model
-// descriptor. Shared by CalculateCost and CalculateCostForAdapter so the two
-// resolution strategies (anthropic-default vs. adapter-provider-aware) cannot
+// descriptor. Shared by CalculateCost and CalculateCostFor so the two
+// resolution strategies (anthropic-default vs. serving-provider-aware) cannot
 // drift into two different pricing formulas.
 func priceCounts(d models.ModelDescriptor, t TokenCounts) float64 {
 	total := float64(t.Input)*d.Rates.Input + float64(t.Output)*d.Rates.Output

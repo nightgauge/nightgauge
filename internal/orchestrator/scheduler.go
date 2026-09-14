@@ -5867,7 +5867,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 						// 5m per the CalculateCost convention. Per-stage 5m/1h split
 						// is #390. Adapter-aware (#585): prices at the serving
 						// provider's rates, not an anthropic default.
-						anomalyCost, _ = tokens.CalculateCostForAdapter(adapterName, servedModel, tokens.TokenCounts{
+						anomalyCost, _ = tokens.CalculateCostFor(adapterName, servedModel, tokens.TokenCounts{
 							Input: inputTokens, Output: outputTokens, CacheRead: cacheReadTokens,
 							CacheCreation5m: cacheCreationTokens,
 						})
@@ -6109,7 +6109,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				// per the CalculateCost convention. Per-stage 5m/1h split is #390.
 				// Adapter-aware (#585): prices at the serving provider's rates,
 				// not an anthropic default.
-				stageCostForCb, _ = tokens.CalculateCostForAdapter(adapterName, servedModel, tokens.TokenCounts{
+				stageCostForCb, _ = tokens.CalculateCostFor(adapterName, servedModel, tokens.TokenCounts{
 					Input: inputTokens, Output: outputTokens, CacheRead: cacheReadTokens,
 					CacheCreation5m: cacheCreationTokens,
 				})
@@ -7093,7 +7093,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// the CalculateCost convention. Per-stage 5m/1h split is #390.
 			// Adapter-aware (#585): prices at the serving provider's rates, not
 			// an anthropic default.
-			stageCost, _ = tokens.CalculateCostForAdapter(adapterName, model, tokens.TokenCounts{
+			stageCost, _ = tokens.CalculateCostFor(adapterName, model, tokens.TokenCounts{
 				Input: inputTokens, Output: outputTokens, CacheRead: cacheReadTokens,
 				CacheCreation5m: cacheCreationTokens,
 			})
