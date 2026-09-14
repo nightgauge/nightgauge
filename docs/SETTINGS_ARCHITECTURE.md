@@ -278,7 +278,7 @@ opencode:
   model: lmstudio/qwen/qwen3.8-27b # used when a caller names no model
   provider: lm-studio # lm-studio | ollama; the endpoint id is lmstudio | ollama
   base_url: http://127.0.0.1:1234/v1
-  limit:
+  limit: # optional: overrides the limits discovered from the server
     context: 131072 # at or below what the server has loaded, not the model maximum
     output: 8192
   timeouts:
@@ -297,11 +297,17 @@ opencode:
   `npm i --prefix ~/.nightgauge/tools/opencode opencode-ai@<max-tested>`,
   puts the binary at `.nightgauge/tools/opencode/node_modules/.bin/opencode`
   in your home directory; pin the absolute form of that path.
-- A dispatch to the endpoint is refused while `limit.context` or
-  `limit.output` is 0 or missing: OpenCode never compacts a session whose
-  context limit is 0, which is what LM Studio reports. The block declares one
-  endpoint, whose id is `lmstudio` or `ollama`; a model under any other id
-  OpenCode does not know, such as `lmstudio-remote/<model>`, is refused.
+- `limit` is optional. A dispatch discovers the model's window from the
+  server, once per process: the context LM Studio has loaded it with, or the
+  `num_ctx` its Ollama Modelfile sets. `limit.context` and `limit.output`
+  override what is discovered, except that a context above the loaded window
+  is clamped to it with a warning. Where the server reports no output cap, the
+  output limit is the smaller of 32000 and a quarter of the window. A dispatch
+  whose limits neither `limit` nor the server gives is refused: OpenCode never
+  compacts a session whose context limit is 0, which is what LM Studio reports.
+  The block declares one endpoint, whose id is `lmstudio` or `ollama`; a model
+  under any other id OpenCode does not know, such as
+  `lmstudio-remote/<model>`, is refused.
 - `base_url` must be `http` or `https` with no user name or password. A host
   that is not this machine is accepted and reported as `non_loopback: true`.
 - `inherit_user_config` is off by default for security: your OpenCode config

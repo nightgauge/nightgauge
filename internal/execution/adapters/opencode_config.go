@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -202,7 +203,9 @@ type OpenCodeEndpoint struct {
 	// NonLoopback is true when BaseURL's host is not this machine, so a run
 	// on it sends the stage's code over the network.
 	NonLoopback bool
-	// Limit is what the server has loaded.
+	// Limit is the machine-tier override of the limits discovered from the
+	// server (resolveLimit): each one it sets wins, except a context
+	// above the window the server has loaded.
 	Limit config.OpenCodeLimit
 	// HeaderTimeout and ChunkTimeout bound the waits for the first response
 	// byte and between streamed chunks.
@@ -216,8 +219,8 @@ type OpenCodeEndpoint struct {
 // OpenCodeEndpoints returns the endpoints the machine-tier `opencode:` block
 // declares: none, or the one its flat keys describe. A block that declares a
 // server it cannot describe fully is an error, and so is a base_url that is
-// not an http or https URL or that carries credentials. Limits are checked
-// when a stage dispatches to the endpoint (BuildOpenCodeConfig), not here.
+// not an http or https URL or that carries credentials. Limits are resolved
+// when a stage dispatches to the endpoint (resolveLimit), not here.
 func OpenCodeEndpoints(cfg config.OpenCodeConfig) ([]OpenCodeEndpoint, error) {
 	declared := cfg.Provider != "" || cfg.BaseURL != "" || cfg.Limit != (config.OpenCodeLimit{}) ||
 		cfg.Timeouts != (config.OpenCodeTimeouts{})
@@ -329,6 +332,12 @@ type OpenCodeConfigInput struct {
 	// steering and the MCP servers (codexprovision.ProvisionOpenCode, which
 	// PrepareOpenCodeRun reads). Its zero value gives none.
 	Repository codexprovision.OpenCodeProvision
+	// Discover returns the descriptor of model, a "<key>/<id>", on the
+	// declared endpoint ep: the default source of the endpoint's limits
+	// (resolveLimit). OpenCodeConfigInputFor sets it to
+	// openCodeLocalDiscovery; nil discovers nothing, so only the machine-tier
+	// override describes a model.
+	Discover func(ep OpenCodeEndpoint, model string) (models.LocalDescriptor, error)
 }
 
 // OpenCodeConfigInputFor is the input a dispatch of run gets on a machine
@@ -352,7 +361,42 @@ func OpenCodeConfigInputFor(settings config.OpenCodeConfig, run RunOptions, runR
 		Formatter: orDefault(settings.Formatter, true),
 		RunRoot:   runRoot,
 		Lookup:    lookup,
+		Discover:  openCodeLocalDiscovery,
 	}, nil
+}
+
+// openCodeLocalDiscovery is the descriptor of model on the declared endpoint
+// ep, discovered from the server at the endpoint's base URL once per process
+// (models.ResolveLocal), or what a test binary swapped in for it
+// (SwapOpenCodeLocalDiscoveryForTest).
+func openCodeLocalDiscovery(ep OpenCodeEndpoint, model string) (models.LocalDescriptor, error) {
+	openCodeLocalDiscoveryMu.RLock()
+	override := openCodeLocalDiscoveryOverride
+	openCodeLocalDiscoveryMu.RUnlock()
+	if override != nil {
+		return override(ep, model)
+	}
+	return models.ResolveLocal("opencode", model, models.LocalEndpoint{ID: ep.ID, Provider: ep.Provider, BaseURL: ep.BaseURL})
+}
+
+var (
+	openCodeLocalDiscoveryMu       sync.RWMutex
+	openCodeLocalDiscoveryOverride func(OpenCodeEndpoint, string) (models.LocalDescriptor, error)
+)
+
+// SwapOpenCodeLocalDiscoveryForTest makes every dispatch's discovery answer
+// with f until the returned function restores it, so no test asks a model
+// server it does not run. nil restores the real discovery.
+func SwapOpenCodeLocalDiscoveryForTest(f func(ep OpenCodeEndpoint, model string) (models.LocalDescriptor, error)) (restore func()) {
+	openCodeLocalDiscoveryMu.Lock()
+	prev := openCodeLocalDiscoveryOverride
+	openCodeLocalDiscoveryOverride = f
+	openCodeLocalDiscoveryMu.Unlock()
+	return func() {
+		openCodeLocalDiscoveryMu.Lock()
+		openCodeLocalDiscoveryOverride = prev
+		openCodeLocalDiscoveryMu.Unlock()
+	}
 }
 
 // OpenCodeRunConfig is a built per-run config.
@@ -367,6 +411,10 @@ type OpenCodeRunConfig struct {
 	// endpoint whose base URL is on this machine. A hosted provider's model
 	// runs elsewhere, so it is true for every other dispatch.
 	NonLoopback bool
+	// Warnings are what the config changed from the machine-tier config,
+	// such as a context limit clamped to the server's loaded window.
+	// PrepareOpenCodeRun prints each on stderr.
+	Warnings []string
 }
 
 // The JSON shape of OPENCODE_CONFIG_CONTENT. Every key is one opencode
@@ -502,10 +550,12 @@ type openCodeAnthropicOptionsJSON struct {
 //     loads no other provider from credentials the stage keeps for its tools
 //     (the forge tokens, AWS and Google Cloud) and not its own free one;
 //   - the dispatched provider's block: a complete block for a declared
-//     endpoint, keyed by the endpoint's id, with its limits, timeouts and
-//     tool calls, or the anthropic block, with its SDK package, API root and
-//     key reference; in either, the dispatched model's entry pins the model
-//     id OpenCode sends and the SDK package that sends it;
+//     endpoint, keyed by the endpoint's id, with its limits
+//     (resolveLimit: the machine-tier override, else the
+//     descriptor in.Discover discovers from the server), timeouts and tool
+//     calls, or the anthropic block, with its SDK package, API root and key
+//     reference; in either, the dispatched model's entry pins the model id
+//     OpenCode sends and the SDK package that sends it;
 //   - steps on the build, plan, general and explore agents; the legacy
 //     mode.<name> entry of every agent in openCodePinnedModeAgents, the same
 //     as its agent entry; subagent_depth; the title agent disabled;
@@ -522,7 +572,7 @@ type openCodeAnthropicOptionsJSON struct {
 // endpoint nor a provider OpenCode's bundled catalog knows, a local one
 // included; an anthropic model whose entry it cannot pin: one the bundled
 // catalog does not list, or a fast-mode entry (openCodeAnthropicModelRefusal);
-// an endpoint whose limit.context or limit.output is 0 or missing; a
+// an endpoint model whose limits neither the override nor discovery gives; a
 // repository instructions entry or MCP server it cannot write safely; and
 // content holding a {env:NAME} whose variable holds a value OpenCode cannot
 // paste into its config text (openCodeUnpastableRefs), ANTHROPIC_API_KEY's
@@ -557,10 +607,15 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 	_, catalogKey := openCodeCatalogEnv[key]
 	switch ep, declared := findOpenCodeEndpoint(in.Endpoints, key); {
 	case declared:
-		limit, err := ep.effectiveLimit(in.Run.MaxTokens)
+		desc, discoverErr := models.LocalDescriptor{}, errors.New("nothing discovers it")
+		if in.Discover != nil {
+			desc, discoverErr = in.Discover(ep, model)
+		}
+		limit, warnings, err := ep.resolveLimit(modelID, in.Run.MaxTokens, desc, discoverErr)
 		if err != nil {
 			return OpenCodeRunConfig{}, err
 		}
+		built.Warnings = warnings
 		file := openCodeEndpointURLFile(in.RunRoot, ep.ID)
 		providers[ep.ID] = openCodeEndpointBlockJSON{
 			NPM: openCodeEndpointNPM,
@@ -586,7 +641,7 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 	case openCodeIsLocalKey(model):
 		return OpenCodeRunConfig{}, fmt.Errorf(
 			"model %q names provider key %q, a model server you run, but the machine-tier opencode: config declares no endpoint with that id, so its limits are unknown: LM Studio reports a context limit of 0, and OpenCode never compacts a session whose limit is 0. "+
-				"Set opencode.provider, opencode.base_url, opencode.limit.context and opencode.limit.output in ~/.nightgauge/config.yaml. See docs/SETTINGS_ARCHITECTURE.md",
+				"Set opencode.provider and opencode.base_url in ~/.nightgauge/config.yaml; the limits are discovered from the server, and opencode.limit.context and opencode.limit.output override them. See docs/SETTINGS_ARCHITECTURE.md",
 			model, key)
 	case !catalogKey:
 		return OpenCodeRunConfig{}, fmt.Errorf(
@@ -757,31 +812,80 @@ func openCodeCompaction(known *config.OpenCodeLimit) openCodeCompactionJSON {
 	return c
 }
 
-// effectiveLimit is the endpoint's limit for a dispatch whose token cap is
-// maxTokens: limit.output is lowered to the cap when one is set. Either limit
-// at 0 is refused, because OpenCode never compacts a session whose context
-// limit is 0 (opencode 1.18.30's overflow check returns false for it) and a
-// session then runs into the server's loaded window.
-func (ep OpenCodeEndpoint) effectiveLimit(maxTokens int) (config.OpenCodeLimit, error) {
-	limit := ep.Limit
+// openCodeOutputTokenMax is the most opencode 1.18.30 asks a model for in one
+// reply, and what it asks for when the model's limit.output is 0 (its
+// OUTPUT_TOKEN_MAX).
+const openCodeOutputTokenMax = 32000
+
+// resolveLimit is the limits a dispatch of modelID, the id after the
+// endpoint's key, gets on ep, with the warnings to print (ADR-022 § 7, § 13).
+// desc is the model's descriptor as discovered from the server, and
+// discoverErr the reason it is unresolved. Each limit is:
+//
+//   - the machine-tier override in ep.Limit when it sets one, except that a
+//     context above the window the server has loaded the model with is
+//     clamped to that window, with a warning, because the server fails a
+//     request past it;
+//   - otherwise the descriptor's: its context window, and its output cap or,
+//     since LM Studio reports none, the smaller of OpenCode's own reply cap
+//     and a quarter of the window;
+//   - otherwise the dispatch is refused with the reason discovery gave.
+//
+// A limit is never 0: OpenCode never compacts a session whose context limit
+// is 0 (opencode 1.18.30's overflow check returns false for it), and a
+// session then runs into the server's loaded window. limit.output is then
+// lowered to maxTokens when one is set.
+func (ep OpenCodeEndpoint) resolveLimit(modelID string, maxTokens int, desc models.LocalDescriptor, discoverErr error) (config.OpenCodeLimit, []string, error) {
+	key := ep.ConfigKey
 	for _, v := range []struct {
 		name  string
 		value int
-	}{{"context", limit.Context}, {"output", limit.Output}} {
-		if v.value <= 0 {
-			return config.OpenCodeLimit{}, fmt.Errorf(
-				"%s.limit.%s is 0 or missing for endpoint %s: OpenCode compacts a session only when it knows the model's limits, and with a context limit of 0 it never does, so the stage would run into the server's loaded window. "+
-					"Set %s.limit.context to the context the server has loaded (at or below it, not the model's maximum) and %s.limit.output to the most one reply may use, in ~/.nightgauge/config.yaml",
-				ep.ConfigKey, v.name, ep.ID, ep.ConfigKey, ep.ConfigKey)
+	}{{"context", ep.Limit.Context}, {"output", ep.Limit.Output}} {
+		if v.value < 0 {
+			return config.OpenCodeLimit{}, nil, fmt.Errorf("%s.limit.%s is negative (%d) for endpoint %s: set it to a number of tokens, or remove it to use the value discovered from the server", key, v.name, v.value, ep.ID)
 		}
 	}
-	if limit.Output >= limit.Context {
-		return config.OpenCodeLimit{}, fmt.Errorf("%s.limit.output (%d) must be less than %s.limit.context (%d) for endpoint %s: a reply cannot take the whole window", ep.ConfigKey, limit.Output, ep.ConfigKey, limit.Context, ep.ID)
+	if discoverErr == nil && desc.ContextWindow <= 0 {
+		discoverErr = errors.New("the server reported no context window")
+	}
+	discovered := discoverErr == nil
+	unresolved := func(name, what string) error {
+		return fmt.Errorf(
+			"%s.limit.%s is not set for endpoint %s, and %s could not be discovered from the server (%v). OpenCode compacts a session only when it knows the model's limits, and with a context limit of 0 it never does, so the stage would run into the server's loaded window. "+
+				"Make the server report it, or set %s.limit.context to the context the server has loaded (at or below it, not the model's maximum) and %s.limit.output to the most one reply may use, in ~/.nightgauge/config.yaml",
+			key, name, ep.ID, what, discoverErr, key, key)
+	}
+
+	var warnings []string
+	limit := ep.Limit
+	switch {
+	case limit.Context > 0 && discovered && limit.Context > desc.ContextWindow:
+		warnings = append(warnings, fmt.Sprintf(
+			"%s.limit.context (%d) is larger than the %d tokens endpoint %s has loaded %s with, and the server fails a request past its loaded window: this dispatch uses %d. Set %s.limit.context at or below %d, or load the model with a larger context",
+			key, limit.Context, desc.ContextWindow, ep.ID, modelID, desc.ContextWindow, key, desc.ContextWindow))
+		limit.Context = desc.ContextWindow
+	case limit.Context > 0:
+	case discovered:
+		limit.Context = desc.ContextWindow
+	default:
+		return config.OpenCodeLimit{}, nil, unresolved("context", "the window it has loaded "+modelID+" with")
+	}
+	switch {
+	case limit.Output > 0:
+	case discovered && desc.MaxOutput > 0:
+		limit.Output = desc.MaxOutput
+	case discovered:
+		limit.Output = min(openCodeOutputTokenMax, limit.Context/4)
+	default:
+		return config.OpenCodeLimit{}, nil, unresolved("output", "the most one reply from "+modelID+" may use")
+	}
+	if limit.Output <= 0 || limit.Output >= limit.Context {
+		return config.OpenCodeLimit{}, nil, fmt.Errorf("%s.limit.output (%d) must be more than 0 and less than %s.limit.context (%d) for endpoint %s: a reply cannot take the whole window", key, limit.Output, key, limit.Context, ep.ID)
 	}
 	if maxTokens > 0 && maxTokens < limit.Output {
 		limit.Output = maxTokens
 	}
-	return limit, nil
+	return limit, warnings, nil
 }
 
 func findOpenCodeEndpoint(endpoints []OpenCodeEndpoint, key string) (OpenCodeEndpoint, bool) {
@@ -1056,6 +1160,9 @@ func PrepareOpenCodeRun(req OpenCodeRunRequest) (*OpenCodeRun, error) {
 		}
 	}
 
+	for _, warning := range built.Warnings {
+		fmt.Fprintf(os.Stderr, "[opencode] %s\n", warning)
+	}
 	root, created, err := EnsureOpenCodeRunRoot(req.Home, req.ID, req.Lookup)
 	if err != nil {
 		return nil, err

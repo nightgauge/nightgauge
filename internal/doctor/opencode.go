@@ -20,13 +20,15 @@ import (
 //
 // The row answers what a dispatch would meet on this machine, in the order a
 // dispatch meets it: the experimental enable gate, the machine-tier
-// `opencode:` block, the binary (opencode.binary's pin or the opencode on
-// PATH), the compat manifest's version policy, the catalog `opencode models`
-// lists under the per-run config, the OpenCode config on this machine a run
-// cannot be isolated from, and the readiness of every model server the block
-// declares. It also prints what a run is isolated into, the offline posture
-// the per-run config sets, stored logins OpenCode holds for Anthropic, and
-// whether the binary changed since the last dispatch.
+// `opencode:` block and the per-run config it gives opencode.model, limits
+// discovered from the server included, the binary (opencode.binary's pin or
+// the opencode on PATH), the compat manifest's version policy, the catalog
+// `opencode models` lists under the per-run config, the OpenCode config on
+// this machine a run cannot be isolated from, and the readiness of every
+// model server the block declares, against the context limit a dispatch
+// gives OpenCode. It also prints what a run is isolated into, the offline
+// posture the per-run config sets, stored logins OpenCode holds for
+// Anthropic, and whether the binary changed since the last dispatch.
 //
 // A blocking finding makes the row not OK, which is also what cap recovery
 // reads (orchestrator.AdapterUsableForCapHop calls CheckAdapters): the
@@ -265,6 +267,23 @@ func checkOpenCode(name string, spec adapterSpec, probe adapterProbe) AdapterHea
 	oc.Offline = openCodeOfflinePosture(settings.Model, endpoints)
 	h.Notes = append(h.Notes, oc.Offline)
 
+	// run is the per-run config a dispatch of opencode.model gets, nil when
+	// no model is set or the adapter refuses to build it. The refusal
+	// blocks, and what the build changed from the machine-tier config, such
+	// as a context limit clamped to the server's loaded window, warns.
+	var run *adapters.OpenCodeRunConfig
+	if settings.Model != "" && endpointErr == nil {
+		built, err := openCodePerRunConfig(p, settings, settings.Model)
+		if err != nil {
+			block(err.Error())
+		} else {
+			run = &built
+			for _, w := range built.Warnings {
+				warn(w)
+			}
+		}
+	}
+
 	oc.Pinned = settings.Binary != ""
 	bin, binErr := adapters.ResolveOpenCodeBinary(settings.Binary, p.lookPath)
 	if binErr != nil {
@@ -288,7 +307,10 @@ func checkOpenCode(name string, spec adapterSpec, probe adapterProbe) AdapterHea
 			}
 			checkOpenCodeDrift(p, home, bin, version, oc, warn)
 			if settings.Model != "" && endpointErr == nil {
-				checkOpenCodeCatalog(&h, p, bin, settings, block, warn)
+				h.Model = settings.Model
+				if run != nil {
+					checkOpenCodeCatalog(&h, p, bin, settings, *run, block, warn)
+				}
 			}
 		}
 	}
@@ -311,7 +333,7 @@ func checkOpenCode(name string, spec adapterSpec, probe adapterProbe) AdapterHea
 	}
 
 	if endpointErr == nil {
-		checkOpenCodeEndpoints(p, settings, endpoints, oc, block, warn)
+		checkOpenCodeEndpoints(p, settings, endpoints, run, oc, block, warn)
 	}
 
 	h.OK = len(blocking) == 0
@@ -372,10 +394,10 @@ func checkOpenCodeDrift(p openCodeProbe, home string, bin adapters.OpenCodeBinar
 		bin.Path, orUnset(version), rec.Version, where, pinAdvice))
 }
 
-// checkOpenCodeCatalog runs `opencode models` under the per-run config for
-// opencode.model and reports whether the model is in it. A config the
-// adapter would refuse to build is a blocking finding (the dispatch would be
-// refused the same way); a probe that could not run is a warning.
+// checkOpenCodeCatalog runs `opencode models` under built, the per-run config
+// for opencode.model, and reports whether the model is in it. A config the
+// adapter would refuse to build is checkOpenCode's blocking finding, so this
+// runs only on one it builds; a probe that could not run is a warning.
 //
 // What the listing shows depends on whether the per-run config declares the
 // model:
@@ -400,14 +422,8 @@ func checkOpenCodeDrift(p openCodeProbe, home string, bin adapters.OpenCodeBinar
 // none of its variables set, and one holding a model entry for it adds the
 // model to the listing. For a model the per-run config does not declare, a
 // listing that lacks it is then a warning that says so, never a block.
-func checkOpenCodeCatalog(h *AdapterHealth, p openCodeProbe, bin adapters.OpenCodeBinary, settings config.OpenCodeConfig, block, warn func(string)) {
+func checkOpenCodeCatalog(h *AdapterHealth, p openCodeProbe, bin adapters.OpenCodeBinary, settings config.OpenCodeConfig, built adapters.OpenCodeRunConfig, block, warn func(string)) {
 	model := settings.Model
-	h.Model = model
-	built, err := openCodePerRunConfig(p, settings, model)
-	if err != nil {
-		block(err.Error())
-		return
-	}
 	out, err := p.models(bin.Path, settings, model)
 	if err != nil {
 		warn("the catalog probe `opencode models` could not run: " + err.Error())
@@ -488,17 +504,47 @@ func openCodeDeclaresModel(content, model string) bool {
 	return ok
 }
 
+// openCodeInjectedContext is the limit.context content, a per-run config,
+// gives model id on the provider block key, or 0 when it gives none.
+func openCodeInjectedContext(content, key, id string) int {
+	var cfg struct {
+		Provider map[string]struct {
+			Models map[string]struct {
+				Limit struct {
+					Context int `json:"context"`
+				} `json:"limit"`
+			} `json:"models"`
+		} `json:"provider"`
+	}
+	if json.Unmarshal([]byte(content), &cfg) != nil {
+		return 0
+	}
+	return cfg.Provider[key].Models[id].Limit.Context
+}
+
 // checkOpenCodeEndpoints probes every model server the block declares. A
 // server that is not ready blocks when opencode.model runs on it; otherwise
 // it is a warning. A context warning is always a warning.
-func checkOpenCodeEndpoints(p openCodeProbe, settings config.OpenCodeConfig, endpoints []adapters.OpenCodeEndpoint, oc *OpenCodeHealth, block, warn func(string)) {
+//
+// The context the probe compares is the one a dispatch gives OpenCode: for
+// opencode.model's endpoint, the limit.context run, the per-run config, holds
+// for the model, which the machine-tier override sets or discovery fills and
+// which is clamped to the loaded window; 0 when the config did not build,
+// whose refusal is checkOpenCode's finding. Another endpoint's is the
+// override, when the block sets one.
+func checkOpenCodeEndpoints(p openCodeProbe, settings config.OpenCodeConfig, endpoints []adapters.OpenCodeEndpoint, run *adapters.OpenCodeRunConfig, oc *OpenCodeHealth, block, warn func(string)) {
 	key, modelID, _ := strings.Cut(settings.Model, "/")
 	for _, ep := range endpoints {
 		model := ""
+		injected := ep.Limit.Context
 		if key == ep.ID {
 			model = modelID
+			injected = 0
+			if run != nil {
+				injected = openCodeInjectedContext(run.Content, ep.ID, modelID)
+			}
 		}
-		r := p.endpoint(adapters.OpenCodeEndpointTarget{ID: ep.ID, Kind: ep.Provider, BaseURL: ep.BaseURL}, model, ep.Limit.Context)
+		r := p.endpoint(adapters.OpenCodeEndpointTarget{ID: ep.ID, Kind: ep.Provider, BaseURL: ep.BaseURL}, model, injected)
 		oc.Endpoints = append(oc.Endpoints, r)
 		switch {
 		case !r.Ready && model != "":

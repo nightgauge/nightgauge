@@ -3,16 +3,21 @@ package adapters
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
+	"github.com/nightgauge/nightgauge/internal/models"
 )
 
 // fixedOpenCodeSettings stands in for the machine-tier `opencode:` block, so
@@ -153,29 +158,41 @@ func TestOpenCodeConfigGolden(t *testing.T) {
 	}
 }
 
-// TestOpenCodeConfigRefusesAZeroLimit: LM Studio reports a context limit of
-// 0, and OpenCode never compacts a session whose limit is 0, so a stage would
-// run into the loaded window. A limit of 0, or one that is missing, refuses
-// the config with an error naming the key and saying what to set.
-func TestOpenCodeConfigRefusesAZeroLimit(t *testing.T) {
+// TestOpenCodeConfigRefusesAnUnresolvedLimit: LM Studio reports a context
+// limit of 0 to OpenCode, and OpenCode never compacts a session whose limit is
+// 0, so a stage would run into the loaded window. A limit the machine-tier
+// config does not set and discovery cannot find refuses the config with an
+// error naming the key, the reason discovery gave, and what to set. A
+// negative limit, and an output limit as large as the window, are refused
+// too.
+func TestOpenCodeConfigRefusesAnUnresolvedLimit(t *testing.T) {
 	run := RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b", MaxTurns: 40}
+	build := func(limit config.OpenCodeLimit) (OpenCodeRunConfig, error) {
+		settings := lmStudioSettings()
+		settings.Limit = limit
+		in, err := OpenCodeConfigInputFor(settings, run, goldenRunRoot, envLookup(nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		in.Discover = func(OpenCodeEndpoint, string) (models.LocalDescriptor, error) {
+			return models.LocalDescriptor{}, errors.New("the server refused the connection")
+		}
+		return BuildOpenCodeConfig(in)
+	}
 	for name, tc := range map[string]struct {
 		limit config.OpenCodeLimit
 		key   string
 	}{
-		"context 0":       {config.OpenCodeLimit{Context: 0, Output: 8192}, "opencode.limit.context"},
-		"output 0":        {config.OpenCodeLimit{Context: 131072, Output: 0}, "opencode.limit.output"},
-		"both missing":    {config.OpenCodeLimit{}, "opencode.limit.context"},
-		"negative output": {config.OpenCodeLimit{Context: 131072, Output: -1}, "opencode.limit.output"},
+		"context 0":    {config.OpenCodeLimit{Context: 0, Output: 8192}, "opencode.limit.context"},
+		"output 0":     {config.OpenCodeLimit{Context: 131072, Output: 0}, "opencode.limit.output"},
+		"both missing": {config.OpenCodeLimit{}, "opencode.limit.context"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			settings := lmStudioSettings()
-			settings.Limit = tc.limit
-			built, err := buildOpenCodeConfigFor(t, settings, run, nil)
+			built, err := build(tc.limit)
 			if err == nil {
-				t.Fatalf("a config was built with limit %+v: %s", tc.limit, built.Content)
+				t.Fatalf("a config was built with limit %+v and nothing discovered: %s", tc.limit, built.Content)
 			}
-			for _, want := range []string{tc.key, "endpoint lmstudio", "never", "~/.nightgauge/config.yaml"} {
+			for _, want := range []string{tc.key, "endpoint lmstudio", "the server refused the connection", "never", "~/.nightgauge/config.yaml"} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("the refusal does not say %q: %v", want, err)
 				}
@@ -183,10 +200,189 @@ func TestOpenCodeConfigRefusesAZeroLimit(t *testing.T) {
 		})
 	}
 
-	settings := lmStudioSettings()
-	settings.Limit = config.OpenCodeLimit{Context: 8192, Output: 8192}
-	if _, err := buildOpenCodeConfigFor(t, settings, run, nil); err == nil || !strings.Contains(err.Error(), "must be less than") {
+	for _, limit := range []config.OpenCodeLimit{{Context: 131072, Output: -1}, {Context: -1, Output: 8192}} {
+		if _, err := build(limit); err == nil || !strings.Contains(err.Error(), "is negative") {
+			t.Errorf("a negative limit %+v was accepted: %v", limit, err)
+		}
+	}
+	if _, err := build(config.OpenCodeLimit{Context: 8192, Output: 8192}); err == nil || !strings.Contains(err.Error(), "less than opencode.limit.context") {
 		t.Errorf("an output limit as large as the window was accepted: %v", err)
+	}
+}
+
+// discoveredOpenCodeInput is the input of the reference dispatch on a machine
+// whose endpoint override is limit, where the server reports desc for the
+// dispatched model. It fails the test if discovery is asked about anything
+// but the declared endpoint and the dispatched model.
+func discoveredOpenCodeInput(t *testing.T, limit config.OpenCodeLimit, maxTokens int, desc models.LocalDescriptor, discoverErr error) OpenCodeConfigInput {
+	t.Helper()
+	settings := lmStudioSettings()
+	settings.Limit = limit
+	const model = "lmstudio/qwen/qwen3.8-27b"
+	in, err := OpenCodeConfigInputFor(settings, RunOptions{Stage: "feature-dev", Model: model, MaxTokens: maxTokens}, goldenRunRoot, envLookup(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.Discover = func(ep OpenCodeEndpoint, got string) (models.LocalDescriptor, error) {
+		if ep.ID != "lmstudio" || ep.Provider != "lm-studio" || ep.BaseURL != settings.BaseURL || got != model {
+			t.Errorf("discovery was asked for %q on endpoint %+v; want %s on the declared lmstudio endpoint", got, ep, model)
+		}
+		return desc, discoverErr
+	}
+	return in
+}
+
+// endpointModelLimit is the dispatched model's limit.<key> and the
+// compaction reserve in built content.
+func endpointModelLimit(t *testing.T, built OpenCodeRunConfig) (context, input, output, reserved any) {
+	t.Helper()
+	doc := decodeOpenCodeConfig(t, built.Content)
+	limit := func(key string) any {
+		return jsonPath(doc, "provider", "lmstudio", "models", "qwen/qwen3.8-27b", "limit", key)
+	}
+	return limit("context"), limit("input"), limit("output"), jsonPath(doc, "compaction", "reserved")
+}
+
+// TestOpenCodeConfigLimitsFromTheDescriptor: with no machine-tier override,
+// the endpoint model's limits are the descriptor discovered from the server:
+// its loaded window, and its output cap or, where the server reports none,
+// the smaller of OpenCode's own 32000-token reply cap and a quarter of the
+// window. An override of one limit keeps the other discovered.
+func TestOpenCodeConfigLimitsFromTheDescriptor(t *testing.T) {
+	lmStudio := models.LocalDescriptor{Endpoint: "lmstudio", Provider: "lm-studio", Model: "qwen/qwen3.8-27b", ContextWindow: 131072, ToolCall: true}
+	capped := lmStudio
+	capped.MaxOutput = 4096
+	small := lmStudio
+	small.ContextWindow = 16384
+	for _, tc := range []struct {
+		name            string
+		limit           config.OpenCodeLimit
+		maxTokens       int
+		desc            models.LocalDescriptor
+		context, output int
+	}{
+		{"no override", config.OpenCodeLimit{}, 0, lmStudio, 131072, 32000},
+		{"the server's output cap", config.OpenCodeLimit{}, 0, capped, 131072, 4096},
+		{"a small window", config.OpenCodeLimit{}, 0, small, 16384, 4096},
+		{"the stage's token cap", config.OpenCodeLimit{}, 2048, lmStudio, 131072, 2048},
+		{"an output override", config.OpenCodeLimit{Output: 8192}, 0, lmStudio, 131072, 8192},
+		{"a context override below the window", config.OpenCodeLimit{Context: 65536}, 0, lmStudio, 65536, 16384},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			built, err := BuildOpenCodeConfig(discoveredOpenCodeInput(t, tc.limit, tc.maxTokens, tc.desc, nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+			context, input, output, reserved := endpointModelLimit(t, built)
+			if context != float64(tc.context) || input != float64(tc.context) || output != float64(tc.output) || reserved != float64(tc.output) {
+				t.Errorf("limit.context %v, limit.input %v, limit.output %v, compaction.reserved %v; want %d, %d, %d, %d",
+					context, input, output, reserved, tc.context, tc.context, tc.output, tc.output)
+			}
+			if len(built.Warnings) != 0 {
+				t.Errorf("warnings for limits at or below the window: %q", built.Warnings)
+			}
+		})
+	}
+}
+
+// TestOpenCodeConfigClampsTheContextOverride: a machine-tier context limit
+// above the window the server has loaded is clamped to that window, because
+// the server fails a request past it, and the warning says so, naming the
+// endpoint by id and never its address. An override the server could not be
+// asked about is used as it is.
+func TestOpenCodeConfigClampsTheContextOverride(t *testing.T) {
+	desc := models.LocalDescriptor{Endpoint: "lmstudio", Provider: "lm-studio", Model: "qwen/qwen3.8-27b", ContextWindow: 131072, ToolCall: true}
+	built, err := BuildOpenCodeConfig(discoveredOpenCodeInput(t, config.OpenCodeLimit{Context: 200000, Output: 8192}, 0, desc, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	context, input, output, _ := endpointModelLimit(t, built)
+	if context != float64(131072) || input != float64(131072) || output != float64(8192) {
+		t.Errorf("limit.context %v, limit.input %v, limit.output %v; want the loaded window 131072, 131072 and the override 8192", context, input, output)
+	}
+	if len(built.Warnings) != 1 {
+		t.Fatalf("warnings = %q; want the clamp's", built.Warnings)
+	}
+	for _, want := range []string{"opencode.limit.context (200000)", "131072", "endpoint lmstudio", "qwen/qwen3.8-27b", "uses 131072"} {
+		if !strings.Contains(built.Warnings[0], want) {
+			t.Errorf("the warning does not say %q: %s", want, built.Warnings[0])
+		}
+	}
+	if strings.Contains(built.Warnings[0], "127.0.0.1") {
+		t.Errorf("the warning names the endpoint's address: %s", built.Warnings[0])
+	}
+
+	built, err = BuildOpenCodeConfig(discoveredOpenCodeInput(t, config.OpenCodeLimit{Context: 200000, Output: 8192}, 0, models.LocalDescriptor{}, errors.New("the server refused the connection")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if context, _, _, _ := endpointModelLimit(t, built); context != float64(200000) || len(built.Warnings) != 0 {
+		t.Errorf("with nothing discovered: limit.context %v, warnings %q; want the override 200000 and none", context, built.Warnings)
+	}
+}
+
+// TestPrepareOpenCodeRunDiscoversFromTheMachineTierEndpoint: a dispatch
+// discovers the model's window from the server the machine-tier config
+// declares, once, and prints the clamp's warning; the server a repository's
+// opencode.json names is never asked.
+func TestPrepareOpenCodeRunDiscoversFromTheMachineTierEndpoint(t *testing.T) {
+	t.Cleanup(SwapOpenCodeLocalDiscoveryForTest(nil))
+	const model = "qwen/prepare-run-discovery"
+	listing := func(loaded int) string {
+		return `{"data":[{"id":"` + model + `","object":"model","type":"llm","state":"loaded","max_context_length":262144,"loaded_context_length":` + strconv.Itoa(loaded) + `,"capabilities":["tool_use"]}],"object":"list"}`
+	}
+	var mu sync.Mutex
+	hits := map[string]int{}
+	server := func(name string, body string) *httptest.Server {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			hits[name+" "+r.Method+" "+r.URL.Path]++
+			mu.Unlock()
+			_, _ = w.Write([]byte(body))
+		}))
+		t.Cleanup(srv.Close)
+		return srv
+	}
+	machine := server("machine", listing(65536))
+	repository := server("repository", listing(262144))
+
+	wt := openCodeFixtureRepo(t, map[string]string{
+		"AGENTS.md":     "# Rules\n",
+		"opencode.json": `{"provider":{"lmstudio":{"options":{"baseURL":"` + repository.URL + `/v1"}}}}`,
+	})
+	settings := config.OpenCodeConfig{Provider: "lm-studio", BaseURL: machine.URL + "/v1", Limit: config.OpenCodeLimit{Context: 200000, Output: 8192}}
+	home := t.TempDir()
+	var run *OpenCodeRun
+	var err error
+	stderr := captureAdapterStderr(t, func() {
+		run, err = PrepareOpenCodeRun(withMcpForge(OpenCodeRunRequest{
+			Home:               home,
+			ID:                 testRunID,
+			MachineConfigDir:   filepath.Join(home, ".nightgauge"),
+			Run:                RunOptions{Stage: "feature-dev", Model: "lmstudio/" + model, WorktreeDir: wt},
+			Settings:           settings,
+			Lookup:             envLookup(nil),
+			GOOS:               "linux",
+			ManagedConfigFiles: []string{},
+		}, nil))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := decodeOpenCodeConfig(t, run.ConfigContent)
+	if got := jsonPath(doc, "provider", "lmstudio", "models", model, "limit", "context"); got != float64(65536) {
+		t.Errorf("limit.context = %v; want 65536, the window the machine-tier endpoint has loaded", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(hits) != 1 || hits["machine GET /api/v0/models"] != 1 {
+		t.Errorf("requests = %v; want one GET /api/v0/models to the machine-tier endpoint and none to the repository's", hits)
+	}
+	if !strings.Contains(stderr, "[opencode] opencode.limit.context (200000) is larger than the 65536 tokens endpoint lmstudio has loaded") {
+		t.Errorf("stderr lacks the clamp's warning:\n%s", stderr)
+	}
+	if host := strings.TrimPrefix(machine.URL, "http://"); strings.Contains(stderr, host) {
+		t.Errorf("stderr names the endpoint's address:\n%s", stderr)
 	}
 }
 
