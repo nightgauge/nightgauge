@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -135,7 +136,7 @@ func defaultOpenCodeProbe() openCodeProbe {
 		machineConfigDir: config.MachineConfigDir,
 		settings:         func() (config.OpenCodeConfig, error) { return config.LoadOpenCodeConfig("") },
 		lookPath:         exec.LookPath,
-		version:          adapters.OpenCodeVersionOf,
+		version:          func(bin string) (string, error) { return adapters.OpenCodeVersionOf(context.Background(), bin) },
 		models:           runOpenCodeModels,
 		endpoint: func(target adapters.OpenCodeEndpointTarget, model string, injected int) adapters.OpenCodeEndpointReadiness {
 			return adapters.ProbeOpenCodeEndpoint(nil, target, model, injected)
@@ -173,7 +174,7 @@ func runOpenCodeModels(bin string, settings config.OpenCodeConfig, model string)
 		return "", err
 	}
 	set, _ := adapters.OpenCodeProviderVars(model, os.LookupEnv)
-	res, err := probe.Run(bin, []string{"models"}, built.Content, built.Files, set...)
+	res, err := probe.Run(context.Background(), bin, []string{"models"}, built.Content, built.Files, set...)
 	if err != nil {
 		return "", err
 	}

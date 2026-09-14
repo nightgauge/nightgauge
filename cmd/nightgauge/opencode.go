@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -92,7 +93,7 @@ notices go to stderr.`,
 			if !asJSON {
 				return errors.New("pass --json: the command prints JSON only")
 			}
-			run, err := openCodeConfigForStage(openCodeConfigFlags{
+			run, err := openCodeConfigForStage(cmd.Context(), openCodeConfigFlags{
 				stage: stage, worktree: worktree, model: model, runID: runID,
 				maxTurns: maxTurns, maxTokens: maxTokens,
 			})
@@ -127,7 +128,7 @@ type openCodeConfigFlags struct {
 // the manager does, and prepares the run through adapters.PrepareOpenCodeRun,
 // the function the adapter's PrepareRunRoot calls, with the one machine-tier
 // block it read.
-func openCodeConfigForStage(f openCodeConfigFlags) (*adapters.OpenCodeRun, error) {
+func openCodeConfigForStage(ctx context.Context, f openCodeConfigFlags) (*adapters.OpenCodeRun, error) {
 	stage := strings.TrimSpace(f.stage)
 	if stage == "" {
 		return nil, errors.New("--stage is required")
@@ -162,7 +163,7 @@ func openCodeConfigForStage(f openCodeConfigFlags) (*adapters.OpenCodeRun, error
 		MaxTokens:   f.maxTokens,
 	}
 	adapter := adapters.NewOpenCodeAdapter()
-	if err := adapter.PreDispatch(run); err != nil {
+	if err := adapter.PreDispatch(ctx, run); err != nil {
 		return nil, err
 	}
 	if err := adapter.ValidateModel(model); err != nil {

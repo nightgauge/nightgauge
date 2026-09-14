@@ -16,7 +16,6 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/config"
-	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 )
 
 // TestOpenCodeCatalogProbeOnTheBinary: for a hosted provider whose block the
@@ -45,7 +44,7 @@ func TestOpenCodeCatalogProbeOnTheBinary(t *testing.T) {
 				f.env["OPENAI_API_KEY"] = c.credential
 			}
 			f.probe.lookPath = func(string) (string, error) { return bin, nil }
-			f.probe.version = adapters.OpenCodeVersionOf
+			f.probe.version = defaultOpenCodeProbe().version
 			f.probe.models = runOpenCodeModels
 			h := f.check()
 			text := rowText(t, h)
