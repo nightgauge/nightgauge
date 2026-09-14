@@ -1397,11 +1397,14 @@ esac
 	return acc, result, string(calls)
 }
 
-// openCodeStageCost prices a replayed stage by the provider its RunResult
-// records, never by the adapter (ADR-022 § 1, § 3): a local provider's model
+// openCodeStageCost models ADR-022 § 3's intended stamp: it prices a replayed
+// stage by the provider its RunResult records (ModelProvider, ServedModel),
+// never by the adapter (ADR-022 § 1). Under that rule a local provider's model
 // the registry holds no rate for is a stamped zero, and a registry id is
-// priced from the registry's rate card. #1630 stamps the stage's record from
-// the same two fields.
+// priced from the registry's rate card. It is not the production call: the
+// scheduler prices by the adapter, "opencode", which leaves a local model's
+// stage record unstamped. The record is stamped this way only once #1630
+// lands.
 func openCodeStageCost(r *adapters.RunResult) (float64, bool) {
 	return tokens.CalculateCostForAdapter(r.ModelProvider, r.ServedModel, tokens.TokenCounts{
 		Input: r.InputTokens, Output: r.OutputTokens, CacheRead: r.CacheReadTokens,
@@ -1422,7 +1425,9 @@ var openCodeLocalSteps = []openCodeStepTruth{
 // TestParseOpenCodeRealCaptureLocal: a real run on the lmstudio endpoint. The
 // parser's totals are the README's sums of the three step_finish events,
 // reasoning folded into output; the session's export total equals them; and
-// the stage, served by provider lm-studio, is a stamped zero (ADR-022 § 3).
+// the stage, served by provider lm-studio, is a stamped zero under ADR-022
+// § 3's rule (openCodeStageCost; the stage record is stamped only once #1630
+// lands).
 func TestParseOpenCodeRealCaptureLocal(t *testing.T) {
 	const name = "opencode_stream_local_capture.jsonl"
 	checkOpenCodeCapture(t, name, openCodeLocalSteps)
@@ -1446,7 +1451,7 @@ func TestParseOpenCodeRealCaptureLocal(t *testing.T) {
 		t.Errorf("OpenCode's reported cost = %v, want the capture's 0", result.AdapterReportedCostUSD)
 	}
 	if cost, stamped := openCodeStageCost(result); cost != 0 || !stamped {
-		t.Errorf("cost = %v, stamped = %v; a stage on a local provider is a stamped zero", cost, stamped)
+		t.Errorf("cost = %v, stamped = %v; ADR-022 § 3 stamps a local provider's stage at zero", cost, stamped)
 	}
 }
 
@@ -1597,7 +1602,7 @@ func TestParseOpenCodeRealCaptureSubagent(t *testing.T) {
 			result.InputTokens, result.PeakStepInputTokens, want.Input)
 	}
 	if cost, stamped := openCodeStageCost(result); cost != 0 || !stamped || result.AdapterReportedCostUSD != 0 {
-		t.Errorf("cost = %v, stamped = %v, reported = %v; want a stamped local zero", cost, stamped, result.AdapterReportedCostUSD)
+		t.Errorf("cost = %v, stamped = %v, reported = %v; want ADR-022 § 3's stamped local zero", cost, stamped, result.AdapterReportedCostUSD)
 	}
 	for _, child := range openCodeSubagentSessions[1:] {
 		if !strings.Contains(calls, "export "+child.id+" --sanitize --pure") {

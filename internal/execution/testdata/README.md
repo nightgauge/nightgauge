@@ -582,7 +582,11 @@ and the tests' ground truth in the same change.
 The session's export: `info.tokens` 17365 input, 144 output, 47 reasoning,
 no cache; `info.cost` 0; served by `lmstudio` / `qwen/qwen3.8-27b`. The stage
 records 17365 input and 191 output (reasoning folded in), provider
-`lm-studio`, a stamped zero.
+`lm-studio`. Priced from that provider and served model, as ADR-022 § 3
+intends, the stage is a stamped zero. The stage record is not stamped yet: the
+scheduler still prices by the adapter, `opencode`, which resolves no rate for
+this model, so the record stays unstamped until #1630 lands. The tests check
+ADR-022 § 3's rule, not the record.
 
 `opencode_stream_cloud_capture.jsonl` (the stub's edit, then stop):
 

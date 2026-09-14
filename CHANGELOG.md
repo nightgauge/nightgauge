@@ -69,8 +69,9 @@ changelog, and the release workflow refuses a tag that does not.
   a stub-provider run dispatched under a hosted provider key that stands in
   for the hosted shape until a real hosted capture exists (#1680). The tests
   pin the summed step usage, the subagent usage folded in from the session
-  table, a stamped zero for the local model and a registry price for the
-  hosted one. The captures showed that a subagent's rejected permission does
+  table and a registry price for the hosted model. For the local model they
+  check ADR-022 § 3's rule, which stamps a zero; the stage record itself stays
+  unstamped until #1630 lands. The captures showed that a subagent's rejected permission does
   not end the run, yet still fails the stage; ADR-022 § 9 records it. The
   second local endpoint's capture is not included: that endpoint did not
   answer (#1629)
