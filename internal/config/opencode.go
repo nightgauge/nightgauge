@@ -25,8 +25,10 @@ import (
 // the OpenCode provider key a stage names on -m, follows from Provider:
 // `lmstudio` for lm-studio and `ollama` for ollama.
 type OpenCodeConfig struct {
-	// Binary pins the opencode binary: a command on PATH or an absolute path.
-	// The doctor's version-policy check reads it (ADR-022 § 20).
+	// Binary pins the opencode binary a dispatch spawns and the doctor
+	// checks: the absolute path of an executable file. A relative path is
+	// refused, never looked up on PATH; unset runs the opencode on PATH
+	// (ADR-022 § 7, § 20).
 	Binary string `yaml:"binary,omitempty" json:"binary,omitempty"`
 
 	// InheritUserConfig layers the operator's own OpenCode config (their XDG

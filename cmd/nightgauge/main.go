@@ -11856,7 +11856,7 @@ func parseAdaptersFlag(raw string) []string {
 // writeAdapterRows prints one row per adapter. The mark is ✗ for an adapter
 // that is not usable and ⚠ for one that is usable but below its version floor
 // (claude, which stays usable below its floor); either prints the remediation
-// beneath it.
+// beneath it. Every row prints its warnings (⚠) and notes (·) beneath it.
 func writeAdapterRows(w io.Writer, adapters []doctor.AdapterHealth) {
 	for _, a := range adapters {
 		status := "✓"
@@ -11882,6 +11882,12 @@ func writeAdapterRows(w io.Writer, adapters []doctor.AdapterHealth) {
 		if status != "✓" && a.Remediation != "" {
 			fmt.Fprintf(w, "        → %s\n", a.Remediation)
 		}
+		for _, warning := range a.Warnings {
+			fmt.Fprintf(w, "        ⚠ %s\n", warning)
+		}
+		for _, note := range a.Notes {
+			fmt.Fprintf(w, "        · %s\n", note)
+		}
 	}
 }
 
@@ -11889,6 +11895,9 @@ func writeAdapterRows(w io.Writer, adapters []doctor.AdapterHealth) {
 func renderAdapterDetail(a doctor.AdapterHealth) string {
 	switch a.Kind {
 	case "cli":
+		if a.OpenCode != nil && !a.OpenCode.Enabled {
+			return "experimental adapter, not enabled"
+		}
 		if !a.Installed {
 			return fmt.Sprintf("%s CLI not found on PATH", a.Binary)
 		}

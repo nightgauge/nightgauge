@@ -425,6 +425,9 @@ type openCodeStageOutcome struct {
 	// helpers are the fake's invocations other than the stage's own run:
 	// the processes the parser started after the stage.
 	helpers []openCodeHelperCall
+	// preDispatch are the processes started before the stage ran: the
+	// version policy's `--version` probe (#1627).
+	preDispatch []openCodeHelperCall
 	// worktree is the stage's worktree.
 	worktree string
 }
@@ -488,6 +491,7 @@ export)
   fi
   cat %[1]q; exit 0 ;;
 esac
+echo STAGE >> %[6]q
 echo $$ > %[5]q
 cat > /dev/null
 cat %[2]q
@@ -552,24 +556,30 @@ exit %[4]d
 	if err != nil {
 		t.Fatalf("RunStage: %v", err)
 	}
-	return openCodeStageOutcome{result: result, logged: logged, helpers: readHelperLog(t, helperLog), worktree: worktree}
+	before, after := readHelperLog(t, helperLog)
+	return openCodeStageOutcome{result: result, logged: logged, helpers: after, preDispatch: before, worktree: worktree}
 }
 
-// readHelperLog parses the fake's record of the processes the parser started.
-func readHelperLog(t *testing.T, path string) []openCodeHelperCall {
+// readHelperLog parses the fake's record of the processes started around the
+// stage: before, those started before the stage's own run (the version
+// policy's probe), and after, those the parser started once it ended. The
+// fake writes a STAGE line when the stage's run starts.
+func readHelperLog(t *testing.T, path string) (before, after []openCodeHelperCall) {
 	t.Helper()
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil
+		return nil, nil
 	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	var calls []openCodeHelperCall
+	calls := &before
 	var call *openCodeHelperCall
 	for _, line := range strings.Split(string(raw), "\n") {
 		kind, rest, _ := strings.Cut(line, "\t")
 		switch {
+		case line == "STAGE":
+			calls = &after
 		case line == "ARGS" || kind == "ARGS":
 			call = &openCodeHelperCall{env: map[string]string{}}
 			if rest != "" {
@@ -582,11 +592,11 @@ func readHelperLog(t *testing.T, path string) []openCodeHelperCall {
 			k, v, _ := strings.Cut(rest, "=")
 			call.env[k] = v
 		case line == "END":
-			calls = append(calls, *call)
+			*calls = append(*calls, *call)
 			call = nil
 		}
 	}
-	return calls
+	return before, after
 }
 
 func readTestdata(t *testing.T, name string) string {
@@ -1288,6 +1298,26 @@ func TestOpenCodeFoldHelpersRunPureFromTheRunRoot(t *testing.T) {
 	for _, want := range []string{"--version", "db", "export"} {
 		if !seen[want] {
 			t.Errorf("the parser never ran opencode %s, so this test proves nothing about it; calls: %+v", want, out.helpers)
+		}
+	}
+	// Before the stage, the version policy (#1627) ran `--version` once, in a
+	// directory of its own, holding no credential and nothing of the stage.
+	if len(out.preDispatch) != 1 || strings.Join(out.preDispatch[0].args, " ") != "--version" {
+		t.Fatalf("before the stage opencode ran %+v, want the version policy's one --version", out.preDispatch)
+	}
+	pre := out.preDispatch[0]
+	if strings.HasPrefix(pre.cwd, worktree) || strings.HasPrefix(pre.cwd, runs) {
+		t.Errorf("the version probe ran in %s, inside the worktree or a run's root", pre.cwd)
+	}
+	for _, name := range []string{"GITHUB_TOKEN", "OPENCODE_SERVER_PASSWORD", "NIGHTGAUGE_STAGE", "OPENCODE_CONFIG_CONTENT"} {
+		if _, ok := pre.env[name]; ok {
+			t.Errorf("the version probe was given %s", name)
+		}
+	}
+	// The probe's directory is gone by now, so its path is compared by name.
+	for _, name := range []string{"HOME", "XDG_DATA_HOME"} {
+		if !strings.Contains(pre.env[name], string(filepath.Separator)+filepath.Base(pre.cwd)+string(filepath.Separator)) {
+			t.Errorf("the version probe's %s %s is not in its own directory %s", name, pre.env[name], pre.cwd)
 		}
 	}
 }
