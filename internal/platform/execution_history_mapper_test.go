@@ -801,3 +801,190 @@ func equalStrings(a, b []string) bool {
 	}
 	return true
 }
+
+// openCodeTestRecord is a run whose stages ran on opencode against a local
+// model, a registry-known hosted model and a model of an unrecognized
+// provider key, beside one claude stage. Each stage's model is the one its
+// record carries (ADR-022 § 2), and its cost is what CompleteStage stamped.
+func openCodeTestRecord() state.V2RunRecord {
+	stage := func(model string) state.V2StageDetail {
+		return state.V2StageDetail{Status: "complete", DurationMs: 1000,
+			ModelSelection: &state.V2ModelSelect{Model: model, Source: "routing"}}
+	}
+	return state.V2RunRecord{
+		IssueNumber: 1630,
+		StartedAt:   "2026-09-14T10:00:00Z",
+		CompletedAt: "2026-09-14T10:05:00Z",
+		Outcome:     "complete",
+		Stages: map[string]state.V2StageDetail{
+			"issue-pickup":     stage("claude-haiku-4-5"),
+			"feature-planning": stage("claude-sonnet-5"),
+			"feature-dev":      stage("lm-studio/qwen/qwen3.8-27b"),
+			"feature-validate": stage("openrouter/meta-llama/llama-4"),
+		},
+		Tokens: state.V2Tokens{
+			EstimatedCostUSD: 0.12,
+			CostUnstamped:    true,
+			PerStage: map[string]state.V2StageTokens{
+				"issue-pickup":     {Input: 100, Output: 10, CostUSD: 0.001, Adapter: "claude", CostSource: state.CostSourceComputed},
+				"feature-planning": {Input: 1000, Output: 100, CostUSD: 0.119, Adapter: "opencode", CostSource: state.CostSourceComputed},
+				"feature-dev":      {Input: 5000, Output: 500, CostUSD: 0, Adapter: "opencode", CostSource: state.CostSourceComputed},
+				"feature-validate": {Input: 800, Output: 80, CostUSD: 0, Adapter: "opencode", CostSource: state.CostSourceUnknown, CostUnstamped: true},
+			},
+		},
+	}
+}
+
+// TestBuildExecutionHistoryStages_OpenCodeStageIdentity: an opencode stage
+// carries the ADR-022 model and provider identity, a registry model as its
+// bare id and a local model as "<provider>/<id>", with modelProvider naming
+// the provider that served it while provider stays the executing adapter. A
+// stage of any other adapter has no modelProvider key at all. A local
+// stage's stamped zero is sent as 0, and an unstamped stage's cost as null.
+func TestBuildExecutionHistoryStages_OpenCodeStageIdentity(t *testing.T) {
+	got, err := V2RunRecordToExecutionHistoryRunRecord(openCodeTestRecord(), ExecutionHistoryMapperInput{Repo: "nightgauge/nightgauge"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := map[string]struct {
+		model, modelProvider string
+		cost                 *float64
+	}{
+		"issue-pickup":     {"claude-haiku-4-5", "", ptrFloat(0.001)},
+		"feature-planning": {"claude-sonnet-5", "anthropic", ptrFloat(0.119)},
+		"feature-dev":      {"lm-studio/qwen/qwen3.8-27b", "lm-studio", ptrFloat(0)},
+		"feature-validate": {"openrouter/meta-llama/llama-4", "other", nil},
+	}
+	if len(got.Stages) != len(want) {
+		t.Fatalf("len(Stages) = %d, want %d", len(got.Stages), len(want))
+	}
+	for _, s := range got.Stages {
+		w := want[s.StageID]
+		if s.Model == nil || *s.Model != w.model {
+			t.Errorf("%s: model = %q, want %q", s.StageID, deref(s.Model), w.model)
+		}
+		if deref(s.ModelProvider) != w.modelProvider || (w.modelProvider == "") != (s.ModelProvider == nil) {
+			t.Errorf("%s: modelProvider = %v, want %q", s.StageID, valueOf(s.ModelProvider), w.modelProvider)
+		}
+		switch {
+		case w.cost == nil && s.CostUsd != nil:
+			t.Errorf("%s: costUsd = %v, want null (unstamped)", s.StageID, *s.CostUsd)
+		case w.cost != nil && (s.CostUsd == nil || *s.CostUsd != *w.cost):
+			t.Errorf("%s: costUsd = %v, want %v", s.StageID, valueOf(s.CostUsd), *w.cost)
+		}
+		if s.StageID != "issue-pickup" && deref(s.Provider) != "opencode" {
+			t.Errorf("%s: provider = %q, want the executing adapter opencode", s.StageID, deref(s.Provider))
+		}
+	}
+
+	data, err := json.Marshal(got.Stages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw []map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range raw {
+		id := strings.Trim(string(s["stageId"]), `"`)
+		_, has := s["modelProvider"]
+		if has != (want[id].modelProvider != "") {
+			t.Errorf("%s: modelProvider key present = %v, want %v", id, has, want[id].modelProvider != "")
+		}
+		if id == "feature-dev" && string(s["costUsd"]) != "0" {
+			t.Errorf("feature-dev: costUsd = %s, want 0", s["costUsd"])
+		}
+	}
+}
+
+// TestBuildExecutionHistoryStages_OpenCodeDispatchedModelNormalized: a
+// stage record that still carries the -m value an opencode stage was
+// dispatched with is sent in the recorded form all the same.
+func TestBuildExecutionHistoryStages_OpenCodeDispatchedModelNormalized(t *testing.T) {
+	for in, want := range map[string][2]string{
+		"lmstudio/qwen/qwen3.8-27b": {"lm-studio/qwen/qwen3.8-27b", "lm-studio"},
+		"anthropic/claude-sonnet-5": {"claude-sonnet-5", "anthropic"},
+		"ollama/qwen3-coder:30b":    {"ollama/qwen3-coder:30b", "ollama"},
+	} {
+		rec := state.V2RunRecord{
+			Stages: map[string]state.V2StageDetail{"feature-dev": {Status: "complete",
+				ModelSelection: &state.V2ModelSelect{Model: in}}},
+			Tokens: state.V2Tokens{PerStage: map[string]state.V2StageTokens{"feature-dev": {Adapter: "opencode"}}},
+		}
+		stages, _ := buildExecutionHistoryStages(rec)
+		if got := [2]string{deref(stages[0].Model), deref(stages[0].ModelProvider)}; got != want {
+			t.Errorf("%s: (model, modelProvider) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestV2RunRecordToExecutionHistoryRunRecord_StampedZeroRunTotal: a run
+// whose every stage is a stamped zero, such as one that used only local
+// models, sends totalCostUsd 0, not null, which the platform stores as an
+// unknown cost. A run with an unstamped stage, or whose stages name no cost
+// source, still sends null.
+func TestV2RunRecordToExecutionHistoryRunRecord_StampedZeroRunTotal(t *testing.T) {
+	local := state.V2StageTokens{Input: 5000, Output: 500, Adapter: "opencode", CostSource: state.CostSourceComputed}
+	bookend := state.V2StageTokens{Adapter: "claude", CostSource: state.CostSourceDeterministic}
+	for _, tc := range []struct {
+		name     string
+		tokens   state.V2Tokens
+		wantZero bool
+	}{
+		{"every stage a stamped zero", state.V2Tokens{PerStage: map[string]state.V2StageTokens{
+			"issue-pickup": bookend, "feature-dev": local}}, true},
+		{"one stage unstamped", state.V2Tokens{CostUnstamped: true, PerStage: map[string]state.V2StageTokens{
+			"feature-dev":      local,
+			"feature-validate": {Adapter: "opencode", CostSource: state.CostSourceUnknown, CostUnstamped: true}}}, false},
+		{"no cost source recorded", state.V2Tokens{PerStage: map[string]state.V2StageTokens{
+			"feature-dev": {Input: 5000, Output: 500, Adapter: "codex"}}}, false},
+		{"no stage tokens", state.V2Tokens{}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := state.V2RunRecord{IssueNumber: 1630, StartedAt: "2026-09-14T10:00:00Z", Outcome: "complete", Tokens: tc.tokens}
+			got, err := V2RunRecordToExecutionHistoryRunRecord(rec, ExecutionHistoryMapperInput{Repo: "nightgauge/nightgauge"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := json.Marshal(got)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var m map[string]json.RawMessage
+			if err := json.Unmarshal(data, &m); err != nil {
+				t.Fatal(err)
+			}
+			want := "null"
+			if tc.wantZero {
+				want = "0"
+			}
+			if string(m["totalCostUsd"]) != want {
+				t.Errorf("totalCostUsd = %s, want %s", m["totalCostUsd"], want)
+			}
+		})
+	}
+}
+
+// TestTelemetryLabel: a modelProvider the platform's label guard would
+// reject is never sent, because the strict stage schema would drop the
+// whole run.
+func TestTelemetryLabel(t *testing.T) {
+	for label, ok := range map[string]bool{
+		"lm-studio": true, "other": true, "4090": true,
+		"": false, "-x": false, "LM-Studio": false, "a.b": false, "a/b": false,
+		strings.Repeat("a", 64): true, strings.Repeat("a", 65): false,
+	} {
+		if got := telemetryLabel(label) != nil; got != ok {
+			t.Errorf("telemetryLabel(%q) accepted = %v, want %v", label, got, ok)
+		}
+	}
+}
+
+func ptrFloat(v float64) *float64 { return &v }
+
+func valueOf[T any](p *T) any {
+	if p == nil {
+		return nil
+	}
+	return *p
+}

@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -190,6 +191,18 @@ func buildExecutionHistoryStages(record state.V2RunRecord) ([]ExecutionHistorySt
 			model = tok.Adapter
 		}
 
+		// An opencode stage records the model and the provider that served it
+		// as ADR-022 § 1-2 decide (tokens.OpenCodeModelIdentity): a registry
+		// model as its bare id, any other model as "<provider>/<id>". provider
+		// below stays the executing adapter, so modelProvider is the only
+		// field that tells a local stage from a hosted one.
+		var modelProvider string
+		if hasTok && tok.Adapter == openCodeAdapter {
+			if recorded, p := tokens.OpenCodeModelIdentity(model); recorded != "" {
+				model, modelProvider = recorded, p
+			}
+		}
+
 		// provider is the executing adapter recorded on the stage (V5 —
 		// StageMetricV5Schema). Unlike `model` it is NOT reused as a model
 		// fallback: it is the distinct adapter identity the platform persists to
@@ -221,17 +234,20 @@ func buildExecutionHistoryStages(record state.V2RunRecord) ([]ExecutionHistorySt
 		if hasTok {
 			inputTokens = tok.Input
 			outputTokens = tok.Output
-			if tok.CostUSD != 0 {
+			// A stamped zero, such as a local model's, is sent as 0: null
+			// tells the platform the cost is unknown (#1630).
+			if tok.CostUSD != 0 || stampedStageCost(tok) {
 				c := tok.CostUSD
 				costUsd = &c
 				summedCostUSD += tok.CostUSD
 			}
 		}
-		// tok.CostUnstamped (#585, #588) is deliberately NOT read here: the
-		// platform's ExecutionHistoryStageMetric / V4 schema has no field for
-		// it, and this mapper mirrors pipelineRunV4Mapper.ts's allowlisted
-		// field construction, so adding one requires a coordinated platform
-		// schema change first. The signal stays in the local V2 record
+		// tok.CostUnstamped (#585, #588) has no field of its own on the wire:
+		// the platform's ExecutionHistoryStageMetric / V4 schema has none, and
+		// this mapper mirrors pipelineRunV4Mapper.ts's allowlisted field
+		// construction, so adding one requires a coordinated platform schema
+		// change first. It reaches the wire only as the null costUsd of an
+		// unstamped zero above. The signal stays in the local V2 record
 		// (state.V2StageTokens.CostUnstamped / state.V2Tokens.CostUnstamped)
 		// for `nightgauge cost by-class` and other local consumers.
 
@@ -242,16 +258,17 @@ func buildExecutionHistoryStages(record state.V2RunRecord) ([]ExecutionHistorySt
 		}
 
 		stages = append(stages, ExecutionHistoryStageMetric{
-			StageID:      truncate(name, executionHistoryFieldMax),
-			StageName:    truncate(name, executionHistoryFieldMax),
-			Attempt:      1, // mirrors the reference TS mapper — no per-attempt granularity on the wire yet.
-			Model:        nonEmptyTruncatedPtr(model, executionHistoryFieldMax),
-			Provider:     nonEmptyTruncatedPtr(provider, executionHistoryFieldMax),
-			DurationMs:   durationMs,
-			InputTokens:  inputTokens,
-			OutputTokens: outputTokens,
-			TotalTokens:  inputTokens + outputTokens,
-			CostUsd:      costUsd,
+			StageID:       truncate(name, executionHistoryFieldMax),
+			StageName:     truncate(name, executionHistoryFieldMax),
+			Attempt:       1, // mirrors the reference TS mapper — no per-attempt granularity on the wire yet.
+			Model:         nonEmptyTruncatedPtr(model, executionHistoryFieldMax),
+			Provider:      nonEmptyTruncatedPtr(provider, executionHistoryFieldMax),
+			ModelProvider: telemetryLabel(modelProvider),
+			DurationMs:    durationMs,
+			InputTokens:   inputTokens,
+			OutputTokens:  outputTokens,
+			TotalTokens:   inputTokens + outputTokens,
+			CostUsd:       costUsd,
 			// 'failed'/'error' are the only non-success terminal states the
 			// producer writes; 'complete' and 'skipped' both count as success —
 			// mirrors pipelineRunV4Mapper.ts's success predicate exactly.
@@ -264,6 +281,56 @@ func buildExecutionHistoryStages(record state.V2RunRecord) ([]ExecutionHistorySt
 	}
 
 	return stages, summedCostUSD
+}
+
+// openCodeAdapter is the multi-provider adapter whose stages carry a model
+// provider (ADR-022).
+const openCodeAdapter = "opencode"
+
+// stampedStageCost reports whether a stage's cost is a priced figure: priced
+// from a rate card, reported by the CLI, or the exact zero of a stage that
+// dispatched no model, and not unstamped. A record that names no source is
+// not one: absence means source-unknown, never priced.
+func stampedStageCost(tok state.V2StageTokens) bool {
+	if tok.CostUnstamped {
+		return false
+	}
+	switch tok.CostSource {
+	case state.CostSourceComputed, state.CostSourceNative, state.CostSourceDeterministic:
+		return true
+	}
+	return false
+}
+
+// runCostStamped reports whether every stage cost of a run is a priced
+// figure, so a zero run total is a real zero rather than an unknown.
+func runCostStamped(t state.V2Tokens) bool {
+	if t.CostUnstamped || len(t.PerStage) == 0 {
+		return false
+	}
+	for _, tok := range t.PerStage {
+		if !stampedStageCost(tok) {
+			return false
+		}
+	}
+	return true
+}
+
+// telemetryLabelPattern is the platform's guard for a stage's modelProvider
+// and endpoint labels, the grammar of an OpenCode provider key.
+var telemetryLabelPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
+// telemetryLabelMax is the platform's length bound for those labels.
+const telemetryLabelMax = 64
+
+// telemetryLabel returns label when the platform's guard accepts it, else
+// nil. The stage schema is strict, so a label it rejects would drop the
+// whole run's upload.
+func telemetryLabel(label string) *string {
+	if len(label) > telemetryLabelMax || !telemetryLabelPattern.MatchString(label) {
+		return nil
+	}
+	return &label
 }
 
 // toTelemetryLabels converts the run record's labels into the wire `labels`
@@ -345,6 +412,11 @@ func V2RunRecordToExecutionHistoryRunRecord(record state.V2RunRecord, input Exec
 		// (same rationale as the retired mapper's TotalCostUsd backfill,
 		// Issue #4009).
 		v := summedStageCostUSD
+		totalCostUsd = &v
+	case runCostStamped(record.Tokens):
+		// Every stage is a stamped zero, as on a run that used only local
+		// models: its total is a real 0, not an unknown (#1630).
+		v := 0.0
 		totalCostUsd = &v
 	}
 

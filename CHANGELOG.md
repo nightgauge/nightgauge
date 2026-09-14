@@ -64,6 +64,16 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- An OpenCode stage with a cost budget is stopped once its cost, priced from
+  the model registry at every `step_finish`, passes the budget: its process
+  group gets SIGTERM, then SIGKILL after 10 seconds, and the stage fails as
+  `budget_exceeded` with `[cost-cap-exceeded]` ending its stderr. OpenCode's
+  own reported cost is never used. A hosted model the registry cannot price
+  logs one `[opencode-cost]` warning and runs without a cost cap. The Go
+  scheduler's platform telemetry for an OpenCode stage now carries
+  `modelProvider`, the provider that served its model, beside its ADR-022
+  model identity (#1630)
+
 - An OpenCode stage now gets its repository's steering and the pipeline's MCP
   servers. Its `AGENTS.md`, or the `CLAUDE.md` of a repository that has only
   that, and the files it `@`-imports from inside the worktree reach the model
@@ -218,6 +228,16 @@ changelog, and the release workflow refuses a tag that does not.
   usable, so cap recovery never hops onto it (#1627)
 
 ### Fixed
+
+- An OpenCode stage's cost is now priced by the provider that served its
+  model, not by the adapter name: a stage on an LM Studio or Ollama model
+  records a stamped zero cost instead of an unstamped one, and a stage on a
+  hosted model the registry lists is priced at that model's registry rates.
+  A hosted model the registry does not list stays unstamped.
+  `CalculateCostFor` replaces `CalculateCostForAdapter`; every other adapter
+  prices as before. The Go scheduler's platform telemetry now sends a stamped
+  zero stage cost, and the run total of a run whose every stage is a stamped
+  zero, as `0` instead of `null` (#1630)
 
 - A stage the operator stops is reported as stopped, not as a
   `wait: context canceled` failure, when its CLI exits on the stop but a
