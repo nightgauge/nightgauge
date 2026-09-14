@@ -30,13 +30,19 @@ var openCodeIntegrationBuild bool
 // nothing else. PreDispatch holds the binary to the version policy, so every
 // test that dispatches with the gate open reads a version, and none may read
 // it from whatever opencode, if any, the machine running the tests has.
+//
+// It also makes the forge an OpenCode dispatch reads its MCP servers from
+// refuse every read for the whole test binary, so no test reaches GitHub; a
+// test that reads servers sets req.McpForge itself (withMcpForge).
 func TestMain(m *testing.M) {
 	cleanup := hometest.Isolate()
 	restorePath := func() {}
 	if !openCodeIntegrationBuild {
 		restorePath = installPackageOpenCodeFake()
 	}
+	restoreForge := SwapOpenCodeMcpForgeForTest(mapForge{err: errors.New("the adapters test binary reads no forge: set OpenCodeRunRequest.McpForge")})
 	code := m.Run()
+	restoreForge()
 	restorePath()
 	cleanup()
 	os.Exit(code)
@@ -385,7 +391,7 @@ func TestOpenCodePinnedBinaryIsCheckedSpawnedAndRecorded(t *testing.T) {
 	m := openCodeManifestForTest(t)
 	fake := installFakeOpenCode(t, fakeOpenCodeBehavior{version: m.MaxTested})
 	a := pinnedAdapter(lmStudioSettings(), fake.path)
-	run := RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b"}
+	run := RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b", WorktreeDir: t.TempDir()}
 	if err := a.PreDispatch(context.Background(), run); err != nil {
 		t.Fatalf("PreDispatch = %v", err)
 	}
@@ -804,10 +810,13 @@ func TestOpenCodeMachineConfigRefusalsAreTheDispatchs(t *testing.T) {
 			settings := lmStudioSettings()
 			settings.InheritUserConfig = c.inherit
 			req := OpenCodeRunRequest{
-				Home:               home,
-				ID:                 testRunID,
-				MachineConfigDir:   filepath.Join(home, ".nightgauge"),
-				Run:                RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"},
+				Home:             home,
+				ID:               testRunID,
+				MachineConfigDir: filepath.Join(home, ".nightgauge"),
+				// A worktree with nothing in it: this test is about machine
+				// config refusals, not steering or MCP servers, and
+				// PrepareOpenCodeRun now requires one to read those from.
+				Run:                RunOptions{Model: "lmstudio/qwen/qwen3.8-27b", WorktreeDir: t.TempDir()},
 				Settings:           settings,
 				Lookup:             envLookup(nil),
 				GOOS:               runtime.GOOS,

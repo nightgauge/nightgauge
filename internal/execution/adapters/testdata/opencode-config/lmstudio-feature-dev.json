@@ -104,7 +104,32 @@
   "snapshot": false,
   "lsp": true,
   "formatter": true,
-  "instructions": [],
+  "mcp": {
+    "fs": {
+      "type": "local",
+      "command": ["npx", "-y", "srv"],
+      "environment": {
+        "LEVEL": "debug",
+        "TOKEN": "{env:FIXTURE_TOKEN}"
+      },
+      "enabled": true
+    },
+    "remote": {
+      "type": "remote",
+      "url": "https://mcp.example.test/mcp",
+      "headers": {
+        "Authorization": "Bearer {env:FIXTURE_TOKEN}",
+        "X-Team": "core"
+      },
+      "oauth": false,
+      "enabled": true
+    }
+  },
+  "instructions": [
+    "/nightgauge-test-worktree/AGENTS.md",
+    "/nightgauge-test-worktree/docs/rules.md",
+    "/nightgauge-test-home/.nightgauge/opencode/runs/01890a5d-ac96-774b-bcce-b302099a8057/nightgauge/steering.md"
+  ],
   "skills": {
     "urls": []
   }

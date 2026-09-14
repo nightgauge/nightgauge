@@ -7059,17 +7059,29 @@ nightgauge config init --owner nightgauge --project 1 --out -
 
 ```bash
 nightgauge opencode config --stage <stage> --worktree <path> --json \
-  [--model <provider>/<model>] [--max-turns <n>] [--max-tokens <n>] [--run-id <uuid>]
+  [--repo <owner/name>] [--model <provider>/<model>] [--max-turns <n>] \
+  [--max-tokens <n>] [--run-id <uuid>]
 ```
 
 Prints what an `opencode` spawn for the stage is given, so a caller outside the
 Go path (the SDK) runs OpenCode under the same bytes as the Go adapter. It runs
 the adapter's own checks in the manager's order (`PreDispatch`, the model
 check) and its preparation (`adapters.PrepareOpenCodeRun`): the run's root is
-created, or reused for `--run-id`, and the endpoint's base URL is written to a
-0600 file in it. Without `--run-id` a new root is minted, and a root no stage
-uses for 7 days is swept. `--max-turns` becomes the steps cap of the build
-agent and each subagent, 200 when it is 0. The model defaults to
+created, or reused for `--run-id`, and the endpoint's base URL and the
+baseline steering are written to 0600 files in it. The config names the
+worktree's own steering file, the files it imports and that steering file as
+`instructions`, and holds the MCP servers `--repo`'s default branch defines
+at its head, which the verb reads from GitHub in one query bounded to 15
+seconds, with credentials as `{env:VAR}` references (ADR-022 § 8); nothing is
+written into the worktree, and nothing of the worktree's repository is read
+for the servers. Without `--repo`, or when GitHub cannot be read, the stage
+gets no MCP server and stderr says why. A server whose variable holds a value
+OpenCode cannot paste into its config text, in the environment OpenCode is
+spawned with, is left out, and a dispatch whose `ANTHROPIC_API_KEY` holds one
+is refused. Without `--run-id` a
+new root is minted, and a root no stage uses for 7 days is swept.
+`--max-turns` becomes the steps cap of the build agent and each subagent, 200
+when it is 0. The model defaults to
 `opencode.model` from the machine-tier config; see
 [SETTINGS_ARCHITECTURE.md](SETTINGS_ARCHITECTURE.md#the-opencode-block). The
 adapter's warning and notices go to stderr.

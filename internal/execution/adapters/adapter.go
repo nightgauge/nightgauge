@@ -101,6 +101,10 @@ type RunRootRequest struct {
 	// model and effort checks. The opencode adapter builds the run's config
 	// from it (ADR-022 § 8).
 	Run RunOptions
+	// WorkspaceRoot is the manager's workspace root, the launch root and
+	// never a stage's worktree. The opencode adapter loads the config there
+	// that names the GitHub identity its forge read of the MCP servers uses.
+	WorkspaceRoot string
 }
 
 // RunRoot is a directory private to one pipeline run, where an adapter whose

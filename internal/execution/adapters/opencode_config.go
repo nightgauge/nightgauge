@@ -1,19 +1,24 @@
 package adapters
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
 	"unicode"
 
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
+	"github.com/nightgauge/nightgauge/internal/forge"
 	"github.com/nightgauge/nightgauge/internal/models"
 )
 
@@ -67,11 +72,21 @@ import (
 // Two things are never in the content itself:
 //
 //   - A credential. The anthropic block reads its key as the reference
-//     {env:ANTHROPIC_API_KEY}, which OpenCode resolves in its own process.
+//     {env:ANTHROPIC_API_KEY}, and an MCP server's variables are {env:VAR}
+//     references too, which OpenCode resolves in its own process by pasting
+//     each value into the text unescaped, so a reference to a value it
+//     cannot paste refuses the dispatch (openCodeUnpastableRefs).
 //   - A model server's base URL. The environment reaches every tool a stage
 //     runs, so the URL is written to a 0600 file in the run's root, and the
 //     content names that file with a {file:...} reference, which 1.18.30
 //     resolves in OPENCODE_CONFIG_CONTENT as it does in a file.
+//
+// The repository's steering and the pipeline's MCP servers reach a run
+// through this config too (#1626), read by codexprovision.ProvisionOpenCode:
+// instructions name the repository's steering files by absolute path inside
+// the worktree, and the file in the run's root that Nightgauge's baseline
+// steering is written to, and never a URL; mcp holds the servers the base
+// branch defines. Nothing is written into the worktree.
 
 // OpenCodeConfigSchemaVersion is the schema_version of `nightgauge opencode
 // config --json`. A caller refuses an output whose major version it does not
@@ -310,6 +325,10 @@ type OpenCodeConfigInput struct {
 	RunRoot string
 	// Lookup reads the environment the provider's credential comes from.
 	Lookup func(string) (string, bool)
+	// Repository is what the stage is given from its repository: the
+	// steering and the MCP servers (codexprovision.ProvisionOpenCode, which
+	// PrepareOpenCodeRun reads). Its zero value gives none.
+	Repository codexprovision.OpenCodeProvision
 }
 
 // OpenCodeConfigInputFor is the input a dispatch of run gets on a machine
@@ -341,8 +360,8 @@ type OpenCodeRunConfig struct {
 	// Content is OPENCODE_CONFIG_CONTENT.
 	Content string
 	// Files are what Content refers to, by absolute path under the run root:
-	// the dispatched endpoint's base URL. Each is written with mode 0600
-	// before the spawn.
+	// the dispatched endpoint's base URL and the baseline steering. Each is
+	// written with mode 0600 before the spawn.
 	Files map[string]string
 	// NonLoopback is false only when the stage dispatches to a declared
 	// endpoint whose base URL is on this machine. A hosted provider's model
@@ -369,8 +388,12 @@ type openCodeConfigJSON struct {
 	Snapshot         bool                         `json:"snapshot"`
 	LSP              bool                         `json:"lsp"`
 	Formatter        bool                         `json:"formatter"`
-	Instructions     []string                     `json:"instructions"`
-	Skills           openCodeSkillsJSON           `json:"skills"`
+	// MCP is keyed by server name. OPENCODE_CONFIG_CONTENT wins over a lower
+	// layer for the servers it names; a lower layer can still add a server of
+	// its own, which the project-config tamper gate closes (#1638).
+	MCP          map[string]codexprovision.OpenCodeMcpServer `json:"mcp"`
+	Instructions []string                                    `json:"instructions"`
+	Skills       openCodeSkillsJSON                          `json:"skills"`
 }
 
 type openCodeAgentJSON struct {
@@ -487,7 +510,11 @@ type openCodeAnthropicOptionsJSON struct {
 //     mode.<name> entry of every agent in openCodePinnedModeAgents, the same
 //     as its agent entry; subagent_depth; the title agent disabled;
 //   - compaction, tool_output, share "disabled", autoupdate false, snapshot,
-//     lsp and formatter, and empty instructions and skills.urls.
+//     lsp and formatter, and empty skills.urls;
+//   - instructions: the repository's steering files, then the file in the run
+//     root the baseline steering is written to (openCodeInstructionEntries),
+//     never a URL; and mcp, the pipeline's MCP servers
+//     (openCodeCheckMcpServers).
 //
 // It refuses a model the adapter cannot dispatch; an anthropic/ model while
 // ANTHROPIC_API_KEY is unset and a platform provider's model
@@ -495,7 +522,11 @@ type openCodeAnthropicOptionsJSON struct {
 // endpoint nor a provider OpenCode's bundled catalog knows, a local one
 // included; an anthropic model whose entry it cannot pin: one the bundled
 // catalog does not list, or a fast-mode entry (openCodeAnthropicModelRefusal);
-// and an endpoint whose limit.context or limit.output is 0 or missing.
+// an endpoint whose limit.context or limit.output is 0 or missing; a
+// repository instructions entry or MCP server it cannot write safely; and
+// content holding a {env:NAME} whose variable holds a value OpenCode cannot
+// paste into its config text (openCodeUnpastableRefs), ANTHROPIC_API_KEY's
+// included.
 func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 	if in.Lookup == nil {
 		return OpenCodeRunConfig{}, errors.New("opencode config: no environment to check the provider's credential against")
@@ -578,6 +609,21 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 		}
 	}
 
+	instructions, steering, err := openCodeInstructionEntries(in.Repository, in.RunRoot)
+	if err != nil {
+		return OpenCodeRunConfig{}, err
+	}
+	for path, content := range steering {
+		if built.Files == nil {
+			built.Files = map[string]string{}
+		}
+		built.Files[path] = content
+	}
+	mcp, err := openCodeCheckMcpServers(in.Repository.MCP)
+	if err != nil {
+		return OpenCodeRunConfig{}, err
+	}
+
 	steps := in.Run.MaxTurns
 	if steps <= 0 {
 		steps = openCodeDefaultSteps
@@ -611,15 +657,46 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 		Snapshot:         in.Snapshot,
 		LSP:              in.LSP,
 		Formatter:        in.Formatter,
-		Instructions:     []string{},
+		MCP:              mcp,
+		Instructions:     instructions,
 		Skills:           openCodeSkillsJSON{URLs: []string{}},
 	}
 	raw, err := json.Marshal(cfg)
 	if err != nil {
 		return OpenCodeRunConfig{}, fmt.Errorf("opencode config: %w", err)
 	}
+	if names := openCodeUnpastableRefs(string(raw), in.Lookup); len(names) > 0 {
+		return OpenCodeRunConfig{}, fmt.Errorf(
+			"opencode config: refused, because the value of %s holds a quote, a backslash, a control character or {file:, and OpenCode pastes a variable's value into its config text unescaped: the config would not parse, and OpenCode's error would print it with every credential it resolved in it, the MCP servers' included. "+
+				"Correct the value; one read from a file with CRLF line endings ends in a carriage return",
+			strings.Join(names, ", "))
+	}
 	built.Content = string(raw)
 	return built, nil
+}
+
+// openCodeEnvSubstitutionRE is the reference OpenCode 1.18.30 replaces with a
+// variable's value in its config text before it parses it (read from its
+// bundled source: /\{env:([^}]+)\}/g).
+var openCodeEnvSubstitutionRE = regexp.MustCompile(`\{env:([^}]+)\}`)
+
+// openCodeUnpastableRefs names, sorted, each variable a {env:NAME} in content
+// refers to whose value, as lookup reads the environment OpenCode inherits,
+// OpenCode cannot paste into the text (codexprovision.OpenCodeUnpastable).
+// One such value fails the parse of the whole config, and OpenCode's error
+// prints the text it substituted, with every value it resolved, so the
+// content is checked as a whole: ANTHROPIC_API_KEY as well as every MCP
+// server's variables, which ProvisionOpenCode has already checked server by
+// server.
+func openCodeUnpastableRefs(content string, lookup func(string) (string, bool)) []string {
+	var names []string
+	for _, m := range openCodeEnvSubstitutionRE.FindAllStringSubmatch(content, -1) {
+		if value, ok := lookup(m[1]); ok && codexprovision.OpenCodeUnpastable(value) {
+			names = append(names, m[1])
+		}
+	}
+	slices.Sort(names)
+	return slices.Compact(names)
 }
 
 // openCodeAnthropicModelRefusal refuses an anthropic model whose entry the
@@ -731,6 +808,81 @@ func openCodeEndpointURLFile(root, id string) string {
 	return filepath.Join(root, openCodeRunFilesDir, id+".base-url")
 }
 
+// openCodeSteeringFile is where the run keeps the baseline steering its
+// config's instructions name.
+func openCodeSteeringFile(root string) string {
+	return filepath.Join(root, openCodeRunFilesDir, "steering.md")
+}
+
+// openCodeInstructionEntries is the config's instructions list, and the file
+// the baseline steering is written to: the repository's steering files first,
+// each an absolute path inside the worktree, then that file, in the run root.
+// Every entry passes codexprovision.OpenCodeInstructionPathError, so none is
+// a URL, which OpenCode would fetch, a name OpenCode would read as a file
+// pattern, or a {env:...} or {file:...} reference (ADR-022 § 10).
+// ProvisionOpenCode gives no other kind; one is refused all the same, because
+// this is the one writer of a run's config.
+func openCodeInstructionEntries(repo codexprovision.OpenCodeProvision, runRoot string) ([]string, map[string]string, error) {
+	entries := []string{}
+	if len(repo.Instructions) > 0 && (!filepath.IsAbs(repo.Root) || filepath.Clean(repo.Root) != repo.Root) {
+		return nil, nil, fmt.Errorf("opencode config: the worktree %q the steering files are in is not an absolute, clean path", repo.Root)
+	}
+	for _, path := range repo.Instructions {
+		if err := codexprovision.OpenCodeInstructionPathError(path); err != nil {
+			return nil, nil, fmt.Errorf("opencode config: instructions entry refused: %w", err)
+		}
+		if !strings.HasPrefix(path, repo.Root+string(filepath.Separator)) {
+			return nil, nil, fmt.Errorf("opencode config: instructions entry %q is outside the worktree %s", path, repo.Root)
+		}
+		entries = append(entries, path)
+	}
+	if repo.Steering == "" {
+		return entries, nil, nil
+	}
+	file := openCodeSteeringFile(runRoot)
+	if err := codexprovision.OpenCodeInstructionPathError(file); err != nil {
+		return nil, nil, fmt.Errorf("opencode config: the steering file: %w", err)
+	}
+	return append(entries, file), map[string]string{file: repo.Steering}, nil
+}
+
+// openCodeEnvRefRE is the one form of OpenCode substitution an MCP server may
+// carry: a {env:VAR} reference, which codexprovision translates each ${VAR}
+// of the pipeline's MCP config to.
+var openCodeEnvRefRE = regexp.MustCompile(`\{env:[A-Za-z_][A-Za-z0-9_]*\}`)
+
+// openCodeCheckMcpServers returns the config's mcp block. A server must be a
+// local one with a command or a remote one with a URL, and no name or value
+// may hold OpenCode's substitution syntax other than a {env:VAR} reference:
+// a {file:...} reference would read a file into the config, and a malformed
+// {env: reference could read a variable no ${VAR} named.
+func openCodeCheckMcpServers(servers map[string]codexprovision.OpenCodeMcpServer) (map[string]codexprovision.OpenCodeMcpServer, error) {
+	out := map[string]codexprovision.OpenCodeMcpServer{}
+	for name, s := range servers {
+		switch {
+		case s.Type == "local" && len(s.Command) > 0 && s.URL == "":
+		case s.Type == "remote" && s.URL != "" && len(s.Command) == 0:
+		default:
+			return nil, fmt.Errorf("opencode config: MCP server %q is neither a local server with a command nor a remote one with a url", name)
+		}
+		values := []string{name, s.Cwd, s.URL}
+		values = append(values, s.Command...)
+		for k, v := range s.Environment {
+			values = append(values, k, v)
+		}
+		for k, v := range s.Headers {
+			values = append(values, k, v)
+		}
+		for _, v := range values {
+			if rest := openCodeEnvRefRE.ReplaceAllString(v, ""); strings.Contains(rest, "{env:") || strings.Contains(rest, "{file:") {
+				return nil, fmt.Errorf("opencode config: MCP server %q holds OpenCode substitution syntax other than a {env:VAR} reference", name)
+			}
+		}
+		out[name] = s
+	}
+	return out, nil
+}
+
 // openCodeCheckRunRoot refuses a root the content cannot refer into: it must
 // be absolute, and a {file:...} reference ends at the first '}' and is read
 // from the JSON text as written, so the path may hold no brace, quote,
@@ -767,6 +919,11 @@ type OpenCodeRunRequest struct {
 	// (openCodeManagedConfigFiles); nil means this machine's. Only tests set
 	// it, because the real files are outside any directory a test may write.
 	ManagedConfigFiles []string
+	// McpForge is the forge the MCP servers are read from, for the
+	// repository Run records (RunOptions.TargetRepo, else RunOptions.Repo):
+	// OpenCodeMcpForge on the adapter's path and the verb's. nil starts no
+	// server.
+	McpForge forge.DefaultBranchFileService
 }
 
 // OpenCodeRun is everything an opencode spawn is given besides its argv and
@@ -827,6 +984,18 @@ func OpenCodeEnvWithholdFor(model string) OpenCodeEnvWithhold {
 // for OpenCodeOrphanMaxAge, and a root holding stored logins is refused
 // (openCodeStoredLoginRefusal).
 //
+// The config carries what the stage is given from the repository in
+// req.Run.WorktreeDir (codexprovision.ProvisionOpenCode): its steering as
+// instructions, and the MCP servers of the default branch of the repository
+// req.Run records, as req.McpForge serves them, less any server a variable of
+// which holds a value OpenCode cannot paste into its config text; a dispatch
+// whose ANTHROPIC_API_KEY holds one is refused (BuildOpenCodeConfig). Each
+// value is read in the environment OpenCode is spawned with
+// (openCodeSpawnLookup): the run's isolation variables laid over req.Lookup,
+// less what the spawn withholds. A dispatch without a worktree is refused,
+// because it would run with neither. A prepared run says on stderr what it is
+// given and what it is not.
+//
 // Unless req.Settings opts into the operator's own OpenCode config, a
 // $HOME/.opencode holding config (openCodeHomeConfigRefusal) and the
 // machine's managed OpenCode config (openCodeManagedConfigRefusal) refuse
@@ -843,9 +1012,26 @@ func PrepareOpenCodeRun(req OpenCodeRunRequest) (*OpenCodeRun, error) {
 	if err != nil {
 		return nil, err
 	}
-	input, err := OpenCodeConfigInputFor(req.Settings, req.Run, rootPath, req.Lookup)
+	if req.Lookup == nil {
+		return nil, errors.New("opencode: no inherited environment to prepare the run against")
+	}
+	// OpenCode resolves each {env:NAME} of its config in the environment it is
+	// spawned with, so every value is checked there: the isolation variables
+	// the run sets over what this process inherited, less what the spawn
+	// withholds. They depend on the root's path alone, and nothing is created
+	// yet.
+	isolation, err := OpenCodeIsolationEnv(openCodeIsolationFor(req, rootPath))
 	if err != nil {
 		return nil, err
+	}
+	spawnLookup := openCodeSpawnLookup(req.Lookup, isolation, req.Run.Model)
+	input, err := OpenCodeConfigInputFor(req.Settings, req.Run, rootPath, spawnLookup)
+	if err != nil {
+		return nil, err
+	}
+	mcp := codexprovision.McpSource{Repo: openCodeRunRepo(req.Run), Forge: req.McpForge}
+	if input.Repository, err = codexprovision.ProvisionOpenCode(context.Background(), req.Run.WorktreeDir, mcp, spawnLookup); err != nil {
+		return nil, fmt.Errorf("opencode: %w", err)
 	}
 	built, err := BuildOpenCodeConfig(input)
 	if err != nil {
@@ -887,18 +1073,12 @@ func PrepareOpenCodeRun(req OpenCodeRunRequest) (*OpenCodeRun, error) {
 	if err := writeOpenCodeRunFiles(root, built.Files); err != nil {
 		return nil, err
 	}
-	env, err := OpenCodeIsolationEnv(OpenCodeIsolation{
-		Root:              root,
-		Home:              req.Home,
-		Lookup:            req.Lookup,
-		GOOS:              req.GOOS,
-		MachineConfigDir:  req.MachineConfigDir,
-		InheritUserConfig: req.Settings.InheritUserConfig,
-	})
+	env, err := OpenCodeIsolationEnv(openCodeIsolationFor(req, root))
 	if err != nil {
 		return nil, err
 	}
 	env[openCodeConfigContentEnvVar] = built.Content
+	reportOpenCodeRepository(os.Stderr, input.Repository)
 	return &OpenCodeRun{
 		SchemaVersion: OpenCodeConfigSchemaVersion,
 		ConfigContent: built.Content,
@@ -908,6 +1088,50 @@ func PrepareOpenCodeRun(req OpenCodeRunRequest) (*OpenCodeRun, error) {
 		RunDir:        root,
 		NonLoopback:   built.NonLoopback,
 	}, nil
+}
+
+// openCodeIsolationFor is the isolation a dispatch of req gets in root.
+func openCodeIsolationFor(req OpenCodeRunRequest, root string) OpenCodeIsolation {
+	return OpenCodeIsolation{
+		Root:              root,
+		Home:              req.Home,
+		Lookup:            req.Lookup,
+		GOOS:              req.GOOS,
+		MachineConfigDir:  req.MachineConfigDir,
+		InheritUserConfig: req.Settings.InheritUserConfig,
+	}
+}
+
+// reportOpenCodeRepository says on w what a prepared run is given from its
+// repository, then each thing it is not given and why: one line for the
+// steering and the MCP servers, and one per warning. It names files and
+// servers, never a value.
+func reportOpenCodeRepository(w io.Writer, repo codexprovision.OpenCodeProvision) {
+	steering := "no steering file of the repository's own"
+	if n := len(repo.Instructions); n > 0 {
+		steering = "the repository's " + filepath.Base(repo.Instructions[0])
+		if n > 1 {
+			steering += fmt.Sprintf(" and %d file(s) it imports", n-1)
+		}
+	}
+	names := make([]string, 0, len(repo.MCP))
+	for name := range repo.MCP {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	var mcp string
+	switch {
+	case repo.McpSource == "":
+		mcp = "no MCP server"
+	case len(names) == 0:
+		mcp = "no MCP server (" + repo.McpSource + " defines none)"
+	default:
+		mcp = "the MCP servers " + repo.McpSource + " defines: " + strings.Join(names, ", ")
+	}
+	fmt.Fprintf(w, "[opencode] this stage is given %s and Nightgauge's baseline steering as instructions, and %s\n", steering, mcp)
+	for _, warning := range repo.Warnings {
+		fmt.Fprintf(w, "[opencode] %s\n", warning)
+	}
 }
 
 // writeOpenCodeRunFiles writes each file, mode 0600, into the root's

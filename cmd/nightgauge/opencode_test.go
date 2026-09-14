@@ -2,18 +2,49 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/adaptercompat"
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
+	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
+
+// openCodeVerbForge serves files as the head of main on a forge, or fails
+// with err, and records the repositories it is asked for.
+type openCodeVerbForge struct {
+	files map[string]string
+	err   error
+	mu    *sync.Mutex
+	asked *[]string
+}
+
+func (f openCodeVerbForge) DefaultBranchFiles(_ context.Context, owner, name string, paths []string) (*forgetypes.DefaultBranchFiles, error) {
+	if f.asked != nil {
+		f.mu.Lock()
+		*f.asked = append(*f.asked, owner+"/"+name)
+		f.mu.Unlock()
+	}
+	if f.err != nil {
+		return nil, f.err
+	}
+	out := &forgetypes.DefaultBranchFiles{Branch: "main", Commit: "0123456789abcdef0123456789abcdef01234567", Files: map[string]forgetypes.RepoFile{}}
+	for _, p := range paths {
+		if content, ok := f.files[p]; ok {
+			out.Files[p] = forgetypes.RepoFile{Regular: true, Content: []byte(content)}
+		}
+	}
+	return out, nil
+}
 
 // openCodeVerbMachineConfig is the reference machine's `opencode:` block: one
 // LM Studio on loopback with a 131072-token window loaded.
@@ -289,6 +320,89 @@ func TestOpenCodeConfigVerbHoldsNoCredential(t *testing.T) {
 	}
 	if !strings.Contains(run.ConfigContent, `"apiKey":"{env:ANTHROPIC_API_KEY}"`) {
 		t.Errorf("the anthropic key is not read through {env:ANTHROPIC_API_KEY}: %s", run.ConfigContent)
+	}
+}
+
+// TestOpenCodeConfigVerbCarriesTheRepository: the verb's config carries what
+// the Go path's does from the stage's repository (#1626), so the SDK path
+// (#1648) gets it through the verb: the repository's CLAUDE.md as an
+// instructions entry, and the MCP servers of --repo's default branch as the
+// forge serves them, whose credential is an {env:VAR} reference. The forge
+// is asked for --repo. The variable's value is nowhere in the output, and a
+// server the worktree alone defines is not in the config. Without --repo the
+// stage gets no MCP server.
+func TestOpenCodeConfigVerbCarriesTheRepository(t *testing.T) {
+	isolateOpenCodeVerb(t, openCodeVerbMachineConfig)
+	const token = "fake-mcp-credential-1626"
+	t.Setenv("MCP_FIXTURE_TOKEN", token)
+	servers := `{"mcpServers": {"r": {"type": "http", "url": "https://mcp.example.test/mcp", "headers": {"Authorization": "Bearer ${MCP_FIXTURE_TOKEN}"}}}}`
+	seed := gittest.InitRepo(t, t.TempDir(), "-b", "main")
+	for name, content := range map[string]string{"CLAUDE.md": "# Rules\n\nSENTINEL-7Q\n", ".mcp.json": servers} {
+		if err := os.WriteFile(filepath.Join(seed, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gittest.Run(t, seed, "add", "-A")
+	gittest.Run(t, seed, "commit", "-qm", "base")
+	origin := filepath.Join(t.TempDir(), "origin.git")
+	gittest.Run(t, seed, "clone", "-q", "--bare", seed, origin)
+	parent := t.TempDir()
+	gittest.Run(t, parent, "clone", "-q", origin, "wt")
+	worktree := filepath.Join(parent, "wt")
+	if err := os.WriteFile(filepath.Join(worktree, ".mcp.json"), []byte(strings.Replace(servers, `"r":`, `"evil": {"command": "/bin/sh"}, "r":`, 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var asked []string
+	t.Cleanup(adapters.SwapOpenCodeMcpForgeForTest(openCodeVerbForge{files: map[string]string{".mcp.json": servers}, mu: &sync.Mutex{}, asked: &asked}))
+	out, stderr, err := runOpenCodeVerbStderr(t, "--stage", "feature-dev", "--worktree", worktree, "--repo", "fixture-owner/fixture-repo", "--run-id", openCodeVerbRunID, "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(asked, []string{"fixture-owner/fixture-repo"}) {
+		t.Errorf("the forge was asked for %v, want --repo's fixture-owner/fixture-repo", asked)
+	}
+	if strings.Contains(out, token) {
+		t.Fatalf("the verb's output holds the MCP credential's value:\n%s", out)
+	}
+	var run adapters.OpenCodeRun
+	if err := json.Unmarshal([]byte(out), &run); err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Instructions []string                  `json:"instructions"`
+		MCP          map[string]map[string]any `json:"mcp"`
+	}
+	if err := json.Unmarshal([]byte(run.ConfigContent), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(worktree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Instructions) != 2 || cfg.Instructions[0] != filepath.Join(resolved, "CLAUDE.md") || cfg.Instructions[1] != filepath.Join(run.RunDir, "nightgauge", "steering.md") {
+		t.Errorf("instructions = %q; want the worktree's CLAUDE.md, then the run's steering file", cfg.Instructions)
+	}
+	if len(cfg.MCP) != 1 || cfg.MCP["r"]["headers"].(map[string]any)["Authorization"] != "Bearer {env:MCP_FIXTURE_TOKEN}" {
+		t.Errorf("mcp = %v; want r alone, its credential a {env:MCP_FIXTURE_TOKEN} reference", cfg.MCP)
+	}
+	if !strings.Contains(stderr, "not started: evil") {
+		t.Errorf("stderr does not name the server left out:\n%s", stderr)
+	}
+
+	out, stderr, err = runOpenCodeVerbStderr(t, "--stage", "feature-dev", "--worktree", worktree, "--run-id", openCodeVerbRunID, "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(out), &run); err != nil {
+		t.Fatal(err)
+	}
+	cfg.MCP = nil
+	if err := json.Unmarshal([]byte(run.ConfigContent), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.MCP) != 0 || !strings.Contains(stderr, "records no repository") {
+		t.Errorf("without --repo, mcp = %v and stderr:\n%s", cfg.MCP, stderr)
 	}
 }
 

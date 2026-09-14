@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
 )
 
 // fixedOpenCodeSettings stands in for the machine-tier `opencode:` block, so
@@ -68,19 +69,52 @@ func jsonPath(doc map[string]any, keys ...string) any {
 	return cur
 }
 
+// goldenWorktree is a worktree that is never created: BuildOpenCodeConfig
+// only names files in it.
+const goldenWorktree = "/nightgauge-test-worktree"
+
+// goldenRepository is what the reference stage is given from its repository:
+// its AGENTS.md and a file it imports, the baseline steering, and a local and
+// a remote MCP server, translated from the pipeline's .mcp.json shape.
+func goldenRepository(t *testing.T) codexprovision.OpenCodeProvision {
+	t.Helper()
+	servers, warnings := codexprovision.OpenCodeMcpServers(map[string]codexprovision.PipelineMcpServer{
+		"fs":     {Command: "npx", Args: []string{"-y", "srv"}, Env: map[string]string{"LEVEL": "debug", "TOKEN": "${FIXTURE_TOKEN}"}},
+		"remote": {Type: "http", URL: "https://mcp.example.test/mcp", Headers: map[string]string{"Authorization": "Bearer ${FIXTURE_TOKEN}", "X-Team": "core"}},
+	})
+	if len(warnings) > 0 {
+		t.Fatalf("the reference servers drew warnings: %v", warnings)
+	}
+	return codexprovision.OpenCodeProvision{
+		Root:         goldenWorktree,
+		Steering:     "# Nightgauge Pipeline Steering (OpenCode)\n\n## Key Rules\n\n- Never push directly to main",
+		Instructions: []string{goldenWorktree + "/AGENTS.md", goldenWorktree + "/docs/rules.md"},
+		MCP:          servers,
+		McpSource:    "origin/main",
+	}
+}
+
 // TestOpenCodeConfigGolden pins the whole per-run config for the reference
-// dispatch: a feature-dev stage with a 40-turn cap on the reference LM Studio.
-// Every key the builder sets is in the golden, so dropping one (share,
-// small_model, a limit, a steps cap) changes it. The content is compared byte
-// for byte after the golden's whitespace is removed.
+// dispatch: a feature-dev stage with a 40-turn cap on the reference LM
+// Studio, in a repository with steering and MCP servers. Every key the
+// builder sets is in the golden, so dropping one (share, small_model, a
+// limit, a steps cap, an instructions entry, an MCP server's oauth) changes
+// it. The content is compared byte for byte after the golden's whitespace is
+// removed.
 //
 //	NIGHTGAUGE_UPDATE_GOLDEN=1 go test ./internal/execution/adapters/ -run TestOpenCodeConfigGolden
 func TestOpenCodeConfigGolden(t *testing.T) {
-	built, err := buildOpenCodeConfigFor(t, lmStudioSettings(), RunOptions{
-		Stage:    "feature-dev",
-		Model:    "lmstudio/qwen/qwen3.8-27b",
-		MaxTurns: 40,
-	}, nil)
+	in, err := OpenCodeConfigInputFor(lmStudioSettings(), RunOptions{
+		Stage:       "feature-dev",
+		Model:       "lmstudio/qwen/qwen3.8-27b",
+		MaxTurns:    40,
+		WorktreeDir: goldenWorktree,
+	}, goldenRunRoot, envLookup(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.Repository = goldenRepository(t)
+	built, err := BuildOpenCodeConfig(in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,8 +144,9 @@ func TestOpenCodeConfigGolden(t *testing.T) {
 	}
 
 	file := filepath.Join(goldenRunRoot, "nightgauge", "lmstudio.base-url")
-	if got := built.Files; len(got) != 1 || got[file] != "http://127.0.0.1:1234/v1" {
-		t.Errorf("Files = %q, want the endpoint's base URL at %s and nothing else", got, file)
+	steering := filepath.Join(goldenRunRoot, "nightgauge", "steering.md")
+	if got := built.Files; len(got) != 2 || got[file] != "http://127.0.0.1:1234/v1" || got[steering] != in.Repository.Steering {
+		t.Errorf("Files = %q, want the endpoint's base URL at %s, the steering at %s and nothing else", got, file, steering)
 	}
 	if built.NonLoopback {
 		t.Error("a loopback endpoint was flagged non_loopback")
@@ -529,6 +564,124 @@ func TestOpenCodeConfigCredentialsAreReferences(t *testing.T) {
 	}
 }
 
+// TestOpenCodeConfigRefusesAnInstructionsEntryItCannotWriteSafely: the
+// builder is the one writer of a run's config, so it refuses an instructions
+// entry that is a URL, which OpenCode would fetch, a relative path, a path
+// outside the worktree, one holding a brace, which OpenCode's substitution
+// reads, and one whose name OpenCode would glob, whatever gave it the entry.
+// A worktree entry and the run's steering file are written.
+func TestOpenCodeConfigRefusesAnInstructionsEntryItCannotWriteSafely(t *testing.T) {
+	build := func(entries ...string) (OpenCodeRunConfig, error) {
+		in, err := OpenCodeConfigInputFor(lmStudioSettings(), RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"}, goldenRunRoot, envLookup(nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		in.Repository = codexprovision.OpenCodeProvision{Root: goldenWorktree, Steering: "steering", Instructions: entries}
+		return BuildOpenCodeConfig(in)
+	}
+	for _, entry := range []string{
+		"https://example.test/rules.md",
+		"AGENTS.md",
+		"/elsewhere/AGENTS.md",
+		goldenWorktree + "/{file:~/.ssh/id_rsa}.md",
+		goldenWorktree + "/docs/*.md",
+		goldenWorktree + "/docs/../../etc/passwd",
+	} {
+		if built, err := build(entry); err == nil {
+			t.Errorf("instructions entry %q was written:\n%s", entry, built.Content)
+		}
+	}
+	built, err := build(goldenWorktree + "/AGENTS.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := jsonPath(decodeOpenCodeConfig(t, built.Content), "instructions").([]any)
+	steering := filepath.Join(goldenRunRoot, "nightgauge", "steering.md")
+	if len(got) != 2 || got[0] != goldenWorktree+"/AGENTS.md" || got[1] != steering || built.Files[steering] != "steering" {
+		t.Errorf("instructions = %v, files = %v; want the worktree's AGENTS.md, then the steering file holding the steering", got, built.Files)
+	}
+}
+
+// TestOpenCodeConfigRefusesAnMcpServerItCannotWriteSafely: an MCP server may
+// carry OpenCode's substitution syntax only as a {env:VAR} reference. A
+// {file:...} reference, which would read a file into the config, and a
+// malformed {env: are refused, and so is a server that is neither a local one
+// with a command nor a remote one with a URL.
+func TestOpenCodeConfigRefusesAnMcpServerItCannotWriteSafely(t *testing.T) {
+	off := false
+	build := func(s codexprovision.OpenCodeMcpServer) (OpenCodeRunConfig, error) {
+		in, err := OpenCodeConfigInputFor(lmStudioSettings(), RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"}, goldenRunRoot, envLookup(nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		in.Repository = codexprovision.OpenCodeProvision{MCP: map[string]codexprovision.OpenCodeMcpServer{"s": s}}
+		return BuildOpenCodeConfig(in)
+	}
+	for name, s := range map[string]codexprovision.OpenCodeMcpServer{
+		"file header":   {Type: "remote", URL: "https://mcp.example.test", Headers: map[string]string{"X": "{file:~/.ssh/id_rsa}"}, OAuth: &off, Enabled: true},
+		"malformed env": {Type: "local", Command: []string{"srv"}, Environment: map[string]string{"K": "{env:A B}"}, Enabled: true},
+		"file command":  {Type: "local", Command: []string{"{file:/etc/passwd}"}, Enabled: true},
+		"no command":    {Type: "local", Enabled: true},
+		"no url":        {Type: "remote", OAuth: &off, Enabled: true},
+		"no type":       {Command: []string{"srv"}, Enabled: true},
+	} {
+		if built, err := build(s); err == nil {
+			t.Errorf("%s: the server was written:\n%s", name, built.Content)
+		}
+	}
+	built, err := build(codexprovision.OpenCodeMcpServer{Type: "local", Command: []string{"srv", "--token={env:TOKEN}"}, Environment: map[string]string{"K": `{env:K}{"a":1}`}, Enabled: true})
+	if err != nil {
+		t.Fatalf("a server with {env:VAR} references was refused: %v", err)
+	}
+	if got := jsonPath(decodeOpenCodeConfig(t, built.Content), "mcp", "s", "type"); got != "local" {
+		t.Errorf("mcp.s.type = %v", got)
+	}
+}
+
+// TestOpenCodeConfigRefusesAValueOpenCodeCannotPaste: OpenCode pastes each
+// {env:NAME}'s value into the config text unescaped before it parses it, so
+// one value it cannot paste fails the whole config, and its error prints the
+// text with every credential it resolved, the MCP servers' included. The
+// builder is the one writer of the content, so it refuses a dispatch while
+// any reference the content holds names such a value: ANTHROPIC_API_KEY ending
+// in a carriage return, as one read from a file with CRLF line endings does,
+// holding a quote, a backslash or {file:, or an MCP server's variable. The
+// refusal names the variable, never the value.
+func TestOpenCodeConfigRefusesAValueOpenCodeCannotPaste(t *testing.T) {
+	const value = "fixture-anthropic-value-1626"
+	run := RunOptions{Model: "anthropic/claude-sonnet-5", MaxTurns: 40}
+	for _, bad := range []string{value + "\r", value + `"`, value + `\x`, value + "{file:/nonexistent}"} {
+		built, err := buildOpenCodeConfigFor(t, config.OpenCodeConfig{}, run, map[string]string{"ANTHROPIC_API_KEY": bad})
+		switch {
+		case err == nil:
+			t.Errorf("ANTHROPIC_API_KEY %q: a config was built:\n%s", bad, built.Content)
+		case !strings.Contains(err.Error(), "ANTHROPIC_API_KEY") || strings.Contains(err.Error(), value):
+			t.Errorf("ANTHROPIC_API_KEY %q: the refusal should name the variable and not its value: %v", bad, err)
+		}
+	}
+
+	off := false
+	build := func(token string) (OpenCodeRunConfig, error) {
+		in, err := OpenCodeConfigInputFor(lmStudioSettings(), RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"}, goldenRunRoot,
+			envLookup(map[string]string{"MCP_FIXTURE_TOKEN": token}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		in.Repository = codexprovision.OpenCodeProvision{MCP: map[string]codexprovision.OpenCodeMcpServer{
+			"r": {Type: "remote", URL: "https://mcp.example.test/mcp", Headers: map[string]string{"Authorization": "Bearer {env:MCP_FIXTURE_TOKEN}"}, OAuth: &off, Enabled: true},
+		}}
+		return BuildOpenCodeConfig(in)
+	}
+	if built, err := build(value + "\n"); err == nil {
+		t.Errorf("an MCP server's variable holding a newline was written:\n%s", built.Content)
+	} else if !strings.Contains(err.Error(), "MCP_FIXTURE_TOKEN") || strings.Contains(err.Error(), value) {
+		t.Errorf("the refusal should name the variable and not its value: %v", err)
+	}
+	if _, err := build(value); err != nil {
+		t.Errorf("a value OpenCode can paste was refused: %v", err)
+	}
+}
+
 // TestOpenCodeAnthropicRequiresAPIKey: the builder refuses an anthropic/ model
 // while ANTHROPIC_API_KEY is unset or empty, naming the variable, the same
 // refusal PreDispatch makes, so the verb, which never calls PreDispatch,
@@ -777,7 +930,7 @@ func TestPrepareOpenCodeRunNamesWhatTheSpawnMustNotInherit(t *testing.T) {
 			Home:             home,
 			ID:               testRunID,
 			MachineConfigDir: filepath.Join(home, ".nightgauge"),
-			Run:              RunOptions{Stage: "feature-dev", Model: model},
+			Run:              RunOptions{Stage: "feature-dev", Model: model, WorktreeDir: t.TempDir()},
 			Settings:         lmStudioSettings(),
 			Lookup:           envLookup(nil),
 			GOOS:             "linux",
@@ -844,7 +997,7 @@ func TestPrepareOpenCodeRunRefusesConfigARunCannotBeIsolatedFrom(t *testing.T) {
 		Home:             home,
 		ID:               testRunID,
 		MachineConfigDir: filepath.Join(home, ".nightgauge"),
-		Run:              RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b"},
+		Run:              RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b", WorktreeDir: t.TempDir()},
 		Settings:         lmStudioSettings(),
 		Lookup:           envLookup(nil),
 		GOOS:             "linux",
@@ -883,7 +1036,7 @@ func TestPrepareOpenCodeRunKeepsTheBaseURLOutOfTheEnvironment(t *testing.T) {
 		Home:             home,
 		ID:               testRunID,
 		MachineConfigDir: filepath.Join(home, ".nightgauge"),
-		Run:              RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b", MaxTurns: 40},
+		Run:              RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b", MaxTurns: 40, WorktreeDir: t.TempDir()},
 		Settings:         lmStudioSettings(),
 		Lookup:           envLookup(nil),
 		GOOS:             "linux",

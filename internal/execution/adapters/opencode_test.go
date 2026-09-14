@@ -266,8 +266,9 @@ func TestOpenCodeGate(t *testing.T) {
 // But the target repository's opencode.json and .opencode/ still load until
 // #1638, and they can add what the per-run config does not set: an agent or
 // subagent of their own, with its own model on the dispatched provider and no
-// steps cap, a remote instructions URL, or a provider header that carries an
-// environment variable to the model server. They can also add options.model
+// steps cap, an MCP server of their own, which OpenCode starts beside the
+// default branch's (#1626), a remote instructions URL, or a provider header that
+// carries an environment variable to the model server. They can also add options.model
 // to the dispatched model's own entry or an agent's own options, or a
 // variant, and change the model actually served without touching the pinned
 // id; on anthropic, options.speed or options.fallbacks the same way; and an
@@ -281,22 +282,25 @@ func TestOpenCodeGate(t *testing.T) {
 // repository can add, including the three routes #1638 has yet to close, the
 // endpoint line names the other model and Ollama cloud models, and the
 // stage-limits line names the limits. The warning is also the only disclosure
-// of what the output redaction leaves in place, of a repository whose
-// steering does not load, and of the stage limits a run does not get, so
-// those lines name exactly what is redacted, which steering file is dropped
-// and which limit is missing.
+// of what the output redaction leaves in place and of the stage limits a run
+// does not get, so those lines name exactly what is redacted and which limit
+// is missing. Repository steering is no longer on it: the per-run config
+// names the repository's steering files as instructions (#1626).
 func TestOpenCodeWarningDisclosesWhereThePromptCanGo(t *testing.T) {
 	gaps := map[string]string{}
 	for _, c := range openCodeUnenforcedControls {
 		gaps[c.name] = c.gap
 	}
-	if _, ok := gaps["egress defaults"]; ok {
-		t.Error("the warning still lists egress defaults, which the per-run config enforces")
+	for _, enforced := range []string{"egress defaults", "repository steering"} {
+		if _, ok := gaps[enforced]; ok {
+			t.Errorf("the warning still lists %s, which the per-run config enforces", enforced)
+		}
 	}
 	for name, wants := range map[string][]string{
 		"project-config tamper gate": {
 			"the target repository's opencode.json and .opencode/", "cannot change a key the per-run config sets",
-			"agent or subagent of their own", "no steps cap", "remote instructions URL", "header on the provider block",
+			"agent or subagent of their own", "no steps cap", "an MCP server of their own, which OpenCode starts",
+			"remote instructions URL", "header on the provider block",
 			"forge token", "options.model", "without touching the pinned id", "options.speed", "options.fallbacks",
 			"options.mcpServers", "ANTHROPIC_API_KEY",
 		},
@@ -309,7 +313,6 @@ func TestOpenCodeWarningDisclosesWhereThePromptCanGo(t *testing.T) {
 			"only the values of the server password, GITHUB_TOKEN, GH_TOKEN, GITLAB_TOKEN",
 			"the dispatched provider", "every other secret the child holds", "stays in it",
 		},
-		"repository steering": {"AGENTS.md", "not its CLAUDE.md", "runs without it"},
 	} {
 		gap, ok := gaps[name]
 		if !ok {

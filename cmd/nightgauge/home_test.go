@@ -1,11 +1,13 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/hometest"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 )
@@ -17,7 +19,11 @@ import (
 // #1426. See internal/hometest.
 func TestMain(m *testing.M) {
 	cleanup := hometest.Isolate()
+	// No test here reaches GitHub for an OpenCode stage's MCP servers; one
+	// that reads them swaps in a forge of its own.
+	restoreForge := adapters.SwapOpenCodeMcpForgeForTest(openCodeVerbForge{err: errors.New("the cmd test binary reads no forge")})
 	code := m.Run()
+	restoreForge()
 	cleanup()
 	os.Exit(code)
 }

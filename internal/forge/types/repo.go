@@ -21,3 +21,24 @@ type Repo struct {
 type Actor struct {
 	Login string `json:"login"`
 }
+
+// RepoFile is one path of a repository as its forge serves it at a commit.
+type RepoFile struct {
+	// Regular is true when the path is a regular file. A symbolic link, a
+	// directory or a submodule at the path is not, and has no Content.
+	Regular bool `json:"regular"`
+	// Content is the file's bytes when Regular.
+	Content []byte `json:"content,omitempty"`
+}
+
+// DefaultBranchFiles is the head of a repository's default branch as its
+// forge reports it, and files read at that commit in the same answer.
+type DefaultBranchFiles struct {
+	// Branch is the default branch's name.
+	Branch string `json:"branch"`
+	// Commit is the object id of the commit at the branch's head.
+	Commit string `json:"commit"`
+	// Files holds each path asked for that the commit has; a path the commit
+	// does not have is absent.
+	Files map[string]RepoFile `json:"files"`
+}

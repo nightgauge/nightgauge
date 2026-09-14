@@ -11,12 +11,18 @@
 // The TypeScript modules are the reference behavior to mirror: managed-block
 // markers, user-wins-on-collision, control-char escaping, and the idempotent /
 // non-destructive merge semantics are kept byte-for-byte compatible. #4041
+//
+// OpenCode stages share the steering and the MCP sources (#1626) but are
+// provisioned without writing anything: ProvisionOpenCode reads the steering,
+// the repository's own steering files and the MCP servers of the run's
+// repository's default branch on its forge, and the opencode adapter's
+// per-run config delivers them (opencode_steering.go, opencode_mcp.go). The
+// package keeps its name because the scheduler imports it.
 package codexprovision
 
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -60,23 +66,31 @@ type codexMcpServer struct {
 // `.claude/settings.json` `mcpServers` (secondary). `.mcp.json` wins on a name
 // clash. Malformed/non-string env+header values are coerced (never crash).
 func ReadPipelineMcpServers(workspaceRoot string) map[string]PipelineMcpServer {
+	return readPipelineMcpServers(workspaceRoot, readFileGracefully)
+}
+
+// readPipelineMcpServers is ReadPipelineMcpServers reading each source file
+// (mcpSourceFiles, in merge order) through read, which returns false for a
+// missing file. An OpenCode stage reads through a worktreeReader.
+func readPipelineMcpServers(workspaceRoot string, read readFunc) map[string]PipelineMcpServer {
 	merged := map[string]PipelineMcpServer{}
-	for k, v := range extractServers(filepath.Join(workspaceRoot, ".claude", "settings.json")) {
-		merged[k] = v
-	}
-	for k, v := range extractServers(filepath.Join(workspaceRoot, ".mcp.json")) {
-		merged[k] = v // .mcp.json takes precedence
+	for _, path := range mcpSourceFiles {
+		raw, ok := read(filepath.Join(workspaceRoot, filepath.FromSlash(path)))
+		if !ok {
+			continue
+		}
+		for k, v := range extractServersFromJSON([]byte(raw)) {
+			merged[k] = v // a later file, .mcp.json, takes precedence
+		}
 	}
 	return merged
 }
 
-// extractServers reads a JSON file and returns its `mcpServers` map, tolerating
-// missing files, malformed JSON, and non-string env/header values.
-func extractServers(filePath string) map[string]PipelineMcpServer {
-	raw, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil
-	}
+// extractServersFromJSON returns the `mcpServers` map of a JSON document, the
+// content of a file in the working tree (readPipelineMcpServers) or of a blob
+// on the forge (ReadForgeMcpServers), tolerating malformed JSON and
+// non-string env/header values.
+func extractServersFromJSON(raw []byte) map[string]PipelineMcpServer {
 	// Decode loosely so non-string env/header values (JSON numbers/booleans) are
 	// coerced rather than failing the whole parse (#4025 review #2/#8).
 	var root struct {

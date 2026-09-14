@@ -115,6 +115,10 @@ capture script and the full observation table are in
 | Read from the bundled source: a model with a `limit.input` compacts at `limit.input` less `compaction.reserved`, so a lower layer's `limit.input` moves the threshold          | § 7, § 8                   |
 | A repository `opencode.json` that gives `anthropic` a `baseURL` re-points `ANTHROPIC_API_KEY` to it unless `OPENCODE_CONFIG_CONTENT` sets one                                  | § 17                       |
 | An unknown key in `OPENCODE_CONFIG_CONTENT` is dropped without a word                                                                                                          | § 8                        |
+| An `instructions` entry naming the resolved path of the `AGENTS.md` OpenCode finds itself loads it once; read from the bundled source, the entry's name is a glob              | § 8                        |
+| `mcp` entries of the `local` and `remote` shapes parse in `OPENCODE_CONFIG_CONTENT`, and OpenCode resolves an `{env:VAR}` in them in its own process                           | § 8                        |
+| An `{env:VAR}` value is pasted unescaped: a quote, backslash or control character in it fails the parse, whose error prints the config; a `{file:...}` in it is read           | § 8                        |
+| While project config loads, OpenCode's own search loads an `AGENTS.md` that is a symbolic link to a file outside the worktree                                                  | § 8                        |
 | `opencode debug config` exits 1 on a value of the wrong type in `OPENCODE_CONFIG_CONTENT`, 0 on an unknown key, and prints every other key the content sets                    | § 20                       |
 | `opencode models` lists a configured endpoint's model with the endpoint's server stopped                                                                                       | § 20                       |
 | `opencode run --help` prints its help on stderr and nothing on stdout                                                                                                          | § 20                       |
@@ -203,7 +207,6 @@ has opted in.
 | failure classification     | #1624, #1631  |
 | output redaction           | #1624, #1678  |
 | project-config tamper gate | #1638         |
-| repository steering        | #1626         |
 | permission map             | #1638         |
 | safety plugin              | #1635, #1640  |
 | endpoint policy            | #1678, #1679  |
@@ -552,9 +555,10 @@ reports it `non_loopback: true`, as it does every hosted provider's model.
   provider the stage dispatches to (§ 1, § 17, § Endpoints), keyed by endpoint
   id; the locked keys of § 15; `enabled_providers` narrowed to the dispatched
   key; the limits, compaction policy, tool-output caps and steps cap; and
-  § 12's settings. The permission map (§ 9, #1638), the plugin list (#1635) and
-  the `instructions` entries and MCP servers (#1626) extend the same builder,
-  so there is no second writer. Observed on 1.18.30, OpenCode merges its
+  § 12's settings; and the repository's steering as `instructions` entries and
+  the pipeline's MCP servers (below, #1626). The permission map (§ 9, #1638)
+  and the plugin list (#1635) extend the same builder, so there is no second
+  writer. Observed on 1.18.30, OpenCode merges its
   config in this order, lowest first: the files in the XDG config directory,
   `OPENCODE_CONFIG`, the repository's files, the config directories
   (`OPENCODE_CONFIG_DIR` last among them), `OPENCODE_CONFIG_CONTENT`, and then,
@@ -584,8 +588,8 @@ reports it `non_loopback: true`, as it does every hosted provider's model.
   (#1638), and until then its warning line says so. Second, a model's
   `limit.input` decides its compaction threshold, so the endpoint's model
   block sets it (§ 7). Third, `instructions` are concatenated across layers,
-  not replaced, so the content's empty list removes none; the repository's
-  are the tamper gate's (#1638). Fourth, read from the 1.18.30 bundled source
+  not replaced, so the content's list removes none; the repository's are the
+  tamper gate's (#1638). Fourth, read from the 1.18.30 bundled source
   and observed, a model entry's `id` is the model name OpenCode sends and its
   `provider.npm` the SDK package it loads, both in place of the provider
   block's: with a repository entry giving the dispatched model an `id` of its
@@ -747,11 +751,91 @@ reports it `non_loopback: true`, as it does every hosted provider's model.
   stage must not rewrite the config the next stage runs under. #1638 (with
   #1626) sets the switch.
 - **Steering.** Observed: that switch also hides the repository's `AGENTS.md`
-  and `CLAUDE.md`. The repository's steering therefore reaches OpenCode only as
-  an `instructions` entry with an absolute path into the worktree, which was
-  observed to load. #1626 applies the rule Codex and Gemini steering already
-  use: `AGENTS.md`, or `CLAUDE.md` without its `@AGENTS.md` import only when
-  `AGENTS.md` has no content of its own.
+  and `CLAUDE.md`. The repository's steering therefore reaches OpenCode only
+  as `instructions` entries, never because OpenCode finds it, and the per-run
+  config carries them whether the switch is set or not (#1626). Each is an
+  absolute path, the form observed to load in every configuration: the
+  repository's steering file, by the rule Codex and Gemini steering already
+  use (`AGENTS.md`, or `CLAUDE.md` without its `@AGENTS.md` import only when
+  `AGENTS.md` has no content of its own); every file it imports; and a file in
+  the run root's `nightgauge/` directory holding the baseline steering that
+  Codex's managed `AGENTS.md` block comes from, the one function both use.
+  Nothing is written into the worktree. Imports resolve as Claude Code
+  resolves them, relative to the importing file, up to three deep, and no
+  file is given twice, so a cycle ends. They stay inside the worktree: a URL,
+  a path in the home directory, an absolute path, one whose `..` leaves the
+  worktree and a symbolic link out of it are each left out with a warning on
+  stderr. Every file Nightgauge reads for the stage, the baseline steering's
+  sources and the worktree's MCP files included, is read only when it is a
+  regular file inside the worktree once its symbolic links are resolved, and
+  only its first MiB. A link out of the worktree, a FIFO or a device is passed
+  over with a warning, and the rule falls through to the next source, such as
+  `CLAUDE.md` for an `AGENTS.md` linked out of the worktree. So nothing
+  Nightgauge gives OpenCode comes from outside the repository. OpenCode's own
+  search, which reads the repository's `AGENTS.md` while project config loads,
+  is not confined by this: observed, it loads an `AGENTS.md` linked out of the
+  worktree, and switching project config off (#1638) ends it. Read
+  from the 1.18.30 bundled source, OpenCode loads an absolute entry by
+  globbing its last element in its directory, so an entry whose name holds a
+  character a pattern could read is left out too. Every path is written with
+  its symbolic links resolved, the form of the paths OpenCode finds itself,
+  so a file both name loads once.
+- **MCP servers.** The per-run config's `mcp` holds the pipeline's MCP
+  servers, the ones a Claude stage gets from `.mcp.json` and
+  `.claude/settings.json`, and no others (#1626). They are read from the
+  forge, not from the worktree and not from the repository on the machine: a
+  server is a command OpenCode runs or a URL it sends tool calls to, and a
+  stage can write its worktree, so a server one stage added to `.mcp.json`
+  would otherwise start in the next without review. A stage can write the
+  rest of the repository too, and every worktree of it shares that: the refs
+  and objects (a moved `origin/main`, a deleted object, a `refs/replace/`
+  entry), the git config that says where origin is and how git reaches it
+  (`remote.origin.url`, `url.<x>.insteadOf`, transport settings git would run
+  in the orchestrator's environment), and its worktree's `.git` file. So none
+  of it is read and no `git` command runs for the servers. The repository is
+  the one the pipeline records for the run (the dispatch's target repository,
+  `owner/name`; `nightgauge opencode config` takes it as `--repo`), never one
+  parsed from the worktree's git config. One GitHub GraphQL query, through
+  the pipeline's GitHub client and the identity the workspace config names for
+  the repository's owner, returns the default branch, the commit at its head
+  and `.claude/settings.json` and `.mcp.json` at that commit, so both files
+  come from the commit the answer names; a file that commit does not have
+  gives no server, and one it has as a symbolic link is not followed. The
+  read, the identity's token included, is bounded to 15 seconds, and a `gh`
+  it runs for the token is killed at the deadline. When the read fails, times
+  out, or the run records no repository, the stage gets no MCP server and one
+  warning on stderr says why; nothing falls back to a local ref. A warning
+  names a server only the worktree defines, one it defines differently, and
+  one only the default branch defines, and stderr names the repository,
+  branch and commit the servers were read at. The servers are what GitHub
+  serves for that repository's default branch, and no write a stage makes on
+  the machine changes them. Each `${VAR}` becomes OpenCode's `{env:VAR}`, so
+  no variable's value is in the content, and a value already holding
+  OpenCode's `{env:...}` or `{file:...}` syntax refuses its server, because
+  OpenCode would substitute it. OpenCode resolves a
+  `{env:VAR}` in its own process by pasting the variable's value into its
+  config text before parsing it, unescaped (read from the 1.18.30 bundled
+  source, and observed): a quote, a backslash or a control character in the
+  value makes the whole config fail to parse, and OpenCode's error prints the
+  substituted config, every resolved credential in it, and a `{file:...}` in
+  the value is read as a file reference. So each variable a server names is
+  checked in the environment OpenCode is spawned with, its value never
+  recorded: the run's isolation variables (and `OPENCODE_CONFIG_CONTENT`,
+  which always holds a quote) laid over the inherited environment, less the
+  variables the spawn withholds. A server one of whose variables holds such a
+  value is left out with a warning naming the variable. The builder then
+  checks every `{env:VAR}` the finished content holds the same way,
+  `{env:ANTHROPIC_API_KEY}` included,
+  and refuses the dispatch, naming the variable, when one holds such a value:
+  a key read from a file with CRLF line endings ends in a carriage return, and
+  would otherwise fail the parse and print every MCP credential beside it. A
+  remote server is given `oauth: false`: OpenCode's OAuth flow needs a browser
+  login and a callback server on the machine, which a headless stage cannot
+  complete. The operator's own servers
+  stay out with the rest of their OpenCode config (`inherit_user_config`,
+  below); a repository's `opencode.json` can still add a server of its own,
+  which OpenCode starts beside these, until the tamper gate closes that route
+  (#1638), and until then the tamper-gate warning line says so.
 - **`--pure` is never passed.** It would also drop the Nightgauge plugin.
   Plugins are controlled by the per-run `plugin` list (the Nightgauge plugin
   and nothing else) and `OPENCODE_DISABLE_DEFAULT_PLUGINS=1`. Observed by
@@ -903,14 +987,12 @@ disabled (§ 8) drops it anyway.
   OpenCode finding a repository's `.agents/skills` by itself, which is § 8's
   rule anyway: Nightgauge renders a stage's skills (#1666), and OpenCode
   discovers nothing.
-- The repository's `CLAUDE.md` fallback reaches a run only once Nightgauge
-  injects it (§ 8, #1626), never because OpenCode finds it. Until then
-  `_PROMPT` hides it, so a repository whose only steering is `CLAUDE.md` runs
-  without its rules, and the enabled-dispatch warning's repository-steering
-  line says so.
-- `@imports` are not followed; OpenCode never followed them in any
-  configuration observed. Steering that depends on an import is inlined by
-  #1626's injection, which already strips the `@AGENTS.md` import line.
+- The repository's `CLAUDE.md` fallback reaches a run because Nightgauge
+  injects it (§ 8, #1626), never because OpenCode finds it: `_PROMPT` hides it
+  from OpenCode's own search.
+- OpenCode never followed an `@import` in any configuration observed.
+  Nightgauge resolves each into an `instructions` entry of its own (§ 8), and
+  skips the `@AGENTS.md` import line of a `CLAUDE.md` it gives.
 
 ### 12. Pipeline defaults for `snapshot`, `lsp` and `formatter`
 

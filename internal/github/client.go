@@ -273,15 +273,7 @@ func configuredGitHubUser(cfg TokenResolver, owner string) string {
 // execGHAuthToken obtains a token from the default gh CLI user.
 // Replaced in tests to avoid spawning real processes.
 var execGHAuthToken = func() (string, error) {
-	out, err := exec.Command("gh", "auth", "token").Output()
-	if err != nil {
-		return "", fmt.Errorf("gh auth token: %w", err)
-	}
-	tok := strings.TrimSpace(string(out))
-	if tok == "" {
-		return "", fmt.Errorf("gh auth token: empty output")
-	}
-	return tok, nil
+	return ghAuthToken(context.Background(), "")
 }
 
 // execGHAuthTokenForUser obtains a token from gh CLI for a specific user.
@@ -294,15 +286,36 @@ var execGHAuthToken = func() (string, error) {
 // silently the wrong identity. Stripping the env forces gh to read THAT user's
 // keyring entry, which is the whole point of scoping by --user (#4068).
 var execGHAuthTokenForUser = func(user string) (string, error) {
-	cmd := exec.Command("gh", "auth", "token", "--user", user)
-	cmd.Env = envWithout(os.Environ(), "GH_TOKEN", "GITHUB_TOKEN")
+	return ghAuthToken(context.Background(), user)
+}
+
+// ghAuthTokenWaitDelay bounds how long ghAuthToken waits for gh's output
+// pipes once gh has exited or ctx has ended, so a process gh leaves holding
+// them cannot hold the caller.
+const ghAuthTokenWaitDelay = 2 * time.Second
+
+// ghAuthToken runs `gh auth token`, for user when it is not empty, under ctx:
+// gh is killed when ctx ends. For a user, ambient GH_TOKEN and GITHUB_TOKEN
+// are stripped from gh's environment (execGHAuthTokenForUser).
+func ghAuthToken(ctx context.Context, user string) (string, error) {
+	args := []string{"auth", "token"}
+	label := "gh auth token"
+	if user != "" {
+		args = append(args, "--user", user)
+		label += " --user " + user
+	}
+	cmd := exec.CommandContext(ctx, "gh", args...)
+	if user != "" {
+		cmd.Env = envWithout(os.Environ(), "GH_TOKEN", "GITHUB_TOKEN")
+	}
+	cmd.WaitDelay = ghAuthTokenWaitDelay
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("gh auth token --user %s: %w", user, err)
+		return "", fmt.Errorf("%s: %w", label, err)
 	}
 	tok := strings.TrimSpace(string(out))
 	if tok == "" {
-		return "", fmt.Errorf("gh auth token --user %s: empty output", user)
+		return "", fmt.Errorf("%s: empty output", label)
 	}
 	return tok, nil
 }
@@ -362,7 +375,22 @@ func NewClientFromConfig(cfg TokenResolver, owner string, cliToken string) (*Cli
 	if cliToken != "" {
 		return NewClientWithToken(cliToken), nil
 	}
+	return newClientFromChain(cfg, owner, execGHAuthTokenForUser, execGHAuthToken)
+}
 
+// NewClientFromConfigContext is NewClientFromConfig with no --token flag and
+// every gh CLI call it makes run under ctx, so the gh fallback cannot hold the
+// caller past ctx's deadline. The tiers and the identity rules are
+// NewClientFromConfig's.
+func NewClientFromConfigContext(ctx context.Context, cfg TokenResolver, owner string) (*Client, error) {
+	return newClientFromChain(cfg, owner,
+		func(user string) (string, error) { return ghAuthToken(ctx, user) },
+		func() (string, error) { return ghAuthToken(ctx, "") })
+}
+
+// newClientFromChain is tiers 2 and 3 of NewClientFromConfig, resolving a gh
+// CLI token through forUser and byDefault.
+func newClientFromChain(cfg TokenResolver, owner string, forUser func(string) (string, error), byDefault func() (string, error)) (*Client, error) {
 	// 2. Config-based token (per-project or per-org).
 	if cfg != nil {
 		tok, err := cfg.ResolveToken(owner)
@@ -379,7 +407,7 @@ func NewClientFromConfig(cfg TokenResolver, owner string, cliToken string) (*Cli
 	// as it regardless of whatever ambient token the runner injected.
 	if user := configuredGitHubUser(cfg, owner); user != "" {
 		warnGHFallback(cfg)
-		tok, err := execGHAuthTokenForUser(user)
+		tok, err := forUser(user)
 		if err != nil {
 			return nil, fmt.Errorf("no GitHub token available for configured github_user %q (tried config and gh auth token --user; ambient GITHUB_TOKEN is intentionally NOT used for a configured identity): %w", user, err)
 		}
@@ -393,7 +421,7 @@ func NewClientFromConfig(cfg TokenResolver, owner string, cliToken string) (*Cli
 
 	// 3c. No github_user, no env token — fall back to the default gh account.
 	warnGHFallback(cfg)
-	tok, err := execGHAuthToken()
+	tok, err := byDefault()
 	if err != nil {
 		return nil, fmt.Errorf("no GitHub token available (tried config, GITHUB_TOKEN env, and gh CLI): %w", err)
 	}

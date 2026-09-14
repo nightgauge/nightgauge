@@ -90,7 +90,7 @@ func TestExtractSummary_CapsAtMaxLines(t *testing.T) {
 // --- assembleSteeringContent ---
 
 func TestAssembleSteeringContent_AlwaysHasHeaderAndRules(t *testing.T) {
-	got := assembleSteeringContent(t.TempDir()) // empty project — no source docs
+	got := assembleSteeringContent(t.TempDir(), codexSteering, readFileGracefully) // empty project — no source docs
 	assertContains(t, got, "# Nightgauge Pipeline Steering (Codex)")
 	assertContains(t, got, "## Key Rules")
 	assertContains(t, got, "Never push directly to main")
@@ -104,7 +104,7 @@ func TestAssembleSteeringContent_IncludesProjectAndStandards(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "standards", "security.md"), "# Security\nNo secrets.\n")
 	writeFile(t, filepath.Join(dir, "docs", "GIT_WORKFLOW.md"), "# Git\nBranch first.\n")
 
-	got := assembleSteeringContent(dir)
+	got := assembleSteeringContent(dir, codexSteering, readFileGracefully)
 	assertContains(t, got, "## Project")
 	assertContains(t, got, "My Project")
 	assertContains(t, got, "## Coding Standards")
@@ -119,7 +119,7 @@ func TestReadProjectDescription_PrefersAgentsMdOverClaudeAdapter(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "AGENTS.md"), "# Contract\n## Scope\nThe real rules.\n")
 	writeFile(t, filepath.Join(dir, "CLAUDE.md"), "@AGENTS.md\n\n# Claude Code adapter\nClaude-only notes.\n")
-	got := readProjectDescription(dir)
+	got := readProjectDescription(dir, readFileGracefully)
 	assertContains(t, got, "The real rules.")
 	if strings.Contains(got, "Claude-only") {
 		t.Errorf("adapter text leaked into the description: %q", got)
@@ -131,7 +131,7 @@ func TestReadProjectDescription_FallsBackToClaudeSkippingImport(t *testing.T) {
 	// AGENTS.md holding only the managed block has no user part.
 	writeFile(t, filepath.Join(dir, "AGENTS.md"), steeringManagedBegin+"\ngen\n"+steeringManagedEnd+"\n")
 	writeFile(t, filepath.Join(dir, "CLAUDE.md"), "\n@AGENTS.md\n\n# Legacy\nOld-model description.\n")
-	got := readProjectDescription(dir)
+	got := readProjectDescription(dir, readFileGracefully)
 	if strings.Contains(got, "@AGENTS.md") {
 		t.Errorf("the import line is not a description: %q", got)
 	}
@@ -141,7 +141,7 @@ func TestReadProjectDescription_FallsBackToClaudeSkippingImport(t *testing.T) {
 func TestReadProjectDescription_ImportOnlyClaudeIsEmpty(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "CLAUDE.md"), "@AGENTS.md\n")
-	if got := readProjectDescription(dir); got != "" {
+	if got := readProjectDescription(dir, readFileGracefully); got != "" {
 		t.Errorf("import-only CLAUDE.md must yield no description, got %q", got)
 	}
 }
@@ -153,7 +153,7 @@ func TestReadProjectDescription_StripsManagedBlockFromAgentsMd(t *testing.T) {
 		steeringManagedBegin + "\n# generated junk\n" + steeringManagedEnd + "\n"
 	writeFile(t, filepath.Join(dir, "AGENTS.md"), agents)
 
-	got := readProjectDescription(dir)
+	got := readProjectDescription(dir, readFileGracefully)
 	assertContains(t, got, "Real description.")
 	if strings.Contains(got, "generated junk") {
 		t.Errorf("managed block must be stripped before reading AGENTS.md: %q", got)

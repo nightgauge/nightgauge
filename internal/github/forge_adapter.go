@@ -33,6 +33,10 @@ var (
 	// line is the one that keeps the verb working on the default GitHub
 	// forge (#1157).
 	_ forge.GraphQLService = (*ForgeAdapter)(nil)
+
+	// The optional default-branch file read the OpenCode adapter's MCP
+	// servers come from (#1626).
+	_ forge.DefaultBranchFileService = (*RepoService)(nil)
 )
 
 // ForgeAdapter wraps a *Client (plus owner/projectNumber/ownerType) and
