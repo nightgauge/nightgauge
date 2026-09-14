@@ -489,10 +489,10 @@ read by a `TestParseOpenCodeRealCapture*` test in `stream_test.go`:
 | File                                     | Endpoint id                       | Model                     | Steps |
 | ---------------------------------------- | --------------------------------- | ------------------------- | ----: |
 | `opencode_stream_local_capture.jsonl`    | `lmstudio`                        | `qwen/qwen3.8-27b`        |     3 |
+| `opencode_stream_remote_capture.jsonl`   | `lmstudio-remote`                 | `qwen/qwen3.8-27b`        |     5 |
 | `opencode_stream_subagent_capture.jsonl` | `lmstudio`                        | `qwen/qwen3.8-27b`        |     5 |
 | `opencode_stream_subagent_stderr.txt`    | `lmstudio`                        | the subagent run's stderr |     - |
 | `opencode_stream_cloud_capture.jsonl`    | none: the stub provider, as `xai` | `grok-4.6` (stub)         |     2 |
-| second endpoint (`lmstudio-remote`)      | **BLOCKED**, not captured         | -                         |     - |
 
 **`opencode_stream_cloud_capture.jsonl` is not a hosted provider's output.**
 It is the repository's stub provider (`cmd/stub-provider`, script
@@ -507,22 +507,25 @@ is the priced shape: OpenCode prices each step from its bundled catalog
 the served model is one the registry prices. The stub reports no cache
 tokens, so hosted cache pools are #1680's to capture.
 
-**The second-endpoint leg is BLOCKED.** The `lmstudio-remote` endpoint did
-not answer on 2026-09-14 (the connection failed at every probe, before and
-after the other legs), so there is no capture, fixture, test or manifest
-entry for it. No hosted model was substituted. Its capture, which is to show
-that the provider key and endpoint id are the only labels a stage records,
-waits for that endpoint.
+**`opencode_stream_remote_capture.jsonl` is the second local endpoint.** A
+second LM Studio server serving the same model and quant, reached through a
+provider block keyed `lmstudio-remote` whose `baseURL` names that server; its
+address is not recorded here. The stream names no provider key, so the label
+a stage records comes from the dispatched `-m` and the export's `providerID`,
+both `lmstudio-remote`. Until declared endpoints resolve an id to its provider
+(#1678), ADR-022 § 1 normalizes that key to `other`, and `other` is never
+priced as a local zero, so the stage stays unstamped.
 
-| Field       | Value                                                                 |
-| ----------- | --------------------------------------------------------------------- |
-| Captured at | 2026-09-14                                                            |
-| CLI version | `1.18.30` (`opencode --version`)                                      |
-| Host OS     | macOS 27.0 (Darwin 27.0.0, arm64)                                     |
-| Model       | `qwen/qwen3.8-27b` on LM Studio, MLX 8-bit, loaded context 131072     |
-| Endpoint    | `lmstudio`, on `127.0.0.1:1234`; `lmstudio-remote` BLOCKED            |
-| Wall clock  | local 148 s, subagent 528 s, cloud stand-in 3 s; each capped at 900 s |
-| Redaction   | sandbox paths and session ids; no credential was found                |
+| Field       | Value                                                              |
+| ----------- | ------------------------------------------------------------------ |
+| Captured at | 2026-09-14                                                         |
+| CLI version | `1.18.30` (`opencode --version`)                                   |
+| Host OS     | macOS 27.0 (Darwin 27.0.0, arm64)                                  |
+| Model       | `qwen/qwen3.8-27b` on LM Studio, MLX 8-bit, loaded context 131072  |
+| Endpoint    | `lmstudio`, on `127.0.0.1:1234`; `lmstudio-remote`, address elided |
+| Wall clock  | local 148 s, remote 208 s, subagent 528 s, cloud stand-in 3 s      |
+| Wall cap    | 900 s per leg                                                      |
+| Redaction   | sandbox paths and session ids; no credential was found             |
 
 Each leg ran the argv the adapter emits, with the prompt on stdin, from a
 throwaway git repository holding `calc.py` (`add` returning `a - b`; the
@@ -537,7 +540,12 @@ opencode run --format json --print-logs --log-level ERROR \
   directories, the `OPENCODE_DISABLE_*` switches of
   `scripts/capture-opencode-fixture.sh`, and a random
   `OPENCODE_SERVER_PASSWORD`. The run's config names one provider, as a
-  complete block (`env: []`, an empty `apiKey`).
+  complete block (`env: []`, an empty `apiKey`). The remote leg's block is
+  keyed `lmstudio-remote`, its `baseURL` read at run time from the
+  maintainer's own config into a shell variable and written only into the
+  sandbox's config; the endpoint was checked with `curl` against its
+  `/api/v0/models` (model loaded, context 131072) before the run, and no
+  `opencode` command ran outside the sandbox.
 - **Bounds.** Each run was its own process group under a 900 s alarm
   (`perl -e 'setpgrp(0,0); alarm 900; exec @ARGV'`); after exit the group was
   killed and checked empty, and so was the stub's pid.
@@ -549,11 +557,11 @@ opencode run --format json --print-logs --log-level ERROR \
   never kept. The sandbox, its session database with it, was deleted when
   each leg ended; the maintainer's own OpenCode database gained no session
   (its newest predates the captures).
-- **Permissions.** Local: `edit` allowed, `bash`, `webfetch` and
+- **Permissions.** Local and remote: `edit` allowed, `bash`, `webfetch` and
   `external_directory` denied. Subagent: the same plus `task` allowed, and the
   `general` agent's `bash` set to `ask`, so a subagent's `bash` call is
   auto-rejected while the run's own session has no `bash` tool.
-- **Prompts.** Local: "calc.py has a bug: add(a, b) should return the sum of a
+- **Prompts.** Local and remote: "calc.py has a bug: add(a, b) should return the sum of a
   and b. Fix it." Subagent: "Use the task tool twice, one call after the other.
   First, have a general subagent read calc.py and report the bug in add.
   Second, have another general subagent run `python3 calc.py` with the bash
@@ -587,6 +595,26 @@ intends, the stage is a stamped zero. The stage record is not stamped yet: the
 scheduler still prices by the adapter, `opencode`, which resolves no rate for
 this model, so the record stays unstamped until #1630 lands. The tests check
 ADR-022 § 3's rule, not the record.
+
+`opencode_stream_remote_capture.jsonl` (glob, read, edit, grep, stop),
+captured 2026-09-14 on the `lmstudio-remote` endpoint:
+
+| step    | reason       | input | output | reasoning | cache read | cache write | `part.cost` |
+| ------- | ------------ | ----: | -----: | --------: | ---------: | ----------: | ----------: |
+| 1       | `tool-calls` |  5678 |     31 |        23 |          0 |           0 |           0 |
+| 2       | `tool-calls` |  5767 |     43 |         7 |          0 |           0 |           0 |
+| 3       | `tool-calls` |  5931 |     77 |        28 |          0 |           0 |           0 |
+| 4       | `tool-calls` |  6058 |     41 |        15 |          0 |           0 |           0 |
+| 5       | `stop`       |  6208 |     26 |        64 |          0 |           0 |           0 |
+| **sum** |              | 29642 |    218 |       137 |          0 |           0 |           0 |
+
+The session's export: `info.tokens` 29642 input, 218 output, 137 reasoning,
+no cache; `info.cost` 0; served by `lmstudio-remote` / `qwen/qwen3.8-27b`.
+The run had one session and its stderr was empty. The stage records 29642
+input and 355 output, provider `other`, served and upstream model
+`lmstudio-remote/qwen/qwen3.8-27b`: the endpoint id survives where the
+`lmstudio` endpoint's stage records `lm-studio/qwen/qwen3.8-27b`. Its cost is
+unstamped, not a zero, until #1678.
 
 `opencode_stream_cloud_capture.jsonl` (the stub's edit, then stop):
 

@@ -1455,6 +1455,60 @@ func TestParseOpenCodeRealCaptureLocal(t *testing.T) {
 	}
 }
 
+// openCodeRemoteSteps is opencode_stream_remote_capture.jsonl's ground truth:
+// the same model and quant as the local capture, served by a second LM Studio
+// endpoint under provider key lmstudio-remote, five steps (glob, read, edit,
+// grep, stop). As on the lmstudio endpoint, OpenCode prices each step at 0
+// and there is no cache pool.
+var openCodeRemoteSteps = []openCodeStepTruth{
+	{"tool-calls", 5678, 31, 23, 0, 0, 0},
+	{"tool-calls", 5767, 43, 7, 0, 0, 0},
+	{"tool-calls", 5931, 77, 28, 0, 0, 0},
+	{"tool-calls", 6058, 41, 15, 0, 0, 0},
+	{"stop", 6208, 26, 64, 0, 0, 0},
+}
+
+// TestParseOpenCodeRealCaptureRemote: a real run on the second local
+// endpoint, lmstudio-remote. The stream names no provider, so the parser's
+// totals are the README's step sums exactly as on the lmstudio endpoint; the
+// label comes from the dispatched -m and the export's providerID, and the
+// stage records the endpoint id: served and upstream model
+// lmstudio-remote/qwen/qwen3.8-27b, never the lmstudio endpoint's
+// lm-studio/qwen/qwen3.8-27b. Until declared endpoints resolve an id to its
+// provider (#1678), the key normalizes to "other" (ADR-022 § 1), and "other"
+// is never priced as a local zero: the stage stays unstamped.
+func TestParseOpenCodeRealCaptureRemote(t *testing.T) {
+	const name = "opencode_stream_remote_capture.jsonl"
+	checkOpenCodeCapture(t, name, openCodeRemoteSteps)
+	for i, line := range openCodeFixtureLines(t, name) {
+		if strings.Contains(line, "lmstudio") {
+			t.Errorf("%s line %d names a provider key; the stream carries none, so the label is the dispatch's", name, i+1)
+		}
+	}
+
+	exported := openCodeTokens(29642, 218, 137, 0, 0)
+	if sum, _ := sumOpenCodeSteps(openCodeRemoteSteps); exported != openCodeTokens(sum.input, sum.output, sum.reasoning, sum.read, sum.write) {
+		t.Errorf("the README's export total %+v is not its step sum %+v", exported, sum)
+	}
+	_, result, _ := replayOpenCodeFold(t, name, "lmstudio-remote/qwen/qwen3.8-27b", []openCodeCaptureSession{
+		{id: openCodeCaptureParent, tokens: exported, provider: "lmstudio-remote", model: "qwen/qwen3.8-27b"},
+	})
+	if result.InputTokens != 29642 || result.OutputTokens != 218+137 {
+		t.Errorf("RunResult input/output = %d/%d, want 29642/355", result.InputTokens, result.OutputTokens)
+	}
+	if result.ModelProvider != "other" || result.ServedModel != "lmstudio-remote/qwen/qwen3.8-27b" ||
+		result.UpstreamModel != "lmstudio-remote/qwen/qwen3.8-27b" {
+		t.Errorf("provider/served/upstream = %q/%q/%q, want other/lmstudio-remote/qwen/qwen3.8-27b/lmstudio-remote/qwen/qwen3.8-27b",
+			result.ModelProvider, result.ServedModel, result.UpstreamModel)
+	}
+	if result.AdapterReportedCostUSD != 0 {
+		t.Errorf("OpenCode's reported cost = %v, want the capture's 0", result.AdapterReportedCostUSD)
+	}
+	if cost, stamped := openCodeStageCost(result); cost != 0 || stamped {
+		t.Errorf("cost = %v, stamped = %v; an undeclared endpoint id is other, never a stamped local zero", cost, stamped)
+	}
+}
+
 // openCodeCloudSteps is opencode_stream_cloud_capture.jsonl's ground truth:
 // the repository's stub provider on 127.0.0.1, dispatched as xai/grok-4.6, so
 // OpenCode prices each step from its bundled catalog. It stands in for a
