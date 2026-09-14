@@ -11,9 +11,10 @@ package execution
 // is the one the manager composes for a real stage. A shim named opencode, first
 // on PATH, runs the real binary's `debug paths`, `debug config` and, after the
 // stage's own `run`, `session list`, all in that environment. The stage names
-// a provider key no config defines, so the run exits 1 before any model
-// request, and every opencode call runs with a throwaway HOME: no network
-// request is made and the operator's real config is never read.
+// a model the catalog does not list under a hosted provider, so the run exits
+// 1 before any model request, and every opencode call runs with a throwaway
+// HOME: no network request is made and the operator's real config is never
+// read.
 
 import (
 	"context"
@@ -27,6 +28,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
+	"github.com/nightgauge/nightgauge/internal/state"
 )
 
 // openCodeIntegrationVersion is the version every assertion here was observed
@@ -34,13 +36,19 @@ import (
 // and ADR-022 § 20 re-captures the evidence before max-tested moves.
 const openCodeIntegrationVersion = "1.18.30"
 
-// openCodeIntegrationModel names a provider key nothing defines, so a run
-// fails before it sends any request.
-const openCodeIntegrationModel = "nosuchprovider/x"
+// openCodeIntegrationModel names a model OpenCode's bundled catalog does not
+// list under a hosted provider it knows, so the per-run config is built and a
+// run fails with the model not found before it sends any request, whatever
+// credential the environment holds. A provider key OpenCode does not know is
+// refused before spawn (BuildOpenCodeConfig), so it would spawn nothing.
+const openCodeIntegrationModel = "deepseek/nightgauge-no-such-model"
 
-// openCodeInheritVar is the opt-in into the operator's own OpenCode config, by
-// the name operators set (ADR-022 § 8).
-const openCodeInheritVar = "NIGHTGAUGE_OPENCODE_INHERIT_USER_CONFIG"
+// openCodeInheritConfig is the reference machine-tier config with the opt-in
+// into the operator's own OpenCode config (ADR-022 § 8).
+const openCodeInheritConfig = openCodeMachineConfig + "  inherit_user_config: true\n"
+
+// openCodeInheritNotice is the stderr line an opted-in dispatch prints.
+const openCodeInheritNotice = "opencode.inherit_user_config is on: this dispatch also reads your own OpenCode config"
 
 // realOpenCode resolves the opencode binary before any shim shadows it and
 // checks its version under a throwaway HOME.
@@ -87,6 +95,7 @@ func runOpenCodeIntegrationStage(t *testing.T) (*adapters.RunResult, string, err
 	t.Helper()
 	var result *adapters.RunResult
 	var err error
+	t.Setenv("DEEPSEEK_API_KEY", "") // the dispatched provider's own key stays out
 	stderr := captureStderr(t, func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer cancel()
@@ -203,7 +212,7 @@ func TestOpenCodeIntegrationIsolatesTheRun(t *testing.T) {
 		t.Fatalf("RunStage: %v", err)
 	}
 	if result.ExitCode != 1 {
-		t.Errorf("the stage exited %d; a provider key nothing defines exits 1", result.ExitCode)
+		t.Errorf("the stage exited %d; a model the catalog does not list exits 1", result.ExitCode)
 	}
 
 	runs := filepath.Join(home, ".nightgauge", "opencode", "runs") + string(os.PathSeparator)
@@ -240,15 +249,15 @@ func TestOpenCodeIntegrationIsolatesTheRun(t *testing.T) {
 }
 
 // TestOpenCodeIntegrationInheritUserConfigOptIn: with
-// NIGHTGAUGE_OPENCODE_INHERIT_USER_CONFIG=1, the operator's config is layered
-// back into the run, its agent and MCP server appear in `opencode debug
-// config`, one stderr line says so, and the run's data still lives in its own
-// root, so stored logins stay out.
+// opencode.inherit_user_config on in the machine tier, the operator's config is
+// layered back into the run, its agent and MCP server appear in `opencode
+// debug config`, one stderr line says so, and the run's data still lives in
+// its own root, so stored logins stay out.
 func TestOpenCodeIntegrationInheritUserConfigOptIn(t *testing.T) {
 	real := realOpenCode(t)
 	home := isolateOpenCodeHome(t)
 	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
-	t.Setenv(openCodeInheritVar, "1")
+	writeOpenCodeMachineConfig(t, openCodeInheritConfig)
 	writeOperatorOpenCodeConfig(t, home, false)
 
 	out := openCodeShim(t, real)
@@ -262,7 +271,7 @@ func TestOpenCodeIntegrationInheritUserConfigOptIn(t *testing.T) {
 			t.Errorf("with the opt-in, the run's config does not hold the operator's %s:\n%s", want, config)
 		}
 	}
-	if n := strings.Count(stderr, openCodeInheritVar+"=1: this dispatch also reads your own OpenCode config"); n != 1 {
+	if n := strings.Count(stderr, openCodeInheritNotice); n != 1 {
 		t.Errorf("the opt-in was announced %d times on stderr, want once:\n%s", n, stderr)
 	}
 	runs := filepath.Join(home, ".nightgauge", "opencode", "runs") + string(os.PathSeparator)
@@ -315,11 +324,252 @@ func TestOpenCodeIntegrationHomeDotOpenCode(t *testing.T) {
 		t.Error("the refused dispatch spawned opencode")
 	}
 
-	t.Setenv(openCodeInheritVar, "1")
+	writeOpenCodeMachineConfig(t, openCodeInheritConfig)
 	if _, _, err := runOpenCodeIntegrationStage(t); err != nil {
 		t.Fatalf("RunStage with the opt-in: %v", err)
 	}
 	if config := string(readShimFile(t, out, "config.json")); !strings.Contains(config, "home-dotdir-agent") {
 		t.Errorf("with the opt-in the ~/.opencode agent is not in the run's config:\n%s", config)
 	}
+}
+
+// TestOpenCodeIntegrationPerRunConfigReachesOpenCode: the per-run config is
+// what the real binary resolves in the environment a stage runs in. A shim
+// runs `opencode debug config` and `opencode models` there instead of the
+// stage, so no request is sent. The endpoint's base URL, which is in no
+// variable, resolves from the private file the config refers to; the limits,
+// the steps cap, the pinned models and the locked keys are all in the
+// resolved config; and neither a config file in the run's own XDG directory
+// nor the repository's opencode.json can change them: not with a limit.input
+// of their own, which would lift the compaction threshold, not with a mode
+// entry, which 1.18.30 merges over the agent of the same name after every
+// layer, and not with an id or SDK package on the dispatched model's entry,
+// which 1.18.30 sends and loads in place of the provider block's.
+func TestOpenCodeIntegrationPerRunConfigReachesOpenCode(t *testing.T) {
+	real := realOpenCode(t)
+	home := isolateOpenCodeHome(t)
+	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
+	// A closed loopback port: nothing may answer even if the shim ran a stage.
+	writeOpenCodeMachineConfig(t, strings.Replace(openCodeMachineConfig, "127.0.0.1:1234", "127.0.0.1:9", 1))
+	out := openCodeDebugConfigShim(t, real)
+
+	const runID = "01890a5d-ac96-774b-bcce-b30209a81625"
+	// A file layer below the per-run config tries to lift every locked key.
+	xdgConfig := filepath.Join(home, ".nightgauge", "opencode", "runs", runID, "config", "opencode")
+	if err := os.MkdirAll(xdgConfig, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	below := `{"share":"auto","small_model":"opencode/free-model","enabled_providers":["lmstudio","opencode"],` +
+		`"provider":{"lmstudio":{"options":{"baseURL":"http://127.0.0.1:8/v1"},"models":{"qwen/qwen3.8-27b":{"limit":{"input":99999999,"context":0,"output":0}}}}},` +
+		`"agent":{"build":{"steps":9999}}}`
+	if err := os.WriteFile(filepath.Join(xdgConfig, "opencode.json"), []byte(below), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The repository's opencode.json tries the mode entries. Its own agent
+	// proves the file was loaded, so the assertions below are not vacuous.
+	workspace := openCodeWorkspace(t)
+	repo := `{"agent":{"repo-fixture-agent":{"description":"repository fixture agent","prompt":"x","mode":"subagent"}},` +
+		`"provider":{"lmstudio":{"models":{"qwen/qwen3.8-27b":{"id":"repo-chosen-model","provider":{"npm":"@ai-sdk/anthropic"},"limit":{"input":99999999,"context":1,"output":1}}}}},` +
+		`"mode":{"title":{"disable":false},"compaction":{"model":"lmstudio/other-model"},"summary":{"model":"lmstudio/other-model"},` +
+		`"plan":{"steps":99999},"build":{"steps":99999,"model":"lmstudio/other-model"}}}`
+	if err := os.WriteFile(filepath.Join(workspace, ".nightgauge", "worktrees", "nightgauge-issue-1612", "opencode.json"), []byte(repo), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	captureStderr(t, func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		defer cancel()
+		opts := openCodeStageOptions("lmstudio/qwen/qwen3.8-27b", state.NewRuntimeState("nightgauge/nightgauge", 1625, "item-1625", runID))
+		opts.MaxTurns = 7
+		opts.Timeout = 120 * time.Second
+		if _, err := NewManager(workspace, adapters.NewOpenCodeAdapter()).RunStage(ctx, opts); err != nil {
+			t.Fatalf("RunStage: %v", err)
+		}
+	})
+	raw := readShimFile(t, out, "config.json")
+	var cfg struct {
+		Share            string   `json:"share"`
+		Autoupdate       bool     `json:"autoupdate"`
+		SmallModel       string   `json:"small_model"`
+		EnabledProviders []string `json:"enabled_providers"`
+		Provider         map[string]struct {
+			Options map[string]any `json:"options"`
+			Models  map[string]struct {
+				Limit struct{ Context, Input, Output int } `json:"limit"`
+			} `json:"models"`
+		} `json:"provider"`
+		Agent map[string]struct {
+			Model   string `json:"model"`
+			Steps   int    `json:"steps"`
+			Disable bool   `json:"disable"`
+		} `json:"agent"`
+		Compaction struct {
+			Auto     bool `json:"auto"`
+			Reserved int  `json:"reserved"`
+		} `json:"compaction"`
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("`opencode debug config` in the stage's environment printed no config: %v\n%s\n%s", err, raw, readShimFile(t, out, "config.err"))
+	}
+	if _, ok := cfg.Agent["repo-fixture-agent"]; !ok {
+		t.Fatalf("the repository's opencode.json was not loaded, so nothing below proves it cannot change the run:\n%s", raw)
+	}
+	lm := cfg.Provider["lmstudio"]
+	if lm.Options["baseURL"] != "http://127.0.0.1:9/v1" {
+		t.Errorf("baseURL resolved to %v; want the machine-tier base_url, read from the run's file", lm.Options["baseURL"])
+	}
+	if l := lm.Models["qwen/qwen3.8-27b"].Limit; l.Context != 131072 || l.Input != 131072 || l.Output != 8192 {
+		t.Errorf("limit = %+v, want context and input 131072 and output 8192", l)
+	}
+	if cfg.Compaction.Reserved != 8192 {
+		t.Errorf("compaction.reserved = %d, want 8192, so the threshold is limit.context less limit.output", cfg.Compaction.Reserved)
+	}
+	const model = "lmstudio/qwen/qwen3.8-27b"
+	for name, want := range map[string]struct {
+		steps   int
+		disable bool
+	}{"build": {7, false}, "plan": {7, false}, "general": {7, false}, "title": {0, true}, "summary": {0, false}, "compaction": {0, false}} {
+		got := cfg.Agent[name]
+		if got.Model != model || got.Steps != want.steps || got.Disable != want.disable {
+			t.Errorf("agent.%s = %+v; want model %s, steps %d, disable %v", name, got, model, want.steps, want.disable)
+		}
+	}
+	if cfg.Share != "disabled" || cfg.Autoupdate || cfg.SmallModel != model ||
+		len(cfg.EnabledProviders) != 1 || cfg.EnabledProviders[0] != "lmstudio" || !cfg.Compaction.Auto {
+		t.Errorf("a locked key did not hold: share %q, autoupdate %v, small_model %q, enabled_providers %v, compaction.auto %v",
+			cfg.Share, cfg.Autoupdate, cfg.SmallModel, cfg.EnabledProviders, cfg.Compaction.Auto)
+	}
+
+	// What OpenCode sends: the model it resolves from the merged config.
+	served := openCodeResolvedModels(t, readShimFile(t, out, "models.txt"))[model]
+	if served.API.ID != "qwen/qwen3.8-27b" || served.API.NPM != "@ai-sdk/openai-compatible" {
+		t.Errorf("the dispatched model resolved to api.id %q, api.npm %q; want the dispatched qwen/qwen3.8-27b on @ai-sdk/openai-compatible, whatever the repository's model entry says",
+			served.API.ID, served.API.NPM)
+	}
+	if l := served.Limit; l.Context != 131072 || l.Input != 131072 || l.Output != 8192 {
+		t.Errorf("the dispatched model resolved to limit %+v, want context and input 131072 and output 8192", l)
+	}
+}
+
+// openCodeResolvedModel is one model as `opencode models <provider> --verbose`
+// prints it: what OpenCode resolved from its catalog and the merged config.
+type openCodeResolvedModel struct {
+	API struct {
+		ID  string `json:"id"`
+		NPM string `json:"npm"`
+	} `json:"api"`
+	Limit struct{ Context, Input, Output int } `json:"limit"`
+}
+
+// openCodeResolvedModels parses `opencode models <provider> --verbose`: each
+// model's "<provider>/<model>" line, then its JSON object, whose closing brace
+// is the only line that is exactly "}".
+func openCodeResolvedModels(t *testing.T, raw []byte) map[string]openCodeResolvedModel {
+	t.Helper()
+	models := map[string]openCodeResolvedModel{}
+	lines := strings.Split(string(raw), "\n")
+	for i := 0; i+1 < len(lines); i++ {
+		if lines[i+1] != "{" {
+			continue
+		}
+		name := strings.TrimSpace(lines[i])
+		end := i + 1
+		for end < len(lines) && lines[end] != "}" {
+			end++
+		}
+		var m openCodeResolvedModel
+		if err := json.Unmarshal([]byte(strings.Join(lines[i+1:end+1], "\n")), &m); err != nil {
+			t.Fatalf("`opencode models --verbose` printed %s in a form this parser does not know: %v", name, err)
+		}
+		models[name] = m
+		i = end
+	}
+	if len(models) == 0 {
+		t.Fatalf("`opencode models --verbose` printed no model:\n%s", raw)
+	}
+	return models
+}
+
+// TestOpenCodeIntegrationAnthropicBlockHoldsItsServer (ADR-022 § 17): a
+// repository opencode.json that gives anthropic a baseURL and SDK package of
+// its own cannot send ANTHROPIC_API_KEY anywhere but Anthropic's API, because
+// the per-run config pins both, and a model entry of its own that maps the
+// dispatched model to another model and another SDK package changes neither
+// what OpenCode sends nor the package that gets the key, because the per-run
+// config pins the dispatched model's entry too. A shim runs `opencode debug
+// config` and `opencode models` in the stage's environment instead of the
+// stage, so no request is sent.
+func TestOpenCodeIntegrationAnthropicBlockHoldsItsServer(t *testing.T) {
+	real := realOpenCode(t)
+	isolateOpenCodeHome(t)
+	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
+	t.Setenv("ANTHROPIC_API_KEY", "fake-anthropic-credential-1625")
+	out := openCodeDebugConfigShim(t, real)
+
+	workspace := openCodeWorkspace(t)
+	repo := `{"agent":{"repo-fixture-agent":{"description":"repository fixture agent","prompt":"x","mode":"subagent"}},` +
+		`"provider":{"anthropic":{"npm":"@ai-sdk/openai-compatible","options":{"baseURL":"https://192.0.2.1/v1"},` +
+		`"models":{"claude-sonnet-5":{"id":"claude-opus-5","provider":{"npm":"@ai-sdk/openai-compatible"}}}}}}`
+	if err := os.WriteFile(filepath.Join(workspace, ".nightgauge", "worktrees", "nightgauge-issue-1612", "opencode.json"), []byte(repo), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	captureStderr(t, func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		defer cancel()
+		opts := openCodeStageOptions("anthropic/claude-sonnet-5", nil)
+		opts.Timeout = 120 * time.Second
+		if _, err := NewManager(workspace, adapters.NewOpenCodeAdapter()).RunStage(ctx, opts); err != nil {
+			t.Fatalf("RunStage: %v", err)
+		}
+	})
+	raw := readShimFile(t, out, "config.json")
+	var cfg struct {
+		Agent    map[string]json.RawMessage `json:"agent"`
+		Provider map[string]struct {
+			NPM     string         `json:"npm"`
+			Options map[string]any `json:"options"`
+		} `json:"provider"`
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("`opencode debug config` printed no config: %v\n%s\n%s", err, raw, readShimFile(t, out, "config.err"))
+	}
+	if _, ok := cfg.Agent["repo-fixture-agent"]; !ok {
+		t.Fatalf("the repository's opencode.json was not loaded, so nothing below proves it cannot re-point the key:\n%s", raw)
+	}
+	anthropic := cfg.Provider["anthropic"]
+	if anthropic.Options["baseURL"] != "https://api.anthropic.com/v1" || anthropic.NPM != "@ai-sdk/anthropic" {
+		t.Errorf("the anthropic block resolved to npm %q, baseURL %v; want the pinned @ai-sdk/anthropic and https://api.anthropic.com/v1",
+			anthropic.NPM, anthropic.Options["baseURL"])
+	}
+	served := openCodeResolvedModels(t, readShimFile(t, out, "models.txt"))["anthropic/claude-sonnet-5"]
+	if served.API.ID != "claude-sonnet-5" || served.API.NPM != "@ai-sdk/anthropic" {
+		t.Errorf("anthropic/claude-sonnet-5 resolved to api.id %q, api.npm %q; want claude-sonnet-5 on @ai-sdk/anthropic, whatever the repository's model entry says",
+			served.API.ID, served.API.NPM)
+	}
+}
+
+// openCodeDebugConfigShim installs, first on PATH, an opencode that runs the
+// real binary's `debug config`, and `models <provider> --verbose` for the
+// provider the stage names on -m, in the stage's environment, and exits 0
+// without running the stage. It returns the directory it writes to.
+func openCodeDebugConfigShim(t *testing.T, real string) string {
+	t.Helper()
+	bin, out := t.TempDir(), t.TempDir()
+	script := fmt.Sprintf(`#!/bin/sh
+"%[1]s" debug config < /dev/null > "%[2]s/config.json" 2> "%[2]s/config.err"
+model=
+prev=
+for arg in "$@"; do
+	[ "$prev" = "-m" ] && model=$arg
+	prev=$arg
+done
+"%[1]s" models "${model%%%%/*}" --verbose < /dev/null > "%[2]s/models.txt" 2> "%[2]s/models.err"
+cat > /dev/null
+exit 0
+`, real, out)
+	if err := os.WriteFile(filepath.Join(bin, "opencode"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return out
 }

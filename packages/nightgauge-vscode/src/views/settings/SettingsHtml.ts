@@ -45,6 +45,14 @@ export interface StageAdapterPreviewRow {
 
 export interface SettingsHtmlOptions {
   codexModels?: string[];
+  /**
+   * OpenCode catalog from `opencode models` (Issue #1628), refreshed by
+   * `SettingsPanel.refreshOpenCodeModels`. Not yet rendered as a bound select
+   * (OpenCode's `opencode.model` is machine-tier config outside the Zod
+   * schema — see ADR-022 § 7); reserved for consumers such as
+   * "Run Pipeline with Model".
+   */
+  openCodeModels?: import("../../services/OpenCodeModelCatalogService").OpenCodeModelEntry[];
   lmStudioModels?: Array<{
     id: string;
     loaded?: boolean;
@@ -112,6 +120,7 @@ export const STAGE_ADAPTER_OPTIONS: ReadonlyArray<{ value: string; label: string
   { value: "gemini", label: "Gemini CLI (Experimental)" },
   { value: "copilot", label: "GitHub Copilot CLI (Experimental)" },
   { value: "grok", label: "Grok Build CLI (Experimental)" },
+  { value: "opencode", label: "OpenCode (Experimental)" },
 ];
 
 /**
@@ -1441,6 +1450,7 @@ function getCoreSectionHtml(
           { value: "ollama", label: "Ollama" },
           { value: "copilot", label: "GitHub Copilot CLI" },
           { value: "grok", label: "Grok Build CLI" },
+          { value: "opencode", label: "OpenCode (Experimental)" },
         ],
         disabled,
         g("ui.core.adapter"),

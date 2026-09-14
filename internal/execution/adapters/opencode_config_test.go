@@ -1,0 +1,957 @@
+package adapters
+
+import (
+	"bytes"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/nightgauge/nightgauge/internal/config"
+)
+
+// fixedOpenCodeSettings stands in for the machine-tier `opencode:` block, so
+// no test reads the machine's real config.
+func fixedOpenCodeSettings(cfg config.OpenCodeConfig) func(string) (config.OpenCodeConfig, error) {
+	return func(string) (config.OpenCodeConfig, error) { return cfg, nil }
+}
+
+// lmStudioSettings is the reference machine: one LM Studio on loopback with a
+// 131072-token window loaded and 8192 tokens a reply.
+func lmStudioSettings() config.OpenCodeConfig {
+	return config.OpenCodeConfig{
+		Provider: "lm-studio",
+		BaseURL:  "http://127.0.0.1:1234/v1",
+		Limit:    config.OpenCodeLimit{Context: 131072, Output: 8192},
+	}
+}
+
+// goldenRunRoot is a run root that is never created: BuildOpenCodeConfig only
+// names files in it.
+const goldenRunRoot = "/nightgauge-test-home/.nightgauge/opencode/runs/" + testRunID
+
+// buildOpenCodeConfigFor builds the config a dispatch of run gets on a machine
+// whose `opencode:` block is settings, with env as the environment.
+func buildOpenCodeConfigFor(t *testing.T, settings config.OpenCodeConfig, run RunOptions, env map[string]string) (OpenCodeRunConfig, error) {
+	t.Helper()
+	in, err := OpenCodeConfigInputFor(settings, run, goldenRunRoot, envLookup(env))
+	if err != nil {
+		return OpenCodeRunConfig{}, err
+	}
+	return BuildOpenCodeConfig(in)
+}
+
+// decodeOpenCodeConfig decodes built content into generic JSON.
+func decodeOpenCodeConfig(t *testing.T, content string) map[string]any {
+	t.Helper()
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(content), &doc); err != nil {
+		t.Fatalf("the config content is not JSON: %v\n%s", err, content)
+	}
+	return doc
+}
+
+// jsonPath walks doc along keys and returns what it finds, or nil.
+func jsonPath(doc map[string]any, keys ...string) any {
+	var cur any = doc
+	for _, k := range keys {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return nil
+		}
+		cur = m[k]
+	}
+	return cur
+}
+
+// TestOpenCodeConfigGolden pins the whole per-run config for the reference
+// dispatch: a feature-dev stage with a 40-turn cap on the reference LM Studio.
+// Every key the builder sets is in the golden, so dropping one (share,
+// small_model, a limit, a steps cap) changes it. The content is compared byte
+// for byte after the golden's whitespace is removed.
+//
+//	NIGHTGAUGE_UPDATE_GOLDEN=1 go test ./internal/execution/adapters/ -run TestOpenCodeConfigGolden
+func TestOpenCodeConfigGolden(t *testing.T) {
+	built, err := buildOpenCodeConfigFor(t, lmStudioSettings(), RunOptions{
+		Stage:    "feature-dev",
+		Model:    "lmstudio/qwen/qwen3.8-27b",
+		MaxTurns: 40,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden := filepath.Join("testdata", "opencode-config", "lmstudio-feature-dev.json")
+	if os.Getenv("NIGHTGAUGE_UPDATE_GOLDEN") == "1" {
+		var pretty bytes.Buffer
+		if err := json.Indent(&pretty, []byte(built.Content), "", "  "); err != nil {
+			t.Fatal(err)
+		}
+		pretty.WriteByte('\n')
+		if err := os.WriteFile(golden, pretty.Bytes(), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, err := os.ReadFile(golden)
+	if err != nil {
+		t.Fatalf("read the golden: %v", err)
+	}
+	var want bytes.Buffer
+	if err := json.Compact(&want, raw); err != nil {
+		t.Fatalf("the golden is not JSON: %v", err)
+	}
+	if built.Content != want.String() {
+		var pretty bytes.Buffer
+		_ = json.Indent(&pretty, []byte(built.Content), "", "  ")
+		t.Errorf("the per-run config differs from %s; if the change is intended, regenerate it with NIGHTGAUGE_UPDATE_GOLDEN=1. Got:\n%s", golden, pretty.String())
+	}
+
+	file := filepath.Join(goldenRunRoot, "nightgauge", "lmstudio.base-url")
+	if got := built.Files; len(got) != 1 || got[file] != "http://127.0.0.1:1234/v1" {
+		t.Errorf("Files = %q, want the endpoint's base URL at %s and nothing else", got, file)
+	}
+	if built.NonLoopback {
+		t.Error("a loopback endpoint was flagged non_loopback")
+	}
+}
+
+// TestOpenCodeConfigRefusesAZeroLimit: LM Studio reports a context limit of
+// 0, and OpenCode never compacts a session whose limit is 0, so a stage would
+// run into the loaded window. A limit of 0, or one that is missing, refuses
+// the config with an error naming the key and saying what to set.
+func TestOpenCodeConfigRefusesAZeroLimit(t *testing.T) {
+	run := RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b", MaxTurns: 40}
+	for name, tc := range map[string]struct {
+		limit config.OpenCodeLimit
+		key   string
+	}{
+		"context 0":       {config.OpenCodeLimit{Context: 0, Output: 8192}, "opencode.limit.context"},
+		"output 0":        {config.OpenCodeLimit{Context: 131072, Output: 0}, "opencode.limit.output"},
+		"both missing":    {config.OpenCodeLimit{}, "opencode.limit.context"},
+		"negative output": {config.OpenCodeLimit{Context: 131072, Output: -1}, "opencode.limit.output"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			settings := lmStudioSettings()
+			settings.Limit = tc.limit
+			built, err := buildOpenCodeConfigFor(t, settings, run, nil)
+			if err == nil {
+				t.Fatalf("a config was built with limit %+v: %s", tc.limit, built.Content)
+			}
+			for _, want := range []string{tc.key, "endpoint lmstudio", "never", "~/.nightgauge/config.yaml"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not say %q: %v", want, err)
+				}
+			}
+		})
+	}
+
+	settings := lmStudioSettings()
+	settings.Limit = config.OpenCodeLimit{Context: 8192, Output: 8192}
+	if _, err := buildOpenCodeConfigFor(t, settings, run, nil); err == nil || !strings.Contains(err.Error(), "must be less than") {
+		t.Errorf("an output limit as large as the window was accepted: %v", err)
+	}
+}
+
+// TestOpenCodeConfigStepsCap: the build agent and every subagent get the
+// stage's turn cap as their steps cap, so a stage cannot loop forever, and
+// the legacy mode.build and mode.plan entries carry it too, because opencode
+// 1.18.30 applies mode.<name> over agent.<name> after every config layer.
+// With no turn cap the documented default applies. subagent_depth is always
+// set.
+func TestOpenCodeConfigStepsCap(t *testing.T) {
+	for _, tc := range []struct {
+		maxTurns, want int
+	}{{40, 40}, {0, openCodeDefaultSteps}, {-3, openCodeDefaultSteps}} {
+		built, err := buildOpenCodeConfigFor(t, lmStudioSettings(), RunOptions{Model: "lmstudio/qwen/qwen3.8-27b", MaxTurns: tc.maxTurns}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		doc := decodeOpenCodeConfig(t, built.Content)
+		for _, path := range [][]string{
+			{"agent", "build"}, {"agent", "plan"}, {"agent", "general"}, {"agent", "explore"}, {"mode", "build"}, {"mode", "plan"},
+		} {
+			if got := jsonPath(doc, append(path, "steps")...); got != float64(tc.want) {
+				t.Errorf("MaxTurns %d: %s.steps = %v, want %d", tc.maxTurns, strings.Join(path, "."), got, tc.want)
+			}
+		}
+		if got := jsonPath(doc, "subagent_depth"); got != float64(openCodeSubagentDepth) {
+			t.Errorf("subagent_depth = %v, want %d", got, openCodeSubagentDepth)
+		}
+	}
+	if openCodeDefaultSteps <= 0 {
+		t.Fatal("the default steps cap must bound a stage")
+	}
+}
+
+// TestOpenCodeConfigPinsEveryModel (ADR-022 § 15): small_model and every
+// built-in agent's model are the dispatched model, the title agent is off so
+// no title request is sent, the stage runs on the build agent, no agent can be
+// disabled from below, and OpenCode loads the dispatched provider alone.
+// Observed on 1.18.30, without enabled_providers a run holding the forge
+// tokens and cloud credentials a stage keeps loads amazon-bedrock,
+// github-copilot, gitlab, google-vertex and OpenCode's own free provider.
+func TestOpenCodeConfigPinsEveryModel(t *testing.T) {
+	for _, tc := range []struct {
+		model, key string
+		env        map[string]string
+	}{
+		{"lmstudio/qwen/qwen3.8-27b", "lmstudio", nil},
+		{"anthropic/claude-sonnet-5", "anthropic", map[string]string{"ANTHROPIC_API_KEY": "fake-anthropic-credential-1625"}},
+		{"openai/gpt-5.5", "openai", nil},
+	} {
+		built, err := buildOpenCodeConfigFor(t, lmStudioSettings(), RunOptions{Model: tc.model}, tc.env)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.model, err)
+		}
+		doc := decodeOpenCodeConfig(t, built.Content)
+		for _, key := range []string{"model", "small_model"} {
+			if doc[key] != tc.model {
+				t.Errorf("%s: %s = %v, want the dispatched model", tc.model, key, doc[key])
+			}
+		}
+		agents, _ := doc["agent"].(map[string]any)
+		for _, name := range []string{"build", "plan", "general", "explore", "title", "summary", "compaction"} {
+			agent, _ := agents[name].(map[string]any)
+			if agent["model"] != tc.model {
+				t.Errorf("%s: agent.%s.model = %v, want the dispatched model", tc.model, name, agent["model"])
+			}
+			wantDisabled := name == "title"
+			if agent["disable"] != wantDisabled {
+				t.Errorf("%s: agent.%s.disable = %v, want %v", tc.model, name, agent["disable"], wantDisabled)
+			}
+		}
+		if doc["default_agent"] != "build" {
+			t.Errorf("%s: default_agent = %v, want build", tc.model, doc["default_agent"])
+		}
+		enabled, _ := doc["enabled_providers"].([]any)
+		if len(enabled) != 1 || enabled[0] != tc.key {
+			t.Errorf("%s: enabled_providers = %v, want [%s] alone", tc.model, enabled, tc.key)
+		}
+		providers, _ := doc["provider"].(map[string]any)
+		for key := range providers {
+			if key != tc.key {
+				t.Errorf("%s: the config injects a block for %s, which the stage does not dispatch to", tc.model, key)
+			}
+		}
+		for key, want := range map[string]any{"share": "disabled", "autoupdate": false, "snapshot": false, "lsp": true, "formatter": true} {
+			if doc[key] != want {
+				t.Errorf("%s: %s = %v, want %v", tc.model, key, doc[key], want)
+			}
+		}
+		if got, _ := doc["instructions"].([]any); got == nil || len(got) != 0 {
+			t.Errorf("%s: instructions = %v, want []", tc.model, doc["instructions"])
+		}
+		if got, _ := jsonPath(doc, "skills", "urls").([]any); got == nil || len(got) != 0 {
+			t.Errorf("%s: skills.urls = %v, want []", tc.model, jsonPath(doc, "skills", "urls"))
+		}
+	}
+}
+
+// TestOpenCodeConfigPinsTheModeEntries: observed on opencode 1.18.30, every
+// mode.<name> of the merged config is merged over agent.<name> after all
+// layers, so a repository's mode.title could turn session titles back on and
+// its mode.compaction could move the transcript to another model. The content
+// sets the mode entry of every built-in primary agent to its agent entry, so
+// its own values win. The general and explore subagents get none: a mode
+// entry would make them primary agents.
+func TestOpenCodeConfigPinsTheModeEntries(t *testing.T) {
+	built, err := buildOpenCodeConfigFor(t, lmStudioSettings(), RunOptions{Model: "lmstudio/qwen/qwen3.8-27b", MaxTurns: 40}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := decodeOpenCodeConfig(t, built.Content)
+	for _, name := range []string{"build", "plan", "title", "summary", "compaction"} {
+		agent, mode := jsonPath(doc, "agent", name), jsonPath(doc, "mode", name)
+		if mode == nil {
+			t.Errorf("mode.%s is not set, so a lower layer's mode.%s would win over agent.%s", name, name, name)
+			continue
+		}
+		a, _ := json.Marshal(agent)
+		m, _ := json.Marshal(mode)
+		if string(a) != string(m) {
+			t.Errorf("mode.%s = %s, want agent.%s's %s", name, m, name, a)
+		}
+	}
+	for _, name := range []string{"general", "explore"} {
+		if mode := jsonPath(doc, "mode", name); mode != nil {
+			t.Errorf("mode.%s = %v; a mode entry turns the %s subagent into a primary agent", name, mode, name)
+		}
+	}
+}
+
+// TestOpenCodeConfigLimitInputHoldsTheCompactionThreshold: on opencode
+// 1.18.30 a model with a limit.input compacts at limit.input less
+// compaction.reserved, so a lower layer that added a limit.input to the
+// endpoint's model could lift the threshold past the loaded window. The
+// block sets limit.input to limit.context, and reserved to the output limit,
+// so the threshold is limit.context less limit.output, for an output limit
+// above OpenCode's own 20000-token reserve as well.
+func TestOpenCodeConfigLimitInputHoldsTheCompactionThreshold(t *testing.T) {
+	for _, tc := range []struct {
+		limit     config.OpenCodeLimit
+		maxTokens int
+		output    int
+	}{
+		{config.OpenCodeLimit{Context: 131072, Output: 8192}, 0, 8192},
+		{config.OpenCodeLimit{Context: 131072, Output: 32768}, 0, 32768},
+		{config.OpenCodeLimit{Context: 131072, Output: 32768}, 4096, 4096},
+	} {
+		settings := lmStudioSettings()
+		settings.Limit = tc.limit
+		built, err := buildOpenCodeConfigFor(t, settings, RunOptions{Model: "lmstudio/qwen/qwen3.8-27b", MaxTokens: tc.maxTokens}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		doc := decodeOpenCodeConfig(t, built.Content)
+		limit := func(key string) any {
+			return jsonPath(doc, "provider", "lmstudio", "models", "qwen/qwen3.8-27b", "limit", key)
+		}
+		if limit("input") != float64(tc.limit.Context) {
+			t.Errorf("%+v: limit.input = %v, want limit.context %d", tc.limit, limit("input"), tc.limit.Context)
+		}
+		if limit("output") != float64(tc.output) {
+			t.Errorf("%+v: limit.output = %v, want %d", tc.limit, limit("output"), tc.output)
+		}
+		reserved, _ := jsonPath(doc, "compaction", "reserved").(float64)
+		if threshold := tc.limit.Context - int(reserved); threshold != tc.limit.Context-tc.output {
+			t.Errorf("%+v, max tokens %d: compaction.reserved = %v puts the threshold at %d, want limit.context less limit.output, %d",
+				tc.limit, tc.maxTokens, reserved, threshold, tc.limit.Context-tc.output)
+		}
+	}
+}
+
+// TestOpenCodeConfigAnthropicBlockPinsItsServer (ADR-022 § 17): the anthropic
+// block sets the SDK package and Anthropic's API root beside the key
+// reference, so a repository or inherited config that sets a baseURL of its
+// own for anthropic cannot send ANTHROPIC_API_KEY to its server.
+func TestOpenCodeConfigAnthropicBlockPinsItsServer(t *testing.T) {
+	built, err := buildOpenCodeConfigFor(t, config.OpenCodeConfig{}, RunOptions{Model: "anthropic/claude-sonnet-5"},
+		map[string]string{"ANTHROPIC_API_KEY": "fake-anthropic-credential-1625"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := decodeOpenCodeConfig(t, built.Content)
+	for path, want := range map[string]string{
+		"npm":             "@ai-sdk/anthropic",
+		"options.baseURL": "https://api.anthropic.com/v1",
+		"options.apiKey":  "{env:ANTHROPIC_API_KEY}",
+	} {
+		if got := jsonPath(doc, append([]string{"provider", "anthropic"}, strings.Split(path, ".")...)...); got != want {
+			t.Errorf("provider.anthropic.%s = %v, want %q", path, got, want)
+		}
+	}
+}
+
+// TestOpenCodeConfigPinsTheServedModel: on opencode 1.18.30 a config model
+// entry's id is the model name OpenCode sends, and its provider.npm is the SDK
+// package that receives the key, whatever the provider block says. The
+// content's own entry for the dispatched model sets both, so a lower layer's
+// entry cannot send the stage to another model or package. The model is sent
+// under the id the stage names. The anthropic entry sets nothing else, so the
+// catalog's limits and options still apply.
+func TestOpenCodeConfigPinsTheServedModel(t *testing.T) {
+	anthropicKey := map[string]string{"ANTHROPIC_API_KEY": "fake-anthropic-credential-1625"}
+	for _, tc := range []struct {
+		model, key, modelID, servedID, npm string
+		keys                               []string
+	}{
+		{"lmstudio/qwen/qwen3.8-27b", "lmstudio", "qwen/qwen3.8-27b", "qwen/qwen3.8-27b", "@ai-sdk/openai-compatible", []string{"id", "limit", "provider", "tool_call"}},
+		{"anthropic/claude-sonnet-5", "anthropic", "claude-sonnet-5", "claude-sonnet-5", "@ai-sdk/anthropic", []string{"id", "provider"}},
+		{"anthropic/claude-haiku-4-5-20251001", "anthropic", "claude-haiku-4-5-20251001", "claude-haiku-4-5-20251001", "@ai-sdk/anthropic", []string{"id", "provider"}},
+	} {
+		built, err := buildOpenCodeConfigFor(t, lmStudioSettings(), RunOptions{Model: tc.model}, anthropicKey)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.model, err)
+		}
+		doc := decodeOpenCodeConfig(t, built.Content)
+		models, _ := jsonPath(doc, "provider", tc.key, "models").(map[string]any)
+		if len(models) != 1 || models[tc.modelID] == nil {
+			t.Errorf("%s: provider.%s.models = %v, want the dispatched model's entry alone", tc.model, tc.key, keysOf(models))
+			continue
+		}
+		entry, _ := models[tc.modelID].(map[string]any)
+		if got := entry["id"]; got != tc.servedID {
+			t.Errorf("%s: models.%s.id = %v, want %q, so a lower layer cannot send another model", tc.model, tc.modelID, got, tc.servedID)
+		}
+		if got := jsonPath(entry, "provider", "npm"); got != tc.npm {
+			t.Errorf("%s: models.%s.provider.npm = %v, want %q, the provider block's own package", tc.model, tc.modelID, got, tc.npm)
+		}
+		if got := jsonPath(doc, "provider", tc.key, "npm"); got != tc.npm {
+			t.Errorf("%s: provider.%s.npm = %v, want %q", tc.model, tc.key, got, tc.npm)
+		}
+		if got := keysOf(entry); !slices.Equal(got, tc.keys) {
+			t.Errorf("%s: models.%s sets %v, want %v", tc.model, tc.modelID, got, tc.keys)
+		}
+	}
+}
+
+// TestOpenCodeConfigRefusesAnAnthropicModelItCannotPin: the content's entry
+// for an anthropic model defines that model even where OpenCode's bundled
+// catalog does not list it, and such a model has no limits, so OpenCode would
+// never compact its session. A fast-mode entry cannot be pinned either:
+// OpenCode derives it from a base model and sends the base model's id with
+// options and a header of its own, so pinning the entry's own id sends a model
+// Anthropic does not serve, and pinning the base id drops the fast mode. Both
+// are refused before spawn, naming the model and a model to dispatch instead.
+func TestOpenCodeConfigRefusesAnAnthropicModelItCannotPin(t *testing.T) {
+	env := map[string]string{"ANTHROPIC_API_KEY": "fake-anthropic-credential-1625"}
+	for _, tc := range []struct {
+		model string
+		want  []string
+	}{
+		{"anthropic/claude-nightgauge-no-such-model", []string{"bundled catalog", "never compacts", "claude-sonnet-4-6"}},
+		{"anthropic/claude-sonnet-5-fast", []string{"bundled catalog", "never compacts", "claude-sonnet-4-6"}},
+		{"anthropic/qwen/qwen3.8-27b", []string{"bundled catalog", "never compacts", "claude-sonnet-4-6"}},
+		{"anthropic/claude-opus-5-fast", []string{"fast-mode", "anthropic/claude-opus-5 instead"}},
+		{"anthropic/claude-opus-4-8-fast", []string{"fast-mode", "anthropic/claude-opus-4-8 instead"}},
+	} {
+		built, err := buildOpenCodeConfigFor(t, lmStudioSettings(), RunOptions{Model: tc.model}, env)
+		if err == nil {
+			t.Errorf("%s: a config was built: %s", tc.model, built.Content)
+			continue
+		}
+		for _, want := range append([]string{strconv.Quote(tc.model)}, tc.want...) {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: the refusal does not say %q: %v", tc.model, want, err)
+			}
+		}
+	}
+}
+
+// TestOpenCodeConfigNonLoopbackUnlessALocalEndpoint: non_loopback is false
+// only for a declared endpoint on this machine. A hosted provider's model runs
+// on its servers, so an offline claim holds for none of them.
+func TestOpenCodeConfigNonLoopbackUnlessALocalEndpoint(t *testing.T) {
+	lan := lmStudioSettings()
+	lan.BaseURL = "http://192.0.2.10:1234/v1"
+	for _, tc := range []struct {
+		settings config.OpenCodeConfig
+		model    string
+		want     bool
+	}{
+		{lmStudioSettings(), "lmstudio/qwen/qwen3.8-27b", false},
+		{lan, "lmstudio/qwen/qwen3.8-27b", true},
+		{lmStudioSettings(), "anthropic/claude-sonnet-5", true},
+		{lmStudioSettings(), "openai/gpt-5.5", true},
+		{lmStudioSettings(), "openrouter/meta-llama/llama-4", true},
+	} {
+		built, err := buildOpenCodeConfigFor(t, tc.settings, RunOptions{Model: tc.model},
+			map[string]string{"ANTHROPIC_API_KEY": "fake-anthropic-credential-1625"})
+		if err != nil {
+			t.Fatalf("%s: %v", tc.model, err)
+		}
+		if built.NonLoopback != tc.want {
+			t.Errorf("%s on %s: NonLoopback = %v, want %v", tc.model, tc.settings.BaseURL, built.NonLoopback, tc.want)
+		}
+	}
+}
+
+// TestOpenCodeConfigRefusesAnUndeclaredProviderKey: a provider key that no
+// endpoint declares and OpenCode's bundled catalog does not know can only be
+// defined by a config Nightgauge does not build, whose base URL and limits it
+// never checked, such as a second LM Studio the repository or the operator's
+// own config names. It is refused before spawn, and the refusal never quotes
+// an endpoint's address. A hosted catalog provider is dispatched as before.
+func TestOpenCodeConfigRefusesAnUndeclaredProviderKey(t *testing.T) {
+	for _, model := range []string{"lmstudio-remote/qwen/qwen3.8-27b", "nosuchprovider/x", "lab/qwen/qwen3.8-27b"} {
+		built, err := buildOpenCodeConfigFor(t, lmStudioSettings(), RunOptions{Model: model}, nil)
+		if err == nil {
+			t.Errorf("%s: a config was built: %s", model, built.Content)
+			continue
+		}
+		key, _, _ := strings.Cut(model, "/")
+		for _, want := range []string{strconv.Quote(key), "neither an endpoint", "never compacts"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: the refusal does not say %q: %v", model, want, err)
+			}
+		}
+		if strings.Contains(err.Error(), "127.0.0.1") {
+			t.Errorf("%s: the refusal quotes the endpoint's address: %v", model, err)
+		}
+	}
+	for _, model := range []string{"openai/gpt-5.5", "openrouter/meta-llama/llama-4", "deepseek/deepseek-chat", "ollama-cloud/qwen3-coder:480b"} {
+		if _, err := buildOpenCodeConfigFor(t, lmStudioSettings(), RunOptions{Model: model}, nil); err != nil {
+			t.Errorf("%s: a hosted catalog provider was refused: %v", model, err)
+		}
+	}
+}
+
+// TestOpenCodeConfigRefusesPlatformProviders (ADR-022 § 17): a provider whose
+// credentials are the forge's or a cloud platform's, which a stage keeps for
+// its tools, is refused at config time as it is before dispatch, so the verb
+// refuses it too: github-copilot would run on the forge's gh login, a
+// Copilot subscription, and google-vertex-anthropic and amazon-bedrock would
+// reach Claude without ANTHROPIC_API_KEY.
+func TestOpenCodeConfigRefusesPlatformProviders(t *testing.T) {
+	for _, provider := range openCodePlatformProviders {
+		model := provider + "/claude-sonnet-5"
+		built, err := buildOpenCodeConfigFor(t, lmStudioSettings(), RunOptions{Model: model},
+			map[string]string{"ANTHROPIC_API_KEY": "fake-anthropic-credential-1625", "GITHUB_TOKEN": "fake-forge-credential-1625"})
+		if err == nil {
+			t.Errorf("%s: a config was built: %s", model, built.Content)
+			continue
+		}
+		for _, want := range []string{strconv.Quote(provider), "subscription or OAuth", "§ 17"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: the refusal does not say %q: %v", model, want, err)
+			}
+		}
+		if strings.Contains(err.Error(), "fake-forge-credential-1625") {
+			t.Errorf("%s: the refusal carries a credential's value: %v", model, err)
+		}
+	}
+}
+
+// TestOpenCodeConfigCredentialsAreReferences (ADR-022 § 17): an anthropic/
+// stage's key is read by OpenCode from ANTHROPIC_API_KEY through the reference
+// {env:ANTHROPIC_API_KEY}; its value appears nowhere in the config.
+func TestOpenCodeConfigCredentialsAreReferences(t *testing.T) {
+	const secret = "fake-anthropic-credential-1625"
+	built, err := buildOpenCodeConfigFor(t, lmStudioSettings(), RunOptions{Model: "anthropic/claude-sonnet-5", MaxTurns: 40},
+		map[string]string{"ANTHROPIC_API_KEY": secret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(built.Content, secret) {
+		t.Errorf("the credential's value is in the config content:\n%s", built.Content)
+	}
+	for _, content := range built.Files {
+		if strings.Contains(content, secret) {
+			t.Error("the credential's value is in a file the config refers to")
+		}
+	}
+	doc := decodeOpenCodeConfig(t, built.Content)
+	if got := jsonPath(doc, "provider", "anthropic", "options", "apiKey"); got != "{env:ANTHROPIC_API_KEY}" {
+		t.Errorf("provider.anthropic.options.apiKey = %v, want the reference {env:ANTHROPIC_API_KEY}", got)
+	}
+}
+
+// TestOpenCodeAnthropicRequiresAPIKey: the builder refuses an anthropic/ model
+// while ANTHROPIC_API_KEY is unset or empty, naming the variable, the same
+// refusal PreDispatch makes, so the verb, which never calls PreDispatch,
+// refuses it too. With the variable set the config is built.
+func TestOpenCodeAnthropicRequiresAPIKey(t *testing.T) {
+	run := RunOptions{Model: "anthropic/claude-sonnet-5", MaxTurns: 40}
+	for _, env := range []map[string]string{nil, {"ANTHROPIC_API_KEY": ""}} {
+		if built, err := buildOpenCodeConfigFor(t, config.OpenCodeConfig{}, run, env); err == nil {
+			t.Errorf("with ANTHROPIC_API_KEY %v a config was built: %s", env, built.Content)
+		} else if !strings.Contains(err.Error(), "ANTHROPIC_API_KEY is not set") || !strings.Contains(err.Error(), "claude-headless") {
+			t.Errorf("the refusal does not name the variable and the way out: %v", err)
+		}
+	}
+	if _, err := buildOpenCodeConfigFor(t, config.OpenCodeConfig{}, run, map[string]string{"ANTHROPIC_API_KEY": "fake-anthropic-credential-1625"}); err != nil {
+		t.Errorf("with ANTHROPIC_API_KEY set the config was refused: %v", err)
+	}
+}
+
+// TestOpenCodeConfigProviderKeyedByEndpoint (ADR-022 § Endpoints): a provider
+// block is keyed by its endpoint's id, not its kind, so two endpoints of one
+// kind are two blocks. The flat machine-tier keys declare the endpoint
+// `lmstudio`; an endpoint renamed `lab` is dispatched and keyed as `lab`.
+func TestOpenCodeConfigProviderKeyedByEndpoint(t *testing.T) {
+	endpoints, err := OpenCodeEndpoints(lmStudioSettings())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(endpoints) != 1 || endpoints[0].ID != "lmstudio" || endpoints[0].Provider != "lm-studio" {
+		t.Fatalf("the flat keys declare %+v, want one lm-studio endpoint with id lmstudio", endpoints)
+	}
+	for _, id := range []string{"lmstudio", "lab"} {
+		ep := endpoints[0]
+		ep.ID = id
+		built, err := BuildOpenCodeConfig(OpenCodeConfigInput{
+			Run:       RunOptions{Model: id + "/qwen/qwen3.8-27b", MaxTurns: 40},
+			Endpoints: []OpenCodeEndpoint{ep},
+			RunRoot:   goldenRunRoot,
+			Lookup:    envLookup(nil),
+		})
+		if err != nil {
+			t.Fatalf("id %s: %v", id, err)
+		}
+		doc := decodeOpenCodeConfig(t, built.Content)
+		providers, _ := doc["provider"].(map[string]any)
+		if len(providers) != 1 || providers[id] == nil {
+			t.Errorf("id %s: provider keys = %v, want [%s]", id, keysOf(providers), id)
+		}
+		if got := jsonPath(doc, "provider", id, "options", "baseURL"); got != "{file:"+filepath.Join(goldenRunRoot, "nightgauge", id+".base-url")+"}" {
+			t.Errorf("id %s: baseURL = %v, want a reference to the endpoint's own file", id, got)
+		}
+		if got := jsonPath(doc, "provider", id, "models", "qwen/qwen3.8-27b", "limit", "context"); got != float64(131072) {
+			t.Errorf("id %s: the model's limit.context = %v, want 131072", id, got)
+		}
+		for _, key := range []string{"npm", "env"} {
+			if jsonPath(doc, "provider", id, key) == nil {
+				t.Errorf("id %s: the endpoint block has no %s", id, key)
+			}
+		}
+		if got := jsonPath(doc, "provider", id, "options", "apiKey"); got != "" {
+			t.Errorf("id %s: apiKey = %v, want empty so no variable binds to the endpoint", id, got)
+		}
+	}
+}
+
+func keysOf(m map[string]any) []string {
+	var keys []string
+	for k := range m {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
+}
+
+// TestOpenCodeConfigEndpointURL: an endpoint's base_url must be http or https
+// with no user name or password; a host that is not this machine is accepted
+// and flagged. The URL never reaches the config content or an error: the
+// content refers to a private file, and errors name the endpoint.
+func TestOpenCodeConfigEndpointURL(t *testing.T) {
+	for _, tc := range []struct {
+		url         string
+		ok          bool
+		nonLoopback bool
+	}{
+		{"http://127.0.0.1:1234/v1", true, false},
+		{"http://localhost:1234/v1", true, false},
+		{"http://[::1]:1234/v1", true, false},
+		{"https://127.0.0.1:1234/v1", true, false},
+		{"http://192.0.2.10:1234/v1", true, true},
+		{"http://[2001:db8::10]:1234/v1", true, true},
+		{"ftp://127.0.0.1:1234/v1", false, false},
+		{"http://u:p@127.0.0.1:1234", false, false},
+		{"http://u@192.0.2.10:1234", false, false},
+		{"127.0.0.1:1234/v1", false, false},
+		{"http:///v1", false, false},
+		{"http://127.0.0.1:1234/v1?key=x", false, false},
+		{"http://127.0.0.1:1234/v1 ", false, false},
+	} {
+		settings := lmStudioSettings()
+		settings.BaseURL = tc.url
+		built, err := buildOpenCodeConfigFor(t, settings, RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"}, nil)
+		if !tc.ok {
+			if err == nil {
+				t.Errorf("%s: accepted", tc.url)
+			} else if strings.Contains(err.Error(), strings.TrimSpace(tc.url)) || strings.Contains(err.Error(), "192.0.2.10") {
+				t.Errorf("%s: the error quotes the URL: %v", tc.url, err)
+			} else if !strings.Contains(err.Error(), "endpoint lmstudio") {
+				t.Errorf("%s: the error does not name the endpoint: %v", tc.url, err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s: refused: %v", tc.url, err)
+			continue
+		}
+		if built.NonLoopback != tc.nonLoopback {
+			t.Errorf("%s: NonLoopback = %v, want %v", tc.url, built.NonLoopback, tc.nonLoopback)
+		}
+		if strings.Contains(built.Content, strings.TrimSuffix(tc.url, "/v1")) {
+			t.Errorf("%s: the URL is in the config content:\n%s", tc.url, built.Content)
+		}
+	}
+}
+
+// TestOpenCodeConfigRefusesAnUndeclaredLocalEndpoint: a model server the
+// operator runs is described only by a declared endpoint, so a local provider
+// key with none, or with one of another kind, is refused before anything
+// uses OpenCode's own defaults for it (a context limit of 0 for LM Studio).
+func TestOpenCodeConfigRefusesAnUndeclaredLocalEndpoint(t *testing.T) {
+	ollama := config.OpenCodeConfig{Provider: "ollama", BaseURL: "http://127.0.0.1:11434/v1", Limit: config.OpenCodeLimit{Context: 32768, Output: 4096}}
+	for _, tc := range []struct {
+		settings config.OpenCodeConfig
+		model    string
+	}{
+		{config.OpenCodeConfig{}, "lmstudio/qwen/qwen3.8-27b"},
+		{config.OpenCodeConfig{}, "ollama/qwen3-coder:30b"},
+		{ollama, "lmstudio/qwen/qwen3.8-27b"},
+		{lmStudioSettings(), "ollama/qwen3-coder:30b"},
+	} {
+		_, err := buildOpenCodeConfigFor(t, tc.settings, RunOptions{Model: tc.model}, nil)
+		if err == nil || !strings.Contains(err.Error(), "declares no endpoint") || !strings.Contains(err.Error(), "opencode.limit.context") {
+			t.Errorf("%s with %q declared: err = %v, want a refusal naming the missing endpoint", tc.model, tc.settings.Provider, err)
+		}
+	}
+	if _, err := buildOpenCodeConfigFor(t, ollama, RunOptions{Model: "ollama/qwen3-coder:30b"}, nil); err != nil {
+		t.Errorf("a declared ollama endpoint was refused: %v", err)
+	}
+}
+
+// TestOpenCodeConfigRefusesABraceInTheModel: OpenCode substitutes {env:...}
+// and {file:...} in its config text before parsing it, so a model id that
+// carried one would send a secret's value as the model name.
+func TestOpenCodeConfigRefusesABraceInTheModel(t *testing.T) {
+	for _, model := range []string{"lmstudio/{env:GITHUB_TOKEN}", "openai/x{file:/etc/hosts}", "openai/}"} {
+		if built, err := buildOpenCodeConfigFor(t, lmStudioSettings(), RunOptions{Model: model}, nil); err == nil {
+			t.Errorf("%s: built %s", model, built.Content)
+		}
+	}
+}
+
+// TestOpenCodeConfigMaxTokensLowersTheOutputLimit: a stage's token cap lowers
+// the endpoint's output limit and never raises it.
+func TestOpenCodeConfigMaxTokensLowersTheOutputLimit(t *testing.T) {
+	for _, tc := range []struct{ maxTokens, want int }{{0, 8192}, {4096, 4096}, {65536, 8192}} {
+		built, err := buildOpenCodeConfigFor(t, lmStudioSettings(), RunOptions{Model: "lmstudio/qwen/qwen3.8-27b", MaxTokens: tc.maxTokens}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := jsonPath(decodeOpenCodeConfig(t, built.Content), "provider", "lmstudio", "models", "qwen/qwen3.8-27b", "limit", "output")
+		if got != float64(tc.want) {
+			t.Errorf("MaxTokens %d: limit.output = %v, want %d", tc.maxTokens, got, tc.want)
+		}
+	}
+}
+
+// TestOpenCodeEndpointsValidateTheFlatKeys: a server the block describes must
+// name its kind; the kinds are lm-studio and ollama; a timeout under a second
+// is a unit mistake; an unset timeout gets the default sized for cold prefill.
+func TestOpenCodeEndpointsValidateTheFlatKeys(t *testing.T) {
+	if eps, err := OpenCodeEndpoints(config.OpenCodeConfig{InheritUserConfig: true, Model: "anthropic/claude-sonnet-5"}); err != nil || len(eps) != 0 {
+		t.Errorf("a block declaring no server gave %v, %v", eps, err)
+	}
+	noKind := lmStudioSettings()
+	noKind.Provider = ""
+	if _, err := OpenCodeEndpoints(noKind); err == nil || !strings.Contains(err.Error(), "opencode.provider is not set") {
+		t.Errorf("a server with no kind: %v", err)
+	}
+	vllm := lmStudioSettings()
+	vllm.Provider = "vllm"
+	if _, err := OpenCodeEndpoints(vllm); err == nil || !strings.Contains(err.Error(), "lm-studio or ollama") {
+		t.Errorf("an unsupported kind: %v", err)
+	}
+	tiny := lmStudioSettings()
+	tiny.Timeouts.Header = config.YAMLDuration(180000) // nanoseconds, meant as milliseconds
+	if _, err := OpenCodeEndpoints(tiny); err == nil || !strings.Contains(err.Error(), "opencode.timeouts.header") {
+		t.Errorf("a sub-second timeout: %v", err)
+	}
+	eps, err := OpenCodeEndpoints(lmStudioSettings())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eps[0].HeaderTimeout != openCodeDefaultTimeout || eps[0].ChunkTimeout != openCodeDefaultTimeout {
+		t.Errorf("default timeouts = %s, %s; want %s", eps[0].HeaderTimeout, eps[0].ChunkTimeout, openCodeDefaultTimeout)
+	}
+	if openCodeDefaultTimeout <= 76*time.Second {
+		t.Errorf("the default timeout %s does not cover the 76 s cold prefill measured on LM Studio", openCodeDefaultTimeout)
+	}
+	custom := lmStudioSettings()
+	custom.Timeouts = config.OpenCodeTimeouts{Header: config.YAMLDuration(5 * time.Minute), Chunk: config.YAMLDuration(2 * time.Minute)}
+	built, err := buildOpenCodeConfigFor(t, custom, RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := decodeOpenCodeConfig(t, built.Content)
+	if jsonPath(doc, "provider", "lmstudio", "options", "headerTimeout") != float64(300000) ||
+		jsonPath(doc, "provider", "lmstudio", "options", "chunkTimeout") != float64(120000) {
+		t.Errorf("configured timeouts did not reach the block in milliseconds: %v", jsonPath(doc, "provider", "lmstudio", "options"))
+	}
+}
+
+// TestOpenCodeConfigOperatorOverrides: ADR-022 § 12 lets the operator turn
+// snapshots on and lsp or formatter off on the machine tier.
+func TestOpenCodeConfigOperatorOverrides(t *testing.T) {
+	on, off := true, false
+	settings := lmStudioSettings()
+	settings.Snapshot, settings.LSP, settings.Formatter = &on, &off, &off
+	built, err := buildOpenCodeConfigFor(t, settings, RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := decodeOpenCodeConfig(t, built.Content)
+	if doc["snapshot"] != true || doc["lsp"] != false || doc["formatter"] != false {
+		t.Errorf("snapshot, lsp, formatter = %v, %v, %v; want the operator's true, false, false", doc["snapshot"], doc["lsp"], doc["formatter"])
+	}
+}
+
+// TestPrepareOpenCodeRunNamesWhatTheSpawnMustNotInherit: the prepared run
+// carries, as data, exactly the inherited variables the Go path keeps from the
+// child (OpenCodeWithholdsEnv), so a caller spawning OpenCode from the verb's
+// output composes the same environment without mirroring the catalog. Checked
+// for a local and a hosted dispatch, against every catalog variable, both
+// base-URL variables, OpenCode's own variables and variables a stage keeps.
+func TestPrepareOpenCodeRunNamesWhatTheSpawnMustNotInherit(t *testing.T) {
+	home := t.TempDir()
+	for _, model := range []string{"lmstudio/qwen/qwen3.8-27b", "openai/gpt-5.5"} {
+		run, err := PrepareOpenCodeRun(OpenCodeRunRequest{
+			Home:             home,
+			ID:               testRunID,
+			MachineConfigDir: filepath.Join(home, ".nightgauge"),
+			Run:              RunOptions{Stage: "feature-dev", Model: model},
+			Settings:         lmStudioSettings(),
+			Lookup:           envLookup(nil),
+			GOOS:             "linux",
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", model, err)
+		}
+		raw, err := json.Marshal(run)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out struct {
+			EnvWithhold *struct {
+				Prefixes []string `json:"prefixes"`
+				Names    []string `json:"names"`
+			} `json:"env_withhold"`
+		}
+		if err := json.Unmarshal(raw, &out); err != nil {
+			t.Fatal(err)
+		}
+		if out.EnvWithhold == nil {
+			t.Fatalf("%s: the prepared run names no env_withhold, so a caller cannot compose the child's environment:\n%s", model, raw)
+		}
+		covers := func(name string) bool {
+			for _, p := range out.EnvWithhold.Prefixes {
+				if strings.HasPrefix(name, p) {
+					return true
+				}
+			}
+			return slices.Contains(out.EnvWithhold.Names, name)
+		}
+		candidates := []string{
+			"OPENCODE_AUTH_CONTENT", "OPENCODE_CONFIG_DIR", "OPENCODE_ANYTHING_LATER",
+			"ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "PATH", "HOME", "GH_TOKEN",
+		}
+		for _, vars := range openCodeCatalogEnv {
+			candidates = append(candidates, vars...)
+		}
+		for _, name := range candidates {
+			if got, want := covers(name), OpenCodeWithholdsEnv(model, name); got != want {
+				t.Errorf("%s: env_withhold covers %s = %v, but the Go path withholds it = %v", model, name, got, want)
+			}
+		}
+		if !slices.IsSorted(out.EnvWithhold.Names) {
+			t.Errorf("%s: env_withhold.names is not sorted", model)
+		}
+	}
+}
+
+// TestPrepareOpenCodeRunRefusesConfigARunCannotBeIsolatedFrom: a
+// $HOME/.opencode holding config, or the machine's managed OpenCode config,
+// refuses the run in the preparation the adapter and the verb share, before
+// anything is created, unless the machine tier opts into the operator's own
+// OpenCode config, which then says so on stderr and layers it in.
+func TestPrepareOpenCodeRunRefusesConfigARunCannotBeIsolatedFrom(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".opencode"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".opencode", "opencode.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	req := OpenCodeRunRequest{
+		Home:             home,
+		ID:               testRunID,
+		MachineConfigDir: filepath.Join(home, ".nightgauge"),
+		Run:              RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b"},
+		Settings:         lmStudioSettings(),
+		Lookup:           envLookup(nil),
+		GOOS:             "linux",
+	}
+	if run, err := PrepareOpenCodeRun(req); err == nil {
+		t.Fatalf("a run was prepared while ~/.opencode holds config: %+v", run)
+	} else if !strings.Contains(err.Error(), filepath.Join(home, ".opencode")) || !strings.Contains(err.Error(), openCodeInheritSetting) {
+		t.Errorf("the refusal does not name ~/.opencode and the opt-in: %v", err)
+	}
+	if _, err := os.Lstat(OpenCodeRunsDir(home)); !os.IsNotExist(err) {
+		t.Errorf("a refused run created %s", OpenCodeRunsDir(home))
+	}
+
+	req.Settings.InheritUserConfig = true
+	var run *OpenCodeRun
+	var err error
+	stderr := captureAdapterStderr(t, func() { run, err = PrepareOpenCodeRun(req) })
+	if err != nil {
+		t.Fatalf("with %s on the run was refused: %v", openCodeInheritSetting, err)
+	}
+	if run.Env["OPENCODE_CONFIG_DIR"] == "" {
+		t.Error("with the opt-in the run does not layer the operator's OpenCode config in")
+	}
+	if n := strings.Count(stderr, openCodeInheritSetting+" is on"); n != 1 {
+		t.Errorf("the opt-in was announced %d times, want once:\n%s", n, stderr)
+	}
+}
+
+// TestPrepareOpenCodeRunKeepsTheBaseURLOutOfTheEnvironment: the run's
+// environment carries the config, and the endpoint's base URL is only in a
+// 0600 file in the run root's Nightgauge directory, which the config refers
+// to. A refused config creates nothing on disk.
+func TestPrepareOpenCodeRunKeepsTheBaseURLOutOfTheEnvironment(t *testing.T) {
+	home := t.TempDir()
+	req := OpenCodeRunRequest{
+		Home:             home,
+		ID:               testRunID,
+		MachineConfigDir: filepath.Join(home, ".nightgauge"),
+		Run:              RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b", MaxTurns: 40},
+		Settings:         lmStudioSettings(),
+		Lookup:           envLookup(nil),
+		GOOS:             "linux",
+	}
+
+	refused := req
+	refused.Settings.Limit.Context = 0
+	if _, err := PrepareOpenCodeRun(refused); err == nil {
+		t.Fatal("a zero context limit was accepted")
+	}
+	if _, err := os.Lstat(OpenCodeRunsDir(home)); !os.IsNotExist(err) {
+		t.Errorf("a refused config created %s", OpenCodeRunsDir(home))
+	}
+
+	run, err := PrepareOpenCodeRun(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.SchemaVersion != OpenCodeConfigSchemaVersion || run.RunDir != filepath.Join(OpenCodeRunsDir(home), testRunID) {
+		t.Errorf("run = %+v", run)
+	}
+	if run.Env["OPENCODE_CONFIG_CONTENT"] != run.ConfigContent || run.ConfigContent == "" {
+		t.Error("the environment does not carry the config content")
+	}
+	if want := filepath.Join(run.RunDir, "config", "opencode", "plugin"); run.PluginDir != want {
+		t.Errorf("PluginDir = %q, want %q", run.PluginDir, want)
+	}
+	for k, v := range run.Env {
+		if strings.Contains(v, "127.0.0.1:1234") {
+			t.Errorf("%s carries the endpoint's base URL", k)
+		}
+	}
+	file := filepath.Join(run.RunDir, "nightgauge", "lmstudio.base-url")
+	fi, err := os.Lstat(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o600 || !fi.Mode().IsRegular() {
+		t.Errorf("%s has mode %s, want a regular 0600 file", file, fi.Mode())
+	}
+	if dir, err := os.Lstat(filepath.Dir(file)); err != nil || dir.Mode().Perm() != 0o700 {
+		t.Errorf("the Nightgauge directory of the run root is not 0700: %v %v", dir, err)
+	}
+	if got, _ := os.ReadFile(file); string(got) != "http://127.0.0.1:1234/v1" {
+		t.Errorf("%s holds %q", file, got)
+	}
+	if !strings.Contains(run.ConfigContent, "{file:"+file+"}") {
+		t.Errorf("the config does not refer to %s:\n%s", file, run.ConfigContent)
+	}
+
+	// A link planted at the file's name is replaced, never followed.
+	target := filepath.Join(t.TempDir(), "operator-file")
+	if err := os.WriteFile(target, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(file); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, file); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PrepareOpenCodeRun(req); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(target); string(got) != "keep" {
+		t.Errorf("the write followed a link planted at %s", file)
+	}
+	if fi, _ := os.Lstat(file); fi.Mode()&os.ModeSymlink != 0 {
+		t.Error("the planted link is still there")
+	}
+}

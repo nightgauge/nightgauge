@@ -4,6 +4,7 @@ import type { NightgaugeConfig } from "../views/settings/types";
 import { NightgaugeYamlService } from "../views/settings/NightgaugeYamlService";
 import { getExecutionAdapter, type ExecutionAdapter } from "../utils/nightgaugeConfig";
 import { ConfigBridge } from "../services/ConfigBridge";
+import { isOpenCodeSwitchOn, openCodeGateMessage } from "../utils/openCodeExperimentalGate";
 
 interface AdapterOption extends vscode.QuickPickItem {
   value: ExecutionAdapter;
@@ -66,6 +67,17 @@ export function registerSwitchAdapterCommand(logger: Logger): vscode.Disposable 
               : "Experimental agentic pipeline adapter",
           value: "grok",
         },
+        {
+          label: "OpenCode",
+          detail:
+            "Experimental; requires the opencode CLI and either a local model server " +
+            "(LM Studio, Ollama) or a hosted provider API key",
+          description:
+            current === "opencode"
+              ? "Current adapter (experimental)"
+              : "Experimental agentic pipeline adapter",
+          value: "opencode",
+        },
       ],
       {
         title: "Nightgauge: Switch Execution Adapter",
@@ -100,6 +112,15 @@ export function registerSwitchAdapterCommand(logger: Logger): vscode.Disposable 
             "Run `gcloud auth application-default login` if authentication fails."
         );
       }
+    }
+
+    if (adapterSelection.value === "opencode" && !isOpenCodeSwitchOn()) {
+      // Blocking: unlike the warnings above, OpenCode does not dispatch at
+      // all without the switch (ADR-022), so writing the adapter now would
+      // silently produce a pipeline that refuses to run. Leave the config
+      // untouched and name the way to actually enable it.
+      vscode.window.showInformationMessage(openCodeGateMessage());
+      return;
     }
 
     // Always write to local config (config.local.yaml, gitignored).

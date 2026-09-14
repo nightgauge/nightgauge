@@ -253,11 +253,59 @@ write target** for any non-ephemeral key. File:
 | `nightgauge.backend.timeoutSeconds`                                | VSCode setting                        | Machine     | Per-developer machine performance tuning.                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `lm_studio.*` (model, context_length, base_url, stream_options, …) | team YAML                             | Machine     | LM Studio is local-only (`http://localhost:1234`); endpoint, model, and tuning are per-developer install state. **MIGRATE.**                                                                                                                                                                                                                                                                                                                     |
 | `ollama.*`                                                         | schema only                           | Machine     | Same reasoning as LM Studio — per-developer local install.                                                                                                                                                                                                                                                                                                                                                                                       |
+| `opencode.*` (provider, base_url, limit, timeouts, …)              | machine YAML                          | Machine     | The OpenCode adapter's facts about this machine: its binary, where the model server listens and what it has loaded. It decides where a stage's code is sent, so it is read from the machine file only, and a committed `opencode:` refuses every `opencode` dispatch. See [The `opencode` block](#the-opencode-block).                                                                                                                           |
 | `platform.*` (api keys, telemetry, retry policy)                   | schema only                           | Machine     | Cloud-platform credentials and per-user telemetry opt-out.                                                                                                                                                                                                                                                                                                                                                                                       |
 | `remote.*` (IPC bridge settings)                                   | schema only                           | Machine     | Per-developer IPC socket / port — local install state.                                                                                                                                                                                                                                                                                                                                                                                           |
 | `autonomous.enabled_repos`                                         | team YAML / runtime memento (v1)      | Machine     | Per-developer choice of which repos this developer operates on. **Cross-worktree consistent — workspaceState was wrong (#3641):** each git worktree spawned by the pipeline has a distinct workspace folder URI, so a workspaceState value only applies in the parent working tree. The Go binary running inside a worktree reads `~/.nightgauge/config.yaml` directly; machine tier is the only tier that propagates correctly. **MIGRATE v2.** |
 | `autonomous.repositories.<repo>.sequential`                        | team YAML / runtime memento (v1)      | Machine     | Per-developer, per-repo policy. Same worktree-consistency reasoning as `enabled_repos` (#3641). **MIGRATE v2.**                                                                                                                                                                                                                                                                                                                                  |
 | `autonomous.repositories.<repo>.max_concurrent`                    | team YAML / runtime memento (v1)      | Machine     | Per-developer, per-repo policy. Same reasoning (#3641). **MIGRATE v2.**                                                                                                                                                                                                                                                                                                                                                                          |
+
+### The `opencode` block
+
+The `opencode` adapter builds each run's OpenCode config from this block
+([ADR-022](decisions/022-opencode-multi-provider-adapter.md) § 7), and
+`nightgauge opencode config` prints the same config for the SDK path. It lives
+in `~/.nightgauge/config.yaml` and nowhere else: the loader
+(`config.LoadOpenCodeConfig`) reads the machine file alone, never the
+checkout's `config.local.yaml`, and refuses a dispatch whose committed project
+config declares `opencode:`, naming the machine file. An unknown key in the
+block is an error.
+
+```yaml
+opencode:
+  binary: opencode # a command on PATH or an absolute path (the doctor's version check)
+  inherit_user_config: false # true layers your own OpenCode config into runs
+  model: lmstudio/qwen/qwen3.8-27b # used when a caller names no model
+  provider: lm-studio # lm-studio | ollama; the endpoint id is lmstudio | ollama
+  base_url: http://127.0.0.1:1234/v1
+  limit:
+    context: 131072 # at or below what the server has loaded, not the model maximum
+    output: 8192
+  timeouts:
+    header: 3m # wait for the first response byte; default 3m
+    chunk: 3m # wait between streamed chunks; default 3m
+  snapshot: false # default false
+  lsp: true # default true
+  formatter: true # default true
+```
+
+- A dispatch to the endpoint is refused while `limit.context` or
+  `limit.output` is 0 or missing: OpenCode never compacts a session whose
+  context limit is 0, which is what LM Studio reports. The block declares one
+  endpoint, whose id is `lmstudio` or `ollama`; a model under any other id
+  OpenCode does not know, such as `lmstudio-remote/<model>`, is refused.
+- `base_url` must be `http` or `https` with no user name or password. A host
+  that is not this machine is accepted and reported as `non_loopback: true`.
+- `inherit_user_config` is off by default for security: your OpenCode config
+  can name plugins, MCP servers, providers and models. Every key the per-run
+  config sets still wins over it, the model a stage on your endpoint or on
+  `anthropic` is sent as included, except a managed OpenCode config's and the
+  `general` and `explore` subagents' model and steps cap, which a `mode` entry
+  of the same name replaces. What the per-run config does not set, your
+  config still can: a hosted model's limits, and the server and model of a
+  hosted provider other than `anthropic`.
+- Timeouts are durations such as `3m`; a bare number is read as nanoseconds
+  and refused.
 
 ## Tier 3: Runtime
 

@@ -521,6 +521,7 @@ func rootCmd() *cobra.Command {
 
 	root.AddCommand(
 		adapterCmd(),
+		opencodeCmd(),
 		backlogCmd(),
 		capabilitiesCmd(),
 		boardCmd(),
