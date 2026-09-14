@@ -1,6 +1,7 @@
 package terminalkind
 
 import (
+	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -737,4 +738,75 @@ func edgeName(atLeftEdge bool) string {
 		return "left"
 	}
 	return "right"
+}
+
+// TestOpenCodeTextPartDoesNotClassify is #1631's security constraint, driven
+// by the real captures in testdata/opencode/. context_window_exceeded parks an
+// issue, so a model that writes overflow wording into its own reply must not
+// steer the pipeline there. For every captured overflow, the server message
+// OpenCode received (the stream error event's data.message) is put into a
+// model `text` event, in the shape opencode 1.18.30 writes one, and that
+// event must classify as nothing. The same message on the stderr line
+// OpenCode printed for it must classify context_window_exceeded — the control
+// that shows the words, not the test, are what the rules key on.
+func TestOpenCodeTextPartDoesNotClassify(t *testing.T) {
+	for _, leg := range []string{"overflow-openai", "overflow-lmstudio", "overflow-ollama", "overflow-llamacpp"} {
+		t.Run(leg, func(t *testing.T) {
+			stream, err := os.ReadFile(filepath.Join("testdata", "opencode", leg+".jsonl"))
+			if err != nil {
+				t.Fatalf("read the %s stream: %v", leg, err)
+			}
+			var message string
+			for _, line := range strings.Split(strings.TrimSpace(string(stream)), "\n") {
+				var ev struct {
+					Type  string `json:"type"`
+					Error struct {
+						Name string `json:"name"`
+						Data struct {
+							Message string `json:"message"`
+						} `json:"data"`
+					} `json:"error"`
+				}
+				if json.Unmarshal([]byte(line), &ev) == nil && ev.Type == "error" && ev.Error.Name == "ContextOverflowError" {
+					message = ev.Error.Data.Message
+					break
+				}
+			}
+			if message == "" {
+				t.Fatalf("the %s stream has no ContextOverflowError event to take the server's message from", leg)
+			}
+
+			stderr, err := os.ReadFile(filepath.Join("testdata", "opencode", leg+".stderr"))
+			if err != nil {
+				t.Fatalf("read the %s stderr: %v", leg, err)
+			}
+			var logLine string
+			for _, line := range strings.Split(string(stderr), "\n") {
+				if strings.Contains(line, "AI_APICallError: "+message) {
+					logLine = line
+				}
+			}
+			if logLine == "" {
+				t.Fatalf("no %s stderr line carries AI_APICallError: %q", leg, message)
+			}
+			if got := Classify("exit 1: " + logLine); got != "context_window_exceeded" {
+				t.Errorf("OpenCode's own stderr line for this overflow classifies %q, want context_window_exceeded:\n%s", got, logLine)
+			}
+
+			part, err := json.Marshal(map[string]any{
+				"type": "text", "timestamp": 1789336540710, "sessionID": "ses_fixture0000000000000000001",
+				"part": map[string]any{
+					"id": "prt_fixture", "messageID": "msg_fixture", "sessionID": "ses_fixture0000000000000000001",
+					"type": "text", "text": "The last attempt failed: " + message + " I will retry with less context.",
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := Classify(string(part)); got != "" {
+				t.Errorf("a model text part quoting the overflow classifies %q, want nothing — model-authored text "+
+					"must not reach a kind that parks the issue:\n%s", got, part)
+			}
+		})
+	}
 }

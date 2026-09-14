@@ -8,6 +8,7 @@ Evidence and expectations for the canonical terminal-kind rule table
 | `corpus.json`          | Behaviour corpus. Hand-authored expectations, each with a written rationale. |
 | `captured-shapes.json` | Generated evidence. Real failure text from live telemetry, redacted.         |
 | `stress-golden.json`   | Generated behaviour snapshot. Derived from the table, not hand-authored.     |
+| `opencode/`            | Real opencode 1.18.30 failure output (#1631). See `opencode/README.md`.      |
 
 ## What this pins, and why it needs pinning
 

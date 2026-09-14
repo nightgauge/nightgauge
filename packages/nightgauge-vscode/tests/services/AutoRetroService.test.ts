@@ -688,6 +688,106 @@ describe("AutoRetroService", () => {
       expect(findings[0].recommendation).toContain("credentials");
     });
 
+    it.each([
+      [
+        "context_window_exceeded",
+        "context-window-exceeded",
+        'exit 1: timestamp=2026-01-01T00:00:00.000Z level=ERROR message=process error="The prompt is greater than the context length of the loaded model."',
+        "larger context",
+      ],
+      [
+        "adapter_permission_rejected",
+        "adapter-permission-rejected",
+        "exit 1: ! permission requested: bash (...); auto-rejecting\n[adapter-permission-rejected] tool=bash",
+        "opencode.json",
+      ],
+      [
+        "adapter_incompatible",
+        "adapter-incompatible",
+        'exit 0: dispatch refused for adapter "opencode": adapter_incompatible: opencode 1.17.2 is below the minimum tested version 1.18.30',
+        "max-tested",
+      ],
+    ])(
+      "names the remediation for the parked kind %s (Issue #1631)",
+      (kind, category, reason, remedy) => {
+        // A parked kind is never retried, so the retro's recommendation is the
+        // only place an operator learns what to change: it must name the cause
+        // and must not suggest the re-run that the scheduler refuses.
+        const findings = AutoRetroService.classifyFailure(
+          {
+            text: reason,
+            sourcesAnalyzed: ["session_log"],
+            terminalKind: kind as "context_window_exceeded",
+            terminalReason: reason,
+          },
+          "feature-dev"
+        );
+        expect(findings[0].category).toBe(category);
+        expect(findings[0].evidence[0]).toContain(kind);
+        expect(findings[0].recommendation).toContain(remedy);
+        // A park never pauses the fleet, and `autonomous resume` acts only on
+        // a pause, so it would leave the issue held. The release that works on
+        // a running fleet is clearing the issue's failures.
+        expect(findings[0].recommendation).toContain(
+          "nightgauge autonomous clear-failures <owner/repo#N>"
+        );
+        expect(findings[0].recommendation).not.toContain("autonomous resume");
+      }
+    );
+
+    it("does not blame a Nightgauge permission map for an adapter permission rejection (Issue #1631)", () => {
+      // Nightgauge generates no OpenCode permission map yet, so the `ask` that
+      // was rejected came from a repository's or the user's opencode.json.
+      // The retro must say so, and must not steer the operator toward
+      // loosening a rule that guards secret files.
+      const reason =
+        "exit 1: ! permission requested: edit (...); auto-rejecting\n[adapter-permission-rejected] tool=edit";
+      const findings = AutoRetroService.classifyFailure(
+        {
+          text: reason,
+          sourcesAnalyzed: ["session_log"],
+          terminalKind: "adapter_permission_rejected",
+          terminalReason: reason,
+        },
+        "feature-dev"
+      );
+      expect(findings[0].summary).not.toMatch(/Nightgauge's (generated|own) permission map/);
+      expect(findings[0].recommendation).not.toMatch(/permission map Nightgauge generated/);
+      expect(findings[0].recommendation).toContain("secret files");
+    });
+
+    it("parks OpenCode's .env read guard and points at the issue text (Issue #1631)", () => {
+      // OpenCode's own default ruleset asks before reading `*.env` and
+      // `*.env.*`, so a stage sent to a secret file by the model or by the
+      // issue text ends `tool=read`. It parks like every other rejection; the
+      // retro must name the guard and the issue text, never a retry, and
+      // never advise loosening the guard.
+      const reason =
+        "exit 1: ! permission requested: read (...); auto-rejecting\n[adapter-permission-rejected] tool=read";
+      const findings = AutoRetroService.classifyFailure(
+        {
+          text: reason,
+          sourcesAnalyzed: ["session_log"],
+          terminalKind: "adapter_permission_rejected",
+          terminalReason: reason,
+        },
+        "feature-dev"
+      );
+      expect(findings[0].category).toBe("adapter-permission-rejected");
+      expect(findings[0].recommendation).toContain("`*.env` and `*.env.*`");
+      expect(findings[0].recommendation).toContain(
+        "issue text asks the stage to read secret files"
+      );
+      expect(findings[0].recommendation).toContain(
+        "never by loosening a rule that guards secret files"
+      );
+      expect(findings[0].recommendation).toContain("parked");
+      expect(findings[0].recommendation).not.toMatch(/retried instead|permission_denied/);
+      expect(findings[0].recommendation).toContain(
+        "nightgauge autonomous clear-failures <owner/repo#N>"
+      );
+    });
+
     it('classifies as "stop-hook-error" on Claude CLI stop-hook notification (no terminal result event)', () => {
       // Genuine #3204 case: stop-hook fires and the subagent goes silent —
       // no terminal result event ever lands. The time-gate (#3275) treats
