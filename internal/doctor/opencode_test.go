@@ -65,8 +65,9 @@ func openCodeLMStudio() config.OpenCodeConfig {
 
 // openCodeFixture is a doctor probe for one test: the gate open, a home of
 // its own, the block settings, a binary at max-tested whose `opencode
-// models` prints the configured-model capture, and every endpoint ready at
-// the context it is given.
+// models` prints the configured-model capture, every endpoint ready at the
+// context it is given, and managed OpenCode config files of its own, none of
+// which exists.
 type openCodeFixture struct {
 	env   map[string]string
 	home  string
@@ -91,9 +92,10 @@ func newOpenCodeFixture(t *testing.T, settings config.OpenCodeConfig) *openCodeF
 			return adapters.OpenCodeEndpointReadiness{Endpoint: target.ID, Kind: target.Kind, Model: model,
 				Reachable: true, Ready: true, InjectedContext: injected, LoadedContext: injected}
 		},
-		readFile: os.ReadFile,
-		glob:     filepath.Glob,
-		goos:     runtime.GOOS,
+		readFile:           os.ReadFile,
+		glob:               filepath.Glob,
+		goos:               runtime.GOOS,
+		managedConfigFiles: []string{filepath.Join(t.TempDir(), "opencode.json")},
 	}
 	return f
 }
@@ -179,13 +181,20 @@ func TestOpenCodeRowWithTheGateClosedRunsNothing(t *testing.T) {
 // blocks, with remediation. A config the doctor builds for a declared model
 // always lists it, so models-other, built for another model, stands for a
 // listing that lacks it.
+//
+// The per-run config declares an endpoint's model whatever
+// opencode.inherit_user_config says, so a listing without it blocks with the
+// operator's config inherited too.
 func TestOpenCodeCatalogProbe(t *testing.T) {
 	for _, c := range []struct {
 		fixture string
+		inherit bool
 		want    bool
-	}{{"models-configured", true}, {"models-other", false}} {
-		t.Run(c.fixture, func(t *testing.T) {
-			f := newOpenCodeFixture(t, openCodeLMStudio())
+	}{{"models-configured", false, true}, {"models-other", false, false}, {"models-other", true, false}} {
+		t.Run(fmt.Sprintf("%s inherit=%v", c.fixture, c.inherit), func(t *testing.T) {
+			settings := openCodeLMStudio()
+			settings.InheritUserConfig = c.inherit
+			f := newOpenCodeFixture(t, settings)
 			out := readOpenCodeFixture(t, c.fixture)
 			f.probe.models = func(string, config.OpenCodeConfig, string) (string, error) { return out, nil }
 			h := f.check()
@@ -215,24 +224,36 @@ func TestOpenCodeCatalogProbe(t *testing.T) {
 // `opencode models` lists nothing, and the row blocks on the credential a
 // stage would lack too, never reporting output it could not parse. With one
 // set, the listing decides, and the value is never printed.
+//
+// With opencode.inherit_user_config on, a dispatch also reads the operator's
+// own OpenCode config, which can hold the provider's API key or declare the
+// model (observed on 1.18.30), and the probe reads none of the operator's
+// OpenCode state. So a listing that lacks the model, empty or not, warns that
+// it leaves that config out, and blocks nothing.
 func TestOpenCodeCatalogProbeHostedProvider(t *testing.T) {
-	settings := openCodeLMStudio()
-	settings.Model = "openai/gpt-4.1"
 	const key = "set-by-the-test"
+	const inheritedCaveat = "opencode.inherit_user_config is on, so a dispatch also reads your own OpenCode config"
 	for _, c := range []struct {
 		name       string
+		inherit    bool
 		credential bool
 		listing    string
 		ok         bool
 		modelOK    *bool
 		want       string
 	}{
-		{"no credential", false, "", false, boolPtr(false), "OPENAI_API_KEY"},
-		{"listed", true, "openai/gpt-4.1\nopenai/gpt-5\n", true, boolPtr(true), ""},
-		{"not listed", true, "openai/gpt-5\n", false, boolPtr(false), "`opencode models` does not list opencode.model openai/gpt-4.1"},
-		{"credential set, nothing listed", true, "", true, nil, "listed no openai model"},
+		{"no credential", false, false, "", false, boolPtr(false), "OPENAI_API_KEY"},
+		{"listed", false, true, "openai/gpt-4.1\nopenai/gpt-5\n", true, boolPtr(true), ""},
+		{"not listed", false, true, "openai/gpt-5\n", false, boolPtr(false), "`opencode models` does not list opencode.model openai/gpt-4.1"},
+		{"credential set, nothing listed", false, true, "", true, nil, "listed no openai model"},
+		{"inherited config, no credential", true, false, "", true, nil, inheritedCaveat},
+		{"inherited config, not listed", true, true, "openai/gpt-5\n", true, nil, inheritedCaveat},
+		{"inherited config, listed", true, true, "openai/gpt-4.1\nopenai/gpt-5\n", true, boolPtr(true), ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			settings := openCodeLMStudio()
+			settings.Model = "openai/gpt-4.1"
+			settings.InheritUserConfig = c.inherit
 			f := newOpenCodeFixture(t, settings)
 			if c.credential {
 				f.env["OPENAI_API_KEY"] = key
@@ -249,6 +270,12 @@ func TestOpenCodeCatalogProbeHostedProvider(t *testing.T) {
 			}
 			if c.want != "" && !strings.Contains(said, c.want) {
 				t.Errorf("the row does not say %q\n%s", c.want, said)
+			}
+			if c.inherit && c.want != "" {
+				warnings := strings.Join(h.Warnings, "\n")
+				if !strings.Contains(warnings, c.want) || !strings.Contains(warnings, "the probe leaves out") {
+					t.Errorf("the warning does not say the listing leaves out the inherited config\n%s", said)
+				}
 			}
 			if strings.Contains(text, "could not parse") {
 				t.Errorf("an empty listing for a hosted provider was reported as unparseable\n%s", said)
@@ -624,6 +651,77 @@ func TestOpenCodeUnreachableServerIsNotACapHopTarget(t *testing.T) {
 	f.probe.settings = func() (config.OpenCodeConfig, error) { return settings, nil }
 	if usable, reason := capHopVerdict(CheckAdapters([]string{"opencode"})); !usable {
 		t.Errorf("ready server: not usable: %s", reason)
+	}
+}
+
+// TestOpenCodeRowBlocksOnConfigARunCannotBeIsolatedFrom drives CheckAdapters,
+// the function cap recovery reads: while opencode.inherit_user_config is off,
+// every dispatch is refused before anything is created when ~/.opencode holds
+// config or the machine has managed OpenCode config
+// (adapters.PrepareOpenCodeRun), so the row blocks on each with the adapter's
+// refusal, naming what it found and never its content, and cap recovery does
+// not hop onto it. What an install leaves in ~/.opencode is not config, and
+// with the opt-in neither blocks.
+func TestOpenCodeRowBlocksOnConfigARunCannotBeIsolatedFrom(t *testing.T) {
+	const sentinel = "machine-config-content-sentinel-1627"
+	for _, c := range []struct {
+		name    string
+		entries []string // under ~/.opencode; a name holding a dot is a file
+		managed bool
+		inherit bool
+		want    []string
+	}{
+		{"install leftovers only", []string{"bin", "package.json"}, false, false, nil},
+		{"home config", []string{"opencode.json", "agent"}, false, false, []string{".opencode", "(opencode.json, agent)"}},
+		{"managed config", nil, true, false, []string{"managed OpenCode config"}},
+		{"both", []string{"plugin"}, true, false, []string{"(plugin)", "managed OpenCode config"}},
+		{"both, inherited", []string{"plugin"}, true, true, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			settings := openCodeLMStudio()
+			settings.InheritUserConfig = c.inherit
+			f := newOpenCodeFixture(t, settings)
+			for _, entry := range c.entries {
+				path := filepath.Join(f.home, ".opencode", entry)
+				if !strings.Contains(entry, ".") {
+					if err := os.MkdirAll(path, 0o700); err != nil {
+						t.Fatal(err)
+					}
+					continue
+				}
+				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(sentinel), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if c.managed {
+				if err := os.WriteFile(f.probe.managedConfigFiles[0], []byte(sentinel), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			prev := newOpenCodeProbe
+			newOpenCodeProbe = func() openCodeProbe { return f.probe }
+			t.Cleanup(func() { newOpenCodeProbe = prev })
+
+			health := CheckAdapters([]string{"opencode"})
+			usable, reason := capHopVerdict(health)
+			if usable != (len(c.want) == 0) {
+				t.Fatalf("usable = %v, reason %q; want usable only with no config a run cannot be isolated from", usable, reason)
+			}
+			for _, want := range c.want {
+				if !strings.Contains(reason, want) {
+					t.Errorf("the remediation does not say %q: %s", want, reason)
+				}
+			}
+			if len(c.want) > 0 && !strings.Contains(reason, "opencode.inherit_user_config: true") {
+				t.Errorf("the remediation does not name the opt-in: %s", reason)
+			}
+			if strings.Contains(rowText(t, health[0]), sentinel) {
+				t.Error("the row carries a config file's content")
+			}
+		})
 	}
 }
 

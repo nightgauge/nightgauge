@@ -21,21 +21,24 @@ import (
 // dispatch meets it: the experimental enable gate, the machine-tier
 // `opencode:` block, the binary (opencode.binary's pin or the opencode on
 // PATH), the compat manifest's version policy, the catalog `opencode models`
-// lists under the per-run config, and the readiness of every model server the
-// block declares. It also prints what a run is isolated into, the offline
-// posture the per-run config sets, stored logins OpenCode holds for Anthropic,
-// and whether the binary changed since the last dispatch.
+// lists under the per-run config, the OpenCode config on this machine a run
+// cannot be isolated from, and the readiness of every model server the block
+// declares. It also prints what a run is isolated into, the offline posture
+// the per-run config sets, stored logins OpenCode holds for Anthropic, and
+// whether the binary changed since the last dispatch.
 //
 // A blocking finding makes the row not OK, which is also what cap recovery
 // reads (orchestrator.AdapterUsableForCapHop calls CheckAdapters): the
 // remediation of each is joined into the row's. Every other finding is a
 // warning, which degrades the doctor's verdict without failing the adapter.
 //
-// The version policy, the binary pin, the probe spawns and the endpoint
-// readiness probe are the adapter's own functions (adapters.CheckOpenCodeVersion,
-// ResolveOpenCodeBinary, OpenCodeProbe, ProbeOpenCodeEndpoint), the ones its
-// PreDispatch enforces, so the doctor and a dispatch cannot disagree. A model
-// server is named by its endpoint id and never by its address.
+// The version policy, the binary pin, the probe spawns, the machine config
+// refusals and the endpoint readiness probe are the adapter's own functions
+// (adapters.CheckOpenCodeVersion, ResolveOpenCodeBinary, OpenCodeProbe,
+// OpenCodeMachineConfigRefusals, ProbeOpenCodeEndpoint), the ones its
+// PreDispatch and PrepareRunRoot enforce, so the doctor and a dispatch cannot
+// disagree. A model server is named by its endpoint id and never by its
+// address.
 
 // OpenCodeHealth is the opencode adapter's section of its doctor row.
 type OpenCodeHealth struct {
@@ -112,6 +115,11 @@ type openCodeProbe struct {
 	readFile func(string) ([]byte, error)
 	glob     func(string) ([]string, error)
 	goos     string
+	// managedConfigFiles replaces the machine's managed OpenCode config files
+	// (adapters.OpenCodeRunRequest.ManagedConfigFiles); nil means this
+	// machine's. Only tests set it, because the real files are outside any
+	// directory a test may write.
+	managedConfigFiles []string
 }
 
 // newOpenCodeProbe builds the OpenCode check's dependencies for
@@ -222,7 +230,7 @@ func checkOpenCode(name string, spec adapterSpec, probe adapterProbe) AdapterHea
 	home, homeErr := p.home()
 	if homeErr != nil {
 		home = ""
-		warn("the home directory could not be resolved, so the run directories, the stored logins and the last dispatch were not checked")
+		warn("the home directory could not be resolved, so the run directories, the stored logins, the last dispatch and the OpenCode config a run cannot be isolated from were not checked")
 	}
 	settings, settingsErr := p.settings()
 	if settingsErr != nil {
@@ -285,6 +293,20 @@ func checkOpenCode(name string, spec adapterSpec, probe adapterProbe) AdapterHea
 	}
 	if settings.Model == "" {
 		h.Notes = append(h.Notes, "opencode.model is not set, so the catalog probe did not run: a stage names its own <provider>/<model>")
+	}
+
+	// While opencode.inherit_user_config is off, PrepareOpenCodeRun refuses
+	// every dispatch on a machine whose ~/.opencode holds config or which has
+	// managed OpenCode config, whatever the stage.
+	if home != "" {
+		for _, refusal := range adapters.OpenCodeMachineConfigRefusals(adapters.OpenCodeRunRequest{
+			Home:               home,
+			Settings:           settings,
+			GOOS:               p.goos,
+			ManagedConfigFiles: p.managedConfigFiles,
+		}) {
+			block(refusal.Error())
+		}
 	}
 
 	if endpointErr == nil {
@@ -369,6 +391,14 @@ func checkOpenCodeDrift(p openCodeProbe, home string, bin adapters.OpenCodeBinar
 //     (runOpenCodeModels), so the listing is a dispatch's. When the provider
 //     has variables and this environment holds none, OpenCode lists nothing
 //     for it, and a stage would find no model, which blocks and names them.
+//
+// With opencode.inherit_user_config on, a dispatch also reads the operator's
+// own OpenCode config, and the probe reads none of the operator's OpenCode
+// state, so the listing leaves that config out. Observed on 1.18.30, a lower
+// config layer holding a provider's options.apiKey loads the provider with
+// none of its variables set, and one holding a model entry for it adds the
+// model to the listing. For a model the per-run config does not declare, a
+// listing that lacks it is then a warning that says so, never a block.
 func checkOpenCodeCatalog(h *AdapterHealth, p openCodeProbe, bin adapters.OpenCodeBinary, settings config.OpenCodeConfig, block, warn func(string)) {
 	model := settings.Model
 	h.Model = model
@@ -384,10 +414,16 @@ func checkOpenCodeCatalog(h *AdapterHealth, p openCodeProbe, bin adapters.OpenCo
 	}
 	key, _, _ := strings.Cut(strings.TrimSpace(model), "/")
 	declared := openCodeDeclaresModel(built.Content, model)
+	inherited := settings.InheritUserConfig && !declared
 	if strings.TrimSpace(out) == "" {
 		// `opencode models` exited 0 and listed nothing: the one provider
 		// the per-run config enables did not load.
 		if set, unset := adapters.OpenCodeProviderVars(model, p.lookupEnv); !declared && len(set) == 0 && len(unset) > 0 {
+			if inherited {
+				warn(fmt.Sprintf("`opencode models` lists no %s model under the per-run config, and none of the provider's variables (%s) is set in this environment; %s, and which can hold provider %s's API key. The model check did not decide: unless that config holds a key for %s, set %s where the pipeline runs",
+					key, strings.Join(unset, ", "), openCodeInheritedConfigCaveat, key, key, strings.Join(unset, " or ")))
+				return
+			}
 			h.ModelOK = boolPtr(false)
 			block(fmt.Sprintf("`opencode models` lists no %s model under the per-run config: OpenCode loads provider %s only when one of its variables (%s) is set, and none is set in this environment, so a stage on opencode.model %s would find no model. Set %s where the pipeline runs",
 				key, key, strings.Join(unset, ", "), model, strings.Join(unset, " or ")))
@@ -402,6 +438,11 @@ func checkOpenCodeCatalog(h *AdapterHealth, p openCodeProbe, bin adapters.OpenCo
 		return
 	}
 	present := catalogContains(ids, model)
+	if !present && inherited {
+		warn(fmt.Sprintf("`opencode models` does not list opencode.model %s under the per-run config; %s, and which can declare the model. The model check did not decide: unless that config declares %s, a stage on it fails, so name a model `opencode models %s` lists",
+			model, openCodeInheritedConfigCaveat, model, key))
+		return
+	}
 	h.ModelOK = boolPtr(present)
 	if present {
 		if declared {
@@ -413,6 +454,10 @@ func checkOpenCodeCatalog(h *AdapterHealth, p openCodeProbe, bin adapters.OpenCo
 	block(fmt.Sprintf("`opencode models` does not list opencode.model %s under the per-run config, so a stage on it would fail: name a model `opencode models %s` lists, or set opencode.model to one",
 		model, key))
 }
+
+// openCodeInheritedConfigCaveat says why, with opencode.inherit_user_config
+// on, what the catalog probe lists is not what a dispatch finds.
+const openCodeInheritedConfigCaveat = "but opencode.inherit_user_config is on, so a dispatch also reads your own OpenCode config (your OpenCode config directory and ~/.opencode), which the probe leaves out, as it reads none of your OpenCode state"
 
 // openCodePerRunConfig builds the per-run config a dispatch of model would
 // get, into a root that is never created, and returns the adapter's refusal

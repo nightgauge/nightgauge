@@ -185,7 +185,12 @@ changelog, and the release workflow refuses a tag that does not.
   plugin in a directory above it loads. The doctor row also runs
   `opencode models` for `opencode.model`, setting a hosted provider's
   variables that your environment holds to a placeholder, never the
-  credential, and names them when it holds none; probes each LM Studio or
+  credential, and names them when it holds none; with
+  `opencode.inherit_user_config` on, such a provider's model the listing lacks
+  is a warning, not a block, because your own OpenCode config can supply the
+  key or the model. With that opt-in off, the row blocks, as every dispatch is
+  refused, while `~/.opencode` holds config or the machine has managed
+  OpenCode config, naming what it found. The row also probes each LM Studio or
   Ollama endpoint, named by id and never by address, for reachability, whether
   the model is loaded and the context it is loaded with, warning when
   `limit.context` is 0 or larger; prints the run's OpenCode directories and an

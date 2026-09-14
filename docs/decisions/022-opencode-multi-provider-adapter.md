@@ -120,6 +120,7 @@ capture script and the full observation table are in
 | `opencode run --help` prints its help on stderr and nothing on stdout                                                                                                          | § 20                       |
 | Outside a git repository, OpenCode reads `opencode.json` from the directories above the working directory; `OPENCODE_DISABLE_PROJECT_CONFIG=1` stops it                        | § 20                       |
 | `opencode models` lists a hosted provider the config declares no block for only when one of its variables is set, whatever the value                                           | § 20                       |
+| `OPENCODE_CONFIG_DIR` holding a hosted provider's `options.apiKey` loads it with none of its variables set; a model entry there adds the model to `opencode models`            | § 20                       |
 
 The first contradiction changes § 8: once project config is disabled, which it
 must be (a repository must not grant itself permissions, plugins or providers),
@@ -703,7 +704,10 @@ reports it `non_loopback: true`, as it does every hosted provider's model.
   `PrepareOpenCodeRun`, which builds the run's config and environment from
   the same read of the machine-tier block, so the opt-in can never read as on
   for the refusal and off for the environment; `nightgauge opencode config`
-  runs it too.
+  runs it too. The doctor's `opencode` row blocks on each, naming what it
+  found, through `OpenCodeMachineConfigRefusals`, which makes the same two
+  checks on the same inputs, so cap recovery never hops onto a machine that
+  refuses every dispatch (#1627).
 - **`inherit_user_config`** defaults to `false`: the operator's global
   OpenCode config is not read. The way to turn it on is
   `opencode.inherit_user_config: true` in the machine tier (§ 7), which a
@@ -1255,6 +1259,13 @@ manifest's, and its remediation is the managed install,
   holds, and a dispatch keeps, to a placeholder, never to the credential, and
   lists what a dispatch would. When the environment holds none of them, the
   row blocks and names them, because a stage would find no model either.
+  With `inherit_user_config` on (§ 8) the listing is not a dispatch's: a
+  dispatch also reads the operator's own OpenCode config, and a probe reads
+  none of the operator's OpenCode state. Observed on 1.18.30, a lower config
+  layer holding such a provider's `options.apiKey` loads it with none of its
+  variables set, and one holding a model entry for it adds the model to the
+  listing. So with the opt-in, a listing that lacks the model, empty or not,
+  is a warning that says the probe left that config out, never a block.
 - Raising max-tested re-captures `testdata/opencode-cli/`, the reserved
   endpoint ids and the `lmstudio` exception (§ Endpoints) included, and
   `internal/doctor/testdata/opencode-capture/`, in the same change, and

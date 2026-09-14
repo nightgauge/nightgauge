@@ -28,7 +28,8 @@ import (
 	"github.com/nightgauge/nightgauge/internal/config"
 )
 
-// OpenCode's version policy, binary pin and endpoint readiness (ADR-022 § 7,
+// OpenCode's version policy, binary pin, endpoint readiness, and the OpenCode
+// config on the machine a run cannot be isolated from (ADR-022 § 7, § 8,
 // § 20, § Endpoints).
 //
 // These are the checks a dispatch and `nightgauge doctor` share. They live
@@ -834,6 +835,38 @@ func CheckOpenCodeRunHelp(res OpenCodeProbeResult, argv []string) error {
 		return errors.New(strings.Join(problems, "; "))
 	}
 	return nil
+}
+
+// OpenCodeMachineConfigRefusals are the refusals PrepareOpenCodeRun(req) makes
+// from the machine rather than the stage, in its order, before it creates
+// anything: none while req.Settings opts into the operator's own OpenCode
+// config (opencode.inherit_user_config), and otherwise $HOME/.opencode
+// holding config (openCodeHomeConfigRefusal), then the machine's managed
+// OpenCode config (openCodeManagedConfigRefusal), whose files
+// req.ManagedConfigFiles replaces as it does for PrepareOpenCodeRun. Only
+// req.Home, req.Settings, req.GOOS and req.ManagedConfigFiles are read. Each
+// refusal names the entries or files it found and reads none of them.
+//
+// A dispatch stops at the first. The doctor reports every one, so its
+// opencode row, and cap recovery with it, never calls usable a machine that
+// refuses every dispatch. PrepareOpenCodeRun makes the same two checks on the
+// same fields; TestOpenCodeMachineConfigRefusalsAreTheDispatchs holds the two
+// together.
+func OpenCodeMachineConfigRefusals(req OpenCodeRunRequest) []error {
+	if req.Settings.InheritUserConfig {
+		return nil
+	}
+	managed := req.ManagedConfigFiles
+	if managed == nil {
+		managed = openCodeManagedConfigFiles(req.GOOS, openCodeUsername())
+	}
+	var refusals []error
+	for _, err := range []error{openCodeHomeConfigRefusal(req.Home), openCodeManagedConfigRefusal(managed)} {
+		if err != nil {
+			refusals = append(refusals, err)
+		}
+	}
+	return refusals
 }
 
 // OpenCodeDispatchRecord is the binary and version the last opencode dispatch

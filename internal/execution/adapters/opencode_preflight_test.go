@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -655,6 +656,92 @@ func TestOpenCodeProbeKillsItsProcessGroup(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Errorf("the timeout took %s", elapsed)
+	}
+}
+
+// TestOpenCodeMachineConfigRefusalsAreTheDispatchs: the refusals the doctor
+// reports for the machine (OpenCodeMachineConfigRefusals) are the ones
+// PrepareOpenCodeRun makes from the same request: none with
+// opencode.inherit_user_config on, and otherwise ~/.opencode holding config
+// and then the machine's managed OpenCode config, the first of which is the
+// dispatch's own refusal, word for word. Each names what it found and never
+// its content.
+func TestOpenCodeMachineConfigRefusalsAreTheDispatchs(t *testing.T) {
+	const sentinel = "machine-config-content-sentinel-1627"
+	for _, c := range []struct {
+		name    string
+		entries []string // under ~/.opencode; a name holding a dot is a file
+		managed bool
+		inherit bool
+		want    []string // what each refusal names, in order
+	}{
+		{"none", nil, false, false, nil},
+		{"install leftovers only", []string{"bin", "node_modules", "package.json"}, false, false, nil},
+		{"home config", []string{"opencode.jsonc", "commands"}, false, false, []string{"(opencode.jsonc, commands)"}},
+		{"managed config", nil, true, false, []string{"managed OpenCode config"}},
+		{"both", []string{"skill"}, true, false, []string{"(skill)", "managed OpenCode config"}},
+		{"both, inherited", []string{"skill"}, true, true, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			home := t.TempDir()
+			for _, entry := range c.entries {
+				path := filepath.Join(home, ".opencode", entry)
+				if !strings.Contains(entry, ".") {
+					if err := os.MkdirAll(path, 0o700); err != nil {
+						t.Fatal(err)
+					}
+					continue
+				}
+				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(sentinel), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			managed := []string{filepath.Join(t.TempDir(), "opencode.json")}
+			if c.managed {
+				if err := os.WriteFile(managed[0], []byte(sentinel), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			settings := lmStudioSettings()
+			settings.InheritUserConfig = c.inherit
+			req := OpenCodeRunRequest{
+				Home:               home,
+				ID:                 testRunID,
+				MachineConfigDir:   filepath.Join(home, ".nightgauge"),
+				Run:                RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"},
+				Settings:           settings,
+				Lookup:             envLookup(nil),
+				GOOS:               runtime.GOOS,
+				ManagedConfigFiles: managed,
+			}
+
+			refusals := OpenCodeMachineConfigRefusals(req)
+			if len(refusals) != len(c.want) {
+				t.Fatalf("refusals = %v, want %d naming %q", refusals, len(c.want), c.want)
+			}
+			for i, want := range c.want {
+				if !strings.Contains(refusals[i].Error(), want) {
+					t.Errorf("refusal %d does not say %q: %v", i, want, refusals[i])
+				}
+				if strings.Contains(refusals[i].Error(), sentinel) {
+					t.Errorf("refusal %d carries a file's content", i)
+				}
+			}
+
+			var err error
+			captureAdapterStderr(t, func() { _, err = PrepareOpenCodeRun(req) })
+			switch {
+			case len(refusals) == 0 && err != nil:
+				t.Errorf("no machine refusal, and the dispatch was refused: %v", err)
+			case len(refusals) > 0 && err == nil:
+				t.Errorf("the dispatch went ahead past %v", refusals[0])
+			case len(refusals) > 0 && err.Error() != refusals[0].Error():
+				t.Errorf("the dispatch's refusal is\n%v\nwant the first machine refusal\n%v", err, refusals[0])
+			}
+		})
 	}
 }
 
