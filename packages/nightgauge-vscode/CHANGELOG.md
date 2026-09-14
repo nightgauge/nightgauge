@@ -32,11 +32,12 @@ and this project adheres to
 - Run records with the `permission_denied`, `context_window_exceeded`,
   `adapter_permission_rejected` or `adapter_incompatible` terminal kinds keep
   their kind instead of falling back to the V2 schema, and the auto-retro
-  names a remediation for the three new kinds: a larger context, another
-  model or a split issue; a change to the configured OpenCode `ask` rule;
-  the max-tested OpenCode build, pinned. Each ends with the
-  `nightgauge autonomous clear-failures` command that releases the issue
-  (#1631)
+  names a remediation for the three new OpenCode (Experimental) kinds: a
+  larger context, another model or a split issue; for a rejected tool, the
+  OpenCode `ask` rule behind it, including OpenCode's own `.env` read guard,
+  which is never loosened; the max-tested OpenCode build, pinned. Each ends
+  with the `nightgauge autonomous clear-failures` command that releases the
+  issue (#1631)
 - Codex stages no longer leave generated `AGENTS.md` steering in your commits:
   if the agent committed it, the stage's cleanup adds a commit removing it, and
   the steering summary now comes from `AGENTS.md` rather than `CLAUDE.md`

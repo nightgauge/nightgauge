@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/nightgauge/nightgauge/internal/depgraph"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
@@ -68,33 +71,75 @@ func TestOpenCodeCapturedFailuresClassify(t *testing.T) {
 	}
 }
 
-// TestOpenCodeReadRejectionIsNotParked: opencode 1.18.30's own default
-// ruleset asks before reading `*.env` and `*.env.*`, and a headless run
-// auto-rejects the ask. A stage allowed Read that reaches for `.env`, on its
-// own or because the issue asked it to, therefore ends with
-// `[adapter-permission-rejected] tool=read`. That is OpenCode's secret-file
-// guard working, and the model chose the path, so it must not park the issue:
-// it takes permission_denied's short-backoff retry, where an attempt that
-// leaves the file alone succeeds. Every other granted permission still parks.
-func TestOpenCodeReadRejectionIsNotParked(t *testing.T) {
-	for _, c := range []struct {
-		tool string
-		want string
-	}{
-		{"read", TerminalKindPermissionDenied},
-		{"bash", TerminalKindAdapterPermissionRejected},
-		{"edit", TerminalKindAdapterPermissionRejected},
-	} {
-		t.Run(c.tool, func(t *testing.T) {
-			stderr := "! permission requested: " + c.tool + " (...); auto-rejecting\n[adapter-permission-rejected] tool=" + c.tool + "\n"
+// TestOpenCodeReadRejectionParks: opencode 1.18.30's own default ruleset asks
+// before reading `*.env` and `*.env.*`, and a headless run auto-rejects the
+// ask, so a stage allowed Read that reaches for a secret file, on its own or
+// because the issue text asked it to, ends `[adapter-permission-rejected]
+// tool=read`. That parks exactly as a rejection of any other granted
+// permission does: one dispatch, then an operator hold. A retry would let the
+// model or the issue text loop the issue against a guard nobody may loosen.
+//
+// The rejection goes through the real completion path: the reason the
+// scheduler builds from the stage's stderr, NotifyComplete's Go-side
+// classification, onPipelineComplete, then the graph reconcile and
+// prioritize. It is delivered once more than permission_denied's
+// consecutive-denial cap, with any retry deadline treated as elapsed, because
+// that retry's cap deletes the backoff and leaves an unheld entry the
+// reconcile re-admits. The issue must never be a candidate again. bash and
+// edit are the controls: the permission a marker names is the model's tool
+// choice and never changes the outcome.
+func TestOpenCodeReadRejectionParks(t *testing.T) {
+	for _, tool := range []string{"read", "bash", "edit"} {
+		t.Run(tool, func(t *testing.T) {
+			stubReconcileGhUnreachable(t)
+			as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
+			as.workspaceRoot = t.TempDir()
+			as.state.LifetimeIssueFailures = map[string]int{}
+			as.perIssueFailureCount = map[string]int{}
+			as.retryBackoff = map[string]retryPlan{}
+
+			// The stage's stderr as #1624's parser leaves it
+			// (internal/execution/opencode_usage_test.go pins this shape).
+			stderr := "! permission requested: " + tool + " (...); auto-rejecting\n[adapter-permission-rejected] tool=" + tool + "\n"
 			text, _ := cliFailureText("", stderr)
 			reason := terminalFailureReason(1, nil, text)
-			got := ClassifyTerminalKind(reason)
-			if got != c.want {
-				t.Fatalf("a %s rejection classifies %q, want %q:\n%s", c.tool, got, c.want, reason)
+
+			const repo, n = "acme/app", 1631
+			key := fmt.Sprintf("%s#%d", repo, n)
+			g := holdTestGraph(&depgraph.Node{Repo: repo, Number: n, State: "OPEN", BoardStatus: "Ready"})
+			for attempt := 1; attempt <= permissionDeniedMaxAttempts+1; attempt++ {
+				addRunning(as, repo, n, "an issue whose stage reaches for a .env file")
+				as.NotifyComplete(repo, n, false, false, "", reason)
+				as.drainBackground()
+
+				if plan, ok := as.retryBackoff[key]; ok {
+					t.Errorf("attempt %d: a %s rejection scheduled a %s retry; it must park", attempt, tool, plan.Kind)
+					// Let the backoff elapse, as a running scheduler would.
+					plan.Until = time.Now().Add(-time.Second)
+					as.retryBackoff[key] = plan
+				}
+				as.reconcileStateAgainstGraph(g)
+				if isCandidate(as.prioritize(context.Background(), g), repo, n) {
+					t.Fatalf("attempt %d: after a %s rejection the issue is a dispatch candidate again, "+
+						"so the model or the issue text can loop it:\n%s", attempt, tool, reason)
+				}
 			}
-			if parks := TerminalKindParks(got); parks != (c.want == TerminalKindAdapterPermissionRejected) {
-				t.Errorf("TerminalKindParks(%q) = %v for a %s rejection", got, parks, c.tool)
+
+			if got := as.humanHoldFor(repo, n); got != HoldOperatorResume {
+				t.Errorf("hold = %q, want %q", got, HoldOperatorResume)
+			}
+			if len(as.state.Failed) != 1 {
+				t.Fatalf("state.Failed has %d entries, want the one park", len(as.state.Failed))
+			}
+			f := as.state.Failed[0]
+			if f.Kind != TerminalKindAdapterPermissionRejected {
+				t.Errorf("failed entry kind = %q, want %q", f.Kind, TerminalKindAdapterPermissionRejected)
+			}
+			if !strings.Contains(f.Reason, TerminalKindRemediation(TerminalKindAdapterPermissionRejected)) {
+				t.Errorf("failed entry reason does not name the remediation:\n%s", f.Reason)
+			}
+			if got := as.state.LifetimeIssueFailures[key]; got != 0 {
+				t.Errorf("LifetimeIssueFailures = %d, want 0: the rejection is not charged to the issue", got)
 			}
 		})
 	}

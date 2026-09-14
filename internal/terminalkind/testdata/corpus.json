@@ -1711,13 +1711,22 @@
       "rationale": "The same failure on Ollama's scheduler path: a model the server lists but cannot load from disk. Pins the `ai_apicallerror` + `not found, try pulling it` clause, because `%q` quotes the name in double quotes and the model-name quote clause keys on single ones."
     },
     {
-      "id": "opencode-read-guard-rejection-retries",
+      "id": "opencode-read-guard-rejection-parks",
       "input": "exit 1: ! permission requested: read (...); auto-rejecting\n[adapter-permission-rejected] tool=read",
-      "expected": "permission_denied",
+      "expected": "adapter_permission_rejected",
       "expected_signal": "",
       "source": "synthetic",
       "producer": "An opencode stage's stderr after #1624's parser, for a stage allowed Read that tried to read a `.env` file: opencode 1.18.30's default ruleset asks on `read` for `*.env` and `*.env.*`, the headless run auto-rejects the ask, and the parser emits `[adapter-permission-rejected] tool=read` because Read maps to `read` (internal/execution/adapters/adapter.go OpenCodeToolsAllowed).",
-      "rationale": "OpenCode's secret-file guard doing its job. The model picked the path, so a retry that does not reach for the file succeeds, and parking would let issue text or model behaviour hold the issue for an operator while the park's remedy invited loosening the guard. It must take permission_denied's bounded short-backoff retry. Deleting opencode-read-guard-rejected, or moving it below adapter-permission-rejected, turns this row adapter_permission_rejected."
+      "rationale": "OpenCode's secret-file guard parks the issue like every other granted permission's rejection (#1631): one dispatch, then an operator hold. A retry would let the model or the issue text that sent it to the file loop the issue, and nothing about the guard may be loosened to clear it. A rule that claims `tool=read` for any retrying kind turns this row red."
+    },
+    {
+      "id": "opencode-read-and-bash-rejections-park",
+      "input": "exit 1: [adapter-permission-rejected] tool=read\n! permission requested: bash (...); auto-rejecting\n[adapter-permission-rejected] tool=bash",
+      "expected": "adapter_permission_rejected",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "A reason that joins two stages' tails (a stage's error and its tail, or a composed first-cause reason): one opencode stage rejected `read` under OpenCode's default `.env` guard, another rejected `bash` under an `ask` rule in an opencode.json, each ending in #1624's marker.",
+      "rationale": "The permission a marker names is the model's tool choice and never changes the kind: whichever marker comes first, the reason parks as adapter_permission_rejected."
     }
   ]
 }

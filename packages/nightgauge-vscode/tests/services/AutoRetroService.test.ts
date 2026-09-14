@@ -756,6 +756,38 @@ describe("AutoRetroService", () => {
       expect(findings[0].recommendation).toContain("secret files");
     });
 
+    it("parks OpenCode's .env read guard and points at the issue text (Issue #1631)", () => {
+      // OpenCode's own default ruleset asks before reading `*.env` and
+      // `*.env.*`, so a stage sent to a secret file by the model or by the
+      // issue text ends `tool=read`. It parks like every other rejection; the
+      // retro must name the guard and the issue text, never a retry, and
+      // never advise loosening the guard.
+      const reason =
+        "exit 1: ! permission requested: read (...); auto-rejecting\n[adapter-permission-rejected] tool=read";
+      const findings = AutoRetroService.classifyFailure(
+        {
+          text: reason,
+          sourcesAnalyzed: ["session_log"],
+          terminalKind: "adapter_permission_rejected",
+          terminalReason: reason,
+        },
+        "feature-dev"
+      );
+      expect(findings[0].category).toBe("adapter-permission-rejected");
+      expect(findings[0].recommendation).toContain("`*.env` and `*.env.*`");
+      expect(findings[0].recommendation).toContain(
+        "issue text asks the stage to read secret files"
+      );
+      expect(findings[0].recommendation).toContain(
+        "never by loosening a rule that guards secret files"
+      );
+      expect(findings[0].recommendation).toContain("parked");
+      expect(findings[0].recommendation).not.toMatch(/retried instead|permission_denied/);
+      expect(findings[0].recommendation).toContain(
+        "nightgauge autonomous clear-failures <owner/repo#N>"
+      );
+    });
+
     it('classifies as "stop-hook-error" on Claude CLI stop-hook notification (no terminal result event)', () => {
       // Genuine #3204 case: stop-hook fires and the subagent goes silent —
       // no terminal result event ever lands. The time-gate (#3275) treats

@@ -2196,21 +2196,6 @@
       "signal": ""
     },
     {
-      "input": "[adapter-permission-rejected] tool=read",
-      "kind": "permission_denied",
-      "signal": ""
-    },
-    {
-      "input": "exit 1: [adapter-permission-rejected] tool=read",
-      "kind": "permission_denied",
-      "signal": ""
-    },
-    {
-      "input": "[ADAPTER-PERMISSION-REJECTED] TOOL=READ",
-      "kind": "permission_denied",
-      "signal": ""
-    },
-    {
       "input": "[adapter-permission-rejected]",
       "kind": "adapter_permission_rejected",
       "signal": ""
@@ -2726,11 +2711,6 @@
       "signal": ""
     },
     {
-      "input": "network unavailable: extended github connectivity loss | [adapter-permission-rejected] tool=read",
-      "kind": "network_unavailable",
-      "signal": ""
-    },
-    {
       "input": "network unavailable: extended github connectivity loss | [adapter-permission-rejected]",
       "kind": "network_unavailable",
       "signal": ""
@@ -2942,11 +2922,6 @@
     },
     {
       "input": "adapter_incompatible | [commit-orphaned]",
-      "kind": "adapter_incompatible",
-      "signal": ""
-    },
-    {
-      "input": "adapter_incompatible | [adapter-permission-rejected] tool=read",
       "kind": "adapter_incompatible",
       "signal": ""
     },
@@ -3166,11 +3141,6 @@
       "signal": "stream_idle_timeout"
     },
     {
-      "input": "stream idle timeout | [adapter-permission-rejected] tool=read",
-      "kind": "stream_idle_timeout",
-      "signal": "stream_idle_timeout"
-    },
-    {
       "input": "stream idle timeout | [adapter-permission-rejected]",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -3382,11 +3352,6 @@
     },
     {
       "input": "overloaded | [commit-orphaned]",
-      "kind": "api_overloaded",
-      "signal": "api_overloaded"
-    },
-    {
-      "input": "overloaded | [adapter-permission-rejected] tool=read",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
     },
@@ -3606,11 +3571,6 @@
       "signal": "api_connection_lost"
     },
     {
-      "input": "socket connection was closed | [adapter-permission-rejected] tool=read",
-      "kind": "api_connection_lost",
-      "signal": "api_connection_lost"
-    },
-    {
       "input": "socket connection was closed | [adapter-permission-rejected]",
       "kind": "api_connection_lost",
       "signal": "api_connection_lost"
@@ -3822,11 +3782,6 @@
     },
     {
       "input": "[rate-limit-quota-exhausted] | [commit-orphaned]",
-      "kind": "rate_limit_quota_exhausted",
-      "signal": "rate_limit_quota_exhausted"
-    },
-    {
-      "input": "[rate-limit-quota-exhausted] | [adapter-permission-rejected] tool=read",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
     },
@@ -4046,11 +4001,6 @@
       "signal": "adapter_auth_failed"
     },
     {
-      "input": "[adapter-auth-failed] | [adapter-permission-rejected] tool=read",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
       "input": "[adapter-auth-failed] | [adapter-permission-rejected]",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
@@ -4262,11 +4212,6 @@
     },
     {
       "input": "ai_apicallerror context_length_exceeded | [commit-orphaned]",
-      "kind": "context_window_exceeded",
-      "signal": ""
-    },
-    {
-      "input": "ai_apicallerror context_length_exceeded | [adapter-permission-rejected] tool=read",
       "kind": "context_window_exceeded",
       "signal": ""
     },
@@ -4486,11 +4431,6 @@
       "signal": ""
     },
     {
-      "input": "not_found_error model | [adapter-permission-rejected] tool=read",
-      "kind": "model_unavailable",
-      "signal": ""
-    },
-    {
       "input": "not_found_error model | [adapter-permission-rejected]",
       "kind": "model_unavailable",
       "signal": ""
@@ -4702,11 +4642,6 @@
     },
     {
       "input": "pipeline-start-failure issue-closed | [commit-orphaned]",
-      "kind": "issue_closed",
-      "signal": ""
-    },
-    {
-      "input": "pipeline-start-failure issue-closed | [adapter-permission-rejected] tool=read",
       "kind": "issue_closed",
       "signal": ""
     },
@@ -4926,11 +4861,6 @@
       "signal": ""
     },
     {
-      "input": "[blocked-dependency] | [adapter-permission-rejected] tool=read",
-      "kind": "blocked_dependency",
-      "signal": ""
-    },
-    {
       "input": "[blocked-dependency] | [adapter-permission-rejected]",
       "kind": "blocked_dependency",
       "signal": ""
@@ -5142,11 +5072,6 @@
     },
     {
       "input": "architecture approval required | [commit-orphaned]",
-      "kind": "architecture_approval_required",
-      "signal": "architecture_approval_required"
-    },
-    {
-      "input": "architecture approval required | [adapter-permission-rejected] tool=read",
       "kind": "architecture_approval_required",
       "signal": "architecture_approval_required"
     },
@@ -5366,11 +5291,6 @@
       "signal": "github_quota_low"
     },
     {
-      "input": "github-quota-low | [adapter-permission-rejected] tool=read",
-      "kind": "github_quota_low",
-      "signal": "github_quota_low"
-    },
-    {
       "input": "github-quota-low | [adapter-permission-rejected]",
       "kind": "github_quota_low",
       "signal": "github_quota_low"
@@ -5582,11 +5502,6 @@
     },
     {
       "input": "github-network-outage | [commit-orphaned]",
-      "kind": "github_network_outage",
-      "signal": "github_network_outage"
-    },
-    {
-      "input": "github-network-outage | [adapter-permission-rejected] tool=read",
       "kind": "github_network_outage",
       "signal": "github_network_outage"
     },
@@ -5806,11 +5721,6 @@
       "signal": ""
     },
     {
-      "input": "secondary rate limit | [adapter-permission-rejected] tool=read",
-      "kind": "github_rate_limited",
-      "signal": ""
-    },
-    {
       "input": "secondary rate limit | [adapter-permission-rejected]",
       "kind": "github_rate_limited",
       "signal": ""
@@ -6022,11 +5932,6 @@
     },
     {
       "input": "[pr-merge-unmerged | [commit-orphaned]",
-      "kind": "pr_merge_unmerged",
-      "signal": ""
-    },
-    {
-      "input": "[pr-merge-unmerged | [adapter-permission-rejected] tool=read",
       "kind": "pr_merge_unmerged",
       "signal": ""
     },
@@ -6246,11 +6151,6 @@
       "signal": ""
     },
     {
-      "input": "[stage:worktree-containment] | [adapter-permission-rejected] tool=read",
-      "kind": "containment_breach",
-      "signal": ""
-    },
-    {
       "input": "[stage:worktree-containment] | [adapter-permission-rejected]",
       "kind": "containment_breach",
       "signal": ""
@@ -6462,11 +6362,6 @@
     },
     {
       "input": "[not-pipeline-actionable] | [commit-orphaned]",
-      "kind": "not_pipeline_actionable",
-      "signal": ""
-    },
-    {
-      "input": "[not-pipeline-actionable] | [adapter-permission-rejected] tool=read",
       "kind": "not_pipeline_actionable",
       "signal": ""
     },
@@ -6686,11 +6581,6 @@
       "signal": ""
     },
     {
-      "input": "[dev-produced-no-changes] | [adapter-permission-rejected] tool=read",
-      "kind": "dev_produced_no_changes",
-      "signal": ""
-    },
-    {
       "input": "[dev-produced-no-changes] | [adapter-permission-rejected]",
       "kind": "dev_produced_no_changes",
       "signal": ""
@@ -6902,11 +6792,6 @@
     },
     {
       "input": "[dev-handoff-missing] | [commit-orphaned]",
-      "kind": "dev_handoff_missing",
-      "signal": ""
-    },
-    {
-      "input": "[dev-handoff-missing] | [adapter-permission-rejected] tool=read",
       "kind": "dev_handoff_missing",
       "signal": ""
     },
@@ -7126,11 +7011,6 @@
       "signal": ""
     },
     {
-      "input": "invalid auth method | [adapter-permission-rejected] tool=read",
-      "kind": "git_transport_auth_failed",
-      "signal": ""
-    },
-    {
       "input": "invalid auth method | [adapter-permission-rejected]",
       "kind": "git_transport_auth_failed",
       "signal": ""
@@ -7342,11 +7222,6 @@
     },
     {
       "input": "premature turn end | [commit-orphaned]",
-      "kind": "premature_turn_end",
-      "signal": ""
-    },
-    {
-      "input": "premature turn end | [adapter-permission-rejected] tool=read",
       "kind": "premature_turn_end",
       "signal": ""
     },
@@ -7566,11 +7441,6 @@
       "signal": ""
     },
     {
-      "input": "worktree_uncommitted | [adapter-permission-rejected] tool=read",
-      "kind": "worktree_uncommitted",
-      "signal": ""
-    },
-    {
       "input": "worktree_uncommitted | [adapter-permission-rejected]",
       "kind": "worktree_uncommitted",
       "signal": ""
@@ -7782,11 +7652,6 @@
     },
     {
       "input": "budget_ceiling_hit | [commit-orphaned]",
-      "kind": "budget_ceiling_hit",
-      "signal": ""
-    },
-    {
-      "input": "budget_ceiling_hit | [adapter-permission-rejected] tool=read",
       "kind": "budget_ceiling_hit",
       "signal": ""
     },
@@ -8006,11 +7871,6 @@
       "signal": ""
     },
     {
-      "input": "[runaway-progress-exceeded] | [adapter-permission-rejected] tool=read",
-      "kind": "runaway_progress",
-      "signal": ""
-    },
-    {
       "input": "[runaway-progress-exceeded] | [adapter-permission-rejected]",
       "kind": "runaway_progress",
       "signal": ""
@@ -8222,11 +8082,6 @@
     },
     {
       "input": "[runaway-ceiling-exceeded] | [commit-orphaned]",
-      "kind": "stall_kill",
-      "signal": ""
-    },
-    {
-      "input": "[runaway-ceiling-exceeded] | [adapter-permission-rejected] tool=read",
       "kind": "stall_kill",
       "signal": ""
     },
@@ -8446,11 +8301,6 @@
       "signal": ""
     },
     {
-      "input": "[cost-cap-exceeded] | [adapter-permission-rejected] tool=read",
-      "kind": "budget_exceeded",
-      "signal": ""
-    },
-    {
       "input": "[cost-cap-exceeded] | [adapter-permission-rejected]",
       "kind": "budget_exceeded",
       "signal": ""
@@ -8662,11 +8512,6 @@
     },
     {
       "input": "stage-no-output-timeout | [commit-orphaned]",
-      "kind": "stall_kill",
-      "signal": ""
-    },
-    {
-      "input": "stage-no-output-timeout | [adapter-permission-rejected] tool=read",
       "kind": "stall_kill",
       "signal": ""
     },
@@ -8886,11 +8731,6 @@
       "signal": ""
     },
     {
-      "input": "[stall-killed] | [adapter-permission-rejected] tool=read",
-      "kind": "stall_kill",
-      "signal": ""
-    },
-    {
       "input": "[stall-killed] | [adapter-permission-rejected]",
       "kind": "stall_kill",
       "signal": ""
@@ -9102,11 +8942,6 @@
     },
     {
       "input": "pipeline_budget_exceeded | [commit-orphaned]",
-      "kind": "budget_exceeded",
-      "signal": ""
-    },
-    {
-      "input": "pipeline_budget_exceeded | [adapter-permission-rejected] tool=read",
       "kind": "budget_exceeded",
       "signal": ""
     },
@@ -9326,11 +9161,6 @@
       "signal": ""
     },
     {
-      "input": "schema validation | [adapter-permission-rejected] tool=read",
-      "kind": "validation_error",
-      "signal": ""
-    },
-    {
       "input": "schema validation | [adapter-permission-rejected]",
       "kind": "validation_error",
       "signal": ""
@@ -9542,11 +9372,6 @@
     },
     {
       "input": "[no-changes-produced] | [commit-orphaned]",
-      "kind": "no_changes_produced",
-      "signal": ""
-    },
-    {
-      "input": "[no-changes-produced] | [adapter-permission-rejected] tool=read",
       "kind": "no_changes_produced",
       "signal": ""
     },
@@ -9766,11 +9591,6 @@
       "signal": ""
     },
     {
-      "input": "[validation-failed] | [adapter-permission-rejected] tool=read",
-      "kind": "validation_failed",
-      "signal": ""
-    },
-    {
       "input": "[validation-failed] | [adapter-permission-rejected]",
       "kind": "validation_failed",
       "signal": ""
@@ -9982,11 +9802,6 @@
     },
     {
       "input": "[validation-inconclusive] | [commit-orphaned]",
-      "kind": "validation_inconclusive",
-      "signal": ""
-    },
-    {
-      "input": "[validation-inconclusive] | [adapter-permission-rejected] tool=read",
       "kind": "validation_inconclusive",
       "signal": ""
     },
@@ -10206,11 +10021,6 @@
       "signal": ""
     },
     {
-      "input": "[branch-forked] | [adapter-permission-rejected] tool=read",
-      "kind": "branch_forked",
-      "signal": ""
-    },
-    {
       "input": "[branch-forked] | [adapter-permission-rejected]",
       "kind": "branch_forked",
       "signal": ""
@@ -10426,11 +10236,6 @@
       "signal": ""
     },
     {
-      "input": "[commit-orphaned] | [adapter-permission-rejected] tool=read",
-      "kind": "commit_orphaned",
-      "signal": ""
-    },
-    {
       "input": "[commit-orphaned] | [adapter-permission-rejected]",
       "kind": "commit_orphaned",
       "signal": ""
@@ -10468,226 +10273,6 @@
     {
       "input": "[commit-orphaned] | subagent crash",
       "kind": "commit_orphaned",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | network unavailable: extended github connectivity loss",
-      "kind": "network_unavailable",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | adapter_incompatible",
-      "kind": "adapter_incompatible",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | stream idle timeout",
-      "kind": "stream_idle_timeout",
-      "signal": "stream_idle_timeout"
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | overloaded",
-      "kind": "api_overloaded",
-      "signal": "api_overloaded"
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | socket connection was closed",
-      "kind": "api_connection_lost",
-      "signal": "api_connection_lost"
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | [rate-limit-quota-exhausted]",
-      "kind": "rate_limit_quota_exhausted",
-      "signal": "rate_limit_quota_exhausted"
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | [adapter-auth-failed]",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | ai_apicallerror context_length_exceeded",
-      "kind": "context_window_exceeded",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | not_found_error model",
-      "kind": "model_unavailable",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | pipeline-start-failure issue-closed",
-      "kind": "issue_closed",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | [blocked-dependency]",
-      "kind": "blocked_dependency",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | architecture approval required",
-      "kind": "architecture_approval_required",
-      "signal": "architecture_approval_required"
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | github-quota-low",
-      "kind": "github_quota_low",
-      "signal": "github_quota_low"
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | github-network-outage",
-      "kind": "github_network_outage",
-      "signal": "github_network_outage"
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | secondary rate limit",
-      "kind": "github_rate_limited",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | [pr-merge-unmerged",
-      "kind": "pr_merge_unmerged",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | [stage:worktree-containment]",
-      "kind": "containment_breach",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | [not-pipeline-actionable]",
-      "kind": "not_pipeline_actionable",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | [dev-produced-no-changes]",
-      "kind": "dev_produced_no_changes",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | [dev-handoff-missing]",
-      "kind": "dev_handoff_missing",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | invalid auth method",
-      "kind": "git_transport_auth_failed",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | premature turn end",
-      "kind": "premature_turn_end",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | worktree_uncommitted",
-      "kind": "worktree_uncommitted",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | budget_ceiling_hit",
-      "kind": "budget_ceiling_hit",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | [runaway-progress-exceeded]",
-      "kind": "runaway_progress",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | [runaway-ceiling-exceeded]",
-      "kind": "stall_kill",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | [cost-cap-exceeded]",
-      "kind": "budget_exceeded",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | stage-no-output-timeout",
-      "kind": "stall_kill",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | [stall-killed]",
-      "kind": "stall_kill",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | pipeline_budget_exceeded",
-      "kind": "budget_exceeded",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | schema validation",
-      "kind": "validation_error",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | [no-changes-produced]",
-      "kind": "no_changes_produced",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | [validation-failed]",
-      "kind": "validation_failed",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | [validation-inconclusive]",
-      "kind": "validation_inconclusive",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | [branch-forked]",
-      "kind": "branch_forked",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | [commit-orphaned]",
-      "kind": "commit_orphaned",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | [adapter-permission-rejected]",
-      "kind": "permission_denied",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | [permission-denied]",
-      "kind": "permission_denied",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | stage_context_unreadable",
-      "kind": "permission_denied",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | dev_build_verification_missing",
-      "kind": "permission_denied",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | dev_build_verification_failed",
-      "kind": "permission_denied",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | dev_tests_failed",
-      "kind": "permission_denied",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | pr_merge_lookup_failed",
-      "kind": "permission_denied",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] tool=read | subagent crash",
-      "kind": "permission_denied",
       "signal": ""
     },
     {
@@ -10868,11 +10453,6 @@
     {
       "input": "[adapter-permission-rejected] | [commit-orphaned]",
       "kind": "commit_orphaned",
-      "signal": ""
-    },
-    {
-      "input": "[adapter-permission-rejected] | [adapter-permission-rejected] tool=read",
-      "kind": "permission_denied",
       "signal": ""
     },
     {
@@ -11091,11 +10671,6 @@
       "signal": ""
     },
     {
-      "input": "[permission-denied] | [adapter-permission-rejected] tool=read",
-      "kind": "permission_denied",
-      "signal": ""
-    },
-    {
       "input": "[permission-denied] | [adapter-permission-rejected]",
       "kind": "adapter_permission_rejected",
       "signal": ""
@@ -11308,11 +10883,6 @@
     {
       "input": "stage_context_unreadable | [commit-orphaned]",
       "kind": "commit_orphaned",
-      "signal": ""
-    },
-    {
-      "input": "stage_context_unreadable | [adapter-permission-rejected] tool=read",
-      "kind": "permission_denied",
       "signal": ""
     },
     {
@@ -11531,11 +11101,6 @@
       "signal": ""
     },
     {
-      "input": "dev_build_verification_missing | [adapter-permission-rejected] tool=read",
-      "kind": "permission_denied",
-      "signal": ""
-    },
-    {
       "input": "dev_build_verification_missing | [adapter-permission-rejected]",
       "kind": "adapter_permission_rejected",
       "signal": ""
@@ -11748,11 +11313,6 @@
     {
       "input": "dev_build_verification_failed | [commit-orphaned]",
       "kind": "commit_orphaned",
-      "signal": ""
-    },
-    {
-      "input": "dev_build_verification_failed | [adapter-permission-rejected] tool=read",
-      "kind": "permission_denied",
       "signal": ""
     },
     {
@@ -11971,11 +11531,6 @@
       "signal": ""
     },
     {
-      "input": "dev_tests_failed | [adapter-permission-rejected] tool=read",
-      "kind": "permission_denied",
-      "signal": ""
-    },
-    {
       "input": "dev_tests_failed | [adapter-permission-rejected]",
       "kind": "adapter_permission_rejected",
       "signal": ""
@@ -12191,11 +11746,6 @@
       "signal": ""
     },
     {
-      "input": "pr_merge_lookup_failed | [adapter-permission-rejected] tool=read",
-      "kind": "permission_denied",
-      "signal": ""
-    },
-    {
       "input": "pr_merge_lookup_failed | [adapter-permission-rejected]",
       "kind": "adapter_permission_rejected",
       "signal": ""
@@ -12408,11 +11958,6 @@
     {
       "input": "subagent crash | [commit-orphaned]",
       "kind": "commit_orphaned",
-      "signal": ""
-    },
-    {
-      "input": "subagent crash | [adapter-permission-rejected] tool=read",
-      "kind": "permission_denied",
       "signal": ""
     },
     {

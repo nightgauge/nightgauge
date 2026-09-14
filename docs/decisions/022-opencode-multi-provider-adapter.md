@@ -1635,16 +1635,17 @@ on `127.0.0.1`, two of those assumptions do not hold. The captures, their
 capture script and the source of every wording are in
 [`internal/terminalkind/testdata/opencode/`](../../internal/terminalkind/testdata/opencode/README.md).
 
-| Failure                                 | What 1.18.30 prints on stderr                                                                                                                                   | Exit |
-| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
-| A request the server refuses (any 4xx)  | A `level=ERROR` logfmt line, `message="stream error"`, `error.error="AI_APICallError: <message>"`, where the message is the server's own `error.message`        | 1    |
-| An overflow the server reports          | The same line. OpenCode then tries one compaction, which overflows as well, and the stream's `error` event names the failure `ContextOverflowError`             | 1    |
-| A 401 with no body                      | `AI_APICallError: Unauthorized`, the HTTP reason phrase                                                                                                         | 1    |
-| A server that is not listening          | `AI_APICallError: Cannot connect to API: Unable to connect. Is the computer able to access the url?`, after about 60 s of retries. `ECONNREFUSED` never appears | 1    |
-| A 500                                   | `AI_APICallError: <message>`, after about 70 s of retries                                                                                                       | 1    |
-| `-m` naming a model the config lacks    | `ProviderModelNotFoundError: Model not found: <provider>/<model>`, before any request                                                                           | 1    |
-| A model id the loopback LM Studio lacks | Nothing: with one model loaded, LM Studio answered the request with the loaded model                                                                            | 0    |
-| A model Ollama 0.32.11 has not pulled   | `AI_APICallError: model '<name>' not found`, Ollama's 404 message, at once                                                                                      | 1    |
+| Failure                                       | What 1.18.30 prints on stderr                                                                                                                                                                                                             | Exit             |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
+| A request the server refuses (any 4xx)        | A `level=ERROR` logfmt line, `message="stream error"`, `error.error="AI_APICallError: <message>"`, where the message is the server's own `error.message`                                                                                  | 1                |
+| An overflow the server reports                | The same line. OpenCode then tries one compaction, which overflows as well, and the stream's `error` event names the failure `ContextOverflowError`                                                                                       | 1                |
+| A 401 with no body                            | `AI_APICallError: Unauthorized`, the HTTP reason phrase                                                                                                                                                                                   | 1                |
+| A server that is not listening                | `AI_APICallError: Cannot connect to API: Unable to connect. Is the computer able to access the url?`, after about 60 s of retries. `ECONNREFUSED` never appears                                                                           | 1                |
+| A 500                                         | `AI_APICallError: <message>`, after about 70 s of retries                                                                                                                                                                                 | 1                |
+| `-m` naming a model the config lacks          | `ProviderModelNotFoundError: Model not found: <provider>/<model>`, before any request                                                                                                                                                     | 1                |
+| A model id the loopback LM Studio lacks       | Nothing: with one model loaded, LM Studio answered the request with the loaded model                                                                                                                                                      | 0                |
+| A model Ollama 0.32.11 has not pulled         | `AI_APICallError: model '<name>' not found`, Ollama's 404 message, at once                                                                                                                                                                | 1                |
+| A stage allowed Read that reaches for `*.env` | OpenCode's own default `ask` rule on `read` for `*.env` and `*.env.*`, auto-rejected headless: `! permission requested: read (<pattern>); auto-rejecting`, which #1624's parser ends with `[adapter-permission-rejected] tool=read` (§ 9) | 0, reported as 1 |
 
 The last line of stderr is always a `message=process` line whose `stack`
 repeats `AI_APICallError: <message>`, so the last lines a stage's reason keeps
@@ -1665,6 +1666,14 @@ What changes:
   loopback LM Studio with one model loaded does not, so the stage runs on
   another model and nothing classifies. Whether the served-model record (§ 1,
   § 2) shows the substitution was not checked here.
+- A `read` rejection under OpenCode's own `.env` guard classifies
+  `adapter_permission_rejected` and parks, like a rejection of any other
+  granted permission. #1631's acceptance criterion says the rejection is not
+  retried, and a retry would let the model, or issue text that asks for the
+  file, loop the issue. The remediation names the guard, asks whether the
+  issue text sent the stage there, and never loosens a rule that guards
+  secret files. Nightgauge generates no permission map yet (#1638), so the
+  guard is OpenCode's default and nothing Nightgauge writes changes it.
 
 ## Consequences
 
