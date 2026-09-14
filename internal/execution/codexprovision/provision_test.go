@@ -116,6 +116,58 @@ func TestProvision_NoMcpServersSkipsConfigButStillWritesAgentsMd(t *testing.T) {
 	}
 }
 
+// writeSteeringFixture writes a repository with every source the steering
+// reads and both kinds of MCP server into dir. The files are written here,
+// not kept under testdata/, because an AGENTS.md or CLAUDE.md in the tree is
+// an instruction file every agent tool would load.
+func writeSteeringFixture(t *testing.T, dir string) {
+	t.Helper()
+	writeFile(t, filepath.Join(dir, "AGENTS.md"), "# Fixture Contract\n\n## Scope\n\nThe fixture's rules.\n\n## Commands\n\n```bash\nmake test\n```\n")
+	writeFile(t, filepath.Join(dir, "CLAUDE.md"), "@AGENTS.md\n\n# Claude Code adapter\n\nClaude-only notes.\n")
+	writeFile(t, filepath.Join(dir, "standards", "code-standards.md"), "# Code Standards\n\nUse tabs.\n")
+	writeFile(t, filepath.Join(dir, "standards", "security.md"), "# Security\n\nNo secrets in code.\n")
+	writeFile(t, filepath.Join(dir, "docs", "GIT_WORKFLOW.md"), "# Git Workflow\n\nBranch first.\n")
+	writeFile(t, filepath.Join(dir, ".mcp.json"), `{"mcpServers": {
+  "fs": {"command": "npx", "args": ["-y", "srv"], "env": {"LEVEL": "debug"}},
+  "remote": {"type": "http", "url": "https://mcp.example.test/mcp", "headers": {"Authorization": "Bearer ${FIXTURE_TOKEN}", "X-Team": "core"}}
+}}`)
+}
+
+// TestProvision_CodexGolden pins the bytes the Codex path writes, AGENTS.md
+// and config.toml, for a fixture repository. The goldens were generated from
+// the code before OpenCode shared the steering function (#1626), so a change
+// to the shared function that moves one Codex byte fails here.
+//
+//	NIGHTGAUGE_UPDATE_GOLDEN=1 go test ./internal/execution/codexprovision/ -run TestProvision_CodexGolden
+func TestProvision_CodexGolden(t *testing.T) {
+	dir := t.TempDir()
+	codexHome := filepath.Join(t.TempDir(), "codex-home")
+	t.Setenv("CODEX_HOME", codexHome)
+	writeSteeringFixture(t, dir)
+
+	if _, err := Provision("codex", dir); err != nil {
+		t.Fatalf("Provision(codex): %v", err)
+	}
+	for _, c := range []struct{ got, golden string }{
+		{filepath.Join(dir, "AGENTS.md"), "codex-agents-md.golden"},
+		{filepath.Join(codexHome, "config.toml"), "codex-config-toml.golden"},
+	} {
+		got := readFileOrFail(t, c.got)
+		golden := filepath.Join("testdata", "provision", c.golden)
+		if os.Getenv("NIGHTGAUGE_UPDATE_GOLDEN") == "1" {
+			if err := os.MkdirAll(filepath.Dir(golden), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(golden, []byte(got), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if want := readFileOrFail(t, golden); got != want {
+			t.Errorf("%s differs from %s\n--- got ---\n%s\n--- want ---\n%s", c.got, golden, got, want)
+		}
+	}
+}
+
 func TestCodexConfigTomlPath_RespectsCodexHome(t *testing.T) {
 	t.Setenv("CODEX_HOME", "/custom/codex")
 	if got := codexConfigTomlPath(); got != filepath.Join("/custom/codex", "config.toml") {

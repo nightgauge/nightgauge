@@ -1,0 +1,15 @@
+# >>> BEGIN NIGHTGAUGE MANAGED MCP >>>
+# Managed by the Nightgauge pipeline (issue #4025). Servers inside these
+# markers are regenerated from the project's .mcp.json on every Codex stage —
+# edits here are overwritten. Define your own [mcp_servers.*] OUTSIDE the block.
+
+[mcp_servers.fs]
+command = "npx"
+args = ["-y", "srv"]
+env = { LEVEL = "debug" }
+
+[mcp_servers.remote]
+url = "https://mcp.example.test/mcp"
+bearer_token_env_var = "FIXTURE_TOKEN"
+http_headers = { X-Team = "core" }
+# <<< END NIGHTGAUGE MANAGED MCP <<<

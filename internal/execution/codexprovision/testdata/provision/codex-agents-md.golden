@@ -1,0 +1,56 @@
+# Fixture Contract
+
+## Scope
+
+The fixture's rules.
+
+## Commands
+
+```bash
+make test
+```
+
+<!-- BEGIN NIGHTGAUGE MANAGED STEERING -->
+# Nightgauge Pipeline Steering (Codex)
+
+_This block is managed by the Nightgauge pipeline. Edits inside the_
+_markers are overwritten; add your own guidance outside them._
+
+## Project
+
+# Fixture Contract
+
+## Scope
+
+The fixture's rules.
+
+## Commands
+
+```bash
+make test
+```
+
+## Coding Standards
+
+# Code Standards
+
+Use tabs.
+
+## Security
+
+# Security
+
+No secrets in code.
+
+## Git Workflow
+
+# Git Workflow
+
+Branch first.
+
+## Key Rules
+
+- Never push directly to main
+- Never hardcode secrets
+- Follow existing patterns in the codebase
+<!-- END NIGHTGAUGE MANAGED STEERING -->
