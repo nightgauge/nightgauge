@@ -169,6 +169,27 @@ changelog, and the release workflow refuses a tag that does not.
   local model is refused before spawn unless the block declares its server
   with nonzero limits, because OpenCode never compacts a session whose context
   limit is 0, which is what LM Studio reports (#1625)
+- `nightgauge doctor --adapters opencode` checks the OpenCode adapter the way
+  a dispatch meets it, and dispatch enforces the same version policy. The
+  floor and max-tested version come from the compat manifest. A binary below
+  the floor, or whose version cannot be read, is refused before spawn as
+  `adapter_incompatible`, naming both versions and the managed install
+  (`npm i --prefix ~/.nightgauge/tools/opencode opencode-ai@<max-tested>`). A
+  binary above max-tested warns, refuses a model server you run, and runs a
+  stage only once a self-test has passed for that binary, version and per-run
+  config: `opencode debug config` on the stage's config must exit 0 and keep
+  every key it sets, and `opencode run --help` must accept every flag the
+  adapter passes. `opencode.binary` pins the binary for the doctor and the
+  spawn alike, and must be an absolute path. The doctor row also runs
+  `opencode models` for `opencode.model`; probes each LM Studio or Ollama
+  endpoint, named by id and never by address, for reachability, whether the
+  model is loaded and the context it is loaded with, warning when
+  `limit.context` is 0 or larger; prints the run's OpenCode directories and an
+  offline posture that says egress is unverified until #1644; flags an OAuth
+  `anthropic` login in OpenCode's stored logins, reading only its type; and
+  warns when the binary changed since the last dispatch. With
+  `NIGHTGAUGE_EXPERIMENTAL_OPENCODE` unset the row runs nothing and is not
+  usable, so cap recovery never hops onto it (#1627)
 
 ### Fixed
 
