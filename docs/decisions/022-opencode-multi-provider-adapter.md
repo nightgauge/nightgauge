@@ -519,8 +519,9 @@ opencode:
 A stage's turn cap becomes the steps cap of the build agent and each
 subagent, and a stage with none gets 200 steps, room for a long stage on a
 local model that still ends a session caught in a loop. A dispatch to an
-endpoint whose `limit.context` or `limit.output` is 0 or missing is refused
-before spawn, as is a local provider key no endpoint declares, and any other
+endpoint model whose `limit.context` or `limit.output` neither the machine-tier
+`limit` nor discovery from the server (§ 13) gives is refused before spawn, as
+is a local provider key no endpoint declares, and any other
 key that is neither a declared endpoint id nor a key in OpenCode's bundled
 catalog (a second LM Studio's id until #1678 lets it be declared): LM Studio
 reports a context limit of 0, OpenCode never compacts a session whose limit is
@@ -1057,6 +1058,35 @@ keyed by normalized provider and model id, never by endpoint address. A model
 on an endpoint is priced by § 3's rule: `cost_usd: 0` stamped where the model
 is known to run on the endpoint, unstamped otherwise. The committed file
 carries no local model and no endpoint.
+
+_Amendment 2026-09-14 (#1633, as implemented)._ The descriptor is discovered
+from the endpoint's server once per process, kept in memory keyed by endpoint
+id and model id, and never written to disk; a failed discovery is kept too,
+not retried. LM Studio is read from `GET /api/v0/models` and Ollama from
+`POST /api/show`. The per-run config (§ 7) takes each limit from the
+machine-tier `limit` where it sets one, and otherwise from the descriptor; a
+`limit.context` above the discovered loaded window is clamped to it with a
+warning, because the server fails a request past it. Observed on LM Studio
+0.4.24 and Ollama 0.32.11 (the captures, their field names and their
+provenance are in `internal/models/testdata/local-discovery/`), three facts
+differ from what #1633 assumed:
+
+- LM Studio's `/api/v0/models` reports the loaded window
+  (`loaded_context_length`, never `max_context_length`) and tool use
+  (`capabilities: ["tool_use"]`), but no output cap and no reasoning flag. An
+  LM Studio descriptor therefore has no `max_output` and no `reasoning`, and
+  the per-run output limit for it is the smaller of OpenCode's own
+  32 000-token reply cap (what 1.18.30 asks for when `limit.output` is 0) and
+  a quarter of the window, unless the machine-tier `limit.output` sets one.
+- Ollama's `/api/show` carries `num_ctx` only when the model's Modelfile sets
+  it. Without one, Ollama loads the model with a default derived from the
+  machine's memory and capped at the trained context, which `/api/show` does
+  not report and `/api/ps` reports only while the model is loaded. Such a
+  model is unresolved: the operator sets `num_ctx` in its Modelfile, or
+  `opencode.limit.context`.
+- Ollama reports reasoning (`capabilities` includes `thinking`) and an output
+  cap (`num_predict` in `parameters`, when the Modelfile sets one); its
+  descriptor carries both.
 
 ### 14. Host overlay segment (amends ADR-016)
 
@@ -1654,6 +1684,57 @@ Studio beside Ollama. Each is a named **endpoint** in `opencode.endpoints[]`
   and what the stage costs, so it happens only through an explicit fallback
   chain entry the operator configured (#1643), and it is recorded as a
   provider change, not an endpoint change.
+
+## Failure wording (amendment 2026-09-14)
+
+#1631 assumed that OpenCode reports a failed model request on stderr in the
+model server's own words, so that a down local server reads
+`ECONNREFUSED 127.0.0.1:1234` and a missing model reads as the server's
+not-found error. Observed on 1.18.30 with `--print-logs --log-level ERROR`,
+against the stub provider (#1618), one-status servers and an `ollama serve`
+on `127.0.0.1`, two of those assumptions do not hold. The captures, their
+capture script and the source of every wording are in
+[`internal/terminalkind/testdata/opencode/`](../../internal/terminalkind/testdata/opencode/README.md).
+
+| Failure                                       | What 1.18.30 prints on stderr                                                                                                                                                                                                             | Exit             |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
+| A request the server refuses (any 4xx)        | A `level=ERROR` logfmt line, `message="stream error"`, `error.error="AI_APICallError: <message>"`, where the message is the server's own `error.message`                                                                                  | 1                |
+| An overflow the server reports                | The same line. OpenCode then tries one compaction, which overflows as well, and the stream's `error` event names the failure `ContextOverflowError`                                                                                       | 1                |
+| A 401 with no body                            | `AI_APICallError: Unauthorized`, the HTTP reason phrase                                                                                                                                                                                   | 1                |
+| A server that is not listening                | `AI_APICallError: Cannot connect to API: Unable to connect. Is the computer able to access the url?`, after about 60 s of retries. `ECONNREFUSED` never appears                                                                           | 1                |
+| A 500                                         | `AI_APICallError: <message>`, after about 70 s of retries                                                                                                                                                                                 | 1                |
+| `-m` naming a model the config lacks          | `ProviderModelNotFoundError: Model not found: <provider>/<model>`, before any request                                                                                                                                                     | 1                |
+| A model id the loopback LM Studio lacks       | Nothing: with one model loaded, LM Studio answered the request with the loaded model                                                                                                                                                      | 0                |
+| A model Ollama 0.32.11 has not pulled         | `AI_APICallError: model '<name>' not found`, Ollama's 404 message, at once                                                                                                                                                                | 1                |
+| A stage allowed Read that reaches for `*.env` | OpenCode's own default `ask` rule on `read` for `*.env` and `*.env.*`, auto-rejected headless: `! permission requested: read (<pattern>); auto-rejecting`, which #1624's parser ends with `[adapter-permission-rejected] tool=read` (§ 9) | 0, reported as 1 |
+
+The last line of stderr is always a `message=process` line whose `stack`
+repeats `AI_APICallError: <message>`, so the last lines a stage's reason keeps
+hold both the wrapper and the server's words. The model's own text is on the
+stream, never on stderr.
+
+What changes:
+
+- The OpenCode clauses of the terminal-kind table key on
+  `AI_APICallError` together with the server's words, never on the words
+  alone, so model prose that says "context length exceeded" matches nothing
+  (#1631). The overflow fragments are the ones OpenCode's own recogniser
+  matches, and its source names the server each belongs to.
+- A down local server classifies on `Cannot connect to API`, not on
+  `ECONNREFUSED`.
+- A model id the server lacks is a failure only where the server says so.
+  Ollama does, and its not-found wording classifies `model_unavailable`. A
+  loopback LM Studio with one model loaded does not, so the stage runs on
+  another model and nothing classifies. Whether the served-model record (§ 1,
+  § 2) shows the substitution was not checked here.
+- A `read` rejection under OpenCode's own `.env` guard classifies
+  `adapter_permission_rejected` and parks, like a rejection of any other
+  granted permission. #1631's acceptance criterion says the rejection is not
+  retried, and a retry would let the model, or issue text that asks for the
+  file, loop the issue. The remediation names the guard, asks whether the
+  issue text sent the stage there, and never loosens a rule that guards
+  secret files. Nightgauge generates no permission map yet (#1638), so the
+  guard is OpenCode's default and nothing Nightgauge writes changes it.
 
 ## Consequences
 

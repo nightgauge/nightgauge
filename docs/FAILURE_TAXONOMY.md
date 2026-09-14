@@ -247,6 +247,9 @@ record may carry both fields, neither, or only one.
 | `dev_build_verification_failed`  | feature-dev ran its build and recorded `build_verification.status="failed"` (Issue #1237) — organic implementation failure                                                                                                                                                                                                                                                                                                           |
 | `dev_tests_failed`               | feature-dev's own test run recorded `tests_status.failed > 0` (Issue #1237) — organic implementation failure                                                                                                                                                                                                                                                                                                                         |
 | `pr_merge_lookup_failed`         | pr-merge's gate could not establish the PR's state: `gh pr view` failed or was rate-limited on every attempt and the local-git fallback found no merge commit (Issue #1237) — infrastructure; the merge may have landed unseen                                                                                                                                                                                                       |
+| `context_window_exceeded`        | The prompt outgrew the context the model server has the model loaded with (Issue #1631) — read only from the adapter's own failed-request line, never from model text; parked, never retried on the same model and adapter                                                                                                                                                                                                           |
+| `adapter_permission_rejected`    | The adapter auto-rejected a tool the stage's allowed tools grant, #1624's `[adapter-permission-rejected]` marker (Issue #1631) — an `ask` rule: OpenCode's own `.env` read guard, or one in a repository's or the user's OpenCode config; parked whatever tool it names, not retried, not charged to the issue                                                                                                                       |
+| `adapter_incompatible`           | The adapter's binary cannot serve the dispatch: below the compat floor, unreadable, or above max-tested with a failed self-test (Issues #1627, #1631) — parked; pin or install the max-tested build                                                                                                                                                                                                                                  |
 
 `permission_denied` (Issue #289) is a **harness-fault** kind, distinct from a
 stage failure. The harness rejects certain tool calls outright — the observed
@@ -267,6 +270,92 @@ than looping forever. Emitted with the `[permission-denied]` marker /
 `user rejected tool use` text, matched BEFORE the generic subagent-crash
 fallback so the "exit " substring in the rejection text doesn't misclassify it
 as a process death.
+
+### OpenCode (Experimental) and local-model failures (#1631)
+
+A stage on OpenCode fails with OpenCode's words, not the model server's
+alone. opencode 1.18.30 with `--print-logs` writes a failed model request to
+stderr as `AI_APICallError: <the server's error message>`, and the stage's
+reason keeps its last lines. The OpenCode clauses of the rule table key on
+that wrapper **and** the server's words together. The model's own output is
+on the stream, never on stderr, so a model that writes "context length
+exceeded" into its reply matches nothing: the security row
+`opencode-text-part-overflow-wording-does-not-classify` and
+`TestOpenCodeTextPartDoesNotClassify` pin it. What each failure looks like is
+recorded in [ADR-022 § Failure wording](decisions/022-opencode-multi-provider-adapter.md#failure-wording-amendment-2026-09-14),
+from the captures in `internal/terminalkind/testdata/opencode/`.
+
+| Failure                                  | Kind                          | Recovery                                                |
+| ---------------------------------------- | ----------------------------- | ------------------------------------------------------- |
+| The prompt outgrew the loaded context    | `context_window_exceeded`     | Parked (below)                                          |
+| The adapter rejected an allowed tool     | `adapter_permission_rejected` | Parked                                                  |
+| The `.env` read guard rejected a `read`  | `adapter_permission_rejected` | Parked                                                  |
+| The binary cannot serve the dispatch     | `adapter_incompatible`        | Parked                                                  |
+| The model server is not listening        | `network_unavailable`         | Generic backoff; outcome recording skipped              |
+| `ProviderModelNotFoundError`             | `model_unavailable`           | Cap recovery (below)                                    |
+| An Ollama model that is not pulled       | `model_unavailable`           | Cap recovery (below)                                    |
+| The server refused the credentials (401) | `adapter_auth_failed`         | Short backoff, no lifetime-cap increment, not escalated |
+
+**The parked kinds.** `context_window_exceeded`, `adapter_permission_rejected`
+and `adapter_incompatible` each name a condition the next attempt on the same
+model and adapter meets unchanged: the same prompt against the same window,
+the same permission rule, the same binary. None is charged to the issue. So
+`TerminalKindParks` routes all three the same way: the in-run model
+escalation is skipped, the autonomous scheduler schedules no retry, charges no
+`LifetimeIssueFailures`, feeds no cascade breaker and does not pause, and
+`HoldForTerminalKind` holds the entry for an operator (below), so the graph
+reconcile does not re-admit it either. The failed entry's reason carries the
+remediation from `TerminalKindRemediation`, which ends with the release:
+`nightgauge autonomous clear-failures <owner/repo#N>`. A park does not pause
+the fleet, and `autonomous resume` acts only on a pause, so a resume leaves a
+park held while the fleet runs.
+
+- `context_window_exceeded`: reload the model with a larger context, route the
+  stage to a model with a larger window, or split the issue. It is not an
+  agent failure. The run record carries the kind for the fit check (#1645) and
+  the size gate (#1655), which add re-route and decomposition; until they land,
+  the issue stays parked. OpenCode itself names these failures
+  `ContextOverflowError`, and the table's five overflow fragments are the ones
+  its recogniser matches for OpenAI-compatible servers, LM Studio, Ollama and
+  the llama.cpp server.
+- `adapter_permission_rejected`: an `ask` rule rejected, headless, a tool the
+  stage's allowed tools grant. Nightgauge generates no OpenCode permission map
+  yet (#1638), so the rule is OpenCode's own default guard on reading `*.env`
+  and `*.env.*` files, or one in a repository's or the user's `opencode.json`.
+  A stage allowed Read that reaches for a secret file, on its own or because
+  the issue text asked it to, ends with
+  `[adapter-permission-rejected] tool=read`, and it parks like any other
+  tool's rejection: a retry would let the model or the issue text loop the
+  issue, and the permission the marker names never changes the kind. For
+  `tool=read`, check whether the issue text asks the stage to read secret
+  files and remove that ask; otherwise change the rule only if the stage
+  should have the tool, and never loosen a rule that guards secret files. It
+  sits above `permission_denied` (#289), the harness refusing a tool the stage
+  was not allowed, which retries with a short backoff.
+- `adapter_incompatible`: install the max-tested build the refusal names and
+  pin the adapter's binary to it. The refusal stamps the kind itself
+  (`*OpenCodeIncompatibleError`), before anything is spawned.
+
+**A down local server** classifies `network_unavailable` on OpenCode's
+`Cannot connect to API`, which it prints after about 60 s of its own retries.
+It never prints `ECONNREFUSED`. That kind implies no connectivity cooldown in
+the Go scheduler: the only cooldown is the extension's GitHub connectivity
+probe, which a down local server never trips. The run takes the generic
+failure path with exponential backoff, and outcome recording skips it as
+environmental noise. The cascade breaker still counts it, which is what stops a
+fleet from dispatching every issue into a server that is down.
+
+**A missing model.** OpenCode's `ProviderModelNotFoundError: Model not found`
+classifies `model_unavailable`, which enters cap recovery: the tier ladder,
+then a hop along `pipeline.adapter_fallback_chain`. So does an Ollama server
+asked for a model it has not pulled: it answers 404, and OpenCode prints
+`AI_APICallError: model '<name>' not found` (Ollama's scheduler says
+`model "<name>" not found, try pulling it first` for a model whose files are
+missing, which classifies the same way). Whether a failure on a model the
+operator hosts may hop to a hosted entry of that chain is an open question,
+decided by #1643 and not here. A loopback LM Studio with one model loaded does
+not fail on an unknown model id at all: it answers with the loaded model, so
+nothing classifies.
 
 `branch_forked` (Issue #163) is the one kind that is **strictly harmful to
 retry**. The remote branch head is not reachable from the run's local tip, so
@@ -421,16 +510,19 @@ between a gate passing and a repository halting. Both now walk the same ladder,
 and an unresolvable base records an EMPTY file list rather than inventing one
 from `HEAD~1`.
 
-### Retryability: the two kinds the rescan may not re-admit (#1486)
+### Retryability: the kinds the rescan may not re-admit (#1486, #1631)
 
 Every kind above is retryable by the autonomous scheduler's graph reconcile —
-that is what recovers a crashed run — with exactly two exceptions, and they are
-the two that halt on purpose and say so:
+that is what recovers a crashed run — with two groups of exceptions: the two
+kinds that halt on purpose and say so, and the three parked kinds (#1631):
 
 | Kind                             | Held for                                    | Released by                                                                                         |
 | -------------------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------- |
 | `architecture_approval_required` | A human approving a high-impact decision    | The approval label (`approved:architecture` by default) or `.nightgauge/pipeline/approval-<n>.json` |
 | `not_pipeline_actionable`        | A human doing the thing the pipeline cannot | An explicit `autonomous resume` (fleet or repo), or clearing the issue's failures                   |
+| `context_window_exceeded`        | A larger context, another model, or a split | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause |
+| `adapter_permission_rejected`    | A changed `ask` rule or issue text          | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause |
+| `adapter_incompatible`           | The max-tested binary, installed and pinned | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause |
 
 The scheduler records the kind on the `failed` entry (`FailedItem.Kind`) and
 derives the hold from it via `HoldForTerminalKind`, so retryability has one
@@ -540,6 +632,9 @@ construction (`classifyTerminalKind` / `resolveTerminalKind` in
 | `dev_build_verification_failed`  | `organic` — the stage's own build broke                                                     |
 | `dev_tests_failed`               | `organic` — the stage's own tests failed                                                    |
 | `pr_merge_lookup_failed`         | `infrastructure` — gh / local git could not answer, not the issue                           |
+| `context_window_exceeded`        | parked — the loaded model's limit, not the issue; no lifetime-cap increment, no cascade     |
+| `adapter_permission_rejected`    | parked — an `ask` rule on an allowed tool; no lifetime-cap increment, no cascade            |
+| `adapter_incompatible`           | parked — the adapter's binary, not the issue; no lifetime-cap increment, no cascade         |
 
 **The sweep (#1237).** #9 built the mechanism but left eleven `KindFail`
 sites emitting an empty `TerminalKind` — four in `feature_dev_gate.go`, two
@@ -613,9 +708,11 @@ export const ExecutionHistoryRunRecordV3Schema = ExecutionHistoryRunRecordV2Sche
 The `TerminalKind*` constants live in
 `internal/orchestrator/failure_handler.go`; the rules that produce them live in
 `internal/terminalkind/table.json` (see below). When changing the enum, update
-**all three** in lockstep — the `TerminalFailureKindSchema` test in
-`packages/nightgauge-vscode/tests/views/dashboard/FailedRun.test.ts`
-guards against drift.
+**all three** in lockstep. `failureClassifier.parity.test.ts` (SDK) and
+`packages/nightgauge-vscode/tests/schemas/terminalFailureKind.parity.test.ts`
+(extension) read the Go constants and fail on a kind missing from either side,
+in both directions. The extension test found `permission_denied` missing from
+the Zod enum when it was added (#1631).
 
 ### One rule table, three interpreters (Issue #306)
 
@@ -1149,34 +1246,37 @@ under `.nightgauge/retros/`. These categories drive the retro
 dashboard view, auto-issue creation, and recommendations surfaced to
 operators.
 
-| Category                  | Severity | Source                                          | Notes                                                                                                                 |
-| ------------------------- | -------- | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `budget-exceeded`         | high     | extension log: budget enforcer                  | Token or cost ceiling tripped before grace.                                                                           |
-| `shipped-but-overbudget`  | low      | state-aware override                            | `budget-exceeded` finding with a MERGED PR — work shipped (#3108).                                                    |
-| `false-negative-shipped`  | low      | state-aware override (#3275)                    | Generalizes the shipped-but-merged path: ANY pr-merge failure where `gh pr view` shows MERGED reclassifies here.      |
-| `state-management`        | high     | extension log: schema/context errors            | Pipeline contract failed (missing context file, schema validation).                                                   |
-| `ci-infrastructure`       | medium   | gh CLI / CI poll                                | External CI checks failed.                                                                                            |
-| `model-capability`        | high     | extension parser                                | Empty/garbled model output.                                                                                           |
-| `timeout`                 | medium   | free-form                                       | Configurable stage timeout (distinct from skillRunner stall-kill).                                                    |
-| `validation-failure`      | high     | subagent stdout                                 | Tests/typecheck/build failed.                                                                                         |
-| `stall-kill`              | medium   | skillRunner                                     | Subagent went silent past idle/hard-cap threshold.                                                                    |
-| `cost-cap`                | high     | skillRunner log line OR diagnostic file (#3275) | Per-stage `pipeline.stage_cost_caps` fired. The file-existence check (`<stage>-cost-capped.log`) is deterministic.    |
-| `infrastructure-outage`   | low      | OfflineManager / DNS                            | Network outage during the run.                                                                                        |
-| `stop-hook-error`         | medium   | Claude CLI notification (time-gated #3275)      | Pre-result `stop-hook-error` notification — the genuine #3204 silent-hang signature. Post-result emissions are noise. |
-| `skill-no-op`             | high     | pr-merge context (#3275)                        | pr-merge LLM path reported success but post-merge verification found the PR is not actually merged.                   |
-| `adapter-unavailable`     | high     | dispatcher envelope                             | Primary adapter prereq failed; no fallback walked (#3223).                                                            |
-| `no-adapter-available`    | high     | dispatcher envelope                             | Full fallback chain exhausted (#3231).                                                                                |
-| `quota-exhausted`         | low      | run record kind (#1448)                         | A provider or forge quota WINDOW is closed. Reopens on a clock; no config change helps.                               |
-| `model-unavailable`       | high     | run record kind (#1448)                         | The API rejected the selected model, so the stage never ran. Routing/plan fault, not model quality.                   |
-| `permission-denied`       | medium   | run record kind (#1448)                         | The harness refused a tool call. Not a defect — fix the pattern the stage reached for.                                |
-| `human-decision-required` | medium   | run record kind (#1448)                         | Architecture approval halt, or a stage declared the deliverable is not producible by any lap. Parked, not broken.     |
-| `dependency-blocked`      | low      | run record kind (#1448)                         | Dispatched over an open `blockedBy` edge. The dispatch decision is the defect, not the stage.                         |
-| `no-work-required`        | low      | run record kind (#1448)                         | Nothing to produce: the issue was already closed, or the branch holds no commits to open a PR for.                    |
-| `work-stranded`           | high     | run record kind (#1448)                         | The work EXISTS where the pipeline does not look (uncommitted, stray branch, diverged remote, commit with no PR).     |
-| `containment-breach`      | high     | run record kind (#1448)                         | The stage wrote into a repository it does not own (#129) while reporting success.                                     |
-| `validation-inconclusive` | medium   | run record kind (#1448)                         | A validation tier ran and executed zero tests — nothing failed, so nothing was verified (#221).                       |
-| `credential-failure`      | high     | run record `terminal_failure_kind`              | `git_transport_auth_failed` — a git or forge transport refused the machine's credentials (#878).                      |
-| `unknown`                 | low      | fallback                                        | No structured signal or keyword match.                                                                                |
+| Category                      | Severity | Source                                          | Notes                                                                                                                   |
+| ----------------------------- | -------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `budget-exceeded`             | high     | extension log: budget enforcer                  | Token or cost ceiling tripped before grace.                                                                             |
+| `shipped-but-overbudget`      | low      | state-aware override                            | `budget-exceeded` finding with a MERGED PR — work shipped (#3108).                                                      |
+| `false-negative-shipped`      | low      | state-aware override (#3275)                    | Generalizes the shipped-but-merged path: ANY pr-merge failure where `gh pr view` shows MERGED reclassifies here.        |
+| `state-management`            | high     | extension log: schema/context errors            | Pipeline contract failed (missing context file, schema validation).                                                     |
+| `ci-infrastructure`           | medium   | gh CLI / CI poll                                | External CI checks failed.                                                                                              |
+| `model-capability`            | high     | extension parser                                | Empty/garbled model output.                                                                                             |
+| `timeout`                     | medium   | free-form                                       | Configurable stage timeout (distinct from skillRunner stall-kill).                                                      |
+| `validation-failure`          | high     | subagent stdout                                 | Tests/typecheck/build failed.                                                                                           |
+| `stall-kill`                  | medium   | skillRunner                                     | Subagent went silent past idle/hard-cap threshold.                                                                      |
+| `cost-cap`                    | high     | skillRunner log line OR diagnostic file (#3275) | Per-stage `pipeline.stage_cost_caps` fired. The file-existence check (`<stage>-cost-capped.log`) is deterministic.      |
+| `infrastructure-outage`       | low      | OfflineManager / DNS                            | Network outage during the run.                                                                                          |
+| `stop-hook-error`             | medium   | Claude CLI notification (time-gated #3275)      | Pre-result `stop-hook-error` notification — the genuine #3204 silent-hang signature. Post-result emissions are noise.   |
+| `skill-no-op`                 | high     | pr-merge context (#3275)                        | pr-merge LLM path reported success but post-merge verification found the PR is not actually merged.                     |
+| `adapter-unavailable`         | high     | dispatcher envelope                             | Primary adapter prereq failed; no fallback walked (#3223).                                                              |
+| `no-adapter-available`        | high     | dispatcher envelope                             | Full fallback chain exhausted (#3231).                                                                                  |
+| `quota-exhausted`             | low      | run record kind (#1448)                         | A provider or forge quota WINDOW is closed. Reopens on a clock; no config change helps.                                 |
+| `model-unavailable`           | high     | run record kind (#1448)                         | The API rejected the selected model, so the stage never ran. Routing/plan fault, not model quality.                     |
+| `permission-denied`           | medium   | run record kind (#1448)                         | The harness refused a tool call. Not a defect — fix the pattern the stage reached for.                                  |
+| `human-decision-required`     | medium   | run record kind (#1448)                         | Architecture approval halt, or a stage declared the deliverable is not producible by any lap. Parked, not broken.       |
+| `dependency-blocked`          | low      | run record kind (#1448)                         | Dispatched over an open `blockedBy` edge. The dispatch decision is the defect, not the stage.                           |
+| `no-work-required`            | low      | run record kind (#1448)                         | Nothing to produce: the issue was already closed, or the branch holds no commits to open a PR for.                      |
+| `work-stranded`               | high     | run record kind (#1448)                         | The work EXISTS where the pipeline does not look (uncommitted, stray branch, diverged remote, commit with no PR).       |
+| `containment-breach`          | high     | run record kind (#1448)                         | The stage wrote into a repository it does not own (#129) while reporting success.                                       |
+| `validation-inconclusive`     | medium   | run record kind (#1448)                         | A validation tier ran and executed zero tests — nothing failed, so nothing was verified (#221).                         |
+| `credential-failure`          | high     | run record `terminal_failure_kind`              | `git_transport_auth_failed` — a git or forge transport refused the machine's credentials (#878).                        |
+| `context-window-exceeded`     | medium   | run record `terminal_failure_kind`              | The prompt outgrew the model's loaded context. Parked; the remedy is a larger window, another model or a split (#1631). |
+| `adapter-permission-rejected` | high     | run record `terminal_failure_kind`              | The adapter rejected a tool the stage is allowed under an `ask` rule, OpenCode's `.env` read guard included (#1631).    |
+| `adapter-incompatible`        | high     | run record `terminal_failure_kind`              | The adapter's binary cannot serve the dispatch; install and pin the max-tested build (#1631).                           |
+| `unknown`                     | low      | fallback                                        | No structured signal or keyword match.                                                                                  |
 
 ### The Record's Kind Is Decided Here, Not Guessed (Issue #1448)
 

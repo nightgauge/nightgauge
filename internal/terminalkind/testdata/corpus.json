@@ -1574,6 +1574,159 @@
       "source": "synthetic",
       "producer": "grok (internal/execution/adapters/grok.go, registry.go factory \"grok\") — the grok Build CLI's real `Not signed in` auth wording (#591), preceded by an unrelated retry-configuration notice that happens to contain the bare literal `hard cap`.",
       "rationale": "THE #565 AC3 NEGATIVE CONTROL. Matching is over the WHOLE joined string, not per line (table.json's input_contract), so a rule's bare literal can be satisfied by an EARLIER, unrelated line even when a LATER line names the real, more specific failure. Before #565 this input classified stall_kill: stall-kill's bare `hard cap` clause sat at ladder position 23 while adapter-auth-failed's `not signed in` sat at position 26, so the retry-configuration noise line won over the actual auth failure that ended the stage. #565 moved adapter-auth-failed to directly follow rate-limit-quota-exhausted, grouping it with the OTHER rule that exists specifically to classify raw, unmarked vendor CLI stderr (#560/#591 are siblings), which is what this row now pins as passing. A retry-loop mentioning a hard cap is not itself a stall; a CLI that never authenticated is never going to retry its way out, and reporting stall_kill sent it down a backoff-and-retry recovery path for a failure retrying cannot fix."
+    },
+    {
+      "id": "opencode-overflow-openai-compatible",
+      "input": "exit 1: timestamp=2026-01-01T00:00:00.000Z level=ERROR run=00000000 message=process session.id=ses_fixture0000000000000000001 messageID=msg_fixture0000000000000000001 error=\"This model's maximum context length is 8192 tokens, however the messages resulted in more tokens: context_length_exceeded. local server: n_ctx = 8192 exceeded by the request; reduce the prompt and try again.\" stack=\"AI_APICallError: This model's maximum context length is 8192 tokens, however the messages resulted in more tokens: context_length_exceeded. local server: n_ctx = 8192 exceeded by the request; reduce the prompt and try again.\\n    at <anonymous> (/$bunfs/root/chunk-4jmjcj2v.js:6:14582)\\n    at async <anonymous> (/$bunfs/root/chunk-4jmjcj2v.js:6:12790)\\n    at processTicksAndRejections (native:7:39)\"",
+      "expected": "context_window_exceeded",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "opencode 1.18.30 run with --print-logs --log-level ERROR, captured by scripts/capture-opencode-failure-fixture.sh (#1631): the last stderr line of internal/terminalkind/testdata/opencode/overflow-openai.stderr, verbatim after redaction, behind the `exit 1: ` the scheduler's terminalFailureReason adds. The server is the stub provider's `overflow` script (#1618), whose message carries the OpenAI-compatible `context_length_exceeded` code and `maximum context length is N tokens`.",
+      "rationale": "THE REAL SHAPE of a context overflow on the OpenCode path, and the reason the kind exists: pre-#1631 this line satisfied only the `exit ` fallback and was booked subagent_crash, fed the cascade breaker and was retried into the same window. OpenCode wraps the server's message in `AI_APICallError: `, and every context-window-exceeded clause requires that wrapper, so this line classifies and model prose with the same words does not (see opencode-text-part-overflow-wording-does-not-classify). OpenCode's own stream names this failure ContextOverflowError (overflow-openai.jsonl), so the record and the adapter agree."
+    },
+    {
+      "id": "opencode-overflow-lmstudio",
+      "input": "exit 1: timestamp=2026-01-01T00:00:00.000Z level=ERROR run=00000000 message=process session.id=ses_fixture0000000000000000001 messageID=msg_fixture0000000000000000001 error=\"The prompt is greater than the context length of the loaded model.\" stack=\"AI_APICallError: The prompt is greater than the context length of the loaded model.\\n    at <anonymous> (/$bunfs/root/chunk-4jmjcj2v.js:6:14582)\\n    at async <anonymous> (/$bunfs/root/chunk-4jmjcj2v.js:6:12790)\\n    at processTicksAndRejections (native:7:39)\"",
+      "expected": "context_window_exceeded",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "opencode 1.18.30 run with --print-logs --log-level ERROR, captured by scripts/capture-opencode-failure-fixture.sh (#1631): the last stderr line of internal/terminalkind/testdata/opencode/overflow-lmstudio.stderr, verbatim after redaction, behind the `exit 1: ` the scheduler's terminalFailureReason adds. The 400's message is a sentence built around `greater than the context length`, the fragment OpenCode's overflow recogniser attributes to LM Studio (packages/opencode/src/provider/error.ts at 334ab4707c; the same pattern is in the 1.18.30 binary). The sentence is the capture's; the fragment is LM Studio's as OpenCode records it.",
+      "rationale": "LM Studio is the loopback model server this workspace's OpenCode stages run on, so its overflow is the one this kind most needs to catch. Pins the LM Studio clause through OpenCode's real line shape: deleting it leaves this row to the `exit ` fallback."
+    },
+    {
+      "id": "opencode-overflow-ollama",
+      "input": "exit 1: timestamp=2026-01-01T00:00:00.000Z level=ERROR run=00000000 message=process session.id=ses_fixture0000000000000000001 messageID=msg_fixture0000000000000000001 error=\"prompt too long; exceeded max context length by 1024 tokens\" stack=\"AI_APICallError: prompt too long; exceeded max context length by 1024 tokens\\n    at <anonymous> (/$bunfs/root/chunk-4jmjcj2v.js:6:14582)\\n    at async <anonymous> (/$bunfs/root/chunk-4jmjcj2v.js:6:12790)\\n    at processTicksAndRejections (native:7:39)\"",
+      "expected": "context_window_exceeded",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "opencode 1.18.30 run with --print-logs --log-level ERROR, captured by scripts/capture-opencode-failure-fixture.sh (#1631): the last stderr line of internal/terminalkind/testdata/opencode/overflow-ollama.stderr, verbatim after redaction, behind the `exit 1: ` the scheduler's terminalFailureReason adds. The 400's message is built around `prompt too long; exceeded max context length`, the fragment OpenCode's overflow recogniser attributes to Ollama's explicit overflow error (packages/opencode/src/provider/error.ts at 334ab4707c; the same pattern is in the 1.18.30 binary).",
+      "rationale": "Ollama is the second local server kind an OpenCode endpoint can name (ADR-022 § Endpoints). The clause is the fixed prefix of OpenCode's pattern, which covers both of its `exceeded (max) context length` spellings, and is gated on the wrapper like every overflow clause."
+    },
+    {
+      "id": "opencode-overflow-llamacpp",
+      "input": "exit 1: timestamp=2026-01-01T00:00:00.000Z level=ERROR run=00000000 message=process session.id=ses_fixture0000000000000000001 messageID=msg_fixture0000000000000000001 error=\"the request exceeds the available context size, try increasing it\" stack=\"AI_APICallError: the request exceeds the available context size, try increasing it\\n    at <anonymous> (/$bunfs/root/chunk-4jmjcj2v.js:6:14582)\\n    at async <anonymous> (/$bunfs/root/chunk-4jmjcj2v.js:6:12790)\\n    at processTicksAndRejections (native:7:39)\"",
+      "expected": "context_window_exceeded",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "opencode 1.18.30 run with --print-logs --log-level ERROR, captured by scripts/capture-opencode-failure-fixture.sh (#1631): the last stderr line of internal/terminalkind/testdata/opencode/overflow-llamacpp.stderr, verbatim after redaction, behind the `exit 1: ` the scheduler's terminalFailureReason adds. The 400's message is built around `exceeds the available context size`, the fragment OpenCode's overflow recogniser attributes to the llama.cpp server (packages/opencode/src/provider/error.ts at 334ab4707c; the same pattern is in the 1.18.30 binary).",
+      "rationale": "The llama.cpp server is the engine under GGUF models in both LM Studio and Ollama and an OpenAI-compatible endpoint in its own right; its overflow wording differs from both front ends', so it needs its own clause and its own row."
+    },
+    {
+      "id": "opencode-text-part-overflow-wording-does-not-classify",
+      "input": "{\"type\":\"text\",\"timestamp\":1789336540710,\"sessionID\":\"ses_fixture0000000000000000001\",\"part\":{\"id\":\"prt_09cc4d623001ox8z7hvDbvJXh7\",\"messageID\":\"msg_09cc4d5ad001QaZ82wsnecKlQN\",\"sessionID\":\"ses_fixture0000000000000000001\",\"type\":\"text\",\"text\":\"If the build fails with context_length_exceeded (the maximum context length is 8192 tokens, or the prompt is greater than the context length, or prompt too long; exceeded max context length, or the request exceeds the available context size), or if it cannot connect to API because the key was unauthorized, or the model 'qwen3:8b' not found, try pulling it first, I will split the change.\",\"time\":{\"start\":1789336540707,\"end\":1789336540709}}}",
+      "expected": "",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "An opencode 1.18.30 `--format json` text event, in the exact shape of the one in internal/execution/testdata/opencode_stream_research_sample.jsonl (#1624), whose `text` — the MODEL's reply — carries every server phrase the OpenCode clauses key on, without OpenCode's `AI_APICallError` wrapper.",
+      "rationale": "THE SECURITY ROW (#1631). context_window_exceeded parks an issue, so model-authored text must never be able to reach it, nor network_unavailable or adapter_auth_failed through the OpenCode clauses. The input contract already refuses a transcript as a reason; this row pins the second line of defence, the table's own: every OpenCode clause is a conjunction with `ai_apicallerror`, which only OpenCode's log writes, around a failed MODEL REQUEST. It is also the negative row for each server-phrase half of those conjunctions, so widening any of them to its phrase alone turns this row red."
+    },
+    {
+      "id": "opencode-provider-error-is-not-an-overflow",
+      "input": "exit 1: timestamp=2026-01-01T00:00:00.000Z level=ERROR run=00000000 message=process session.id=ses_fixture0000000000000000001 messageID=msg_fixture0000000000000000001 error=\"stub-provider: internal error\" stack=\"AI_APICallError: stub-provider: internal error\\n    at <anonymous> (/$bunfs/root/chunk-4jmjcj2v.js:6:14582)\\n    at async <anonymous> (/$bunfs/root/chunk-4jmjcj2v.js:6:12790)\\n    at processTicksAndRejections (native:7:39)\"",
+      "expected": "subagent_crash",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "opencode 1.18.30 run with --print-logs --log-level ERROR, captured by scripts/capture-opencode-failure-fixture.sh (#1631): the last stderr line of internal/terminalkind/testdata/opencode/provider-error.stderr, verbatim after redaction, behind the `exit 1: ` the scheduler's terminalFailureReason adds. The server is the stub provider's `error` script (#1618): a 500 that is not an overflow, which OpenCode retried for about 70 s before giving up.",
+      "rationale": "THE NEGATIVE CONTROL for the `ai_apicallerror` half of every OpenCode clause. A failed model request that is none of the recognised shapes keeps its generic kind; if any clause were widened to the wrapper alone, every provider error would read as an overflow, an auth failure or a down server, and the first of those parks the issue."
+    },
+    {
+      "id": "opencode-provider-401-unauthorized",
+      "input": "exit 1: timestamp=2026-01-01T00:00:00.000Z level=ERROR run=00000000 message=process session.id=ses_fixture0000000000000000001 messageID=msg_fixture0000000000000000001 error=Unauthorized stack=\"AI_APICallError: Unauthorized\\n    at <anonymous> (/$bunfs/root/chunk-4jmjcj2v.js:6:14371)\\n    at async <anonymous> (/$bunfs/root/chunk-4jmjcj2v.js:6:12790)\\n    at processTicksAndRejections (native:7:39)\"",
+      "expected": "adapter_auth_failed",
+      "expected_signal": "adapter_auth_failed",
+      "source": "synthetic",
+      "producer": "opencode 1.18.30 run with --print-logs --log-level ERROR, captured by scripts/capture-opencode-failure-fixture.sh (#1631): the last stderr line of internal/terminalkind/testdata/opencode/auth.stderr, verbatim after redaction, behind the `exit 1: ` the scheduler's terminalFailureReason adds. The server answered 401 with no body, so the message is the HTTP reason phrase.",
+      "rationale": "A model server refused the credentials OpenCode sent: the provider auth failure #1631 maps onto adapter_auth_failed, whose routing (short backoff, no lifetime-cap increment, no cascade feed) and escalation exclusion are right for a key a stronger model cannot supply. Before this clause the line fell to subagent_crash. The rule is signal:true, so the extension reacts to it as Go records it."
+    },
+    {
+      "id": "opencode-local-server-down",
+      "input": "exit 1: timestamp=2026-01-01T00:00:00.000Z level=ERROR run=00000000 message=process session.id=ses_fixture0000000000000000001 messageID=msg_fixture0000000000000000001 error=\"Cannot connect to API: Unable to connect. Is the computer able to access the url?\" stack=\"AI_APICallError: Cannot connect to API: Unable to connect. Is the computer able to access the url?\\n    at e (/$bunfs/root/chunk-4jmjcj2v.js:2:6248)\\n    at <anonymous> (/$bunfs/root/chunk-4jmjcj2v.js:6:13321)\\n    at processTicksAndRejections (native:7:39)\"",
+      "expected": "network_unavailable",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "opencode 1.18.30 run with --print-logs --log-level ERROR, captured by scripts/capture-opencode-failure-fixture.sh (#1631): the last stderr line of internal/terminalkind/testdata/opencode/server-down.stderr, verbatim after redaction, behind the `exit 1: ` the scheduler's terminalFailureReason adds. The provider block pointed at a closed loopback port; OpenCode retried for about 60 s first.",
+      "rationale": "A local model server that is not running. #1631 expected `ECONNREFUSED 127.0.0.1:1234`, and opencode 1.18.30 never prints it: this is its wording (ADR-022 § Failure wording), so this is the row that pins the mapping to network_unavailable. Outcome recording skips that kind as environmental noise, which a down server is, and the rule is signal:false, so no extension cooldown keys on it."
+    },
+    {
+      "id": "opencode-provider-model-not-found",
+      "input": "exit 1: timestamp=2026-01-01T00:00:00.000Z level=ERROR run=00000000 message=failed ref=err_fixture error=\"ProviderModelNotFoundError: Model not found: lmstudio/qwen/not-a-configured-model. Did you mean: qwen/qwen3-30b-a3b-2507, qwen/qwen3-coder-30b, qwen/qwen3.8-27b?\" cause=\"ProviderModelNotFoundError: Model not found: lmstudio/qwen/not-a-configured-model. Did you mean: qwen/qwen3-30b-a3b-2507, qwen/qwen3-coder-30b, qwen/qwen3.8-27b?\\n    at <anonymous> (/$bunfs/root/chunk-3yjk1w4m.js:439:94278)\\n    at SessionPrompt.getModel (/$bunfs/root/chunk-jsvjjq7j.js:1142:11505)\\n    at SessionPrompt.getModel (definition) (/$bunfs/root/chunk-jsvjjq7j.js:1142:908)\\n    at SessionPrompt.run (/$bunfs/root/chunk-jsvjjq7j.js:1142:15339)\\n    at SessionPrompt.run (definition) (/$bunfs/root/chunk-jsvjjq7j.js:1142:10503)\\n    at SessionRunState.ensureRunning (/$bunfs/root/chunk-jsvjjq7j.js:1142:15308)\\n    at SessionRunState.ensureRunning (definition) (/$bunfs/root/chunk-jsvjjq7j.js:2:8188)\\n    at SessionPrompt.loop (/$bunfs/root/chunk-jsvjjq7j.js:1142:10225)\\n    at SessionPrompt.loop (definition) (/$bunfs/root/chunk-jsvjjq7j.js:1142:15244)\\n    at SessionPrompt.prompt (/$bunfs/root/chunk-mjh4q85p.js:4:13297)\\n    at SessionPrompt.prompt (definition) (/$bunfs/root/chunk-jsvjjq7j.js:1142:9844)\"",
+      "expected": "model_unavailable",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "opencode 1.18.30 run with --print-logs --log-level ERROR, captured by scripts/capture-opencode-failure-fixture.sh (#1631): the last stderr line of internal/terminalkind/testdata/opencode/model-not-configured.stderr, verbatim after redaction, behind the `exit 1: ` the scheduler's terminalFailureReason adds. `-m` named a model the provider block does not list, and OpenCode refused before any request (ProviderModelNotFoundError).",
+      "rationale": "OpenCode's own not-found error for a model it has no entry for, classified model_unavailable by the existing `model not found` clause rather than by a new one, which is the mapping #1631 asks for. Pinned because the line also carries a stack of `at …` frames and a `Did you mean` list, and nothing in either may claim it first."
+    },
+    {
+      "id": "adapter-incompatible-below-floor",
+      "input": "exit 0: dispatch refused for adapter \"opencode\": adapter_incompatible: opencode 1.17.2 (/usr/local/bin/opencode) is below the minimum tested version 1.18.30, and no OpenCode behaviour this adapter relies on was observed below it. Install the tested build with `npm i --prefix ~/.nightgauge/tools/opencode opencode-ai@1.18.30` and pin it with opencode.binary: /Users/fixture/.nightgauge/tools/opencode/node_modules/.bin/opencode in ~/.nightgauge/config.yaml. See docs/decisions/022-opencode-multi-provider-adapter.md § 20",
+      "expected": "adapter_incompatible",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "*adapters.OpenCodeIncompatibleError.Error() from adapters.CheckOpenCodeVersion for an opencode below the compat manifest's floor (#1627), wrapped by execution.Manager as `dispatch refused for adapter %q: %w` and by the scheduler's terminalFailureReason; rendered from the code, with the binary at /usr/local/bin/opencode and home /Users/fixture.",
+      "rationale": "A version-policy refusal cannot succeed on retry — the same binary is refused the same way — and before #1631 it satisfied only the `exit ` fallback, so it was booked subagent_crash and retried. The refusal stamps its own kind first, and that stamp is the one term the rule reads, so the reason's paths and the remediation's command cannot steer it."
+    },
+    {
+      "id": "adapter-permission-rejected-marker",
+      "input": "[adapter-permission-rejected] tool=bash",
+      "expected": "adapter_permission_rejected",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "The marker internal/execution/opencode_usage.go appends as the last line of an opencode stage's stderr when OpenCode auto-rejected a permission the stage's allowed tools grant (#1624, ADR-022 § 9).",
+      "rationale": "The marker alone, as #1631's verification names it. It means an `ask` rule rejected a tool the stage is allowed, for any permission but `read`: a repository's or the user's opencode.json, since Nightgauge generates no permission map yet (#1638). The next attempt meets that rule unchanged, so it parks without a retry and without charging the issue."
+    },
+    {
+      "id": "adapter-permission-rejected-as-the-stage-reports-it",
+      "input": "exit 1: ! permission requested: bash (...); auto-rejecting\n[adapter-permission-rejected] tool=bash",
+      "expected": "adapter_permission_rejected",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "An opencode stage's stderr after #1624's parser: the auto-reject notice with its patterns stripped to `(...)` and the marker as the last line (internal/execution/opencode_usage_test.go pins this exact text), behind the scheduler's `exit 1: `.",
+      "rationale": "ORDERING against the fallback: the `exit ` prefix and the notice's `auto-rejecting` must not take it. This is the shape the scheduler actually classifies."
+    },
+    {
+      "id": "order-adapter-permission-rejected-beats-permission-denied",
+      "input": "exit 1: [permission-denied] tool=external_directory\n[adapter-permission-rejected] tool=bash",
+      "expected": "adapter_permission_rejected",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "Both of #1624's markers in one reason: internal/execution/opencode_usage.go emits `[permission-denied] tool=<p>` for a permission the stage's allowed tools do not grant and `[adapter-permission-rejected] tool=<p>` for one they do.",
+      "rationale": "ORDERING. #1631 requires the adapter rule ahead of permission-denied: the harness refusing a forbidden tool is retried with a short backoff, the adapter rejecting an allowed one is an `ask` rule in the configuration that no retry clears. Moving adapter-permission-rejected below permission-denied turns this row red."
+    },
+    {
+      "id": "opencode-ollama-model-not-pulled",
+      "input": "exit 1: timestamp=2026-01-01T00:00:00.000Z level=ERROR run=00000000 message=process session.id=ses_fixture0000000000000000001 messageID=msg_fixture0000000000000000001 error=\"model 'qwen3:8b' not found\" stack=\"AI_APICallError: model 'qwen3:8b' not found\\n    at <anonymous> (/$bunfs/root/chunk-4jmjcj2v.js:6:14582)\\n    at async <anonymous> (/$bunfs/root/chunk-4jmjcj2v.js:6:12790)\\n    at processTicksAndRejections (native:7:39)\"",
+      "expected": "model_unavailable",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "opencode 1.18.30 run with --print-logs --log-level ERROR against a real `ollama serve` 0.32.11 on 127.0.0.1 with an empty model directory, `-m ollama/qwen3:8b`, captured by scripts/capture-opencode-failure-fixture.sh (#1631): the last stderr line of internal/terminalkind/testdata/opencode/ollama-model-not-pulled.stderr, verbatim after redaction, behind the `exit 1: ` the scheduler's terminalFailureReason adds. Ollama answered 404 with `model 'qwen3:8b' not found` (type not_found_error, on the stream only).",
+      "rationale": "#1631's acceptance criterion names a missing or unloaded model on Ollama as model_unavailable. Ollama fails on a model it has not pulled, and the quoted name splits the `model not found` literal, so before the `ai_apicallerror` + `model '` + `' not found` clause this line fell to the `exit ` fallback and was booked subagent_crash, retried, charged to the issue and fed to the cascade breaker. As model_unavailable it enters cap recovery, whose tier walk reaches a model the server does have."
+    },
+    {
+      "id": "opencode-ollama-model-not-found-try-pulling",
+      "input": "exit 1: timestamp=2026-01-01T00:00:00.000Z level=ERROR run=00000000 message=process session.id=ses_fixture0000000000000000001 messageID=msg_fixture0000000000000000001 error=\"model \\\"qwen3:8b\\\" not found, try pulling it first\" stack=\"AI_APICallError: model \\\"qwen3:8b\\\" not found, try pulling it first\\n    at <anonymous> (/$bunfs/root/chunk-4jmjcj2v.js:6:14582)\\n    at async <anonymous> (/$bunfs/root/chunk-4jmjcj2v.js:6:12790)\\n    at processTicksAndRejections (native:7:39)\"",
+      "expected": "model_unavailable",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "Ollama's other not-found wording, `model %q not found, try pulling it first` (server/routes.go handleScheduleError at v0.32.11, commit 39df91c9826b), which it returns when the scheduler cannot find a model's files, placed in the line opencode 1.18.30 printed for the captured Ollama 404 (internal/terminalkind/testdata/opencode/ollama-model-not-pulled.stderr) with the message replaced, and `\"` escaped as that line escapes a quote.",
+      "rationale": "The same failure on Ollama's scheduler path: a model the server lists but cannot load from disk. Pins the `ai_apicallerror` + `not found, try pulling it` clause, because `%q` quotes the name in double quotes and the model-name quote clause keys on single ones."
+    },
+    {
+      "id": "opencode-read-guard-rejection-parks",
+      "input": "exit 1: ! permission requested: read (...); auto-rejecting\n[adapter-permission-rejected] tool=read",
+      "expected": "adapter_permission_rejected",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "An opencode stage's stderr after #1624's parser, for a stage allowed Read that tried to read a `.env` file: opencode 1.18.30's default ruleset asks on `read` for `*.env` and `*.env.*`, the headless run auto-rejects the ask, and the parser emits `[adapter-permission-rejected] tool=read` because Read maps to `read` (internal/execution/adapters/adapter.go OpenCodeToolsAllowed).",
+      "rationale": "OpenCode's secret-file guard parks the issue like every other granted permission's rejection (#1631): one dispatch, then an operator hold. A retry would let the model or the issue text that sent it to the file loop the issue, and nothing about the guard may be loosened to clear it. A rule that claims `tool=read` for any retrying kind turns this row red."
+    },
+    {
+      "id": "opencode-read-and-bash-rejections-park",
+      "input": "exit 1: [adapter-permission-rejected] tool=read\n! permission requested: bash (...); auto-rejecting\n[adapter-permission-rejected] tool=bash",
+      "expected": "adapter_permission_rejected",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "A reason that joins two stages' tails (a stage's error and its tail, or a composed first-cause reason): one opencode stage rejected `read` under OpenCode's default `.env` guard, another rejected `bash` under an `ask` rule in an opencode.json, each ending in #1624's marker.",
+      "rationale": "The permission a marker names is the model's tool choice and never changes the kind: whichever marker comes first, the reason parks as adapter_permission_rejected."
     }
   ]
 }

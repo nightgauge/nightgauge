@@ -1051,8 +1051,10 @@ type OpenCodeEndpointReadiness struct {
 	// Studio's loaded_context_length, not its maximum), or will load it with
 	// (Ollama's num_ctx); 0 when unknown.
 	LoadedContext int `json:"loaded_context,omitempty"`
-	// InjectedContext is the limit.context the per-run config gives the
-	// endpoint's models.
+	// InjectedContext is the limit.context the per-run config gives Model
+	// on the endpoint: the machine-tier override, clamped to the loaded
+	// window, or the window discovered from the server. 0 when the caller
+	// knows none, which the probe then does not compare.
 	InjectedContext int `json:"injected_context"`
 	// Ready is true when a stage on Model can run: the server answers and
 	// has the model, loaded where the server does not load it on demand.
@@ -1067,8 +1069,9 @@ type OpenCodeEndpointReadiness struct {
 // ProbeOpenCodeEndpoint checks one model server the operator runs: whether it
 // answers, whether model (the id after the endpoint's key; "" to check only
 // the server) is on it and loaded, the context it has loaded, and whether
-// injectedContext, the limit.context the per-run config gives the endpoint's
-// models, fits that context. It is one endpoint per call, so a caller with
+// injectedContext, the limit.context the per-run config gives model on the
+// endpoint (0 when the caller knows none), fits that context. It is one
+// endpoint per call, so a caller with
 // several endpoints (#1678) probes each.
 //
 // Only the server behind target.BaseURL is requested, with no credential, no
@@ -1281,8 +1284,12 @@ func probeOllama(client *http.Client, root, id string, r *OpenCodeEndpointReadin
 	}
 	r.Ready = true
 	if r.LoadedContext == 0 {
-		r.Warning = fmt.Sprintf("endpoint %s sets no num_ctx for %s, so Ollama loads it with its own default context, which can be far below opencode.limit.context (%d): set num_ctx for the model, or OLLAMA_CONTEXT_LENGTH, at or above it",
-			id, r.Model, r.InjectedContext)
+		limit := "the context limit a dispatch gives OpenCode"
+		if r.InjectedContext > 0 {
+			limit = fmt.Sprintf("the %d-token context limit a dispatch gives OpenCode", r.InjectedContext)
+		}
+		r.Warning = fmt.Sprintf("endpoint %s sets no num_ctx for %s, so Ollama loads it with its own default context, which can be far below %s: set num_ctx for the model, or OLLAMA_CONTEXT_LENGTH, at or above it",
+			id, r.Model, limit)
 		return
 	}
 	r.Warning = openCodeContextWarning(id, r.Model, r.InjectedContext, r.LoadedContext)
@@ -1292,19 +1299,17 @@ func probeOllama(client *http.Client, root, id string, r *OpenCodeEndpointReadin
 // "name value" pair per line.
 var ollamaNumCtxRE = regexp.MustCompile(`(?m)^\s*num_ctx\s+(\d+)\s*$`)
 
-// openCodeContextWarning is the warning for an injected context limit that is
-// 0 or larger than the context the endpoint has loaded, or "" when it fits.
+// openCodeContextWarning is the warning for an injected context limit larger
+// than the context the endpoint has loaded, or "" when it fits or either is
+// unknown. The injected limit is the one a dispatch resolved, which is
+// already clamped to the window discovery saw (resolveLimit), so it is larger
+// only when the server's window is not the one the dispatch resolved against.
+// An unknown injected limit is no finding here: a dispatch whose limits do
+// not resolve is refused, and that refusal is the finding.
 func openCodeContextWarning(id, model string, injected, loaded int) string {
-	switch {
-	case injected <= 0 && loaded > 0:
-		return fmt.Sprintf("opencode.limit.context is 0 or unset for endpoint %s: OpenCode never compacts a session whose context limit is 0, so a dispatch to it is refused; set it at or below the %d tokens %s is loaded with",
-			id, loaded, model)
-	case injected <= 0:
-		return fmt.Sprintf("opencode.limit.context is 0 or unset for endpoint %s: OpenCode never compacts a session whose context limit is 0, so a dispatch to it is refused; set it at or below the context %s is loaded with",
-			id, model)
-	case loaded > 0 && injected > loaded:
-		return fmt.Sprintf("opencode.limit.context (%d) is larger than the %d tokens endpoint %s has loaded %s with: OpenCode compacts only past the limit, so the server runs out of context first; set opencode.limit.context at or below %d, or load the model with a larger context",
-			injected, loaded, id, model, loaded)
+	if injected <= 0 || loaded <= 0 || injected <= loaded {
+		return ""
 	}
-	return ""
+	return fmt.Sprintf("the %d-token context limit a dispatch gives OpenCode for %s is larger than the %d tokens endpoint %s has loaded it with: OpenCode compacts only past the limit, so the server runs out of context first; set opencode.limit.context at or below %d, or load the model with a larger context",
+		injected, model, loaded, id, loaded)
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/hometest"
+	"github.com/nightgauge/nightgauge/internal/models"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 )
 
@@ -22,7 +23,12 @@ func TestMain(m *testing.M) {
 	// No test here reaches GitHub for an OpenCode stage's MCP servers; one
 	// that reads them swaps in a forge of its own.
 	restoreForge := adapters.SwapOpenCodeMcpForgeForTest(openCodeVerbForge{err: errors.New("the cmd test binary reads no forge")})
+	// Nor does one ask a model server for a local model's limits.
+	restoreDiscovery := adapters.SwapOpenCodeLocalDiscoveryForTest(func(adapters.OpenCodeEndpoint, string) (models.LocalDescriptor, error) {
+		return models.LocalDescriptor{}, errors.New("the cmd test binary asks no model server")
+	})
 	code := m.Run()
+	restoreDiscovery()
 	restoreForge()
 	cleanup()
 	os.Exit(code)
