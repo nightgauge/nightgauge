@@ -16,6 +16,17 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- `runPipelineWithModel.test.ts` now drives the real
+  `OpenCodeModelCatalogService` (child_process mocked, catalog service
+  unmocked) for the "Run Pipeline with Model" OpenCode picker, closing the gap
+  where the service was mocked entirely and the `provider/model` id filter
+  itself was never exercised (#1628)
+- The VS Code extension now offers OpenCode (labeled Experimental) in the
+  switch-adapter quick-pick, the per-stage and global adapter dropdowns, and
+  the Adapter Doctor view, gated by `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1`; a
+  new `OpenCodeModelCatalogService` sources `provider/model` ids from
+  `opencode models` for "Run Pipeline with Model" and the settings panel
+  (#1628)
 - The VS Code extension's `ExecutionAdapter` now includes `opencode` as a
   first-class value: `ui.core.adapter`, `pipeline.stage_adapters.<stage>` and
   `pipeline.adapter_fallback_chain` all accept it, and an auto-router pick of

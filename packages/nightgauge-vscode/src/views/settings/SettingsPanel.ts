@@ -18,6 +18,7 @@ import { resolveStageAdapter } from "../../utils/resolvers/adapterResolver";
 import { getModeStageAdapterModel } from "../../utils/modeProfiles";
 import { getPerformanceMode } from "../../utils/resolvers/monitoringResolver";
 import { toNightgaugeAdapter } from "../../services/HeadlessOrchestrator";
+import { isOpenCodeSwitchOn, openCodeGateMessage } from "../../utils/openCodeExperimentalGate";
 import { validateAdapterAuth } from "@nightgauge/sdk";
 import type { PipelineStage } from "@nightgauge/sdk";
 import type { ExecutionAdapter } from "../../utils/resolvers/modelResolver";
@@ -33,6 +34,11 @@ import type { ConfigSourceMap } from "../../config/schema";
 import type { RuntimeStateStore } from "../../config/RuntimeStateStore";
 import { LmStudioService } from "../../services/LmStudioService";
 import { CodexModelCatalogService } from "../../services/CodexModelCatalogService";
+import {
+  OpenCodeModelCatalogService,
+  type OpenCodeModelEntry,
+} from "../../services/OpenCodeModelCatalogService";
+import { getOpenCodeModel } from "../../utils/resolvers/modelResolver";
 import { Logger } from "../../utils/logger";
 import type { LmStudioModelInfo } from "../../services/LmStudioService";
 import { SecretStorageService, SECRET_KEYS } from "../../services/SecretStorageService";
@@ -106,8 +112,10 @@ export class SettingsPanel implements vscode.Disposable {
   private readonly lmStudioLogger = new Logger("Nightgauge LM Studio");
   private readonly lmStudioService = new LmStudioService(this.lmStudioLogger);
   private readonly codexModelCatalogService = new CodexModelCatalogService();
+  private readonly openCodeModelCatalogService = new OpenCodeModelCatalogService();
   private lmStudioModels: LmStudioModelInfo[] = [];
   private codexModels: string[] = [];
+  private openCodeModels: OpenCodeModelEntry[] = [];
   private forgeInstances: ForgeInstanceRow[] = [];
   private readonly repositoryProjectService = new RepositoryProjectSettingsService();
   private readonly workspaceRepoService = new WorkspaceRepoSettingsService();
@@ -313,6 +321,9 @@ export class SettingsPanel implements vscode.Disposable {
     if (this.currentConfig.ui?.core?.adapter === "codex") {
       this.refreshCodexModels(true);
     }
+    if (this.currentConfig.ui?.core?.adapter === "opencode") {
+      void this.refreshOpenCodeModels(true);
+    }
 
     // Handle panel disposal
     this.panel.onDidDispose(() => this.handlePanelClosed(), undefined, this.disposables);
@@ -425,6 +436,7 @@ export class SettingsPanel implements vscode.Disposable {
       this.tierState,
       {
         codexModels: this.codexModels,
+        openCodeModels: this.openCodeModels,
         lmStudioModels: this.lmStudioModels,
         stageAdapterPreview,
         performanceMode: previewMode,
@@ -733,6 +745,19 @@ export class SettingsPanel implements vscode.Disposable {
     const numericSelectPaths = ["pipeline.max_concurrent"];
     const coerced =
       numericSelectPaths.includes(path) && typeof value === "string" ? parseInt(value, 10) : value;
+
+    // OpenCode does not dispatch at all without the experimental switch
+    // (ADR-022): persisting `opencode` here now would silently produce a
+    // pipeline that refuses to run, and only fail later with an AdapterError
+    // when a pipeline actually dispatches. Match the Switch Adapter quick
+    // pick's gate exactly (Issue #1628) so every adapter-selection surface
+    // behaves the same way: refuse to write it and explain how to enable it.
+    const isAdapterSelectionPath =
+      path === "ui.core.adapter" || path.startsWith("pipeline.stage_adapters.");
+    if (isAdapterSelectionPath && coerced === "opencode" && !isOpenCodeSwitchOn()) {
+      vscode.window.showInformationMessage(openCodeGateMessage());
+      return;
+    }
 
     // For pipeline.stage_adapters.<stage> and pipeline.stage_models.<stage>, an
     // empty string represents "(Use global default)" — delete the leaf rather
@@ -1189,6 +1214,9 @@ export class SettingsPanel implements vscode.Disposable {
       case "codex-refresh-models":
         this.refreshCodexModels(false);
         break;
+      case "opencode-refresh-models":
+        await this.refreshOpenCodeModels(false);
+        break;
       case "lm-studio-load-model":
         await this.handleLmStudioLoadModel(payload);
         break;
@@ -1619,6 +1647,18 @@ export class SettingsPanel implements vscode.Disposable {
       vscode.window.showInformationMessage(
         `Codex models refreshed: ${this.codexModels.length} available.`
       );
+    }
+  }
+
+  private async refreshOpenCodeModels(silent: boolean): Promise<void> {
+    this.openCodeModels = await this.openCodeModelCatalogService.listModels(
+      getOpenCodeModel(this.workspaceRoot)
+    );
+    this.updatePanel();
+
+    if (!silent) {
+      const selectable = this.openCodeModels.filter((m) => m.selectable).length;
+      vscode.window.showInformationMessage(`OpenCode models refreshed: ${selectable} available.`);
     }
   }
 

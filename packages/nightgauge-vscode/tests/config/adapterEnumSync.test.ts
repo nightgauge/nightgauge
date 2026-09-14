@@ -21,7 +21,14 @@ import { STAGE_ADAPTER_OPTIONS, STAGE_MODEL_OPTIONS } from "../../src/views/sett
 import { VALID_ADAPTERS } from "../../src/utils/resolvers/modelResolver";
 
 const CANONICAL = [...AdapterEnumSchema.options].sort();
-const AGENTIC_PIPELINE_ADAPTERS = ["claude", "codex", "copilot", "gemini", "grok"].sort();
+const AGENTIC_PIPELINE_ADAPTERS = [
+  "claude",
+  "codex",
+  "copilot",
+  "gemini",
+  "grok",
+  "opencode",
+].sort();
 
 const SRC_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../src");
 
