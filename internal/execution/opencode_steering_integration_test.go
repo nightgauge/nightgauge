@@ -307,11 +307,15 @@ func TestOpenCodeIntegrationMcpFromBaseBranchReachesOpenCode(t *testing.T) {
 // openCodeMcpShim installs, first on PATH, an opencode that runs the real
 // binary's `debug config` in the stage's environment, keeps the
 // OPENCODE_CONFIG_CONTENT it was given, and exits 0 without running the
-// stage. It returns the directory it writes to.
+// stage. Any call other than `run`, such as the version preflight's
+// `--version`, goes straight to the real binary (the same rule
+// openCodeShim follows), so it cannot answer for the shim. It returns the
+// directory it writes to.
 func openCodeMcpShim(t *testing.T, real string) string {
 	t.Helper()
 	bin, out := t.TempDir(), t.TempDir()
 	script := fmt.Sprintf(`#!/bin/sh
+[ "$1" = run ] || exec "%[1]s" "$@"
 "%[1]s" debug config < /dev/null > "%[2]s/config.json" 2> "%[2]s/config.err"
 printf '%%s' "$OPENCODE_CONFIG_CONTENT" > "%[2]s/content.json"
 cat > /dev/null
