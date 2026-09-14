@@ -891,6 +891,12 @@ it is printed for every subagent session as well as the run's own; and the
 patterns are the call's input printed unescaped, so a call whose input holds
 a newline (a heredoc, a commit message with a body) spreads the notice over
 several lines, only the last ending in `); auto-rejecting`.
+#1629's subagent capture adds a fifth: a subagent's rejection does not end
+the run. The subagent's session ends, the run's `task` call fails with
+`Subagent failed (task_id: <session>): ` followed by the rejection message,
+and the run goes on and exits 0. That notice is still the first on stderr, so
+it decides the stage's marker below, and a stage whose own session finished
+its task reports exit 1.
 
 - Permission maps Nightgauge generates contain only `allow` and `deny`, never
   `ask`. That covers the permissions OpenCode defaults to `ask`, such as
