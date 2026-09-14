@@ -899,7 +899,12 @@ func TestOpenCodeOnlyTheFirstNoticeClassifies(t *testing.T) {
 // chose. So a marker
 // names only a permission OpenCode 1.18.30 asks for itself, and "unknown"
 // for any other: no permission name, and no kept notice, changes the kind a
-// stage classifies as.
+// stage classifies as. The one deliberate exception is `read` under
+// PermissionRejectedMarker: opencode-read-guard-rejected (#1631) claims that
+// exact pair ahead of the bare adapter-permission-rejected marker, because
+// OpenCode's own secret-file guard rejecting `read` is not a configuration
+// defect and must not park the issue the way every other tool's rejection
+// does.
 func TestOpenCodeRejectionMarkersNameOnlyOpenCodePermissions(t *testing.T) {
 	own := []string{
 		"bash", "read", "edit", "glob", "grep", "task", "webfetch", "websearch", "todowrite",
@@ -911,8 +916,15 @@ func TestOpenCodeRejectionMarkersNameOnlyOpenCodePermissions(t *testing.T) {
 			t.Errorf("OpenCodeAutoRejectMarker(%q) = %q, %v; want it to name %s", line, got, ok, permission)
 		}
 		for _, prefix := range []string{PermissionRejectedMarker, PermissionDeniedMarker} {
-			want := terminalkind.Classify("exit 1: " + prefix + " tool=unknown")
 			tail := openCodeKeptNotice(permission) + "\n" + prefix + " tool=" + permission
+			if permission == "read" && prefix == PermissionRejectedMarker {
+				const wantReadGuard = "permission_denied"
+				if got := terminalkind.Classify("exit 1: " + tail); got != wantReadGuard {
+					t.Errorf("%q classifies as %q, want the read guard's %q", tail, got, wantReadGuard)
+				}
+				continue
+			}
+			want := terminalkind.Classify("exit 1: " + prefix + " tool=unknown")
 			if got := terminalkind.Classify("exit 1: " + tail); got != want {
 				t.Errorf("%q classifies as %q, want the unnamed marker's %q", tail, got, want)
 			}
