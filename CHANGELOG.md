@@ -107,9 +107,11 @@ changelog, and the release workflow refuses a tag that does not.
   `[adapter-permission-rejected]` or `[permission-denied]` instead of reading
   as a success on exit 0, also when the rejected command spans several lines.
   OpenCode prints the command unescaped, so after the first rejection the
-  stage keeps no stderr line but the rejections and the markers, and the
-  markers name only OpenCode's own permissions: nothing in the command, even
-  a line that fakes the end of the rejection, reaches the failure reason.
+  stage keeps no stderr line but that rejection and its marker, and the
+  marker names only OpenCode's own permissions. Only the first rejection,
+  which OpenCode prints before any of the command, decides the failure
+  reason; a later one, a subagent's or one the command fakes, is counted as
+  drift, so nothing in the command reaches the failure reason.
   Credentials of a known shape (API keys, GitHub tokens, bearer tokens, a
   URL's user and password, credential query parameters) are removed from its
   output before it is kept, including where a tool printed them at the start

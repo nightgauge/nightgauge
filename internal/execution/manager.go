@@ -640,12 +640,15 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	// than the worktree, and not at all once the operator stopped the stage.
 	var openCodeDone *openCodeOutcome
 	if openCode != nil {
+		// The value BuildCommand passed as -m; the model check before
+		// dispatch refused any model it would not pass.
+		dispatched, _ := adapters.OpenCodeModelArg(runOpts.Model)
 		exit := openCodeExit{
 			bin:        cmd.Path,
 			env:        cmd.Env,
 			runRoot:    os.TempDir(),
 			exitCode:   -1,
-			dispatched: runOpts.Model,
+			dispatched: dispatched,
 			stopped:    execution.stopRequested.Load(),
 		}
 		if runOpts.RunRoot != nil && runOpts.RunRoot.Dir != "" {

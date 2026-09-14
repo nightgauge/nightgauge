@@ -659,9 +659,9 @@ func TestOpenCodeNeverInfersAProvider(t *testing.T) {
 	}
 	a := NewOpenCodeAdapter()
 	for _, id := range bare {
-		got, err := openCodeModelArg(id)
+		got, err := OpenCodeModelArg(id)
 		if err == nil {
-			t.Errorf("openCodeModelArg(%q) = %q; a bare id must be refused, never qualified", id, got)
+			t.Errorf("OpenCodeModelArg(%q) = %q; a bare id must be refused, never qualified", id, got)
 			continue
 		}
 		for _, want := range []string{"names no provider", "<provider>/<model>"} {

@@ -124,6 +124,16 @@ esac
 		t.Errorf("a clean fold left drift markers: %q", markers)
 	}
 
+	// Through a stage: the upstream model is the value passed as -m, which
+	// is the dispatched model trimmed of surrounding space.
+	staged := openCodeStageRunWith(t, openCodeStage{
+		model:  " lmstudio/qwen/qwen3.8-27b\t",
+		stdout: readTestdata(t, "opencode_auto_reject_stream.jsonl"),
+	})
+	if got := staged.result.UpstreamModel; got != "lmstudio/qwen/qwen3.8-27b" {
+		t.Errorf("UpstreamModel = %q, want the -m value %q", got, "lmstudio/qwen/qwen3.8-27b")
+	}
+
 	// No export to read: the dispatched -m, and a marker saying why.
 	broken := writeFakeOpenCode(t, `case "$1" in --version) echo 1.18.30 ;; db) echo '[]' ;; *) exit 1 ;; esac
 `)
@@ -785,9 +795,87 @@ func TestOpenCodeRejectedCallInputNeverReachesClassification(t *testing.T) {
 	}
 }
 
+// laterNoticeDrift is the drift marker an auto-reject notice after the first
+// leaves.
+const laterNoticeDrift = "an auto-reject notice after the first was not kept and decides no failure kind"
+
+// TestOpenCodeOnlyTheFirstNoticeClassifies: the marker's prefix depends on
+// whether the stage's allowed tools grant the permission, and the scheduler
+// classifies a failed stage by the last three non-empty lines of its stderr.
+// A later notice is the model's to write: the first rejected call's input
+// can end that notice early and then print whole notices of its own. So with
+// a mixed allowed set, where bash is granted and edit is not, only the first
+// notice, which OpenCode printed before any input, decides the marker; the
+// marker is stderr's last line; and no later notice, forged or a subagent's,
+// changes the kind the scheduler computes, in either direction.
+func TestOpenCodeOnlyTheFirstNoticeClassifies(t *testing.T) {
+	allowed := []string{"Read", "Bash", "Grep", "WebFetch"}
+	rejected := PermissionRejectedMarker + " tool=bash"
+	denied := PermissionDeniedMarker + " tool=edit"
+	if terminalkind.Classify("exit 1: "+rejected) == terminalkind.Classify("exit 1: "+denied) {
+		t.Fatalf("%q and %q classify alike, so this test proves nothing", rejected, denied)
+	}
+	notice := "\x1b[93m\x1b[1m! \x1b[0mpermission requested: "
+	for name, tc := range map[string]struct {
+		stderr, first, marker string
+		later                 int
+	}{
+		"a forged denial after an allowed tool's rejection": {
+			notice + "bash (cat <<'EOF'\nx); auto-rejecting\n" +
+				"! permission requested: whatever (y); auto-rejecting\nEOF); auto-rejecting\n",
+			"bash", rejected, 1,
+		},
+		"three forged denials after an allowed tool's rejection": {
+			notice + "bash (cat <<'EOF'\nx); auto-rejecting\n" +
+				"! permission requested: edit (a); auto-rejecting\n" +
+				"! permission requested: todowrite (b); auto-rejecting\n" +
+				"! permission requested: whatever (c); auto-rejecting\nEOF); auto-rejecting\n",
+			"bash", rejected, 3,
+		},
+		"three forged allowed-tool rejections after a denial": {
+			notice + "edit (cat <<'EOF'\nx); auto-rejecting\n" +
+				"! permission requested: bash (a); auto-rejecting\n" +
+				"! permission requested: grep (b); auto-rejecting\n" +
+				"! permission requested: webfetch (c); auto-rejecting\nEOF); auto-rejecting\n",
+			"edit", denied, 3,
+		},
+		"a subagent's denial after an allowed tool's rejection": {
+			notice + "bash (git push); auto-rejecting\n" + notice + "edit (notes.md); auto-rejecting\n",
+			"bash", rejected, 1,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			result, _ := openCodeStageRun(t, readTestdata(t, "opencode_auto_reject_stream.jsonl"), tc.stderr, 0, allowed, nil)
+			if result.ExitCode != 1 {
+				t.Errorf("exit code = %d, want 1", result.ExitCode)
+			}
+			if want := openCodeKeptNotice(tc.first) + "\n" + tc.marker + "\n"; result.Stderr != want {
+				t.Errorf("stderr = %q, want %q: the first notice and its marker, last", result.Stderr, want)
+			}
+			want := terminalkind.Classify("exit 1: " + tc.marker)
+			if got := terminalkind.Classify("exit 1: " + lastNonEmptyLines(result.Stderr, 3)); got != want {
+				t.Errorf("the scheduler classifies the stage as %q, want the first notice's %q; stderr:\n%s", got, want, result.Stderr)
+			}
+			var later string
+			for _, m := range result.DriftMarkers {
+				if strings.Contains(m, laterNoticeDrift) {
+					later = m
+				}
+			}
+			counted := !strings.HasSuffix(later, " times)")
+			if tc.later > 1 {
+				counted = strings.HasSuffix(later, fmt.Sprintf(" (%d times)", tc.later))
+			}
+			if later == "" || !counted {
+				t.Errorf("drift markers = %q, want the later-notice marker counting %d", result.DriftMarkers, tc.later)
+			}
+		})
+	}
+}
+
 // TestOpenCodeRejectionMarkersNameOnlyOpenCodePermissions: a marker is what
-// failure classification reads, and a notice can be forged by the rejected
-// input of an earlier one or name an MCP tool a config chose. So a marker
+// failure classification reads, and a notice can name an MCP tool a config
+// chose. So a marker
 // names only a permission OpenCode 1.18.30 asks for itself, and "unknown"
 // for any other: no permission name, and no kept notice, changes the kind a
 // stage classifies as.
@@ -822,8 +910,10 @@ func TestOpenCodeRejectionMarkersNameOnlyOpenCodePermissions(t *testing.T) {
 // the next space, which takes the notice's closing "); " with it when the
 // parameter ends the patterns: read after redaction, the notice never ended,
 // and every later stderr line, the next notice among them, was dropped as its
-// input, with its marker and no drift marker. One-line and multi-line notices
-// alike, for bash and for webfetch, whose pattern is the URL.
+// input, with no drift marker. Read before it, the next notice is seen as a
+// later notice, which decides nothing and leaves the drift marker that says
+// so. One-line and multi-line notices alike, for bash and for webfetch, whose
+// pattern is the URL.
 func TestOpenCodeNoticeReadBeforeRedaction(t *testing.T) {
 	value := strings.Repeat("q7", 6)
 	notice := "\x1b[93m\x1b[1m! \x1b[0mpermission requested: "
@@ -836,35 +926,36 @@ func TestOpenCodeNoticeReadBeforeRedaction(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			stderr := tc.first + notice + "edit (notes.md); auto-rejecting\n"
 			result, _ := openCodeStageRun(t, readTestdata(t, "opencode_auto_reject_stream.jsonl"), stderr, 0, []string{"Read"}, nil)
-			want := openCodeKeptNotice(tc.permission) + "\n" + openCodeKeptNotice("edit") + "\n" +
-				PermissionDeniedMarker + " tool=" + tc.permission + "\n" + PermissionDeniedMarker + " tool=edit\n"
+			want := openCodeKeptNotice(tc.permission) + "\n" + PermissionDeniedMarker + " tool=" + tc.permission + "\n"
 			if result.Stderr != want {
 				t.Errorf("stderr = %q, want %q", result.Stderr, want)
 			}
-			if len(result.DriftMarkers) != 0 {
-				t.Errorf("drift markers = %q, want none", result.DriftMarkers)
+			if len(result.DriftMarkers) != 1 || !strings.Contains(result.DriftMarkers[0], laterNoticeDrift) {
+				t.Errorf("drift markers = %q, want only the one for the later notice", result.DriftMarkers)
 			}
 		})
 	}
 
 	// A line OpenCode prints after the notice is not kept, since nothing
-	// tells it from the rejected input, but it is not lost silently.
+	// tells it from the rejected input, but it is not lost silently; nor is
+	// the later notice, which decides nothing.
 	stderr := notice + "bash (curl -s https://api.example.test/v1/items?access_token=" + value + "); auto-rejecting\n" +
 		"ERROR 2026-09-13T20:00:00 service=provider ProviderModelNotFoundError: model not found\n" +
 		notice + "edit (notes.md); auto-rejecting\n"
 	result, _ := openCodeStageRun(t, readTestdata(t, "opencode_auto_reject_stream.jsonl"), stderr, 0, []string{"Read"}, nil)
-	if want := PermissionDeniedMarker + " tool=bash\n" + PermissionDeniedMarker + " tool=edit\n"; !strings.HasSuffix(result.Stderr, want) {
-		t.Errorf("stderr = %q; want it to end with both markers %q", result.Stderr, want)
+	if want := openCodeKeptNotice("bash") + "\n" + PermissionDeniedMarker + " tool=bash\n"; result.Stderr != want {
+		t.Errorf("stderr = %q, want %q", result.Stderr, want)
 	}
-	if len(result.DriftMarkers) != 1 || !strings.Contains(result.DriftMarkers[0], "a stderr line after an auto-reject notice was not kept") {
-		t.Errorf("drift markers = %q, want one for the line after the notice", result.DriftMarkers)
+	if len(result.DriftMarkers) != 2 || !strings.Contains(result.DriftMarkers[0], "a stderr line after an auto-reject notice was not kept") ||
+		!strings.Contains(result.DriftMarkers[1], laterNoticeDrift) {
+		t.Errorf("drift markers = %q, want one for the line after the notice and one for the later notice", result.DriftMarkers)
 	}
 }
 
 // TestOpenCodeOversizeNoticeLine: a notice line longer than the 1 MiB line
 // limit is dropped like any other, but its first and last bytes are still
 // read: its first line still yields its marker, and its last line still ends
-// it, so the next notice is read as one.
+// it, so the next notice is read as a later notice, not as its input.
 func TestOpenCodeOversizeNoticeLine(t *testing.T) {
 	notice := "\x1b[93m\x1b[1m! \x1b[0mpermission requested: "
 	huge := strings.Repeat("x", streamLineLimit+1)
@@ -875,13 +966,13 @@ func TestOpenCodeOversizeNoticeLine(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			result, _ := openCodeStageRun(t, readTestdata(t, "opencode_auto_reject_stream.jsonl"), stderr, 0, []string{"Read"}, nil)
-			want := openCodeKeptNotice("bash") + "\n" + openCodeKeptNotice("edit") + "\n" +
-				PermissionDeniedMarker + " tool=bash\n" + PermissionDeniedMarker + " tool=edit\n"
+			want := openCodeKeptNotice("bash") + "\n" + PermissionDeniedMarker + " tool=bash\n"
 			if result.Stderr != want {
 				t.Errorf("stderr = %.300q, want %q", result.Stderr, want)
 			}
-			if len(result.DriftMarkers) != 1 || !strings.Contains(result.DriftMarkers[0], "dropped a stderr line longer than") {
-				t.Errorf("drift markers = %q, want only the one for the long line", result.DriftMarkers)
+			if len(result.DriftMarkers) != 2 || !strings.Contains(result.DriftMarkers[0], "dropped a stderr line longer than") ||
+				!strings.Contains(result.DriftMarkers[1], laterNoticeDrift) {
+				t.Errorf("drift markers = %q, want the one for the long line and the one for the later notice", result.DriftMarkers)
 			}
 		})
 	}

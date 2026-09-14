@@ -777,15 +777,17 @@ several lines, only the last ending in `); auto-rejecting`.
   that itself ends in `); auto-rejecting` ends it early, and nothing tells
   their later lines from what OpenCode prints next. So from the first notice
   on, the stage keeps no stderr line but the parser's own, and a drift marker
-  counts the lines it dropped. A later line that reads as a notice still
-  yields a marker, and one the patterns forged can add a marker naming one of
-  OpenCode's own permissions, but nothing they chose reaches what
-  classification reads. When the stream shows OpenCode's rejection error on
-  the stage's own tool call and stderr named no permission, the run still
-  fails, with `[permission-denied] tool=unknown` and a drift marker: the event
-  names the tool, and a rejection of `external_directory` or `doom_loop` is
-  one the tool's name does not show. Nothing else of the transcript is read.
-  #1631 owns the failure kinds.
+  counts the lines it dropped. The first notice decides: OpenCode printed it
+  before any rejected input, so its permission alone yields the stage's one
+  marker, which is the last line of the stage's stderr. A later notice,
+  whether a subagent's or one the patterns forged, is drift only: a drift
+  marker counts it, and it yields no marker, so it cannot change the kind the
+  last lines of stderr classify as. When the stream shows OpenCode's
+  rejection error on the stage's own tool call and stderr named no
+  permission, the run still fails, with `[permission-denied] tool=unknown`
+  and a drift marker: the event names the tool, and a rejection of
+  `external_directory` or `doom_loop` is one the tool's name does not show.
+  Nothing else of the transcript is read. #1631 owns the failure kinds.
 - The project directory OpenCode uses is the resolved path, so an absolute
   path through a symlinked prefix (such as macOS `/tmp`) reads as an external
   directory. The permission map is built against resolved paths.

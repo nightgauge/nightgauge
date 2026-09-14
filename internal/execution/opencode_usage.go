@@ -1,7 +1,7 @@
 // opencode_usage.go completes an opencode stage's RunResult after the process
 // exits (ADR-022 § 1-3, § 9, § 22): the usage of subagent sessions, which the
 // stream never carries; the served model, which the stream does not name; the
-// CLI's version; the markers for permissions OpenCode rejected on its own; and
+// CLI's version; the marker for the permission OpenCode rejected on its own; and
 // the redaction of credentials from every line the child prints.
 //
 // Every opencode process started here (--version, db, export) runs in its own
@@ -84,9 +84,8 @@ const openCodeAutoRejectEnd = "); auto-rejecting"
 
 // openCodePermissions are the permissions opencode 1.18.30 asks for itself,
 // read from its bundled source. A notice naming any other, such as an MCP
-// tool's, which a config names, or one the rejected input of an earlier
-// notice forged, is recorded as openCodeUnknownPermission: a marker is what
-// failure classification reads, so no name the model or a config chose may
+// tool's, which a config names, is recorded as openCodeUnknownPermission: a
+// marker is what failure classification reads, so no name a config chose may
 // reach it.
 var openCodePermissions = map[string]bool{
 	"bash": true, "read": true, "edit": true, "glob": true, "grep": true,
@@ -371,14 +370,14 @@ func appendTail(tail, data []byte, n int) []byte {
 type openCodeRun struct {
 	stream  *OpenCodeStream
 	allowed map[string]bool
-	// markers are the classification markers, one per rejected permission,
-	// in the order first seen. Only the stderr reader appends to it.
-	markers []string
-	// inNotice is set while an auto-reject notice spans lines: the lines up
-	// to the one ending in openCodeAutoRejectEnd are the rejected call's
-	// input. noticed is set once any notice started. Only the stderr reader
-	// touches them.
-	inNotice, noticed bool
+	// marker is the classification marker of the first auto-reject notice,
+	// empty until one is read; it is set once and never replaced. Only the
+	// stderr reader touches it.
+	marker string
+	// inNotice is set while the first notice spans lines: the lines up to
+	// the one ending in openCodeAutoRejectEnd are the rejected call's input.
+	// Only the stderr reader touches it.
+	inNotice bool
 	// fold starts the post-exit opencode processes; tests replace it.
 	fold openCodeFold
 }
@@ -401,8 +400,8 @@ type stderrLine int
 const (
 	// stderrKept is an ordinary line, kept as it is.
 	stderrKept stderrLine = iota
-	// stderrNotice is the first line of an auto-reject notice, kept as
-	// openCodeKeptNotice.
+	// stderrNotice is the first line of the first auto-reject notice, kept
+	// as openCodeKeptNotice.
 	stderrNotice
 	// stderrDropped is a line nothing of which is kept.
 	stderrDropped
@@ -414,16 +413,21 @@ const (
 // dropped for its length. It returns the kept notice for a stderrNotice line.
 // Nothing of the line is stored here: the caller redacts what it keeps.
 //
-// An auto-reject notice yields a marker for its permission and is kept as
-// openCodeKeptNotice: the call's input never reaches the stage's stderr,
-// which failure classification reads. The lines a notice spans after its
-// first are that input, so they are dropped, and none of them is read as a
-// notice of its own. The input is printed unescaped, so a line of it that
-// itself ends in openCodeAutoRejectEnd ends the notice early, and nothing
-// tells the input's later lines from what OpenCode prints next. So from the
-// first notice on, no other line is kept, with a drift marker counting them;
-// a later notice still yields its own marker. One the rejected input forged
-// can name nothing outside openCodePermissions.
+// The first auto-reject notice decides the stage's classification marker,
+// for its permission, and is kept as openCodeKeptNotice: the call's input
+// never reaches the stage's stderr, which failure classification reads. It
+// is the one notice OpenCode printed before any rejected call's input could
+// be printed, so it is the only one whose permission the model cannot have
+// chosen. The lines it spans after its first are that input, so they are
+// dropped, and none of them is read as a notice of its own. The input is
+// printed unescaped, so a line of it that itself ends in
+// openCodeAutoRejectEnd ends the notice early, and nothing tells the input's
+// later lines from what OpenCode prints next, a later notice included. So
+// from the first notice on, no other line is kept: a later notice, whether a
+// subagent's real one or one the input forged, is dropped with a drift
+// marker counting it and yields no classification marker, and every other
+// line is dropped with a drift marker of its own. The one marker therefore
+// ends the stage's stderr, where the scheduler's tail reads it.
 func (r *openCodeRun) observeStderr(start, end string) (string, stderrLine) {
 	if r.inNotice {
 		r.inNotice = !strings.HasSuffix(openCodePlain(end), openCodeAutoRejectEnd)
@@ -432,42 +436,35 @@ func (r *openCodeRun) observeStderr(start, end string) (string, stderrLine) {
 	plain := openCodePlain(start)
 	permission, ok := openCodeRejectedPermission(plain)
 	switch {
-	case !ok && !r.noticed:
+	case !ok && r.marker == "":
 		return "", stderrKept
 	case !ok:
 		if plain != "" {
 			r.stream.Drift("a stderr line after an auto-reject notice was not kept: OpenCode prints the rejected call's input unescaped, so it cannot be told from that input")
 		}
 		return "", stderrDropped
+	case r.marker != "":
+		r.stream.Drift("an auto-reject notice after the first was not kept and decides no failure kind: it may be a subagent's, or one the first rejected call's input forged")
+		return "", stderrDropped
 	}
-	r.noticed = true
 	r.inNotice = !strings.HasSuffix(openCodePlain(end), openCodeAutoRejectEnd)
 	if permission == openCodeUnknownPermission {
 		r.stream.Drift("an auto-reject line on stderr names no permission this parser recognizes")
 	}
-	r.addMarker(openCodeRejectionMarker(permission, r.allowed))
+	r.marker = openCodeRejectionMarker(permission, r.allowed)
 	return openCodeKeptNotice(permission), stderrNotice
-}
-
-// addMarker records marker once.
-func (r *openCodeRun) addMarker(marker string) {
-	for _, m := range r.markers {
-		if m == marker {
-			return
-		}
-	}
-	r.markers = append(r.markers, marker)
 }
 
 // openCodeOutcome is what finish learned, applied to the RunResult.
 type openCodeOutcome struct {
 	exitedZero bool
-	markers    []string
-	version    string
-	served     OpenCodeServedModel
-	cost       float64
-	partial    bool
-	drift      []string
+	// marker is the classification marker, or empty.
+	marker  string
+	version string
+	served  OpenCodeServedModel
+	cost    float64
+	partial bool
+	drift   []string
 }
 
 // openCodeExit is how an opencode stage's child ended, and what finish needs
@@ -482,7 +479,7 @@ type openCodeExit struct {
 	runRoot string
 	// exitCode is -1 when the child did not exit on its own.
 	exitCode int
-	// dispatched is the model the stage was dispatched with (-m).
+	// dispatched is the value the stage passed as -m (adapters.OpenCodeModelArg).
 	dispatched string
 	// stopped is set when the operator stopped the stage: then no process is
 	// started after it.
@@ -513,20 +510,20 @@ func (r *openCodeRun) finish(ctx context.Context, exit openCodeExit, acc *TokenA
 	if r.inNotice {
 		r.stream.Drift("an auto-reject notice on stderr did not end with %q", openCodeAutoRejectEnd)
 	}
-	markers := r.markers
-	if r.stream.RejectedToolCalls > 0 && len(markers) == 0 {
+	marker := r.marker
+	if r.stream.RejectedToolCalls > 0 && marker == "" {
 		// OpenCode rejected the stage's own tool call, and stderr did not say
 		// which permission. The run still stopped there, so it still fails.
 		// The event names the tool, not the permission, and a rejection of
 		// external_directory or doom_loop is one the tool's name does not
 		// show, so the marker names none.
 		r.stream.Drift("the stream shows a tool call OpenCode rejected, but stderr carried no auto-reject line naming its permission")
-		markers = []string{openCodeRejectionMarker(openCodeUnknownPermission, r.allowed)}
+		marker = openCodeRejectionMarker(openCodeUnknownPermission, r.allowed)
 	}
 	r.stream.Finish(exit.exitCode)
 	return openCodeOutcome{
 		exitedZero: exit.exitCode == 0,
-		markers:    markers,
+		marker:     marker,
 		version:    res.version,
 		served:     res.served,
 		cost:       r.stream.ReportedCostUSD + res.childCost,
@@ -561,8 +558,8 @@ func openCodeHelperEnv(env []string) []string {
 
 // apply writes the outcome onto the RunResult. A rejected permission ends
 // the run on 1.18.30 even though the process exits 0, so an exit-0 run with
-// one is reported as exit 1 (ADR-022 § 9), and its markers end Stderr, where
-// failure classification reads the reason.
+// one is reported as exit 1 (ADR-022 § 9), and its marker is the last line of
+// Stderr, where failure classification reads the reason.
 func (o openCodeOutcome) apply(result *adapters.RunResult) {
 	result.ServedModel = o.served.Model
 	result.ModelProvider = o.served.Provider
@@ -571,20 +568,21 @@ func (o openCodeOutcome) apply(result *adapters.RunResult) {
 	result.AdapterReportedCostUSD = o.cost
 	result.UsagePartial = o.partial
 	result.DriftMarkers = o.drift
-	if len(o.markers) == 0 {
+	if o.marker == "" {
 		return
 	}
 	if result.Stderr != "" && !strings.HasSuffix(result.Stderr, "\n") {
 		result.Stderr += "\n"
 	}
-	result.Stderr += strings.Join(o.markers, "\n") + "\n"
+	result.Stderr += o.marker + "\n"
 	if o.exitedZero && result.ExitCode == 0 {
 		result.ExitCode = 1
 	}
 }
 
 // report logs the drift markers and streams every marker to the stage's
-// output, so an operator watching the stage sees them.
+// output, the classification marker last, so an operator watching the stage
+// sees them.
 func (o openCodeOutcome) report(opts StageOptions) {
 	for _, m := range o.drift {
 		fmt.Fprintf(os.Stderr, "%s %s#%d %s: %s\n", OpenCodeDriftMarker, opts.Repo, opts.IssueNumber, opts.Stage,
@@ -593,8 +591,11 @@ func (o openCodeOutcome) report(opts StageOptions) {
 	if opts.Streamer == nil {
 		return
 	}
-	for _, m := range append(append([]string{}, o.drift...), o.markers...) {
+	for _, m := range o.drift {
 		opts.Streamer.OnOutput("stderr", []byte(m+"\n"))
+	}
+	if o.marker != "" {
+		opts.Streamer.OnOutput("stderr", []byte(o.marker+"\n"))
 	}
 }
 
@@ -608,8 +609,9 @@ type OpenCodeServedModel struct {
 	// model as "<provider>/<id>", and an "other" model as its raw
 	// provider-qualified id.
 	Model string
-	// Upstream is the raw -m value exactly as dispatched (ADR-022 § 2), also
-	// when the export shows that another model served the stage.
+	// Upstream is the raw -m value exactly as passed to OpenCode (ADR-022
+	// § 2), the dispatched model trimmed of surrounding space, also when the
+	// export shows that another model served the stage.
 	Upstream string
 }
 
