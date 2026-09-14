@@ -1,0 +1,8 @@
+{
+  "instructions": ["@PROJECT_DIR@/inline-rules.md"],
+  "plugin": ["file://@PROJECT_DIR@/plugins/inline-plugin.js"],
+  "mcp": {
+    "inline-mcp": { "type": "local", "command": ["/usr/bin/true"], "enabled": false },
+    "shared-mcp": { "type": "local", "command": ["/usr/bin/true"], "enabled": false }
+  }
+}

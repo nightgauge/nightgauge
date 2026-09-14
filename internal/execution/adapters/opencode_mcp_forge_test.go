@@ -2,22 +2,13 @@ package adapters
 
 import (
 	"context"
-	"errors"
-	"os"
-	"testing"
 
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
 )
 
-// TestMain makes the forge an OpenCode dispatch reads its MCP servers from
-// refuse every read for the whole test binary, so no test reaches GitHub; a
-// test that reads servers sets req.McpForge itself (withMcpForge).
-func TestMain(m *testing.M) {
-	restore := SwapOpenCodeMcpForgeForTest(mapForge{err: errors.New("the adapters test binary reads no forge: set OpenCodeRunRequest.McpForge")})
-	code := m.Run()
-	restore()
-	os.Exit(code)
-}
+// TestMain for this package lives in opencode_preflight_test.go: it also
+// swaps the MCP forge for a refusing stub, so no test reaches GitHub; a test
+// that reads servers sets req.McpForge itself (withMcpForge).
 
 // fixtureRepo is the repository the pipeline records for a fixture's run.
 const fixtureRepo = "fixture-owner/fixture-repo"

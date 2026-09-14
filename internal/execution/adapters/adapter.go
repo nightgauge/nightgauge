@@ -4,6 +4,7 @@ package adapters
 import (
 	"context"
 	"io"
+	"strings"
 )
 
 // SkillRunner is the interface for AI CLI adapters (Claude, Codex, Gemini).
@@ -120,6 +121,10 @@ type RunRoot struct {
 
 // RunResult captures the output of a skill execution.
 type RunResult struct {
+	// ExitCode is the child's exit status, with one exception: a stream
+	// parser that finds an exit-0 run failed reports 1. Only the opencode
+	// parser does, for a run that stopped on a permission OpenCode rejected
+	// by itself (ADR-022 § 9), and the marker naming it ends Stderr.
 	ExitCode     int
 	Stdout       string
 	Stderr       string
@@ -151,6 +156,35 @@ type RunResult struct {
 	RefusalFallbackTo       string
 	RefusalFallbackCategory string
 
+	// PeakStepInputTokens is the largest prompt a single model step sent:
+	// its input plus cache-read and cache-write tokens. Unlike the summed
+	// pools it does not grow with every turn, so it is what compares with a
+	// context window. 0 when the stream carries no per-step usage (every
+	// adapter but opencode).
+	PeakStepInputTokens int
+	// ModelProvider is the normalized provider of ServedModel (ADR-022 § 1),
+	// which then holds the recorded form of § 2. UpstreamModel is the raw -m
+	// value exactly as dispatched ("lmstudio/qwen/qwen3.8-27b"), also when
+	// another model served the stage. Only a multi-provider adapter
+	// (opencode) sets them.
+	ModelProvider string
+	UpstreamModel string
+	// AdapterVersion is the version the adapter's CLI reports for itself
+	// (`opencode --version`), or "" when it was not read.
+	AdapterVersion string
+	// AdapterReportedCostUSD is the cost the CLI itself reported. OpenCode's
+	// comes from its bundled catalog, not a bill, and is never used to price
+	// a stage (ADR-022 § 3).
+	AdapterReportedCostUSD float64
+	// UsagePartial is true when part of the stage's usage could not be read,
+	// such as a subagent session whose export failed. The token fields then
+	// hold what was read, and DriftMarkers says what was not.
+	UsagePartial bool
+	// DriftMarkers are the stream parser's evidence that the CLI's output did
+	// not have the shape it was written against, each prefixed
+	// "[opencode-drift]". They are never success evidence.
+	DriftMarkers []string
+
 	// Cancelled is true when execution.Manager itself requested this exit —
 	// CancelWithGrace/StopExecution SIGTERM'd the process and it left
 	// gracefully (#564). This is the ONLY component that knows a stop was
@@ -161,6 +195,46 @@ type RunResult struct {
 	// runner cannot see it either. Set once, here, so no second predicate for
 	// "was this a stop" grows anywhere else.
 	Cancelled bool
+}
+
+// openCodeToolForClaudeTool maps the Claude Code tool names a skill's
+// allowed-tools frontmatter uses to the OpenCode permission governing the same
+// capability. OpenCode 1.18.30 gates its write and edit tools with one
+// permission, `edit`, so Write, Edit and MultiEdit all map to it. This is the
+// only mapping: the stream parser's rejection markers and the permission map
+// (#1638) both read it.
+var openCodeToolForClaudeTool = map[string]string{
+	"Bash":      "bash",
+	"Read":      "read",
+	"Write":     "edit",
+	"Edit":      "edit",
+	"MultiEdit": "edit",
+	"Glob":      "glob",
+	"Grep":      "grep",
+	"Task":      "task",
+	"WebFetch":  "webfetch",
+}
+
+// OpenCodeToolForClaudeTool returns the OpenCode permission for a Claude Code
+// tool name. A frontmatter entry may carry a pattern, as "Bash(git:*)" does;
+// the name before it decides.
+func OpenCodeToolForClaudeTool(name string) (string, bool) {
+	name, _, _ = strings.Cut(strings.TrimSpace(name), "(")
+	tool, ok := openCodeToolForClaudeTool[name]
+	return tool, ok
+}
+
+// OpenCodeToolsAllowed returns the set of OpenCode permissions the Claude Code
+// tool names in allowed grant. A name with no OpenCode counterpart grants
+// nothing.
+func OpenCodeToolsAllowed(allowed []string) map[string]bool {
+	set := map[string]bool{}
+	for _, name := range allowed {
+		if tool, ok := OpenCodeToolForClaudeTool(name); ok {
+			set[tool] = true
+		}
+	}
+	return set
 }
 
 // OutputStreamer receives streamed output from a running skill process.

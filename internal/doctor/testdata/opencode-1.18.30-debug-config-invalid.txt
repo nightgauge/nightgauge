@@ -1,0 +1,301 @@
+# opencode 1.18.30 `opencode debug config`, captured by opencode-capture/capture.sh.
+# OPENCODE_CONFIG_CONTENT is the per-run config `nightgauge opencode config` builds
+# for anthropic/claude-sonnet-5, changed as each case says. See opencode-capture/README.md.
+==> case valid
+==> change none
+==> exit 0
+==> content
+{"model":"anthropic/claude-sonnet-5","small_model":"anthropic/claude-sonnet-5","default_agent":"build","enabled_providers":["anthropic"],"provider":{"anthropic":{"npm":"@ai-sdk/anthropic","options":{"baseURL":"https://api.anthropic.com/v1","apiKey":"{env:ANTHROPIC_API_KEY}"},"models":{"claude-sonnet-5":{"id":"claude-sonnet-5","provider":{"npm":"@ai-sdk/anthropic"}}}}},"agent":{"build":{"model":"anthropic/claude-sonnet-5","steps":200,"disable":false},"compaction":{"model":"anthropic/claude-sonnet-5","disable":false},"explore":{"model":"anthropic/claude-sonnet-5","steps":200,"disable":false},"general":{"model":"anthropic/claude-sonnet-5","steps":200,"disable":false},"plan":{"model":"anthropic/claude-sonnet-5","steps":200,"disable":false},"summary":{"model":"anthropic/claude-sonnet-5","disable":false},"title":{"model":"anthropic/claude-sonnet-5","disable":true}},"mode":{"build":{"model":"anthropic/claude-sonnet-5","steps":200,"disable":false},"compaction":{"model":"anthropic/claude-sonnet-5","disable":false},"plan":{"model":"anthropic/claude-sonnet-5","steps":200,"disable":false},"summary":{"model":"anthropic/claude-sonnet-5","disable":false},"title":{"model":"anthropic/claude-sonnet-5","disable":true}},"subagent_depth":1,"compaction":{"auto":true,"prune":true,"reserved":20000,"tail_turns":2,"preserve_recent_tokens":15000},"tool_output":{"max_lines":1000,"max_bytes":32768},"share":"disabled","autoupdate":false,"snapshot":false,"lsp":true,"formatter":true,"instructions":[],"skills":{"urls":[]}}
+==> stdout
+{
+  "agent": {
+    "build": {
+      "model": "anthropic/claude-sonnet-5",
+      "steps": 200,
+      "disable": false,
+      "options": {},
+      "permission": {},
+      "mode": "primary"
+    },
+    "compaction": {
+      "model": "anthropic/claude-sonnet-5",
+      "disable": false,
+      "options": {},
+      "permission": {},
+      "mode": "primary"
+    },
+    "explore": {
+      "model": "anthropic/claude-sonnet-5",
+      "steps": 200,
+      "disable": false,
+      "options": {},
+      "permission": {}
+    },
+    "general": {
+      "model": "anthropic/claude-sonnet-5",
+      "steps": 200,
+      "disable": false,
+      "options": {},
+      "permission": {}
+    },
+    "plan": {
+      "model": "anthropic/claude-sonnet-5",
+      "steps": 200,
+      "disable": false,
+      "options": {},
+      "permission": {},
+      "mode": "primary"
+    },
+    "summary": {
+      "model": "anthropic/claude-sonnet-5",
+      "disable": false,
+      "options": {},
+      "permission": {},
+      "mode": "primary"
+    },
+    "title": {
+      "model": "anthropic/claude-sonnet-5",
+      "disable": true,
+      "options": {},
+      "permission": {},
+      "mode": "primary"
+    }
+  },
+  "mode": {
+    "build": {
+      "model": "anthropic/claude-sonnet-5",
+      "steps": 200,
+      "disable": false,
+      "options": {},
+      "permission": {}
+    },
+    "compaction": {
+      "model": "anthropic/claude-sonnet-5",
+      "disable": false,
+      "options": {},
+      "permission": {}
+    },
+    "plan": {
+      "model": "anthropic/claude-sonnet-5",
+      "steps": 200,
+      "disable": false,
+      "options": {},
+      "permission": {}
+    },
+    "summary": {
+      "model": "anthropic/claude-sonnet-5",
+      "disable": false,
+      "options": {},
+      "permission": {}
+    },
+    "title": {
+      "model": "anthropic/claude-sonnet-5",
+      "disable": true,
+      "options": {},
+      "permission": {}
+    }
+  },
+  "plugin": [],
+  "command": {},
+  "model": "anthropic/claude-sonnet-5",
+  "small_model": "anthropic/claude-sonnet-5",
+  "default_agent": "build",
+  "enabled_providers": [
+    "anthropic"
+  ],
+  "provider": {
+    "anthropic": {
+      "npm": "@ai-sdk/anthropic",
+      "options": {
+        "baseURL": "https://api.anthropic.com/v1",
+        "apiKey": ""
+      },
+      "models": {
+        "claude-sonnet-5": {
+          "id": "claude-sonnet-5",
+          "provider": {
+            "npm": "@ai-sdk/anthropic"
+          }
+        }
+      }
+    }
+  },
+  "subagent_depth": 1,
+  "compaction": {
+    "auto": true,
+    "prune": true,
+    "reserved": 20000,
+    "tail_turns": 2,
+    "preserve_recent_tokens": 15000
+  },
+  "tool_output": {
+    "max_lines": 1000,
+    "max_bytes": 32768
+  },
+  "share": "disabled",
+  "autoupdate": false,
+  "snapshot": false,
+  "lsp": true,
+  "formatter": true,
+  "instructions": [],
+  "skills": {
+    "urls": []
+  },
+  "username": "unknown"
+}
+==> stderr
+==> end
+==> case unknown-key
+==> change top-level key nightgauge_unknown_key added
+==> exit 0
+==> content
+{"nightgauge_unknown_key":true,"model":"anthropic/claude-sonnet-5","small_model":"anthropic/claude-sonnet-5","default_agent":"build","enabled_providers":["anthropic"],"provider":{"anthropic":{"npm":"@ai-sdk/anthropic","options":{"baseURL":"https://api.anthropic.com/v1","apiKey":"{env:ANTHROPIC_API_KEY}"},"models":{"claude-sonnet-5":{"id":"claude-sonnet-5","provider":{"npm":"@ai-sdk/anthropic"}}}}},"agent":{"build":{"model":"anthropic/claude-sonnet-5","steps":200,"disable":false},"compaction":{"model":"anthropic/claude-sonnet-5","disable":false},"explore":{"model":"anthropic/claude-sonnet-5","steps":200,"disable":false},"general":{"model":"anthropic/claude-sonnet-5","steps":200,"disable":false},"plan":{"model":"anthropic/claude-sonnet-5","steps":200,"disable":false},"summary":{"model":"anthropic/claude-sonnet-5","disable":false},"title":{"model":"anthropic/claude-sonnet-5","disable":true}},"mode":{"build":{"model":"anthropic/claude-sonnet-5","steps":200,"disable":false},"compaction":{"model":"anthropic/claude-sonnet-5","disable":false},"plan":{"model":"anthropic/claude-sonnet-5","steps":200,"disable":false},"summary":{"model":"anthropic/claude-sonnet-5","disable":false},"title":{"model":"anthropic/claude-sonnet-5","disable":true}},"subagent_depth":1,"compaction":{"auto":true,"prune":true,"reserved":20000,"tail_turns":2,"preserve_recent_tokens":15000},"tool_output":{"max_lines":1000,"max_bytes":32768},"share":"disabled","autoupdate":false,"snapshot":false,"lsp":true,"formatter":true,"instructions":[],"skills":{"urls":[]}}
+==> stdout
+{
+  "agent": {
+    "build": {
+      "model": "anthropic/claude-sonnet-5",
+      "steps": 200,
+      "disable": false,
+      "options": {},
+      "permission": {},
+      "mode": "primary"
+    },
+    "compaction": {
+      "model": "anthropic/claude-sonnet-5",
+      "disable": false,
+      "options": {},
+      "permission": {},
+      "mode": "primary"
+    },
+    "explore": {
+      "model": "anthropic/claude-sonnet-5",
+      "steps": 200,
+      "disable": false,
+      "options": {},
+      "permission": {}
+    },
+    "general": {
+      "model": "anthropic/claude-sonnet-5",
+      "steps": 200,
+      "disable": false,
+      "options": {},
+      "permission": {}
+    },
+    "plan": {
+      "model": "anthropic/claude-sonnet-5",
+      "steps": 200,
+      "disable": false,
+      "options": {},
+      "permission": {},
+      "mode": "primary"
+    },
+    "summary": {
+      "model": "anthropic/claude-sonnet-5",
+      "disable": false,
+      "options": {},
+      "permission": {},
+      "mode": "primary"
+    },
+    "title": {
+      "model": "anthropic/claude-sonnet-5",
+      "disable": true,
+      "options": {},
+      "permission": {},
+      "mode": "primary"
+    }
+  },
+  "mode": {
+    "build": {
+      "model": "anthropic/claude-sonnet-5",
+      "steps": 200,
+      "disable": false,
+      "options": {},
+      "permission": {}
+    },
+    "compaction": {
+      "model": "anthropic/claude-sonnet-5",
+      "disable": false,
+      "options": {},
+      "permission": {}
+    },
+    "plan": {
+      "model": "anthropic/claude-sonnet-5",
+      "steps": 200,
+      "disable": false,
+      "options": {},
+      "permission": {}
+    },
+    "summary": {
+      "model": "anthropic/claude-sonnet-5",
+      "disable": false,
+      "options": {},
+      "permission": {}
+    },
+    "title": {
+      "model": "anthropic/claude-sonnet-5",
+      "disable": true,
+      "options": {},
+      "permission": {}
+    }
+  },
+  "plugin": [],
+  "command": {},
+  "model": "anthropic/claude-sonnet-5",
+  "small_model": "anthropic/claude-sonnet-5",
+  "default_agent": "build",
+  "enabled_providers": [
+    "anthropic"
+  ],
+  "provider": {
+    "anthropic": {
+      "npm": "@ai-sdk/anthropic",
+      "options": {
+        "baseURL": "https://api.anthropic.com/v1",
+        "apiKey": ""
+      },
+      "models": {
+        "claude-sonnet-5": {
+          "id": "claude-sonnet-5",
+          "provider": {
+            "npm": "@ai-sdk/anthropic"
+          }
+        }
+      }
+    }
+  },
+  "subagent_depth": 1,
+  "compaction": {
+    "auto": true,
+    "prune": true,
+    "reserved": 20000,
+    "tail_turns": 2,
+    "preserve_recent_tokens": 15000
+  },
+  "tool_output": {
+    "max_lines": 1000,
+    "max_bytes": 32768
+  },
+  "share": "disabled",
+  "autoupdate": false,
+  "snapshot": false,
+  "lsp": true,
+  "formatter": true,
+  "instructions": [],
+  "skills": {
+    "urls": []
+  },
+  "username": "unknown"
+}
+==> stderr
+==> end
+==> case wrong-type
+==> change share set to the number 42
+==> exit 1
+==> content
+{"model":"anthropic/claude-sonnet-5","small_model":"anthropic/claude-sonnet-5","default_agent":"build","enabled_providers":["anthropic"],"provider":{"anthropic":{"npm":"@ai-sdk/anthropic","options":{"baseURL":"https://api.anthropic.com/v1","apiKey":"{env:ANTHROPIC_API_KEY}"},"models":{"claude-sonnet-5":{"id":"claude-sonnet-5","provider":{"npm":"@ai-sdk/anthropic"}}}}},"agent":{"build":{"model":"anthropic/claude-sonnet-5","steps":200,"disable":false},"compaction":{"model":"anthropic/claude-sonnet-5","disable":false},"explore":{"model":"anthropic/claude-sonnet-5","steps":200,"disable":false},"general":{"model":"anthropic/claude-sonnet-5","steps":200,"disable":false},"plan":{"model":"anthropic/claude-sonnet-5","steps":200,"disable":false},"summary":{"model":"anthropic/claude-sonnet-5","disable":false},"title":{"model":"anthropic/claude-sonnet-5","disable":true}},"mode":{"build":{"model":"anthropic/claude-sonnet-5","steps":200,"disable":false},"compaction":{"model":"anthropic/claude-sonnet-5","disable":false},"plan":{"model":"anthropic/claude-sonnet-5","steps":200,"disable":false},"summary":{"model":"anthropic/claude-sonnet-5","disable":false},"title":{"model":"anthropic/claude-sonnet-5","disable":true}},"subagent_depth":1,"compaction":{"auto":true,"prune":true,"reserved":20000,"tail_turns":2,"preserve_recent_tokens":15000},"tool_output":{"max_lines":1000,"max_bytes":32768},"share":42,"autoupdate":false,"snapshot":false,"lsp":true,"formatter":true,"instructions":[],"skills":{"urls":[]}}
+==> stdout
+==> stderr
+Error: Configuration is invalid at OPENCODE_CONFIG_CONTENT
+↳ Expected "manual" | "auto" | "disabled" | undefined, got 42 share
+==> end

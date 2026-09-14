@@ -110,6 +110,33 @@ changelog, and the release workflow refuses a tag that does not.
   (`ANTHROPIC_API_KEY` for `anthropic/*`), never an interactive login. The
   auto-router scores `opencode` like LM Studio, so a paid adapter still wins
   every stage (#1615)
+- An `opencode` stage now reports its real token usage: the Go binary parses
+  `opencode run --format json` instead of handing it to the Claude parser,
+  which booked zero tokens. It sums every step, keeps the largest single
+  step's prompt, adds each subagent session's usage from its sanitized export
+  after the run (at most 64, each read under a 10-second timeout, from the
+  run's own directory with no plugins and no credentials, and not at all
+  after an operator stop), and records the model that served the stage. The
+  stage's result also carries that model's provider, the `-m` value it was
+  dispatched with and the `opencode --version` it ran; the stage record gains
+  the provider and the `-m` value with #1630. A stage that stopped because
+  OpenCode rejected a permission on its own now fails with
+  `[adapter-permission-rejected]` or `[permission-denied]` instead of reading
+  as a success on exit 0, also when the rejected command spans several lines.
+  OpenCode prints the command unescaped, so after the first rejection the
+  stage keeps no stderr line but that rejection and its marker, and the
+  marker names only OpenCode's own permissions. Only the first rejection,
+  which OpenCode prints before any of the command, decides the failure
+  reason; a later one, a subagent's or one the command fakes, is counted as
+  drift, so nothing in the command reaches the failure reason.
+  Credentials of a known shape (API keys, GitHub tokens, bearer tokens, a
+  URL's user and password, credential query parameters) are removed from its
+  output before it is kept, including where a tool printed them at the start
+  of a line or in colour, and so are the credentials Nightgauge hands the
+  stage, also in their JSON-escaped form; provider settings such as
+  `AWS_REGION` or a Vertex project are not redacted as secrets. Output
+  that no longer matches what OpenCode 1.18.30 printed leaves an
+  `[opencode-drift]` marker in the log instead of passing silently (#1624)
 - `nightgauge preflight managed-steering` reports generated Nightgauge steering
   committed in any tracked `AGENTS.md`, and `--fix` removes it from the working
   tree (issue 1675)
@@ -159,9 +186,45 @@ changelog, and the release workflow refuses a tag that does not.
   local model is refused before spawn unless the block declares its server
   with nonzero limits, because OpenCode never compacts a session whose context
   limit is 0, which is what LM Studio reports (#1625)
+- `nightgauge doctor --adapters opencode` checks the OpenCode adapter the way
+  a dispatch meets it, and dispatch enforces the same version policy. The
+  floor and max-tested version come from the compat manifest. A binary below
+  the floor, or whose version cannot be read, is refused before spawn as
+  `adapter_incompatible`, naming both versions and the managed install
+  (`npm i --prefix ~/.nightgauge/tools/opencode opencode-ai@<max-tested>`). A
+  binary above max-tested warns, refuses a model server you run, and runs a
+  stage only once a self-test has passed for that binary, version and per-run
+  config: `opencode debug config` on the stage's config must exit 0 and keep
+  every key it sets, and `opencode run --help` must accept every flag the
+  adapter passes. `opencode.binary` pins the binary for the doctor and the
+  spawn alike, and must be an absolute path. Every probe of the binary runs in
+  a throwaway directory with project config off, so no `opencode.json` or
+  plugin in a directory above it loads. The doctor row also runs
+  `opencode models` for `opencode.model`, setting a hosted provider's
+  variables that your environment holds to a placeholder, never the
+  credential, and names them when it holds none; with
+  `opencode.inherit_user_config` on, such a provider's model the listing lacks
+  is a warning, not a block, because your own OpenCode config can supply the
+  key or the model. With that opt-in off, the row blocks, as every dispatch is
+  refused, while `~/.opencode` holds config or the machine has managed
+  OpenCode config, naming what it found. The row also probes each LM Studio or
+  Ollama endpoint, named by id and never by address, for reachability, whether
+  the model is loaded and the context it is loaded with, warning when
+  `limit.context` is 0 or larger; prints the run's OpenCode directories and an
+  offline posture that says egress is unverified until #1644; flags an OAuth
+  `anthropic` login in OpenCode's stored logins, reading only its type; and
+  warns when the binary changed since the last dispatch. With
+  `NIGHTGAUGE_EXPERIMENTAL_OPENCODE` unset the row runs nothing and is not
+  usable, so cap recovery never hops onto it (#1627)
 
 ### Fixed
 
+- A stage the operator stops is reported as stopped, not as a
+  `wait: context canceled` failure, when its CLI exits on the stop but a
+  process it started holds its output past the grace period. OpenCode's
+  version-policy probes now run under the stage's context: a stage whose
+  context is done starts none of them, and a probe it stops is not reported
+  as an incompatible binary (#1627)
 - ADR-022 no longer says `--yolo` and `--dangerously-skip-permissions` are not
   `opencode run` options. In 1.18.30 both are hidden options that switch on the
   same auto-approval as `--auto`. The adapter still never emits them, and
@@ -236,6 +299,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Security
 
+- CI now checks the experimental `opencode` adapter's config-merge and
+  plugin-loading assumptions against an exact install of opencode 1.18.30, so
+  an OpenCode upgrade that changes them fails the build. ADR-022 § 8 records
+  the results: until a stage stops OpenCode loading the target repository's
+  `opencode.json` and `.opencode/` (#1638), that config can reorder a run's
+  permission patterns so a denied command runs, add plugins and MCP servers
+  the run's own lists cannot remove, and add a remote instructions URL that
+  a run fetches (#1632)
 - OpenCode stages run in a private directory per pipeline run
   (`~/.nightgauge/opencode/runs/<run>/`), deleted when the run ends: a run
   reads none of your own OpenCode config, plugins, logins or `~/.agents/skills`,
@@ -251,8 +322,9 @@ changelog, and the release workflow refuses a tag that does not.
   you chose instead of falling back to a credentials file or profile. That
   does not stop every other provider: the dispatch warning lists what still
   reaches one. The
-  server password, the forge tokens and the stage's own provider's variables
-  are redacted from its captured output, and no other secret is yet. Dispatch
+  server password, the forge tokens and the stage's own provider's credentials
+  are redacted from its captured output, and other secrets only by their shape
+  (#1624). Dispatch
   is refused while `~/.opencode` or this machine's managed OpenCode config
   holds config, which OpenCode reads whatever the run's directories; move
   `~/.opencode`'s entries to `~/.config/opencode`, or set

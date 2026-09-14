@@ -2,6 +2,7 @@ package adapters
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -485,11 +486,11 @@ func TestOpenCodePreDispatchReadsTheEnvironment(t *testing.T) {
 	t.Setenv("HOME", t.TempDir()) // no ~/.opencode, whatever the real home holds
 	a := &OpenCodeAdapter{managedConfig: []string{}, settings: fixedOpenCodeSettings(config.OpenCodeConfig{})}
 	t.Setenv(ExperimentalOpenCodeEnvVar, "")
-	if err := a.PreDispatch(RunOptions{}); err == nil {
+	if err := a.PreDispatch(context.Background(), RunOptions{}); err == nil {
 		t.Error("PreDispatch allowed a dispatch with the switch unset")
 	}
 	t.Setenv(ExperimentalOpenCodeEnvVar, "1")
-	if err := a.PreDispatch(RunOptions{}); err != nil {
+	if err := a.PreDispatch(context.Background(), RunOptions{}); err != nil {
 		t.Errorf("PreDispatch refused with the switch set: %v", err)
 	}
 }
@@ -525,7 +526,7 @@ func TestOpenCodePreDispatchRequiresTheAnthropicAPIKey(t *testing.T) {
 			t.Setenv("ANTHROPIC_API_KEY", key)
 		}
 		for _, model := range anthropic {
-			err := a.PreDispatch(RunOptions{Model: model})
+			err := a.PreDispatch(context.Background(), RunOptions{Model: model})
 			if err == nil {
 				t.Errorf("PreDispatch(%q) with ANTHROPIC_API_KEY %s allowed the dispatch", model, key)
 				continue
@@ -543,14 +544,14 @@ func TestOpenCodePreDispatchRequiresTheAnthropicAPIKey(t *testing.T) {
 
 	t.Setenv("ANTHROPIC_API_KEY", "set-by-the-test")
 	for _, model := range anthropic[2:] {
-		if err := a.PreDispatch(RunOptions{Model: model}); err != nil {
+		if err := a.PreDispatch(context.Background(), RunOptions{Model: model}); err != nil {
 			t.Errorf("PreDispatch(%q) with ANTHROPIC_API_KEY set = %v; want the dispatch allowed", model, err)
 		}
 	}
 
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	for _, model := range []string{"lmstudio/qwen/qwen3.8-27b", "openai/gpt-5.5", "openrouter/anthropic/claude-sonnet-5"} {
-		if err := a.PreDispatch(RunOptions{Model: model}); err != nil {
+		if err := a.PreDispatch(context.Background(), RunOptions{Model: model}); err != nil {
 			t.Errorf("PreDispatch(%q) without ANTHROPIC_API_KEY = %v; only an anthropic/ model needs it", model, err)
 		}
 	}
@@ -578,7 +579,7 @@ func TestOpenCodePreDispatchRefusesPlatformProviders(t *testing.T) {
 		t.Setenv(ExperimentalOpenCodeEnvVar, sw)
 		for _, model := range refused {
 			var err error
-			stderr := captureAdapterStderr(t, func() { err = a.PreDispatch(RunOptions{Model: model}) })
+			stderr := captureAdapterStderr(t, func() { err = a.PreDispatch(context.Background(), RunOptions{Model: model}) })
 			if err == nil {
 				t.Errorf("switch %q: PreDispatch(%q) allowed the dispatch", sw, model)
 				continue
@@ -596,14 +597,14 @@ func TestOpenCodePreDispatchRefusesPlatformProviders(t *testing.T) {
 			}
 		}
 	}
-	if err := a.PreDispatch(RunOptions{Model: "github-copilot/gpt-5.5"}); err == nil || !strings.Contains(err.Error(), "GITHUB_TOKEN") {
+	if err := a.PreDispatch(context.Background(), RunOptions{Model: "github-copilot/gpt-5.5"}); err == nil || !strings.Contains(err.Error(), "GITHUB_TOKEN") {
 		t.Errorf("the github-copilot refusal does not name the variable it would run on: %v", err)
 	}
 
 	t.Setenv(ExperimentalOpenCodeEnvVar, "1")
 	for _, model := range []string{"openai/gpt-5.5", "openrouter/anthropic/claude-sonnet-5", "lmstudio/qwen/qwen3.8-27b"} {
 		var err error
-		captureAdapterStderr(t, func() { err = a.PreDispatch(RunOptions{Model: model}) })
+		captureAdapterStderr(t, func() { err = a.PreDispatch(context.Background(), RunOptions{Model: model}) })
 		if err != nil {
 			t.Errorf("PreDispatch(%q) = %v; only a platform provider meets this refusal", model, err)
 		}
@@ -662,9 +663,9 @@ func TestOpenCodeNeverInfersAProvider(t *testing.T) {
 	}
 	a := NewOpenCodeAdapter()
 	for _, id := range bare {
-		got, err := openCodeModelArg(id)
+		got, err := OpenCodeModelArg(id)
 		if err == nil {
-			t.Errorf("openCodeModelArg(%q) = %q; a bare id must be refused, never qualified", id, got)
+			t.Errorf("OpenCodeModelArg(%q) = %q; a bare id must be refused, never qualified", id, got)
 			continue
 		}
 		for _, want := range []string{"names no provider", "<provider>/<model>"} {

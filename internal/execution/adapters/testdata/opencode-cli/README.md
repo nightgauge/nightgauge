@@ -13,15 +13,16 @@ and update the table below in the same change.
 
 ## What was captured
 
-| Field       | Value                                           |
-| ----------- | ----------------------------------------------- |
-| Host OS     | macOS 27.0 (Darwin 27.0.0, arm64)               |
-| Captured at | 2026-09-12                                      |
-| Command     | `opencode run --help`, stdin from `/dev/null`   |
-| CLI version | `1.18.30` (`opencode --version`, `version.txt`) |
-| Install     | npm package `opencode-ai`                       |
-| Exit code   | 0                                               |
-| Redaction   | `capture.sh`; nothing needed redacting          |
+| Field       | Value                                            |
+| ----------- | ------------------------------------------------ |
+| Host OS     | macOS 27.0 (Darwin 27.0.0, arm64)                |
+| Captured at | 2026-09-12                                       |
+| Command     | `opencode run --help`, stdin from `/dev/null`    |
+| Stream      | stderr; stdout is empty. `capture.sh` keeps both |
+| CLI version | `1.18.30` (`opencode --version`, `version.txt`)  |
+| Install     | npm package `opencode-ai`                        |
+| Exit code   | 0                                                |
+| Redaction   | `capture.sh`; nothing needed redacting           |
 
 ## Behaviour observed on the same version
 
@@ -101,3 +102,5 @@ or ran only `debug config` in the stage's environment.
 | Read from the bundled source: OpenCode substitutes `{env:...}` and then `{file:...}` anywhere in its config text before parsing it, both patterns case-sensitive                                                                     | The config-variable substitution in the 1.18.30 binary (2026-09-13)                                                                                                                                                                                                                                                                                                            |
 | An `{env:VAR}` value is pasted unescaped: a quote, backslash, newline or tab in it fails the parse of `OPENCODE_CONFIG_CONTENT`, whose error prints it with every value; a `{file:path}` in it is read, a `{env:...}` is not         | `debug config` with a throwaway `HOME` and `env -i`, one value at a time (2026-09-13); `TestOpenCodeIntegrationMcpFromBaseBranchReachesOpenCode` gives a server's variable a backslash                                                                                                                                                                                         |
 | While project config loads, OpenCode's own search loads an `AGENTS.md` that is a symbolic link to a file outside the worktree                                                                                                        | A sentinel in the link's target reached the recorded system prompt while the per-run config named the repository's `CLAUDE.md` instead (2026-09-13)                                                                                                                                                                                                                            |
+| `opencode run --help` prints its help on stderr and nothing on stdout, and exits 0; an unknown `run` flag prints the same help on stderr and exits 1                                                                                 | 3053 bytes on stderr and none on stdout under a throwaway `HOME` and XDG directories; the self-test reads the options from either stream (2026-09-13)                                                                                                                                                                                                                          |
+| Outside a git repository, OpenCode reads `opencode.json` from the directories above the working directory; `OPENCODE_DISABLE_PROJECT_CONFIG=1` stops it                                                                              | A `username` in an `opencode.json` one directory above a working directory outside any repository appeared in `debug config`, and a `share: 42` there made it exit 1; with the switch, neither had any effect. Every probe sets it (2026-09-13)                                                                                                                                |

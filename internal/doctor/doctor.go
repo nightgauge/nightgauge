@@ -519,6 +519,9 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 				}
 				warnings = append(warnings, fmt.Sprintf("adapter %q not ready: %s", a.Adapter, detail))
 			}
+			for _, w := range a.Warnings {
+				warnings = append(warnings, fmt.Sprintf("adapter %q: %s", a.Adapter, w))
+			}
 		}
 	}
 

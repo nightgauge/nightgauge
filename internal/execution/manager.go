@@ -282,10 +282,18 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	// runs after worktree setup, so a check that has to inspect the tree the
 	// stage will run in can join it, and ahead of the model and effort checks
 	// and BuildCommand, so a refusal states the real reason and spawns nothing.
+	//
+	// A stage whose context is done by now is not dispatched: the hook is not
+	// called, so none of its probes starts, and nothing below runs. The hook
+	// gets the stage's context, so a probe it starts is killed when the stage
+	// is (#1627).
+	if err := execCtx.Err(); err != nil {
+		return nil, fmt.Errorf("stage not dispatched: %w", err)
+	}
 	if gate, ok := adapter.(interface {
-		PreDispatch(adapters.RunOptions) error
+		PreDispatch(context.Context, adapters.RunOptions) error
 	}); ok {
-		if err := gate.PreDispatch(runOpts); err != nil {
+		if err := gate.PreDispatch(execCtx, runOpts); err != nil {
 			return nil, fmt.Errorf("dispatch refused for adapter %q: %w", adapter.Name(), err)
 		}
 	}
@@ -484,19 +492,56 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	modelTracker := &ServedModelTracker{}
 	streamFmt := StreamFormatForAdapter(adapter.Name())
 
+	// OpenCode (ADR-022): its own parser, whose run state also watches
+	// stderr, before redaction, for permissions OpenCode rejected on its own,
+	// and keeps no rejected call's input and no line after the first such
+	// notice but the parser's own; every line is also redacted of credential
+	// shapes, not only of the variables above, and a JSON event's strings
+	// are redacted decoded as well as escaped; and a line over the scanner's
+	// limit is dropped with a drift marker instead of ending the read, its
+	// ends still read for a notice.
+	redactOut := func(b []byte) []byte { return redactLine(redact, b) }
+	var openCode *openCodeRun
+	if streamFmt == StreamFormatOpenCode {
+		openCode = newOpenCodeRun(tokenAcc.OpenCode(), runOpts.AllowedTools)
+		redactOut = openCodeOutputRedactor(redact)
+	}
+	eachLine := func(r io.Reader, name string, onLine func([]byte), onOversize func(head, tail []byte)) {
+		if openCode != nil {
+			_ = forEachLine(r, streamLineLimit, onLine, func(head, tail []byte) {
+				openCode.stream.Drift("dropped a %s line longer than the %d-byte line limit", name, streamLineLimit)
+				if onOversize != nil {
+					onOversize(head, tail)
+				}
+			})
+			return
+		}
+		scanner := bufio.NewScanner(r)
+		scanner.Buffer(make([]byte, 0, 64*1024), streamLineLimit)
+		for scanner.Scan() {
+			onLine(scanner.Bytes())
+		}
+	}
+	keepStderr := func(line []byte) {
+		line = redactOut(line)
+		stderrBuf = append(stderrBuf, line...)
+		stderrBuf = append(stderrBuf, '\n')
+		if opts.Streamer != nil {
+			opts.Streamer.OnOutput("stderr", append(line, '\n'))
+		}
+	}
+
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		scanner := bufio.NewScanner(stdout)
-		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		// Deterministic phase inference (Issue #3760): some stages (notably the
 		// edit-heavy feature-dev) don't reliably emit phase markers, so infer
 		// progress from observed tool activity. No-op for self-reporting stages;
 		// monotonic; real markers take precedence via ObserveRealMarker.
 		inferer := NewPhaseInferer(opts.Stage)
 		started := false
-		for scanner.Scan() {
-			line := redactLine(redact, scanner.Bytes())
+		eachLine(stdout, "stdout", func(raw []byte) {
+			line := redactOut(raw)
 			stdoutBuf = append(stdoutBuf, line...)
 			stdoutBuf = append(stdoutBuf, '\n')
 			lineStr := string(line)
@@ -534,20 +579,31 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 			if opts.Streamer != nil {
 				opts.Streamer.OnOutput("stdout", append(line, '\n'))
 			}
-		}
+		}, nil)
 	}()
 	go func() {
 		defer wg.Done()
-		scanner := bufio.NewScanner(stderr)
-		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-		for scanner.Scan() {
-			line := redactLine(redact, scanner.Bytes())
-			stderrBuf = append(stderrBuf, line...)
-			stderrBuf = append(stderrBuf, '\n')
-			if opts.Streamer != nil {
-				opts.Streamer.OnOutput("stderr", append(line, '\n'))
+		var onOversize func(head, tail []byte)
+		if openCode != nil {
+			onOversize = func(head, tail []byte) {
+				if notice, kind := openCode.observeStderr(string(head), string(tail)); kind == stderrNotice {
+					keepStderr([]byte(notice))
+				}
 			}
 		}
+		eachLine(stderr, "stderr", func(raw []byte) {
+			if openCode != nil {
+				// The notice is read on the line as printed: redaction can
+				// rewrite the end it is recognized by.
+				switch notice, kind := openCode.observeStderr(string(raw), string(raw)); kind {
+				case stderrDropped:
+					return
+				case stderrNotice:
+					raw = []byte(notice)
+				}
+			}
+			keepStderr(raw)
+		}, onOversize)
 	}()
 
 	// Wait for output to drain, then wait for process
@@ -585,7 +641,38 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 		m.publishStageChild(opts.Repo, opts.Runtime)
 	}
 
+	// OpenCode's usage fold reads its subagent sessions into tokenAcc before
+	// the result is built from it; the rest of what it learned is applied on
+	// top of the result. It runs under ctx rather than execCtx, so a stage
+	// that timed out still has its usage read, from the run's root rather
+	// than the worktree, and not at all once the operator stopped the stage.
+	var openCodeDone *openCodeOutcome
+	if openCode != nil {
+		// The value BuildCommand passed as -m; the model check before
+		// dispatch refused any model it would not pass.
+		dispatched, _ := adapters.OpenCodeModelArg(runOpts.Model)
+		exit := openCodeExit{
+			bin:        cmd.Path,
+			env:        cmd.Env,
+			runRoot:    os.TempDir(),
+			exitCode:   -1,
+			dispatched: dispatched,
+			stopped:    execution.stopRequested.Load(),
+		}
+		if runOpts.RunRoot != nil && runOpts.RunRoot.Dir != "" {
+			exit.runRoot = runOpts.RunRoot.Dir
+		}
+		if cmd.ProcessState != nil {
+			exit.exitCode = cmd.ProcessState.ExitCode()
+		}
+		done := openCode.finish(ctx, exit, tokenAcc)
+		openCodeDone = &done
+	}
 	result := runResultFromAccumulator(string(stdoutBuf), string(stderrBuf), tokenAcc, modelTracker)
+	if openCodeDone != nil {
+		openCodeDone.apply(result)
+		openCodeDone.report(opts)
+	}
 	// #564: a graceful-stop CLI that traps SIGTERM and exits 0 is otherwise
 	// indistinguishable from a healthy stage — ExitCode is 0 and cmd.Wait()
 	// returns a nil error either way. execution.stopRequested is the ONLY
@@ -604,9 +691,13 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	}
 
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		var exitErr *exec.ExitError
+		switch {
+		case errors.As(err, &exitErr):
 			result.ExitCode = exitErr.ExitCode()
-		} else {
+		case stoppedStageExited(result.Cancelled, cmd.ProcessState, err):
+			result.ExitCode = cmd.ProcessState.ExitCode()
+		default:
 			return result, fmt.Errorf("wait: %w", err)
 		}
 	}
@@ -616,6 +707,25 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	}
 
 	return result, nil
+}
+
+// stoppedStageExited reports whether cmd.Wait's error is only the stop's own
+// context cancellation, on a stage the operator stopped whose process has
+// been reaped (#1627).
+//
+// A stop signals the stage's group, waits out its grace, and only then
+// cancels the stage's context (StopExecution, CancelWithGrace). When the
+// stage traps the SIGTERM and exits 0 while something it started still holds
+// its output past the grace, the stage is an unreaped zombie when the context
+// is cancelled: os/exec's context watcher signals it, the signal succeeds,
+// and cmd.Wait then returns the context's error instead of the exit status it
+// reaped. The stage did not fail to be waited for. It was stopped, which
+// RunResult.Cancelled already says (#564). Reported as a wait error it was
+// lost: the scheduler's runner drops the result on an error return, so the
+// operator's stop was classified as the stage's own failure.
+func stoppedStageExited(stopped bool, state *os.ProcessState, err error) bool {
+	return stopped && state != nil &&
+		(errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded))
 }
 
 // stageStateDir is the directory the run's runtime-{issue}-{runId}.json lives
@@ -682,6 +792,7 @@ func runResultFromAccumulator(stdout, stderr string, tokenAcc *TokenAccumulator,
 		CacheCreation1hTokens: cacheCreation1h,
 		PremiumRequests:       tokenAcc.PremiumRequests,
 		ServedModel:           modelTracker.ServedModel,
+		PeakStepInputTokens:   tokenAcc.PeakStepInputTokens,
 	}
 }
 
@@ -1053,25 +1164,63 @@ const redactedSecretMinLen = 8
 
 // envValueRedactor returns a replacer that swaps the value of each variable
 // in names, as env holds it, for "[REDACTED:<name>]", or nil when none of
-// them holds a value worth redacting. Longer values are matched first, so a
-// secret that contains another is replaced whole.
+// them holds a value worth redacting. A variable whose name says it holds a
+// setting rather than a credential (isProviderSetting) is not redacted. Each
+// value is matched both as it is and as the content of a JSON string
+// (jsonEscaped), because a --format json event escapes a tool's output: a
+// value holding a quote or a backslash, such as a JSON service key, is
+// otherwise never found there. Longer forms are matched first, so a secret
+// that contains another is replaced whole.
 func envValueRedactor(env, names []string) *strings.Replacer {
-	type secret struct{ name, value string }
+	type secret struct{ form, name string }
 	var secrets []secret
 	for _, name := range names {
-		if value, ok := lookupEnvList(env, name); ok && len(value) >= redactedSecretMinLen {
-			secrets = append(secrets, secret{name, value})
+		value, ok := lookupEnvList(env, name)
+		if !ok || len(value) < redactedSecretMinLen || isProviderSetting(name) {
+			continue
+		}
+		secrets = append(secrets, secret{value, name})
+		if escaped := jsonEscaped(value); escaped != value {
+			secrets = append(secrets, secret{escaped, name})
 		}
 	}
 	if len(secrets) == 0 {
 		return nil
 	}
-	sort.SliceStable(secrets, func(i, j int) bool { return len(secrets[i].value) > len(secrets[j].value) })
+	sort.SliceStable(secrets, func(i, j int) bool { return len(secrets[i].form) > len(secrets[j].form) })
 	pairs := make([]string, 0, 2*len(secrets))
 	for _, s := range secrets {
-		pairs = append(pairs, s.value, "[REDACTED:"+s.name+"]")
+		pairs = append(pairs, s.form, "[REDACTED:"+s.name+"]")
 	}
 	return strings.NewReplacer(pairs...)
+}
+
+// isProviderSetting reports whether the variable name holds a provider setting
+// rather than a credential: OpenCode's catalog binds a provider's region,
+// project, account, host and endpoint to it beside its key (AWS_REGION,
+// GOOGLE_VERTEX_PROJECT, DATABRICKS_HOST), and redacting their values would
+// strip every "us-east-1", or an organization's name, from a stage's output.
+// A name with a credential segment (KEY, APIKEY, TOKEN, SECRET, PASSWORD,
+// PASSWD, PAT) is never a setting, so AWS_ACCESS_KEY_ID stays redacted; nor is
+// a name of any shape not listed here, so a variable a later catalog adds is
+// redacted until it is recognized. GOOGLE_APPLICATION_CREDENTIALS holds the
+// path of a credential file, not the credential.
+func isProviderSetting(name string) bool {
+	segments := strings.Split(name, "_")
+	for _, s := range segments {
+		switch s {
+		case "KEY", "APIKEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "PAT":
+			return false
+		}
+	}
+	if name == "GOOGLE_APPLICATION_CREDENTIALS" {
+		return true
+	}
+	switch segments[len(segments)-1] {
+	case "REGION", "LOCATION", "PROJECT", "ACCOUNT", "HOST", "ENDPOINT", "URL", "NAME", "ID":
+		return true
+	}
+	return false
 }
 
 // lookupEnvList returns the value env, a KEY=VALUE list, holds for key: the

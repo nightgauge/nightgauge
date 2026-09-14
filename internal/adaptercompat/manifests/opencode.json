@@ -21,15 +21,16 @@
   "install": { "npm": "opencode-ai" },
   "managed_install": "",
   "required_flags": ["--dir", "--format", "--log-level", "--print-logs", "-m"],
-  "catalog": {
-    "skip_reason": "No OpenCode model-listing output has been captured yet; the evidence covers opencode run --help only (internal/execution/adapters/testdata/opencode-cli)."
-  },
+  "catalog": { "command": "opencode models" },
   "fixtures": [
     "internal/execution/adapters/testdata/opencode-cli/run-help.txt",
     "internal/execution/adapters/testdata/opencode-cli/version.txt",
     "internal/adaptercompat/testdata/opencode-feed/releases.txt",
     "internal/adaptercompat/testdata/opencode-feed/tags.txt",
-    "internal/execution/adapters/testdata/cli-help/opencode-run-1.18.30.txt"
+    "internal/execution/adapters/testdata/cli-help/opencode-run-1.18.30.txt",
+    "internal/doctor/testdata/opencode-1.18.30-debug-config-invalid.txt",
+    "internal/doctor/testdata/opencode-1.18.30-models-configured.txt",
+    "internal/doctor/testdata/opencode-1.18.30-models-other.txt"
   ],
   "config_schema_sha256": "",
   "plugin_api_version": "",

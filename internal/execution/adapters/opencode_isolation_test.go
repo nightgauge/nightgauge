@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"context"
 	"io"
 	"maps"
 	"os"
@@ -344,7 +345,7 @@ func TestOpenCodeDispatchNamesTheVariablesItWithholds(t *testing.T) {
 	dispatch := func() []string {
 		t.Helper()
 		var err error
-		stderr := captureAdapterStderr(t, func() { err = a.PreDispatch(model) })
+		stderr := captureAdapterStderr(t, func() { err = a.PreDispatch(context.Background(), model) })
 		if err != nil {
 			t.Fatalf("PreDispatch refused: %v", err)
 		}
@@ -1094,7 +1095,7 @@ func TestOpenCodeIsolationRefusalFollowsTheBlockTheRunIsBuiltFrom(t *testing.T) 
 	var root *RunRoot
 	var err error
 	stderr := captureAdapterStderr(t, func() {
-		if err = a.PreDispatch(run); err == nil {
+		if err = a.PreDispatch(context.Background(), run); err == nil {
 			root, err = a.PrepareRunRoot(RunRootRequest{ID: testRunID, MachineConfigDir: t.TempDir(), Run: run})
 		}
 	})
@@ -1221,7 +1222,7 @@ func TestOpenCodeRefusesAHomeDotOpenCodeWithConfig(t *testing.T) {
 
 	a.settings = fixedOpenCodeSettings(lmStudioSettings())
 	t.Setenv(ExperimentalOpenCodeEnvVar, "")
-	if err := a.PreDispatch(RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"}); err == nil || !strings.Contains(err.Error(), "is experimental") {
+	if err := a.PreDispatch(context.Background(), RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"}); err == nil || !strings.Contains(err.Error(), "is experimental") {
 		t.Errorf("with the switch unset the refusal = %v; want the gate's", err)
 	}
 }

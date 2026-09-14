@@ -1,0 +1,10 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "agent": {
+    "dot-opencode-json-agent": {
+      "description": "adversarial fixture marker",
+      "prompt": "marker",
+      "mode": "subagent"
+    }
+  }
+}

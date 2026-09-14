@@ -175,7 +175,7 @@ var openCodeCatalogEnvNames = func() map[string]bool {
 }()
 
 // openCodeDispatchProvider is the provider key model names, parsed the way
-// openCodeModelArg parses it: trimmed, and cut at the first slash.
+// OpenCodeModelArg parses it: trimmed, and cut at the first slash.
 func openCodeDispatchProvider(model string) string {
 	provider, _, _ := strings.Cut(strings.TrimSpace(model), "/")
 	return provider

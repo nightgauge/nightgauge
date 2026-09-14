@@ -2,10 +2,14 @@ package doctor
 
 import (
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -572,9 +576,88 @@ func TestAdapterSpecConstants(t *testing.T) {
 	if !adapterSpecs["codex"].mcp {
 		t.Error("codex must be flagged as MCP-provisioning")
 	}
-	if len(AllAdapterNames()) != 9 {
-		t.Errorf("expected 9 adapters in AllAdapterNames, got %d", len(AllAdapterNames()))
+	if len(AllAdapterNames()) != 10 {
+		t.Errorf("expected 10 adapters in AllAdapterNames, got %d", len(AllAdapterNames()))
 	}
+}
+
+// TestOpenCodeFloorComesFromTheManifest: the opencode row's floor, floor
+// policy and max-tested version are the compat manifest's, read from it and
+// never restated. The spec's fields must be the compat* calls, so a literal
+// floor turns this red even while it happens to equal the manifest's.
+func TestOpenCodeFloorComesFromTheManifest(t *testing.T) {
+	m, ok := adaptercompat.Get("opencode")
+	if !ok || m.MinVersion == "" || m.FloorPolicy != adaptercompat.FloorFailClosed {
+		t.Fatalf("the opencode manifest = %+v, want a fail_closed floor", m)
+	}
+	spec, ok := adapterSpecs["opencode"]
+	if !ok || spec.kind != kindCLI || spec.minVersion != m.MinVersion || spec.floorPolicy != m.FloorPolicy {
+		t.Fatalf("opencode spec = %+v, want a cli spec on the manifest's floor %s (%s)", spec, m.MinVersion, m.FloorPolicy)
+	}
+	h := checkAdapter("opencode", fakeProbe{}.toProbe())
+	if h.MinVersion != m.MinVersion || h.OpenCode == nil || h.OpenCode.MaxTested != m.MaxTested || h.OpenCode.FloorPolicy != m.FloorPolicy {
+		t.Errorf("row floor %q, max-tested %v; want the manifest's %s and %s", h.MinVersion, h.OpenCode, m.MinVersion, m.MaxTested)
+	}
+
+	fields := openCodeSpecFields(t)
+	for field, call := range map[string]string{"minVersion": "compatMinVersion", "floorPolicy": "compatFloorPolicy"} {
+		expr, ok := fields[field]
+		if !ok {
+			t.Errorf("the opencode spec sets no %s", field)
+			continue
+		}
+		c, isCall := expr.(*ast.CallExpr)
+		fn, isIdent := func() (*ast.Ident, bool) {
+			if !isCall {
+				return nil, false
+			}
+			id, ok := c.Fun.(*ast.Ident)
+			return id, ok
+		}()
+		if !isIdent || fn.Name != call || len(c.Args) != 1 {
+			t.Errorf("the opencode spec's %s is not %s(\"opencode\"): a floor written out in adapterSpecs stops following the manifest", field, call)
+			continue
+		}
+		if lit, ok := c.Args[0].(*ast.BasicLit); !ok || lit.Value != `"opencode"` {
+			t.Errorf("the opencode spec's %s reads another adapter's manifest", field)
+		}
+	}
+}
+
+// openCodeSpecFields parses adapters.go and returns the fields of the
+// "opencode" entry of adapterSpecs, by name.
+func openCodeSpecFields(t *testing.T) map[string]ast.Expr {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), "adapters.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := map[string]ast.Expr{}
+	ast.Inspect(file, func(n ast.Node) bool {
+		kv, ok := n.(*ast.KeyValueExpr)
+		if !ok {
+			return true
+		}
+		if key, ok := kv.Key.(*ast.BasicLit); !ok || key.Value != `"opencode"` {
+			return true
+		}
+		lit, ok := kv.Value.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		for _, elt := range lit.Elts {
+			if f, ok := elt.(*ast.KeyValueExpr); ok {
+				if name, ok := f.Key.(*ast.Ident); ok {
+					fields[name.Name] = f.Value
+				}
+			}
+		}
+		return false
+	})
+	if len(fields) == 0 {
+		t.Fatal("adapters.go has no \"opencode\" entry in adapterSpecs")
+	}
+	return fields
 }
 
 // TestCheckAdapter_ClaudeBelowManifestFloorWarns: claude-headless has a floor
@@ -706,20 +789,19 @@ func TestCheckAdapters_CompatLoadFailureIsOneFailingRow(t *testing.T) {
 	}
 }
 
-// TestOpenCodeManifestIsDataOnly: the opencode manifest exists for later
-// consumers; the doctor reads a manifest only by one of its own adapter names,
-// and opencode is not one, so its presence changes no doctor row.
-func TestOpenCodeManifestIsDataOnly(t *testing.T) {
-	if _, ok := adaptercompat.Get("opencode"); !ok {
-		t.Fatal("no opencode manifest")
+// TestOpenCodeIsADoctorAdapter: `doctor --adapters` lists opencode, under its
+// own name and through AllAdapterNames, among the CLI adapters.
+func TestOpenCodeIsADoctorAdapter(t *testing.T) {
+	names := AllAdapterNames()
+	i := slices.Index(names, "opencode")
+	if i < 0 {
+		t.Fatalf("AllAdapterNames() = %v, want opencode in it", names)
 	}
-	if _, ok := adapterSpecs["opencode"]; ok {
-		t.Error("adapterSpecs has an opencode entry; the doctor's OpenCode checks are separate work")
+	if slices.Index(names, "claude-sdk") < i {
+		t.Errorf("AllAdapterNames() = %v, want opencode among the CLI adapters, before the SDK ones", names)
 	}
-	for _, name := range AllAdapterNames() {
-		if normalizeAdapterName(name) == "opencode" {
-			t.Error("AllAdapterNames includes opencode")
-		}
+	if h := checkAdapter("opencode", fakeProbe{}.toProbe()); h.Adapter != "opencode" || h.Kind != "cli" || h.Binary != "opencode" {
+		t.Errorf("row = %+v, want the opencode cli row", h)
 	}
 }
 

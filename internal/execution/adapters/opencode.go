@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"context"
 	"crypto/rand"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"unicode"
 
 	"github.com/nightgauge/nightgauge/internal/config"
@@ -30,6 +32,9 @@ import (
 // missing on every dispatch it lets through. It refuses an anthropic/ model
 // while ANTHROPIC_API_KEY is unset, and a model on a provider that runs on the
 // forge's or a cloud platform's credentials (openCodeCredentialRefusal).
+// Once the switch is set it holds the binary to the compat manifest's version
+// policy (checkVersionPolicy, opencode_preflight.go), and a binary
+// opencode.binary pins is the one spawned.
 //
 // Every spawn runs in a root private to its pipeline run
 // (opencode_isolation.go, ADR-022 § 8), under a per-run config built from the
@@ -49,6 +54,11 @@ type OpenCodeAdapter struct {
 	// stage's worktree; nil means config.LoadOpenCodeConfig. Only tests set
 	// it, so a test never reads the machine's real config.
 	settings func(worktreeDir string) (config.OpenCodeConfig, error)
+	// pinned hands BuildCommand the binary opencode.binary pins, keyed by the
+	// *RunRoot PrepareRunRoot returned for the dispatch, from the same read of
+	// the machine-tier block the run's config is built from. BuildCommand
+	// takes it out; the manager calls it once for each root.
+	pinned sync.Map
 }
 
 // loadSettings reads the machine-tier `opencode:` block for a stage running
@@ -140,32 +150,41 @@ var openCodeUnenforcedControls = []openCodeControl{
 	{"safety plugin", "Nightgauge's careful-gate and stage-gate hooks do not run inside OpenCode"},
 	{"endpoint policy", "the server behind a hosted provider key other than anthropic is whatever OpenCode's bundled catalog and a lower config layer make it: a provider block the repository or your OpenCode config names after that provider can send its API key to another base URL and the stage to another model, a LAN or public base URL of the declared endpoint is neither refused nor warned about, and an Ollama cloud model, which a local Ollama forwards to Ollama's hosted service, is dispatched like a local one"},
 	{"stage limits", "the stage's cost budget is not passed to OpenCode, and neither is its token cap on a hosted model, anthropic's included, whose limits come from OpenCode's catalog unless the repository or your OpenCode config sets them, and a context limit of 0 set there means the session is never compacted; the steps cap and the stage timeout bound a run, but nothing stops it at its cost budget"},
-	{"version policy", "the opencode binary's version is not checked against the floor or the max-tested version"},
 }
 
 // PreDispatch implements the manager's optional pre-dispatch hook, which runs
 // after worktree setup and before BuildCommand, so a refusal spawns nothing.
+// ctx is the stage's: the version policy's probes run under it.
 // `nightgauge opencode config` calls it too, so the SDK path meets the same
 // checks.
 //
 // The credential refusals come first (openCodeCredentialRefusal): the switch
 // cannot satisfy them, so they are the reason to state, and no
-// enabled-dispatch warning precedes them. Then the gate. Last, a stderr line
+// enabled-dispatch warning precedes them. Then the gate. Then the version
+// policy (checkVersionPolicy): a binary below the compat manifest's floor, or
+// newer than max-tested and failing its self-test or dispatched to a model
+// server the operator runs, is refused as adapter_incompatible before
+// anything is created. Last, a stderr line
 // names every provider variable the environment holds that the stage, and so
 // every tool it runs, will not get (openCodeWithheldProviderEnv), by name
 // alone.
 //
-// Every refusal that depends on the machine-tier `opencode:` block comes from
-// PrepareRunRoot, which reads the block once and builds the run's config and
-// environment from it before it creates anything: the block committed in the
-// target repository, a zero limit, an undeclared endpoint, a malformed
+// Every other refusal that depends on the machine-tier `opencode:` block comes
+// from PrepareRunRoot, which reads the block once and builds the run's config
+// and environment from it before it creates anything: the block committed in
+// the target repository, a zero limit, an undeclared endpoint, a malformed
 // base_url, and, unless the operator opted into their own OpenCode config, a
 // $HOME/.opencode holding config or the machine's managed OpenCode config.
-func (a *OpenCodeAdapter) PreDispatch(opts RunOptions) error {
+// The version policy reads the block for its binary pin and, above
+// max-tested, for the self-test's per-run config.
+func (a *OpenCodeAdapter) PreDispatch(ctx context.Context, opts RunOptions) error {
 	if err := openCodeCredentialRefusal(opts.Model, os.LookupEnv); err != nil {
 		return err
 	}
 	if err := openCodeGate(os.Getenv(ExperimentalOpenCodeEnvVar), os.Stderr); err != nil {
+		return err
+	}
+	if err := a.checkVersionPolicy(ctx, opts); err != nil {
 		return err
 	}
 	if names := openCodeWithheldProviderEnv(opts.Model, os.Environ()); len(names) > 0 {
@@ -233,7 +252,7 @@ func openCodePlatformProviderRefusal(model string) error {
 // server it names, a proxy serving a subscription included
 // (openCodeEndpointEnv).
 //
-// The model is parsed the way openCodeModelArg parses it (trimmed, split on
+// The model is parsed the way OpenCodeModelArg parses it (trimmed, split on
 // the first slash). The provider key is compared case-insensitively, so every
 // spelling of it meets this requirement rather than only the model check.
 func openCodeAnthropicRefusal(model string, lookup func(string) (string, bool)) error {
@@ -278,9 +297,9 @@ func openCodeGate(switchValue string, warn io.Writer) error {
 // ValidateModel implements the manager's optional pre-spawn model check. A
 // dispatch must name a model OpenCode can take on -m, because without -m
 // OpenCode falls back to the model its own config names — the operator's, not
-// the pipeline's. openCodeModelArg defines the one accepted form.
+// the pipeline's. OpenCodeModelArg defines the one accepted form.
 func (a *OpenCodeAdapter) ValidateModel(model string) error {
-	_, err := openCodeModelArg(model)
+	_, err := OpenCodeModelArg(model)
 	return err
 }
 
@@ -290,8 +309,10 @@ func (a *OpenCodeAdapter) ValidateModel(model string) error {
 // so a host name or an address can never be used as a key.
 var openCodeProviderKeyRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
-// openCodeModelArg returns the value for OpenCode's -m flag. Only an explicit
-// "<provider>/<model>" is accepted, and it passes through unchanged. OpenCode
+// OpenCodeModelArg returns the value for OpenCode's -m flag. Only an explicit
+// "<provider>/<model>" is accepted, and it passes through with only its
+// surrounding space trimmed; the manager records that value as the stage's
+// upstream model (ADR-022 § 2). OpenCode
 // splits it on the FIRST slash, so "lmstudio/qwen/qwen3.8-27b" is model
 // "qwen/qwen3.8-27b" on provider "lmstudio".
 //
@@ -300,7 +321,7 @@ var openCodeProviderKeyRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 // where the repository's code goes and what the stage costs, so the operator
 // names it (ADR-022, The command). Also refused: an empty model, and a value
 // whose provider key or model id could read as a flag.
-func openCodeModelArg(model string) (string, error) {
+func OpenCodeModelArg(model string) (string, error) {
 	m := strings.TrimSpace(model)
 	if m == "" {
 		return "", fmt.Errorf("the opencode adapter needs a model: set the stage model to <provider>/<model>, such as lmstudio/<model-id> or anthropic/<model-id>")
@@ -343,16 +364,24 @@ func isSpaceOrControl(r rune) bool {
 //
 // The environment includes opts.RunRoot's, which points OpenCode at the
 // run's own root and carries the per-run config as OPENCODE_CONFIG_CONTENT
-// (PrepareRunRoot). The manager always prepares one; a caller that skips it
-// gets no isolation variables and no config, the way a model the manager's
+// (PrepareRunRoot). The command is the binary opencode.binary pins, which
+// PrepareRunRoot hands over for that root, and otherwise the opencode on
+// PATH. The manager always prepares one; a caller that skips it gets no
+// isolation variables, no config and no pin, the way a model the manager's
 // check would refuse gets no -m.
 func (a *OpenCodeAdapter) BuildCommand(opts RunOptions) (string, []string, map[string]string) {
+	name := openCodeBinaryName
+	if opts.RunRoot != nil {
+		if pin, ok := a.pinned.LoadAndDelete(opts.RunRoot); ok {
+			name = pin.(string)
+		}
+	}
 	args := []string{"run", "--format", "json", "--print-logs", "--log-level", "ERROR"}
 	// The manager's ValidateModel call has already rejected a model this
 	// cannot express, so -m is always present on a real dispatch. Omitting it
 	// here, rather than guessing, keeps BuildCommand total for callers that
 	// skip validation.
-	if model, err := openCodeModelArg(opts.Model); err == nil {
+	if model, err := OpenCodeModelArg(opts.Model); err == nil {
 		args = append(args, "-m", model)
 	}
 	if opts.WorktreeDir != "" {
@@ -395,7 +424,7 @@ func (a *OpenCodeAdapter) BuildCommand(opts RunOptions) (string, []string, map[s
 		maps.Copy(env, opts.RunRoot.Env)
 	}
 
-	return "opencode", args, env
+	return name, args, env
 }
 
 // PrepareRunRoot implements the manager's optional per-run root hook, which
@@ -417,6 +446,11 @@ func (a *OpenCodeAdapter) BuildCommand(opts RunOptions) (string, []string, map[s
 // process inherited. Creating a root also sweeps the roots no stage has used
 // for OpenCodeOrphanMaxAge, which a crashed run leaves behind. A root holding
 // stored logins refuses the dispatch (openCodeStoredLoginRefusal).
+//
+// The same read gives the binary pin (opencode.binary, ADR-022 § 7), which
+// is checked again here (ResolveOpenCodeBinary) and handed to BuildCommand, so
+// the binary spawned is the one the block names now, never one PATH finds in
+// its place.
 func (a *OpenCodeAdapter) PrepareRunRoot(req RunRootRequest) (*RunRoot, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -425,6 +459,14 @@ func (a *OpenCodeAdapter) PrepareRunRoot(req RunRootRequest) (*RunRoot, error) {
 	settings, err := a.loadSettings(req.Run.WorktreeDir)
 	if err != nil {
 		return nil, err
+	}
+	var pin string
+	if settings.Binary != "" {
+		bin, err := ResolveOpenCodeBinary(settings.Binary, nil)
+		if err != nil {
+			return nil, err
+		}
+		pin = bin.Path
 	}
 	run, err := PrepareOpenCodeRun(OpenCodeRunRequest{
 		Home:               home,
@@ -440,7 +482,11 @@ func (a *OpenCodeAdapter) PrepareRunRoot(req RunRootRequest) (*RunRoot, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &RunRoot{Dir: run.RunDir, Env: run.Env}, nil
+	root := &RunRoot{Dir: run.RunDir, Env: run.Env}
+	if pin != "" {
+		a.pinned.Store(root, pin)
+	}
+	return root, nil
 }
 
 // WithholdsEnv implements the manager's optional hook deciding which inherited

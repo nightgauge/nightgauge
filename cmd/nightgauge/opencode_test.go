@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/adaptercompat"
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
@@ -61,10 +62,21 @@ const openCodeVerbRunID = "01890a5d-ac96-774b-bcce-b30209a81625"
 
 // isolateOpenCodeVerb points HOME and the machine tier at fresh directories,
 // writes machineConfig as the machine-tier config, clears every variable the
-// run is resolved from, sets the adapter's enable switch, and returns a
-// worktree to run the verb against.
+// run is resolved from, sets the adapter's enable switch, puts a fake opencode
+// at the compat manifest's max-tested version first on PATH (the adapter's
+// version policy reads it), and returns a worktree to run the verb against.
 func isolateOpenCodeVerb(t *testing.T, machineConfig string) string {
 	t.Helper()
+	m, ok := adaptercompat.Get("opencode")
+	if !ok {
+		t.Fatal("no opencode compat manifest")
+	}
+	bin := t.TempDir()
+	fake := "#!/bin/sh\n[ \"$1\" = --version ] && { echo " + m.MaxTested + "; exit 0; }\nexit 97\n"
+	if err := os.WriteFile(filepath.Join(bin, "opencode"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("HOME", t.TempDir())
 	for _, k := range []string{"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME", "GH_CONFIG_DIR", "GOCACHE", "ANTHROPIC_API_KEY"} {
 		t.Setenv(k, "")

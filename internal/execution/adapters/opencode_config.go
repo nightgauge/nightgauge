@@ -531,7 +531,7 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 	if in.Lookup == nil {
 		return OpenCodeRunConfig{}, errors.New("opencode config: no environment to check the provider's credential against")
 	}
-	model, err := openCodeModelArg(in.Run.Model)
+	model, err := OpenCodeModelArg(in.Run.Model)
 	if err != nil {
 		return OpenCodeRunConfig{}, err
 	}

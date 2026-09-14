@@ -1,6 +1,7 @@
 package execution
 
 import (
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -916,6 +917,7 @@ func TestStreamFormatForAdapter(t *testing.T) {
 		{"gemini-sdk", StreamFormatGemini},
 		{"copilot", StreamFormatCopilot},
 		{"grok", StreamFormatGrok},
+		{"opencode", StreamFormatOpenCode},
 		{"unknown", StreamFormatClaude}, // default
 	}
 
@@ -1044,5 +1046,180 @@ func TestServedModelTrackerNilSafety(t *testing.T) {
 	tracker := &ServedModelTracker{}
 	if fb := tracker.Observe(nil); fb != nil {
 		t.Error("nil event must not record")
+	}
+}
+
+// ── #1624 OpenCode `run --format json` ────────────────────────────────────
+
+// openCodeFixtureLines reads a real opencode 1.18.30 capture from testdata
+// (testdata/README.md § OpenCode), one event per element.
+func openCodeFixtureLines(t *testing.T, name string) []string {
+	t.Helper()
+	data, err := os.ReadFile("testdata/" + name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Split(strings.TrimSpace(string(data)), "\n")
+}
+
+// parseOpenCode feeds lines through the dispatch the manager uses for the
+// opencode adapter.
+func parseOpenCode(lines []string) *TokenAccumulator {
+	acc := &TokenAccumulator{}
+	format := StreamFormatForAdapter("opencode")
+	for _, line := range lines {
+		acc.ParseLine(format, line)
+	}
+	return acc
+}
+
+// withOpenCodeTokens returns a step_finish line with its part.tokens
+// replaced, keeping every other field of the captured event.
+func withOpenCodeTokens(t *testing.T, line string, input, output, reasoning, read, write int) string {
+	t.Helper()
+	var ev map[string]any
+	if err := json.Unmarshal([]byte(line), &ev); err != nil {
+		t.Fatal(err)
+	}
+	part, ok := ev["part"].(map[string]any)
+	if !ok || ev["type"] != "step_finish" {
+		t.Fatalf("not a step_finish event: %s", line)
+	}
+	part["tokens"] = map[string]any{
+		"total": input + output + reasoning + read + write, "input": input, "output": output,
+		"reasoning": reasoning, "cache": map[string]any{"read": read, "write": write},
+	}
+	out, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
+}
+
+// TestParseOpenCodeStream: opencode has no final usage event, so a run's
+// usage is the sum of its step_finish events. The research sample is a real
+// two-step capture (1539 then 1550 input): a parser that kept only the last
+// step would book 1550. Reasoning folds into output as it does for grok, and
+// the peak is the largest single step's prompt, which #1653 compares with the
+// context window.
+func TestParseOpenCodeStream(t *testing.T) {
+	lines := openCodeFixtureLines(t, "opencode_stream_research_sample.jsonl")
+	acc := parseOpenCode(lines)
+	s := acc.OpenCode()
+	if s.StepFinishes != 2 {
+		t.Fatalf("step_finish events = %d, want the capture's 2", s.StepFinishes)
+	}
+	if acc.InputTokens != 1539+1550 || acc.OutputTokens != 8+6 {
+		t.Errorf("input/output = %d/%d, want the summed steps %d/%d (the last step alone is 1550/6)",
+			acc.InputTokens, acc.OutputTokens, 1539+1550, 8+6)
+	}
+	if acc.PeakStepInputTokens != 1550 {
+		t.Errorf("peak step input = %d, want 1550", acc.PeakStepInputTokens)
+	}
+	if acc.CacheRead != 0 || acc.CacheCreated != 0 {
+		t.Errorf("cache read/write = %d/%d, want the capture's 0/0", acc.CacheRead, acc.CacheCreated)
+	}
+	if s.SessionID != "ses_fixture0000000000000000001" {
+		t.Errorf("session = %q, want the capture's (redacted) session", s.SessionID)
+	}
+	s.Finish(0)
+	if got := s.DriftMarkers(); len(got) != 0 {
+		t.Errorf("the real capture produced drift markers: %q", got)
+	}
+
+	// The same two captured events, carrying the issue's research numbers:
+	// 7550 and 7750 input, 101 output and 54 reasoning between them.
+	var steps []int
+	for i, line := range lines {
+		if strings.Contains(line, `"type":"step_finish"`) {
+			steps = append(steps, i)
+		}
+	}
+	research := append([]string{}, lines...)
+	research[steps[0]] = withOpenCodeTokens(t, lines[steps[0]], 7550, 40, 30, 0, 0)
+	research[steps[1]] = withOpenCodeTokens(t, lines[steps[1]], 7750, 61, 24, 0, 0)
+	acc = parseOpenCode(research)
+	if acc.InputTokens != 15300 || acc.OutputTokens != 155 || acc.PeakStepInputTokens != 7750 {
+		t.Errorf("input/output/peak = %d/%d/%d, want 15300/155/7750",
+			acc.InputTokens, acc.OutputTokens, acc.PeakStepInputTokens)
+	}
+
+	// Cache pools: OpenCode reports input with both cache pools already
+	// subtracted, so each lands in its own pool, and a step's prompt, the
+	// peak, counts all three.
+	cached := append([]string{}, lines...)
+	cached[steps[0]] = withOpenCodeTokens(t, lines[steps[0]], 100, 10, 0, 6000, 400)
+	cached[steps[1]] = withOpenCodeTokens(t, lines[steps[1]], 200, 20, 0, 6400, 0)
+	acc = parseOpenCode(cached)
+	if acc.InputTokens != 300 || acc.CacheRead != 12400 || acc.CacheCreated != 400 {
+		t.Errorf("input/cache read/cache write = %d/%d/%d, want 300/12400/400",
+			acc.InputTokens, acc.CacheRead, acc.CacheCreated)
+	}
+	if acc.PeakStepInputTokens != 6600 {
+		t.Errorf("peak = %d, want the second step's 200+6400", acc.PeakStepInputTokens)
+	}
+}
+
+// TestParseOpenCodeStreamDriftMarkers: a shape opencode 1.18.30 did not emit
+// is a drift marker, one per finding, and never a crash or a silent zero.
+func TestParseOpenCodeStreamDriftMarkers(t *testing.T) {
+	sample := openCodeFixtureLines(t, "opencode_stream_research_sample.jsonl")
+	last := len(sample) - 1
+	if !strings.Contains(sample[last], `"type":"step_finish"`) {
+		t.Fatalf("the sample no longer ends with a step_finish: %s", sample[last])
+	}
+	without := func(field string) []string {
+		var ev map[string]any
+		if err := json.Unmarshal([]byte(sample[last]), &ev); err != nil {
+			t.Fatal(err)
+		}
+		delete(ev["part"].(map[string]any), field)
+		b, _ := json.Marshal(ev)
+		lines := append([]string{}, sample[:last]...)
+		return append(lines, string(b))
+	}
+	var noSteps []string
+	for _, line := range sample {
+		if !strings.Contains(line, `"type":"step_finish"`) {
+			noSteps = append(noSteps, line)
+		}
+	}
+	unknown := append(append([]string{}, sample...), `{"type":"step_summary","timestamp":1,"sessionID":"ses_fixture0000000000000000001","part":{}}`)
+
+	for _, tc := range []struct {
+		name  string
+		lines []string
+		exit  int
+		want  string // "" = no marker
+	}{
+		{"unknown event type", unknown, 0, `unknown event type "step_summary"`},
+		{"step_finish without part.tokens", without("tokens"), 0, "a step_finish event has no part.tokens"},
+		{"step_finish without part.reason", without("reason"), 0, "a step_finish event has no part.reason"},
+		{"zero step_finish on exit 0", noSteps, 0, "the run exited 0 without a step_finish event"},
+		{"zero step_finish on a failed exit", noSteps, 1, ""},
+		{"a line that is not a JSON event", append(append([]string{}, sample...), "plain text"), 0, "a stdout line is not a JSON event"},
+		{"the real capture", sample, 0, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := parseOpenCode(tc.lines).OpenCode()
+			s.Finish(tc.exit)
+			got := s.DriftMarkers()
+			if tc.want == "" {
+				if len(got) != 0 {
+					t.Errorf("markers = %q, want none", got)
+				}
+				return
+			}
+			if len(got) != 1 || !strings.HasPrefix(got[0], OpenCodeDriftMarker+" ") || !strings.Contains(got[0], tc.want) {
+				t.Errorf("markers = %q, want exactly one %s marker saying %q", got, OpenCodeDriftMarker, tc.want)
+			}
+		})
+	}
+
+	// A marker repeated is one marker that says how often, so a stream that
+	// drifted on every line cannot bury the log.
+	s := parseOpenCode([]string{"x", "y", "z"}).OpenCode()
+	if got := s.DriftMarkers(); len(got) != 1 || !strings.HasSuffix(got[0], "(3 times)") {
+		t.Errorf("markers = %q, want one marker counted 3 times", got)
 	}
 }

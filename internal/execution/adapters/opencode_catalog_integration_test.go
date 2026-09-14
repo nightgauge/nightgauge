@@ -22,8 +22,23 @@ import (
 	"testing"
 )
 
-// openCodeCatalogVersion is the version openCodeCatalogEnv was read from.
-const openCodeCatalogVersion = "1.18.30"
+// openCodeCatalogVersion (const, "1.18.30") now lives in opencode_preflight.go
+// (non-test), shared with the runtime preflight checks it also pins.
+
+// openCodeCatalogBinary resolves the installed opencode binary. On CI a
+// missing binary fails the test rather than skipping it: CI installs the
+// pinned version to run it.
+func openCodeCatalogBinary(t *testing.T) string {
+	t.Helper()
+	path, err := exec.LookPath("opencode")
+	if err != nil {
+		if os.Getenv("CI") == "true" {
+			t.Fatalf("opencode is not on PATH, and CI must run this test: install opencode-ai@%s", openCodeCatalogVersion)
+		}
+		t.Skip("opencode is not on PATH")
+	}
+	return path
+}
 
 // openCodeCatalogEntryRE matches one provider entry of the catalog bundled in
 // the binary, as its source is minified: id:"<key>",env:["<VAR>",...].
@@ -37,10 +52,7 @@ var openCodeQuotedRE = regexp.MustCompile(`"([^"]+)"`)
 // binary's catalog exactly. A different binary fails rather than skips, and a
 // mismatch prints the entries to paste into opencode_catalog_env.go.
 func TestOpenCodeCatalogEnvMatchesTheBinary(t *testing.T) {
-	path, err := exec.LookPath("opencode")
-	if err != nil {
-		t.Skip("opencode is not on PATH")
-	}
+	path := openCodeCatalogBinary(t)
 	cmd := exec.Command(path, "--version")
 	cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=/usr/bin:/bin"}
 	out, err := cmd.Output()
@@ -114,10 +126,7 @@ func TestOpenCodeCatalogEnvMatchesTheBinary(t *testing.T) {
 // each model it prints, keyed by its "<provider>/<model>" line.
 func openCodeModelsVerbose(t *testing.T, provider, content string) map[string]map[string]any {
 	t.Helper()
-	path, err := exec.LookPath("opencode")
-	if err != nil {
-		t.Skip("opencode is not on PATH")
-	}
+	path := openCodeCatalogBinary(t)
 	cmd := exec.Command(path, "models", provider, "--verbose")
 	cmd.Dir = t.TempDir()
 	cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=/usr/bin:/bin", "OPENCODE_DISABLE_MODELS_FETCH=1",
@@ -161,10 +170,7 @@ func openCodeModelsVerbose(t *testing.T, provider, content string) map[string]ma
 // also change nothing about a model it accepts: each one resolves, under the
 // per-run config the builder makes for it, exactly as it does with none.
 func TestOpenCodeAnthropicModelsMatchTheBinary(t *testing.T) {
-	path, err := exec.LookPath("opencode")
-	if err != nil {
-		t.Skip("opencode is not on PATH")
-	}
+	path := openCodeCatalogBinary(t)
 	cmd := exec.Command(path, "--version")
 	cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=/usr/bin:/bin"}
 	out, err := cmd.Output()
