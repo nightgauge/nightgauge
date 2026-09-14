@@ -19,6 +19,10 @@
     {
       "pattern": "^https://github\\.com/orgs/nightgauge/projects/10$",
       "comment": "Confirmed HTTP 404 (#697 re-enablement sweep, 2026-08-18) -- project 10 does not exist under this org. Content fix is a separate, out-of-scope change."
+    },
+    {
+      "pattern": "^https://marketplace\\.visualstudio\\.com/",
+      "comment": "Host-scoped exemption (#1767). The VS Code Marketplace listing linked from README.md is a publishing artifact -- it is checked where it is published, not a property of this repository's documentation. CI and local gates must never request marketplace.visualstudio.com: a third-party listing whose availability we do not control must not be able to block every merge (the listing answered HTTP 404 for hours on 2026-09-14 for reasons entirely unrelated to any change here, and every PR's required link-check job failed with it). Scoped to this one host only -- every other external link is still checked. Listing availability is checked after publishing and once a day by the release watchdog, not by this gate."
     }
   ],
   "aliveStatusCodes": [200, 206, 301, 302, 307, 308, 401, 403, 429]

@@ -62,6 +62,15 @@ changelog, and the release workflow refuses a tag that does not.
   claude below it gets a `⚠` row naming the floor and stays usable, so the
   doctor does not mark it not ready (#1613)
 
+### Fixed
+
+- The required `link-check` job and the local gate no longer request the VS
+  Code Marketplace listing linked from `README.md`: `.markdown-link-check.json`
+  now ignores `https://marketplace.visualstudio.com/` links host-wide, since
+  the listing's availability is a publishing concern, not a property of this
+  repository's documentation, and a third-party listing must not be able to
+  block every merge (#1767)
+
 ### Added
 
 - The OpenCode config schema published for the newest tested OpenCode
