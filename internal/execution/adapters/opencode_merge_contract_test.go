@@ -51,6 +51,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // mcVersion is the opencode version every answer here was observed on. A
@@ -959,19 +961,12 @@ func TestOpenCodeProviderBaseURLPrecedence(t *testing.T) {
 	}
 }
 
-// mcGit runs git with no system or global config, so the operator's hooks,
-// signing and identity take no part.
+// mcGit runs git through internal/gittest, which disarms background gc and
+// blinds the invocation to the operator's or CI image's system/global config
+// (#680, #542) instead of this file re-deriving that isolation on its own.
 func (h *mcHarness) git(dir string, args ...string) {
 	h.t.Helper()
-	cmd := exec.Command("git", append([]string{
-		"-c", "user.name=Adversarial Fixture", "-c", "user.email=fixture@example.invalid",
-		"-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main",
-	}, args...)...)
-	cmd.Dir = dir
-	cmd.Env = []string{"HOME=" + h.home, "PATH=/usr/bin:/bin", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null"}
-	if out, err := cmd.CombinedOutput(); err != nil {
-		h.t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
-	}
+	gittest.Run(h.t, dir, args...)
 }
 
 // TestOpenCodeConfigDiscoveryAboveWorktree pins question 5 on the layout
