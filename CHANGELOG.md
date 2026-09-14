@@ -64,6 +64,16 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- The OpenCode stream parser is now tested against real opencode 1.18.30
+  runs: a local LM Studio model, a run whose model started two subagents, and
+  a stub-provider run dispatched under a hosted provider key that stands in
+  for the hosted shape until a real hosted capture exists (#1680). The tests
+  pin the summed step usage, the subagent usage folded in from the session
+  table, a stamped zero for the local model and a registry price for the
+  hosted one. The captures showed that a subagent's rejected permission does
+  not end the run, yet still fails the stage; ADR-022 § 9 records it. The
+  second local endpoint's capture is not included: that endpoint did not
+  answer (#1629)
 - An OpenCode stage now gets its repository's steering and the pipeline's MCP
   servers. Its `AGENTS.md`, or the `CLAUDE.md` of a repository that has only
   that, and the files it `@`-imports from inside the worktree reach the model

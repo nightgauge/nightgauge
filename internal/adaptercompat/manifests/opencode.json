@@ -30,7 +30,11 @@
     "internal/execution/adapters/testdata/cli-help/opencode-run-1.18.30.txt",
     "internal/doctor/testdata/opencode-1.18.30-debug-config-invalid.txt",
     "internal/doctor/testdata/opencode-1.18.30-models-configured.txt",
-    "internal/doctor/testdata/opencode-1.18.30-models-other.txt"
+    "internal/doctor/testdata/opencode-1.18.30-models-other.txt",
+    "internal/execution/testdata/opencode_stream_local_capture.jsonl",
+    "internal/execution/testdata/opencode_stream_cloud_capture.jsonl",
+    "internal/execution/testdata/opencode_stream_subagent_capture.jsonl",
+    "internal/execution/testdata/opencode_stream_subagent_stderr.txt"
   ],
   "config_schema_sha256": "",
   "plugin_api_version": "",

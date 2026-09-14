@@ -433,7 +433,8 @@ The stub counts words rather than tokens and reports no reasoning or cache
 tokens, so `TestParseOpenCodeStream` also replays the two captured
 `step_finish` events carrying the research numbers (7550 and 7750 input, 101
 output and 54 reasoning) and cache pools, on the real event shape. Captures
-from a real model, with reasoning, cache and subagent sessions, are #1629's.
+from a real model, with reasoning tokens and subagent sessions, follow in
+[§ OpenCode: real-model captures](#opencode-real-model-captures).
 
 ### Observed on the same version, not committed
 
@@ -446,7 +447,8 @@ from a real model, with reasoning, cache and subagent sessions, are #1629's.
   id; a sanitized export redacts the `task` tool's metadata, which names the
   child session. The session table's `parent_id` column is the record of which
   session started which, so the parser lists subagent sessions with
-  `opencode db` and walks the tree itself. #1629's subagent capture pins this.
+  `opencode db` and walks the tree itself. The subagent capture below pins
+  this against a real run with two subagent sessions.
 - A subagent may not start another subagent unless the config raises
   `subagent_depth`, which defaults to 1.
 - `opencode --version` creates the XDG directories it finds missing, and
@@ -477,3 +479,169 @@ stderr keeps its escape codes. The script then refuses any file that still
 holds a credential shape, an IPv4 address other than `127.0.0.1`, a sandbox
 path or the run's server password; `--self-test` proves the refusal by
 planting a credential, and `--check` runs it on existing files.
+
+## OpenCode: real-model captures
+
+**Real** `opencode run --format json` transcripts (#1629), captured on the
+maintainer's machine and redacted by [`redact-opencode.jq`](redact-opencode.jq), each
+read by a `TestParseOpenCodeRealCapture*` test in `stream_test.go`:
+
+| File                                     | Endpoint id                       | Model                     | Steps |
+| ---------------------------------------- | --------------------------------- | ------------------------- | ----: |
+| `opencode_stream_local_capture.jsonl`    | `lmstudio`                        | `qwen/qwen3.8-27b`        |     3 |
+| `opencode_stream_subagent_capture.jsonl` | `lmstudio`                        | `qwen/qwen3.8-27b`        |     5 |
+| `opencode_stream_subagent_stderr.txt`    | `lmstudio`                        | the subagent run's stderr |     - |
+| `opencode_stream_cloud_capture.jsonl`    | none: the stub provider, as `xai` | `grok-4.6` (stub)         |     2 |
+| second endpoint (`lmstudio-remote`)      | **BLOCKED**, not captured         | -                         |     - |
+
+**`opencode_stream_cloud_capture.jsonl` is not a hosted provider's output.**
+It is the repository's stub provider (`cmd/stub-provider`, script
+`tool-edit-stop`) on `127.0.0.1`, dispatched as `xai/grok-4.6`, and it stands
+in for the hosted shape until #1680 captures a real hosted model. The run's
+config gives the `xai` key a complete provider block pointing at the stub
+(`npm: @ai-sdk/openai-compatible`, `env: []`, an empty `apiKey`), and OpenCode
+runs under `env -i`, so no hosted provider, no request off the machine and no
+API key took part; the stub's log counted both model requests. What it shows
+is the priced shape: OpenCode prices each step from its bundled catalog
+(`part.cost` is 2 USD per million input tokens and 6 per million output), and
+the served model is one the registry prices. The stub reports no cache
+tokens, so hosted cache pools are #1680's to capture.
+
+**The second-endpoint leg is BLOCKED.** The `lmstudio-remote` endpoint did
+not answer on 2026-09-14 (the connection failed at every probe, before and
+after the other legs), so there is no capture, fixture, test or manifest
+entry for it. No hosted model was substituted. Its capture, which is to show
+that the provider key and endpoint id are the only labels a stage records,
+waits for that endpoint.
+
+| Field       | Value                                                                 |
+| ----------- | --------------------------------------------------------------------- |
+| Captured at | 2026-09-14                                                            |
+| CLI version | `1.18.30` (`opencode --version`)                                      |
+| Host OS     | macOS 27.0 (Darwin 27.0.0, arm64)                                     |
+| Model       | `qwen/qwen3.8-27b` on LM Studio, MLX 8-bit, loaded context 131072     |
+| Endpoint    | `lmstudio`, on `127.0.0.1:1234`; `lmstudio-remote` BLOCKED            |
+| Wall clock  | local 148 s, subagent 528 s, cloud stand-in 3 s; each capped at 900 s |
+| Redaction   | sandbox paths and session ids; no credential was found                |
+
+Each leg ran the argv the adapter emits, with the prompt on stdin, from a
+throwaway git repository holding `calc.py` (`add` returning `a - b`; the
+stub's script expects `a + b`):
+
+```bash
+opencode run --format json --print-logs --log-level ERROR \
+  -m <provider key>/<model> --dir <scratch git repository>
+```
+
+- **Isolation (#1616).** `env -i`, a throwaway `HOME`, `TMPDIR` and four XDG
+  directories, the `OPENCODE_DISABLE_*` switches of
+  `scripts/capture-opencode-fixture.sh`, and a random
+  `OPENCODE_SERVER_PASSWORD`. The run's config names one provider, as a
+  complete block (`env: []`, an empty `apiKey`).
+- **Bounds.** Each run was its own process group under a 900 s alarm
+  (`perl -e 'setpgrp(0,0); alarm 900; exec @ARGV'`); after exit the group was
+  killed and checked empty, and so was the stub's pid.
+- **Sessions.** From the sandbox root, with the same environment,
+  `opencode db "SELECT id, parent_id, time_created FROM session ..." --format json --pure`
+  listed the session tree, and `opencode export <session> --sanitize --pure`
+  was read for `info.tokens`, `info.cost` and the assistant messages'
+  `providerID` and `modelID`, which are the numbers below. The exports were
+  never kept. The sandbox, its session database with it, was deleted when
+  each leg ended; the maintainer's own OpenCode database gained no session
+  (its newest predates the captures).
+- **Permissions.** Local: `edit` allowed, `bash`, `webfetch` and
+  `external_directory` denied. Subagent: the same plus `task` allowed, and the
+  `general` agent's `bash` set to `ask`, so a subagent's `bash` call is
+  auto-rejected while the run's own session has no `bash` tool.
+- **Prompts.** Local: "calc.py has a bug: add(a, b) should return the sum of a
+  and b. Fix it." Subagent: "Use the task tool twice, one call after the other.
+  First, have a general subagent read calc.py and report the bug in add.
+  Second, have another general subagent run `python3 calc.py` with the bash
+  tool and report what it printed. Then fix the bug in calc.py yourself." Cloud
+  stand-in: "Change add so that it subtracts in calc.py."
+- **Redaction.** `redact-opencode.jq` over stdout and stderr, then
+  `scripts/capture-opencode-fixture.sh --check` on every file. The subagent
+  run's stderr, one auto-reject notice, is committed redacted, as the #1624
+  auto-reject stderr is; no raw stream, raw stderr or export was kept.
+
+**Do not replace these files with synthesized equivalents.** A recapture on
+another model or version will not reproduce these numbers; update the tables
+and the tests' ground truth in the same change.
+
+### Ground truth encoded in the files
+
+`opencode_stream_local_capture.jsonl` (read, edit, stop):
+
+| step    | reason       | input | output | reasoning | cache read | cache write | `part.cost` |
+| ------- | ------------ | ----: | -----: | --------: | ---------: | ----------: | ----------: |
+| 1       | `tool-calls` |  5640 |     44 |        10 |          0 |           0 |           0 |
+| 2       | `tool-calls` |  5809 |     78 |         7 |          0 |           0 |           0 |
+| 3       | `stop`       |  5916 |     22 |        30 |          0 |           0 |           0 |
+| **sum** |              | 17365 |    144 |        47 |          0 |           0 |           0 |
+
+The session's export: `info.tokens` 17365 input, 144 output, 47 reasoning,
+no cache; `info.cost` 0; served by `lmstudio` / `qwen/qwen3.8-27b`. The stage
+records 17365 input and 191 output (reasoning folded in), provider
+`lm-studio`, a stamped zero.
+
+`opencode_stream_cloud_capture.jsonl` (the stub's edit, then stop):
+
+| step    | reason       | input | output | reasoning | cache read | cache write | `part.cost` |
+| ------- | ------------ | ----: | -----: | --------: | ---------: | ----------: | ----------: |
+| 1       | `tool-calls` |  1539 |      8 |         0 |          0 |           0 |    0.003126 |
+| 2       | `stop`       |  1550 |      6 |         0 |          0 |           0 |    0.003136 |
+| **sum** |              |  3089 |     14 |         0 |          0 |           0 |    0.006262 |
+
+The session's export: `info.tokens` 3089 input, 14 output; `info.cost`
+0.006262; served by `xai` / `grok-4.6`. The stage records provider `xai`,
+model `grok-4.6`, priced from the registry's rate card, which is not
+OpenCode's 0.006262 (ADR-022 § 3).
+
+`opencode_stream_subagent_capture.jsonl`, the run's own session (task,
+task, read, edit, stop):
+
+| step    | reason       | input | output | reasoning | cache read | cache write | `part.cost` |
+| ------- | ------------ | ----: | -----: | --------: | ---------: | ----------: | ----------: |
+| 1       | `tool-calls` |  5681 |    110 |        12 |          0 |           0 |           0 |
+| 2       | `tool-calls` |  5915 |    108 |        60 |          0 |           0 |           0 |
+| 3       | `tool-calls` |  6140 |     45 |        85 |          0 |           0 |           0 |
+| 4       | `tool-calls` |  6386 |     79 |        23 |          0 |           0 |           0 |
+| 5       | `stop`       |  6510 |     97 |        70 |          0 |           0 |           0 |
+| **sum** |              | 30632 |    439 |       250 |          0 |           0 |           0 |
+
+The session tree and each session's export (`info.tokens`, `info.cost`), all
+served by `lmstudio` / `qwen/qwen3.8-27b`:
+
+| session                          | parent | input | output | reasoning | cache | cost |
+| -------------------------------- | ------ | ----: | -----: | --------: | ----: | ---: |
+| `ses_fixture0000000000000000001` | none   | 30632 |    439 |       250 |     0 |    0 |
+| `ses_fixture0000000000000000002` | `…001` | 12832 |     95 |        18 |     0 |    0 |
+| `ses_fixture0000000000000000003` | `…001` |  6330 |     49 |        15 |     0 |    0 |
+| **stage**                        |        | 49794 |    583 |       283 |     0 |    0 |
+
+The parent's export equals the stream's sum; the stage's usage is the three
+exports' sum, 49794 input and 866 output. A parser that summed only the
+stream would book 30632 and 689. The peak step prompt stays the parent's
+6510: a subagent's session total is not a step.
+
+### Observed on opencode 1.18.30
+
+- The three assumptions held: no final usage event; no subagent step in the
+  run's stream, every event of which carries the run's own `sessionID`; and
+  `part.cost` and `info.cost` 0 for the local model.
+- Qwen reports reasoning tokens (`part.tokens.reasoning`) on every step, yet
+  without `--thinking` the stream has no `reasoning` event; the export has the
+  reasoning parts.
+- The stream is not sanitized, and a `task` tool event names its subagent
+  session: `part.state.metadata.sessionId` (with `parentSessionId` and the
+  subagent's `model`), the output's `<task id="ses_…" state="completed">`,
+  and a failed call's `Subagent failed (task_id: ses_…): …`. The parser reads
+  none of these; the session table stays the record it walks.
+- A subagent's rejected permission does not end the run. OpenCode prints the
+  notice on the run's stderr, the subagent's session ends, the run's `task`
+  call fails with `Subagent failed (task_id: <session>): ` and the rejection
+  message, which is not the rejection of the run's own call, and the run goes
+  on: here it read `calc.py`, fixed it and stopped, and exited 0. The notice
+  is the first on stderr, so it decides the stage's marker (ADR-022 § 9): the
+  stage reports exit 1 with `tool=bash` although its own session finished the
+  task.
