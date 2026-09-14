@@ -8,7 +8,6 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -191,16 +190,15 @@ func buildExecutionHistoryStages(record state.V2RunRecord) ([]ExecutionHistorySt
 			model = tok.Adapter
 		}
 
-		// An opencode stage records the model and the provider that served it
-		// as ADR-022 § 1-2 decide (tokens.OpenCodeModelIdentity): a registry
-		// model as its bare id, any other model as "<provider>/<id>". provider
-		// below stays the executing adapter, so modelProvider is the only
-		// field that tells a local stage from a hosted one.
+		// A multi-provider adapter's stage (opencode) records the provider
+		// that served its model beside the model, in the form ADR-022 § 1-2
+		// decide. provider below stays the executing adapter, so
+		// modelProvider is the only field that tells a local stage from a
+		// hosted one. It is sent as recorded, never derived from the model
+		// string: the served model can differ from the one dispatched.
 		var modelProvider string
-		if hasTok && tok.Adapter == openCodeAdapter {
-			if recorded, p := tokens.OpenCodeModelIdentity(model); recorded != "" {
-				model, modelProvider = recorded, p
-			}
+		if detail.ModelSelection != nil {
+			modelProvider = detail.ModelSelection.ModelProvider
 		}
 
 		// provider is the executing adapter recorded on the stage (V5 —
@@ -282,10 +280,6 @@ func buildExecutionHistoryStages(record state.V2RunRecord) ([]ExecutionHistorySt
 
 	return stages, summedCostUSD
 }
-
-// openCodeAdapter is the multi-provider adapter whose stages carry a model
-// provider (ADR-022).
-const openCodeAdapter = "opencode"
 
 // stampedStageCost reports whether a stage's cost is a priced figure: priced
 // from a rate card, reported by the CLI, or the exact zero of a stage that

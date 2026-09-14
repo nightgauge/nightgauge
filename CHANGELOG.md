@@ -64,15 +64,23 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
-- An OpenCode stage with a cost budget is stopped once its cost, priced from
-  the model registry at every `step_finish`, passes the budget: its process
-  group gets SIGTERM, then SIGKILL after 10 seconds, and the stage fails as
-  `budget_exceeded` with `[cost-cap-exceeded]` ending its stderr. OpenCode's
-  own reported cost is never used. A hosted model the registry cannot price
-  logs one `[opencode-cost]` warning and runs without a cost cap. The Go
-  scheduler's platform telemetry for an OpenCode stage now carries
-  `modelProvider`, the provider that served its model, beside its ADR-022
-  model identity (#1630)
+- An OpenCode stage with a cost budget is stopped once the cost of its own
+  steps, priced from the model registry at every `step_finish`, passes the
+  budget: its process group gets SIGTERM, then SIGKILL after 10 seconds, and
+  the stage fails as `budget_exceeded` with `[cost-cap-exceeded]` ending its
+  stderr. A subagent's steps are not in the stream, so its usage is priced
+  only once the stage has ended: a stage its subagents took past the budget
+  is not stopped while they run, but fails as `budget_exceeded` then, and the
+  enabled-dispatch warning says so. OpenCode's own reported cost is never
+  used. A hosted model the registry cannot price logs one `[opencode-cost]`
+  warning and runs without a cost cap (#1630)
+
+- An OpenCode stage's run record now carries the identity of the model that
+  served it on its `model_selection`: `model_provider`, `upstream_model` (the
+  `-m` value it was dispatched with, kept when another model served it) and
+  `endpoint` (the declared endpoint that served it). The Go scheduler's
+  platform telemetry sends the recorded provider as `modelProvider` beside
+  the stage's ADR-022 model identity (#1630)
 
 - An OpenCode stage now gets its repository's steering and the pipeline's MCP
   servers. Its `AGENTS.md`, or the `CLAUDE.md` of a repository that has only

@@ -25,11 +25,16 @@ type costStage struct {
 	// model is the dispatched model, and the export names it as the model
 	// that served the stage.
 	model string
+	// served, when set, is the model the export names instead of model.
+	served string
 	// budget is the stage's CostBudget in USD.
 	budget float64
 	// run is the shell the stage runs once it has read its prompt. $STEPS is
 	// the captured research stream.
 	run string
+	// childInput, when set, gives the stage's session one subagent session
+	// whose export reports that many input tokens.
+	childInput int
 }
 
 // costStageOutcome is what one stage left behind.
@@ -57,23 +62,33 @@ func runCostStage(t *testing.T, stage costStage) costStageOutcome {
 	if err := os.WriteFile(steps, []byte(readTestdata(t, "opencode_stream_research_sample.jsonl")), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	key, id, _ := strings.Cut(stage.model, "/")
+	served := stage.model
+	if stage.served != "" {
+		served = stage.served
+	}
+	key, id, _ := strings.Cut(served, "/")
 	export := filepath.Join(dir, "export.json")
-	if err := os.WriteFile(export, []byte(sessionExport(0, 0, 0, 0, 0, 0, key, id)), 0o600); err != nil {
+	if err := os.WriteFile(export, []byte(sessionExport(stage.childInput, 0, 0, 0, 0, 0, key, id)), 0o600); err != nil {
 		t.Fatal(err)
+	}
+	// The fold adds only the tokens of a subagent session's export, never
+	// the stage's own, so one export serves both.
+	rows := "[]"
+	if stage.childInput > 0 {
+		rows = `[{"id":"ses_childA","parent_id":"ses_fixture0000000000000000001"}]`
 	}
 	pidFile := filepath.Join(dir, "stage.pid")
 	script := fmt.Sprintf(`#!/bin/sh
 case "$1" in
 --version) echo 1.18.30; exit 0 ;;
-db) echo '[]'; exit 0 ;;
+db) echo '%s'; exit 0 ;;
 export) cat %q; exit 0 ;;
 esac
 echo $$ > %q
 cat > /dev/null
 STEPS=%q
 %s
-`, export, pidFile, steps, stage.run)
+`, rows, export, pidFile, steps, stage.run)
 	if err := os.WriteFile(filepath.Join(dir, "opencode"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -260,6 +275,88 @@ func TestOpenCodeCostWatchdogInert(t *testing.T) {
 			}
 			if strings.Contains(out.logged, CostCapExceededMarker) {
 				t.Errorf("the manager logged a budget stop:\n%s", out.logged)
+			}
+		})
+	}
+}
+
+// TestOpenCodeCostWatchdogCountsSubagentSpend: a subagent's usage never
+// reaches the stream, so the watchdog cannot stop a stage while its
+// subagents spend. Their usage is folded in once the stage has ended, and a
+// stage whose cost, its subagent sessions included, is then past its budget
+// is never recorded as a success: it fails with [cost-cap-exceeded] ending
+// its stderr, which classifies as budget_exceeded, and is not cancelled. The
+// same stage whose subagents stay inside the budget succeeds.
+func TestOpenCodeCostWatchdogCountsSubagentSpend(t *testing.T) {
+	const model, budget = "anthropic/claude-sonnet-5", 0.5
+	for _, tc := range []struct {
+		name       string
+		childInput int
+		over       bool
+	}{
+		// At claude-sonnet-5's registry rate of USD 3 per million input
+		// tokens, the subagent alone costs USD 3.
+		{"over", 1_000_000, true},
+		// USD 0.30, and the stage's own steps about USD 0.01.
+		{"within", 100_000, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := runCostStage(t, costStage{model: model, budget: budget, childInput: tc.childInput, run: `cat "$STEPS"`})
+			res := out.result
+			if res.Cancelled {
+				t.Error("RunResult.Cancelled = true: a budget stop is not an operator's stop")
+			}
+			if res.InputTokens < tc.childInput {
+				t.Fatalf("input tokens = %d; the subagent's %d were not folded in", res.InputTokens, tc.childInput)
+			}
+			if !tc.over {
+				if res.ExitCode != 0 || strings.Contains(res.Stderr+out.logged, CostCapExceededMarker) {
+					t.Errorf("exit %d, stderr:\n%s\nlogged:\n%s\nwant a stage inside its budget to succeed", res.ExitCode, res.Stderr, out.logged)
+				}
+				return
+			}
+			if res.ExitCode == 0 {
+				t.Error("the stage exited 0 past its cost budget; it must fail")
+			}
+			lines := strings.Split(strings.TrimRight(res.Stderr, "\n"), "\n")
+			if last := lines[len(lines)-1]; !strings.HasPrefix(last, CostCapExceededMarker+" ") || !strings.Contains(last, "subagent") {
+				t.Errorf("the stage's stderr does not end with a %s line naming its subagent sessions:\n%s", CostCapExceededMarker, res.Stderr)
+			}
+			if kind := terminalkind.Classify(fmt.Sprintf("exit %d: %s", res.ExitCode, res.Stderr)); kind != "budget_exceeded" {
+				t.Errorf("the stage classifies as %q, want budget_exceeded:\n%s", kind, res.Stderr)
+			}
+			if n := strings.Count(out.logged, CostCapExceededMarker); n != 1 {
+				t.Errorf("the manager logged %s %d times, want once:\n%s", CostCapExceededMarker, n, out.logged)
+			}
+		})
+	}
+}
+
+// TestOpenCodeStageModelIdentity: an opencode stage's result carries the
+// ADR-022 § 2 identity the stage record is written from: the served model in
+// its recorded form, the provider that served it, the -m value as
+// dispatched, and the endpoint id when the served model's provider key is an
+// endpoint the machine declares. The reference machine declares one LM
+// Studio, whose id is lmstudio. When the export shows that another model
+// served the stage, the model, provider and endpoint are the served model's
+// and the upstream model stays the -m value.
+func TestOpenCodeStageModelIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		model, served                         string
+		wantModel, wantProvider, wantEndpoint string
+	}{
+		{"lmstudio/qwen/qwen3.8-27b", "", "lm-studio/qwen/qwen3.8-27b", "lm-studio", "lmstudio"},
+		{"anthropic/claude-sonnet-5", "", "claude-sonnet-5", "anthropic", ""},
+		{"openai/gpt-9-preview", "", "openai/gpt-9-preview", "openai", ""},
+		{"anthropic/claude-sonnet-5", "lmstudio/qwen/qwen3.8-27b", "lm-studio/qwen/qwen3.8-27b", "lm-studio", "lmstudio"},
+		{"lmstudio/qwen/qwen3.8-27b", "anthropic/claude-sonnet-5", "claude-sonnet-5", "anthropic", ""},
+	} {
+		t.Run(tc.model+" served by "+tc.served, func(t *testing.T) {
+			res := runCostStage(t, costStage{model: tc.model, served: tc.served, run: `cat "$STEPS"`}).result
+			got := [4]string{res.ServedModel, res.ModelProvider, res.UpstreamModel, res.Endpoint}
+			want := [4]string{tc.wantModel, tc.wantProvider, tc.model, tc.wantEndpoint}
+			if got != want {
+				t.Errorf("(served model, model provider, upstream model, endpoint) = %q, want %q", got, want)
 			}
 		})
 	}

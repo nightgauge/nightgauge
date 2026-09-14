@@ -503,9 +503,10 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	//
 	// Its cost watchdog (ADR-022 § 3) re-prices the stage from the model
 	// registry on every step_finish and stops the stage once that passes
-	// RunOptions.CostBudget, since OpenCode takes no cost cap of its own. The
-	// model is the value BuildCommand passed as -m: the model check before
-	// dispatch refused any model it would not pass.
+	// RunOptions.CostBudget, since OpenCode takes no cost cap of its own; the
+	// subagent sessions the stream never carries are priced in once the stage
+	// has ended. The model is the value BuildCommand passed as -m: the model
+	// check before dispatch refused any model it would not pass.
 	redactOut := func(b []byte) []byte { return redactLine(redact, b) }
 	var openCode *openCodeRun
 	var openCodeModel string
@@ -679,11 +680,20 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 		if runOpts.RunRoot != nil && runOpts.RunRoot.Dir != "" {
 			exit.runRoot = runOpts.RunRoot.Dir
 		}
+		if runOpts.RunRoot != nil {
+			exit.endpoints = runOpts.RunRoot.Endpoints
+		}
 		if cmd.ProcessState != nil {
 			exit.exitCode = cmd.ProcessState.ExitCode()
 		}
 		done := openCode.finish(ctx, exit, tokenAcc)
 		openCodeDone = &done
+		// The fold added the subagent sessions' usage, which the stream never
+		// carried: a stage they took past its cost budget fails too.
+		if costCap.settle(tokenAcc) {
+			fmt.Fprintf(os.Stderr, "%s#%d %s: %s\n", opts.Repo, opts.IssueNumber, opts.Stage, costCap.notice())
+			keepStderr([]byte(costCap.notice()))
+		}
 	}
 	result := runResultFromAccumulator(string(stdoutBuf), string(stderrBuf), tokenAcc, modelTracker)
 	if openCodeDone != nil {
@@ -719,7 +729,7 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 		}
 	}
 	// A stage stopped at its cost budget failed, even when it exited 0 on the
-	// SIGTERM.
+	// SIGTERM, and so did one its subagents took past it.
 	if costCap != nil && costCap.fired && result.ExitCode == 0 {
 		result.ExitCode = 1
 	}

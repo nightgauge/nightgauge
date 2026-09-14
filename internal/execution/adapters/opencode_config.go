@@ -951,6 +951,9 @@ type OpenCodeRun struct {
 	// every hosted provider, so a claim that the run stays offline does not
 	// hold.
 	NonLoopback bool `json:"non_loopback"`
+	// Endpoints are the ids of the endpoints the run's config declares
+	// (OpenCodeEndpoints), for the stage record's endpoint (ADR-022 § 2).
+	Endpoints []string `json:"-"`
 }
 
 // OpenCodeEnvWithhold is OpenCodeWithholdsEnv for one dispatch, as data: an
@@ -1087,7 +1090,17 @@ func PrepareOpenCodeRun(req OpenCodeRunRequest) (*OpenCodeRun, error) {
 		PluginDir:     filepath.Join(root, "config", "opencode", "plugin"),
 		RunDir:        root,
 		NonLoopback:   built.NonLoopback,
+		Endpoints:     openCodeEndpointIDList(input.Endpoints),
 	}, nil
+}
+
+// openCodeEndpointIDList is the id of each endpoint, in order.
+func openCodeEndpointIDList(endpoints []OpenCodeEndpoint) []string {
+	ids := make([]string, 0, len(endpoints))
+	for _, ep := range endpoints {
+		ids = append(ids, ep.ID)
+	}
+	return ids
 }
 
 // openCodeIsolationFor is the isolation a dispatch of req gets in root.

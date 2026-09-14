@@ -320,30 +320,3 @@ func TestCalculateCostForOpenCodeUnstamped(t *testing.T) {
 		}
 	}
 }
-
-// TestOpenCodeModelIdentity is ADR-022 § 1's fixture table: the model a
-// stage record carries and its provider, from the -m value and from the
-// recorded form alike. The endpoint rows wait for declared endpoints (#1679),
-// so lmstudio-remote is an "other" key until then.
-func TestOpenCodeModelIdentity(t *testing.T) {
-	for _, tc := range []struct{ in, recorded, provider string }{
-		{"lmstudio/qwen/qwen3.8-27b", "lm-studio/qwen/qwen3.8-27b", "lm-studio"},
-		{"lm-studio/qwen/qwen3.8-27b", "lm-studio/qwen/qwen3.8-27b", "lm-studio"},
-		{"ollama/qwen3-coder:30b", "ollama/qwen3-coder:30b", "ollama"},
-		{"anthropic/claude-sonnet-5", "claude-sonnet-5", "anthropic"},
-		{"claude-sonnet-5", "claude-sonnet-5", "anthropic"},
-		{"openai/gpt-5.5", "gpt-5.5", "openai"},
-		{"xai/grok-4.6", "grok-4.6", "xai"},
-		{"google/gemini-2.5-pro", "gemini-2.5-pro", "google"},
-		{"openai/gpt-9-preview", "openai/gpt-9-preview", "openai"},
-		{"openrouter/meta-llama/llama-4", "openrouter/meta-llama/llama-4", "other"},
-		{"lmstudio-remote/qwen/qwen3.8-27b", "lmstudio-remote/qwen/qwen3.8-27b", "other"},
-		{"sonnet", "", ""},
-		{"", "", ""},
-	} {
-		recorded, provider := OpenCodeModelIdentity(tc.in)
-		if recorded != tc.recorded || provider != tc.provider {
-			t.Errorf("OpenCodeModelIdentity(%q) = (%q, %q), want (%q, %q)", tc.in, recorded, provider, tc.recorded, tc.provider)
-		}
-	}
-}

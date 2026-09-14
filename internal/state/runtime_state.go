@@ -269,6 +269,12 @@ type RuntimeState struct {
 	// #299/#397 empty-means-undetermined convention — never a guess.
 	StageServedModels map[string]string `json:"stageServedModels,omitempty"`
 
+	// StageModelIdentities captures, for each stage of a multi-provider
+	// adapter, the ADR-022 § 2 identity of the model that served it, as the
+	// executor reported it (adapters.RunResult.ModelProvider, UpstreamModel
+	// and Endpoint). BuildV2Record projects it onto V2ModelSelect.
+	StageModelIdentities map[string]StageModelIdentity `json:"stageModelIdentities,omitempty"`
+
 	// StageEfforts captures the EFFORT_LEVELS rung actually in force for each
 	// stage's dispatch, when Go has direct, first-party evidence of it (Issue
 	// #580). Today that evidence exists only for the grok-family adapters'
@@ -1806,6 +1812,38 @@ func (rs *RuntimeState) RecordStageServedModel(stage PipelineStage, model string
 	rs.StageServedModels[string(stage)] = model
 }
 
+// StageModelIdentity is the ADR-022 § 2 identity of the model that served a
+// stage of a multi-provider adapter: the provider that served it, the model
+// dispatched on -m, and the id of the declared endpoint that served it.
+type StageModelIdentity struct {
+	Provider string `json:"provider,omitempty"`
+	Upstream string `json:"upstream,omitempty"`
+	Endpoint string `json:"endpoint,omitempty"`
+}
+
+// RecordStageModelIdentity records the identity the executor reported for a
+// stage. A zero identity, which every single-provider adapter reports, is
+// ignored, so the stage records none.
+func (rs *RuntimeState) RecordStageModelIdentity(stage PipelineStage, id StageModelIdentity) {
+	if id == (StageModelIdentity{}) {
+		return
+	}
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if rs.StageModelIdentities == nil {
+		rs.StageModelIdentities = make(map[string]StageModelIdentity)
+	}
+	rs.StageModelIdentities[string(stage)] = id
+}
+
+// StageModelIdentityOf returns the recorded identity of a stage, or the zero
+// identity when none was reported.
+func (rs *RuntimeState) StageModelIdentityOf(stage PipelineStage) StageModelIdentity {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	return rs.StageModelIdentities[string(stage)]
+}
+
 // StageServedModel returns the recorded served model id for a stage, or ""
 // when the stream never reported one.
 func (rs *RuntimeState) StageServedModel(stage PipelineStage) string {
@@ -2664,6 +2702,12 @@ func (rs *RuntimeState) snapshotLocked() *RuntimeState {
 		snap.StageServedModels = make(map[string]string, len(rs.StageServedModels))
 		for k, v := range rs.StageServedModels {
 			snap.StageServedModels[k] = v
+		}
+	}
+	if len(rs.StageModelIdentities) > 0 {
+		snap.StageModelIdentities = make(map[string]StageModelIdentity, len(rs.StageModelIdentities))
+		for k, v := range rs.StageModelIdentities {
+			snap.StageModelIdentities[k] = v
 		}
 	}
 	if len(rs.StageEfforts) > 0 {

@@ -86,14 +86,14 @@ func TestOpenCodeServedModel(t *testing.T) {
 		providerID, modelID, dispatched string
 		want                            OpenCodeServedModel
 	}{
-		{"lmstudio", "qwen/qwen3.8-27b", "lmstudio/qwen/qwen3.8-27b", OpenCodeServedModel{"lm-studio", "lm-studio/qwen/qwen3.8-27b", "lmstudio/qwen/qwen3.8-27b"}},
-		{"", "", "lmstudio/qwen/qwen3.8-27b", OpenCodeServedModel{"lm-studio", "lm-studio/qwen/qwen3.8-27b", "lmstudio/qwen/qwen3.8-27b"}},
-		{"ollama", "qwen3-coder:30b", "lmstudio/qwen/qwen3.8-27b", OpenCodeServedModel{"ollama", "ollama/qwen3-coder:30b", "lmstudio/qwen/qwen3.8-27b"}},
-		{"lmstudio", "qwen/qwen3.8-27b", "ollama/qwen3-coder:30b", OpenCodeServedModel{"lm-studio", "lm-studio/qwen/qwen3.8-27b", "ollama/qwen3-coder:30b"}},
-		{"anthropic", "claude-sonnet-5", "anthropic/claude-sonnet-5", OpenCodeServedModel{"anthropic", "claude-sonnet-5", "anthropic/claude-sonnet-5"}},
-		{"openai", "gpt-9-preview", "openai/gpt-9-preview", OpenCodeServedModel{"openai", "openai/gpt-9-preview", "openai/gpt-9-preview"}},
-		{"openrouter", "meta-llama/llama-4", "openrouter/meta-llama/llama-4", OpenCodeServedModel{"other", "openrouter/meta-llama/llama-4", "openrouter/meta-llama/llama-4"}},
-		{"anthropic", "claude-sonnet-5", "", OpenCodeServedModel{"anthropic", "claude-sonnet-5", ""}},
+		{"lmstudio", "qwen/qwen3.8-27b", "lmstudio/qwen/qwen3.8-27b", OpenCodeServedModel{"lm-studio", "lm-studio/qwen/qwen3.8-27b", "lmstudio/qwen/qwen3.8-27b", "lmstudio"}},
+		{"", "", "lmstudio/qwen/qwen3.8-27b", OpenCodeServedModel{"lm-studio", "lm-studio/qwen/qwen3.8-27b", "lmstudio/qwen/qwen3.8-27b", "lmstudio"}},
+		{"ollama", "qwen3-coder:30b", "lmstudio/qwen/qwen3.8-27b", OpenCodeServedModel{"ollama", "ollama/qwen3-coder:30b", "lmstudio/qwen/qwen3.8-27b", "ollama"}},
+		{"lmstudio", "qwen/qwen3.8-27b", "ollama/qwen3-coder:30b", OpenCodeServedModel{"lm-studio", "lm-studio/qwen/qwen3.8-27b", "ollama/qwen3-coder:30b", "lmstudio"}},
+		{"anthropic", "claude-sonnet-5", "anthropic/claude-sonnet-5", OpenCodeServedModel{"anthropic", "claude-sonnet-5", "anthropic/claude-sonnet-5", "anthropic"}},
+		{"openai", "gpt-9-preview", "openai/gpt-9-preview", OpenCodeServedModel{"openai", "openai/gpt-9-preview", "openai/gpt-9-preview", "openai"}},
+		{"openrouter", "meta-llama/llama-4", "openrouter/meta-llama/llama-4", OpenCodeServedModel{"other", "openrouter/meta-llama/llama-4", "openrouter/meta-llama/llama-4", "openrouter"}},
+		{"anthropic", "claude-sonnet-5", "", OpenCodeServedModel{"anthropic", "claude-sonnet-5", "", "anthropic"}},
 		{"", "", "", OpenCodeServedModel{}},
 	} {
 		if got := ResolveOpenCodeServedModel(tc.providerID, tc.modelID, tc.dispatched); got != tc.want {
@@ -116,7 +116,7 @@ esac
 `, exportFile))
 	stream := &OpenCodeStream{SessionID: "ses_fixture0000000000000000001"}
 	res := testFold(bin, dir).run(context.Background(), stream, "ollama/qwen3-coder:30b")
-	want := OpenCodeServedModel{"lm-studio", "lm-studio/qwen/qwen3.8-27b", "ollama/qwen3-coder:30b"}
+	want := OpenCodeServedModel{"lm-studio", "lm-studio/qwen/qwen3.8-27b", "ollama/qwen3-coder:30b", "lmstudio"}
 	if res.served != want {
 		t.Errorf("served = %+v, want the export's %+v", res.served, want)
 	}
@@ -139,7 +139,7 @@ esac
 `)
 	stream = &OpenCodeStream{SessionID: "ses_fixture0000000000000000001"}
 	res = testFold(broken, dir).run(context.Background(), stream, "ollama/qwen3-coder:30b")
-	if want := (OpenCodeServedModel{"ollama", "ollama/qwen3-coder:30b", "ollama/qwen3-coder:30b"}); res.served != want {
+	if want := (OpenCodeServedModel{"ollama", "ollama/qwen3-coder:30b", "ollama/qwen3-coder:30b", "ollama"}); res.served != want {
 		t.Errorf("served with no export = %+v, want the dispatched %+v", res.served, want)
 	}
 	if markers := stream.DriftMarkers(); len(markers) != 1 || !strings.Contains(markers[0], "the served model is the dispatched model") {

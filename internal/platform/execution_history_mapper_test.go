@@ -804,12 +804,13 @@ func equalStrings(a, b []string) bool {
 
 // openCodeTestRecord is a run whose stages ran on opencode against a local
 // model, a registry-known hosted model and a model of an unrecognized
-// provider key, beside one claude stage. Each stage's model is the one its
-// record carries (ADR-022 § 2), and its cost is what CompleteStage stamped.
+// provider key, beside one claude stage. Each stage's model and model
+// provider are the ones its record carries (ADR-022 § 2), and its cost is
+// what CompleteStage stamped.
 func openCodeTestRecord() state.V2RunRecord {
-	stage := func(model string) state.V2StageDetail {
+	stage := func(model, provider string) state.V2StageDetail {
 		return state.V2StageDetail{Status: "complete", DurationMs: 1000,
-			ModelSelection: &state.V2ModelSelect{Model: model, Source: "routing"}}
+			ModelSelection: &state.V2ModelSelect{Model: model, Source: "routing", ModelProvider: provider}}
 	}
 	return state.V2RunRecord{
 		IssueNumber: 1630,
@@ -817,10 +818,10 @@ func openCodeTestRecord() state.V2RunRecord {
 		CompletedAt: "2026-09-14T10:05:00Z",
 		Outcome:     "complete",
 		Stages: map[string]state.V2StageDetail{
-			"issue-pickup":     stage("claude-haiku-4-5"),
-			"feature-planning": stage("claude-sonnet-5"),
-			"feature-dev":      stage("lm-studio/qwen/qwen3.8-27b"),
-			"feature-validate": stage("openrouter/meta-llama/llama-4"),
+			"issue-pickup":     stage("claude-haiku-4-5", ""),
+			"feature-planning": stage("claude-sonnet-5", "anthropic"),
+			"feature-dev":      stage("lm-studio/qwen/qwen3.8-27b", "lm-studio"),
+			"feature-validate": stage("openrouter/meta-llama/llama-4", "other"),
 		},
 		Tokens: state.V2Tokens{
 			EstimatedCostUSD: 0.12,
@@ -897,23 +898,34 @@ func TestBuildExecutionHistoryStages_OpenCodeStageIdentity(t *testing.T) {
 	}
 }
 
-// TestBuildExecutionHistoryStages_OpenCodeDispatchedModelNormalized: a
-// stage record that still carries the -m value an opencode stage was
-// dispatched with is sent in the recorded form all the same.
-func TestBuildExecutionHistoryStages_OpenCodeDispatchedModelNormalized(t *testing.T) {
-	for in, want := range map[string][2]string{
-		"lmstudio/qwen/qwen3.8-27b": {"lm-studio/qwen/qwen3.8-27b", "lm-studio"},
-		"anthropic/claude-sonnet-5": {"claude-sonnet-5", "anthropic"},
-		"ollama/qwen3-coder:30b":    {"ollama/qwen3-coder:30b", "ollama"},
+// TestBuildExecutionHistoryStages_ModelProviderIsTheRecordedOne: the
+// modelProvider sent is the one the stage record carries, never one derived
+// from the model string. A stage served by another model than the one its
+// model string suggests sends its recorded provider, a stage that recorded
+// none sends none, and a recorded provider the platform's label guard would
+// reject is dropped rather than failing the upload.
+func TestBuildExecutionHistoryStages_ModelProviderIsTheRecordedOne(t *testing.T) {
+	for _, tc := range []struct {
+		model, recorded string
+		want            *string
+	}{
+		{"lm-studio/qwen/qwen3.8-27b", "lm-studio", ptrString("lm-studio")},
+		{"claude-sonnet-5", "anthropic", ptrString("anthropic")},
+		{"lmstudio/qwen/qwen3.8-27b", "", nil},
+		{"claude-sonnet-5", "", nil},
+		{"lm-studio/qwen/qwen3.8-27b", "LM Studio", nil},
 	} {
 		rec := state.V2RunRecord{
 			Stages: map[string]state.V2StageDetail{"feature-dev": {Status: "complete",
-				ModelSelection: &state.V2ModelSelect{Model: in}}},
+				ModelSelection: &state.V2ModelSelect{Model: tc.model, ModelProvider: tc.recorded}}},
 			Tokens: state.V2Tokens{PerStage: map[string]state.V2StageTokens{"feature-dev": {Adapter: "opencode"}}},
 		}
 		stages, _ := buildExecutionHistoryStages(rec)
-		if got := [2]string{deref(stages[0].Model), deref(stages[0].ModelProvider)}; got != want {
-			t.Errorf("%s: (model, modelProvider) = %q, want %q", in, got, want)
+		if deref(stages[0].Model) != tc.model {
+			t.Errorf("%s: model = %q, want the recorded model", tc.model, deref(stages[0].Model))
+		}
+		if (tc.want == nil) != (stages[0].ModelProvider == nil) || (tc.want != nil && *tc.want != *stages[0].ModelProvider) {
+			t.Errorf("(%s, recorded %q): modelProvider = %v, want %v", tc.model, tc.recorded, valueOf(stages[0].ModelProvider), valueOf(tc.want))
 		}
 	}
 }
@@ -981,6 +993,8 @@ func TestTelemetryLabel(t *testing.T) {
 }
 
 func ptrFloat(v float64) *float64 { return &v }
+
+func ptrString(v string) *string { return &v }
 
 func valueOf[T any](p *T) any {
 	if p == nil {

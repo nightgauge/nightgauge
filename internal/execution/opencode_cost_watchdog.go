@@ -1,7 +1,8 @@
 // opencode_cost_watchdog.go stops an opencode stage at its cost budget
 // (ADR-022 § 3). OpenCode takes no cost cap of its own, so the manager prices
 // the stage from the model registry as its stream arrives and ends the run
-// once the registry-priced cost passes RunOptions.CostBudget.
+// once the registry-priced cost passes RunOptions.CostBudget, and prices it
+// again with its subagent sessions once it has ended.
 package execution
 
 import (
@@ -30,11 +31,13 @@ const openCodeCostKillGrace = 10 * time.Second
 // openCodeCostWatchdog prices one opencode stage as its stream arrives. Only
 // the stdout reader touches it.
 //
-// It prices the stage's own session: a subagent's steps never reach the
-// stream, so their usage is added after the stage ends (opencode_usage.go)
-// and is not bounded here. It prices at the rates of the model the stage was
-// dispatched with, because no stream event names the model that served a
-// step.
+// While the stage runs it prices the stage's own session: a subagent's steps
+// never reach the stream, so it cannot stop a stage while its subagents
+// spend. Their usage is folded in once the stage has ended
+// (opencode_usage.go), and settle prices the stage again then, so a stage
+// its subagents took past the budget fails instead of being recorded as a
+// success. It prices at the rates of the model the stage was dispatched
+// with, because no stream event names the model that served a step.
 type openCodeCostWatchdog struct {
 	// model is the -m value the stage was dispatched with.
 	model string
@@ -46,6 +49,9 @@ type openCodeCostWatchdog struct {
 	cost float64
 	// fired is set once the stage crossed its budget.
 	fired bool
+	// settled is set when the stage crossed it only once its subagents'
+	// usage was folded in, after it had ended.
+	settled bool
 }
 
 // newOpenCodeCostWatchdog returns the watchdog for a stage dispatched with
@@ -73,6 +79,24 @@ func (w *openCodeCostWatchdog) observe(acc *TokenAccumulator) bool {
 	if w == nil || w.fired {
 		return false
 	}
+	return w.price(acc)
+}
+
+// settle prices the stage once it has ended and its subagent sessions'
+// usage has been folded into acc, and reports whether that took it past its
+// budget for the first time. The stage is not stopped, since it has already
+// ended, but it fails all the same.
+func (w *openCodeCostWatchdog) settle(acc *TokenAccumulator) bool {
+	if w == nil || w.fired {
+		return false
+	}
+	w.settled = w.price(acc)
+	return w.settled
+}
+
+// price prices acc's usage at the model's registry rates and marks the
+// watchdog fired when that is past the budget.
+func (w *openCodeCostWatchdog) price(acc *TokenAccumulator) bool {
 	cache5m, cache1h := acc.CacheCreationByTTL()
 	w.cost, _ = tokens.CalculateCostFor("opencode", w.model, tokens.TokenCounts{
 		Input:           acc.InputTokens,
@@ -88,8 +112,12 @@ func (w *openCodeCostWatchdog) observe(acc *TokenAccumulator) bool {
 	return true
 }
 
-// notice is the line that ends the stopped stage's stderr.
+// notice is the line that ends the stderr of a stage past its budget.
 func (w *openCodeCostWatchdog) notice() string {
+	if w.settled {
+		return fmt.Sprintf("%s the stage's registry-priced cost of USD %.4f, its subagent sessions included, passed its cost budget of USD %.4f, so it failed; a subagent's usage is read only once the stage has ended, so it was not stopped",
+			CostCapExceededMarker, w.cost, w.budget)
+	}
 	return fmt.Sprintf("%s the stage's registry-priced cost of USD %.4f passed its cost budget of USD %.4f, so it was stopped",
 		CostCapExceededMarker, w.cost, w.budget)
 }

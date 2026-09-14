@@ -243,28 +243,6 @@ func openCodeCost(model string, t TokenCounts) (float64, bool) {
 	return 0, false
 }
 
-// OpenCodeModelIdentity returns an opencode stage's model as ADR-022 § 2
-// records it, and the provider that served it (§ 1): a registry model as its
-// bare id ("claude-sonnet-5", "anthropic"), any other model of a known
-// provider as "<provider>/<id>" ("lm-studio/qwen/qwen3.8-27b", "lm-studio"),
-// and a model of an unrecognized provider key as the raw value, with provider
-// "other". model may be either form a stage carries: the -m value OpenCode
-// was dispatched with, or the recorded form. Both are empty for a value that
-// is neither, such as a tier band or an unknown bare id.
-func OpenCodeModelIdentity(model string) (recorded, provider string) {
-	provider, id := openCodeServing(model)
-	switch {
-	case provider == "":
-		return "", ""
-	case provider == "other":
-		return model, provider
-	}
-	if d, ok := registryModel(provider, id); ok {
-		return d.ID, provider
-	}
-	return provider + "/" + id, provider
-}
-
 // openCodeServing reads an opencode model in either form a stage carries and
 // returns the provider that serves it and the model id under that provider.
 //
