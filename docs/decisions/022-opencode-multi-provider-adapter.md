@@ -723,13 +723,16 @@ reports it `non_loopback: true`, as it does every hosted provider's model.
   directory, which stays per run (§ 17). An API key written into the
   operator's config is inherited, and the stderr line says so.
 - **The target repository's `opencode.json`, `opencode.jsonc` and
-  `.opencode/**`.** `OPENCODE_DISABLE_PROJECT_CONFIG=1` is set on every spawn,
-  so OpenCode never loads them. Nightgauge reads them instead. Keys outside the
-  locked set are merged into the per-run config, and a locked key the
-  repository sets is dropped with a warning. The tamper gate records the files'
-  hashes when the worktree is created, and `PreDispatch` refuses a dispatch
-  when they have changed since, because a stage must not rewrite the config the
-  next stage runs under (#1638).
+  `.opencode/**`.** `OPENCODE_DISABLE_PROJECT_CONFIG=1` is the intended
+  control, so that OpenCode never loads them and Nightgauge reads them
+  instead, but it is not set on any spawn yet, so the repository's files
+  still load (see the adversarial results below). Keys outside the locked set
+  are meant to merge into the per-run config, and a locked key the repository
+  sets is meant to be dropped with a warning, once the switch is set. The
+  tamper gate records the files' hashes when the worktree is created, and
+  `PreDispatch` refuses a dispatch when they have changed since, because a
+  stage must not rewrite the config the next stage runs under. #1638 (with
+  #1626) sets the switch.
 - **Steering.** Observed: that switch also hides the repository's `AGENTS.md`
   and `CLAUDE.md`. The repository's steering therefore reaches OpenCode only as
   an `instructions` entry with an absolute path into the worktree, which was
@@ -982,7 +985,7 @@ the setting. A **locked** row cannot be turned back on from any config tier.
 | Model-catalog fetch                      | `OPENCODE_DISABLE_MODELS_FETCH=1`                                                                                  | privacy   | locked                                                                                                                |
 | LSP server download                      | `OPENCODE_DISABLE_LSP_DOWNLOAD=1`                                                                                  | security  | locked                                                                                                                |
 | Default and third-party plugins          | `OPENCODE_DISABLE_DEFAULT_PLUGINS=1`; `plugin` lists Nightgauge's only                                             | security  | locked                                                                                                                |
-| Repository project config                | `OPENCODE_DISABLE_PROJECT_CONFIG=1`; reviewed merge (§ 8)                                                          | security  | locked                                                                                                                |
+| Repository project config                | `OPENCODE_DISABLE_PROJECT_CONFIG=1`; reviewed merge (§ 8)                                                          | security  | locked; not set yet, so the repository's config still loads until #1638 (with #1626) (§ 8)                            |
 | Operator's global OpenCode config        | `inherit_user_config: false`; `~/.opencode` and managed config refused (§ 8)                                       | security  | overridable; locked keys win over all but managed config                                                              |
 | Session titles                           | `agent.title.disable: true` (§ 10)                                                                                 | privacy   | locked                                                                                                                |
 | A model other than the dispatched one    | `small_model`, every agent's `model`, and on an endpoint or `anthropic` the model's `id` and package, pinned       | security  | locked (`id`/`provider.npm`); `options.model`, `speed`/`fallbacks` and `mcpServers` still route around it until #1638 |
