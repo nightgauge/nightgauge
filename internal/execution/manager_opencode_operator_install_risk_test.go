@@ -225,10 +225,22 @@ func TestOpenCodeOperatorInstallRiskDoesNotMisclassifyAFastFailure(t *testing.T)
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
+	// The real error line is written to stderr, and step_start to stdout,
+	// BEFORE step_start — not after — so those bytes are already sitting in
+	// the (kernel-buffered) pipe before the plugin handshake check ever
+	// observes step_start and kills the process group. Order here only
+	// controls whether the bytes were written to the pipe at all before the
+	// process dies, not whether the manager's reader goroutine gets to read
+	// them — a killed writer does not erase what it already wrote. Emitting
+	// them the other way around (as an earlier revision of this fixture
+	// did) races the manager's own step_start-triggered kill, which is
+	// deliberately fast (TestOpenCodeHandshakeKillPrecedesVersionProbe),
+	// against the child's next scheduler slice, and was observed flaky
+	// under CI's heavier concurrent load.
 	script := fmt.Sprintf(`#!/bin/sh
 %s
-echo '{"type":"step_start","sessionID":"fixture"}'
 echo "a real, unrelated failure" >&2
+echo '{"type":"step_start","sessionID":"fixture"}'
 exit 7
 `, openCodeFakeVersion)
 	if err := os.WriteFile(filepath.Join(dir, "opencode"), []byte(script), 0o755); err != nil {

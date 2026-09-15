@@ -259,12 +259,18 @@ type npmLockFile struct {
 }
 
 // safeJoin joins dir and name (a tar entry path, always "/"-separated),
-// refusing a name that would resolve outside dir. It rejects any entry whose
-// cleaned, dir-relative path starts with ".." or is itself ".." — the
-// canonical zip-slip guard — rather than relying on a prefix comparison a
-// static analyzer cannot always follow back to its sink.
+// refusing a name that would resolve outside dir. The raw entry name is
+// checked for a ".." path element before it is ever joined to dir — rejected
+// at the source, not only re-derived and re-checked after joining — since
+// that is the pattern static analysis (this repo's CodeQL gate) can follow
+// all the way from the archive entry to the file-system sink below.
 func safeJoin(dir, name string) (string, error) {
 	clean := filepath.FromSlash(strings.TrimPrefix(name, "/"))
+	for _, part := range strings.Split(clean, string(filepath.Separator)) {
+		if part == ".." {
+			return "", fmt.Errorf("archive entry %q escapes the target directory", name)
+		}
+	}
 	target := filepath.Join(dir, clean)
 	rel, err := filepath.Rel(dir, target)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
