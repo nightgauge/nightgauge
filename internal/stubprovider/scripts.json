@@ -1,8 +1,6 @@
 {
   "tool-edit-stop": {
-    "models": [
-      "stub/stub-model"
-    ],
+    "models": ["stub/stub-model"],
     "kind": "turns",
     "turns": [
       {
@@ -21,9 +19,7 @@
     ]
   },
   "bash-then-stop": {
-    "models": [
-      "stub/stub-model"
-    ],
+    "models": ["stub/stub-model"],
     "kind": "turns",
     "turns": [
       {
@@ -40,21 +36,15 @@
     ]
   },
   "overflow": {
-    "models": [
-      "stub/stub-model"
-    ],
+    "models": ["stub/stub-model"],
     "kind": "overflow"
   },
   "error": {
-    "models": [
-      "stub/stub-model"
-    ],
+    "models": ["stub/stub-model"],
     "kind": "error"
   },
   "slow": {
-    "models": [
-      "stub/stub-model"
-    ],
+    "models": ["stub/stub-model"],
     "kind": "turns",
     "turns": [
       {
@@ -64,15 +54,11 @@
     "first_token_delay_ms": 250
   },
   "invalid-kind-fixture": {
-    "models": [
-      "stub/stub-model"
-    ],
+    "models": ["stub/stub-model"],
     "kind": "not-a-real-kind"
   },
   "compaction-probe": {
-    "models": [
-      "stub/stub-model"
-    ],
+    "models": ["stub/stub-model"],
     "kind": "turns",
     "turns": [
       {
@@ -241,9 +227,7 @@
     ]
   },
   "compaction-summary": {
-    "models": [
-      "stub/stub-model"
-    ],
+    "models": ["stub/stub-model"],
     "kind": "turns",
     "turns": [
       {

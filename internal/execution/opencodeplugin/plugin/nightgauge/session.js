@@ -235,7 +235,7 @@ function shouldNotify(sessionID) {
 // to alert the operator. It never reads or writes output.status: the
 // permission decision is opencode's own to make, and this hook only
 // observes it.
-export async function permissionAsk(ctx, input, output) {
+export async function permissionAsk(ctx, input) {
   if (!input) return;
   const sessionID = input.sessionID || "";
   appendEvent(

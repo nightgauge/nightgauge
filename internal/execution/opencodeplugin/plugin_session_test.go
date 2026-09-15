@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/skills"
 )
 
@@ -774,24 +775,12 @@ process.stdout.write(JSON.stringify(results));
 // real branch and commit to read.
 func initGitRepoOnBranch(t *testing.T, branch string) string {
 	t.Helper()
-	root := t.TempDir()
-	run := func(args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com",
-			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.com",
-		)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
-	run("init", "-q", "-b", branch)
+	root := gittest.InitRepo(t, t.TempDir(), "-q", "-b", branch)
 	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("probe\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	run("add", "README.md")
-	run("commit", "-q", "-m", "init")
+	gittest.Run(t, root, "add", "README.md")
+	gittest.Run(t, root, "commit", "-q", "-m", "init")
 	return root
 }
 
