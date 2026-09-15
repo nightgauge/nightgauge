@@ -22,6 +22,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
+	"github.com/nightgauge/nightgauge/internal/execution/opencodeplugin"
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/state"
@@ -349,7 +350,7 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 		if dirErr != nil {
 			return nil, fmt.Errorf("per-run root for adapter %q: resolve the machine-tier config directory: %w", adapter.Name(), dirErr)
 		}
-		root, prepErr := preparer.PrepareRunRoot(adapters.RunRootRequest{ID: id, MachineConfigDir: machineDir, Run: runOpts, WorkspaceRoot: m.workspaceRoot})
+		root, prepErr := preparer.PrepareRunRoot(adapters.RunRootRequest{ID: id, MachineConfigDir: machineDir, Run: runOpts, WorkspaceRoot: m.workspaceRoot, Context: ctx})
 		if prepErr != nil {
 			return nil, fmt.Errorf("dispatch refused for adapter %q: %w", adapter.Name(), prepErr)
 		}
@@ -518,9 +519,121 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 		costCap = newOpenCodeCostWatchdog(openCodeModel, runOpts.CostBudget, os.Stderr,
 			fmt.Sprintf("%s#%d %s", opts.Repo, opts.IssueNumber, opts.Stage))
 	}
+	// Nightgauge OpenCode plugin handshake (#1635, ADR-022): the manager is
+	// the one reader of both the nonce and the sentinel path opencode.go's
+	// InstallNightgaugePlugin minted into the run's own environment, so it
+	// verifies without a second implementation of either. handshakeChecked
+	// and firstToolUseAt are written only by the stdout goroutine below and
+	// read only after wg.Wait() (or, for the immediate kill, from inside that
+	// same goroutine) — the same single-writer-then-barrier discipline
+	// costCap.fired already relies on.
+	var pluginHandshake opencodeplugin.HandshakeConfig
+	var pluginHandshakeOK bool
+	var handshakeChecked bool
+	var firstToolUseAt time.Time
+	var handshakeFailure string
+	var operatorInstallRisk string
+	if openCode != nil && runOpts.RunRoot != nil {
+		pluginHandshake, pluginHandshakeOK = opencodeplugin.HandshakeConfigFromEnv(runOpts.RunRoot.Env)
+		operatorInstallRisk = runOpts.RunRoot.Env[opencodeplugin.EnvOperatorInstallRisk]
+	}
+	// Operator install risk watchdog (#1635/A11 round 6, narrowed AC1,
+	// ADR-022 amendment 2026-09-15; round 8 correction, same amendment date):
+	// Nightgauge never seeds or merges into an operator-owned OpenCode config
+	// directory ($HOME/.opencode, or OPENCODE_CONFIG_DIR under
+	// opencode.inherit_user_config), so offline — or against an unreachable
+	// registry — OpenCode's own install into one can block the CLI before it
+	// ever prints a byte: no step_start, so the plugin handshake above never
+	// even runs, and nothing on stderr says why. Bounded independently of the
+	// stage's own timeout (opts.Timeout can be minutes; this cannot be, or
+	// "never a hang" is only true in the limit).
+	//
+	// operatorInstallRisk (adapters.operatorInstallRisk) is only ever
+	// non-empty here for a directory opencodeplugin.OperatorInstallSatisfied
+	// reported UNSATISFIED at spawn time — a directory already satisfied
+	// never arms this watchdog at all (round 8: it gets OpenCode's own local,
+	// instant fast path, same as a run's own XDG-resolved config directory,
+	// so there is nothing to bound). Once armed, the watchdog stands down on
+	// EITHER of two independent pieces of evidence that OpenCode's own
+	// install is no longer in the way, whichever arrives first: the directory
+	// BECOMING satisfied — polled, read-only, never written by this goroutine
+	// — or ANY output arriving on stdout or stderr, proof the CLI is not
+	// stuck before its first line. The poll exists because an operator with a
+	// reachable registry has OpenCode's own install completing in the
+	// background while the CLI itself stays silent until its first model
+	// step; without polling for satisfaction, a slow first token (a local
+	// model prefilling a large prompt) would otherwise still be capped by
+	// this watchdog even though the install it exists to bound is long done —
+	// the exact latency-capping regression round 8 exists to fix. Whatever
+	// happens after stand-down is the existing handshake/parser logic's job,
+	// not this watchdog's. killProcessTreeUntilGone, the same group-kill the
+	// handshake failure path uses (its own doc comment explains why a single
+	// SIGKILL can miss a grandchild forked in the same instant), not a bare
+	// context timeout: the default exec.CommandContext cancellation signals
+	// only the direct process, and a still-running npm child inheriting the
+	// stdout/stderr pipes would otherwise keep wg.Wait() below blocked past
+	// this bound regardless.
+	//
+	// Deliberately NOT one of wg's two members: wg.Wait() below gates on the
+	// stdout/stderr readers alone, so this watchdog can be told to stop
+	// (stopOperatorInstallWatchdog) once they finish on their own — a
+	// process that exited quickly for an unrelated reason must not sit
+	// misclassified as an install-risk timeout for the rest of the bound. A
+	// member of wg here would deadlock: nothing could close that stop
+	// channel before wg.Wait() itself returned.
+	firstOutput := make(chan struct{})
+	var firstOutputOnce sync.Once
+	stopOperatorInstallWatchdog := make(chan struct{})
+	operatorInstallWatchdogDone := make(chan struct{})
+	var operatorInstallTimedOut atomic.Bool
+	if operatorInstallRisk != "" {
+		bound := openCodeOperatorInstallWaitBound
+		if dl, ok := execCtx.Deadline(); ok {
+			if remaining := time.Until(dl); remaining < bound {
+				bound = max(remaining, 0)
+			}
+		}
+		riskDir := operatorInstallRisk
+		go func() {
+			defer close(operatorInstallWatchdogDone)
+			deadline := time.After(bound)
+			ticker := time.NewTicker(openCodeOperatorInstallPollInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-firstOutput:
+					return
+				case <-stopOperatorInstallWatchdog:
+					return
+				case <-ticker.C:
+					if opencodeplugin.OperatorInstallSatisfied(riskDir) {
+						return
+					}
+				case <-deadline:
+					operatorInstallTimedOut.Store(true)
+					killProcessTreeUntilGone(cmd.Process, openCodeHandshakeKillWindow)
+					return
+				}
+			}
+		}()
+	} else {
+		close(operatorInstallWatchdogDone)
+	}
 	eachLine := func(r io.Reader, name string, onLine func([]byte), onOversize func(head, tail []byte)) {
+		// firstOutputOnce fires on the very first line either stream
+		// produces, oversized lines included (onOversize below still routes
+		// through onLine's own drift notice) — the operator-install-risk
+		// watchdog above only cares that the CLI is not silently stuck, not
+		// what it first said.
+		onLine = func(wrapped func([]byte)) func([]byte) {
+			return func(b []byte) {
+				firstOutputOnce.Do(func() { close(firstOutput) })
+				wrapped(b)
+			}
+		}(onLine)
 		if openCode != nil {
 			_ = forEachLine(r, streamLineLimit, onLine, func(head, tail []byte) {
+				firstOutputOnce.Do(func() { close(firstOutput) })
 				openCode.stream.Drift("dropped a %s line longer than the %d-byte line limit", name, streamLineLimit)
 				if onOversize != nil {
 					onOversize(head, tail)
@@ -562,6 +675,64 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 			if stepAdded && costCap.observe(tokenAcc) {
 				fmt.Fprintf(os.Stderr, "%s#%d %s: %s\n", opts.Repo, opts.IssueNumber, opts.Stage, costCap.notice())
 				costCap.stop(cmd.Process, execution.done)
+			}
+			// Nightgauge OpenCode plugin handshake (#1635): step_start is the
+			// earliest point at which a tool call could possibly exist, so
+			// checking the instant the FIRST one is observed proves the
+			// plugin's init (and so its sentinel write) happened before any
+			// tool ran. A failure here kills the process group at once —
+			// the marker itself is appended to stderr only after wg.Wait()
+			// (below), never from this goroutine, so it never races the
+			// stderr goroutine's own append to the same buffer.
+			if pluginHandshakeOK && event != nil {
+				switch event.Type {
+				case "step_start":
+					if !handshakeChecked {
+						handshakeChecked = true
+						if err := opencodeplugin.VerifyLoaded(pluginHandshake); err != nil {
+							// Kill the process group FIRST: openCodePluginHandshakeMarker
+							// runs `opencode --version` (bounded at 5s, but
+							// observed to take real, non-zero time) to name the
+							// binary in the failure marker. Computing that
+							// marker before signalling used to leave the
+							// stage's process group alive and ungated for the
+							// probe's whole duration — exactly the window a
+							// failed handshake must close first (ADR-022,
+							// #1635 fix round finding 3).
+							//
+							// killProcessTreeUntilGone, not a single
+							// signalProcessTree call: a single SIGKILL can miss
+							// a grandchild the stage forks in the same instant
+							// the signal is delivered — the fork completing
+							// after the kernel already decided who receives a
+							// pending group signal. Linux aborts a fork under a
+							// pending group kill; XNU (macOS) does not, so the
+							// new child joins the group, survives, keeps
+							// stdout open, and the stage hangs until it exits
+							// on its own (#1635 fix round finding 6, observed
+							// with opencode's own child-spawn timing: the first
+							// tool's child is typically forked within a few ms
+							// of step_start, i.e. right when this fires).
+							killProcessTreeUntilGone(cmd.Process, openCodeHandshakeKillWindow)
+							handshakeFailure = openCodePluginHandshakeMarker(err, cmd.Path)
+						}
+					}
+				case "tool_use":
+					if firstToolUseAt.IsZero() {
+						// Prefer the tool's own start time (part.state.time.start,
+						// epoch milliseconds, ParseOpenCodeStreamLine's
+						// event.OpenCodeToolStartedAt) over this goroutine's
+						// wall clock: 1.18.30 emits tool_use only once a call
+						// has completed or errored, so "now" is always later
+						// than when the tool actually started, and a
+						// sentinel written in between would wrongly read as
+						// on time (#1635 fix round finding 4).
+						firstToolUseAt = time.Now()
+						if event.OpenCodeToolStartedAt > 0 {
+							firstToolUseAt = time.UnixMilli(event.OpenCodeToolStartedAt)
+						}
+					}
+				}
 			}
 			// Track the serving model; a refusal fallback gets one observable
 			// log line the moment it fires (#91).
@@ -624,10 +795,52 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 
 	// Wait for output to drain, then wait for process
 	wg.Wait()
+	// The two readers are done — the process exited (or was killed) on its
+	// own, so the operator-install-risk watchdog above no longer needs to
+	// wait out the rest of its bound: tell it to stop, and wait for it to
+	// actually have (operatorInstallTimedOut below is a single-writer,
+	// read-after-barrier fact exactly like handshakeChecked/firstToolUseAt).
+	close(stopOperatorInstallWatchdog)
+	<-operatorInstallWatchdogDone
 	// A stage the cost watchdog stopped ends its stderr with the marker
 	// failure classification reads, added once both readers are done.
 	if costCap != nil && costCap.fired {
 		keepStderr([]byte(costCap.notice()))
+	}
+	// Nightgauge OpenCode plugin handshake, exit check (#1635): re-stat the
+	// sentinel now the run has ended. Its mtime must precede the first
+	// tool_use this stream observed — a step_start check alone cannot see a
+	// sentinel written AFTER a tool already ran (a race the step_start check
+	// resolves in the plugin's favor, since nothing had happened yet to
+	// gate). Skipped once the step_start check already failed: the marker is
+	// already set, and re-deriving the same verdict would only risk masking
+	// it with a different one.
+	if pluginHandshakeOK && handshakeFailure == "" {
+		if err := opencodeplugin.VerifyNotLate(pluginHandshake, firstToolUseAt); err != nil {
+			handshakeFailure = openCodePluginHandshakeMarker(err, cmd.Path)
+		}
+	}
+	// Operator install risk, classified (#1635/A11 round 6, narrowed AC1):
+	// the watchdog above killed the stage because it produced no output at
+	// all within the bound, while its config touched an operator-owned
+	// OpenCode directory that did not already satisfy the pin — the known
+	// shape of OpenCode's own install waiting on an unreachable registry. A
+	// genuine handshake failure is more specific and wins (handshakeFailure
+	// == "" guards it); an operator's own Stop is not this and must not be
+	// misreported as one (execution.stopRequested guards it — CancelWithGrace
+	// sets it before this goroutine barrier is ever reached).
+	if handshakeFailure == "" && operatorInstallTimedOut.Load() && !execution.stopRequested.Load() {
+		handshakeFailure = openCodePluginHandshakeMarker(&opencodeplugin.IncompatibleError{
+			Reason: fmt.Sprintf(
+				"opencode produced no output at all: OpenCode's own @opencode-ai/plugin install into the operator-owned OpenCode config directory %s may be waiting on an unreachable registry. "+
+					"Nightgauge never seeds or merges into an operator-owned OpenCode directory (ADR-022 amendment 2026-09-15) — "+
+					"pre-warm it online, remove it, or turn off opencode.inherit_user_config. nightgauge/nightgauge#1787 tracks removing this wait entirely with a per-run HOME",
+				operatorInstallRisk,
+			),
+		}, cmd.Path)
+	}
+	if handshakeFailure != "" {
+		keepStderr([]byte(handshakeFailure))
 	}
 	err = cmd.Wait()
 	// Signal waitForExit callers (CancelWithGrace/StopExecution) that the
@@ -736,6 +949,18 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	// SIGTERM, and so did one its subagents took past it or whose subagent
 	// usage was only partly read.
 	if costCap != nil && costCap.fired && result.ExitCode == 0 {
+		result.ExitCode = 1
+	}
+	// A failed Nightgauge OpenCode plugin handshake (#1635) must fail the
+	// stage even when the CLI itself exited 0: the step_start check kills the
+	// process group, but a CLI that traps the signal and still exits 0 (or a
+	// handshake that only failed at the exit-time late-sentinel recheck,
+	// VerifyNotLate, after the process had already exited cleanly) must not
+	// read as a successful stage. Before this, only handshakeFailure's marker
+	// text reached stderr; ExitCode was never forced, so a run whose plugin
+	// never loaded, or loaded late, could still report success (#1635 fix
+	// round finding 4).
+	if handshakeFailure != "" && result.ExitCode == 0 {
 		result.ExitCode = 1
 	}
 
@@ -986,6 +1211,27 @@ func (m *Manager) CancelWithGrace(key string, timeout time.Duration) (bool, erro
 //
 // Returns whether anything was signalled, so a caller can tell "reaped" from
 // "there was nothing to reap".
+// openCodePluginHandshakeMarker renders a failed Nightgauge OpenCode plugin
+// handshake check (#1635) as the stage's stderr marker. err is an
+// *opencodeplugin.IncompatibleError; its own Error() already carries the bare
+// word "adapter_incompatible" the terminalkind table keys on (see
+// internal/orchestrator/failure_handler.go's TerminalKindAdapterIncompatible),
+// so this only adds the observed `opencode --version`, best-effort, naming
+// the binary the handshake failed against.
+func openCodePluginHandshakeMarker(err error, ocBinary string) string {
+	version := "(unknown)"
+	if ocBinary != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if out, verr := exec.CommandContext(ctx, ocBinary, "--version").Output(); verr == nil {
+			if v := strings.TrimSpace(string(out)); v != "" {
+				version = v
+			}
+		}
+	}
+	return fmt.Sprintf("[nightgauge-opencode-plugin] %v (opencode --version: %s)", err, version)
+}
+
 func signalProcessTree(proc *os.Process, sig syscall.Signal) bool {
 	if proc == nil {
 		return false
@@ -996,6 +1242,102 @@ func signalProcessTree(proc *os.Process, sig syscall.Signal) bool {
 		return true
 	}
 	return proc.Signal(sig) == nil
+}
+
+// openCodeHandshakeKillWindow bounds killProcessTreeUntilGone's re-signal
+// loop. The race it closes resolves within single-digit milliseconds in
+// practice (the escaping child is one already mid-fork when the first
+// SIGKILL lands, observed 3-8ms after the group's leader emits the
+// step_start line this handshake reacts to), so this only needs to be long
+// enough that a slow CI host is never mistaken for an unkillable process.
+// killProcessTreeUntilGone cannot detect the race resolving and return
+// early (see its own doc comment), so every call runs the full window: this
+// is a fixed per-failure cost, not a ceiling on the common case.
+const openCodeHandshakeKillWindow = 1 * time.Second
+
+// openCodeOperatorInstallWaitBound bounds the operator-install-risk
+// watchdog: the longest a dispatch waits — with neither the target directory
+// becoming satisfied nor any output at all arriving — before killing the
+// stage and classifying it, once its config touches an operator-owned
+// OpenCode directory opencodeplugin.OperatorInstallSatisfied reported
+// UNSATISFIED at spawn time (#1635/A11 round 6, ADR-022 amendment
+// 2026-09-15, narrowed AC1; round 8 correction, same amendment date: a
+// directory already satisfied at spawn time never arms this watchdog at
+// all — see operatorInstallRisk's own doc comment). A variable, not a
+// constant, so a test can shorten it (the same pattern openCodeProbeTimeout
+// uses) — and further capped at dispatch time by whatever remains of the
+// stage's own context deadline, so this is never the LONGER of the two.
+//
+// 100s: an UNSATISFIED $HOME/.opencode or OPENCODE_CONFIG_DIR needs OpenCode
+// to actually run its own real @opencode-ai/plugin install over the
+// network — a genuine registry round trip, not merely a local check — so
+// even with a reachable registry this can legitimately take tens of
+// seconds. 100s leaves headroom above that intrinsic, legitimate delay so
+// narrowed AC1's online case — an operator with a reachable registry,
+// exactly as their own OpenCode runs — is not cut short by this bound
+// (the watchdog also stands down the moment the directory becomes satisfied,
+// well before this bound in that case), while still catching the truly
+// unbounded case (ADR-022's amendment records 71s-146.88s waits against an
+// UNREACHABLE registry, and an unresolvable one waits far longer than
+// that). nightgauge/nightgauge#1787 (a per-run HOME, so $HOME/.opencode stops
+// being a config directory at all) is the tracked path to removing the wait
+// entirely rather than only bounding it.
+var openCodeOperatorInstallWaitBound = 100 * time.Second
+
+// openCodeOperatorInstallPollInterval is how often the operator-install-risk
+// watchdog re-checks, read-only, whether its target directory has become
+// satisfied while it waits (#1635/A11 round 8, ADR-022 amendment
+// 2026-09-15). Short enough that a legitimate install completing in the
+// background is noticed promptly — an armed watchdog must never cap model
+// latency once OpenCode's own install is done — and cheap enough (a handful
+// of os.Stat calls) that polling it costs nothing next to the seconds this
+// watchdog waits. A variable, not a constant, so a test can shorten it the
+// same way openCodeOperatorInstallWaitBound already is.
+var openCodeOperatorInstallPollInterval = 1500 * time.Millisecond
+
+// killProcessTreeUntilGone repeatedly signals proc's whole process group
+// with SIGKILL, spaced a short interval apart, for the full window — it
+// cannot detect the group being gone and return early (see below), so it
+// always runs to completion.
+//
+// A single SIGKILL is not enough for the #1635 plugin-handshake failure path
+// on darwin/XNU: opencode's shell leader was observed to fork its first
+// tool's child within a few milliseconds of the step_start line this
+// handshake check reacts to — i.e. right when the SIGKILL is sent. Linux
+// aborts a fork that lands under a pending group-kill signal; XNU does not,
+// so the new grandchild can complete its fork AFTER the kernel already
+// decided the pending signal had no takers, join the group, and keep
+// running — inheriting the stage's stdout, so the manager's stream-reading
+// goroutine (and so RunStage) blocks until that process exits on its own
+// (#1635 fix round finding 6; reproduced on this darwin development machine
+// in roughly one run in three of
+// TestOpenCodePluginHandshakeFailureKillsTheStage before this fix — CI runs
+// on Linux, where a fork aborts under a pending group signal, so it was
+// likely green throughout).
+//
+// The exit check cannot be "kill(-pgid, 0) returns ESRCH": the stage's own
+// process is not reaped until the manager's later cmd.Wait(), so it stays a
+// zombie — still a live member of its own process group as far as the
+// kernel's signal-delivery bookkeeping is concerned — for the entire time
+// this function can run, which means kill(-pgid, 0) never reports ESRCH here
+// (observed returning EPERM on darwin instead, well before any deadline).
+// So instead this sends a bounded, closely-spaced burst of SIGKILLs: cheap
+// and more than enough to catch a fork landing within a few milliseconds of
+// the first one, without blocking a non-racing kill on a signal that will
+// never arrive.
+func killProcessTreeUntilGone(proc *os.Process, window time.Duration) {
+	if proc == nil {
+		return
+	}
+	const interval = 15 * time.Millisecond
+	deadline := time.Now().Add(window)
+	for {
+		signalProcessTree(proc, syscall.SIGKILL)
+		if time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(interval)
+	}
 }
 
 // Stop stops a running execution by key (format: "owner/repo#number").

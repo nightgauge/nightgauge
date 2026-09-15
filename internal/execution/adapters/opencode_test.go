@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/execution/opencodeplugin"
 	"github.com/nightgauge/nightgauge/internal/models"
 )
 
@@ -71,6 +72,25 @@ func TestOpenCodeBuildCommandArgv(t *testing.T) {
 		t.Errorf("argv =\n  %q\nwant\n  %q", args, want)
 	}
 	assertNoForbiddenFlag(t, args)
+}
+
+// TestOpenCodeBuildCommandWithholdsOperatorInstallRiskFromTheChild (#1635/A11
+// round 8): EnvOperatorInstallRisk is manager-only — manager.go reads it back
+// from opts.RunRoot.Env directly, before BuildCommand ever runs — so
+// BuildCommand's own returned env, which becomes the opencode child
+// process's environment, must not carry it.
+func TestOpenCodeBuildCommandWithholdsOperatorInstallRiskFromTheChild(t *testing.T) {
+	_, _, env := NewOpenCodeAdapter().BuildCommand(RunOptions{
+		Model: "lmstudio/qwen/qwen3.8-27b",
+		RunRoot: &RunRoot{
+			Env: map[string]string{
+				opencodeplugin.EnvOperatorInstallRisk: "/home/operator/.opencode",
+			},
+		},
+	})
+	if got, ok := env[opencodeplugin.EnvOperatorInstallRisk]; ok {
+		t.Errorf("child env carries %s = %q; this marker is manager-only and must not reach the opencode child process", opencodeplugin.EnvOperatorInstallRisk, got)
+	}
 }
 
 // TestOpenCodePromptNeverOnArgv is the prompt-channel contract (ADR-022 § 19):

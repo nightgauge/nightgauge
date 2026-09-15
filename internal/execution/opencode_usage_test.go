@@ -504,6 +504,16 @@ export)
 esac
 echo STAGE >> %[6]q
 echo $$ > %[5]q
+if [ -n "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL" ]; then
+  printf '{"nonce":"%%s","plugin_version":"1","hooks":[]}' "$NIGHTGAUGE_OPENCODE_PLUGIN_NONCE" > "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL"
+  # A replayed capture's own events carry the ORIGINAL run's historical
+  # timestamps, arbitrarily earlier than this test process's clock — so a
+  # sentinel written just now would always read as "late" against them
+  # (VerifyNotLate). Backdating it to the epoch keeps this fake's stand-in
+  # write from ever failing that check on a capture it did not itself
+  # produce; a test of lateness writes its own sentinel and skips this fake.
+  touch -t 197001010000 "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL" 2>/dev/null || true
+fi
 cat > /dev/null
 cat %[2]q
 cat %[3]q >&2

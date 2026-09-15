@@ -1257,7 +1257,7 @@ func TestPrepareOpenCodeRunKeepsTheBaseURLOutOfTheEnvironment(t *testing.T) {
 	if run.Env["OPENCODE_CONFIG_CONTENT"] != run.ConfigContent || run.ConfigContent == "" {
 		t.Error("the environment does not carry the config content")
 	}
-	if want := filepath.Join(run.RunDir, "config", "opencode", "plugin"); run.PluginDir != want {
+	if want := filepath.Join(run.RunDir, "config", "opencode", "nightgauge-plugin"); run.PluginDir != want {
 		t.Errorf("PluginDir = %q, want %q", run.PluginDir, want)
 	}
 	for k, v := range run.Env {

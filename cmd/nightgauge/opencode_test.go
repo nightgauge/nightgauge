@@ -15,6 +15,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/adaptercompat"
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
+	"github.com/nightgauge/nightgauge/internal/execution/opencodeplugin"
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
 	"github.com/nightgauge/nightgauge/internal/gittest"
 )
@@ -198,6 +199,19 @@ func TestOpenCodeConfigVerbMatchesTheAdapter(t *testing.T) {
 		t.Errorf("the verb's env has %d variables, the adapter's run root %d", len(verb.Env), len(root.Env))
 	}
 	for k, v := range verb.Env {
+		// The plugin handshake nonce (#1635) is freshly minted by each of
+		// the two independent InstallNightgaugePlugin calls this test makes
+		// (crypto/rand, opencodeplugin.NewNonce) — it can never be byte
+		// identical across them, unlike every other entry, which is a
+		// deterministic function of the same inputs (id, worktree, model).
+		// Presence and non-emptiness are what the verb/adapter parity
+		// contract actually promises for this one key.
+		if k == opencodeplugin.EnvNonce {
+			if v == "" || env[k] == "" {
+				t.Errorf("env[%s]: expected a non-empty handshake nonce from both the verb (%q) and the adapter (%q)", k, v, env[k])
+			}
+			continue
+		}
 		if env[k] != v {
 			t.Errorf("env[%s]: the verb prints %q, the adapter spawns with %q", k, v, env[k])
 		}

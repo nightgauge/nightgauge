@@ -1045,11 +1045,26 @@ type OpenCodeRun struct {
 	// inherited variable it names before it adds Env, as the manager does for
 	// the Go path (OpenCodeWithholdsEnv).
 	EnvWithhold OpenCodeEnvWithhold `json:"env_withhold"`
-	// PluginDir is the directory in the run's OpenCode config directory that
-	// OpenCode loads the run's plugins from.
+	// PluginDir is where InstallNightgaugePlugin writes the plugin tree,
+	// inside the run's OpenCode config directory but deliberately NOT named
+	// "plugin" or "plugins": 1.18.30 auto-loads every file directly under
+	// either of those two names in an OpenCode config directory, in addition
+	// to loading whatever the config's own `plugin` array names (#1635 fix
+	// round finding 2) — so a PluginDir named "plugin" and a `plugin` array
+	// entry pointing into it load the SAME file twice, and every hook in it
+	// (careful-gate included) fires twice per tool call. The config's
+	// `plugin` array entry (addNightgaugePluginToConfig) is the one and only
+	// thing that makes OpenCode load it.
 	PluginDir string `json:"plugin_dir"`
 	// RunDir is the run's root.
 	RunDir string `json:"run_dir"`
+	// Home is the OS home directory (OpenCodeRunRequest.Home) the run was
+	// built for. InstallNightgaugePlugin uses it, not exported in Env, to
+	// find the operator's $HOME/.opencode (#1635 fix round finding 3):
+	// isolation moves the run's own OpenCode config directory but not that
+	// one, so a plugin-bearing config still leaves it needing a seed of its
+	// own.
+	Home string `json:"-"`
 	// NonLoopback is false only when the stage dispatches to a declared
 	// endpoint on this machine. It is true for an endpoint elsewhere and for
 	// every hosted provider, so a claim that the run stays offline does not
@@ -1194,8 +1209,9 @@ func PrepareOpenCodeRun(req OpenCodeRunRequest) (*OpenCodeRun, error) {
 		ConfigContent: built.Content,
 		Env:           env,
 		EnvWithhold:   OpenCodeEnvWithholdFor(req.Run.Model),
-		PluginDir:     filepath.Join(root, "config", "opencode", "plugin"),
+		PluginDir:     filepath.Join(root, "config", "opencode", "nightgauge-plugin"),
 		RunDir:        root,
+		Home:          req.Home,
 		NonLoopback:   built.NonLoopback,
 		Endpoints:     openCodeEndpointIDList(input.Endpoints),
 	}, nil

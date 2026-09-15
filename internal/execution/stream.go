@@ -53,6 +53,18 @@ type StreamEvent struct {
 	OriginalModel   string `json:"original_model,omitempty"`
 	FallbackModel   string `json:"fallback_model,omitempty"`
 	RefusalCategory string `json:"api_refusal_category,omitempty"`
+
+	// OpenCodeToolStartedAt is set only by ParseOpenCodeStreamLine on a
+	// tool_use event that carries part.state.time.start (epoch
+	// milliseconds): when the tool itself began, which 1.18.30 always
+	// observes strictly before the tool_use event's own emission (it emits
+	// tool_use only once a call has completed or errored). The Nightgauge
+	// OpenCode plugin handshake's late-sentinel check (manager.go,
+	// opencodeplugin.VerifyNotLate, #1635 fix round) reads this instead of
+	// the time its own reader saw the line, so a sentinel written while the
+	// tool was already running, but before the line reached the manager,
+	// still reads as late. Zero when absent or not opencode's stream.
+	OpenCodeToolStartedAt int64 `json:"-"`
 }
 
 // StreamMessage contains message-level data.
@@ -683,8 +695,21 @@ type openCodePart struct {
 // openCodeToolState is a tool_use part's outcome. Error is compared with
 // OpenCode's own rejection message only; it is never copied anywhere.
 type openCodeToolState struct {
-	Status string `json:"status"`
-	Error  string `json:"error"`
+	Status string              `json:"status"`
+	Error  string              `json:"error"`
+	Time   *openCodeToolTiming `json:"time"`
+}
+
+// openCodeToolTiming is a tool_use part's state.time (#1635 fix round):
+// Start is when the tool itself began, epoch milliseconds, observed earlier
+// than the tool_use event's own emission — 1.18.30 emits tool_use only once
+// a call completed or errored, so reading this instead of the manager's own
+// wall clock at the moment it saw the line is what lets the Nightgauge
+// OpenCode plugin handshake's late-sentinel check (VerifyNotLate,
+// internal/execution/opencodeplugin) catch a sentinel written between a
+// tool's real start and the line reaching the manager.
+type openCodeToolTiming struct {
+	Start int64 `json:"start"`
 }
 
 // OpenCodeTokens is OpenCode's per-step (step_finish part.tokens) and
@@ -789,6 +814,9 @@ func (acc *TokenAccumulator) ParseOpenCodeStreamLine(line string) (*StreamEvent,
 		s.SessionID = ev.SessionID
 	}
 	event := &StreamEvent{Type: ev.Type, SessionID: ev.SessionID}
+	if ev.Type == "tool_use" && ev.Part != nil && ev.Part.State != nil && ev.Part.State.Time != nil {
+		event.OpenCodeToolStartedAt = ev.Part.State.Time.Start
+	}
 	if !openCodeKnownEvents[ev.Type] {
 		s.Drift("unknown event type %s", quotedEventType(ev.Type))
 		return event, false

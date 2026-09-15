@@ -1,0 +1,44 @@
+[
+  {
+    "name": "destructive docker compose down blocked while careful is on",
+    "command": "docker compose down -v",
+    "careful": true,
+    "expect": "block"
+  },
+  {
+    "name": "same command allowed while careful is off",
+    "command": "docker compose down -v",
+    "careful": false,
+    "expect": "allow"
+  },
+  {
+    "name": "non-destructive docker compose up allowed while careful is on",
+    "command": "docker compose up -d",
+    "careful": true,
+    "expect": "allow"
+  },
+  {
+    "name": "quoted prose mentioning a destructive command is allowed (#4069)",
+    "command": "echo \"remember: docker compose down -v wipes prod\"",
+    "careful": true,
+    "expect": "allow"
+  },
+  {
+    "name": "a commit message describing a dangerous command is allowed (#4069)",
+    "command": "git commit -m \"explain why kubectl delete is dangerous\"",
+    "careful": true,
+    "expect": "allow"
+  },
+  {
+    "name": "a gh comment body describing a migration is allowed (#4069)",
+    "command": "gh issue comment 9 --body \"we used a non-destructive DROP-free migration\"",
+    "careful": true,
+    "expect": "allow"
+  },
+  {
+    "name": "a real destructive SQL op piped into a client is blocked",
+    "command": "echo 'DROP TABLE x' | psql",
+    "careful": true,
+    "expect": "block"
+  }
+]

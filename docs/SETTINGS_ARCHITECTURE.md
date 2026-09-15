@@ -318,6 +318,17 @@ opencode:
   of the same name replaces. What the per-run config does not set, your
   config still can: a hosted model's limits, and the server and model of a
   hosted provider other than `anthropic`.
+
+  Nightgauge never writes into your own OpenCode config directory
+  (`~/.opencode`, or your XDG OpenCode config directory once this is on) —
+  see [ADR-022 § "Nightgauge OpenCode
+  plugin"](decisions/022-opencode-multi-provider-adapter.md#nightgauge-opencode-plugin-amendment-2026-09-15-1635).
+  OpenCode's own
+  install into either is your own environment, exactly as it is in your own
+  `opencode` runs, which on a machine with no reachable registry can take a
+  while: a dispatch touching either directory bounds that wait and fails the
+  stage `adapter_incompatible` rather than hanging, naming the directory.
+
 - Timeouts are durations such as `3m`; a bare number is read as nanoseconds
   and refused.
 

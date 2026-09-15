@@ -3,10 +3,12 @@ package adapters
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"io"
 	"maps"
 	"os"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"slices"
@@ -15,6 +17,7 @@ import (
 	"unicode"
 
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/execution/opencodeplugin"
 	"github.com/nightgauge/nightgauge/internal/models"
 )
 
@@ -422,6 +425,12 @@ func (a *OpenCodeAdapter) BuildCommand(opts RunOptions) (string, []string, map[s
 	}
 	if opts.RunRoot != nil {
 		maps.Copy(env, opts.RunRoot.Env)
+		// EnvOperatorInstallRisk is manager-only (manager.go's operator-
+		// install-risk watchdog reads it back from opts.RunRoot.Env
+		// directly, before this function ever runs): the child opencode
+		// process itself has no use for it, so it does not belong in the
+		// child's own environment (#1635/A11 round 8).
+		delete(env, opencodeplugin.EnvOperatorInstallRisk)
 	}
 
 	return name, args, env
@@ -482,11 +491,165 @@ func (a *OpenCodeAdapter) PrepareRunRoot(req RunRootRequest) (*RunRoot, error) {
 	if err != nil {
 		return nil, err
 	}
+	ctx := req.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// req.ID, not req.Run.RunID, is what names this handshake: req.ID is
+	// always a run identity (RunRootRequest.ID's contract — either the
+	// dispatch's own or one the manager minted for a dispatch that has none),
+	// while req.Run.RunID is only ever non-empty for a dispatch that already
+	// carries a runtime identity. A dispatch with no identity (the autonomous
+	// issue-refine dispatch, buildRunOptions's nil-Runtime case) still gets a
+	// minted root and a real spawn, so it must still get a handshake, or a
+	// plugin that fails to load on that dispatch goes unnoticed (#1635 fix
+	// round finding 1/5).
+	if err := InstallNightgaugePlugin(ctx, run, req.Run.OutputFile, req.ID); err != nil {
+		return nil, err
+	}
 	root := &RunRoot{Dir: run.RunDir, Env: run.Env, Endpoints: run.Endpoints}
 	if pin != "" {
 		a.pinned.Store(root, pin)
 	}
 	return root, nil
+}
+
+// InstallNightgaugePlugin writes the embedded Nightgauge OpenCode plugin
+// (internal/execution/opencodeplugin, #1635) into run's PluginDir and adds it
+// to the per-run config's `plugin` array — the only change this makes to the
+// config PrepareOpenCodeRun already built; every other key is untouched.
+// outputFile and runID are the dispatch's RunOptions.OutputFile/RunID.
+//
+// Both the adapter's PrepareRunRoot and the `nightgauge opencode config` verb
+// (cmd/nightgauge/opencode.go) call this, immediately after
+// PrepareOpenCodeRun, so the SDK path and the Go path get the identical
+// plugin reference TestOpenCodeConfigVerbMatchesTheAdapter checks byte for
+// byte.
+//
+// OPENCODE_DISABLE_PROJECT_CONFIG=1 is the load mechanism #1632's
+// adversarial suite (TestOpenCodeDisableProjectConfig) proved isolates it
+// (ADR-022 amendment 2026-09-14): with it set, neither the target
+// repository's `.opencode/plugins/*` nor its own `plugin[]` entries load,
+// only the per-run config's own list does, and the run's isolation
+// environment already keeps a global OpenCode plugin directory out of the
+// XDG config tree this run sees (#1616). AC2 requires this, and the
+// maintainer decision on the #1635 fix round's second review keeps it set on
+// every spawn rather than narrowing AC2 — restored after the round's first
+// pass removed it (a regression: see the amendment for what that broke and
+// what it costs to keep this set instead).
+//
+// The flag also drops the target repository's own opencode.json/opencode.jsonc
+// and `.opencode/` directory WHOLESALE — its agent, provider, mode,
+// permission and instructions keys, not only `plugin` — because 1.18.30
+// offers no finer-grained switch: project config is one unit, on or off.
+// Until #1638 builds the Go-side reviewed merge that restores a target
+// repository's non-plugin customisation under this flag,
+// TestOpenCodeIntegrationPerRunConfigReachesOpenCode and
+// TestOpenCodeIntegrationAnthropicBlockHoldsItsServer assert the resulting
+// behaviour instead of the repository's own opencode.json content reaching
+// the resolved config: Nightgauge's own locked keys are exactly what a
+// dispatch sees, whatever a target repository's project config says. That
+// narrowing is recorded in the ADR-022 amendment dated 2026-09-14, not
+// invented by this comment.
+//
+// Without a run identity (runID == "") the plugin is still installed and
+// referenced, but no handshake nonce or sentinel is minted. No production
+// caller takes this branch today: the adapter's own PrepareRunRoot (above)
+// always passes req.ID, which is a run identity by RunRootRequest.ID's
+// contract, and `nightgauge opencode config` (cmd/nightgauge/opencode.go)
+// also always passes a validated-or-minted id of its own, for parity with
+// the adapter's config (TestOpenCodeConfigVerbMatchesTheAdapter) — even
+// though it spawns nothing and so nothing ever verifies the handshake it
+// arms. This branch exists only so a direct, non-CLI caller with no run
+// identity of its own still gets a usable config back rather than an error.
+
+// seedPluginDependencies runs before the plugin is referenced: opencode
+// 1.18.30 installs the @opencode-ai/plugin npm package into any OpenCode
+// config directory whose resolved config carries a non-empty `plugin` array —
+// observed independent of whether the plugin itself is a local file with no
+// import of that package — and every invocation that resolves such a config
+// (`debug config`, `run`, ...) waits for that install before doing anything
+// else. Pre-seeding this run's own OpenCode config directory with the
+// embedded, version-pinned copy WriteDependencies extracts
+// (opencode_plugin_deps.go, ADR-022 amendment 2026-09-14) is what keeps a
+// dispatch from ever making a network request for it, cold cache or warm.
+// ctx is honoured by the seed (bounded, local work; see
+// writeEmbeddedPluginDependencies) rather than a disconnected
+// context.Background() of its own.
+func InstallNightgaugePlugin(ctx context.Context, run *OpenCodeRun, outputFile, runID string) error {
+	entry, err := opencodeplugin.Write(run.PluginDir)
+	if err != nil {
+		return fmt.Errorf("opencode: writing the nightgauge plugin: %w", err)
+	}
+	seedPluginDependencies(ctx, filepath.Dir(run.PluginDir))
+	// 1.18.30 installs @opencode-ai/plugin into every directory its own
+	// ConfigPaths.directories names, not only the run's own XDG config
+	// directory: $HOME/.opencode when it exists (isolation does not move it —
+	// openCodeHomeConfigRefusal's own comment: "neither the XDG variables,
+	// OPENCODE_DISABLE_PROJECT_CONFIG nor OPENCODE_PURE stops it") and
+	// OPENCODE_CONFIG_DIR, set only under opencode.inherit_user_config, at
+	// the operator's own XDG OpenCode config directory. Nightgauge never
+	// seeds or merges anything into either (#1635/A11 round 6, ADR-022
+	// amendment 2026-09-15, narrowed AC1: an earlier round did, and the
+	// review that found the seed it fell back to left an operator's own
+	// `import ... from "@opencode-ai/plugin"` unresolvable — see
+	// opencode_plugin_deps.go's package doc comment). OpenCode's own install
+	// into its own config directories is the operator's environment, exactly
+	// as in the operator's own OpenCode runs. operatorInstallRisk only READS
+	// (never writes) whether either directory is in play AND does not already
+	// satisfy the pin (#1635/A11 round 8, ADR-022 amendment 2026-09-15: a
+	// directory that already satisfies opencode's own check gets OpenCode's
+	// local, instant fast path, same as a run's own XDG-resolved config
+	// directory, so it is not flagged) — so the manager can bound the wait
+	// and classify a stage that never produces output as adapter_incompatible
+	// instead of an unclassified hang (manager.go), rather than silently
+	// waiting on the registry.
+	if risk := operatorInstallRisk(run); risk != "" {
+		run.Env[opencodeplugin.EnvOperatorInstallRisk] = risk
+	}
+	content, err := addNightgaugePluginToConfig(run.ConfigContent, entry)
+	if err != nil {
+		return fmt.Errorf("opencode: adding the nightgauge plugin to the per-run config: %w", err)
+	}
+	run.ConfigContent = content
+	run.Env[openCodeConfigContentEnvVar] = content
+	run.Env["OPENCODE_DISABLE_PROJECT_CONFIG"] = "1"
+	run.Env[opencodeplugin.EnvPluginPath] = entry
+
+	if runID == "" {
+		return nil
+	}
+	nonce, err := opencodeplugin.NewNonce()
+	if err != nil {
+		return fmt.Errorf("opencode: minting the plugin handshake nonce: %w", err)
+	}
+	sentinel := opencodeplugin.SentinelPath(outputFile, run.RunDir, runID)
+	if err := opencodeplugin.DeleteStaleSentinel(sentinel); err != nil {
+		return fmt.Errorf("opencode: %w", err)
+	}
+	run.Env[opencodeplugin.EnvNonce] = nonce
+	run.Env[opencodeplugin.EnvSentinel] = sentinel
+	return nil
+}
+
+// addNightgaugePluginToConfig sets content's top-level "plugin" key to an
+// array holding exactly entry, leaving every other key byte-identical.
+// content is decoded generically (map[string]any) rather than through
+// openCodeConfigJSON, which declares no plugin field of its own: adding one
+// there is BuildOpenCodeConfig's job (opencode_config.go) once #1635 and
+// #1638 agree on a permission map to extend the same builder with; until
+// then this is the one place the config gains a plugin entry.
+func addNightgaugePluginToConfig(content, entry string) (string, error) {
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(content), &raw); err != nil {
+		return "", fmt.Errorf("decoding the per-run config: %w", err)
+	}
+	raw["plugin"] = []string{entry}
+	out, err := json.Marshal(raw)
+	if err != nil {
+		return "", fmt.Errorf("re-encoding the per-run config: %w", err)
+	}
+	return string(out), nil
 }
 
 // WithholdsEnv implements the manager's optional hook deciding which inherited

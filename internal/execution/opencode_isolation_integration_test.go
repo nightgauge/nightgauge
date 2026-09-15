@@ -15,23 +15,41 @@ package execution
 // the real binary, so it cannot overwrite what the stage's environment
 // resolved. The stage names a model the catalog does not list under a hosted
 // provider, so the run exits 1 before any model request, and every opencode
-// call runs with a throwaway HOME and npm pointed at a closed loopback port,
-// because OpenCode installs plugin dependencies with npm: no request leaves
-// the machine and the operator's real config is never read. With CI=true a
-// missing binary fails every case rather than skipping it.
+// call runs with a throwaway HOME and npm pointed at a closed loopback port
+// as a belt-and-suspenders check: InstallNightgaugePlugin now seeds
+// @opencode-ai/plugin from an embedded, version-pinned copy
+// (opencodeplugin.WriteDependencies, ADR-022 amendment 2026-09-14), so
+// OpenCode's own install of it finds an already-satisfied node_modules tree
+// and makes no request of its own — the closed port proves that, rather than
+// being what stops a live install from reaching one. The operator's real
+// config is never read either way. With CI=true a missing binary fails every
+// case rather than skipping it.
+//
+// TestOpenCodeIntegrationAbsentInheritedConfigDirOffline and
+// TestOpenCodeIntegrationHomeDirBinOnly are the exception: they dispatch
+// with an operator-owned OpenCode directory ($HOME/.opencode, or
+// OPENCODE_CONFIG_DIR under opencode.inherit_user_config) in play.
+// Nightgauge never seeds or merges into either (#1635/A11 round 6, ADR-022
+// amendment 2026-09-15, narrowed AC1), so those two expect the dispatch to
+// fail, bounded by the manager's operator-install-risk watchdog
+// (openCodeOperatorInstallWaitBound, shortened for the test) rather than by
+// npm's own registry retry/backoff.
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
+	"github.com/nightgauge/nightgauge/internal/execution/opencodeplugin"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -54,9 +72,11 @@ const openCodeInheritConfig = openCodeMachineConfig + "  inherit_user_config: tr
 // openCodeInheritNotice is the stderr line an opted-in dispatch prints.
 const openCodeInheritNotice = "opencode.inherit_user_config is on: this dispatch also reads your own OpenCode config"
 
-// openCodeNoRegistry points npm, which OpenCode runs to install plugin
-// dependencies, at a loopback port nothing listens on. Every opencode call
-// here carries it, so none can reach a public registry.
+// openCodeNoRegistry points npm, which OpenCode would otherwise run to
+// install plugin dependencies, at a loopback port nothing listens on: a
+// belt-and-suspenders check on top of InstallNightgaugePlugin's embedded
+// dependency seed, not what makes these tests offline-safe by itself. Every
+// opencode call here carries it, so none can reach a public registry.
 const openCodeNoRegistry = "npm_config_registry=http://127.0.0.1:9/"
 
 // nightgaugeCanaryEnv, set by scripts/adapter-canary.sh's cmd_opencode_canary
@@ -180,6 +200,17 @@ func TestRealOpenCodePinRelaxedUnderCanary(t *testing.T) {
 // binary's.
 func openCodeShim(t *testing.T, real string) string {
 	t.Helper()
+	return openCodeShimWithRegistry(t, real, openCodeNoRegistry)
+}
+
+// openCodeShimWithRegistry is openCodeShim parameterized on the
+// `npm_config_registry=...` line the shim's own script exports: most tests
+// want the shared closed-port belt-and-suspenders check (openCodeShim), but
+// a test proving no registry request is ever sent — as opposed to merely
+// proving the process does not hang — needs a real listener it can count
+// connections on instead (#1635 fix round 2).
+func openCodeShimWithRegistry(t *testing.T, real, registryEnv string) string {
+	t.Helper()
 	bin, out := t.TempDir(), t.TempDir()
 	script := fmt.Sprintf(`#!/bin/sh
 export %[3]s
@@ -190,7 +221,7 @@ export %[3]s
 code=$?
 "%[1]s" session list < /dev/null > "%[2]s/sessions.txt" 2>&1
 exit $code
-`, real, out, openCodeNoRegistry)
+`, real, out, registryEnv)
 	if err := os.WriteFile(filepath.Join(bin, "opencode"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -198,18 +229,74 @@ exit $code
 	return out
 }
 
+// localNPMRegistry starts a loopback TCP listener standing in for the npm
+// registry and returns the `npm_config_registry=...` line to export it as,
+// plus an accessor for how many connections it has accepted so far. Unlike
+// openCodeNoRegistry's closed port, a real listener lets a test assert "no
+// request was ever sent" positively — zero connections — rather than only
+// "the process did not hang forever", which a closed port that happens to
+// fail fast for an unrelated reason could satisfy without proving anything.
+func localNPMRegistry(t *testing.T) (registryEnv string, connections func() int32) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var count int32
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		ln.Close()
+		<-done
+	})
+	go func() {
+		defer close(done)
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			atomic.AddInt32(&count, 1)
+			conn.Close()
+		}
+	}()
+	return fmt.Sprintf("npm_config_registry=http://%s/", ln.Addr().String()), func() int32 {
+		return atomic.LoadInt32(&count)
+	}
+}
+
 // runOpenCodeIntegrationStage dispatches one stage with no run identity, so
 // its root is minted and gone when RunStage returns.
 func runOpenCodeIntegrationStage(t *testing.T) (*adapters.RunResult, string, error) {
+	t.Helper()
+	return runOpenCodeIntegrationStageWithTimeout(t, 120*time.Second)
+}
+
+// runOpenCodeIntegrationStageWithTimeout is runOpenCodeIntegrationStage with
+// a caller-chosen timeout, for a dispatch whose config touches an
+// operator-owned OpenCode directory that does NOT already satisfy the pin,
+// which legitimately waits on OpenCode's own real install rather than
+// getting a local, instant fast path (#1635/A11 round 6, corrected round 8:
+// only an UNSATISFIED $HOME/.opencode or OPENCODE_CONFIG_DIR pays that wait;
+// a directory seeded with the full four-file set gets the same fast path a
+// run's own XDG-resolved config directory always did — see
+// seedOperatorInstallSatisfied's own doc comment). The two CI-required
+// opt-in success tests (TestOpenCodeIntegrationInheritUserConfigOptIn,
+// TestOpenCodeIntegrationHomeDotOpenCode) seed their operator directories
+// satisfied and so no longer need a raised timeout; the two offline tests
+// below (TestOpenCodeIntegrationAbsentInheritedConfigDirOffline,
+// TestOpenCodeIntegrationHomeDirBinOnly) deliberately leave their operator
+// directory unsatisfied and use withShortOperatorInstallWaitBoundForRealBinary
+// instead, to prove the bound rather than wait it out.
+func runOpenCodeIntegrationStageWithTimeout(t *testing.T, timeout time.Duration) (*adapters.RunResult, string, error) {
 	t.Helper()
 	var result *adapters.RunResult
 	var err error
 	t.Setenv("DEEPSEEK_API_KEY", "") // the dispatched provider's own key stays out
 	stderr := captureStderr(t, func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 		opts := openCodeStageOptions(openCodeIntegrationModel, nil)
-		opts.Timeout = 120 * time.Second
+		opts.Timeout = timeout
 		result, err = NewManager(openCodeWorkspace(t), adapters.NewOpenCodeAdapter()).RunStage(ctx, opts)
 	})
 	return result, stderr, err
@@ -264,6 +351,34 @@ func writeOperatorOpenCodeConfig(t *testing.T, home string, plugin bool) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "opencode.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// seedOperatorInstallSatisfied writes dir's own FULL four-file set —
+// package.json, package-lock.json, node_modules/.package-lock.json, and
+// node_modules/@opencode-ai/plugin/package.json naming opencodeplugin.DepsVersion
+// — via opencodeplugin.WriteDependencies. That set satisfies both opencode
+// 1.18.30's own "is @opencode-ai/plugin already installed" check and
+// opencodeplugin.OperatorInstallSatisfied (which reads only a subset of it —
+// node_modules, package.json's dependency names and package-lock.json's own
+// root package entry, never the hidden lockfile or the version marker; see
+// its doc comment). TEST FIXTURE state standing in for "the operator already
+// ran opencode themselves and it installed the pinned version", never
+// anything Nightgauge's own production code writes (#1635/A11 round 6,
+// ADR-022 amendment 2026-09-15: Nightgauge never seeds or merges into an
+// operator-owned directory). Without this, a test that opts a real dispatch
+// into an operator-owned directory (opencode.inherit_user_config, or a
+// fixture under $HOME/.opencode) hits the SAME operator-install-risk wait
+// the offline tests above exist to prove is bounded — which is real,
+// correct behaviour, but is not what THESE tests are about: they prove the
+// opt-in itself layers the operator's agent/MCP config back in, once
+// OpenCode's own install is already satisfied, exactly as it would be for
+// an operator who has used OpenCode before. Seeding only the version marker
+// (round 6/7's fixture) does NOT satisfy opencode's own check.
+func seedOperatorInstallSatisfied(t *testing.T, dir string) {
+	t.Helper()
+	if err := opencodeplugin.WriteDependencies(dir); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -357,6 +472,52 @@ func TestOpenCodeIntegrationIsolatesTheRun(t *testing.T) {
 	}
 }
 
+// TestOpenCodeIntegrationPluginLoadsExactlyOnce (#1635 fix round finding 2):
+// the run's resolved `opencode debug config` names the Nightgauge plugin file
+// exactly once. 1.18.30 auto-loads every file directly under a
+// "plugin"/"plugins" directory of an OpenCode config directory IN ADDITION TO
+// whatever the config's own `plugin` array names; PluginDir used to be named
+// exactly "plugin" (the auto-scanned name), and the per-run config also
+// listed the same file in `plugin`, so it loaded twice — every hook in it,
+// careful-gate included, fired twice per tool call. Reverting PluginDir's
+// name back to "plugin" turns this red: `opencode debug config` lists the
+// file once as a bare path (the config array entry) and once more prefixed
+// "file://" (the auto-scan), so the count below is 2, not 1.
+func TestOpenCodeIntegrationPluginLoadsExactlyOnce(t *testing.T) {
+	real := realOpenCode(t)
+	isolateOpenCodeHome(t)
+	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
+
+	out := openCodeShim(t, real)
+	if _, _, err := runOpenCodeIntegrationStage(t); err != nil {
+		t.Fatalf("RunStage: %v", err)
+	}
+
+	config := string(readShimFile(t, out, "config.json"))
+	if !strings.HasPrefix(strings.TrimSpace(config), "{") {
+		t.Fatalf("`opencode debug config` printed no config:\n%s\n%s", config, readShimFile(t, out, "config.err"))
+	}
+	var resolved struct {
+		Plugin []string `json:"plugin"`
+	}
+	if err := json.Unmarshal([]byte(config), &resolved); err != nil {
+		t.Fatalf("the resolved config is not JSON: %v\n%s", err, config)
+	}
+	loaded := map[string]int{}
+	for _, entry := range resolved.Plugin {
+		loaded[strings.TrimPrefix(entry, "file://")]++
+	}
+	nightgauge := 0
+	for path, n := range loaded {
+		if strings.HasSuffix(path, "nightgauge.js") {
+			nightgauge += n
+		}
+	}
+	if nightgauge != 1 {
+		t.Errorf("the resolved config's plugin array names the Nightgauge plugin %d time(s), want exactly 1: %v", nightgauge, resolved.Plugin)
+	}
+}
+
 // TestOpenCodeIntegrationInheritUserConfigOptIn: with
 // opencode.inherit_user_config on in the machine tier, the operator's config is
 // layered back into the run, its agent and MCP server appear in `opencode
@@ -368,11 +529,36 @@ func TestOpenCodeIntegrationInheritUserConfigOptIn(t *testing.T) {
 	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
 	writeOpenCodeMachineConfig(t, openCodeInheritConfig)
 	writeOperatorOpenCodeConfig(t, home, false)
+	// Test fixture only: stands in for "the operator already ran opencode
+	// themselves" (#1635/A11 round 6). Seeded with the FULL four-file set
+	// (seedOperatorInstallSatisfied), this DOES shorten this test's own
+	// runtime to a few seconds — round 8 (ADR-022 amendment 2026-09-15)
+	// found, driven directly against the pinned binary, that OpenCode
+	// 1.18.30's "already installed" fast path applies to OPENCODE_CONFIG_DIR
+	// exactly as it does to a run's own XDG-resolved config directory, once
+	// the full set is what is actually seeded rather than only the version
+	// marker (round 6/7's narrower fixture, which did not get the fast
+	// path).
+	seedOperatorInstallSatisfied(t, filepath.Join(home, ".config", "opencode"))
 
 	out := openCodeShim(t, real)
-	_, stderr, err := runOpenCodeIntegrationStage(t)
+	started := time.Now()
+	result, stderr, err := runOpenCodeIntegrationStage(t)
+	elapsed := time.Since(started)
 	if err != nil {
 		t.Fatalf("RunStage: %v", err)
+	}
+	// A satisfied OPENCODE_CONFIG_DIR must never arm the operator-install-risk
+	// watchdog (#1635/A11 round 8): this dispatch completes on the fast path,
+	// not by the watchdog's own bound expiring and the CLI being killed.
+	if result != nil && result.ExitCode == -1 {
+		t.Error("ExitCode = -1: the dispatch was killed rather than completing on OpenCode's own fast path")
+	}
+	if strings.Contains(stderr, "adapter_incompatible") || strings.Contains(stderr, "may be waiting on an unreachable registry") {
+		t.Errorf("stderr carries an install-risk/adapter_incompatible marker for a directory seeded satisfied:\n%s", stderr)
+	}
+	if elapsed > 20*time.Second {
+		t.Errorf("RunStage took %s; a satisfied OPENCODE_CONFIG_DIR should get OpenCode's own fast path (observed ~4.5s for a whole dispatch on the pinned binary), not the ~70-80s an install wait takes", elapsed)
 	}
 	config := string(readShimFile(t, out, "config.json"))
 	for _, want := range []string{"operator-fixture-agent", "operator-fixture-mcp"} {
@@ -434,11 +620,162 @@ func TestOpenCodeIntegrationHomeDotOpenCode(t *testing.T) {
 	}
 
 	writeOpenCodeMachineConfig(t, openCodeInheritConfig)
-	if _, _, err := runOpenCodeIntegrationStage(t); err != nil {
+	// Test fixture only, standing in for "the operator already ran opencode
+	// themselves" (#1635/A11 round 6) — with the full set this DOES shorten
+	// this dispatch's own runtime; see
+	// TestOpenCodeIntegrationInheritUserConfigOptIn's own comment on why.
+	// inherit_user_config also puts OPENCODE_CONFIG_DIR (the operator's own
+	// ~/.config/opencode) in play, independent of ~/.opencode, so both are
+	// seeded here.
+	seedOperatorInstallSatisfied(t, filepath.Join(home, ".opencode"))
+	seedOperatorInstallSatisfied(t, filepath.Join(home, ".config", "opencode"))
+	started := time.Now()
+	result, stderr, err := runOpenCodeIntegrationStage(t)
+	elapsed := time.Since(started)
+	if err != nil {
 		t.Fatalf("RunStage with the opt-in: %v", err)
+	}
+	if result != nil && result.ExitCode == -1 {
+		t.Error("ExitCode = -1: the dispatch was killed rather than completing on OpenCode's own fast path")
+	}
+	if strings.Contains(stderr, "adapter_incompatible") || strings.Contains(stderr, "may be waiting on an unreachable registry") {
+		t.Errorf("stderr carries an install-risk/adapter_incompatible marker for directories seeded satisfied:\n%s", stderr)
+	}
+	// This test seeds two operator-owned directories (~/.opencode and
+	// ~/.config/opencode) and runs a preceding refused dispatch before the
+	// timed section starts, so its fast-path wall clock runs measurably
+	// higher under CI's shared-runner load than the single-directory cases
+	// above (observed 23.7s in CI vs ~5-6s locally). 35s keeps a wide margin
+	// below the ~70-80s slow path this assertion exists to catch, while
+	// giving that CI variance headroom the tighter 20s bound in the
+	// single-directory tests does not need.
+	if elapsed > 35*time.Second {
+		t.Errorf("RunStage took %s; both operator directories were seeded satisfied and should get OpenCode's own fast path, not the ~70-80s an install wait takes", elapsed)
 	}
 	if config := string(readShimFile(t, out, "config.json")); !strings.Contains(config, "home-dotdir-agent") {
 		t.Errorf("with the opt-in the ~/.opencode agent is not in the run's config:\n%s", config)
+	}
+}
+
+// depsMarkerPath is the file WriteDependencies' embedded copy always creates
+// in the run's own OpenCode config directory, checked below in place of
+// enumerating the whole extracted tree.
+func depsMarkerPath(dir string) string {
+	return filepath.Join(dir, "node_modules", "@opencode-ai", "plugin", "package.json")
+}
+
+// openCodeOfflineWallClockCap bounds the two tests below at the shortened
+// openCodeOperatorInstallWaitBound this file sets for them, comfortably
+// below the multi-minute registry retry/backoff wait ADR-022's amendment
+// records (71s and 146.88s observed) a regression back to an UNBOUNDED wait
+// would reproduce.
+const openCodeOfflineWallClockCap = 20 * time.Second
+
+// withShortOperatorInstallWaitBoundForRealBinary shortens
+// openCodeOperatorInstallWaitBound for a real-binary test in this file, so
+// it proves the bound without waiting out the production-sized one (or,
+// pre-fix, npm's own multi-minute retry/backoff).
+func withShortOperatorInstallWaitBoundForRealBinary(t *testing.T, bound time.Duration) {
+	t.Helper()
+	prev := openCodeOperatorInstallWaitBound
+	openCodeOperatorInstallWaitBound = bound
+	t.Cleanup(func() { openCodeOperatorInstallWaitBound = prev })
+}
+
+// TestOpenCodeIntegrationAbsentInheritedConfigDirOffline (#1635/A11 round 6,
+// ADR-022 amendment 2026-09-15, narrowed AC1): opencode.inherit_user_config
+// is on and OPENCODE_CONFIG_DIR (the operator's own ~/.config/opencode here)
+// does not exist yet — the shape a machine that has never run opencode with
+// this HOME has. Nightgauge never creates or seeds it (an earlier round did;
+// narrowed AC1 removes that): the real binary's own install waits on the
+// registry stand-in, and the dispatch fails, bounded by the shortened
+// watchdog rather than by npm's own multi-minute retry/backoff, classified
+// adapter_incompatible and naming the directory. Deleting the manager's
+// operator-install-risk watchdog turns this red: the dispatch then waits out
+// this test's own registry listener well past openCodeOfflineWallClockCap,
+// bounded only by RunStage's own 120s context timeout, with no
+// adapter_incompatible marker at all.
+func TestOpenCodeIntegrationAbsentInheritedConfigDirOffline(t *testing.T) {
+	real := realOpenCode(t)
+	home := isolateOpenCodeHome(t)
+	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
+	writeOpenCodeMachineConfig(t, openCodeInheritConfig)
+	if _, err := os.Stat(filepath.Join(home, ".config", "opencode")); err == nil {
+		t.Fatal("test premise broken: ~/.config/opencode already exists")
+	}
+	withShortOperatorInstallWaitBoundForRealBinary(t, 6*time.Second)
+
+	registryEnv, _ := localNPMRegistry(t)
+	openCodeShimWithRegistry(t, real, registryEnv)
+
+	start := time.Now()
+	result, stderr, err := runOpenCodeIntegrationStage(t)
+	elapsed := time.Since(start)
+	if elapsed > openCodeOfflineWallClockCap {
+		t.Errorf("RunStage took %s, want under %s: an absent, unsatisfied OPENCODE_CONFIG_DIR must be bounded by the watchdog, not by npm's own retry/backoff", elapsed, openCodeOfflineWallClockCap)
+	}
+	combined := stderr
+	if result != nil {
+		combined += result.Stderr
+	}
+	if !strings.Contains(combined, "adapter_incompatible") {
+		t.Errorf("stderr/result carries no adapter_incompatible marker:\nerr=%v\nstderr=%s", err, combined)
+	}
+	if !strings.Contains(combined, filepath.Join(home, ".config", "opencode")) {
+		t.Errorf("stderr/result does not name the operator-owned OPENCODE_CONFIG_DIR:\nstderr=%s", combined)
+	}
+	// Deliberately no assertion that OPENCODE_CONFIG_DIR stays absent:
+	// opencode 1.18.30 creates it itself the moment a config naming it
+	// resolves, whether or not the install that follows ever completes —
+	// exactly the operator's own environment narrowed AC1 accepts. Only
+	// Nightgauge's own @opencode-ai/plugin write is forbidden there.
+	if _, err := os.Stat(depsMarkerPath(filepath.Join(home, ".config", "opencode"))); err == nil {
+		t.Error("Nightgauge must never write @opencode-ai/plugin into the operator-owned OPENCODE_CONFIG_DIR")
+	}
+}
+
+// TestOpenCodeIntegrationHomeDirBinOnly (#1635/A11 round 6, ADR-022
+// amendment 2026-09-15, narrowed AC1): $HOME/.opencode exists but holds only
+// bin/ — the shape opencode's own official install script leaves before any
+// config file is ever written there. Nightgauge never writes into it (an
+// earlier round merged into it; narrowed AC1 removes that): the dispatch
+// waits on the real binary's own install, bounded by the shortened watchdog,
+// and fails classified rather than hanging or silently succeeding with a
+// merge Nightgauge no longer performs.
+func TestOpenCodeIntegrationHomeDirBinOnly(t *testing.T) {
+	real := realOpenCode(t)
+	home := isolateOpenCodeHome(t)
+	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
+	operatorOpenCodeDir := filepath.Join(home, ".opencode")
+	if err := os.MkdirAll(filepath.Join(operatorOpenCodeDir, "bin"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	withShortOperatorInstallWaitBoundForRealBinary(t, 6*time.Second)
+
+	registryEnv, _ := localNPMRegistry(t)
+	openCodeShimWithRegistry(t, real, registryEnv)
+
+	start := time.Now()
+	result, stderr, err := runOpenCodeIntegrationStage(t)
+	elapsed := time.Since(start)
+	if elapsed > openCodeOfflineWallClockCap {
+		t.Errorf("RunStage took %s, want under %s: a bin/-only ~/.opencode must be bounded by the watchdog, not by npm's own retry/backoff", elapsed, openCodeOfflineWallClockCap)
+	}
+	combined := stderr
+	if result != nil {
+		combined += result.Stderr
+	}
+	if !strings.Contains(combined, "adapter_incompatible") {
+		t.Errorf("stderr/result carries no adapter_incompatible marker:\nerr=%v\nstderr=%s", err, combined)
+	}
+	if !strings.Contains(combined, operatorOpenCodeDir) {
+		t.Errorf("stderr/result does not name the operator-owned %s:\nstderr=%s", operatorOpenCodeDir, combined)
+	}
+	if _, err := os.Stat(depsMarkerPath(operatorOpenCodeDir)); err == nil {
+		t.Error("Nightgauge must never write @opencode-ai/plugin into an operator-owned $HOME/.opencode")
+	}
+	if _, err := os.Stat(filepath.Join(operatorOpenCodeDir, "bin")); err != nil {
+		t.Errorf("the pre-existing bin/ directory is gone: %v", err)
 	}
 }
 
@@ -448,12 +785,19 @@ func TestOpenCodeIntegrationHomeDotOpenCode(t *testing.T) {
 // stage, so no request is sent. The endpoint's base URL, which is in no
 // variable, resolves from the private file the config refers to; the limits,
 // the steps cap, the pinned models and the locked keys are all in the
-// resolved config; and neither a config file in the run's own XDG directory
-// nor the repository's opencode.json can change them: not with a limit.input
-// of their own, which would lift the compaction threshold, not with a mode
-// entry, which 1.18.30 merges over the agent of the same name after every
-// layer, and not with an id or SDK package on the dispatched model's entry,
-// which 1.18.30 sends and loads in place of the provider block's.
+// resolved config; and a config file in the run's own XDG directory cannot
+// change them: not with a limit.input of their own, which would lift the
+// compaction threshold, not with a steps count of its own on an agent
+// InstallNightgaugePlugin's config already locks.
+//
+// The repository's own opencode.json does not merge in AT ALL, locked keys
+// or not: InstallNightgaugePlugin sets OPENCODE_DISABLE_PROJECT_CONFIG=1 on
+// every OpenCode dispatch (AC2, ADR-022 amendment 2026-09-14), and 1.18.30
+// offers no finer switch than "every project config file this repository
+// holds, including .opencode/plugins/* and plugin[]" — so proving a
+// dispatched stage cannot see anything the repository's file sets is exactly
+// what proves the isolation AC2 requires, until #1638 builds the Go-side
+// merge that lets non-plugin repository customisation back in.
 func TestOpenCodeIntegrationPerRunConfigReachesOpenCode(t *testing.T) {
 	real := realOpenCode(t)
 	home := isolateOpenCodeHome(t)
@@ -474,8 +818,10 @@ func TestOpenCodeIntegrationPerRunConfigReachesOpenCode(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(xdgConfig, "opencode.json"), []byte(below), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// The repository's opencode.json tries the mode entries. Its own agent
-	// proves the file was loaded, so the assertions below are not vacuous.
+	// The repository's opencode.json tries the mode entries and its own
+	// agent — and, with OPENCODE_DISABLE_PROJECT_CONFIG=1 set, must not
+	// reach the resolved config at all (asserted below by repo-fixture-agent
+	// being ABSENT, not present).
 	workspace := openCodeWorkspace(t)
 	repo := `{"agent":{"repo-fixture-agent":{"description":"repository fixture agent","prompt":"x","mode":"subagent"}},` +
 		`"provider":{"lmstudio":{"models":{"qwen/qwen3.8-27b":{"id":"repo-chosen-model","provider":{"npm":"@ai-sdk/anthropic"},"limit":{"input":99999999,"context":1,"output":1}}}}},` +
@@ -516,12 +862,27 @@ func TestOpenCodeIntegrationPerRunConfigReachesOpenCode(t *testing.T) {
 			Auto     bool `json:"auto"`
 			Reserved int  `json:"reserved"`
 		} `json:"compaction"`
+		Plugin []string `json:"plugin"`
 	}
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		t.Fatalf("`opencode debug config` in the stage's environment printed no config: %v\n%s\n%s", err, raw, readShimFile(t, out, "config.err"))
 	}
-	if _, ok := cfg.Agent["repo-fixture-agent"]; !ok {
-		t.Fatalf("the repository's opencode.json was not loaded, so nothing below proves it cannot change the run:\n%s", raw)
+	// AC2: only the embedded Nightgauge plugin ever appears, on a live
+	// dispatch through the adapter — not a config the test built by hand.
+	// 1.18.30's `debug config` echoes the one entry the per-run config set
+	// twice (its own normalisation of the same path alongside the literal
+	// value); every entry must still name only the Nightgauge plugin.
+	if len(cfg.Plugin) == 0 {
+		t.Errorf("resolved plugin array is empty, want the embedded Nightgauge plugin")
+	}
+	for _, p := range cfg.Plugin {
+		if !strings.Contains(p, "nightgauge.js") {
+			t.Errorf("resolved plugin array = %q, want every entry to name only the embedded Nightgauge plugin", cfg.Plugin)
+			break
+		}
+	}
+	if _, ok := cfg.Agent["repo-fixture-agent"]; ok {
+		t.Fatalf("the repository's opencode.json loaded despite OPENCODE_DISABLE_PROJECT_CONFIG=1: AC2 requires a target repository's project config never to reach a dispatch:\n%s", raw)
 	}
 	lm := cfg.Provider["lmstudio"]
 	if lm.Options["baseURL"] != "http://127.0.0.1:9/v1" {
@@ -601,13 +962,15 @@ func openCodeResolvedModels(t *testing.T, raw []byte) map[string]openCodeResolve
 
 // TestOpenCodeIntegrationAnthropicBlockHoldsItsServer (ADR-022 § 17): a
 // repository opencode.json that gives anthropic a baseURL and SDK package of
-// its own cannot send ANTHROPIC_API_KEY anywhere but Anthropic's API, because
-// the per-run config pins both, and a model entry of its own that maps the
-// dispatched model to another model and another SDK package changes neither
-// what OpenCode sends nor the package that gets the key, because the per-run
-// config pins the dispatched model's entry too. A shim runs `opencode debug
-// config` and `opencode models` in the stage's environment instead of the
-// stage, so no request is sent.
+// its own cannot send ANTHROPIC_API_KEY anywhere but Anthropic's API, and a
+// model entry of its own that maps the dispatched model to another model and
+// another SDK package changes neither what OpenCode sends nor the package
+// that gets the key — because, with OPENCODE_DISABLE_PROJECT_CONFIG=1 set on
+// every OpenCode dispatch (AC2, ADR-022 amendment 2026-09-14), the
+// repository's file never merges into the resolved config at all, so there
+// is nothing there for the per-run config to out-rank. A shim runs `opencode
+// debug config` and `opencode models` in the stage's environment instead of
+// the stage, so no request is sent.
 func TestOpenCodeIntegrationAnthropicBlockHoldsItsServer(t *testing.T) {
 	real := realOpenCode(t)
 	isolateOpenCodeHome(t)
@@ -642,8 +1005,8 @@ func TestOpenCodeIntegrationAnthropicBlockHoldsItsServer(t *testing.T) {
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		t.Fatalf("`opencode debug config` printed no config: %v\n%s\n%s", err, raw, readShimFile(t, out, "config.err"))
 	}
-	if _, ok := cfg.Agent["repo-fixture-agent"]; !ok {
-		t.Fatalf("the repository's opencode.json was not loaded, so nothing below proves it cannot re-point the key:\n%s", raw)
+	if _, ok := cfg.Agent["repo-fixture-agent"]; ok {
+		t.Fatalf("the repository's opencode.json loaded despite OPENCODE_DISABLE_PROJECT_CONFIG=1: AC2 requires a target repository's project config never to reach a dispatch:\n%s", raw)
 	}
 	anthropic := cfg.Provider["anthropic"]
 	if anthropic.Options["baseURL"] != "https://api.anthropic.com/v1" || anthropic.NPM != "@ai-sdk/anthropic" {
