@@ -4,8 +4,8 @@
   "min_version": "1.18.30",
   "min_version_reason": "Every OpenCode behaviour ADR-022 relies on was observed on 1.18.30 (ADR-022 section 20).",
   "floor_policy": "fail_closed",
-  "max_tested": "1.18.30",
-  "max_tested_reason": "The only version observed; above it, dispatch warns and self-tests, and endpoint dispatch stops (ADR-022 section 20).",
+  "max_tested": "0.0.1",
+  "max_tested_reason": "THROWAWAY: nonexistent published version (npm has no opencode-ai@0.0.1) deliberately set to make the canary's OpenCode stub leg fail install for #1639 verification (do not merge).",
   "feeds": [
     { "kind": "npm", "ref": "opencode-ai" },
     {
