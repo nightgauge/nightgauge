@@ -449,38 +449,82 @@ cmd_opencode_canary() {
 }
 
 # opencode_canary_failing_line <go-test-output-file>: the line naming the
-# actual failure, not a t.Logf notice — go test -v's plain text does not tag
-# which indented "file.go:N: message" line came from t.Error versus t.Log
-# (realOpenCode's own "opencode %s is installed (canary: pin relaxed ...)"
-# notice, printed by nearly every case here once the installed version
-# differs from the pinned 1.18.30 baseline, shares the exact shape). Every
-# case that fails prints a "--- FAIL: TestName" summary once its own output
-# is flushed, so the LAST "file.go:N:" line directly above the FIRST such
-# summary is that failing case's own last word — a t.Fatalf's line, or an
-# accumulated t.Error's last one — never an early notice a passing prefix of
-# the same test printed first.
+# actual failure, not a t.Logf notice (realOpenCode's own "opencode %s is
+# installed (canary: pin relaxed ...)" notice, printed by nearly every case
+# here once the installed version differs from the pinned 1.18.30 baseline —
+# it shares the exact indented "file.go:N: message" shape a real t.Error or
+# t.Fatalf line has). cmd_opencode_canary runs `go test -tags canary ...
+# -count=1` WITHOUT -v: go prints the "--- FAIL: TestName" summary FIRST and
+# the failing test's own buffered "file.go:N: message" lines AFTER it,
+# stopping at the first unindented line (bare "FAIL"). `go test -v` prints
+# the opposite order: the same lines BEFORE the "--- FAIL:" summary, back to
+# the unindented "=== RUN" marker that started that test. Either order can
+# put the notice ahead of the real message (t.Log always runs before the
+# t.Fatalf/t.Error that ends the test), so both directions are scanned in
+# the order go test actually prints them and the first non-notice line wins
+# — never a hard-coded assumption of one order. A t.Fatalf's continuation
+# lines are indented past "file.go:N:" and never match, so only the failing
+# message's own first line is ever returned. Fixtures for both orders,
+# captured from a real `go test` run: scripts/testdata/adapter-canary-gotest/.
 opencode_canary_failing_line() {
   python3 - "$1" <<'PY'
 import re, sys
 
 lines = open(sys.argv[1]).read().split("\n")
+# Any indented, non-blank line: a candidate "file.go:N: message" line AND a
+# t.Fatalf/t.Errorf message's own indented continuation lines (e.g. embedded
+# stderr), which carry no "_test.go:N:" prefix of their own and must not end
+# the block early — only an unindented line (the next unindented go test
+# marker, or the bare "FAIL") does that.
+indent_re = re.compile(r'^\s+\S')
 detail_re = re.compile(r'^\s+\S.*_test\.go:\d+:')
 fail_re = re.compile(r'^\s*--- FAIL:')
+notice_re = re.compile(r'is installed \(canary: pin relaxed')
 
-fail_at = next((i for i, l in enumerate(lines) if fail_re.match(l)), None)
-detail = ""
-if fail_at is not None:
-    for i in range(fail_at - 1, -1, -1):
+
+def block_after(start):
+    out = []
+    for i in range(start + 1, len(lines)):
+        if not indent_re.match(lines[i]):
+            break
         if detail_re.match(lines[i]):
-            detail = lines[i].strip()
+            out.append(lines[i].strip())
+    return out
+
+
+def block_before(start):
+    out = []
+    for i in range(start - 1, -1, -1):
+        if not indent_re.match(lines[i]):
             break
-        if lines[i].strip():
-            break
+        if detail_re.match(lines[i]):
+            out.append(lines[i].strip())
+    out.reverse()
+    return out
+
+
+def first_non_notice(candidates):
+    for c in candidates:
+        if not notice_re.search(c):
+            return c
+    return ""
+
+
+detail = ""
+fail_at = next((i for i, l in enumerate(lines) if fail_re.match(l)), None)
+if fail_at is not None:
+    # Non -v layout: the failing test's own lines follow "--- FAIL:", in the
+    # order they were logged, so the first non-notice one is the real one.
+    detail = first_non_notice(block_after(fail_at))
+    if not detail:
+        # -v layout: the failing test's own lines precede "--- FAIL:", also
+        # in logged order, so its own last word is closest to "--- FAIL:".
+        detail = first_non_notice(list(reversed(block_before(fail_at))))
 if not detail:
-    for l in lines:
-        if detail_re.match(l):
-            detail = l.strip()
-            break
+    # No attributable line at all (a build failure, a panic before any
+    # subtest ran, or every candidate was a notice): fall back to the first
+    # non-notice "file.go:N:" line anywhere in the output.
+    detail = first_non_notice([l.strip() for l in lines if detail_re.match(l)])
 print(detail)
 PY
 }

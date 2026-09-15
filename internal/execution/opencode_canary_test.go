@@ -75,6 +75,23 @@ import (
 // (flagContractModel, schemaContractConfigs).
 const openCodeCanaryModel = "lmstudio/stub/stub-model"
 
+// init registers this file's cleanup into opencode_mcp_forge_test.go's
+// single, untagged TestMain (#1639 round 4 low) — canaryStubProviderCleanup
+// runs after m.Run() and removes stubProviderCanaryDir if
+// stubProviderCanaryBinary ever created one.
+func init() {
+	canaryStubProviderCleanup = func() {
+		if stubProviderCanaryDir != "" {
+			os.RemoveAll(stubProviderCanaryDir)
+		}
+	}
+}
+
+// stubProviderCanaryDir is the os.MkdirTemp directory stubProviderCanaryBinary
+// builds into, recorded so the TestMain cleanup above can remove it; empty
+// until stubProviderCanaryBinary has actually run once.
+var stubProviderCanaryDir string
+
 // stubProviderCanaryBinary builds the real cmd/stub-provider binary once for
 // the whole test binary run (not per test), the same way
 // internal/stubprovider/server_test.go's own buildStubProviderBinary does —
@@ -88,6 +105,7 @@ var stubProviderCanaryBinary = sync.OnceValues(func() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	stubProviderCanaryDir = dir
 	bin := filepath.Join(dir, "stub-provider")
 	cmd := exec.Command("go", "build", "-o", bin, "github.com/nightgauge/nightgauge/cmd/stub-provider")
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -593,5 +611,27 @@ func TestOpenCodeCanaryStubIsKilledAndConfirmedDead(t *testing.T) {
 	})
 	if err := syscall.Kill(pid, 0); err == nil {
 		t.Fatalf("stub-provider pid %d is still alive after its own t.Cleanup ran: AC8's kill-and-confirm-dead contract did not hold", pid)
+	}
+}
+
+// TestOpenCodeCanaryStubProviderCleanupRegistered is the #1639 round 4 low's
+// own regression test: opencode_mcp_forge_test.go's single, untagged
+// TestMain only removes stubProviderCanaryBinary's os.MkdirTemp directory
+// when this file's init has wired canaryStubProviderCleanup, so a change
+// that drops that wiring goes back to leaking one
+// nightgauge-canary-stub-provider-* directory under $TMPDIR per test-binary
+// run without failing anything — this test is what fails instead. It does
+// not call the hook itself: canaryStubProviderCleanup removes the directory
+// stubProviderCanaryBinary's sync.OnceValues cached bin path still points
+// into, which every other test in this same process that spawns the stub
+// (TestOpenCodeCanaryStubIsKilledAndConfirmedDead and the live-run tests
+// above) still needs. The removal itself is proven by hand, once, outside
+// this process: `go test -tags canary ./internal/execution -run
+// TestOpenCodeCanaryStubIsKilledAndConfirmedDead` in a fresh process, then
+// confirming with `find "$TMPDIR" -maxdepth 1 -iname
+// 'nightgauge-canary-stub-provider-*'` that nothing remains.
+func TestOpenCodeCanaryStubProviderCleanupRegistered(t *testing.T) {
+	if canaryStubProviderCleanup == nil {
+		t.Fatal("canaryStubProviderCleanup is nil: this file's init no longer registers it, so TestMain will not remove stubProviderCanaryBinary's os.MkdirTemp directory")
 	}
 }

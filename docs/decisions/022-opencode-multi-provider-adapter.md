@@ -1445,7 +1445,7 @@ manifest's, and its remediation is the managed install,
   same refusal is what would otherwise keep the daily/PR canary from ever
   driving a real newer release through the endpoint the stub provider serves
   on (`lmstudio`), leaving it unable to tell "new and working" from "new and
-  broken." `openCodeEndpointAboveMaxTested`'s refusal is skipped when a
+  broken." `OpenCodeEndpointAboveMaxTested`'s refusal is skipped when a
   package-level hook, `openCodeCanaryRelax`, is both non-nil and returns true
   for the dispatched model; the self-test below still runs. The hook is set
   only by `opencode_preflight_canary.go`, a file gated behind the `canary`
@@ -1752,6 +1752,40 @@ What changes:
   issue text sent the stage there, and never loosens a rule that guards
   secret files. Nightgauge generates no permission map yet (#1638), so the
   guard is OpenCode's default and nothing Nightgauge writes changes it.
+
+## Canary tooling corrections (amendment 2026-09-14, round 4)
+
+Two round-3 assumptions about the #1639 canary's own tooling, not about
+OpenCode itself, did not hold once reproduced:
+
+- **`scripts/adapter-canary.sh`'s `opencode_canary_failing_line` assumed
+  `go test -v`'s line order.** `cmd_opencode_canary` actually runs `go test
+-tags canary ... -count=1` with no `-v`, and without `-v` go prints the
+  `--- FAIL: TestName` summary BEFORE the failing test's own buffered
+  `file.go:N: message` lines, not after — the opposite of round 3's backward
+  walk, which found nothing there and fell back to the first `file.go:N:`
+  line in the whole file: on any installed version other than the pinned
+  1.18.30, that line is realOpenCode's own `t.Logf` "pin relaxed" notice (§
+  20 above), never the real failure. The parser now scans both the
+  immediately-following block (the shape `-count=1` alone actually prints)
+  and the immediately-preceding one (the shape `-v` would print, kept so the
+  parser does not regress if the invocation ever adds `-v`), skips the
+  "pin relaxed" notice deterministically in whichever order it appears
+  relative to the real message, and returns only the failing message's own
+  first line — a `t.Fatalf`'s further, more-indented continuation lines carry
+  no `file.go:N:` prefix of their own and are never matched. Fixtures
+  captured from a real, tiny `go test -tags canaryfixture` run, in both
+  orders, are committed at
+  `scripts/testdata/adapter-canary-gotest/README.md`, which records exactly
+  how they were produced.
+- **`OpenCodeEndpointAboveMaxTested`'s casing.** § 20 above named it
+  `openCodeEndpointAboveMaxTested` (lower-case initial); the function is
+  exported. Wording only — the behavior this section describes was already
+  correct.
+
+Neither correction changes OpenCode's own observed behavior recorded
+elsewhere in this document; both are about `scripts/adapter-canary.sh`'s own
+`go test`-output parsing and this document's own prose.
 
 ## Consequences
 

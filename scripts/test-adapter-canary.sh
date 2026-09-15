@@ -461,23 +461,45 @@ check "cmd_opencode_canary's row reports fail" \
 check "cmd_opencode_canary returns non-zero on a failing go test" \
   grep -q '^RC=[1-9]' "$TMP/opencode-canary-rc.txt"
 
-# 5a-2. cmd_opencode_canary's row detail must be the actual failing line, not
-# realOpenCode's own "pin relaxed" t.Logf notice — printed by nearly every
-# case here once the installed version differs from the pinned 1.18.30
-# baseline, so it shares the exact "file.go:N: message" shape go test -v
-# prints a real t.Error with, and would otherwise be taken as "the offending
-# line" AC2 names (#1639 round 3).
-cat >"$FAKE_GO_DIR/go" <<'FAKEGO'
+# 5a-2. opencode_canary_failing_line's row detail must be the actual failing
+# message, not realOpenCode's own "pin relaxed" t.Logf notice — printed by
+# nearly every case here once the installed version differs from the pinned
+# 1.18.30 baseline, so it shares the exact "file.go:N: message" shape a real
+# t.Error/t.Fatalf line has, and would otherwise be taken as "the offending
+# line" AC2 names (#1639 round 3 low, round 4 fix: cmd_opencode_canary's own
+# `go test -tags canary ... -count=1` carries NO -v, so go prints the
+# "--- FAIL:" summary BEFORE the failing test's own lines, not after — the
+# opposite of what the round-3 parser assumed, so it found nothing there and
+# fell back to the first "file.go:N:" line in the whole file, which is
+# exactly this notice on any non-1.18.30 version). Both fixtures are REAL
+# `go test` output (scripts/testdata/adapter-canary-gotest/README.md records
+# how they were captured), in the two orders go test actually prints, each
+# with the notice preceding the real, multi-line failing message.
+GOTEST_FIXTURES="$REPO_ROOT/scripts/testdata/adapter-canary-gotest"
+(
+  source "$SCRIPT"
+  detail_no_v="$(opencode_canary_failing_line "$GOTEST_FIXTURES/opencode-canary-fail-no-v.txt")"
+  detail_with_v="$(opencode_canary_failing_line "$GOTEST_FIXTURES/opencode-canary-fail-with-v.txt")"
+  echo "$detail_no_v" >"$TMP/detail-no-v.txt"
+  echo "$detail_with_v" >"$TMP/detail-with-v.txt"
+)
+check "no -v layout (--- FAIL: before the log lines): detail is the real failing message" \
+  grep -qF 'checkOpenCodeCanaryStream: 1 problem(s) on the stream:' "$TMP/detail-no-v.txt"
+check "no -v layout: detail does not carry the pin-relaxed notice instead" \
+  sh -c "! grep -qF 'is installed (canary: pin relaxed' '$TMP/detail-no-v.txt'"
+check "-v layout (--- FAIL: after the log lines): detail is the real failing message" \
+  grep -qF 'checkOpenCodeCanaryStream: 1 problem(s) on the stream:' "$TMP/detail-with-v.txt"
+check "-v layout: detail does not carry the pin-relaxed notice instead" \
+  sh -c "! grep -qF 'is installed (canary: pin relaxed' '$TMP/detail-with-v.txt'"
+
+# 5a-3. End to end through cmd_opencode_canary itself, with a fake `go` that
+# replays the REAL no -v fixture verbatim (the shape cmd_opencode_canary's
+# own invocation actually produces) and a fake opencode that reports a
+# version newer than max_tested — the "reproduce end to end once with a fake
+# opencode that reports a newer version and fails" case.
+cat >"$FAKE_GO_DIR/go" <<FAKEGO
 #!/usr/bin/env bash
-cat <<'OUT'
-=== RUN   TestOpenCodeCanaryLiveStream
-    opencode_isolation_integration_test.go:99: opencode 1.19.0 is installed (canary: pin relaxed from the 1.18.30 baseline observed for ADR-022)
-    opencode_canary_test.go:397: RunStage: dispatch refused: adapter_incompatible: opencode 1.19.0 is newer than the max-tested 1.18.30
---- FAIL: TestOpenCodeCanaryLiveStream (0.10s)
-FAIL
-FAIL	github.com/nightgauge/nightgauge/internal/execution	0.55s
-FAIL
-OUT
+cat "$GOTEST_FIXTURES/opencode-canary-fail-no-v.txt"
 exit 1
 FAKEGO
 chmod +x "$FAKE_GO_DIR/go"
@@ -485,8 +507,12 @@ chmod +x "$FAKE_GO_DIR/go"
   source "$SCRIPT"
   PATH="$FAKE_GO_DIR:$PATH" cmd_opencode_canary "$FAKE_OPENCODE_DIR/opencode" 1.19.0 >"$TMP/opencode-canary-row-2.jsonl"
 )
-check "the row's detail is the actual failing line, not the pin-relaxed notice" \
-  sh -c "jq -r '.detail' '$TMP/opencode-canary-row-2.jsonl' | grep -qF 'RunStage: dispatch refused'"
+check "cmd_opencode_canary's row reports the newer, fake-reported version" \
+  sh -c "jq -e '.version == \"1.19.0\"' '$TMP/opencode-canary-row-2.jsonl' >/dev/null"
+check "cmd_opencode_canary's row reports fail on the real no -v fixture" \
+  sh -c "jq -e '.result == \"fail\"' '$TMP/opencode-canary-row-2.jsonl' >/dev/null"
+check "the row's detail is the actual failing message, not the pin-relaxed notice" \
+  sh -c "jq -r '.detail' '$TMP/opencode-canary-row-2.jsonl' | grep -qF 'checkOpenCodeCanaryStream: 1 problem(s) on the stream:'"
 check "the row's detail does not carry the pin-relaxed notice instead" \
   sh -c "! jq -r '.detail' '$TMP/opencode-canary-row-2.jsonl' | grep -qF 'is installed (canary: pin relaxed'"
 

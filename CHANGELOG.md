@@ -116,7 +116,17 @@ changelog, and the release workflow refuses a tag that does not.
   forward onto a newer capture instead of failing every adapter with one on
   its next release. The OpenCode leg's stub now runs as a real `stub-provider`
   subprocess per test, its PID captured, killed and confirmed dead in that
-  test's own cleanup (#1639)
+  test's own cleanup. The `opencode-canary` row's detail is now the failing
+  test's own message in either shape `go test` actually prints it — the
+  `-count=1` run `cmd_opencode_canary` invokes has no `-v`, so the
+  `--- FAIL:` summary prints before the test's buffered log lines, not after
+  — and it never carries realOpenCode's own "pin relaxed" `t.Logf` notice or a
+  multi-line failure's own continuation lines. `stubProviderCanaryBinary`'s
+  `os.MkdirTemp` build directory is now removed by the package's `TestMain`
+  instead of leaking one per test-binary run, and
+  `testdata/cli-help/README.md` now notes that a hidden-flag sidecar carried
+  forward onto a newer capture (above) is not itself probe evidence at that
+  newer version (#1639)
 - The OpenCode config schema published for the newest tested OpenCode
   (1.18.30) is now pinned in the repository, and a contract test validates
   every per-run config the builder generates against it, across LM Studio,
