@@ -2538,6 +2538,74 @@ git-initializes it first (`gitInitOneCommitWorktree`,
 `gitInitTestWorktree`, `isolateOpenCodeVerb`'s own fixture) — the same
 shape every real dispatch's worktree already has by construction.
 
+## Correction to the `/tmp` allow-list: `*` crosses `/`, so `/tmp/*` was the whole tree, not one level (#1638 fix round, same day)
+
+The second fix round above recorded the `/tmp` allow-list's accepted cost as
+"every OTHER file directly under `/tmp` or `/private/tmp`, not only the ones
+its own skill uses" and asserted the backstops "still win... whether or not
+the file happens to sit under `/tmp`." Both sentences assumed opencode
+1.18.30's `Wildcard.match` never lets a configured `*` cross a `/`, the same
+assumption this document's "Correction to the pattern-matching amendment"
+section above already had to retract once for `edit`'s own patterns. It does
+not hold for `external_directory` either: the bundled matcher (`o.replace(/[.+^${}()|[\]\\]/g,"\\$&").replace(/\*/g,".*").replace(/\?/g,".")`,
+tested anchored `^...$`) turns a configured `*` into the regex `.*`, which
+matches across `/` exactly like a real glob's would. A bounded probe against
+the pinned binary (`TestOpenCodeTmpDirAllowDoesNotReachANestedFile`,
+`opencode_guard_integration_test.go`) found a NESTED file's own
+`external_directory` request (`dirname(file)+"/*"`, two directories below
+`/tmp`) matched the configured `/tmp/*` entry, and both a `read` of it and a
+`write` of a sibling at the same depth completed — the accepted cost was the
+whole `/tmp` and `/private/tmp` trees, at any depth, not one level. A flat
+`/tmp` symlink whose target is outside every allow-listed directory matched
+the same way, so the sentence above claiming the secret and project-config
+deny-list backstops "win... whether or not the file happens to sit under
+`/tmp`" does not hold for that shape either: those backstops are lexical on
+the path string a tool call reports, which does not resolve a symlink to its
+target — a pre-existing property of a lexical backstop, not something this
+correction changes or closes.
+
+`openCodeTmpDirAllowPatterns` is now `/tmp/?` and `/private/tmp/?` (`?`
+becomes the regex `.`, exactly one character, never `/`), not `/tmp/*`.
+Opencode's own `external_directory` request for a FLAT file directly under
+`/tmp` is always the literal six-character string `/tmp/*` — never the
+file's own name (§ "AC4's `/tmp` allow-list" above) — and that string's only
+character after `/tmp/` is the literal `*`, which `/tmp/?` matches; a
+NESTED file's request has more than one character there and does not match.
+The accepted cost is now what the second fix round's own prose intended:
+every stage's Read/Edit-governed tool calls can reach any OTHER file
+directly under `/tmp` or `/private/tmp`, never a nested one. The flat-symlink
+gap above is unaffected by this narrowing (the symlink's own path is still
+flat), and stays open — the same follow-up recorded below (moving the six
+stage skills' `/tmp` scratch files to a per-run scratch directory) is what
+would close it, by removing the need for this allow entry at all.
+
+`openCodeTmpCoverageMissing` (`opencode_guard_test.go`) is now
+`openCodeWildcardMatch` (`opencode_guard.go`), opencode's real matcher, not
+the plain map lookup the second fix round above described as "whether a
+scanned `/tmp/...` literal's own `dirname(literal)+"/*"` request... is
+covered by `openCodeTmpDirAllowPatterns`" — that description was accurate
+about the INTENT, but the lookup it shipped with was exact-string equality
+against the (still-`/tmp/*`-shaped) source list, which happened to agree
+with the real matcher only because the pre-narrowing pattern was identical
+to the request string it needed to match. Swapping in `/tmp/?` without this
+change would have made the drift test (`TestOpenCodeTmpAllowListCoversStageSkills`)
+report the six stage skills' own flat literals as uncovered, a false red;
+`TestOpenCodeTmpAllowListCoverageFailsOnANewLiteral`'s own red companion is
+unchanged in shape, still a nested literal the flat pattern does not cover.
+
+`TestOpenCodeOutsideReadRejected` and `TestOpenCodeBinDirCpDenied` each gain
+a `TMPDIR=/tmp`-forcing companion
+(`TestOpenCodeOutsideReadRejectedUnderTmpdirTmp`,
+`TestOpenCodeBinDirCpDeniedUnderTmpdirTmp`). With `TMPDIR` unset — this
+repository's own `ubuntu-latest` CI default, and the common Linux developer
+setup — Go's `t.TempDir()` places every fixture these two tests treat as
+"outside the allow-list" under `/tmp` itself, one level down; against the
+pre-narrowing `/tmp/*` pattern both tests' own probes completed instead of
+erroring, a platform-dependent gap this document's own prior amendments did
+not carry a leg for. Forcing `TMPDIR=/tmp` reproduces the shape on any
+platform, including this document's own macOS-based probes above, whose
+default temp root (`/var/folders/...`) never exercised it.
+
 ## Consequences
 
 - The model layer's one-adapter-one-provider assumption becomes a special

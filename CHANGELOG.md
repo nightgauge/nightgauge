@@ -201,11 +201,21 @@ stop-verify --emit-event --session-id <id> [--child]` detached and
   (read-only: denied on `edit`), the context and output file directories when
   they are outside the worktree, and, since opencode's own `external_directory`
   matching is at directory granularity only (`dirname(file)/*`, never the
-  file's own path), a directory-level `/tmp/*` and `/private/tmp/*` allow
-  (replacing an earlier per-file list that could never match a real request
-  on 1.18.30) — the accepted cost, and a follow-up to move the six stage
-  skills' scratch files to a per-run directory instead, are recorded in
-  ADR-022's own amendment. The `NIGHTGAUGE_BIN` directory is NOT allow-listed:
+  file's own path), a `/tmp/?` and `/private/tmp/?` allow (replacing an
+  earlier per-file list that could never match a real request on 1.18.30).
+  `?` matters: opencode's own pattern matching turns a configured `*` into a
+  regex that DOES cross `/`, so a `/tmp/*` entry — this map's own first draft —
+  matched every NESTED `/tmp` request too, not only a flat one, exposing the
+  whole `/tmp` and `/private/tmp` trees at any depth rather than the flat,
+  one-level cost the map intends; `?` (exactly one character, never `/`)
+  matches only the flat request opencode's own dirname-based construction
+  always produces for a flat file. The accepted cost — every stage's
+  Read/Edit-governed tool calls can reach any OTHER file directly under
+  `/tmp` or `/private/tmp`, never a nested one — and a follow-up to move the
+  six stage skills' scratch files to a per-run directory instead, are
+  recorded in ADR-022's own amendment, along with a same-day correction of an
+  earlier reading of this that assumed `*` never crosses `/`. The
+  `NIGHTGAUGE_BIN` directory is NOT allow-listed:
   a scan of the six stage skills found no Read, `cat` or `cd` of a path under
   it, only `$BINARY` execution and a `PATH` export, so the entry bought
   nothing they use while letting a Read tool inspect the running binary's own

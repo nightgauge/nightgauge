@@ -515,6 +515,24 @@ func TestOpenCodeBinDirEditDenied(t *testing.T) {
 // own external_directory check, naming that permission in the rejected
 // tool_use event.
 func TestOpenCodeBinDirCpDenied(t *testing.T) {
+	runOpenCodeBinDirCpDeniedProbe(t)
+}
+
+// TestOpenCodeBinDirCpDeniedUnderTmpdirTmp is TestOpenCodeBinDirCpDenied's
+// own regression leg for TMPDIR=/tmp (ubuntu-latest CI's default, and the
+// usual Linux developer setup): #1638 fix round finding. With TMPDIR unset,
+// t.TempDir() puts binDir itself under /tmp, nested at least one level;
+// before the fix round's "?" narrowing (openCodeTmpDirAllowPatterns), that
+// fell inside the old, recursive "/tmp/*" allow and the planted cp
+// completed instead of being rejected. See
+// TestOpenCodeOutsideReadRejectedUnderTmpdirTmp's own comment for why
+// forcing TMPDIR=/tmp here does not depend on which OS runs it.
+func TestOpenCodeBinDirCpDeniedUnderTmpdirTmp(t *testing.T) {
+	t.Setenv("TMPDIR", "/tmp")
+	runOpenCodeBinDirCpDeniedProbe(t)
+}
+
+func runOpenCodeBinDirCpDeniedProbe(t *testing.T) {
 	dir := t.TempDir()
 	guardWriteFile(t, filepath.Join(dir, "README.md"), "probe worktree\n")
 	source := filepath.Join(dir, "payload.sh")
@@ -568,6 +586,29 @@ func TestOpenCodeBinDirCpDenied(t *testing.T) {
 // package execution's own tested concern, not this file's or this ticket's
 // file_ownership — noted here as a finding, not fixed here.
 func TestOpenCodeOutsideReadRejected(t *testing.T) {
+	runOpenCodeOutsideReadRejectedProbe(t)
+}
+
+// TestOpenCodeOutsideReadRejectedUnderTmpdirTmp is
+// TestOpenCodeOutsideReadRejected's own regression leg for TMPDIR=/tmp
+// (ubuntu-latest CI's default, and the usual Linux developer setup): #1638
+// fix round finding. With TMPDIR unset, Go's t.TempDir() (both here and in
+// the shared probe below) puts every fixture directory this test treats as
+// "outside the allow-list" under /tmp itself — nested at least one level
+// (t.TempDir()'s own "<name>/NNN" shape), never the bare, flat "/tmp/*"
+// request the allow-list legitimately grants. Before the fix round's "?"
+// narrowing (openCodeTmpDirAllowPatterns), that nested fixture fell inside
+// the old, recursive "/tmp/*" allow and this probe's own read completed
+// instead of erroring; forcing TMPDIR=/tmp here reproduces that on any
+// platform, including one whose default temp root is already outside /tmp
+// (macOS's /var/folders/...), so this leg does not depend on which OS runs
+// it.
+func TestOpenCodeOutsideReadRejectedUnderTmpdirTmp(t *testing.T) {
+	t.Setenv("TMPDIR", "/tmp")
+	runOpenCodeOutsideReadRejectedProbe(t)
+}
+
+func runOpenCodeOutsideReadRejectedProbe(t *testing.T) {
 	home := t.TempDir()
 	outsideFile := filepath.Join(home, "secret-outside-allowlist.txt")
 	guardWriteFile(t, outsideFile, "PROBE-1638-OUTSIDE-CONTENT\n")
@@ -750,5 +791,71 @@ func TestOpenCodeTmpDirAllowLetsAStageReadAndCatFromTmp(t *testing.T) {
 	}
 	if !sawBashSuccess {
 		t.Errorf("no successful tool_use for \"bash\" in stdout:\n%s", stdout)
+	}
+}
+
+// TestOpenCodeTmpDirAllowDoesNotReachANestedFile is
+// TestOpenCodeTmpDirAllowLetsAStageReadAndCatFromTmp's own negative
+// companion, and #1638 fix round finding's own closure: opencode 1.18.30's
+// Wildcard.match turns a configured "*" into ".*", which crosses "/", so the
+// PRE-fix "/tmp/*" allow entry matched a NESTED /tmp file's own
+// external_directory request too, not only a flat one — the whole /tmp and
+// /private/tmp trees were reachable for read and edit at any depth, wider
+// than ADR-022's own recorded cost (every OTHER file directly under /tmp).
+// openCodeTmpDirAllowPatterns' "/tmp/?" entry (this fix round) matches only
+// the flat request; this probe's read of a two-levels-down file, and write
+// of a sibling at the same depth, must both be rejected, naming
+// external_directory, and the sibling file's content must be untouched.
+func TestOpenCodeTmpDirAllowDoesNotReachANestedFile(t *testing.T) {
+	dir := t.TempDir()
+	guardWriteFile(t, filepath.Join(dir, "README.md"), "probe worktree\n")
+	guardGitInit(t, dir)
+
+	root, err := os.MkdirTemp("/tmp", "ocp1638-nested-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(root) })
+	nested := filepath.Join(root, "sub", "other-process-secret.txt")
+	guardWriteFile(t, nested, "SECRET\n")
+	sibling := filepath.Join(root, "sub", "victim.txt")
+	guardWriteFile(t, sibling, "ORIGINAL\n")
+
+	opts := RunOptions{AllowedTools: []string{"Read", "Write"}, WorktreeDir: dir}
+	permission := openCodePermissionMap(opts, "")
+
+	stub := newGuardStubServer(t, []guardStubTurn{
+		{ToolCall: &guardStubToolCall{Name: "read", Arguments: map[string]any{"filePath": nested}}},
+		{ToolCall: &guardStubToolCall{Name: "write", Arguments: map[string]any{"filePath": sibling, "content": "OVERWRITTEN\n"}}},
+		{Content: "done"},
+	})
+	exitCode, stdout, stderr := guardDirectRun(t, permission, stub, dir)
+	t.Logf("exit=%d\nstdout:\n%s\nstderr:\n%s", exitCode, stdout, stderr)
+
+	var sawRead, sawWrite bool
+	for _, line := range strings.Split(strings.TrimRight(stdout, "\n"), "\n") {
+		tool, status, errText, ok := guardToolUseEvent(line)
+		if !ok {
+			continue
+		}
+		switch tool {
+		case "read":
+			sawRead = true
+		case "write":
+			sawWrite = true
+		default:
+			continue
+		}
+		if status != "error" {
+			t.Errorf("nested /tmp %s was not rejected (status=%q)", tool, status)
+		} else if !strings.Contains(errText, `"permission":"external_directory"`) {
+			t.Errorf("the rejection's error text does not name permission external_directory: %s", errText)
+		}
+	}
+	if !sawRead || !sawWrite {
+		t.Fatalf("missing tool_use events (read=%v write=%v) in stdout:\n%s", sawRead, sawWrite, stdout)
+	}
+	if got, _ := os.ReadFile(sibling); string(got) != "ORIGINAL\n" {
+		t.Errorf("a nested /tmp sibling file was overwritten via external_directory: got %q", got)
 	}
 }

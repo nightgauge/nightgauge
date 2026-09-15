@@ -119,14 +119,28 @@ var openCodeBashDenyBackstop = []string{"rm -rf *", "rm -fr *", "git push --forc
 // backstop names ("*.env", ".env*", "**/.ssh/**", "**/id_rsa*" and the gh
 // hosts pattern — TestOpenCodeDenyListBackstopComplete's golden checks these
 // five are present, independent of this var, so a shorter var still fails
-// that test), plus "**/*.env" and "**/.env*": opencode 1.18.30's own anchored
-// Wildcard.match means "*.env" and ".env*" only ever match a ROOT-level file
-// (worktree-relative patterns have no leading "**", so "*" cannot cross a "/"
-// the way a real glob's "*" would); a nested secret file such as
-// apps/web/.env.local needs the "**/" prefix to be caught at all. Without it,
-// a Read-granted stage's read "*": allow backstop is the last matching rule
-// for that file, and it is readable (#1638 fix round finding: a routed
-// #1752 request, TestProbeA9NestedEnvLocalRead).
+// that test), plus "**/*.env" and "**/.env*".
+//
+// opencode 1.18.30's Wildcard.match turns "*" into the regex ".*", which DOES
+// cross a "/" (#1638 fix round finding — see openCodeTmpDirAllowPatterns
+// below, where the same premise, applied to external_directory, had a real
+// consequence): "*.env" alone already denies a nested file at any depth
+// whose name literally ends in ".env" (apps/web/prod.env is denied by
+// "*.env" with no "**/" prefix at all), because its regex is anchored only
+// at the string's end. "**/*.env" restates that; it is not what makes the
+// nested case work. An earlier round's comment here said the opposite
+// ("'*' cannot cross a '/'"), which was wrong.
+//
+// ".env*" is different: its regex is anchored at the string's START
+// (^\.env.*$), and a nested file's worktree-relative path starts with its
+// directory name, never literally ".env" — so ".env*" alone really is
+// root-only, for that reason, not because "*" cannot cross "/". "**/.env*"
+// is the addition that does new work: it is what catches a nested dotfile
+// such as apps/web/.env.local, which "*.env" does not catch either (the name
+// ends in ".local", not ".env"). Without "**/.env*", a Read-granted stage's
+// read "*": allow backstop is the last matching rule for that file, and it
+// is readable (#1638 fix round finding: a routed #1752 request,
+// TestProbeA9NestedEnvLocalRead).
 //
 // "*.env.*" and "**/*.env.*" widen this past ".env"/".env*"'s own shape (a
 // file whose name STARTS with, or literally IS, ".env"): opencode 1.18.30's
@@ -380,34 +394,70 @@ func openCodeExternalDirectoryPermission(allow []string) *openCodePatternMap {
 }
 
 // openCodeTmpDirAllowPatterns are the external_directory allow-list entries
-// for every /tmp path the six stage skills use (skills/nightgauge-{issue-
-// pickup,feature-planning,feature-dev,feature-validate,pr-create,pr-merge}).
+// for the /tmp literal every six stage skills use (skills/nightgauge-{issue-
+// pickup,feature-planning,feature-dev,feature-validate,pr-create,pr-merge}),
+// FLAT, directly under /tmp with no subdirectory.
 //
 // #1638 fix round finding (AC4, ADR-022's dated amendment): opencode 1.18.30
 // asks external_directory for dirname(file)+"/*", never the file's own
 // path — a probe of a per-file allow entry (`/tmp/automerge.err`, or the
 // same with a real wildcard) against a real read/write of exactly that path
 // was refused every time, because the pattern that would have to match is
-// literally "/tmp/*", not the file's own name at all. A per-file allow-list
-// can therefore never work on this binary; only a directory-level entry
-// does, one per resolved form of /tmp (macOS resolves /tmp to /private/tmp,
-// ADR-022 § 9's last bullet). The accepted cost — every stage skill's read
-// and edit tools can reach any OTHER file directly under /tmp or
-// /private/tmp, not only its own — is recorded in ADR-022's own amendment,
-// alongside the follow-up that moves the six stage skills to a per-run
-// scratch directory so this allow entry can be narrowed or removed. The
-// secret and project-config deny-list backstops (openCodeSecretDenyBackstop,
+// the literal six-character string "/tmp/*" (a literal "*" character, not a
+// wildcard placeholder), not the file's own name at all. A per-file
+// allow-list can therefore never work on this binary; only an entry that
+// matches that literal string does, one per resolved form of /tmp (macOS
+// resolves /tmp to /private/tmp, ADR-022 § 9's last bullet).
+//
+// A second #1638 fix round finding, dated after that amendment, corrects it:
+// opencode 1.18.30's own Wildcard.match (bundled source:
+// `o.replace(/[.+^${}()|[\]\\]/g,"\\$&").replace(/\*/g,".*").replace(/\?/g,".")`,
+// tested anchored `^...$`) turns a CONFIGURED "*" into the regex ".*", which
+// DOES cross a "/". A pattern of "/tmp/*" therefore matches every nested
+// request too, not only the flat one: a two-levels-down file's own request,
+// "/tmp/a/b/*", matches "^/tmp/.*$" exactly as the flat request "/tmp/*"
+// does. That is wider than ADR-022's own recorded cost (every file directly
+// under /tmp or /private/tmp) — it is the whole tree, at any depth, for read
+// and edit both (openCodeWildcardMatch models this matcher exactly;
+// openCodeTmpCoverageMissing, opencode_guard_test.go, uses it to check
+// coverage the same way opencode itself would, not by string equality).
+//
+// This entry is "/tmp/?", not "/tmp/*": "?" turns into the regex ".", one
+// character, never "/". The flat request string is always the literal
+// "/tmp/*" (opencode's own construction, above), whose only character after
+// "/tmp/" is the literal "*" — "/tmp/?" matches that one character exactly.
+// A nested request such as "/tmp/a/b/*" has more than one character after
+// "/tmp/" and does not match "/tmp/?" at all. This is the narrowest pattern
+// that still allows the flat case, and it depends only on opencode's own
+// dirname+"/*" construction always producing that exact six-character
+// string for a flat /tmp file, never on the real file name underneath it.
+//
+// The accepted cost is now what ADR-022's amendment always intended: every
+// stage skill's read and edit tools can reach any OTHER file directly under
+// /tmp or /private/tmp, not only its own — never a nested one, and never a
+// /tmp symlink target outside every allow-listed directory (that request's
+// own dirname+"/*" is the symlink's OWN path under /tmp, still exactly
+// "/tmp/*" when the symlink itself is flat, so this narrowing does not by
+// itself close a flat symlink; the secret and project-config deny-list
+// backstops below are lexical on whichever path string the request carries,
+// so they do not follow a symlink to its target either — a known,
+// unaffected gap, not one this pattern change purports to close). The
+// follow-up that moves the six stage skills to a per-run scratch directory
+// (so this allow entry can be narrowed further or removed) still stands.
+// The secret and project-config deny-list backstops (openCodeSecretDenyBackstop,
 // openCodeProjectConfigDenyBackstop) still win over this allow where they
 // apply, since edit's own deny entries are checked last (§ "external_directory
 // allow-list" / openCodeEditPermission).
 //
-// Every stage skill's own /tmp literal is FLAT, directly under /tmp with no
-// subdirectory (TestOpenCodeTmpAllowListCoversStageSkills asserts this stays
-// true, since "*" never crosses a "/" in opencode's own pattern matching): a
-// skill that ever needs a NESTED /tmp subdirectory needs its own
+// TestOpenCodeTmpAllowListCoversStageSkills asserts every stage skill's own
+// /tmp literal stays FLAT: a skill that ever needs a NESTED /tmp subdirectory
+// needs its own
 // dirname(file)+"/*" entry added here explicitly, this pair does not cover
-// it.
-var openCodeTmpDirAllowPatterns = []string{"/tmp/*", "/private/tmp/*"}
+// it — and, since that request string is never the bare "/tmp/*" this
+// narrowed entry matches, whatever pattern covers it necessarily reopens a
+// nested-tree hazard for that one path, same as the pre-narrowing "/tmp/*"
+// did for the whole tree.
+var openCodeTmpDirAllowPatterns = []string{"/tmp/?", "/private/tmp/?"}
 
 // openCodeTmpLiteralRE matches a /tmp/... path literal in skill markdown or
 // shell text: /tmp/ followed by a run of characters that cannot appear
@@ -505,11 +555,38 @@ func openCodeScanStageSkillTmpLiterals(skillsRoot string) ([]string, error) {
 // worktree-external /tmp/... path found in a stage skill: dirname(lit) +
 // "/*" — never lit's own path (#1638 fix round finding, AC4). This is what
 // TestOpenCodeTmpAllowListCoversStageSkills checks every scanned literal
-// against openCodeTmpDirAllowPatterns with, so the test's own notion of
-// "covered" matches opencode's real matching, not a literal string
-// containment check on the source list.
+// against openCodeTmpDirAllowPatterns with (via openCodeWildcardMatch, a
+// second #1638 fix round finding), so the test's own notion of "covered"
+// matches opencode's real matching, not a literal string containment check
+// or exact-equality check on the source list.
 func openCodeTmpRequestPattern(lit string) string {
 	return filepath.ToSlash(filepath.Dir(lit)) + "/*"
+}
+
+// openCodeWildcardEscapeRE is opencode 1.18.30's own Wildcard.match escape
+// set (bundled source: `o.replace(/[.+^${}()|[\]\\]/g,"\\$&")`) — every
+// regex metacharacter EXCEPT "*" and "?", which the same function goes on to
+// treat specially, below.
+var openCodeWildcardEscapeRE = regexp.MustCompile(`[.+^${}()|\[\]\\]`)
+
+// openCodeWildcardMatch reports whether target matches pattern the way
+// opencode 1.18.30's own Wildcard.match does (bundled source:
+// `o.replace(/[.+^${}()|[\]\\]/g,"\\$&").replace(/\*/g,".*").replace(/\?/g,".")`,
+// then `new RegExp("^"+l+"$","s").test(e)`): every regex metacharacter in
+// pattern other than "*" and "?" is escaped FIRST, then "*" becomes ".*"
+// (crosses "/") and "?" becomes "." (one character, including "/"), and the
+// result is matched anchored at both ends. This is the function every
+// pattern this file writes into a config is really evaluated against — an
+// exact string-equality or containment check on the source pattern list, as
+// openCodeTmpCoverageMissing (opencode_guard_test.go) used before the #1638
+// fix round finding that added this function, models a different, weaker
+// rule than the one opencode itself enforces.
+func openCodeWildcardMatch(target, pattern string) bool {
+	escaped := openCodeWildcardEscapeRE.ReplaceAllString(pattern, `\$0`)
+	escaped = strings.ReplaceAll(escaped, "*", ".*")
+	escaped = strings.ReplaceAll(escaped, "?", ".")
+	re := regexp.MustCompile("(?s)^" + escaped + "$")
+	return re.MatchString(target)
 }
 
 // openCodeDirPatterns returns the external_directory allow pattern(s) for

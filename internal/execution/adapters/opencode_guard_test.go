@@ -436,19 +436,33 @@ func TestOpenCodeBashScopedEntry(t *testing.T) {
 // openCodeTmpCoverageMissing returns, of found (openCodeScanStageSkillTmpLiterals'
 // own normalized output), the ones opencode's own external_directory ask —
 // dirname(literal) + "/*" (openCodeTmpRequestPattern), never the literal's
-// own path — is not covered by openCodeTmpDirAllowPatterns. This is the
-// mechanism both TestOpenCodeTmpAllowListCoversStageSkills and its own
-// red/green companion share, so a literal is judged covered the same way
-// opencode 1.18.30 itself would judge the request, not by literal string
-// containment against the source list (#1638 fix round, AC4).
+// own path — is not covered by openCodeTmpDirAllowPatterns. Coverage is
+// checked with openCodeWildcardMatch, opencode 1.18.30's own pattern
+// matching, not by literal string containment or exact-string equality
+// against the source list: an earlier round of this function used plain map
+// lookup (`allow[openCodeTmpRequestPattern(lit)]`), which models a rule
+// opencode does not actually enforce — with openCodeTmpDirAllowPatterns'
+// "/tmp/?" entry, that lookup would report a plain flat literal like
+// /tmp/automerge.err (whose request is the literal string "/tmp/*") as
+// UNCOVERED, because "/tmp/*" as a plain map key is never equal to the
+// configured pattern string "/tmp/?", even though opencode's own matcher
+// does consider "/tmp/?" a match for the request "/tmp/*" (#1638 fix round
+// finding, AC4). This is the mechanism both
+// TestOpenCodeTmpAllowListCoversStageSkills and its own red/green companion
+// share, so a literal is judged covered the same way opencode 1.18.30
+// itself would judge the request.
 func openCodeTmpCoverageMissing(found []string) []string {
-	allow := map[string]bool{}
-	for _, p := range openCodeTmpDirAllowPatterns {
-		allow[p] = true
-	}
 	var missing []string
 	for _, lit := range found {
-		if !allow[openCodeTmpRequestPattern(lit)] {
+		req := openCodeTmpRequestPattern(lit)
+		covered := false
+		for _, p := range openCodeTmpDirAllowPatterns {
+			if openCodeWildcardMatch(req, p) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
 			missing = append(missing, lit)
 		}
 	}
@@ -479,12 +493,20 @@ func TestOpenCodeTmpAllowListCoversStageSkills(t *testing.T) {
 // TestOpenCodeTmpAllowListCoverageFailsOnANewLiteral is
 // TestOpenCodeTmpAllowListCoversStageSkills's own red/green coverage: a
 // fixture skill introducing a /tmp path under a NESTED subdirectory
-// (/tmp/sub/dir/x) must fail the same coverage check. openCodeTmpDirAllowPatterns'
-// "/tmp/*" pattern never crosses a "/" (opencode's own matching, like every
-// other pattern this file builds), so a nested subdirectory is exactly the
-// shape the flat allow-list does NOT cover — unlike a plain new root-level
-// /tmp/... literal, which this pair already covers and so proves nothing
-// about drift detection.
+// (/tmp/sub/dir/x) must fail the same coverage check.
+// openCodeTmpDirAllowPatterns' "/tmp/?" pattern only ever matches the exact
+// six-character request string "/tmp/*" a FLAT file produces (opencode's
+// own dirname+"/*" construction, openCodeTmpRequestPattern) — a nested
+// subdirectory's own request, "/tmp/sub/dir/*", has more than the one
+// character "?" allows after "/tmp/", so it is exactly the shape the flat
+// allow-list does NOT cover — unlike a plain new root-level /tmp/...
+// literal, which this pair already covers (its request is always literally
+// "/tmp/*", regardless of the literal's own file name) and so proves
+// nothing about drift detection. An earlier round of this comment said "*"
+// never crosses a "/" in opencode's own pattern matching; that was wrong —
+// opencode's own Wildcard.match turns a configured "*" into ".*", which DOES
+// cross "/" (#1638 fix round finding) — this pair uses "?" (one character,
+// never "/") specifically because "*" would not have stayed flat.
 func TestOpenCodeTmpAllowListCoverageFailsOnANewLiteral(t *testing.T) {
 	fixture := t.TempDir()
 	dst := filepath.Join(fixture, "nightgauge-feature-dev")
