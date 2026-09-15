@@ -1,7 +1,5 @@
 {
-  "$schema": "https://anthropic.com/claude-code/hooks.schema.json",
   "description": "Nightgauge Pipeline Hooks - Enforceable quality gates and workflow automation",
-  "version": "1.0.0",
   "hooks": {
     "Notification": [
       {
