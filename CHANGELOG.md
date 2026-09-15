@@ -81,6 +81,21 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The OpenCode plugin's `session.js` (#1641) spawned every telemetry verb
+  (`hook stop-verify` on `session.idle`, `hook notify` on a permission ask,
+  `hook skill-usage` on a skill tool call) with `spawnSync`, which blocks
+  opencode's entire single-threaded event loop for as long as the child runs,
+  up to its 5s bound — measured directly against the pinned 1.18.30 binary,
+  one such call added a full 5.0s of dead time to a single dispatch (9.1-9.3s
+  observed vs. ~4.4s with that call's spawn skipped), and turned
+  `TestOpenCodeIntegrationInheritUserConfigOptIn`'s 20s bound red on CI.
+  `runHook` now spawns asynchronously (`node:child_process.spawn`, not
+  `spawnSync`) with the same 5s bound, killing the child's whole process
+  group on timeout so a notify verb's own `osascript`/`notify-send`
+  grandchild cannot outlive it; telemetry callers that do not need the
+  result never await the spawn, and `session.idle`'s stop-verify verdict is
+  recorded from a `.then()`/`.catch()` continuation rather than by blocking
+  the hook's own return (#1641, #1810)
 - `adapter-canary.yml` pinned `actions/setup-node` at a SHA
   (`fc7e5e49f31379e40cf9b708e5abd6ebfad0e0fd`, tagged `v5.0.0`) that GitHub
   cannot resolve, failing both the `flag-contracts` and `opencode-canary` legs

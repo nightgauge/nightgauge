@@ -13,9 +13,34 @@
 // never a throw. Model-authored content never reaches a spawned verb's argv;
 // every payload travels as stdin JSON, exactly as gates.js's careful-gate
 // already does.
+//
+// runHook is async (node:child_process spawn, not spawnSync) on purpose
+// (#1641 fixed forward): opencode is a single-threaded event loop process,
+// and spawnSync blocks that ENTIRE process — every other session's tool
+// calls, timers and bus events — for as long as the child runs, up to
+// SPAWN_TIMEOUT_MS. Measured directly against the pinned 1.18.30 binary: one
+// `hook stop-verify` call that ran past its bound added a full 5.0s of dead
+// time to a single dispatch (9.1-9.3s observed vs. ~4.4s with that one call's
+// spawn skipped) — exactly SPAWN_TIMEOUT_MS, not a coincidence. An async
+// spawn lets opencode keep servicing everything else while a hook verb runs;
+// the bound, the argv/stdin contract and the fail-open "not ok" result are
+// unchanged.
+//
+// Every caller below either (a) never needs the result at all (notifyOnce,
+// toolExecuteBefore's skill-usage call: the returned promise is left
+// unawaited, only .catch()-guarded against an unhandled rejection), or (b)
+// genuinely needs it but must still let the exported hook function itself
+// return immediately (event()'s session.idle branch: the spawn is started,
+// and the verdict is recorded from a .then()/.catch() continuation once the
+// bounded child settles, never by awaiting inline), or (c) is the one case
+// where opencode itself is waiting on the output before it can proceed
+// (sessionCompacting's inject-context call, which mutates output.context
+// synchronously with respect to the compaction it is contributing to) — that
+// one alone awaits runHook inline, and even then only ties up its own async
+// call chain, never the shared event loop the way spawnSync did.
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 
 const SPAWN_TIMEOUT_MS = 5000;
 
@@ -93,22 +118,89 @@ function resolveNightgaugeBin() {
 }
 
 // runHook spawns bin with args, feeding stdinPayload (a string, or null for
-// no stdin) and returns {ok, stdout} — ok is false on any spawn error,
+// no stdin) and resolves {ok, stdout} — ok is false on any spawn error,
 // signal, timeout or non-zero exit, in which case stdout is always "". Every
 // caller below treats a not-ok result as "nothing to record", never as a
 // reason to throw: this module is telemetry, not a gate.
+//
+// The child is spawned detached (POSIX: its own process group, pgid ==
+// child.pid) so that on timeout the WHOLE group is killed, not just the
+// direct child: `hook notify`'s own osascript/notify-send grandchild (or any
+// verb that shells out further) would otherwise survive its parent's SIGKILL
+// and keep running past SPAWN_TIMEOUT_MS. Killing `-child.pid` reaches the
+// group; killing child.pid alone would not.
 function runHook(bin, args, cwd, stdinPayload) {
-  const result = spawnSync(bin, args, {
-    input: stdinPayload == null ? undefined : stdinPayload,
-    cwd,
-    timeout: SPAWN_TIMEOUT_MS,
-    shell: false,
-    encoding: "utf8",
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn(bin, args, {
+        cwd,
+        stdio: ["pipe", "pipe", "ignore"],
+        shell: false,
+        detached: true,
+      });
+    } catch {
+      resolve({ ok: false, stdout: "" });
+      return;
+    }
+
+    let stdout = "";
+    let timedOut = false;
+    let settled = false;
+
+    const finish = (ok) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ ok, stdout: ok ? stdout.trim() : "" });
+    };
+
+    // killGroup reaps the child and every grandchild it spawned: SIGKILL to
+    // -pid targets the process group detached:true created, not just the
+    // one pid. If the group kill itself fails (e.g. the child already
+    // exited between the timer firing and this running), falling back to
+    // killing the child directly is still best-effort cleanup, never a
+    // throw.
+    const killGroup = () => {
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // best effort: nothing left to reap
+        }
+      }
+    };
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killGroup();
+    }, SPAWN_TIMEOUT_MS);
+
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.on("error", () => finish(false));
+    child.on("close", (code, signal) => {
+      if (timedOut || signal || code !== 0) {
+        finish(false);
+      } else {
+        finish(true);
+      }
+    });
+
+    try {
+      if (stdinPayload == null) {
+        child.stdin.end();
+      } else {
+        child.stdin.end(stdinPayload, "utf8");
+      }
+    } catch {
+      // A write/end failure on stdin still lets the close handler above
+      // resolve this promise from the child's own exit/signal/timeout.
+    }
   });
-  if (result.error || result.signal || result.status !== 0) {
-    return { ok: false, stdout: "" };
-  }
-  return { ok: true, stdout: (result.stdout || "").trim() };
 }
 
 // eventsPath mirrors opencodeplugin.EventsPath (events.go) byte for byte: a
@@ -187,7 +279,12 @@ export async function sessionCompacting(ctx, input, output) {
   const bin = resolveNightgaugeBin();
   if (!bin) return;
   const cwd = resolveCwd(ctx);
-  const { ok, stdout } = runHook(bin, ["hook", "inject-context", "--workdir", cwd], cwd, null);
+  const { ok, stdout } = await runHook(
+    bin,
+    ["hook", "inject-context", "--workdir", cwd],
+    cwd,
+    null
+  );
   if (!ok || stdout === "" || stdout.length > INJECT_CONTEXT_MAX_BYTES) return;
   try {
     JSON.parse(stdout); // validate before injecting
@@ -249,7 +346,12 @@ export async function permissionAsk(ctx, input) {
 
 // notifyOnce runs `hook notify` at most once per sessionID per 60 s (the
 // shared throttle both the permission.ask export and event()'s own
-// permission.asked handling apply).
+// permission.asked handling apply). Fire-and-forget: nothing here reads the
+// notify verb's result, so the returned promise is deliberately not
+// awaited — awaiting it would only delay this hook's own return without
+// opencode gaining anything, since runHook itself is already async and never
+// blocks the event loop while the child runs. The trailing .catch keeps a
+// spawn error from ever becoming an unhandled promise rejection.
 function notifyOnce(ctx, sessionID, permissionType) {
   if (!shouldNotify(sessionID)) return;
   const bin = resolveNightgaugeBin();
@@ -261,7 +363,7 @@ function notifyOnce(ctx, sessionID, permissionType) {
     ["hook", "notify", "--event", "permission_prompt"],
     cwd,
     JSON.stringify({ message })
-  );
+  ).catch(() => {});
 }
 
 // event handles the session lifecycle events this module cares about:
@@ -296,17 +398,30 @@ export async function event(ctx, input) {
   if (evt.type === "session.idle") {
     appendEvent("idle", sessionID, isChildSession(sessionID), {});
     const bin = resolveNightgaugeBin();
-    let verdict = "no_bin";
-    if (bin) {
-      const cwd = resolveCwd(ctx);
-      const { ok, stdout } = runHook(bin, ["hook", "stop-verify", "--workdir", cwd], cwd, null);
-      // EvaluateStopHookOutput's own contract (internal/hooks/stop.go):
-      // silent stdout means every task is complete; a non-empty
-      // {"decision":"block",...} means it is not. Only the verdict code is
-      // ever recorded, never Reason (which can hold plan-derived text).
-      verdict = !ok ? "error" : stdout === "" ? "complete" : "blocked";
+    if (!bin) {
+      appendEvent("stop_verify", sessionID, isChildSession(sessionID), { verdict: "no_bin" });
+      return;
     }
-    appendEvent("stop_verify", sessionID, isChildSession(sessionID), { verdict });
+    const cwd = resolveCwd(ctx);
+    const child = isChildSession(sessionID);
+    // event() itself does not await this: a hung or slow `hook stop-verify`
+    // must never delay opencode's own handling of the session.idle bus event
+    // (the very regression #1641 introduced — see runHook's own comment).
+    // The verdict is still genuinely needed, so it is recorded once the
+    // bounded spawn settles, via .then()/.catch() rather than blocking this
+    // function's return on it.
+    runHook(bin, ["hook", "stop-verify", "--workdir", cwd], cwd, null)
+      .then(({ ok, stdout }) => {
+        // EvaluateStopHookOutput's own contract (internal/hooks/stop.go):
+        // silent stdout means every task is complete; a non-empty
+        // {"decision":"block",...} means it is not. Only the verdict code is
+        // ever recorded, never Reason (which can hold plan-derived text).
+        const verdict = !ok ? "error" : stdout === "" ? "complete" : "blocked";
+        appendEvent("stop_verify", sessionID, child, { verdict });
+      })
+      .catch(() => {
+        appendEvent("stop_verify", sessionID, child, { verdict: "error" });
+      });
     return;
   }
 
@@ -366,5 +481,7 @@ export async function toolExecuteBefore(ctx, input, output) {
   if (!bin) return;
   const cwd = resolveCwd(ctx);
   const payload = JSON.stringify({ tool_name: "Skill", cwd, tool_input: { skill } });
-  runHook(bin, ["hook", "skill-usage"], cwd, payload);
+  // Fire-and-forget, same reasoning as notifyOnce: nothing here reads the
+  // skill-usage verb's result, so its promise is not awaited.
+  runHook(bin, ["hook", "skill-usage"], cwd, payload).catch(() => {});
 }

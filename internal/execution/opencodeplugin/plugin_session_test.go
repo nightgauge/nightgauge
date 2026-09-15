@@ -666,6 +666,105 @@ func TestChildSessionEventsAreTaggedChild(t *testing.T) {
 	}
 }
 
+// --- non-blocking spawn (#1641 fixed forward) ---
+
+// TestEventIdleAndPermissionHandlersReturnQuicklyWithAHungHook is the direct
+// regression test for the #1641 CI slowdown (~10-16s added to every OpenCode
+// dispatch, measured on the pinned 1.18.30 binary: one `hook stop-verify`
+// call blocking a full SPAWN_TIMEOUT_MS=5000ms). NIGHTGAUGE_BIN here points
+// at a shim that sleeps 3s (well under SPAWN_TIMEOUT_MS, so it completes on
+// its own rather than being killed by the bound) before writing a marker
+// file and exiting 0. Against session.js's own synchronous spawnSync, both
+// event(session.idle) (-> `hook stop-verify`) and event(permission.asked)
+// (-> `hook notify`) block for the full 3s the shim sleeps, because
+// spawnSync freezes the whole process, including the very call that is
+// waiting on it — this test is red there. Against the fix (async spawn,
+// never awaited on either of these two paths), both calls return in
+// milliseconds while the child keeps running in the background; the marker
+// file's existence once the driver process exits (which, absent .unref(),
+// only happens after every spawned child has settled) proves that child was
+// left to finish and reaped, not killed early or abandoned as an orphan.
+func TestEventIdleAndPermissionHandlersReturnQuicklyWithAHungHook(t *testing.T) {
+	node := requireNode(t)
+	root := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "hook-ran.marker")
+	shim := filepath.Join(t.TempDir(), "slow-hook.sh")
+	script := "#!/bin/sh\nsleep 3\necho done >> " + shellQuote(marker) + "\nexit 0\n"
+	if err := os.WriteFile(shim, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	outputFile := filepath.Join(t.TempDir(), "output", "run.json")
+	if err := os.MkdirAll(filepath.Dir(outputFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	driver := `
+import { pathToFileURL } from "node:url";
+const mod = await import(pathToFileURL(process.env.NG_SESSION_PATH).href);
+const ctx = { directory: process.env.NG_CWD, worktree: process.env.NG_CWD };
+
+async function timed(run) {
+  const t0 = Date.now();
+  await run();
+  return Date.now() - t0;
+}
+
+const idleMs = await timed(() =>
+  mod.event(ctx, { event: { type: "session.idle", properties: { sessionID: "ses_slow_1" } } })
+);
+const permMs = await timed(() =>
+  mod.event(ctx, {
+    event: {
+      type: "permission.asked",
+      properties: { id: "p1", sessionID: "ses_slow_2", permission: "bash" },
+    },
+  })
+);
+
+process.stdout.write(JSON.stringify({ idleMs, permMs }));
+`
+	sessionPath := sessionModulePath(t)
+	driverPath := filepath.Join(t.TempDir(), "driver.mjs")
+	if err := os.WriteFile(driverPath, []byte(driver), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(node, driverPath)
+	env := append(os.Environ(),
+		"NG_SESSION_PATH="+sessionPath,
+		"NG_CWD="+root,
+		"NIGHTGAUGE_BIN="+shim,
+		"NIGHTGAUGE_OUTPUT_FILE="+outputFile,
+		"NIGHTGAUGE_RUN_ID=run-nonblock-1",
+	)
+	cmd.Env = env
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			t.Fatalf("driver failed: %v\nstderr:\n%s", err, ee.Stderr)
+		}
+		t.Fatalf("driver failed: %v", err)
+	}
+	var timing struct {
+		IdleMs int64 `json:"idleMs"`
+		PermMs int64 `json:"permMs"`
+	}
+	if err := json.Unmarshal(out, &timing); err != nil {
+		t.Fatalf("driver printed non-JSON: %s (%v)", out, err)
+	}
+	if timing.IdleMs >= 1000 {
+		t.Errorf("event(session.idle) took %dms against a 3s-hung hook verb; want well under 1000ms — session.js must never block opencode's event loop on a slow spawn", timing.IdleMs)
+	}
+	if timing.PermMs >= 1000 {
+		t.Errorf("event(permission.asked) took %dms against a 3s-hung hook verb; want well under 1000ms", timing.PermMs)
+	}
+
+	if _, err := os.Stat(marker); err != nil {
+		t.Errorf("the hook verb's marker file (written after its 3s sleep) does not exist: %v — the child was killed early or abandoned as an orphan rather than left to finish and reaped", err)
+	}
+}
+
 // --- tool.execute.before: skill argument validation ---
 
 // TestSkillToolRejectsFreeTextAndNestedArgs: a "name" argument that is a
