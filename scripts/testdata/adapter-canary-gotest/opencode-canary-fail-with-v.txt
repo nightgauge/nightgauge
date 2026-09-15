@@ -1,0 +1,12 @@
+=== RUN   TestOpenCodeCanaryFixturePass
+    zzfixture_canary_test.go:8: opencode 1.19.0 is installed (canary: pin relaxed from the 1.18.30 baseline observed for ADR-022)
+--- PASS: TestOpenCodeCanaryFixturePass (0.00s)
+=== RUN   TestOpenCodeCanaryFixtureFailure
+    zzfixture_canary_test.go:12: opencode 1.19.0 is installed (canary: pin relaxed from the 1.18.30 baseline observed for ADR-022)
+    zzfixture_canary_test.go:13: checkOpenCodeCanaryStream: 1 problem(s) on the stream:
+        unexpected event type
+        line: {"type":"not-a-type"}
+--- FAIL: TestOpenCodeCanaryFixtureFailure (0.00s)
+FAIL
+FAIL	github.com/nightgauge/nightgauge/internal/execution	0.185s
+FAIL

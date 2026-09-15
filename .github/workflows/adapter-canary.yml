@@ -1,0 +1,312 @@
+name: adapter-canary
+
+# The scheduled latest-CLI canary (#1639). Nothing else installs a non-Claude
+# CLI in CI, and nothing ever runs the newest release of any manifest CLI
+# against the flag contract (#1617), the stub-provider OpenCode run (#1618,
+# #1624) and the pinned OpenCode config schema (#1634). This ties them
+# together, files a drift issue when something breaks, and blocks a PR that
+# bumps a manifest's max_tested while the canary is red at that version.
+#
+# Runs daily, on workflow_dispatch, and on every pull_request — a workflow-
+# level `paths:` filter would leave this a required check pending forever on
+# an unrelated PR, so `changed` decides at runtime instead and every other job
+# is skipped (not filtered out of the run) when nothing under
+# internal/adaptercompat/manifests/ changed.
+#
+# On a schedule or workflow_dispatch every manifest CLI installs at its npm
+# dist-tag `latest`; on a pull_request every manifest CLI installs at its OWN
+# manifest's current max_tested — the proposed version for whichever manifest
+# the PR bumped, the already-approved one for every other, both read from the
+# checked-out branch, not from a separate input.
+#
+# install/flag-contracts/opencode-canary hold only `contents: read` and
+# receive no secret: `latest` from npm is unreviewed code, and it runs with
+# nothing to exfiltrate. report holds `issues: write`, runs no CLI and no
+# model, and reads only the canary-summary.json artifact those jobs upload.
+
+on:
+  schedule:
+    - cron: "17 6 * * *" # daily; a time no other scheduled workflow here uses
+  workflow_dispatch: {}
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: adapter-canary-${{ github.event_name == 'pull_request' && github.ref || 'scheduled' }}
+  cancel-in-progress: true
+
+env:
+  # schedule and workflow_dispatch install the newest release of every
+  # manifest CLI; pull_request installs each manifest's own current
+  # max_tested (adapter-canary.sh install <adapter> "$VERSION_MODE").
+  VERSION_MODE: ${{ github.event_name == 'pull_request' && 'pinned' || 'latest' }}
+
+jobs:
+  changed:
+    name: Decide whether a manifest changed
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Decide
+        id: decide
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "schedule/workflow_dispatch: always runs"
+            exit 0
+          fi
+          git fetch --no-tags --depth=1 origin "${{ github.event.pull_request.base.sha }}"
+          if git diff --name-only "${{ github.event.pull_request.base.sha }}" HEAD \
+              -- internal/adaptercompat/manifests/ | grep -q .; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "internal/adaptercompat/manifests/ changed: running"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "internal/adaptercompat/manifests/ unchanged: nothing to canary on this PR"
+          fi
+
+  flag-contracts:
+    name: Flag contract at the newest (or proposed) CLI versions
+    needs: changed
+    if: ${{ needs.changed.outputs.run == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          # No Go cache: this job installs and runs `latest` from npm before
+          # anything else — unreviewed code — and setup-go's post step would
+          # otherwise save that run's GOMODCACHE/GOCACHE under the same
+          # main-scoped key ci.yml and release.yml restore, letting a
+          # compromised upstream release write into a cache Go trusts on
+          # reuse there.
+          cache: false
+
+      - uses: actions/setup-node@fc7e5e49f31379e40cf9b708e5abd6ebfad0e0fd # v5.0.0
+        with:
+          node-version: "22"
+
+      - name: Install every manifest CLI and capture its --help
+        id: capture
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/help"
+          : > "$RUNNER_TEMP/versions.env"
+          for manifest in internal/adaptercompat/manifests/*.json; do
+            adapter="$(basename "$manifest" .json)"
+            [ -n "$(jq -r '.install.npm // .install.installer // ""' "$manifest")" ] || continue
+            echo "::group::install $adapter ($VERSION_MODE)"
+            requested="$VERSION_MODE"
+            if [ "$VERSION_MODE" = "pinned" ]; then
+              requested="$(jq -r '.max_tested' "$manifest")"
+            fi
+            if out="$(bash scripts/adapter-canary.sh install "$adapter" "$requested")"; then
+              eval "$out"
+              echo "$adapter=$version" >> "$RUNNER_TEMP/versions.env"
+              ADAPTER_CANARY_VERSION="$version" bash scripts/adapter-canary.sh capture-help "$adapter" "$bin" "$RUNNER_TEMP/help"
+            else
+              echo "install failed for $adapter" >&2
+            fi
+            echo "::endgroup::"
+          done
+
+      - name: Run TestFlagContract against the fresh captures
+        run: |
+          set -euo pipefail
+          bash scripts/adapter-canary.sh flag-contract "$RUNNER_TEMP/help" | tee "$RUNNER_TEMP/flag-contract-summary.jsonl"
+
+      - name: Upload the summary rows
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: canary-summary-flag-contract
+          path: ${{ runner.temp }}/flag-contract-summary.jsonl
+          if-no-files-found: error
+          retention-days: 14
+
+  opencode-canary:
+    name: OpenCode stub run and config-schema diff
+    needs: changed
+    if: ${{ needs.changed.outputs.run == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          # No Go cache: see the flag-contracts job's own setup-go step for
+          # why — this job installs and runs `latest` opencode from npm
+          # before anything else too.
+          cache: false
+
+      - uses: actions/setup-node@fc7e5e49f31379e40cf9b708e5abd6ebfad0e0fd # v5.0.0
+        with:
+          node-version: "22"
+
+      - name: Install opencode
+        id: install
+        run: |
+          set -euo pipefail
+          requested="$VERSION_MODE"
+          if [ "$VERSION_MODE" = "pinned" ]; then
+            requested="$(jq -r '.max_tested' internal/adaptercompat/manifests/opencode.json)"
+          fi
+          out="$(bash scripts/adapter-canary.sh install opencode "$requested")"
+          eval "$out"
+          echo "bin=$bin" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Run the OpenCode canary (stub run, permission leg, bad model)
+        id: opencode_leg
+        # continue-on-error, not a bare failing step: a red stream/permission/
+        # bad-model leg must not skip the schema-diff leg below it (both have
+        # no `if:` of their own by default, so with pipefail set a step that
+        # exits non-zero marks the job success()=false and every later default
+        # step is skipped — the schema diff never ran on the exact days that
+        # mattered, including #1634's own security-key alarm). The "Fail the
+        # job if any leg failed" step below reads this outcome and is what
+        # actually turns the job red.
+        continue-on-error: true
+        env:
+          CI: "true"
+        run: |
+          set -euo pipefail
+          bash scripts/adapter-canary.sh opencode-canary \
+            "${{ steps.install.outputs.bin }}" "${{ steps.install.outputs.version }}" \
+            | tee "$RUNNER_TEMP/opencode-summary.jsonl"
+
+      - name: Upload the opencode-canary run summary
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          # This is the one-row JSON summary (result: pass/fail), not a raw
+          # `opencode run --format json` stream: the AC names no such
+          # artifact (only the technical notes do), and the Go test's own
+          # stdout never leaves the runner for this workflow to upload. The
+          # version in the name is the INSTALLED version
+          # (steps.install.outputs.version), so a daily run's artifact is
+          # never named with a stale max_tested.
+          name: opencode-canary-run-summary-${{ steps.install.outputs.version }}
+          path: ${{ runner.temp }}/opencode-summary.jsonl
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Diff the live OpenCode config schema against the pin
+        id: schema_diff_leg
+        # Runs regardless of the opencode-canary leg's own result (see that
+        # step's continue-on-error comment): `if: !cancelled()` so it still
+        # runs even if a prior step failed outright, on top of the
+        # continue-on-error above which already keeps the job's default
+        # success() true for this step.
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          bash scripts/adapter-canary.sh schema-diff --version "${{ steps.install.outputs.version }}" \
+            | tee "$RUNNER_TEMP/schema-diff-summary.jsonl"
+
+      - name: Upload the summary rows
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: canary-summary-opencode
+          path: |
+            ${{ runner.temp }}/opencode-summary.jsonl
+            ${{ runner.temp }}/schema-diff-summary.jsonl
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Fail the job if any OpenCode leg failed
+        # Both legs above run with continue-on-error, so a red one alone would
+        # otherwise leave this job green. This step is what actually turns it
+        # red — it is the last step, so its own failure is the job's last
+        # word. `!cancelled()` rather than `always()`: a cancelled run (this
+        # workflow's own concurrency group supersedes an older PR run) should
+        # stay "cancelled", not be reported as a leg "failure" by this step.
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          rc=0
+          [ "${{ steps.opencode_leg.outcome }}" = "success" ] || { echo "::error::the opencode-canary leg failed"; rc=1; }
+          [ "${{ steps.schema_diff_leg.outcome }}" = "success" ] || { echo "::error::the schema-diff leg failed"; rc=1; }
+          exit "$rc"
+
+  report:
+    name: File or update the drift issue
+    needs: [changed, flag-contracts, opencode-canary]
+    # always() so a failed leg is still reported; skipped entirely when
+    # `changed` said there was nothing to canary, and never on a pull_request
+    # — a PR's own red check is the signal there, not a filed issue.
+    if: ${{ always() && needs.changed.outputs.run == 'true' && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: |
+            scripts/adapter-canary.sh
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: canary-summary-*
+          path: ${{ runner.temp }}/summary
+          merge-multiple: true
+
+      - name: Merge the summary rows
+        run: |
+          set -euo pipefail
+          cat "$RUNNER_TEMP"/summary/*.jsonl > "$RUNNER_TEMP/canary-summary.json"
+
+      - name: Upload the merged summary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: canary-summary.json
+          path: ${{ runner.temp }}/canary-summary.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: File or update one drift issue per adapter+version
+        env:
+          # The automatic job token (scoped by this job's own `permissions:`
+          # above), not a configured secret — grep -n 'secrets\.' finds none
+          # in this file.
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/adapter-canary.sh report "$RUNNER_TEMP/canary-summary.json"
+
+      - name: Summarize the run
+        if: ${{ always() }}
+        run: |
+          {
+            echo "### adapter-canary"
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/canary-summary.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

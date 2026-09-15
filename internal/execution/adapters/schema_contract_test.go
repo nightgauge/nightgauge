@@ -77,6 +77,32 @@ func readPinnedSchema(t *testing.T) []byte {
 	return raw
 }
 
+// schemaContractSchemaPathEnv points TestGeneratedConfigsValidate,
+// TestValidatorRejectsUnknownKey, TestNoDeprecatedKeys and
+// TestSecurityKeysPresentAndKnown at a schema other than the pinned one, so
+// the release canary's schema-diff leg (#1639) can re-run this suite against
+// a freshly fetched live schema when it differs from the manifest's
+// config_schema_sha256, with no code change. TestManifestSchemaHash ignores
+// it: its whole point is comparing the PINNED schema's own hash against the
+// manifest, which an override would defeat.
+const schemaContractSchemaPathEnv = "NIGHTGAUGE_OPENCODE_SCHEMA_PATH"
+
+// schemaContractSchema reads the schema the four suites above validate the
+// generated configs against: the override when schemaContractSchemaPathEnv is
+// set, else the pinned schema (readPinnedSchema).
+func schemaContractSchema(t *testing.T) []byte {
+	t.Helper()
+	path := os.Getenv(schemaContractSchemaPathEnv)
+	if path == "" {
+		return readPinnedSchema(t)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read the schema %s names (%s): %v", schemaContractSchemaPathEnv, path, err)
+	}
+	return raw
+}
+
 // compileSchemaContract compiles schema, a JSON Schema document, as the
 // document at schemaContractSchemaURL, under draft 2020-12, the draft the
 // pinned schema declares.
@@ -241,7 +267,7 @@ func schemaContractConfigs(t *testing.T) []schemaContractConfig {
 // TestGeneratedConfigsValidate: every per-run config the matrix builds is a
 // valid document under the pinned schema, as a whole, with zero errors.
 func TestGeneratedConfigsValidate(t *testing.T) {
-	sch := compileSchemaContract(t, readPinnedSchema(t))
+	sch := compileSchemaContract(t, schemaContractSchema(t))
 	configs := schemaContractConfigs(t)
 	if len(configs) != 40 {
 		t.Fatalf("the matrix built %d configs, want 40", len(configs))
@@ -259,7 +285,7 @@ func TestGeneratedConfigsValidate(t *testing.T) {
 // documents pass a permissive {} schema compiled the same way, so the
 // rejection is the pinned schema's, not the harness's.
 func TestValidatorRejectsUnknownKey(t *testing.T) {
-	pinned := compileSchemaContract(t, readPinnedSchema(t))
+	pinned := compileSchemaContract(t, schemaContractSchema(t))
 	permissive := compileSchemaContract(t, []byte(`{}`))
 	for _, c := range schemaContractConfigs(t) {
 		doc := decodeOpenCodeConfig(t, c.content)
@@ -300,7 +326,7 @@ var schemaContractAllowedDeprecated = map[string]string{
 // asserted by name as well: steps and share, never maxSteps or autoshare.
 // Each finding is printed as the JSON pointer of the property.
 func TestNoDeprecatedKeys(t *testing.T) {
-	schema := decodeSchemaDoc(t, readPinnedSchema(t))
+	schema := decodeSchemaDoc(t, schemaContractSchema(t))
 
 	// The walker is not vacuous: it finds each deprecated property the
 	// renames left behind, and not their replacements.
@@ -357,7 +383,7 @@ var schemaContractSecurityKeys = []string{"share", "autoupdate", "enabled_provid
 // file, never a URL) and mcp. Each security key is a property the pinned
 // schema defines at the top level.
 func TestSecurityKeysPresentAndKnown(t *testing.T) {
-	schema := decodeSchemaDoc(t, readPinnedSchema(t))
+	schema := decodeSchemaDoc(t, schemaContractSchema(t))
 	defined := schema.topLevelProperties()
 	for _, key := range schemaContractSecurityKeys {
 		if !defined[key] {

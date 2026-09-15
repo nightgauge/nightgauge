@@ -86,6 +86,47 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- A scheduled latest-CLI canary (`.github/workflows/adapter-canary.yml`,
+  `scripts/adapter-canary.sh`) installs the newest release of every manifest
+  CLI daily and on `workflow_dispatch`, and reruns the flag contract (#1617)
+  against each one's freshly captured `--help`. Its OpenCode leg
+  (`internal/execution/opencode_canary_test.go`, build tag `canary`) drives
+  the installed `opencode` against the #1618 stub provider and asserts the
+  stream's event-type allow-list, field paths and non-zero token accounting
+  (#1624), the permission-reject leg's auto-rejection and exit code, and a
+  bad-model leg's exit 1 with a `type: "error"` event. A schema-diff leg
+  compares the live `https://opencode.ai/config.json` against the manifest's
+  `config_schema_sha256` and, on a difference, re-runs the #1634 suite against
+  the live schema. The workflow also runs as a required check on a PR that
+  changes a manifest's `max_tested`, at that proposed version, and a `report`
+  job (`issues: write` only, no secrets, no CLI or model) files or updates one
+  open `canary: <adapter> <version> drift` issue per failing adapter+version
+  from the run's JSON summary. Above `max_tested`, OpenCode's own
+  endpoint-above-max-tested refusal (ADR-022 § 20) would otherwise block the
+  canary from ever driving a real release through the stream contract, so a
+  canary-only relaxation (`openCodeCanaryRelax`, gated behind the `canary`
+  build tag no production build carries, and only under the explicit
+  `NIGHTGAUGE_CANARY=true` signal) lets the leg's own dispatch through while a
+  production build's refusal is unchanged; the row records the INSTALLED
+  version. The `opencode-canary` job's stream/permission/bad-model leg and its
+  schema-diff leg each run regardless of the other's outcome, and the job
+  itself goes red if either failed. The `flag-contract` leg attributes a
+  malformed or dropped-flag capture to its own adapter and version rather than
+  a version-less placeholder, and carries a CLI's hidden, undocumented flags
+  forward onto a newer capture instead of failing every adapter with one on
+  its next release. The OpenCode leg's stub now runs as a real `stub-provider`
+  subprocess per test, its PID captured, killed and confirmed dead in that
+  test's own cleanup. The `opencode-canary` row's detail is now the failing
+  test's own message in either shape `go test` actually prints it — the
+  `-count=1` run `cmd_opencode_canary` invokes has no `-v`, so the
+  `--- FAIL:` summary prints before the test's buffered log lines, not after
+  — and it never carries realOpenCode's own "pin relaxed" `t.Logf` notice or a
+  multi-line failure's own continuation lines. `stubProviderCanaryBinary`'s
+  `os.MkdirTemp` build directory is now removed by the package's `TestMain`
+  instead of leaking one per test-binary run, and
+  `testdata/cli-help/README.md` now notes that a hidden-flag sidecar carried
+  forward onto a newer capture (above) is not itself probe evidence at that
+  newer version (#1639)
 - The OpenCode config schema published for the newest tested OpenCode
   (1.18.30) is now pinned in the repository, and a contract test validates
   every per-run config the builder generates against it, across LM Studio,
