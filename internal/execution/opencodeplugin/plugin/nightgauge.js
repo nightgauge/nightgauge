@@ -10,14 +10,22 @@
 // plugin init entirely: opencode then runs with the Nightgauge plugin not
 // loaded at all, no handshake sentinel is ever written, and the manager's
 // handshake check (internal/execution/manager.go) fails the stage closed as
-// adapter_incompatible instead of running ungated.
+// adapter_incompatible instead of running ungated. `command.execute.before`
+// likewise runs gates.js's commandExecuteBefore (#1640's sanitize-prompt
+// gate) MANDATORILY, before any optional session.js delegate — a review
+// finding this round: this hook used to only delegate to ./nightgauge/
+// session.js (#1641's file), so gates.js's sanitize-prompt gate, though
+// fully implemented and unit-tested, never actually ran on a real dispatch.
 //
 // The remaining hooks delegate to ./nightgauge/session.js and
-// ./nightgauge/edit.js, which sibling tickets (#1640/#1641/#1642) create. A
-// hook with no such module installed yet is a pure no-op: optionalHooks()
-// imports it dynamically and swallows the failure.
+// ./nightgauge/edit.js, which sibling tickets (#1641/#1642) create. A hook
+// with no such module installed yet is a pure no-op: optionalHooks() imports
+// it dynamically and swallows the failure.
 import fs from "node:fs";
-import { toolExecuteBefore } from "./nightgauge/gates.js";
+import {
+  toolExecuteBefore,
+  commandExecuteBefore as gatesCommandExecuteBefore,
+} from "./nightgauge/gates.js";
 
 // NIGHTGAUGE_PLUGIN_VERSION MUST match opencodeplugin.PluginVersion
 // (plugin.go) byte for byte — TestPluginVersionAndHooksMatchGo compares
@@ -95,6 +103,7 @@ export const NightgaugePlugin = async (ctx) => {
       }
     },
     "command.execute.before": async (input, output) => {
+      await gatesCommandExecuteBefore(ctx, input, output);
       if (typeof session.commandExecuteBefore === "function") {
         await session.commandExecuteBefore(ctx, input, output);
       }
