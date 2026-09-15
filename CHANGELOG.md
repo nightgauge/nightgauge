@@ -503,6 +503,29 @@ changelog, and the release workflow refuses a tag that does not.
   warns when the binary changed since the last dispatch. With
   `NIGHTGAUGE_EXPERIMENTAL_OPENCODE` unset the row runs nothing and is not
   usable, so cap recovery never hops onto it (#1627)
+- The Nightgauge OpenCode plugin's `gates.js` now runs workflow-gate and
+  stage-gate too, not just #1635's careful-gate: a `bash` tool call runs
+  workflow-gate, careful-gate, then stage-gate, in `hooks.json`'s own
+  PreToolUse order (first deny wins), so a push to main, a force-push, a
+  destructive git operation, a secret read/write, an analysis stage
+  advancing git/forge state outside its mandate, and a `gh pr merge --admin`/
+  `--auto` bypass are all blocked under OpenCode exactly as they already are
+  under Claude Code. `edit` and `write` tool calls run workflow-gate with a
+  Claude-shaped `file_path` payload, so editing `.env` or writing
+  `credentials.json` is blocked the same way. Every tool id opencode 1.18.30
+  exposes is now pinned to a classification (`TOOL_CLASSIFICATION`); a tool
+  id the table does not list is blocked closed with
+  `[nightgauge-gate:unknown-tool]`, and `apply_patch` — real, but never
+  observed carrying a verified Claude-shaped payload on a real dispatch — is
+  classified and blocked rather than guessed at. A new `commandExecuteBefore`
+  export runs `hook sanitize-prompt` against a `command.execute.before`
+  expansion; `nightgauge.js` does not yet call it (a follow-up, since it
+  currently delegates that hook to #1641's `session.js`). The unconditional
+  `task` denial (#1635's AC9 fallback) is unchanged. New
+  `internal/execution/opencodeplugin/plugin_gates_test.go` and two testdata
+  fixtures — `gates_parity_corpus.json` and a captured
+  `opencode-1.18.30-tools.txt` — check every gate against the real built
+  binary and the real embedded plugin (#1640)
 
 ### Fixed
 
