@@ -43,8 +43,11 @@ clone the repository.)
 
 ### Steps
 
-1. **Install** — Install **Nightgauge** from the VS Code Marketplace. The
-   Marketplace serves the build matching your platform automatically.
+1. **Install** — Install **Nightgauge** from the
+   [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=nightgauge.nightgauge-vscode),
+   or from [Open VSX](https://open-vsx.org/extension/nightgauge/nightgauge-vscode)
+   in VSCodium, Cursor, Windsurf and other Open VSX-based editors. Either
+   registry serves the build matching your platform automatically.
 2. **Sign in (optional)** — Run **Nightgauge: Sign In with GitHub** from the
    Command Palette. This connects a Nightgauge account for hosted features. It
    is **not** how the pipeline reaches GitHub — that is `gh auth login` above,
@@ -71,11 +74,13 @@ clone the repository.)
 
 ### Installing
 
-Nightgauge ships a separate build per platform. The Marketplace picks the right
-one for you; **macOS (Apple Silicon and Intel) and Linux x64 are supported.**
-Windows is not supported yet — the pipeline backend is a native binary that has
-no Windows build, so the Marketplace will report the extension as unavailable
-there.
+Nightgauge ships a separate build per platform to both the
+[VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=nightgauge.nightgauge-vscode)
+and [Open VSX](https://open-vsx.org/extension/nightgauge/nightgauge-vscode); each
+picks the right one for you. **macOS (Apple Silicon and Intel) and Linux x64 are
+supported.** Windows is not supported yet — the pipeline backend is a native
+binary that has no Windows build, so the registry will report the extension as
+unavailable there.
 
 To install a specific build instead, download the VSIX matching your OS and
 architecture from the [GitHub

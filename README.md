@@ -2,6 +2,7 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](go.mod)
+[![Open VSX](https://img.shields.io/open-vsx/v/nightgauge/nightgauge-vscode?label=Open%20VSX)](https://open-vsx.org/extension/nightgauge/nightgauge-vscode)
 
 ![Nightgauge](packages/nightgauge-vscode/resources/nightgauge-icon.png)
 
@@ -66,7 +67,9 @@ integration, batch processing, and one-click pipeline execution.
 
 Install **Nightgauge** from the
 [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=nightgauge.nightgauge-vscode),
-which selects the build for your platform automatically. Target-specific VSIXs
+or from [Open VSX](https://open-vsx.org/extension/nightgauge/nightgauge-vscode) in
+VSCodium, Cursor, Windsurf, Gitpod and other Open VSX-based editors. Both
+select the build for your platform automatically. Target-specific VSIXs
 are also available from the GitHub Release; **Extensions → … → Install from
 VSIX** installs one manually. Building locally or running `dev-install.sh` is
 for extension development and intentionally produces a non-release build.
