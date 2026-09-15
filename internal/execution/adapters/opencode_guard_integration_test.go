@@ -32,6 +32,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // guardStubModel is the provider/model every probe in this file dispatches:
@@ -340,10 +342,7 @@ func guardGitInit(t *testing.T, dir string) {
 		{"add", "-A"},
 		{"-c", "user.email=probe@example.invalid", "-c", "user.name=probe", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "base"},
 	} {
-		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
+		gittest.Run(t, dir, args...)
 	}
 }
 
