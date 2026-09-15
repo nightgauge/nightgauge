@@ -96,6 +96,9 @@ export const NightgaugePlugin = async (ctx) => {
   return {
     "tool.execute.before": async (input, output) => {
       await toolExecuteBefore(ctx, input, output);
+      if (typeof session.toolExecuteBefore === "function") {
+        await session.toolExecuteBefore(ctx, input, output);
+      }
     },
     "tool.execute.after": async (input, output) => {
       if (typeof edit.toolExecuteAfter === "function") {
