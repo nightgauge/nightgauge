@@ -208,6 +208,11 @@ func openCodeConfigForStage(ctx context.Context, f openCodeConfigFlags) (*adapte
 		Lookup:           os.LookupEnv,
 		GOOS:             runtime.GOOS,
 		McpForge:         adapters.OpenCodeMcpForge(cwd),
+		// The adapter's own PrepareRunRoot sets the identical BinDir
+		// (adapters.OpenCodeBinDir()), so the permission map's
+		// external_directory allow-list this verb prints matches the
+		// adapter's exactly (#1638, TestOpenCodeConfigVerbMatchesTheAdapter).
+		BinDir: adapters.OpenCodeBinDir(),
 	})
 	if err != nil {
 		return nil, err

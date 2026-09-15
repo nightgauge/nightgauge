@@ -161,7 +161,13 @@ var openCodeUnenforcedControls = []openCodeControl{
 // `nightgauge opencode config` calls it too, so the SDK path meets the same
 // checks.
 //
-// The credential refusals come first (openCodeCredentialRefusal): the switch
+// The project-config tamper gate (openCodeProjectConfigTamperCheck,
+// opencode_guard.go, #1638) comes first: it is the one check here that reads
+// the worktree the stage will run in, which is why this hook runs after
+// worktree setup at all (ADR-022 § 8), and a tampered worktree is refused
+// whatever the switch or a model's credentials say.
+//
+// The credential refusals come next (openCodeCredentialRefusal): the switch
 // cannot satisfy them, so they are the reason to state, and no
 // enabled-dispatch warning precedes them. Then the gate. Then the version
 // policy (checkVersionPolicy): a binary below the compat manifest's floor, or
@@ -181,6 +187,9 @@ var openCodeUnenforcedControls = []openCodeControl{
 // The version policy reads the block for its binary pin and, above
 // max-tested, for the self-test's per-run config.
 func (a *OpenCodeAdapter) PreDispatch(ctx context.Context, opts RunOptions) error {
+	if err := openCodeProjectConfigTamperCheck(ctx, opts.WorktreeDir); err != nil {
+		return err
+	}
 	if err := openCodeCredentialRefusal(opts.Model, os.LookupEnv); err != nil {
 		return err
 	}
@@ -487,6 +496,7 @@ func (a *OpenCodeAdapter) PrepareRunRoot(req RunRootRequest) (*RunRoot, error) {
 		GOOS:               runtime.GOOS,
 		ManagedConfigFiles: a.managedConfig,
 		McpForge:           OpenCodeMcpForge(req.WorkspaceRoot),
+		BinDir:             OpenCodeBinDir(),
 	})
 	if err != nil {
 		return nil, err
@@ -542,12 +552,15 @@ func (a *OpenCodeAdapter) PrepareRunRoot(req RunRootRequest) (*RunRoot, error) {
 // and `.opencode/` directory WHOLESALE — its agent, provider, mode,
 // permission and instructions keys, not only `plugin` — because 1.18.30
 // offers no finer-grained switch: project config is one unit, on or off.
-// Until #1638 builds the Go-side reviewed merge that restores a target
-// repository's non-plugin customisation under this flag,
-// TestOpenCodeIntegrationPerRunConfigReachesOpenCode and
-// TestOpenCodeIntegrationAnthropicBlockHoldsItsServer assert the resulting
-// behaviour instead of the repository's own opencode.json content reaching
-// the resolved config: Nightgauge's own locked keys are exactly what a
+// #1638 does not restore any of it: ADR-022's own "control not yet enforced"
+// table scopes #1638 to two rows, the permission map (opencode_guard.go's
+// openCodePermissionMap, folded into this builder's output) and the
+// project-config tamper gate (openCodeProjectConfigTamperCheck, called from
+// PreDispatch) — a REFUSAL when the worktree's opencode.json* or .opencode/
+// differs from the base branch, not a merge that lets a target repository's
+// own project config reach a dispatch. TestOpenCodeIntegrationPerRunConfigReachesOpenCode
+// and TestOpenCodeIntegrationAnthropicBlockHoldsItsServer's assertions stand
+// unchanged by this ticket: Nightgauge's own locked keys are exactly what a
 // dispatch sees, whatever a target repository's project config says. That
 // narrowing is recorded in the ADR-022 amendment dated 2026-09-14, not
 // invented by this comment.
@@ -635,10 +648,12 @@ func InstallNightgaugePlugin(ctx context.Context, run *OpenCodeRun, outputFile, 
 // addNightgaugePluginToConfig sets content's top-level "plugin" key to an
 // array holding exactly entry, leaving every other key byte-identical.
 // content is decoded generically (map[string]any) rather than through
-// openCodeConfigJSON, which declares no plugin field of its own: adding one
-// there is BuildOpenCodeConfig's job (opencode_config.go) once #1635 and
-// #1638 agree on a permission map to extend the same builder with; until
-// then this is the one place the config gains a plugin entry.
+// openCodeConfigJSON: BuildOpenCodeConfig (opencode_config.go) now also
+// extends the same builder with a "permission" key (#1638,
+// opencode_guard.go), so content already carries one when this runs, and the
+// decode-and-re-encode round-trips it unchanged, along with every other key —
+// this remains the one place the config gains a "plugin" entry, because
+// plugin identity is #1635's, not this builder's.
 func addNightgaugePluginToConfig(content, entry string) (string, error) {
 	var raw map[string]any
 	if err := json.Unmarshal([]byte(content), &raw); err != nil {

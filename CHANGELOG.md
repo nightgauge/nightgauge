@@ -187,7 +187,32 @@ stop-verify --emit-event --session-id <id> [--child]` detached and
   exactly one compaction. #1625's declared steps cap is not itself opencode's
   hard stop on this binary (a run past the cap still executes tool calls
   before ending at idle; see ADR-022's amendment) (#1641)
-
+- The `opencode` adapter's per-run config now carries an explicit `permission`
+  map derived from the dispatching stage's `AllowedTools`
+  (`openCodePermissionMap`, `internal/execution/adapters/opencode_guard.go`):
+  every key (`*`, `read`, `edit`, `glob`, `grep`, `list`, `bash`, `task`,
+  `webfetch`, `websearch`, `skill`, `todowrite`, `doom_loop`,
+  `external_directory`) is set to `allow` or `deny`, never `ask` (ADR-022
+  § 9), with a `bash`/`read`/`edit` deny-list backstop
+  (`rm -rf *`, `git push --force*` and friends; `*.env`, `**/.ssh/**`,
+  `**/id_rsa*`, the gh hosts file; `opencode.json*` and `.opencode/**` on
+  `edit`) present in every map regardless of what the stage's tools grant,
+  and an `external_directory` allow-list scoped to `NIGHTGAUGE_SKILL_DIR`
+  (read-only: denied on `edit`), the `NIGHTGAUGE_BIN` directory, the context
+  and output file directories when they are outside the worktree, and every
+  `/tmp` literal the six stage skills use, in both `/tmp` and `/private/tmp`
+  forms. A new pre-spawn check in the adapter's `PreDispatch`
+  (`openCodeProjectConfigTamperCheck`) refuses a dispatch whose worktree
+  carries a modified, untracked or git-ignored `opencode.json`,
+  `opencode.jsonc` or `.opencode/` relative to its base branch, naming every
+  offending path and spawning nothing — a stage must not rewrite the OpenCode
+  config the next stage in the same worktree runs under. Bounded probes
+  against the pinned opencode 1.18.30 binary found the permission map's
+  pattern matching narrower than ADR-022 § 9 assumed for `edit`/`read` (no
+  leading `/`, and a real glob wildcard required) and an `external_directory`
+  allow-list entry needed in both its given and symlink-resolved forms, not
+  only the resolved one; both are corrected in the generated map and recorded
+  in ADR-022's own amendment (#1638)
 - A scheduled latest-CLI canary (`.github/workflows/adapter-canary.yml`,
   `scripts/adapter-canary.sh`) installs the newest release of every manifest
   CLI daily and on `workflow_dispatch`, and reruns the flag contract (#1617)

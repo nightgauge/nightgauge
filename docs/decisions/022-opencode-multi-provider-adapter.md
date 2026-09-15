@@ -2175,6 +2175,75 @@ step failed first, the OpenCode integration step never executed and its
 result was never part of the verdict. Filing that separately; it is not
 fixed here.
 
+## The permission map's pattern matching (amendment 2026-09-15, #1638)
+
+§ 9 assumed opencode 1.18.30 resolves a `permission` object's patterns the
+same way for every key, matching the last rule the merged config carries
+against a request's own absolute path. #1638's own bounded probes against the
+pinned binary (a scripted, in-process OpenAI-compatible stub scripting real
+`read`/`edit`/`bash` tool calls, `internal/execution/adapters/opencode_guard_integration_test.go`
+and the isolated probes its history records) found three narrower rules
+instead, each load-bearing for the permission map #1638 generates:
+
+- **A pattern with no glob metacharacter is never matched for `edit`.**
+  `edit: {"*": "allow", "secret.txt": "deny"}`, with `secret.txt` the exact
+  relative path a tool call's own `filePath` carried, still ran the edit: the
+  literal pattern was never consulted. The same object with the pattern
+  spelled `**/secret.txt` or `secret.*` — a real glob, differing only in
+  carrying a `*` — denied it. Every pattern #1638 sets on `edit` or `read`
+  beyond the bare `*` default is therefore built to carry a real wildcard;
+  the static backstop entries already did (`*.env`, `**/.ssh/**`, and the
+  rest), and a dynamic directory pattern is built as `<dir>/**`.
+- **A pattern that starts with `/` is never matched for `edit`, only for
+  `external_directory`.** `edit: {"*": "allow", "/a/b/**": "deny"}` ran an
+  edit whose `filePath` was exactly `/a/b/c`; stripping the leading `/` from
+  the identical pattern denied it. `external_directory`'s own patterns need
+  the leading `/` (an unprefixed directory pattern in that key was never
+  observed to match anything): a probe of `external_directory: {"*": "deny",
+"/a/b/**": "allow"}` let a read under `/a/b/` through, and the same pattern
+  without its leading `/` refused it. So a directory pattern's two uses need
+  two different strings: `openCodeDirPatterns` (opencode_guard.go) keeps the
+  leading separator for `external_directory`'s allow-list, and
+  `openCodeEditDenyPatterns` strips it for `edit`'s deny entries — the
+  NIGHTGAUGE_SKILL_DIR read-only pair (§ "external_directory allow-list")
+  uses one function for each half. Once both defects are avoided — a real
+  wildcard, no leading `/` — `edit`'s own last-matching-rule-wins behaves as
+  § 9 assumed: a specific `deny` added after a `*: allow` was consistently
+  denied in every probe, in both directions (a specific `allow` after a
+  `*: deny` was consistently let through). `bash`'s own patterns, matched
+  against the command string rather than a path, were never observed to need
+  either correction: `bash: {"*": "allow", "rm -rf *": "deny"}` denied `rm
+-rf /tmp/x` in the same probe run that found `edit`'s literal-pattern gap.
+- **`external_directory` needs a directory's path in more than one form.**
+  A macOS `t.TempDir()` skill directory under `$TMPDIR` (itself under `/var`,
+  a symlink to `/private/var`) was reported by a real tool call's `filePath`
+  unresolved (`/var/folders/.../skill/_includes/note.md`), even though §
+  9's own last bullet ("the permission map is built against resolved
+  paths") predicted the resolved form. An allow-list built only from
+  `filepath.EvalSymlinks`'s output did not match it; one carrying both the
+  given and the resolved form (when they differ) matched either way.
+  `openCodeDirPatterns` returns both, which is also why the six stage
+  skills' `/tmp` literals were already emitted in both `/tmp` and
+  `/private/tmp` forms before this amendment (the same macOS gap, generalized
+  here to every directory pattern the permission map builds, not only
+  `/tmp`'s).
+
+None of the three findings changes § 9's `ask`-vs-`auto-rejecting` account:
+a `deny` match, unlike an `ask` one, was never observed to print the
+`! permission requested: ... auto-rejecting` stderr notice — it fails the
+tool call directly, visible in `--format json` stdout as an errored
+`tool_use` event, with the rejected permission's name inside the event's own
+`error` text, never on stderr. Every generated map is `allow`/`deny` only
+(§ 9, AC1), so an enabled dispatch's stderr carries that notice only when a
+target repository's own project config or a lower layer adds an `ask` entry
+this map does not already override — the project-config tamper gate (§ 8)
+is the control that closes that route. #1624's own failure classification
+(`OpenCodeAutoRejectMarker`, `internal/execution/opencode_usage.go`) reads
+stderr for the notice; whether it also needs a stdout-based path for a plain
+`deny` rejection, now that every dispatch's own map never emits `ask`, is
+package `execution`'s own tested concern, raised here as a finding rather
+than settled by this change.
+
 ## Consequences
 
 - The model layer's one-adapter-one-provider assumption becomes a special
