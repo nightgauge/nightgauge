@@ -391,6 +391,35 @@ func TestOpenCodeAboveMaxTestedRefusesAnEndpoint(t *testing.T) {
 	}
 }
 
+// TestOpenCodeAboveMaxTestedRefusesAnEndpointEvenWithTheCanaryEnvSet is the
+// production side of #1639's canary relaxation: openCodeCanaryRelax
+// (opencode_preflight.go) is nil in this default build — only
+// opencode_preflight_canary.go, gated behind the "canary" build tag no
+// production build ever adds, sets it — so setting NIGHTGAUGE_CANARY=true
+// alone, without that tag, must not relax the refusal this file's own
+// TestOpenCodeAboveMaxTestedRefusesAnEndpoint proves. Without this test, a
+// future change that reads the env var directly here instead of through the
+// nil-by-default hook would relax production silently.
+func TestOpenCodeAboveMaxTestedRefusesAnEndpointEvenWithTheCanaryEnvSet(t *testing.T) {
+	t.Setenv("NIGHTGAUGE_CANARY", "true")
+	preflightEnv(t)
+	m := openCodeManifestForTest(t)
+	above := patchStep(t, m.MaxTested, 1)
+	fake := installFakeOpenCode(t, fakeOpenCodeBehavior{version: above, debugConfig: echoContent})
+	err := pinnedAdapter(lmStudioSettings(), fake.path).PreDispatch(context.Background(), RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"})
+	if err == nil {
+		t.Fatal("an endpoint dispatch above max-tested was allowed with NIGHTGAUGE_CANARY=true set in a non-canary build")
+	}
+	for _, want := range []string{"adapter_incompatible", above, m.MaxTested, "endpoint lmstudio"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name %q: %v", want, err)
+		}
+	}
+	if n := fake.count(t, "debug config"); n != 0 {
+		t.Errorf("the self-test ran for a dispatch that is refused anyway")
+	}
+}
+
 // TestOpenCodePinnedBinaryIsCheckedSpawnedAndRecorded: opencode.binary pins
 // the binary the version policy reads, the one BuildCommand spawns, and the
 // one the dispatch record names.

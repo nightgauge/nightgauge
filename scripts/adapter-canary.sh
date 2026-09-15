@@ -14,9 +14,12 @@
 #                                         NIGHTGAUGE_FLAG_CONTRACT_HELP_DIR
 #                                         override reads. Also carries the
 #                                         committed testdata/cli-help sidecar
-#                                         (<capture>.txt.hidden) over when the
-#                                         version captured is the version that
-#                                         sidecar was probed on (#1617).
+#                                         (<capture>.txt.hidden) over onto the
+#                                         fresh capture whatever version it was
+#                                         itself probed on (#1617, #1639 round
+#                                         3): a hidden flag is judged on the
+#                                         evidence already probed for it, not
+#                                         auto-failed for the CLI being newer.
 #   flag-contract <dir>                  Run TestFlagContract once against
 #                                         every adapter's capture in dir (a
 #                                         shared directory captured for every
@@ -175,7 +178,10 @@ resolve_npm_version() {
     printf '%s\n' "$version"
     return
   fi
-  npm view "$pkg" version 2>/dev/null || die "npm view $pkg version failed"
+  # AC8 names an explicit timeout on every external command; npm view talks
+  # to the registry over the network, so it is bounded the same way every
+  # other network/CLI call in this script is.
+  bounded "$HELP_TIMEOUT" npm view "$pkg" version 2>/dev/null || die "npm view $pkg version failed"
 }
 
 cmd_install() {
@@ -255,17 +261,24 @@ cmd_capture_help() {
   } >"$outdir/$stem-$version.txt"
   rm -f "$raw"
 
-  # Carry over the committed hidden-flag sidecar (#1617) when this capture is
-  # at the exact version the committed one records: a probe done at that
-  # version is still valid evidence for TestFlagContract, so without this a
-  # fresh capture at an adapter's OWN max_tested (every pull_request run, and
-  # a daily/latest run when no new release shipped) reports every one of its
-  # hidden flags as a contract violation. A capture at a DIFFERENT version
-  # carries nothing over — that flag has not been probed there, and the
-  # contract reporting it is the daily run doing its job.
-  local committed="$COMMITTED_HELP_DIR/$stem-$version.txt"
-  if [ -f "$committed.hidden" ]; then
-    cp "$committed.hidden" "$outdir/$stem-$version.txt.hidden"
+  # Carry over the committed hidden-flag sidecar (#1617), whatever version it
+  # was probed on: a hidden flag a CLI does not document in its help tends to
+  # stay hidden and accepted release over release, so exact-match-only carried
+  # it forward on a pull_request run (every manifest CLI installed at its own
+  # already-approved max_tested) but auto-failed claude-headless and grok on
+  # EVERY daily/latest run after the next release shipped, because the
+  # freshly captured version then differs from the committed probe's own —
+  # judging the adapter for being newer instead of on its own captured flags
+  # (#1639 round 3). There is at most one committed sidecar per stem (a
+  # re-probe replaces it, per testdata/cli-help/README.md), so `ls -t | head`
+  # is exact, not a guess among several; nothing here re-probes automatically,
+  # so a flag genuinely dropped between the probed and the freshly captured
+  # version is still missed until a human re-probes it — the same limitation
+  # exact-match carryover already had for any version it DID carry forward to.
+  local committed
+  committed="$(ls -t "$COMMITTED_HELP_DIR/$stem"-*.txt.hidden 2>/dev/null | head -n1)"
+  if [ -n "$committed" ]; then
+    cp "$committed" "$outdir/$stem-$version.txt.hidden"
   fi
   echo "$outdir/$stem-$version.txt"
 }
@@ -286,12 +299,28 @@ flag_contract_capture_version() {
   done
 }
 
+# adapter_stem <adapter>: the file-name stem an adapter's captures use,
+# <adapter>[-<sub>] — the same stem cmd_capture_help writes and
+# flag_contract_test.go's findHelpCapture reads. Every path
+# flagContractProblems names is under this stem, so it is what attributes a
+# problem line that has no "<adapter>: " prefix to its real adapter.
+adapter_stem() {
+  local adapter="$1" sub
+  sub="$(help_subcommand "$adapter")"
+  printf '%s' "$adapter${sub:+-$sub}"
+}
+
 # cmd_flag_contract <helpdir>: runs TestFlagContract once against every
 # adapter's capture in helpdir (the daily/PR run captures every manifest CLI
 # into one shared directory first) and emits one JSON row per adapter: "pass"
 # with no captured help problem, or "fail" naming the offending flag — parsed
-# from the test's own `t.Error` lines, each of which already starts
-# "<adapter>: ..." (flagContractProblems' message shape).
+# from the test's own `t.Error` lines. Most already start "<adapter>: "
+# (flagContractProblems' message shape); the rest — a malformed capture
+# ("parsed only N options..."), a header/command/version mismatch, or an
+# orphan sidecar — name the capture's own path instead
+# (<stem>-<version>.txt[.hidden]), so they are attributed by that path to the
+# real adapter and the version IN THE PATH, never dropped and never filed
+# under a pseudo adapter with no version.
 cmd_flag_contract() {
   local helpdir
   helpdir="$(abspath "${1:?usage: flag-contract <helpdir>}")"
@@ -300,59 +329,82 @@ cmd_flag_contract() {
   ( cd "$REPO_ROOT" && NIGHTGAUGE_FLAG_CONTRACT_HELP_DIR="$helpdir" \
       bounded "$GOTEST_TIMEOUT" go test -v ./internal/execution/adapters -run TestFlagContract -count=1 ) >"$out" 2>&1 || rc=$?
 
+  # Every genuine problem line, both the per-adapter attribution below and the
+  # fallback after it read from this same set. flagContractProblems' NOTES
+  # (t.Log; not a contract violation — known-broken/hidden-flag bookkeeping
+  # and the helpNotCaptured skip reason) share go test's plain
+  # "file.go:N: message" shape with a real problem (t.Error), so the three
+  # note templates are excluded by name up front.
+  local problem_lines=""
+  if [ "$rc" -ne 0 ]; then
+    problem_lines="$(grep -E '_test\.go:[0-9]+:' "$out" \
+      | grep -v -E 'is known broken \(#[0-9]+\)' \
+      | grep -v -E 'is hidden in .*records it probed as accepted on' \
+      | grep -v -E ': flags not checked against help: ' \
+      || true)"
+  fi
+
   local adapters
   adapters="$(for f in "$MANIFESTS"/*.json; do basename "$f" .json; done)"
-  local adapter version failed any_failed=0
+  local adapter version failed
   for adapter in $adapters; do
     version="$(flag_contract_capture_version "$helpdir" "$adapter")"
     [ -n "$version" ] || version="$(manifest_field "$adapter" '.max_tested // ""')"
-    # go test's plain output does not distinguish a t.Error line (a real
-    # contract violation) from a t.Log note (known-broken/hidden-flag/skip
-    # bookkeeping) — both print as "file.go:N: message". When the suite as a
-    # whole passed (rc=0), NEITHER kind failed anything, so every adapter is
-    # reported pass regardless of what its notes say. Only on a genuine
-    # failure (rc!=0) is a line naming the adapter attributed to it.
+    # When the suite as a whole passed (rc=0), nothing failed anything, so
+    # every adapter is reported pass regardless of what its notes say.
     if [ "$rc" -eq 0 ]; then
       json_row adapter="$adapter" version="$version" check=flag-contract result=pass detail=""
       continue
     fi
-    # flagContractProblems' NOTES (t.Log; not a contract violation) share the
-    # plain "file.go:N: message" shape a real problem (t.Error) does, so the
-    # three note templates it uses (knownBroken/hidden-flag bookkeeping and
-    # the helpNotCaptured skip reason) are excluded by name before the first
-    # remaining "<adapter>: " line is taken as a genuine failure.
-    failed="$(grep -E '_test\.go:[0-9]+:' "$out" \
-      | grep -E "^\s*[a-z_.]+_test\.go:[0-9]+: ${adapter}: " \
-      | grep -v -E 'is known broken \(#[0-9]+\)' \
-      | grep -v -E 'is hidden in .*records it probed as accepted on' \
-      | grep -v -E ': flags not checked against help: ' \
-      | head -n1 || true)"
+    failed="$(printf '%s\n' "$problem_lines" | grep -E "^\s*[a-z_.]+_test\.go:[0-9]+: ${adapter}: " | head -n1 || true)"
+    local stem file_version=""
+    stem="$(adapter_stem "$adapter")"
+    if [ -z "$failed" ]; then
+      failed="$(printf '%s\n' "$problem_lines" | grep -E -- "${stem}-[0-9]+\.[0-9]+\.[0-9]+\.txt" | head -n1 || true)"
+      if [ -n "$failed" ]; then
+        file_version="$(printf '%s\n' "$failed" \
+          | grep -oE -- "${stem}-[0-9]+\.[0-9]+\.[0-9]+\.txt" | head -n1 \
+          | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')"
+      fi
+    fi
     if [ -n "$failed" ]; then
-      any_failed=1
-      json_row adapter="$adapter" version="$version" check=flag-contract result=fail \
+      json_row adapter="$adapter" version="${file_version:-$version}" check=flag-contract result=fail \
         detail="$(echo "$failed" | sed -E "s/^[^:]+:[0-9]+: //")"
     else
       json_row adapter="$adapter" version="$version" check=flag-contract result=pass detail=""
     fi
   done
 
-  # A genuine failure (rc!=0) whose t.Error line is not prefixed
-  # "<adapter>: " — flagContractProblems reports several this way: a
-  # malformed capture ("parsed only N options..."), a header/command/version
-  # mismatch, or an orphan sidecar — is attributed to no adapter above, so
-  # every row above reads "pass" even though the suite failed. Without this,
-  # `report` (which only acts on result == "fail") files nothing for exactly
-  # the kind of break — a help-format change — this leg exists to catch.
-  if [ "$rc" -ne 0 ] && [ "$any_failed" -eq 0 ]; then
-    local fallback
-    fallback="$(grep -E '_test\.go:[0-9]+:' "$out" \
-      | grep -v -E 'is known broken \(#[0-9]+\)' \
-      | grep -v -E 'is hidden in .*records it probed as accepted on' \
-      | grep -v -E ': flags not checked against help: ' \
-      | head -n1 || true)"
-    [ -n "$fallback" ] || fallback="$(tail -n 5 "$out" | tr '\n' ' ')"
-    json_row adapter=flag-contract version="" check=flag-contract result=fail \
-      detail="$(echo "$fallback" | sed -E 's/^[^:]+:[0-9]+: //')"
+  # A genuine failure (rc!=0) whose t.Error line names no known adapter,
+  # neither by an "<adapter>: " prefix nor by one of its own capture paths —
+  # a manifest-level problem, not a per-adapter one — is attributed to no row
+  # above. `report` only acts on result == "fail", so without this a problem
+  # of this shape is filed nowhere even though SOME OTHER adapter's own row
+  # already carries its own failure: any_failed alone no longer suppresses
+  # this. There is no real adapter+version to name it with, so, and only
+  # here, it is filed as adapter="flag-contract" version="" — never as a
+  # substitute for the per-adapter attribution above, which handles every
+  # problem flagContractProblems is observed to raise today.
+  if [ "$rc" -ne 0 ]; then
+    local remaining="$problem_lines"
+    for adapter in $adapters; do
+      remaining="$(printf '%s\n' "$remaining" | grep -v -E "^\s*[a-z_.]+_test\.go:[0-9]+: ${adapter}: " || true)"
+      stem="$(adapter_stem "$adapter")"
+      remaining="$(printf '%s\n' "$remaining" | grep -v -E -- "${stem}-[0-9]+\.[0-9]+\.[0-9]+\.txt" || true)"
+    done
+    remaining="$(printf '%s\n' "$remaining" | grep -E '_test\.go:[0-9]+:' || true)"
+    if [ -z "$remaining" ] && [ -z "$problem_lines" ]; then
+      # go test itself produced no attributable line at all (a build failure,
+      # a panic before any subtest ran): the last 5 lines are the best detail
+      # available, so at least ONE row still tells `report` something broke.
+      remaining="$(tail -n 5 "$out" | tr '\n' ' ')"
+    fi
+    if [ -n "$remaining" ]; then
+      local fallback
+      fallback="$(printf '%s\n' "$remaining" | head -n1)"
+      json_row adapter=flag-contract version="" check=flag-contract result=fail \
+        detail="$(echo "$fallback" | sed -E 's/^[^:]+:[0-9]+: //')"
+    fi
   fi
   rm -f "$out"
   return "$rc"
@@ -374,18 +426,63 @@ cmd_opencode_canary() {
   version="${2:-}"
   [ -n "$version" ] || version="$(manifest_field opencode '.max_tested // ""')"
   out="$(mktemp "${TMPDIR:-/tmp}/adapter-canary-opencode.XXXXXX")"
+  # Also ./internal/execution/adapters: TestOpenCodeCanaryRelax* there is the
+  # #1639 round-3 regression for openCodeCanaryRelax (opencode_preflight.go),
+  # the canary-only relaxation that lets THIS run's dispatch through the
+  # endpoint-above-max-tested refusal. It needs no live binary (a fake, like
+  # the rest of that package's tests), so running it here costs nothing and
+  # means the relaxation itself is proven on every canary invocation, not
+  # just by hand.
   ( cd "$REPO_ROOT" && PATH="$dir:$PATH" CI=true NIGHTGAUGE_CANARY=true \
-      bounded "$GOTEST_TIMEOUT" go test -tags canary ./internal/execution -run TestOpenCodeCanary -count=1 ) >"$out" 2>&1 || rc=$?
+      bounded "$GOTEST_TIMEOUT" go test -tags canary ./internal/execution ./internal/execution/adapters \
+        -run 'TestOpenCodeCanary' -count=1 ) >"$out" 2>&1 || rc=$?
   if [ "$rc" -eq 0 ]; then
     json_row adapter=opencode version="$version" check=opencode-canary result=pass detail=""
   else
     local detail
-    detail="$(grep -m1 -E '^\s+.*_test\.go:[0-9]+:' "$out" | sed 's/^ *//' || true)"
+    detail="$(opencode_canary_failing_line "$out")"
     [ -n "$detail" ] || detail="$(tail -n 5 "$out" | tr '\n' ' ')"
     json_row adapter=opencode version="$version" check=opencode-canary result=fail detail="$detail"
   fi
   rm -f "$out"
   return "$rc"
+}
+
+# opencode_canary_failing_line <go-test-output-file>: the line naming the
+# actual failure, not a t.Logf notice — go test -v's plain text does not tag
+# which indented "file.go:N: message" line came from t.Error versus t.Log
+# (realOpenCode's own "opencode %s is installed (canary: pin relaxed ...)"
+# notice, printed by nearly every case here once the installed version
+# differs from the pinned 1.18.30 baseline, shares the exact shape). Every
+# case that fails prints a "--- FAIL: TestName" summary once its own output
+# is flushed, so the LAST "file.go:N:" line directly above the FIRST such
+# summary is that failing case's own last word — a t.Fatalf's line, or an
+# accumulated t.Error's last one — never an early notice a passing prefix of
+# the same test printed first.
+opencode_canary_failing_line() {
+  python3 - "$1" <<'PY'
+import re, sys
+
+lines = open(sys.argv[1]).read().split("\n")
+detail_re = re.compile(r'^\s+\S.*_test\.go:\d+:')
+fail_re = re.compile(r'^\s*--- FAIL:')
+
+fail_at = next((i for i, l in enumerate(lines) if fail_re.match(l)), None)
+detail = ""
+if fail_at is not None:
+    for i in range(fail_at - 1, -1, -1):
+        if detail_re.match(lines[i]):
+            detail = lines[i].strip()
+            break
+        if lines[i].strip():
+            break
+if not detail:
+    for l in lines:
+        if detail_re.match(l):
+            detail = l.strip()
+            break
+print(detail)
+PY
 }
 
 # ---------------------------------------------------------------------------
@@ -502,9 +599,12 @@ PY
 # stub-run: start/stop the real stub-provider BINARY (cmd/stub-provider),
 # bounded, PID captured and confirmed dead. Used only by
 # scripts/test-adapter-canary.sh to exercise the timeout/cleanup contract
-# directly — the workflow's own opencode-canary leg never calls these; its
-# stub run is the Go test's in-process one (stubprovider.NewServer), whose
-# stream this script has no way to capture.
+# directly at the shell level — the workflow's own opencode-canary leg never
+# calls these; its stub run is opencode_canary_test.go's own
+# startOpenCodeCanaryStub, which spawns this SAME binary as a real subprocess
+# per test and captures/kills/confirms its PID in that test's own t.Cleanup
+# (AC8), so this shell-level pair and that Go-level one prove the identical
+# lifecycle contract, one directly and one through the Go test's own process.
 # ---------------------------------------------------------------------------
 
 # opencode_canary_stub_start <script> <pidfile> <urlfile>: builds (if needed)

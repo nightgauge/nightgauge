@@ -1441,6 +1441,23 @@ manifest's, and its remediation is the managed install,
   refusal names the installed version and max-tested, and its remediation is a
   `binary` pin to a max-tested build. Hosted dispatch continues under the
   warning and self-test above.
+  **The #1639 canary's own leg is the one exception**, and only there: this
+  same refusal is what would otherwise keep the daily/PR canary from ever
+  driving a real newer release through the endpoint the stub provider serves
+  on (`lmstudio`), leaving it unable to tell "new and working" from "new and
+  broken." `openCodeEndpointAboveMaxTested`'s refusal is skipped when a
+  package-level hook, `openCodeCanaryRelax`, is both non-nil and returns true
+  for the dispatched model; the self-test below still runs. The hook is set
+  only by `opencode_preflight_canary.go`, a file gated behind the `canary`
+  build tag no production build (`cmd/nightgauge`, the VS Code extension
+  bundle, `scripts/clean-install-e2e.sh`) ever adds, and even then only once
+  the explicit `NIGHTGAUGE_CANARY=true` signal `scripts/adapter-canary.sh`'s
+  `cmd_opencode_canary` sets is read at call time. A default build's
+  `openCodeCanaryRelax` is nil regardless of environment, so the refusal above
+  holds for every real dispatch;
+  `TestOpenCodeAboveMaxTestedRefusesAnEndpointEvenWithTheCanaryEnvSet`
+  (`opencode_preflight_test.go`, no build tag, run by the default
+  `go test ./...`) is the regression for that.
 - **Drift.** Every dispatch that passes records the binary and version it was
   checked against in `~/.nightgauge/opencode/last-dispatch.json`, and the
   doctor warns when the binary it resolves now reports another version.

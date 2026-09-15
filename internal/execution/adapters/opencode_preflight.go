@@ -486,6 +486,22 @@ func CheckOpenCodeVersion(bin OpenCodeBinary, version string, versionErr error, 
 	return p, nil
 }
 
+// openCodeCanaryRelax is nil in every production build. The #1639 canary leg
+// exists to run the INSTALLED latest release of opencode through this exact
+// refusal path, not just warn about it — otherwise the daily run can never
+// tell "new and working" from "new and broken" for a model server endpoint.
+// Only opencode_preflight_canary.go, gated behind the "canary" build tag that
+// reaches nothing but `go test -tags canary` (scripts/adapter-canary.sh's own
+// invocation; no production build ever adds that tag — see
+// scripts/clean-install-e2e.sh and the cmd/nightgauge build), sets this at
+// init(), and even then only relaxes once the explicit NIGHTGAUGE_CANARY=true
+// signal is read from the environment at call time. A production binary
+// therefore cannot reach the relaxation by any dispatch input: the var stays
+// nil regardless of environment. TestOpenCodeAboveMaxTestedRefusesAnEndpoint
+// EvenWithTheCanaryEnvSet (opencode_preflight_test.go, no build tag, run by
+// the default `go test ./...`) proves it.
+var openCodeCanaryRelax func(model string) bool
+
 // OpenCodeEndpointAboveMaxTested refuses a dispatch of model to a model server
 // the operator runs (a declared endpoint, or the lmstudio or ollama key) on a
 // binary newer than max-tested (ADR-022 § 20, § Endpoints), and returns nil
@@ -493,6 +509,11 @@ func CheckOpenCodeVersion(bin OpenCodeBinary, version string, versionErr error, 
 // endpoint ids are safe, is read from the max-tested binary's catalog, and no
 // self-test can re-check it. The caller has established p.AboveMaxTested.
 func OpenCodeEndpointAboveMaxTested(p OpenCodeVersionPolicy, model string, endpoints []OpenCodeEndpoint, home string) error {
+	if openCodeCanaryRelax != nil && openCodeCanaryRelax(model) {
+		fmt.Fprintf(os.Stderr, "[opencode] WARNING: canary relaxation lets opencode %s (%s) dispatch model %q above the max-tested %s: the self-test below still runs\n",
+			p.Version, p.Binary.Path, model, p.MaxTested)
+		return nil
+	}
 	key := openCodeDispatchProvider(model)
 	if _, declared := findOpenCodeEndpoint(endpoints, key); !declared && !openCodeIsLocalKey(model) {
 		return nil

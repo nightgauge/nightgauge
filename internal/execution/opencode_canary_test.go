@@ -51,6 +51,7 @@ package execution
 // diverge.
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -60,11 +61,12 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
-	"github.com/nightgauge/nightgauge/internal/stubprovider"
 )
 
 // openCodeCanaryModel dispatches to the stub provider through the machine
@@ -73,32 +75,114 @@ import (
 // (flagContractModel, schemaContractConfigs).
 const openCodeCanaryModel = "lmstudio/stub/stub-model"
 
-// startOpenCodeCanaryStub serves script on loopback, bounded the way the
-// shell leg's `stub-provider --max-requests 20 --idle-timeout 60s` is, and
-// returns its OpenAI-compatible base URL. The server is stopped, and its
-// goroutine's exit observed, when t ends.
+// stubProviderCanaryBinary builds the real cmd/stub-provider binary once for
+// the whole test binary run (not per test), the same way
+// internal/stubprovider/server_test.go's own buildStubProviderBinary does —
+// by Go import path, so it resolves from whatever package directory `go
+// test` set as cwd, not a path relative to this file. AC8 names a stub PID
+// "captured, killed and confirmed dead", which only a real OS subprocess —
+// never the in-process stubprovider.NewServer this file used before round 3
+// — has one of.
+var stubProviderCanaryBinary = sync.OnceValues(func() (string, error) {
+	dir, err := os.MkdirTemp("", "nightgauge-canary-stub-provider-")
+	if err != nil {
+		return "", err
+	}
+	bin := filepath.Join(dir, "stub-provider")
+	cmd := exec.Command("go", "build", "-o", bin, "github.com/nightgauge/nightgauge/cmd/stub-provider")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("building cmd/stub-provider: %w\n%s", err, out)
+	}
+	return bin, nil
+})
+
+// startOpenCodeCanaryStub spawns the real stub-provider BINARY as its own OS
+// process, serving script on loopback, bounded the way the shell leg's
+// `stub-provider --max-requests 20 --idle-timeout 60s` is (AC8), and returns
+// its OpenAI-compatible base URL. Its PID is captured at spawn.
+// t.Cleanup — which the testing package runs whether the test passes, fails
+// or panics, the same unconditional guarantee an `if: always()` workflow
+// step gives a shell-spawned process — sends SIGTERM, waits up to 2s,
+// escalates to SIGKILL, and fails the test if the PID is somehow still alive
+// after that: the stub is never left running past the test that started it.
 func startOpenCodeCanaryStub(t *testing.T, script string) string {
 	t.Helper()
-	stub, err := stubprovider.NewServer(stubprovider.Config{
-		Script: script, MaxRequests: 20, IdleTimeout: 60 * time.Second,
-	})
+	base, _ := startOpenCodeCanaryStubWithPID(t, script)
+	return base
+}
+
+// startOpenCodeCanaryStubWithPID is startOpenCodeCanaryStub, also returning
+// the spawned PID so TestOpenCodeCanaryStubIsKilledAndConfirmedDead can
+// verify AC8's contract directly, rather than through this package's own
+// unexported t.Cleanup succeeding silently.
+func startOpenCodeCanaryStubWithPID(t *testing.T, script string) (baseURL string, pid int) {
+	t.Helper()
+	bin, err := stubProviderCanaryBinary()
 	if err != nil {
 		t.Fatal(err)
 	}
-	ln, err := stubprovider.Listen("127.0.0.1:0")
+	cmd := exec.Command(bin, "--script", script, "--listen", "127.0.0.1:0",
+		"--max-requests", "20", "--idle-timeout", "60s")
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("stub-provider StdoutPipe: %v", err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	served := make(chan error, 1)
-	go func() { served <- stub.Serve(ctx, ln) }()
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting stub-provider: %v", err)
+	}
+	pid = cmd.Process.Pid
+
+	// Reap the child as soon as it exits: kill(pid, 0) below would otherwise
+	// keep succeeding on a zombie until something calls Wait.
+	waitDone := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(waitDone)
+	}()
+
 	t.Cleanup(func() {
-		cancel()
-		if err := <-served; err != nil {
-			t.Errorf("the stub provider stopped with %v", err)
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+		wait := func(d time.Duration) bool {
+			select {
+			case <-waitDone:
+				return true
+			case <-time.After(d):
+				return false
+			}
+		}
+		if !wait(2 * time.Second) {
+			_ = cmd.Process.Kill()
+			wait(2 * time.Second)
+		}
+		if err := syscall.Kill(pid, 0); err == nil {
+			t.Errorf("stub-provider pid %d is still alive after cleanup", pid)
 		}
 	})
-	return "http://" + ln.Addr().String() + "/v1"
+
+	lineCh, errCh := make(chan string, 1), make(chan error, 1)
+	go func() {
+		line, err := bufio.NewReader(stdout).ReadString('\n')
+		if err != nil {
+			errCh <- err
+			return
+		}
+		lineCh <- line
+	}()
+	var line string
+	select {
+	case line = <-lineCh:
+	case err := <-errCh:
+		t.Fatalf("reading stub-provider's base_url: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("stub-provider did not print its base_url in time")
+	}
+	var payload struct {
+		BaseURL string `json:"base_url"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(line)), &payload); err != nil {
+		t.Fatalf("stub-provider printed %q, not the base_url JSON line: %v", line, err)
+	}
+	return payload.BaseURL, pid
 }
 
 // openCodeCanaryDirectRunID is a fixed, valid run identity (runstate.IsIdentity),
@@ -485,5 +569,29 @@ func TestOpenCodeCanaryBadModel(t *testing.T) {
 	}
 	if !sawError {
 		t.Errorf("the bad-model run's stdout carries no type:\"error\" event:\n%s\nstderr:\n%s", result.Stdout, stderr)
+	}
+}
+
+// TestOpenCodeCanaryStubIsKilledAndConfirmedDead is AC8's own regression test
+// for startOpenCodeCanaryStub: it needs no live opencode binary, only the
+// stub-provider binary this package now builds and spawns as a real
+// subprocess. The stub is started inside a t.Run subtest, so its own
+// t.Cleanup — the unconditional guarantee this file's comments claim — has
+// already run by the time this test observes the PID afterward: if the
+// process were still alive, kill(pid, 0) below would say so.
+func TestOpenCodeCanaryStubIsKilledAndConfirmedDead(t *testing.T) {
+	var pid int
+	t.Run("spawn and use the stub", func(t *testing.T) {
+		var base string
+		base, pid = startOpenCodeCanaryStubWithPID(t, "tool-edit-stop")
+		if base == "" {
+			t.Fatal("startOpenCodeCanaryStubWithPID returned no base_url")
+		}
+		if err := syscall.Kill(pid, 0); err != nil {
+			t.Fatalf("the stub-provider pid %d is not alive right after spawn: %v", pid, err)
+		}
+	})
+	if err := syscall.Kill(pid, 0); err == nil {
+		t.Fatalf("stub-provider pid %d is still alive after its own t.Cleanup ran: AC8's kill-and-confirm-dead contract did not hold", pid)
 	}
 }

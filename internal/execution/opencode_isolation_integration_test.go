@@ -142,7 +142,20 @@ func TestRealOpenCodePinRelaxedUnderCanary(t *testing.T) {
 	run := func(canary bool) (passed bool, output []byte) {
 		t.Helper()
 		cmd := exec.Command(os.Args[0], "-test.run=^TestRealOpenCodePinRelaxedUnderCanaryHelper$", "-test.v")
-		env := append(os.Environ(),
+		// Filter any inherited NIGHTGAUGE_CANARY out of the base environment
+		// before deciding whether to set it: this test's own outer process can
+		// carry it (scripts/adapter-canary.sh's cmd_opencode_canary sets it for
+		// the whole `go test -tags canary` invocation this file's package now
+		// runs under), and without filtering, run(false) would inherit
+		// "true" and wrongly pass the "pin still holds" case it exists to
+		// prove.
+		var env []string
+		for _, kv := range os.Environ() {
+			if !strings.HasPrefix(kv, nightgaugeCanaryEnv+"=") {
+				env = append(env, kv)
+			}
+		}
+		env = append(env,
 			realOpenCodePinHelperEnv+"=1",
 			"PATH="+fake+string(os.PathListSeparator)+os.Getenv("PATH"),
 		)

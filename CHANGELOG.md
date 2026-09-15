@@ -101,7 +101,22 @@ changelog, and the release workflow refuses a tag that does not.
   changes a manifest's `max_tested`, at that proposed version, and a `report`
   job (`issues: write` only, no secrets, no CLI or model) files or updates one
   open `canary: <adapter> <version> drift` issue per failing adapter+version
-  from the run's JSON summary (#1639)
+  from the run's JSON summary. Above `max_tested`, OpenCode's own
+  endpoint-above-max-tested refusal (ADR-022 § 20) would otherwise block the
+  canary from ever driving a real release through the stream contract, so a
+  canary-only relaxation (`openCodeCanaryRelax`, gated behind the `canary`
+  build tag no production build carries, and only under the explicit
+  `NIGHTGAUGE_CANARY=true` signal) lets the leg's own dispatch through while a
+  production build's refusal is unchanged; the row records the INSTALLED
+  version. The `opencode-canary` job's stream/permission/bad-model leg and its
+  schema-diff leg each run regardless of the other's outcome, and the job
+  itself goes red if either failed. The `flag-contract` leg attributes a
+  malformed or dropped-flag capture to its own adapter and version rather than
+  a version-less placeholder, and carries a CLI's hidden, undocumented flags
+  forward onto a newer capture instead of failing every adapter with one on
+  its next release. The OpenCode leg's stub now runs as a real `stub-provider`
+  subprocess per test, its PID captured, killed and confirmed dead in that
+  test's own cleanup (#1639)
 - The OpenCode config schema published for the newest tested OpenCode
   (1.18.30) is now pinned in the repository, and a contract test validates
   every per-run config the builder generates against it, across LM Studio,
