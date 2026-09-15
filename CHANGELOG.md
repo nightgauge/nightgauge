@@ -16,6 +16,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- Both READMEs now link the extension's Open VSX listing beside the VS Code
+  Marketplace, so users of VSCodium, Cursor, Windsurf and other Open VSX-based
+  editors have a documented install path; the root README gains an Open VSX
+  version badge (#1788)
 - `nightgauge skill render`'s overlay cascade gains a host segment ahead of
   provider (`OverlayKeys` now returns host → provider → id), keyed by the
   execution adapter itself so it resolves even when the model does not — an
