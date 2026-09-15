@@ -321,8 +321,9 @@ opencode:
 
   Nightgauge never writes into your own OpenCode config directory
   (`~/.opencode`, or your XDG OpenCode config directory once this is on) —
-  see [ADR-022 § "Nightgauge OpenCode plugin, sixth fix
-  round"](decisions/022-opencode-multi-provider-adapter.md). OpenCode's own
+  see [ADR-022 § "Nightgauge OpenCode
+  plugin"](decisions/022-opencode-multi-provider-adapter.md#nightgauge-opencode-plugin-amendment-2026-09-15-1635).
+  OpenCode's own
   install into either is your own environment, exactly as it is in your own
   `opencode` runs, which on a machine with no reachable registry can take a
   while: a dispatch touching either directory bounds that wait and fails the

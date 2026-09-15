@@ -296,15 +296,16 @@ func TestInstallNightgaugePluginNeverWritesInheritedConfigDir(t *testing.T) {
 
 // TestInstallNightgaugePluginDoesNotRiskASatisfiedOperatorDir (#1635/A11
 // round 8, ADR-022 amendment 2026-09-15, correcting round 7): a
-// $HOME/.opencode already holding the FULL set opencode 1.18.30's own "is
-// @opencode-ai/plugin already installed" check reads (not only the version
-// marker — depsdata/README.md's table) is NOT flagged as a risk. Round 7
+// $HOME/.opencode already holding what opencode 1.18.30's own "is
+// @opencode-ai/plugin already installed" check requires (not only the
+// version marker — depsdata/README.md) is NOT flagged as a risk. Round 7
 // flagged a satisfied directory too, on a re-measurement that seeded only
 // the version marker and found the wait unchanged; driven directly against
-// the real 1.18.30 binary with the full four-file set this test seeds, a
-// satisfied operator directory DOES get OpenCode's local, instant fast path
-// (~1s for `debug config`), the same as a run's own XDG-resolved config
-// directory — round 7's premise does not hold once the full set is what is
+// the real 1.18.30 binary with the full four-file archive this test seeds
+// (a superset of what OperatorInstallSatisfied itself reads), a satisfied
+// operator directory DOES get OpenCode's local, instant fast path (~1s for
+// `debug config`), the same as a run's own XDG-resolved config directory —
+// round 7's premise does not hold once the real predicate is what is
 // actually checked and seeded. Flagging (and so arming the watchdog for) a
 // directory that never waits on the registry at all would leave narrowed
 // AC1's online case indistinguishable from a genuine install wait.
@@ -312,10 +313,11 @@ func TestInstallNightgaugePluginDoesNotRiskASatisfiedOperatorDir(t *testing.T) {
 	stubPluginDependencySeeder(t)
 	home := t.TempDir()
 	operatorOpenCode := filepath.Join(home, ".opencode")
-	// The full four-file set OperatorInstallSatisfied checks — exactly what
-	// WriteDependencies extracts for a run's own directory, used here only as
-	// a test fixture for an operator-owned one (production code never writes
-	// there; see opencode_plugin_deps.go's operatorInstallRisk doc comment).
+	// The full four-file archive — a superset of what OperatorInstallSatisfied
+	// itself reads — exactly what WriteDependencies extracts for a run's own
+	// directory, used here only as a test fixture for an operator-owned one
+	// (production code never writes there; see opencode_plugin_deps.go's
+	// operatorInstallRisk doc comment).
 	if err := opencodeplugin.WriteDependencies(operatorOpenCode); err != nil {
 		t.Fatal(err)
 	}
@@ -332,15 +334,15 @@ func TestInstallNightgaugePluginDoesNotRiskASatisfiedOperatorDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := run.Env[opencodeplugin.EnvOperatorInstallRisk]; got != "" {
-		t.Errorf("run.Env[%s] = %q, want \"\": a $HOME/.opencode already holding the full set opencode's own check reads gets the local, instant fast path, so the watchdog must not be armed for it", opencodeplugin.EnvOperatorInstallRisk, got)
+		t.Errorf("run.Env[%s] = %q, want \"\": a $HOME/.opencode already satisfying opencode's own check gets the local, instant fast path, so the watchdog must not be armed for it", opencodeplugin.EnvOperatorInstallRisk, got)
 	}
 }
 
 // TestInstallNightgaugePluginStillRisksAnUnsatisfiedOperatorDir: a
-// $HOME/.opencode that exists but holds only the version marker — not the
-// full set opencode's own check reads — is still flagged as a risk, exactly
-// like one holding nothing at all (#1635/A11 round 8: only a directory
-// OperatorInstallSatisfied's full-set check actually passes is exempt).
+// $HOME/.opencode that exists but holds only the version marker — which
+// opencode's own check does not read at all — is still flagged as a risk,
+// exactly like one holding nothing at all (#1635/A11 round 8: only a
+// directory OperatorInstallSatisfied actually reports satisfied is exempt).
 func TestInstallNightgaugePluginStillRisksAnUnsatisfiedOperatorDir(t *testing.T) {
 	stubPluginDependencySeeder(t)
 	home := t.TempDir()

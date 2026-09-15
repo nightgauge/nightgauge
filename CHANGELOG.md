@@ -196,9 +196,11 @@ changelog, and the release workflow refuses a tag that does not.
   from an embedded, version-pinned copy of `@opencode-ai/plugin@1.18.30` (no
   npm binary, no lifecycle script and no network request, ever): a small,
   four-file archive extracted outright (`package.json`, both lockfiles, and
-  `@opencode-ai/plugin`'s own version marker — exactly what opencode's "is
-  it installed" check reads for that directory, under 5 KB gzipped, cut from
-  an ~11 MB, 3,886-file capture of the whole installed dependency tree,
+  `@opencode-ai/plugin`'s own version marker — what a real install for that
+  directory also produces, though opencode's own "is it installed" check
+  reads only `package.json` and `package-lock.json` by dependency name — under
+  5 KB gzipped, cut from an ~11 MB, 3,886-file capture of the whole installed
+  dependency tree,
   since neither opencode's plugin loader nor the Nightgauge plugin ever
   resolve anything else in that tree at runtime), regenerated deterministically
   by `internal/execution/opencodeplugin/depsdata/regenerate`
@@ -228,10 +230,12 @@ changelog, and the release workflow refuses a tag that does not.
   on that install, but the wait is now bounded and the failure classified
   rather than left to hang or to read as an unclassified timeout: the
   manager starts a watchdog the instant such a dispatch's config touches an
-  unsatisfied directory, bounded by a duration well above the ~70-80s a
-  legitimate, reachable-registry install takes (so the online case — an
-  operator with an actual internet connection, exactly as their own
-  OpenCode run would be — still completes) but capped at whatever remains
+  unsatisfied directory, bounded at 100s — headroom above the tens of
+  seconds a legitimate, reachable-registry install can take (so the online
+  case — an operator with an actual internet connection, exactly as their
+  own OpenCode run would be — still completes), while still catching the
+  truly unbounded case: an unreachable registry's own retry/backoff window,
+  observed at ~71s-146.88s in production — but capped at whatever remains
   of the stage's own timeout. The watchdog stands down on EITHER of two
   independent signals, whichever arrives first: the directory becoming
   satisfied (checked read-only, polled every second or two, never written)

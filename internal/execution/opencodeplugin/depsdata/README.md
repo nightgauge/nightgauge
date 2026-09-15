@@ -16,18 +16,31 @@ opencode 1.18.30 installs the npm package `@opencode-ai/plugin` into any
 OpenCode config directory whose resolved config carries a non-empty `plugin`
 array, independent of whether a plugin file actually imports that package,
 and every invocation that resolves such a config waits for that install
-before doing anything else. Driving the real, pinned 1.18.30 binary against
-progressively smaller trees (`opencode debug config`, offline, timed) — the
-#1635 fix round 2 methodology, repeated here for anyone re-verifying it —
-established that opencode's own "is this already installed" check reads
-exactly four files:
+before doing anything else.
+
+opencode's own "is this already installed" check (`Npm.install`, pulled from
+the pinned binary's own strings and driven against it directly — a later
+#1635/A11 fix round, correcting round 8 below) reads only two of the files a
+real install produces: it is satisfied if the directory is not writable, or
+if `node_modules` exists and every dependency name `package.json` declares
+(`dependencies`, `devDependencies`, `peerDependencies`,
+`optionalDependencies`, plus `@opencode-ai/plugin` itself) is present among
+the keys of `package-lock.json`'s own root (`""`) `packages` entry — by name
+only, never by version. It never reads `node_modules/.package-lock.json` or
+the installed package's own version marker at all.
+
+Driving the real, pinned 1.18.30 binary against progressively smaller trees
+(`opencode debug config`, offline, timed) — the #1635 fix round 2
+methodology, repeated here for anyone re-verifying it — established that a
+run's own OpenCode config directory needs exactly four files present for
+that install to be skipped:
 
 | File                                            | Role                                                                                         |
 | ----------------------------------------------- | -------------------------------------------------------------------------------------------- |
 | `package.json`                                  | the resolved dependency declaration (`{"dependencies":{"@opencode-ai/plugin":"<version>"}}`) |
 | `package-lock.json`                             | the root npm lockfile                                                                        |
 | `node_modules/.package-lock.json`               | npm's own hidden lockfile                                                                    |
-| `node_modules/@opencode-ai/plugin/package.json` | the version marker opencode compares against `package.json`                                  |
+| `node_modules/@opencode-ai/plugin/package.json` | the installed package's own version marker (opencode's own check never reads it)             |
 
 The archive holds exactly those four files — nothing else, not even
 `node_modules/@opencode-ai/plugin/dist/`. Removing any one of the four and
@@ -142,10 +155,11 @@ Then update `opencodeplugin.DepsVersion` in `deps.go` to match —
 `TestDepsArchiveMatchesPinnedVersion` fails until both agree — and re-run the
 real-binary integration suite
 (`go test -tags opencode_integration ./internal/execution/... ./internal/execution/opencodeplugin/...`)
-to reconfirm the four-file set is still everything the new version's install
-check reads: opencode's own check is an implementation detail this
-repository does not control, and a future version could read one more file
-than 1.18.30 does.
+to reconfirm the four-file set is still sufficient for the new version's
+install check to be skipped, and that `OperatorInstallSatisfied`'s predicate
+still matches what the new version's own check reads: opencode's own check
+is an implementation detail this repository does not control, and a future
+version could read a different file than 1.18.30 does.
 
 ## Size budget
 

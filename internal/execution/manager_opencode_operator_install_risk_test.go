@@ -394,8 +394,8 @@ func TestOpenCodeOperatorInstallRiskStandsDownWhenDirectoryBecomesSatisfied(t *t
 
 // TestOpenCodeOperatorInstallRiskNeverArmsForAnAlreadySatisfiedDirectory
 // (#1635/A11 round 8, ADR-022 amendment 2026-09-15, correcting round 7): an
-// operator directory that ALREADY satisfies the pin — the full four-file set
-// — BEFORE this dispatch ever spawns opencode never arms the watchdog at
+// operator directory that ALREADY satisfies opencode's own install check
+// BEFORE this dispatch ever spawns opencode never arms the watchdog at
 // all, so a silent stretch far longer than the shortened bound (standing in
 // for a slow first model token, e.g. a local model prefilling a large
 // prompt) is never mistaken for a hung install and never killed. Round 7's
@@ -407,10 +407,11 @@ func TestOpenCodeOperatorInstallRiskNeverArmsForAnAlreadySatisfiedDirectory(t *t
 	home := isolateOpenCodeHome(t)
 	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
 	operatorOpenCode := filepath.Join(home, ".opencode")
-	// The full four-file set OperatorInstallSatisfied checks, written BEFORE
-	// the dispatch, standing in for "the operator already ran opencode
-	// themselves" — never written by production code for an operator-owned
-	// directory (opencode_plugin_deps.go's operatorInstallRisk doc comment).
+	// The full four-file archive (a superset of what OperatorInstallSatisfied
+	// itself reads), written BEFORE the dispatch, standing in for "the
+	// operator already ran opencode themselves" — never written by
+	// production code for an operator-owned directory (opencode_plugin_deps.go's
+	// operatorInstallRisk doc comment).
 	if err := opencodeplugin.WriteDependencies(operatorOpenCode); err != nil {
 		t.Fatal(err)
 	}

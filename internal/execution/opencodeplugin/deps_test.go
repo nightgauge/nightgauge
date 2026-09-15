@@ -373,10 +373,13 @@ func TestDepsArchiveSizeBudget(t *testing.T) {
 }
 
 // TestDepsArchiveHoldsOnlyThePinnedFourFiles pins the trimmed archive's own
-// contents: exactly the four files opencode 1.18.30's own install check
-// reads (depsdata/README.md), nothing from the full @opencode-ai/plugin
-// dependency closure. Re-embedding the whole installed tree (the pre-trim
-// shape) turns this red.
+// contents: exactly the four files that satisfy opencode 1.18.30's own
+// install check for a run's own directory (depsdata/README.md), nothing
+// from the full @opencode-ai/plugin dependency closure. The check itself
+// reads only two of them, by dependency name (OperatorInstallSatisfied's
+// doc comment); the other two are what a real install also produces.
+// Re-embedding the whole installed tree (the pre-trim shape) turns this
+// red.
 func TestDepsArchiveHoldsOnlyThePinnedFourFiles(t *testing.T) {
 	want := map[string]bool{
 		"package.json":                                  true,

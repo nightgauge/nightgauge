@@ -1790,12 +1790,11 @@ elsewhere in this document; both are about `scripts/adapter-canary.sh`'s own
 ## Nightgauge OpenCode plugin (amendment 2026-09-15, #1635)
 
 This section states the final design #1635 shipped. The build-out history —
-what each review round found and how the design got here — lived in seven
+what was found along the way and how the design got here — lived in seven
 prior amendment sections in this document; it is now recorded instead in
 [nightgauge/nightgauge#1635](https://github.com/nightgauge/nightgauge/issues/1635)'s
 own comments, which this section links where a specific decision needs
-attribution, per the delegation the runbook's two-round review limit
-describes.
+attribution.
 
 **Handshake.** The adapter deletes any stale sentinel and exports
 `NIGHTGAUGE_OPENCODE_PLUGIN_NONCE` before spawn; the plugin's init writes
@@ -1850,12 +1849,15 @@ embedded, version-pinned, read-only archive
 (`internal/execution/opencodeplugin/depsdata/opencode-ai-plugin-1.18.30.tar.gz`,
 `opencodeplugin.WriteDependencies`): no npm binary, no lifecycle script and
 no network request ever runs to produce or extract it. The archive holds
-exactly the four files opencode's own "is `@opencode-ai/plugin` already
-installed" check reads — `package.json`, `package-lock.json`,
+exactly four files — `package.json`, `package-lock.json`,
 `node_modules/.package-lock.json`, and `@opencode-ai/plugin`'s own
-`package.json` version marker — nothing else, not even `dist/`, since
-neither opencode's plugin loader nor the Nightgauge plugin itself
-(`plugin/nightgauge.js`, `plugin/nightgauge/gates.js`) ever imports
+`package.json` version marker — nothing else, not even `dist/`. opencode's
+own "is `@opencode-ai/plugin` already installed" check reads only two of
+them (`package.json` and `package-lock.json`, by dependency name, never a
+version — see the narrowed-AC1 paragraph below); the archive keeps the other
+two because they are what a real `npm install` for this package also
+produces, and neither opencode's plugin loader nor the Nightgauge plugin
+itself (`plugin/nightgauge.js`, `plugin/nightgauge/gates.js`) ever imports
 `@opencode-ai/plugin` or anything in its dependency tree at runtime; both
 import only `node:*` built-ins and each other. `depsdata/README.md` records
 the full provenance, the empirical method, and how to regenerate the archive
