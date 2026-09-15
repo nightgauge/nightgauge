@@ -127,7 +127,19 @@ var openCodeBashDenyBackstop = []string{"rm -rf *", "rm -fr *", "git push --forc
 // a Read-granted stage's read "*": allow backstop is the last matching rule
 // for that file, and it is readable (#1638 fix round finding: a routed
 // #1752 request, TestProbeA9NestedEnvLocalRead).
-var openCodeSecretDenyBackstop = []string{"*.env", ".env*", "**/*.env", "**/.env*", "**/.ssh/**", "**/id_rsa*", openCodeGhHostsPattern}
+//
+// "*.env.*" and "**/*.env.*" widen this past ".env"/".env*"'s own shape (a
+// file whose name STARTS with, or literally IS, ".env"): opencode 1.18.30's
+// own bundled default `read` guard denies both "*.env" and "*.env.*"
+// (ADR-022's failure-wording amendment, "A stage allowed Read that reaches
+// for *.env"), and a file such as config/prod.env.local — ".env" is an
+// INFIX, the name neither starts nor ends with it — matches neither of this
+// backstop's other patterns at any depth, root or nested, without this pair
+// (#1638 fix round finding, a routed #1752 request).
+var openCodeSecretDenyBackstop = []string{
+	"*.env", ".env*", "**/*.env", "**/.env*", "*.env.*", "**/*.env.*",
+	"**/.ssh/**", "**/id_rsa*", openCodeGhHostsPattern,
+}
 
 // openCodeGhHostsPattern matches gh's hosts file under any GH_CONFIG_DIR
 // (opencode_isolation.go points GH_CONFIG_DIR at the operator's own gh
@@ -367,22 +379,35 @@ func openCodeExternalDirectoryPermission(allow []string) *openCodePatternMap {
 	return pm
 }
 
-// openCodeTmpAllowList is every /tmp/... literal a scan of the six stage
-// skills (skills/nightgauge-{issue-pickup,feature-planning,feature-dev,
-// feature-validate,pr-create,pr-merge}) found, normalized: a shell
-// substitution within the literal ($(...), ${...}, $$, or a bare $VAR)
-// becomes "*". TestOpenCodeTmpAllowListCoversStageSkills re-scans the skills
-// and fails when one introduces a literal this list does not cover.
-var openCodeTmpAllowList = []string{
-	"/tmp/planning_tmp.json",
-	"/tmp/fixed.go.bak",
-	"/tmp/*.ng-revert.bak",
-	"/tmp/ng-test-exec-*.json",
-	"/tmp/verify-ui-dev-server-*.log",
-	"/tmp/automerge.err",
-	"/tmp/ib_group_b_git.json",
-	"/tmp/ib_group_c_files.json",
-}
+// openCodeTmpDirAllowPatterns are the external_directory allow-list entries
+// for every /tmp path the six stage skills use (skills/nightgauge-{issue-
+// pickup,feature-planning,feature-dev,feature-validate,pr-create,pr-merge}).
+//
+// #1638 fix round finding (AC4, ADR-022's dated amendment): opencode 1.18.30
+// asks external_directory for dirname(file)+"/*", never the file's own
+// path — a probe of a per-file allow entry (`/tmp/automerge.err`, or the
+// same with a real wildcard) against a real read/write of exactly that path
+// was refused every time, because the pattern that would have to match is
+// literally "/tmp/*", not the file's own name at all. A per-file allow-list
+// can therefore never work on this binary; only a directory-level entry
+// does, one per resolved form of /tmp (macOS resolves /tmp to /private/tmp,
+// ADR-022 § 9's last bullet). The accepted cost — every stage skill's read
+// and edit tools can reach any OTHER file directly under /tmp or
+// /private/tmp, not only its own — is recorded in ADR-022's own amendment,
+// alongside the follow-up that moves the six stage skills to a per-run
+// scratch directory so this allow entry can be narrowed or removed. The
+// secret and project-config deny-list backstops (openCodeSecretDenyBackstop,
+// openCodeProjectConfigDenyBackstop) still win over this allow where they
+// apply, since edit's own deny entries are checked last (§ "external_directory
+// allow-list" / openCodeEditPermission).
+//
+// Every stage skill's own /tmp literal is FLAT, directly under /tmp with no
+// subdirectory (TestOpenCodeTmpAllowListCoversStageSkills asserts this stays
+// true, since "*" never crosses a "/" in opencode's own pattern matching): a
+// skill that ever needs a NESTED /tmp subdirectory needs its own
+// dirname(file)+"/*" entry added here explicitly, this pair does not cover
+// it.
+var openCodeTmpDirAllowPatterns = []string{"/tmp/*", "/private/tmp/*"}
 
 // openCodeTmpLiteralRE matches a /tmp/... path literal in skill markdown or
 // shell text: /tmp/ followed by a run of characters that cannot appear
@@ -397,8 +422,7 @@ var openCodeTmpLiteralRE = regexp.MustCompile("/tmp/[^\\s\"'`<>;&|)\\\\]+")
 var openCodeShellVarRE = regexp.MustCompile(`\$\([^)]*\)|\$\{[^}]*\}|\$\$|\$[A-Za-z_][A-Za-z0-9_]*`)
 
 // openCodeNormalizeTmpLiteral replaces every shell variable expansion in lit
-// with "*" and collapses a run of "*" into one, the same normalization
-// openCodeTmpAllowList's entries were hand-derived with. Exported to this
+// with "*" and collapses a run of "*" into one. Exported to this
 // package's tests as the reference normalization; the scan itself
 // (openCodeScanStageSkillTmpLiterals) substitutes a whole file's shell
 // variables before extracting a literal, not after (openCodeCollapseStars),
@@ -417,8 +441,8 @@ func openCodeCollapseStars(s string) string {
 	return s
 }
 
-// openCodeStageSkillDirs are the six stage skills the /tmp allow-list and the
-// external-directory allow-list (NIGHTGAUGE_SKILL_DIR) are scoped to.
+// openCodeStageSkillDirs are the six stage skills the /tmp coverage scan and
+// the external-directory allow-list (NIGHTGAUGE_SKILL_DIR) are scoped to.
 var openCodeStageSkillDirs = []string{
 	"nightgauge-issue-pickup",
 	"nightgauge-feature-planning",
@@ -432,7 +456,8 @@ var openCodeStageSkillDirs = []string{
 // openCodeStageSkillDirs> for /tmp/... literals (openCodeTmpLiteralRE),
 // normalizes each (openCodeNormalizeTmpLiteral) and returns the sorted,
 // de-duplicated set found. TestOpenCodeTmpAllowListCoversStageSkills is what
-// checks every one of them is in openCodeTmpAllowList.
+// checks every one of them is covered by openCodeTmpDirAllowPatterns, under
+// opencode's own dirname(file)+"/*" matching (openCodeTmpRequestPattern).
 func openCodeScanStageSkillTmpLiterals(skillsRoot string) ([]string, error) {
 	seen := map[string]bool{}
 	var out []string
@@ -475,16 +500,16 @@ func openCodeScanStageSkillTmpLiterals(skillsRoot string) ([]string, error) {
 	return out, nil
 }
 
-// openCodeTmpAllowPatterns is openCodeTmpAllowList, each pattern also emitted
-// under /private/tmp: on macOS, opencode reports the resolved path, and
-// /tmp is a symlink to /private/tmp there (ADR-022 § 9's last bullet: "The
-// permission map is built against resolved paths").
-func openCodeTmpAllowPatterns() []string {
-	out := make([]string, 0, len(openCodeTmpAllowList)*2)
-	for _, p := range openCodeTmpAllowList {
-		out = append(out, p, "/private"+p)
-	}
-	return out
+// openCodeTmpRequestPattern is the external_directory pattern opencode
+// 1.18.30 itself asks permission for when a tool call touches lit, a
+// worktree-external /tmp/... path found in a stage skill: dirname(lit) +
+// "/*" — never lit's own path (#1638 fix round finding, AC4). This is what
+// TestOpenCodeTmpAllowListCoversStageSkills checks every scanned literal
+// against openCodeTmpDirAllowPatterns with, so the test's own notion of
+// "covered" matches opencode's real matching, not a literal string
+// containment check on the source list.
+func openCodeTmpRequestPattern(lit string) string {
+	return filepath.ToSlash(filepath.Dir(lit)) + "/*"
 }
 
 // openCodeDirPatterns returns the external_directory allow pattern(s) for
@@ -615,16 +640,30 @@ func openCodeSkillDir(opts RunOptions) string {
 }
 
 // openCodeExternalDirectoryAllowList is ADR-022 § "external_directory
-// allow-list": NIGHTGAUGE_SKILL_DIR, the NIGHTGAUGE_BIN dir, the context and
-// output file dirs when they are outside the worktree, and the six stage
-// skills' /tmp literals in both /tmp and /private/tmp forms. binDir is the
-// running nightgauge binary's directory (NIGHTGAUGE_BIN's dir); the caller
-// resolves it (OpenCodeBinDir), because BuildOpenCodeConfig is pure and
-// os.Executable reads process state, not OpenCodeConfigInput.
-func openCodeExternalDirectoryAllowList(opts RunOptions, binDir string) []string {
+// allow-list": NIGHTGAUGE_SKILL_DIR, the context and output file dirs when
+// they are outside the worktree, and the six stage skills' /tmp literals in
+// both /tmp and /private/tmp forms.
+//
+// The NIGHTGAUGE_BIN dir is deliberately NOT here (#1638 fix round finding
+// 5/9, item 4): a scan of the six stage skills' own committed text finds
+// every $NIGHTGAUGE_BIN reference is `BINARY="${NIGHTGAUGE_BIN:-}"` followed
+// by running $BINARY (bash execution, never gated by external_directory —
+// this ADR's own "the external_directory check is a lexical backstop; bash
+// redirection is not covered by it anyway") or
+// `export PATH="$(dirname "$BINARY"):$PATH"` (a shell variable assignment,
+// not a Read/cat/cd of a path under it) — no skill Reads, cats or cds into
+// NIGHTGAUGE_BIN. Allow-listing it bought a stage nothing the six skills
+// actually use, while letting a Read tool call inspect the running
+// nightgauge binary's own directory (a self-hosted repo's own build output,
+// on a machine where NIGHTGAUGE_BIN is the checkout's own bin/, or any
+// sibling files an operator placed beside the binary). binDir no longer
+// reaches this function (openCodePermissionMap's own edit-deny backstop,
+// openCodeWorktreeRelativeDirPatterns, still denies EDITING it as defense in
+// depth, belt-and-suspenders past external_directory's own "*": "deny"
+// default already refusing everything else there).
+func openCodeExternalDirectoryAllowList(opts RunOptions) []string {
 	var allow []string
 	allow = append(allow, openCodeDirPatterns(openCodeSkillDir(opts))...)
-	allow = append(allow, openCodeDirPatterns(binDir)...)
 	worktree := opts.WorktreeDir
 	// insideWorktree reports whether dir (as given, or resolved) is the
 	// worktree or under it, in either's given/resolved form: a file's own
@@ -664,7 +703,7 @@ func openCodeExternalDirectoryAllowList(opts RunOptions, binDir string) []string
 	}
 	addOutsideWorktree(opts.ContextFile)
 	addOutsideWorktree(opts.OutputFile)
-	allow = append(allow, openCodeTmpAllowPatterns()...)
+	allow = append(allow, openCodeTmpDirAllowPatterns...)
 	return allow
 }
 
@@ -713,7 +752,7 @@ func openCodePermissionMap(opts RunOptions, binDir string) *openCodePermissionJS
 		Skill:             openCodeScalarPermission(grants["skill"]),
 		TodoWrite:         openCodeScalarPermission(grants["todowrite"]),
 		DoomLoop:          openCodeDeny,
-		ExternalDirectory: openCodeExternalDirectoryPermission(openCodeExternalDirectoryAllowList(opts, binDir)),
+		ExternalDirectory: openCodeExternalDirectoryPermission(openCodeExternalDirectoryAllowList(opts)),
 	}
 }
 
@@ -758,12 +797,20 @@ func openCodePermissionMap(opts RunOptions, binDir string) *openCodePermissionJS
 //
 // Nothing under those paths is ever read; only named.
 //
-// A worktreeDir that is not a git repository at all (a non-pipeline caller,
-// or a test fixture with no .git) has no base branch to differ from, so it is
-// skipped, never refused: every real dispatch's WorktreeDir is a git
-// worktree by construction (Manager.RunStage's own worktree setup, which this
-// hook runs after), so the skip is theoretical in production and only keeps
-// this function total for a caller that has none.
+// worktreeDir == "" is the one open case, kept lenient rather than refused: a
+// caller that names no worktree at all is not a real dispatch (every one
+// names Manager.RunStage's own worktree), and dozens of PreDispatch tests
+// across this package construct a RunOptions with no WorktreeDir to test
+// something else entirely. Once worktreeDir is non-empty, though, this
+// function fails CLOSED, never open, on anything git itself cannot confirm
+// clean: a worktreeDir git reports is not a git repository (a stage's
+// dispatch config named a path outside any checkout, or one whose .git a
+// prior stage removed or corrupted) refuses with that reason, it does not
+// silently pass — #1638 fix round finding: the prior version treated "not a
+// git repository" as "nothing to compare, so allow it", exactly backwards
+// for a gate whose whole job is refusing an unverifiable worktree. A git
+// status failure for any OTHER reason (git missing from PATH, a corrupt
+// object database) already returned a refusal below and is unchanged.
 func openCodeProjectConfigTamperCheck(ctx context.Context, worktreeDir string) error {
 	if worktreeDir == "" {
 		return nil
@@ -795,7 +842,10 @@ func openCodeProjectConfigTamperCheck(ctx context.Context, worktreeDir string) e
 		if errors.As(err, &exitErr) {
 			stderr := strings.TrimSpace(string(exitErr.Stderr))
 			if strings.Contains(stderr, "not a git repository") {
-				return nil
+				return fmt.Errorf(
+					"opencode: refused: %s is not a git repository, so its %s cannot be verified against a base branch. "+
+						"See docs/decisions/022-opencode-multi-provider-adapter.md § 8",
+					worktreeDir, gitProtectedPathsDoc)
 			}
 			return fmt.Errorf("opencode: checking %s for project-config tamper: git status: %s", worktreeDir, stderr)
 		}

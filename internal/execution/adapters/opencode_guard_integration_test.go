@@ -468,12 +468,18 @@ func TestOpenCodeIncludesEditDeniedInGitWorktree(t *testing.T) {
 	}
 }
 
-// TestOpenCodeBinDirEditDenied is #1638 fix round finding 8's probe:
-// external_directory allow-lists NIGHTGAUGE_BIN (openCodeExternalDirectoryAllowList)
-// so a stage may Read there, but nothing denied Edit or Write of it, and
-// every stage skill grants both. A stage could plant an executable in the
-// running nightgauge binary's own directory — typically a PATH directory —
-// giving it persistent code execution outside the per-run isolation.
+// TestOpenCodeBinDirEditDenied is #1638 fix round finding 8's probe: even
+// before finding 5/9 (item 4) removed NIGHTGAUGE_BIN from
+// openCodeExternalDirectoryAllowList entirely, nothing denied Edit or Write
+// of it while external_directory allow-listed it for Read, and every stage
+// skill grants both. A stage could plant an executable in the running
+// nightgauge binary's own directory — typically a PATH directory — giving
+// it persistent code execution outside the per-run isolation. This still
+// covers the edit-deny backstop directly (openCodeWorktreeRelativeDirPatterns'
+// own defense in depth, kept past the allow-list removal); a write tool
+// call now hits BOTH that and external_directory's own "*": "deny" default,
+// either one already sufficient — see TestOpenCodeBinDirCpDenied below for
+// the bash leg the issue's own item 4 asked for.
 func TestOpenCodeBinDirEditDenied(t *testing.T) {
 	dir := t.TempDir()
 	guardWriteFile(t, filepath.Join(dir, "README.md"), "probe worktree\n")
@@ -494,6 +500,53 @@ func TestOpenCodeBinDirEditDenied(t *testing.T) {
 
 	if _, err := os.Stat(planted); err == nil {
 		t.Errorf("NIGHTGAUGE_BIN dir is writable: a write tool call planted %s", planted)
+	}
+}
+
+// TestOpenCodeBinDirCpDenied is #1638 fix round finding 5/9's own closure
+// (item 4): a scan of the six stage skills' own committed text found no
+// concrete Read, cat or cd of a path under NIGHTGAUGE_BIN — every reference
+// is `BINARY="${NIGHTGAUGE_BIN:-}"` followed by running $BINARY or
+// `export PATH="$(dirname "$BINARY"):$PATH"`, neither a filesystem read of
+// it — so openCodeExternalDirectoryAllowList no longer allow-lists it at
+// all (kept only for TestOpenCodeBinDirEditDenied's own edit-deny leg,
+// unaffected). This probe is the bash leg the issue's own item 4 asked for:
+// a bash `cp` planting a file into NIGHTGAUGE_BIN is refused by opencode's
+// own external_directory check, naming that permission in the rejected
+// tool_use event.
+func TestOpenCodeBinDirCpDenied(t *testing.T) {
+	dir := t.TempDir()
+	guardWriteFile(t, filepath.Join(dir, "README.md"), "probe worktree\n")
+	source := filepath.Join(dir, "payload.sh")
+	guardWriteFile(t, source, "#!/bin/sh\necho PLANTED\n")
+	guardGitInit(t, dir)
+
+	binDir := t.TempDir()
+	planted := filepath.Join(binDir, "gh")
+
+	opts := RunOptions{AllowedTools: []string{"Read", "Bash"}, WorktreeDir: dir}
+	permission := openCodePermissionMap(opts, binDir)
+
+	stub := newGuardStubServer(t, []guardStubTurn{
+		{ToolCall: &guardStubToolCall{Name: "bash", Arguments: map[string]any{"command": fmt.Sprintf("cp %q %q", source, planted)}}},
+		{Content: "done"},
+	})
+	exitCode, stdout, stderr := guardDirectRun(t, permission, stub, dir)
+	t.Logf("exit=%d\nstdout:\n%s\nstderr:\n%s", exitCode, stdout, stderr)
+
+	for _, line := range strings.Split(strings.TrimRight(stdout, "\n"), "\n") {
+		tool, status, errText, ok := guardToolUseEvent(line)
+		if !ok || tool != "bash" {
+			continue
+		}
+		if status != "error" {
+			t.Errorf("the bash cp into NIGHTGAUGE_BIN was not rejected (status=%q)", status)
+		} else if !strings.Contains(errText, `"permission":"external_directory"`) {
+			t.Errorf("the rejection's error text does not name permission external_directory: %s", errText)
+		}
+	}
+	if _, err := os.Stat(planted); err == nil {
+		t.Errorf("NIGHTGAUGE_BIN dir is writable via bash: cp planted %s", planted)
 	}
 }
 
@@ -555,39 +608,147 @@ func TestOpenCodeOutsideReadRejected(t *testing.T) {
 }
 
 // TestOpenCodeNestedDotEnvDenied is a routed #1752 request's own probe: a
-// Read-granted stage must not be able to read a NESTED .env file, such as
-// apps/web/.env.local, not only a root-level one. opencode's own read
-// patterns are matched against the worktree-relative path with no implicit
-// "**" prefix, so the issue's own "*.env"/".env*" backstop entries only ever
-// match a root-level file; without "**/*.env"/"**/.env*" (#1638 fix round
-// finding), the map's read "*": allow backstop is the last matching rule for
-// a nested one, and it is readable.
+// Read-granted stage must not be able to read a NESTED secret file, whether
+// its name starts with ".env" (apps/web/.env.local) or merely carries
+// ".env." as an infix (config/prod.env.local) — neither shape at any depth.
+// opencode's own read patterns are matched against the worktree-relative
+// path with no implicit "**" prefix, so the issue's own backstop entries
+// only ever match a root-level file, or a name that starts with ".env";
+// without "**/*.env"/"**/.env*" (#1638 fix round finding) and
+// "*.env.*"/"**/*.env.*" (#1638 fix round, a routed #1752 request), the
+// map's read "*": allow backstop is the last matching rule for either
+// nested file, and it is readable. A control read of config/plain.txt,
+// which names no secret shape at all, MUST complete — proving the deny is
+// specific to these two filenames, not a broader nested-read regression.
 func TestOpenCodeNestedDotEnvDenied(t *testing.T) {
 	dir := t.TempDir()
 	guardWriteFile(t, filepath.Join(dir, "README.md"), "probe worktree\n")
 	guardWriteFile(t, filepath.Join(dir, "apps", "web", ".env.local"), "SECRET=PROBE-1638\n")
+	guardWriteFile(t, filepath.Join(dir, "config", "prod.env.local"), "SECRET=PROBE-1752\n")
+	guardWriteFile(t, filepath.Join(dir, "config", "plain.txt"), "not a secret\n")
 	guardGitInit(t, dir)
+
+	// opencode reports a tool call's filePath resolved through symlinks
+	// (ADR-022 § 9's last bullet); t.TempDir() on macOS is itself under a
+	// symlink ($TMPDIR -> /private/var/...), so this probe's own tool paths
+	// are built from the resolved root too, the same form the real dispatch
+	// events below actually carry.
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	opts := RunOptions{AllowedTools: []string{"Read"}, WorktreeDir: dir}
 	permission := openCodePermissionMap(opts, "")
 
-	nested := filepath.Join(dir, "apps", "web", ".env.local")
+	envLocal := filepath.Join(resolved, "apps", "web", ".env.local")
+	prodEnv := filepath.Join(resolved, "config", "prod.env.local")
+	plain := filepath.Join(resolved, "config", "plain.txt")
 	stub := newGuardStubServer(t, []guardStubTurn{
-		{ToolCall: &guardStubToolCall{Name: "read", Arguments: map[string]any{"filePath": nested}}},
+		{ToolCall: &guardStubToolCall{Name: "read", Arguments: map[string]any{"filePath": envLocal}}},
+		{ToolCall: &guardStubToolCall{Name: "read", Arguments: map[string]any{"filePath": prodEnv}}},
+		{ToolCall: &guardStubToolCall{Name: "read", Arguments: map[string]any{"filePath": plain}}},
 		{Content: "done"},
 	})
 	exitCode, stdout, stderr := guardDirectRun(t, permission, stub, dir)
 	t.Logf("exit=%d\nstdout:\n%s\nstderr:\n%s", exitCode, stdout, stderr)
 
+	var reads []string
 	for _, line := range strings.Split(strings.TrimRight(stdout, "\n"), "\n") {
-		tool, status, _, ok := guardToolUseEvent(line)
+		tool, st, _, ok := guardToolUseEvent(line)
 		if !ok || tool != "read" {
 			continue
 		}
-		if status != "error" {
-			t.Errorf("secret widening: apps/web/.env.local was READ under the generated map (status=%q)", status)
-		}
-		return
+		reads = append(reads, st)
 	}
-	t.Fatalf("no tool_use event for \"read\" in stdout:\n%s", stdout)
+	if len(reads) != 3 {
+		t.Fatalf("saw %d \"read\" tool_use events, want 3 (env-local, prod-env, plain):\n%s", len(reads), stdout)
+	}
+	if reads[0] != "error" {
+		t.Errorf("secret widening: apps/web/.env.local was READ under the generated map (status=%q)", reads[0])
+	}
+	if reads[1] != "error" {
+		t.Errorf("secret widening: config/prod.env.local was READ under the generated map (status=%q)", reads[1])
+	}
+	if reads[2] == "error" {
+		t.Errorf("control read failed: config/plain.txt (no secret shape) was denied too, so this is not a targeted deny")
+	}
+}
+
+// TestOpenCodeTmpDirAllowLetsAStageReadAndCatFromTmp is AC4's own
+// real-binary closure (#1638 fix round): opencode 1.18.30 asks
+// external_directory for dirname(file)+"/*", never the file's own path, so a
+// per-file allow entry (the pre-fix openCodeTmpAllowList) could never match
+// a real tool call against exactly that file — this probe is what found
+// that, and what proves the directory-level fix
+// (openCodeTmpDirAllowPatterns) now lets a stage skill's own /tmp use
+// complete: a Read tool call and a bash `cat`, both on /tmp/automerge.err, a
+// literal the nightgauge-pr-merge skill itself uses. A bash `mv` OUT of
+// /tmp — the issue's other named shape — was ALSO probed here and found
+// still refused even with an explicit allow for the source directory:
+// opencode's own lexical scan of a multi-path bash command does not reduce
+// to the same dirname(file)+"/*" request a single-path read/edit/bash call
+// does, consistent with this ADR's own "the external_directory check is a
+// lexical backstop; bash redirection is not covered by it anyway" — a
+// finding for the record, not a regression this fix claims to close.
+func TestOpenCodeTmpDirAllowLetsAStageReadAndCatFromTmp(t *testing.T) {
+	dir := t.TempDir()
+	guardWriteFile(t, filepath.Join(dir, "README.md"), "probe worktree\n")
+	guardGitInit(t, dir)
+
+	// A real, FLAT file directly under /tmp (never t.TempDir(), which is
+	// under macOS's $TMPDIR, not /tmp itself): this probe means to exercise
+	// openCodePermissionMap's own DEFAULT /tmp allow entries exactly as a
+	// real dispatch gets them, not a hand-patched one this test adds itself.
+	tmpFile, err := os.CreateTemp("/tmp", "ocp1638-automerge-*.err")
+	if err != nil {
+		t.Fatal(err)
+	}
+	automergeErr := tmpFile.Name()
+	t.Cleanup(func() { os.Remove(automergeErr) })
+	if _, err := tmpFile.WriteString("PROBE-1638-AUTOMERGE-ERR\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := RunOptions{AllowedTools: []string{"Read", "Bash"}, WorktreeDir: dir}
+	permission := openCodePermissionMap(opts, "")
+
+	stub := newGuardStubServer(t, []guardStubTurn{
+		{ToolCall: &guardStubToolCall{Name: "read", Arguments: map[string]any{"filePath": automergeErr}}},
+		{ToolCall: &guardStubToolCall{Name: "bash", Arguments: map[string]any{"command": fmt.Sprintf("cat %q", automergeErr)}}},
+		{Content: "done"},
+	})
+	exitCode, stdout, stderr := guardDirectRun(t, permission, stub, dir)
+	t.Logf("exit=%d\nstdout:\n%s\nstderr:\n%s", exitCode, stdout, stderr)
+
+	var sawReadSuccess, sawBashSuccess bool
+	for _, line := range strings.Split(strings.TrimRight(stdout, "\n"), "\n") {
+		tool, status, errText, ok := guardToolUseEvent(line)
+		if !ok {
+			continue
+		}
+		switch tool {
+		case "read":
+			if status != "error" {
+				sawReadSuccess = true
+			} else {
+				t.Errorf("the read of /tmp/automerge.err was rejected: %s", errText)
+			}
+		case "bash":
+			if status != "error" {
+				sawBashSuccess = true
+			} else {
+				t.Errorf("the bash cat of /tmp/automerge.err was rejected: %s", errText)
+			}
+		}
+	}
+	if !sawReadSuccess {
+		t.Errorf("no successful tool_use for \"read\" in stdout:\n%s", stdout)
+	}
+	if !sawBashSuccess {
+		t.Errorf("no successful tool_use for \"bash\" in stdout:\n%s", stdout)
+	}
 }

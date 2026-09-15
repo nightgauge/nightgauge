@@ -285,7 +285,7 @@ func TestOpenCodePermissionMap(t *testing.T) {
 					t.Errorf("permission.edit[%q] = %v, want %q (the skill dir is read-only: Read succeeds, Edit is denied)", skillDirPattern, edit[skillDirPattern], openCodeDeny)
 				}
 			}
-			for _, p := range openCodeTmpAllowPatterns() {
+			for _, p := range openCodeTmpDirAllowPatterns {
 				if extDir[p] != openCodeAllow {
 					t.Errorf("permission.external_directory[%q] = %v, want %q", p, extDir[p], openCodeAllow)
 				}
@@ -316,6 +316,35 @@ func TestOpenCodePermissionMapEmptyAllowedToolsNeverAllows(t *testing.T) {
 		obj, ok := permission[key].(map[string]any)
 		if !ok || obj["*"] != openCodeDeny {
 			t.Errorf("permission.%s[\"*\"] = %v, want %q with no AllowedTools", key, permission[key], openCodeDeny)
+		}
+	}
+}
+
+// TestOpenCodePermissionMapNeverAllowsBinDir is #1638 fix round finding
+// 5/9's own closure (item 4): a scan of the six stage skills' own committed
+// text finds no concrete Read, cat or cd of a path under NIGHTGAUGE_BIN —
+// every reference either runs $BINARY (bash execution, never gated by
+// external_directory) or reads $(dirname "$BINARY") into PATH (a shell
+// variable, not a filesystem read) — so the generated external_directory
+// allow-list must never carry binDir's own pattern, whatever binDir is.
+func TestOpenCodePermissionMapNeverAllowsBinDir(t *testing.T) {
+	binDir := t.TempDir()
+	pm := openCodePermissionMap(RunOptions{AllowedTools: []string{"Read", "Edit", "Write"}, WorktreeDir: t.TempDir()}, binDir)
+	raw, err := json.Marshal(pm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var permission map[string]any
+	if err := json.Unmarshal(raw, &permission); err != nil {
+		t.Fatal(err)
+	}
+	extDir, ok := permission["external_directory"].(map[string]any)
+	if !ok {
+		t.Fatalf("permission.external_directory is not an object: %#v", permission["external_directory"])
+	}
+	for _, pattern := range openCodeDirPatterns(binDir) {
+		if action, present := extDir[pattern]; present {
+			t.Errorf("permission.external_directory[%q] = %v, want the key absent: NIGHTGAUGE_BIN must not be external_directory-allow-listed", pattern, action)
 		}
 	}
 }
@@ -404,8 +433,35 @@ func TestOpenCodeBashScopedEntry(t *testing.T) {
 	}
 }
 
+// openCodeTmpCoverageMissing returns, of found (openCodeScanStageSkillTmpLiterals'
+// own normalized output), the ones opencode's own external_directory ask —
+// dirname(literal) + "/*" (openCodeTmpRequestPattern), never the literal's
+// own path — is not covered by openCodeTmpDirAllowPatterns. This is the
+// mechanism both TestOpenCodeTmpAllowListCoversStageSkills and its own
+// red/green companion share, so a literal is judged covered the same way
+// opencode 1.18.30 itself would judge the request, not by literal string
+// containment against the source list (#1638 fix round, AC4).
+func openCodeTmpCoverageMissing(found []string) []string {
+	allow := map[string]bool{}
+	for _, p := range openCodeTmpDirAllowPatterns {
+		allow[p] = true
+	}
+	var missing []string
+	for _, lit := range found {
+		if !allow[openCodeTmpRequestPattern(lit)] {
+			missing = append(missing, lit)
+		}
+	}
+	return missing
+}
+
 // TestOpenCodeTmpAllowListCoversStageSkills scans the six stage skills for
-// /tmp/... literals and fails when one is not in openCodeTmpAllowList.
+// /tmp/... literals and fails when one's own external_directory request
+// (dirname/"*", opencode's real matching — AC4, #1638 fix round) is not
+// covered by openCodeTmpDirAllowPatterns. Every literal the scan finds today
+// is flat, directly under /tmp, so this always passes against the committed
+// skills; a skill that introduced a NESTED /tmp subdirectory would need its
+// own allow entry (this test's own red companion below proves that).
 func TestOpenCodeTmpAllowListCoversStageSkills(t *testing.T) {
 	skillsRoot := filepath.Join(repoRootForTest(t), "skills")
 	found, err := openCodeScanStageSkillTmpLiterals(skillsRoot)
@@ -415,34 +471,27 @@ func TestOpenCodeTmpAllowListCoversStageSkills(t *testing.T) {
 	if len(found) == 0 {
 		t.Fatal("the scan found no /tmp/... literal in the six stage skills; the scan regex or the skill paths are broken")
 	}
-	allow := map[string]bool{}
-	for _, p := range openCodeTmpAllowList {
-		allow[p] = true
-	}
-	var missing []string
-	for _, p := range found {
-		if !allow[p] {
-			missing = append(missing, p)
-		}
-	}
-	if len(missing) > 0 {
-		t.Errorf("the six stage skills use /tmp paths openCodeTmpAllowList does not cover: %v (found: %v)", missing, found)
+	if missing := openCodeTmpCoverageMissing(found); len(missing) > 0 {
+		t.Errorf("the six stage skills use /tmp paths openCodeTmpDirAllowPatterns does not cover: %v (found: %v)", missing, found)
 	}
 }
 
 // TestOpenCodeTmpAllowListCoverageFailsOnANewLiteral is
 // TestOpenCodeTmpAllowListCoversStageSkills's own red/green coverage: a
-// fixture copy of one stage skill with a new /tmp literal must fail the same
-// coverage check, proving the scan-and-compare mechanism actually catches
-// drift rather than passing vacuously.
+// fixture skill introducing a /tmp path under a NESTED subdirectory
+// (/tmp/sub/dir/x) must fail the same coverage check. openCodeTmpDirAllowPatterns'
+// "/tmp/*" pattern never crosses a "/" (opencode's own matching, like every
+// other pattern this file builds), so a nested subdirectory is exactly the
+// shape the flat allow-list does NOT cover — unlike a plain new root-level
+// /tmp/... literal, which this pair already covers and so proves nothing
+// about drift detection.
 func TestOpenCodeTmpAllowListCoverageFailsOnANewLiteral(t *testing.T) {
-	skillsRoot := repoRootForTest(t)
 	fixture := t.TempDir()
 	dst := filepath.Join(fixture, "nightgauge-feature-dev")
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	content := "---\nname: nightgauge-feature-dev\n---\n\nWrite output to /tmp/opencode-1638-fixture-drift.json\n"
+	content := "---\nname: nightgauge-feature-dev\n---\n\nWrite output to /tmp/sub/dir/opencode-1638-fixture-drift.json\n"
 	if err := os.WriteFile(filepath.Join(dst, "SKILL.md"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -453,20 +502,9 @@ func TestOpenCodeTmpAllowListCoverageFailsOnANewLiteral(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	allow := map[string]bool{}
-	for _, p := range openCodeTmpAllowList {
-		allow[p] = true
+	if missing := openCodeTmpCoverageMissing(found); len(missing) == 0 {
+		t.Fatalf("a fixture skill introducing a nested /tmp/sub/dir/... path was not caught as uncovered: found %v", found)
 	}
-	var missing []string
-	for _, p := range found {
-		if !allow[p] {
-			missing = append(missing, p)
-		}
-	}
-	if len(missing) == 0 {
-		t.Fatalf("a fixture skill introducing /tmp/opencode-1638-fixture-drift.json was not caught as uncovered: found %v", found)
-	}
-	_ = skillsRoot
 }
 
 // swapOpenCodeStageSkillDirsForTest replaces openCodeStageSkillDirs with
@@ -533,6 +571,46 @@ func TestOpenCodeTamperGateCleanTreePasses(t *testing.T) {
 	wt := openCodeFixtureRepo(t, tamperFixtureBaseFiles)
 	if err := openCodeProjectConfigTamperCheck(context.Background(), wt); err != nil {
 		t.Fatalf("a clean worktree was refused: %v", err)
+	}
+}
+
+// TestOpenCodeTamperGateNonGitWorktreeFailsClosed is #1638's trivial-low
+// finding: a worktreeDir git reports is not a git repository (a dispatch
+// config named a path outside any checkout, or one whose .git a prior stage
+// removed or corrupted) must REFUSE, naming the reason — not silently pass
+// because there is nothing to compare against. A gate whose entire job is
+// refusing an unverifiable worktree must fail closed, not open, on the one
+// case where verification itself is impossible.
+func TestOpenCodeTamperGateNonGitWorktreeFailsClosed(t *testing.T) {
+	wt := t.TempDir() // deliberately never git-initialized
+	err := openCodeProjectConfigTamperCheck(context.Background(), wt)
+	if err == nil {
+		t.Fatal("a non-git worktree was not refused; the gate must fail closed")
+	}
+	if !strings.Contains(err.Error(), "not a git repository") {
+		t.Errorf("the refusal does not name the reason: %v", err)
+	}
+}
+
+// TestOpenCodeTamperGateGitStatusFailsClosed is the gate's OTHER fail-closed
+// leg: a git invocation that fails for a reason besides "not a git
+// repository" (here, a corrupt .git that makes every git subcommand error)
+// must also refuse, naming the worktree — not merely NOT pass silently, but
+// return an actionable error, never nil.
+func TestOpenCodeTamperGateGitStatusFailsClosed(t *testing.T) {
+	wt := openCodeFixtureRepo(t, tamperFixtureBaseFiles)
+	// Corrupt the index (not HEAD or .git itself, which git reports as "not
+	// a git repository" — the OTHER leg, its own test above) so `git status`
+	// fails for a distinct reason, the same shape a damaged worktree gives.
+	if err := os.WriteFile(filepath.Join(wt, ".git", "index"), []byte("corrupt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := openCodeProjectConfigTamperCheck(context.Background(), wt)
+	if err == nil {
+		t.Fatal("a worktree whose git status fails was not refused; the gate must fail closed")
+	}
+	if !strings.Contains(err.Error(), wt) {
+		t.Errorf("the refusal does not name the worktree: %v", err)
 	}
 }
 

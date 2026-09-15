@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
+	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/terminalkind"
 )
 
@@ -697,19 +698,32 @@ func TestOpenCodeAutoRejectMarker(t *testing.T) {
 	}
 
 	// The stream shows the rejection but stderr does not name it: the wording
-	// drifted, or the line was lost. The run stopped there all the same, so
-	// it still fails. The event names the tool, not the permission, so the
-	// marker names none, and it never claims the adapter's own posture
-	// refused a granted tool; a drift marker says why.
-	result, _ := openCodeStageRun(t, stream, "", 0, []string{"Bash"}, nil)
-	if result.ExitCode != 1 {
-		t.Errorf("exit code = %d; a run the stream shows stopped on a rejection must not read as success", result.ExitCode)
-	}
-	if want := PermissionDeniedMarker + " tool=unknown\n"; !strings.HasSuffix(result.Stderr, want) || strings.Contains(result.Stderr, PermissionRejectedMarker) {
-		t.Errorf("stderr = %q; want it to end with %q and hold no %s", result.Stderr, want, PermissionRejectedMarker)
-	}
-	if len(result.DriftMarkers) != 1 || !strings.Contains(result.DriftMarkers[0], "stderr carried no auto-reject line") {
-		t.Errorf("drift markers = %q, want the stderr cross-check", result.DriftMarkers)
+	// drifted, or the line was lost — the ONLY shape a "deny" match (this
+	// map's own rejection shape, ADR-022 § 9's "pattern matching" amendment)
+	// ever takes in production, since it never prints the "auto-rejecting"
+	// notice. The run stopped there all the same, so it still fails. AC3
+	// (#1638 fix round): the rejected tool_use event's own part.tool
+	// ("bash" in this fixture) now names the marker instead of "unknown", so
+	// the SAME rejected call classifies differently depending on whether the
+	// stage's own allowed tools grant it — exactly like a stderr-notice
+	// rejection already does.
+	for _, tc := range []struct {
+		allowed []string
+		marker  string
+	}{
+		{[]string{"Bash"}, PermissionRejectedMarker + " tool=bash"},
+		{[]string{"Read"}, PermissionDeniedMarker + " tool=bash"},
+	} {
+		result, _ := openCodeStageRun(t, stream, "", 0, tc.allowed, nil)
+		if result.ExitCode != 1 {
+			t.Errorf("allowed %q: exit code = %d; a run the stream shows stopped on a rejection must not read as success", tc.allowed, result.ExitCode)
+		}
+		if want := tc.marker + "\n"; !strings.HasSuffix(result.Stderr, want) {
+			t.Errorf("allowed %q: stderr = %q; want it to end with %q", tc.allowed, result.Stderr, want)
+		}
+		if len(result.DriftMarkers) != 1 || !strings.Contains(result.DriftMarkers[0], "stderr carried no auto-reject line") {
+			t.Errorf("allowed %q: drift markers = %q, want the stderr cross-check", tc.allowed, result.DriftMarkers)
+		}
 	}
 }
 
@@ -732,12 +746,25 @@ func TestOpenCodeDenyRejectedNeverSuccess(t *testing.T) {
 	if strings.Contains(stream, "auto-rejecting") {
 		t.Fatal("the fixture carries an auto-reject notice; it must be the \"deny\"-only shape with none")
 	}
-	result, _ := openCodeStageRun(t, stream, "", 0, []string{"Bash"}, nil)
-	if result.ExitCode == 0 {
-		t.Fatal("a stage OpenCode's own permission \"deny\" stopped must not read as success (exit 0)")
-	}
-	if !strings.Contains(result.Stderr, PermissionRejectedMarker) && !strings.Contains(result.Stderr, PermissionDeniedMarker) {
-		t.Errorf("stderr carries neither %s nor %s; AC3 requires one: %q", PermissionRejectedMarker, PermissionDeniedMarker, result.Stderr)
+	// AC3 (#1638 fix round): the marker names the rejected tool_use event's
+	// own part.tool ("bash" here) exactly, not the unnamed "unknown"
+	// fallback — [adapter-permission-rejected] when the stage's own
+	// AllowedTools grants it, [permission-denied] otherwise, per
+	// openCodeRejectionMarker(tool, allowed).
+	for _, tc := range []struct {
+		allowed []string
+		marker  string
+	}{
+		{[]string{"Bash"}, PermissionRejectedMarker + " tool=bash"},
+		{[]string{"Read"}, PermissionDeniedMarker + " tool=bash"},
+	} {
+		result, _ := openCodeStageRun(t, stream, "", 0, tc.allowed, nil)
+		if result.ExitCode == 0 {
+			t.Fatalf("allowed %q: a stage OpenCode's own permission \"deny\" stopped must not read as success (exit 0)", tc.allowed)
+		}
+		if want := tc.marker + "\n"; !strings.HasSuffix(result.Stderr, want) {
+			t.Errorf("allowed %q: stderr = %q, want it to end with %q", tc.allowed, result.Stderr, want)
+		}
 	}
 }
 
@@ -1304,6 +1331,16 @@ func TestOpenCodeFoldHelpersRunPureFromTheRunRoot(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(plugins, "probe.sh"), []byte(plugin), 0o644); err != nil {
 				t.Fatal(err)
 			}
+			// Committed onto the fixture's own base ref (openCodeWorkspace's
+			// single "main" branch, no origin), not left untracked: this
+			// test is about the fold's post-exit helpers never loading a
+			// planted plugin, not about the project-config tamper gate
+			// (#1638 fix round) — an untracked .opencode/plugin/probe.sh
+			// would be refused before spawn by that gate now that the
+			// fixture worktree is a real git repository, which is a
+			// DIFFERENT test's own coverage (opencode_guard_test.go).
+			gittest.Run(t, dir, "add", "-A")
+			gittest.Run(t, dir, "commit", "-qm", "plugin fixture")
 		},
 	})
 	if raw, err := os.ReadFile(probe); err == nil {

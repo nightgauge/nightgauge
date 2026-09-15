@@ -88,7 +88,18 @@ func isolateOpenCodeVerb(t *testing.T, machineConfig string) string {
 	if err := os.WriteFile(filepath.Join(machineDir, "config.yaml"), []byte(machineConfig), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return t.TempDir()
+	// A real, one-commit git repository: the project-config tamper gate
+	// (#1638 fix round) now fails CLOSED, not open, on a worktree git
+	// reports is not one, and PreDispatch runs it before every other check
+	// this verb exercises.
+	worktree := t.TempDir()
+	gittest.InitRepo(t, worktree, "-b", "main")
+	if err := os.WriteFile(filepath.Join(worktree, "README.md"), []byte("fixture\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gittest.Run(t, worktree, "add", "-A")
+	gittest.Run(t, worktree, "commit", "-qm", "base")
+	return worktree
 }
 
 // runOpenCodeVerb runs `nightgauge opencode config` with args and returns its

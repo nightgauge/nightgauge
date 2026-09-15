@@ -141,6 +141,8 @@
       ".env*": "deny",
       "**/*.env": "deny",
       "**/.env*": "deny",
+      "*.env.*": "deny",
+      "**/*.env.*": "deny",
       "**/.ssh/**": "deny",
       "**/id_rsa*": "deny",
       "**/gh/hosts.yml": "deny"
@@ -151,6 +153,8 @@
       ".env*": "deny",
       "**/*.env": "deny",
       "**/.env*": "deny",
+      "*.env.*": "deny",
+      "**/*.env.*": "deny",
       "**/.ssh/**": "deny",
       "**/id_rsa*": "deny",
       "**/gh/hosts.yml": "deny",
@@ -176,22 +180,8 @@
     "doom_loop": "deny",
     "external_directory": {
       "*": "deny",
-      "/tmp/planning_tmp.json": "allow",
-      "/private/tmp/planning_tmp.json": "allow",
-      "/tmp/fixed.go.bak": "allow",
-      "/private/tmp/fixed.go.bak": "allow",
-      "/tmp/*.ng-revert.bak": "allow",
-      "/private/tmp/*.ng-revert.bak": "allow",
-      "/tmp/ng-test-exec-*.json": "allow",
-      "/private/tmp/ng-test-exec-*.json": "allow",
-      "/tmp/verify-ui-dev-server-*.log": "allow",
-      "/private/tmp/verify-ui-dev-server-*.log": "allow",
-      "/tmp/automerge.err": "allow",
-      "/private/tmp/automerge.err": "allow",
-      "/tmp/ib_group_b_git.json": "allow",
-      "/private/tmp/ib_group_b_git.json": "allow",
-      "/tmp/ib_group_c_files.json": "allow",
-      "/private/tmp/ib_group_c_files.json": "allow"
+      "/tmp/*": "allow",
+      "/private/tmp/*": "allow"
     }
   }
 }

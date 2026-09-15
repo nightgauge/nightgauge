@@ -789,6 +789,15 @@ type OpenCodeStream struct {
 	// permission-rejection error. Stderr, not this count, names the
 	// permission: this is only the cross-check that stderr said so.
 	RejectedToolCalls int
+	// RejectedTool is the FIRST rejected tool_use event's own part.tool
+	// (opencode's own lowercase name: "bash", "edit", "apply_patch", ...),
+	// empty when the event named none. It is opencode_usage.go's own
+	// fallback source for the classification marker (AC3, #1638 fix round)
+	// when stderr carried no auto-reject notice at all — a "deny" match
+	// never prints one (ADR-022 § 9's "The permission map's pattern
+	// matching" amendment), so this is the only source for every dispatch
+	// under a generated permission map.
+	RejectedTool string
 
 	drift driftLog
 }
@@ -858,6 +867,9 @@ func (acc *TokenAccumulator) ParseOpenCodeStreamLine(line string) (*StreamEvent,
 		if ev.Part != nil && ev.Part.State != nil && ev.Part.State.Status == "error" &&
 			openCodeIsRejectedToolError(ev.Part.State.Error) {
 			s.RejectedToolCalls++
+			if s.RejectedTool == "" && ev.Part.Tool != "" {
+				s.RejectedTool = ev.Part.Tool
+			}
 		}
 	case "step_finish":
 		s.StepFinishes++

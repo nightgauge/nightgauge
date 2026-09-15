@@ -269,7 +269,7 @@ func aboveMaxTestedAnthropic(t *testing.T, b fakeOpenCodeBehavior) (*OpenCodeAda
 	fake := installFakeOpenCode(t, b)
 	t.Setenv("ANTHROPIC_API_KEY", "set-by-the-test")
 	return pinnedAdapter(config.OpenCodeConfig{}, fake.path), fake,
-		RunOptions{Stage: "feature-dev", Model: "anthropic/claude-sonnet-5", WorktreeDir: t.TempDir()}
+		RunOptions{Stage: "feature-dev", Model: "anthropic/claude-sonnet-5", WorktreeDir: gitInitTestWorktree(t)}
 }
 
 // TestOpenCodeSelfTestRefusesAConfigDebugConfigRejects: above max-tested, a
@@ -428,7 +428,7 @@ func TestOpenCodePinnedBinaryIsCheckedSpawnedAndRecorded(t *testing.T) {
 	m := openCodeManifestForTest(t)
 	fake := installFakeOpenCode(t, fakeOpenCodeBehavior{version: m.MaxTested})
 	a := pinnedAdapter(lmStudioSettings(), fake.path)
-	run := RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b", WorktreeDir: t.TempDir()}
+	run := RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b", WorktreeDir: gitInitTestWorktree(t)}
 	if err := a.PreDispatch(context.Background(), run); err != nil {
 		t.Fatalf("PreDispatch = %v", err)
 	}
