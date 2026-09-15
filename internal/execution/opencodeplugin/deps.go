@@ -137,6 +137,15 @@ func extractArchive(dir string) error {
 		if err != nil {
 			return fmt.Errorf("opencodeplugin: reading the embedded dependency archive: %w", err)
 		}
+		// GOOD: reject the raw archive entry name outright if it contains a
+		// ".." path-traversal element, before it is used to derive any
+		// file-system path below — the canonical zip-slip guard (CodeQL
+		// go/zip-slip's own documented fix), gating every write this loop
+		// makes on the untrusted name itself rather than on a path derived
+		// from it.
+		if strings.Contains(hdr.Name, "..") {
+			return fmt.Errorf("opencodeplugin: archive entry %q escapes the target directory", hdr.Name)
+		}
 		target, err := safeJoin(dir, hdr.Name)
 		if err != nil {
 			return fmt.Errorf("opencodeplugin: %w", err)
