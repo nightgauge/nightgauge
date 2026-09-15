@@ -12,39 +12,63 @@
 #                                         dir/<adapter>[-<sub>]-<version>.txt,
 #                                         the shape flag_contract_test.go's
 #                                         NIGHTGAUGE_FLAG_CONTRACT_HELP_DIR
-#                                         override reads.
+#                                         override reads. Also carries the
+#                                         committed testdata/cli-help sidecar
+#                                         (<capture>.txt.hidden) over when the
+#                                         version captured is the version that
+#                                         sidecar was probed on (#1617).
 #   flag-contract <dir>                  Run TestFlagContract once against
 #                                         every adapter's capture in dir (a
 #                                         shared directory captured for every
 #                                         manifest CLI). Prints one JSON row
 #                                         per adapter: pass, or fail naming the
-#                                         offending flag.
-#   opencode-canary <bin>                Run the #1639 OpenCode leg
+#                                         offending flag; plus one more
+#                                         "flag-contract" row on a genuine
+#                                         failure the suite could not attribute
+#                                         to a single adapter.
+#   opencode-canary <bin> [version]      Run the #1639 OpenCode leg
 #                                         (go test -tags canary ./internal/execution
 #                                         -run TestOpenCodeCanary) with <bin>
-#                                         first on PATH. Prints one JSON row.
+#                                         first on PATH. Prints one JSON row
+#                                         labelled with [version] — the
+#                                         INSTALLED version, not the
+#                                         manifest's max_tested.
 #   schema-diff [--live-file F]          Compare the live OpenCode config
-#                                         schema (fetched from
+#          [--version V]                 schema (fetched from
 #                                         schemaContractSchemaURL, or read from
 #                                         F) against the manifest's
-#                                         config_schema_sha256. Prints one JSON
-#                                         row; on a difference, re-runs the
-#                                         #1634 suite against the live schema.
+#                                         config_schema_sha256, labelling the
+#                                         row with V (the installed version;
+#                                         defaults to max_tested). Prints one
+#                                         JSON row; on a difference, re-runs
+#                                         the #1634 suite against the live
+#                                         schema, and fails (result: fail, and
+#                                         this command's own exit code) when
+#                                         that suite fails.
 #   report <summary.json>                File or update one open
 #                                         "canary: <adapter> <version> drift"
 #                                         issue per adapter+version with a
 #                                         result: fail row. gh, GH_TOKEN.
 #
 # Every install and CLI call is bounded (ADAPTER_CANARY_TIMEOUT,
-# ADAPTER_CANARY_INSTALL_TIMEOUT); a stub-provider this script starts is
-# always killed and its death confirmed before the function that started it
-# returns (opencode_canary_stub_start/opencode_canary_stub_stop).
+# ADAPTER_CANARY_INSTALL_TIMEOUT, ADAPTER_CANARY_GOTEST_TIMEOUT); a
+# stub-provider this script starts is always killed and its death confirmed
+# before the function that started it returns (opencode_canary_stub_start/
+# opencode_canary_stub_stop). flag-contract, opencode-canary and schema-diff
+# all return the underlying check's own exit code, so a caller that pipes
+# their output through `tee` needs `set -o pipefail` (or `shell: bash`, which
+# implies it) to see it — see .github/workflows/adapter-canary.yml.
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MANIFESTS="$REPO_ROOT/internal/adaptercompat/manifests"
+COMMITTED_HELP_DIR="$REPO_ROOT/internal/execution/adapters/testdata/cli-help"
 HELP_TIMEOUT="${ADAPTER_CANARY_TIMEOUT:-300}"
 INSTALL_TIMEOUT="${ADAPTER_CANARY_INSTALL_TIMEOUT:-900}"
+# ci.yml wraps its own `go test` in `timeout 10m`; the three suites this
+# script drives (flag-contract, opencode-canary, schema-diff) get the same
+# backstop so a hang in the suite, not just the install, is bounded.
+GOTEST_TIMEOUT="${ADAPTER_CANARY_GOTEST_TIMEOUT:-600}"
 SCHEMA_URL="https://opencode.ai/config.json"
 
 die() {
@@ -182,7 +206,7 @@ cmd_install() {
     bounded "$INSTALL_TIMEOUT" env "GROK_BIN_DIR=$bindir" /bin/bash "$script" "$requested" >&2 \
       || die "$adapter: the installer failed for '${requested:-latest}'"
     bin="$bindir/$binary"
-    version="$("$bin" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"
+    version="$(bounded "$HELP_TIMEOUT" "$bin" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"
     [ -n "$version" ] || die "$adapter: could not read the installed version from $bin --version"
   else
     die "$adapter: the manifest names neither an npm package nor an installer"
@@ -220,7 +244,7 @@ cmd_capture_help() {
   # (ADAPTER_CANARY_VERSION), else read from the binary itself.
   version="${ADAPTER_CANARY_VERSION:-}"
   if [ -z "$version" ]; then
-    version="$("$bin" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"
+    version="$(bounded "$HELP_TIMEOUT" "$bin" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"
   fi
   [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "$adapter: could not resolve a MAJOR.MINOR.PATCH version to name the capture"
 
@@ -230,6 +254,19 @@ cmd_capture_help() {
     cat "$raw"
   } >"$outdir/$stem-$version.txt"
   rm -f "$raw"
+
+  # Carry over the committed hidden-flag sidecar (#1617) when this capture is
+  # at the exact version the committed one records: a probe done at that
+  # version is still valid evidence for TestFlagContract, so without this a
+  # fresh capture at an adapter's OWN max_tested (every pull_request run, and
+  # a daily/latest run when no new release shipped) reports every one of its
+  # hidden flags as a contract violation. A capture at a DIFFERENT version
+  # carries nothing over — that flag has not been probed there, and the
+  # contract reporting it is the daily run doing its job.
+  local committed="$COMMITTED_HELP_DIR/$stem-$version.txt"
+  if [ -f "$committed.hidden" ]; then
+    cp "$committed.hidden" "$outdir/$stem-$version.txt.hidden"
+  fi
   echo "$outdir/$stem-$version.txt"
 }
 
@@ -261,11 +298,11 @@ cmd_flag_contract() {
   local out rc=0
   out="$(mktemp "${TMPDIR:-/tmp}/adapter-canary-flagcontract.XXXXXX")"
   ( cd "$REPO_ROOT" && NIGHTGAUGE_FLAG_CONTRACT_HELP_DIR="$helpdir" \
-      go test -v ./internal/execution/adapters -run TestFlagContract -count=1 ) >"$out" 2>&1 || rc=$?
+      bounded "$GOTEST_TIMEOUT" go test -v ./internal/execution/adapters -run TestFlagContract -count=1 ) >"$out" 2>&1 || rc=$?
 
   local adapters
   adapters="$(for f in "$MANIFESTS"/*.json; do basename "$f" .json; done)"
-  local adapter version failed
+  local adapter version failed any_failed=0
   for adapter in $adapters; do
     version="$(flag_contract_capture_version "$helpdir" "$adapter")"
     [ -n "$version" ] || version="$(manifest_field "$adapter" '.max_tested // ""')"
@@ -291,12 +328,32 @@ cmd_flag_contract() {
       | grep -v -E ': flags not checked against help: ' \
       | head -n1 || true)"
     if [ -n "$failed" ]; then
+      any_failed=1
       json_row adapter="$adapter" version="$version" check=flag-contract result=fail \
         detail="$(echo "$failed" | sed -E "s/^[^:]+:[0-9]+: //")"
     else
       json_row adapter="$adapter" version="$version" check=flag-contract result=pass detail=""
     fi
   done
+
+  # A genuine failure (rc!=0) whose t.Error line is not prefixed
+  # "<adapter>: " — flagContractProblems reports several this way: a
+  # malformed capture ("parsed only N options..."), a header/command/version
+  # mismatch, or an orphan sidecar — is attributed to no adapter above, so
+  # every row above reads "pass" even though the suite failed. Without this,
+  # `report` (which only acts on result == "fail") files nothing for exactly
+  # the kind of break — a help-format change — this leg exists to catch.
+  if [ "$rc" -ne 0 ] && [ "$any_failed" -eq 0 ]; then
+    local fallback
+    fallback="$(grep -E '_test\.go:[0-9]+:' "$out" \
+      | grep -v -E 'is known broken \(#[0-9]+\)' \
+      | grep -v -E 'is hidden in .*records it probed as accepted on' \
+      | grep -v -E ': flags not checked against help: ' \
+      | head -n1 || true)"
+    [ -n "$fallback" ] || fallback="$(tail -n 5 "$out" | tr '\n' ' ')"
+    json_row adapter=flag-contract version="" check=flag-contract result=fail \
+      detail="$(echo "$fallback" | sed -E 's/^[^:]+:[0-9]+: //')"
+  fi
   rm -f "$out"
   return "$rc"
 }
@@ -306,13 +363,19 @@ cmd_flag_contract() {
 # ---------------------------------------------------------------------------
 
 cmd_opencode_canary() {
-  local bin="${1:?usage: opencode-canary <opencode-bin>}"
+  local bin="${1:?usage: opencode-canary <opencode-bin> [version]}"
   local dir version out rc=0
   dir="$(dirname "$bin")"
-  version="$(manifest_field opencode '.max_tested // ""')"
+  # The INSTALLED version, passed by the caller (the workflow's install step
+  # already resolved it) — not the manifest's max_tested, which is only the
+  # last-approved baseline and, on a daily/latest run, is almost always stale.
+  # Falling back to max_tested here is only for a caller that has no other
+  # version to hand (e.g. a manual invocation).
+  version="${2:-}"
+  [ -n "$version" ] || version="$(manifest_field opencode '.max_tested // ""')"
   out="$(mktemp "${TMPDIR:-/tmp}/adapter-canary-opencode.XXXXXX")"
-  ( cd "$REPO_ROOT" && PATH="$dir:$PATH" CI=true \
-      go test -tags canary ./internal/execution -run TestOpenCodeCanary -count=1 ) >"$out" 2>&1 || rc=$?
+  ( cd "$REPO_ROOT" && PATH="$dir:$PATH" CI=true NIGHTGAUGE_CANARY=true \
+      bounded "$GOTEST_TIMEOUT" go test -tags canary ./internal/execution -run TestOpenCodeCanary -count=1 ) >"$out" 2>&1 || rc=$?
   if [ "$rc" -eq 0 ]; then
     json_row adapter=opencode version="$version" check=opencode-canary result=pass detail=""
   else
@@ -322,6 +385,7 @@ cmd_opencode_canary() {
     json_row adapter=opencode version="$version" check=opencode-canary result=fail detail="$detail"
   fi
   rm -f "$out"
+  return "$rc"
 }
 
 # ---------------------------------------------------------------------------
@@ -360,10 +424,11 @@ PY
 }
 
 cmd_schema_diff() {
-  local live_file=""
+  local live_file="" opt_version=""
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --live-file) live_file="$2"; shift 2 ;;
+      --version) opt_version="$2"; shift 2 ;;
       *) die "schema-diff: unknown argument '$1'" ;;
     esac
   done
@@ -387,8 +452,12 @@ cmd_schema_diff() {
 
   local live_sum
   live_sum="$(sha256_of "$live")"
-  local version
-  version="$(manifest_field opencode '.max_tested // ""')"
+  # The INSTALLED version, passed by the caller — not the manifest's
+  # max_tested, for the same reason cmd_opencode_canary takes it (a stale
+  # label defeats the per-adapter+version dedupe in `report`). Falls back to
+  # max_tested only when the caller has no other version to hand.
+  local version="$opt_version"
+  [ -n "$version" ] || version="$(manifest_field opencode '.max_tested // ""')"
 
   if [ "$live_sum" = "$manifest_sum" ]; then
     json_row adapter=opencode version="$version" check=schema-diff result=unchanged detail=""
@@ -402,7 +471,7 @@ cmd_schema_diff() {
   local suite_out rc=0
   suite_out="$(mktemp "${TMPDIR:-/tmp}/adapter-canary-schema-suite.XXXXXX")"
   ( cd "$REPO_ROOT" && NIGHTGAUGE_OPENCODE_SCHEMA_PATH="$live" \
-      go test ./internal/execution/adapters \
+      bounded "$GOTEST_TIMEOUT" go test ./internal/execution/adapters \
         -run 'TestGeneratedConfigsValidate|TestValidatorRejectsUnknownKey|TestNoDeprecatedKeys|TestSecurityKeysPresentAndKnown' \
         -count=1 ) >"$suite_out" 2>&1 || rc=$?
 
@@ -416,16 +485,26 @@ d["config_suite"] = sys.argv[2]
 print(json.dumps(d))
 PY
 )"
-  json_row adapter=opencode version="$version" check=schema-diff result=changed detail="$detail"
+  # A live schema that breaks the #1634 suite — including dropping or
+  # renaming a security key TestSecurityKeysPresentAndKnown exists to catch —
+  # is a real contract break, not mere "changed" bookkeeping: `report` only
+  # files a drift issue for a result=fail row, and this step must itself fail
+  # so the job goes red (once the tee/pipefail fix lets that status through).
+  local result="changed"
+  [ "$suite_result" = "fail" ] && result="fail"
+  json_row adapter=opencode version="$version" check=schema-diff result="$result" detail="$detail"
   [ -n "$live_file" ] || rm -f "$live"
   rm -f "$suite_out"
+  [ "$suite_result" = "pass" ]
 }
 
 # ---------------------------------------------------------------------------
 # stub-run: start/stop the real stub-provider BINARY (cmd/stub-provider),
-# bounded, PID captured and confirmed dead — the artifact-capture leg the
-# workflow uses to upload the raw stream, apart from the Go test's own
-# in-process stub.
+# bounded, PID captured and confirmed dead. Used only by
+# scripts/test-adapter-canary.sh to exercise the timeout/cleanup contract
+# directly — the workflow's own opencode-canary leg never calls these; its
+# stub run is the Go test's in-process one (stubprovider.NewServer), whose
+# stream this script has no way to capture.
 # ---------------------------------------------------------------------------
 
 # opencode_canary_stub_start <script> <pidfile> <urlfile>: builds (if needed)
@@ -445,7 +524,22 @@ opencode_canary_stub_start() {
     sleep 0.1
     tries=$((tries + 1))
   done
-  [ -s "$urlfile" ] || die "stub-provider did not print its base_url in time"
+  if [ ! -s "$urlfile" ]; then
+    # A hang on this path must not leak $pid (and whatever it spawned): kill
+    # the whole subtree and confirm it is dead before dying, the same
+    # guarantee opencode_canary_stub_stop gives its own caller. Children
+    # first: killing $pid before its children reparents them to init (PID 1)
+    # before `pkill -P "$pid"` can find them by parent, which is exactly how
+    # the fake stub-provider's own `sleep 9999` used to survive this path.
+    pkill -9 -P "$pid" 2>/dev/null || true
+    kill -9 "$pid" 2>/dev/null || true
+    tries=0
+    while kill -0 "$pid" 2>/dev/null && [ "$tries" -lt 50 ]; do
+      sleep 0.1
+      tries=$((tries + 1))
+    done
+    die "stub-provider did not print its base_url in time"
+  fi
 }
 
 # opencode_canary_stub_stop <pidfile>: kills the stub-provider named in
@@ -480,26 +574,15 @@ cmd_report() {
   command -v gh >/dev/null 2>&1 || die "gh is not on PATH"
 
   # One title per adapter+version among the FAILING rows, each with its own
-  # failing rows folded into the issue body.
-  local titles
-  titles="$(python3 - "$summary" <<'PY'
-import json, sys
-rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
-seen = {}
-for r in rows:
-    if r.get("result") != "fail":
-        continue
-    key = (r.get("adapter", ""), r.get("version", ""))
-    seen.setdefault(key, []).append(r)
-for (adapter, version), failing in seen.items():
-    title = f"canary: {adapter} {version} drift"
-    body_lines = [f"- {r.get('check')}: {r.get('detail','')}" for r in failing]
-    print(title + "\x1f" + "\n".join(body_lines))
-PY
-)"
-  [ -n "$titles" ] || { echo "no failing rows; nothing to file"; return 0; }
-
-  while IFS=$'\x1f' read -r title body; do
+  # failing rows folded into the issue body. NUL-delimited (title, body)
+  # pairs, read below with `read -d ''`, not "\x1f" + a line-based `read`: a
+  # body with more than one failing row (opencode failing both flag-contract
+  # and opencode-canary at the same version is the common case) spans several
+  # lines, and a line-based read turned every line after the first into a
+  # bogus new title with an empty body.
+  local any=0
+  while IFS= read -r -d '' title && IFS= read -r -d '' body; do
+    any=1
     [ -n "$title" ] || continue
     local existing
     existing="$(gh issue list --state open --search "in:title \"$title\"" --json title,url \
@@ -512,7 +595,23 @@ PY
       url="$(gh issue create --title "$title" --body "$body" --label component:ci)"
       echo "created $url"
     fi
-  done <<<"$titles"
+  done < <(python3 - "$summary" <<'PY'
+import json, sys
+rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+seen = {}
+for r in rows:
+    if r.get("result") != "fail":
+        continue
+    key = (r.get("adapter", ""), r.get("version", ""))
+    seen.setdefault(key, []).append(r)
+for (adapter, version), failing in seen.items():
+    title = f"canary: {adapter} {version} drift"
+    body = "\n".join(f"- {r.get('check')}: {r.get('detail','')}" for r in failing)
+    sys.stdout.write(title + "\0" + body + "\0")
+PY
+)
+
+  [ "$any" -eq 1 ] || echo "no failing rows; nothing to file"
 }
 
 # ---------------------------------------------------------------------------

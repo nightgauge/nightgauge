@@ -123,7 +123,9 @@ jobs:
           done
 
       - name: Run TestFlagContract against the fresh captures
-        run: bash scripts/adapter-canary.sh flag-contract "$RUNNER_TEMP/help" | tee "$RUNNER_TEMP/flag-contract-summary.jsonl"
+        run: |
+          set -euo pipefail
+          bash scripts/adapter-canary.sh flag-contract "$RUNNER_TEMP/help" | tee "$RUNNER_TEMP/flag-contract-summary.jsonl"
 
       - name: Upload the summary rows
         if: ${{ always() }}
@@ -166,25 +168,37 @@ jobs:
           out="$(bash scripts/adapter-canary.sh install opencode "$requested")"
           eval "$out"
           echo "bin=$bin" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Run the OpenCode canary (stub run, permission leg, bad model)
         env:
           CI: "true"
-        run: bash scripts/adapter-canary.sh opencode-canary "${{ steps.install.outputs.bin }}" | tee "$RUNNER_TEMP/opencode-summary.jsonl"
+        run: |
+          set -euo pipefail
+          bash scripts/adapter-canary.sh opencode-canary \
+            "${{ steps.install.outputs.bin }}" "${{ steps.install.outputs.version }}" \
+            | tee "$RUNNER_TEMP/opencode-summary.jsonl"
 
-      - name: Upload the stub-run stream
+      - name: Upload the opencode-canary run summary
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          # Re-committing fixtures from this is a human step
-          # (docs/runbooks/adapter-bump.md, #1669), never automatic.
-          name: opencode-canary-stream-${{ steps.install.outputs.version }}
+          # This is the one-row JSON summary (result: pass/fail), not a raw
+          # `opencode run --format json` stream — the Go test's stub run is
+          # in-process (stubprovider.NewServer) and never writes its stream
+          # anywhere this workflow could upload it. The version in the name
+          # is the INSTALLED version (steps.install.outputs.version), so a
+          # daily run's artifact is never named with a stale max_tested.
+          name: opencode-canary-run-summary-${{ steps.install.outputs.version }}
           path: ${{ runner.temp }}/opencode-summary.jsonl
           if-no-files-found: warn
           retention-days: 14
 
       - name: Diff the live OpenCode config schema against the pin
-        run: bash scripts/adapter-canary.sh schema-diff | tee "$RUNNER_TEMP/schema-diff-summary.jsonl"
+        run: |
+          set -euo pipefail
+          bash scripts/adapter-canary.sh schema-diff --version "${{ steps.install.outputs.version }}" \
+            | tee "$RUNNER_TEMP/schema-diff-summary.jsonl"
 
       - name: Upload the summary rows
         if: ${{ always() }}

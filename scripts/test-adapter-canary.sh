@@ -132,6 +132,42 @@ echo '{"adapter":"opencode","version":"1.18.30","check":"opencode-canary","resul
 PATH="$FAKE_BIN:$PATH" bash "$SCRIPT" report "$CLEAN_SUMMARY" >/dev/null
 check "a summary with no failing rows calls gh at all: it does not" sh -c "[ ! -s '$GH_LOG' ]"
 
+# Two failing rows for the SAME adapter+version (opencode failing both
+# flag-contract and opencode-canary at once is the common trigger) must file
+# exactly ONE issue, with both rows folded into its body — not a second, bogus
+# issue titled with the second row's own detail text.
+GH_STATE2="$TMP/gh-state2"
+mkdir -p "$GH_STATE2"
+FAKE_BIN2="$TMP/fakebin2"
+mkdir -p "$FAKE_BIN2"
+GH_LOG2="$TMP/gh2.log"
+cat >"$FAKE_BIN2/gh" <<EOF
+#!/usr/bin/env bash
+echo "gh \$*" >> "$GH_LOG2"
+case "\$1 \$2" in
+  "issue list") echo '[]' ;;
+  "issue create")
+    echo created > "$GH_STATE2/created"
+    echo "https://example.test/issues/8888"
+    ;;
+  "issue comment") echo commented >> "$GH_STATE2/comments" ;;
+  *) echo "unhandled: \$*" >&2; exit 1 ;;
+esac
+EOF
+chmod +x "$FAKE_BIN2/gh"
+MULTI_SUMMARY="$TMP/multi.jsonl"
+cat >"$MULTI_SUMMARY" <<'JSONL'
+{"adapter":"opencode","version":"1.18.30","check":"flag-contract","result":"fail","detail":"BuildCommand emits -m (with zero RunOptions), which opencode-run-1.18.30.txt does not define"}
+{"adapter":"opencode","version":"1.18.30","check":"opencode-canary","result":"fail","detail":"opencode_canary_test.go:420: stderr: event type not-a-type"}
+JSONL
+PATH="$FAKE_BIN2:$PATH" bash "$SCRIPT" report "$MULTI_SUMMARY" >/dev/null
+check "two failing rows, same adapter+version: exactly one 'gh issue create' ran" \
+  sh -c "[ \"\$(grep -c '^gh issue create' '$GH_LOG2')\" = 1 ]"
+check "the one issue is titled for the adapter+version, not a row's own detail text" \
+  grep -q -- "--title canary: opencode 1.18.30 drift" "$GH_LOG2"
+check "the one issue's body carries BOTH failing rows" \
+  sh -c "grep -q 'flag-contract:' '$GH_LOG2' && grep -q 'opencode-canary:' '$GH_LOG2'"
+
 echo ""
 echo "=== 3. stub-provider timeouts and cleanup ==="
 
@@ -151,12 +187,19 @@ echo "=== 3. stub-provider timeouts and cleanup ==="
   fi
 
   # 3b. a "stub-provider" that never prints its base_url makes
-  # opencode_canary_stub_start fail (bounded), rather than hang forever.
+  # opencode_canary_stub_start fail (bounded), rather than hang forever — and
+  # kills the process it started, including the child that process spawned
+  # (bash's own last-command optimization can make the wrapper's `sleep 9999`
+  # a separate, reparentable child rather than replacing the wrapper), not
+  # just leave it to be reparented to init and outlive the run.
   FAKEDIR="$TMP/fake-stub-bin"
   mkdir -p "$FAKEDIR/bin"
-  cat >"$FAKEDIR/bin/stub-provider" <<'FAKE'
+  SLEEP_PIDFILE="$TMP/hang-sleep.pid"
+  cat >"$FAKEDIR/bin/stub-provider" <<FAKE
 #!/usr/bin/env bash
-sleep 9999
+sleep 9999 &
+echo \$! >"$SLEEP_PIDFILE"
+wait
 FAKE
   chmod +x "$FAKEDIR/bin/stub-provider"
   START=$(date +%s)
@@ -173,14 +216,26 @@ FAKE
     else
       echo "FAIL stub-start-times-out-on-a-hang (took ${ELAPSED}s)"
     fi
-    # The hung fake process is still running under its own pid; clean it up
-    # directly (it is not the real stub-provider's PID file contract).
   fi
-  pkill -f "$FAKEDIR/bin/stub-provider" 2>/dev/null || true
+  # opencode_canary_stub_start's own timeout-path cleanup, not a pattern-based
+  # pkill here, must already have killed the wrapper's sleep child.
+  sleep 0.3
+  if [ -f "$SLEEP_PIDFILE" ] && kill -0 "$(cat "$SLEEP_PIDFILE")" 2>/dev/null; then
+    echo "FAIL stub-start-kills-its-own-child (pid $(cat "$SLEEP_PIDFILE") still alive)"
+  else
+    echo "PASS stub-start-kills-its-own-child"
+  fi
+  # A safety net for this suite itself, independent of the FAIL/PASS above:
+  # this test must never be the reason a `sleep 9999` (or its wrapper)
+  # outlives the run, whether or not opencode_canary_stub_start's own
+  # cleanup did its job.
+  [ -f "$TMP/hang.pid" ] && { kill -9 "$(cat "$TMP/hang.pid")" 2>/dev/null || true; }
+  [ -f "$SLEEP_PIDFILE" ] && { kill -9 "$(cat "$SLEEP_PIDFILE")" 2>/dev/null || true; }
 ) >"$TMP/stub-cases.log" 2>&1
 cat "$TMP/stub-cases.log"
 check "opencode_canary_stub_stop kills a hung process" grep -q '^PASS stub-stop-kills-hung-process' "$TMP/stub-cases.log"
 check "opencode_canary_stub_start does not hang forever on a silent stub" grep -q '^PASS stub-start-times-out-on-a-hang' "$TMP/stub-cases.log"
+check "opencode_canary_stub_start kills the child it started, not just the wrapper" grep -q '^PASS stub-start-kills-its-own-child' "$TMP/stub-cases.log"
 
 echo ""
 echo "=== 4. flag-contract row attribution ==="
@@ -209,6 +264,132 @@ check "codex is not mis-attributed the failure" \
   sh -c "echo '$OUT' | jq -c 'select(.adapter==\"codex\")' | jq -e '.result == \"pass\"' >/dev/null"
 check "grok is not mis-attributed the failure" \
   sh -c "echo '$OUT' | jq -c 'select(.adapter==\"grok\")' | jq -e '.result == \"pass\"' >/dev/null"
+
+# 4c. capture-help carries the committed hidden-flag sidecar over when the
+# freshly captured version is the committed capture's own version — the exact
+# shape a pull_request run (VERSION_MODE=pinned, every manifest CLI installed
+# at its OWN max_tested) and a daily/latest run with no new release produce.
+# Without this, claude-headless (--max-turns) and grok (--no-auto-update) fail
+# the contract every single day at their own already-approved version.
+FRESH="$TMP/fresh-capture"
+mkdir -p "$FRESH"
+FAKEBINS="$TMP/fakebins"
+mkdir -p "$FAKEBINS"
+for pair in "claude-headless:claude:" "grok:grok:" "opencode:opencode:run"; do
+  adapter="${pair%%:*}"
+  rest="${pair#*:}"
+  binname="${rest%%:*}"
+  sub="${rest#*:}"
+  for capture in "$CLI_HELP/$adapter"-*.txt; do break; done
+  ver="$(basename "$capture" .txt | grep -oE '[0-9]+\.[0-9]+\.[0-9]+$')"
+  fake="$FAKEBINS/$binname"
+  if [ -n "$sub" ]; then
+    cat >"$fake" <<FAKE
+#!/usr/bin/env bash
+if [ "\$1" = "$sub" ] && [ "\$2" = "--help" ]; then tail -n +2 "$capture"; fi
+FAKE
+  else
+    cat >"$fake" <<FAKE
+#!/usr/bin/env bash
+if [ "\$1" = "--help" ]; then tail -n +2 "$capture"; fi
+FAKE
+  fi
+  chmod +x "$fake"
+  ADAPTER_CANARY_VERSION="$ver" bash "$SCRIPT" capture-help "$adapter" "$fake" "$FRESH" >/dev/null
+done
+# codex has no compat-adapter fake bin above; carry its own committed capture
+# over unchanged so the flag-contract run below covers every captured
+# adapter, not just the three this sidecar fix concerns.
+cp "$CLI_HELP/codex-exec-0.145.0.txt" "$FRESH/"
+check "capture-help writes claude-headless's committed .hidden sidecar at its own version" \
+  [ -f "$FRESH/claude-headless-2.1.258.txt.hidden" ]
+check "capture-help writes grok's committed .hidden sidecar at its own version" \
+  [ -f "$FRESH/grok-1.0.4.txt.hidden" ]
+OUT="$(bash "$SCRIPT" flag-contract "$FRESH" 2>&1)"
+check "flag-contract on a directory captured without sidecars, but at each adapter's own version, still exits 0" \
+  sh -c "bash '$SCRIPT' flag-contract '$FRESH' >/dev/null 2>&1"
+check "claude-headless passes on a freshly captured (sidecar-less) help dir" \
+  sh -c "echo '$OUT' | jq -c 'select(.adapter==\"claude-headless\")' | jq -e '.result == \"pass\"' >/dev/null"
+check "grok passes on a freshly captured (sidecar-less) help dir" \
+  sh -c "echo '$OUT' | jq -c 'select(.adapter==\"grok\")' | jq -e '.result == \"pass\"' >/dev/null"
+
+# 4d. a genuine failure whose t.Error line is not prefixed "<adapter>: "
+# (flagContractProblems reports a malformed capture, a header/command/version
+# mismatch, or an orphan sidecar this way) still produces a fail row — not six
+# silent "pass" rows with the suite's own non-zero exit as the only signal.
+TRUNCATED="$TMP/truncated-help"
+mkdir -p "$TRUNCATED"
+cp "$CLI_HELP"/*.txt "$CLI_HELP"/*.txt.hidden "$TRUNCATED/" 2>/dev/null
+head -n 3 "$CLI_HELP/opencode-run-1.18.30.txt" >"$TRUNCATED/opencode-run-1.18.30.txt"
+OUT="$(bash "$SCRIPT" flag-contract "$TRUNCATED")"
+RC=$?
+check "flag-contract exits non-zero on a malformed capture" [ "$RC" -ne 0 ]
+check "every per-adapter row still reads pass (the malformed capture is not '<adapter>: '-prefixed)" \
+  sh -c "! echo '$OUT' | jq -c 'select(.adapter != \"flag-contract\")' | jq -r '.result' | grep -qx fail"
+check "a fallback fail row is still emitted, so report still files a drift issue" \
+  sh -c "row=\$(echo '$OUT' | jq -c 'select(.adapter==\"flag-contract\")'); [ -n \"\$row\" ] && echo \"\$row\" | jq -e '.result == \"fail\"' >/dev/null"
+
+echo ""
+echo "=== 5. opencode-canary and schema-diff propagate a failure's exit code ==="
+
+# 5a. cmd_opencode_canary must return the underlying `go test` failure's exit
+# code (it used to end on `rm -f`, whose own exit status masked it), so the
+# tee'd workflow step (once pipefail is set) actually goes red.
+FAKE_GO_DIR="$TMP/fake-go"
+mkdir -p "$FAKE_GO_DIR"
+cat >"$FAKE_GO_DIR/go" <<'FAKEGO'
+#!/usr/bin/env bash
+echo "opencode_canary_test.go:420: opencode: fake stream contract failure" >&2
+exit 1
+FAKEGO
+chmod +x "$FAKE_GO_DIR/go"
+FAKE_OPENCODE_DIR="$TMP/fake-opencode"
+mkdir -p "$FAKE_OPENCODE_DIR"
+cat >"$FAKE_OPENCODE_DIR/opencode" <<'FAKEOC'
+#!/usr/bin/env bash
+echo "1.19.0"
+FAKEOC
+chmod +x "$FAKE_OPENCODE_DIR/opencode"
+(
+  source "$SCRIPT"
+  PATH="$FAKE_GO_DIR:$PATH" cmd_opencode_canary "$FAKE_OPENCODE_DIR/opencode" 1.19.0 >"$TMP/opencode-canary-row.jsonl"
+  echo "RC=$?" >"$TMP/opencode-canary-rc.txt"
+)
+check "cmd_opencode_canary's row reports the installed version, not max_tested" \
+  sh -c "jq -e '.version == \"1.19.0\"' '$TMP/opencode-canary-row.jsonl' >/dev/null"
+check "cmd_opencode_canary's row reports fail" \
+  sh -c "jq -e '.result == \"fail\"' '$TMP/opencode-canary-row.jsonl' >/dev/null"
+check "cmd_opencode_canary returns non-zero on a failing go test" \
+  grep -q '^RC=[1-9]' "$TMP/opencode-canary-rc.txt"
+
+# 5b. cmd_schema_diff must fail (result=fail, non-zero exit) when the live
+# schema breaks the #1634 suite — not report=changed and exit 0, which
+# silences exactly the alarm TestSecurityKeysPresentAndKnown exists to raise.
+DROPPED="$TMP/dropped-schema.json"
+python3 - "$SCHEMA" "$DROPPED" <<'PY'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+node = doc
+for _ in range(8):
+    if "properties" in node:
+        break
+    if "$ref" in node and "$defs" in doc:
+        node = doc["$defs"][node["$ref"].split("/")[-1]]
+        continue
+    break
+node["properties"].pop("share", None)
+node["properties"].pop("autoupdate", None)
+json.dump(doc, open(sys.argv[2], "w"))
+PY
+OUT="$(bash "$SCRIPT" schema-diff --live-file "$DROPPED" --version 1.19.0 2>/dev/null)"
+RC=$?
+check "schema-diff exits non-zero when the live schema breaks the #1634 suite" [ "$RC" -ne 0 ]
+check "schema-diff's row reports result=fail, not changed" \
+  sh -c "[ -n '$OUT' ] && echo '$OUT' | jq -e '.result == \"fail\"' >/dev/null"
+check "schema-diff's row reports the version the caller passed" \
+  sh -c "[ -n '$OUT' ] && echo '$OUT' | jq -e '.version == \"1.19.0\"' >/dev/null"
+check "schema-diff's detail still carries the property-level diff" \
+  sh -c "[ -n '$OUT' ] && echo '$OUT' | jq -r '.detail' | jq -e '.removed == [\"autoupdate\", \"share\"]' >/dev/null"
 
 echo ""
 echo "=== $PASS passed, $FAIL failed ==="

@@ -59,9 +59,22 @@ const openCodeInheritNotice = "opencode.inherit_user_config is on: this dispatch
 // here carries it, so none can reach a public registry.
 const openCodeNoRegistry = "npm_config_registry=http://127.0.0.1:9/"
 
+// nightgaugeCanaryEnv, set by scripts/adapter-canary.sh's cmd_opencode_canary
+// (never by the opencode_integration suite), relaxes realOpenCode's exact
+// version pin: the whole point of the #1639 canary leg is to exercise
+// whatever npm's `latest` dist-tag resolves to today, which is almost never
+// openCodeIntegrationVersion. Without this, the daily run can only ever
+// report "a newer version exists" against the wrong (pinned) version label
+// and never actually drive the newest release through the stream contract.
+const nightgaugeCanaryEnv = "NIGHTGAUGE_CANARY"
+
 // realOpenCode resolves the opencode binary before any shim shadows it and
 // checks its version under a throwaway HOME. On CI a missing binary fails the
-// case: CI installs the pinned version to run these cases.
+// case: CI installs the pinned version to run these cases. Under the canary
+// build (nightgaugeCanaryEnv=true), any resolvable MAJOR.MINOR.PATCH is
+// accepted instead of exactly openCodeIntegrationVersion; the
+// opencode_integration suite (nightgaugeCanaryEnv unset) always enforces the
+// exact pin, because THAT suite's assertions were observed on that version.
 func realOpenCode(t *testing.T) string {
 	t.Helper()
 	path, err := exec.LookPath("opencode")
@@ -77,10 +90,76 @@ func realOpenCode(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("opencode --version: %v", err)
 	}
-	if v := strings.TrimSpace(string(out)); v != openCodeIntegrationVersion {
+	v := strings.TrimSpace(string(out))
+	if os.Getenv(nightgaugeCanaryEnv) == "true" {
+		if !openCodeVersionRE.MatchString(v) {
+			t.Fatalf("opencode --version printed %q, not a MAJOR.MINOR.PATCH version", v)
+		}
+		if v != openCodeIntegrationVersion {
+			t.Logf("opencode %s is installed (canary: pin relaxed from the %s baseline observed for ADR-022)", v, openCodeIntegrationVersion)
+		}
+		return path
+	}
+	if v != openCodeIntegrationVersion {
 		t.Fatalf("opencode %s is installed; these cases were observed on %s. Re-verify ADR-022's observations before changing the pin", v, openCodeIntegrationVersion)
 	}
 	return path
+}
+
+// realOpenCodePinHelperEnv marks a subprocess as
+// TestRealOpenCodePinRelaxedUnderCanaryHelper's own invocation, so running
+// the whole suite normally never runs it standalone.
+const realOpenCodePinHelperEnv = "NG_REALOPENCODE_PIN_HELPER"
+
+// TestRealOpenCodePinRelaxedUnderCanaryHelper does nothing but call
+// realOpenCode and let it Fatal or not; TestRealOpenCodePinRelaxedUnderCanary
+// re-execs the test binary onto just this test (the standard
+// os/exec-style helper-process pattern) so it can assert on the exit code of
+// a REAL t.Fatalf, something no amount of t.Run bookkeeping can do without
+// also failing the outer test.
+func TestRealOpenCodePinRelaxedUnderCanaryHelper(t *testing.T) {
+	if os.Getenv(realOpenCodePinHelperEnv) != "1" {
+		t.Skip("only runs as TestRealOpenCodePinRelaxedUnderCanary's subprocess")
+	}
+	realOpenCode(t)
+}
+
+// TestRealOpenCodePinRelaxedUnderCanary is the regression test for
+// nightgaugeCanaryEnv: without it, realOpenCode failed on any opencode
+// version other than openCodeIntegrationVersion, so the #1639 daily canary
+// — which installs npm's `latest` dist-tag, almost never that pinned version
+// — could never actually drive the newest release through the live stream,
+// permission and bad-model legs; it could only fail on the pin itself. With
+// it set, a different (but still valid) version is accepted; the
+// opencode_integration suite (which never sets it) keeps the exact pin.
+func TestRealOpenCodePinRelaxedUnderCanary(t *testing.T) {
+	fake := t.TempDir()
+	script := filepath.Join(fake, "opencode")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho 9.9.9\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	run := func(canary bool) (passed bool, output []byte) {
+		t.Helper()
+		cmd := exec.Command(os.Args[0], "-test.run=^TestRealOpenCodePinRelaxedUnderCanaryHelper$", "-test.v")
+		env := append(os.Environ(),
+			realOpenCodePinHelperEnv+"=1",
+			"PATH="+fake+string(os.PathListSeparator)+os.Getenv("PATH"),
+		)
+		if canary {
+			env = append(env, nightgaugeCanaryEnv+"=true")
+		}
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		return err == nil, out
+	}
+
+	if passed, out := run(false); passed {
+		t.Errorf("realOpenCode accepted opencode 9.9.9 with %s unset; the opencode_integration suite's exact pin must still hold:\n%s", nightgaugeCanaryEnv, out)
+	}
+	if passed, out := run(true); !passed {
+		t.Errorf("realOpenCode rejected opencode 9.9.9 with %s=true; the canary leg needs the pin relaxed to drive npm's latest dist-tag:\n%s", nightgaugeCanaryEnv, out)
+	}
 }
 
 // openCodeShim installs the shim and returns the directory it writes to. It

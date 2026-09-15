@@ -2,17 +2,25 @@
 
 package execution
 
-// The latest-CLI canary's OpenCode leg (#1639), tied to the manifest's own
-// max_tested (opencode 1.18.30, ADR-022 § 20). scripts/adapter-canary.sh runs
+// The latest-CLI canary's OpenCode leg (#1639). scripts/adapter-canary.sh
+// runs
 //
 //	go test -tags canary ./internal/execution -run TestOpenCodeCanary
 //
-// after installing that version, against the #1618 stub provider.
+// after installing opencode at, on a schedule or workflow_dispatch, npm's
+// `latest` dist-tag — almost never the manifest's own max_tested (opencode
+// 1.18.30, ADR-022 § 20) — or, on a pull_request that proposes a new
+// max_tested, that proposed version; either way against the #1618 stub
+// provider. realOpenCode's own version pin (see nightgaugeCanaryEnv in
+// opencode_isolation_integration_test.go) is relaxed to any resolvable
+// version under this build tag for exactly that reason: this leg's whole
+// point is to exercise whatever is newest today, not to re-verify the pin.
 //
 // TestOpenCodeCanaryLiveStream dispatches through the same Manager.RunStage
 // path a real stage runs (adapters.NewOpenCodeAdapter), reusing the helpers
 // opencode_isolation_integration_test.go and manager_test.go already proved:
-// realOpenCode (the version pin and CI-must-run rule), isolateOpenCodeHome,
+// realOpenCode (the CI-must-run rule; the exact-version pin holds only for
+// the separate opencode_integration suite), isolateOpenCodeHome,
 // openCodeStageOptions, writeOpenCodeMachineConfig and openCodeGitWorktree.
 // TestOpenCodeCanaryPermission and TestOpenCodeCanaryBadModel's exit-code
 // assertions are about the CLI's OWN contract, which Manager.RunStage's own
