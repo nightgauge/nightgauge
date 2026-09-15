@@ -534,6 +534,42 @@ changelog, and the release workflow refuses a tag that does not.
   warns when the binary changed since the last dispatch. With
   `NIGHTGAUGE_EXPERIMENTAL_OPENCODE` unset the row runs nothing and is not
   usable, so cap recovery never hops onto it (#1627)
+- The Nightgauge OpenCode plugin's `gates.js` now runs workflow-gate and
+  stage-gate too, not just #1635's careful-gate: a `bash` tool call runs
+  workflow-gate, careful-gate, then stage-gate, in `hooks.json`'s own
+  PreToolUse order (first deny wins), so a push to main, a force-push, a
+  destructive git operation, a secret read/write, an analysis stage
+  advancing git/forge state outside its mandate, and a `gh pr merge --admin`/
+  `--auto` bypass are all blocked under OpenCode exactly as they already are
+  under Claude Code. `edit` and `write` tool calls run workflow-gate with a
+  Claude-shaped `file_path` payload, so editing `.env` or writing
+  `credentials.json` is blocked the same way. Every tool id opencode 1.18.30
+  exposes is now pinned to a classification (`TOOL_CLASSIFICATION`, a frozen,
+  null-prototype table so an inherited `Object.prototype` key such as
+  `constructor` or `__proto__` can never read back as a defined kind and
+  bypass the check below it); a tool id the table does not list is blocked
+  closed with `[nightgauge-gate:unknown-tool]`, and `apply_patch` — real,
+  and reachable whenever the dispatch model's id matches opencode's own
+  `gpt-*` (non-`oss`, non-`gpt-4`) tool-selection rule, which offers
+  `apply_patch` instead of `edit`/`write` for that model family — is
+  classified and blocked rather than guessed at, since its `patchText` hunks
+  are not yet mapped to a Claude-shaped `file_path` payload. opencode's own
+  read-only MCP resource tools (`list_mcp_resources`,
+  `list_mcp_resource_templates`, `read_mcp_resource`) are classified
+  passthrough; a repository's own MCP server tools (`<server>_<tool>`) are
+  not yet mapped and stay blocked closed under `[nightgauge-gate:unknown-tool]`
+  until #1626's per-run `mcp` config is threaded through to the plugin — see
+  the ADR-022 amendment this round for that gap against ADR-022's own
+  capability table. A new `commandExecuteBefore` export runs `hook
+sanitize-prompt` against a `command.execute.before` expansion, and
+  `nightgauge.js` now calls it before any `session.js` delegate (#1641's
+  file), fixing a gap in this same change where the export existed but the
+  registered hook never called it. The unconditional `task` denial (#1635's
+  AC9 fallback) is unchanged. New
+  `internal/execution/opencodeplugin/plugin_gates_test.go` and two testdata
+  fixtures — `gates_parity_corpus.json` and a captured
+  `opencode-1.18.30-tools.txt` — check every gate against the real built
+  binary and the real embedded plugin (#1640)
 
 ### Fixed
 

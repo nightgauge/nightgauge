@@ -1109,29 +1109,29 @@ overlay.
 
 Every OpenCode capability has one disposition:
 
-| Capability                       | Disposition                  | Owner or reason                                                                                                                                                                |
-| -------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Skills                           | supported                    | #1666 (install target), rendered per stage                                                                                                                                     |
-| Commands                         | supported                    | #1666 (`configs/opencode` templates)                                                                                                                                           |
-| Subagents (`task`)               | denied (AC9 fallback)        | #1624 rolls subagent usage into the stage, but the plugin denies `task` unconditionally until AC9 is settled — see the "Nightgauge OpenCode plugin" amendment dated 2026-09-15 |
-| Plugins                          | supported, Nightgauge's only | #1635, #1640, #1641, #1642                                                                                                                                                     |
-| MCP                              | supported                    | #1626                                                                                                                                                                          |
-| Permissions                      | supported                    | #1638                                                                                                                                                                          |
-| Sandboxing                       | non-goal                     | OpenCode has none upstream; containment is § 8 isolation, the permission map and the worktree                                                                                  |
-| Resume and fork                  | deferred                     | #1643 (session resume within a run)                                                                                                                                            |
-| Export                           | supported, sanitized only    | § 22                                                                                                                                                                           |
-| Import                           | non-goal                     | a session file or URL is untrusted input with nothing to gain                                                                                                                  |
-| Usage (`opencode stats`)         | non-goal                     | usage comes from the stream and the registry (§ 3), not OpenCode's catalog prices                                                                                              |
-| `json_schema` output             | deferred                     | #1650                                                                                                                                                                          |
-| Variants (`--variant`)           | supported                    | #1643 maps effort to a variant                                                                                                                                                 |
-| Compaction                       | supported                    | #1625 (settings), #1641 (events)                                                                                                                                               |
-| Worktrees and workspaces         | non-goal                     | Nightgauge owns worktrees; OpenCode's experimental workspaces stay off                                                                                                         |
-| Snapshots                        | off by default               | § 12                                                                                                                                                                           |
-| LSP                              | supported, installed servers | § 12                                                                                                                                                                           |
-| Share                            | non-goal                     | disabled and locked (§ 10)                                                                                                                                                     |
-| GitHub agent (`opencode github`) | deferred                     | #1650                                                                                                                                                                          |
-| ACP                              | deferred                     | #1650                                                                                                                                                                          |
-| `serve` and `run --attach`       | deferred                     | #1650, under § 18's guardrails                                                                                                                                                 |
+| Capability                       | Disposition                                   | Owner or reason                                                                                                                                                                                                                                   |
+| -------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Skills                           | supported                                     | #1666 (install target), rendered per stage                                                                                                                                                                                                        |
+| Commands                         | supported                                     | #1666 (`configs/opencode` templates)                                                                                                                                                                                                              |
+| Subagents (`task`)               | denied (AC9 fallback)                         | #1624 rolls subagent usage into the stage, but the plugin denies `task` unconditionally until AC9 is settled — see the "Nightgauge OpenCode plugin" amendment dated 2026-09-15                                                                    |
+| Plugins                          | supported, Nightgauge's only                  | #1635, #1640, #1641, #1642                                                                                                                                                                                                                        |
+| MCP                              | config: supported; tool calls: blocked closed | #1626 wires the per-run `mcp` config; a repository's own MCP server tool call is blocked closed under `[nightgauge-gate:unknown-tool]` until a mapping exists — see the "OpenCode plugin gate parity" amendment dated 2026-09-15 (round 2, #1640) |
+| Permissions                      | supported                                     | #1638                                                                                                                                                                                                                                             |
+| Sandboxing                       | non-goal                                      | OpenCode has none upstream; containment is § 8 isolation, the permission map and the worktree                                                                                                                                                     |
+| Resume and fork                  | deferred                                      | #1643 (session resume within a run)                                                                                                                                                                                                               |
+| Export                           | supported, sanitized only                     | § 22                                                                                                                                                                                                                                              |
+| Import                           | non-goal                                      | a session file or URL is untrusted input with nothing to gain                                                                                                                                                                                     |
+| Usage (`opencode stats`)         | non-goal                                      | usage comes from the stream and the registry (§ 3), not OpenCode's catalog prices                                                                                                                                                                 |
+| `json_schema` output             | deferred                                      | #1650                                                                                                                                                                                                                                             |
+| Variants (`--variant`)           | supported                                     | #1643 maps effort to a variant                                                                                                                                                                                                                    |
+| Compaction                       | supported                                     | #1625 (settings), #1641 (events)                                                                                                                                                                                                                  |
+| Worktrees and workspaces         | non-goal                                      | Nightgauge owns worktrees; OpenCode's experimental workspaces stay off                                                                                                                                                                            |
+| Snapshots                        | off by default                                | § 12                                                                                                                                                                                                                                              |
+| LSP                              | supported, installed servers                  | § 12                                                                                                                                                                                                                                              |
+| Share                            | non-goal                                      | disabled and locked (§ 10)                                                                                                                                                                                                                        |
+| GitHub agent (`opencode github`) | deferred                                      | #1650                                                                                                                                                                                                                                             |
+| ACP                              | deferred                                      | #1650                                                                                                                                                                                                                                             |
+| `serve` and `run --attach`       | deferred                                      | #1650, under § 18's guardrails                                                                                                                                                                                                                    |
 
 ADR-020 allows an opt-out of a value-adding feature for footprint and cost, and
 already keeps destructive, money-spending and data-exporting features opt-in.
@@ -1933,6 +1933,102 @@ for; it remains open.
 tracks a per-run `HOME`, so `$HOME/.opencode` stops being a config directory
 at all — removing the operator-install wait entirely rather than only
 bounding and classifying it.
+
+## OpenCode plugin gate parity: 1.18.30 divergences from AC assumptions (amendment 2026-09-15, round 2, #1640)
+
+#1640 extended the plugin's `gates.js` (workflow-gate, stage-gate,
+`command.execute.before` sanitize-prompt, and a pinned `TOOL_CLASSIFICATION`
+fail-closed table) beyond the "Nightgauge OpenCode plugin" amendment above's
+careful-gate and `task` denial. AC7 requires recording, here, any observed
+divergence from that work's stated assumptions before continuing; this
+section is that record, written from a fix round that traced three of them
+against the pinned 1.18.30 binary's own minified source rather than
+inference.
+
+**`apply_patch` vs `edit`/`write` is a per-model switch, not a capture
+disagreement.** An earlier version of `gates.js`'s own comments described two
+tool-surface captures — the static `opencode debug agent build` dump and the
+real dispatch stream captures this ADR's § 6 already recorded — as
+"disagreeing" on whether `edit`/`write` or `apply_patch` is the file-mutation
+tool. They do not disagree: 1.18.30's `ToolRegistry.tools({...defaultModel,
+agent})` enables `apply_patch` and disables `edit`/`write` exactly when
+
+```
+modelID.includes("gpt-") && !modelID.includes("oss") && !modelID.includes("gpt-4")
+```
+
+and offers `edit`/`write` (not `apply_patch`) for every other model family.
+`debug agent build`'s empty-`HOME` default model happened to match that rule;
+the real dispatch captures used models that did not. Consequence: any
+OpenCode dispatch whose model id matches this rule — for example an
+`openai/gpt-5*` id admitted from OpenCode's bundled catalog — is offered only
+`apply_patch` for file mutation, which `gates.js` classifies `"blocked"`
+(below), so every tool-based file edit in that stage fails outright rather
+than merely being screened differently. This is a real gap for any pipeline
+stage dispatched against such a model, not a documentation nit; it is not
+fixed here.
+
+**`apply_patch`'s argument shape is known, not "never observed."** Its input
+is a single `{patchText}` string; the pinned binary's own patch parser reads
+`*** Add File:`, `*** Update File:`, `*** Delete File:` and `*** Move to:`
+headers to recover each path a patch touches. `gates.js` still blocks it
+(kind `"blocked"`) because that shape has never been mapped to a Claude-shaped
+`file_path` payload for workflow-gate, not because the shape is unknown.
+
+**`command.execute.before`'s prompt has already had its shell substitutions
+run.** 1.18.30's command-template pipeline substitutes `$ARGUMENTS` into the
+template, then runs every `` !`...` `` span in the COMBINED text through the
+invoking user's own shell, and only afterwards calls
+`trigger("command.execute.before", ...)` with the already-substituted,
+already-shelled-out text. No `tool.execute.before` fires for those shell
+spans. Consequence, confirmed by an offline probe against the real binary (a
+plugin logging and throwing from both hooks, a command template containing
+`` !`touch ...` ``, and a `--command argshell` invocation with a `` !`...` ``
+span inside the caller-supplied argument): the shell commands run and their
+side effects land BEFORE the plugin ever sees the command, and a plugin
+throw aborts the prompt but not the shell command that already ran. A
+subagent (`subtask: true`) command's expansion also arrives as a
+`{type:"subtask", prompt}` output part, not `{type:"text"}` — `gates.js`'s
+`commandExecuteBefore` (#1640) reads only `type:"text"` parts today, so a
+subtask expansion is not currently screened by sanitize-prompt at all. This
+is not reachable from a Nightgauge dispatch today: the adapter never passes
+`--command` (only `run --format json ...`) and sets
+`OPENCODE_DISABLE_PROJECT_CONFIG=1`, so no config a Nightgauge run loads can
+define a command template in the first place. The guardrail here, until a
+future issue changes that: `command` must stay out of every config a
+Nightgauge run loads, and a `{type:"subtask"}` part needs its own
+sanitize-prompt coverage before command templates are ever enabled.
+
+**MCP tool calls: correcting § 15's "MCP: supported" row.** § 15's
+capability table names MCP `supported` (#1626), which is accurate for the
+per-run config's `mcp` block (§ 8) reaching a dispatch. It does not mean
+every MCP-sourced tool call is gated the way a first-party tool is. 1.18.30's
+`tool.execute.before` also fires for three kinds of id `TOOL_CLASSIFICATION`
+did not list before this fix round:
+
+- a repository's own MCP server tools, dispatched via `CodeMode.invokeChildTool`
+  with `tool: <server>_<local-tool-name>` (the server/tool key `Ah0`'s own
+  code builds);
+- opencode's own read-only MCP resource tools, `list_mcp_resources`,
+  `list_mcp_resource_templates` and `read_mcp_resource` — opencode itself
+  groups these under the same `"read"` permission category as `read`/`glob`/
+  `grep` (confirmed against the binary's own permission-mapping code); and
+- code-mode child tool invocation itself (`CodeMode.invokeChildTool`).
+
+Before this fix round every one of these threw `[nightgauge-gate:unknown-tool]`,
+so an OpenCode stage with an MCP server configured silently lost that
+server's tools entirely. The fix round classifies the three read-only
+resource tools `"passthrough"` (they only list or read resource metadata a
+configured server advertises). It deliberately does NOT classify a
+repository's own `<server>_<tool>` ids: this plugin has no reliable way to
+distinguish a read-only MCP tool from a mutating one by id alone, and #1626's
+per-run config already resolves per-repository server definitions the plugin
+does not currently see. **Until a mapping is built (tracked as a follow-up,
+not yet filed as its own issue), a repository's own MCP server tool calls
+stay blocked closed under `[nightgauge-gate:unknown-tool]`** — narrower than
+§ 15's "MCP: supported" row implies for a stage running under the OpenCode
+adapter specifically; the Claude Code side is unaffected (`hooks.json` never
+gates an MCP tool call at all).
 
 ## Session-lifecycle events plugin (amendment 2026-09-15, #1641 fix round)
 
