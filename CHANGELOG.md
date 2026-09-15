@@ -83,6 +83,23 @@ changelog, and the release workflow refuses a tag that does not.
   at setup on a `workflow_dispatch` run; both steps now pin the same
   `v7.0.0` SHA (`820762786026740c76f36085b0efc47a31fe5020`) every other
   workflow in the repo already uses (#1639)
+- `adapter-canary.yml` now also runs on every push to `main`: main's own
+  branch-protection ruleset requires the `flag-contracts` and
+  `opencode-canary` status contexts, but the workflow previously ran only on
+  `schedule`, `workflow_dispatch` and `pull_request`, so those contexts never
+  reported on a push commit and `scripts/post-merge-check.sh` read every merge
+  as `NOT-YET` forever. The `changed` job now diffs a push against
+  `github.event.before` (falling back to `HEAD^` for a new branch or an
+  unreachable before SHA) the same way it already diffs a pull_request against
+  its base SHA, so a push touching nothing under
+  `internal/adaptercompat/manifests/` still skips both jobs (a skipped
+  required job reports success); a push that does change a manifest runs the
+  canary at that manifest's own `max_tested`, matching pull_request. The
+  `report` drift-issue job already only files or comments on failing rows and
+  already excludes only `pull_request`, so it needed no separate push rule —
+  it joins schedule/workflow_dispatch there unchanged, gated on
+  `needs.changed.outputs.run == 'true'`. The concurrency group is now keyed on
+  `github.ref` alone (#1639)
 - The required `link-check` job and the local gate no longer request the VS
   Code Marketplace listing linked from `README.md`: `.markdown-link-check.json`
   now ignores `https://marketplace.visualstudio.com/` links host-wide, since

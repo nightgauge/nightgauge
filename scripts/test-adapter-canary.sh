@@ -63,6 +63,11 @@ check() { # check <description> <command...>
   shift
   if "$@"; then ok "$desc"; else bad "$desc"; fi
 }
+str_contains() { # str_contains <haystack> <needle> — argv, not sh -c string
+  # re-quoting, so a needle/haystack containing single or double quotes
+  # (YAML expressions do) is never mangled.
+  case "$1" in *"$2"*) return 0 ;; *) return 1 ;; esac
+}
 
 TMP="$(mktemp -d)"
 TMP="$(cd "$TMP" && pwd -P)"
@@ -576,6 +581,48 @@ check "the final step does NOT continue on its own error, so its own failure fai
 REPORT_IF="$(yq -r '.jobs["report"].if' "$WORKFLOW")"
 check "the report job still runs regardless of a leg failure (always())" \
   sh -c "echo '$REPORT_IF' | grep -q 'always()'"
+
+echo ""
+echo "=== 6b. adapter-canary.yml on push to main (#1639 round 4): required checks must report there ==="
+
+PUSH_BRANCHES="$(yq -r '.on.push.branches[]' "$WORKFLOW" 2>/dev/null)"
+check "push to main is a trigger" \
+  sh -c "echo '$PUSH_BRANCHES' | grep -qx main"
+
+DECIDE_RUN="$(yq -r '.jobs["changed"].steps[] | select(.name == "Decide") | .run' "$WORKFLOW")"
+check "the changed job's decide step branches on the push event" \
+  str_contains "$DECIDE_RUN" 'event_name }}" = "push"'
+check "the changed job's decide step reads the push's own before SHA" \
+  str_contains "$DECIDE_RUN" 'github.event.before'
+check "the changed job's decide step falls back when before is the all-zeros SHA" \
+  str_contains "$DECIDE_RUN" '0000000000000000000000000000000000000000'
+check "the changed job's decide step falls back to HEAD^ when before is unusable" \
+  str_contains "$DECIDE_RUN" 'HEAD^'
+check "the changed job's decide step diffs against the resolved before SHA for a push" \
+  str_contains "$DECIDE_RUN" 'git diff --name-only "$before" HEAD'
+
+# A push that changes a manifest must run the canary at that manifest's own
+# max_tested, the same as a pull_request — not at npm's `latest`.
+VERSION_MODE_EXPR="$(yq -r '.env.VERSION_MODE' "$WORKFLOW")"
+check "VERSION_MODE is pinned (not latest) for a push, same as a pull_request" \
+  str_contains "$VERSION_MODE_EXPR" "event_name == 'push'"
+
+# report's decision for push (documented in the workflow's own header comment
+# and this file's header above): it must still be reachable on push — no
+# push-specific exclusion was added alongside the existing pull_request one —
+# because it is already gated on needs.changed.outputs.run == 'true' (a push
+# touching no manifest never reaches it) and cmd_report itself only files or
+# comments on FAILING rows (section 2 above), so a green push writes nothing.
+check "the report job still excludes pull_request" \
+  str_contains "$REPORT_IF" "event_name != 'pull_request'"
+check "the report job is not excluded on push" \
+  sh -c '! echo "$1" | grep -q "event_name != .push."' _ "$REPORT_IF"
+check "the report job still requires changed to say a manifest changed" \
+  str_contains "$REPORT_IF" "needs.changed.outputs.run == 'true'"
+
+CONCURRENCY_GROUP="$(yq -r '.concurrency.group' "$WORKFLOW")"
+check "the concurrency group is per-ref, so push shares one group with schedule/dispatch on main and never a stray PR ref" \
+  str_contains "$CONCURRENCY_GROUP" 'github.ref'
 
 echo ""
 echo "=== 7. process hygiene: this suite leaves nothing running under its own \$TMP ==="
