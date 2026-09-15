@@ -74,16 +74,32 @@ dispatch with a clear, classified (`adapter_incompatible`) error rather than
 hang (`internal/execution/manager.go`'s operator-install-risk watchdog).
 
 `opencodeplugin.OperatorInstallSatisfied` is a READ-ONLY check (never a
-write) of whether a directory holds the FULL set opencode 1.18.30's own "is
-`@opencode-ai/plugin` already installed" check reads (the table above), not
-only the version marker. Round 7 measured only the marker and, finding a
-marker-only directory still paid the ~70-80s registry round trip, concluded
-no operator directory ever gets a fast path and dropped the exemption for a
-satisfied one entirely. **Round 8 (ADR-022 amendment 2026-09-15) corrects
-this:** driven against the real binary with the full four-file set actually
-seeded, an operator directory that satisfies opencode's own check DOES get
-the same local, instant fast path a run's own XDG-resolved config directory
-always did. `adapters.operatorInstallRisk` arms `manager.go`'s
+write) of whether a directory satisfies opencode 1.18.30's own "is
+`@opencode-ai/plugin` already installed" check. Round 7 measured only the
+version marker and, finding a marker-only directory still paid the ~70-80s
+registry round trip, concluded no operator directory ever gets a fast path
+and dropped the exemption for a satisfied one entirely. Round 8 (ADR-022
+amendment 2026-09-15) restored the exemption but defined "satisfied" as all
+four files in the table above existing and the version marker naming
+`DepsVersion` exactly — plausible from the outside, but not what the pinned
+binary's own `Npm.install` (found in its strings) actually does. **A later
+#1635/A11 fix round corrects this against the real predicate:** the
+directory is satisfied if it is not writable, or if `node_modules` exists
+and every dependency name in `package.json` (`dependencies`,
+`devDependencies`, `peerDependencies`, `optionalDependencies`, plus
+`@opencode-ai/plugin` itself) is present among the keys of
+`package-lock.json`'s own root (`""`) `packages` entry — checked by name
+only, never by version, and never reading
+`node_modules/.package-lock.json` or the installed package's own version
+marker at all. Driven against the real binary, that predicate is what
+actually decides the fast path: it exempts a directory an earlier opencode
+installed into (opencode never upgrades or re-checks a satisfied
+directory's version) and a directory missing only the hidden lockfile, and
+it still flags a directory whose `package.json` names one more dependency
+(OpenCode's own documented way to add a custom tool) than
+`package-lock.json`'s root entry lists — round 8's file-existence-only
+predicate read that last shape satisfied instead, though opencode's own
+check reinstalls for it. `adapters.operatorInstallRisk` arms `manager.go`'s
 operator-install-risk watchdog only for a directory in play that
 `OperatorInstallSatisfied` reports unsatisfied; once armed, the watchdog
 stands down on either the directory becoming satisfied (polled, read-only)

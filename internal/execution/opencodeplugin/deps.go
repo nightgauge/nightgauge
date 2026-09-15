@@ -52,6 +52,7 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -99,7 +100,8 @@ func WriteDependencies(dir string) error {
 }
 
 // pluginPackageName is the npm package depsArchive exists to satisfy, and
-// OperatorInstallSatisfied checks the version of.
+// OperatorInstallSatisfied checks the presence of (by name only — it never
+// compares versions).
 const pluginPackageName = "@opencode-ai/plugin"
 
 // extractArchive walks depsArchive's one entry into dir, truncating and
@@ -165,59 +167,95 @@ func extractArchive(dir string) error {
 
 // OperatorInstallSatisfied reports, READ-ONLY, whether dir — an
 // operator-owned OpenCode config directory ($HOME/.opencode, or an inherited
-// OPENCODE_CONFIG_DIR under opencode.inherit_user_config) — already holds the
-// full set opencode 1.18.30's own "is @opencode-ai/plugin already installed"
-// check reads (depsdata/README.md's table: package.json, package-lock.json,
-// node_modules/.package-lock.json, and node_modules/@opencode-ai/plugin's own
-// package.json naming DepsVersion), not only the version marker. Nightgauge
-// never seeds or merges anything into such a directory (#1635/A11 round 6,
-// ADR-022 amendment 2026-09-15, narrowed AC1 — an earlier round did, and the
-// archive that made that safe for a directory holding the operator's own
-// tool/plugin files is removed); this exists only for
-// adapters.InstallNightgaugePlugin, never to write there.
+// OPENCODE_CONFIG_DIR under opencode.inherit_user_config) — already satisfies
+// opencode 1.18.30's own "is @opencode-ai/plugin already installed" check
+// (`Npm.install`, pulled from the strings of the pinned binary and driven
+// against it directly — #1635/A11 fix round, correcting round 8). That
+// check:
 //
-// #1635/A11 round 8 (ADR-022 amendment 2026-09-15, correcting round 7):
-// checking only the version marker made this report "satisfied" for a
-// directory that, on the pinned binary, still took opencode's own ~71s
-// unsatisfied-marker wait — round 7's own re-measurement conflated "the
-// marker names the right version" with "opencode's own check passes," which
-// reads the other three files too. Driven against the real binary with the
-// full set this function now checks, a satisfied operator directory DOES get
-// opencode's local, instant fast path (~1s), matching a run's own
-// XDG-resolved config directory (WriteDependencies' target, checked the same
-// way this function checks an operator directory). operatorInstallRisk
-// (adapters/opencode_plugin_deps.go) arms the watchdog only for a directory
-// this reports unsatisfied.
+//  1. is satisfied immediately, without installing anything, if dir itself
+//     is not writable (dirUnwritable);
+//  2. is unsatisfied if dir/node_modules is absent;
+//  3. otherwise is satisfied unless some dependency NAME in dir/package.json
+//     — the "dependencies", "devDependencies", "peerDependencies" and
+//     "optionalDependencies" blocks, plus @opencode-ai/plugin itself — is
+//     missing from dir/package-lock.json's own root ("") package entry.
+//
+// It never compares versions, and never reads
+// dir/node_modules/.package-lock.json or the installed package's own version
+// marker at all: round 8's predicate — all four files exist AND the marker
+// equals DepsVersion exactly — checked files this reads nothing like, and
+// read both directions wrong (deps_test.go's
+// TestOperatorInstallSatisfiedMatchesOpenCodesOwnInstallCheck holds the
+// measured cases). Nightgauge never seeds or merges anything into such a
+// directory (#1635/A11 round 6, ADR-022 amendment 2026-09-15, narrowed AC1 —
+// an earlier round did, and the archive that made that safe for a directory
+// holding the operator's own tool/plugin files is removed); this exists only
+// for adapters.InstallNightgaugePlugin (via operatorInstallRisk), never to
+// write there.
 func OperatorInstallSatisfied(dir string) bool {
-	for _, rel := range operatorInstallCheckedFiles {
-		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(rel))); err != nil {
+	if dirUnwritable(dir) {
+		return true
+	}
+	if fi, err := os.Stat(filepath.Join(dir, "node_modules")); err != nil || !fi.IsDir() {
+		return false
+	}
+	pkgData, err := os.ReadFile(filepath.Join(dir, "package.json"))
+	if err != nil {
+		return false
+	}
+	var pkg npmDependencyBlock
+	if err := json.Unmarshal(pkgData, &pkg); err != nil {
+		return false
+	}
+	want := pkg.names()
+	want[pluginPackageName] = struct{}{}
+
+	lockData, err := os.ReadFile(filepath.Join(dir, "package-lock.json"))
+	if err != nil {
+		return false
+	}
+	var lock npmLockFile
+	if err := json.Unmarshal(lockData, &lock); err != nil {
+		return false
+	}
+	have := lock.Packages[""].names()
+	for name := range want {
+		if _, ok := have[name]; !ok {
 			return false
 		}
 	}
-	v, err := installedPluginVersion(dir)
-	return err == nil && v == DepsVersion
+	return true
 }
 
-// operatorInstallCheckedFiles are the three files, beside the version marker
-// installedPluginVersion itself reads, that opencode 1.18.30's own "is
-// @opencode-ai/plugin already installed" check reads (depsdata/README.md's
-// table) — the same four files WriteDependencies extracts for a run's own
-// directory.
-var operatorInstallCheckedFiles = []string{
-	"package.json",
-	"package-lock.json",
-	"node_modules/.package-lock.json",
+// npmDependencyBlock is the shape opencode 1.18.30's own install check reads
+// dependency NAMES out of twice: once from a root package.json, once from a
+// package-lock.json's own root ("") entry in "packages". Both look
+// identical to that check, so one type decodes either.
+type npmDependencyBlock struct {
+	Dependencies         map[string]string `json:"dependencies"`
+	DevDependencies      map[string]string `json:"devDependencies"`
+	PeerDependencies     map[string]string `json:"peerDependencies"`
+	OptionalDependencies map[string]string `json:"optionalDependencies"`
 }
 
-// installedPluginVersion reads dir's own
-// node_modules/@opencode-ai/plugin/package.json, if any, and returns the
-// version it names.
-func installedPluginVersion(dir string) (string, error) {
-	data, err := os.ReadFile(filepath.Join(dir, "node_modules", "@opencode-ai", "plugin", "package.json"))
-	if err != nil {
-		return "", err
+// names returns the union of every dependency NAME (never a version) this
+// block declares, across all four dependency kinds.
+func (b npmDependencyBlock) names() map[string]struct{} {
+	out := map[string]struct{}{}
+	for _, block := range [...]map[string]string{b.Dependencies, b.DevDependencies, b.PeerDependencies, b.OptionalDependencies} {
+		for name := range block {
+			out[name] = struct{}{}
+		}
 	}
-	return parsePackageVersion(data)
+	return out
+}
+
+// npmLockFile is the one field of a package-lock.json this package reads:
+// its root ("") package entry, the only one opencode's own install check
+// consults.
+type npmLockFile struct {
+	Packages map[string]npmDependencyBlock `json:"packages"`
 }
 
 // safeJoin joins dir and name (a tar entry path, always "/"-separated),

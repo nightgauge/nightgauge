@@ -220,25 +220,29 @@ changelog, and the release workflow refuses a tag that does not.
 
   Offline, or against an unreachable registry, a dispatch touching a
   `$HOME/.opencode` or `OPENCODE_CONFIG_DIR` that does NOT already satisfy
-  opencode's own install check (the full four-file set the check reads, not
-  only the version marker) still waits on that install, but the wait is now
-  bounded and the failure classified rather than left to hang or to read as
-  an unclassified timeout: the manager starts a watchdog the instant such a
-  dispatch's config touches an unsatisfied directory, bounded by a duration
-  well above the ~70-80s a legitimate, reachable-registry install takes (so
-  the online case — an operator with an actual internet connection, exactly
-  as their own OpenCode run would be — still completes) but capped at
-  whatever remains of the stage's own timeout. The watchdog stands down on
-  EITHER of two independent signals, whichever arrives first: the directory
-  becoming satisfied (checked read-only, polled every second or two, never
-  written) or any output at all arriving, proof the CLI is not stuck — so it
-  never caps model latency once OpenCode's own install completes. A directory
+  opencode's own install check — pulled from the pinned binary's own
+  `Npm.install`: satisfied if the directory is not writable, or if
+  `node_modules` exists and every dependency name `package.json` declares
+  (plus `@opencode-ai/plugin` itself) is present in `package-lock.json`'s
+  root package entry, checked by name only, never by version — still waits
+  on that install, but the wait is now bounded and the failure classified
+  rather than left to hang or to read as an unclassified timeout: the
+  manager starts a watchdog the instant such a dispatch's config touches an
+  unsatisfied directory, bounded by a duration well above the ~70-80s a
+  legitimate, reachable-registry install takes (so the online case — an
+  operator with an actual internet connection, exactly as their own
+  OpenCode run would be — still completes) but capped at whatever remains
+  of the stage's own timeout. The watchdog stands down on EITHER of two
+  independent signals, whichever arrives first: the directory becoming
+  satisfied (checked read-only, polled every second or two, never written)
+  or any output at all arriving, proof the CLI is not stuck — so it never
+  caps model latency once OpenCode's own install completes. A directory
   that already satisfies the check BEFORE the dispatch ever spawns opencode
   gets the same local, instant fast path a run's own XDG-resolved config
-  directory always did (driving the pinned binary directly with the full
-  four-file set seeded: ~1s for `debug config`, ~4.5s for a whole dispatch),
-  so it never arms the watchdog at all. A bound that fires kills the whole
-  process group (the same reaping the plugin handshake failure path already
+  directory always did (driving the pinned binary directly with the
+  predicate above satisfied: ~1s for `debug config`, ~4.5s for a whole
+  dispatch), so it never arms the watchdog at all. A bound that fires kills
+  the whole process group (the same reaping the plugin handshake failure path already
   uses, since a single `SIGKILL` can leave a same-instant grandchild fork
   holding the stage's stdout/stderr pipes open) and fails the stage
   `adapter_incompatible`, naming the directory and #1787 (a per-run `HOME`,

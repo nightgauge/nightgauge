@@ -125,16 +125,18 @@ func seedPluginDependencies(ctx context.Context, configDir string) {
 //
 // A directory opencodeplugin.OperatorInstallSatisfied reports satisfied is
 // NOT flagged (#1635/A11 round 8, ADR-022 amendment 2026-09-15, correcting
-// round 7). Round 7 flagged a satisfied directory too, on the theory that
-// resolving a plugin-bearing config against $HOME/.opencode or
+// round 7; the fix round after it corrected OperatorInstallSatisfied's own
+// predicate to match opencode's real Npm.install check — see its doc
+// comment in deps.go). Round 7 flagged a satisfied directory too, on the
+// theory that resolving a plugin-bearing config against $HOME/.opencode or
 // OPENCODE_CONFIG_DIR "pays the same ~70-80s registry round trip regardless
 // of whether node_modules already satisfies the pin" — but that measurement
-// checked only the version marker, one of the four files opencode's own "is
-// @opencode-ai/plugin already installed" check reads
-// (depsdata/README.md's table). Driven directly against the real 1.18.30
-// binary with the FULL four-file set OperatorInstallSatisfied now checks, a
-// satisfied operator directory gets the same local, instant fast path
-// (~1s for `debug config`, ~4.5s for a whole dispatch) a run's own
+// checked only the version marker, which opencode's own "is
+// @opencode-ai/plugin already installed" check does not read at all
+// (deps.go's OperatorInstallSatisfied doc comment). Driven directly against
+// the real 1.18.30 binary with the predicate OperatorInstallSatisfied now
+// checks, a satisfied operator directory gets the same local, instant fast
+// path (~1s for `debug config`, ~4.5s for a whole dispatch) a run's own
 // XDG-resolved config directory always did — round 7's own re-measurement
 // conflated the marker-only case (still slow) with the fully-satisfied case
 // (fast), and its conclusion does not hold. manager.go's watchdog this flag

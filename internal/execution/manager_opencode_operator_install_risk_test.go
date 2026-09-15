@@ -266,37 +266,36 @@ exit 7
 }
 
 // installOpenCodeFakeSatisfiesThenSilent writes a fake `opencode` that
-// answers --version, then WRITES the full four-file set
-// opencodeplugin.OperatorInstallSatisfied checks into operatorDir (standing
-// in for OpenCode's own real install completing in the background — no
-// registry ever touched), then stays silent — no step_start, nothing at all
-// — for sleep, comfortably longer than the shortened watchdog bound any test
-// here sets, before finally printing one harmless, non-NDJSON line and
-// exiting 0. Never emitting a step_start/tool_use-shaped line keeps the
-// PRE-EXISTING plugin handshake check out of this test's own assertions:
-// VerifyNotLate is a no-op when no tool call was ever observed
-// (firstToolUse.IsZero()), so any classified failure recorded here can only
-// be the operator-install-risk watchdog's own.
+// answers --version, then WRITES the set opencodeplugin.OperatorInstallSatisfied
+// actually reads into operatorDir — node_modules/, a package.json naming
+// @opencode-ai/plugin as a dependency, and a package-lock.json whose root
+// ("") package entry lists that same name under "dependencies" (the real npm
+// lockfile shape depsdata/opencode-ai-plugin-1.18.30.tar.gz's own
+// package-lock.json takes — depsdata/README.md), standing in for OpenCode's
+// own real install completing in the background — no registry ever touched
+// — then stays silent — no step_start, nothing at all — for sleep,
+// comfortably longer than the shortened watchdog bound any test here sets,
+// before finally printing one harmless, non-NDJSON line and exiting 0. Never
+// emitting a step_start/tool_use-shaped line keeps the PRE-EXISTING plugin
+// handshake check out of this test's own assertions: VerifyNotLate is a
+// no-op when no tool call was ever observed (firstToolUse.IsZero()), so any
+// classified failure recorded here can only be the operator-install-risk
+// watchdog's own.
 func installOpenCodeFakeSatisfiesThenSilent(t *testing.T, operatorDir string, sleep time.Duration) {
 	t.Helper()
 	dir := t.TempDir()
-	markerDir := filepath.Join(operatorDir, "node_modules", "@opencode-ai", "plugin")
 	script := fmt.Sprintf(`#!/bin/sh
 %s
 mkdir -p %q
 printf '{"dependencies":{"@opencode-ai/plugin":"%s"}}' > %q
-printf '{}' > %q
-printf '{}' > %q
-printf '{"name":"@opencode-ai/plugin","version":"%s"}' > %q
+printf '{"packages":{"":{"dependencies":{"@opencode-ai/plugin":"%s"}}}}' > %q
 sleep %d
 echo not-json-output
 `,
 		openCodeFakeVersion,
-		markerDir,
+		filepath.Join(operatorDir, "node_modules"),
 		opencodeplugin.DepsVersion, filepath.Join(operatorDir, "package.json"),
-		filepath.Join(operatorDir, "package-lock.json"),
-		filepath.Join(operatorDir, "node_modules", ".package-lock.json"),
-		opencodeplugin.DepsVersion, filepath.Join(markerDir, "package.json"),
+		opencodeplugin.DepsVersion, filepath.Join(operatorDir, "package-lock.json"),
 		int(sleep.Seconds()),
 	)
 	if err := os.WriteFile(filepath.Join(dir, "opencode"), []byte(script), 0o755); err != nil {
@@ -327,8 +326,9 @@ echo not-json-output
 // (#1635/A11 round 8, ADR-022 amendment 2026-09-15, correcting round 7): an
 // operator directory that exists but does NOT satisfy the pin at spawn time
 // arms the watchdog, exactly as round 6/7 already did. What round 8 changes
-// is what makes it stand down: the fake here writes the full four-file set
-// INTO the directory (standing in for OpenCode's own real install completing
+// is what makes it stand down: the fake here writes the set
+// opencodeplugin.OperatorInstallSatisfied actually reads INTO the directory
+// (standing in for OpenCode's own real install completing
 // in the background — never a registry request) partway through, then stays
 // silent for far longer than the shortened bound before ever printing a
 // byte. Round 7's code stands down only on first output, so it would kill

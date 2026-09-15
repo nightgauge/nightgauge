@@ -1878,8 +1878,17 @@ OpenCode runs, no different from what happens when the operator runs
 `opencode` themselves
 ([#1635 comment, 2026-09-15T07:16Z](https://github.com/nightgauge/nightgauge/issues/1635)).
 `opencodeplugin.OperatorInstallSatisfied` is a READ-ONLY check of whether
-such a directory already holds the full four-file set opencode's own check
-reads, never a write.
+such a directory already satisfies opencode's own install check — pulled
+from the pinned binary's own `Npm.install` and driven against it directly: a
+directory is satisfied if it is not writable, or if `node_modules` exists
+and package.json's own dependency names (all four dependency kinds, plus
+`@opencode-ai/plugin`) are all present in `package-lock.json`'s root
+package entry, by name only, never by version — never a write. An earlier
+version of this check (#1635/A11 round 8) required all four files
+`depsdata/README.md`'s table lists to exist and the version marker to equal
+`DepsVersion` exactly; a later fix round found that did not match the
+pinned binary and corrected it (`deps.go`'s `OperatorInstallSatisfied` doc
+comment holds the measured cases).
 
 **Bounded and classified operator wait, with its stand-down rule.** Offline,
 or against an unreachable registry, a dispatch touching an operator

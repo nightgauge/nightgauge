@@ -358,13 +358,15 @@ func writeOperatorOpenCodeConfig(t *testing.T, home string, plugin bool) {
 // seedOperatorInstallSatisfied writes dir's own FULL four-file set —
 // package.json, package-lock.json, node_modules/.package-lock.json, and
 // node_modules/@opencode-ai/plugin/package.json naming opencodeplugin.DepsVersion
-// — the exact set opencodeplugin.OperatorInstallSatisfied checks and opencode
-// 1.18.30's own "is @opencode-ai/plugin already installed" check reads
-// (depsdata/README.md's table), via opencodeplugin.WriteDependencies. TEST
-// FIXTURE state standing in for "the operator already ran opencode
-// themselves and it installed the pinned version", never anything
-// Nightgauge's own production code writes (#1635/A11 round 6, ADR-022
-// amendment 2026-09-15: Nightgauge never seeds or merges into an
+// — via opencodeplugin.WriteDependencies. That set satisfies both opencode
+// 1.18.30's own "is @opencode-ai/plugin already installed" check and
+// opencodeplugin.OperatorInstallSatisfied (which reads only a subset of it —
+// node_modules, package.json's dependency names and package-lock.json's own
+// root package entry, never the hidden lockfile or the version marker; see
+// its doc comment). TEST FIXTURE state standing in for "the operator already
+// ran opencode themselves and it installed the pinned version", never
+// anything Nightgauge's own production code writes (#1635/A11 round 6,
+// ADR-022 amendment 2026-09-15: Nightgauge never seeds or merges into an
 // operator-owned directory). Without this, a test that opts a real dispatch
 // into an operator-owned directory (opencode.inherit_user_config, or a
 // fixture under $HOME/.opencode) hits the SAME operator-install-risk wait
@@ -373,9 +375,7 @@ func writeOperatorOpenCodeConfig(t *testing.T, home string, plugin bool) {
 // opt-in itself layers the operator's agent/MCP config back in, once
 // OpenCode's own install is already satisfied, exactly as it would be for
 // an operator who has used OpenCode before. Seeding only the version marker
-// (round 6/7's fixture) does NOT satisfy opencode's own check — round 8
-// (ADR-022 amendment 2026-09-15) found that only the full set does, driven
-// directly against the pinned binary.
+// (round 6/7's fixture) does NOT satisfy opencode's own check.
 func seedOperatorInstallSatisfied(t *testing.T, dir string) {
 	t.Helper()
 	if err := opencodeplugin.WriteDependencies(dir); err != nil {
