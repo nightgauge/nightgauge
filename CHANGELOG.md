@@ -95,7 +95,14 @@ changelog, and the release workflow refuses a tag that does not.
   grandchild cannot outlive it; telemetry callers that do not need the
   result never await the spawn, and `session.idle`'s stop-verify verdict is
   recorded from a `.then()`/`.catch()` continuation rather than by blocking
-  the hook's own return (#1641, #1810)
+  the hook's own return (#1641, #1810). That async `runHook` wrote its stdin
+  payload to `child.stdin` without a `'stdin'` (or `'stdout'`) `'error'`
+  listener registered first: when the telemetry child exited before reading
+  it, the write's EPIPE surfaced as an unhandled `'error'` event and crashed
+  the whole opencode process — a plugin this repository's own comments call
+  "telemetry, it is never a gate" taking the host down with it. Fixed
+  forward a second time by registering no-op `'error'` listeners on both
+  streams before writing (#1641, #1813)
 - `adapter-canary.yml` pinned `actions/setup-node` at a SHA
   (`fc7e5e49f31379e40cf9b708e5abd6ebfad0e0fd`, tagged `v5.0.0`) that GitHub
   cannot resolve, failing both the `flag-contracts` and `opencode-canary` legs

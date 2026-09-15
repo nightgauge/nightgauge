@@ -181,6 +181,18 @@ function runHook(bin, args, cwd, stdinPayload) {
     child.stdout.on("data", (chunk) => {
       stdout += chunk;
     });
+    // child.stdout/child.stdin are their own EventEmitters: a pipe error on
+    // either (e.g. the child exits or never spawns before this process
+    // finishes writing/reading) surfaces as an 'error' event on that stream,
+    // not on `child` itself. Node's default behaviour for an unhandled
+    // 'error' event is to throw, which crashes this whole opencode process —
+    // exactly the EPIPE observed when a child exits (or fails to spawn)
+    // before its stdin is read (#1641 fixed forward, second pass). A no-op
+    // listener here is enough: the close handler below still resolves this
+    // promise from the child's own exit/signal/timeout, so nothing is lost
+    // by swallowing the stream-level error itself.
+    child.stdin.on("error", () => {});
+    child.stdout.on("error", () => {});
     child.on("error", () => finish(false));
     child.on("close", (code, signal) => {
       if (timedOut || signal || code !== 0) {
