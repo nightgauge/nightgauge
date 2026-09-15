@@ -157,6 +157,26 @@ stop-verify --emit-event --session-id <id> [--child]` detached and
 
 ### Added
 
+- `plugin/nightgauge/edit.js` gives an OpenCode stage the same
+  PostToolUse:Edit|Write coverage Claude Code's hooks.json gives one:
+  format-on-save, a version-consistency check, and a test-quality warning,
+  run in hooks.json's own order and timeouts (`hook format` 30 s,
+  `hook check-version` 10 s, `hook test-quality` 5 s) against a
+  Claude-shaped `{tool_name, tool_input:{file_path,...}}` payload built from
+  opencode 1.18.30's own `tool.execute.after` arguments. Exactly one
+  formatter path runs per dispatch: the plugin calls `hook format` only when
+  OpenCode's own `formatter` setting (read from `OPENCODE_CONFIG_CONTENT`)
+  is off. A path outside the worktree (absolute, or carrying a `..` segment)
+  spawns nothing and adds no warning. Every warning is appended to the
+  tool's own output (capped at 2 KB total) rather than thrown, so a warning
+  is never mistaken for a gate, and a hung verb leaves the tool result
+  intact. New Go verb `nightgauge hook test-quality`
+  (`internal/hooks/testquality.go`) ports
+  `claude-plugins/nightgauge/hooks/test-quality.sh`'s three zero-value-test
+  checks (a tautological assertion, an empty test body, a `console.log`
+  with no assertion) byte-for-byte, since the OpenCode plugin path has no
+  shell script it can spawn directly; the shell script itself is unchanged
+  (#1642)
 - `plugin/nightgauge/session.js` gives an OpenCode stage the same session
   coverage Claude Code's hooks give one: compaction context re-injection
   (`experimental.session.compacting` runs `hook inject-context`), suppression

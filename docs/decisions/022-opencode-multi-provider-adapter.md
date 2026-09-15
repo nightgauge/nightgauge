@@ -2175,6 +2175,42 @@ step failed first, the OpenCode integration step never executed and its
 result was never part of the verdict. Filing that separately; it is not
 fixed here.
 
+## OpenCode plugin edit hooks: `tool.execute.after` argument shape (amendment 2026-09-15, #1642)
+
+#1642's own AC7 requires recording, here, any observed divergence from its
+stated assumptions before continuing. The issue's assumptions read
+`tool.execute.after` receives the tool's args and a mutable `output.output`;
+`edit`/`write` args are `filePath`/`oldString`/`newString`/`content`" without
+saying which side of the call — `input` or `output` — carries `args`. A
+bounded, offline probe against the pinned 1.18.30 binary (a logging plugin
+loaded in place of `plugin/nightgauge/edit.js`, driven through the #1618
+stub's `tool-edit-stop` script and a temporary `write-then-stop` fixture, no
+live model and no network egress) settles both halves:
+
+**`args` live on `input`, not `output` — the opposite of `tool.execute.before`.**
+`tool.execute.before`'s `args` are on `output.args` (gates.js, already
+documented). `tool.execute.after`'s own `input` instead carries
+`{tool, sessionID, callID, args}` directly — captured verbatim off the real
+binary:
+
+```json
+{"hook":"after","input":{"tool":"edit","sessionID":"ses_...","callID":"call-stub-tool-edit-stop-0","args":{"filePath":"calc.py","newString":"return a - b","oldString":"return a + b"}},"output":{"metadata":{...},"title":"calc.py","output":"Edit applied successfully."}}
+```
+
+and the same shape for `write`, with `args: {content, filePath}`. `output`
+itself carries `{title, output, metadata}`, confirming the issue's own
+`output.output` assumption. `edit.js` reads `input.args`, not `output.args`,
+accordingly.
+
+**Mutating `output.output` in place reaches the model's next turn.** The
+probe's `tool.execute.after` appended a marker string to `output.output`
+in place (no reassignment of `output` itself, no return value). The very
+next `POST /v1/chat/completions` request the stub-provider received carried
+that marker, byte for byte, as the `tool`-role message's own `content` —
+not merely visible within the hook's own scope, and not silently dropped
+before the session's own transcript is built. This confirms the issue's
+"so the model sees them" half of AC5 without qualification.
+
 ## Consequences
 
 - The model layer's one-adapter-one-provider assumption becomes a special

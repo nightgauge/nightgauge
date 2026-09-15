@@ -5707,6 +5707,7 @@ func hookCmd() *cobra.Command {
 		hookNotifyCmd(),
 		hookCheckDepsCmd(),
 		hookCheckVersionCmd(),
+		hookTestQualityCmd(),
 		hookSanitizePromptCmd(),
 		hookPostMergeCmd(),
 		hookSkillUsageCmd(),
@@ -6080,6 +6081,33 @@ func hookCheckVersionCmd() *cobra.Command {
 	cmd.Flags().StringVar(&pluginVersion, "plugin-version", "", "Version from plugin.json")
 	cmd.Flags().StringVar(&skillVersion, "skill-version", "", "Version from SKILL.md")
 	return cmd
+}
+
+func hookTestQualityCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "test-quality",
+		Short: "Warn on zero-value test patterns in *.test.ts/*.spec.ts (PostToolUse for Write/Edit, reads JSON from stdin)",
+		Long: `Go port of claude-plugins/nightgauge/hooks/test-quality.sh (#1642): the
+same three zero-value-test checks (a tautological assertion, an empty test
+body, a console.log with no expect()/assert() call), the same
+NIGHTGAUGE_SKIP_TEST_QUALITY=1 opt-out, and the same *.test.ts/*.spec.ts
+filter — the shell script itself is unchanged and still runs for Claude Code;
+this verb exists because the OpenCode plugin path
+(internal/execution/opencodeplugin/plugin/nightgauge/edit.js) has no shell
+script it can spawn.
+
+As a PostToolUse hook for Write/Edit the payload arrives on stdin with no
+argv. Warnings print to stderr; this command always exits 0 and never blocks
+the tool call.`,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			result := hooks.EvaluateTestQuality(readHookInput(cmd))
+			if out := hooks.FormatWarnings(result); out != "" {
+				fmt.Fprint(cmd.ErrOrStderr(), out)
+			}
+			return nil
+		},
+	}
 }
 
 func hookSanitizePromptCmd() *cobra.Command {
