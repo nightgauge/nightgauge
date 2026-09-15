@@ -1109,29 +1109,29 @@ overlay.
 
 Every OpenCode capability has one disposition:
 
-| Capability                       | Disposition                  | Owner or reason                                                                               |
-| -------------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------- |
-| Skills                           | supported                    | #1666 (install target), rendered per stage                                                    |
-| Commands                         | supported                    | #1666 (`configs/opencode` templates)                                                          |
-| Subagents (`task`)               | supported                    | #1624 rolls subagent usage into the stage                                                     |
-| Plugins                          | supported, Nightgauge's only | #1635, #1640, #1641, #1642                                                                    |
-| MCP                              | supported                    | #1626                                                                                         |
-| Permissions                      | supported                    | #1638                                                                                         |
-| Sandboxing                       | non-goal                     | OpenCode has none upstream; containment is § 8 isolation, the permission map and the worktree |
-| Resume and fork                  | deferred                     | #1643 (session resume within a run)                                                           |
-| Export                           | supported, sanitized only    | § 22                                                                                          |
-| Import                           | non-goal                     | a session file or URL is untrusted input with nothing to gain                                 |
-| Usage (`opencode stats`)         | non-goal                     | usage comes from the stream and the registry (§ 3), not OpenCode's catalog prices             |
-| `json_schema` output             | deferred                     | #1650                                                                                         |
-| Variants (`--variant`)           | supported                    | #1643 maps effort to a variant                                                                |
-| Compaction                       | supported                    | #1625 (settings), #1641 (events)                                                              |
-| Worktrees and workspaces         | non-goal                     | Nightgauge owns worktrees; OpenCode's experimental workspaces stay off                        |
-| Snapshots                        | off by default               | § 12                                                                                          |
-| LSP                              | supported, installed servers | § 12                                                                                          |
-| Share                            | non-goal                     | disabled and locked (§ 10)                                                                    |
-| GitHub agent (`opencode github`) | deferred                     | #1650                                                                                         |
-| ACP                              | deferred                     | #1650                                                                                         |
-| `serve` and `run --attach`       | deferred                     | #1650, under § 18's guardrails                                                                |
+| Capability                       | Disposition                  | Owner or reason                                                                                                                                                                |
+| -------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Skills                           | supported                    | #1666 (install target), rendered per stage                                                                                                                                     |
+| Commands                         | supported                    | #1666 (`configs/opencode` templates)                                                                                                                                           |
+| Subagents (`task`)               | denied (AC9 fallback)        | #1624 rolls subagent usage into the stage, but the plugin denies `task` unconditionally until AC9 is settled — see the "Nightgauge OpenCode plugin" amendment dated 2026-09-15 |
+| Plugins                          | supported, Nightgauge's only | #1635, #1640, #1641, #1642                                                                                                                                                     |
+| MCP                              | supported                    | #1626                                                                                                                                                                          |
+| Permissions                      | supported                    | #1638                                                                                                                                                                          |
+| Sandboxing                       | non-goal                     | OpenCode has none upstream; containment is § 8 isolation, the permission map and the worktree                                                                                  |
+| Resume and fork                  | deferred                     | #1643 (session resume within a run)                                                                                                                                            |
+| Export                           | supported, sanitized only    | § 22                                                                                                                                                                           |
+| Import                           | non-goal                     | a session file or URL is untrusted input with nothing to gain                                                                                                                  |
+| Usage (`opencode stats`)         | non-goal                     | usage comes from the stream and the registry (§ 3), not OpenCode's catalog prices                                                                                              |
+| `json_schema` output             | deferred                     | #1650                                                                                                                                                                          |
+| Variants (`--variant`)           | supported                    | #1643 maps effort to a variant                                                                                                                                                 |
+| Compaction                       | supported                    | #1625 (settings), #1641 (events)                                                                                                                                               |
+| Worktrees and workspaces         | non-goal                     | Nightgauge owns worktrees; OpenCode's experimental workspaces stay off                                                                                                         |
+| Snapshots                        | off by default               | § 12                                                                                                                                                                           |
+| LSP                              | supported, installed servers | § 12                                                                                                                                                                           |
+| Share                            | non-goal                     | disabled and locked (§ 10)                                                                                                                                                     |
+| GitHub agent (`opencode github`) | deferred                     | #1650                                                                                                                                                                          |
+| ACP                              | deferred                     | #1650                                                                                                                                                                          |
+| `serve` and `run --attach`       | deferred                     | #1650, under § 18's guardrails                                                                                                                                                 |
 
 ADR-020 allows an opt-out of a value-adding feature for footprint and cost, and
 already keeps destructive, money-spending and data-exporting features opt-in.
@@ -1786,6 +1786,142 @@ OpenCode itself, did not hold once reproduced:
 Neither correction changes OpenCode's own observed behavior recorded
 elsewhere in this document; both are about `scripts/adapter-canary.sh`'s own
 `go test`-output parsing and this document's own prose.
+
+## Nightgauge OpenCode plugin (amendment 2026-09-15, #1635)
+
+This section states the final design #1635 shipped. The build-out history —
+what each review round found and how the design got here — lived in seven
+prior amendment sections in this document; it is now recorded instead in
+[nightgauge/nightgauge#1635](https://github.com/nightgauge/nightgauge/issues/1635)'s
+own comments, which this section links where a specific decision needs
+attribution, per the delegation the runbook's two-round review limit
+describes.
+
+**Handshake.** The adapter deletes any stale sentinel and exports
+`NIGHTGAUGE_OPENCODE_PLUGIN_NONCE` before spawn; the plugin's init writes
+`.opencode-plugin-<RUN_ID>.json` (nonce, plugin version, hooks) beside
+`NIGHTGAUGE_OUTPUT_FILE`. `Manager.RunStage` verifies it twice: at the run's
+first `step_start` event — the earliest point any tool call could exist —
+and again at exit, comparing the sentinel's mtime against the first
+`tool_use`'s own reported start time (`state.time.start`), since 1.18.30 can
+log `tool_use` before `step_start` is flushed. Either check failing kills the
+stage's whole process group (`killProcessTreeUntilGone`, a bounded,
+closely-spaced burst of `SIGKILL`s rather than one delivery: a single
+`SIGKILL` can miss a child OpenCode forks in the same instant on macOS, which
+does not abort a fork under a pending group-kill signal the way Linux does)
+and fails the stage `adapter_incompatible`, forcing a non-zero exit code even
+when the CLI itself exited 0, and naming the plugin path and `opencode
+--version`. The handshake is keyed on the run's own root identity
+(`RunRootRequest.ID`, always present), not the dispatch's possibly-absent
+runtime identity, so it arms for every dispatch that actually spawns
+opencode, including the autonomous issue-refine dispatch with no runtime
+identity of its own.
+
+**Isolation.** `OPENCODE_DISABLE_PROJECT_CONFIG=1` is set on every OpenCode
+dispatch (AC2): only the embedded Nightgauge plugin may load, and a target
+repository's own `.opencode/plugins/*` and `plugin[]` entries never load
+beside it. The cost, until #1638 builds the Go-side reviewed merge, is that a
+target repository's own `opencode.json` (its `agent`, `provider`, `mode`,
+`permission` and `instructions` keys, not only `plugin`) does not merge into
+a dispatch's resolved config at all — 1.18.30 offers no switch narrower than
+"every project config file this repository holds."
+`TestOpenCodeIntegrationPerRunConfigReachesOpenCode` and
+`TestOpenCodeIntegrationAnthropicBlockHoldsItsServer` assert that negative
+against the real binary.
+
+**Single plugin load.** The plugin file lives outside the run's OpenCode
+config directory's own `plugin`/`plugins` subdirectory
+(`.../config/opencode/nightgauge-plugin`, not the auto-scanned
+`.../plugin`), which 1.18.30 auto-loads on top of whatever the resolved
+config's own `plugin` array names; naming the plugin only in the array, once,
+is what keeps every hook — careful-gate included — from firing twice per
+tool call. `TestOpenCodeIntegrationPluginLoadsExactlyOnce` asserts the
+resolved `plugin` array names the file exactly once, against the real
+binary.
+
+**Per-run-root seed, trimmed archive.** opencode 1.18.30 installs the npm
+package `@opencode-ai/plugin` into any OpenCode config directory whose
+resolved config carries a non-empty `plugin` array, independent of whether a
+plugin file imports that package, and every invocation that resolves such a
+config waits for that install before doing anything else — offline, or
+against an unreachable registry, that wait does not fail fast. Nightgauge
+pre-seeds the run's own, freshly-created OpenCode config directory with an
+embedded, version-pinned, read-only archive
+(`internal/execution/opencodeplugin/depsdata/opencode-ai-plugin-1.18.30.tar.gz`,
+`opencodeplugin.WriteDependencies`): no npm binary, no lifecycle script and
+no network request ever runs to produce or extract it. The archive holds
+exactly the four files opencode's own "is `@opencode-ai/plugin` already
+installed" check reads — `package.json`, `package-lock.json`,
+`node_modules/.package-lock.json`, and `@opencode-ai/plugin`'s own
+`package.json` version marker — nothing else, not even `dist/`, since
+neither opencode's plugin loader nor the Nightgauge plugin itself
+(`plugin/nightgauge.js`, `plugin/nightgauge/gates.js`) ever imports
+`@opencode-ai/plugin` or anything in its dependency tree at runtime; both
+import only `node:*` built-ins and each other. `depsdata/README.md` records
+the full provenance, the empirical method, and how to regenerate the archive
+for a new pinned opencode version;
+`internal/execution/opencodeplugin/depsdata/regenerate` rebuilds it
+deterministically from a real, `--ignore-scripts` `npm install`, and
+`TestDepsArchiveSizeBudget` fails the build if it grows past 32 KiB
+compressed.
+
+**Narrowed AC1: no npm or Bun install runs into any Nightgauge-owned
+directory.** opencode 1.18.30 installs `@opencode-ai/plugin` into every
+OpenCode config directory its resolved config touches, not only the run's
+own: `$HOME/.opencode` when it exists (no XDG variable,
+`OPENCODE_DISABLE_PROJECT_CONFIG` nor `OPENCODE_PURE` stops OpenCode reading
+it), and, under `opencode.inherit_user_config`, the operator's own
+`OPENCODE_CONFIG_DIR`. **Nightgauge never seeds, merges into, or otherwise
+writes to either directory** — OpenCode's own install into its own config
+directories is the operator's environment, exactly as in the operator's own
+OpenCode runs, no different from what happens when the operator runs
+`opencode` themselves
+([#1635 comment, 2026-09-15T07:16Z](https://github.com/nightgauge/nightgauge/issues/1635)).
+`opencodeplugin.OperatorInstallSatisfied` is a READ-ONLY check of whether
+such a directory already holds the full four-file set opencode's own check
+reads, never a write.
+
+**Bounded and classified operator wait, with its stand-down rule.** Offline,
+or against an unreachable registry, a dispatch touching an operator
+directory that does NOT already satisfy opencode's own check still waits on
+OpenCode's own real install.
+`manager.go`'s operator-install-risk watchdog bounds that wait independently
+of the stage's own timeout (further capped by whatever remains of the
+stage's own context deadline) and fails the dispatch `adapter_incompatible`,
+naming the directory and #1787, if it fires. The watchdog arms ONLY for a
+directory `OperatorInstallSatisfied` reports unsatisfied at spawn time — a
+directory already satisfied gets OpenCode's own local, instant fast path (the
+same one a run's own XDG-resolved config directory always gets) and is never
+armed at all. Once armed, it stands down on EITHER of two independent
+signals, whichever arrives first: the directory BECOMING satisfied (checked
+read-only, polled every second or two, never written — proof OpenCode's own
+in-flight install is done) or the first output arriving on stdout or stderr
+(proof the CLI is not stuck before its first line). This is what keeps the
+watchdog from ever capping model latency once OpenCode's own install
+completes — a slow first token from a local model prefilling a large prompt
+is never mistaken for a hung install
+([#1635 comment, 2026-09-15T12:00Z](https://github.com/nightgauge/nightgauge/issues/1635)).
+`manager_opencode_operator_install_risk_test.go` covers the bound, the
+stage-context cap, the two stand-down paths, and that a fast, unrelated
+failure is never misclassified with the watchdog's own marker text.
+
+**`task` denied (AC9).** A bounded spike against 1.18.30 (an embedded plugin
+wired as a Node `event`/`tool.execute.before` logger, pointed at a real local
+model, given a prompt directing it to call `task` once) could not determine
+within its budget whether 1.18.30 calls `tool.execute.before` inside a `task`
+(subagent) session. Per AC9's own stated fallback for "not or undecidable",
+`gates.js`'s `toolExecuteBefore` denies the `task` tool unconditionally,
+careful mode on or off, checked before the careful-gate verb and independent
+of `NIGHTGAUGE_BIN` — a subagent session this plugin cannot verify it gates
+is worse than no subagent at all. `TestNodeHarnessDeniesTask` is the
+red/green coverage. Settling AC9 properly, and lifting the denial, needs
+either an upstream answer or a faster local model than the spike had time
+for; it remains open.
+
+**Follow-up:** [nightgauge/nightgauge#1787](https://github.com/nightgauge/nightgauge/issues/1787)
+tracks a per-run `HOME`, so `$HOME/.opencode` stops being a config directory
+at all — removing the operator-install wait entirely rather than only
+bounding and classifying it.
 
 ## Consequences
 

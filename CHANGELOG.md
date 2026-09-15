@@ -154,6 +154,101 @@ changelog, and the release workflow refuses a tag that does not.
   `testdata/cli-help/README.md` now notes that a hidden-flag sidecar carried
   forward onto a newer capture (above) is not itself probe evidence at that
   newer version (#1639)
+- An OpenCode dispatch now carries the Nightgauge OpenCode plugin: a
+  `tool.execute.before` hook, embedded in the binary and written into the
+  per-run OpenCode config directory (never installed from npm or Bun), runs
+  the same careful-gate verb (`nightgauge hook careful-gate`) the Claude Code
+  hook runs, so a Bash tool call a stage runs under OpenCode is blocked the
+  same way it would be under Claude Code while careful mode is on. The
+  per-run config's `plugin` array names only this file, and
+  `OPENCODE_DISABLE_PROJECT_CONFIG=1` is set on every OpenCode dispatch, so a
+  target repository's own `.opencode/plugins/*` and `plugin[]` entries never
+  load beside it (AC2) — the cost, until #1638 builds the Go-side merge that
+  restores it, is that a target repository's own `opencode.json` does not
+  merge into a dispatch's resolved config at all (see the ADR-022 amendment).
+  The plugin file is written outside the run's OpenCode config directory's
+  own `plugin`/`plugins` subdirectory, which 1.18.30 auto-loads on top of the
+  config's own `plugin` array: naming both the same file loaded it, and so
+  fired every hook in it, twice per tool call. A startup handshake — a nonce
+  and sentinel the plugin's init writes, verified the instant the run's first
+  `step_start` event is observed (the process group is signalled with a
+  bounded, closely-spaced burst of SIGKILLs rather than trusting one
+  delivery — a single SIGKILL can miss a child OpenCode forks in the same
+  instant on macOS, which does not abort a fork under a pending group-kill
+  signal the way Linux does — before anything else, including the `opencode
+--version` the failure marker names) and re-checked at exit against the
+  first `tool_use`'s own reported start time — kills the stage's whole
+  process group and fails it `adapter_incompatible`, forcing a non-zero exit
+  code even when the CLI itself exited 0, when the plugin did not load,
+  loaded late, or a stale sentinel is read. This handshake now arms for
+  every dispatch that actually spawns opencode, including one with no
+  runtime identity of its own (the autonomous issue-refine dispatch): it is
+  keyed on the run's own root identity, which the manager always mints one
+  of, not on the dispatch's possibly-absent runtime identity, so a plugin
+  that fails to load can no longer go ungated there. Because opencode 1.18.30
+  installs `@opencode-ai/plugin` into every OpenCode config directory its
+  resolved config touches — the run's own, `$HOME/.opencode` when it exists,
+  and, under `inherit_user_config`, the operator's own XDG OpenCode config
+  directory — the moment any of them carries a non-empty `plugin` array,
+  independent of whether the plugin itself needs it, and every invocation
+  that resolves such a config waits for that install before doing anything
+  else, the run's own, freshly-created config directory is now pre-seeded
+  from an embedded, version-pinned copy of `@opencode-ai/plugin@1.18.30` (no
+  npm binary, no lifecycle script and no network request, ever): a small,
+  four-file archive extracted outright (`package.json`, both lockfiles, and
+  `@opencode-ai/plugin`'s own version marker — exactly what opencode's "is
+  it installed" check reads for that directory, under 5 KB gzipped, cut from
+  an ~11 MB, 3,886-file capture of the whole installed dependency tree,
+  since neither opencode's plugin loader nor the Nightgauge plugin ever
+  resolve anything else in that tree at runtime), regenerated deterministically
+  by `internal/execution/opencodeplugin/depsdata/regenerate`
+  (`--ignore-scripts`) and size-budget-tested so a future regression cannot
+  grow it back toward the original capture unnoticed.
+
+  **Nightgauge never seeds, merges into, or otherwise writes to an
+  operator-owned OpenCode directory** — `$HOME/.opencode` or, under
+  `inherit_user_config`, `OPENCODE_CONFIG_DIR` — narrowing AC1 to: no npm or
+  Bun install runs into any Nightgauge-owned directory. An earlier round
+  tried seeding these two as well, first from the same four-file archive
+  (which satisfies opencode's own install check forever while leaving an
+  operator's own `import ... from "@opencode-ai/plugin"` tool file
+  permanently unresolvable — OpenCode's own documented way to write a custom
+  tool), then from a second, ~10.4 MB re-embedded archive of the complete
+  real tree; both are removed. OpenCode's own install into its own config
+  directories is the operator's environment now, exactly as it is in the
+  operator's own OpenCode runs.
+
+  Offline, or against an unreachable registry, a dispatch touching a
+  `$HOME/.opencode` or `OPENCODE_CONFIG_DIR` that does NOT already satisfy
+  opencode's own install check (the full four-file set the check reads, not
+  only the version marker) still waits on that install, but the wait is now
+  bounded and the failure classified rather than left to hang or to read as
+  an unclassified timeout: the manager starts a watchdog the instant such a
+  dispatch's config touches an unsatisfied directory, bounded by a duration
+  well above the ~70-80s a legitimate, reachable-registry install takes (so
+  the online case — an operator with an actual internet connection, exactly
+  as their own OpenCode run would be — still completes) but capped at
+  whatever remains of the stage's own timeout. The watchdog stands down on
+  EITHER of two independent signals, whichever arrives first: the directory
+  becoming satisfied (checked read-only, polled every second or two, never
+  written) or any output at all arriving, proof the CLI is not stuck — so it
+  never caps model latency once OpenCode's own install completes. A directory
+  that already satisfies the check BEFORE the dispatch ever spawns opencode
+  gets the same local, instant fast path a run's own XDG-resolved config
+  directory always did (driving the pinned binary directly with the full
+  four-file set seeded: ~1s for `debug config`, ~4.5s for a whole dispatch),
+  so it never arms the watchdog at all. A bound that fires kills the whole
+  process group (the same reaping the plugin handshake failure path already
+  uses, since a single `SIGKILL` can leave a same-instant grandchild fork
+  holding the stage's stdout/stderr pipes open) and fails the stage
+  `adapter_incompatible`, naming the directory and #1787 (a per-run `HOME`,
+  the tracked path to removing the wait entirely rather than only bounding
+  it), the same way a genuine handshake failure already does. The plugin also
+  denies the `task` tool (subagents) unconditionally: a bounded spike against
+  1.18.30 could not confirm whether `tool.execute.before` runs inside a
+  subagent's own session, so AC9's fallback applies until that is settled
+  (ADR-022, amendment 2026-09-15) (#1632, #1635, #1787)
+
 - The OpenCode config schema published for the newest tested OpenCode
   (1.18.30) is now pinned in the repository, and a contract test validates
   every per-run config the builder generates against it, across LM Studio,

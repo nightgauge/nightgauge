@@ -105,6 +105,15 @@ type RunRootRequest struct {
 	// never a stage's worktree. The opencode adapter loads the config there
 	// that names the GitHub identity its forge read of the MCP servers uses.
 	WorkspaceRoot string
+	// Context is the stage's own context, when the caller has one (the
+	// manager, through RunStage). An adapter whose PrepareRunRoot hook does
+	// bounded work of its own (the opencode adapter's plugin-dependency
+	// seed, #1635 fix round finding 3) honours it instead of running on a
+	// context.Background() disconnected from the stage's own cancellation
+	// and deadline. Nil for a caller with no such context (a bare CLI verb,
+	// most existing tests): the hook then falls back to
+	// context.Background() and bounds its own work only by its own means.
+	Context context.Context
 }
 
 // RunRoot is a directory private to one pipeline run, where an adapter whose

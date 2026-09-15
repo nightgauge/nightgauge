@@ -362,4 +362,18 @@ export default [
       globals: nodeGlobals,
     },
   },
+
+  // The Nightgauge OpenCode plugin (#1635): embedded in the Go binary and
+  // written into a run's per-run OpenCode plugin directory at spawn, never
+  // installed from npm or Bun, so opencode loads it as a local ES module.
+  // Without this it falls through to js.configs.recommended (no Node
+  // globals, no-undef on), so every `process.env` reference errors.
+  {
+    files: ["internal/execution/opencodeplugin/plugin/**/*.js"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: "module",
+      globals: nodeGlobals,
+    },
+  },
 ];

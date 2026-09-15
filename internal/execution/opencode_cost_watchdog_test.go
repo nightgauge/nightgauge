@@ -91,6 +91,14 @@ db) echo '%s'; exit 0 ;;
 export) %s ;;
 esac
 echo $$ > %q
+if [ -n "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL" ]; then
+  printf '{"nonce":"%%s","plugin_version":"1","hooks":[]}' "$NIGHTGAUGE_OPENCODE_PLUGIN_NONCE" > "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL"
+  # The replayed capture's own tool events carry ITS OWN historical
+  # timestamps; backdate the sentinel so VerifyNotLate never reads a
+  # just-written file as later than them (mirrors opencode_usage_test.go's
+  # openCodeStageRunWith).
+  touch -t 197001010000 "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL" 2>/dev/null || true
+fi
 cat > /dev/null
 STEPS=%q
 %s

@@ -199,7 +199,7 @@ func openCodeConfigForStage(ctx context.Context, f openCodeConfigFlags) (*adapte
 	// (clientFromConfig). It decides who asks, not what is read: the files
 	// are what GitHub serves for --repo.
 	cwd, _ := os.Getwd()
-	return adapters.PrepareOpenCodeRun(adapters.OpenCodeRunRequest{
+	prepared, err := adapters.PrepareOpenCodeRun(adapters.OpenCodeRunRequest{
 		Home:             home,
 		ID:               id,
 		MachineConfigDir: machineDir,
@@ -209,4 +209,21 @@ func openCodeConfigForStage(ctx context.Context, f openCodeConfigFlags) (*adapte
 		GOOS:             runtime.GOOS,
 		McpForge:         adapters.OpenCodeMcpForge(cwd),
 	})
+	if err != nil {
+		return nil, err
+	}
+	// The Go adapter's PrepareRunRoot installs the Nightgauge OpenCode plugin
+	// (#1635) immediately after this same call; mirrored here so the SDK path
+	// prints the identical `plugin` reference (TestOpenCodeConfigVerbMatchesTheAdapter).
+	// id, not run.RunID, is what names the handshake: run.RunID (RunOptions'
+	// own field) is never set by this command, while id is always a run
+	// identity (validated or minted above) — the same thing req.ID is for the
+	// adapter's own PrepareRunRoot call (opencode.go, #1635 fix round finding
+	// 1/5). This verb never spawns opencode, so nothing ever checks the
+	// minted handshake; it exists only so the printed config matches what a
+	// real spawn with the same id would get, byte for byte.
+	if err := adapters.InstallNightgaugePlugin(ctx, prepared, run.OutputFile, id); err != nil {
+		return nil, err
+	}
+	return prepared, nil
 }
