@@ -77,6 +77,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- `adapter-canary.yml` pinned `actions/setup-node` at a SHA
+  (`fc7e5e49f31379e40cf9b708e5abd6ebfad0e0fd`, tagged `v5.0.0`) that GitHub
+  cannot resolve, failing both the `flag-contracts` and `opencode-canary` legs
+  at setup on a `workflow_dispatch` run; both steps now pin the same
+  `v7.0.0` SHA (`820762786026740c76f36085b0efc47a31fe5020`) every other
+  workflow in the repo already uses (#1639)
 - The required `link-check` job and the local gate no longer request the VS
   Code Marketplace listing linked from `README.md`: `.markdown-link-check.json`
   now ignores `https://marketplace.visualstudio.com/` links host-wide, since
