@@ -32,6 +32,8 @@
 //     chat-completions request's tool-result message content, not merely in
 //     the hook's own view of `output`.
 import { spawnSync } from "node:child_process";
+import { realpathSync } from "node:fs";
+import path from "node:path";
 
 // Claude-shaped hooks.json timeouts
 // (claude-plugins/nightgauge/hooks/hooks.json, PostToolUse:Edit|Write), in
@@ -62,23 +64,68 @@ function resolveNightgaugeBin() {
   return bin;
 }
 
-// isPathContained mirrors internal/hooks/format.go's ValidateFilePath: an
-// absolute path, or one with a literal ".." path segment, is refused before
-// anything is ever spawned (AC3: "a path outside the worktree... spawns no
-// formatter and adds no warning" — the security notes' "the plugin
-// additionally skips any path outside the worktree without spawning" half;
-// the Go verb re-validates independently, the other half). This checks path
-// SEGMENTS ("..", not merely the substring anywhere in the path), which is
-// narrower than ValidateFilePath's own `strings.Contains(cleaned, "..")` —
-// deliberately: a real traversal (`../../x.go`) is refused by both, and the
-// rare filename that only CONTAINS ".." as a substring without it being a
-// path segment stays refused by the Go verb regardless (evaluateFormatIn
-// fails closed there too), so nothing here ever double-runs or crashes on
-// that edge case, only skips a client-side spawn it would not have needed.
-function isPathContained(filePath) {
+// realpathOrSelf mirrors internal/hooks/format.go's relativizeHookPath's own
+// filepath.EvalSymlinks fallback: a path that cannot be resolved (does not
+// exist yet — the tool may be about to CREATE it — or a permission error)
+// is used unresolved rather than failing the containment check outright.
+function realpathOrSelf(p) {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
+}
+
+// isPathContained mirrors internal/hooks/format.go's relativizeHookPath, not
+// ValidateFilePath: opencode 1.18.30's own tool schemas require an ABSOLUTE
+// filePath (the installed binary's own strings: write's is "The absolute
+// path to write... must be absolute, not relative", edit's is "The absolute
+// path to the file to modify"), so refusing every absolute path here made
+// every one of these hooks dead in production — format.go's own
+// evaluateFormatFromHook exists to undo exactly that refusal on the Go side
+// ("format-on-save stays a no-op" otherwise, per its own comment); this
+// mirrors it here so the containment DECISION happens once, before anything
+// spawns, rather than only on the Go side after three processes already ran.
+//
+// A RELATIVE path is refused only when a literal ".." path SEGMENT appears
+// ("..", not merely the substring anywhere in the path) — narrower than
+// ValidateFilePath's own `strings.Contains(cleaned, "..")`, deliberately: a
+// real traversal (`../../x.go`) is refused by both, and the rare filename
+// that only CONTAINS ".." as a substring without it being a path segment
+// stays refused by the Go verb regardless (evaluateFormatIn fails closed
+// there too), so nothing here ever double-runs or crashes on that edge
+// case, only skips a client-side spawn it would not have needed.
+//
+// An ABSOLUTE path is resolved against cwd using path.relative, with BOTH
+// sides realpath'd the same way relativizeHookPath tries both the raw and
+// the resolved form — macOS hands out `/tmp` for what resolveCwd(ctx)
+// reports as `/private/tmp`, and comparing only the unresolved forms would
+// read that as an escape and refuse a legitimate file. path.relative (not a
+// startsWith/prefix check) is what makes a sibling directory that merely
+// shares cwd's name as a PREFIX (e.g. cwd `/…/wt` and filePath
+// `/…/wt-evil/x.go`) resolve to a path starting with `..` and get refused,
+// rather than a naive prefix check wrongly treating it as contained.
+function isPathContained(filePath, cwd) {
   if (typeof filePath !== "string" || filePath === "") return false;
-  if (filePath.startsWith("/")) return false;
-  return !filePath.split("/").includes("..");
+  if (!path.isAbsolute(filePath)) {
+    return !filePath.split("/").includes("..");
+  }
+  if (typeof cwd !== "string" || cwd === "") return false;
+
+  const cwdCandidates = [cwd, realpathOrSelf(cwd)];
+  const fileCandidates = [
+    filePath,
+    path.join(realpathOrSelf(path.dirname(filePath)), path.basename(filePath)),
+  ];
+
+  for (const wd of cwdCandidates) {
+    for (const fp of fileCandidates) {
+      const rel = path.relative(wd, fp);
+      if (rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel)) continue;
+      return true;
+    }
+  }
+  return false;
 }
 
 // formatterEnabled reads the per-run OPENCODE_CONFIG_CONTENT this opencode
@@ -163,9 +210,9 @@ export async function toolExecuteAfter(ctx, input, output) {
 
     const args = (input && input.args) || {};
     const filePath = typeof args.filePath === "string" ? args.filePath : "";
-    if (!isPathContained(filePath)) return;
-
     const cwd = resolveCwd(ctx);
+    if (!isPathContained(filePath, cwd)) return;
+
     const bin = resolveNightgaugeBin();
     const toolName = input.tool === "edit" ? "Edit" : "Write";
     const toolInput = { file_path: filePath };

@@ -2202,6 +2202,25 @@ itself carries `{title, output, metadata}`, confirming the issue's own
 `output.output` assumption. `edit.js` reads `input.args`, not `output.args`,
 accordingly.
 
+**Correction (fix round, 2026-09-15): the capture's `filePath: "calc.py"` is
+an artifact of the stub fixture, not of 1.18.30's own argument shape.** The
+`{tool, sessionID, callID, args}` envelope above is genuine, but the
+`tool-edit-stop`/`write-then-stop` stub fixture that produced it supplies its
+own relative `filePath` value; the installed 1.18.30 binary's own tool
+schemas (read via `strings` on the pinned binary) require an ABSOLUTE
+`filePath` for both tools — write's own schema text reads "The absolute path
+to write... must be absolute, not relative", edit's reads "The absolute path
+to the file to modify" — and this repository's own real-model captures
+(`internal/execution/testdata/opencode_stream_local_capture.jsonl`,
+`..._remote_capture.jsonl`, `..._subagent_capture.jsonl`) each show an
+absolute `filePath` on a real `edit` call, e.g.
+`/tmp/nightgauge-fixture/repo/calc.py`. `edit.js`'s first cut refused every
+absolute path outright (mirroring `internal/hooks/format.go`'s
+`ValidateFilePath`), which left format/check-version/test-quality dead
+against a real model; it now resolves an absolute `filePath` against the
+run's cwd the way `format.go`'s own `relativizeHookPath` resolves one for
+the Claude Code hook path, and refuses only a path that resolves outside it.
+
 **Mutating `output.output` in place reaches the model's next turn.** The
 probe's `tool.execute.after` appended a marker string to `output.output`
 in place (no reassignment of `output` itself, no return value). The very

@@ -34,13 +34,40 @@ type TestQualityResult struct {
 // call anywhere in the same content. `.` matches within a line only in both
 // grep (line-buffered) and Go's default (non-multiline, non-dotall) regexp
 // semantics, so the empty-body pattern only matches an `it(...)  => {}` that
-// is not split across lines in either implementation.
+// is not split across lines in either implementation — EXCEPT for `\s`
+// itself: grep's own `\s` is confined to whatever line grep is currently
+// looking at (test-quality.sh feeds it $CONTENT one line at a time, since
+// `echo "$CONTENT" | grep` still iterates line by line even though $CONTENT
+// itself holds embedded newlines), but Go RE2's `\s` matches `\n` (and
+// `\r`) same as any other whitespace, so evaluating the pattern against the
+// WHOLE content string lets it span lines the shell script never would.
+// evaluateEmptyTestBodyPerLine below is what actually keeps the two
+// implementations in parity; emptyTestBodyPattern itself must never be run
+// against multi-line content directly.
 var (
 	tautologicalAssertionPattern = regexp.MustCompile(`expect\(true\)\.toBe\(true\)|expect\(false\)\.toBe\(false\)`)
 	emptyTestBodyPattern         = regexp.MustCompile(`it\(.*\(\)\s*=>\s*\{\s*\}\)`)
 	consoleLogPattern            = regexp.MustCompile(`console\.log`)
 	hasAssertionPattern          = regexp.MustCompile(`expect\(|assert[.(]`)
 )
+
+// evaluateEmptyTestBodyPerLine mirrors grep's own line-oriented matching:
+// test-quality.sh's `echo "$CONTENT" | grep -qE '...'` only ever sees one
+// line of $CONTENT at a time, so its `\s*` can never bridge a `\n` a real
+// model's edit introduces between `() =>` and `{}`. Splitting on "\n" first
+// (not "\r\n" — a lone "\r" stays attached to whichever line it trails,
+// exactly like grep's own line splitting on a text stream) and matching
+// each line independently reproduces that; the two-argument
+// strings.Split(x,"\n") is a strict decomposition, so no line is ever
+// dropped or merged.
+func evaluateEmptyTestBodyPerLine(content string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		if emptyTestBodyPattern.MatchString(line) {
+			return true
+		}
+	}
+	return false
+}
 
 // EvaluateTestQuality is the Go port of
 // claude-plugins/nightgauge/hooks/test-quality.sh (#1642): the OpenCode
@@ -89,7 +116,7 @@ func EvaluateTestQuality(inputJSON []byte) TestQualityResult {
 	if tautologicalAssertionPattern.MatchString(content) {
 		warnings = append(warnings, "Tautological assertion detected (expect(true).toBe(true) or expect(false).toBe(false)). Replace with meaningful assertions.")
 	}
-	if emptyTestBodyPattern.MatchString(content) {
+	if evaluateEmptyTestBodyPerLine(content) {
 		warnings = append(warnings, "Empty test body detected. Tests must contain assertions.")
 	}
 	if consoleLogPattern.MatchString(content) && !hasAssertionPattern.MatchString(content) {

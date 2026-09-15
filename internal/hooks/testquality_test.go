@@ -97,6 +97,15 @@ func TestTestQualityMatchesShellScript(t *testing.T) {
 		{"tautological assertion expect(true).toBe(true)", "a.test.ts", "content", `expect(true).toBe(true);`},
 		{"tautological assertion expect(false).toBe(false)", "a.spec.ts", "new_string", `expect(false).toBe(false);`},
 		{"empty test body", "a.test.ts", "content", `it("does nothing", () => {})`},
+		// Go RE2's \s matches \n (and \r); grep's does not span the line it
+		// is currently reading, since test-quality.sh's own
+		// `echo "$CONTENT" | grep` iterates $CONTENT one line at a time even
+		// though $CONTENT holds embedded newlines. A naive whole-content
+		// regexp match (rather than a per-line one) would warn here where
+		// the shell script stays silent.
+		{"empty test body split across lines is NOT flagged (grep is line-oriented)", "a.test.ts", "content", "it(\"does nothing\", () => {\n})"},
+		{"empty test body split before the arrow is NOT flagged", "a.test.ts", "content", "it(\"does nothing\", ()\n=> {})"},
+		{"empty test body split across a CRLF line ending is NOT flagged", "a.test.ts", "content", "it(\"does nothing\", () => {\r\n})"},
 		{"console.log with no assertion", "a.test.ts", "content", "console.log(\"debug\");"},
 		{"console.log alongside a real assertion is clean", "a.test.ts", "content", "console.log(\"debug\");\nexpect(1).toBe(1);"},
 		{"a clean test file", "a.test.ts", "content", `it("adds", () => { expect(1 + 1).toBe(2); })`},

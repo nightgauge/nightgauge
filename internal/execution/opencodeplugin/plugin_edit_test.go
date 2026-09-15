@@ -278,17 +278,35 @@ func TestEditHookOutsideWorktreeSpawnsNothing(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		filePath string
+		// filePathFn overrides filePath when set, for a case whose path
+		// depends on root (created fresh per subtest below).
+		filePathFn func(root string) string
 	}{
-		{"absolute path elsewhere", "/etc/hosts"},
-		{"parent-directory traversal", "../../x.go"},
+		{name: "absolute path elsewhere", filePath: "/etc/hosts"},
+		{name: "parent-directory traversal", filePath: "../../x.go"},
+		// A sibling directory that merely shares root as a PREFIX
+		// (root-evil, not root itself) must still be refused — the
+		// guardrail against a naive `startsWith(cwd)` containment check,
+		// which path.relative-based isPathContained avoids: path.relative
+		// resolves this to a path starting with "..", not a prefix match.
+		{
+			name: "sibling directory sharing only a name prefix with the worktree",
+			filePathFn: func(root string) string {
+				return filepath.Join(root+"-evil", "x.go")
+			},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
+			filePath := tc.filePath
+			if tc.filePathFn != nil {
+				filePath = tc.filePathFn(root)
+			}
 			logPath := filepath.Join(t.TempDir(), "log.txt")
 			bin := writeRecordingBin(t, logPath, "", 0)
 			env := map[string]string{"OPENCODE_CONFIG_CONTENT": `{"formatter":false}`}
 
-			argsJSON, err := json.Marshal(map[string]any{"filePath": tc.filePath, "content": "x"})
+			argsJSON, err := json.Marshal(map[string]any{"filePath": filePath, "content": "x"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -297,12 +315,44 @@ func TestEditHookOutsideWorktreeSpawnsNothing(t *testing.T) {
 				t.Fatalf("want no throw, got %q", res.Message)
 			}
 			if got := readLogLines(t, logPath); len(got) != 0 {
-				t.Errorf("spawned verbs for %q = %v, want zero spawns", tc.filePath, got)
+				t.Errorf("spawned verbs for %q = %v, want zero spawns", filePath, got)
 			}
 			if res.Output["output"] != "orig" {
 				t.Errorf("output.output = %v, want the original tool output unchanged", res.Output["output"])
 			}
 		})
+	}
+}
+
+// --- an ABSOLUTE filePath inside the worktree runs the hooks: opencode
+// 1.18.30's own tool schemas require an absolute filePath, so refusing
+// every absolute path (the pre-fix behaviour) made every one of these hooks
+// dead against a real model. AC3 only excludes an absolute path OUTSIDE the
+// worktree — one inside it is exactly as contained as a relative one. ---
+
+func TestEditHookAbsolutePathInsideWorktreeRunsHooks(t *testing.T) {
+	node := requireNode(t)
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(t.TempDir(), "log.txt")
+	bin := writeRecordingBin(t, logPath, "", 0)
+	env := map[string]string{"OPENCODE_CONFIG_CONTENT": `{"formatter":false}`}
+
+	absPath := filepath.Join(root, "src", "a.test.ts")
+	argsJSON, err := json.Marshal(map[string]any{"filePath": absPath, "content": "expect(true).toBe(true);"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := runEditHarness(t, node, root, "write", string(argsJSON), `{"output":"orig"}`, bin, env)
+	if res.Threw {
+		t.Fatalf("want no throw, got %q", res.Message)
+	}
+	got := readLogLines(t, logPath)
+	want := []string{"format", "check-version", "test-quality"}
+	if !equalStrings(got, want) {
+		t.Errorf("spawned verbs for an absolute path inside the worktree = %v, want %v", got, want)
 	}
 }
 
@@ -442,7 +492,13 @@ process.stdout.write(JSON.stringify(Object.keys(hooks)));
 
 // --- guardrail: replaying 1.18.30's real tool.execute.after argument shape
 // (captured by this issue's own offline probe against the pinned binary —
-// see edit.js's header comment) ---
+// see edit.js's header comment). The stub fixture below (tool-edit-stop)
+// supplies its OWN relative filePath ("calc.py") — that is a property of the
+// stub, not of 1.18.30's tool schemas, which require an absolute filePath;
+// TestEditHookMatchesRealModelCaptureArgumentShape below replays the
+// absolute-path shape this repository's own real-model captures show
+// (internal/execution/testdata/opencode_stream_local_capture.jsonl and
+// siblings), which is what a schema-conformant model actually sends. ---
 
 func TestEditHookMatches1_18_30ArgumentShape(t *testing.T) {
 	node := requireNode(t)
@@ -475,5 +531,47 @@ func TestEditHookMatches1_18_30ArgumentShape(t *testing.T) {
 	}
 	if got2 := readLogLines(t, logPath2); !equalStrings(got2, want) {
 		t.Errorf("spawned verbs = %v, want %v against the captured 1.18.30 write shape", got2, want)
+	}
+}
+
+// TestEditHookMatchesRealModelCaptureArgumentShape replays the ABSOLUTE
+// filePath shape this repository's own real-model captures show for a real
+// `edit` call (internal/execution/testdata/opencode_stream_local_capture.jsonl:
+// `"tool":"edit"... "input":{"filePath":"/tmp/nightgauge-fixture/repo/calc.py",
+// "oldString":"    return a - b","newString":"    return a + b"}`), rooted at
+// this test's own temp dir with the same relative structure
+// (root/repo/calc.py) so the path is genuinely INSIDE the run's cwd, exactly
+// as it was for the real capture's own worktree. Unlike
+// TestEditHookMatches1_18_30ArgumentShape's stub fixture (a relative
+// "calc.py", an artifact of the stub's own tool implementation), this is
+// what a schema-conformant model — which 1.18.30's own tool schemas require
+// to send an absolute filePath — actually produces.
+func TestEditHookMatchesRealModelCaptureArgumentShape(t *testing.T) {
+	node := requireNode(t)
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "repo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(t.TempDir(), "log.txt")
+	bin := writeRecordingBin(t, logPath, "", 0)
+	env := map[string]string{"OPENCODE_CONFIG_CONTENT": `{"formatter":false}`}
+
+	absPath := filepath.Join(root, "repo", "calc.py")
+	argsJSON, err := json.Marshal(map[string]any{
+		"filePath":  absPath,
+		"oldString": "    return a - b",
+		"newString": "    return a + b",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := runEditHarness(t, node, root, "edit", string(argsJSON), `{"metadata":{},"title":"calc.py","output":"Edit applied successfully."}`, bin, env)
+	if res.Threw {
+		t.Fatalf("want no throw against the real-model capture's absolute-path shape, got %q", res.Message)
+	}
+	got := readLogLines(t, logPath)
+	want := []string{"format", "check-version", "test-quality"}
+	if !equalStrings(got, want) {
+		t.Errorf("spawned verbs = %v, want %v against the real-model capture's absolute filePath", got, want)
 	}
 }
