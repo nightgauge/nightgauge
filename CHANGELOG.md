@@ -113,6 +113,24 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- `plugin/nightgauge/session.js` gives an OpenCode stage the same session
+  coverage Claude Code's hooks give one: compaction context re-injection
+  (`experimental.session.compacting` runs `hook inject-context`), suppression
+  of opencode 1.18.30's post-compaction synthetic "Continue if you have next
+  steps" turn (`experimental.compaction.autocontinue`), idle stop-verification
+  (`session.idle` runs `hook stop-verify`), skill-usage telemetry for the
+  native `skill` tool, and a 60-second-throttled permission-ask desktop
+  notification — every one fail-open and never a gate. A new bounded run-dir
+  events file (`opencode-events-<RUN_ID>.jsonl`, capped at 1 MiB, ids and
+  verdict codes only, never transcript or prompt text) records compaction,
+  stop-verify, permission-ask and skill events; `internal/execution/opencodeplugin/events.go`
+  (`ReadRunEvents`, `CompactionCount`) is the Go-side reader #1653 will
+  consume. Driven against the real pinned opencode 1.18.30 binary and #1618's
+  offline stub provider: without the autocontinue suppression, a compacted
+  session's synthetic continue turn resumes the build agent indefinitely
+  (observed 500+ loop steps before the test's own bound killed it); with it,
+  the session ends at idle after exactly one compaction (#1641)
+
 - A scheduled latest-CLI canary (`.github/workflows/adapter-canary.yml`,
   `scripts/adapter-canary.sh`) installs the newest release of every manifest
   CLI daily and on `workflow_dispatch`, and reruns the flag contract (#1617)
