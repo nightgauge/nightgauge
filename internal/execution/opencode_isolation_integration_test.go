@@ -641,7 +641,15 @@ func TestOpenCodeIntegrationHomeDotOpenCode(t *testing.T) {
 	if strings.Contains(stderr, "adapter_incompatible") || strings.Contains(stderr, "may be waiting on an unreachable registry") {
 		t.Errorf("stderr carries an install-risk/adapter_incompatible marker for directories seeded satisfied:\n%s", stderr)
 	}
-	if elapsed > 20*time.Second {
+	// This test seeds two operator-owned directories (~/.opencode and
+	// ~/.config/opencode) and runs a preceding refused dispatch before the
+	// timed section starts, so its fast-path wall clock runs measurably
+	// higher under CI's shared-runner load than the single-directory cases
+	// above (observed 23.7s in CI vs ~5-6s locally). 35s keeps a wide margin
+	// below the ~70-80s slow path this assertion exists to catch, while
+	// giving that CI variance headroom the tighter 20s bound in the
+	// single-directory tests does not need.
+	if elapsed > 35*time.Second {
 		t.Errorf("RunStage took %s; both operator directories were seeded satisfied and should get OpenCode's own fast path, not the ~70-80s an install wait takes", elapsed)
 	}
 	if config := string(readShimFile(t, out, "config.json")); !strings.Contains(config, "home-dotdir-agent") {
