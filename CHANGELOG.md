@@ -86,6 +86,22 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- A scheduled latest-CLI canary (`.github/workflows/adapter-canary.yml`,
+  `scripts/adapter-canary.sh`) installs the newest release of every manifest
+  CLI daily and on `workflow_dispatch`, and reruns the flag contract (#1617)
+  against each one's freshly captured `--help`. Its OpenCode leg
+  (`internal/execution/opencode_canary_test.go`, build tag `canary`) drives
+  the installed `opencode` against the #1618 stub provider and asserts the
+  stream's event-type allow-list, field paths and non-zero token accounting
+  (#1624), the permission-reject leg's auto-rejection and exit code, and a
+  bad-model leg's exit 1 with a `type: "error"` event. A schema-diff leg
+  compares the live `https://opencode.ai/config.json` against the manifest's
+  `config_schema_sha256` and, on a difference, re-runs the #1634 suite against
+  the live schema. The workflow also runs as a required check on a PR that
+  changes a manifest's `max_tested`, at that proposed version, and a `report`
+  job (`issues: write` only, no secrets, no CLI or model) files or updates one
+  open `canary: <adapter> <version> drift` issue per failing adapter+version
+  from the run's JSON summary (#1639)
 - The OpenCode config schema published for the newest tested OpenCode
   (1.18.30) is now pinned in the repository, and a contract test validates
   every per-run config the builder generates against it, across LM Studio,

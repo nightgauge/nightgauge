@@ -7,6 +7,7 @@ branch-merged-check.sh regression suite
 post-merge-check.sh regression suite
 scrub-evidence.sh regression suite
 capture-cli-help.sh regression suite
+adapter-canary.sh regression suite
 CI change-class gate regression suite
 make generate-ipc-client
 generated IPC client in sync

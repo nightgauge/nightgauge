@@ -1,4 +1,4 @@
-//go:build opencode_integration
+//go:build opencode_integration || canary
 
 package execution
 
