@@ -41,8 +41,41 @@ export const OPENCODE_PERMISSION_DENIED_MARKER = "[permission-denied]";
 /** The stream carried an `error` event: OpenCode reported the run failed. */
 export const OPENCODE_ERROR_EVENT_MARKER = "[opencode-error-event]";
 
-/** The error OpenCode 1.18.30 gives a tool call whose permission request it rejected. */
+/**
+ * The error OpenCode 1.18.30 gives a tool call whose permission request it
+ * rejected because the permission resolved to "ask" and a headless run
+ * auto-rejects it. Bundled source also has this exact text with " with the
+ * following feedback: ${this.feedback}" appended for an interactive human's
+ * own rejection, so this is matched as a PREFIX (isOpenCodeRejectedToolError
+ * below), never exact equality.
+ */
 const OPENCODE_REJECTED_TOOL_ERROR = "The user rejected permission to use this specific tool call.";
+
+/**
+ * The DIFFERENT error text 1.18.30 gives a tool call whose permission
+ * resolved to "deny" directly (bundled source: `The user has specified a
+ * rule which prevents you from using this specific tool call. Here are some
+ * of the relevant rules ${JSON.stringify(this.ruleset)}`) — nightgauge's own
+ * generated OpenCode permission map never sets "ask" (ADR-022 § 9), so every
+ * stage running under it hits this path, never OPENCODE_REJECTED_TOOL_ERROR's.
+ * A prefix, matched with startsWith: the ruleset list trails it dynamically
+ * per call. Go parity: internal/execution/stream.go's
+ * openCodeRuleDeniedToolErrorPrefix (#1638 fix round finding, AC3).
+ */
+const OPENCODE_RULE_DENIED_TOOL_ERROR_PREFIX =
+  "The user has specified a rule which prevents you from using this specific tool call.";
+
+/**
+ * Reports whether errText is a tool_use event's error for a call OpenCode's
+ * own permission config refused — either text above, "ask" auto-rejected or
+ * "deny" matched directly.
+ */
+function isOpenCodeRejectedToolError(errText: string): boolean {
+  return (
+    errText.startsWith(OPENCODE_REJECTED_TOOL_ERROR) ||
+    errText.startsWith(OPENCODE_RULE_DENIED_TOOL_ERROR_PREFIX)
+  );
+}
 
 /** The event types opencode 1.18.30 writes. */
 const OPENCODE_KNOWN_EVENTS: ReadonlySet<string> = new Set([
@@ -211,7 +244,11 @@ export function parseOpenCodeStream(
     switch (type) {
       case "tool_use": {
         const state = part && isRecord(part.state) ? part.state : undefined;
-        if (state?.status === "error" && state.error === OPENCODE_REJECTED_TOOL_ERROR) {
+        if (
+          state?.status === "error" &&
+          typeof state.error === "string" &&
+          isOpenCodeRejectedToolError(state.error)
+        ) {
           s.rejectedToolCalls++;
         }
         break;

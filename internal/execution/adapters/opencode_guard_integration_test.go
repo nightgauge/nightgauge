@@ -326,6 +326,27 @@ func guardWriteFile(t *testing.T, path, content string) {
 	}
 }
 
+// guardGitInit makes dir a one-commit git repository — every real dispatch's
+// WorktreeDir is one (Manager.RunStage's own worktree setup), unlike a bare
+// t.TempDir(). opencode 1.18.30 resolves Instance.worktree, what edit/write/
+// read patterns are matched relative to, from `git rev-parse --show-toplevel`
+// when dir is a git repository, and "/" (the whole filesystem) when it is
+// not — the two forms this file's probes tell apart (#1638 fix round finding
+// 1/7).
+func guardGitInit(t *testing.T, dir string) {
+	t.Helper()
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main"},
+		{"add", "-A"},
+		{"-c", "user.email=probe@example.invalid", "-c", "user.name=probe", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "base"},
+	} {
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+}
+
 // TestOpenCodeIncludesReadAllowed is AC2's own probe: a stage whose
 // permission map allows Read and denies Edit, with NIGHTGAUGE_SKILL_DIR
 // allow-listed for external_directory and denied for edit, reads a file
@@ -404,6 +425,78 @@ func guardToolUseEvent(line string) (tool, status, errText string, ok bool) {
 	return ev.Part.Tool, ev.Part.State.Status, ev.Part.State.Error, true
 }
 
+// TestOpenCodeIncludesEditDeniedInGitWorktree is AC2's probe in the shape
+// every real dispatch actually runs in: a git worktree (guardGitInit), not
+// TestOpenCodeIncludesReadAllowed's bare t.TempDir(). opencode 1.18.30
+// matches edit's own deny patterns against path.relative(Instance.worktree,
+// file), and Instance.worktree is the git top-level for a git repository —
+// not "/", which is the only case an absolute, leading-slash-stripped
+// pattern (the pre-fix openCodeEditDenyPatterns) matches. #1638 fix round
+// finding 1/7: before the fix, this edit succeeded and the include file was
+// overwritten.
+func TestOpenCodeIncludesEditDeniedInGitWorktree(t *testing.T) {
+	skillDir := filepath.Join(t.TempDir(), "skill")
+	includeFile := filepath.Join(skillDir, "_includes", "note.md")
+	guardWriteFile(t, includeFile, "PROBE-1638-INCLUDE-CONTENT\n")
+
+	dir := t.TempDir()
+	guardWriteFile(t, filepath.Join(dir, "README.md"), "probe worktree\n")
+	guardGitInit(t, dir)
+
+	opts := RunOptions{AllowedTools: []string{"Read", "Edit"}, SkillPath: filepath.Join(skillDir, "SKILL.md"), WorktreeDir: dir}
+	permission := openCodePermissionMap(opts, "")
+
+	stub := newGuardStubServer(t, []guardStubTurn{
+		{ToolCall: &guardStubToolCall{Name: "edit", Arguments: map[string]any{"filePath": includeFile, "oldString": "PROBE-1638-INCLUDE-CONTENT", "newString": "TAMPERED"}}},
+		{Content: "done"},
+	})
+	exitCode, stdout, stderr := guardDirectRun(t, permission, stub, dir)
+	t.Logf("exit=%d\nstdout:\n%s\nstderr:\n%s", exitCode, stdout, stderr)
+
+	var sawEditError bool
+	for _, line := range strings.Split(strings.TrimRight(stdout, "\n"), "\n") {
+		tool, status, _, ok := guardToolUseEvent(line)
+		if ok && tool == "edit" && status == "error" {
+			sawEditError = true
+		}
+	}
+	if !sawEditError {
+		t.Errorf("no errored tool_use for \"edit\" of a skill-dir file in a git worktree:\n%s", stdout)
+	}
+	if got, _ := os.ReadFile(includeFile); strings.Contains(string(got), "TAMPERED") {
+		t.Errorf("AC2 broken in a git worktree: the edit of NIGHTGAUGE_SKILL_DIR/_includes/note.md succeeded, content is now %q", got)
+	}
+}
+
+// TestOpenCodeBinDirEditDenied is #1638 fix round finding 8's probe:
+// external_directory allow-lists NIGHTGAUGE_BIN (openCodeExternalDirectoryAllowList)
+// so a stage may Read there, but nothing denied Edit or Write of it, and
+// every stage skill grants both. A stage could plant an executable in the
+// running nightgauge binary's own directory — typically a PATH directory —
+// giving it persistent code execution outside the per-run isolation.
+func TestOpenCodeBinDirEditDenied(t *testing.T) {
+	dir := t.TempDir()
+	guardWriteFile(t, filepath.Join(dir, "README.md"), "probe worktree\n")
+	guardGitInit(t, dir)
+
+	binDir := t.TempDir()
+	planted := filepath.Join(binDir, "gh")
+
+	opts := RunOptions{AllowedTools: []string{"Read", "Edit", "Write"}, WorktreeDir: dir}
+	permission := openCodePermissionMap(opts, binDir)
+
+	stub := newGuardStubServer(t, []guardStubTurn{
+		{ToolCall: &guardStubToolCall{Name: "write", Arguments: map[string]any{"filePath": planted, "content": "#!/bin/sh\necho PLANTED\n"}}},
+		{Content: "done"},
+	})
+	exitCode, stdout, stderr := guardDirectRun(t, permission, stub, dir)
+	t.Logf("exit=%d\nstdout:\n%s\nstderr:\n%s", exitCode, stdout, stderr)
+
+	if _, err := os.Stat(planted); err == nil {
+		t.Errorf("NIGHTGAUGE_BIN dir is writable: a write tool call planted %s", planted)
+	}
+}
+
 // TestOpenCodeOutsideReadRejected is AC3's own probe: a Read outside the
 // allow-list (a file in $HOME, never NIGHTGAUGE_SKILL_DIR, the worktree, the
 // NIGHTGAUGE_BIN dir or an allow-listed /tmp path) is rejected by opencode
@@ -459,4 +552,42 @@ func TestOpenCodeOutsideReadRejected(t *testing.T) {
 	if !sawRejection {
 		t.Fatalf("no tool_use event for \"read\" in stdout:\n%s", stdout)
 	}
+}
+
+// TestOpenCodeNestedDotEnvDenied is a routed #1752 request's own probe: a
+// Read-granted stage must not be able to read a NESTED .env file, such as
+// apps/web/.env.local, not only a root-level one. opencode's own read
+// patterns are matched against the worktree-relative path with no implicit
+// "**" prefix, so the issue's own "*.env"/".env*" backstop entries only ever
+// match a root-level file; without "**/*.env"/"**/.env*" (#1638 fix round
+// finding), the map's read "*": allow backstop is the last matching rule for
+// a nested one, and it is readable.
+func TestOpenCodeNestedDotEnvDenied(t *testing.T) {
+	dir := t.TempDir()
+	guardWriteFile(t, filepath.Join(dir, "README.md"), "probe worktree\n")
+	guardWriteFile(t, filepath.Join(dir, "apps", "web", ".env.local"), "SECRET=PROBE-1638\n")
+	guardGitInit(t, dir)
+
+	opts := RunOptions{AllowedTools: []string{"Read"}, WorktreeDir: dir}
+	permission := openCodePermissionMap(opts, "")
+
+	nested := filepath.Join(dir, "apps", "web", ".env.local")
+	stub := newGuardStubServer(t, []guardStubTurn{
+		{ToolCall: &guardStubToolCall{Name: "read", Arguments: map[string]any{"filePath": nested}}},
+		{Content: "done"},
+	})
+	exitCode, stdout, stderr := guardDirectRun(t, permission, stub, dir)
+	t.Logf("exit=%d\nstdout:\n%s\nstderr:\n%s", exitCode, stdout, stderr)
+
+	for _, line := range strings.Split(strings.TrimRight(stdout, "\n"), "\n") {
+		tool, status, _, ok := guardToolUseEvent(line)
+		if !ok || tool != "read" {
+			continue
+		}
+		if status != "error" {
+			t.Errorf("secret widening: apps/web/.env.local was READ under the generated map (status=%q)", status)
+		}
+		return
+	}
+	t.Fatalf("no tool_use event for \"read\" in stdout:\n%s", stdout)
 }

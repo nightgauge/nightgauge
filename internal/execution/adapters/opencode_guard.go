@@ -116,8 +116,18 @@ func openCodePermissionKeyForClaudeTool(name string) (string, bool) {
 var openCodeBashDenyBackstop = []string{"rm -rf *", "rm -fr *", "git push --force*", "git push -f*", "git push * --force*"}
 
 // openCodeSecretDenyBackstop are the read/edit patterns the issue's deny-list
-// backstop names.
-var openCodeSecretDenyBackstop = []string{"*.env", ".env*", "**/.ssh/**", "**/id_rsa*", openCodeGhHostsPattern}
+// backstop names ("*.env", ".env*", "**/.ssh/**", "**/id_rsa*" and the gh
+// hosts pattern — TestOpenCodeDenyListBackstopComplete's golden checks these
+// five are present, independent of this var, so a shorter var still fails
+// that test), plus "**/*.env" and "**/.env*": opencode 1.18.30's own anchored
+// Wildcard.match means "*.env" and ".env*" only ever match a ROOT-level file
+// (worktree-relative patterns have no leading "**", so "*" cannot cross a "/"
+// the way a real glob's "*" would); a nested secret file such as
+// apps/web/.env.local needs the "**/" prefix to be caught at all. Without it,
+// a Read-granted stage's read "*": allow backstop is the last matching rule
+// for that file, and it is readable (#1638 fix round finding: a routed
+// #1752 request, TestProbeA9NestedEnvLocalRead).
+var openCodeSecretDenyBackstop = []string{"*.env", ".env*", "**/*.env", "**/.env*", "**/.ssh/**", "**/id_rsa*", openCodeGhHostsPattern}
 
 // openCodeGhHostsPattern matches gh's hosts file under any GH_CONFIG_DIR
 // (opencode_isolation.go points GH_CONFIG_DIR at the operator's own gh
@@ -313,11 +323,16 @@ func openCodeReadPermission(g *openCodeToolGrant) *openCodePatternMap {
 }
 
 // openCodeEditPermission is always a pattern map: "*" from g, every scoped
-// pattern g grants, the secret and project-config deny-list backstops, and,
-// when skillDirPattern is not empty, a deny for it — the read-only half of
-// the external_directory allow-list (manager.go's NIGHTGAUGE_SKILL_DIR): a
-// stage may Read under it but never Edit it.
-func openCodeEditPermission(g *openCodeToolGrant, skillDirPatterns []string) *openCodePatternMap {
+// pattern g grants, the secret and project-config deny-list backstops, and a
+// deny for every pattern in denyDirPatterns — the read-only half of the
+// external_directory allow-list's directory entries (manager.go's
+// NIGHTGAUGE_SKILL_DIR, and the running binary's own NIGHTGAUGE_BIN dir,
+// #1638 fix round finding 8): a stage may Read under either, but never Edit
+// or Write into it. Without this deny, external_directory's allow of
+// NIGHTGAUGE_BIN plus edit's own default "*": "allow" (every stage skill
+// grants Edit and Write) lets a stage plant an executable on the operator's
+// PATH.
+func openCodeEditPermission(g *openCodeToolGrant, denyDirPatterns []string) *openCodePatternMap {
 	pm := newOpenCodePatternMap()
 	base := openCodeDeny
 	if g != nil && g.bare {
@@ -335,7 +350,7 @@ func openCodeEditPermission(g *openCodeToolGrant, skillDirPatterns []string) *op
 	for _, pattern := range openCodeProjectConfigDenyBackstop {
 		pm.set(pattern, openCodeDeny)
 	}
-	for _, pattern := range skillDirPatterns {
+	for _, pattern := range denyDirPatterns {
 		pm.set(pattern, openCodeDeny)
 	}
 	return pm
@@ -497,29 +512,96 @@ func openCodeDirPatterns(dir string) []string {
 	return patterns
 }
 
-// openCodeEditDenyPatterns is openCodeDirPatterns with each pattern's
-// leading path separator stripped, de-duplicated. A bounded probe against
-// opencode 1.18.30 (TestOpenCodeIncludesReadAllowed; also reproduced in
-// isolation for "edit" specifically) found that "edit"'s own pattern
-// matching (unlike "external_directory"'s, ADR-022's amendment dated
-// 2026-09-15 records the contrast) never matches a pattern that starts with
-// "/" against the tool call's own absolute filePath — the identical pattern,
-// stripped of its leading slash, matches correctly. Every other pattern this
-// file sets on "edit" (openCodeSecretDenyBackstop,
-// openCodeProjectConfigDenyBackstop) already has no leading slash, so this
-// conversion is needed only for a dynamic, absolute directory pattern such
-// as the skill dir's.
-func openCodeEditDenyPatterns(dir string) []string {
+// openCodeWorktreeRelativeDirPatterns returns the edit-deny pattern(s) for
+// dir, expressed the way opencode 1.18.30's edit, write AND read tools ask
+// permission: `patterns:[path.relative(Instance.worktree, file)]` (bundled
+// source: `n.ask({permission:"edit",patterns:[qo.relative(y.worktree,u)]...})`).
+// Instance.worktree is the git worktree root for a git repository, and "/"
+// for a directory that is not one.
+//
+// ADR-022's 2026-09-15 amendment, and the openCodeEditDenyPatterns this
+// function replaces, recorded a different, wrong rule ("a pattern starting
+// with / never matches for edit"; "a pattern with no glob metacharacter never
+// matches"). Both were artifacts of that amendment's own fixture, a plain
+// t.TempDir() with no .git, where Instance.worktree really is "/" and a
+// leading-slash-stripped absolute path happens to equal the correct relative
+// form by coincidence. A second, bounded probe against the real binary in an
+// actual git worktree (TestProbeA9SkillEditInGitWorktree, ADR-022's
+// 2026-09-15 correction) found the old, absolute-path-derived pattern never
+// matches there: an edit of NIGHTGAUGE_SKILL_DIR/_includes/note.md succeeded
+// when it must be denied (AC2).
+//
+// worktreeDir's own git top-level (openCodeGitTopLevel, a filesystem walk-up
+// for a ".git" entry — never a `git` subprocess, so this function, like
+// openCodePermissionMap, stays pure) is the relative root when worktreeDir is
+// one; "/" otherwise, matching opencode's own non-git fallback exactly, which
+// TestOpenCodeIncludesReadAllowed's bare t.TempDir() fixture still exercises
+// deliberately. Every real dispatch's WorktreeDir IS the git worktree
+// Manager.RunStage created, so this finds it as its own top-level directly.
+//
+// Both the given and the symlink-resolved form of the resolved root and of
+// dir are combined (openCodeDirPatterns' own reasoning: opencode can report
+// either form for either path, independently, under macOS's /var ->
+// /private/var), de-duplicated.
+func openCodeWorktreeRelativeDirPatterns(worktreeDir, dir string) []string {
+	if dir == "" {
+		return nil
+	}
+	root := string(filepath.Separator)
+	if worktreeDir != "" {
+		if top, ok := openCodeGitTopLevel(worktreeDir); ok {
+			root = top
+		}
+	}
+	roots := []string{filepath.Clean(root)}
+	if r, err := filepath.EvalSymlinks(root); err == nil {
+		if c := filepath.Clean(r); c != roots[0] {
+			roots = append(roots, c)
+		}
+	}
+	dirs := []string{filepath.Clean(dir)}
+	if r, err := filepath.EvalSymlinks(dir); err == nil {
+		if c := filepath.Clean(r); c != dirs[0] {
+			dirs = append(dirs, c)
+		}
+	}
 	var out []string
 	seen := map[string]bool{}
-	for _, p := range openCodeDirPatterns(dir) {
-		p = strings.TrimPrefix(p, string(filepath.Separator))
-		if !seen[p] {
-			seen[p] = true
-			out = append(out, p)
+	for _, rt := range roots {
+		for _, d := range dirs {
+			rel, err := filepath.Rel(rt, d)
+			if err != nil {
+				continue
+			}
+			p := filepath.ToSlash(rel) + "/**"
+			if !seen[p] {
+				seen[p] = true
+				out = append(out, p)
+			}
 		}
 	}
 	return out
+}
+
+// openCodeGitTopLevel walks dir and its ancestors for a ".git" entry (file or
+// directory, so a linked worktree's own gitdir pointer file counts, not just
+// a primary checkout's .git directory), the same directory `git rev-parse
+// --show-toplevel` would report — a filesystem walk-up, deliberately never a
+// `git` subprocess, so openCodeWorktreeRelativeDirPatterns stays pure. ok is
+// false when no ancestor (up to the filesystem root) has one: dir is not
+// inside a git repository at all.
+func openCodeGitTopLevel(dir string) (top string, ok bool) {
+	d := filepath.Clean(dir)
+	for {
+		if _, err := os.Lstat(filepath.Join(d, ".git")); err == nil {
+			return d, true
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			return "", false
+		}
+		d = parent
+	}
 }
 
 // openCodeSkillDir is the directory RunOptions.SkillPath names (manager.go's
@@ -613,11 +695,14 @@ func openCodePermissionMap(opts RunOptions, binDir string) *openCodePermissionJS
 			grants["list"] = &openCodeToolGrant{bare: r.bare, scopes: append([]string(nil), r.scopes...)}
 		}
 	}
-	skillDirEditDenyPatterns := openCodeEditDenyPatterns(openCodeSkillDir(opts))
+	editDenyDirPatterns := append(
+		openCodeWorktreeRelativeDirPatterns(opts.WorktreeDir, openCodeSkillDir(opts)),
+		openCodeWorktreeRelativeDirPatterns(opts.WorktreeDir, binDir)...,
+	)
 	return &openCodePermissionJSON{
 		Wildcard:          openCodeDeny,
 		Read:              openCodeReadPermission(grants["read"]),
-		Edit:              openCodeEditPermission(grants["edit"], skillDirEditDenyPatterns),
+		Edit:              openCodeEditPermission(grants["edit"], editDenyDirPatterns),
 		Glob:              openCodeScalarPermission(grants["glob"]),
 		Grep:              openCodeScalarPermission(grants["grep"]),
 		List:              openCodeScalarPermission(grants["list"]),
@@ -636,18 +721,41 @@ func openCodePermissionMap(opts RunOptions, binDir string) *openCodePermissionJS
 //
 // openCodeProjectConfigTamperCheck refuses a dispatch when the worktree's
 // opencode.json, opencode.jsonc or .opencode/ differ from the base branch:
-// modified, staged, untracked or git-ignored. A stage must not rewrite the
-// OpenCode config the next stage in the same worktree runs under
-// (addNightgaugePluginToConfig and BuildOpenCodeConfig together are the only
-// writers Nightgauge itself uses; this gate is what refuses one a stage wrote
-// on its own).
+// modified, staged, untracked, git-ignored, committed on top of the base tip,
+// or hidden from git's own diff machinery by a skip-worktree or
+// assume-unchanged bit. A stage must not rewrite the OpenCode config the next
+// stage in the same worktree runs under (addNightgaugePluginToConfig and
+// BuildOpenCodeConfig together are the only writers Nightgauge itself uses;
+// this gate is what refuses one a stage wrote on its own).
 //
-// `git status --porcelain=v1 --ignored`, scoped to exactly those paths, is
-// the check: a fresh worktree's HEAD is the base branch's tip, so anything it
-// reports is a difference from that tip, tracked or not. git itself does not
-// follow a symlink to list untracked files inside its target, so a symlinked
-// .opencode is reported as itself — the issue's "symlinks are compared as
-// links, not followed" — without this function resolving anything by hand.
+// Three independent legs, each scoped to exactly those paths, because no
+// single git command catches everything a stage could do:
+//
+//  1. `git status --porcelain=v1 --ignored --untracked-files=all` — every
+//     difference from HEAD and the index: modified, staged, untracked or
+//     git-ignored. git itself does not follow a symlink to list untracked
+//     files inside its target, so a symlinked .opencode is reported as itself
+//     — the issue's "symlinks are compared as links, not followed" — without
+//     this function resolving anything by hand.
+//  2. `git diff --name-only <merge-base> -- <paths>` against the worktree's
+//     resolved base ref (openCodeTamperGateBaseRef) — status alone only ever
+//     sees a difference from HEAD, which is wrong once a stage commits its
+//     tamper: Manager.RunStage reuses one worktree across every stage of a
+//     run, and a later stage's HEAD is whatever an earlier stage committed,
+//     not the base branch's tip. Comparing to the merge-base instead of HEAD
+//     catches a committed change status alone misses. A worktree with no
+//     resolvable base ref (no origin remote and no local main/master — never
+//     a real dispatch, whose worktree Manager.RunStage clones from the target
+//     repository) skips only this leg, not the whole check.
+//  3. `git ls-files -v -- <paths>` — a path a stage marked skip-worktree or
+//     assume-unchanged (`git update-index --skip-worktree`/`--assume-unchanged`)
+//     is invisible to both (1) and (2): git's own diff and status machinery
+//     is told to assume it matches the index and never inspect its content.
+//     ls-files -v reports every tracked path's flag regardless (uppercase
+//     "H" is the normal, unmarked state; anything else is the bit itself,
+//     which is offending on its own — a legitimate dispatch never sets one on
+//     these paths).
+//
 // Nothing under those paths is ever read; only named.
 //
 // A worktreeDir that is not a git repository at all (a non-pipeline caller,
@@ -660,14 +768,28 @@ func openCodeProjectConfigTamperCheck(ctx context.Context, worktreeDir string) e
 	if worktreeDir == "" {
 		return nil
 	}
+	const gitProtectedPathsDoc = "opencode.json, opencode.jsonc or .opencode/"
+	protectedPaths := []string{"opencode.json", "opencode.jsonc", ".opencode"}
+
+	seen := map[string]bool{}
+	var paths []string
+	add := func(p string) {
+		p = strings.TrimSpace(p)
+		if p == "" || seen[p] {
+			return
+		}
+		seen[p] = true
+		paths = append(paths, p)
+	}
+
+	// Leg 1: everything status sees relative to HEAD and the index.
 	// --untracked-files=all is explicit, not left to git's default or an
 	// operator's global status.showUntrackedFiles: the default ("normal")
 	// collapses an entirely untracked directory to one line (".opencode/",
 	// naming no file inside it), and the issue requires each offending path
 	// named.
-	cmd := exec.CommandContext(ctx, "git", "-C", worktreeDir, "status", "--porcelain=v1", "--ignored", "--untracked-files=all",
-		"--", "opencode.json", "opencode.jsonc", ".opencode")
-	out, err := cmd.Output()
+	statusArgs := append([]string{"status", "--porcelain=v1", "--ignored", "--untracked-files=all", "--"}, protectedPaths...)
+	out, err := openCodeGitOutput(ctx, worktreeDir, statusArgs...)
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
@@ -679,19 +801,96 @@ func openCodeProjectConfigTamperCheck(ctx context.Context, worktreeDir string) e
 		}
 		return fmt.Errorf("opencode: checking %s for project-config tamper: %w", worktreeDir, err)
 	}
-	var paths []string
-	for _, line := range strings.Split(string(out), "\n") {
+	for _, line := range strings.Split(out, "\n") {
 		if len(line) < 4 {
 			continue
 		}
-		paths = append(paths, strings.TrimSpace(line[3:]))
+		add(line[3:])
 	}
+
+	// Leg 2: committed on top of the base branch, which status alone misses
+	// in a worktree a later stage reuses (best-effort: a worktree with no
+	// resolvable base ref skips only this leg).
+	if baseRef, ok := openCodeTamperGateBaseRef(ctx, worktreeDir); ok {
+		if mergeBase, err := openCodeGitOutput(ctx, worktreeDir, "merge-base", "HEAD", baseRef); err == nil {
+			if mergeBase = strings.TrimSpace(mergeBase); mergeBase != "" {
+				diffArgs := append([]string{"diff", "--name-only", mergeBase, "--"}, protectedPaths...)
+				if diffOut, err := openCodeGitOutput(ctx, worktreeDir, diffArgs...); err == nil {
+					for _, line := range strings.Split(strings.TrimSpace(diffOut), "\n") {
+						add(line)
+					}
+				}
+			}
+		}
+	}
+
+	// Leg 3: a skip-worktree or assume-unchanged bit on a protected path
+	// hides a working-tree edit from both legs above.
+	lsArgs := append([]string{"ls-files", "-v", "--"}, protectedPaths...)
+	if lsOut, err := openCodeGitOutput(ctx, worktreeDir, lsArgs...); err == nil {
+		for _, line := range strings.Split(strings.TrimRight(lsOut, "\n"), "\n") {
+			if len(line) < 3 || line[0] == 'H' {
+				continue
+			}
+			add(line[2:])
+		}
+	}
+
 	if len(paths) == 0 {
 		return nil
 	}
 	sort.Strings(paths)
 	return fmt.Errorf(
-		"opencode: refused: %s's opencode.json, opencode.jsonc or .opencode/ differs from the base branch (modified, untracked or git-ignored): %s. "+
+		"opencode: refused: %s's %s differs from the base branch (modified, untracked, git-ignored, committed on top of the base tip, or skip-worktree/assume-unchanged): %s. "+
 			"A stage must not rewrite the OpenCode config the next stage in this worktree runs under. See docs/decisions/022-opencode-multi-provider-adapter.md § 8",
-		worktreeDir, strings.Join(paths, ", "))
+		worktreeDir, gitProtectedPathsDoc, strings.Join(paths, ", "))
+}
+
+// openCodeTamperGateBaseRef resolves the ref openCodeProjectConfigTamperCheck's
+// second leg compares worktreeDir against: the remote's default branch when
+// one is configured (a real pipeline worktree always has an "origin" remote —
+// Manager.RunStage clones it from the target repository), else the local
+// branch of the same name, mirroring internal/execution's own
+// resolveBaseRef/detectDefaultBranch (worktree_sweep.go). Duplicated locally
+// rather than imported: internal/execution imports this package (adapters),
+// so the reverse import would cycle. ok is false when neither a remote nor a
+// local ref for the resolved default branch name exists — a repository with
+// no commit reachable from anywhere but HEAD, which openCodeProjectConfigTamperCheck
+// treats as "this leg finds nothing", not as a refusal.
+func openCodeTamperGateBaseRef(ctx context.Context, worktreeDir string) (ref string, ok bool) {
+	defaultBranch := "main"
+	if out, err := openCodeGitOutput(ctx, worktreeDir, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil {
+		if name := strings.TrimPrefix(strings.TrimSpace(out), "origin/"); name != "" {
+			defaultBranch = name
+		}
+	} else {
+		for _, candidate := range []string{"main", "master"} {
+			if openCodeGitRefExists(ctx, worktreeDir, "refs/remotes/origin/"+candidate) || openCodeGitRefExists(ctx, worktreeDir, "refs/heads/"+candidate) {
+				defaultBranch = candidate
+				break
+			}
+		}
+	}
+	if openCodeGitRefExists(ctx, worktreeDir, "refs/remotes/origin/"+defaultBranch) {
+		return "origin/" + defaultBranch, true
+	}
+	if openCodeGitRefExists(ctx, worktreeDir, "refs/heads/"+defaultBranch) {
+		return defaultBranch, true
+	}
+	return "", false
+}
+
+// openCodeGitRefExists reports whether ref resolves to a commit in dir.
+func openCodeGitRefExists(ctx context.Context, dir, ref string) bool {
+	cmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--verify", "--quiet", ref)
+	return cmd.Run() == nil
+}
+
+// openCodeGitOutput runs a git command in dir and returns its trimmed-of-
+// nothing stdout (the caller trims what it needs: a porcelain listing's
+// leading status columns are significant).
+func openCodeGitOutput(ctx context.Context, dir string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	out, err := cmd.Output()
+	return string(out), err
 }

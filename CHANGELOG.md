@@ -198,21 +198,36 @@ stop-verify --emit-event --session-id <id> [--child]` detached and
   `**/id_rsa*`, the gh hosts file; `opencode.json*` and `.opencode/**` on
   `edit`) present in every map regardless of what the stage's tools grant,
   and an `external_directory` allow-list scoped to `NIGHTGAUGE_SKILL_DIR`
-  (read-only: denied on `edit`), the `NIGHTGAUGE_BIN` directory, the context
-  and output file directories when they are outside the worktree, and every
-  `/tmp` literal the six stage skills use, in both `/tmp` and `/private/tmp`
-  forms. A new pre-spawn check in the adapter's `PreDispatch`
+  (read-only: denied on `edit`), the `NIGHTGAUGE_BIN` directory (also
+  read-only: denied on `edit`, so a stage cannot plant an executable in the
+  running binary's own directory), the context and output file directories
+  when they are outside the worktree, and every `/tmp` literal the six stage
+  skills use, in both `/tmp` and `/private/tmp` forms — though opencode's own
+  `external_directory` matching is at directory granularity only
+  (`dirname(file)/*`), so those per-file `/tmp` entries do not actually match
+  a real request yet; ADR-022 records the finding and defers the fix (a
+  per-run scratch directory) rather than widening the allow-list to all of
+  shared `/tmp`. The read/edit deny-list backstop also denies a NESTED secret
+  file (`**/*.env`, `**/.env*`; the root-level-only `*.env`/`.env*` alone let
+  one through). A new pre-spawn check in the adapter's `PreDispatch`
   (`openCodeProjectConfigTamperCheck`) refuses a dispatch whose worktree
   carries a modified, untracked or git-ignored `opencode.json`,
-  `opencode.jsonc` or `.opencode/` relative to its base branch, naming every
-  offending path and spawning nothing — a stage must not rewrite the OpenCode
-  config the next stage in the same worktree runs under. Bounded probes
-  against the pinned opencode 1.18.30 binary found the permission map's
-  pattern matching narrower than ADR-022 § 9 assumed for `edit`/`read` (no
-  leading `/`, and a real glob wildcard required) and an `external_directory`
-  allow-list entry needed in both its given and symlink-resolved forms, not
-  only the resolved one; both are corrected in the generated map and recorded
-  in ADR-022's own amendment (#1638)
+  `opencode.jsonc` or `.opencode/` relative to its base branch — including one
+  a prior stage already committed in the same reused worktree, or hid behind
+  `git update-index --skip-worktree`, not only a difference from `HEAD` —
+  naming every offending path and spawning nothing; a stage must not rewrite
+  the OpenCode config the next stage in the same worktree runs under. A tool
+  call OpenCode's permission map rejects with a `deny` match (this map's only
+  rejection shape: it never emits `ask`) now also counts toward failure
+  classification (`internal/execution/stream.go`,
+  `packages/nightgauge-sdk/src/cli/adapters/opencodeStream.ts`), so a stage a
+  `deny` stopped is never read as a success. Bounded probes against the
+  pinned opencode 1.18.30 binary, run in a real git worktree rather than a
+  bare temporary directory, found `edit`'s own pattern matching resolves
+  against the path relative to the worktree's git top-level, not the
+  leading-slash-stripped absolute path an earlier reading of the same probes
+  assumed; both the generated map and ADR-022's own amendment are corrected
+  (#1638)
 - A scheduled latest-CLI canary (`.github/workflows/adapter-canary.yml`,
   `scripts/adapter-canary.sh`) installs the newest release of every manifest
   CLI daily and on `workflow_dispatch`, and reruns the flag contract (#1617)

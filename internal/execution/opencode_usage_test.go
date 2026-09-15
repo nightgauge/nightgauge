@@ -713,6 +713,34 @@ func TestOpenCodeAutoRejectMarker(t *testing.T) {
 	}
 }
 
+// TestOpenCodeDenyRejectedNeverSuccess is AC3's own closure (#1638 fix round):
+// a tool call OpenCode's own permission config resolved to "deny" directly
+// (never "ask") carries a DIFFERENT error text than
+// opencode_auto_reject_stream.jsonl's — "The user has specified a rule which
+// prevents you…" — and it prints NO stderr auto-reject notice at all: that
+// notice is specific to "ask" (ADR-022 § 9 forbids "ask" outright in a
+// generated permission map, so this is the ONLY rejection shape #1638's own
+// map ever produces). The captured fixture
+// (testdata/opencode_deny_rejected_stream.jsonl, a real opencode 1.18.30
+// run's stdout, internal/execution/adapters' own guardDirectRun harness) also
+// exits 0. Before openCodeIsRejectedToolError (stream.go) recognized this
+// text, RejectedToolCalls never counted it, the finish() fallback
+// (opencode_usage.go) never fired, and the run read as a plain success: exit
+// 0, no marker, no drift. This test is what proves it never does.
+func TestOpenCodeDenyRejectedNeverSuccess(t *testing.T) {
+	stream := readTestdata(t, "opencode_deny_rejected_stream.jsonl")
+	if strings.Contains(stream, "auto-rejecting") {
+		t.Fatal("the fixture carries an auto-reject notice; it must be the \"deny\"-only shape with none")
+	}
+	result, _ := openCodeStageRun(t, stream, "", 0, []string{"Bash"}, nil)
+	if result.ExitCode == 0 {
+		t.Fatal("a stage OpenCode's own permission \"deny\" stopped must not read as success (exit 0)")
+	}
+	if !strings.Contains(result.Stderr, PermissionRejectedMarker) && !strings.Contains(result.Stderr, PermissionDeniedMarker) {
+		t.Errorf("stderr carries neither %s nor %s; AC3 requires one: %q", PermissionRejectedMarker, PermissionDeniedMarker, result.Stderr)
+	}
+}
+
 // TestOpenCodeAutoRejectMultiLine: OpenCode prints a rejected call's input
 // unescaped, so a bash command over several lines spreads the auto-reject
 // notice over several stderr lines; the capture is a heredoc on 1.18.30. The

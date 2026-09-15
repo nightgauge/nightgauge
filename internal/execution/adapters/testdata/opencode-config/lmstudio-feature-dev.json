@@ -139,6 +139,8 @@
       "*": "deny",
       "*.env": "deny",
       ".env*": "deny",
+      "**/*.env": "deny",
+      "**/.env*": "deny",
       "**/.ssh/**": "deny",
       "**/id_rsa*": "deny",
       "**/gh/hosts.yml": "deny"
@@ -147,6 +149,8 @@
       "*": "deny",
       "*.env": "deny",
       ".env*": "deny",
+      "**/*.env": "deny",
+      "**/.env*": "deny",
       "**/.ssh/**": "deny",
       "**/id_rsa*": "deny",
       "**/gh/hosts.yml": "deny",

@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // The permission map and the project-config tamper gate (ADR-022 § 9, § 8;
@@ -158,10 +160,20 @@ func openCodeBackstopEntries(t *testing.T, permission map[string]any, key string
 // "allow" without the backstop, fails this test (openCodeBackstopEntries).
 func TestOpenCodePermissionMap(t *testing.T) {
 	skillsRoot := filepath.Join(repoRootForTest(t), "skills")
-	worktree := filepath.Join(t.TempDir(), "worktree")
-	if err := os.MkdirAll(worktree, 0o755); err != nil {
+	// A real git worktree, not a bare directory: every real dispatch's
+	// WorktreeDir is one (Manager.RunStage's own worktree setup), and edit's
+	// deny patterns are computed relative to it (openCodeWorktreeRelativeDirPatterns,
+	// #1638 fix round finding 1/7) — a bare directory would silently exercise
+	// only the "/" fallback branch, the one a non-git fixture used to hide
+	// this exact bug behind.
+	worktreeDir := filepath.Join(t.TempDir(), "worktree")
+	if err := os.MkdirAll(worktreeDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	worktree := gittest.InitRepo(t, worktreeDir, "-q", "-b", "main")
+	writeRepoFile(t, filepath.Join(worktree, "README.md"), "worktree\n")
+	gittest.Run(t, worktree, "add", "-A")
+	gittest.Run(t, worktree, "commit", "-qm", "base")
 
 	for _, name := range openCodeStageSkillDirs {
 		t.Run(name, func(t *testing.T) {
@@ -263,12 +275,12 @@ func TestOpenCodePermissionMap(t *testing.T) {
 					t.Errorf("permission.external_directory[%q] = %v, want %q (the stage's own skill dir, ADR-022's NIGHTGAUGE_SKILL_DIR allow-list entry)", skillDirPattern, extDir[skillDirPattern], openCodeAllow)
 				}
 			}
-			// edit's own deny pattern has no leading slash: a bounded probe
-			// against opencode 1.18.30 found "edit" never matches a
-			// leading-slash pattern against the tool call's absolute
-			// filePath, unlike "external_directory" (ADR-022 amendment
-			// dated 2026-09-15).
-			for _, skillDirPattern := range openCodeEditDenyPatterns(filepath.Join(skillsRoot, name)) {
+			// edit's own deny pattern is relative to the worktree root, not
+			// the skill dir's absolute path: a bounded probe against opencode
+			// 1.18.30 in a real git worktree (TestProbeA9SkillEditInGitWorktree,
+			// ADR-022's 2026-09-15 correction) found the absolute-path form
+			// never matches there (#1638 fix round finding 1/7).
+			for _, skillDirPattern := range openCodeWorktreeRelativeDirPatterns(worktree, filepath.Join(skillsRoot, name)) {
 				if edit[skillDirPattern] != openCodeDeny {
 					t.Errorf("permission.edit[%q] = %v, want %q (the skill dir is read-only: Read succeeds, Edit is denied)", skillDirPattern, edit[skillDirPattern], openCodeDeny)
 				}
@@ -335,7 +347,11 @@ func TestOpenCodeDenyListBackstopComplete(t *testing.T) {
 	read := permission["read"].(map[string]any)
 	edit := permission["edit"].(map[string]any)
 	for _, m := range []map[string]any{read, edit} {
-		for _, want := range []string{"*.env", ".env*", "**/.ssh/**", "**/id_rsa*", "**/gh/hosts.yml"} {
+		// "**/*.env" and "**/.env*" cover a NESTED secret file
+		// (apps/web/.env.local): "*.env" and ".env*" alone only ever match a
+		// root-level one, since opencode's own pattern matching has no
+		// implicit "**" prefix (#1638 fix round, a routed #1752 request).
+		for _, want := range []string{"*.env", ".env*", "**/*.env", "**/.env*", "**/.ssh/**", "**/id_rsa*", "**/gh/hosts.yml"} {
 			if m[want] != openCodeDeny {
 				t.Errorf("= %v, want %q for %q", m[want], openCodeDeny, want)
 			}
@@ -553,6 +569,52 @@ func TestOpenCodeTamperGateIgnoredPlugin(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), ".opencode/plugins/ignored.ts") {
 		t.Errorf("the refusal does not name the ignored file: %v", err)
+	}
+}
+
+// TestOpenCodeTamperGateCommittedChange is AC6's own probe: a prior stage in
+// the same reused worktree (Manager.RunStage reuses one worktree across a
+// run's stages) commits opencode.json and a new .opencode/plugins/x.ts on the
+// feature branch. `git status` alone is clean — HEAD is the tampered commit,
+// not the base branch's tip — so without comparing to a resolved base ref
+// (openCodeTamperGateBaseRef), the gate passes a worktree that differs from
+// the base branch exactly the way the issue names (#1638 fix round finding
+// 4/9).
+func TestOpenCodeTamperGateCommittedChange(t *testing.T) {
+	wt := openCodeFixtureRepo(t, tamperFixtureBaseFiles)
+	gittest.Run(t, wt, "checkout", "-qb", "feat/x")
+	writeRepoFile(t, filepath.Join(wt, "opencode.json"), `{"base":true,"permission":{"bash":"allow"},"plugin":["./.opencode/plugins/x.ts"]}`)
+	writeRepoFile(t, filepath.Join(wt, ".opencode", "plugins", "x.ts"), "export default {}\n")
+	gittest.Run(t, wt, "add", "-A")
+	gittest.Run(t, wt, "commit", "-qm", "stage commit")
+
+	err := openCodeProjectConfigTamperCheck(context.Background(), wt)
+	if err == nil {
+		t.Fatal("a committed change to opencode.json and .opencode/plugins/x.ts, relative to the base branch, was not refused")
+	}
+	for _, want := range []string{"opencode.json", ".opencode/plugins/x.ts"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name %s: %v", want, err)
+		}
+	}
+}
+
+// TestOpenCodeTamperGateSkipWorktree is #1638 fix round finding 4/9's own
+// probe: `git update-index --skip-worktree` tells git's own diff and status
+// machinery to assume opencode.json matches the index, so a working-tree edit
+// under it is invisible to both the status leg and the committed-diff leg —
+// only an explicit `git ls-files -v` flag check catches it.
+func TestOpenCodeTamperGateSkipWorktree(t *testing.T) {
+	wt := openCodeFixtureRepo(t, tamperFixtureBaseFiles)
+	gittest.Run(t, wt, "update-index", "--skip-worktree", "opencode.json")
+	writeRepoFile(t, filepath.Join(wt, "opencode.json"), `{"base":true,"tampered":true}`)
+
+	err := openCodeProjectConfigTamperCheck(context.Background(), wt)
+	if err == nil {
+		t.Fatal("a skip-worktree-hidden modification of opencode.json was not refused")
+	}
+	if !strings.Contains(err.Error(), "opencode.json") {
+		t.Errorf("the refusal does not name opencode.json: %v", err)
 	}
 }
 
