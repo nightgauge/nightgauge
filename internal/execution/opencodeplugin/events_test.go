@@ -108,6 +108,39 @@ func TestReadRunEventsRejectsTextField(t *testing.T) {
 	}
 }
 
+// TestReadRunEventsRejectsNonScalarOrOversizedDetail: a defence-in-depth
+// backstop independent of session.js's own SKILL_ID_RE — a "detail" object
+// with a nested value (an object or array, under any key, not only "text")
+// or an over-length string is dropped, exactly as a line carrying a literal
+// "text" key already is. This is what still catches a buggy or tampered
+// writer even if session.js's own validation regresses. Removing
+// detailHoldsOnlyScalars's check turns this red.
+func TestReadRunEventsRejectsNonScalarOrOversizedDetail(t *testing.T) {
+	dir := t.TempDir()
+	oversized := strings.Repeat("a", detailValueMaxLen+1)
+	content := strings.Join([]string{
+		`{"v":1,"ts":"t","kind":"skill","session_id":"a","detail":{"skill":"nightgauge:ok"}}`,
+		`{"v":1,"ts":"t","kind":"skill","session_id":"b","detail":{"skill":{"nested":"object"}}}`,
+		`{"v":1,"ts":"t","kind":"skill","session_id":"c","detail":{"skill":["array","value"]}}`,
+		`{"v":1,"ts":"t","kind":"skill","session_id":"d","detail":{"skill":"` + oversized + `"}}`,
+		`{"v":1,"ts":"t","kind":"stop_verify","session_id":"e","detail":{"verdict":"complete"}}`,
+	}, "\n") + "\n"
+	p := writeEventsFile(t, dir, "events.jsonl", content)
+
+	events, err := ReadRunEvents(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("got %d events, want 2 (a, e survive; b, c, d dropped): %+v", len(events), events)
+	}
+	for _, ev := range events {
+		if ev.SessionID == "b" || ev.SessionID == "c" || ev.SessionID == "d" {
+			t.Errorf("a non-scalar or oversized detail line (session_id=%s) was not dropped", ev.SessionID)
+		}
+	}
+}
+
 // TestReadRunEventsSkipsUnparseableLines: a line that is not valid JSON is
 // dropped rather than failing the whole read.
 func TestReadRunEventsSkipsUnparseableLines(t *testing.T) {

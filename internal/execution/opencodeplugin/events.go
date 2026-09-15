@@ -37,6 +37,13 @@ const EventsTruncatedKind = "truncated"
 // purposes; the JS side (session.js) is what enforces it.
 const eventsMaxBytes = 1 << 20 // 1 MiB
 
+// detailValueMaxLen bounds a single detail string value's length. This is a
+// second, independent line of defence (session.js's own SKILL_ID_RE already
+// bounds the one detail value a model can influence, the skill id) against a
+// buggy or tampered writer smuggling a long string — a sentence, a command
+// line — past the reader under a key that is not literally "text".
+const detailValueMaxLen = 256
+
 // Event is one line of the run's events file.
 type Event struct {
 	V         int            `json:"v"`
@@ -108,9 +115,36 @@ func ReadRunEvents(path string) ([]Event, error) {
 		if _, hasText := ev.Detail["text"]; hasText {
 			continue
 		}
+		if !detailHoldsOnlyScalars(ev.Detail) {
+			continue
+		}
 		events = append(events, ev)
 	}
 	return events, nil
+}
+
+// detailHoldsOnlyScalars reports whether every value in detail is a scalar
+// (string, number, bool or null) within detailValueMaxLen — never a nested
+// object or array. detail must hold only ids, counts and verdict codes (this
+// file's own retention contract); a nested object (e.g. a skill id the model
+// passed as {"text": "..."}, which carries no top-level or detail-level
+// "text" key to catch) or an over-length string is exactly the shape a
+// smuggled transcript fragment would take, so the line is dropped rather
+// than returned.
+func detailHoldsOnlyScalars(detail map[string]any) bool {
+	for _, v := range detail {
+		switch val := v.(type) {
+		case nil, bool, float64:
+			// scalar: fine.
+		case string:
+			if len(val) > detailValueMaxLen {
+				return false
+			}
+		default:
+			return false // object, array, or any other non-scalar shape
+		}
+	}
+	return true
 }
 
 // CompactionCount reports how many "compaction" events path holds.

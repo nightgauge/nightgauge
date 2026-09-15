@@ -43,6 +43,42 @@ let eventsTruncated = false;
 // notify spawn — the whole of the 60 s per-session throttle.
 const lastNotifyAt = new Map();
 
+// childSessionIDs is every session id this process has ever observed with a
+// non-empty session.info.parentID, learned from session.created/
+// session.updated events (1.18.30's Session.Info carries an optional
+// parentID: observed directly on the bundled client bundle's own
+// `session.updated` reducer and `experimental.session.list({roots: ...})`
+// call). Module-level for the same reason as eventsTruncated/lastNotifyAt: it
+// must survive across every hook call this one opencode process makes.
+// gates.js denies the `task` tool unconditionally (ADR-022, AC9), so no
+// child session is known to reach any hook this plugin registers today —
+// this set is expected to stay empty in production until that denial lifts,
+// and every appendEvent call below still reads it rather than hard-coding
+// false, so child reporting is correct the day it does.
+const childSessionIDs = new Set();
+
+// SKILL_ID_RE bounds what toolExecuteBefore ever treats as a skill id: opaque
+// identifiers only (the "skill" tool's own schema field), never a sentence.
+// A model-authored value that fails this (an object, or free text) is never
+// recorded verbatim — see toolExecuteBefore's own comment.
+const SKILL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
+
+// isChildSession reports whether sessionID was ever seen with a non-empty
+// parentID.
+function isChildSession(sessionID) {
+  return !!sessionID && childSessionIDs.has(sessionID);
+}
+
+// trackSessionParentage records session.created/session.updated's own
+// parentage, when present, so later events for the same sessionID can be
+// tagged as a child session rather than always reporting false.
+function trackSessionParentage(props) {
+  const info = props && props.info;
+  if (info && info.id && info.parentID) {
+    childSessionIDs.add(info.id);
+  }
+}
+
 function resolveCwd(ctx) {
   return (ctx && (ctx.directory || ctx.worktree)) || process.cwd();
 }
@@ -167,9 +203,14 @@ export async function sessionCompacting(ctx, input, output) {
 // compaction succeeds (ADR-022): the session ends at idle instead, and
 // unfinished work surfaces through the existing Go stage gates and #1643's
 // resume/retry path, never as a silent continuation a $0 local run could
-// loop on for hours with every USD guardrail inert. #1625's steps cap
-// remains the hard stop underneath this either way. There is nothing to
-// spawn here, only a value to set, so this cannot itself hang or fail.
+// loop on for hours with every USD guardrail inert. #1625's declared steps
+// cap is NOT itself a hard stop underneath this on 1.18.30 — a step at or
+// past the cap still executes a tool call rather than ending the turn (only
+// an extra assistant nudge message is added); ADR-022's "Session-lifecycle
+// events plugin" amendment measures this directly (13 loop steps against a
+// declared cap of 8). So this suppression, not the steps cap, is what
+// actually bounds a compacted session's runtime. There is nothing to spawn
+// here, only a value to set, so this cannot itself hang or fail.
 export async function compactionAutocontinue(ctx, input, output) {
   if (output) output.enabled = false;
 }
@@ -185,25 +226,36 @@ function shouldNotify(sessionID) {
   return true;
 }
 
-// permissionAsk records the ask in the events file and, at most once per
-// session per 60 s, runs `hook notify` to alert the operator. It never reads
-// or writes output.status: the permission decision is opencode's own to
-// make, and this hook only observes it.
+// permissionAsk is the plugin's `permission.ask` hook contribution, kept for
+// forward compatibility only: empirically, opencode 1.18.30 never calls this
+// hook at all (0 occurrences of the literal "permission.ask" in the pinned
+// binary's own trigger sites; permissions are published only as the bus
+// event "permission.asked", handled in event() below). It records the ask in
+// the events file and, at most once per session per 60 s, runs `hook notify`
+// to alert the operator. It never reads or writes output.status: the
+// permission decision is opencode's own to make, and this hook only
+// observes it.
 export async function permissionAsk(ctx, input, output) {
   if (!input) return;
   const sessionID = input.sessionID || "";
   appendEvent(
     "permission_ask",
     sessionID,
-    false,
+    isChildSession(sessionID),
     input.type ? { permission_type: input.type } : {}
   );
+  notifyOnce(ctx, sessionID, input.type);
+}
 
+// notifyOnce runs `hook notify` at most once per sessionID per 60 s (the
+// shared throttle both the permission.ask export and event()'s own
+// permission.asked handling apply).
+function notifyOnce(ctx, sessionID, permissionType) {
   if (!shouldNotify(sessionID)) return;
   const bin = resolveNightgaugeBin();
   if (!bin) return;
   const cwd = resolveCwd(ctx);
-  const message = "Nightgauge: permission requested (" + (input.type || "unknown") + ")";
+  const message = "Nightgauge: permission requested (" + (permissionType || "unknown") + ")";
   runHook(
     bin,
     ["hook", "notify", "--event", "permission_prompt"],
@@ -212,25 +264,37 @@ export async function permissionAsk(ctx, input, output) {
   );
 }
 
-// event handles the two session lifecycle events this module cares about:
-// session.compacted (a compaction just succeeded: record one "compaction"
-// event) and session.idle (the session went idle: run `hook stop-verify`
-// and record its verdict as a "stop_verify" event). Every other event type
-// is ignored. This function never sends a message into the session — it has
-// no such capability — and never re-prompts the model: it only spawns a
-// read-only verification verb and records what it returned.
+// event handles the session lifecycle events this module cares about:
+// session.created/session.updated (track parentage only, never recorded
+// directly), session.compacted (a compaction just succeeded: record one
+// "compaction" event), session.idle (the session went idle: record one
+// "idle" event, then run `hook stop-verify` and record its verdict as a
+// "stop_verify" event), and permission.asked — opencode 1.18.30's own bus
+// event for a permission prompt; the plugin hook named "permission.ask" is
+// never called on this binary (see permissionAsk's own comment), so this is
+// the path AC5/AC6 actually run on. Every other event type is ignored. This
+// function never sends a message into the session — it has no such
+// capability — and never re-prompts the model: it only spawns read-only
+// verification/notify verbs and records what they returned.
 export async function event(ctx, input) {
   const evt = input && input.event;
   if (!evt || typeof evt.type !== "string") return;
   const props = evt.properties || {};
+
+  if (evt.type === "session.created" || evt.type === "session.updated") {
+    trackSessionParentage(props);
+    return;
+  }
+
   const sessionID = props.sessionID || "";
 
   if (evt.type === "session.compacted") {
-    appendEvent("compaction", sessionID, false, {});
+    appendEvent("compaction", sessionID, isChildSession(sessionID), {});
     return;
   }
 
   if (evt.type === "session.idle") {
+    appendEvent("idle", sessionID, isChildSession(sessionID), {});
     const bin = resolveNightgaugeBin();
     let verdict = "no_bin";
     if (bin) {
@@ -242,7 +306,25 @@ export async function event(ctx, input) {
       // ever recorded, never Reason (which can hold plan-derived text).
       verdict = !ok ? "error" : stdout === "" ? "complete" : "blocked";
     }
-    appendEvent("stop_verify", sessionID, false, { verdict });
+    appendEvent("stop_verify", sessionID, isChildSession(sessionID), { verdict });
+    return;
+  }
+
+  if (evt.type === "permission.asked") {
+    // 1.18.30's permission.asked properties: {id, sessionID, permission,
+    // patterns, metadata, always, tool}. Only `permission` (the permission
+    // *type*, e.g. "bash") and sessionID are ever recorded: `patterns` and
+    // `metadata` carry the model-authored command text the permission asks
+    // about (e.g. a literal shell command), which the events file's own
+    // retention contract (never transcript or prompt text) forbids.
+    const permissionType = typeof props.permission === "string" ? props.permission : "";
+    appendEvent(
+      "permission_ask",
+      sessionID,
+      isChildSession(sessionID),
+      permissionType ? { permission_type: permissionType } : {}
+    );
+    notifyOnce(ctx, sessionID, permissionType);
   }
 }
 
@@ -253,13 +335,32 @@ export async function event(ctx, input) {
 // own decision already applied — but this never throws regardless (fail-
 // open, telemetry only: technical notes, "asynchronous and fail-open").
 // Every other tool is untouched.
+//
+// tool.execute.before fires on the model's raw arguments, before opencode's
+// own skill tool decodes its schema — so a confused or adversarial model can
+// put anything there, including nested objects or free-text sentences (see
+// the events file's own retention contract: no transcript or prompt text,
+// ever). `name` is read first (the skill tool's own schema field on 1.18.30;
+// `skill`/`id` are read only as a fallback for an older or divergent
+// shape), and is accepted only when it is a string matching SKILL_ID_RE — an
+// opaque identifier, never a sentence. Anything else records
+// {skill_invalid:true} instead of the raw value, and never reaches `hook
+// skill-usage`'s stdin either.
 export async function toolExecuteBefore(ctx, input, output) {
   if (!input || input.tool !== "skill") return;
   const args = (output && output.args) || {};
-  const skill = args.skill || args.name || args.id || "";
-  if (!skill) return;
+  const sessionID = input.sessionID || "";
+  const child = isChildSession(sessionID);
+  const raw = args.name !== undefined ? args.name : args.skill !== undefined ? args.skill : args.id;
+  if (raw === undefined || raw === null || raw === "") return;
 
-  appendEvent("skill", input.sessionID || "", false, { skill });
+  if (typeof raw !== "string" || !SKILL_ID_RE.test(raw)) {
+    appendEvent("skill", sessionID, child, { skill_invalid: true });
+    return;
+  }
+  const skill = raw;
+
+  appendEvent("skill", sessionID, child, { skill });
 
   const bin = resolveNightgaugeBin();
   if (!bin) return;

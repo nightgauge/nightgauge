@@ -373,6 +373,132 @@ func TestCompactionAutocontinueSuppressionAgainstRealOpenCode(t *testing.T) {
 	assertCompactionStubGreen(t, result)
 }
 
+// TestPermissionAskEventAgainstRealOpenCode drives the pinned opencode
+// 1.18.30 binary with `permission: {bash: "ask"}` — the config production
+// dispatch takes whenever careful mode's own gate is not what is asking —
+// against the #1618 stub's single-bash-call fixture, and asserts the run's
+// events file gains exactly one permission_ask event carrying only
+// detail.permission_type ("bash"), never the command text opencode's own
+// permission.asked bus event otherwise carries in `patterns`/`metadata`.
+// This is the AC5/AC6 assertion the review found missing: the plugin's own
+// `permission.ask` hook is never called by this binary at all (0
+// occurrences of the literal "permission.ask" in its own trigger sites, see
+// session.js's permissionAsk comment); only event()'s permission.asked
+// branch reaches production. Reverting that branch (or reverting it back to
+// reading input.type from a permission.ask call that never happens) turns
+// this red: opencode's own stderr still shows "message=asking ... permission=bash"
+// and "permission requested: bash ...; auto-rejecting", but the events file
+// gains no permission_ask line.
+func TestPermissionAskEventAgainstRealOpenCode(t *testing.T) {
+	real := realOpenCodeForPluginTest(t)
+	stubBin := buildStubProviderBin(t)
+	growth := startStubInstance(t, stubBin, "bash-then-stop")
+
+	sh := newCompactionStubHome(t)
+	projectDir := t.TempDir()
+	runDir := t.TempDir()
+	outputFile := filepath.Join(runDir, "output", "run.json")
+	if err := os.MkdirAll(filepath.Dir(outputFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runID := "permask-stub-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	nonce, err := NewNonce()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg map[string]any
+	if err := json.Unmarshal(compactionStubConfig(sh.pluginEntry, growth.baseURL, growth.baseURL), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg["permission"] = map[string]any{"bash": "ask"}
+	configContent, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), compactionStubBudget)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, real, "run", "please do the task, using bash as needed",
+		"-m", "lmstudio/stub-model", "--agent", "build", "--print-logs", "--log-level", "DEBUG")
+	cmd.Dir = projectDir
+	cmd.Env = []string{
+		"HOME=" + sh.home,
+		"PATH=/usr/bin:/bin",
+		"XDG_CONFIG_HOME=" + sh.xdgConfigHome,
+		"XDG_DATA_HOME=" + filepath.Join(sh.home, ".data"),
+		"XDG_CACHE_HOME=" + filepath.Join(sh.home, ".cache"),
+		"XDG_STATE_HOME=" + filepath.Join(sh.home, ".state"),
+		"OPENCODE_DISABLE_AUTOUPDATE=1",
+		"OPENCODE_DISABLE_MODELS_FETCH=1",
+		"OPENCODE_DISABLE_DEFAULT_PLUGINS=1",
+		"OPENCODE_DISABLE_PROJECT_CONFIG=1",
+		"OPENCODE_CONFIG_CONTENT=" + string(configContent),
+		pluginIntegrationNoRegistry,
+		EnvNonce + "=" + nonce,
+		EnvSentinel + "=" + filepath.Join(runDir, "sentinel.json"),
+		EnvPluginPath + "=" + sh.pluginEntry,
+		"NIGHTGAUGE_BIN=" + buildNightgaugeBin(t),
+		"NIGHTGAUGE_OUTPUT_FILE=" + outputFile,
+		"NIGHTGAUGE_RUN_ID=" + runID,
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	// The stub's one bash call is auto-rejected (no interactive UI attached),
+	// so the run itself is expected to exit non-zero — only the events file
+	// and stderr's own permission trace are asserted on.
+	_ = cmd.Run()
+
+	if !strings.Contains(stderr.String(), "permission=bash") {
+		t.Fatalf("test premise broken: stderr never shows opencode asking for bash permission:\n%s", stderr.String())
+	}
+
+	eventsPath, ok := EventsPath(outputFile, runID)
+	if !ok {
+		t.Fatal("test premise broken: EventsPath refused this test's own absolute output file")
+	}
+	events, err := ReadRunEvents(eventsPath)
+	if err != nil {
+		t.Fatalf("reading events file %s: %v", eventsPath, err)
+	}
+	permAsks := 0
+	for _, e := range events {
+		if e.Kind != "permission_ask" {
+			continue
+		}
+		permAsks++
+		if e.Detail["permission_type"] != "bash" {
+			t.Errorf("permission_ask detail.permission_type = %v, want bash", e.Detail["permission_type"])
+		}
+		if _, hasPatterns := e.Detail["patterns"]; hasPatterns {
+			t.Errorf("permission_ask detail carries patterns (model-authored command text); must never be recorded")
+		}
+	}
+	if permAsks != 1 {
+		t.Fatalf("got %d permission_ask events, want exactly 1: %+v", permAsks, events)
+	}
+}
+
+// loopStepsWantMax bounds this fixture's own loop-step count. #1625's steps
+// cap (8, set on every agent in compactionStubConfig) is NOT the hard stop
+// AC2 and ADR-022 assumed: on a step at or past the cap, 1.18.30 only appends
+// an assistant nudge message and still passes every tool, so the run keeps
+// making bash tool calls past the cap rather than stopping at it (measured
+// directly off the pinned binary's own decompiled loop condition). Against
+// this fixture's own deterministic, offline, scripted turns, a green run
+// consistently logs 13 loop steps (steps 8-11 each still call bash, one past
+// the declared cap of 8) — never the wide, cap-agnostic slack of 20 an
+// earlier version of this bound allowed, which is loose enough to hide that
+// contradiction entirely. This divergence is recorded in ADR-022 ("Nightgauge
+// OpenCode plugin" amendment) and on #1625; AC2's "within #1625's steps cap"
+// wording is inaccurate for 1.18.30 and should be read as "within the
+// autocontinue-suppression's own bound", not #1625's literal cap. The bound
+// below still meaningfully guards the autocontinue-suppression regression
+// this test exists for: TestCompactionAutocontinueSuppressionRedGreen's
+// negative control (autocontinue suppression removed) logged 311+ loop steps
+// in the same fixture, over 20x this bound.
+const loopStepsWantMax = 16
+
 // assertCompactionStubGreen is the green-path assertion set, factored out so
 // the red/green procedure (below) can run it against both the fixed and the
 // backed-out session.js from the same call sites.
@@ -384,22 +510,33 @@ func assertCompactionStubGreen(t *testing.T, result compactionStubResult) {
 	if result.sessionID == "" {
 		t.Fatalf("could not find the session id in stderr:\n%s", result.stderr)
 	}
-	if n := strings.Count(result.stderr, "message=loop"); n > 20 {
-		t.Errorf("the run logged %d loop steps, want well under the steps cap's neighborhood (8); a runaway continuation is exactly what compaction.autocontinue suppression exists to prevent", n)
+	if n := strings.Count(result.stderr, "message=loop"); n > loopStepsWantMax {
+		t.Errorf("the run logged %d loop steps, want at most %d (see loopStepsWantMax's own comment on why #1625's steps cap of 8 is not itself the bound); a runaway continuation is exactly what compaction.autocontinue suppression exists to prevent", n, loopStepsWantMax)
 	}
 
 	events, err := ReadRunEvents(result.eventsPath)
 	if err != nil {
 		t.Fatalf("reading events file %s: %v", result.eventsPath, err)
 	}
-	compactions := 0
+	compactions, idles, stopVerifies := 0, 0, 0
 	for _, e := range events {
-		if e.Kind == "compaction" {
+		switch e.Kind {
+		case "compaction":
 			compactions++
+		case "idle":
+			idles++
+		case "stop_verify":
+			stopVerifies++
 		}
 	}
 	if compactions != 1 {
 		t.Errorf("got %d compaction events, want exactly 1: %+v", compactions, events)
+	}
+	if idles != 1 {
+		t.Errorf("got %d idle events, want exactly 1: %+v", idles, events)
+	}
+	if stopVerifies != 1 {
+		t.Errorf("got %d stop_verify events, want exactly 1: %+v", stopVerifies, events)
 	}
 
 	if strings.Contains(result.stderr, continueMarker) {

@@ -119,17 +119,30 @@ changelog, and the release workflow refuses a tag that does not.
   of opencode 1.18.30's post-compaction synthetic "Continue if you have next
   steps" turn (`experimental.compaction.autocontinue`), idle stop-verification
   (`session.idle` runs `hook stop-verify`), skill-usage telemetry for the
-  native `skill` tool, and a 60-second-throttled permission-ask desktop
-  notification — every one fail-open and never a gate. A new bounded run-dir
-  events file (`opencode-events-<RUN_ID>.jsonl`, capped at 1 MiB, ids and
-  verdict codes only, never transcript or prompt text) records compaction,
-  stop-verify, permission-ask and skill events; `internal/execution/opencodeplugin/events.go`
-  (`ReadRunEvents`, `CompactionCount`) is the Go-side reader #1653 will
-  consume. Driven against the real pinned opencode 1.18.30 binary and #1618's
-  offline stub provider: without the autocontinue suppression, a compacted
-  session's synthetic continue turn resumes the build agent indefinitely
-  (observed 500+ loop steps before the test's own bound killed it); with it,
-  the session ends at idle after exactly one compaction (#1641)
+  native `skill` tool (accepted only as an opaque id matching a bounded
+  pattern — never a nested object or free text a confused model passed
+  instead), and a 60-second-throttled permission-ask desktop notification —
+  every one fail-open and never a gate. Permission-ask is driven off
+  opencode 1.18.30's own `permission.asked` bus event, read through the
+  plugin's `event` hook: the pinned binary never calls the separate
+  `permission.ask` plugin hook at all, so that path is kept only for forward
+  compatibility. A new bounded run-dir events file
+  (`opencode-events-<RUN_ID>.jsonl`, capped at 1 MiB, ids and verdict codes
+  only, never transcript or prompt text) records compaction, idle,
+  stop-verify, permission-ask and skill events, each tagged `child` when the
+  session's own `parentID` says so (unverified against a real child session
+  while #1635/AC9 denies the `task` tool);
+  `internal/execution/opencodeplugin/events.go` (`ReadRunEvents`,
+  `CompactionCount`) is the Go-side reader #1653 will consume, and now also
+  rejects a detail value that is not a scalar or that runs long, as a second
+  line of defence past the writer's own validation. Driven against the real
+  pinned opencode 1.18.30 binary and #1618's offline stub provider: without
+  the autocontinue suppression, a compacted session's synthetic continue turn
+  resumes the build agent indefinitely (observed 500+ loop steps before the
+  test's own bound killed it); with it, the session ends at idle after
+  exactly one compaction. #1625's declared steps cap is not itself opencode's
+  hard stop on this binary (a run past the cap still executes tool calls
+  before ending at idle; see ADR-022's amendment) (#1641)
 
 - A scheduled latest-CLI canary (`.github/workflows/adapter-canary.yml`,
   `scripts/adapter-canary.sh`) installs the newest release of every manifest

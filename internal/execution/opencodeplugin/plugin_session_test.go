@@ -242,11 +242,12 @@ func TestCompactionAutocontinueAlwaysDisables(t *testing.T) {
 	}
 }
 
-// --- event: session.idle -> stop_verify ---
+// --- event: session.idle -> idle, stop_verify ---
 
-// TestEventIdleWritesStopVerifyEvent: an idle event writes a stop_verify
-// line to the run's events file, with a verdict and no other free text.
-// Removing the event handler's session.idle branch turns this red.
+// TestEventIdleWritesStopVerifyEvent: an idle event writes an "idle" line
+// followed by a "stop_verify" line to the run's events file, with a verdict
+// and no other free text. Removing the event handler's "idle" append (or its
+// session.idle branch entirely) turns this red.
 func TestEventIdleWritesStopVerifyEvent(t *testing.T) {
 	node := requireNode(t)
 	bin := buildNightgaugeBin(t)
@@ -279,12 +280,19 @@ func TestEventIdleWritesStopVerifyEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 1 {
-		t.Fatalf("got %d events, want exactly 1: %+v", len(events), events)
+	if len(events) != 2 {
+		t.Fatalf("got %d events, want exactly 2 (idle, stop_verify): %+v", len(events), events)
 	}
-	ev := events[0]
+	idle := events[0]
+	if idle.Kind != "idle" {
+		t.Errorf("events[0].kind = %q, want idle", idle.Kind)
+	}
+	if idle.SessionID != "ses_idle_1" {
+		t.Errorf("events[0].session_id = %q, want ses_idle_1", idle.SessionID)
+	}
+	ev := events[1]
 	if ev.Kind != "stop_verify" {
-		t.Errorf("kind = %q, want stop_verify", ev.Kind)
+		t.Errorf("events[1].kind = %q, want stop_verify", ev.Kind)
 	}
 	if ev.SessionID != "ses_idle_1" {
 		t.Errorf("session_id = %q, want ses_idle_1", ev.SessionID)
@@ -415,7 +423,10 @@ func TestPermissionAskThrottlesNotify(t *testing.T) {
 	root := t.TempDir()
 	counter := filepath.Join(t.TempDir(), "notify-calls.txt")
 	counterScript := filepath.Join(t.TempDir(), "count-notify.sh")
-	script := "#!/bin/sh\ncat >> " + shellQuote(counter) + " <<< 1\nexit 0\n"
+	// POSIX sh only: `<<<` is a bash/zsh herestring dash (Ubuntu's /bin/sh)
+	// rejects, which silently never wrote the counter file in CI (this
+	// workspace's own required Go build & test job runs on ubuntu-latest).
+	script := "#!/bin/sh\necho 1 >> " + shellQuote(counter) + "\nexit 0\n"
 	if err := os.WriteFile(counterScript, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -493,6 +504,266 @@ func TestPermissionAskEmitsEvent(t *testing.T) {
 	}
 	if events[0].Detail["permission_type"] != "bash" {
 		t.Errorf("detail.permission_type = %v, want \"bash\"", events[0].Detail["permission_type"])
+	}
+}
+
+// --- event: permission.asked (the path opencode 1.18.30 actually triggers;
+// the permission.ask hook above never fires on that binary — see session.js's
+// own comment on permissionAsk) ---
+
+// TestEventPermissionAskedEmitsEventAndThrottlesNotify: event() with a
+// permission.asked bus event (1.18.30's real shape: {id, sessionID,
+// permission, patterns, metadata, always, tool}) records a permission_ask
+// event carrying only permission_type, never the model-authored `patterns`
+// text, and applies the same 60s per-session notify throttle permissionAsk
+// does. Removing event()'s permission.asked branch turns this red — the
+// production defect this covers: the plugin's permission.ask hook export is
+// never called by the pinned binary at all.
+func TestEventPermissionAskedEmitsEventAndThrottlesNotify(t *testing.T) {
+	node := requireNode(t)
+	root := t.TempDir()
+	counter := filepath.Join(t.TempDir(), "notify-calls.txt")
+	counterScript := filepath.Join(t.TempDir(), "count-notify.sh")
+	script := "#!/bin/sh\necho 1 >> " + shellQuote(counter) + "\nexit 0\n"
+	if err := os.WriteFile(counterScript, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outputFile := filepath.Join(t.TempDir(), "output", "run.json")
+	if err := os.MkdirAll(filepath.Dir(outputFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runID := "run-perm-asked-1"
+	eventsFile, ok := EventsPath(outputFile, runID)
+	if !ok {
+		t.Fatal("test premise broken")
+	}
+
+	permAsked := map[string]any{
+		"type": "permission.asked",
+		"properties": map[string]any{
+			"id":         "per_1",
+			"sessionID":  "ses_perm_asked_1",
+			"permission": "bash",
+			"patterns":   []any{"echo the deploy key is SECRET-PLACEHOLDER"},
+			"metadata":   map[string]any{"command": "echo the deploy key is SECRET-PLACEHOLDER"},
+			"always":     []any{"echo *"},
+			"tool":       map[string]any{"messageID": "m1", "callID": "c1"},
+		},
+	}
+	calls := []sessionCall{
+		{Fn: "event", Input: map[string]any{"event": permAsked}},
+		{Fn: "event", Input: map[string]any{"event": permAsked}},
+		{Fn: "event", Input: map[string]any{"event": permAsked}},
+	}
+	results := runSessionHarness(t, node, root, calls, map[string]string{
+		"NIGHTGAUGE_BIN":         counterScript,
+		"NIGHTGAUGE_OUTPUT_FILE": outputFile,
+		"NIGHTGAUGE_RUN_ID":      runID,
+	})
+	for i, r := range results {
+		if r.Threw {
+			t.Fatalf("call %d threw: %s", i, r.Message)
+		}
+	}
+
+	events, err := ReadRunEvents(eventsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("got %d events, want 3 (one permission_ask per call): %+v", len(events), events)
+	}
+	for i, ev := range events {
+		if ev.Kind != "permission_ask" {
+			t.Errorf("events[%d].kind = %q, want permission_ask", i, ev.Kind)
+		}
+		if ev.SessionID != "ses_perm_asked_1" {
+			t.Errorf("events[%d].session_id = %q, want ses_perm_asked_1", i, ev.SessionID)
+		}
+		if ev.Detail["permission_type"] != "bash" {
+			t.Errorf("events[%d].detail.permission_type = %v, want bash", i, ev.Detail["permission_type"])
+		}
+		if _, hasPatterns := ev.Detail["patterns"]; hasPatterns {
+			t.Errorf("events[%d].detail carries patterns (model-authored command text); must never be recorded", i)
+		}
+	}
+
+	data, err := os.ReadFile(counter)
+	if err != nil {
+		t.Fatalf("the notify script never ran even once: %v", err)
+	}
+	got := 0
+	if lines := strings.TrimSpace(string(data)); lines != "" {
+		got = len(strings.Split(lines, "\n"))
+	}
+	if got != 1 {
+		t.Errorf("notify spawned %d times for 3 permission.asked events in the same 60s window, want exactly 1", got)
+	}
+}
+
+// --- child session propagation ---
+
+// TestChildSessionEventsAreTaggedChild: a session.updated event carrying a
+// non-empty info.parentID marks that sessionID as a child for every
+// subsequent event in this same process; a session with no parentID stays
+// child:false. gates.js denies the `task` tool unconditionally today, so no
+// real child session reaches this plugin yet (ADR-022) — this drives the
+// tracking logic directly, the way a future lift of that denial would
+// exercise it. Removing session.js's parentage tracking turns this red.
+func TestChildSessionEventsAreTaggedChild(t *testing.T) {
+	node := requireNode(t)
+	root := t.TempDir()
+	outputFile := filepath.Join(t.TempDir(), "output", "run.json")
+	if err := os.MkdirAll(filepath.Dir(outputFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runID := "run-child-1"
+	eventsFile, ok := EventsPath(outputFile, runID)
+	if !ok {
+		t.Fatal("test premise broken")
+	}
+
+	sessionUpdated := func(id, parentID string) map[string]any {
+		info := map[string]any{"id": id}
+		if parentID != "" {
+			info["parentID"] = parentID
+		}
+		return map[string]any{"type": "session.updated", "properties": map[string]any{"info": info}}
+	}
+	calls := []sessionCall{
+		{Fn: "event", Input: map[string]any{"event": sessionUpdated("ses_parent", "")}},
+		{Fn: "event", Input: map[string]any{"event": sessionUpdated("ses_child", "ses_parent")}},
+		{Fn: "event", Input: map[string]any{"event": map[string]any{"type": "session.compacted", "properties": map[string]any{"sessionID": "ses_parent"}}}},
+		{Fn: "event", Input: map[string]any{"event": map[string]any{"type": "session.compacted", "properties": map[string]any{"sessionID": "ses_child"}}}},
+	}
+	results := runSessionHarness(t, node, root, calls, map[string]string{
+		"NIGHTGAUGE_OUTPUT_FILE": outputFile,
+		"NIGHTGAUGE_RUN_ID":      runID,
+	})
+	for i, r := range results {
+		if r.Threw {
+			t.Fatalf("call %d threw: %s", i, r.Message)
+		}
+	}
+
+	events, err := ReadRunEvents(eventsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("got %d events, want 2: %+v", len(events), events)
+	}
+	bySession := map[string]bool{}
+	for _, ev := range events {
+		bySession[ev.SessionID] = ev.Child
+	}
+	if bySession["ses_parent"] {
+		t.Errorf("ses_parent (no parentID) was tagged child:true")
+	}
+	if !bySession["ses_child"] {
+		t.Errorf("ses_child (parentID=ses_parent) was tagged child:false, want true")
+	}
+}
+
+// --- tool.execute.before: skill argument validation ---
+
+// TestSkillToolRejectsFreeTextAndNestedArgs: a "name" argument that is a
+// nested object, or a free-text sentence, never lands verbatim in the events
+// file — only a value matching the skill-id pattern does. Both bad shapes
+// instead record {skill_invalid:true} and never spawn `hook skill-usage`.
+// Reproduces the reviewer's own probe values
+// ({"text":"SECRET-TRANSCRIPT-TEXT..."} and "The user wrote: deploy key is
+// PLACEHOLDER-SECRET, ..."). Loosening SKILL_ID_RE or reading args.name
+// unchecked turns this red.
+func TestSkillToolRejectsFreeTextAndNestedArgs(t *testing.T) {
+	node := requireNode(t)
+	root := t.TempDir()
+	outputFile := filepath.Join(t.TempDir(), "output", "run.json")
+	if err := os.MkdirAll(filepath.Dir(outputFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runID := "run-skill-invalid-1"
+	eventsFile, ok := EventsPath(outputFile, runID)
+	if !ok {
+		t.Fatal("test premise broken")
+	}
+
+	driver := `
+import { pathToFileURL } from "node:url";
+const mod = await import(pathToFileURL(process.env.NG_SESSION_PATH).href);
+const ctx = { directory: process.env.NG_CWD, worktree: process.env.NG_CWD };
+const cases = JSON.parse(process.env.NG_ARGS);
+const results = [];
+for (const args of cases) {
+  const input = { tool: "skill", sessionID: "s", callID: "c" };
+  const output = { args };
+  try {
+    await mod.toolExecuteBefore(ctx, input, output);
+    results.push({ threw: false });
+  } catch (e) {
+    results.push({ threw: true, message: String(e && e.message ? e.message : e) });
+  }
+}
+process.stdout.write(JSON.stringify(results));
+`
+	sessionPath := sessionModulePath(t)
+	driverPath := filepath.Join(t.TempDir(), "driver.mjs")
+	if err := os.WriteFile(driverPath, []byte(driver), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	argCases := []map[string]any{
+		{"name": map[string]any{"text": "SECRET-TRANSCRIPT-TEXT from the conversation"}},
+		{"name": "The user wrote: deploy key is PLACEHOLDER-SECRET, summarize the plan then continue"},
+	}
+	argsJSON, err := json.Marshal(argCases)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(node, driverPath)
+	env := append(os.Environ(),
+		"NG_SESSION_PATH="+sessionPath,
+		"NG_CWD="+root,
+		"NG_ARGS="+string(argsJSON),
+		"NIGHTGAUGE_OUTPUT_FILE="+outputFile,
+		"NIGHTGAUGE_RUN_ID="+runID,
+	)
+	env = removeEnv(env, "NIGHTGAUGE_BIN")
+	cmd.Env = env
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			t.Fatalf("driver failed: %v\nstderr:\n%s", err, ee.Stderr)
+		}
+		t.Fatalf("driver failed: %v", err)
+	}
+	var results []sessionCallResult
+	if err := json.Unmarshal(out, &results); err != nil {
+		t.Fatalf("driver printed non-JSON: %s (%v)", out, err)
+	}
+	for i, r := range results {
+		if r.Threw {
+			t.Fatalf("case %d threw: %s", i, r.Message)
+		}
+	}
+
+	events, err := ReadRunEvents(eventsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("got %d events, want 2: %+v", len(events), events)
+	}
+	for i, ev := range events {
+		if ev.Kind != "skill" {
+			t.Errorf("events[%d].kind = %q, want skill", i, ev.Kind)
+		}
+		if ev.Detail["skill_invalid"] != true {
+			t.Errorf("events[%d].detail = %v, want {skill_invalid:true}", i, ev.Detail)
+		}
+		if _, hasSkill := ev.Detail["skill"]; hasSkill {
+			t.Errorf("events[%d].detail carries a raw skill value; the invalid input must never be recorded verbatim", i)
+		}
 	}
 }
 

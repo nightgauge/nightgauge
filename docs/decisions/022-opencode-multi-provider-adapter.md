@@ -1934,6 +1934,87 @@ tracks a per-run `HOME`, so `$HOME/.opencode` stops being a config directory
 at all — removing the operator-install wait entirely rather than only
 bounding and classifying it.
 
+## Session-lifecycle events plugin (amendment 2026-09-15, #1641 fix round)
+
+`plugin/nightgauge/session.js` (#1641) shipped against three assumptions this
+fix round found wrong on the real 1.18.30 binary, each confirmed with an
+offline, loopback-only probe against the pinned binary rather than assumed
+from its type declarations.
+
+**The `permission.ask` plugin hook is never called.** 1.18.30 publishes a
+permission prompt only as the bus event `permission.asked`
+(`{id, sessionID, permission, patterns, metadata, always, tool}`), which
+reaches the plugin's `event` hook; the string `"permission.ask"` occurs zero
+times among the binary's own `trigger("...")` call sites — every one of the
+fourteen hooks it does call is `chat.headers`, `chat.message`, `chat.params`,
+`command.execute.before`, `experimental.chat.messages.transform`,
+`experimental.chat.system.transform`, `experimental.compaction.autocontinue`,
+`experimental.session.compacting`, `experimental.text.complete`, `file.open`,
+`shell.env`, `tab.new`, `tool.definition`, or `tool.execute.after`/`.before`.
+So AC5's notification and AC6's permission-ask events, both routed through
+`permissionAsk` (the `permission.ask` hook), silently never fired in
+production; the harness tests passed only because they call `permissionAsk`
+directly in Node, bypassing the loader. `event()` now handles
+`permission.asked` itself — the throttle and the events-file write both moved
+there, reading `properties.permission` (the permission type) only, never
+`patterns`/`metadata` (the model-authored command text those carry). The
+`permission.ask` export stays, unused in production, only for forward
+compatibility should a later opencode version call it directly.
+`TestEventPermissionAskedEmitsEventAndThrottlesNotify` is the Node-harness
+coverage; `TestPermissionAskEventAgainstRealOpenCode`
+(`compaction_stub_test.go`) is the real-binary row, `permission: {bash:
+"ask"}` against the #1618 stub.
+
+**`session.idle` wrote only `stop_verify`, never `idle`.** The wire format
+(`kind: compaction|idle|stop_verify|permission_ask|skill`) and `events.go`'s
+own `EventKinds` always named five kinds; the writer only ever produced four.
+`event()` now appends one `idle` line before running `hook stop-verify`.
+Covered by `TestEventIdleWritesStopVerifyEvent` and the real-binary
+`assertCompactionStubGreen`.
+
+**`child` was hard-coded `false`.** 1.18.30's `Session.Info` carries an
+optional `parentID` (visible on `session.created`/`session.updated`'s own
+`properties.info.parentID`, and in the bundled client's own reducers —
+`case "session.updated": ... r.parentID`), so `event()` now tracks it: a
+sessionID first observed with a non-empty `info.parentID` is tagged `child`
+in every later event it produces. `TestChildSessionEventsAreTaggedChild`
+drives this directly, since `gates.js` still denies the `task` tool
+unconditionally (AC9, above) and no run in this codebase can produce a real
+child session — a parent-only compaction-stub run's own `session.updated`
+traffic was checked directly (this fix round's own probe) and never carried a
+`parentID` for its single session, consistent with that denial. **The gap AC6
+and AC7 asked to be recorded stands as before: child-session delivery through
+this plugin is unverified**, now for a documented reason (AC9's denial)
+rather than an unimplemented `child` field.
+
+**#1625's steps cap is not opencode's own hard stop.** AC2 read "a run forced
+into compaction ends without it and within #1625's steps cap", and ADR-022
+(the section above) assumed "#1625's steps cap remains the hard stop
+underneath this either way." On 1.18.30, a step at or past `agent.*.steps`
+only appends an assistant nudge message (`let oe=Y.steps??1/0,L=_>=oe;
+...messages:[...an,...L?[{role:"assistant",content:lh}]:[]],tools:le` in the
+binary's own minified loop) and still passes every tool — the loop does not
+stop there. Against `compaction_stub_test.go`'s own deterministic, offline
+fixture (`steps: 8`), a green run consistently logs 13 loop steps, not ≤8:
+steps 8 through 11 each still execute a bash tool call after the declared cap.
+`assertCompactionStubGreen`'s bound (`loopStepsWantMax`) is tightened from an
+earlier, cap-agnostic 20 to 16 (13 plus small headroom) to reflect this
+measured reality rather than mask it, and its own comment records the
+contradiction. AC2's "within #1625's steps cap" should be read as "within the
+autocontinue-suppression's own bound", not #1625's literal cap; #1625 should
+be read the same way pending its own fix round. The assertion still
+meaningfully catches the regression it exists for:
+`compactionAutocontinue`'s own suppression removed produced 311+ loop steps
+in the same fixture, over 20x the tightened bound.
+
+**CI coverage.** `.github/workflows/ci.yml`'s "OpenCode integration
+(opencode-ai@1.18.30)" step ran neither `TestPluginLoadsOnRealOpenCode`
+(#1635) nor `TestCompactionAutocontinueSuppressionAgainstRealOpenCode`
+(#1641): its package list omitted `./internal/execution/opencodeplugin/` and
+its `-run` regex did not match either name, so nothing in CI would have
+caught a regression in either. Both, plus the new
+`TestPermissionAskEventAgainstRealOpenCode`, are now named in that step.
+
 ## Consequences
 
 - The model layer's one-adapter-one-provider assumption becomes a special
