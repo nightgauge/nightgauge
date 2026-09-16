@@ -36,6 +36,21 @@ import (
 // (os.Executable in production) so the resolve-failure path is testable.
 // Best-effort by design: "" simply falls through to the skill's
 // PATH/repo/canonical/go-bin fallbacks.
+// hostExecutable resolves THIS process's own binary for the NIGHTGAUGE_BIN
+// export below. It is a package variable rather than a direct os.Executable
+// reference because NIGHTGAUGE_BIN is not merely informational any more: the
+// OpenCode plugin SPAWNS it, as `nightgauge hook stop-verify` on every
+// session.idle (#1641). Under `go test`, os.Executable is the Go TEST
+// binary, so that spawn re-runs the whole test binary — measured on
+// internal/execution's own suite at 104.5 s of forked git work, orphaned
+// past the test that started it, and bounded only by the plugin's 5 s kill.
+// That, not any production cost, is what pushed
+// TestOpenCodeIntegrationInheritUserConfigOptIn from ~8-12 s towards its
+// 20 s bound (#1810). An integration test that dispatches the real OpenCode
+// CLI points this at a real nightgauge build instead
+// (useRealNightgaugeBinary).
+var hostExecutable = os.Executable
+
 func hostBinaryPath(executable func() (string, error)) string {
 	self, err := executable()
 	if err != nil {
@@ -1503,7 +1518,7 @@ func composeStageEnv(base []string, withhold func(key string) bool, adapterEnv m
 	// authoritative — no duplicate NIGHTGAUGE_BIN with OS-dependent
 	// precedence if one was inherited. Best-effort: a failure to resolve self
 	// never blocks the spawn (the cascade has PATH/repo fallbacks).
-	if self := hostBinaryPath(os.Executable); self != "" {
+	if self := hostBinaryPath(hostExecutable); self != "" {
 		env = upsertEnvVar(env, "NIGHTGAUGE_BIN", self)
 	}
 

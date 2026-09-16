@@ -7,7 +7,9 @@
 // hook to a no-op, never breaks plugin load the way gates.js's mandatory
 // import does — this module observes and records, it is never a gate.
 //
-// Every spawn below is bounded (SPAWN_TIMEOUT_MS) and its result is never
+// Every spawn below is bounded — by SPAWN_TIMEOUT_MS here, or, for the one
+// verb spawned on a terminal event and deliberately let go of
+// (runHookDetached), by that verb's own Go-side bound — and its result is never
 // allowed to change what the tool call, permission decision or model turn
 // does: a hung, missing or failing verb degrades to "nothing recorded",
 // never a throw. Model-authored content never reaches a spawned verb's argv;
@@ -18,26 +20,32 @@
 // (#1641 fixed forward): opencode is a single-threaded event loop process,
 // and spawnSync blocks that ENTIRE process — every other session's tool
 // calls, timers and bus events — for as long as the child runs, up to
-// SPAWN_TIMEOUT_MS. Measured directly against the pinned 1.18.30 binary: one
-// `hook stop-verify` call that ran past its bound added a full 5.0s of dead
-// time to a single dispatch (9.1-9.3s observed vs. ~4.4s with that one call's
-// spawn skipped) — exactly SPAWN_TIMEOUT_MS, not a coincidence. An async
-// spawn lets opencode keep servicing everything else while a hook verb runs;
-// the bound, the argv/stdin contract and the fail-open "not ok" result are
-// unchanged.
+// SPAWN_TIMEOUT_MS. An async spawn lets opencode keep servicing everything
+// else while a hook verb runs; the bound, the argv/stdin contract and the
+// fail-open "not ok" result are unchanged.
 //
-// Every caller below either (a) never needs the result at all (notifyOnce,
-// toolExecuteBefore's skill-usage call: the returned promise is left
-// unawaited, only .catch()-guarded against an unhandled rejection), or (b)
-// genuinely needs it but must still let the exported hook function itself
-// return immediately (event()'s session.idle branch: the spawn is started,
-// and the verdict is recorded from a .then()/.catch() continuation once the
-// bounded child settles, never by awaiting inline), or (c) is the one case
-// where opencode itself is waiting on the output before it can proceed
-// (sessionCompacting's inject-context call, which mutates output.context
-// synchronously with respect to the compaction it is contributing to) — that
-// one alone awaits runHook inline, and even then only ties up its own async
-// call chain, never the shared event loop the way spawnSync did.
+// There are two spawn helpers, for two genuinely different lifetimes
+// (#1810):
+//
+//   - runHook, for a verb whose result this process will still be alive to
+//     see. Its promise is either awaited (sessionCompacting's
+//     inject-context call, the one case where opencode is itself waiting on
+//     the output before it can proceed) or left unawaited and only
+//     .catch()-guarded (notifyOnce, toolExecuteBefore's skill-usage call).
+//     Its SPAWN_TIMEOUT_MS timer, which lives in THIS process, is what
+//     bounds the child.
+//
+//   - runHookDetached, for a verb spawned on a TERMINAL event, where this
+//     process may be gone before the child has even started work. Measured
+//     against the pinned 1.18.30 binary (#1810): opencode does NOT await the
+//     promise a plugin's `event` hook returns, and a one-shot `opencode run`
+//     exits within ~10 ms of publishing session.idle — a continuation
+//     scheduled 20 ms out never runs at all, and an `await` inside the event
+//     hook never resumes. Nothing this process schedules can therefore
+//     record a session.idle verb's result, and no timer of this process's
+//     can bound it either. So the child is unref'd (this process never waits
+//     on it), it writes its OWN result line into the run's events file, and
+//     it enforces its OWN bound. See event()'s session.idle branch.
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -215,6 +223,39 @@ function runHook(bin, args, cwd, stdinPayload) {
   });
 }
 
+// runHookDetached spawns bin with args and immediately lets go of it: its
+// own process group (detached), no stdio at all, and unref()'d so this
+// process's event loop is never held open by it and it is never killed when
+// this process exits. It is for a verb spawned on a TERMINAL event, where
+// this process is about to disappear (see runHook's own comment); such a
+// verb records its own result and enforces its own bound, because nothing
+// here can do either for it.
+//
+// It returns true when the child was started, and false when it provably was
+// not — the ONE failure a caller can still act on synchronously. The
+// executable check is deliberately synchronous (accessSync): spawn() reports
+// ENOENT/EACCES on a LATER tick as an 'error' event, which on a terminal
+// event is a tick this process may never reach, so a caller that needs to
+// record "the verb could not run" has to learn it before returning.
+function runHookDetached(bin, args, cwd) {
+  try {
+    fs.accessSync(bin, fs.constants.X_OK);
+  } catch {
+    return false;
+  }
+  let child;
+  try {
+    child = spawn(bin, args, { cwd, stdio: "ignore", shell: false, detached: true });
+  } catch {
+    return false;
+  }
+  // Nothing reads this child's outcome, but an unhandled 'error' event would
+  // still throw and crash opencode (the #1641 EPIPE lesson): swallow it.
+  child.on("error", () => {});
+  child.unref();
+  return true;
+}
+
 // eventsPath mirrors opencodeplugin.EventsPath (events.go) byte for byte: a
 // relative or ".."-bearing NIGHTGAUGE_OUTPUT_FILE, or a missing run id,
 // disables the file rather than writing elsewhere. Both env vars are the
@@ -382,8 +423,9 @@ function notifyOnce(ctx, sessionID, permissionType) {
 // session.created/session.updated (track parentage only, never recorded
 // directly), session.compacted (a compaction just succeeded: record one
 // "compaction" event), session.idle (the session went idle: record one
-// "idle" event, then run `hook stop-verify` and record its verdict as a
-// "stop_verify" event), and permission.asked — opencode 1.18.30's own bus
+// "idle" event, then hand a detached `hook stop-verify --emit-event` the job
+// of recording its own verdict as a "stop_verify" event, since this process
+// will not be alive to do it), and permission.asked — opencode 1.18.30's own bus
 // event for a permission prompt; the plugin hook named "permission.ask" is
 // never called on this binary (see permissionAsk's own comment), so this is
 // the path AC5/AC6 actually run on. Every other event type is ignored. This
@@ -416,24 +458,35 @@ export async function event(ctx, input) {
     }
     const cwd = resolveCwd(ctx);
     const child = isChildSession(sessionID);
-    // event() itself does not await this: a hung or slow `hook stop-verify`
-    // must never delay opencode's own handling of the session.idle bus event
-    // (the very regression #1641 introduced — see runHook's own comment).
-    // The verdict is still genuinely needed, so it is recorded once the
-    // bounded spawn settles, via .then()/.catch() rather than blocking this
-    // function's return on it.
-    runHook(bin, ["hook", "stop-verify", "--workdir", cwd], cwd, null)
-      .then(({ ok, stdout }) => {
-        // EvaluateStopHookOutput's own contract (internal/hooks/stop.go):
-        // silent stdout means every task is complete; a non-empty
-        // {"decision":"block",...} means it is not. Only the verdict code is
-        // ever recorded, never Reason (which can hold plan-derived text).
-        const verdict = !ok ? "error" : stdout === "" ? "complete" : "blocked";
-        appendEvent("stop_verify", sessionID, child, { verdict });
-      })
-      .catch(() => {
-        appendEvent("stop_verify", sessionID, child, { verdict: "error" });
-      });
+    // session.idle is TERMINAL for a one-shot `opencode run`: measured
+    // against the pinned 1.18.30 binary (#1810), opencode neither awaits the
+    // promise this hook returns nor stays alive more than ~10 ms past
+    // publishing the event, so an `await` here never resumes and a
+    // .then()/.catch() continuation never runs. Either shape loses the
+    // verdict silently — which is exactly how #1641's first fix left
+    // TestCompactionAutocontinueSuppressionAgainstRealOpenCode reading 0
+    // stop_verify events where it wants 1.
+    //
+    // So the verdict is not recorded from here at all. The `hook
+    // stop-verify` child is handed --emit-event and writes its OWN
+    // stop_verify line into this same events file (Go side: events.go's
+    // AppendRunEvent, honouring the same 1 MiB cap and the same retention
+    // contract), from a process that outlives opencode and bounds itself.
+    // Nothing in this function waits on it, so no dispatch can be slowed by
+    // a slow or hung verb — not by a millisecond.
+    //
+    // The session id travels as argv, not stdin, because it is opencode's
+    // own opaque id and never model-authored; the Go side re-checks its
+    // shape before recording it regardless.
+    const args = ["hook", "stop-verify", "--workdir", cwd, "--emit-event"];
+    if (sessionID) args.push("--session-id", sessionID);
+    if (child) args.push("--child");
+    if (!runHookDetached(bin, args, cwd)) {
+      // The one outcome this process can still determine synchronously, and
+      // therefore the one it still owns: the verb could not be started at
+      // all, so no child exists to write the line.
+      appendEvent("stop_verify", sessionID, child, { verdict: "no_bin" });
+    }
     return;
   }
 

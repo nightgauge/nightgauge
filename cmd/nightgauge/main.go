@@ -32,6 +32,7 @@ import (
 	docspkg "github.com/nightgauge/nightgauge/internal/docs"
 	"github.com/nightgauge/nightgauge/internal/doctor"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
+	"github.com/nightgauge/nightgauge/internal/execution/opencodeplugin"
 	"github.com/nightgauge/nightgauge/internal/executor"
 	"github.com/nightgauge/nightgauge/internal/focus"
 	"github.com/nightgauge/nightgauge/internal/forge"
@@ -5813,8 +5814,21 @@ func hookStageGateCmd() *cobra.Command {
 	}
 }
 
+// stopVerifyEmitBound bounds the --emit-event path's own evaluation. That
+// path runs detached, inside a process the OpenCode plugin spawned and then
+// let go of (#1810): nothing upstream is still holding a timer that could
+// kill it, so the bound has to live here. On expiry the verdict recorded is
+// "timeout" and the process returns, so a wedged evaluation can neither hang
+// forever as an orphan nor lose the verdict. The plain (Claude Code Stop
+// hook) path is left unbounded and byte-identical, because there the caller
+// is waiting on this process and applies its own bound.
+const stopVerifyEmitBound = 5 * time.Second
+
 func hookStopVerifyCmd() *cobra.Command {
 	var workdir string
+	var emitEvent bool
+	var sessionID string
+	var childSession bool
 
 	cmd := &cobra.Command{
 		Use:   "stop-verify",
@@ -5836,6 +5850,9 @@ internal and unaffected by this output-format change.`,
 			if workdir == "" {
 				workdir, _ = os.Getwd() // os.Getwd failure falls back to empty string; Load() handles missing workdir
 			}
+			if emitEvent {
+				return emitStopVerifyEvent(workdir, sessionID, childSession)
+			}
 			out, err := hooks.EvaluateStopHookOutput(workdir)
 			if err != nil {
 				return err
@@ -5854,7 +5871,67 @@ internal and unaffected by this output-format change.`,
 	}
 
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Working directory (default: cwd)")
+	cmd.Flags().BoolVar(&emitEvent, "emit-event", false,
+		"Record the verdict as a stop_verify line in this run's OpenCode events file instead of printing it (used by the OpenCode plugin's session.idle hook)")
+	cmd.Flags().StringVar(&sessionID, "session-id", "", "OpenCode session id to tag the emitted event with (--emit-event only)")
+	cmd.Flags().BoolVar(&childSession, "child", false, "Tag the emitted event as coming from a child session (--emit-event only)")
 	return cmd
+}
+
+// emitStopVerifyEvent is the --emit-event path: it evaluates the Stop hook
+// and appends ONE stop_verify line to this run's OpenCode events file,
+// rather than printing the verdict for a caller to read.
+//
+// It exists because opencode 1.18.30 does not await a plugin `event` hook's
+// promise and a one-shot `opencode run` exits within ~10 ms of publishing
+// session.idle (#1810, measured against the pinned binary). The plugin
+// therefore cannot observe this verb's result at all — neither by awaiting
+// it nor from a continuation — so the verdict is written by the process that
+// computes it, which is detached and outlives opencode.
+//
+// Only the verdict CODE is ever recorded, never EvaluateStopHookOutput's
+// Reason, which can hold plan-derived text the events file's retention
+// contract forbids. The session id is recorded only when it is an opaque
+// identifier.
+func emitStopVerifyEvent(workdir, sessionID string, childSession bool) error {
+	type stopVerdict struct {
+		out []byte
+		err error
+	}
+	done := make(chan stopVerdict, 1)
+	go func() {
+		out, err := hooks.EvaluateStopHookOutput(workdir)
+		done <- stopVerdict{out: out, err: err}
+	}()
+
+	verdict := ""
+	select {
+	case r := <-done:
+		switch {
+		case r.err != nil:
+			verdict = "error"
+		case len(r.out) == 0:
+			verdict = "complete"
+		default:
+			verdict = "blocked"
+		}
+	case <-time.After(stopVerifyEmitBound):
+		verdict = "timeout"
+	}
+
+	path, ok := opencodeplugin.RunEventsPathFromEnv()
+	if !ok {
+		// Not inside a Nightgauge run, or the run's output file is not a path
+		// the events file may live beside: there is nothing to record, and
+		// that is not a failure.
+		return nil
+	}
+	return opencodeplugin.AppendRunEvent(path, opencodeplugin.Event{
+		Kind:      "stop_verify",
+		SessionID: opencodeplugin.SanitizeEventID(sessionID),
+		Child:     childSession,
+		Detail:    map[string]any{"verdict": verdict},
+	})
 }
 
 func hookFormatCmd() *cobra.Command {

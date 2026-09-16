@@ -44,6 +44,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -211,6 +212,7 @@ func openCodeShim(t *testing.T, real string) string {
 // connections on instead (#1635 fix round 2).
 func openCodeShimWithRegistry(t *testing.T, real, registryEnv string) string {
 	t.Helper()
+	useRealNightgaugeBinary(t)
 	bin, out := t.TempDir(), t.TempDir()
 	script := fmt.Sprintf(`#!/bin/sh
 export %[3]s
@@ -227,6 +229,105 @@ exit $code
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return out
+}
+
+// nightgaugeBinForIntegration builds cmd/nightgauge once per test process.
+//
+// pristineEnviron is this process's environment as it was at package
+// initialization — before any t.Setenv has run. Every case here reassigns
+// HOME to a throwaway directory (isolateOpenCodeHome), and t.Setenv mutates
+// the real process environment, so a `go build` that inherited the live
+// environment would resolve GOPATH/GOMODCACHE inside that throwaway
+// directory and re-download the module cache into it, per test. Package-level
+// initializers run before TestMain and before any test, so this is the
+// operator's own environment.
+var (
+	pristineEnviron   = os.Environ()
+	nightgaugeBinOnce sync.Once
+	nightgaugeBinPath string
+	nightgaugeBinErr  error
+)
+
+// useRealNightgaugeBinary points the manager's NIGHTGAUGE_BIN export at a
+// real nightgauge build for the duration of one test, instead of at this Go
+// test binary (#1810).
+//
+// It is not cosmetic. NIGHTGAUGE_BIN is spawned: the OpenCode plugin runs
+// `$NIGHTGAUGE_BIN hook stop-verify` on every session.idle, and these cases
+// dispatch the REAL opencode through openCodeShim, so that spawn really
+// happens. With os.Executable's own answer — this test binary — the spawn
+// re-runs the entire internal/execution suite inside the dispatch: measured
+// at 104.5 s wall clock, forking git into other tests' temp directories, and
+// left orphaned once the plugin's own 5 s bound died with the CLI. That is
+// the whole of the "~5 s hook" #1641 was blamed for; a real `nightgauge hook
+// stop-verify` answers in ~70 ms (measured, same machine, warm).
+//
+// Every case that dispatches the real CLI goes through
+// openCodeShimWithRegistry, so installing this there covers all of them.
+func useRealNightgaugeBinary(t *testing.T) {
+	t.Helper()
+	nightgaugeBinOnce.Do(func() {
+		out := filepath.Join(os.TempDir(), fmt.Sprintf("nightgauge-execution-integration-%d", os.Getpid()))
+		cmd := exec.Command("go", "build", "-o", out, "github.com/nightgauge/nightgauge/cmd/nightgauge")
+		cmd.Env = pristineEnviron
+		if b, err := cmd.CombinedOutput(); err != nil {
+			nightgaugeBinErr = fmt.Errorf("building nightgauge: %w\n%s", err, b)
+			return
+		}
+		nightgaugeBinPath = out
+		integrationNightgaugeBinaryCleanup = func() { _ = os.Remove(out) }
+	})
+	if nightgaugeBinErr != nil {
+		t.Fatalf("could not build a real nightgauge for the OpenCode integration harness: %v", nightgaugeBinErr)
+	}
+	previous := hostExecutable
+	hostExecutable = func() (string, error) { return nightgaugeBinPath, nil }
+	t.Cleanup(func() { hostExecutable = previous })
+}
+
+// TestOpenCodeIntegrationHostBinaryIsARealNightgauge is the harness half of
+// #1810's fix, shown directly rather than inferred from a wall-clock bound.
+//
+// NIGHTGAUGE_BIN is exported to every stage and SPAWNED by the OpenCode
+// plugin as `$NIGHTGAUGE_BIN hook stop-verify` on session.idle. Before this
+// fix it resolved, under `go test`, to this Go TEST binary: running that
+// argv re-runs the entire internal/execution suite — 104.5 s of forked git
+// work, exit status 1, orphaned past the test that started it, and capped
+// only by the plugin's 5 s kill. That 5 s, not any production cost, is the
+// "slow hook verb" #1641 was blamed for. This case runs the exact argv the
+// plugin runs and requires it to behave like the verb it names.
+func TestOpenCodeIntegrationHostBinaryIsARealNightgauge(t *testing.T) {
+	real := realOpenCode(t)
+	_ = openCodeShim(t, real) // the same installer every dispatching case uses
+
+	self := hostBinaryPath(hostExecutable)
+	if self == "" {
+		t.Fatal("the manager resolved no host binary to export as NIGHTGAUGE_BIN")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, self, "hook", "stop-verify", "--workdir", t.TempDir())
+	cmd.Dir = t.TempDir()
+	cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=/usr/bin:/bin"}
+	started := time.Now()
+	out, err := cmd.CombinedOutput()
+	elapsed := time.Since(started)
+
+	if err != nil {
+		t.Fatalf("`$NIGHTGAUGE_BIN hook stop-verify` exited %v — NIGHTGAUGE_BIN is not a nightgauge binary\noutput:\n%s", err, out)
+	}
+	// EvaluateStopHookOutput's own contract for a workdir with no plan file:
+	// silent stdout. A Go test binary prints its own test log here instead.
+	if len(out) != 0 {
+		t.Errorf("`$NIGHTGAUGE_BIN hook stop-verify` printed %d bytes for a workdir with no plan file, want silence:\n%s", len(out), out)
+	}
+	// The plugin's own bound is 5s. A real verb answers in well under a
+	// second; anything near the bound is a binary that is doing something
+	// else entirely.
+	if elapsed > 2*time.Second {
+		t.Errorf("`$NIGHTGAUGE_BIN hook stop-verify` took %s; the verb the plugin spawns on every session.idle must answer in milliseconds", elapsed)
+	}
 }
 
 // localNPMRegistry starts a loopback TCP listener standing in for the npm

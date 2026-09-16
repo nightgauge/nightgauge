@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/skills"
@@ -245,10 +246,192 @@ func TestCompactionAutocontinueAlwaysDisables(t *testing.T) {
 
 // --- event: session.idle -> idle, stop_verify ---
 
+// stopVerifyWaitBound is how long a test waits for the detached `hook
+// stop-verify --emit-event` child to append its line. A real stop-verify
+// answers in ~70 ms warm; 30 s is wide headroom that still fails rather than
+// hangs if the child never writes at all.
+const stopVerifyWaitBound = 30 * time.Second
+
+// TestEventIdleStopVerifyEventSurvivesItsHostProcess is #1810's own
+// regression test, and the one that distinguishes every candidate fix.
+//
+// Measured against the pinned opencode 1.18.30 binary: opencode does NOT
+// await the promise a plugin's `event` hook returns, and a one-shot
+// `opencode run` exits within ~10 ms of publishing session.idle (a probe
+// plugin whose event hook awaited 1200 ms never reached the line after its
+// await, and a .then() scheduled 20 ms out never ran). This driver
+// reproduces exactly that: it calls event(session.idle) and then kills its
+// own process with process.exit(0) on the very next tick, allowing NOTHING
+// the plugin scheduled to run afterwards.
+//
+// Against #1641's fix-forward shape — the verdict recorded from a .then()
+// continuation on an in-process spawn — no stop_verify line is ever written
+// here, which is precisely the "got 0 stop_verify events, want exactly 1"
+// that TestCompactionAutocontinueSuppressionAgainstRealOpenCode reported on
+// main. Awaiting runHook inline inside the event hook is red here too, and
+// for the same reason: the await simply never resumes. Only a verdict
+// written by a process that OUTLIVES the host passes.
+func TestEventIdleStopVerifyEventSurvivesItsHostProcess(t *testing.T) {
+	node := requireNode(t)
+	bin := buildNightgaugeBin(t)
+	root := t.TempDir() // no PLAN.md: EvaluateStop's own OK path
+
+	outputFile := filepath.Join(t.TempDir(), "output", "run.json")
+	if err := os.MkdirAll(filepath.Dir(outputFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runID := "run-idle-survives-1"
+	eventsFile, ok := EventsPath(outputFile, runID)
+	if !ok {
+		t.Fatal("test premise broken: EventsPath refused a valid absolute output file")
+	}
+
+	driver := `
+import { pathToFileURL } from "node:url";
+const mod = await import(pathToFileURL(process.env.NG_SESSION_PATH).href);
+const ctx = { directory: process.env.NG_CWD, worktree: process.env.NG_CWD };
+
+const t0 = Date.now();
+await mod.event(ctx, {
+  event: { type: "session.idle", properties: { sessionID: "ses_survives_1" } },
+});
+process.stdout.write(JSON.stringify({ idleMs: Date.now() - t0 }));
+// Exactly what opencode 1.18.30 does ~10ms after publishing session.idle:
+// tear the process down, running no queued continuation, no timer and no
+// pending await.
+process.exit(0);
+`
+	driverPath := filepath.Join(t.TempDir(), "driver.mjs")
+	if err := os.WriteFile(driverPath, []byte(driver), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(node, driverPath)
+	env := append(os.Environ(),
+		"NG_SESSION_PATH="+sessionModulePath(t),
+		"NG_CWD="+root,
+	)
+	for k, v := range map[string]string{
+		"NIGHTGAUGE_BIN":         bin,
+		"NIGHTGAUGE_OUTPUT_FILE": outputFile,
+		"NIGHTGAUGE_RUN_ID":      runID,
+	} {
+		env = upsertEnv(env, k, v)
+	}
+	cmd.Env = env
+	cmd.Dir = root
+	started := time.Now()
+	out, err := cmd.Output()
+	hostElapsed := time.Since(started)
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			t.Fatalf("driver failed: %v\nstderr:\n%s", err, ee.Stderr)
+		}
+		t.Fatalf("driver failed: %v", err)
+	}
+	var timing struct {
+		IdleMs int64 `json:"idleMs"`
+	}
+	if err := json.Unmarshal(out, &timing); err != nil {
+		t.Fatalf("driver printed non-JSON: %s (%v)", out, err)
+	}
+	// Invariant (i): the hook itself never waits on the verb. The spawn is
+	// started and let go of, so this is a handful of milliseconds even though
+	// the verb it starts has real work to do.
+	if timing.IdleMs >= 1000 {
+		t.Errorf("event(session.idle) took %dms; it must never wait on the stop-verify verb at all", timing.IdleMs)
+	}
+
+	// Invariant (ii): the verdict is not lost, even though the process that
+	// requested it is already gone.
+	events, err := WaitForRunEvent(eventsFile, "stop_verify", stopVerifyWaitBound)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stopVerify []Event
+	for _, e := range events {
+		if e.Kind == "stop_verify" {
+			stopVerify = append(stopVerify, e)
+		}
+	}
+	if len(stopVerify) != 1 {
+		t.Fatalf("got %d stop_verify events after the host process exited in %s, want exactly 1: %+v",
+			len(stopVerify), hostElapsed, events)
+	}
+	if got := stopVerify[0].SessionID; got != "ses_survives_1" {
+		t.Errorf("stop_verify.session_id = %q, want ses_survives_1", got)
+	}
+	if verdict, _ := stopVerify[0].Detail["verdict"].(string); verdict != "complete" {
+		t.Errorf("stop_verify detail.verdict = %v, want \"complete\"", stopVerify[0].Detail["verdict"])
+	}
+}
+
+// TestEventIdleRecordsNoBinWhenTheVerbCannotRun: the one stop_verify verdict
+// the plugin still owns. With NIGHTGAUGE_BIN pointing at an absolute path
+// that is not executable, no child can be started to write the line, so the
+// plugin writes it itself — synchronously, before returning, because on a
+// terminal event there is no later tick. Deferring this to spawn's own async
+// 'error' event turns it red.
+func TestEventIdleRecordsNoBinWhenTheVerbCannotRun(t *testing.T) {
+	node := requireNode(t)
+	root := t.TempDir()
+
+	notExecutable := filepath.Join(t.TempDir(), "not-a-binary")
+	if err := os.WriteFile(notExecutable, []byte("#!/bin/sh\nexit 0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	outputFile := filepath.Join(t.TempDir(), "output", "run.json")
+	if err := os.MkdirAll(filepath.Dir(outputFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runID := "run-idle-nobin-1"
+	eventsFile, ok := EventsPath(outputFile, runID)
+	if !ok {
+		t.Fatal("test premise broken")
+	}
+
+	calls := []sessionCall{{
+		Fn:    "event",
+		Input: map[string]any{"event": map[string]any{"type": "session.idle", "properties": map[string]any{"sessionID": "ses_nobin_1"}}},
+	}}
+	results := runSessionHarness(t, node, root, calls, map[string]string{
+		"NIGHTGAUGE_BIN":         notExecutable,
+		"NIGHTGAUGE_OUTPUT_FILE": outputFile,
+		"NIGHTGAUGE_RUN_ID":      runID,
+	})
+	if results[0].Threw {
+		t.Fatalf("event(session.idle) threw: %s", results[0].Message)
+	}
+
+	// No wait: this verdict must already be on disk when the hook returns.
+	events, err := ReadRunEvents(eventsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopVerifies := 0
+	for _, e := range events {
+		if e.Kind != "stop_verify" {
+			continue
+		}
+		stopVerifies++
+		if verdict, _ := e.Detail["verdict"].(string); verdict != "no_bin" {
+			t.Errorf("detail.verdict = %v, want \"no_bin\"", e.Detail["verdict"])
+		}
+	}
+	if stopVerifies != 1 {
+		t.Fatalf("got %d stop_verify events, want exactly 1 written synchronously: %+v", stopVerifies, events)
+	}
+}
+
 // TestEventIdleWritesStopVerifyEvent: an idle event writes an "idle" line
 // followed by a "stop_verify" line to the run's events file, with a verdict
 // and no other free text. Removing the event handler's "idle" append (or its
 // session.idle branch entirely) turns this red.
+//
+// The two lines come from two processes now (#1810): "idle" from the plugin,
+// "stop_verify" from the detached `hook stop-verify --emit-event` child,
+// which by design outlives its host — so the read is WaitForRunEvent, not a
+// bare ReadRunEvents, exactly as events.go tells #1653's reader to do it.
 func TestEventIdleWritesStopVerifyEvent(t *testing.T) {
 	node := requireNode(t)
 	bin := buildNightgaugeBin(t)
@@ -277,7 +460,7 @@ func TestEventIdleWritesStopVerifyEvent(t *testing.T) {
 		t.Fatalf("event(session.idle) threw: %s", results[0].Message)
 	}
 
-	events, err := ReadRunEvents(eventsFile)
+	events, err := WaitForRunEvent(eventsFile, "stop_verify", stopVerifyWaitBound)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -669,27 +852,34 @@ func TestChildSessionEventsAreTaggedChild(t *testing.T) {
 // --- non-blocking spawn (#1641 fixed forward) ---
 
 // TestEventIdleAndPermissionHandlersReturnQuicklyWithAHungHook is the direct
-// regression test for the #1641 CI slowdown (~10-16s added to every OpenCode
-// dispatch, measured on the pinned 1.18.30 binary: one `hook stop-verify`
-// call blocking a full SPAWN_TIMEOUT_MS=5000ms). NIGHTGAUGE_BIN here points
-// at a shim that sleeps 3s (well under SPAWN_TIMEOUT_MS, so it completes on
-// its own rather than being killed by the bound) before writing a marker
-// file and exiting 0. Against session.js's own synchronous spawnSync, both
+// regression test for the #1641 CI slowdown (one `hook stop-verify` call
+// blocking a full SPAWN_TIMEOUT_MS=5000ms of opencode's single-threaded
+// event loop). NIGHTGAUGE_BIN here points at a shim that sleeps 3s (well
+// under SPAWN_TIMEOUT_MS, so it completes on its own rather than being
+// killed by the bound) before appending to a marker file and exiting 0.
+// Against session.js's own original synchronous spawnSync, both
 // event(session.idle) (-> `hook stop-verify`) and event(permission.asked)
 // (-> `hook notify`) block for the full 3s the shim sleeps, because
 // spawnSync freezes the whole process, including the very call that is
-// waiting on it — this test is red there. Against the fix (async spawn,
-// never awaited on either of these two paths), both calls return in
-// milliseconds while the child keeps running in the background; the marker
-// file's existence once the driver process exits (which, absent .unref(),
-// only happens after every spawned child has settled) proves that child was
-// left to finish and reaped, not killed early or abandoned as an orphan.
+// waiting on it — this test is red there. Against the fix, both calls return
+// in milliseconds while their children keep running.
+//
+// The two children have deliberately DIFFERENT lifetimes (#1810), and this
+// test asserts both. The permission.asked child is an ordinary runHook
+// spawn: this process waits on it, so its marker is written before the
+// driver exits. The session.idle child is runHookDetached and unref'd — it
+// must outlive this process, because on a terminal event nothing here will
+// be alive to record its result — so its marker is polled for AFTER the
+// driver exits, and a shim that had been killed with its parent would never
+// write it.
 func TestEventIdleAndPermissionHandlersReturnQuicklyWithAHungHook(t *testing.T) {
 	node := requireNode(t)
 	root := t.TempDir()
 	marker := filepath.Join(t.TempDir(), "hook-ran.marker")
 	shim := filepath.Join(t.TempDir(), "slow-hook.sh")
-	script := "#!/bin/sh\nsleep 3\necho done >> " + shellQuote(marker) + "\nexit 0\n"
+	// $2 is the verb ("stop-verify" or "notify"), so one shim serves both
+	// paths and the marker says which child reached the finish line.
+	script := "#!/bin/sh\nsleep 3\necho \"$2\" >> " + shellQuote(marker) + "\nexit 0\n"
 	if err := os.WriteFile(shim, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -760,8 +950,25 @@ process.stdout.write(JSON.stringify({ idleMs, permMs }));
 		t.Errorf("event(permission.asked) took %dms against a 3s-hung hook verb; want well under 1000ms", timing.PermMs)
 	}
 
-	if _, err := os.Stat(marker); err != nil {
-		t.Errorf("the hook verb's marker file (written after its 3s sleep) does not exist: %v — the child was killed early or abandoned as an orphan rather than left to finish and reaped", err)
+	// The permission.asked child is an ordinary runHook spawn: this process
+	// stayed alive for it, so its marker is already on disk.
+	if raw, err := os.ReadFile(marker); err != nil || !strings.Contains(string(raw), "notify") {
+		t.Errorf("the notify verb's marker line (written after its 3s sleep) is missing: %v / %q — the child was killed early rather than left to finish and reaped", err, raw)
+	}
+	// The session.idle child is detached and unref'd: it MUST still be
+	// running now, and must finish on its own. A child killed with its parent
+	// never writes this line.
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		raw, _ := os.ReadFile(marker)
+		if strings.Contains(string(raw), "stop-verify") {
+			break
+		}
+		if !time.Now().Before(deadline) {
+			t.Errorf("the stop-verify verb's marker line never appeared (%q); the detached child must outlive the process that spawned it", raw)
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 
