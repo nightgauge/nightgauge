@@ -9,6 +9,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-09-16
+
 ### Fixed
 
 - The Output Window no longer fetches its markdown renderer from a CDN. marked
@@ -488,7 +490,8 @@ shipped as [0.2.1].
 - Settings for authentication provider, model selection, and paths
 - Settings for notification sounds, volume, and Do Not Disturb respect
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/nightgauge/nightgauge/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/nightgauge/nightgauge/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/nightgauge/nightgauge/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/nightgauge/nightgauge/compare/v0.3.0...v0.3.1
