@@ -224,7 +224,24 @@ fi
 # VSCode keeps every prior version on disk; they accumulate quickly with dev builds.
 EXT_DIR="$HOME/.vscode/extensions"
 EXT_PREFIX="nightgauge.nightgauge-vscode-"
-OLD_VERSIONS=$(ls -d "${EXT_DIR}/${EXT_PREFIX}"* 2>/dev/null | sort -t- -k4 -V | sed '$d')
+# `ls` exits non-zero when its glob matches nothing, and under `set -euo
+# pipefail` that killed the script right here — before "==> Installing", and
+# silently, because the `2>/dev/null` discarded the only clue. The block exists
+# to delete *old* versions, so it only ever fired destructively when there were
+# none: it broke the first install on a machine and worked correctly forever
+# after, which is why it survived. Glob into an array instead, so "no matches"
+# is an empty list rather than an error.
+shopt -s nullglob
+INSTALLED_DIRS=("${EXT_DIR}/${EXT_PREFIX}"*)
+shopt -u nullglob
+OLD_VERSIONS=""
+if [[ ${#INSTALLED_DIRS[@]} -gt 1 ]]; then
+  # `sort -t- -k4` addressed a fourth dash-separated field that does not exist
+  # (the path splits into three), so the version never participated in the sort
+  # and this kept whichever name sorted last lexicographically rather than the
+  # newest build. Identical prefixes make a plain version sort correct here.
+  OLD_VERSIONS=$(printf '%s\n' "${INSTALLED_DIRS[@]}" | sort -V | sed '$d')
+fi
 if [[ -n "$OLD_VERSIONS" ]]; then
   OLD_COUNT=$(echo "$OLD_VERSIONS" | wc -l | tr -d ' ')
   echo "==> Cleaning up $OLD_COUNT old extension version(s)..."
