@@ -73,10 +73,11 @@ type RecoveryAggregate struct {
 // AppliedFilters echoes the input flags so consumers can confirm what was
 // applied without re-parsing CLI args.
 type AppliedFilters struct {
-	Runs  int    `json:"runs"`
-	Since string `json:"since"`
-	Until string `json:"until"`
-	Issue int    `json:"issue"`
+	Runs    int    `json:"runs"`
+	Since   string `json:"since"`
+	Until   string `json:"until"`
+	Issue   int    `json:"issue"`
+	Adapter string `json:"adapter"`
 }
 
 // RunMetric is a per-run snapshot used by both the audit narrative and the
@@ -108,6 +109,24 @@ type StageAgg struct {
 	TokenStats    TokenStats     `json:"token_stats"`
 	Models        map[string]int `json:"models"`
 	ModelSources  map[string]int `json:"model_sources"`
+	// AdapterUsage is the per-adapter token/cost breakdown for this stage,
+	// keyed by adapter name. The reserved key UnknownAdapterKey collects
+	// entries with no adapter stamp (V2StageTokens.Adapter == ""), kept
+	// distinct from any real adapter name so a consumer can tell "no
+	// attribution" from "attributed to a zero-cost adapter."
+	AdapterUsage map[string]AdapterAgg `json:"adapter_usage"`
+}
+
+// UnknownAdapterKey is the AdapterUsage bucket for stage entries with no
+// adapter stamp (V2StageTokens.Adapter == "").
+const UnknownAdapterKey = "unknown"
+
+// AdapterAgg is the per-(stage, adapter) token/cost breakdown.
+type AdapterAgg struct {
+	TokenStats    TokenStats `json:"token_stats"`
+	CostUSD       float64    `json:"cost_usd"`
+	StageCount    int        `json:"stage_count"`
+	CostUnstamped int        `json:"cost_unstamped_count"`
 }
 
 // Stats holds count, median, mean, p90, min, max for a numeric series. Median
@@ -197,6 +216,11 @@ type Options struct {
 	Until string
 	// Issue keeps only records with this issue number. 0 = all.
 	Issue int
+	// Adapter restricts the AdapterUsage breakdown to a single adapter name.
+	// "" = all. Unlike Issue, this does not drop whole runs or records — it
+	// scopes only the per-adapter breakdown, since a single run can span
+	// multiple adapters across its stages.
+	Adapter string
 	// IncludeAnalysis gates the Analysis block (size accuracy + weekly trend).
 	IncludeAnalysis bool
 }
@@ -235,10 +259,11 @@ func Aggregate(records []state.V2RunRecord, opts Options) (Result, []string) {
 		V:            SchemaVersion,
 		RunsAnalyzed: len(filtered),
 		Filters: AppliedFilters{
-			Runs:  opts.Runs,
-			Since: opts.Since,
-			Until: opts.Until,
-			Issue: opts.Issue,
+			Runs:    opts.Runs,
+			Since:   opts.Since,
+			Until:   opts.Until,
+			Issue:   opts.Issue,
+			Adapter: opts.Adapter,
 		},
 		Runs:         make([]RunMetric, 0, len(filtered)),
 		StageMetrics: make(map[string]StageAgg, len(StageNames)),
@@ -258,6 +283,7 @@ func Aggregate(records []state.V2RunRecord, opts Options) (Result, []string) {
 			Status:       map[string]int{},
 			Models:       map[string]int{},
 			ModelSources: map[string]int{},
+			AdapterUsage: map[string]AdapterAgg{},
 		}
 	}
 
@@ -272,6 +298,20 @@ func Aggregate(records []state.V2RunRecord, opts Options) (Result, []string) {
 		stageTokens[stage] = map[string][]float64{
 			"input": {}, "output": {}, "cache_read": {}, "cache_creation": {},
 		}
+	}
+
+	// adapterTokens[stage][adapterKey][dimension] collects the per-adapter
+	// token series; adapterCost/adapterCount/adapterCostUnstamped track the
+	// scalar sums for each (stage, adapterKey) bucket.
+	adapterTokens := make(map[string]map[string]map[string][]float64, len(StageNames))
+	adapterCost := make(map[string]map[string]float64, len(StageNames))
+	adapterCount := make(map[string]map[string]int, len(StageNames))
+	adapterCostUnstamped := make(map[string]map[string]int, len(StageNames))
+	for _, stage := range StageNames {
+		adapterTokens[stage] = map[string]map[string][]float64{}
+		adapterCost[stage] = map[string]float64{}
+		adapterCount[stage] = map[string]int{}
+		adapterCostUnstamped[stage] = map[string]int{}
 	}
 
 	for _, r := range filtered {
@@ -353,6 +393,35 @@ func Aggregate(records []state.V2RunRecord, opts Options) (Result, []string) {
 			if ps.CacheCreation > 0 {
 				stageTokens[stage]["cache_creation"] = append(stageTokens[stage]["cache_creation"], float64(ps.CacheCreation))
 			}
+
+			adapterKey := ps.Adapter
+			if adapterKey == "" {
+				adapterKey = UnknownAdapterKey
+			}
+			if opts.Adapter == "" || adapterKey == opts.Adapter {
+				if _, ok := adapterTokens[stage][adapterKey]; !ok {
+					adapterTokens[stage][adapterKey] = map[string][]float64{
+						"input": {}, "output": {}, "cache_read": {}, "cache_creation": {},
+					}
+				}
+				if ps.Input > 0 {
+					adapterTokens[stage][adapterKey]["input"] = append(adapterTokens[stage][adapterKey]["input"], float64(ps.Input))
+				}
+				if ps.Output > 0 {
+					adapterTokens[stage][adapterKey]["output"] = append(adapterTokens[stage][adapterKey]["output"], float64(ps.Output))
+				}
+				if ps.CacheRead > 0 {
+					adapterTokens[stage][adapterKey]["cache_read"] = append(adapterTokens[stage][adapterKey]["cache_read"], float64(ps.CacheRead))
+				}
+				if ps.CacheCreation > 0 {
+					adapterTokens[stage][adapterKey]["cache_creation"] = append(adapterTokens[stage][adapterKey]["cache_creation"], float64(ps.CacheCreation))
+				}
+				adapterCost[stage][adapterKey] += ps.CostUSD
+				adapterCount[stage][adapterKey]++
+				if ps.CostUnstamped {
+					adapterCostUnstamped[stage][adapterKey]++
+				}
+			}
 		}
 
 		result.Runs = append(result.Runs, rm)
@@ -367,6 +436,19 @@ func Aggregate(records []state.V2RunRecord, opts Options) (Result, []string) {
 			Output:        computeStats(stageTokens[stage]["output"]),
 			CacheRead:     computeStats(stageTokens[stage]["cache_read"]),
 			CacheCreation: computeStats(stageTokens[stage]["cache_creation"]),
+		}
+		for adapterKey, series := range adapterTokens[stage] {
+			agg.AdapterUsage[adapterKey] = AdapterAgg{
+				TokenStats: TokenStats{
+					Input:         computeStats(series["input"]),
+					Output:        computeStats(series["output"]),
+					CacheRead:     computeStats(series["cache_read"]),
+					CacheCreation: computeStats(series["cache_creation"]),
+				},
+				CostUSD:       round4(adapterCost[stage][adapterKey]),
+				StageCount:    adapterCount[stage][adapterKey],
+				CostUnstamped: adapterCostUnstamped[stage][adapterKey],
+			}
 		}
 		result.StageMetrics[stage] = agg
 	}

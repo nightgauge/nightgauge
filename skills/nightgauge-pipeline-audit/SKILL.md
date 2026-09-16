@@ -58,15 +58,16 @@ results into human-readable findings.
 
 ### Core Options
 
-| Argument           | Description                                    | Default |
-| ------------------ | ---------------------------------------------- | ------- |
-| `--runs N`         | Analyze last N pipeline runs                   | `10`    |
-| `--since DATE`     | Analyze runs since date (YYYY-MM-DD)           | -       |
-| `--issue N`        | Analyze runs for specific issue number         | -       |
-| `--create-issues`  | Auto-create GitHub issues for high findings    | `false` |
-| `--severity LEVEL` | Minimum severity for `--create-issues`         | `high`  |
-| `--format FORMAT`  | Output format: `summary`, `json`, `both`       | `both`  |
-| `--compare DATE`   | Compare metrics before/after date (YYYY-MM-DD) | -       |
+| Argument           | Description                                                | Default   |
+| ------------------ | ---------------------------------------------------------- | --------- |
+| `--runs N`         | Analyze last N pipeline runs                               | `10`      |
+| `--since DATE`     | Analyze runs since date (YYYY-MM-DD)                       | -         |
+| `--issue N`        | Analyze runs for specific issue number                     | -         |
+| `--adapter NAME`   | Filter the per-stage adapter breakdown to a single adapter | `-` (all) |
+| `--create-issues`  | Auto-create GitHub issues for high findings                | `false`   |
+| `--severity LEVEL` | Minimum severity for `--create-issues`                     | `high`    |
+| `--format FORMAT`  | Output format: `summary`, `json`, `both`                   | `both`    |
+| `--compare DATE`   | Compare metrics before/after date (YYYY-MM-DD)             | -         |
 
 ### Examples
 
@@ -83,6 +84,9 @@ results into human-readable findings.
 # Analyze a specific issue's pipeline runs
 /nightgauge:pipeline-audit --issue 628
 
+# Scope the per-stage adapter breakdown to a single adapter
+/nightgauge:pipeline-audit --adapter codex
+
 # Generate improvement issues for high-severity findings
 /nightgauge:pipeline-audit --create-issues
 
@@ -95,6 +99,15 @@ results into human-readable findings.
 # Compare metrics before/after an optimization
 /nightgauge:pipeline-audit --compare 2026-03-01
 ```
+
+`nightgauge pipeline aggregate --json` output includes
+`stage_metrics.<stage>.adapter_usage`, a per-adapter token/cost breakdown keyed
+by adapter name, with a reserved `"unknown"` key for stage entries that carry
+no adapter stamp. Each bucket's `cost_unstamped_count` marks how many of its
+stage entries had a placeholder (unpriceable) cost — the persisted substitute
+for the issue's `UsagePartial` field, which is execution-layer-only and never
+reaches this schema (see `internal/state/history.go`'s `V2StageTokens.CostUnstamped`
+doc comment).
 
 ---
 

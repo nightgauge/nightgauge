@@ -64,6 +64,22 @@ func withStageTokens(r state.V2RunRecord, stage string, input, output, cacheRead
 	return r
 }
 
+// withStageTokensAdapter extends withStageTokens with the adapter/cost
+// dimension (Adapter, CostUSD, CostUnstamped) exercised by the
+// AdapterUsage breakdown.
+func withStageTokensAdapter(r state.V2RunRecord, stage string, input, output, cacheRead, cacheCreation int, adapter string, costUSD float64, costUnstamped bool) state.V2RunRecord {
+	r.Tokens.PerStage[stage] = state.V2StageTokens{
+		Input:         input,
+		Output:        output,
+		CacheRead:     cacheRead,
+		CacheCreation: cacheCreation,
+		Adapter:       adapter,
+		CostUSD:       costUSD,
+		CostUnstamped: costUnstamped,
+	}
+	return r
+}
+
 func TestAggregate_RunsLimitTrimsLastN(t *testing.T) {
 	records := []state.V2RunRecord{
 		fixtureRecord(1, "2026-04-20T10:00:00Z", "2026-04-20T10:01:00Z"),
@@ -105,6 +121,96 @@ func TestAggregate_IssueFilter(t *testing.T) {
 		if r.IssueNumber != 100 {
 			t.Errorf("found IssueNumber=%d in filtered output", r.IssueNumber)
 		}
+	}
+}
+
+func TestAggregate_MixedAdapterCorpus(t *testing.T) {
+	r1 := fixtureRecord(1, "2026-04-20T10:00:00Z", "2026-04-20T10:01:00Z")
+	r1 = withStage(r1, "feature-dev", "complete", 1000)
+	r1 = withStageTokensAdapter(r1, "feature-dev", 100, 200, 10, 5, "claude", 0.05, false)
+
+	r2 := fixtureRecord(2, "2026-04-21T10:00:00Z", "2026-04-21T10:01:00Z")
+	r2 = withStage(r2, "feature-dev", "complete", 1000)
+	r2 = withStageTokensAdapter(r2, "feature-dev", 300, 400, 0, 0, "codex", 0.10, false)
+
+	r3 := fixtureRecord(3, "2026-04-22T10:00:00Z", "2026-04-22T10:01:00Z")
+	r3 = withStage(r3, "feature-dev", "complete", 1000)
+	r3 = withStageTokensAdapter(r3, "feature-dev", 50, 60, 0, 0, "gemini", 0.02, false)
+
+	res, _ := Aggregate([]state.V2RunRecord{r1, r2, r3}, Options{})
+
+	agg := res.StageMetrics["feature-dev"].AdapterUsage
+	if got := agg["claude"].TokenStats.Input.Count; got != 1 {
+		t.Fatalf("claude input count = %d, want 1", got)
+	}
+	if got := agg["claude"].TokenStats.Input.Mean; got != 100 {
+		t.Errorf("claude input mean = %v, want 100", got)
+	}
+	if got := agg["codex"].CostUSD; got != 0.10 {
+		t.Errorf("codex cost = %v, want 0.10", got)
+	}
+	if got := agg["gemini"].StageCount; got != 1 {
+		t.Errorf("gemini stage count = %d, want 1", got)
+	}
+	if _, ok := agg["unknown"]; ok {
+		t.Errorf("unexpected unknown bucket in mixed-adapter corpus")
+	}
+}
+
+func TestAggregate_UnstampedAdapterCorpus(t *testing.T) {
+	r1 := fixtureRecord(1, "2026-04-20T10:00:00Z", "2026-04-20T10:01:00Z")
+	r1 = withStage(r1, "feature-dev", "complete", 1000)
+	r1 = withStageTokensAdapter(r1, "feature-dev", 100, 200, 0, 0, "", 0.0, true)
+
+	r2 := fixtureRecord(2, "2026-04-21T10:00:00Z", "2026-04-21T10:01:00Z")
+	r2 = withStage(r2, "feature-dev", "complete", 1000)
+	r2 = withStageTokensAdapter(r2, "feature-dev", 150, 250, 0, 0, "claude", 0.05, false)
+
+	res, _ := Aggregate([]state.V2RunRecord{r1, r2}, Options{})
+
+	agg := res.StageMetrics["feature-dev"].AdapterUsage
+	unknown, ok := agg[UnknownAdapterKey]
+	if !ok {
+		t.Fatalf("expected %q bucket to be present", UnknownAdapterKey)
+	}
+	if unknown.StageCount != 1 {
+		t.Errorf("unknown stage count = %d, want 1", unknown.StageCount)
+	}
+	if unknown.CostUnstamped != 1 {
+		t.Errorf("unknown cost_unstamped_count = %d, want 1", unknown.CostUnstamped)
+	}
+	if _, ok := agg["claude"]; !ok {
+		t.Errorf("expected claude bucket to be present distinct from unknown")
+	}
+	if claude := agg["claude"]; claude.CostUnstamped != 0 {
+		t.Errorf("claude cost_unstamped_count = %d, want 0", claude.CostUnstamped)
+	}
+}
+
+func TestAggregate_FilterByAdapter(t *testing.T) {
+	r1 := fixtureRecord(1, "2026-04-20T10:00:00Z", "2026-04-20T10:01:00Z")
+	r1 = withStage(r1, "feature-dev", "complete", 1000)
+	r1 = withStageTokensAdapter(r1, "feature-dev", 100, 200, 0, 0, "claude", 0.05, false)
+
+	r2 := fixtureRecord(2, "2026-04-21T10:00:00Z", "2026-04-21T10:01:00Z")
+	r2 = withStage(r2, "feature-dev", "complete", 1000)
+	r2 = withStageTokensAdapter(r2, "feature-dev", 300, 400, 0, 0, "codex", 0.10, false)
+
+	res, _ := Aggregate([]state.V2RunRecord{r1, r2}, Options{Adapter: "codex"})
+
+	if res.Filters.Adapter != "codex" {
+		t.Errorf("Filters.Adapter = %q, want codex", res.Filters.Adapter)
+	}
+	agg := res.StageMetrics["feature-dev"]
+	if _, ok := agg.AdapterUsage["claude"]; ok {
+		t.Errorf("claude bucket should be excluded by adapter filter")
+	}
+	if _, ok := agg.AdapterUsage["codex"]; !ok {
+		t.Errorf("codex bucket should be present")
+	}
+	// Status counts (unfiltered) still reflect both runs.
+	if agg.Status["complete"] != 2 {
+		t.Errorf("Status[complete] = %d, want 2 (unfiltered by adapter)", agg.Status["complete"])
 	}
 }
 

@@ -12903,6 +12903,7 @@ func pipelineAggregateCmd() *cobra.Command {
 		since      string
 		until      string
 		issue      int
+		adapter    string
 		include    string
 		jsonOutput bool
 		workdir    string
@@ -12921,6 +12922,10 @@ Currently only "analysis" is recognized (size-accuracy + weekly-trend block,
 matching the audit skill's Issue #1591 logic). Unknown values produce a warning
 in the output rather than an error — forward-compatible for future blocks like
 "signals" or "gates".
+
+The --adapter flag scopes each stage's adapter_usage breakdown to a single
+adapter name (empty = all); it does not exclude whole runs since one run can
+span multiple adapters across its stages.
 
 Exit codes:
   0  aggregate completed (zero records is not an error)
@@ -12955,6 +12960,7 @@ Exit codes:
 				Since:           since,
 				Until:           until,
 				Issue:           issue,
+				Adapter:         adapter,
 				IncludeAnalysis: includeAnalysis,
 			})
 			if len(extraWarnings) > 0 {
@@ -12993,6 +12999,7 @@ Exit codes:
 	cmd.Flags().StringVar(&since, "since", "", "Lower bound YYYY-MM-DD (filename pre-filter)")
 	cmd.Flags().StringVar(&until, "until", "", "Upper bound YYYY-MM-DD (forward-compat)")
 	cmd.Flags().IntVar(&issue, "issue", 0, "Filter to a single issue number (0 = all)")
+	cmd.Flags().StringVar(&adapter, "adapter", "", "Filter the per-stage adapter_usage breakdown to a single adapter (empty = all)")
 	cmd.Flags().StringVar(&include, "include", "", "Optional analysis blocks (comma-separated). Currently: analysis")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output result as JSON (parsed by skills)")
 	cmd.Flags().StringVar(&workdir, "workdir", "", "History root (default: current working directory)")
@@ -13006,9 +13013,9 @@ func printPipelineAggregateHuman(r *pipeline.Result) {
 		fmt.Printf(" (%s..%s)", r.DateFrom, r.DateTo)
 	}
 	fmt.Println()
-	if r.Filters.Runs > 0 || r.Filters.Since != "" || r.Filters.Until != "" || r.Filters.Issue > 0 {
-		fmt.Printf("filters: runs=%d since=%q until=%q issue=%d\n",
-			r.Filters.Runs, r.Filters.Since, r.Filters.Until, r.Filters.Issue)
+	if r.Filters.Runs > 0 || r.Filters.Since != "" || r.Filters.Until != "" || r.Filters.Issue > 0 || r.Filters.Adapter != "" {
+		fmt.Printf("filters: runs=%d since=%q until=%q issue=%d adapter=%q\n",
+			r.Filters.Runs, r.Filters.Since, r.Filters.Until, r.Filters.Issue, r.Filters.Adapter)
 	}
 	fmt.Println()
 	fmt.Printf("  %-20s %6s %12s %12s %10s\n", "stage", "count", "median ms", "p90 ms", "failures")
@@ -13018,6 +13025,20 @@ func printPipelineAggregateHuman(r *pipeline.Result) {
 		fmt.Printf("  %-20s %6d %12.0f %12.0f %10d\n",
 			stage, agg.DurationStats.Count, agg.DurationStats.Median,
 			agg.DurationStats.P90, failures)
+		adapterKeys := make([]string, 0, len(agg.AdapterUsage))
+		for k := range agg.AdapterUsage {
+			adapterKeys = append(adapterKeys, k)
+		}
+		sort.Strings(adapterKeys)
+		for _, k := range adapterKeys {
+			au := agg.AdapterUsage[k]
+			unstampedNote := ""
+			if au.CostUnstamped > 0 {
+				unstampedNote = fmt.Sprintf(" (cost_unstamped=%d)", au.CostUnstamped)
+			}
+			fmt.Printf("      %-16s stages=%-4d cost=$%.4f%s\n",
+				k, au.StageCount, au.CostUSD, unstampedNote)
+		}
 	}
 	if r.Analysis != nil {
 		fmt.Println()
