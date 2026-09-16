@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeEventsFile(t *testing.T, dir, name, content string) string {
@@ -261,6 +262,195 @@ func TestEventsFileCapsAtOneMiBWithOneTruncatedLine(t *testing.T) {
 	}
 	if permissionAsks != 0 {
 		t.Errorf("got %d permission_ask events past the cap, want 0 (writing must have stopped)", permissionAsks)
+	}
+}
+
+// --- AppendRunEvent: the Go-side writer (#1810) ---
+
+// TestAppendRunEventWritesALineTheReaderAccepts: the second writer's output
+// is indistinguishable from session.js's to ReadRunEvents — same version,
+// same ISO-8601 millisecond timestamp shape, same fields.
+func TestAppendRunEventWritesALineTheReaderAccepts(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "events.jsonl")
+	if err := AppendRunEvent(p, Event{Kind: "stop_verify", SessionID: "ses_go_1", Child: true, Detail: map[string]any{"verdict": "blocked"}}); err != nil {
+		t.Fatal(err)
+	}
+	events, err := ReadRunEvents(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1: %+v", len(events), events)
+	}
+	e := events[0]
+	if e.V != 1 || e.Kind != "stop_verify" || e.SessionID != "ses_go_1" || !e.Child {
+		t.Errorf("event = %+v, want v=1 kind=stop_verify session_id=ses_go_1 child=true", e)
+	}
+	if verdict, _ := e.Detail["verdict"].(string); verdict != "blocked" {
+		t.Errorf("detail.verdict = %v, want blocked", e.Detail["verdict"])
+	}
+	// Date.toISOString()'s own shape, so a reader cannot tell the two writers
+	// apart by their timestamps.
+	if _, err := time.Parse("2006-01-02T15:04:05.000Z", e.TS); err != nil {
+		t.Errorf("ts = %q, want a JavaScript Date.toISOString()-shaped timestamp: %v", e.TS, err)
+	}
+	// 0600, like every line session.js writes.
+	info, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("events file mode = %v, want 0600", info.Mode().Perm())
+	}
+}
+
+// TestAppendRunEventRefusesToBreakTheRetentionContract: the Go writer
+// enforces the SAME contract the reader does, so a caller cannot smuggle
+// transcript text into the file through the process that computes a verdict.
+func TestAppendRunEventRefusesToBreakTheRetentionContract(t *testing.T) {
+	for name, detail := range map[string]map[string]any{
+		"text key":  {"text": "SECRET-TRANSCRIPT-TEXT"},
+		"nested":    {"verdict": map[string]any{"reason": "3 tasks incomplete in PLAN.md"}},
+		"oversized": {"verdict": strings.Repeat("x", detailValueMaxLen+1)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := filepath.Join(t.TempDir(), "events.jsonl")
+			if err := AppendRunEvent(p, Event{Kind: "stop_verify", Detail: detail}); err == nil {
+				t.Fatal("AppendRunEvent accepted a detail the reader would drop; the writer must refuse it")
+			}
+			if _, err := os.Stat(p); !os.IsNotExist(err) {
+				t.Errorf("the events file was created anyway: %v", err)
+			}
+		})
+	}
+}
+
+// TestAppendRunEventCapsAtOneMiBWithOneTruncatedLine: the Go writer honours
+// the same 1 MiB cap and the same single "truncated" sentinel session.js
+// does — and, unlike the JS side's in-process flag, gets it right across
+// process boundaries, since every `hook stop-verify` child is a fresh
+// process. Three separate appends past the cap must leave exactly one
+// truncated line.
+func TestAppendRunEventCapsAtOneMiBWithOneTruncatedLine(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "events.jsonl")
+	line := `{"v":1,"ts":"t","kind":"skill","session_id":"seed","detail":{"skill":"x"}}` + "\n"
+	var seed strings.Builder
+	for seed.Len() < eventsMaxBytes+1024 {
+		seed.WriteString(line)
+	}
+	if err := os.WriteFile(p, []byte(seed.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 3; i++ {
+		if err := AppendRunEvent(p, Event{Kind: "stop_verify", Detail: map[string]any{"verdict": "complete"}}); err != nil {
+			t.Fatalf("append %d: %v", i, err)
+		}
+	}
+
+	events, err := ReadRunEvents(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	truncated, stopVerifies := 0, 0
+	for _, e := range events {
+		switch e.Kind {
+		case EventsTruncatedKind:
+			truncated++
+		case "stop_verify":
+			stopVerifies++
+		}
+	}
+	if truncated != 1 {
+		t.Errorf("got %d truncated lines after 3 appends past the cap, want exactly 1", truncated)
+	}
+	if stopVerifies != 0 {
+		t.Errorf("got %d stop_verify events past the cap, want 0 (writing must have stopped)", stopVerifies)
+	}
+}
+
+// TestAppendRunEventDisabledPathIsANoOp: an empty path is the events file
+// being disabled for this run, not a failure — the same fail-quiet rule
+// session.js's own eventsPath() applies.
+func TestAppendRunEventDisabledPathIsANoOp(t *testing.T) {
+	if err := AppendRunEvent("", Event{Kind: "stop_verify"}); err != nil {
+		t.Errorf("AppendRunEvent(\"\") = %v, want nil", err)
+	}
+}
+
+// TestSanitizeEventIDKeepsOnlyOpaqueIdentifiers: a session id reaches the
+// writer through a child process's argv, so its shape is re-checked there.
+func TestSanitizeEventIDKeepsOnlyOpaqueIdentifiers(t *testing.T) {
+	for _, keep := range []string{"ses_f587a64abffeWo2wDy3QSY38pV", "a", "A1.b-c:d"} {
+		if got := SanitizeEventID(keep); got != keep {
+			t.Errorf("SanitizeEventID(%q) = %q, want it kept", keep, got)
+		}
+	}
+	for _, drop := range []string{"", " ses_1", "the user wrote: deploy key is PLACEHOLDER", "ses/1", strings.Repeat("s", 129)} {
+		if got := SanitizeEventID(drop); got != "" {
+			t.Errorf("SanitizeEventID(%q) = %q, want \"\"", drop, got)
+		}
+	}
+}
+
+// TestWaitForRunEventReturnsEarlyAndBounds: the reader contract for a file
+// whose terminal line is written by a process that outlives the CLI.
+func TestWaitForRunEventReturnsEarlyAndBounds(t *testing.T) {
+	t.Run("returns as soon as the kind appears", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "events.jsonl")
+		if err := AppendRunEvent(p, Event{Kind: "idle"}); err != nil {
+			t.Fatal(err)
+		}
+		go func() {
+			time.Sleep(150 * time.Millisecond)
+			_ = AppendRunEvent(p, Event{Kind: "stop_verify", Detail: map[string]any{"verdict": "complete"}})
+		}()
+		started := time.Now()
+		events, err := WaitForRunEvent(p, "stop_verify", 10*time.Second)
+		elapsed := time.Since(started)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(events) != 2 {
+			t.Fatalf("got %d events, want 2: %+v", len(events), events)
+		}
+		if elapsed > 5*time.Second {
+			t.Errorf("WaitForRunEvent took %s; it must return as soon as the event lands, not wait out its bound", elapsed)
+		}
+	})
+
+	t.Run("returns what it has when the bound expires", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "events.jsonl")
+		if err := AppendRunEvent(p, Event{Kind: "idle"}); err != nil {
+			t.Fatal(err)
+		}
+		events, err := WaitForRunEvent(p, "stop_verify", 100*time.Millisecond)
+		if err != nil {
+			t.Fatalf("an expired bound must not be an error: %v", err)
+		}
+		if len(events) != 1 || events[0].Kind != "idle" {
+			t.Errorf("events = %+v, want the one idle event it did have", events)
+		}
+	})
+}
+
+// TestRunEventsPathFromEnv: the child resolves the same file the plugin
+// does, from the two variables it inherits, applying EventsPath's rules.
+func TestRunEventsPathFromEnv(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(RunOutputFileEnvVar, filepath.Join(dir, "output", "run.json"))
+	t.Setenv(RunIDEnvVar, "run-env-1")
+	got, ok := RunEventsPathFromEnv()
+	if !ok {
+		t.Fatal("RunEventsPathFromEnv refused an absolute output file")
+	}
+	if want := filepath.Join(dir, "output", EventsFileName("run-env-1")); got != want {
+		t.Errorf("RunEventsPathFromEnv() = %q, want %q", got, want)
+	}
+
+	t.Setenv(RunIDEnvVar, "")
+	if _, ok := RunEventsPathFromEnv(); ok {
+		t.Error("RunEventsPathFromEnv accepted an empty run id; outside a run the file is disabled")
 	}
 }
 

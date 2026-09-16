@@ -514,7 +514,15 @@ func assertCompactionStubGreen(t *testing.T, result compactionStubResult) {
 		t.Errorf("the run logged %d loop steps, want at most %d (see loopStepsWantMax's own comment on why #1625's steps cap of 8 is not itself the bound); a runaway continuation is exactly what compaction.autocontinue suppression exists to prevent", n, loopStepsWantMax)
 	}
 
-	events, err := ReadRunEvents(result.eventsPath)
+	// The run's terminal "stop_verify" line is written by the detached
+	// `nightgauge hook stop-verify --emit-event` child, which by design
+	// outlives the CLI (#1810: opencode 1.18.30 neither awaits a plugin event
+	// hook's promise nor lives more than ~10 ms past publishing
+	// session.idle, so no in-process shape can record it). Reading the file
+	// the instant `opencode run` returns would be racing that child, not
+	// observing a lost event — so this is events.go's own reader contract,
+	// WaitForRunEvent, exactly as #1653's reader must use it.
+	events, err := WaitForRunEvent(result.eventsPath, "stop_verify", stopVerifyWaitBound)
 	if err != nil {
 		t.Fatalf("reading events file %s: %v", result.eventsPath, err)
 	}

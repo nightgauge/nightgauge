@@ -21,6 +21,13 @@ import (
 // of adding a second TestMain, which would not compile alongside this one.
 var canaryStubProviderCleanup func()
 
+// integrationNightgaugeBinaryCleanup removes the real nightgauge binary
+// useRealNightgaugeBinary builds once per test process (#1810). Declared
+// untagged, and set only from the opencode_integration/canary-tagged file
+// that builds it, for the same reason canaryStubProviderCleanup is: package
+// execution has exactly one TestMain.
+var integrationNightgaugeBinaryCleanup func()
+
 // TestMain makes the forge an OpenCode stage reads its MCP servers from
 // refuse every read for the whole test binary: the manager's OpenCode
 // dispatches record a repository, and none of them may reach GitHub. A test
@@ -36,6 +43,9 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	if canaryStubProviderCleanup != nil {
 		canaryStubProviderCleanup()
+	}
+	if integrationNightgaugeBinaryCleanup != nil {
+		integrationNightgaugeBinaryCleanup()
 	}
 	restoreDiscovery()
 	restore()

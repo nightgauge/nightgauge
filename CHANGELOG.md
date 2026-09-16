@@ -81,6 +81,50 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The OpenCode plugin's `session.js` (#1641) spawned every telemetry verb
+  (`hook stop-verify` on `session.idle`, `hook notify` on a permission ask,
+  `hook skill-usage` on a skill tool call) with `spawnSync`, which blocks
+  opencode's entire single-threaded event loop for as long as the child runs,
+  up to its 5s bound. `runHook` now spawns asynchronously
+  (`node:child_process.spawn`, not `spawnSync`) with the same 5s bound,
+  killing the child's whole process group on timeout so a notify verb's own
+  `osascript`/`notify-send` grandchild cannot outlive it, and registers no-op
+  `'error'` listeners on the child's stdin and stdout before writing: without
+  them, a telemetry child that exited before reading its stdin turned the
+  write's EPIPE into an unhandled `'error'` event that crashed the whole
+  opencode process — a module this repository's own comments call "telemetry,
+  it is never a gate" taking the host down with it (#1641, #1810, #1813)
+- `session.idle`'s stop-verify verdict is now written by the verb itself,
+  not by the plugin. Probing the pinned opencode 1.18.30 binary settled two
+  things: it does not await the promise a plugin's `event` hook returns, and
+  a one-shot `opencode run` exits within ~10ms of publishing `session.idle`
+  (a plugin whose event hook awaited 1200ms never reached the line after its
+  await; a `.then()` scheduled 20ms out never ran). So neither awaiting the
+  verb inline nor recording it from a continuation can survive that exit, and
+  `TestCompactionAutocontinueSuppressionAgainstRealOpenCode` read `0
+stop_verify events, want exactly 1`. The plugin now spawns `nightgauge hook
+stop-verify --emit-event --session-id <id> [--child]` detached and
+  unref'd and never waits on it at all, so no dispatch can be slowed by a
+  slow or hung verb; that child appends its own `stop_verify` line through
+  the new `opencodeplugin.AppendRunEvent`, honouring the same 1 MiB cap, the
+  same single `truncated` sentinel and the same retention contract (ids,
+  counts and verdict codes only, never the block reason), and bounds its own
+  evaluation at 5s with a `timeout` verdict rather than hanging. The plugin
+  still writes the one verdict it can determine synchronously, `no_bin`.
+  Readers — `#1653` included — must use the new
+  `opencodeplugin.WaitForRunEvent`, because a run's events file now finalizes
+  shortly after the OpenCode CLI exits (#1641, #1810)
+- `NIGHTGAUGE_BIN`, which the manager exports to every stage and the OpenCode
+  plugin SPAWNS, resolved under `go test` to the Go test binary. Running
+  `internal/execution`'s own test binary as `… hook stop-verify --workdir X`
+  re-runs that entire suite — measured at 104.5s of wall clock, forking git
+  into other tests' temp directories, and left orphaned once the CLI died
+  with the plugin's 5s bound. That, not any production cost, is the "5s hook
+  verb" that pushed `TestOpenCodeIntegrationInheritUserConfigOptIn` towards
+  its 20s bound; a real `nightgauge hook stop-verify` answers in ~70ms warm.
+  The manager now resolves the export through an injectable `hostExecutable`,
+  and every OpenCode integration case that dispatches the real CLI points it
+  at a real `nightgauge` build (#1810)
 - `adapter-canary.yml` pinned `actions/setup-node` at a SHA
   (`fc7e5e49f31379e40cf9b708e5abd6ebfad0e0fd`, tagged `v5.0.0`) that GitHub
   cannot resolve, failing both the `flag-contracts` and `opencode-canary` legs

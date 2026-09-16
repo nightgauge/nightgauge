@@ -2111,6 +2111,70 @@ its `-run` regex did not match either name, so nothing in CI would have
 caught a regression in either. Both, plus the new
 `TestPermissionAskEventAgainstRealOpenCode`, are now named in that step.
 
+## OpenCode does not await plugin hook promises (amendment 2026-09-15, #1810)
+
+Two assumptions underneath the session-lifecycle plugin turned out to be
+wrong. Both were settled by probing the pinned 1.18.30 binary directly, not
+by reading its source or reasoning from the plugin type declarations.
+
+**OpenCode does not await the promise a plugin's `event` hook returns, and a
+one-shot `opencode run` exits within ~10 ms of publishing `session.idle`.** A
+probe plugin registered as the only plugin in the run, whose `event` hook
+`await`ed a bounded 1200 ms sleep and then wrote a marker file, never reached
+the line after its `await`; the run's total wall clock was identical
+(1.53 s vs 1.51 s) to the same plugin returning immediately. A continuation
+scheduled with `.then()` landed only at a 0 ms delay (9 ms after the hook
+returned) and was already lost at 20 ms. So on the terminal event, nothing
+the plugin schedules — an `await`, a `.then()`, a timer — can be relied on to
+run at all, and no timer of the plugin's can bound a child it spawned either.
+
+That is what made #1641's fix-forward shape (record the verdict from a
+`.then()` continuation on an in-process spawn) produce `got 0 stop_verify
+events, want exactly 1` against
+`TestCompactionAutocontinueSuppressionAgainstRealOpenCode`. Awaiting the verb
+inline instead is no better, and for the same reason.
+
+**Decision.** The `stop_verify` verdict is written by the process that
+computes it. `session.js` spawns `nightgauge hook stop-verify --emit-event
+--session-id <id> [--child]` detached and `unref`'d, and does not wait on it
+at all; that child appends its own `stop_verify` line through
+`opencodeplugin.AppendRunEvent`, honouring the same 1 MiB cap, the same
+single `truncated` sentinel and the same retention contract (ids, counts and
+verdict codes — never `EvaluateStopHookOutput`'s `Reason`, which is
+plan-derived text), and bounds its own evaluation at 5 s, recording
+`verdict: "timeout"` rather than hanging. The one verdict the plugin still
+owns is `no_bin`, which it writes synchronously after a synchronous
+executability check, because on a terminal event there is no later tick in
+which to learn it from `spawn`'s asynchronous `'error'` event.
+
+The consequence for readers, #1653 included, is that a run's events file
+finalizes shortly AFTER the OpenCode CLI exits. `events.go` grows
+`WaitForRunEvent` for exactly that, and both the real-binary suite and the
+Node-harness suite read through it.
+
+**The "5 s hook verb" was a test-harness artifact, not production cost.**
+`composeStageEnv` exported `NIGHTGAUGE_BIN` from `os.Executable()`, which
+under `go test` is the Go TEST binary — and the plugin SPAWNS that value.
+Running `internal/execution`'s own test binary as `… hook stop-verify
+--workdir X` re-runs the entire suite: measured at 104.5 s of wall clock,
+forking git into other tests' temp directories, exiting 1, and orphaned past
+the test that started it once the CLI died with the plugin's 5 s bound. A
+real `nightgauge hook stop-verify` answers in ~70 ms warm (0.47 s cold). The
+manager now resolves that export through an injectable `hostExecutable`, and
+every integration case that dispatches the real CLI points it at a real
+`nightgauge` build (`useRealNightgaugeBinary`).
+`TestOpenCodeIntegrationHostBinaryIsARealNightgauge` asserts it by running
+the exact argv the plugin runs.
+
+**CI masking.** The regression reached `main` green because
+`.github/workflows/ci.yml`'s "OpenCode integration (opencode-ai@1.18.30)"
+step is guarded only by `if: needs.changes.outputs.run_heavy != 'false'`.
+GitHub Actions skips a step with no `always()`/`failure()` condition once an
+earlier step in the same job has failed, so on a run where the main Go test
+step failed first, the OpenCode integration step never executed and its
+result was never part of the verdict. Filing that separately; it is not
+fixed here.
+
 ## Consequences
 
 - The model layer's one-adapter-one-provider assumption becomes a special
