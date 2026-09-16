@@ -41,8 +41,41 @@ export const OPENCODE_PERMISSION_DENIED_MARKER = "[permission-denied]";
 /** The stream carried an `error` event: OpenCode reported the run failed. */
 export const OPENCODE_ERROR_EVENT_MARKER = "[opencode-error-event]";
 
-/** The error OpenCode 1.18.30 gives a tool call whose permission request it rejected. */
+/**
+ * The error OpenCode 1.18.30 gives a tool call whose permission request it
+ * rejected because the permission resolved to "ask" and a headless run
+ * auto-rejects it. Bundled source also has this exact text with " with the
+ * following feedback: ${this.feedback}" appended for an interactive human's
+ * own rejection, so this is matched as a PREFIX (isOpenCodeRejectedToolError
+ * below), never exact equality.
+ */
 const OPENCODE_REJECTED_TOOL_ERROR = "The user rejected permission to use this specific tool call.";
+
+/**
+ * The DIFFERENT error text 1.18.30 gives a tool call whose permission
+ * resolved to "deny" directly (bundled source: `The user has specified a
+ * rule which prevents you from using this specific tool call. Here are some
+ * of the relevant rules ${JSON.stringify(this.ruleset)}`) — nightgauge's own
+ * generated OpenCode permission map never sets "ask" (ADR-022 § 9), so every
+ * stage running under it hits this path, never OPENCODE_REJECTED_TOOL_ERROR's.
+ * A prefix, matched with startsWith: the ruleset list trails it dynamically
+ * per call. Go parity: internal/execution/stream.go's
+ * openCodeRuleDeniedToolErrorPrefix (#1638 fix round finding, AC3).
+ */
+const OPENCODE_RULE_DENIED_TOOL_ERROR_PREFIX =
+  "The user has specified a rule which prevents you from using this specific tool call.";
+
+/**
+ * Reports whether errText is a tool_use event's error for a call OpenCode's
+ * own permission config refused — either text above, "ask" auto-rejected or
+ * "deny" matched directly.
+ */
+function isOpenCodeRejectedToolError(errText: string): boolean {
+  return (
+    errText.startsWith(OPENCODE_REJECTED_TOOL_ERROR) ||
+    errText.startsWith(OPENCODE_RULE_DENIED_TOOL_ERROR_PREFIX)
+  );
+}
 
 /** The event types opencode 1.18.30 writes. */
 const OPENCODE_KNOWN_EVENTS: ReadonlySet<string> = new Set([
@@ -149,6 +182,15 @@ export interface OpenCodeStreamState {
   reportedCostUsd: number;
   /** tool_use events OpenCode failed with its own permission-rejection error. */
   rejectedToolCalls: number;
+  /**
+   * The FIRST rejected tool_use event's own `part.tool` (opencode's own
+   * lowercase name: "bash", "edit", "apply_patch", ...), `undefined` when
+   * the event named none. classifyOpenCodeRun's own fallback source for the
+   * marker (AC3, #1638 fix round) when stderr carries no auto-reject notice
+   * at all — a "deny" match never prints one. Go parity:
+   * OpenCodeStream.RejectedTool in opencode_usage.go/stream.go.
+   */
+  rejectedTool?: string;
   /** The `error.name` of every error event, in order ("unknown" when it has none). */
   errorEvents: string[];
   /** The text parts' text, joined: the stage's display output, never classified. */
@@ -211,8 +253,15 @@ export function parseOpenCodeStream(
     switch (type) {
       case "tool_use": {
         const state = part && isRecord(part.state) ? part.state : undefined;
-        if (state?.status === "error" && state.error === OPENCODE_REJECTED_TOOL_ERROR) {
+        if (
+          state?.status === "error" &&
+          typeof state.error === "string" &&
+          isOpenCodeRejectedToolError(state.error)
+        ) {
           s.rejectedToolCalls++;
+          if (s.rejectedTool === undefined && typeof part?.tool === "string" && part.tool !== "") {
+            s.rejectedTool = part.tool;
+          }
         }
         break;
       }
@@ -316,6 +365,20 @@ export function openCodeToolsAllowed(allowedTools: readonly string[] = []): Read
 
 function plain(line: string): string {
   return line.replace(ANSI_ESCAPE_RE, "").trim();
+}
+
+/**
+ * Maps a rejected tool_use event's own `part.tool` name (opencode's own
+ * lowercase tool id, {@link OpenCodeStreamState.rejectedTool}) to the
+ * permission key {@link rejectionMarker} classifies by. 1.18.30 has no
+ * permission of its own for "write" or "apply_patch": both are governed by
+ * the same "edit" permission the generated map's own "edit" key controls
+ * (ADR-022 § 9). Every other tool name already equals its own permission
+ * key, so it passes through unchanged. Go parity:
+ * openCodeToolRejectionPermission in opencode_usage.go.
+ */
+function openCodeToolRejectionPermission(tool: string): string {
+  return tool === "write" || tool === "apply_patch" ? "edit" : tool;
 }
 
 function rejectionMarker(permission: string, allowed: ReadonlySet<string>): string {
@@ -995,10 +1058,21 @@ export async function classifyOpenCodeRun(input: OpenCodeRunInput): Promise<Open
   }
   let marker = stderr.marker;
   if (stream.rejectedToolCalls > 0 && marker === undefined) {
+    // A "deny" match (this map's own rejection shape, ADR-022 § 9's
+    // "pattern matching" amendment) never prints the "auto-rejecting"
+    // notice a stderr-only read depends on. AC3 (#1638 fix round): the
+    // rejected tool_use event's own part.tool names the marker instead of
+    // "unknown", mapped through openCodeToolRejectionPermission
+    // (write/apply_patch -> edit); an event that named no tool at all
+    // still falls back to "unknown".
     drift.add(
-      "the stream shows a tool call OpenCode rejected, but stderr carried no auto-reject line naming its permission"
+      "the stream shows a tool call OpenCode rejected, but stderr carried no auto-reject line naming its permission; classified from the rejected tool_use event's own tool name"
     );
-    marker = rejectionMarker("unknown", openCodeToolsAllowed(input.allowedTools));
+    const tool =
+      stream.rejectedTool !== undefined
+        ? openCodeToolRejectionPermission(stream.rejectedTool)
+        : "unknown";
+    marker = rejectionMarker(tool, openCodeToolsAllowed(input.allowedTools));
   }
   const noSteps = input.exitCode === 0 && stream.stepFinishes === 0;
   if (noSteps) {

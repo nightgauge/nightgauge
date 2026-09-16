@@ -53,6 +53,18 @@ type StreamEvent struct {
 	OriginalModel   string `json:"original_model,omitempty"`
 	FallbackModel   string `json:"fallback_model,omitempty"`
 	RefusalCategory string `json:"api_refusal_category,omitempty"`
+
+	// OpenCodeToolStartedAt is set only by ParseOpenCodeStreamLine on a
+	// tool_use event that carries part.state.time.start (epoch
+	// milliseconds): when the tool itself began, which 1.18.30 always
+	// observes strictly before the tool_use event's own emission (it emits
+	// tool_use only once a call has completed or errored). The Nightgauge
+	// OpenCode plugin handshake's late-sentinel check (manager.go,
+	// opencodeplugin.VerifyNotLate, #1635 fix round) reads this instead of
+	// the time its own reader saw the line, so a sentinel written while the
+	// tool was already running, but before the line reached the manager,
+	// still reads as late. Zero when absent or not opencode's stream.
+	OpenCodeToolStartedAt int64 `json:"-"`
 }
 
 // StreamMessage contains message-level data.
@@ -683,8 +695,21 @@ type openCodePart struct {
 // openCodeToolState is a tool_use part's outcome. Error is compared with
 // OpenCode's own rejection message only; it is never copied anywhere.
 type openCodeToolState struct {
-	Status string `json:"status"`
-	Error  string `json:"error"`
+	Status string              `json:"status"`
+	Error  string              `json:"error"`
+	Time   *openCodeToolTiming `json:"time"`
+}
+
+// openCodeToolTiming is a tool_use part's state.time (#1635 fix round):
+// Start is when the tool itself began, epoch milliseconds, observed earlier
+// than the tool_use event's own emission — 1.18.30 emits tool_use only once
+// a call completed or errored, so reading this instead of the manager's own
+// wall clock at the moment it saw the line is what lets the Nightgauge
+// OpenCode plugin handshake's late-sentinel check (VerifyNotLate,
+// internal/execution/opencodeplugin) catch a sentinel written between a
+// tool's real start and the line reaching the manager.
+type openCodeToolTiming struct {
+	Start int64 `json:"start"`
 }
 
 // OpenCodeTokens is OpenCode's per-step (step_finish part.tokens) and
@@ -702,8 +727,40 @@ type OpenCodeTokens struct {
 }
 
 // openCodeRejectedToolError is the error OpenCode 1.18.30 gives a tool call
-// whose permission request it rejected.
+// whose permission request it rejected because the permission resolved to
+// "ask" and a headless run auto-rejects it (captured verbatim:
+// testdata/opencode_auto_reject_stream.jsonl). Bundled source also has this
+// exact text with " with the following feedback: ${this.feedback}" appended
+// for an interactive human's own rejection — never a headless pipeline run's
+// own path, but openCodeIsRejectedToolError's prefix match (below) still
+// recognizes it, on the same reasoning as the "deny" prefix.
 const openCodeRejectedToolError = "The user rejected permission to use this specific tool call."
+
+// openCodeRuleDeniedToolErrorPrefix is the DIFFERENT error text 1.18.30 gives
+// a tool call whose permission resolved to "deny" directly (bundled source:
+// `The user has specified a rule which prevents you from using this specific
+// tool call. Here are some of the relevant rules ${JSON.stringify(this.ruleset)}`)
+// — #1638's own generated permission map never sets "ask" (ADR-022 § 9), so
+// every stage running under it hits this path, never openCodeRejectedToolError's
+// exact one. A bounded probe against the real binary
+// (internal/execution/adapters' opencode_guard_integration_test.go,
+// TestOpenCodeOutsideReadRejected) confirms the observed text matches.
+// #1638 fix round finding (AC3): before this constant existed,
+// RejectedToolCalls (below) never counted a "deny" rejection, and every
+// classification path that depends on it (openCodeOutcome.marker's
+// RejectedToolCalls fallback, opencode_usage.go's finish) silently reported
+// success for a stage a permission-map "deny" actually stopped.
+const openCodeRuleDeniedToolErrorPrefix = "The user has specified a rule which prevents you from using this specific tool call."
+
+// openCodeIsRejectedToolError reports whether errText is a tool_use event's
+// error for a call OpenCode's own permission config refused — either
+// rejection text above, "ask" auto-rejected or "deny" matched directly. Both
+// are matched as prefixes, never exact equality: the ruleset text trails the
+// "deny" text dynamically per call, and the interactive-feedback text trails
+// the "ask" text the same way.
+func openCodeIsRejectedToolError(errText string) bool {
+	return strings.HasPrefix(errText, openCodeRejectedToolError) || strings.HasPrefix(errText, openCodeRuleDeniedToolErrorPrefix)
+}
 
 // openCodeKnownEvents are the event types opencode 1.18.30 writes.
 var openCodeKnownEvents = map[string]bool{
@@ -732,6 +789,15 @@ type OpenCodeStream struct {
 	// permission-rejection error. Stderr, not this count, names the
 	// permission: this is only the cross-check that stderr said so.
 	RejectedToolCalls int
+	// RejectedTool is the FIRST rejected tool_use event's own part.tool
+	// (opencode's own lowercase name: "bash", "edit", "apply_patch", ...),
+	// empty when the event named none. It is opencode_usage.go's own
+	// fallback source for the classification marker (AC3, #1638 fix round)
+	// when stderr carried no auto-reject notice at all — a "deny" match
+	// never prints one (ADR-022 § 9's "The permission map's pattern
+	// matching" amendment), so this is the only source for every dispatch
+	// under a generated permission map.
+	RejectedTool string
 
 	drift driftLog
 }
@@ -789,6 +855,9 @@ func (acc *TokenAccumulator) ParseOpenCodeStreamLine(line string) (*StreamEvent,
 		s.SessionID = ev.SessionID
 	}
 	event := &StreamEvent{Type: ev.Type, SessionID: ev.SessionID}
+	if ev.Type == "tool_use" && ev.Part != nil && ev.Part.State != nil && ev.Part.State.Time != nil {
+		event.OpenCodeToolStartedAt = ev.Part.State.Time.Start
+	}
 	if !openCodeKnownEvents[ev.Type] {
 		s.Drift("unknown event type %s", quotedEventType(ev.Type))
 		return event, false
@@ -796,8 +865,11 @@ func (acc *TokenAccumulator) ParseOpenCodeStreamLine(line string) (*StreamEvent,
 	switch ev.Type {
 	case "tool_use":
 		if ev.Part != nil && ev.Part.State != nil && ev.Part.State.Status == "error" &&
-			ev.Part.State.Error == openCodeRejectedToolError {
+			openCodeIsRejectedToolError(ev.Part.State.Error) {
 			s.RejectedToolCalls++
+			if s.RejectedTool == "" && ev.Part.Tool != "" {
+				s.RejectedTool = ev.Part.Tool
+			}
 		}
 	case "step_finish":
 		s.StepFinishes++

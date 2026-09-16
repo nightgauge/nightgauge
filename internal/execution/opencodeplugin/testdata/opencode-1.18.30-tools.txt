@@ -1,0 +1,34 @@
+# Captured 2026-09-15 (#1640) against the pinned opencode 1.18.30 binary:
+#
+#   opencode debug agent build
+#
+# ...with HOME pointed at an empty, throwaway directory and stdout piped to
+# this file's `"tools"` object keys, one per line, sorted. This is the
+# `build` agent's own default tool-enable map (Nightgauge pipeline stages
+# dispatch through this agent) — the primary agent, "native": true, no
+# project or user config narrowing it, so this is the full built-in surface
+# `opencode debug agent build` reports for 1.18.30.
+#
+# This is NOT the full set of tool ids gates.js's TOOL_CLASSIFICATION table
+# covers: it omits `edit`/`write` (real, observed firing `tool.execute.before`
+# with `"tool":"edit"` in internal/execution/testdata/opencode_stream_
+# research_sample.jsonl and opencode_stream_cloud_capture.jsonl, both captured
+# before #1640, and named in docs/decisions/022-opencode-multi-provider-
+# adapter.md § 6's own "observed default tools" list) and `list`/`websearch`
+# (named in that same ADR's § 9 "explore" subagent permission dump). See
+# gates.js's TOOL_CLASSIFICATION comment for the reconciliation: the
+# classification table is the UNION of this capture and those other captures,
+# never a subset of only this file. TestToolClassificationCoversCapturedTools
+# (plugin_gates_test.go) asserts every id below is in the table — not that
+# the table contains nothing else.
+apply_patch
+bash
+glob
+grep
+invalid
+question
+read
+skill
+task
+todowrite
+webfetch

@@ -1109,29 +1109,29 @@ overlay.
 
 Every OpenCode capability has one disposition:
 
-| Capability                       | Disposition                  | Owner or reason                                                                               |
-| -------------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------- |
-| Skills                           | supported                    | #1666 (install target), rendered per stage                                                    |
-| Commands                         | supported                    | #1666 (`configs/opencode` templates)                                                          |
-| Subagents (`task`)               | supported                    | #1624 rolls subagent usage into the stage                                                     |
-| Plugins                          | supported, Nightgauge's only | #1635, #1640, #1641, #1642                                                                    |
-| MCP                              | supported                    | #1626                                                                                         |
-| Permissions                      | supported                    | #1638                                                                                         |
-| Sandboxing                       | non-goal                     | OpenCode has none upstream; containment is § 8 isolation, the permission map and the worktree |
-| Resume and fork                  | deferred                     | #1643 (session resume within a run)                                                           |
-| Export                           | supported, sanitized only    | § 22                                                                                          |
-| Import                           | non-goal                     | a session file or URL is untrusted input with nothing to gain                                 |
-| Usage (`opencode stats`)         | non-goal                     | usage comes from the stream and the registry (§ 3), not OpenCode's catalog prices             |
-| `json_schema` output             | deferred                     | #1650                                                                                         |
-| Variants (`--variant`)           | supported                    | #1643 maps effort to a variant                                                                |
-| Compaction                       | supported                    | #1625 (settings), #1641 (events)                                                              |
-| Worktrees and workspaces         | non-goal                     | Nightgauge owns worktrees; OpenCode's experimental workspaces stay off                        |
-| Snapshots                        | off by default               | § 12                                                                                          |
-| LSP                              | supported, installed servers | § 12                                                                                          |
-| Share                            | non-goal                     | disabled and locked (§ 10)                                                                    |
-| GitHub agent (`opencode github`) | deferred                     | #1650                                                                                         |
-| ACP                              | deferred                     | #1650                                                                                         |
-| `serve` and `run --attach`       | deferred                     | #1650, under § 18's guardrails                                                                |
+| Capability                       | Disposition                                   | Owner or reason                                                                                                                                                                                                                                   |
+| -------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Skills                           | supported                                     | #1666 (install target), rendered per stage                                                                                                                                                                                                        |
+| Commands                         | supported                                     | #1666 (`configs/opencode` templates)                                                                                                                                                                                                              |
+| Subagents (`task`)               | denied (AC9 fallback)                         | #1624 rolls subagent usage into the stage, but the plugin denies `task` unconditionally until AC9 is settled — see the "Nightgauge OpenCode plugin" amendment dated 2026-09-15                                                                    |
+| Plugins                          | supported, Nightgauge's only                  | #1635, #1640, #1641, #1642                                                                                                                                                                                                                        |
+| MCP                              | config: supported; tool calls: blocked closed | #1626 wires the per-run `mcp` config; a repository's own MCP server tool call is blocked closed under `[nightgauge-gate:unknown-tool]` until a mapping exists — see the "OpenCode plugin gate parity" amendment dated 2026-09-15 (round 2, #1640) |
+| Permissions                      | supported                                     | #1638                                                                                                                                                                                                                                             |
+| Sandboxing                       | non-goal                                      | OpenCode has none upstream; containment is § 8 isolation, the permission map and the worktree                                                                                                                                                     |
+| Resume and fork                  | deferred                                      | #1643 (session resume within a run)                                                                                                                                                                                                               |
+| Export                           | supported, sanitized only                     | § 22                                                                                                                                                                                                                                              |
+| Import                           | non-goal                                      | a session file or URL is untrusted input with nothing to gain                                                                                                                                                                                     |
+| Usage (`opencode stats`)         | non-goal                                      | usage comes from the stream and the registry (§ 3), not OpenCode's catalog prices                                                                                                                                                                 |
+| `json_schema` output             | deferred                                      | #1650                                                                                                                                                                                                                                             |
+| Variants (`--variant`)           | supported                                     | #1643 maps effort to a variant                                                                                                                                                                                                                    |
+| Compaction                       | supported                                     | #1625 (settings), #1641 (events)                                                                                                                                                                                                                  |
+| Worktrees and workspaces         | non-goal                                      | Nightgauge owns worktrees; OpenCode's experimental workspaces stay off                                                                                                                                                                            |
+| Snapshots                        | off by default                                | § 12                                                                                                                                                                                                                                              |
+| LSP                              | supported, installed servers                  | § 12                                                                                                                                                                                                                                              |
+| Share                            | non-goal                                      | disabled and locked (§ 10)                                                                                                                                                                                                                        |
+| GitHub agent (`opencode github`) | deferred                                      | #1650                                                                                                                                                                                                                                             |
+| ACP                              | deferred                                      | #1650                                                                                                                                                                                                                                             |
+| `serve` and `run --attach`       | deferred                                      | #1650, under § 18's guardrails                                                                                                                                                                                                                    |
 
 ADR-020 allows an opt-out of a value-adding feature for footprint and cost, and
 already keeps destructive, money-spending and data-exporting features opt-in.
@@ -1441,6 +1441,23 @@ manifest's, and its remediation is the managed install,
   refusal names the installed version and max-tested, and its remediation is a
   `binary` pin to a max-tested build. Hosted dispatch continues under the
   warning and self-test above.
+  **The #1639 canary's own leg is the one exception**, and only there: this
+  same refusal is what would otherwise keep the daily/PR canary from ever
+  driving a real newer release through the endpoint the stub provider serves
+  on (`lmstudio`), leaving it unable to tell "new and working" from "new and
+  broken." `OpenCodeEndpointAboveMaxTested`'s refusal is skipped when a
+  package-level hook, `openCodeCanaryRelax`, is both non-nil and returns true
+  for the dispatched model; the self-test below still runs. The hook is set
+  only by `opencode_preflight_canary.go`, a file gated behind the `canary`
+  build tag no production build (`cmd/nightgauge`, the VS Code extension
+  bundle, `scripts/clean-install-e2e.sh`) ever adds, and even then only once
+  the explicit `NIGHTGAUGE_CANARY=true` signal `scripts/adapter-canary.sh`'s
+  `cmd_opencode_canary` sets is read at call time. A default build's
+  `openCodeCanaryRelax` is nil regardless of environment, so the refusal above
+  holds for every real dispatch;
+  `TestOpenCodeAboveMaxTestedRefusesAnEndpointEvenWithTheCanaryEnvSet`
+  (`opencode_preflight_test.go`, no build tag, run by the default
+  `go test ./...`) is the regression for that.
 - **Drift.** Every dispatch that passes records the binary and version it was
   checked against in `~/.nightgauge/opencode/last-dispatch.json`, and the
   doctor warns when the binary it resolves now reports another version.
@@ -1735,6 +1752,914 @@ What changes:
   issue text sent the stage there, and never loosens a rule that guards
   secret files. Nightgauge generates no permission map yet (#1638), so the
   guard is OpenCode's default and nothing Nightgauge writes changes it.
+
+## Canary tooling corrections (amendment 2026-09-14, round 4)
+
+Two round-3 assumptions about the #1639 canary's own tooling, not about
+OpenCode itself, did not hold once reproduced:
+
+- **`scripts/adapter-canary.sh`'s `opencode_canary_failing_line` assumed
+  `go test -v`'s line order.** `cmd_opencode_canary` actually runs `go test
+-tags canary ... -count=1` with no `-v`, and without `-v` go prints the
+  `--- FAIL: TestName` summary BEFORE the failing test's own buffered
+  `file.go:N: message` lines, not after — the opposite of round 3's backward
+  walk, which found nothing there and fell back to the first `file.go:N:`
+  line in the whole file: on any installed version other than the pinned
+  1.18.30, that line is realOpenCode's own `t.Logf` "pin relaxed" notice (§
+  20 above), never the real failure. The parser now scans both the
+  immediately-following block (the shape `-count=1` alone actually prints)
+  and the immediately-preceding one (the shape `-v` would print, kept so the
+  parser does not regress if the invocation ever adds `-v`), skips the
+  "pin relaxed" notice deterministically in whichever order it appears
+  relative to the real message, and returns only the failing message's own
+  first line — a `t.Fatalf`'s further, more-indented continuation lines carry
+  no `file.go:N:` prefix of their own and are never matched. Fixtures
+  captured from a real, tiny `go test -tags canaryfixture` run, in both
+  orders, are committed at
+  `scripts/testdata/adapter-canary-gotest/README.md`, which records exactly
+  how they were produced.
+- **`OpenCodeEndpointAboveMaxTested`'s casing.** § 20 above named it
+  `openCodeEndpointAboveMaxTested` (lower-case initial); the function is
+  exported. Wording only — the behavior this section describes was already
+  correct.
+
+Neither correction changes OpenCode's own observed behavior recorded
+elsewhere in this document; both are about `scripts/adapter-canary.sh`'s own
+`go test`-output parsing and this document's own prose.
+
+## Nightgauge OpenCode plugin (amendment 2026-09-15, #1635)
+
+This section states the final design #1635 shipped. The build-out history —
+what was found along the way and how the design got here — lived in seven
+prior amendment sections in this document; it is now recorded instead in
+[nightgauge/nightgauge#1635](https://github.com/nightgauge/nightgauge/issues/1635)'s
+own comments, which this section links where a specific decision needs
+attribution.
+
+**Handshake.** The adapter deletes any stale sentinel and exports
+`NIGHTGAUGE_OPENCODE_PLUGIN_NONCE` before spawn; the plugin's init writes
+`.opencode-plugin-<RUN_ID>.json` (nonce, plugin version, hooks) beside
+`NIGHTGAUGE_OUTPUT_FILE`. `Manager.RunStage` verifies it twice: at the run's
+first `step_start` event — the earliest point any tool call could exist —
+and again at exit, comparing the sentinel's mtime against the first
+`tool_use`'s own reported start time (`state.time.start`), since 1.18.30 can
+log `tool_use` before `step_start` is flushed. Either check failing kills the
+stage's whole process group (`killProcessTreeUntilGone`, a bounded,
+closely-spaced burst of `SIGKILL`s rather than one delivery: a single
+`SIGKILL` can miss a child OpenCode forks in the same instant on macOS, which
+does not abort a fork under a pending group-kill signal the way Linux does)
+and fails the stage `adapter_incompatible`, forcing a non-zero exit code even
+when the CLI itself exited 0, and naming the plugin path and `opencode
+--version`. The handshake is keyed on the run's own root identity
+(`RunRootRequest.ID`, always present), not the dispatch's possibly-absent
+runtime identity, so it arms for every dispatch that actually spawns
+opencode, including the autonomous issue-refine dispatch with no runtime
+identity of its own.
+
+**Isolation.** `OPENCODE_DISABLE_PROJECT_CONFIG=1` is set on every OpenCode
+dispatch (AC2): only the embedded Nightgauge plugin may load, and a target
+repository's own `.opencode/plugins/*` and `plugin[]` entries never load
+beside it. The cost, until #1638 builds the Go-side reviewed merge, is that a
+target repository's own `opencode.json` (its `agent`, `provider`, `mode`,
+`permission` and `instructions` keys, not only `plugin`) does not merge into
+a dispatch's resolved config at all — 1.18.30 offers no switch narrower than
+"every project config file this repository holds."
+`TestOpenCodeIntegrationPerRunConfigReachesOpenCode` and
+`TestOpenCodeIntegrationAnthropicBlockHoldsItsServer` assert that negative
+against the real binary.
+
+**Single plugin load.** The plugin file lives outside the run's OpenCode
+config directory's own `plugin`/`plugins` subdirectory
+(`.../config/opencode/nightgauge-plugin`, not the auto-scanned
+`.../plugin`), which 1.18.30 auto-loads on top of whatever the resolved
+config's own `plugin` array names; naming the plugin only in the array, once,
+is what keeps every hook — careful-gate included — from firing twice per
+tool call. `TestOpenCodeIntegrationPluginLoadsExactlyOnce` asserts the
+resolved `plugin` array names the file exactly once, against the real
+binary.
+
+**Per-run-root seed, trimmed archive.** opencode 1.18.30 installs the npm
+package `@opencode-ai/plugin` into any OpenCode config directory whose
+resolved config carries a non-empty `plugin` array, independent of whether a
+plugin file imports that package, and every invocation that resolves such a
+config waits for that install before doing anything else — offline, or
+against an unreachable registry, that wait does not fail fast. Nightgauge
+pre-seeds the run's own, freshly-created OpenCode config directory with an
+embedded, version-pinned, read-only archive
+(`internal/execution/opencodeplugin/depsdata/opencode-ai-plugin-1.18.30.tar.gz`,
+`opencodeplugin.WriteDependencies`): no npm binary, no lifecycle script and
+no network request ever runs to produce or extract it. The archive holds
+exactly four files — `package.json`, `package-lock.json`,
+`node_modules/.package-lock.json`, and `@opencode-ai/plugin`'s own
+`package.json` version marker — nothing else, not even `dist/`. opencode's
+own "is `@opencode-ai/plugin` already installed" check reads only two of
+them (`package.json` and `package-lock.json`, by dependency name, never a
+version — see the narrowed-AC1 paragraph below); the archive keeps the other
+two because they are what a real `npm install` for this package also
+produces, and neither opencode's plugin loader nor the Nightgauge plugin
+itself (`plugin/nightgauge.js`, `plugin/nightgauge/gates.js`) ever imports
+`@opencode-ai/plugin` or anything in its dependency tree at runtime; both
+import only `node:*` built-ins and each other. `depsdata/README.md` records
+the full provenance, the empirical method, and how to regenerate the archive
+for a new pinned opencode version;
+`internal/execution/opencodeplugin/depsdata/regenerate` rebuilds it
+deterministically from a real, `--ignore-scripts` `npm install`, and
+`TestDepsArchiveSizeBudget` fails the build if it grows past 32 KiB
+compressed.
+
+**Narrowed AC1: no npm or Bun install runs into any Nightgauge-owned
+directory.** opencode 1.18.30 installs `@opencode-ai/plugin` into every
+OpenCode config directory its resolved config touches, not only the run's
+own: `$HOME/.opencode` when it exists (no XDG variable,
+`OPENCODE_DISABLE_PROJECT_CONFIG` nor `OPENCODE_PURE` stops OpenCode reading
+it), and, under `opencode.inherit_user_config`, the operator's own
+`OPENCODE_CONFIG_DIR`. **Nightgauge never seeds, merges into, or otherwise
+writes to either directory** — OpenCode's own install into its own config
+directories is the operator's environment, exactly as in the operator's own
+OpenCode runs, no different from what happens when the operator runs
+`opencode` themselves
+([#1635 comment, 2026-09-15T07:16Z](https://github.com/nightgauge/nightgauge/issues/1635)).
+`opencodeplugin.OperatorInstallSatisfied` is a READ-ONLY check of whether
+such a directory already satisfies opencode's own install check — pulled
+from the pinned binary's own `Npm.install` and driven against it directly: a
+directory is satisfied if it is not writable, or if `node_modules` exists
+and package.json's own dependency names (all four dependency kinds, plus
+`@opencode-ai/plugin`) are all present in `package-lock.json`'s root
+package entry, by name only, never by version — never a write. An earlier
+version of this check (#1635/A11 round 8) required all four files
+`depsdata/README.md`'s table lists to exist and the version marker to equal
+`DepsVersion` exactly; a later fix round found that did not match the
+pinned binary and corrected it (`deps.go`'s `OperatorInstallSatisfied` doc
+comment holds the measured cases).
+
+**Bounded and classified operator wait, with its stand-down rule.** Offline,
+or against an unreachable registry, a dispatch touching an operator
+directory that does NOT already satisfy opencode's own check still waits on
+OpenCode's own real install.
+`manager.go`'s operator-install-risk watchdog bounds that wait independently
+of the stage's own timeout (further capped by whatever remains of the
+stage's own context deadline) and fails the dispatch `adapter_incompatible`,
+naming the directory and #1787, if it fires. The watchdog arms ONLY for a
+directory `OperatorInstallSatisfied` reports unsatisfied at spawn time — a
+directory already satisfied gets OpenCode's own local, instant fast path (the
+same one a run's own XDG-resolved config directory always gets) and is never
+armed at all. Once armed, it stands down on EITHER of two independent
+signals, whichever arrives first: the directory BECOMING satisfied (checked
+read-only, polled every second or two, never written — proof OpenCode's own
+in-flight install is done) or the first output arriving on stdout or stderr
+(proof the CLI is not stuck before its first line). This is what keeps the
+watchdog from ever capping model latency once OpenCode's own install
+completes — a slow first token from a local model prefilling a large prompt
+is never mistaken for a hung install
+([#1635 comment, 2026-09-15T12:00Z](https://github.com/nightgauge/nightgauge/issues/1635)).
+`manager_opencode_operator_install_risk_test.go` covers the bound, the
+stage-context cap, the two stand-down paths, and that a fast, unrelated
+failure is never misclassified with the watchdog's own marker text.
+
+**`task` denied (AC9).** A bounded spike against 1.18.30 (an embedded plugin
+wired as a Node `event`/`tool.execute.before` logger, pointed at a real local
+model, given a prompt directing it to call `task` once) could not determine
+within its budget whether 1.18.30 calls `tool.execute.before` inside a `task`
+(subagent) session. Per AC9's own stated fallback for "not or undecidable",
+`gates.js`'s `toolExecuteBefore` denies the `task` tool unconditionally,
+careful mode on or off, checked before the careful-gate verb and independent
+of `NIGHTGAUGE_BIN` — a subagent session this plugin cannot verify it gates
+is worse than no subagent at all. `TestNodeHarnessDeniesTask` is the
+red/green coverage. Settling AC9 properly, and lifting the denial, needs
+either an upstream answer or a faster local model than the spike had time
+for; it remains open.
+
+**Follow-up:** [nightgauge/nightgauge#1787](https://github.com/nightgauge/nightgauge/issues/1787)
+tracks a per-run `HOME`, so `$HOME/.opencode` stops being a config directory
+at all — removing the operator-install wait entirely rather than only
+bounding and classifying it.
+
+## OpenCode plugin gate parity: 1.18.30 divergences from AC assumptions (amendment 2026-09-15, round 2, #1640)
+
+#1640 extended the plugin's `gates.js` (workflow-gate, stage-gate,
+`command.execute.before` sanitize-prompt, and a pinned `TOOL_CLASSIFICATION`
+fail-closed table) beyond the "Nightgauge OpenCode plugin" amendment above's
+careful-gate and `task` denial. AC7 requires recording, here, any observed
+divergence from that work's stated assumptions before continuing; this
+section is that record, written from a fix round that traced three of them
+against the pinned 1.18.30 binary's own minified source rather than
+inference.
+
+**`apply_patch` vs `edit`/`write` is a per-model switch, not a capture
+disagreement.** An earlier version of `gates.js`'s own comments described two
+tool-surface captures — the static `opencode debug agent build` dump and the
+real dispatch stream captures this ADR's § 6 already recorded — as
+"disagreeing" on whether `edit`/`write` or `apply_patch` is the file-mutation
+tool. They do not disagree: 1.18.30's `ToolRegistry.tools({...defaultModel,
+agent})` enables `apply_patch` and disables `edit`/`write` exactly when
+
+```
+modelID.includes("gpt-") && !modelID.includes("oss") && !modelID.includes("gpt-4")
+```
+
+and offers `edit`/`write` (not `apply_patch`) for every other model family.
+`debug agent build`'s empty-`HOME` default model happened to match that rule;
+the real dispatch captures used models that did not. Consequence: any
+OpenCode dispatch whose model id matches this rule — for example an
+`openai/gpt-5*` id admitted from OpenCode's bundled catalog — is offered only
+`apply_patch` for file mutation, which `gates.js` classifies `"blocked"`
+(below), so every tool-based file edit in that stage fails outright rather
+than merely being screened differently. This is a real gap for any pipeline
+stage dispatched against such a model, not a documentation nit; it is not
+fixed here.
+
+**`apply_patch`'s argument shape is known, not "never observed."** Its input
+is a single `{patchText}` string; the pinned binary's own patch parser reads
+`*** Add File:`, `*** Update File:`, `*** Delete File:` and `*** Move to:`
+headers to recover each path a patch touches. `gates.js` still blocks it
+(kind `"blocked"`) because that shape has never been mapped to a Claude-shaped
+`file_path` payload for workflow-gate, not because the shape is unknown.
+
+**`command.execute.before`'s prompt has already had its shell substitutions
+run.** 1.18.30's command-template pipeline substitutes `$ARGUMENTS` into the
+template, then runs every `` !`...` `` span in the COMBINED text through the
+invoking user's own shell, and only afterwards calls
+`trigger("command.execute.before", ...)` with the already-substituted,
+already-shelled-out text. No `tool.execute.before` fires for those shell
+spans. Consequence, confirmed by an offline probe against the real binary (a
+plugin logging and throwing from both hooks, a command template containing
+`` !`touch ...` ``, and a `--command argshell` invocation with a `` !`...` ``
+span inside the caller-supplied argument): the shell commands run and their
+side effects land BEFORE the plugin ever sees the command, and a plugin
+throw aborts the prompt but not the shell command that already ran. A
+subagent (`subtask: true`) command's expansion also arrives as a
+`{type:"subtask", prompt}` output part, not `{type:"text"}` — `gates.js`'s
+`commandExecuteBefore` (#1640) reads only `type:"text"` parts today, so a
+subtask expansion is not currently screened by sanitize-prompt at all. This
+is not reachable from a Nightgauge dispatch today: the adapter never passes
+`--command` (only `run --format json ...`) and sets
+`OPENCODE_DISABLE_PROJECT_CONFIG=1`, so no config a Nightgauge run loads can
+define a command template in the first place. The guardrail here, until a
+future issue changes that: `command` must stay out of every config a
+Nightgauge run loads, and a `{type:"subtask"}` part needs its own
+sanitize-prompt coverage before command templates are ever enabled.
+
+**MCP tool calls: correcting § 15's "MCP: supported" row.** § 15's
+capability table names MCP `supported` (#1626), which is accurate for the
+per-run config's `mcp` block (§ 8) reaching a dispatch. It does not mean
+every MCP-sourced tool call is gated the way a first-party tool is. 1.18.30's
+`tool.execute.before` also fires for three kinds of id `TOOL_CLASSIFICATION`
+did not list before this fix round:
+
+- a repository's own MCP server tools, dispatched via `CodeMode.invokeChildTool`
+  with `tool: <server>_<local-tool-name>` (the server/tool key `Ah0`'s own
+  code builds);
+- opencode's own read-only MCP resource tools, `list_mcp_resources`,
+  `list_mcp_resource_templates` and `read_mcp_resource` — opencode itself
+  groups these under the same `"read"` permission category as `read`/`glob`/
+  `grep` (confirmed against the binary's own permission-mapping code); and
+- code-mode child tool invocation itself (`CodeMode.invokeChildTool`).
+
+Before this fix round every one of these threw `[nightgauge-gate:unknown-tool]`,
+so an OpenCode stage with an MCP server configured silently lost that
+server's tools entirely. The fix round classifies the three read-only
+resource tools `"passthrough"` (they only list or read resource metadata a
+configured server advertises). It deliberately does NOT classify a
+repository's own `<server>_<tool>` ids: this plugin has no reliable way to
+distinguish a read-only MCP tool from a mutating one by id alone, and #1626's
+per-run config already resolves per-repository server definitions the plugin
+does not currently see. **Until a mapping is built (tracked as a follow-up,
+not yet filed as its own issue), a repository's own MCP server tool calls
+stay blocked closed under `[nightgauge-gate:unknown-tool]`** — narrower than
+§ 15's "MCP: supported" row implies for a stage running under the OpenCode
+adapter specifically; the Claude Code side is unaffected (`hooks.json` never
+gates an MCP tool call at all).
+
+## Session-lifecycle events plugin (amendment 2026-09-15, #1641 fix round)
+
+`plugin/nightgauge/session.js` (#1641) shipped against three assumptions this
+fix round found wrong on the real 1.18.30 binary, each confirmed with an
+offline, loopback-only probe against the pinned binary rather than assumed
+from its type declarations.
+
+**The `permission.ask` plugin hook is never called.** 1.18.30 publishes a
+permission prompt only as the bus event `permission.asked`
+(`{id, sessionID, permission, patterns, metadata, always, tool}`), which
+reaches the plugin's `event` hook; the string `"permission.ask"` occurs zero
+times among the binary's own `trigger("...")` call sites — every one of the
+fourteen hooks it does call is `chat.headers`, `chat.message`, `chat.params`,
+`command.execute.before`, `experimental.chat.messages.transform`,
+`experimental.chat.system.transform`, `experimental.compaction.autocontinue`,
+`experimental.session.compacting`, `experimental.text.complete`, `file.open`,
+`shell.env`, `tab.new`, `tool.definition`, or `tool.execute.after`/`.before`.
+So AC5's notification and AC6's permission-ask events, both routed through
+`permissionAsk` (the `permission.ask` hook), silently never fired in
+production; the harness tests passed only because they call `permissionAsk`
+directly in Node, bypassing the loader. `event()` now handles
+`permission.asked` itself — the throttle and the events-file write both moved
+there, reading `properties.permission` (the permission type) only, never
+`patterns`/`metadata` (the model-authored command text those carry). The
+`permission.ask` export stays, unused in production, only for forward
+compatibility should a later opencode version call it directly.
+`TestEventPermissionAskedEmitsEventAndThrottlesNotify` is the Node-harness
+coverage; `TestPermissionAskEventAgainstRealOpenCode`
+(`compaction_stub_test.go`) is the real-binary row, `permission: {bash:
+"ask"}` against the #1618 stub.
+
+**`session.idle` wrote only `stop_verify`, never `idle`.** The wire format
+(`kind: compaction|idle|stop_verify|permission_ask|skill`) and `events.go`'s
+own `EventKinds` always named five kinds; the writer only ever produced four.
+`event()` now appends one `idle` line before running `hook stop-verify`.
+Covered by `TestEventIdleWritesStopVerifyEvent` and the real-binary
+`assertCompactionStubGreen`.
+
+**`child` was hard-coded `false`.** 1.18.30's `Session.Info` carries an
+optional `parentID` (visible on `session.created`/`session.updated`'s own
+`properties.info.parentID`, and in the bundled client's own reducers —
+`case "session.updated": ... r.parentID`), so `event()` now tracks it: a
+sessionID first observed with a non-empty `info.parentID` is tagged `child`
+in every later event it produces. `TestChildSessionEventsAreTaggedChild`
+drives this directly, since `gates.js` still denies the `task` tool
+unconditionally (AC9, above) and no run in this codebase can produce a real
+child session — a parent-only compaction-stub run's own `session.updated`
+traffic was checked directly (this fix round's own probe) and never carried a
+`parentID` for its single session, consistent with that denial. **The gap AC6
+and AC7 asked to be recorded stands as before: child-session delivery through
+this plugin is unverified**, now for a documented reason (AC9's denial)
+rather than an unimplemented `child` field.
+
+**#1625's steps cap is not opencode's own hard stop.** AC2 read "a run forced
+into compaction ends without it and within #1625's steps cap", and ADR-022
+(the section above) assumed "#1625's steps cap remains the hard stop
+underneath this either way." On 1.18.30, a step at or past `agent.*.steps`
+only appends an assistant nudge message (`let oe=Y.steps??1/0,L=_>=oe;
+...messages:[...an,...L?[{role:"assistant",content:lh}]:[]],tools:le` in the
+binary's own minified loop) and still passes every tool — the loop does not
+stop there. Against `compaction_stub_test.go`'s own deterministic, offline
+fixture (`steps: 8`), a green run consistently logs 13 loop steps, not ≤8:
+steps 8 through 11 each still execute a bash tool call after the declared cap.
+`assertCompactionStubGreen`'s bound (`loopStepsWantMax`) is tightened from an
+earlier, cap-agnostic 20 to 16 (13 plus small headroom) to reflect this
+measured reality rather than mask it, and its own comment records the
+contradiction. AC2's "within #1625's steps cap" should be read as "within the
+autocontinue-suppression's own bound", not #1625's literal cap; #1625 should
+be read the same way pending its own fix round. The assertion still
+meaningfully catches the regression it exists for:
+`compactionAutocontinue`'s own suppression removed produced 311+ loop steps
+in the same fixture, over 20x the tightened bound.
+
+**CI coverage.** `.github/workflows/ci.yml`'s "OpenCode integration
+(opencode-ai@1.18.30)" step ran neither `TestPluginLoadsOnRealOpenCode`
+(#1635) nor `TestCompactionAutocontinueSuppressionAgainstRealOpenCode`
+(#1641): its package list omitted `./internal/execution/opencodeplugin/` and
+its `-run` regex did not match either name, so nothing in CI would have
+caught a regression in either. Both, plus the new
+`TestPermissionAskEventAgainstRealOpenCode`, are now named in that step.
+
+## OpenCode does not await plugin hook promises (amendment 2026-09-15, #1810)
+
+Two assumptions underneath the session-lifecycle plugin turned out to be
+wrong. Both were settled by probing the pinned 1.18.30 binary directly, not
+by reading its source or reasoning from the plugin type declarations.
+
+**OpenCode does not await the promise a plugin's `event` hook returns, and a
+one-shot `opencode run` exits within ~10 ms of publishing `session.idle`.** A
+probe plugin registered as the only plugin in the run, whose `event` hook
+`await`ed a bounded 1200 ms sleep and then wrote a marker file, never reached
+the line after its `await`; the run's total wall clock was identical
+(1.53 s vs 1.51 s) to the same plugin returning immediately. A continuation
+scheduled with `.then()` landed only at a 0 ms delay (9 ms after the hook
+returned) and was already lost at 20 ms. So on the terminal event, nothing
+the plugin schedules — an `await`, a `.then()`, a timer — can be relied on to
+run at all, and no timer of the plugin's can bound a child it spawned either.
+
+That is what made #1641's fix-forward shape (record the verdict from a
+`.then()` continuation on an in-process spawn) produce `got 0 stop_verify
+events, want exactly 1` against
+`TestCompactionAutocontinueSuppressionAgainstRealOpenCode`. Awaiting the verb
+inline instead is no better, and for the same reason.
+
+**Decision.** The `stop_verify` verdict is written by the process that
+computes it. `session.js` spawns `nightgauge hook stop-verify --emit-event
+--session-id <id> [--child]` detached and `unref`'d, and does not wait on it
+at all; that child appends its own `stop_verify` line through
+`opencodeplugin.AppendRunEvent`, honouring the same 1 MiB cap, the same
+single `truncated` sentinel and the same retention contract (ids, counts and
+verdict codes — never `EvaluateStopHookOutput`'s `Reason`, which is
+plan-derived text), and bounds its own evaluation at 5 s, recording
+`verdict: "timeout"` rather than hanging. The one verdict the plugin still
+owns is `no_bin`, which it writes synchronously after a synchronous
+executability check, because on a terminal event there is no later tick in
+which to learn it from `spawn`'s asynchronous `'error'` event.
+
+The consequence for readers, #1653 included, is that a run's events file
+finalizes shortly AFTER the OpenCode CLI exits. `events.go` grows
+`WaitForRunEvent` for exactly that, and both the real-binary suite and the
+Node-harness suite read through it.
+
+**The "5 s hook verb" was a test-harness artifact, not production cost.**
+`composeStageEnv` exported `NIGHTGAUGE_BIN` from `os.Executable()`, which
+under `go test` is the Go TEST binary — and the plugin SPAWNS that value.
+Running `internal/execution`'s own test binary as `… hook stop-verify
+--workdir X` re-runs the entire suite: measured at 104.5 s of wall clock,
+forking git into other tests' temp directories, exiting 1, and orphaned past
+the test that started it once the CLI died with the plugin's 5 s bound. A
+real `nightgauge hook stop-verify` answers in ~70 ms warm (0.47 s cold). The
+manager now resolves that export through an injectable `hostExecutable`, and
+every integration case that dispatches the real CLI points it at a real
+`nightgauge` build (`useRealNightgaugeBinary`).
+`TestOpenCodeIntegrationHostBinaryIsARealNightgauge` asserts it by running
+the exact argv the plugin runs.
+
+**CI masking.** The regression reached `main` green because
+`.github/workflows/ci.yml`'s "OpenCode integration (opencode-ai@1.18.30)"
+step is guarded only by `if: needs.changes.outputs.run_heavy != 'false'`.
+GitHub Actions skips a step with no `always()`/`failure()` condition once an
+earlier step in the same job has failed, so on a run where the main Go test
+step failed first, the OpenCode integration step never executed and its
+result was never part of the verdict. Filing that separately; it is not
+fixed here.
+
+## The permission map's pattern matching (amendment 2026-09-15, #1638)
+
+§ 9 assumed opencode 1.18.30 resolves a `permission` object's patterns the
+same way for every key, matching the last rule the merged config carries
+against a request's own absolute path. #1638's own bounded probes against the
+pinned binary (a scripted, in-process OpenAI-compatible stub scripting real
+`read`/`edit`/`bash` tool calls, `internal/execution/adapters/opencode_guard_integration_test.go`
+and the isolated probes its history records) found three narrower rules
+instead, each load-bearing for the permission map #1638 generates:
+
+- **A pattern with no glob metacharacter is never matched for `edit`.**
+  `edit: {"*": "allow", "secret.txt": "deny"}`, with `secret.txt` the exact
+  relative path a tool call's own `filePath` carried, still ran the edit: the
+  literal pattern was never consulted. The same object with the pattern
+  spelled `**/secret.txt` or `secret.*` — a real glob, differing only in
+  carrying a `*` — denied it. Every pattern #1638 sets on `edit` or `read`
+  beyond the bare `*` default is therefore built to carry a real wildcard;
+  the static backstop entries already did (`*.env`, `**/.ssh/**`, and the
+  rest), and a dynamic directory pattern is built as `<dir>/**`.
+- **A pattern that starts with `/` is never matched for `edit`, only for
+  `external_directory`.** `edit: {"*": "allow", "/a/b/**": "deny"}` ran an
+  edit whose `filePath` was exactly `/a/b/c`; stripping the leading `/` from
+  the identical pattern denied it. `external_directory`'s own patterns need
+  the leading `/` (an unprefixed directory pattern in that key was never
+  observed to match anything): a probe of `external_directory: {"*": "deny",
+"/a/b/**": "allow"}` let a read under `/a/b/` through, and the same pattern
+  without its leading `/` refused it. So a directory pattern's two uses need
+  two different strings: `openCodeDirPatterns` (opencode_guard.go) keeps the
+  leading separator for `external_directory`'s allow-list, and
+  `openCodeEditDenyPatterns` strips it for `edit`'s deny entries — the
+  NIGHTGAUGE_SKILL_DIR read-only pair (§ "external_directory allow-list")
+  uses one function for each half. Once both defects are avoided — a real
+  wildcard, no leading `/` — `edit`'s own last-matching-rule-wins behaves as
+  § 9 assumed: a specific `deny` added after a `*: allow` was consistently
+  denied in every probe, in both directions (a specific `allow` after a
+  `*: deny` was consistently let through). `bash`'s own patterns, matched
+  against the command string rather than a path, were never observed to need
+  either correction: `bash: {"*": "allow", "rm -rf *": "deny"}` denied `rm
+-rf /tmp/x` in the same probe run that found `edit`'s literal-pattern gap.
+- **`external_directory` needs a directory's path in more than one form.**
+  A macOS `t.TempDir()` skill directory under `$TMPDIR` (itself under `/var`,
+  a symlink to `/private/var`) was reported by a real tool call's `filePath`
+  unresolved (`/var/folders/.../skill/_includes/note.md`), even though §
+  9's own last bullet ("the permission map is built against resolved
+  paths") predicted the resolved form. An allow-list built only from
+  `filepath.EvalSymlinks`'s output did not match it; one carrying both the
+  given and the resolved form (when they differ) matched either way.
+  `openCodeDirPatterns` returns both, which is also why the six stage
+  skills' `/tmp` literals were already emitted in both `/tmp` and
+  `/private/tmp` forms before this amendment (the same macOS gap, generalized
+  here to every directory pattern the permission map builds, not only
+  `/tmp`'s).
+
+None of the three findings changes § 9's `ask`-vs-`auto-rejecting` account:
+a `deny` match, unlike an `ask` one, was never observed to print the
+`! permission requested: ... auto-rejecting` stderr notice — it fails the
+tool call directly, visible in `--format json` stdout as an errored
+`tool_use` event, with the rejected permission's name inside the event's own
+`error` text, never on stderr. Every generated map is `allow`/`deny` only
+(§ 9, AC1), so an enabled dispatch's stderr carries that notice only when a
+target repository's own project config or a lower layer adds an `ask` entry
+this map does not already override — the project-config tamper gate (§ 8)
+is the control that closes that route. #1624's own failure classification
+(`OpenCodeAutoRejectMarker`, `internal/execution/opencode_usage.go`) reads
+stderr for the notice; whether it also needs a stdout-based path for a plain
+`deny` rejection, now that every dispatch's own map never emits `ask`, is
+package `execution`'s own tested concern, raised here as a finding rather
+than settled by this change.
+
+## Correction to the pattern-matching amendment (#1638 fix round, same day)
+
+A same-day review of the amendment above, run against the same pinned
+binary but in a real **git worktree** rather than the amendment's own bare
+`t.TempDir()` fixture, found its first two bullets describe an artifact of
+that fixture, not opencode's actual rule. `TestOpenCodeIncludesReadAllowed`
+(the amendment's own probe) never had a `.git` in its project directory; a
+git worktree is what every real dispatch actually runs in
+(`Manager.RunStage`'s own worktree setup).
+
+**The corrected rule.** opencode 1.18.30's `edit`, `write` and `read` tools
+all ask permission with `patterns:[path.relative(Instance.worktree, file)]`
+(bundled source: `n.ask({permission:"edit",patterns:[qo.relative(y.worktree,u)]...})`).
+`Instance.worktree` is the git repository's top-level
+(`git rev-parse --show-toplevel`) for a git repository, and `/` — the whole
+filesystem — for a directory that is not one. The amendment's fixture had no
+`.git`, so `Instance.worktree` there really was `/`, and a pattern's absolute
+path with its leading `/` stripped happens to equal the correct
+worktree-relative form in that one case, by coincidence: `filepath.Rel("/",
+"/a/b/c")` is `"a/b/c"`, the same string stripping the slash gives. Read
+against a real git worktree instead, the identical, slash-stripped pattern
+never matches: the file's actual relative path is the git top-level's
+relative form, `../../…/skill/_includes/note.md` for a skill directory
+outside the worktree, which an anchored `Users/…/skill/**` pattern never
+matches. `TestProbeA9SkillEditInGitWorktree` (the fix round's own probe,
+folded into `internal/execution/adapters/opencode_guard_integration_test.go`
+as `TestOpenCodeIncludesEditDeniedInGitWorktree`) reproduced this directly: an
+`edit` of `NIGHTGAUGE_SKILL_DIR/_includes/note.md` succeeded in a git
+worktree under the pre-fix map, with the file's content actually rewritten —
+AC2 broken in exactly the shape every real dispatch runs in. The amendment's
+first bullet ("no glob metacharacter") does not hold up either: the same
+git-worktree probe denied the edit with a literal, no-wildcard relative
+pattern once it was the CORRECT relative form, so the missing wildcard was
+never the defect — the absolute-vs-relative path was.
+
+`external_directory`'s own patterns are unaffected by this correction: they
+are matched against the file's absolute path (or, for a directory a shell
+command's argument resolves into, `dirname(file)`), never against a
+worktree-relative form, which is why the amendment's third bullet (needing
+both the given and the resolved directory form) still holds, and why
+`external_directory`'s allow-list entries correctly keep their leading `/`
+while `edit`'s deny entries must not have one relative to `/` — or, in a real
+git worktree, must instead be the file's path relative to the worktree's own
+top-level, with `../` segments where the directory is outside it.
+
+**The fix.** `openCodeWorktreeRelativeDirPatterns` (`opencode_guard.go`)
+replaces `openCodeEditDenyPatterns`: it resolves the git top-level of
+`RunOptions.WorktreeDir` by walking its ancestors for a `.git` entry — never
+a `git` subprocess, so the permission-map builder stays pure — and computes
+the deny pattern relative to that top-level (or to `/` when `WorktreeDir` is
+empty or not a git repository, preserving the amendment's fixture-only
+behaviour for a non-git test double). The same function now also denies edit
+of `NIGHTGAUGE_BIN`'s own directory: the external_directory allow-list
+already let a stage read there, but nothing had ever denied `edit`, so any
+Edit-granted stage — every one of the six stage skills — could plant an
+executable in the running nightgauge binary's own directory, typically a
+`PATH` entry, before this fix
+(`TestOpenCodeBinDirEditDenied`/`TestProbeA9BinDirWritable`).
+
+**A second, narrower correction: nested secret files.** The read/edit
+backstop's `*.env`/`.env*` entries, matched the same worktree-relative way,
+only ever match a ROOT-level file (opencode's pattern matching has no
+implicit `**` prefix the way a shell glob does). A nested secret such as
+`apps/web/.env.local` fell through to the backstop's own `*`/`.env`-shaped
+entries and reached `read: "*": "allow"` unmatched. `**/*.env` and
+`**/.env*` were added to `openCodeSecretDenyBackstop` to close it
+(`TestOpenCodeNestedDotEnvDenied`/`TestProbeA9NestedEnvLocalRead`; a routed
+#1752 comment on the issue asked for exactly this coverage).
+
+**AC3 closed, not just raised.** The finding this document's previous
+section left open — a plain `deny` rejection has no stderr notice, so
+`OpenCodeAutoRejectMarker`'s stderr-based classification never fires for
+one — turned out to have an existing fallback already built for it:
+`openCodeRun.finish` (`internal/execution/opencode_usage.go`) already
+classifies a run as rejected, never success, whenever the stream shows a
+`RejectedToolCalls > 0` and stderr named no permission. That fallback simply
+never fired, because `RejectedToolCalls`'s own match
+(`internal/execution/stream.go`) was an exact-string comparison against
+`"The user rejected permission to use this specific tool call."` — the
+`ask`-and-auto-rejected text — and a `deny` match's real text is different:
+`"The user has specified a rule which prevents you from using this specific
+tool call. Here are some of the relevant rules […]"` (bundled source,
+confirmed against the pinned binary). `openCodeIsRejectedToolError` now
+matches either text as a PREFIX (the ruleset list, and an interactive
+rejection's own feedback text, both trail their respective prefixes
+dynamically), on both the Go and the TS/SDK parser
+(`packages/nightgauge-sdk/src/cli/adapters/opencodeStream.ts`, which
+`internal/execution/testdata/opencode_stream_expected.json` binds to the same
+fixtures) — `TestOpenCodeDenyRejectedNeverSuccess` and the TS suite's own run
+over the newly captured `opencode_deny_rejected_stream.jsonl` are the
+red/green coverage. #1631's own `PermissionRejectedMarker`/
+`PermissionDeniedMarker` split still cannot name the specific permission a
+plain tool_use error refused (the event names the tool, not the permission),
+so the fallback's marker is always `tool=unknown`; a drift marker records why,
+exactly as it already did for the `ask`-with-lost-stderr case this fallback
+was originally built for.
+
+**The tamper gate's base ref (AC6).** `openCodeProjectConfigTamperCheck`
+compared the worktree only to `HEAD`, on the premise that a fresh worktree's
+`HEAD` is the base branch's tip. That premise fails for every stage after the
+first in a worktree `Manager.RunStage` reuses across a run: a stage with
+`Bash` can commit its own tamper, and `git status` alone never sees a
+difference from `HEAD` once it has. `openCodeProjectConfigTamperCheck` now
+runs three legs — the existing `git status` leg; `git diff --name-only
+<merge-base-with-the-resolved-base-ref>` for a change already committed on
+top of the base branch's tip (`openCodeTamperGateBaseRef`, a local,
+subprocess-free mirror of `internal/execution/worktree_sweep.go`'s own
+`resolveBaseRef`/`detectDefaultBranch`, duplicated rather than imported
+because `internal/execution` imports this package and the reverse would
+cycle); and `git ls-files -v`, because `git update-index
+--skip-worktree`/`--assume-unchanged` hides a working-tree edit from both the
+status and the diff legs entirely (`TestOpenCodeTamperGateCommittedChange`,
+`TestOpenCodeTamperGateSkipWorktree`).
+
+**AC4's `/tmp` allow-list: found dead, left dead, recorded (AC8).** A
+probe read Tool.assertExternalDirectory's own bundled source: every
+`external_directory` request — the file tool's own out-of-worktree check,
+and each directory a bash command's argument resolves into — asks with
+`patterns:[path.join(dirname(file), "*")]`, never the file's own path.
+`Wildcard.match` then compares that literal `dirname/*` string against each
+rule. None of `openCodeTmpAllowList`'s 16 per-file entries (`/tmp/planning_tmp.json`
+and the rest) can ever equal `/tmp/*`, so every one is dead: a Read-granted
+stage's read of any of those exact, allow-listed files is refused
+(`TestProbeA9TmpAllowListRead`, reproduced and left red on purpose — this is
+the one finding this fix round does NOT close in code). The only pattern
+`external_directory`'s own matching can ever honour at this granularity is
+the directory itself, `/tmp/*` (and `/private/tmp/*`): opencode 1.18.30 has
+no mechanism to allow-list one file inside a shared directory without
+allowing every file directly in it. Setting that pattern would fix AC4's
+letter but open exactly the hazard this ADR's own Security constraints name
+first: `/tmp` shared with other processes. That is a product decision, not a
+code defect this file's ownership can make unilaterally — per this
+document's own § 9 "stop and record" rule (the issue's AC8) — so this fix
+round leaves the allow-list exactly as it was (a list of the literal paths,
+inert against `external_directory`) and records the finding here instead of
+silently widening exposure. The follow-up direction, not yet an issue: move
+the six stage skills' `/tmp` scratch files into a directory scoped to one
+run (`RunRoot`'s own `tmp` subdirectory is the obvious candidate — already
+present, already per-run) and allow-list that directory instead of
+`/tmp` itself, closing AC4 without the shared-directory hazard.
+
+## Second fix round: AC3 tool naming, AC4's /tmp allow, #1752's widening, NIGHTGAUGE_BIN, tamper-gate fail-closed (amendment 2026-09-15, #1638 fix round, stages D/E)
+
+A delegated fix round closed four review findings the round above left open
+or recorded rather than fixed, plus one trivial low, each with red/green
+Go coverage and, where the finding is about opencode's own runtime
+behaviour, a bounded probe against the pinned 1.18.30 binary.
+
+**AC3, finally closed with a real permission name, not `tool=unknown`.**
+The round above's "AC3 closed, not just raised" section left the fallback
+marker (`openCodeRun.finish`'s own path, hit whenever the stream shows a
+`RejectedToolCalls > 0` and stderr named no permission — a "deny" match's
+own shape, since it never prints the stderr notice) naming
+`openCodeUnknownPermission` ("unknown") unconditionally, because "the event
+names the tool, not the permission." That reasoning undersold what the
+event actually carries: a rejected `tool_use` event's own `part.tool` is
+the opencode tool name the model called (`"bash"`, `"edit"`, `"read"`,
+`"apply_patch"`, …) — not the specific permission sub-category
+(`external_directory` vs. the base permission) that ultimately refused it,
+but a real, useful name all the same, and the one AC3's own Verification
+bullet asks for (`[adapter-permission-rejected]` for a granted tool,
+`[permission-denied]` for one that is not). `OpenCodeStream.RejectedTool`
+(`internal/execution/stream.go`) now records the FIRST rejected tool_use
+event's own `part.tool`; `openCodeToolRejectionPermission`
+(`internal/execution/opencode_usage.go`, and its TS twin in
+`opencodeStream.ts`) maps `write`/`apply_patch` to `edit` — 1.18.30 has no
+permission of its own for either — and passes every other name through
+unchanged; `openCodeRejectionMarker(tool, allowed)` then classifies exactly
+as it already does for a stderr-sourced permission name.
+`TestOpenCodeDenyRejectedNeverSuccess` and `TestOpenCodeAutoRejectMarker`
+(Go) and the TS suite's own two cases now assert the EXACT marker for both
+an allowed and a not-allowed tool set, not merely that one of the two
+markers is present.
+
+**AC4's `/tmp` allow-list: the per-file design confirmed impossible,
+replaced with a directory-level allow.** The round above's own bounded
+probe (`Tool.assertExternalDirectory`'s bundled source) already found every
+`external_directory` request is `patterns:[path.join(dirname(file), "*")]`,
+never the file's own path, and recorded the per-file allow-list as dead
+without fixing it, "a product decision, not a code defect this file's
+ownership can make unilaterally." This fix round's own decision: the
+per-file design is impossible on 1.18.30, full stop, so the directory-level
+allow — literally `/tmp/*` and `/private/tmp/*`
+(`openCodeTmpDirAllowPatterns`, `opencode_guard.go`) — is the only shape
+that can ever work, replacing `openCodeTmpAllowList`'s sixteen dead
+entries. The accepted cost: every stage's Read/Edit-governed tool calls can
+now reach any OTHER file directly under `/tmp` or `/private/tmp`, not only
+the ones its own skill uses — shared `/tmp` readability and writability by
+`read`/`edit`, the hazard the round above named and declined to open. Two
+things bound that cost: the secret and project-config deny-list backstops
+(`openCodeSecretDenyBackstop`, `openCodeProjectConfigDenyBackstop`) are
+still checked LAST and still win over this allow wherever they apply
+(`*.env`, `**/.ssh/**`, `opencode.json*`, …, whether or not the file
+happens to sit under `/tmp`); and the `external_directory` check itself is
+only ever a lexical backstop, not a sandbox — a bounded probe this fix
+round ran (a bash `mv` moving a file OUT of an allow-listed `/tmp`
+directory, across two different external directories in one command) found
+it refused even with an explicit allow for the source directory, while a
+single-path bash `cat` or `cp` of the same file was correctly allowed or
+refused by the matching directory-level rule — so bash redirection or a
+multi-path command is not reliably covered by this control at all, allowed
+or denied, and was never claimed to be. `TestOpenCodeTmpDirAllowLetsAStageReadAndCatFromTmp`
+(a real-binary probe against actual files under `/tmp`, not a hand-patched
+allow entry) is the closure; `TestOpenCodeTmpAllowListCoversStageSkills`
+now asks whether a scanned `/tmp/...` literal's own `dirname(literal)+"/*"`
+request (`openCodeTmpRequestPattern`) is covered by
+`openCodeTmpDirAllowPatterns`, not whether the literal string itself is in
+a list — the six stage skills' own `/tmp` literals are all flat, directly
+under `/tmp`, so this holds today; its red companion introduces a NESTED
+`/tmp/sub/dir/...` literal, which this flat pair does not cover, and does
+fail. **Follow-up, not yet its own issue:** move the six stage skills'
+`/tmp` scratch files to a directory scoped to one run (`RunRoot`'s own
+`tmp` subdirectory, already present, already per-run) and allow-list that
+instead of `/tmp` itself, closing the shared-directory cost this amendment
+accepts rather than removing it.
+
+**#1752's widening: `*.env.*` as an infix, not only a prefix or suffix.**
+The round above's nested-secret fix (`**/*.env`, `**/.env*`) still only
+ever matches a filename that STARTS with `.env` or literally ends in
+`.env`. A file such as `config/prod.env.local` — `.env` as an INFIX, the
+name neither starts nor ends with it — matched none of those patterns, at
+any depth, and opencode 1.18.30's own bundled default `read` guard already
+treats `*.env.*` as a shape worth an `ask` rule in its own right (the
+Failure wording amendment above, "A stage allowed Read that reaches for
+`*.env`"), independent evidence this is a real secret shape, not a
+speculative widening. `*.env.*` and `**/*.env.*` are added to
+`openCodeSecretDenyBackstop`, paired the same root/nested way as the
+existing `.env`-prefixed entries. `TestOpenCodeNestedDotEnvDenied` now
+builds every tool path from `filepath.EvalSymlinks(dir)` (matching what a
+real dispatch event actually carries, not the given, unresolved form),
+asserts BOTH `apps/web/.env.local` and `config/prod.env.local` are denied,
+and includes a control read of `config/plain.txt` — a name with no secret
+shape at all — that MUST complete, proving the deny is targeted rather than
+a broader nested-read regression.
+
+**NIGHTGAUGE_BIN removed from the `external_directory` allow-list.** A scan
+of the six stage skills' own committed text for a concrete Read, `cat` or
+`cd` of a path under `NIGHTGAUGE_BIN` found none: every reference is
+`BINARY="${NIGHTGAUGE_BIN:-}"` followed by running `$BINARY` (bash
+execution — never gated by `external_directory` at all, the same "lexical
+backstop, not bash redirection" limitation this amendment's AC4 section
+records) or `export PATH="$(dirname "$BINARY"):$PATH"` (a shell variable
+assignment, never a filesystem read). The allow-list entry bought no stage
+skill anything it uses, while letting a Read tool call inspect the running
+nightgauge binary's own directory — a self-hosted checkout's own build
+output, or any sibling files an operator placed beside the binary.
+`openCodeExternalDirectoryAllowList` no longer takes a `binDir` parameter
+at all; `openCodeWorktreeRelativeDirPatterns`' own edit-deny backstop
+(finding 8, round above) is unaffected and still denies EDITING the
+directory as defense in depth, now redundant with `external_directory`'s
+own `"*": "deny"` default rather than the allow-list's own carve-out.
+`TestOpenCodePermissionMapNeverAllowsBinDir` is the unit coverage;
+`TestOpenCodeBinDirCpDenied` is the real-binary probe the issue's own item
+4 asked for — a bash `cp` planting a file into `NIGHTGAUGE_BIN` is refused,
+naming `external_directory` in the rejected `tool_use` event, unlike the
+multi-path `mv` probe above.
+
+Unrelated to this dir, but bearing on when it could ever be reopened for a
+GPT-family dispatch: `apply_patch`'s own `*** Move to:` header (§ 6, and
+the `#1640` amendment above) names a patch's destination path, but nothing
+in this repository's `apply_patch` handling reads that header today —
+`gates.js` classifies the whole tool `"blocked"` (the `#1640` amendment),
+so no Move-to destination ever reaches a workflow-gate or a permission
+check at all while that classification stands.
+[nightgauge/nightgauge#1808](https://github.com/nightgauge/nightgauge/issues/1808)
+tracks mapping `apply_patch`'s `patchText` to Claude-shaped file payloads;
+until that includes gating a Move-to destination the same way an `edit` or
+`write` tool call's own path is gated, `apply_patch` must stay `"blocked"` —
+lifting the block first would let a Move-to destination bypass every
+path-shaped control this ADR and `gates.js` both rely on, this
+`external_directory` allow-list included.
+
+**Trivial low: the tamper gate now fails CLOSED on an unverifiable
+worktree.** `openCodeProjectConfigTamperCheck` treated `git status`
+reporting "not a git repository" as "nothing to compare, so allow it" —
+backwards for a gate whose entire job is refusing a worktree it cannot
+verify. A `worktreeDir` git reports is not a repository (a dispatch config
+naming a path outside any checkout, or one whose `.git` a prior stage
+removed or corrupted) now REFUSES, naming the reason
+(`TestOpenCodeTamperGateNonGitWorktreeFailsClosed`); a `git status`
+invocation that fails for any OTHER reason (a corrupted index, tested by
+`TestOpenCodeTamperGateGitStatusFailsClosed`) already refused before this
+fix and is unchanged. `worktreeDir == ""` (no worktree named at all — never
+a real dispatch, only a caller that supplies none, including the dozens of
+this package's own `PreDispatch` tests that construct a `RunOptions` with
+no `WorktreeDir` to test something else entirely) is unaffected: it is
+still skipped, not refused, since there is no worktree to have lied about.
+Every fixture across `internal/execution`, `internal/execution/adapters`
+and `cmd/nightgauge` that dispatched through a plain, non-git `t.TempDir()`
+worktree to test something OTHER than the tamper gate itself now
+git-initializes it first (`gitInitOneCommitWorktree`,
+`gitInitTestWorktree`, `isolateOpenCodeVerb`'s own fixture) — the same
+shape every real dispatch's worktree already has by construction.
+
+## Correction to the `/tmp` allow-list: `*` crosses `/`, so `/tmp/*` was the whole tree, not one level (#1638 fix round, same day)
+
+The second fix round above recorded the `/tmp` allow-list's accepted cost as
+"every OTHER file directly under `/tmp` or `/private/tmp`, not only the ones
+its own skill uses" and asserted the backstops "still win... whether or not
+the file happens to sit under `/tmp`." Both sentences assumed opencode
+1.18.30's `Wildcard.match` never lets a configured `*` cross a `/`, the same
+assumption this document's "Correction to the pattern-matching amendment"
+section above already had to retract once for `edit`'s own patterns. It does
+not hold for `external_directory` either: the bundled matcher (`o.replace(/[.+^${}()|[\]\\]/g,"\\$&").replace(/\*/g,".*").replace(/\?/g,".")`,
+tested anchored `^...$`) turns a configured `*` into the regex `.*`, which
+matches across `/` exactly like a real glob's would. A bounded probe against
+the pinned binary (`TestOpenCodeTmpDirAllowDoesNotReachANestedFile`,
+`opencode_guard_integration_test.go`) found a NESTED file's own
+`external_directory` request (`dirname(file)+"/*"`, two directories below
+`/tmp`) matched the configured `/tmp/*` entry, and both a `read` of it and a
+`write` of a sibling at the same depth completed — the accepted cost was the
+whole `/tmp` and `/private/tmp` trees, at any depth, not one level. A flat
+`/tmp` symlink whose target is outside every allow-listed directory matched
+the same way, so the sentence above claiming the secret and project-config
+deny-list backstops "win... whether or not the file happens to sit under
+`/tmp`" does not hold for that shape either: those backstops are lexical on
+the path string a tool call reports, which does not resolve a symlink to its
+target — a pre-existing property of a lexical backstop, not something this
+correction changes or closes.
+
+`openCodeTmpDirAllowPatterns` is now `/tmp/?` and `/private/tmp/?` (`?`
+becomes the regex `.`, exactly one character, never `/`), not `/tmp/*`.
+Opencode's own `external_directory` request for a FLAT file directly under
+`/tmp` is always the literal six-character string `/tmp/*` — never the
+file's own name (§ "AC4's `/tmp` allow-list" above) — and that string's only
+character after `/tmp/` is the literal `*`, which `/tmp/?` matches; a
+NESTED file's request has more than one character there and does not match.
+The accepted cost is now what the second fix round's own prose intended:
+every stage's Read/Edit-governed tool calls can reach any OTHER file
+directly under `/tmp` or `/private/tmp`, never a nested one. The flat-symlink
+gap above is unaffected by this narrowing (the symlink's own path is still
+flat), and stays open — the same follow-up recorded below (moving the six
+stage skills' `/tmp` scratch files to a per-run scratch directory) is what
+would close it, by removing the need for this allow entry at all.
+
+`openCodeTmpCoverageMissing` (`opencode_guard_test.go`) is now
+`openCodeWildcardMatch` (`opencode_guard.go`), opencode's real matcher, not
+the plain map lookup the second fix round above described as "whether a
+scanned `/tmp/...` literal's own `dirname(literal)+"/*"` request... is
+covered by `openCodeTmpDirAllowPatterns`" — that description was accurate
+about the INTENT, but the lookup it shipped with was exact-string equality
+against the (still-`/tmp/*`-shaped) source list, which happened to agree
+with the real matcher only because the pre-narrowing pattern was identical
+to the request string it needed to match. Swapping in `/tmp/?` without this
+change would have made the drift test (`TestOpenCodeTmpAllowListCoversStageSkills`)
+report the six stage skills' own flat literals as uncovered, a false red;
+`TestOpenCodeTmpAllowListCoverageFailsOnANewLiteral`'s own red companion is
+unchanged in shape, still a nested literal the flat pattern does not cover.
+
+`TestOpenCodeOutsideReadRejected` and `TestOpenCodeBinDirCpDenied` each gain
+a `TMPDIR=/tmp`-forcing companion
+(`TestOpenCodeOutsideReadRejectedUnderTmpdirTmp`,
+`TestOpenCodeBinDirCpDeniedUnderTmpdirTmp`). With `TMPDIR` unset — this
+repository's own `ubuntu-latest` CI default, and the common Linux developer
+setup — Go's `t.TempDir()` places every fixture these two tests treat as
+"outside the allow-list" under `/tmp` itself, one level down; against the
+pre-narrowing `/tmp/*` pattern both tests' own probes completed instead of
+erroring, a platform-dependent gap this document's own prior amendments did
+not carry a leg for. Forcing `TMPDIR=/tmp` reproduces the shape on any
+platform, including this document's own macOS-based probes above, whose
+default temp root (`/var/folders/...`) never exercised it.
+
+## OpenCode plugin edit hooks: `tool.execute.after` argument shape (amendment 2026-09-15, #1642)
+
+#1642's own AC7 requires recording, here, any observed divergence from its
+stated assumptions before continuing. The issue's assumptions read
+`tool.execute.after` receives the tool's args and a mutable `output.output`;
+`edit`/`write` args are `filePath`/`oldString`/`newString`/`content`" without
+saying which side of the call — `input` or `output` — carries `args`. A
+bounded, offline probe against the pinned 1.18.30 binary (a logging plugin
+loaded in place of `plugin/nightgauge/edit.js`, driven through the #1618
+stub's `tool-edit-stop` script and a temporary `write-then-stop` fixture, no
+live model and no network egress) settles both halves:
+
+**`args` live on `input`, not `output` — the opposite of `tool.execute.before`.**
+`tool.execute.before`'s `args` are on `output.args` (gates.js, already
+documented). `tool.execute.after`'s own `input` instead carries
+`{tool, sessionID, callID, args}` directly — captured verbatim off the real
+binary:
+
+```json
+{"hook":"after","input":{"tool":"edit","sessionID":"ses_...","callID":"call-stub-tool-edit-stop-0","args":{"filePath":"calc.py","newString":"return a - b","oldString":"return a + b"}},"output":{"metadata":{...},"title":"calc.py","output":"Edit applied successfully."}}
+```
+
+and the same shape for `write`, with `args: {content, filePath}`. `output`
+itself carries `{title, output, metadata}`, confirming the issue's own
+`output.output` assumption. `edit.js` reads `input.args`, not `output.args`,
+accordingly.
+
+**Correction (fix round, 2026-09-15): the capture's `filePath: "calc.py"` is
+an artifact of the stub fixture, not of 1.18.30's own argument shape.** The
+`{tool, sessionID, callID, args}` envelope above is genuine, but the
+`tool-edit-stop`/`write-then-stop` stub fixture that produced it supplies its
+own relative `filePath` value; the installed 1.18.30 binary's own tool
+schemas (read via `strings` on the pinned binary) require an ABSOLUTE
+`filePath` for both tools — write's own schema text reads "The absolute path
+to write... must be absolute, not relative", edit's reads "The absolute path
+to the file to modify" — and this repository's own real-model captures
+(`internal/execution/testdata/opencode_stream_local_capture.jsonl`,
+`..._remote_capture.jsonl`, `..._subagent_capture.jsonl`) each show an
+absolute `filePath` on a real `edit` call, e.g.
+`/tmp/nightgauge-fixture/repo/calc.py`. `edit.js`'s first cut refused every
+absolute path outright (mirroring `internal/hooks/format.go`'s
+`ValidateFilePath`), which left format/check-version/test-quality dead
+against a real model; it now resolves an absolute `filePath` against the
+run's cwd the way `format.go`'s own `relativizeHookPath` resolves one for
+the Claude Code hook path, and refuses only a path that resolves outside it.
+
+**Mutating `output.output` in place reaches the model's next turn.** The
+probe's `tool.execute.after` appended a marker string to `output.output`
+in place (no reassignment of `output` itself, no return value). The very
+next `POST /v1/chat/completions` request the stub-provider received carried
+that marker, byte for byte, as the `tool`-role message's own `content` —
+not merely visible within the hook's own scope, and not silently dropped
+before the session's own transcript is built. This confirms the issue's
+"so the model sees them" half of AC5 without qualification.
 
 ## Consequences
 

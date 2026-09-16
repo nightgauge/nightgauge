@@ -15,6 +15,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
+	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
@@ -815,6 +816,11 @@ func TestOpenCodeDispatchRefusedUntilEnabled(t *testing.T) {
 	if err := os.MkdirAll(worktree, 0755); err != nil {
 		t.Fatal(err)
 	}
+	// A real git repository: the project-config tamper gate (#1638 fix
+	// round) now fails CLOSED, not open, on a worktree git reports is not
+	// one, so a plain directory would be refused before this test's own
+	// enable-gate check ever ran.
+	gitInitOneCommitWorktree(t, worktree)
 
 	const prompt = "--auto implement the issue; this prompt must arrive on stdin only"
 	run := func() (*adapters.RunResult, error, string) {
@@ -1031,14 +1037,38 @@ func openCodeStageOptions(model string, runtime *state.RuntimeState) StageOption
 	}
 }
 
-// openCodeWorkspace is a workspace root whose issue-1612 worktree exists.
+// openCodeWorkspace is a workspace root whose issue-1612 worktree exists as
+// a real, one-commit git repository — every real dispatch's WorktreeDir is
+// one by construction (Manager.RunStage's own worktree setup), and the
+// OpenCode adapter's project-config tamper gate now fails CLOSED, not open,
+// on a worktree git reports is not a repository (#1638 fix round finding
+// 9/9), so a fixture that used to be a plain directory would be refused
+// before ever reaching the fake opencode binary the test under it means to
+// exercise.
 func openCodeWorkspace(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, ".nightgauge", "worktrees", "nightgauge-issue-1612"), 0o755); err != nil {
+	worktree := filepath.Join(root, ".nightgauge", "worktrees", "nightgauge-issue-1612")
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	gitInitOneCommitWorktree(t, worktree)
 	return root
+}
+
+// gitInitOneCommitWorktree makes dir a one-commit git repository in place:
+// the minimum openCodeProjectConfigTamperCheck needs to pass a clean
+// worktree (#1638 fix round: the gate now fails closed on a worktree git
+// reports is not a repository, so every OpenCode fixture that used to be a
+// plain directory needs this).
+func gitInitOneCommitWorktree(t *testing.T, dir string) {
+	t.Helper()
+	gittest.InitRepo(t, dir, "-b", "main")
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("fixture\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gittest.Run(t, dir, "add", "-A")
+	gittest.Run(t, dir, "commit", "-qm", "base")
 }
 
 // TestOpenCodeAnthropicDispatchNeedsTheAPIKey is ADR-022 § 17's key

@@ -260,8 +260,8 @@ jobs:
           prefix="$RUNNER_TEMP/opencode-cli"
           npm install --prefix "$prefix" --no-fund --no-audit opencode-ai@1.18.30
           PATH="$prefix/node_modules/.bin:$PATH" timeout 10m go test -tags opencode_integration -count=1 -v \
-            -run '^TestOpenCode(Integration.*|PurePluginLoading|InlineDenyBeatsProjectAllow|ArrayMerge|ProviderBaseURLPrecedence|ConfigDiscoveryAboveWorktree|DisableProjectConfig|MergeHarnessReapsEveryProcess|CatalogEnvMatchesTheBinary|AnthropicModelsMatchTheBinary)$' \
-            ./internal/execution/ ./internal/execution/adapters/
+            -run '^Test(OpenCode(Integration.*|PurePluginLoading|InlineDenyBeatsProjectAllow|ArrayMerge|ProviderBaseURLPrecedence|ConfigDiscoveryAboveWorktree|DisableProjectConfig|MergeHarnessReapsEveryProcess|CatalogEnvMatchesTheBinary|AnthropicModelsMatchTheBinary)|RealOpenCodePinRelaxedUnderCanary|PluginLoadsOnRealOpenCode|CompactionAutocontinueSuppressionAgainstRealOpenCode|PermissionAskEventAgainstRealOpenCode)$' \
+            ./internal/execution/ ./internal/execution/adapters/ ./internal/execution/opencodeplugin/
       # Evidence that outlives the runner. Both passes write to files, so if the
       # step is cancelled (job timeout, a runner OOM-kill) the replay groups
       # never happen and the only record of how far each pass got is these three

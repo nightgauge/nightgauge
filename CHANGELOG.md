@@ -38,6 +38,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- Both READMEs now link the extension's Open VSX listing beside the VS Code
+  Marketplace, so users of VSCodium, Cursor, Windsurf and other Open VSX-based
+  editors have a documented install path; the root README gains an Open VSX
+  version badge (#1788)
 - `nightgauge skill render`'s overlay cascade gains a host segment ahead of
   provider (`OverlayKeys` now returns host → provider → id), keyed by the
   execution adapter itself so it resolves even when the model does not — an
@@ -99,6 +103,73 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The OpenCode plugin's `session.js` (#1641) spawned every telemetry verb
+  (`hook stop-verify` on `session.idle`, `hook notify` on a permission ask,
+  `hook skill-usage` on a skill tool call) with `spawnSync`, which blocks
+  opencode's entire single-threaded event loop for as long as the child runs,
+  up to its 5s bound. `runHook` now spawns asynchronously
+  (`node:child_process.spawn`, not `spawnSync`) with the same 5s bound,
+  killing the child's whole process group on timeout so a notify verb's own
+  `osascript`/`notify-send` grandchild cannot outlive it, and registers no-op
+  `'error'` listeners on the child's stdin and stdout before writing: without
+  them, a telemetry child that exited before reading its stdin turned the
+  write's EPIPE into an unhandled `'error'` event that crashed the whole
+  opencode process — a module this repository's own comments call "telemetry,
+  it is never a gate" taking the host down with it (#1641, #1810, #1813)
+- `session.idle`'s stop-verify verdict is now written by the verb itself,
+  not by the plugin. Probing the pinned opencode 1.18.30 binary settled two
+  things: it does not await the promise a plugin's `event` hook returns, and
+  a one-shot `opencode run` exits within ~10ms of publishing `session.idle`
+  (a plugin whose event hook awaited 1200ms never reached the line after its
+  await; a `.then()` scheduled 20ms out never ran). So neither awaiting the
+  verb inline nor recording it from a continuation can survive that exit, and
+  `TestCompactionAutocontinueSuppressionAgainstRealOpenCode` read `0
+stop_verify events, want exactly 1`. The plugin now spawns `nightgauge hook
+stop-verify --emit-event --session-id <id> [--child]` detached and
+  unref'd and never waits on it at all, so no dispatch can be slowed by a
+  slow or hung verb; that child appends its own `stop_verify` line through
+  the new `opencodeplugin.AppendRunEvent`, honouring the same 1 MiB cap, the
+  same single `truncated` sentinel and the same retention contract (ids,
+  counts and verdict codes only, never the block reason), and bounds its own
+  evaluation at 5s with a `timeout` verdict rather than hanging. The plugin
+  still writes the one verdict it can determine synchronously, `no_bin`.
+  Readers — `#1653` included — must use the new
+  `opencodeplugin.WaitForRunEvent`, because a run's events file now finalizes
+  shortly after the OpenCode CLI exits (#1641, #1810)
+- `NIGHTGAUGE_BIN`, which the manager exports to every stage and the OpenCode
+  plugin SPAWNS, resolved under `go test` to the Go test binary. Running
+  `internal/execution`'s own test binary as `… hook stop-verify --workdir X`
+  re-runs that entire suite — measured at 104.5s of wall clock, forking git
+  into other tests' temp directories, and left orphaned once the CLI died
+  with the plugin's 5s bound. That, not any production cost, is the "5s hook
+  verb" that pushed `TestOpenCodeIntegrationInheritUserConfigOptIn` towards
+  its 20s bound; a real `nightgauge hook stop-verify` answers in ~70ms warm.
+  The manager now resolves the export through an injectable `hostExecutable`,
+  and every OpenCode integration case that dispatches the real CLI points it
+  at a real `nightgauge` build (#1810)
+- `adapter-canary.yml` pinned `actions/setup-node` at a SHA
+  (`fc7e5e49f31379e40cf9b708e5abd6ebfad0e0fd`, tagged `v5.0.0`) that GitHub
+  cannot resolve, failing both the `flag-contracts` and `opencode-canary` legs
+  at setup on a `workflow_dispatch` run; both steps now pin the same
+  `v7.0.0` SHA (`820762786026740c76f36085b0efc47a31fe5020`) every other
+  workflow in the repo already uses (#1639)
+- `adapter-canary.yml` now also runs on every push to `main`: main's own
+  branch-protection ruleset requires the `flag-contracts` and
+  `opencode-canary` status contexts, but the workflow previously ran only on
+  `schedule`, `workflow_dispatch` and `pull_request`, so those contexts never
+  reported on a push commit and `scripts/post-merge-check.sh` read every merge
+  as `NOT-YET` forever. The `changed` job now diffs a push against
+  `github.event.before` (falling back to `HEAD^` for a new branch or an
+  unreachable before SHA) the same way it already diffs a pull_request against
+  its base SHA, so a push touching nothing under
+  `internal/adaptercompat/manifests/` still skips both jobs (a skipped
+  required job reports success); a push that does change a manifest runs the
+  canary at that manifest's own `max_tested`, matching pull_request. The
+  `report` drift-issue job already only files or comments on failing rows and
+  already excludes only `pull_request`, so it needed no separate push rule —
+  it joins schedule/workflow_dispatch there unchanged, gated on
+  `needs.changed.outputs.run == 'true'`. The concurrency group is now keyed on
+  `github.ref` alone (#1639)
 - The required `link-check` job and the local gate no longer request the VS
   Code Marketplace listing linked from `README.md`: `.markdown-link-check.json`
   now ignores `https://marketplace.visualstudio.com/` links host-wide, since
@@ -107,6 +178,269 @@ changelog, and the release workflow refuses a tag that does not.
   block every merge (#1767)
 
 ### Added
+
+- `plugin/nightgauge/edit.js` gives an OpenCode stage the same
+  PostToolUse:Edit|Write coverage Claude Code's hooks.json gives one:
+  format-on-save, a version-consistency check, and a test-quality warning,
+  run in hooks.json's own order and timeouts (`hook format` 30 s,
+  `hook check-version` 10 s, `hook test-quality` 5 s) against a
+  Claude-shaped `{tool_name, tool_input:{file_path,...}}` payload built from
+  opencode 1.18.30's own `tool.execute.after` arguments. Exactly one
+  formatter path runs per dispatch: the plugin calls `hook format` only when
+  OpenCode's own `formatter` setting (read from `OPENCODE_CONFIG_CONTENT`)
+  is off. opencode 1.18.30's own tool schemas require an ABSOLUTE `filePath`
+  for both `edit` and `write`, so an absolute path is resolved against the
+  run's worktree (realpath'd on both sides, the same containment
+  `internal/hooks/format.go`'s `relativizeHookPath` already does for the
+  Claude Code hook path) rather than refused outright; only a path that
+  resolves outside the worktree (by that resolution, or by carrying a `..`
+  segment) spawns nothing and adds no warning. Every warning is appended to
+  the tool's own output (capped at 2 KB total) rather than thrown, so a
+  warning is never mistaken for a gate, and a hung verb leaves the tool
+  result intact. New Go verb `nightgauge hook test-quality`
+  (`internal/hooks/testquality.go`) ports
+  `claude-plugins/nightgauge/hooks/test-quality.sh`'s three zero-value-test
+  checks (a tautological assertion, an empty test body, a `console.log`
+  with no assertion), evaluating the empty-test-body pattern one line at a
+  time to keep grep's own line-oriented `\s` semantics (Go's `\s` spans a
+  newline; grep's stays within the line it is reading), since the OpenCode
+  plugin path has no shell script it can spawn directly; the shell script
+  itself is unchanged (#1642)
+- `plugin/nightgauge/session.js` gives an OpenCode stage the same session
+  coverage Claude Code's hooks give one: compaction context re-injection
+  (`experimental.session.compacting` runs `hook inject-context`), suppression
+  of opencode 1.18.30's post-compaction synthetic "Continue if you have next
+  steps" turn (`experimental.compaction.autocontinue`), idle stop-verification
+  (`session.idle` runs `hook stop-verify`), skill-usage telemetry for the
+  native `skill` tool (accepted only as an opaque id matching a bounded
+  pattern — never a nested object or free text a confused model passed
+  instead), and a 60-second-throttled permission-ask desktop notification —
+  every one fail-open and never a gate. Permission-ask is driven off
+  opencode 1.18.30's own `permission.asked` bus event, read through the
+  plugin's `event` hook: the pinned binary never calls the separate
+  `permission.ask` plugin hook at all, so that path is kept only for forward
+  compatibility. A new bounded run-dir events file
+  (`opencode-events-<RUN_ID>.jsonl`, capped at 1 MiB, ids and verdict codes
+  only, never transcript or prompt text) records compaction, idle,
+  stop-verify, permission-ask and skill events, each tagged `child` when the
+  session's own `parentID` says so (unverified against a real child session
+  while #1635/AC9 denies the `task` tool);
+  `internal/execution/opencodeplugin/events.go` (`ReadRunEvents`,
+  `CompactionCount`) is the Go-side reader #1653 will consume, and now also
+  rejects a detail value that is not a scalar or that runs long, as a second
+  line of defence past the writer's own validation. Driven against the real
+  pinned opencode 1.18.30 binary and #1618's offline stub provider: without
+  the autocontinue suppression, a compacted session's synthetic continue turn
+  resumes the build agent indefinitely (observed 500+ loop steps before the
+  test's own bound killed it); with it, the session ends at idle after
+  exactly one compaction. #1625's declared steps cap is not itself opencode's
+  hard stop on this binary (a run past the cap still executes tool calls
+  before ending at idle; see ADR-022's amendment) (#1641)
+- The `opencode` adapter's per-run config now carries an explicit `permission`
+  map derived from the dispatching stage's `AllowedTools`
+  (`openCodePermissionMap`, `internal/execution/adapters/opencode_guard.go`):
+  every key (`*`, `read`, `edit`, `glob`, `grep`, `list`, `bash`, `task`,
+  `webfetch`, `websearch`, `skill`, `todowrite`, `doom_loop`,
+  `external_directory`) is set to `allow` or `deny`, never `ask` (ADR-022
+  § 9), with a `bash`/`read`/`edit` deny-list backstop
+  (`rm -rf *`, `git push --force*` and friends; `*.env`, `**/.ssh/**`,
+  `**/id_rsa*`, the gh hosts file; `opencode.json*` and `.opencode/**` on
+  `edit`) present in every map regardless of what the stage's tools grant,
+  and an `external_directory` allow-list scoped to `NIGHTGAUGE_SKILL_DIR`
+  (read-only: denied on `edit`), the context and output file directories when
+  they are outside the worktree, and, since opencode's own `external_directory`
+  matching is at directory granularity only (`dirname(file)/*`, never the
+  file's own path), a `/tmp/?` and `/private/tmp/?` allow (replacing an
+  earlier per-file list that could never match a real request on 1.18.30).
+  `?` matters: opencode's own pattern matching turns a configured `*` into a
+  regex that DOES cross `/`, so a `/tmp/*` entry — this map's own first draft —
+  matched every NESTED `/tmp` request too, not only a flat one, exposing the
+  whole `/tmp` and `/private/tmp` trees at any depth rather than the flat,
+  one-level cost the map intends; `?` (exactly one character, never `/`)
+  matches only the flat request opencode's own dirname-based construction
+  always produces for a flat file. The accepted cost — every stage's
+  Read/Edit-governed tool calls can reach any OTHER file directly under
+  `/tmp` or `/private/tmp`, never a nested one — and a follow-up to move the
+  six stage skills' scratch files to a per-run directory instead, are
+  recorded in ADR-022's own amendment, along with a same-day correction of an
+  earlier reading of this that assumed `*` never crosses `/`. The
+  `NIGHTGAUGE_BIN` directory is NOT allow-listed:
+  a scan of the six stage skills found no Read, `cat` or `cd` of a path under
+  it, only `$BINARY` execution and a `PATH` export, so the entry bought
+  nothing they use while letting a Read tool inspect the running binary's own
+  directory; `edit` of it stays denied as defense in depth regardless. The
+  read/edit deny-list backstop also denies a NESTED secret file (`**/*.env`,
+  `**/.env*`; the root-level-only `*.env`/`.env*` alone let one through) and,
+  routing a follow-up request from #1752, a secret name carrying `.env` as an
+  INFIX rather than a prefix or suffix (`*.env.*`, `**/*.env.*` — matching
+  opencode's own bundled default guard's shape for the same file). A new
+  pre-spawn check in the adapter's `PreDispatch`
+  (`openCodeProjectConfigTamperCheck`) refuses a dispatch whose worktree
+  carries a modified, untracked or git-ignored `opencode.json`,
+  `opencode.jsonc` or `.opencode/` relative to its base branch — including one
+  a prior stage already committed in the same reused worktree, or hid behind
+  `git update-index --skip-worktree`, not only a difference from `HEAD`, and,
+  now, a worktree git itself reports is not a repository at all, which used
+  to pass silently — naming every offending path and spawning nothing; a
+  stage must not rewrite the OpenCode config the next stage in the same
+  worktree runs under. A tool call OpenCode's permission map rejects with a
+  `deny` match (this map's only rejection shape: it never emits `ask`) now
+  also counts toward failure classification
+  (`internal/execution/stream.go`,
+  `packages/nightgauge-sdk/src/cli/adapters/opencodeStream.ts`), naming the
+  rejected `tool_use` event's own tool (mapped through the same
+  `edit`/`write`/`apply_patch` equivalence the map itself uses, never the
+  unnamed `tool=unknown` fallback), so a stage a `deny` stopped is never read
+  as a success AND classifies by the tool it actually stopped on. Bounded
+  probes against the pinned opencode 1.18.30 binary, run in a real git
+  worktree rather than a bare temporary directory, found `edit`'s own pattern
+  matching resolves against the path relative to the worktree's git top-level,
+  not the leading-slash-stripped absolute path an earlier reading of the same
+  probes assumed; both the generated map and ADR-022's own amendment are
+  corrected (#1638)
+- A scheduled latest-CLI canary (`.github/workflows/adapter-canary.yml`,
+  `scripts/adapter-canary.sh`) installs the newest release of every manifest
+  CLI daily and on `workflow_dispatch`, and reruns the flag contract (#1617)
+  against each one's freshly captured `--help`. Its OpenCode leg
+  (`internal/execution/opencode_canary_test.go`, build tag `canary`) drives
+  the installed `opencode` against the #1618 stub provider and asserts the
+  stream's event-type allow-list, field paths and non-zero token accounting
+  (#1624), the permission-reject leg's auto-rejection and exit code, and a
+  bad-model leg's exit 1 with a `type: "error"` event. A schema-diff leg
+  compares the live `https://opencode.ai/config.json` against the manifest's
+  `config_schema_sha256` and, on a difference, re-runs the #1634 suite against
+  the live schema. The workflow also runs as a required check on a PR that
+  changes a manifest's `max_tested`, at that proposed version, and a `report`
+  job (`issues: write` only, no secrets, no CLI or model) files or updates one
+  open `canary: <adapter> <version> drift` issue per failing adapter+version
+  from the run's JSON summary. Above `max_tested`, OpenCode's own
+  endpoint-above-max-tested refusal (ADR-022 § 20) would otherwise block the
+  canary from ever driving a real release through the stream contract, so a
+  canary-only relaxation (`openCodeCanaryRelax`, gated behind the `canary`
+  build tag no production build carries, and only under the explicit
+  `NIGHTGAUGE_CANARY=true` signal) lets the leg's own dispatch through while a
+  production build's refusal is unchanged; the row records the INSTALLED
+  version. The `opencode-canary` job's stream/permission/bad-model leg and its
+  schema-diff leg each run regardless of the other's outcome, and the job
+  itself goes red if either failed. The `flag-contract` leg attributes a
+  malformed or dropped-flag capture to its own adapter and version rather than
+  a version-less placeholder, and carries a CLI's hidden, undocumented flags
+  forward onto a newer capture instead of failing every adapter with one on
+  its next release. The OpenCode leg's stub now runs as a real `stub-provider`
+  subprocess per test, its PID captured, killed and confirmed dead in that
+  test's own cleanup. The `opencode-canary` row's detail is now the failing
+  test's own message in either shape `go test` actually prints it — the
+  `-count=1` run `cmd_opencode_canary` invokes has no `-v`, so the
+  `--- FAIL:` summary prints before the test's buffered log lines, not after
+  — and it never carries realOpenCode's own "pin relaxed" `t.Logf` notice or a
+  multi-line failure's own continuation lines. `stubProviderCanaryBinary`'s
+  `os.MkdirTemp` build directory is now removed by the package's `TestMain`
+  instead of leaking one per test-binary run, and
+  `testdata/cli-help/README.md` now notes that a hidden-flag sidecar carried
+  forward onto a newer capture (above) is not itself probe evidence at that
+  newer version (#1639)
+- An OpenCode dispatch now carries the Nightgauge OpenCode plugin: a
+  `tool.execute.before` hook, embedded in the binary and written into the
+  per-run OpenCode config directory (never installed from npm or Bun), runs
+  the same careful-gate verb (`nightgauge hook careful-gate`) the Claude Code
+  hook runs, so a Bash tool call a stage runs under OpenCode is blocked the
+  same way it would be under Claude Code while careful mode is on. The
+  per-run config's `plugin` array names only this file, and
+  `OPENCODE_DISABLE_PROJECT_CONFIG=1` is set on every OpenCode dispatch, so a
+  target repository's own `.opencode/plugins/*` and `plugin[]` entries never
+  load beside it (AC2) — the cost, until #1638 builds the Go-side merge that
+  restores it, is that a target repository's own `opencode.json` does not
+  merge into a dispatch's resolved config at all (see the ADR-022 amendment).
+  The plugin file is written outside the run's OpenCode config directory's
+  own `plugin`/`plugins` subdirectory, which 1.18.30 auto-loads on top of the
+  config's own `plugin` array: naming both the same file loaded it, and so
+  fired every hook in it, twice per tool call. A startup handshake — a nonce
+  and sentinel the plugin's init writes, verified the instant the run's first
+  `step_start` event is observed (the process group is signalled with a
+  bounded, closely-spaced burst of SIGKILLs rather than trusting one
+  delivery — a single SIGKILL can miss a child OpenCode forks in the same
+  instant on macOS, which does not abort a fork under a pending group-kill
+  signal the way Linux does — before anything else, including the `opencode
+--version` the failure marker names) and re-checked at exit against the
+  first `tool_use`'s own reported start time — kills the stage's whole
+  process group and fails it `adapter_incompatible`, forcing a non-zero exit
+  code even when the CLI itself exited 0, when the plugin did not load,
+  loaded late, or a stale sentinel is read. This handshake now arms for
+  every dispatch that actually spawns opencode, including one with no
+  runtime identity of its own (the autonomous issue-refine dispatch): it is
+  keyed on the run's own root identity, which the manager always mints one
+  of, not on the dispatch's possibly-absent runtime identity, so a plugin
+  that fails to load can no longer go ungated there. Because opencode 1.18.30
+  installs `@opencode-ai/plugin` into every OpenCode config directory its
+  resolved config touches — the run's own, `$HOME/.opencode` when it exists,
+  and, under `inherit_user_config`, the operator's own XDG OpenCode config
+  directory — the moment any of them carries a non-empty `plugin` array,
+  independent of whether the plugin itself needs it, and every invocation
+  that resolves such a config waits for that install before doing anything
+  else, the run's own, freshly-created config directory is now pre-seeded
+  from an embedded, version-pinned copy of `@opencode-ai/plugin@1.18.30` (no
+  npm binary, no lifecycle script and no network request, ever): a small,
+  four-file archive extracted outright (`package.json`, both lockfiles, and
+  `@opencode-ai/plugin`'s own version marker — what a real install for that
+  directory also produces, though opencode's own "is it installed" check
+  reads only `package.json` and `package-lock.json` by dependency name — under
+  5 KB gzipped, cut from an ~11 MB, 3,886-file capture of the whole installed
+  dependency tree,
+  since neither opencode's plugin loader nor the Nightgauge plugin ever
+  resolve anything else in that tree at runtime), regenerated deterministically
+  by `internal/execution/opencodeplugin/depsdata/regenerate`
+  (`--ignore-scripts`) and size-budget-tested so a future regression cannot
+  grow it back toward the original capture unnoticed.
+
+  **Nightgauge never seeds, merges into, or otherwise writes to an
+  operator-owned OpenCode directory** — `$HOME/.opencode` or, under
+  `inherit_user_config`, `OPENCODE_CONFIG_DIR` — narrowing AC1 to: no npm or
+  Bun install runs into any Nightgauge-owned directory. An earlier round
+  tried seeding these two as well, first from the same four-file archive
+  (which satisfies opencode's own install check forever while leaving an
+  operator's own `import ... from "@opencode-ai/plugin"` tool file
+  permanently unresolvable — OpenCode's own documented way to write a custom
+  tool), then from a second, ~10.4 MB re-embedded archive of the complete
+  real tree; both are removed. OpenCode's own install into its own config
+  directories is the operator's environment now, exactly as it is in the
+  operator's own OpenCode runs.
+
+  Offline, or against an unreachable registry, a dispatch touching a
+  `$HOME/.opencode` or `OPENCODE_CONFIG_DIR` that does NOT already satisfy
+  opencode's own install check — pulled from the pinned binary's own
+  `Npm.install`: satisfied if the directory is not writable, or if
+  `node_modules` exists and every dependency name `package.json` declares
+  (plus `@opencode-ai/plugin` itself) is present in `package-lock.json`'s
+  root package entry, checked by name only, never by version — still waits
+  on that install, but the wait is now bounded and the failure classified
+  rather than left to hang or to read as an unclassified timeout: the
+  manager starts a watchdog the instant such a dispatch's config touches an
+  unsatisfied directory, bounded at 100s — headroom above the tens of
+  seconds a legitimate, reachable-registry install can take (so the online
+  case — an operator with an actual internet connection, exactly as their
+  own OpenCode run would be — still completes), while still catching the
+  truly unbounded case: an unreachable registry's own retry/backoff window,
+  observed at ~71s-146.88s in production — but capped at whatever remains
+  of the stage's own timeout. The watchdog stands down on EITHER of two
+  independent signals, whichever arrives first: the directory becoming
+  satisfied (checked read-only, polled every second or two, never written)
+  or any output at all arriving, proof the CLI is not stuck — so it never
+  caps model latency once OpenCode's own install completes. A directory
+  that already satisfies the check BEFORE the dispatch ever spawns opencode
+  gets the same local, instant fast path a run's own XDG-resolved config
+  directory always did (driving the pinned binary directly with the
+  predicate above satisfied: ~1s for `debug config`, ~4.5s for a whole
+  dispatch), so it never arms the watchdog at all. A bound that fires kills
+  the whole process group (the same reaping the plugin handshake failure path already
+  uses, since a single `SIGKILL` can leave a same-instant grandchild fork
+  holding the stage's stdout/stderr pipes open) and fails the stage
+  `adapter_incompatible`, naming the directory and #1787 (a per-run `HOME`,
+  the tracked path to removing the wait entirely rather than only bounding
+  it), the same way a genuine handshake failure already does. The plugin also
+  denies the `task` tool (subagents) unconditionally: a bounded spike against
+  1.18.30 could not confirm whether `tool.execute.before` runs inside a
+  subagent's own session, so AC9's fallback applies until that is settled
+  (ADR-022, amendment 2026-09-15) (#1632, #1635, #1787)
 
 - The OpenCode config schema published for the newest tested OpenCode
   (1.18.30) is now pinned in the repository, and a contract test validates
@@ -354,6 +688,42 @@ changelog, and the release workflow refuses a tag that does not.
   warns when the binary changed since the last dispatch. With
   `NIGHTGAUGE_EXPERIMENTAL_OPENCODE` unset the row runs nothing and is not
   usable, so cap recovery never hops onto it (#1627)
+- The Nightgauge OpenCode plugin's `gates.js` now runs workflow-gate and
+  stage-gate too, not just #1635's careful-gate: a `bash` tool call runs
+  workflow-gate, careful-gate, then stage-gate, in `hooks.json`'s own
+  PreToolUse order (first deny wins), so a push to main, a force-push, a
+  destructive git operation, a secret read/write, an analysis stage
+  advancing git/forge state outside its mandate, and a `gh pr merge --admin`/
+  `--auto` bypass are all blocked under OpenCode exactly as they already are
+  under Claude Code. `edit` and `write` tool calls run workflow-gate with a
+  Claude-shaped `file_path` payload, so editing `.env` or writing
+  `credentials.json` is blocked the same way. Every tool id opencode 1.18.30
+  exposes is now pinned to a classification (`TOOL_CLASSIFICATION`, a frozen,
+  null-prototype table so an inherited `Object.prototype` key such as
+  `constructor` or `__proto__` can never read back as a defined kind and
+  bypass the check below it); a tool id the table does not list is blocked
+  closed with `[nightgauge-gate:unknown-tool]`, and `apply_patch` — real,
+  and reachable whenever the dispatch model's id matches opencode's own
+  `gpt-*` (non-`oss`, non-`gpt-4`) tool-selection rule, which offers
+  `apply_patch` instead of `edit`/`write` for that model family — is
+  classified and blocked rather than guessed at, since its `patchText` hunks
+  are not yet mapped to a Claude-shaped `file_path` payload. opencode's own
+  read-only MCP resource tools (`list_mcp_resources`,
+  `list_mcp_resource_templates`, `read_mcp_resource`) are classified
+  passthrough; a repository's own MCP server tools (`<server>_<tool>`) are
+  not yet mapped and stay blocked closed under `[nightgauge-gate:unknown-tool]`
+  until #1626's per-run `mcp` config is threaded through to the plugin — see
+  the ADR-022 amendment this round for that gap against ADR-022's own
+  capability table. A new `commandExecuteBefore` export runs `hook
+sanitize-prompt` against a `command.execute.before` expansion, and
+  `nightgauge.js` now calls it before any `session.js` delegate (#1641's
+  file), fixing a gap in this same change where the export existed but the
+  registered hook never called it. The unconditional `task` denial (#1635's
+  AC9 fallback) is unchanged. New
+  `internal/execution/opencodeplugin/plugin_gates_test.go` and two testdata
+  fixtures — `gates_parity_corpus.json` and a captured
+  `opencode-1.18.30-tools.txt` — check every gate against the real built
+  binary and the real embedded plugin (#1640)
 
 ### Fixed
 

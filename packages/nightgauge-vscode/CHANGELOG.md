@@ -23,6 +23,8 @@ and this project adheres to
 
 ### Changed
 
+- The README now names both registries the extension is published to — the
+  VS Code Marketplace and Open VSX — with links to each listing (#1788)
 - OpenCode now appears, labeled Experimental, in the switch-adapter
   quick-pick, the per-stage and global adapter dropdowns, and the Adapter
   Doctor view. Choosing it from the quick-pick while

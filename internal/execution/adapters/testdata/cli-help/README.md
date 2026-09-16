@@ -29,6 +29,16 @@ hand.
   in its name: the contract reports one with no capture of that name, and it
   reports a hidden flag in a capture of another version until the probe is
   recorded for that version. Writing the sidecar needs no code edit.
+- **The #1639 canary carries a committed `.hidden` sidecar forward onto a
+  newer capture.** `scripts/adapter-canary.sh capture-help` copies the sidecar
+  named here onto the fresh capture it writes for whatever version it just
+  installed (`latest` on the daily/scheduled run, or a PR's proposed
+  `max_tested`), without re-running any probe. A `flag-contract` pass on that
+  newer version is therefore evidence the flag is still not _listed_ in
+  `--help`, never evidence it is still _accepted_ there — that only holds for
+  the version actually probed, in the table below. Treat a carried-forward
+  pass as inconclusive for the hidden flag specifically, and re-probe it by
+  hand (see "Re-capturing" below) once a version bump is otherwise ready.
 
 ## What reads them
 

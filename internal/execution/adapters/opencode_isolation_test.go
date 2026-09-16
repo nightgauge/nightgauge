@@ -125,9 +125,12 @@ func TestOpenCodeIsolationEnv(t *testing.T) {
 // OPENCODE_DISABLE_EXTERNAL_SKILLS, which 1.18.30 needs to keep the operator's
 // ~/.agents/skills out, are "1" on every spawn. The blanket
 // OPENCODE_DISABLE_CLAUDE_CODE is never set, because it would also drop what
-// ADR-022 § 11 keeps, and OPENCODE_DISABLE_PROJECT_CONFIG waits for the
-// reviewed merge of the repository's opencode.json (#1638). The names are
-// literal here, so dropping one from the adapter's list fails.
+// ADR-022 § 11 keeps. OPENCODE_DISABLE_PROJECT_CONFIG is absent from THIS
+// function's own output — OpenCodeIsolationEnv, the base isolation env — not
+// because it is unset on a dispatch: InstallNightgaugePlugin
+// (opencode.go, ADR-022 amendment 2026-09-14) sets it separately, on every
+// OpenCode dispatch in practice, for AC2. The names are literal here, so
+// dropping one from the adapter's list fails.
 func TestOpenCodeDisableFlags(t *testing.T) {
 	env, err := OpenCodeIsolationEnv(OpenCodeIsolation{Root: "/r", Home: "/h", Lookup: envLookup(nil), GOOS: "linux", MachineConfigDir: "/m"})
 	if err != nil {
@@ -1091,7 +1094,7 @@ func TestOpenCodeIsolationRefusalFollowsTheBlockTheRunIsBuiltFrom(t *testing.T) 
 		s.InheritUserConfig = reads == 1
 		return s, nil
 	}}
-	run := RunOptions{Model: "lmstudio/qwen/qwen3.8-27b", WorktreeDir: t.TempDir()}
+	run := RunOptions{Model: "lmstudio/qwen/qwen3.8-27b", WorktreeDir: gitInitTestWorktree(t)}
 	var root *RunRoot
 	var err error
 	stderr := captureAdapterStderr(t, func() {

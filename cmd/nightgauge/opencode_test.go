@@ -15,6 +15,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/adaptercompat"
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
+	"github.com/nightgauge/nightgauge/internal/execution/opencodeplugin"
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
 	"github.com/nightgauge/nightgauge/internal/gittest"
 )
@@ -87,7 +88,18 @@ func isolateOpenCodeVerb(t *testing.T, machineConfig string) string {
 	if err := os.WriteFile(filepath.Join(machineDir, "config.yaml"), []byte(machineConfig), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return t.TempDir()
+	// A real, one-commit git repository: the project-config tamper gate
+	// (#1638 fix round) now fails CLOSED, not open, on a worktree git
+	// reports is not one, and PreDispatch runs it before every other check
+	// this verb exercises.
+	worktree := t.TempDir()
+	gittest.InitRepo(t, worktree, "-b", "main")
+	if err := os.WriteFile(filepath.Join(worktree, "README.md"), []byte("fixture\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gittest.Run(t, worktree, "add", "-A")
+	gittest.Run(t, worktree, "commit", "-qm", "base")
+	return worktree
 }
 
 // runOpenCodeVerb runs `nightgauge opencode config` with args and returns its
@@ -159,6 +171,61 @@ func TestOpenCodeConfigVerbShape(t *testing.T) {
 	}
 }
 
+// TestOpenCodeConfigVerbResolvesStageTools is #1638 fix round finding 5's own
+// probe: the verb had no flag or lookup for --stage's AllowedTools/SkillPath,
+// so openCodeConfigForStage's RunOptions always carried neither, and
+// openCodePermissionMap generated a deny-everything map regardless of the
+// stage's real SKILL.md — read/edit/bash all "*": "deny", no
+// NIGHTGAUGE_SKILL_DIR allow-list entry, no matter --stage. --skills-root
+// points the verb at a fixture skill so it can resolve one.
+func TestOpenCodeConfigVerbResolvesStageTools(t *testing.T) {
+	worktree := isolateOpenCodeVerb(t, openCodeVerbMachineConfig)
+
+	// "feature-dev" is a real pipeline stage (skillrender.StageSkillDirs), so
+	// it resolves to "nightgauge-feature-dev" the same way a real dispatch's
+	// SkillsRoots lookup does — an arbitrary stage name skillrender does not
+	// know would fail Locate for a reason unrelated to this fix (Locate is
+	// this verb's own dependency, not something #1638 changes).
+	skillsRoot := t.TempDir()
+	skillDir := filepath.Join(skillsRoot, "skills", "nightgauge-feature-dev")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skillMD := "---\nname: nightgauge-feature-dev\nallowed-tools: Read Write Edit Bash\n---\n\nProbe stage body.\n"
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(skillMD), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runOpenCodeVerb(t, "--stage", "feature-dev", "--worktree", worktree, "--run-id", openCodeVerbRunID,
+		"--skills-root", skillsRoot, "--json")
+	if err != nil {
+		t.Fatalf("the verb failed: %v", err)
+	}
+	var run adapters.OpenCodeRun
+	if err := json.Unmarshal([]byte(out), &run); err != nil {
+		t.Fatal(err)
+	}
+	var config struct {
+		Permission struct {
+			Read map[string]string `json:"read"`
+			Edit map[string]string `json:"edit"`
+			Bash map[string]string `json:"bash"`
+		} `json:"permission"`
+	}
+	if err := json.Unmarshal([]byte(run.ConfigContent), &config); err != nil {
+		t.Fatalf("config_content is not the expected shape: %v\n%s", err, run.ConfigContent)
+	}
+	for key, m := range map[string]map[string]string{"read": config.Permission.Read, "edit": config.Permission.Edit, "bash": config.Permission.Bash} {
+		if m["*"] != "allow" {
+			t.Errorf("permission.%s[\"*\"] = %q, want \"allow\": the fixture SKILL.md grants Read/Write/Edit/Bash, so the verb should resolve them, not print the deny-everything default", key, m["*"])
+		}
+	}
+	skillDirPattern := filepath.Clean(skillDir) + "/**"
+	if !strings.Contains(run.ConfigContent, skillDirPattern) {
+		t.Errorf("config_content has no external_directory allow-list entry for the resolved skill dir %q:\n%s", skillDirPattern, run.ConfigContent)
+	}
+}
+
 // TestOpenCodeConfigVerbMatchesTheAdapter: for the same inputs the verb prints
 // exactly what the Go adapter hands a spawn, byte for byte: config_content is
 // the child's OPENCODE_CONFIG_CONTENT, every env entry is the value the child
@@ -198,6 +265,19 @@ func TestOpenCodeConfigVerbMatchesTheAdapter(t *testing.T) {
 		t.Errorf("the verb's env has %d variables, the adapter's run root %d", len(verb.Env), len(root.Env))
 	}
 	for k, v := range verb.Env {
+		// The plugin handshake nonce (#1635) is freshly minted by each of
+		// the two independent InstallNightgaugePlugin calls this test makes
+		// (crypto/rand, opencodeplugin.NewNonce) — it can never be byte
+		// identical across them, unlike every other entry, which is a
+		// deterministic function of the same inputs (id, worktree, model).
+		// Presence and non-emptiness are what the verb/adapter parity
+		// contract actually promises for this one key.
+		if k == opencodeplugin.EnvNonce {
+			if v == "" || env[k] == "" {
+				t.Errorf("env[%s]: expected a non-empty handshake nonce from both the verb (%q) and the adapter (%q)", k, v, env[k])
+			}
+			continue
+		}
 		if env[k] != v {
 			t.Errorf("env[%s]: the verb prints %q, the adapter spawns with %q", k, v, env[k])
 		}
