@@ -14,6 +14,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Added
+
+- `nightgauge pipeline aggregate` now reports a per-adapter token/cost
+  breakdown for every stage, with a new `--adapter` filter and an `unknown`
+  bucket for stage entries with no adapter stamp (#1846)
+
 ### Fixed
 
 - `packages/nightgauge-vscode/scripts/dev-install.sh` exited silently before
