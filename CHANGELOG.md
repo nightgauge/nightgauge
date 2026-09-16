@@ -14,6 +14,8 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-09-16
+
 ### Fixed
 
 - The Output Window webview no longer loads executable code from a remote
@@ -1804,7 +1806,8 @@ with GitHub Project board integration, dashboard, context file viewer, and
 the first set of commands and settings. Recorded so the extension's changelog
 and this one name the same versions.
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/nightgauge/nightgauge/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/nightgauge/nightgauge/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/nightgauge/nightgauge/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/nightgauge/nightgauge/compare/v0.3.0...v0.3.1
