@@ -14,6 +14,23 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- `packages/nightgauge-vscode/scripts/dev-install.sh` exited silently before
+  installing when no version of the extension was already present. The
+  old-version cleanup globbed with `ls`, which exits non-zero on no match;
+  under `set -euo pipefail` that ended the script, and the block's own
+  `2>/dev/null` discarded the only diagnostic. The failure was therefore
+  invisible — the build and package steps all succeeded and the run simply
+  stopped before `==> Installing` — and it could only ever happen on a
+  machine with no prior install, which is why it survived. The glob now expands
+  into an array, so "no matches" is an empty list rather than an error.
+- The same block sorted with `sort -t- -k4`, addressing a fourth dash-separated
+  field that does not exist; the version never participated in the sort, so
+  cleanup kept whichever directory sorted last lexicographically rather than
+  the newest build. Now a plain version sort, which is correct because the
+  paths share an identical prefix.
+
 ## [0.4.3] - 2026-09-16
 
 ### Fixed
