@@ -15,6 +15,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/runstate"
+	"github.com/nightgauge/nightgauge/internal/skillrender"
 )
 
 // --- opencode command ---
@@ -39,14 +40,15 @@ func opencodeCmd() *cobra.Command {
 // makes before spawning is an error here.
 func opencodeConfigCmd() *cobra.Command {
 	var (
-		stage     string
-		worktree  string
-		repo      string
-		model     string
-		runID     string
-		maxTurns  int
-		maxTokens int
-		asJSON    bool
+		stage      string
+		worktree   string
+		repo       string
+		model      string
+		runID      string
+		maxTurns   int
+		maxTokens  int
+		skillsRoot string
+		asJSON     bool
 	)
 	cmd := &cobra.Command{
 		Use:   "config",
@@ -73,6 +75,16 @@ server and stderr says why.
 The run's root is created, or reused when --run-id names a run that has one.
 Without --run-id a new root is minted; the caller owns it, and a root no stage
 uses for 7 days is swept.
+
+--stage's AllowedTools and SkillPath, what the permission map's every read/
+edit/bash key and its NIGHTGAUGE_SKILL_DIR allow-list entry are actually
+derived from (#1638), are resolved the same way the Go pipeline resolves them
+for a dispatch: skillrender.Render against --skills-root (default: the current
+directory, plus the bundle next to this binary — skillrender.DefaultRoots).
+When --stage's SKILL.md cannot be found there, the config is still printed,
+with no tool granted (every permission key deny) and a stderr notice saying
+so, rather than failing the command — the shape every caller before #1638's
+fix round always got.
 
 The model defaults to opencode.model in the machine-tier config. The command
 runs the adapter's own checks, so it fails, and prints nothing on stdout,
@@ -101,7 +113,7 @@ notices go to stderr.`,
 			}
 			run, err := openCodeConfigForStage(cmd.Context(), openCodeConfigFlags{
 				stage: stage, worktree: worktree, repo: repo, model: model, runID: runID,
-				maxTurns: maxTurns, maxTokens: maxTokens,
+				maxTurns: maxTurns, maxTokens: maxTokens, skillsRoot: skillsRoot,
 			})
 			if err != nil {
 				return err
@@ -119,6 +131,7 @@ notices go to stderr.`,
 	cmd.Flags().StringVar(&runID, "run-id", "", "Run identity whose root to use (default: a new root)")
 	cmd.Flags().IntVar(&maxTurns, "max-turns", 0, "Stage turn cap, set as the steps cap of the build agent and each subagent (0: the adapter's default of 200)")
 	cmd.Flags().IntVar(&maxTokens, "max-tokens", 0, "Stage token cap, which lowers the endpoint's output limit (0: none)")
+	cmd.Flags().StringVar(&skillsRoot, "skills-root", "", "Root to search for --stage's SKILL.md, the same convention skillrender.DefaultRoots resolves (default: the current directory, plus the installed bundle next to this binary)")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "Print JSON (the only output format)")
 	_ = cmd.MarkFlagRequired("stage")
 	_ = cmd.MarkFlagRequired("worktree")
@@ -126,8 +139,8 @@ notices go to stderr.`,
 }
 
 type openCodeConfigFlags struct {
-	stage, worktree, repo, model, runID string
-	maxTurns, maxTokens                 int
+	stage, worktree, repo, model, runID, skillsRoot string
+	maxTurns, maxTokens                             int
 }
 
 // openCodeConfigForStage resolves the verb's inputs the way the manager
@@ -162,13 +175,16 @@ func openCodeConfigForStage(ctx context.Context, f openCodeConfigFlags) (*adapte
 	if model == "" {
 		return nil, errors.New("no model: pass --model <provider>/<model>, or set opencode.model in the machine-tier config (~/.nightgauge/config.yaml)")
 	}
+	allowedTools, skillPath := openCodeVerbStageTools(stage, f.skillsRoot)
 	run := adapters.RunOptions{
-		Stage:       stage,
-		WorktreeDir: worktree,
-		TargetRepo:  strings.TrimSpace(f.repo),
-		Model:       model,
-		MaxTurns:    f.maxTurns,
-		MaxTokens:   f.maxTokens,
+		Stage:        stage,
+		WorktreeDir:  worktree,
+		TargetRepo:   strings.TrimSpace(f.repo),
+		Model:        model,
+		MaxTurns:     f.maxTurns,
+		MaxTokens:    f.maxTokens,
+		AllowedTools: allowedTools,
+		SkillPath:    skillPath,
 	}
 	adapter := adapters.NewOpenCodeAdapter()
 	if err := adapter.PreDispatch(ctx, run); err != nil {
@@ -208,6 +224,11 @@ func openCodeConfigForStage(ctx context.Context, f openCodeConfigFlags) (*adapte
 		Lookup:           os.LookupEnv,
 		GOOS:             runtime.GOOS,
 		McpForge:         adapters.OpenCodeMcpForge(cwd),
+		// The adapter's own PrepareRunRoot sets the identical BinDir
+		// (adapters.OpenCodeBinDir()), so the permission map's
+		// external_directory allow-list this verb prints matches the
+		// adapter's exactly (#1638, TestOpenCodeConfigVerbMatchesTheAdapter).
+		BinDir: adapters.OpenCodeBinDir(),
 	})
 	if err != nil {
 		return nil, err
@@ -226,4 +247,48 @@ func openCodeConfigForStage(ctx context.Context, f openCodeConfigFlags) (*adapte
 		return nil, err
 	}
 	return prepared, nil
+}
+
+// openCodeVerbStageTools resolves stage's AllowedTools and SkillPath the way
+// the Go pipeline resolves them for a real dispatch (internal/orchestrator/
+// scheduler.go: skillrender.Render against skillrender.DefaultRoots(workspaceRoot),
+// AllowedTools filtered through skillrender.FilterHeadlessTools) — the
+// permission map's every read/edit/bash key and its NIGHTGAUGE_SKILL_DIR
+// allow-list entry come from exactly these two fields (openCodePermissionMap,
+// #1638), so leaving them unset here, as this verb always did before this fix
+// round, silently printed a deny-everything map for every stage
+// (TestOpenCodeConfigVerbResolvesStageTools; the issue's own #1648/#1625
+// consumers read this verb as the one authority for what a spawn gets).
+//
+// skillsRoot is --skills-root when the caller passed one, else the current
+// directory: this verb has no workspaceRoot of its own the way the Go
+// pipeline's Scheduler does (WorkspaceRoot names the checkout that IS
+// running the orchestrator, not any of --worktree, which can be a sibling
+// repository's own worktree). skillrender.DefaultRoots' own bundle-relative
+// fallback (a "skills" directory next to this binary's own directory,
+// bundleSkillsRoot) still finds an installed layout's skills regardless of
+// either.
+//
+// A resolution failure (no SKILL.md for stage under any searched root) is
+// never fatal to the command: it prints a stderr notice and returns nil,
+// nil, so the caller still gets a config — one with every permission key
+// denied, the shape every caller of this verb got before this fix round, and
+// still useful for every other field (env, isolation, run_dir).
+func openCodeVerbStageTools(stage, skillsRoot string) (allowedTools []string, skillPath string) {
+	root := skillsRoot
+	if root == "" {
+		if cwd, err := os.Getwd(); err == nil {
+			root = cwd
+		}
+	}
+	skillData, err := skillrender.Render(skillrender.Options{
+		Stage:       stage,
+		Adapter:     "opencode",
+		SkillsRoots: skillrender.DefaultRoots(root),
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[opencode] could not resolve %s's SKILL.md under %q (pass --skills-root, or run from the nightgauge checkout, to fix this): %v; printing the config with every permission key denied\n", stage, root, err)
+		return nil, ""
+	}
+	return skillrender.FilterHeadlessTools(skillData.AllowedTools), skillData.SkillPath
 }

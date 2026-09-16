@@ -35,6 +35,22 @@ func openCodeFixtureRepo(t *testing.T, files map[string]string) string {
 	return filepath.Join(parent, "wt")
 }
 
+// gitInitTestWorktree is a fresh git repository with one commit and no
+// origin: the minimum openCodeProjectConfigTamperCheck needs to pass a clean
+// worktree (#1638 fix round: the gate now fails closed on a non-git
+// worktree, so every PreDispatch test that used a plain t.TempDir() to test
+// something ELSE needs one of these instead). Lighter than
+// openCodeFixtureRepo's clone-with-origin shape, which stays reserved for
+// the tamper gate's own tests.
+func gitInitTestWorktree(t *testing.T) string {
+	t.Helper()
+	dir := gittest.InitRepo(t, t.TempDir(), "-b", "main")
+	writeRepoFile(t, filepath.Join(dir, "README.md"), "probe worktree\n")
+	gittest.Run(t, dir, "add", "-A")
+	gittest.Run(t, dir, "commit", "-qm", "base")
+	return dir
+}
+
 func writeRepoFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

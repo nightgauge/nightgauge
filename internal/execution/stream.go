@@ -727,8 +727,40 @@ type OpenCodeTokens struct {
 }
 
 // openCodeRejectedToolError is the error OpenCode 1.18.30 gives a tool call
-// whose permission request it rejected.
+// whose permission request it rejected because the permission resolved to
+// "ask" and a headless run auto-rejects it (captured verbatim:
+// testdata/opencode_auto_reject_stream.jsonl). Bundled source also has this
+// exact text with " with the following feedback: ${this.feedback}" appended
+// for an interactive human's own rejection — never a headless pipeline run's
+// own path, but openCodeIsRejectedToolError's prefix match (below) still
+// recognizes it, on the same reasoning as the "deny" prefix.
 const openCodeRejectedToolError = "The user rejected permission to use this specific tool call."
+
+// openCodeRuleDeniedToolErrorPrefix is the DIFFERENT error text 1.18.30 gives
+// a tool call whose permission resolved to "deny" directly (bundled source:
+// `The user has specified a rule which prevents you from using this specific
+// tool call. Here are some of the relevant rules ${JSON.stringify(this.ruleset)}`)
+// — #1638's own generated permission map never sets "ask" (ADR-022 § 9), so
+// every stage running under it hits this path, never openCodeRejectedToolError's
+// exact one. A bounded probe against the real binary
+// (internal/execution/adapters' opencode_guard_integration_test.go,
+// TestOpenCodeOutsideReadRejected) confirms the observed text matches.
+// #1638 fix round finding (AC3): before this constant existed,
+// RejectedToolCalls (below) never counted a "deny" rejection, and every
+// classification path that depends on it (openCodeOutcome.marker's
+// RejectedToolCalls fallback, opencode_usage.go's finish) silently reported
+// success for a stage a permission-map "deny" actually stopped.
+const openCodeRuleDeniedToolErrorPrefix = "The user has specified a rule which prevents you from using this specific tool call."
+
+// openCodeIsRejectedToolError reports whether errText is a tool_use event's
+// error for a call OpenCode's own permission config refused — either
+// rejection text above, "ask" auto-rejected or "deny" matched directly. Both
+// are matched as prefixes, never exact equality: the ruleset text trails the
+// "deny" text dynamically per call, and the interactive-feedback text trails
+// the "ask" text the same way.
+func openCodeIsRejectedToolError(errText string) bool {
+	return strings.HasPrefix(errText, openCodeRejectedToolError) || strings.HasPrefix(errText, openCodeRuleDeniedToolErrorPrefix)
+}
 
 // openCodeKnownEvents are the event types opencode 1.18.30 writes.
 var openCodeKnownEvents = map[string]bool{
@@ -757,6 +789,15 @@ type OpenCodeStream struct {
 	// permission-rejection error. Stderr, not this count, names the
 	// permission: this is only the cross-check that stderr said so.
 	RejectedToolCalls int
+	// RejectedTool is the FIRST rejected tool_use event's own part.tool
+	// (opencode's own lowercase name: "bash", "edit", "apply_patch", ...),
+	// empty when the event named none. It is opencode_usage.go's own
+	// fallback source for the classification marker (AC3, #1638 fix round)
+	// when stderr carried no auto-reject notice at all — a "deny" match
+	// never prints one (ADR-022 § 9's "The permission map's pattern
+	// matching" amendment), so this is the only source for every dispatch
+	// under a generated permission map.
+	RejectedTool string
 
 	drift driftLog
 }
@@ -824,8 +865,11 @@ func (acc *TokenAccumulator) ParseOpenCodeStreamLine(line string) (*StreamEvent,
 	switch ev.Type {
 	case "tool_use":
 		if ev.Part != nil && ev.Part.State != nil && ev.Part.State.Status == "error" &&
-			ev.Part.State.Error == openCodeRejectedToolError {
+			openCodeIsRejectedToolError(ev.Part.State.Error) {
 			s.RejectedToolCalls++
+			if s.RejectedTool == "" && ev.Part.Tool != "" {
+				s.RejectedTool = ev.Part.Tool
+			}
 		}
 	case "step_finish":
 		s.StepFinishes++

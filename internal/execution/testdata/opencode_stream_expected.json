@@ -41,6 +41,20 @@
       ],
       "fold": null
     },
+    "opencode_deny_rejected_stream.jsonl": {
+      "dispatched": "guard/stub-model",
+      "stream": {
+        "session_id": "ses_f5918b921ffeG3yN1lRKu1SjD0",
+        "step_finishes": 1,
+        "tokens": { "input": 0, "output": 0, "reasoning": 0, "cache_read": 0, "cache_write": 0 },
+        "peak_step_input": 0,
+        "reported_cost_usd": 0,
+        "rejected_tool_calls": 1
+      },
+      "stderr": "opencode_deny_rejected_stderr.txt",
+      "failures": [],
+      "fold": null
+    },
     "opencode_stream_cloud_capture.jsonl": {
       "dispatched": "xai/grok-4.6",
       "stream": {
