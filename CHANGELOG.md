@@ -14,6 +14,22 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- The registry publish steps in `marketplace-publish.yml` no longer leave a
+  partial release behind. Both were a bare `for VSIX in *.vsix; do publish; done`
+  under `set -e`, so the first failure aborted the step: the `v0.4.2` Open VSX
+  publish landed `darwin-arm64`, hit `503 Service Unavailable` on
+  `darwin-x64`, and never attempted `linux-x64`. That advertises a version most
+  platforms cannot install, and re-running could not repair it, because the
+  target that already landed answers with a conflict and aborts the loop again
+  at the first VSIX. Both steps now call `scripts/publish-vsix-set.sh`, which
+  retries transient registry failures, treats an already-published target as
+  success so a re-run completes a partial release, attempts every target before
+  failing so the summary is the whole truth, and still exits non-zero naming
+  any target that never landed. `scripts/test-publish-vsix-set.sh` covers all
+  six behaviours, including the 503-mid-loop case that motivated it.
+
 ## [0.4.2] - 2026-09-16
 
 ### Fixed

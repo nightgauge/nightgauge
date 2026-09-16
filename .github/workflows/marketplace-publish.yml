@@ -327,10 +327,10 @@ jobs:
           fi
           # Each .vsix carries its targetPlatform in the manifest, so vsce
           # publishes it for the right platform without re-specifying --target.
-          for VSIX in *.vsix; do
-            echo "Publishing $VSIX"
-            npx @vscode/vsce@3.9.2 publish --no-dependencies --packagePath "$VSIX" ${CHANNEL[@]+"${CHANNEL[@]}"}
-          done
+          # Same idempotent, retrying helper as the Open VSX step: a partial
+          # release is the failure mode worth engineering against.
+          bash "$GITHUB_WORKSPACE/scripts/publish-vsix-set.sh" \
+            marketplace "$VERSION" ${CHANNEL[@]+"${CHANNEL[@]}"}
 
       - name: Publish per-target VSIXs to Open VSX
         if: ${{ inputs.registries == 'open-vsx' || inputs.registries == 'both' }}
@@ -349,10 +349,10 @@ jobs:
           else
             echo "Version $VERSION → publishing to Open VSX as release"
           fi
-          for VSIX in *.vsix; do
-            echo "Publishing $VSIX to Open VSX"
-            npx --yes ovsx@1.2.0 publish "$VSIX" ${CHANNEL[@]+"${CHANNEL[@]}"}
-          done
+          # Idempotent and retrying: a transient 5xx mid-loop used to abort the
+          # step and leave a partial release that a re-run could not repair.
+          bash "$GITHUB_WORKSPACE/scripts/publish-vsix-set.sh" \
+            open-vsx "$VERSION" ${CHANNEL[@]+"${CHANNEL[@]}"}
 
       - name: Upload the published VSIXs as a workflow artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
