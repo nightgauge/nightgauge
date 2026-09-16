@@ -18,9 +18,19 @@ import { BaseTreeItem } from "./BaseTreeItem";
  * `unreported` — the stage ended having never reported it (#1246). Distinct
  * because the two carry opposite information about intent, and the
  * end-of-stage back-fill can only ever observe the second.
+ * `superseded` — this ATTEMPT was displaced, not judged (#1850).
+ * `degraded` — it did not succeed, on a stage that succeeded anyway (#1850).
  */
 export type PhaseStatus =
-  "pending" | "running" | "complete" | "skipped" | "unreported" | "failed" | "abandoned";
+  | "pending"
+  | "running"
+  | "complete"
+  | "skipped"
+  | "unreported"
+  | "failed"
+  | "abandoned"
+  | "superseded"
+  | "degraded";
 
 interface PhaseDisplayConfig {
   icon: string;
@@ -42,6 +52,18 @@ const PHASE_STATUS_CONFIG: Record<PhaseStatus, PhaseDisplayConfig> = {
   // stage moved past it without it ever finishing" are different findings, and
   // the second is the one that points at a stuck stage.
   abandoned: { icon: "debug-disconnect", iconColor: "testing.iconQueued" },
+  // Neither of these may use the failure glyph or the failure colour. That is
+  // the entire point of #1850: a green run rendered a red ✗ on itself and the
+  // operator investigated a stage that had merged its PR and closed its issue.
+  //
+  // `superseded` reads as "handed on" — the deterministic runner stopped here
+  // and the LLM path took the phase. Queued, not failed: something else is
+  // doing it.
+  superseded: { icon: "arrow-right", iconColor: "testing.iconQueued" },
+  // `degraded` reads as "did not succeed, and the stage shipped anyway". A
+  // warning is exactly the weight it deserves — more than `unreported`, which
+  // claims no evidence, and less than `failed`, which claims the run broke.
+  degraded: { icon: "warning", iconColor: "testing.iconSkipped" },
 };
 
 /**

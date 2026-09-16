@@ -129,19 +129,25 @@ func TestPRMergePhases_PuntPreservesEarlierPhases(t *testing.T) {
 	// The phase the punt happened inside must not be left open: a `running`
 	// record survives to the stage boundary and is rewritten `abandoned`
 	// (#1009), which reads as "the run got stuck here".
-	if !rec.has("freshness-check", "failed") {
+	// Closed as `superseded`, not `failed` (#1850). This is the exact record
+	// the issue was filed about: pr-merge punted here, re-entered, merged the
+	// PR and exited 0, and freshness-check still said `failed`.
+	if !rec.has("freshness-check", "superseded") {
 		t.Errorf("the in-flight phase was not closed on the punt; events = %+v", rec.events)
 	}
+	if got := rec.namesWithStatus("failed"); len(got) != 0 {
+		t.Errorf("punt recorded %v as failed — a punt is a handoff, not a verdict", got)
+	}
 	for _, e := range rec.events {
-		if e.status == "running" && !rec.has(e.name, "complete") && !rec.has(e.name, "failed") {
+		if e.status == "running" && !rec.has(e.name, "complete") && !rec.has(e.name, "superseded") {
 			t.Errorf("phase %q was left running when the runner returned", e.name)
 		}
 	}
 }
 
 // TestPRMergePhases_ContextReadFailurePuntsWithoutSkips covers the earliest
-// punt there is — the runner reports one failed phase and nothing else, so the
-// skill starts from a clean slate.
+// punt there is — the runner reports one superseded phase and nothing else, so
+// the skill starts from a clean slate.
 func TestPRMergePhases_ContextReadFailurePuntsWithoutSkips(t *testing.T) {
 	r := newRunnerWith(&fakeGh{}, 0)
 	r.prContextRead = func(string, int) (int, error) { return 0, errors.New("no such file") }
@@ -154,8 +160,8 @@ func TestPRMergePhases_ContextReadFailurePuntsWithoutSkips(t *testing.T) {
 	if got := rec.namesWithStatus("skipped"); len(got) != 0 {
 		t.Errorf("recorded %v as skipped on a punt", got)
 	}
-	if !rec.has("read-pr-context", "failed") {
-		t.Errorf("read-pr-context should be recorded failed; events = %+v", rec.events)
+	if !rec.has("read-pr-context", "superseded") {
+		t.Errorf("read-pr-context should be recorded superseded; events = %+v", rec.events)
 	}
 }
 

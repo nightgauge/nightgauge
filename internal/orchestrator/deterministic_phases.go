@@ -49,6 +49,11 @@ func (p *deterministicPhaseReporter) PhaseFail(stage, name string, index, total 
 	p.settled(stage, name, index, total, "failed")
 }
 
+func (p *deterministicPhaseReporter) PhaseSupersede(stage, name string, index, total int) {
+	p.rt.SupersedePhase(state.PipelineStage(stage), name, index, total)
+	p.settled(stage, name, index, total, "superseded")
+}
+
 func (p *deterministicPhaseReporter) PhaseSkip(stage, name string, index, total int) {
 	p.rt.SkipPhase(state.PipelineStage(stage), name, index, total)
 	p.settled(stage, name, index, total, "skipped")

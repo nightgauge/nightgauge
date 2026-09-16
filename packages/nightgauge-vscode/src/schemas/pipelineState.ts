@@ -153,6 +153,12 @@ export const StagePhaseSchema = z.object({
    * said about this phase" about a phase that demonstrably started. It is the
    * status that identifies a stuck stage, so losing it loses the finding
    * (#1558).
+   * `superseded` — this ATTEMPT at the phase was displaced, not judged: the
+   * deterministic runner stopped inside it and punted, and the LLM path is
+   * about to run the same phase for real (#1850).
+   * `degraded` — the phase did not succeed and its stage exited 0 anyway, on
+   * purpose (pr-create's write-context; see PIPELINE_STATE_SCHEMA.md). Split
+   * out of `failed` so a green stage stops rendering a red \u2717 (#1850).
    *
    * This list must stay in step with internal/state/runtime_state.go's
    * PhaseRecord.Status and with PhaseStatus in views/items/PhaseTreeItem.ts.
@@ -165,6 +171,8 @@ export const StagePhaseSchema = z.object({
     "unreported",
     "failed",
     "abandoned",
+    "superseded",
+    "degraded",
   ]),
   started_at: z.string().datetime().optional(),
   completed_at: z.string().datetime().optional(),

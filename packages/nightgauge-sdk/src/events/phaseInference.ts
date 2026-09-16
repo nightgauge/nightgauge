@@ -131,6 +131,19 @@ function isPlanningContextPath(path: string): boolean {
   return /(^|\/)planning-\d+\.json$/.test(path) || /\.nightgauge\/pipeline\/planning-/.test(path);
 }
 
+function isValidateContextPath(path: string): boolean {
+  return /(^|\/)validate-\d+\.json$/.test(path) || /\.nightgauge\/pipeline\/validate-/.test(path);
+}
+
+/**
+ * Anchored on a push specifically, not on any VCS call: feature-validate runs
+ * status and diff commands throughout and neither is the commit-and-push
+ * waypoint.
+ */
+function isBranchPushCommand(command: string): boolean {
+  return /\bgit\s+push\b/.test(command);
+}
+
 /**
  * Per-stage inference rules. Only stages that do NOT reliably self-report phase
  * markers need entries here. Rules are evaluated against each tool call; when
@@ -191,6 +204,45 @@ const STAGE_RULES: Partial<Record<ExecutionStage, PhaseInferenceRule[]>> = {
       index: 10,
       match: (name, input) =>
         EDIT_TOOLS.has(name) && isPlanningContextPath(inputString(input, "file_path")),
+    },
+  ],
+  // feature-validate (23 phases). Left out of #3760 and the worst-reported
+  // stage in the run that produced #1850: 0 of 23 phases across four minutes
+  // and $0.68, on a stage that exited 0.
+  //
+  // There is nothing different about its prompt — its 23 markers are as
+  // unconditional in the SKILL.md as feature-dev's 18 were. They are skipped
+  // for the same structural reason: each is a standalone printf in its own
+  // bash block, on a stage whose real work is Read, Bash and Edit.
+  "feature-validate": [
+    // The stage opens by reading the dev handoff and the files it names
+    // (covers phases 0-1).
+    { index: 1, match: (name) => READ_TOOLS.has(name) },
+    // Running the test/build suite -> run-tests, where nearly all of the
+    // stage's wall-clock goes. Deliberately the same predicate feature-dev
+    // uses: the two stages run the same commands, and a second pattern for one
+    // vocabulary is a drift source.
+    {
+      index: 10,
+      match: (name, input) =>
+        name === "Bash" && isTestOrBuildCommand(inputString(input, "command")),
+    },
+    // Pushing the branch -> commit-and-push.
+    {
+      index: 18,
+      match: (name, input) => name === "Bash" && isBranchPushCommand(inputString(input, "command")),
+    },
+    // Writing the validate-context handoff -> write-validate-context.
+    {
+      index: 19,
+      match: (name, input) =>
+        EDIT_TOOLS.has(name) && isValidateContextPath(inputString(input, "file_path")),
+    },
+    // Syncing project board status -> sync-project-status, the stage's last
+    // observable act before it narrates.
+    {
+      index: 20,
+      match: (name, input) => name === "Bash" && isStatusSyncCommand(inputString(input, "command")),
     },
   ],
 };

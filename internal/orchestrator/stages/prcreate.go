@@ -513,7 +513,7 @@ func (r *DeterministicPRCreateRunner) Run(ctx context.Context, issueNumber int, 
 	ph.start("load-context")
 	snap, err := r.readContext(workdir, issueNumber)
 	if err != nil {
-		ph.failInFlight()
+		ph.supersedeInFlight()
 		return finish(PRCreateResult{Path: CreatePathPunt, Reason: ReasonContextInvalidJSON}, nil)
 	}
 	snap.IssueNumber = issueNumber
@@ -533,18 +533,18 @@ func (r *DeterministicPRCreateRunner) Run(ctx context.Context, issueNumber int, 
 
 	decision := DecideCreate(snap)
 	if !decision.ShouldCreate {
-		ph.failInFlight()
+		ph.supersedeInFlight()
 		return finish(PRCreateResult{Path: CreatePathPunt, Reason: decision.Reason}, nil)
 	}
 
 	if r.prClient == nil || r.git == nil {
-		ph.failInFlight()
+		ph.supersedeInFlight()
 		return finish(PRCreateResult{Path: CreatePathPunt, Reason: ReasonClientUnavailable}, nil)
 	}
 
 	owner, repoName := splitOwnerRepo(repo)
 	if owner == "" || repoName == "" {
-		ph.failInFlight()
+		ph.supersedeInFlight()
 		return finish(PRCreateResult{Path: CreatePathPunt, Reason: ReasonClientUnavailable}, nil)
 	}
 
@@ -589,7 +589,7 @@ func (r *DeterministicPRCreateRunner) Run(ctx context.Context, issueNumber int, 
 	if pushErr := r.git.PushBranch(ctx, workdir, snap.Branch); pushErr != nil {
 		exists, existsErr := r.git.RemoteBranchExists(ctx, workdir, snap.Branch)
 		if existsErr != nil || !exists {
-			ph.failInFlight()
+			ph.supersedeInFlight()
 			return finish(PRCreateResult{Path: CreatePathPunt, Reason: fmt.Sprintf("%s: %s", ReasonPushFailed, truncateErr(pushErr, 200))}, nil)
 		}
 		// Branch already on origin — proceed to open the PR from it.
@@ -601,7 +601,7 @@ func (r *DeterministicPRCreateRunner) Run(ctx context.Context, issueNumber int, 
 	ph.start("create-pr")
 	repoID, idErr := r.prClient.GetRepoID(ctx, owner, repoName)
 	if idErr != nil {
-		ph.failInFlight()
+		ph.supersedeInFlight()
 		return finish(PRCreateResult{Path: CreatePathPunt, Reason: fmt.Sprintf("%s: %s", ReasonCreateFailed, truncateErr(idErr, 200))}, nil)
 	}
 
@@ -609,14 +609,14 @@ func (r *DeterministicPRCreateRunner) Run(ctx context.Context, issueNumber int, 
 	body := RenderBody(snap)
 	pr, createErr := r.prClient.CreatePR(ctx, repoID, title, body, snap.Branch, snap.BaseBranch)
 	if createErr != nil {
-		ph.failInFlight()
+		ph.supersedeInFlight()
 		return finish(PRCreateResult{Path: CreatePathPunt, Reason: fmt.Sprintf("%s: %s", ReasonCreateFailed, truncateErr(createErr, 200))}, nil)
 	}
 	ph.complete("create-pr")
 
 	ph.start("verify-pr-created")
 	if pr == nil || pr.Number <= 0 {
-		ph.failInFlight()
+		ph.supersedeInFlight()
 		return finish(PRCreateResult{Path: CreatePathPunt, Reason: ReasonCreateFailed}, nil)
 	}
 	ph.complete("verify-pr-created")
@@ -632,6 +632,14 @@ func (r *DeterministicPRCreateRunner) Run(ctx context.Context, issueNumber int, 
 	}); writeErr != nil {
 		// The PR exists, so the stage still succeeded deterministically — but
 		// pr-{N}.json did not land, so write-context failed and says so.
+		//
+		// The ONE site here that is a genuine phase failure rather than a punt
+		// handoff: nothing re-attempts write-context, so there is no later
+		// path for this attempt to be superseded BY. It stays `failed`, and
+		// CompleteStage's clear site downgrades it to `degraded` when the
+		// stage goes on to exit 0 (#1850) — the reclassification belongs
+		// there, where the stage's own verdict is finally known, not here,
+		// where it is not.
 		ph.failInFlight()
 		ph.skipOffPath()
 		return finish(PRCreateResult{

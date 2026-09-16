@@ -96,10 +96,50 @@ describe("StageTreeItem phase counting (#1246)", () => {
     item.setPhases(phases, undefined, 14);
 
     const label = String(item.description ?? "");
-    expect(label).toContain("0/3 phases");
-    expect(label).toContain("3 unreported");
+    // Not "0/3 phases · 3 unreported" (#1850). When EVERY applicable phase is
+    // unreported the stage did not score zero — it was never measured, and a
+    // zero in the numerator position reads as "this stage did none of its
+    // work". The denominator stays visible so the amount left unmeasured is
+    // not hidden either.
+    expect(label).toContain("phases not reported (3)");
     expect(label).toContain("11 skipped");
+    expect(label).not.toContain("0/3");
     expect(label).not.toContain("11/14");
+  });
+
+  // The partial case still scores, because there it IS a score: something was
+  // observed and something was not.
+  it("still shows a count when only some phases went unreported", () => {
+    const item = new StageTreeItem(STAGE, "pending");
+    item.setStatus("complete");
+    item.setPhases(
+      [phase("a", "complete"), phase("b", "unreported"), phase("c", "unreported")],
+      undefined,
+      3
+    );
+
+    const label = String(item.description ?? "");
+    expect(label).toContain("1/3 phases");
+    expect(label).toContain("2 unreported");
+    expect(label).not.toContain("not reported (");
+  });
+
+  // #1850: neither new status may be counted as progress, and neither may
+  // read as a failure.
+  it("counts neither superseded nor degraded as observed work", () => {
+    const item = new StageTreeItem(STAGE, "pending");
+    item.setStatus("complete");
+    item.setPhases(
+      [phase("a", "complete"), phase("b", "superseded"), phase("c", "degraded")],
+      undefined,
+      3
+    );
+
+    const label = String(item.description ?? "");
+    expect(label).toContain("1/3 phases");
+    expect(label).toContain("1 superseded");
+    expect(label).toContain("1 degraded");
+    expect(label).not.toContain("3/3");
   });
 
   it("says so when every phase was skipped, rather than showing a full bar", () => {

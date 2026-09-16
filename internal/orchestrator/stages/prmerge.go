@@ -299,7 +299,7 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 	ph.start("read-pr-context")
 	prNumber, err := r.prContextRead(workdir, issueNumber)
 	if err != nil {
-		ph.failInFlight()
+		ph.supersedeInFlight()
 		// No pr-{N}.json or unreadable. Punt — the LLM skill path can decide
 		// whether to author the PR or fail the run. Don't silently treat as
 		// merged: a missing PR context is structurally unexpected at this
@@ -316,7 +316,7 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 	ph.start("ci-gate")
 	snap, fetchErr := r.fetchWithPolling(ctx, gh, prNumber)
 	if fetchErr != nil {
-		ph.failInFlight()
+		ph.supersedeInFlight()
 		return finish(PRMergeResult{
 			Path:     PathPunt,
 			PRNumber: prNumber,
@@ -328,7 +328,7 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 	// the stage to the LLM skill, which can merge the same head, so the refusal
 	// has to come first to be a gate rather than a suggestion (issue 1675).
 	if refused := r.refuseGeneratedSteering(ctx, workdir, prNumber, snap); refused != nil {
-		ph.failInFlight()
+		ph.supersedeInFlight()
 		return finish(*refused, nil)
 	}
 
@@ -354,7 +354,7 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 	if !decision.ShouldMerge && MergeBlockedByPendingCI(snap) {
 		waited, outcome, waitErr := r.waitForCleanMergeState(ctx, gh, prNumber, snap)
 		if waitErr != nil {
-			ph.failInFlight()
+			ph.supersedeInFlight()
 			return finish(PRMergeResult{
 				Path:     PathPunt,
 				PRNumber: prNumber,
@@ -365,7 +365,7 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 		snap = waited
 		switch outcome {
 		case ciWaitTimedOut:
-			ph.failInFlight()
+			ph.supersedeInFlight()
 			return finish(PRMergeResult{
 				Path:     PathPunt,
 				PRNumber: prNumber,
@@ -373,7 +373,7 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 				Reason:   ReasonCIWaitTimeout,
 			}, nil)
 		case ciWaitNoChecksCreated:
-			ph.failInFlight()
+			ph.supersedeInFlight()
 			return finish(PRMergeResult{
 				Path:     PathPunt,
 				PRNumber: prNumber,
@@ -403,7 +403,7 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 			ph.skip("merge")
 			ph.skipOffPath()
 		} else {
-			ph.failInFlight()
+			ph.supersedeInFlight()
 		}
 		return finish(PRMergeResult{
 			Path:        path,
@@ -449,7 +449,7 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 	// re-poll below confirms MERGED).
 	ph.start("merge")
 	if mergeErr := gh.Merge(ctx, prNumber); mergeErr != nil {
-		ph.failInFlight()
+		ph.supersedeInFlight()
 		if isRateLimitErr(mergeErr) {
 			return finish(PRMergeResult{
 				Path:     PathPunt,
@@ -469,7 +469,7 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 	// Re-poll for MERGED with the same EC budget.
 	postSnap, postErr := r.fetchWithPolling(ctx, gh, prNumber)
 	if postErr != nil {
-		ph.failInFlight()
+		ph.supersedeInFlight()
 		// Merge call succeeded but post-verification failed — we cannot OBSERVE
 		// MERGED, so we must NOT self-report merged. Punt and let the canonical
 		// scheduler gate (verifyPRMerged) be the sole MERGED authority (#4070).
@@ -509,7 +509,7 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 	// the scheduler does not proceed to EvaluatePostMerge and close the issue
 	// on an unconfirmed merge. The autonomous scheduler will retry on the next
 	// tick when the PR's state becomes observable.
-	ph.failInFlight()
+	ph.supersedeInFlight()
 	return finish(PRMergeResult{
 		Path:     PathPunt,
 		PRNumber: prNumber,

@@ -171,7 +171,7 @@ the discovery regex and the atomic-write contract. This section documents the
 | Position       | `stage`, `startedAt`, `stageStart`                                                                                                                                                                                                                                                                                                                          |
 | Process        | `pid`, `ownerPid`, `worktreeDir`                                                                                                                                                                                                                                                                                                                            |
 | Totals         | `inputTokens`, `outputTokens`, `totalCostUsd`, `authoritativeChangeClass`, `actualLinesChanged`                                                                                                                                                                                                                                                             |
-| Progress       | `completedStages`, `supersededStages`, `skippedStages`, `phaseHistory`, `stageErrors`, `retryCount`, `escalationHistory`, `ralphIterations`                                                                                                                                                                                                                 |
+| Progress       | `completedStages`, `supersededStages`, `skippedStages`, `phaseHistory`, `supersededPhaseHistory`, `stageErrors`, `retryCount`, `escalationHistory`, `ralphIterations`                                                                                                                                                                                       |
 | Per-stage maps | `stageModes`, `stageAdapters`, `stageModels`, `stageServedModels`, `stageModelIdentities`, `stageEfforts`, `stageThinking`, `stageServedEfforts`, `stageServedThinking`, `stageModelSelectionModes`, `stageExecutionPaths`, `stagePuntReasons`, `stageGateResults`, `stageAnomalies`, `stageRecoveryAttempts`, `stageOutputTails`, `terminatingStageTokens` |
 | Outcome        | `gateResults`, `prUrl`, `mergedCommitSha`, `mergedAt`, `mainCheckVerdict`, `mainCheckFailing`, `license`, `licenseExpiredMidRun`, `toolCalls`, `modelRefusalFallbacks`                                                                                                                                                                                      |
 
@@ -230,19 +230,69 @@ never backtracked.
 
 `status` values and who writes each:
 
-| Value       | Writer                                                       |
-| ----------- | ------------------------------------------------------------ |
-| `running`   | `BeginPhase`                                                 |
-| `complete`  | `CompletePhase`                                              |
-| `skipped`   | `SkipPhase` — a phase the stage chose not to run (#1026)     |
-| `failed`    | `FailPhase` — a phase that reported an error (#1026)         |
-| `abandoned` | `CompleteStage` — still running when its stage ended (#1009) |
+| Value        | Writer                                                               |
+| ------------ | -------------------------------------------------------------------- |
+| `running`    | `BeginPhase`                                                         |
+| `complete`   | `CompletePhase`                                                      |
+| `skipped`    | `SkipPhase` — a phase the stage chose not to run (#1026)             |
+| `unreported` | `UnreportedPhase` — the stage ended having never reported it (#1246) |
+| `failed`     | `FailPhase` — a phase that reported an error (#1026)                 |
+| `abandoned`  | `CompleteStage` — still running when its stage ended (#1009)         |
+| `superseded` | `SupersedePhase` — this ATTEMPT was displaced, not judged (#1850)    |
+| `degraded`   | `CompleteStage` — did not succeed, on a stage that did (#1850)       |
+
+`superseded` and `degraded` split what `failed` used to carry. `failed` is a
+verdict on the WORK and belongs only to a phase that did not succeed and that
+nothing re-attempts.
+
+- **`superseded`** is a statement about one attempt: the deterministic runner
+  stopped inside the phase and punted, and the LLM path is about to run the
+  same phase for real. Recording that as `failed` is what produced #1850 —
+  `pr-merge` punted, re-entered, merged the PR, exited 0, and still carried a
+  `failed` `freshness-check` that no reader could tell from a genuine failure.
+- **`degraded`** is the invariant's escape valve, written at `CompleteStage`
+  when a `failed` phase survives onto a stage that exits 0 with an empty
+  `stageErrors`. `pr-create`'s `write-context` is the real case: `pr-{N}.json`
+  did not write, the PR exists, and the runner returns success-with-warning on
+  purpose because `pr-merge` degrades to a punt when the file is missing. The
+  record keeps its real start and duration and still says the phase did not
+  succeed; what it drops is the claim that the run failed there.
+
+Neither is a zero-width placeholder — both carry the attempt's real timestamps,
+which is the whole distinction against `unreported`.
 
 Until #1026 the first two were the only values any writer produced, even though
 `skipped` was declared; and a phase that never completed stayed `running`
 forever, which read as "the run is stuck here" long after the stage had moved
 on. Both are now written, and the set above is pinned by a parity test — a value
 added to the Go struct without being documented here fails the build.
+
+### `phaseHistory[]` vs `supersededPhaseHistory[]`
+
+`phaseHistory` carries the **current attempt** of every stage — the same
+most-recent-attempt contract `completedStages` and `stageErrors` hold, and
+`BeginStage` is the clear site for all three.
+
+It did not hold that contract until #1850. `BeginStage` un-booked a re-entered
+stage's `StageResult` and left its phase records in place, so a second attempt
+inherited the first one's verdicts: the stage header described attempt 2 while
+the phase rows still described attempt 1, timestamps included. Worse, the rows
+did not merely sit there — `SkipPhase` and `UnreportedPhase` are
+first-writer-wins on stage+name, so a stale row **outranked** the new attempt
+and silently discarded its honest record.
+
+Displaced rows **move** to `supersededPhaseHistory` rather than being dropped,
+for the same reason `supersededStages` exists: "what did the first attempt get
+through before it punted?" is a real question, and the answer is only wrong
+when it is presented as the current attempt's verdict.
+
+Two invariants follow, both pinned by regression tests in
+`internal/state/phase_stage_instance_test.go`:
+
+- No `phaseHistory` entry's `startedAt` precedes its stage instance's
+  `startedAt` (its `completedStages` entry).
+- No stage with `exitCode: 0` and an empty `stageErrors` entry carries a phase
+  with status `failed`.
 
 ## Schema versioning rules
 

@@ -30,7 +30,7 @@ func TestDeterministicPhaseReporter_ReachesTheDurableRunRecord(t *testing.T) {
 	rep.PhaseStart("pr-merge", "read-pr-context", 0, 14)
 	rep.PhaseComplete("pr-merge", "read-pr-context")
 	rep.PhaseSkip("pr-merge", "fetch-reviews", 5, 14)
-	rep.PhaseFail("pr-merge", "ci-gate", 3, 14)
+	rep.PhaseSupersede("pr-merge", "ci-gate", 3, 14)
 
 	rs.CompleteStage(0, tokens.TokenCounts{Input: 1, Output: 1}, "", "")
 
@@ -47,7 +47,9 @@ func TestDeterministicPhaseReporter_ReachesTheDurableRunRecord(t *testing.T) {
 	for name, want := range map[string]string{
 		"read-pr-context": "complete",
 		"fetch-reviews":   "skipped",
-		"ci-gate":         "failed",
+		// The punt records the ATTEMPT as displaced, not the phase as failed
+		// (#1850) — the skill is about to run ci-gate for real.
+		"ci-gate": "superseded",
 	} {
 		if got[name] != want {
 			t.Errorf("durable record has phase %q as %q, want %q (all: %v)", name, got[name], want, got)
@@ -106,7 +108,7 @@ func TestDeterministicPunt_SkillMarkersDoNotContradictEarlierPhases(t *testing.T
 	rep.PhaseStart("pr-merge", "read-pr-context", 0, 14)
 	rep.PhaseComplete("pr-merge", "read-pr-context")
 	rep.PhaseStart("pr-merge", "ci-gate", 3, 14)
-	rep.PhaseFail("pr-merge", "ci-gate", 3, 14)
+	rep.PhaseSupersede("pr-merge", "ci-gate", 3, 14)
 
 	// The skill takes over and works the stage for real.
 	for _, p := range []struct {
@@ -133,8 +135,8 @@ func TestDeterministicPunt_SkillMarkersDoNotContradictEarlierPhases(t *testing.T
 	if !containsStatus(statuses["read-pr-context"], "complete") {
 		t.Errorf("read-pr-context = %v, want the deterministic completion preserved", statuses["read-pr-context"])
 	}
-	if !containsStatus(statuses["ci-gate"], "failed") {
-		t.Errorf("ci-gate = %v, want the deterministic attempt preserved as failed", statuses["ci-gate"])
+	if !containsStatus(statuses["ci-gate"], "superseded") {
+		t.Errorf("ci-gate = %v, want the deterministic attempt preserved as superseded", statuses["ci-gate"])
 	}
 	// And nothing it wrote contradicts what the skill then observed.
 	if !containsStatus(statuses["ci-gate"], "complete") {

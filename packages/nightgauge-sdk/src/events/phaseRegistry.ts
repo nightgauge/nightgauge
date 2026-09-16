@@ -19,6 +19,7 @@
  * | **Skill markers** | `<!-- phase:start … -->` in skill output, parsed by the extension's `streamOutputHandler` → `PhaseTracker` | every stage on its LLM path |
  * | **Go deterministic reporter** | `internal/orchestrator/deterministic_phases.go` (`newDeterministicPhaseReporter`), passed to the runners via `stages.WithPhaseReporter` | `pr-merge`, `pr-create` on their deterministic Go paths (#1247 / PR #1398), and the `pr-stage` CLI route (PR #1408) |
  * | **TS deterministic reporter** | `packages/nightgauge-vscode/src/utils/deterministicPhases.ts` (`createDeterministicPhaseReporter`), writing through `PipelineStateService` | `issue-pickup` on the extension's deterministic-first path, `ContextAssembler.generateDeterministicContext` (#1534) |
+ * | **Phase inference** | `phaseInference.ts` `STAGE_RULES` and its Go mirror `internal/execution/phase_inference.go` | `feature-dev`, `feature-planning` (#3760), `feature-validate` (#1850) — LLM stages whose markers the model routinely skips |
  *
  * A path that reports NOTHING is not neutral: the tree seeds this registry's
  * rows, shows `0/N` for the run's duration, and back-fills every row as
@@ -26,6 +27,18 @@
  * path until #1534 — 0/14 while running, 14 unreported when it succeeded.
  * Any new non-LLM path for a stage in this registry must take one of the two
  * reporters above, or the stage's rows regress to that state.
+ *
+ * An LLM path can regress to it too, and the markers being unconditional in
+ * the SKILL.md is not a defence: each one is a standalone printf the model has
+ * to choose to run, and on edit-heavy stages it routinely does not.
+ * `feature-validate` reported 0 of 23 phases across four minutes and $0.68 on
+ * a stage that exited 0 (#1850). That is what the inference row above is for —
+ * a stage in this registry with no reporter AND no inference rules will
+ * eventually show a reader nothing.
+ *
+ * Where the tree cannot measure at all it now says so rather than rendering
+ * `0/N`: a zero in the numerator position reads as "this stage did none of its
+ * work", which on that run was the opposite of the truth (#1850).
  *
  * A deterministic path reports the registry phases it performs and marks the
  * rest `skipped` WITH A REASON. `skipped` is the correct word — the path
@@ -35,6 +48,8 @@
  * @see Issue #1027 - Skills emit structured phase markers
  * @see Issue #1247 / PR #1398 - deterministic Go runners report their phases
  * @see Issue #1534 - deterministic issue-pickup reports its phases
+ * @see Issue #3760 - inference for feature-dev / feature-planning
+ * @see Issue #1850 - inference for feature-validate; a green run rendered broken
  */
 
 import type { PipelineStage } from "./EventBus.js";

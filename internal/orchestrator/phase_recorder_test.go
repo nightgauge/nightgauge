@@ -32,6 +32,10 @@ func (t teeReporter) PhaseFail(stage, name string, index, total int) {
 	t.a.PhaseFail(stage, name, index, total)
 	t.b.PhaseFail(stage, name, index, total)
 }
+func (t teeReporter) PhaseSupersede(stage, name string, index, total int) {
+	t.a.PhaseSupersede(stage, name, index, total)
+	t.b.PhaseSupersede(stage, name, index, total)
+}
 func (t teeReporter) PhaseSkip(stage, name string, index, total int) {
 	t.a.PhaseSkip(stage, name, index, total)
 	t.b.PhaseSkip(stage, name, index, total)
@@ -54,6 +58,8 @@ func replayInto(rt *state.RuntimeState, ts []PhaseTransition) {
 			rt.CompletePhase(stage, t.Name)
 		case "failed":
 			rt.FailPhase(stage, t.Name, t.Index, t.Total)
+		case "superseded":
+			rt.SupersedePhase(stage, t.Name, t.Index, t.Total)
 		case "skipped":
 			rt.SkipPhase(stage, t.Name, t.Index, t.Total)
 		}
@@ -134,15 +140,18 @@ func TestPhaseRecorderMatchesTheSchedulerReporter(t *testing.T) {
 
 	// AC4, stated as its own assertion rather than left implicit in the
 	// comparison: a punt writes no skips, and the phase the runner was inside
-	// is `failed` — so the skill's own markers continue without contradiction.
+	// is `superseded` — so the skill's own markers continue without
+	// contradiction. It was `failed` until #1850, which is a verdict on work
+	// the skill was about to do successfully, and on a stage that then exited
+	// 0 it rendered as a red ✗ on a green run.
 	for _, p := range shapes(replayed.PhaseHistory) {
 		if p.Status == "skipped" {
 			t.Errorf("punt recorded a skip for %q — a punt hands the stage to the skill, "+
 				"so claiming a phase was deliberately skipped contradicts it", p.Name)
 		}
 	}
-	if got := shapes(replayed.PhaseHistory); got[len(got)-1].Status != "failed" {
-		t.Errorf("the phase the runner punted inside is %q, want failed: %+v",
+	if got := shapes(replayed.PhaseHistory); got[len(got)-1].Status != "superseded" {
+		t.Errorf("the phase the runner punted inside is %q, want superseded: %+v",
 			got[len(got)-1].Status, got)
 	}
 }
@@ -170,6 +179,10 @@ func TestPhaseRecorderMatchesAcrossTheWholeStatusVocabulary(t *testing.T) {
 	i, n = idx("merge")
 	tee.PhaseStart("pr-merge", "merge", i, n)
 	tee.PhaseFail("pr-merge", "merge", i, n)
+
+	i, n = idx("freshness-check")
+	tee.PhaseStart("pr-merge", "freshness-check", i, n)
+	tee.PhaseSupersede("pr-merge", "freshness-check", i, n)
 
 	i, n = idx("output-summary")
 	tee.PhaseSkip("pr-merge", "output-summary", i, n)

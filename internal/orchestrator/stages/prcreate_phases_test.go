@@ -54,7 +54,14 @@ func TestPRCreatePhases_PuntRecordsNoSkips(t *testing.T) {
 	if !rec.has("load-context", "complete") {
 		t.Error("load-context completed before the punt and must stay recorded complete")
 	}
-	if !rec.has("preflight-checks", "failed") {
+	// `superseded`, not `failed` (#1850): the punt displaces this ATTEMPT at
+	// the phase, it does not judge the phase. The LLM path is about to run it
+	// for real, and on a stage that then exits 0 a `failed` here is a red ✗ on
+	// work that succeeded.
+	if !rec.has("preflight-checks", "superseded") {
 		t.Errorf("the in-flight phase was left open on the punt; events = %+v", rec.events)
+	}
+	if got := rec.namesWithStatus("failed"); len(got) != 0 {
+		t.Errorf("punt recorded %v as failed — a punt is a handoff, not a verdict", got)
 	}
 }

@@ -73,8 +73,11 @@ func TestPhaseRecordStatusesAreDocumented(t *testing.T) {
 	section := phaseRecordSection(t, string(raw))
 
 	// Every status the production writers can produce, and the writer of each.
-	// Adding a sixth without documenting it fails here.
-	for _, status := range []string{"running", "complete", "skipped", "failed", "abandoned"} {
+	// Adding another without documenting it fails here.
+	for _, status := range []string{
+		"running", "complete", "skipped", "unreported", "failed", "abandoned",
+		"superseded", "degraded",
+	} {
 		if !strings.Contains(section, "`"+status+"`") {
 			t.Errorf("PhaseRecord.Status can be %q and the phaseHistory table does not list it", status)
 		}

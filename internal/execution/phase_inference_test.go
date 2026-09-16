@@ -80,16 +80,63 @@ func TestPhaseInferer_RealMarkerWins(t *testing.T) {
 	}
 }
 
+// TestPhaseInferer_DisabledForSelfReportingStages uses pr-merge, which really
+// does self-report: its phases come from the deterministic Go reporter as
+// direct function calls, so there is nothing for inference to add.
+//
+// It used to use feature-validate, on the premise that feature-validate
+// self-reports. It does not (#1850). It is an LLM stage whose 23 markers are
+// standalone printfs the model skips for exactly feature-dev's reason, and the
+// observed run reported 0 of 23 across four minutes and $0.68 while exiting 0.
 func TestPhaseInferer_DisabledForSelfReportingStages(t *testing.T) {
-	inf := NewPhaseInferer("feature-validate")
+	inf := NewPhaseInferer("pr-merge")
 	if inf.enabled {
-		t.Fatal("feature-validate should not infer phases")
+		t.Fatal("pr-merge reports phases from the deterministic runner and must not infer them")
 	}
 	if _, ok := inf.Start(); ok {
 		t.Fatal("disabled inferer must not emit a start marker")
 	}
 	if _, ok := inf.ObserveToolUse("Write", map[string]any{"file_path": "src/a.ts"}); ok {
 		t.Fatal("disabled inferer must not emit from tool use")
+	}
+}
+
+// TestPhaseInferer_FeatureValidateInfersFromItsRealWork is the #1850 half: the
+// worst-reported stage in the observed run now has the same fallback
+// feature-dev got in #3760.
+func TestPhaseInferer_FeatureValidateInfersFromItsRealWork(t *testing.T) {
+	inf := NewPhaseInferer("feature-validate")
+	if !inf.enabled {
+		t.Fatal("feature-validate must infer phases — it does not reliably emit markers")
+	}
+
+	m, ok := inf.Start()
+	if !ok || m.Index != 0 || m.Total != 23 {
+		t.Fatalf("Start should open validate-environment of 23, got %+v ok=%v", m, ok)
+	}
+
+	if m, ok := inf.ObserveToolUse("Read", map[string]any{"file_path": "dev-42.json"}); !ok ||
+		m.Name != "read-dev-context" {
+		t.Fatalf("a read should map to read-dev-context, got %+v ok=%v", m, ok)
+	}
+	if m, ok := inf.ObserveToolUse("Bash", map[string]any{"command": "go test ./..."}); !ok ||
+		m.Name != "run-tests" {
+		t.Fatalf("a test command should map to run-tests, got %+v ok=%v", m, ok)
+	}
+	if m, ok := inf.ObserveToolUse("Bash", map[string]any{"command": "git push -u origin HEAD"}); !ok ||
+		m.Name != "commit-and-push" {
+		t.Fatalf("a branch push should map to commit-and-push, got %+v ok=%v", m, ok)
+	}
+	if m, ok := inf.ObserveToolUse("Write", map[string]any{
+		"file_path": ".nightgauge/pipeline/validate-42.json",
+	}); !ok || m.Name != "write-validate-context" {
+		t.Fatalf("the validate-context write should map to write-validate-context, got %+v ok=%v", m, ok)
+	}
+
+	// Monotonic, exactly as for feature-dev: a later read must not drag the
+	// cursor back to an earlier phase.
+	if _, ok := inf.ObserveToolUse("Read", map[string]any{"file_path": "src/a.ts"}); ok {
+		t.Fatal("a read after write-validate-context must not regress the cursor")
 	}
 }
 

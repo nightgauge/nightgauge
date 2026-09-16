@@ -112,6 +112,9 @@ func (r *recordingReporter) PhaseComplete(stage, name string) {
 func (r *recordingReporter) PhaseFail(stage, name string, index, total int) {
 	r.events = append(r.events, phaseEvent{stage, name, "failed", index, total})
 }
+func (r *recordingReporter) PhaseSupersede(stage, name string, index, total int) {
+	r.events = append(r.events, phaseEvent{stage, name, "superseded", index, total})
+}
 func (r *recordingReporter) PhaseSkip(stage, name string, index, total int) {
 	r.events = append(r.events, phaseEvent{stage, name, "skipped", index, total})
 }
