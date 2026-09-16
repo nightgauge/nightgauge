@@ -64,10 +64,22 @@ the SHA-256 of the lines between the markers.
   is dead. Never rely on `jobs` from a later shell.
 - Keep context lean: finish the scope, delegate bounded searches, and start a
   fresh session for new work.
+- **Keep sessions short, and bound what each one is handed.** A turn is billed
+  mostly for re-reading the context it inherits. Within one 732-turn session
+  mean context per turn climbed 103k to 631k with no plateau, so cumulative
+  spend is roughly quadratic in turn count and the last decile paid ~6x the
+  first for the same work. Compaction is not a fix; it firing is the signal the
+  ceiling was reached. Accumulation is not the only shape: across 155 pipeline
+  stages none accumulated (median 1.8x first-to-last turn, bounded by a
+  ~10-turn exit), yet first-turn context tracked the pasted diff's size at
+  r=0.99 — 162k mean context per turn against 30k for the rest. So finish the
+  scope and start fresh, spend fewer turns while in one (batch calls, do not
+  poll, do not re-read context), and bound the payload a stage opens with. Run
+  `nightgauge-internal/scripts/ws spend`; it reports context per turn per session.
 - Instruction files are regular files. Never symlink them and never import
   across repositories.
 
-<!-- nightgauge-workspace-rules:end sha256=d7071de1401b8d70b6ff0259c36c8b7cc33fb58e13b1751c5615059643d8b52d -->
+<!-- nightgauge-workspace-rules:end sha256=183af6685226d1c5cc3fbd542466dc04743916ce4c60c0a9bc953283a55a1ea6 -->
 
 ## Repository operating contract
 
