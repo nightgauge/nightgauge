@@ -39,6 +39,7 @@ REQUIRED_FILES=(
   scripts/ci-local-steps.txt
   scripts/test-branch-merged-check.sh
   scripts/test-post-merge-check.sh
+  scripts/test-publish-vsix-set.sh
   scripts/test-scrub-evidence.sh
   docker/clean-install/scrub-evidence.sh
   scripts/test-capture-cli-help.sh
@@ -375,6 +376,16 @@ run_group "branch-merged-check.sh regression suite" \
 #      exercised here.
 run_group "post-merge-check.sh regression suite" \
   bash scripts/test-post-merge-check.sh
+
+# 1b2a. publish-vsix-set.sh regression suite — the registry publish loop. Its
+#       motivating state is a partial release: the v0.4.2 Open VSX publish had
+#       one target land, the next hit a 503, and the third was never attempted,
+#       so the release advertised a version most platforms could not install and
+#       a re-run could not repair it. Neither a transient 5xx nor an
+#       already-published conflict can be produced on demand against a live
+#       registry, so they are only ever exercised here.
+run_group "publish-vsix-set.sh regression suite" \
+  bash scripts/test-publish-vsix-set.sh
 
 # 1b3. scrub-evidence.sh regression suite (#1335) — the second of the two
 #      layers that must each stop a credential reaching a public artifact. The
