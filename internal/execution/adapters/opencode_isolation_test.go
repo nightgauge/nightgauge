@@ -1094,7 +1094,7 @@ func TestOpenCodeIsolationRefusalFollowsTheBlockTheRunIsBuiltFrom(t *testing.T) 
 		s.InheritUserConfig = reads == 1
 		return s, nil
 	}}
-	run := RunOptions{Model: "lmstudio/qwen/qwen3.8-27b", WorktreeDir: t.TempDir()}
+	run := RunOptions{Model: "lmstudio/qwen/qwen3.8-27b", WorktreeDir: gitInitTestWorktree(t)}
 	var root *RunRoot
 	var err error
 	stderr := captureAdapterStderr(t, func() {

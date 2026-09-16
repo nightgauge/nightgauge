@@ -338,6 +338,14 @@ type OpenCodeConfigInput struct {
 	// openCodeLocalDiscovery; nil discovers nothing, so only the machine-tier
 	// override describes a model.
 	Discover func(ep OpenCodeEndpoint, model string) (models.LocalDescriptor, error)
+	// BinDir is the running nightgauge binary's directory (NIGHTGAUGE_BIN's
+	// dir), part of the permission map's external_directory allow-list
+	// (openCodePermissionMap, #1638). Resolved by the caller (OpenCodeBinDir)
+	// rather than read here, because BuildOpenCodeConfig is pure and
+	// os.Executable reads process state, not this input; OpenCodeConfigInputFor
+	// deliberately leaves it "" (see its own doc comment) — PrepareOpenCodeRun
+	// sets it from OpenCodeRunRequest.BinDir after that call returns.
+	BinDir string
 }
 
 // OpenCodeConfigInputFor is the input a dispatch of run gets on a machine
@@ -362,6 +370,13 @@ func OpenCodeConfigInputFor(settings config.OpenCodeConfig, run RunOptions, runR
 		RunRoot:   runRoot,
 		Lookup:    lookup,
 		Discover:  openCodeLocalDiscovery,
+		// BinDir is left empty here deliberately: this constructor is called
+		// directly by tests (and by the self-test's per-run config,
+		// opencode_preflight.go) that need BuildOpenCodeConfig's output to
+		// stay reproducible across machines, which os.Executable() is not (it
+		// names whatever binary is running — a `go test` temp binary in a
+		// test process). PrepareOpenCodeRun, the one production path, sets it
+		// from OpenCodeRunRequest.BinDir after this call returns.
 	}, nil
 }
 
@@ -442,6 +457,12 @@ type openCodeConfigJSON struct {
 	MCP          map[string]codexprovision.OpenCodeMcpServer `json:"mcp"`
 	Instructions []string                                    `json:"instructions"`
 	Skills       openCodeSkillsJSON                          `json:"skills"`
+	// Permission is the ADR-022 § 9 map derived from in.Run.AllowedTools
+	// (openCodePermissionMap, opencode_guard.go, #1638): every key explicit,
+	// never "ask". addNightgaugePluginToConfig (opencode.go) decodes this
+	// builder's output generically to add the top-level "plugin" key #1635
+	// needs, and round-trips this key unchanged.
+	Permission *openCodePermissionJSON `json:"permission"`
 }
 
 type openCodeAgentJSON struct {
@@ -564,7 +585,10 @@ type openCodeAnthropicOptionsJSON struct {
 //   - instructions: the repository's steering files, then the file in the run
 //     root the baseline steering is written to (openCodeInstructionEntries),
 //     never a URL; and mcp, the pipeline's MCP servers
-//     (openCodeCheckMcpServers).
+//     (openCodeCheckMcpServers);
+//   - permission: the ADR-022 § 9 map derived from in.Run.AllowedTools and
+//     in.BinDir (openCodePermissionMap, opencode_guard.go, #1638) — every key
+//     explicit, never "ask".
 //
 // It refuses a model the adapter cannot dispatch; an anthropic/ model while
 // ANTHROPIC_API_KEY is unset and a platform provider's model
@@ -715,6 +739,7 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 		MCP:              mcp,
 		Instructions:     instructions,
 		Skills:           openCodeSkillsJSON{URLs: []string{}},
+		Permission:       openCodePermissionMap(in.Run, in.BinDir),
 	}
 	raw, err := json.Marshal(cfg)
 	if err != nil {
@@ -1028,6 +1053,14 @@ type OpenCodeRunRequest struct {
 	// OpenCodeMcpForge on the adapter's path and the verb's. nil starts no
 	// server.
 	McpForge forge.DefaultBranchFileService
+	// BinDir is the running nightgauge binary's directory (NIGHTGAUGE_BIN's
+	// dir), part of the permission map's external_directory allow-list
+	// (openCodePermissionMap, #1638). The adapter's PrepareRunRoot and the
+	// `nightgauge opencode config` verb (cmd/nightgauge/opencode.go) both set
+	// it to OpenCodeBinDir(), so TestOpenCodeConfigVerbMatchesTheAdapter's
+	// byte-for-byte comparison holds; "" (a caller, typically a test, that
+	// does not set it) adds no NIGHTGAUGE_BIN entry to the allow-list.
+	BinDir string
 }
 
 // OpenCodeRun is everything an opencode spawn is given besides its argv and
@@ -1151,6 +1184,7 @@ func PrepareOpenCodeRun(req OpenCodeRunRequest) (*OpenCodeRun, error) {
 	if err != nil {
 		return nil, err
 	}
+	input.BinDir = req.BinDir
 	mcp := codexprovision.McpSource{Repo: openCodeRunRepo(req.Run), Forge: req.McpForge}
 	if input.Repository, err = codexprovision.ProvisionOpenCode(context.Background(), req.Run.WorktreeDir, mcp, spawnLookup); err != nil {
 		return nil, fmt.Errorf("opencode: %w", err)

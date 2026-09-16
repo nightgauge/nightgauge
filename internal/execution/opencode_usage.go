@@ -141,6 +141,25 @@ func openCodeKeptNotice(permission string) string {
 	return "! permission requested: " + permission + " (..." + openCodeAutoRejectEnd
 }
 
+// openCodeToolRejectionPermission maps a rejected tool_use event's own
+// part.tool name (stream.go's OpenCodeStream.RejectedTool, opencode's own
+// lowercase tool id) to the permission key openCodeRejectionMarker
+// classifies by. 1.18.30 has no permission of its own for "write" or
+// "apply_patch": both are governed by the same "edit" permission the
+// generated map's own "edit" key controls (ADR-022 § 9; the map's edit
+// deny-list is what a "write" or "apply_patch" call is actually refused
+// against). Every other tool name already equals its own permission key
+// ("bash", "read", "glob", "grep", "task", "webfetch", "websearch",
+// "todowrite", "skill"), so it passes through unchanged.
+func openCodeToolRejectionPermission(tool string) string {
+	switch tool {
+	case "write", "apply_patch":
+		return "edit"
+	default:
+		return tool
+	}
+}
+
 func openCodeRejectionMarker(permission string, allowed map[string]bool) string {
 	if allowed[permission] {
 		return PermissionRejectedMarker + " tool=" + permission
@@ -520,12 +539,20 @@ func (r *openCodeRun) finish(ctx context.Context, exit openCodeExit, acc *TokenA
 	marker := r.marker
 	if r.stream.RejectedToolCalls > 0 && marker == "" {
 		// OpenCode rejected the stage's own tool call, and stderr did not say
-		// which permission. The run still stopped there, so it still fails.
-		// The event names the tool, not the permission, and a rejection of
-		// external_directory or doom_loop is one the tool's name does not
-		// show, so the marker names none.
-		r.stream.Drift("the stream shows a tool call OpenCode rejected, but stderr carried no auto-reject line naming its permission")
-		marker = openCodeRejectionMarker(openCodeUnknownPermission, r.allowed)
+		// which permission: a "deny" match (this map's only rejection shape,
+		// ADR-022 § 9) never prints the "auto-rejecting" notice a stderr-only
+		// read depends on. The run still stopped there, so it still fails.
+		// The rejected tool_use event's own part.tool (AC3, #1638 fix round)
+		// is what names it instead, mapped through
+		// openCodeToolRejectionPermission (write/apply_patch -> edit); an
+		// event that named no tool at all still falls back to
+		// openCodeUnknownPermission.
+		r.stream.Drift("the stream shows a tool call OpenCode rejected, but stderr carried no auto-reject line naming its permission; classified from the rejected tool_use event's own tool name")
+		tool := openCodeUnknownPermission
+		if r.stream.RejectedTool != "" {
+			tool = openCodeToolRejectionPermission(r.stream.RejectedTool)
+		}
+		marker = openCodeRejectionMarker(tool, r.allowed)
 	}
 	r.stream.Finish(exit.exitCode)
 	var endpoint string

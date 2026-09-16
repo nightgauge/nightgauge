@@ -2175,6 +2175,437 @@ step failed first, the OpenCode integration step never executed and its
 result was never part of the verdict. Filing that separately; it is not
 fixed here.
 
+## The permission map's pattern matching (amendment 2026-09-15, #1638)
+
+§ 9 assumed opencode 1.18.30 resolves a `permission` object's patterns the
+same way for every key, matching the last rule the merged config carries
+against a request's own absolute path. #1638's own bounded probes against the
+pinned binary (a scripted, in-process OpenAI-compatible stub scripting real
+`read`/`edit`/`bash` tool calls, `internal/execution/adapters/opencode_guard_integration_test.go`
+and the isolated probes its history records) found three narrower rules
+instead, each load-bearing for the permission map #1638 generates:
+
+- **A pattern with no glob metacharacter is never matched for `edit`.**
+  `edit: {"*": "allow", "secret.txt": "deny"}`, with `secret.txt` the exact
+  relative path a tool call's own `filePath` carried, still ran the edit: the
+  literal pattern was never consulted. The same object with the pattern
+  spelled `**/secret.txt` or `secret.*` — a real glob, differing only in
+  carrying a `*` — denied it. Every pattern #1638 sets on `edit` or `read`
+  beyond the bare `*` default is therefore built to carry a real wildcard;
+  the static backstop entries already did (`*.env`, `**/.ssh/**`, and the
+  rest), and a dynamic directory pattern is built as `<dir>/**`.
+- **A pattern that starts with `/` is never matched for `edit`, only for
+  `external_directory`.** `edit: {"*": "allow", "/a/b/**": "deny"}` ran an
+  edit whose `filePath` was exactly `/a/b/c`; stripping the leading `/` from
+  the identical pattern denied it. `external_directory`'s own patterns need
+  the leading `/` (an unprefixed directory pattern in that key was never
+  observed to match anything): a probe of `external_directory: {"*": "deny",
+"/a/b/**": "allow"}` let a read under `/a/b/` through, and the same pattern
+  without its leading `/` refused it. So a directory pattern's two uses need
+  two different strings: `openCodeDirPatterns` (opencode_guard.go) keeps the
+  leading separator for `external_directory`'s allow-list, and
+  `openCodeEditDenyPatterns` strips it for `edit`'s deny entries — the
+  NIGHTGAUGE_SKILL_DIR read-only pair (§ "external_directory allow-list")
+  uses one function for each half. Once both defects are avoided — a real
+  wildcard, no leading `/` — `edit`'s own last-matching-rule-wins behaves as
+  § 9 assumed: a specific `deny` added after a `*: allow` was consistently
+  denied in every probe, in both directions (a specific `allow` after a
+  `*: deny` was consistently let through). `bash`'s own patterns, matched
+  against the command string rather than a path, were never observed to need
+  either correction: `bash: {"*": "allow", "rm -rf *": "deny"}` denied `rm
+-rf /tmp/x` in the same probe run that found `edit`'s literal-pattern gap.
+- **`external_directory` needs a directory's path in more than one form.**
+  A macOS `t.TempDir()` skill directory under `$TMPDIR` (itself under `/var`,
+  a symlink to `/private/var`) was reported by a real tool call's `filePath`
+  unresolved (`/var/folders/.../skill/_includes/note.md`), even though §
+  9's own last bullet ("the permission map is built against resolved
+  paths") predicted the resolved form. An allow-list built only from
+  `filepath.EvalSymlinks`'s output did not match it; one carrying both the
+  given and the resolved form (when they differ) matched either way.
+  `openCodeDirPatterns` returns both, which is also why the six stage
+  skills' `/tmp` literals were already emitted in both `/tmp` and
+  `/private/tmp` forms before this amendment (the same macOS gap, generalized
+  here to every directory pattern the permission map builds, not only
+  `/tmp`'s).
+
+None of the three findings changes § 9's `ask`-vs-`auto-rejecting` account:
+a `deny` match, unlike an `ask` one, was never observed to print the
+`! permission requested: ... auto-rejecting` stderr notice — it fails the
+tool call directly, visible in `--format json` stdout as an errored
+`tool_use` event, with the rejected permission's name inside the event's own
+`error` text, never on stderr. Every generated map is `allow`/`deny` only
+(§ 9, AC1), so an enabled dispatch's stderr carries that notice only when a
+target repository's own project config or a lower layer adds an `ask` entry
+this map does not already override — the project-config tamper gate (§ 8)
+is the control that closes that route. #1624's own failure classification
+(`OpenCodeAutoRejectMarker`, `internal/execution/opencode_usage.go`) reads
+stderr for the notice; whether it also needs a stdout-based path for a plain
+`deny` rejection, now that every dispatch's own map never emits `ask`, is
+package `execution`'s own tested concern, raised here as a finding rather
+than settled by this change.
+
+## Correction to the pattern-matching amendment (#1638 fix round, same day)
+
+A same-day review of the amendment above, run against the same pinned
+binary but in a real **git worktree** rather than the amendment's own bare
+`t.TempDir()` fixture, found its first two bullets describe an artifact of
+that fixture, not opencode's actual rule. `TestOpenCodeIncludesReadAllowed`
+(the amendment's own probe) never had a `.git` in its project directory; a
+git worktree is what every real dispatch actually runs in
+(`Manager.RunStage`'s own worktree setup).
+
+**The corrected rule.** opencode 1.18.30's `edit`, `write` and `read` tools
+all ask permission with `patterns:[path.relative(Instance.worktree, file)]`
+(bundled source: `n.ask({permission:"edit",patterns:[qo.relative(y.worktree,u)]...})`).
+`Instance.worktree` is the git repository's top-level
+(`git rev-parse --show-toplevel`) for a git repository, and `/` — the whole
+filesystem — for a directory that is not one. The amendment's fixture had no
+`.git`, so `Instance.worktree` there really was `/`, and a pattern's absolute
+path with its leading `/` stripped happens to equal the correct
+worktree-relative form in that one case, by coincidence: `filepath.Rel("/",
+"/a/b/c")` is `"a/b/c"`, the same string stripping the slash gives. Read
+against a real git worktree instead, the identical, slash-stripped pattern
+never matches: the file's actual relative path is the git top-level's
+relative form, `../../…/skill/_includes/note.md` for a skill directory
+outside the worktree, which an anchored `Users/…/skill/**` pattern never
+matches. `TestProbeA9SkillEditInGitWorktree` (the fix round's own probe,
+folded into `internal/execution/adapters/opencode_guard_integration_test.go`
+as `TestOpenCodeIncludesEditDeniedInGitWorktree`) reproduced this directly: an
+`edit` of `NIGHTGAUGE_SKILL_DIR/_includes/note.md` succeeded in a git
+worktree under the pre-fix map, with the file's content actually rewritten —
+AC2 broken in exactly the shape every real dispatch runs in. The amendment's
+first bullet ("no glob metacharacter") does not hold up either: the same
+git-worktree probe denied the edit with a literal, no-wildcard relative
+pattern once it was the CORRECT relative form, so the missing wildcard was
+never the defect — the absolute-vs-relative path was.
+
+`external_directory`'s own patterns are unaffected by this correction: they
+are matched against the file's absolute path (or, for a directory a shell
+command's argument resolves into, `dirname(file)`), never against a
+worktree-relative form, which is why the amendment's third bullet (needing
+both the given and the resolved directory form) still holds, and why
+`external_directory`'s allow-list entries correctly keep their leading `/`
+while `edit`'s deny entries must not have one relative to `/` — or, in a real
+git worktree, must instead be the file's path relative to the worktree's own
+top-level, with `../` segments where the directory is outside it.
+
+**The fix.** `openCodeWorktreeRelativeDirPatterns` (`opencode_guard.go`)
+replaces `openCodeEditDenyPatterns`: it resolves the git top-level of
+`RunOptions.WorktreeDir` by walking its ancestors for a `.git` entry — never
+a `git` subprocess, so the permission-map builder stays pure — and computes
+the deny pattern relative to that top-level (or to `/` when `WorktreeDir` is
+empty or not a git repository, preserving the amendment's fixture-only
+behaviour for a non-git test double). The same function now also denies edit
+of `NIGHTGAUGE_BIN`'s own directory: the external_directory allow-list
+already let a stage read there, but nothing had ever denied `edit`, so any
+Edit-granted stage — every one of the six stage skills — could plant an
+executable in the running nightgauge binary's own directory, typically a
+`PATH` entry, before this fix
+(`TestOpenCodeBinDirEditDenied`/`TestProbeA9BinDirWritable`).
+
+**A second, narrower correction: nested secret files.** The read/edit
+backstop's `*.env`/`.env*` entries, matched the same worktree-relative way,
+only ever match a ROOT-level file (opencode's pattern matching has no
+implicit `**` prefix the way a shell glob does). A nested secret such as
+`apps/web/.env.local` fell through to the backstop's own `*`/`.env`-shaped
+entries and reached `read: "*": "allow"` unmatched. `**/*.env` and
+`**/.env*` were added to `openCodeSecretDenyBackstop` to close it
+(`TestOpenCodeNestedDotEnvDenied`/`TestProbeA9NestedEnvLocalRead`; a routed
+#1752 comment on the issue asked for exactly this coverage).
+
+**AC3 closed, not just raised.** The finding this document's previous
+section left open — a plain `deny` rejection has no stderr notice, so
+`OpenCodeAutoRejectMarker`'s stderr-based classification never fires for
+one — turned out to have an existing fallback already built for it:
+`openCodeRun.finish` (`internal/execution/opencode_usage.go`) already
+classifies a run as rejected, never success, whenever the stream shows a
+`RejectedToolCalls > 0` and stderr named no permission. That fallback simply
+never fired, because `RejectedToolCalls`'s own match
+(`internal/execution/stream.go`) was an exact-string comparison against
+`"The user rejected permission to use this specific tool call."` — the
+`ask`-and-auto-rejected text — and a `deny` match's real text is different:
+`"The user has specified a rule which prevents you from using this specific
+tool call. Here are some of the relevant rules […]"` (bundled source,
+confirmed against the pinned binary). `openCodeIsRejectedToolError` now
+matches either text as a PREFIX (the ruleset list, and an interactive
+rejection's own feedback text, both trail their respective prefixes
+dynamically), on both the Go and the TS/SDK parser
+(`packages/nightgauge-sdk/src/cli/adapters/opencodeStream.ts`, which
+`internal/execution/testdata/opencode_stream_expected.json` binds to the same
+fixtures) — `TestOpenCodeDenyRejectedNeverSuccess` and the TS suite's own run
+over the newly captured `opencode_deny_rejected_stream.jsonl` are the
+red/green coverage. #1631's own `PermissionRejectedMarker`/
+`PermissionDeniedMarker` split still cannot name the specific permission a
+plain tool_use error refused (the event names the tool, not the permission),
+so the fallback's marker is always `tool=unknown`; a drift marker records why,
+exactly as it already did for the `ask`-with-lost-stderr case this fallback
+was originally built for.
+
+**The tamper gate's base ref (AC6).** `openCodeProjectConfigTamperCheck`
+compared the worktree only to `HEAD`, on the premise that a fresh worktree's
+`HEAD` is the base branch's tip. That premise fails for every stage after the
+first in a worktree `Manager.RunStage` reuses across a run: a stage with
+`Bash` can commit its own tamper, and `git status` alone never sees a
+difference from `HEAD` once it has. `openCodeProjectConfigTamperCheck` now
+runs three legs — the existing `git status` leg; `git diff --name-only
+<merge-base-with-the-resolved-base-ref>` for a change already committed on
+top of the base branch's tip (`openCodeTamperGateBaseRef`, a local,
+subprocess-free mirror of `internal/execution/worktree_sweep.go`'s own
+`resolveBaseRef`/`detectDefaultBranch`, duplicated rather than imported
+because `internal/execution` imports this package and the reverse would
+cycle); and `git ls-files -v`, because `git update-index
+--skip-worktree`/`--assume-unchanged` hides a working-tree edit from both the
+status and the diff legs entirely (`TestOpenCodeTamperGateCommittedChange`,
+`TestOpenCodeTamperGateSkipWorktree`).
+
+**AC4's `/tmp` allow-list: found dead, left dead, recorded (AC8).** A
+probe read Tool.assertExternalDirectory's own bundled source: every
+`external_directory` request — the file tool's own out-of-worktree check,
+and each directory a bash command's argument resolves into — asks with
+`patterns:[path.join(dirname(file), "*")]`, never the file's own path.
+`Wildcard.match` then compares that literal `dirname/*` string against each
+rule. None of `openCodeTmpAllowList`'s 16 per-file entries (`/tmp/planning_tmp.json`
+and the rest) can ever equal `/tmp/*`, so every one is dead: a Read-granted
+stage's read of any of those exact, allow-listed files is refused
+(`TestProbeA9TmpAllowListRead`, reproduced and left red on purpose — this is
+the one finding this fix round does NOT close in code). The only pattern
+`external_directory`'s own matching can ever honour at this granularity is
+the directory itself, `/tmp/*` (and `/private/tmp/*`): opencode 1.18.30 has
+no mechanism to allow-list one file inside a shared directory without
+allowing every file directly in it. Setting that pattern would fix AC4's
+letter but open exactly the hazard this ADR's own Security constraints name
+first: `/tmp` shared with other processes. That is a product decision, not a
+code defect this file's ownership can make unilaterally — per this
+document's own § 9 "stop and record" rule (the issue's AC8) — so this fix
+round leaves the allow-list exactly as it was (a list of the literal paths,
+inert against `external_directory`) and records the finding here instead of
+silently widening exposure. The follow-up direction, not yet an issue: move
+the six stage skills' `/tmp` scratch files into a directory scoped to one
+run (`RunRoot`'s own `tmp` subdirectory is the obvious candidate — already
+present, already per-run) and allow-list that directory instead of
+`/tmp` itself, closing AC4 without the shared-directory hazard.
+
+## Second fix round: AC3 tool naming, AC4's /tmp allow, #1752's widening, NIGHTGAUGE_BIN, tamper-gate fail-closed (amendment 2026-09-15, #1638 fix round, stages D/E)
+
+A delegated fix round closed four review findings the round above left open
+or recorded rather than fixed, plus one trivial low, each with red/green
+Go coverage and, where the finding is about opencode's own runtime
+behaviour, a bounded probe against the pinned 1.18.30 binary.
+
+**AC3, finally closed with a real permission name, not `tool=unknown`.**
+The round above's "AC3 closed, not just raised" section left the fallback
+marker (`openCodeRun.finish`'s own path, hit whenever the stream shows a
+`RejectedToolCalls > 0` and stderr named no permission — a "deny" match's
+own shape, since it never prints the stderr notice) naming
+`openCodeUnknownPermission` ("unknown") unconditionally, because "the event
+names the tool, not the permission." That reasoning undersold what the
+event actually carries: a rejected `tool_use` event's own `part.tool` is
+the opencode tool name the model called (`"bash"`, `"edit"`, `"read"`,
+`"apply_patch"`, …) — not the specific permission sub-category
+(`external_directory` vs. the base permission) that ultimately refused it,
+but a real, useful name all the same, and the one AC3's own Verification
+bullet asks for (`[adapter-permission-rejected]` for a granted tool,
+`[permission-denied]` for one that is not). `OpenCodeStream.RejectedTool`
+(`internal/execution/stream.go`) now records the FIRST rejected tool_use
+event's own `part.tool`; `openCodeToolRejectionPermission`
+(`internal/execution/opencode_usage.go`, and its TS twin in
+`opencodeStream.ts`) maps `write`/`apply_patch` to `edit` — 1.18.30 has no
+permission of its own for either — and passes every other name through
+unchanged; `openCodeRejectionMarker(tool, allowed)` then classifies exactly
+as it already does for a stderr-sourced permission name.
+`TestOpenCodeDenyRejectedNeverSuccess` and `TestOpenCodeAutoRejectMarker`
+(Go) and the TS suite's own two cases now assert the EXACT marker for both
+an allowed and a not-allowed tool set, not merely that one of the two
+markers is present.
+
+**AC4's `/tmp` allow-list: the per-file design confirmed impossible,
+replaced with a directory-level allow.** The round above's own bounded
+probe (`Tool.assertExternalDirectory`'s bundled source) already found every
+`external_directory` request is `patterns:[path.join(dirname(file), "*")]`,
+never the file's own path, and recorded the per-file allow-list as dead
+without fixing it, "a product decision, not a code defect this file's
+ownership can make unilaterally." This fix round's own decision: the
+per-file design is impossible on 1.18.30, full stop, so the directory-level
+allow — literally `/tmp/*` and `/private/tmp/*`
+(`openCodeTmpDirAllowPatterns`, `opencode_guard.go`) — is the only shape
+that can ever work, replacing `openCodeTmpAllowList`'s sixteen dead
+entries. The accepted cost: every stage's Read/Edit-governed tool calls can
+now reach any OTHER file directly under `/tmp` or `/private/tmp`, not only
+the ones its own skill uses — shared `/tmp` readability and writability by
+`read`/`edit`, the hazard the round above named and declined to open. Two
+things bound that cost: the secret and project-config deny-list backstops
+(`openCodeSecretDenyBackstop`, `openCodeProjectConfigDenyBackstop`) are
+still checked LAST and still win over this allow wherever they apply
+(`*.env`, `**/.ssh/**`, `opencode.json*`, …, whether or not the file
+happens to sit under `/tmp`); and the `external_directory` check itself is
+only ever a lexical backstop, not a sandbox — a bounded probe this fix
+round ran (a bash `mv` moving a file OUT of an allow-listed `/tmp`
+directory, across two different external directories in one command) found
+it refused even with an explicit allow for the source directory, while a
+single-path bash `cat` or `cp` of the same file was correctly allowed or
+refused by the matching directory-level rule — so bash redirection or a
+multi-path command is not reliably covered by this control at all, allowed
+or denied, and was never claimed to be. `TestOpenCodeTmpDirAllowLetsAStageReadAndCatFromTmp`
+(a real-binary probe against actual files under `/tmp`, not a hand-patched
+allow entry) is the closure; `TestOpenCodeTmpAllowListCoversStageSkills`
+now asks whether a scanned `/tmp/...` literal's own `dirname(literal)+"/*"`
+request (`openCodeTmpRequestPattern`) is covered by
+`openCodeTmpDirAllowPatterns`, not whether the literal string itself is in
+a list — the six stage skills' own `/tmp` literals are all flat, directly
+under `/tmp`, so this holds today; its red companion introduces a NESTED
+`/tmp/sub/dir/...` literal, which this flat pair does not cover, and does
+fail. **Follow-up, not yet its own issue:** move the six stage skills'
+`/tmp` scratch files to a directory scoped to one run (`RunRoot`'s own
+`tmp` subdirectory, already present, already per-run) and allow-list that
+instead of `/tmp` itself, closing the shared-directory cost this amendment
+accepts rather than removing it.
+
+**#1752's widening: `*.env.*` as an infix, not only a prefix or suffix.**
+The round above's nested-secret fix (`**/*.env`, `**/.env*`) still only
+ever matches a filename that STARTS with `.env` or literally ends in
+`.env`. A file such as `config/prod.env.local` — `.env` as an INFIX, the
+name neither starts nor ends with it — matched none of those patterns, at
+any depth, and opencode 1.18.30's own bundled default `read` guard already
+treats `*.env.*` as a shape worth an `ask` rule in its own right (the
+Failure wording amendment above, "A stage allowed Read that reaches for
+`*.env`"), independent evidence this is a real secret shape, not a
+speculative widening. `*.env.*` and `**/*.env.*` are added to
+`openCodeSecretDenyBackstop`, paired the same root/nested way as the
+existing `.env`-prefixed entries. `TestOpenCodeNestedDotEnvDenied` now
+builds every tool path from `filepath.EvalSymlinks(dir)` (matching what a
+real dispatch event actually carries, not the given, unresolved form),
+asserts BOTH `apps/web/.env.local` and `config/prod.env.local` are denied,
+and includes a control read of `config/plain.txt` — a name with no secret
+shape at all — that MUST complete, proving the deny is targeted rather than
+a broader nested-read regression.
+
+**NIGHTGAUGE_BIN removed from the `external_directory` allow-list.** A scan
+of the six stage skills' own committed text for a concrete Read, `cat` or
+`cd` of a path under `NIGHTGAUGE_BIN` found none: every reference is
+`BINARY="${NIGHTGAUGE_BIN:-}"` followed by running `$BINARY` (bash
+execution — never gated by `external_directory` at all, the same "lexical
+backstop, not bash redirection" limitation this amendment's AC4 section
+records) or `export PATH="$(dirname "$BINARY"):$PATH"` (a shell variable
+assignment, never a filesystem read). The allow-list entry bought no stage
+skill anything it uses, while letting a Read tool call inspect the running
+nightgauge binary's own directory — a self-hosted checkout's own build
+output, or any sibling files an operator placed beside the binary.
+`openCodeExternalDirectoryAllowList` no longer takes a `binDir` parameter
+at all; `openCodeWorktreeRelativeDirPatterns`' own edit-deny backstop
+(finding 8, round above) is unaffected and still denies EDITING the
+directory as defense in depth, now redundant with `external_directory`'s
+own `"*": "deny"` default rather than the allow-list's own carve-out.
+`TestOpenCodePermissionMapNeverAllowsBinDir` is the unit coverage;
+`TestOpenCodeBinDirCpDenied` is the real-binary probe the issue's own item
+4 asked for — a bash `cp` planting a file into `NIGHTGAUGE_BIN` is refused,
+naming `external_directory` in the rejected `tool_use` event, unlike the
+multi-path `mv` probe above.
+
+Unrelated to this dir, but bearing on when it could ever be reopened for a
+GPT-family dispatch: `apply_patch`'s own `*** Move to:` header (§ 6, and
+the `#1640` amendment above) names a patch's destination path, but nothing
+in this repository's `apply_patch` handling reads that header today —
+`gates.js` classifies the whole tool `"blocked"` (the `#1640` amendment),
+so no Move-to destination ever reaches a workflow-gate or a permission
+check at all while that classification stands.
+[nightgauge/nightgauge#1808](https://github.com/nightgauge/nightgauge/issues/1808)
+tracks mapping `apply_patch`'s `patchText` to Claude-shaped file payloads;
+until that includes gating a Move-to destination the same way an `edit` or
+`write` tool call's own path is gated, `apply_patch` must stay `"blocked"` —
+lifting the block first would let a Move-to destination bypass every
+path-shaped control this ADR and `gates.js` both rely on, this
+`external_directory` allow-list included.
+
+**Trivial low: the tamper gate now fails CLOSED on an unverifiable
+worktree.** `openCodeProjectConfigTamperCheck` treated `git status`
+reporting "not a git repository" as "nothing to compare, so allow it" —
+backwards for a gate whose entire job is refusing a worktree it cannot
+verify. A `worktreeDir` git reports is not a repository (a dispatch config
+naming a path outside any checkout, or one whose `.git` a prior stage
+removed or corrupted) now REFUSES, naming the reason
+(`TestOpenCodeTamperGateNonGitWorktreeFailsClosed`); a `git status`
+invocation that fails for any OTHER reason (a corrupted index, tested by
+`TestOpenCodeTamperGateGitStatusFailsClosed`) already refused before this
+fix and is unchanged. `worktreeDir == ""` (no worktree named at all — never
+a real dispatch, only a caller that supplies none, including the dozens of
+this package's own `PreDispatch` tests that construct a `RunOptions` with
+no `WorktreeDir` to test something else entirely) is unaffected: it is
+still skipped, not refused, since there is no worktree to have lied about.
+Every fixture across `internal/execution`, `internal/execution/adapters`
+and `cmd/nightgauge` that dispatched through a plain, non-git `t.TempDir()`
+worktree to test something OTHER than the tamper gate itself now
+git-initializes it first (`gitInitOneCommitWorktree`,
+`gitInitTestWorktree`, `isolateOpenCodeVerb`'s own fixture) — the same
+shape every real dispatch's worktree already has by construction.
+
+## Correction to the `/tmp` allow-list: `*` crosses `/`, so `/tmp/*` was the whole tree, not one level (#1638 fix round, same day)
+
+The second fix round above recorded the `/tmp` allow-list's accepted cost as
+"every OTHER file directly under `/tmp` or `/private/tmp`, not only the ones
+its own skill uses" and asserted the backstops "still win... whether or not
+the file happens to sit under `/tmp`." Both sentences assumed opencode
+1.18.30's `Wildcard.match` never lets a configured `*` cross a `/`, the same
+assumption this document's "Correction to the pattern-matching amendment"
+section above already had to retract once for `edit`'s own patterns. It does
+not hold for `external_directory` either: the bundled matcher (`o.replace(/[.+^${}()|[\]\\]/g,"\\$&").replace(/\*/g,".*").replace(/\?/g,".")`,
+tested anchored `^...$`) turns a configured `*` into the regex `.*`, which
+matches across `/` exactly like a real glob's would. A bounded probe against
+the pinned binary (`TestOpenCodeTmpDirAllowDoesNotReachANestedFile`,
+`opencode_guard_integration_test.go`) found a NESTED file's own
+`external_directory` request (`dirname(file)+"/*"`, two directories below
+`/tmp`) matched the configured `/tmp/*` entry, and both a `read` of it and a
+`write` of a sibling at the same depth completed — the accepted cost was the
+whole `/tmp` and `/private/tmp` trees, at any depth, not one level. A flat
+`/tmp` symlink whose target is outside every allow-listed directory matched
+the same way, so the sentence above claiming the secret and project-config
+deny-list backstops "win... whether or not the file happens to sit under
+`/tmp`" does not hold for that shape either: those backstops are lexical on
+the path string a tool call reports, which does not resolve a symlink to its
+target — a pre-existing property of a lexical backstop, not something this
+correction changes or closes.
+
+`openCodeTmpDirAllowPatterns` is now `/tmp/?` and `/private/tmp/?` (`?`
+becomes the regex `.`, exactly one character, never `/`), not `/tmp/*`.
+Opencode's own `external_directory` request for a FLAT file directly under
+`/tmp` is always the literal six-character string `/tmp/*` — never the
+file's own name (§ "AC4's `/tmp` allow-list" above) — and that string's only
+character after `/tmp/` is the literal `*`, which `/tmp/?` matches; a
+NESTED file's request has more than one character there and does not match.
+The accepted cost is now what the second fix round's own prose intended:
+every stage's Read/Edit-governed tool calls can reach any OTHER file
+directly under `/tmp` or `/private/tmp`, never a nested one. The flat-symlink
+gap above is unaffected by this narrowing (the symlink's own path is still
+flat), and stays open — the same follow-up recorded below (moving the six
+stage skills' `/tmp` scratch files to a per-run scratch directory) is what
+would close it, by removing the need for this allow entry at all.
+
+`openCodeTmpCoverageMissing` (`opencode_guard_test.go`) is now
+`openCodeWildcardMatch` (`opencode_guard.go`), opencode's real matcher, not
+the plain map lookup the second fix round above described as "whether a
+scanned `/tmp/...` literal's own `dirname(literal)+"/*"` request... is
+covered by `openCodeTmpDirAllowPatterns`" — that description was accurate
+about the INTENT, but the lookup it shipped with was exact-string equality
+against the (still-`/tmp/*`-shaped) source list, which happened to agree
+with the real matcher only because the pre-narrowing pattern was identical
+to the request string it needed to match. Swapping in `/tmp/?` without this
+change would have made the drift test (`TestOpenCodeTmpAllowListCoversStageSkills`)
+report the six stage skills' own flat literals as uncovered, a false red;
+`TestOpenCodeTmpAllowListCoverageFailsOnANewLiteral`'s own red companion is
+unchanged in shape, still a nested literal the flat pattern does not cover.
+
+`TestOpenCodeOutsideReadRejected` and `TestOpenCodeBinDirCpDenied` each gain
+a `TMPDIR=/tmp`-forcing companion
+(`TestOpenCodeOutsideReadRejectedUnderTmpdirTmp`,
+`TestOpenCodeBinDirCpDeniedUnderTmpdirTmp`). With `TMPDIR` unset — this
+repository's own `ubuntu-latest` CI default, and the common Linux developer
+setup — Go's `t.TempDir()` places every fixture these two tests treat as
+"outside the allow-list" under `/tmp` itself, one level down; against the
+pre-narrowing `/tmp/*` pattern both tests' own probes completed instead of
+erroring, a platform-dependent gap this document's own prior amendments did
+not carry a leg for. Forcing `TMPDIR=/tmp` reproduces the shape on any
+platform, including this document's own macOS-based probes above, whose
+default temp root (`/var/folders/...`) never exercised it.
+
 ## Consequences
 
 - The model layer's one-adapter-one-provider assumption becomes a special

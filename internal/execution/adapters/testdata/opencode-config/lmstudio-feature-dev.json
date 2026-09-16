@@ -132,5 +132,56 @@
   ],
   "skills": {
     "urls": []
+  },
+  "permission": {
+    "*": "deny",
+    "read": {
+      "*": "deny",
+      "*.env": "deny",
+      ".env*": "deny",
+      "**/*.env": "deny",
+      "**/.env*": "deny",
+      "*.env.*": "deny",
+      "**/*.env.*": "deny",
+      "**/.ssh/**": "deny",
+      "**/id_rsa*": "deny",
+      "**/gh/hosts.yml": "deny"
+    },
+    "edit": {
+      "*": "deny",
+      "*.env": "deny",
+      ".env*": "deny",
+      "**/*.env": "deny",
+      "**/.env*": "deny",
+      "*.env.*": "deny",
+      "**/*.env.*": "deny",
+      "**/.ssh/**": "deny",
+      "**/id_rsa*": "deny",
+      "**/gh/hosts.yml": "deny",
+      "opencode.json*": "deny",
+      ".opencode/**": "deny"
+    },
+    "glob": "deny",
+    "grep": "deny",
+    "list": "deny",
+    "bash": {
+      "*": "deny",
+      "rm -rf *": "deny",
+      "rm -fr *": "deny",
+      "git push --force*": "deny",
+      "git push -f*": "deny",
+      "git push * --force*": "deny"
+    },
+    "task": "deny",
+    "webfetch": "deny",
+    "websearch": "deny",
+    "skill": "deny",
+    "todowrite": "deny",
+    "doom_loop": "deny",
+    "external_directory": {
+      "*": "deny",
+      "/tmp/?": "allow",
+      "/private/tmp/?": "allow"
+    }
   }
 }

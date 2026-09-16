@@ -320,14 +320,47 @@ describe("opencode stream parser: failures are never success (#1637)", () => {
     );
   });
 
-  it("a rejected call with no stderr notice still fails, naming no permission", async () => {
-    const summary = await classifyOpenCodeRun({
-      stdout: testdata("opencode_auto_reject_stream.jsonl"),
-      stderr: "",
-      exitCode: 0,
-      dispatched: "lmstudio/qwen/qwen3.8-27b",
-    });
-    expect(summary.failure).toMatch(/^\[permission-denied\] tool=unknown: /);
+  it("a rejected call with no stderr notice names the tool_use event's own tool (AC3, #1638 fix round)", async () => {
+    // A "deny" match (the generated permission map's only rejection shape,
+    // ADR-022 § 9) never prints the "auto-rejecting" notice, so the marker
+    // must come from the rejected tool_use event's own part.tool ("bash" in
+    // this fixture) instead of the unnamed "unknown" fallback, classified
+    // differently by whether the stage's own allowed tools grant it.
+    for (const tc of [
+      { allowedTools: ["Bash"], want: /^\[adapter-permission-rejected\] tool=bash: / },
+      { allowedTools: ["Read"], want: /^\[permission-denied\] tool=bash: / },
+    ] as const) {
+      const summary = await classifyOpenCodeRun({
+        stdout: testdata("opencode_auto_reject_stream.jsonl"),
+        stderr: "",
+        exitCode: 0,
+        allowedTools: tc.allowedTools,
+        dispatched: "lmstudio/qwen/qwen3.8-27b",
+      });
+      expect(summary.failure).toMatch(tc.want);
+    }
+  });
+
+  it('a real "deny"-only capture (no stderr notice at all) is never a success (AC3, #1638 fix round)', async () => {
+    // opencode_deny_rejected_stream.jsonl/_stderr.txt is a real 1.18.30
+    // capture of a "deny"-matched tool call: its stderr file is empty, the
+    // shape the map's own rejection always takes (ADR-022 § 9's "pattern
+    // matching" amendment). Go parity: TestOpenCodeDenyRejectedNeverSuccess.
+    const stdout = testdata("opencode_deny_rejected_stream.jsonl");
+    expect(stdout).not.toContain("auto-rejecting");
+    for (const tc of [
+      { allowedTools: ["Bash"], want: /^\[adapter-permission-rejected\] tool=bash: / },
+      { allowedTools: ["Read"], want: /^\[permission-denied\] tool=bash: / },
+    ] as const) {
+      const summary = await classifyOpenCodeRun({
+        stdout,
+        stderr: "",
+        exitCode: 0,
+        allowedTools: tc.allowedTools,
+        dispatched: "guard/stub-model",
+      });
+      expect(summary.failure).toMatch(tc.want);
+    }
   });
 
   it("an error event fails the run", async () => {

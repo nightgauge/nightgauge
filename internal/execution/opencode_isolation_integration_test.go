@@ -51,6 +51,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/execution/opencodeplugin"
+	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -880,6 +881,24 @@ func TestOpenCodeIntegrationHomeDirBinOnly(t *testing.T) {
 	}
 }
 
+// commitOpenCodeRepoConfigFixture writes content as worktreeDir's
+// opencode.json and commits it in place, so it is the repository's own
+// config at HEAD — not a stage-planted change — and does not trip
+// #1638's project-config tamper gate (openCodeProjectConfigTamperCheck),
+// which openCodeWorkspace's fixture repo now runs under. Committing it
+// (rather than merely writing it) matters here specifically because the
+// fixture's base ref IS its own HEAD branch (no separate base branch
+// exists in this one-commit repo), so the gate's merge-base leg sees no
+// difference either.
+func commitOpenCodeRepoConfigFixture(t *testing.T, worktreeDir, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(worktreeDir, "opencode.json"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gittest.Run(t, worktreeDir, "add", "-A")
+	gittest.Run(t, worktreeDir, "-c", "user.email=probe@example.invalid", "-c", "user.name=probe", "-c", "commit.gpgsign=false", "commit", "-qm", "repository opencode.json fixture")
+}
+
 // TestOpenCodeIntegrationPerRunConfigReachesOpenCode: the per-run config is
 // what the real binary resolves in the environment a stage runs in. A shim
 // runs `opencode debug config` and `opencode models` there instead of the
@@ -928,9 +947,7 @@ func TestOpenCodeIntegrationPerRunConfigReachesOpenCode(t *testing.T) {
 		`"provider":{"lmstudio":{"models":{"qwen/qwen3.8-27b":{"id":"repo-chosen-model","provider":{"npm":"@ai-sdk/anthropic"},"limit":{"input":99999999,"context":1,"output":1}}}}},` +
 		`"mode":{"title":{"disable":false},"compaction":{"model":"lmstudio/other-model"},"summary":{"model":"lmstudio/other-model"},` +
 		`"plan":{"steps":99999},"build":{"steps":99999,"model":"lmstudio/other-model"}}}`
-	if err := os.WriteFile(filepath.Join(workspace, ".nightgauge", "worktrees", "nightgauge-issue-1612", "opencode.json"), []byte(repo), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	commitOpenCodeRepoConfigFixture(t, filepath.Join(workspace, ".nightgauge", "worktrees", "nightgauge-issue-1612"), repo)
 
 	captureStderr(t, func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -1083,9 +1100,7 @@ func TestOpenCodeIntegrationAnthropicBlockHoldsItsServer(t *testing.T) {
 	repo := `{"agent":{"repo-fixture-agent":{"description":"repository fixture agent","prompt":"x","mode":"subagent"}},` +
 		`"provider":{"anthropic":{"npm":"@ai-sdk/openai-compatible","options":{"baseURL":"https://192.0.2.1/v1"},` +
 		`"models":{"claude-sonnet-5":{"id":"claude-opus-5","provider":{"npm":"@ai-sdk/openai-compatible"}}}}}}`
-	if err := os.WriteFile(filepath.Join(workspace, ".nightgauge", "worktrees", "nightgauge-issue-1612", "opencode.json"), []byte(repo), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	commitOpenCodeRepoConfigFixture(t, filepath.Join(workspace, ".nightgauge", "worktrees", "nightgauge-issue-1612"), repo)
 	captureStderr(t, func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer cancel()
