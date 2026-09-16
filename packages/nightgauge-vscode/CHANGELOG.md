@@ -9,6 +9,18 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-09-16
+
+### Fixed
+
+- 0.4.2 reached Open VSX for Apple Silicon only. The publish aborted partway on
+  a transient registry error, so the Intel Mac and Linux builds of that version
+  were never uploaded. 0.4.3 is the same extension published for all three
+  targets. If you are on Intel macOS or Linux and 0.4.2 never appeared, this is
+  the version to install.
+- The bundled markdown renderer moves to marked 18.0.13, picked up
+  automatically by the build from the extension's own pinned dependency.
+
 ## [0.4.2] - 2026-09-16
 
 ### Fixed
@@ -490,7 +502,8 @@ shipped as [0.2.1].
 - Settings for authentication provider, model selection, and paths
 - Settings for notification sounds, volume, and Do Not Disturb respect
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/nightgauge/nightgauge/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/nightgauge/nightgauge/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/nightgauge/nightgauge/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/nightgauge/nightgauge/compare/v0.3.1...v0.4.0
