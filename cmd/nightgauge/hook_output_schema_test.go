@@ -269,6 +269,7 @@ func TestHookCommands_RunWithoutArgv(t *testing.T) {
 		// so this asserts the argv contract without a desktop side effect.
 		{"notify", hookNotifyCmd, `{"hook_event_name":"Notification"}`},
 		{"format", hookFormatCmd, `{"tool_name":"Write","tool_input":{"file_path":"nonexistent.txt"}}`},
+		{"test-quality", hookTestQualityCmd, `{"tool_name":"Write","tool_input":{"file_path":"a.test.ts","content":"console.log(1)"}}`},
 		{"sanitize-prompt", hookSanitizePromptCmd, `{"tool_name":"Task","tool_input":{"prompt":"fix the build"}}`},
 	}
 
@@ -285,6 +286,26 @@ func TestHookCommands_RunWithoutArgv(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestHookTestQualityRegistered is #1642's own regression: hookCmd()'s
+// cmd.AddCommand(...) list is a flat call, easy to extend a verb's own
+// function without adding it there, which would leave `nightgauge hook
+// test-quality` unrecognised even though hookTestQualityCmd() itself works
+// fine when called directly (as TestHookCommands_RunWithoutArgv above does).
+// Removing hookTestQualityCmd() from hookCmd()'s AddCommand(...) call turns
+// this red without touching hookTestQualityCmd() itself.
+func TestHookTestQualityRegistered(t *testing.T) {
+	var found bool
+	for _, sub := range hookCmd().Commands() {
+		if sub.Name() == "test-quality" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal(`hookCmd() does not register "test-quality" — hookTestQualityCmd() must be added to hookCmd()'s cmd.AddCommand(...) list`)
 	}
 }
 

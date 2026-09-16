@@ -2606,6 +2606,61 @@ not carry a leg for. Forcing `TMPDIR=/tmp` reproduces the shape on any
 platform, including this document's own macOS-based probes above, whose
 default temp root (`/var/folders/...`) never exercised it.
 
+## OpenCode plugin edit hooks: `tool.execute.after` argument shape (amendment 2026-09-15, #1642)
+
+#1642's own AC7 requires recording, here, any observed divergence from its
+stated assumptions before continuing. The issue's assumptions read
+`tool.execute.after` receives the tool's args and a mutable `output.output`;
+`edit`/`write` args are `filePath`/`oldString`/`newString`/`content`" without
+saying which side of the call — `input` or `output` — carries `args`. A
+bounded, offline probe against the pinned 1.18.30 binary (a logging plugin
+loaded in place of `plugin/nightgauge/edit.js`, driven through the #1618
+stub's `tool-edit-stop` script and a temporary `write-then-stop` fixture, no
+live model and no network egress) settles both halves:
+
+**`args` live on `input`, not `output` — the opposite of `tool.execute.before`.**
+`tool.execute.before`'s `args` are on `output.args` (gates.js, already
+documented). `tool.execute.after`'s own `input` instead carries
+`{tool, sessionID, callID, args}` directly — captured verbatim off the real
+binary:
+
+```json
+{"hook":"after","input":{"tool":"edit","sessionID":"ses_...","callID":"call-stub-tool-edit-stop-0","args":{"filePath":"calc.py","newString":"return a - b","oldString":"return a + b"}},"output":{"metadata":{...},"title":"calc.py","output":"Edit applied successfully."}}
+```
+
+and the same shape for `write`, with `args: {content, filePath}`. `output`
+itself carries `{title, output, metadata}`, confirming the issue's own
+`output.output` assumption. `edit.js` reads `input.args`, not `output.args`,
+accordingly.
+
+**Correction (fix round, 2026-09-15): the capture's `filePath: "calc.py"` is
+an artifact of the stub fixture, not of 1.18.30's own argument shape.** The
+`{tool, sessionID, callID, args}` envelope above is genuine, but the
+`tool-edit-stop`/`write-then-stop` stub fixture that produced it supplies its
+own relative `filePath` value; the installed 1.18.30 binary's own tool
+schemas (read via `strings` on the pinned binary) require an ABSOLUTE
+`filePath` for both tools — write's own schema text reads "The absolute path
+to write... must be absolute, not relative", edit's reads "The absolute path
+to the file to modify" — and this repository's own real-model captures
+(`internal/execution/testdata/opencode_stream_local_capture.jsonl`,
+`..._remote_capture.jsonl`, `..._subagent_capture.jsonl`) each show an
+absolute `filePath` on a real `edit` call, e.g.
+`/tmp/nightgauge-fixture/repo/calc.py`. `edit.js`'s first cut refused every
+absolute path outright (mirroring `internal/hooks/format.go`'s
+`ValidateFilePath`), which left format/check-version/test-quality dead
+against a real model; it now resolves an absolute `filePath` against the
+run's cwd the way `format.go`'s own `relativizeHookPath` resolves one for
+the Claude Code hook path, and refuses only a path that resolves outside it.
+
+**Mutating `output.output` in place reaches the model's next turn.** The
+probe's `tool.execute.after` appended a marker string to `output.output`
+in place (no reassignment of `output` itself, no return value). The very
+next `POST /v1/chat/completions` request the stub-provider received carried
+that marker, byte for byte, as the `tool`-role message's own `content` —
+not merely visible within the hook's own scope, and not silently dropped
+before the session's own transcript is built. This confirms the issue's
+"so the model sees them" half of AC5 without qualification.
+
 ## Consequences
 
 - The model layer's one-adapter-one-provider assumption becomes a special
