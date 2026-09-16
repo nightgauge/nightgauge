@@ -9,6 +9,18 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- The Output Window no longer fetches its markdown renderer from a CDN. marked
+  is vendored from the extension's own pinned dependency into
+  `dist/vendor/marked.umd.js` and loaded through `webview.asWebviewUri`, so the
+  webview executes only code that ships inside the package and its
+  Content-Security-Policy names no remote origin. This is required by both the
+  Visual Studio Marketplace Publisher Agreement and the Open VSX publishing
+  terms. It also restores markdown rendering in the Output Window, which had
+  been falling back to escaped HTML since marked stopped publishing
+  `marked.min.js` in v5 and the CDN request began returning 404.
+
 ### Changed
 
 - The README now names both registries the extension is published to — the

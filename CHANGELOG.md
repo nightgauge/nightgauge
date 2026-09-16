@@ -14,6 +14,28 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- The Output Window webview no longer loads executable code from a remote
+  origin. It previously pulled marked from
+  `https://cdn.jsdelivr.net/npm/marked/marked.min.js` and named that origin in
+  its `script-src` and `connect-src`. Both the Visual Studio Marketplace
+  Publisher Agreement and the Open VSX publishing terms require an extension to
+  execute only the code contained in its published package, so this was a
+  violation regardless of intent, and the unversioned `npm/marked` specifier
+  resolved to whatever "latest" happened to be at load time. marked's browser
+  build is now vendored from the package's own pinned `marked` dependency into
+  `dist/vendor/marked.umd.js` by `scripts/vendor-webview-assets.mjs` and loaded
+  through `webview.asWebviewUri`, so the CSP carries no remote origin at all.
+  As a side effect this restores client-side markdown rendering in the Output
+  Window: marked dropped `marked.min.js` from its published files in v5, so the
+  CDN request had been returning 404 and the renderer had been silently falling
+  back to escaped HTML. `tests/views/webviewNoRemoteCode.test.ts` now fails the
+  build if any webview source reintroduces a remote `<script src>` or names an
+  `http(s)` origin in a `script-src`, `connect-src` or `worker-src` directive,
+  and both `scripts/check-runtime-assets.sh` and the `marketplace-publish.yml`
+  VSIX verification refuse an artifact that is missing the vendored asset.
+
 ### Changed
 
 - Both READMEs now link the extension's Open VSX listing beside the VS Code

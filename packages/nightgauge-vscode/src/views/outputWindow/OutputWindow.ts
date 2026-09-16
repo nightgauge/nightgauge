@@ -297,6 +297,9 @@ export class OutputWindow implements vscode.Disposable {
         retainContextWhenHidden: true,
         localResourceRoots: [
           vscode.Uri.joinPath(this.extensionUri, "src", "views", "outputWindow"),
+          // Vendored webview browser builds (marked). Required so the CSP can
+          // drop its remote CDN origin and load the script from the package.
+          vscode.Uri.joinPath(this.extensionUri, "dist", "vendor"),
         ],
       }
     );
@@ -1730,7 +1733,8 @@ export class OutputWindow implements vscode.Disposable {
       activeSlots,
       this.state.getActiveSlotIndex(),
       slotEntries,
-      slotStages
+      slotStages,
+      this.extensionUri
     );
   }
 
