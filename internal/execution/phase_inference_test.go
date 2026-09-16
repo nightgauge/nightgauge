@@ -103,7 +103,7 @@ func TestPhaseInferer_DisabledForSelfReportingStages(t *testing.T) {
 
 // TestPhaseInferer_FeatureValidateInfersFromItsRealWork is the #1850 half: the
 // worst-reported stage in the observed run now has the same fallback
-// feature-dev got in #3760.
+// feature-dev already had.
 func TestPhaseInferer_FeatureValidateInfersFromItsRealWork(t *testing.T) {
 	inf := NewPhaseInferer("feature-validate")
 	if !inf.enabled {

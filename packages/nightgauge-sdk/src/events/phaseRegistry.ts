@@ -19,7 +19,7 @@
  * | **Skill markers** | `<!-- phase:start … -->` in skill output, parsed by the extension's `streamOutputHandler` → `PhaseTracker` | every stage on its LLM path |
  * | **Go deterministic reporter** | `internal/orchestrator/deterministic_phases.go` (`newDeterministicPhaseReporter`), passed to the runners via `stages.WithPhaseReporter` | `pr-merge`, `pr-create` on their deterministic Go paths (#1247 / PR #1398), and the `pr-stage` CLI route (PR #1408) |
  * | **TS deterministic reporter** | `packages/nightgauge-vscode/src/utils/deterministicPhases.ts` (`createDeterministicPhaseReporter`), writing through `PipelineStateService` | `issue-pickup` on the extension's deterministic-first path, `ContextAssembler.generateDeterministicContext` (#1534) |
- * | **Phase inference** | `phaseInference.ts` `STAGE_RULES` and its Go mirror `internal/execution/phase_inference.go` | `feature-dev`, `feature-planning` (#3760), `feature-validate` (#1850) — LLM stages whose markers the model routinely skips |
+ * | **Phase inference** | `phaseInference.ts` `STAGE_RULES` and its Go mirror `internal/execution/phase_inference.go` | `feature-dev`, `feature-planning`, and `feature-validate` (#1850) — LLM stages whose markers the model routinely skips |
  *
  * A path that reports NOTHING is not neutral: the tree seeds this registry's
  * rows, shows `0/N` for the run's duration, and back-fills every row as
@@ -48,7 +48,6 @@
  * @see Issue #1027 - Skills emit structured phase markers
  * @see Issue #1247 / PR #1398 - deterministic Go runners report their phases
  * @see Issue #1534 - deterministic issue-pickup reports its phases
- * @see Issue #3760 - inference for feature-dev / feature-planning
  * @see Issue #1850 - inference for feature-validate; a green run rendered broken
  */
 

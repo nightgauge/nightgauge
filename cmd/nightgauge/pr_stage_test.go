@@ -188,7 +188,7 @@ func TestPrStageMerge_EmitsPhases(t *testing.T) {
 		switch p.Status {
 		case "running":
 			sawRunning = true
-		case "complete", "failed", "skipped":
+		case "complete", "failed", "skipped", "superseded", "degraded":
 			sawTerminal = true
 		default:
 			t.Errorf("phase %+v has an unknown status", p)
@@ -202,15 +202,18 @@ func TestPrStageMerge_EmitsPhases(t *testing.T) {
 	}
 
 	// AC4: a punt writes no skips, and the phase the runner was inside is
-	// recorded failed.
+	// recorded `superseded` — this attempt was displaced, not judged. It was
+	// `failed` until #1850, which is a verdict on work the skill is about to do
+	// successfully, and on a stage that then exits 0 it renders as a red ✗ on a
+	// green run.
 	for _, p := range res.Phases {
 		if p.Status == "skipped" {
 			t.Errorf("punt emitted a skip for %q — a punt hands the stage to the skill", p.Name)
 		}
 	}
 	last := res.Phases[len(res.Phases)-1]
-	if last.Name != "read-pr-context" || last.Status != "failed" {
-		t.Errorf("last transition = %+v, want read-pr-context failed (the punt point)", last)
+	if last.Name != "read-pr-context" || last.Status != "superseded" {
+		t.Errorf("last transition = %+v, want read-pr-context superseded (the punt point)", last)
 	}
 }
 

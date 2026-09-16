@@ -206,8 +206,8 @@ const STAGE_RULES: Partial<Record<ExecutionStage, PhaseInferenceRule[]>> = {
         EDIT_TOOLS.has(name) && isPlanningContextPath(inputString(input, "file_path")),
     },
   ],
-  // feature-validate (23 phases). Left out of #3760 and the worst-reported
-  // stage in the run that produced #1850: 0 of 23 phases across four minutes
+  // feature-validate (23 phases). Left out of the rules above and the
+  // worst-reported stage in the run that produced #1850: 0 of 23 phases across four minutes
   // and $0.68, on a stage that exited 0.
   //
   // There is nothing different about its prompt — its 23 markers are as

@@ -68,7 +68,7 @@ var featurePlanningPhases = []string{
 // feature-validate stage, mirroring PHASE_REGISTRY["feature-validate"] in the
 // SDK. Index == position.
 //
-// feature-validate was left out of the #3760 inference work and is the worst
+// feature-validate was left out of the inference work above and is the worst
 // case in the run that produced #1850: 0 of 23 phases reported across four
 // minutes and $0.68, on a stage that exited 0. Its 23 markers are as
 // unconditional in the SKILL.md as feature-dev's 18 were, and the model skips

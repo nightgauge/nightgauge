@@ -42,7 +42,8 @@ changelog, and the release workflow refuses a tag that does not.
   carry a `failed` phase (#1850)
 - `feature-validate` emitted no phase markers at all — 0 of 23 across a
   four-minute, $0.68 stage — because its markers are standalone `printf`
-  commands the model skips, exactly as `feature-dev`'s were before #3760. It
+  commands the model skips, exactly as `feature-dev`'s were before it got an
+  inference fallback. It
   now infers phase progress from the tool calls it actually makes, in both the
   Go and TypeScript execution paths (#1850)
 - A stage whose phases could not be measured at all now says so instead of
