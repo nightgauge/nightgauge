@@ -4463,9 +4463,28 @@ export function getOutputWindowHtml(
   activeSlots?: SlotInfo[],
   activeSlotIndex?: number | null,
   slotEntries?: Map<number, OutputEntry[]>,
-  slotStages?: Map<number, StageProgress[]>
+  slotStages?: Map<number, StageProgress[]>,
+  /**
+   * Extension install root, used to resolve the vendored webview assets. When
+   * omitted (unit tests that render HTML without an extension host) the marked
+   * script tag is left out and the renderer falls back to escaped HTML, which
+   * is the same path taken when the script fails to load.
+   */
+  extensionUri?: vscode.Uri
 ): string {
   const nonce = getNonce();
+
+  // Markdown rendering runs client-side, so the webview needs marked's browser
+  // build. Load it from dist/vendor/ via asWebviewUri, never from a CDN: the
+  // Marketplace and Open VSX both require an extension to execute only code
+  // contained in its published package, and a remote <script src> breaks that
+  // even when the CSP names the origin. dist/vendor/marked.umd.js is copied
+  // from the pinned `marked` dependency by scripts/vendor-webview-assets.mjs.
+  const markedScriptTag = extensionUri
+    ? `<script src="${webview.asWebviewUri(
+        vscode.Uri.joinPath(extensionUri, "dist", "vendor", "marked.umd.js")
+      )}" nonce="${nonce}"></script>`
+    : "";
 
   const title = (() => {
     const slots = activeSlots ?? [];
@@ -4509,9 +4528,9 @@ export function getOutputWindowHtml(
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}' https://cdn.jsdelivr.net; connect-src https://cdn.jsdelivr.net;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}' ${webview.cspSource};">
   <title>${title}</title>
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js" nonce="${nonce}"></script>
+  ${markedScriptTag}
   <style>
     ${getStyles()}
   </style>

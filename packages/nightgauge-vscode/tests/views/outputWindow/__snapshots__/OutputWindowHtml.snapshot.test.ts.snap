@@ -6,9 +6,9 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > empty state — no entrie
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src test-csp 'unsafe-inline'; script-src 'nonce-NONCE' https://cdn.jsdelivr.net; connect-src https://cdn.jsdelivr.net;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src test-csp 'unsafe-inline'; script-src 'nonce-NONCE' test-csp;">
   <title>Nightgauge Output</title>
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js" nonce="NONCE"></script>
+  
   <style>
     
     :root {
@@ -4026,9 +4026,9 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > overview dashboard with 3
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src test-csp 'unsafe-inline'; script-src 'nonce-NONCE' https://cdn.jsdelivr.net; connect-src https://cdn.jsdelivr.net;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src test-csp 'unsafe-inline'; script-src 'nonce-NONCE' test-csp;">
   <title>Nightgauge Output — #101 — Complete feature · nightgauge/nightgauge</title>
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js" nonce="NONCE"></script>
+  
   <style>
     
     :root {
@@ -8114,9 +8114,9 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with output content — m
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src test-csp 'unsafe-inline'; script-src 'nonce-NONCE' https://cdn.jsdelivr.net; connect-src https://cdn.jsdelivr.net;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src test-csp 'unsafe-inline'; script-src 'nonce-NONCE' test-csp;">
   <title>Nightgauge Output - Issue #42</title>
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js" nonce="NONCE"></script>
+  
   <style>
     
     :root {
@@ -12170,9 +12170,9 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with question prompt acti
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src test-csp 'unsafe-inline'; script-src 'nonce-NONCE' https://cdn.jsdelivr.net; connect-src https://cdn.jsdelivr.net;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src test-csp 'unsafe-inline'; script-src 'nonce-NONCE' test-csp;">
   <title>Nightgauge Output - Issue #99</title>
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js" nonce="NONCE"></script>
+  
   <style>
     
     :root {
@@ -16215,9 +16215,9 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with search bar visible �
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src test-csp 'unsafe-inline'; script-src 'nonce-NONCE' https://cdn.jsdelivr.net; connect-src https://cdn.jsdelivr.net;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src test-csp 'unsafe-inline'; script-src 'nonce-NONCE' test-csp;">
   <title>Nightgauge Output - Issue #7</title>
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js" nonce="NONCE"></script>
+  
   <style>
     
     :root {
@@ -20253,9 +20253,9 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with slot info including 
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src test-csp 'unsafe-inline'; script-src 'nonce-NONCE' https://cdn.jsdelivr.net; connect-src https://cdn.jsdelivr.net;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src test-csp 'unsafe-inline'; script-src 'nonce-NONCE' test-csp;">
   <title>Nightgauge Output — #42 — Fix truncation bug · nightgauge/nightgauge</title>
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js" nonce="NONCE"></script>
+  
   <style>
     
     :root {
