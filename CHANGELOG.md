@@ -29,7 +29,7 @@ marketplace add` and `grok plugin install` both exit non-zero once their
   never refreshed the plugin, so Grok kept the snapshot from the first install
   while the Claude arm re-copied from the working tree. Both idempotent states
   are now recognized and routed to `marketplace update` / `plugin update`, and
-  command output is only surfaced on a genuine failure
+  command output is only surfaced on a genuine failure (#1851)
 
 - `packages/nightgauge-vscode/scripts/dev-install.sh` exited silently before
   installing when no version of the extension was already present. The
