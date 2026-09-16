@@ -22,6 +22,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- `scripts/install-agent-skills.sh` printed raw `Error:` lines and a false
+  "marketplace add failed" warning on every re-run, because `grok plugin
+marketplace add` and `grok plugin install` both exit non-zero once their
+  target is already configured or installed. The already-installed case also
+  never refreshed the plugin, so Grok kept the snapshot from the first install
+  while the Claude arm re-copied from the working tree. Both idempotent states
+  are now recognized and routed to `marketplace update` / `plugin update`, and
+  command output is only surfaced on a genuine failure (#1851)
+
 - `packages/nightgauge-vscode/scripts/dev-install.sh` exited silently before
   installing when no version of the extension was already present. The
   old-version cleanup globbed with `ls`, which exits non-zero on no match;
