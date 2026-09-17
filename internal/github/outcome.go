@@ -183,6 +183,67 @@ type predictionAccuracy struct {
 	Survival *survivalCalibration `yaml:"survival_calibration,omitempty"`
 }
 
+// predictionAccuracyKnownFields lists every YAML key predictionAccuracy
+// accepts, including the legacy `survival` key from v0.3.0/v0.3.1 model files
+// (renamed to `survival_calibration` in #1592/v0.4.0). UnmarshalYAML checks
+// decoded keys against this set to preserve the KnownFields(true) strictness
+// the top-level decoder would otherwise apply, since a custom UnmarshalYAML
+// bypasses reflection-based field checking.
+var predictionAccuracyKnownFields = map[string]bool{
+	"total_predictions":    true,
+	"correct_predictions":  true,
+	"by_type":              true,
+	"by_size":              true,
+	"recent_outcomes":      true,
+	"self_heal_events":     true,
+	"survival_calibration": true,
+	"survival":             true,
+}
+
+// UnmarshalYAML accepts the legacy `survival` key alongside the current
+// `survival_calibration` key, preferring survival_calibration when both are
+// present. The struct's `survival_calibration` tag means MarshalYAML always
+// emits the new key, so a legacy-keyed model self-migrates one-way on its
+// next save via the existing saveModel path.
+func (p *predictionAccuracy) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind != yaml.MappingNode {
+		return errors.New("prediction_accuracy: expected a mapping")
+	}
+	for i := 0; i < len(value.Content); i += 2 {
+		key := value.Content[i].Value
+		if !predictionAccuracyKnownFields[key] {
+			return fmt.Errorf("field %s not found in type github.predictionAccuracy", key)
+		}
+	}
+
+	var alias struct {
+		TotalPredictions   int                  `yaml:"total_predictions"`
+		CorrectPredictions int                  `yaml:"correct_predictions"`
+		ByType             map[string]typeStats `yaml:"by_type"`
+		BySize             map[string]typeStats `yaml:"by_size"`
+		RecentOutcomes     []recentOutcome      `yaml:"recent_outcomes"`
+		SelfHealEvents     []SelfHealEvent      `yaml:"self_heal_events,omitempty"`
+		Survival           *survivalCalibration `yaml:"survival_calibration,omitempty"`
+		LegacySurvival     *survivalCalibration `yaml:"survival,omitempty"`
+	}
+	if err := value.Decode(&alias); err != nil {
+		return err
+	}
+
+	p.TotalPredictions = alias.TotalPredictions
+	p.CorrectPredictions = alias.CorrectPredictions
+	p.ByType = alias.ByType
+	p.BySize = alias.BySize
+	p.RecentOutcomes = alias.RecentOutcomes
+	p.SelfHealEvents = alias.SelfHealEvents
+	if alias.Survival != nil {
+		p.Survival = alias.Survival
+	} else {
+		p.Survival = alias.LegacySurvival
+	}
+	return nil
+}
+
 // SelfHealEvent records a single pipeline self-heal occurrence for frequency tracking.
 type SelfHealEvent struct {
 	IssueNumber int    `yaml:"issue_number"`
