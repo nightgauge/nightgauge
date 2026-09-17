@@ -262,11 +262,19 @@ jobs:
         run: |
           set -euo pipefail
           # vsce target -> Makefile binary suffix (GOOS-GOARCH)
-          declare -A BIN=(
-            [darwin-arm64]=darwin-arm64
-            [darwin-x64]=darwin-amd64
-            [linux-x64]=linux-amd64
-          )
+          # vsce target -> Makefile binary suffix, as a case rather than an
+          # associative array. `declare -A` needs bash 4, and macOS ships bash
+          # 3.2 for licensing reasons, so the array silently mangles into an
+          # unbound variable there. Keeping this portable means the same step
+          # runs on ubuntu and on the macos runner that codesigning requires.
+          bin_suffix() {
+            case "$1" in
+              darwin-arm64) echo darwin-arm64 ;;
+              darwin-x64)   echo darwin-amd64 ;;
+              linux-x64)    echo linux-amd64 ;;
+              *) echo "unknown target $1" >&2; return 1 ;;
+            esac
+          }
           # vsce records the pre-release flag in the VSIX manifest at PACKAGE
           # time; `publish --pre-release` on a VSIX packaged without it is
           # refused (#1299). Keep release assets aligned with registry channel.
@@ -281,7 +289,7 @@ jobs:
           fi
           mkdir -p dist/bin
           for T in darwin-arm64 darwin-x64 linux-x64; do
-            SRC="../../bin/nightgauge-${BIN[$T]}"
+            SRC="../../bin/nightgauge-$(bin_suffix "$T")"
             [[ -f "$SRC" ]] || { echo "ERROR: missing $SRC (did 'make build-all' run?)"; exit 1; }
             cp "$SRC" dist/bin/nightgauge
             chmod +x dist/bin/nightgauge
