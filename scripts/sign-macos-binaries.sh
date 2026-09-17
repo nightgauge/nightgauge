@@ -10,7 +10,10 @@
 #
 #   APPLE_CERT_P12         base64 of a "Developer ID Application" .p12
 #   APPLE_CERT_PASSWORD    its export password
-#   APPLE_SIGNING_IDENTITY e.g. "Developer ID Application: Edibu, LLC (RZJPN7Y7BG)"
+#   APPLE_SIGNING_IDENTITY must match the certificate CN EXACTLY. Apple issued
+#                          ours as "Developer ID Application: Edibu LLC (RZJPN7Y7BG)"
+#                          with NO comma, even though the legal entity is written
+#                          "Edibu, LLC". A comma here fails to match and signing fails.
 #   APPLE_ID               Apple ID for notarytool
 #   APPLE_TEAM_ID          e.g. RZJPN7Y7BG
 #   APPLE_APP_PASSWORD     an app-specific password, not the account password
@@ -65,9 +68,20 @@ KEYCHAIN="${RUNNER_TEMP:-/tmp}/nightgauge-signing.keychain-db"
 KEYCHAIN_PASSWORD="$(uuidgen)"
 CERT_PATH="${RUNNER_TEMP:-/tmp}/developer-id.p12"
 
+# Save the caller's keychain search list so it can be restored. Adding our
+# keychain to the search list is required for codesign to find the identity,
+# but clobbering the list and not putting it back would reconfigure the
+# machine -- harmless on an ephemeral runner, not harmless on a developer's
+# Mac or a self-hosted runner.
+ORIGINAL_SEARCH_LIST="$(security list-keychains -d user | tr -d ' "')"
+
 cleanup() {
   # The keychain holds a private key. Remove it whether or not signing worked;
   # a self-hosted runner would otherwise retain it between jobs.
+  if [[ -n "${ORIGINAL_SEARCH_LIST:-}" ]]; then
+    # shellcheck disable=SC2086  # deliberate word splitting: one arg per keychain
+    security list-keychains -d user -s $ORIGINAL_SEARCH_LIST 2>/dev/null || true
+  fi
   security delete-keychain "$KEYCHAIN" 2>/dev/null || true
   rm -f "$CERT_PATH" 2>/dev/null || true
 }
@@ -83,7 +97,10 @@ security import "$CERT_PATH" -P "$APPLE_CERT_PASSWORD" -A \
 # Without this, codesign prompts for keychain access and hangs a headless job.
 security set-key-partition-list -S apple-tool:,apple:,codesign: \
   -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
-security list-keychain -d user -s "$KEYCHAIN" login.keychain-db
+# Prepend ours, keeping everything the caller already had. `list-keychain`
+# (singular) is an undocumented alias; use the documented plural form.
+# shellcheck disable=SC2086
+security list-keychains -d user -s "$KEYCHAIN" $ORIGINAL_SEARCH_LIST
 echo "::endgroup::"
 
 FAILED=()

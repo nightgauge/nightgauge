@@ -42,7 +42,7 @@ cat > "$WORK/bin/codesign" <<'S'
 for a in "$@"; do
   case "$a" in
     --verify) exit "${VERIFY_RC:-0}" ;;
-    --display) echo "Authority=Developer ID Application: Edibu, LLC (RZJPN7Y7BG)"; exit 0 ;;
+    --display) echo "Authority=Developer ID Application: Edibu LLC (RZJPN7Y7BG)"; exit 0 ;;
   esac
 done
 exit "${SIGN_RC:-0}"
@@ -70,7 +70,7 @@ run() { ( unset APPLE_CERT_P12 APPLE_CERT_PASSWORD APPLE_SIGNING_IDENTITY \
           "$@" bash "$SUT" "$BIN" ) > "$WORK/out" 2>&1; echo $?; }
 
 signing_env=(env APPLE_CERT_P12=Zm9v APPLE_CERT_PASSWORD=pw
-             APPLE_SIGNING_IDENTITY="Developer ID Application: Edibu, LLC (RZJPN7Y7BG)")
+             APPLE_SIGNING_IDENTITY="Developer ID Application: Edibu LLC (RZJPN7Y7BG)")
 notary_env=("${signing_env[@]}" APPLE_ID=a@b.c APPLE_TEAM_ID=RZJPN7Y7BG APPLE_APP_PASSWORD=x)
 
 echo "sign-macos-binaries self-test"

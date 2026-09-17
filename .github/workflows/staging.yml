@@ -26,7 +26,11 @@ concurrency:
 jobs:
   dry-run:
     name: Build all artifacts (no publish)
-    runs-on: ubuntu-latest
+    # macos-latest, not ubuntu: Apple `codesign` runs only on macOS, and the
+    # rc channel is where signing is proved before release.yml adopts it.
+    # macOS still cross-compiles linux/amd64 (CGO_ENABLED=0), and macos
+    # minutes are free for public repositories.
+    runs-on: macos-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -66,6 +70,22 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: make build-all VERSION="$VERSION"
+
+      # Sign before anything packages these binaries. The VSIX freezes whatever
+      # is in dist/bin/, so signing afterwards would ship an unsigned copy while
+      # reporting success. No-ops with a notice when the Apple secrets are
+      # absent, so a fork or a secretless re-run still completes.
+      - name: Sign the macOS binaries
+        env:
+          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          bash scripts/sign-macos-binaries.sh \
+            bin/nightgauge-darwin-arm64 bin/nightgauge-darwin-amd64
 
       - name: Build SDK + extension
         run: npm run build
@@ -129,6 +149,10 @@ jobs:
       # must NOT ship source maps or type declarations (.vscodeignore drift).
       - name: Verify VSIX contents
         working-directory: packages/nightgauge-vscode
+        env:
+          # Non-empty only when a signing certificate is configured, so the
+          # assertion below is strict on a real rc and informational on a fork.
+          APPLE_SIGNING_EXPECTED: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -142,6 +166,29 @@ jobs:
             unzip -l "$VSIX" | grep -q 'extension/dist/sdk-cli.cjs' \
               || { echo "ERROR: $VSIX missing bundled SDK CLI"; exit 1; }
             if unzip -l "$VSIX" | grep -qE '\.(map|d\.ts)$'; then echo "ERROR: $VSIX ships source maps or type declarations"; exit 1; fi
+
+            # Assert the PACKAGED binary is Developer ID signed, not the one the
+            # signing step happened to touch. The VSIX freezes a copy, so this
+            # is the only check that speaks for what a user actually installs --
+            # and the 0.4.2 Open VSX publish is the standing reminder that a
+            # step's own success line is not evidence.
+            case "$VSIX" in
+              *darwin*)
+                unzip -p "$VSIX" extension/dist/bin/nightgauge > "$RUNNER_TEMP/packaged-bin"
+                if [[ -n "${APPLE_SIGNING_EXPECTED:-}" ]]; then
+                  codesign -dvvv "$RUNNER_TEMP/packaged-bin" 2>&1 \
+                    | grep -q 'Authority=Developer ID Application' \
+                    || { echo "ERROR: $VSIX ships a binary that is not Developer ID signed"; exit 1; }
+                  codesign -dv "$RUNNER_TEMP/packaged-bin" 2>&1 | grep -q 'flags=0x10000(runtime)' \
+                    || { echo "ERROR: $VSIX binary lacks the hardened runtime"; exit 1; }
+                  echo "OK: $VSIX carries a Developer ID signature with hardened runtime"
+                else
+                  codesign -dv "$RUNNER_TEMP/packaged-bin" 2>&1 | grep -q 'adhoc' \
+                    && echo "NOTE: $VSIX binary is ad-hoc signed (no Apple secrets configured)"
+                fi
+                rm -f "$RUNNER_TEMP/packaged-bin"
+                ;;
+            esac
             echo "OK: $VSIX"
           done
           [[ "$COUNT" -eq 3 ]] || { echo "ERROR: expected 3 VSIXs, found $COUNT"; exit 1; }

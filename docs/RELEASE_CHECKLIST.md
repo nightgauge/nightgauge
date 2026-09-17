@@ -603,14 +603,14 @@ node and `vsce`; `macos` minutes are free for public repositories.
 
 ### Repository secrets to add
 
-| Secret                   | Purpose                                                             |
-| ------------------------ | ------------------------------------------------------------------- |
-| `APPLE_CERT_P12`         | `base64` of the `Developer ID Application` .p12                     |
-| `APPLE_CERT_PASSWORD`    | Its export password                                                 |
-| `APPLE_SIGNING_IDENTITY` | e.g. `Developer ID Application: Edibu, LLC (RZJPN7Y7BG)`            |
-| `APPLE_ID`               | Apple ID for `notarytool` (optional; notarization only)             |
-| `APPLE_TEAM_ID`          | `RZJPN7Y7BG` (optional; notarization only)                          |
-| `APPLE_APP_PASSWORD`     | An **app-specific** password, never the account password (optional) |
+| Secret                   | Purpose                                                                                                                                                                                 |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `APPLE_CERT_P12`         | `base64` of the `Developer ID Application` .p12                                                                                                                                         |
+| `APPLE_CERT_PASSWORD`    | Its export password                                                                                                                                                                     |
+| `APPLE_SIGNING_IDENTITY` | Exactly `Developer ID Application: Edibu LLC (RZJPN7Y7BG)`. **No comma**: it must match the certificate CN, which Apple issued without one even though the legal entity is `Edibu, LLC` |
+| `APPLE_ID`               | Apple ID for `notarytool` (optional; notarization only)                                                                                                                                 |
+| `APPLE_TEAM_ID`          | `RZJPN7Y7BG` (optional; notarization only)                                                                                                                                              |
+| `APPLE_APP_PASSWORD`     | An **app-specific** password, never the account password (optional)                                                                                                                     |
 
 Signing is skipped unless the first three are present; notarization
 additionally needs the last three. With none set the script exits 0 and says
