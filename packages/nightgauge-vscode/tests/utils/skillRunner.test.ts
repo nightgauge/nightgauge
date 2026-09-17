@@ -860,15 +860,21 @@ allowed-tools: Read Write Edit Bash AskUserQuestion
       expect(onPhaseStart).not.toHaveBeenCalled();
     });
 
-    it("does NOT infer phases for stages that self-report (feature-validate)", () => {
+    // #1850: feature-validate was excluded here on the theory that it
+    // self-reports. It does not — it reported 0 of its 23 phases across a
+    // four-minute, $0.68 run that exited 0, for the same structural reason
+    // feature-dev did: every marker is a standalone printf the model skips.
+    it("infers phases for feature-validate too (#1850)", () => {
       const onPhaseStart = vi.fn();
       runStageSkillHeadless("feature-validate", 42, { onPhaseStart });
 
       mockProcess.stdout!.emit("data", Buffer.from('{"type":"system","subtype":"init"}\n'));
-      emitAssistantToolUse("Write", { file_path: "src/feature.ts", content: "x" });
+      emitAssistantToolUse("Read", { file_path: "dev-context.md" }); // read-dev-context
+      emitAssistantToolUse("Bash", { command: "npx -w nightgauge-vscode vitest run" }); // run-tests
 
-      // No inferred markers — only genuine printf markers drive validate.
-      expect(onPhaseStart).not.toHaveBeenCalled();
+      const phases = onPhaseStart.mock.calls.map((c) => c[1]);
+      expect(phases).toEqual(["validate-environment", "read-dev-context", "run-tests"]);
+      expect(onPhaseStart).toHaveBeenLastCalledWith("feature-validate", "run-tests", 10, 23);
     });
   });
 
@@ -879,6 +885,12 @@ allowed-tools: Read Write Edit Bash AskUserQuestion
   describe("phase marker double-sighting (#217)", () => {
     const MARKER =
       '<!-- phase:start name="feedback-context-check" index=2 total=8 stage="feature-validate" -->';
+
+    // feature-validate also infers phases from its tool calls (#1850), so the
+    // mock sees inferred markers alongside the printf'd one. Double-sighting is
+    // a claim about THIS marker, so count only the calls that carry its name.
+    const markerCalls = (onPhaseStart: ReturnType<typeof vi.fn>): unknown[][] =>
+      onPhaseStart.mock.calls.filter((c) => c[1] === "feedback-context-check");
 
     it("fires onPhaseStart exactly once for a command echo + tool_result pair", () => {
       const onPhaseStart = vi.fn();
@@ -901,7 +913,7 @@ allowed-tools: Read Write Edit Bash AskUserQuestion
         },
       });
       mockProcess.stdout!.emit("data", Buffer.from(assistantLine + "\n"));
-      expect(onPhaseStart).not.toHaveBeenCalled();
+      expect(markerCalls(onPhaseStart)).toHaveLength(0);
 
       // Tool-result turn: the printf stdout carrying the actual marker.
       const userLine = JSON.stringify({
@@ -913,7 +925,7 @@ allowed-tools: Read Write Edit Bash AskUserQuestion
       });
       mockProcess.stdout!.emit("data", Buffer.from(userLine + "\n"));
 
-      expect(onPhaseStart).toHaveBeenCalledTimes(1);
+      expect(markerCalls(onPhaseStart)).toHaveLength(1);
       expect(onPhaseStart).toHaveBeenCalledWith("feature-validate", "feedback-context-check", 2, 8);
 
       // Later assistant text must not replay the echo: pre-fix, the command
@@ -929,7 +941,7 @@ allowed-tools: Read Write Edit Bash AskUserQuestion
       });
       mockProcess.stdout!.emit("data", Buffer.from(followUpLine + "\n"));
 
-      expect(onPhaseStart).toHaveBeenCalledTimes(1);
+      expect(markerCalls(onPhaseStart)).toHaveLength(1);
     });
 
     it("still detects markers emitted as genuine assistant text", () => {
@@ -945,7 +957,7 @@ allowed-tools: Read Write Edit Bash AskUserQuestion
       });
       mockProcess.stdout!.emit("data", Buffer.from(assistantLine + "\n"));
 
-      expect(onPhaseStart).toHaveBeenCalledTimes(1);
+      expect(markerCalls(onPhaseStart)).toHaveLength(1);
       expect(onPhaseStart).toHaveBeenCalledWith("feature-validate", "feedback-context-check", 2, 8);
     });
   });
