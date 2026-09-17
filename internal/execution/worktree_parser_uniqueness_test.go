@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // sanctionedIssueParsers are the only functions in the tree allowed to turn an
@@ -64,11 +66,17 @@ func scanForIssueParsers(t *testing.T, root string) []string {
 	var offenders []string
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
+			if gittest.TolerateConcurrentScratchWrite(err) {
+				return nil
+			}
 			return err
 		}
 		if d.IsDir() {
 			switch d.Name() {
 			case ".git", "node_modules", "vendor", "bin", "dist":
+				return fs.SkipDir
+			}
+			if gittest.IsScratchOutputDir(d.Name()) {
 				return fs.SkipDir
 			}
 			// A nested checkout of THIS repo contains every sanctioned parser

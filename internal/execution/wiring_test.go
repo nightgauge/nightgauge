@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // TestEveryProductionSweepCallSiteOpensTheMergedPRDoor is a SOURCE-level test,
@@ -44,11 +46,17 @@ func TestEveryProductionSweepCallSiteOpensTheMergedPRDoor(t *testing.T) {
 
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
+			if gittest.TolerateConcurrentScratchWrite(err) {
+				return nil
+			}
 			return err
 		}
 		if d.IsDir() {
 			switch d.Name() {
 			case ".git", "node_modules", "vendor", "dist", "out":
+				return filepath.SkipDir
+			}
+			if gittest.IsScratchOutputDir(d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -124,11 +132,17 @@ func countWatchedLiterals(t *testing.T, root string, watched map[string]bool) in
 	count := 0
 	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
+			if gittest.TolerateConcurrentScratchWrite(err) {
+				return nil
+			}
 			return err
 		}
 		if d.IsDir() {
 			switch d.Name() {
 			case ".git", "node_modules", "vendor", "dist", "out":
+				return filepath.SkipDir
+			}
+			if gittest.IsScratchOutputDir(d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil
