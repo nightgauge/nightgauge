@@ -65,11 +65,13 @@ Signed release binaries, checksums, and the Homebrew cask are available from
 The full Nightgauge experience with visual dashboard, project board
 integration, batch processing, and one-click pipeline execution.
 
-Install **Nightgauge** from the
-[VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=nightgauge.nightgauge-vscode),
-or from [Open VSX](https://open-vsx.org/extension/nightgauge/nightgauge-vscode) in
-VSCodium, Cursor, Windsurf, Gitpod and other Open VSX-based editors. Both
-select the build for your platform automatically. Target-specific VSIXs
+Install **Nightgauge** from
+[Open VSX](https://open-vsx.org/extension/nightgauge/nightgauge-vscode), which
+selects the build for your platform automatically and is the default registry in
+VSCodium, Cursor, Windsurf and Gitpod. In VS Code itself, install the `.vsix` for
+your platform from the
+[latest release](https://github.com/nightgauge/nightgauge/releases/latest) with
+`code --install-extension <file>.vsix`. Target-specific VSIXs
 are also available from the GitHub Release; **Extensions → … → Install from
 VSIX** installs one manually. Building locally or running `dev-install.sh` is
 for extension development and intentionally produces a non-release build.

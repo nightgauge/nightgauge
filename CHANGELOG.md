@@ -14,6 +14,17 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- The install instructions in both READMEs pointed at a VS Code Marketplace
+  listing that returns 404, which was actively misleading: the extension
+  README is also the Open VSX listing's Details tab, so Open VSX visitors were
+  being handed a dead link as their first install option. Both now lead with
+  Open VSX and document the direct `.vsix` path
+  (`code --install-extension <file>.vsix`) for VS Code itself, using the
+  per-target assets already attached to every GitHub release. No behaviour
+  change; the extension was never Marketplace-dependent at runtime.
+
 ### Changed
 
 - Reduced the extension's Marketplace trust surface, following the publisher
