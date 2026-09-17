@@ -278,18 +278,39 @@ install_grok() {
   # after the directory (`nightgauge`), not marketplace.json's `name`.
   # `grok plugin install nightgauge --trust` works after marketplace add.
   # A plugin-command failure must not fail the home-skills copy.
+  #
+  # BOTH COMMANDS ARE NON-IDEMPOTENT AND EXIT 1 ON A SECOND RUN:
+  # `marketplace add` fails with "already configured" and `install` fails with
+  # "already installed". That is the steady state of a dev refresh, not a
+  # failure, so each is matched and routed to the refresh command — the Claude
+  # arm above re-copies from the working tree on every run and this one must
+  # too, or a re-run leaves Grok on the plugin snapshot it first installed.
+  # Command output is captured rather than sent to the terminal so the expected
+  # "already ..." lines do not read as errors; a genuine failure prints it.
   if [ "$grok_cli" -eq 1 ]; then
     local plugin_src="$REPO_ROOT/claude-plugins/nightgauge"
+    local out
     echo "    Installing Nightgauge plugin via grok (best-effort) ..."
-    if ! grok plugin marketplace add "$REPO_ROOT" >/dev/null; then
+    if out="$(grok plugin marketplace add "$REPO_ROOT" 2>&1)" ||
+      printf '%s' "$out" | grep -q 'already configured'; then
+      grok plugin marketplace update nightgauge >/dev/null 2>&1 || true
+    else
       echo "    WARNING: grok plugin marketplace add failed — ~/.grok/skills copy still applies." >&2
+      printf '%s\n' "$out" >&2
     fi
-    if grok plugin install "$plugin_src" --trust >/dev/null; then
+    if out="$(grok plugin install "$plugin_src" --trust 2>&1)"; then
       echo "    Grok plugin installed from $plugin_src."
-    elif grok plugin install nightgauge --trust >/dev/null; then
+    elif printf '%s' "$out" | grep -q 'already installed'; then
+      if grok plugin update nightgauge >/dev/null 2>&1; then
+        echo "    Grok plugin refreshed from $plugin_src."
+      else
+        echo "    WARNING: grok plugin update failed — ~/.grok/skills copy still applies." >&2
+      fi
+    elif grok plugin install nightgauge --trust >/dev/null 2>&1; then
       echo "    Grok plugin installed as nightgauge."
     else
       echo "    WARNING: grok plugin install failed — ~/.grok/skills copy still applies." >&2
+      printf '%s\n' "$out" >&2
     fi
   fi
 }

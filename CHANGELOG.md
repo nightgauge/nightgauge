@@ -22,6 +22,27 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The SDK and both copies of the product-audit skill declared
+  `@types/js-yaml@^4` alongside `js-yaml@^5`. js-yaml 5 ships its own type
+  declarations, so the stub package described the wrong major and shadowed
+  them whenever npm hoisted a js-yaml 4 copy above the workspace. That turned
+  `npm run build` red with TS2353 on the `quoteStyle` dump option in
+  `ComplexityModelService.ts` and `KnowledgeService.ts`, and failed the
+  quoted-`schema_version` serialization test. The stub and its lockfile
+  entries are removed, leaving js-yaml's own declarations as the only source
+  of its types. The VS Code extension and the root tooling scripts imported
+  js-yaml without declaring it, relying on whatever major happened to be
+  hoisted; both now depend on `js-yaml@^5.4.2` explicitly (#1853)
+
+- `scripts/install-agent-skills.sh` printed raw `Error:` lines and a false
+  "marketplace add failed" warning on every re-run, because `grok plugin
+marketplace add` and `grok plugin install` both exit non-zero once their
+  target is already configured or installed. The already-installed case also
+  never refreshed the plugin, so Grok kept the snapshot from the first install
+  while the Claude arm re-copied from the working tree. Both idempotent states
+  are now recognized and routed to `marketplace update` / `plugin update`, and
+  command output is only surfaced on a genuine failure (#1851)
+
 - A run that succeeded completely rendered in the pipeline tree as mostly
   unreported with a red ✗ on it, so operators investigated runs that had merged
   their PR and closed their issue. Phase records outlived the stage attempt
