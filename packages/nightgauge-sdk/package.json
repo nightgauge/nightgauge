@@ -66,7 +66,7 @@
   "devDependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.270",
     "@types/node": "^26.5.1",
-    "@vitest/coverage-v8": "^4.1.11",
+    "@vitest/coverage-v8": "^5.0.0",
     "typescript": "^7.0.2",
     "vitest": "^4.1.2"
   }
