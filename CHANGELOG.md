@@ -14,6 +14,21 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- `TestEveryRecordEscalationHasADurableTwin` no longer annotates a passing CI
+  run with `##[error]`. Its `t.Logf` message began with a bare `<path>:` token,
+  so the rendered line carried two `file:line`-shaped tokens
+  (`escalation_durability_test.go:62: scheduler.go: 3 RecordEscalation...`) and
+  matched a Go problem matcher, which marked benign diagnostics as errors. The
+  test was always passing: the assertion is `appends < records`, and appends
+  legitimately run ahead because the two model-unavailable downgrade sites
+  append without a `RecordEscalation`. 81 other `t.Logf` lines in the suite are
+  unannotated because their messages lack that shape. Reworded rather than
+  silencing the matcher, which still catches real Go build errors. Worth fixing
+  because a red error on a green run teaches people to ignore error
+  annotations.
+
 ## [0.4.4] - 2026-09-17
 
 ### Added
