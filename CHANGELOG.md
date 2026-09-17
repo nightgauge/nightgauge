@@ -22,6 +22,16 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The SDK and both copies of the product-audit skill declared
+  `@types/js-yaml@^4` alongside `js-yaml@^5`. js-yaml 5 ships its own type
+  declarations, so the stub package described the wrong major and shadowed
+  them whenever npm hoisted a js-yaml 4 copy above the workspace. That turned
+  `npm run build` red with TS2353 on the `quoteStyle` dump option in
+  `ComplexityModelService.ts` and `KnowledgeService.ts`, and failed the
+  quoted-`schema_version` serialization test. The `@types/js-yaml`
+  declarations and their lockfile entries are removed, leaving js-yaml's own
+  declarations as the only source of its types (#1853)
+
 - `scripts/install-agent-skills.sh` printed raw `Error:` lines and a false
   "marketplace add failed" warning on every re-run, because `grok plugin
 marketplace add` and `grok plugin install` both exit non-zero once their
