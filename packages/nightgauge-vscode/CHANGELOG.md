@@ -9,6 +9,14 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- Install instructions now lead with Open VSX, and document installing the
+  `.vsix` for your platform directly in VS Code with
+  `code --install-extension <file>.vsix` (or **Extensions: Install from VSIX**).
+  Every release attaches all three per-target builds, so VS Code users install
+  the same artifact either way.
+
 ### Added
 
 - The listing now includes "What this extension does on your machine": the

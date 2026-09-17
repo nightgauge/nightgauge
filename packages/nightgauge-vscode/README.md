@@ -43,11 +43,14 @@ clone the repository.)
 
 ### Steps
 
-1. **Install** — Install **Nightgauge** from the
-   [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=nightgauge.nightgauge-vscode),
-   or from [Open VSX](https://open-vsx.org/extension/nightgauge/nightgauge-vscode)
-   in VSCodium, Cursor, Windsurf and other Open VSX-based editors. Either
-   registry serves the build matching your platform automatically.
+1. **Install** — from
+   [Open VSX](https://open-vsx.org/extension/nightgauge/nightgauge-vscode), which
+   serves the build matching your platform automatically and is wired in by
+   default in VSCodium, Cursor, Windsurf and Gitpod. In VS Code itself, download
+   the `.vsix` for your platform from the
+   [latest release](https://github.com/nightgauge/nightgauge/releases/latest) and
+   install it with `code --install-extension nightgauge-vscode-<target>-<version>.vsix`,
+   or **Extensions: Install from VSIX** in the Command Palette.
 2. **Sign in (optional)** — Run **Nightgauge: Sign In with GitHub** from the
    Command Palette. This connects a Nightgauge account for hosted features. It
    is **not** how the pipeline reaches GitHub — that is `gh auth login` above,
@@ -74,10 +77,11 @@ clone the repository.)
 
 ### Installing
 
-Nightgauge ships a separate build per platform to both the
-[VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=nightgauge.nightgauge-vscode)
-and [Open VSX](https://open-vsx.org/extension/nightgauge/nightgauge-vscode); each
-picks the right one for you. **macOS (Apple Silicon and Intel) and Linux x64 are
+Nightgauge ships a separate build per platform to
+[Open VSX](https://open-vsx.org/extension/nightgauge/nightgauge-vscode), which
+picks the right one for you, and attaches all three as `.vsix` assets to every
+[GitHub release](https://github.com/nightgauge/nightgauge/releases/latest) for
+direct install in VS Code. **macOS (Apple Silicon and Intel) and Linux x64 are
 supported.** Windows is not supported yet — the pipeline backend is a native
 binary that has no Windows build, so the registry will report the extension as
 unavailable there.
