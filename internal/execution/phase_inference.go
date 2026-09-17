@@ -64,11 +64,48 @@ var featurePlanningPhases = []string{
 	"self-assessment",           // 13
 }
 
+// featureValidatePhases is the ordered phase name table for the
+// feature-validate stage, mirroring PHASE_REGISTRY["feature-validate"] in the
+// SDK. Index == position.
+//
+// feature-validate was left out of the inference work above and is the worst
+// case in the run that produced #1850: 0 of 23 phases reported across four
+// minutes and $0.68, on a stage that exited 0. Its 23 markers are as
+// unconditional in the SKILL.md as feature-dev's 18 were, and the model skips
+// them for the same reason — each is a standalone printf in its own bash block
+// on a stage whose real work is Read/Bash/Edit.
+var featureValidatePhases = []string{
+	"validate-environment",       // 0
+	"read-dev-context",           // 1
+	"batch-detection",            // 2
+	"ac-completion-check",        // 3
+	"detect-testing-environment", // 4
+	"ptc-detection",              // 5
+	"freshness-check",            // 6
+	"build-verification",         // 7
+	"dead-code-detection",        // 8
+	"baseline-comparison",        // 9
+	"run-tests",                  // 10
+	"mobile-mcp-tests",           // 11
+	"verify-ui-gate",             // 12
+	"ci-parity-check",            // 13
+	"knowledge-coverage-check",   // 14
+	"pre-push-merge-validation",  // 15
+	"generate-checklist",         // 16
+	"feedback-signal-evaluation", // 17
+	"commit-and-push",            // 18
+	"write-validate-context",     // 19
+	"sync-project-status",        // 20
+	"output-summary",             // 21
+	"self-assessment",            // 22
+}
+
 // stagePhaseTables maps a stage to its ordered phase names. Only stages that do
 // NOT reliably self-report phase markers need an entry; others are no-ops.
 var stagePhaseTables = map[string][]string{
 	"feature-dev":      featureDevPhases,
 	"feature-planning": featurePlanningPhases,
+	"feature-validate": featureValidatePhases,
 }
 
 var (
@@ -80,6 +117,8 @@ var (
 	statusSyncRe      = regexp.MustCompile(`\b(move-status|gh\s+project)\b`)
 	planFileRe        = regexp.MustCompile(`(^|/)\.nightgauge/plans/.+\.md$`)
 	planningContextRe = regexp.MustCompile(`(^|/)planning-\d+\.json$|\.nightgauge/pipeline/planning-`)
+	validateContextRe = regexp.MustCompile(`(^|/)validate-\d+\.json$|\.nightgauge/pipeline/validate-`)
+	gitPushRe         = regexp.MustCompile(`\bgit\s+push\b`)
 )
 
 // inferenceRule maps an observed tool call to a target phase index.
@@ -139,6 +178,35 @@ func stageRules(stage string) []inferenceRule {
 			// Writing the planning-context handoff → write-planning-context.
 			{index: 10, match: func(name string, input map[string]any) bool {
 				return editToolRe.MatchString(name) && planningContextRe.MatchString(inputStr(input, "file_path"))
+			}},
+		}
+	case "feature-validate":
+		return []inferenceRule{
+			// Any read → read-dev-context. The stage opens by reading the dev
+			// handoff and the files it names, so this is the earliest honest
+			// waypoint and covers phases 0-1.
+			{index: 1, match: func(name string, _ map[string]any) bool { return readToolRe.MatchString(name) }},
+			// A build/test command → run-tests, where the stage spends nearly
+			// all of its wall-clock. Deliberately the same testBuildRe
+			// feature-dev uses: the two stages run the same commands, and a
+			// second pattern for one vocabulary is a drift source.
+			{index: 10, match: func(name string, input map[string]any) bool {
+				return name == "Bash" && testBuildRe.MatchString(inputStr(input, "command"))
+			}},
+			// Pushing the branch → commit-and-push. Anchored on `git push`
+			// rather than any git call, because the stage runs `git status` and
+			// `git diff` throughout and neither is this waypoint.
+			{index: 18, match: func(name string, input map[string]any) bool {
+				return name == "Bash" && gitPushRe.MatchString(inputStr(input, "command"))
+			}},
+			// Writing the validate-context handoff → write-validate-context.
+			{index: 19, match: func(name string, input map[string]any) bool {
+				return editToolRe.MatchString(name) && validateContextRe.MatchString(inputStr(input, "file_path"))
+			}},
+			// Board status sync → sync-project-status, the stage's last
+			// observable act before it narrates.
+			{index: 20, match: func(name string, input map[string]any) bool {
+				return name == "Bash" && statusSyncRe.MatchString(inputStr(input, "command"))
 			}},
 		}
 	default:

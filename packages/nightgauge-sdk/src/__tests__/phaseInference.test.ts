@@ -181,9 +181,49 @@ describe("createPhaseInference — feature-planning (#3771)", () => {
   });
 });
 
-describe("createPhaseInference — stages without rules", () => {
-  it("is a no-op for feature-validate (it self-reports reliably)", () => {
+describe("createPhaseInference — feature-validate (#1850)", () => {
+  // This stage used to be asserted as a no-op "because it self-reports
+  // reliably". It does not. It is an LLM stage whose 23 markers are standalone
+  // printfs the model skips for exactly feature-dev's reason, and the run that
+  // produced #1850 reported 0 of 23 across four minutes and $0.68 while
+  // exiting 0.
+  it("infers from the work it actually does", () => {
     const inf = createPhaseInference("feature-validate");
+    expect(inf.enabled).toBe(true);
+
+    expect(inf.start()).toMatchObject({ index: 0, total: 23 });
+    expect(inf.observeToolUse("Read", { file_path: "dev-42.json" })).toMatchObject({
+      name: "read-dev-context",
+    });
+    expect(inf.observeToolUse("Bash", { command: "npm run test" })).toMatchObject({
+      name: "run-tests",
+    });
+    expect(inf.observeToolUse("Bash", { command: "git push -u origin HEAD" })).toMatchObject({
+      name: "commit-and-push",
+    });
+    expect(
+      inf.observeToolUse("Write", { file_path: ".nightgauge/pipeline/validate-42.json" })
+    ).toMatchObject({ name: "write-validate-context" });
+  });
+
+  it("is monotonic — a later read does not regress the cursor", () => {
+    const inf = createPhaseInference("feature-validate");
+    inf.start();
+    inf.observeToolUse("Bash", { command: "npm run test" });
+    expect(inf.observeToolUse("Read", { file_path: "src/a.ts" })).toBeNull();
+  });
+
+  it("yields to a real marker", () => {
+    const inf = createPhaseInference("feature-validate");
+    inf.start();
+    inf.observeRealMarker(19); // the skill emitted write-validate-context
+    expect(inf.observeToolUse("Bash", { command: "npm run test" })).toBeNull();
+  });
+});
+
+describe("createPhaseInference — stages without rules", () => {
+  it("is a no-op for pr-merge, which reports from the deterministic runner", () => {
+    const inf = createPhaseInference("pr-merge");
     expect(inf.enabled).toBe(false);
     expect(inf.start()).toBeNull();
     expect(inf.observeToolUse("Write", { file_path: "src/foo.ts" })).toBeNull();

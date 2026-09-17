@@ -157,8 +157,33 @@ type RuntimeState struct {
 	SupersededStages []StageResult `json:"supersededStages,omitempty"`
 	SkippedStages    []string      `json:"skippedStages"`
 
-	// Phase tracking
+	// Phase tracking.
+	//
+	// PhaseHistory carries the CURRENT attempt of every stage, the same
+	// most-recent-attempt contract CompletedStages and StageErrors already
+	// hold. BeginStage is the clear site, exactly as it is for those two, and
+	// SupersededPhaseHistory is where the displaced records go.
+	//
+	// It did not hold that contract until #1850, and nothing else in the
+	// record did either: BeginStage un-booked a re-entered stage's
+	// StageResult and left its phase records in place, so a second attempt
+	// inherited the first one's verdicts. The observed run recorded
+	// pr-merge/freshness-check `failed` from a punted first attempt, kept it
+	// after the second attempt merged the PR, and stamped it 1.3s BEFORE the
+	// stage instance it was rendered against had started. A green run painted
+	// a red ✗ on itself.
 	PhaseHistory []PhaseRecord `json:"phaseHistory"`
+	// SupersededPhaseHistory holds every phase record a later BeginStage
+	// displaced from PhaseHistory — the run's ledger of phase work that
+	// happened and was then re-done.
+	//
+	// A MOVE and never a delete, for the same reason SupersededStages is: a
+	// retro asking "what did the first attempt get through before it punted?"
+	// is a real question, and the answer is only wrong when it is presented as
+	// the CURRENT attempt's verdict. Keeping the records under a name that
+	// says which attempt they belong to answers both questions without either
+	// one lying.
+	SupersededPhaseHistory []PhaseRecord `json:"supersededPhaseHistory,omitempty"`
 	// StageErrors is CURRENT-ATTEMPT state, not a run-long failure log (#407).
 	// CONTRACT: a stage has an entry here ⇔ that stage's MOST RECENT attempt
 	// failed, OR the pipeline refused before that stage could attempt anything.
@@ -416,7 +441,24 @@ type PhaseRecord struct {
 	// deliberate skips — the phase markers are unconditional in the skill, and
 	// the model simply emits them in only ~11% of runs. A reader cannot act on
 	// a distinction the record does not draw.
-	Status      string     `json:"status"` // "running" | "complete" | "skipped" | "unreported" | "failed" | "abandoned"
+	// "superseded" (#1850) is a phase ATTEMPT that was displaced rather than
+	// judged: the deterministic runner started it, declined to finish it and
+	// punted to the LLM path, which then performs the same phase for real.
+	// That used to be recorded "failed", which is a verdict on the phase and
+	// not on the attempt — so pr-merge exited 0, merged the PR, and still
+	// carried a `failed` freshness-check that a human could not tell from a
+	// genuine failure without opening this file. A status that contradicts its
+	// own stage's exit code is worse than no status at all.
+	//
+	// "degraded" (#1850) is the other half of that contract: a phase that
+	// genuinely did not succeed on a stage that deliberately succeeded anyway.
+	// pr-create's write-context is the real case — pr-{N}.json failed to
+	// write, the PR exists, and the runner returns success-with-warning
+	// because pr-merge degrades to a punt when the file is missing. The phase
+	// keeps its real start, its real duration and the fact that it did not
+	// succeed; what it loses is the claim that the RUN failed here, which is
+	// the claim `failed` makes to every reader of the tree.
+	Status      string     `json:"status"` // "running" | "complete" | "skipped" | "unreported" | "failed" | "abandoned" | "superseded" | "degraded"
 	StartedAt   time.Time  `json:"startedAt"`
 	CompletedAt *time.Time `json:"completedAt,omitempty"`
 }
@@ -849,6 +891,28 @@ func (rs *RuntimeState) BeginStage(stage PipelineStage) {
 		kept = append(kept, sr)
 	}
 	rs.CompletedStages = kept
+
+	// Displace the previous attempt's phase records for the same reason and by
+	// the same rule (#1850). Un-booking the StageResult and leaving the phase
+	// records behind left the two halves of one stage's record describing
+	// different attempts: the header said "running, attempt 2" and the phase
+	// rows still carried attempt 1's verdicts, including its failures.
+	//
+	// Every downstream consumer reads PhaseHistory positionally by stage+name
+	// — the tree's per-stage rows, BuildV2Record's V2StageDetail.Phases, and
+	// the first-writer-wins guards in SkipPhase/UnreportedPhase — so a stale
+	// record does not merely sit there. It OUTRANKS the new attempt: those two
+	// guards return early on any existing stage+name match, so attempt 2's
+	// honest record was silently discarded in favour of attempt 1's.
+	keptPhases := rs.PhaseHistory[:0]
+	for _, p := range rs.PhaseHistory {
+		if p.Stage == stage {
+			rs.SupersededPhaseHistory = append(rs.SupersededPhaseHistory, p)
+			continue
+		}
+		keptPhases = append(keptPhases, p)
+	}
+	rs.PhaseHistory = keptPhases
 }
 
 // CompleteStage records the completion of the current stage.
@@ -1061,6 +1125,35 @@ func (rs *RuntimeState) completeStageInternalLocked(exitCode, inputTokens, outpu
 	// Do not reintroduce a "recovered" status here.
 	if exitCode == 0 {
 		delete(rs.StageErrors, string(rs.Stage))
+		// THE CLEAR SITE for the phase-verdict contract (#1850): a phase
+		// cannot report `failed` on a stage whose exit code is 0 and whose
+		// StageErrors entry is empty — which, one line up, is exactly the
+		// state this branch has just established.
+		//
+		// The two production paths that could produce that contradiction are
+		// both fixed at their source: BeginStage now displaces a previous
+		// attempt's records, and a deterministic punt records `superseded`
+		// rather than `failed`. This is the invariant those fixes serve,
+		// asserted where it becomes decidable rather than left implicit in
+		// them — a third path added later inherits it for free.
+		//
+		// It DOWNGRADES rather than deletes, and downgrades to `degraded`
+		// rather than `unreported`: the record has a real start, a real
+		// duration and real evidence that an attempt happened and did not
+		// succeed. Rewriting it to `unreported` would claim the stage never
+		// said anything about the phase, which is the one thing we know is
+		// false. Dropping it would destroy the evidence outright.
+		//
+		// `degraded` is not a euphemism for `failed`. It is the exact state
+		// pr-create's write-context lands in: pr-{N}.json did not write, the
+		// PR exists, and the runner returns success-with-warning ON PURPOSE
+		// because the downstream consumer (pr-merge) degrades gracefully to a
+		// punt when the context file is missing. The stage's green is policy,
+		// not an accident, so by this issue's own dichotomy it is the phase
+		// VERDICT that must stop rendering as a failure — while still saying,
+		// in one word and with its real duration attached, that this phase did
+		// not succeed.
+		rs.degradeFailedPhasesLocked(rs.Stage)
 	}
 
 	result := StageResult{
@@ -1321,6 +1414,45 @@ func (rs *RuntimeState) FailPhase(stage PipelineStage, name string, index, total
 	})
 }
 
+// SupersedePhase closes the most recent running record for stage+name as
+// `superseded` (#1850): the attempt was displaced, not judged.
+//
+// Same amend-or-append shape as FailPhase, and deliberately NOT the same
+// meaning. FailPhase asserts the phase reported an error, which is a claim
+// about the work. This asserts only that THIS attempt stopped short and handed
+// the work to a path that is about to do it — the deterministic runner punting
+// to the skill. On the observed run those two were conflated, so a pr-merge
+// that punted once and then merged the PR reported `failed` on the phase that
+// made the punt decision, on a stage whose exit code was 0 and whose
+// stageErrors was empty.
+//
+// The record keeps the attempt's real StartedAt and a real CompletedAt: it is
+// evidence of something that happened and took time, not a zero-width
+// placeholder standing in for silence. That is the whole distinction against
+// `unreported`.
+func (rs *RuntimeState) SupersedePhase(stage PipelineStage, name string, index, total int) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	now := time.Now()
+	for i := len(rs.PhaseHistory) - 1; i >= 0; i-- {
+		p := &rs.PhaseHistory[i]
+		if p.Stage == stage && p.Name == name && p.Status == "running" {
+			p.Status = "superseded"
+			p.CompletedAt = &now
+			return
+		}
+	}
+	rs.PhaseHistory = append(rs.PhaseHistory, PhaseRecord{
+		Stage:       stage,
+		Name:        name,
+		Index:       index,
+		Total:       total,
+		Status:      "superseded",
+		StartedAt:   now,
+		CompletedAt: &now,
+	})
+}
+
 // CloseRunningPhases terminates any phase of `stage` still marked running
 // (#1009), returning how many it closed.
 //
@@ -1357,6 +1489,24 @@ func (rs *RuntimeState) closeRunningPhasesLocked(stage PipelineStage) int {
 		}
 	}
 	return closed
+}
+
+// degradeFailedPhasesLocked rewrites every `failed` phase of `stage` to
+// `degraded`, returning how many it rewrote. Callers hold the mutex.
+//
+// Only ever called on a SUCCEEDING completion. On a failing one a `failed`
+// phase is the most useful record in the file — it says where the stage died —
+// and must survive untouched.
+func (rs *RuntimeState) degradeFailedPhasesLocked(stage PipelineStage) int {
+	rewritten := 0
+	for i := range rs.PhaseHistory {
+		p := &rs.PhaseHistory[i]
+		if p.Stage == stage && p.Status == "failed" {
+			p.Status = "degraded"
+			rewritten++
+		}
+	}
+	return rewritten
 }
 
 // SetLicenseSnapshot records the license validation result from pipeline
@@ -2663,6 +2813,10 @@ func (rs *RuntimeState) snapshotLocked() *RuntimeState {
 	copy(snap.SkippedStages, rs.SkippedStages)
 	snap.PhaseHistory = make([]PhaseRecord, len(rs.PhaseHistory))
 	copy(snap.PhaseHistory, rs.PhaseHistory)
+	if len(rs.SupersededPhaseHistory) > 0 {
+		snap.SupersededPhaseHistory = make([]PhaseRecord, len(rs.SupersededPhaseHistory))
+		copy(snap.SupersededPhaseHistory, rs.SupersededPhaseHistory)
+	}
 	snap.StageErrors = make(map[string]string, len(rs.StageErrors))
 	for k, v := range rs.StageErrors {
 		snap.StageErrors[k] = v

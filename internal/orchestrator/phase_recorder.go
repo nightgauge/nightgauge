@@ -113,6 +113,10 @@ func (p *PhaseRecorder) PhaseFail(stage, name string, index, total int) {
 	p.append(stage, name, index, total, "failed")
 }
 
+func (p *PhaseRecorder) PhaseSupersede(stage, name string, index, total int) {
+	p.append(stage, name, index, total, "superseded")
+}
+
 func (p *PhaseRecorder) PhaseSkip(stage, name string, index, total int) {
 	p.append(stage, name, index, total, "skipped")
 }

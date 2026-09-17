@@ -15,6 +15,11 @@ import { PhaseTreeItem, type PhaseStatus } from "../../../src/views/items/PhaseT
  * "nothing was ever reported about this phase" about a phase that
  * demonstrably started. It is the status that identifies a stuck stage, so the
  * drift did not just lose a label, it lost the finding (#1558).
+ *
+ * `superseded` and `degraded` (#1850) split what `failed` used to carry, and
+ * are exactly the kind of addition this test exists to catch: a green run that
+ * rendered a red ✗ is the same class of defect as #1009's, reached from the
+ * other direction.
  */
 const TS_PHASE_STATUSES: PhaseStatus[] = [
   "pending",
@@ -24,6 +29,8 @@ const TS_PHASE_STATUSES: PhaseStatus[] = [
   "unreported",
   "failed",
   "abandoned",
+  "superseded",
+  "degraded",
 ];
 
 /**

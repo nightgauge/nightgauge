@@ -26,7 +26,15 @@ import "context"
 type PhaseReporter interface {
 	PhaseStart(stage, name string, index, total int)
 	PhaseComplete(stage, name string)
+	// PhaseFail is a verdict on the WORK: this phase did not succeed and no
+	// later path re-attempts it.
 	PhaseFail(stage, name string, index, total int)
+	// PhaseSupersede is a statement about this ATTEMPT only: the deterministic
+	// path stopped here and handed the phase to a path that is about to run it
+	// for real. Split out from PhaseFail by #1850, which is what happens when
+	// one method carries both meanings — a pr-merge that punted, re-entered
+	// and merged the PR reported `failed` on a stage that exited 0.
+	PhaseSupersede(stage, name string, index, total int)
 	PhaseSkip(stage, name string, index, total int)
 }
 
@@ -190,7 +198,9 @@ func (e *phaseEmitter) start(name string) {
 	if e.r == nil {
 		return
 	}
-	e.failInFlight()
+	// The runner moved on with a phase still open. That displaces the open
+	// attempt; it does not judge it (#1850).
+	e.supersedeInFlight()
 	e.inFlight = name
 	e.r.PhaseStart(e.spec.stage, name, e.spec.index(name), e.spec.total())
 }
@@ -205,14 +215,30 @@ func (e *phaseEmitter) complete(name string) {
 	e.r.PhaseComplete(e.spec.stage, name)
 }
 
-// failInFlight closes whatever phase is open as `failed`.
+// supersedeInFlight closes whatever phase is open as `superseded`.
 //
-// Called on every punt. "Failed" is the truthful record of a deterministic
-// ATTEMPT that did not get through — it does not claim the phase cannot be
-// done, and it does not block the skill from starting the same phase fresh and
-// completing it. What it must never do here is write `skipped`: the LLM path
-// is about to run that phase for real, and a skip would say the stage decided
-// not to.
+// Called on every punt. The record being made is about the deterministic
+// ATTEMPT, not about the phase: this path stopped short and the LLM path is
+// about to run the same phase for real. `failed` said that badly enough to
+// produce #1850 — pr-merge punted once, re-entered, merged the PR, exited 0,
+// and still carried a `failed` freshness-check that no reader could tell from
+// a genuine failure. `superseded` is the same fact without the verdict, and it
+// does not block the skill from starting the phase fresh and completing it.
+//
+// What it must never write is `skipped`: the LLM path is about to run that
+// phase for real, and a skip would say the stage decided not to.
+func (e *phaseEmitter) supersedeInFlight() {
+	if e.r == nil || e.inFlight == "" {
+		return
+	}
+	name := e.inFlight
+	e.inFlight = ""
+	e.r.PhaseSupersede(e.spec.stage, name, e.spec.index(name), e.spec.total())
+}
+
+// failInFlight closes whatever phase is open as `failed` — a verdict on the
+// WORK, reserved for a phase that genuinely did not succeed and that no later
+// path will re-attempt. pr-create's write-context is the only caller.
 func (e *phaseEmitter) failInFlight() {
 	if e.r == nil || e.inFlight == "" {
 		return
@@ -233,7 +259,7 @@ func (e *phaseEmitter) skipOffPath() {
 	if e.r == nil {
 		return
 	}
-	e.failInFlight()
+	e.supersedeInFlight()
 	for i, name := range e.spec.order {
 		if e.spec.roles[name] == phaseOffPath {
 			e.r.PhaseSkip(e.spec.stage, name, i, e.spec.total())

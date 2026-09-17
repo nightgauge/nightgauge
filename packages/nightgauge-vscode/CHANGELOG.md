@@ -9,6 +9,25 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- A pipeline run that succeeded completely no longer renders in the tree with a
+  red ✗ on it. A phase belonging to an earlier attempt of a re-run stage was
+  kept as the current attempt's verdict, so `pr-merge` showed a failed
+  freshness check on the very run that merged the PR. Phase rows now belong to
+  the attempt that produced them.
+- A deterministic stage that hands work to the AI path no longer marks that
+  phase failed. It shows as superseded — the work is being done, just by the
+  other path. A phase that genuinely did not succeed on a stage that completed
+  anyway shows as degraded, with a warning rather than an error icon.
+- Feature Validation now shows phase progress. It reported nothing at all for
+  the whole stage, so a four-minute validation looked like a stage doing
+  nothing; progress is inferred from the work it is observed doing, as Feature
+  Development already did.
+- A stage whose phases could not be measured now says "phases not reported (N)"
+  instead of "0/N phases", which read as though the stage had done none of its
+  work.
+
 ## [0.4.3] - 2026-09-16
 
 ### Fixed

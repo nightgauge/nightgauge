@@ -274,17 +274,38 @@ export class StageTreeItem extends BaseTreeItem {
       const unreportedCount = this.countPhasesWithStatus("unreported");
       const skippedCount = this.countPhasesWithStatus("skipped");
       const abandonedCount = this.countPhasesWithStatus("abandoned");
+      const supersededCount = this.countPhasesWithStatus("superseded");
+      const degradedCount = this.countPhasesWithStatus("degraded");
       // Every claim is named, and none is folded into another (#1246, #1558).
       // "18/18 phases" on a run that observed four of them is not a rounding
       // problem — it is the reader being told the stage's own safety phases
       // ran when the system has no evidence either way. The same is true of a
       // skip: it is a decision, not work, and it belongs beside the count
       // rather than inside it.
+      //
+      // The all-unreported case gets its own sentence rather than reading
+      // `0/23 phases · 23 unreported` (#1850). That rendering is a measurement
+      // dressed as a score: it puts a zero in the numerator position, which
+      // every reader parses as "this stage did none of its work", when what
+      // actually happened is that the stage did four minutes and $0.68 of work
+      // and narrated none of it. A stage that cannot report its phases has to
+      // SAY that.
+      //
+      // The denominator stays visible on purpose. Dropping it would hide how
+      // much went unmeasured, which is the opposite failure and just as
+      // dishonest.
+      const unmeasured = applicable > 0 && unreportedCount >= applicable;
       const parts: string[] = [
-        applicable > 0 ? `${completedCount}/${applicable} phases` : "no phases applicable",
+        applicable === 0
+          ? "no phases applicable"
+          : unmeasured
+            ? `phases not reported (${applicable})`
+            : `${completedCount}/${applicable} phases`,
       ];
-      if (unreportedCount > 0) parts.push(`${unreportedCount} unreported`);
+      if (unreportedCount > 0 && !unmeasured) parts.push(`${unreportedCount} unreported`);
       if (abandonedCount > 0) parts.push(`${abandonedCount} abandoned`);
+      if (degradedCount > 0) parts.push(`${degradedCount} degraded`);
+      if (supersededCount > 0) parts.push(`${supersededCount} superseded`);
       if (skippedCount > 0) parts.push(`${skippedCount} skipped`);
       const phaseSummary = parts.join(" · ");
 
@@ -600,6 +621,8 @@ export class StageTreeItem extends BaseTreeItem {
    * | `abandoned`  | it started; the stage moved past it      | no      |
    * | `skipped`    | the stage decided not to run it          | no — it leaves the denominator instead |
    * | `unreported` | nothing was ever said about it           | no      |
+   * | `superseded` | this attempt was displaced, not judged   | no      |
+   * | `degraded`   | it did not succeed; the stage did        | no      |
    * | `pending`    | it has not started                       | no      |
    *
    * #1246 removed `unreported` from this count and left `skipped` in, on the

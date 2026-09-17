@@ -43,6 +43,34 @@ marketplace add` and `grok plugin install` both exit non-zero once their
   are now recognized and routed to `marketplace update` / `plugin update`, and
   command output is only surfaced on a genuine failure (#1851)
 
+- A run that succeeded completely rendered in the pipeline tree as mostly
+  unreported with a red ✗ on it, so operators investigated runs that had merged
+  their PR and closed their issue. Phase records outlived the stage attempt
+  that produced them: `BeginStage` un-booked a re-entered stage's result and
+  left its phase rows in place, so a second attempt inherited the first one's
+  verdicts — `pr-merge/freshness-check` stayed `failed` after the retry merged
+  the PR, timestamped 1.3s before the stage instance it was rendered against
+  had started. `phaseHistory` now carries the current attempt only, the same
+  contract `completedStages` and `stageErrors` already held, and displaced rows
+  move to a new `supersededPhaseHistory` rather than being dropped (#1850)
+- A deterministic runner that punted to the LLM path recorded the in-flight
+  phase `failed`, which is a verdict on work the skill was about to do
+  successfully. Punts now record a new `superseded` status, and a phase that
+  genuinely did not succeed on a stage that exits 0 on purpose — pr-create's
+  `write-context` — records `degraded`. Neither renders as a failure, and both
+  keep the attempt's real duration instead of becoming a zero-width
+  placeholder. A stage with `exitCode: 0` and empty `stageErrors` can no longer
+  carry a `failed` phase (#1850)
+- `feature-validate` emitted no phase markers at all — 0 of 23 across a
+  four-minute, $0.68 stage — because its markers are standalone `printf`
+  commands the model skips, exactly as `feature-dev`'s were before it got an
+  inference fallback. It
+  now infers phase progress from the tool calls it actually makes, in both the
+  Go and TypeScript execution paths (#1850)
+- A stage whose phases could not be measured at all now says so instead of
+  rendering `0/N`, which put a zero in the numerator position and read as "this
+  stage did none of its work". The denominator stays visible so the amount left
+  unmeasured is not hidden either (#1850)
 - `packages/nightgauge-vscode/scripts/dev-install.sh` exited silently before
   installing when no version of the extension was already present. The
   old-version cleanup globbed with `ls`, which exits non-zero on no match;

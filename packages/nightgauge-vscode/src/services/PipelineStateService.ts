@@ -117,7 +117,13 @@ export interface StagePhase {
     | "skipped"
     | "unreported"
     // Go's sixth (#1009): started, and the stage finished without it settling.
-    | "abandoned";
+    | "abandoned"
+    // #1850. `superseded`: this ATTEMPT was displaced, not judged — the
+    // deterministic runner punted and the LLM path is about to run the phase.
+    // `degraded`: it did not succeed, on a stage that exited 0 on purpose.
+    // Both split out of `failed`, which was painting a red ✗ on green runs.
+    | "superseded"
+    | "degraded";
   started_at?: string;
   completed_at?: string;
   /**
