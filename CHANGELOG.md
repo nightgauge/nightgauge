@@ -14,6 +14,52 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Added
+
+- The macOS binaries bundled in the VSIX are now **Developer ID signed and
+  notarized** by `release.yml`, `staging.yml` and `marketplace-publish.yml`.
+  Each release job runs on `macos-latest`, because Apple `codesign` is
+  macOS-only, and signs immediately after `make build-all` and before anything
+  packages the binaries: the VSIX freezes whatever is in `dist/bin/`, so
+  signing afterwards would ship an unsigned copy while reporting success. The
+  VSIX verification step then asserts the **packaged** binary carries an
+  `Authority=Developer ID Application` line and `flags=0x10000(runtime)`,
+  rather than trusting the signing step's own output, because the 0.4.2 Open
+  VSX publish printed a success line for a version the registry would not
+  serve. Proven on the rc channel first: `v0.4.4-rc.2` signed and notarized
+  both darwin targets and the packaged assertion passed for each. The macOS
+  runner is free only because this repository is public and `macos-latest` is a
+  standard runner, verified against the timing API rather than assumed; a
+  private repository bills macOS at 10x the Linux rate.
+- `scripts/sign-macos-binaries.sh` codesigns and optionally notarizes the macOS
+  binaries that ship inside the VSIX, which until now carried only an ad-hoc
+  linker signature, cryptographically equivalent to unsigned. The Marketplace
+  security-and-trust guidance states packages are scanned "using the same
+  advanced tech found in Microsoft Defender" and rescanned after publication,
+  and a ~28MB statically linked Go executable that spawns processes is the
+  highest-risk artifact in the package; a Developer ID signature is the
+  strongest provenance signal available for it, and it also stops Gatekeeper
+  warning users who install from a VSIX or Open VSX. **Not yet wired into any
+  release workflow**: it needs a `Developer ID Application` certificate (the
+  team currently holds only `Apple Distribution`, which is App Store scoped)
+  and a macOS runner, since the release jobs run on `ubuntu-latest` and
+  `codesign` is macOS-only. With no credentials set the script exits 0 and says
+  so, so it is safe to enable before the certificate exists.
+  `scripts/test-sign-macos-binaries.sh` covers ten behaviours with stubbed
+  `codesign`/`security`/`xcrun`, including the two that matter most: no
+  credentials must be a clean no-op rather than a release-breaking failure, and
+  a signature that does not verify must fail rather than be reported as
+  success, because a broken signature looks deliberate. Registered in
+  `ci-local.sh` and its step inventory.
+- `docs/RELEASE_CHECKLIST.md` gains "Signing the bundled macOS binaries": the
+  two prerequisites, the six repository secrets, and an enablement order that
+  proves signing on an `rc` tag through `staging.yml` before it touches
+  `release.yml`, because an unverified change to the release path is what
+  produced the partial Open VSX publish on 2026-09-16. Also records what was
+  ruled out: symbol stripping is not a meaningful obfuscation signal, since Go
+  keeps function names in `pclntab` regardless of `-s -w`, so the release keeps
+  `-s -w` rather than paying 12.7MB for nothing.
+
 ### Fixed
 
 - The install instructions in both READMEs pointed at a VS Code Marketplace
