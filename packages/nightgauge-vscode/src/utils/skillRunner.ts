@@ -3214,7 +3214,12 @@ export function validateAdapterPrerequisites(
     if (!commandExists("grok")) {
       return (
         "Grok adapter selected, but `grok` CLI is not available in PATH. " +
-        "Install Grok Build (`curl -fsSL https://x.ai/cli/install.sh | bash`) or switch adapter."
+        // Deliberately NOT a `curl … | bash` one-liner. A pipe-to-shell command
+        // shipped inside a published extension is a signature that static
+        // malware scanners match on, and the Marketplace trust review is the
+        // wrong place to explain that it was only ever a help string. Name the
+        // install page and let the operator read it.
+        "Install Grok Build from https://x.ai/cli, then reopen VS Code, or switch adapter."
       );
     }
     return null;

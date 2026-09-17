@@ -14,6 +14,28 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Changed
+
+- Reduced the extension's Marketplace trust surface, following the publisher
+  block whose stated reason was only "the Publisher Agreement and Terms of
+  Use". Two items that are free to remove and not worth the cost of defending
+  are gone: `"claude"` is no longer a listing keyword (naming an integrated
+  tool in prose is nominative use and stays, but keywords are the
+  search-placement vector the policy on others' marks is aimed at), and the
+  Grok adapter's setup message no longer contains a `curl … | bash` one-liner,
+  which was always just a help string but is a signature static scanners match
+  on. `tests/marketplaceTrustSurface.test.ts` guards both: no foreign mark in
+  `keywords`, and no fetch-piped-to-shell anywhere in shipped source.
+
+### Added
+
+- The extension README gains "What this extension does on your machine", which
+  inventories the bundled Go binary, process spawning, credential use, bundled
+  shell hooks, the single out-of-workspace write and its confirmation, and
+  every egress path. The listing is what a Marketplace reviewer reads, so the
+  answer to "what is this thing doing" now lives there instead of having to be
+  asked for.
+
 ### Added
 
 - `nightgauge pipeline aggregate` now reports a per-adapter token/cost
