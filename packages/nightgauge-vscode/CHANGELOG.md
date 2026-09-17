@@ -9,6 +9,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-09-17
+
 ### Changed
 
 - The `nightgauge` binary bundled in the extension is now signed with an Apple
@@ -551,7 +553,8 @@ shipped as [0.2.1].
 - Settings for authentication provider, model selection, and paths
 - Settings for notification sounds, volume, and Do Not Disturb respect
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.4.4...HEAD
+[0.4.4]: https://github.com/nightgauge/nightgauge/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/nightgauge/nightgauge/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/nightgauge/nightgauge/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/nightgauge/nightgauge/compare/v0.4.0...v0.4.1
