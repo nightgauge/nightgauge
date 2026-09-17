@@ -34,7 +34,7 @@
     "nightgauge",
     "sdlc",
     "pipeline",
-    "claude",
+    "issue-to-pr",
     "automation"
   ],
   "homepage": "https://nightgauge.dev",

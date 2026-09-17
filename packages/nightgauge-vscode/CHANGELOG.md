@@ -9,6 +9,20 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- The listing now includes "What this extension does on your machine": the
+  bundled Go binary and the fact that nothing is downloaded at runtime, which
+  processes get spawned and why, that your existing `gh` credentials are used
+  and none are stored, the bundled shell hooks, the one file written outside
+  your workspace and the confirmation shown first, and every path by which data
+  leaves the machine.
+
+### Changed
+
+- The Grok adapter's setup message links the install page instead of printing a
+  `curl … | bash` command.
+
 ### Fixed
 
 - A pipeline run that succeeded completely no longer renders in the tree with a
