@@ -16,6 +16,21 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- The macOS binaries bundled in the VSIX are now **Developer ID signed and
+  notarized** by `release.yml`, `staging.yml` and `marketplace-publish.yml`.
+  Each release job runs on `macos-latest`, because Apple `codesign` is
+  macOS-only, and signs immediately after `make build-all` and before anything
+  packages the binaries: the VSIX freezes whatever is in `dist/bin/`, so
+  signing afterwards would ship an unsigned copy while reporting success. The
+  VSIX verification step then asserts the **packaged** binary carries an
+  `Authority=Developer ID Application` line and `flags=0x10000(runtime)`,
+  rather than trusting the signing step's own output, because the 0.4.2 Open
+  VSX publish printed a success line for a version the registry would not
+  serve. Proven on the rc channel first: `v0.4.4-rc.2` signed and notarized
+  both darwin targets and the packaged assertion passed for each. The macOS
+  runner is free only because this repository is public and `macos-latest` is a
+  standard runner, verified against the timing API rather than assumed; a
+  private repository bills macOS at 10x the Linux rate.
 - `scripts/sign-macos-binaries.sh` codesigns and optionally notarizes the macOS
   binaries that ship inside the VSIX, which until now carried only an ad-hoc
   linker signature, cryptographically equivalent to unsigned. The Marketplace

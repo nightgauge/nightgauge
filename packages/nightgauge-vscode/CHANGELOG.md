@@ -9,6 +9,14 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- The `nightgauge` binary bundled in the extension is now signed with an Apple
+  Developer ID certificate and notarized by Apple, with the hardened runtime
+  enabled. Previously it carried only an ad-hoc signature, which macOS treats
+  as unsigned. If Gatekeeper warned you when the pipeline first started its
+  backend, it should no longer.
+
 ### Fixed
 
 - Install instructions now lead with Open VSX, and document installing the
