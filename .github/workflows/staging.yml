@@ -28,8 +28,15 @@ jobs:
     name: Build all artifacts (no publish)
     # macos-latest, not ubuntu: Apple `codesign` runs only on macOS, and the
     # rc channel is where signing is proved before release.yml adopts it.
-    # macOS still cross-compiles linux/amd64 (CGO_ENABLED=0), and macos
-    # minutes are free for public repositories.
+    # macOS still cross-compiles linux/amd64 (CGO_ENABLED=0).
+    #
+    # COST: free only because this repository is PUBLIC and this is a STANDARD
+    # runner. Verified, not assumed -- the timing API reports MACOS total_ms 0
+    # for a 271s job (`gh api repos/.../actions/runs/<id>/timing`). Two things
+    # would change that: making the repository private, where macOS bills at
+    # 10x the Linux rate against included minutes, or switching to a larger
+    # runner such as macos-14-xlarge, which is billed even on public repos.
+    # Do not copy this pattern into a private repository without re-checking.
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
