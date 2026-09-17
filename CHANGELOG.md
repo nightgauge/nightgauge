@@ -22,6 +22,19 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- `TestNoDirectGitSpawnsInTests` and three other module-root `filepath.Walk`/
+  `WalkDir` guards (`TestExactlyOneWorktreeIssueParser`,
+  `TestEveryProductionSweepCallSiteOpensTheMergedPRDoor`, and
+  `TestSourceFilesAreCleanUTF8`) walked into `.ci-local-logs`,
+  `scripts/ci-local.sh`'s own scratch-output directory, which the script
+  creates and deletes files in concurrently with the `go test` step that runs
+  these guards. A file vanishing between the walk's directory read and its
+  stat produced a `lstat: no such file or directory` walk error that each
+  guard propagated verbatim, failing the test nondeterministically on a diff
+  that could not have caused it. All four now skip `.ci-local-logs` and
+  tolerate a mid-walk `ENOENT` via a shared `internal/gittest` helper scoped
+  to `fs.ErrNotExist`, so no other walk error is silently swallowed (#1856)
+
 - The SDK and both copies of the product-audit skill declared
   `@types/js-yaml@^4` alongside `js-yaml@^5`. js-yaml 5 ships its own type
   declarations, so the stub package described the wrong major and shadowed

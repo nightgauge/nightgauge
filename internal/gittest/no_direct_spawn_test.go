@@ -39,11 +39,17 @@ func TestNoDirectGitSpawnsInTests(t *testing.T) {
 	var offenders []string
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
+			if TolerateConcurrentScratchWrite(err) {
+				return nil
+			}
 			return err
 		}
 		if info.IsDir() {
 			switch info.Name() {
 			case ".git", "node_modules", "vendor", ".worktrees", "dist", "out":
+				return filepath.SkipDir
+			}
+			if IsScratchOutputDir(info.Name()) {
 				return filepath.SkipDir
 			}
 			// A nested checkout (an agent worktree under .claude/worktrees, a

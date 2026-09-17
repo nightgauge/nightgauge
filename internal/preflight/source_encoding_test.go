@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // TestSourceFilesAreCleanUTF8 is a standing guard against mojibake — text that
@@ -195,6 +197,9 @@ func sourceFiles(t *testing.T) []string {
 	var out []string
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
+			if gittest.TolerateConcurrentScratchWrite(err) {
+				return nil
+			}
 			return err
 		}
 		if d.IsDir() {
@@ -203,6 +208,9 @@ func sourceFiles(t *testing.T) []string {
 			// are not this checkout's source, and scanning them lets an
 			// unrelated branch's half-saved file fail a gate on main.
 			case ".git", ".worktrees", "node_modules", "vendor", "bin", "dist", "out", "testdata":
+				return fs.SkipDir
+			}
+			if gittest.IsScratchOutputDir(d.Name()) {
 				return fs.SkipDir
 			}
 			return nil
