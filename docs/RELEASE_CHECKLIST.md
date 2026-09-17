@@ -556,3 +556,108 @@ pre-release.
   [GIT_WORKFLOW.md](GIT_WORKFLOW.md#extension-registry-channels).
 - It is not permission to ship producer/resume/restart/discard recovery.
 - It is not a claim that every contributed command was hand-tested.
+
+## Signing the bundled macOS binaries
+
+**Status: not yet enabled.** `scripts/sign-macos-binaries.sh` exists and is
+covered by `scripts/test-sign-macos-binaries.sh`, but no release workflow calls
+it yet, and the binary that ships inside the VSIX carries only an ad-hoc
+(linker) signature, which is cryptographically equivalent to unsigned.
+
+### Why it is worth doing
+
+The Marketplace security-and-trust guidance states that incoming packages are
+scanned "using the same advanced tech found in Microsoft Defender", that an
+extension is rescanned shortly after publication, and that periodic
+marketplace-wide rescans run afterwards. A ~28MB statically linked Go
+executable that spawns processes and makes network calls is the highest-risk
+artifact in the package, and a valid Developer ID signature is the strongest
+provenance signal available for it. It also stops Gatekeeper warning users who
+install from a VSIX or from Open VSX, which is a present-day benefit
+independent of any Marketplace listing.
+
+**Ruled out, so it is not repeated:** symbol stripping was investigated as a
+possible false-positive trigger and rejected. Go retains function names in
+`pclntab` regardless of `-s -w` (`main.main`, `runtime.*` and package
+identifiers are all still present in a stripped build, and `go tool nm` still
+resolves symbols), so the binary is not meaningfully obscured. Unstripping
+would cost about 12.7MB, a 44% size increase, for no measurable gain. The
+release keeps `-s -w`.
+
+### Two prerequisites, in order
+
+**1. A `Developer ID Application` certificate.** The Edibu LLC team
+(`RZJPN7Y7BG`) has an Apple Developer membership, but the certificates
+currently issued are `Apple Distribution`, which is for the App Store and iOS.
+Signing a Mac binary distributed _outside_ the App Store requires a
+`Developer ID Application` certificate, created at
+developer.apple.com → Certificates → the `+` button. It costs nothing beyond
+the existing membership. Export it as a `.p12` with a password.
+
+**2. A macOS runner.** `release.yml`, `staging.yml` and
+`marketplace-publish.yml` all use `runs-on: ubuntu-latest` and cross-compile
+the darwin binaries. Apple's `codesign` runs only on macOS, so the job that
+signs has to run there. The least invasive option is to move the packaging job
+to `macos-latest`, which can still cross-compile `linux/amd64` and still run
+node and `vsce`; `macos` minutes are free for public repositories.
+
+### Repository secrets to add
+
+| Secret                   | Purpose                                                             |
+| ------------------------ | ------------------------------------------------------------------- |
+| `APPLE_CERT_P12`         | `base64` of the `Developer ID Application` .p12                     |
+| `APPLE_CERT_PASSWORD`    | Its export password                                                 |
+| `APPLE_SIGNING_IDENTITY` | e.g. `Developer ID Application: Edibu, LLC (RZJPN7Y7BG)`            |
+| `APPLE_ID`               | Apple ID for `notarytool` (optional; notarization only)             |
+| `APPLE_TEAM_ID`          | `RZJPN7Y7BG` (optional; notarization only)                          |
+| `APPLE_APP_PASSWORD`     | An **app-specific** password, never the account password (optional) |
+
+Signing is skipped unless the first three are present; notarization
+additionally needs the last three. With none set the script exits 0 and says
+so, which is why it is safe to wire in before the certificate exists.
+
+### How to enable it, and how to prove it works first
+
+`staging.yml` exists for `vX.Y.Z-rc.N` tags and builds the same per-target
+VSIXs as a release. **Exercise signing there before it ever touches
+`release.yml`.** An unverified change to the release path is what produced the
+partial Open VSX publish on 2026-09-16.
+
+1. Create the certificate and add the secrets.
+2. Move `staging.yml`'s job to `macos-latest` and call, after `make build-all`:
+
+   ```yaml
+   - name: Sign the macOS binaries
+     env:
+       APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+       APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+       APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+       APPLE_ID: ${{ secrets.APPLE_ID }}
+       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+       APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+     run: |
+       bash scripts/sign-macos-binaries.sh \
+         bin/nightgauge-darwin-arm64 bin/nightgauge-darwin-amd64
+   ```
+
+3. Tag an rc, and verify against the produced VSIX rather than the job log:
+
+   ```bash
+   unzip -p <vsix> extension/dist/bin/nightgauge > /tmp/ng && codesign -dv /tmp/ng
+   ```
+
+   `Authority=Developer ID Application: Edibu, LLC` and
+   `flags=0x10000(runtime)` must both appear. `Signature=adhoc` means it did
+   not work.
+
+4. Only then apply the same change to `release.yml` and
+   `marketplace-publish.yml`.
+
+### Notarization and bare executables
+
+A bare Mach-O cannot be stapled; `stapler` handles `.app`, `.dmg` and `.pkg`
+only. Submitting a zip still registers the ticket with Apple and Gatekeeper
+checks it online, so notarization is worth doing, but the ticket cannot be
+attached to the file. The script treats a notary failure as a warning rather
+than an error on purpose: the signature is the load-bearing part, and an Apple
+service outage must not fail a release.
