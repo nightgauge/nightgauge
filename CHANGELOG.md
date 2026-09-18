@@ -16,6 +16,9 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- OpenCode edit hooks no longer discard valid warnings when Node reports `EPIPE`
+  alongside a successful child-process status.
+
 - `TestEveryRecordEscalationHasADurableTwin` no longer annotates a passing CI
   run with `##[error]`. Its `t.Logf` message began with a bare `<path>:` token,
   so the rendered line carried two `file:line`-shaped tokens

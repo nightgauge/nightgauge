@@ -48,6 +48,11 @@ export const TEST_QUALITY_TIMEOUT_MS = 5000;
 // verb's stderr joined together, not to each verb individually.
 const MAX_APPEND_BYTES = 2048;
 
+// Test-only outcome records let the embedded-plugin harness distinguish a
+// missing binary, spawn failure, signal, non-zero exit, and empty warning
+// without exposing a child process's stderr in tool output.
+const EDIT_HOOK_DIAGNOSTICS_ENV = "NIGHTGAUGE_EDIT_HOOK_DIAGNOSTICS";
+
 // resolveCwd mirrors gates.js's gateCwd / session.js's resolveCwd: the run's
 // worktree, exactly what the Claude Code hook process sees.
 function resolveCwd(ctx) {
@@ -151,16 +156,58 @@ function formatterEnabled() {
   return true;
 }
 
-// runQualityVerb spawns `nightgauge hook <verb>` with payload on stdin and
-// returns its trimmed stderr, or "" on ANY failure: no NIGHTGAUGE_BIN, a
-// spawn error, a timeout, or a non-zero exit. Every one of format,
-// check-version and test-quality is documented to "always exit 0"
-// (test-quality.sh's own contract, ported byte for byte by the Go verb this
-// issue adds); a non-zero exit here means something is already broken, and
-// this hook's own contract is "never fail the tool" regardless — so a
-// broken verb degrades to "nothing to append", exactly like a missing one.
+function emptyQualityOutcome(verb) {
+  return {
+    verb,
+    error_kind: null,
+    error_code: null,
+    signal: null,
+    status: null,
+    stderr_bytes: 0,
+    stderr_nonempty: false,
+  };
+}
+
+// classifyQualityVerbResult is exported only so the embedded-plugin test can
+// deterministically supply the exact spawnSync result observed in CI: EPIPE
+// together with status 0 and usable stderr. Production calls it only with the
+// real spawnSync result.
+export function classifyQualityVerbResult(verb, result) {
+  const outcome = emptyQualityOutcome(verb);
+  if (!result) {
+    outcome.error_kind = "missing-result";
+    return { warning: "", outcome };
+  }
+  outcome.status = typeof result.status === "number" ? result.status : null;
+  outcome.signal = typeof result.signal === "string" ? result.signal : null;
+  // spawnSync can report EPIPE after a child has already exited with a real
+  // status. A concrete status or signal is the child outcome; the simultaneous
+  // error is only a pipe-cleanup detail and must not discard usable stderr.
+  if (result.error && outcome.status === null && outcome.signal === null) {
+    outcome.error_kind = "spawn-error";
+    outcome.error_code = typeof result.error.code === "string" ? result.error.code : "unknown";
+  }
+  const stderr = typeof result.stderr === "string" ? result.stderr : "";
+  outcome.stderr_bytes = Buffer.byteLength(stderr, "utf8");
+  outcome.stderr_nonempty = stderr !== "";
+  if (outcome.error_kind || outcome.signal || outcome.status !== 0) {
+    return { warning: "", outcome };
+  }
+  return { warning: stderr.trim(), outcome };
+}
+
+// runQualityVerb spawns `nightgauge hook <verb>` with payload on stdin. It
+// keeps its fail-open warning contract while separately recording bounded
+// process facts for the test-only diagnostic path.
 function runQualityVerb(bin, args, payload, cwd, timeoutMs) {
-  if (!bin) return "";
+  const verb = args[1] || "";
+  const outcome = {
+    ...emptyQualityOutcome(verb),
+  };
+  if (!bin) {
+    outcome.error_kind = "missing-binary";
+    return { warning: "", outcome };
+  }
   let result;
   try {
     result = spawnSync(bin, args, {
@@ -171,10 +218,10 @@ function runQualityVerb(bin, args, payload, cwd, timeoutMs) {
       encoding: "utf8",
     });
   } catch {
-    return "";
+    outcome.error_kind = "spawn-exception";
+    return { warning: "", outcome };
   }
-  if (!result || result.error || result.signal || result.status !== 0) return "";
-  return (result.stderr || "").trim();
+  return classifyQualityVerbResult(verb, result);
 }
 
 // appendWarnings joins the non-empty chunks with a blank line, builds the
@@ -220,17 +267,17 @@ export async function toolExecuteAfter(ctx, input, output) {
     if (typeof args.newString === "string") toolInput.new_string = args.newString;
     const payload = { tool_name: toolName, cwd, tool_input: toolInput };
 
-    const formatStderr = formatterEnabled()
-      ? ""
+    const formatResult = formatterEnabled()
+      ? null
       : runQualityVerb(bin, ["hook", "format"], payload, cwd, FORMAT_TIMEOUT_MS);
-    const checkVersionStderr = runQualityVerb(
+    const checkVersionResult = runQualityVerb(
       bin,
       ["hook", "check-version"],
       payload,
       cwd,
       CHECK_VERSION_TIMEOUT_MS
     );
-    const testQualityStderr = runQualityVerb(
+    const testQualityResult = runQualityVerb(
       bin,
       ["hook", "test-quality"],
       payload,
@@ -238,7 +285,19 @@ export async function toolExecuteAfter(ctx, input, output) {
       TEST_QUALITY_TIMEOUT_MS
     );
 
-    appendWarnings(output, [formatStderr, checkVersionStderr, testQualityStderr]);
+    const results = [formatResult, checkVersionResult, testQualityResult].filter(Boolean);
+    appendWarnings(
+      output,
+      results.map((result) => result.warning)
+    );
+    if (process.env[EDIT_HOOK_DIAGNOSTICS_ENV] === "1" && output && typeof output === "object") {
+      const metadata =
+        output.metadata && typeof output.metadata === "object" ? output.metadata : {};
+      output.metadata = {
+        ...metadata,
+        nightgauge_edit_hook_outcomes: results.map((result) => result.outcome),
+      };
+    }
   } catch {
     // toolExecuteAfter must never throw: a warning check is not a gate, and
     // this module's whole contract is "never fail the tool".

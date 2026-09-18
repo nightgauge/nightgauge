@@ -84,6 +84,22 @@ process.stdout.write(JSON.stringify({
 }));
 `
 
+// nodeEditEPIPEStatusDriver supplies the exact result shape observed in CI,
+// without depending on a pipe-close race to make spawnSync produce it.
+const nodeEditEPIPEStatusDriver = `
+import { pathToFileURL } from "node:url";
+const mod = await import(pathToFileURL(process.env.NG_EDIT_PATH).href);
+const error = new Error("write EPIPE");
+error.code = "EPIPE";
+const result = mod.classifyQualityVerbResult("test-quality", {
+  error,
+  status: 0,
+  signal: null,
+  stderr: "quality warning\n",
+});
+process.stdout.write(JSON.stringify(result));
+`
+
 // runEditHarness drives one tool.execute.after call through nightgauge.js's
 // own registered hook for an opencode-shaped edit/write args object.
 func runEditHarness(t *testing.T, node, cwd, tool, argsJSON, outputJSON, nightgaugeBin string, extraEnv map[string]string) toolExecuteAfterResult {
@@ -135,6 +151,26 @@ func readEditTimeoutConstants(t *testing.T, node string) map[string]int {
 		t.Fatalf("node harness printed non-JSON: %s (%v)", out, err)
 	}
 	return res
+}
+
+func readEditEPIPEStatusResult(t *testing.T, node string) map[string]any {
+	t.Helper()
+	_, editPath := editJSPath(t)
+	driver := writeGatesDriver(t, nodeEditEPIPEStatusDriver)
+	cmd := exec.Command(node, driver)
+	cmd.Env = append(os.Environ(), "NG_EDIT_PATH="+editPath)
+	out, err := cmd.Output()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			t.Fatalf("node harness failed: %v\nstderr:\n%s", err, ee.Stderr)
+		}
+		t.Fatalf("node harness failed: %v", err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal(out, &result); err != nil {
+		t.Fatalf("node harness printed non-JSON: %s (%v)", out, err)
+	}
+	return result
 }
 
 // writeRecordingBin writes a tiny POSIX shell script that appends its own
@@ -377,7 +413,10 @@ func TestEditHookAppendsWarningsCappedAt2KB(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	env := map[string]string{"OPENCODE_CONFIG_CONTENT": `{"formatter":true}`} // skip format
+	env := map[string]string{
+		"NIGHTGAUGE_EDIT_HOOK_DIAGNOSTICS": "1",
+		"OPENCODE_CONFIG_CONTENT":          `{"formatter":true}`,
+	} // skip format
 	argsJSON := `{"filePath":"a.test.ts","content":"x"}`
 	res := runEditHarness(t, node, root, "write", argsJSON, `{"output":"orig"}`, binPath, env)
 	if res.Threw {
@@ -392,8 +431,107 @@ func TestEditHookAppendsWarningsCappedAt2KB(t *testing.T) {
 		t.Errorf("appended %d bytes, want <= 2048 (issue's own 2 KB cap)", appended)
 	}
 	if appended == 0 {
-		t.Errorf("nothing was appended at all; want the (capped) 5 KB fake warning")
+		t.Errorf("nothing was appended at all; want the (capped) 5 KB fake warning; outcomes=%#v", res.Output["metadata"])
 	}
+}
+
+func TestEditHookEPIPEWithSuccessfulStatusKeepsWarning(t *testing.T) {
+	node := requireNode(t)
+	result := readEditEPIPEStatusResult(t, node)
+	if result["warning"] != "quality warning" {
+		t.Fatalf("warning = %#v, want child stderr when EPIPE accompanies status 0", result["warning"])
+	}
+	outcome, ok := result["outcome"].(map[string]any)
+	if !ok {
+		t.Fatalf("outcome = %#v, want object", result["outcome"])
+	}
+	if outcome["verb"] != "test-quality" || outcome["status"] != float64(0) ||
+		outcome["signal"] != nil || outcome["error_kind"] != nil || outcome["error_code"] != nil ||
+		outcome["stderr_nonempty"] != true || outcome["stderr_bytes"] != float64(16) {
+		t.Errorf("outcome = %#v, want bounded successful EPIPE classification", outcome)
+	}
+	if _, exposed := outcome["stderr"]; exposed {
+		t.Errorf("diagnostic outcome exposes stderr content: %#v", outcome)
+	}
+}
+
+func TestEditHookQualityVerbDiagnostics(t *testing.T) {
+	node := requireNode(t)
+	root := t.TempDir()
+	argsJSON := `{"filePath":"a.test.ts","content":"x"}`
+	env := map[string]string{
+		"NIGHTGAUGE_EDIT_HOOK_DIAGNOSTICS": "1",
+		"OPENCODE_CONFIG_CONTENT":          `{"formatter":true}`,
+	}
+
+	readOutcomes := func(t *testing.T, res toolExecuteAfterResult) []map[string]any {
+		t.Helper()
+		metadata, ok := res.Output["metadata"].(map[string]any)
+		if !ok {
+			t.Fatalf("diagnostic metadata = %#v, want object", res.Output["metadata"])
+		}
+		raw, ok := metadata["nightgauge_edit_hook_outcomes"].([]any)
+		if !ok {
+			t.Fatalf("diagnostic outcomes = %#v, want array", metadata["nightgauge_edit_hook_outcomes"])
+		}
+		outcomes := make([]map[string]any, 0, len(raw))
+		for _, item := range raw {
+			outcome, ok := item.(map[string]any)
+			if !ok {
+				t.Fatalf("diagnostic outcome = %#v, want object", item)
+			}
+			outcomes = append(outcomes, outcome)
+		}
+		return outcomes
+	}
+
+	t.Run("known-good warning producer records successful test-quality", func(t *testing.T) {
+		dir := t.TempDir()
+		binPath := filepath.Join(dir, "fake-nightgauge")
+		script := "#!/bin/sh\n" +
+			"if [ \"$2\" = 'test-quality' ]; then printf 'quality warning\\n' 1>&2; fi\n" +
+			"exit 0\n"
+		if err := os.WriteFile(binPath, []byte(script), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		res := runEditHarness(t, node, root, "write", argsJSON, `{"output":"orig"}`, binPath, env)
+		if res.Threw {
+			t.Fatalf("want no throw, got %q", res.Message)
+		}
+		outcomes := readOutcomes(t, res)
+		if len(outcomes) != 2 {
+			t.Fatalf("outcome count = %d, want check-version and test-quality", len(outcomes))
+		}
+		quality := outcomes[1]
+		if quality["verb"] != "test-quality" || quality["status"] != float64(0) ||
+			quality["stderr_nonempty"] != true || quality["error_kind"] != nil {
+			t.Errorf("test-quality outcome = %#v, want successful non-empty warning", quality)
+		}
+	})
+
+	t.Run("known-bad producer records non-zero exit and leaves output intact", func(t *testing.T) {
+		dir := t.TempDir()
+		binPath := filepath.Join(dir, "fake-nightgauge")
+		script := "#!/bin/sh\n" +
+			"if [ \"$2\" = 'test-quality' ]; then exit 23; fi\n" +
+			"exit 0\n"
+		if err := os.WriteFile(binPath, []byte(script), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		res := runEditHarness(t, node, root, "write", argsJSON, `{"output":"orig"}`, binPath, env)
+		if res.Threw {
+			t.Fatalf("want no throw, got %q", res.Message)
+		}
+		if res.Output["output"] != "orig" {
+			t.Errorf("output.output = %#v, want original output after failed child", res.Output["output"])
+		}
+		outcomes := readOutcomes(t, res)
+		quality := outcomes[1]
+		if quality["verb"] != "test-quality" || quality["status"] != float64(23) ||
+			quality["error_kind"] != nil || quality["signal"] != nil {
+			t.Errorf("test-quality outcome = %#v, want non-zero exit classification", quality)
+		}
+	})
 }
 
 // TestEditHookTimeoutLeavesToolResultIntact: a fake test-quality verb that
