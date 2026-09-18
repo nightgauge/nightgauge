@@ -14,6 +14,13 @@
   "compilerOptions": {
     "noEmit": true,
     "rootDir": ".",
+    // This config typechecks; it never emits. The inherited `declaration: true`
+    // still forces every inferred type to be nameable in a .d.ts, which vitest
+    // 5 broke: `vi.fn()` inferences now reference an internal chunk type
+    // (`Procedure`) that a test file cannot name (TS2883). No declaration emit
+    // means no nameability constraint.
+    "declaration": false,
+    "declarationMap": false,
     // vitest and playwright load these through esbuild/tsx as ES modules, so
     // `import.meta` is legal in them and CommonJS resolution is not what runs.
     "module": "ESNext",
