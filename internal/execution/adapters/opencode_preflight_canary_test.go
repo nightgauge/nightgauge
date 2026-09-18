@@ -59,7 +59,11 @@ func TestOpenCodeCanaryRelaxLetsAnAboveMaxTestedEndpointDispatchRunItsSelfTest(t
 		debugConfig: echoContent,
 		runHelp:     helpScript(t, capturedRunHelp(t)),
 	})
-	run := RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b", WorktreeDir: t.TempDir()}
+	run := RunOptions{
+		Stage:       "feature-dev",
+		Model:       "lmstudio/qwen/qwen3.8-27b",
+		WorktreeDir: gitInitTestWorktree(t),
+	}
 	var err error
 	stderr := captureAdapterStderr(t, func() {
 		err = pinnedAdapter(lmStudioSettings(), fake.path).PreDispatch(context.Background(), run)

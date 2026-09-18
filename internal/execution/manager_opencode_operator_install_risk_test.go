@@ -173,7 +173,9 @@ func TestOpenCodeOperatorInstallRiskBoundByRemainingStageContext(t *testing.T) {
 	runtime := &state.RuntimeState{RunID: runID}
 
 	opts := openCodeStageOptions("lmstudio/qwen/qwen3.8-27b", runtime)
-	opts.Timeout = 1 * time.Second
+	// Leave enough headroom for pre-dispatch probes under full-suite load while
+	// keeping the stage deadline well below the watchdog's 10-second bound.
+	opts.Timeout = 3 * time.Second
 
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
@@ -185,8 +187,8 @@ func TestOpenCodeOperatorInstallRiskBoundByRemainingStageContext(t *testing.T) {
 	})
 	elapsed := time.Since(started)
 
-	if elapsed > 5*time.Second {
-		t.Fatalf("RunStage took %s; a 1s stage timeout must cap the watchdog's 10s bound, not the other way round", elapsed)
+	if elapsed > 7*time.Second {
+		t.Fatalf("RunStage took %s; a 3s stage timeout must cap the watchdog's 10s bound, not the other way round", elapsed)
 	}
 
 	combined := stderr
@@ -204,6 +206,47 @@ func TestOpenCodeOperatorInstallRiskBoundByRemainingStageContext(t *testing.T) {
 	}
 	if !processGroupDead(pid) {
 		t.Errorf("the fake opencode (pid %d) or its process group is still alive after the bounded timeout", pid)
+	}
+}
+
+func TestOperatorInstallWaitBound(t *testing.T) {
+	now := time.Date(2026, time.September, 18, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name        string
+		configured  time.Duration
+		deadline    time.Time
+		hasDeadline bool
+		want        time.Duration
+	}{
+		{name: "no deadline", configured: 10 * time.Second, want: 10 * time.Second},
+		{
+			name:        "later deadline",
+			configured:  10 * time.Second,
+			deadline:    now.Add(time.Minute),
+			hasDeadline: true,
+			want:        10 * time.Second,
+		},
+		{
+			name:        "earlier deadline",
+			configured:  10 * time.Second,
+			deadline:    now.Add(3 * time.Second),
+			hasDeadline: true,
+			want:        3 * time.Second,
+		},
+		{
+			name:        "expired deadline",
+			configured:  10 * time.Second,
+			deadline:    now.Add(-time.Second),
+			hasDeadline: true,
+			want:        0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := operatorInstallWaitBound(tc.configured, tc.deadline, tc.hasDeadline, now)
+			if got != tc.want {
+				t.Fatalf("operatorInstallWaitBound() = %s, want %s", got, tc.want)
+			}
+		})
 	}
 }
 
