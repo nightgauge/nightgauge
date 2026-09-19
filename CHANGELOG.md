@@ -24,6 +24,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A release whose Homebrew cask pull request is never merged is now caught.
+  The daily release watchdog compares the cask version on the tap's `main`
+  with the latest stable release, fails when they differ, names the cask pull
+  request to merge, and keeps one issue open until the tap catches up. The
+  release run now closes older cask pull requests as superseded when it opens
+  a new one. The tap had served v0.2.3 through seven releases (#1874).
+
 - OpenCode edit hooks no longer discard valid warnings when Node reports `EPIPE`
   alongside a successful child-process status.
 
