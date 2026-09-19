@@ -121,6 +121,17 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- `internal/github/outcome.go` renamed `prediction_accuracy.survival` to
+  `survival_calibration` in #1592 (v0.4.0), and the model decoder's
+  `KnownFields(true)` turned that rename into a hard decode error for any
+  `.nightgauge/complexity-model.yaml` still carrying the legacy key from
+  v0.3.0/v0.3.1 — breaking `RecordOutcome`, `RecordSelfHealEvent`, and
+  `ApplySurvivalVerdicts` for every operator upgrading from v0.3.x.
+  `predictionAccuracy` now decodes the legacy `survival` key as a fallback
+  (preferring `survival_calibration` when both are present) while still
+  rejecting genuinely unknown fields, so a v0.3.x model loads again and
+  self-migrates to the new key one-way on its next save (#1843)
+
 - `TestNoDirectGitSpawnsInTests` and three other module-root `filepath.Walk`/
   `WalkDir` guards (`TestExactlyOneWorktreeIssueParser`,
   `TestEveryProductionSweepCallSiteOpensTheMergedPRDoor`, and

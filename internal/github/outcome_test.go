@@ -1015,6 +1015,156 @@ func TestRecordSelfHealEvent_BootstrapsMissingModel(t *testing.T) {
 	}
 }
 
+// TestDecodeComplexityModelDocument_LegacySurvivalKey reproduces the exact
+// #1843 failure: a v0.3.0/v0.3.1 model file shipped `prediction_accuracy.survival`,
+// renamed to `survival_calibration` in #1592/v0.4.0. Decoding must succeed and
+// populate PredictionAccuracy.Survival from the legacy key.
+func TestDecodeComplexityModelDocument_LegacySurvivalKey(t *testing.T) {
+	model := newBootstrapComplexityModel(time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC))
+	model.PredictionAccuracy.Survival = &survivalCalibration{
+		Confidence:           0.5,
+		NegativeObservations: 1,
+		PositiveObservations: 2,
+	}
+	data, err := yaml.Marshal(model)
+	if err != nil {
+		t.Fatalf("marshal model: %v", err)
+	}
+	legacy := bytes.Replace(data, []byte("survival_calibration:"), []byte("survival:"), 1)
+
+	decoded, err := decodeComplexityModelDocument(legacy)
+	if err != nil {
+		t.Fatalf("decode legacy-keyed model: %v", err)
+	}
+	if decoded.PredictionAccuracy == nil || decoded.PredictionAccuracy.Survival == nil {
+		t.Fatal("legacy survival key did not populate PredictionAccuracy.Survival")
+	}
+	if decoded.PredictionAccuracy.Survival.PositiveObservations != 2 {
+		t.Fatalf("PositiveObservations = %d, want 2", decoded.PredictionAccuracy.Survival.PositiveObservations)
+	}
+}
+
+// TestDecodeComplexityModelDocument_PrefersNewSurvivalKey asserts that when a
+// document carries both the legacy `survival` key and the current
+// `survival_calibration` key, the new key wins.
+func TestDecodeComplexityModelDocument_PrefersNewSurvivalKey(t *testing.T) {
+	model := newBootstrapComplexityModel(time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC))
+	model.PredictionAccuracy.Survival = &survivalCalibration{Confidence: 0.9, PositiveObservations: 9}
+	data, err := yaml.Marshal(model)
+	if err != nil {
+		t.Fatalf("marshal model: %v", err)
+	}
+
+	var raw map[string]interface{}
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal to raw map: %v", err)
+	}
+	pa := raw["prediction_accuracy"].(map[string]interface{})
+	legacyCopy := map[string]interface{}{}
+	for k, v := range pa["survival_calibration"].(map[string]interface{}) {
+		legacyCopy[k] = v
+	}
+	legacyCopy["confidence"] = 0.1
+	legacyCopy["positive_observations"] = 1
+	pa["survival"] = legacyCopy
+
+	combined, err := yaml.Marshal(raw)
+	if err != nil {
+		t.Fatalf("marshal combined document: %v", err)
+	}
+
+	decoded, err := decodeComplexityModelDocument(combined)
+	if err != nil {
+		t.Fatalf("decode document with both survival keys: %v", err)
+	}
+	if decoded.PredictionAccuracy.Survival.PositiveObservations != 9 {
+		t.Fatalf("PositiveObservations = %d, want 9 (survival_calibration should win)",
+			decoded.PredictionAccuracy.Survival.PositiveObservations)
+	}
+}
+
+// TestDecodeComplexityModelDocument_RejectsUnknownPredictionAccuracyField proves
+// that the legacy-key allowance does not weaken KnownFields(true) strictness for
+// genuinely unknown fields inside prediction_accuracy.
+func TestDecodeComplexityModelDocument_RejectsUnknownPredictionAccuracyField(t *testing.T) {
+	model := newBootstrapComplexityModel(time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC))
+	data, err := yaml.Marshal(model)
+	if err != nil {
+		t.Fatalf("marshal model: %v", err)
+	}
+
+	var raw map[string]interface{}
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal to raw map: %v", err)
+	}
+	pa := raw["prediction_accuracy"].(map[string]interface{})
+	pa["totally_unknown_field"] = "boom"
+
+	corrupted, err := yaml.Marshal(raw)
+	if err != nil {
+		t.Fatalf("marshal corrupted document: %v", err)
+	}
+
+	if _, err := decodeComplexityModelDocument(corrupted); err == nil {
+		t.Fatal("expected decode error for unknown prediction_accuracy field, got nil")
+	}
+}
+
+// TestRecordOutcome_MigratesLegacySurvivalKeyOnSave proves the migration is
+// one-way: a legacy-keyed model round-tripped through RecordOutcome
+// re-serializes with only survival_calibration, never survival.
+func TestRecordOutcome_MigratesLegacySurvivalKeyOnSave(t *testing.T) {
+	dir := t.TempDir()
+	incDir := filepath.Join(dir, ".nightgauge")
+	if err := os.MkdirAll(incDir, 0755); err != nil {
+		t.Fatalf("create .nightgauge dir: %v", err)
+	}
+
+	model := newBootstrapComplexityModel(time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC))
+	model.BootstrapDate = ""
+	model.PredictionAccuracy.Survival = &survivalCalibration{Confidence: 0.5, PositiveObservations: 3}
+	data, err := yaml.Marshal(model)
+	if err != nil {
+		t.Fatalf("marshal model: %v", err)
+	}
+	legacy := bytes.Replace(data, []byte("survival_calibration:"), []byte("survival:"), 1)
+
+	modelPath := filepath.Join(incDir, "complexity-model.yaml")
+	if err := os.WriteFile(modelPath, legacy, 0644); err != nil {
+		t.Fatalf("write legacy model: %v", err)
+	}
+
+	svc := NewOutcomeService(dir)
+	result := svc.RecordOutcome(OutcomeParams{
+		IssueNumber:   42,
+		PRNumber:      57,
+		ModelID:       "claude-sonnet-4-6",
+		PredictedSize: "M",
+		ActualLines:   450,
+		IssueType:     "feature",
+		CompletedAt:   time.Now().UTC().Format(time.RFC3339),
+	})
+	if !result.Recorded || result.Error != "" {
+		t.Fatalf("RecordOutcome on legacy-keyed model = %+v, want recorded", result)
+	}
+
+	saved, err := os.ReadFile(modelPath)
+	if err != nil {
+		t.Fatalf("read saved model: %v", err)
+	}
+	if bytes.Contains(saved, []byte("survival:")) {
+		t.Fatal("saved model still contains the legacy `survival:` key")
+	}
+	if !bytes.Contains(saved, []byte("survival_calibration:")) {
+		t.Fatal("saved model dropped survival calibration state on migration")
+	}
+
+	reloaded := loadModel(t, dir)
+	if reloaded.PredictionAccuracy.Survival == nil || reloaded.PredictionAccuracy.Survival.PositiveObservations != 3 {
+		t.Fatalf("survival calibration state lost on migration: %+v", reloaded.PredictionAccuracy.Survival)
+	}
+}
+
 func loadModel(t *testing.T, dir string) *complexityModel {
 	t.Helper()
 	modelPath := filepath.Join(dir, ".nightgauge", "complexity-model.yaml")
