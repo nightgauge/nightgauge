@@ -14,6 +14,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Added
+
+- `scripts/check-agent-guidance.sh` now fails when the routing file has no
+  `decisions/` route, and, when `.nightgauge/config.yaml` sets
+  `knowledge.enabled: true`, when it does not mention `.nightgauge/knowledge/`.
+  Every repository passed the check while four routing files lacked one of the
+  two. Smart Setup's routing template emits both routes.
+
 ### Fixed
 
 - A release whose Homebrew cask pull request is never merged is now caught.
