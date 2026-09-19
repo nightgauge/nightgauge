@@ -1,24 +1,38 @@
 /**
- * Ensures .nightgauge/.gitignore exists and contains all required patterns.
+ * Ensures .nightgauge/.gitignore exists and its rules are in force.
  *
  * Called on extension activation so that pipeline artifacts are always ignored,
  * even if the user never ran /nightgauge:repo-init.
  *
- * The file is only written when it is missing or out-of-date (checked via a
- * version marker comment). Existing custom lines added by users are preserved
- * by appending the canonical block rather than overwriting.
+ * The file is written when it is missing, or when it is out of date (checked
+ * via a version marker comment) AND untracked. A COMMITTED out-of-date file is
+ * never edited (#1875): replacing it left every primary clone dirty on `main`
+ * with a change nothing committed, and discarded the repository's own rules.
+ * Its current rules are applied per machine through info/exclude instead
+ * (./localGitExclude), and the committed file is upgraded by pull request.
+ * Lines below LOCAL_ADDITIONS_MARKER belong to the repository and survive
+ * every rewrite.
  */
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { isGitTracked, toRootPatterns, writeLocalExcludeBlock } from "./localGitExclude";
 import { loadWorkspaceConfig } from "./workspaceDetection";
 
 /**
  * Bump this when adding new patterns so the extension knows to update
  * existing .gitignore files that were written with an older version.
  */
-const GITIGNORE_VERSION = 12;
+const GITIGNORE_VERSION = 13;
 const VERSION_MARKER = `# nightgauge-gitignore-version: ${GITIGNORE_VERSION}`;
+
+/**
+ * Everything after this line in an existing file is kept on upgrade. Spelled
+ * out literally in GITIGNORE_CONTENT too, so the rendered template the tests
+ * compare against is the plain template text.
+ */
+const LOCAL_ADDITIONS_MARKER =
+  "# ─── Local additions (kept on upgrade) ──────────────────────────────";
 
 /**
  * Canonical .nightgauge/.gitignore content.
@@ -149,44 +163,38 @@ pipeline/queue-state.json
 # and no producer for these files existed at all until #753.
 /release-watch/
 /improvement-runs/
+
+# ─── Local additions (kept on upgrade) ──────────────────────────────
+# Rules below this line are this repository's own (for example, un-ignoring
+# /knowledge/ to commit the knowledge tree). Template upgrades keep them.
 `;
 
 /**
- * Ensure .nightgauge/.gitignore exists and is up-to-date.
+ * Ensure .nightgauge/.gitignore exists and its current rules are in force.
  *
- * - If .nightgauge/ doesn't exist, creates it with the gitignore.
- * - If .gitignore is missing, writes it.
- * - If .gitignore exists but has an older version marker (or none), replaces it.
- * - If .gitignore already has the current version marker, does nothing.
+ * - Missing: writes it, plus the `.gitkeep` files its `!…/.gitkeep` rules
+ *   anchor to (this is the initial scaffold, which repo-init commits).
+ * - Current version marker: does nothing.
+ * - Older version, TRACKED: leaves the committed file alone and writes the
+ *   current rules to the repository's info/exclude (`deferred`), so pipeline
+ *   exhaust stays out of `git status` without dirtying the checkout. The
+ *   committed file is upgraded through a pull request.
+ * - Older version, untracked: rewrites it, keeping any local additions.
  *
- * Also creates standard subdirectories with .gitkeep files so that
- * the ignore rules have something to anchor to.
+ * `.gitkeep` files are only written with a new file: on every activation they
+ * reappeared as untracked files in repositories that never committed them.
  */
 export async function ensureGitignore(
   nightgaugeRoot: string
-): Promise<{ created: boolean; updated: boolean }> {
+): Promise<{ created: boolean; updated: boolean; deferred?: boolean }> {
   const nightgaugeDir = path.join(nightgaugeRoot, ".nightgauge");
   const gitignorePath = path.join(nightgaugeDir, ".gitignore");
 
-  // Ensure .nightgauge/ and standard subdirectories exist
+  // Ensure .nightgauge/ and standard subdirectories exist. An empty directory
+  // is invisible to git, so this never dirties a checkout.
   const subdirs = ["pipeline/history", "plans", "logs"];
   for (const sub of subdirs) {
-    const dir = path.join(nightgaugeDir, sub);
-    await fs.mkdir(dir, { recursive: true });
-    // Create .gitkeep if missing
-    const gitkeep = path.join(dir, ".gitkeep");
-    try {
-      await fs.access(gitkeep);
-    } catch {
-      await fs.writeFile(gitkeep, "");
-    }
-  }
-  // Also ensure top-level .gitkeep in pipeline/
-  const pipelineGitkeep = path.join(nightgaugeDir, "pipeline", ".gitkeep");
-  try {
-    await fs.access(pipelineGitkeep);
-  } catch {
-    await fs.writeFile(pipelineGitkeep, "");
+    await fs.mkdir(path.join(nightgaugeDir, sub), { recursive: true });
   }
 
   // Check existing .gitignore
@@ -199,6 +207,14 @@ export async function ensureGitignore(
 
   if (existing === null) {
     await fs.writeFile(gitignorePath, GITIGNORE_CONTENT, "utf8");
+    for (const sub of [...subdirs, "pipeline"]) {
+      const gitkeep = path.join(nightgaugeDir, sub, ".gitkeep");
+      try {
+        await fs.access(gitkeep);
+      } catch {
+        await fs.writeFile(gitkeep, "");
+      }
+    }
     return { created: true, updated: false };
   }
 
@@ -207,8 +223,27 @@ export async function ensureGitignore(
     return { created: false, updated: false };
   }
 
-  // Out-of-date — replace with canonical content
-  await fs.writeFile(gitignorePath, GITIGNORE_CONTENT, "utf8");
+  if (await isGitTracked(nightgaugeRoot, ".nightgauge/.gitignore")) {
+    await writeLocalExcludeBlock(
+      nightgaugeRoot,
+      "nightgauge-gitignore",
+      toRootPatterns(".nightgauge", GITIGNORE_CONTENT)
+    );
+    return { created: false, updated: false, deferred: true };
+  }
+
+  // Out-of-date and untracked — replace with canonical content, keeping the
+  // repository's own additions.
+  const markerAt = existing.indexOf(LOCAL_ADDITIONS_MARKER);
+  let local = "";
+  if (markerAt >= 0) {
+    const after = existing.slice(markerAt + LOCAL_ADDITIONS_MARKER.length);
+    const canonicalTail = GITIGNORE_CONTENT.slice(
+      GITIGNORE_CONTENT.indexOf(LOCAL_ADDITIONS_MARKER) + LOCAL_ADDITIONS_MARKER.length
+    );
+    local = after.startsWith(canonicalTail) ? after.slice(canonicalTail.length) : after;
+  }
+  await fs.writeFile(gitignorePath, GITIGNORE_CONTENT + local, "utf8");
   return { created: false, updated: true };
 }
 
@@ -220,6 +255,8 @@ export interface WorkspaceGitignoreResult {
   root: string;
   created: boolean;
   updated: boolean;
+  /** The committed file is behind; its current rules were applied per machine. */
+  deferred?: boolean;
   /**
    * Set when the repo was passed over: "not-initialized" (no
    * `.nightgauge/config.yaml`, so the user never opted this repo in) or
@@ -297,9 +334,12 @@ export async function ensureWorkspaceGitignores(
       continue;
     }
     try {
-      const { created, updated } = await ensureGitignore(root);
+      const { created, updated, deferred } = await ensureGitignore(root);
       result.created = created;
       result.updated = updated;
+      if (deferred) {
+        result.deferred = true;
+      }
     } catch (error) {
       result.error = error instanceof Error ? error.message : String(error);
     }

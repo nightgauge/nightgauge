@@ -1461,17 +1461,18 @@ personalized and recognizable to teammates.
    [naming conventions](#naming-conventions) and [file schemas](#file-schema)
    above.
 
-5. **Git tracking (your choice)**: The knowledge directory can be committed to
-   git or gitignored — it is your team's choice. To ignore it, add to
-   `.gitignore`:
+5. **Git tracking (your choice)**: The managed `.nightgauge/.gitignore`
+   ignores `/knowledge/` by default. To commit the knowledge tree instead, add
+   these rules below that file's `Local additions (kept on upgrade)` line,
+   where template upgrades preserve them:
 
    ```gitignore
-   .nightgauge/knowledge/
+   !/knowledge/
+   /knowledge/.recall-cache/
    ```
 
-   To track it, commit `.nightgauge/knowledge/` alongside your feature
-   branches. Committed knowledge files provide a durable record of decisions
-   even after issues are closed.
+   Committed knowledge files provide a durable record of decisions even after
+   issues are closed.
 
 ---
 

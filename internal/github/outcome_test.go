@@ -311,6 +311,50 @@ func TestInitializeModel_PreservesCustomGitignore(t *testing.T) {
 	}
 }
 
+// #1875: a consumer whose committed .nightgauge/.gitignore predates the
+// /complexity-model.lock rule must not have that committed file edited on its
+// primary clone. The rule goes to info/exclude and the tree stays clean.
+func TestInitializeModel_NeverEditsATrackedGitignore(t *testing.T) {
+	dir := t.TempDir()
+	gittest.InitRepo(t, dir, "-q")
+	modelDir := filepath.Join(dir, ".nightgauge")
+	if err := os.MkdirAll(modelDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ignorePath := filepath.Join(modelDir, ".gitignore")
+	committed := "# nightgauge-gitignore-version: 11\n/complexity-model.yaml\n"
+	if err := os.WriteFile(ignorePath, []byte(committed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gittest.Run(t, dir, "add", ".nightgauge/.gitignore")
+	gittest.Run(t, dir, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "init")
+
+	if _, err := NewOutcomeService(dir).InitializeModel(); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(ignorePath); string(data) != committed {
+		t.Fatalf("tracked .gitignore was edited:\n%s", data)
+	}
+	if out := gittest.Run(t, dir, "status", "--porcelain", "--untracked-files=all"); len(out) != 0 {
+		t.Fatalf("primary clone left dirty:\n%s", out)
+	}
+	exclude, err := os.ReadFile(filepath.Join(dir, ".git", "info", "exclude"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsLine(string(exclude), "/.nightgauge/complexity-model.lock") {
+		t.Fatalf("lock rule not in info/exclude:\n%s", exclude)
+	}
+	// Idempotent: a second run adds nothing.
+	if _, err := NewOutcomeService(dir).InitializeModel(); err != nil {
+		t.Fatal(err)
+	}
+	again, _ := os.ReadFile(filepath.Join(dir, ".git", "info", "exclude"))
+	if string(again) != string(exclude) {
+		t.Fatalf("second run rewrote info/exclude:\n%s", again)
+	}
+}
+
 func TestRunModelTransaction_InstallsValidatedDocument(t *testing.T) {
 	dir := t.TempDir()
 	svc := NewOutcomeService(dir)

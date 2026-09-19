@@ -696,6 +696,12 @@ export async function initializeServices(
             logger.info("Created .nightgauge/.gitignore");
           } else if (result.updated) {
             logger.info("Updated .nightgauge/.gitignore to latest version");
+          } else if (result.deferred) {
+            logger.warn(
+              "The committed .nightgauge/.gitignore is older than the current template. " +
+                "Its current rules apply on this machine via .git/info/exclude; upgrade " +
+                "the committed file through a pull request (#1875)."
+            );
           }
         })
         .catch((error) => {
@@ -716,6 +722,12 @@ export async function initializeServices(
                 root: r.root,
                 error: r.error,
               });
+            } else if (r.deferred) {
+              logger.warn(
+                "Committed .nightgauge/.gitignore is older than the current template; " +
+                  "applied its rules via .git/info/exclude. Upgrade it through a pull request.",
+                { repo: r.name, root: r.root }
+              );
             } else if (r.created || r.updated) {
               logger.info("Refreshed .nightgauge/.gitignore for workspace repo", {
                 repo: r.name,

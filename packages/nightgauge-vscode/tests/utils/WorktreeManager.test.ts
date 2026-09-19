@@ -206,15 +206,31 @@ describe("WorktreeManager", () => {
       warnSpy.mockRestore();
     });
 
-    it("ensures .gitignore includes worktree base", async () => {
-      fsMock.readFile.mockResolvedValue("node_modules\n");
+    it("ignores the worktree base per machine, never in the tracked .gitignore (#1875)", async () => {
+      fsMock.readFile.mockImplementation((p: string) =>
+        String(p) === "/repo/.gitignore"
+          ? Promise.resolve("node_modules\n")
+          : Promise.reject(Object.assign(new Error("ENOENT"), { code: "ENOENT" }))
+      );
+      execFileAsyncMock.mockImplementation((_cmd: string, args: string[]) =>
+        Promise.resolve({
+          stdout:
+            args[0] === "rev-parse" && args.includes("--git-common-dir") ? "/repo/.git\n" : "",
+          stderr: "",
+        })
+      );
 
       await manager.create(42, "feat/42-test", { npmInstall: false });
 
       expect(fsMock.writeFile).toHaveBeenCalledWith(
+        "/repo/.git/info/exclude",
+        expect.stringContaining("/.worktrees/"),
+        "utf8"
+      );
+      expect(fsMock.writeFile).not.toHaveBeenCalledWith(
         "/repo/.gitignore",
-        expect.stringContaining(".worktrees"),
-        "utf-8"
+        expect.anything(),
+        expect.anything()
       );
     });
 
