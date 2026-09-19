@@ -9,6 +9,38 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-09-17
+
+### Changed
+
+- The `nightgauge` binary bundled in the extension is now signed with an Apple
+  Developer ID certificate and notarized by Apple, with the hardened runtime
+  enabled. Previously it carried only an ad-hoc signature, which macOS treats
+  as unsigned. If Gatekeeper warned you when the pipeline first started its
+  backend, it should no longer.
+
+### Fixed
+
+- Install instructions now lead with Open VSX, and document installing the
+  `.vsix` for your platform directly in VS Code with
+  `code --install-extension <file>.vsix` (or **Extensions: Install from VSIX**).
+  Every release attaches all three per-target builds, so VS Code users install
+  the same artifact either way.
+
+### Added
+
+- The listing now includes "What this extension does on your machine": the
+  bundled Go binary and the fact that nothing is downloaded at runtime, which
+  processes get spawned and why, that your existing `gh` credentials are used
+  and none are stored, the bundled shell hooks, the one file written outside
+  your workspace and the confirmation shown first, and every path by which data
+  leaves the machine.
+
+### Changed
+
+- The Grok adapter's setup message links the install page instead of printing a
+  `curl … | bash` command.
+
 ### Fixed
 
 - A pipeline run that succeeded completely no longer renders in the tree with a
@@ -521,7 +553,8 @@ shipped as [0.2.1].
 - Settings for authentication provider, model selection, and paths
 - Settings for notification sounds, volume, and Do Not Disturb respect
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.4.4...HEAD
+[0.4.4]: https://github.com/nightgauge/nightgauge/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/nightgauge/nightgauge/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/nightgauge/nightgauge/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/nightgauge/nightgauge/compare/v0.4.0...v0.4.1

@@ -602,12 +602,13 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	operatorInstallWatchdogDone := make(chan struct{})
 	var operatorInstallTimedOut atomic.Bool
 	if operatorInstallRisk != "" {
-		bound := openCodeOperatorInstallWaitBound
-		if dl, ok := execCtx.Deadline(); ok {
-			if remaining := time.Until(dl); remaining < bound {
-				bound = max(remaining, 0)
-			}
-		}
+		dl, hasDeadline := execCtx.Deadline()
+		bound := operatorInstallWaitBound(
+			openCodeOperatorInstallWaitBound,
+			dl,
+			hasDeadline,
+			time.Now(),
+		)
 		riskDir := operatorInstallRisk
 		go func() {
 			defer close(operatorInstallWatchdogDone)
@@ -1298,6 +1299,18 @@ const openCodeHandshakeKillWindow = 1 * time.Second
 // being a config directory at all) is the tracked path to removing the wait
 // entirely rather than only bounding it.
 var openCodeOperatorInstallWaitBound = 100 * time.Second
+
+func operatorInstallWaitBound(
+	configured time.Duration,
+	deadline time.Time,
+	hasDeadline bool,
+	now time.Time,
+) time.Duration {
+	if !hasDeadline {
+		return configured
+	}
+	return min(configured, max(deadline.Sub(now), 0))
+}
 
 // openCodeOperatorInstallPollInterval is how often the operator-install-risk
 // watchdog re-checks, read-only, whether its target directory has become

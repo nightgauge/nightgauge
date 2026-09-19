@@ -34,7 +34,7 @@
     "nightgauge",
     "sdlc",
     "pipeline",
-    "claude",
+    "issue-to-pr",
     "automation"
   ],
   "homepage": "https://nightgauge.dev",
@@ -1771,16 +1771,16 @@
   "devDependencies": {
     "@hono/node-server": "^2.1.1",
     "@playwright/test": "^1.63.0",
-    "@types/node": "^26.5.1",
+    "@types/node": "^26.6.1",
     "@types/vscode": "^1.85.0",
-    "@vitest/coverage-v8": "^4.1.11",
+    "@vitest/coverage-v8": "^5.0.0",
     "@vscode/test-electron": "^3.1.0",
     "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.28.2",
-    "hono": "^4.13.7",
+    "hono": "^4.13.8",
     "tsx": "^4.23.13",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.2"
+    "vitest": "^5.0.0"
   },
   "author": {
     "name": "nightgauge"

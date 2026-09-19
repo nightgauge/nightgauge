@@ -59,7 +59,15 @@ func TestEveryRecordEscalationHasADurableTwin(t *testing.T) {
 		records := len(recordEscalationCall.FindAllString(string(source), -1))
 		appends := len(appendEscalationCall.FindAllString(string(source), -1))
 		totalRecord += records
-		t.Logf("%s: %d RecordEscalation, %d AppendEscalation", path, records, appends)
+		// Phrased so the message does NOT begin with a bare `<path>:` token.
+		// With one, the rendered line reads
+		//   escalation_durability_test.go:62: scheduler.go: 3 RecordEscalation...
+		// which carries two file:line-shaped tokens and matches a Go problem
+		// matcher, so CI annotated a passing test with ##[error]. 81 other
+		// t.Logf lines in the suite are unannotated because their messages do
+		// not have that shape. A red error on a green run teaches people to
+		// ignore error annotations, which is worse than the cosmetic noise.
+		t.Logf("site %s has %d RecordEscalation and %d AppendEscalation", path, records, appends)
 
 		// AppendEscalation legitimately runs AHEAD within a file: the two
 		// model-unavailable downgrade sites append without a RecordEscalation,

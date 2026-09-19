@@ -40,6 +40,7 @@ REQUIRED_FILES=(
   scripts/test-branch-merged-check.sh
   scripts/test-post-merge-check.sh
   scripts/test-publish-vsix-set.sh
+  scripts/test-sign-macos-binaries.sh
   scripts/test-scrub-evidence.sh
   docker/clean-install/scrub-evidence.sh
   scripts/test-capture-cli-help.sh
@@ -386,6 +387,15 @@ run_group "post-merge-check.sh regression suite" \
 #       registry, so they are only ever exercised here.
 run_group "publish-vsix-set.sh regression suite" \
   bash scripts/test-publish-vsix-set.sh
+
+# 1b2b. sign-macos-binaries.sh regression suite. The state it must handle
+#       correctly is the one that exists today: no Apple credentials, so it has
+#       to be a clean no-op rather than a release-breaking failure. It must also
+#       never report success for a signature that does not verify, since a
+#       broken signature is worse than none because it looks deliberate. Neither
+#       state can be produced against real codesign without a certificate.
+run_group "sign-macos-binaries.sh regression suite" \
+  bash scripts/test-sign-macos-binaries.sh
 
 # 1b3. scrub-evidence.sh regression suite (#1335) — the second of the two
 #      layers that must each stop a credential reaching a public artifact. The

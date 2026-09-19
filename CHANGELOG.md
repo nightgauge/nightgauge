@@ -14,6 +14,105 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- OpenCode edit hooks no longer discard valid warnings when Node reports `EPIPE`
+  alongside a successful child-process status.
+
+- `TestEveryRecordEscalationHasADurableTwin` no longer annotates a passing CI
+  run with `##[error]`. Its `t.Logf` message began with a bare `<path>:` token,
+  so the rendered line carried two `file:line`-shaped tokens
+  (`escalation_durability_test.go:62: scheduler.go: 3 RecordEscalation...`) and
+  matched a Go problem matcher, which marked benign diagnostics as errors. The
+  test was always passing: the assertion is `appends < records`, and appends
+  legitimately run ahead because the two model-unavailable downgrade sites
+  append without a `RecordEscalation`. 81 other `t.Logf` lines in the suite are
+  unannotated because their messages lack that shape. Reworded rather than
+  silencing the matcher, which still catches real Go build errors. Worth fixing
+  because a red error on a green run teaches people to ignore error
+  annotations.
+
+## [0.4.4] - 2026-09-17
+
+### Added
+
+- The macOS binaries bundled in the VSIX are now **Developer ID signed and
+  notarized** by `release.yml`, `staging.yml` and `marketplace-publish.yml`.
+  Each release job runs on `macos-latest`, because Apple `codesign` is
+  macOS-only, and signs immediately after `make build-all` and before anything
+  packages the binaries: the VSIX freezes whatever is in `dist/bin/`, so
+  signing afterwards would ship an unsigned copy while reporting success. The
+  VSIX verification step then asserts the **packaged** binary carries an
+  `Authority=Developer ID Application` line and `flags=0x10000(runtime)`,
+  rather than trusting the signing step's own output, because the 0.4.2 Open
+  VSX publish printed a success line for a version the registry would not
+  serve. Proven on the rc channel first: `v0.4.4-rc.2` signed and notarized
+  both darwin targets and the packaged assertion passed for each. The macOS
+  runner is free only because this repository is public and `macos-latest` is a
+  standard runner, verified against the timing API rather than assumed; a
+  private repository bills macOS at 10x the Linux rate.
+- `scripts/sign-macos-binaries.sh` codesigns and optionally notarizes the macOS
+  binaries that ship inside the VSIX, which until now carried only an ad-hoc
+  linker signature, cryptographically equivalent to unsigned. The Marketplace
+  security-and-trust guidance states packages are scanned "using the same
+  advanced tech found in Microsoft Defender" and rescanned after publication,
+  and a ~28MB statically linked Go executable that spawns processes is the
+  highest-risk artifact in the package; a Developer ID signature is the
+  strongest provenance signal available for it, and it also stops Gatekeeper
+  warning users who install from a VSIX or Open VSX. **Not yet wired into any
+  release workflow**: it needs a `Developer ID Application` certificate (the
+  team currently holds only `Apple Distribution`, which is App Store scoped)
+  and a macOS runner, since the release jobs run on `ubuntu-latest` and
+  `codesign` is macOS-only. With no credentials set the script exits 0 and says
+  so, so it is safe to enable before the certificate exists.
+  `scripts/test-sign-macos-binaries.sh` covers ten behaviours with stubbed
+  `codesign`/`security`/`xcrun`, including the two that matter most: no
+  credentials must be a clean no-op rather than a release-breaking failure, and
+  a signature that does not verify must fail rather than be reported as
+  success, because a broken signature looks deliberate. Registered in
+  `ci-local.sh` and its step inventory.
+- `docs/RELEASE_CHECKLIST.md` gains "Signing the bundled macOS binaries": the
+  two prerequisites, the six repository secrets, and an enablement order that
+  proves signing on an `rc` tag through `staging.yml` before it touches
+  `release.yml`, because an unverified change to the release path is what
+  produced the partial Open VSX publish on 2026-09-16. Also records what was
+  ruled out: symbol stripping is not a meaningful obfuscation signal, since Go
+  keeps function names in `pclntab` regardless of `-s -w`, so the release keeps
+  `-s -w` rather than paying 12.7MB for nothing.
+
+### Fixed
+
+- The install instructions in both READMEs pointed at a VS Code Marketplace
+  listing that returns 404, which was actively misleading: the extension
+  README is also the Open VSX listing's Details tab, so Open VSX visitors were
+  being handed a dead link as their first install option. Both now lead with
+  Open VSX and document the direct `.vsix` path
+  (`code --install-extension <file>.vsix`) for VS Code itself, using the
+  per-target assets already attached to every GitHub release. No behaviour
+  change; the extension was never Marketplace-dependent at runtime.
+
+### Changed
+
+- Reduced the extension's Marketplace trust surface, following the publisher
+  block whose stated reason was only "the Publisher Agreement and Terms of
+  Use". Two items that are free to remove and not worth the cost of defending
+  are gone: `"claude"` is no longer a listing keyword (naming an integrated
+  tool in prose is nominative use and stays, but keywords are the
+  search-placement vector the policy on others' marks is aimed at), and the
+  Grok adapter's setup message no longer contains a `curl … | bash` one-liner,
+  which was always just a help string but is a signature static scanners match
+  on. `tests/marketplaceTrustSurface.test.ts` guards both: no foreign mark in
+  `keywords`, and no fetch-piped-to-shell anywhere in shipped source.
+
+### Added
+
+- The extension README gains "What this extension does on your machine", which
+  inventories the bundled Go binary, process spawning, credential use, bundled
+  shell hooks, the single out-of-workspace write and its confirmation, and
+  every egress path. The listing is what a Marketplace reviewer reads, so the
+  answer to "what is this thing doing" now lives there instead of having to be
+  asked for.
+
 ### Added
 
 - `nightgauge pipeline aggregate` now reports a per-adapter token/cost
@@ -1920,7 +2019,8 @@ with GitHub Project board integration, dashboard, context file viewer, and
 the first set of commands and settings. Recorded so the extension's changelog
 and this one name the same versions.
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.4.4...HEAD
+[0.4.4]: https://github.com/nightgauge/nightgauge/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/nightgauge/nightgauge/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/nightgauge/nightgauge/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/nightgauge/nightgauge/compare/v0.4.0...v0.4.1

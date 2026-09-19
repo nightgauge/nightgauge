@@ -173,7 +173,9 @@ func TestOpenCodeOperatorInstallRiskBoundByRemainingStageContext(t *testing.T) {
 	runtime := &state.RuntimeState{RunID: runID}
 
 	opts := openCodeStageOptions("lmstudio/qwen/qwen3.8-27b", runtime)
-	opts.Timeout = 1 * time.Second
+	// Leave enough headroom for pre-dispatch probes under full-suite load while
+	// keeping the stage deadline well below the watchdog's 10-second bound.
+	opts.Timeout = 3 * time.Second
 
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
@@ -185,8 +187,8 @@ func TestOpenCodeOperatorInstallRiskBoundByRemainingStageContext(t *testing.T) {
 	})
 	elapsed := time.Since(started)
 
-	if elapsed > 5*time.Second {
-		t.Fatalf("RunStage took %s; a 1s stage timeout must cap the watchdog's 10s bound, not the other way round", elapsed)
+	if elapsed > 7*time.Second {
+		t.Fatalf("RunStage took %s; a 3s stage timeout must cap the watchdog's 10s bound, not the other way round", elapsed)
 	}
 
 	combined := stderr
@@ -204,6 +206,47 @@ func TestOpenCodeOperatorInstallRiskBoundByRemainingStageContext(t *testing.T) {
 	}
 	if !processGroupDead(pid) {
 		t.Errorf("the fake opencode (pid %d) or its process group is still alive after the bounded timeout", pid)
+	}
+}
+
+func TestOperatorInstallWaitBound(t *testing.T) {
+	now := time.Date(2026, time.September, 18, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name        string
+		configured  time.Duration
+		deadline    time.Time
+		hasDeadline bool
+		want        time.Duration
+	}{
+		{name: "no deadline", configured: 10 * time.Second, want: 10 * time.Second},
+		{
+			name:        "later deadline",
+			configured:  10 * time.Second,
+			deadline:    now.Add(time.Minute),
+			hasDeadline: true,
+			want:        10 * time.Second,
+		},
+		{
+			name:        "earlier deadline",
+			configured:  10 * time.Second,
+			deadline:    now.Add(3 * time.Second),
+			hasDeadline: true,
+			want:        3 * time.Second,
+		},
+		{
+			name:        "expired deadline",
+			configured:  10 * time.Second,
+			deadline:    now.Add(-time.Second),
+			hasDeadline: true,
+			want:        0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := operatorInstallWaitBound(tc.configured, tc.deadline, tc.hasDeadline, now)
+			if got != tc.want {
+				t.Fatalf("operatorInstallWaitBound() = %s, want %s", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -247,11 +290,18 @@ exit 7
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	withShortOperatorInstallWaitBound(t, 3*time.Second)
+	// Bound and budget are a load-tolerant pair. Under the ci-local.sh
+	// 4-way load, spawning the fake and tearing its group down has been
+	// observed at ~3s all by itself, so a budget that sits near the bound
+	// makes the assertion a scheduler lottery (#1836). At a 10s bound the
+	// regression path — watchdog waits out the FULL bound, ~10s — stays far
+	// above the 5s budget, while the healthy path stays far below it even
+	// loaded. The marker-text check below remains the load-invariant half.
+	withShortOperatorInstallWaitBound(t, 10*time.Second)
 
 	workspace := openCodeWorkspace(t)
 	m := NewManager(workspace, adapters.NewOpenCodeAdapter())
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 
 	started := time.Now()
@@ -262,7 +312,7 @@ exit 7
 	})
 	elapsed := time.Since(started)
 
-	if elapsed > 2*time.Second {
+	if elapsed > 5*time.Second {
 		t.Fatalf("RunStage took %s; a process that exits immediately must not wait out any part of the watchdog bound", elapsed)
 	}
 	combined := stderr

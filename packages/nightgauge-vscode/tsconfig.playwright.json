@@ -9,6 +9,11 @@
   "compilerOptions": {
     "noEmit": true,
     "rootDir": ".",
+    // Typecheck-only, same as tsconfig.test.json: no declaration emit, so the
+    // inherited `declaration: true` (and its TS2883 nameability constraint on
+    // vitest 5's mock inferences) is switched off here as well.
+    "declaration": false,
+    "declarationMap": false,
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "lib": ["ES2022", "DOM"],

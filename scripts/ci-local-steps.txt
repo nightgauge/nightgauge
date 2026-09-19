@@ -6,6 +6,7 @@ gofmt -l ./internal ./cmd
 branch-merged-check.sh regression suite
 post-merge-check.sh regression suite
 publish-vsix-set.sh regression suite
+sign-macos-binaries.sh regression suite
 scrub-evidence.sh regression suite
 capture-cli-help.sh regression suite
 adapter-canary.sh regression suite

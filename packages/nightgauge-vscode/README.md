@@ -43,11 +43,14 @@ clone the repository.)
 
 ### Steps
 
-1. **Install** — Install **Nightgauge** from the
-   [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=nightgauge.nightgauge-vscode),
-   or from [Open VSX](https://open-vsx.org/extension/nightgauge/nightgauge-vscode)
-   in VSCodium, Cursor, Windsurf and other Open VSX-based editors. Either
-   registry serves the build matching your platform automatically.
+1. **Install** — from
+   [Open VSX](https://open-vsx.org/extension/nightgauge/nightgauge-vscode), which
+   serves the build matching your platform automatically and is wired in by
+   default in VSCodium, Cursor, Windsurf and Gitpod. In VS Code itself, download
+   the `.vsix` for your platform from the
+   [latest release](https://github.com/nightgauge/nightgauge/releases/latest) and
+   install it with `code --install-extension nightgauge-vscode-<target>-<version>.vsix`,
+   or **Extensions: Install from VSIX** in the Command Palette.
 2. **Sign in (optional)** — Run **Nightgauge: Sign In with GitHub** from the
    Command Palette. This connects a Nightgauge account for hosted features. It
    is **not** how the pipeline reaches GitHub — that is `gh auth login` above,
@@ -74,10 +77,11 @@ clone the repository.)
 
 ### Installing
 
-Nightgauge ships a separate build per platform to both the
-[VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=nightgauge.nightgauge-vscode)
-and [Open VSX](https://open-vsx.org/extension/nightgauge/nightgauge-vscode); each
-picks the right one for you. **macOS (Apple Silicon and Intel) and Linux x64 are
+Nightgauge ships a separate build per platform to
+[Open VSX](https://open-vsx.org/extension/nightgauge/nightgauge-vscode), which
+picks the right one for you, and attaches all three as `.vsix` assets to every
+[GitHub release](https://github.com/nightgauge/nightgauge/releases/latest) for
+direct install in VS Code. **macOS (Apple Silicon and Intel) and Linux x64 are
 supported.** Windows is not supported yet — the pipeline backend is a native
 binary that has no Windows build, so the registry will report the extension as
 unavailable there.
@@ -136,6 +140,57 @@ run merged. Configure either in `.nightgauge/config.yaml`.
 ![Slack notification attachment for a merged pipeline run — issue, PR, stage summary and cost](https://raw.githubusercontent.com/nightgauge/nightgauge/main/docs/images/marketing/notification-slack.png)
 
 > Exact appearance varies with your VS Code theme, platform, and version.
+
+## What this extension does on your machine
+
+Nightgauge is an automation tool, so it does more on a developer machine than a
+theme or a linter does. Everything it does is listed here rather than left for
+you to discover, because "an extension that runs a coding agent" is exactly the
+shape a reasonable person should want disclosed up front.
+
+**It runs a bundled native binary.** `dist/bin/nightgauge` is a compiled Go
+program, built from `cmd/nightgauge` in this repository, and it ships inside the
+extension for your platform. It is the deterministic half of the product: it
+reads and writes `.nightgauge/` state, talks to the GitHub API, and renders
+stage prompts. **Nothing is downloaded at runtime** — the binary is resolved
+from the installed extension directory, an explicit
+`nightgauge.backend.binaryPath` setting, or your `PATH`, and never fetched.
+
+**It executes no remote code.** Every webview loads its scripts from inside the
+package and no Content-Security-Policy in the extension names a remote origin.
+This is enforced by a build-time check, not a convention.
+
+**It spawns processes.** `git`, the `gh` CLI, and your chosen AI coding agent
+(the `claude` CLI by default). That is the product: the pipeline works by
+driving the same tools you would drive by hand. It requires a trusted workspace
+and is fully disabled in VS Code's Restricted Mode.
+
+**It uses your existing credentials, and stores none of its own.** GitHub access
+comes from `gh auth login` or a token you place in `.nightgauge/config.yaml`.
+`GH_TOKEN` / `GITHUB_TOKEN` are read from your environment and passed to the
+child processes that need them. They are never transmitted anywhere else.
+
+**It runs shell hooks from the bundled plugin.** `dist/claude-plugins/` contains
+the pipeline's Agent Skills and its hook scripts, all readable in this
+repository under `claude-plugins/`. They gate stage transitions and validate
+work; they are the same files whether you install the extension or clone the
+repo.
+
+**It writes outside the workspace only when you ask.** The one case is
+`~/.claude/settings.json`, and only if you run **Nightgauge: Show my 5-hour and
+weekly limits**, which shows the exact file path in a confirmation dialog first
+and can be reversed from the same command. After an extension update the
+extension repairs the absolute path it previously wrote there, since its own
+update invalidated it; it never touches a `statusLine` it did not write.
+
+**What leaves your machine.** Telemetry, on by default and disclosed in
+[Privacy and Telemetry](#privacy-and-telemetry) above, to `api.nightgauge.dev`.
+It honors VS Code's global telemetry setting as a hard stop that no Nightgauge
+setting can override. Your AI provider's CLI makes its own calls to its own
+provider, under your own account and credentials. There is no other egress.
+
+For the security reporting process and supported versions, see
+[SECURITY.md](https://github.com/nightgauge/nightgauge/blob/main/SECURITY.md).
 
 ## Privacy and Telemetry
 
