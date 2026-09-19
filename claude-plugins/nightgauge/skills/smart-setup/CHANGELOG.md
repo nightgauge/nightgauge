@@ -10,6 +10,9 @@ and this project adheres to
 
 ### Added
 
+- The generated `docs/AGENT_GUIDANCE.md` has a `## Decisions and knowledge`
+  section routing `docs/decisions/` and, when the knowledge base is enabled,
+  `.nightgauge/knowledge/`, which the bundled check now requires (issue 1876).
 - `/smart-setup verify`: a read-only conformance report against the DC-01…DC-22
   checklist, running the installed check for the items it covers (issue 1675).
 - Installs a byte-identical copy of the bundled `check-agent-guidance.sh` and a

@@ -149,6 +149,13 @@ a dead path). Include the Knowledge row only when `KNOWLEDGE_DIR_EXISTS=true`,
 and a Testing row only when `docs/TESTING.md` exists; otherwise delete the row.
 Never leave a row outside the table.
 
+The `## Decisions and knowledge` section is prose, so its paths need not exist
+yet, and the check requires it: the file must contain `decisions/`, and must
+mention `.nightgauge/knowledge/` when `.nightgauge/config.yaml` sets
+`knowledge.enabled: true`. Always keep the decisions line. Keep the knowledge
+line when `HAS_NIGHTGAUGE_CONFIG=true`, unless the config sets
+`knowledge.enabled: false`; otherwise delete it.
+
 ```markdown
 # Agent Guidance and Documentation Routing
 
@@ -171,6 +178,13 @@ agent instructions and routes tasks to documentation.
 Instruction files are regular files: no symlinks, no imports from outside the
 repository. `scripts/check-agent-guidance.sh` enforces this in CI (job
 `agent guidance`).
+
+## Decisions and knowledge
+
+- Decisions that span this repository are recorded as numbered records under
+  `docs/decisions/`. Read the relevant ones before changing what they decided.
+- Per-issue requirements and decisions live under `.nightgauge/knowledge/`
+  (`PRD.md`, `decisions.md`). Read them before implementing that issue.
 
 ## Documentation routing
 
