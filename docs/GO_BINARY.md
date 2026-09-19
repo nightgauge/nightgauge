@@ -25,8 +25,10 @@ brew tap nightgauge/tap
 brew install --cask nightgauge/tap/nightgauge
 ```
 
-The Homebrew cask is auto-updated on each release via GoReleaser. Supports
-both Apple Silicon (arm64) and Intel (amd64) Macs.
+Each release proposes the new cask as a pull request on the tap (GoReleaser),
+and `brew` serves it once that pull request is merged. The daily release
+watchdog fails and opens an issue while the tap is behind the latest release.
+Supports both Apple Silicon (arm64) and Intel (amd64) Macs.
 
 ### go install
 

@@ -35,6 +35,13 @@ name: Release Watchdog
 # now runs where there is nothing to write with, and everything it produces
 # passes through the validator before a token is anywhere near it.
 #
+# A fourth job, `channels`, is independent of the discovery switches: it
+# verifies every distribution channel serves the latest stable release
+# (scripts/verify-release-channels.sh, #1874). The Homebrew cask arrives as a
+# pull request on the tap that someone must merge, and seven releases went by
+# with nobody noticing it had not been. #1769 adds the VS Code Marketplace and
+# Open VSX as further channels of the same script and job.
+#
 # The state files are published to the `discovery-state` branch, not to `main`:
 # `main`'s ruleset requires a pull request, so no workflow token can push to
 # it. The full reasoning, and the developer-side fetch, are in
@@ -79,6 +86,38 @@ env:
   TZ: UTC
 
 jobs:
+  channels:
+    name: Distribution channels serve the latest release
+    # Not gated on autonomous_discovery: a stale distribution channel is a
+    # release defect whatever the discovery switches say.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      # Read the releases here; the tap is public, so its cask and pull
+      # requests need no token scope beyond this.
+      contents: read
+      # One issue per channel, opened while it is behind and closed once
+      # current (never duplicated).
+      issues: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      DRY_RUN: ${{ inputs.dry_run || false }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Homebrew tap serves the latest release
+        # Red, naming the cask PR to merge, whenever Casks/nightgauge.rb on
+        # the tap's main differs from the latest non-prerelease tag. Closing
+        # superseded cask PRs needs the tap token, so it happens in
+        # release.yml, which holds it, when the newer PR is opened.
+        run: |
+          set -euo pipefail
+          ARGS=(--channel homebrew)
+          if [ "$DRY_RUN" != "true" ]; then
+            ARGS+=(--issue-repo "$GITHUB_REPOSITORY")
+          fi
+          bash scripts/verify-release-channels.sh "${ARGS[@]}"
+
   gate:
     name: Resolve the autonomous_discovery switches
     runs-on: ubuntu-latest
