@@ -61,6 +61,8 @@ valid_fixture() {
   cat >"$FIX/docs/AGENT_GUIDANCE.md" <<'EOF'
 # Guidance
 
+Decisions are recorded in docs/decisions/.
+
 ## Documentation routing
 
 | Topic | Primary Docs                        | Keywords |
@@ -244,6 +246,74 @@ expect_fail "unresolved routing link" "routing path does not resolve: NOPE.md"
 valid_fixture
 printf '| Out | ../../etc/passwd | out |\n' >>"$FIX/docs/AGENT_GUIDANCE.md"
 expect_fail "routing path leaving the root" "routing path does not resolve: ../../etc/passwd (leaves --root)"
+
+# --- routing content: decisions and knowledge-base routes --------------------
+# drop_decisions — remove the fixture's only decisions/ mention.
+drop_decisions() {
+  grep -v 'decisions/' "$FIX/docs/AGENT_GUIDANCE.md" >"$FIX/g.tmp"
+  mv "$FIX/g.tmp" "$FIX/docs/AGENT_GUIDANCE.md"
+}
+# write_config <yaml body> — the fixture's .nightgauge/config.yaml.
+write_config() {
+  mkdir -p "$FIX/.nightgauge"
+  printf '%s\n' "$1" >"$FIX/.nightgauge/config.yaml"
+}
+KNOWLEDGE_MSG="routing file has no knowledge-base route (.nightgauge/knowledge/)"
+valid_fixture
+drop_decisions
+expect_fail "routing file without a decisions route" \
+  "routing file has no decisions route (no decisions/ path or link): docs/AGENT_GUIDANCE.md"
+valid_fixture
+drop_decisions
+cp "$FIX/docs/AGENT_GUIDANCE.md" "$FIX/docs/ROUTES.md"
+printf -- '- [Routes](ROUTES.md)\n' >>"$FIX/docs/README.md"
+expect_fail "decisions-route failure names a custom --routing file" \
+  "routing file has no decisions route (no decisions/ path or link): docs/ROUTES.md" \
+  --routing docs/ROUTES.md
+valid_fixture
+drop_decisions
+printf '\nSee [the ADRs](decisions/README.md).\n' >>"$FIX/docs/AGENT_GUIDANCE.md"
+expect_pass "a decisions/ link is a decisions route"
+valid_fixture
+write_config 'knowledge:
+  enabled: true'
+expect_fail "knowledge enabled without a knowledge-base route" \
+  "$KNOWLEDGE_MSG though .nightgauge/config.yaml sets knowledge.enabled: true: docs/AGENT_GUIDANCE.md"
+printf '\nPer-issue decisions live under `.nightgauge/knowledge/`.\n' >>"$FIX/docs/AGENT_GUIDANCE.md"
+expect_pass "knowledge enabled with a knowledge-base route"
+valid_fixture
+write_config 'knowledge:
+  enabled: false'
+expect_pass "knowledge disabled needs no knowledge-base route"
+valid_fixture
+write_config 'pipeline:
+  enabled: true
+knowledge:
+  auto_scaffold: true
+  telemetry:
+    enabled: true
+other:
+  enabled: true'
+expect_pass "only the knowledge block own enabled: counts, not a nested or sibling one"
+valid_fixture
+write_config 'knowledge:
+  telemetry:
+    enabled: false
+  enabled: "true"   # quoted, with a comment'
+expect_fail "quoted enabled: true after a nested block is enabled" "$KNOWLEDGE_MSG"
+valid_fixture
+write_config 'knowledge: { auto_scaffold: true, enabled: true }'
+expect_fail "flow-style knowledge block with enabled: true" "$KNOWLEDGE_MSG"
+valid_fixture
+write_config '# knowledge:
+#   enabled: true
+review:
+  enabled: true'
+expect_pass "commented-out knowledge block does not apply"
+valid_fixture
+write_config 'knowledge:
+  enabled: $(touch pwned)'
+expect_pass "a command in the knowledge config is data, not true"
 
 # Link text is prose: only the destination is a path, and a whole link
 # (text, destination and title) is removed before the cell is tokenised.

@@ -47,6 +47,11 @@
 # "Defers to CLAUDE.md" is deliberately narrow: an `@CLAUDE.md` import, or a
 # sentence of the form "read|see|follow|consult [the] CLAUDE.md first|instead".
 # Mentioning CLAUDE.md as the adapter that imports AGENTS.md is fine.
+#
+# The routing file must route decisions (contain a decisions/ path or link)
+# and, when .nightgauge/config.yaml has a top-level knowledge: block whose own
+# enabled: is true, the per-issue knowledge base (mention .nightgauge/knowledge/).
+# That YAML is read as text with awk; nothing in it is evaluated.
 
 set -euo pipefail
 
@@ -388,10 +393,65 @@ esac
 # ---------------------------------------------------------------------------
 # Routing document and documentation index
 # ---------------------------------------------------------------------------
+KNOWLEDGE_CONFIG=".nightgauge/config.yaml"
+
+# knowledge_enabled: exit 0 when $KNOWLEDGE_CONFIG under --root has a top-level
+# knowledge: block whose own enabled: key is true (block or flow style). A
+# missing file or block, enabled: false, or an enabled: nested deeper (such as
+# knowledge.telemetry.enabled) does not count. Read as text, never evaluated.
+knowledge_enabled() {
+  local cfg="$ROOT/$KNOWLEDGE_CONFIG"
+  [ -f "$cfg" ] || return 1
+  LC_ALL=C awk '
+    function is_true(v) {
+      sub(/[[:space:]]+#.*$/, "", v)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+      gsub(/^["\047]|["\047]$/, "", v)
+      return tolower(v) == "true"
+    }
+    { sub(/\r$/, "") }
+    inblk {
+      if ($0 ~ /^[[:space:]]*(#|$)/) next
+      match($0, /^[[:space:]]*/)
+      if (RLENGTH == 0) { inblk = 0 }
+      else {
+        if (child == 0) child = RLENGTH
+        if (RLENGTH == child && $0 ~ /^[[:space:]]*enabled[[:space:]]*:/) {
+          v = $0
+          sub(/^[[:space:]]*enabled[[:space:]]*:/, "", v)
+          found = is_true(v)
+          exit
+        }
+        next
+      }
+    }
+    /^knowledge[[:space:]]*:/ {
+      rest = $0
+      sub(/^knowledge[[:space:]]*:[[:space:]]*/, "", rest)
+      if (rest ~ /^\{/) {
+        found = (rest ~ /[{,][[:space:]]*enabled[[:space:]]*:[[:space:]]*["\047]?[Tt][Rr][Uu][Ee]["\047]?[[:space:]]*[,}]/)
+        exit
+      }
+      inblk = 1
+      child = 0
+    }
+    END { exit found ? 0 : 1 }
+  ' "$cfg"
+}
+
 ROUTING_PATH="$ROOT/$ROUTING"
 if [ ! -f "$ROUTING_PATH" ]; then
   fail "routing file missing: $ROUTING"
 else
+  # Every routing file routes the two places an agent looks before deciding:
+  # where this repository records decisions and, when enabled, the per-issue
+  # knowledge base.
+  LC_ALL=C grep -Fq -- 'decisions/' "$ROUTING_PATH" ||
+    fail "routing file has no decisions route (no decisions/ path or link): $ROUTING"
+  if knowledge_enabled &&
+    ! LC_ALL=C grep -Fq -- '.nightgauge/knowledge/' "$ROUTING_PATH"; then
+    fail "routing file has no knowledge-base route (.nightgauge/knowledge/) though $KNOWLEDGE_CONFIG sets knowledge.enabled: true: $ROUTING"
+  fi
   if ! LC_ALL=C awk -v phrases="$ROUTING_PHRASES" '
     /^[[:space:]]*(```|~~~)/ { fence = !fence; next }
     !fence && /^#+[[:space:]]/ {

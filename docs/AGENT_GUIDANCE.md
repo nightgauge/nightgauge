@@ -101,6 +101,16 @@ its sibling `CLAUDE.md`; when any tracked instruction file (`AGENTS.md`,
 `CLAUDE.md` resolves outside the root. `scripts/test-agent-guidance-check.sh`
 proves each failure with a mutation.
 
+The routing file must also route the two places an agent consults before a
+decision:
+
+- **Decisions.** It contains a `decisions/` path or link, naming where this
+  repository records its decisions.
+- **Knowledge base.** When `.nightgauge/config.yaml` has a top-level
+  `knowledge:` block whose own `enabled:` is `true`, it mentions
+  `.nightgauge/knowledge/`. A missing file or block, or `enabled: false`, makes
+  the rule inapplicable. The YAML is read as text and never evaluated.
+
 CI runs both in `.github/workflows/agent-guidance.yml` as a job named exactly
 `agent guidance`, with no path filter, so every workspace repository reports
 the same check name and it can be required everywhere.
