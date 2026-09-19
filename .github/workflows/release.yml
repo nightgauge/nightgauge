@@ -493,3 +493,22 @@ jobs:
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: packages/nightgauge-vscode/*.vsix
+
+      # FINAL STEP. GoReleaser only PROPOSES the cask (a pull request on the
+      # tap, .goreleaser.yml), so the release is not complete until that pull
+      # request merges. Prove it was proposed, close every older cask PR as
+      # superseded so the queue cannot pile up (#1874: seven sat open), and
+      # name the one to merge. The daily release watchdog stays red until the
+      # tap's main serves this version.
+      - name: Homebrew cask proposed; close superseded cask PRs
+        env:
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -z "${HOMEBREW_TAP_GITHUB_TOKEN:-}" ]; then
+            echo "::notice::HOMEBREW_TAP_GITHUB_TOKEN not set; the cask was not proposed (see Preflight)."
+            exit 0
+          fi
+          GH_TOKEN="$HOMEBREW_TAP_GITHUB_TOKEN" bash scripts/verify-release-channels.sh \
+            --channel homebrew --release --version "$VERSION" --close-superseded

@@ -850,6 +850,10 @@ main ──●──●──●──●──●──
 7. Push the tag: `git push origin v0.2.0`
 8. `release.yml` runs → builds, creates the GitHub Release with attested
    assets, opens the Homebrew cask PR (gated by the `production` environment)
+   and closes older cask PRs as superseded. **Merge the cask PR** after
+   checking its sha256s against the release's `checksums.txt`: until it
+   merges, `brew` serves the previous version and `release-watchdog.yml` is
+   red (`scripts/verify-release-channels.sh`)
 9. `gh workflow run marketplace-publish.yml --ref v0.4.0 -f registries=both`
    → publishes the per-target VSIXs to the VS Code Marketplace and Open VSX
    (even 0.x minor lines are stable; odd 0.x minor lines are pre-release)
