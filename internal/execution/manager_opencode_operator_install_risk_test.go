@@ -290,11 +290,18 @@ exit 7
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	withShortOperatorInstallWaitBound(t, 3*time.Second)
+	// Bound and budget are a load-tolerant pair. Under the ci-local.sh
+	// 4-way load, spawning the fake and tearing its group down has been
+	// observed at ~3s all by itself, so a budget that sits near the bound
+	// makes the assertion a scheduler lottery (#1836). At a 10s bound the
+	// regression path — watchdog waits out the FULL bound, ~10s — stays far
+	// above the 5s budget, while the healthy path stays far below it even
+	// loaded. The marker-text check below remains the load-invariant half.
+	withShortOperatorInstallWaitBound(t, 10*time.Second)
 
 	workspace := openCodeWorkspace(t)
 	m := NewManager(workspace, adapters.NewOpenCodeAdapter())
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 
 	started := time.Now()
@@ -305,7 +312,7 @@ exit 7
 	})
 	elapsed := time.Since(started)
 
-	if elapsed > 2*time.Second {
+	if elapsed > 5*time.Second {
 		t.Fatalf("RunStage took %s; a process that exits immediately must not wait out any part of the watchdog bound", elapsed)
 	}
 	combined := stderr
