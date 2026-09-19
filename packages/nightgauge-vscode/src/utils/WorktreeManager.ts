@@ -13,6 +13,7 @@ import { exec, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import * as fs from "node:fs/promises";
 import { assertValidBranchName } from "./BranchNameValidator";
+import { writeLocalExcludeBlock } from "./localGitExclude";
 
 const execAsync = promisify(exec);
 // #2884: avoid sync subprocess — blocks the VSCode extension host event loop.
@@ -928,28 +929,25 @@ export class WorktreeManager {
   }
 
   /**
-   * Ensure .worktrees is in .gitignore
+   * Ensure the worktree base is ignored — per machine, never by editing the
+   * tracked root .gitignore (#1875). Appending to it left the operator's
+   * primary clone dirty on `main` with a change nothing committed. The rule
+   * goes to the repository's info/exclude, which every worktree shares.
    */
   private async ensureGitignore(): Promise<void> {
-    const gitignorePath = path.join(this.repoRoot, ".gitignore");
-    const pattern = this.worktreeBase;
-
+    const base = this.worktreeBase.replace(/^\/+|\/+$/g, "");
     try {
-      const content = await fs.readFile(gitignorePath, "utf-8");
-      if (content.includes(pattern)) return;
-
-      // Append to .gitignore
-      const newContent = content.endsWith("\n")
-        ? `${content}${pattern}\n`
-        : `${content}\n${pattern}\n`;
-      await fs.writeFile(gitignorePath, newContent, "utf-8");
-    } catch {
-      // .gitignore may not exist — create it
-      try {
-        await fs.writeFile(gitignorePath, `${pattern}\n`, "utf-8");
-      } catch {
-        // Non-fatal
+      const content = await fs.readFile(path.join(this.repoRoot, ".gitignore"), "utf-8");
+      if (content.split("\n").some((l) => l.trim().replace(/^\/|\/$/g, "") === base)) {
+        return;
       }
+    } catch {
+      // No root .gitignore.
+    }
+    try {
+      await writeLocalExcludeBlock(this.repoRoot, "worktrees", [`/${base}/`]);
+    } catch {
+      // Non-fatal
     }
   }
 }

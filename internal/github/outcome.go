@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -658,10 +659,76 @@ func (s *OutcomeService) ensureLocalModelGitignore() error {
 	if missing == "" {
 		return nil
 	}
+	// A committed .gitignore is the repository's, not this machine's: editing it
+	// leaves the primary clone dirty on main with a change nothing commits, and a
+	// staged copy of it blocks `git pull --ff-only` (#1875). The rules this
+	// process needs are per-machine, so they go to the repository's
+	// info/exclude, which git reads the same way and never tracks. The
+	// committed file catches up when the repository adopts the current
+	// template through a pull request.
+	if handled, err := excludeLocallyIfTracked(filepath.Dir(ignorePath), missing); handled || err != nil {
+		return err
+	}
 	if len(content) > 0 && content[len(content)-1] != '\n' {
 		content += "\n"
 	}
 	return atomicfile.Write(ignorePath, []byte(content+missing), info.Mode().Perm())
+}
+
+// excludeLocallyIfTracked writes the directory-relative ignore patterns in
+// missing (one per line, each starting with "/") to the repository's
+// info/exclude when dir/.gitignore is tracked. It reports handled=false,
+// leaving the caller to edit the file, when dir is not in a git work tree or
+// its .gitignore is untracked (no committed state to dirty).
+func excludeLocallyIfTracked(dir, missing string) (bool, error) {
+	tracked := exec.Command("git", "ls-files", "--error-unmatch", "--", ".gitignore")
+	tracked.Dir = dir
+	tracked.Stdout, tracked.Stderr = io.Discard, io.Discard
+	if tracked.Run() != nil {
+		return false, nil
+	}
+	rev := exec.Command("git", "rev-parse", "--path-format=absolute", "--git-common-dir", "--show-prefix")
+	rev.Dir = dir
+	out, err := rev.Output()
+	if err != nil {
+		return false, nil
+	}
+	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	if len(lines) < 1 || lines[0] == "" {
+		return false, nil
+	}
+	commonDir := lines[0]
+	prefix := ""
+	if len(lines) > 1 {
+		prefix = strings.TrimSuffix(lines[1], "/")
+	}
+	excludePath := filepath.Join(commonDir, "info", "exclude")
+	existing, err := os.ReadFile(excludePath)
+	if err != nil && !os.IsNotExist(err) {
+		return true, fmt.Errorf("read %s: %w", excludePath, err)
+	}
+	content := string(existing)
+	add := ""
+	for _, pattern := range strings.Split(strings.TrimSpace(missing), "\n") {
+		rooted := "/" + strings.TrimPrefix(pattern, "/")
+		if prefix != "" {
+			rooted = "/" + prefix + rooted
+		}
+		if !containsLine(content, rooted) {
+			add += rooted + "\n"
+		}
+	}
+	if add == "" {
+		return true, nil
+	}
+	if len(content) > 0 && content[len(content)-1] != '\n' {
+		content += "\n"
+	}
+	if err := os.MkdirAll(filepath.Dir(excludePath), 0o755); err != nil {
+		return true, fmt.Errorf("create %s: %w", filepath.Dir(excludePath), err)
+	}
+	content += "# nightgauge: per-machine runtime state (the committed .gitignore predates it, #1875)\n" + add
+	return true, atomicfile.Write(excludePath, []byte(content), 0o644)
 }
 
 func containsLine(content, expected string) bool {

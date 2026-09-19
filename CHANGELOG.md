@@ -16,6 +16,17 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The extension and CLI no longer leave a repository's primary clone dirty
+  (#1875). An older committed `.nightgauge/.gitignore` is no longer replaced on
+  activation, which also discarded the repository's own rules; its newer rules
+  apply on your machine through `.git/info/exclude`, and the committed file is
+  upgraded by pull request. Creating a pipeline worktree no longer appends
+  `.worktrees` to the root `.gitignore`, `.gitkeep` files are written only when
+  `.nightgauge/` is first scaffolded, and `nightgauge outcome` no longer
+  appends to a committed `.nightgauge/.gitignore`. The template (version 13)
+  ends with a `Local additions` section that upgrades keep, which is where a
+  repository that commits its knowledge tree un-ignores `/knowledge/`.
+
 - OpenCode edit hooks no longer discard valid warnings when Node reports `EPIPE`
   alongside a successful child-process status.
 

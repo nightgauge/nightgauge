@@ -6,7 +6,7 @@
 #   config.yaml           — repository-wide pipeline configuration
 #   .gitignore            — this file
 #   */.gitkeep            — preserve directory structure
-# nightgauge-gitignore-version: 12
+# nightgauge-gitignore-version: 13
 
 # ─── Pipeline context, state, and execution data ─────────────────────
 pipeline/*
@@ -122,3 +122,7 @@ pipeline/queue-state.json
 # and no producer for these files existed at all until #753.
 /release-watch/
 /improvement-runs/
+
+# ─── Local additions (kept on upgrade) ──────────────────────────────
+# Rules below this line are this repository's own (for example, un-ignoring
+# /knowledge/ to commit the knowledge tree). Template upgrades keep them.

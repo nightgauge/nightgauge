@@ -28,8 +28,11 @@ done
 
 Create `.nightgauge/.gitignore` to prevent pipeline artifacts from
 polluting `git status`. If the file already exists and contains
-`nightgauge-gitignore-version:`, skip this step (the extension manages it
-automatically). Otherwise, write the full file:
+`nightgauge-gitignore-version:`, skip this step: a committed file is never
+rewritten in place (the extension applies newer rules per machine through
+`.git/info/exclude`), and upgrading it to the version below is a pull request
+that replaces everything above the `Local additions` line and keeps what is
+below it. Otherwise, write the full file:
 
 ```gitignore
 # Nightgauge Pipeline — Generated Artifacts
@@ -40,7 +43,7 @@ automatically). Otherwise, write the full file:
 #   config.yaml           — repository-wide pipeline configuration
 #   .gitignore            — this file
 #   */.gitkeep            — preserve directory structure
-# nightgauge-gitignore-version: 12
+# nightgauge-gitignore-version: 13
 
 # ─── Pipeline context, state, and execution data ─────────────────────
 pipeline/*
@@ -156,6 +159,10 @@ pipeline/queue-state.json
 # and no producer for these files existed at all until #753.
 /release-watch/
 /improvement-runs/
+
+# ─── Local additions (kept on upgrade) ──────────────────────────────
+# Rules below this line are this repository's own (for example, un-ignoring
+# /knowledge/ to commit the knowledge tree). Template upgrades keep them.
 ```
 
 **Note:** The extension automatically creates and updates this file on
