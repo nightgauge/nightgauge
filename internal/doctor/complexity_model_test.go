@@ -57,10 +57,11 @@ func TestCheckComplexityModel_InvalidFileUsesSupportedRepairGuidance(t *testing.
 	}
 }
 
-// TestCheckComplexityModel_V03xFixtureIsHealthy reproduces #1911: a v0.3.x
-// model file (no lines_changed_thresholds block, introduced in #1592/v0.4.0)
-// must be reported healthy — the missing block is backfilled from bootstrap
-// defaults on decode, not treated as a validation failure.
+// TestCheckComplexityModel_V03xFixtureIsHealthy reproduces #1911/#1918: a
+// genuine v0.3.x model file — no lines_changed_thresholds (#1592/v0.4.0), no
+// learnings, no critical_files — must be reported healthy. Every absent
+// additive section is backfilled from bootstrap defaults on decode in one
+// pass, not treated as a validation failure.
 func TestCheckComplexityModel_V03xFixtureIsHealthy(t *testing.T) {
 	fixture, err := os.ReadFile(filepath.Join("..", "..", "tests", "fixtures", "complexity-model-v0.3.x.yaml"))
 	if err != nil {
