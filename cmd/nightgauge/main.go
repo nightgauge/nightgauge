@@ -7058,8 +7058,15 @@ func prRulesetPrecheckCmd() *cobra.Command {
 				requiredChecks = union
 			}
 			var mismatches []cipkg.RequiredCheckConfigMismatch
+			var silentSkipRisks []cipkg.SilentSkipRisk
 			if workdir, wdErr := os.Getwd(); wdErr == nil {
 				mismatches = cipkg.DetectRequiredCheckConfigMismatches(workdir, requiredChecks)
+				// Forward-looking net (#1817): flags the same bare-`if:`-after-a-
+				// conditional-step anti-pattern across every job in every workflow,
+				// not just the one this issue's evidence came from. Never a merge
+				// blocker — a warning surfaces the latent risk without holding this
+				// PR's own merge hostage to auditing jobs it did not touch.
+				silentSkipRisks = cipkg.DetectSilentSkipRisk(workdir)
 			}
 			if len(mismatches) > 0 {
 				prSvc := gh.NewPRService(client)
@@ -7085,7 +7092,8 @@ func prRulesetPrecheckCmd() *cobra.Command {
 				return printJSON(struct {
 					*gh.RulesetCheckResult
 					ConfigMismatches []cipkg.RequiredCheckConfigMismatch `json:"config_mismatches,omitempty"`
-				}{result, mismatches})
+					SilentSkipRisks  []cipkg.SilentSkipRisk              `json:"silent_skip_risks,omitempty"`
+				}{result, mismatches, silentSkipRisks})
 			}
 
 			fmt.Printf("Branch ruleset pre-check for PR #%d (base: %s)\n", prNumber, result.BaseRef)
@@ -7098,6 +7106,9 @@ func prRulesetPrecheckCmd() *cobra.Command {
 				} else {
 					fmt.Printf("Config hazard: %s\n", m.Remediation)
 				}
+			}
+			for _, r := range silentSkipRisks {
+				fmt.Printf("Config hazard: %s (%s, job %q, step %q)\n", r.Remediation, r.WorkflowPath, r.JobKey, r.StepName)
 			}
 			if len(result.DetectedRules) == 0 {
 				fmt.Println("No blocking rulesets detected — safe to merge.")

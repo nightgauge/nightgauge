@@ -133,13 +133,16 @@ jobs:
       - name: Platform operation registry in sync
         run: make check-platform-operations
       - name: Build
-        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
+        id: build
+        if: ${{ !cancelled() && needs.changes.outputs.run_heavy != 'false' }}
         run: go build ./...
       - name: Vet
-        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
+        id: vet
+        if: ${{ !cancelled() && needs.changes.outputs.run_heavy != 'false' }}
         run: go vet ./...
       - name: Gofmt
-        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
+        id: gofmt
+        if: ${{ !cancelled() && needs.changes.outputs.run_heavy != 'false' }}
         run: |
           UNFORMATTED="$(gofmt -l ./internal ./cmd)"
           if [ -n "$UNFORMATTED" ]; then
@@ -215,7 +218,8 @@ jobs:
       # `if: always()` so the three capture files survive even a cancellation
       # the shell never gets to handle.
       - name: Test (plain and race, concurrently)
-        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
+        id: test
+        if: ${{ !cancelled() && needs.changes.outputs.run_heavy != 'false' }}
         run: |
           timeout 25m go test -json ./... -count=1 > go-test.json 2> go-test.err &
           plain=$!
@@ -255,7 +259,8 @@ jobs:
       # binary fails every test rather than skipping it, and -v lists every
       # test that ran.
       - name: OpenCode integration (opencode-ai@1.18.30)
-        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
+        id: opencode
+        if: ${{ !cancelled() && needs.changes.outputs.run_heavy != 'false' }}
         run: |
           prefix="$RUNNER_TEMP/opencode-cli"
           npm install --prefix "$prefix" --no-fund --no-audit opencode-ai@1.18.30
@@ -285,8 +290,58 @@ jobs:
       # own ancestry-acceptance door (#593). No npm/node needed, so it runs
       # here rather than in lint.yml.
       - name: branch-merged-check.sh regression suite
-        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
+        id: branch_merged_check
+        if: ${{ !cancelled() && needs.changes.outputs.run_heavy != 'false' }}
         run: bash scripts/test-branch-merged-check.sh
+      # Makes a legitimate fast-path skip and a required step actually silently
+      # skipping distinguishable from the job's own Summary tab, not just from
+      # reading this YAML (#1817 AC3). `if: always()` so it still runs — and
+      # reports — even when one of the six steps above failed.
+      - name: Verify required steps did not silently skip
+        if: always()
+        env:
+          RUN_HEAVY: ${{ needs.changes.outputs.run_heavy }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          VET_OUTCOME: ${{ steps.vet.outcome }}
+          GOFMT_OUTCOME: ${{ steps.gofmt.outcome }}
+          TEST_OUTCOME: ${{ steps.test.outcome }}
+          OPENCODE_OUTCOME: ${{ steps.opencode.outcome }}
+          BRANCH_MERGED_CHECK_OUTCOME: ${{ steps.branch_merged_check.outcome }}
+        run: |
+          {
+            if [ "$RUN_HEAVY" = "false" ]; then
+              echo "### Verification: fast path"
+              echo "run_heavy=false — the six steps below are expected to be skipped."
+            else
+              echo "### Verification: full path"
+              echo "run_heavy=$RUN_HEAVY — the six steps below are required to run."
+            fi
+            echo
+            echo "| Step | Outcome |"
+            echo "| --- | --- |"
+            echo "| Build | $BUILD_OUTCOME |"
+            echo "| Vet | $VET_OUTCOME |"
+            echo "| Gofmt | $GOFMT_OUTCOME |"
+            echo "| Test (plain and race, concurrently) | $TEST_OUTCOME |"
+            echo "| OpenCode integration | $OPENCODE_OUTCOME |"
+            echo "| branch-merged-check.sh regression suite | $BRANCH_MERGED_CHECK_OUTCOME |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$RUN_HEAVY" != "false" ]; then
+            fail=0
+            for pair in "Build:$BUILD_OUTCOME" "Vet:$VET_OUTCOME" "Gofmt:$GOFMT_OUTCOME" \
+              "Test (plain and race, concurrently):$TEST_OUTCOME" \
+              "OpenCode integration:$OPENCODE_OUTCOME" \
+              "branch-merged-check.sh regression suite:$BRANCH_MERGED_CHECK_OUTCOME"; do
+              name="${pair%%:*}"
+              outcome="${pair##*:}"
+              if [ "$outcome" = "skipped" ]; then
+                echo "::error::required step '$name' was silently skipped on the full path (run_heavy=$RUN_HEAVY)"
+                fail=1
+              fi
+            done
+            [ "$fail" -eq 0 ]
+          fi
 
   # The Node suite (~15.5k tests) is split into two parallel jobs so it fits the
   # window on 2-core runners. `npm ci` needs no registry auth: the tree vendors

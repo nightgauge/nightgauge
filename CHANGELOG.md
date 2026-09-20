@@ -24,6 +24,20 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- CI's `go` job no longer silently skips required verification steps —
+  including the OpenCode integration regression test — when an earlier step
+  in the same job fails (#1817). The Build, Vet, Gofmt, Test, OpenCode
+  integration, and `branch-merged-check.sh` regression steps now carry
+  `!cancelled()` in their `if:` conditions, matching the job-level convention
+  already used elsewhere in this file, so a failure earlier in the job lets
+  them run — and fail — instead of reporting no verdict at all. A new
+  "Verify required steps did not silently skip" step publishes a labeled
+  fast-path/full-path summary to the job's Summary tab and fails the job if a
+  required step is unexpectedly skipped. A new deterministic detector,
+  `internal/ci.DetectSilentSkipRisk`, flags this same anti-pattern across
+  every job in every workflow file and is wired into the pre-merge ruleset
+  check as a non-blocking warning.
+
 - The extension and CLI no longer leave a repository's primary clone dirty
   (#1875). An older committed `.nightgauge/.gitignore` is no longer replaced on
   activation, which also discarded the repository's own rules; its newer rules
