@@ -70,6 +70,20 @@ assert_not_contains() {
 out="$(assert_exit "clean.trace passes" 0 "$CHECK" check-trace "$TESTDATA/clean.trace")"
 assert_contains "clean.trace prints the zero-attempts line" "$out" "non-loopback attempts: 0"
 
+# --- netlink-and-ipv6-fallback.trace: exit 0, no false positives -----------
+# Reproduces the real CI trace format from #1644's first run: AF_NETLINK
+# interface enumeration (RTM_GETLINK/RTM_GETADDR — never leaves the host)
+# and a dual-stack bind that fails on ::1 (EADDRNOTAVAIL inside a namespace
+# with no IPv6 loopback configured) and falls back to ::ffff:127.0.0.1.
+# strace renders an IPv6 address as the inet_pton() call that reconstructs
+# it, with no "sin6_addr=" prefix — unlike this suite's other IPv6 fixture
+# lines, which predate seeing a real trace and never matched the parser's
+# old regex at all, silently fail-closing every IPv6 destination.
+
+out="$(assert_exit "netlink-and-ipv6-fallback.trace passes" 0 \
+  "$CHECK" check-trace "$TESTDATA/netlink-and-ipv6-fallback.trace")"
+assert_contains "netlink-and-ipv6-fallback.trace prints the zero-attempts line" "$out" "non-loopback attempts: 0"
+
 # --- leaked-connect.trace: exit 1, names the PID and executable ------------
 
 out="$(assert_exit "leaked-connect.trace fails" 1 "$CHECK" check-trace "$TESTDATA/leaked-connect.trace")"

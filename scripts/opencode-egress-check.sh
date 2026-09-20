@@ -19,8 +19,8 @@
 #   check-trace <trace-log-path> [allowed-endpoint ...]
 #     The deterministic parser: no namespace, no root, no live binaries.
 #     Parses connect/sendto/sendmsg/bind/listen lines from a strace -f
-#     -e trace=connect,sendto,sendmsg,bind,listen log. AF_UNIX, 127.0.0.0/8
-#     and ::1 destinations are always allowed; each allowed-endpoint
+#     -e trace=connect,sendto,sendmsg,bind,listen log. AF_UNIX, AF_NETLINK,
+#     127.0.0.0/8 and ::1 destinations are always allowed; each allowed-endpoint
 #     argument (an exact "host:port" literal, e.g. "192.0.2.20:8080") is an
 #     additional allowed destination for this call only — CI's own
 #     invocation passes none, so CI stays loopback-only. Prints
@@ -59,8 +59,8 @@ cmd_check_trace() {
 #
 # Reads a strace -f -e trace=connect,sendto,sendmsg,bind,listen log and
 # asserts every connect/sendto/sendmsg/bind destination, and every listen()'s
-# own already-bound address, is AF_UNIX, 127.0.0.0/8, ::1, or one of the
-# allowed-endpoint arguments (exact "host:port" literals). Never resolves a
+# own already-bound address, is AF_UNIX, AF_NETLINK, 127.0.0.0/8, ::1, or one
+# of the allowed-endpoint arguments (exact "host:port" literals). Never resolves a
 # DNS name: a sendto to a resolver is itself the finding, not something to
 # look up and excuse.
 #
@@ -81,19 +81,39 @@ SYSCALL_RE = re.compile(r"^(\d+)\s+(connect|sendto|sendmsg|bind|listen)\((\d+)")
 EXECVE_RE = re.compile(r'^(\d+)\s+execve\("([^"]+)"')
 CLONE_RE = re.compile(r"^(\d+)\s+(clone|clone3|fork|vfork)\(.*=\s*(-?\d+)\s*$")
 ADDR4_RE = re.compile(r'sin_addr=inet_addr\("([^"]+)"\)')
-ADDR6_RE = re.compile(r'sin6_addr=inet_pton\([^,]*,\s*"([^"]+)"\)')
+# strace renders a sockaddr_in6's address as the inet_pton() call that would
+# reconstruct it — literally `inet_pton(AF_INET6, "::1", &sin6_addr)` — not
+# as "sin6_addr=<value>"; a `sin6_addr=inet_pton(...)` prefix never appears
+# in real output, so requiring it here always failed to match, sending every
+# IPv6 destination (::1 loopback included) to the fail-closed "unknown"
+# branch below.
+ADDR6_RE = re.compile(r'inet_pton\([^,]*,\s*"([^"]+)"')
 PORT_RE = re.compile(r"sin_?port6?=htons\((\d+)\)")
 
 
 def is_loopback(addr):
     try:
-        return ipaddress.ip_address(addr).is_loopback
+        ip = ipaddress.ip_address(addr)
     except ValueError:
         return False
+    if ip.is_loopback:
+        return True
+    # ipaddress.IPv6Address.is_loopback only matches the literal ::1: an
+    # IPv4-mapped loopback (::ffff:127.0.0.1 — what a dual-stack bind falls
+    # back to after ::1 fails inside a namespace with no IPv6 loopback
+    # configured) does not set it, even though it is 127.0.0.1 on the wire.
+    mapped = getattr(ip, "ipv4_mapped", None)
+    return mapped is not None and mapped.is_loopback
 
 
 def destination(line):
-    if "AF_UNIX" in line:
+    if "AF_UNIX" in line or "AF_NETLINK" in line:
+        # AF_NETLINK is the kernel/userspace interface-configuration
+        # protocol (RTM_GETLINK, RTM_GETADDR, ...): it never leaves the
+        # host, so it is not a network destination to fail closed on, same
+        # as AF_UNIX above. Node/Go's own network-interface enumeration
+        # (os.networkInterfaces(), net.Interfaces()) routinely opens one of
+        # these on startup, with no attacker-observable effect off-box.
         return None
     m4 = ADDR4_RE.search(line)
     m6 = ADDR6_RE.search(line)
