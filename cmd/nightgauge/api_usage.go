@@ -21,18 +21,18 @@ import (
 // matters because the whole point of the ledger is comparing a window from
 // before a change against one from after it.
 type apiUsageRecord struct {
-	TS         string `json:"ts"`
-	Kind       string `json:"kind"`
-	Method     string `json:"method"`
-	Path       string `json:"path"`
-	Op         string `json:"op"`
-	Caller     string `json:"caller"`
-	Status     int    `json:"status"`
-	Cost        int   `json:"cost"`
-	SincePrevMs int64 `json:"since_prev_ms"`
-	Remaining  int    `json:"remaining"`
-	Cached     bool   `json:"cached"`
-	DurationMs int64  `json:"duration_ms"`
+	TS          string `json:"ts"`
+	Kind        string `json:"kind"`
+	Method      string `json:"method"`
+	Path        string `json:"path"`
+	Op          string `json:"op"`
+	Caller      string `json:"caller"`
+	Status      int    `json:"status"`
+	Cost        int    `json:"cost"`
+	SincePrevMs int64  `json:"since_prev_ms"`
+	Remaining   int    `json:"remaining"`
+	Cached      bool   `json:"cached"`
+	DurationMs  int64  `json:"duration_ms"`
 }
 
 // apiUsageGroup is one row of the report: a caller, operation, or resource
@@ -117,7 +117,7 @@ the ledger off; set it to a path to write somewhere other than the default
 					// per-caller bill. See attributable().
 					"unattributed_points": unattributed,
 					"by":                  byWhat,
-					"groups":  groups,
+					"groups":              groups,
 				}
 				if resource != "" {
 					// Named in the payload so a consumer cannot mistake a

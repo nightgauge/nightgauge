@@ -6,7 +6,13 @@ matches **before doing any work**:
 
 ```bash
 if [ -n "$NIGHTGAUGE_TARGET_REPO" ]; then
-  ACTUAL_REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)
+  # Derive this checkout's identity from its own git remote. The question
+  # is "which repository is this working directory?", and the remote answers
+  # it exactly — locally, with no API call. This used to shell out to the
+  # GitHub CLI for the same string, spending a request per stage on every
+  # repo in the workspace, invisible to `nightgauge api-usage`.
+  ACTUAL_REPO=$(git remote get-url origin 2>/dev/null \
+    | sed -E 's#^git@[^:]+:#-#; s#^https?://[^/]+/#-#; s#^-##; s#\.git$##')
   if [ -n "$ACTUAL_REPO" ] && [ "$ACTUAL_REPO" != "$NIGHTGAUGE_TARGET_REPO" ]; then
     echo "[repo-mismatch] FATAL: repository identity assertion failed"
     echo "  Expected: $NIGHTGAUGE_TARGET_REPO"

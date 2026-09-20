@@ -78,7 +78,7 @@ type APILedgerRecord struct {
 	// first call on a resource (no baseline) and for a 304 served from cache
 	// (which never left the machine). Negative drops mean the window reset
 	// between calls and are reported as 0 rather than as a bogus refund.
-	Cost      int   `json:"cost"`
+	Cost int `json:"cost"`
 	// SincePrevMs is the wall time between this process's previous priced
 	// call on the same resource and this one. It is the honest qualifier on
 	// Cost.
@@ -97,7 +97,7 @@ type APILedgerRecord struct {
 	// prior observation (first priced call in this process).
 	SincePrevMs int64 `json:"since_prev_ms,omitempty"`
 	Remaining   int   `json:"remaining"`
-	Reset     int64 `json:"reset,omitempty"`
+	Reset       int64 `json:"reset,omitempty"`
 	// HeaderObserved is true exactly when this request's response carried a
 	// parseable X-RateLimit-Remaining header — independent of Cost and
 	// Cached. A cached (304) hit legitimately costs 0 points (Cost is the
@@ -120,10 +120,10 @@ type APILedgerRecord struct {
 // apiLedger appends request records to a rolling JSONL file. A nil *apiLedger
 // is a no-op, so the disabled path costs one nil check per request.
 type apiLedger struct {
-	mu   sync.Mutex
-	path string
-	f    *os.File
-	enc  *json.Encoder
+	mu     sync.Mutex
+	path   string
+	f      *os.File
+	enc    *json.Encoder
 	prev   map[string]int       // resource -> last observed Remaining
 	prevAt map[string]time.Time // resource -> when that Remaining was observed
 }
