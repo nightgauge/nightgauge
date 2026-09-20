@@ -37,6 +37,19 @@ changelog, and the release workflow refuses a tag that does not.
   `internal/ci.DetectSilentSkipRisk`, flags this same anti-pattern across
   every job in every workflow file and is wired into the pre-merge ruleset
   check as a non-blocking warning.
+- The Go/CLI execution path now completes phases correctly for
+  `feature-planning`, `feature-dev` and `feature-validate` (#1885). A phase
+  start now settles the stage's previously active phase `complete`, matching
+  the extension/IPC path's `phaseTracker.ts` semantics; a successful stage
+  boundary settles the last active phase `complete` (not `abandoned`) and
+  back-fills every phase name the stage never reported as `unreported`, so
+  the denominator is the registry total; `abandoned` is now reserved for an
+  abnormal stage boundary (non-zero exit). Previously every Go-path stage
+  boundary rewrote every still-running phase to `abandoned` regardless of
+  outcome, and the completion path used for a CLI-reported native cost
+  (`CompleteStageWithCost`, the common case for agentic stages) never
+  settled a stray running phase at all — so a successful run could render
+  `0/N phases · N abandoned`.
 
 - The extension and CLI no longer leave a repository's primary clone dirty
   (#1875). An older committed `.nightgauge/.gitignore` is no longer replaced on

@@ -502,9 +502,12 @@ func TestSetStageError(t *testing.T) {
 func TestPersistAndLoad(t *testing.T) {
 	dir := t.TempDir()
 	rs := NewRuntimeState("nightgauge/nightgauge", 1899, "item-1", testRunID())
-	rs.BeginStage(StageFeatureDev)
+	// StagePRCreate has no PhaseRegistry entry (#1885): a deterministic stage
+	// so this round-trip test's phase count is not perturbed by the
+	// registry back-fill exercised elsewhere (phase_settle_parity_test.go).
+	rs.BeginStage(StagePRCreate)
 	rs.CompleteStage(0, tokens.TokenCounts{Input: 500, Output: 200}, "", "")
-	rs.BeginPhase(StageFeatureDev, "implementation", 3, 14)
+	rs.BeginPhase(StagePRCreate, "implementation", 3, 14)
 	rs.SetStageError(StageFeaturePlanning, "timeout")
 
 	if err := rs.Persist(dir); err != nil {

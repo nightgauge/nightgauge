@@ -45,12 +45,18 @@ func TestBuildV2Record_CarriesPhaseRecordsIntoTheDurableRecord(t *testing.T) {
 	if !ok {
 		t.Fatalf("no stage detail for feature-planning; stages = %v", rec.Stages)
 	}
-	if len(detail.Phases) != 4 {
-		t.Fatalf("durable record carries %d phase(s), want 4 — phase telemetry is being discarded", len(detail.Phases))
+	// A successful completion now back-fills every PhaseRegistry name the
+	// stage never reported as `unreported` (#1885 AC4), so the 4 explicit
+	// records above grow to the registry's full 14 — the denominator this
+	// issue fixes is the registry total, not however many records happened
+	// to exist before the stage boundary.
+	if len(detail.Phases) != len(PhaseRegistry[StageFeaturePlanning]) {
+		t.Fatalf("durable record carries %d phase(s), want %d (registry total) — phase telemetry is being discarded",
+			len(detail.Phases), len(PhaseRegistry[StageFeaturePlanning]))
 	}
 
 	// Sorted by registry index, not arrival order.
-	wantOrder := []int{1, 6, 7, 13}
+	wantOrder := []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13}
 	for i, want := range wantOrder {
 		if detail.Phases[i].Index != want {
 			t.Errorf("phase[%d].Index = %d, want %d (records must be ordered by registry index)", i, detail.Phases[i].Index, want)
@@ -70,6 +76,11 @@ func TestBuildV2Record_CarriesPhaseRecordsIntoTheDurableRecord(t *testing.T) {
 	if got := byName["self-assessment"].Status; got != "abandoned" {
 		t.Errorf("abandoned phase recorded as %q, want \"abandoned\"", got)
 	}
+	// A registry phase the stage never mentioned at all back-fills
+	// `unreported` (#1885 AC4) — never absorbed into "skipped".
+	if got := byName["ac-reconcile"].Status; got != "unreported" {
+		t.Errorf("never-reported phase recorded as %q, want \"unreported\"", got)
+	}
 	if byName["load-context"].DurationMs != 30_000 {
 		t.Errorf("completed phase duration = %dms, want 30000", byName["load-context"].DurationMs)
 	}
@@ -84,12 +95,17 @@ func TestBuildV2Record_CarriesPhaseRecordsIntoTheDurableRecord(t *testing.T) {
 func TestBuildV2Record_OmitsPhasesWhenThereAreNone(t *testing.T) {
 	hw := NewHistoryWriter(t.TempDir())
 	rs := NewRuntimeState("nightgauge/nightgauge", 1055, "item-nophases", testRunID())
-	rs.BeginStage(StageFeatureDev)
+	// StagePRCreate has no PhaseRegistry entry (#1885), so its successful
+	// completion runs no back-fill and this stays the true "no phases at all"
+	// case the test name promises. A registry stage (e.g. StageFeatureDev)
+	// now legitimately back-fills its full phase list as `unreported` on
+	// success (AC4) — see TestBuildV2Record_CarriesPhaseRecordsIntoTheDurableRecord.
+	rs.BeginStage(StagePRCreate)
 	rs.CompleteStage(0, tokens.TokenCounts{Input: 1, Output: 1}, "", "")
 
 	rec := hw.BuildV2Record(rs, true, "", V2RunInput{Title: "no phases", Branch: "feat/1055"}, time.Now())
 
-	raw, err := json.Marshal(rec.Stages[string(StageFeatureDev)])
+	raw, err := json.Marshal(rec.Stages[string(StagePRCreate)])
 	if err != nil {
 		t.Fatalf("marshal stage detail: %v", err)
 	}
