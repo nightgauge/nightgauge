@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- `docs/ADAPTER_MATRIX.md`'s OpenCode egress section records the CI run that
+  proves it: run 35514658308, 2026-09-20, `non-loopback attempts: 0`. The
+  field had been left as `PENDING` by #1644's own PR even though the run
+  executed and passed on that PR's head, so the issue's Verification section
+  was unmet on `main`. Found by independent verification, not by CI.
+
 - `scripts/check-agent-guidance.sh` now fails when the routing file has no
   `decisions/` route, and, when `.nightgauge/config.yaml` sets
   `knowledge.enabled: true`, when it does not mention `.nightgauge/knowledge/`.

@@ -161,11 +161,16 @@ XAI_API_KEY values) to prove isolation strips them before spawn.
 
 - **opencode version (pinned max_tested):** 1.18.30
   (`internal/adaptercompat/manifests/opencode.json`)
-- **CI run:** PENDING. `gh workflow run opencode-egress.yml` has not yet
-  executed against this PR; the job triggers on `workflow_dispatch` and on a
-  `pull_request` whose diff touches the paths the workflow filters on. Fill
-  in the run URL, date and outcome ("non-loopback attempts: N") here once it
-  has, per this issue's own Verification section.
+- **CI run:** PASS, 2026-09-20 —
+  https://github.com/nightgauge/nightgauge/actions/runs/35514658308
+  (job "Linux network-namespace egress check", conclusion `success`).
+  Outcome: **non-loopback attempts: 0**. The job log records
+  `opencode-egress-check.sh: inside the network namespace (only lo is up)`,
+  and the uploaded `opencode-egress-1.18.30` artifact's `summary.json` reads
+  `{"result": "pass", "non_loopback_attempts": 0, "opencode_version":
+"1.18.30"}`. This is the run on PR #1896's head that became merge commit
+  `070e186f`; GitHub does not re-run checks against a squash-merge SHA, so no
+  check run is attached to `070e186f` itself.
 - **Local verification performed ahead of that run** (this issue's own Test
   Plan, items 1 and 4 — the namespace/strace leg itself is Linux-only and
   cannot be reproduced on this platform):
