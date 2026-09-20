@@ -21,6 +21,13 @@ changelog, and the release workflow refuses a tag that does not.
   `knowledge.enabled: true`, when it does not mention `.nightgauge/knowledge/`.
   Every repository passed the check while four routing files lacked one of the
   two. Smart Setup's routing template emits both routes.
+- A Linux network-namespace + `strace` CI job
+  (`.github/workflows/opencode-egress.yml`,
+  `scripts/opencode-egress-check.sh`) verifies zero non-loopback egress for a
+  real OpenCode dispatch against a local-provider stub, plus a macOS
+  `sandbox-exec` recipe (`scripts/opencode-egress-macos.sb`) for an operator
+  to repeat the same check against a real local model server (#1644). The
+  result is recorded in `docs/ADAPTER_MATRIX.md`.
 
 ### Fixed
 
