@@ -1,0 +1,4 @@
+200 execve("/usr/bin/opencode", ["opencode", "run"], 0x7ffe12340000 /* 40 vars */) = 0
+200 connect(3, {sa_family=AF_INET, sin_port=htons(41231), sin_addr=inet_addr("127.0.0.1")}, 16) = 0
+200 connect(7, {sa_family=AF_INET, sin_port=htons(443), sin_addr=inet_addr("192.0.2.10")}, 16) = -1 EINPROGRESS (Operation now in progress)
+200 connect(4, {sa_family=AF_UNIX, sun_path="/tmp/opencode-1234.sock"}, 110) = 0

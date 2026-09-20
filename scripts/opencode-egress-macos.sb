@@ -1,0 +1,37 @@
+; opencode-egress-macos.sb — the #1644 macOS operator recipe.
+;
+; A `sandbox-exec` profile denying every outbound network connection except
+; loopback, for an operator to repeat the Linux CI job's egress check by hand
+; against a real LM Studio/Ollama during #1659. The Linux network-namespace +
+; strace job (.github/workflows/opencode-egress.yml) is the gating evidence
+; for this issue; this profile is a documented, operator-run tool, not a CI
+; job of its own.
+;
+; Usage:
+;   sandbox-exec -f scripts/opencode-egress-macos.sb curl -sS https://example.com
+;     must FAIL (denied outbound to a non-loopback host).
+;   sandbox-exec -f scripts/opencode-egress-macos.sb curl 127.0.0.1:<stub-port>/v1/models
+;     must SUCCEED (loopback is allowed).
+;
+; Run the real check under this profile the same way:
+;   sandbox-exec -f scripts/opencode-egress-macos.sb opencode run --format json ...
+;
+; Observe every denied attempt live, in a second terminal, while the command
+; above runs:
+;   log stream --predicate 'eventMessage CONTAINS "deny" AND eventMessage CONTAINS "network"'
+;
+; Declaring one additional LAN endpoint for the manual #1659 repeat (a
+; declared, operator-run model server on the local network — see ADR-022's
+; "Endpoints" amendment): append one more allow rule naming exactly that
+; host and port, e.g.
+;   (allow network-outbound (remote ip "192.168.1.42:1234"))
+; Add at most one such rule per repeat, matching the endpoint under test, and
+; keep the `log stream` predicate above running so any OTHER denied attempt
+; is still visible. This profile itself declares none — an operator adds the
+; single line for their own repeat and discards the edit afterward, it is
+; not committed as part of this profile.
+
+(version 1)
+(allow default)
+(deny network-outbound)
+(allow network-outbound (remote ip "localhost:*"))

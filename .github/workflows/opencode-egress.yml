@@ -1,0 +1,139 @@
+name: opencode-egress
+
+# The #1644 OpenCode + local-provider egress check. Nothing else measures
+# whether a real OpenCode dispatch, run through Nightgauge's isolation
+# (#1616), per-run config (#1625) and plugin (#1635), ever opens a
+# non-loopback connection. This job runs a real feature-dev stage through the
+# OpenCode adapter (internal/execution/opencode_egress_test.go) inside a
+# Linux network namespace whose only interface is loopback
+# (`unshare --user --map-root-user --net`), with the whole process tree under
+# `strace`, against the #1618 stub provider, and asserts zero non-loopback
+# connect/sendto/sendmsg/bind/listen attempts. It is new, narrowly-scoped
+# security evidence, not a required check on every PR — see the trigger
+# rationale below.
+#
+# Triggers: `workflow_dispatch` (the issue's own verification runs it this
+# way) and a `pull_request` whose diff touches the files this check is
+# actually evidence for. Unlike adapter-canary.yml this does not also run on
+# `schedule` or plain `push`: nothing here needs daily drift detection, and a
+# push to main only ever carries an already-reviewed change.
+#
+# No secret is used: the three fake cloud-provider keys are literal strings
+# in this file, never a `secrets.*` reference (AC: "the fake keys must never
+# be real").
+
+on:
+  workflow_dispatch: {}
+  pull_request:
+    paths:
+      - "scripts/opencode-egress-check.sh"
+      - "scripts/opencode-egress-macos.sb"
+      - "internal/execution/opencode_egress_test.go"
+      - "internal/execution/adapters/opencode*.go"
+      - "internal/execution/opencodeplugin/**"
+      - ".github/workflows/opencode-egress.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opencode-egress-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  egress-check:
+    name: Linux network-namespace egress check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+
+      - name: Allow unprivileged user namespaces
+        # ubuntu-latest (24.04) restricts CLONE_NEWUSER via AppArmor by
+        # default, so the job's own `unshare --user --map-root-user --net`
+        # fails with "write failed /proc/self/uid_map: Operation not
+        # permitted" before it ever gets to run the egress check. This is a
+        # runner-image default, not a security control this job depends on —
+        # loosen it for this ephemeral runner only.
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Install opencode at the manifest's pinned max_tested
+        id: install
+        run: |
+          set -euo pipefail
+          version="$(jq -r .max_tested internal/adaptercompat/manifests/opencode.json)"
+          out="$(bash scripts/adapter-canary.sh install opencode "$version")"
+          eval "$out"
+          echo "bin=$bin" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Run the egress check inside the network namespace
+        id: egress
+        env:
+          PATH: ${{ github.workspace }}/.egress-bin:/usr/bin:/bin:/usr/local/bin
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/artifacts" .egress-bin
+          ln -sf "$(dirname "${{ steps.install.outputs.bin }}")"/opencode .egress-bin/opencode
+          OPENCODE_EGRESS_VERSION="${{ steps.install.outputs.version }}" \
+            bash scripts/opencode-egress-check.sh run "$RUNNER_TEMP/trace.log" "$RUNNER_TEMP/artifacts"
+          echo "non-loopback attempts: $(grep -c '^non-loopback attempts:' "$RUNNER_TEMP/artifacts/summary.json" || true)"
+
+      - name: Fail the job if the run's own PIDs were not confirmed dead
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          if [ -f "$RUNNER_TEMP/artifacts/pids.txt" ]; then
+            while read -r pid; do
+              [ -n "$pid" ] || continue
+              if kill -0 "$pid" 2>/dev/null; then
+                echo "::error::pid $pid (captured by the run harness) is still alive"
+                exit 1
+              fi
+              echo "dead $pid"
+            done < "$RUNNER_TEMP/artifacts/pids.txt"
+          fi
+
+      - name: Assert no fake key literal reached the artifact directory
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          if grep -R -l -F -e "sk-egress-fake" "$RUNNER_TEMP/artifacts" >/dev/null 2>&1; then
+            echo "::error::a fake key literal is present, unredacted, under the artifact directory"
+            exit 1
+          fi
+
+      - name: Upload the trace, redacted env dump and summary
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: opencode-egress-${{ steps.install.outputs.version }}
+          path: |
+            ${{ runner.temp }}/trace.log
+            ${{ runner.temp }}/artifacts/env.redacted.txt
+            ${{ runner.temp }}/artifacts/summary.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Summarize the run
+        if: ${{ always() }}
+        run: |
+          {
+            echo "### opencode-egress"
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/artifacts/summary.json" 2>/dev/null || echo "no summary.json produced"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

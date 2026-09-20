@@ -144,6 +144,49 @@ deterministic punt), #560 (402 classification).
 
 ---
 
+## OpenCode egress (local provider) (#1644)
+
+**Scope:** this measures the agent and its model traffic only. `gh` and
+`git` talking to the forge are by design and outside it.
+
+A Linux network-namespace + `strace` CI job
+(`.github/workflows/opencode-egress.yml`, `scripts/opencode-egress-check.sh`)
+runs a real feature-dev stage through the OpenCode adapter
+(`internal/execution/opencode_egress_test.go`, `Manager.RunStage`, the same
+path production dispatch uses) inside a namespace whose only interface is
+loopback, against the #1618 stub provider, and asserts zero non-loopback
+connect/sendto/sendmsg/bind/listen attempts across the whole process tree,
+with a hostile parent environment (fake OPENAI_API_KEY/ANTHROPIC_API_KEY/
+XAI_API_KEY values) to prove isolation strips them before spawn.
+
+- **opencode version (pinned max_tested):** 1.18.30
+  (`internal/adaptercompat/manifests/opencode.json`)
+- **CI run:** PENDING. `gh workflow run opencode-egress.yml` has not yet
+  executed against this PR; the job triggers on `workflow_dispatch` and on a
+  `pull_request` whose diff touches the paths the workflow filters on. Fill
+  in the run URL, date and outcome ("non-loopback attempts: N") here once it
+  has, per this issue's own Verification section.
+- **Local verification performed ahead of that run** (this issue's own Test
+  Plan, items 1 and 4 — the namespace/strace leg itself is Linux-only and
+  cannot be reproduced on this platform):
+  - The Go dispatch fixture (`go test -tags canary ./internal/execution -run
+TestOpenCodeEgressCheck`) passed locally against a real, installed
+    opencode binary (canary-relaxed pin), proving the bare-remote,
+    pre-seeded-context fixture and the stub dispatch work before the
+    namespace/strace wrapper is ever involved.
+  - The committed macOS sandbox-exec recipe
+    (`scripts/opencode-egress-macos.sb`) was run by hand: denying the
+    non-loopback command and allowing the loopback one, exactly as its own
+    usage comment states.
+  - `bash scripts/test-opencode-egress-check.sh` (the check-trace parser's
+    own unit tests: clean/leaked-connect/DNS-lookup/declared-endpoint
+    fixtures, plus the redaction fixture) passed.
+
+Names no host other than 127.0.0.1/::1 above, and none of the pending fields
+will either.
+
+---
+
 ## Per-Adapter Deep Dive
 
 ### 1. claude-headless

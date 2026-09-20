@@ -1,0 +1,4 @@
+400 execve("/usr/bin/opencode", ["opencode", "run"], 0x7ffe12340000 /* 40 vars */) = 0
+400 connect(3, {sa_family=AF_INET, sin_port=htons(41231), sin_addr=inet_addr("127.0.0.1")}, 16) = 0
+400 connect(7, {sa_family=AF_INET, sin_port=htons(8080), sin_addr=inet_addr("192.0.2.20")}, 16) = 0
+400 connect(8, {sa_family=AF_INET, sin_port=htons(8080), sin_addr=inet_addr("203.0.113.5")}, 16) = -1 EINPROGRESS (Operation now in progress)

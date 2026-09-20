@@ -1,0 +1,7 @@
+100 execve("/usr/bin/opencode", ["opencode", "run"], 0x7ffe12340000 /* 40 vars */) = 0
+100 connect(3, {sa_family=AF_INET, sin_port=htons(41231), sin_addr=inet_addr("127.0.0.1")}, 16) = 0
+100 connect(4, {sa_family=AF_UNIX, sun_path="/tmp/opencode-1234.sock"}, 110) = 0
+100 connect(5, {sa_family=AF_INET6, sin6_family=AF_INET6, sin6_port=htons(443), sin6_flowinfo=0, sin6_addr=inet_pton(AF_INET6, "::1"), sin6_scope_id=0}, 28) = 0
+100 sendto(4, "GET /v1/models HTTP/1.1\r\n", 26, MSG_NOSIGNAL, {sa_family=AF_UNIX, sun_path="/tmp/opencode-1234.sock"}, 110) = 26
+100 bind(6, {sa_family=AF_INET, sin_port=htons(0), sin_addr=inet_addr("127.0.0.1")}, 16) = 0
+100 listen(6, 128) = 0

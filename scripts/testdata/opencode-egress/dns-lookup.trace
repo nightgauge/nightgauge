@@ -1,0 +1,5 @@
+300 execve("/usr/bin/opencode", ["opencode", "run"], 0x7ffe12340000 /* 40 vars */) = 0
+300 connect(3, {sa_family=AF_INET, sin_port=htons(41231), sin_addr=inet_addr("127.0.0.1")}, 16) = 0
+# DNS lookup of registry.npmjs.org via the system resolver, seen as a
+# connectionless sendto to a non-loopback resolver address.
+300 sendto(9, "\336\255\1\0\0\1\0\0\0\0\0\0\rregistry\6npmjs\3org\0\0\1\0\1", 32, MSG_NOSIGNAL, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("8.8.8.8")}, 16) = 32
