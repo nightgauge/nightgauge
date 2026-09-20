@@ -1,0 +1,7 @@
+400 execve("/usr/sbin/ip", ["ip", "link", "set", "lo", "up"], 0x7ffe12340000 /* 40 vars */) = 0
+400 bind(3, {sa_family=AF_NETLINK, nl_pid=0, nl_groups=00000000}, 12) = 0
+400 sendto(3, [{nlmsg_len=32, nlmsg_type=RTM_NEWLINK, nlmsg_flags=NLM_F_REQUEST|NLM_F_ACK, nlmsg_seq=0, nlmsg_pid=0}, {ifi_family=AF_UNSPEC, ifi_type=ARPHRD_NETROM, ifi_index=0, ifi_flags=0, ifi_change=0}], 32, 0, NULL, 0) = 32
+401 execve("/usr/bin/opencode", ["opencode", "run"], 0x7ffe12340000 /* 40 vars */) = 0
+401 connect(27, {sa_family=AF_INET, sin_port=htons(36831), sin_addr=inet_addr("127.0.0.1")}, 16) = -1 EINPROGRESS (Operation now in progress)
+401 sendto(27, "POST /v1/chat/completions HTTP/1"..., 20161, MSG_DONTWAIT|MSG_NOSIGNAL, NULL, 0) = 20161
+401 sendmsg(27, {msg_name=NULL, msg_namelen=0, msg_iov=[{iov_base="POST /v1/chat/completions HTTP/1"..., iov_len=512}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 512

@@ -84,6 +84,30 @@ out="$(assert_exit "netlink-and-ipv6-fallback.trace passes" 0 \
   "$CHECK" check-trace "$TESTDATA/netlink-and-ipv6-fallback.trace")"
 assert_contains "netlink-and-ipv6-fallback.trace prints the zero-attempts line" "$out" "non-loopback attempts: 0"
 
+# --- connected-send.trace: an address-less send is not an unknown one ------
+# Reproduces the second real CI trace from #1644: a sendto()/sendmsg() on an
+# already-connected socket passes no destination (sendto's dest_addr is NULL,
+# sendmsg's msg_name=NULL), and `ip link set lo up`'s netlink write is one of
+# them — strace decodes its payload as RTM_NEWLINK/AF_UNSPEC, so the line
+# never spells AF_NETLINK either. Reading those as unreadable destinations
+# fail-closed flagged OpenCode's own POST to the loopback stub provider.
+
+out="$(assert_exit "connected-send.trace passes" 0 \
+  "$CHECK" check-trace "$TESTDATA/connected-send.trace")"
+assert_contains "connected-send.trace prints the zero-attempts line" "$out" "non-loopback attempts: 0"
+
+# --- addressless-send.trace: the fail-closed posture is still intact -------
+# The rule above resolves an address-less send against what the fd was
+# already seen connecting or binding to — it does not excuse the send. An fd
+# this trace never saw connect stays "unknown", and one connected off-box is
+# named by its real destination, not waved through.
+
+out="$(assert_exit "addressless-send.trace fails" 1 \
+  "$CHECK" check-trace "$TESTDATA/addressless-send.trace")"
+assert_contains "a send on an fd with no observed connect stays unknown" "$out" "unknown"
+assert_contains "an address-less send inherits its fd's real destination" "$out" "192.0.2.30:443"
+assert_contains "addressless-send.trace counts all three" "$out" "non-loopback attempts: 3"
+
 # --- leaked-connect.trace: exit 1, names the PID and executable ------------
 
 out="$(assert_exit "leaked-connect.trace fails" 1 "$CHECK" check-trace "$TESTDATA/leaked-connect.trace")"

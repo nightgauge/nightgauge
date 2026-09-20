@@ -1,0 +1,4 @@
+500 execve("/usr/bin/opencode", ["opencode", "run"], 0x7ffe12340000 /* 40 vars */) = 0
+500 sendmsg(9, {msg_name=NULL, msg_namelen=0, msg_iov=[{iov_base="GET / HTTP/1.1"..., iov_len=64}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 64
+500 connect(11, {sa_family=AF_INET, sin_port=htons(443), sin_addr=inet_addr("192.0.2.30")}, 16) = 0
+500 sendto(11, "POST /v1/messages HTTP/1.1"..., 1024, MSG_DONTWAIT|MSG_NOSIGNAL, NULL, 0) = 1024

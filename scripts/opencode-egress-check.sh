@@ -20,7 +20,9 @@
 #     The deterministic parser: no namespace, no root, no live binaries.
 #     Parses connect/sendto/sendmsg/bind/listen lines from a strace -f
 #     -e trace=connect,sendto,sendmsg,bind,listen log. AF_UNIX, AF_NETLINK,
-#     127.0.0.0/8 and ::1 destinations are always allowed; each allowed-endpoint
+#     127.0.0.0/8 and ::1 destinations are always allowed; a send with no
+#     destination argument (an already-connected socket) is resolved against
+#     that fd's own earlier connect/bind; each allowed-endpoint
 #     argument (an exact "host:port" literal, e.g. "192.0.2.20:8080") is an
 #     additional allowed destination for this call only — CI's own
 #     invocation passes none, so CI stays loopback-only. Prints
@@ -64,11 +66,14 @@ cmd_check_trace() {
 # DNS name: a sendto to a resolver is itself the finding, not something to
 # look up and excuse.
 #
-# listen(fd, backlog) carries no address of its own — the address came from
-# an earlier bind() on the same fd — so this parser tracks each (pid, fd)'s
-# last bound address and looks it up when a matching listen() is seen; a
-# listen() with no recorded bind (e.g. on an inherited fd) is not flagged,
-# since there is nothing observed in this trace to call unsafe.
+# Some calls carry no address of their own. listen(fd, backlog) takes it from
+# an earlier bind() on the same fd; a sendto()/sendmsg() on an already-
+# connected socket passes NULL and takes it from an earlier connect(). This
+# parser therefore tracks each (pid, fd)'s last bound or connected
+# destination and resolves those calls against it. A listen() with no
+# recorded bind is not flagged — nothing observed here calls it unsafe — but
+# an address-less send on an fd this trace never saw connect stays "unknown"
+# and is flagged, so the fail-closed posture is unchanged.
 #
 # Exit 0 and prints "non-loopback attempts: 0" on a clean trace. Exit 1 and,
 # before the count line, one "PID <pid> (<executable>): <destination>" line
@@ -89,6 +94,21 @@ ADDR4_RE = re.compile(r'sin_addr=inet_addr\("([^"]+)"\)')
 # branch below.
 ADDR6_RE = re.compile(r'inet_pton\([^,]*,\s*"([^"]+)"')
 PORT_RE = re.compile(r"sin_?port6?=htons\((\d+)\)")
+
+# A sendto()/sendmsg() on an already-connected socket passes no destination
+# at all — sendto's dest_addr is NULL and sendmsg's msg_name=NULL — so the
+# line carries no address to parse. That is not an unreadable destination:
+# the destination was fixed by an earlier connect() (or bind()) on the same
+# fd, which this parser already read and judged. Flagging these as "unknown"
+# fail-closed hits every ordinary loopback exchange, including OpenCode's own
+# POST to the stub provider and `ip link set lo up`'s netlink write, whose
+# decoded RTM_NEWLINK payload spells AF_UNSPEC rather than AF_NETLINK.
+NULL_DEST_RE = re.compile(r"msg_name=NULL|,\s*NULL,\s*\d+\)\s*=")
+
+# Per-fd destination classes. LOCAL is AF_UNIX/AF_NETLINK (never leaves the
+# host); NO_ADDRESS is the NULL-destination send described above.
+LOCAL = object()
+NO_ADDRESS = object()
 
 
 def is_loopback(addr):
@@ -114,11 +134,15 @@ def destination(line):
         # as AF_UNIX above. Node/Go's own network-interface enumeration
         # (os.networkInterfaces(), net.Interfaces()) routinely opens one of
         # these on startup, with no attacker-observable effect off-box.
-        return None
+        return LOCAL
     m4 = ADDR4_RE.search(line)
     m6 = ADDR6_RE.search(line)
     addr = m4.group(1) if m4 else (m6.group(1) if m6 else None)
     if addr is None:
+        if NULL_DEST_RE.search(line):
+            # No destination argument at all: resolved by the caller against
+            # what this fd was already connected or bound to.
+            return NO_ADDRESS
         # An AF_INET/AF_INET6 socket op strace could not be parsed for an
         # address: treated as disallowed rather than silently skipped, since
         # a parser that cannot read a destination cannot prove it was
@@ -138,7 +162,7 @@ def main(argv):
     allowed = set(argv[2:])
 
     exe_by_pid = {}
-    bound_addr_by_pid_fd = {}
+    addr_by_pid_fd = {}
     violations = []
 
     def is_allowed(addr, label):
@@ -166,30 +190,53 @@ def main(argv):
             if not m:
                 continue
             pid, syscall, fd = m.group(1), m.group(2), m.group(3)
+            key = (pid, fd)
+
+            def flag(label):
+                violations.append((pid, exe_by_pid.get(pid, "unknown"), label))
 
             if syscall == "listen":
-                bound = bound_addr_by_pid_fd.get((pid, fd))
-                if bound is None:
+                # listen(fd, backlog) carries no address; use the fd's own.
+                known = addr_by_pid_fd.get(key)
+                if known is None or known is LOCAL:
                     continue
-                addr, label = bound
+                addr, label = known
                 if is_allowed(addr, label):
                     continue
-                exe = exe_by_pid.get(pid, "unknown")
-                violations.append((pid, exe, label))
+                flag(label)
                 continue
 
             dest = destination(line)
-            if dest is None:
+
+            if dest is LOCAL:
+                addr_by_pid_fd[key] = LOCAL
                 continue
+
+            if dest is NO_ADDRESS:
+                known = addr_by_pid_fd.get(key)
+                if known is LOCAL:
+                    continue
+                if known is None:
+                    # Nothing in this trace says where this fd points — an
+                    # inherited or pre-namespace socket. Still fail closed.
+                    addr = label = "unknown"
+                else:
+                    addr, label = known
+                if is_allowed(addr, label):
+                    continue
+                flag(label)
+                continue
+
             addr, port, label = dest
 
-            if syscall == "bind":
-                bound_addr_by_pid_fd[(pid, fd)] = (addr, label)
+            # connect() fixes the destination of every later address-less
+            # send on this fd; bind() does the same for listen().
+            if syscall in ("bind", "connect"):
+                addr_by_pid_fd[key] = (addr, label)
 
             if is_allowed(addr, label):
                 continue
-            exe = exe_by_pid.get(pid, "unknown")
-            violations.append((pid, exe, label))
+            flag(label)
 
     for pid, exe, label in violations:
         print(f"PID {pid} ({exe}): {label}")
