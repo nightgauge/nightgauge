@@ -150,6 +150,7 @@ import {
   CliPipelineReconciliationService,
   type RegisteredPipelineRoot,
 } from "../services/CliPipelineReconciliationService";
+import { createCliPipelineSlotCallbacks } from "./cliPipelineSlots";
 import { SlotOutputManager } from "../views/SlotOutputManager";
 import { getConcurrentPipelineConfig, getPerformanceMode } from "../utils/nightgaugeConfig";
 import { hasCustomStageOverrides } from "../utils/customStageModels";
@@ -2021,10 +2022,6 @@ export async function initializeServices(
     // IPC server. Reconcile their atomic runtime snapshots from registered
     // roots so terminal/agent/automation launches remain visible (#27).
     let cliRoots: RegisteredPipelineRoot[] = [];
-    const cliStateServices = new Map<
-      string,
-      { issueNumber: number; service: PipelineStateService }
-    >();
     let nextCliSlotIndex = concurrentConfig.maxConcurrent;
     const refreshCliRoots = async (): Promise<void> => {
       if (!workspaceManager) return;
@@ -2038,58 +2035,27 @@ export async function initializeServices(
       }
       cliRoots = roots;
     };
-    const cliReconciler = new CliPipelineReconciliationService(
-      () => cliRoots,
-      {
-        onDiscovered: (run) => {
-          // An IPC-managed slot with the same issue is already authoritative.
-          if (treeProvider.getConcurrentSlot(run.snapshot.issueNumber)) return;
-          const stateService = PipelineStateService.createForWorktree(
-            run.root,
-            run.snapshot.issueNumber
-          );
-          stateService.applyRuntimeSnapshot(run.snapshot);
-          cliStateServices.set(run.key, {
-            issueNumber: run.snapshot.issueNumber,
-            service: stateService,
-          });
-          treeProvider.addConcurrentSlot(
-            nextCliSlotIndex++,
-            run.snapshot.issueNumber,
-            run.snapshot.title || `Issue #${run.snapshot.issueNumber}`,
-            stateService
-          );
-          logger.info("Discovered direct CLI pipeline", {
-            repo: run.snapshot.repo,
-            issueNumber: run.snapshot.issueNumber,
-            runId: run.snapshot.runId,
-          });
-        },
-        onUpdated: (run) => {
-          cliStateServices.get(run.key)?.service.applyRuntimeSnapshot(run.snapshot);
-        },
-        onSettled: (run) => {
-          const tracked = cliStateServices.get(run.key);
-          if (!tracked) return;
-          treeProvider.removeConcurrentSlotIfOwned(tracked.issueNumber, tracked.service);
-          tracked.service.dispose();
-          cliStateServices.delete(run.key);
-          logger.info("Direct CLI pipeline settled", {
-            repo: run.snapshot.repo,
-            issueNumber: run.snapshot.issueNumber,
-            runId: run.snapshot.runId,
-          });
-        },
+    // The discovered/updated/settled callbacks live in `cliPipelineSlots.ts`
+    // so they can be executed by a test (#586). They used to be an inline
+    // closure here that registered the TREE slot and nothing else, which left
+    // the Output window showing the last extension-launched run's bytes with
+    // no indication whose they were.
+    const cliSlots = createCliPipelineSlotCallbacks({
+      tree: () => treeProvider,
+      output: () => outputWindow,
+      createStateService: (root, issueNumber) =>
+        PipelineStateService.createForWorktree(root, issueNumber),
+      nextSlotIndex: () => nextCliSlotIndex++,
+      logger,
+    });
+    const cliReconciler = new CliPipelineReconciliationService(() => cliRoots, cliSlots.callbacks, {
+      onLegacySnapshotName: (info) => {
+        logger.warn(
+          "CLI run is invisible: its snapshot is still on the pre-ADR-017 name. Restart `nightgauge serve` (or the CLI) on the current binary.",
+          info
+        );
       },
-      {
-        onLegacySnapshotName: (info) => {
-          logger.warn(
-            "CLI run is invisible: its snapshot is still on the pre-ADR-017 name. Restart `nightgauge serve` (or the CLI) on the current binary.",
-            info
-          );
-        },
-      }
-    );
+    });
     const disposeCliWorkspaceListener = workspaceManager?.onWorkspaceChanged(() => {
       void refreshCliRoots().then(() => cliReconciler.scan());
     });
@@ -2100,8 +2066,7 @@ export async function initializeServices(
     context.subscriptions.push(cliReconciler, {
       dispose: () => {
         disposeCliWorkspaceListener?.dispose();
-        for (const tracked of cliStateServices.values()) tracked.service.dispose();
-        cliStateServices.clear();
+        cliSlots.disposeAll();
       },
     });
 

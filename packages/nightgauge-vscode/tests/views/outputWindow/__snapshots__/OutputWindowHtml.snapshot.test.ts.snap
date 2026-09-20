@@ -1528,6 +1528,48 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > empty state — no entrie
       opacity: 0.85;
     }
 
+    /* CLI-discovered run — reconciled from disk, never streamed (#586). */
+    .slot-tab-chip-cli {
+      background: var(--vscode-badge-background);
+      color: var(--vscode-badge-foreground);
+      letter-spacing: 0.04em;
+    }
+
+    /* ==========================================================
+     * Per-slot identity strip — Issue #586
+     * Names the run a panel is showing so no panel can be read as
+     * the current run when it is not.
+     * ========================================================= */
+    .slot-panel-header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: var(--spacing-sm);
+      padding: var(--spacing-xs) var(--spacing-md);
+      border-bottom: 1px solid var(--vscode-panel-border);
+      background: var(--vscode-editor-background);
+      font-size: 0.85em;
+      flex: 0 0 auto;
+    }
+
+    .slot-panel-issue {
+      font-weight: 600;
+      color: var(--vscode-textLink-foreground);
+    }
+
+    .slot-panel-title {
+      color: var(--vscode-foreground);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .slot-panel-meta {
+      color: var(--vscode-descriptionForeground);
+      font-family: var(--vscode-editor-font-family);
+      font-size: 0.9em;
+    }
+
     /* Each slot panel fills the remaining output area */
     .slot-panel {
       display: none;
@@ -5548,6 +5590,48 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > overview dashboard with 3
       opacity: 0.85;
     }
 
+    /* CLI-discovered run — reconciled from disk, never streamed (#586). */
+    .slot-tab-chip-cli {
+      background: var(--vscode-badge-background);
+      color: var(--vscode-badge-foreground);
+      letter-spacing: 0.04em;
+    }
+
+    /* ==========================================================
+     * Per-slot identity strip — Issue #586
+     * Names the run a panel is showing so no panel can be read as
+     * the current run when it is not.
+     * ========================================================= */
+    .slot-panel-header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: var(--spacing-sm);
+      padding: var(--spacing-xs) var(--spacing-md);
+      border-bottom: 1px solid var(--vscode-panel-border);
+      background: var(--vscode-editor-background);
+      font-size: 0.85em;
+      flex: 0 0 auto;
+    }
+
+    .slot-panel-issue {
+      font-weight: 600;
+      color: var(--vscode-textLink-foreground);
+    }
+
+    .slot-panel-title {
+      color: var(--vscode-foreground);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .slot-panel-meta {
+      color: var(--vscode-descriptionForeground);
+      font-family: var(--vscode-editor-font-family);
+      font-size: 0.9em;
+    }
+
     /* Each slot panel fills the remaining output area */
     .slot-panel {
       display: none;
@@ -5799,19 +5883,7 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > overview dashboard with 3
         <button type="button" class="overview-card-btn" data-overview-action="reveal-github" data-slot="2">Open GitHub</button>
         <button type="button" class="overview-card-btn" data-overview-action="open-log" data-slot="2">Open log</button>
       </div>
-    </div></div></div><div class="slot-panel" id="slot-panel-0" data-slot="0">
-      <div class="empty-state">
-        <p>No output yet. Start a pipeline to see activity here.</p>
-      </div>
-    </div><div class="slot-panel" id="slot-panel-1" data-slot="1">
-      <div class="empty-state">
-        <p>No output yet. Start a pipeline to see activity here.</p>
-      </div>
-    </div><div class="slot-panel" id="slot-panel-2" data-slot="2">
-      <div class="empty-state">
-        <p>No output yet. Start a pipeline to see activity here.</p>
-      </div>
-    </div>
+    </div></div></div><div class="slot-panel" id="slot-panel-0" data-slot="0"><div class="slot-panel-header"><span class="slot-panel-issue">#101</span><span class="slot-panel-title">Complete feature</span><span class="slot-panel-meta">nightgauge/nightgauge</span></div><div class="empty-state slot-panel-empty"><p>No output yet for issue #101.</p></div></div><div class="slot-panel" id="slot-panel-1" data-slot="1"><div class="slot-panel-header"><span class="slot-panel-issue">#102</span><span class="slot-panel-title">Another complete</span><span class="slot-panel-meta">nightgauge/nightgauge</span></div><div class="empty-state slot-panel-empty"><p>No output yet for issue #102.</p></div></div><div class="slot-panel" id="slot-panel-2" data-slot="2"><div class="slot-panel-header"><span class="slot-panel-issue">#103</span><span class="slot-panel-title">In-flight work</span><span class="slot-panel-meta">nightgauge/nightgauge</span></div><div class="empty-state slot-panel-empty"><p>No output yet for issue #103.</p></div></div>
     </main>
 
     <div class="message-input-container" id="messageInputContainer">
@@ -9634,6 +9706,48 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with output content — m
       background: var(--vscode-badge-background);
       color: var(--vscode-badge-foreground);
       opacity: 0.85;
+    }
+
+    /* CLI-discovered run — reconciled from disk, never streamed (#586). */
+    .slot-tab-chip-cli {
+      background: var(--vscode-badge-background);
+      color: var(--vscode-badge-foreground);
+      letter-spacing: 0.04em;
+    }
+
+    /* ==========================================================
+     * Per-slot identity strip — Issue #586
+     * Names the run a panel is showing so no panel can be read as
+     * the current run when it is not.
+     * ========================================================= */
+    .slot-panel-header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: var(--spacing-sm);
+      padding: var(--spacing-xs) var(--spacing-md);
+      border-bottom: 1px solid var(--vscode-panel-border);
+      background: var(--vscode-editor-background);
+      font-size: 0.85em;
+      flex: 0 0 auto;
+    }
+
+    .slot-panel-issue {
+      font-weight: 600;
+      color: var(--vscode-textLink-foreground);
+    }
+
+    .slot-panel-title {
+      color: var(--vscode-foreground);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .slot-panel-meta {
+      color: var(--vscode-descriptionForeground);
+      font-family: var(--vscode-editor-font-family);
+      font-size: 0.9em;
     }
 
     /* Each slot panel fills the remaining output area */
@@ -13692,6 +13806,48 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with question prompt acti
       opacity: 0.85;
     }
 
+    /* CLI-discovered run — reconciled from disk, never streamed (#586). */
+    .slot-tab-chip-cli {
+      background: var(--vscode-badge-background);
+      color: var(--vscode-badge-foreground);
+      letter-spacing: 0.04em;
+    }
+
+    /* ==========================================================
+     * Per-slot identity strip — Issue #586
+     * Names the run a panel is showing so no panel can be read as
+     * the current run when it is not.
+     * ========================================================= */
+    .slot-panel-header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: var(--spacing-sm);
+      padding: var(--spacing-xs) var(--spacing-md);
+      border-bottom: 1px solid var(--vscode-panel-border);
+      background: var(--vscode-editor-background);
+      font-size: 0.85em;
+      flex: 0 0 auto;
+    }
+
+    .slot-panel-issue {
+      font-weight: 600;
+      color: var(--vscode-textLink-foreground);
+    }
+
+    .slot-panel-title {
+      color: var(--vscode-foreground);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .slot-panel-meta {
+      color: var(--vscode-descriptionForeground);
+      font-family: var(--vscode-editor-font-family);
+      font-size: 0.9em;
+    }
+
     /* Each slot panel fills the remaining output area */
     .slot-panel {
       display: none;
@@ -17737,6 +17893,48 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with search bar visible �
       opacity: 0.85;
     }
 
+    /* CLI-discovered run — reconciled from disk, never streamed (#586). */
+    .slot-tab-chip-cli {
+      background: var(--vscode-badge-background);
+      color: var(--vscode-badge-foreground);
+      letter-spacing: 0.04em;
+    }
+
+    /* ==========================================================
+     * Per-slot identity strip — Issue #586
+     * Names the run a panel is showing so no panel can be read as
+     * the current run when it is not.
+     * ========================================================= */
+    .slot-panel-header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: var(--spacing-sm);
+      padding: var(--spacing-xs) var(--spacing-md);
+      border-bottom: 1px solid var(--vscode-panel-border);
+      background: var(--vscode-editor-background);
+      font-size: 0.85em;
+      flex: 0 0 auto;
+    }
+
+    .slot-panel-issue {
+      font-weight: 600;
+      color: var(--vscode-textLink-foreground);
+    }
+
+    .slot-panel-title {
+      color: var(--vscode-foreground);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .slot-panel-meta {
+      color: var(--vscode-descriptionForeground);
+      font-family: var(--vscode-editor-font-family);
+      font-size: 0.9em;
+    }
+
     /* Each slot panel fills the remaining output area */
     .slot-panel {
       display: none;
@@ -21775,6 +21973,48 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with slot info including 
       opacity: 0.85;
     }
 
+    /* CLI-discovered run — reconciled from disk, never streamed (#586). */
+    .slot-tab-chip-cli {
+      background: var(--vscode-badge-background);
+      color: var(--vscode-badge-foreground);
+      letter-spacing: 0.04em;
+    }
+
+    /* ==========================================================
+     * Per-slot identity strip — Issue #586
+     * Names the run a panel is showing so no panel can be read as
+     * the current run when it is not.
+     * ========================================================= */
+    .slot-panel-header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: var(--spacing-sm);
+      padding: var(--spacing-xs) var(--spacing-md);
+      border-bottom: 1px solid var(--vscode-panel-border);
+      background: var(--vscode-editor-background);
+      font-size: 0.85em;
+      flex: 0 0 auto;
+    }
+
+    .slot-panel-issue {
+      font-weight: 600;
+      color: var(--vscode-textLink-foreground);
+    }
+
+    .slot-panel-title {
+      color: var(--vscode-foreground);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .slot-panel-meta {
+      color: var(--vscode-descriptionForeground);
+      font-family: var(--vscode-editor-font-family);
+      font-size: 0.9em;
+    }
+
     /* Each slot panel fills the remaining output area */
     .slot-panel {
       display: none;
@@ -21986,11 +22226,7 @@ exports[`getOutputWindowHtml snapshots (Issue #1242) > with slot info including 
         <button type="button" class="overview-card-btn" data-overview-action="reveal-github" data-slot="0">Open GitHub</button>
         <button type="button" class="overview-card-btn" data-overview-action="open-log" data-slot="0">Open log</button>
       </div>
-    </div></div></div><div class="slot-panel active" id="slot-panel-0" data-slot="0">
-      <div class="empty-state">
-        <p>No output yet. Start a pipeline to see activity here.</p>
-      </div>
-    </div>
+    </div></div></div><div class="slot-panel active" id="slot-panel-0" data-slot="0"><div class="slot-panel-header"><span class="slot-panel-issue">#42</span><span class="slot-panel-title">Fix truncation bug</span><span class="slot-panel-meta">nightgauge/nightgauge</span></div><div class="empty-state slot-panel-empty"><p>No output yet for issue #42.</p></div></div>
     </main>
 
     <div class="message-input-container" id="messageInputContainer">
