@@ -183,12 +183,14 @@ has opted in.
   `amazon-bedrock`, `google-vertex`, `google-vertex-anthropic` and the rest of
   § 8's platform providers) is refused before spawn the same way, first and
   whatever the switch says (§ 17).
-- **`~/.opencode` holding config, or the machine's managed OpenCode config,
-  refuses an enabled dispatch** unless the operator has opted into their own
-  OpenCode config (§ 8), because run isolation cannot keep either out of a
-  run. The refusal is made where the run's config and environment are built
-  from the machine-tier block (`PrepareOpenCodeRun`), after the gate and
-  before anything is created.
+- **The machine's managed OpenCode config refuses an enabled dispatch**
+  unless the operator has opted into their own OpenCode config (§ 8), because
+  run isolation cannot keep it out of a run. The refusal is made where the
+  run's config and environment are built from the machine-tier block
+  (`PrepareOpenCodeRun`), after the gate and before anything is created.
+  Before #1787, a populated `~/.opencode` refused a dispatch the same way;
+  since #1787 a non-inheriting run's own per-run `HOME` keeps it out
+  structurally instead, so there is nothing left to refuse.
 - **`nightgauge opencode config` makes every refusal the adapter makes before
   spawning**: it runs `PreDispatch`, the model check and the same preparation,
   so a caller that spawns OpenCode from its output (#1648) meets the same
@@ -719,21 +721,57 @@ reports it `non_loopback: true`, as it does every hosted provider's model.
   loaded `amazon-bedrock`, `github-copilot`, `gitlab`, `google-vertex`,
   `google-vertex-anthropic` and OpenCode's own free models beside the
   dispatched provider without it, and the dispatched provider alone with it.
-- **The home directory.** `home` does not move, and OpenCode 1.18.30 reads two
-  operator locations from it whatever the XDG variables say.
+- **The home directory (#1787).** OpenCode 1.18.30 reads two operator
+  locations from `home` whatever the XDG variables say:
   `OPENCODE_DISABLE_EXTERNAL_SKILLS=1` closes `~/.agents/skills` and
-  `~/.claude/skills`. `~/.opencode` is a config directory to OpenCode: it loads
+  `~/.claude/skills`; `~/.opencode` is a config directory to OpenCode: it loads
   its `opencode.json`, `opencode.jsonc`, and `agent`, `command`, `mode`,
   `plugin`, `tool` and `skill` directories under either spelling. Neither
-  `OPENCODE_DISABLE_PROJECT_CONFIG` nor `OPENCODE_PURE` stops that read, and
-  moving `HOME` would move every other tool with it. So while `~/.opencode`
-  holds any of those entries, an enabled dispatch is refused before anything
-  is created, naming the entries without reading them, unless
-  `inherit_user_config` is on. What
-  an install leaves there (`bin/`, a `package.json` and its `node_modules`) is
-  not config. The remediation is to move the entries into the XDG config
-  directory, which the operator's own OpenCode reads and a pipeline run does
-  not.
+  `OPENCODE_DISABLE_PROJECT_CONFIG` nor `OPENCODE_PURE` stops that read.
+  Before #1787, moving `HOME` would have moved every other tool the stage
+  starts with it, so the adapter only ever _detected_ a populated
+  `~/.opencode` and refused the dispatch — safe, but leaving the wait for
+  OpenCode's own install into it in place whenever the operator's real
+  `~/.opencode` held anything to install against.
+
+  Since #1787, a non-inheriting run gets a private `home/` inside the same
+  per-run root `EnsureOpenCodeRunRoot` already builds (alongside `config/`,
+  `data/`, `cache/` and `state/`), populated by the same
+  symlink-the-operator's-entries pattern `config/` uses
+  (`linkOperatorConfig`/`linkOperatorConfigEntry`, generalized as
+  `linkOperatorHome`), withholding only `.opencode`. `HOME` is then pointed at
+  `home/` for the dispatch (`OpenCodeIsolationEnv`). Because `home/.opencode`
+  never exists, OpenCode never finds config to install against and never
+  waits — without hiding any other operator state a stage's tools resolve via
+  `$HOME` (`.gitconfig`, `.netrc`, `.git-credentials`, `.ssh`, `.aws`,
+  `.config`, ...), which keeps flowing through unchanged symlinks, exactly as
+  `linkOperatorConfig` already does for `$XDG_CONFIG_HOME`. The refusal
+  (`openCodeHomeConfigRefusal`) is removed as dead code: once a non-inheriting
+  run's `HOME` structurally guarantees an empty `.opencode`, the condition it
+  checked can never be observed true.
+
+  `inherit_user_config` is unchanged by this: it still leaves `HOME` untouched
+  entirely, so `~/.opencode` (and the machine's managed config) load exactly
+  as they do outside a run.
+
+  **Trade-off, carried over from `config/`'s own:** a symlinked entry is
+  bidirectional — a tool that _writes_ through one of the forwarded entries
+  (an SSH `known_hosts` append, a git credential store, an AWS SSO cache
+  write) writes into the operator's real file, exactly as `config/`'s
+  forwarding already accepts for `~/.gitconfig`'s XDG-side entries. #1787
+  extends where that risk already applied, from `$XDG_CONFIG_HOME` to
+  `$HOME`; it does not change the risk model itself.
+
+  Owning changes: `internal/doctor/opencode.go`'s `checkOpenCode` no longer
+  blocks a dispatch on a populated `~/.opencode` (only the machine's managed
+  config still does); `OpenCodeMachineConfigRefusals` and `PrepareOpenCodeRun`
+  make the same one check instead of two; `operatorInstallRisk`
+  (`opencode_plugin_deps.go`) resolves the dispatch's _own_ `HOME` (its `Env`,
+  falling back to the operator's real one only when `HOME` is left untouched)
+  rather than always the operator's real one, so the operator-install-risk
+  watchdog can no longer arm for a non-inheriting run's `$HOME/.opencode` — it
+  structurally cannot exist.
+
 - **The machine's managed config.** Read from the 1.18.30 bundled source and
   observed: OpenCode reads `opencode.json` and `opencode.jsonc` from a managed
   config directory, `/etc/opencode` on Linux and
@@ -745,14 +783,15 @@ reports it `non_loopback: true`, as it does every hosted provider's model.
   environment moves them. While any of those files exists, an enabled
   dispatch is refused before anything is created, naming the files without
   reading them, unless `inherit_user_config` is on, which accepts the
-  machine's config with the operator's own. Both refusals are made by
+  machine's config with the operator's own. The refusal is made by
   `PrepareOpenCodeRun`, which builds the run's config and environment from
   the same read of the machine-tier block, so the opt-in can never read as on
   for the refusal and off for the environment; `nightgauge opencode config`
-  runs it too. The doctor's `opencode` row blocks on each, naming what it
-  found, through `OpenCodeMachineConfigRefusals`, which makes the same two
-  checks on the same inputs, so cap recovery never hops onto a machine that
-  refuses every dispatch (#1627).
+  runs it too. The doctor's `opencode` row blocks on it, naming what it
+  found, through `OpenCodeMachineConfigRefusals`, which makes the same check
+  on the same inputs, so cap recovery never hops onto a machine that refuses
+  every dispatch (#1627). Before #1787 this was two refusals (the home
+  directory's above, and this one); since #1787 only this one remains.
 - **`inherit_user_config`** defaults to `false`: the operator's global
   OpenCode config is not read. The way to turn it on is
   `opencode.inherit_user_config: true` in the machine tier (§ 7), which a
@@ -1148,7 +1187,7 @@ the setting. A **locked** row cannot be turned back on from any config tier.
 | LSP server download                      | `OPENCODE_DISABLE_LSP_DOWNLOAD=1`                                                                                  | security  | locked                                                                                                                |
 | Default and third-party plugins          | `OPENCODE_DISABLE_DEFAULT_PLUGINS=1`; `plugin` lists Nightgauge's only                                             | security  | locked                                                                                                                |
 | Repository project config                | `OPENCODE_DISABLE_PROJECT_CONFIG=1`; reviewed merge (§ 8)                                                          | security  | locked; not set yet, so the repository's config still loads until #1638 (with #1626) (§ 8)                            |
-| Operator's global OpenCode config        | `inherit_user_config: false`; `~/.opencode` and managed config refused (§ 8)                                       | security  | overridable; locked keys win over all but managed config                                                              |
+| Operator's global OpenCode config        | `inherit_user_config: false`; per-run `HOME` keeps `~/.opencode` out (#1787), managed config refused (§ 8)         | security  | overridable; locked keys win over all but managed config                                                              |
 | Session titles                           | `agent.title.disable: true` (§ 10)                                                                                 | privacy   | locked                                                                                                                |
 | A model other than the dispatched one    | `small_model`, every agent's `model`, and on an endpoint or `anthropic` the model's `id` and package, pinned       | security  | locked (`id`/`provider.npm`); `options.model`, `speed`/`fallbacks` and `mcpServers` still route around it until #1638 |
 | OAuth and subscription credentials       | never read (§ 17)                                                                                                  | security  | locked                                                                                                                |
@@ -1872,7 +1911,10 @@ directory.** opencode 1.18.30 installs `@opencode-ai/plugin` into every
 OpenCode config directory its resolved config touches, not only the run's
 own: `$HOME/.opencode` when it exists (no XDG variable,
 `OPENCODE_DISABLE_PROJECT_CONFIG` nor `OPENCODE_PURE` stops OpenCode reading
-it), and, under `opencode.inherit_user_config`, the operator's own
+it — but since #1787 a non-inheriting run's `HOME` is its own per-run `home/`,
+whose `.opencode` is never created, so this path is only ever in play under
+`opencode.inherit_user_config`, where `HOME` stays the operator's real one),
+and, under `opencode.inherit_user_config`, the operator's own
 `OPENCODE_CONFIG_DIR`. **Nightgauge never seeds, merges into, or otherwise
 writes to either directory** — OpenCode's own install into its own config
 directories is the operator's environment, exactly as in the operator's own
@@ -1895,7 +1937,11 @@ comment holds the measured cases).
 **Bounded and classified operator wait, with its stand-down rule.** Offline,
 or against an unreachable registry, a dispatch touching an operator
 directory that does NOT already satisfy opencode's own check still waits on
-OpenCode's own real install.
+OpenCode's own real install. Since #1787 this can only be `OPENCODE_CONFIG_DIR`
+under `opencode.inherit_user_config` (or, under the same setting, the
+operator's real `$HOME/.opencode`); a non-inheriting run's own per-run `HOME`
+keeps `$HOME/.opencode` structurally out of reach, so this watchdog can no
+longer arm for one.
 `manager.go`'s operator-install-risk watchdog bounds that wait independently
 of the stage's own timeout (further capped by whatever remains of the
 stage's own context deadline) and fails the dispatch `adapter_incompatible`,
@@ -1929,10 +1975,11 @@ red/green coverage. Settling AC9 properly, and lifting the denial, needs
 either an upstream answer or a faster local model than the spike had time
 for; it remains open.
 
-**Follow-up:** [nightgauge/nightgauge#1787](https://github.com/nightgauge/nightgauge/issues/1787)
-tracks a per-run `HOME`, so `$HOME/.opencode` stops being a config directory
-at all — removing the operator-install wait entirely rather than only
-bounding and classifying it.
+**Resolved:** [nightgauge/nightgauge#1787](https://github.com/nightgauge/nightgauge/issues/1787)
+gave a non-inheriting run its own per-run `HOME`, so `$HOME/.opencode` stops
+being a config directory to it at all — removing the operator-install wait
+entirely for that case, rather than only bounding and classifying it. See
+"The home directory" above.
 
 ## OpenCode plugin gate parity: 1.18.30 divergences from AC assumptions (amendment 2026-09-15, round 2, #1640)
 

@@ -738,34 +738,25 @@ func TestOpenCodeUnreachableServerIsNotACapHopTarget(t *testing.T) {
 func TestOpenCodeRowBlocksOnConfigARunCannotBeIsolatedFrom(t *testing.T) {
 	const sentinel = "machine-config-content-sentinel-1627"
 	for _, c := range []struct {
-		name    string
-		entries []string // under ~/.opencode; a name holding a dot is a file
-		managed bool
-		inherit bool
-		want    []string
+		name          string
+		operatorEntry bool // a populated ~/.opencode, which never refuses (#1787)
+		managed       bool
+		inherit       bool
+		want          []string
 	}{
-		{"install leftovers only", []string{"bin", "package.json"}, false, false, nil},
-		{"home config", []string{"opencode.json", "agent"}, false, false, []string{".opencode", "(opencode.json, agent)"}},
-		{"managed config", nil, true, false, []string{"managed OpenCode config"}},
-		{"both", []string{"plugin"}, true, false, []string{"(plugin)", "managed OpenCode config"}},
-		{"both, inherited", []string{"plugin"}, true, true, nil},
+		{"install leftovers only", false, false, false, nil},
+		{"operator ~/.opencode present, never refuses", true, false, false, nil},
+		{"managed config", false, true, false, []string{"managed OpenCode config"}},
+		{"both, only managed refuses", true, true, false, []string{"managed OpenCode config"}},
+		{"both, inherited", true, true, true, nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			settings := openCodeLMStudio()
 			settings.InheritUserConfig = c.inherit
 			f := newOpenCodeFixture(t, settings)
-			for _, entry := range c.entries {
-				path := filepath.Join(f.home, ".opencode", entry)
-				if !strings.Contains(entry, ".") {
-					if err := os.MkdirAll(path, 0o700); err != nil {
-						t.Fatal(err)
-					}
-					continue
-				}
-				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(path, []byte(sentinel), 0o600); err != nil {
+			if c.operatorEntry {
+				path := filepath.Join(f.home, ".opencode", "agent")
+				if err := os.MkdirAll(path, 0o700); err != nil {
 					t.Fatal(err)
 				}
 			}

@@ -23,8 +23,8 @@ import (
 // `opencode:` block and the per-run config it gives opencode.model, limits
 // discovered from the server included, the binary (opencode.binary's pin or
 // the opencode on PATH), the compat manifest's version policy, the catalog
-// `opencode models` lists under the per-run config, the OpenCode config on
-// this machine a run cannot be isolated from, and the readiness of every
+// `opencode models` lists under the per-run config, the machine-wide managed
+// OpenCode config a run cannot be isolated from, and the readiness of every
 // model server the block declares, against the context limit a dispatch
 // gives OpenCode. It also prints what a run is isolated into, the offline
 // posture the per-run config sets, stored logins OpenCode holds for
@@ -233,7 +233,7 @@ func checkOpenCode(name string, spec adapterSpec, probe adapterProbe) AdapterHea
 	home, homeErr := p.home()
 	if homeErr != nil {
 		home = ""
-		warn("the home directory could not be resolved, so the run directories, the stored logins, the last dispatch and the OpenCode config a run cannot be isolated from were not checked")
+		warn("the home directory could not be resolved, so the run directories, the stored logins, and the last dispatch were not checked")
 	}
 	settings, settingsErr := p.settings()
 	if settingsErr != nil {
@@ -319,8 +319,10 @@ func checkOpenCode(name string, spec adapterSpec, probe adapterProbe) AdapterHea
 	}
 
 	// While opencode.inherit_user_config is off, PrepareOpenCodeRun refuses
-	// every dispatch on a machine whose ~/.opencode holds config or which has
-	// managed OpenCode config, whatever the stage.
+	// every dispatch on a machine that has managed OpenCode config, whatever
+	// the stage. A populated ~/.opencode no longer refuses a dispatch: a
+	// non-inheriting run gets its own per-run HOME, which never contains
+	// .opencode.
 	if home != "" {
 		for _, refusal := range adapters.OpenCodeMachineConfigRefusals(adapters.OpenCodeRunRequest{
 			Home:               home,

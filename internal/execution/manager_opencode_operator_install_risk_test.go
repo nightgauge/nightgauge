@@ -27,6 +27,13 @@ import (
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
+// openCodeMachineConfigInherited is openCodeMachineConfig with
+// opencode.inherit_user_config on: the only condition, since #1787, under
+// which a dispatch's HOME is left untouched and so can still read the
+// operator's real $HOME/.opencode or OPENCODE_CONFIG_DIR — the shape the
+// operator-install-risk watchdog exists to bound.
+const openCodeMachineConfigInherited = openCodeMachineConfig + "  inherit_user_config: true\n"
+
 // installOpenCodeFakeSilent writes a fake `opencode` that answers --version
 // (so the post-run version probes never count as the stage's own
 // invocation), records its own pid, and then produces NOTHING ELSE — no
@@ -83,8 +90,14 @@ func withShortOperatorInstallPollInterval(t *testing.T, interval time.Duration) 
 // turns this red: the fake sleeps 30s longer than the bound, so a RunStage
 // that took anywhere near that long, or whose stderr carries no
 // adapter_incompatible marker, means the watchdog did not run.
+//
+// #1787 gave a non-inheriting run its own per-run HOME, so a dispatch never
+// reads the operator's real $HOME/.opencode at all unless
+// opencode.inherit_user_config is on — the only condition under which this
+// risk can still be real, so this fixture opts in to keep exercising it.
 func TestOpenCodeOperatorInstallRiskBoundedAndClassified(t *testing.T) {
 	home := isolateOpenCodeHome(t)
+	writeOpenCodeMachineConfig(t, openCodeMachineConfigInherited)
 	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
 	operatorOpenCode := filepath.Join(home, ".opencode")
 	if err := os.MkdirAll(filepath.Join(operatorOpenCode, "bin"), 0o700); err != nil {
@@ -152,8 +165,13 @@ func TestOpenCodeOperatorInstallRiskBoundedAndClassified(t *testing.T) {
 // the stage context" (#1635/A11 round 6 decision), not only by its own
 // constant. A short stage timeout with a long watchdog bound must still end
 // promptly.
+//
+// opencode.inherit_user_config is on here for the same reason as
+// TestOpenCodeOperatorInstallRiskBoundedAndClassified: since #1787, a
+// non-inheriting run's own per-run HOME keeps $HOME/.opencode out of reach.
 func TestOpenCodeOperatorInstallRiskBoundByRemainingStageContext(t *testing.T) {
 	home := isolateOpenCodeHome(t)
+	writeOpenCodeMachineConfig(t, openCodeMachineConfigInherited)
 	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
 	if err := os.MkdirAll(filepath.Join(home, ".opencode", "bin"), 0o700); err != nil {
 		t.Fatal(err)

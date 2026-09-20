@@ -555,11 +555,14 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	// Operator install risk watchdog (#1635/A11 round 6, narrowed AC1,
 	// ADR-022 amendment 2026-09-15; round 8 correction, same amendment date):
 	// Nightgauge never seeds or merges into an operator-owned OpenCode config
-	// directory ($HOME/.opencode, or OPENCODE_CONFIG_DIR under
-	// opencode.inherit_user_config), so offline — or against an unreachable
-	// registry — OpenCode's own install into one can block the CLI before it
-	// ever prints a byte: no step_start, so the plugin handshake above never
-	// even runs, and nothing on stderr says why. Bounded independently of the
+	// directory (OPENCODE_CONFIG_DIR, or $HOME/.opencode when
+	// opencode.inherit_user_config leaves HOME untouched — since #1787, a
+	// non-inheriting run's own per-run HOME keeps $HOME/.opencode
+	// structurally out of reach, so only the inherited case can still arm
+	// this watchdog), so offline — or against an unreachable registry —
+	// OpenCode's own install into one can block the CLI before it ever
+	// prints a byte: no step_start, so the plugin handshake above never even
+	// runs, and nothing on stderr says why. Bounded independently of the
 	// stage's own timeout (opts.Timeout can be minutes; this cannot be, or
 	// "never a hang" is only true in the limit).
 	//
@@ -850,7 +853,7 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 			Reason: fmt.Sprintf(
 				"opencode produced no output at all: OpenCode's own @opencode-ai/plugin install into the operator-owned OpenCode config directory %s may be waiting on an unreachable registry. "+
 					"Nightgauge never seeds or merges into an operator-owned OpenCode directory (ADR-022 amendment 2026-09-15) — "+
-					"pre-warm it online, remove it, or turn off opencode.inherit_user_config. nightgauge/nightgauge#1787 tracks removing this wait entirely with a per-run HOME",
+					"pre-warm it online, remove it, or turn off opencode.inherit_user_config. nightgauge/nightgauge#1787 gave a non-inheriting run its own per-run HOME, so this can only happen with opencode.inherit_user_config on",
 				operatorInstallRisk,
 			),
 		}, cmd.Path)
@@ -1295,9 +1298,11 @@ const openCodeHandshakeKillWindow = 1 * time.Second
 // well before this bound in that case), while still catching the truly
 // unbounded case (ADR-022's amendment records 71s-146.88s waits against an
 // UNREACHABLE registry, and an unresolvable one waits far longer than
-// that). nightgauge/nightgauge#1787 (a per-run HOME, so $HOME/.opencode stops
-// being a config directory at all) is the tracked path to removing the wait
-// entirely rather than only bounding it.
+// that). nightgauge/nightgauge#1787 gave a non-inheriting run its own
+// per-run HOME, so $HOME/.opencode is no longer a config directory at all
+// for one; this bound now only matters under
+// opencode.inherit_user_config, or for OPENCODE_CONFIG_DIR, which that
+// setting still leaves pointed at the operator's own.
 var openCodeOperatorInstallWaitBound = 100 * time.Second
 
 func operatorInstallWaitBound(

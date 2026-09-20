@@ -55,6 +55,7 @@ func TestOpenCodeIsolationEnv(t *testing.T) {
 			"GH_CONFIG_DIR":                       home + "/.config/gh",
 			"NIGHTGAUGE_CONFIG_HOME":              "/machine/tier",
 			"GOCACHE":                             home + "/.cache/go-build",
+			"HOME":                                root + "/home",
 		}
 	}
 	for _, tc := range []struct {
@@ -83,12 +84,16 @@ func TestOpenCodeIsolationEnv(t *testing.T) {
 		{name: "an empty GOCACHE is unset", goos: "linux",
 			inherited: map[string]string{"GOCACHE": ""}},
 		{name: "inherit_user_config layers the operator's config directory", goos: "linux", inherit: true,
-			change: func(w map[string]string) { w["OPENCODE_CONFIG_DIR"] = home + "/.config/opencode" }},
+			change: func(w map[string]string) {
+				w["OPENCODE_CONFIG_DIR"] = home + "/.config/opencode"
+				delete(w, "HOME")
+			}},
 		{name: "inherit_user_config follows the operator's XDG_CONFIG_HOME", goos: "linux", inherit: true,
 			inherited: map[string]string{"XDG_CONFIG_HOME": "/xdg"},
 			change: func(w map[string]string) {
 				w["OPENCODE_CONFIG_DIR"] = "/xdg/opencode"
 				w["GH_CONFIG_DIR"] = "/xdg/gh"
+				delete(w, "HOME")
 			}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -522,7 +527,7 @@ func TestEnsureOpenCodeRunRoot(t *testing.T) {
 	if want := filepath.Join(OpenCodeRunsDir(home), testRunID); root != want {
 		t.Errorf("root = %q, want %q", root, want)
 	}
-	for _, dir := range []string{"", "config", "data", "cache", "state"} {
+	for _, dir := range []string{"", "config", "data", "cache", "state", "home"} {
 		fi, err := os.Lstat(filepath.Join(root, dir))
 		if err != nil {
 			t.Fatal(err)
@@ -987,6 +992,63 @@ func TestOpenCodeRunRootLinksTheOperatorsXDGConfig(t *testing.T) {
 	}
 }
 
+// TestOpenCodeRunRootLinksTheOperatorsHome: home/ links every top-level entry
+// of the operator's real home directory except .opencode, so a tool the stage
+// starts still resolves the operator's home-directory state (.gitconfig,
+// .ssh, .aws, ...) when HOME is pointed at home/ (OpenCodeIsolationEnv), while
+// OpenCode itself finds no $HOME/.opencode there — home/.opencode is never
+// created (#1787). A non-symlink entry the run made itself, while the
+// operator had none, is left alone, mirroring linkOperatorConfig's own
+// guarantee for config/.
+func TestOpenCodeRunRootLinksTheOperatorsHome(t *testing.T) {
+	write := func(path, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	home := t.TempDir()
+	write(filepath.Join(home, ".gitconfig"), "[user]\n\tname = operator\n")
+	write(filepath.Join(home, ".netrc"), "machine example.invalid login operator password fixture\n")
+	write(filepath.Join(home, ".ssh", "config"), "Host *\n")
+	write(filepath.Join(home, ".aws", "config"), "[default]\nregion = us-east-1\n")
+	write(filepath.Join(home, ".config", "git", "config"), "[user]\n\temail = operator@example.invalid\n")
+	if err := os.MkdirAll(filepath.Join(home, ".opencode", "agent"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	root, _, err := EnsureOpenCodeRunRoot(home, testRunID, envLookup(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	linked := func(name, want string) {
+		t.Helper()
+		if got, err := os.Readlink(filepath.Join(root, "home", name)); err != nil || got != want {
+			t.Errorf("home/%s = %q (%v); want a link to %s", name, got, err, want)
+		}
+	}
+	for _, name := range []string{".gitconfig", ".netrc", ".ssh", ".aws", ".config"} {
+		linked(name, filepath.Join(home, name))
+	}
+	if _, err := os.Lstat(filepath.Join(root, "home", ".opencode")); !os.IsNotExist(err) {
+		t.Errorf("home/.opencode exists (%v); OpenCode must never find one under the per-run HOME", err)
+	}
+
+	// The run made its own entry while the operator had none; the operator
+	// then made one.
+	write(filepath.Join(root, "home", ".npmrc"), "the run's own\n")
+	write(filepath.Join(home, ".npmrc"), "the operator's\n")
+	if _, _, err := EnsureOpenCodeRunRoot(home, testRunID, envLookup(nil)); err != nil {
+		t.Fatalf("the next stage refused a root holding an entry the run made itself: %v", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(root, "home", ".npmrc")); err != nil || string(b) != "the run's own\n" {
+		t.Errorf("the run's own home/.npmrc was replaced: %q, %v", b, err)
+	}
+}
+
 // TestOpenCodeManagedConfigFiles: the machine-wide managed config opencode
 // 1.18.30 reads, per platform, from its bundled source.
 func TestOpenCodeManagedConfigFiles(t *testing.T) {
@@ -1071,12 +1133,15 @@ func TestOpenCodeRefusesManagedOpenCodeConfig(t *testing.T) {
 }
 
 // TestOpenCodeIsolationRefusalFollowsTheBlockTheRunIsBuiltFrom: the
-// ~/.opencode and managed-config refusals and the environment that decides
-// whether the operator's config is layered in come from one read of the
-// machine-tier block. With a block that reads opted in first and opted out
-// after, a dispatch is never let through with ~/.opencode holding config and
-// the run built as opted out, which would load that config with neither the
-// refusal nor the stderr line.
+// managed-config refusal and the environment that decides whether the
+// operator's config is layered in come from one read of the machine-tier
+// block. With a block that reads opted in first and opted out after, a
+// dispatch is never let through with managed config present and the run built
+// as opted out, which would load that config with neither the refusal nor the
+// stderr line. (Before #1787, ~/.opencode holding config could also race
+// this way; a non-inheriting run's own per-run HOME now keeps ~/.opencode
+// structurally out of reach, so only the managed-config refusal can still
+// race.)
 func TestOpenCodeIsolationRefusalFollowsTheBlockTheRunIsBuiltFrom(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -1084,11 +1149,12 @@ func TestOpenCodeIsolationRefusalFollowsTheBlockTheRunIsBuiltFrom(t *testing.T) 
 		t.Setenv(k, "")
 	}
 	t.Setenv(ExperimentalOpenCodeEnvVar, "1")
-	if err := os.MkdirAll(filepath.Join(home, ".opencode", "agent"), 0o700); err != nil {
+	managed := filepath.Join(t.TempDir(), "opencode.json")
+	if err := os.WriteFile(managed, []byte("{}"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	reads := 0
-	a := &OpenCodeAdapter{managedConfig: []string{}, settings: func(string) (config.OpenCodeConfig, error) {
+	a := &OpenCodeAdapter{managedConfig: []string{managed}, settings: func(string) (config.OpenCodeConfig, error) {
 		reads++
 		s := lmStudioSettings()
 		s.InheritUserConfig = reads == 1
@@ -1104,11 +1170,11 @@ func TestOpenCodeIsolationRefusalFollowsTheBlockTheRunIsBuiltFrom(t *testing.T) 
 	})
 	switch {
 	case err != nil:
-		if !strings.Contains(err.Error(), filepath.Join(home, ".opencode")) {
+		if !strings.Contains(err.Error(), managed) {
 			t.Errorf("the dispatch was refused for another reason: %v", err)
 		}
 	case root.Env["OPENCODE_CONFIG_DIR"] == "":
-		t.Error("the dispatch went ahead with ~/.opencode holding config and the run built as opted out: that config loads with neither the refusal nor the opt-in")
+		t.Error("the dispatch went ahead with managed config present and the run built as opted out: that config loads with neither the refusal nor the opt-in")
 	case !strings.Contains(stderr, openCodeInheritSetting+" is on"):
 		t.Errorf("the run layers the operator's config in but stderr does not say so:\n%s", stderr)
 	}
@@ -1133,101 +1199,6 @@ func captureAdapterStderr(t *testing.T, fn func()) string {
 	fn()
 	_ = w.Close()
 	return string(<-out)
-}
-
-// TestOpenCodeRefusesAHomeDotOpenCodeWithConfig: observed on 1.18.30,
-// OpenCode reads $HOME/.opencode as a config directory whatever the XDG
-// variables say, so the per-run root cannot keep it out (ADR-022 § 8). A
-// dispatch is refused before spawn while it holds anything OpenCode loads
-// from a config directory, naming the entries without reading them, and
-// nothing is created. What an install or OpenCode itself leaves there is not
-// config. With the operator's opt-in into their own OpenCode config,
-// opencode.inherit_user_config in the machine tier, the dispatch goes ahead
-// and stderr says so. The refusal is PrepareRunRoot's, which the verb shares;
-// without the switch, PreDispatch's gate refuses first.
-func TestOpenCodeRefusesAHomeDotOpenCodeWithConfig(t *testing.T) {
-	// The name is what operators set and what ADR-022 § 8 documents.
-	if openCodeInheritSetting != "opencode.inherit_user_config" {
-		t.Fatalf("the opt-in setting is %q; ADR-022 § 8 names opencode.inherit_user_config", openCodeInheritSetting)
-	}
-	for _, k := range []string{"XDG_CONFIG_HOME", "XDG_CACHE_HOME", "GH_CONFIG_DIR", "GOCACHE"} {
-		t.Setenv(k, "")
-	}
-	a := &OpenCodeAdapter{managedConfig: []string{}, settings: fixedOpenCodeSettings(lmStudioSettings())}
-	req := RunRootRequest{ID: testRunID, MachineConfigDir: t.TempDir(), Run: RunOptions{Model: "lmstudio/qwen/qwen3.8-27b", WorktreeDir: t.TempDir()}}
-	t.Setenv(ExperimentalOpenCodeEnvVar, "1")
-	const sentinel = "home-config-content-sentinel-1616"
-	for _, entry := range []string{
-		"opencode.json", "opencode.jsonc", "agent", "agents", "command", "commands",
-		"mode", "modes", "plugin", "plugins", "tool", "tools", "skill", "skills",
-	} {
-		home := t.TempDir()
-		t.Setenv("HOME", home)
-		path := filepath.Join(home, ".opencode", entry)
-		if strings.Contains(entry, ".") {
-			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(path, []byte(sentinel), 0o600); err != nil {
-				t.Fatal(err)
-			}
-		} else if err := os.MkdirAll(path, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		_, err := a.PrepareRunRoot(req)
-		if err == nil {
-			t.Errorf("~/.opencode/%s: the dispatch was allowed", entry)
-			continue
-		}
-		for _, want := range []string{filepath.Join(home, ".opencode"), entry, openCodeInheritSetting + ": true", filepath.Join("~", ".config", "opencode")} {
-			if !strings.Contains(err.Error(), want) {
-				t.Errorf("~/.opencode/%s: the refusal does not say %q: %v", entry, want, err)
-			}
-		}
-		if strings.Contains(err.Error(), sentinel) {
-			t.Errorf("~/.opencode/%s: the refusal carries the file's content", entry)
-		}
-		if _, err := os.Lstat(OpenCodeRunsDir(home)); !os.IsNotExist(err) {
-			t.Errorf("~/.opencode/%s: the refused dispatch created %s", entry, OpenCodeRunsDir(home))
-		}
-	}
-
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	for _, notConfig := range []string{"bin", "node_modules"} {
-		if err := os.MkdirAll(filepath.Join(home, ".opencode", notConfig), 0o700); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, notConfig := range []string{"package.json", ".gitignore", "bun.lock"} {
-		if err := os.WriteFile(filepath.Join(home, ".opencode", notConfig), []byte("{}"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := a.PrepareRunRoot(req); err != nil {
-		t.Errorf("a ~/.opencode holding only bin/ and install files was refused: %v", err)
-	}
-
-	if err := os.MkdirAll(filepath.Join(home, ".opencode", "agent"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	inherit := lmStudioSettings()
-	inherit.InheritUserConfig = true
-	a.settings = fixedOpenCodeSettings(inherit)
-	var err error
-	stderr := captureAdapterStderr(t, func() { _, err = a.PrepareRunRoot(req) })
-	if err != nil {
-		t.Errorf("with %s on the dispatch was refused: %v", openCodeInheritSetting, err)
-	}
-	if n := strings.Count(stderr, openCodeInheritSetting+" is on: this dispatch also reads your own OpenCode config"); n != 1 {
-		t.Errorf("the opt-in was announced %d times on stderr, want once:\n%s", n, stderr)
-	}
-
-	a.settings = fixedOpenCodeSettings(lmStudioSettings())
-	t.Setenv(ExperimentalOpenCodeEnvVar, "")
-	if err := a.PreDispatch(context.Background(), RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"}); err == nil || !strings.Contains(err.Error(), "is experimental") {
-		t.Errorf("with the switch unset the refusal = %v; want the gate's", err)
-	}
 }
 
 // TestOpenCodePrepareRunRoot drives the hook the manager calls: the root is
@@ -1266,6 +1237,9 @@ func TestOpenCodePrepareRunRoot(t *testing.T) {
 	}
 	if first.Env["XDG_DATA_HOME"] != filepath.Join(first.Dir, "data") || first.Env["NIGHTGAUGE_CONFIG_HOME"] != req.MachineConfigDir {
 		t.Errorf("Env does not point OpenCode at the root: %v", first.Env)
+	}
+	if want := filepath.Join(first.Dir, "home"); first.Env["HOME"] != want {
+		t.Errorf("Env[HOME] = %q, want %q", first.Env["HOME"], want)
 	}
 	if content := first.Env["OPENCODE_CONFIG_CONTENT"]; !strings.Contains(content, `"enabled_providers":["lmstudio"]`) {
 		t.Errorf("Env does not carry the run's config as OPENCODE_CONFIG_CONTENT: %q", content)
