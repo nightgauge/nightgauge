@@ -131,6 +131,32 @@ func TestRefineStageOptionsCarryAPromptAndToolAllowlist(t *testing.T) {
 	}
 }
 
+// TestRefineStageOptionsSetsCostBudget pins #1749: refineStageOptions is one
+// of the two production StageOptions builders that must carry a non-zero
+// CostBudget so the OpenCode watchdog / --max-budget-usd chain downstream
+// (execution.Manager.buildRunOptions) is ever actually reached.
+func TestRefineStageOptionsSetsCostBudget(t *testing.T) {
+	ws := t.TempDir()
+	bundle := refineSkillFixture(t)
+	withRefineRoots(t, ws, bundle)
+
+	sched := NewScheduler(nil, SchedulerConfig{WorkspaceRoot: ws})
+	as := NewAutonomousScheduler(sched, nil, []depgraph.RepoConfig{}, nil, DefaultAutonomousConfig(), ws)
+
+	opts, err := as.refineStageOptions("acme", "widgets", 42, "claude")
+	if err != nil {
+		t.Fatalf("refineStageOptions: %v", err)
+	}
+
+	want := PipelineBudgetCeilingUSD(ws)
+	if want <= 0 {
+		t.Fatalf("PipelineBudgetCeilingUSD(%q) = %v, want > 0", ws, want)
+	}
+	if opts.CostBudget != want {
+		t.Errorf("CostBudget = %v, want %v (PipelineBudgetCeilingUSD(workspaceRoot))", opts.CostBudget, want)
+	}
+}
+
 func containsStr(hay []string, needle string) bool {
 	for _, h := range hay {
 		if h == needle {

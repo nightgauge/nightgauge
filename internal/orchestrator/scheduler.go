@@ -105,6 +105,7 @@ type StageRunParams struct {
 	// configured adapter is the one whose cap just cost the run a stage.
 	AdapterPin   string
 	MaxTokens    int
+	CostBudget   float64
 	Timeout      time.Duration
 	SkillPath    string
 	ContextFile  string
@@ -519,8 +520,13 @@ func terminalFailureReason(exitCode int, err error, failText string) string {
 }
 
 // RunStage implements StageRunner by delegating to execution.Manager.
-func (r *ExecutionManagerRunner) RunStage(ctx context.Context, params StageRunParams) (*StageRunResult, error) {
-	opts := execution.StageOptions{
+// stageOptionsFromParams projects StageRunParams onto execution.StageOptions.
+// Extracted from ExecutionManagerRunner.RunStage (#1749) so the CostBudget
+// (and every other field) carry is assertable without spawning a process,
+// mirroring the cliRunResultToStageResult extraction below for the same
+// reason on the result side.
+func stageOptionsFromParams(params StageRunParams) execution.StageOptions {
+	return execution.StageOptions{
 		Repo:         params.Repo,
 		IssueNumber:  params.IssueNumber,
 		Stage:        string(params.Stage),
@@ -530,6 +536,7 @@ func (r *ExecutionManagerRunner) RunStage(ctx context.Context, params StageRunPa
 		Model:        params.Model,
 		Effort:       params.Effort,
 		MaxTokens:    params.MaxTokens,
+		CostBudget:   params.CostBudget,
 		Timeout:      params.Timeout,
 		Runtime:      params.Runtime,
 		AllowedTools: params.AllowedTools,
@@ -537,6 +544,10 @@ func (r *ExecutionManagerRunner) RunStage(ctx context.Context, params StageRunPa
 		TargetRepo:   params.TargetRepo,
 		PhaseEventFn: params.PhaseEventFn,
 	}
+}
+
+func (r *ExecutionManagerRunner) RunStage(ctx context.Context, params StageRunParams) (*StageRunResult, error) {
+	opts := stageOptionsFromParams(params)
 
 	result, err := r.execMgr.RunStage(ctx, opts)
 	if err != nil {
@@ -5508,6 +5519,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// Replaces a blind 30-min literal that killed frontier-mode Fable
 			// stages before their own progress-gated hard cap could apply.
 			Timeout:      routing.ResolveStageTimeout(string(stage), model),
+			CostBudget:   PipelineBudgetCeilingUSD(workspaceRoot),
 			SkillPath:    skillData.SkillPath,
 			ContextFile:  contextFile,
 			OutputFile:   outputFile,

@@ -8127,6 +8127,7 @@ func (as *AutonomousScheduler) refineStageOptions(owner, repo string, issueNumbe
 		SkillPath:   rendered.SkillPath,
 		Model:       "sonnet",
 		Timeout:     5 * time.Minute,
+		CostBudget:  PipelineBudgetCeilingUSD(as.workspaceRoot),
 		TargetRepo:  fullRepo,
 		// Without these two the resolved SkillPath is never read by any
 		// adapter: execution.Manager pipes Prompt on stdin and passes
