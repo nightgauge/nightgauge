@@ -24,6 +24,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- An OpenCode stage no longer waits on an install into an operator's
+  populated `~/.opencode` (#1787). Every non-inheriting OpenCode dispatch now
+  runs with its own per-run `HOME`, populated with symbolic links to the
+  operator's other home-directory state (`.gitconfig`, `.netrc`, `.ssh`,
+  `.aws`, `.config`, ...) except `.opencode`, so OpenCode never finds config
+  to install against there and never waits, while every other tool the stage
+  starts still resolves the operator's files unchanged.
+  `opencode.inherit_user_config` is unaffected: it still leaves `HOME`
+  untouched entirely.
 - A symlink planted inside an OpenCode `external_directory` allow-listed
   directory (`NIGHTGAUGE_SKILL_DIR`, the context/output file directories, or
   the `/tmp`, `/private/tmp` scratch roots) after the per-run permission map

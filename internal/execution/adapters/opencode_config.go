@@ -1151,13 +1151,12 @@ func OpenCodeEnvWithholdFor(model string) OpenCodeEnvWithhold {
 // because it would run with neither. A prepared run says on stderr what it is
 // given and what it is not.
 //
-// Unless req.Settings opts into the operator's own OpenCode config, a
-// $HOME/.opencode holding config (openCodeHomeConfigRefusal) and the
-// machine's managed OpenCode config (openCodeManagedConfigRefusal) refuse
-// the dispatch; with the opt-in, stderr says what the run reads. Both follow
-// the same Settings the environment is built from, so a setting changed
-// between two reads can never leave a run with neither the refusal nor the
-// notice.
+// Unless req.Settings opts into the operator's own OpenCode config, the
+// dispatch gets its own per-run HOME (OpenCodeIsolationEnv), which keeps
+// OpenCode from ever finding a $HOME/.opencode to read or install into; the
+// machine's managed OpenCode config still refuses the dispatch
+// (openCodeManagedConfigRefusal), because nothing moves it. With the opt-in,
+// stderr says what the run reads instead.
 //
 // The adapter's PrepareRunRoot and `nightgauge opencode config` both call it,
 // so the SDK path and the Go path run under the same bytes and the same
@@ -1197,9 +1196,6 @@ func PrepareOpenCodeRun(req OpenCodeRunRequest) (*OpenCodeRun, error) {
 		fmt.Fprintf(os.Stderr, "[opencode] %s is on: this dispatch also reads your own OpenCode config (your XDG OpenCode config directory, ~/.opencode and any managed OpenCode config on this machine). Every key the per-run config sets still wins over it except a managed config's, which outranks them all; stored logins are not inherited, but an API key written in that config is\n",
 			openCodeInheritSetting)
 	} else {
-		if err := openCodeHomeConfigRefusal(req.Home); err != nil {
-			return nil, err
-		}
 		managed := req.ManagedConfigFiles
 		if managed == nil {
 			managed = openCodeManagedConfigFiles(req.GOOS, openCodeUsername())

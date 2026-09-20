@@ -25,13 +25,11 @@ package execution
 // config is never read either way. With CI=true a missing binary fails every
 // case rather than skipping it.
 //
-// TestOpenCodeIntegrationAbsentInheritedConfigDirOffline and
-// TestOpenCodeIntegrationHomeDirBinOnly are the exception: they dispatch
-// with an operator-owned OpenCode directory ($HOME/.opencode, or
-// OPENCODE_CONFIG_DIR under opencode.inherit_user_config) in play.
-// Nightgauge never seeds or merges into either (#1635/A11 round 6, ADR-022
-// amendment 2026-09-15, narrowed AC1), so those two expect the dispatch to
-// fail, bounded by the manager's operator-install-risk watchdog
+// TestOpenCodeIntegrationAbsentInheritedConfigDirOffline is the exception: it
+// dispatches under opencode.inherit_user_config with OPENCODE_CONFIG_DIR (the
+// operator's own) in play. Nightgauge never seeds or merges into it (#1635/A11
+// round 6, ADR-022 amendment 2026-09-15, narrowed AC1), so it expects the
+// dispatch to fail, bounded by the manager's operator-install-risk watchdog
 // (openCodeOperatorInstallWaitBound, shortened for the test) rather than by
 // npm's own registry retry/backoff.
 
@@ -381,14 +379,17 @@ func runOpenCodeIntegrationStage(t *testing.T) (*adapters.RunResult, string, err
 // only an UNSATISFIED $HOME/.opencode or OPENCODE_CONFIG_DIR pays that wait;
 // a directory seeded with the full four-file set gets the same fast path a
 // run's own XDG-resolved config directory always did — see
-// seedOperatorInstallSatisfied's own doc comment). The two CI-required
-// opt-in success tests (TestOpenCodeIntegrationInheritUserConfigOptIn,
+// seedOperatorInstallSatisfied's own doc comment). Since #1787, only
+// OPENCODE_CONFIG_DIR under opencode.inherit_user_config can still pay that
+// wait: a non-inheriting run's own per-run HOME keeps $HOME/.opencode out of
+// reach entirely. The CI-required opt-in success tests
+// (TestOpenCodeIntegrationInheritUserConfigOptIn,
 // TestOpenCodeIntegrationHomeDotOpenCode) seed their operator directories
-// satisfied and so no longer need a raised timeout; the two offline tests
-// below (TestOpenCodeIntegrationAbsentInheritedConfigDirOffline,
-// TestOpenCodeIntegrationHomeDirBinOnly) deliberately leave their operator
-// directory unsatisfied and use withShortOperatorInstallWaitBoundForRealBinary
-// instead, to prove the bound rather than wait it out.
+// satisfied and so no longer need a raised timeout; the offline test below
+// (TestOpenCodeIntegrationAbsentInheritedConfigDirOffline) deliberately
+// leaves its operator directory unsatisfied and uses
+// withShortOperatorInstallWaitBoundForRealBinary instead, to prove the bound
+// rather than wait it out.
 func runOpenCodeIntegrationStageWithTimeout(t *testing.T, timeout time.Duration) (*adapters.RunResult, string, error) {
 	t.Helper()
 	var result *adapters.RunResult
@@ -511,10 +512,11 @@ func readShimFile(t *testing.T, dir, name string) []byte {
 }
 
 // TestOpenCodeIntegrationIsolatesTheRun: under the environment a stage runs
-// in, `opencode debug paths` resolves config, data, cache and state inside
-// the run's root (home stays); the operator's global opencode.json, with an
-// agent, an MCP server and a plugin, is absent from `opencode debug config`;
-// and the stage's session is in the run's own session list and never in the
+// in, `opencode debug paths` resolves config, data, cache, state AND home
+// inside the run's root (#1787: home moves too, so $HOME/.opencode never
+// exists there); the operator's global opencode.json, with an agent, an MCP
+// server and a plugin, is absent from `opencode debug config`; and the
+// stage's session is in the run's own session list and never in the
 // operator's.
 func TestOpenCodeIntegrationIsolatesTheRun(t *testing.T) {
 	real := realOpenCode(t)
@@ -543,13 +545,13 @@ func TestOpenCodeIntegrationIsolatesTheRun(t *testing.T) {
 
 	runs := filepath.Join(home, ".nightgauge", "opencode", "runs") + string(os.PathSeparator)
 	paths := debugPaths(t, readShimFile(t, out, "paths.txt"))
-	for _, name := range []string{"config", "data", "cache", "state"} {
+	for _, name := range []string{"config", "data", "cache", "state", "home"} {
 		if !strings.HasPrefix(paths[name], runs) {
 			t.Errorf("debug paths %s = %s, want it inside a run root under %s", name, paths[name], runs)
 		}
 	}
-	if paths["home"] != home {
-		t.Errorf("debug paths home = %s, want the unmoved %s", paths["home"], home)
+	if paths["home"] == home {
+		t.Errorf("debug paths home = %s, want a per-run HOME (#1787), not the operator's own %s", paths["home"], home)
 	}
 
 	config := string(readShimFile(t, out, "config.json"))
@@ -679,9 +681,12 @@ func TestOpenCodeIntegrationInheritUserConfigOptIn(t *testing.T) {
 
 // TestOpenCodeIntegrationHomeDotOpenCode: OpenCode reads ~/.opencode as a
 // config directory whatever the XDG variables say, so an agent there reaches
-// a run's config even in the run's environment. That is why an enabled
-// dispatch is refused while ~/.opencode holds config, before anything is
-// spawned, and why the operator's opt-in lets it through with the agent loaded.
+// the operator's own OpenCode. Since #1787 a non-inheriting dispatch gets its
+// own per-run HOME (the run root's home/), which never contains .opencode, so
+// the agent never reaches the run, the dispatch never waits on OpenCode's own
+// install into it (no npm registry connection at all), and the operator's
+// ~/.opencode is left completely untouched. With the operator's opt-in
+// (opencode.inherit_user_config), HOME is left alone and the agent loads.
 func TestOpenCodeIntegrationHomeDotOpenCode(t *testing.T) {
 	real := realOpenCode(t)
 	home := isolateOpenCodeHome(t)
@@ -690,13 +695,19 @@ func TestOpenCodeIntegrationHomeDotOpenCode(t *testing.T) {
 	if err := os.MkdirAll(agentDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(agentDir, "home-dotdir-agent.md"),
+	agentFile := filepath.Join(agentDir, "home-dotdir-agent.md")
+	if err := os.WriteFile(agentFile,
 		[]byte("---\ndescription: from ~/.opencode\nmode: subagent\n---\nhome dot-dir agent\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	before, err := os.Stat(agentFile)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	// The premise: with all four XDG directories elsewhere, and project
-	// config disabled, the agent still loads.
+	// The premise: with all four XDG directories elsewhere but HOME left
+	// alone, and project config disabled, the agent still loads — proves the
+	// fixture is real config, so its absence below is meaningful.
 	root := t.TempDir()
 	cmd := exec.Command(real, "debug", "config")
 	cmd.Dir = t.TempDir()
@@ -709,16 +720,38 @@ func TestOpenCodeIntegrationHomeDotOpenCode(t *testing.T) {
 		t.Fatalf("opencode debug config with the XDG directories moved: %v\n%s", err, premise)
 	}
 	if !strings.Contains(string(premise), "home-dotdir-agent") {
-		t.Fatalf("opencode %s no longer reads ~/.opencode in a run's environment; revisit the refusal in ADR-022 § 8:\n%s", openCodeIntegrationVersion, premise)
+		t.Fatalf("opencode %s no longer reads ~/.opencode when HOME is left alone; revisit ADR-022 § 8:\n%s", openCodeIntegrationVersion, premise)
 	}
 
-	out := openCodeShim(t, real)
-	_, _, err = runOpenCodeIntegrationStage(t)
-	if err == nil || !strings.Contains(err.Error(), filepath.Join(home, ".opencode")) {
-		t.Fatalf("RunStage with an agent in ~/.opencode = %v; want a refusal naming it", err)
+	registryEnv, connections := localNPMRegistry(t)
+	out := openCodeShimWithRegistry(t, real, registryEnv)
+	start := time.Now()
+	result, stderr, err := runOpenCodeIntegrationStage(t)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("RunStage with an agent in ~/.opencode = %v; #1787's per-run HOME must never wait or refuse on it", err)
 	}
-	if _, statErr := os.Stat(filepath.Join(out, "paths.txt")); statErr == nil {
-		t.Error("the refused dispatch spawned opencode")
+	if result != nil && result.ExitCode == -1 {
+		t.Error("ExitCode = -1: the dispatch was killed rather than completing")
+	}
+	if strings.Contains(stderr, "adapter_incompatible") || strings.Contains(stderr, "may be waiting on an unreachable registry") {
+		t.Errorf("stderr carries an install-risk/adapter_incompatible marker; a non-inheriting run's own per-run HOME must never touch ~/.opencode at all:\n%s", stderr)
+	}
+	if elapsed > openCodeOfflineWallClockCap {
+		t.Errorf("RunStage took %s, want under %s: #1787's whole point is that a non-inheriting run never waits on ~/.opencode", elapsed, openCodeOfflineWallClockCap)
+	}
+	if n := connections(); n != 0 {
+		t.Errorf("the npm registry stand-in saw %d connection(s); a non-inheriting run must never reach for a config directory it never sees", n)
+	}
+	if config := string(readShimFile(t, out, "config.json")); strings.Contains(config, "home-dotdir-agent") {
+		t.Errorf("the run's resolved config holds the operator's ~/.opencode agent; a non-inheriting run's HOME must keep it out entirely:\n%s", config)
+	}
+	after, err := os.Stat(agentFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !before.ModTime().Equal(after.ModTime()) {
+		t.Errorf("the operator's %s mtime changed: %v -> %v", agentFile, before.ModTime(), after.ModTime())
 	}
 
 	writeOpenCodeMachineConfig(t, openCodeInheritConfig)
@@ -732,8 +765,8 @@ func TestOpenCodeIntegrationHomeDotOpenCode(t *testing.T) {
 	seedOperatorInstallSatisfied(t, filepath.Join(home, ".opencode"))
 	seedOperatorInstallSatisfied(t, filepath.Join(home, ".config", "opencode"))
 	started := time.Now()
-	result, stderr, err := runOpenCodeIntegrationStage(t)
-	elapsed := time.Since(started)
+	result, stderr, err = runOpenCodeIntegrationStage(t)
+	elapsed = time.Since(started)
 	if err != nil {
 		t.Fatalf("RunStage with the opt-in: %v", err)
 	}
@@ -770,8 +803,12 @@ func depsMarkerPath(dir string) string {
 // openCodeOperatorInstallWaitBound this file sets for them, comfortably
 // below the multi-minute registry retry/backoff wait ADR-022's amendment
 // records (71s and 146.88s observed) a regression back to an UNBOUNDED wait
-// would reproduce.
-const openCodeOfflineWallClockCap = 20 * time.Second
+// would reproduce. 35s (not 20s) because CI runs this package alongside two
+// others in the same `go test` invocation: TestOpenCodeIntegrationHomeDotOpenCode
+// observed 23-24s there against ~11s standalone locally — real contention,
+// not a regression — and 35s still leaves more than half its margin below
+// the 71s floor this guards against.
+const openCodeOfflineWallClockCap = 35 * time.Second
 
 // withShortOperatorInstallWaitBoundForRealBinary shortens
 // openCodeOperatorInstallWaitBound for a real-binary test in this file, so
@@ -836,15 +873,16 @@ func TestOpenCodeIntegrationAbsentInheritedConfigDirOffline(t *testing.T) {
 	}
 }
 
-// TestOpenCodeIntegrationHomeDirBinOnly (#1635/A11 round 6, ADR-022
-// amendment 2026-09-15, narrowed AC1): $HOME/.opencode exists but holds only
-// bin/ — the shape opencode's own official install script leaves before any
-// config file is ever written there. Nightgauge never writes into it (an
-// earlier round merged into it; narrowed AC1 removes that): the dispatch
-// waits on the real binary's own install, bounded by the shortened watchdog,
-// and fails classified rather than hanging or silently succeeding with a
-// merge Nightgauge no longer performs.
-func TestOpenCodeIntegrationHomeDirBinOnly(t *testing.T) {
+// TestOpenCodeIntegrationHomeDirBinOnlyNeverArmsTheWatchdog (#1787): before
+// this issue, a bin/-only $HOME/.opencode — the shape opencode's own official
+// install script leaves before any config file is ever written there — armed
+// the operator-install-risk watchdog for a non-inheriting run exactly as a
+// populated one did. Since #1787, a non-inheriting run's own per-run HOME
+// keeps $HOME/.opencode out of reach altogether, so the watchdog is never
+// armed and the dispatch completes on the run's own model dispatch path
+// (which fails fast: the stage's model is not in the catalog), never bounded
+// by openCodeOperatorInstallWaitBound at all.
+func TestOpenCodeIntegrationHomeDirBinOnlyNeverArmsTheWatchdog(t *testing.T) {
 	real := realOpenCode(t)
 	home := isolateOpenCodeHome(t)
 	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
@@ -852,26 +890,30 @@ func TestOpenCodeIntegrationHomeDirBinOnly(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(operatorOpenCodeDir, "bin"), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	// Deliberately short: if this fires, the watchdog armed after all.
 	withShortOperatorInstallWaitBoundForRealBinary(t, 6*time.Second)
 
-	registryEnv, _ := localNPMRegistry(t)
+	registryEnv, connections := localNPMRegistry(t)
 	openCodeShimWithRegistry(t, real, registryEnv)
 
 	start := time.Now()
 	result, stderr, err := runOpenCodeIntegrationStage(t)
 	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("RunStage: %v", err)
+	}
 	if elapsed > openCodeOfflineWallClockCap {
-		t.Errorf("RunStage took %s, want under %s: a bin/-only ~/.opencode must be bounded by the watchdog, not by npm's own retry/backoff", elapsed, openCodeOfflineWallClockCap)
+		t.Errorf("RunStage took %s, want under %s: a bin/-only ~/.opencode must never arm the watchdog for a non-inheriting run", elapsed, openCodeOfflineWallClockCap)
 	}
 	combined := stderr
 	if result != nil {
 		combined += result.Stderr
 	}
-	if !strings.Contains(combined, "adapter_incompatible") {
-		t.Errorf("stderr/result carries no adapter_incompatible marker:\nerr=%v\nstderr=%s", err, combined)
+	if strings.Contains(combined, "adapter_incompatible") || strings.Contains(combined, "may be waiting on an unreachable registry") {
+		t.Errorf("stderr/result carries an install-risk/adapter_incompatible marker; a non-inheriting run's per-run HOME must keep $HOME/.opencode out of reach:\n%s", combined)
 	}
-	if !strings.Contains(combined, operatorOpenCodeDir) {
-		t.Errorf("stderr/result does not name the operator-owned %s:\nstderr=%s", operatorOpenCodeDir, combined)
+	if n := connections(); n != 0 {
+		t.Errorf("the npm registry stand-in saw %d connection(s); a non-inheriting run must never reach for $HOME/.opencode", n)
 	}
 	if _, err := os.Stat(depsMarkerPath(operatorOpenCodeDir)); err == nil {
 		t.Error("Nightgauge must never write @opencode-ai/plugin into an operator-owned $HOME/.opencode")

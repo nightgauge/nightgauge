@@ -1176,32 +1176,33 @@ func TestPrepareOpenCodeRunNamesWhatTheSpawnMustNotInherit(t *testing.T) {
 	}
 }
 
-// TestPrepareOpenCodeRunRefusesConfigARunCannotBeIsolatedFrom: a
-// $HOME/.opencode holding config, or the machine's managed OpenCode config,
-// refuses the run in the preparation the adapter and the verb share, before
-// anything is created, unless the machine tier opts into the operator's own
-// OpenCode config, which then says so on stderr and layers it in.
+// TestPrepareOpenCodeRunRefusesConfigARunCannotBeIsolatedFrom: the machine's
+// managed OpenCode config refuses the run in the preparation the adapter and
+// the verb share, before anything is created, unless the machine tier opts
+// into the operator's own OpenCode config, which then says so on stderr and
+// layers it in. (Before #1787, a $HOME/.opencode holding config refused the
+// run too; a non-inheriting run's own per-run HOME now keeps it structurally
+// out of reach, so PrepareOpenCodeRun never refuses on it.)
 func TestPrepareOpenCodeRunRefusesConfigARunCannotBeIsolatedFrom(t *testing.T) {
 	home := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(home, ".opencode"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(home, ".opencode", "opencode.json"), []byte("{}"), 0o600); err != nil {
+	managed := filepath.Join(t.TempDir(), "opencode.json")
+	if err := os.WriteFile(managed, []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	req := OpenCodeRunRequest{
-		Home:             home,
-		ID:               testRunID,
-		MachineConfigDir: filepath.Join(home, ".nightgauge"),
-		Run:              RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b", WorktreeDir: t.TempDir()},
-		Settings:         lmStudioSettings(),
-		Lookup:           envLookup(nil),
-		GOOS:             "linux",
+		Home:               home,
+		ID:                 testRunID,
+		MachineConfigDir:   filepath.Join(home, ".nightgauge"),
+		Run:                RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b", WorktreeDir: t.TempDir()},
+		Settings:           lmStudioSettings(),
+		Lookup:             envLookup(nil),
+		GOOS:               "linux",
+		ManagedConfigFiles: []string{managed},
 	}
 	if run, err := PrepareOpenCodeRun(req); err == nil {
-		t.Fatalf("a run was prepared while ~/.opencode holds config: %+v", run)
-	} else if !strings.Contains(err.Error(), filepath.Join(home, ".opencode")) || !strings.Contains(err.Error(), openCodeInheritSetting) {
-		t.Errorf("the refusal does not name ~/.opencode and the opt-in: %v", err)
+		t.Fatalf("a run was prepared while the machine has managed OpenCode config: %+v", run)
+	} else if !strings.Contains(err.Error(), managed) || !strings.Contains(err.Error(), openCodeInheritSetting) {
+		t.Errorf("the refusal does not name the managed config file and the opt-in: %v", err)
 	}
 	if _, err := os.Lstat(OpenCodeRunsDir(home)); !os.IsNotExist(err) {
 		t.Errorf("a refused run created %s", OpenCodeRunsDir(home))
@@ -1219,6 +1220,58 @@ func TestPrepareOpenCodeRunRefusesConfigARunCannotBeIsolatedFrom(t *testing.T) {
 	}
 	if n := strings.Count(stderr, openCodeInheritSetting+" is on"); n != 1 {
 		t.Errorf("the opt-in was announced %d times, want once:\n%s", n, stderr)
+	}
+}
+
+// TestPrepareOpenCodeRunGetsItsOwnHomeWithNoOpencodeToRefuse: a
+// non-inheriting run's HOME points at the per-run root's home/, populated
+// from the operator's real home directory except .opencode, so
+// PrepareOpenCodeRun succeeds even while the operator's real ~/.opencode
+// holds config, and nothing under the operator's real ~/.opencode is
+// touched (#1787).
+func TestPrepareOpenCodeRunGetsItsOwnHomeWithNoOpencodeToRefuse(t *testing.T) {
+	home := t.TempDir()
+	operatorOpenCode := filepath.Join(home, ".opencode")
+	if err := os.MkdirAll(operatorOpenCode, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const sentinel = `{"marker":"operator-opencode-1787"}`
+	if err := os.WriteFile(filepath.Join(operatorOpenCode, "opencode.json"), []byte(sentinel), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(filepath.Join(operatorOpenCode, "opencode.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := OpenCodeRunRequest{
+		Home:               home,
+		ID:                 testRunID,
+		MachineConfigDir:   filepath.Join(home, ".nightgauge"),
+		Run:                RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b", WorktreeDir: t.TempDir()},
+		Settings:           lmStudioSettings(),
+		Lookup:             envLookup(nil),
+		GOOS:               "linux",
+		ManagedConfigFiles: []string{},
+	}
+	run, err := PrepareOpenCodeRun(req)
+	if err != nil {
+		t.Fatalf("the run was refused with a populated operator ~/.opencode: %v", err)
+	}
+	if want := filepath.Join(run.RunDir, "home"); run.Env["HOME"] != want {
+		t.Errorf("Env[HOME] = %q, want %q", run.Env["HOME"], want)
+	}
+	if _, err := os.Lstat(filepath.Join(run.RunDir, "home", ".opencode")); !os.IsNotExist(err) {
+		t.Errorf("the run's own home/.opencode exists (%v); it must never be created", err)
+	}
+	after, err := os.Stat(filepath.Join(operatorOpenCode, "opencode.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !before.ModTime().Equal(after.ModTime()) {
+		t.Errorf("the operator's ~/.opencode/opencode.json mtime changed: %v -> %v", before.ModTime(), after.ModTime())
+	}
+	if b, err := os.ReadFile(filepath.Join(operatorOpenCode, "opencode.json")); err != nil || string(b) != sentinel {
+		t.Errorf("the operator's ~/.opencode/opencode.json changed: %q, %v", b, err)
 	}
 }
 

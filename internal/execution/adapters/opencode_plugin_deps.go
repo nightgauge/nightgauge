@@ -112,9 +112,14 @@ func seedPluginDependencies(ctx context.Context, configDir string) {
 // config directories is the operator's environment, exactly as in the
 // operator's own OpenCode runs.
 //
-//   - $HOME/.opencode: only when it already exists AND does not already
-//     satisfy the pin — opencode never creates it itself, so an absent one is
-//     not this dispatch's problem.
+//   - $HOME/.opencode, where $HOME is what this dispatch's own env sets it
+//     to (run.Env["HOME"]), falling back to run.Home when the run leaves HOME
+//     untouched (opencode.inherit_user_config on) — only when it already
+//     exists AND does not already satisfy the pin — opencode never creates it
+//     itself, so an absent one is not this dispatch's problem. A
+//     non-inheriting run's HOME is the per-run root's home/ (#1787), whose
+//     .opencode linkOperatorHome never populates, so this can only ever flag
+//     the operator's real $HOME/.opencode under the inherit setting.
 //   - OPENCODE_CONFIG_DIR: whenever the run's env sets it and it does not
 //     already satisfy the pin (only ever set under
 //     opencode.inherit_user_config) — an absent one is unsatisfied by
@@ -144,8 +149,12 @@ func seedPluginDependencies(ctx context.Context, configDir string) {
 // read-only, not only on first output — an operator's OWN in-flight install
 // completing must never be capped as if it were a hang.
 func operatorInstallRisk(run *OpenCodeRun) string {
-	if run.Home != "" {
-		home := filepath.Join(run.Home, ".opencode")
+	dispatchHome := run.Env["HOME"]
+	if dispatchHome == "" {
+		dispatchHome = run.Home
+	}
+	if dispatchHome != "" {
+		home := filepath.Join(dispatchHome, ".opencode")
 		if fi, err := os.Stat(home); err == nil && fi.IsDir() && !opencodeplugin.OperatorInstallSatisfied(home) {
 			return home
 		}

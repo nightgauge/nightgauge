@@ -597,11 +597,13 @@ func InstallNightgaugePlugin(ctx context.Context, run *OpenCodeRun, outputFile, 
 	seedPluginDependencies(ctx, filepath.Dir(run.PluginDir))
 	// 1.18.30 installs @opencode-ai/plugin into every directory its own
 	// ConfigPaths.directories names, not only the run's own XDG config
-	// directory: $HOME/.opencode when it exists (isolation does not move it —
-	// openCodeHomeConfigRefusal's own comment: "neither the XDG variables,
-	// OPENCODE_DISABLE_PROJECT_CONFIG nor OPENCODE_PURE stops it") and
-	// OPENCODE_CONFIG_DIR, set only under opencode.inherit_user_config, at
-	// the operator's own XDG OpenCode config directory. Nightgauge never
+	// directory: $HOME/.opencode when it exists — under
+	// opencode.inherit_user_config, that is the operator's real one, since
+	// HOME is left untouched; otherwise it is the per-run HOME's own
+	// home/.opencode, which linkOperatorHome never populates, so this path is
+	// only ever in play under the inherit setting — and OPENCODE_CONFIG_DIR,
+	// set only under opencode.inherit_user_config, at the operator's own XDG
+	// OpenCode config directory. Nightgauge never
 	// seeds or merges anything into either (#1635/A11 round 6, ADR-022
 	// amendment 2026-09-15, narrowed AC1: an earlier round did, and the
 	// review that found the seed it fell back to left an operator's own

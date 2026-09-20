@@ -25,7 +25,7 @@ type openCodeRootRunner struct {
 
 func (r *openCodeRootRunner) RunStage(ctx context.Context, params StageRunParams) (*StageRunResult, error) {
 	root := filepath.Join(r.home, ".nightgauge", "opencode", "runs", params.RunID)
-	for _, dir := range []string{"config", "data/opencode", "cache", "state"} {
+	for _, dir := range []string{"config", "data/opencode", "cache", "state", "home"} {
 		if err := os.MkdirAll(filepath.Join(root, dir), 0o700); err != nil {
 			return nil, err
 		}

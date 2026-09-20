@@ -34,9 +34,11 @@ import (
 //   - OpenCode also reads $HOME/.opencode as a config directory and
 //     $HOME/.agents/skills (and $HOME/.claude/skills) for skills, whatever the
 //     XDG variables say. OPENCODE_DISABLE_EXTERNAL_SKILLS=1 stops the skill
-//     scans; nothing but HOME stops the $HOME/.opencode read, so
-//     PrepareOpenCodeRun refuses a dispatch while that directory holds config
-//     (openCodeHomeConfigRefusal).
+//     scans; nothing but HOME stops the $HOME/.opencode read, so a
+//     non-inheriting run gets its own HOME too: a private home/ inside the
+//     same root, populated the same way as config/ (linkOperatorHome), which
+//     never contains .opencode, so OpenCode never finds config to install
+//     against there.
 //   - The machine's managed OpenCode config merges above every other layer,
 //     OPENCODE_CONFIG_CONTENT included, and nothing moves it, so
 //     PrepareOpenCodeRun refuses a dispatch while it exists as well
@@ -277,11 +279,11 @@ func OpenCodeRunRoot(home, id string) (string, error) {
 // earlier stage of the run created it, and returns its path. created reports
 // whether this call created it.
 //
-// The root and its config/, data/, cache/ and state/ are directories of mode
-// 0700; an existing one with another mode is reset to 0700, and one that is a
-// symbolic link or not a directory is refused, so nothing is written through a
-// link planted in the root. Nothing else is created: in particular no
-// auth.json, so the data directory starts empty (ADR-022 § 17).
+// The root and its config/, data/, cache/, state/ and home/ are directories of
+// mode 0700; an existing one with another mode is reset to 0700, and one that
+// is a symbolic link or not a directory is refused, so nothing is written
+// through a link planted in the root. Nothing else is created: in particular
+// no auth.json, so the data directory starts empty (ADR-022 § 17).
 //
 // config/ holds a symbolic link to every entry of the operator's XDG config
 // directory ($XDG_CONFIG_HOME, else ~/.config, resolved from lookup) except
@@ -297,6 +299,15 @@ func OpenCodeRunRoot(home, id string) (string, error) {
 // the entries the operator has added since, and re-points a link whose
 // directory moved. An entry the run created itself, while the operator had
 // none, is not a link and is left as it is.
+//
+// home/ holds the same symbolic-link forwarding, applied to the operator's
+// real home directory instead of the XDG config directory, except .opencode
+// (linkOperatorHome). A non-inheriting run's HOME is pointed at it
+// (OpenCodeIsolationEnv), so every tool the stage starts still reads the
+// operator's other home-directory state (.gitconfig, .netrc,
+// .git-credentials, .ssh, .aws, .config, ...) unchanged, but OpenCode itself
+// finds no $HOME/.opencode to read or install into, because home/.opencode
+// never exists.
 //
 // Every call refreshes the root's modification time, which is what
 // SweepOpenCodeRunRoots ages.
@@ -316,7 +327,13 @@ func EnsureOpenCodeRunRoot(home, id string, lookup func(string) (string, bool)) 
 			return "", false, err
 		}
 	}
+	if _, err := ensurePrivateDir(filepath.Join(root, "home")); err != nil {
+		return "", false, err
+	}
 	if err := linkOperatorConfig(root, operatorXDGConfigHome(home, lookup)); err != nil {
+		return "", false, err
+	}
+	if err := linkOperatorHome(root, home); err != nil {
 		return "", false, err
 	}
 	now := time.Now()
@@ -370,6 +387,34 @@ func linkOperatorConfig(root, operatorConfigHome string) error {
 		}
 		link := filepath.Join(root, "config", e.Name())
 		if err := linkOperatorConfigEntry(link, filepath.Join(operatorConfigHome, e.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// linkOperatorHome links every entry of the operator's real home directory
+// except .opencode into root/home. See EnsureOpenCodeRunRoot.
+func linkOperatorHome(root, home string) error {
+	if !filepath.IsAbs(home) {
+		return nil
+	}
+	if fi, err := os.Stat(home); err != nil || !fi.IsDir() {
+		return nil
+	}
+	entries, err := os.ReadDir(home)
+	if err != nil {
+		return fmt.Errorf("opencode run root: read the operator's home directory: %w", err)
+	}
+	for _, e := range entries {
+		// EqualFold: on a case-insensitive filesystem a link named OpenCode
+		// would be the run's own home/.opencode entry (there is none, but the
+		// exclusion is kept symmetric with linkOperatorConfig's).
+		if strings.EqualFold(e.Name(), ".opencode") {
+			continue
+		}
+		link := filepath.Join(root, "home", e.Name())
+		if err := linkOperatorConfigEntry(link, filepath.Join(home, e.Name())); err != nil {
 			return err
 		}
 	}
@@ -527,6 +572,14 @@ type OpenCodeIsolation struct {
 //     in. Observed on 1.18.30, OpenCode merges that directory above the
 //     per-run config file and below OPENCODE_CONFIG_CONTENT, and the machine's
 //     managed config above both.
+//   - without InheritUserConfig, HOME at the root's home/, populated by
+//     linkOperatorHome (EnsureOpenCodeRunRoot) with a symbolic link to every
+//     entry of the operator's real home directory except .opencode, so
+//     OpenCode never finds a $HOME/.opencode to read or install into, while
+//     every other tool the stage starts still resolves the operator's
+//     home-directory state through the forwarded links. With InheritUserConfig,
+//     HOME is left untouched, so the operator's real $HOME/.opencode loads
+//     exactly as it does outside a run, matching OPENCODE_CONFIG_DIR.
 //
 // An inherited value of any of these names is replaced by the manager, never
 // left beside the export.
@@ -558,6 +611,8 @@ func OpenCodeIsolationEnv(in OpenCodeIsolation) (map[string]string, error) {
 	}
 	if in.InheritUserConfig {
 		env["OPENCODE_CONFIG_DIR"] = filepath.Join(operatorConfigHome, "opencode")
+	} else {
+		env["HOME"] = filepath.Join(in.Root, "home")
 	}
 	return env, nil
 }
@@ -583,41 +638,6 @@ func operatorUserCacheDir(in OpenCodeIsolation) string {
 		}
 		return filepath.Join(in.Home, ".cache")
 	}
-}
-
-// openCodeHomeConfigEntries are what opencode 1.18.30 loads from a config
-// directory, read from its bundled source: the two config files, and the
-// agent, command, mode, plugin, tool and skill directories under either
-// spelling.
-var openCodeHomeConfigEntries = []string{
-	"opencode.json", "opencode.jsonc",
-	"agent", "agents", "command", "commands", "mode", "modes",
-	"plugin", "plugins", "tool", "tools", "skill", "skills",
-}
-
-// openCodeHomeConfigRefusal refuses a dispatch while $HOME/.opencode holds
-// config. Observed on 1.18.30: OpenCode reads $HOME/.opencode as a config
-// directory on every run, and neither the XDG variables,
-// OPENCODE_DISABLE_PROJECT_CONFIG nor OPENCODE_PURE stops it, so the per-run
-// root cannot keep it out. A directory holding only what an install or
-// OpenCode itself puts there (bin/, a package.json and its node_modules) is
-// not config. The refusal names the entries and never reads them.
-func openCodeHomeConfigRefusal(home string) error {
-	dir := filepath.Join(home, ".opencode")
-	var found []string
-	for _, name := range openCodeHomeConfigEntries {
-		if _, err := os.Lstat(filepath.Join(dir, name)); err == nil {
-			found = append(found, name)
-		}
-	}
-	if len(found) == 0 {
-		return nil
-	}
-	return fmt.Errorf(
-		"%s holds OpenCode config (%s), and OpenCode reads that directory on every run whatever its XDG directories are, so a pipeline run cannot be isolated from it. "+
-			"Move those entries into your XDG OpenCode config directory (%s), which your own OpenCode sessions still read and pipeline runs do not, "+
-			"or set %s: true in your machine-tier config (~/.nightgauge/config.yaml) to run pipeline stages with your OpenCode config. See docs/decisions/022-opencode-multi-provider-adapter.md § 8",
-		dir, strings.Join(found, ", "), filepath.Join("~", ".config", "opencode"), openCodeInheritSetting)
 }
 
 // openCodeManagedConfigFiles are the machine-wide managed config files

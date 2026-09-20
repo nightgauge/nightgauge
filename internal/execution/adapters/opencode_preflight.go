@@ -873,20 +873,22 @@ func CheckOpenCodeRunHelp(res OpenCodeProbeResult, argv []string) error {
 }
 
 // OpenCodeMachineConfigRefusals are the refusals PrepareOpenCodeRun(req) makes
-// from the machine rather than the stage, in its order, before it creates
-// anything: none while req.Settings opts into the operator's own OpenCode
-// config (opencode.inherit_user_config), and otherwise $HOME/.opencode
-// holding config (openCodeHomeConfigRefusal), then the machine's managed
+// from the machine rather than the stage, before it creates anything: none
+// while req.Settings opts into the operator's own OpenCode config
+// (opencode.inherit_user_config), and otherwise the machine's managed
 // OpenCode config (openCodeManagedConfigRefusal), whose files
 // req.ManagedConfigFiles replaces as it does for PrepareOpenCodeRun. Only
-// req.Home, req.Settings, req.GOOS and req.ManagedConfigFiles are read. Each
-// refusal names the entries or files it found and reads none of them.
+// req.Settings, req.GOOS and req.ManagedConfigFiles are read. The refusal
+// names the files it found and reads none of them.
 //
-// A dispatch stops at the first. The doctor reports every one, so its
-// opencode row, and cap recovery with it, never calls usable a machine that
-// refuses every dispatch. PrepareOpenCodeRun makes the same two checks on the
-// same fields; TestOpenCodeMachineConfigRefusalsAreTheDispatchs holds the two
-// together.
+// $HOME/.opencode no longer refuses a dispatch: a non-inheriting run gets its
+// own per-run HOME (OpenCodeIsolationEnv), which never contains .opencode, so
+// the condition the old refusal checked can no longer be observed true.
+//
+// The doctor reports the refusal, so its opencode row, and cap recovery with
+// it, never calls usable a machine that refuses every dispatch.
+// PrepareOpenCodeRun makes the same check on the same fields;
+// TestOpenCodeMachineConfigRefusalsAreTheDispatchs holds the two together.
 func OpenCodeMachineConfigRefusals(req OpenCodeRunRequest) []error {
 	if req.Settings.InheritUserConfig {
 		return nil
@@ -896,10 +898,8 @@ func OpenCodeMachineConfigRefusals(req OpenCodeRunRequest) []error {
 		managed = openCodeManagedConfigFiles(req.GOOS, openCodeUsername())
 	}
 	var refusals []error
-	for _, err := range []error{openCodeHomeConfigRefusal(req.Home), openCodeManagedConfigRefusal(managed)} {
-		if err != nil {
-			refusals = append(refusals, err)
-		}
+	if err := openCodeManagedConfigRefusal(managed); err != nil {
+		refusals = append(refusals, err)
 	}
 	return refusals
 }

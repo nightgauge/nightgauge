@@ -537,18 +537,17 @@ func TestOpenCodeConfigVerbFlagsANonLoopbackEndpoint(t *testing.T) {
 // TestOpenCodeConfigVerbRefusesWhatTheAdapterRefusesBeforeSpawn: the verb is
 // the SDK path's one authority, so it refuses every dispatch the Go adapter
 // refuses before spawning, not only the config's own refusals: without the
-// enable switch; and, unless the machine tier opts into the operator's own
-// OpenCode config, while ~/.opencode holds config, which OpenCode loads into
-// any run and whose plugins run in-process. A refusal prints nothing on
-// stdout and creates no run root. With the opt-in the verb goes ahead, layers
-// the operator's config in, and says so on stderr.
+// enable switch. Since #1787, a populated ~/.opencode no longer refuses the
+// verb: a non-inheriting dispatch gets its own per-run HOME (home/), which
+// never contains .opencode, so the verb goes ahead and the operator's real
+// ~/.opencode is left untouched. With the opt-in the verb also goes ahead,
+// layers the operator's config in instead, and says so on stderr.
 func TestOpenCodeConfigVerbRefusesWhatTheAdapterRefusesBeforeSpawn(t *testing.T) {
 	worktree := isolateOpenCodeVerb(t, openCodeVerbMachineConfig)
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Fatal(err)
 	}
-	runs := adapters.OpenCodeRunsDir(home)
 	args := []string{"--stage", "feature-dev", "--worktree", worktree, "--run-id", openCodeVerbRunID, "--json"}
 
 	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "")
@@ -566,15 +565,30 @@ func TestOpenCodeConfigVerbRefusesWhatTheAdapterRefusesBeforeSpawn(t *testing.T)
 	if err := os.WriteFile(filepath.Join(dotDir, "opencode.json"), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	before, err := os.Stat(filepath.Join(dotDir, "opencode.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	out, err := runOpenCodeVerb(t, args...)
-	if err == nil || !strings.Contains(err.Error(), dotDir) || !strings.Contains(err.Error(), "opencode.inherit_user_config") {
-		t.Errorf("with ~/.opencode holding config the verb = %v, want the adapter's refusal naming it; printed:\n%s", err, out)
+	if err != nil {
+		t.Fatalf("with ~/.opencode holding config the verb = %v; #1787's per-run HOME must never refuse or wait on it", err)
 	}
-	if out != "" {
-		t.Errorf("a refusal printed on stdout:\n%s", out)
+	var run adapters.OpenCodeRun
+	if jsonErr := json.Unmarshal([]byte(out), &run); jsonErr != nil {
+		t.Fatal(jsonErr)
 	}
-	if _, err := os.Lstat(runs); !os.IsNotExist(err) {
-		t.Errorf("a refused verb created %s", runs)
+	if want := filepath.Join(run.RunDir, "home"); run.Env["HOME"] != want {
+		t.Errorf("Env[HOME] = %q, want %q", run.Env["HOME"], want)
+	}
+	if _, err := os.Lstat(filepath.Join(run.RunDir, "home", ".opencode")); !os.IsNotExist(err) {
+		t.Errorf("the run's own home/.opencode exists (%v); it must never be created", err)
+	}
+	after, err := os.Stat(filepath.Join(dotDir, "opencode.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !before.ModTime().Equal(after.ModTime()) {
+		t.Errorf("the operator's ~/.opencode/opencode.json mtime changed: %v -> %v", before.ModTime(), after.ModTime())
 	}
 
 	machineDir := os.Getenv("NIGHTGAUGE_CONFIG_HOME")
@@ -585,12 +599,18 @@ func TestOpenCodeConfigVerbRefusesWhatTheAdapterRefusesBeforeSpawn(t *testing.T)
 	if err != nil {
 		t.Fatalf("with the opt-in the verb refused: %v", err)
 	}
-	var run adapters.OpenCodeRun
-	if err := json.Unmarshal([]byte(out), &run); err != nil {
+	// A fresh struct: json.Unmarshal merges into an existing non-nil map
+	// rather than replacing it, so reusing `run` here would carry the first
+	// call's "HOME" entry forward even though this response's JSON omits it.
+	var inheritRun adapters.OpenCodeRun
+	if err := json.Unmarshal([]byte(out), &inheritRun); err != nil {
 		t.Fatal(err)
 	}
-	if run.Env["OPENCODE_CONFIG_DIR"] == "" {
+	if inheritRun.Env["OPENCODE_CONFIG_DIR"] == "" {
 		t.Error("with the opt-in the verb's env does not layer the operator's OpenCode config in")
+	}
+	if inheritRun.Env["HOME"] != "" {
+		t.Errorf("with the opt-in the verb's env still sets a per-run HOME: %q, want it left untouched", inheritRun.Env["HOME"])
 	}
 	if !strings.Contains(stderr, "opencode.inherit_user_config is on") {
 		t.Errorf("with the opt-in the verb did not say so on stderr:\n%s", stderr)

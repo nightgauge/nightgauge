@@ -808,29 +808,22 @@ func TestOpenCodeStoppedDispatchIsNotIncompatible(t *testing.T) {
 func TestOpenCodeMachineConfigRefusalsAreTheDispatchs(t *testing.T) {
 	const sentinel = "machine-config-content-sentinel-1627"
 	for _, c := range []struct {
-		name    string
-		entries []string // under ~/.opencode; a name holding a dot is a file
-		managed bool
-		inherit bool
-		want    []string // what each refusal names, in order
+		name          string
+		operatorEntry bool // a populated ~/.opencode, which never refuses (#1787)
+		managed       bool
+		inherit       bool
+		want          []string // what each refusal names, in order
 	}{
-		{"none", nil, false, false, nil},
-		{"install leftovers only", []string{"bin", "node_modules", "package.json"}, false, false, nil},
-		{"home config", []string{"opencode.jsonc", "commands"}, false, false, []string{"(opencode.jsonc, commands)"}},
-		{"managed config", nil, true, false, []string{"managed OpenCode config"}},
-		{"both", []string{"skill"}, true, false, []string{"(skill)", "managed OpenCode config"}},
-		{"both, inherited", []string{"skill"}, true, true, nil},
+		{"none", false, false, false, nil},
+		{"operator ~/.opencode present, never refuses", true, false, false, nil},
+		{"managed config", false, true, false, []string{"managed OpenCode config"}},
+		{"both, only managed refuses", true, true, false, []string{"managed OpenCode config"}},
+		{"both, inherited", true, true, true, nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			home := t.TempDir()
-			for _, entry := range c.entries {
-				path := filepath.Join(home, ".opencode", entry)
-				if !strings.Contains(entry, ".") {
-					if err := os.MkdirAll(path, 0o700); err != nil {
-						t.Fatal(err)
-					}
-					continue
-				}
+			if c.operatorEntry {
+				path := filepath.Join(home, ".opencode", "opencode.jsonc")
 				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 					t.Fatal(err)
 				}
