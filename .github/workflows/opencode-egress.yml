@@ -60,6 +60,15 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Allow unprivileged user namespaces
+        # ubuntu-latest (24.04) restricts CLONE_NEWUSER via AppArmor by
+        # default, so the job's own `unshare --user --map-root-user --net`
+        # fails with "write failed /proc/self/uid_map: Operation not
+        # permitted" before it ever gets to run the egress check. This is a
+        # runner-image default, not a security control this job depends on —
+        # loosen it for this ephemeral runner only.
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
       - name: Install opencode at the manifest's pinned max_tested
         id: install
         run: |
