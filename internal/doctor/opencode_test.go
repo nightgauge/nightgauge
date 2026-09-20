@@ -345,7 +345,7 @@ func lmStudioListing(state string, loaded int) string {
 // caller does not know, which the probe does not compare.
 func TestOpenCodeEndpointReadinessLMStudio(t *testing.T) {
 	target := func(srv *httptest.Server) adapters.OpenCodeEndpointTarget {
-		return adapters.OpenCodeEndpointTarget{ID: "lmstudio", Kind: "lm-studio", BaseURL: srv.URL + "/v1"}
+		return adapters.OpenCodeEndpointTarget{ID: "lmstudio", Kind: "lm-studio", BaseURL: srv.URL + "/v1", Legacy: true}
 	}
 	loaded := lmStudioServer(t, lmStudioListing("loaded", 131072))
 
@@ -412,7 +412,7 @@ func TestOpenCodeEndpointReadinessOllama(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	target := adapters.OpenCodeEndpointTarget{ID: "ollama", Kind: "ollama", BaseURL: srv.URL + "/v1"}
+	target := adapters.OpenCodeEndpointTarget{ID: "ollama", Kind: "ollama", BaseURL: srv.URL + "/v1", Legacy: true}
 
 	r := adapters.ProbeOpenCodeEndpoint(nil, target, "qwen3:8b", 131072)
 	if !r.Ready || r.Loaded == nil || *r.Loaded || r.LoadedContext != 8192 {
@@ -431,6 +431,51 @@ func TestOpenCodeEndpointReadinessOllama(t *testing.T) {
 	if r := adapters.ProbeOpenCodeEndpoint(nil, target, "llama3:8b", 0); !strings.Contains(r.Warning, "sets no num_ctx for llama3:8b") ||
 		strings.Contains(r.Warning, "(0)") || strings.Contains(r.Warning, " 0-token") {
 		t.Errorf("no num_ctx, injected unknown: warning %q, want the no-num_ctx warning with no limit of 0", r.Warning)
+	}
+}
+
+// TestOpenCodeEndpointReadinessRows (#1678): a doctor row carries one
+// readiness result per declared opencode.endpoints[] entry, through the real
+// generic OpenAI-compatible probe: one server answers and is ready, the
+// other is unreachable. Neither is opencode.model's endpoint here, so neither
+// readiness problem blocks the row — only a dispatched endpoint's
+// unreadiness does (TestOpenCodeRowEndpointNotReadyBlocks).
+func TestOpenCodeEndpointReadinessRows(t *testing.T) {
+	ready := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"object":"list","data":[{"id":"qwen/qwen3.8-27b"}]}`)
+	}))
+	t.Cleanup(ready.Close)
+	unreachable := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	unreachableURL := unreachable.URL
+	unreachable.Close()
+
+	settings := config.OpenCodeConfig{
+		Endpoints: []config.OpenCodeEndpointConfig{
+			{ID: "mtplx", Provider: "openai-compatible", BaseURL: ready.URL + "/v1", Limit: config.OpenCodeLimit{Context: 262144, Output: 32000}},
+			{ID: "mtplx-remote", Provider: "openai-compatible", BaseURL: unreachableURL + "/v1", Limit: config.OpenCodeLimit{Context: 262144, Output: 32000}},
+		},
+	}
+	f := newOpenCodeFixture(t, settings)
+	f.probe.endpoint = func(target adapters.OpenCodeEndpointTarget, model string, injected int) adapters.OpenCodeEndpointReadiness {
+		return adapters.ProbeOpenCodeEndpoint(nil, target, model, injected)
+	}
+	h := f.check()
+	if len(h.OpenCode.Endpoints) != 2 {
+		t.Fatalf("endpoints = %+v, want 2 rows", h.OpenCode.Endpoints)
+	}
+	byID := map[string]adapters.OpenCodeEndpointReadiness{}
+	for _, r := range h.OpenCode.Endpoints {
+		byID[r.Endpoint] = r
+	}
+	if r := byID["mtplx"]; !r.Reachable || !r.Ready {
+		t.Errorf("mtplx = %+v, want reachable and ready", r)
+	}
+	if r := byID["mtplx-remote"]; r.Reachable || r.Ready {
+		t.Errorf("mtplx-remote = %+v, want unreachable", r)
+	}
+	if !h.OK {
+		t.Errorf("row = OK false, remediation %q; want OK: opencode.model is unset, so neither endpoint is the dispatched one", h.Remediation)
 	}
 }
 

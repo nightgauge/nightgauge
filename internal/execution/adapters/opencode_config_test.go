@@ -1357,3 +1357,169 @@ func TestPrepareOpenCodeRunKeepsTheBaseURLOutOfTheEnvironment(t *testing.T) {
 		t.Error("the planted link is still there")
 	}
 }
+
+// TestOpenCodeConfigPerEndpointProviders (#1678): two declared endpoints of
+// one kind, dispatched to one of them, produce two provider keys, each with
+// its own baseURL file and its own limit.context/limit.output. Collapsing
+// them to one key would leave one entry in doc["provider"], which the length
+// check below catches.
+func TestOpenCodeConfigPerEndpointProviders(t *testing.T) {
+	settings := config.OpenCodeConfig{
+		Endpoints: []config.OpenCodeEndpointConfig{
+			{
+				ID: "lmstudio", Provider: "lm-studio", BaseURL: "http://127.0.0.1:1234/v1",
+				Limit:  config.OpenCodeLimit{Context: 131072, Output: 8192},
+				Models: []config.OpenCodeEndpointModel{{ID: "qwen/qwen3.8-27b"}},
+			},
+			{
+				ID: "lmstudio-remote", Provider: "lm-studio", BaseURL: "http://192.168.1.50:1234/v1", AllowLAN: true,
+				Limit:  config.OpenCodeLimit{Context: 65536, Output: 4096},
+				Models: []config.OpenCodeEndpointModel{{ID: "qwen/qwen3.8-27b"}},
+			},
+		},
+	}
+	built, err := buildOpenCodeConfigFor(t, settings, RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := decodeOpenCodeConfig(t, built.Content)
+	providers, _ := doc["provider"].(map[string]any)
+	if len(providers) != 2 {
+		t.Fatalf("provider = %v, want exactly 2 keys", providers)
+	}
+	baseURL := func(id string) string {
+		opts, _ := jsonPath(providers, id, "options").(map[string]any)
+		s, _ := opts["baseURL"].(string)
+		return s
+	}
+	file := func(id string) string { return openCodeEndpointURLFile(goldenRunRoot, id) }
+	if got, want := baseURL("lmstudio"), "{file:"+file("lmstudio")+"}"; got != want {
+		t.Errorf("lmstudio options.baseURL = %q, want %q", got, want)
+	}
+	if got, want := baseURL("lmstudio-remote"), "{file:"+file("lmstudio-remote")+"}"; got != want {
+		t.Errorf("lmstudio-remote options.baseURL = %q, want %q", got, want)
+	}
+	if got := built.Files[file("lmstudio")]; got != "http://127.0.0.1:1234/v1" {
+		t.Errorf("lmstudio's file holds %q", got)
+	}
+	if got := built.Files[file("lmstudio-remote")]; got != "http://192.168.1.50:1234/v1" {
+		t.Errorf("lmstudio-remote's file holds %q", got)
+	}
+	limit := func(id string) (context, output float64) {
+		m, _ := jsonPath(providers, id, "models", "qwen/qwen3.8-27b", "limit").(map[string]any)
+		context, _ = m["context"].(float64)
+		output, _ = m["output"].(float64)
+		return
+	}
+	if c, o := limit("lmstudio"); c != 131072 || o != 8192 {
+		t.Errorf("lmstudio limit = %v/%v, want 131072/8192", c, o)
+	}
+	if c, o := limit("lmstudio-remote"); c != 65536 || o != 4096 {
+		t.Errorf("lmstudio-remote limit = %v/%v, want 65536/4096", c, o)
+	}
+}
+
+// TestOpenCodeLanHttpRequiresOptIn (#1678): a non-loopback base_url is
+// refused unless the entry sets allow_lan; even then, a documentation
+// address (RFC 5737) that is neither loopback nor private-network is
+// refused, and the refusal names the endpoint, not the address.
+func TestOpenCodeLanHttpRequiresOptIn(t *testing.T) {
+	base := config.OpenCodeEndpointConfig{
+		ID: "lmstudio-remote", Provider: "lm-studio", BaseURL: "http://192.168.1.50:1234/v1",
+		Limit: config.OpenCodeLimit{Context: 131072, Output: 8192},
+	}
+	if _, err := OpenCodeEndpoints(config.OpenCodeConfig{Endpoints: []config.OpenCodeEndpointConfig{base}}); err == nil || !strings.Contains(err.Error(), "allow_lan") {
+		t.Fatalf("a LAN endpoint without allow_lan: err = %v, want one naming allow_lan", err)
+	}
+
+	withLAN := base
+	withLAN.AllowLAN = true
+	endpoints, err := OpenCodeEndpoints(config.OpenCodeConfig{Endpoints: []config.OpenCodeEndpointConfig{withLAN}})
+	if err != nil {
+		t.Fatalf("with allow_lan: %v", err)
+	}
+	if len(endpoints) != 1 || !endpoints[0].NonLoopback {
+		t.Fatalf("endpoints = %+v, want one NonLoopback entry", endpoints)
+	}
+
+	docAddr := withLAN
+	docAddr.BaseURL = "http://192.0.2.10:1234/v1"
+	_, err = OpenCodeEndpoints(config.OpenCodeConfig{Endpoints: []config.OpenCodeEndpointConfig{docAddr}})
+	if err == nil || !strings.Contains(err.Error(), "private-network") {
+		t.Fatalf("a documentation address with allow_lan: err = %v, want one naming private-network", err)
+	}
+	if strings.Contains(err.Error(), "192.0.2.10") {
+		t.Errorf("the refusal quotes the address: %v", err)
+	}
+}
+
+// TestOpenCodeEndpointReservedIDRefusal (#1678, ADR-022 § Endpoints): an id
+// that collides with a catalog provider key is refused, except "lmstudio" on
+// a lm-studio entry — the one exception the ADR carves out, since that
+// catalog entry is LM Studio itself and the complete block cuts its only
+// binding.
+func TestOpenCodeEndpointReservedIDRefusal(t *testing.T) {
+	for _, tc := range []struct {
+		id, provider string
+		wantErr      bool
+	}{
+		{"deepseek", "openai-compatible", true},
+		{"github-copilot", "openai-compatible", true},
+		{"lmstudio", "lm-studio", false},
+		{"lmstudio", "openai-compatible", true},
+		{"lmstudio-remote", "lm-studio", false},
+		{"ollama", "ollama", false},
+	} {
+		cfg := config.OpenCodeConfig{Endpoints: []config.OpenCodeEndpointConfig{{
+			ID: tc.id, Provider: tc.provider, BaseURL: "http://127.0.0.1:1234/v1",
+			Limit: config.OpenCodeLimit{Context: 131072, Output: 8192},
+		}}}
+		_, err := OpenCodeEndpoints(cfg)
+		switch {
+		case tc.wantErr && err == nil:
+			t.Errorf("id %q provider %q: want a reserved-id refusal, got none", tc.id, tc.provider)
+		case !tc.wantErr && err != nil:
+			t.Errorf("id %q provider %q: unexpected error: %v", tc.id, tc.provider, err)
+		}
+	}
+}
+
+// TestOpenCodeConfigVariantsPassthrough (#1678): a declared model's variants,
+// disabled entries included, are carried through unfiltered into the
+// generated provider block. This builder never inspects them; #1643 does.
+func TestOpenCodeConfigVariantsPassthrough(t *testing.T) {
+	settings := config.OpenCodeConfig{
+		Endpoints: []config.OpenCodeEndpointConfig{{
+			ID: "mtplx", Provider: "openai-compatible", BaseURL: "http://127.0.0.1:4141/v1",
+			Limit:  config.OpenCodeLimit{Context: 262144, Output: 32000},
+			Models: []config.OpenCodeEndpointModel{{ID: "qwen/qwen3.8-27b", Variants: []string{"low", "medium", "xhigh"}}},
+		}},
+	}
+	built, err := buildOpenCodeConfigFor(t, settings, RunOptions{Model: "mtplx/qwen/qwen3.8-27b"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := decodeOpenCodeConfig(t, built.Content)
+	variants, _ := jsonPath(doc, "provider", "mtplx", "models", "qwen/qwen3.8-27b", "variants").([]any)
+	want := []string{"low", "medium", "xhigh"}
+	if len(variants) != len(want) {
+		t.Fatalf("variants = %v, want %v", variants, want)
+	}
+	for i, w := range want {
+		if variants[i] != w {
+			t.Errorf("variants[%d] = %v, want %q", i, variants[i], w)
+		}
+	}
+}
+
+// TestOpenCodeEndpointsRequiresDeclaredLimits (#1678): a declared endpoint is
+// never probed for the context it has loaded (2026-09-20 scope narrowing), so
+// its limit.context and limit.output must be set in config.
+func TestOpenCodeEndpointsRequiresDeclaredLimits(t *testing.T) {
+	cfg := config.OpenCodeConfig{Endpoints: []config.OpenCodeEndpointConfig{{
+		ID: "mtplx", Provider: "openai-compatible", BaseURL: "http://127.0.0.1:4141/v1",
+	}}}
+	if _, err := OpenCodeEndpoints(cfg); err == nil || !strings.Contains(err.Error(), "limit") {
+		t.Fatalf("no declared limit: err = %v, want one naming limit.context/limit.output", err)
+	}
+}
