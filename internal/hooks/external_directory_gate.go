@@ -67,6 +67,21 @@ func EvaluateExternalDirectoryGate(inputJSON []byte) GateDecision {
 		return Allow()
 	}
 	for _, root := range opencodeallow.RootsFromEnv(worktree) {
+		if root == opencodeallow.TmpRoot || root == opencodeallow.PrivateTmpRoot {
+			// /tmp and /private/tmp are allow-listed FLAT only — matching
+			// the six stage skills' own literal /tmp usage and the
+			// permission map's narrowed "/tmp/?" pattern
+			// (openCodeTmpDirAllowPatterns, opencode_guard.go). Treating
+			// these two roots as full recursive roots here (like every
+			// other root below) would allow a symlink planted anywhere
+			// under /tmp — including any nested temp directory the test
+			// runner's own TMPDIR happens to use on Linux — defeating the
+			// containment check this gate exists to enforce.
+			if externalDirectoryGateFlatMatch(root, resolvedDir) {
+				return Allow()
+			}
+			continue
+		}
 		if externalDirectoryGateContained(root, resolvedDir) {
 			return Allow()
 		}
@@ -94,6 +109,13 @@ func externalDirectoryGateResolveDir(file string) string {
 		return r
 	}
 	return dir
+}
+
+// externalDirectoryGateFlatMatch reports whether dir is exactly root — no
+// subdirectory match — the flat-only allowance /tmp and /private/tmp get
+// (see the TmpRoot/PrivateTmpRoot case above).
+func externalDirectoryGateFlatMatch(root, dir string) bool {
+	return filepath.Clean(dir) == filepath.Clean(root)
 }
 
 // externalDirectoryGateContained reports whether dir is root itself or lies
