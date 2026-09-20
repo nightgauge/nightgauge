@@ -47,6 +47,16 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A Go-dispatched pipeline stage (the scheduler's normal path and the
+  autonomous issue-refine path) now always carries a real USD cost cap
+  (#1749). `execution.StageOptions.CostBudget` was already wired all the way
+  downstream to the OpenCode cost watchdog and to `--max-budget-usd` on the
+  claude / claude_sdk / lmstudio / ollama adapters, but no production caller
+  ever set it, so it was always the zero value and none of that enforcement
+  ever ran — an operator's `pipeline.token_budget_ceiling.ceiling_usd` (or
+  its default of $75) was silently inert for every Go/auto-mode dispatch.
+  Both call sites now pass `PipelineBudgetCeilingUSD(workspaceRoot)`.
+
 - The Output window no longer shows an older run's content while a
   CLI-started pipeline is the live one (#586). A `nightgauge run` discovered
   on disk now registers its own Output-window slot alongside its tree slot,
