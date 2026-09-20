@@ -406,6 +406,46 @@ func TestFileMutationGate(t *testing.T) {
 	}
 }
 
+// --- #1816: "read" runs external-directory-gate, resolving symlinks ---
+
+func TestReadGateResolvesSymlinks(t *testing.T) {
+	node := requireNode(t)
+	bin := buildNightgaugeBin(t)
+	home := isolatedHomeEnv(t)
+
+	t.Run("a read inside the worktree is allowed", func(t *testing.T) {
+		root := t.TempDir()
+		file := filepath.Join(root, "notes.md")
+		if err := os.WriteFile(file, []byte("hi"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		res := runToolHarness(t, node, root, "read", marshalJSON(t, map[string]any{"filePath": file}), bin, home)
+		if res.Threw {
+			t.Fatalf("want no throw, got %q", res.Message)
+		}
+	})
+
+	t.Run("a symlink planted in the worktree pointing outside every allow-listed root is blocked", func(t *testing.T) {
+		root := t.TempDir()
+		outside := t.TempDir()
+		secret := filepath.Join(outside, "secret.txt")
+		if err := os.WriteFile(secret, []byte("shh"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		link := filepath.Join(root, "link.txt")
+		if err := os.Symlink(secret, link); err != nil {
+			t.Fatal(err)
+		}
+		res := runToolHarness(t, node, root, "read", marshalJSON(t, map[string]any{"filePath": link}), bin, home)
+		if !res.Threw {
+			t.Fatal("want a throw, got none")
+		}
+		if !strings.HasPrefix(res.Message, "[nightgauge-gate:external-directory]") {
+			t.Errorf("message = %q, want the [nightgauge-gate:external-directory] marker", res.Message)
+		}
+	})
+}
+
 // --- AC4: an unlisted tool id is blocked closed ---
 
 func TestUnknownToolBlockedClosed(t *testing.T) {

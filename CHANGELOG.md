@@ -24,6 +24,17 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A symlink planted inside an OpenCode `external_directory` allow-listed
+  directory (`NIGHTGAUGE_SKILL_DIR`, the context/output file directories, or
+  the `/tmp`, `/private/tmp` scratch roots) after the per-run permission map
+  was generated, pointing outside every allow-listed directory, is now
+  refused (#1816). opencode 1.18.30 matches its permission map lexically and
+  never resolves symlinks at match time, so a link's own path — not its
+  target — was what the allow-list matched; a `read` tool call now runs a
+  new dispatch-time gate (`nightgauge hook external-directory-gate`) that
+  resolves symlinks against the actual filesystem before deciding, closing
+  the gap the config-generation-time-only resolution could not. A symlink
+  that resolves to a location inside the worktree keeps working unchanged.
 - CI's `go` job no longer silently skips required verification steps —
   including the OpenCode integration regression test — when an earlier step
   in the same job fails (#1817). The Build, Vet, Gofmt, Test, OpenCode
