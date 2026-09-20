@@ -142,6 +142,21 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A genuine v0.3.x `.nightgauge/complexity-model.yaml` — no
+  `lines_changed_thresholds`, no `learnings`, no `critical_files` — now loads
+  instead of failing validation with "model calibration sections are
+  incomplete" (#1918). #1911/#1917 backfilled `lines_changed_thresholds` alone
+  and closed only that one field, leaving the same real-world file broken on
+  `learnings`, the third instance of this class in one release
+  after #1843's `survival` rename and #1911's own gap. Decoding now backfills
+  every additive section a document leaves absent — not just the two named so
+  far — from `newBootstrapComplexityModel` in a single reflective pass, so a
+  future additive required field is covered without a new code change. A map
+  section backfills key-by-key (an operator-set size or entry is left
+  untouched); any other absent section is replaced wholesale; a
+  present-but-invalid value in any section is still rejected, never silently
+  replaced. The next save persists the completed document.
+
 - A v0.3.x `.nightgauge/complexity-model.yaml` now loads instead of failing
   validation with `lines_changed_thresholds.XS must be positive` (#1911).
   `lines_changed_thresholds` was introduced in #1592/v0.4.0 and required by

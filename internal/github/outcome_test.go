@@ -1298,6 +1298,75 @@ func TestDecodeComplexityModelDocument_RejectsInvalidPresentLinesChangedThreshol
 	}
 }
 
+// TestDecodeComplexityModelDocument_BackfillsSeveralAbsentSectionsAtOnce
+// reproduces #1918: a genuine v0.3.x document has no `lines_changed_thresholds`,
+// no `learnings`, and no `critical_files` — three additive sections introduced
+// across three separate releases — and all three must be backfilled from the
+// bootstrap document in a single decode pass, with the rest of the document's
+// accumulated calibration preserved untouched.
+func TestDecodeComplexityModelDocument_BackfillsSeveralAbsentSectionsAtOnce(t *testing.T) {
+	model := newBootstrapComplexityModel(time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC))
+	model.TotalObservations = 59
+	model.TypeAdjustments["bug"] = typeAdjustment{Modifier: -0.9, Observations: 12, Rationale: "calibrated"}
+
+	var raw map[string]interface{}
+	data, err := yaml.Marshal(model)
+	if err != nil {
+		t.Fatalf("marshal model: %v", err)
+	}
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal to raw map: %v", err)
+	}
+	delete(raw, "lines_changed_thresholds")
+	delete(raw, "learnings")
+	delete(raw, "critical_files")
+
+	v03x, err := yaml.Marshal(raw)
+	if err != nil {
+		t.Fatalf("marshal v0.3.x-shaped document: %v", err)
+	}
+
+	decoded, err := decodeComplexityModelDocument(v03x)
+	if err != nil {
+		t.Fatalf("decode model missing several additive sections: %v", err)
+	}
+	for size, want := range defaultLinesChangedThresholds {
+		if got := decoded.LinesChangedThresholds[size]; got != want {
+			t.Errorf("LinesChangedThresholds[%s] = %d, want backfilled default %d", size, got, want)
+		}
+	}
+	if len(decoded.Learnings) == 0 {
+		t.Error("Learnings not backfilled from bootstrap")
+	}
+	if decoded.CriticalFiles == nil {
+		t.Error("CriticalFiles not backfilled from bootstrap")
+	}
+	if decoded.TotalObservations != 59 {
+		t.Errorf("TotalObservations = %d, want 59 (preserved)", decoded.TotalObservations)
+	}
+	if decoded.TypeAdjustments["bug"].Observations != 12 {
+		t.Errorf("TypeAdjustments[bug] = %+v, want preserved calibration", decoded.TypeAdjustments["bug"])
+	}
+}
+
+// TestDecodeComplexityModelDocument_RejectsInvalidPresentCriticalFiles proves
+// backfill applies to absence only for pointer sections too: a present but
+// invalid `critical_files` block is left untouched rather than replaced by the
+// bootstrap default, so validation still rejects it.
+func TestDecodeComplexityModelDocument_RejectsInvalidPresentCriticalFiles(t *testing.T) {
+	model := newBootstrapComplexityModel(time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC))
+	model.CriticalFiles.PerFileModifier = -1
+
+	data, err := yaml.Marshal(model)
+	if err != nil {
+		t.Fatalf("marshal model: %v", err)
+	}
+
+	if _, err := decodeComplexityModelDocument(data); err == nil {
+		t.Fatal("expected decode error for invalid present critical_files.per_file_modifier, got nil")
+	}
+}
+
 // TestRecordOutcome_MigratesMissingLinesChangedThresholdsOnSave proves the
 // backfill is one-way: a v0.3.x model missing lines_changed_thresholds,
 // loaded and saved via RecordOutcome, re-serializes with the complete block.
