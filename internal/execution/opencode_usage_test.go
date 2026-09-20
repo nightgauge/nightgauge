@@ -410,6 +410,10 @@ type openCodeStage struct {
 	exitCode       int
 	allowedTools   []string
 	streamer       adapters.OutputStreamer
+	// machineConfig, when set, replaces openCodeMachineConfig as the
+	// machine-tier `opencode:` block, written after isolateOpenCodeHome's own
+	// write of the reference config.
+	machineConfig string
 	// worktree, when set, prepares the stage's worktree before dispatch.
 	worktree func(dir string)
 	// hold, when set, is the shell the stage runs after its output to keep
@@ -465,6 +469,9 @@ type openCodeHelperCall struct {
 func openCodeStageRunWith(t *testing.T, stage openCodeStage) openCodeStageOutcome {
 	t.Helper()
 	isolateOpenCodeHome(t)
+	if stage.machineConfig != "" {
+		writeOpenCodeMachineConfig(t, stage.machineConfig)
+	}
 	dir := t.TempDir()
 	pidFile := filepath.Join(dir, "stage.pid")
 	helperLog := filepath.Join(dir, "helpers.log")
@@ -1189,6 +1196,29 @@ func openCodeServiceKey() (value, secretPart string) {
 	return `{"clientid":"sb-fixture-1624","clientsecret":"` + secretPart + `","url":"https://example.test"}`, secretPart
 }
 
+// TestLiteralValueRedactorMatchesRawAndJSONEscapedForms (#1678): a secret
+// supplied directly, not looked up from an environment (an adapter's
+// RedactedLiterals hook, for a base_url that is never an environment
+// variable), is redacted both as it is and as the content of a JSON string,
+// mirroring envValueRedactor's own two forms.
+func TestLiteralValueRedactorMatchesRawAndJSONEscapedForms(t *testing.T) {
+	const baseURL = `http://10.9.8.7:1234/v1`
+	redactor := literalValueRedactor([]string{baseURL})
+	if redactor == nil {
+		t.Fatal("literalValueRedactor returned nil for a value worth redacting")
+	}
+	if got := string(redactLine(redactor, []byte("dial "+baseURL+" failed"))); strings.Contains(got, "10.9.8.7") {
+		t.Errorf("the raw form was not redacted: %q", got)
+	}
+	event := `{"error":{"message":"failed"},"metadata":{"url":"` + baseURL + `"}}`
+	if got := string(redactLine(redactor, []byte(event))); strings.Contains(got, "10.9.8.7") || !json.Valid([]byte(got)) {
+		t.Errorf("a JSON-escaped occurrence was not redacted, or the line is no longer valid JSON: %q", got)
+	}
+	if redactor := literalValueRedactor([]string{"short"}); redactor != nil {
+		t.Error("a value shorter than redactedSecretMinLen was redacted")
+	}
+}
+
 // TestOpenCodeRedactsQuoteBearingValue: the value of a variable the adapter
 // names is removed from a --format json event, where a tool's output is
 // JSON-escaped, and not only where it appears as it is: a JSON service key
@@ -1660,5 +1690,54 @@ func TestCaptureOpenCodeFixtureRefusesCredentials(t *testing.T) {
 				t.Errorf("%s in %q: redact-opencode.jq gave %q; RedactCredentials gives %q", shape, input, got, RedactCredentials(input))
 			}
 		}
+	}
+}
+
+// TestRunRecordEndpointLabelNoHost (#1678): with a declared endpoint whose
+// base_url names a LAN address, the run record's endpoint is the id alone,
+// never the address, and the address never survives into stderr, the
+// manager's own log, or a JSON error event's metadata.url field — the leak
+// ADR-022 § 22 assigns to this issue's RedactedLiterals hook.
+func TestRunRecordEndpointLabelNoHost(t *testing.T) {
+	const address = "10.9.8.7"
+	machineConfig := `opencode:
+  endpoints:
+    - id: lmstudio
+      provider: lm-studio
+      base_url: http://` + address + `:1234/v1
+      allow_lan: true
+      limit:
+        context: 131072
+        output: 8192
+`
+	errorEvent := `{"type":"error","timestamp":1,"error":{"name":"http_error","message":"request failed"},"metadata":{"url":"http://` + address + `:1234/v1/chat/completions"}}`
+	out := openCodeStageRunWith(t, openCodeStage{
+		machineConfig: machineConfig,
+		stdout:        errorEvent + "\n",
+		stderr:        "ERROR request to http://" + address + ":1234/v1/chat/completions failed: connect: connection refused\n",
+	})
+	res := out.result
+	if res.Endpoint != "lmstudio" {
+		t.Errorf("Endpoint = %q, want lmstudio", res.Endpoint)
+	}
+	if res.ModelProvider != "lm-studio" {
+		t.Errorf("ModelProvider = %q, want lm-studio", res.ModelProvider)
+	}
+	record, err := json.Marshal(res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for where, text := range map[string]string{
+		"the serialized run record": string(record),
+		"result.Stdout":             res.Stdout,
+		"result.Stderr":             res.Stderr,
+		"the manager's own log":     out.logged,
+	} {
+		if strings.Contains(text, address) {
+			t.Errorf("%s holds the endpoint's LAN address %s", where, address)
+		}
+	}
+	if !strings.Contains(res.Stderr, "[REDACTED:") {
+		t.Errorf("result.Stderr does not show where the address was redacted: %q", res.Stderr)
 	}
 }

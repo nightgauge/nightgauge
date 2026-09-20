@@ -1050,11 +1050,17 @@ type OpenCodeEndpointTarget struct {
 	// ID is the endpoint id, the OpenCode provider key a stage names on -m.
 	// It is the only name any result or message gives the endpoint.
 	ID string
-	// Kind is lm-studio or ollama.
+	// Kind is lm-studio, ollama or openai-compatible.
 	Kind string
 	// BaseURL is the server's OpenAI-compatible API root as the machine-tier
 	// config declares it. The probe requests it and never reports it.
 	BaseURL string
+	// Legacy is true only for the one endpoint the flat machine-tier keys
+	// describe (OpenCodeEndpoint.Legacy). It alone gets the LM-Studio/Ollama
+	// -specific probe; every declared opencode.endpoints[] entry, whatever
+	// its Kind label, gets the generic OpenAI-compatible probe (2026-09-20
+	// scope narrowing, ADR-022 § Endpoints).
+	Legacy bool
 }
 
 // OpenCodeEndpointReadiness is what the readiness probe found at one
@@ -1085,6 +1091,9 @@ type OpenCodeEndpointReadiness struct {
 	// window.
 	Problem string `json:"problem,omitempty"`
 	Warning string `json:"warning,omitempty"`
+	// Slots is the endpoint's declared capacity (OpenCodeEndpoint.
+	// MaxConcurrency), never measured or probed. 0 means not declared.
+	Slots int `json:"slots,omitempty"`
 }
 
 // ProbeOpenCodeEndpoint checks one model server the operator runs: whether it
@@ -1111,15 +1120,68 @@ func ProbeOpenCodeEndpoint(client *http.Client, target OpenCodeEndpointTarget, m
 		return r
 	}
 	root := u.Scheme + "://" + u.Host
-	switch target.Kind {
-	case "lm-studio":
+	switch {
+	case !target.Legacy:
+		// Every declared opencode.endpoints[] entry gets the generic
+		// OpenAI-compatible probe regardless of its Kind label: lm-studio and
+		// ollama are optional labels there, with no protocol-specific probe
+		// of their own (2026-09-20 scope narrowing, ADR-022 § Endpoints).
+		probeOpenAICompatible(client, root, target.ID, &r)
+	case target.Kind == "lm-studio":
 		probeLMStudio(client, root, target.ID, &r)
-	case "ollama":
+	case target.Kind == "ollama":
 		probeOllama(client, root, target.ID, &r)
 	default:
 		r.Problem = fmt.Sprintf("endpoint %s is of kind %q, which the readiness probe does not know", target.ID, target.Kind)
 	}
 	return r
+}
+
+// probeOpenAICompatible checks a generic OpenAI-compatible server: GET
+// {root}/models. Reachable is set on any response, Ready on HTTP 200 (and,
+// when a model is named, on that model appearing in the listing). Unlike
+// probeLMStudio it never reads a loaded-context field: no standard
+// OpenAI-compatible /models response carries one, and the 2026-09-20 scope
+// narrowing drops the loaded-vs-declared-context comparison for this probe
+// rather than half-trust a server-reported number (LoadedContext stays 0).
+func probeOpenAICompatible(client *http.Client, root, id string, r *OpenCodeEndpointReadiness) {
+	status, body, failure := openCodeReadinessRequest(client, http.MethodGet, root+"/models", nil)
+	switch {
+	case status == 0:
+		r.Problem = fmt.Sprintf("endpoint %s is not answering (%s): start the model server, or correct its base_url", id, failure)
+		return
+	case failure != "":
+		r.Reachable = true
+		r.Problem = fmt.Sprintf("endpoint %s answered, but %s", id, failure)
+		return
+	case status != http.StatusOK:
+		r.Reachable = true
+		r.Problem = fmt.Sprintf("endpoint %s answered its model listing with HTTP %d: it may not be an OpenAI-compatible server, or its API may have changed", id, status)
+		return
+	}
+	r.Reachable = true
+	if r.Model == "" {
+		r.Ready = true
+		return
+	}
+	var listing struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &listing); err != nil {
+		r.Problem = fmt.Sprintf("endpoint %s answered its model listing with something other than the OpenAI-compatible JSON shape", id)
+		return
+	}
+	for _, m := range listing.Data {
+		if m.ID == r.Model {
+			loaded := true
+			r.Loaded = &loaded
+			r.Ready = true
+			return
+		}
+	}
+	r.Problem = fmt.Sprintf("model %s is not on endpoint %s's model listing", r.Model, id)
 }
 
 // openCodeReadinessClient requests only the URL it is given: no proxy from

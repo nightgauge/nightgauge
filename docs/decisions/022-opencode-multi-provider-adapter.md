@@ -1741,6 +1741,50 @@ Studio beside Ollama. Each is a named **endpoint** in `opencode.endpoints[]`
   chain entry the operator configured (#1643), and it is recorded as a
   provider change, not an endpoint change.
 
+### Endpoints narrowing (amendment 2026-09-20, #1678)
+
+Verified against the maintainer's actual machine on 2026-09-20: two
+OpenAI-compatible endpoints, neither LM Studio nor Ollama. The amendment
+above still specs id syntax, the reserved-id catalog check, complete provider
+blocks, the `endpoint` wire label, the LAN/`allow_lan`/private-network rules
+and forwarding endpoints unchanged. This amendment narrows three things
+#1678 actually implements them against:
+
+- **`openai-compatible` is the primary and only required kind.** `lm-studio`
+  and `ollama` are optional labels on an `opencode.endpoints[]` entry, with
+  no protocol-specific readiness probe of their own; every declared entry,
+  whatever its label, is checked with one generic `GET {base_url}/models`
+  probe (`OpenCodeEndpoint.Legacy` distinguishes the pre-existing
+  single-flat-key endpoint, which keeps the LM-Studio/Ollama-specific
+  probes untouched, from a declared entry, which always gets the generic
+  one). Implementing per-server protocol clients for servers Nightgauge does
+  not control would duplicate knowledge OpenCode itself already has.
+- **The loaded-vs-declared-context doctor warning is dropped, not
+  implemented.** No generic OpenAI-compatible `/models` response carries a
+  loaded-context field, and a server-reported number half-trusted is worse
+  than the operator's own declared `limit.context` and `limit.output`. A
+  declared entry is therefore never probed for its loaded context: its
+  `limit.context` and `limit.output` must be set in config, and doctor
+  surfaces the entry's declared `max_concurrency` as "slots" instead — a
+  declared capacity, never measured.
+- **The config field is `provider`, holding the already-normalized value
+  directly** (`provider: lm-studio`), not `kind`; this was already correct in
+  the prose above (§ Endpoints' own code sample) but the issue's original
+  technical notes drifted from it, so this reconciles the two. Reserved-id
+  collision refusal reuses the catalog `internal/execution/adapters` already
+  captures from the max-tested binary for env-var withholding
+  (`openCodeCatalogEnv`, § 20) rather than a separate fixture: it is the same
+  213-key snapshot, kept in sync by the same re-capture obligation, so a
+  second copy would only be one more thing to drift.
+- **Declared `models[].variants`** are carried through unfiltered into the
+  generated provider block (opaque passthrough, disabled entries included);
+  #1643's `--variant` mapping is what reads them, not this layer.
+
+Read-only consistency check against ADR-012 and ADR-013: neither exists in
+this repository's `docs/decisions/` (the sequence skips from 011 to 015), so
+there is nothing here for this amendment to conflict with; if either is a
+private ADR in `nightgauge-internal`, that check is that repository's to run.
+
 ## Failure wording (amendment 2026-09-14)
 
 #1631 assumed that OpenCode reports a failed model request on stderr in the

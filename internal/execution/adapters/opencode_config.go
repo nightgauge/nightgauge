@@ -194,7 +194,11 @@ var openCodeEndpointIDs = map[string]string{
 type OpenCodeEndpoint struct {
 	// ID is the OpenCode provider key a stage names on -m.
 	ID string
-	// Provider is the endpoint's kind: lm-studio or ollama.
+	// Provider is the endpoint's kind: lm-studio, ollama or
+	// openai-compatible. lm-studio and ollama are labels only for an entry
+	// declared in Endpoints (below); they carry no protocol-specific
+	// readiness probe there (2026-09-20 scope narrowing) — only the legacy
+	// flat-key endpoint keeps the LM-Studio/Ollama-specific probes.
 	Provider string
 	// BaseURL is the server's API root. It is validated by OpenCodeEndpoints,
 	// and it never appears in the config content, an error or the verb's
@@ -205,23 +209,78 @@ type OpenCodeEndpoint struct {
 	NonLoopback bool
 	// Limit is the machine-tier override of the limits discovered from the
 	// server (resolveLimit): each one it sets wins, except a context
-	// above the window the server has loaded.
+	// above the window the server has loaded. For a declared Endpoints[]
+	// entry this is the only source: it is never discovered from the server.
 	Limit config.OpenCodeLimit
 	// HeaderTimeout and ChunkTimeout bound the waits for the first response
 	// byte and between streamed chunks.
 	HeaderTimeout time.Duration
 	ChunkTimeout  time.Duration
 	// ConfigKey is where the endpoint is declared, for messages:
-	// "opencode" for the flat machine-tier keys.
+	// "opencode" for the flat machine-tier keys, "opencode.endpoints" for a
+	// declared entry.
 	ConfigKey string
+	// Legacy is true only for the one endpoint the flat machine-tier keys
+	// (opencode.provider/.base_url/...) describe. A declared Endpoints[]
+	// entry is false, whatever its Provider label: the readiness probe and
+	// the provider-block builder both key off this, not off Provider,
+	// because openai-compatible is the only kind a declared entry gets a
+	// protocol-specific behavior for, and it gets none (ADR-022
+	// § Endpoints).
+	Legacy bool
+	// AllowLAN, APIKeyEnv, SelfHosted, MaxConcurrency and Models are the
+	// declared entry's own fields (config.OpenCodeEndpointConfig), unset for
+	// the legacy endpoint.
+	AllowLAN       bool
+	APIKeyEnv      string
+	SelfHosted     bool
+	MaxConcurrency int
+	Models         []config.OpenCodeEndpointModel
 }
 
-// OpenCodeEndpoints returns the endpoints the machine-tier `opencode:` block
-// declares: none, or the one its flat keys describe. A block that declares a
-// server it cannot describe fully is an error, and so is a base_url that is
-// not an http or https URL or that carries credentials. Limits are resolved
-// when a stage dispatches to the endpoint (resolveLimit), not here.
+// openCodeEndpointIDRE is a declared endpoint's id syntax (ADR-022
+// § Endpoints): lowercase letters, digits and -, at most 32 characters,
+// never starting with -.
+var openCodeEndpointIDRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
+
+// OpenCodeEndpoints returns every endpoint the machine-tier `opencode:` block
+// declares: the one its flat keys describe (if any), then each entry of
+// Endpoints, in declared order. A block that declares a server it cannot
+// describe fully is an error, and so is a base_url that is not an http or
+// https URL, that carries credentials, or that is on the local network
+// without an explicit opt-in. Limits for the flat endpoint are resolved when
+// a stage dispatches to it (resolveLimit); a declared entry's limits are
+// never discovered, only the machine-tier value it sets.
 func OpenCodeEndpoints(cfg config.OpenCodeConfig) ([]OpenCodeEndpoint, error) {
+	var endpoints []OpenCodeEndpoint
+	legacy, err := openCodeLegacyEndpoint(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if legacy != nil {
+		endpoints = append(endpoints, *legacy)
+	}
+	seen := map[string]string{} // id -> where it was declared, for the collision message
+	if legacy != nil {
+		seen[legacy.ID] = legacy.ConfigKey
+	}
+	for i, entry := range cfg.Endpoints {
+		ep, err := openCodeDeclaredEndpoint(entry, i)
+		if err != nil {
+			return nil, err
+		}
+		if where, dup := seen[ep.ID]; dup {
+			return nil, fmt.Errorf("opencode.endpoints[%d].id %q collides with the endpoint %s already declares: every endpoint id must be unique", i, ep.ID, where)
+		}
+		seen[ep.ID] = ep.ConfigKey
+		endpoints = append(endpoints, ep)
+	}
+	return endpoints, nil
+}
+
+// openCodeLegacyEndpoint builds the single endpoint the flat machine-tier
+// keys describe, or nil when none of them is set.
+func openCodeLegacyEndpoint(cfg config.OpenCodeConfig) (*OpenCodeEndpoint, error) {
 	declared := cfg.Provider != "" || cfg.BaseURL != "" || cfg.Limit != (config.OpenCodeLimit{}) ||
 		cfg.Timeouts != (config.OpenCodeTimeouts{})
 	if !declared {
@@ -247,7 +306,7 @@ func OpenCodeEndpoints(cfg config.OpenCodeConfig) ([]OpenCodeEndpoint, error) {
 	if err != nil {
 		return nil, err
 	}
-	return []OpenCodeEndpoint{{
+	return &OpenCodeEndpoint{
 		ID:            id,
 		Provider:      cfg.Provider,
 		BaseURL:       cfg.BaseURL,
@@ -256,7 +315,113 @@ func OpenCodeEndpoints(cfg config.OpenCodeConfig) ([]OpenCodeEndpoint, error) {
 		HeaderTimeout: header,
 		ChunkTimeout:  chunk,
 		ConfigKey:     key,
-	}}, nil
+		Legacy:        true,
+	}, nil
+}
+
+// openCodeDeclaredEndpoint validates and builds one opencode.endpoints[i]
+// entry (ADR-022 § Endpoints).
+func openCodeDeclaredEndpoint(entry config.OpenCodeEndpointConfig, i int) (OpenCodeEndpoint, error) {
+	key := fmt.Sprintf("opencode.endpoints[%d]", i)
+	if entry.ID == "" {
+		return OpenCodeEndpoint{}, fmt.Errorf("%s.id is not set: name the instance, such as lmstudio or lmstudio-remote", key)
+	}
+	if !openCodeEndpointIDRE.MatchString(entry.ID) {
+		return OpenCodeEndpoint{}, fmt.Errorf("%s.id %q is not valid: an id is lowercase letters, digits and -, at most 32 characters, and must not start with -", key, entry.ID)
+	}
+	if err := openCodeReservedIDRefusal(entry.ID, entry.Provider, key); err != nil {
+		return OpenCodeEndpoint{}, err
+	}
+	switch entry.Provider {
+	case "lm-studio", "ollama", "openai-compatible":
+	default:
+		return OpenCodeEndpoint{}, fmt.Errorf("%s.provider %q is not lm-studio, ollama or openai-compatible", key, entry.Provider)
+	}
+	nonLoopback, err := openCodeCheckBaseURL(entry.BaseURL, key, entry.ID)
+	if err != nil {
+		return OpenCodeEndpoint{}, err
+	}
+	if nonLoopback {
+		if !entry.AllowLAN {
+			return OpenCodeEndpoint{}, fmt.Errorf("%s.base_url (endpoint %s) is not on this machine: set %s.allow_lan: true to allow a model server on your local network, or use a loopback address", key, entry.ID, key)
+		}
+		if err := openCodePrivateNetworkRefusal(entry.BaseURL, key, entry.ID); err != nil {
+			return OpenCodeEndpoint{}, err
+		}
+	}
+	if entry.Limit.Context <= 0 || entry.Limit.Output <= 0 {
+		return OpenCodeEndpoint{}, fmt.Errorf(
+			"%s.limit.context and .limit.output are not both set for endpoint %s: a declared endpoint is never probed for the context it has loaded (2026-09-20 scope narrowing), so its limits must be declared",
+			key, entry.ID)
+	}
+	if entry.Limit.Context < 0 || entry.Limit.Output < 0 {
+		return OpenCodeEndpoint{}, fmt.Errorf("%s.limit is negative for endpoint %s", key, entry.ID)
+	}
+	header, err := openCodeTimeout(entry.Timeouts.Header.Duration(), key+".timeouts.header")
+	if err != nil {
+		return OpenCodeEndpoint{}, err
+	}
+	chunk, err := openCodeTimeout(entry.Timeouts.Chunk.Duration(), key+".timeouts.chunk")
+	if err != nil {
+		return OpenCodeEndpoint{}, err
+	}
+	return OpenCodeEndpoint{
+		ID:             entry.ID,
+		Provider:       entry.Provider,
+		BaseURL:        entry.BaseURL,
+		NonLoopback:    nonLoopback,
+		Limit:          entry.Limit,
+		HeaderTimeout:  header,
+		ChunkTimeout:   chunk,
+		ConfigKey:      key,
+		Legacy:         false,
+		AllowLAN:       entry.AllowLAN,
+		APIKeyEnv:      entry.APIKeyEnv,
+		SelfHosted:     entry.SelfHosted,
+		MaxConcurrency: entry.MaxConcurrency,
+		Models:         entry.Models,
+	}, nil
+}
+
+// openCodeReservedIDRefusal refuses an id that collides with a provider key
+// OpenCode's bundled catalog (openCodeCatalogEnv, captured from the
+// max-tested binary, ADR-022 § 20) already uses: OpenCode merges a config
+// provider block into the catalog provider of the same key, and whatever the
+// block does not override is kept, credential bindings included (ADR-022
+// § Endpoints). The one exception is "lmstudio" on a lm-studio entry: that
+// catalog entry is LM Studio itself, and the only binding it hands on
+// (LMSTUDIO_API_KEY) is cut by the complete block every declared endpoint
+// gets.
+func openCodeReservedIDRefusal(id, provider, key string) error {
+	if _, reserved := openCodeCatalogEnv[id]; !reserved {
+		return nil
+	}
+	if id == "lmstudio" && provider == "lm-studio" {
+		return nil
+	}
+	return fmt.Errorf(
+		"%s.id %q is a provider key OpenCode's bundled catalog already uses: OpenCode would merge this endpoint's block into that catalog entry and keep whatever the block does not override, credential bindings included, which could send the catalog provider's own API key to this endpoint. Choose a different id",
+		key, id)
+}
+
+// openCodePrivateNetworkRefusal refuses a non-loopback base_url whose host is
+// not a private-network address (RFC 1918, or an IPv6 unique-local address):
+// allow_lan permits a model server on the operator's own local network, not a
+// public or documentation address (ADR-022 § Endpoints). Nothing is resolved:
+// a host that is not a literal IP address cannot be judged, so it is refused
+// too.
+func openCodePrivateNetworkRefusal(rawURL, key, id string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("%s.base_url (endpoint %s) is not a valid URL", key, id)
+	}
+	ip := net.ParseIP(u.Hostname())
+	if ip == nil || !ip.IsPrivate() {
+		return fmt.Errorf(
+			"%s.base_url (endpoint %s) is on the local network, but its host is not a private-network address (RFC 1918, or an IPv6 unique-local address): allow_lan permits a model server on your own network, not a public or documentation address",
+			key, id)
+	}
+	return nil
 }
 
 // openCodeCheckBaseURL validates an endpoint's base URL and reports whether
@@ -517,6 +682,11 @@ type openCodeModelJSON struct {
 	Provider openCodeModelProviderJSON `json:"provider"`
 	Limit    openCodeLimitJSON         `json:"limit"`
 	ToolCall bool                      `json:"tool_call"`
+	// Variants is an operator-declared endpoint model's opaque passthrough
+	// (config.OpenCodeEndpointModel.Variants, #1678): this builder never
+	// inspects its contents, including which entries are disabled. #1643's
+	// --variant mapping reads it.
+	Variants []string `json:"variants,omitempty"`
 }
 
 type openCodeModelProviderJSON struct {
@@ -646,7 +816,7 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 			Env: []string{},
 			Options: openCodeEndpointOptionsJSON{
 				BaseURL:       "{file:" + file + "}",
-				APIKey:        "",
+				APIKey:        openCodeAPIKeyRef(ep.APIKeyEnv),
 				HeaderTimeout: ep.HeaderTimeout.Milliseconds(),
 				ChunkTimeout:  ep.ChunkTimeout.Milliseconds(),
 			},
@@ -656,12 +826,53 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 					Provider: openCodeModelProviderJSON{NPM: openCodeEndpointNPM},
 					Limit:    openCodeLimitJSON{Context: limit.Context, Input: limit.Context, Output: limit.Output},
 					ToolCall: true,
+					Variants: openCodeDeclaredVariants(ep.Models, modelID),
 				},
 			},
 		}
 		built.Files = map[string]string{file: ep.BaseURL}
 		built.NonLoopback = ep.NonLoopback
 		known = &limit
+
+		// Every other declared endpoint also gets a complete provider block,
+		// keyed by its own id, so a future dispatch can name any of them on
+		// -m without rebuilding the config (#1679, ADR-022 § Endpoints:
+		// "Nightgauge injects one provider block per endpoint"). This runs
+		// only when the dispatch itself lands on a declared local endpoint:
+		// a dispatch to a hosted provider (anthropic, or any other catalog
+		// key) injects that provider's block alone (TestOpenCodeConfigPins
+		// EveryModel) — enabled_providers already narrows OpenCode to the
+		// dispatched key regardless, but the config text itself carries no
+		// other provider while the stage's tools hold the forge and cloud
+		// credentials a hosted dispatch runs with.
+		for _, other := range in.Endpoints {
+			if other.ID == ep.ID {
+				continue
+			}
+			file := openCodeEndpointURLFile(in.RunRoot, other.ID)
+			otherModels := map[string]openCodeModelJSON{}
+			for _, m := range other.Models {
+				otherModels[m.ID] = openCodeModelJSON{
+					ID:       m.ID,
+					Provider: openCodeModelProviderJSON{NPM: openCodeEndpointNPM},
+					Limit:    openCodeLimitJSON{Context: other.Limit.Context, Input: other.Limit.Context, Output: other.Limit.Output},
+					ToolCall: true,
+					Variants: m.Variants,
+				}
+			}
+			providers[other.ID] = openCodeEndpointBlockJSON{
+				NPM: openCodeEndpointNPM,
+				Env: []string{},
+				Options: openCodeEndpointOptionsJSON{
+					BaseURL:       "{file:" + file + "}",
+					APIKey:        openCodeAPIKeyRef(other.APIKeyEnv),
+					HeaderTimeout: other.HeaderTimeout.Milliseconds(),
+					ChunkTimeout:  other.ChunkTimeout.Milliseconds(),
+				},
+				Models: otherModels,
+			}
+			built.Files[file] = other.BaseURL
+		}
 	case openCodeIsLocalKey(model):
 		return OpenCodeRunConfig{}, fmt.Errorf(
 			"model %q names provider key %q, a model server you run, but the machine-tier opencode: config declares no endpoint with that id, so its limits are unknown: LM Studio reports a context limit of 0, and OpenCode never compacts a session whose limit is 0. "+
@@ -920,6 +1131,29 @@ func findOpenCodeEndpoint(endpoints []OpenCodeEndpoint, key string) (OpenCodeEnd
 		}
 	}
 	return OpenCodeEndpoint{}, false
+}
+
+// openCodeAPIKeyRef is options.apiKey for an endpoint's credential: a
+// reference to the environment variable its api_key_env names, or "" when it
+// has none. It is never a literal (ADR-022 § Endpoints: "Credentials are
+// supplied only via api_key_env").
+func openCodeAPIKeyRef(apiKeyEnv string) string {
+	if apiKeyEnv == "" {
+		return ""
+	}
+	return "{env:" + apiKeyEnv + "}"
+}
+
+// openCodeDeclaredVariants is the Variants an endpoint's own declared Models
+// list carries for modelID, or nil when the endpoint declares no entry for
+// it (the legacy flat-key endpoint never does).
+func openCodeDeclaredVariants(models []config.OpenCodeEndpointModel, modelID string) []string {
+	for _, m := range models {
+		if m.ID == modelID {
+			return m.Variants
+		}
+	}
+	return nil
 }
 
 // openCodeIsLocalKey reports whether model's provider key names a model
