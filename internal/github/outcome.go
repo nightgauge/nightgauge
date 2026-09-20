@@ -49,6 +49,38 @@ var (
 	outcomeModelLocks   = map[string]*sync.Mutex{}
 )
 
+// defaultLinesChangedThresholds backfills the `lines_changed_thresholds`
+// block for model documents written before it existed (#1592/v0.4.0). A
+// v0.3.x model has every other required key but not this one; without a
+// backfill the zero-value map read fails validation with no recovery path
+// short of discarding the file's accumulated calibration (#1911).
+var defaultLinesChangedThresholds = map[string]int{"XS": 100, "S": 325, "M": 850, "L": 1850, "XL": 2500}
+
+// backfillLinesChangedThresholds fills only sizes absent from the model's
+// lines_changed_thresholds block, from defaultLinesChangedThresholds. It never
+// overwrites a size that is already present — including a present-but-invalid
+// value — so validateComplexityModelDocument still rejects those as before.
+// The next saveModel call persists the completed block, making the backfill
+// one-way per #1843's precedent for the survival_calibration rename.
+func cloneLinesChangedThresholds() map[string]int {
+	clone := make(map[string]int, len(defaultLinesChangedThresholds))
+	for size, threshold := range defaultLinesChangedThresholds {
+		clone[size] = threshold
+	}
+	return clone
+}
+
+func backfillLinesChangedThresholds(model *complexityModel) {
+	if model.LinesChangedThresholds == nil {
+		model.LinesChangedThresholds = make(map[string]int, len(defaultLinesChangedThresholds))
+	}
+	for size, threshold := range defaultLinesChangedThresholds {
+		if _, present := model.LinesChangedThresholds[size]; !present {
+			model.LinesChangedThresholds[size] = threshold
+		}
+	}
+}
+
 // OutcomeParams holds the parameters needed to record a pipeline outcome.
 type OutcomeParams struct {
 	IssueNumber   int
@@ -348,6 +380,7 @@ func decodeComplexityModelDocument(data []byte) (*complexityModel, error) {
 		}
 		return nil, err
 	}
+	backfillLinesChangedThresholds(&model)
 	if err := validateComplexityModelDocument(&model); err != nil {
 		return nil, err
 	}
@@ -846,7 +879,7 @@ func newBootstrapComplexityModel(now time.Time) *complexityModel {
 			"medium":   {Modifier: 0, Rationale: "Baseline priority"},
 			"low":      {Modifier: -0.1, Rationale: "Low priority often simpler scope"},
 		},
-		LinesChangedThresholds: map[string]int{"XS": 100, "S": 325, "M": 850, "L": 1850, "XL": 2500},
+		LinesChangedThresholds: cloneLinesChangedThresholds(),
 		Learnings: []string{
 			fmt.Sprintf("%s: Bootstrap model created with universal baseline calibration from cross-repo data.", today),
 		},

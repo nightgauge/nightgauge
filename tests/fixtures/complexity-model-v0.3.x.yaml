@@ -1,0 +1,133 @@
+schema_version: "1.0"
+last_updated: "2026-09-09"
+total_observations: 59
+decay:
+  enabled: false
+  half_life_days: 30
+model_tracking:
+  current_default: claude-sonnet-4-6
+  observations_by_model:
+    claude-sonnet-4-6: 59
+patterns:
+  high_complexity:
+    - match: refactor|redesign|rewrite
+      modifier: 1.5
+      confidence: 0.45
+      rationale: Refactoring/redesign typically requires touching many files
+      observations: 4
+    - match: migrate|migration
+      modifier: 1.3
+      confidence: 0.45
+      rationale: Migration work spans analysis, planning, and execution layers
+      observations: 2
+    - match: multi.?repo|workspace|cross.?repo
+      modifier: 1.5
+      confidence: 0.5
+      rationale: Multi-repo features require coordination across boundaries
+      observations: 1
+  medium_complexity:
+    - match: config|setting|option
+      modifier: 0
+      confidence: 0.5
+      rationale: Configuration changes are moderate scope
+      observations: 6
+    - match: validation|schema|zod
+      modifier: 0
+      confidence: 0.57
+      rationale: Schema/validation changes are moderate scope
+      observations: 3
+  low_complexity:
+    - match: typo|spelling|wording
+      modifier: -1
+      confidence: 0.7
+      rationale: Typo/spelling fixes are minimal scope
+      observations: 5
+    - match: readme|changelog|documentation
+      modifier: -0.8
+      confidence: 0.65
+      rationale: Documentation-only changes are small scope
+      observations: 3
+    - match: bump|upgrade|version
+      modifier: -0.5
+      confidence: 0.56
+      rationale: Version bumps are typically small
+      observations: 2
+size_calibration:
+  XS:
+    expected_lines: 50
+    actual_average_lines: 61
+    sample_count: 12
+  S:
+    expected_lines: 150
+    actual_average_lines: 208
+    sample_count: 18
+  M:
+    expected_lines: 500
+    actual_average_lines: 561
+    sample_count: 15
+  L:
+    expected_lines: 1200
+    actual_average_lines: 1490
+    sample_count: 9
+  XL:
+    expected_lines: 2500
+    actual_average_lines: 2401
+    sample_count: 5
+type_adjustments:
+  feature:
+    modifier: -1.4
+    observations: 21
+    rationale: Seeded from cross-repo baseline (45 observations show features over-predicted)
+  bug:
+    modifier: -0.6
+    observations: 19
+    rationale: Bugs tend toward smaller scope
+  docs:
+    modifier: -0.7
+    observations: 8
+    rationale: Documentation changes are typically smaller
+  refactor:
+    modifier: 0.3
+    observations: 7
+    rationale: Refactors tend to touch more files
+  chore:
+    modifier: -0.3
+    observations: 4
+    rationale: Chores are typically small maintenance
+learnings:
+  - "2026-06-01: Bootstrap model created with universal baseline calibration from cross-repo data."
+priority_adjustments:
+  critical:
+    modifier: 0.2
+    rationale: Critical issues often have broader scope
+    observations: 3
+  high:
+    modifier: 0.1
+    rationale: High priority slightly correlates with complexity
+    observations: 11
+  medium:
+    modifier: 0
+    rationale: Baseline priority
+    observations: 40
+  low:
+    modifier: -0.1
+    rationale: Low priority often simpler scope
+    observations: 5
+prediction_accuracy:
+  total_predictions: 59
+  correct_predictions: 47
+  by_type:
+    feature:
+      total: 21
+      correct: 17
+    bug:
+      total: 19
+      correct: 16
+  by_size:
+    XS:
+      total: 12
+      correct: 10
+    S:
+      total: 18
+      correct: 14
+  recent_outcomes: []

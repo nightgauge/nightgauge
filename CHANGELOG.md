@@ -142,6 +142,19 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A v0.3.x `.nightgauge/complexity-model.yaml` now loads instead of failing
+  validation with `lines_changed_thresholds.XS must be positive` (#1911).
+  `lines_changed_thresholds` was introduced in #1592/v0.4.0 and required by
+  `validateComplexityModelDocument`, but no migration ever backfilled it for
+  files written before that release — the same upgrade gap #1843 fixed for
+  the `survival` → `survival_calibration` rename, in the same v0.4.0 release.
+  Decoding now backfills each missing size from the bootstrap defaults
+  (`XS:100, S:325, M:850, L:1850, XL:2500`), leaving any operator-set size
+  untouched and still rejecting a present-but-non-positive value; the next
+  save persists the completed block. `RecordOutcome`, `RecordSelfHealEvent`,
+  `ApplySurvivalVerdicts` and `nightgauge doctor` all recover without an
+  operator having to delete the model and lose its accumulated calibration.
+
 - A Go-dispatched pipeline stage (the scheduler's normal path and the
   autonomous issue-refine path) now always carries a real USD cost cap
   (#1749). `execution.StageOptions.CostBudget` was already wired all the way
