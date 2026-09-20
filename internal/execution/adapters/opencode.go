@@ -358,6 +358,49 @@ func isSpaceOrControl(r rune) bool {
 	return unicode.IsSpace(r) || unicode.IsControl(r)
 }
 
+// openCodeSessionIDRE is the shape a session id session.js's own opencode
+// plugin observes (opencodeplugin.Event.SessionID, #1624) — the only session
+// id -s ever carries (#1643): one this run itself recorded, never one read
+// from config, a prompt or model output. Anything else is silently omitted
+// rather than trusted, mirroring OpenCodeModelArg's refusal shape.
+var openCodeSessionIDRE = regexp.MustCompile(`^ses_[A-Za-z0-9]+$`)
+
+// openCodeRejectsFlagValue reports whether v must never reach argv as a flag
+// value: empty, starting with '-' (so it can never be read as a flag of its
+// own), or carrying whitespace/control characters. Mirrors OpenCodeModelArg's
+// model-id check (#1643 AC 7); applied here to --variant and -s.
+func openCodeRejectsFlagValue(v string) bool {
+	return v == "" || strings.HasPrefix(v, "-") || strings.IndexFunc(v, isSpaceOrControl) >= 0
+}
+
+// openCodeVariantsForModel returns the Variants an operator declared for
+// model's provider key and model id in settings' declared endpoints, or nil
+// when the provider is not a declared endpoint, or declares no variants for
+// this model.
+//
+// This is the config-declared-only path AC 4 and AC 8 name as the fallback:
+// the issue's `opencode models --verbose` catalog-probe extension is not
+// implemented here because no captured fixture of that flag's output exists
+// against opencode 1.18.30 (testdata/opencode-cli holds none) to parse
+// against, and shipping an unverified parser would be exactly the guess AC 8
+// forbids. See the docs/decisions/022-opencode-multi-provider-adapter.md
+// amendment this issue adds.
+func openCodeVariantsForModel(settings config.OpenCodeConfig, model string) []string {
+	provider, modelID, qualified := strings.Cut(strings.TrimSpace(model), "/")
+	if !qualified {
+		return nil
+	}
+	endpoints, err := OpenCodeEndpoints(settings)
+	if err != nil {
+		return nil
+	}
+	ep, ok := findOpenCodeEndpoint(endpoints, provider)
+	if !ok {
+		return nil
+	}
+	return openCodeDeclaredVariants(ep.Models, modelID)
+}
+
 // BuildCommand builds `opencode run` for one stage.
 //
 // Every flag here is load-bearing, and so is every flag that is absent. The
@@ -398,6 +441,23 @@ func (a *OpenCodeAdapter) BuildCommand(opts RunOptions) (string, []string, map[s
 	}
 	if opts.WorktreeDir != "" {
 		args = append(args, "--dir", opts.WorktreeDir)
+	}
+	// Effort → --variant (#1643 AC 4): only for a model that DECLARES the
+	// dispatched effort rung as one of its variants — never guessed, never
+	// emitted for a model with no declared variants (effort is recorded
+	// "not applicable" for those, by the caller emitting no flag here).
+	if opts.Effort != "" && !openCodeRejectsFlagValue(opts.Effort) {
+		if settings, err := a.loadSettings(opts.WorktreeDir); err == nil {
+			if slices.Contains(openCodeVariantsForModel(settings, opts.Model), opts.Effort) {
+				args = append(args, "--variant", opts.Effort)
+			}
+		}
+	}
+	// Session resume (#1643 AC 5): only a session id this run itself
+	// recorded and only in the shape session.js's plugin observes — see
+	// openCodeSessionIDRE and RunOptions.ResumeSessionID.
+	if id := strings.TrimSpace(opts.ResumeSessionID); id != "" && openCodeSessionIDRE.MatchString(id) {
+		args = append(args, "-s", id)
 	}
 
 	env := map[string]string{

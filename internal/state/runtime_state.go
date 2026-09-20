@@ -294,6 +294,16 @@ type RuntimeState struct {
 	// #299/#397 empty-means-undetermined convention — never a guess.
 	StageServedModels map[string]string `json:"stageServedModels,omitempty"`
 
+	// StageOpenCodeSessions captures the OpenCode session id observed for
+	// each stage's latest opencode dispatch (#1643), read back from the
+	// run's events file (opencodeplugin.Event.SessionID). Mirrors
+	// StageServedModels: keyed by stage so the value survives stage
+	// failures, stalls, and crashes. Valid for -s reuse ONLY when a retry's
+	// adapter, model and worktree all match the attempt that recorded it —
+	// that comparison is the caller's (the retry-dispatch wiring that sets
+	// RunOptions.ResumeSessionID), not enforced here.
+	StageOpenCodeSessions map[string]string `json:"stageOpenCodeSessions,omitempty"`
+
 	// StageModelIdentities captures, for each stage of a multi-provider
 	// adapter, the ADR-022 § 2 identity of the model that served it, as the
 	// executor reported it for the stage's latest result
@@ -2037,6 +2047,33 @@ func (rs *RuntimeState) RecordStageServedModel(stage PipelineStage, model string
 	rs.StageServedModels[string(stage)] = model
 }
 
+// RecordStageOpenCodeSession records the OpenCode session id observed for a
+// stage's latest opencode dispatch (#1643). Mirrors
+// RecordStageServedModel/RecordStageAdapter: empty ids are ignored to
+// preserve the omitempty contract on the wire.
+func (rs *RuntimeState) RecordStageOpenCodeSession(stage PipelineStage, sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if rs.StageOpenCodeSessions == nil {
+		rs.StageOpenCodeSessions = make(map[string]string)
+	}
+	rs.StageOpenCodeSessions[string(stage)] = sessionID
+}
+
+// StageOpenCodeSession returns the recorded OpenCode session id for a stage,
+// or "" when absent.
+func (rs *RuntimeState) StageOpenCodeSession(stage PipelineStage) string {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if rs.StageOpenCodeSessions == nil {
+		return ""
+	}
+	return rs.StageOpenCodeSessions[string(stage)]
+}
+
 // StageModelIdentity is the ADR-022 § 2 identity of the model that served a
 // stage of a multi-provider adapter: the provider that served it, the model
 // dispatched on -m, and the id of the declared endpoint that served it.
@@ -2934,6 +2971,12 @@ func (rs *RuntimeState) snapshotLocked() *RuntimeState {
 		snap.StageServedModels = make(map[string]string, len(rs.StageServedModels))
 		for k, v := range rs.StageServedModels {
 			snap.StageServedModels[k] = v
+		}
+	}
+	if len(rs.StageOpenCodeSessions) > 0 {
+		snap.StageOpenCodeSessions = make(map[string]string, len(rs.StageOpenCodeSessions))
+		for k, v := range rs.StageOpenCodeSessions {
+			snap.StageOpenCodeSessions[k] = v
 		}
 	}
 	if len(rs.StageModelIdentities) > 0 {

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/execution/opencodeplugin"
 	"github.com/nightgauge/nightgauge/internal/intelligence/routing"
 	"github.com/nightgauge/nightgauge/internal/models"
 	"github.com/nightgauge/nightgauge/internal/preflight"
@@ -84,7 +85,12 @@ func resolveDispatchEffort(adapterName string) string {
 // claude CLI — applying it universally would misattribute "off" to an
 // adapter the flag never touched.
 func resolveDispatchThinking(adapterName, model string) string {
-	provider := models.ProviderForAdapter(adapterName)
+	// ProviderFor, not ProviderForAdapter: opencode's adapter name names no
+	// fixed provider (#1643), so the thinking-default lookup below must read
+	// the DISPATCHED model's provider, not "other". Every other adapter's
+	// answer is unchanged — ProviderFor is ProviderForAdapter's for
+	// everything but opencode.
+	provider := models.ProviderFor(adapterName, model)
 	desc, ok := models.Resolve(provider, model)
 	if !ok || desc.Behavior == nil || !state.IsThinkingState(desc.Behavior.ThinkingDefault) {
 		return ""
@@ -93,6 +99,61 @@ func resolveDispatchThinking(adapterName, model string) string {
 		return "off"
 	}
 	return desc.Behavior.ThinkingDefault
+}
+
+// resolveResumeSessionID answers RunOptions.ResumeSessionID for a stage about
+// to dispatch (#1643 AC 5): the OpenCode session id recorded for this stage's
+// PRIOR attempt, but only when adapter, model AND worktree all still match
+// that attempt. Any of the three changing — a cap-hop, a tier descent, a
+// worktree switch — answers "", starting a fresh session, because a session
+// recorded under a different adapter, model or worktree names a run OpenCode
+// itself has no continuity story for.
+//
+// Only opencode ever has a recorded session (RecordStageOpenCodeSession is
+// only ever called after an opencode dispatch), so this returns "" for every
+// other adapter without consulting runtime at all.
+func resolveResumeSessionID(runtime *state.RuntimeState, stage state.PipelineStage, adapterName, model, worktreeDir string) string {
+	if runtime == nil || adapterName != "opencode" {
+		return ""
+	}
+	sessionID := runtime.StageOpenCodeSession(stage)
+	if sessionID == "" {
+		return ""
+	}
+	if runtime.StageAdapter(stage) != adapterName {
+		return ""
+	}
+	if runtime.StageModel(stage) != model {
+		return ""
+	}
+	if worktreeDir != "" && runtime.WorktreeDir != "" && runtime.WorktreeDir != worktreeDir {
+		return ""
+	}
+	return sessionID
+}
+
+// latestOpenCodeSessionID reads back the OpenCode session id session.js's
+// plugin recorded for this dispatch's run (#1624's events file,
+// opencodeplugin.EventsPath/ReadRunEvents), and returns the last non-empty
+// one observed. "" when the file is disabled (EventsPath's ok=false), absent,
+// unreadable, or carries no session id — every case is honest silence, never
+// a guess, matching this file's #580/#606 observation convention.
+func latestOpenCodeSessionID(outputFile, runID string) string {
+	path, ok := opencodeplugin.EventsPath(outputFile, runID)
+	if !ok {
+		return ""
+	}
+	events, err := opencodeplugin.ReadRunEvents(path)
+	if err != nil {
+		return ""
+	}
+	sessionID := ""
+	for _, ev := range events {
+		if ev.SessionID != "" {
+			sessionID = ev.SessionID
+		}
+	}
+	return sessionID
 }
 
 // defaultStageEfforts is the manual-mode effort fallback table. Mirrors

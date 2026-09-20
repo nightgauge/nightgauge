@@ -131,6 +131,13 @@ type StageRunParams struct {
 	SkillFallbackUsed bool   // True when platform resolution failed and community skill is used
 	RetroFindings     string // Prior failure findings injected on escalated retry; empty = first attempt
 	IsEscalatedRetry  bool   // True when this is an escalated retry with a better model
+
+	// ResumeSessionID threads to adapters.RunOptions.ResumeSessionID (#1643):
+	// the OpenCode session id to resume, set only when this dispatch's
+	// adapter, model and worktree all match the attempt that recorded it
+	// (resolveResumeSessionID). Empty on every ordinary dispatch and every
+	// adapter/model/worktree hop.
+	ResumeSessionID string
 }
 
 // StageRunResult is the cross-mode stage execution result.
@@ -527,22 +534,23 @@ func terminalFailureReason(exitCode int, err error, failText string) string {
 // reason on the result side.
 func stageOptionsFromParams(params StageRunParams) execution.StageOptions {
 	return execution.StageOptions{
-		Repo:         params.Repo,
-		IssueNumber:  params.IssueNumber,
-		Stage:        string(params.Stage),
-		SkillPath:    params.SkillPath,
-		ContextFile:  params.ContextFile,
-		OutputFile:   params.OutputFile,
-		Model:        params.Model,
-		Effort:       params.Effort,
-		MaxTokens:    params.MaxTokens,
-		CostBudget:   params.CostBudget,
-		Timeout:      params.Timeout,
-		Runtime:      params.Runtime,
-		AllowedTools: params.AllowedTools,
-		Prompt:       params.Prompt,
-		TargetRepo:   params.TargetRepo,
-		PhaseEventFn: params.PhaseEventFn,
+		Repo:            params.Repo,
+		IssueNumber:     params.IssueNumber,
+		Stage:           string(params.Stage),
+		SkillPath:       params.SkillPath,
+		ContextFile:     params.ContextFile,
+		OutputFile:      params.OutputFile,
+		Model:           params.Model,
+		Effort:          params.Effort,
+		MaxTokens:       params.MaxTokens,
+		CostBudget:      params.CostBudget,
+		Timeout:         params.Timeout,
+		Runtime:         params.Runtime,
+		AllowedTools:    params.AllowedTools,
+		Prompt:          params.Prompt,
+		TargetRepo:      params.TargetRepo,
+		PhaseEventFn:    params.PhaseEventFn,
+		ResumeSessionID: params.ResumeSessionID,
 	}
 }
 
@@ -817,6 +825,12 @@ type Scheduler struct {
 	// and authenticated. Defaults to AdapterUsableForCapHop; overridden in tests
 	// so the decision never shells a vendor CLI.
 	capAdapterUsable func(adapter string) (bool, string)
+
+	// capCandidateModel resolves a fallback-chain candidate's configured
+	// model, for opencode's cap-hop skip check (#1643). Defaults to reading
+	// the machine-tier opencode: block; overridden in tests so the decision
+	// never reads disk.
+	capCandidateModel func(adapter string) string
 
 	// Callbacks
 	onStageStart    func(repo string, issue int, stage string, title string)
@@ -5500,6 +5514,12 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			}
 		}
 
+		// Session resume (#1643 AC 5): reuse the prior attempt's OpenCode
+		// session only when THIS dispatch's adapter, model and worktree all
+		// match the attempt that recorded it — any hop (a cap-hop, a tier
+		// descent, a different worktree) starts a fresh session instead.
+		resumeSessionID := resolveResumeSessionID(runtime, stage, adapterName, model, workspaceRoot)
+
 		// Run the stage via StageRunner interface
 		stageParams := StageRunParams{
 			Stage:       stage,
@@ -5542,6 +5562,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			SkillFallbackUsed: skillFallbackUsed,    // True when platform failed for paid tier
 			RetroFindings:     retroFindings,
 			IsEscalatedRetry:  isEscalated,
+			ResumeSessionID:   resumeSessionID,
 		}
 
 		// stageStartedAt anchors the diagnostic record's ElapsedMs fallback
@@ -5657,6 +5678,17 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// request-or-served value servedModel computes.
 		if result != nil {
 			runtime.RecordStageServedModel(stage, result.ServedModel)
+			// Session resume (#1643 AC 5): record the OpenCode session this
+			// dispatch used, read back from the run's own events file
+			// (opencodeplugin.Event.SessionID) — the SAME source #1624
+			// already writes. A retry of this stage reuses it only when
+			// resolveResumeSessionID's adapter/model/worktree match holds;
+			// every other adapter never opens this file at all.
+			if adapterName == "opencode" {
+				if sessionID := latestOpenCodeSessionID(outputFile, runtime.RunID); sessionID != "" {
+					runtime.RecordStageOpenCodeSession(stage, sessionID)
+				}
+			}
 			// A multi-provider adapter's stage also records the provider that
 			// served it, the -m it was dispatched with and its endpoint
 			// (ADR-022 § 2): once servedModel re-records the model below, the
@@ -6737,13 +6769,14 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// a descent cannot be recorded under one provider and looked up
 			// under another.
 			capInput := CapRecoveryInput{
-				Kind:          resolvedFailureKind,
-				DispatchModel: model,
-				ServedModel:   servedModel,
-				Adapter:       adapterName,
-				Tried:         runtime.CapAdaptersTried(),
-				Engine:        s.retryEngine,
-				AdapterUsable: s.capAdapterUsableFn(),
+				Kind:           resolvedFailureKind,
+				DispatchModel:  model,
+				ServedModel:    servedModel,
+				Adapter:        adapterName,
+				Tried:          runtime.CapAdaptersTried(),
+				Engine:         s.retryEngine,
+				AdapterUsable:  s.capAdapterUsableFn(),
+				CandidateModel: s.capCandidateModelFn(workspaceRoot),
 			}
 			// The chain is read from disk only for a failure the ladder
 			// actually governs. Every other stage failure — the overwhelming

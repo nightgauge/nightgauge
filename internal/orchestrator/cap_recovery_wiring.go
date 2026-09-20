@@ -67,6 +67,40 @@ func (s *Scheduler) SetCapAdapterUsable(fn func(string) (bool, string)) {
 	s.capAdapterUsable = fn
 }
 
+// capCandidateModelFn returns the fallback-chain candidate model resolver the
+// cap walk should use (#1643): the test override when one is wired, a
+// workspaceRoot-scoped default otherwise. The default answers only for
+// opencode — every other adapter serves one provider regardless of model, so
+// nextCapProvider's skip check needs nothing more for them — and reads the
+// machine-tier opencode: block's single flat-key Model, the same
+// "<provider>/<model> a caller that names none runs" value a real opencode
+// dispatch with no per-stage override would take.
+func (s *Scheduler) capCandidateModelFn(workspaceRoot string) func(string) string {
+	if s != nil && s.capCandidateModel != nil {
+		return s.capCandidateModel
+	}
+	return func(adapter string) string {
+		if adapter != "opencode" {
+			return ""
+		}
+		cfg, err := config.LoadOpenCodeConfig(workspaceRoot)
+		if err != nil {
+			return ""
+		}
+		return cfg.Model
+	}
+}
+
+// SetCapCandidateModel overrides the fallback-chain candidate-model resolver.
+// Tests use it so a cap-recovery decision never reads the machine-tier
+// config from disk; production leaves it unset.
+func (s *Scheduler) SetCapCandidateModel(fn func(string) string) {
+	if s == nil {
+		return
+	}
+	s.capCandidateModel = fn
+}
+
 // capFallbackProducer is the Action Center producer id for cap-driven routing
 // changes. One id for both verdicts (tier descent and provider hop) because
 // they are one condition to the operator — "a usage cap changed how your work is

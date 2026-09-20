@@ -45,6 +45,23 @@ changelog, and the release workflow refuses a tag that does not.
   to repeat the same check against a real local model server (#1644). The
   result is recorded in `docs/ADAPTER_MATRIX.md`.
 
+- OpenCode routing is now provider-aware (#1643). A usage-cap fallback walk
+  (`pipeline.adapter_fallback_chain`) skips an `opencode` candidate
+  configured against the same account that just capped the run, instead of
+  treating every `opencode` candidate as an unrelated provider; effort maps
+  to `opencode run`'s `--variant <v>` for a model that declares that effort
+  rung in `opencode.endpoints[].models[].variants`, and nothing is guessed
+  for one that does not; a retry of the same stage on the same model and
+  worktree resumes the prior attempt's OpenCode session via `-s <id>`, and
+  any adapter, model or worktree change starts a fresh session instead. The
+  new `--variant` and `-s` values are validated the same way `-m` already
+  is — never a value read from config, a prompt or model output, only one
+  the operator declared or this run itself recorded. See the
+  `docs/decisions/022-opencode-multi-provider-adapter.md` 2026-09-20
+  amendment for the one deviation from plan: `opencode models --verbose`
+  is not parsed for declared variants, since no captured fixture of that
+  flag's output exists to verify a parser against.
+
 ### Fixed
 
 - A Go-dispatched pipeline stage (the scheduler's normal path and the

@@ -120,6 +120,15 @@ type CapRecoveryInput struct {
 	// candidate, which is the conservative reading — an unprobed provider is
 	// not a provider we know we can reach.
 	AdapterUsable func(adapter string) (bool, string)
+	// CandidateModel resolves the model a fallback-chain candidate adapter
+	// would dispatch, when known. Only opencode's provider answer varies by
+	// model (models.ProviderFor), so this is opencode's model-resolution
+	// injection point: nil, or an empty return, leaves the skip check reading
+	// the candidate's adapter-only provider, exactly as before this field
+	// existed. Injected rather than read from config.Load directly, mirroring
+	// AdapterUsable, so a decision that would otherwise read disk stays
+	// unit-testable without a fixture.
+	CandidateModel func(adapter string) string
 }
 
 // CapRecoveryDecision is the verdict plus everything the caller needs to act on
@@ -235,7 +244,15 @@ func DecideCapRecovery(in CapRecoveryInput) CapRecoveryDecision {
 // A candidate is skipped by PROVIDER, not by adapter name: the capped provider
 // may be reachable under several adapter names (claude / claude-headless /
 // claude-sdk all resolve to anthropic), and hopping onto a second name for the
-// same exhausted account buys a second failure at full stage price.
+// same exhausted account buys a second failure at full stage price. For
+// opencode — the one adapter name with no fixed provider — the skip check
+// needs the candidate's configured model too: an opencode candidate
+// configured with anthropic/* is the same account that just capped us, one
+// configured with lmstudio/* or openai/* is not (#1643). CandidateModel
+// supplies that model when it is known; an unresolved model, exactly as
+// before this field existed, leaves the candidate's answer at
+// ProviderForAdapter's (models.ProviderFor's behavior for every adapter but
+// opencode).
 func nextCapProvider(in CapRecoveryInput, cappedProvider string) (string, string, bool) {
 	if in.AdapterUsable == nil {
 		return "", "", false
@@ -248,7 +265,11 @@ func nextCapProvider(in CapRecoveryInput, cappedProvider string) (string, string
 		if in.Tried[candidate] {
 			continue
 		}
-		if cappedProvider != "" && models.ProviderForAdapter(candidate) == cappedProvider {
+		candidateModel := ""
+		if in.CandidateModel != nil {
+			candidateModel = in.CandidateModel(candidate)
+		}
+		if cappedProvider != "" && models.ProviderFor(candidate, candidateModel) == cappedProvider {
 			continue // same account that just refused us
 		}
 		if ok, reason := in.AdapterUsable(candidate); !ok {
@@ -269,6 +290,13 @@ func nextCapProvider(in CapRecoveryInput, cappedProvider string) (string, string
 // rule and the operator's sentence both need to distinguish anthropic from
 // "unknown". scopeDescentProvider collapses the two, which is correct for the
 // ladder it guards and wrong for everything here.
+//
+// The adapter fallback prefers models.ProviderFor(adapter, servedModel) over
+// ProviderForAdapter(adapter) alone: for opencode, whose adapter name names no
+// fixed provider, a served model unresolved by models.Get (a config-declared
+// endpoint model, never registered) is still parseable via ParseOpenCodeModel,
+// which ProviderFor delegates to. Every other adapter's answer is unchanged —
+// ProviderFor is ProviderForAdapter's for everything but opencode.
 func capProviderOf(servedModel, adapter string) string {
 	if id := strings.TrimSpace(servedModel); id != "" {
 		if m, ok := models.Get(id); ok && m.Provider != "" {
@@ -276,7 +304,7 @@ func capProviderOf(servedModel, adapter string) string {
 		}
 	}
 	if a := strings.TrimSpace(adapter); a != "" {
-		if p := models.ProviderForAdapter(a); p != "" && p != "other" {
+		if p := models.ProviderFor(a, servedModel); p != "" && p != "other" {
 			return p
 		}
 	}
