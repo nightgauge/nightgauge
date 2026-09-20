@@ -1,6 +1,7 @@
 package config
 
 import (
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -48,11 +49,11 @@ opencode:
 // is the zero config, not an error.
 func TestLoadOpenCodeConfigAbsent(t *testing.T) {
 	withNoMachineConfig(t)
-	if cfg, err := LoadOpenCodeConfig(""); err != nil || cfg != (OpenCodeConfig{}) {
+	if cfg, err := LoadOpenCodeConfig(""); err != nil || !reflect.DeepEqual(cfg, OpenCodeConfig{}) {
 		t.Errorf("no machine file: %+v, %v", cfg, err)
 	}
 	withMachineConfig(t, "github_user: octocat\nopencode:\n")
-	if cfg, err := LoadOpenCodeConfig(""); err != nil || cfg != (OpenCodeConfig{}) {
+	if cfg, err := LoadOpenCodeConfig(""); err != nil || !reflect.DeepEqual(cfg, OpenCodeConfig{}) {
 		t.Errorf("an empty block: %+v, %v", cfg, err)
 	}
 }

@@ -687,3 +687,37 @@ func (a *OpenCodeAdapter) WithholdsEnv(opts RunOptions, key string) bool {
 func (a *OpenCodeAdapter) RedactedEnv(opts RunOptions) []string {
 	return openCodeRedactedEnv(opts.Model)
 }
+
+// RedactedLiterals implements the manager's optional hook naming secret
+// values directly, rather than the name of an environment variable to look
+// one up by: an endpoint's base_url, which is deliberately never an
+// environment variable (it is referenced from the generated config through a
+// {file:...} reference into a 0600 file in the run root), so RedactedEnv
+// above cannot catch it. Observed on 1.18.30, an OpenCode --format json
+// error event's metadata.url field carries the request's full URL (ADR-022
+// § 22, § Endpoints, #1678).
+//
+// It returns the base_url of every endpoint this run declared
+// (opts.RunRoot.Endpoints), resolved back against the machine-tier
+// opencode: block, so a run that never touched a declared endpoint (a hosted
+// dispatch, or one with no RunRoot) returns none.
+func (a *OpenCodeAdapter) RedactedLiterals(opts RunOptions) []string {
+	if opts.RunRoot == nil || len(opts.RunRoot.Endpoints) == 0 {
+		return nil
+	}
+	settings, err := config.LoadOpenCodeConfig(opts.WorktreeDir)
+	if err != nil {
+		return nil
+	}
+	endpoints, err := OpenCodeEndpoints(settings)
+	if err != nil {
+		return nil
+	}
+	var values []string
+	for _, id := range opts.RunRoot.Endpoints {
+		if ep, ok := findOpenCodeEndpoint(endpoints, id); ok && ep.BaseURL != "" {
+			values = append(values, ep.BaseURL)
+		}
+	}
+	return values
+}

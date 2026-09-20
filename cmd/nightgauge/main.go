@@ -12007,6 +12007,11 @@ func writeAdapterRows(w io.Writer, adapters []doctor.AdapterHealth) {
 			}
 			fmt.Fprintf(w, "        mcp: %s (%s)\n", mcpState, a.Mcp.ConfigPath)
 		}
+		if a.OpenCode != nil {
+			for _, ep := range a.OpenCode.Endpoints {
+				fmt.Fprintf(w, "        endpoint %s\n", renderOpenCodeEndpointRow(ep))
+			}
+		}
 		if status != "✓" && a.Remediation != "" {
 			fmt.Fprintf(w, "        → %s\n", a.Remediation)
 		}
@@ -12017,6 +12022,32 @@ func writeAdapterRows(w io.Writer, adapters []doctor.AdapterHealth) {
 			fmt.Fprintf(w, "        · %s\n", note)
 		}
 	}
+}
+
+// renderOpenCodeEndpointRow is one endpoint's readiness line (#1678, AC6): id,
+// kind, reachable, whether the model is loaded, and its declared slots. It
+// never prints the endpoint's base_url, which the row never receives in the
+// first place — OpenCodeEndpointReadiness carries none.
+func renderOpenCodeEndpointRow(ep adapters.OpenCodeEndpointReadiness) string {
+	loaded := "unknown"
+	if ep.Loaded != nil {
+		loaded = "no"
+		if *ep.Loaded {
+			loaded = "yes"
+		}
+	}
+	slots := "not declared"
+	if ep.Slots > 0 {
+		slots = strconv.Itoa(ep.Slots)
+	}
+	line := fmt.Sprintf("%s (%s): reachable=%v model_loaded=%s slots=%s", ep.Endpoint, ep.Kind, ep.Reachable, loaded, slots)
+	if ep.Problem != "" {
+		line += "\n          ✗ " + ep.Problem
+	}
+	if ep.Warning != "" {
+		line += "\n          ⚠ " + ep.Warning
+	}
+	return line
 }
 
 // renderAdapterDetail builds the one-line human summary for an adapter row.

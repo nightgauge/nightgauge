@@ -412,14 +412,24 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 
 	// Output redaction (ADR-022 § 22): an adapter that hands its child secrets
 	// through the environment names those variables through the optional
-	// RedactedEnv hook, and their values are removed from every line the child
-	// prints before it is streamed or kept.
-	var redact *strings.Replacer
+	// RedactedEnv hook; one with a secret that is never an environment
+	// variable (an endpoint's base_url, #1678) names the value itself through
+	// the optional RedactedLiterals hook. Either way, the value is removed
+	// from every line the child prints before it is streamed or kept. Both
+	// hooks' secrets are merged into one replacer so a single pass catches
+	// both kinds together.
+	var secrets []redactSecret
 	if r, ok := adapter.(interface {
 		RedactedEnv(adapters.RunOptions) []string
 	}); ok {
-		redact = envValueRedactor(cmd.Env, r.RedactedEnv(runOpts))
+		secrets = append(secrets, collectEnvSecrets(cmd.Env, r.RedactedEnv(runOpts))...)
 	}
+	if r, ok := adapter.(interface {
+		RedactedLiterals(adapters.RunOptions) []string
+	}); ok {
+		secrets = append(secrets, collectLiteralSecrets(r.RedactedLiterals(runOpts))...)
+	}
+	redact := buildValueRedactor(secrets)
 
 	// Set up stdin pipe for adapters that receive prompt via stdin
 	var stdinPipe io.WriteCloser
@@ -1574,6 +1584,69 @@ func composeStageEnv(base []string, withhold func(key string) bool, adapterEnv m
 // ordinary string.
 const redactedSecretMinLen = 8
 
+// redactSecret is one secret value to remove from captured output, and the
+// label its redaction is filed under ("[REDACTED:<label>]").
+type redactSecret struct{ value, label string }
+
+// collectEnvSecrets is the secrets envValueRedactor builds a replacer from:
+// the value of each variable in names, as env holds it, skipping one too
+// short to be a secret (redactedSecretMinLen) or whose name says it holds a
+// setting rather than a credential (isProviderSetting).
+func collectEnvSecrets(env, names []string) []redactSecret {
+	var secrets []redactSecret
+	for _, name := range names {
+		value, ok := lookupEnvList(env, name)
+		if !ok || len(value) < redactedSecretMinLen || isProviderSetting(name) {
+			continue
+		}
+		secrets = append(secrets, redactSecret{value, name})
+	}
+	return secrets
+}
+
+// collectLiteralSecrets is literalValueRedactor's secrets: each value in
+// values directly, not looked up from an environment (an adapter's
+// RedactedLiterals hook, for a secret that is never an environment variable,
+// such as an endpoint's base_url, #1678), labeled generically since the
+// value alone carries no name to file it under.
+func collectLiteralSecrets(values []string) []redactSecret {
+	var secrets []redactSecret
+	for _, v := range values {
+		if len(v) < redactedSecretMinLen {
+			continue
+		}
+		secrets = append(secrets, redactSecret{v, "endpoint-url"})
+	}
+	return secrets
+}
+
+// buildValueRedactor returns a replacer that swaps each secret's value for
+// "[REDACTED:<label>]", or nil when secrets holds nothing worth redacting.
+// Each value is matched both as it is and as the content of a JSON string
+// (jsonEscaped), because a --format json event escapes a tool's output: a
+// value holding a quote or a backslash, such as a JSON service key or a
+// query string, is otherwise never found there. Longer forms are matched
+// first, so a secret that contains another is replaced whole.
+func buildValueRedactor(secrets []redactSecret) *strings.Replacer {
+	type form struct{ text, label string }
+	var forms []form
+	for _, s := range secrets {
+		forms = append(forms, form{s.value, s.label})
+		if escaped := jsonEscaped(s.value); escaped != s.value {
+			forms = append(forms, form{escaped, s.label})
+		}
+	}
+	if len(forms) == 0 {
+		return nil
+	}
+	sort.SliceStable(forms, func(i, j int) bool { return len(forms[i].text) > len(forms[j].text) })
+	pairs := make([]string, 0, 2*len(forms))
+	for _, f := range forms {
+		pairs = append(pairs, f.text, "[REDACTED:"+f.label+"]")
+	}
+	return strings.NewReplacer(pairs...)
+}
+
 // envValueRedactor returns a replacer that swaps the value of each variable
 // in names, as env holds it, for "[REDACTED:<name>]", or nil when none of
 // them holds a value worth redacting. A variable whose name says it holds a
@@ -1584,27 +1657,15 @@ const redactedSecretMinLen = 8
 // otherwise never found there. Longer forms are matched first, so a secret
 // that contains another is replaced whole.
 func envValueRedactor(env, names []string) *strings.Replacer {
-	type secret struct{ form, name string }
-	var secrets []secret
-	for _, name := range names {
-		value, ok := lookupEnvList(env, name)
-		if !ok || len(value) < redactedSecretMinLen || isProviderSetting(name) {
-			continue
-		}
-		secrets = append(secrets, secret{value, name})
-		if escaped := jsonEscaped(value); escaped != value {
-			secrets = append(secrets, secret{escaped, name})
-		}
-	}
-	if len(secrets) == 0 {
-		return nil
-	}
-	sort.SliceStable(secrets, func(i, j int) bool { return len(secrets[i].form) > len(secrets[j].form) })
-	pairs := make([]string, 0, 2*len(secrets))
-	for _, s := range secrets {
-		pairs = append(pairs, s.form, "[REDACTED:"+s.name+"]")
-	}
-	return strings.NewReplacer(pairs...)
+	return buildValueRedactor(collectEnvSecrets(env, names))
+}
+
+// literalValueRedactor mirrors envValueRedactor for secrets supplied
+// directly, not looked up from an environment: an adapter's RedactedLiterals
+// hook, for a secret (an endpoint's base_url, ADR-022 § 22, #1678) that is
+// never an environment variable.
+func literalValueRedactor(values []string) *strings.Replacer {
+	return buildValueRedactor(collectLiteralSecrets(values))
 }
 
 // isProviderSetting reports whether the variable name holds a provider setting

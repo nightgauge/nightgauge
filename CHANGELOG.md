@@ -22,6 +22,16 @@ changelog, and the release workflow refuses a tag that does not.
   executed and passed on that PR's head, so the issue's Verification section
   was unmet on `main`. Found by independent verification, not by CI.
 
+- The machine-tier `opencode:` config accepts an `endpoints[]` list, so an
+  operator can declare more than one named local model server instance (two
+  LM Studio servers, LM Studio beside Ollama, or any OpenAI-compatible
+  server) with its own id, readiness check and capacity (#1678). Each
+  endpoint gets its own complete OpenCode provider block;
+  `nightgauge doctor --adapters` prints one readiness row per endpoint (id,
+  kind, reachable, whether the model is loaded, and declared slots); an
+  endpoint's `base_url` never leaves the machine tier and is redacted from
+  every captured run output. A non-loopback endpoint requires
+  `allow_lan: true` and a private-network address.
 - `scripts/check-agent-guidance.sh` now fails when the routing file has no
   `decisions/` route, and, when `.nightgauge/config.yaml` sets
   `knowledge.enabled: true`, when it does not mention `.nightgauge/knowledge/`.

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/doctor"
+	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 )
 
 // TestDoctorCheckOrder_CoversEveryEmittedCheck pins the render list against
@@ -76,5 +77,37 @@ func TestWriteAdapterRows_WarnFloorIsAWarnRow(t *testing.T) {
 	}
 	if strings.Join(lines, "\n") != strings.Join(want, "\n") {
 		t.Errorf("rows:\n%s\nwant:\n%s", buf.String(), strings.Join(want, "\n"))
+	}
+}
+
+// TestWriteAdapterRows_OpenCodeEndpointRows (#1678, AC6): one readiness row
+// per declared endpoint, naming id, kind, reachable, whether the model is
+// loaded and its declared slots; a problem or a warning prints beneath it.
+// No base_url or host appears — the row never receives one.
+func TestWriteAdapterRows_OpenCodeEndpointRows(t *testing.T) {
+	loadedTrue, loadedFalse := true, false
+	oc := &doctor.OpenCodeHealth{
+		Enabled: true,
+		Endpoints: []adapters.OpenCodeEndpointReadiness{
+			{Endpoint: "mtplx", Kind: "openai-compatible", Reachable: true, Loaded: &loadedTrue, Ready: true, Slots: 2},
+			{Endpoint: "mtplx-remote", Kind: "openai-compatible", Reachable: false, Loaded: &loadedFalse, Problem: "endpoint mtplx-remote is not answering (connection refused)"},
+		},
+	}
+	row := doctor.AdapterHealth{Adapter: "opencode", Kind: "cli", Binary: "opencode", OK: true, OpenCode: oc}
+
+	var buf bytes.Buffer
+	writeAdapterRows(&buf, []doctor.AdapterHealth{row})
+	out := buf.String()
+	for _, want := range []string{
+		"endpoint mtplx (openai-compatible): reachable=true model_loaded=yes slots=2",
+		"endpoint mtplx-remote (openai-compatible): reachable=false model_loaded=no slots=not declared",
+		"endpoint mtplx-remote is not answering (connection refused)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output does not contain %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "10.") || strings.Contains(out, "127.0.0.1") || strings.Contains(out, "http://") {
+		t.Errorf("output holds an address: %s", out)
 	}
 }

@@ -73,6 +73,13 @@ type OpenCodeConfig struct {
 	Snapshot  *bool `yaml:"snapshot,omitempty" json:"snapshot,omitempty"`
 	LSP       *bool `yaml:"lsp,omitempty" json:"lsp,omitempty"`
 	Formatter *bool `yaml:"formatter,omitempty" json:"formatter,omitempty"`
+
+	// Endpoints declares any number of additional named model server
+	// instances beyond the single flat-key endpoint above (ADR-022
+	// § Endpoints, #1678): two LM Studio instances, LM Studio beside Ollama,
+	// or any OpenAI-compatible server. Each becomes its own OpenCode
+	// provider block, keyed by its id.
+	Endpoints []OpenCodeEndpointConfig `yaml:"endpoints,omitempty" json:"endpoints,omitempty"`
 }
 
 // OpenCodeLimit is a model server's token limits.
