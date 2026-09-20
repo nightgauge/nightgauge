@@ -11,6 +11,13 @@ and this project adheres to
 
 ### Fixed
 
+- The pipeline tree view no longer shows a successful auto/CLI-mode run of
+  `feature-planning`, `feature-dev` or `feature-validate` as `0/N phases · N
+abandoned` (#1885). The Go execution path now completes a phase when the
+  next one starts and settles the last phase `complete` — not `abandoned` —
+  at a successful stage boundary, matching the IPC path's existing behavior.
+  `abandoned` still appears when a stage genuinely ends abnormally.
+
 - The extension and CLI no longer leave a repository's primary clone dirty
   (#1875). An older committed `.nightgauge/.gitignore` is no longer replaced on
   activation, which also discarded the repository's own rules; its newer rules

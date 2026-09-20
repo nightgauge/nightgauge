@@ -3,6 +3,8 @@ package execution
 import (
 	"encoding/json"
 	"regexp"
+
+	"github.com/nightgauge/nightgauge/internal/state"
 )
 
 // Phase inference — deterministic phase progress from observable tool activity.
@@ -22,90 +24,14 @@ import (
 // This mirrors packages/nightgauge-sdk/src/events/phaseInference.ts so the
 // Go (auto/CLI) and TypeScript (VSCode/IPC) execution paths behave identically.
 
-// featureDevPhases is the ordered phase name table for the feature-dev stage,
-// mirroring PHASE_REGISTRY["feature-dev"] in the SDK. Index == position.
-var featureDevPhases = []string{
-	"validate-environment",             // 0
-	"read-planning-context",            // 1
-	"batch-plan-detection",             // 2
-	"feedback-context-check",           // 3
-	"plan-verification",                // 4
-	"knowledge-base-read",              // 5
-	"recall-architectural-constraints", // 6
-	"standards-loading",                // 7
-	"implementation",                   // 8
-	"testing",                          // 9
-	"e2e-testing",                      // 10
-	"quality-review",                   // 11
-	"self-correction",                  // 12
-	"feedback-signal-evaluation",       // 13
-	"write-dev-context",                // 14
-	"sync-project-status",              // 15
-	"output-summary",                   // 16
-	"self-assessment",                  // 17
-}
-
-// featurePlanningPhases is the ordered phase name table for the feature-planning
-// stage, mirroring PHASE_REGISTRY["feature-planning"] in the SDK. Index == position.
-var featurePlanningPhases = []string{
-	"feedback-context-check",    // 0
-	"load-context",              // 1
-	"batch-detection",           // 2
-	"ac-reconcile",              // 3
-	"assess-complexity",         // 4
-	"pattern-mining",            // 5
-	"documentation-analysis",    // 6
-	"knowledge-base-read",       // 7
-	"recall-prior-decisions",    // 8
-	"produce-plan",              // 9
-	"write-planning-context",    // 10
-	"knowledge-base-enrichment", // 11
-	"complete-stage",            // 12
-	"self-assessment",           // 13
-}
-
-// featureValidatePhases is the ordered phase name table for the
-// feature-validate stage, mirroring PHASE_REGISTRY["feature-validate"] in the
-// SDK. Index == position.
-//
-// feature-validate was left out of the inference work above and is the worst
-// case in the run that produced #1850: 0 of 23 phases reported across four
-// minutes and $0.68, on a stage that exited 0. Its 23 markers are as
-// unconditional in the SKILL.md as feature-dev's 18 were, and the model skips
-// them for the same reason — each is a standalone printf in its own bash block
-// on a stage whose real work is Read/Bash/Edit.
-var featureValidatePhases = []string{
-	"validate-environment",       // 0
-	"read-dev-context",           // 1
-	"batch-detection",            // 2
-	"ac-completion-check",        // 3
-	"detect-testing-environment", // 4
-	"ptc-detection",              // 5
-	"freshness-check",            // 6
-	"build-verification",         // 7
-	"dead-code-detection",        // 8
-	"baseline-comparison",        // 9
-	"run-tests",                  // 10
-	"mobile-mcp-tests",           // 11
-	"verify-ui-gate",             // 12
-	"ci-parity-check",            // 13
-	"knowledge-coverage-check",   // 14
-	"pre-push-merge-validation",  // 15
-	"generate-checklist",         // 16
-	"feedback-signal-evaluation", // 17
-	"commit-and-push",            // 18
-	"write-validate-context",     // 19
-	"sync-project-status",        // 20
-	"output-summary",             // 21
-	"self-assessment",            // 22
-}
-
-// stagePhaseTables maps a stage to its ordered phase names. Only stages that do
-// NOT reliably self-report phase markers need an entry; others are no-ops.
+// stagePhaseTables maps a stage to its ordered phase names, read from
+// internal/state's PhaseRegistry — the one Go-side declaration of these
+// tables (#1885). Only stages that do NOT reliably self-report phase markers
+// need an entry; others are no-ops.
 var stagePhaseTables = map[string][]string{
-	"feature-dev":      featureDevPhases,
-	"feature-planning": featurePlanningPhases,
-	"feature-validate": featureValidatePhases,
+	"feature-dev":      state.RegistryPhaseNames(state.StageFeatureDev),
+	"feature-planning": state.RegistryPhaseNames(state.StageFeaturePlanning),
+	"feature-validate": state.RegistryPhaseNames(state.StageFeatureValidate),
 }
 
 var (

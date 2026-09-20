@@ -941,9 +941,10 @@ func (rs *RuntimeState) CompleteStage(exitCode int, counts tokens.TokenCounts, m
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 
-	// A phase the stage never completed cannot still be running once the stage
-	// is over (#1009). Leaving it told every reader the run was stuck there.
-	rs.closeRunningPhasesLocked(rs.Stage)
+	// Settle the stage's phase records at this boundary (#1885): complete and
+	// back-fill on success, abandon-only on failure. See
+	// settleStagePhasesLocked for the two arms' rationale.
+	rs.settleStagePhasesLocked(rs.Stage, exitCode)
 
 	counts = rs.consumeCurrentStageTokenCountsLocked(counts)
 	cost, stamped := tokens.CalculateCostFor(adapter, model, counts)
@@ -1001,6 +1002,13 @@ func (rs *RuntimeState) CompleteStage(exitCode int, counts tokens.TokenCounts, m
 func (rs *RuntimeState) CompleteStageWithCost(exitCode, inputTokens, outputTokens, cacheReadTokens int, actualCostUsd float64, cacheCreationTokens ...int) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
+
+	// Settle the stage's phase records at this boundary (#1885). This path
+	// previously called neither closeRunningPhasesLocked nor any successor: a
+	// stray running phase on a native-cost completion (the common case for
+	// agentic stages) was never even settled to `abandoned` — it stayed
+	// "running" forever.
+	rs.settleStagePhasesLocked(rs.Stage, exitCode)
 
 	counts := tokens.TokenCounts{
 		Input:     inputTokens,
@@ -1284,6 +1292,14 @@ const phaseStartDedupeWindow = 60 * time.Second
 // while it is still running and recent — so a later legitimate re-emission
 // of the phase appends normally. Naive global dedupe would be wrong: stage
 // retries re-emit markers for phases that genuinely run again.
+//
+// Settles the stage's previously active phase as `complete` before starting
+// the next one (#1885, AC1), mirroring `phaseTracker.ts`'s `onPhaseDetected`:
+// a phase transition IS the evidence the previous phase finished, and on the
+// Go path nothing else ever said so — the previous phase sat "running" until
+// the stage's own boundary settled it, which made every phase but the last
+// one of a stage invisible as anything but "running" for the phase's own
+// duration and then either "complete" (never, on this path) or "abandoned".
 func (rs *RuntimeState) BeginPhase(stage PipelineStage, name string, index, total int) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
@@ -1294,6 +1310,7 @@ func (rs *RuntimeState) BeginPhase(stage PipelineStage, name string, index, tota
 			return
 		}
 	}
+	rs.completeRunningPhasesLocked(stage)
 	rs.PhaseHistory = append(rs.PhaseHistory, PhaseRecord{
 		Stage:     stage,
 		Name:      name,
@@ -1366,6 +1383,12 @@ func (rs *RuntimeState) SkipPhase(stage PipelineStage, name string, index, total
 func (rs *RuntimeState) UnreportedPhase(stage PipelineStage, name string, index, total int) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
+	rs.unreportedPhaseLocked(stage, name, index, total)
+}
+
+// unreportedPhaseLocked is UnreportedPhase's body for callers already holding
+// rs.mu — settleStagePhasesLocked's back-fill loop calls this form.
+func (rs *RuntimeState) unreportedPhaseLocked(stage PipelineStage, name string, index, total int) {
 	for i := range rs.PhaseHistory {
 		if rs.PhaseHistory[i].Stage == stage && rs.PhaseHistory[i].Name == name {
 			return
@@ -1475,8 +1498,8 @@ func (rs *RuntimeState) CloseRunningPhases(stage PipelineStage) int {
 }
 
 // closeRunningPhasesLocked is CloseRunningPhases for callers already holding
-// the mutex — CompleteStage does, and calling the exported form there would
-// deadlock.
+// the mutex — settleStagePhasesLocked's abnormal-boundary arm does, and
+// calling the exported form there would deadlock.
 func (rs *RuntimeState) closeRunningPhasesLocked(stage PipelineStage) int {
 	now := time.Now()
 	closed := 0
@@ -1489,6 +1512,57 @@ func (rs *RuntimeState) closeRunningPhasesLocked(stage PipelineStage) int {
 		}
 	}
 	return closed
+}
+
+// completeRunningPhasesLocked settles every currently-running phase of stage
+// as `complete`, returning how many it settled. Used both by BeginPhase (to
+// close out the phase a new one is displacing, #1885 AC1) and by
+// settleStagePhasesLocked's successful-boundary arm (to close out the last
+// phase a stage never explicitly completed, AC2). Callers hold rs.mu.
+func (rs *RuntimeState) completeRunningPhasesLocked(stage PipelineStage) int {
+	now := time.Now()
+	completed := 0
+	for i := range rs.PhaseHistory {
+		p := &rs.PhaseHistory[i]
+		if p.Stage == stage && p.Status == "running" {
+			p.Status = "complete"
+			p.CompletedAt = &now
+			completed++
+		}
+	}
+	return completed
+}
+
+// settleStagePhasesLocked closes out stage's phase records at a stage
+// boundary (#1885), mirroring `phaseTracker.ts`'s `completeStagePhases`.
+//
+// A SUCCESSFUL boundary (exitCode == 0) completes the last active phase
+// rather than abandoning it — the stage got all the way to its own
+// completion call, which is not what "abandoned" means (AC2) — and then
+// back-fills every PhaseRegistry phase name the stage never reported at all
+// as `unreported`, so the denominator downstream readers see is the
+// registry's total rather than however many PhaseHistory records happen to
+// exist (AC4). unreportedPhaseLocked is idempotent per stage+name, so a
+// phase that DID report (complete, skipped, failed, ...) keeps its real
+// outcome; only genuine silence is filled.
+//
+// An ABNORMAL boundary (non-zero exit code, abort, crash) still abandons a
+// still-running phase (#1009, AC3) and runs no back-fill: a stage that did
+// not finish did not finish covering its own phase list either, and marking
+// its untouched phases `unreported` would claim they got a fair chance to
+// report when the stage never reached them.
+//
+// Callers hold rs.mu.
+func (rs *RuntimeState) settleStagePhasesLocked(stage PipelineStage, exitCode int) {
+	if exitCode != 0 {
+		rs.closeRunningPhasesLocked(stage)
+		return
+	}
+	rs.completeRunningPhasesLocked(stage)
+	names := RegistryPhaseNames(stage)
+	for i, name := range names {
+		rs.unreportedPhaseLocked(stage, name, i, len(names))
+	}
 }
 
 // degradeFailedPhasesLocked rewrites every `failed` phase of `stage` to
