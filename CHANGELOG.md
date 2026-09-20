@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- `docs/ADAPTER_MATRIX.md`'s OpenCode egress section records the CI run that
+  proves it: run 35514658308, 2026-09-20, `non-loopback attempts: 0`. The
+  field had been left as `PENDING` by #1644's own PR even though the run
+  executed and passed on that PR's head, so the issue's Verification section
+  was unmet on `main`. Found by independent verification, not by CI.
+
 - The machine-tier `opencode:` config accepts an `endpoints[]` list, so an
   operator can declare more than one named local model server instance (two
   LM Studio servers, LM Studio beside Ollama, or any OpenAI-compatible
