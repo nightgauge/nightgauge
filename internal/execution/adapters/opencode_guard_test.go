@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/gittest"
+	"github.com/nightgauge/nightgauge/internal/opencodeallow"
 )
 
 // The permission map and the project-config tamper gate (ADR-022 § 9, § 8;
@@ -526,6 +527,60 @@ func TestOpenCodeTmpAllowListCoverageFailsOnANewLiteral(t *testing.T) {
 	}
 	if missing := openCodeTmpCoverageMissing(found); len(missing) == 0 {
 		t.Fatalf("a fixture skill introducing a nested /tmp/sub/dir/... path was not caught as uncovered: found %v", found)
+	}
+}
+
+// TestOpenCodeExternalDirectoryGateRootsMatchAllowList is #1816's own
+// anti-drift check: OpenCodeExternalDirectoryAllowRoots (plain directories,
+// consumed by internal/hooks' dispatch-time external-directory-gate) and
+// openCodeExternalDirectoryAllowList (glob patterns, consumed by opencode's
+// own lexical permission map) must describe the same set of directories, one
+// derived from the other, so they can never silently diverge.
+func TestOpenCodeExternalDirectoryGateRootsMatchAllowList(t *testing.T) {
+	worktree := t.TempDir()
+	skillDir := t.TempDir()
+	contextDir := t.TempDir()
+	opts := RunOptions{
+		WorktreeDir: worktree,
+		SkillPath:   filepath.Join(skillDir, "SKILL.md"),
+		ContextFile: filepath.Join(contextDir, "context.json"),
+		OutputFile:  filepath.Join(contextDir, "output.json"),
+	}
+
+	roots := OpenCodeExternalDirectoryAllowRoots(opts)
+	allowList := openCodeExternalDirectoryAllowList(opts)
+
+	var wantPatterns []string
+	for _, root := range roots {
+		if root == opencodeallow.TmpRoot || root == opencodeallow.PrivateTmpRoot {
+			continue
+		}
+		wantPatterns = append(wantPatterns, openCodeDirPatterns(root)...)
+	}
+	wantPatterns = append(wantPatterns, openCodeTmpDirAllowPatterns...)
+
+	if len(allowList) != len(wantPatterns) {
+		t.Fatalf("openCodeExternalDirectoryAllowList has %d entries, want %d derived from "+
+			"OpenCodeExternalDirectoryAllowRoots: got %v, want %v", len(allowList), len(wantPatterns), allowList, wantPatterns)
+	}
+	for i := range allowList {
+		if allowList[i] != wantPatterns[i] {
+			t.Errorf("openCodeExternalDirectoryAllowList[%d] = %q, want %q (derived from OpenCodeExternalDirectoryAllowRoots)",
+				i, allowList[i], wantPatterns[i])
+		}
+	}
+
+	foundTmp, foundPrivateTmp := false, false
+	for _, root := range roots {
+		if root == opencodeallow.TmpRoot {
+			foundTmp = true
+		}
+		if root == opencodeallow.PrivateTmpRoot {
+			foundPrivateTmp = true
+		}
+	}
+	if !foundTmp || !foundPrivateTmp {
+		t.Errorf("OpenCodeExternalDirectoryAllowRoots must include both %q and %q, got %v", opencodeallow.TmpRoot, opencodeallow.PrivateTmpRoot, roots)
 	}
 }
 

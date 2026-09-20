@@ -66,6 +66,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/nightgauge/nightgauge/internal/opencodeallow"
 )
 
 // openCodeAllow and openCodeDeny are the only two actions a generated
@@ -740,48 +742,49 @@ func openCodeSkillDir(opts RunOptions) string {
 // default already refusing everything else there).
 func openCodeExternalDirectoryAllowList(opts RunOptions) []string {
 	var allow []string
-	allow = append(allow, openCodeDirPatterns(openCodeSkillDir(opts))...)
-	worktree := opts.WorktreeDir
-	// insideWorktree reports whether dir (as given, or resolved) is the
-	// worktree or under it, in either's given/resolved form: a file's own
-	// directory and the worktree can each be reported unresolved or
-	// resolved independently (the same macOS /var -> /private/var gap
-	// openCodeDirPatterns documents), so every combination is checked.
-	insideWorktree := func(dir string) bool {
-		if worktree == "" || dir == "" {
-			return false
+	for _, root := range OpenCodeExternalDirectoryAllowRoots(opts) {
+		if root == opencodeallow.TmpRoot || root == opencodeallow.PrivateTmpRoot {
+			// The literal, narrower openCodeTmpDirAllowPatterns below is
+			// what opencode's own lexical matcher actually needs for these
+			// two roots (see that var's own doc comment) — openCodeDirPatterns'
+			// "/**" form would be a different, wider pattern than the one
+			// that has been probed against the real binary.
+			continue
 		}
-		dirForms := []string{dir}
-		if r, err := filepath.EvalSymlinks(dir); err == nil {
-			dirForms = append(dirForms, r)
-		}
-		worktreeForms := []string{worktree}
-		if r, err := filepath.EvalSymlinks(worktree); err == nil {
-			worktreeForms = append(worktreeForms, r)
-		}
-		for _, d := range dirForms {
-			for _, w := range worktreeForms {
-				if d == w || strings.HasPrefix(d, w+string(filepath.Separator)) {
-					return true
-				}
-			}
-		}
-		return false
+		allow = append(allow, openCodeDirPatterns(root)...)
 	}
-	addOutsideWorktree := func(file string) {
-		if file == "" {
-			return
-		}
-		dir := filepath.Dir(file)
-		if insideWorktree(dir) {
-			return
-		}
-		allow = append(allow, openCodeDirPatterns(dir)...)
-	}
-	addOutsideWorktree(opts.ContextFile)
-	addOutsideWorktree(opts.OutputFile)
 	allow = append(allow, openCodeTmpDirAllowPatterns...)
 	return allow
+}
+
+// openCodeAllowOptions projects RunOptions' three allow-list-relevant fields
+// into opencodeallow.Options.
+func openCodeAllowOptions(opts RunOptions) opencodeallow.Options {
+	return opencodeallow.Options{
+		SkillPath:   opts.SkillPath,
+		WorktreeDir: opts.WorktreeDir,
+		ContextFile: opts.ContextFile,
+		OutputFile:  opts.OutputFile,
+	}
+}
+
+// OpenCodeExternalDirectoryAllowRoots returns the resolved directories a read
+// outside the worktree is allowed to touch: NIGHTGAUGE_SKILL_DIR, the
+// context/output file directories (when outside the worktree), and the
+// /tmp, /private/tmp scratch roots — the same set
+// openCodeExternalDirectoryAllowList encodes as glob patterns, as plain
+// directories for a caller that resolves symlinks itself rather than
+// pattern-matching a request string. Delegates to internal/opencodeallow,
+// the actual source of truth shared with internal/hooks' dispatch-time gate
+// (#1816) — that package cannot import this one (an import cycle:
+// opencodeplugin -> hooks -> adapters -> opencodeplugin), so the roots logic
+// lives there and this is a thin, RunOptions-shaped wrapper around it, kept
+// so openCodeExternalDirectoryAllowList's own callers and this package's
+// tests still read naturally. TestOpenCodeExternalDirectoryGateRootsMatchAllowList
+// checks openCodeExternalDirectoryAllowList is still built from exactly
+// these roots.
+func OpenCodeExternalDirectoryAllowRoots(opts RunOptions) []string {
+	return opencodeallow.Roots(openCodeAllowOptions(opts))
 }
 
 // OpenCodeBinDir is the running nightgauge binary's directory

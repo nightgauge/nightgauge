@@ -14,6 +14,13 @@
 //   - "edit"/"write" -> workflow-gate only, with a Claude-shaped `file_path`
 //                      payload (claude-plugins/nightgauge/hooks/hooks.json's
 //                      PreToolUse:Edit|Write).
+//   - "read"        -> external-directory-gate: resolves symlinks and
+//                      refuses a read whose resolved directory falls outside
+//                      the worktree and every OpenCode external_directory
+//                      allow-listed root (#1816) — opencode's own permission
+//                      map matches a tool call's filePath lexically, so a
+//                      symlink planted inside an allow-listed directory
+//                      after the config is written is invisible to it.
 //   - "task"        -> always denied (AC9 fallback below), independent of
 //                      every other gate.
 //   - every other tool id in TOOL_CLASSIFICATION -> passthrough (read-only,
@@ -63,6 +70,11 @@ const SANITIZE_MARKER = "[nightgauge-gate:sanitize]";
 // UNKNOWN_TOOL_MARKER prefixes the fail-closed denial for a tool id absent
 // from TOOL_CLASSIFICATION.
 const UNKNOWN_TOOL_MARKER = "[nightgauge-gate:unknown-tool]";
+
+// EXTERNAL_DIRECTORY_MARKER prefixes an external-directory-gate denial: a
+// Read whose resolved (symlink-followed) target falls outside the worktree
+// and every OpenCode external_directory allow-listed root (#1816).
+const EXTERNAL_DIRECTORY_MARKER = "[nightgauge-gate:external-directory]";
 
 // TASK_MARKER prefixes the AC9 fallback's own error, distinct from every
 // other marker, so a stage's remediation output can tell a careful-mode/
@@ -123,7 +135,7 @@ export const TOOL_CLASSIFICATION = Object.freeze(
     write: "file",
     task: "task", // intercepted unconditionally above; listed for completeness
     apply_patch: "blocked",
-    read: "passthrough",
+    read: "read",
     glob: "passthrough",
     grep: "passthrough",
     list: "passthrough",
@@ -272,6 +284,17 @@ export async function toolExecuteBefore(ctx, input, output) {
     runGateVerb(["hook", "workflow-gate"], payload, cwd, WORKFLOW_MARKER);
     runGateVerb(["hook", "careful-gate"], payload, cwd, MARKER);
     runGateVerb(["hook", "stage-gate"], payload, cwd, STAGE_MARKER);
+    return;
+  }
+
+  if (kind === "read") {
+    const filePath = typeof args.filePath === "string" ? args.filePath : "";
+    const payload = {
+      tool_name: "Read",
+      cwd,
+      tool_input: { file_path: filePath },
+    };
+    runGateVerb(["hook", "external-directory-gate"], payload, cwd, EXTERNAL_DIRECTORY_MARKER);
     return;
   }
 

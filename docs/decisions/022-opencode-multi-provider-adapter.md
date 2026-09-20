@@ -2661,6 +2661,72 @@ not merely visible within the hook's own scope, and not silently dropped
 before the session's own transcript is built. This confirms the issue's
 "so the model sees them" half of AC5 without qualification.
 
+## Dispatch-time symlink resolution for `read` (amendment 2026-09-20, #1816)
+
+§ "The permission map's pattern matching" (amendment 2026-09-15, #1638)
+already documents that opencode 1.18.30 matches `external_directory` (and
+every other permission key) lexically: it compares a tool call's `filePath`
+string against the generated glob patterns, never resolving symlinks at
+match time. That amendment's own generator-side fix
+(`openCodeDirPatterns`/`openCodeWorktreeRelativeDirPatterns`) resolves
+symlinks too, but only **once, at config-generation time**, to compute the
+pattern strings opencode's matcher later applies lexically. A symlink
+planted **after** the config is written — at any point during the stage's
+own run — is invisible to that one-time resolution: opencode's matcher is a
+pinned third-party binary this repository does not control, and no
+config-generation-time fix can catch a runtime-planted symlink. #1816 (an
+out-of-scope finding from #1638's own adversarial review) is this gap made
+concrete: a symlink placed directly under an allow-listed directory
+(`NIGHTGAUGE_SKILL_DIR`, the context/output file directories, or the `/tmp`,
+`/private/tmp` scratch literals), pointing anywhere outside every
+allow-listed directory, is matched by the allow pattern on the link's own
+lexical path — its resolved target is never checked — and the read
+completes.
+
+The fix cannot live in the permission-map generator, so it lives at the one
+enforcement surface this repository does control with access to the actual
+filesystem at the moment of the tool call: the Nightgauge OpenCode plugin's
+own `gates.js` (`tool.execute.before`, § "Nightgauge OpenCode plugin"
+above), which already runs `nightgauge hook <verb>` as a real subprocess
+gate for `bash` and `edit`/`write`. `read` was classified `"passthrough"`
+there (no gate at all, opencode's own lexical permission map the only
+check); it is now `"read"`, dispatching to a new verb, `nightgauge hook
+external-directory-gate` (`internal/hooks/external_directory_gate.go`).
+
+The new gate resolves the file's real location with `filepath.EvalSymlinks`
+against the **full file path**, not merely its directory (`filepath.Dir`)
+before resolving — resolving only the directory misses a symlink that is
+the file's own last path component, which is exactly this issue's attack
+shape. It then checks the resolved directory for containment in the
+worktree or in `internal/opencodeallow.RootsFromEnv`'s allow-listed roots
+(the same roots `internal/execution/adapters`'
+`OpenCodeExternalDirectoryAllowRoots`/`openCodeExternalDirectoryAllowList`
+project into glob patterns for the config, kept as one shared, tested
+source of truth so the plain-directory and glob-pattern views can never
+diverge — `TestOpenCodeExternalDirectoryGateRootsMatchAllowList`). The two
+packages cannot share this logic via a direct import: `internal/hooks`'
+own tests import `internal/execution/opencodeplugin` (to drive the embedded
+plugin end to end), and `internal/execution/adapters` also imports
+`internal/execution/opencodeplugin` (to embed the plugin tree into a
+dispatch), so `internal/hooks` importing `internal/execution/adapters`
+directly would close an import cycle
+(`opencodeplugin -> hooks -> adapters -> opencodeplugin`). The roots logic
+instead lives in a standalone leaf package, `internal/opencodeallow`, that
+neither side needs to route through the other to reach.
+
+`printPreToolUse` (`cmd/nightgauge/hookoutput.go`) already gives this gate
+AC2 ("classified like any other permission rejection") for free: a `Block`
+decision renders as the identical `hookSpecificOutput.permissionDecision:
+"deny"` shape `gates.js`'s `runGateVerb` already parses into a marker-prefixed
+throw for every other gate here, so this refusal needed no new
+classification code.
+
+Like every other lexical fallback this document records, resolving only
+`glob`/`grep`/`list`/`webfetch` etc. stays out of scope: the issue's own ACs
+and verification section are specifically about a `read` through a planted
+symlink, and broadening to every path-bearing tool would need its own probe
+per tool this issue's evidence does not cover.
+
 ## Consequences
 
 - The model layer's one-adapter-one-provider assumption becomes a special

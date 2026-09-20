@@ -5714,6 +5714,7 @@ func hookCmd() *cobra.Command {
 		hookCarefulGateCmd(),
 		hookStageGateCmd(),
 		hookClaudeStatusLineCmd(),
+		hookExternalDirectoryGateCmd(),
 	)
 	return cmd
 }
@@ -5811,6 +5812,17 @@ func hookStageGateCmd() *cobra.Command {
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return printPreToolUse(hooks.EvaluateStageGate(readHookInput(cmd)))
+		},
+	}
+}
+
+func hookExternalDirectoryGateCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:          "external-directory-gate",
+		Short:        "Resolve symlinks and refuse a Read outside the OpenCode external_directory allow-list (reads JSON from stdin)",
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return printPreToolUse(hooks.EvaluateExternalDirectoryGate(readHookInput(cmd)))
 		},
 	}
 }
