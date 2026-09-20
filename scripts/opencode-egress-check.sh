@@ -243,6 +243,7 @@ cmd_run() {
         "$0" run "$trace_path" "$artifact_dir"
   fi
 
+  bring_loopback_up
   echo "opencode-egress-check.sh: inside the network namespace (only lo is up)"
 
   local bin="${OPENCODE_EGRESS_STUB_BIN:?OPENCODE_EGRESS_STUB_BIN must be set inside the namespace}"
@@ -332,6 +333,58 @@ with open(src) as f, open(dst, "w") as out:
         else:
             out.write(line)
 PY
+}
+
+# bring_loopback_up: brings the new network namespace's loopback interface up.
+#
+# `unshare --net` gives the namespace a loopback interface that is DOWN, so
+# every connect() to 127.0.0.1 inside it fails with ENETUNREACH even though
+# bind() succeeds — the stub provider comes up and stays up, OpenCode then
+# cannot reach it, and the stage fails ~95s later with no attributable cause
+# while the trace honestly reports "non-loopback attempts: 0". Bringing lo up
+# is what makes this namespace loopback-ONLY rather than network-NONE, which
+# is what the check is evidence for.
+#
+# `ip` lives in /usr/sbin on Ubuntu and the calling workflow deliberately
+# keeps a narrow PATH, so resolve it from PATH first and fall back to the
+# usual absolute locations rather than widening PATH for the whole run. The
+# AF_NETLINK socket `ip` opens is already an allowed destination in
+# check-trace (it never leaves the host), so this adds nothing the parser
+# would flag.
+bring_loopback_up() {
+  local ip_bin=""
+  local cand
+  for cand in "$(command -v ip 2>/dev/null || true)" /usr/sbin/ip /sbin/ip /usr/bin/ip /bin/ip; do
+    if [ -n "$cand" ] && [ -x "$cand" ]; then
+      ip_bin="$cand"
+      break
+    fi
+  done
+  [ -n "$ip_bin" ] || die "ip(8) not found: cannot bring the namespace's loopback interface up"
+  "$ip_bin" link set lo up || die "bringing the namespace's loopback interface up failed"
+
+  # Verify rather than assume: a silent no-op here reproduces the exact opaque
+  # failure this function exists to prevent, so prove a loopback connect works
+  # before any live binary depends on it.
+  python3 - <<'LOOPBACK_PROBE' || die "loopback is unusable inside the namespace after 'ip link set lo up'"
+import socket
+import sys
+
+server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+try:
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    client.settimeout(5)
+    client.connect(server.getsockname())
+    server.accept()[0].close()
+    client.close()
+except OSError as err:
+    print(f"loopback probe failed: {err}", file=sys.stderr)
+    sys.exit(1)
+finally:
+    server.close()
+LOOPBACK_PROBE
 }
 
 # reap_and_confirm_dead <pidfile>: kills every PID listed in pidfile, then
