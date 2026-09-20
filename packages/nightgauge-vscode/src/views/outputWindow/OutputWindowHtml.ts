@@ -1767,6 +1767,48 @@ function getStyles(): string {
       opacity: 0.85;
     }
 
+    /* CLI-discovered run — reconciled from disk, never streamed (#586). */
+    .slot-tab-chip-cli {
+      background: var(--vscode-badge-background);
+      color: var(--vscode-badge-foreground);
+      letter-spacing: 0.04em;
+    }
+
+    /* ==========================================================
+     * Per-slot identity strip — Issue #586
+     * Names the run a panel is showing so no panel can be read as
+     * the current run when it is not.
+     * ========================================================= */
+    .slot-panel-header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: var(--spacing-sm);
+      padding: var(--spacing-xs) var(--spacing-md);
+      border-bottom: 1px solid var(--vscode-panel-border);
+      background: var(--vscode-editor-background);
+      font-size: 0.85em;
+      flex: 0 0 auto;
+    }
+
+    .slot-panel-issue {
+      font-weight: 600;
+      color: var(--vscode-textLink-foreground);
+    }
+
+    .slot-panel-title {
+      color: var(--vscode-foreground);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .slot-panel-meta {
+      color: var(--vscode-descriptionForeground);
+      font-family: var(--vscode-editor-font-family);
+      font-size: 0.9em;
+    }
+
     /* Each slot panel fills the remaining output area */
     .slot-panel {
       display: none;
@@ -4282,10 +4324,19 @@ function getTabBarHtml(activeSlots: SlotInfo[], activeSlotIndex: number | null):
     const archivedChip = slot.archived
       ? ` <span class="slot-tab-chip slot-tab-chip-archived">Archived</span>`
       : "";
+    // A CLI-discovered run is reconciled from disk, not streamed (#586). The
+    // chip says so on the tab itself, so an empty panel reads as "this run's
+    // output is elsewhere" rather than "this run is doing nothing".
+    const cliChip =
+      slot.origin === "cli" ? ` <span class="slot-tab-chip slot-tab-chip-cli">CLI</span>` : "";
     const label = `Slot ${slot.slotIndex + 1} · #${slot.issueNumber}${stageLabel}`;
-    const titleHint = slot.archived ? " (archived — rebuilt from on-disk log)" : "";
+    const titleHint = slot.archived
+      ? " (archived — rebuilt from on-disk log)"
+      : slot.origin === "cli"
+        ? " (started by `nightgauge run` — output goes to the launching terminal)"
+        : "";
     const fullTitle = `Slot ${slot.slotIndex + 1}: #${slot.issueNumber} — ${escapeHtml(slot.title)}${stageLabel}${titleHint}`;
-    html += `<button${cls} data-slot="${slot.slotIndex}" title="${fullTitle}">${escapeHtml(label)}${archivedChip}${getTabBadgesHtml(slot)}</button>`;
+    html += `<button${cls} data-slot="${slot.slotIndex}" title="${fullTitle}">${escapeHtml(label)}${archivedChip}${cliChip}${getTabBadgesHtml(slot)}</button>`;
   }
 
   html += `</div>`;
@@ -4419,6 +4470,67 @@ export function getOverviewPanelHtml(activeSlots: SlotInfo[], nowMs: number = Da
  * @param slotStages  - Map<slotIndex, StageProgress[]> for per-slot stage groups (Issue #2814)
  * @see Issue #2705, #2814, #2817
  */
+/**
+ * Render the identity strip that opens every per-slot panel (#586).
+ *
+ * The Output window used to render a slot's bytes with nothing saying whose
+ * bytes they were. That is survivable while the only slots are ones this
+ * extension spawned — but a `nightgauge run` started in a terminal is
+ * discovered, not spawned, so the window could show an older run's content
+ * with no way to tell it was the wrong run. Naming the issue, the repo and the
+ * run id on every panel makes "which run am I reading?" answerable from the
+ * panel itself rather than from memory.
+ *
+ * The run id is shown short (its first segment) with the full value on the
+ * title attribute — a UUIDv7 is too long to sit inline, and the first segment
+ * is what the logs and the snapshot filenames are grepped by.
+ */
+export function getSlotPanelHeaderHtml(slot: SlotInfo): string {
+  const parts: string[] = [
+    `<span class="slot-panel-issue">#${slot.issueNumber}</span>`,
+    `<span class="slot-panel-title">${escapeHtml(slot.title)}</span>`,
+  ];
+  if (slot.repoSlug) {
+    parts.push(`<span class="slot-panel-meta">${escapeHtml(slot.repoSlug)}</span>`);
+  }
+  if (slot.runId) {
+    const short = slot.runId.split("-")[0];
+    parts.push(
+      `<span class="slot-panel-meta slot-panel-run" title="Run ${escapeHtml(slot.runId)}">run ${escapeHtml(short)}</span>`
+    );
+  }
+  if (slot.origin === "cli") {
+    parts.push(
+      `<span class="slot-panel-meta slot-panel-origin" title="Started by \`nightgauge run\` outside this window">CLI</span>`
+    );
+  }
+  return `<div class="slot-panel-header">${parts.join("")}</div>`;
+}
+
+/**
+ * Render a slot panel's empty state (#586).
+ *
+ * Deliberately NOT the generic "No output yet. Start a pipeline to see
+ * activity here." — for a CLI-discovered run that sentence is false twice
+ * over: a pipeline IS running, and starting another one would not put its
+ * stream here. The honest statement is that this window never receives that
+ * run's stream, and where the stream actually is. Showing nothing, or showing
+ * the previous slot's content, is how this defect presented in the first
+ * place.
+ */
+export function getSlotPanelEmptyHtml(slot: SlotInfo): string {
+  const body =
+    slot.origin === "cli"
+      ? `<p>No live stream for this run — issue #${slot.issueNumber} was started by
+         <code>nightgauge run</code> outside this window, so its output goes to the
+         launching terminal.</p>
+         <p>Stage, phase and cost above are reconciled from the run's snapshot on disk.
+         Use <strong>Open log</strong> on the Overview card if this run's repository has
+         a session log.</p>`
+      : `<p>No output yet for issue #${slot.issueNumber}.</p>`;
+  return `<div class="empty-state slot-panel-empty">${body}</div>`;
+}
+
 function getSlotPanelsHtml(
   entries: OutputEntry[],
   stages: StageProgress[],
@@ -4442,7 +4554,13 @@ function getSlotPanelsHtml(
     const cls = isActive ? " active" : "";
     const panelEntries = slotEntries.get(slot.slotIndex) ?? [];
     const panelStages = slotStages?.get(slot.slotIndex) ?? stages;
-    html += `<div class="slot-panel${cls}" id="slot-panel-${slot.slotIndex}" data-slot="${slot.slotIndex}">${getEntriesHtml(panelEntries, panelStages)}</div>`;
+    // A slot with no entries gets the slot-aware empty state, never
+    // `getEntriesHtml`'s generic "start a pipeline" copy (#586).
+    const bodyHtml =
+      panelEntries.length === 0
+        ? getSlotPanelEmptyHtml(slot)
+        : getEntriesHtml(panelEntries, panelStages);
+    html += `<div class="slot-panel${cls}" id="slot-panel-${slot.slotIndex}" data-slot="${slot.slotIndex}">${getSlotPanelHeaderHtml(slot)}${bodyHtml}</div>`;
   }
 
   return html;

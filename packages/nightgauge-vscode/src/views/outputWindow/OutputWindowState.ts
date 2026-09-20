@@ -66,6 +66,26 @@ export interface OutputEntry {
 }
 
 /**
+ * Where a slot's run was launched from (#586).
+ *
+ * `extension` runs are spawned by this extension host, so their stdout is
+ * piped into the Output window live. `cli` runs are `nightgauge run` processes
+ * discovered on disk by `CliPipelineReconciliationService`: the extension sees
+ * their runtime snapshot but never their stream, which lands in the launching
+ * terminal. The distinction is user-facing — a slot with no entries means
+ * "waiting" for one origin and "watch your terminal" for the other.
+ */
+export type SlotOrigin = "extension" | "cli";
+
+/** Optional identity carried alongside a slot registration (#586). */
+export interface SlotRegistrationOptions {
+  /** The run identity (ADR-017 `run_id`), when the caller knows it. */
+  runId?: string;
+  /** Defaults to `extension` — the historic, and still the common, case. */
+  origin?: SlotOrigin;
+}
+
+/**
  * Per-slot info for tab bar rendering (Issue #2705, #2815)
  */
 export interface SlotInfo {
@@ -73,6 +93,14 @@ export interface SlotInfo {
   issueNumber: number;
   title: string;
   repoSlug?: string;
+  /**
+   * Run identity for this slot, when known (#586). Rendered in the panel
+   * header so a reader can tell WHICH run's bytes they are looking at —
+   * one issue can be dispatched concurrently more than once.
+   */
+  runId?: string;
+  /** Launch origin; absent is read as `extension` (#586). */
+  origin?: SlotOrigin;
   stage?: PipelineStage;
   /** Per-slot stage progress — independent from global stages (Issue #2814) */
   stages: Map<PipelineStage, StageProgress>;
@@ -718,7 +746,13 @@ export class OutputWindowState {
     );
   }
 
-  registerSlot(slotIndex: number, issueNumber: number, title: string, repoSlug?: string): void {
+  registerSlot(
+    slotIndex: number,
+    issueNumber: number,
+    title: string,
+    repoSlug?: string,
+    options?: SlotRegistrationOptions
+  ): void {
     const existing = this.slotInfos.get(slotIndex);
     const stages = existing?.stages ?? new Map<PipelineStage, StageProgress>();
     if (!existing) {
@@ -738,6 +772,11 @@ export class OutputWindowState {
       issueNumber,
       title,
       repoSlug,
+      // Re-registration must not erase identity the first call carried: the
+      // reconciler re-registers on every poll, and a later call that omits
+      // the run id would otherwise blank the panel header (#586).
+      runId: options?.runId ?? existing?.runId,
+      origin: options?.origin ?? existing?.origin ?? "extension",
       stage: existing?.stage,
       stages,
       tokenUsage,

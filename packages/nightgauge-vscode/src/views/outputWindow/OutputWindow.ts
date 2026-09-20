@@ -19,6 +19,7 @@ import {
   type StageStatus,
   type ExecutionMode,
   type SlotInfo,
+  type SlotRegistrationOptions,
 } from "./OutputWindowState";
 import {
   getOutputWindowHtml,
@@ -1136,9 +1137,38 @@ export class OutputWindow implements vscode.Disposable {
    * @param slotIndex  - 0-based slot index
    * @param issueNumber - Issue number being processed in this slot
    * @param title      - Issue title for the tab label
+   * @param repoSlug   - `owner/repo` the run targets, when known
+   * @param options    - Run identity and launch origin (#586)
    */
-  registerSlotInfo(slotIndex: number, issueNumber: number, title: string, repoSlug?: string): void {
-    this.state.registerSlot(slotIndex, issueNumber, title, repoSlug);
+  registerSlotInfo(
+    slotIndex: number,
+    issueNumber: number,
+    title: string,
+    repoSlug?: string,
+    options?: SlotRegistrationOptions
+  ): void {
+    this.state.registerSlot(slotIndex, issueNumber, title, repoSlug, options);
+    this.updatePanel();
+  }
+
+  /**
+   * Drop a slot's tab and buffer, but only while it still belongs to the run
+   * that asked for it (#586).
+   *
+   * This is the Output-window twin of `PipelineTreeProvider.
+   * removeConcurrentSlotIfOwned`: a CLI run that settles must take its own tab
+   * down, and must not take down a tab some later run has since registered at
+   * the same index. Ownership is the run id, because one issue can be
+   * dispatched more than once and the issue number alone cannot tell the two
+   * dispatches apart.
+   *
+   * A slot registered without a run id is never removed by this path — an
+   * unidentified slot cannot be proven to be the caller's.
+   */
+  removeSlotInfoIfOwned(slotIndex: number, runId: string): void {
+    const slot = this.state.getSlot(slotIndex);
+    if (!slot || slot.runId !== runId) return;
+    this.state.removeSlot(slotIndex);
     this.updatePanel();
   }
 

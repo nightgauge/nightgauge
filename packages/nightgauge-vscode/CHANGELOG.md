@@ -11,6 +11,16 @@ and this project adheres to
 
 ### Fixed
 
+- The Output window is no longer blind to pipeline runs started from a
+  terminal (#586). A run discovered by CLI reconciliation now gets its own
+  Output window tab — marked `CLI` — which is removed when that run settles.
+  Every slot tab's panel opens with a strip naming the issue, repository and
+  run id it is showing, so no panel can be misread as the current run, and a
+  tab with no stream says where the stream is instead of showing nothing or
+  the previously selected run's output. A CLI run's live output still lands in
+  its launching terminal; this makes the extension honest about that rather
+  than appearing to display it.
+
 - The pipeline tree view no longer shows a successful auto/CLI-mode run of
   `feature-planning`, `feature-dev` or `feature-validate` as `0/N phases · N
 abandoned` (#1885). The Go execution path now completes a phase when the

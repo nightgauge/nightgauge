@@ -31,6 +31,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- The Output window no longer shows an older run's content while a
+  CLI-started pipeline is the live one (#586). A `nightgauge run` discovered
+  on disk now registers its own Output-window slot alongside its tree slot,
+  every slot panel names the issue, repository and run id it is showing, and a
+  slot with no stream says so — a CLI run's output goes to its launching
+  terminal — instead of leaving the previous slot's content on screen.
+
 - An OpenCode stage no longer waits on an install into an operator's
   populated `~/.opencode` (#1787). Every non-inheriting OpenCode dispatch now
   runs with its own per-run `HOME`, populated with symbolic links to the
