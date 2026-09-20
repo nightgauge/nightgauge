@@ -14,6 +14,84 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`nightgauge issue route` cost 375 GraphQL points per call and now costs 4.** Measured against the live API, before and after, with byte-identical
+  output. It paged the entire project board — every status, `first: 100` a
+  page, ~19 pages — to read two fields off one row and discard the rest. The
+  API ledger recorded 209 requests from that one call site in a single day
+  across 11 invocations: **~4,125 points, when the whole hourly GraphQL
+  budget is 5,000**. Fourteen routing calls in an hour exhausted the account,
+  which is the shape of the rate-limit exhaustion this workspace has been
+  hitting. It now uses `BoardService.GetItem`, the server-side-filtered
+  single-item read that `RunQueue` already used for exactly this reason
+  (#908). Same change fixes a second bug on the same line: it matched on
+  issue number alone, so on a board shared by several repositories two
+  issues at the same number collided and whichever page arrived first won.
+
+- The VS Code attention sweep no longer runs on a timer just because the
+  editor window has focus. A sweep is ~64 GraphQL points plus 18 REST calls
+  across a six-repo workspace, and the timer's only condition was window
+  focus — so reading unrelated code cost ~256 points an hour, per open
+  window, with autonomous mode off and no pipeline run in flight. It was
+  observed sweeping six repositories while the account was already
+  exhausted, absorbing the timeouts and retrying. The timer now also
+  requires the autonomous dispatch loop to be running. Every other trigger
+  is unchanged — activation, an explicit repository-view refresh, a run
+  terminating, and focus regained after idling — so the inbox still fills
+  for anyone actually looking at it.
+
+- `skills/_shared/AUTO_SELECTION.md` pulled the whole project board with a
+  raw `gh project item-list` and no `--limit`, inside a structure documented
+  as used by all seven selection tiers, with critical-then-high retries on
+  two of them — up to fourteen whole-board pulls for one pickup, and
+  invisible to `nightgauge api-usage` because a `gh` subprocess never
+  reaches the ledger. It now reads the board once through
+  `nightgauge board list --status Ready --json` and runs every tier as a
+  `jq` filter over that one payload. The "all issues blocked" path reuses
+  the same payload instead of pulling the board a second time.
+
+- `skills/_shared/REPO_IDENTITY_CHECK.md` spent a GitHub API call per stage,
+  per repository, asking the CLI for a repository slug that
+  `git remote get-url origin` answers locally for free.
+
+### Changed
+
+- The no-direct-`gh` gate now scans the files a stage actually executes.
+  Its glob was `skills/*/SKILL.md` — exact filename — so `_includes/` and
+  `_shared/`, where every expensive direct call in the tree lived, were
+  never opened; a skill inheriting five `_shared` files full of `gh` calls
+  passed clean. It also now reads only fenced code and skips comments,
+  because the previous scope flagged prose: it was reporting two findings on
+  `main` that were both Markdown table cells, and `_shared/CI_GATE.md`
+  spends two lines _forbidding_ a hand-rolled `gh pr checks` poll. A gate
+  that cries wolf gets allowlisted until it means nothing.
+
+  `scripts/lint-skills/no-direct-gh.sh` was a second, independent
+  implementation of the same rule and had drifted to the same blind spot; it
+  is now a thin wrapper around the Go gate. The allowlist accepts a
+  repo-relative file path as well as a skill name, so a single reviewed file
+  can be exempted with its reason recorded instead of waving through a whole
+  skill. `TestSkillNoDirectGH_RealTreeIsClean` runs the gate against the
+  real `skills/` directory, the way `TestPlatformRawHTTP_RealPackageIsClean`
+  does — the gate previously had only synthetic temp-dir fixtures and was in
+  neither `ci-local.sh` nor `lint.yml`, so nothing had ever pointed it at
+  the tree it guards.
+
+- `nightgauge api-usage` no longer bills a caller for points it cannot prove
+  it spent. `cost` is a delta of an account-wide counter against a
+  per-process baseline, so a call made after a quiet spell absorbs whatever
+  every other process, the `gh` CLI, and any other session on the token
+  spent meanwhile. That is how a one-point `node(id:)` read came to be
+  reported at 4,638 points, and why investigations into this workspace's
+  exhaustion kept arriving at an innocent function. Records now carry
+  `since_prev_ms`, costs are charged to a caller only when the previous
+  observation was within five seconds, and everything else is reported as an
+  explicit UNATTRIBUTED total with a note on where it comes from. Ledger
+  caller attribution also stops naming `sync.(*Once).doSlow` and
+  `runtime.goexit`, which accounted for 695 of 9,435 records (7.4%) in one
+  workspace.
+
 ### Added
 
 - `docs/ADAPTER_MATRIX.md`'s OpenCode egress section records the CI run that

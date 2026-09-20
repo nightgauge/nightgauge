@@ -41,7 +41,7 @@ func TestSkillNoDirectGH_CleanPassesEmpty(t *testing.T) {
 
 func TestSkillNoDirectGH_RegressionFlagsViolation(t *testing.T) {
 	root := t.TempDir()
-	makeSkill(t, root, "offender", "## Steps\n\ngh issue view 42 --json number,title\n")
+	makeSkill(t, root, "offender", "## Steps\n\n```bash\ngh issue view 42 --json number,title\n```\n")
 	makeSkill(t, root, "innocent", "nightgauge forge issue list\n")
 
 	result, err := RunSkillNoDirectGHCheck(context.Background(), SkillNoDirectGHOptions{Root: root})
@@ -55,8 +55,12 @@ func TestSkillNoDirectGH_RegressionFlagsViolation(t *testing.T) {
 	if f.SkillFile != filepath.Join("skills", "offender", "SKILL.md") {
 		t.Errorf("skill_file = %q", f.SkillFile)
 	}
-	if f.Line != 3 {
-		t.Errorf("line = %d, want 3", f.Line)
+	// Line 4: "## Steps", blank, "```bash", then the call. The fence is
+	// part of the fixture now because the gate only reads fenced code —
+	// prose that merely mentions the CLI is not a call. See
+	// TestSkillNoDirectGH_ProseMentionIsNotAViolation.
+	if f.Line != 4 {
+		t.Errorf("line = %d, want 4", f.Line)
 	}
 	if f.Match == "" {
 		t.Errorf("match should be non-empty: %+v", f)
@@ -121,7 +125,7 @@ func TestSkillNoDirectGH_MissingRoot_Errors(t *testing.T) {
 
 func TestSkillNoDirectGH_AllowlistExemptsSkill(t *testing.T) {
 	root := t.TempDir()
-	makeSkill(t, root, "exempt-me", "## Steps\ngh issue view 1\n")
+	makeSkill(t, root, "exempt-me", "## Steps\n```bash\ngh issue view 1\n```\n")
 	makeSkill(t, root, "must-be-clean", "nightgauge forge issue view 1\n")
 
 	allowlist := filepath.Join(root, "allowlist.txt")
@@ -146,7 +150,7 @@ func TestSkillNoDirectGH_AllowlistExemptsSkill(t *testing.T) {
 
 func TestSkillNoDirectGH_AllowlistMissing_NoExemption(t *testing.T) {
 	root := t.TempDir()
-	makeSkill(t, root, "offender", "gh issue view 1\n")
+	makeSkill(t, root, "offender", "```bash\ngh issue view 1\n```\n")
 
 	result, err := RunSkillNoDirectGHCheck(context.Background(), SkillNoDirectGHOptions{
 		Root:          root,
@@ -157,5 +161,98 @@ func TestSkillNoDirectGH_AllowlistMissing_NoExemption(t *testing.T) {
 	}
 	if len(result.Findings) != 1 {
 		t.Errorf("missing allowlist should not silently exempt: got %d findings", len(result.Findings))
+	}
+}
+
+// TestSkillNoDirectGH_RealTreeIsClean runs the gate against this
+// repository's actual skills/ directory, the way
+// TestPlatformRawHTTP_RealPackageIsClean does for its own gate.
+//
+// Every other test in this file builds a synthetic skill in a temp dir. That
+// is enough to prove the matcher works and nothing more, and for a long time
+// it was all there was: the gate was in neither ci-local.sh nor lint.yml, so
+// nothing ever pointed it at the real tree. It was meanwhile reporting two
+// findings on main — both false positives, prose in a Markdown table — while
+// 83 direct calls sat unexamined in `_includes/` and `_shared/`, which its
+// `skills/*/SKILL.md` glob never opened. A gate whose only evidence is its
+// own fixtures cannot tell you that.
+//
+// This test is the missing half. It fails on a new direct call in any file a
+// stage executes, and it fails if the scan ever silently covers nothing.
+func TestSkillNoDirectGH_RealTreeIsClean(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatalf("resolve repo root: %v", err)
+	}
+	res, err := RunSkillNoDirectGHCheck(context.Background(), SkillNoDirectGHOptions{Root: root})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	for _, f := range res.Findings {
+		t.Errorf("%s:%d direct GitHub-CLI call in an executed skill file: %s",
+			f.SkillFile, f.Line, f.Match)
+	}
+	if res.SkillsChecked == 0 {
+		t.Fatal("skills_checked = 0; the gate scanned nothing")
+	}
+	// The whole point of the widened scope. If this drops back to the
+	// SKILL.md-only count, the glob regressed and the includes are dark
+	// again.
+	if res.SkillsChecked < 60 {
+		t.Errorf("skills_checked = %d; expected the scan to cover SKILL.md plus _includes/ and _shared/ (the directories where the expensive calls live)", res.SkillsChecked)
+	}
+}
+
+// TestSkillNoDirectGH_ProseMentionIsNotAViolation pins the scope decision
+// that came with reading `_includes/` and `_shared/`: a skill is a Markdown
+// document, and only the fenced code in it runs.
+//
+// Without this, the gate flags its own advice. `_shared/CI_GATE.md` spends
+// two prose lines telling authors to NEVER hand-roll a `gh pr checks` poll,
+// and the un-widened gate was reporting two findings on main that were both
+// table cells describing a check, not performing one. Noise like that is how
+// a gate gets allowlisted until it means nothing.
+func TestSkillNoDirectGH_ProseMentionIsNotAViolation(t *testing.T) {
+	root := t.TempDir()
+	makeSkill(t, root, "prose", "Never hand-roll a `gh pr checks` poll.\n\n| B1 | `gh label list` per repo |\n")
+	makeSkill(t, root, "comment-only", "```bash\n# fall back to gh run rerun when this fails\nnightgauge ci checks-complete\n```\n")
+
+	result, err := RunSkillNoDirectGHCheck(context.Background(), SkillNoDirectGHOptions{Root: root})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	for _, f := range result.Findings {
+		t.Errorf("prose flagged as a call: %s:%d %s", f.SkillFile, f.Line, f.Match)
+	}
+}
+
+// TestSkillNoDirectGH_ScansIncludesAndShared is the regression for the scope
+// hole itself: the old glob was skills/*/SKILL.md, so a clean SKILL.md that
+// pulled a `_shared` include full of direct calls passed the gate. That is
+// exactly how the whole-board pull in _shared/AUTO_SELECTION.md survived.
+func TestSkillNoDirectGH_ScansIncludesAndShared(t *testing.T) {
+	root := t.TempDir()
+	makeSkill(t, root, "host", "nightgauge forge issue list\n")
+
+	for _, f := range []struct{ dir, name string }{
+		{filepath.Join("skills", "host", "_includes"), "step.md"},
+		{filepath.Join("skills", "_shared"), "SHARED.md"},
+	} {
+		dir := filepath.Join(root, f.dir)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+		body := "```bash\ngh project item-list 3 --owner acme --format json\n```\n"
+		if err := os.WriteFile(filepath.Join(dir, f.name), []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", f.name, err)
+		}
+	}
+
+	result, err := RunSkillNoDirectGHCheck(context.Background(), SkillNoDirectGHOptions{Root: root})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(result.Findings) != 2 {
+		t.Fatalf("expected 2 findings (one per included file), got %d: %+v", len(result.Findings), result.Findings)
 	}
 }

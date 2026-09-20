@@ -23,7 +23,7 @@ import (
 type SkillNoDirectGHResult struct {
 	V              int                    `json:"v"`               // schema version, always 1
 	Root           string                 `json:"root"`            // absolute path
-	SkillsChecked  int                    `json:"skills_checked"`  // count of skills/*/SKILL.md files inspected
+	SkillsChecked  int                    `json:"skills_checked"`  // count of executable skill files inspected (SKILL.md + _includes/ + _shared/)
 	SkillsExempted []string               `json:"skills_exempted"` // allowlist entries that suppressed findings
 	Findings       []SkillDirectGHFinding `json:"findings"`        // one entry per direct gh occurrence in non-allowlisted skills
 	Warnings       []string               `json:"warnings"`        // non-fatal issues (read errors, etc.)
@@ -94,21 +94,48 @@ func RunSkillNoDirectGHCheck(_ context.Context, opts SkillNoDirectGHOptions) (*S
 		result.Warnings = append(result.Warnings, fmt.Sprintf("read allowlist %s: %v", allowlistPath, allowErr))
 	}
 
-	skillsGlob := filepath.Join(root, "skills", "*", "SKILL.md")
-	matches, err := filepath.Glob(skillsGlob)
-	if err != nil {
-		return nil, fmt.Errorf("glob %s: %w", skillsGlob, err)
+	// Scope: every file a stage actually EXECUTES, not just SKILL.md.
+	//
+	// This used to be one glob, `skills/*/SKILL.md`. A skill's SKILL.md is
+	// the smallest part of what runs: the bodies live in `_includes/` next
+	// to it and in the cross-skill `_shared/` directory, both pulled in by
+	// `<!-- include: -->`. So every expensive direct call in the tree sat in
+	// exactly the directories this gate never opened, and the skills that
+	// inherited them passed clean. `_shared/AUTO_SELECTION.md` pulled the
+	// whole project board per tier that way, on the default pickup path.
+	//
+	// CHANGELOG.md, reference/ and tests/ files under a skill are prose
+	// about the skill rather than steps a stage runs, so they stay out of
+	// scope; widening to every .md would gate documentation on a CLI ban.
+	var matches []string
+	for _, pattern := range []string{
+		filepath.Join(root, "skills", "*", "SKILL.md"),
+		filepath.Join(root, "skills", "*", "_includes", "*.md"),
+		filepath.Join(root, "skills", "_shared", "*.md"),
+	} {
+		found, err := filepath.Glob(pattern)
+		if err != nil {
+			return nil, fmt.Errorf("glob %s: %w", pattern, err)
+		}
+		matches = append(matches, found...)
 	}
 	sort.Strings(matches)
 	result.SkillsChecked = len(matches)
 
 	exempted := map[string]bool{}
 	for _, path := range matches {
-		// Derive the skill directory name from the SKILL.md path:
-		//   <root>/skills/<name>/SKILL.md → <name>
+		// Derive the owning skill from the path:
+		//   <root>/skills/<name>/SKILL.md            → <name>
+		//   <root>/skills/<name>/_includes/x.md      → <name>
+		//   <root>/skills/_shared/x.md               → _shared
+		//
+		// A `_shared` file resolves to "_shared", which is deliberately not
+		// a skill name: an include used by many skills must never inherit
+		// one skill's allowlist exemption.
 		skillName := filepath.Base(filepath.Dir(path))
-		isAllowed := allowed[skillName]
-
+		if skillName == "_includes" {
+			skillName = filepath.Base(filepath.Dir(filepath.Dir(path)))
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("read %s: %v", path, err))
@@ -118,11 +145,45 @@ func RunSkillNoDirectGHCheck(_ context.Context, opts SkillNoDirectGHOptions) (*S
 		if relErr != nil {
 			rel = path
 		}
+		// An allowlist entry is either a skill directory name or a single
+		// repo-relative file path. The path form exists for `_shared/`,
+		// which has no skill name to exempt, and because exempting one
+		// reviewed file is honest where exempting a whole skill is a
+		// blanket nobody re-reads.
+		isAllowed := allowed[skillName] || allowed[filepath.ToSlash(rel)]
 		lines := strings.Split(string(data), "\n")
+		inFence := false
 		for i, line := range lines {
+			// Only lines a stage actually RUNS can spend quota. A skill is
+			// a Markdown document: most of a `gh ` match in it is prose —
+			// and `_shared/CI_GATE.md` even spends two lines FORBIDDING a
+			// hand-rolled `gh pr checks` poll. Flagging that as a violation
+			// is how a gate earns a reputation for noise and gets
+			// allowlisted into uselessness, which is the failure this whole
+			// guard exists to prevent. So: fenced code only, comments
+			// excluded.
+			if strings.HasPrefix(strings.TrimSpace(line), "```") {
+				inFence = !inFence
+				continue
+			}
+			if !inFence {
+				continue
+			}
+			if strings.HasPrefix(strings.TrimSpace(line), "#") {
+				continue
+			}
 			if directGHRE.MatchString(line) {
 				if isAllowed {
-					exempted[skillName] = true
+					// Report the exemption by the thing that was actually
+					// exempted. A path-scoped entry covers one file; saying
+					// "_shared" would read as the whole shared directory
+					// being waived, which it is not — AUTO_SELECTION.md and
+					// its neighbours are still gated.
+					if allowed[filepath.ToSlash(rel)] {
+						exempted[filepath.ToSlash(rel)] = true
+					} else {
+						exempted[skillName] = true
+					}
 					continue
 				}
 				trimmed := strings.TrimSpace(line)

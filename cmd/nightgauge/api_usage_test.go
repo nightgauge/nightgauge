@@ -68,15 +68,21 @@ func TestReadAPIUsageMissingFileNamesTheEnvVar(t *testing.T) {
 func TestGroupAPIUsageRanksByPointsNotCalls(t *testing.T) {
 	// The whole point of the ledger: 2 board reads outrank 11 REST calls.
 	// A report that ranked by call count would hide the actual bill.
+	// SincePrevMs is inside the attribution window on every priced row:
+	// these model a back-to-back call chain, which is the only shape where
+	// a cost delta honestly belongs to the caller beside it.
 	recs := []apiUsageRecord{
-		{Caller: "board", Cost: 17, Kind: "graphql"},
-		{Caller: "board", Cost: 17, Kind: "graphql"},
-		{Caller: "alerts", Cost: 1, Kind: "core"},
-		{Caller: "alerts", Cost: 1, Kind: "core"},
-		{Caller: "alerts", Cost: 1, Kind: "core", Cached: true},
-		{Caller: "alerts", Cost: 0, Kind: "core", Status: 404},
+		{Caller: "board", Cost: 17, Kind: "graphql", SincePrevMs: 300},
+		{Caller: "board", Cost: 17, Kind: "graphql", SincePrevMs: 250},
+		{Caller: "alerts", Cost: 1, Kind: "core", SincePrevMs: 90},
+		{Caller: "alerts", Cost: 1, Kind: "core", SincePrevMs: 80},
+		{Caller: "alerts", Cost: 1, Kind: "core", Cached: true, SincePrevMs: 70},
+		{Caller: "alerts", Cost: 0, Kind: "core", Status: 404, SincePrevMs: 60},
 	}
-	groups, total := groupAPIUsage(recs, "caller")
+	groups, total, unattributed := groupAPIUsage(recs, "caller")
+	if unattributed != 0 {
+		t.Errorf("unattributed = %d, want 0 — every row is inside the window", unattributed)
+	}
 	if total != 37 {
 		t.Errorf("total = %d, want 37", total)
 	}
@@ -324,5 +330,56 @@ func TestAPIUsageBudgetIgnoresNonGraphQLPool(t *testing.T) {
 	}
 	if !strings.Contains(out, "Remaining (observed): 4983 pts") {
 		t.Errorf("a REST (core) record's exhausted remaining leaked into the GraphQL budget: %q", out)
+	}
+}
+
+// TestGroupAPIUsageDoesNotBillAcrossAGap is the regression for the defect
+// that made this tool useless exactly when it mattered.
+//
+// Cost is a delta of an account-wide counter with a per-process baseline, so
+// a call made after a long silence "sees" every point anything else on the
+// token spent meanwhile. In a real workspace ledger that charged 4,638
+// points — a whole hourly GraphQL budget — to a single node(id:) read that
+// costs one, because 5m19s had passed since that process last looked. Every
+// investigation that sorted by this column chased that innocent function.
+//
+// A gap-spanning cost is still REPORTED, as an account-level total. It is
+// just not charged to a caller.
+func TestGroupAPIUsageDoesNotBillAcrossAGap(t *testing.T) {
+	recs := []apiUsageRecord{
+		{Caller: "cheap-node-read", Cost: 4638, Kind: "graphql", SincePrevMs: 319000},
+		{Caller: "cheap-node-read", Cost: 1, Kind: "graphql", SincePrevMs: 400},
+	}
+	groups, total, unattributed := groupAPIUsage(recs, "caller")
+	if total != 4639 {
+		t.Errorf("total = %d, want 4639 — the account really did spend it", total)
+	}
+	if unattributed != 4638 {
+		t.Errorf("unattributed = %d, want 4638", unattributed)
+	}
+	if len(groups) != 1 {
+		t.Fatalf("groups = %d, want 1", len(groups))
+	}
+	if groups[0].Points != 1 {
+		t.Errorf("caller charged %d pts, want 1 — the gap-spanning delta is not its bill", groups[0].Points)
+	}
+	if groups[0].Calls != 2 {
+		t.Errorf("calls = %d, want 2 — call counts are unaffected", groups[0].Calls)
+	}
+}
+
+// TestGroupAPIUsageFirstCallHasNoBaseline pins the other half: the first
+// priced call in a process has no previous observation, so there is no delta
+// to charge and nothing to invent.
+func TestGroupAPIUsageFirstCallHasNoBaseline(t *testing.T) {
+	recs := []apiUsageRecord{
+		{Caller: "first", Cost: 0, Kind: "graphql", SincePrevMs: 0},
+	}
+	groups, total, unattributed := groupAPIUsage(recs, "caller")
+	if total != 0 || unattributed != 0 || groups[0].Points != 0 {
+		t.Errorf("total=%d unattributed=%d points=%d, want all zero", total, unattributed, groups[0].Points)
+	}
+	if groups[0].Calls != 1 {
+		t.Errorf("calls = %d, want 1 — the call still happened", groups[0].Calls)
 	}
 }
