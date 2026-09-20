@@ -803,8 +803,12 @@ func depsMarkerPath(dir string) string {
 // openCodeOperatorInstallWaitBound this file sets for them, comfortably
 // below the multi-minute registry retry/backoff wait ADR-022's amendment
 // records (71s and 146.88s observed) a regression back to an UNBOUNDED wait
-// would reproduce.
-const openCodeOfflineWallClockCap = 20 * time.Second
+// would reproduce. 35s (not 20s) because CI runs this package alongside two
+// others in the same `go test` invocation: TestOpenCodeIntegrationHomeDotOpenCode
+// observed 23-24s there against ~11s standalone locally — real contention,
+// not a regression — and 35s still leaves more than half its margin below
+// the 71s floor this guards against.
+const openCodeOfflineWallClockCap = 35 * time.Second
 
 // withShortOperatorInstallWaitBoundForRealBinary shortens
 // openCodeOperatorInstallWaitBound for a real-binary test in this file, so
