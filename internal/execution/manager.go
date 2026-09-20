@@ -1459,6 +1459,10 @@ type StageOptions struct {
 	CostBudget   float64  // Max cost in USD
 	TargetRepo   string   // Expected repo for skill verification (owner/repo)
 
+	// ResumeSessionID threads to adapters.RunOptions.ResumeSessionID — see
+	// its doc comment (#1643). Only the opencode adapter consumes it.
+	ResumeSessionID string
+
 	// PhaseEventFn is called when a phase:start marker is detected in skill stdout.
 	// Arguments: stage name, phase name, index, total.
 	PhaseEventFn func(stage, name string, index, total int)
@@ -1483,22 +1487,23 @@ func buildRunOptions(opts StageOptions, worktreeDir string) adapters.RunOptions 
 	}
 
 	return adapters.RunOptions{
-		SkillPath:    opts.SkillPath,
-		WorktreeDir:  worktreeDir,
-		ContextFile:  opts.ContextFile,
-		OutputFile:   opts.OutputFile,
-		IssueNumber:  opts.IssueNumber,
-		Repo:         opts.Repo,
-		Stage:        opts.Stage,
-		Model:        opts.Model,
-		Effort:       opts.Effort,
-		MaxTokens:    opts.MaxTokens,
-		AllowedTools: opts.AllowedTools,
-		Prompt:       opts.Prompt,
-		MaxTurns:     opts.MaxTurns,
-		CostBudget:   opts.CostBudget,
-		TargetRepo:   opts.TargetRepo,
-		RunID:        runID,
+		SkillPath:       opts.SkillPath,
+		WorktreeDir:     worktreeDir,
+		ContextFile:     opts.ContextFile,
+		OutputFile:      opts.OutputFile,
+		IssueNumber:     opts.IssueNumber,
+		Repo:            opts.Repo,
+		Stage:           opts.Stage,
+		Model:           opts.Model,
+		Effort:          opts.Effort,
+		MaxTokens:       opts.MaxTokens,
+		AllowedTools:    opts.AllowedTools,
+		Prompt:          opts.Prompt,
+		MaxTurns:        opts.MaxTurns,
+		CostBudget:      opts.CostBudget,
+		TargetRepo:      opts.TargetRepo,
+		RunID:           runID,
+		ResumeSessionID: opts.ResumeSessionID,
 	}
 }
 

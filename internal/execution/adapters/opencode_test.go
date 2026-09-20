@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -791,5 +792,116 @@ func TestOpenCodeArgvMatchesCapturedHelp(t *testing.T) {
 		if _, ok := options[f]; !ok {
 			t.Errorf("forbidden flag %s is no longer an option of opencode %s run; re-check ADR-022 § 9 before editing the list", f, ver)
 		}
+	}
+}
+
+// declaredVariantSettings is a machine whose one declared endpoint (an
+// openai-compatible server at id "declared") names one model with declared
+// variants — the config-declared path #1643 AC 4/AC 8's --variant mapping
+// reads (see openCodeVariantsForModel's doc comment for why this is the
+// config-declared-only path, not a `models --verbose` probe).
+func declaredVariantSettings(variants []string) config.OpenCodeConfig {
+	return config.OpenCodeConfig{
+		Endpoints: []config.OpenCodeEndpointConfig{{
+			ID:       "declared",
+			Provider: "openai-compatible",
+			BaseURL:  "http://127.0.0.1:8080/v1",
+			Limit:    config.OpenCodeLimit{Context: 32768, Output: 4096},
+			Models: []config.OpenCodeEndpointModel{
+				{ID: "reasoner", Variants: variants},
+			},
+		}},
+	}
+}
+
+// TestOpenCodeBuildCommandVariantMapping is #1643 AC 4: effort maps to
+// --variant only when the dispatched model DECLARES that effort rung as one
+// of its variants; a variant-less model, or an effort the model does not
+// declare, gets no flag.
+func TestOpenCodeBuildCommandVariantMapping(t *testing.T) {
+	cases := []struct {
+		name     string
+		settings config.OpenCodeConfig
+		effort   string
+		want     bool
+	}{
+		{"declared effort emits the flag", declaredVariantSettings([]string{"low", "high"}), "high", true},
+		{"undeclared effort emits nothing — never guessed", declaredVariantSettings([]string{"low", "high"}), "medium", false},
+		{"variant-less model emits nothing", declaredVariantSettings(nil), "high", false},
+		{"no effort at all emits nothing", declaredVariantSettings([]string{"high"}), "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &OpenCodeAdapter{settings: fixedOpenCodeSettings(tc.settings)}
+			_, args, _ := a.BuildCommand(RunOptions{
+				Model:       "declared/reasoner",
+				WorktreeDir: "/w",
+				Effort:      tc.effort,
+			})
+			got := slices.Contains(args, "--variant")
+			if got != tc.want {
+				t.Errorf("effort %q against declared variants: --variant present = %v, want %v (argv %q)", tc.effort, got, tc.want, args)
+			}
+			if got {
+				idx := slices.Index(args, "--variant")
+				if idx+1 >= len(args) || args[idx+1] != tc.effort {
+					t.Errorf("--variant value = %v, want %q", args, tc.effort)
+				}
+			}
+		})
+	}
+}
+
+// TestOpenCodeBuildCommandSessionResume is #1643 AC 5: a well-formed session
+// id reaches -s; RunOptions.ResumeSessionID is the ONLY source BuildCommand
+// ever reads for it.
+func TestOpenCodeBuildCommandSessionResume(t *testing.T) {
+	_, args, _ := NewOpenCodeAdapter().BuildCommand(RunOptions{
+		Model:           "lmstudio/qwen/qwen3.8-27b",
+		WorktreeDir:     "/w",
+		ResumeSessionID: "ses_abc123XYZ",
+	})
+	idx := slices.Index(args, "-s")
+	if idx < 0 || idx+1 >= len(args) || args[idx+1] != "ses_abc123XYZ" {
+		t.Errorf("argv %q does not carry -s ses_abc123XYZ", args)
+	}
+}
+
+// TestOpenCodeBuildCommandRejectsInjectionInVariantAndSession is #1643 AC 7:
+// BuildCommand never puts a session, variant or model value that starts with
+// '-' (or a variant/session containing whitespace) on argv — it silently
+// omits the flag instead, the same total-function shape OpenCodeModelArg's
+// own rejection uses for -m.
+func TestOpenCodeBuildCommandRejectsInjectionInVariantAndSession(t *testing.T) {
+	dangerous := []string{"-auto", "--auto", "-x", "ses_ok; rm -rf /", "ses_has space"}
+	for _, v := range dangerous {
+		t.Run("session="+v, func(t *testing.T) {
+			_, args, _ := NewOpenCodeAdapter().BuildCommand(RunOptions{
+				Model:           "lmstudio/qwen/qwen3.8-27b",
+				WorktreeDir:     "/w",
+				ResumeSessionID: v,
+			})
+			if slices.Contains(args, "-s") {
+				t.Errorf("argv %q emitted -s for rejected session value %q", args, v)
+			}
+			for _, a := range args {
+				if a == v {
+					t.Errorf("argv %q carries the rejected value %q verbatim", args, v)
+				}
+			}
+		})
+	}
+	for _, v := range []string{"-high", "--variant", "high risk"} {
+		t.Run("variant="+v, func(t *testing.T) {
+			a := &OpenCodeAdapter{settings: fixedOpenCodeSettings(declaredVariantSettings([]string{v}))}
+			_, args, _ := a.BuildCommand(RunOptions{
+				Model:       "declared/reasoner",
+				WorktreeDir: "/w",
+				Effort:      v,
+			})
+			if slices.Contains(args, "--variant") {
+				t.Errorf("argv %q emitted --variant for rejected value %q", args, v)
+			}
+		})
 	}
 }

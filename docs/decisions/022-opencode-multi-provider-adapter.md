@@ -2818,6 +2818,65 @@ and verification section are specifically about a `read` through a planted
 symlink, and broadening to every path-bearing tool would need its own probe
 per tool this issue's evidence does not cover.
 
+## Routing, cap-hop, `--variant` and session resume (amendment 2026-09-20, #1643)
+
+§ "Consequences" below already named the direction — `ProviderFor(adapter,
+model)` replacing `ProviderForAdapter` at every caller that needs the serving
+provider — as a consequence of this ADR before a caller had actually moved.
+#1643 is that move: `internal/orchestrator/cap_recovery.go` (`nextCapProvider`,
+`capProviderOf`) and `internal/orchestrator/dispatch_envelope.go`
+(`resolveDispatchThinking`) now call `ProviderFor`, so an `opencode` candidate
+configured against the just-capped provider is skipped in a cap-hop walk, and
+opencode's dispatched model resolves the correct provider for thinking-default
+attribution. `nextCapProvider`'s skip check needed a new injection point,
+`CapRecoveryInput.CandidateModel`, because a chain candidate's adapter name
+alone cannot answer "which model would this candidate run" the way the
+stage's own already-resolved model can — the scheduler's default reads the
+machine-tier `opencode:` block's flat `Model` field; a nil resolver (every
+call site and test before this issue) falls back to `ProviderForAdapter`'s
+answer unchanged.
+
+**Deviation from the plan, per this issue's own AC 8 escape valve**: the issue
+named `opencode models --verbose` as the source for per-model declared
+variants (the effort → `--variant` mapping). No captured fixture of that
+flag's output against opencode 1.18.30 exists (`testdata/opencode-cli` holds
+only `run --help` and `version` — see its README), so the doctor's catalog
+probe (`internal/doctor/opencode.go`) is **not** extended to parse it: doing
+so would mean shipping an unverified parser against a CLI shape nobody has
+observed, exactly what AC 8 says to stop and record rather than do. The
+`--variant` mapping instead reads only the config-declared source that was
+already end-to-end wired for a different purpose
+(`config.OpenCodeEndpointModel.Variants` → `openCodeModelJSON.Variants` in
+`internal/execution/adapters/opencode_config.go`, itself commented "#1643's
+--variant mapping is what reads it"): `openCodeVariantsForModel`
+(`internal/execution/adapters/opencode.go`) looks up the dispatched model's
+declared endpoint entry and `BuildCommand` emits `--variant <effort>` only
+when the dispatched `RunOptions.Effort` is itself one of that model's declared
+variants — never a guessed rung, and nothing for a model that declares no
+variants at all (effort records "not applicable" for those, same as every
+other adapter with no Go-visible effort evidence, § "Provider-aware call
+sites" above / `dispatch_envelope.go`'s `#580` convention). Reopen the
+`--verbose` catalog-probe extension once a real capture exists; until then this
+is the complete, honest source.
+
+Session resume (`RunOptions.ResumeSessionID`, `-s <id>` in `BuildCommand`)
+follows § 8's reading of the retention window unchanged: the run's own data
+directory, not a separate TTL. `RuntimeState.RecordStageOpenCodeSession` /
+`StageOpenCodeSession` mirror `RecordStageServedModel`'s pattern, and the
+scheduler (`resolveResumeSessionID`, `internal/orchestrator/dispatch_envelope.go`)
+passes the recorded id to a retry of the SAME stage only when adapter, model
+AND worktree all still match the attempt that recorded it — any of the three
+changing (a cap-hop, a tier descent, a worktree switch) starts a fresh
+session. The id itself is captured by reading back the same events file
+(`opencodeplugin.EventsPath`/`ReadRunEvents`) the session-lifecycle plugin (§
+"Session-lifecycle events plugin" amendment above, #1641) already writes to —
+no new writer, only a new reader. `-s` and `--variant` are both validated
+against a fixed, non-guessable shape before they ever reach argv
+(`openCodeSessionIDRE`, `openCodeRejectsFlagValue`), mirroring
+`OpenCodeModelArg`'s existing reject-on-leading-dash guard for `-m`: never a
+session id, variant or model value read from config, a prompt or model
+output, only one this run itself recorded or the operator declared.
+
 ## Consequences
 
 - The model layer's one-adapter-one-provider assumption becomes a special

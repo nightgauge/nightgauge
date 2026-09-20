@@ -689,3 +689,70 @@ func TestDowngradeProviderForServedModel(t *testing.T) {
 		t.Errorf("adapter hint %q and served-id hint %q disagree for xai", a, s)
 	}
 }
+
+// TestResolveResumeSessionID is #1643 AC 5: a retry of the same stage on the
+// same model and worktree carries the recorded OpenCode session; any of the
+// three changing clears it.
+func TestResolveResumeSessionID(t *testing.T) {
+	const stage = state.StageFeatureDev
+
+	newRuntimeWithSession := func(adapter, model, worktree, sessionID string) *state.RuntimeState {
+		rs := state.NewRuntimeState("acme/repo", 1643, "item-1", "run-1")
+		rs.SetWorktree(worktree)
+		rs.RecordStageAdapter(stage, adapter)
+		rs.RecordStageModel(stage, model)
+		rs.RecordStageOpenCodeSession(stage, sessionID)
+		return rs
+	}
+
+	t.Run("same adapter, model and worktree carries the session", func(t *testing.T) {
+		rs := newRuntimeWithSession("opencode", "lmstudio/qwen3-coder", "/work/issue-1643", "ses_abc123")
+		got := resolveResumeSessionID(rs, stage, "opencode", "lmstudio/qwen3-coder", "/work/issue-1643")
+		if got != "ses_abc123" {
+			t.Errorf("resolveResumeSessionID = %q, want ses_abc123 (adapter/model/worktree unchanged)", got)
+		}
+	})
+
+	t.Run("a model hop clears the session", func(t *testing.T) {
+		rs := newRuntimeWithSession("opencode", "lmstudio/qwen3-coder", "/work/issue-1643", "ses_abc123")
+		got := resolveResumeSessionID(rs, stage, "opencode", "lmstudio/qwen3-coder-32b", "/work/issue-1643")
+		if got != "" {
+			t.Errorf("resolveResumeSessionID = %q, want \"\" — the model changed", got)
+		}
+	})
+
+	t.Run("an adapter hop (cap-hop) clears the session", func(t *testing.T) {
+		rs := newRuntimeWithSession("opencode", "lmstudio/qwen3-coder", "/work/issue-1643", "ses_abc123")
+		got := resolveResumeSessionID(rs, stage, "codex", "lmstudio/qwen3-coder", "/work/issue-1643")
+		if got != "" {
+			t.Errorf("resolveResumeSessionID = %q, want \"\" — the adapter changed (cap-hop)", got)
+		}
+	})
+
+	t.Run("a worktree change clears the session", func(t *testing.T) {
+		rs := newRuntimeWithSession("opencode", "lmstudio/qwen3-coder", "/work/issue-1643", "ses_abc123")
+		got := resolveResumeSessionID(rs, stage, "opencode", "lmstudio/qwen3-coder", "/work/issue-1643-retry")
+		if got != "" {
+			t.Errorf("resolveResumeSessionID = %q, want \"\" — the worktree changed", got)
+		}
+	})
+
+	t.Run("no recorded session answers empty", func(t *testing.T) {
+		rs := state.NewRuntimeState("acme/repo", 1643, "item-1", "run-1")
+		rs.SetWorktree("/work/issue-1643")
+		rs.RecordStageAdapter(stage, "opencode")
+		rs.RecordStageModel(stage, "lmstudio/qwen3-coder")
+		got := resolveResumeSessionID(rs, stage, "opencode", "lmstudio/qwen3-coder", "/work/issue-1643")
+		if got != "" {
+			t.Errorf("resolveResumeSessionID = %q, want \"\" — no session was ever recorded", got)
+		}
+	})
+
+	t.Run("every other adapter never consults runtime", func(t *testing.T) {
+		rs := newRuntimeWithSession("opencode", "lmstudio/qwen3-coder", "/work/issue-1643", "ses_abc123")
+		got := resolveResumeSessionID(rs, stage, "claude", "sonnet", "/work/issue-1643")
+		if got != "" {
+			t.Errorf("resolveResumeSessionID = %q, want \"\" — only opencode ever has a recorded session", got)
+		}
+	})
+}

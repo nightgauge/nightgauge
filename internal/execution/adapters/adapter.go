@@ -84,6 +84,17 @@ type RunOptions struct {
 	// adapter without the hook. Only the opencode adapter has one (ADR-022
 	// § 8): every stage of a run shares it, and the run's end deletes it.
 	RunRoot *RunRoot
+
+	// ResumeSessionID is the OpenCode session id a retry of THIS stage should
+	// resume, or "" for a fresh session (#1643). Set by the retry engine only
+	// when adapter, model AND worktree all match the attempt that recorded
+	// the session (state.RuntimeState.RecordStageOpenCodeSession); a model,
+	// adapter or worktree hop — including a cap-hop or tier descent — clears
+	// it, so a fresh session always starts under those conditions. Consumed
+	// only by the opencode adapter (BuildCommand's -s flag); every other
+	// adapter ignores the field. Never a value read from config, a prompt or
+	// model output — only a session id this run itself recorded.
+	ResumeSessionID string
 }
 
 // RunRootRequest is what the manager hands an adapter's PrepareRunRoot hook.
