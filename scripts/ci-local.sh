@@ -399,6 +399,17 @@ run_group "publish-vsix-set.sh regression suite" \
 run_group "sign-macos-binaries.sh regression suite" \
   bash scripts/test-sign-macos-binaries.sh
 
+# 1b2c. malware-scan.sh regression suite — the artifact scan that now gates
+#       every release and Marketplace publish. Its failure mode is silence:
+#       `clamscan` exits 0 both for a clean artifact and for one it never read
+#       (measured: `--max-filesize=1M` on the real .vsix reports "Data scanned:
+#       0 B" and exits 0). The gate therefore asserts a floor on bytes actually
+#       scanned, and this suite is what proves that floor can fail. The arms
+#       are stubbed so they run without ClamAV installed, plus one real-EICAR
+#       arm when it is, so the stubs cannot drift from the tool.
+run_group "malware-scan.sh regression suite" \
+  bash scripts/test-malware-scan.sh
+
 # 1b3. scrub-evidence.sh regression suite (#1335) — the second of the two
 #      layers that must each stop a credential reaching a public artifact. The
 #      first is the output-channel sanitizer, which matches secret SHAPES; this

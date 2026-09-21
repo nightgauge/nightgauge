@@ -85,6 +85,16 @@ check-terminal-kind-table:
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -ldflags "-s -w -X main.version=$(VERSION)"
+
+# -trimpath removes local filesystem paths from the binary, so a build of a
+# given commit is reproducible by anyone rather than carrying the builder's
+# home directory. That is what lets a third party -- a Marketplace reviewer
+# responding to an antivirus flag, say -- rebuild the tag and compare hashes
+# instead of taking our word that an artifact is clean. GoReleaser defaults
+# its own builds to -trimpath and .goreleaser.yml now states it explicitly;
+# without this the .vsix-bundled binary and the CLI archive binary were built
+# two different ways from the same commit.
+GOFLAGS_BUILD := -trimpath
 BIN_DIR := bin
 
 # CGO_ENABLED=0 produces a statically linked binary, matching what GoReleaser
@@ -98,13 +108,13 @@ export CGO_ENABLED
 
 # Build CLI for current platform
 build-cli:
-	go build $(LDFLAGS) -o $(BIN_DIR)/nightgauge ./cmd/nightgauge
+	go build $(GOFLAGS_BUILD) $(LDFLAGS) -o $(BIN_DIR)/nightgauge ./cmd/nightgauge
 
 # Build CLI for all target platforms
 build-all: build-cli
-	GOOS=darwin GOARCH=arm64 go build $(LDFLAGS) -o $(BIN_DIR)/nightgauge-darwin-arm64 ./cmd/nightgauge
-	GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o $(BIN_DIR)/nightgauge-darwin-amd64 ./cmd/nightgauge
-	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BIN_DIR)/nightgauge-linux-amd64 ./cmd/nightgauge
+	GOOS=darwin GOARCH=arm64 go build $(GOFLAGS_BUILD) $(LDFLAGS) -o $(BIN_DIR)/nightgauge-darwin-arm64 ./cmd/nightgauge
+	GOOS=darwin GOARCH=amd64 go build $(GOFLAGS_BUILD) $(LDFLAGS) -o $(BIN_DIR)/nightgauge-darwin-amd64 ./cmd/nightgauge
+	GOOS=linux GOARCH=amd64 go build $(GOFLAGS_BUILD) $(LDFLAGS) -o $(BIN_DIR)/nightgauge-linux-amd64 ./cmd/nightgauge
 
 # Run Go tests
 test-go:

@@ -371,6 +371,35 @@ jobs:
           done
           [[ "$COUNT" -eq 3 ]] || { echo "ERROR: expected 3 per-target VSIXs, found $COUNT"; exit 1; }
 
+      # Malware-scan every artifact BEFORE anything is attested or published.
+      # v0.4.4 reached the Marketplace unscanned by us and was flagged there
+      # (6/66, all generic heuristics, artifact clean). Whatever a scanner is
+      # going to say, we say it first. Runs on macOS via Homebrew because this
+      # job needs macos-latest for `codesign`.
+      #
+      # The gate is not clamscan's exit code: clamscan exits 0 both for a clean
+      # artifact and for one it never read. malware-scan.sh additionally asserts
+      # a floor on bytes actually scanned. See scripts/malware-scan.sh.
+      - name: Malware scan (ClamAV)
+        run: |
+          set -euo pipefail
+          brew install --quiet clamav
+          CLAMETC="$(brew --prefix)/etc/clamav"
+          mkdir -p "$CLAMETC" "$(brew --prefix)/var/lib/clamav"
+          sed 's/^Example/#Example/' "$CLAMETC/freshclam.conf.sample" > "$CLAMETC/freshclam.conf"
+          freshclam --quiet
+          bash scripts/malware-scan.sh \
+            --report "$RUNNER_TEMP/clamav-report.json" \
+            packages/nightgauge-vscode/*.vsix bin/
+
+      - name: Upload malware scan report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: clamav-scan-report${{ github.job }}
+          path: ${{ runner.temp }}/clamav-report.json
+          if-no-files-found: warn
+
       # `Inject release version` runs `npm version`, which rewrites the extension's
       # package.json AND the root package-lock.json. GoReleaser's `validate` pipe
       # then refuses to release ("git is in a dirty state"). The version is already
