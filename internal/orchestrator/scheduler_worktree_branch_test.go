@@ -286,10 +286,14 @@ func TestScheduler_NonTerminalReconcile_UnresolvableBranch_LogsTheSkip(t *testin
 	const (
 		issueNumber = 298
 		repo        = "nightgauge/nightgauge"
-		branch      = "fix/298-worktree"
+		// NOT #298's branch. The context names no branch AND the worktree's
+		// HEAD is on someone else's, which since #1919 is what "unresolvable"
+		// actually requires: an empty context over a worktree checked out on
+		// THIS issue's branch is now recovered from HEAD, and a fixture built
+		// that way would be asserting on a state the pipeline no longer
+		// reaches.
+		branch = "chore/4242-unrelated-worktree"
 	)
-	// The worktree still exists on a real branch; the CONTEXT names none, which
-	// is the only state in which resolveFeatureBranch legitimately answers "".
 	f := newWorktreeRunFixture(t, issueNumber, branch)
 
 	probes := &ghProbeRecorder{}

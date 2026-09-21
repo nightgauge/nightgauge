@@ -16,6 +16,27 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **`issue-pickup` stopped failing on a branch that existed the whole time.**
+  The pipeline's first stage failed more often than it succeeded (21 ok / 28
+  failed), and every failure was the same shape: the stage exited 0, the branch
+  was created in git, and the gate found `"branch": ""` in the context file. The
+  skill assigned `BRANCH_NAME` in its branch-creation phase and read it back
+  several phases later — in a different shell, and a shell variable does not
+  survive between tool calls, so `${BRANCH_NAME:-}` expanded to nothing. The
+  orchestrator then escalated to a larger model and paid for the same stage
+  twice, which fixed nothing, because a second model loses a variable exactly as
+  reliably as the first. Two changes: the skill's context write now re-derives
+  every field in its own block from a source that survives (the issue number and
+  repo from the process environment, the branch from the worktree's own `HEAD`,
+  the issue content from one fetch) and fails loudly instead of writing a blank;
+  and the orchestrator recovers an empty `branch` from the worktree's `HEAD`
+  after the stage exits and before the gate reads the file. The recovery is
+  deliberately narrow — it never overwrites a value the skill did write, and it
+  stamps nothing unless `HEAD` is on this issue's own branch, so a stage that
+  really created no branch still fails the gate. The same lost shell also left
+  the title, body, labels and acceptance criteria empty in every affected
+  context file; those are fixed by the same rewrite.
+
 - **77% of this workspace's GraphQL spend was invisible to the API ledger and
   is now recorded and throttled.** Two gaps. First, every `gh` subprocess the
   binary runs — post-condition gates, recovery actions, non-terminal
