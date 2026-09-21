@@ -9,6 +9,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-09-21
+
 ### Changed
 
 - The Go binary bundled in this extension is now built with `-trimpath`, so it

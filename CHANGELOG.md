@@ -14,6 +14,21 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-09-21
+
+### Fixed
+
+- **The malware-scan self-test no longer plants an EICAR sample.** It ran only
+  from `ci-local.sh` — that is, only on developer machines, never in CI, which
+  has no ClamAV — so the sample fired a real antivirus alert on every gate run
+  of every contributor with protection enabled, and never once ran somewhere it
+  was harmless. Worse, a host antivirus quarantines the sample before
+  `clamscan` reads it, so the arm failed on exactly the machines it was meant
+  to reassure. It now asserts the real `clamscan` still emits every summary
+  field `malware-scan.sh` parses, which catches the drift that actually
+  matters: an output-format change breaking the parsing while every stubbed arm
+  still passes.
+
 ### Changed
 
 - **Every binary now carries a vendor identifier.** Avast's clean software
