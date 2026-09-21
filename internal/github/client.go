@@ -964,8 +964,8 @@ func (g headroomGate) resetWait() (time.Duration, bool) {
 	if tracker == nil {
 		return 0, false
 	}
-	entry, fresh, err := tracker.Get(user)
-	if err != nil || entry == nil || !fresh {
+	entry, fresh, err := tracker.GetBudget(user)
+	if err != nil || entry == nil {
 		return 0, false
 	}
 	floor := rateLimitFloor()
@@ -974,6 +974,23 @@ func (g headroomGate) resetWait() (time.Duration, bool) {
 	}
 	now := time.Now().Unix()
 	if entry.ResetAt > 0 && entry.ResetAt <= now {
+		return 0, false
+	}
+	// A below-floor reading is NOT discarded for being stale. Freshness and
+	// expiry answer different questions, and conflating them is what made this
+	// gate dead code for most of its wall-clock life: producers, short-lived
+	// CLI processes and the attention sweep each start with a tracker entry
+	// older than SharedTrackerMinCheckIntervalSecs (15s), so `!fresh` opened
+	// the gate on a budget already known to be exhausted, and they spent into
+	// a zero balance. On 2026-09-21 the machine's tracker was 7h44m stale while
+	// the account exhausted its GraphQL quota twice.
+	//
+	// ResetAt is the authority for an exhaustion reading: until that second
+	// elapses the budget CANNOT have recovered, however old the reading is, and
+	// the check above already releases the gate once it has. Staleness only
+	// matters when there is no reset to reason about, so freshness is required
+	// only for an entry that carries no ResetAt.
+	if entry.ResetAt <= 0 && !fresh {
 		return 0, false
 	}
 	resetIn := time.Duration(entry.ResetAt-now) * time.Second
