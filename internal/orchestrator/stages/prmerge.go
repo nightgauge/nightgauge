@@ -173,15 +173,20 @@ type MergeDecision struct {
 // Decide is the pure-function decision matrix. Given a snapshot, decide
 // whether to issue the merge, declare already-merged, or punt.
 //
-// Decision matrix:
+// Decision matrix (most specific blocker wins; a failed check or a blocking
+// review is reported even when it also makes MergeStateStatus non-CLEAN,
+// which is the overwhelming common case in production — see #1927):
 //
 //	state == MERGED                                       → ShouldMerge=false (already merged; runner returns merged)
-//	state == OPEN && MERGEABLE && CLEAN
+//	state == OPEN && MERGEABLE
 //	  && no FAILURE/ERROR checks
-//	  && review not blocking                              → ShouldMerge=true
-//	state == OPEN && (CONFLICTING | DIRTY | BLOCKED ...)  → Punt
+//	  && review not blocking
+//	  && CLEAN                                            → ShouldMerge=true
 //	state == OPEN && any failed check                     → Punt (failed CI)
 //	state == OPEN && REVIEW_REQUIRED|CHANGES_REQUESTED    → Punt
+//	state == OPEN && (CONFLICTING | DIRTY | BLOCKED ...)  → Punt (catch-all,
+//	  reached only when nothing more specific applies, e.g. a genuine
+//	  BEHIND/DIRTY state)
 //	any other (CLOSED, unknown)                           → Punt
 //
 // "Review not blocking" means ReviewDecision is APPROVED or empty (no
@@ -199,10 +204,6 @@ func Decide(snap PRViewSnapshot) MergeDecision {
 		return MergeDecision{Punt: true, Reason: fmt.Sprintf("%s: %s", ReasonNotMergeable, snap.Mergeable)}
 	}
 
-	if snap.MergeStateStatus != "CLEAN" {
-		return MergeDecision{Punt: true, Reason: fmt.Sprintf("%s: %s", ReasonDirtyState, snap.MergeStateStatus)}
-	}
-
 	for _, c := range snap.StatusCheckRollup {
 		if c.Conclusion == "FAILURE" || c.Conclusion == "ERROR" {
 			return MergeDecision{Punt: true, Reason: fmt.Sprintf("%s: %s", ReasonFailedChecks, c.Name)}
@@ -213,7 +214,29 @@ func Decide(snap PRViewSnapshot) MergeDecision {
 		return MergeDecision{Punt: true, Reason: fmt.Sprintf("%s: %s", ReasonReviewMissing, snap.ReviewDecision)}
 	}
 
+	if snap.MergeStateStatus != "CLEAN" {
+		return MergeDecision{Punt: true, Reason: fmt.Sprintf("%s: %s", ReasonDirtyState, snap.MergeStateStatus)}
+	}
+
 	return MergeDecision{ShouldMerge: true, Reason: ReasonCleanMerged}
+}
+
+// logPuntSnapshot records the full decision snapshot behind a punt so the
+// reason for a punt is provable after the fact instead of inferred from a
+// single reason string (#1927 AC1) — also the measurement instrument for
+// whether dirty-merge-state stops standing in for a failed check.
+func logPuntSnapshot(prNumber int, reason string, snap PRViewSnapshot) {
+	checks := make([]string, 0, len(snap.StatusCheckRollup))
+	for _, c := range snap.StatusCheckRollup {
+		conclusion := c.Conclusion
+		if conclusion == "" {
+			conclusion = "PENDING"
+		}
+		checks = append(checks, fmt.Sprintf("%s=%s", c.Name, conclusion))
+	}
+	log.Printf("pr-merge: punt snapshot pr=%d reason=%q state=%s mergeable=%s mergeStateStatus=%s reviewDecision=%s checks=%d [%s]",
+		prNumber, reason, snap.State, snap.Mergeable, snap.MergeStateStatus, snap.ReviewDecision,
+		len(snap.StatusCheckRollup), strings.Join(checks, ", "))
 }
 
 // DefaultECPolls / DefaultECPollInterval mirror the eventual-consistency
@@ -367,6 +390,7 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 		switch outcome {
 		case ciWaitTimedOut:
 			ph.supersedeInFlight()
+			logPuntSnapshot(prNumber, ReasonCIWaitTimeout, snap)
 			return finish(PRMergeResult{
 				Path:     PathPunt,
 				PRNumber: prNumber,
@@ -375,6 +399,7 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 			}, nil)
 		case ciWaitNoChecksCreated:
 			ph.supersedeInFlight()
+			logPuntSnapshot(prNumber, ReasonNoChecksCreated, snap)
 			return finish(PRMergeResult{
 				Path:     PathPunt,
 				PRNumber: prNumber,
@@ -405,6 +430,7 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 			ph.skipOffPath()
 		} else {
 			ph.supersedeInFlight()
+			logPuntSnapshot(prNumber, decision.Reason, snap)
 		}
 		return finish(PRMergeResult{
 			Path:        path,

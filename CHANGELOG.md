@@ -16,6 +16,24 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **`pr-merge` reported a generic "dirty merge state" instead of the actual
+  blocker whenever a PR also had a failed check or a missing review.**
+  `Decide()` tested `MergeStateStatus != CLEAN` before it scanned the
+  status-check rollup for `FAILURE`/`ERROR`, but GitHub never reports
+  `MergeStateStatus` as `CLEAN` once a required check has failed — so the more
+  specific `failed-ci-checks` reason was unreachable in production and every
+  real CI failure surfaced as `dirty-merge-state: BLOCKED`, the catch-all
+  reason reserved for a block the deterministic path could not diagnose more
+  specifically. That misattribution sent at least one run down the paid LLM
+  path to babysit CI that the bounded CI wait (#297) already handles for free.
+  `Decide()` now checks the failed-check rollup and blocking review before the
+  merge-state catch-all, so the most specific blocker is reported; no PR's
+  merge/no-merge verdict changes. `pr-merge` also now logs the full deciding
+  snapshot (state, mergeable, mergeStateStatus, reviewDecision, per-check
+  conclusions) at every punt the CI wait and `Decide()` govern, so a punt's
+  cause is provable after the fact instead of inferred from a single reason
+  string.
+
 - **`issue-pickup` stopped failing on a branch that existed the whole time.**
   The pipeline's first stage failed more often than it succeeded (21 ok / 28
   failed), and every failure was the same shape: the stage exited 0, the branch
