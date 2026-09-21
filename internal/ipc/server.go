@@ -4061,6 +4061,21 @@ func (s *Server) registerMethods() {
 				"index":       p.Index,
 				"total":       p.Total,
 			})
+		case "passed":
+			// #1924: the ordering-derived arm. The run was observed at a later
+			// phase, which is evidence it moved past this one — weaker than
+			// "complete" (never observed running) and stronger than
+			// "unreported" (which carries no ordering claim at all).
+			rt.PassPhase(stage, p.Name, p.Index, p.Total)
+			s.Emit("phase.passed", map[string]interface{}{
+				"repo":        p.Repo,
+				"issueNumber": p.IssueNumber,
+				"runId":       runID,
+				"stage":       p.Stage,
+				"name":        p.Name,
+				"index":       p.Index,
+				"total":       p.Total,
+			})
 		case "unreported":
 			// #1246: the end-of-stage back-fill. Kept separate from "skip" so
 			// the durable record distinguishes a decision from an absence of

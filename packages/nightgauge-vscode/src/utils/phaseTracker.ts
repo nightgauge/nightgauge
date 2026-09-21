@@ -29,6 +29,13 @@ export interface PhaseTracker {
   onPhaseDetected: PhaseDetectedCallback;
 
   /**
+   * Record a phase the run moved past without ever reporting it (#1924).
+   * Terminal on arrival — it does NOT close or open a running phase, because
+   * it was never observed running.
+   */
+  passPhase: (stage: PipelineStage, marker: { name: string; index: number; total: number }) => void;
+
+  /**
    * Complete the last running phase for a stage.
    * Call this from onStageComplete to prevent the final phase from
    * spinning indefinitely after the stage ends.
@@ -128,6 +135,19 @@ export function createPhaseTracker(stateService: PipelineStateService): PhaseTra
     });
   }
 
+  function passPhase(
+    stage: PipelineStage,
+    marker: { name: string; index: number; total: number }
+  ): void {
+    // Deliberately does NOT touch activePhase: a passed phase was never
+    // running, so it must not close the phase that is (#1924). Serialized on
+    // the same per-stage queue as the rest so the append order matches the
+    // phase order.
+    enqueue(stage, async () => {
+      await stateService.markPhasePassed(stage, marker.name, marker.total, marker.index);
+    });
+  }
+
   function completeStagePhases(stage: PipelineStage): void {
     const prev = activePhase.get(stage);
     activePhase.delete(stage);
@@ -182,5 +202,5 @@ export function createPhaseTracker(stateService: PipelineStateService): PhaseTra
     }
   }
 
-  return { onPhaseDetected, completeStagePhases, completeAllStages };
+  return { onPhaseDetected, passPhase, completeStagePhases, completeAllStages };
 }

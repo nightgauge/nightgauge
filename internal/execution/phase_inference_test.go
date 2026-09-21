@@ -33,7 +33,7 @@ func TestPhaseInferer_AdvancesThroughWaypoints(t *testing.T) {
 		{"Bash", map[string]any{"command": "nightgauge project move-status 42"}, "sync-project-status", 15},
 	}
 	for _, c := range cases {
-		m, ok := inf.ObserveToolUse(c.tool, c.input)
+		m, _, ok := inf.ObserveToolUse(c.tool, c.input)
 		if !ok {
 			t.Fatalf("expected advancement for %s %v", c.tool, c.input)
 		}
@@ -46,15 +46,15 @@ func TestPhaseInferer_AdvancesThroughWaypoints(t *testing.T) {
 func TestPhaseInferer_Monotonic(t *testing.T) {
 	inf := NewPhaseInferer("feature-dev")
 	inf.Start()
-	if _, ok := inf.ObserveToolUse("Write", map[string]any{"file_path": "src/a.ts"}); !ok {
+	if _, _, ok := inf.ObserveToolUse("Write", map[string]any{"file_path": "src/a.ts"}); !ok {
 		t.Fatal("expected implementation advancement")
 	}
 	// A later context read must not regress the phase.
-	if _, ok := inf.ObserveToolUse("Read", map[string]any{"file_path": "src/b.ts"}); ok {
+	if _, _, ok := inf.ObserveToolUse("Read", map[string]any{"file_path": "src/b.ts"}); ok {
 		t.Fatal("expected no regression for a late read")
 	}
 	// Re-editing source must not re-emit implementation.
-	if _, ok := inf.ObserveToolUse("Edit", map[string]any{"file_path": "src/c.ts"}); ok {
+	if _, _, ok := inf.ObserveToolUse("Edit", map[string]any{"file_path": "src/c.ts"}); ok {
 		t.Fatal("expected no duplicate implementation emission")
 	}
 }
@@ -62,7 +62,7 @@ func TestPhaseInferer_Monotonic(t *testing.T) {
 func TestPhaseInferer_DevContextWriteIsNotImplementation(t *testing.T) {
 	inf := NewPhaseInferer("feature-dev")
 	inf.Start()
-	m, ok := inf.ObserveToolUse("Write", map[string]any{"file_path": ".nightgauge/pipeline/dev-42.json"})
+	m, _, ok := inf.ObserveToolUse("Write", map[string]any{"file_path": ".nightgauge/pipeline/dev-42.json"})
 	if !ok {
 		t.Fatal("expected advancement")
 	}
@@ -75,7 +75,7 @@ func TestPhaseInferer_RealMarkerWins(t *testing.T) {
 	inf := NewPhaseInferer("feature-dev")
 	inf.Start()
 	inf.ObserveRealMarker(11) // quality-review reached via a genuine marker
-	if _, ok := inf.ObserveToolUse("Write", map[string]any{"file_path": "src/a.ts"}); ok {
+	if _, _, ok := inf.ObserveToolUse("Write", map[string]any{"file_path": "src/a.ts"}); ok {
 		t.Fatal("inferred implementation must not regress past a real marker")
 	}
 }
@@ -96,7 +96,7 @@ func TestPhaseInferer_DisabledForSelfReportingStages(t *testing.T) {
 	if _, ok := inf.Start(); ok {
 		t.Fatal("disabled inferer must not emit a start marker")
 	}
-	if _, ok := inf.ObserveToolUse("Write", map[string]any{"file_path": "src/a.ts"}); ok {
+	if _, _, ok := inf.ObserveToolUse("Write", map[string]any{"file_path": "src/a.ts"}); ok {
 		t.Fatal("disabled inferer must not emit from tool use")
 	}
 }
@@ -115,19 +115,19 @@ func TestPhaseInferer_FeatureValidateInfersFromItsRealWork(t *testing.T) {
 		t.Fatalf("Start should open validate-environment of 23, got %+v ok=%v", m, ok)
 	}
 
-	if m, ok := inf.ObserveToolUse("Read", map[string]any{"file_path": "dev-42.json"}); !ok ||
+	if m, _, ok := inf.ObserveToolUse("Read", map[string]any{"file_path": "dev-42.json"}); !ok ||
 		m.Name != "read-dev-context" {
 		t.Fatalf("a read should map to read-dev-context, got %+v ok=%v", m, ok)
 	}
-	if m, ok := inf.ObserveToolUse("Bash", map[string]any{"command": "go test ./..."}); !ok ||
+	if m, _, ok := inf.ObserveToolUse("Bash", map[string]any{"command": "go test ./..."}); !ok ||
 		m.Name != "run-tests" {
 		t.Fatalf("a test command should map to run-tests, got %+v ok=%v", m, ok)
 	}
-	if m, ok := inf.ObserveToolUse("Bash", map[string]any{"command": "git push -u origin HEAD"}); !ok ||
+	if m, _, ok := inf.ObserveToolUse("Bash", map[string]any{"command": "git push -u origin HEAD"}); !ok ||
 		m.Name != "commit-and-push" {
 		t.Fatalf("a branch push should map to commit-and-push, got %+v ok=%v", m, ok)
 	}
-	if m, ok := inf.ObserveToolUse("Write", map[string]any{
+	if m, _, ok := inf.ObserveToolUse("Write", map[string]any{
 		"file_path": ".nightgauge/pipeline/validate-42.json",
 	}); !ok || m.Name != "write-validate-context" {
 		t.Fatalf("the validate-context write should map to write-validate-context, got %+v ok=%v", m, ok)
@@ -135,7 +135,7 @@ func TestPhaseInferer_FeatureValidateInfersFromItsRealWork(t *testing.T) {
 
 	// Monotonic, exactly as for feature-dev: a later read must not drag the
 	// cursor back to an earlier phase.
-	if _, ok := inf.ObserveToolUse("Read", map[string]any{"file_path": "src/a.ts"}); ok {
+	if _, _, ok := inf.ObserveToolUse("Read", map[string]any{"file_path": "src/a.ts"}); ok {
 		t.Fatal("a read after write-validate-context must not regress the cursor")
 	}
 }
@@ -161,7 +161,7 @@ func TestPhaseInferer_FeaturePlanningWaypoints(t *testing.T) {
 		{"Write", map[string]any{"file_path": ".nightgauge/pipeline/planning-6.json"}, "write-planning-context", 10},
 	}
 	for _, c := range cases {
-		m, ok := inf.ObserveToolUse(c.tool, c.input)
+		m, _, ok := inf.ObserveToolUse(c.tool, c.input)
 		if !ok {
 			t.Fatalf("expected advancement for %s %v", c.tool, c.input)
 		}
@@ -171,7 +171,7 @@ func TestPhaseInferer_FeaturePlanningWaypoints(t *testing.T) {
 	}
 
 	// A late read must not regress past produce-plan/write-planning-context.
-	if _, ok := inf.ObserveToolUse("Read", map[string]any{"file_path": "docs/ARCHITECTURE.md"}); ok {
+	if _, _, ok := inf.ObserveToolUse("Read", map[string]any{"file_path": "docs/ARCHITECTURE.md"}); ok {
 		t.Fatal("expected no regression for a late planning read")
 	}
 }
@@ -180,7 +180,7 @@ func TestPhaseInferer_FeaturePlanningRealMarkerWins(t *testing.T) {
 	inf := NewPhaseInferer("feature-planning")
 	inf.Start()
 	inf.ObserveRealMarker(10) // write-planning-context reached via a genuine marker
-	if _, ok := inf.ObserveToolUse("Read", map[string]any{"file_path": "docs/x.md"}); ok {
+	if _, _, ok := inf.ObserveToolUse("Read", map[string]any{"file_path": "docs/x.md"}); ok {
 		t.Fatal("inferred documentation-analysis must not regress past a real marker")
 	}
 }

@@ -262,13 +262,29 @@ export interface PhaseInference {
    * Observe a tool call. Returns a marker to emit when it advances the phase
    * past the current cursor, otherwise null.
    */
-  observeToolUse(toolName: string, toolInput: unknown): ParsedPhaseMarker | null;
+  observeToolUse(toolName: string, toolInput: unknown): PhaseAdvance | null;
   /**
    * Sync the cursor when the skill emitted a genuine marker, so inferred
-   * markers never regress or duplicate a real one. No marker is returned —
-   * the real marker is delivered through the normal path.
+   * markers never regress or duplicate a real one. The real marker itself is
+   * delivered through the normal path; what comes back here are the phases the
+   * marker revealed the run had already moved past (#1924).
    */
-  observeRealMarker(index: number): void;
+  observeRealMarker(index: number): ParsedPhaseMarker[];
+}
+
+/**
+ * An advance of the phase cursor: the phase now current, plus every phase the
+ * cursor jumped OVER to reach it (#1924).
+ *
+ * The jumped-over phases are the point. A run that reports 1 and then 9 was in
+ * 2..8 and said nothing, and before this they stayed invisible until the
+ * end-of-stage back-fill stamped them `unreported`. They are carried separately
+ * from `marker` because they are a weaker claim — derived from ordering, never
+ * observed — and must be recorded as `passed`, not `complete`.
+ */
+export interface PhaseAdvance {
+  marker: ParsedPhaseMarker;
+  passed: ParsedPhaseMarker[];
 }
 
 /**
@@ -288,20 +304,52 @@ function markerFor(stage: ExecutionStage, index: number): ParsedPhaseMarker | nu
  * @param stage - The pipeline stage name
  * @returns A stateful {@link PhaseInference}
  */
+/**
+ * The stages whose phases come from marker parsing / inference, and therefore
+ * need gap-fill. Mirrors stagePhaseTables in internal/execution/phase_inference.go.
+ */
+const GAP_FILL_STAGES: ReadonlySet<string> = new Set([
+  "feature-dev",
+  "feature-planning",
+  "feature-validate",
+]);
+
 export function createPhaseInference(stage: string): PhaseInference {
   const rules = STAGE_RULES[stage as ExecutionStage];
   const execStage = stage as ExecutionStage;
-  const enabled = !!rules && !!PHASE_REGISTRY[execStage];
+  // A phase table alone is enough (#1924): gap-fill derives progress from
+  // ORDERING, so it applies to a stage that self-reports markers and has no
+  // inference rules at all. Requiring rules too is what kept gap-fill off any
+  // stage the rule table had not been taught yet.
+  //
+  // Scoped to the AGENTIC stages, mirroring Go's stagePhaseTables. PHASE_REGISTRY
+  // is wider than that table — it also declares issue-pickup, pr-create and
+  // pr-merge — and those report full start/complete pairs from the
+  // deterministic runner. Inferring over them would file ordering-derived
+  // `passed` records alongside real observed ones, which is strictly worse than
+  // silence: it competes with evidence.
+  const enabled = GAP_FILL_STAGES.has(execStage);
 
   // Highest phase index emitted/observed so far. -1 means nothing yet.
   let cursor = -1;
 
-  function advanceTo(index: number): ParsedPhaseMarker | null {
+  /** Markers for the unreported phases strictly between the cursor and index. */
+  function gapBelow(index: number): ParsedPhaseMarker[] {
+    const passed: ParsedPhaseMarker[] = [];
+    for (let i = cursor + 1; i < index; i++) {
+      const m = markerFor(execStage, i);
+      if (m) passed.push(m);
+    }
+    return passed;
+  }
+
+  function advanceTo(index: number): PhaseAdvance | null {
     if (index <= cursor) return null;
     const marker = markerFor(execStage, index);
     if (!marker) return null;
+    const passed = gapBelow(index);
     cursor = index;
-    return marker;
+    return { marker, passed };
   }
 
   return {
@@ -309,10 +357,10 @@ export function createPhaseInference(stage: string): PhaseInference {
 
     start(): ParsedPhaseMarker | null {
       if (!enabled) return null;
-      return advanceTo(0);
+      return advanceTo(0)?.marker ?? null;
     },
 
-    observeToolUse(toolName: string, toolInput: unknown): ParsedPhaseMarker | null {
+    observeToolUse(toolName: string, toolInput: unknown): PhaseAdvance | null {
       if (!enabled || !rules) return null;
       let best = -1;
       for (const rule of rules) {
@@ -324,9 +372,11 @@ export function createPhaseInference(stage: string): PhaseInference {
       return advanceTo(best);
     },
 
-    observeRealMarker(index: number): void {
-      if (!enabled) return;
-      if (index > cursor) cursor = index;
+    observeRealMarker(index: number): ParsedPhaseMarker[] {
+      if (!enabled || index <= cursor) return [];
+      const passed = gapBelow(index);
+      cursor = index;
+      return passed;
     },
   };
 }

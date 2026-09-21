@@ -651,6 +651,18 @@ export interface SkillRunCallbacks {
    */
   onPhaseStart?: (stage: PipelineStage, name: string, index: number, total: number) => void;
   /**
+   * Called for a phase the run advanced BEYOND without ever reporting it
+   * (#1924). Derived from ordering — observing phase N is evidence about every
+   * phase below it — so these arrive live, at the moment the later phase is
+   * seen, rather than waiting for the end-of-stage back-fill.
+   *
+   * Deliberately not folded into onPhaseStart: a passed phase is terminal on
+   * arrival and was never observed running, so recording it as a start (which
+   * closes the previous phase as `complete`) would manufacture completions the
+   * run cannot defend.
+   */
+  onPhasePassed?: (stage: PipelineStage, name: string, index: number, total: number) => void;
+  /**
    * Called when a tool_use block is detected in stream-json output (Issue #639)
    * Used for recording tool calls to PipelineStateService → Dashboard
    * @param toolName - The name of the tool being invoked
@@ -6621,8 +6633,14 @@ export function runStageSkillHeadless(
     // Deterministic phase inference (#3760): stages that don't self-report
     // phase markers (feature-dev) advance from the tool calls they actually
     // make. No-op for self-reporting stages; monotonic; real markers win.
-    const inferred = phaseInference.observeToolUse(name, input);
-    if (inferred) {
+    const advance = phaseInference.observeToolUse(name, input);
+    if (advance) {
+      // Phases jumped over are reported first, so the durable history stays in
+      // phase order rather than discovery order (#1924).
+      for (const p of advance.passed) {
+        callbacks?.onPhasePassed?.(stage, p.name, p.index, p.total);
+      }
+      const inferred = advance.marker;
       lastPhaseName = inferred.name;
       traceRecorder.phaseTransition(stage, inferred);
       callbacks?.onPhaseStart?.(stage, inferred.name, inferred.index, inferred.total);
@@ -6890,7 +6908,9 @@ export function runStageSkillHeadless(
               `[skillRunner] PHASE MARKER DETECTED: stage=${stage} name=${marker.name} index=${marker.index} total=${marker.total} hasCallback=${!!callbacks?.onPhaseStart}`
             );
             lastPhaseName = marker.name; // track for stall diagnostic (#3484)
-            phaseInference.observeRealMarker(marker.index); // real marker wins (#3760)
+            for (const p of phaseInference.observeRealMarker(marker.index)) {
+              callbacks?.onPhasePassed?.(stage, p.name, p.index, p.total); // gap the marker revealed (#1924)
+            }
             progressMonitor.recordSignal("phase_marker");
             traceRecorder.phaseTransition(stage, marker);
             callbacks?.onPhaseStart?.(stage, marker.name, marker.index, marker.total);
@@ -6901,7 +6921,9 @@ export function runStageSkillHeadless(
       if (parsed?.type === "content_block_stop" && phaseContentBuffer) {
         for (const marker of parsePhaseMarkers(phaseContentBuffer)) {
           lastPhaseName = marker.name; // track for stall diagnostic (#3484)
-          phaseInference.observeRealMarker(marker.index); // real marker wins (#3760)
+          for (const p of phaseInference.observeRealMarker(marker.index)) {
+            callbacks?.onPhasePassed?.(stage, p.name, p.index, p.total); // gap the marker revealed (#1924)
+          }
           traceRecorder.phaseTransition(stage, marker);
           callbacks?.onPhaseStart?.(stage, marker.name, marker.index, marker.total);
         }
@@ -6948,7 +6970,9 @@ export function runStageSkillHeadless(
         observeExternalProgressDeclarations(toolResult.content);
         for (const marker of parsePhaseMarkers(toolResult.content)) {
           lastPhaseName = marker.name;
-          phaseInference.observeRealMarker(marker.index); // real marker wins (#3760)
+          for (const p of phaseInference.observeRealMarker(marker.index)) {
+            callbacks?.onPhasePassed?.(stage, p.name, p.index, p.total); // gap the marker revealed (#1924)
+          }
           progressMonitor.recordSignal("phase_marker");
           traceRecorder.phaseTransition(stage, marker);
           callbacks?.onPhaseStart?.(stage, marker.name, marker.index, marker.total);

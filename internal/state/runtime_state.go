@@ -468,7 +468,7 @@ type PhaseRecord struct {
 	// keeps its real start, its real duration and the fact that it did not
 	// succeed; what it loses is the claim that the RUN failed here, which is
 	// the claim `failed` makes to every reader of the tree.
-	Status      string     `json:"status"` // "running" | "complete" | "skipped" | "unreported" | "failed" | "abandoned" | "superseded" | "degraded"
+	Status      string     `json:"status"` // "running" | "complete" | "passed" | "skipped" | "unreported" | "failed" | "abandoned" | "superseded" | "degraded"
 	StartedAt   time.Time  `json:"startedAt"`
 	CompletedAt *time.Time `json:"completedAt,omitempty"`
 }
@@ -1373,6 +1373,53 @@ func (rs *RuntimeState) SkipPhase(stage PipelineStage, name string, index, total
 		Index:       index,
 		Total:       total,
 		Status:      "skipped",
+		StartedAt:   now,
+		CompletedAt: &now,
+	})
+}
+
+// PassPhase records a phase the run advanced beyond without ever reporting it
+// (#1924).
+//
+// Phases within a stage are an ORDERED list, so observing index N is itself
+// evidence about every index below N: the run is past them. That is real
+// information, available the moment N arrives, and it is what turns a handful
+// of landmark observations into continuous live progress.
+//
+// It is deliberately NOT "complete". A completed phase was seen to run and seen
+// to close; a passed one was only ever inferred from ordering. BeginPhase
+// closing the previous running record as complete is evidence; this is not, and
+// collapsing the two would manufacture completions the run cannot defend — the
+// same mistake #1246 corrected when a back-fill claimed fourteen phases were
+// skipped on a run whose own gate record proved two of them ran.
+//
+// It is also stronger than "unreported", which is what the end-of-stage
+// back-fill writes: unreported carries no ordering claim at all, while passed
+// says the run demonstrably moved beyond this phase DURING the stage. Both are
+// terminal on arrival.
+//
+// Same append-and-idempotent shape as SkipPhase and UnreportedPhase: keyed on
+// stage+name, and an existing record always wins because it carries evidence
+// this one does not.
+func (rs *RuntimeState) PassPhase(stage PipelineStage, name string, index, total int) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.passPhaseLocked(stage, name, index, total)
+}
+
+func (rs *RuntimeState) passPhaseLocked(stage PipelineStage, name string, index, total int) {
+	for i := range rs.PhaseHistory {
+		if rs.PhaseHistory[i].Stage == stage && rs.PhaseHistory[i].Name == name {
+			return
+		}
+	}
+	now := time.Now()
+	rs.PhaseHistory = append(rs.PhaseHistory, PhaseRecord{
+		Stage:       stage,
+		Name:        name,
+		Index:       index,
+		Total:       total,
+		Status:      "passed",
 		StartedAt:   now,
 		CompletedAt: &now,
 	})

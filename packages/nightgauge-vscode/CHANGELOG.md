@@ -11,6 +11,14 @@ and this project adheres to
 
 ### Fixed
 
+- The pipeline tree shows phase progress as it happens, not in a burst at the
+  end of each stage. Most phases previously never lit up at all: a stage
+  reported a handful of landmarks and the rest arrived at the end-of-stage
+  back-fill as `unreported`. Because phases are ordered, seeing one phase is
+  evidence the run is past the earlier ones, so those are now settled live
+  under a new `passed` status — rendered distinctly from `complete`, since the
+  phase was never observed running and a check mark would claim otherwise.
+
 - The attention sweep no longer runs on its timer just because the editor
   window has focus. A sweep costs roughly 64 GraphQL points plus 18 REST
   calls across a six-repo workspace, and window focus was the timer's only

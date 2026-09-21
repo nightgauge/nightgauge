@@ -18,6 +18,9 @@ import { BaseTreeItem } from "./BaseTreeItem";
  * `unreported` — the stage ended having never reported it (#1246). Distinct
  * because the two carry opposite information about intent, and the
  * end-of-stage back-fill can only ever observe the second.
+ * `passed` — the run was observed at a LATER phase, so ordering proves it moved
+ *   beyond this one, but it was never seen to run (#1924). Weaker than
+ *   `complete`, stronger than `unreported`, which claims no ordering at all.
  * `superseded` — this ATTEMPT was displaced, not judged (#1850).
  * `degraded` — it did not succeed, on a stage that succeeded anyway (#1850).
  */
@@ -25,6 +28,7 @@ export type PhaseStatus =
   | "pending"
   | "running"
   | "complete"
+  | "passed"
   | "skipped"
   | "unreported"
   | "failed"
@@ -41,6 +45,9 @@ const PHASE_STATUS_CONFIG: Record<PhaseStatus, PhaseDisplayConfig> = {
   pending: { icon: "circle-outline" },
   running: { icon: "sync~spin" },
   complete: { icon: "check", iconColor: "testing.iconPassed" },
+  // Distinct from complete on purpose: a check mark here would claim the phase
+  // was seen to run, which is exactly what a passed phase cannot claim.
+  passed: { icon: "chevron-right", iconColor: "descriptionForeground" },
   skipped: { icon: "debug-step-over" },
   // Deliberately dimmer and distinct from the skip glyph: "no telemetry" must
   // not read as a decision the stage made (#1246).

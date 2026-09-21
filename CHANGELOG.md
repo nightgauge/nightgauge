@@ -16,6 +16,30 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **Pipeline phases are now visible while they are worked, instead of only at
+  landmarks.** On a representative run, 10 of `feature-planning`'s 14 phases
+  and 14 of `feature-dev`'s 18 never appeared until the end-of-stage back-fill
+  stamped them `unreported` — so a forty-minute stage showed four updates and
+  then a burst. Live reporting had rested on two signals that could not cover
+  every phase: markers a skill emits voluntarily (edit-heavy stages routinely
+  skip them) and landmark inference rules covering ~5 indices of 18. Progress
+  is now derived from **ordering** as well: phases are an ordered list, so
+  observing phase N is evidence the run moved past every phase below it, and
+  those are reported at that moment rather than at stage end. Five landmarks
+  now yield continuous progress across all 18 phases.
+  - They are recorded as **`passed`**, a new status, never as `complete`. A
+    passed phase was never seen to run; only ordering places the run beyond
+    it. It is stronger than `unreported`, which claims no ordering at all, and
+    weaker than `complete`, which carries evidence. A progress display must not
+    manufacture completions it cannot defend.
+  - **`nightgauge run` renders phase progress at all.** The data had been in
+    the run's `PhaseHistory` the whole time with nothing to print it, because
+    only the IPC server registered the phase callbacks — so outside VS Code a
+    long stage was indistinguishable from a hung one. Phase lines go to
+    stderr, leaving stdout's machine-readable contract intact.
+  - Go and TypeScript were changed together and pinned by mirrored tests, the
+    drift class that already cost #1247 and #1398.
+
 - **`nightgauge issue route` cost 375 GraphQL points per call and now costs 4.** Measured against the live API, before and after, with byte-identical
   output. It paged the entire project board — every status, `first: 100` a
   page, ~19 pages — to read two fields off one row and discard the rest. The
