@@ -14,6 +14,31 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The machine-wide GitHub rate-limit gate was dead code for most of its
+  wall-clock life.** `headroomGate.resetWait` discarded any tracker reading
+  older than 15 seconds as "no data" and opened the gate — so a budget already
+  measured as exhausted was spent into anyway by every short-lived CLI process
+  and by every producer that runs between the attention sweep's bursts.
+  Freshness and expiry answer different questions: staleness costs confidence
+  in _how much_ is left, but none in whether the window has _reset_, and a
+  below-floor reading can only move further down before it does. `ResetAt` is
+  now the authority for a below-floor entry, and freshness is required only
+  when the entry carries no reset to reason about. Measured on 2026-09-21: the
+  tracker had not been written for 7h44m while the account exhausted its
+  GraphQL quota twice.
+
+- **One account's budget was tracked under two keys, and each saw half the
+  spend.** The IPC server wires the shared tracker with an empty user (which
+  collapses to `default`) while the per-repo resolver and the per-user clients
+  wire it with the resolved gh username. Both spend one pool, so both gates
+  believed roughly twice the real budget remained and neither ever observed
+  the other's exhaustion. `SharedRateLimitTracker.GetBudget` now reports the
+  most constrained entry sharing the caller's reset window — the same second
+  means the same account — and the scheduler's three headroom reads use it.
+  `Get` is unchanged for callers that genuinely want their own key.
+
 ## [0.4.6] - 2026-09-21
 
 ### Changed

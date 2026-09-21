@@ -193,9 +193,17 @@ func TestRateLimitGate_NoOpAboveFloor(t *testing.T) {
 	}
 }
 
-// TestRateLimitGate_NoOpWhenStale verifies that a stale tracker entry does
-// NOT gate (since we have no recent confidence in the count).
-func TestRateLimitGate_NoOpWhenStale(t *testing.T) {
+// TestRateLimitGate_StaleExhaustionStillGates is the end-to-end form of the
+// rule corrected on 2026-09-21. This test previously asserted the opposite —
+// "a stale entry does NOT gate, since we have no recent confidence in the
+// count" — and that rationale is the defect: staleness costs us confidence in
+// HOW MUCH is left, but none at all in whether the window has RESET, and a
+// below-floor reading can only move further down before it does. Because every
+// short-lived process and every between-burst producer starts with an entry
+// older than SharedTrackerMinCheckIntervalSecs, the old rule left the gate
+// open essentially always; the machine's tracker was 7h44m stale while the
+// account exhausted its GraphQL quota twice.
+func TestRateLimitGate_StaleExhaustionStillGates(t *testing.T) {
 	var calls int32
 	srv := graphQLProbeServer(t, nil, &calls)
 	defer srv.Close()
@@ -221,11 +229,46 @@ func TestRateLimitGate_NoOpWhenStale(t *testing.T) {
 	c := NewClientWithURL("test-token", srv.URL).WithRateLimitTracker(tr, "alice")
 	t.Setenv(rateLimitFloorEnv, "100")
 
+	if _, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err == nil {
+		t.Fatal("stale below-floor entry inside its reset window must gate, got a dispatched call")
+	}
+	if got := atomic.LoadInt32(&calls); got != 0 {
+		t.Fatalf("expected the call to be gated before dispatch, got %d dispatched", got)
+	}
+}
+
+// TestRateLimitGate_NoOpWhenStaleAndNoReset keeps the "no recent confidence"
+// no-op for the one state where it is still the right answer: an entry that
+// carries no reset second at all, so there is nothing to say the window has
+// not already turned over.
+func TestRateLimitGate_NoOpWhenStaleAndNoReset(t *testing.T) {
+	var calls int32
+	srv := graphQLProbeServer(t, nil, &calls)
+	defer srv.Close()
+
+	path := filepath.Join(t.TempDir(), "rate-limit.json")
+	tr := NewSharedRateLimitTracker(path)
+	if err := tr.Set("alice", &RateLimitInfo{Remaining: 5, Limit: 5000}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	file, err := tr.readLocked()
+	if err != nil {
+		t.Fatal(err)
+	}
+	file.Entries["alice"].ResetAt = 0
+	file.Entries["alice"].CheckedAt = time.Now().Unix() - int64(SharedTrackerMinCheckIntervalSecs) - 30
+	if err := tr.writeLocked(file); err != nil {
+		t.Fatal(err)
+	}
+
+	c := NewClientWithURL("test-token", srv.URL).WithRateLimitTracker(tr, "alice")
+	t.Setenv(rateLimitFloorEnv, "100")
+
 	if _, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
-		t.Fatalf("stale entry must not gate: %v", err)
+		t.Fatalf("stale entry with no reset must not gate: %v", err)
 	}
 	if got := atomic.LoadInt32(&calls); got != 1 {
-		t.Fatalf("expected the call to dispatch (stale → no-op), got %d", got)
+		t.Fatalf("expected the call to dispatch, got %d", got)
 	}
 }
 
@@ -486,7 +529,15 @@ func TestHeadroomGate_MatchesClientDecisions(t *testing.T) {
 		{"one below the floor", &RateLimitInfo{Remaining: 99, Limit: 5000, ResetAt: future}, 0, true},
 		{"exhausted", &RateLimitInfo{Remaining: 0, Limit: 5000, ResetAt: future}, 0, true},
 		{"below floor but the window already reset", &RateLimitInfo{Remaining: 5, Limit: 5000, ResetAt: time.Now().Add(-time.Minute).Unix()}, 0, false},
-		{"below floor but the reading is stale", &RateLimitInfo{Remaining: 5, Limit: 5000, ResetAt: future}, time.Now().Add(-time.Hour).Unix(), false},
+		// A stale below-floor reading STILL gates. ResetAt, not CheckedAt, is
+		// the expiry for an exhaustion reading: until that second elapses the
+		// budget cannot have recovered, however old the reading is. This row
+		// asserted `false` until 2026-09-21, which is why the gate was dead
+		// code for most of its wall-clock life — every short-lived process and
+		// every between-burst producer starts with an entry older than 15s.
+		{"below floor and stale, but the window has not reset", &RateLimitInfo{Remaining: 5, Limit: 5000, ResetAt: future}, time.Now().Add(-time.Hour).Unix(), true},
+		// Freshness still governs when there is no reset to reason about.
+		{"below floor, stale, and no reset recorded", &RateLimitInfo{Remaining: 5, Limit: 5000, ResetAt: 0}, time.Now().Add(-time.Hour).Unix(), false},
 	}
 
 	for _, tc := range tests {

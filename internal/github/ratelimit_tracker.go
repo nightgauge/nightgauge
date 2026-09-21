@@ -97,6 +97,54 @@ func (t *SharedRateLimitTracker) Get(user string) (*SharedTrackerEntry, bool, er
 	return entry, fresh, nil
 }
 
+// GetBudget returns the reading that governs user's next call, which is not
+// always user's own entry.
+//
+// The tracker file is keyed by gh username, but GitHub's primary rate limit is
+// keyed by ACCOUNT. One account reaches this file under more than one key: the
+// IPC server's default client wires the tracker with an empty user (collapsing
+// to "default"), while the per-repo resolver and the per-user clients wire it
+// with the resolved gh username. Both spend the same pool, and before this each
+// key saw only its own share — so both gates believed roughly twice the real
+// budget remained, and neither ever observed the other's exhaustion. An
+// operator's file has been observed carrying "default" and a username key with
+// different Remaining values against an identical ResetAt.
+//
+// ResetAt is the discriminator. GitHub's window is per account, so two entries
+// reporting the SAME non-zero reset second are the same pool; a genuinely
+// different account is on its own window. Among those, the lowest Remaining is
+// the truth, because a reading can only be stale in the direction of having
+// spent more since. Picking the most constrained entry therefore fails toward
+// waiting rather than toward burning, which is the safe direction for a gate.
+//
+// The returned bool is the freshness of the entry actually returned.
+func (t *SharedRateLimitTracker) GetBudget(user string) (*SharedTrackerEntry, bool, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	file, err := t.readLocked()
+	if err != nil {
+		return nil, false, err
+	}
+	entry := file.Entries[keyFor(user)]
+	if entry == nil {
+		return nil, false, nil
+	}
+	governing := entry
+	if entry.ResetAt > 0 {
+		for key, other := range file.Entries {
+			if other == nil || key == keyFor(user) {
+				continue
+			}
+			if other.ResetAt == entry.ResetAt && other.Remaining < governing.Remaining {
+				governing = other
+			}
+		}
+	}
+	fresh := time.Now().Unix()-governing.CheckedAt < SharedTrackerMinCheckIntervalSecs
+	return governing, fresh, nil
+}
+
 // Set persists info for user, merging with any existing entries. The write is
 // atomic (temp file + rename) so concurrent readers never observe a partial
 // write.
