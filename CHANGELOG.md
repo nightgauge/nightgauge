@@ -16,19 +16,6 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [0.4.6] - 2026-09-21
 
-### Fixed
-
-- **The malware-scan self-test no longer plants an EICAR sample.** It ran only
-  from `ci-local.sh` — that is, only on developer machines, never in CI, which
-  has no ClamAV — so the sample fired a real antivirus alert on every gate run
-  of every contributor with protection enabled, and never once ran somewhere it
-  was harmless. Worse, a host antivirus quarantines the sample before
-  `clamscan` reads it, so the arm failed on exactly the machines it was meant
-  to reassure. It now asserts the real `clamscan` still emits every summary
-  field `malware-scan.sh` parses, which catches the drift that actually
-  matters: an output-format change breaking the parsing while every stubbed arm
-  still passes.
-
 ### Changed
 
 - **Every binary now carries a vendor identifier.** Avast's clean software
@@ -92,8 +79,9 @@ changelog, and the release workflow refuses a tag that does not.
   closed when the floor is not met. Size limits are raised for the same reason
   — the .vsix already scans to 77.40 MiB against ClamAV's own 100 MB default
   `--max-scansize`, so the scan was within 23% of silently skipping content.
-  `scripts/test-malware-scan.sh` covers all of it, including a real EICAR
-  sample so the stubbed arms cannot drift from the tool they imitate.
+  `scripts/test-malware-scan.sh` covers all of it, including an arm that
+  asserts the real `clamscan` still emits every summary field the script
+  parses, so the stubbed arms cannot drift from the tool they imitate.
 
 - **The npm dependency tree is scanned.** `govulncheck` covered the Go module
   graph only, while the extension bundles its entire npm tree into
