@@ -9,6 +9,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-09-20
+
 ### Fixed
 
 - The extension's GitHub spending is now visible to the API ledger. The Go
@@ -610,7 +612,8 @@ shipped as [0.2.1].
 - Settings for authentication provider, model selection, and paths
 - Settings for notification sounds, volume, and Do Not Disturb respect
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.4.4...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.4.5...HEAD
+[0.4.5]: https://github.com/nightgauge/nightgauge/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/nightgauge/nightgauge/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/nightgauge/nightgauge/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/nightgauge/nightgauge/compare/v0.4.1...v0.4.2

@@ -14,6 +14,8 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-09-20
+
 ### Fixed
 
 - **`pr-merge` reported a generic "dirty merge state" instead of the actual
@@ -2338,7 +2340,8 @@ with GitHub Project board integration, dashboard, context file viewer, and
 the first set of commands and settings. Recorded so the extension's changelog
 and this one name the same versions.
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.4.4...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.4.5...HEAD
+[0.4.5]: https://github.com/nightgauge/nightgauge/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/nightgauge/nightgauge/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/nightgauge/nightgauge/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/nightgauge/nightgauge/compare/v0.4.1...v0.4.2
