@@ -1703,22 +1703,36 @@ issue number 0 — useful for tests.`,
 				input.Body = issue.Body
 				input.Labels = issue.Labels
 
-				// Look up board size/priority by listing items and matching number.
-				// Skipped silently when --size/--priority overrides are present, or
-				// when the project number cannot be resolved (offline orgs). Size
-				// and priority are all it reads, so no relationship list is read.
+				// Look up this issue's board Size and Priority with the
+				// server-side-filtered single-item read (#908's treatment,
+				// applied here — see scheduler.go's RunQueue for the original).
+				//
+				// This used to call ListItemsWithRelations(ctx, "", NoRelations),
+				// which pages EVERY status of the whole board at first:100 and
+				// then discards all but one row. Two things were wrong with it:
+				//
+				//  1. It cost 17 GraphQL points per page, measured as the mode
+				//     over 189 of 190 priced samples in one day's API ledger —
+				//     3,230 points a day for two fields. NoRelations does not
+				//     make that read cheap: the relation flags filter the
+				//     RESULT, they do not shape the query document, so the
+				//     sub-issue and blocking selections are sent and billed
+				//     either way. The old comment claiming otherwise is gone.
+				//  2. It matched on item.Number alone. On a board shared by
+				//     several repositories, two issues at the same number
+				//     collide and whichever page arrives first wins. GetItem
+				//     takes owner and repo and checks both.
+				//
+				// A miss is still silent: an issue that is not on the board
+				// routes from its labels alone, as before.
 				if sizeFlag == "" || priorityFlag == "" {
-					if items, ferr := gh.NewBoardService(client, ownerPart, projectNumber, getOwnerType(cmd)).ListItemsWithRelations(cmd.Context(), "", gh.NoRelations); ferr == nil {
-						for _, item := range items {
-							if item.Number == number {
-								if input.BoardSize == "" {
-									input.BoardSize = string(item.Size)
-								}
-								if input.BoardPriority == "" {
-									input.BoardPriority = string(item.Priority)
-								}
-								break
-							}
+					boardSvc := gh.NewBoardService(client, ownerPart, projectNumber, getOwnerType(cmd))
+					if item, ferr := boardSvc.GetItem(cmd.Context(), ownerPart, repoPart, number); ferr == nil && item != nil {
+						if input.BoardSize == "" {
+							input.BoardSize = string(item.Size)
+						}
+						if input.BoardPriority == "" {
+							input.BoardPriority = string(item.Priority)
 						}
 					}
 				}

@@ -1204,6 +1204,13 @@ func TestGrokAdapterCarriesEverySentenceFromBeforeTheSplit(t *testing.T) {
 // host segment now resolves an extra key for each of them, but since no
 // hosts/<adapter>.md exists, nothing new is collected and the composed text
 // must be identical to the pre-change capture.
+// The captures were re-pinned once since, for #1912: REPO_IDENTITY_CHECK.md
+// stopped asking the GitHub CLI for a repository slug that `git remote` answers
+// locally for free. That edit moved exactly one line in each of the four
+// captures and nothing else — verified by diffing every golden against a fresh
+// render before replacing them, which is the only way re-pinning a "renders
+// unchanged" golden is honest. It also showed the shared include reaches every
+// stage, so the call it removed was per stage, not per run.
 func TestClaudeCodexGeminiRendersUnchanged(t *testing.T) {
 	root := realSkillsRoot(t)
 	// Render resolves _includes paths to their absolute filesystem form, which

@@ -23,6 +23,7 @@
  * per-consumer rationale (DESIGN RULING).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { AutonomousActivityState } from "../../src/utils/autonomousActivityState";
 import {
   AttentionSweepService,
   PollingVisibilityGate,
@@ -129,6 +130,13 @@ describe("PollingVisibilityGate — core gate (#484)", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     PollingVisibilityGate.resetForTests();
+    // The sweep TIMER now requires the autonomous dispatch loop to be
+    // running: a focused window alone is not a reason to spend GitHub
+    // quota (~64 GraphQL points + 18 REST per sweep, per open window).
+    // These suites exercise the timer, so they put the loop in "running".
+    // The off case is pinned by its own test below.
+    AutonomousActivityState.resetForTests();
+    AutonomousActivityState.instance.setStatus("running");
   });
 
   afterEach(() => {
@@ -260,6 +268,13 @@ describe("AttentionSweepService — timer respects the shared gate (#484 AC1, AC
     windowState = { focused: true };
     windowStateListeners.clear();
     PollingVisibilityGate.resetForTests();
+    // The sweep TIMER now requires the autonomous dispatch loop to be
+    // running: a focused window alone is not a reason to spend GitHub
+    // quota (~64 GraphQL points + 18 REST per sweep, per open window).
+    // These suites exercise the timer, so they put the loop in "running".
+    // The off case is pinned by its own test below.
+    AutonomousActivityState.resetForTests();
+    AutonomousActivityState.instance.setStatus("running");
   });
 
   afterEach(() => {

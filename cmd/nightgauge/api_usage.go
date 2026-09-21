@@ -21,17 +21,18 @@ import (
 // matters because the whole point of the ledger is comparing a window from
 // before a change against one from after it.
 type apiUsageRecord struct {
-	TS         string `json:"ts"`
-	Kind       string `json:"kind"`
-	Method     string `json:"method"`
-	Path       string `json:"path"`
-	Op         string `json:"op"`
-	Caller     string `json:"caller"`
-	Status     int    `json:"status"`
-	Cost       int    `json:"cost"`
-	Remaining  int    `json:"remaining"`
-	Cached     bool   `json:"cached"`
-	DurationMs int64  `json:"duration_ms"`
+	TS          string `json:"ts"`
+	Kind        string `json:"kind"`
+	Method      string `json:"method"`
+	Path        string `json:"path"`
+	Op          string `json:"op"`
+	Caller      string `json:"caller"`
+	Status      int    `json:"status"`
+	Cost        int    `json:"cost"`
+	SincePrevMs int64  `json:"since_prev_ms"`
+	Remaining   int    `json:"remaining"`
+	Cached      bool   `json:"cached"`
+	DurationMs  int64  `json:"duration_ms"`
 }
 
 // apiUsageGroup is one row of the report: a caller, operation, or resource
@@ -107,13 +108,16 @@ the ledger off; set it to a path to write somewhere other than the default
 					sinceSuffix(since))
 				return nil
 			}
-			groups, total := groupAPIUsage(recs, byWhat)
+			groups, total, unattributed := groupAPIUsage(recs, byWhat)
 			if asJSON {
 				payload := map[string]interface{}{
 					"records": len(recs),
 					"points":  total,
-					"by":      byWhat,
-					"groups":  groups,
+					// Named so a consumer cannot read `points` as a
+					// per-caller bill. See attributable().
+					"unattributed_points": unattributed,
+					"by":                  byWhat,
+					"groups":              groups,
 				}
 				if resource != "" {
 					// Named in the payload so a consumer cannot mistake a
@@ -123,7 +127,7 @@ the ledger off; set it to a path to write somewhere other than the default
 				}
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(payload)
 			}
-			printAPIUsage(cmd.OutOrStdout(), recs, groups, total, byWhat, top, since)
+			printAPIUsage(cmd.OutOrStdout(), recs, groups, total, unattributed, byWhat, top, since)
 			return nil
 		},
 	}
@@ -257,11 +261,30 @@ func filterAPIUsageResource(recs []apiUsageRecord, resource string) []apiUsageRe
 	return out
 }
 
+// attributionWindow is how recently this process must have observed the
+// rate-limit counter for a cost delta to belong to the call that observed it.
+//
+// Inside a few seconds the only thing that plausibly moved an account-wide
+// budget is the request just made. Beyond it, anything on the same token
+// could have. Five seconds is deliberately generous: it keeps genuine
+// back-to-back call chains attributed while refusing to name a culprit for a
+// five-minute silence.
+const attributionWindow = 5000 // milliseconds
+
+// attributable reports whether a record's Cost can honestly be charged to the
+// caller that produced it. A first priced call in a process (SincePrevMs == 0)
+// has no baseline and no cost to charge; a delta measured across a gap
+// belongs to the account, not to this caller.
+func attributable(r apiUsageRecord) bool {
+	return r.Cost > 0 && r.SincePrevMs > 0 && r.SincePrevMs <= attributionWindow
+}
+
 // groupAPIUsage buckets records by the requested dimension and returns them
 // most-expensive first, along with the total points across all records.
-func groupAPIUsage(recs []apiUsageRecord, by string) ([]apiUsageGroup, int) {
+func groupAPIUsage(recs []apiUsageRecord, by string) ([]apiUsageGroup, int, int) {
 	idx := map[string]*apiUsageGroup{}
 	total := 0
+	unattributed := 0
 	for _, r := range recs {
 		key := apiUsageKey(r, by)
 		g, ok := idx[key]
@@ -269,7 +292,20 @@ func groupAPIUsage(recs []apiUsageRecord, by string) ([]apiUsageGroup, int) {
 			g = &apiUsageGroup{Key: key}
 			idx[key] = g
 		}
-		g.Points += r.Cost
+		// Attribute a cost to its caller only when this process observed the
+		// counter moments earlier. Cost is a delta of an ACCOUNT-wide budget
+		// with a per-process baseline, so across a gap it measures whatever
+		// else drew the budget down — other processes, the `gh` CLI, another
+		// session — and the caller named beside it is simply the next one to
+		// look. Billing that to a caller is how a one-point node(id:) read
+		// came to be reported as 4,638 points, and how every investigation
+		// into this workspace's rate-limit exhaustion chased the wrong
+		// function.
+		if attributable(r) {
+			g.Points += r.Cost
+		} else {
+			unattributed += r.Cost
+		}
 		g.Calls++
 		if r.Cached {
 			g.Cached++
@@ -294,7 +330,7 @@ func groupAPIUsage(recs []apiUsageRecord, by string) ([]apiUsageGroup, int) {
 		// whose row order shuffles cannot be diffed before against after.
 		return out[i].Key < out[j].Key
 	})
-	return out, total
+	return out, total, unattributed
 }
 
 // apiUsageKey picks the grouping dimension. Every branch has a non-empty
@@ -400,8 +436,8 @@ func printAPIBudget(w io.Writer, recs []apiUsageRecord, since time.Duration) {
 		pages, items)
 }
 
-func printAPIUsage(w io.Writer, recs []apiUsageRecord, groups []apiUsageGroup, total int, by string, top int, since time.Duration) {
-	byResource, _ := groupAPIUsage(recs, "resource")
+func printAPIUsage(w io.Writer, recs []apiUsageRecord, groups []apiUsageGroup, total, unattributed int, by string, top int, since time.Duration) {
+	byResource, _, _ := groupAPIUsage(recs, "resource")
 	cached, gets := 0, 0
 	for _, r := range recs {
 		if r.Cached {
@@ -412,7 +448,15 @@ func printAPIUsage(w io.Writer, recs []apiUsageRecord, groups []apiUsageGroup, t
 		}
 	}
 
-	fmt.Fprintf(w, "GitHub API ledger — %d requests%s, %d points billed\n\n", len(recs), sinceSuffix(since), total)
+	fmt.Fprintf(w, "GitHub API ledger — %d requests%s, %d points observed\n", len(recs), sinceSuffix(since), total)
+	if unattributed > 0 {
+		pct := float64(unattributed) / float64(total) * 100
+		fmt.Fprintf(w, "  of which %d pts (%.0f%%) are UNATTRIBUTED — the budget fell while this\n", unattributed, pct)
+		fmt.Fprintf(w, "  process was not calling. Spent by something outside the ledger: another\n")
+		fmt.Fprintf(w, "  nightgauge process, the `gh` CLI in an agent stage, or another session on\n")
+		fmt.Fprintf(w, "  the same token. It is NOT charged to any caller below.\n")
+	}
+	fmt.Fprintln(w)
 
 	fmt.Fprintf(w, "By resource:\n")
 	for _, g := range byResource {
