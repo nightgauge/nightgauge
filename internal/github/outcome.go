@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -48,6 +49,61 @@ var (
 	outcomeModelLocksMu sync.Mutex
 	outcomeModelLocks   = map[string]*sync.Mutex{}
 )
+
+// defaultLinesChangedThresholds seeds the bootstrap model's
+// `lines_changed_thresholds` block.
+var defaultLinesChangedThresholds = map[string]int{"XS": 100, "S": 325, "M": 850, "L": 1850, "XL": 2500}
+
+func cloneLinesChangedThresholds() map[string]int {
+	clone := make(map[string]int, len(defaultLinesChangedThresholds))
+	for size, threshold := range defaultLinesChangedThresholds {
+		clone[size] = threshold
+	}
+	return clone
+}
+
+// backfillFromBootstrap fills every additive section a decoded model leaves
+// absent — a nil map, slice, or pointer field — from newBootstrapComplexityModel,
+// in one reflective pass over complexityModel's top-level fields rather than a
+// per-field special case (#1918). A v0.3.x document predates fields like
+// `learnings` and `lines_changed_thresholds` (#1592/v0.4.0, #1911) entirely, so
+// they decode as nil; without this pass validation rejects the whole document
+// with no recovery short of discarding its accumulated calibration.
+//
+// A map field absent entirely is replaced wholesale; a map field present but
+// missing individual keys (e.g. an operator-edited lines_changed_thresholds
+// with only some sizes set) is topped up key-by-key. Neither path ever
+// overwrites a key or section already present — including a present-but-invalid
+// value — so validateComplexityModelDocument still rejects those as before. The
+// next saveModel call persists the completed document, making the backfill
+// one-way per #1843's precedent for the survival_calibration rename.
+func backfillFromBootstrap(model *complexityModel) {
+	bootstrap := newBootstrapComplexityModel(time.Now().UTC())
+	dst := reflect.ValueOf(model).Elem()
+	src := reflect.ValueOf(bootstrap).Elem()
+	for i := 0; i < dst.NumField(); i++ {
+		dstField := dst.Field(i)
+		srcField := src.Field(i)
+		switch dstField.Kind() {
+		case reflect.Map:
+			if dstField.IsNil() {
+				dstField.Set(srcField)
+				continue
+			}
+			iter := srcField.MapRange()
+			for iter.Next() {
+				key := iter.Key()
+				if !dstField.MapIndex(key).IsValid() {
+					dstField.SetMapIndex(key, iter.Value())
+				}
+			}
+		case reflect.Slice, reflect.Ptr:
+			if dstField.IsNil() {
+				dstField.Set(srcField)
+			}
+		}
+	}
+}
 
 // OutcomeParams holds the parameters needed to record a pipeline outcome.
 type OutcomeParams struct {
@@ -348,6 +404,7 @@ func decodeComplexityModelDocument(data []byte) (*complexityModel, error) {
 		}
 		return nil, err
 	}
+	backfillFromBootstrap(&model)
 	if err := validateComplexityModelDocument(&model); err != nil {
 		return nil, err
 	}
@@ -846,7 +903,7 @@ func newBootstrapComplexityModel(now time.Time) *complexityModel {
 			"medium":   {Modifier: 0, Rationale: "Baseline priority"},
 			"low":      {Modifier: -0.1, Rationale: "Low priority often simpler scope"},
 		},
-		LinesChangedThresholds: map[string]int{"XS": 100, "S": 325, "M": 850, "L": 1850, "XL": 2500},
+		LinesChangedThresholds: cloneLinesChangedThresholds(),
 		Learnings: []string{
 			fmt.Sprintf("%s: Bootstrap model created with universal baseline calibration from cross-repo data.", today),
 		},

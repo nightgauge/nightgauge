@@ -78,9 +78,26 @@ type APILedgerRecord struct {
 	// first call on a resource (no baseline) and for a 304 served from cache
 	// (which never left the machine). Negative drops mean the window reset
 	// between calls and are reported as 0 rather than as a bogus refund.
-	Cost      int   `json:"cost"`
-	Remaining int   `json:"remaining"`
-	Reset     int64 `json:"reset,omitempty"`
+	Cost int `json:"cost"`
+	// SincePrevMs is the wall time between this process's previous priced
+	// call on the same resource and this one. It is the honest qualifier on
+	// Cost.
+	//
+	// Cost is a delta of a counter the whole ACCOUNT shares — every process,
+	// the `gh` CLI, and any other tool on the same token draw it down. The
+	// baseline (`prev`) is per-process and in-memory, so whatever anything
+	// else spent in the gap is billed to this process's next call. In one
+	// workspace ledger 1,587 distinct PIDs wrote ~6 records each, and a
+	// single `node(id:)` read — a one-point query — was recorded at 4,638
+	// points because 5m19s had elapsed since that process last looked.
+	//
+	// A large Cost with a large SincePrevMs is a measurement of the account,
+	// not of the caller named beside it. Readers must not attribute across a
+	// gap; `nightgauge api-usage` buckets those separately. Zero means no
+	// prior observation (first priced call in this process).
+	SincePrevMs int64 `json:"since_prev_ms,omitempty"`
+	Remaining   int   `json:"remaining"`
+	Reset       int64 `json:"reset,omitempty"`
 	// HeaderObserved is true exactly when this request's response carried a
 	// parseable X-RateLimit-Remaining header — independent of Cost and
 	// Cached. A cached (304) hit legitimately costs 0 points (Cost is the
@@ -103,11 +120,12 @@ type APILedgerRecord struct {
 // apiLedger appends request records to a rolling JSONL file. A nil *apiLedger
 // is a no-op, so the disabled path costs one nil check per request.
 type apiLedger struct {
-	mu   sync.Mutex
-	path string
-	f    *os.File
-	enc  *json.Encoder
-	prev map[string]int // resource -> last observed Remaining
+	mu     sync.Mutex
+	path   string
+	f      *os.File
+	enc    *json.Encoder
+	prev   map[string]int       // resource -> last observed Remaining
+	prevAt map[string]time.Time // resource -> when that Remaining was observed
 }
 
 var (
@@ -234,7 +252,7 @@ func openAPILedger() *apiLedger {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil
 	}
-	l := &apiLedger{path: path, prev: map[string]int{}}
+	l := &apiLedger{path: path, prev: map[string]int{}, prevAt: map[string]time.Time{}}
 	if err := l.open(); err != nil {
 		return nil
 	}
@@ -278,10 +296,18 @@ func (l *apiLedger) record(rec APILedgerRecord, remainingHdr string) {
 		if n, err := strconv.Atoi(remainingHdr); err == nil {
 			rec.Remaining = n
 			rec.HeaderObserved = true
+			now := time.Now()
 			if prev, ok := l.prev[rec.Kind]; ok && prev >= n {
 				rec.Cost = prev - n
+				if at, ok := l.prevAt[rec.Kind]; ok {
+					rec.SincePrevMs = now.Sub(at).Milliseconds()
+				}
 			}
 			l.prev[rec.Kind] = n
+			if l.prevAt == nil {
+				l.prevAt = map[string]time.Time{}
+			}
+			l.prevAt[rec.Kind] = now
 		}
 	}
 	_ = l.enc.Encode(&rec)
@@ -389,7 +415,17 @@ func isPassThroughFrame(fn string) bool {
 		strings.HasPrefix(fn, "net/http/"),
 		strings.Contains(fn, "shurcooL"),
 		strings.Contains(fn, "golang.org/x/oauth2"),
-		strings.Contains(fn, "/internal/forge/boardcache."):
+		strings.Contains(fn, "/internal/forge/boardcache."),
+		// Runtime and sync frames are never an answer to "what is costing
+		// me points?" either. `sync.(*Once).doSlow` is the frame you get
+		// when a lazily-initialised read runs inside a Once, and
+		// `runtime.goexit` is the bottom of a goroutine stack: 695 of 9,435
+		// records in one workspace's ledger (7.4%) named one of those two
+		// instead of a caller. The skip list above exists precisely to stop
+		// this and these two slipped past it.
+		strings.HasPrefix(fn, "sync."),
+		strings.HasPrefix(fn, "runtime."),
+		strings.HasPrefix(fn, "internal/poll."):
 		return true
 	}
 	return false

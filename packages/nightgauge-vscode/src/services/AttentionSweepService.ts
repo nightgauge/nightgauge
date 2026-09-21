@@ -53,6 +53,7 @@
 import * as vscode from "vscode";
 import type { AttentionSweepResult, BoardChangedResult } from "./IpcClientBase";
 import type { Logger } from "../utils/logger";
+import { AutonomousActivityState } from "../utils/autonomousActivityState";
 
 /** What asked for a sweep. Echoed to the daemon log so a surprising burst of
  * forge traffic can be traced back to its trigger. */
@@ -439,12 +440,31 @@ export class AttentionSweepService implements vscode.Disposable {
     // Trigger 3: the conservative timer, running only while this window lives.
     if (config.intervalMs > 0) {
       this.timer = setInterval(() => {
-        // #484 — this consumer's own predicate is isWindowActive() ALONE
-        // (no isViewVisible check): the attention inbox stays warm while
-        // the operator is working even with every tree view collapsed. See
-        // the gate's module doc comment for the per-consumer rationale.
+        // #484 — this consumer's own predicate is isWindowActive() (no
+        // isViewVisible check): the attention inbox stays warm while the
+        // operator is working even with every tree view collapsed. See the
+        // gate's module doc comment for the per-consumer rationale.
         if (!PollingVisibilityGate.instance.isWindowActive()) {
           this.deps.logger.debug("Attention sweep timer skipped — window inactive", {});
+          return;
+        }
+        // A focused window is not, by itself, a reason to spend GitHub
+        // quota. This timer used to sweep on window focus alone: a sweep
+        // is ~64 GraphQL points plus 18 REST calls across a six-repo
+        // workspace, so reading unrelated code with the editor focused
+        // cost ~256 points an hour, per open window, with autonomous mode
+        // off and no run in flight. The timer now sweeps only while the
+        // autonomous scheduler is actually running, which is when a board
+        // can change without anyone asking.
+        //
+        // Every other trigger is unchanged and still covers the operator's
+        // own arrival: activation, an explicit repository-view refresh, a
+        // run terminating, and focus regained after idling. Those are
+        // event-driven and consult the one-point board-change probe first,
+        // so turning the timer off does not leave the inbox stale for
+        // anyone who is actually looking at it.
+        if (!AutonomousActivityState.instance.isActive()) {
+          this.deps.logger.debug("Attention sweep timer skipped — autonomous inactive", {});
           return;
         }
         void this.sweep("timer");

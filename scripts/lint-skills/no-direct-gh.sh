@@ -1,67 +1,45 @@
 #!/usr/bin/env bash
-# scripts/lint-skills/no-direct-gh.sh — fail when any non-allowlisted
-# skill SKILL.md contains a direct `gh ` token. Skills target the
-# `nightgauge forge` abstraction (ADR-008); direct `gh` calls
-# bypass the cross-forge boundary and break the GitLab slot of the
-# .nightgauge/skill-smoke/ harness (run by hand; no CI workflow runs it).
+# scripts/lint-skills/no-direct-gh.sh — fail when a skill file a stage
+# EXECUTES contains a direct `gh ` call. Skills target the
+# `nightgauge forge` abstraction (ADR-008); a direct call bypasses the
+# cross-forge boundary, and — the reason this gate's scope was widened —
+# it is invisible to the API ledger, so the quota it spends can never be
+# attributed afterwards.
 #
-# Scope: skills/*/SKILL.md only. Tests, _shared/, and templates/ are
-# exempted by glob — a follow-up issue migrates those.
+# This script is now a thin wrapper around `nightgauge preflight
+# skill-no-direct-gh`, which is the single implementation.
 #
-# Allowlist: scripts/lint-skills/allowlist.txt — one skill directory
-# name per line. Skills listed there are exempted; entries MUST be
-# removed as each skill migrates (see #3349 follow-up).
+# It used to be a second, independent implementation in grep/rg, and the
+# two drifted exactly as duplicated gates do: both globbed
+# `skills/*/SKILL.md`, so `_includes/` and `_shared/` — where every
+# expensive call actually lived, including a whole-board pull per tier in
+# _shared/AUTO_SELECTION.md — were never scanned by either. Fixing the
+# scope in one place and not the other would have re-created the gap in a
+# new shape. One implementation, two entry points.
+#
+# Scope, allowlist semantics and the fenced-code-only rule are documented
+# at internal/preflight/skill_no_direct_gh.go.
 #
 # Exit codes:
-#   0  no direct gh calls in any non-allowlisted skill
-#   1  one or more skills regressed (gate fails)
-#
-# Mirrored as `nightgauge preflight skill-no-direct-gh` so CI uses
-# the Go binary; this shell script is the developer-friendly path.
+#   0  no direct gh calls in any non-allowlisted executed skill file
+#   1  one or more findings (gate fails)
+#   2  the check could not be run (binary not found)
 
 set -euo pipefail
 
 ROOT="${1:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
-ALLOWLIST="${ALLOWLIST:-$ROOT/scripts/lint-skills/allowlist.txt}"
-PATTERN='\bgh '
 
-cd "$ROOT"
+BINARY="${NIGHTGAUGE_BIN:-}"
+if [ -n "$BINARY" ] && [ ! -x "$BINARY" ]; then BINARY=""; fi
+if [ -z "$BINARY" ]; then BINARY="$(command -v nightgauge 2>/dev/null || echo "")"; fi
+if [ -z "$BINARY" ] && [ -x "$ROOT/bin/nightgauge" ]; then BINARY="$ROOT/bin/nightgauge"; fi
 
-# Collect raw matches across all SKILL.md files. Suppress "no matches"
-# exit codes from rg (1) and grep (1) so the script's own exit code is
-# the gate signal, not the search tool's.
-if command -v rg >/dev/null 2>&1; then
-  raw=$(rg -n --no-heading "$PATTERN" --glob 'skills/*/SKILL.md' 2>/dev/null || true)
-else
-  raw=$(grep -E -n -H -r --include=SKILL.md "$PATTERN" skills/ 2>/dev/null || true)
+if [ -z "$BINARY" ]; then
+  echo "no-direct-gh: cannot run — no nightgauge binary found." >&2
+  echo "  Build one with 'make build' or set NIGHTGAUGE_BIN." >&2
+  echo "  Refusing to fall back to a second grep implementation: the last one" >&2
+  echo "  drifted from the Go gate and left _includes/ and _shared/ unscanned." >&2
+  exit 2
 fi
 
-# Filter out lines whose skill name is allowlisted. Format of each line:
-#   skills/<name>/SKILL.md:<lineno>:<match>
-# Check allowlist using grep (POSIX-compatible, no bash associative arrays)
-filtered=""
-while IFS= read -r line; do
-  [ -z "$line" ] && continue
-  name=$(printf '%s' "$line" | sed -E 's|^skills/([^/]+)/SKILL\.md:.*$|\1|')
-  # Check if name is in the allowlist (grep returns 0 if found, 1 if not)
-  if [ -f "$ALLOWLIST" ] && grep -q "^${name}$" "$ALLOWLIST" 2>/dev/null; then
-    continue
-  fi
-  filtered="${filtered}${line}"$'\n'
-done <<< "$raw"
-
-# Trim trailing newline.
-filtered=${filtered%$'\n'}
-
-if [ -z "$filtered" ]; then
-  echo "lint-skills: no direct gh calls found in non-allowlisted skills/*/SKILL.md ✓"
-  exit 0
-fi
-
-echo "lint-skills: ERROR — skills with direct gh calls (use 'nightgauge forge' instead):" >&2
-printf '%s\n' "$filtered" >&2
-echo "" >&2
-echo "See docs/decisions/008-skill-forge-cli.md for the migration table." >&2
-echo "If a skill is intentionally tracked for follow-up migration, add it to" >&2
-echo "scripts/lint-skills/allowlist.txt with a justification comment." >&2
-exit 1
+exec "$BINARY" preflight skill-no-direct-gh --root "$ROOT"

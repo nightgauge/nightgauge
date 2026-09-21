@@ -26,32 +26,52 @@ algorithm. This is the DEFAULT behavior when no issue number is provided and
 
 #### Reference Filter Pattern
 
-All tiers use this structure with tier-specific `gh issue list` flags. First
-fetch candidates, then filter blocked issues via Go binary `hook check-deps`:
+**Pull the board ONCE, then run every tier against that one payload.**
+
+The board read is the expensive call in this skill: a ProjectV2 page costs
+17 GraphQL points against an hourly budget of 5000, and the previous version
+of this section put a raw GitHub-CLI `project item-list` inside the tiers
+with no `--limit`. Seven tiers, two of them retrying critical-then-high, is
+up to fourteen whole-board pulls for one pickup — and a raw `gh` call is
+invisible to `nightgauge api-usage`, so that spend never appeared in any
+report. Read it once into a file; the tiers are `jq` filters over that file
+and cost nothing.
 
 ```bash
-# Step 1: Get candidate issues (no dependency filtering at CLI level —
-# gh CLI does not support blockedBy as a --json field)
-CANDIDATES=$(gh project item-list "$PROJECT_NUMBER" --owner "$OWNER" --format json 2>/dev/null | \
-  jq '[.items[] | select(.status == "Ready" and .type == "ISSUE" and .content.state == "OPEN")
-    | { number: .content.number, title: .content.title, labels: (.content.labels // []) }
-    | select(.labels | map(.name) | index("type:epic") | not)
-  ]')
+BINARY=$(command -v nightgauge 2>/dev/null || echo "nightgauge")
 
-# Step 2: Filter out blocked issues using Go binary hook check-deps
-# (queries GitHub's native blockedBy/blocking GraphQL API)
-ISSUE=$(printf '%s\n' "$CANDIDATES" | jq -r '.[].number' | while read -r n; do
-  BINARY=$(command -v nightgauge 2>/dev/null || echo "nightgauge")
+# Step 1: one board read, cached and ledgered, for the whole selection.
+BOARD=$(mktemp -t ng-board.XXXXXX.json)
+"$BINARY" board list --status Ready --json > "$BOARD" || exit 1
+
+# Every tier filters THIS file. Never re-read the board inside the loop.
+CANDIDATES=$(jq '[.[] | select(.type == "ISSUE" and .state == "OPEN")
+  | { number, title, labels, assignees, milestone, createdAt }
+  | select(.labels | index("type:epic") | not)
+]' "$BOARD")
+```
+
+Apply the tier's own filter to `$CANDIDATES` with `jq` — see the tier table
+above for what each one selects — and stop at the first tier that yields a
+row. Then, and only then, check blockers on the survivors:
+
+```bash
+# Step 2: blocker check, on the selected tier's candidates only.
+# (blockedBy is not a --json field on any CLI; check-deps reads the native
+# GraphQL relationship. It is one call per issue, so it runs on the tier
+# that matched, never on all seven.)
+ISSUE=$(printf '%s\n' "$TIER_CANDIDATES" | jq -r '.[].number' | while read -r n; do
   RESULT=$("$BINARY" hook check-deps "$n" --check-only 2>/dev/null || echo '{"has_open_dependencies":false}')
-  HAS_DEPS=$(printf '%s\n' "$RESULT" | jq -r '.has_open_dependencies')
-  if [ "$HAS_DEPS" = "false" ]; then
-    printf '%s\n' "$CANDIDATES" | jq ".[] | select(.number == $n)" | head -1
+  if [ "$(printf '%s\n' "$RESULT" | jq -r '.has_open_dependencies')" = "false" ]; then
+    printf '%s\n' "$TIER_CANDIDATES" | jq ".[] | select(.number == $n)" | head -1
     break
   fi
 done)
+
+rm -f "$BOARD"
 ```
 
-**NOTE**: The `gh issue list --json` command does NOT support `blockedBy` as a
+**NOTE**: No CLI `issue list --json` surface supports `blockedBy` as a
 field. Blocking relationships must be queried via GraphQL (which
 `nightgauge hook check-deps` handles). Do NOT use `trackedInIssues` — that is a
 different GitHub feature (task list checkboxes) and does not represent blocking.
@@ -95,7 +115,7 @@ When `-i` flag is provided or user rejects auto-selection:
 
 ```bash
 # List open issues (optionally filtered by --label)
-gh issue list --state open --limit 15 --json number,title,labels,assignees \
+nightgauge issue list --state open --limit 15 --json \
   --jq '.[] | "#\(.number) - \(.title) [\(.labels | map(.name) | join(", "))]"'
 ```
 
@@ -110,7 +130,7 @@ No issues with Ready status found on the project board.
 
 Options:
 1. Create a new issue: /nightgauge-issue-create
-2. Check all open issues: gh issue list --state open
+2. Check all open issues: nightgauge issue list --state open
 3. Set an issue to Ready on the project board: `nightgauge project sync-status <number> ready`
 ```
 
@@ -120,10 +140,8 @@ If all tiers are exhausted but blocked issues exist, find the least-blocked
 option (fewest open dependencies):
 
 ```bash
-# Get all ready issues, then check each for blocking relationships
-CANDIDATES=$(gh project item-list "$PROJECT_NUMBER" --owner "$OWNER" --format json 2>/dev/null | \
-  jq -r '[.items[] | select(.status == "Ready" and .type == "ISSUE" and .content.state == "OPEN")
-    | .content.number] | .[]')
+# Reuse the ONE board payload already read in Step 1 — do not read it again.
+CANDIDATES=$(printf '%s\n' "$CANDIDATES" | jq -r '.[].number')
 
 BLOCKED_ISSUES="[]"
 for n in $CANDIDATES; do

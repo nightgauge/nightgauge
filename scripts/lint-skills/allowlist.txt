@@ -27,3 +27,37 @@ nightgauge-backlog-groom
 nightgauge-continuous-improvement
 nightgauge-product-audit
 nightgauge-issue-create
+
+# --- Path-scoped exceptions (one reviewed FILE, not a whole skill) ---
+#
+# Added when the gate's scope widened to `_includes/` and `_shared/`, the
+# directories where every expensive direct call actually lived. Each line
+# below is a file that was read and judged, not a skill waved through.
+# Prefer removing an entry over adding one.
+#
+# Rare one-shot writes on epic completion (comment + close) and a sub-issue
+# read. Low volume, but the read has a cheap equivalent in
+# `nightgauge issue list --epic`. NOT migrated here deliberately: the
+# template is marked "do NOT modify field names or argument format" and the
+# downstream jq depends on its exact shape, and this change set could not
+# exercise it — the account's GraphQL quota was exhausted. Tracked for
+# migration with the epic-completion path under test.
+skills/_shared/EPIC_HANDLING.md
+#
+# `gh run list` / `gh run rerun --failed` on a failed CI run. REST, not
+# GraphQL, and bounded by the retry loop's own cap — it does not touch the
+# budget this gate was widened to protect. Kept because re-running a failed
+# job has no `nightgauge` equivalent today.
+skills/_shared/AUTO_FIX_LOOP.md
+#
+# A deliberate independent cross-check: the PR's existence and its check
+# rollup are read through BOTH `nightgauge forge pr` and the GitHub CLI, so
+# that a bug in our own forge layer cannot make a missing PR look present.
+# Converting it to one source would delete the property that makes it worth
+# having.
+skills/nightgauge-pr-create/_includes/create-and-ci.md
+#
+# Not an invocation at all — a past decision recorded inside a JSON string
+# in an example payload. Exempted rather than reworded so the record stays
+# verbatim.
+skills/_shared/SELF_ASSESSMENT_EPILOGUE.md

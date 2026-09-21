@@ -1209,6 +1209,227 @@ func TestRecordOutcome_MigratesLegacySurvivalKeyOnSave(t *testing.T) {
 	}
 }
 
+// TestDecodeComplexityModelDocument_BackfillsAbsentLinesChangedThresholds
+// reproduces the #1911 failure: a v0.3.x model file has every required key
+// except `lines_changed_thresholds` (introduced in #1592/v0.4.0). Decoding
+// must backfill every size from the bootstrap defaults and preserve the rest
+// of the document's accumulated calibration.
+func TestDecodeComplexityModelDocument_BackfillsAbsentLinesChangedThresholds(t *testing.T) {
+	model := newBootstrapComplexityModel(time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC))
+	model.TotalObservations = 59
+	model.TypeAdjustments["bug"] = typeAdjustment{Modifier: -0.9, Observations: 12, Rationale: "calibrated"}
+
+	var raw map[string]interface{}
+	data, err := yaml.Marshal(model)
+	if err != nil {
+		t.Fatalf("marshal model: %v", err)
+	}
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal to raw map: %v", err)
+	}
+	delete(raw, "lines_changed_thresholds")
+
+	v03x, err := yaml.Marshal(raw)
+	if err != nil {
+		t.Fatalf("marshal v0.3.x-shaped document: %v", err)
+	}
+
+	decoded, err := decodeComplexityModelDocument(v03x)
+	if err != nil {
+		t.Fatalf("decode model without lines_changed_thresholds: %v", err)
+	}
+	for size, want := range defaultLinesChangedThresholds {
+		if got := decoded.LinesChangedThresholds[size]; got != want {
+			t.Errorf("LinesChangedThresholds[%s] = %d, want backfilled default %d", size, got, want)
+		}
+	}
+	if decoded.TotalObservations != 59 {
+		t.Errorf("TotalObservations = %d, want 59 (preserved)", decoded.TotalObservations)
+	}
+	if decoded.TypeAdjustments["bug"].Observations != 12 {
+		t.Errorf("TypeAdjustments[bug] = %+v, want preserved calibration", decoded.TypeAdjustments["bug"])
+	}
+}
+
+// TestDecodeComplexityModelDocument_BackfillsOnlyMissingLinesChangedThresholds
+// asserts a partial block backfills only the absent sizes and leaves
+// operator-set values for the present sizes untouched.
+func TestDecodeComplexityModelDocument_BackfillsOnlyMissingLinesChangedThresholds(t *testing.T) {
+	model := newBootstrapComplexityModel(time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC))
+	model.LinesChangedThresholds = map[string]int{"XS": 42, "M": 999}
+
+	data, err := yaml.Marshal(model)
+	if err != nil {
+		t.Fatalf("marshal model: %v", err)
+	}
+
+	decoded, err := decodeComplexityModelDocument(data)
+	if err != nil {
+		t.Fatalf("decode partially-keyed model: %v", err)
+	}
+	if decoded.LinesChangedThresholds["XS"] != 42 {
+		t.Errorf("LinesChangedThresholds[XS] = %d, want operator-set 42 untouched", decoded.LinesChangedThresholds["XS"])
+	}
+	if decoded.LinesChangedThresholds["M"] != 999 {
+		t.Errorf("LinesChangedThresholds[M] = %d, want operator-set 999 untouched", decoded.LinesChangedThresholds["M"])
+	}
+	for _, size := range []string{"S", "L", "XL"} {
+		if got, want := decoded.LinesChangedThresholds[size], defaultLinesChangedThresholds[size]; got != want {
+			t.Errorf("LinesChangedThresholds[%s] = %d, want backfilled default %d", size, got, want)
+		}
+	}
+}
+
+// TestDecodeComplexityModelDocument_RejectsInvalidPresentLinesChangedThreshold
+// proves backfill applies to absence only: a present-but-non-positive value is
+// still rejected by validateComplexityModelDocument, never silently replaced.
+func TestDecodeComplexityModelDocument_RejectsInvalidPresentLinesChangedThreshold(t *testing.T) {
+	model := newBootstrapComplexityModel(time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC))
+	model.LinesChangedThresholds["M"] = 0
+	model.LinesChangedThresholds["L"] = -5
+
+	data, err := yaml.Marshal(model)
+	if err != nil {
+		t.Fatalf("marshal model: %v", err)
+	}
+
+	if _, err := decodeComplexityModelDocument(data); err == nil {
+		t.Fatal("expected decode error for non-positive lines_changed_thresholds.M, got nil")
+	}
+}
+
+// TestDecodeComplexityModelDocument_BackfillsSeveralAbsentSectionsAtOnce
+// reproduces #1918: a genuine v0.3.x document has no `lines_changed_thresholds`,
+// no `learnings`, and no `critical_files` — three additive sections introduced
+// across three separate releases — and all three must be backfilled from the
+// bootstrap document in a single decode pass, with the rest of the document's
+// accumulated calibration preserved untouched.
+func TestDecodeComplexityModelDocument_BackfillsSeveralAbsentSectionsAtOnce(t *testing.T) {
+	model := newBootstrapComplexityModel(time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC))
+	model.TotalObservations = 59
+	model.TypeAdjustments["bug"] = typeAdjustment{Modifier: -0.9, Observations: 12, Rationale: "calibrated"}
+
+	var raw map[string]interface{}
+	data, err := yaml.Marshal(model)
+	if err != nil {
+		t.Fatalf("marshal model: %v", err)
+	}
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal to raw map: %v", err)
+	}
+	delete(raw, "lines_changed_thresholds")
+	delete(raw, "learnings")
+	delete(raw, "critical_files")
+
+	v03x, err := yaml.Marshal(raw)
+	if err != nil {
+		t.Fatalf("marshal v0.3.x-shaped document: %v", err)
+	}
+
+	decoded, err := decodeComplexityModelDocument(v03x)
+	if err != nil {
+		t.Fatalf("decode model missing several additive sections: %v", err)
+	}
+	for size, want := range defaultLinesChangedThresholds {
+		if got := decoded.LinesChangedThresholds[size]; got != want {
+			t.Errorf("LinesChangedThresholds[%s] = %d, want backfilled default %d", size, got, want)
+		}
+	}
+	if len(decoded.Learnings) == 0 {
+		t.Error("Learnings not backfilled from bootstrap")
+	}
+	if decoded.CriticalFiles == nil {
+		t.Error("CriticalFiles not backfilled from bootstrap")
+	}
+	if decoded.TotalObservations != 59 {
+		t.Errorf("TotalObservations = %d, want 59 (preserved)", decoded.TotalObservations)
+	}
+	if decoded.TypeAdjustments["bug"].Observations != 12 {
+		t.Errorf("TypeAdjustments[bug] = %+v, want preserved calibration", decoded.TypeAdjustments["bug"])
+	}
+}
+
+// TestDecodeComplexityModelDocument_RejectsInvalidPresentCriticalFiles proves
+// backfill applies to absence only for pointer sections too: a present but
+// invalid `critical_files` block is left untouched rather than replaced by the
+// bootstrap default, so validation still rejects it.
+func TestDecodeComplexityModelDocument_RejectsInvalidPresentCriticalFiles(t *testing.T) {
+	model := newBootstrapComplexityModel(time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC))
+	model.CriticalFiles.PerFileModifier = -1
+
+	data, err := yaml.Marshal(model)
+	if err != nil {
+		t.Fatalf("marshal model: %v", err)
+	}
+
+	if _, err := decodeComplexityModelDocument(data); err == nil {
+		t.Fatal("expected decode error for invalid present critical_files.per_file_modifier, got nil")
+	}
+}
+
+// TestRecordOutcome_MigratesMissingLinesChangedThresholdsOnSave proves the
+// backfill is one-way: a v0.3.x model missing lines_changed_thresholds,
+// loaded and saved via RecordOutcome, re-serializes with the complete block.
+func TestRecordOutcome_MigratesMissingLinesChangedThresholdsOnSave(t *testing.T) {
+	dir := t.TempDir()
+	incDir := filepath.Join(dir, ".nightgauge")
+	if err := os.MkdirAll(incDir, 0755); err != nil {
+		t.Fatalf("create .nightgauge dir: %v", err)
+	}
+
+	model := newBootstrapComplexityModel(time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC))
+	model.BootstrapDate = ""
+
+	var raw map[string]interface{}
+	data, err := yaml.Marshal(model)
+	if err != nil {
+		t.Fatalf("marshal model: %v", err)
+	}
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal to raw map: %v", err)
+	}
+	delete(raw, "lines_changed_thresholds")
+
+	v03x, err := yaml.Marshal(raw)
+	if err != nil {
+		t.Fatalf("marshal v0.3.x-shaped document: %v", err)
+	}
+
+	modelPath := filepath.Join(incDir, "complexity-model.yaml")
+	if err := os.WriteFile(modelPath, v03x, 0644); err != nil {
+		t.Fatalf("write v0.3.x model: %v", err)
+	}
+
+	svc := NewOutcomeService(dir)
+	result := svc.RecordOutcome(OutcomeParams{
+		IssueNumber:   42,
+		PRNumber:      57,
+		ModelID:       "claude-sonnet-4-6",
+		PredictedSize: "M",
+		ActualLines:   450,
+		IssueType:     "feature",
+		CompletedAt:   time.Now().UTC().Format(time.RFC3339),
+	})
+	if !result.Recorded || result.Error != "" {
+		t.Fatalf("RecordOutcome on v0.3.x-shaped model = %+v, want recorded", result)
+	}
+
+	saved, err := os.ReadFile(modelPath)
+	if err != nil {
+		t.Fatalf("read saved model: %v", err)
+	}
+	if !bytes.Contains(saved, []byte("lines_changed_thresholds:")) {
+		t.Fatal("saved model did not persist the backfilled lines_changed_thresholds block")
+	}
+
+	reloaded := loadModel(t, dir)
+	for size, want := range defaultLinesChangedThresholds {
+		if got := reloaded.LinesChangedThresholds[size]; got != want {
+			t.Errorf("reloaded LinesChangedThresholds[%s] = %d, want %d", size, got, want)
+		}
+	}
+}
+
 func loadModel(t *testing.T, dir string) *complexityModel {
 	t.Helper()
 	modelPath := filepath.Join(dir, ".nightgauge", "complexity-model.yaml")

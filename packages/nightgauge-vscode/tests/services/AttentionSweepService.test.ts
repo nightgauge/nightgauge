@@ -17,6 +17,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { AutonomousActivityState } from "../../src/utils/autonomousActivityState";
 import {
   AttentionSweepService,
   resolveSweepRepos,
@@ -126,10 +127,19 @@ describe("AttentionSweepService", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
+    // The sweep TIMER now requires the autonomous dispatch loop to be
+    // running. A focused window on its own is not a reason to spend GitHub
+    // quota: a sweep is ~64 GraphQL points plus 18 REST calls across a
+    // six-repo workspace, per open window. The suites here exercise the
+    // timer, so they put the loop in "running"; the off case has its own
+    // test at the bottom of this file.
+    AutonomousActivityState.resetForTests();
+    AutonomousActivityState.instance.setStatus("running");
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    AutonomousActivityState.resetForTests();
   });
 
   it("sweeps once on activation, passing the workspace repos and the trigger", async () => {
@@ -420,6 +430,36 @@ describe("AttentionSweepService", () => {
     ipc.result = { ...emptyResult(), autoResolved: 2 };
     await service.sweep("manual");
     expect(onChanged).toHaveBeenCalledTimes(2);
+
+    service.dispose();
+  });
+
+  it("the timer does not sweep while the autonomous loop is not running", async () => {
+    // The defect this pins: the timer's only predicate was "is this VS Code
+    // window focused?". Reading unrelated code with the editor in front
+    // therefore spent ~64 GraphQL points plus 18 REST calls every 15
+    // minutes, per open window, with autonomous mode off and no pipeline
+    // run in flight — against an hourly GraphQL budget of 5000 shared by
+    // every tool on the token. It was observed sweeping six repos while the
+    // account was already exhausted, taking the timeouts and retrying.
+    //
+    // Activation still sweeps: the operator arriving is a real trigger, and
+    // it is the one that fills the inbox they are about to look at.
+    AutonomousActivityState.resetForTests(); // status defaults to inactive
+    const { service, ipc } = makeService({ config: { intervalMs: 60_000 } });
+
+    service.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ipc.calls.map((c) => c.reason)).toEqual(["activation"]);
+
+    await vi.advanceTimersByTimeAsync(60_000 * 10); // ten intervals
+    expect(ipc.calls.map((c) => c.reason)).toEqual(["activation"]);
+
+    // And it resumes the moment the loop is genuinely running, because that
+    // is when a board can change with nobody asking.
+    AutonomousActivityState.instance.setStatus("running");
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(ipc.calls.map((c) => c.reason)).toEqual(["activation", "timer"]);
 
     service.dispose();
   });

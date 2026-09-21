@@ -57,6 +57,32 @@ func TestCheckComplexityModel_InvalidFileUsesSupportedRepairGuidance(t *testing.
 	}
 }
 
+// TestCheckComplexityModel_V03xFixtureIsHealthy reproduces #1911/#1918: a
+// genuine v0.3.x model file — no lines_changed_thresholds (#1592/v0.4.0), no
+// learnings, no critical_files — must be reported healthy. Every absent
+// additive section is backfilled from bootstrap defaults on decode in one
+// pass, not treated as a validation failure.
+func TestCheckComplexityModel_V03xFixtureIsHealthy(t *testing.T) {
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "tests", "fixtures", "complexity-model-v0.3.x.yaml"))
+	if err != nil {
+		t.Fatalf("read v0.3.x fixture: %v", err)
+	}
+
+	root := t.TempDir()
+	modelPath := filepath.Join(root, ".nightgauge", "complexity-model.yaml")
+	if err := os.MkdirAll(filepath.Dir(modelPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(modelPath, fixture, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	check, warning := checkComplexityModel(root)
+	if !check.OK || warning != "" {
+		t.Fatalf("v0.3.x fixture check = %+v, warning = %q", check, warning)
+	}
+}
+
 func TestCheckComplexityModel_RejectsSymlinkedDirectory(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()

@@ -11,6 +11,17 @@ and this project adheres to
 
 ### Fixed
 
+- The attention sweep no longer runs on its timer just because the editor
+  window has focus. A sweep costs roughly 64 GraphQL points plus 18 REST
+  calls across a six-repo workspace, and window focus was the timer's only
+  condition — so reading unrelated code with Nightgauge installed spent
+  about 256 GitHub points an hour, per open window, with autonomous mode off
+  and no pipeline run in flight. On a busy account that is enough to help
+  exhaust the hourly limit for every other tool sharing the token. The timer
+  now also requires the autonomous dispatch loop to be running. Arriving at
+  the window, refreshing the repositories view, a run finishing, and
+  regaining focus after idling all still sweep as before.
+
 - The Output window is no longer blind to pipeline runs started from a
   terminal (#586). A run discovered by CLI reconciliation now gets its own
   Output window tab — marked `CLI` — which is removed when that run settles.
