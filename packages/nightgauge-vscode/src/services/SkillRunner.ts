@@ -437,6 +437,16 @@ export class SkillRunner {
           onPhaseStart: (_detectedStage, name, index, total) => {
             callbacks?.onPhaseStart?.(callbackStage, name, index, total);
           },
+          // The ordering-derived arm (#1924). This object is an explicit
+          // property list, not a spread of `callbacks`, so a callback the
+          // runner invokes is undefined here until it is named — which is how
+          // #1926 shipped a gap-fill that both layers implemented and no run
+          // ever recorded. Re-keyed to `callbackStage` exactly like
+          // onPhaseStart: the runner reports the stage it DETECTED, and the
+          // durable record is keyed on the stage we were asked to run.
+          onPhasePassed: (_detectedStage, name, index, total) => {
+            callbacks?.onPhasePassed?.(callbackStage, name, index, total);
+          },
           onToolCall: (toolName, toolInput) => {
             const input = toolInput as Record<string, unknown> | undefined;
             const target =

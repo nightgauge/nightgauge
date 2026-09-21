@@ -149,6 +149,26 @@ export class OrchestratorEventDispatcher {
     );
   }
 
+  /**
+   * A phase the run advanced beyond without ever reporting it (#1924).
+   *
+   * Terminal on arrival, so it is NOT routed through onPhaseStart's "a phase
+   * started" channel: a passed phase was never observed running, and only the
+   * ordering of the phase list places the run beyond it.
+   */
+  onPhasePassed(
+    stage: PipelineStage,
+    phaseName: string,
+    phaseIndex: number,
+    totalPhases: number
+  ): void {
+    this.invoke(
+      () => this.callbacks?.onPhasePassed?.(stage, phaseName, phaseIndex, totalPhases),
+      "onPhasePassed",
+      stage
+    );
+  }
+
   onPhaseComplete(
     stage: PipelineStage,
     phaseName: string,

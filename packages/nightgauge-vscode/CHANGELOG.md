@@ -9,6 +9,13 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- Phase progress within a stage is visible while the stage is worked, rather
+  than appearing all at once when it ends. The ordering-derived phases added in
+  0.4.5 were computed and then discarded before they reached the pipeline
+  state, so a long stage still showed a handful of updates followed by a burst.
+
 ## [0.4.5] - 2026-09-20
 
 ### Fixed

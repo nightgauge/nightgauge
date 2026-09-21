@@ -527,6 +527,16 @@ export interface PipelineCallbacks {
     phaseIndex: number,
     totalPhases: number
   ) => void;
+  /**
+   * Called for a phase the run advanced beyond without ever reporting it
+   * (#1924). Terminal on arrival — see OrchestratorEventDispatcher.onPhasePassed.
+   */
+  onPhasePassed?: (
+    stage: PipelineStage,
+    phaseName: string,
+    phaseIndex: number,
+    totalPhases: number
+  ) => void;
   /** Called when a phase completes within a stage (Issue #1029) */
   onPhaseComplete?: (
     stage: PipelineStage,
@@ -14956,6 +14966,15 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           onPhaseStart: (_detectedStage, name, index, total) => {
             markStageOutput();
             this.eventDispatcher.onPhaseStart(stage, name, index, total);
+          },
+          // The ordering-derived arm (#1924). Forwarded here for the same
+          // reason as onPhaseStart: this object is an explicit property list,
+          // and a runner callback that is never named is silently undefined —
+          // which is exactly how gap-fill reached main implemented at both
+          // layers and recorded by no run.
+          onPhasePassed: (_detectedStage, name, index, total) => {
+            markStageOutput();
+            this.eventDispatcher.onPhasePassed(stage, name, index, total);
           },
           onStderr: (data) => {
             markStageOutput();

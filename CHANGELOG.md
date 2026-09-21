@@ -16,6 +16,18 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **Phase gap-fill now actually records anything.** #1926 derived live phase
+  progress from phase ordering, and on the path that runs pipelines from VS
+  Code it produced not one record: `SkillRunner.runStage` builds the stage
+  runner's callback object as an explicit property list, and nobody added
+  `onPhasePassed` to it, so every ordering-derived event was dropped between a
+  producer and a consumer that were both correct. A run measured after the fix
+  shipped still showed the distribution the fix existed to remove — 11 of
+  `feature-planning`'s 14 phases and 14 of `feature-dev`'s 18 arriving in the
+  end-of-stage burst as `unreported`, with zero `passed`. The callback is
+  forwarded at both relay sites, and a test now derives the phase callbacks the
+  runner invokes and fails if a relay site does not forward every one of them.
+
 - **A release build no longer fails on a passing test suite.** The `v0.4.5`
   release workflow failed with 13,875 tests passing and one failing — in a
   teardown, not an assertion. `skillRunner.worktreeContainment.test.ts`'s first

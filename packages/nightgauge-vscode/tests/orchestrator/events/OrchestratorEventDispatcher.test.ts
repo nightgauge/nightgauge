@@ -37,6 +37,7 @@ function makeCallbacks(overrides?: Partial<PipelineCallbacks>): PipelineCallback
     onBackwardTransitionConfirm: vi.fn().mockResolvedValue(false),
     onRoutingDecisionLoaded: vi.fn(),
     onPhaseStart: vi.fn(),
+    onPhasePassed: vi.fn(),
     onPhaseComplete: vi.fn(),
     onToolCall: vi.fn(),
     onStallWarningClear: vi.fn(),
@@ -242,6 +243,24 @@ describe("OrchestratorEventDispatcher — phase events", () => {
     const d = new OrchestratorEventDispatcher(cbs, makeLogger());
     d.onPhaseStart("feature-dev", "Research", 0, 3);
     expect(cbs.onPhaseStart).toHaveBeenCalledWith("feature-dev", "Research", 0, 3);
+  });
+
+  it("onPhasePassed passes all arguments", () => {
+    const cbs = makeCallbacks();
+    const d = new OrchestratorEventDispatcher(cbs, makeLogger());
+    d.onPhasePassed("feature-dev", "Research", 0, 3);
+    expect(cbs.onPhasePassed).toHaveBeenCalledWith("feature-dev", "Research", 0, 3);
+  });
+
+  it("onPhasePassed does not reach the phase-start channel (#1924)", () => {
+    // A passed phase was never observed running -- only the ordering of the
+    // phase list places the run beyond it. Collapsing it onto onPhaseStart
+    // would announce a phase as begun that nothing saw begin.
+    const cbs = makeCallbacks();
+    const d = new OrchestratorEventDispatcher(cbs, makeLogger());
+    d.onPhasePassed("feature-dev", "Research", 0, 3);
+    expect(cbs.onPhaseStart).not.toHaveBeenCalled();
+    expect(cbs.onPhaseComplete).not.toHaveBeenCalled();
   });
 
   it("onPhaseComplete passes all arguments including durationMs", () => {
