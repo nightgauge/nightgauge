@@ -276,6 +276,16 @@ export interface GitHubAuthCheckResult {
   error?: string;
 }
 
+/**
+ * Raw GraphQL envelope returned by `github.graphqlRaw` (matches Go
+ * GitHubGraphQLRawResult) — the same shape `gh api graphql` prints, so a
+ * caller that switches transports reads its response unchanged.
+ */
+export interface GitHubGraphQLRawResult {
+  data?: Record<string, unknown>;
+  errors?: unknown[];
+}
+
 export interface IssueDetail {
   number: number;
   title: string;
@@ -1787,9 +1797,17 @@ export abstract class IpcClientBase implements vscode.Disposable {
     // platform.* IPC methods return "platform client not configured".
     this.forwardPlatformEnv(env);
 
+    // Start the daemon IN the workspace it was told to serve (#1913).
+    // `--workspace` is a string the Go side threads through config and the
+    // scheduler; it never changes the process's working directory. Anything
+    // inside the daemon that resolves a relative path against the cwd —
+    // the API ledger did, and wrote nothing as a result — inherited the
+    // extension host's directory instead. Unset workspaceRoot keeps today's
+    // behaviour (inherit), since there is no better answer to hand it.
     const proc = spawn(this.binaryPath, args, {
       stdio: ["pipe", "pipe", "pipe"],
       env,
+      ...(this.workspaceRoot ? { cwd: this.workspaceRoot } : {}),
     });
 
     this.process = proc;

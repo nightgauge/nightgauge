@@ -21,11 +21,11 @@ package gates
 
 import (
 	"context"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -178,10 +178,11 @@ func (n NoOp) Verify(_ context.Context, _ int, _ string) GateResult {
 // stub GitHub API calls without spinning up a real CLI. Tests assign
 // a replacement that returns canned stdout/stderr.
 //
-// Default implementation runs the real `gh` binary.
+// Default implementation runs the real `gh` binary through
+// github.RunGhSubprocess, so the call is ledgered and pays the shared
+// rate-limit headroom gate (#1913).
 var execGh = func(ctx context.Context, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "gh", args...)
-	return cmd.Output()
+	return github.RunGhSubprocess(ctx, "", args...)
 }
 
 // ghPRViewArgs builds the `gh pr view` argument list, pinning `--repo` when a
