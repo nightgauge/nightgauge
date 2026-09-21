@@ -170,6 +170,17 @@ changelog, and the release workflow refuses a tag that does not.
   `ApplySurvivalVerdicts` and `nightgauge doctor` all recover without an
   operator having to delete the model and lose its accumulated calibration.
 
+- `internal/github/outcome.go` renamed `prediction_accuracy.survival` to
+  `survival_calibration` in #1592 (v0.4.0), and the model decoder's
+  `KnownFields(true)` turned that rename into a hard decode error for any
+  `.nightgauge/complexity-model.yaml` still carrying the legacy key from
+  v0.3.0/v0.3.1 — breaking `RecordOutcome`, `RecordSelfHealEvent`, and
+  `ApplySurvivalVerdicts` for every operator upgrading from v0.3.x.
+  `predictionAccuracy` now decodes the legacy `survival` key as a fallback
+  (preferring `survival_calibration` when both are present) while still
+  rejecting genuinely unknown fields, so a v0.3.x model loads again and
+  self-migrates to the new key one-way on its next save (#1843)
+
 - A Go-dispatched pipeline stage (the scheduler's normal path and the
   autonomous issue-refine path) now always carries a real USD cost cap
   (#1749). `execution.StageOptions.CostBudget` was already wired all the way
@@ -356,17 +367,6 @@ changelog, and the release workflow refuses a tag that does not.
   bucket for stage entries with no adapter stamp (#1846)
 
 ### Fixed
-
-- `internal/github/outcome.go` renamed `prediction_accuracy.survival` to
-  `survival_calibration` in #1592 (v0.4.0), and the model decoder's
-  `KnownFields(true)` turned that rename into a hard decode error for any
-  `.nightgauge/complexity-model.yaml` still carrying the legacy key from
-  v0.3.0/v0.3.1 — breaking `RecordOutcome`, `RecordSelfHealEvent`, and
-  `ApplySurvivalVerdicts` for every operator upgrading from v0.3.x.
-  `predictionAccuracy` now decodes the legacy `survival` key as a fallback
-  (preferring `survival_calibration` when both are present) while still
-  rejecting genuinely unknown fields, so a v0.3.x model loads again and
-  self-migrates to the new key one-way on its next save (#1843)
 
 - `TestNoDirectGitSpawnsInTests` and three other module-root `filepath.Walk`/
   `WalkDir` guards (`TestExactlyOneWorktreeIssueParser`,
