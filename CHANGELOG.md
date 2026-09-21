@@ -16,6 +16,18 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **`pr-merge` no longer hands a PR to the LLM because GitHub had not finished
+  thinking.** GitHub computes a PR's mergeability asynchronously and answers
+  `UNKNOWN` for the first seconds after the PR is created; `pr-merge` starts
+  seconds after `pr-create`. That absent verdict was read as a negative one
+  twice over — the decision function punted on it at its first test, and the
+  bounded CI wait, which also requires a known-mergeable PR, never got its turn
+  at all. The run then paid an LLM to babysit CI to green, the largest single
+  line in a run, for work the deterministic path does for free. The runner now
+  waits a short, separate budget (20 s) for the verdict to land, and if it never
+  does it punts `mergeability-unresolved` rather than reporting a conflict it
+  never observed. A real conflict is still punted immediately.
+
 - **Phase gap-fill now actually records anything.** #1926 derived live phase
   progress from phase ordering, and on the path that runs pipelines from VS
   Code it produced not one record: `SkillRunner.runStage` builds the stage

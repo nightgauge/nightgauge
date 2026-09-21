@@ -50,6 +50,7 @@ It then evaluates a pure decision function over the typed snapshot:
 | `OPEN`   | `MERGEABLE`   | `BLOCKED` / `UNSTABLE` | none, CI pending | approved/none | **wait for CI** → re-evaluate                                            |
 | `OPEN`   | `MERGEABLE`   | `BLOCKED` / `UNSTABLE` | **no check yet** | approved/none | **wait (grace)** → re-evaluate; punt `no-checks-created` if none appears |
 | `OPEN`   | `MERGEABLE`   | `BLOCKED` / `UNSTABLE` | all concluded    | approved/none | punt `dirty-merge-state`                                                 |
+| `OPEN`   | `UNKNOWN`     | -                      | -                | -             | **wait for a verdict** → re-evaluate; punt `mergeability-unresolved`     |
 | `OPEN`   | `CONFLICTING` | -                      | -                | -             | punt                                                                     |
 | `OPEN`   | `MERGEABLE`   | `DIRTY` / `BEHIND`     | -                | -             | punt                                                                     |
 | `OPEN`   | `MERGEABLE`   | `CLEAN`                | any              | -             | punt                                                                     |
@@ -80,6 +81,38 @@ When the extension's LLM pr-merge skill runs (after a punt, or when the Go
 binary could not run), it first applies the same check to the branch's
 upstream head. A head that cannot be inspected is logged and passed; the
 pr-create push and the post-stage repair are the other layers of the guard.
+
+### Bounded mergeability wait (Issue #1933)
+
+GitHub computes `mergeable` **asynchronously** and answers `UNKNOWN` for the
+first seconds after a PR is created or pushed to. pr-merge starts seconds after
+pr-create, so the first snapshot of a pipeline-authored PR routinely carries no
+verdict yet.
+
+`UNKNOWN` is the **absence** of a verdict, not a negative one — but every
+downstream test read it as negative. `Decide` tests `mergeable != MERGEABLE`
+first, so a value GitHub was still computing outranked every other signal and
+punted `not-mergeable: UNKNOWN`; `mergeBlockedByPendingCI` demands `MERGEABLE`
+too, so the #297 CI wait below **never got its turn at all**. The LLM path then
+babysat CI to green — the single largest line in the run — for work the
+deterministic path does for free once the verdict lands.
+
+The runner now polls for the verdict before `Decide` reaches one:
+`DefaultMergeabilityPolls` × `DefaultMergeabilityPollInterval` = 10 × 2 s = 20 s.
+Its own budget, deliberately short — mergeability resolves in seconds, unlike
+CI, which takes minutes and gets the far larger budget below. The wait stops as
+soon as the verdict lands or the PR leaves `OPEN`; a transient fetch error keeps
+it alive (the budget bounds it, not the first bad response) while a rate limit
+surfaces immediately, as elsewhere in this path.
+
+Exhausting the budget punts **`mergeability-unresolved`**, deliberately distinct
+from `not-mergeable: CONFLICTING`: a punt must never report a conflict the
+runner did not observe. A real `CONFLICTING` verdict is never waited on — it is
+a verdict, and waiting would only delay the LLM path that has to resolve it.
+
+This is a race, so it is not observable on every run: a snapshot that happens to
+arrive after GitHub finished computing takes the deterministic path and looks
+correct. See `prmerge_mergeability_1933_test.go`, which pins the losing side.
 
 ### Bounded CI wait (Issue #297)
 

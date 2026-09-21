@@ -90,6 +90,18 @@ const (
 	// entry from an unrelated issue must never block someone's merge; the
 	// whole-base sweep is `knowledge validate --conformance`.
 	ReasonKnowledgeNonConformant = "knowledge-non-conformant"
+	// ReasonMergeabilityUnresolved is recorded when GitHub never finished
+	// computing `mergeable` within the bounded wait (#1933).
+	//
+	// Deliberately NOT `not-mergeable: UNKNOWN`. UNKNOWN is the absence of a
+	// verdict, not a negative one, and reading it as a conflict is what punted
+	// the deterministic path eleven seconds into every run that lost the race:
+	// `Decide` tested `Mergeable != "MERGEABLE"` first, so a value GitHub was
+	// still computing outranked every other signal, and `MergeBlockedByPendingCI`
+	// — which also demands MERGEABLE — meant the #297 CI wait never got its
+	// turn at all. A punt that survives the wait names the absence, so it can
+	// never again be read as a conflict that was actually diagnosed.
+	ReasonMergeabilityUnresolved = "mergeability-unresolved"
 	// ReasonGeneratedSteering is recorded (with PathRefused) when an AGENTS.md
 	// at the PR head carries the pipeline's managed Codex steering block —
 	// generated, per-stage content that must never reach the default branch
@@ -239,6 +251,23 @@ func logPuntSnapshot(prNumber int, reason string, snap PRViewSnapshot) {
 		len(snap.StatusCheckRollup), strings.Join(checks, ", "))
 }
 
+// mergeableUnknown is GitHub's "I have not computed this yet" answer for a
+// pull request's `mergeable` field. It is returned for the first seconds after
+// a push or a PR creation, and pr-merge starts seconds after pr-create.
+const mergeableUnknown = "UNKNOWN"
+
+// DefaultMergeabilityPolls / DefaultMergeabilityPollInterval bound the wait for
+// GitHub to compute mergeability (#1933).
+//
+// Its own budget, deliberately short: mergeability resolves in seconds, unlike
+// CI, which takes minutes and gets the far larger #297 budget. A long budget
+// here would delay the punt on a PR whose mergeability genuinely never
+// resolves, and that PR needs the LLM path promptly.
+const (
+	DefaultMergeabilityPolls        = 10
+	DefaultMergeabilityPollInterval = 2 * time.Second
+)
+
 // DefaultECPolls / DefaultECPollInterval mirror the eventual-consistency
 // budget the TS verifyPostMergeState uses. Re-declared here so the Go runner
 // matches the existing tolerance without a runtime dependency on the TS path.
@@ -263,7 +292,13 @@ type DeterministicRunner struct {
 	// ciNoCheckGrace bounds the prefix of the CI wait spent on a PR whose
 	// check rollup is still empty (#1027) — see DefaultCINoCheckGracePolls.
 	ciNoCheckGrace int
-	now            func() time.Time
+	// mergeabilityPollInterval / mergeabilityPollMax bound the wait for GitHub
+	// to compute `mergeable` (#1933) — a third budget, separate from both the
+	// EC budget above and the CI budget, because it is waiting on a different
+	// thing on a different timescale.
+	mergeabilityPollInterval time.Duration
+	mergeabilityPollMax      int
+	now                      func() time.Time
 	// knowledgeConformance checks the issue's knowledge entries against the
 	// frontmatter contract. Injectable for tests; nil disables the gate.
 	knowledgeConformance func(workdir string, issueNumber int) (*knowledge.ConformanceResult, error)
@@ -285,7 +320,11 @@ func NewDeterministicRunner() *DeterministicRunner {
 		ciPollInterval: DefaultCIPollInterval,
 		ciPollMax:      DefaultCIPollMax,
 		ciNoCheckGrace: DefaultCINoCheckGracePolls,
-		now:            time.Now,
+
+		mergeabilityPollInterval: DefaultMergeabilityPollInterval,
+		mergeabilityPollMax:      DefaultMergeabilityPolls,
+
+		now: time.Now,
 
 		knowledgeConformance: knowledge.ValidateConformanceForIssue,
 		steeringGate: func(ctx context.Context, workdir, headRef string) (codexprovision.PRHeadVerdict, error) {
@@ -354,6 +393,48 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 	if refused := r.refuseGeneratedSteering(ctx, workdir, prNumber, snap); refused != nil {
 		ph.supersedeInFlight()
 		return finish(*refused, nil)
+	}
+
+	// Bounded mergeability wait (#1933). GitHub computes `mergeable`
+	// asynchronously and answers UNKNOWN for the first seconds after a PR is
+	// created; pr-merge starts seconds after pr-create, so the first snapshot
+	// of a pipeline-authored PR routinely has no verdict yet.
+	//
+	// This runs BEFORE Decide because UNKNOWN is the absence of a verdict, and
+	// every downstream test treats it as a negative one: Decide punts on
+	// `Mergeable != "MERGEABLE"` at its first test, and MergeBlockedByPendingCI
+	// demands MERGEABLE too, so an unresolved value did not merely mis-answer
+	// one question — it denied the #297 CI wait its turn entirely, and the LLM
+	// path then babysat CI to green at real per-run cost for work this path
+	// does for free once the verdict lands.
+	//
+	// It runs AFTER the steering gate for the reason that gate documents: a
+	// refusal must precede anything that can punt, and waiting here would
+	// otherwise delay a refusal the runner can already make.
+	if snap.State == "OPEN" && snap.Mergeable == mergeableUnknown {
+		waited, waitErr := r.waitForMergeability(ctx, gh, prNumber, snap)
+		if waitErr != nil {
+			ph.supersedeInFlight()
+			return finish(PRMergeResult{
+				Path:     PathPunt,
+				PRNumber: prNumber,
+				PRState:  snap.State,
+				Reason:   classifyFetchError(waitErr),
+			}, nil)
+		}
+		snap = waited
+		// Still no verdict when the budget expired. Punt — but name the absence
+		// rather than reporting a conflict the runner never observed.
+		if snap.State == "OPEN" && snap.Mergeable == mergeableUnknown {
+			ph.supersedeInFlight()
+			logPuntSnapshot(prNumber, ReasonMergeabilityUnresolved, snap)
+			return finish(PRMergeResult{
+				Path:     PathPunt,
+				PRNumber: prNumber,
+				PRState:  snap.State,
+				Reason:   ReasonMergeabilityUnresolved,
+			}, nil)
+		}
 	}
 
 	decision := Decide(snap)
@@ -633,6 +714,42 @@ func (r *DeterministicRunner) fetchWithPolling(ctx context.Context, gh ghClient,
 	}
 	if lastErr != nil && last.State == "" {
 		return PRViewSnapshot{}, lastErr
+	}
+	return last, nil
+}
+
+// waitForMergeability polls until GitHub has computed the PR's `mergeable`
+// field, or the bounded budget expires (#1933).
+//
+// Returns the last snapshot seen either way; the caller decides what an
+// unresolved verdict means. It stops early on any resolution — including the
+// PR leaving OPEN — because a MERGED or CLOSED PR has a verdict of its own that
+// Decide already handles, and continuing to poll would only delay it.
+//
+// A transient fetch error keeps the wait alive: the budget, not the first bad
+// response, is what bounds this. Rate limits are the exception, surfaced
+// immediately, matching fetchWithPolling and waitForCleanMergeState
+// (#3020 / ADR-004) — retrying a rate limit inside the deterministic path is
+// how the path spends its budget earning nothing.
+func (r *DeterministicRunner) waitForMergeability(ctx context.Context, gh ghClient, prNumber int, initial PRViewSnapshot) (PRViewSnapshot, error) {
+	last := initial
+	for poll := 0; poll < r.mergeabilityPollMax; poll++ {
+		select {
+		case <-ctx.Done():
+			return last, ctx.Err()
+		case <-time.After(r.mergeabilityPollInterval):
+		}
+		snap, err := gh.View(ctx, prNumber)
+		if err != nil {
+			if isRateLimitErr(err) {
+				return last, err
+			}
+			continue
+		}
+		last = snap
+		if snap.State != "OPEN" || snap.Mergeable != mergeableUnknown {
+			return snap, nil
+		}
 	}
 	return last, nil
 }
