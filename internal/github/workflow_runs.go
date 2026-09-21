@@ -75,7 +75,9 @@ func (s *CIService) listWorkflowRuns(ctx context.Context, owner, repo, workflowF
 	wf = strings.TrimPrefix(wf, "/")
 
 	q := url.Values{}
-	q.Set("branch", branch)
+	if branch != "" {
+		q.Set("branch", branch)
+	}
 	q.Set("status", "completed")
 	if event != "" {
 		q.Set("event", event)
