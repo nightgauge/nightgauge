@@ -124,12 +124,44 @@ signature. Detections of this kind are generic by name (`Malware-gen`,
 `TR/Malware`, `Trojan.Malware`, or a bare ML score) and appear on a small
 minority of engines while every major vendor reports the file clean.
 
-If you are assessing such a flag, the checks above are the ones that carry
-information: a valid provenance attestation and an Apple notarization together
-establish that the artifact is exactly what this repository built from the
-named commit, and that Apple's malware scanning cleared it. A generic heuristic
-name from a minority of engines, with no prevalence and no family attribution,
-does not.
+### The v0.4.4 case, and how to read it
+
+The `darwin-arm64` .vsix for v0.4.4 was flagged by 6 of 66 engines on
+VirusTotal. The important detail is what happened to the executable inside it.
+
+VirusTotal unpacks archives and scans the contained files as their own
+reports. The .vsix and its bundled Go binary therefore have separate verdicts:
+
+| File                 | SHA-256           | Verdict    |
+| -------------------- | ----------------- | ---------- |
+| The .vsix container  | `30d9182a…f89fa5` | 6 / 66     |
+| The Mach-O inside it | `d6855c8d…96c2`   | **0 / 66** |
+
+Every engine that flagged the container reports the executable itself
+`Undetected` — Avast, AVG, Avira, WithSecure, Ikarus and Cynet included. The
+binary's report is public:
+
+```text
+https://www.virustotal.com/gui/file/d6855c8d71521e01bb4e09e3a67ec227429af70d1414c7700bd90685706796c2
+```
+
+This is the shape of a container-level false positive. Archive scanning scores
+structure — entropy, layout, a large opaque executable sitting beside a set of
+shell scripts — while file scanning analyses the code itself. The first found
+something structurally unusual; the second, looking at the actual executable,
+found nothing.
+
+### What carries information when assessing a flag
+
+A valid provenance attestation and an Apple notarization together establish
+that the artifact is exactly what this repository built from the named commit,
+and that Apple's malware scanning cleared it. Alongside a 0/66 verdict on the
+executable from the scanner that raised the flag, that is three independent
+organisations — Apple, GitHub and VirusTotal — reaching the same conclusion by
+different methods.
+
+A generic heuristic name from a minority of engines, with no prevalence and no
+family attribution, does not carry comparable weight.
 
 To report a suspected false positive or any security concern, see
 [SECURITY.md](SECURITY.md).

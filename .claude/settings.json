@@ -1,7 +1,11 @@
 {
   "autoMemoryEnabled": false,
   "permissions": {
-    "allow": ["Bash(__NEW_LINE_2d5d70ec07396d52__ echo \"\")"]
+    "allow": [
+      "Bash(__NEW_LINE_2d5d70ec07396d52__ echo \"\")",
+      "Bash(git tag:*)",
+      "Bash(git push origin v*)"
+    ]
   },
   "hooks": {
     "PreToolUse": [

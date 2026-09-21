@@ -16,6 +16,24 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **The RC dry-run scans its artifacts too.** `staging.yml` was the one release
+  path that did not run the ClamAV gate, which is backwards: the RC is the
+  build a release is promoted from, so catching a problem there costs a retag
+  rather than a withdrawal.
+
+### Changed
+
+- **`docs/ARTIFACT_VERIFICATION.md` now cites VirusTotal's own verdict on the
+  executable.** VirusTotal unpacks archives and scans contained files as
+  separate reports, so the v0.4.4 `.vsix` and the Go binary inside it have
+  different verdicts: the container scored 6/66, the executable `d6855c8d…96c2`
+  scored **0/66**, with every engine that flagged the container — Avast, AVG,
+  Avira, WithSecure, Ikarus, Cynet — reporting the binary `Undetected`. That is
+  a container-level false positive, and it means Apple, GitHub and VirusTotal
+  independently agree the artifact is clean.
+
+### Added
+
 - **Every release artifact is malware-scanned before it is published or
   attested.** v0.4.4's `darwin-arm64` .vsix was flagged on VirusTotal (6 of 66
   engines, all generic heuristics) after it reached the Marketplace. The

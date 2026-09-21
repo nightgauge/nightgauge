@@ -208,6 +208,34 @@ jobs:
           done
           [[ "$COUNT" -eq 3 ]] || { echo "ERROR: expected 3 VSIXs, found $COUNT"; exit 1; }
 
+      # The RC is the build a release is promoted FROM, so it is the one most
+      # worth scanning -- catching a problem here costs a retag, catching it
+      # after publish costs a withdrawal. release.yml and marketplace-publish.yml
+      # run this same script; without it here the dry-run was the one release
+      # path that did not exercise the gate.
+      #
+      # Not the exit code alone: clamscan exits 0 both for a clean artifact and
+      # for one it never read. See scripts/malware-scan.sh.
+      - name: Malware scan (ClamAV)
+        run: |
+          set -euo pipefail
+          brew install --quiet clamav
+          CLAMETC="$(brew --prefix)/etc/clamav"
+          mkdir -p "$CLAMETC" "$(brew --prefix)/var/lib/clamav"
+          sed 's/^Example/#Example/' "$CLAMETC/freshclam.conf.sample" > "$CLAMETC/freshclam.conf"
+          freshclam --quiet
+          bash scripts/malware-scan.sh \
+            --report "$RUNNER_TEMP/clamav-report.json" \
+            packages/nightgauge-vscode/*.vsix bin/
+
+      - name: Upload malware scan report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: clamav-scan-report-rc
+          path: ${{ runner.temp }}/clamav-report.json
+          if-no-files-found: warn
+
       # syft powers the `sboms:` block in .goreleaser.yml. The RC dry-run must
       # exercise the exact same SBOM path as the real release, so install syft
       # (SHA-pinned) here too.
