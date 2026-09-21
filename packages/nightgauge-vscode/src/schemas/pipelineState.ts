@@ -167,6 +167,7 @@ export const StagePhaseSchema = z.object({
     "pending",
     "running",
     "complete",
+    "passed",
     "skipped",
     "unreported",
     "failed",

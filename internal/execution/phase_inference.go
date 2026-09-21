@@ -156,10 +156,15 @@ func NewPhaseInferer(stage string) *PhaseInferer {
 	phases := stagePhaseTables[stage]
 	rules := stageRules(stage)
 	return &PhaseInferer{
-		stage:   stage,
-		phases:  phases,
-		rules:   rules,
-		enabled: len(phases) > 0 && len(rules) > 0,
+		stage:  stage,
+		phases: phases,
+		rules:  rules,
+		// A phase table alone is enough (#1924). Gap-fill derives progress from
+		// ORDERING, so it works for a stage that self-reports markers and has no
+		// inference rules at all; rules only add extra landmarks to fill between.
+		// Requiring both is what kept gap-fill off any stage the rule table had
+		// not been taught yet.
+		enabled: len(phases) > 0,
 		cursor:  -1,
 	}
 }
@@ -176,16 +181,37 @@ func (p *PhaseInferer) markerFor(index int) (*PhaseMarker, bool) {
 	}, true
 }
 
-func (p *PhaseInferer) advanceTo(index int) (*PhaseMarker, bool) {
+// advanceTo moves the cursor to index and returns the marker for it, plus the
+// markers for every phase the cursor jumped OVER (#1924).
+//
+// The jumped-over phases are the whole point: a run that reports 1 and then 9
+// was in 2..8 and said nothing, and before this they vanished until the
+// end-of-stage back-fill. They are returned separately from the advance because
+// they are a weaker claim — see RuntimeState.PassPhase.
+func (p *PhaseInferer) advanceTo(index int) (*PhaseMarker, []PhaseMarker, bool) {
 	if index <= p.cursor {
-		return nil, false
+		return nil, nil, false
 	}
 	m, ok := p.markerFor(index)
 	if !ok {
-		return nil, false
+		return nil, nil, false
 	}
+	passed := p.gapBelow(index)
 	p.cursor = index
-	return m, true
+	return m, passed, true
+}
+
+// gapBelow returns markers for the unreported phases strictly between the
+// cursor and index. Callers hold no lock; PhaseInferer is single-goroutine,
+// driven by the one output-scanning loop in manager.go.
+func (p *PhaseInferer) gapBelow(index int) []PhaseMarker {
+	var passed []PhaseMarker
+	for i := p.cursor + 1; i < index; i++ {
+		if m, ok := p.markerFor(i); ok {
+			passed = append(passed, *m)
+		}
+	}
+	return passed
 }
 
 // Start emits the stage's first phase. Call once when output begins.
@@ -193,13 +219,14 @@ func (p *PhaseInferer) Start() (*PhaseMarker, bool) {
 	if !p.enabled {
 		return nil, false
 	}
-	return p.advanceTo(0)
+	m, _, ok := p.advanceTo(0)
+	return m, ok
 }
 
 // ObserveToolUse returns a marker when the tool call advances the phase.
-func (p *PhaseInferer) ObserveToolUse(toolName string, input map[string]any) (*PhaseMarker, bool) {
+func (p *PhaseInferer) ObserveToolUse(toolName string, input map[string]any) (*PhaseMarker, []PhaseMarker, bool) {
 	if !p.enabled {
-		return nil, false
+		return nil, nil, false
 	}
 	best := -1
 	for _, r := range p.rules {
@@ -208,17 +235,22 @@ func (p *PhaseInferer) ObserveToolUse(toolName string, input map[string]any) (*P
 		}
 	}
 	if best == -1 {
-		return nil, false
+		return nil, nil, false
 	}
 	return p.advanceTo(best)
 }
 
 // ObserveRealMarker syncs the cursor forward when a genuine marker was emitted,
 // so inferred markers never regress or duplicate a real one.
-func (p *PhaseInferer) ObserveRealMarker(index int) {
-	if p.enabled && index > p.cursor {
-		p.cursor = index
+// A real marker also closes a gap: a skill that printf's 0 then 6 was in 1..5
+// and never said so, so the jumped-over phases are returned here too (#1924).
+func (p *PhaseInferer) ObserveRealMarker(index int) []PhaseMarker {
+	if !p.enabled || index <= p.cursor {
+		return nil
 	}
+	passed := p.gapBelow(index)
+	p.cursor = index
+	return passed
 }
 
 // toolUse is a single tool call extracted from an assistant message.

@@ -16,6 +16,11 @@ import { PhaseTreeItem, type PhaseStatus } from "../../../src/views/items/PhaseT
  * demonstrably started. It is the status that identifies a stuck stage, so the
  * drift did not just lose a label, it lost the finding (#1558).
  *
+ * `passed` (#1924) is the ordering-derived arm: the run was observed at a later
+ * phase, so it demonstrably moved beyond this one, but it was never seen to
+ * run. It sits between `complete` and `unreported` and must render as neither —
+ * a check mark would claim evidence it does not have.
+ *
  * `superseded` and `degraded` (#1850) split what `failed` used to carry, and
  * are exactly the kind of addition this test exists to catch: a green run that
  * rendered a red ✗ is the same class of defect as #1009's, reached from the
@@ -25,6 +30,7 @@ const TS_PHASE_STATUSES: PhaseStatus[] = [
   "pending",
   "running",
   "complete",
+  "passed",
   "skipped",
   "unreported",
   "failed",

@@ -773,6 +773,17 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 			}
 			// Detect phase markers in skill output
 			if opts.PhaseEventFn != nil {
+				// Phases the run jumped over are reported before the phase that
+				// revealed them, so the durable history stays in phase order
+				// rather than in discovery order (#1924).
+				emitPassed := func(passed []PhaseMarker) {
+					if opts.PhasePassedFn == nil {
+						return
+					}
+					for _, m := range passed {
+						opts.PhasePassedFn(m.Stage, m.Name, m.Index, m.Total)
+					}
+				}
 				// Emit the stage's first phase as soon as output starts so
 				// non-self-reporting stages show a live phase immediately.
 				if !started {
@@ -782,12 +793,13 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 					}
 				}
 				if marker, ok := ParsePhaseMarker(lineStr); ok {
-					inferer.ObserveRealMarker(marker.Index) // real marker wins
+					emitPassed(inferer.ObserveRealMarker(marker.Index)) // real marker wins
 					opts.PhaseEventFn(marker.Stage, marker.Name, marker.Index, marker.Total)
 				}
 				// Infer phase advancement from assistant-message tool calls.
 				for _, tu := range extractToolUses(lineStr) {
-					if m, ok := inferer.ObserveToolUse(tu.Name, tu.Input); ok {
+					if m, passed, ok := inferer.ObserveToolUse(tu.Name, tu.Input); ok {
+						emitPassed(passed)
 						opts.PhaseEventFn(m.Stage, m.Name, m.Index, m.Total)
 					}
 				}
@@ -1466,6 +1478,12 @@ type StageOptions struct {
 	// PhaseEventFn is called when a phase:start marker is detected in skill stdout.
 	// Arguments: stage name, phase name, index, total.
 	PhaseEventFn func(stage, name string, index, total int)
+	// PhasePassedFn is called for each phase the run advanced beyond without
+	// ever reporting it (#1924). Separate from PhaseEventFn because it is a
+	// weaker claim — ordering, not observation — and its records are terminal
+	// on arrival rather than a running phase awaiting a close. See
+	// state.RuntimeState.PassPhase.
+	PhasePassedFn func(stage, name string, index, total int)
 }
 
 // buildRunOptions maps the orchestrator-layer StageOptions onto the

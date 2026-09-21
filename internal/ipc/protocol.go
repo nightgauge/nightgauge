@@ -1186,7 +1186,10 @@ type PipelineNotifyPhaseTransitionParams struct {
 	// "unreported" means the stage ended without ever saying. Both are
 	// terminal, and the distinction has to exist on the wire or the durable
 	// record cannot carry it either.
-	EventType string `json:"eventType"` // "start" | "complete" | "skip" | "unreported" | "fail"
+	// "passed" (#1924) is the ordering-derived arm: phases the run demonstrably
+	// moved beyond without ever announcing them, settled live rather than at the
+	// end-of-stage back-fill.
+	EventType string `json:"eventType"` // "start" | "complete" | "passed" | "skip" | "unreported" | "fail"
 	// RunID is the run identity the server keys on (ADR-017 step 4, Decision
 	// 1). REQUIRED: absent is run_id_required, non-canonical is
 	// run_id_invalid. RUN-PROGRESS class (Decision 3). A scheduler-owned run is

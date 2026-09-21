@@ -262,6 +262,11 @@ export interface SkillRunnerCallbacks {
   onStdout?: (stage: PipelineStage, data: string) => void;
   onStderr?: (stage: PipelineStage, data: string) => void;
   onPhaseStart?: (stage: PipelineStage, name: string, index: number, total: number) => void;
+  /**
+   * A phase the run advanced beyond without ever reporting it (#1924).
+   * Terminal on arrival; see PipelineStateService.markPhasePassed.
+   */
+  onPhasePassed?: (stage: PipelineStage, name: string, index: number, total: number) => void;
   onTokenUsage?: (usage: {
     inputTokens: number;
     outputTokens: number;

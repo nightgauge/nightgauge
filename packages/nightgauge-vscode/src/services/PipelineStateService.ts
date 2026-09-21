@@ -113,6 +113,10 @@ export interface StagePhase {
     | "pending"
     | "running"
     | "complete"
+    // #1924. The run was observed at a LATER phase, so ordering proves it moved
+    // beyond this one, but it was never seen to run. Between `complete`
+    // (observed) and `unreported` (no ordering claim at all).
+    | "passed"
     | "failed"
     | "skipped"
     | "unreported"
@@ -1749,6 +1753,26 @@ export class PipelineStateService implements vscode.Disposable {
    * writing "skipped" for it told operators fourteen phases were deliberately
    * skipped on a run whose gate record and session log prove two of them ran.
    */
+  /**
+   * Record a phase the run advanced BEYOND without ever reporting it (#1924).
+   *
+   * Not `markPhaseUnreported`: that is the end-of-stage back-fill and asserts
+   * only that nothing was ever said. This asserts more — the run was observed
+   * at a LATER phase, and phases are ordered, so it demonstrably moved past
+   * this one, and it can be said live rather than at stage end.
+   *
+   * Not `completePhase` either: the phase was never seen to run, so claiming a
+   * completion would manufacture evidence. Between the two by design.
+   */
+  async markPhasePassed(
+    stage: string,
+    phaseName: string,
+    total: number,
+    registryIndex?: number
+  ): Promise<void> {
+    return this.recordTerminalPhase(stage, phaseName, total, "passed", registryIndex);
+  }
+
   async markPhaseUnreported(
     stage: string,
     phaseName: string,
@@ -1760,14 +1784,14 @@ export class PipelineStateService implements vscode.Disposable {
 
   /**
    * Shared body for the terminal, append-only phase outcomes (skip /
-   * unreported). Idempotent on name: a phase that already carries ANY status
+   * unreported / passed). Idempotent on name: a phase that already carries ANY status
    * wins, because it carries evidence this back-fill does not.
    */
   private async recordTerminalPhase(
     stage: string,
     phaseName: string,
     total: number,
-    status: "skipped" | "unreported",
+    status: "skipped" | "unreported" | "passed",
     registryIndex?: number,
     reason?: string
   ): Promise<void> {
@@ -1795,7 +1819,7 @@ export class PipelineStateService implements vscode.Disposable {
       phaseName,
       registryIndex ?? phases.length - 1,
       total,
-      status === "skipped" ? "skip" : "unreported"
+      status === "skipped" ? "skip" : status === "passed" ? "passed" : "unreported"
     );
   }
 
@@ -1836,7 +1860,7 @@ export class PipelineStateService implements vscode.Disposable {
     phaseName: string,
     index: number,
     total: number,
-    eventType: "skip" | "unreported" | "fail"
+    eventType: "skip" | "unreported" | "fail" | "passed"
   ): void {
     const runId = this.wireIdentityOrSkip("pipeline.notifyPhaseTransition", stage);
     if (runId === null) return;

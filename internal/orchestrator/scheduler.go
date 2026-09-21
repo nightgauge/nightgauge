@@ -123,10 +123,13 @@ type StageRunParams struct {
 	// it rather than sending an empty id the server's identity-bearing verbs
 	// would then hard-reject, silently, one swallowed `.catch` at a time
 	// (ADR-017 Decision 10).
-	RunID             string
-	AllowedTools      []string
-	Prompt            string
-	PhaseEventFn      func(stage, name string, index, total int)
+	RunID        string
+	AllowedTools []string
+	Prompt       string
+	PhaseEventFn func(stage, name string, index, total int)
+	// PhasePassedFn reports a phase the run advanced beyond without ever
+	// reporting it (#1924).
+	PhasePassedFn     func(stage, name string, index, total int)
 	SkillContent      string // Resolved skill body from platform; empty = use local file
 	SkillFallbackUsed bool   // True when platform resolution failed and community skill is used
 	RetroFindings     string // Prior failure findings injected on escalated retry; empty = first attempt
@@ -550,6 +553,7 @@ func stageOptionsFromParams(params StageRunParams) execution.StageOptions {
 		Prompt:          params.Prompt,
 		TargetRepo:      params.TargetRepo,
 		PhaseEventFn:    params.PhaseEventFn,
+		PhasePassedFn:   params.PhasePassedFn,
 		ResumeSessionID: params.ResumeSessionID,
 	}
 }
@@ -5502,6 +5506,15 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				s.onPhaseDetected(item.Repo, item.Number, pStage, pName, pIndex, pTotal)
 			}
 		}
+		// A phase the run demonstrably moved past without reporting (#1924).
+		// Terminal on arrival, and deliberately not routed through
+		// onPhaseDetected's "a phase started" channel.
+		phasePassedFn := func(pStage, pName string, pIndex, pTotal int) {
+			runtime.PassPhase(stage, pName, pIndex, pTotal)
+			if s.onPhaseSettled != nil {
+				s.onPhaseSettled(item.Repo, item.Number, pStage, pName, pIndex, pTotal, "passed")
+			}
+		}
 
 		// Check if this is an escalated retry — load retro findings if so
 		isEscalated := s.retryEngine.CurrentModel(string(stage)) != ""
@@ -5558,6 +5571,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			AllowedTools:      skillrender.FilterHeadlessTools(skillData.AllowedTools),
 			Prompt:            prompt,
 			PhaseEventFn:      phaseEventFn,
+			PhasePassedFn:     phasePassedFn,
 			SkillContent:      resolvedSkillContent, // Platform-resolved; empty = TypeScript uses local file
 			SkillFallbackUsed: skillFallbackUsed,    // True when platform failed for paid tier
 			RetroFindings:     retroFindings,

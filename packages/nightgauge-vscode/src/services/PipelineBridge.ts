@@ -471,6 +471,34 @@ export class PipelineBridge {
             });
           });
       },
+      onPhasePassed: (_stage, name, index, total) => {
+        // A phase the run demonstrably moved past without reporting it
+        // (#1924). Terminal on arrival, so it goes to the tracker's settle
+        // path rather than onPhaseDetected's "a phase started" path.
+        this.logger.info("PipelineBridge: phase passed unreported", {
+          stage,
+          name,
+          index,
+          total,
+        });
+        this.phaseTracker?.passPhase(stage as PipelineStage, { name, index, total });
+        this.ipcClient
+          .call("pipeline.notifyPhaseTransition", {
+            repo: ipcParams.repo ?? "",
+            issueNumber: ipcParams.issueNumber,
+            runId: ipcParams.runId,
+            stage,
+            name,
+            index,
+            total,
+            eventType: "passed",
+          } satisfies NotifyPhaseTransitionParams)
+          .catch((err) => {
+            this.logger.error("PipelineBridge: notifyPhaseTransition(passed) failed", {
+              error: String(err),
+            });
+          });
+      },
       onTokenUsage: (usage) => {
         this.logger.info("PipelineBridge: token usage", {
           stage,
