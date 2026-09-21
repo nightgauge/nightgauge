@@ -405,8 +405,10 @@ run_group "sign-macos-binaries.sh regression suite" \
 #       (measured: `--max-filesize=1M` on the real .vsix reports "Data scanned:
 #       0 B" and exits 0). The gate therefore asserts a floor on bytes actually
 #       scanned, and this suite is what proves that floor can fail. The arms
-#       are stubbed so they run without ClamAV installed, plus one real-EICAR
-#       arm when it is, so the stubs cannot drift from the tool.
+#       are stubbed so they run without ClamAV installed; a real-clamscan arm
+#       asserts the tool still emits the summary fields the script parses, so
+#       the stubs cannot drift. No arm plants an EICAR sample -- this suite
+#       runs only on developer machines, where that would trip real antivirus.
 run_group "malware-scan.sh regression suite" \
   bash scripts/test-malware-scan.sh
 
