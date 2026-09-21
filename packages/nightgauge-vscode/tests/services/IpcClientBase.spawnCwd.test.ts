@@ -56,7 +56,11 @@ import * as vscode from "vscode";
 import { spawn } from "child_process";
 import { IpcClientBase } from "../../src/services/IpcClientBase";
 
-class TestableIpcClient extends IpcClientBase {}
+class TestableIpcClient extends IpcClientBase {
+  constructor() {
+    super();
+  }
+}
 
 const WORKSPACE = "/workspaces/acme";
 

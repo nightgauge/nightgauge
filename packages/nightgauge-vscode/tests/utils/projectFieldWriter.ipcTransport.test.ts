@@ -9,6 +9,7 @@
 
 import { describe, it, expect, beforeEach, vi, type Mock } from "vitest";
 import { getProjectItemStatus, clearConfigCache } from "../../src/utils/projectFieldWriter";
+import type { Logger } from "../../src/utils/logger";
 
 vi.mock("child_process", () => {
   const execMock = vi.fn();
@@ -42,6 +43,17 @@ import { resolveConfigPath } from "../../src/utils/configPathResolver";
 
 const MOCK_CWD = "/test/workspace";
 const PROJECT_ID = "PVT_test_project";
+
+function createMockLogger(): Logger {
+  return {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  } as unknown as Logger;
+}
+
+const mockLogger = createMockLogger();
 
 const MOCK_YAML_CONFIG = {
   owner: "TestOrg",
@@ -102,7 +114,7 @@ describe("projectFieldWriter GraphQL transport (#1913)", () => {
     ipcState.isConnected = true;
     ipcState.githubGraphqlRaw = vi.fn().mockResolvedValue(STATUS_RESPONSE);
 
-    const status = await getProjectItemStatus(42, MOCK_CWD);
+    const status = await getProjectItemStatus(42, MOCK_CWD, mockLogger);
 
     expect(status).toBe("Ready");
     expect(ipcState.githubGraphqlRaw).toHaveBeenCalled();
@@ -112,7 +124,7 @@ describe("projectFieldWriter GraphQL transport (#1913)", () => {
   it("falls back to gh api graphql when no daemon is connected", async () => {
     ipcState.isConnected = false;
 
-    const status = await getProjectItemStatus(42, MOCK_CWD);
+    const status = await getProjectItemStatus(42, MOCK_CWD, mockLogger);
 
     expect(status).toBe("Ready");
     expect(ipcState.githubGraphqlRaw).not.toHaveBeenCalled();
@@ -126,7 +138,7 @@ describe("projectFieldWriter GraphQL transport (#1913)", () => {
     ipcState.isConnected = true;
     ipcState.githubGraphqlRaw = vi.fn().mockRejectedValue(new Error("method not found"));
 
-    const status = await getProjectItemStatus(42, MOCK_CWD);
+    const status = await getProjectItemStatus(42, MOCK_CWD, mockLogger);
 
     expect(status).toBe("Ready");
     expect(exec as unknown as Mock).toHaveBeenCalled();
