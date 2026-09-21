@@ -413,10 +413,54 @@ macOS (Apple Silicon and Intel) and Linux x64 only — see
 Verify all of it from the Command Palette with **Nightgauge: Adapter
 Doctor**.
 
+## Uninstalling
+
+Removing the extension from VS Code removes the extension and its bundled
+binary. Nightgauge also writes state outside the extension directory, which VS
+Code does not clean up. To remove everything it created:
+
+```bash
+# Per-user configuration and cached usage data
+rm -rf ~/.nightgauge ~/.config/nightgauge
+
+# Per-repository state, in each repo you ran Nightgauge in
+rm -rf <repo>/.nightgauge
+```
+
+Nothing is installed outside these paths and the VS Code extension directory:
+no system services, no login items, no changes to other applications or system
+settings. Files Nightgauge generated _in_ your repository — `AGENTS.md`,
+`CLAUDE.md`, docs added by **Make Repo AI-Ready** — are ordinary tracked files
+and are left alone; remove them with git if you no longer want them.
+
 ## License
 
-[Apache-2.0](https://github.com/nightgauge/nightgauge/blob/main/LICENSE)
+[Apache-2.0](https://github.com/nightgauge/nightgauge/blob/main/LICENSE) ·
+[Terms](https://nightgauge.dev/terms/) ·
+[Privacy Policy](https://nightgauge.dev/privacy/)
 
-## Author
+## Publisher
 
-nightgauge
+Nightgauge is published and stewarded by **Edibu, LLC**.
+
+- Marketplace publisher: `nightgauge`
+- Contact: support@nightgauge.dev · security: security@nightgauge.dev
+- Source: https://github.com/nightgauge/nightgauge (Apache-2.0)
+
+The macOS binaries bundled in this extension are signed with the Apple
+Developer ID `Developer ID Application: Edibu LLC (RZJPN7Y7BG)` and notarized
+by Apple, so the signing identity on the shipped executable can be matched
+against the publisher named here. The certificate's common name omits the
+comma in the registered entity name **Edibu, LLC**; the authoritative
+identifier is the Apple Team ID **RZJPN7Y7BG**, which is stable across
+certificate renewals.
+
+```bash
+unzip -p <vsix> extension/dist/bin/nightgauge > /tmp/ng
+codesign -dv --verbose=4 /tmp/ng    # Authority + TeamIdentifier
+spctl -a -vvv -t install /tmp/ng    # notarization
+```
+
+Every release artifact also carries a signed GitHub build-provenance
+attestation. See
+[Artifact Verification](https://github.com/nightgauge/nightgauge/blob/main/docs/ARTIFACT_VERIFICATION.md).

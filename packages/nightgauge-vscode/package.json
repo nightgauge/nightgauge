@@ -1783,7 +1783,9 @@
     "vitest": "^5.0.0"
   },
   "author": {
-    "name": "nightgauge"
+    "name": "Edibu, LLC",
+    "email": "support@nightgauge.dev",
+    "url": "https://nightgauge.dev"
   },
   "license": "Apache-2.0",
   "bugs": {

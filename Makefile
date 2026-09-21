@@ -84,7 +84,8 @@ check-terminal-kind-table:
 # --- Go CLI Binary ---
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS := -ldflags "-s -w -X main.version=$(VERSION)"
+VENDOR ?= Edibu, LLC
+LDFLAGS := -ldflags "-s -w -X main.version=$(VERSION) -X 'main.vendor=$(VENDOR)'"
 
 # -trimpath removes local filesystem paths from the binary, so a build of a
 # given commit is reproducible by anyone rather than carrying the builder's

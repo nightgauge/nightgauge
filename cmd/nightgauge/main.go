@@ -72,6 +72,19 @@ import (
 // version is set at build time via ldflags.
 var version = "dev"
 
+// vendor identifies the publishing entity and is embedded in every binary,
+// on every platform, whether or not that platform supports code signing.
+//
+// Avast's clean software guidelines ask that "every executable file should
+// contain a vendor identifier". On macOS that is carried by the Developer ID
+// code signature, but the linux build is unsigned and so carried no vendor
+// attribution at all beyond the Go module path. A linker-injected string
+// covers every target uniformly and survives stripping, since -s -w removes
+// the symbol table and DWARF, not package-level data.
+//
+// Overridable via -X so a downstream rebuild is not forced to claim our name.
+var vendor = "Edibu, LLC"
+
 // effectiveVersion preserves the linker-injected release version and falls
 // back to Go module build metadata for `go install ...@version` builds.
 func effectiveVersion() string {
@@ -4684,7 +4697,10 @@ func versionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Print version information",
 		Run: func(cmd *cobra.Command, args []string) {
+			// Version stays on the first line, alone, so anything parsing
+			// `nightgauge version` keeps working.
 			fmt.Printf("nightgauge %s\n", effectiveVersion())
+			fmt.Printf("vendor: %s\n", vendor)
 		},
 	}
 }
