@@ -2,9 +2,11 @@ package github
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/survival"
 )
@@ -217,5 +219,22 @@ func TestSurvivalDetector_BreakagePastTheFirstPage(t *testing.T) {
 	}
 	if !obs.Broke || !strings.Contains(obs.BrokeDetail, "late") {
 		t.Errorf("a failure on page 2 must be attributed, got %+v", obs)
+	}
+}
+
+// The survival sweep polls `gh api` for commits and check-runs on every merged
+// PR it is still watching — a steady, unbounded-in-principle REST spend that
+// was invisible to the ledger before #1913. The default seam must route
+// through the gated, ledgered helper; the stub seam above must keep working.
+func TestSurvivalExecGhDefaultIsGatedAndLedgered(t *testing.T) {
+	isolateSharedTracker(t, &RateLimitInfo{
+		Remaining: 1, Limit: 5000, ResetAt: time.Now().Add(30 * time.Minute).Unix(),
+	})
+	t.Setenv(rateLimitFloorEnv, "100")
+	t.Setenv(rateLimitNoWaitEnv, "1")
+
+	_, err := survivalExecGh(context.Background(), "api", "repos/o/r/commits")
+	if !errors.Is(err, ErrRateLimitGated) {
+		t.Fatalf("err = %v, want ErrRateLimitGated — the default survivalExecGh must route through RunGhSubprocess", err)
 	}
 }

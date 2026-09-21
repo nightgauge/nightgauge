@@ -1780,12 +1780,12 @@ thing the lock existed to prevent.
 
 **What each entry point does with a held lease:**
 
-|                                |                                                                                                                           |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
-| `nightgauge autonomous run`    | Refuses, naming the holder's PID and workspace. `--attach` makes it exit 0 instead — the running scheduler keeps the work |
-| `nightgauge serve`             | **Starts anyway**, serving IPC without attaching a scheduler, and logs why                                                |
-| `nightgauge autonomous status` | Prints the lease line whether held or free                                                                                |
-| `nightgauge doctor`            | `serve_lease` — clean when free or healthy, a finding only when wedged                                                    |
+|                                |                                                                                                                                                                                    |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `nightgauge autonomous run`    | Refuses, naming the holder's PID and workspace. `--attach` makes it exit 0 instead — the running scheduler keeps the work                                                          |
+| `nightgauge serve`             | **Starts anyway**, serving IPC without attaching a scheduler, and logs why                                                                                                         |
+| `nightgauge autonomous status` | Prints the lease line whether held or free                                                                                                                                         |
+| `nightgauge doctor`            | `serve_lease` — clean when free or healthy, a finding only when wedged; `ledger_daemon_coverage` — a finding when a live, working daemon writes no API-ledger records here (#1913) |
 
 `serve` does not refuse, and that asymmetry is deliberate. It is also the stdio
 IPC server the extension talks to, one per extension host, so **two VS Code
@@ -4650,6 +4650,45 @@ Rotation is safe across the several nightgauge processes that share one
 workspace ledger. The writer sizes the **path**, not its open handle, so a
 process holding an inode a sibling already renamed detects the divergence and
 reopens instead of rotating a second time.
+
+#### The two blind spots it used to have (Issue #1913)
+
+Instrumenting the transport records everything that goes THROUGH the transport,
+and two large classes of traffic did not. Measured over one workspace's whole
+ledger, 77% of the GraphQL points consumed had no nightgauge record within five
+seconds of the drop.
+
+- **`gh` subprocesses.** Post-condition gates, recovery actions, non-terminal
+  reconcile, survival detection and the deterministic pr-merge stage all shell
+  out to `gh`. Every one of those calls spends from the same budget, and none
+  of them wrote a record or waited on the headroom gate — so a stage could
+  drain the window the next stage needed. They now go through
+  `github.RunGhSubprocess`, which pays the shared gate first and then prices
+  the call with one free `GET /rate_limit` afterwards. `gh` never prints its
+  rate-limit headers, so the resource is inferred from which pool MOVED
+  between this process's previous observation and that probe; when nothing
+  moved (no baseline yet, or a call that spent nothing) the record's cost is
+  zero either way and the subcommand shape picks the pool to baseline.
+- **The `serve` daemon's own traffic.** `serve --workspace <root>` threads that
+  root through config, the IPC server and the scheduler, but never calls
+  `os.Chdir`, and the extension spawned the binary with no `cwd`. The ledger
+  resolved `.nightgauge/logs/github-api.jsonl` against the process working
+  directory — the extension host's — which is not a workspace, so the
+  greenfield guard opened no file at all. `github.SetAPILedgerWorkspaceRoot`
+  makes the explicitly-named workspace authoritative for that path (applied
+  from the root command for any `--workspace`/`--workdir` invocation), and the
+  extension now spawns the daemon with `cwd` set to the workspace it serves.
+  `nightgauge doctor`'s `ledger_daemon_coverage` arm reports the gap if it ever
+  reopens: it fires only when a live daemon, with pipeline activity in the same
+  window, has zero records under its PID — an idle daemon legitimately spends
+  nothing, and an arm that warns during normal quiet is one operators switch
+  off.
+
+The extension's project-board writers (`projectFieldWriter`,
+`ProjectIterationService`) call the `github.graphqlRaw` IPC method instead of
+`gh api graphql`, so their queries run on the daemon's instrumented client.
+They fall back to the subprocess when no daemon is connected — a synchronous
+board write must not start depending on `serve` being up.
 
 #### Three surfaces read the same window
 

@@ -16,6 +16,27 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **77% of this workspace's GraphQL spend was invisible to the API ledger and
+  is now recorded and throttled.** Two gaps. First, every `gh` subprocess the
+  binary runs — post-condition gates, recovery actions, non-terminal
+  reconcile, survival detection, the deterministic pr-merge stage — drew from
+  the same budget while writing no ledger record and never waiting on the
+  rate-limit headroom gate, so a stage could drain the window the next stage
+  needed. Those calls now go through one instrumented helper that pays the
+  gate and records the call with its real calling frame, the resource that
+  actually moved, and the budget observed right after it. Second, the `serve`
+  daemon resolved its ledger path against the process working directory while
+  `--workspace` only ever changed a string: a daemon started by the extension
+  (which spawned it with no `cwd`) wrote its records to the wrong place, or —
+  because the default path only opens inside an existing workspace — nowhere
+  at all. The workspace root is now authoritative for the ledger path, the
+  extension starts the daemon in the workspace it serves, and the extension's
+  project-board writers route their GraphQL through the daemon's instrumented
+  client instead of `gh api graphql`, falling back to the subprocess only when
+  no daemon is connected. `nightgauge doctor` gained a `ledger_daemon_coverage`
+  arm that reports a live, working daemon whose calls are not reaching the
+  workspace ledger.
+
 - **`nightgauge issue route` cost 375 GraphQL points per call and now costs 4.** Measured against the live API, before and after, with byte-identical
   output. It paged the entire project board — every status, `first: 100` a
   page, ~19 pages — to read two fields off one row and discard the rest. The

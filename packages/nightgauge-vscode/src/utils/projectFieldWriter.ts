@@ -18,6 +18,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as yaml from "yaml";
 import { resolveConfigPath } from "./configPathResolver";
+import { IpcClient } from "../services/IpcClient";
 import type { Logger } from "./logger";
 
 const execAsync = promisify(exec);
@@ -297,15 +298,30 @@ async function loadProjectConfigs(cwd: string): Promise<MultiProjectConfig[] | n
 // ============================================================================
 
 /**
- * Execute a GraphQL query/mutation via `gh api graphql --input -`.
+ * Execute a GraphQL query/mutation.
  *
- * Passes the full request body as JSON via stdin to avoid shell escaping issues.
+ * Prefers the running daemon's `github.graphqlRaw` IPC method: that client is
+ * the one the API ledger instruments and the rate-limit gate throttles, so a
+ * board write made this way is visible spend instead of invisible spend
+ * (#1913). The `gh api graphql` subprocess remains the fallback for the case
+ * this utility runs with no daemon connected — it is a synchronous helper
+ * other code calls directly, and making it require `serve` would trade a
+ * measurement gap for an outage.
  */
 async function executeGraphQL(
   query: string,
   variables: Record<string, unknown>,
   cwd: string
 ): Promise<Record<string, unknown>> {
+  const ipc = IpcClient.getInstance();
+  if (ipc.isConnected) {
+    try {
+      return (await ipc.githubGraphqlRaw(query, variables)) as Record<string, unknown>;
+    } catch {
+      // Fall through to the subprocess: a refused or failed IPC call must not
+      // turn a board write into a hard failure.
+    }
+  }
   const body = JSON.stringify({ query, variables });
   const shellSafe = body.replace(/'/g, "'\\''");
   const { stdout } = await execAsync(`printf '%s' '${shellSafe}' | gh api graphql --input -`, {

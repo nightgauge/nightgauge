@@ -488,6 +488,14 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 		warnings = append(warnings, serveLeaseWarning)
 	}
 
+	// The other half of the lease question (#1913): the lease says a daemon is
+	// alive, this says whether its spending is visible.
+	ledgerCoverage, ledgerCoverageWarning := checkLedgerDaemonCoverage(cwd, now)
+	result.Checks["ledger_daemon_coverage"] = ledgerCoverage
+	if ledgerCoverageWarning != "" {
+		warnings = append(warnings, ledgerCoverageWarning)
+	}
+
 	processLeaks, processWarning := checkOrphanedProcesses(cwd, now)
 	result.Checks["orphaned_processes"] = processLeaks
 	if processWarning != "" {
