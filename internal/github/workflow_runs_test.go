@@ -57,6 +57,45 @@ func TestListWorkflowRuns_Success(t *testing.T) {
 	}
 }
 
+func TestListWorkflowRuns_EmptyBranchOmitsParam(t *testing.T) {
+	var capturedQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedQuery = r.URL.RawQuery
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"workflow_runs":[]}`))
+	}))
+	defer srv.Close()
+
+	svc := newCIServiceForRESTTest(srv)
+	if _, err := svc.ListWorkflowRuns(context.Background(), "o", "r", "ci.yml", "", 5); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(capturedQuery, "branch=") {
+		t.Errorf("query should omit branch param for empty branch, got: %q", capturedQuery)
+	}
+	if !strings.Contains(capturedQuery, "status=completed") {
+		t.Errorf("query missing status=completed: %q", capturedQuery)
+	}
+}
+
+func TestListWorkflowRuns_NonEmptyBranchIncludesParam(t *testing.T) {
+	var capturedQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedQuery = r.URL.RawQuery
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"workflow_runs":[]}`))
+	}))
+	defer srv.Close()
+
+	svc := newCIServiceForRESTTest(srv)
+	if _, err := svc.ListWorkflowRuns(context.Background(), "o", "r", "ci.yml", "release", 5); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(capturedQuery, "branch=release") {
+		t.Errorf("query missing branch=release: %q", capturedQuery)
+	}
+}
+
 func TestListWorkflowRuns_StripsWorkflowsPrefix(t *testing.T) {
 	var capturedPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
