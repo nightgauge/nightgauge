@@ -1663,6 +1663,30 @@ func (s *Server) registerMethods() {
 		}, nil
 	}
 
+	//ipc:method githubGraphqlRaw params:GitHubGraphQLRawParams result:GitHubGraphQLRawResult
+	s.methods["github.graphqlRaw"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
+		var p GitHubGraphQLRawParams
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, fmt.Errorf("invalid params: %w", err)
+		}
+		if strings.TrimSpace(p.Query) == "" {
+			return nil, fmt.Errorf("query is required")
+		}
+		c, err := s.clientForUser(p.GitHubUser)
+		if err != nil {
+			return nil, err
+		}
+		raw, err := c.ExecuteGraphQL(ctx, p.Query, p.Variables)
+		if err != nil {
+			return nil, err
+		}
+		var out GitHubGraphQLRawResult
+		if err := json.Unmarshal(raw, &out); err != nil {
+			return nil, fmt.Errorf("decode graphql response: %w", err)
+		}
+		return &out, nil
+	}
+
 	//ipc:method issueView params:IssueViewParams result:IssueDetail
 	s.methods["issue.view"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
 		var p IssueViewParams

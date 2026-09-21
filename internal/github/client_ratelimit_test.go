@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -461,5 +462,83 @@ func TestInstallHeaderInterceptor_Idempotent(t *testing.T) {
 	}
 	if _, doubled := rt.base.(*rateLimitHeaderTransport); doubled {
 		t.Fatal("transport should not be double-wrapped")
+	}
+}
+
+// TestHeadroomGate_MatchesClientDecisions is the regression guard on #1913's
+// refactor: the gate moved out of *Client so a `gh` subprocess could pay it
+// too, and the only thing that must not change in the move is WHEN it trips.
+// Each row is asserted twice — through the client method and through the bare
+// gate value — and the two answers must agree.
+func TestHeadroomGate_MatchesClientDecisions(t *testing.T) {
+	t.Setenv(rateLimitFloorEnv, "100")
+	future := time.Now().Add(20 * time.Minute).Unix()
+
+	tests := []struct {
+		name      string
+		entry     *RateLimitInfo
+		checkedAt int64 // 0 = fresh (Set stamps now)
+		wantGated bool
+	}{
+		{"no entry at all", nil, 0, false},
+		{"healthy budget", &RateLimitInfo{Remaining: 4500, Limit: 5000, ResetAt: future}, 0, false},
+		{"exactly at the floor", &RateLimitInfo{Remaining: 100, Limit: 5000, ResetAt: future}, 0, false},
+		{"one below the floor", &RateLimitInfo{Remaining: 99, Limit: 5000, ResetAt: future}, 0, true},
+		{"exhausted", &RateLimitInfo{Remaining: 0, Limit: 5000, ResetAt: future}, 0, true},
+		{"below floor but the window already reset", &RateLimitInfo{Remaining: 5, Limit: 5000, ResetAt: time.Now().Add(-time.Minute).Unix()}, 0, false},
+		{"below floor but the reading is stale", &RateLimitInfo{Remaining: 5, Limit: 5000, ResetAt: future}, time.Now().Add(-time.Hour).Unix(), false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "rate-limit.json")
+			tr := NewSharedRateLimitTracker(path)
+			if tc.entry != nil {
+				if tc.checkedAt == 0 {
+					if err := tr.Set("alice", tc.entry); err != nil {
+						t.Fatalf("seed tracker: %v", err)
+					}
+				} else {
+					// Written by hand: Set always stamps CheckedAt with now, and
+					// the stale row is the one case that needs an older stamp.
+					file := sharedTrackerFile{Version: sharedTrackerFileVersion, Entries: map[string]*SharedTrackerEntry{
+						"alice": {
+							Remaining: tc.entry.Remaining,
+							Limit:     tc.entry.Limit,
+							ResetAt:   tc.entry.ResetAt,
+							CheckedAt: tc.checkedAt,
+						},
+					}}
+					raw, merr := json.Marshal(file)
+					if merr != nil {
+						t.Fatalf("marshal tracker file: %v", merr)
+					}
+					if werr := os.WriteFile(path, raw, 0o644); werr != nil {
+						t.Fatalf("write tracker file: %v", werr)
+					}
+				}
+			}
+
+			silent := func(string, ...interface{}) {}
+			c := NewClientWithURL("test-token", "https://example.invalid/graphql").
+				WithRateLimitTracker(tr, "alice")
+			c.gateLogger = silent
+			clientWait, clientGated := c.rateLimitResetWait()
+
+			gateWait, gateGated := headroomGate{tracker: tr, user: "alice", logger: silent}.resetWait()
+
+			if clientGated != tc.wantGated {
+				t.Errorf("client gated = %v, want %v", clientGated, tc.wantGated)
+			}
+			if gateGated != clientGated {
+				t.Errorf("extracted gate says %v, client says %v — the refactor changed behaviour",
+					gateGated, clientGated)
+			}
+			// Both read the same clock a moment apart; a second of slack keeps
+			// the comparison about the DECISION, not about scheduling.
+			if diff := clientWait - gateWait; diff > time.Second || diff < -time.Second {
+				t.Errorf("wait differs: client %s, gate %s", clientWait, gateWait)
+			}
+		})
 	}
 }

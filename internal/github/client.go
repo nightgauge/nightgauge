@@ -911,11 +911,56 @@ func (t *rateLimitHeaderTransport) RoundTrip(req *http.Request) (*http.Response,
 // pessimistic). The one-line "rate limit gated" decision is logged here so the
 // fail-fast and wait paths share identical operator-visible output.
 func (c *Client) rateLimitResetWait() (time.Duration, bool) {
+	return c.headroomGate().resetWait()
+}
+
+// headroomGate is the rate-limit gate as a value, decoupled from *Client.
+//
+// The gate is a statement about a MACHINE-WIDE budget — the shared tracker
+// file exists precisely so every process on one token reads one view of it —
+// so code that never builds a *Client must be able to pay it too. `gh`
+// subprocesses are exactly that code (#1913): they spend from the same budget
+// and, before this, walked past the gate entirely. Keeping one implementation
+// here rather than two is the whole point: two gates drift, and the drift is
+// invisible until a stage drains the window the next stage needed.
+type headroomGate struct {
+	tracker *SharedRateLimitTracker
+	user    string
+	// wait flips fail-fast (ErrRateLimitGated) to wait-for-reset.
+	wait     bool
+	logger   func(format string, args ...interface{})
+	jitter   func() time.Duration
+	governor *gateReleaseGovernor
+}
+
+// headroomGate builds the gate this client pays from its own wiring.
+func (c *Client) headroomGate() headroomGate {
 	c.mu.Lock()
-	tracker := c.tracker
-	user := c.trackerUser
-	logger := c.gateLogger
+	g := headroomGate{
+		tracker: c.tracker,
+		user:    c.trackerUser,
+		wait:    c.rateLimitWaitOnGate,
+		logger:  c.gateLogger,
+	}
 	c.mu.Unlock()
+	g.jitter = c.gateJitter
+	g.governor = c.governor()
+	return g
+}
+
+func (g headroomGate) log() func(format string, args ...interface{}) {
+	if g.logger == nil {
+		return log.Printf
+	}
+	return g.logger
+}
+
+// resetWait reports whether the tracker shows a fresh below-floor reading
+// inside an un-elapsed reset window, and if so how long until it resets.
+func (g headroomGate) resetWait() (time.Duration, bool) {
+	tracker := g.tracker
+	user := g.user
+	logger := g.log()
 	if tracker == nil {
 		return 0, false
 	}
@@ -932,12 +977,49 @@ func (c *Client) rateLimitResetWait() (time.Duration, bool) {
 		return 0, false
 	}
 	resetIn := time.Duration(entry.ResetAt-now) * time.Second
-	if logger == nil {
-		logger = log.Printf
-	}
 	logger("github: rate limit gated (remaining=%d floor=%d reset_in=%s user=%q)",
 		entry.Remaining, floor, resetIn, user)
 	return resetIn, true
+}
+
+// await is the pre-call gate: fail fast, or wait out the reset window bounded
+// by maxFullExhaustionWait and ctx.
+func (g headroomGate) await(ctx context.Context) error {
+	resetIn, gated := g.resetWait()
+	if !gated {
+		return nil
+	}
+	if !g.wait {
+		return fmt.Errorf("%w: floor=%d reset_in=%s", ErrRateLimitGated, rateLimitFloor(), resetIn)
+	}
+	sleep := resetIn + 500*time.Millisecond
+	if sleep > maxFullExhaustionWait {
+		sleep = maxFullExhaustionWait
+	}
+	// Jitter after the cap: the cap bounds how long the reset may keep us; the
+	// jitter is the deliberate spread between processes and must survive it.
+	jitter := time.Duration(0)
+	if g.jitter != nil {
+		jitter = g.jitter()
+	}
+	sleep += jitter
+	logger := g.log()
+	logger("github: rate limit gated — waiting %s for reset before retrying (jitter=%s user=%q)",
+		sleep.Round(time.Second), jitter.Round(time.Millisecond), g.user)
+	gov := g.governor
+	if gov == nil {
+		gov = processGateGovernor
+	}
+	gov.enqueue()
+	defer gov.dequeue()
+	select {
+	case <-time.After(sleep):
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	// The window is open. Leave one at a time so a burst of sleepers does not
+	// re-fire into the fresh window as a single wave.
+	return gov.release(ctx, logger)
 }
 
 // waitRateLimitGate is the pre-call rate-limit gate used by query/mutate/REST.
@@ -952,42 +1034,7 @@ func (c *Client) rateLimitResetWait() (time.Duration, bool) {
 // 429). A context that expires mid-wait returns ctx.Err(), so a short-ctx call
 // bails fast while a long-ctx recovery op waits the reset out. Issue #3976.
 func (c *Client) waitRateLimitGate(ctx context.Context) error {
-	resetIn, gated := c.rateLimitResetWait()
-	if !gated {
-		return nil
-	}
-	c.mu.Lock()
-	wait := c.rateLimitWaitOnGate
-	user := c.trackerUser
-	logger := c.gateLogger
-	c.mu.Unlock()
-	if !wait {
-		return fmt.Errorf("%w: floor=%d reset_in=%s", ErrRateLimitGated, rateLimitFloor(), resetIn)
-	}
-	sleep := resetIn + 500*time.Millisecond
-	if sleep > maxFullExhaustionWait {
-		sleep = maxFullExhaustionWait
-	}
-	// Jitter after the cap: the cap bounds how long the reset may keep us; the
-	// jitter is the deliberate spread between processes and must survive it.
-	jitter := c.gateJitter()
-	sleep += jitter
-	if logger == nil {
-		logger = log.Printf
-	}
-	logger("github: rate limit gated — waiting %s for reset before retrying (jitter=%s user=%q)",
-		sleep.Round(time.Second), jitter.Round(time.Millisecond), user)
-	g := c.governor()
-	g.enqueue()
-	defer g.dequeue()
-	select {
-	case <-time.After(sleep):
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-	// The window is open. Leave one at a time so a burst of sleepers does not
-	// re-fire into the fresh window as a single wave.
-	return g.release(ctx, logger)
+	return c.headroomGate().await(ctx)
 }
 
 // ResolveTokenForUser returns the GitHub token for the given gh CLI user.

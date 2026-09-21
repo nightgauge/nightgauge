@@ -286,6 +286,22 @@ func getOwnerType(cmd *cobra.Command) gh.OwnerType {
 // globalToken holds the --token CLI flag value. Set by rootCmd PersistentPreRunE.
 var globalToken string
 
+// explicitWorkspaceRoot returns the workspace this invocation was explicitly
+// pointed at via --workspace or --workdir, or "" when it was given neither
+// (in which case the process cwd is already the right answer).
+func explicitWorkspaceRoot(cmd *cobra.Command) string {
+	for _, name := range []string{"workspace", "workdir"} {
+		f := cmd.Flags().Lookup(name)
+		if f == nil || !cmd.Flags().Changed(name) {
+			continue
+		}
+		if v := strings.TrimSpace(f.Value.String()); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // clientFromConfig creates a GitHub client using the full resolution chain:
 //  1. --token CLI flag (globalToken)
 //  2. Per-project or per-org token from config (github_auth.token / github_auth.tokens)
@@ -481,6 +497,14 @@ func rootCmd() *cobra.Command {
 	// Note: if a future subcommand adds its own PersistentPreRunE, it must chain
 	// this call manually (cobra does not chain PersistentPreRunE automatically).
 	root.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		// A command told which workspace to act on must bill its GitHub calls
+		// to THAT workspace's ledger (#1913). The ledger resolves its relative
+		// default path independently, and nothing in this binary ever calls
+		// os.Chdir — so without this, `nightgauge serve --workspace X` (and
+		// every `--workdir X` invocation) wrote its records against whatever
+		// directory the caller happened to be in, or nowhere at all.
+		gh.SetAPILedgerWorkspaceRoot(explicitWorkspaceRoot(cmd))
+
 		workdir, err := os.Getwd()
 		if err != nil {
 			return nil // not fatal — use hardcoded defaults
@@ -4724,6 +4748,15 @@ func serveCmd() *cobra.Command {
 		Short:  "Start JSON-over-stdio IPC server for VSCode",
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Workspace root: prefer explicit --workspace flag, fall back to CWD
+			workspaceRoot := workspaceDir
+			if workspaceRoot == "" {
+				workspaceRoot, _ = os.Getwd() // os.Getwd failure falls back to empty string; Load() handles missing workdir
+			}
+			// Before the first GitHub client exists, so the daemon's very first
+			// request lands in the ledger of the workspace it serves (#1913).
+			gh.SetAPILedgerWorkspaceRoot(workspaceRoot)
+
 			var client *gh.Client
 			if githubGraphQLURL != "" {
 				token := os.Getenv("GITHUB_TOKEN")
@@ -4737,12 +4770,6 @@ func serveCmd() *cobra.Command {
 			}
 
 			var opts []ipc.ServerOption
-
-			// Workspace root: prefer explicit --workspace flag, fall back to CWD
-			workspaceRoot := workspaceDir
-			if workspaceRoot == "" {
-				workspaceRoot, _ = os.Getwd() // os.Getwd failure falls back to empty string; Load() handles missing workdir
-			}
 
 			// Set up persistent file-based logging (tees to stderr + file)
 			closeLog := setupServeLogging(workspaceRoot)
@@ -11861,7 +11888,7 @@ var doctorCheckOrder = []string{
 	"binary", "gh", "github_auth", "api_user", "scopes", "rate_limit", "github_api_budget", "config", "project",
 	"complexity_model", "ai_adapter",
 	"compose_orphans", "worktree_leaks", "stranded_branches", "pipeline_stashes", "preserved_wip", "orphaned_processes",
-	"serve_lease",
+	"serve_lease", "ledger_daemon_coverage",
 	"survival_backlog", "survival_coverage", "corpus_calibration", "scheduled_automations",
 }
 

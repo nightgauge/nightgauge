@@ -143,7 +143,42 @@ var (
 	ledgerConfigOff atomic.Bool
 	// testLedgerOverride is set only by tests, via withTestLedger.
 	testLedgerOverride atomic.Value
+	// ledgerWorkspaceRoot holds the workspace a command was explicitly told to
+	// act on, for resolving the relative default path. Empty means "use the
+	// process cwd", which is what every non-daemon invocation already wanted.
+	ledgerWorkspaceRoot atomic.Value
 )
+
+// SetAPILedgerWorkspaceRoot names the workspace whose ledger this process
+// writes, for the relative default path.
+//
+// The daemon is why this exists (#1913). `nightgauge serve --workspace <root>`
+// threads that root through config, the IPC server and the scheduler, but it
+// never calls os.Chdir — and the extension spawns the binary without a `cwd`,
+// so the process's actual working directory is the extension host's. The
+// ledger resolved `.nightgauge/logs/github-api.jsonl` against that cwd, which
+// is not a workspace, so openAPILedger's greenfield guard returned nil and a
+// daemon serving six repositories for three hours wrote zero records. The two
+// resolutions were silently decoupled; this is the seam that couples them.
+//
+// Call it before the first GitHub request. After the ledger has resolved the
+// root is already baked into the open file and a later call does nothing.
+func SetAPILedgerWorkspaceRoot(root string) {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return
+	}
+	ledgerWorkspaceRoot.Store(root)
+}
+
+// ledgerRelativeBase returns the directory a relative ledger path resolves
+// against: the explicitly-named workspace when one was set, else the cwd.
+func ledgerRelativeBase() (string, error) {
+	if v, ok := ledgerWorkspaceRoot.Load().(string); ok && v != "" {
+		return v, nil
+	}
+	return os.Getwd()
+}
 
 // SetAPILedgerEnabled applies the `github.api_ledger.enabled` config setting.
 //
@@ -227,11 +262,11 @@ func openAPILedger() *apiLedger {
 		explicitPath = false
 	}
 	if !filepath.IsAbs(path) {
-		wd, err := os.Getwd()
+		base, err := ledgerRelativeBase()
 		if err != nil {
 			return nil
 		}
-		path = filepath.Join(wd, path)
+		path = filepath.Join(base, path)
 	}
 	// At the DEFAULT path, the ledger writes into an existing workspace and
 	// never conjures one. An always-on instrument that creates .nightgauge/
@@ -312,6 +347,20 @@ func (l *apiLedger) record(rec APILedgerRecord, remainingHdr string) {
 	}
 	_ = l.enc.Encode(&rec)
 	l.rotateIfFull()
+}
+
+// previousRemaining reports this process's last observed Remaining for a
+// rate-limit resource. A `gh` subprocess never tells us which pool it drew
+// from, so the only honest way to name the resource is to see which one moved
+// (see ghSubprocessResource).
+func (l *apiLedger) previousRemaining(kind string) (int, bool) {
+	if l == nil {
+		return 0, false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	n, ok := l.prev[kind]
+	return n, ok
 }
 
 // rotateIfFull shifts the numbered backups up and reopens a fresh file once

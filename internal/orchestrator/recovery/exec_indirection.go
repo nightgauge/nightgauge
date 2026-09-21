@@ -7,11 +7,15 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/nightgauge/nightgauge/internal/github"
 )
 
 // execGh is the indirection point for `gh`-backed recovery actions so tests
 // can stub GitHub CLI calls. Mirrors gates.execGh's pattern (Issue #3266).
-// Default implementation runs the real `gh` binary.
+// Default implementation runs the real `gh` binary through
+// github.RunGhSubprocess, so the call is ledgered and pays the shared
+// rate-limit headroom gate (#1913).
 //
 // Tests assign a replacement that returns canned stdout/stderr.
 //
@@ -20,8 +24,7 @@ import (
 // separate indirection is needed — the existing variadic signature covers
 // arbitrary gh flag combinations.
 var execGh = func(ctx context.Context, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "gh", args...)
-	return cmd.Output()
+	return github.RunGhSubprocess(ctx, "", args...)
 }
 
 // execGit is the indirection point for `git`-backed recovery actions. Mirrors

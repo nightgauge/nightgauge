@@ -11,6 +11,14 @@ and this project adheres to
 
 ### Fixed
 
+- The extension's GitHub spending is now visible to the API ledger. The Go
+  daemon is started in the workspace folder it serves, instead of inheriting
+  the extension host's working directory — which is why a daemon that had been
+  sweeping six repositories for three hours had written no ledger records at
+  all. Project-board field and iteration writes now run their GraphQL through
+  that daemon rather than shelling out to `gh api graphql`, so they are
+  recorded and rate-limit-gated like every other call; with no daemon
+  connected they still fall back to the subprocess.
 - The pipeline tree shows phase progress as it happens, not in a burst at the
   end of each stage. Most phases previously never lit up at all: a stage
   reported a handful of landmarks and the rest arrived at the end-of-stage

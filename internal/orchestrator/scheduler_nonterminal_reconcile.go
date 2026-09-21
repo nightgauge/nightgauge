@@ -5,25 +5,25 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os/exec"
 	"strconv"
 	"strings"
 
+	"github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
 // reconcileExecGh is the indirection point for `gh`-backed non-terminal
 // reconciliation (#3873) so tests can stub GitHub CLI calls without spinning up
-// a real CLI. Mirrors gates.execGh / recovery.execGh (#3266). Default
-// implementation runs the real `gh` binary.
+// a real CLI. Mirrors gates.execGh / recovery.execGh (#3266). The default runs
+// the real `gh` binary through github.RunGhSubprocess, so the call is ledgered
+// and pays the shared rate-limit headroom gate (#1913).
 //
 // Cross-repo invocations pass `--repo <owner/repo>` as part of args, matching
 // the recovery.execGh contract — the variadic signature covers arbitrary gh
 // flag combinations.
 var reconcileExecGh = func(ctx context.Context, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "gh", args...)
-	return cmd.Output()
+	return github.RunGhSubprocess(ctx, "", args...)
 }
 
 // reconcileOutcome names WHICH reconcile arm fired, not merely whether one did.

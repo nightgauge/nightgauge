@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/survival"
@@ -12,9 +11,10 @@ import (
 
 // survivalExecGh is the indirection point for `gh`-backed survival detection so
 // tests can stub GitHub CLI calls without a real binary (mirrors the
-// reconcileExecGh / recovery.execGh pattern). It runs the real `gh` by default.
+// reconcileExecGh / recovery.execGh pattern). The default runs the real `gh`
+// through the instrumented, rate-limit-gated helper (#1913).
 var survivalExecGh = func(ctx context.Context, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, "gh", args...).Output()
+	return RunGhSubprocess(ctx, "", args...)
 }
 
 // SurvivalDetector is the deterministic, GitHub-backed implementation of

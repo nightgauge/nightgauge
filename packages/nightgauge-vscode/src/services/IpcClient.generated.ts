@@ -57,6 +57,7 @@ import type {
   GitCleanupMergedBranchesResult,
   GitComposeBranchNameResult,
   GitHubAuthCheckResult,
+  GitHubGraphQLRawResult,
   GitLogEntry,
   GitStatusResult,
   HealthAnalysis,
@@ -715,6 +716,10 @@ export class IpcClientGenerated extends IpcClientBase {
 
   async githubAuthCheck(githubUser?: string): Promise<GitHubAuthCheckResult> {
     return this.call<GitHubAuthCheckResult>('github.authCheck', { githubUser });
+  }
+
+  async githubGraphqlRaw(query: string, variables?: unknown, githubUser?: string): Promise<GitHubGraphQLRawResult> {
+    return this.call<GitHubGraphQLRawResult>('github.graphqlRaw', { query, variables, githubUser });
   }
 
 

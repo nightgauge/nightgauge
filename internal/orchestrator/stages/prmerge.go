@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
+	"github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/knowledge"
 )
 
@@ -853,12 +854,9 @@ func (c *execGhClient) withWorkdir(dir string) ghClient {
 }
 
 func (c *execGhClient) View(ctx context.Context, prNumber int) (PRViewSnapshot, error) {
-	cmd := exec.CommandContext(ctx, "gh", "pr", "view", fmt.Sprintf("%d", prNumber),
+	stdout, err := github.RunGhSubprocess(ctx, c.workdir,
+		"pr", "view", fmt.Sprintf("%d", prNumber),
 		"--json", "state,statusCheckRollup,mergeable,mergeStateStatus,reviewDecision,headRefName")
-	if c.workdir != "" {
-		cmd.Dir = c.workdir
-	}
-	stdout, err := cmd.Output()
 	if err != nil {
 		return PRViewSnapshot{}, normalizeGhError(err)
 	}
@@ -915,12 +913,8 @@ func (c *execGhClient) View(ctx context.Context, prNumber int) (PRViewSnapshot, 
 // reclaimed by the post-merge worktree sweep once the worktree is no longer
 // active.
 func (c *execGhClient) Merge(ctx context.Context, prNumber int) error {
-	cmd := exec.CommandContext(ctx, "gh", "pr", "merge", fmt.Sprintf("%d", prNumber),
-		"--squash")
-	if c.workdir != "" {
-		cmd.Dir = c.workdir
-	}
-	_, err := cmd.Output()
+	_, err := github.RunGhSubprocess(ctx, c.workdir,
+		"pr", "merge", fmt.Sprintf("%d", prNumber), "--squash")
 	if err != nil {
 		return normalizeGhError(err)
 	}

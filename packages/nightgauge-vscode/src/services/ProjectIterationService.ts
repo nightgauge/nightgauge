@@ -26,6 +26,7 @@ import type {
 } from "./types/iteration";
 import { resolveConfigPath, logDeprecationWarning } from "../utils/configPathResolver";
 import { getGitHubUser } from "../utils/nightgaugeConfig";
+import { IpcClient } from "./IpcClient";
 import { execFile } from "child_process";
 
 const execAsync = promisify(exec);
@@ -96,6 +97,36 @@ export class ProjectIterationService {
       return { ...process.env, GH_TOKEN: this.ghTokenCache } as Record<string, string>;
     }
     return process.env as Record<string, string>;
+  }
+
+  /**
+   * Run a GraphQL query, preferring the daemon over `gh api graphql`.
+   *
+   * The subprocess spends from the same GraphQL budget as every in-process
+   * call while being invisible to the API ledger and unthrottled by the
+   * rate-limit gate (#1913). The daemon's client is instrumented and gated,
+   * so routing the identical query through it makes the spend measurable.
+   * The subprocess stays as the fallback for a window with no daemon
+   * connected — iteration sync must not start depending on `serve`.
+   */
+  private async graphql(
+    query: string,
+    variables: Record<string, string>
+  ): Promise<Record<string, unknown>> {
+    const ipc = IpcClient.getInstance();
+    if (ipc.isConnected) {
+      try {
+        return (await ipc.githubGraphqlRaw(query, variables)) as Record<string, unknown>;
+      } catch {
+        // Fall through to the subprocess rather than failing the sync.
+      }
+    }
+    const args = ["api", "graphql", "-f", `query=${query}`];
+    for (const [key, value] of Object.entries(variables)) {
+      args.push("-f", `${key}=${value}`);
+    }
+    const result = await execFileAsync("gh", args, { cwd: this.workspaceRoot });
+    return JSON.parse(result.stdout) as Record<string, unknown>;
   }
 
   /**
@@ -555,23 +586,11 @@ export class ProjectIterationService {
     `;
 
     try {
-      const result = await execFileAsync(
-        "gh",
-        [
-          "api",
-          "graphql",
-          "-f",
-          `query=${query}`,
-          "-f",
-          `projectId=${projectGlobalId}`,
-          "-f",
-          `fieldName=${fieldName}`,
-        ],
-        { cwd: this.workspaceRoot }
-      );
-
-      const data = JSON.parse(result.stdout);
-      const field = data.data?.node?.field as GraphQLIterationField | undefined;
+      const data = (await this.graphql(query, {
+        projectId: projectGlobalId,
+        fieldName,
+      })) as { data?: { node?: { field?: GraphQLIterationField } } };
+      const field = data.data?.node?.field;
 
       return field?.configuration?.iterations ?? [];
     } catch {
@@ -679,11 +698,11 @@ export class ProjectIterationService {
     `;
 
     try {
-      const args = ["api", "graphql", "-f", `query=${query}`, "-f", `projectId=${projectGlobalId}`];
-      if (cursor) args.push("-f", `cursor=${cursor}`);
-      const result = await execFileAsync("gh", args, { cwd: this.workspaceRoot });
-
-      const data = JSON.parse(result.stdout);
+      const variables: Record<string, string> = { projectId: projectGlobalId };
+      if (cursor) variables.cursor = cursor;
+      const data = (await this.graphql(query, variables)) as {
+        data?: { node?: { items?: { nodes?: unknown; pageInfo?: unknown } } };
+      };
       const items = data.data?.node?.items;
 
       if (!items) {

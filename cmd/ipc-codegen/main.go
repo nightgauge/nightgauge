@@ -387,6 +387,7 @@ func collectImportTypes(methods []MethodDef) []string {
 		"GitCleanupMergedBranchesResult":     true,
 		"GitComposeBranchNameResult":         true, // Issue #889
 		"GitHubAuthCheckResult":              true,
+		"GitHubGraphQLRawResult":             true, // Issue #1913
 		"CancelActiveForNetworkOutageResult": true, // Issue #3296
 		"CostAnalyticsResult":                true, // Issue #3317
 		"AnalyticsHealthResult":              true, // Issue #3318

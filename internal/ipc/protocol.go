@@ -229,6 +229,27 @@ type GitHubRateLimitParams struct {
 	GitHubUser string `json:"githubUser,omitempty"` // per-repo gh CLI user for multi-identity auth
 }
 
+// GitHubGraphQLRawParams are parameters for github.graphqlRaw.
+//
+// It exists so the extension's project-board writers stop shelling out to
+// `gh api graphql` (#1913): a subprocess spends from the same GraphQL budget
+// as everything else while being invisible to the API ledger and unthrottled
+// by the rate-limit gate. Routing the SAME query through the daemon's
+// existing client costs no new privilege — the subprocess already ran with
+// this token and these scopes — and makes the spend visible.
+type GitHubGraphQLRawParams struct {
+	Query      string                 `json:"query"`
+	Variables  map[string]interface{} `json:"variables,omitempty"`
+	GitHubUser string                 `json:"githubUser,omitempty"`
+}
+
+// GitHubGraphQLRawResult carries the GraphQL response envelope verbatim, so a
+// caller reads `data` and `errors` exactly as `gh api graphql` printed them.
+type GitHubGraphQLRawResult struct {
+	Data   map[string]interface{} `json:"data,omitempty"`
+	Errors []interface{}          `json:"errors,omitempty"`
+}
+
 // IssueViewParams are parameters for issue.view.
 type IssueViewParams struct {
 	Owner      string `json:"owner"`

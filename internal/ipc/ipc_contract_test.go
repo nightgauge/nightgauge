@@ -214,8 +214,9 @@ var contractTestedMethods = map[string]bool{
 	"forge.list":           true,
 	"forge.connectionTest": true,
 	// GitHub
-	"github.rateLimit": true,
-	"github.authCheck": true,
+	"github.rateLimit":  true,
+	"github.authCheck":  true,
+	"github.graphqlRaw": true,
 	// Notifications
 	"notifications.reloadTokens":       true,
 	"notifications.checkAuthorization": true,
@@ -478,6 +479,13 @@ func TestContract_GitHub(t *testing.T) {
 	t.Run("github.authCheck/registered", func(t *testing.T) {
 		id := h.sendRequest("github.authCheck", map[string]interface{}{})
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "github.authCheck")
+	})
+
+	// #1913 — the verb the extension's board writers use instead of shelling
+	// out to `gh api graphql`, which spent from the same budget unrecorded.
+	t.Run("github.graphqlRaw/registered", func(t *testing.T) {
+		id := h.sendRequest("github.graphqlRaw", map[string]interface{}{"query": "query{viewer{login}}"})
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "github.graphqlRaw")
 	})
 }
 
