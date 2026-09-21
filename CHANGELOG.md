@@ -14,6 +14,20 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A release build no longer fails on a passing test suite.** The `v0.4.5`
+  release workflow failed with 13,875 tests passing and one failing — in a
+  teardown, not an assertion. `skillRunner.worktreeContainment.test.ts`'s first
+  case ended by emitting `close` without waiting for what that emit starts: the
+  containment comparison shells out to `git` in every repo under the test's
+  temp directory, and `afterEach` removed that directory while those children
+  were still walking it, so `fs.rmSync` threw `ENOTEMPTY`. The case now awaits
+  completion like the other five. Confirmed by instrumenting the teardown
+  rather than by rerunning until green: before the fix the first case reached
+  `afterEach` with the containment work unsettled and the other five did not;
+  after it, all six settle first.
+
 ## [0.4.5] - 2026-09-20
 
 ### Fixed

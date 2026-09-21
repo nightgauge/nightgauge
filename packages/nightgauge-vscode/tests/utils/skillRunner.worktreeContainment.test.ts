@@ -199,20 +199,27 @@ describe("runStageSkillHeadless — worktree write containment (#129)", () => {
   it("establishes the containment boundary before the stage can write", async () => {
     const proc = createMockChildProcess();
     vi.mocked(spawn).mockReturnValue(proc);
-    const handle = runStageSkillHeadless(
-      "feature-dev",
-      129,
-      {},
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      worktree
-    );
-    expect(handle.containmentBaselineReady).toBeDefined();
-    await handle.containmentBaselineReady;
-    proc.emit("close", 0);
+    // `close` starts the containment comparison, which shells out to git in
+    // every repo under `tmp`. The test must not return before that settles:
+    // afterEach removes `tmp`, and a git child still walking it makes the
+    // rmSync fail ENOTEMPTY — a teardown race that failed the whole suite,
+    // and with it the v0.4.5 release build, on 13,875 passing tests.
+    const completed = new Promise<void>((resolve) => {
+      const handle = runStageSkillHeadless(
+        "feature-dev",
+        129,
+        { onComplete: () => resolve() },
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        worktree
+      );
+      expect(handle.containmentBaselineReady).toBeDefined();
+      void handle.containmentBaselineReady!.then(() => proc.emit("close", 0));
+    });
+    await completed;
   });
 
   it("fails a stage that wrote into a sibling repo, even though it exited 0", async () => {
