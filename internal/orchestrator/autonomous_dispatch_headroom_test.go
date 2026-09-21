@@ -29,7 +29,7 @@ func withFreshTracker(t *testing.T, user string, remaining int, resetIn time.Dur
 		Limit:     5000,
 		ResetAt:   time.Now().Add(resetIn).Unix(),
 	}
-	if err := tr.Set(user, info); err != nil {
+	if err := tr.Set(user, gh.ResourceCore, info); err != nil {
 		t.Fatalf("seed tracker: %v", err)
 	}
 	c := gh.NewClientWithURL("test-token", "https://api.github.test/graphql").WithRateLimitTracker(tr, user)

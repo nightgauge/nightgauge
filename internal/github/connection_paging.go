@@ -222,7 +222,7 @@ func (c *Client) readNextRelationPages(ctx context.Context, batch []*openRelatio
 			what, ErrConnectionTruncated, batch[0].pages+1, cause)
 	}
 
-	if err := c.waitRateLimitGate(ctx); err != nil {
+	if err := c.waitRateLimitGate(ctx, ResourceGraphQL); err != nil {
 		return failed(err)
 	}
 	var env struct {

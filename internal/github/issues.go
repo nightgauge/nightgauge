@@ -337,7 +337,7 @@ func (s *IssueService) getIssuesByNumbers(ctx context.Context, owner, repo strin
 
 	// queryRaw has no rate-limit floor gate, so wait on it here as Client.query
 	// does: below the floor a fail-fast client sends nothing.
-	if err := s.client.waitRateLimitGate(ctx); err != nil {
+	if err := s.client.waitRateLimitGate(ctx, ResourceGraphQL); err != nil {
 		return nil, fmt.Errorf("batch fetch issues: %w", err)
 	}
 	raw, err := s.client.queryRaw(ctx, sb.String(), vars)

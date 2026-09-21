@@ -1418,7 +1418,7 @@ func (s *Server) registerMethods() {
 		// tracker, at most one query fires per SharedTrackerMinCheckIntervalSecs
 		// regardless of how many windows are open.
 		if s.rateLimitTracker != nil {
-			if entry, fresh, err := s.rateLimitTracker.Get(p.GitHubUser); err == nil && fresh && entry != nil {
+			if entry, fresh, err := s.rateLimitTracker.Get(p.GitHubUser, gh.ResourceGraphQL); err == nil && fresh && entry != nil {
 				return &gh.RateLimitInfo{
 					Remaining: entry.Remaining,
 					Limit:     entry.Limit,
@@ -1437,7 +1437,7 @@ func (s *Server) registerMethods() {
 		if s.rateLimitTracker != nil {
 			// Persist is best-effort — if the tracker file is unwritable we
 			// still return fresh data to the caller rather than failing.
-			_ = s.rateLimitTracker.Set(p.GitHubUser, info)
+			_ = s.rateLimitTracker.Set(p.GitHubUser, gh.ResourceGraphQL, info)
 		}
 		return info, nil
 	}
@@ -1465,7 +1465,7 @@ func (s *Server) registerMethods() {
 		// caller treats "no reading" as "not exhausted on this signal".
 		var haveBucket bool
 		if s.rateLimitTracker != nil {
-			if entry, _, err := s.rateLimitTracker.Get(p.GitHubUser); err == nil && entry != nil {
+			if entry, _, err := s.rateLimitTracker.GetBudgetAcrossPools(p.GitHubUser); err == nil && entry != nil {
 				result.Remaining = entry.Remaining
 				result.Limit = entry.Limit
 				result.ResetsAt = entry.ResetAt

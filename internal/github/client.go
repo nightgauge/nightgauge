@@ -346,13 +346,46 @@ func envWithout(env []string, keys ...string) []string {
 	return out
 }
 
+// withMachineTracker attaches the machine-wide shared rate-limit tracker to a
+// client built for a one-shot process.
+//
+// Until this existed, WithRateLimitTracker was called in exactly three places,
+// all inside internal/ipc — so the gate was a DAEMON-ONLY mechanism. Every CLI
+// invocation (`nightgauge run` and the whole six-stage pipeline, the post-merge
+// hooks, issue route, pr_stage) built a client with a nil tracker, and a nil
+// tracker makes headroomGate.resetWait return at its first line: never gated,
+// and never writing a reading back. That is why the machine's tracker file sat
+// unwritten for 7h44m on 2026-09-21 while thousands of calls went out, and why
+// the pipeline only ever discovered exhaustion by taking a 403 from GitHub.
+//
+// WithRateLimitWait matches the daemon's choice (internal/ipc/server.go): a
+// one-shot that is out of budget should wait for the window — bounded by
+// maxFullExhaustionWait and the caller's context — rather than hard-fail an
+// issue that is mid-flight. The user key is empty, which collapses to
+// "default"; GetBudget reconciles that against whatever key the daemon writes,
+// since the same reset second is the same account.
+//
+// Best-effort: an unresolvable tracker path leaves the client exactly as it
+// was, because failing to build a client over a missing cache file would be a
+// worse outcome than an ungated call.
+func withMachineTracker(c *Client) *Client {
+	if c == nil {
+		return c
+	}
+	path, err := DefaultSharedTrackerPath()
+	if err != nil {
+		return c
+	}
+	return c.WithRateLimitTracker(NewSharedRateLimitTracker(path), "").WithRateLimitWait()
+}
+
 // NewClient creates a GitHub GraphQL client using the GITHUB_TOKEN env var.
 func NewClient() (*Client, error) {
 	token := os.Getenv("GITHUB_TOKEN")
 	if token == "" {
 		return nil, fmt.Errorf("GITHUB_TOKEN environment variable is required")
 	}
-	return NewClientWithToken(token), nil
+	return withMachineTracker(NewClientWithToken(token)), nil
 }
 
 // NewClientFromConfig creates a GitHub GraphQL client using the resolution
@@ -373,7 +406,7 @@ func NewClient() (*Client, error) {
 func NewClientFromConfig(cfg TokenResolver, owner string, cliToken string) (*Client, error) {
 	// 1. CLI flag override.
 	if cliToken != "" {
-		return NewClientWithToken(cliToken), nil
+		return withMachineTracker(NewClientWithToken(cliToken)), nil
 	}
 	return newClientFromChain(cfg, owner, execGHAuthTokenForUser, execGHAuthToken)
 }
@@ -398,7 +431,7 @@ func newClientFromChain(cfg TokenResolver, owner string, forUser func(string) (s
 			// Log as warning only — fall through to next tier.
 			fmt.Fprintf(os.Stderr, "warning: config token resolution failed: %v\n", err)
 		} else if tok != "" {
-			return NewClientWithToken(tok), nil
+			return withMachineTracker(NewClientWithToken(tok)), nil
 		}
 	}
 
@@ -411,7 +444,7 @@ func newClientFromChain(cfg TokenResolver, owner string, forUser func(string) (s
 		if err != nil {
 			return nil, fmt.Errorf("no GitHub token available for configured github_user %q (tried config and gh auth token --user; ambient GITHUB_TOKEN is intentionally NOT used for a configured identity): %w", user, err)
 		}
-		return NewClientWithToken(tok), nil
+		return withMachineTracker(NewClientWithToken(tok)), nil
 	}
 
 	// 3b. No github_user configured — ambient GITHUB_TOKEN env var first.
@@ -425,7 +458,7 @@ func newClientFromChain(cfg TokenResolver, owner string, forUser func(string) (s
 	if err != nil {
 		return nil, fmt.Errorf("no GitHub token available (tried config, GITHUB_TOKEN env, and gh CLI): %w", err)
 	}
-	return NewClientWithToken(tok), nil
+	return withMachineTracker(NewClientWithToken(tok)), nil
 }
 
 // warnGHFallback emits the gh CLI deprecation warning to stderr unless the
@@ -898,9 +931,41 @@ func (t *rateLimitHeaderTransport) RoundTrip(req *http.Request) (*http.Response,
 	if tracker == nil {
 		return resp, err
 	}
+	// GitHub names the pool it charged, and that is the authority: it is the
+	// same header the ledger records as Kind, and it is right for endpoints
+	// that bill somewhere unexpected. When it is absent — a proxy that strips
+	// it, a test server — fall back to the request path rather than to core,
+	// because silently filing a GraphQL reading under core is precisely the
+	// masking this split exists to end.
+	resource := resp.Header.Get("X-RateLimit-Resource")
+	if resource == "" {
+		resource = c.resourceForRequest(resp.Request)
+	}
 	// Best-effort: a tracker write failure must never break a request.
-	_, _ = tracker.SetFromHeaders(user, remaining, limit, reset)
+	_, _ = tracker.SetFromHeaders(user, resource, remaining, limit, reset)
 	return resp, err
+}
+
+// resourceForRequest infers the rate-limit pool from the request itself, for
+// responses that carry no X-RateLimit-Resource header (a proxy that strips it,
+// a test server). The client already knows the endpoint it sends GraphQL to,
+// so compare against that rather than pattern-matching a path: httptest
+// servers have no path at all, and getting this wrong files a GraphQL reading
+// under core, which is the masking this split exists to end.
+func (c *Client) resourceForRequest(req *http.Request) string {
+	if req == nil || req.URL == nil {
+		return ResourceCore
+	}
+	c.mu.Lock()
+	gqlURL := c.graphqlURL
+	c.mu.Unlock()
+	if gqlURL != "" && strings.HasPrefix(req.URL.String(), gqlURL) {
+		return ResourceGraphQL
+	}
+	if req.URL.Path == "/graphql" || strings.HasSuffix(req.URL.Path, "/graphql") {
+		return ResourceGraphQL
+	}
+	return ResourceCore
 }
 
 // rateLimitResetWait reports whether the attached tracker shows a fresh
@@ -910,8 +975,8 @@ func (t *rateLimitHeaderTransport) RoundTrip(req *http.Request) (*http.Response,
 // (the next API response will refresh us, so gating would be pointlessly
 // pessimistic). The one-line "rate limit gated" decision is logged here so the
 // fail-fast and wait paths share identical operator-visible output.
-func (c *Client) rateLimitResetWait() (time.Duration, bool) {
-	return c.headroomGate().resetWait()
+func (c *Client) rateLimitResetWait(resource string) (time.Duration, bool) {
+	return c.headroomGate(resource).resetWait()
 }
 
 // headroomGate is the rate-limit gate as a value, decoupled from *Client.
@@ -926,6 +991,9 @@ func (c *Client) rateLimitResetWait() (time.Duration, bool) {
 type headroomGate struct {
 	tracker *SharedRateLimitTracker
 	user    string
+	// resource is the pool this gate protects (ResourceCore / ResourceGraphQL).
+	// Empty means "the caller cannot know", and gates on the lower of the two.
+	resource string
 	// wait flips fail-fast (ErrRateLimitGated) to wait-for-reset.
 	wait     bool
 	logger   func(format string, args ...interface{})
@@ -934,13 +1002,14 @@ type headroomGate struct {
 }
 
 // headroomGate builds the gate this client pays from its own wiring.
-func (c *Client) headroomGate() headroomGate {
+func (c *Client) headroomGate(resource string) headroomGate {
 	c.mu.Lock()
 	g := headroomGate{
-		tracker: c.tracker,
-		user:    c.trackerUser,
-		wait:    c.rateLimitWaitOnGate,
-		logger:  c.gateLogger,
+		tracker:  c.tracker,
+		user:     c.trackerUser,
+		resource: resource,
+		wait:     c.rateLimitWaitOnGate,
+		logger:   c.gateLogger,
 	}
 	c.mu.Unlock()
 	g.jitter = c.gateJitter
@@ -964,7 +1033,14 @@ func (g headroomGate) resetWait() (time.Duration, bool) {
 	if tracker == nil {
 		return 0, false
 	}
-	entry, fresh, err := tracker.GetBudget(user)
+	var entry *SharedTrackerEntry
+	var fresh bool
+	var err error
+	if g.resource == "" {
+		entry, fresh, err = tracker.GetBudgetAcrossPools(user)
+	} else {
+		entry, fresh, err = tracker.GetBudget(user, g.resource)
+	}
 	if err != nil || entry == nil {
 		return 0, false
 	}
@@ -994,8 +1070,8 @@ func (g headroomGate) resetWait() (time.Duration, bool) {
 		return 0, false
 	}
 	resetIn := time.Duration(entry.ResetAt-now) * time.Second
-	logger("github: rate limit gated (remaining=%d floor=%d reset_in=%s user=%q)",
-		entry.Remaining, floor, resetIn, user)
+	logger("github: rate limit gated (pool=%s remaining=%d floor=%d reset_in=%s user=%q)",
+		g.poolLabel(), entry.Remaining, floor, resetIn, user)
 	return resetIn, true
 }
 
@@ -1050,8 +1126,16 @@ func (g headroomGate) await(ctx context.Context) error {
 // returns nil so the call proceeds (the response path absorbs any residual
 // 429). A context that expires mid-wait returns ctx.Err(), so a short-ctx call
 // bails fast while a long-ctx recovery op waits the reset out. Issue #3976.
-func (c *Client) waitRateLimitGate(ctx context.Context) error {
-	return c.headroomGate().await(ctx)
+func (c *Client) waitRateLimitGate(ctx context.Context, resource string) error {
+	return c.headroomGate(resource).await(ctx)
+}
+
+// poolLabel names the gate's pool for operator output.
+func (g headroomGate) poolLabel() string {
+	if g.resource == "" {
+		return "core+graphql"
+	}
+	return g.resource
 }
 
 // ResolveTokenForUser returns the GitHub token for the given gh CLI user.
@@ -1170,7 +1254,7 @@ func (c *Client) Mutate(ctx context.Context, m interface{}, input map[string]int
 
 // query executes a GraphQL query with rate limiting and retry on rate limit errors.
 func (c *Client) query(ctx context.Context, q interface{}, variables map[string]interface{}) error {
-	if err := c.waitRateLimitGate(ctx); err != nil {
+	if err := c.waitRateLimitGate(ctx, ResourceGraphQL); err != nil {
 		return err
 	}
 	for attempt := 0; attempt <= maxRetries; attempt++ {
@@ -1199,7 +1283,7 @@ func (c *Client) query(ctx context.Context, q interface{}, variables map[string]
 
 // mutate executes a GraphQL mutation with rate limiting and retry.
 func (c *Client) mutate(ctx context.Context, m interface{}, input map[string]interface{}) error {
-	if err := c.waitRateLimitGate(ctx); err != nil {
+	if err := c.waitRateLimitGate(ctx, ResourceGraphQL); err != nil {
 		return err
 	}
 	for attempt := 0; attempt <= maxRetries; attempt++ {
@@ -1360,7 +1444,7 @@ func (c *Client) restDoStatus(ctx context.Context, method, path string, body int
 		}
 	}
 
-	if err := c.waitRateLimitGate(ctx); err != nil {
+	if err := c.waitRateLimitGate(ctx, ResourceCore); err != nil {
 		return nil, 0, err
 	}
 
@@ -1615,7 +1699,7 @@ func (c *Client) computeRateLimitBackoff(ctx context.Context, err error, attempt
 		// Probe also failed (rate limited). Fall back to the tracker's cached
 		// ResetAt so we still wait for the actual reset rather than using the
 		// short exponential fallback.
-		if entry, _, trackerErr := c.tracker.Get(c.trackerUser); trackerErr == nil && entry != nil && entry.ResetAt > 0 {
+		if entry, _, trackerErr := c.tracker.Get(c.trackerUser, ResourceGraphQL); trackerErr == nil && entry != nil && entry.ResetAt > 0 {
 			until := time.Duration(entry.ResetAt-time.Now().Unix())*time.Second + 500*time.Millisecond
 			if until > 0 {
 				log.Printf("github: rate limit fully exhausted, probe failed — using cached reset (user=%q), waiting %s",

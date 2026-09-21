@@ -16,13 +16,36 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The rate-limit gate was never installed on the CLI path.**
+  `WithRateLimitTracker` was called in three places, all inside
+  `internal/ipc`, so the shared tracker was a daemon-only mechanism. Every
+  one-shot process — `nightgauge run` and all six pipeline stages, the
+  post-merge hooks, `issue route` — built a client with a nil tracker, and a
+  nil tracker makes the gate return "not gated" at its first line. Those
+  processes were never held before a call and never wrote a reading back, so
+  they learned about exhaustion only by taking a 403. Every CLI constructor now
+  attaches the machine-wide tracker and waits out a reset rather than failing an
+  in-flight issue. This is the wiring the other two fixes depend on.
+
+- **The tracker conflated the core and graphql budgets into one slot.** GitHub
+  bills REST and GraphQL separately, each with its own remaining count and
+  reset second, and the response-header interceptor wrote whichever pool
+  answered last into a single per-user slot. Core is almost always the
+  healthier pool, so a REST reply routinely erased the GraphQL exhaustion the
+  gate existed to see — measured at 20:11Z on 2026-09-21: `graphql remaining=110`
+  and `core remaining=4988` in the same window, one number stored. Entries are
+  keyed `(user, pool)` from tracker version 2 (v1 entries are dropped on read),
+  the pool comes from GitHub's own `X-RateLimit-Resource` header, and each gate
+  consults the pool its call will actually spend. A `gh` subprocess, whose
+  shape is not known before it starts, consults the more constrained of the two.
+
 - **The machine-wide GitHub rate-limit gate was dead code for most of its
   wall-clock life.** `headroomGate.resetWait` discarded any tracker reading
   older than 15 seconds as "no data" and opened the gate — so a budget already
   measured as exhausted was spent into anyway by every short-lived CLI process
   and by every producer that runs between the attention sweep's bursts.
   Freshness and expiry answer different questions: staleness costs confidence
-  in *how much* is left, but none in whether the window has *reset*, and a
+  in _how much_ is left, but none in whether the window has _reset_, and a
   below-floor reading can only move further down before it does. `ResetAt` is
   now the authority for a below-floor entry, and freshness is required only
   when the entry carries no reset to reason about. Measured on 2026-09-21: the

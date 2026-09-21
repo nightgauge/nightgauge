@@ -43,7 +43,7 @@ func TestRateLimitGate_WaitsThenProceeds_WhenEnabled(t *testing.T) {
 	// Adding whole seconds to a whole-second value makes the margin exactly the
 	// offset, whenever in the second the test happens to start.
 	resetAt := time.Now().Unix() + 2
-	if err := tr.Set("alice", &RateLimitInfo{Remaining: 5, Limit: 5000, ResetAt: resetAt}); err != nil {
+	if err := tr.Set("alice", ResourceGraphQL, &RateLimitInfo{Remaining: 5, Limit: 5000, ResetAt: resetAt}); err != nil {
 		t.Fatalf("seed tracker: %v", err)
 	}
 	t.Setenv(rateLimitFloorEnv, "100")
@@ -74,7 +74,7 @@ func TestRateLimitGate_WaitRespectsContext(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rate-limit.json")
 	tr := NewSharedRateLimitTracker(path)
 	resetAt := time.Now().Add(20 * time.Minute).Unix() // far away
-	if err := tr.Set("alice", &RateLimitInfo{Remaining: 5, Limit: 5000, ResetAt: resetAt}); err != nil {
+	if err := tr.Set("alice", ResourceGraphQL, &RateLimitInfo{Remaining: 5, Limit: 5000, ResetAt: resetAt}); err != nil {
 		t.Fatalf("seed tracker: %v", err)
 	}
 	t.Setenv(rateLimitFloorEnv, "100")
@@ -106,7 +106,8 @@ func TestREST_GateFailFastWithoutWait(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rate-limit.json")
 	tr := NewSharedRateLimitTracker(path)
 	resetAt := time.Now().Add(20 * time.Minute).Unix()
-	if err := tr.Set("alice", &RateLimitInfo{Remaining: 5, Limit: 5000, ResetAt: resetAt}); err != nil {
+	// restGet spends the CORE pool, so that is the pool that must gate it.
+	if err := tr.Set("alice", ResourceCore, &RateLimitInfo{Remaining: 5, Limit: 5000, ResetAt: resetAt}); err != nil {
 		t.Fatalf("seed tracker: %v", err)
 	}
 	t.Setenv(rateLimitFloorEnv, "100")

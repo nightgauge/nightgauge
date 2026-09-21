@@ -43,7 +43,7 @@ func seedGatedTracker(t *testing.T, resetOffsetSeconds int64) *SharedRateLimitTr
 	// Whole seconds on a whole-second reading, see the #923 note in
 	// client_ratelimit_wait_test.go.
 	resetAt := time.Now().Unix() + resetOffsetSeconds
-	if err := tr.Set("alice", &RateLimitInfo{Remaining: 5, Limit: 5000, ResetAt: resetAt}); err != nil {
+	if err := tr.Set("alice", ResourceGraphQL, &RateLimitInfo{Remaining: 5, Limit: 5000, ResetAt: resetAt}); err != nil {
 		t.Fatalf("seed tracker: %v", err)
 	}
 	t.Setenv(rateLimitFloorEnv, "100")
@@ -81,7 +81,7 @@ func TestRateLimitGate_JitterExtendsWait(t *testing.T) {
 	gateTestHooks(c, 0.999, 2*time.Second, time.Nanosecond)
 
 	start := time.Now()
-	if err := c.waitRateLimitGate(context.Background()); err != nil {
+	if err := c.waitRateLimitGate(context.Background(), ResourceGraphQL); err != nil {
 		t.Fatalf("waitRateLimitGate: %v", err)
 	}
 	if waited := time.Since(start); waited < 3450*time.Millisecond {
@@ -119,7 +119,7 @@ func TestRateLimitGate_GovernorSpreadsBurst(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			err := c.waitRateLimitGate(ctx)
+			err := c.waitRateLimitGate(ctx, ResourceGraphQL)
 			mu.Lock()
 			released = append(released, time.Now())
 			errs = append(errs, err)
