@@ -14,6 +14,44 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Added
+
+- **Every release artifact is malware-scanned before it is published or
+  attested.** v0.4.4's `darwin-arm64` .vsix was flagged on VirusTotal (6 of 66
+  engines, all generic heuristics) after it reached the Marketplace. The
+  artifact was clean — Developer ID signed, Apple-notarized, provenance-attested
+  — but nothing in the release path scanned the packaged artifact, so the first
+  scan anyone ran was the Marketplace's. `scripts/malware-scan.sh` now runs
+  ClamAV over the per-target .vsix files and the built binaries in both
+  `release.yml` and `marketplace-publish.yml`, before attestation and before
+  publish, and writes a JSON report as a run artifact.
+
+  The gate is deliberately not `clamscan`'s exit code. `clamscan` exits `0`
+  both for a clean artifact and for one it never read: measured on the real
+  .vsix, `--max-filesize=1M` reports `Data scanned: 0 B` and still exits `0`.
+  The scan therefore also asserts a floor on bytes actually scanned, and fails
+  closed when the floor is not met. Size limits are raised for the same reason
+  — the .vsix already scans to 77.40 MiB against ClamAV's own 100 MB default
+  `--max-scansize`, so the scan was within 23% of silently skipping content.
+  `scripts/test-malware-scan.sh` covers all of it, including a real EICAR
+  sample so the stubbed arms cannot drift from the tool they imitate.
+
+- **The npm dependency tree is scanned.** `govulncheck` covered the Go module
+  graph only, while the extension bundles its entire npm tree into
+  `dist/extension.cjs`. `npm audit` now gates CI at high severity — the side of
+  the supply chain where a hijacked package is far likelier than in a Go
+  binary. The tree is currently clean at every severity.
+
+### Changed
+
+- **Go builds are reproducible.** `-trimpath` is now set in both the Makefile
+  and `.goreleaser.yml`, which previously disagreed: GoReleaser trimmed by
+  default and the Makefile — which builds the binary bundled into the .vsix —
+  did not, so one commit produced two differently-built binaries. Published
+  binaries embedded 1198 strings containing the build machine's paths; they now
+  embed none. This is what lets a third party rebuild a tag and compare hashes
+  rather than take our word that an artifact is clean.
+
 ### Fixed
 
 - **`pr-merge` no longer hands a PR to the LLM because GitHub had not finished

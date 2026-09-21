@@ -31,6 +31,11 @@ builds:
         goarch: arm64
     main: ./cmd/nightgauge
     binary: nightgauge
+    # Stated explicitly rather than relying on GoReleaser's default, so this
+    # matches the Makefile's GOFLAGS_BUILD and a reader can see the two build
+    # paths agree. -trimpath keeps builds reproducible from the tag.
+    flags:
+      - -trimpath
     ldflags:
       - -s -w -X main.version={{.Version}}
 

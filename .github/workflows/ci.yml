@@ -618,6 +618,37 @@ jobs:
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
           "$(go env GOPATH)/bin/govulncheck" ./...
+      - name: npm vulnerability scan (npm audit)
+        # govulncheck above covers the Go module graph ONLY. The extension
+        # bundles its npm dependency tree into dist/extension.cjs via esbuild,
+        # so until this step the entire JavaScript supply chain shipped to
+        # users was unscanned -- the side of the tree where a malicious or
+        # hijacked package is far likelier than in a Go binary.
+        #
+        # `npm audit` is deliberate over a third-party scanner action: it needs
+        # no pinned external action in the release-adjacent path, and the
+        # lockfile is the exact input we ship. It matches known advisories, not
+        # novel malicious behaviour -- pair it with GitHub's Dependabot alerts,
+        # which cover this repository already.
+        #
+        # Gated at `high` so a release is not blocked by a low-severity
+        # advisory in a devDependency; moderate and below are reported.
+        run: |
+          set -uo pipefail
+          npm audit --audit-level=high || AUDIT_RC=$?
+          npm audit --audit-level=moderate --json > npm-audit.json 2>/dev/null || true
+          if [ "${AUDIT_RC:-0}" -ne 0 ]; then
+            echo "::error::npm audit found a high or critical advisory"
+            exit 1
+          fi
+          echo "OK: no high/critical npm advisories"
+      - name: Upload npm audit report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: npm-audit-report
+          path: npm-audit.json
+          if-no-files-found: warn
       - name: Go dependency-license gate (go-licenses)
         # Blocks proprietary (forbidden) and GPL/AGPL-family (restricted)
         # licenses. Reciprocal (MPL-2.0, file-level copyleft) is allowed — it is

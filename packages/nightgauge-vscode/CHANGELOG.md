@@ -9,6 +9,13 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- The Go binary bundled in this extension is now built with `-trimpath`, so it
+  no longer embeds build-machine paths and a given release can be rebuilt from
+  its tag and hash-compared. Every published .vsix is also malware-scanned
+  before it is attested or uploaded.
+
 ### Fixed
 
 - Phase progress within a stage is visible while the stage is worked, rather
