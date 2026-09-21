@@ -29,26 +29,99 @@ mkdir -p .nightgauge/pipeline
 
 ## Step 8.2: Write issue-{N}.json inline
 
+**Every value below is re-derived in THIS block, from a source that survives.**
+Nothing is inherited from an earlier phase. Each `Bash` call is a fresh shell,
+so a variable assigned in Phase 3 or Phase 5 is gone by the time this block
+runs, and the old `${VAR:-}` defaults turned that into a schema-valid context
+file with an empty `branch`, an empty title and no labels — a stage that exits
+0 and produces nothing the gate will accept (#1919).
+
+Durable sources, in order of authority:
+
+| Field         | Source                                                                   |
+| ------------- | ------------------------------------------------------------------------ |
+| issue number  | `NIGHTGAUGE_ISSUE_NUMBER` — process environment, set by the orchestrator |
+| repo          | `NIGHTGAUGE_REPO` — same                                                 |
+| `branch`      | the worktree's own `HEAD`; branch creation checks it out                 |
+| `base_branch` | `origin/HEAD`                                                            |
+| issue content | one `nightgauge forge issue view` fetch                                  |
+
 ```bash
+set -u
+ISSUE_NUMBER="${ISSUE_NUMBER:-${NIGHTGAUGE_ISSUE_NUMBER:-}}"
+REPO="${REPO:-${NIGHTGAUGE_REPO:-}}"
+if [ -z "$ISSUE_NUMBER" ]; then
+  echo "ERROR: no issue number (neither ISSUE_NUMBER nor NIGHTGAUGE_ISSUE_NUMBER)" >&2
+  exit 1
+fi
+
+# The branch. HEAD is authoritative: `nightgauge git branch-create` creates AND
+# checks out, so by this phase the worktree is already on the feature branch.
+BRANCH_NAME="${BRANCH_NAME:-}"
+[ -n "$BRANCH_NAME" ] || BRANCH_NAME=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+case "$BRANCH_NAME" in
+  */"$ISSUE_NUMBER"-*) ;;
+  *)
+    echo "ERROR: HEAD is on '$BRANCH_NAME', which is not issue #$ISSUE_NUMBER's branch." >&2
+    echo "       Re-run Phase 5 (nightgauge git branch-create --issue $ISSUE_NUMBER --json)," >&2
+    echo "       which is idempotent, then repeat this step." >&2
+    exit 1
+    ;;
+esac
+
+BASE_BRANCH="${BASE_BRANCH:-}"
+if [ -z "$BASE_BRANCH" ]; then
+  BASE_BRANCH=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')
+fi
+BASE_BRANCH="${BASE_BRANCH:-main}"
+
+# The issue itself. One fetch, only when this shell does not already hold it.
+ISSUE_JSON="${ISSUE_JSON:-}"
+if [ -z "$ISSUE_JSON" ]; then
+  if [ -n "$REPO" ]; then
+    ISSUE_JSON=$(nightgauge forge issue view "$ISSUE_NUMBER" --repo "$REPO" --json)
+  else
+    ISSUE_JSON=$(nightgauge forge issue view "$ISSUE_NUMBER" --json)
+  fi
+fi
+if [ -z "$ISSUE_JSON" ] || ! printf '%s\n' "$ISSUE_JSON" | jq -e . >/dev/null 2>&1; then
+  echo "ERROR: could not fetch issue #$ISSUE_NUMBER as JSON" >&2
+  exit 1
+fi
+
 TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 CONTEXT_FILE=".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json"
 
-# Extract labels and body from issue JSON for safe jq interpolation
+TITLE="${TITLE:-$(printf '%s\n' "$ISSUE_JSON" | jq -r '.title // ""')}"
 LABELS_JSON=$(printf '%s\n' "$ISSUE_JSON" | jq -c '[.labels[].name]')
 ISSUE_BODY=$(printf '%s\n' "$ISSUE_JSON" | jq -r '.body // ""')
 
+# Type from the branch prefix, which the binary already derived from the
+# labels — one derivation, not two that can disagree.
+ISSUE_TYPE="${ISSUE_TYPE:-}"
+if [ -z "$ISSUE_TYPE" ]; then
+  case "${BRANCH_NAME%%/*}" in
+    fix) ISSUE_TYPE="bug" ;;
+    docs) ISSUE_TYPE="docs" ;;
+    chore) ISSUE_TYPE="chore" ;;
+    refactor) ISSUE_TYPE="refactor" ;;
+    test) ISSUE_TYPE="test" ;;
+    *) ISSUE_TYPE="feature" ;;
+  esac
+fi
+
 # Extract requirements from issue body
-REQ_SUMMARY=$(printf '%s\n' "$ISSUE_JSON" | jq -r '.body' | head -5 | tr '\n' ' ')
-REQ_AC=$(printf '%s\n' "$ISSUE_JSON" | jq -r '.body' | grep -E '^\s*-\s*\[' | jq -R -s 'split("\n") | map(select(. != ""))')
+REQ_SUMMARY=$(printf '%s\n' "$ISSUE_BODY" | head -5 | tr '\n' ' ')
+REQ_AC=$(printf '%s\n' "$ISSUE_BODY" | grep -E '^\s*-\s*\[' | jq -R -s 'split("\n") | map(select(. != ""))')
 
 jq -n \
   --argjson issue_number "$ISSUE_NUMBER" \
-  --arg title "${TITLE:-}" \
-  --arg body "${ISSUE_BODY:-}" \
-  --arg branch "${BRANCH_NAME:-}" \
-  --arg base_branch "${BASE_BRANCH:-main}" \
-  --arg issue_type "${ISSUE_TYPE:-feature}" \
-  --argjson labels "${LABELS_JSON}" \
+  --arg title "$TITLE" \
+  --arg body "$ISSUE_BODY" \
+  --arg branch "$BRANCH_NAME" \
+  --arg base_branch "$BASE_BRANCH" \
+  --arg issue_type "$ISSUE_TYPE" \
+  --argjson labels "${LABELS_JSON:-[]}" \
   --arg req_summary "${REQ_SUMMARY:-}" \
   --argjson req_ac "${REQ_AC:-[]}" \
   --arg created_at "$TIMESTAMP" \
@@ -62,7 +135,7 @@ jq -n \
     type: $issue_type,
     requirements: {
       summary: $req_summary,
-      acceptance_criteria: ($req_ac | fromjson),
+      acceptance_criteria: $req_ac,
       user_story: null,
       technical_notes: null
     },
@@ -73,10 +146,19 @@ jq -n \
     created_at: $created_at
   }' > "$CONTEXT_FILE"
 
-jq . "$CONTEXT_FILE" > /dev/null && \
-  echo "Context written: $CONTEXT_FILE" || \
-  { echo "ERROR: Context file JSON invalid" >&2; exit 1; }
+jq -e '.branch != "" and .title != ""' "$CONTEXT_FILE" > /dev/null && \
+  echo "Context written: $CONTEXT_FILE (branch=$BRANCH_NAME)" || \
+  { echo "ERROR: context file is missing branch or title" >&2; exit 1; }
 ```
+
+**If this block exits non-zero, do not continue.** Fix what it reported and run
+it again — it is idempotent.
+
+**Backstop:** the orchestrator repairs an empty `branch` from the worktree's
+`HEAD` after the stage exits and before the post-condition gate reads the file,
+so a run that loses it anyway is no longer a wasted, escalated stage. That is a
+safety net, not a licence — a context whose other fields are empty still
+describes nothing to the stages downstream.
 
 ## Step 8.3: Knowledge scaffolding — done by the binary, not by this skill
 

@@ -8,6 +8,21 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Phase 8 no longer inherits shell variables from earlier phases (#1919).**
+  `BRANCH_NAME`, `ISSUE_JSON`, `TITLE`, `ISSUE_TYPE` and `BASE_BRANCH` were
+  assigned in Phase 3 / Phase 5 and read back in Phase 8, in a different shell
+  — and a shell variable does not survive between tool calls. `${VAR:-}` then
+  wrote a schema-valid `issue-{N}.json` with an empty `branch`, empty title and
+  no labels, which the post-condition gate correctly called a no-op. Phase 8
+  now re-derives every field in its own block from a source that survives: the
+  issue number and repo from the process environment, the branch from the
+  worktree's `HEAD`, the issue content from one `forge issue view` fetch. It
+  fails loudly when `HEAD` is not this issue's branch, and its final check
+  asserts `branch` and `title` are non-empty rather than merely that the file
+  is parseable — the old check passed on an empty file.
+
 ### Changed
 
 - Migrate all direct `gh` invocations to `nightgauge forge` (#3363, Wave 4 of forge-abstraction epic #3349). Skill now works against GitLab as well as GitHub via the forge abstraction.

@@ -5808,6 +5808,17 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// /nightgauge:retro's outcome append, the sidebar) then found
 			// nothing, which is why this workspace's root KB still ended at
 			// 390- after hundreds of runs.
+			// Recover a `branch` the skill lost between shells BEFORE the
+			// post-condition gate reads the file (#1919). Ordered ahead of
+			// resolveFeatureBranch's own re-read below is not possible — that
+			// ran before the stage's context was final — so the runtime's
+			// branch is refreshed here too.
+			stampFeatureBranchAtPickup(workspaceRoot, stageWorkspace(runtime, workspaceRoot), item)
+			if runtime != nil && runtime.FeatureBranch() == "" {
+				if b := resolveFeatureBranch(runtime, workspaceRoot, item.Number); b != "" {
+					runtime.SetBranch(b)
+				}
+			}
 			s.scaffoldKnowledgeAtPickup(workspaceRoot, stageWorkspace(runtime, workspaceRoot), item)
 		case state.StageFeatureValidate:
 			if gr := loadGateResults(workspaceRoot, item.Number); len(gr) > 0 {
@@ -8180,6 +8191,94 @@ func (s *Scheduler) scaffoldKnowledgeAtPickup(workspaceRoot, worktreeDir string,
 	if _, err := kbworkspace.InitTree(kbworkspace.InitTreeInput{WorkspaceRoot: wsRoot}); err != nil {
 		log.Printf("#%d: workspace knowledge tree init failed (non-fatal): %v", item.Number, err)
 	}
+}
+
+// stampFeatureBranchAtPickup repairs an issue context file whose `branch` field
+// is empty by reading the branch the run's worktree is actually checked out on
+// (#1919).
+//
+// The skill assigns BRANCH_NAME in its branch-creation phase and reads it back
+// several phases later, in a different shell — and a shell variable does not
+// survive between tool calls. When the write lands in its own shell the field
+// expands to "", the context file is otherwise complete and schema-valid, and
+// the post-condition gate correctly calls the stage a no-op. The stage is then
+// paid for twice (escalation) for a branch that exists in git the whole time.
+//
+// `nightgauge git branch-create` creates AND checks out, so by the time the
+// context is written the worktree's HEAD names the answer. Reading it here
+// takes the field out of the model's hands entirely.
+//
+// Deliberately narrow, so this repairs a lost variable and never invents a
+// branch:
+//   - only when `branch` is absent or empty; a non-empty value is never
+//     overwritten, however wrong it looks (an empty slug is #1915's defect,
+//     not this one's).
+//   - only when HEAD is on a branch whose issue number is THIS issue. A
+//     detached HEAD, or a worktree still sitting on the base branch because no
+//     branch was ever created, stamps nothing and the gate fails as it should.
+//
+// Non-fatal throughout: every failure is logged and the gate remains the
+// authority on whether the stage produced its post-state.
+func stampFeatureBranchAtPickup(workspaceRoot, worktreeDir string, item types.BoardItem) {
+	contextPath := resolveIssueContextPath(workspaceRoot, worktreeDir, item.Repo, item.Number)
+	if contextPath == "" {
+		return
+	}
+	data, err := os.ReadFile(contextPath)
+	if err != nil {
+		return
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return
+	}
+	if existing, ok := raw["branch"].(string); ok && strings.TrimSpace(existing) != "" {
+		return
+	}
+
+	repoDir := worktreeDir
+	if repoDir == "" {
+		repoDir = workspaceRoot
+	}
+	gitSvc, err := git.NewService(repoDir)
+	if err != nil {
+		log.Printf("#%d: issue context has no branch and the worktree at %s could not be "+
+			"opened to recover it (non-fatal): %v", item.Number, repoDir, err)
+		return
+	}
+	branch, err := gitSvc.CurrentBranch()
+	if err != nil {
+		log.Printf("#%d: issue context has no branch and HEAD in %s names none "+
+			"(non-fatal): %v", item.Number, repoDir, err)
+		return
+	}
+	if n, ok := git.ParseIssueNumberFromBranch(branch); !ok || n != item.Number {
+		log.Printf("#%d: issue context has no branch and HEAD is on %q, which is not this "+
+			"issue's branch — stamping nothing", item.Number, branch)
+		return
+	}
+
+	raw["branch"] = branch
+	updated, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return
+	}
+	// Atomic write, same as stampKnowledgePath: temp file + rename, so a
+	// reader never sees a half-written context (#1210).
+	tmpPath := contextPath + ".tmp"
+	if err := os.WriteFile(tmpPath, updated, 0o644); err != nil {
+		log.Printf("#%d: could not write recovered branch %q into %s (non-fatal): %v",
+			item.Number, branch, contextPath, err)
+		return
+	}
+	if err := os.Rename(tmpPath, contextPath); err != nil {
+		_ = os.Remove(tmpPath)
+		log.Printf("#%d: could not write recovered branch %q into %s (non-fatal): %v",
+			item.Number, branch, contextPath, err)
+		return
+	}
+	log.Printf("#%d: issue context carried no branch; recovered %q from the worktree's HEAD (#1919)",
+		item.Number, branch)
 }
 
 // stampKnowledgePath writes knowledge_path into the run's issue context file,
