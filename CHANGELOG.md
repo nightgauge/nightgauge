@@ -22,7 +22,7 @@ changelog, and the release workflow refuses a tag that does not.
   measured as exhausted was spent into anyway by every short-lived CLI process
   and by every producer that runs between the attention sweep's bursts.
   Freshness and expiry answer different questions: staleness costs confidence
-  in *how much* is left, but none in whether the window has *reset*, and a
+  in _how much_ is left, but none in whether the window has _reset_, and a
   below-floor reading can only move further down before it does. `ResetAt` is
   now the authority for a below-floor entry, and freshness is required only
   when the entry carries no reset to reason about. Measured on 2026-09-21: the
