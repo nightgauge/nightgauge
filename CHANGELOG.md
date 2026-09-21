@@ -14,6 +14,32 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Changed
+
+- **Every binary now carries a vendor identifier.** Avast's clean software
+  guidelines ask that "every executable file should contain a vendor
+  identifier". On macOS that is carried by the Developer ID signature, but the
+  linux build is unsigned and carried no attribution beyond the Go module
+  path. `main.vendor` is now linker-injected on every target and survives
+  stripping, and `nightgauge version` reports it. The version stays alone on
+  the first line so existing parsers are unaffected.
+
+- **The listing documents complete removal.** VS Code removes the extension
+  and its bundled binary, but not `~/.nightgauge`, `~/.config/nightgauge` or
+  per-repository `.nightgauge/`. The README now says exactly what to delete
+  and states that nothing is installed outside those paths — no services, no
+  login items, no changes to other applications or system settings.
+
+- **The Marketplace listing now names the publishing entity.** Avast's clean
+  software guidelines require software to "clearly identify the product vendor"
+  and "how to contact this entity". The listing named only the handle
+  `nightgauge`, while the shipped macOS binary is signed
+  `Developer ID Application: Edibu LLC (RZJPN7Y7BG)` — two unexplained names
+  for anyone comparing the signature to the publisher. The README and the
+  extension manifest now name Edibu, LLC, give a contact address, link the
+  Terms alongside the Privacy Policy and licence, and state the signing
+  identity with the commands to verify it.
+
 ### Added
 
 - **The RC dry-run scans its artifacts too.** `staging.yml` was the one release

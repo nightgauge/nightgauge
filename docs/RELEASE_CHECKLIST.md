@@ -586,7 +586,7 @@ release keeps `-s -w`.
 
 ### Two prerequisites, in order
 
-**1. A `Developer ID Application` certificate.** The Edibu LLC team
+**1. A `Developer ID Application` certificate.** The Edibu, LLC team
 (`RZJPN7Y7BG`) has an Apple Developer membership, but the certificates
 currently issued are `Apple Distribution`, which is for the App Store and iOS.
 Signing a Mac binary distributed _outside_ the App Store requires a
