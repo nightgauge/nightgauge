@@ -572,10 +572,11 @@ func TestAttentionRaiseBranchProtectionClassifiesDaemonSide(t *testing.T) {
 				},
 			},
 			wantRaised: true,
-			// Decide reports the merge state before it walks the checks, so the
-			// reason names the state — the card is still correct that a human
-			// is needed, which is what the gate decides.
-			wantReason: "dirty-merge-state: BLOCKED",
+			// #1927: Decide walks the failed-check rollup before the merge-state
+			// catch-all, so the reason names the actual failed check — the card
+			// is still correct that a human is needed, which is what the gate
+			// decides, and now also names what to fix.
+			wantReason: "failed-ci-checks: build-and-test",
 		},
 		{
 			name: "review required while CI is still pending will not clear by waiting",
@@ -585,7 +586,9 @@ func TestAttentionRaiseBranchProtectionClassifiesDaemonSide(t *testing.T) {
 				Checks:         []AttentionRaiseCheck{{Name: "build-and-test", Conclusion: ""}},
 			},
 			wantRaised: true,
-			wantReason: "dirty-merge-state: BLOCKED",
+			// #1927: a blocking review is also more specific than the
+			// merge-state catch-all, and Decide now reports it first.
+			wantReason: "review-not-approved: REVIEW_REQUIRED",
 		},
 		// #1027: pr-merge's FIRST snapshot has no check run at all — GitHub has
 		// not created one yet. The predicate treats that as CI not started;

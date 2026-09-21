@@ -157,7 +157,7 @@ func TestDecide_DirtyMergeableTrue_Punts(t *testing.T) {
 
 func TestDecide_FailedCheck_Punts(t *testing.T) {
 	d := Decide(PRViewSnapshot{
-		State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "CLEAN",
+		State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "BLOCKED",
 		StatusCheckRollup: []PRStatusCheckRow{
 			{Name: "build", Conclusion: "SUCCESS"},
 			{Name: "test", Conclusion: "FAILURE"},
@@ -168,6 +168,64 @@ func TestDecide_FailedCheck_Punts(t *testing.T) {
 	}
 	if !strings.Contains(d.Reason, "failed-ci-checks") {
 		t.Errorf("Reason = %q, want failed-ci-checks", d.Reason)
+	}
+}
+
+// TestDecide_FailedCheckPrecedesDirtyMergeState pins the #1927 regression: a
+// snapshot that is simultaneously non-CLEAN (BLOCKED) and carries a FAILURE
+// row must report failed-ci-checks, never dirty-merge-state.
+func TestDecide_FailedCheckPrecedesDirtyMergeState(t *testing.T) {
+	d := Decide(PRViewSnapshot{
+		State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "BLOCKED",
+		StatusCheckRollup: []PRStatusCheckRow{
+			{Name: "VSCode build & test", Conclusion: "FAILURE"},
+		},
+	})
+	if !d.Punt {
+		t.Fatalf("expected punt, got %+v", d)
+	}
+	if !strings.HasPrefix(d.Reason, ReasonFailedChecks) {
+		t.Errorf("Reason = %q, want prefix %q (failed check must be more specific than dirty-merge-state) — got %+v",
+			d.Reason, ReasonFailedChecks, d)
+	}
+	if strings.HasPrefix(d.Reason, ReasonDirtyState) {
+		t.Errorf("Reason = %q must not be dirty-merge-state when a check has FAILED — this is the #1927 regression", d.Reason)
+	}
+}
+
+// TestDecide_BlockingReviewPrecedesDirtyMergeState pins the review-before-
+// merge-state ordering: a BLOCKED state with a blocking review and no failed
+// check must report review-not-approved, not dirty-merge-state.
+func TestDecide_BlockingReviewPrecedesDirtyMergeState(t *testing.T) {
+	d := Decide(PRViewSnapshot{
+		State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "BLOCKED",
+		ReviewDecision: "REVIEW_REQUIRED",
+	})
+	if !d.Punt {
+		t.Fatalf("expected punt, got %+v", d)
+	}
+	if !strings.HasPrefix(d.Reason, ReasonReviewMissing) {
+		t.Errorf("Reason = %q, want prefix %q — got %+v", d.Reason, ReasonReviewMissing, d)
+	}
+	if strings.HasPrefix(d.Reason, ReasonDirtyState) {
+		t.Errorf("Reason = %q must not be dirty-merge-state when review is blocking", d.Reason)
+	}
+}
+
+// TestDecide_DirtyMergeStateStillReachable_WhenNothingMoreSpecific confirms
+// the dirty-merge-state catch-all still fires for a genuine BEHIND/DIRTY
+// state with no failed check and no blocking review — BranchOutOfDate.Matches
+// depends on this reason staying reachable.
+func TestDecide_DirtyMergeStateStillReachable_WhenNothingMoreSpecific(t *testing.T) {
+	d := Decide(PRViewSnapshot{
+		State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "BEHIND",
+	})
+	if !d.Punt {
+		t.Fatalf("expected punt, got %+v", d)
+	}
+	if !strings.HasPrefix(d.Reason, ReasonDirtyState) {
+		t.Errorf("Reason = %q, want prefix %q when nothing more specific applies — got %+v",
+			d.Reason, ReasonDirtyState, d)
 	}
 }
 
@@ -267,7 +325,7 @@ func TestDeterministicRunner_RealConflict_Punts(t *testing.T) {
 
 func TestDeterministicRunner_FailedCI_Punts(t *testing.T) {
 	gh := &fakeGh{preMerge: PRViewSnapshot{
-		State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "CLEAN",
+		State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "BLOCKED",
 		StatusCheckRollup: []PRStatusCheckRow{
 			{Name: "ci", Conclusion: "FAILURE"},
 		},
