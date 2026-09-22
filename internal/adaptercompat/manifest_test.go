@@ -198,6 +198,82 @@ func TestLoadDir_RefusesWithAdapterAndField(t *testing.T) {
 	}
 }
 
+// treeWithRaw is treeWith for a manifest already serialized to bytes, so a
+// case above what map[string]any can express (a duplicate exact key) can be
+// built by hand.
+func treeWithRaw(t *testing.T, data []byte) fstest.MapFS {
+	t.Helper()
+	return fstest.MapFS{
+		ManifestDir + "/codex.json":                 {Data: data},
+		"internal/execution/testdata/present.jsonl": {Data: []byte("{}\n")},
+	}
+}
+
+// TestLoadDir_RefusesCaseVariantAndDuplicateKeys pins #1712's first finding:
+// encoding/json matches a struct field's key case-insensitively when there is
+// no exact match, and a later duplicate key silently overwrites an earlier
+// one, so DisallowUnknownFields alone accepted "Min_Version", "MIN_VERSION"
+// and a repeated "min_version" — none of them the exact key LoadDir's schema
+// names.
+func TestLoadDir_RefusesCaseVariantAndDuplicateKeys(t *testing.T) {
+	t.Run("case variant", func(t *testing.T) {
+		m := validManifest()
+		delete(m, "min_version")
+		m["Min_Version"] = "0.111.0"
+		data, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ms, err := LoadDir(treeWithRaw(t, data))
+		if err == nil {
+			t.Fatalf("LoadDir accepted Min_Version as min_version: %+v", ms)
+		}
+		msg := err.Error()
+		t.Log(msg)
+		if !strings.Contains(msg, `"codex"`) || !strings.Contains(msg, "Min_Version") {
+			t.Errorf("error does not name the adapter and the offending key: %s", msg)
+		}
+	})
+	t.Run("uppercase variant", func(t *testing.T) {
+		m := validManifest()
+		delete(m, "min_version")
+		m["MIN_VERSION"] = "0.111.0"
+		data, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ms, err := LoadDir(treeWithRaw(t, data))
+		if err == nil {
+			t.Fatalf("LoadDir accepted MIN_VERSION as min_version: %+v", ms)
+		}
+		if msg := err.Error(); !strings.Contains(msg, `"codex"`) || !strings.Contains(msg, "MIN_VERSION") {
+			t.Errorf("error does not name the adapter and the offending key: %s", msg)
+		}
+	})
+	t.Run("duplicate exact key", func(t *testing.T) {
+		m := validManifest()
+		data, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Compact json.Marshal output always ends in '}'; splice a second,
+		// byte-identical "min_version" key in ahead of it.
+		if data[len(data)-1] != '}' {
+			t.Fatalf("test setup: marshaled manifest does not end in '}': %s", data)
+		}
+		data = append(data[:len(data)-1], []byte(`,"min_version":"0.111.0"}`)...)
+		ms, err := LoadDir(treeWithRaw(t, data))
+		if err == nil {
+			t.Fatalf("LoadDir accepted a repeated min_version key: %+v", ms)
+		}
+		msg := err.Error()
+		t.Log(msg)
+		if !strings.Contains(msg, `"codex"`) || !strings.Contains(msg, "min_version") {
+			t.Errorf("error does not name the adapter and the offending key: %s", msg)
+		}
+	})
+}
+
 // TestLoadDir_ReasonMakesAnEmptyVersionValid is the other half of the empty
 // min_version case: the reason is what the loader asks for, not a version.
 func TestLoadDir_ReasonMakesAnEmptyVersionValid(t *testing.T) {
@@ -306,7 +382,7 @@ func readLines(t *testing.T, name string) []string {
 func TestPackageStartsNoProcess(t *testing.T) {
 	allowed := map[string]bool{
 		"bytes": true, "embed": true, "encoding/json": true, "errors": true, "fmt": true,
-		"io": true, "io/fs": true, "path": true, "path/filepath": true, "regexp": true,
+		"io": true, "io/fs": true, "path": true, "path/filepath": true, "reflect": true, "regexp": true,
 		"sort": true, "strconv": true, "strings": true, "sync": true, "unicode": true,
 	}
 	files, err := filepath.Glob("*.go")

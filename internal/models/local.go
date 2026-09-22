@@ -27,24 +27,32 @@ import (
 // descriptor is keyed by the endpoint it was discovered on and the model id
 // on it, so two endpoints serving the same model each keep their own.
 //
-// LM Studio is read from GET /api/v0/models: the model's state and
-// loaded_context_length, the window a session has, never max_context_length,
-// which is only what the model could be loaded with. Ollama is read from
-// POST /api/show: the num_ctx parameter of the model's Modelfile. Observed on
-// Ollama 0.32.11, a model whose Modelfile sets no num_ctx is loaded with a
-// default context that /api/show does not report (GET /api/ps reports it only
-// while the model is loaded), so its descriptor is unresolved.
+// LM Studio is read from GET /api/v1/models when the server resolves the
+// model there (#1761): the entry's key, capabilities.trained_for_tool_use,
+// capabilities.reasoning and its loaded instance's config.context_length.
+// Otherwise it is read from the older GET /api/v0/models: the model's state,
+// loaded_context_length and capabilities. Either way the window is the one a
+// session has, never max_context_length, which is only what the model could
+// be loaded with. Ollama is read from POST /api/show: the num_ctx parameter of
+// the model's Modelfile. Observed on Ollama 0.32.11, a model whose Modelfile
+// sets no num_ctx is loaded with a default context that /api/show does not
+// report (GET /api/ps reports it only while the model is loaded), so its
+// descriptor is unresolved.
 //
-// Discovery sends one request per endpoint and model per process, to the
+// Discovery asks once per endpoint and model per process: one request for
+// Ollama, and for LM Studio a v1 request, then a v0 request only when v1 did
+// not resolve the model, both within one LocalDiscoveryTimeout. It asks the
 // base URL of an endpoint the machine-tier `opencode:` block declares or, for
 // the default endpoints, the one NIGHTGAUGE_LM_STUDIO_BASE_URL or
 // NIGHTGAUGE_OLLAMA_BASE_URL names. Nothing a repository holds is read for
-// it. The request carries no credential, uses no proxy, follows no redirect,
-// and is bounded by LocalDiscoveryTimeout and localMaxBody. An endpoint's
+// it. A request carries no credential, uses no proxy, follows no redirect,
+// and its body is bounded by localMaxBody. An endpoint's
 // address never appears in a descriptor or a reason: they name the endpoint
 // by its id.
 
-// LocalDiscoveryTimeout bounds the one request discovery sends to a server.
+// LocalDiscoveryTimeout bounds one discovery on a server: Ollama's one
+// request, or LM Studio's v1 request (capped at half of it) and its v0
+// fallback together.
 const LocalDiscoveryTimeout = 2 * time.Second
 
 // localMaxBody bounds a server's response. A model listing is a few
@@ -85,7 +93,8 @@ type LocalDescriptor struct {
 	// Model is the model id on the endpoint, without its provider key.
 	Model string `json:"model"`
 	// ContextWindow is the context the server loads the model with: LM
-	// Studio's loaded_context_length, Ollama's num_ctx. It is never 0 in a
+	// Studio's loaded instance config.context_length (v1) or
+	// loaded_context_length (v0), Ollama's num_ctx. It is never 0 in a
 	// resolved descriptor.
 	ContextWindow int `json:"context_window"`
 	// MaxOutput is the most tokens the server lets one reply use: Ollama's
@@ -93,11 +102,13 @@ type LocalDescriptor struct {
 	// cap below the window, which LM Studio never reports.
 	MaxOutput int `json:"max_output"`
 	// ToolCall is whether the server says the model calls tools: LM Studio's
-	// tool_use capability, Ollama's tools capability.
+	// capabilities.trained_for_tool_use (v1) or tool_use capability (v0),
+	// Ollama's tools capability.
 	ToolCall bool `json:"tool_call"`
-	// Reasoning is whether the server says the model reasons: Ollama's
-	// thinking capability. nil means the server does not say, which is every
-	// LM Studio model: its /api/v0/models reports no such capability.
+	// Reasoning is whether the server says the model reasons: LM Studio's
+	// v1 capabilities.reasoning, Ollama's thinking capability. nil means the
+	// server does not say: an LM Studio model read from /api/v0/models, which
+	// reports no such capability, or a v1 entry with no capabilities.
 	Reasoning *bool `json:"reasoning,omitempty"`
 }
 
@@ -305,14 +316,138 @@ type lmStudioModel struct {
 	Capabilities        []string `json:"capabilities"`
 }
 
+// lmStudioV1Listing is LM Studio's newer GET /api/v1/models (#1761), in the
+// shape LM Studio's REST API documentation gives
+// (https://lmstudio.ai/docs/developer/rest/list): a models[] array whose
+// entries are keyed by key, with capabilities.trained_for_tool_use,
+// capabilities.reasoning (present only when the model exposes a reasoning
+// configuration) and loaded_instances[].config.context_length, the context
+// each loaded instance runs with. max_context_length is deliberately not
+// read, for the same reason as v0's. No LM Studio server was reachable to
+// capture a live v1 response when this was written: the fixture
+// testdata/local-discovery/lmstudio-api-v1-models.json is transcribed from
+// that documentation and must be re-captured (README.md there).
+type lmStudioV1Listing struct {
+	Models []lmStudioV1Model `json:"models"`
+}
+
+// lmStudioV1Model is one entry of the v1 listing. Capabilities is absent for
+// an embedding model.
+type lmStudioV1Model struct {
+	Key          string `json:"key"`
+	Capabilities *struct {
+		TrainedForToolUse bool `json:"trained_for_tool_use"`
+		Reasoning         *struct {
+			AllowedOptions []string `json:"allowed_options"`
+			Default        string   `json:"default"`
+		} `json:"reasoning"`
+	} `json:"capabilities"`
+	LoadedInstances []struct {
+		ID     string `json:"id"`
+		Config struct {
+			ContextLength int `json:"context_length"`
+		} `json:"config"`
+	} `json:"loaded_instances"`
+}
+
+// lmStudioV0Unanswered is a v0 failure in which the server gave no model
+// listing at all (a transport failure, a non-200 status, or a body that is
+// not the listing), as opposed to a listing that does not resolve the model.
+type lmStudioV0Unanswered struct{ err error }
+
+func (e lmStudioV0Unanswered) Error() string { return e.err.Error() }
+func (e lmStudioV0Unanswered) Unwrap() error { return e.err }
+
+// discoverLMStudio prefers the newer GET /api/v1/models, the only source of
+// Reasoning, and falls back to GET /api/v0/models whenever v1 does not
+// resolve the model: a transport failure, a non-200 status, a body that does
+// not decode as lmStudioV1Listing, or a listing that does not list the model,
+// has not loaded it or reports no context length for it. A v1 answer never
+// hides a v0 answer that resolves. Both requests share the one
+// LocalDiscoveryTimeout budget ctx carries; the v1 request is capped at half
+// of it, so a server that accepts the v1 connection but never answers cannot
+// starve the v0 fallback. When neither resolves, the reason is v0's, unless
+// v0 gave no listing at all and v1 did, in which case it is v1's.
 func discoverLMStudio(ctx context.Context, root, model string) (LocalDescriptor, error) {
+	v1Ctx, cancel := context.WithTimeout(ctx, LocalDiscoveryTimeout/2)
+	listing, ok := lmStudioV1(v1Ctx, root)
+	cancel()
+	var v1Err error
+	if ok {
+		desc, err := lmStudioFromV1(listing, model)
+		if err == nil {
+			return desc, nil
+		}
+		v1Err = err
+	}
+	desc, err := discoverLMStudioV0(ctx, root, model)
+	if err != nil && v1Err != nil && errors.As(err, new(lmStudioV0Unanswered)) {
+		return LocalDescriptor{}, v1Err
+	}
+	return desc, err
+}
+
+// lmStudioV1 asks root's GET /api/v1/models and reports ok=true only when the
+// server answered with a body that decodes as lmStudioV1Listing.
+func lmStudioV1(ctx context.Context, root string) (lmStudioV1Listing, bool) {
+	_, body, err := localRequest(ctx, http.MethodGet, root+"/api/v1/models", nil)
+	if err != nil {
+		return lmStudioV1Listing{}, false
+	}
+	var listing lmStudioV1Listing
+	if jsonErr := json.Unmarshal(body, &listing); jsonErr != nil || listing.Models == nil {
+		return lmStudioV1Listing{}, false
+	}
+	return listing, true
+}
+
+// lmStudioFromV1 is discoverLMStudio's v1 half. The model is the entry whose
+// key is model; it is loaded when it has a loaded instance, and its window is
+// the first loaded instance's config.context_length. ToolCall is
+// capabilities.trained_for_tool_use. Reasoning is nil when the entry has no
+// capabilities (an embedding model), false when capabilities carries no
+// reasoning object, and otherwise whether any allowed reasoning option is
+// other than "off".
+func lmStudioFromV1(listing lmStudioV1Listing, model string) (LocalDescriptor, error) {
+	i := slices.IndexFunc(listing.Models, func(m lmStudioV1Model) bool { return m.Key == model })
+	if i < 0 {
+		return LocalDescriptor{}, fmt.Errorf("the LM Studio server does not list model %s: download it with `lms get %s`", model, model)
+	}
+	m := listing.Models[i]
+	if len(m.LoadedInstances) == 0 {
+		return LocalDescriptor{}, fmt.Errorf("the LM Studio server lists model %s but has not loaded it, and a model it loads on demand gets its default context: load it with `lms load %s`", model, model)
+	}
+	contextWindow := m.LoadedInstances[0].Config.ContextLength
+	if contextWindow <= 0 {
+		return LocalDescriptor{}, fmt.Errorf("the LM Studio server reports no loaded context length for model %s", model)
+	}
+	desc := LocalDescriptor{
+		Provider:      "lm-studio",
+		Model:         model,
+		ContextWindow: contextWindow,
+	}
+	if m.Capabilities != nil {
+		desc.ToolCall = m.Capabilities.TrainedForToolUse
+		reasoning := false
+		if r := m.Capabilities.Reasoning; r != nil {
+			reasoning = slices.ContainsFunc(r.AllowedOptions, func(o string) bool { return o != "off" })
+		}
+		desc.Reasoning = &reasoning
+	}
+	return desc, nil
+}
+
+// discoverLMStudioV0 is discoverLMStudio's fallback: the original
+// /api/v0/models path, which reports no Reasoning. A failure in which the
+// server gave no listing is a lmStudioV0Unanswered.
+func discoverLMStudioV0(ctx context.Context, root, model string) (LocalDescriptor, error) {
 	_, body, err := localRequest(ctx, http.MethodGet, root+"/api/v0/models", nil)
 	if err != nil {
-		return LocalDescriptor{}, fmt.Errorf("the LM Studio model listing: %w", err)
+		return LocalDescriptor{}, lmStudioV0Unanswered{fmt.Errorf("the LM Studio model listing: %w", err)}
 	}
 	var listing lmStudioListing
 	if err := json.Unmarshal(body, &listing); err != nil || listing.Data == nil {
-		return LocalDescriptor{}, errors.New("the server's /api/v0/models is not LM Studio's model listing")
+		return LocalDescriptor{}, lmStudioV0Unanswered{errors.New("the server's /api/v0/models is not LM Studio's model listing")}
 	}
 	i := slices.IndexFunc(listing.Data, func(m lmStudioModel) bool { return m.ID == model })
 	if i < 0 {

@@ -222,6 +222,60 @@ create --body-file` call, so the compact profile (and its tests) pin
 
 ### Fixed
 
+- **Review follow-ups: #1712, #1721 and #1742 closed, #1761 in part.**
+  (#1761's second bullet lands in #2005; its fifth is triage.)
+  `adaptercompat` manifests now refuse a case-variant or duplicate JSON key
+  (`Min_Version`, a repeated `min_version`) that `DisallowUnknownFields` let
+  through; `AdapterUsableForCapHop` selects its adapter's row by name instead
+  of `health[0]`, which a `compat-manifests` load-failure row could push out
+  of position; and a stale comment said any `warn` floor kept an adapter
+  usable, when only `claude-headless` opts into that.
+  `scripts/capture-cli-help.sh` redacts the login name only where it names the
+  account — the home-directory component at the start of a path (`/Users/<u>`,
+  `/home/<u>`, `/root`, `/var/root`), after `~`, or before `@` — so running as
+  `root` no longer rewrites help prose such as `the working root` or
+  `path/to/root`; the host name is still redacted as a whole name anywhere,
+  except a host named `localhost`, which never identifies a machine, so a
+  CLI's own `http://localhost:4096` example text is untouched.
+  `docs/GO_BINARY.md` now says which adapters (`gemini`, `copilot`) have no
+  captured `--help` to check `required_flags` against. The flag-contract test
+  now asserts every `RunOptions` field is either varied by its option product
+  or explicitly held fixed, which caught `ResumeSessionID` never exercising
+  opencode's `-s` flag; `opencode.json`'s `required_flags` now lists it. The
+  OpenCode adversarial merge-contract suite's harness drops
+  `OPENCODE_DISABLE_PROJECT_CONFIG` from its isolation environment so a future
+  change there cannot silently flip its positive controls off, skips a
+  process-group `SIGKILL` for a PID already recorded finished with an empty
+  group (a kernel-recycled pgid could otherwise hit an unrelated process),
+  git-inits every fixture project copy so OpenCode's directory discovery
+  cannot climb past it toward the operator's real home, and no longer names a
+  real, unclaimed npm package in its committed q1 fixture. `internal/doctor`'s
+  `TestMain` now isolates OpenCode local-model discovery like its sibling
+  packages do, so `TestOpenCodeProbeRedactsBaseURL` no longer sends a real
+  discovery request to an RFC 5737 address and block for its ~2.4s timeout;
+  `OpenCodeConfig.Limit`'s doc comment no longer says it is the sole source of
+  a server's limits, now that discovery can fill an unset one. Local-model
+  discovery now asks LM Studio's newer `GET /api/v1/models` first, decoding
+  the shape LM Studio documents (`models[].key`, `loaded_instances[]` with
+  `config.context_length`, `capabilities.trained_for_tool_use` and
+  `capabilities.reasoning`), and falls back to the pinned `GET /api/v0/models`
+  whenever v1 does not resolve the model — a 404, a body that is not the
+  listing, or a model it does not list, has not loaded or gives no context
+  length — so a v1 answer never hides a working v0. The v1 request is capped
+  at half the one discovery timeout both share. The v1 fixture is transcribed
+  from LM Studio's documentation, not captured from a live server, and is
+  marked for re-capture. The flag-contract's argv model can now express a
+  flag declared to precede a subcommand (the shape codex's `-a`/
+  `--ask-for-approval` needs once #1715 fixes it), pinned by a dedicated
+  test; nothing an adapter emits today changes. `scripts/capture-cli-help.sh`'s
+  `bounded()` now polls for, and kills, every descendant of the CLI or
+  installer it runs — not only its process group — so one that calls
+  `setsid()` to escape the group no longer outlives the script; it
+  re-identifies each tracked pid by start time before killing it, so a
+  recycled pid is never signalled, and a daemon that double-forks within one
+  0.2s poll interval remains a documented gap. The grok installer's sha256 is
+  checked against a pinned value before it runs, refusing an installer that
+  does not match the recorded provenance instead of running it blind.
 - **Live skill evals no longer give the scenario model tools or the
   operator's checkout.** `LiveClaudeModelRunner` spawned `claude --print` with
   the CLI's default tool set in the current directory, so a live cell could

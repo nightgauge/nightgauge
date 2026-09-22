@@ -506,6 +506,10 @@ func TestOpenCodeRowEndpointNotReadyBlocks(t *testing.T) {
 // clamped to it, and the row says so; with neither, the dispatch's own
 // refusal is the finding.
 func TestOpenCodeRowReportsTheContextADispatchInjects(t *testing.T) {
+	// This test's whole point is what real discovery reports against a local
+	// LM Studio stub, so it opts out of TestMain's package-wide failing
+	// default (#1761) back to the real thing.
+	t.Cleanup(adapters.SwapOpenCodeLocalDiscoveryForTest(nil))
 	for _, c := range []struct {
 		name     string
 		state    string

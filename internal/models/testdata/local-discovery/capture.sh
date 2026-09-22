@@ -14,6 +14,8 @@
 #                         (default qwen3-ctx32k; README.md says how it was made)
 #
 # Writes lmstudio-api-v0-models.json (GET /api/v0/models, whitespace aside),
+# lmstudio-api-v1-models.json (GET /api/v1/models, whitespace aside; the
+# committed one is transcribed from LM Studio's docs until this re-captures it),
 # ollama-api-show-num-ctx.json and ollama-api-show-no-num-ctx.json (POST
 # /api/show for each Ollama model, trimmed as below). Update README.md's
 # provenance table in the same change, and re-run `go test ./internal/models/`.
@@ -63,6 +65,7 @@ fetch() {
 }
 
 fetch "$lmstudio_root/api/v0/models" >"$staging/lmstudio-api-v0-models.json"
+fetch "$lmstudio_root/api/v1/models" >"$staging/lmstudio-api-v1-models.json"
 
 show() {
   fetch -X POST -H 'Content-Type: application/json' \
@@ -79,7 +82,7 @@ json.dump(body, sys.stdout, indent=2)
 show "$ollama_model_num_ctx" >"$staging/ollama-api-show-num-ctx.json"
 show "$ollama_model" >"$staging/ollama-api-show-no-num-ctx.json"
 
-names="lmstudio-api-v0-models.json ollama-api-show-num-ctx.json ollama-api-show-no-num-ctx.json"
+names="lmstudio-api-v0-models.json lmstudio-api-v1-models.json ollama-api-show-num-ctx.json ollama-api-show-no-num-ctx.json"
 for name in $names; do
   f="$staging/$name"
   sed -i.bak -e "s#${HOME}#~#g" "$f" && rm -f "$f.bak"

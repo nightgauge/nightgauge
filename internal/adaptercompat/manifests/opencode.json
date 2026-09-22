@@ -20,7 +20,7 @@
   ],
   "install": { "npm": "opencode-ai" },
   "managed_install": "",
-  "required_flags": ["--dir", "--format", "--log-level", "--print-logs", "-m"],
+  "required_flags": ["--dir", "--format", "--log-level", "--print-logs", "-m", "-s"],
   "catalog": { "command": "opencode models" },
   "fixtures": [
     "internal/execution/adapters/testdata/opencode-cli/run-help.txt",
