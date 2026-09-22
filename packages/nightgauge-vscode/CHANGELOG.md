@@ -9,6 +9,11 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- Stages routed to the `opus` band now run Claude Opus 5.5
+  (`claude-opus-5-5`), and stage cost is priced at its $4/$20 per MTok rates.
+
 ## [0.4.6] - 2026-09-21
 
 ### Changed

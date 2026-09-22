@@ -16,6 +16,16 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **Claude Opus 5.5 now serves the `opus` band.** `claude-opus-5-5` is
+  registered ($4/$20 per MTok, 1M context, `low`–`max` effort) and every stage
+  routed to `opus` — on the Claude CLI and the API alike — now runs it;
+  `claude-opus-5` is deprecated with `claude-opus-5-5` as its replacement and
+  stays pinnable by id. Opus 5.5's own effort default is `medium`, so an
+  opus-routed stage with no configured effort runs one level lower than it did
+  on Opus 5, and thinking can no longer be disabled at any effort. Through the
+  OpenCode adapter, `anthropic/claude-opus-5-5` is refused until OpenCode's
+  bundled catalog lists it; pin `anthropic/claude-opus-5` there meanwhile.
+
 - **`scripts/ci-local.sh --changed`, an opt-in change-scoped fast path (#1985).**
   Derives the changed path set from `git diff --name-only origin/main...HEAD`
   plus the working tree and, when nothing in it can reach Go, skips

@@ -692,8 +692,13 @@ func TestAnthropicCacheRatesFollowPublishedMultipliers(t *testing.T) {
 	// Claude Fable 5.1",
 	// https://platform.claude.com/docs/en/models/fable-5-1/whats-new-fable-5-1
 	// (#1274). Its cache WRITE pools are unchanged and stay on the derivation.
+	// Opus 5.5 prices cached reads at $0.20/MTok against a $4.00/MTok input
+	// sticker — 0.05x, half of Opus 5's line. Source: Claude pricing,
+	// https://platform.claude.com/docs/en/about-claude/pricing. Its cache
+	// WRITE pools ($5 / $8) stay on the derivation.
 	cacheReadMultiplierOverrides := map[string]float64{
 		"claude-fable-5-1": 0.025,
+		"claude-opus-5-5":  0.05,
 	}
 
 	seen := 0
