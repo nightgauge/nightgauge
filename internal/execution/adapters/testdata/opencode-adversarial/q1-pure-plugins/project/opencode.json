@@ -1,4 +1,4 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["adversarial-fixture-npm-plugin@1.0.0"]
+  "plugin": ["@ADVERSARIAL_NPM_PLUGIN_SPEC@"]
 }

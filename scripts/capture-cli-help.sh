@@ -17,7 +17,10 @@
 #   - Every CLI is installed fresh, at the pinned version, into one `mktemp -d`
 #     prefix, never globally, and the prefix is removed on every exit (trap).
 #     npm packages use `npm install --prefix`; the grok CLI uses its vendor
-#     installer, with HOME and GROK_BIN_DIR inside the prefix.
+#     installer, with HOME and GROK_BIN_DIR inside the prefix. A vendor
+#     installer's sha256 is checked against `expected_installer_sha256`
+#     before it runs, refusing an installer that does not match the recorded
+#     provenance rather than running it blind (#1721).
 #   - Installs and CLIs run under `env -i` with a minimal environment. PATH
 #     holds only node, npm, curl and the system directories. HOME, TMPDIR and
 #     the XDG directories point inside the prefix, and the working directory is
@@ -31,14 +34,28 @@
 #   - Every download, install and CLI call is bounded by a timeout. macOS has no
 #     timeout(1), so a perl wrapper runs the command in a process group of its
 #     own and kills the whole group when the time runs out. It also kills the
-#     group after a normal exit, so nothing a call started outlives it.
+#     group after a normal exit, and every descendant (and process group a
+#     descendant leads) that its 0.2s poll saw, even one that called setsid()
+#     to leave the group. It never kills a pid it cannot still identify as
+#     the process it saw (same pid and start time), so a recycled pid is safe.
+#     Limit: a daemon that double-forks faster than one poll interval
+#     (fork, setsid, fork, intermediate exits) is never seen and can outlive
+#     the call; see bounded().
 #   - The version comes from the pin, the manifest's max_tested. For npm
 #     packages it is confirmed against the installed package.json. The script
 #     never runs `--version`.
 #
 # Redaction: ANSI escape sequences are stripped. The prefix's HOME and the
 # capturing user's HOME become `~`, and any other prefix path becomes
-# `<capture-prefix>`. The login name and the host name become `<user>` and `<host>`.
+# `<capture-prefix>`. The host name (full and short) becomes `<host>` wherever
+# it stands as a whole name. The login name becomes `<user>` only where it
+# names the account: as the home-directory component at the start of a path
+# (`/Users/<u>`, `/home/<u>`, or `/root` and `/var/root` when running as
+# root), after `~`, or before `@`. It is never matched after an arbitrary `/`
+# or as a bare word, so help prose such as "path/to/root" or "the working
+# root" is left alone when the capture runs as root (#1721). A host named
+# exactly `localhost` is never substituted at all: it never identifies a
+# machine, so a CLI's own generic example text naming it is untouched.
 # Trailing whitespace is trimmed and a final newline ensured. A capture that
 # names any IPv4 address other than 127.0.0.1 is refused. Captures are staged
 # and moved into place only after every requested adapter passed, so a refused
@@ -85,10 +102,33 @@ help_subcommand() {
   esac
 }
 
+# expected_installer_sha256 <adapter>: the sha256 that adapter's vendor
+# installer script must match before this script runs it, so a compromised
+# or silently changed installer refuses rather than being executed blind and
+# its (possibly tampered) help text recorded as if it were the real thing
+# (#1721). Pinned by hand after downloading and inspecting the installer;
+# update it, and the provenance row in testdata/cli-help/README.md, together,
+# only after confirming the new installer by hand. Echoes empty for an
+# adapter with no pin yet, which this script does not refuse: a first pin
+# still has to come from somewhere, and the sha256 this run computed is
+# already recorded in the summary line for that purpose.
+#
+# CAPTURE_CLI_HELP_GROK_INSTALLER_SHA256 overrides grok's pin so
+# scripts/test-capture-cli-help.sh can point it at its own stubbed
+# installer's real hash instead of the production one; unset in every real
+# run.
+expected_installer_sha256() {
+  case "$1" in
+    grok) echo "${CAPTURE_CLI_HELP_GROK_INSTALLER_SHA256:-7fd6fdc75d9418b2e58356726fcbf1ae849416f773925da07d0ccc7a60d3e791}" ;;
+    *) echo "" ;;
+  esac
+}
+
 # bounded <seconds> <command> [args...]: run the command in a process group of
 # its own, with stdin from /dev/null. On timeout, or on INT/TERM/HUP, kill the
-# group and exit 124 (timeout) or 130. After a normal exit, kill whatever the
-# command left running in its group, then exit with the command's status.
+# group and every descendant and exit 124 (timeout) or 130. After a normal
+# exit, kill whatever the command left running, group and descendants alike,
+# then exit with the command's status.
 bounded() {
   perl -e '
     use strict;
@@ -103,9 +143,75 @@ bounded() {
       POSIX::_exit(127);
     }
     setpgrp($pid, $pid);
+
+    # A descendant that calls setsid() leaves $pid'"'"'s process group, so
+    # `kill KILL, -$pid` below never reaches it. Each scan therefore walks
+    # the process table from $pid and from every pid already tracked, polled
+    # throughout the run rather than read once at the end: once whichever
+    # ancestor sits between $pid and an escaped descendant exits, that
+    # descendant reparents to init and its ppid chain no longer leads back to
+    # $pid, so a single scan taken only at cleanup time would already have
+    # lost it (#1721). %seen maps each tracked pid to its start time; %groups
+    # holds the process groups tracked pids lead, so a child an escaped
+    # group leader starts between two scans is caught by its group too.
+    #
+    # A pid is dropped from %seen as soon as a scan no longer lists it with
+    # the same start time, and a group once a scan finds no member of it, so
+    # a pid or group id the kernel recycles for an unrelated process after
+    # ours exited is never killed: the reap below only signals pids a fresh
+    # scan still shows as the process that was tracked.
+    #
+    # Limit: tracking is only as fine as the poll. A descendant that forks,
+    # calls setsid() and forks again, with the intermediate exiting, all
+    # within one 0.2s poll interval (the classic daemon double fork), leaves
+    # a grandchild whose parent is init, whose session and group are the
+    # vanished intermediate'"'"'s, and which no scan ever linked to $pid: it
+    # is not reaped. Nothing portable to macOS closes that window.
+    my (%seen, %groups);
+    my $own_group = 1;
+    my $scan = sub {
+      open(my $ps, "-|", "ps", "-e", "-o", "pid=,ppid=,pgid=,lstart=") or return 0;
+      my (%children, %start, %members);
+      while (my $line = <$ps>) {
+        next unless $line =~ /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.*?)\s*$/;
+        my ($p, $pp, $pg) = ($1 + 0, $2 + 0, $3 + 0);
+        push @{$children{$pp}}, $p;
+        push @{$members{$pg}}, $p;
+        $start{$p} = $4;
+      }
+      close $ps;
+      $own_group = $members{$pid} ? 1 : 0;
+      for my $p (keys %seen) {
+        delete $seen{$p} unless defined $start{$p} && $start{$p} eq $seen{$p};
+      }
+      for my $g (keys %groups) {
+        delete $groups{$g} unless $members{$g};
+      }
+      my @stack = ($pid, keys %seen, map { @{$members{$_}} } keys %groups);
+      my %found;
+      while (@stack) {
+        my $p = pop @stack;
+        next if $found{$p}++;
+        push @stack, @{$children{$p} || []};
+      }
+      delete $found{$pid};
+      for my $p (keys %found) {
+        next unless defined $start{$p};
+        $seen{$p} = $start{$p};
+        $groups{$p} = 1 if $members{$p};
+      }
+      return 1;
+    };
+    my $reap = sub {
+      # Without a fresh scan no tracked pid can be re-identified, so none is
+      # signalled; the group kill alone still stands.
+      my $fresh = $scan->();
+      kill "KILL", -$pid if $own_group;
+      kill "KILL", keys %seen if $fresh && %seen;
+    };
     my $stop = sub {
       my ($code, $why) = @_;
-      kill "KILL", -$pid;
+      $reap->();
       waitpid($pid, 0);
       print STDERR "capture-cli-help.sh: $why: @ARGV\n";
       exit $code;
@@ -113,10 +219,18 @@ bounded() {
     $SIG{ALRM} = sub { $stop->(124, "timed out after ${secs}s") };
     $SIG{INT} = $SIG{TERM} = $SIG{HUP} = sub { $stop->(130, "interrupted") };
     alarm $secs;
-    waitpid($pid, 0);
-    my $status = $?;
+    # Polls rather than blocks on waitpid, so %seen is kept current while
+    # $pid'"'"'s tree is still intact instead of read only once, after exit,
+    # when an escaped descendant may already be unreachable from it.
+    my $status;
+    while (1) {
+      $scan->();
+      my $r = waitpid($pid, POSIX::WNOHANG());
+      if ($r == $pid) { $status = $?; last; }
+      select(undef, undef, undef, 0.2);
+    }
     alarm 0;
-    kill "KILL", -$pid;
+    $reap->();
     exit($status & 127 ? 128 + ($status & 127) : $status >> 8);
   ' "$@" </dev/null
 }
@@ -222,19 +336,42 @@ redact() {
           my $v = $ENV{$k} // "";
           push @paths, [$v, $to] if length($v) > 1;
         }
-        our @words;
-        for (["SCRUB_HOST", "<host>"], ["SCRUB_HOST_SHORT", "<host>"], ["SCRUB_USER", "<user>"]) {
-          my ($k, $to) = @$_;
+        our (@hosts, $user);
+        for my $k ("SCRUB_HOST", "SCRUB_HOST_SHORT") {
           my $v = $ENV{$k} // "";
-          push @words, [$v, $to] if length($v) > 0;
+          next if length($v) == 0;
+          # "localhost" never identifies a machine, so leaving it alone
+          # cannot leak anything, and redacting it corrupts a CLI own
+          # generic example text (opencode default "http://localhost:4096")
+          # on a host that happens to be named localhost -- the #1721 finding.
+          next if lc($v) eq "localhost";
+          push @hosts, $v;
         }
+        $user = $ENV{SCRUB_USER} // "";
         our %n;
       }
-      our (@paths, @words, %n);
+      our (@paths, @hosts, $user, %n);
       $n{ansi} += s/\e\[[0-9;?]*[ -\/]*[@-~]//g;
       $n{ansi} += s/\e\][^\a\e]*(?:\a|\e\\)//g;
       for my $p (@paths) { $n{$p->[1]} += s/\Q$p->[0]\E/$p->[1]/g; }
-      for my $w (@words) { $n{$w->[1]} += s/(?<![\w.-])\Q$w->[0]\E(?![\w-])/$w->[1]/g; }
+      # The host name is redacted wherever it stands as a whole name (not
+      # inside a longer word or dotted name). The full name goes first, so a
+      # short name never splits it.
+      for my $h (@hosts) {
+        $n{"<host>"} += s/(?<![\w.-])\Q$h\E(?![\w-]|\.\w)/<host>/g;
+      }
+      # The login name is redacted only where it identifies the account: as
+      # the home-directory component at the start of a path (/Users/<u>,
+      # /home/<u>, and /root or /var/root for root), after `~`, or before
+      # `@`. Never after an arbitrary `/`, so help prose such as
+      # "path/to/root" is left alone when the capture runs as root, and never
+      # as a bare word (#1721).
+      if (length $user) {
+        my $home = $user eq "root" ? qr{/(?:var/)?} : qr{/(?:Users|home)/};
+        $n{"<user>"} += s{(?<![\w.~/-])($home)\Q$user\E(?![\w.-])}{$1<user>}g;
+        $n{"<user>"} += s/(?<=~)\Q$user\E(?![\w-])/<user>/g;
+        $n{"<user>"} += s/(?<![\w.-])\Q$user\E(?=\@)/<user>/g;
+      }
       s/\s+$//;
       END {
         my @r = map { "$_=" . ($n{$_} + 0) } sort keys %n;
@@ -296,6 +433,14 @@ for adapter in "${ADAPTERS[@]}"; do
       sed 's/^/    /' "$LOGS/$adapter-download.log" >&2
       die "$adapter: downloading $installer failed"
     }
+    got_sha="$(sha256 "$script")"
+    want_sha="$(expected_installer_sha256 "$adapter")"
+    if [ -n "$want_sha" ] && [ "$got_sha" != "$want_sha" ]; then
+      die "$adapter: installer $installer sha256 is $got_sha, not the pinned $want_sha in" \
+        "expected_installer_sha256; refusing to run an installer that does not match the" \
+        "recorded provenance. If this is a deliberate, verified update, confirm the new" \
+        "installer by hand, then update expected_installer_sha256 and testdata/cli-help/README.md together"
+    fi
     bindir="$PREFIX/$adapter-bin"
     if ! in_clean_env "$INSTALL_TIMEOUT" "GROK_BIN_DIR=$bindir" /bin/bash "$script" "$version" \
       >"$LOGS/$adapter-install.log" 2>&1; then
