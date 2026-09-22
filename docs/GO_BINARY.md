@@ -7159,7 +7159,9 @@ adapter's per-spawn exports (such as `OPENCODE_SERVER_PASSWORD`).
 
 The SDK's OpenCode adapter runs this verb for every stage
 (`packages/nightgauge-sdk/src/cli/adapters/opencodeRunConfig.ts`, #1648): the
-binary is `NIGHTGAUGE_BIN`, else `nightgauge` on `PATH`, and the stage fails
+binary is `NIGHTGAUGE_BIN`, else `nightgauge` on `PATH`. It passes the
+stage's turn budget as `--max-turns` and the pipeline run's UUIDv7 identity as
+`--run-id`, and the stage fails
 before any `opencode` starts when the verb fails, times out (15 s) or prints a
 `schema_version` whose major it does not know. It checks the plugin handshake
 the way the Go manager does (#1804). `TestOpenCodeConfigGolden` pins the

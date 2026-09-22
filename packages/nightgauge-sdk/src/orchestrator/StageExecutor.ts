@@ -44,6 +44,13 @@ export interface StageExecutorOptions {
   /** Codex thread ID for `exec resume` on backtrack retry. @see Issue #1659 */
   resumeSessionId?: string;
   /**
+   * The pipeline run's identity (PipelineOrchestrator.run: the run-state
+   * run_id, else a minted UUIDv7), the SDK twin of the Go dispatch's
+   * `Runtime.RunID`. The opencode adapter passes it to `nightgauge opencode
+   * config` as --run-id, so a run's stages share one per-run root. @see Issue #1648
+   */
+  runId?: string;
+  /**
    * Stops the stage: the query's own abort signal fires with it, as it fires
    * on the stage's timeout. @see Issue #1637
    */
@@ -87,6 +94,10 @@ export interface SDKQueryOptions {
     cwd?: string;
     /** Codex thread ID for `exec resume` on backtrack retry. @see Issue #1659 */
     resumeSessionId?: string;
+    /** The pipeline stage the query runs. @see Issue #1648 */
+    stage?: string;
+    /** The pipeline run's identity, when the stage runs inside one. @see Issue #1648 */
+    runId?: string;
     /**
      * Aborts the query. StageExecutor fires it on the stage's timeout and on
      * the stage's own abort signal; the opencode adapter kills the whole
@@ -222,6 +233,8 @@ export class StageExecutor {
           systemPrompt: systemPromptPresetForAdapter(options.adapter),
           cwd: options.cwd,
           resumeSessionId: options.resumeSessionId,
+          stage: options.stage,
+          ...(options.runId !== undefined && { runId: options.runId }),
           abortSignal: abort.signal,
         },
       };

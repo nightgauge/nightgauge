@@ -148,6 +148,18 @@ esac
   return bin;
 }
 
+/**
+ * Create the query function and run one query: the run config is obtained
+ * per query, so a refused config surfaces here, before anything is spawned.
+ */
+async function runOnce(
+  adapter: OpenCodeAdapter,
+  opts: { cwd: string; stage?: string }
+): Promise<SDKMessage[]> {
+  const query = await adapter.createQueryFunction(opts);
+  return drain(query({ prompt: "p", options: { cwd: opts.cwd } }));
+}
+
 async function drain(gen: AsyncGenerator<SDKMessage>): Promise<SDKMessage[]> {
   const out: SDKMessage[] = [];
   for await (const m of gen) out.push(m);
@@ -230,9 +242,9 @@ describe("OpenCodeAdapter run config (#1637, #1648)", () => {
       model: LOCAL_MODEL,
       spawn: spawn as never,
     });
-    const err = await adapter
-      .createQueryFunction({ cwd: tmp("oc-wt-"), stage: "feature-dev" })
-      .catch((e: unknown) => e);
+    const err = await runOnce(adapter, { cwd: tmp("oc-wt-"), stage: "feature-dev" }).catch(
+      (e: unknown) => e
+    );
     expect(err).toBeInstanceOf(AdapterError);
     expect((err as AdapterError).category).toBe("BINARY_NOT_FOUND");
     expect((err as AdapterError).message).toContain("nightgauge opencode config");
@@ -253,7 +265,7 @@ describe("OpenCodeAdapter run config (#1637, #1648)", () => {
         model: LOCAL_MODEL,
         runConfigProvider: providerFor({ ...config, env }),
       });
-      await expect(adapter.createQueryFunction({ cwd: tmp("oc-wt-") }), drop).rejects.toThrow(
+      await expect(runOnce(adapter, { cwd: tmp("oc-wt-") }), drop).rejects.toThrow(
         new RegExp(`it sets no ${drop}`)
       );
     }
@@ -262,7 +274,7 @@ describe("OpenCodeAdapter run config (#1637, #1648)", () => {
       model: LOCAL_MODEL,
       runConfigProvider: providerFor({ ...runConfig(tmp("oc-run-")), pluginVersion: "" }),
     });
-    await expect(adapter.createQueryFunction({ cwd: tmp("oc-wt-") })).rejects.toThrow(
+    await expect(runOnce(adapter, { cwd: tmp("oc-wt-") })).rejects.toThrow(
       /names no plugin version/
     );
   });
@@ -275,7 +287,7 @@ describe("OpenCodeAdapter run config (#1637, #1648)", () => {
       spawn: spawn as never,
       runConfigProvider: async () => ({}) as OpenCodeRunConfig,
     });
-    await expect(adapter.createQueryFunction({ cwd: tmp("oc-wt-") })).rejects.toMatchObject({
+    await expect(runOnce(adapter, { cwd: tmp("oc-wt-") })).rejects.toMatchObject({
       category: "CONFIG_INVALID",
     });
     expect(spawn).not.toHaveBeenCalled();
@@ -292,7 +304,7 @@ describe("OpenCodeAdapter run config (#1637, #1648)", () => {
         env: { ...config.env, OPENCODE_PERMISSION: '{"*":"allow"}' },
       }),
     });
-    await expect(adapter.createQueryFunction({ cwd: tmp("oc-wt-") })).rejects.toThrow(
+    await expect(runOnce(adapter, { cwd: tmp("oc-wt-") })).rejects.toThrow(
       /OPENCODE_PERMISSION, which is not a run variable/
     );
   });
@@ -307,13 +319,14 @@ describe("OpenCodeAdapter run config (#1637, #1648)", () => {
   it("accepts a run config carrying the plugin/handshake variables, HOME and OPENCODE_DISABLE_PROJECT_CONFIG", async () => {
     const root = tmp("oc-run-");
     const adapter = new OpenCodeAdapter({
-      env: {},
+      env: {
+        PATH: `${writeStub(tmp("oc-stub-"), `  cat '${join(TESTDATA, "opencode_stream_research_sample.jsonl")}'`)}:${process.env.PATH}`,
+      },
       model: LOCAL_MODEL,
       runConfigProvider: providerFor(runConfig(root)),
     });
-    await expect(adapter.createQueryFunction({ cwd: tmp("oc-wt-") })).resolves.toBeInstanceOf(
-      Function
-    );
+    const messages = await runOnce(adapter, { cwd: tmp("oc-wt-") });
+    expect(messages.some((m) => m.type === "result")).toBe(true);
   });
 
   // A NIGHTGAUGE_OPENCODE_PLUGIN_PATH/_SENTINEL outside the run's own root is
@@ -333,7 +346,7 @@ describe("OpenCodeAdapter run config (#1637, #1648)", () => {
           env: { ...config.env, [name]: "/etc/passwd" },
         }),
       });
-      await expect(adapter.createQueryFunction({ cwd: tmp("oc-wt-") }), name).rejects.toThrow(
+      await expect(runOnce(adapter, { cwd: tmp("oc-wt-") }), name).rejects.toThrow(
         new RegExp(`its ${name} is not an absolute path in the run's root`)
       );
     }
@@ -356,7 +369,9 @@ describe("OpenCodeAdapter run config (#1637, #1648)", () => {
     const root = tmp("oc-run-");
     const config = runConfig(root);
     const adapter = new OpenCodeAdapter({
-      env: {},
+      env: {
+        PATH: `${writeStub(tmp("oc-stub-"), `  cat '${join(TESTDATA, "opencode_stream_research_sample.jsonl")}'`)}:${process.env.PATH}`,
+      },
       model: LOCAL_MODEL,
       runConfigProvider: providerFor({
         ...config,
@@ -366,9 +381,8 @@ describe("OpenCodeAdapter run config (#1637, #1648)", () => {
         },
       }),
     });
-    await expect(adapter.createQueryFunction({ cwd: tmp("oc-wt-") })).resolves.toBeInstanceOf(
-      Function
-    );
+    const messages = await runOnce(adapter, { cwd: tmp("oc-wt-") });
+    expect(messages.some((m) => m.type === "result")).toBe(true);
   });
 });
 

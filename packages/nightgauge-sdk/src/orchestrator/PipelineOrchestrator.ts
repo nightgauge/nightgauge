@@ -222,6 +222,13 @@ export class PipelineOrchestrator {
    */
   private traceRecorder: TraceRecorder | null = null;
 
+  /**
+   * The identity of the run() in progress (the run-state run_id, else a
+   * minted UUIDv7, the same value the trace recorder is opened with); null
+   * between runs. Each stage's query gets it (StageExecutorOptions.runId).
+   */
+  private runId: string | null = null;
+
   /** Session IDs per stage for resume-aware backtrack retry. @see Issue #1659 */
   private stageSessionIds: Map<string, string> = new Map();
 
@@ -554,9 +561,10 @@ export class PipelineOrchestrator {
       .read()
       .then((s) => s?.run_id ?? null)
       .catch(() => null);
+    this.runId = runStateRunId ?? uuidV7();
     this.traceRecorder = TraceRecorder.open({
       pipelineDir: this.config.contextPath,
-      runId: runStateRunId ?? uuidV7(),
+      runId: this.runId,
       issue: issueNumber,
     });
 
@@ -635,6 +643,7 @@ export class PipelineOrchestrator {
       // finished (fail-open: flush never throws past the recorder).
       await this.traceRecorder?.flush();
       this.traceRecorder = null;
+      this.runId = null;
       this.isRunning = false;
       this.currentStage = null;
       this.abortController = null;
@@ -691,6 +700,7 @@ export class PipelineOrchestrator {
         cwd: this.config.cwd,
         timeoutMs: this.config.stageTimeoutMs,
         resumeSessionId: options?.resumeSessionId,
+        ...(this.runId !== null && { runId: this.runId }),
         abortSignal,
       })) {
         messages.push(message);
@@ -748,6 +758,7 @@ export class PipelineOrchestrator {
         maxTurns: this.config.maxTurnsPerStage,
         cwd: this.config.cwd,
         timeoutMs: this.config.stageTimeoutMs,
+        ...(this.runId !== null && { runId: this.runId }),
         abortSignal,
       });
     } finally {

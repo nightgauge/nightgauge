@@ -42,7 +42,7 @@ const RESEARCH = join(
 const ADAPTERS_SRC = join(REPO_ROOT, "packages/nightgauge-sdk/src/cli/adapters");
 
 interface Golden {
-  inputs: { model: string; stage: string; repo: string };
+  inputs: { model: string; stage: string; repo: string; max_turns: number; run_id: string };
   verb: Record<string, unknown> & { config_content: string; env: Record<string, string> };
   go_spawn_env: Record<string, string>;
 }
@@ -137,6 +137,15 @@ function readEnvFile(path: string): Record<string, string> {
   return env;
 }
 
+/** Create the query function and run one query; the verb runs per query. */
+async function runOnce(
+  adapter: OpenCodeAdapter,
+  opts: { cwd: string; stage?: string }
+): Promise<SDKMessage[]> {
+  const query = await adapter.createQueryFunction(opts);
+  return drain(query({ prompt: "p", options: { cwd: opts.cwd } }));
+}
+
 async function drain(gen: AsyncGenerator<SDKMessage>): Promise<SDKMessage[]> {
   const out: SDKMessage[] = [];
   for await (const m of gen) out.push(m);
@@ -181,7 +190,18 @@ async function stageFromGolden(
 describe("SDK/Go parity through the golden (#1648)", () => {
   it("the SDK child gets byte-identical OPENCODE_CONFIG_CONTENT and every XDG/OPENCODE_* value of the Go spawn", async () => {
     const { base, golden, worktree, record, query } = await stageFromGolden();
-    await drain(query({ prompt: "p", options: { cwd: worktree } }));
+    // The same inputs the Go golden was generated with, as StageExecutor
+    // hands them to a query: the stage's turn budget and the run's identity.
+    await drain(
+      query({
+        prompt: "p",
+        options: {
+          cwd: worktree,
+          maxTurns: golden.inputs.max_turns,
+          runId: golden.inputs.run_id,
+        },
+      })
+    );
     const child = readEnvFile(record);
 
     expect(child.OPENCODE_CONFIG_CONTENT).toBe(golden.go_spawn_env.OPENCODE_CONFIG_CONTENT);
@@ -213,8 +233,42 @@ describe("SDK/Go parity through the golden (#1648)", () => {
       golden.inputs.model,
       "--repo",
       golden.inputs.repo,
+      "--max-turns",
+      String(golden.inputs.max_turns),
+      "--run-id",
+      golden.inputs.run_id,
       "--json",
     ]);
+  });
+
+  it("the query's stage, turn budget and run identity reach the verb; a non-identity run id does not", async () => {
+    const { base, golden, worktree, query } = await stageFromGolden();
+    const argv = () => readFileSync(join(base, "verb-argv"), "utf-8").trimEnd().split("\n");
+    const after = (list: string[], flag: string) =>
+      list.includes(flag) ? list[list.indexOf(flag) + 1] : undefined;
+
+    await drain(
+      query({
+        prompt: "p",
+        options: {
+          cwd: worktree,
+          stage: "feature-validate",
+          maxTurns: 17,
+          runId: golden.inputs.run_id,
+        },
+      })
+    );
+    expect(after(argv(), "--stage")).toBe("feature-validate");
+    expect(after(argv(), "--max-turns")).toBe("17");
+    expect(after(argv(), "--run-id")).toBe(golden.inputs.run_id);
+
+    // A run id that is not a canonical UUIDv7 run identity is not passed (the
+    // verb mints a root, as the Go manager does), and neither is a zero budget.
+    await drain(
+      query({ prompt: "p", options: { cwd: worktree, maxTurns: 0, runId: "wf-12-feature-dev" } })
+    );
+    expect(argv()).not.toContain("--run-id");
+    expect(argv()).not.toContain("--max-turns");
   });
 
   it("the verb's env overrides an inherited XDG_CONFIG_HOME and OPENCODE_CONFIG_CONTENT", async () => {
@@ -345,9 +399,9 @@ describe("a verb that fails fails the stage before any opencode starts (#1648)",
       model: "lmstudio/qwen/qwen3.8-27b",
       spawn: spawn as never,
     });
-    const err = await adapter
-      .createQueryFunction({ cwd: tmp("oc-wt-"), stage: "feature-dev" })
-      .catch((e: unknown) => e);
+    const err = await runOnce(adapter, { cwd: tmp("oc-wt-"), stage: "feature-dev" }).catch(
+      (e: unknown) => e
+    );
     expect(spawn).not.toHaveBeenCalled();
     expect(err).toBeInstanceOf(AdapterError);
     return err as AdapterError;
@@ -397,9 +451,9 @@ describe("a verb that fails fails the stage before any opencode starts (#1648)",
       spawn: spawn as never,
       runConfigProvider: createOpenCodeRunConfigProvider({ env: {}, execFile }),
     });
-    const err = await adapter
-      .createQueryFunction({ cwd: tmp("oc-wt-"), stage: "feature-dev" })
-      .catch((e: unknown) => e);
+    const err = await runOnce(adapter, { cwd: tmp("oc-wt-"), stage: "feature-dev" }).catch(
+      (e: unknown) => e
+    );
     expect(spawn).not.toHaveBeenCalled();
     expect((err as AdapterError).category).toBe("TIMEOUT");
     expect((err as AdapterError).message).toContain("15 s");
@@ -411,9 +465,7 @@ describe("a verb that fails fails the stage before any opencode starts (#1648)",
       env: { NIGHTGAUGE_BIN: writeNightgaugeStub(dir, "exit 0") },
       model: "lmstudio/qwen/qwen3.8-27b",
     });
-    await expect(adapter.createQueryFunction({ cwd: tmp("oc-wt-") })).rejects.toThrow(
-      /stage is not known/
-    );
+    await expect(runOnce(adapter, { cwd: tmp("oc-wt-") })).rejects.toThrow(/stage is not known/);
   });
 });
 

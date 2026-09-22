@@ -22,7 +22,7 @@ import type {
   SDKQueryOptions,
 } from "../../orchestrator/StageExecutor.js";
 import type { NightgaugeAdapter } from "./ICliAdapter.js";
-import type { OpenCodeRunConfig } from "./OpenCodeAdapter.js";
+import type { OpenCodeRunConfig, OpenCodeRunConfigRequest } from "./OpenCodeAdapter.js";
 import { applyCodexSandboxProfile } from "./codexSandbox.js";
 import {
   OPENCODE_CONFIG_CONTENT_ENV,
@@ -401,10 +401,17 @@ export function createCliQueryFn(options: {
 export interface OpenCodeQueryContext {
   /** The dispatched `<provider>/<model>`, already checked. */
   model: string;
-  /** The absolute worktree the run config was built for, and the run's --dir and cwd. */
+  /** The absolute worktree a query runs in when its options name no cwd. */
   worktree: string;
+  /** The stage a query runs when its options name none. */
   stage?: string;
-  runConfig: OpenCodeRunConfig;
+  /**
+   * Obtains and checks one query's run config (`nightgauge opencode config`
+   * by default), before anything is spawned.
+   */
+  runConfig: (request: Omit<OpenCodeRunConfigRequest, "repo">) => Promise<OpenCodeRunConfig>;
+  /** The `opencode run` argv for a worktree. */
+  argv: (worktree: string) => string[];
   /** The environment the child's is curated from. */
   parentEnv: NodeJS.ProcessEnv;
   /** Spawns processes; default `node:child_process` spawn. */
@@ -633,21 +640,30 @@ function helperEnv(stageEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
  */
 async function* openCodeQuery(
   command: string,
-  args: readonly string[],
+  _args: readonly string[],
   run: OpenCodeQueryContext,
   queryOptions: SDKQueryOptions
 ): AsyncGenerator<SDKMessage> {
-  const { model, worktree, stage, runConfig } = run;
+  const { model } = run;
   const spawnFn = run.spawn ?? spawn;
   const cwd = queryOptions.options?.cwd;
-  if (cwd !== undefined && resolvePath(cwd) !== worktree) {
-    throw new AdapterError(
-      `the OpenCode run config was built for ${worktree}, not ${resolvePath(cwd)}: create the ` +
-        "query function for the worktree the stage runs in",
-      "CONFIG_INVALID",
-      "OpenCode"
-    );
-  }
+  const worktree = cwd !== undefined ? resolvePath(cwd) : run.worktree;
+  const stage = queryOptions.options?.stage ?? run.stage;
+  const maxTurns = queryOptions.options?.maxTurns;
+  const runId = queryOptions.options?.runId;
+  // The per-run config is the query's own: its stage, its turn budget and its
+  // run's identity reach the verb, as the Go dispatch's RunOptions reach
+  // PrepareRunRoot (#1648). A refusal here spawns nothing.
+  const runConfig = await run.runConfig({
+    model,
+    worktree,
+    ...(stage !== undefined && { stage }),
+    ...(maxTurns !== undefined && { maxTurns }),
+    ...(runId !== undefined && { runId }),
+  });
+  // The binary the verb vetted, and the argv for this query's worktree.
+  const spawnCommand = runConfig.binary ?? command;
+  const spawnArgs = run.argv(worktree);
   const signal = queryOptions.options?.abortSignal;
   // The run config was checked to carry the handshake (checkRunConfig).
   const handshake = openCodeHandshakeFromEnv(runConfig.env, runConfig.pluginVersion);
@@ -675,7 +691,7 @@ async function* openCodeQuery(
     ...(stage !== undefined && { NIGHTGAUGE_STAGE: stage }),
   };
 
-  const result = await runOpenCodeProcess(spawnFn, command, args, {
+  const result = await runOpenCodeProcess(spawnFn, spawnCommand, spawnArgs, {
     cwd: worktree,
     env,
     stdin: queryOptions.prompt,
@@ -710,7 +726,7 @@ async function* openCodeQuery(
     exitCode: result.code,
     allowedTools: queryOptions.options?.allowedTools,
     dispatched: model,
-    fold: openCodeHelper(spawnFn, command, runConfig.runDir, env, signal),
+    fold: openCodeHelper(spawnFn, spawnCommand, runConfig.runDir, env, signal),
     redact: openCodeRedactor(secrets),
   });
 

@@ -21,8 +21,15 @@ changelog, and the release workflow refuses a tag that does not.
   every stage because nothing supplied its run config. Now each stage runs
   `nightgauge opencode config` (`NIGHTGAUGE_BIN`, else `nightgauge` on
   `PATH`) through `execFile` with an argv array, a 15 s timeout and an 8 MiB
-  output cap. The config, the isolation env, the withheld variables, the
-  handshake and the opencode binary all come from that verb. No TypeScript
+  output cap. The verb runs once per query, not once per query function, so
+  a query function shared by every stage of a pipeline still gets each stage
+  its own config. It gets the query's stage, `--max-turns` from the stage's
+  turn budget and `--run-id` from the pipeline run's identity.
+  `PipelineOrchestrator.run` now hands that identity to every stage. The id
+  is only passed when it is a UUIDv7 run identity; otherwise the verb mints a
+  root of its own, as the Go manager does. The config, the isolation env, the
+  withheld variables, the handshake and the opencode binary all come from
+  that verb. No TypeScript
   builds any of it. A verb that fails (the tamper gate included), times out,
   prints something that is not JSON, leaves out a field, or reports a
   `schema_version` major other than 1 fails the stage before any `opencode`

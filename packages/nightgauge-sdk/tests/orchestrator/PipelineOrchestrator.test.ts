@@ -142,6 +142,34 @@ describe("PipelineOrchestrator", () => {
       expect(stageOrder).toContain("issue-pickup");
     });
 
+    it("gives every stage's query its stage, its turn budget and the run's one identity (#1648)", async () => {
+      const seen: Array<{ stage?: string; maxTurns?: number; runId?: string }> = [];
+      const query: SDKQueryFunction = async function* (q) {
+        seen.push({
+          stage: q.options?.stage,
+          maxTurns: q.options?.maxTurns,
+          runId: q.options?.runId,
+        });
+        yield createMockResult();
+      };
+      const orchestrator = new PipelineOrchestrator(query, {
+        stages: ["issue-pickup", "feature-planning"],
+        autoApprove: true,
+        maxTurnsPerStage: 33,
+      });
+      const result = await orchestrator.run(42);
+
+      expect(result.success).toBe(true);
+      expect(seen.map((s) => s.stage)).toEqual(["issue-pickup", "feature-planning"]);
+      expect(seen.map((s) => s.maxTurns)).toEqual([33, 33]);
+      // One run identity for the whole run, a canonical UUIDv7 when no
+      // run-state names one.
+      expect(seen[0].runId).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+      );
+      expect(seen[1].runId).toBe(seen[0].runId);
+    });
+
     it("should stop on stage failure", async () => {
       const orchestrator = new PipelineOrchestrator(createFailingQuery(new Error("Failed")), {
         stages: ["issue-pickup", "feature-planning"],

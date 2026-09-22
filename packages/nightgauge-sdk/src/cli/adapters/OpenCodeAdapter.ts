@@ -269,6 +269,16 @@ export interface OpenCodeRunConfigRequest {
   readonly stage?: string;
   /** The repository the stage works on, as `owner/name`: its MCP servers come from its default branch. */
   readonly repo?: string;
+  /**
+   * The stage's turn budget (the query's `maxTurns`), the verb's --max-turns:
+   * the steps cap of the build agent and each subagent.
+   */
+  readonly maxTurns?: number;
+  /**
+   * The pipeline run's identity (the query's `runId`), the verb's --run-id:
+   * the stages of one run share its per-run root, as on the Go path.
+   */
+  readonly runId?: string;
 }
 
 /** Builds a stage's per-run config and isolation environment (opencodeRunConfig.ts). */
@@ -473,10 +483,11 @@ export class OpenCodeAdapter implements ICliAdapter {
   }
 
   /**
-   * Check the model and its credentials, then obtain the stage's per-run config
-   * through the run config provider (`nightgauge opencode config` by default)
-   * and return the query function. No opencode process is spawned here, and
-   * none at all when a check or the provider refuses.
+   * Check the model and its credentials and return the query function. Each
+   * query first obtains its stage's per-run config through the run config
+   * provider (`nightgauge opencode config` by default), with the query's
+   * stage, `maxTurns` and `runId`; no opencode process is spawned when a check
+   * or the provider refuses.
    */
   async createQueryFunction(options?: QueryFunctionOptions): Promise<SDKQueryFunction> {
     const model = this.dispatchModel();
@@ -494,15 +505,25 @@ export class OpenCodeAdapter implements ICliAdapter {
     const worktree = resolve(options?.cwd ?? process.cwd());
     const stage = options?.stage;
     const repo = this.env.NIGHTGAUGE_TARGET_REPO || this.env.NIGHTGAUGE_REPO || undefined;
-    const runConfig = checkRunConfig(
-      await this.runConfigProvider({ model, worktree, stage, ...(repo && { repo }) })
-    );
+    const provider = this.runConfigProvider;
     return createCliQueryFn({
-      command: runConfig.binary ?? this.cliCommand,
+      command: this.cliCommand,
       args: buildOpenCodeArgv(model, worktree),
       adapter: this.name,
       promptDelivery: "stdin",
-      openCode: { model, worktree, stage, runConfig, parentEnv: this.env, spawn: this.spawn },
+      openCode: {
+        model,
+        worktree,
+        stage,
+        // One run config per query: the stage, its turn budget and the run
+        // identity are the query's, so a query function shared by every stage
+        // of a pipeline (run.ts) still gets each stage its own config.
+        runConfig: async (request) =>
+          checkRunConfig(await provider({ ...request, ...(repo && { repo }) })),
+        argv: (dir) => buildOpenCodeArgv(model, dir),
+        parentEnv: this.env,
+        spawn: this.spawn,
+      },
     });
   }
 
