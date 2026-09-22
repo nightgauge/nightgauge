@@ -16,6 +16,36 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **The SDK's OpenCode adapter runs under the Go per-run config (#1648), and
+  checks the plugin handshake (#1804).** Before this, the SDK adapter refused
+  every stage because nothing supplied its run config. Now each stage runs
+  `nightgauge opencode config` (`NIGHTGAUGE_BIN`, else `nightgauge` on
+  `PATH`) through `execFile` with an argv array, a 15 s timeout and an 8 MiB
+  output cap. The config, the isolation env, the withheld variables, the
+  handshake and the opencode binary all come from that verb. No TypeScript
+  builds any of it. A verb that fails (the tamper gate included), times out,
+  prints something that is not JSON, leaves out a field, or reports a
+  `schema_version` major other than 1 fails the stage before any `opencode`
+  starts. The error carries the verb's stderr with credentials redacted. The
+  SDK spawn applies `env_withhold` to the inherited environment, then lays the
+  verb's `env` over it. So an inherited `XDG_CONFIG_HOME` or
+  `OPENCODE_CONFIG_CONTENT` never reaches the child. The child runs the
+  binary the verb vetted. The handshake mirrors `manager.go`. At the first
+  `step_start` the sentinel must carry the run's nonce and the installed
+  `plugin_version`, or the process group is killed. If the run made a tool
+  call, the sentinel must also be dated no later than that call's start. The
+  verb's output is now `schema_version` 1.1. It adds `binary`, the absolute
+  path of the opencode the version policy checked, and `plugin_version`.
+  `TestOpenCodeConfigGolden` generates
+  `internal/execution/adapters/testdata/opencode_config_golden.json` from the
+  real verb and the Go adapter's `BuildCommand`. The SDK's
+  `opencodeRunConfig.test.ts` feeds that file through the SDK path and asserts
+  that the child's `OPENCODE_CONFIG_CONTENT` and every `HOME`, `XDG_*`,
+  `OPENCODE_*` and `NIGHTGAUGE_OPENCODE_*` value match the Go spawn's. A key
+  added on either side turns that side's test red. The SDK's opencode install
+  hint now names the managed install of the max-tested build and its
+  `opencode.binary` pin. The Go refusals already did.
+
 - **Compact render profiles for issue-pickup (#1660) and feature-validate
   (#1663).** Both stages now fit the ADR-023 share at a 32768-token window
   with `nightgauge skill render --profile compact`. issue-pickup goes from

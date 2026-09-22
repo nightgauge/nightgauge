@@ -1,6 +1,6 @@
 /**
  * OpenCodeAdapter (#1637): registration, the argv the Go adapter emits, the
- * inert-until-#1648 run config, the fail-closed version floor, the model and
+ * run config's checks, the fail-closed version floor, the model and
  * credential checks, the child environment a real spawn gets, the redaction
  * of stderr and of the model's text, and killing the run's process group on
  * abort and when this process exits or is interrupted.
@@ -91,6 +91,7 @@ function runConfig(root: string): OpenCodeRunConfig {
     configContent: JSON.stringify({ model: LOCAL_MODEL, share: "disabled" }),
     env,
     runDir: root,
+    pluginVersion: "1",
   };
 }
 
@@ -116,12 +117,20 @@ function writeStub(dir: string, runBody: string): string {
       { info: { role: "assistant", providerID: "lmstudio", modelID: "qwen/qwen3.8-27b" } },
     ],
   });
+  // Like the real plugin's init, `run` writes the handshake sentinel before
+  // any event (dated in the past, as a plugin that loaded before every tool
+  // call would have), unless NO_SENTINEL is set.
   const script = `#!/bin/sh
 case "$1" in
 run)
   printf '%s\\n' "$@" > '${dir}/argv'
   env > '${dir}/env'
   cat > '${dir}/stdin'
+  if [ -z "$NO_SENTINEL" ] && [ -n "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL" ]; then
+    mkdir -p "$(dirname "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL")"
+    printf '{"nonce":"%s","plugin_version":"1","hooks":[]}' "$NIGHTGAUGE_OPENCODE_PLUGIN_NONCE" > "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL"
+    touch -t 202001010000 "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL"
+  fi
 ${runBody}
   ;;
 export)
@@ -213,19 +222,49 @@ describe("OpenCodeAdapter argv (#1637)", () => {
   });
 });
 
-describe("OpenCodeAdapter without a run config provider (#1637)", () => {
-  it("createQueryFunction fails CONFIG_INVALID naming #1648 and spawns nothing", async () => {
+describe("OpenCodeAdapter run config (#1637, #1648)", () => {
+  it("by default obtains it from `nightgauge opencode config`, and spawns nothing when that fails", async () => {
     const spawn = vi.fn();
     const adapter = new OpenCodeAdapter({
-      env: { PATH: "/usr/bin" },
+      env: { PATH: "/usr/bin", NIGHTGAUGE_BIN: join(tmp("oc-nobin-"), "nightgauge") },
       model: LOCAL_MODEL,
       spawn: spawn as never,
     });
-    const err = await adapter.createQueryFunction({ cwd: tmp("oc-wt-") }).catch((e: unknown) => e);
+    const err = await adapter
+      .createQueryFunction({ cwd: tmp("oc-wt-"), stage: "feature-dev" })
+      .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(AdapterError);
-    expect((err as AdapterError).category).toBe("CONFIG_INVALID");
-    expect((err as AdapterError).message).toContain("#1648");
+    expect((err as AdapterError).category).toBe("BINARY_NOT_FOUND");
+    expect((err as AdapterError).message).toContain("nightgauge opencode config");
     expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("refuses a run config without the plugin handshake", async () => {
+    for (const drop of [
+      "NIGHTGAUGE_OPENCODE_PLUGIN_NONCE",
+      "NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL",
+      "NIGHTGAUGE_OPENCODE_PLUGIN_PATH",
+    ]) {
+      const config = runConfig(tmp("oc-run-"));
+      const env = { ...config.env };
+      delete env[drop];
+      const adapter = new OpenCodeAdapter({
+        env: {},
+        model: LOCAL_MODEL,
+        runConfigProvider: providerFor({ ...config, env }),
+      });
+      await expect(adapter.createQueryFunction({ cwd: tmp("oc-wt-") }), drop).rejects.toThrow(
+        new RegExp(`it sets no ${drop}`)
+      );
+    }
+    const adapter = new OpenCodeAdapter({
+      env: {},
+      model: LOCAL_MODEL,
+      runConfigProvider: providerFor({ ...runConfig(tmp("oc-run-")), pluginVersion: "" }),
+    });
+    await expect(adapter.createQueryFunction({ cwd: tmp("oc-wt-") })).rejects.toThrow(
+      /names no plugin version/
+    );
   });
 
   it("a run config provider that returns nothing usable is refused too", async () => {

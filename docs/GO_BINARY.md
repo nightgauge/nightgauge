@@ -7143,17 +7143,29 @@ adapter's warning and notices go to stderr.
 
 | Field            | Meaning                                                                                                   |
 | ---------------- | --------------------------------------------------------------------------------------------------------- |
-| `schema_version` | Output version (`1.0`); a caller refuses an unknown major version                                         |
+| `schema_version` | Output version (`1.1`); a caller refuses an unknown major version                                         |
 | `config_content` | `OPENCODE_CONFIG_CONTENT`, the per-run OpenCode config                                                    |
 | `env`            | Every variable the spawn sets from the run, the config included; no secret                                |
 | `env_withhold`   | `prefixes` and `names` of the inherited variables the spawn must not get; remove them before adding `env` |
 | `plugin_dir`     | Where OpenCode loads the run's plugins from                                                               |
 | `run_dir`        | The run's private root                                                                                    |
 | `non_loopback`   | `false` only for a declared model server on this machine; `true` elsewhere and for any hosted provider    |
+| `binary`         | Absolute path of the `opencode` the version policy checked; spawn this one                               |
+| `plugin_version` | The `plugin_version` the plugin's handshake sentinel (`env`'s `NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL`) must carry |
 
 A caller that removes the `env_withhold` variables from its environment, then
 adds `env`, gives the child what the Go path gives it, apart from the
 adapter's per-spawn exports (such as `OPENCODE_SERVER_PASSWORD`).
+
+The SDK's OpenCode adapter runs this verb for every stage
+(`packages/nightgauge-sdk/src/cli/adapters/opencodeRunConfig.ts`, #1648): the
+binary is `NIGHTGAUGE_BIN`, else `nightgauge` on `PATH`, and the stage fails
+before any `opencode` starts when the verb fails, times out (15 s) or prints a
+`schema_version` whose major it does not know. It checks the plugin handshake
+the way the Go manager does (#1804). `TestOpenCodeConfigGolden` pins the
+verb's output and the Go spawn's environment for fixed inputs to
+`internal/execution/adapters/testdata/opencode_config_golden.json`, which the
+SDK's tests feed through the SDK path.
 
 It exits 1, with nothing on stdout, wherever the adapter refuses a dispatch
 before spawning: without `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1`, a model that is

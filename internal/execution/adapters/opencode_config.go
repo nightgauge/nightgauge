@@ -91,8 +91,9 @@ import (
 
 // OpenCodeConfigSchemaVersion is the schema_version of `nightgauge opencode
 // config --json`. A caller refuses an output whose major version it does not
-// know (#1648).
-const OpenCodeConfigSchemaVersion = "1.0"
+// know (#1648). 1.1 added binary and plugin_version, which the SDK spawn path
+// needs to run the binary the verb vetted and to verify the plugin handshake.
+const OpenCodeConfigSchemaVersion = "1.1"
 
 // openCodeConfigContentEnvVar is the inline config layer OpenCode merges last
 // of every layer Nightgauge does not refuse.
@@ -1325,6 +1326,18 @@ type OpenCodeRun struct {
 	PluginDir string `json:"plugin_dir"`
 	// RunDir is the run's root.
 	RunDir string `json:"run_dir"`
+	// Binary is the absolute path of the opencode binary the adapter's
+	// version policy vetted for this dispatch (ResolveOpenCodeBinary: the
+	// opencode.binary pin, else the opencode on PATH). Only
+	// `nightgauge opencode config` sets it, so an SDK caller (#1648) spawns
+	// the binary the verb checked rather than whatever opencode its own PATH
+	// finds. The Go spawn path takes the pin from PrepareRunRoot instead.
+	Binary string `json:"binary,omitempty"`
+	// PluginVersion is the plugin_version the Nightgauge plugin's handshake
+	// sentinel must carry (opencodeplugin.PluginVersion), set by
+	// InstallNightgaugePlugin, so a caller outside this binary verifies the
+	// handshake against the version the verb installed, not a copy of it.
+	PluginVersion string `json:"plugin_version,omitempty"`
 	// Home is the OS home directory (OpenCodeRunRequest.Home) the run was
 	// built for. InstallNightgaugePlugin uses it, not exported in Env, to
 	// find the operator's $HOME/.opencode (#1635 fix round finding 3):

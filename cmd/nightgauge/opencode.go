@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -64,6 +65,10 @@ func opencodeConfigCmd() *cobra.Command {
                   names before adding env, as the Go adapter does
   plugin_dir      where OpenCode loads the run's plugins from
   run_dir         the run's private root
+  binary          the absolute path of the opencode binary the version
+                  policy checked: spawn this one
+  plugin_version  the plugin_version the plugin's handshake sentinel (at
+                  env's NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL) must carry
   non_loopback    false only for a declared model server on this machine;
                   true for one elsewhere and for every hosted provider
 
@@ -240,12 +245,20 @@ func openCodeConfigForStage(ctx context.Context, f openCodeConfigFlags) (*adapte
 	// own field) is never set by this command, while id is always a run
 	// identity (validated or minted above) — the same thing req.ID is for the
 	// adapter's own PrepareRunRoot call (opencode.go, #1635 fix round finding
-	// 1/5). This verb never spawns opencode, so nothing ever checks the
-	// minted handshake; it exists only so the printed config matches what a
-	// real spawn with the same id would get, byte for byte.
+	// 1/5). This verb never spawns opencode itself: the SDK caller that
+	// spawns from its output verifies the minted handshake (#1648, #1804,
+	// opencodeHandshake.ts), against the sentinel path and nonce in env and
+	// the plugin_version printed beside them.
 	if err := adapters.InstallNightgaugePlugin(ctx, prepared, run.OutputFile, id); err != nil {
 		return nil, err
 	}
+	// The binary PreDispatch's version policy just vetted, resolved by the
+	// same function from the same pin, so an SDK caller spawns exactly it.
+	bin, err := adapters.ResolveOpenCodeBinary(settings.Binary, exec.LookPath)
+	if err != nil {
+		return nil, err
+	}
+	prepared.Binary = bin.Path
 	return prepared, nil
 }
 

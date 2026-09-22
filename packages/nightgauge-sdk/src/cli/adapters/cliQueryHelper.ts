@@ -8,6 +8,7 @@
  * @see Issue #627 - Extract ICliAdapter interface & unify types
  * @see Issue #1051 - Add positional prompt delivery and Gemini stream-json support
  * @see Issue #1637 - The opencode branch: process group, curated env, stream classification
+ * @see Issue #1804 - The opencode branch verifies the plugin handshake
  */
 
 import { spawn } from "node:child_process";
@@ -33,6 +34,7 @@ import {
 import { AdapterError } from "./errors.js";
 import { openCodeProviderEnv } from "./opencodeCatalog.js";
 import { classifyOpenCodeRun, openCodeRedactor, type OpenCodeHelper } from "./opencodeStream.js";
+import { OpenCodeHandshakeWatch, openCodeHandshakeFromEnv } from "./opencodeHandshake.js";
 import {
   summarizeCodexJsonOutput,
   summarizeGeminiStreamJsonOutput,
@@ -515,6 +517,8 @@ function runOpenCodeProcess(
     signal?: AbortSignal;
     timeoutMs?: number;
     maxOutput?: number;
+    /** Sees each complete stdout line as it arrives; returning true kills the group at once. */
+    onStdoutLine?: (line: string) => boolean;
   }
 ): Promise<ProcessResult> {
   return new Promise((resolvePromise, reject) => {
@@ -552,7 +556,15 @@ function runOpenCodeProcess(
 
     child.stdout?.setEncoding("utf-8");
     child.stderr?.setEncoding("utf-8");
+    let partial = "";
     child.stdout?.on("data", (chunk: string) => {
+      if (opts.onStdoutLine) {
+        const lines = (partial + chunk).split("\n");
+        partial = lines.pop() ?? "";
+        for (const line of lines) {
+          if (opts.onStdoutLine(line)) killGroup(child.pid, "SIGKILL");
+        }
+      }
       if (opts.maxOutput !== undefined && stdout.length + chunk.length > opts.maxOutput) {
         overflow = true;
         return;
@@ -571,6 +583,9 @@ function runOpenCodeProcess(
       reject(err);
     });
     child.on("close", (code) => {
+      if (opts.onStdoutLine && partial !== "" && opts.onStdoutLine(partial)) {
+        killGroup(child.pid, "SIGKILL");
+      }
       if (timer) clearTimeout(timer);
       if (grace) clearTimeout(grace);
       opts.signal?.removeEventListener("abort", onAbort);
@@ -634,10 +649,24 @@ async function* openCodeQuery(
     );
   }
   const signal = queryOptions.options?.abortSignal;
+  // The run config was checked to carry the handshake (checkRunConfig).
+  const handshake = openCodeHandshakeFromEnv(runConfig.env, runConfig.pluginVersion);
+  if (handshake === undefined) {
+    throw new AdapterError(
+      "the OpenCode run config carries no plugin handshake, so the run could not be verified",
+      "CONFIG_INVALID",
+      "OpenCode"
+    );
+  }
+  const watch = new OpenCodeHandshakeWatch(handshake);
   // A fresh value per spawn, never logged and never on argv (ADR-022 § 18).
   const password = randomBytes(24).toString("base64url");
   const env: NodeJS.ProcessEnv = {
-    ...curateOpenCodeChildEnv(run.parentEnv, model, runConfig.env),
+    ...curateOpenCodeChildEnv(
+      withholdInherited(run.parentEnv, runConfig.envWithhold),
+      model,
+      runConfig.env
+    ),
     [OPENCODE_CONFIG_CONTENT_ENV]: runConfig.configContent,
     [OPENCODE_SERVER_PASSWORD_ENV]: password,
     NIGHTGAUGE_ADAPTER: "opencode",
@@ -651,9 +680,17 @@ async function* openCodeQuery(
     env,
     stdin: queryOptions.prompt,
     signal,
+    onStdoutLine: (line) => watch.observe(line),
   });
   if (result.aborted) {
     throw new Error("opencode query aborted: its process group was killed");
+  }
+  // The plugin handshake (#1804, manager.go's twin): a run whose plugin did
+  // not load, loaded late or left a foreign sentinel fails, whatever its exit
+  // code, before anything it printed is read as a result.
+  const handshakeFailure = watch.finish();
+  if (handshakeFailure !== undefined) {
+    throw new AdapterError(handshakeFailure, "VERSION_MISMATCH", "OpenCode");
   }
 
   // The values of the secrets the child held are removed from every line it
@@ -707,6 +744,25 @@ async function* openCodeQuery(
     usage_partial: summary.usagePartial,
     ...(summary.sessionId !== undefined && { session_id: summary.sessionId }),
   };
+}
+
+/**
+ * `parentEnv` less every variable `nightgauge opencode config` says the spawn
+ * must not inherit (`env_withhold`), applied before the child's own curation
+ * as the Go manager applies OpenCodeWithholdsEnv.
+ */
+function withholdInherited(
+  parentEnv: NodeJS.ProcessEnv,
+  withhold: OpenCodeRunConfig["envWithhold"]
+): NodeJS.ProcessEnv {
+  if (withhold === undefined) return parentEnv;
+  const names = new Set(withhold.names);
+  const kept: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(parentEnv)) {
+    if (names.has(name) || withhold.prefixes.some((p) => name.startsWith(p))) continue;
+    kept[name] = value;
+  }
+  return kept;
 }
 
 /**

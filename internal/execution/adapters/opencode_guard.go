@@ -66,6 +66,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	"github.com/nightgauge/nightgauge/internal/opencodeallow"
 )
@@ -797,11 +798,27 @@ func OpenCodeExternalDirectoryAllowRoots(opts RunOptions) []string {
 // failure to resolve the running binary never refuses the config, the same
 // way manager.go's hostBinaryPath's failure never blocks a spawn.
 func OpenCodeBinDir() string {
+	if dir := openCodeBinDirOverride.Load(); dir != nil {
+		return *dir
+	}
 	self, err := os.Executable()
 	if err != nil || self == "" {
 		return ""
 	}
 	return filepath.Dir(self)
+}
+
+// openCodeBinDirOverride replaces os.Executable's directory in
+// OpenCodeBinDir for a test (SwapOpenCodeBinDirForTest).
+var openCodeBinDirOverride atomic.Pointer[string]
+
+// SwapOpenCodeBinDirForTest makes OpenCodeBinDir return dir until the
+// returned function restores it. The go test binary lives in a randomly
+// named build directory, which the permission map would otherwise carry into
+// a golden (TestOpenCodeConfigGolden).
+func SwapOpenCodeBinDirForTest(dir string) (restore func()) {
+	prev := openCodeBinDirOverride.Swap(&dir)
+	return func() { openCodeBinDirOverride.Store(prev) }
 }
 
 // openCodePermissionMap builds the ADR-022 § 9 / #1638 permission map for
