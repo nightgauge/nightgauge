@@ -385,7 +385,7 @@ func raiseRiskFloors(floors map[string]string, d routing.Decision) map[string]st
 			continue
 		}
 		if raised == nil {
-			raised = make(map[string]string, len(floors)+2)
+			raised = make(map[string]string, len(floors))
 			for k, v := range floors {
 				raised[k] = v
 			}
