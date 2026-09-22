@@ -1,68 +1,46 @@
----
-name: feature-validate
-description: Validate feature implementation with integration/E2E tests and manual
-  checklists. Use after /feature-dev to ensure the feature works end-to-end
-  before creating PR.
-license: Apache-2.0
-metadata:
-  author: nightgauge
-  version: "1.20.0"
-  source: https://github.com/nightgauge/nightgauge
-allowed-tools: Read Write Edit Glob Grep Bash Task
-orchestration:
-  mode: pipeline
-  phase: validate
-  ceiling: fanout
-  units:
-    - id: build
-      role: stage
-      promptRef: _includes/build-and-tests.md
-    - id: tests
-      role: stage
-      promptRef: _includes/build-and-tests.md
-    - id: ci-parity
-      role: stage
-      promptRef: _includes/ci-and-knowledge.md
-  judge:
-    mode: gate
-    gate: true
-    quorum: 1
-    promptRef: _includes/ci-and-knowledge.md
-programmatic-tools: run_build run_lint run_tests run_typecheck
-context: fork
-agent: test-runner
-model: sonnet
-# Completion verification is a Go StageGate (FeatureDevGate /
-# FeatureValidateGate — internal/orchestrator/gates), NOT a Claude-only
-# `hooks: Stop:` block: hooks silently never fired on non-Claude adapters
-# (spike #33 D2, #55). Do not reintroduce hooks here — the portability
-# linter rejects them.
-inputs:
-  - .nightgauge/pipeline/dev-{N}.json
-outputs:
-  - .nightgauge/pipeline/validate-{N}.json
-disable-model-invocation: true
----
-
 <!-- include: ../_shared/PIPELINE_CONTEXT.md -->
 <!-- include: ../_shared/AUTONOMY_CONTRACT.md -->
-<!-- include: ../_shared/BATCH_MODE.md -->
 
-# Feature Validation
+## Batch Mode
 
-Trusts the dev context handoff (no build/unit-test/security re-runs that already passed), runs integration/E2E tests with Ralph Loop self-healing (up to 3 auto-fix attempts, [docs/RALPH_LOOP.md](../../../../docs/RALPH_LOOP.md)), excludes pre-existing failures via baseline comparison, and writes validation context for `/nightgauge-pr-create`.
+**Batch mode is additive.** Every stage has a single-issue path that is the
+default and is never modified by this section. A batch context file is an
+_optional overlay_: when the file this stage looks for is absent — the normal
+case — continue the single-issue path unchanged and do not mention batch mode
+again. Never invent, guess at, or synthesize a batch context file that is not
+on disk.
 
-**Invoke**: `/nightgauge-feature-validate` (Claude Code plugin), `$nightgauge-feature-validate` (Codex), or via Agent Skills (Copilot/Cursor). **Requires**: `.nightgauge/pipeline/dev-{N}.json` from `/nightgauge-feature-dev`, on the feature branch from `/nightgauge-issue-pickup` (schema: [docs/CONTEXT_ARCHITECTURE.md](../../../../docs/CONTEXT_ARCHITECTURE.md)). **Config**: `.nightgauge/config.yaml` ([docs/CONFIGURATION.md](../../../../docs/CONFIGURATION.md)); per-key defaults and env overrides in `_includes/configuration.md` (read when needed).
+### The per-stage contract
+
+| Stage              | Batch input          | Batch output        |
+| ------------------ | -------------------- | ------------------- |
+| `feature-validate` | `dev-batch-{E}.json` | `validate-{E}.json` |
+
+All paths are relative to `.nightgauge/pipeline/`.
+
+- **Every gate still runs.** Batch mode changes how many issues a run covers,
+  never which validations execute. Build, tests, and stage gates run once over
+  the combined change set — they are not skipped or sampled.
+
+Full contract, detection block and invariants: Read `skills/_shared/BATCH_MODE.md` when `dev-batch-{E}.json` exists.
+
+# Feature Validation (compact)
+
+> Compact render profile (ADR 023 §Q5, #1663). Keeps every phase marker, every
+> gate, the Exit Contract and `validate-{N}.json` contract, the honesty and
+> no-flaky-dismissal rules and the verify-ui blocking rules; the shared
+> preflight, freshness, long-running-process and self-assessment procedures
+> are on-demand `Read` directives instead of inlined text. Content here MUST
+> stay a strict subset of the base SKILL.md's own wording — this file trims,
+> it never invents new instructions.
+
+Trusts the dev context handoff (no build/unit-test/security re-runs that already passed), runs integration/E2E tests with Ralph Loop self-healing (up to 3 auto-fix attempts, [docs/RALPH_LOOP.md](../../../../../docs/RALPH_LOOP.md)), excludes pre-existing failures via baseline comparison, and writes validation context for `/nightgauge-pr-create`.
+
+**Invoke**: `/nightgauge-feature-validate` (Claude Code plugin), `$nightgauge-feature-validate` (Codex), or via Agent Skills (Copilot/Cursor). **Requires**: `.nightgauge/pipeline/dev-{N}.json` from `/nightgauge-feature-dev`, on the feature branch from `/nightgauge-issue-pickup` (schema: [docs/CONTEXT_ARCHITECTURE.md](../../../../../docs/CONTEXT_ARCHITECTURE.md)). **Config**: `.nightgauge/config.yaml` ([docs/CONFIGURATION.md](../../../../../docs/CONFIGURATION.md)); per-key defaults and env overrides in `_includes/configuration.md` (read when needed).
 
 ## Arguments
 
-| Flag               | Description                                    |
-| ------------------ | ---------------------------------------------- |
-| (none)             | Run all checks (default)                       |
-| `--skip-manual`    | Skip manual testing prompts (low-risk changes) |
-| `--e2e-only`       | Only run E2E tests, skip manual checklist      |
-| `--checklist-only` | Generate checklist without running tests       |
-| `--auto-pass`      | Auto-pass all checklist items (CI/automated)   |
+`--skip-manual` (skip manual testing prompts), `--e2e-only`, `--checklist-only`, `--auto-pass` (auto-pass all checklist items); no flag runs all checks.
 
 ## Exit Contract — Read This First
 
@@ -75,22 +53,11 @@ test -s ".nightgauge/pipeline/validate-${ISSUE_NUMBER}.json" || \
 
 ## Spike Issues (`type:spike`)
 
-For `type:spike` issues, run `nightgauge spike materialize "$ISSUE_NUMBER" --dry-run`. Non-zero exit = the `docs/spikes/<N>-*.md` artifact is missing or its recommendations block fails schema validation — a **blocking** validation failure ([docs/SPIKE_CONTRACT.md](../../../../docs/SPIKE_CONTRACT.md)).
-
-## Supporting files (load on demand)
-
-- `_includes/configuration.md` (same directory as this SKILL.md) — config key defaults and environment overrides (read when a config default is needed)
-- `_includes/context-load.md` (same directory as this SKILL.md) — read in Phase 0 (read dev context), Phase 0.5 (batch detection), Phase 0.6 (AC ac-check steps)
-- `_includes/test-setup.md` (same directory as this SKILL.md) — read in Phase 1 (detect testing environment) and Phase 1.8 (PTC detection)
-- `_includes/build-and-tests.md` (same directory as this SKILL.md) — read in Phase 1.5 (build verification), Phase 1.6 (dead code), Phase 1.7 (baseline comparison), Phase 2 (run tests), Phase 2.4 (mobile MCP E2E), Step 2.5 (evidence-of-execution gate)
-- `_includes/verify-ui-gate.md` (same directory as this SKILL.md) — read in Phase 2.45 (web UI verification gate)
-- `_includes/ci-and-knowledge.md` (same directory as this SKILL.md) — read in Phase 2.5 (CI parity), Phase 2.6 (knowledge coverage), Phase 2.7 (pre-push gate)
-- `_includes/feedback-and-commit.md` (same directory as this SKILL.md) — read in Phase 3 (checklist), Phase 4 (feedback signals), Phase 4.9 (compute status), Phase 5 (commit and push)
-- `_includes/context-and-board.md` (same directory as this SKILL.md) — read in Phase 6 (write validate context) and Phase 7 (sync board)
+For `type:spike` issues, run `nightgauge spike materialize "$ISSUE_NUMBER" --dry-run`. Non-zero exit = the `docs/spikes/<N>-*.md` artifact is missing or its recommendations block fails schema validation — a **blocking** validation failure ([docs/SPIKE_CONTRACT.md](../../../../../docs/SPIKE_CONTRACT.md)).
 
 ## Orchestration
 
-The `orchestration:` frontmatter models validation as an ordered pipeline — build (1.5) → tests (2) → CI-parity (2.5) — closed by an adversarial **gate** judge whose verdict is the evidence the Go `FeatureValidateGate.Verify()` loop consumes (epic #3899): a failed verdict fails validation. Gate-metric records are part of that evidence — the verify-ui gate (2.45) and adversarial review (2.5 judge) emit `nightgauge gate record-metric` per their includes, and `gate_metrics[]` flows into the validate context (Phase 6); FeatureValidateGate treats zero records as a no-op failure. Each unit's `promptRef` is the SAME `_includes/*.md` the phases below read; the prose Workflow remains the single-agent portability floor ([docs/WORKFLOW_ORCHESTRATION.md](../../../../docs/WORKFLOW_ORCHESTRATION.md)).
+Validation is an ordered pipeline — build (1.5) → tests (2) → CI-parity (2.5) — closed by an adversarial **gate** judge whose verdict is the evidence the Go `FeatureValidateGate.Verify()` loop consumes: a failed verdict fails validation. `gate_metrics[]` flows into the validate context (Phase 6); FeatureValidateGate treats zero records as a no-op failure. Full orchestration and supporting-file index: Read `skills/nightgauge-feature-validate/SKILL.md` when needed.
 
 ## Gotchas
 
@@ -101,7 +68,7 @@ The `orchestration:` frontmatter models validation as an ordered pipeline — bu
 - **Honesty rule — record every gate result as observed.** Never turn a catch into a pass by weakening the check: no lint-disable comments, skipped or deleted tests, loosened assertions or edited gate config. Fixing the code so it is genuinely correct is allowed (Ralph Loop); laundering the finding is not, and `validate-{N}.json` reports what actually ran.
 - **Never dismiss a failing test as flaky without root-causing it.** Re-running until green is not a fix; a failure you cannot explain is recorded as a failure.
 - **Env vars do NOT persist across Bash invocations** — re-derive `VALIDATION_STATUS` (and other gate inputs) inside the same cell that uses them; a stale/empty value spuriously skips the commit phase.
-- See also [`_shared/GOTCHAS.md`](../_shared/GOTCHAS.md).
+- See also the cross-cutting gotchas: Read `skills/_shared/GOTCHAS.md`.
 
 ## Workflow
 
@@ -111,7 +78,7 @@ The `orchestration:` frontmatter models validation as an ordered pipeline — bu
 
 ### Phase -1: Validate Environment
 
-<!-- include: ../_shared/PREFLIGHT.md -->
+**Read `skills/_shared/PREFLIGHT.md` now and follow it before continuing.**
 
 ```bash
 printf '<!-- phase:start name="validate-environment" index=0 total=23 stage="feature-validate" -->\n'
@@ -165,7 +132,7 @@ printf '<!-- phase:start name="ptc-detection" index=5 total=23 stage="feature-va
 printf '<!-- phase:start name="freshness-check" index=6 total=23 stage="feature-validate" -->\n'
 ```
 
-<!-- include: ../_shared/FRESHNESS_CHECK.md -->
+**Read `skills/_shared/FRESHNESS_CHECK.md` now and follow it before continuing this phase.**
 
 Best-effort: if `FRESHNESS_CHECK_FAILED=true`, log a warning and continue — pr-merge resolves conflicts later.
 
@@ -193,7 +160,7 @@ printf '<!-- phase:start name="baseline-comparison" index=9 total=23 stage="feat
 
 > **Read `_includes/build-and-tests.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Identify pre-existing failures (already failing on main) so the Ralph Loop skips them; runs ONLY when tests fail, skipped when dev context shows all passed.
 
-<!-- include: ../_shared/LONG_RUNNING_PROCESSES.md -->
+Before waiting on any long external process, Read `skills/_shared/LONG_RUNNING_PROCESSES.md` and follow it.
 
 ### Phase 2: Run Tests (Redundancy-Aware)
 
@@ -277,7 +244,7 @@ printf '<!-- phase:start name="commit-and-push" index=18 total=23 stage="feature
 printf '<!-- phase:start name="write-validate-context" index=19 total=23 stage="feature-validate" -->\n'
 ```
 
-> **Read `_includes/context-and-board.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Write `.nightgauge/pipeline/validate-{N}.json` for `/nightgauge-pr-create` (schema: [docs/CONTEXT_ARCHITECTURE.md](../../../../docs/CONTEXT_ARCHITECTURE.md)) — **every run, even on failure** (Exit Contract above).
+> **Read `_includes/context-and-board.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Write `.nightgauge/pipeline/validate-{N}.json` for `/nightgauge-pr-create` (schema: [docs/CONTEXT_ARCHITECTURE.md](../../../../../docs/CONTEXT_ARCHITECTURE.md)) — **every run, even on failure** (Exit Contract above).
 
 ### Phase 7: Sync Project Board Status
 
@@ -316,13 +283,4 @@ fi
 printf '<!-- phase:start name="self-assessment" index=22 total=23 stage="feature-validate" -->\n'
 ```
 
-<!-- include: ../_shared/SELF_ASSESSMENT_EPILOGUE.md -->
-
-<!--
-  LEAN REWRITE — adopted 2026-07-13 on a measured composite-score win
-  (+1.8 Sonnet 5 / +1.6 Opus 4.8, no deterministic-check regressions),
-  replacing a 581-line predecessor at 55% of its size.
-  Measurement and decision rule: evals/skill-variants/feature-validate/README.md
-  Inventory preserved across the rewrite: 23/23 phase markers, 6/6 shared
-  includes, exit contract x2, spike gate, gate-metric emissions.
--->
+**Read `skills/_shared/SELF_ASSESSMENT_EPILOGUE.md` now and follow it before continuing this phase.**
