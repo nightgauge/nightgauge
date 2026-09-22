@@ -14,6 +14,24 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Added
+
+- **Spike #1650 measured OpenCode's server mode, and three of its four questions
+  came back negative.** `docs/spikes/1650-opencode-server-mode-warm-serve-run-attach-http-permission.md`
+  records the evidence; ADR-022 is amended and its § 15 disposition table now
+  reads `non-goal` for `json_schema` output, the GitHub agent and ACP, with
+  `serve`/`run --attach` still deferred. The governing finding: an attached
+  `run` uses the **server's** configuration, permission map, XDG isolation and
+  session database, not its own — so a warm server shared across stages would
+  collapse every stage into one identity, one credential set and one
+  transcript, while a server per stage saves less than it costs to boot. An
+  HTTP permission approver does work (3 ms, over the v1 event and reply pair),
+  but it cannot give the model a denial reason, cannot recover a pending ask
+  after a restart, and lets an unanswered ask hang forever instead of failing
+  closed. `json_schema` output makes a session's transcript unreadable on
+  opencode 1.18.31. Plain `opencode run` still opens no TCP listener, so
+  ADR-022 § 18 stands.
+
 ### Fixed
 
 - **The rate-limit gate was never installed on the CLI path.**
