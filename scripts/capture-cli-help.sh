@@ -38,7 +38,12 @@
 #
 # Redaction: ANSI escape sequences are stripped. The prefix's HOME and the
 # capturing user's HOME become `~`, and any other prefix path becomes
-# `<capture-prefix>`. The login name and the host name become `<user>` and `<host>`.
+# `<capture-prefix>`. The login name and the host name become `<user>` and
+# `<host>`, but only in a path- or account-like context (after `/` or `~`, or
+# adjoining `@`), never as a bare word in ordinary help prose — a CLI whose
+# help text happens to say "root" or "localhost" is left alone (#1721). A host
+# named exactly `localhost` is never substituted at all: it never identifies
+# a machine, so a CLI's own generic example text naming it is untouched.
 # Trailing whitespace is trimmed and a final newline ensured. A capture that
 # names any IPv4 address other than 127.0.0.1 is refused. Captures are staged
 # and moved into place only after every requested adapter passed, so a refused
@@ -226,7 +231,13 @@ redact() {
         for (["SCRUB_HOST", "<host>"], ["SCRUB_HOST_SHORT", "<host>"], ["SCRUB_USER", "<user>"]) {
           my ($k, $to) = @$_;
           my $v = $ENV{$k} // "";
-          push @words, [$v, $to] if length($v) > 0;
+          next if length($v) == 0;
+          # "localhost" never identifies a machine, so leaving it alone
+          # cannot leak anything, and redacting it corrupts a CLI own
+          # generic example text (opencode default "http://localhost:4096")
+          # on a host that happens to be named localhost -- the #1721 finding.
+          next if $to eq "<host>" && lc($v) eq "localhost";
+          push @words, [$v, $to];
         }
         our %n;
       }
@@ -234,7 +245,17 @@ redact() {
       $n{ansi} += s/\e\[[0-9;?]*[ -\/]*[@-~]//g;
       $n{ansi} += s/\e\][^\a\e]*(?:\a|\e\\)//g;
       for my $p (@paths) { $n{$p->[1]} += s/\Q$p->[0]\E/$p->[1]/g; }
-      for my $w (@words) { $n{$w->[1]} += s/(?<![\w.-])\Q$w->[0]\E(?![\w-])/$w->[1]/g; }
+      # A bare-word match rewrites the login/host name wherever it appears,
+      # including as an ordinary English word in the CLI own help prose
+      # ("the working root of the project") or a literal placeholder host in
+      # example text ("http://localhost:4096"), which corrupts the capture
+      # and breaks the byte-identical comparison across machines (#1721).
+      # Restrict the match to a path- or account-like context: immediately
+      # after a slash or tilde (a filesystem path), or adjoining an at sign
+      # (a user@host pair) on either side.
+      for my $w (@words) {
+        $n{$w->[1]} += s/(?<=[\/~\@])\Q$w->[0]\E(?![\w-])|(?<![\w.-])\Q$w->[0]\E(?=\@)/$w->[1]/g;
+      }
       s/\s+$//;
       END {
         my @r = map { "$_=" . ($n{$_} + 0) } sort keys %n;

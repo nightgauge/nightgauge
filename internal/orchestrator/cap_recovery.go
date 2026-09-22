@@ -382,16 +382,23 @@ func capDescentReason(reason, fromModel, toModel string) string {
 // stays a pure function.
 func AdapterUsableForCapHop(adapter string) (bool, string) {
 	health := doctor.CheckAdapters([]string{adapter})
-	if len(health) == 0 {
-		return false, "adapter doctor returned no reading"
-	}
-	h := health[0]
-	if !h.OK {
-		reason := h.Remediation
-		if reason == "" {
-			reason = "not usable"
+	// CheckAdapters may prepend a "compat-manifests" row ahead of the
+	// requested adapters (checkAdaptersWithProbe, internal/doctor/adapters.go)
+	// when the embedded compat manifests fail to load, so the requested
+	// adapter's row is not always health[0]. Select it by name (#1712).
+	want := strings.TrimSpace(adapter)
+	for _, h := range health {
+		if h.Adapter != want {
+			continue
 		}
-		return false, reason
+		if !h.OK {
+			reason := h.Remediation
+			if reason == "" {
+				reason = "not usable"
+			}
+			return false, reason
+		}
+		return true, ""
 	}
-	return true, ""
+	return false, "adapter doctor returned no reading"
 }

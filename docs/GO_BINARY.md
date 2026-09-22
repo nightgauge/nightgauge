@@ -5515,7 +5515,11 @@ A Go test holds the doctor to the manifest.
 Its `required_flags` are exactly the flags the adapter's `BuildCommand` emits,
 and the flag-contract tests (`internal/execution/adapters/flag_contract_test.go`)
 check each of them against the CLI's own `--help`, captured at the newest
-tested version by `scripts/capture-cli-help.sh`.
+tested version by `scripts/capture-cli-help.sh` — for `claude-headless`,
+`codex`, `grok` and `opencode`. `gemini` and `copilot` have no capture
+(neither CLI is installed on the maintainer's machine, `helpNotCaptured` in
+the test); their `required_flags` is still held equal to what `BuildCommand`
+emits, but not against either CLI's real `--help`.
 A CLI below its floor gets `version_ok: false` and a remediation naming the
 floor. Codex, gemini and grok also get `ok: false`. Claude's floor
 is the oldest version a captured fixture backs, not a known break, so a claude

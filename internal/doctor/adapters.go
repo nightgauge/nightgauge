@@ -246,6 +246,18 @@ var loadCompatManifests = func() error {
 	return err
 }
 
+// SwapCompatManifestLoadForTest makes CheckAdapters report the embedded
+// compat manifests as failed to load with err until the returned function
+// restores it. Exported so a test outside this package (e.g. the
+// orchestrator's cap-hop row-selection regression, #1712) can exercise the
+// "compat-manifests" failing row CheckAdapters prepends ahead of every
+// requested adapter, without corrupting the real embedded manifests.
+func SwapCompatManifestLoadForTest(err error) (restore func()) {
+	prev := loadCompatManifests
+	loadCompatManifests = func() error { return err }
+	return func() { loadCompatManifests = prev }
+}
+
 // compatManifestRowName labels the row reporting a compat manifest that
 // failed to load. It is not an adapter name.
 const compatManifestRowName = "compat-manifests"

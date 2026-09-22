@@ -86,10 +86,18 @@ same.
 ## Probes
 
 The rows below were observed on 2026-09-13 on the pinned versions, installed
-the way the script installs them and in the same isolation: a throwaway prefix
-removed afterwards, `env -i` with `HOME` and the XDG directories inside it, an
-empty working directory, stdin from `/dev/null`, and every call bounded to 60
-seconds. No credential was present, and no probe reached a model.
+the way the script installs them and under the same mitigations: a throwaway
+prefix removed afterwards, `env -i` with `HOME` and the XDG directories inside
+it, an empty working directory, stdin from `/dev/null`, and every call bounded
+to 60 seconds. No credential was present, and no probe reached a model.
+`env -i` clears the environment a probe's process sees — no operator
+`HOME`, API key or proxy setting reaches it through a variable — but it is
+not filesystem isolation: the process still has whatever file access the
+account running the script has, and a CLI or installer that reads a path
+directly (not through `$HOME`), or one that calls into the OS user database
+rather than reading the environment, is not confined by it. The prefix, the
+empty working directory and the timeout are what keeps a capture's own files
+inside a throwaway location (#1721).
 
 ### Accepted but not listed (the `.hidden` sidecars)
 

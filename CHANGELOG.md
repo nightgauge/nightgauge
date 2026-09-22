@@ -222,6 +222,34 @@ create --body-file` call, so the compact profile (and its tests) pin
 
 ### Fixed
 
+- **Four small review follow-ups closed (#1712, #1721, #1742, #1761).**
+  `adaptercompat` manifests now refuse a case-variant or duplicate JSON key
+  (`Min_Version`, a repeated `min_version`) that `DisallowUnknownFields` let
+  through; `AdapterUsableForCapHop` selects its adapter's row by name instead
+  of `health[0]`, which a `compat-manifests` load-failure row could push out
+  of position; and a stale comment said any `warn` floor kept an adapter
+  usable, when only `claude-headless` opts into that. `scripts/capture-cli-help.sh`
+  no longer redacts a login or host name as a bare word — only in a path- or
+  account-like context — so running as `root` or on a host named `localhost`
+  no longer rewrites a CLI's own help prose or its `http://localhost:4096`
+  example text; `docs/GO_BINARY.md` now says which adapters (`gemini`,
+  `copilot`) have no captured `--help` to check `required_flags` against. The
+  flag-contract test now asserts every `RunOptions` field is either varied by
+  its option product or explicitly held fixed, which caught `ResumeSessionID`
+  never exercising opencode's `-s` flag; `opencode.json`'s `required_flags`
+  now lists it. The OpenCode adversarial merge-contract suite's harness drops
+  `OPENCODE_DISABLE_PROJECT_CONFIG` from its isolation environment so a future
+  change there cannot silently flip its positive controls off, skips a
+  process-group `SIGKILL` for a PID already recorded finished with an empty
+  group (a kernel-recycled pgid could otherwise hit an unrelated process),
+  git-inits every fixture project copy so OpenCode's directory discovery
+  cannot climb past it toward the operator's real home, and no longer names a
+  real, unclaimed npm package in its committed q1 fixture. `internal/doctor`'s
+  `TestMain` now isolates OpenCode local-model discovery like its sibling
+  packages do, so `TestOpenCodeProbeRedactsBaseURL` no longer sends a real
+  discovery request to an RFC 5737 address and block for its ~2.4s timeout;
+  `OpenCodeConfig.Limit`'s doc comment no longer says it is the sole source of
+  a server's limits, now that discovery can fill an unset one.
 - **Live skill evals no longer give the scenario model tools or the
   operator's checkout.** `LiveClaudeModelRunner` spawned `claude --print` with
   the CLI's default tool set in the current directory, so a live cell could

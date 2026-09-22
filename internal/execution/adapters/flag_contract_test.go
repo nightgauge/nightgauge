@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -123,8 +124,9 @@ func expandOptions[T any](in []RunOptions, values []T, set func(*RunOptions, T))
 
 // flagContractOptions is the cartesian product of the RunOptions values that
 // change what a BuildCommand emits: model, effort, turn cap, token cap,
-// allowed tools, cost budget, worktree and prompt. RunOptions has no resume
-// or session field, so no adapter emits a resume flag today.
+// allowed tools, cost budget, worktree, prompt and resume session (opencode's
+// -s flag). TestFlagContractOptionsCoversEveryRunOptionsField holds this list,
+// plus flagContractFixedFields below, to every field RunOptions declares.
 func flagContractOptions(models, prompts []string) []RunOptions {
 	opts := []RunOptions{{
 		SkillPath:   "/skills/feature-dev/SKILL.md",
@@ -143,6 +145,7 @@ func flagContractOptions(models, prompts []string) []RunOptions {
 	opts = expandOptions(opts, flagContractToolSets, func(o *RunOptions, v []string) { o.AllowedTools = v })
 	opts = expandOptions(opts, []float64{0, 1.5}, func(o *RunOptions, v float64) { o.CostBudget = v })
 	opts = expandOptions(opts, []string{"", "/work/nightgauge-issue-1617"}, func(o *RunOptions, v string) { o.WorktreeDir = v })
+	opts = expandOptions(opts, []string{"", "ses_1617abc"}, func(o *RunOptions, v string) { o.ResumeSessionID = v })
 	return expandOptions(opts, prompts, func(o *RunOptions, v string) { o.Prompt = v })
 }
 
@@ -161,11 +164,70 @@ func describeOptions(o RunOptions) string {
 	add(len(o.AllowedTools) > 0, "AllowedTools=%s", strings.Join(o.AllowedTools, ","))
 	add(o.CostBudget != 0, "CostBudget=%g", o.CostBudget)
 	add(o.WorktreeDir != "", "WorktreeDir=%s", o.WorktreeDir)
+	add(o.ResumeSessionID != "", "ResumeSessionID=%s", o.ResumeSessionID)
 	add(o.Prompt != "", "Prompt=%q", o.Prompt)
 	if len(parts) == 0 {
 		return "zero RunOptions"
 	}
 	return strings.Join(parts, " ")
+}
+
+// flagContractVariedFields are the RunOptions fields flagContractOptions
+// varies across the option product (each set by one of its expandOptions
+// calls).
+var flagContractVariedFields = map[string]bool{
+	"Model": true, "Effort": true, "MaxTurns": true, "MaxTokens": true,
+	"AllowedTools": true, "CostBudget": true, "WorktreeDir": true,
+	"ResumeSessionID": true, "Prompt": true,
+}
+
+// flagContractFixedFields are the RunOptions fields flagContractOptions sets
+// once to a fixed non-zero value rather than varying: they identify the
+// dispatch (skill, context files, issue, repo, stage, run id), not a choice a
+// BuildCommand branches its argv on.
+var flagContractFixedFields = map[string]bool{
+	"SkillPath": true, "ContextFile": true, "OutputFile": true, "IssueNumber": true,
+	"Repo": true, "Stage": true, "TargetRepo": true, "RunID": true,
+}
+
+// flagContractUnrepresentableFields are RunOptions fields this contract
+// cannot set through the public struct literal flagContractOptions builds:
+// named here, explicitly, rather than silently passing the exhaustiveness
+// check below.
+var flagContractUnrepresentableFields = map[string]bool{
+	// RunRoot is the per-run root the manager prepares through an adapter's
+	// PrepareRunRoot hook, before BuildCommand ever sees the options — never a
+	// value this contract's own struct literal constructs.
+	"RunRoot": true,
+}
+
+// TestFlagContractOptionsCoversEveryRunOptionsField pins #1721's
+// exhaustiveness finding: without this test, a RunOptions field could be
+// added and wired into an adapter's BuildCommand (gating a new flag) without
+// flagContractOptions ever varying it — the field defaults to its zero value
+// in every generated option, the gated flag never appears in any argv this
+// suite builds, and TestFlagContract can never catch a real CLI dropping or
+// renaming it. Every RunOptions field must be accounted for: varied, held
+// fixed on purpose, or named as unrepresentable, each with its own list above.
+func TestFlagContractOptionsCoversEveryRunOptionsField(t *testing.T) {
+	rt := reflect.TypeOf(RunOptions{})
+	var uncovered []string
+	for i := 0; i < rt.NumField(); i++ {
+		name := rt.Field(i).Name
+		switch {
+		case flagContractVariedFields[name], flagContractFixedFields[name], flagContractUnrepresentableFields[name]:
+			continue
+		default:
+			uncovered = append(uncovered, name)
+		}
+	}
+	if len(uncovered) > 0 {
+		t.Fatalf("RunOptions field(s) %q are in none of flagContractVariedFields, "+
+			"flagContractFixedFields or flagContractUnrepresentableFields: a flag an adapter's "+
+			"BuildCommand gates on one of them could be added without this contract's option "+
+			"product ever exercising it. Add each field to the list that describes it, and if it "+
+			"gates a flag, vary it in flagContractOptions", uncovered)
+	}
 }
 
 // argvFlags returns the flags in one argv, "=value" stripped. With a

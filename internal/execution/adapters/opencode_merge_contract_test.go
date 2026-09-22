@@ -91,6 +91,20 @@ const (
 // into a config directory before it loads a plugin.
 const mcPluginSDKPath = "/@opencode-ai%2fplugin"
 
+// mcNpmPluginPackage is the npm plugin q1's fixture project loads, and
+// mcNpmPluginPlaceholder the token its committed opencode.json names instead
+// of the real spec. The harness's npm registry stub always serves this
+// package name on loopback, but the placeholder is not itself a syntactically
+// valid npm package name (uppercase, underscores), so it can never resolve
+// against the real registry: a contributor who runs `opencode` by hand
+// straight from testdata/ (skipping copyFixture's rewrite, and so the real
+// npm registry, not the stub) finds no such package instead of depending on
+// "adversarial-fixture-npm-plugin" staying unclaimed there forever (#1742).
+const (
+	mcNpmPluginPackage     = "adversarial-fixture-npm-plugin"
+	mcNpmPluginPlaceholder = "@ADVERSARIAL_NPM_PLUGIN_SPEC@"
+)
+
 // mcPrompt is the user message every run sends on stdin.
 const mcPrompt = "adversarial fixture prompt"
 
@@ -168,6 +182,14 @@ func (h *mcHarness) env(extra map[string]string) []string {
 	if err != nil {
 		h.t.Fatal(err)
 	}
+	// OPENCODE_DISABLE_PROJECT_CONFIG is not in OpenCodeIsolationEnv's output
+	// today, but is tracked to join it (#1626/#1638). Once it does, copying
+	// iso wholesale into every spawn would flip every positive control this
+	// suite has — Q1's project-config-on control, Q2/Q4/Q5's project-alone
+	// controls, Q3's concat assertions, Q6's without-the-switch control — off
+	// silently, with nothing about pinned OpenCode behavior having changed.
+	// Drop it here so only a caller that opts in (Q6, via extra) sets it.
+	delete(iso, "OPENCODE_DISABLE_PROJECT_CONFIG")
 	env := map[string]string{
 		"HOME":   h.home,
 		"PATH":   "/usr/bin:/bin",
@@ -232,6 +254,11 @@ func (h *mcHarness) start(dir string, extra map[string]string, stdin string, arg
 		defer close(p.finished)
 		defer cancel()
 		err := cmd.Wait()
+		// Mark the PID finished, and check its group for a survivor, the
+		// instant Wait returns: reap runs tens of seconds later, on cleanup,
+		// and the kernel is free to recycle a genuinely empty group's ID in
+		// that gap (#1742).
+		h.pids.finished(cmd.Process.Pid)
 		p.result = mcResult{stdout: p.stdout.String(), stderr: p.stderr.String(), timedOut: errors.Is(ctx.Err(), context.DeadlineExceeded)}
 		var exitErr *exec.ExitError
 		switch {
@@ -268,10 +295,18 @@ func (h *mcHarness) run(dir string, extra map[string]string, stdin string, args 
 type mcPIDLedger struct {
 	mu   sync.Mutex
 	pids []int
+	// finishedEmpty holds true for a pid whose process had already exited,
+	// with nothing left in its process group, the instant finished() checked
+	// it (see start's goroutine). reap must not SIGKILL -pid for such an
+	// entry: once a group is genuinely empty the kernel may reuse its id for
+	// an unrelated process group, so a kill issued tens of seconds later, at
+	// cleanup, could hit a same-user group that has nothing to do with this
+	// test (#1742).
+	finishedEmpty map[int]bool
 }
 
 func newMCPIDLedger(t *testing.T) *mcPIDLedger {
-	l := &mcPIDLedger{}
+	l := &mcPIDLedger{finishedEmpty: map[int]bool{}}
 	t.Cleanup(func() { l.reap(t) })
 	return l
 }
@@ -282,10 +317,33 @@ func (l *mcPIDLedger) add(pid int) {
 	l.pids = append(l.pids, pid)
 }
 
+// finished records that pid's process has been Wait()ed, and whether its
+// process group already had no member left to signal at that instant.
+func (l *mcPIDLedger) finished(pid int) {
+	empty := !mcSignalable(-pid)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.finishedEmpty[pid] = empty
+}
+
 func (l *mcPIDLedger) recorded() []int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return slices.Clone(l.pids)
+}
+
+// killable is the recorded PIDs reap should send -pid SIGKILL to: every one
+// not already known to have finished with an empty group.
+func (l *mcPIDLedger) killable() []int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []int
+	for _, pid := range l.pids {
+		if !l.finishedEmpty[pid] {
+			out = append(out, pid)
+		}
+	}
+	return out
 }
 
 // survivors returns every recorded PID that is still alive, or whose process
@@ -300,10 +358,10 @@ func (l *mcPIDLedger) survivors() []int {
 	return alive
 }
 
-// reap kills every recorded process group and waits for all of them to be
-// gone.
+// reap kills every recorded process group not already known to have finished
+// empty, and waits for all recorded PIDs to be gone.
 func (l *mcPIDLedger) reap(t testing.TB) {
-	for _, pid := range l.recorded() {
+	for _, pid := range l.killable() {
 		_ = syscall.Kill(-pid, syscall.SIGKILL)
 	}
 	deadline := time.Now().Add(5 * time.Second)
@@ -523,20 +581,27 @@ func withModelStub(t *testing.T, inline string, stub *mcModelStub) string {
 	return string(raw)
 }
 
-// project copies a fixture tree to a fresh directory and returns its resolved
-// path. A file named <name>.fixture.md is written as <name>.md (the tree holds
-// no instruction or skill file under its real name, so no tool reading this
-// repository takes one for its own), and @PROJECT_DIR@ in a JSON file becomes
-// the copy's path.
+// project copies a fixture tree to a fresh directory, git-inits it and
+// returns its resolved path. A file named <name>.fixture.md is written as
+// <name>.md (the tree holds no instruction or skill file under its real
+// name, so no tool reading this repository takes one for its own), and
+// @PROJECT_DIR@ in a JSON file becomes the copy's path.
+//
+// The git init matches production, where a stage's cwd is always a git
+// worktree root: without it, OpenCode's directory discovery can walk up past
+// the copy toward wherever TMPDIR resolves, and on a TMPDIR under the
+// operator's real home that loads the operator's own .opencode config or
+// plugins as "project config" (#1742).
 func (h *mcHarness) project(fixture string) string {
 	h.t.Helper()
 	dst := filepath.Join(h.scratch, "project-"+strings.ReplaceAll(fixture, "/", "-"))
 	h.copyFixture(fixture, dst, dst)
+	h.git(dst, "init", "-q")
 	return dst
 }
 
 // copyFixture copies the fixture tree src into dst, substituting projectDir
-// for @PROJECT_DIR@.
+// for @PROJECT_DIR@ and the real npm plugin spec for mcNpmPluginPlaceholder.
 func (h *mcHarness) copyFixture(src, dst, projectDir string) {
 	h.t.Helper()
 	root := filepath.Join(mcFixtures, src)
@@ -557,6 +622,7 @@ func (h *mcHarness) copyFixture(src, dst, projectDir string) {
 		}
 		if filepath.Ext(path) == ".json" {
 			raw = []byte(strings.ReplaceAll(string(raw), mcProjectDir, projectDir))
+			raw = []byte(strings.ReplaceAll(string(raw), mcNpmPluginPlaceholder, mcNpmPluginPackage+"@1.0.0"))
 		}
 		name := strings.Replace(filepath.Base(rel), ".fixture.md", ".md", 1)
 		return os.WriteFile(filepath.Join(dst, filepath.Dir(rel), name), raw, 0o644)
@@ -712,7 +778,7 @@ func mcDig(v any, keys ...string) any {
 // is why the --pure run below may or may not show that request.
 func TestOpenCodePurePluginLoading(t *testing.T) {
 	t.Parallel()
-	const npmPlugin = "adversarial-fixture-npm-plugin"
+	const npmPlugin = mcNpmPluginPackage
 	packages := map[string]string{npmPlugin: filepath.Join(mcFixtures, "q1-pure-plugins", "npm-plugin")}
 
 	control := newMCHarness(t, packages)

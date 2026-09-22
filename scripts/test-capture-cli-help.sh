@@ -85,6 +85,13 @@ case "\$(cat "$TMP/mode")" in
     echo "usage: $2 [options]"
     echo "  --attach <url>  e.g. http://192.0.2.10:4096"
     ;;
+  wordcheck)
+    echo "usage: $2 [options]"
+    echo "the working root of the project"
+    echo "listening on http://localhost:4096 by default"
+    echo "config lives at /root/.config/$2.toml"
+    echo "owner default root@localhost"
+    ;;
   *)
     echo "usage: $2 [options]"
     echo "  --config <path>  default \$HOME/.config/$2.toml"
@@ -161,6 +168,21 @@ EOF
 for name in claude codex opencode grok; do
   write_fake_cli "$STUBS/fake-cli-$name" "$name"
 done
+
+# WORDSTUBS holds fake `id`/`hostname` commands so a dedicated run (below,
+# #1721) can put the script's own bare-word redaction under a login name and
+# a host name it does not control on this machine: "root" and "localhost".
+WORDSTUBS="$TMP/wordstubs"
+mkdir -p "$WORDSTUBS"
+cat >"$WORDSTUBS/id" <<'EOF'
+#!/bin/bash
+echo root
+EOF
+cat >"$WORDSTUBS/hostname" <<'EOF'
+#!/bin/bash
+echo localhost
+EOF
+chmod +x "$WORDSTUBS/id" "$WORDSTUBS/hostname"
 
 SENTINEL="sentinel-credential-6f1d"
 SCRATCH="$TMP/scratch"
@@ -296,6 +318,22 @@ check "a sleeping npm makes the script exit non-zero" [ "$RC" -ne 0 ]
 check "it stopped at the timeout (${SECONDS_TAKEN}s, the stub sleeps 30s)" [ "$SECONDS_TAKEN" -lt 20 ]
 check "npm and the child it started are dead" sleepers_are_dead
 check "nothing is left in TMPDIR after an install timeout" scratch_is_empty
+
+# --- 5. Redaction only fires in a path- or account-like context (#1721) -----
+rm -rf "$OUT"
+run_capture wordcheck "PATH=$WORDSTUBS:$STUBS:$PATH" -- opencode
+check "the run under a fake root/localhost identity succeeded" [ "$RC" -eq 0 ]
+capture="$OUT/opencode-run-$OPENCODE_V.txt"
+check "\"root\" as an ordinary word in help prose is untouched" \
+  grep -qxF 'the working root of the project' "$capture"
+check "a host literally named localhost in example text is untouched" \
+  grep -qF 'http://localhost:4096' "$capture"
+check "a real home-directory leak (/root/...) is still redacted" \
+  grep -qF 'config lives at /<user>/.config/opencode.toml' "$capture"
+check "a user@host leak still redacts the user, but never a localhost host" \
+  grep -qxF 'owner default <user>@localhost' "$capture"
+check "the bare words root/localhost never survive unredacted next to a path or @" \
+  sh -c "! grep -qE '/root[/.]|root@localhost' '$capture'"
 
 echo ""
 echo "=== $PASS passed, $FAIL failed ==="
