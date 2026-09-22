@@ -197,3 +197,107 @@ Read `+"`skills/_shared/PIPELINE_CONTEXT.md`"+` for context.
 		t.Errorf("doubled separator — the path was rewritten twice:\n%s", env.Content)
 	}
 }
+
+// ─── --context-window (#1645, ADR 023) ───────────────────────────────────────
+
+// writeBigStageSkill writes a skill padded well past any plausible small test
+// budget, so a tiny --context-window can be made to fail without a real
+// skills/ checkout.
+func writeBigStageSkill(t *testing.T, root, stage string, repeats int) {
+	t.Helper()
+	var body strings.Builder
+	body.WriteString("---\nname: big-skill\nallowed-tools: Read\n---\n\n# Big Skill\n\n")
+	for i := 0; i < repeats; i++ {
+		body.WriteString("This line pads the rendered content out to a measurable token count.\n")
+	}
+	writeStageSkill(t, root, stage, body.String())
+}
+
+func TestRenderNoFlagOutputByteIdenticalWithAndWithoutContextWindowSupport(t *testing.T) {
+	// The no-flag path must be untouched by the existence of --context-window:
+	// same bytes on stdout, no stderr verdict line, exit 0.
+	root := t.TempDir()
+	writeStageSkill(t, root, "feature-dev", toolSkill)
+
+	out, err := runRender(t, "--stage", "feature-dev", "--skills-root", root)
+	if err != nil {
+		t.Fatalf("execute: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "# Test Skill") {
+		t.Errorf("missing skill body:\n%s", out)
+	}
+}
+
+func TestRenderContextWindowOverBudgetExitsNonZero(t *testing.T) {
+	root := t.TempDir()
+	writeBigStageSkill(t, root, "feature-dev", 5000)
+
+	out, err := runRender(t, "--stage", "feature-dev", "--skills-root", root, "--context-window", "1000")
+	if err == nil {
+		t.Fatalf("expected a non-zero exit for an over-budget render, got success:\n%s", out)
+	}
+	if !strings.Contains(out, "# Big Skill") {
+		t.Errorf("content should still be printed to stdout on a failing verdict:\n%s", out)
+	}
+}
+
+func TestRenderContextWindowUnderBudgetExitsZero(t *testing.T) {
+	root := t.TempDir()
+	writeStageSkill(t, root, "feature-dev", toolSkill)
+
+	out, err := runRender(t, "--stage", "feature-dev", "--skills-root", root, "--context-window", "1000000")
+	if err != nil {
+		t.Fatalf("expected success for an under-budget render: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "# Test Skill") {
+		t.Errorf("missing skill body:\n%s", out)
+	}
+}
+
+func TestRenderContextWindowJSONCarriesBudgetVerdict(t *testing.T) {
+	root := t.TempDir()
+	writeStageSkill(t, root, "feature-dev", toolSkill)
+
+	out, err := runRender(t, "--stage", "feature-dev", "--skills-root", root, "--json", "--context-window", "1000000")
+	if err != nil {
+		t.Fatalf("execute: %v\n%s", err, out)
+	}
+	var env struct {
+		Budget *struct {
+			Fits            bool
+			EstimatedTokens int
+			Budget          int
+			Window          int
+			Share           float64
+		} `json:"budget"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatalf("envelope is not JSON: %v\n%s", err, out)
+	}
+	if env.Budget == nil {
+		t.Fatalf("expected a budget verdict in the envelope:\n%s", out)
+	}
+	if !env.Budget.Fits {
+		t.Errorf("expected Fits=true for a tiny render against a 1M window: %+v", env.Budget)
+	}
+	if env.Budget.Window != 1_000_000 {
+		t.Errorf("Window = %d, want 1000000", env.Budget.Window)
+	}
+}
+
+func TestRenderContextWindowOmittedFromJSONWhenUnset(t *testing.T) {
+	root := t.TempDir()
+	writeStageSkill(t, root, "feature-dev", toolSkill)
+
+	out, err := runRender(t, "--stage", "feature-dev", "--skills-root", root, "--json")
+	if err != nil {
+		t.Fatalf("execute: %v\n%s", err, out)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(out), &raw); err != nil {
+		t.Fatalf("envelope is not JSON: %v\n%s", err, out)
+	}
+	if _, present := raw["budget"]; present {
+		t.Errorf("plain --json without --context-window must not carry a budget verdict:\n%s", out)
+	}
+}

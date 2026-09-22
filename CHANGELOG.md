@@ -62,6 +62,21 @@ changelog, and the release workflow refuses a tag that does not.
   means the same account — and the scheduler's three headroom reads use it.
   `Get` is unchanged for callers that genuinely want their own key.
 
+### Added
+
+- **A stage that cannot fit its model's context window is caught before
+  spawn, not after a provider overflow.** `nightgauge skill render
+--context-window N` reports estimated tokens, the stage's ADR-023 budget,
+  and a verdict (exits non-zero over budget; unchanged, byte-identical output
+  without the flag). At dispatch, the Go scheduler now runs the same check:
+  when the resolved model's window is known and the rendered stage exceeds
+  its share, it re-routes once to the largest-window model on the same
+  provider, or refuses with a `context_window_exceeded` reason naming the
+  stage, estimated tokens, window and share. `AutoProviderRouter` scores the
+  `opencode` adapter by the actually-resolved model's window instead of a
+  static 32k placeholder. See
+  [ADR-023](docs/decisions/023-model-aware-context-budgets.md) (#1645).
+
 ## [0.4.6] - 2026-09-21
 
 ### Changed

@@ -101,11 +101,17 @@ type Fragment struct {
 
 // Result is the render output plus the provenance `--json` reports.
 type Result struct {
-	V             int      `json:"v"`
-	Stage         string   `json:"stage"`
-	Model         string   `json:"model,omitempty"`
-	Provider      string   `json:"provider,omitempty"`
-	ResolvedModel string   `json:"resolved_model_id,omitempty"`
+	V             int    `json:"v"`
+	Stage         string `json:"stage"`
+	Model         string `json:"model,omitempty"`
+	Provider      string `json:"provider,omitempty"`
+	ResolvedModel string `json:"resolved_model_id,omitempty"`
+	// ContextWindow is the resolved model descriptor's context window, when
+	// one resolved (ADR 023 § "Prior Art" #5). Zero when the model is unknown
+	// or unresolved — dispatch-time fit-check callers (internal/orchestrator)
+	// read it straight off this Result rather than re-deriving the same
+	// descriptor OverlayKeys already resolved a second time.
+	ContextWindow int      `json:"context_window,omitempty"`
 	SkillPath     string   `json:"skill_path"`
 	SkillName     string   `json:"skill_name,omitempty"`
 	AllowedTools  []string `json:"allowed_tools,omitempty"`
@@ -300,6 +306,7 @@ func Render(opts Options) (*Result, error) {
 	if resolved {
 		res.Provider = descriptor.Provider
 		res.ResolvedModel = descriptor.ID
+		res.ContextWindow = descriptor.ContextWindow
 	}
 	res.Keys = append(res.Keys, keys...)
 	hostKey := opts.Adapter
