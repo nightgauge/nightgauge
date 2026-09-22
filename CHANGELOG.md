@@ -187,7 +187,7 @@ changelog, and the release workflow refuses a tag that does not.
   same class of defect as #1848. `shouldSkipBoardRevert` (extracted from
   `runPipeline`'s inline condition in `internal/orchestrator/scheduler.go`,
   so it is unit-testable on its own) now also skips the revert when
-  `RuntimeState.MergedCommitSha` is set — the `#4133` post-merge
+  `RuntimeState.MergedCommitSha` is set — the post-merge
   ground-truth breadcrumb, recorded only after the PR's `MERGED` state is
   verified — regardless of what a later stage does. A follow-up review found
   scheduler.go's own board write skipping was not enough: the always-running

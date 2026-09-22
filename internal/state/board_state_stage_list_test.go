@@ -8,7 +8,7 @@ import (
 )
 
 // TestAllPipelineStagesMatchesDeclaredConstants is the #1969 follow-up guard
-// (Opus review, Low 4): AllPipelineStages is a hand-written slice, and a
+// AllPipelineStages is a hand-written slice, and a
 // hand-written list can silently fall behind a new PipelineStage constant
 // the same way the ORIGINAL #1969 bug fell behind a new stage — a defect
 // invisible to a reader iterating the list, because the list itself never

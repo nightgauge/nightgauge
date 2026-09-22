@@ -331,7 +331,7 @@ expect 2 "no ref anywhere (local or remote) stays UNKNOWN/2 with the original te
   -- run_in "$root" env NO_PR=1 "$SCRIPT" fix/993-never-existed origin/main
 
 # ── (k) stale cached tracking ref — UNKNOWN/2, not a false SAFE-DELETE ─────
-# (Opus review, Medium 2) The remote-only path must not trust a cached
+# The remote-only path must not trust a cached
 # refs/remotes/origin/<branch>: nothing refreshes it between fetches. A
 # SECOND clone pushes a new commit to the same branch AFTER this repo's own
 # push/fetch, so this repo's cache is stale relative to the live remote —

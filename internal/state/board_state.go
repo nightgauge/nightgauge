@@ -35,7 +35,7 @@ const (
 )
 
 // AllPipelineStages is the canonical, exhaustive list of every PipelineStage
-// constant declared above, in declaration order (#1969 follow-up, Low 4).
+// constant declared above, in declaration order (#1969).
 // It exists so a consumer that must reach EVERY stage — the skillrender
 // reachability guard (TestEveryStageConstantIsRenderable) is the motivating
 // one — iterates this list rather than hand-copying the constants into a

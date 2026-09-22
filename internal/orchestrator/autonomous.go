@@ -1519,10 +1519,10 @@ func (as *AutonomousScheduler) Run(ctx context.Context) error {
 		// (#3398)
 		terminalKind := ""
 		failureDetail := ""
-		// merged carries the #4133 post-merge ground-truth breadcrumb
+		// merged carries the post-merge ground-truth breadcrumb
 		// (RuntimeState.MergedCommitSha, set only after verifyPRMergeForStage
 		// confirms the run's own PR is MERGED) into as.onPipelineComplete
-		// (#1969 Medium 1). scheduler.go's runPipeline terminal defer already
+		// (#1969). scheduler.go's runPipeline terminal defer already
 		// skips ITS OWN board revert on this signal (shouldSkipBoardRevert),
 		// but that defer returns before this callback fires, so without
 		// threading the flag through, this wrapper independently re-applies
@@ -1850,7 +1850,7 @@ func (as *AutonomousScheduler) NotifyComplete(repo string, issueNumber int, succ
 			terminalFailureKind = reclassified
 		}
 	}
-	// merged is always false on this path (#1969 Medium 1): the #4133
+	// merged is always false on this path (#1969): the
 	// post-merge ground-truth breadcrumb is Go-only
 	// (RuntimeState.MergedCommitSha) and has no extension-side equivalent —
 	// nothing on the IPC/extension path reads or writes it, so there is no
@@ -4873,7 +4873,7 @@ func (as *AutonomousScheduler) enqueueItem(ctx context.Context, item CandidateIt
 // Anthropic-quota cooldown runs until the actual bucket reset (#3431).
 // Optional — empty falls back to a 1-hour floor.
 //
-// merged is the #4133 post-merge ground-truth breadcrumb (#1969 Medium 1):
+// merged is the post-merge ground-truth breadcrumb (#1969):
 // true when this run's own PR was confirmed MERGED before a LATER stage
 // failed (RuntimeState.MergedCommitSha != ""). scheduler.go's runPipeline
 // terminal defer computes and acts on the equivalent signal for its OWN
@@ -4958,10 +4958,10 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 	} else {
 		key := fmt.Sprintf("%s#%d", repo, issue)
 
-		// #1969 (Medium 1 of the follow-up review): the forge already gave a
+		// #1969: the forge already gave a
 		// verdict this failure must not relitigate. merged is true only when
 		// the run's own PR was confirmed MERGED (scheduler.go's
-		// verifyPRMergeForStage / RuntimeState.MergedCommitSha, the #4133
+		// verifyPRMergeForStage / RuntimeState.MergedCommitSha, the
 		// ground-truth breadcrumb) before a LATER stage failed — the
 		// shouldSkipBoardRevert condition scheduler.go's own runPipeline
 		// terminal defer already applies to its OWN board write. That defer

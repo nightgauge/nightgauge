@@ -4139,7 +4139,7 @@ var newRunID = runstate.NewRunID
 // only fork again). #1969 adds a fifth for the opposite direction — not
 // "there's unseen work," but "the forge already gave a verdict and it must
 // not be relitigated": mergedCommitSha is runtime's post-merge ground-truth
-// breadcrumb (#4133), set ONLY after verifyPRMergeForStage confirms the PR's
+// breadcrumb, set ONLY after verifyPRMergeForStage confirms the PR's
 // MERGED state and checkEpicCompletion has run. A later stage failing (the
 // unregistered spike-materialize stage, #1969's own bug) must not undo a
 // Status write the successful merge already justified.
