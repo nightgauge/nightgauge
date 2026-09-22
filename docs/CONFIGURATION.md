@@ -496,22 +496,23 @@ Everything below is on for a workspace that has configured nothing. Each row
 names what turning it off buys you, so the opt-out is a decision rather than a
 guess.
 
-| Key                                           | Default                    | What it costs while on                                                                                                                                                                                                          |
-| --------------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pipeline.adversarial_review.enabled`         | `true`                     | **Per-run cost.** One or more extra LLM critic passes on every `feature-validate`. It is the fresh-eyes read the implementing model cannot give itself                                                                          |
-| `pipeline.grounding_gate.enabled`             | `true`                     | **Nothing measurable.** Deterministic pre-`feature-dev` check that the worktree is on the branch the run thinks it is. No model call                                                                                            |
-| `pipeline.test_execution`                     | `true`                     | **Nothing measurable.** Inert in a repo whose test command excludes nothing; it has no off switch by design (see its section)                                                                                                   |
-| `pipeline.progress_runaway.*`                 | `true`                     | **Nothing measurable.** Replaces the dollar-ceiling kill with a forward-progress signal, so a slow-but-working stage is no longer killed for being slow                                                                         |
-| `pipeline.survival.window_days`               | `7`                        | **Repository footprint**, small: one survival record per merge under `.nightgauge/`, aged out automatically                                                                                                                     |
-| `pipeline.gemini_context.*`                   | `true`                     | **Repository footprint.** Writes a `GEMINI.md` into the tree for the Gemini adapter. Irrelevant unless that adapter is selected                                                                                                 |
-| `autonomous.discipline_gate.enabled`          | `true`                     | **Nothing measurable.** A local readiness score (`min_score: 30`, `mode: block`) that steers an under-prepared repo — no real test suite, no CI — toward human-in-the-loop rather than full autonomy                            |
-| `autonomous.stuck_epic_detection.enabled`     | `true`                     | **Per-run cost**, negligible: one Discord message per stalled epic, at most once per `re_alert_after` (6h). Needs a webhook env var to deliver anything                                                                         |
-| `ready_to_ship.enabled`                       | `true`                     | **Per-run cost**, negligible: one Discord message when an epic fully closes. It posts the deploy command; it never runs it                                                                                                      |
-| `remote_commands.enabled`                     | `true`                     | **Per-run cost** in GitHub API quota: the polling loop that lets the dashboard drive a local daemon. Inert without a platform                                                                                                   |
-| `attention.dependabot_stale_remediation_days` | `7`                        | **Nothing measurable.** Threshold, not a switch: how long a Dependabot remediation PR may sit before the Action Center cards it. It is also the card's re-alert bucket width                                                    |
-| `audit.*`                                     | follows `platform.enabled` | **Per-run cost**, negligible, and only when a platform is configured: batched event POSTs with an offline queue. There is no independent `audit.enabled` — see ADR-021                                                          |
-| `epic.summary.enabled`                        | `true`                     | **Repository footprint and per-run cost** at the full tier: an LLM pass that commits a summary document. The tier classifier decides which epics get it                                                                         |
-| `automations.enabled`                         | `true`                     | **Nothing until you configure it.** Inert while `automations.triggers` is empty — which is the shipped state. Worth knowing because the action set includes `run_script`, so a populated `triggers` list executes what it names |
+| Key                                           | Default                    | What it costs while on                                                                                                                                                                                                                                               |
+| --------------------------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pipeline.adversarial_review.enabled`         | `true`                     | **Per-run cost.** One or more extra LLM critic passes on every `feature-validate`. It is the fresh-eyes read the implementing model cannot give itself                                                                                                               |
+| `pipeline.grounding_gate.enabled`             | `true`                     | **Nothing measurable.** Deterministic pre-`feature-dev` check that the worktree is on the branch the run thinks it is. No model call                                                                                                                                 |
+| `pipeline.feature_dev_sub_sessions`           | `true`                     | **Nothing measurable** on windows of 200,000 tokens or more, where it never engages. Below that, feature-dev runs as one fresh session per plan task, which re-sends the cacheable skill prefix once per step. See [its section](#pipelinefeature_dev_sub_sessions). |
+| `pipeline.test_execution`                     | `true`                     | **Nothing measurable.** Inert in a repo whose test command excludes nothing; it has no off switch by design (see its section)                                                                                                                                        |
+| `pipeline.progress_runaway.*`                 | `true`                     | **Nothing measurable.** Replaces the dollar-ceiling kill with a forward-progress signal, so a slow-but-working stage is no longer killed for being slow                                                                                                              |
+| `pipeline.survival.window_days`               | `7`                        | **Repository footprint**, small: one survival record per merge under `.nightgauge/`, aged out automatically                                                                                                                                                          |
+| `pipeline.gemini_context.*`                   | `true`                     | **Repository footprint.** Writes a `GEMINI.md` into the tree for the Gemini adapter. Irrelevant unless that adapter is selected                                                                                                                                      |
+| `autonomous.discipline_gate.enabled`          | `true`                     | **Nothing measurable.** A local readiness score (`min_score: 30`, `mode: block`) that steers an under-prepared repo — no real test suite, no CI — toward human-in-the-loop rather than full autonomy                                                                 |
+| `autonomous.stuck_epic_detection.enabled`     | `true`                     | **Per-run cost**, negligible: one Discord message per stalled epic, at most once per `re_alert_after` (6h). Needs a webhook env var to deliver anything                                                                                                              |
+| `ready_to_ship.enabled`                       | `true`                     | **Per-run cost**, negligible: one Discord message when an epic fully closes. It posts the deploy command; it never runs it                                                                                                                                           |
+| `remote_commands.enabled`                     | `true`                     | **Per-run cost** in GitHub API quota: the polling loop that lets the dashboard drive a local daemon. Inert without a platform                                                                                                                                        |
+| `attention.dependabot_stale_remediation_days` | `7`                        | **Nothing measurable.** Threshold, not a switch: how long a Dependabot remediation PR may sit before the Action Center cards it. It is also the card's re-alert bucket width                                                                                         |
+| `audit.*`                                     | follows `platform.enabled` | **Per-run cost**, negligible, and only when a platform is configured: batched event POSTs with an offline queue. There is no independent `audit.enabled` — see ADR-021                                                                                               |
+| `epic.summary.enabled`                        | `true`                     | **Repository footprint and per-run cost** at the full tier: an LLM pass that commits a summary document. The tier classifier decides which epics get it                                                                                                              |
+| `automations.enabled`                         | `true`                     | **Nothing until you configure it.** Inert while `automations.triggers` is empty — which is the shipped state. Worth knowing because the action set includes `run_script`, so a populated `triggers` list executes what it names                                      |
 
 ## Off by default, and why
 
@@ -2299,6 +2300,34 @@ pipeline:
 **See also:**
 
 - Issue #1573 — Stage timeout auto-tuning
+
+---
+
+#### pipeline.feature_dev_sub_sessions
+
+When the dispatch model's resolved context window is known and below 200,000
+tokens, the Go scheduler runs feature-dev as bounded sub-sessions: one fresh
+session per unchecked task of the plan named by `planning-{N}.json`, at most
+12 ([ADR-023](decisions/023-model-aware-context-budgets.md) Q7). Each step
+hands off through the working tree; the feature-dev gate runs once, after the
+last step. Windows of 200,000 tokens or more, unknown windows and the VS Code
+(IPC) runner always use one session.
+
+| Option                     | Type    | Default | Description                                         |
+| -------------------------- | ------- | ------- | --------------------------------------------------- |
+| `feature_dev_sub_sessions` | boolean | `true`  | `false` keeps feature-dev on one session everywhere |
+
+The environment variable `NIGHTGAUGE_FEATURE_DEV_SUB_SESSIONS` overrides the
+key for the scheduler process: `0`, `false` or `off` opts out, and `1`,
+`true` or `on` restores the default. It never forces sub-sessions onto a
+window the policy leaves on one session.
+
+**Example:**
+
+```yaml
+pipeline:
+  feature_dev_sub_sessions: false
+```
 
 ---
 

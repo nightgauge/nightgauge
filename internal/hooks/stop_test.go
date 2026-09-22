@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -386,19 +387,53 @@ func TestParsePlanFile_ListsTasksInOrder(t *testing.T) {
 		t.Fatalf("ParsePlanFile: %v", err)
 	}
 	want := []PlanTask{
-		{Text: "Done first", Done: true, Line: 2},
-		{Text: "Second, open", Line: 3},
-		{Text: "Nested third", Line: 5},
+		{Text: "Done first", Done: true, Line: 2, Headings: []string{"Plan"}},
+		{Text: "Second, open", Line: 3, Headings: []string{"Plan"}},
+		{Text: "Nested third", Line: 5, Indent: 2, Headings: []string{"Plan"}},
 	}
-	if len(status.Tasks) != len(want) {
-		t.Fatalf("Tasks = %+v, want %+v", status.Tasks, want)
-	}
-	for i := range want {
-		if status.Tasks[i] != want[i] {
-			t.Errorf("Tasks[%d] = %+v, want %+v", i, status.Tasks[i], want[i])
-		}
+	if !reflect.DeepEqual(status.Tasks, want) {
+		t.Errorf("Tasks = %+v, want %+v", status.Tasks, want)
 	}
 	if status.Total != len(status.Tasks) {
 		t.Errorf("Total %d disagrees with %d listed tasks", status.Total, len(status.Tasks))
+	}
+}
+
+// Fences, nesting and headings are recorded on each task (#1651) without
+// changing what the counts have always included.
+func TestParsePlanFile_RecordsFenceIndentAndHeadings(t *testing.T) {
+	dir := t.TempDir()
+	plan := "# Plan\n" +
+		"## Step-by-step implementation plan\n" +
+		"### Phase 1\n" +
+		"- [ ] Top task\n" +
+		"  - [ ] Sub-bullet\n" +
+		"```markdown\n" +
+		"# not a heading\n" +
+		"- [ ] Example in a fence\n" +
+		"```\n" +
+		"## Acceptance Criteria\n" +
+		"- [x] An AC\n"
+	planPath := filepath.Join(dir, "PLAN.md")
+	if err := os.WriteFile(planPath, []byte(plan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	status, err := ParsePlanFile(planPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Total != 4 || status.Complete != 1 || status.Incomplete != 3 {
+		t.Errorf("counts = %d/%d/%d, want 4/1/3 (fenced and nested boxes still count)",
+			status.Total, status.Complete, status.Incomplete)
+	}
+	impl := []string{"Plan", "Step-by-step implementation plan", "Phase 1"}
+	want := []PlanTask{
+		{Text: "Top task", Line: 4, Headings: impl},
+		{Text: "Sub-bullet", Line: 5, Indent: 2, Headings: impl},
+		{Text: "Example in a fence", Line: 8, InFence: true, Headings: impl},
+		{Text: "An AC", Done: true, Line: 11, Headings: []string{"Plan", "Acceptance Criteria"}},
+	}
+	if !reflect.DeepEqual(status.Tasks, want) {
+		t.Errorf("Tasks =\n%+v\nwant\n%+v", status.Tasks, want)
 	}
 }

@@ -509,6 +509,10 @@ const TERMINAL_KIND_CATEGORY: Record<TerminalFailureKind, RetroFailureCategory> 
 
   // Nightgauge's OWN configured ceilings tripped. Actionable in config.
   budget_exceeded: "budget-exceeded",
+  // #1651: the feature-dev sub-session bound, not a dollar budget, was spent
+  // with plan tasks unchecked; the remedy is the same shape — more room, or a
+  // smaller issue.
+  dev_step_cap_reached: "budget-exceeded",
   budget_ceiling_hit: "budget-exceeded",
 
   // A quality gate ran and honestly failed. There is a failing test, type

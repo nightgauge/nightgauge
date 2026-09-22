@@ -403,13 +403,14 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	// stdout/stderr pipes — held this function's readers open until it exited
 	// on its own. feature-dev sub-sessions cancel the running session when the
 	// stage is cancelled, so that leak would repeat once per step. The group
-	// kill returns what the default does for an already-exited child
+	// kill goes through signalProcessTree, the helper every other kill path
+	// uses, and returns what the default does for an already-exited child
 	// (os.ErrProcessDone), so cmd.Wait reports the same errors it did before.
 	cmd.Cancel = func() error {
-		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err == nil {
+		if signalProcessTree(cmd.Process, syscall.SIGKILL) {
 			return nil
 		}
-		return cmd.Process.Kill()
+		return os.ErrProcessDone
 	}
 
 	// Merge environment. An adapter whose CLI must not inherit some host

@@ -275,7 +275,9 @@ func TestFeatureDevSteps_LastStepAuthoredHandoffStands(t *testing.T) {
 	}
 }
 
-// AC3: never more than the hard cap, and never more than the task count.
+// AC3: never more than the hard cap. A plan the cap cannot finish fails the
+// stage as dev_step_cap_reached, and the capped final session is told it is
+// the last step.
 func TestFeatureDevSteps_HardCapBoundsTheLoop(t *testing.T) {
 	tasks := make([]string, 50)
 	for i := range tasks {
@@ -287,21 +289,200 @@ func TestFeatureDevSteps_HardCapBoundsTheLoop(t *testing.T) {
 	if err != nil || len(open) != 50 {
 		t.Fatalf("plan fixture: %d open tasks, err %v", len(open), err)
 	}
-	if _, err := runFeatureDevSteps(context.Background(), r, f.params(), f.ws, f.planPath, open, 12, time.Now); err != nil {
-		t.Fatalf("runFeatureDevSteps: %v", err)
-	}
+	res, err := runFeatureDevSteps(context.Background(), r, f.params(), f.ws, f.planPath, open, 12, time.Now)
 	if len(r.calls) != 12 {
 		t.Errorf("RunStage calls = %d, want the hard cap 12", len(r.calls))
 	}
+	if err == nil || res.ExitCode != 1 {
+		t.Fatalf("stage result = exit %d, err %v; a capped plan with unchecked tasks must fail", res.ExitCode, err)
+	}
+	if got := ClassifyTerminalKind(stageFailureText(err, res)); got != TerminalKindDevStepCapReached {
+		t.Errorf("terminal kind = %q, want %q", got, TerminalKindDevStepCapReached)
+	}
+	if !strings.Contains(err.Error(), "38 plan step(s) still unchecked") {
+		t.Errorf("error does not count the remaining steps: %v", err)
+	}
+	lastPrompt := r.calls[11].Prompt
+	if !strings.Contains(lastPrompt, "step 12 of 12") || !strings.Contains(lastPrompt, "This is the last step") {
+		t.Errorf("the capped final session was not told it is the last step:\n%s", lastPrompt)
+	}
+	if strings.Contains(r.calls[10].Prompt, "This is the last step") {
+		t.Error("session 11 was told it is the last step")
+	}
+
 	// Through the production policy, too.
 	g := newStepFixture(t, tasks...)
 	r2 := &fakeStepRunner{honours: true, act: writesAFile(t, g.ws)}
-	if _, err := runSteps(t, g, r2, localWindow); err != nil {
+	res2, err2 := runSteps(t, g, r2, localWindow)
+	if len(r2.calls) != featureDevSubSessionHardCap || err2 == nil || res2.ExitCode != 1 {
+		t.Errorf("production policy: calls = %d, exit %d, err %v", len(r2.calls), res2.ExitCode, err2)
+	}
+}
+
+// Blocker 1: the plan is re-read before every step. A session that checks
+// off more than its own task leaves the next session the first task still
+// open — never an already-done one, which would change nothing and fail the
+// stage as dev_produced_no_changes.
+func TestFeatureDevSteps_SkipsTasksAnEarlierStepChecked(t *testing.T) {
+	f := newStepFixture(t, "One", "Two", "Three", "Four")
+	r := &fakeStepRunner{honours: true, act: func(k int, p StageRunParams) (*StageRunResult, error) {
+		writeFileT(t, filepath.Join(f.ws, fmt.Sprintf("step%d.go", k)), "package x\n")
+		if k == 1 {
+			body, _ := os.ReadFile(f.planPath)
+			b := string(body)
+			for _, task := range []string{"One", "Two", "Three"} {
+				b = strings.Replace(b, "- [ ] "+task, "- [x] "+task, 1)
+			}
+			writeFileT(t, f.planPath, b)
+		}
+		return &StageRunResult{}, nil
+	}}
+	res, err := runSteps(t, f, r, localWindow)
+	if err != nil || res.ExitCode != 0 {
+		t.Fatalf("stage = exit %d, err %v; want success", res.ExitCode, err)
+	}
+	if len(r.calls) != 2 {
+		t.Fatalf("RunStage calls = %d, want 2", len(r.calls))
+	}
+	p := r.calls[1].Prompt
+	if !strings.Contains(p, "step 2 of 2") || !strings.Contains(p, "Four") || strings.Contains(p, "```text\nTwo") {
+		t.Errorf("step 2 was not given the first still-open task as the last step:\n%s", p)
+	}
+	if !strings.Contains(p, "This is the last step") {
+		t.Error("step 2 was not told it is the last step")
+	}
+}
+
+// Should-fix 5: only top-level work items are steps — not nested
+// sub-bullets, not checkboxes in code fences, not acceptance criteria.
+func TestFeatureDevSteps_OnlyTopLevelImplementationTasksAreSteps(t *testing.T) {
+	for _, tc := range []struct {
+		name, plan string
+		want       []string
+	}{
+		{"implementation section", "# Plan\n## Step-by-step implementation plan\n" +
+			"- [ ] Alpha\n  - [ ] alpha detail\n```md\n- [ ] fenced example\n```\n- [ ] Beta\n" +
+			"## Notes\n- [ ] a note outside the steps\n## Acceptance Criteria\n- [ ] AC one\n",
+			[]string{"Alpha", "Beta"}},
+		{"no implementation section", "# Plan\n- [ ] Alpha\n    - [ ] nested\n## Definition of Done\n- [ ] DoD one\n- [ ] Beta\n",
+			[]string{"Alpha"}},
+		{"no headings", "- [ ] Alpha\n~~~\n- [ ] tilde fenced\n~~~\n- [ ] Beta\n", []string{"Alpha", "Beta"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newStepFixture(t)
+			writeFileT(t, f.planPath, tc.plan)
+			r := &fakeStepRunner{honours: true, act: writesAFile(t, f.ws)}
+			if _, err := runSteps(t, f, r, localWindow); err != nil {
+				t.Fatalf("runFeatureDevStage: %v", err)
+			}
+			if len(r.calls) != len(tc.want) {
+				t.Fatalf("RunStage calls = %d, want %d", len(r.calls), len(tc.want))
+			}
+			for i, w := range tc.want {
+				if !strings.Contains(r.calls[i].Prompt, "```text\n"+w+"\n```") {
+					t.Errorf("step %d is not %q:\n%s", i+1, w, r.calls[i].Prompt)
+				}
+			}
+		})
+	}
+}
+
+// Should-fix 3: the sessions share the stage's timeout; none gets the whole
+// of it again, and none starts once it is spent.
+func TestFeatureDevSteps_TimeoutIsShared(t *testing.T) {
+	f := newStepFixture(t, "One", "Two", "Three", "Four")
+	var mu sync.Mutex
+	clock := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+	now := func() time.Time { mu.Lock(); defer mu.Unlock(); return clock }
+	write := writesAFile(t, f.ws)
+	r := &fakeStepRunner{honours: true, act: func(k int, p StageRunParams) (*StageRunResult, error) {
+		mu.Lock()
+		clock = clock.Add(40 * time.Second)
+		mu.Unlock()
+		return write(k, p)
+	}}
+	params := f.params()
+	params.Timeout = 100 * time.Second
+	_, open, _ := loadFeatureDevPlanSteps(f.ws, stepIssue)
+	res, err := runFeatureDevSteps(context.Background(), r, params, f.ws, f.planPath, open, 12, now)
+	if !errors.Is(err, context.DeadlineExceeded) || res.ExitCode != 1 {
+		t.Fatalf("stage = exit %d, err %v; want the fourth session refused on the spent timeout", res.ExitCode, err)
+	}
+	if len(r.calls) != 3 {
+		t.Fatalf("RunStage calls = %d, want 3", len(r.calls))
+	}
+	for i, want := range []time.Duration{100 * time.Second, 60 * time.Second, 20 * time.Second} {
+		if got := r.calls[i].Timeout; got != want {
+			t.Errorf("session %d timeout = %s, want %s", i+1, got, want)
+		}
+	}
+}
+
+// Should-fix 4: a step before the last leaves a stop-hook sentinel by design
+// (the plan still has the later steps' tasks). It must not reach the
+// scheduler's post-stage recovery commit; the last session's sentinel does.
+func TestFeatureDevSteps_IntermediateStopHookSentinelIsCleared(t *testing.T) {
+	f := newStepFixture(t, "One", "Two")
+	sentinel := filepath.Join(f.ws, ".nightgauge", "pipeline", fmt.Sprintf("stop-hook-status-%d.json", stepIssue))
+	write := writesAFile(t, f.ws)
+	r := &fakeStepRunner{honours: true, act: func(k int, p StageRunParams) (*StageRunResult, error) {
+		if k == 2 {
+			if _, err := os.Stat(sentinel); err == nil {
+				t.Error("step 1's stop-hook sentinel survived into step 2")
+			}
+		}
+		writeFileT(t, sentinel, fmt.Sprintf(`{"ok":false,"reason":"step %d"}`, k))
+		return write(k, p)
+	}}
+	if _, err := runSteps(t, f, r, localWindow); err != nil {
 		t.Fatalf("runFeatureDevStage: %v", err)
 	}
-	if len(r2.calls) != featureDevSubSessionHardCap {
-		t.Errorf("RunStage calls = %d, want %d", len(r2.calls), featureDevSubSessionHardCap)
+	raw, err := os.ReadFile(sentinel)
+	if err != nil || !strings.Contains(string(raw), "step 2") {
+		t.Errorf("the last session's sentinel = %q, %v; want it kept", raw, err)
 	}
+}
+
+// Should-fix 6: the operator opt-out keeps one session.
+func TestFeatureDevSteps_OptOut(t *testing.T) {
+	run := func(t *testing.T, root string) int {
+		f := newStepFixture(t, "One", "Two")
+		r := &fakeStepRunner{honours: true, act: writesAFile(t, f.ws)}
+		s := &Scheduler{stageRunner: r, workspaceRoot: root}
+		if _, err := s.runFeatureDevStage(context.Background(), f.params(), localWindow, f.ws); err != nil {
+			t.Fatal(err)
+		}
+		return len(r.calls)
+	}
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	root := t.TempDir()
+	writeFileT(t, filepath.Join(root, ".nightgauge", "config.yaml"), "owner: nightgauge\npipeline:\n  feature_dev_sub_sessions: false\n")
+
+	t.Run("config key", func(t *testing.T) {
+		t.Setenv(featureDevSubSessionsEnvVar, "")
+		if n := run(t, root); n != 1 {
+			t.Errorf("calls = %d, want 1", n)
+		}
+	})
+	t.Run("env off", func(t *testing.T) {
+		t.Setenv(featureDevSubSessionsEnvVar, "false")
+		if n := run(t, t.TempDir()); n != 1 {
+			t.Errorf("calls = %d, want 1", n)
+		}
+	})
+	t.Run("env on beats config off", func(t *testing.T) {
+		t.Setenv(featureDevSubSessionsEnvVar, "1")
+		if n := run(t, root); n != 2 {
+			t.Errorf("calls = %d, want 2", n)
+		}
+	})
+	t.Run("default on", func(t *testing.T) {
+		t.Setenv(featureDevSubSessionsEnvVar, "")
+		if n := run(t, t.TempDir()); n != 2 {
+			t.Errorf("calls = %d, want 2", n)
+		}
+	})
 }
 
 // AC3: a session that changes nothing and checks nothing stops the loop as

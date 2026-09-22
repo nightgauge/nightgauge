@@ -39,6 +39,16 @@ type PlanTask struct {
 	Done bool
 	// Line is the 1-based line number in the plan file.
 	Line int
+	// Indent is the width of the whitespace before the `-`: 0 for a
+	// top-level item, more for a nested sub-bullet.
+	Indent int
+	// InFence is true for a checkbox inside a fenced code block. The counts
+	// above include it, as they always have; a caller choosing work items
+	// can leave it out.
+	InFence bool
+	// Headings is the Markdown heading path above the line, outermost first
+	// (headings inside code fences are not headings).
+	Headings []string
 }
 
 var (
@@ -46,6 +56,10 @@ var (
 	checkboxComplete = regexp.MustCompile(`^\s*-\s+\[x\]\s`)
 	// checkboxIncomplete matches "- [ ] ..."
 	checkboxIncomplete = regexp.MustCompile(`^\s*-\s+\[ \]\s`)
+	// fenceLine matches a code-fence line; group 1 is the marker run.
+	fenceLine = regexp.MustCompile("^ {0,3}(`{3,}|~{3,})")
+	// headingLine matches an ATX heading; group 1 is the level.
+	headingLine = regexp.MustCompile(`^ {0,3}(#{1,6})\s+(.*?)(?:\s+#+)?\s*$`)
 	// branchIssueNumber matches feat/42-desc, fix/123-desc, etc.
 	branchIssueNumber = regexp.MustCompile(`^(?:feat|fix|docs|refactor|chore)/(\d+)-`)
 )
@@ -219,17 +233,48 @@ func parsePlanFile(path string) (*PlanStatus, error) {
 	status := &PlanStatus{}
 	scanner := bufio.NewScanner(f)
 	lineNo := 0
+	fence := ""                   // the open fence's marker run, "" outside a fence
+	headings := make([]string, 7) // headings[level], level 1..6
 	for scanner.Scan() {
 		lineNo++
 		line := scanner.Text()
+		if m := fenceLine.FindStringSubmatch(line); m != nil {
+			switch {
+			case fence == "":
+				fence = m[1]
+			case m[1][0] == fence[0] && len(m[1]) >= len(fence) && strings.TrimSpace(line[len(m[0]):]) == "":
+				fence = ""
+			}
+		} else if fence == "" {
+			if m := headingLine.FindStringSubmatch(line); m != nil {
+				level := len(m[1])
+				headings[level] = strings.TrimSpace(m[2])
+				for l := level + 1; l < len(headings); l++ {
+					headings[l] = ""
+				}
+			}
+		}
+		task := func(m string, done bool) PlanTask {
+			var path []string
+			for _, h := range headings[1:] {
+				if h != "" {
+					path = append(path, h)
+				}
+			}
+			return PlanTask{
+				Text: strings.TrimSpace(line[len(m):]), Done: done, Line: lineNo,
+				Indent:  len(line) - len(strings.TrimLeft(line, " \t")),
+				InFence: fence != "", Headings: path,
+			}
+		}
 		if m := checkboxComplete.FindString(line); m != "" {
 			status.Complete++
 			status.Total++
-			status.Tasks = append(status.Tasks, PlanTask{Text: strings.TrimSpace(line[len(m):]), Done: true, Line: lineNo})
+			status.Tasks = append(status.Tasks, task(m, true))
 		} else if m := checkboxIncomplete.FindString(line); m != "" {
 			status.Incomplete++
 			status.Total++
-			status.Tasks = append(status.Tasks, PlanTask{Text: strings.TrimSpace(line[len(m):]), Line: lineNo})
+			status.Tasks = append(status.Tasks, task(m, false))
 		}
 	}
 

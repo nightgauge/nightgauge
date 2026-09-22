@@ -587,6 +587,20 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
       "why": "The inverse kind (#223), matched here for the same reason and with the same urgency: its gate reason is embedded in exactly the `premature turn end:` wrapper on some paths. The distinction is what tells a triager whether there is anything on disk worth saving."
     },
     {
+      "id": "dev-step-cap-reached",
+      "kind": "dev_step_cap_reached",
+      "signal": false,
+      "clauses": [
+        [
+          "[dev-step-cap-reached]"
+        ],
+        [
+          "dev_step_cap_reached"
+        ]
+      ],
+      "why": "feature-dev ran as bounded sub-sessions (#1651) and used every session its bound allows — the plan's unchecked-task count when the stage started, never more than the hard cap — with plan tasks still unchecked. The work so far is on disk and a retry resumes from the next unchecked task, so it must not read as dev_produced_no_changes or as a crash. Its only producer is the step loop's own marker."
+    },
+    {
       "id": "git-transport-auth-failed",
       "kind": "git_transport_auth_failed",
       "signal": false,

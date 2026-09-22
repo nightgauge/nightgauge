@@ -240,7 +240,18 @@ session**, never a resume, so it does not rely on in-session compaction at
 all. The session's prompt is the stable rendered-skill prefix first and the
 step text last. The scheduler only splits the stage when its runner delivers
 the scheduler's prompt: the IPC runner, where the extension composes the
-prompt, keeps the single session. Code: `internal/orchestrator/featuredev_steps.go`.
+prompt, keeps the single session. A step is a top-level, unfenced checkbox in
+the plan's implementation section (or, with no such section, in any section
+but acceptance criteria and checklists); the plan is re-read before every
+step, so a task an earlier session already checked is never dispatched. The
+bound is the unchecked-step count the stage started with, never more than
+12; spending it with steps still unchecked fails the stage as
+`dev_step_cap_reached`, and a retry resumes from the next unchecked step. The
+sessions share the stage's timeout and cost ceiling. Operators opt out with
+`pipeline.feature_dev_sub_sessions: false` or
+`NIGHTGAUGE_FEATURE_DEV_SUB_SESSIONS=false`; the default is on, as ADR-020
+requires of a correctness feature with no footprint or cost reason to be off.
+Code: `internal/orchestrator/featuredev_steps.go`.
 
 ### Q8 — Non-USD budgets (#1652)
 

@@ -19,25 +19,36 @@ changelog, and the release workflow refuses a tag that does not.
 - **feature-dev runs as bounded sub-sessions on small context windows
   (#1651).** When the dispatch model's resolved window is known and below
   200,000 tokens (ADR-023 Q7, amended with the concrete policy), the Go
-  scheduler runs feature-dev as one fresh session per unchecked task in the
-  plan named by `planning-{N}.json`, in order, at most 12 sessions. The
-  sessions share the stage's cost ceiling: each gets what the earlier ones
-  left, and none starts once it is spent. Each
-  session's prompt is the unchanged rendered skill first, then a "step K of
-  N" preamble, the handoff git derived after the previous step, and the step
+  scheduler runs feature-dev as one fresh session per unchecked step of the
+  plan named by `planning-{N}.json`, in order. A step is a top-level checkbox
+  outside code fences, in the plan's implementation section when it has one
+  and never in an acceptance-criteria or checklist section. The plan is
+  re-read before each step, so a task an earlier session already checked is
+  skipped. The loop runs at most as many sessions as there were unchecked
+  steps when the stage started, never more than 12. If that bound is spent
+  with steps still unchecked, the stage fails as the new terminal kind
+  `dev_step_cap_reached`, and a retry resumes from the next unchecked step.
+  The last session the bound allows is told it is the last step. The
+  sessions share the stage's timeout and cost ceiling: each gets what the
+  earlier ones left, and none starts once either is spent. Each session's
+  prompt is the unchanged rendered skill first, then a "step K of N"
+  preamble, the handoff git derived after the previous step, and the step
   text last, in a code fence it cannot close and cut at 2 KiB with a note.
   Sessions never resume an earlier session. After each step the scheduler
   writes `dev-{N}.json` from git with `handoff_source: derived` and a `step`
-  index; a last session that wrote its own handoff keeps it. A session that
-  changes no deliverable file and checks no task stops the stage as
-  `dev_produced_no_changes`; a failed session ends the stage with no step
-  retry. A `plan_file` that does not resolve, after `EvalSymlinks`, to a
-  regular file inside the worktree refuses the stage. The run record gets one
-  `sub-session-K` phase per session, with its duration, and its tokens in the
-  phase name, because the phase record has no token field. The feature-dev
-  gate still runs once, after the last step. Larger or unknown windows, the
-  VS Code (IPC) runner, which builds its own prompt, and runs with no plan
-  keep today's single session.
+  index; a last session that wrote its own handoff keeps it. A stop-hook
+  sentinel left by a step before the last is removed, so it does not trigger
+  the post-stage recovery commit. A session that changes no deliverable file
+  and checks no task stops the stage as `dev_produced_no_changes`; a failed
+  session ends the stage with no step retry. A `plan_file` that does not
+  resolve, after `EvalSymlinks`, to a regular file inside the worktree
+  refuses the stage. The run record gets one `sub-session-K` phase per
+  session, with its duration, and its tokens in the phase name, because the
+  phase record has no token field. The feature-dev gate still runs once,
+  after the last step. Larger or unknown windows, the VS Code (IPC) runner,
+  which builds its own prompt, and runs with no plan keep today's single
+  session. Opt out with `pipeline.feature_dev_sub_sessions: false` or
+  `NIGHTGAUGE_FEATURE_DEV_SUB_SESSIONS=false`.
 
 - **The SDK's OpenCode adapter runs under the Go per-run config (#1648), and
   checks the plugin handshake (#1804).** Before this, the SDK adapter refused

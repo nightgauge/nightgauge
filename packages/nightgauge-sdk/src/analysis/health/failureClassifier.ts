@@ -234,6 +234,7 @@ export type TerminalFailureKind =
   | "dev_produced_no_changes" // Issue #202 — feature-dev's gate found the stage workspace empty (clean tree, branch level with base) despite a truthful dev context; the work landed where the pipeline never reads
   | "containment_breach" // Issue #230 — the write-containment check (#129) found the stage wrote into a repository it does not own; it exits 0 and reports success, so nothing else marks it failed
   | "dev_handoff_missing" // Issue #223 — the inverse of the above: the dev context is absent or empty and git finds the changed files right there; the stage did the work and ended without writing its handoff, so the work must be preserved rather than re-derived
+  | "dev_step_cap_reached" // Issue #1651 — feature-dev ran as bounded sub-sessions and spent its session bound with plan tasks still unchecked; the finished steps' work is on disk and a retry resumes from the next unchecked task
   | "adapter_auth_failed" // Issue #312 — adapter auth pre-flight failed (probe timed out after retry, or definitively logged out); retryable infra
   | "no_changes_produced" // Issue #317 — pr-create's deterministic fallback confirmed zero commits ahead of base; genuinely nothing to open a PR for (e.g. a dispatched human-only issue)
   | "validation_failed" // Issue #326 — feature-validate honestly failed its quality gates (validation_status="failed"); organic implementation failure, not a subagent crash
@@ -294,6 +295,7 @@ export const ALL_TERMINAL_FAILURE_KINDS: readonly TerminalFailureKind[] = [
   "dev_produced_no_changes",
   "containment_breach",
   "dev_handoff_missing",
+  "dev_step_cap_reached",
   "adapter_auth_failed",
   "no_changes_produced",
   "validation_failed",

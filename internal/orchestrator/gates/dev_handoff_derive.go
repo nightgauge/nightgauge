@@ -489,7 +489,9 @@ func DeriveStepHandoff(workspace string, issueNumber int, ctxPath string, step i
 // Two equal fingerprints mean no deliverable file changed between them, even
 // when the set of changed paths is unchanged (a sub-session editing a file an
 // earlier one already modified). It stages into a throwaway copy of the
-// index, so the real index and the working tree are never touched.
+// index, so the real index, HEAD and the working tree are left as they were;
+// `git add` does write the staged content as loose blobs into the object
+// store, where they are unreferenced and git's own gc prunes them.
 func WorkTreeFingerprint(workspace string) (string, error) {
 	indexPath, err := gitOutput(workspace, "rev-parse", "--git-path", "index")
 	if err != nil {

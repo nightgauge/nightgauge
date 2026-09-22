@@ -263,6 +263,14 @@ const (
 	// the stage's own turn-ending/delegation behavior, not the environment and
 	// not the issue. Issue #202.
 	TerminalKindDevProducedNoChanges = "dev_produced_no_changes"
+
+	// TerminalKindDevStepCapReached: feature-dev ran as bounded sub-sessions
+	// (#1651) and spent its session bound — the unchecked-task count it
+	// started with, never more than the hard cap — with plan tasks still
+	// unchecked. The finished steps' work is on disk; a retry of the stage
+	// re-reads the plan and resumes from the next unchecked task. Distinct
+	// from DevProducedNoChanges: this stage did produce work.
+	TerminalKindDevStepCapReached = "dev_step_cap_reached"
 	// TerminalKindDevHandoffMissing is the exact inverse of
 	// DevProducedNoChanges: the dev context is absent or reports nothing, and
 	// git finds the changed files sitting in the stage workspace. The stage did
