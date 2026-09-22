@@ -277,6 +277,59 @@ expect 1 "a merged PR head whose parents exclude the tip stays KEEP" "commits pa
 
 unset FAKE_PR_STATE FAKE_PR_BRANCH FAKE_PR_NUM FAKE_PR_SHA FAKE_PR_PARENTS
 
+# ── (h) remote-only ancestor tip is SAFE-DELETE, judged from the remote ────
+# (#1990) The concrete repro: a worktree removal deletes the LOCAL branch,
+# but a push already updated the local remote-tracking ref
+# (refs/remotes/origin/<branch>), which survives. When that remote tip is an
+# ancestor of base, this is the "obvious answer" #1990 reports has no
+# sanctioned path to today.
+new_fixture
+root="$TMP/clone"
+wt="$(add_worktree "$root" 991 fix/991-remote-safe)"
+commit_in "$wt" file.txt "remote-safe content
+"
+git_in "$wt" push -q origin fix/991-remote-safe
+git_in "$root" merge -q fix/991-remote-safe
+git_in "$root" push -q origin main
+git_in "$root" worktree remove "$wt" --force
+git_in "$root" branch -D fix/991-remote-safe
+if git -C "$root" rev-parse --verify --quiet refs/heads/fix/991-remote-safe >/dev/null 2>&1; then
+  echo "fixture bug: local branch fix/991-remote-safe should be gone" >&2
+  exit 1
+fi
+if ! git -C "$root" rev-parse --verify --quiet refs/remotes/origin/fix/991-remote-safe >/dev/null 2>&1; then
+  echo "fixture bug: refs/remotes/origin/fix/991-remote-safe should survive the local branch delete" >&2
+  exit 1
+fi
+expect 0 "remote-only ancestor tip is SAFE-DELETE, judged from the remote tip" \
+  "remote-only ref, judged from the remote tip" \
+  -- run_in "$root" env NO_PR=1 "$SCRIPT" fix/991-remote-safe origin/main
+
+# ── (i) remote-only, NOT an ancestor — stays non-zero (KEEP) ───────────────
+# The other half of the same repro: the local branch is gone the same way,
+# but the remote tip carries content base does not have. Judging it from the
+# remote tip must not turn an unmerged branch safe.
+new_fixture
+root="$TMP/clone"
+wt="$(add_worktree "$root" 992 fix/992-remote-unmerged)"
+commit_in "$wt" file.txt "never merged anywhere
+"
+git_in "$wt" push -q origin fix/992-remote-unmerged
+git_in "$root" worktree remove "$wt" --force
+git_in "$root" branch -D fix/992-remote-unmerged
+expect 1 "remote-only, unmerged content stays KEEP (non-zero), judged from the remote tip" \
+  "remote-only ref, judged from the remote tip" \
+  -- run_in "$root" env NO_PR=1 "$SCRIPT" fix/992-remote-unmerged origin/main
+
+# ── (j) no ref anywhere — still UNKNOWN/2 with the unchanged "no such ref" ─
+# text, distinct from the remote-only diagnosis above. #1990 asks these two
+# to read as different diagnoses; this pins the untouched one.
+new_fixture
+root="$TMP/clone"
+expect 2 "no ref anywhere (local or remote) stays UNKNOWN/2 with the original text" \
+  "no such ref: fix/993-never-existed" \
+  -- run_in "$root" env NO_PR=1 "$SCRIPT" fix/993-never-existed origin/main
+
 echo ""
 if [ "$FAIL" -gt 0 ]; then
   printf '\033[31m%s passed, %s FAILED\033[0m\n' "$PASS" "$FAIL"

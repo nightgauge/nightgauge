@@ -116,9 +116,28 @@ merged_pr_head_parents() {
 classify() {
   local branch="$1" base="$2" files residual tip pr pr_sha pr_num
 
+  # Resolve the branch to judge: a local ref first (today's behavior,
+  # unchanged), and only when that is absent, its remote-tracking ref
+  # (#1990) — a worktree removal deletes the local branch but leaves the
+  # pushed remote copy standing, and that copy is still judgeable. $ref is
+  # what every ancestry/content/tip check below actually inspects; $branch
+  # stays the display name and the forge-lookup key (a merged/open PR is
+  # indexed by headRefName, never by which ref happened to survive locally).
+  # remote_only distinguishes the two DIFFERENT diagnoses "no ref anywhere"
+  # (still UNKNOWN/2, unchanged text) and "remote-only ref, judged from the
+  # remote tip" (a new SAFE-DELETE/KEEP path) — collapsing them was exactly
+  # the gap #1990 reports: a remote-only merged branch read UNKNOWN/2
+  # forever, so the sanctioned path could never delete it.
+  local ref="$branch" remote_only=0 remote_note=""
   if ! git rev-parse --verify --quiet "$branch" >/dev/null; then
-    echo "UNKNOWN      no such ref: $branch"
-    return 2
+    if git rev-parse --verify --quiet "refs/remotes/origin/$branch" >/dev/null; then
+      ref="refs/remotes/origin/$branch"
+      remote_only=1
+      remote_note="remote-only ref, judged from the remote tip — "
+    else
+      echo "UNKNOWN      no such ref: $branch"
+      return 2
+    fi
   fi
   if ! git rev-parse --verify --quiet "$base" >/dev/null; then
     echo "UNKNOWN      no such base ref: $base"
@@ -132,14 +151,20 @@ classify() {
   # Its uncommitted work lives in the worktree and is invisible to every
   # commit-based check here. git refuses the delete, but a tool that answers
   # "safe" for work in progress is giving wrong advice regardless.
-  local wt
-  wt=$(git worktree list --porcelain 2>/dev/null \
-    | awk -v b="refs/heads/$branch" '
-        /^worktree /  { w = substr($0, 10) }
-        /^branch /    { if (substr($0, 8) == b) { print w; exit } }')
-  if [ -n "$wt" ]; then
-    echo "KEEP         checked out in a worktree: $wt"
-    return 1
+  #
+  # Skipped for a remote-only branch: `git worktree list` matches local
+  # branch refs (refs/heads/<branch>), and remote_only means that ref does
+  # not exist — there is no local checkout for this branch name to hold.
+  if [ "$remote_only" = 0 ]; then
+    local wt
+    wt=$(git worktree list --porcelain 2>/dev/null \
+      | awk -v b="refs/heads/$branch" '
+          /^worktree /  { w = substr($0, 10) }
+          /^branch /    { if (substr($0, 8) == b) { print w; exit } }')
+    if [ -n "$wt" ]; then
+      echo "KEEP         checked out in a worktree: $wt"
+      return 1
+    fi
   fi
 
   # An OPEN PR means the branch is in use no matter what its content says.
@@ -154,12 +179,12 @@ classify() {
   # Cheapest positive case: the branch tip is already contained in base, so
   # base has every commit it has. This is what `git branch -d` accepts, and it
   # is decisive on its own — no content comparison needed.
-  if git merge-base --is-ancestor "$branch" "$base" 2>/dev/null; then
-    echo "SAFE-DELETE  tip is an ancestor of $base — fully contained"
+  if git merge-base --is-ancestor "$ref" "$base" 2>/dev/null; then
+    echo "SAFE-DELETE  ${remote_note}tip is an ancestor of $base — fully contained"
     return 0
   fi
 
-  files=$(git diff --name-only "$base...$branch" 2>/dev/null)
+  files=$(git diff --name-only "$base...$ref" 2>/dev/null)
   if [ -z "$files" ]; then
     # NOT "merged" — undecidable, and NOT the ancestor case (ruled out above).
     # A branch that introduces nothing yet is not contained in base means the
@@ -170,21 +195,21 @@ classify() {
 
   # Base TIP vs branch TIP, restricted to those paths. NUL-split so the list
   # never routes through shell word-splitting and spaces are safe.
-  residual=$(git diff --name-only -z "$base...$branch" \
-    | xargs -0 git diff --stat "$base" "$branch" -- 2>/dev/null)
+  residual=$(git diff --name-only -z "$base...$ref" \
+    | xargs -0 git diff --stat "$base" "$ref" -- 2>/dev/null)
 
   if [ -z "$residual" ]; then
-    echo "SAFE-DELETE  content identical in $base ($(printf '%s\n' "$files" | grep -c .) files)"
+    echo "SAFE-DELETE  ${remote_note}content identical in $base ($(printf '%s\n' "$files" | grep -c .) files)"
     return 0
   fi
 
   # Content differs — ask the forge whether this branch already merged.
-  tip=$(git rev-parse "$branch" 2>/dev/null)
+  tip=$(git rev-parse "$ref" 2>/dev/null)
   if pr=$(merged_pr_for "$branch"); then
     pr_sha=$(printf '%s' "$pr" | cut -f1)
     pr_num=$(printf '%s' "$pr" | cut -f2)
     if [ "$pr_sha" = "$tip" ]; then
-      echo "SAFE-DELETE  merged as PR #$pr_num at this exact tip; $base moved on since"
+      echo "SAFE-DELETE  ${remote_note}merged as PR #$pr_num at this exact tip; $base moved on since"
       return 0
     fi
 
@@ -196,15 +221,15 @@ classify() {
     local parents
     parents=$(merged_pr_head_parents "$pr_sha")
     if [ -n "$parents" ] && printf '%s\n' "$parents" | grep -qx "$tip"; then
-      echo "SAFE-DELETE  merged as PR #$pr_num; tip is a parent of the merged head (update-branch) — $base moved on since"
+      echo "SAFE-DELETE  ${remote_note}merged as PR #$pr_num; tip is a parent of the merged head (update-branch) — $base moved on since"
       return 0
     fi
 
-    echo "KEEP         PR #$pr_num merged a DIFFERENT tip (${pr_sha:0:7} vs ${tip:0:7}) — commits past the merge"
+    echo "KEEP         ${remote_note}PR #$pr_num merged a DIFFERENT tip (${pr_sha:0:7} vs ${tip:0:7}) — commits past the merge"
     return 1
   fi
 
-  echo "KEEP         $(printf '%s\n' "$residual" | tail -1 | sed 's/^ *//')"
+  echo "KEEP         ${remote_note}$(printf '%s\n' "$residual" | tail -1 | sed 's/^ *//')"
   return 1
 }
 
