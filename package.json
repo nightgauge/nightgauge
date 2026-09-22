@@ -46,14 +46,14 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@google/genai": "^2.22.0",
+    "@google/genai": "^2.23.0",
     "@typescript-eslint/eslint-plugin": "^8.70.0",
     "@typescript-eslint/parser": "^8.64.0",
-    "eslint": "^10.10.0",
+    "eslint": "^10.11.0",
     "eslint-config-prettier": "^10.1.8",
     "husky": "^9.1.7",
     "js-yaml": "^5.4.2",
     "lint-staged": "^17.5.1",
-    "prettier": "^3.9.6"
+    "prettier": "^3.9.8"
   }
 }
