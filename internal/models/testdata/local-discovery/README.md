@@ -34,8 +34,16 @@ in the same change.
   (loaded models only) and `capabilities` (`["tool_use"]` for the Qwen model,
   absent for the embedding model). The loaded Qwen model reports
   `max_context_length` 262144 and `loaded_context_length` 131072. No field
-  reports an output cap or whether the model reasons. (LM Studio's newer
-  `GET /api/v1/models` does report reasoning; discovery does not read it.)
+  reports an output cap or whether the model reasons.
+- **LM Studio `GET /api/v1/models`** (#1761): discovery prefers this over v0
+  when the server answers it, reading `data[].capabilities.reasoning` and
+  `data[].loaded_instances[].config.context_length`. No local LM Studio
+  server was reachable to capture a real v1 response when this landed — the
+  shape `discoverLMStudio` (`../../local.go`) reads is LM Studio's documented
+  REST API response, not a fixture in this directory. Re-capture a real one
+  here and update `local_test.go`'s v1 test to read it, the way the v0 test
+  reads `lmstudio-api-v0-models.json`, next time someone has a reachable
+  server.
 - **Ollama `POST /api/show`**: `parameters` (the Modelfile's parameters, one
   `name value` pair per line), `details`, `model_info` and `capabilities`
   (`["completion","tools","thinking"]`), beside the dropped `license`,

@@ -27,13 +27,17 @@ import (
 // descriptor is keyed by the endpoint it was discovered on and the model id
 // on it, so two endpoints serving the same model each keep their own.
 //
-// LM Studio is read from GET /api/v0/models: the model's state and
-// loaded_context_length, the window a session has, never max_context_length,
-// which is only what the model could be loaded with. Ollama is read from
-// POST /api/show: the num_ctx parameter of the model's Modelfile. Observed on
-// Ollama 0.32.11, a model whose Modelfile sets no num_ctx is loaded with a
-// default context that /api/show does not report (GET /api/ps reports it only
-// while the model is loaded), so its descriptor is unresolved.
+// LM Studio is read from GET /api/v1/models when the server answers it
+// (capabilities.reasoning and each loaded instance's own runtime
+// context_length, #1761), falling back to the older GET /api/v0/models: the
+// model's state and loaded_context_length, the window a session has, never
+// max_context_length, which is only what the model could be loaded with.
+// Neither endpoint reports whether a model calls tools once discovery is on
+// the v1 path. Ollama is read from POST /api/show: the num_ctx parameter of
+// the model's Modelfile. Observed on Ollama 0.32.11, a model whose Modelfile
+// sets no num_ctx is loaded with a default context that /api/show does not
+// report (GET /api/ps reports it only while the model is loaded), so its
+// descriptor is unresolved.
 //
 // Discovery sends one request per endpoint and model per process, to the
 // base URL of an endpoint the machine-tier `opencode:` block declares or, for
@@ -305,7 +309,104 @@ type lmStudioModel struct {
 	Capabilities        []string `json:"capabilities"`
 }
 
+// lmStudioV1Listing is LM Studio's newer GET /api/v1/models (#1761). Unlike
+// /api/v0/models it can say whether a model reasons, and it reports each
+// loaded instance's own runtime context length rather than one flat
+// loaded_context_length. No local LM Studio server was reachable to capture a
+// real response when this was written (see
+// testdata/local-discovery/README.md); the shape is LM Studio's documented
+// REST API response — id, state, capabilities.reasoning and
+// loaded_instances[].config.context_length — not a captured fixture. A
+// server too old to have the endpoint, or one with it disabled, answers this
+// request with a 404 or something else that fails to decode, which
+// discoverLMStudio reads as "did not answer" and falls back to v0.
+type lmStudioV1Listing struct {
+	Data []lmStudioV1Model `json:"data"`
+}
+
+// lmStudioV1Model is one entry of the v1 listing.
+type lmStudioV1Model struct {
+	ID           string `json:"id"`
+	State        string `json:"state"`
+	Capabilities struct {
+		Reasoning bool `json:"reasoning"`
+	} `json:"capabilities"`
+	LoadedInstances []struct {
+		Config struct {
+			ContextLength int `json:"context_length"`
+		} `json:"config"`
+	} `json:"loaded_instances"`
+}
+
+// discoverLMStudio prefers the newer GET /api/v1/models, which is the only
+// source of Reasoning and of a loaded instance's actual runtime context
+// length (rather than v0's single loaded_context_length field), and falls
+// back to GET /api/v0/models when v1 does not answer: a transport failure, a
+// non-200 status, or a body that does not decode as lmStudioV1Listing all
+// count as "did not answer" (lmStudioV1). The v1 attempt is capped at half
+// the overall discovery budget, so a server that accepts the v1 connection
+// but never answers cannot starve the v0 fallback of its own chance within
+// the same LocalDiscoveryTimeout.
 func discoverLMStudio(ctx context.Context, root, model string) (LocalDescriptor, error) {
+	v1Ctx, cancel := context.WithTimeout(ctx, LocalDiscoveryTimeout/2)
+	listing, ok := lmStudioV1(v1Ctx, root)
+	cancel()
+	if ok {
+		return lmStudioFromV1(listing, model)
+	}
+	return discoverLMStudioV0(ctx, root, model)
+}
+
+// lmStudioV1 asks root's GET /api/v1/models and reports ok=true only when the
+// server answered with a body that decodes as lmStudioV1Listing.
+func lmStudioV1(ctx context.Context, root string) (lmStudioV1Listing, bool) {
+	_, body, err := localRequest(ctx, http.MethodGet, root+"/api/v1/models", nil)
+	if err != nil {
+		return lmStudioV1Listing{}, false
+	}
+	var listing lmStudioV1Listing
+	if jsonErr := json.Unmarshal(body, &listing); jsonErr != nil || listing.Data == nil {
+		return lmStudioV1Listing{}, false
+	}
+	return listing, true
+}
+
+// lmStudioFromV1 is discoverLMStudio's v1 half: the same state and context
+// checks as v0, plus Reasoning from capabilities.reasoning. ToolCall is not
+// set from v1 — its capabilities object was not observed to carry a
+// tool-use-shaped field the way v0's capabilities array does, so this stays
+// the zero value rather than a guess.
+func lmStudioFromV1(listing lmStudioV1Listing, model string) (LocalDescriptor, error) {
+	i := slices.IndexFunc(listing.Data, func(m lmStudioV1Model) bool { return m.ID == model })
+	if i < 0 {
+		return LocalDescriptor{}, fmt.Errorf("the LM Studio server does not list model %s: download it with `lms get %s`", model, model)
+	}
+	m := listing.Data[i]
+	if m.State != "loaded" {
+		return LocalDescriptor{}, fmt.Errorf("the LM Studio server lists model %s but has not loaded it (state %q), and a model it loads on demand gets its default context: load it with `lms load %s`", model, m.State, model)
+	}
+	contextWindow := 0
+	for _, inst := range m.LoadedInstances {
+		if inst.Config.ContextLength > 0 {
+			contextWindow = inst.Config.ContextLength
+			break
+		}
+	}
+	if contextWindow <= 0 {
+		return LocalDescriptor{}, fmt.Errorf("the LM Studio server reports no loaded context length for model %s", model)
+	}
+	reasoning := m.Capabilities.Reasoning
+	return LocalDescriptor{
+		Provider:      "lm-studio",
+		Model:         model,
+		ContextWindow: contextWindow,
+		Reasoning:     &reasoning,
+	}, nil
+}
+
+// discoverLMStudioV0 is discoverLMStudio's fallback: the original
+// /api/v0/models path, which reports no Reasoning.
+func discoverLMStudioV0(ctx context.Context, root, model string) (LocalDescriptor, error) {
 	_, body, err := localRequest(ctx, http.MethodGet, root+"/api/v0/models", nil)
 	if err != nil {
 		return LocalDescriptor{}, fmt.Errorf("the LM Studio model listing: %w", err)

@@ -249,7 +249,22 @@ create --body-file` call, so the compact profile (and its tests) pin
   packages do, so `TestOpenCodeProbeRedactsBaseURL` no longer sends a real
   discovery request to an RFC 5737 address and block for its ~2.4s timeout;
   `OpenCodeConfig.Limit`'s doc comment no longer says it is the sole source of
-  a server's limits, now that discovery can fill an unset one.
+  a server's limits, now that discovery can fill an unset one. Local-model
+  discovery now prefers LM Studio's newer `GET /api/v1/models` when the
+  server answers it — the only source of `Reasoning` and of a loaded
+  instance's actual runtime context length — falling back to the pinned
+  `GET /api/v0/models` otherwise, capped at half the discovery timeout so a
+  v1 endpoint that accepts the connection but never answers cannot starve the
+  v0 fallback. The flag-contract's argv model can now express a flag
+  declared to precede a subcommand (the shape codex's `-a`/
+  `--ask-for-approval` needs once #1715 fixes it), pinned by a dedicated
+  test; nothing an adapter emits today changes. `scripts/capture-cli-help.sh`'s
+  `bounded()` now polls for, and kills, every descendant of the CLI or
+  installer it runs — not only its process group — so one that calls
+  `setsid()` to escape the group can no longer outlive the script; and the
+  grok installer's sha256 is checked against a pinned value before it runs,
+  refusing an installer that does not match the recorded provenance instead
+  of running it blind.
 - **Live skill evals no longer give the scenario model tools or the
   operator's checkout.** `LiveClaudeModelRunner` spawned `claude --print` with
   the CLI's default tool set in the current directory, so a live cell could

@@ -79,6 +79,18 @@ func (s *localServer) hits() int {
 	return len(s.requests)
 }
 
+// requestPaths names every request s got so far, in order, for a failure
+// message.
+func requestPaths(s *localServer) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, len(s.requests))
+	for i, r := range s.requests {
+		out[i] = r.URL.Path
+	}
+	return out
+}
+
 // lmStudioServer serves body as LM Studio's GET /api/v0/models.
 func lmStudioServer(t *testing.T, body []byte) *localServer {
 	t.Helper()
@@ -189,8 +201,109 @@ func TestResolveLocalLMStudioReadsLoadedContext(t *testing.T) {
 	if desc != want {
 		t.Errorf("descriptor = %+v; want %+v", desc, want)
 	}
-	if srv.hits() != 1 || srv.requests[0].URL.Path != "/api/v0/models" {
-		t.Errorf("the server got %d request(s); want one GET /api/v0/models", srv.hits())
+	// Discovery prefers GET /api/v1/models (#1761); this stub does not serve
+	// it, so it falls through to 404 and discovery falls back to v0.
+	if srv.hits() != 2 || srv.requests[0].URL.Path != "/api/v1/models" || srv.requests[1].URL.Path != "/api/v0/models" {
+		t.Errorf("the server got %d request(s) %v; want GET /api/v1/models then GET /api/v0/models", srv.hits(), requestPaths(srv))
+	}
+}
+
+// lmStudioV1Server serves body as LM Studio's newer GET /api/v1/models, and
+// 404 for /api/v0/models — a real v1-capable server would answer both, but a
+// 404 there is how this suite proves discovery never falls back once v1 has
+// already answered.
+func lmStudioV1Server(t *testing.T, body []byte) *localServer {
+	t.Helper()
+	return newLocalServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/models" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	})
+}
+
+// TestResolveLocalLMStudioV1ReadsReasoningAndLoadedContext: #1761. No real
+// LM Studio server was reachable to capture a v1 response when this was
+// written (testdata/local-discovery/README.md); the body below follows LM
+// Studio's documented REST API shape for GET /api/v1/models.
+func TestResolveLocalLMStudioV1ReadsReasoningAndLoadedContext(t *testing.T) {
+	resetLocalCache(t)
+	body, err := json.Marshal(map[string]any{
+		"data": []map[string]any{
+			{
+				"id":    capturedLMStudioModel,
+				"state": "loaded",
+				"capabilities": map[string]any{
+					"reasoning": true,
+					"tool_use":  true,
+				},
+				"loaded_instances": []map[string]any{
+					{"config": map[string]any{"context_length": capturedLoadedContext}},
+				},
+			},
+			{
+				"id":               capturedNotLoadedModel,
+				"state":            "not-loaded",
+				"capabilities":     map[string]any{"reasoning": false},
+				"loaded_instances": []map[string]any{},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := lmStudioV1Server(t, body)
+	t.Setenv(LMStudioBaseURLEnv, srv.URL+"/v1")
+
+	desc, err := ResolveLocal("opencode", "lmstudio/"+capturedLMStudioModel)
+	if err != nil {
+		t.Fatalf("ResolveLocal: %v", err)
+	}
+	want := LocalDescriptor{
+		Endpoint:      "lmstudio",
+		Provider:      "lm-studio",
+		Model:         capturedLMStudioModel,
+		ContextWindow: capturedLoadedContext,
+		MaxOutput:     0,
+		ToolCall:      false, // v1's capabilities are not read for ToolCall; see discoverLMStudio's comment
+	}
+	if desc.Reasoning == nil || !*desc.Reasoning {
+		t.Errorf("reasoning = %v; the fixture's capabilities.reasoning is true", desc.Reasoning)
+	}
+	desc.Reasoning = nil
+	if desc != want {
+		t.Errorf("descriptor = %+v; want %+v", desc, want)
+	}
+	// Exactly one request: v1 answered, so discovery never falls back to v0.
+	if srv.hits() != 1 || srv.requests[0].URL.Path != "/api/v1/models" {
+		t.Errorf("the server got %d request(s) %v; want exactly one GET /api/v1/models", srv.hits(), requestPaths(srv))
+	}
+}
+
+// TestResolveLocalLMStudioFallsBackToV0 pins the other half of #1761: a
+// server old enough, or configured, to answer /api/v1/models with something
+// that is not that listing (here, a 404, matching an LM Studio version that
+// predates the endpoint) makes discovery fall back to /api/v0/models rather
+// than treating the model as undiscoverable.
+func TestResolveLocalLMStudioFallsBackToV0(t *testing.T) {
+	resetLocalCache(t)
+	srv := lmStudioServer(t, readFixture(t, lmStudioListingFixture))
+	t.Setenv(LMStudioBaseURLEnv, srv.URL+"/v1")
+
+	desc, err := ResolveLocal("opencode", "lmstudio/"+capturedLMStudioModel)
+	if err != nil {
+		t.Fatalf("ResolveLocal: %v", err)
+	}
+	if desc.ContextWindow != capturedLoadedContext {
+		t.Errorf("context_window = %d, want the v0 fixture's %d", desc.ContextWindow, capturedLoadedContext)
+	}
+	if desc.Reasoning != nil {
+		t.Errorf("Reasoning = %v, want nil: v0 reports no such capability", desc.Reasoning)
+	}
+	if srv.hits() != 2 || srv.requests[0].URL.Path != "/api/v1/models" || srv.requests[1].URL.Path != "/api/v0/models" {
+		t.Errorf("the server got %d request(s) %v; want a v1 probe, then the v0 fallback", srv.hits(), requestPaths(srv))
 	}
 }
 
@@ -276,8 +389,10 @@ func TestLocalDescriptorsPerEndpoint(t *testing.T) {
 			t.Errorf("%s: descriptor = %+v; want endpoint %s, window %d", tc.id, desc, tc.id, tc.window)
 		}
 	}
-	if local.hits() != 1 || remote.hits() != 1 {
-		t.Errorf("hits: lmstudio %d, lmstudio-remote %d; want one each", local.hits(), remote.hits())
+	// Two requests each: the v1 probe (#1761), which this stub does not
+	// serve, then the v0 fallback.
+	if local.hits() != 2 || remote.hits() != 2 {
+		t.Errorf("hits: lmstudio %d, lmstudio-remote %d; want two each (v1 probe, v0 fallback)", local.hits(), remote.hits())
 	}
 }
 
@@ -347,11 +462,16 @@ func TestResolveLocalSendsNoCredentials(t *testing.T) {
 	if _, err := ResolveLocal("opencode", "ollama/"+capturedOllamaNumCtx, endpoints...); err != nil {
 		t.Fatal(err)
 	}
-	for _, s := range []*localServer{lm, ol} {
-		if s.hits() != 1 {
-			t.Fatalf("a server got %d request(s); want 1", s.hits())
+	// lm (LM Studio) gets a v1 probe then the v0 fallback (#1761); ol
+	// (Ollama) has no v1 path and gets exactly its one POST /api/show.
+	for _, tc := range []struct {
+		s    *localServer
+		want int
+	}{{lm, 2}, {ol, 1}} {
+		if tc.s.hits() != tc.want {
+			t.Fatalf("a server got %d request(s); want %d", tc.s.hits(), tc.want)
 		}
-		for _, r := range s.requests {
+		for _, r := range tc.s.requests {
 			for _, h := range []string{"Authorization", "Proxy-Authorization", "Cookie"} {
 				if v := r.Header.Get(h); v != "" {
 					t.Errorf("%s %s carries %s %q", r.Method, r.URL.Path, h, v)
@@ -366,7 +486,7 @@ func TestResolveLocalSendsNoCredentials(t *testing.T) {
 	if strings.Contains(err.Error(), "secret") {
 		t.Errorf("the reason quotes the credential: %v", err)
 	}
-	if n := lm.hits(); n != 1 {
+	if n := lm.hits(); n != 2 {
 		t.Errorf("a base URL carrying a credential was requested: %d request(s)", n)
 	}
 }
@@ -399,8 +519,9 @@ func TestResolveLocalContactsOnlyTheMachineTierURL(t *testing.T) {
 	if err != nil || desc.ContextWindow != capturedLoadedContext {
 		t.Fatalf("ResolveLocal = %+v, %v", desc, err)
 	}
-	if machine.hits() != 1 || repository.hits() != 0 || environment.hits() != 0 {
-		t.Errorf("hits: machine tier %d, repository %d, environment %d; want 1, 0, 0", machine.hits(), repository.hits(), environment.hits())
+	// machine tier: a v1 probe (#1761), then the v0 fallback.
+	if machine.hits() != 2 || repository.hits() != 0 || environment.hits() != 0 {
+		t.Errorf("hits: machine tier %d, repository %d, environment %d; want 2, 0, 0", machine.hits(), repository.hits(), environment.hits())
 	}
 }
 
@@ -420,8 +541,10 @@ func TestResolveLocalAsksOnce(t *testing.T) {
 	if first == nil || first.Error() != second.Error() {
 		t.Errorf("the two calls disagree: %v; %v", first, second)
 	}
-	if n := srv.hits(); n != 1 {
-		t.Errorf("the server got %d request(s) across two calls; want exactly 1", n)
+	// A v1 probe (#1761), then the v0 fallback: both refused, both cached
+	// together, so the two ResolveLocal calls above cost 2 requests total.
+	if n := srv.hits(); n != 2 {
+		t.Errorf("the server got %d request(s) across two calls; want exactly 2 (a v1 probe, then the v0 fallback)", n)
 	}
 
 	var wg sync.WaitGroup
@@ -429,8 +552,8 @@ func TestResolveLocalAsksOnce(t *testing.T) {
 		wg.Go(func() { _, _ = ResolveLocal("opencode", "lmstudio/concurrent", ep) })
 	}
 	wg.Wait()
-	if n := srv.hits(); n != 2 {
-		t.Errorf("eight concurrent calls for one model sent %d request(s); want 1", n-1)
+	if n := srv.hits(); n != 4 {
+		t.Errorf("eight concurrent calls for one model sent %d request(s) beyond the first two; want 2 (a v1 probe, then the v0 fallback, once)", n-2)
 	}
 }
 

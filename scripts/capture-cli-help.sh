@@ -17,7 +17,10 @@
 #   - Every CLI is installed fresh, at the pinned version, into one `mktemp -d`
 #     prefix, never globally, and the prefix is removed on every exit (trap).
 #     npm packages use `npm install --prefix`; the grok CLI uses its vendor
-#     installer, with HOME and GROK_BIN_DIR inside the prefix.
+#     installer, with HOME and GROK_BIN_DIR inside the prefix. A vendor
+#     installer's sha256 is checked against `expected_installer_sha256`
+#     before it runs, refusing an installer that does not match the recorded
+#     provenance rather than running it blind (#1721).
 #   - Installs and CLIs run under `env -i` with a minimal environment. PATH
 #     holds only node, npm, curl and the system directories. HOME, TMPDIR and
 #     the XDG directories point inside the prefix, and the working directory is
@@ -90,10 +93,33 @@ help_subcommand() {
   esac
 }
 
+# expected_installer_sha256 <adapter>: the sha256 that adapter's vendor
+# installer script must match before this script runs it, so a compromised
+# or silently changed installer refuses rather than being executed blind and
+# its (possibly tampered) help text recorded as if it were the real thing
+# (#1721). Pinned by hand after downloading and inspecting the installer;
+# update it, and the provenance row in testdata/cli-help/README.md, together,
+# only after confirming the new installer by hand. Echoes empty for an
+# adapter with no pin yet, which this script does not refuse: a first pin
+# still has to come from somewhere, and the sha256 this run computed is
+# already recorded in the summary line for that purpose.
+#
+# CAPTURE_CLI_HELP_GROK_INSTALLER_SHA256 overrides grok's pin so
+# scripts/test-capture-cli-help.sh can point it at its own stubbed
+# installer's real hash instead of the production one; unset in every real
+# run.
+expected_installer_sha256() {
+  case "$1" in
+    grok) echo "${CAPTURE_CLI_HELP_GROK_INSTALLER_SHA256:-7fd6fdc75d9418b2e58356726fcbf1ae849416f773925da07d0ccc7a60d3e791}" ;;
+    *) echo "" ;;
+  esac
+}
+
 # bounded <seconds> <command> [args...]: run the command in a process group of
 # its own, with stdin from /dev/null. On timeout, or on INT/TERM/HUP, kill the
-# group and exit 124 (timeout) or 130. After a normal exit, kill whatever the
-# command left running in its group, then exit with the command's status.
+# group and every descendant and exit 124 (timeout) or 130. After a normal
+# exit, kill whatever the command left running, group and descendants alike,
+# then exit with the command's status.
 bounded() {
   perl -e '
     use strict;
@@ -108,9 +134,41 @@ bounded() {
       POSIX::_exit(127);
     }
     setpgrp($pid, $pid);
+
+    # A descendant that calls setsid() leaves $pid'"'"'s process group, so
+    # `kill KILL, -$pid` below never reaches it. seen accumulates every pid
+    # ever observed under $pid in the process table, polled throughout the
+    # run rather than read once at the end: once whichever ancestor sits
+    # between $pid and an escaped descendant exits, that descendant
+    # reparents to init and its ppid chain no longer leads back to $pid, so a
+    # single scan taken only at cleanup time would already have lost it (#1721).
+    my %seen;
+    my $scan = sub {
+      open(my $ps, "-|", "ps", "-e", "-o", "pid=,ppid=") or return;
+      my %children;
+      while (my $line = <$ps>) {
+        next unless $line =~ /^\s*(\d+)\s+(\d+)\s*$/;
+        push @{$children{$2 + 0}}, $1 + 0;
+      }
+      close $ps;
+      my @stack = ($pid);
+      my %found;
+      while (@stack) {
+        my $p = pop @stack;
+        next if $found{$p}++;
+        push @stack, @{$children{$p} || []};
+      }
+      delete $found{$pid};
+      $seen{$_} = 1 for keys %found;
+    };
+    my $reap = sub {
+      $scan->();
+      kill "KILL", -$pid;
+      kill "KILL", keys %seen if %seen;
+    };
     my $stop = sub {
       my ($code, $why) = @_;
-      kill "KILL", -$pid;
+      $reap->();
       waitpid($pid, 0);
       print STDERR "capture-cli-help.sh: $why: @ARGV\n";
       exit $code;
@@ -118,10 +176,19 @@ bounded() {
     $SIG{ALRM} = sub { $stop->(124, "timed out after ${secs}s") };
     $SIG{INT} = $SIG{TERM} = $SIG{HUP} = sub { $stop->(130, "interrupted") };
     alarm $secs;
-    waitpid($pid, 0);
-    my $status = $?;
+    # Polls rather than blocks on waitpid, so $seen is kept current while
+    # $pid'"'"'s tree is still intact instead of read only once, after exit,
+    # when an escaped descendant may already be unreachable from it.
+    my $status;
+    while (1) {
+      $scan->();
+      my $r = waitpid($pid, POSIX::WNOHANG());
+      if ($r == $pid) { $status = $?; last; }
+      select(undef, undef, undef, 0.2);
+    }
     alarm 0;
     kill "KILL", -$pid;
+    kill "KILL", keys %seen if %seen;
     exit($status & 127 ? 128 + ($status & 127) : $status >> 8);
   ' "$@" </dev/null
 }
@@ -317,6 +384,14 @@ for adapter in "${ADAPTERS[@]}"; do
       sed 's/^/    /' "$LOGS/$adapter-download.log" >&2
       die "$adapter: downloading $installer failed"
     }
+    got_sha="$(sha256 "$script")"
+    want_sha="$(expected_installer_sha256 "$adapter")"
+    if [ -n "$want_sha" ] && [ "$got_sha" != "$want_sha" ]; then
+      die "$adapter: installer $installer sha256 is $got_sha, not the pinned $want_sha in" \
+        "expected_installer_sha256; refusing to run an installer that does not match the" \
+        "recorded provenance. If this is a deliberate, verified update, confirm the new" \
+        "installer by hand, then update expected_installer_sha256 and testdata/cli-help/README.md together"
+    fi
     bindir="$PREFIX/$adapter-bin"
     if ! in_clean_env "$INSTALL_TIMEOUT" "GROK_BIN_DIR=$bindir" /bin/bash "$script" "$version" \
       >"$LOGS/$adapter-install.log" 2>&1; then

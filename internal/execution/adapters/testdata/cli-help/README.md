@@ -72,6 +72,12 @@ hand.
 opencode 1.18.30 prints `run --help` on stderr, so the script captures stdout
 and stderr together, as `../opencode-cli/capture.sh` does.
 
+The grok installer's sha256 above is not only recorded here: it is also
+pinned in `scripts/capture-cli-help.sh`'s `expected_installer_sha256`, which
+the script checks the freshly downloaded installer against before running it,
+refusing a mismatch (#1721). Update both together, only after confirming a
+changed installer by hand.
+
 ## Not captured
 
 | Adapter   | Reason                                                                                                                                                   |

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -230,17 +231,53 @@ func TestFlagContractOptionsCoversEveryRunOptionsField(t *testing.T) {
 	}
 }
 
-// argvFlags returns the flags in one argv, "=value" stripped. With a
-// subcommand, argv[0] must be it. No option value in flagContractOptions
-// starts with "-", so every token that does is a flag, except the bare "-"
-// codex takes as "read the prompt from stdin".
-func argvFlags(sub string, args []string) ([]string, error) {
-	if sub != "" {
-		if len(args) == 0 || args[0] != sub {
-			return nil, fmt.Errorf("argv does not start with the %q subcommand the help was captured for: %q", sub, args)
-		}
-		args = args[1:]
+// helpArgvShape describes where a subcommand sits in the argv BuildCommand
+// builds, so argvFlags can check a flag that must precede it — the shape
+// #1715's fix needs for codex: `--ask-for-approval`/`-a` is a top-level codex
+// option (`codex -a never exec ...`), not a `codex exec` one, so it belongs
+// before the subcommand, not after. Every adapter's shape is subcommand-first
+// today (LeadingFlags nil): the subcommand must be in argv, and every flag
+// before it is refused. LeadingFlags names the flags allowed to precede it
+// instead; checking them against a captured top-level --help (rather than
+// the subcommand's) is #1715's own work, not built here — this only makes
+// the shape expressible and stops an undeclared leading flag silently
+// passing as if it were a trailing one.
+type helpArgvShape struct {
+	Sub          string
+	LeadingFlags []string
+}
+
+// argvFlags returns the flags in one argv, "=value" stripped, split into
+// leading (before shape.Sub, each one shape.LeadingFlags names) and trailing
+// (shape.Sub onward). No option value in flagContractOptions starts with
+// "-", so every token that does is a flag, except the bare "-" codex takes as
+// "read the prompt from stdin".
+func argvFlags(shape helpArgvShape, args []string) (leading, trailing []string, err error) {
+	if shape.Sub == "" {
+		return nil, flagsOf(args), nil
 	}
+	if len(shape.LeadingFlags) == 0 {
+		// The strict, subcommand-first shape every real adapter has today:
+		// unchanged from before this type existed.
+		if len(args) == 0 || args[0] != shape.Sub {
+			return nil, nil, fmt.Errorf("argv does not start with the %q subcommand the help was captured for: %q", shape.Sub, args)
+		}
+		return nil, flagsOf(args[1:]), nil
+	}
+	i := slices.Index(args, shape.Sub)
+	if i < 0 {
+		return nil, nil, fmt.Errorf("argv does not contain the %q subcommand the help was captured for: %q", shape.Sub, args)
+	}
+	for _, f := range flagsOf(args[:i]) {
+		if !slices.Contains(shape.LeadingFlags, f) {
+			return nil, nil, fmt.Errorf("argv has %q before the %q subcommand, which does not declare it as a leading flag: %q", f, shape.Sub, args)
+		}
+	}
+	return flagsOf(args[:i]), flagsOf(args[i+1:]), nil
+}
+
+// flagsOf returns every flag in args, "=value" stripped.
+func flagsOf(args []string) []string {
 	var flags []string
 	for _, a := range args {
 		if a == "-" || !strings.HasPrefix(a, "-") {
@@ -249,7 +286,50 @@ func argvFlags(sub string, args []string) ([]string, error) {
 		name, _, _ := strings.Cut(a, "=")
 		flags = append(flags, name)
 	}
-	return flags, nil
+	return flags
+}
+
+// TestArgvFlagsExpressesALeadingFlagBeforeTheSubcommand pins the argv model
+// extension #1721 asks for: a flag can be declared to precede the
+// subcommand, the shape codex's #1715 fix needs for `-a`/`--ask-for-approval`
+// (a top-level codex option: `codex -a never exec ...`, not a `codex exec`
+// one). This is the model only — codex's BuildCommand does not emit `-a` yet
+// (#1715 is its own, unfixed issue), and checking a leading flag against a
+// captured top-level `codex --help` (rather than `codex exec --help`) is
+// #1715's own work, so nothing here changes what TestFlagContract checks
+// today.
+func TestArgvFlagsExpressesALeadingFlagBeforeTheSubcommand(t *testing.T) {
+	shape := helpArgvShape{Sub: "exec", LeadingFlags: []string{"-a", "--ask-for-approval"}}
+	leading, trailing, err := argvFlags(shape, []string{"-a", "never", "exec", "--json", "-"})
+	if err != nil {
+		t.Fatalf("argvFlags: %v", err)
+	}
+	if !slices.Equal(leading, []string{"-a"}) {
+		t.Errorf("leading = %v, want [-a]", leading)
+	}
+	if !slices.Equal(trailing, []string{"--json"}) {
+		t.Errorf("trailing = %v, want [--json]", trailing)
+	}
+
+	// A leading flag the shape does not declare still refuses: LeadingFlags
+	// names exactly what may precede the subcommand, not "anything does".
+	if _, _, err := argvFlags(shape, []string{"--bogus", "exec"}); err == nil {
+		t.Fatal("argvFlags accepted an undeclared leading flag")
+	}
+
+	// Every real adapter's shape today declares no LeadingFlags, so it stays
+	// exactly as strict as before this type existed: the subcommand must be
+	// argv[0], full stop — including for codex's actual argv today (#1715
+	// unfixed), where "-a" lands after "exec" and is read as an ordinary
+	// trailing flag, not refused as a misplaced leading one.
+	if _, _, err := argvFlags(helpArgvShape{Sub: "exec"}, []string{"-a", "never", "exec", "--json"}); err == nil {
+		t.Fatal("the strict subcommand-first shape accepted a flag before the subcommand")
+	}
+	if _, trailing, err := argvFlags(helpArgvShape{Sub: "exec"}, []string{"exec", "-a", "never", "--json", "-"}); err != nil {
+		t.Errorf("argvFlags: %v", err)
+	} else if !slices.Equal(trailing, []string{"-a", "--json"}) {
+		t.Errorf("trailing = %v, want [-a --json]", trailing)
+	}
 }
 
 // emittedFlagsByAdapter builds every adapter's command over
@@ -280,7 +360,7 @@ func emittedFlagsByAdapter(t *testing.T) map[string]map[string]string {
 			t.Setenv("TMPDIR", tmp)
 			for _, o := range flagContractOptions([]string{"", flagContractModel(adapter)}, []string{"", "implement the issue"}) {
 				_, args, _ := runner.BuildCommand(o)
-				got, err := argvFlags(helpSubcommand[adapter], args)
+				_, got, err := argvFlags(helpArgvShape{Sub: helpSubcommand[adapter]}, args)
 				if err != nil {
 					t.Errorf("%s with %s: %v", adapter, describeOptions(o), err)
 					continue

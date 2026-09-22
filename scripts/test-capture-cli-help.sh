@@ -92,6 +92,38 @@ case "\$(cat "$TMP/mode")" in
     echo "config lives at /root/.config/$2.toml"
     echo "owner default root@localhost"
     ;;
+  escape)
+    echo "usage: $2 [options]"
+    marker="$LOG/escape-marker"
+    rm -f "\$marker"
+    # macOS has no setsid(1); a backgrounded perl stands in (#1721). It calls
+    # POSIX::setsid itself, leaving this process's process group (and
+    # bounded()'s -\$pid kill) while staying this process's direct child, so
+    # its ppid chain to bounded()'s tracked pid holds until this script
+    # exits; it records its own PID and outlives this script, which returns
+    # normally right after.
+    perl -e '
+      use POSIX ();
+      POSIX::setsid();
+      open(my \$fh, ">", \$ARGV[0]) or exit 1;
+      print \$fh \$\$;
+      close \$fh;
+      sleep 30;
+    ' "\$marker" &
+    # Wait for the marker so the escaped descendant reliably exists, and is
+    # therefore visible to at least one bounded() scan, before this process
+    # (bounded()'s direct child) exits normally.
+    for _ in \$(seq 1 50); do
+      [ -s "\$marker" ] && break
+      sleep 0.1
+    done
+    # Stay alive a little longer: this process (bounded()'s tracked pid) is
+    # the escaped descendant's real parent until it exits, so ending the
+    # instant the marker appears would reparent the descendant to init in
+    # the same instant, leaving bounded()'s poll no window to see the intact
+    # chain — not the leak this test is pinning.
+    sleep 1.5
+    ;;
   *)
     echo "usage: $2 [options]"
     echo "  --config <path>  default \$HOME/.config/$2.toml"
@@ -169,6 +201,15 @@ for name in claude codex opencode grok; do
   write_fake_cli "$STUBS/fake-cli-$name" "$name"
 done
 
+# The real sha256 of the stub above, so run_capture's default env satisfies
+# capture-cli-help.sh's installer-hash pin (#1721) for every ordinary run;
+# the pin test below overrides it with a wrong value instead.
+if command -v shasum >/dev/null 2>&1; then
+  FAKE_GROK_INSTALLER_SHA256="$(shasum -a 256 "$STUBS/fake-grok-installer" | awk '{print $1}')"
+else
+  FAKE_GROK_INSTALLER_SHA256="$(sha256sum "$STUBS/fake-grok-installer" | awk '{print $1}')"
+fi
+
 # WORDSTUBS holds fake `id`/`hostname` commands so a dedicated run (below,
 # #1721) can put the script's own bare-word redaction under a login name and
 # a host name it does not control on this machine: "root" and "localhost".
@@ -209,6 +250,7 @@ run_capture() {
     GEMINI_API_KEY="$SENTINEL" GITHUB_TOKEN="$SENTINEL" GH_TOKEN="$SENTINEL" \
     COPILOT_GITHUB_TOKEN="$SENTINEL" NPM_TOKEN="$SENTINEL" GROK_DEPLOYMENT_KEY="$SENTINEL" \
     OPENCODE_AUTH_CONTENT="$SENTINEL" AWS_SECRET_ACCESS_KEY="$SENTINEL" \
+    CAPTURE_CLI_HELP_GROK_INSTALLER_SHA256="$FAKE_GROK_INSTALLER_SHA256" \
     ${extra[@]+"${extra[@]}"} \
     bash "$SCRIPT" "$@" >"$TMP/run.out" 2>&1
   RC=$?
@@ -334,6 +376,33 @@ check "a user@host leak still redacts the user, but never a localhost host" \
   grep -qxF 'owner default <user>@localhost' "$capture"
 check "the bare words root/localhost never survive unredacted next to a path or @" \
   sh -c "! grep -qE '/root[/.]|root@localhost' '$capture'"
+
+# --- 6. A setsid-escaped descendant is reaped too (#1721) -------------------
+rm -rf "$OUT"
+marker="$LOG/escape-marker"
+rm -f "$marker"
+run_capture escape -- grok
+check "the run that spawned an escaped descendant still succeeded" [ "$RC" -eq 0 ]
+check "the escaped descendant's marker was written" [ -s "$marker" ]
+escaped_pid="$(cat "$marker" 2>/dev/null || true)"
+check "the escaped descendant is not a live pid we forgot to check" [ -n "$escaped_pid" ]
+check "the setsid-escaped grandchild does not survive a normal exit" \
+  sh -c "! kill -0 '$escaped_pid' 2>/dev/null"
+
+# --- 7. A grok installer that does not match the pinned sha256 is refused --
+# (#1721). Every other check above already proves the matching-hash case:
+# they run with CAPTURE_CLI_HELP_GROK_INSTALLER_SHA256 set to the stub
+# installer's real hash and grok installs and captures normally.
+printf 'previous capture\n' >"$OUT/grok-$GROK_V.txt"
+run_capture ok "CAPTURE_CLI_HELP_GROK_INSTALLER_SHA256=0000000000000000000000000000000000000000000000000000000000000000" -- grok
+check "a grok installer sha256 mismatch exits non-zero" [ "$RC" -ne 0 ]
+check "the mismatch names both hashes" sh -c "
+  grep -qF '$FAKE_GROK_INSTALLER_SHA256' '$TMP/run.out' &&
+  grep -qF '0000000000000000000000000000000000000000000000000000000000000000' '$TMP/run.out'
+"
+check "the installer never ran on a sha256 mismatch" sh -c "! grep -q . '$LOG'/installer.*.argv 2>/dev/null"
+check "the refused capture left the committed file as it was" \
+  [ "$(cat "$OUT/grok-$GROK_V.txt")" = "previous capture" ]
 
 echo ""
 echo "=== $PASS passed, $FAIL failed ==="
