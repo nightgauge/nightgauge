@@ -92,7 +92,14 @@ func TestCompactProfile_FallsBackToFullWithWarning(t *testing.T) {
 func stagesWithCompactProfile(t *testing.T) map[string]string {
 	t.Helper()
 	root := realSkillsRoot(t)
-	return map[string]string{"pr-merge": root, "issue-pickup": root, "feature-validate": root}
+	return map[string]string{
+		"pr-merge":         root,
+		"issue-pickup":     root,
+		"feature-validate": root,
+		"feature-planning": root,
+		"feature-dev":      root,
+		"pr-create":        root,
+	}
 }
 
 // TestCompactMarkerParity is the mechanical check AC2 asks for: every
