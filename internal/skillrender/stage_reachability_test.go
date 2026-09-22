@@ -19,32 +19,26 @@ import (
 // Locate("spike-materialize") failed for every spike issue after its work
 // had already merged.
 //
-// This test instead iterates the PipelineStage constants declared in
-// internal/state/board_state.go — the independent source of truth for
-// "which stages exist" — and asserts each one resolves to a non-empty
-// StageSkillDirs entry. Removing spike-materialize's registration (or
-// forgetting to add a future stage's) turns this red; growing the map with
-// an extra, unused key does not, because the direction being checked is
-// "every constant has a map entry," not the reverse.
+// This test instead iterates state.AllPipelineStages — the independent
+// source of truth for "which stages exist" — and asserts each one resolves
+// to a non-empty StageSkillDirs entry. Removing spike-materialize's
+// registration (or forgetting to add a future stage's) turns this red;
+// growing the map with an extra, unused key does not, because the direction
+// being checked is "every constant has a map entry," not the reverse.
+//
+// AllPipelineStages (internal/state/board_state.go) is itself a
+// hand-written slice, but a SEPARATE guard in that package
+// (TestAllPipelineStagesMatchesDeclaredConstants, added alongside this test
+// for #1969's follow-up review) parses board_state.go's own AST and fails
+// if a new PipelineStage constant is ever declared without also being added
+// there — so a stage this test needs to see cannot be silently missing from
+// AllPipelineStages either. Every PipelineStage constant reaches Render
+// through StageSkillDirs, whether or not the scheduler appends it
+// unconditionally (spike-materialize is conditional on issue type;
+// issue-refine is dispatched by the autonomous refinement loop rather than
+// runPipeline's stage list) — all of them belong in this check.
 func TestEveryStageConstantIsRenderable(t *testing.T) {
-	// Every PipelineStage constant board_state.go declares, whether or not
-	// the scheduler appends it unconditionally (spike-materialize is
-	// conditional on issue type; issue-refine is dispatched by the
-	// autonomous refinement loop rather than runPipeline's stage list) —
-	// all of them reach Render through this same map, so all of them belong
-	// in this list.
-	stages := []state.PipelineStage{
-		state.StageIssuePickup,
-		state.StageFeaturePlanning,
-		state.StageFeatureDev,
-		state.StageFeatureValidate,
-		state.StagePRCreate,
-		state.StagePRMerge,
-		state.StageSpikeMaterialize,
-		state.StageIssueRefine,
-	}
-
-	for _, stage := range stages {
+	for _, stage := range state.AllPipelineStages {
 		dir, ok := StageSkillDirs[string(stage)]
 		if !ok || dir == "" {
 			t.Errorf("state.PipelineStage %q has no StageSkillDirs entry — "+
