@@ -137,6 +137,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **Live skill evals no longer give the scenario model tools or the
+  operator's checkout.** `LiveClaudeModelRunner` spawned `claude --print` with
+  the CLI's default tool set in the current directory, so a live cell could
+  act on the repository it was started from; one pushed the branch under test
+  while running feature-validate's scenarios. Each cell now runs with
+  `--tools ""` in an empty scratch directory that is removed afterwards.
 - **The `--render-profile` eval lane no longer measures bare prompts when the
   render fails.** `scripts/evaluate-skills.ts` caught every render error and
   ran the scenario without its skill text, so a `nightgauge` binary on `PATH`
