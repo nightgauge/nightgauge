@@ -53,6 +53,7 @@ LIST_STEPS=0
 # as the operator's answer to "what else is running right now?".
 SLOT_PROBE=0
 SLOT_PROBE_HOLD=0
+RELEASE_PROBE=0
 # `--group-probe <count> <seconds>` runs `count` trivial steps through the REAL
 # `run_group`/`run_group_wait` pair and reports the greatest number of slots ever
 # held at once, plus the failure accounting. It is the regression test for the
@@ -65,6 +66,7 @@ GROUP_PROBE_HOLD=2
 case "${1:-}" in
   --list-steps) LIST_STEPS=1 ;;
   --slot-probe) SLOT_PROBE=1; SLOT_PROBE_HOLD="${2:-0}" ;;
+  --release-probe) RELEASE_PROBE=1 ;;
   --group-probe) GROUP_PROBE="${2:-4}"; GROUP_PROBE_HOLD="${3:-2}" ;;
 esac
 
@@ -222,6 +224,15 @@ CI_LOCAL_JOBS="${CI_LOCAL_JOBS:-4}"
 CI_LOCAL_SLOT_WAIT="${CI_LOCAL_SLOT_WAIT:-1800}"
 SLOT_ROOT=""
 GROUP_SLOTS=()
+# Identifies THIS gate for the life of the process, so a release can tell "my
+# slot" from "a slot that has since been handed to someone else". Slot paths are
+# numbered 1..CI_LOCAL_JOBS and therefore REUSED: a grouped child removes its own
+# slot the moment it finishes, another gate can take that same path immediately,
+# and this gate's exit-time sweep still has the path in GROUP_SLOTS. Without an
+# owner stamp that sweep deletes the other gate's LIVE slot, silently shrinking
+# the machine-wide budget it is the whole point of this mechanism to hold — and
+# only when gates overlap, which is the only case it exists for.
+GATE_ID="$$-$(date +%s)"
 
 slot_key() {
   local common
@@ -264,6 +275,11 @@ slot_acquire() {
     i=1
     while [ "$i" -le "$CI_LOCAL_JOBS" ]; do
       if mkdir "$SLOT_ROOT/$i" 2>/dev/null; then
+        # `owner` is written once and never rewritten; `pid` is rewritten by the
+        # grouped child so a killed child's slot becomes reclaimable. They answer
+        # different questions: `pid` is "is the holder alive", `owner` is "is
+        # this still the same holder".
+        printf '%s\n' "$GATE_ID" > "$SLOT_ROOT/$i/owner"
         printf '%s\n' "$$" > "$SLOT_ROOT/$i/pid"
         printf '%s\n' "$SLOT_ROOT/$i"
         return 0
@@ -287,8 +303,15 @@ slot_acquire() {
   done
 }
 
+# Release a slot ONLY if this gate still owns it. A path we no longer own is
+# either already gone or now another gate's live slot; in both cases the correct
+# action is nothing.
 slot_release() { # slot_release <slot-dir>
   [ -n "${1:-}" ] || return 0
+  [ -d "$1" ] || return 0
+  local owner=""
+  [ -r "$1/owner" ] && owner="$(cat "$1/owner" 2>/dev/null || true)"
+  [ "$owner" = "$GATE_ID" ] || return 0
   rm -rf "$1" 2>/dev/null || true
   return 0
 }
@@ -409,6 +432,37 @@ if [ "$SLOT_PROBE" -eq 1 ]; then
   echo "slot released"
   exit 0
 fi
+if [ "$RELEASE_PROBE" -eq 1 ]; then
+  # Assert the release guard in one process, because the race it prevents cannot
+  # be staged from outside: it needs a slot path this gate still has in
+  # GROUP_SLOTS whose `owner` has since become someone else's. Take a slot, forge
+  # a foreign owner onto it (what a reused path looks like after another gate
+  # claimed it), then release and report whether the slot survived.
+  rp_slot="$(slot_acquire)"
+  GROUP_SLOTS+=("$rp_slot")
+  printf '%s\n' "$rp_slot" > /dev/null
+  echo "release probe: acquired $rp_slot"
+  printf 'some-other-gate-9999\n' > "$rp_slot/owner"
+  release_own_slots
+  if [ -d "$rp_slot" ]; then
+    echo "release probe: foreign slot SURVIVED"
+  else
+    echo "release probe: foreign slot DELETED"
+  fi
+  # Now the same slot, still ours, must be released normally — otherwise the
+  # guard would be trivially satisfied by never releasing anything.
+  rm -rf "$rp_slot" 2>/dev/null || true
+  rp_own="$(slot_acquire)"
+  GROUP_SLOTS=("$rp_own")
+  release_own_slots
+  if [ -d "$rp_own" ]; then
+    echo "release probe: own slot LEAKED"
+  else
+    echo "release probe: own slot released"
+  fi
+  rm -rf "$rp_own" 2>/dev/null || true
+  exit 0
+fi
 if [ "$LIST_STEPS" -eq 0 ]; then
   announce_neighbours
 fi
@@ -435,7 +489,7 @@ INFRA_COUNT=0
 # test. Recovering "which test failed" must never depend on having guessed the
 # right pipeline beforehand.
 LOG_DIR="${CI_LOCAL_LOG_DIR:-$REPO_ROOT/.ci-local-logs}"
-if [ "$LIST_STEPS" -eq 0 ] && [ "$SLOT_PROBE" -eq 0 ]; then
+if [ "$LIST_STEPS" -eq 0 ] && [ "$SLOT_PROBE" -eq 0 ] && [ "$RELEASE_PROBE" -eq 0 ]; then
   mkdir -p "$LOG_DIR"
   rm -f "$LOG_DIR"/*.log 2>/dev/null || true
 fi
@@ -584,7 +638,7 @@ run_group() {
     "$@" > "$log" 2>&1
     printf '%s\n' "$?" > "$codefile"
     printf '%s\n' "$((SECONDS - local_start))" > "$codefile.secs"
-    [ -n "$slot" ] && rm -rf "$slot" 2>/dev/null
+    [ -n "$slot" ] && slot_release "$slot"
     true ) &
   GROUP_PIDS+=("$!")
   GROUP_LABELS+=("$label")

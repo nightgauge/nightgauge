@@ -190,7 +190,7 @@ sleeper=$!
 HOLDER_PIDS="$HOLDER_PIDS $sleeper"
 for n in 1 2; do
   printf '%s\n' "$sleeper" > "$live/$n/pid"
-  printf '%s\n' "$sleeper" > "$live/$n/gate"
+  printf '%s\n' "$sleeper" > "$live/$n/owner"
 done
 env CI_LOCAL_SLOT_ROOT="$live" CI_LOCAL_LOG_DIR="$TMP/logs-live" CI_LOCAL_JOBS=2 \
   CI_LOCAL_SLOT_WAIT=3 bash scripts/ci-local.sh --slot-probe > "$TMP/live.log" 2>&1
@@ -204,7 +204,7 @@ mkdir -p "$dead/1" "$dead/2"
 for n in 1 2; do
   # A pid that cannot be running.
   printf '99999999\n' > "$dead/$n/pid"
-  printf '99999999\n' > "$dead/$n/gate"
+  printf 'some-dead-gate-99999999\n' > "$dead/$n/owner"
 done
 env CI_LOCAL_SLOT_ROOT="$dead" CI_LOCAL_LOG_DIR="$TMP/logs-dead" CI_LOCAL_JOBS=2 \
   CI_LOCAL_SLOT_WAIT=5 bash scripts/ci-local.sh --slot-probe > "$TMP/dead.log" 2>&1
@@ -214,6 +214,21 @@ check "the reclaimed slot is then taken" $?
 grep -q 'gave up waiting' "$TMP/dead.log" && reclaim_clean=1 || reclaim_clean=0
 [ "$reclaim_clean" = "0" ]
 check "reclaiming a dead slot did not require giving up on the wait" $?
+
+# ── (9b) a release only ever removes a slot this gate still OWNS ─────────────
+# Slot paths are numbered and therefore reused. A grouped child hands its slot
+# back the instant it finishes, another gate can take that same path, and this
+# gate's exit-time sweep still holds the path — so an unguarded release deletes
+# the other gate's LIVE slot and silently shrinks the machine-wide budget. Only
+# happens when gates overlap, which is the only case the budget exists for.
+rel="$TMP/slots-release"
+env CI_LOCAL_SLOT_ROOT="$rel" CI_LOCAL_JOBS=2 CI_LOCAL_SLOT_WAIT=5 \
+  bash scripts/ci-local.sh --release-probe > "$TMP/release.log" 2>&1
+check "the release probe runs" $?
+grep -q 'foreign slot SURVIVED' "$TMP/release.log"
+check "a slot whose owner is now another gate is NOT deleted by our release" $?
+grep -q 'own slot released' "$TMP/release.log"
+check "a slot we still own IS released (the guard is not 'never release')" $?
 
 # ── (10) the budget is keyed on the SHARED git dir, so worktrees share it ────
 # The gates that collide are the ones in sibling worktrees of one repository.
@@ -237,7 +252,7 @@ sleep 30 &
 sleeper2=$!
 HOLDER_PIDS="$HOLDER_PIDS $sleeper2"
 printf '%s\n' "$sleeper2" > "$full/1/pid"
-printf '%s\n' "$sleeper2" > "$full/1/gate"
+printf '%s\n' "$sleeper2" > "$full/1/owner"
 env CI_LOCAL_SLOT_ROOT="$full" CI_LOCAL_JOBS=1 bash scripts/ci-local.sh --list-steps \
   > "$TMP/steps.log" 2>&1
 check "--list-steps succeeds with the budget fully held" $?
