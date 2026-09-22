@@ -240,6 +240,55 @@ describe("OpenCodeAdapter without a run config provider (#1637)", () => {
       /OPENCODE_PERMISSION, which is not a run variable/
     );
   });
+
+  // #1804: InstallNightgaugePlugin (internal/execution/adapters/opencode.go) sets
+  // the plugin path and handshake variables on every run with a run identity, and
+  // `nightgauge opencode config --json` prints the same for parity. Before this
+  // fix, checkRunConfig refused a run config carrying any of them.
+  it("accepts a run config carrying the plugin path and handshake variables", async () => {
+    const root = tmp("oc-run-");
+    const config = runConfig(root);
+    const adapter = new OpenCodeAdapter({
+      env: {},
+      model: LOCAL_MODEL,
+      runConfigProvider: providerFor({
+        ...config,
+        env: {
+          ...config.env,
+          NIGHTGAUGE_OPENCODE_PLUGIN_PATH: join(root, "plugin", "nightgauge.js"),
+          NIGHTGAUGE_OPENCODE_PLUGIN_NONCE: "a-minted-nonce",
+          NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL: join(root, "sentinel.json"),
+        },
+      }),
+    });
+    await expect(adapter.createQueryFunction({ cwd: tmp("oc-wt-") })).resolves.toBeInstanceOf(
+      Function
+    );
+  });
+
+  // #1802 tracks the Go adapter forwarding this operator directory path to the
+  // opencode child because it rides in the same run.Env struct the manager reads
+  // the risk flag back from; that is a leak, not something #1804 should extend to
+  // the TS spawn path. The TS side has no consumer for this value, so it stays
+  // refused.
+  it("still refuses NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK, an operator directory path", async () => {
+    const root = tmp("oc-run-");
+    const config = runConfig(root);
+    const adapter = new OpenCodeAdapter({
+      env: {},
+      model: LOCAL_MODEL,
+      runConfigProvider: providerFor({
+        ...config,
+        env: {
+          ...config.env,
+          NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK: "/home/operator/.opencode",
+        },
+      }),
+    });
+    await expect(adapter.createQueryFunction({ cwd: tmp("oc-wt-") })).rejects.toThrow(
+      /NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK, which is not a run variable/
+    );
+  });
 });
 
 describe("OpenCodeAdapter.validateAuth (#1637)", () => {

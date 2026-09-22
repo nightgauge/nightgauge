@@ -8,6 +8,7 @@ import {
   curateOpenCodeChildEnv,
   isChildEnvAllowed,
   isOpenCodeChildEnvAllowed,
+  isOpenCodeRunEnvName,
 } from "../../src/cli/adapters/childEnv.js";
 import {
   OPENCODE_CATALOG_ENV,
@@ -221,6 +222,35 @@ describe("curateOpenCodeChildEnv (#1637)", () => {
       return !isOpenCodeChildEnvAllowed(name, model);
     });
     expect(notForwarded).toEqual([]);
+  });
+
+  // #1804: InstallNightgaugePlugin (internal/execution/adapters/opencode.go)
+  // sets NIGHTGAUGE_OPENCODE_PLUGIN_PATH/NONCE/SENTINEL and, when an operator
+  // directory is at risk, NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK — the Go
+  // side's opencodeplugin.Env* constants (plugin.go). The three plugin/handshake
+  // names must be run-env names here too, so `nightgauge opencode config
+  // --json`'s own output (#1648) is never refused by checkRunConfig. The
+  // operator-risk name is deliberately excluded: its value is an operator
+  // directory path, and forwarding it to the TS spawn path's child would open
+  // on a second surface the leak #1802 already tracks on the Go side.
+  it("parity: the plugin/handshake names opencodeplugin.go defines are run-env names, the operator-risk name is not", () => {
+    const plugin = fs.readFileSync(
+      path.join(GO_ADAPTERS_DIR, "../opencodeplugin/plugin.go"),
+      "utf-8"
+    );
+    const goConsts: Record<string, string> = {};
+    for (const m of plugin.matchAll(/^\s*(Env\w+)\s*=\s*"([^"]+)"/gm)) {
+      goConsts[m[1]] = m[2];
+    }
+    expect(goConsts.EnvNonce).toBe("NIGHTGAUGE_OPENCODE_PLUGIN_NONCE");
+    expect(goConsts.EnvSentinel).toBe("NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL");
+    expect(goConsts.EnvPluginPath).toBe("NIGHTGAUGE_OPENCODE_PLUGIN_PATH");
+    expect(goConsts.EnvOperatorInstallRisk).toBe("NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK");
+
+    for (const key of ["EnvNonce", "EnvSentinel", "EnvPluginPath"]) {
+      expect(isOpenCodeRunEnvName(goConsts[key]), goConsts[key]).toBe(true);
+    }
+    expect(isOpenCodeRunEnvName(goConsts.EnvOperatorInstallRisk)).toBe(false);
   });
 
   it("OpenCode's catalog, platform providers and switches are the Go adapter's", () => {

@@ -195,12 +195,41 @@ export const OPENCODE_SERVER_PASSWORD_ENV = "OPENCODE_SERVER_PASSWORD";
 export const OPENCODE_CONFIG_CONTENT_ENV = "OPENCODE_CONFIG_CONTENT";
 
 /**
+ * The nightgauge plugin's path and handshake variables, the TS twin of
+ * `opencodeplugin.EnvPluginPath` / `EnvNonce` / `EnvSentinel`
+ * (internal/execution/opencodeplugin/plugin.go): `InstallNightgaugePlugin`
+ * (internal/execution/adapters/opencode.go) sets all three on every run with
+ * a run identity, and `nightgauge opencode config --json` prints the same
+ * three for parity with the Go adapter's own spawn path (#1804). Their
+ * values are a per-run plugin file path, a minted nonce and a per-run
+ * sentinel file path — none of them an operator path — so forwarding them to
+ * an opencode child carries no leak.
+ */
+export const OPENCODE_PLUGIN_PATH_ENV = "NIGHTGAUGE_OPENCODE_PLUGIN_PATH";
+export const OPENCODE_PLUGIN_NONCE_ENV = "NIGHTGAUGE_OPENCODE_PLUGIN_NONCE";
+export const OPENCODE_PLUGIN_SENTINEL_ENV = "NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL";
+
+/**
  * Every variable the run's own environment may set on an opencode spawn: the
  * isolation variables `nightgauge opencode config` prints as `env` (ADR-022
- * § 8, OpenCodeIsolationEnv in the Go adapter) and the per-run config. These
- * are the only OPENCODE_* names a spawn carries besides the adapter's own
+ * § 8, OpenCodeIsolationEnv in the Go adapter), the per-run config, and the
+ * plugin/handshake variables above. These are the only OPENCODE_ and
+ * NIGHTGAUGE_OPENCODE_ prefixed names a spawn carries besides the adapter's own
  * {@link OPENCODE_SERVER_PASSWORD_ENV}; OPENCODE_CONFIG_DIR is set only when
  * the operator opted into their own OpenCode config (opencode.inherit_user_config).
+ *
+ * Deliberately excluded: `NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK`
+ * (`opencodeplugin.EnvOperatorInstallRisk`). Its value is an operator-owned
+ * directory path ($HOME/.opencode, or an inherited OPENCODE_CONFIG_DIR — see
+ * `operatorInstallRisk` in internal/execution/adapters/opencode_plugin_deps.go),
+ * read back only by the Go manager's own install-wait watchdog (manager.go),
+ * never by opencode or the plugin itself. The Go adapter forwards it to the
+ * opencode child today only because it rides in the same `run.Env` struct the
+ * manager reads back from — a wholesale-copy leak tracked separately as
+ * #1802, not fixed here. The TS spawn path has no watchdog that needs this
+ * value, so admitting the name here would open the same leak on a second
+ * surface for no TS-side benefit. Add it only alongside a fix for #1802 that
+ * stops treating it as a value the child must see.
  */
 const OPENCODE_RUN_ENV_NAMES: ReadonlySet<string> = new Set<string>([
   ...OPENCODE_ISOLATION_XDG,
@@ -210,6 +239,9 @@ const OPENCODE_RUN_ENV_NAMES: ReadonlySet<string> = new Set<string>([
   "GH_CONFIG_DIR",
   "NIGHTGAUGE_CONFIG_HOME",
   "GOCACHE",
+  OPENCODE_PLUGIN_PATH_ENV,
+  OPENCODE_PLUGIN_NONCE_ENV,
+  OPENCODE_PLUGIN_SENTINEL_ENV,
 ]);
 
 /** Whether the run's own environment may set `name` on an opencode spawn. */

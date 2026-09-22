@@ -34,6 +34,18 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The SDK's OpenCode run-env allowlist rejected the plugin/handshake
+  variables `InstallNightgaugePlugin` sets.** `childEnv.ts`'s
+  `OPENCODE_RUN_ENV_NAMES` now includes `NIGHTGAUGE_OPENCODE_PLUGIN_PATH`,
+  `NIGHTGAUGE_OPENCODE_PLUGIN_NONCE` and `NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL`,
+  the TS twin of `opencodeplugin.EnvPluginPath`/`EnvNonce`/`EnvSentinel`
+  (`internal/execution/opencodeplugin/plugin.go`). Before this fix,
+  `checkRunConfig` would have rejected `nightgauge opencode config --json`'s
+  own output outright once #1648 wires it in. Deliberately not allowlisted:
+  `NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK` — its value is an operator
+  directory path, and admitting it here would extend the leak #1802 tracks on
+  the Go spawn path to the SDK's own (#1804).
+
 - **ADR-022's "subagent cost" gap read as a live risk; it is currently
   unreachable.** § 3's watchdog passage, its § 15 `Subagents (task)` row, and
   the `openCodeUnenforcedControls` "subagent cost" warning
