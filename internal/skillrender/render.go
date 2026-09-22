@@ -85,13 +85,14 @@ const (
 // searched. Every key here must also be shipped by the marketplace bundle —
 // see TestBundleShipsEverySkillTheGoDirectPathRenders.
 var StageSkillDirs = map[string]string{
-	"issue-pickup":     "nightgauge-issue-pickup",
-	"feature-planning": "nightgauge-feature-planning",
-	"feature-dev":      "nightgauge-feature-dev",
-	"feature-validate": "nightgauge-feature-validate",
-	"pr-create":        "nightgauge-pr-create",
-	"pr-merge":         "nightgauge-pr-merge",
-	"issue-refine":     "nightgauge-issue-refine",
+	"issue-pickup":      "nightgauge-issue-pickup",
+	"feature-planning":  "nightgauge-feature-planning",
+	"feature-dev":       "nightgauge-feature-dev",
+	"feature-validate":  "nightgauge-feature-validate",
+	"pr-create":         "nightgauge-pr-create",
+	"pr-merge":          "nightgauge-pr-merge",
+	"issue-refine":      "nightgauge-issue-refine",
+	"spike-materialize": "nightgauge-spike-materialize",
 }
 
 // Options parameterize a render.

@@ -47,13 +47,24 @@ const toolOutputReserveFraction = 0.15
 // #1645's own body ("Measured base-only renders (bytes/4)"). The absolute
 // figures are not reused as an absolute budget — only their PROPORTIONS,
 // normalized against the heaviest stage, become each stage's Share.
+// "spike-materialize" and "issue-refine" were measured the same way for
+// #1969: `nightgauge skill render --stage <stage> --skills-root ./skills`,
+// byte length of the base-only stdout render divided by 4 —
+// spike-materialize (6246 bytes -> 1561) and issue-refine (26227 bytes ->
+// 6556). Both land under minShare's floor of maxStageBaseTokens*0.35 (pr-merge
+// is heaviest at 21700, so the floor is ~7595), so Share still returns
+// minShare for them; the entries exist so a future re-measurement of pr-merge
+// (the normalization denominator) does not silently change these two stages'
+// share out from under an empty table lookup.
 var stageBaseTokens = map[string]int{
-	"issue-pickup":     16500,
-	"feature-planning": 12300,
-	"feature-dev":      11600,
-	"feature-validate": 12600,
-	"pr-create":        11200,
-	"pr-merge":         21700,
+	"issue-pickup":      16500,
+	"feature-planning":  12300,
+	"feature-dev":       11600,
+	"feature-validate":  12600,
+	"pr-create":         11200,
+	"pr-merge":          21700,
+	"spike-materialize": 1561,
+	"issue-refine":      6556,
 }
 
 // maxStageBaseTokens is the normalization denominator: the heaviest measured
@@ -77,9 +88,11 @@ func Estimate(content string) int {
 
 // Share returns stage's fraction of the usable window (the window after
 // usableWindow's reserves), normalized against the heaviest measured stage
-// and floored at minShare. A stage with no entry in stageBaseTokens —
-// issue-refine, or a future stage never added to the table — has no
-// measurement to derive a bigger share from, so it gets the floor.
+// and floored at minShare. A stage with no entry in stageBaseTokens — a
+// future stage never added to the table — has no measurement to derive a
+// bigger share from, so it gets the floor; issue-refine and
+// spike-materialize are both measured (see stageBaseTokens) but land under
+// the floor anyway, so they also return minShare today.
 func Share(stage string) float64 {
 	base, ok := stageBaseTokens[stage]
 	if !ok {
