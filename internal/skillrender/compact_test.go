@@ -115,12 +115,17 @@ func TestCompactMarkerParity(t *testing.T) {
 				t.Fatalf("stage %q has no compact profile; remove it from stagesWithCompactProfile or add _profiles/compact.md", stage)
 			}
 
+			// Compared with stripIssueRefs (compact_issue_pickup_test.go): a
+			// compact profile may drop an inline "#NNNN" issue citation the
+			// publication-boundary check rejects on a new line, while
+			// keeping the rule the marker names. Every other byte of the
+			// marker must still match.
 			compactSet := make(map[string]bool)
 			for _, m := range CompactionMarkers(compact.Content) {
-				compactSet[m] = true
+				compactSet[stripIssueRefs(m)] = true
 			}
 			for _, m := range CompactionMarkers(full.Content) {
-				if !compactSet[m] {
+				if !compactSet[stripIssueRefs(m)] {
 					t.Errorf("compact render for %q is missing must-survive marker: %s", stage, m)
 				}
 			}

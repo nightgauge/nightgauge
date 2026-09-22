@@ -322,7 +322,7 @@ overwrites it after the stage exits (#1011). Every other field's meaning and
 default: Read `skills/nightgauge-feature-planning/SKILL.md` (Phase 5) when
 needed.
 
-#### Emit risk-tiering facts for the approval gate (#4135)
+#### Emit risk-tiering facts for the approval gate
 
 The architecture-approval gate (run at feature-dev) risk-tiers the change on
 two facts that only the plan knows. Merge a `dependency_analysis` block into

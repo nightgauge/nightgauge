@@ -80,13 +80,12 @@ fanned out. Detail: Read
 - **Never force-push, never fall back to asking.** This stage is headless — a
   force-push can destroy history and a blocked prompt hangs the run. Resolve
   deterministically or fail with a clear reason.
-- **Scope-drift gate (#3040, platform incident #840).** Re-scan the diff
-  before opening; unexpected changes outside the issue's scope are blocked,
-  not shipped.
+- **Scope-drift gate (platform incident).** Re-scan the diff before opening;
+  unexpected changes outside the issue's scope are blocked, not shipped.
 - **False-success guard.** Exiting 0 with no open PR is a failure — verify
   the PR actually exists before reporting success (Phase 3.6).
-- **Epic-umbrella PRs must `Closes` every shipped sub, not just the epic
-  (#3979).** When a single PR delivers more than one of an epic's sub-issue
+- **Epic-umbrella PRs must `Closes` every shipped sub, not just the epic.**
+  When a single PR delivers more than one of an epic's sub-issue
   deliverables, enumerate `Closes #sub` for **each** sub whose work is in the
   diff — do NOT rely on `Closes #epic` alone.
 - See also the cross-cutting gotchas: Read `skills/_shared/GOTCHAS.md`.
@@ -299,7 +298,7 @@ printf '<!-- phase:start name="scope-drift-gate" index=8 total=14 stage="pr-crea
 
 **PURPOSE**: For `type:docs` and `type:chore` issues, verify that modified
 files fall within the configured allowlist. Out-of-scope changes indicate
-scope drift (Issue #3040, platform incident #840).
+scope drift (platform incident).
 
 > **Read `_includes/security-and-scope.md` (same directory as this SKILL.md) now
 > and follow its instructions before continuing this phase.**
@@ -375,7 +374,7 @@ while the stage is behaving correctly, and it is killed with its PR already
 open. `CI_FINAL_STATUS=pending` is the correct, complete answer when checks
 have not finished; pr-merge owns polling and auto-fix.
 
-**HARD RULE — DO NOT FIX CI HERE (Issue #3666):** pr-create's only job is to
+**HARD RULE — DO NOT FIX CI HERE:** pr-create's only job is to
 open the PR and exit cleanly. Do not regenerate golden images, run
 formatters, push fix commits, or retry the agent to "make CI green" — the
 pr-merge stage owns the auto-fix loop. Record what you saw in `CI_FAILURES_JSON`

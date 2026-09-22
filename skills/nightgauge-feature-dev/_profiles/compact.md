@@ -77,7 +77,7 @@ overrides: Read [docs/CONTEXT_ARCHITECTURE.md](../../../docs/CONTEXT_ARCHITECTUR
 - **Build before tests.** A build step MUST run before the suite — unit tests
   can pass while the build is broken, masking a defect feature-validate would
   catch later.
-- **Never report success when a check failed (#2779).** Swallowing a failed
+- **Never report success when a check failed.** Swallowing a failed
   build/test ships a broken change to pr-create where CI blocks the merge.
 - **Leave the changes on disk in THIS worktree (#202).** The gate verifies
   with git, not your `files_changed` report: a clean workspace level with
@@ -127,9 +127,9 @@ loading context or doing any work.
 
 <!-- include: ../_shared/REPO_IDENTITY_CHECK.md -->
 
-**Grounding gate (#4099)** — before loading context or editing anything,
-confirm you are grounded: on **this** issue's feature branch (not the base)
-with the issue context present. ON by default
+**Grounding gate** — before loading context or editing anything, confirm you
+are grounded: on **this** issue's feature branch (not the base) with the
+issue context present. ON by default
 (`pipeline.grounding_gate.enabled: false` disables it).
 
 ```bash
@@ -152,7 +152,7 @@ fi
 [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
 if [ -n "$BINARY" ]; then
   "$BINARY" ground "$ISSUE_NUMBER" || {
-    echo "GROUNDING FAILED — do NOT edit files. Switch to the issue's feature branch / re-run issue-pickup, or stop and surface the mismatch (#4099, #3863)."
+    echo "GROUNDING FAILED — do NOT edit files. Switch to the issue's feature branch / re-run issue-pickup, or stop and surface the mismatch."
     exit 1
   }
 fi
@@ -162,7 +162,7 @@ When the gate prints `recommendation=pull-human` (grounded but no acceptance
 criteria), pause and request the missing context rather than guessing the
 premise.
 
-**Architecture-approval gate (#4098, #4135)** — a high-impact decision stays
+**Architecture-approval gate** — a high-impact decision stays
 human-owned: it must be approved by a human before feature-dev implements it.
 A decision is high-impact when ANY of these hold: ≥2 distinct architectural
 trade-off signals in the issue/ADR; a high-risk issue (`routing.risk_high`);
@@ -391,7 +391,7 @@ pass the Step 6.4 CI-parity HARD GATE before proceeding.
 suite MUST pass locally before proceeding. These checks are **blocking** —
 feature-dev MUST NOT report success if any of them fail. Swallowing failures
 here lets a broken PR through to `pr-create`, where CI catches it and blocks
-the merge. See issue #2779 for the incident that motivated this gate.
+the merge. See the CI-parity incident that motivated this gate.
 
 > **Read `_includes/review-and-correction.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
