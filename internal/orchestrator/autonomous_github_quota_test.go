@@ -19,7 +19,7 @@ func TestGitHubQuotaSnapshot(t *testing.T) {
 
 	tracker := gh.NewSharedRateLimitTracker(filepath.Join(t.TempDir(), "rl.json"))
 	reset := time.Now().Add(20 * time.Minute).Unix()
-	if err := tracker.Set("", &gh.RateLimitInfo{Remaining: 8, Limit: 5000, ResetAt: reset}); err != nil {
+	if err := tracker.Set("", gh.ResourceCore, &gh.RateLimitInfo{Remaining: 8, Limit: 5000, ResetAt: reset}); err != nil {
 		t.Fatalf("tracker.Set: %v", err)
 	}
 	client := gh.NewClientWithToken("x").WithRateLimitTracker(tracker, "")

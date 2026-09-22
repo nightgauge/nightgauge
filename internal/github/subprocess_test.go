@@ -80,7 +80,7 @@ func isolateSharedTracker(t *testing.T, seed *RateLimitInfo) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "rate-limit.json")
 	if seed != nil {
-		if err := NewSharedRateLimitTracker(path).Set("", seed); err != nil {
+		if err := NewSharedRateLimitTracker(path).Set("", ResourceCore, seed); err != nil {
 			t.Fatalf("seed tracker: %v", err)
 		}
 	}

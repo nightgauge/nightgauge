@@ -241,7 +241,7 @@ func TestSustainedHourBudgetSimulation(t *testing.T) {
 			Limit:     limit,
 			ResetAt:   resetAt.Unix(),
 		}
-		if err := tr.Set("alice", info); err != nil {
+		if err := tr.Set("alice", gh.ResourceCore, info); err != nil {
 			t.Fatalf("seed tracker: %v", err)
 		}
 

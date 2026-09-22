@@ -2193,7 +2193,7 @@ func (as *AutonomousScheduler) RateLimitRemaining() int {
 	if tracker == nil {
 		return -1
 	}
-	entry, _, err := tracker.GetBudget(as.ghClient.RateLimitTrackerUser())
+	entry, _, err := tracker.GetBudgetAcrossPools(as.ghClient.RateLimitTrackerUser())
 	if err != nil || entry == nil {
 		return -1
 	}
@@ -2213,7 +2213,7 @@ func (as *AutonomousScheduler) gitHubQuotaSnapshot() (remaining, limit int, rese
 	if tracker == nil {
 		return 0, 0, time.Time{}, false
 	}
-	entry, _, err := tracker.GetBudget(as.ghClient.RateLimitTrackerUser())
+	entry, _, err := tracker.GetBudgetAcrossPools(as.ghClient.RateLimitTrackerUser())
 	if err != nil || entry == nil {
 		return 0, 0, time.Time{}, false
 	}
@@ -6675,7 +6675,7 @@ func (as *AutonomousScheduler) hasDispatchHeadroom() (bool, string) {
 	if floor <= 0 {
 		return true, ""
 	}
-	entry, _, err := tracker.GetBudget(as.ghClient.RateLimitTrackerUser())
+	entry, _, err := tracker.GetBudgetAcrossPools(as.ghClient.RateLimitTrackerUser())
 	if err != nil || entry == nil {
 		return true, ""
 	}

@@ -99,7 +99,7 @@ func TestETagCache_ConditionalGETLifecycle(t *testing.T) {
 	}
 	state.mu.Unlock()
 
-	entry1, _, err := tr.Get("alice")
+	entry1, _, err := tr.Get("alice", ResourceCore)
 	if err != nil {
 		t.Fatalf("tracker.Get after first fetch: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestETagCache_ConditionalGETLifecycle(t *testing.T) {
 	}
 	state.mu.Unlock()
 
-	entry2, _, err := tr.Get("alice")
+	entry2, _, err := tr.Get("alice", ResourceCore)
 	if err != nil {
 		t.Fatalf("tracker.Get after second fetch: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestETagCache_ConditionalGETLifecycle(t *testing.T) {
 	}
 	state.mu.Unlock()
 
-	entry3, _, err := tr.Get("alice")
+	entry3, _, err := tr.Get("alice", ResourceCore)
 	if err != nil {
 		t.Fatalf("tracker.Get after third fetch: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestETagCache_ConditionalGETLifecycle(t *testing.T) {
 	}
 	state.mu.Unlock()
 
-	entry4, _, err := tr.Get("alice")
+	entry4, _, err := tr.Get("alice", ResourceCore)
 	if err != nil {
 		t.Fatalf("tracker.Get after fourth fetch: %v", err)
 	}

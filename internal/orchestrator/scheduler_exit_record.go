@@ -272,7 +272,7 @@ func (s *Scheduler) rateLimitRemainingAtExit() int {
 	if user == "" {
 		return -1
 	}
-	entry, ok, err := tracker.Get(user)
+	entry, ok, err := tracker.GetBudgetAcrossPools(user)
 	if err != nil || !ok || entry == nil {
 		return -1
 	}

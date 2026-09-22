@@ -31,14 +31,15 @@ func TestGateHoldsOnStaleExhaustion(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rate-limit.json")
 	reset := time.Now().Add(18 * time.Minute).Unix()
 	writeTrackerFile(t, path, map[string]*SharedTrackerEntry{
-		"alice": {Remaining: 0, Limit: 5000, ResetAt: reset,
+		"alice|graphql": {Remaining: 0, Limit: 5000, ResetAt: reset,
 			CheckedAt: time.Now().Add(-7*time.Hour - 44*time.Minute).Unix()},
 	})
 
 	wait, gated := headroomGate{
-		tracker: NewSharedRateLimitTracker(path),
-		user:    "alice",
-		logger:  func(string, ...interface{}) {},
+		tracker:  NewSharedRateLimitTracker(path),
+		user:     "alice",
+		resource: ResourceGraphQL,
+		logger:   func(string, ...interface{}) {},
 	}.resetWait()
 
 	if !gated {
@@ -56,15 +57,16 @@ func TestGateReleasesOnceTheWindowResets(t *testing.T) {
 	t.Setenv(rateLimitFloorEnv, "100")
 	path := filepath.Join(t.TempDir(), "rate-limit.json")
 	writeTrackerFile(t, path, map[string]*SharedTrackerEntry{
-		"alice": {Remaining: 0, Limit: 5000,
+		"alice|graphql": {Remaining: 0, Limit: 5000,
 			ResetAt:   time.Now().Add(-time.Second).Unix(),
 			CheckedAt: time.Now().Add(-time.Hour).Unix()},
 	})
 
 	if _, gated := (headroomGate{
-		tracker: NewSharedRateLimitTracker(path),
-		user:    "alice",
-		logger:  func(string, ...interface{}) {},
+		tracker:  NewSharedRateLimitTracker(path),
+		user:     "alice",
+		resource: ResourceGraphQL,
+		logger:   func(string, ...interface{}) {},
 	}).resetWait(); gated {
 		t.Fatal("gate held past its own reset second — callers would never proceed")
 	}
@@ -81,15 +83,16 @@ func TestBudgetIsSharedAcrossTrackerKeys(t *testing.T) {
 	now := time.Now().Unix()
 	writeTrackerFile(t, path, map[string]*SharedTrackerEntry{
 		// What the default client last saw: looks healthy.
-		"default": {Remaining: 3799, Limit: 5000, ResetAt: reset, CheckedAt: now},
+		"default|graphql": {Remaining: 3799, Limit: 5000, ResetAt: reset, CheckedAt: now},
 		// What the resolved per-user client last saw on the SAME window.
-		"alice": {Remaining: 4, Limit: 5000, ResetAt: reset, CheckedAt: now},
+		"alice|graphql": {Remaining: 4, Limit: 5000, ResetAt: reset, CheckedAt: now},
 	})
 
 	if _, gated := (headroomGate{
-		tracker: NewSharedRateLimitTracker(path),
-		user:    "", // collapses to "default" — internal/ipc/server.go
-		logger:  func(string, ...interface{}) {},
+		tracker:  NewSharedRateLimitTracker(path),
+		user:     "", // collapses to "default" — internal/ipc/server.go
+		resource: ResourceGraphQL,
+		logger:   func(string, ...interface{}) {},
 	}).resetWait(); !gated {
 		t.Fatal("default-keyed gate ignored an exhaustion recorded under the same account's other key")
 	}
@@ -103,14 +106,15 @@ func TestBudgetIgnoresAnotherAccountsWindow(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rate-limit.json")
 	now := time.Now().Unix()
 	writeTrackerFile(t, path, map[string]*SharedTrackerEntry{
-		"alice": {Remaining: 4200, Limit: 5000, ResetAt: time.Now().Add(30 * time.Minute).Unix(), CheckedAt: now},
-		"bob":   {Remaining: 0, Limit: 5000, ResetAt: time.Now().Add(9 * time.Minute).Unix(), CheckedAt: now},
+		"alice|graphql": {Remaining: 4200, Limit: 5000, ResetAt: time.Now().Add(30 * time.Minute).Unix(), CheckedAt: now},
+		"bob|graphql":   {Remaining: 0, Limit: 5000, ResetAt: time.Now().Add(9 * time.Minute).Unix(), CheckedAt: now},
 	})
 
 	if _, gated := (headroomGate{
-		tracker: NewSharedRateLimitTracker(path),
-		user:    "alice",
-		logger:  func(string, ...interface{}) {},
+		tracker:  NewSharedRateLimitTracker(path),
+		user:     "alice",
+		resource: ResourceGraphQL,
+		logger:   func(string, ...interface{}) {},
 	}).resetWait(); gated {
 		t.Fatal("alice gated on bob's exhaustion — different reset windows are different pools")
 	}
@@ -123,13 +127,13 @@ func TestGetBudgetReportsTheGoverningEntry(t *testing.T) {
 	reset := time.Now().Add(15 * time.Minute).Unix()
 	now := time.Now().Unix()
 	writeTrackerFile(t, path, map[string]*SharedTrackerEntry{
-		"default": {Remaining: 3799, Limit: 5000, ResetAt: reset, CheckedAt: now},
-		"alice":   {Remaining: 12, Limit: 5000, ResetAt: reset, CheckedAt: now},
-		"other":   {Remaining: 1, Limit: 5000, ResetAt: reset + 3600, CheckedAt: now},
+		"default|graphql": {Remaining: 3799, Limit: 5000, ResetAt: reset, CheckedAt: now},
+		"alice|graphql":   {Remaining: 12, Limit: 5000, ResetAt: reset, CheckedAt: now},
+		"other|graphql":   {Remaining: 1, Limit: 5000, ResetAt: reset + 3600, CheckedAt: now},
 	})
 	tr := NewSharedRateLimitTracker(path)
 
-	entry, _, err := tr.GetBudget("default")
+	entry, _, err := tr.GetBudget("default", ResourceGraphQL)
 	if err != nil {
 		t.Fatalf("GetBudget: %v", err)
 	}
@@ -139,7 +143,7 @@ func TestGetBudgetReportsTheGoverningEntry(t *testing.T) {
 
 	// Get is unchanged: it still answers "what is under MY key", which is what
 	// the writers and the doctor check want.
-	own, _, err := tr.Get("default")
+	own, _, err := tr.Get("default", ResourceGraphQL)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}

@@ -123,7 +123,7 @@ func TestRateLimitGate_TripsBelowFloor(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rate-limit.json")
 	tr := NewSharedRateLimitTracker(path)
 	resetAt := time.Now().Add(20 * time.Minute).Unix()
-	if err := tr.Set("alice", &RateLimitInfo{Remaining: 50, Limit: 5000, ResetAt: resetAt}); err != nil {
+	if err := tr.Set("alice", ResourceGraphQL, &RateLimitInfo{Remaining: 50, Limit: 5000, ResetAt: resetAt}); err != nil {
 		t.Fatalf("seed tracker: %v", err)
 	}
 
@@ -171,7 +171,7 @@ func TestRateLimitGate_NoOpAboveFloor(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "rate-limit.json")
 	tr := NewSharedRateLimitTracker(path)
-	if err := tr.Set("alice", &RateLimitInfo{
+	if err := tr.Set("alice", ResourceGraphQL, &RateLimitInfo{
 		Remaining: 4500, Limit: 5000,
 		ResetAt: time.Now().Add(30 * time.Minute).Unix(),
 	}); err != nil {
@@ -210,7 +210,7 @@ func TestRateLimitGate_StaleExhaustionStillGates(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "rate-limit.json")
 	tr := NewSharedRateLimitTracker(path)
-	if err := tr.Set("alice", &RateLimitInfo{
+	if err := tr.Set("alice", ResourceGraphQL, &RateLimitInfo{
 		Remaining: 5, Limit: 5000,
 		ResetAt: time.Now().Add(30 * time.Minute).Unix(),
 	}); err != nil {
@@ -221,7 +221,7 @@ func TestRateLimitGate_StaleExhaustionStillGates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	file.Entries["alice"].CheckedAt = time.Now().Unix() - int64(SharedTrackerMinCheckIntervalSecs) - 30
+	file.Entries["alice|graphql"].CheckedAt = time.Now().Unix() - int64(SharedTrackerMinCheckIntervalSecs) - 30
 	if err := tr.writeLocked(file); err != nil {
 		t.Fatal(err)
 	}
@@ -248,15 +248,15 @@ func TestRateLimitGate_NoOpWhenStaleAndNoReset(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "rate-limit.json")
 	tr := NewSharedRateLimitTracker(path)
-	if err := tr.Set("alice", &RateLimitInfo{Remaining: 5, Limit: 5000}); err != nil {
+	if err := tr.Set("alice", ResourceGraphQL, &RateLimitInfo{Remaining: 5, Limit: 5000}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	file, err := tr.readLocked()
 	if err != nil {
 		t.Fatal(err)
 	}
-	file.Entries["alice"].ResetAt = 0
-	file.Entries["alice"].CheckedAt = time.Now().Unix() - int64(SharedTrackerMinCheckIntervalSecs) - 30
+	file.Entries["alice|graphql"].ResetAt = 0
+	file.Entries["alice|graphql"].CheckedAt = time.Now().Unix() - int64(SharedTrackerMinCheckIntervalSecs) - 30
 	if err := tr.writeLocked(file); err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +282,7 @@ func TestRateLimitGate_NoOpWhenResetPassed(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "rate-limit.json")
 	tr := NewSharedRateLimitTracker(path)
-	if err := tr.Set("alice", &RateLimitInfo{
+	if err := tr.Set("alice", ResourceGraphQL, &RateLimitInfo{
 		Remaining: 5, Limit: 5000,
 		ResetAt: time.Now().Add(-1 * time.Minute).Unix(),
 	}); err != nil {
@@ -325,7 +325,7 @@ func TestRateLimitGate_EnvOverride(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "rate-limit.json")
 	tr := NewSharedRateLimitTracker(path)
-	if err := tr.Set("alice", &RateLimitInfo{
+	if err := tr.Set("alice", ResourceGraphQL, &RateLimitInfo{
 		Remaining: 200, Limit: 5000,
 		ResetAt: time.Now().Add(30 * time.Minute).Unix(),
 	}); err != nil {
@@ -377,7 +377,7 @@ func TestHeaderInterceptor_FeedsTracker(t *testing.T) {
 		t.Fatalf("call: %v", err)
 	}
 
-	entry, fresh, err := tr.Get("alice")
+	entry, fresh, err := tr.Get("alice", ResourceGraphQL)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -429,7 +429,7 @@ func TestHeaderInterceptor_SkipsResponsesWithoutHeaders(t *testing.T) {
 	if _, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
 		t.Fatalf("call: %v", err)
 	}
-	entry, _, err := tr.Get("alice")
+	entry, _, err := tr.Get("alice", ResourceGraphQL)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -478,7 +478,7 @@ func TestHeaderInterceptor_NoDoubleCount(t *testing.T) {
 		}
 	}
 
-	entry, _, _ := tr.Get("alice")
+	entry, _, _ := tr.Get("alice", ResourceGraphQL)
 	if entry == nil {
 		t.Fatal("expected entry")
 	}
@@ -546,14 +546,14 @@ func TestHeadroomGate_MatchesClientDecisions(t *testing.T) {
 			tr := NewSharedRateLimitTracker(path)
 			if tc.entry != nil {
 				if tc.checkedAt == 0 {
-					if err := tr.Set("alice", tc.entry); err != nil {
+					if err := tr.Set("alice", ResourceGraphQL, tc.entry); err != nil {
 						t.Fatalf("seed tracker: %v", err)
 					}
 				} else {
 					// Written by hand: Set always stamps CheckedAt with now, and
 					// the stale row is the one case that needs an older stamp.
 					file := sharedTrackerFile{Version: sharedTrackerFileVersion, Entries: map[string]*SharedTrackerEntry{
-						"alice": {
+						"alice|graphql": {
 							Remaining: tc.entry.Remaining,
 							Limit:     tc.entry.Limit,
 							ResetAt:   tc.entry.ResetAt,
@@ -574,7 +574,7 @@ func TestHeadroomGate_MatchesClientDecisions(t *testing.T) {
 			c := NewClientWithURL("test-token", "https://example.invalid/graphql").
 				WithRateLimitTracker(tr, "alice")
 			c.gateLogger = silent
-			clientWait, clientGated := c.rateLimitResetWait()
+			clientWait, clientGated := c.rateLimitResetWait(ResourceGraphQL)
 
 			gateWait, gateGated := headroomGate{tracker: tr, user: "alice", logger: silent}.resetWait()
 

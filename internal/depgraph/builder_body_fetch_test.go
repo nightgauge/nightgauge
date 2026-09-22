@@ -122,7 +122,7 @@ func TestBuildGraphWithBoards_BodyFetchHonorsRateLimitFloor(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	tr := gh.NewSharedRateLimitTracker(filepath.Join(t.TempDir(), "rate-limit.json"))
-	if err := tr.Set("alice", &gh.RateLimitInfo{
+	if err := tr.Set("alice", gh.ResourceGraphQL, &gh.RateLimitInfo{
 		Remaining: 5, Limit: 5000, ResetAt: time.Now().Add(time.Hour).Unix(),
 	}); err != nil {
 		t.Fatalf("seed tracker: %v", err)

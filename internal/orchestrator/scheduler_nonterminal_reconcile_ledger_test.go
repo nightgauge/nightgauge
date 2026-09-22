@@ -27,8 +27,10 @@ func gateEveryGhSubprocess(t *testing.T) {
 		t.Fatalf("seed home: %v", err)
 	}
 	tracker := filepath.Join(home, ".nightgauge", "rate-limit.json")
+	// Version 2, keyed (user, pool): a v1 file is dropped on read by design,
+	// and a `gh` child may spend either pool, so the exhausted one is enough.
 	body := fmt.Sprintf(
-		`{"version":1,"entries":{"default":{"remaining":1,"limit":5000,"resetAt":%d,"checkedAt":%d}}}`,
+		`{"version":2,"entries":{"default|graphql":{"remaining":1,"limit":5000,"resetAt":%d,"checkedAt":%d}}}`,
 		time.Now().Add(30*time.Minute).Unix(), time.Now().Unix())
 	if err := os.WriteFile(tracker, []byte(body), 0o644); err != nil {
 		t.Fatalf("seed tracker: %v", err)

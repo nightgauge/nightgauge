@@ -433,7 +433,7 @@ func TestContract_Board_RegisteredSurvivesExhaustedQuota(t *testing.T) {
 
 	trackerPath := filepath.Join(ipcTestHome, ".nightgauge", "rate-limit.json")
 	tracker := gh.NewSharedRateLimitTracker(trackerPath)
-	if err := tracker.Set("", &gh.RateLimitInfo{
+	if err := tracker.Set("", gh.ResourceCore, &gh.RateLimitInfo{
 		Remaining: 0,
 		Limit:     5000,
 		ResetAt:   time.Now().Add(45 * time.Minute).Unix(),
