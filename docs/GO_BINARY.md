@@ -865,9 +865,18 @@ When `--json` is set the verb emits:
   "documentation_scope": "standard",
   "rationale": "Standard path: M size, code change, complexity 3, high priority. Full pipeline execution.",
   "effective_size": "M",
+  "size_source": "board",
   "effective_priority": "high"
 }
 ```
+
+`size_source` says where `effective_size` came from: `foundation`, `board`,
+`label`, `planner` or `default`. `default` means nothing named a size and the
+verb assumed M, so the complexity, route and documentation scope were derived
+from that assumption; the rationale then reads "M size assumed" instead of
+"M size". An issue with no size still routes as M at pickup. The scheduler
+re-derives the routing once feature-planning has assessed a size (see
+[CONFIGURATION.md § Routing by cost per closed issue](CONFIGURATION.md#routing-by-cost-per-closed-issue)).
 
 Offline mode — pass issue number `0` plus all of `--size`, `--priority`,
 `--type` to derive a decision without touching GitHub. Useful for tests and

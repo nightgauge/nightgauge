@@ -4932,6 +4932,10 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		ChangeType:        routingDecision.ChangeType,
 		ComplexityScore:   routingDecision.ComplexityScore,
 	})
+	// High-risk model floor: feature-dev and feature-validate dispatch on at
+	// least Opus for a risk_high issue, applied with the minimum_model floors
+	// so the performance mode's ceiling still caps it.
+	modelFloors = raiseRiskFloors(modelFloors, routingDecision)
 	if skips := schedulerSkippableStages(routingDecision.SkipStages); len(skips) > 0 {
 		kept := make([]state.PipelineStage, 0, len(stages))
 		for _, st := range stages {
@@ -5142,7 +5146,11 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// alias — so every escalation, floor, and downgrade below has to have
 		// been applied by the time Render runs. The behavioral preamble still
 		// applies after the prompt is assembled; only the resolution moves.
-		model := s.resolveDispatchModel(stage, item.Number, workspaceRoot, predictedModel, modelFloors, issueJobClass)
+		// The run's routed tier is per stage for feature-dev: the Decision's
+		// size can put implementation on Opus (routedStageModel), while every
+		// other stage keeps the run-wide prediction.
+		model := s.resolveDispatchModel(stage, item.Number, workspaceRoot,
+			routedStageModel(stage, predictedModel, routingDecision), modelFloors, issueJobClass)
 
 		// Compose SKILL.md through the one renderer (#78), overlay-aware (#79).
 		// With no overlay files present this is byte-identical to a base-only
@@ -7205,6 +7213,36 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				item.Labels, workspaceRoot, stageWorkspace(runtime, workspaceRoot))
 		}
 
+		// #1909: a size-less issue was routed at pickup from an assumed M.
+		// Now that the planner has assessed a size, re-derive the Decision so
+		// feature-dev's tier and the recorded route come from that size.
+		if stage == state.StageFeaturePlanning {
+			if next, ok := plannerRoutingDecision(workspaceRoot, stageWorkspace(runtime, workspaceRoot), item, routingDecision); ok {
+				log.Printf("#%d: re-routed from the planner's size %s (was an assumed M): route %s → %s, complexity %d → %d (#1909)",
+					item.Number, next.EffectiveSize, routingDecision.SuggestedRoute, next.SuggestedRoute,
+					routingDecision.ComplexityScore, next.ComplexityScore)
+				routingDecision = next
+				issueRoutingPath = next.SuggestedRoute
+				// The run record reads complexity and route from here, and
+				// recordOutcome re-reads them from the issue context, so both
+				// carry the planner's size rather than the assumed M.
+				complexityScore = next.ComplexityScore
+				if err := recordPlannerRoutingDecision(workspaceRoot, stageWorkspace(runtime, workspaceRoot), item, next); err != nil {
+					log.Printf("#%d: could not write the re-derived routing into the issue context (non-fatal): %v", item.Number, err)
+				}
+				tracer.Emit(trace.KindChangeClass, "", trace.ChangeClassPayload{
+					SuggestedRoute:    next.SuggestedRoute,
+					MatchedChangeRule: next.MatchedChangeRule,
+					SkipStages:        next.SkipStages,
+					Rationale:         next.Rationale,
+					RiskHigh:          next.RiskHigh,
+					RiskReasons:       next.RiskReasons,
+					ChangeType:        next.ChangeType,
+					ComplexityScore:   next.ComplexityScore,
+				})
+			}
+		}
+
 		// Issue #3542: after a successful feature-dev stage, check whether the
 		// Stop hook signaled incomplete tasks (stop-hook-status-{N}.json). In
 		// the #3365 incident the stop hook returned OK=false while the agent
@@ -7918,17 +7956,52 @@ func traceAlternatives(alts []routing.Alternative) []trace.RoutingAlternative {
 }
 
 func deriveRoutingDecision(workspaceRoot string, item types.BoardItem) routing.Decision {
+	return deriveRoutingDecisionWithPlannerSize(workspaceRoot, item, "")
+}
+
+// deriveRoutingDecisionWithPlannerSize is deriveRoutingDecision with the size
+// feature-planning assessed as the last size source before the default M
+// (#1909). A board size or `size:*` label still wins over it.
+func deriveRoutingDecisionWithPlannerSize(workspaceRoot string, item types.BoardItem, plannerSize string) routing.Decision {
 	in := routing.DeriveInput{
 		Title:         item.Title,
 		Labels:        item.Labels,
 		BoardSize:     string(item.Size),
 		BoardPriority: string(item.Priority),
+		PlannerSize:   plannerSize,
 	}
 	if cfg, err := config.Load(workspaceRoot); err == nil && cfg != nil && cfg.Routing != nil {
 		in.ForceFullPipeline = cfg.Routing.ForceFullPipeline
 		in.ChangeRules = cfg.Routing.ChangeRules
 	}
 	return routing.Derive(in)
+}
+
+// plannerRoutingDecision re-derives a run's routing Decision from the size
+// feature-planning assessed, when the Decision the run started from had no
+// size and assumed M (#1909). ok=false leaves prior in force: the size came
+// from a real source, or the plan named no usable size.
+//
+// Routing is decided at pickup and the planner's size only exists after
+// feature-planning, so without this the default M routed the whole run. The
+// re-derived Decision replaces the run's for everything still ahead of it —
+// feature-dev's implementation tier (ImplementationBand) and the route the run
+// record carries. It does NOT newly skip a stage: the only skippable stage
+// still ahead is feature-validate, and a planner's smaller size removing
+// validation mid-run would trade rigor for a size nobody set. The skip set
+// stays the one the run started with.
+func plannerRoutingDecision(workspaceRoot, worktreeDir string, item types.BoardItem, prior routing.Decision) (routing.Decision, bool) {
+	if prior.SizeSource != routing.SizeSourceDefault {
+		return prior, false
+	}
+	assessment := execution.LoadPlannerAssessment(workspaceRoot, worktreeDir, item.Repo, item.Number)
+	size := PlannerSizeFromAssessment(assessment.SizeLabel, assessment.Score)
+	if size == "" {
+		return prior, false
+	}
+	next := deriveRoutingDecisionWithPlannerSize(workspaceRoot, item, size)
+	next.SkipStages = prior.SkipStages
+	return next, true
 }
 
 // gateRelaxContext returns ctx augmented with the gate-relaxation flag (#4128)
@@ -8438,66 +8511,28 @@ func (s *Scheduler) shouldReRoute(workspaceRoot, worktreeDir, repo string, issue
 // full recommendation so the caller can trace the decision with its
 // reasoning and rejected alternatives (#179).
 func (s *Scheduler) reRouteContext(ctx context.Context, workspaceRoot, worktreeDir, repo string, issueNumber int, oldModel string) (routing.Recommendation, error) {
-	// Rewrite the file the stages actually read. Writing to the workspace root
-	// unconditionally would leave the real context — in the worktree —
-	// untouched while creating a decoy beside it (#994).
-	contextPath := resolveIssueContextPath(workspaceRoot, worktreeDir, repo, issueNumber)
-	if contextPath == "" {
-		contextPath = filepath.Join(workspaceRoot, ".nightgauge", "pipeline",
-			fmt.Sprintf("issue-%d.json", issueNumber))
-	}
-
-	data, err := os.ReadFile(contextPath)
-	if err != nil {
-		return routing.Recommendation{}, fmt.Errorf("read context: %w", err)
-	}
-
-	var raw map[string]interface{}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return routing.Recommendation{}, fmt.Errorf("unmarshal context: %w", err)
-	}
-
-	// Extract complexity score (preserved — not re-estimated)
-	complexityScore := 0
-	if routingRaw, ok := raw["routing"].(map[string]interface{}); ok {
+	var rec routing.Recommendation
+	err := rewriteIssueContextRouting(workspaceRoot, worktreeDir, repo, issueNumber, func(routingRaw map[string]interface{}) {
+		// Extract complexity score (preserved — not re-estimated)
+		complexityScore := 0
 		if cs, ok := routingRaw["complexity_score"].(float64); ok {
 			complexityScore = int(cs)
 		}
-	}
 
-	// Get fresh recommendation using the stateless router (reads current perf-mode)
-	router := routing.NewRouter(nil, workspaceRoot)
-	rec := router.Route(ctx, "feature-dev", complexity.Score{Value: complexityScore})
+		// Get fresh recommendation using the stateless router (reads current perf-mode)
+		router := routing.NewRouter(nil, workspaceRoot)
+		rec = router.Route(ctx, "feature-dev", complexity.Score{Value: complexityScore})
 
-	// Update only routing fields — complexity and other invariants are unchanged
-	if routingRaw, ok := raw["routing"].(map[string]interface{}); ok {
+		// Update only routing fields — complexity and other invariants are unchanged
 		if pickupRec, ok := routingRaw["pickup_recommendation"].(map[string]interface{}); ok {
 			pickupRec["dev_model"] = rec.Model
 		} else {
 			routingRaw["pickup_recommendation"] = map[string]interface{}{"dev_model": rec.Model}
 		}
 		routingRaw["rationale"] = rec.Reasoning
-	}
-
-	updated, err := json.MarshalIndent(raw, "", "  ")
+	})
 	if err != nil {
-		return routing.Recommendation{}, fmt.Errorf("marshal context: %w", err)
-	}
-
-	// Validate JSON before writing
-	var check interface{}
-	if err := json.Unmarshal(updated, &check); err != nil {
-		return routing.Recommendation{}, fmt.Errorf("validate updated context: %w", err)
-	}
-
-	// Atomic write: temp file + rename to avoid partial writes
-	tmpPath := contextPath + ".tmp"
-	if err := os.WriteFile(tmpPath, updated, 0o644); err != nil {
-		return routing.Recommendation{}, fmt.Errorf("write temp context: %w", err)
-	}
-	if err := os.Rename(tmpPath, contextPath); err != nil {
-		_ = os.Remove(tmpPath)
-		return routing.Recommendation{}, fmt.Errorf("rename context: %w", err)
+		return routing.Recommendation{}, err
 	}
 
 	if rec.Model != oldModel {
@@ -8506,6 +8541,70 @@ func (s *Scheduler) reRouteContext(ctx context.Context, workspaceRoot, worktreeD
 	}
 
 	return rec, nil
+}
+
+// rewriteIssueContextRouting is the one read-modify-write of the issue
+// context's `routing` object (issue-{N}.json) the scheduler performs: it
+// resolves the file the stages actually read (the worktree's on an isolated
+// run — writing to the root unconditionally would leave the real context
+// untouched while creating a decoy beside it, #994), hands `routing` to edit,
+// and writes the result atomically (temp + rename). A context whose routing is
+// absent or null is left without one — a partial object would fail the
+// schema's required fields — while edit still runs, on a detached map.
+func rewriteIssueContextRouting(workspaceRoot, worktreeDir, repo string, issueNumber int, edit func(routingRaw map[string]interface{})) error {
+	contextPath := resolveIssueContextPath(workspaceRoot, worktreeDir, repo, issueNumber)
+	if contextPath == "" {
+		contextPath = filepath.Join(workspaceRoot, ".nightgauge", "pipeline",
+			fmt.Sprintf("issue-%d.json", issueNumber))
+	}
+
+	data, err := os.ReadFile(contextPath)
+	if err != nil {
+		return fmt.Errorf("read context: %w", err)
+	}
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("unmarshal context: %w", err)
+	}
+
+	routingRaw, ok := raw["routing"].(map[string]interface{})
+	if !ok {
+		routingRaw = map[string]interface{}{}
+	}
+	edit(routingRaw)
+
+	updated, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal context: %w", err)
+	}
+
+	// Atomic write: temp file + rename to avoid partial writes
+	tmpPath := contextPath + ".tmp"
+	if err := os.WriteFile(tmpPath, updated, 0o644); err != nil {
+		return fmt.Errorf("write temp context: %w", err)
+	}
+	if err := os.Rename(tmpPath, contextPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("rename context: %w", err)
+	}
+	return nil
+}
+
+// recordPlannerRoutingDecision writes a planner-re-derived Decision (#1909)
+// into the issue context the later stages and the run record read: the route
+// (`suggested_route`), the complexity (`complexity_score`, the same Fibonacci
+// scale the schema carries) and the rationale. skip_stages is not touched —
+// the re-derivation keeps the skip set the run started with — and neither is
+// pickup_recommendation.dev_model: the run-wide tier every reasoning stage
+// shares stays the router's, and only feature-dev's dispatch is raised
+// (routedStageModel).
+func recordPlannerRoutingDecision(workspaceRoot, worktreeDir string, item types.BoardItem, d routing.Decision) error {
+	return rewriteIssueContextRouting(workspaceRoot, worktreeDir, item.Repo, item.Number, func(routingRaw map[string]interface{}) {
+		routingRaw["suggested_route"] = d.SuggestedRoute
+		routingRaw["complexity_score"] = d.ComplexityScore
+		routingRaw["rationale"] = d.Rationale
+	})
 }
 
 // loadGateResults reads quality gate results for the given issue.
@@ -8966,7 +9065,7 @@ func (s *Scheduler) resolveDispatchModel(
 	// reflects the floored tier.
 	if floor := stageModelFloor(modelFloors, string(stage)); floor != "" {
 		if raised := enforceMinimumModel(model, floor); raised != model {
-			log.Printf("#%d: stage %s — model_routing.minimum_model floor %q raised %s → %s",
+			log.Printf("#%d: stage %s — minimum-model floor %q raised %s → %s",
 				issueNumber, stage, floor, model, raised)
 			model = raised
 		}
