@@ -324,6 +324,68 @@ func TestOpenCodeConfigVerbMatchesTheAdapter(t *testing.T) {
 	}
 }
 
+// TestOpenCodeConfigVerbEnvKeysMatchGoldenFixture (#1804) is the drift guard
+// two independent reviews of this fix round both landed on: a parity test
+// that only reads opencodeplugin's exported `Env*` constants is structurally
+// blind to a variable set by a bare string literal — OPENCODE_DISABLE_PROJECT_CONFIG
+// is set inline at InstallNightgaugePlugin's call site (opencode.go), not one
+// of those constants — or set somewhere else in the isolation env entirely
+// (HOME, OpenCodeIsolationEnv, opencode_isolation.go). Both slipped past a
+// constants-only parity test once already. This test runs the real verb, the
+// same one an SDK caller runs, and pins the exact key set it prints against
+// internal/execution/testdata/opencode_config_verb_env_keys.golden.json —
+// the file tests/cli/childEnv.test.ts reads on the TS side to assert every
+// one of these keys is accepted by the TS allowlist. A key this test does not
+// know about is exactly as invisible to that TS assertion, so keeping this
+// test green is what keeps the two lists from drifting apart again.
+//
+// NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK is deliberately not in the
+// fixture: operatorInstallRisk (opencode_plugin_deps.go) only sets it when an
+// operator's OpenCode install directory is at risk, which this bare
+// invocation's fresh, empty $HOME never is. Its own accept-but-withhold
+// contract is pinned by TestOpenCodeBuildCommandWithholdsOperatorInstallRiskFromTheChild
+// on this side and by dedicated tests in opencodeAdapter.test.ts on the TS
+// side, not by this fixture.
+func TestOpenCodeConfigVerbEnvKeysMatchGoldenFixture(t *testing.T) {
+	worktree := isolateOpenCodeVerb(t, openCodeVerbMachineConfig)
+	out, err := runOpenCodeVerb(t, "--stage", "feature-dev", "--worktree", worktree, "--run-id", openCodeVerbRunID, "--json")
+	if err != nil {
+		t.Fatalf("the verb failed: %v", err)
+	}
+	var run adapters.OpenCodeRun
+	if err := json.Unmarshal([]byte(out), &run); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, 0, len(run.Env))
+	for k := range run.Env {
+		got = append(got, k)
+	}
+	slices.Sort(got)
+
+	goldenPath := filepath.Join("..", "..", "internal", "execution", "testdata", "opencode_config_verb_env_keys.golden.json")
+	raw, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("reading the golden fixture: %v", err)
+	}
+	var golden struct {
+		Keys []string `json:"keys"`
+	}
+	if err := json.Unmarshal(raw, &golden); err != nil {
+		t.Fatalf("parsing the golden fixture: %v", err)
+	}
+
+	if !slices.Equal(got, golden.Keys) {
+		t.Errorf(
+			"the verb's env keys drifted from %s.\n  golden: %v\n  got:    %v\n"+
+				"If this is a deliberate new variable, add it to childEnv.ts's "+
+				"OPENCODE_RUN_ENV_NAMES (or OPENCODE_RUN_ENV_WITHHELD_NAMES if it "+
+				"must never reach the child) first, then regenerate this fixture "+
+				"with the sorted key set above.",
+			goldenPath, golden.Keys, got,
+		)
+	}
+}
+
 // TestOpenCodeConfigVerbRefuses: every refusal the adapter makes before
 // spawning fails the verb with a reason, and nothing is printed on stdout for
 // a caller to spawn with.
