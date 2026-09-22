@@ -114,6 +114,13 @@ jobs:
       # explain trains people to dismiss reds.
       - name: ci-local.sh concurrency and failure-reporting contract
         run: bash scripts/test-ci-local-concurrency.sh
+      # The local gate's change-scoping contract (#1985). `--changed` can remove
+      # the two Go suites from a local run, and this is what holds the rule that
+      # a skipped step is reported as a third state and never as a pass. CI is
+      # the right place for it precisely because CI never runs `--changed`: the
+      # property would otherwise be observed only by the people relying on it.
+      - name: ci-local.sh change-scoping contract
+        run: bash scripts/test-ci-local-changed-scope.sh
       - name: Agent-skill install target regression suite
         run: bash scripts/test-install-agent-skills-targets.sh
       # Read-only, and free to sit anywhere in this job: `--check-mirror`
