@@ -1533,6 +1533,31 @@ func (rs *RuntimeState) SupersedePhase(stage PipelineStage, name string, index, 
 	})
 }
 
+// RecordSettledPhase appends a phase record that is terminal on arrival and
+// carries its own measured bounds (#1651).
+//
+// The scheduler's feature-dev sub-sessions use it to record one entry per
+// session. BeginPhase cannot: each session's own skill markers call
+// BeginPhase too, which settles every running phase of the stage, so a
+// sub-session record opened with it would be closed by the first marker the
+// session emitted and report that instant as its duration. Recording after
+// the session returns, with the times the scheduler measured, is the only
+// shape that keeps the duration true.
+func (rs *RuntimeState) RecordSettledPhase(stage PipelineStage, name string, index, total int, status string, startedAt, completedAt time.Time) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	done := completedAt
+	rs.PhaseHistory = append(rs.PhaseHistory, PhaseRecord{
+		Stage:       stage,
+		Name:        name,
+		Index:       index,
+		Total:       total,
+		Status:      status,
+		StartedAt:   startedAt,
+		CompletedAt: &done,
+	})
+}
+
 // CloseRunningPhases terminates any phase of `stage` still marked running
 // (#1009), returning how many it closed.
 //

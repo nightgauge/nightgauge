@@ -16,6 +16,29 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **feature-dev runs as bounded sub-sessions on small context windows
+  (#1651).** When the dispatch model's resolved window is known and below
+  200,000 tokens (ADR-023 Q7, amended with the concrete policy), the Go
+  scheduler runs feature-dev as one fresh session per unchecked task in the
+  plan named by `planning-{N}.json`, in order, at most 12 sessions. The
+  sessions share the stage's cost ceiling: each gets what the earlier ones
+  left, and none starts once it is spent. Each
+  session's prompt is the unchanged rendered skill first, then a "step K of
+  N" preamble, the handoff git derived after the previous step, and the step
+  text last, in a code fence it cannot close and cut at 2 KiB with a note.
+  Sessions never resume an earlier session. After each step the scheduler
+  writes `dev-{N}.json` from git with `handoff_source: derived` and a `step`
+  index; a last session that wrote its own handoff keeps it. A session that
+  changes no deliverable file and checks no task stops the stage as
+  `dev_produced_no_changes`; a failed session ends the stage with no step
+  retry. A `plan_file` that does not resolve, after `EvalSymlinks`, to a
+  regular file inside the worktree refuses the stage. The run record gets one
+  `sub-session-K` phase per session, with its duration, and its tokens in the
+  phase name, because the phase record has no token field. The feature-dev
+  gate still runs once, after the last step. Larger or unknown windows, the
+  VS Code (IPC) runner, which builds its own prompt, and runs with no plan
+  keep today's single session.
+
 - **The SDK's OpenCode adapter runs under the Go per-run config (#1648), and
   checks the plugin handshake (#1804).** Before this, the SDK adapter refused
   every stage because nothing supplied its run config. Now each stage runs
@@ -221,6 +244,12 @@ create --body-file` call, so the compact profile (and its tests) pin
   ADR-022 § 18 stands.
 
 ### Fixed
+
+- **A cancelled or timed-out Go-direct stage now kills its whole process
+  group (#1651).** `execution.Manager` spawned stages as group leaders but
+  let the stage context's cancel signal only the direct child, so a process
+  the stage had backgrounded survived, and because it held the output pipes
+  open, `RunStage` did not return until that process exited.
 
 - **Live skill evals no longer give the scenario model tools or the
   operator's checkout.** `LiveClaudeModelRunner` spawned `claude --print` with

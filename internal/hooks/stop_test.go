@@ -370,3 +370,35 @@ func setupFakeBranch(t *testing.T, dir, branch string) {
 		t.Fatal(err)
 	}
 }
+
+// The task list rides on the same parse as the counts (#1651), so the
+// scheduler's feature-dev sub-sessions and the stop hook can never disagree
+// about which tasks a plan has.
+func TestParsePlanFile_ListsTasksInOrder(t *testing.T) {
+	dir := t.TempDir()
+	plan := "# Plan\n- [x] Done first\n- [ ]   Second, open  \nprose\n  - [ ] Nested third\n"
+	planPath := filepath.Join(dir, "PLAN.md")
+	if err := os.WriteFile(planPath, []byte(plan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	status, err := ParsePlanFile(planPath)
+	if err != nil {
+		t.Fatalf("ParsePlanFile: %v", err)
+	}
+	want := []PlanTask{
+		{Text: "Done first", Done: true, Line: 2},
+		{Text: "Second, open", Line: 3},
+		{Text: "Nested third", Line: 5},
+	}
+	if len(status.Tasks) != len(want) {
+		t.Fatalf("Tasks = %+v, want %+v", status.Tasks, want)
+	}
+	for i := range want {
+		if status.Tasks[i] != want[i] {
+			t.Errorf("Tasks[%d] = %+v, want %+v", i, status.Tasks[i], want[i])
+		}
+	}
+	if status.Total != len(status.Tasks) {
+		t.Errorf("Total %d disagrees with %d listed tasks", status.Total, len(status.Tasks))
+	}
+}

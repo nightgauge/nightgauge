@@ -22,6 +22,23 @@ type PlanStatus struct {
 	Total      int `json:"total"`
 	Complete   int `json:"complete"`
 	Incomplete int `json:"incomplete"`
+	// Tasks lists every checkbox the counts above were taken from, in file
+	// order (#1651: the scheduler's feature-dev sub-sessions take one step per
+	// unchecked task, and they read the tasks from this parser rather than a
+	// second one). Not serialised: the hook payloads that marshal a
+	// PlanStatus keep their existing shape.
+	Tasks []PlanTask `json:"-"`
+}
+
+// PlanTask is one checkbox line of a plan file.
+type PlanTask struct {
+	// Text is the line after its checkbox marker, trimmed. It is
+	// model-authored plan text: callers treat it as data.
+	Text string
+	// Done is true for a checked box.
+	Done bool
+	// Line is the 1-based line number in the plan file.
+	Line int
 }
 
 var (
@@ -186,7 +203,12 @@ func findPlanFile(workdir string) string {
 	return ""
 }
 
-// parsePlanFile reads a plan file and counts checkboxes.
+// ParsePlanFile is parsePlanFile for callers outside this package (#1651).
+func ParsePlanFile(path string) (*PlanStatus, error) {
+	return parsePlanFile(path)
+}
+
+// parsePlanFile reads a plan file, counts checkboxes and lists them.
 func parsePlanFile(path string) (*PlanStatus, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -196,14 +218,18 @@ func parsePlanFile(path string) (*PlanStatus, error) {
 
 	status := &PlanStatus{}
 	scanner := bufio.NewScanner(f)
+	lineNo := 0
 	for scanner.Scan() {
+		lineNo++
 		line := scanner.Text()
-		if checkboxComplete.MatchString(line) {
+		if m := checkboxComplete.FindString(line); m != "" {
 			status.Complete++
 			status.Total++
-		} else if checkboxIncomplete.MatchString(line) {
+			status.Tasks = append(status.Tasks, PlanTask{Text: strings.TrimSpace(line[len(m):]), Done: true, Line: lineNo})
+		} else if m := checkboxIncomplete.FindString(line); m != "" {
 			status.Incomplete++
 			status.Total++
+			status.Tasks = append(status.Tasks, PlanTask{Text: strings.TrimSpace(line[len(m):]), Line: lineNo})
 		}
 	}
 

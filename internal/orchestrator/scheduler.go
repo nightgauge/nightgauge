@@ -5713,7 +5713,12 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// extended connectivity outage (Issue #3296).
 			stageCtx, cancelStage := context.WithCancelCause(ctx)
 			s.registerActiveStage(item.Number, cancelStage)
-			result, stageRunErr = s.stageRunner.RunStage(stageCtx, stageParams)
+			if stage == state.StageFeatureDev {
+				// Bounded sub-sessions when ADR-023 Q7 enables them (#1651).
+				result, stageRunErr = s.runFeatureDevStage(stageCtx, stageParams, skillData.ContextWindow, ws)
+			} else {
+				result, stageRunErr = s.stageRunner.RunStage(stageCtx, stageParams)
+			}
 			s.unregisterActiveStage(item.Number)
 			// If the cancellation cause was ErrNetworkUnavailable, surface a
 			// typed error to the failure handler so it can classify the
