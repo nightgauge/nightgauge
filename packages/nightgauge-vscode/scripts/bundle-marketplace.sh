@@ -51,6 +51,14 @@ for skill in nightgauge-issue-pickup nightgauge-feature-planning \
     if [ -d "$src/_includes" ]; then
       rsync -a "$src/_includes/" "$dest/_includes/"
     fi
+    # Bundle the compact render profile (ADR 023 §Q5, #1654) the same way:
+    # `nightgauge skill render --profile compact` resolves
+    # <skillDir>/_profiles/<profile>.md relative to wherever SKILL.md
+    # actually lives, so a customer repo running only against this bundle
+    # needs the file on disk here too, not just in the source tree.
+    if [ -d "$src/_profiles" ]; then
+      rsync -a "$src/_profiles/" "$dest/_profiles/"
+    fi
   fi
 done
 # Copy shared includes so <!-- include: ../_shared/... --> directives resolve

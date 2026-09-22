@@ -54,6 +54,7 @@ func skillRenderCmd() *cobra.Command {
 		jsonOutput     bool
 		includeContent bool
 		contextWindow  int
+		profile        string
 	)
 	cmd := &cobra.Command{
 		Use:   "render",
@@ -98,7 +99,10 @@ and the frontmatter tool lists renders once rather than twice.`,
   nightgauge skill render --stage pr-merge --model opus --skills-root ./skills --json --include-content
 
   # Context-budget fit check against a model's window (ADR 023, #1645)
-  nightgauge skill render --stage pr-merge --skills-root ./skills --context-window 32768`,
+  nightgauge skill render --stage pr-merge --skills-root ./skills --context-window 32768
+
+  # Compact profile: stage skeleton + on-demand Read directives (ADR 023 §Q5, #1654)
+  nightgauge skill render --stage pr-merge --skills-root ./skills --profile compact`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if stage == "" {
 				return fmt.Errorf("--stage is required (one of: %s)", strings.Join(knownStages(), ", "))
@@ -109,11 +113,19 @@ and the frontmatter tool lists renders once rather than twice.`,
 			if includeContent && !jsonOutput {
 				return fmt.Errorf("--include-content requires --json (without it the composed text is already stdout)")
 			}
+			// Same refusal shape as --include-content above: an unrecognized
+			// value silently rendering full (rather than erroring) is exactly
+			// the "flag that no-ops" defect class. "" and "full" both mean
+			// "no compact" (skillrender.Options.Profile's own contract).
+			if profile != "" && profile != "full" && profile != skillrender.ProfileCompact {
+				return fmt.Errorf("--profile must be \"full\" or %q (or omitted), got %q", skillrender.ProfileCompact, profile)
+			}
 			res, err := skillrender.Render(skillrender.Options{
 				Stage:       stage,
 				Model:       model,
 				Adapter:     adapter,
 				SkillsRoots: roots,
+				Profile:     profile,
 				// Warnings go to stderr so they never corrupt piped stdout,
 				// which is the composed prompt a caller feeds to an agent.
 				Warn: func(msg string) { fmt.Fprintln(os.Stderr, "warning:", msg) },
@@ -169,6 +181,7 @@ and the frontmatter tool lists renders once rather than twice.`,
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit the provenance envelope instead of the composed text")
 	cmd.Flags().BoolVar(&includeContent, "include-content", false, "With --json, carry the composed text in the envelope's \"content\" field (one spawn instead of two)")
 	cmd.Flags().IntVar(&contextWindow, "context-window", 0, "Model context window in tokens; when > 0, checks the render fits the stage's ADR-023 share and exits non-zero when it does not (0: no check, byte-identical to today)")
+	cmd.Flags().StringVar(&profile, "profile", "", "Render profile: \"full\" (default, omitting the flag is identical) or \"compact\" (ADR 023 §Q5, #1654). A stage with no compact profile falls back to full, with a warning.")
 	return cmd
 }
 
