@@ -20,7 +20,7 @@
  */
 
 import type { spawn as nodeSpawn } from "node:child_process";
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, relative, resolve } from "node:path";
 
 import type { SDKQueryFunction } from "../../orchestrator/StageExecutor.js";
 import { isLocalProvider, providerFor } from "../../eval/modelRegistry.js";
@@ -37,7 +37,9 @@ import {
   OPENCODE_CONFIG_CONTENT_ENV,
   OPENCODE_DISABLE_FLAGS,
   OPENCODE_ISOLATION_XDG,
-  isOpenCodeRunEnvName,
+  OPENCODE_PLUGIN_PATH_ENV,
+  OPENCODE_PLUGIN_SENTINEL_ENV,
+  isOpenCodeRunEnvAccepted,
 } from "./childEnv.js";
 import {
   OPENCODE_PLATFORM_PROVIDERS,
@@ -285,7 +287,7 @@ function checkRunConfig(config: unknown): OpenCodeRunConfig {
   if (typeof c.env !== "object" || c.env === null) invalidRunConfig("it has no environment");
   const env = c.env as Record<string, unknown>;
   for (const [name, value] of Object.entries(env)) {
-    if (!isOpenCodeRunEnvName(name))
+    if (!isOpenCodeRunEnvAccepted(name))
       invalidRunConfig(`it sets ${name}, which is not a run variable`);
     if (typeof value !== "string") invalidRunConfig(`its ${name} is not a string`);
   }
@@ -297,6 +299,22 @@ function checkRunConfig(config: unknown): OpenCodeRunConfig {
   }
   for (const name of OPENCODE_DISABLE_FLAGS) {
     if (env[name] !== "1") invalidRunConfig(`it does not set ${name}=1`);
+  }
+  // NIGHTGAUGE_OPENCODE_PLUGIN_PATH is `run.PluginDir`-rooted
+  // (`filepath.Join(root, "config", "opencode", "nightgauge-plugin")`,
+  // opencode_config.go), and NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL is
+  // `opencodeplugin.SentinelPath`'s `runDir` branch — both always under the
+  // run's own root for a config this provider builds. The plugin's own init
+  // writes the sentinel file verbatim at this path (fs.writeFileSync,
+  // plugin/nightgauge.js), truncating whatever is already there, so an
+  // out-of-root or relative value here is refused rather than trusted.
+  for (const name of [OPENCODE_PLUGIN_PATH_ENV, OPENCODE_PLUGIN_SENTINEL_ENV]) {
+    const v = env[name];
+    if (v === undefined) continue;
+    const rel = relative(c.runDir!, v as string);
+    if (!isAbsolute(v as string) || rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
+      invalidRunConfig(`its ${name} is not an absolute path in the run's root`);
+    }
   }
   if (
     env[OPENCODE_CONFIG_CONTENT_ENV] !== undefined &&
