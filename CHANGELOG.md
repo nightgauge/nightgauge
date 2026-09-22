@@ -180,15 +180,30 @@ changelog, and the release workflow refuses a tag that does not.
   new `TestEveryStageConstantIsRenderable` instead iterates the
   `state.PipelineStage` constants and catches exactly this shape of bug.
 - **A pipeline failure after a merge the forge already confirmed no longer
-  reverts the board back to Ready (#1969).** #1650's own failure (above) also
-  moved the issue's Status back to Ready even though PR #1966 had merged and
-  the issue had closed — a terminal verdict contradicting observable forge
-  state, the same class of defect as #1848. `shouldSkipBoardRevert`
-  (extracted from `runPipeline`'s inline condition in
-  `internal/orchestrator/scheduler.go`, so it is unit-testable on its own) now
-  also skips the revert when `RuntimeState.MergedCommitSha` is set — the
-  `#4133` post-merge ground-truth breadcrumb, recorded only after the PR's
-  `MERGED` state is verified — regardless of what a later stage does.
+  reverts the board back to Ready, on either the CLI/queue-run path or the
+  autonomous daemon (#1969).** #1650's own failure (above) also moved the
+  issue's Status back to Ready even though PR #1966 had merged and the issue
+  had closed — a terminal verdict contradicting observable forge state, the
+  same class of defect as #1848. `shouldSkipBoardRevert` (extracted from
+  `runPipeline`'s inline condition in `internal/orchestrator/scheduler.go`,
+  so it is unit-testable on its own) now also skips the revert when
+  `RuntimeState.MergedCommitSha` is set — the `#4133` post-merge
+  ground-truth breadcrumb, recorded only after the PR's `MERGED` state is
+  verified — regardless of what a later stage does. A follow-up review found
+  scheduler.go's own board write skipping was not enough: the always-running
+  `AutonomousScheduler.onPipelineComplete` (`internal/orchestrator/
+autonomous.go`) is a separate call, sequential rather than nested, and
+  independently incremented failure counters, fed the cascade breaker, and
+  reverted the board again in its GENERIC failure branch. It now takes a
+  `merged bool` carrying the same breadcrumb from the CLI/auto wrapper (the
+  extension/IPC path always passes `false` — that breadcrumb has no
+  extension-side equivalent) and skips all three when set, mirroring the
+  existing `branch_forked`/`commit_orphaned` pattern.
+  `state.AllPipelineStages`, exported next to the `PipelineStage` constants
+  (`internal/state/board_state.go`), replaces the reachability guard's own
+  hand-copied stage list; a new `TestAllPipelineStagesMatchesDeclaredConstants`
+  parses `board_state.go`'s AST so a future stage constant can no longer be
+  silently missing from either list.
 - **`scripts/branch-merged-check.sh` can now judge a remote-only branch, so a
   merged branch whose worktree (and local ref) was already removed can be
   swept by the sanctioned path instead of accumulating forever (#1990).** When
@@ -199,7 +214,18 @@ changelog, and the release workflow refuses a tag that does not.
   new `SAFE-DELETE`/`KEEP` path) in the output text. The exit-code contract is
   unchanged: only `0` authorizes deletion. `nightgauge-internal`'s vendored
   copy and `branch-cleanup.sh` (which lives only there) are out of scope for
-  this repository's PR and are the orchestrator's to re-copy and update.
+  this repository's PR and are the orchestrator's to re-copy and update. A
+  follow-up review found the remote-only path trusted a cached
+  remote-tracking ref as-is; it now cross-checks that cache against `git
+ls-remote origin refs/heads/<branch>` before judging anything, refusing
+  (`UNKNOWN`/exit `2`) on any staleness or lookup failure, and folds the
+  confirmed live SHA into the verdict line so a deleter can pin a delete to
+  it with `--force-with-lease`. `HEAD` and a remote-only name matching the
+  base branch's own short name are also refused rather than judged, since
+  both would otherwise compare a ref to itself and read a trivially-true
+  ancestor. `scripts/test-branch-merged-check.sh` runs from `git rev-parse
+--show-toplevel`, so it always tests the checkout the cwd is in — run it
+  from the worktree under test.
 - **A `network_unavailable` readiness refusal no longer feeds the cascading-
   failure breaker (#1989, AC4 gap in #1646).** The failure handler in
   `internal/orchestrator/autonomous.go` is a sequential if-chain, one block
