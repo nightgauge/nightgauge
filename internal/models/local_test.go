@@ -15,9 +15,12 @@ import (
 )
 
 // The fixtures in testdata/local-discovery are real responses captured from
-// LM Studio and Ollama servers on loopback (README.md there).
+// LM Studio and Ollama servers on loopback (README.md there), except
+// lmstudio-api-v1-models.json, which is transcribed from LM Studio's
+// documentation until it is re-captured.
 const (
 	lmStudioListingFixture  = "testdata/local-discovery/lmstudio-api-v0-models.json"
+	lmStudioV1Fixture       = "testdata/local-discovery/lmstudio-api-v1-models.json"
 	ollamaNumCtxFixture     = "testdata/local-discovery/ollama-api-show-num-ctx.json"
 	ollamaNoNumCtxFixture   = "testdata/local-discovery/ollama-api-show-no-num-ctx.json"
 	capturedLMStudioModel   = "qwen/qwen3.8-27b"
@@ -208,77 +211,161 @@ func TestResolveLocalLMStudioReadsLoadedContext(t *testing.T) {
 	}
 }
 
-// lmStudioV1Server serves body as LM Studio's newer GET /api/v1/models, and
-// 404 for /api/v0/models — a real v1-capable server would answer both, but a
-// 404 there is how this suite proves discovery never falls back once v1 has
-// already answered.
-func lmStudioV1Server(t *testing.T, body []byte) *localServer {
+// lmStudioBothServer answers GET /api/v1/models with v1Status and v1Body and
+// GET /api/v0/models with v0Status and v0Body; anything else is 404.
+func lmStudioBothServer(t *testing.T, v1Status int, v1Body []byte, v0Status int, v0Body []byte) *localServer {
 	t.Helper()
 	return newLocalServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/models" {
-			http.NotFound(w, r)
-			return
+		status, body := http.StatusNotFound, []byte("404 page not found")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/models":
+			status, body = v1Status, v1Body
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v0/models":
+			status, body = v0Status, v0Body
 		}
-		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
 		_, _ = w.Write(body)
 	})
 }
 
-// TestResolveLocalLMStudioV1ReadsReasoningAndLoadedContext: #1761. No real
-// LM Studio server was reachable to capture a v1 response when this was
-// written (testdata/local-discovery/README.md); the body below follows LM
-// Studio's documented REST API shape for GET /api/v1/models.
-func TestResolveLocalLMStudioV1ReadsReasoningAndLoadedContext(t *testing.T) {
+// TestResolveLocalLMStudioV1ReadsDocumentedShape: #1761. The fixture is
+// transcribed from LM Studio's documented GET /api/v1/models response
+// (testdata/local-discovery/README.md), not captured. The window is the
+// loaded instance's config.context_length, never max_context_length;
+// ToolCall is capabilities.trained_for_tool_use; Reasoning is true because
+// the reasoning options allow "on".
+func TestResolveLocalLMStudioV1ReadsDocumentedShape(t *testing.T) {
 	resetLocalCache(t)
-	body, err := json.Marshal(map[string]any{
-		"data": []map[string]any{
-			{
-				"id":    capturedLMStudioModel,
-				"state": "loaded",
-				"capabilities": map[string]any{
-					"reasoning": true,
-					"tool_use":  true,
-				},
-				"loaded_instances": []map[string]any{
-					{"config": map[string]any{"context_length": capturedLoadedContext}},
-				},
-			},
-			{
-				"id":               capturedNotLoadedModel,
-				"state":            "not-loaded",
-				"capabilities":     map[string]any{"reasoning": false},
-				"loaded_instances": []map[string]any{},
-			},
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv := lmStudioV1Server(t, body)
+	srv := lmStudioBothServer(t, http.StatusOK, readFixture(t, lmStudioV1Fixture), http.StatusNotFound, nil)
 	t.Setenv(LMStudioBaseURLEnv, srv.URL+"/v1")
 
 	desc, err := ResolveLocal("opencode", "lmstudio/"+capturedLMStudioModel)
 	if err != nil {
 		t.Fatalf("ResolveLocal: %v", err)
 	}
+	if desc.Reasoning == nil || !*desc.Reasoning {
+		t.Errorf("reasoning = %v; the fixture's reasoning options allow \"on\"", desc.Reasoning)
+	}
+	desc.Reasoning = nil
 	want := LocalDescriptor{
 		Endpoint:      "lmstudio",
 		Provider:      "lm-studio",
 		Model:         capturedLMStudioModel,
 		ContextWindow: capturedLoadedContext,
-		MaxOutput:     0,
-		ToolCall:      false, // v1's capabilities are not read for ToolCall; see discoverLMStudio's comment
+		ToolCall:      true,
 	}
-	if desc.Reasoning == nil || !*desc.Reasoning {
-		t.Errorf("reasoning = %v; the fixture's capabilities.reasoning is true", desc.Reasoning)
-	}
-	desc.Reasoning = nil
 	if desc != want {
 		t.Errorf("descriptor = %+v; want %+v", desc, want)
 	}
-	// Exactly one request: v1 answered, so discovery never falls back to v0.
+	// Exactly one request: v1 resolved the model, so discovery never asks v0.
 	if srv.hits() != 1 || srv.requests[0].URL.Path != "/api/v1/models" {
 		t.Errorf("the server got %d request(s) %v; want exactly one GET /api/v1/models", srv.hits(), requestPaths(srv))
+	}
+}
+
+// TestLMStudioFromV1Capabilities pins how v1 capabilities map: no reasoning
+// object is false, only "off" is false, no capabilities at all is nil.
+func TestLMStudioFromV1Capabilities(t *testing.T) {
+	entry := func(caps string) []byte {
+		return []byte(`{"models":[{"key":"m","loaded_instances":[{"id":"m","config":{"context_length":4096}}]` + caps + `}]}`)
+	}
+	for _, tc := range []struct {
+		name      string
+		body      []byte
+		tool      bool
+		reasoning *bool
+	}{
+		{"no reasoning object", entry(`,"capabilities":{"trained_for_tool_use":false}`), false, new(false)},
+		{"off only", entry(`,"capabilities":{"trained_for_tool_use":true,"reasoning":{"allowed_options":["off"],"default":"off"}}`), true, new(false)},
+		{"on only", entry(`,"capabilities":{"reasoning":{"allowed_options":["on"],"default":"on"}}`), false, new(true)},
+		{"no capabilities", entry(``), false, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var listing lmStudioV1Listing
+			if err := json.Unmarshal(tc.body, &listing); err != nil {
+				t.Fatal(err)
+			}
+			desc, err := lmStudioFromV1(listing, "m")
+			if err != nil {
+				t.Fatalf("lmStudioFromV1: %v", err)
+			}
+			if desc.ContextWindow != 4096 || desc.ToolCall != tc.tool {
+				t.Errorf("descriptor = %+v; want context 4096, tool_call %v", desc, tc.tool)
+			}
+			if (desc.Reasoning == nil) != (tc.reasoning == nil) || (desc.Reasoning != nil && *desc.Reasoning != *tc.reasoning) {
+				t.Errorf("reasoning = %v; want %v", desc.Reasoning, tc.reasoning)
+			}
+		})
+	}
+}
+
+// TestResolveLocalLMStudioV1NeverHidesV0: a v1 answer that does not resolve
+// the model — a 404 (an LM Studio that predates the endpoint), a body that
+// is not JSON, an empty listing, the model not loaded, or a loaded instance
+// with no context length — falls back to v0, which resolves it.
+func TestResolveLocalLMStudioV1NeverHidesV0(t *testing.T) {
+	v0 := readFixture(t, lmStudioListingFixture)
+	noContext := bytes.Replace(readFixture(t, lmStudioV1Fixture), []byte(`"context_length": 131072,`), []byte(`"context_length": 0,`), 1)
+	var unloaded map[string]any
+	if err := json.Unmarshal(readFixture(t, lmStudioV1Fixture), &unloaded); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range unloaded["models"].([]any) {
+		m.(map[string]any)["loaded_instances"] = []any{}
+	}
+	unloadedBody, err := json.Marshal(unloaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name     string
+		v1Status int
+		v1Body   []byte
+	}{
+		{"v1 404", http.StatusNotFound, []byte("404 page not found")},
+		{"v1 not JSON", http.StatusOK, []byte("<html>not json</html>")},
+		{"v1 empty listing", http.StatusOK, []byte(`{"models":[]}`)},
+		{"v1 not loaded", http.StatusOK, unloadedBody},
+		{"v1 no context length", http.StatusOK, noContext},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resetLocalCache(t)
+			srv := lmStudioBothServer(t, tc.v1Status, tc.v1Body, http.StatusOK, v0)
+			t.Setenv(LMStudioBaseURLEnv, srv.URL+"/v1")
+
+			desc, err := ResolveLocal("opencode", "lmstudio/"+capturedLMStudioModel)
+			if err != nil {
+				t.Fatalf("ResolveLocal: %v", err)
+			}
+			want := LocalDescriptor{
+				Endpoint:      "lmstudio",
+				Provider:      "lm-studio",
+				Model:         capturedLMStudioModel,
+				ContextWindow: capturedLoadedContext,
+				ToolCall:      true,
+			}
+			if desc != want {
+				t.Errorf("descriptor = %+v; want the v0 result %+v", desc, want)
+			}
+			if srv.hits() != 2 || srv.requests[0].URL.Path != "/api/v1/models" || srv.requests[1].URL.Path != "/api/v0/models" {
+				t.Errorf("the server got %d request(s) %v; want a v1 request, then the v0 fallback", srv.hits(), requestPaths(srv))
+			}
+		})
+	}
+}
+
+// TestResolveLocalLMStudioV1ReasonWhenV0Unanswered: when v1 lists but does
+// not resolve the model and v0 gives no listing at all, the reason is v1's,
+// not v0's 404.
+func TestResolveLocalLMStudioV1ReasonWhenV0Unanswered(t *testing.T) {
+	resetLocalCache(t)
+	srv := lmStudioBothServer(t, http.StatusOK, readFixture(t, lmStudioV1Fixture), http.StatusNotFound, nil)
+	t.Setenv(LMStudioBaseURLEnv, srv.URL+"/v1")
+
+	desc, err := ResolveLocal("opencode", "lmstudio/"+capturedNotLoadedModel)
+	assertUnresolved(t, desc, err, srv.URL, capturedNotLoadedModel, "has not loaded it", "endpoint lmstudio")
+	if err != nil && strings.Contains(err.Error(), "HTTP 404") {
+		t.Errorf("the reason is v0's 404, not v1's: %v", err)
 	}
 }
 

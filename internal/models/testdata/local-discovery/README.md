@@ -1,11 +1,13 @@
 # Local model server evidence (#1633)
 
 The JSON files here are **captured, real responses** from an LM Studio server and
-an Ollama server on loopback, not hand-authored examples. `local_test.go` in
+an Ollama server on loopback, not hand-authored examples, with one exception:
+`lmstudio-api-v1-models.json` is transcribed from LM Studio's documentation
+(below) and must be re-captured. `local_test.go` in
 `../..` serves them from `httptest` servers and checks what local model
 discovery (`ResolveLocal`, `DiscoverLocal` in `../../local.go`) reads from them.
 
-`capture.sh` regenerates all three and applies the redaction described in its
+`capture.sh` regenerates all four and applies the redaction described in its
 header. Re-capture when the server versions below change, and update the tables
 in the same change.
 
@@ -14,6 +16,7 @@ in the same change.
 | File                              | Request                                     | Server                     |
 | --------------------------------- | ------------------------------------------- | -------------------------- |
 | `lmstudio-api-v0-models.json`     | `GET /api/v0/models`, all fields            | LM Studio 0.4.24+1 (macOS) |
+| `lmstudio-api-v1-models.json`     | `GET /api/v1/models`, **not captured**      | transcribed, see below     |
 | `ollama-api-show-num-ctx.json`    | `POST /api/show` `{"model":"qwen3-ctx32k"}` | Ollama 0.32.11 (Homebrew)  |
 | `ollama-api-show-no-num-ctx.json` | `POST /api/show` `{"model":"qwen3:0.6b"}`   | Ollama 0.32.11 (Homebrew)  |
 
@@ -35,15 +38,20 @@ in the same change.
   absent for the embedding model). The loaded Qwen model reports
   `max_context_length` 262144 and `loaded_context_length` 131072. No field
   reports an output cap or whether the model reasons.
-- **LM Studio `GET /api/v1/models`** (#1761): discovery prefers this over v0
-  when the server answers it, reading `data[].capabilities.reasoning` and
-  `data[].loaded_instances[].config.context_length`. No local LM Studio
-  server was reachable to capture a real v1 response when this landed — the
-  shape `discoverLMStudio` (`../../local.go`) reads is LM Studio's documented
-  REST API response, not a fixture in this directory. Re-capture a real one
-  here and update `local_test.go`'s v1 test to read it, the way the v0 test
-  reads `lmstudio-api-v0-models.json`, next time someone has a reachable
-  server.
+- **LM Studio `GET /api/v1/models`** (#1761): **not a live capture.** No
+  LM Studio server was reachable when this landed, so
+  `lmstudio-api-v1-models.json` is transcribed from the response example in
+  LM Studio's REST API documentation
+  (<https://lmstudio.ai/docs/developer/rest/list>), with the entries renamed
+  to the models of the v0 capture: a `models[]` array whose entries carry
+  `key`, `type`, `max_context_length`, `loaded_instances[]` (each with `id`
+  and `config.context_length`, empty when the model is not loaded) and, for
+  LLMs only, `capabilities` with `vision`, `trained_for_tool_use` and an
+  optional `reasoning` object (`allowed_options`, `default`). Discovery
+  (`discoverLMStudio` in `../../local.go`) prefers this endpoint and falls
+  back to v0 whenever it does not resolve the model. Re-capture it with
+  `capture.sh` against a real server, and fix the decoder and this note if the
+  live shape differs from the documented one.
 - **Ollama `POST /api/show`**: `parameters` (the Modelfile's parameters, one
   `name value` pair per line), `details`, `model_info` and `capabilities`
   (`["completion","tools","thinking"]`), beside the dropped `license`,

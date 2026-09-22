@@ -91,6 +91,14 @@ case "\$(cat "$TMP/mode")" in
     echo "listening on http://localhost:4096 by default"
     echo "config lives at /root/.config/$2.toml"
     echo "owner default root@localhost"
+    echo "see path/to/root for details"
+    echo "macOS keeps it in /var/root/.cache"
+    ;;
+  usercheck)
+    echo "usage: $2 [options]"
+    echo "cache at /home/alice/.cache and /Users/alice/Library"
+    echo "see docs/for/alice and the alice section"
+    echo "running on buildbox-7 now"
     ;;
   escape)
     echo "usage: $2 [options]"
@@ -129,6 +137,7 @@ case "\$(cat "$TMP/mode")" in
     echo "  --config <path>  default \$HOME/.config/$2.toml"
     echo "  --home <path>    or $HOME/.$2"
     echo "  --owner <name>   default $(id -un)@$(hostname)"
+    echo "  --node <name>    default $(hostname) or $(hostname -s)"
     echo "  --attach <url>   e.g. http://127.0.0.1:4096"
     printf '  --plain        \033[1mbold\033[0m text   \n'
     ;;
@@ -224,6 +233,20 @@ cat >"$WORDSTUBS/hostname" <<'EOF'
 echo localhost
 EOF
 chmod +x "$WORDSTUBS/id" "$WORDSTUBS/hostname"
+
+# USERSTUBS: an ordinary login ("alice") and host ("buildbox-7"), for the
+# home-path-only login redaction and the bare host-name redaction.
+USERSTUBS="$TMP/userstubs"
+mkdir -p "$USERSTUBS"
+cat >"$USERSTUBS/id" <<'EOF'
+#!/bin/bash
+echo alice
+EOF
+cat >"$USERSTUBS/hostname" <<'EOF'
+#!/bin/bash
+echo buildbox-7
+EOF
+chmod +x "$USERSTUBS/id" "$USERSTUBS/hostname"
 
 SENTINEL="sentinel-credential-6f1d"
 SCRATCH="$TMP/scratch"
@@ -333,6 +356,7 @@ capture="$OUT/opencode-run-$OPENCODE_V.txt"
 check "the child's HOME became ~" grep -qF -- '--config <path>  default ~/.config/opencode.toml' "$capture"
 check "the caller's HOME became ~" grep -qF -- '--home <path>    or ~/.opencode' "$capture"
 check "the login and host names were scrubbed" grep -qF -- '--owner <name>   default <user>@<host>' "$capture"
+check "the bare host name was scrubbed" grep -qF -- '--node <name>    default <host> or <host>' "$capture"
 check "127.0.0.1 is kept" grep -qF 'http://127.0.0.1:4096' "$capture"
 check "ANSI codes and trailing whitespace were stripped" grep -qxF '  --plain        bold text' "$capture"
 check "no prefix path survived" sh -c "! grep -rqF '$SCRATCH' '$OUT'"
@@ -376,6 +400,21 @@ check "a user@host leak still redacts the user, but never a localhost host" \
   grep -qxF 'owner default <user>@localhost' "$capture"
 check "the bare words root/localhost never survive unredacted next to a path or @" \
   sh -c "! grep -qE '/root[/.]|root@localhost' '$capture'"
+check "\"path/to/root\" in help prose is untouched when running as root" \
+  grep -qxF 'see path/to/root for details' "$capture"
+check "root's macOS home /var/root is redacted" \
+  grep -qxF 'macOS keeps it in /var/<user>/.cache' "$capture"
+
+rm -rf "$OUT"
+run_capture usercheck "PATH=$USERSTUBS:$STUBS:$PATH" -- opencode
+check "the run under a fake alice/buildbox-7 identity succeeded" [ "$RC" -eq 0 ]
+capture="$OUT/opencode-run-$OPENCODE_V.txt"
+check "a login's /home and /Users home paths are redacted" \
+  grep -qxF 'cache at /home/<user>/.cache and /Users/<user>/Library' "$capture"
+check "the login after an arbitrary / or as a bare word is untouched" \
+  grep -qxF 'see docs/for/alice and the alice section' "$capture"
+check "the bare host name in prose is redacted" \
+  grep -qxF 'running on <host> now' "$capture"
 
 # --- 6. A setsid-escaped descendant is reaped too (#1721) -------------------
 rm -rf "$OUT"

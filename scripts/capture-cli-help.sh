@@ -34,19 +34,28 @@
 #   - Every download, install and CLI call is bounded by a timeout. macOS has no
 #     timeout(1), so a perl wrapper runs the command in a process group of its
 #     own and kills the whole group when the time runs out. It also kills the
-#     group after a normal exit, so nothing a call started outlives it.
+#     group after a normal exit, and every descendant (and process group a
+#     descendant leads) that its 0.2s poll saw, even one that called setsid()
+#     to leave the group. It never kills a pid it cannot still identify as
+#     the process it saw (same pid and start time), so a recycled pid is safe.
+#     Limit: a daemon that double-forks faster than one poll interval
+#     (fork, setsid, fork, intermediate exits) is never seen and can outlive
+#     the call; see bounded().
 #   - The version comes from the pin, the manifest's max_tested. For npm
 #     packages it is confirmed against the installed package.json. The script
 #     never runs `--version`.
 #
 # Redaction: ANSI escape sequences are stripped. The prefix's HOME and the
 # capturing user's HOME become `~`, and any other prefix path becomes
-# `<capture-prefix>`. The login name and the host name become `<user>` and
-# `<host>`, but only in a path- or account-like context (after `/` or `~`, or
-# adjoining `@`), never as a bare word in ordinary help prose — a CLI whose
-# help text happens to say "root" or "localhost" is left alone (#1721). A host
-# named exactly `localhost` is never substituted at all: it never identifies
-# a machine, so a CLI's own generic example text naming it is untouched.
+# `<capture-prefix>`. The host name (full and short) becomes `<host>` wherever
+# it stands as a whole name. The login name becomes `<user>` only where it
+# names the account: as the home-directory component at the start of a path
+# (`/Users/<u>`, `/home/<u>`, or `/root` and `/var/root` when running as
+# root), after `~`, or before `@`. It is never matched after an arbitrary `/`
+# or as a bare word, so help prose such as "path/to/root" or "the working
+# root" is left alone when the capture runs as root (#1721). A host named
+# exactly `localhost` is never substituted at all: it never identifies a
+# machine, so a CLI's own generic example text naming it is untouched.
 # Trailing whitespace is trimmed and a final newline ensured. A capture that
 # names any IPv4 address other than 127.0.0.1 is refused. Captures are staged
 # and moved into place only after every requested adapter passed, so a refused
@@ -136,22 +145,49 @@ bounded() {
     setpgrp($pid, $pid);
 
     # A descendant that calls setsid() leaves $pid'"'"'s process group, so
-    # `kill KILL, -$pid` below never reaches it. seen accumulates every pid
-    # ever observed under $pid in the process table, polled throughout the
-    # run rather than read once at the end: once whichever ancestor sits
-    # between $pid and an escaped descendant exits, that descendant
-    # reparents to init and its ppid chain no longer leads back to $pid, so a
-    # single scan taken only at cleanup time would already have lost it (#1721).
-    my %seen;
+    # `kill KILL, -$pid` below never reaches it. Each scan therefore walks
+    # the process table from $pid and from every pid already tracked, polled
+    # throughout the run rather than read once at the end: once whichever
+    # ancestor sits between $pid and an escaped descendant exits, that
+    # descendant reparents to init and its ppid chain no longer leads back to
+    # $pid, so a single scan taken only at cleanup time would already have
+    # lost it (#1721). %seen maps each tracked pid to its start time; %groups
+    # holds the process groups tracked pids lead, so a child an escaped
+    # group leader starts between two scans is caught by its group too.
+    #
+    # A pid is dropped from %seen as soon as a scan no longer lists it with
+    # the same start time, and a group once a scan finds no member of it, so
+    # a pid or group id the kernel recycles for an unrelated process after
+    # ours exited is never killed: the reap below only signals pids a fresh
+    # scan still shows as the process that was tracked.
+    #
+    # Limit: tracking is only as fine as the poll. A descendant that forks,
+    # calls setsid() and forks again, with the intermediate exiting, all
+    # within one 0.2s poll interval (the classic daemon double fork), leaves
+    # a grandchild whose parent is init, whose session and group are the
+    # vanished intermediate'"'"'s, and which no scan ever linked to $pid: it
+    # is not reaped. Nothing portable to macOS closes that window.
+    my (%seen, %groups);
+    my $own_group = 1;
     my $scan = sub {
-      open(my $ps, "-|", "ps", "-e", "-o", "pid=,ppid=") or return;
-      my %children;
+      open(my $ps, "-|", "ps", "-e", "-o", "pid=,ppid=,pgid=,lstart=") or return 0;
+      my (%children, %start, %members);
       while (my $line = <$ps>) {
-        next unless $line =~ /^\s*(\d+)\s+(\d+)\s*$/;
-        push @{$children{$2 + 0}}, $1 + 0;
+        next unless $line =~ /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.*?)\s*$/;
+        my ($p, $pp, $pg) = ($1 + 0, $2 + 0, $3 + 0);
+        push @{$children{$pp}}, $p;
+        push @{$members{$pg}}, $p;
+        $start{$p} = $4;
       }
       close $ps;
-      my @stack = ($pid);
+      $own_group = $members{$pid} ? 1 : 0;
+      for my $p (keys %seen) {
+        delete $seen{$p} unless defined $start{$p} && $start{$p} eq $seen{$p};
+      }
+      for my $g (keys %groups) {
+        delete $groups{$g} unless $members{$g};
+      }
+      my @stack = ($pid, keys %seen, map { @{$members{$_}} } keys %groups);
       my %found;
       while (@stack) {
         my $p = pop @stack;
@@ -159,12 +195,19 @@ bounded() {
         push @stack, @{$children{$p} || []};
       }
       delete $found{$pid};
-      $seen{$_} = 1 for keys %found;
+      for my $p (keys %found) {
+        next unless defined $start{$p};
+        $seen{$p} = $start{$p};
+        $groups{$p} = 1 if $members{$p};
+      }
+      return 1;
     };
     my $reap = sub {
-      $scan->();
-      kill "KILL", -$pid;
-      kill "KILL", keys %seen if %seen;
+      # Without a fresh scan no tracked pid can be re-identified, so none is
+      # signalled; the group kill alone still stands.
+      my $fresh = $scan->();
+      kill "KILL", -$pid if $own_group;
+      kill "KILL", keys %seen if $fresh && %seen;
     };
     my $stop = sub {
       my ($code, $why) = @_;
@@ -176,7 +219,7 @@ bounded() {
     $SIG{ALRM} = sub { $stop->(124, "timed out after ${secs}s") };
     $SIG{INT} = $SIG{TERM} = $SIG{HUP} = sub { $stop->(130, "interrupted") };
     alarm $secs;
-    # Polls rather than blocks on waitpid, so $seen is kept current while
+    # Polls rather than blocks on waitpid, so %seen is kept current while
     # $pid'"'"'s tree is still intact instead of read only once, after exit,
     # when an escaped descendant may already be unreachable from it.
     my $status;
@@ -187,8 +230,7 @@ bounded() {
       select(undef, undef, undef, 0.2);
     }
     alarm 0;
-    kill "KILL", -$pid;
-    kill "KILL", keys %seen if %seen;
+    $reap->();
     exit($status & 127 ? 128 + ($status & 127) : $status >> 8);
   ' "$@" </dev/null
 }
@@ -294,34 +336,41 @@ redact() {
           my $v = $ENV{$k} // "";
           push @paths, [$v, $to] if length($v) > 1;
         }
-        our @words;
-        for (["SCRUB_HOST", "<host>"], ["SCRUB_HOST_SHORT", "<host>"], ["SCRUB_USER", "<user>"]) {
-          my ($k, $to) = @$_;
+        our (@hosts, $user);
+        for my $k ("SCRUB_HOST", "SCRUB_HOST_SHORT") {
           my $v = $ENV{$k} // "";
           next if length($v) == 0;
           # "localhost" never identifies a machine, so leaving it alone
           # cannot leak anything, and redacting it corrupts a CLI own
           # generic example text (opencode default "http://localhost:4096")
           # on a host that happens to be named localhost -- the #1721 finding.
-          next if $to eq "<host>" && lc($v) eq "localhost";
-          push @words, [$v, $to];
+          next if lc($v) eq "localhost";
+          push @hosts, $v;
         }
+        $user = $ENV{SCRUB_USER} // "";
         our %n;
       }
-      our (@paths, @words, %n);
+      our (@paths, @hosts, $user, %n);
       $n{ansi} += s/\e\[[0-9;?]*[ -\/]*[@-~]//g;
       $n{ansi} += s/\e\][^\a\e]*(?:\a|\e\\)//g;
       for my $p (@paths) { $n{$p->[1]} += s/\Q$p->[0]\E/$p->[1]/g; }
-      # A bare-word match rewrites the login/host name wherever it appears,
-      # including as an ordinary English word in the CLI own help prose
-      # ("the working root of the project") or a literal placeholder host in
-      # example text ("http://localhost:4096"), which corrupts the capture
-      # and breaks the byte-identical comparison across machines (#1721).
-      # Restrict the match to a path- or account-like context: immediately
-      # after a slash or tilde (a filesystem path), or adjoining an at sign
-      # (a user@host pair) on either side.
-      for my $w (@words) {
-        $n{$w->[1]} += s/(?<=[\/~\@])\Q$w->[0]\E(?![\w-])|(?<![\w.-])\Q$w->[0]\E(?=\@)/$w->[1]/g;
+      # The host name is redacted wherever it stands as a whole name (not
+      # inside a longer word or dotted name). The full name goes first, so a
+      # short name never splits it.
+      for my $h (@hosts) {
+        $n{"<host>"} += s/(?<![\w.-])\Q$h\E(?![\w-]|\.\w)/<host>/g;
+      }
+      # The login name is redacted only where it identifies the account: as
+      # the home-directory component at the start of a path (/Users/<u>,
+      # /home/<u>, and /root or /var/root for root), after `~`, or before
+      # `@`. Never after an arbitrary `/`, so help prose such as
+      # "path/to/root" is left alone when the capture runs as root, and never
+      # as a bare word (#1721).
+      if (length $user) {
+        my $home = $user eq "root" ? qr{/(?:var/)?} : qr{/(?:Users|home)/};
+        $n{"<user>"} += s{(?<![\w.~/-])($home)\Q$user\E(?![\w.-])}{$1<user>}g;
+        $n{"<user>"} += s/(?<=~)\Q$user\E(?![\w-])/<user>/g;
+        $n{"<user>"} += s/(?<![\w.-])\Q$user\E(?=\@)/<user>/g;
       }
       s/\s+$//;
       END {
