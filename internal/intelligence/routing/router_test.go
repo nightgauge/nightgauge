@@ -244,17 +244,33 @@ func TestRouter_AutomaticRouting_NeverSelectsFable(t *testing.T) {
 	}
 }
 
-func TestModelPricing_FableIsTwiceOpus(t *testing.T) {
+// TestModelPricing_FablePricedAboveOpus pins modelPricing to the registry's
+// own rates rather than hardcoded absolutes — a band rotation changes the
+// concrete price, and a pinned dollar figure is exactly what let a stale
+// model id go unnoticed (see 31b5cbe9). Fable's registry entry is
+// independently priced at a premium over whichever model currently holds
+// the opus band; this test asserts that premium relationship, derived from
+// the registry, not a hardcoded ratio.
+func TestModelPricing_FablePricedAboveOpus(t *testing.T) {
+	opus, ok := models.Get(models.BandOpus)
+	if !ok {
+		t.Fatal("registry has no non-deprecated opus-band model")
+	}
+	fable, ok := models.Get(models.BandFable)
+	if !ok {
+		t.Fatal("registry has no non-deprecated fable-band model")
+	}
+
 	oi, oo := modelPricing(ModelOpus)
 	fi, fo := modelPricing(ModelFable)
-	if oi != 5.00 || oo != 25.00 {
-		t.Errorf("opus pricing = %.2f/%.2f, want 5.00/25.00", oi, oo)
+	if oi != opus.Rates.Input || oo != opus.Rates.Output {
+		t.Errorf("opus pricing = %.2f/%.2f, want registry %.2f/%.2f", oi, oo, opus.Rates.Input, opus.Rates.Output)
 	}
-	if fi != 10.00 || fo != 50.00 {
-		t.Errorf("fable pricing = %.2f/%.2f, want 10.00/50.00", fi, fo)
+	if fi != fable.Rates.Input || fo != fable.Rates.Output {
+		t.Errorf("fable pricing = %.2f/%.2f, want registry %.2f/%.2f", fi, fo, fable.Rates.Input, fable.Rates.Output)
 	}
-	if fi != oi*2 || fo != oo*2 {
-		t.Errorf("fable should be 2× opus: fable=%.2f/%.2f opus=%.2f/%.2f", fi, fo, oi, oo)
+	if fi <= oi || fo <= oo {
+		t.Errorf("fable should price above opus: fable=%.2f/%.2f opus=%.2f/%.2f", fi, fo, oi, oo)
 	}
 }
 

@@ -379,10 +379,10 @@ describe("model registry — per-(provider, band) rates (regression guard)", () 
         cacheCreationPerMillion: 3.75,
       },
       opus: {
-        inputPerMillion: 5.0,
-        outputPerMillion: 25.0,
-        cacheReadPerMillion: 0.5,
-        cacheCreationPerMillion: 6.25,
+        inputPerMillion: 4.0,
+        outputPerMillion: 20.0,
+        cacheReadPerMillion: 0.2,
+        cacheCreationPerMillion: 5.0,
       },
       fable: {
         inputPerMillion: 10.0,

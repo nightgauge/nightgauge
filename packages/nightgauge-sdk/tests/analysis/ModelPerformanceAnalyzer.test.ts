@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { ModelPerformanceAnalyzer } from "../../src/analysis/ModelPerformanceAnalyzer.js";
+import { ANTHROPIC_TIER_COST_RATES } from "../../src/analysis/types.js";
 import type { ExecutionHistoryRecord } from "../../src/analysis/types.js";
 
 // --- Test data factories ---
@@ -1507,10 +1508,16 @@ describe("detectOverRouting", () => {
     const result = analyzer.detectOverRouting(records);
 
     expect(result).toHaveLength(1);
-    // With default cost rates: sonnet input = 3.0, opus input = 5.0
-    // costRatio = 3.0 / 5.0 = 0.6
-    // estimatedWaste = totalCost * (1 - costRatio) = 2.0 * 0.4 = 0.8
-    expect(result[0].estimatedWasteUsd).toBeCloseTo(0.8, 2);
+    // Derived from the registry-backed default cost rates rather than
+    // hardcoded prices — a band rotation changes the concrete rate, and a
+    // pinned dollar figure is what let a stale model go unnoticed elsewhere
+    // (see 31b5cbe9).
+    const costRatio =
+      ANTHROPIC_TIER_COST_RATES.sonnet!.inputPerMillion /
+      ANTHROPIC_TIER_COST_RATES.opus!.inputPerMillion;
+    const totalCost = 2.0;
+    const estimatedWaste = totalCost * (1 - costRatio);
+    expect(result[0].estimatedWasteUsd).toBeCloseTo(estimatedWaste, 2);
   });
 });
 

@@ -4,6 +4,42 @@
   "effort_levels": ["low", "medium", "high", "xhigh", "max"],
   "models": [
     {
+      "id": "claude-opus-5-5",
+      "provider": "anthropic",
+      "tiers": ["opus"],
+      "display_name": "Opus 5.5",
+      "concrete_version": "claude-opus-5-5",
+      "rates": {
+        "input": 4.0,
+        "output": 20.0,
+        "cache_read": 0.2,
+        "cache_creation_5m": 5.0,
+        "cache_creation_1h": 8.0
+      },
+      "rate_provenance": "list",
+      "transports": {
+        "cli": {
+          "served": true
+        },
+        "api": {
+          "served": true
+        }
+      },
+      "supported_efforts": ["low", "medium", "high", "xhigh", "max"],
+      "context_window": 1000000,
+      "behavior": {
+        "thinking_default": "on",
+        "thinking_disable_max_effort": "never",
+        "effort_default": "medium",
+        "max_output_tokens": 128000,
+        "propensity": {
+          "verification": "high",
+          "delegation": "high",
+          "narration": "high"
+        }
+      }
+    },
+    {
       "id": "claude-opus-5",
       "provider": "anthropic",
       "tiers": ["opus"],
@@ -27,6 +63,8 @@
       },
       "supported_efforts": ["low", "medium", "high", "xhigh", "max"],
       "context_window": 1000000,
+      "deprecated": true,
+      "replacement": "claude-opus-5-5",
       "behavior": {
         "thinking_default": "on",
         "thinking_disable_max_effort": "high",
@@ -64,7 +102,7 @@
       "supported_efforts": ["low", "medium", "high", "xhigh"],
       "context_window": 200000,
       "deprecated": true,
-      "replacement": "claude-opus-5",
+      "replacement": "claude-opus-5-5",
       "behavior": {
         "thinking_default": "off",
         "effort_default": "high",
