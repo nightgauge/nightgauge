@@ -175,7 +175,7 @@ func assertProfileCodeBlocksAreVerbatim(t *testing.T, stage string) {
 
 func TestCompactIssuePickup_FitsBudget(t *testing.T) {
 	_, compact := renderStagePair(t, "issue-pickup")
-	got := Fit("issue-pickup", compact.Content, compactTestWindow)
+	got := fitCompact(t, "issue-pickup", compact.Content)
 	if !got.Fits {
 		t.Errorf("Fit(issue-pickup compact, %d) = %+v, want Fits=true", compactTestWindow, got)
 	}
@@ -199,7 +199,7 @@ func TestCompactIssuePickup_BudgetCatchesInlinedIncludes(t *testing.T) {
 		}
 		inflated += "\n" + string(data)
 	}
-	if got := Fit("issue-pickup", inflated, compactTestWindow); got.Fits {
+	if got := fitCompact(t, "issue-pickup", inflated); got.Fits {
 		t.Errorf("compact + every _includes file still fits (%+v); the budget check is not discriminating", got)
 	}
 }
@@ -246,4 +246,24 @@ func TestCompactIssuePickup_ReadDirectivesAreAbsoluteAndExist(t *testing.T) {
 
 func TestCompactIssuePickup_CodeBlocksAreVerbatim(t *testing.T) {
 	assertProfileCodeBlocksAreVerbatim(t, "issue-pickup")
+}
+
+// fitRefRoot stands in for the checkout root when a compact render is
+// measured. The render carries the absolute skill root in every Read
+// directive (feature-dev: 27 of them), so its size — and whether it fits —
+// otherwise depends on where the repository is checked out: an 87-character
+// ADR-013 worktree path costs ~590 tokens and failed the 32768-token fit that
+// the CI runner's 39-character path passes. The reference is the CI runner's
+// root, the checkout the budget was measured against.
+const fitRefRoot = "/home/runner/work/nightgauge/nightgauge"
+
+// fitCompact is Fit on content with the checkout root replaced by fitRefRoot,
+// so the budget tests give the same answer in every checkout.
+func fitCompact(t *testing.T, stage, content string) FitResult {
+	t.Helper()
+	abs, err := filepath.Abs(realSkillsRoot(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return Fit(stage, strings.ReplaceAll(content, filepath.Dir(abs), fitRefRoot), compactTestWindow)
 }

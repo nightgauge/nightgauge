@@ -29,7 +29,7 @@ const fdStopAndDeclareRule = "Stop here and declare it.** Do not implement, do n
 
 func TestCompactFeatureDev_FitsBudget(t *testing.T) {
 	_, compact := renderStagePair(t, "feature-dev")
-	got := Fit("feature-dev", compact.Content, compactTestWindow)
+	got := fitCompact(t, "feature-dev", compact.Content)
 	if !got.Fits {
 		t.Errorf("Fit(feature-dev compact, %d) = %+v, want Fits=true", compactTestWindow, got)
 	}
@@ -47,7 +47,7 @@ func TestCompactFeatureDev_BudgetCatchesInlinedIncludes(t *testing.T) {
 		t.Fatalf("read %s: %v", include, err)
 	}
 	inflated := compact.Content + "\n" + string(data)
-	if got := Fit("feature-dev", inflated, compactTestWindow); got.Fits {
+	if got := fitCompact(t, "feature-dev", inflated); got.Fits {
 		t.Errorf("compact + implementation-and-testing.md still fits (%+v); the budget check is not discriminating", got)
 	}
 }

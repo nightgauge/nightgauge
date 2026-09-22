@@ -26,7 +26,7 @@ import (
 
 func TestCompactPrCreate_FitsBudget(t *testing.T) {
 	_, compact := renderStagePair(t, "pr-create")
-	got := Fit("pr-create", compact.Content, compactTestWindow)
+	got := fitCompact(t, "pr-create", compact.Content)
 	if !got.Fits {
 		t.Errorf("Fit(pr-create compact, %d) = %+v, want Fits=true", compactTestWindow, got)
 	}
@@ -42,7 +42,7 @@ func TestCompactPrCreate_BudgetCatchesInlinedSKILLMD(t *testing.T) {
 		t.Fatalf("read %s: %v", compact.SkillPath, err)
 	}
 	inflated := compact.Content + "\n" + string(data)
-	if got := Fit("pr-create", inflated, compactTestWindow); got.Fits {
+	if got := fitCompact(t, "pr-create", inflated); got.Fits {
 		t.Errorf("compact + full SKILL.md body still fits (%+v); the budget check is not discriminating", got)
 	}
 }
