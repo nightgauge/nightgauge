@@ -16,6 +16,30 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **Compact render profiles for issue-pickup (#1660) and feature-validate
+  (#1663).** Both stages now fit the ADR-023 share at a 32768-token window
+  with `nightgauge skill render --profile compact`. issue-pickup goes from
+  ~16.9k to ~8.4k estimated tokens against an 11.8k budget. Its Phase 2.5,
+  2.7, 2.8 and 2.9 gates are now inline and verbatim, where the full render
+  puts them behind a `Read`, and it keeps the `issue-{N}.json` Output Contract
+  and the never-push-to-main rule. feature-validate goes from ~13.2k to ~7.0k
+  against a 9.0k budget. It keeps every phase marker, the build, test and
+  CI-parity gates, the Exit Contract and `validate-{N}.json` checks, the
+  Phase 0.6 directive naming Step 0.6.2b, and the verify-ui blocking rules.
+  The verify-ui procedure and the shared preflight, freshness, long-running
+  and self-assessment text become on-demand `Read`s. feature-validate's
+  Gotchas gain two rules, in the full skill as well as the compact one. The
+  honesty rule says never turn a catch into a pass by weakening the check. The
+  second rule says never dismiss a failing test as flaky without root-causing
+  it. The new tests are `compact_issue_pickup_test.go` and
+  `compact_feature_validate_test.go`. They pin budget fit, marker parity with
+  the full render and the retained rules by name. They also check that every
+  `Read` path is absolute, exists and sits under the skill or `_shared`
+  directory, and that every code block in a profile is byte-identical to its
+  source. The feature-validate file re-runs the AC-gate fail-open cases and
+  the step-wiring check against the include the compact render actually
+  `Read`s.
+
 - **Claude Opus 5.5 now serves the `opus` band.** `claude-opus-5-5` is
   registered ($4/$20 per MTok, 1M context, `low`–`max` effort) and every stage
   routed to `opus` — on the Claude CLI and the API alike — now runs it;
@@ -112,6 +136,26 @@ changelog, and the release workflow refuses a tag that does not.
   ADR-022 § 18 stands.
 
 ### Fixed
+
+- **Live skill evals no longer give the scenario model tools or the
+  operator's checkout.** `LiveClaudeModelRunner` spawned `claude --print` with
+  the CLI's default tool set in the current directory, so a live cell could
+  act on the repository it was started from; one pushed the branch under test
+  while running feature-validate's scenarios. Each cell now runs with
+  `--tools ""` in an empty scratch directory that is removed afterwards.
+- **The `--render-profile` eval lane no longer measures bare prompts when the
+  render fails.** `scripts/evaluate-skills.ts` caught every render error and
+  ran the scenario without its skill text, so a `nightgauge` binary on `PATH`
+  older than `skill render --profile` produced a "full vs compact" comparison
+  in which neither side carried a skill. Only a stage the binary has no skill
+  directory for is still skipped; any other render failure now stops the run
+  and names the binary it used.
+- **issue-pickup's baseline-CI deferral comment no longer says the item will
+  not resume on its own.** The comment Phase 2.8 posts told readers that an
+  operator had to run `nightgauge baseline-gate promote`. Step 2.8.3 of the
+  same file says otherwise: the autonomous daemon resumes the item itself once
+  `main` is green again (#885). The comment now says that the daemon resumes
+  it and that `promote` releases it immediately.
 
 - **A `network_unavailable` readiness refusal no longer feeds the cascading-
   failure breaker (#1989, AC4 gap in #1646).** The failure handler in

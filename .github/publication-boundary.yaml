@@ -734,7 +734,7 @@ issue_references:
   # itemised instead of argued about.
   #
   # NEVER raise this number. Lower it ONLY to the value the checker names.
-  tree_baseline: 5768
+  tree_baseline: 5762
   allow_paths:
     # Files that DEFINE or TEST the rule must contain example violations.
     - ".github/publication-boundary.yaml"
