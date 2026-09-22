@@ -865,9 +865,18 @@ When `--json` is set the verb emits:
   "documentation_scope": "standard",
   "rationale": "Standard path: M size, code change, complexity 3, high priority. Full pipeline execution.",
   "effective_size": "M",
+  "size_source": "board",
   "effective_priority": "high"
 }
 ```
+
+`size_source` says where `effective_size` came from: `foundation`, `board`,
+`label`, `planner` or `default`. `default` means nothing named a size and the
+verb assumed M, so the complexity, route and documentation scope were derived
+from that assumption; the rationale then reads "M size assumed" instead of
+"M size". An issue with no size still routes as M at pickup. The scheduler
+re-derives the routing once feature-planning has assessed a size (see
+[CONFIGURATION.md § Routing by cost per closed issue](CONFIGURATION.md#routing-by-cost-per-closed-issue)).
 
 Offline mode — pass issue number `0` plus all of `--size`, `--priority`,
 `--type` to derive a decision without touching GitHub. Useful for tests and
@@ -5515,7 +5524,16 @@ A Go test holds the doctor to the manifest.
 Its `required_flags` are exactly the flags the adapter's `BuildCommand` emits,
 and the flag-contract tests (`internal/execution/adapters/flag_contract_test.go`)
 check each of them against the CLI's own `--help`, captured at the newest
-tested version by `scripts/capture-cli-help.sh`.
+tested version by `scripts/capture-cli-help.sh` — for `claude-headless`,
+`codex`, `grok` and `opencode`. `gemini` and `copilot` have no capture
+(neither CLI is installed on the maintainer's machine, `helpNotCaptured` in
+the test); their `required_flags` is still held equal to what `BuildCommand`
+emits, but not against either CLI's real `--help`.
+The script runs each install and `--help` in a process group of its own and,
+after it exits or times out, kills that group and every descendant its 0.2s
+poll saw, including one that called `setsid()`; it re-identifies each by pid
+and start time first, so a recycled pid is never signalled. A daemon that
+double-forks within one poll interval is never seen and can outlive the call.
 A CLI below its floor gets `version_ok: false` and a remediation naming the
 floor. Codex, gemini and grok also get `ok: false`. Claude's floor
 is the oldest version a captured fixture backs, not a known break, so a claude

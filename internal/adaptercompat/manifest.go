@@ -23,6 +23,7 @@ import (
 	"io/fs"
 	"path"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -40,8 +41,11 @@ const ManifestDir = "internal/adaptercompat/manifests"
 //go:embed manifests/*.json
 var embedded embed.FS
 
-// Floor policies. A floor under FloorWarn reports a CLI below it and keeps the
-// adapter usable; a floor under FloorFailClosed makes the adapter unusable.
+// Floor policies. A floor under FloorFailClosed makes an adapter below it
+// unusable. A floor under FloorWarn only reports a CLI below it; whether that
+// adapter still runs is the per-adapter adapterSpec.usableBelowFloor opt-in
+// (internal/doctor/adapters.go) — today only claude-headless sets it, so
+// FloorWarn alone does not keep an adapter usable below its floor.
 const (
 	FloorWarn       = "warn"
 	FloorFailClosed = "fail_closed"
@@ -222,6 +226,19 @@ func load(dir fs.FS, tree fs.FS) ([]Manifest, error) {
 // decode parses one manifest, refusing unknown keys and trailing data.
 func decode(file string, data []byte) (Manifest, error) {
 	adapter := strings.TrimSuffix(file, ".json")
+	// exactKeys runs first: encoding/json's own struct decoder matches a key
+	// against a field's `json:"..."` tag case-INsensitively when there is no
+	// exact match, and a later duplicate key silently overwrites an earlier
+	// one — DisallowUnknownFields below catches neither, so "Min_Version",
+	// "MIN_VERSION" and a repeated "min_version" all decoded successfully
+	// before this existed (#1712).
+	if err := exactKeys(data, reflect.TypeOf(Manifest{})); err != nil {
+		field := ""
+		if ke, ok := err.(*keyError); ok {
+			field = ke.field
+		}
+		return Manifest{}, &Error{File: file, Adapter: adapter, Field: field, Msg: err.Error()}
+	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	var m Manifest
@@ -232,6 +249,119 @@ func decode(file string, data []byte) (Manifest, error) {
 		return Manifest{}, &Error{File: file, Adapter: adapter, Msg: "trailing data after the manifest object"}
 	}
 	return m, nil
+}
+
+// keyError names the JSON key path a token-level exactKeys refusal is about,
+// separately from its message text.
+type keyError struct {
+	field string
+	msg   string
+}
+
+func (e *keyError) Error() string { return e.msg }
+
+// exactKeys walks data as a JSON document and requires every object's keys to
+// match, byte-for-byte, a `json:"..."` tag on the corresponding field of the
+// Go struct type rooted at t, and refuses a key repeated within the same
+// object even when the repeat is byte-identical. See decode's comment for why
+// this exists: DisallowUnknownFields alone lets a case variant or a duplicate
+// key silently win.
+func exactKeys(data []byte, t reflect.Type) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	return exactKeysValue(dec, t, "")
+}
+
+// exactKeysValue checks the next JSON value exactKeysValue reads against t: an
+// object is checked field-by-field (exactKeysObject), an array element-by-
+// element against t's element type, and a scalar is consumed and left
+// unchecked (its shape is a type mismatch decode() reports on its own pass).
+func exactKeysValue(dec *json.Decoder, t reflect.Type, path string) error {
+	for t != nil && t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	delim, isDelim := tok.(json.Delim)
+	if !isDelim {
+		return nil
+	}
+	switch delim {
+	case '{':
+		return exactKeysObject(dec, t, path)
+	case '[':
+		var elem reflect.Type
+		if t != nil && (t.Kind() == reflect.Slice || t.Kind() == reflect.Array) {
+			elem = t.Elem()
+		}
+		for dec.More() {
+			if err := exactKeysValue(dec, elem, path); err != nil {
+				return err
+			}
+		}
+		_, err := dec.Token() // ']'
+		return err
+	}
+	return nil
+}
+
+// exactKeysObject checks one JSON object's keys against t's field tags. A nil
+// or non-struct t (a type mismatch between the document and the schema)
+// leaves the object unchecked; decode()'s normal pass reports the mismatch.
+func exactKeysObject(dec *json.Decoder, t reflect.Type, path string) error {
+	if t == nil || t.Kind() != reflect.Struct {
+		depth := 1
+		for depth > 0 {
+			tok, err := dec.Token()
+			if err != nil {
+				return err
+			}
+			if d, ok := tok.(json.Delim); ok {
+				switch d {
+				case '{', '[':
+					depth++
+				case '}', ']':
+					depth--
+				}
+			}
+		}
+		return nil
+	}
+	fields := make(map[string]reflect.Type, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		if name == "" || name == "-" {
+			continue
+		}
+		fields[name] = f.Type
+	}
+	seen := make(map[string]bool, len(fields))
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		key, _ := keyTok.(string)
+		full := key
+		if path != "" {
+			full = path + "." + key
+		}
+		if seen[key] {
+			return &keyError{field: full, msg: fmt.Sprintf("key %q is set more than once", key)}
+		}
+		seen[key] = true
+		ft, ok := fields[key]
+		if !ok {
+			return &keyError{field: full, msg: fmt.Sprintf("key %q does not match any field exactly (check case)", key)}
+		}
+		if err := exactKeysValue(dec, ft, full); err != nil {
+			return err
+		}
+	}
+	_, err := dec.Token() // '}'
+	return err
 }
 
 // decodeErrorField names the field a decode error is about, when it has one.

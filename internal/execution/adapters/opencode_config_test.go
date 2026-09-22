@@ -375,8 +375,10 @@ func TestPrepareOpenCodeRunDiscoversFromTheMachineTierEndpoint(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(hits) != 1 || hits["machine GET /api/v0/models"] != 1 {
-		t.Errorf("requests = %v; want one GET /api/v0/models to the machine-tier endpoint and none to the repository's", hits)
+	// The fixture serves the v0 listing on every path, so the /api/v1 probe
+	// finds no v1 shape and discovery falls back to /api/v0.
+	if len(hits) != 2 || hits["machine GET /api/v1/models"] != 1 || hits["machine GET /api/v0/models"] != 1 {
+		t.Errorf("requests = %v; want one GET /api/v1/models then one GET /api/v0/models to the machine-tier endpoint and none to the repository's", hits)
 	}
 	if !strings.Contains(stderr, "[opencode] opencode.limit.context (200000) is larger than the 65536 tokens endpoint lmstudio has loaded") {
 		t.Errorf("stderr lacks the clamp's warning:\n%s", stderr)
