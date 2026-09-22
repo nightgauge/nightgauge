@@ -330,6 +330,57 @@ expect 2 "no ref anywhere (local or remote) stays UNKNOWN/2 with the original te
   "no such ref: fix/993-never-existed" \
   -- run_in "$root" env NO_PR=1 "$SCRIPT" fix/993-never-existed origin/main
 
+# ── (k) stale cached tracking ref — UNKNOWN/2, not a false SAFE-DELETE ─────
+# (Opus review, Medium 2) The remote-only path must not trust a cached
+# refs/remotes/origin/<branch>: nothing refreshes it between fetches. A
+# SECOND clone pushes a new commit to the same branch AFTER this repo's own
+# push/fetch, so this repo's cache is stale relative to the live remote —
+# the exact shape the reviewer reproduced (tracking ref 96a7c6b vs remote
+# 2e515c3, false SAFE-DELETE).
+new_fixture
+root="$TMP/clone"
+wt="$(add_worktree "$root" 994 fix/994-stale-tracking)"
+commit_in "$wt" file.txt "v1 content
+"
+git_in "$wt" push -q origin fix/994-stale-tracking
+git_in "$root" worktree remove "$wt" --force
+git_in "$root" branch -D fix/994-stale-tracking
+clone2="$TMP/clone2"
+git_in "$TMP" clone -q "$TMP/origin.git" "$clone2"
+git -C "$clone2" config user.email test@test
+git -C "$clone2" config user.name test
+git_in "$clone2" checkout -q fix/994-stale-tracking
+commit_in "$clone2" file.txt "v2 content — pushed by a second clone after root's own push
+"
+git_in "$clone2" push -q origin fix/994-stale-tracking
+expect 2 "a stale cached tracking ref is UNKNOWN/2, not a false SAFE-DELETE" \
+  "STALE" \
+  -- run_in "$root" env NO_PR=1 "$SCRIPT" fix/994-stale-tracking origin/main
+
+# ── (l) branch is HEAD — refuses unconditionally, in every mode ───────────
+new_fixture
+root="$TMP/clone"
+expect 2 "branch is HEAD refuses rather than judging git's own current-commit pointer" \
+  "branch is HEAD" \
+  -- run_in "$root" env NO_PR=1 "$SCRIPT" HEAD origin/main
+
+# ── (m) remote-only branch name equal to the base's own short name ────────
+# A base branch that is only fetched (never checked out) in this repo is
+# remote-only under the SAME name as $base — judging it against itself
+# would trivially read "ancestor" (SAFE-DELETE). Built with a base other
+# than main so this repo's own checkout branch (main) does not shadow it.
+new_fixture
+root="$TMP/clone"
+git_in "$root" push -q origin main:release
+git_in "$root" fetch -q origin
+if git -C "$root" rev-parse --verify --quiet refs/heads/release >/dev/null 2>&1; then
+  echo "fixture bug: refs/heads/release should not exist locally (fetched-only)" >&2
+  exit 1
+fi
+expect 2 "a remote-only branch sharing the base's own short name refuses to compare it to itself" \
+  "base branch's own name" \
+  -- run_in "$root" env NO_PR=1 "$SCRIPT" release origin/release
+
 echo ""
 if [ "$FAIL" -gt 0 ]; then
   printf '\033[31m%s passed, %s FAILED\033[0m\n' "$PASS" "$FAIL"
