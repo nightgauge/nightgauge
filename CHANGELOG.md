@@ -137,6 +137,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The `--render-profile` eval lane no longer measures bare prompts when the
+  render fails.** `scripts/evaluate-skills.ts` caught every render error and
+  ran the scenario without its skill text, so a `nightgauge` binary on `PATH`
+  older than `skill render --profile` produced a "full vs compact" comparison
+  in which neither side carried a skill. Only a stage the binary has no skill
+  directory for is still skipped; any other render failure now stops the run
+  and names the binary it used.
 - **issue-pickup's baseline-CI deferral comment no longer says the item will
   not resume on its own.** The comment Phase 2.8 posts told readers that an
   operator had to run `nightgauge baseline-gate promote`. Step 2.8.3 of the

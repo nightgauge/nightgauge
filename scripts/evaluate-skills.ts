@@ -280,6 +280,16 @@ async function main(): Promise<void> {
           // (e.g. "check-triage", which is not a pipeline stage) is not a
           // measurement-lane failure — skip it and leave that scenario's
           // prompt as the bare scenario text, same as --render-profile unset.
+          // Anything else (a stale binary without --profile, a broken render)
+          // is: skipping it would measure bare prompts and report them as the
+          // profile, which is how a live run silently compared nothing.
+          if (!String((err as Error).message).includes("no skill directory for stage")) {
+            throw new Error(
+              `could not render "${scenario.skill}" at profile "${args.renderProfile}" with ${bin} ` +
+                `(set NIGHTGAUGE_BIN to a current build): ${(err as Error).message}`,
+              { cause: err }
+            );
+          }
           console.error(
             `WARNING: could not render "${scenario.skill}" at profile "${args.renderProfile}": ` +
               `${(err as Error).message}`
