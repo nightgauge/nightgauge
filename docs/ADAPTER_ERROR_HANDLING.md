@@ -1,6 +1,6 @@
 # Adapter Error Handling
 
-This document describes the standardized error handling system used by all 8 CLI
+This document describes the standardized error handling system used by the CLI
 adapters in Nightgauge.
 
 ## Overview
@@ -96,7 +96,7 @@ Validates presence of `ANTHROPIC_API_KEY` environment variable.
 - `BINARY_NOT_FOUND` — `grok` not in PATH
 - `AUTH_MISSING` — no `~/.grok/auth.json` and no `XAI_API_KEY`
 
-**Fix:** `grok login` or `export XAI_API_KEY=xai-...`
+**Fix:** `grok login` or `export XAI_API_KEY=<your-key>`
 **Docs:** https://docs.x.ai/build/overview
 
 ### Gemini CLI (`gemini`)
@@ -175,6 +175,47 @@ No auth validation (Ollama accepts any API key string). Errors occur at query ti
 
 **Fix:** `gh auth login`
 **Docs:** https://docs.github.com/en/copilot/using-github-copilot/using-github-copilot-in-the-command-line
+
+### OpenCode (`opencode`)
+
+**Experimental** — every dispatch is refused before spawn unless
+`NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` is set. Full design record:
+[ADR-022](decisions/022-opencode-multi-provider-adapter.md).
+
+1. Verify `opencode` binary is installed and at or above the compat
+   manifest's floor version
+2. Per the dispatched model's provider (`<provider>/<model>` on `-m`): a
+   local endpoint needs no credential; `anthropic/*` needs
+   `ANTHROPIC_API_KEY`, checked before spawn
+
+**Error scenarios:**
+
+- `BINARY_NOT_FOUND` — `opencode` not in PATH and no `opencode.binary` pin
+  resolves
+- `VERSION_MISMATCH` — installed version below the compat manifest's floor,
+  or a version that could not be read
+- `AUTH_MISSING` — `anthropic/*` dispatched with `ANTHROPIC_API_KEY` unset. A
+  subscription or OAuth login OpenCode may hold is never used as a
+  substitute (ADR-022 § 17).
+
+**Fix:** `npm install -g opencode-ai`, or pin `opencode.binary` to an
+absolute path; for `anthropic/*`, `export ANTHROPIC_API_KEY=<key>`
+**Docs:** https://opencode.ai/docs/cli/
+
+**Terminal failure kinds (#1631).** Once a dispatch is running, a stage's
+failure is classified into one of the kinds
+[FAILURE_TAXONOMY.md](FAILURE_TAXONOMY.md) documents. These are the kinds
+OpenCode's own observed failure text produces (`internal/terminalkind/table.json`,
+`internal/terminalkind/testdata/opencode/`):
+
+| Kind                          | What OpenCode reported                                                                                                                                                                | Remediation                                                                                                                                                      |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `context_window_exceeded`     | `AI_APICallError` wrapping a server's own overflow message (the OpenAI-compatible `context_length_exceeded`, LM Studio's, Ollama's, or llama.cpp's wording)                           | The prompt outgrew the model's loaded context window; shorten the stage's input or dispatch to a model with a larger loaded window                               |
+| `adapter_permission_rejected` | `[adapter-permission-rejected] tool=<permission>` — OpenCode auto-rejected a permission the stage's allowed tools grant                                                               | Nightgauge does not generate an OpenCode permission map yet (#1638); this parks rather than retries, because the same dispatch is rejected identically next time |
+| `adapter_incompatible`        | `adapter_incompatible: <reason>` — below the compat manifest's floor, a version that could not be read, or (above max-tested) a failed self-test or a refused local-endpoint dispatch | Pin `opencode.binary` to a version within the compat manifest's floor/max-tested range                                                                           |
+| `model_unavailable`           | `not_found_error` / `model not found` / `invalid model`, or a usage-limit phrase naming the model                                                                                     | Fix `opencode.model` or the dispatched model id, or pull/load the model on the endpoint                                                                          |
+| `network_unavailable`         | `AI_APICallError: Cannot connect to API: Unable to connect. Is the computer able to access the url?`                                                                                  | The dispatched endpoint's model server is not listening; verify it is running and reachable                                                                      |
+| `adapter_auth_failed`         | `AI_APICallError: Unauthorized` — the model server rejected OpenCode's credentials with a 401                                                                                         | For `anthropic/*`, verify `ANTHROPIC_API_KEY`; for a declared endpoint, verify the endpoint's configured key                                                     |
 
 ## Usage in Code
 
