@@ -220,9 +220,9 @@ but \`main\`'s recent runs are currently red:
 - **Reason**: $REASON
 
 The pipeline has paused this item ([\`baseline-ci-deferred\`](../../docs/FAILURE_TAXONOMY.md#infrastructure)).
-**It will not resume on its own.** Once \`main\`'s runs of this workflow are green
-again, an operator must run \`nightgauge baseline-gate promote\` in the workspace
-to release it back into the queue."
+The autonomous daemon resumes it once \`main\`'s recent runs of this workflow are
+green again; \`nightgauge baseline-gate promote\` in the workspace releases it
+immediately."
 
     nightgauge forge issue comment --subject-id "$ISSUE_NUMBER" -b "$COMMENT_BODY" 2>/dev/null || \
       echo "warning: failed to post deferral comment to #$ISSUE_NUMBER"
