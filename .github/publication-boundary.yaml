@@ -287,6 +287,7 @@ deny:
       - "docs/spikes/568-model-identity-axes.md"
       - "docs/spikes/662-adapter-usage-quota-signals.md"
       - "docs/spikes/1272-ai-native-sdlc-playbook-gap-analysis.md"
+      - "docs/spikes/1650-opencode-server-mode-warm-serve-run-attach-http-permission.md"
     rationale: >-
       Company research artifacts require an explicit publication decision.
       The public README documents the product contract without publishing the
@@ -321,6 +322,17 @@ deny:
       COGS, pricing, customer data, account identifiers, private repository
       issue numbers, or unreleased roadmap material. The spike-materialize
       stage requires the artifact at this path to file its follow-up issues.
+      Spike #1650 (OpenCode server mode) is reviewed and excepted on the same
+      basis: every observation is of the third-party `opencode` CLI's own
+      published surface — its --help output, its GET /doc OpenAPI document,
+      and its behaviour against the repository's already-public
+      cmd/stub-provider — and the only Nightgauge material it cites is ADR-022
+      and public issue numbers in this repository. It contains no COGS,
+      pricing, customer data, account identifiers, private repository issue
+      numbers, or unreleased roadmap material; the one host-identifying value
+      observed during the experiments (this machine's LAN address) is redacted
+      to a placeholder. The spike-materialize stage requires the artifact at
+      this path to file its follow-up issues.
   - path: "docs/epics/**"
     class: PRIVATE
     except:
