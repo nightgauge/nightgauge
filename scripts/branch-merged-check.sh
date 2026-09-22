@@ -187,7 +187,8 @@ classify() {
     local tracking_sha live_line live_sha
     tracking_sha=$(git rev-parse "$ref" 2>/dev/null)
     live_line=$(git ls-remote origin "refs/heads/$branch" 2>/dev/null)
-    live_sha=$(printf '%s' "$live_line" | awk '{print $1; exit}')
+    # ls-remote matches patterns by ref-name tail, so pick the exact ref only.
+    live_sha=$(printf '%s\n' "$live_line" | awk -v want="refs/heads/$branch" '$2 == want {print $1; exit}')
     if [ -z "$live_sha" ]; then
       echo "UNKNOWN      remote-only ref $branch — \`git ls-remote origin refs/heads/$branch\` failed or found nothing; cannot confirm the cached tracking ref ${tracking_sha:0:7} is current"
       return 2
