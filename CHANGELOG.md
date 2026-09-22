@@ -87,6 +87,44 @@ changelog, and the release workflow refuses a tag that does not.
   the step-wiring check against the include the compact render actually
   `Read`s.
 
+- **Compact render profiles for feature-planning (#1661), feature-dev
+  (#1662) and pr-create (#1664).** All three now fit the ADR-023 share at a
+  32768-token window with `nightgauge skill render --profile compact`.
+  feature-planning goes from ~12.4k to ~6.0k estimated tokens against an
+  8.8k budget; it keeps every phase marker, the `planning-{N}.json` Output
+  Contract (`schema_version`, `plan_file`, `files_to_create`,
+  `files_to_modify`, `complexity_assessment`) and the Completion Checklist.
+  Its base skill gains a Gotcha (in both renders) naming the `- [ ] task`
+  checkbox format `parsePlanFile` counts toward plan completion — the issue
+  had no such documented format to trim from, so this is new, honest content
+  rather than an invented compact-only rule. feature-dev goes from ~11.7k to
+  ~7.2k against an 8.3k budget; it keeps every phase marker, the
+  `dev-{N}.json` handoff contract (`files_changed`, `tests_status`), the
+  feature-dev-does-not-commit rule (#1608), build-before-tests, the
+  stop-and-declare rule and the UNOBSERVED-MECHANISM rule (#1263), and
+  carries no instruction that contradicts #1651's single-step scope
+  preamble. pr-create goes from ~11.4k to ~6.6k against an 8.0k budget; it
+  keeps every phase marker, the `pr-{N}.json` contract, the Phase 3.6
+  PR-existence idempotency check, the security re-scan and the Completion
+  Checklist. Its own issue carried a 2026-09-16 plan-audit correction: this
+  repository's pr-create creates the PR through the Go binary's own
+  `"$BINARY" pr create --title ... --body "$PR_BODY" ...`, never a `gh pr
+create --body-file` call, so the compact profile (and its tests) pin
+  `--body "$PR_BODY"` and refuse `--body-file` and `gh pr create` instead of
+  the issue's literal, inapplicable check. The language-specific
+  walkthroughs, long diagnostics prose and worked examples across all three
+  become on-demand `Read`s. The new tests are
+  `compact_feature_planning_test.go`, `compact_feature_dev_test.go` and
+  `compact_pr_create_test.go`. They pin budget fit and marker parity with the
+  full render, the retained rules and contracts by name, that a compact plan
+  fixture parses through `parsePlanFile` with `Total > 0`
+  (`internal/skillrender/testdata/compact-plan-fixture.md`), that no
+  all-remaining-steps directive appears in feature-dev's compact render, and
+  that every `Read` path is absolute, exists and sits under the skill or
+  `_shared` directory. Mock-mode `evaluate-skills.ts --render-profile
+{full,compact}` on `evals/scenarios/{feature-planning,feature-dev,pr-create}/`
+  passes 36/36 on both profiles; no scenario passes full and fails compact.
+
 - **Claude Opus 5.5 now serves the `opus` band.** `claude-opus-5-5` is
   registered ($4/$20 per MTok, 1M context, `low`–`max` effort) and every stage
   routed to `opus` — on the Claude CLI and the API alike — now runs it;

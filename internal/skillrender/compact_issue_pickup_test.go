@@ -53,17 +53,37 @@ func renderStagePair(t *testing.T, stage string) (full, compact *Result) {
 	return full, compact
 }
 
+// legacyIssueRefRE matches a whole parenthetical issue-number citation, with
+// its leading whitespace, e.g. " (#1234)" or " (#4098, #4135)". Used only to
+// NORMALIZE text for comparison, never to rewrite rendered content: a
+// compact profile is allowed to drop a citation to an issue above this
+// repository's publication-boundary high-water mark (scripts/
+// publication-boundary-check.py) while keeping the rule it names, because a
+// NEW line citing such an issue fails that check even when the identical,
+// unflagged citation already sits in the tracked base file (grandfathered
+// only because those lines are not new). Stripping " (#NNNN[, #NNNN...])"
+// symmetrically from both sides of a marker/code-block comparison keeps the
+// check honest about everything else: only the citation (and the single
+// space before it) is allowed to differ.
+var legacyIssueRefRE = regexp.MustCompile(`\s*\(#\d+(?:,\s*#\d+)*\)`)
+
+func stripIssueRefs(s string) string {
+	return legacyIssueRefRE.ReplaceAllString(s, "")
+}
+
 // missingMarkers returns every must-survive marker (CompactionMarkers: phase
 // markers, gate/contract/checklist headings, deny rules) the full render has
-// and the compact render does not.
+// and the compact render does not, comparing with stripIssueRefs applied so
+// a dropped issue-number citation (see legacyIssueRefRE) is not reported as
+// a missing marker.
 func missingMarkers(full, compact string) []string {
 	have := map[string]bool{}
 	for _, m := range CompactionMarkers(compact) {
-		have[m] = true
+		have[stripIssueRefs(m)] = true
 	}
 	var missing []string
 	for _, m := range CompactionMarkers(full) {
-		if !have[m] {
+		if !have[stripIssueRefs(m)] {
 			missing = append(missing, m)
 		}
 	}
@@ -136,13 +156,18 @@ func assertProfileCodeBlocksAreVerbatim(t *testing.T, stage string) {
 			sources = append(sources, string(data))
 		}
 	}
-	corpus := strings.Join(sources, "\n")
+	// Normalized with stripIssueRefs (see its doc comment): a compact profile
+	// is allowed to drop an inline "#NNNN" issue citation from a copied
+	// block — a false-success guard genuinely quoted from the source, minus
+	// a number the publication-boundary check rejects on a new line — while
+	// every other byte must still match.
+	corpus := stripIssueRefs(strings.Join(sources, "\n"))
 	blocks := fencedBlockRE.FindAllString(string(profile), -1)
 	if len(blocks) == 0 {
 		t.Fatal("found no fenced blocks in the compact profile")
 	}
 	for _, b := range blocks {
-		if !strings.Contains(corpus, b) {
+		if !strings.Contains(corpus, stripIssueRefs(b)) {
 			t.Errorf("compact profile block is not verbatim from SKILL.md, _includes or _shared:\n%s", b)
 		}
 	}
