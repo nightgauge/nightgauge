@@ -16,6 +16,38 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **`scripts/ci-local.sh --changed`, an opt-in change-scoped fast path (#1985).**
+  Derives the changed path set from `git diff --name-only origin/main...HEAD`
+  plus the working tree and, when nothing in it can reach Go, skips
+  `go test ./...` and `go test -race ./...` — 194s and 202s of a 10m31s gate
+  measured 2026-09-22 on an idle 12-core Apple M-series, about 63% of it, on
+  diffs neither pass can observe. Default behaviour without the flag is
+  unchanged, and the flag will not become the default: the rule is still "run
+  the complete local gate once before every push". A skipped step is a THIRD
+  state alongside passed and failed, in the same spirit as #1983's
+  `INFRASTRUCTURE ERROR` — the summary names it with its reason, calls the run
+  a PARTIAL gate, and the verdict reads "every check that RAN passed" rather
+  than "all checks passed". It still appears in `--list-steps`, so the #983
+  step-inventory guard sees the same inventory scoped or not; a step may be
+  skipped loudly, never silently deleted. The Go decision is keyed on GENERATOR
+  INPUTS rather than file extensions, all derived from the tree: `*.go`,
+  `go.mod`/`go.sum`, any file inside a directory holding a tracked `.go` file
+  (`internal/terminalkind/table.json`), any `//go:embed` target resolved
+  against its declaring package (`internal/adaptercompat/manifests/*.json`),
+  and the inputs and outputs of the `go run ./cmd/...` recipes in the
+  `Makefile` plus the path defaults in the generator sources — which is how a
+  diff touching only `packages/nightgauge-vscode/src/services/IpcClient.generated.ts`
+  still runs the Go suites. It fails closed: a missing `origin/main` or an
+  empty derivation runs everything. `go build ./...`, `gofmt`, the
+  generated-file drift checks, the changelog contract, the publication boundary
+  and the credential scan always run. PR CI and `main`'s post-merge run are
+  untouched and stay full-scope, so a local miss costs a CI round trip rather
+  than a bad merge. `scripts/test-ci-local-changed-scope.sh` is the contract's
+  regression suite (37 assertions, in `ci-local.sh` and `lint.yml`), and the
+  race step's cost comment now carries both measurements with their dates and
+  machine class — the `#428 / #493 / #1218` decision to run the race pass
+  whole-tree is unaffected, and the re-measurement confirms its +6% figure.
+
 - **`nightgauge skill render --profile compact` and pr-merge's own compact
   profile (#1654).** A stage skeleton — phase markers, gates, the Input
   Contract and the deny rules — with everything else turned into on-demand
@@ -119,10 +151,18 @@ changelog, and the release workflow refuses a tag that does not.
   clock at 419% CPU**, of which `go test -race` is `217s` and the plain pass
   `197s` — so the two Go passes are `414s`, **68% of the gate**, and neither can
   observe a TypeScript-only diff (the argument #1985 makes). The new concurrency
-  contract suite costs `112s` of that total. Two figures in the tree were wrong
-  and are corrected by this one measurement: `docs/GIT_WORKFLOW.md` claimed one
-  machine runs one gate at a time, and the comment above the race step still
-  advertised `2m48s -> 2m58s` for both Go passes together.
+  contract suite costs `112s` of that total. `docs/GIT_WORKFLOW.md` claimed one
+  machine runs one gate at a time, contradicting #855, and is corrected.
+
+  **Corrected while landing #1985:** this entry originally also called the race
+  step's `2m48s -> 2m58s` comment wrong. It is not. That comment states the plain
+  pass alone against plain-and-race run CONCURRENTLY, which is how `ci.yml`'s
+  "Test (plain and race, concurrently)" step works — `168s -> 178s`, and an idle
+  re-measurement the same day got `166s / 174s`. `ci-local.sh` runs the two as
+  separate sequential steps, so a gate log shows `194s` and `202s`, which SUM to
+  ~396s. Comparing that sum to a concurrent wall clock is what produced a bogus
+  "1.8x stale" claim. The `+6%` conclusion stands and the comment needed no
+  correction.
 
 - **The SDK's OpenCode run-env allowlist rejected several variables real
   `nightgauge opencode config --json` output carries, so `checkRunConfig`

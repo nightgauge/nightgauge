@@ -1201,6 +1201,46 @@ Two things this does not license:
   `src/manifest/`, go straight to the package rung — those edits break things at
   a distance by their nature.
 
+### `--changed`: the opt-in fast path (#1985)
+
+```bash
+bash scripts/ci-local.sh --changed
+```
+
+`--changed` derives the changed path set from `git diff --name-only
+origin/main...HEAD` **plus the working tree** and, if nothing in it can reach Go,
+skips `go test ./...` and `go test -race ./...`. Measured 2026-09-22 on an idle
+12-core Apple M-series, those two passes are 194s and 202s of a 10m31s gate —
+about 63% of it — and on a diff that cannot reach Go neither pass can observe the
+change.
+
+Four things about it are deliberate:
+
+- **It is opt-in and will not become the default.** The rule is still "run the
+  complete local gate once before every push", and that means `ci-local.sh` with
+  no flags. A scoped default would weaken the rule everywhere while producing
+  output that looks identical.
+- **A skipped step is a third state, never a pass.** The summary names every
+  skipped step with its reason, calls the run a PARTIAL gate, and the verdict is
+  "every check that RAN passed" rather than "all checks passed". A step may be
+  skipped loudly; it may never disappear (#983).
+- **The decision is keyed on generator inputs, not file extensions.** A `.ts`
+  file rendered from Go (`IpcClient.generated.ts`), a `.json` file reached by
+  `//go:embed`, and any non-Go file sitting in a Go package directory all count
+  as Go inputs. The rules are derived from the tree — `git ls-files '*.go'`, the
+  `//go:embed` declarations, and the `go run ./cmd/...` recipes in the
+  `Makefile` — so a new generator is picked up without editing the gate.
+- **It fails closed.** No `origin/main`, an empty derivation, or anything else
+  that cannot answer "did a Go input change?" runs the suites.
+- **Nothing else is ever skipped**, whatever the scope: the generated-file drift
+  checks, the changelog contract, the publication boundary and the credential
+  scan always run, and so do `go build ./...` and `gofmt`.
+
+What this buys is earlier feedback, not less safety: PR CI runs every step
+regardless and `main`'s post-merge run stays full, so a miss here costs a CI
+round trip rather than a bad merge. `bash scripts/ci-local.sh --changed
+--scope-probe` prints the decision and its reason without running anything.
+
 ### Quick Validation Script
 
 Run `/pr-preflight` locally if you have the skill installed, or run these checks
