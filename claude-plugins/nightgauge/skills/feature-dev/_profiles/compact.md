@@ -89,7 +89,7 @@ overrides: Read [docs/CONTEXT_ARCHITECTURE.md](../../../../../docs/CONTEXT_ARCHI
   if that is impractical, do not ship it. Deliberate mitigation carries
   `NIGHTGAUGE-MITIGATION: issue=<owner/repo#N> mechanism=unobserved` beside
   the code, never prose in a doc comment. Full rationale: Read
-  [`_shared/UNOBSERVED_MECHANISM.md`](../_shared/UNOBSERVED_MECHANISM.md).
+  [`_shared/UNOBSERVED_MECHANISM.md`](../../_shared/UNOBSERVED_MECHANISM.md).
 - **Never run the repo's full pre-submission suite here (#223).** `bash
 scripts/ci-local.sh` and its equivalents belong to feature-validate, which is
   the stage that commits and pushes (#1608). You do not push.
