@@ -4,7 +4,11 @@
 // once the registry-priced cost passes RunOptions.CostBudget, and prices it
 // again with its subagent sessions once it has ended. A stage whose subagent
 // usage was only partly read fails on its budget too, since the budget cannot
-// be verified then.
+// be verified then. The gap this closes late instead of live is currently
+// unreachable: the plugin's gates.js denies every `task` tool call
+// unconditionally as AC9's fallback, so no subagent session can start to
+// spend past the budget while the stage runs (see ADR-022's "Nightgauge
+// OpenCode plugin" amendment, and #1748).
 package execution
 
 import (
@@ -42,6 +46,12 @@ const openCodeCostKillGrace = 10 * time.Second
 // budget cannot be verified. It prices every step, a subagent's included, at
 // the rates of the model the stage was dispatched with, because no stream
 // event names the model that served a step.
+//
+// The "cannot stop a stage while its subagents spend" limitation is
+// currently unreachable in practice: gates.js denies every `task` tool call
+// unconditionally as AC9's fallback, so no subagent session exists to spend
+// past the budget while the stage runs (#1748). This description stays
+// accurate for when AC9 is settled and the denial is lifted.
 type openCodeCostWatchdog struct {
 	// model is the -m value the stage was dispatched with.
 	model string

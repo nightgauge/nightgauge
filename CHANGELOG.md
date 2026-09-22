@@ -34,6 +34,18 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **ADR-022's "subagent cost" gap read as a live risk; it is currently
+  unreachable.** § 3's watchdog passage, its § 15 `Subagents (task)` row, and
+  the `openCodeUnenforcedControls` "subagent cost" warning
+  (`internal/execution/adapters/opencode.go`) described a stage's subagents
+  as able to spend past its cost budget before the watchdog's settle-time
+  check catches it. `gates.js` denies every `task` tool call unconditionally
+  as AC9's fallback, so no subagent session can start at all today — zero
+  dollars of subagent spend is possible through that path. The docs now say
+  so, and a new test
+  (`TestNodeHarnessDeniesTaskRegardlessOfCostBudget`) pins that the denial
+  holds regardless of a cost budget (#1748).
+
 - **The rate-limit gate was never installed on the CLI path.**
   `WithRateLimitTracker` was called in three places, all inside
   `internal/ipc`, so the shared tracker was a daemon-only mechanism. Every
