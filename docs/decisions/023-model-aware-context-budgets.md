@@ -338,5 +338,10 @@ against the _dispatch model's_ window, at render/dispatch time.
 - [ ] #1651 bounded sub-sessions (decision slot only, tracked separately)
 - [ ] #1652 non-USD budgets (decision slot only, tracked separately)
 - [ ] #1655 capacity-aware sizing (decision slot only, tracked separately)
-- [ ] A `compact` render profile (Q5/Q6 decision slot only; no code exists to
-      select or apply one yet)
+- [x] A `compact` render profile (#1654: `internal/skillrender`'s Profile
+      option, `--profile compact`, `DecideProfile`, and pr-merge's own
+      `_profiles/compact.md` as the first consumer. `DecideProfile` is the
+      compact half of this ADR's Q3/Q5 order — full fits, else compact if
+      available and it fits, else refuse. Wiring it into the scheduler ahead
+      of the existing model-swap hop is not part of #1654 and stays
+      `internal/orchestrator`'s own, out of this issue's file ownership.)

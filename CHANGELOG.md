@@ -16,6 +16,25 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **`nightgauge skill render --profile compact` and pr-merge's own compact
+  profile (#1654).** A stage skeleton — phase markers, gates, the Input
+  Contract and the deny rules — with everything else turned into on-demand
+  `Read` directives at `<skillDir>/_profiles/compact.md`, instead of the full
+  `_shared`/`_includes` content a full render inlines or references. Omitting
+  `--profile`, or passing `--profile full`, renders byte-identically to
+  before; a stage with no compact profile falls back to full with a warning.
+  `skills/nightgauge-pr-merge/_profiles/compact.md` is the first consumer:
+  pr-merge's full render is ~21.8k estimated tokens (over the ADR-023 budget
+  at a 32768-token window) and its compact render is ~2.8k, well under it,
+  while keeping the `--admin` prohibition and the post-merge build-check text
+  verbatim. `internal/skillrender/budget.go` gained `DecideProfile`, the
+  compact half of ADR-023's dispatch-outcome order (full → compact → refuse);
+  the model-swap re-route hop stays #1645's own. `scripts/evaluate-skills.ts
+--render-profile full|compact` prepends the rendered skill to each
+  scenario's prompt and tags the recorded JSONL with `render_profile`, so
+  #1660-#1664 can compare profiles on the existing scenarios. The plugin
+  mirror and the VSIX marketplace bundle both ship the new `_profiles/` tree.
+
 - **OpenCode stages get liveness-aware phase inference, adapter-aware stage
   timeouts, and dispatch-time local-endpoint readiness (#1646).** Timing
   assumptions previously came from Claude speeds: a local model's slow-but-
@@ -51,6 +70,61 @@ changelog, and the release workflow refuses a tag that does not.
   ADR-022 § 18 stands.
 
 ### Fixed
+
+- **The SDK's OpenCode run-env allowlist rejected several variables real
+  `nightgauge opencode config --json` output carries, so `checkRunConfig`
+  would have rejected the verb's own output on every machine, once #1648
+  wires it in.** `childEnv.ts`'s `OPENCODE_RUN_ENV_NAMES` was missing
+  `NIGHTGAUGE_OPENCODE_PLUGIN_PATH`/`_NONCE`/`_SENTINEL` (the TS twin of
+  `opencodeplugin.EnvPluginPath`/`EnvNonce`/`EnvSentinel`,
+  `internal/execution/opencodeplugin/plugin.go`), `OPENCODE_DISABLE_PROJECT_CONFIG`
+  (a bare string literal `InstallNightgaugePlugin` sets at its call site in
+  `opencode.go`, not one of `opencodeplugin`'s exported constants — the reason
+  an earlier version of this fix's own parity test, which read only those
+  constants, missed it) and `HOME` (the isolated per-run home
+  `OpenCodeIsolationEnv` sets, `internal/execution/adapters/opencode_isolation.go`).
+  The `HOME` gap was an isolation defeat, not just a rejection: `SYSTEM_ALLOW`
+  already passes an _inherited_ `HOME` through to every opencode child, so
+  without a run variable able to override it, a future looser run-config
+  provider would have left the operator's real `HOME` in place and let
+  OpenCode read the operator's own `~/.opencode` — exactly what ADR-022 § 8
+  isolation exists to prevent. All four are now allowlisted and forwarded.
+  `NIGHTGAUGE_OPENCODE_PLUGIN_PATH`/`_SENTINEL` are also now checked to be
+  absolute paths inside the run's own root, matching
+  `opencodeplugin.SentinelPath`'s formula, since the plugin's own init writes
+  the sentinel file at this path verbatim (`fs.writeFileSync`).
+
+  `NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK` is accepted by `checkRunConfig`
+  too, via a second set (`OPENCODE_RUN_ENV_WITHHELD_NAMES`) consulted only
+  there — refusing it would fail `CONFIG_INVALID` closed on any machine where
+  an operator's `$HOME/.opencode` happens to be unsatisfied, a condition the
+  operator neither sets nor controls. It is never forwarded to the child:
+  `curateOpenCodeChildEnv` still applies only `OPENCODE_RUN_ENV_NAMES`, the
+  TS twin of the Go adapter's own `BuildCommand`, which deletes this same name
+  from the child's env right before returning it (`opencode.go`, pinned by
+  `TestOpenCodeBuildCommandWithholdsOperatorInstallRiskFromTheChild`) — #1802's
+  child-env leak is already closed there; only the config verb's _printed_
+  `env` still carries the name, since the verb prints `RunRoot.Env` directly
+  rather than `BuildCommand`'s output.
+
+  `isOpenCodeChildEnvAllowed` (the _inherited_-environment path, used for a
+  nested SDK spawn) now also denies every `NIGHTGAUGE_OPENCODE_`-prefixed
+  name, not only `OPENCODE_`-prefixed ones: without this, a nested opencode
+  dispatch would have inherited its parent run's plugin path, handshake nonce
+  and sentinel path from `process.env`, letting a nested child write to the
+  parent run's own sentinel file, instead of minting its own.
+
+  A Go/TS parity test now derives its expectation from the real verb's
+  output rather than from `opencodeplugin`'s constant definitions:
+  `TestOpenCodeConfigVerbEnvKeysMatchGoldenFixture`
+  (`cmd/nightgauge/opencode_test.go`) pins the exact `env` key set a
+  reference invocation of `nightgauge opencode config --json` prints against
+  a checked-in fixture
+  (`internal/execution/testdata/opencode_config_verb_env_keys.golden.json`),
+  and `childEnv.test.ts` reads the same fixture to assert every key is
+  accepted by the TS allowlist — closing the blind spot that let both
+  `OPENCODE_DISABLE_PROJECT_CONFIG` and `HOME` through a constants-only parity
+  test undetected (#1804, refs #1648).
 
 - **ADR-022's "subagent cost" gap read as a live risk; it is currently
   unreachable.** § 3's watchdog passage, its § 15 `Subagents (task)` row, and

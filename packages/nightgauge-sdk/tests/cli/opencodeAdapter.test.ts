@@ -49,14 +49,31 @@ afterEach(() => {
   for (const d of tmpDirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
-/** A run config the way `nightgauge opencode config` would build one, under `root`. */
+/**
+ * A run config the way `nightgauge opencode config` would build one, under
+ * `root` — every key a real invocation of the verb prints (#1804: HOME,
+ * OPENCODE_DISABLE_PROJECT_CONFIG and the plugin/handshake trio are real
+ * verb output, not test-only additions; a fixture missing them let the SDK's
+ * allowlist gap in each pass unnoticed).
+ */
 function runConfig(root: string): OpenCodeRunConfig {
   const env: Record<string, string> = {
+    HOME: join(root, "home"),
     XDG_CONFIG_HOME: join(root, "config"),
     XDG_DATA_HOME: join(root, "data"),
     XDG_CACHE_HOME: join(root, "cache"),
     XDG_STATE_HOME: join(root, "state"),
     GH_CONFIG_DIR: join(root, "gh"),
+    OPENCODE_DISABLE_PROJECT_CONFIG: "1",
+    NIGHTGAUGE_OPENCODE_PLUGIN_PATH: join(
+      root,
+      "config",
+      "opencode",
+      "nightgauge-plugin",
+      "nightgauge.js"
+    ),
+    NIGHTGAUGE_OPENCODE_PLUGIN_NONCE: "fixture-nonce",
+    NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL: join(root, ".opencode-plugin-fixture.json"),
   };
   for (const flag of [
     "OPENCODE_DISABLE_MODELS_FETCH",
@@ -240,6 +257,80 @@ describe("OpenCodeAdapter without a run config provider (#1637)", () => {
       /OPENCODE_PERMISSION, which is not a run variable/
     );
   });
+
+  // #1804: InstallNightgaugePlugin (internal/execution/adapters/opencode.go)
+  // sets the plugin path, handshake and OPENCODE_DISABLE_PROJECT_CONFIG
+  // variables on every run with a run identity, and OpenCodeIsolationEnv
+  // sets the isolated HOME — all real `nightgauge opencode config --json`
+  // output (verified against the built verb). runConfig() now carries every
+  // one of them by default, so every test in this file that spawns through it
+  // already exercises acceptance; this asserts it directly too.
+  it("accepts a run config carrying the plugin/handshake variables, HOME and OPENCODE_DISABLE_PROJECT_CONFIG", async () => {
+    const root = tmp("oc-run-");
+    const adapter = new OpenCodeAdapter({
+      env: {},
+      model: LOCAL_MODEL,
+      runConfigProvider: providerFor(runConfig(root)),
+    });
+    await expect(adapter.createQueryFunction({ cwd: tmp("oc-wt-") })).resolves.toBeInstanceOf(
+      Function
+    );
+  });
+
+  // A NIGHTGAUGE_OPENCODE_PLUGIN_PATH/_SENTINEL outside the run's own root is
+  // refused rather than trusted: the plugin's init writes the sentinel file
+  // verbatim at this path (fs.writeFileSync, plugin/nightgauge.js), so an
+  // arbitrary absolute path would let a run config truncate a file anywhere
+  // on disk the SDK process can write to.
+  it("refuses a plugin path or sentinel outside the run's own root", async () => {
+    for (const name of ["NIGHTGAUGE_OPENCODE_PLUGIN_PATH", "NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL"]) {
+      const root = tmp("oc-run-");
+      const config = runConfig(root);
+      const adapter = new OpenCodeAdapter({
+        env: {},
+        model: LOCAL_MODEL,
+        runConfigProvider: providerFor({
+          ...config,
+          env: { ...config.env, [name]: "/etc/passwd" },
+        }),
+      });
+      await expect(adapter.createQueryFunction({ cwd: tmp("oc-wt-") }), name).rejects.toThrow(
+        new RegExp(`its ${name} is not an absolute path in the run's root`)
+      );
+    }
+  });
+
+  // #1802's child-env half (the Go adapter forwarding this operator directory
+  // path to the opencode child) is already closed: BuildCommand deletes
+  // opencodeplugin.EnvOperatorInstallRisk from the child's env right before
+  // returning it (opencode.go, pinned by
+  // TestOpenCodeBuildCommandWithholdsOperatorInstallRiskFromTheChild). Only
+  // the config verb's *printed* env still carries it, because the verb prints
+  // RunRoot.Env directly, not BuildCommand's output. checkRunConfig must
+  // accept the name — refusing it would fail CONFIG_INVALID closed on every
+  // machine where an operator's $HOME/.opencode happens to be unsatisfied,
+  // which the operator neither set nor controls — while never letting it
+  // reach the child, mirroring BuildCommand's own delete. The spawn-level
+  // proof (the value is absent from the actual child env) lives in the
+  // "OpenCodeAdapter spawn" describe block below.
+  it("accepts NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK, an operator directory path, without forwarding it", async () => {
+    const root = tmp("oc-run-");
+    const config = runConfig(root);
+    const adapter = new OpenCodeAdapter({
+      env: {},
+      model: LOCAL_MODEL,
+      runConfigProvider: providerFor({
+        ...config,
+        env: {
+          ...config.env,
+          NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK: "/home/operator/.opencode",
+        },
+      }),
+    });
+    await expect(adapter.createQueryFunction({ cwd: tmp("oc-wt-") })).resolves.toBeInstanceOf(
+      Function
+    );
+  });
 });
 
 describe("OpenCodeAdapter.validateAuth (#1637)", () => {
@@ -419,6 +510,33 @@ describe("OpenCodeAdapter spawn (#1637)", () => {
     expect(env.GH_TOKEN).toBe(PARENT.GH_TOKEN);
     expect(env.NIGHTGAUGE_ADAPTER).toBe("opencode");
     expect(env.NIGHTGAUGE_DISPATCH_MODEL).toBe(LOCAL_MODEL);
+  });
+
+  // #1804/#1802: checkRunConfig accepts NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK
+  // (see the acceptance test above), but curateOpenCodeChildEnv must never
+  // apply it — the TS twin of the Go adapter's BuildCommand deleting it from
+  // the child's own env right before returning it.
+  it("accepts NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK but never forwards it to the child", async () => {
+    const research = join(TESTDATA, "opencode_stream_research_sample.jsonl");
+    const dir = tmp("oc-stub-");
+    const bin = writeStub(dir, `  cat '${research}'`);
+    const worktree = tmp("oc-wt-");
+    const config = runConfig(tmp("oc-run-"));
+    const adapter = new OpenCodeAdapter({
+      env: { ...PARENT, PATH: `${bin}:${process.env.PATH}` },
+      model: LOCAL_MODEL,
+      runConfigProvider: providerFor({
+        ...config,
+        env: {
+          ...config.env,
+          NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK: "/home/operator/.opencode",
+        },
+      }),
+    });
+    const query = await adapter.createQueryFunction({ cwd: worktree, stage: "feature-dev" });
+    await drain(query({ prompt: "p" }));
+    const env = readEnvFile(join(dir, "env"));
+    expect(env.NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK).toBeUndefined();
   });
 
   it("gives an anthropic run ANTHROPIC_API_KEY and no other provider's key", async () => {
