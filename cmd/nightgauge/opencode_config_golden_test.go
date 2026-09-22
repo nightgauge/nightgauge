@@ -156,17 +156,45 @@ func TestOpenCodeConfigGolden(t *testing.T) {
 			repls = append(repls, struct{ from, to string }{n, "@NONCE@"})
 		}
 	}
+	// A JSON-valued string (config_content) was marshalled with its keys
+	// sorted while they still held the real base, so its key order depends
+	// on where the OS puts temp dirs (/tmp/X on Linux sorts after "/tmp/?",
+	// /private/var/X on macOS before it). Re-sorting after substitution
+	// makes the golden the same on every OS.
 	normalize := func(s string) string {
 		for _, r := range repls {
 			s = strings.ReplaceAll(s, r.from, r.to)
 		}
+		var obj map[string]any
+		if strings.HasPrefix(s, "{") && json.Unmarshal([]byte(s), &obj) == nil {
+			if b, err := json.Marshal(obj); err == nil {
+				return string(b)
+			}
+		}
 		return s
+	}
+	var normalizeStrings func(v any) any
+	normalizeStrings = func(v any) any {
+		switch x := v.(type) {
+		case string:
+			return normalize(x)
+		case map[string]any:
+			for k, e := range x {
+				x[k] = normalizeStrings(e)
+			}
+		case []any:
+			for i, e := range x {
+				x[i] = normalizeStrings(e)
+			}
+		}
+		return v
 	}
 
 	var verbObj any
-	if err := json.Unmarshal([]byte(normalize(out)), &verbObj); err != nil {
-		t.Fatalf("the normalized verb output is not JSON: %v", err)
+	if err := json.Unmarshal([]byte(out), &verbObj); err != nil {
+		t.Fatalf("the verb output is not JSON: %v", err)
 	}
+	verbObj = normalizeStrings(verbObj)
 	verbJSON, err := json.MarshalIndent(verbObj, "  ", "  ")
 	if err != nil {
 		t.Fatal(err)
