@@ -92,8 +92,9 @@ import (
 // OpenCodeConfigSchemaVersion is the schema_version of `nightgauge opencode
 // config --json`. A caller refuses an output whose major version it does not
 // know (#1648). 1.1 added binary and plugin_version, which the SDK spawn path
-// needs to run the binary the verb vetted and to verify the plugin handshake.
-const OpenCodeConfigSchemaVersion = "1.1"
+// needs to run the binary the verb vetted and to verify the plugin handshake;
+// 1.2 added run_id, so it can delete the root when the run ends.
+const OpenCodeConfigSchemaVersion = "1.2"
 
 // openCodeConfigContentEnvVar is the inline config layer OpenCode merges last
 // of every layer Nightgauge does not refuse.
@@ -1333,6 +1334,11 @@ type OpenCodeRun struct {
 	// the binary the verb checked rather than whatever opencode its own PATH
 	// finds. The Go spawn path takes the pin from PrepareRunRoot instead.
 	Binary string `json:"binary,omitempty"`
+	// RunID is the run identity RunDir is named by: the verb's --run-id, or
+	// the one it minted. Only `nightgauge opencode config` sets it, so an SDK
+	// caller can delete the root with `nightgauge opencode cleanup` at the
+	// run's end, as the Go scheduler does (ADR-022 § 22).
+	RunID string `json:"run_id,omitempty"`
 	// PluginVersion is the plugin_version the Nightgauge plugin's handshake
 	// sentinel must carry (opencodeplugin.PluginVersion), set by
 	// InstallNightgaugePlugin, so a caller outside this binary verifies the

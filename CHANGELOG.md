@@ -39,16 +39,26 @@ changelog, and the release workflow refuses a tag that does not.
   `OPENCODE_CONFIG_CONTENT` never reaches the child. The child runs the
   binary the verb vetted. The handshake mirrors `manager.go`. At the first
   `step_start` the sentinel must carry the run's nonce and the installed
-  `plugin_version`, or the process group is killed. If the run made a tool
-  call, the sentinel must also be dated no later than that call's start. The
-  verb's output is now `schema_version` 1.1. It adds `binary`, the absolute
-  path of the opencode the version policy checked, and `plugin_version`.
+  `plugin_version`, or the process group is SIGKILLed every 15 ms for up to
+  1 s, as `killProcessTreeUntilGone` does. If the run made a tool call, the
+  sentinel must also be dated no later than that call's start. The verb's
+  output is now `schema_version` 1.2. It adds `binary`, the absolute path of
+  the opencode the version policy checked, `plugin_version` and `run_id`. The
+  SDK runs the verb in the stage's worktree with `--skills-root` taken from
+  the SKILL.md the stage's prompt came from. With `--skills-root` named, a
+  SKILL.md the verb cannot find fails the verb instead of printing an
+  all-deny permission map. A new `nightgauge opencode cleanup --run-id`
+  deletes a per-run root. The SDK calls it when a query whose root was minted
+  for it ends, and when a pipeline run whose stages shared a root ends, as the
+  Go scheduler does at every terminal outcome. A stage repository that is not
+  `owner/name` is now named in a warning rather than dropped silently.
   `TestOpenCodeConfigGolden` generates
   `internal/execution/adapters/testdata/opencode_config_golden.json` from the
   real verb and the Go adapter's `BuildCommand`. The SDK's
   `opencodeRunConfig.test.ts` feeds that file through the SDK path and asserts
-  that the child's `OPENCODE_CONFIG_CONTENT` and every `HOME`, `XDG_*`,
-  `OPENCODE_*` and `NIGHTGAUGE_OPENCODE_*` value match the Go spawn's. A key
+  that the child's `OPENCODE_CONFIG_CONTENT`, every variable the verb's `env`
+  names and every `HOME`, `XDG_*`, `OPENCODE_*` and `NIGHTGAUGE_OPENCODE_*`
+  value match the Go spawn's. A key
   added on either side turns that side's test red. The SDK's opencode install
   hint now names the managed install of the max-tested build and its
   `opencode.binary` pin. The Go refusals already did.

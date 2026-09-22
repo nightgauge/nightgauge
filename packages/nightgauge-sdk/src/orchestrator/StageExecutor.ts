@@ -51,6 +51,12 @@ export interface StageExecutorOptions {
    */
   runId?: string;
   /**
+   * The directory of the stage's SKILL.md as loadStageSkill resolved it for
+   * the prompt. The opencode adapter builds the stage's permission map from
+   * it (the verb's --skills-root). @see Issue #1648
+   */
+  skillDir?: string;
+  /**
    * Stops the stage: the query's own abort signal fires with it, as it fires
    * on the stage's timeout. @see Issue #1637
    */
@@ -98,6 +104,8 @@ export interface SDKQueryOptions {
     stage?: string;
     /** The pipeline run's identity, when the stage runs inside one. @see Issue #1648 */
     runId?: string;
+    /** The directory of the stage's SKILL.md. @see Issue #1648 */
+    skillDir?: string;
     /**
      * Aborts the query. StageExecutor fires it on the stage's timeout and on
      * the stage's own abort signal; the opencode adapter kills the whole
@@ -235,6 +243,7 @@ export class StageExecutor {
           resumeSessionId: options.resumeSessionId,
           stage: options.stage,
           ...(options.runId !== undefined && { runId: options.runId }),
+          ...(options.skillDir !== undefined && { skillDir: options.skillDir }),
           abortSignal: abort.signal,
         },
       };

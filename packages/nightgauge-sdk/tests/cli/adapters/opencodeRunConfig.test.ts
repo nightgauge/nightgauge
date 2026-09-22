@@ -31,6 +31,7 @@ import {
   type OpenCodeConfigExecFile,
 } from "../../../src/cli/adapters/opencodeRunConfig.js";
 import { AdapterError } from "../../../src/cli/adapters/errors.js";
+import { killGroupUntilGone } from "../../../src/cli/adapters/cliQueryHelper.js";
 import type { SDKMessage } from "../../../src/orchestrator/StageExecutor.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../..");
@@ -43,7 +44,11 @@ const ADAPTERS_SRC = join(REPO_ROOT, "packages/nightgauge-sdk/src/cli/adapters")
 
 interface Golden {
   inputs: { model: string; stage: string; repo: string; max_turns: number; run_id: string };
-  verb: Record<string, unknown> & { config_content: string; env: Record<string, string> };
+  verb: Record<string, unknown> & {
+    config_content: string;
+    env: Record<string, string>;
+    run_id: string;
+  };
   go_spawn_env: Record<string, string>;
 }
 
@@ -124,8 +129,32 @@ esac
 /** A stand-in `nightgauge` that records its argv, then runs `body`. */
 function writeNightgaugeStub(dir: string, body: string): string {
   const path = join(dir, "nightgauge");
-  writeExecutable(path, `#!/bin/sh\nprintf '%s\\n' "$@" > '${dir}/verb-argv'\n${body}\n`);
+  writeExecutable(
+    path,
+    `#!/bin/sh
+if [ "$2" = cleanup ]; then echo "$4" >> '${dir}/cleanups'; exit 0; fi
+printf '%s\\n' "$@" > '${dir}/verb-argv'
+pwd > '${dir}/verb-cwd'
+${body}
+`
+  );
   return path;
+}
+
+/** The run ids the stub verb was asked to clean up, in order. */
+function cleanups(dir: string): string[] {
+  try {
+    return readFileSync(join(dir, "cleanups"), "utf-8").trim().split("\n").filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/** A stage skill directory in the `<root>/skills/<skill>` layout loadStageSkill resolves. */
+function skillDirIn(root: string): string {
+  const dir = join(root, "skills", "nightgauge-feature-dev");
+  mkdirSync(dir, { recursive: true });
+  return dir;
 }
 
 function readEnvFile(path: string): Record<string, string> {
@@ -140,10 +169,15 @@ function readEnvFile(path: string): Record<string, string> {
 /** Create the query function and run one query; the verb runs per query. */
 async function runOnce(
   adapter: OpenCodeAdapter,
-  opts: { cwd: string; stage?: string }
+  opts: { cwd: string; stage?: string; skillDir?: string }
 ): Promise<SDKMessage[]> {
-  const query = await adapter.createQueryFunction(opts);
-  return drain(query({ prompt: "p", options: { cwd: opts.cwd } }));
+  const query = await adapter.createQueryFunction({ cwd: opts.cwd, stage: opts.stage });
+  return drain(
+    query({
+      prompt: "p",
+      options: { cwd: opts.cwd, ...(opts.skillDir !== undefined && { skillDir: opts.skillDir }) },
+    })
+  );
 }
 
 async function drain(gen: AsyncGenerator<SDKMessage>): Promise<SDKMessage[]> {
@@ -181,8 +215,11 @@ async function stageFromGolden(
     },
     model: golden.inputs.model,
   });
-  const query = await adapter.createQueryFunction({ cwd: worktree, stage: golden.inputs.stage });
-  return { base, golden, worktree, record, query };
+  const raw = await adapter.createQueryFunction({ cwd: worktree, stage: golden.inputs.stage });
+  // Every query carries the stage's skill directory, as StageExecutor's do.
+  const skillDir = skillDirIn(join(base, "skills-root"));
+  const query: typeof raw = (q) => raw({ ...q, options: { skillDir, ...q.options } });
+  return { base, golden, worktree, record, query, skillDir };
 }
 
 // ---------------------------------------------------------------------------
@@ -209,11 +246,20 @@ describe("SDK/Go parity through the golden (#1648)", () => {
     for (const [name, value] of Object.entries(golden.go_spawn_env)) {
       expect(child[name], name).toBe(value);
     }
-    // No XDG_*, OPENCODE_* or NIGHTGAUGE_OPENCODE_* variable the Go spawn does
-    // not set (the per-spawn server password is minted on both paths).
+    // Every variable the verb's env names reaches the child with the verb's
+    // value (GH_CONFIG_DIR and NIGHTGAUGE_CONFIG_HOME included), except the
+    // one the Go spawn also withholds.
+    for (const [name, value] of Object.entries(golden.verb.env)) {
+      if (name === "NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK") continue;
+      expect(child[name], name).toBe(value);
+    }
+    // No XDG_*, OPENCODE_* or NIGHTGAUGE_OPENCODE_* variable, and none of the
+    // verb's, that the Go spawn does not set (the per-spawn server password
+    // is minted on both paths).
     const compared = (n: string) =>
       n !== "OPENCODE_SERVER_PASSWORD" &&
-      (n === "HOME" ||
+      (n in golden.verb.env ||
+        n === "HOME" ||
         n.startsWith("XDG_") ||
         n.startsWith("OPENCODE_") ||
         n.startsWith("NIGHTGAUGE_OPENCODE_"));
@@ -231,6 +277,8 @@ describe("SDK/Go parity through the golden (#1648)", () => {
       worktree,
       "--model",
       golden.inputs.model,
+      "--skills-root",
+      join(base, "skills-root"),
       "--repo",
       golden.inputs.repo,
       "--max-turns",
@@ -353,13 +401,18 @@ describe("running the verb (#1648)", () => {
       env: { NIGHTGAUGE_BIN: "/opt/nightgauge/bin/nightgauge" },
       execFile,
     });
-    await provider({ model: golden.inputs.model, worktree, stage: "feature-dev" });
+    const skillDir = skillDirIn(tmp("oc-sk-"));
+    await provider({ model: golden.inputs.model, worktree, stage: "feature-dev", skillDir });
     expect(calls).toHaveLength(1);
     expect(calls[0].file).toBe("/opt/nightgauge/bin/nightgauge");
     expect(Array.isArray(calls[0].args)).toBe(true);
     expect(calls[0].args.filter((a) => a === worktree)).toHaveLength(1);
     expect(calls[0].args[calls[0].args.indexOf("--worktree") + 1]).toBe(worktree);
+    expect(calls[0].args[calls[0].args.indexOf("--skills-root") + 1]).toBe(
+      dirname(dirname(skillDir))
+    );
     expect(calls[0].options).toMatchObject({
+      cwd: worktree,
       timeout: 15_000,
       maxBuffer: OPENCODE_CONFIG_VERB_MAX_BUFFER,
     });
@@ -374,6 +427,7 @@ describe("running the verb (#1648)", () => {
       model: golden.inputs.model,
       worktree: "/w",
       stage: "feature-dev",
+      skillDir: "/r/skills/nightgauge-feature-dev",
     });
     expect(calls[0].file).toBe("nightgauge");
     await expect(
@@ -399,9 +453,11 @@ describe("a verb that fails fails the stage before any opencode starts (#1648)",
       model: "lmstudio/qwen/qwen3.8-27b",
       spawn: spawn as never,
     });
-    const err = await runOnce(adapter, { cwd: tmp("oc-wt-"), stage: "feature-dev" }).catch(
-      (e: unknown) => e
-    );
+    const err = await runOnce(adapter, {
+      cwd: tmp("oc-wt-"),
+      stage: "feature-dev",
+      skillDir: skillDirIn(tmp("oc-sk-")),
+    }).catch((e: unknown) => e);
     expect(spawn).not.toHaveBeenCalled();
     expect(err).toBeInstanceOf(AdapterError);
     return err as AdapterError;
@@ -451,9 +507,11 @@ describe("a verb that fails fails the stage before any opencode starts (#1648)",
       spawn: spawn as never,
       runConfigProvider: createOpenCodeRunConfigProvider({ env: {}, execFile }),
     });
-    const err = await runOnce(adapter, { cwd: tmp("oc-wt-"), stage: "feature-dev" }).catch(
-      (e: unknown) => e
-    );
+    const err = await runOnce(adapter, {
+      cwd: tmp("oc-wt-"),
+      stage: "feature-dev",
+      skillDir: skillDirIn(tmp("oc-sk-")),
+    }).catch((e: unknown) => e);
     expect(spawn).not.toHaveBeenCalled();
     expect((err as AdapterError).category).toBe("TIMEOUT");
     expect((err as AdapterError).message).toContain("15 s");
@@ -503,5 +561,92 @@ describe("the plugin handshake on the SDK spawn path (#1804)", () => {
       /no plugin handshake sentinel/
     );
     expect(Date.now() - started).toBeLessThan(10_000);
+  });
+});
+
+describe("the verb builds the stage's permission map from the stage's own skill (#1648)", () => {
+  it("passes the stage's skills root and runs the verb in the worktree", async () => {
+    const { base, worktree, skillDir, query } = await stageFromGolden();
+    await drain(query({ prompt: "p", options: { cwd: worktree } }));
+    const argv = readFileSync(join(base, "verb-argv"), "utf-8").trimEnd().split("\n");
+    expect(argv[argv.indexOf("--skills-root") + 1]).toBe(dirname(dirname(skillDir)));
+    expect(realpathSync(readFileSync(join(base, "verb-cwd"), "utf-8").trim())).toBe(
+      realpathSync(worktree)
+    );
+  });
+
+  it("fails before any opencode starts without the stage's skill directory, or with one outside a skills directory", async () => {
+    for (const skillDir of [undefined, join(tmp("oc-sk-"), "nightgauge-feature-dev")]) {
+      const spawn = vi.fn();
+      const adapter = new OpenCodeAdapter({
+        env: { NIGHTGAUGE_BIN: writeNightgaugeStub(tmp("oc-verb-"), "exit 0") },
+        model: "lmstudio/qwen/qwen3.8-27b",
+        spawn: spawn as never,
+      });
+      await expect(
+        runOnce(adapter, { cwd: tmp("oc-wt-"), stage: "feature-dev", skillDir }),
+        String(skillDir)
+      ).rejects.toThrow(/skill directory/);
+      expect(spawn).not.toHaveBeenCalled();
+    }
+  });
+
+  it("warns when the stage's repository is not owner/name, rather than dropping it silently", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { base, worktree, query } = await stageFromGolden({
+      parentEnv: { NIGHTGAUGE_TARGET_REPO: "not a repository" },
+    });
+    await drain(query({ prompt: "p", options: { cwd: worktree } }));
+    expect(readFileSync(join(base, "verb-argv"), "utf-8")).not.toContain("--repo");
+    expect(warn.mock.calls.map((c) => String(c[0])).join("\n")).toMatch(
+      /"not a repository" is not owner\/name/
+    );
+  });
+});
+
+describe("the per-run root is deleted as the Go scheduler deletes it (#1648, ADR-022 § 22)", () => {
+  it("a root the verb minted for one query is deleted when the query ends, whatever its outcome", async () => {
+    const ok = await stageFromGolden();
+    await drain(ok.query({ prompt: "p", options: { cwd: ok.worktree } }));
+    expect(cleanups(ok.base)).toEqual([ok.golden.verb.run_id]);
+
+    const failed = await stageFromGolden({ sentinel: "none" });
+    await expect(
+      drain(failed.query({ prompt: "p", options: { cwd: failed.worktree } }))
+    ).rejects.toThrow(/handshake/);
+    expect(cleanups(failed.base)).toEqual([failed.golden.verb.run_id]);
+  });
+
+  it("a run's shared root is left for the run's end", async () => {
+    const { base, golden, worktree, query } = await stageFromGolden();
+    await drain(query({ prompt: "p", options: { cwd: worktree, runId: golden.inputs.run_id } }));
+    expect(cleanups(base)).toEqual([]);
+  });
+});
+
+describe("a failed handshake keeps killing the run's group (manager.go's killProcessTreeUntilGone)", () => {
+  it("repeats SIGKILL for the window until every holder of the run's stdio is gone", async () => {
+    const kills: NodeJS.Signals[] = [];
+    killGroupUntilGone(
+      4242,
+      () => false,
+      (_pid, signal) => kills.push(signal),
+      200
+    );
+    await new Promise((r) => setTimeout(r, 300));
+    expect(kills.length).toBeGreaterThanOrEqual(5);
+    expect(new Set(kills)).toEqual(new Set(["SIGKILL"]));
+
+    const stopped: NodeJS.Signals[] = [];
+    let done = false;
+    killGroupUntilGone(
+      4243,
+      () => done,
+      (_pid, signal) => stopped.push(signal),
+      200
+    );
+    done = true;
+    await new Promise((r) => setTimeout(r, 100));
+    expect(stopped).toEqual(["SIGKILL"]);
   });
 });

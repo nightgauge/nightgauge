@@ -21,7 +21,7 @@
  */
 
 import type { spawn as nodeSpawn } from "node:child_process";
-import { isAbsolute, relative, resolve } from "node:path";
+import { basename, isAbsolute, relative, resolve } from "node:path";
 
 import type { SDKQueryFunction } from "../../orchestrator/StageExecutor.js";
 import { isLocalProvider, providerFor } from "../../eval/modelRegistry.js";
@@ -43,7 +43,11 @@ import {
   OPENCODE_PLUGIN_SENTINEL_ENV,
   isOpenCodeRunEnvAccepted,
 } from "./childEnv.js";
-import { createOpenCodeRunConfigProvider } from "./opencodeRunConfig.js";
+import {
+  createOpenCodeRunConfigProvider,
+  createOpenCodeRunRootCleaner,
+  type OpenCodeRunRootCleaner,
+} from "./opencodeRunConfig.js";
 import {
   OPENCODE_PLATFORM_PROVIDERS,
   openCodeProviderEnv,
@@ -248,15 +252,21 @@ export interface OpenCodeRunConfig {
    * The absolute path of the opencode binary the verb's version policy vetted
    * (`binary`), spawned instead of whatever `opencode` PATH finds.
    */
-  readonly binary?: string;
+  readonly binary: string;
   /**
    * The inherited variables the spawn must not get (`env_withhold`): every
    * name starting with one of `prefixes` or listed in `names`.
    */
-  readonly envWithhold?: {
+  readonly envWithhold: {
     readonly prefixes: readonly string[];
     readonly names: readonly string[];
   };
+  /**
+   * The run identity `runDir` is named by (`run_id`): the query's own run's,
+   * or one the verb minted for this query alone, whose root the query
+   * deletes when it ends.
+   */
+  readonly runId: string;
 }
 
 /** What the config is built for. */
@@ -279,6 +289,11 @@ export interface OpenCodeRunConfigRequest {
    * the stages of one run share its per-run root, as on the Go path.
    */
   readonly runId?: string;
+  /**
+   * The directory of the stage's SKILL.md, as the SDK resolved it for the
+   * stage's prompt (loadStageSkill); the verb's --skills-root comes from it.
+   */
+  readonly skillDir?: string;
 }
 
 /** Builds a stage's per-run config and isolation environment (opencodeRunConfig.ts). */
@@ -362,17 +377,20 @@ function checkRunConfig(config: unknown): OpenCodeRunConfig {
   if (typeof c.pluginVersion !== "string" || c.pluginVersion === "") {
     invalidRunConfig("it names no plugin version, so the plugin handshake cannot be verified");
   }
-  if (c.binary !== undefined && (typeof c.binary !== "string" || !isAbsolute(c.binary))) {
+  if (typeof c.binary !== "string" || !isAbsolute(c.binary)) {
     invalidRunConfig("its opencode binary is not an absolute path");
+  }
+  if (typeof c.runId !== "string" || c.runId === "" || basename(c.runDir!) !== c.runId) {
+    invalidRunConfig("its run id does not name its run directory");
   }
   const withhold = c.envWithhold;
   if (
-    withhold !== undefined &&
-    (typeof withhold !== "object" ||
-      withhold === null ||
-      !Array.isArray(withhold.prefixes) ||
-      !Array.isArray(withhold.names) ||
-      ![...withhold.prefixes, ...withhold.names].every((n) => typeof n === "string"))
+    withhold === undefined ||
+    typeof withhold !== "object" ||
+    withhold === null ||
+    !Array.isArray(withhold.prefixes) ||
+    !Array.isArray(withhold.names) ||
+    ![...withhold.prefixes, ...withhold.names].every((n) => typeof n === "string")
   ) {
     invalidRunConfig("its withheld-variable set is not two lists of names");
   }
@@ -381,8 +399,9 @@ function checkRunConfig(config: unknown): OpenCodeRunConfig {
     env: env as Record<string, string>,
     runDir: c.runDir!,
     pluginVersion: c.pluginVersion!,
-    ...(c.binary !== undefined && { binary: c.binary }),
-    ...(withhold !== undefined && { envWithhold: withhold }),
+    binary: c.binary,
+    envWithhold: withhold,
+    runId: c.runId,
   };
 }
 
@@ -407,6 +426,11 @@ export interface OpenCodeAdapterOptions {
   model?: string;
   /** Spawns processes; default `node:child_process` spawn. */
   spawn?: typeof nodeSpawn;
+  /**
+   * Deletes a per-run root the verb minted for one query; default
+   * `nightgauge opencode cleanup` run in {@link env}.
+   */
+  runRootCleaner?: OpenCodeRunRootCleaner;
 }
 
 export class OpenCodeAdapter implements ICliAdapter {
@@ -420,11 +444,13 @@ export class OpenCodeAdapter implements ICliAdapter {
   private readonly env: NodeJS.ProcessEnv;
   private readonly model?: string;
   private readonly spawn?: typeof nodeSpawn;
+  private readonly runRootCleaner: OpenCodeRunRootCleaner;
 
   constructor(options: OpenCodeAdapterOptions = {}) {
     this.env = options.env ?? process.env;
     this.runConfigProvider =
       options.runConfigProvider ?? createOpenCodeRunConfigProvider({ env: this.env });
+    this.runRootCleaner = options.runRootCleaner ?? createOpenCodeRunRootCleaner({ env: this.env });
     this.model = options.model;
     this.spawn = options.spawn;
   }
@@ -521,6 +547,7 @@ export class OpenCodeAdapter implements ICliAdapter {
         runConfig: async (request) =>
           checkRunConfig(await provider({ ...request, ...(repo && { repo }) })),
         argv: (dir) => buildOpenCodeArgv(model, dir),
+        cleanRunRoot: this.runRootCleaner,
         parentEnv: this.env,
         spawn: this.spawn,
       },

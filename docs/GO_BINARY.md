@@ -7143,7 +7143,7 @@ adapter's warning and notices go to stderr.
 
 | Field            | Meaning                                                                                                   |
 | ---------------- | --------------------------------------------------------------------------------------------------------- |
-| `schema_version` | Output version (`1.1`); a caller refuses an unknown major version                                         |
+| `schema_version` | Output version (`1.2`); a caller refuses an unknown major version                                         |
 | `config_content` | `OPENCODE_CONFIG_CONTENT`, the per-run OpenCode config                                                    |
 | `env`            | Every variable the spawn sets from the run, the config included; no secret                                |
 | `env_withhold`   | `prefixes` and `names` of the inherited variables the spawn must not get; remove them before adding `env` |
@@ -7151,6 +7151,7 @@ adapter's warning and notices go to stderr.
 | `run_dir`        | The run's private root                                                                                    |
 | `non_loopback`   | `false` only for a declared model server on this machine; `true` elsewhere and for any hosted provider    |
 | `binary`         | Absolute path of the `opencode` the version policy checked; spawn this one                               |
+| `run_id`         | The run identity `run_dir` is named by: `--run-id`, or the one minted                                     |
 | `plugin_version` | The `plugin_version` the plugin's handshake sentinel (`env`'s `NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL`) must carry |
 
 A caller that removes the `env_withhold` variables from its environment, then
@@ -7159,15 +7160,31 @@ adapter's per-spawn exports (such as `OPENCODE_SERVER_PASSWORD`).
 
 The SDK's OpenCode adapter runs this verb for every stage
 (`packages/nightgauge-sdk/src/cli/adapters/opencodeRunConfig.ts`, #1648): the
-binary is `NIGHTGAUGE_BIN`, else `nightgauge` on `PATH`. It passes the
-stage's turn budget as `--max-turns` and the pipeline run's UUIDv7 identity as
-`--run-id`, and the stage fails
+binary is `NIGHTGAUGE_BIN`, else `nightgauge` on `PATH`, run in the stage's
+worktree. It passes the stage's turn budget as `--max-turns`, the pipeline
+run's UUIDv7 identity as `--run-id` and the root of the stage's own SKILL.md
+as `--skills-root`, and the stage fails
 before any `opencode` starts when the verb fails, times out (15 s) or prints a
 `schema_version` whose major it does not know. It checks the plugin handshake
 the way the Go manager does (#1804). `TestOpenCodeConfigGolden` pins the
 verb's output and the Go spawn's environment for fixed inputs to
 `internal/execution/adapters/testdata/opencode_config_golden.json`, which the
 SDK's tests feed through the SDK path.
+
+With `--skills-root` named, a stage whose SKILL.md is not found under it fails
+the verb rather than printing a config whose permission map denies every tool;
+without it, the verb still prints that config with a stderr notice.
+
+```bash
+nightgauge opencode cleanup --run-id <uuid>
+```
+
+Deletes the per-run root `nightgauge opencode config` created for a run id
+(`adapters.RemoveOpenCodeRunRoot`: an id that is not a run identity, or a root
+that is a link or outside the runs directory, is refused; a missing root is
+not an error). The SDK runs it when a query whose root was minted for it ends,
+and when a pipeline run whose stages shared a root ends, as the Go scheduler
+deletes the root at every terminal outcome (ADR-022 § 22).
 
 It exits 1, with nothing on stdout, wherever the adapter refuses a dispatch
 before spawning: without `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1`, a model that is

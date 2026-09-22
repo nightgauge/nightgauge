@@ -18,7 +18,7 @@
  */
 
 import { execFile as nodeExecFile } from "node:child_process";
-import { isAbsolute } from "node:path";
+import { basename, dirname, isAbsolute } from "node:path";
 import { z } from "zod";
 
 import { AdapterError, type AdapterErrorCategory } from "./errors.js";
@@ -55,6 +55,7 @@ const verbOutputSchema = z.object({
   non_loopback: z.boolean(),
   binary: z.string().min(1),
   plugin_version: z.string().min(1),
+  run_id: z.string().min(1),
 });
 
 /** The part of `node:child_process` execFile this module calls. */
@@ -63,6 +64,7 @@ export type OpenCodeConfigExecFile = (
   args: readonly string[],
   options: {
     env: NodeJS.ProcessEnv;
+    cwd?: string;
     timeout: number;
     maxBuffer: number;
     encoding: "utf8";
@@ -109,6 +111,34 @@ const REPO_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9._-]+$/;
 /** A run identity: a canonical lowercase UUIDv7 (`runstate.IdentityPattern` in Go). */
 const RUN_IDENTITY_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
+/**
+ * The verb's --skills-root for a stage whose SKILL.md the SDK resolved in
+ * `skillDir` (`<root>/skills/<stage skill>`, loadStageSkill): `<root>`, the
+ * convention skillrender.DefaultRoots searches, so the verb builds the
+ * permission map from the SKILL.md the stage's prompt came from. Refused
+ * when the stage's skill directory is unknown or not under a `skills`
+ * directory: the verb would otherwise resolve skills from wherever this
+ * process started.
+ */
+export function openCodeSkillsRoot(skillDir: string | undefined): string {
+  if (skillDir === undefined || skillDir === "") {
+    fail(
+      "the stage's skill directory is not known, so the verb could not build the stage's " +
+        "permission map from its SKILL.md; run the stage through PipelineOrchestrator, which " +
+        "resolves it",
+      "CONFIG_INVALID"
+    );
+  }
+  if (!isAbsolute(skillDir) || basename(dirname(skillDir)) !== "skills") {
+    fail(
+      `the stage's skill directory ${JSON.stringify(skillDir)} is not an absolute ` +
+        "<root>/skills/<skill> path, the layout the verb's --skills-root searches",
+      "CONFIG_INVALID"
+    );
+  }
+  return dirname(dirname(skillDir));
+}
+
 /** The verb's argv for one request: every value its own element. */
 export function openCodeConfigVerbArgs(request: OpenCodeRunConfigRequest): string[] {
   const args = [
@@ -120,6 +150,8 @@ export function openCodeConfigVerbArgs(request: OpenCodeRunConfigRequest): strin
     request.worktree,
     "--model",
     request.model,
+    "--skills-root",
+    openCodeSkillsRoot(request.skillDir),
   ];
   if (request.repo !== undefined && REPO_RE.test(request.repo)) args.push("--repo", request.repo);
   // The stage's turn budget, the Go dispatch's RunOptions.MaxTurns: the verb
@@ -205,6 +237,7 @@ export function parseOpenCodeConfigVerbOutput(stdout: string): OpenCodeRunConfig
     binary: out.binary,
     pluginVersion: out.plugin_version,
     envWithhold: out.env_withhold,
+    runId: out.run_id,
   };
 }
 
@@ -225,6 +258,13 @@ export function createOpenCodeRunConfigProvider(
         "CONFIG_INVALID"
       );
     }
+    if (request.repo !== undefined && !REPO_RE.test(request.repo)) {
+      console.warn(
+        `[opencode-adapter] the stage's repository ${JSON.stringify(request.repo)} is not ` +
+          "owner/name, so it is not passed to `nightgauge opencode config` and the stage gets no " +
+          "MCP server from it"
+      );
+    }
     const bin = resolveNightgaugeBinary(env);
     const args = openCodeConfigVerbArgs(request);
     const redact = stderrRedactor(env);
@@ -235,6 +275,9 @@ export function createOpenCodeRunConfigProvider(
           args,
           {
             env,
+            // The worktree, never wherever this process started: the verb
+            // resolves the forge identity for the MCP read from its cwd.
+            cwd: request.worktree,
             timeout: OPENCODE_CONFIG_VERB_TIMEOUT_MS,
             maxBuffer: OPENCODE_CONFIG_VERB_MAX_BUFFER,
             encoding: "utf8",
@@ -280,4 +323,47 @@ export function createOpenCodeRunConfigProvider(
     });
     return parseOpenCodeConfigVerbOutput(stdout);
   };
+}
+
+/**
+ * Deletes a run's per-run root with `nightgauge opencode cleanup --run-id`,
+ * the SDK twin of the Go scheduler's CleanupOpenCodeRunRoot (ADR-022 § 22).
+ * The root's location is Go's alone; this only names the run.
+ */
+export type OpenCodeRunRootCleaner = (runId: string) => Promise<void>;
+
+export function createOpenCodeRunRootCleaner(
+  options: OpenCodeRunConfigProviderOptions = {}
+): OpenCodeRunRootCleaner {
+  const env = options.env ?? process.env;
+  const execFile = options.execFile ?? (nodeExecFile as unknown as OpenCodeConfigExecFile);
+  return (runId) =>
+    new Promise<void>((resolvePromise, reject) => {
+      try {
+        const bin = resolveNightgaugeBinary(env);
+        const redact = stderrRedactor(env);
+        execFile(
+          bin,
+          ["opencode", "cleanup", "--run-id", runId],
+          {
+            env,
+            timeout: OPENCODE_CONFIG_VERB_TIMEOUT_MS,
+            maxBuffer: OPENCODE_CONFIG_VERB_MAX_BUFFER,
+            encoding: "utf8",
+            windowsHide: true,
+          },
+          (error, _out, errOut) => {
+            if (error === null) resolvePromise();
+            else
+              reject(
+                new Error(
+                  `nightgauge opencode cleanup --run-id ${runId} failed; ${stderrTail(errOut ?? "", redact)}`
+                )
+              );
+          }
+        );
+      } catch (e) {
+        reject(e);
+      }
+    });
 }

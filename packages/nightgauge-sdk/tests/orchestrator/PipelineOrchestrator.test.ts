@@ -1,4 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   PipelineOrchestrator,
   DEFAULT_STAGES,
@@ -168,6 +171,32 @@ describe("PipelineOrchestrator", () => {
         /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
       );
       expect(seen[1].runId).toBe(seen[0].runId);
+    });
+
+    it("deletes an opencode run's shared per-run root when the run ends, through the Go verb (#1648)", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "po-clean-"));
+      const bin = join(dir, "nightgauge");
+      writeFileSync(bin, `#!/bin/sh\necho "$@" >> '${dir}/calls'\n`);
+      chmodSync(bin, 0o755);
+      const prev = process.env.NIGHTGAUGE_BIN;
+      process.env.NIGHTGAUGE_BIN = bin;
+      try {
+        let runId: string | undefined;
+        const query: SDKQueryFunction = async function* (q) {
+          runId = q.options?.runId;
+          yield createMockResult();
+        };
+        for (const adapter of ["claude-headless", "opencode"]) {
+          await new PipelineOrchestrator(query, { stages: ["issue-pickup"], adapter }).run(42);
+        }
+        const calls = readFileSync(join(dir, "calls"), "utf-8").trim().split("\n");
+        // Only the opencode run, once, for the identity its stages were given.
+        expect(calls).toEqual([`opencode cleanup --run-id ${runId}`]);
+      } finally {
+        if (prev === undefined) delete process.env.NIGHTGAUGE_BIN;
+        else process.env.NIGHTGAUGE_BIN = prev;
+        rmSync(dir, { recursive: true, force: true });
+      }
     });
 
     it("should stop on stage failure", async () => {

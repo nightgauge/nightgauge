@@ -412,6 +412,8 @@ export interface OpenCodeQueryContext {
   runConfig: (request: Omit<OpenCodeRunConfigRequest, "repo">) => Promise<OpenCodeRunConfig>;
   /** The `opencode run` argv for a worktree. */
   argv: (worktree: string) => string[];
+  /** Deletes a per-run root (`nightgauge opencode cleanup`). */
+  cleanRunRoot: (runId: string) => Promise<void>;
   /** The environment the child's is curated from. */
   parentEnv: NodeJS.ProcessEnv;
   /** Spawns processes; default `node:child_process` spawn. */
@@ -447,6 +449,38 @@ function killGroup(pid: number | undefined, signal: NodeJS.Signals): void {
   } catch {
     // ESRCH: the group is already gone.
   }
+}
+
+/** How long a failed handshake keeps killing the run's group (`openCodeHandshakeKillWindow`). */
+export const OPENCODE_HANDSHAKE_KILL_WINDOW_MS = 1_000;
+/** The spacing of those kills (`killProcessTreeUntilGone`'s interval). */
+const OPENCODE_HANDSHAKE_KILL_INTERVAL_MS = 15;
+
+/**
+ * Kill a process group, then keep killing it every 15 ms for
+ * {@link OPENCODE_HANDSHAKE_KILL_WINDOW_MS}: the TS twin of manager.go's
+ * killProcessTreeUntilGone. One SIGKILL can miss a grandchild the stage forks
+ * in the same instant (on macOS a fork under a pending group signal
+ * completes and joins the group), which would then keep the run's stdout
+ * open. The burst also stops once `done` says every holder of the run's
+ * stdio has exited, so it never signals a group id that could be reused.
+ */
+export function killGroupUntilGone(
+  pid: number | undefined,
+  done: () => boolean,
+  kill: (pid: number | undefined, signal: NodeJS.Signals) => void = killGroup,
+  windowMs: number = OPENCODE_HANDSHAKE_KILL_WINDOW_MS
+): void {
+  kill(pid, "SIGKILL");
+  const deadline = Date.now() + windowMs;
+  const timer = setInterval(() => {
+    if (done() || Date.now() >= deadline) {
+      clearInterval(timer);
+      return;
+    }
+    kill(pid, "SIGKILL");
+  }, OPENCODE_HANDSHAKE_KILL_INTERVAL_MS);
+  timer.unref?.();
 }
 
 /**
@@ -564,12 +598,13 @@ function runOpenCodeProcess(
     child.stdout?.setEncoding("utf-8");
     child.stderr?.setEncoding("utf-8");
     let partial = "";
+    let closed = false;
     child.stdout?.on("data", (chunk: string) => {
       if (opts.onStdoutLine) {
         const lines = (partial + chunk).split("\n");
         partial = lines.pop() ?? "";
         for (const line of lines) {
-          if (opts.onStdoutLine(line)) killGroup(child.pid, "SIGKILL");
+          if (opts.onStdoutLine(line)) killGroupUntilGone(child.pid, () => closed);
         }
       }
       if (opts.maxOutput !== undefined && stdout.length + chunk.length > opts.maxOutput) {
@@ -590,6 +625,7 @@ function runOpenCodeProcess(
       reject(err);
     });
     child.on("close", (code) => {
+      closed = true;
       if (opts.onStdoutLine && partial !== "" && opts.onStdoutLine(partial)) {
         killGroup(child.pid, "SIGKILL");
       }
@@ -651,6 +687,7 @@ async function* openCodeQuery(
   const stage = queryOptions.options?.stage ?? run.stage;
   const maxTurns = queryOptions.options?.maxTurns;
   const runId = queryOptions.options?.runId;
+  const skillDir = queryOptions.options?.skillDir;
   // The per-run config is the query's own: its stage, its turn budget and its
   // run's identity reach the verb, as the Go dispatch's RunOptions reach
   // PrepareRunRoot (#1648). A refusal here spawns nothing.
@@ -660,9 +697,38 @@ async function* openCodeQuery(
     ...(stage !== undefined && { stage }),
     ...(maxTurns !== undefined && { maxTurns }),
     ...(runId !== undefined && { runId }),
+    ...(skillDir !== undefined && { skillDir }),
   });
+  // A root the verb minted for this query alone (no run identity to share)
+  // is deleted when the query ends, whatever its outcome; a run's shared
+  // root is deleted when the run ends (PipelineOrchestrator.run), as the Go
+  // scheduler deletes it at every terminal outcome (ADR-022 § 22).
+  const mintedRoot = runConfig.runId !== runId;
+  try {
+    yield* openCodeStage(command, run, queryOptions, { worktree, stage, runConfig, spawnFn });
+  } finally {
+    if (mintedRoot) {
+      await run.cleanRunRoot(runConfig.runId).catch((err: unknown) => {
+        console.warn(
+          `[opencode-adapter] the per-run root of run ${runConfig.runId} could not be deleted: ` +
+            (err instanceof Error ? err.message : String(err))
+        );
+      });
+    }
+  }
+}
+
+/** One opencode stage under an obtained run config: spawn, verify, classify. */
+async function* openCodeStage(
+  command: string,
+  run: OpenCodeQueryContext,
+  queryOptions: SDKQueryOptions,
+  q: { worktree: string; stage?: string; runConfig: OpenCodeRunConfig; spawnFn: SpawnFn }
+): AsyncGenerator<SDKMessage> {
+  const { model } = run;
+  const { worktree, stage, runConfig, spawnFn } = q;
   // The binary the verb vetted, and the argv for this query's worktree.
-  const spawnCommand = runConfig.binary ?? command;
+  const spawnCommand = runConfig.binary || command;
   const spawnArgs = run.argv(worktree);
   const signal = queryOptions.options?.abortSignal;
   // The run config was checked to carry the handshake (checkRunConfig).

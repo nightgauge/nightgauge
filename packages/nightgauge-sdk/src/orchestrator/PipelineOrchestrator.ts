@@ -34,6 +34,8 @@ import type { ICliAdapter } from "../cli/adapters/ICliAdapter.js";
 import { TraceRecorder } from "../events/traceRecorder.js";
 import type { TierBand } from "../eval/tierBands.js";
 import { RunStateManager, uuidV7 } from "../context/RunStateManager.js";
+import { createOpenCodeRunRootCleaner } from "../cli/adapters/opencodeRunConfig.js";
+import * as path from "node:path";
 
 /**
  * Default pipeline stages in execution order
@@ -643,6 +645,7 @@ export class PipelineOrchestrator {
       // finished (fail-open: flush never throws past the recorder).
       await this.traceRecorder?.flush();
       this.traceRecorder = null;
+      await this.cleanOpenCodeRunRoot();
       this.runId = null;
       this.isRunning = false;
       this.currentStage = null;
@@ -689,6 +692,7 @@ export class PipelineOrchestrator {
       }
 
       const prompt = await buildStagePrompt(stage, issueNumber, this.config.skillsPath);
+      const skillDir = await this.stageSkillDir(stage);
 
       for await (const message of this.executor.execute({
         stage,
@@ -701,6 +705,7 @@ export class PipelineOrchestrator {
         timeoutMs: this.config.stageTimeoutMs,
         resumeSessionId: options?.resumeSessionId,
         ...(this.runId !== null && { runId: this.runId }),
+        ...(skillDir !== undefined && { skillDir }),
         abortSignal,
       })) {
         messages.push(message);
@@ -728,6 +733,38 @@ export class PipelineOrchestrator {
   }
 
   /**
+   * The absolute directory of the stage's SKILL.md, resolved the way its
+   * prompt's was (loadStageSkill), or undefined when it has none.
+   */
+  private async stageSkillDir(stage: PipelineStage): Promise<string | undefined> {
+    try {
+      const { skillDirectory } = await loadStageSkill(stage, this.config.skillsPath);
+      return path.resolve(skillDirectory);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * An opencode run's stages share the per-run root `nightgauge opencode
+   * config` created for the run's identity; delete it when the run ends,
+   * whatever the outcome, as the Go scheduler does (CleanupOpenCodeRunRoot,
+   * ADR-022 § 22). A failure is reported, never thrown. @see Issue #1648
+   */
+  private async cleanOpenCodeRunRoot(): Promise<void> {
+    if (this.config.adapter !== "opencode" || this.runId === null) return;
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(this.runId)) {
+      return; // never passed as --run-id: each query deleted its own root
+    }
+    await createOpenCodeRunRootCleaner()(this.runId).catch((err: unknown) => {
+      console.warn(
+        `[opencode-adapter] the per-run root of run ${this.runId} could not be deleted: ` +
+          (err instanceof Error ? err.message : String(err))
+      );
+    });
+  }
+
+  /**
    * Run a single stage as an async generator (streaming)
    */
   async *runStageStreaming(stage: PipelineStage, issueNumber: number): AsyncGenerator<SDKMessage> {
@@ -746,6 +783,7 @@ export class PipelineOrchestrator {
     }
 
     const prompt = await buildStagePrompt(stage, issueNumber, this.config.skillsPath);
+    const skillDir = await this.stageSkillDir(stage);
 
     const { signal: abortSignal, release } = this.stageAbort();
     try {
@@ -759,6 +797,7 @@ export class PipelineOrchestrator {
         cwd: this.config.cwd,
         timeoutMs: this.config.stageTimeoutMs,
         ...(this.runId !== null && { runId: this.runId }),
+        ...(skillDir !== undefined && { skillDir }),
         abortSignal,
       });
     } finally {
