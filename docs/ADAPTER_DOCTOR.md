@@ -74,7 +74,7 @@ without the flag: **can this machine run a pipeline stage at all?**
 
 The `ai_adapter` check answers it. It walks `AllAdapterNames()` and
 short-circuits on the first usable adapter, so the common case costs one
-`lookPath` plus one `--version` spawn rather than nine.
+`lookPath` plus one `--version` spawn rather than one per registered adapter.
 
 | Outcome                     | Row | Verdict                                          |
 | --------------------------- | --- | ------------------------------------------------ |
@@ -198,6 +198,76 @@ Two deliberate boundaries:
   `nightgauge doctor` stays free. The probe targets a registry BAND rather
   than a literal id, so registering a new band leader re-points it on the same
   commit.
+
+### OpenCode adapter health (#1627)
+
+```bash
+nightgauge doctor --adapters opencode --json
+```
+
+`opencode` is a `cli`-kind adapter with its own nested `opencode` object on
+the adapter row (`AdapterHealth.OpenCode`, non-nil only for this adapter).
+Every row name below is the JSON field a skill or operator greps for; see
+[ADR-022](decisions/022-opencode-multi-provider-adapter.md) for the design
+this check enforces.
+
+- **`opencode.enabled`** — whether `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` is set
+  in the process environment. While it is not, no other OpenCode check runs:
+  there is nothing to check for a dispatch that never happens.
+- **Version policy (`version_ok`, `min_version`, `opencode.max_tested`,
+  `opencode.floor_policy`).** Below the compat manifest's floor, or when the
+  version cannot be read, the row blocks — the floor policy is
+  `fail_closed`. Above max-tested, the row warns instead of blocking:
+  `opencode.above_max_tested` is set, a hosted dispatch continues under a
+  self-test, and a dispatch to a model server the operator runs (a declared
+  endpoint, or the `lmstudio`/`ollama` provider key) is refused because the
+  self-test cannot re-verify which provider keys the newer binary bundles.
+- **`opencode.pinned`** — whether `opencode.binary` (the machine-tier config
+  key) pins the binary an absolute path resolves, rather than falling back to
+  whatever `opencode` resolves on `PATH`.
+- **`opencode.last_dispatch_version`** — the version the last dispatch on
+  this machine was checked against, when one was recorded. The row warns when
+  the binary it resolves now reports a different version — a PATH install
+  can change under the pipeline the way OpenCode's own TUI updates itself.
+- **The catalog probe (`catalog`, `catalog_warning`).** Runs `opencode models`
+  under the per-run config built for `opencode.model`. For a declared
+  endpoint's model or an `anthropic` model, the per-run config writes the
+  model's own entry, so the probe shows only that the binary loads the
+  config; any other hosted provider is listed only when one of its variables
+  is set in the doctor's own environment, and the row blocks and names them
+  when none is.
+- **Local-provider reachability and loaded context (`opencode.endpoints[]`,
+  one `OpenCodeEndpointReadiness` per declared endpoint).** Each entry probes
+  the endpoint's server and reports whether it is ready, and, for the
+  endpoint `opencode.model` dispatches to, whether the discovered or declared
+  context window covers the injected `limit.context`. An endpoint on another
+  machine, reached over plain `http`, is a separate warning naming the
+  endpoint id — never its `base_url`, host, or address, which appear in no
+  record this check produces (ADR-022 § Endpoints).
+- **The `limit.context 0` warning.** A model whose `limit.context` neither
+  the machine-tier `limit` nor server discovery can supply is refused before
+  spawn (a declared endpoint) or warned about (the always-probed default),
+  because OpenCode never compacts a session whose context limit is 0 — the
+  stage would run into the server's loaded window instead.
+- **Effective config/data dirs (`opencode.dirs`).** `config`, `data`, `cache`,
+  and `state` are the run-scoped OpenCode directories a dispatch isolates
+  under `~/.nightgauge/opencode/runs/<run_id>/`; `operator_config` is set
+  only when `inherit_user_config` is on, naming the operator's own OpenCode
+  config directory a run then also reads.
+- **The offline posture (`opencode.offline`).** A statement about
+  configuration only — a run fetches no model catalog, never autoupdates or
+  shares a session, downloads no LSP server, and enables only the provider it
+  dispatches to — never a claim about verified network egress. It names
+  whether `opencode.model` resolves to an endpoint on this machine, an
+  endpoint on another machine, or a hosted provider, or says the model is
+  unset.
+- **The OAuth-type anthropic flag (`opencode.stored_logins[]`, each a
+  `{source, provider, type}`).** Flags a subscription or OAuth login OpenCode
+  holds for a provider, found in a run's own directories or (with
+  `inherit_user_config`) the operator's. It names only where the login is
+  and its type, never its content, and the finding states that a pipeline
+  run never uses it: an `anthropic/*` stage through OpenCode authenticates
+  only with `ANTHROPIC_API_KEY`.
 
 ### Binary self-check cascade (#277)
 
@@ -339,6 +409,10 @@ TypeScript namesake.)
    dispatch while keeping it available to eval surfaces.
 4. Add a display name to `SDK_ADAPTER_DISPLAY` in
    `packages/nightgauge-vscode/src/commands/adapterDoctor.ts`.
+5. If the adapter ships behind an experimental gate the way `opencode` does
+   (`enabled` in its nested health object), keep the gate check first: every
+   other check is meaningless for a dispatch that is refused before it
+   starts.
 
 ## Related
 
@@ -346,3 +420,4 @@ TypeScript namesake.)
 - [ADAPTER_MATRIX.md](ADAPTER_MATRIX.md) — verified per-adapter capability matrix
 - [MCP_INTEGRATION.md](MCP_INTEGRATION.md) — Codex MCP provisioning
 - [GO_BINARY.md](GO_BINARY.md) — `doctor` CLI reference
+- [decisions/022-opencode-multi-provider-adapter.md](decisions/022-opencode-multi-provider-adapter.md) — the OpenCode adapter's full design record

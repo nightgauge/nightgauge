@@ -77,6 +77,14 @@ changelog, and the release workflow refuses a tag that does not.
   static 32k placeholder. See
   [ADR-023](docs/decisions/023-model-aware-context-budgets.md) (#1645).
 
+- **The OpenCode adapter is documented across the four adapter reference
+  docs.** ADAPTER_GUIDE.md, ADAPTER_MATRIX.md, ADAPTER_DOCTOR.md and
+  ADAPTER_ERROR_HANDLING.md now cover its Experimental status, its
+  per-feature disposition table (ADR-022), its doctor rows, and its terminal
+  failure kinds and remediations — and fix several pre-existing Grok
+  omissions in the same files, including a missing deep-dive section
+  (#1649).
+
 ## [0.4.6] - 2026-09-21
 
 ### Changed

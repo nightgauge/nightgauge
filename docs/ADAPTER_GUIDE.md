@@ -1,41 +1,47 @@
 # Adapter Selection Guide
 
-**Version:** 1.2
-**Updated:** 2026-09-10
-**Issue:** #2599, #584
+**Version:** 1.3
+**Updated:** 2026-09-21
+**Issue:** #2599, #584, #1649
 
 ---
 
 ## Which Adapter Should I Use?
 
-Nightgauge includes eight provider adapters, but only five have the agentic tool
+Nightgauge includes ten provider adapters; seven have the agentic tool
 loop required for pipeline execution. Pick an agentic adapter for issue-to-PR
 work; use chat-only adapters for evaluation, judging, or summarization.
 
-| Priority                     | Recommended Adapter | Category       |
-| ---------------------------- | ------------------- | -------------- |
-| Primary tested pipeline path | **Claude Headless** | Cloud AI (CLI) |
-| Direct SDK integration       | **Claude SDK**      | Cloud AI (SDK) |
-| OpenAI models                | **Codex**           | Cloud AI (CLI) |
-| Google agentic pipeline      | **Gemini CLI**      | Experimental   |
-| GitHub agentic pipeline      | **Copilot**         | Experimental   |
-| xAI Grok Build CLI           | **Grok**            | Experimental   |
-| Google API evaluation        | **Gemini SDK**      | Chat-only      |
-| Privacy / offline evaluation | **Ollama**          | Chat-only      |
-| GUI-based local evaluation   | **LM Studio**       | Chat-only      |
+| Priority                                                              | Recommended Adapter | Category       |
+| --------------------------------------------------------------------- | ------------------- | -------------- |
+| Primary tested pipeline path                                          | **Claude Headless** | Cloud AI (CLI) |
+| Direct SDK integration                                                | **Claude SDK**      | Cloud AI (SDK) |
+| OpenAI models                                                         | **Codex**           | Cloud AI (CLI) |
+| Google agentic pipeline                                               | **Gemini CLI**      | Experimental   |
+| GitHub agentic pipeline                                               | **Copilot**         | Experimental   |
+| xAI Grok Build CLI                                                    | **Grok**            | Beta           |
+| Agentic path to a self-run model, or another CLI to a hosted provider | **OpenCode**        | Experimental   |
+| Google API evaluation                                                 | **Gemini SDK**      | Chat-only      |
+| Privacy / offline evaluation                                          | **Ollama**          | Chat-only      |
+| GUI-based local evaluation                                            | **LM Studio**       | Chat-only      |
 
 ### Decision Matrix
 
-| Factor              | Claude SDK | Claude Headless |   Codex    | Gemini SDK | Gemini CLI | Copilot  | Ollama  | LM Studio |
-| ------------------- | :--------: | :-------------: | :--------: | :--------: | :--------: | :------: | :-----: | :-------: |
-| **Cost**            | Per-token  |  Subscription   | Per-token  | Per-token  | Per-token  | Per-req  |  Free   |   Free    |
-| **Privacy**         |   Cloud    |      Cloud      |   Cloud    |   Cloud    |   Cloud    |  Cloud   |  Local  |   Local   |
-| **Setup**           |  API key   |   OAuth login   | CLI login  |  API key   |  API key   | GH login | Install |  Install  |
-| **Quality**         |  Highest   |      High       |    High    |    High    |    High    |   Good   | Varies  |  Varies   |
-| **Session Resume**  |     ✓      |        ✗        | ✓ (opt-in) |     ✗      |     ✗      |    ✗     |    ✗    |     ✗     |
-| **Token Tracking**  |     ✓      |        ✗        |     ✓      |     ✓      |     ✓      |    ⚠️    |    ✓    |     ✓     |
-| **Offline**         |     ✗      |        ✗        |     ✗      |     ✗      |     ✗      |    ✗     |    ✓    |     ✓     |
-| **Pipeline stages** |     ✓      |        ✓        |  ✓ (beta)  |     ✗      |  ✓ (exp.)  | ✓ (exp.) |    ✗    |     ✗     |
+| Factor              | Claude SDK | Claude Headless |   Codex    | Gemini SDK | Gemini CLI | Copilot  |   Grok    | Ollama  | LM Studio |
+| ------------------- | :--------: | :-------------: | :--------: | :--------: | :--------: | :------: | :-------: | :-----: | :-------: |
+| **Cost**            | Per-token  |  Subscription   | Per-token  | Per-token  | Per-token  | Per-req  | Per-token |  Free   |   Free    |
+| **Privacy**         |   Cloud    |      Cloud      |   Cloud    |   Cloud    |   Cloud    |  Cloud   |   Cloud   |  Local  |   Local   |
+| **Setup**           |  API key   |   OAuth login   | CLI login  |  API key   |  API key   | GH login | CLI login | Install |  Install  |
+| **Quality**         |  Highest   |      High       |    High    |    High    |    High    |   Good   |   High    | Varies  |  Varies   |
+| **Session Resume**  |     ✓      |        ✗        | ✓ (opt-in) |     ✗      |     ✗      |    ✗     |     ✗     |    ✗    |     ✗     |
+| **Token Tracking**  |     ✓      |        ✗        |     ✓      |     ✓      |     ✓      |    ⚠️    |     ✓     |    ✓    |     ✓     |
+| **Offline**         |     ✗      |        ✗        |     ✗      |     ✗      |     ✗      |    ✗     |     ✗     |    ✓    |     ✓     |
+| **Pipeline stages** |     ✓      |        ✓        |  ✓ (beta)  |     ✗      |  ✓ (exp.)  | ✓ (exp.) | ✓ (beta)  |    ✗    |     ✗     |
+
+OpenCode has no column here: it dispatches through whatever provider its
+`-m <provider>/<model>` names, so cost, privacy, and offline posture are
+properties of the dispatched model, not of the adapter. See
+[OpenCode](#opencode) below.
 
 ---
 
@@ -252,7 +258,8 @@ test -f ~/.grok/auth.json && echo "session present"
 - No `--max-budget-usd`; Nightgauge enforces budget itself
 - Subscription usage shares a weekly pool with other Grok products
 - Dollar cost is often unstamped on the subscription path; tokens still record
-- Experimental until a live six-stage matrix lands (#528)
+- Beta since 2026-08-15 (#528): a live six-stage run met the beta bar; see
+  [ADAPTER_MATRIX.md § Grok Live-Run Evidence](ADAPTER_MATRIX.md#grok-live-run-evidence-528)
 
 **Troubleshooting:**
 
@@ -535,7 +542,7 @@ matrix is still pending.
 npm install -g @github/copilot-cli
 
 # Authenticate (any of these)
-export GH_TOKEN=ghp_...
+export GH_TOKEN={env:GH_TOKEN}
 # or
 gh auth login
 ```
@@ -583,12 +590,129 @@ gh auth status
 
 ---
 
+### OpenCode
+
+**Experimental.** One adapter id, `opencode`, reaches both a model server the
+operator runs (LM Studio, Ollama, or another OpenAI-compatible server) and a
+hosted provider (Anthropic, OpenAI, xAI, Google), because the provider is a
+property of the dispatched model id, not of the adapter. Full design record:
+[ADR-022](decisions/022-opencode-multi-provider-adapter.md).
+
+`Manager.RunStage` refuses every `opencode` dispatch before spawning anything
+unless `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` is set in the process environment,
+and an allowed dispatch still prints, on stderr, every control the ADR lists
+as not yet enforced. A dispatch to an `anthropic/*` model is refused while
+`ANTHROPIC_API_KEY` is unset, whatever the switch says.
+
+**Prerequisites:**
+
+- OpenCode CLI installed (`npm install -g opencode-ai`, or a version pin per
+  below)
+- `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` set in the environment the pipeline
+  runs in
+- For a hosted `anthropic/*` model: `ANTHROPIC_API_KEY` set
+- For a self-run model: the server already running and reachable on loopback
+
+**Quick Start:**
+
+```bash
+export NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1
+```
+
+```yaml
+# .nightgauge/config.yaml
+pipeline:
+  stage_adapters:
+    feature-dev: opencode
+```
+
+A dispatch must name a model OpenCode can take on `-m <provider>/<model>` —
+there is no bare-id fallback. The `<provider>` is the first path segment,
+split on the first `/`: `lmstudio/qwen/qwen3.8-27b` is provider key
+`lmstudio`, model `qwen/qwen3.8-27b`; `anthropic/claude-sonnet-5` is provider
+key `anthropic`, model `claude-sonnet-5`. A local model server is declared as
+a named endpoint in the machine tier (`~/.nightgauge/config.yaml`, never the
+committed project config):
+
+```yaml
+opencode:
+  binary: /opt/opencode/bin/opencode # an absolute path, never looked up on PATH
+  endpoints:
+    - id: lmstudio # becomes the OpenCode provider key
+      provider: lm-studio # lm-studio | ollama | openai-compatible
+      base_url: http://127.0.0.1:1234/v1
+      limits:
+        context: 131072 # overrides the value discovered from the server
+        output: 16384
+```
+
+**Isolation from the operator's own OpenCode state.** Every dispatch gets its
+own XDG-isolated run root (`~/.nightgauge/opencode/runs/<run_id>/`), never the
+operator's real `~/.opencode` or global OpenCode config: `inherit_user_config`
+defaults to `false`, and a run's `HOME` structurally keeps `~/.opencode` out
+of it. The session database, transcript, and per-run config are deleted with
+the run root when the run ends, and every inherited `OPENCODE_*` variable is
+stripped before the environment this ADR sets is added — including
+`OPENCODE_AUTH_CONTENT`, so a stored subscription or OAuth login the operator
+holds is never available to a dispatch. A subscription or OAuth login is
+never used for `anthropic/*`; the only credential is `ANTHROPIC_API_KEY`.
+
+**Headless permission semantics.** OpenCode auto-rejects a permission that
+resolves to `ask`: the tool call fails, the run ends after that step, and the
+process **exits 0** — a silent stop that looks like success. Nightgauge's
+permission maps contain only `allow` and `deny`, never `ask`, and the parser
+classifies a rejected-permission tool event as a failure regardless of the
+exit code, so a stage that hits this does not report success. `--auto` and
+its hidden aliases are never emitted; approval is the permission map's job.
+
+**Known Limitations:**
+
+- Experimental: no live six-stage evidence recorded yet (#1659); the switch
+  above must be set explicitly, and every allowed dispatch discloses the
+  controls still unenforced
+- `Subagents (task)` are denied under the current plugin gate (see
+  [ADAPTER_MATRIX.md § 10. opencode](ADAPTER_MATRIX.md#10-opencode) for the
+  full capability disposition table)
+- A model server the operator runs is refused above the compat manifest's
+  max-tested version, even though a hosted dispatch continues under a warning
+- The machine's own managed OpenCode config, when one exists, refuses every
+  dispatch unless `inherit_user_config` is explicitly turned on
+
+**Troubleshooting:**
+
+| Problem                                   | Solution                                                                            |
+| ----------------------------------------- | ----------------------------------------------------------------------------------- |
+| Dispatch refused, gate not enabled        | Set `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` where the pipeline runs                    |
+| `anthropic/*` refused                     | Set `ANTHROPIC_API_KEY`; a subscription or OAuth login is never accepted here       |
+| A local endpoint's dispatch refused       | Check the binary's version against the compat manifest's max-tested version         |
+| Stage fails on an auto-rejected tool call | Widen the stage's allowed tools so the permission map generates `allow`, not `deny` |
+| CLI not found                             | `npm install -g opencode-ai`, or pin `opencode.binary` to an absolute path          |
+
+**Environment Variables:**
+
+| Variable                           | Description                                                                 |
+| ---------------------------------- | --------------------------------------------------------------------------- |
+| `NIGHTGAUGE_EXPERIMENTAL_OPENCODE` | Must be exactly `1` to allow any dispatch                                   |
+| `NIGHTGAUGE_MODEL`                 | The `<provider>/<model>` this dispatch sends on `-m`                        |
+| `ANTHROPIC_API_KEY`                | Required for any `anthropic/*` model; no other Anthropic credential is read |
+
+<!-- Forward link: #1670's MULTI_BACKEND_SETUP section will cover running several
+local model servers side by side; the anchor does not exist yet. -->
+
+---
+
 ## Local AI Adapters
 
 These adapters connect to locally running model servers and do not require a
 model-provider cloud API. Review Nightgauge platform, telemetry, forge, and
 notification settings separately before describing an entire run as offline or
 private. Quality depends on the model you choose.
+
+The `lm-studio` and `ollama` adapters below stay chat-completion-only: they are
+HTTP bridges with no tool loop, and `Manager.RunStage` refuses to dispatch a
+pipeline stage to either. [OpenCode](#opencode) is the agentic path to the same
+kind of self-run model server — it drives a real tool loop against it, the same
+way it drives one against a hosted provider.
 
 ### Ollama
 
