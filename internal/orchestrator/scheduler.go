@@ -4125,6 +4125,33 @@ func maxFloat64(a, b float64) float64 {
 // rots silently if nothing exercises it. Production never reassigns this.
 var newRunID = runstate.NewRunID
 
+// shouldSkipBoardRevert decides whether a failed run's board Status write
+// (back to Ready/Backlog, see the call site below) must be skipped rather
+// than applied. Extracted to a pure function so #1969's new condition —
+// mergedCommitSha != "" — is unit-testable without standing up the whole of
+// runPipeline.
+//
+// Issue #3542 supplies the first two terminal-kind conditions
+// (worktree_uncommitted, budget_ceiling_hit); #163 and #266 add
+// branch_forked and commit_orphaned. All four, plus workRecovered, share one
+// reason: re-dispatching regenerates work that already exists somewhere the
+// revert does not see (a recovery commit, spent budget, a branch that will
+// only fork again). #1969 adds a fifth for the opposite direction — not
+// "there's unseen work," but "the forge already gave a verdict and it must
+// not be relitigated": mergedCommitSha is runtime's post-merge ground-truth
+// breadcrumb, set ONLY after verifyPRMergeForStage confirms the PR's
+// MERGED state and checkEpicCompletion has run. A later stage failing (the
+// unregistered spike-materialize stage, #1969's own bug) must not undo a
+// Status write the successful merge already justified.
+func shouldSkipBoardRevert(workRecovered bool, terminalFailureKind string, mergedCommitSha string) bool {
+	return workRecovered ||
+		terminalFailureKind == TerminalKindWorktreeUncommitted ||
+		terminalFailureKind == TerminalKindBudgetCeiling ||
+		terminalFailureKind == TerminalKindBranchForked ||
+		terminalFailureKind == TerminalKindCommitOrphaned ||
+		mergedCommitSha != ""
+}
+
 // runPipeline executes the full 6-stage pipeline for a board item.
 //
 // The loop integrates retry, budget, and RALPH engines:
@@ -4703,39 +4730,10 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// Revert board status on failure so the autonomous scheduler can re-dispatch.
 		// Skips revert if issue is already "In Review" (PR was opened before failure),
 		// if its current status cannot be read (FailPipeline reports why), or if
-		// configured as "unchanged" (legacy behavior).
-		//
-		// Issue #3542: also skip the scheduler-side revert for the two
-		// recoverable terminal kinds. worktree_uncommitted means the work was
-		// preserved into a recovery commit; budget_ceiling_hit means the cost
-		// was real spend, not a code defect. Leaving the issue "In Progress"
-		// lets the pipeline (or operator) re-run the next stage. In autonomous
-		// mode, revertFailedIssueStatus still resets it to Ready for
-		// re-dispatch — but without a LifetimeIssueFailures increment.
-		//
-		// Issue #163 adds a third, for the opposite reason: branch_forked is NOT
-		// recoverable by re-running. Reverting the board to Ready re-dispatches
-		// the issue straight back into the same non-fast-forward rejection, which
-		// is the loop that burned a full pipeline per cycle. The issue stays put
-		// and its Action Center card is the way back in.
-		// commit_orphaned (#266) joins branch_forked for the same reason:
-		// reverting to Ready re-dispatches into a fresh worktree that redoes the
-		// work, while the commit the pipeline actually produced sits preserved
-		// (by the CleanupWorktree/CleanupLocalBranch ahead-of-base guard) on a
-		// branch nobody re-runs against automatically. The way back in is the
-		// Action Center card, not an automatic retry.
-		// workRecovered, not the kind (#875). The revert is harmful whenever a
-		// recovery commit exists — re-dispatch regenerates the work in a fresh
-		// worktree while the preserved commit sits on a branch nobody re-runs —
-		// and that is true regardless of what NAME the run's failure ended up
-		// with. Keying it on terminalFailureKind meant the protection could only
-		// be kept by also renaming the failure after the rescue. Strictly wider
-		// than the previous condition: every kind listed below still skips.
-		skipBoardRevert := workRecovered ||
-			terminalFailureKind == TerminalKindWorktreeUncommitted ||
-			terminalFailureKind == TerminalKindBudgetCeiling ||
-			terminalFailureKind == TerminalKindBranchForked ||
-			terminalFailureKind == TerminalKindCommitOrphaned
+		// configured as "unchanged" (legacy behavior), or if shouldSkipBoardRevert
+		// (above runPipeline) says this failure's cause must not be relitigated
+		// by a re-dispatch — see its doc comment for the five reasons.
+		skipBoardRevert := shouldSkipBoardRevert(workRecovered, terminalFailureKind, snap.MergedCommitSha)
 		if !pipelineSuccess && !skipBoardRevert && s.stateSvc != nil && s.onFailureStatus != "unchanged" {
 			var targetStatus state.BoardStatus
 			switch s.onFailureStatus {

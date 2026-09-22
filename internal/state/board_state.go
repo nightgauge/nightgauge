@@ -34,6 +34,26 @@ const (
 	StageIssueRefine PipelineStage = "issue-refine"
 )
 
+// AllPipelineStages is the canonical, exhaustive list of every PipelineStage
+// constant declared above, in declaration order (#1969).
+// It exists so a consumer that must reach EVERY stage — the skillrender
+// reachability guard (TestEveryStageConstantIsRenderable) is the motivating
+// one — iterates this list rather than hand-copying the constants into a
+// second, driftable literal. TestAllPipelineStagesMatchesDeclaredConstants
+// (board_state_stage_list_test.go) parses this file's own AST and fails if a
+// future constant is added here without also being added to this slice, so
+// the exhaustiveness is enforced, not just documented.
+var AllPipelineStages = []PipelineStage{
+	StageIssuePickup,
+	StageFeaturePlanning,
+	StageFeatureDev,
+	StageFeatureValidate,
+	StagePRCreate,
+	StagePRMerge,
+	StageSpikeMaterialize,
+	StageIssueRefine,
+}
+
 // BoardStatus represents the project board status field values.
 type BoardStatus string
 

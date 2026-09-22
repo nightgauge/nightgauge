@@ -160,7 +160,7 @@ func TestOpenCodeAdapterAuthFailedTakesTheRetryableInfraPath(t *testing.T) {
 	addRunning(as, repo, num, "opencode auth pre-flight")
 	as.onPipelineComplete(repo, num, false, false,
 		TerminalKindAdapterAuthFailed,
-		"[adapter-auth-failed] opencode: credential refusal — ANTHROPIC_API_KEY is not set for an anthropic/ dispatch.")
+		"[adapter-auth-failed] opencode: credential refusal — ANTHROPIC_API_KEY is not set for an anthropic/ dispatch.", false)
 	as.drainBackground()
 
 	if as.state.Status == "safety_tripped" || as.state.Status == "paused" {

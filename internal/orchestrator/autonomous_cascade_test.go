@@ -59,7 +59,7 @@ func TestAutonomous_CascadePausesAfterThreshold(t *testing.T) {
 
 	for i, num := range []int{100, 101, 102} {
 		addRunning(as, "nightgauge/nightgauge", num, "issue")
-		as.onPipelineComplete("nightgauge/nightgauge", num, false, false, "subagent_crash", "stage failed")
+		as.onPipelineComplete("nightgauge/nightgauge", num, false, false, "subagent_crash", "stage failed", false)
 		as.drainBackground()
 		if i < 2 {
 			if as.state.Status == "safety_tripped" {
@@ -91,7 +91,7 @@ func TestAutonomous_CascadeIgnoresStallKills(t *testing.T) {
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 	for _, num := range []int{200, 201, 202, 203, 204} {
 		addRunning(as, "nightgauge/nightgauge", num, "issue")
-		as.onPipelineComplete("nightgauge/nightgauge", num, false, false, TerminalKindStallKill, "")
+		as.onPipelineComplete("nightgauge/nightgauge", num, false, false, TerminalKindStallKill, "", false)
 		as.drainBackground()
 	}
 	if as.state.Status == "safety_tripped" {
@@ -108,7 +108,7 @@ func TestAutonomous_CascadeIgnoresQuotaExhausted(t *testing.T) {
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 	for _, num := range []int{300, 301, 302, 303} {
 		addRunning(as, "nightgauge/nightgauge", num, "issue")
-		as.onPipelineComplete("nightgauge/nightgauge", num, false, false, TerminalKindRateLimitQuotaExhausted, "")
+		as.onPipelineComplete("nightgauge/nightgauge", num, false, false, TerminalKindRateLimitQuotaExhausted, "", false)
 		as.drainBackground()
 	}
 	if as.state.Status == "safety_tripped" {
@@ -140,7 +140,7 @@ func TestAutonomous_PrMergeUnmerged_Recoverable(t *testing.T) {
 	addRunning(as, repo, issue, "workspace payload upsert")
 
 	detail := "[pr-merge-unmerged:ci_failures] PR #961 has 1 failing CI check(s): Lint, Typecheck, Test, Build. PR: https://github.com/acme/platform/pull/961 | failing-checks: Lint, Typecheck, Test, Build | recoverable: no LifetimeIssueFailures increment; resume after the blocker is resolved."
-	as.onPipelineComplete(repo, issue, false, false, TerminalKindPrMergeUnmerged, detail)
+	as.onPipelineComplete(repo, issue, false, false, TerminalKindPrMergeUnmerged, detail, false)
 	as.drainBackground()
 
 	key := repo + "#" + strconv.Itoa(issue)
@@ -179,7 +179,7 @@ func TestAutonomous_CascadeResetsOnResume(t *testing.T) {
 
 	for _, num := range []int{400, 401, 402} {
 		addRunning(as, "r", num, "issue")
-		as.onPipelineComplete("r", num, false, false, "subagent_crash", "")
+		as.onPipelineComplete("r", num, false, false, "subagent_crash", "", false)
 		as.drainBackground()
 	}
 	if !as.cascadeTracker.IsTripped() {
@@ -207,7 +207,7 @@ func TestAutonomous_CascadeFiresStatusChange(t *testing.T) {
 
 	for _, num := range []int{500, 501, 502} {
 		addRunning(as, "r", num, "issue")
-		as.onPipelineComplete("r", num, false, false, "subagent_crash", "")
+		as.onPipelineComplete("r", num, false, false, "subagent_crash", "", false)
 		as.drainBackground()
 	}
 
@@ -241,7 +241,7 @@ func TestAutonomous_CascadeOnlyFiresOnce(t *testing.T) {
 
 	for _, num := range []int{600, 601, 602, 603, 604, 605} {
 		addRunning(as, "r", num, "issue")
-		as.onPipelineComplete("r", num, false, false, "subagent_crash", "")
+		as.onPipelineComplete("r", num, false, false, "subagent_crash", "", false)
 		as.drainBackground()
 	}
 
@@ -260,7 +260,7 @@ func TestAutonomous_CascadeBreakerNilTrackerIsNoop(t *testing.T) {
 	for _, num := range []int{700, 701, 702} {
 		addRunning(as, "r", num, "issue")
 		// Must not panic.
-		as.onPipelineComplete("r", num, false, false, "subagent_crash", "")
+		as.onPipelineComplete("r", num, false, false, "subagent_crash", "", false)
 		as.drainBackground()
 	}
 	if as.state.Status == "safety_tripped" {

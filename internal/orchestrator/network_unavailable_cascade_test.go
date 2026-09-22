@@ -58,7 +58,7 @@ func TestNetworkUnavailableDoesNotFeedCascadeBreaker(t *testing.T) {
 
 			issueNum := 601 + i
 			as.state.Running = []RunningItem{{Repo: "nightgauge/nightgauge", Number: issueNum, Title: "cascade exemption test"}}
-			as.onPipelineComplete("nightgauge/nightgauge", issueNum, false, false, tt.kind, "test failure: "+tt.name)
+			as.onPipelineComplete("nightgauge/nightgauge", issueNum, false, false, tt.kind, "test failure: "+tt.name, false)
 			as.drainBackground()
 
 			got := tracker.CountInWindow(time.Now())

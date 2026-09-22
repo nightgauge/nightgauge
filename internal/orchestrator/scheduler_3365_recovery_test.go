@@ -183,7 +183,7 @@ func TestOnPipelineComplete_PermissionDenied_TransientNoPauseNoCascade(t *testin
 	addRunning(as, repo, issue, "denied tool call")
 	as.onPipelineComplete(repo, issue, false, false,
 		TerminalKindPermissionDenied,
-		"[permission-denied] harness denied a foreground sleep wait loop tool call")
+		"[permission-denied] harness denied a foreground sleep wait loop tool call", false)
 	as.drainBackground()
 
 	if as.state.Status == "safety_tripped" || as.state.Status == "paused" {
@@ -521,7 +521,7 @@ func TestOnPipelineComplete_RecoverableKinds_NoLifetimeCap(t *testing.T) {
 			}
 
 			before := time.Now()
-			as.onPipelineComplete("nightgauge/nightgauge", 3542, false, false, kind, kind+" (recoverable)")
+			as.onPipelineComplete("nightgauge/nightgauge", 3542, false, false, kind, kind+" (recoverable)", false)
 			as.drainBackground()
 
 			key := "nightgauge/nightgauge#3542"

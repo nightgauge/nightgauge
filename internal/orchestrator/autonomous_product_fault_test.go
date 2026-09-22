@@ -33,7 +33,7 @@ func TestCascadeProductFault_SharedKindAcrossTwoReposChargesNoIssue(t *testing.T
 	for _, f := range failures {
 		addRunning(as, f.repo, f.number, "issue")
 		as.onPipelineComplete(f.repo, f.number, false, false,
-			TerminalKindDevBuildVerificationMissing, "gate rejected a finished implementation")
+			TerminalKindDevBuildVerificationMissing, "gate rejected a finished implementation", false)
 		as.drainBackground()
 	}
 
@@ -80,7 +80,7 @@ func TestCascadeProductFault_MixedKindsStillChargeTheIssues(t *testing.T) {
 	}
 	for _, f := range failures {
 		addRunning(as, f.repo, f.number, "issue")
-		as.onPipelineComplete(f.repo, f.number, false, false, f.kind, "stage failed")
+		as.onPipelineComplete(f.repo, f.number, false, false, f.kind, "stage failed", false)
 		as.drainBackground()
 	}
 
@@ -193,7 +193,7 @@ func TestOperatorStop_DoesNotChargeTheIssueOrFeedTheCascade(t *testing.T) {
 		addRunning(as, "octocat/acme-app", n, "issue")
 		// terminal kind "" is the shape the incident actually produced: SIGTERM,
 		// exit 143, signal_source none, nothing for a text classifier to read.
-		as.onPipelineComplete("octocat/acme-app", n, false, false, "", "exit 143")
+		as.onPipelineComplete("octocat/acme-app", n, false, false, "", "exit 143", false)
 		as.drainBackground()
 	}
 
@@ -228,7 +228,7 @@ func TestOperatorStop_ClassifiedKindIsExemptWithoutStopRequested(t *testing.T) {
 
 	for _, n := range []int{1, 2, 3} {
 		addRunning(as, "octocat/acme-app", n, "issue")
-		as.onPipelineComplete("octocat/acme-app", n, false, false, TerminalKindOperatorStop, "cancelled")
+		as.onPipelineComplete("octocat/acme-app", n, false, false, TerminalKindOperatorStop, "cancelled", false)
 		as.drainBackground()
 	}
 
@@ -249,7 +249,7 @@ func TestCascadeProductFault_UnclassifiedFailuresStillCharge(t *testing.T) {
 
 	for _, n := range []int{1, 2, 3} {
 		addRunning(as, "octocat/acme-app", n, "issue")
-		as.onPipelineComplete("octocat/acme-app", n, false, false, "", "stage failed")
+		as.onPipelineComplete("octocat/acme-app", n, false, false, "", "stage failed", false)
 		as.drainBackground()
 	}
 

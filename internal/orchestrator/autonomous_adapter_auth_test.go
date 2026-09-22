@@ -44,7 +44,7 @@ func TestOnPipelineComplete_AdapterAuthFailed_TransientNoPauseNoCascade(t *testi
 		as.onPipelineComplete(c.repo, c.num, false, false,
 			TerminalKindAdapterAuthFailed,
 			"[adapter-auth-failed] Auth pre-flight failed — auth probe timed out after retry "+
-				"(adapter CLI unresponsive — transient, not a logged-out session).")
+				"(adapter CLI unresponsive — transient, not a logged-out session).", false)
 		as.drainBackground()
 	}
 

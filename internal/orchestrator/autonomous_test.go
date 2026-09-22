@@ -484,7 +484,7 @@ func TestOnPipelineComplete_Success(t *testing.T) {
 		rescanCh: make(chan struct{}, 1),
 	}
 
-	as.onPipelineComplete("R", 42, true, false, "", "")
+	as.onPipelineComplete("R", 42, true, false, "", "", false)
 	as.drainBackground()
 
 	if len(as.state.Running) != 0 {
@@ -520,7 +520,7 @@ func TestOnPipelineComplete_Failure(t *testing.T) {
 		rescanCh: make(chan struct{}, 1),
 	}
 
-	as.onPipelineComplete("R", 99, false, false, "", "")
+	as.onPipelineComplete("R", 99, false, false, "", "", false)
 	as.drainBackground()
 
 	if len(as.state.Running) != 0 {
@@ -552,7 +552,7 @@ func TestOnPipelineComplete_ConflictRecoveryPath_PreservesBranch(t *testing.T) {
 
 	// conflictRestart=false → exhausted/failed conflict-recovery (branch-
 	// preserving) reaches the normal failure path, not the fresh-branch restart.
-	as.onPipelineComplete("R", 70, false, false, "", "")
+	as.onPipelineComplete("R", 70, false, false, "", "", false)
 	as.drainBackground()
 
 	if len(as.state.Failed) != 1 || as.state.Failed[0].Number != 70 {
@@ -588,7 +588,7 @@ func TestOnPipelineComplete_LegacyConflictRestart_BoundedThenTrueFailure(t *test
 	// First MaxConflictRestarts-1 attempts re-queue (not a true failure yet).
 	for i := 1; i < MaxConflictRestarts; i++ {
 		as.state.Running = []RunningItem{{Repo: "R", Number: 80, Title: "Legacy Conflict"}}
-		as.onPipelineComplete("R", 80, false, true, "", "")
+		as.onPipelineComplete("R", 80, false, true, "", "", false)
 		as.drainBackground()
 		if got := as.conflictRestartCount[key]; got != i {
 			t.Fatalf("attempt %d: conflictRestartCount=%d, want %d", i, got, i)
@@ -601,7 +601,7 @@ func TestOnPipelineComplete_LegacyConflictRestart_BoundedThenTrueFailure(t *test
 
 	// The final attempt reaches the bound → true failure path.
 	as.state.Running = []RunningItem{{Repo: "R", Number: 80, Title: "Legacy Conflict"}}
-	as.onPipelineComplete("R", 80, false, true, "", "")
+	as.onPipelineComplete("R", 80, false, true, "", "", false)
 	as.drainBackground()
 	if as.conflictRestartCount[key] != MaxConflictRestarts {
 		t.Errorf("expected conflictRestartCount=%d at bound, got %d", MaxConflictRestarts, as.conflictRestartCount[key])
@@ -640,7 +640,7 @@ func TestOnPipelineComplete_StreamIdleTimeout_LongBackoff(t *testing.T) {
 	}
 
 	before := time.Now()
-	as.onPipelineComplete("nightgauge/nightgauge", 3327, false, false, TerminalKindStreamIdleTimeout, "")
+	as.onPipelineComplete("nightgauge/nightgauge", 3327, false, false, TerminalKindStreamIdleTimeout, "", false)
 	as.drainBackground()
 	after := time.Now()
 
@@ -709,7 +709,7 @@ func TestOnPipelineComplete_RateLimitQuotaExhausted_LongBackoff(t *testing.T) {
 	}
 
 	before := time.Now()
-	as.onPipelineComplete("acme/platform", 885, false, false, TerminalKindRateLimitQuotaExhausted, "")
+	as.onPipelineComplete("acme/platform", 885, false, false, TerminalKindRateLimitQuotaExhausted, "", false)
 	as.drainBackground()
 	after := time.Now()
 
@@ -768,7 +768,7 @@ func TestOnPipelineComplete_StallKill_NoLifetimeCap(t *testing.T) {
 	}
 
 	before := time.Now()
-	as.onPipelineComplete("nightgauge/nightgauge", 3499, false, false, TerminalKindStallKill, "exceeded stall idle threshold (20m)")
+	as.onPipelineComplete("nightgauge/nightgauge", 3499, false, false, TerminalKindStallKill, "exceeded stall idle threshold (20m)", false)
 	as.drainBackground()
 	after := time.Now()
 
@@ -846,7 +846,7 @@ func TestOnPipelineComplete_ApiOverloaded_TransientNoPause(t *testing.T) {
 	}
 
 	before := time.Now()
-	as.onPipelineComplete("nightgauge/nightgauge", 481, false, false, TerminalKindApiOverloaded, "API Error: Overloaded")
+	as.onPipelineComplete("nightgauge/nightgauge", 481, false, false, TerminalKindApiOverloaded, "API Error: Overloaded", false)
 	as.drainBackground()
 	after := time.Now()
 
@@ -939,7 +939,7 @@ func TestOnPipelineComplete_ApiOverloaded_EscalatesAcrossConsecutiveFailures(t *
 	for attempt := 0; attempt < apiOverloadedMaxAttempts; attempt++ {
 		as.state.Running = []RunningItem{{Repo: "nightgauge/nightgauge", Number: 481, Title: "Sustained outage"}}
 		before := time.Now()
-		as.onPipelineComplete("nightgauge/nightgauge", 481, false, false, TerminalKindApiOverloaded, "API Error: Overloaded")
+		as.onPipelineComplete("nightgauge/nightgauge", 481, false, false, TerminalKindApiOverloaded, "API Error: Overloaded", false)
 		as.drainBackground()
 
 		retryAt, ok := retryDeadline(as, key)
@@ -987,7 +987,7 @@ func TestOnPipelineComplete_ApiOverloaded_CeilingStopsRedispatchWithoutLifetimeC
 	// each schedule a retry and increment Attempts).
 	for i := 0; i < apiOverloadedMaxAttempts; i++ {
 		as.state.Running = []RunningItem{{Repo: "nightgauge/nightgauge", Number: 481, Title: "Sustained outage"}}
-		as.onPipelineComplete("nightgauge/nightgauge", 481, false, false, TerminalKindApiOverloaded, "API Error: Overloaded")
+		as.onPipelineComplete("nightgauge/nightgauge", 481, false, false, TerminalKindApiOverloaded, "API Error: Overloaded", false)
 		as.drainBackground()
 	}
 	if _, ok := retryDeadline(as, key); !ok {
@@ -996,7 +996,7 @@ func TestOnPipelineComplete_ApiOverloaded_CeilingStopsRedispatchWithoutLifetimeC
 
 	// The (apiOverloadedMaxAttempts+1)-th failure exceeds the ceiling.
 	as.state.Running = []RunningItem{{Repo: "nightgauge/nightgauge", Number: 481, Title: "Sustained outage"}}
-	as.onPipelineComplete("nightgauge/nightgauge", 481, false, false, TerminalKindApiOverloaded, "API Error: Overloaded")
+	as.onPipelineComplete("nightgauge/nightgauge", 481, false, false, TerminalKindApiOverloaded, "API Error: Overloaded", false)
 	as.drainBackground()
 
 	if _, ok := retryDeadline(as, key); ok {
@@ -1033,14 +1033,14 @@ func TestOnPipelineComplete_ApiOverloaded_SuccessResetsBackoff(t *testing.T) {
 
 	key := "nightgauge/nightgauge#481"
 	as.state.Running = []RunningItem{{Repo: "nightgauge/nightgauge", Number: 481, Title: "Sustained outage"}}
-	as.onPipelineComplete("nightgauge/nightgauge", 481, false, false, TerminalKindApiOverloaded, "API Error: Overloaded")
+	as.onPipelineComplete("nightgauge/nightgauge", 481, false, false, TerminalKindApiOverloaded, "API Error: Overloaded", false)
 	as.drainBackground()
 	if _, ok := retryDeadline(as, key); !ok {
 		t.Fatalf("expected retryBackoff[%q] to be set after transient failure", key)
 	}
 
 	as.state.Running = []RunningItem{{Repo: "nightgauge/nightgauge", Number: 481, Title: "Sustained outage"}}
-	as.onPipelineComplete("nightgauge/nightgauge", 481, true, false, "", "")
+	as.onPipelineComplete("nightgauge/nightgauge", 481, true, false, "", "", false)
 	as.drainBackground()
 
 	if _, ok := retryDeadline(as, key); ok {
@@ -1095,7 +1095,7 @@ func TestTransientFailuresNeverTripTheCircuitBreaker(t *testing.T) {
 			// kind entirely keeps the fleet running.
 			for i, num := range []int{501, 502, 503, 504} {
 				as.state.Running = []RunningItem{{Repo: "nightgauge/nightgauge", Number: num}}
-				as.onPipelineComplete("nightgauge/nightgauge", num, false, false, kind, "transient: "+kind)
+				as.onPipelineComplete("nightgauge/nightgauge", num, false, false, kind, "transient: "+kind, false)
 				as.drainBackground()
 
 				if got := rails.State().ConsecutiveFailures; got != 0 {
@@ -1172,7 +1172,7 @@ func TestOnPipelineComplete_StallKill_RepeatedDoesNotBlockIssue(t *testing.T) {
 		as.state.Running = []RunningItem{
 			{Repo: "nightgauge/nightgauge", Number: 42, Title: "Issue"},
 		}
-		as.onPipelineComplete("nightgauge/nightgauge", 42, false, false, TerminalKindStallKill, "")
+		as.onPipelineComplete("nightgauge/nightgauge", 42, false, false, TerminalKindStallKill, "", false)
 		as.drainBackground()
 		if got := as.state.LifetimeIssueFailures[key]; got != 0 {
 			t.Errorf("after stall #%d: LifetimeIssueFailures[%q] = %d, want 0", i+1, key, got)
@@ -1287,7 +1287,7 @@ func TestOnPipelineComplete_OtherFailures_StillIncrementLifetime(t *testing.T) {
 				retryBackoff:         map[string]retryPlan{},
 			}
 
-			as.onPipelineComplete("R", 5, false, false, kind, "")
+			as.onPipelineComplete("R", 5, false, false, kind, "", false)
 			as.drainBackground()
 
 			if got := as.state.LifetimeIssueFailures["R#5"]; got != 1 {
@@ -1317,10 +1317,10 @@ func TestLifetimeIssueFailures_PersistAcrossResume(t *testing.T) {
 	}
 	// Two failures of the same issue.
 	as.state.Running = []RunningItem{{Repo: "R", Number: 42}}
-	as.onPipelineComplete("R", 42, false, false, "", "")
+	as.onPipelineComplete("R", 42, false, false, "", "", false)
 	as.drainBackground()
 	as.state.Running = []RunningItem{{Repo: "R", Number: 42}}
-	as.onPipelineComplete("R", 42, false, false, "", "")
+	as.onPipelineComplete("R", 42, false, false, "", "", false)
 	as.drainBackground()
 
 	if got := as.state.LifetimeIssueFailures["R#42"]; got != 2 {
@@ -1352,7 +1352,7 @@ func TestLifetimeIssueFailures_ClearedOnSuccess(t *testing.T) {
 		},
 		rescanCh: make(chan struct{}, 1),
 	}
-	as.onPipelineComplete("R", 42, true, false, "", "")
+	as.onPipelineComplete("R", 42, true, false, "", "", false)
 	as.drainBackground()
 	if _, ok := as.state.LifetimeIssueFailures["R#42"]; ok {
 		t.Errorf("expected lifetime counter cleared on success, still present")
@@ -4160,7 +4160,7 @@ func TestOnPipelineComplete_Failure_TriggersStatusRevertGoroutine(t *testing.T) 
 
 	// Should not panic + should remove from Running. The drain joins the
 	// tracked revertFailedIssueStatus goroutine, so it cannot outlive the test.
-	as.onPipelineComplete("nightgauge/nightgauge", 871, false, false, "", "")
+	as.onPipelineComplete("nightgauge/nightgauge", 871, false, false, "", "", false)
 	as.drainBackground()
 
 	if len(as.state.Running) != 0 {
@@ -4187,7 +4187,7 @@ func TestOnPipelineComplete_Success_DoesNotTriggerRevert(t *testing.T) {
 		},
 		rescanCh: make(chan struct{}, 1),
 	}
-	as.onPipelineComplete("nightgauge/nightgauge", 42, true, false, "", "")
+	as.onPipelineComplete("nightgauge/nightgauge", 42, true, false, "", "", false)
 	as.drainBackground()
 
 	if len(as.state.Running) != 0 {
@@ -4370,7 +4370,7 @@ func TestOnPipelineComplete_QuotaExhausted_SetsGlobalCooldown(t *testing.T) {
 
 	as.onPipelineComplete(
 		"acme/platform", 893, false, false,
-		TerminalKindRateLimitQuotaExhausted, failureDetail)
+		TerminalKindRateLimitQuotaExhausted, failureDetail, false)
 	as.drainBackground()
 
 	if as.state.QuotaCooldownUntil == "" {
@@ -4405,7 +4405,7 @@ func TestOnPipelineComplete_QuotaExhausted_NoHintUsesFloor(t *testing.T) {
 	}
 
 	before := time.Now()
-	as.onPipelineComplete("R", 1, false, false, TerminalKindRateLimitQuotaExhausted, "")
+	as.onPipelineComplete("R", 1, false, false, TerminalKindRateLimitQuotaExhausted, "", false)
 	as.drainBackground()
 	gotUntil, err := time.Parse(time.RFC3339, as.state.QuotaCooldownUntil)
 	if err != nil {
@@ -4693,7 +4693,7 @@ func TestOnPipelineComplete_IssueClosed_NoLifetimeIncrement(t *testing.T) {
 	}
 
 	as.onPipelineComplete("nightgauge/nightgauge", 3661, false, false,
-		TerminalKindIssueClosed, "[pipeline-start-failure] issue-closed")
+		TerminalKindIssueClosed, "[pipeline-start-failure] issue-closed", false)
 	as.drainBackground()
 
 	key := "nightgauge/nightgauge#3661"
@@ -4747,7 +4747,7 @@ func TestOnPipelineComplete_IssueClosed_NoCircuitBreaker(t *testing.T) {
 			{Repo: "nightgauge/nightgauge", Number: 3661, Title: "Already-closed"},
 		}
 		as.onPipelineComplete("nightgauge/nightgauge", 3661, false, false,
-			TerminalKindIssueClosed, "[pipeline-start-failure] issue-closed")
+			TerminalKindIssueClosed, "[pipeline-start-failure] issue-closed", false)
 		as.drainBackground()
 		key := "nightgauge/nightgauge#3661"
 		if got := as.state.LifetimeIssueFailures[key]; got != 0 {
@@ -4782,7 +4782,7 @@ func TestOnPipelineComplete_BlockedDependency_NonFailure(t *testing.T) {
 
 	before := time.Now()
 	as.onPipelineComplete("nightgauge/nightgauge", 305, false, false,
-		TerminalKindBlockedDependency, "[blocked-dependency] blockedBy #300 still open")
+		TerminalKindBlockedDependency, "[blocked-dependency] blockedBy #300 still open", false)
 	as.drainBackground()
 	after := time.Now()
 
@@ -4850,7 +4850,7 @@ func TestOnPipelineComplete_BlockedDependency_NoCircuitBreaker(t *testing.T) {
 			{Repo: "nightgauge/nightgauge", Number: 305, Title: "Dispatched while blocked"},
 		}
 		as.onPipelineComplete("nightgauge/nightgauge", 305, false, false,
-			TerminalKindBlockedDependency, "[blocked-dependency] blockedBy #300 still open")
+			TerminalKindBlockedDependency, "[blocked-dependency] blockedBy #300 still open", false)
 		as.drainBackground()
 		key := "nightgauge/nightgauge#305"
 		if got := as.state.LifetimeIssueFailures[key]; got != 0 {
@@ -5206,7 +5206,7 @@ func TestPendingRetriesAreVisibleInExportedState(t *testing.T) {
 	}
 
 	as.onPipelineComplete("nightgauge/nightgauge", 135, false, false,
-		TerminalKindApiOverloaded, "API Error: Overloaded")
+		TerminalKindApiOverloaded, "API Error: Overloaded", false)
 	as.drainBackground()
 
 	as.mu.Lock()
@@ -5243,7 +5243,7 @@ func TestPendingRetriesAreVisibleInExportedState(t *testing.T) {
 	as.state.Running = []RunningItem{{Repo: "nightgauge/nightgauge", Number: 135, Title: "worktree reuse"}}
 	as.mu.Unlock()
 	as.onPipelineComplete("nightgauge/nightgauge", 135, false, false,
-		TerminalKindApiOverloaded, "API Error: Overloaded")
+		TerminalKindApiOverloaded, "API Error: Overloaded", false)
 	as.drainBackground()
 
 	as.mu.Lock()
@@ -5309,7 +5309,7 @@ func TestPendingRetryClearsOnSuccess(t *testing.T) {
 
 	as.state.Running = []RunningItem{{Repo: "nightgauge/nightgauge", Number: 135}}
 	as.onPipelineComplete("nightgauge/nightgauge", 135, false, false,
-		TerminalKindApiOverloaded, "API Error: Overloaded")
+		TerminalKindApiOverloaded, "API Error: Overloaded", false)
 	as.drainBackground()
 	as.mu.Lock()
 	n := len(as.state.PendingRetries)
@@ -5319,7 +5319,7 @@ func TestPendingRetryClearsOnSuccess(t *testing.T) {
 	}
 
 	as.state.Running = []RunningItem{{Repo: "nightgauge/nightgauge", Number: 135}}
-	as.onPipelineComplete("nightgauge/nightgauge", 135, true, false, "", "")
+	as.onPipelineComplete("nightgauge/nightgauge", 135, true, false, "", "", false)
 	as.drainBackground()
 
 	as.mu.Lock()
