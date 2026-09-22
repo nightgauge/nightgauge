@@ -63,12 +63,225 @@ RELEASE_PROBE=0
 # error rather than as a check that asserted false.
 GROUP_PROBE=0
 GROUP_PROBE_HOLD=2
-case "${1:-}" in
-  --list-steps) LIST_STEPS=1 ;;
-  --slot-probe) SLOT_PROBE=1; SLOT_PROBE_HOLD="${2:-0}" ;;
-  --release-probe) RELEASE_PROBE=1 ;;
-  --group-probe) GROUP_PROBE="${2:-4}"; GROUP_PROBE_HOLD="${3:-2}" ;;
-esac
+# `--changed` (#1985) is the OPT-IN change-scoped fast path. Default OFF, and it
+# must stay that way: the repository rule is "run the complete local gate once
+# before every push", and a silently-scoped default would weaken that rule
+# everywhere while looking identical in the output. With no flag this script
+# behaves exactly as it did before #1985 — every step, unconditionally.
+CHANGED_SCOPE=0
+# `--scope-probe` prints the derived change scope and the Go decision the gate
+# WOULD make with the flags it was given, and runs no steps. Same purpose as
+# `--slot-probe`: make the contract assertable in milliseconds instead of by
+# running a 10-minute gate twice. It deliberately does NOT imply `--changed`, so
+# `--scope-probe` alone is the direct assertion that the DEFAULT scopes nothing.
+SCOPE_PROBE=0
+# `--summary-probe` drives the real skip/verdict reporting with one passing step
+# and one skipped step, and exits. It is the regression test for the property
+# that a skipped step is a THIRD state: revert the verdict to the unconditional
+# "✓ All CI-parity checks passed." and this probe's output says so.
+SUMMARY_PROBE=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --list-steps) LIST_STEPS=1; shift ;;
+    --changed) CHANGED_SCOPE=1; shift ;;
+    --scope-probe) SCOPE_PROBE=1; shift ;;
+    --summary-probe) SUMMARY_PROBE=1; shift ;;
+    --slot-probe)
+      SLOT_PROBE=1
+      shift
+      case "${1:-}" in [0-9]*) SLOT_PROBE_HOLD="$1"; shift ;; esac
+      ;;
+    --release-probe) RELEASE_PROBE=1; shift ;;
+    --group-probe)
+      shift
+      case "${1:-}" in [0-9]*) GROUP_PROBE="$1"; shift ;; *) GROUP_PROBE=4 ;; esac
+      case "${1:-}" in [0-9]*) GROUP_PROBE_HOLD="$1"; shift ;; esac
+      ;;
+    *) shift ;;
+  esac
+done
+
+# ── The change scope, and the Go decision (#1985) ────────────────────────────
+#
+# Only consulted under `--changed`. Without the flag every function here is
+# defined and never called, and the gate runs exactly what it ran before.
+#
+# WHY. PR CI re-runs the complete suite on every pull request regardless, so the
+# local gate's full run buys the answer earlier, not extra safety. For a diff
+# that provably cannot reach Go it buys nothing at all, while holding heavy slots
+# other gates on this machine are waiting for (see the budget below). A local
+# false negative therefore costs a CI round trip, never a bad merge — which is
+# what makes this a fast path rather than a loosening of the standard.
+#
+# WHAT IS NEVER SKIPPED, whatever the scope: the generated-file drift checks, the
+# changelog contract, the publication boundary, and the credential scan. They are
+# cheap and their failure modes are not confined to the language that changed.
+#
+# FAIL CLOSED. Every branch that cannot answer "did a Go input change?" — no
+# `origin/main`, a git that will not run, an empty derivation — answers "run
+# them". The only way to skip is a positively-derived empty Go intersection.
+
+# The changed path set: the branch against origin/main PLUS the working tree.
+# The working tree half is not optional — this gate is run BECAUSE you have
+# uncommitted work, and scoping on the committed diff alone would skip the Go
+# suites for an unstaged `.go` edit.
+changed_paths() {
+  {
+    git diff --name-only origin/main...HEAD 2>/dev/null || true
+    git diff --name-only HEAD 2>/dev/null || true
+    git diff --name-only --cached 2>/dev/null || true
+    git ls-files --others --exclude-standard 2>/dev/null || true
+  } | sed '/^$/d' | sort -u
+}
+
+# Directories holding a tracked `.go` file. A non-Go file that sits in a Go
+# package directory — `internal/terminalkind/table.json`, a `testdata/` golden —
+# is a Go input even though its extension says otherwise.
+go_package_dirs() {
+  git ls-files -- '*.go' 2>/dev/null |
+    awk '{ if (index($0, "/")) { sub(/\/[^\/]*$/, ""); print } else { print "." } }' |
+    sort -u
+}
+
+# `//go:embed` targets, resolved against the directory of the file that declares
+# them. This is how `internal/adaptercompat/manifests/*.json` and
+# `internal/setup/templates/*` are found: they are compiled INTO the binary, so
+# editing one changes Go behaviour while touching no `.go` file.
+go_embed_globs() {
+  git grep -I -n -- '//go:embed' -- '*.go' 2>/dev/null |
+    while IFS= read -r hit; do
+      local file rest dir pat
+      file="${hit%%:*}"
+      rest="${hit#*//go:embed }"
+      dir="$(dirname "$file")"
+      for pat in $rest; do
+        case "$pat" in ''|'//'*) continue ;; esac
+        printf '%s/%s\n%s/%s/*\n' "$dir" "$pat" "$dir" "$pat"
+      done
+    done | sort -u
+}
+
+# Codegen inputs AND outputs, derived rather than hardcoded.
+#
+# Two sources, both read from the tree so a new generator is picked up without
+# editing this script:
+#   1. Makefile recipes that `go run ./cmd/...` — every path-shaped token on the
+#      recipe's lines that exists in the tree.
+#   2. Path-shaped string literals in the generator sources themselves
+#      (`cmd/*gen*/`, `*/codegen/`), which is where the flag DEFAULTS live —
+#      `cmd/ipc-codegen/main.go` names
+#      `packages/nightgauge-vscode/src/services/IpcClient.generated.ts`, and
+#      `internal/terminalkind/codegen/codegen.go` names the SDK module and the
+#      behaviour golden it renders.
+#
+# Outputs are deliberately included alongside inputs. A diff that touches only
+# `IpcClient.generated.ts` is either a hand-edit (which the always-run drift
+# check catches) or the visible half of a Go change; in both cases "only TS
+# changed" is the wrong conclusion, and running the Go suites is the cheap side
+# of that bet.
+go_codegen_paths() {
+  {
+    awk '
+      /^\t.*go run \.\// { c = 1 }
+      c { print; if ($0 !~ /\\$/) c = 0 }
+    ' Makefile 2>/dev/null | tr ' \t' '\n\n' | sed 's/\\$//'
+    git grep -I -h -oE '"[a-zA-Z0-9_][a-zA-Z0-9_./-]*\.[a-zA-Z0-9]+"' -- \
+      'cmd/*gen*/*.go' '*/codegen/*.go' 2>/dev/null | tr -d '"'
+  } | sed '/^$/d' | sort -u | while IFS= read -r p; do
+    [ -f "$p" ] && printf '%s\n' "$p"
+  done
+}
+
+GO_SCOPE_DECIDED=0
+GO_SCOPE_RUN=1
+GO_SCOPE_REASON=""
+CHANGED_COUNT=0
+
+# Decide once. Sets GO_SCOPE_RUN (1 run, 0 skip) and GO_SCOPE_REASON.
+decide_go_scope() {
+  [ "$GO_SCOPE_DECIDED" -eq 1 ] && return 0
+  GO_SCOPE_DECIDED=1
+  GO_SCOPE_RUN=1
+
+  if [ "$CHANGED_SCOPE" -eq 0 ]; then
+    GO_SCOPE_REASON="--changed was not given; the gate is running in full"
+    return 0
+  fi
+  if ! git rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
+    GO_SCOPE_REASON="origin/main is not available, so the changed set cannot be derived — running everything"
+    return 0
+  fi
+
+  local changed pkg_dirs embed_globs codegen_paths p d hit=""
+  changed="$(changed_paths)"
+  if [ -z "$changed" ]; then
+    GO_SCOPE_REASON="the changed set came back EMPTY, which is indistinguishable from a broken derivation — running everything"
+    return 0
+  fi
+  CHANGED_COUNT="$(printf '%s\n' "$changed" | wc -l | tr -d ' ')"
+
+  pkg_dirs="$(go_package_dirs)"
+  embed_globs="$(go_embed_globs)"
+  codegen_paths="$(go_codegen_paths)"
+  if [ -z "$pkg_dirs" ]; then
+    GO_SCOPE_REASON="no Go package directories were derived, which cannot be right — running everything"
+    return 0
+  fi
+
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    case "$p" in
+      *.go|go.mod|go.sum|*/go.mod|*/go.sum) hit="$p (a Go source or module file)"; break ;;
+    esac
+    d="$(dirname "$p")"
+    if printf '%s\n' "$pkg_dirs" | grep -qxF -- "$d"; then
+      hit="$p (inside the Go package directory $d)"; break
+    fi
+    if printf '%s\n' "$codegen_paths" | grep -qxF -- "$p"; then
+      hit="$p (a Go codegen input or output)"; break
+    fi
+    local g
+    while IFS= read -r g; do
+      [ -n "$g" ] || continue
+      # $g is a glob on purpose: `//go:embed manifests/*.json` must match the
+      # files it covers, so the pattern is deliberately unquoted here.
+      # shellcheck disable=SC2254
+      case "$p" in $g) hit="$p (embedded into a Go binary by //go:embed $g)"; break ;; esac
+    done <<EOF
+$embed_globs
+EOF
+    [ -n "$hit" ] && break
+  done <<EOF
+$changed
+EOF
+
+  if [ -n "$hit" ]; then
+    GO_SCOPE_REASON="a Go input changed: $hit"
+    GO_SCOPE_RUN=1
+  else
+    GO_SCOPE_REASON="none of the $CHANGED_COUNT changed path(s) is a Go source, module file, //go:embed target, file in a Go package directory, or Go codegen input/output"
+    GO_SCOPE_RUN=0
+  fi
+  return 0
+}
+
+if [ "$SCOPE_PROBE" -eq 1 ]; then
+  decide_go_scope
+  scope_probe_paths="$(changed_paths)"
+  if [ -n "$scope_probe_paths" ]; then
+    echo "changed paths ($(printf '%s\n' "$scope_probe_paths" | wc -l | tr -d ' ')):"
+    printf '%s\n' "$scope_probe_paths" | sed 's/^/  /'
+  else
+    echo "changed paths (0):"
+  fi
+  if [ "$GO_SCOPE_RUN" -eq 1 ]; then
+    echo "go suites: RUN"
+  else
+    echo "go suites: SKIP"
+  fi
+  echo "reason: $GO_SCOPE_REASON"
+  exit 0
+fi
 
 # --- Preflight: every path this gate consumes must EXIST (#983) --------------
 #
@@ -150,6 +363,7 @@ REQUIRED_FILES=(
   scripts/go-test-json-echo.py
   scripts/lib/ci_local_failures.sh
   scripts/test-ci-local-concurrency.sh
+  scripts/test-ci-local-changed-scope.sh
 )
 
 # Makefile targets the gate invokes. `[ -f Makefile ] && grep -q '^t:' Makefile`
@@ -481,6 +695,15 @@ FAILED_LOGS=()
 # reporting it as a check failure is how a red gate gets dismissed as flaky.
 FAILED_KINDS=()
 INFRA_COUNT=0
+# SKIPPED is a THIRD state, alongside passed and failed, in the same spirit as
+# #1983's INFRASTRUCTURE ERROR: "this check did not run" is a different fact from
+# "this check said yes", and collapsing the two is how a gate reports green over
+# something it never looked at. A skipped step is never counted as a pass, never
+# silently omitted, and is named with its reason in the summary of every run that
+# has one (#1985).
+SKIPPED_STEPS=()
+SKIPPED_REASONS=()
+SKIP_COUNT=0
 
 # Every step's output is captured as well as streamed. Without this a failure
 # that does not reproduce is unidentifiable after the fact: the run scrolls
@@ -511,6 +734,112 @@ record_failure() { # record_failure <label> <log> <kind>
   FAILED_KINDS+=("$3")
   [ "$3" = "infra" ] && INFRA_COUNT=$((INFRA_COUNT + 1))
   return 0
+}
+
+# skip_step <label> <reason> — record a step as NOT RUN.
+#
+# It still prints its label under `--list-steps`, so the step-inventory guard
+# (#983) sees the same inventory whether or not the run was scoped. That is the
+# point: #983 exists because a step that VANISHES is invisible in a green exit,
+# and a scoped gate must not reintroduce that by another door. A step may be
+# skipped, loudly, by name; a step may never disappear.
+skip_step() { # skip_step <label> <reason>
+  if [ "$LIST_STEPS" -eq 1 ]; then
+    printf '%s\n' "$1"
+    return 0
+  fi
+  echo ""
+  echo "⊘ $1"
+  echo "  SKIPPED — $2"
+  echo "  NOT RUN, and therefore NOT PASSED. CI will run it on the pull request."
+  SKIPPED_STEPS+=("$1")
+  SKIPPED_REASONS+=("$2")
+  SKIP_COUNT=$((SKIP_COUNT + 1))
+  STEP_SECONDS+=("0")
+  STEP_LABELS+=("$1 [SKIPPED]")
+  return 0
+}
+
+# The skipped block prints on PASS and on FAIL, before either verdict, and is
+# never folded into a count of passes (#1985).
+print_skip_summary() {
+  [ "$SKIP_COUNT" -eq 0 ] && return 0
+  local i
+  echo ""
+  echo "⊘ $SKIP_COUNT step(s) were SKIPPED by --changed. They did NOT run, so they"
+  echo "  asserted NOTHING about your diff — they are not passes:"
+  for i in "${!SKIPPED_STEPS[@]}"; do
+    echo "  ⊘ ${SKIPPED_STEPS[$i]}"
+    echo "      because: ${SKIPPED_REASONS[$i]}"
+  done
+  echo ""
+  echo "  This was a PARTIAL gate. The complete gate is \`bash scripts/ci-local.sh\`"
+  echo "  with no flags, which is what the repository rule means by \"run the"
+  echo "  complete local gate once before every push\". PR CI runs every step"
+  echo "  above regardless, so a miss here costs a CI round trip, not a bad merge."
+  return 0
+}
+
+# The final verdict, factored out so `--summary-probe` drives the REAL thing
+# rather than a copy that could drift from it (#1985). Returns the exit code.
+print_final_verdict() {
+  local i matches
+  if [ "$FAIL_COUNT" -eq 0 ]; then
+    if [ "$SKIP_COUNT" -gt 0 ]; then
+      echo ""
+      echo "✓ Every CI-parity check that RAN passed — but $SKIP_COUNT was/were SKIPPED (above)."
+      echo "  This is NOT \"all checks passed\"."
+    else
+      echo "✓ All CI-parity checks passed."
+    fi
+    return 0
+  else
+    if [ "$INFRA_COUNT" -gt 0 ]; then
+      echo "✗ $FAIL_COUNT check(s) failed — $INFRA_COUNT of them INFRASTRUCTURE errors:"
+    else
+      echo "✗ $FAIL_COUNT check(s) failed:"
+    fi
+    for i in "${!FAILED_STEPS[@]}"; do
+      if [ "${FAILED_KINDS[$i]}" = "infra" ]; then
+        echo "  ! ${FAILED_STEPS[$i]}  [INFRASTRUCTURE — the check could not run]"
+      else
+        echo "  - ${FAILED_STEPS[$i]}"
+      fi
+      echo "      full output: ${FAILED_LOGS[$i]}"
+      # Pull the failing assertions up to the summary. A vitest failure can sit
+      # thousands of lines above the exit line, so "scroll up" is not a usable
+      # instruction — and is exactly how a failure escapes identification.
+      #
+      # ANSI is stripped first: colour-printing suites put an escape sequence
+      # between the indent and the ✗, so this grep matched none of them (#1983).
+      matches="$(failure_markers "${FAILED_LOGS[$i]}" 15 || true)"
+      if [ -n "$matches" ]; then
+        printf '%s\n' "$matches" | sed 's/^/      /'
+      else
+        # NEVER SAY ONLY "SEE THE LOG ABOVE" (#1983). A non-zero exit with no
+        # recognised marker is the case an operator cannot act on, so print the
+        # tail of the log here rather than describing the absence of a message.
+        echo "      no failure marker matched — last 20 lines of the log:"
+        strip_ansi "${FAILED_LOGS[$i]}" | tail -20 | sed 's/^/      | /'
+      fi
+    done
+    if [ "$INFRA_COUNT" -gt 0 ]; then
+      echo ""
+      echo "The ! step(s) above are INFRASTRUCTURE errors: the check could not run, so"
+      echo "it asserted nothing about your diff either way. The usual cause is another"
+      echo "gate or build running at the same time — see \"Concurrency\" at the top of"
+      echo "this script. Re-run the gate on an idle machine before reading these as"
+      echo "failures of your change, and never as \"flaky\": an unexplained red is a"
+      echo "bug in this gate and wants an issue."
+    fi
+    if [ "$FAIL_COUNT" -gt "$INFRA_COUNT" ]; then
+      echo ""
+      echo "Fix the failures before pushing. Most format/lint failures are auto-fixable:"
+      echo "  npm run format"
+      echo "  npm run lint -- --fix"
+    fi
+    return 1
+  fi
 }
 
 run_step() {
@@ -741,6 +1070,19 @@ if [ "$GROUP_PROBE" -gt 0 ]; then
   exit 0
 fi
 
+if [ "$SUMMARY_PROBE" -eq 1 ]; then
+  # One step that really passes and one that is really skipped, through the real
+  # `run_step` / `skip_step` / `print_skip_summary` / `print_final_verdict` path.
+  # The property under test is that the verdict of a run containing a skip is NOT
+  # "All CI-parity checks passed." — the whole defence against a scoped gate
+  # reporting green over a step it never looked at.
+  run_step "summary probe passing step" true
+  skip_step "summary probe skipped step" "the probe asked for one, to exercise this path"
+  print_skip_summary
+  print_final_verdict
+  exit $?
+fi
+
 if [ "$LIST_STEPS" -eq 0 ]; then
   echo "CI-parity local validation — order mirrors .github/workflows/ci.yml"
 fi
@@ -766,26 +1108,69 @@ run_step "ci-local.sh step inventory" bash scripts/test-ci-local-inventory.sh
 run_step "ci-local.sh concurrency and failure-reporting contract" \
   bash scripts/test-ci-local-concurrency.sh
 
+# 0c. The gate's own change-scoping contract (#1985). Third, for the same reason
+#     0b is second: `--changed` can remove the two most expensive steps from a
+#     run, and the only thing standing between that and a false green is the
+#     rule that a skipped step is reported as a third state rather than as a
+#     pass. Runs in seconds against git fixtures, via `--scope-probe`, never a
+#     second full gate.
+run_step "ci-local.sh change-scoping contract" \
+  bash scripts/test-ci-local-changed-scope.sh
+
 # 1. Go build + tests (internal/ + cmd/)
 # -json so the skip accounting has events to read (#474): a package whose tests
 # all SKIPPED still prints `ok`, so without it a guard that stopped guarding is
 # indistinguishable from one that passed. Piped back through
 # go-test-json-echo.py so the log stays readable.
+#
+# `--changed` (#1985) may skip the two TEST passes below — never `go build`,
+# never `gofmt`: those are seconds, and a compile error is not confined to the
+# package that changed. The decision is made once, here, and both suites report
+# the same reason.
+decide_go_scope
 run_step "go build ./..." go build ./...
+if [ "$GO_SCOPE_RUN" -eq 0 ]; then
+  skip_step "go test ./... -count=1 (with skip accounting)" \
+    "--changed, and $GO_SCOPE_REASON"
+else
 run_group "go test ./... -count=1 (with skip accounting)" \
   bash -c 'set -o pipefail; go test -json ./... -count=1 | tee go-test.json | python3 scripts/go-test-json-echo.py && python3 scripts/check-go-test-skips.py go-test.json'
+fi
 # Mirrors the race half of ci.yml's "Test (plain and race, concurrently)" step
 # (#493, merged with the plain pass in #1218), which replaced the
 # internal/orchestrator-scoped step from #428 — one race pass, not two. The
 # scoped step existed because the race detector is the only thing that fails
 # when a drainBackground() join is deleted from a test body, and that argument
-# was never specific to one package. Measured whole-tree cost: +6% over the
-# plain run (2m48s -> 2m58s on an Apple M-series), not the ~3x once feared.
-# That figure is from #1218 (2026-09-04) on an idle machine and has not been
-# re-measured since; on a box running a second gate both passes are slower, which
-# is the budget above doing its job rather than a regression.
+# was never specific to one package. THAT DECISION IS UNCHANGED by anything
+# below; only its stated cost moved.
+#
+# Measured whole-tree cost, with the date and the machine class next to the
+# number this time (#1985):
+#
+#   #1218,  2026-09-04, Apple M-series, idle:  168s plain -> 178s race  (+6%)
+#   #1991,  2026-09-22, idle 12-core Apple M:  194s plain -> 202s race  (+4%)
+#
+# So the +6% conclusion holds: the race detector is nearly free on top of the
+# plain run, not the ~3x once feared. What the second row adds is the OTHER
+# number, which the first row never stated — the two passes together are ~396s
+# of a 10m31s gate, about 63% of it, and on a diff that cannot reach Go neither
+# pass can observe the change. That is the case `--changed` answers.
+#
+# A 288s/297s figure was reported on 2026-09-22 and withdrawn by its author the
+# same day: it was taken while load from a concurrent gate was still draining.
+# It is recorded here only so the next reader does not rediscover it and
+# conclude this comment is stale. Any number quoted here must carry the date and
+# the machine state it was taken under, for exactly that reason.
+#
+# On a box running a second gate both passes are slower, which is the budget
+# above doing its job rather than a regression.
+if [ "$GO_SCOPE_RUN" -eq 0 ]; then
+  skip_step "go test -race -count=1 ./..." \
+    "--changed, and $GO_SCOPE_REASON"
+else
 run_group "go test -race -count=1 ./..." \
   go test -race -count=1 ./...
+fi
 run_step "gofmt -l ./internal ./cmd" \
   bash -c '! gofmt -l ./internal ./cmd | grep .'
 
@@ -1162,53 +1547,7 @@ run_group_wait
 echo ""
 echo "-------------------------------------------------------------------------"
 print_timing_summary
-if [ "$FAIL_COUNT" -eq 0 ]; then
-  echo "✓ All CI-parity checks passed."
-  exit 0
-else
-  if [ "$INFRA_COUNT" -gt 0 ]; then
-    echo "✗ $FAIL_COUNT check(s) failed — $INFRA_COUNT of them INFRASTRUCTURE errors:"
-  else
-    echo "✗ $FAIL_COUNT check(s) failed:"
-  fi
-  for i in "${!FAILED_STEPS[@]}"; do
-    if [ "${FAILED_KINDS[$i]}" = "infra" ]; then
-      echo "  ! ${FAILED_STEPS[$i]}  [INFRASTRUCTURE — the check could not run]"
-    else
-      echo "  - ${FAILED_STEPS[$i]}"
-    fi
-    echo "      full output: ${FAILED_LOGS[$i]}"
-    # Pull the failing assertions up to the summary. A vitest failure can sit
-    # thousands of lines above the exit line, so "scroll up" is not a usable
-    # instruction — and is exactly how a failure escapes identification.
-    #
-    # ANSI is stripped first: colour-printing suites put an escape sequence
-    # between the indent and the ✗, so this grep matched none of them (#1983).
-    matches="$(failure_markers "${FAILED_LOGS[$i]}" 15 || true)"
-    if [ -n "$matches" ]; then
-      printf '%s\n' "$matches" | sed 's/^/      /'
-    else
-      # NEVER SAY ONLY "SEE THE LOG ABOVE" (#1983). A non-zero exit with no
-      # recognised marker is the case an operator cannot act on, so print the
-      # tail of the log here rather than describing the absence of a message.
-      echo "      no failure marker matched — last 20 lines of the log:"
-      strip_ansi "${FAILED_LOGS[$i]}" | tail -20 | sed 's/^/      | /'
-    fi
-  done
-  if [ "$INFRA_COUNT" -gt 0 ]; then
-    echo ""
-    echo "The ! step(s) above are INFRASTRUCTURE errors: the check could not run, so"
-    echo "it asserted nothing about your diff either way. The usual cause is another"
-    echo "gate or build running at the same time — see \"Concurrency\" at the top of"
-    echo "this script. Re-run the gate on an idle machine before reading these as"
-    echo "failures of your change, and never as \"flaky\": an unexplained red is a"
-    echo "bug in this gate and wants an issue."
-  fi
-  if [ "$FAIL_COUNT" -gt "$INFRA_COUNT" ]; then
-    echo ""
-    echo "Fix the failures before pushing. Most format/lint failures are auto-fixable:"
-    echo "  npm run format"
-    echo "  npm run lint -- --fix"
-  fi
-  exit 1
-fi
+
+print_skip_summary
+print_final_verdict
+exit $?
