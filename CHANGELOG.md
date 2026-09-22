@@ -220,6 +220,25 @@ create --body-file` call, so the compact profile (and its tests) pin
   opencode 1.18.31. Plain `opencode run` still opens no TCP listener, so
   ADR-022 § 18 stands.
 
+### Changed
+
+- **Implementation is routed by cost per closed issue (#1909).** On the Go
+  scheduler's dispatch path, `feature-dev` now runs on Opus for an issue
+  whose known size is M or larger after the priority adjustment. The
+  router's recommendation table moves its mid-complexity `feature-dev` cell
+  from Sonnet to Opus. A high-risk issue gets an Opus floor on `feature-dev`
+  and `feature-validate`. The high-risk label rule is the one that already
+  forces the full pipeline. The performance mode still caps both, so
+  `efficiency` stays on Sonnet. An explicit per-stage model still wins over
+  the size rule. An issue with no size keeps its previous tier:
+  `nightgauge issue route --json` now reports `size_source`, and its
+  rationale says when M was assumed. Once `feature-planning` has assessed a
+  size, the scheduler re-derives the run's routing from it, so the
+  `feature-dev` tier and the recorded route follow the planner's size. The
+  reasoning is that a cheaper tier costs more overall when it takes twice the
+  turns and more rework rounds. See
+  [CONFIGURATION.md § Routing by cost per closed issue](docs/CONFIGURATION.md#routing-by-cost-per-closed-issue).
+
 ### Fixed
 
 - **Live skill evals no longer give the scenario model tools or the

@@ -340,3 +340,64 @@ var dispatchStages = []state.PipelineStage{
 	state.StagePRMerge,
 	state.StageSpikeMaterialize,
 }
+
+// routedStageModel returns the run's routed tier (stageBaseModel Step 2) for
+// one stage. The run-wide prediction (pickup_recommendation.dev_model) is ONE
+// tier for every reasoning stage, and on a first run it is empty because the
+// issue context does not exist yet at pickup. feature-dev is the exception:
+// when routing.ImplementationBand puts this issue's implementation on Opus,
+// feature-dev's routed tier is raised to it, and only feature-dev's.
+//
+// It stays in the router's slot on purpose: an explicit per-stage model
+// (pipeline.stage_models, the env override, the manual-mode table) and the
+// `maximum` pin still win over it, eval advice may still re-pick it, and the
+// routed-tier envelope clamps it — so `efficiency` caps it at its ceiling.
+func routedStageModel(stage state.PipelineStage, predicted string, d routing.Decision) string {
+	if stage != state.StageFeatureDev {
+		return predicted
+	}
+	band := routing.ImplementationBand(d)
+	if band == "" {
+		return predicted
+	}
+	if predicted == "" {
+		return band
+	}
+	return enforceMinimumModel(predicted, band)
+}
+
+// raiseRiskFloors returns floors with routing.RiskFloorBand applied for every
+// stage it names, keeping any configured floor that is already stronger.
+//
+// Expressed as a floor, like the run.retryWithEscalation forced tier
+// (raiseStageFloors), rather than as the routed tier: a high-risk issue must not
+// drop below Opus on implementation or review because eval advice re-picked
+// or a workspace default named a cheaper tier. Like every floor it lands inside
+// the stage's routed-tier envelope in resolveDispatchModel, so a cost-capping
+// performance mode still caps it. An explicit
+// NIGHTGAUGE_MODEL_ROUTING_MIN_MODEL_<STAGE> env floor replaces it, as it
+// replaces a configured floor.
+func raiseRiskFloors(floors map[string]string, d routing.Decision) map[string]string {
+	var raised map[string]string
+	for _, stage := range dispatchStages {
+		floor := routing.RiskFloorBand(string(stage), d)
+		if floor == "" {
+			continue
+		}
+		if raised == nil {
+			raised = make(map[string]string, len(floors)+2)
+			for k, v := range floors {
+				raised[k] = v
+			}
+		}
+		key := string(stage)
+		if cur, ok := raised[key]; ok && tierRank(cur) >= tierRank(floor) {
+			continue
+		}
+		raised[key] = floor
+	}
+	if raised == nil {
+		return floors
+	}
+	return raised
+}

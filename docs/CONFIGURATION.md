@@ -3627,6 +3627,93 @@ continues.
 
 Scores above `sonnet_max` route to Opus.
 
+#### Routing by cost per closed issue
+
+The design rule for automatic routing is **expected cost per closed issue**,
+not price per token. Each turn re-reads the context it inherits, so an
+implementation stage costs roughly its turn count times its context, and every
+rework round a missed requirement causes is another paid stage. A tier that is
+half the price per token but takes twice the turns, and ships more rework, is
+not cheaper.
+
+**Evidence.** Measured in September 2026 across interactive sessions that
+mirror the pipeline's stages:
+
+- On implementation, Sonnet took about twice the turns of Opus: 226–244 tool
+  calls on small-to-medium work, against 128 for Opus on a harder
+  medium-to-large security change. It also deferred or missed more, which cost
+  extra paid rounds. At half the price per token that is break-even or worse
+  per closed issue.
+- Sonnet was cheap and clean on narrow, bounded work: audits, delta
+  re-reviews and verification.
+- An earlier measurement found that Opus implementers still ship defects that
+  Opus reviewers catch, so the review stage stays on a strong tier.
+
+**What the Go scheduler applies** (the autonomous dispatch path, in
+`resolveDispatchModel`):
+
+| Stage              | Rule                                                                                                                                                                                                                                                                                        |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `feature-dev`      | **Opus** when the issue's size is known and, after the priority adjustment, is M or larger (`routing.ImplementationBand`). XS and S, and any issue whose size was assumed, keep the tier they would otherwise run: the run's routed tier, then `ui.core.default_model`, then Sonnet.        |
+| `feature-validate` | Unchanged. It closes with the adversarial review judge, and is already a strong tier where the router puts it.                                                                                                                                                                              |
+| High-risk issue    | An **Opus floor** on `feature-dev` and `feature-validate` (`routing.RiskFloorBand`). High-risk is the label rule that already forces the full pipeline: a label containing `security`, `auth`, `billing`, `payment`, `migration`, `public-api`, `breaking` or `credential`, or `risk:high`. |
+
+The size comes from the board's Size field, then a `size:*` label, then the
+planner's assessment. A docs or config change never qualifies, because its
+complexity is capped below M.
+
+**How the rule interacts with the other controls:**
+
+- The implementation band sits in the router's slot. An explicit per-stage
+  model (`pipeline.stage_models`, `NIGHTGAUGE_PIPELINE_STAGE_MODEL_*`, or the
+  `manual`-mode table) wins over it, and so does the `maximum` pin. When
+  `use_eval_recommendations` is on, eval advice may re-pick it. The stage's
+  routed-tier envelope clamps it.
+- The high-risk floor is applied with the `minimum_model` floors, so eval
+  advice or a cheaper workspace default cannot lower it. A
+  `NIGHTGAUGE_MODEL_ROUTING_MIN_MODEL_<STAGE>` environment floor replaces it,
+  as it replaces a configured floor.
+- **The performance mode still caps both.** Under `efficiency` the ceiling is
+  Sonnet, so a high-risk or M-and-larger implementation runs on Sonnet.
+  `model_routing.max_model` caps it the same way.
+
+**Unsized issues.** When an issue has no board size and no `size:*` label,
+routing assumes M. `nightgauge issue route --json` reports that as
+`"size_source": "default"`, and the rationale says the size was assumed. An
+assumed size never selects Opus for implementation. Once `feature-planning`
+has assessed a size, the scheduler re-derives the run's routing from it. From
+that point, `feature-dev`'s tier and the route recorded on the run record
+follow the planner's size, and a second change-class trace event records the
+re-derived decision. The re-derivation never skips a stage the run had kept: a
+planner's small size does not remove `feature-validate` mid-run.
+
+**The router's recommendation table** (`selectModel`, which feeds the pickup
+trace, the `intelligence.route` IPC method and the re-route after a
+performance-mode change) states the same rule on its 1–10 complexity scale:
+
+| Stage              | ≤ 3    | 4–6                   | > 6    |
+| ------------------ | ------ | --------------------- | ------ |
+| `feature-planning` | Sonnet | Sonnet                | Sonnet |
+| `feature-dev`      | Haiku  | **Opus** (was Sonnet) | Opus   |
+| `feature-validate` | Haiku  | Sonnet                | Opus   |
+| plumbing stages    | Haiku  | Haiku                 | Haiku  |
+
+`ImplementationBand` reads `feature-dev`'s row of this table. It converts the
+issue's size into the point on this scale that `complexity.Estimator` assigns
+to that size, and it only ever raises the stage to Opus, never lowers it to
+Haiku.
+
+**What the eval loop does not measure yet.** `use_eval_recommendations`
+advice compares pass rate, quality and cost **per run**. It does not see turns
+per stage or rework rounds per closed issue. The advice file carries no turn
+or rework field, so a term for either one needs the eval lane to aggregate it
+first. Until then, advice can prefer a tier that is cheaper per run but
+costlier per closed issue. That is one reason advice is off by default and
+bounded by the envelope.
+
+The extension-orchestrated path (`AutoModelSelector`'s size × stage matrix)
+does not apply this rule. The Go scheduler above is what autonomous runs use.
+
 **Mode Behavior with `getStageModel()`:**
 
 ```

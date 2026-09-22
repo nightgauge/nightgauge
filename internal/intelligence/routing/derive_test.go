@@ -1,7 +1,9 @@
 package routing
 
 import (
+	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -378,5 +380,84 @@ func TestDerive_LCriticalGoesExtensive(t *testing.T) {
 	}
 	if got.DocumentationScope != "extended" {
 		t.Errorf("DocumentationScope = %q, want extended", got.DocumentationScope)
+	}
+}
+
+// TestResolveSizeWithSource is the #1909 provenance table: every size source
+// reports itself, and the default is named as a default.
+func TestResolveSizeWithSource(t *testing.T) {
+	tests := []struct {
+		name       string
+		board      string
+		labels     []string
+		planner    string
+		foundation bool
+		wantSize   string
+		wantSource string
+	}{
+		{"foundation", "L", []string{"size:L"}, "XL", true, "XS", SizeSourceFoundation},
+		{"board", "L", []string{"size:S"}, "XL", false, "L", SizeSourceBoard},
+		{"label", "", []string{"size:S"}, "XL", false, "S", SizeSourceLabel},
+		{"planner", "", nil, "xl", false, "XL", SizeSourcePlanner},
+		{"default", "", nil, "", false, "M", SizeSourceDefault},
+		{"junk planner size is not a source", "", nil, "huge", false, "M", SizeSourceDefault},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			size, source := resolveSizeWithSource(tt.board, tt.labels, tt.planner, tt.foundation)
+			if size != tt.wantSize || source != tt.wantSource {
+				t.Errorf("resolveSizeWithSource = (%q, %q), want (%q, %q)", size, source, tt.wantSize, tt.wantSource)
+			}
+		})
+	}
+}
+
+// TestDerive_SizeSourceIsTheOnlyDifference: an unsized issue and the same issue
+// labelled size:M route identically; only size_source and the rationale's
+// wording differ, and the rationale no longer asserts the default as fact.
+func TestDerive_SizeSourceIsTheOnlyDifference(t *testing.T) {
+	unsized := Derive(DeriveInput{Title: "t", Labels: []string{"type:feature", "component:go-binary"}})
+	sized := Derive(DeriveInput{Title: "t", Labels: []string{"type:feature", "component:go-binary", "size:M"}})
+	if unsized.SizeSource != SizeSourceDefault || sized.SizeSource != SizeSourceLabel {
+		t.Fatalf("size_source = %q / %q, want default / label", unsized.SizeSource, sized.SizeSource)
+	}
+	if !strings.Contains(unsized.Rationale, "M size assumed") {
+		t.Errorf("unsized rationale must say the size was assumed, got %q", unsized.Rationale)
+	}
+	if strings.Contains(sized.Rationale, "assumed") {
+		t.Errorf("labelled rationale must not say assumed, got %q", sized.Rationale)
+	}
+	unsized.SizeSource, sized.SizeSource = "", ""
+	unsized.Rationale, sized.Rationale = "", ""
+	a, _ := json.Marshal(unsized)
+	b, _ := json.Marshal(sized)
+	if string(a) != string(b) {
+		t.Errorf("unsized and size:M decisions differ beyond provenance:\n%s\n%s", a, b)
+	}
+	raw, _ := json.Marshal(Derive(DeriveInput{Title: "t"}))
+	if !strings.Contains(string(raw), `"size_source":"default"`) {
+		t.Errorf("issue route --json must emit size_source, got %s", raw)
+	}
+}
+
+// TestDerive_Regression1643: no size label, type:feature, component:go-binary.
+// The default M routes standard; the planner's L routes extensive, and the
+// re-derived Decision says where its size came from.
+func TestDerive_Regression1643(t *testing.T) {
+	labels := []string{"type:feature", "component:go-binary"}
+	def := Derive(DeriveInput{Title: "t", Labels: labels})
+	if def.SuggestedRoute != "standard" || def.ComplexityScore != 3 || def.DocumentationScope != "standard" {
+		t.Errorf("default M = %s/%d/%s, want standard/3/standard", def.SuggestedRoute, def.ComplexityScore, def.DocumentationScope)
+	}
+	planned := Derive(DeriveInput{Title: "t", Labels: labels, PlannerSize: "L"})
+	if planned.SuggestedRoute != "extensive" || planned.ComplexityScore != 5 || planned.DocumentationScope != "extended" {
+		t.Errorf("planner L = %s/%d/%s, want extensive/5/extended", planned.SuggestedRoute, planned.ComplexityScore, planned.DocumentationScope)
+	}
+	if planned.SizeSource != SizeSourcePlanner {
+		t.Errorf("planner L size_source = %q, want planner", planned.SizeSource)
+	}
+	// A human's label still wins over the planner.
+	if got := Derive(DeriveInput{Title: "t", Labels: append(labels, "size:S"), PlannerSize: "L"}); got.EffectiveSize != "S" {
+		t.Errorf("size:S with planner L resolved %s, want the label's S", got.EffectiveSize)
 	}
 }

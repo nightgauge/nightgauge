@@ -32,6 +32,14 @@ type DeriveInput struct {
 	BoardSize     string   // "XS"|"S"|"M"|"L"|"XL" — empty if unset
 	BoardPriority string   // "P0"|"P1"|"P2"|"P3" — empty if unset
 
+	// PlannerSize is the XS|S|M|L|XL bucket feature-planning assessed, or "".
+	// It is consulted only when neither the board nor a `size:*` label names a
+	// size, so a human's size always wins over the planner's. At issue-pickup
+	// no plan exists and this is empty; the scheduler re-derives with it once
+	// feature-planning has run, so a size-less issue is not routed for the rest
+	// of the run from the default M (#1909).
+	PlannerSize string
+
 	// ForceFullPipeline mirrors routing.force_full_pipeline. When true, all
 	// stage skipping and rule-based overrides are disabled — every stage runs.
 	// Precedence #2, below the label-based risk floor and above change_rules.
@@ -54,7 +62,12 @@ type Decision struct {
 	DocumentationScope string   `json:"documentation_scope"`
 	Rationale          string   `json:"rationale"`
 	EffectiveSize      string   `json:"effective_size"`
-	EffectivePriority  string   `json:"effective_priority"`
+	// SizeSource names where EffectiveSize came from: "foundation", "board",
+	// "label", "planner" or "default" (#1909). "default" means no source named
+	// a size and EffectiveSize is the assumed M — everything derived from it
+	// (complexity, route, documentation scope) is derived from a guess.
+	SizeSource        string `json:"size_source"`
+	EffectivePriority string `json:"effective_priority"`
 	// RiskHigh is true when label-based risk classification forced the full
 	// pipeline + extensive route regardless of complexity score (#4093).
 	RiskHigh bool `json:"risk_high"`
@@ -72,7 +85,7 @@ func Derive(in DeriveInput) Decision {
 	taskType := deriveTaskType(in.Labels, in.Title, in.Body)
 	foundation := detectFoundationTask(taskType, in.Title)
 
-	effectiveSize := resolveSize(in.BoardSize, in.Labels, foundation)
+	effectiveSize, sizeSource := resolveSizeWithSource(in.BoardSize, in.Labels, in.PlannerSize, foundation)
 	effectivePriority := resolvePriority(in.BoardPriority, in.Labels)
 
 	changeType := deriveChangeType(in.Labels, in.Title, in.Body)
@@ -125,8 +138,9 @@ func Derive(in DeriveInput) Decision {
 		SkipStages:         skip,
 		FoundationTask:     foundation,
 		DocumentationScope: docScope,
-		Rationale:          buildRationale(route, changeType, complexity, effectiveSize, effectivePriority, taskType, foundation, highRisk),
+		Rationale:          buildRationale(route, changeType, complexity, effectiveSize, sizeSource, effectivePriority, taskType, foundation, highRisk),
 		EffectiveSize:      effectiveSize,
+		SizeSource:         sizeSource,
 		EffectivePriority:  effectivePriority,
 		RiskHigh:           highRisk,
 		RiskReasons:        riskReasons,
@@ -212,24 +226,47 @@ func detectFoundationTask(taskType, title string) bool {
 
 // --- size + priority resolution ---
 
+// Size provenance values for Decision.SizeSource (#1909), in the precedence
+// order resolveSizeWithSource applies them.
+const (
+	SizeSourceFoundation = "foundation"
+	SizeSourceBoard      = "board"
+	SizeSourceLabel      = "label"
+	SizeSourcePlanner    = "planner"
+	SizeSourceDefault    = "default"
+)
+
 // resolveSize returns "XS"|"S"|"M"|"L"|"XL". Order: foundation override →
 // board field → size:* label → default M.
 func resolveSize(boardSize string, labels []string, foundation bool) string {
+	size, _ := resolveSizeWithSource(boardSize, labels, "", foundation)
+	return size
+}
+
+// resolveSizeWithSource is resolveSize plus the planner's assessed size and the
+// provenance of the answer (#1909). Order: foundation override → board field →
+// size:* label → planner assessment → default M. The default is still M, so
+// every derived value is unchanged; what changes is that the Decision says the
+// size was assumed instead of presenting it as determined.
+func resolveSizeWithSource(boardSize string, labels []string, plannerSize string, foundation bool) (string, string) {
 	if foundation {
-		return "XS"
+		return "XS", SizeSourceFoundation
 	}
 	if normalized := normalizeSize(boardSize); normalized != "" {
-		return normalized
+		return normalized, SizeSourceBoard
 	}
 	for _, l := range labels {
 		lower := strings.ToLower(l)
 		if strings.HasPrefix(lower, "size:") {
 			if normalized := normalizeSize(strings.TrimPrefix(lower, "size:")); normalized != "" {
-				return normalized
+				return normalized, SizeSourceLabel
 			}
 		}
 	}
-	return "M"
+	if normalized := normalizeSize(plannerSize); normalized != "" {
+		return normalized, SizeSourcePlanner
+	}
+	return "M", SizeSourceDefault
 }
 
 func normalizeSize(s string) string {
@@ -465,9 +502,16 @@ func documentationScopeFor(size, taskType, priority string) string {
 
 // --- rationale ---
 
-func buildRationale(route, changeType string, complexity int, size, priority, taskType string, foundation, highRisk bool) string {
+func buildRationale(route, changeType string, complexity int, size, sizeSource, priority, taskType string, foundation, highRisk bool) string {
 	parts := []string{}
-	if size != "" {
+	switch {
+	case size == "":
+	case sizeSource == SizeSourceDefault:
+		// #1909: never assert a defaulted size as fact.
+		parts = append(parts, size+" size assumed (no board size or size:* label)")
+	case sizeSource == SizeSourcePlanner:
+		parts = append(parts, size+" size (planner-assessed)")
+	default:
 		parts = append(parts, size+" size")
 	}
 	parts = append(parts, changeType+" change")

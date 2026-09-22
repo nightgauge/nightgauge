@@ -14,7 +14,11 @@
 // rigor (forces the full pipeline), never removes it.
 package routing
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/nightgauge/nightgauge/internal/models"
+)
 
 // riskKeywords are matched as case-insensitive substrings against each raw
 // label slug. MUST stay byte-identical to RISK_KEYWORDS in
@@ -67,4 +71,27 @@ func isHighRisk(labels []string) (bool, []string) {
 	}
 
 	return len(reasons) > 0, reasons
+}
+
+// RiskFloorBand returns the minimum band a high-risk issue (Decision.RiskHigh,
+// from isHighRisk) dispatches `stage` on, or "" when no floor applies.
+//
+// Complexity tracks size, not blast radius, so the size-derived model can put a
+// small security or auth change on a cheap tier. The risk signal already forces
+// the full pipeline and the extensive route; this adds the model half: an Opus
+// floor on the implementing stage (feature-dev) and on the stage that closes
+// with the adversarial review judge (feature-validate).
+//
+// It is a FLOOR, applied where model_routing.minimum_model is, so it lands
+// inside the performance mode's envelope: under `efficiency` the ceiling still
+// caps it, and `maximum` pins Opus regardless.
+func RiskFloorBand(stage string, d Decision) string {
+	if !d.RiskHigh {
+		return ""
+	}
+	switch stage {
+	case "feature-dev", "feature-validate":
+		return models.BandOpus
+	}
+	return ""
 }

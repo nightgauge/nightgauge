@@ -18,11 +18,87 @@ func TestRouter_LowComplexity_UsesHaiku(t *testing.T) {
 	}
 }
 
-func TestRouter_MediumComplexity_UsesSonnet(t *testing.T) {
+// Medium complexity: implementation routes to Opus (cost per closed issue),
+// while planning and validation keep the balanced tier.
+func TestRouter_MediumComplexity_DevUsesOpus(t *testing.T) {
 	r := NewRouter(nil, "")
 	rec := r.Route(context.Background(), "feature-dev", complexity.Score{Value: 5})
+	if rec.Model != ModelOpus {
+		t.Errorf("med complexity feature-dev model = %s, want %s", rec.Model, ModelOpus)
+	}
+	for _, stage := range []string{"feature-planning", "feature-validate"} {
+		if got := r.Route(context.Background(), stage, complexity.Score{Value: 5}).Model; got != ModelSonnet {
+			t.Errorf("med complexity %s model = %s, want %s", stage, got, ModelSonnet)
+		}
+	}
+}
+
+// TestSelectModel_Table pins the whole stage × complexity table, so a change
+// to any cell is a deliberate edit here rather than a side effect.
+func TestSelectModel_Table(t *testing.T) {
+	stages := []string{"issue-pickup", "feature-planning", "feature-dev", "feature-validate", "pr-create", "pr-merge"}
+	// Columns: complexity 2 (≤3), 5 (≤6), 9 (>6).
+	want := map[string][3]string{
+		"issue-pickup":     {ModelHaiku, ModelHaiku, ModelHaiku},
+		"feature-planning": {ModelSonnet, ModelSonnet, ModelSonnet},
+		"feature-dev":      {ModelHaiku, ModelOpus, ModelOpus},
+		"feature-validate": {ModelHaiku, ModelSonnet, ModelOpus},
+		"pr-create":        {ModelHaiku, ModelHaiku, ModelHaiku},
+		"pr-merge":         {ModelHaiku, ModelHaiku, ModelHaiku},
+	}
+	for _, stage := range stages {
+		for i, score := range []int{2, 5, 9} {
+			if got := selectModel(stage, score); got != want[stage][i] {
+				t.Errorf("selectModel(%q, %d) = %s, want %s", stage, score, got, want[stage][i])
+			}
+		}
+	}
+	// Band edges: 3 is the top of the Haiku band, 4 and 6 the mid band.
+	for score, w := range map[int]string{3: ModelHaiku, 4: ModelOpus, 6: ModelOpus, 7: ModelOpus} {
+		if got := selectModel("feature-dev", score); got != w {
+			t.Errorf("selectModel(feature-dev, %d) = %s, want %s", score, got, w)
+		}
+	}
+}
+
+// The efficiency envelope must still cap the new mid-band Opus pick.
+func TestRouter_EfficiencyMode_CapsMidComplexityDevOpus(t *testing.T) {
+	root := writeModeFile(t, "efficiency")
+	rec := NewRouter(nil, root).Route(context.Background(), "feature-dev", complexity.Score{Value: 5})
 	if rec.Model != ModelSonnet {
-		t.Errorf("med complexity feature-dev model = %s, want %s", rec.Model, ModelSonnet)
+		t.Errorf("efficiency mode mid-complexity feature-dev = %s, want %s (capped)", rec.Model, ModelSonnet)
+	}
+}
+
+func TestImplementationBand(t *testing.T) {
+	tests := []struct {
+		name   string
+		labels []string
+		board  string
+		plan   string
+		want   string
+	}{
+		{"XS keeps today's tier", []string{"type:feature", "size:XS"}, "", "", ""},
+		{"S keeps today's tier", []string{"type:feature", "size:S"}, "", "", ""},
+		{"M label → opus", []string{"type:feature", "size:M"}, "", "", "opus"},
+		{"L label → opus", []string{"type:feature", "size:L"}, "", "", "opus"},
+		{"XL label → opus", []string{"type:feature", "size:XL"}, "", "", "opus"},
+		{"M board → opus", []string{"type:feature"}, "M", "", "opus"},
+		{"unsized (default M) keeps today's tier", []string{"type:feature"}, "", "", ""},
+		{"unsized, planner assessed M → opus", []string{"type:feature"}, "", "M", "opus"},
+		{"unsized, planner assessed S → today's tier", []string{"type:feature"}, "", "S", ""},
+		{"docs M is capped below the band", []string{"type:docs", "size:M"}, "", "", ""},
+		{"M at low priority scores as S", []string{"type:feature", "size:M", "priority:low"}, "", "", ""},
+		{"S at critical priority scores as M", []string{"type:feature", "size:S", "priority:critical"}, "", "", "opus"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := Derive(DeriveInput{Title: "t", Labels: tt.labels, BoardSize: tt.board, PlannerSize: tt.plan})
+			if got := ImplementationBand(d); got != tt.want {
+				t.Errorf("ImplementationBand(size %s from %s, complexity %d) = %q, want %q",
+					d.EffectiveSize, d.SizeSource, d.ComplexityScore, got, tt.want)
+			}
+		})
 	}
 }
 

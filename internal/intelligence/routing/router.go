@@ -146,6 +146,11 @@ func (r *Router) routeLocal(stage string, cplx complexity.Score) Recommendation 
 		rec.Alternatives = []Alternative{
 			{Model: ModelSonnet, TradeOff: "better quality, ~3x cost"},
 		}
+	case cplx.Value <= 6 && stage == "feature-dev":
+		rec.Reasoning = fmt.Sprintf("medium complexity (%d/10) — implementation routed by cost per closed issue: fewer turns and rework rounds outweigh the per-token premium", cplx.Value)
+		rec.Alternatives = []Alternative{
+			{Model: ModelSonnet, TradeOff: "half the per-token price, but measured at ~2x the turns on implementation and more rework rounds"},
+		}
 	case cplx.Value <= 6:
 		rec.Reasoning = fmt.Sprintf("medium complexity (%d/10) — balanced model", cplx.Value)
 		rec.Alternatives = []Alternative{
@@ -167,6 +172,19 @@ func (r *Router) routeLocal(stage string, cplx complexity.Score) Recommendation 
 }
 
 // selectModel implements the local routing heuristic.
+//
+// The rule it encodes is cost per CLOSED issue, not price per token. A turn
+// re-reads the context it inherits, so an implementation stage's cost is
+// dominated by how many turns it takes and how many paid rework rounds follow
+// it. Measured on implementation work, the mid tier took roughly twice the
+// turns of Opus and deferred or missed more, which costs further rounds; at
+// half the price per token that is break-even or worse per closed issue. So
+// feature-dev routes to Opus from mid complexity up. The mid tier stays where
+// it measured cheap and clean — narrow, bounded work — and feature-validate,
+// the adversarial review stage, keeps its table: Opus reviewers were measured
+// catching defects Opus implementers still ship, and a high-risk issue gets an
+// Opus floor there through RiskFloorBand. See docs/CONFIGURATION.md
+// § Routing by cost per closed issue.
 func selectModel(stage string, complexityScore int) string {
 	// Lightweight stages always use haiku
 	switch stage {
@@ -182,6 +200,9 @@ func selectModel(stage string, complexityScore int) string {
 		}
 		return ModelHaiku
 	case complexityScore <= 6:
+		if stage == "feature-dev" {
+			return ModelOpus // cost per closed issue, not per token
+		}
 		return ModelSonnet
 	default:
 		if stage == "feature-dev" || stage == "feature-validate" {
@@ -189,6 +210,42 @@ func selectModel(stage string, complexityScore int) string {
 		}
 		return ModelSonnet
 	}
+}
+
+// routerScoreForSize places a size bucket on selectModel's 1-10 input scale, at
+// the score complexity.Estimator itself maps to that bucket (1 XS, 3 S, 5 M,
+// 7 L, 9 XL). routing.Decision scores on the Fibonacci 1/2/3/5/8 scale instead,
+// and feeding that scale into selectModel would put an M issue (3) in the
+// Haiku band — so ImplementationBand converts through the bucket.
+var routerScoreForSize = map[string]int{"XS": 1, "S": 3, "M": 5, "L": 7, "XL": 9}
+
+// ImplementationBand returns the band the scheduler dispatches feature-dev on
+// for an issue with Decision d, or "" when the table does not put this issue's
+// implementation on Opus and the stage keeps the tier it would otherwise run.
+//
+// It only ever RAISES to Opus, from selectModel's own feature-dev row: a
+// bucket that row sends below Opus (XS, S) returns "" rather than a Haiku
+// downgrade. The bucket is the Decision's priority-adjusted complexity mapped
+// back through SizeForBaseScore, so a docs/config change (capped at 2) never
+// qualifies and an M issue at priority:critical scores as L.
+//
+// A DEFAULTED size never qualifies (#1909): Derive assumes M when no board
+// size, `size:*` label or planner assessment names one, and routing every
+// unsized issue's implementation to Opus on that guess would spend the premium
+// on no evidence. The scheduler re-derives once feature-planning has assessed a
+// size, so an unsized issue that plans is routed from the planner's size.
+func ImplementationBand(d Decision) string {
+	if d.SizeSource == SizeSourceDefault {
+		return ""
+	}
+	score, ok := routerScoreForSize[SizeForBaseScore(d.ComplexityScore)]
+	if !ok {
+		return ""
+	}
+	if selectModel("feature-dev", score) != ModelOpus {
+		return ""
+	}
+	return models.BandOpus
 }
 
 // estimateTokens predicts token usage by stage and complexity.

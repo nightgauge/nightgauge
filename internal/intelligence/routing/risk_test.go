@@ -119,3 +119,23 @@ func TestRiskFloorParity(t *testing.T) {
 		t.Errorf("Coerce risk_high = %v, want true", coerced["risk_high"])
 	}
 }
+
+func TestRiskFloorBand(t *testing.T) {
+	risky := Derive(DeriveInput{Title: "t", Labels: []string{"type:bug", "size:XS", "component:auth"}})
+	plain := Derive(DeriveInput{Title: "t", Labels: []string{"type:bug", "size:XS"}})
+	if !risky.RiskHigh || plain.RiskHigh {
+		t.Fatalf("fixture: risky.RiskHigh=%v plain.RiskHigh=%v", risky.RiskHigh, plain.RiskHigh)
+	}
+	for _, stage := range []string{"issue-pickup", "feature-planning", "feature-dev", "feature-validate", "pr-create", "pr-merge"} {
+		want := ""
+		if stage == "feature-dev" || stage == "feature-validate" {
+			want = "opus"
+		}
+		if got := RiskFloorBand(stage, risky); got != want {
+			t.Errorf("RiskFloorBand(%q, high-risk) = %q, want %q", stage, got, want)
+		}
+		if got := RiskFloorBand(stage, plain); got != "" {
+			t.Errorf("RiskFloorBand(%q, not high-risk) = %q, want no floor", stage, got)
+		}
+	}
+}
