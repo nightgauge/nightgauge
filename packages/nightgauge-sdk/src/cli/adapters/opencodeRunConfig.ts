@@ -28,6 +28,7 @@ import type {
   OpenCodeRunConfigProvider,
   OpenCodeRunConfigRequest,
 } from "./OpenCodeAdapter.js";
+import { isRunIdentity } from "../../context/runIdentity.js";
 
 const ADAPTER_NAME = "OpenCode";
 const ADR = "docs/decisions/022-opencode-multi-provider-adapter.md";
@@ -108,9 +109,6 @@ export function resolveNightgaugeBinary(env: NodeJS.ProcessEnv): string {
 /** `owner/name`, the form the verb's --repo takes. */
 const REPO_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9._-]+$/;
 
-/** A run identity: a canonical lowercase UUIDv7 (`runstate.IdentityPattern` in Go). */
-const RUN_IDENTITY_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-
 /**
  * The verb's --skills-root for a stage whose SKILL.md the SDK resolved in
  * `skillDir` (`<root>/skills/<stage skill>`, loadStageSkill): `<root>`, the
@@ -166,7 +164,7 @@ export function openCodeConfigVerbArgs(request: OpenCodeRunConfigRequest): strin
   // The run's identity, the Go dispatch's RunOptions.RunID: the stages of one
   // run share its root. Like the Go manager, a value that is not a run
   // identity is not passed, and the verb mints a root of its own.
-  if (request.runId !== undefined && RUN_IDENTITY_RE.test(request.runId)) {
+  if (request.runId !== undefined && isRunIdentity(request.runId)) {
     args.push("--run-id", request.runId);
   }
   args.push("--json");

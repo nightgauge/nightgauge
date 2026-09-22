@@ -9,6 +9,7 @@ import {
 } from "../../src/orchestrator/PipelineOrchestrator.js";
 import { createMockQuery, createFailingQuery, createMockResult } from "../mocks/agent-sdk.js";
 import type { SDKQueryFunction } from "../../src/orchestrator/StageExecutor.js";
+import { RUN_IDENTITY_PATTERN } from "../../src/context/runIdentity.js";
 
 /**
  * Wait until the orchestrator is parked on its approval gate (#1423).
@@ -167,9 +168,7 @@ describe("PipelineOrchestrator", () => {
       expect(seen.map((s) => s.maxTurns)).toEqual([33, 33]);
       // One run identity for the whole run, a canonical UUIDv7 when no
       // run-state names one.
-      expect(seen[0].runId).toMatch(
-        /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
-      );
+      expect(seen[0].runId).toMatch(RUN_IDENTITY_PATTERN);
       expect(seen[1].runId).toBe(seen[0].runId);
     });
 

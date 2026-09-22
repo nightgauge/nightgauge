@@ -36,6 +36,7 @@ import type { TierBand } from "../eval/tierBands.js";
 import { RunStateManager, uuidV7 } from "../context/RunStateManager.js";
 import { createOpenCodeRunRootCleaner } from "../cli/adapters/opencodeRunConfig.js";
 import * as path from "node:path";
+import { isRunIdentity } from "../context/runIdentity.js";
 
 /**
  * Default pipeline stages in execution order
@@ -753,7 +754,7 @@ export class PipelineOrchestrator {
    */
   private async cleanOpenCodeRunRoot(): Promise<void> {
     if (this.config.adapter !== "opencode" || this.runId === null) return;
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(this.runId)) {
+    if (!isRunIdentity(this.runId)) {
       return; // never passed as --run-id: each query deleted its own root
     }
     await createOpenCodeRunRootCleaner()(this.runId).catch((err: unknown) => {
