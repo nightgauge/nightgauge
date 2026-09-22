@@ -45,7 +45,7 @@ func TestParkedKinds_NoRetryNoLifetimeIncrementNoCascade(t *testing.T) {
 			numbers := []int{1631, 1632, 1633}
 			for _, n := range numbers {
 				addRunning(as, repo, n, "a stage on a local model")
-				as.onPipelineComplete(repo, n, false, false, kind, "exit 1: the adapter's own failure text")
+				as.onPipelineComplete(repo, n, false, false, kind, "exit 1: the adapter's own failure text", false)
 				as.drainBackground()
 			}
 
@@ -116,7 +116,7 @@ func TestParkedKinds_ReleasedByTheCommandTheReasonNames(t *testing.T) {
 			const repo, n = "acme/app", 7
 			key := fmt.Sprintf("%s#%d", repo, n)
 			addRunning(as, repo, n, "a stage on a local model")
-			as.onPipelineComplete(repo, n, false, false, kind, "exit 1: the adapter's own failure text")
+			as.onPipelineComplete(repo, n, false, false, kind, "exit 1: the adapter's own failure text", false)
 			as.drainBackground()
 
 			if as.state.Status != "running" {

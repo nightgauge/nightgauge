@@ -48,7 +48,7 @@ func TestOnPipelineComplete_ArchitectureApproval_NoRetryNoLifetimeIncrementNoCas
 	for _, c := range cases {
 		addRunning(as, c.repo, c.num, "awaiting architecture approval")
 		as.onPipelineComplete(c.repo, c.num, false, false,
-			TerminalKindArchitectureApprovalRequired, detail)
+			TerminalKindArchitectureApprovalRequired, detail, false)
 		as.drainBackground()
 	}
 
@@ -94,7 +94,7 @@ func TestOnPipelineComplete_ArchitectureApproval_RepeatedHaltsNeverTripCap(t *te
 		addRunning(as, repo, issue, "awaiting architecture approval")
 		as.onPipelineComplete(repo, issue, false, false,
 			TerminalKindArchitectureApprovalRequired,
-			"ARCHITECTURE APPROVAL REQUIRED — a human must approve this decision")
+			"ARCHITECTURE APPROVAL REQUIRED — a human must approve this decision", false)
 		as.drainBackground()
 	}
 
@@ -131,7 +131,7 @@ func TestArchitectureApproval_DoesNotFeedConsecutiveFailureRail(t *testing.T) {
 		addRunning(as, "acme/platform", num, "awaiting architecture approval")
 		as.onPipelineComplete("acme/platform", num, false, false,
 			TerminalKindArchitectureApprovalRequired,
-			"ARCHITECTURE APPROVAL REQUIRED — a human must approve this decision")
+			"ARCHITECTURE APPROVAL REQUIRED — a human must approve this decision", false)
 		as.drainBackground()
 		if got := as.safetyRails.State().ConsecutiveFailures; got != before {
 			t.Fatalf("after %d approval halt(s): ConsecutiveFailures = %d, want %d unchanged — "+

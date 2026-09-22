@@ -33,7 +33,7 @@ func TestOnPipelineComplete_ApiConnectionLost_TransientNoPause(t *testing.T) {
 
 	before := time.Now()
 	as.onPipelineComplete("nightgauge/acmeapp-infra", 78, false, false,
-		TerminalKindApiConnectionLost, "API Error: The socket connection was closed unexpectedly")
+		TerminalKindApiConnectionLost, "API Error: The socket connection was closed unexpectedly", false)
 	as.drainBackground()
 	after := time.Now()
 
@@ -95,7 +95,7 @@ func TestOnPipelineComplete_GitHubNetworkOutage_ShortGlobalCooldownNoPause(t *te
 	before := time.Now()
 	as.onPipelineComplete("nightgauge/acmeapp-infra", 79, false, false,
 		TerminalKindGitHubNetworkOutage,
-		"[github-network-outage] GitHub API unreachable — pipeline deferred before AI stages (transient; retryInSec=120).")
+		"[github-network-outage] GitHub API unreachable — pipeline deferred before AI stages (transient; retryInSec=120).", false)
 	as.drainBackground()
 
 	key := "nightgauge/acmeapp-infra#79"

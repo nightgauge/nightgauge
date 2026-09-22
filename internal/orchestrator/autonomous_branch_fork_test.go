@@ -40,7 +40,7 @@ func TestOnPipelineComplete_BranchForked_NoRetryNoLifetimeIncrementNoCascade(t *
 		addRunning(as, c.repo, c.num, "forked branch")
 		as.onPipelineComplete(c.repo, c.num, false, false,
 			TerminalKindBranchForked,
-			"[branch-forked] origin/fix/163-x is at abc12345, which is NOT an ancestor of the local tip def67890")
+			"[branch-forked] origin/fix/163-x is at abc12345, which is NOT an ancestor of the local tip def67890", false)
 		as.drainBackground()
 	}
 

@@ -230,7 +230,7 @@ func TestWaitBackgroundBlocksUntilTrackedWorkReturns(t *testing.T) {
 	addRunning(as, "acme/platform", 900, "awaiting architecture approval")
 	as.onPipelineComplete("acme/platform", 900, false, false,
 		TerminalKindArchitectureApprovalRequired,
-		"ARCHITECTURE APPROVAL REQUIRED — a human must approve this decision")
+		"ARCHITECTURE APPROVAL REQUIRED — a human must approve this decision", false)
 
 	waited := make(chan struct{})
 	go func() { as.waitBackground(); close(waited) }()

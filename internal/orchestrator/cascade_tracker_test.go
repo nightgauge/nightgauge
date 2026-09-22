@@ -272,21 +272,21 @@ func TestOnPipelineComplete_CascadeTripsAndPauses(t *testing.T) {
 
 	// Three back-to-back generic failures, threshold == 3.
 	as.state.Running = []RunningItem{{Repo: "R", Number: 1}}
-	as.onPipelineComplete("R", 1, false, false, "", "")
+	as.onPipelineComplete("R", 1, false, false, "", "", false)
 	as.drainBackground()
 	if as.state.Status == "safety_tripped" {
 		t.Fatalf("status tripped after first failure; want still running")
 	}
 
 	as.state.Running = []RunningItem{{Repo: "R", Number: 2}}
-	as.onPipelineComplete("R", 2, false, false, "", "")
+	as.onPipelineComplete("R", 2, false, false, "", "", false)
 	as.drainBackground()
 	if as.state.Status == "safety_tripped" {
 		t.Fatalf("status tripped after second failure; want still running")
 	}
 
 	as.state.Running = []RunningItem{{Repo: "R", Number: 3}}
-	as.onPipelineComplete("R", 3, false, false, "", "")
+	as.onPipelineComplete("R", 3, false, false, "", "", false)
 	as.drainBackground()
 	if as.state.Status != "safety_tripped" {
 		t.Fatalf("status = %q after third failure, want safety_tripped", as.state.Status)
@@ -327,16 +327,16 @@ func TestOnPipelineComplete_TwoFailuresPlusOneOutsideWindow_NoTrip(t *testing.T)
 	}
 
 	as.state.Running = []RunningItem{{Repo: "R", Number: 1}}
-	as.onPipelineComplete("R", 1, false, false, "", "")
+	as.onPipelineComplete("R", 1, false, false, "", "", false)
 	as.drainBackground()
 	// Sleep past the 5ms window so the first failure prunes out before the
 	// next two land. Without the prune, this would trip.
 	time.Sleep(10 * time.Millisecond)
 	as.state.Running = []RunningItem{{Repo: "R", Number: 2}}
-	as.onPipelineComplete("R", 2, false, false, "", "")
+	as.onPipelineComplete("R", 2, false, false, "", "", false)
 	as.drainBackground()
 	as.state.Running = []RunningItem{{Repo: "R", Number: 3}}
-	as.onPipelineComplete("R", 3, false, false, "", "")
+	as.onPipelineComplete("R", 3, false, false, "", "", false)
 	as.drainBackground()
 
 	if as.state.Status == "safety_tripped" {
@@ -366,7 +366,7 @@ func TestOnPipelineComplete_StallKillDoesNotFeedCascade(t *testing.T) {
 
 	for i := 1; i <= 5; i++ {
 		as.state.Running = []RunningItem{{Repo: "R", Number: i}}
-		as.onPipelineComplete("R", i, false, false, TerminalKindStallKill, "")
+		as.onPipelineComplete("R", i, false, false, TerminalKindStallKill, "", false)
 		as.drainBackground()
 	}
 
@@ -403,7 +403,7 @@ func TestResume_ClearsCascadeBreaker(t *testing.T) {
 	// Trip the breaker via three generic failures.
 	for i := 1; i <= 3; i++ {
 		as.state.Running = []RunningItem{{Repo: "R", Number: i}}
-		as.onPipelineComplete("R", i, false, false, "", "")
+		as.onPipelineComplete("R", i, false, false, "", "", false)
 		as.drainBackground()
 	}
 	if as.state.Status != "safety_tripped" {

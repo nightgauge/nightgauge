@@ -1519,8 +1519,19 @@ func (as *AutonomousScheduler) Run(ctx context.Context) error {
 		// (#3398)
 		terminalKind := ""
 		failureDetail := ""
+		// merged carries the #4133 post-merge ground-truth breadcrumb
+		// (RuntimeState.MergedCommitSha, set only after verifyPRMergeForStage
+		// confirms the run's own PR is MERGED) into as.onPipelineComplete
+		// (#1969 Medium 1). scheduler.go's runPipeline terminal defer already
+		// skips ITS OWN board revert on this signal (shouldSkipBoardRevert),
+		// but that defer returns before this callback fires, so without
+		// threading the flag through, this wrapper independently re-applies
+		// failure accounting, the cascade feed, and its OWN board revert to
+		// a run whose merge already landed — #1650's exact repro.
+		merged := false
 		if !success && runtime != nil {
 			snap := runtime.Snapshot()
+			merged = snap.MergedCommitSha != ""
 			if snap.Stage != "" {
 				if errMsg, ok := snap.StageErrors[string(snap.Stage)]; ok {
 					// Prefer the failing stage's gate-sourced structured kind
@@ -1536,7 +1547,7 @@ func (as *AutonomousScheduler) Run(ctx context.Context) error {
 				}
 			}
 		}
-		as.onPipelineComplete(repo, issue, success, false, terminalKind, failureDetail)
+		as.onPipelineComplete(repo, issue, success, false, terminalKind, failureDetail, merged)
 		// Chain to any previously registered callback.
 		if prevCallback != nil {
 			prevCallback(repo, issue, runtime, success)
@@ -1839,7 +1850,14 @@ func (as *AutonomousScheduler) NotifyComplete(repo string, issueNumber int, succ
 			terminalFailureKind = reclassified
 		}
 	}
-	as.onPipelineComplete(repo, issueNumber, success, conflictRestart, terminalFailureKind, failureDetail)
+	// merged is always false on this path (#1969 Medium 1): the #4133
+	// post-merge ground-truth breadcrumb is Go-only
+	// (RuntimeState.MergedCommitSha) and has no extension-side equivalent —
+	// nothing on the IPC/extension path reads or writes it, so there is no
+	// signal to thread through here. See terminal_behaviors.json's
+	// board-status-failure-sync note for the fuller "no extension change
+	// owed" analysis this mirrors.
+	as.onPipelineComplete(repo, issueNumber, success, conflictRestart, terminalFailureKind, failureDetail, false)
 }
 
 // FilterRepos restricts the scheduler to only scan repos in the given set.
@@ -4854,7 +4872,20 @@ func (as *AutonomousScheduler) enqueueItem(ctx context.Context, item CandidateIt
 // extract `resetsAt=<unix>` for quota-exhausted failures so the global
 // Anthropic-quota cooldown runs until the actual bucket reset (#3431).
 // Optional — empty falls back to a 1-hour floor.
-func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, success bool, conflictRestart bool, terminalFailureKind string, failureDetail string) {
+//
+// merged is the #4133 post-merge ground-truth breadcrumb (#1969 Medium 1):
+// true when this run's own PR was confirmed MERGED before a LATER stage
+// failed (RuntimeState.MergedCommitSha != ""). scheduler.go's runPipeline
+// terminal defer computes and acts on the equivalent signal for its OWN
+// board write (shouldSkipBoardRevert) before this callback ever fires, but
+// that defer's skip does not carry over here — this function independently
+// increments failure counters, feeds the cascade breaker, and reverts the
+// board in the GENERIC branch, so a merged run's later-stage failure must
+// tell THIS function too, or it relitigates a verdict the forge already
+// gave (#1650: PR #1966 merged, spike-materialize failed downstream). Always
+// false from the extension/IPC path (NotifyComplete) — that breadcrumb has
+// no extension-side equivalent.
+func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, success bool, conflictRestart bool, terminalFailureKind string, failureDetail string, merged bool) {
 	as.mu.Lock()
 	defer as.mu.Unlock()
 
@@ -4926,6 +4957,49 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		as.goTrackedBoardOp(func(genCtx context.Context) { as.promoteUnblockedToReady(genCtx, repo, issue) })
 	} else {
 		key := fmt.Sprintf("%s#%d", repo, issue)
+
+		// #1969 (Medium 1 of the follow-up review): the forge already gave a
+		// verdict this failure must not relitigate. merged is true only when
+		// the run's own PR was confirmed MERGED (scheduler.go's
+		// verifyPRMergeForStage / RuntimeState.MergedCommitSha, the #4133
+		// ground-truth breadcrumb) before a LATER stage failed — the
+		// shouldSkipBoardRevert condition scheduler.go's own runPipeline
+		// terminal defer already applies to its OWN board write. That defer
+		// runs and returns before as.onPipelineComplete is ever called
+		// (scheduler.go's callback fires after it), so its skip does not
+		// reach this wrapper: this wrapper carries no memory of the previous
+		// call and independently increments perIssueFailureCount,
+		// LifetimeIssueFailures, feeds the cascade breaker, and reverts the
+		// board to Ready in the GENERIC branch (below) for exactly this
+		// shape of run (#1650's own repro: PR #1966 merged, spike-materialize
+		// failed downstream because it was unregistered — Ask 1 of the same
+		// issue). Same remedy, same reasoning as branch_forked/
+		// commit_orphaned above: no lifetime-cap increment, no cascade feed (a
+		// merged run says nothing about the health of the factory), no board
+		// revert. The Action Center card (raised below via
+		// recordFailureLocked) is the way back in, not an automatic retry
+		// that would re-dispatch the issue into redoing already-shipped work.
+		if merged {
+			detail := failureDetail
+			if detail == "" {
+				detail = "a later stage failed after this run's own PR was confirmed merged"
+			}
+			as.recordFailureLocked(repo, issue, title, now, detail, terminalFailureKind)
+			log.Printf("autonomous: %s#%d failed at %s but the run's PR already merged — "+
+				"skipping failure accounting, cascade feed and board revert (left for human triage, queue continues) — %s",
+				repo, issue, terminalFailureKind, detail)
+			if as.safetyRails != nil {
+				as.safetyRails.RecordNonFaultOutcome(0)
+				safetySnap := as.safetyRails.State()
+				as.state.Safety = &safetySnap
+			}
+			as.persistStateLocked()
+			select {
+			case as.rescanCh <- struct{}{}:
+			default:
+			}
+			return
+		}
 
 		// LEGACY fresh-branch conflict restart (#4072 gating). The modern
 		// conflict path resolves in-place via the conflict-recovery loop's

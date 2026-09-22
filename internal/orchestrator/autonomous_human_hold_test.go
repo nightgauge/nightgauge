@@ -61,7 +61,7 @@ func TestArchitectureApprovalHalt_HeldByReconcileAndNotACandidate(t *testing.T) 
 	addRunning(as, "acme/flutter", 530, "Rename the application id")
 	as.onPipelineComplete("acme/flutter", 530, false, false,
 		TerminalKindArchitectureApprovalRequired,
-		"ARCHITECTURE APPROVAL REQUIRED — a human must approve this decision")
+		"ARCHITECTURE APPROVAL REQUIRED — a human must approve this decision", false)
 	as.drainBackground()
 
 	if got := as.state.Failed[0].Kind; got != TerminalKindArchitectureApprovalRequired {
@@ -174,7 +174,7 @@ func TestNotPipelineActionable_StaysParkedAcrossRescans(t *testing.T) {
 	addRunning(as, "acme/dashboard", 778, "Publish the privacy policy")
 	as.onPipelineComplete("acme/dashboard", 778, false, false,
 		TerminalKindNotPipelineActionable,
-		"not pipeline-actionable — the issue's deliverable requires a human")
+		"not pipeline-actionable — the issue's deliverable requires a human", false)
 	as.drainBackground()
 
 	g := holdTestGraph(&depgraph.Node{Repo: "acme/dashboard", Number: 778, State: "OPEN", BoardStatus: "Ready"})
