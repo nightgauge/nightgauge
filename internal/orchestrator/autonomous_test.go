@@ -1070,6 +1070,7 @@ func TestTransientFailuresNeverTripTheCircuitBreaker(t *testing.T) {
 		TerminalKindRateLimitQuotaExhausted,
 		TerminalKindAdapterAuthFailed,
 		TerminalKindModelUnavailable,
+		TerminalKindNetworkUnavailable,
 		TerminalKindWorktreeUncommitted,
 		TerminalKindBudgetCeiling,
 		TerminalKindBlockedDependency,

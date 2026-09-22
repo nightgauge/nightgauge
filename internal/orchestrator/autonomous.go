@@ -5363,6 +5363,53 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			return
 		}
 
+		// A network_unavailable readiness refusal (#1989) means the local
+		// endpoint (e.g. LM Studio) was unreachable when the readiness check
+		// probed it at dispatch time — the pipeline never dispatched into it.
+		// That is environmental, exactly the condition the readiness check
+		// exists to detect instead of burning a dispatch on, and by
+		// construction not the issue's fault. #1989 (AC4 gap in #1646): this
+		// kind fell through to the generic path with no block of its own,
+		// counting an endpoint blip toward the cascade breaker the same as an
+		// unclassified pipeline failure — a flapping or briefly-sleeping local
+		// endpoint could trip the breaker and halt autonomous mode.
+		//
+		// Unlike model_unavailable (an unloaded model/plan tier that will not
+		// come back without operator action, so it gets the long
+		// rate-limit-window backoff), an unreachable local endpoint routinely
+		// clears on its own within minutes — the process restarts, the model
+		// finishes loading, a transient DNS/socket hiccup resolves. So this
+		// DOES schedule a retry, like model_unavailable, but with the shorter
+		// stallKillBackoff already used for the other short-lived local/infra
+		// blips above (adapter_auth_failed, worktree_uncommitted) rather than
+		// streamIdleTimeoutBackoff's hour-long wait, which is sized for a
+		// remote rate-limit window and would be far too long for a local
+		// endpoint that is often back within a minute or two. No max-attempts
+		// cap (like worktree_uncommitted/budget_ceiling_hit above): a
+		// long-flapping endpoint should keep retrying at a fixed cadence
+		// rather than eventually pausing re-dispatch, since each individual
+		// refusal is still environmental, not a sign of a wedged issue.
+		if terminalFailureKind == TerminalKindNetworkUnavailable {
+			as.recordFailureLocked(repo, issue, title, now,
+				"network unavailable (local endpoint unreachable at dispatch, environmental) — will retry after backoff", terminalFailureKind)
+			as.scheduleRetryLocked(key, terminalFailureKind, "local endpoint unreachable at dispatch", time.Now().Add(stallKillBackoff))
+			log.Printf("autonomous: network_unavailable for %s — environmental, retry in %v (no lifetime-cap increment, no cascade feed, no pause)",
+				key, stallKillBackoff)
+			as.persistStateLocked()
+			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
+			select {
+			case as.rescanCh <- struct{}{}:
+			default:
+			}
+			if as.safetyRails != nil {
+				as.safetyRails.RecordNonFaultOutcome(0)
+				safetySnap := as.safetyRails.State()
+				as.state.Safety = &safetySnap
+			}
+			as.persistStateLocked()
+			return
+		}
+
 		// Issue #3542: worktree_uncommitted and budget_ceiling_hit are
 		// recoverable events, not code defects. worktree_uncommitted means the
 		// scheduler preserved the work into a recovery commit; budget_ceiling_hit

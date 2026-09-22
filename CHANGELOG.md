@@ -103,6 +103,20 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A `network_unavailable` readiness refusal no longer feeds the cascading-
+  failure breaker (#1989, AC4 gap in #1646).** The failure handler in
+  `internal/orchestrator/autonomous.go` is a sequential if-chain, one block
+  per exempted `terminalFailureKind`, each returning before
+  `cascadeTracker.RecordFailure`. `TerminalKindModelUnavailable` had a block;
+  `TerminalKindNetworkUnavailable` did not, so a local endpoint (e.g. LM
+  Studio) being unreachable at dispatch time fell through and was counted
+  like an unclassified pipeline failure — a flapping or briefly-sleeping
+  endpoint could trip the breaker and halt autonomous mode. The new block
+  schedules a retry, like `model_unavailable`, but on the shorter
+  `stallKillBackoff` (30m) already used for other short-lived local/infra
+  blips rather than the hour-long `streamIdleTimeoutBackoff` sized for a
+  remote rate-limit window: an unreachable local endpoint routinely clears on
+  its own within minutes, unlike an unloaded model or plan-tier rejection.
 - **`scripts/ci-local.sh` could exit non-zero having named nothing, and now
   cannot (#1983).** Three gates running at once in three worktrees produced a
   red "Mirror drift gate regression suite" whose log held 16 assertions, every
