@@ -5153,6 +5153,28 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		if s.execMgr != nil && s.execMgr.HasAdapter() {
 			adapterName = s.execMgr.AdapterName()
 		}
+
+		// Dispatch-time OpenCode readiness (#1646, ADR-022 § Endpoints):
+		// before anything is created, probe the SPECIFIC local endpoint this
+		// stage would dispatch to — never "some local server somewhere"
+		// (2026-09-12 multiple-endpoints amendment). A slow-but-healthy local
+		// model is not this check's business (#1657 watches liveness once
+		// the stage is running); this refuses only a server that does not
+		// answer or a model it has not loaded, before a subagent spawns and
+		// the failure would otherwise land as a generic subagent_crash.
+		if adapterName == "opencode" {
+			if verdict := resolveOpenCodeReadiness(workspaceRoot, model); !verdict.Ready {
+				reason := fmt.Sprintf("opencode readiness: %s", verdict.Reason)
+				terminalFailureKind, workRecovered = s.refusePreDispatch(item, runtime, workspaceRoot, stage, tracer,
+					"opencode-readiness", reason)
+				// refusePreDispatch's own return is always
+				// TerminalKindValidationError; this dispatch already knows the
+				// precise environmental kind the probe found.
+				terminalFailureKind = verdict.Kind
+				return
+			}
+		}
+
 		// descentProvider names the provider this dispatch will execute on
 		// (#611) — execMgr's adapter on the Go-direct path, and on the IPC
 		// path what the adapter itself reported for this stage's previous
@@ -5616,7 +5638,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// Stage-aware + model-aware last-resort context deadline (#73).
 			// Replaces a blind 30-min literal that killed frontier-mode Fable
 			// stages before their own progress-gated hard cap could apply.
-			Timeout:      routing.ResolveStageTimeout(string(stage), model),
+			Timeout:      routing.ResolveStageTimeout(string(stage), adapterName, model),
 			CostBudget:   PipelineBudgetCeilingUSD(workspaceRoot),
 			SkillPath:    skillData.SkillPath,
 			ContextFile:  contextFile,

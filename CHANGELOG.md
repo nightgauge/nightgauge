@@ -35,6 +35,24 @@ changelog, and the release workflow refuses a tag that does not.
   #1660-#1664 can compare profiles on the existing scenarios. The plugin
   mirror and the VSIX marketplace bundle both ship the new `_profiles/` tree.
 
+- **OpenCode stages get liveness-aware phase inference, adapter-aware stage
+  timeouts, and dispatch-time local-endpoint readiness (#1646).** Timing
+  assumptions previously came from Claude speeds: a local model's slow-but-
+  healthy decode (research measured a 76s cold prefill and ~8 tok/s on a
+  local Qwen3.8 27B) could read as a stall, and nothing refused a stage whose
+  local server was down or model unloaded before spawning it. `PhaseInferer`
+  now reads OpenCode's `tool_use` events (`bash`/`edit`/`write` → the same
+  Bash/Edit/Write phase rules Claude's shape drives), `ResolveStageTimeout`
+  is keyed by stage, adapter AND model — an OpenCode local-provider stage
+  gets a ×3 factor capped at 4 hours instead of the Claude-tier family scale
+  — and the scheduler probes the SPECIFIC local endpoint (LM Studio, Ollama,
+  or a declared `opencode.endpoints[]` entry) a stage is about to dispatch
+  to before creating anything, refusing as `network_unavailable` (the
+  endpoint does not answer) or `model_unavailable` (the model is not
+  loaded, or `opencode.limit.context` is unset or larger than the loaded
+  window) rather than letting a broken local environment spawn and land as
+  a generic `subagent_crash`.
+
 - **Spike #1650 measured OpenCode's server mode, and three of its four questions
   came back negative.** `docs/spikes/1650-opencode-server-mode-warm-serve-run-attach-http-permission.md`
   records the evidence; ADR-022 is amended and its § 15 disposition table now

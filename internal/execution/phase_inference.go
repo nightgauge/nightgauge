@@ -259,9 +259,67 @@ type toolUse struct {
 	Input map[string]any
 }
 
-// extractToolUses parses an assistant stream-json line and returns its tool_use
-// blocks. The CLI delivers tool calls inside complete `assistant` messages, so
-// this is the primary signal for inference. Returns nil for non-assistant lines.
+// openCodeToolNameToClaudeName maps an OpenCode tool_use event's part.tool
+// (opencode's own lowercase tool id, ADR-022 § 1 / opencode_usage.go) to the
+// Claude tool name stageRules matches on, so the one rule table drives phase
+// inference on both the Claude assistant-message shape and OpenCode's. write
+// and apply_patch join edit: opencode 1.18.30 has no permission or usage
+// distinction between them (openCodeToolRejectionPermission), and neither
+// does an edit-heavy stage's phase progress. A tool this table has no entry
+// for (task, webfetch, websearch, todowrite, skill, lsp, ...) matches no
+// phase rule, same as an unrecognized Claude tool name would.
+var openCodeToolNameToClaudeName = map[string]string{
+	"bash":        "Bash",
+	"edit":        "Edit",
+	"write":       "Edit",
+	"apply_patch": "Edit",
+	"read":        "Read",
+	"glob":        "Glob",
+	"grep":        "Grep",
+}
+
+// extractOpenCodeToolUse reads one OpenCode `tool_use` event (opencode
+// 1.18.30's `run --format json`, ADR-022): `{"type":"tool_use","part":
+// {"type":"tool","tool":"edit","state":{"input":{"filePath":...}}}}`. OpenCode
+// emits this only once a call has completed or errored, never on start
+// (#1635's plugin-handshake comment records the same observation), so a
+// phase this advances to was actually reached, not merely attempted.
+//
+// filePath, OpenCode's input key for edit/write/apply_patch, is copied to
+// file_path so the SAME rules that read Claude's Edit/Write input
+// (inputStr(input, "file_path")) match here without a second rule table.
+func extractOpenCodeToolUse(line string) (toolUse, bool) {
+	var env struct {
+		Type string `json:"type"`
+		Part struct {
+			Type  string `json:"type"`
+			Tool  string `json:"tool"`
+			State struct {
+				Input map[string]any `json:"input"`
+			} `json:"state"`
+		} `json:"part"`
+	}
+	if err := json.Unmarshal([]byte(line), &env); err != nil {
+		return toolUse{}, false
+	}
+	if env.Type != "tool_use" || env.Part.Type != "tool" {
+		return toolUse{}, false
+	}
+	name, ok := openCodeToolNameToClaudeName[env.Part.Tool]
+	if !ok {
+		return toolUse{}, false
+	}
+	input := env.Part.State.Input
+	if fp, ok := input["filePath"].(string); ok {
+		input["file_path"] = fp
+	}
+	return toolUse{Name: name, Input: input}, true
+}
+
+// extractToolUses parses one line of stage stdout and returns its tool_use
+// blocks: an assistant stream-json line (the CLI's shape, tool calls inside
+// complete `assistant` messages) or an OpenCode `tool_use` event
+// (extractOpenCodeToolUse). Returns nil for a line that is neither.
 func extractToolUses(line string) []toolUse {
 	var env struct {
 		Type    string `json:"type"`
@@ -273,17 +331,17 @@ func extractToolUses(line string) []toolUse {
 			} `json:"content"`
 		} `json:"message"`
 	}
-	if err := json.Unmarshal([]byte(line), &env); err != nil {
-		return nil
-	}
-	if env.Type != "assistant" {
-		return nil
-	}
-	var out []toolUse
-	for _, b := range env.Message.Content {
-		if b.Type == "tool_use" && b.Name != "" {
-			out = append(out, toolUse{Name: b.Name, Input: b.Input})
+	if err := json.Unmarshal([]byte(line), &env); err == nil && env.Type == "assistant" {
+		var out []toolUse
+		for _, b := range env.Message.Content {
+			if b.Type == "tool_use" && b.Name != "" {
+				out = append(out, toolUse{Name: b.Name, Input: b.Input})
+			}
 		}
+		return out
 	}
-	return out
+	if tu, ok := extractOpenCodeToolUse(line); ok {
+		return []toolUse{tu}
+	}
+	return nil
 }
