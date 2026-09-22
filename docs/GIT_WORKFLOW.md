@@ -305,8 +305,11 @@ should**, so pick the split deliberately rather than opportunistically:
 
 - **Merging is serial.** Every merge puts every other open PR `BEHIND` and costs
   it a fresh CI run.
-- **One machine runs one `ci-local.sh` at a time.** N branches cost N sequential
-  gates however fast they were written.
+- **One machine runs several `ci-local.sh` gates at once, on one budget.**
+  Concurrent gates are supported (#855) and the gate's heavy steps draw on a
+  machine-wide budget of `CI_LOCAL_JOBS` slots shared by every worktree of the
+  repository (#1983), so N branches cost less than N sequential gates but more
+  than one — they interleave rather than stack.
 
 Two sessions on disjoint files is a real gain. Two sessions on the same area is
 strictly worse than one.

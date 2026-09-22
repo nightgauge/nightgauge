@@ -71,6 +71,59 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **`scripts/ci-local.sh` could exit non-zero having named nothing, and now
+  cannot (#1983).** Three gates running at once in three worktrees produced a
+  red "Mirror drift gate regression suite" whose log held 16 assertions, every
+  one of them a pass, under the summary line "(no recognised failure marker —
+  see the log above for detail)". Two defects combined. The summary's marker
+  grep was ANSI-blind — `^[[:space:]]*(×|✗|…)` against
+  `  \033[31m✗\033[0m <desc>`, so no coloured failure in any suite in this
+  repository had ever matched it — and a grouped step whose child was killed
+  under load never wrote an exit code, which the group runner turned into a
+  plain `exit 1`, the same shape as a check that asserted false. The reporting
+  helpers moved to `scripts/lib/ci_local_failures.sh`, strip ANSI first, and
+  print the log's last 20 lines when nothing matches instead of describing the
+  absence of a message; a step the harness could not run is reported as `!`
+  `[INFRASTRUCTURE — the check could not run]` and counted separately, because
+  it asserted nothing about the diff either way. `test-mirror-drift-gate.sh`
+  now announces every arm, reports the arm it was inside from its EXIT and
+  signal traps, holds each arm to a declared assertion count so a partial arm
+  is named rather than showing up as a wrong total, exits 2 with a
+  `HARNESS ERROR` line when the harness itself cannot run (no temp space, a
+  fixture `git` failure) and retries through `index.lock` contention first.
+  `scripts/test-ci-local-concurrency.sh` is the new self-test.
+- **`scripts/ci-local.sh`'s concurrency budget is machine-wide again, so
+  concurrent gates stop oversubscribing the box (#1983).** #855 made the gate
+  concurrency-safe and the workspace has relied on "gates run in parallel, only
+  merges serialise" since. #1217/#1219 then made the gate internally parallel
+  and bounded it with `CI_LOCAL_JOBS=4` PER PROCESS: three gates asked for
+  twelve heavy steps — three `go test ./...`, three `-race` passes, three vitest
+  runs — on a 12-core box, reached load 58, and children were killed before they
+  could record an exit code. `CI_LOCAL_JOBS` now bounds the MACHINE. Slots live
+  in one directory keyed on the repository's shared git dir, so every worktree
+  of a repository draws on one budget while an unrelated checkout keeps its own;
+  a slot is reclaimed only when its owner pid is dead, never on age (#1697's
+  cleanup deleted a live sandbox on an age rule), and a release is a no-op unless
+  the slot still carries this gate's `owner` stamp — slot paths are numbered and
+  reused, so a child that hands its slot back, a second gate that takes the same
+  path, and this gate's exit-time sweep are exactly the sequence in which an
+  unguarded release deletes another gate's LIVE slot and silently shrinks the
+  budget, and only when gates overlap. Gates stay parallel and simply take
+  longer together. A
+  single-instance lock was rejected: it would answer a resource-accounting bug
+  by removing a capability ADR-013 is built on. The gate also reaps its
+  concurrent steps' children by pid on interrupt and verifies they are dead,
+  after `go test` children were seen outliving the gate that spawned them.
+
+  **Measured on merge, alone on an idle 12-core Apple M-series: `10m5s` wall
+  clock at 419% CPU**, of which `go test -race` is `217s` and the plain pass
+  `197s` — so the two Go passes are `414s`, **68% of the gate**, and neither can
+  observe a TypeScript-only diff (the argument #1985 makes). The new concurrency
+  contract suite costs `112s` of that total. Two figures in the tree were wrong
+  and are corrected by this one measurement: `docs/GIT_WORKFLOW.md` claimed one
+  machine runs one gate at a time, and the comment above the race step still
+  advertised `2m48s -> 2m58s` for both Go passes together.
+
 - **The SDK's OpenCode run-env allowlist rejected several variables real
   `nightgauge opencode config --json` output carries, so `checkRunConfig`
   would have rejected the verb's own output on every machine, once #1648

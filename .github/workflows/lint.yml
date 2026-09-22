@@ -108,6 +108,12 @@ jobs:
       # which is #529 all over again.
       - name: Mirror drift gate self-test
         run: bash scripts/test-mirror-drift-gate.sh
+      # The local gate's own concurrency and failure-reporting contract (#1983).
+      # Runs here too because the helpers it asserts are what every other step's
+      # failure is read through, and because a gate that reports a red it cannot
+      # explain trains people to dismiss reds.
+      - name: ci-local.sh concurrency and failure-reporting contract
+        run: bash scripts/test-ci-local-concurrency.sh
       - name: Agent-skill install target regression suite
         run: bash scripts/test-install-agent-skills-targets.sh
       # Read-only, and free to sit anywhere in this job: `--check-mirror`

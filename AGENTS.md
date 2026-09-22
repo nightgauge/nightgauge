@@ -93,6 +93,22 @@ the SHA-256 of the lines between the markers.
   `bash scripts/ci-local.sh`: run it exactly once, after focused checks pass.
   It is the gate, not the iteration loop. The ordered requirements live in
   [docs/GIT_WORKFLOW.md](docs/GIT_WORKFLOW.md#pre-submission-validation-critical).
+- **Concurrent `scripts/ci-local.sh` runs are supported — do not serialise on
+  the gate.** Branches are written in parallel and each one gates itself; only
+  merges serialise. The gate's heavy concurrent steps draw on a MACHINE-WIDE
+  budget of `CI_LOCAL_JOBS` slots (default 4), keyed on the repository's shared
+  git directory, so every worktree of one repository shares one budget. Several
+  gates therefore take longer in wall clock and do not oversubscribe the box.
+  Before #1983 that bound was per process, so three gates ran twelve heavy steps
+  on twelve cores at load 58 and children were killed mid-step; the gate said
+  `exit 1` and named nothing. If you need the old behaviour for a measurement,
+  raise `CI_LOCAL_JOBS`, and know what you are buying.
+- A step the gate marks `!` `[INFRASTRUCTURE — the check could not run]` has
+  asserted nothing about your change: re-run it. That is not licence to dismiss
+  a red as flaky — a red nobody can explain is a bug in the gate and wants an
+  issue. A suite declares this by printing a `HARNESS ERROR` line; if you write
+  a gate suite, distinguish "an arm asserted false" from "the arm could not
+  run" and say which.
 - The merge, post-merge and cleanup rules above are expanded in
   [docs/GIT_WORKFLOW.md](docs/GIT_WORKFLOW.md#after-merge).
 - Ship the strongest in-scope solution. Do not create menus of inferior and
