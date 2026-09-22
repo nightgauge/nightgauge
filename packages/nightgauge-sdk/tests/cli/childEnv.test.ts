@@ -8,6 +8,8 @@ import {
   curateOpenCodeChildEnv,
   isChildEnvAllowed,
   isOpenCodeChildEnvAllowed,
+  isOpenCodeRunEnvAccepted,
+  isOpenCodeRunEnvName,
 } from "../../src/cli/adapters/childEnv.js";
 import {
   OPENCODE_CATALOG_ENV,
@@ -221,6 +223,66 @@ describe("curateOpenCodeChildEnv (#1637)", () => {
       return !isOpenCodeChildEnvAllowed(name, model);
     });
     expect(notForwarded).toEqual([]);
+  });
+
+  // #1804: two independent reviews of this fix round found that a parity test
+  // reading opencodeplugin.go's Env* CONSTANT DEFINITIONS is structurally
+  // blind to a variable set any other way — OPENCODE_DISABLE_PROJECT_CONFIG is
+  // a bare string literal at InstallNightgaugePlugin's call site
+  // (opencode.go), not one of those constants, and HOME is set by
+  // OpenCodeIsolationEnv (opencode_isolation.go) — and both slipped through an
+  // earlier version of this exact test that only checked definitions, the
+  // same blind spot #1969 already named. This test instead reads the KEY SET
+  // `nightgauge opencode config --json` actually prints, pinned by
+  // TestOpenCodeConfigVerbEnvKeysMatchGoldenFixture (cmd/nightgauge/opencode_test.go)
+  // against the same fixture, so a newly-set variable fails a Go test first
+  // and this one second — never neither.
+  it("parity: every key nightgauge opencode config --json prints is accepted by the TS run-env allowlist", () => {
+    const golden = JSON.parse(
+      fs.readFileSync(
+        path.join(
+          GO_ADAPTERS_DIR,
+          "../../execution/testdata/opencode_config_verb_env_keys.golden.json"
+        ),
+        "utf-8"
+      )
+    ) as { keys: string[] };
+    expect(golden.keys.length).toBeGreaterThan(15);
+    // Sanity: the fixture is what this test's own doc comment claims —
+    // guards against a typo'd path silently reading an empty/stale file.
+    expect(golden.keys).toContain("HOME");
+    expect(golden.keys).toContain("OPENCODE_DISABLE_PROJECT_CONFIG");
+    expect(golden.keys).toContain("NIGHTGAUGE_OPENCODE_PLUGIN_NONCE");
+
+    const notAccepted = golden.keys.filter((k) => !isOpenCodeRunEnvAccepted(k));
+    expect(
+      notAccepted,
+      `these keys a real nightgauge opencode config --json prints are refused by ` +
+        `checkRunConfig — add them to childEnv.ts's OPENCODE_RUN_ENV_NAMES:\n` +
+        notAccepted.join("\n")
+    ).toEqual([]);
+    // Every key in this fixture is meant to reach the child (none of them is
+    // the operator-risk name), so isOpenCodeRunEnvName (forwarded), not just
+    // isOpenCodeRunEnvAccepted, must be true for each.
+    const notForwarded = golden.keys.filter((k) => !isOpenCodeRunEnvName(k));
+    expect(notForwarded).toEqual([]);
+  });
+
+  // The operator-risk name is the one key checkRunConfig accepts but
+  // curateOpenCodeChildEnv must never forward — accepting it prevents a
+  // fail-closed CONFIG_INVALID on a machine where an operator's OpenCode
+  // install directory happens to be at risk (a condition the operator neither
+  // set nor controls), while withholding it mirrors the Go adapter's own
+  // BuildCommand, which deletes opencodeplugin.EnvOperatorInstallRisk from
+  // the child's env right before returning it (opencode.go, pinned by
+  // TestOpenCodeBuildCommandWithholdsOperatorInstallRiskFromTheChild) —
+  // #1802's child-env leak is already closed there; only the config verb's
+  // printed env still carries the name, since the verb prints RunRoot.Env
+  // directly rather than BuildCommand's output.
+  it("accepts NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK but never forwards it", () => {
+    const name = "NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK";
+    expect(isOpenCodeRunEnvAccepted(name)).toBe(true);
+    expect(isOpenCodeRunEnvName(name)).toBe(false);
   });
 
   it("OpenCode's catalog, platform providers and switches are the Go adapter's", () => {
