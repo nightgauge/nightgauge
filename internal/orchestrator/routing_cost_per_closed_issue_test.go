@@ -1,9 +1,9 @@
 package orchestrator
 
 import (
-	"go/ast"
-	"go/parser"
-	"go/token"
+	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -190,56 +190,163 @@ func TestPlannerRoutingDecision_KeepsTheStartingSkipSet(t *testing.T) {
 	}
 }
 
-// The helpers above only matter if runPipeline calls them, and no unit test can
-// reach runPipeline without standing up a whole run — so pin the wiring
-// structurally: dispatch passes feature-dev's routed tier through
-// routedStageModel, the risk floors are raised, and the planner re-derivation
-// runs.
-func TestRunPipelineWiresImplementationRouting(t *testing.T) {
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "scheduler.go", nil, 0)
+// plannerSizingRunner is runIDCapturingRunner that plays issue-pickup and
+// feature-planning's file contract: pickup writes an issue context routed from
+// the assumed M, and planning writes a plan that assesses the issue as L.
+type plannerSizingRunner struct {
+	runIDCapturingRunner
+	root string
+}
+
+func (r *plannerSizingRunner) RunStage(ctx context.Context, params StageRunParams) (*StageRunResult, error) {
+	// The base runner writes a generic payload to the stage's OutputFile —
+	// for these two stages that IS the file below — so write after it.
+	out, err := r.runIDCapturingRunner.RunStage(ctx, params)
+	dirs := []string{r.root}
+	if params.WorktreePath != "" && params.WorktreePath != r.root {
+		dirs = append(dirs, params.WorktreePath)
+	}
+	for _, dir := range dirs {
+		switch params.Stage {
+		case state.StageIssuePickup:
+			writeRunFixture(dir, execution.IssueContextRelPath(params.IssueNumber), fmt.Sprintf(`{
+  "issue_number": %d,
+  "routing": {
+    "change_type": "code",
+    "complexity_score": 3,
+    "suggested_route": "standard",
+    "skip_stages": [],
+    "rationale": "M size assumed",
+    "pickup_recommendation": {"dev_model": ""}
+  }
+}`, params.IssueNumber))
+		case state.StageFeaturePlanning:
+			writeRunFixture(dir, execution.PlanningContextRelPath(params.IssueNumber),
+				`{"complexity_assessment":{"size_label":"L","computed_score":5,"documentation_scope":"extended"}}`)
+		}
+	}
+	return out, err
+}
+
+// writeRunFixture writes a stage's output file from inside a dispatch, where
+// no *testing.T is in reach; a write failure panics the run, loudly.
+func writeRunFixture(root, rel, body string) {
+	path := filepath.Join(root, rel)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		panic(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		panic(err)
+	}
+}
+
+// TestRunPipeline_PlannerSizeReachesFeatureDevDispatch drives a real
+// runPipeline for an unsized issue (#1909's #1643 shape). Pickup routes from
+// the assumed M, which never selects Opus; the planner assesses L. The
+// re-derived Decision must reach feature-dev's DISPATCH model — and only
+// feature-dev's — and must be written into the issue context the later stages
+// read, and into the run record.
+func TestRunPipeline_PlannerSizeReachesFeatureDevDispatch(t *testing.T) {
+	isolateRoutingEnv(t)
+	root := gitWorkspace(t)
+	runner := &plannerSizingRunner{root: root}
+	s := newRunIdentityTestScheduler(t, root, runner)
+	var snap *state.RuntimeState
+	s.OnPipelineComplete(func(_ string, _ int, rt *state.RuntimeState, _ bool) { snap = rt })
+
+	const issue = 991909
+	s.runPipeline(context.Background(), types.BoardItem{Number: issue, Repo: "nightgauge/nightgauge", ID: "item-991909",
+		Title: "t", Labels: []string{"type:feature", "component:go-binary"}})
+	if snap == nil {
+		t.Fatal("the pipeline never completed; the fixture is wrong, not the assertion")
+	}
+
+	models := map[state.PipelineStage]string{}
+	for _, c := range runner.captured() {
+		models[c.Stage] = c.Model
+	}
+	if models[state.StageFeatureDev] != "opus" {
+		t.Errorf("feature-dev dispatched on %q, want opus from the planner's L", models[state.StageFeatureDev])
+	}
+	for _, stage := range []state.PipelineStage{state.StageFeaturePlanning, state.StageFeatureValidate} {
+		if got := models[stage]; got != "sonnet" {
+			t.Errorf("%s dispatched on %q, want sonnet (the size rule is feature-dev's only)", stage, got)
+		}
+	}
+
+	// The issue context the later stages read carries the re-derived route
+	// and complexity, and keeps its skip set and dev_model.
+	var ctxDoc struct {
+		Routing map[string]any `json:"routing"`
+	}
+	path := resolveIssueContextPath(root, snap.WorktreeDir, "nightgauge/nightgauge", issue)
+	data, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("parse scheduler.go: %v", err)
+		t.Fatalf("read issue context: %v", err)
 	}
-	var run *ast.FuncDecl
-	for _, d := range file.Decls {
-		if fn, ok := d.(*ast.FuncDecl); ok && fn.Name.Name == "runPipeline" {
-			run = fn
+	if err := json.Unmarshal(data, &ctxDoc); err != nil {
+		t.Fatal(err)
+	}
+	if ctxDoc.Routing["suggested_route"] != "extensive" || ctxDoc.Routing["complexity_score"] != float64(5) {
+		t.Errorf("issue context routing = %v, want suggested_route extensive, complexity_score 5", ctxDoc.Routing)
+	}
+	if skips, _ := ctxDoc.Routing["skip_stages"].([]any); len(skips) != 0 {
+		t.Errorf("issue context skip_stages = %v, want the run's starting (empty) set", skips)
+	}
+
+	// The run record carries the planner's size, not the assumed M.
+	recs, err := state.NewHistoryWriter(root).ReadRecentV2(10, 1)
+	if err != nil {
+		t.Fatalf("read run records: %v", err)
+	}
+	found := false
+	for _, rec := range recs {
+		if rec.IssueNumber != issue {
+			continue
+		}
+		found = true
+		if rec.Routing.ComplexityScore != 5 || rec.Routing.Path != "extensive" {
+			t.Errorf("run record routing = %+v, want complexity 5 on the extensive route", rec.Routing)
 		}
 	}
-	if run == nil {
-		t.Fatal("runPipeline not found in scheduler.go")
+	if !found {
+		t.Error("no run record for the issue")
 	}
-	calls := map[string]int{}
-	routedDispatch := false
-	ast.Inspect(run.Body, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		name := ""
-		switch fn := call.Fun.(type) {
-		case *ast.Ident:
-			name = fn.Name
-		case *ast.SelectorExpr:
-			name = fn.Sel.Name
-		}
-		calls[name]++
-		if name == "resolveDispatchModel" && len(call.Args) >= 4 {
-			if inner, ok := call.Args[3].(*ast.CallExpr); ok {
-				if id, ok := inner.Fun.(*ast.Ident); ok && id.Name == "routedStageModel" {
-					routedDispatch = true
-				}
-			}
-		}
-		return true
-	})
-	if !routedDispatch {
-		t.Error("runPipeline's resolveDispatchModel call does not route its predicted tier through routedStageModel")
+}
+
+// #1909 BLOCKER regression: the size rule must not move the run-wide tier.
+// reRouteContext writes Route("feature-dev", complexity_score) into dev_model,
+// and stageBaseModel applies dev_model to EVERY reasoning stage — so an L issue
+// (complexity_score 5) re-routed in the default elevated mode gets Opus for
+// feature-dev only, while planning and validation stay on Sonnet.
+func TestReRouteContext_SizeRuleStaysOnFeatureDev(t *testing.T) {
+	dir := isolatedWorkspace(t)
+	makeIssueContext(t, dir, 1909, "", 5)
+	makePerfModeFile(t, dir, string(routing.ModeElevated))
+
+	s := testScheduler(t)
+	rec, err := s.reRouteContext(context.Background(), dir, "", "", 1909, "")
+	if err != nil {
+		t.Fatalf("reRouteContext: %v", err)
 	}
-	for _, want := range []string{"raiseRiskFloors", "plannerRoutingDecision"} {
-		if calls[want] == 0 {
-			t.Errorf("runPipeline never calls %s", want)
+	if rec.Model != routing.ModelSonnet {
+		t.Fatalf("re-routed dev_model = %q, want the router's sonnet (the run-wide tier is unchanged)", rec.Model)
+	}
+	_, _, devModel := loadIssueContext(dir, "", "", 1909)
+	if devModel != routing.ModelSonnet {
+		t.Fatalf("dev_model on disk = %q, want %q", devModel, routing.ModelSonnet)
+	}
+
+	sizedL := decisionFor("type:feature", "size:L")
+	want := map[state.PipelineStage]string{
+		state.StageFeaturePlanning: "sonnet",
+		state.StageFeatureDev:      "opus",
+		state.StageFeatureValidate: "sonnet",
+		state.StagePRMerge:         "sonnet",
+	}
+	for stage, w := range want {
+		if got := s.resolveDispatchModel(stage, 1909, dir, routedStageModel(stage, devModel, sizedL), nil, ""); got != w {
+			t.Errorf("L issue, elevated, via reRouteContext: %s = %q, want %q", stage, got, w)
 		}
 	}
 }

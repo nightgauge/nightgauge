@@ -3655,7 +3655,7 @@ mirror the pipeline's stages:
 | Stage              | Rule                                                                                                                                                                                                                                                                                        |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `feature-dev`      | **Opus** when the issue's size is known and, after the priority adjustment, is M or larger (`routing.ImplementationBand`). XS and S, and any issue whose size was assumed, keep the tier they would otherwise run: the run's routed tier, then `ui.core.default_model`, then Sonnet.        |
-| `feature-validate` | Unchanged. It closes with the adversarial review judge, and is already a strong tier where the router puts it.                                                                                                                                                                              |
+| `feature-validate` | Not moved by size; only the high-risk floor below applies. It closes with the adversarial review judge.                                                                                                                                                                                     |
 | High-risk issue    | An **Opus floor** on `feature-dev` and `feature-validate` (`routing.RiskFloorBand`). High-risk is the label rule that already forces the full pipeline: a label containing `security`, `auth`, `billing`, `payment`, `migration`, `public-api`, `breaking` or `credential`, or `risk:high`. |
 
 The size comes from the board's Size field, then a `size:*` label, then the
@@ -3687,21 +3687,20 @@ follow the planner's size, and a second change-class trace event records the
 re-derived decision. The re-derivation never skips a stage the run had kept: a
 planner's small size does not remove `feature-validate` mid-run.
 
-**The router's recommendation table** (`selectModel`, which feeds the pickup
-trace, the `intelligence.route` IPC method and the re-route after a
-performance-mode change) states the same rule on its 1–10 complexity scale:
+**The size rule is not a cell in the router's table.** The router's
+recommendation table (`selectModel`) is unchanged: `feature-dev` is Sonnet at
+complexity 4–6. Its `feature-dev` row also sets the run's routed tier: the
+re-route after a performance-mode change writes it into
+`pickup_recommendation.dev_model`, and every reasoning stage, not only
+`feature-dev`, dispatches on that tier. Putting the size rule in the table
+would move planning, validation and merge to Opus too. So
+`ImplementationBand` is applied to `feature-dev`'s dispatch alone, and it only
+ever raises that stage to Opus.
 
-| Stage              | ≤ 3    | 4–6                   | > 6    |
-| ------------------ | ------ | --------------------- | ------ |
-| `feature-planning` | Sonnet | Sonnet                | Sonnet |
-| `feature-dev`      | Haiku  | **Opus** (was Sonnet) | Opus   |
-| `feature-validate` | Haiku  | Sonnet                | Opus   |
-| plumbing stages    | Haiku  | Haiku                 | Haiku  |
-
-`ImplementationBand` reads `feature-dev`'s row of this table. It converts the
-issue's size into the point on this scale that `complexity.Estimator` assigns
-to that size, and it only ever raises the stage to Opus, never lowers it to
-Haiku.
+**Manual mode.** Under `model_routing.mode: manual` every stage takes its
+model from the manual table (or `pipeline.stage_models`), which wins over the
+router's slot, so the size rule does not apply. Only the high-risk Opus floor
+reaches a manual-mode workspace.
 
 **What the eval loop does not measure yet.** `use_eval_recommendations`
 advice compares pass rate, quality and cost **per run**. It does not see turns

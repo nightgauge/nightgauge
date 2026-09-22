@@ -7223,6 +7223,13 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 					routingDecision.ComplexityScore, next.ComplexityScore)
 				routingDecision = next
 				issueRoutingPath = next.SuggestedRoute
+				// The run record reads complexity and route from here, and
+				// recordOutcome re-reads them from the issue context, so both
+				// carry the planner's size rather than the assumed M.
+				complexityScore = next.ComplexityScore
+				if err := recordPlannerRoutingDecision(workspaceRoot, stageWorkspace(runtime, workspaceRoot), item, next); err != nil {
+					log.Printf("#%d: could not write the re-derived routing into the issue context (non-fatal): %v", item.Number, err)
+				}
 				tracer.Emit(trace.KindChangeClass, "", trace.ChangeClassPayload{
 					SuggestedRoute:    next.SuggestedRoute,
 					MatchedChangeRule: next.MatchedChangeRule,
@@ -8504,66 +8511,28 @@ func (s *Scheduler) shouldReRoute(workspaceRoot, worktreeDir, repo string, issue
 // full recommendation so the caller can trace the decision with its
 // reasoning and rejected alternatives (#179).
 func (s *Scheduler) reRouteContext(ctx context.Context, workspaceRoot, worktreeDir, repo string, issueNumber int, oldModel string) (routing.Recommendation, error) {
-	// Rewrite the file the stages actually read. Writing to the workspace root
-	// unconditionally would leave the real context — in the worktree —
-	// untouched while creating a decoy beside it (#994).
-	contextPath := resolveIssueContextPath(workspaceRoot, worktreeDir, repo, issueNumber)
-	if contextPath == "" {
-		contextPath = filepath.Join(workspaceRoot, ".nightgauge", "pipeline",
-			fmt.Sprintf("issue-%d.json", issueNumber))
-	}
-
-	data, err := os.ReadFile(contextPath)
-	if err != nil {
-		return routing.Recommendation{}, fmt.Errorf("read context: %w", err)
-	}
-
-	var raw map[string]interface{}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return routing.Recommendation{}, fmt.Errorf("unmarshal context: %w", err)
-	}
-
-	// Extract complexity score (preserved — not re-estimated)
-	complexityScore := 0
-	if routingRaw, ok := raw["routing"].(map[string]interface{}); ok {
+	var rec routing.Recommendation
+	err := rewriteIssueContextRouting(workspaceRoot, worktreeDir, repo, issueNumber, func(routingRaw map[string]interface{}) {
+		// Extract complexity score (preserved — not re-estimated)
+		complexityScore := 0
 		if cs, ok := routingRaw["complexity_score"].(float64); ok {
 			complexityScore = int(cs)
 		}
-	}
 
-	// Get fresh recommendation using the stateless router (reads current perf-mode)
-	router := routing.NewRouter(nil, workspaceRoot)
-	rec := router.Route(ctx, "feature-dev", complexity.Score{Value: complexityScore})
+		// Get fresh recommendation using the stateless router (reads current perf-mode)
+		router := routing.NewRouter(nil, workspaceRoot)
+		rec = router.Route(ctx, "feature-dev", complexity.Score{Value: complexityScore})
 
-	// Update only routing fields — complexity and other invariants are unchanged
-	if routingRaw, ok := raw["routing"].(map[string]interface{}); ok {
+		// Update only routing fields — complexity and other invariants are unchanged
 		if pickupRec, ok := routingRaw["pickup_recommendation"].(map[string]interface{}); ok {
 			pickupRec["dev_model"] = rec.Model
 		} else {
 			routingRaw["pickup_recommendation"] = map[string]interface{}{"dev_model": rec.Model}
 		}
 		routingRaw["rationale"] = rec.Reasoning
-	}
-
-	updated, err := json.MarshalIndent(raw, "", "  ")
+	})
 	if err != nil {
-		return routing.Recommendation{}, fmt.Errorf("marshal context: %w", err)
-	}
-
-	// Validate JSON before writing
-	var check interface{}
-	if err := json.Unmarshal(updated, &check); err != nil {
-		return routing.Recommendation{}, fmt.Errorf("validate updated context: %w", err)
-	}
-
-	// Atomic write: temp file + rename to avoid partial writes
-	tmpPath := contextPath + ".tmp"
-	if err := os.WriteFile(tmpPath, updated, 0o644); err != nil {
-		return routing.Recommendation{}, fmt.Errorf("write temp context: %w", err)
-	}
-	if err := os.Rename(tmpPath, contextPath); err != nil {
-		_ = os.Remove(tmpPath)
-		return routing.Recommendation{}, fmt.Errorf("rename context: %w", err)
+		return routing.Recommendation{}, err
 	}
 
 	if rec.Model != oldModel {
@@ -8572,6 +8541,70 @@ func (s *Scheduler) reRouteContext(ctx context.Context, workspaceRoot, worktreeD
 	}
 
 	return rec, nil
+}
+
+// rewriteIssueContextRouting is the one read-modify-write of the issue
+// context's `routing` object (issue-{N}.json) the scheduler performs: it
+// resolves the file the stages actually read (the worktree's on an isolated
+// run — writing to the root unconditionally would leave the real context
+// untouched while creating a decoy beside it, #994), hands `routing` to edit,
+// and writes the result atomically (temp + rename). A context whose routing is
+// absent or null is left without one — a partial object would fail the
+// schema's required fields — while edit still runs, on a detached map.
+func rewriteIssueContextRouting(workspaceRoot, worktreeDir, repo string, issueNumber int, edit func(routingRaw map[string]interface{})) error {
+	contextPath := resolveIssueContextPath(workspaceRoot, worktreeDir, repo, issueNumber)
+	if contextPath == "" {
+		contextPath = filepath.Join(workspaceRoot, ".nightgauge", "pipeline",
+			fmt.Sprintf("issue-%d.json", issueNumber))
+	}
+
+	data, err := os.ReadFile(contextPath)
+	if err != nil {
+		return fmt.Errorf("read context: %w", err)
+	}
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("unmarshal context: %w", err)
+	}
+
+	routingRaw, ok := raw["routing"].(map[string]interface{})
+	if !ok {
+		routingRaw = map[string]interface{}{}
+	}
+	edit(routingRaw)
+
+	updated, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal context: %w", err)
+	}
+
+	// Atomic write: temp file + rename to avoid partial writes
+	tmpPath := contextPath + ".tmp"
+	if err := os.WriteFile(tmpPath, updated, 0o644); err != nil {
+		return fmt.Errorf("write temp context: %w", err)
+	}
+	if err := os.Rename(tmpPath, contextPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("rename context: %w", err)
+	}
+	return nil
+}
+
+// recordPlannerRoutingDecision writes a planner-re-derived Decision (#1909)
+// into the issue context the later stages and the run record read: the route
+// (`suggested_route`), the complexity (`complexity_score`, the same Fibonacci
+// scale the schema carries) and the rationale. skip_stages is not touched —
+// the re-derivation keeps the skip set the run started with — and neither is
+// pickup_recommendation.dev_model: the run-wide tier every reasoning stage
+// shares stays the router's, and only feature-dev's dispatch is raised
+// (routedStageModel).
+func recordPlannerRoutingDecision(workspaceRoot, worktreeDir string, item types.BoardItem, d routing.Decision) error {
+	return rewriteIssueContextRouting(workspaceRoot, worktreeDir, item.Repo, item.Number, func(routingRaw map[string]interface{}) {
+		routingRaw["suggested_route"] = d.SuggestedRoute
+		routingRaw["complexity_score"] = d.ComplexityScore
+		routingRaw["rationale"] = d.Rationale
+	})
 }
 
 // loadGateResults reads quality gate results for the given issue.

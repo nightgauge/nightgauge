@@ -18,30 +18,25 @@ func TestRouter_LowComplexity_UsesHaiku(t *testing.T) {
 	}
 }
 
-// Medium complexity: implementation routes to Opus (cost per closed issue),
-// while planning and validation keep the balanced tier.
-func TestRouter_MediumComplexity_DevUsesOpus(t *testing.T) {
+func TestRouter_MediumComplexity_UsesSonnet(t *testing.T) {
 	r := NewRouter(nil, "")
 	rec := r.Route(context.Background(), "feature-dev", complexity.Score{Value: 5})
-	if rec.Model != ModelOpus {
-		t.Errorf("med complexity feature-dev model = %s, want %s", rec.Model, ModelOpus)
-	}
-	for _, stage := range []string{"feature-planning", "feature-validate"} {
-		if got := r.Route(context.Background(), stage, complexity.Score{Value: 5}).Model; got != ModelSonnet {
-			t.Errorf("med complexity %s model = %s, want %s", stage, got, ModelSonnet)
-		}
+	if rec.Model != ModelSonnet {
+		t.Errorf("med complexity feature-dev model = %s, want %s", rec.Model, ModelSonnet)
 	}
 }
 
 // TestSelectModel_Table pins the whole stage × complexity table, so a change
-// to any cell is a deliberate edit here rather than a side effect.
+// to any cell is a deliberate edit here rather than a side effect. Its
+// feature-dev row is the run-wide tier (dev_model) every reasoning stage
+// shares, so the #1909 implementation rule is deliberately NOT in it.
 func TestSelectModel_Table(t *testing.T) {
 	stages := []string{"issue-pickup", "feature-planning", "feature-dev", "feature-validate", "pr-create", "pr-merge"}
 	// Columns: complexity 2 (≤3), 5 (≤6), 9 (>6).
 	want := map[string][3]string{
 		"issue-pickup":     {ModelHaiku, ModelHaiku, ModelHaiku},
 		"feature-planning": {ModelSonnet, ModelSonnet, ModelSonnet},
-		"feature-dev":      {ModelHaiku, ModelOpus, ModelOpus},
+		"feature-dev":      {ModelHaiku, ModelSonnet, ModelOpus},
 		"feature-validate": {ModelHaiku, ModelSonnet, ModelOpus},
 		"pr-create":        {ModelHaiku, ModelHaiku, ModelHaiku},
 		"pr-merge":         {ModelHaiku, ModelHaiku, ModelHaiku},
@@ -52,21 +47,6 @@ func TestSelectModel_Table(t *testing.T) {
 				t.Errorf("selectModel(%q, %d) = %s, want %s", stage, score, got, want[stage][i])
 			}
 		}
-	}
-	// Band edges: 3 is the top of the Haiku band, 4 and 6 the mid band.
-	for score, w := range map[int]string{3: ModelHaiku, 4: ModelOpus, 6: ModelOpus, 7: ModelOpus} {
-		if got := selectModel("feature-dev", score); got != w {
-			t.Errorf("selectModel(feature-dev, %d) = %s, want %s", score, got, w)
-		}
-	}
-}
-
-// The efficiency envelope must still cap the new mid-band Opus pick.
-func TestRouter_EfficiencyMode_CapsMidComplexityDevOpus(t *testing.T) {
-	root := writeModeFile(t, "efficiency")
-	rec := NewRouter(nil, root).Route(context.Background(), "feature-dev", complexity.Score{Value: 5})
-	if rec.Model != ModelSonnet {
-		t.Errorf("efficiency mode mid-complexity feature-dev = %s, want %s (capped)", rec.Model, ModelSonnet)
 	}
 }
 
