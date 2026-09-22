@@ -730,9 +730,10 @@ type openCodeAnthropicOptionsJSON struct {
 
 // BuildOpenCodeConfig builds the per-run config for in.Run. It reads no file
 // and no environment beyond in.Lookup, but it is not pure: for a declared
-// endpoint model with no machine-tier limit, in.Discover queries the endpoint
-// over HTTP, so the bytes depend on what that server reports. With in.Discover
-// nil, or every limit overridden, the same input gives the same bytes.
+// endpoint's model it always calls in.Discover, which queries the endpoint
+// over HTTP (even when a machine-tier limit overrides what it reports), so
+// the result can depend on what that server says. With in.Discover nil the
+// same input gives the same bytes.
 //
 // It sets:
 //
