@@ -115,6 +115,52 @@ func usableWindow(window int) int {
 	return int(float64(remaining) * (1 - toolOutputReserveFraction))
 }
 
+// ProfileDecision is the ADR 023 §Q3 dispatch outcome for a stage whose full
+// render is being checked against a model's window: dispatch it as rendered,
+// re-render it compact, or refuse. It is the compact half of the ADR's
+// "(1) one re-route hop → (2) refusal" order — the model-swap hop and its
+// scheduler wiring are #1645's own, out of this package and out of #1654's
+// file ownership; this function only ever chooses between the SAME model's
+// full and compact renders.
+type ProfileDecision string
+
+const (
+	// DecisionFits means the full render already fits; no re-route needed.
+	DecisionFits ProfileDecision = "fits"
+	// DecisionCompact means the full render did not fit, a compact profile
+	// exists, and the compact render fits.
+	DecisionCompact ProfileDecision = "compact"
+	// DecisionRefuse means the full render did not fit and either no compact
+	// profile exists or the compact render does not fit either.
+	DecisionRefuse ProfileDecision = "refuse"
+)
+
+// DecideProfile checks fullContent against window first; only when it does
+// NOT fit does it consult the compact render. hasCompactProfile distinguishes
+// "no _profiles/compact.md for this stage" from "compact profile exists but
+// renders empty" — the caller (the skillrender.Render result's own Profile
+// field, ADR 023 §Q5) already knows which one happened and must not have that
+// re-derived from an empty compactContent string, which is a legitimate
+// (if degenerate) render rather than "absent."
+//
+// Returns the FitResult for whichever profile the decision is based on: the
+// full result for DecisionFits and DecisionRefuse-with-no-compact-profile,
+// otherwise the compact result.
+func DecideProfile(stage string, fullContent string, window int, hasCompactProfile bool, compactContent string) (ProfileDecision, FitResult) {
+	full := Fit(stage, fullContent, window)
+	if full.Fits {
+		return DecisionFits, full
+	}
+	if !hasCompactProfile {
+		return DecisionRefuse, full
+	}
+	compact := Fit(stage, compactContent, window)
+	if compact.Fits {
+		return DecisionCompact, compact
+	}
+	return DecisionRefuse, compact
+}
+
 // Fit checks whether stage's rendered content fits window, applying
 // safetyMargin to the raw estimate before comparing it to stage's share of
 // the usable window (ADR 023 § 2).

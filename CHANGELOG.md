@@ -16,6 +16,25 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **`nightgauge skill render --profile compact` and pr-merge's own compact
+  profile (#1654).** A stage skeleton — phase markers, gates, the Input
+  Contract and the deny rules — with everything else turned into on-demand
+  `Read` directives at `<skillDir>/_profiles/compact.md`, instead of the full
+  `_shared`/`_includes` content a full render inlines or references. Omitting
+  `--profile`, or passing `--profile full`, renders byte-identically to
+  before; a stage with no compact profile falls back to full with a warning.
+  `skills/nightgauge-pr-merge/_profiles/compact.md` is the first consumer:
+  pr-merge's full render is ~21.8k estimated tokens (over the ADR-023 budget
+  at a 32768-token window) and its compact render is ~2.8k, well under it,
+  while keeping the `--admin` prohibition and the post-merge build-check text
+  verbatim. `internal/skillrender/budget.go` gained `DecideProfile`, the
+  compact half of ADR-023's dispatch-outcome order (full → compact → refuse);
+  the model-swap re-route hop stays #1645's own. `scripts/evaluate-skills.ts
+--render-profile full|compact` prepends the rendered skill to each
+  scenario's prompt and tags the recorded JSONL with `render_profile`, so
+  #1660-#1664 can compare profiles on the existing scenarios. The plugin
+  mirror and the VSIX marketplace bundle both ship the new `_profiles/` tree.
+
 - **Spike #1650 measured OpenCode's server mode, and three of its four questions
   came back negative.** `docs/spikes/1650-opencode-server-mode-warm-serve-run-attach-http-permission.md`
   records the evidence; ADR-022 is amended and its § 15 disposition table now
