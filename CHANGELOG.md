@@ -16,6 +16,53 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **The SDK's OpenCode adapter runs under the Go per-run config (#1648), and
+  checks the plugin handshake (#1804).** Before this, the SDK adapter refused
+  every stage because nothing supplied its run config. Now each stage runs
+  `nightgauge opencode config` (`NIGHTGAUGE_BIN`, else `nightgauge` on
+  `PATH`) through `execFile` with an argv array, a 15 s timeout and an 8 MiB
+  output cap. The verb runs once per query, not once per query function, so
+  a query function shared by every stage of a pipeline still gets each stage
+  its own config. It gets the query's stage, `--max-turns` from the stage's
+  turn budget and `--run-id` from the pipeline run's identity.
+  `PipelineOrchestrator.run` now hands that identity to every stage. The id
+  is only passed when it is a UUIDv7 run identity; otherwise the verb mints a
+  root of its own, as the Go manager does. The config, the isolation env, the
+  withheld variables, the handshake and the opencode binary all come from
+  that verb. No TypeScript
+  builds any of it. A verb that fails (the tamper gate included), times out,
+  prints something that is not JSON, leaves out a field, or reports a
+  `schema_version` major other than 1 fails the stage before any `opencode`
+  starts. The error carries the verb's stderr with credentials redacted. The
+  SDK spawn applies `env_withhold` to the inherited environment, then lays the
+  verb's `env` over it. So an inherited `XDG_CONFIG_HOME` or
+  `OPENCODE_CONFIG_CONTENT` never reaches the child. The child runs the
+  binary the verb vetted. The handshake mirrors `manager.go`. At the first
+  `step_start` the sentinel must carry the run's nonce and the installed
+  `plugin_version`, or the process group is SIGKILLed every 15 ms for up to
+  1 s, as `killProcessTreeUntilGone` does. If the run made a tool call, the
+  sentinel must also be dated no later than that call's start. The verb's
+  output is now `schema_version` 1.2. It adds `binary`, the absolute path of
+  the opencode the version policy checked, `plugin_version` and `run_id`. The
+  SDK runs the verb in the stage's worktree with `--skills-root` taken from
+  the SKILL.md the stage's prompt came from. With `--skills-root` named, a
+  SKILL.md the verb cannot find fails the verb instead of printing an
+  all-deny permission map. A new `nightgauge opencode cleanup --run-id`
+  deletes a per-run root. The SDK calls it when a query whose root was minted
+  for it ends, and when a pipeline run whose stages shared a root ends, as the
+  Go scheduler does at every terminal outcome. A stage repository that is not
+  `owner/name` is now named in a warning rather than dropped silently.
+  `TestOpenCodeConfigGolden` generates
+  `internal/execution/adapters/testdata/opencode_config_golden.json` from the
+  real verb and the Go adapter's `BuildCommand`. The SDK's
+  `opencodeRunConfig.test.ts` feeds that file through the SDK path and asserts
+  that the child's `OPENCODE_CONFIG_CONTENT`, every variable the verb's `env`
+  names and every `HOME`, `XDG_*`, `OPENCODE_*` and `NIGHTGAUGE_OPENCODE_*`
+  value match the Go spawn's. A key
+  added on either side turns that side's test red. The SDK's opencode install
+  hint now names the managed install of the max-tested build and its
+  `opencode.binary` pin. The Go refusals already did.
+
 - **Compact render profiles for issue-pickup (#1660) and feature-validate
   (#1663).** Both stages now fit the ADR-023 share at a 32768-token window
   with `nightgauge skill render --profile compact`. issue-pickup goes from

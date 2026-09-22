@@ -690,6 +690,7 @@ func InstallNightgaugePlugin(ctx context.Context, run *OpenCodeRun, outputFile, 
 	run.Env[openCodeConfigContentEnvVar] = content
 	run.Env["OPENCODE_DISABLE_PROJECT_CONFIG"] = "1"
 	run.Env[opencodeplugin.EnvPluginPath] = entry
+	run.PluginVersion = opencodeplugin.PluginVersion
 
 	if runID == "" {
 		return nil

@@ -24,7 +24,7 @@ import (
 
 func TestCompactFeaturePlanning_FitsBudget(t *testing.T) {
 	_, compact := renderStagePair(t, "feature-planning")
-	got := Fit("feature-planning", compact.Content, compactTestWindow)
+	got := fitCompact(t, "feature-planning", compact.Content)
 	if !got.Fits {
 		t.Errorf("Fit(feature-planning compact, %d) = %+v, want Fits=true", compactTestWindow, got)
 	}
@@ -48,7 +48,7 @@ func TestCompactFeaturePlanning_BudgetCatchesInlinedIncludes(t *testing.T) {
 		}
 		inflated += "\n" + string(data)
 	}
-	if got := Fit("feature-planning", inflated, compactTestWindow); got.Fits {
+	if got := fitCompact(t, "feature-planning", inflated); got.Fits {
 		t.Errorf("compact + every _includes file still fits (%+v); the budget check is not discriminating", got)
 	}
 }

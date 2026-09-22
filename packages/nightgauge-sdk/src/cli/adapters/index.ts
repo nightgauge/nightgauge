@@ -29,8 +29,14 @@ export {
   buildOpenCodeArgv,
   validateOpenCodeModel,
   openCodeCredentialRefusal,
-  unwiredOpenCodeRunConfigProvider,
 } from "./OpenCodeAdapter.js";
+export {
+  createOpenCodeRunConfigProvider,
+  parseOpenCodeConfigVerbOutput,
+  OPENCODE_CONFIG_VERB_TIMEOUT_MS,
+} from "./opencodeRunConfig.js";
+export type { OpenCodeRunConfigProviderOptions } from "./opencodeRunConfig.js";
+export { OpenCodeHandshakeWatch, OPENCODE_PLUGIN_HANDSHAKE_MARKER } from "./opencodeHandshake.js";
 export type {
   OpenCodeAdapterOptions,
   OpenCodeRunConfig,

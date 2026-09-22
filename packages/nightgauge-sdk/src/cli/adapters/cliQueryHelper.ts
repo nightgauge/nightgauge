@@ -8,6 +8,7 @@
  * @see Issue #627 - Extract ICliAdapter interface & unify types
  * @see Issue #1051 - Add positional prompt delivery and Gemini stream-json support
  * @see Issue #1637 - The opencode branch: process group, curated env, stream classification
+ * @see Issue #1804 - The opencode branch verifies the plugin handshake
  */
 
 import { spawn } from "node:child_process";
@@ -21,7 +22,7 @@ import type {
   SDKQueryOptions,
 } from "../../orchestrator/StageExecutor.js";
 import type { NightgaugeAdapter } from "./ICliAdapter.js";
-import type { OpenCodeRunConfig } from "./OpenCodeAdapter.js";
+import type { OpenCodeRunConfig, OpenCodeRunConfigRequest } from "./OpenCodeAdapter.js";
 import { applyCodexSandboxProfile } from "./codexSandbox.js";
 import {
   OPENCODE_CONFIG_CONTENT_ENV,
@@ -33,6 +34,7 @@ import {
 import { AdapterError } from "./errors.js";
 import { openCodeProviderEnv } from "./opencodeCatalog.js";
 import { classifyOpenCodeRun, openCodeRedactor, type OpenCodeHelper } from "./opencodeStream.js";
+import { OpenCodeHandshakeWatch, openCodeHandshakeFromEnv } from "./opencodeHandshake.js";
 import {
   summarizeCodexJsonOutput,
   summarizeGeminiStreamJsonOutput,
@@ -399,10 +401,19 @@ export function createCliQueryFn(options: {
 export interface OpenCodeQueryContext {
   /** The dispatched `<provider>/<model>`, already checked. */
   model: string;
-  /** The absolute worktree the run config was built for, and the run's --dir and cwd. */
+  /** The absolute worktree a query runs in when its options name no cwd. */
   worktree: string;
+  /** The stage a query runs when its options name none. */
   stage?: string;
-  runConfig: OpenCodeRunConfig;
+  /**
+   * Obtains and checks one query's run config (`nightgauge opencode config`
+   * by default), before anything is spawned.
+   */
+  runConfig: (request: Omit<OpenCodeRunConfigRequest, "repo">) => Promise<OpenCodeRunConfig>;
+  /** The `opencode run` argv for a worktree. */
+  argv: (worktree: string) => string[];
+  /** Deletes a per-run root (`nightgauge opencode cleanup`). */
+  cleanRunRoot: (runId: string) => Promise<void>;
   /** The environment the child's is curated from. */
   parentEnv: NodeJS.ProcessEnv;
   /** Spawns processes; default `node:child_process` spawn. */
@@ -438,6 +449,38 @@ function killGroup(pid: number | undefined, signal: NodeJS.Signals): void {
   } catch {
     // ESRCH: the group is already gone.
   }
+}
+
+/** How long a failed handshake keeps killing the run's group (`openCodeHandshakeKillWindow`). */
+export const OPENCODE_HANDSHAKE_KILL_WINDOW_MS = 1_000;
+/** The spacing of those kills (`killProcessTreeUntilGone`'s interval). */
+const OPENCODE_HANDSHAKE_KILL_INTERVAL_MS = 15;
+
+/**
+ * Kill a process group, then keep killing it every 15 ms for
+ * {@link OPENCODE_HANDSHAKE_KILL_WINDOW_MS}: the TS twin of manager.go's
+ * killProcessTreeUntilGone. One SIGKILL can miss a grandchild the stage forks
+ * in the same instant (on macOS a fork under a pending group signal
+ * completes and joins the group), which would then keep the run's stdout
+ * open. The burst also stops once `done` says every holder of the run's
+ * stdio has exited, so it never signals a group id that could be reused.
+ */
+export function killGroupUntilGone(
+  pid: number | undefined,
+  done: () => boolean,
+  kill: (pid: number | undefined, signal: NodeJS.Signals) => void = killGroup,
+  windowMs: number = OPENCODE_HANDSHAKE_KILL_WINDOW_MS
+): void {
+  kill(pid, "SIGKILL");
+  const deadline = Date.now() + windowMs;
+  const timer = setInterval(() => {
+    if (done() || Date.now() >= deadline) {
+      clearInterval(timer);
+      return;
+    }
+    kill(pid, "SIGKILL");
+  }, OPENCODE_HANDSHAKE_KILL_INTERVAL_MS);
+  timer.unref?.();
 }
 
 /**
@@ -515,6 +558,8 @@ function runOpenCodeProcess(
     signal?: AbortSignal;
     timeoutMs?: number;
     maxOutput?: number;
+    /** Sees each complete stdout line as it arrives; returning true kills the group at once. */
+    onStdoutLine?: (line: string) => boolean;
   }
 ): Promise<ProcessResult> {
   return new Promise((resolvePromise, reject) => {
@@ -552,7 +597,16 @@ function runOpenCodeProcess(
 
     child.stdout?.setEncoding("utf-8");
     child.stderr?.setEncoding("utf-8");
+    let partial = "";
+    let closed = false;
     child.stdout?.on("data", (chunk: string) => {
+      if (opts.onStdoutLine) {
+        const lines = (partial + chunk).split("\n");
+        partial = lines.pop() ?? "";
+        for (const line of lines) {
+          if (opts.onStdoutLine(line)) killGroupUntilGone(child.pid, () => closed);
+        }
+      }
       if (opts.maxOutput !== undefined && stdout.length + chunk.length > opts.maxOutput) {
         overflow = true;
         return;
@@ -571,6 +625,10 @@ function runOpenCodeProcess(
       reject(err);
     });
     child.on("close", (code) => {
+      closed = true;
+      if (opts.onStdoutLine && partial !== "" && opts.onStdoutLine(partial)) {
+        killGroup(child.pid, "SIGKILL");
+      }
       if (timer) clearTimeout(timer);
       if (grace) clearTimeout(grace);
       opts.signal?.removeEventListener("abort", onAbort);
@@ -618,26 +676,79 @@ function helperEnv(stageEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
  */
 async function* openCodeQuery(
   command: string,
-  args: readonly string[],
+  _args: readonly string[],
   run: OpenCodeQueryContext,
   queryOptions: SDKQueryOptions
 ): AsyncGenerator<SDKMessage> {
-  const { model, worktree, stage, runConfig } = run;
+  const { model } = run;
   const spawnFn = run.spawn ?? spawn;
   const cwd = queryOptions.options?.cwd;
-  if (cwd !== undefined && resolvePath(cwd) !== worktree) {
+  const worktree = cwd !== undefined ? resolvePath(cwd) : run.worktree;
+  const stage = queryOptions.options?.stage ?? run.stage;
+  const maxTurns = queryOptions.options?.maxTurns;
+  const runId = queryOptions.options?.runId;
+  const skillDir = queryOptions.options?.skillDir;
+  // The per-run config is the query's own: its stage, its turn budget and its
+  // run's identity reach the verb, as the Go dispatch's RunOptions reach
+  // PrepareRunRoot (#1648). A refusal here spawns nothing.
+  const runConfig = await run.runConfig({
+    model,
+    worktree,
+    ...(stage !== undefined && { stage }),
+    ...(maxTurns !== undefined && { maxTurns }),
+    ...(runId !== undefined && { runId }),
+    ...(skillDir !== undefined && { skillDir }),
+  });
+  // A root the verb minted for this query alone (no run identity to share)
+  // is deleted when the query ends, whatever its outcome; a run's shared
+  // root is deleted when the run ends (PipelineOrchestrator.run), as the Go
+  // scheduler deletes it at every terminal outcome (ADR-022 § 22).
+  const mintedRoot = runConfig.runId !== runId;
+  try {
+    yield* openCodeStage(command, run, queryOptions, { worktree, stage, runConfig, spawnFn });
+  } finally {
+    if (mintedRoot) {
+      await run.cleanRunRoot(runConfig.runId).catch((err: unknown) => {
+        console.warn(
+          `[opencode-adapter] the per-run root of run ${runConfig.runId} could not be deleted: ` +
+            (err instanceof Error ? err.message : String(err))
+        );
+      });
+    }
+  }
+}
+
+/** One opencode stage under an obtained run config: spawn, verify, classify. */
+async function* openCodeStage(
+  command: string,
+  run: OpenCodeQueryContext,
+  queryOptions: SDKQueryOptions,
+  q: { worktree: string; stage?: string; runConfig: OpenCodeRunConfig; spawnFn: SpawnFn }
+): AsyncGenerator<SDKMessage> {
+  const { model } = run;
+  const { worktree, stage, runConfig, spawnFn } = q;
+  // The binary the verb vetted, and the argv for this query's worktree.
+  const spawnCommand = runConfig.binary || command;
+  const spawnArgs = run.argv(worktree);
+  const signal = queryOptions.options?.abortSignal;
+  // The run config was checked to carry the handshake (checkRunConfig).
+  const handshake = openCodeHandshakeFromEnv(runConfig.env, runConfig.pluginVersion);
+  if (handshake === undefined) {
     throw new AdapterError(
-      `the OpenCode run config was built for ${worktree}, not ${resolvePath(cwd)}: create the ` +
-        "query function for the worktree the stage runs in",
+      "the OpenCode run config carries no plugin handshake, so the run could not be verified",
       "CONFIG_INVALID",
       "OpenCode"
     );
   }
-  const signal = queryOptions.options?.abortSignal;
+  const watch = new OpenCodeHandshakeWatch(handshake);
   // A fresh value per spawn, never logged and never on argv (ADR-022 § 18).
   const password = randomBytes(24).toString("base64url");
   const env: NodeJS.ProcessEnv = {
-    ...curateOpenCodeChildEnv(run.parentEnv, model, runConfig.env),
+    ...curateOpenCodeChildEnv(
+      withholdInherited(run.parentEnv, runConfig.envWithhold),
+      model,
+      runConfig.env
+    ),
     [OPENCODE_CONFIG_CONTENT_ENV]: runConfig.configContent,
     [OPENCODE_SERVER_PASSWORD_ENV]: password,
     NIGHTGAUGE_ADAPTER: "opencode",
@@ -646,14 +757,22 @@ async function* openCodeQuery(
     ...(stage !== undefined && { NIGHTGAUGE_STAGE: stage }),
   };
 
-  const result = await runOpenCodeProcess(spawnFn, command, args, {
+  const result = await runOpenCodeProcess(spawnFn, spawnCommand, spawnArgs, {
     cwd: worktree,
     env,
     stdin: queryOptions.prompt,
     signal,
+    onStdoutLine: (line) => watch.observe(line),
   });
   if (result.aborted) {
     throw new Error("opencode query aborted: its process group was killed");
+  }
+  // The plugin handshake (#1804, manager.go's twin): a run whose plugin did
+  // not load, loaded late or left a foreign sentinel fails, whatever its exit
+  // code, before anything it printed is read as a result.
+  const handshakeFailure = watch.finish();
+  if (handshakeFailure !== undefined) {
+    throw new AdapterError(handshakeFailure, "VERSION_MISMATCH", "OpenCode");
   }
 
   // The values of the secrets the child held are removed from every line it
@@ -673,7 +792,7 @@ async function* openCodeQuery(
     exitCode: result.code,
     allowedTools: queryOptions.options?.allowedTools,
     dispatched: model,
-    fold: openCodeHelper(spawnFn, command, runConfig.runDir, env, signal),
+    fold: openCodeHelper(spawnFn, spawnCommand, runConfig.runDir, env, signal),
     redact: openCodeRedactor(secrets),
   });
 
@@ -707,6 +826,25 @@ async function* openCodeQuery(
     usage_partial: summary.usagePartial,
     ...(summary.sessionId !== undefined && { session_id: summary.sessionId }),
   };
+}
+
+/**
+ * `parentEnv` less every variable `nightgauge opencode config` says the spawn
+ * must not inherit (`env_withhold`), applied before the child's own curation
+ * as the Go manager applies OpenCodeWithholdsEnv.
+ */
+function withholdInherited(
+  parentEnv: NodeJS.ProcessEnv,
+  withhold: OpenCodeRunConfig["envWithhold"]
+): NodeJS.ProcessEnv {
+  if (withhold === undefined) return parentEnv;
+  const names = new Set(withhold.names);
+  const kept: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(parentEnv)) {
+    if (names.has(name) || withhold.prefixes.some((p) => name.startsWith(p))) continue;
+    kept[name] = value;
+  }
+  return kept;
 }
 
 /**

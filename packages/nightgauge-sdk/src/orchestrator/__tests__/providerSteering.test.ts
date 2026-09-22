@@ -38,7 +38,8 @@ describe("systemPromptPresetForAdapter (#4028)", () => {
     // opencode never receives the claude_code preset, even when its model is
     // Anthropic's (ADR-022): steering here is keyed by the HOST ADAPTER, never
     // by the resolved provider — the OpenCode CLI does not consume this preset
-    // and gets its guidance from the AGENTS.md file #1626 provisions instead.
+    // and gets its guidance from the per-run config's `instructions` #1626
+    // provisions instead.
     // This function takes no model parameter, so "regardless of model" holds
     // for every model an opencode run could dispatch to, cloud or local.
     expect(systemPromptPresetForAdapter("opencode")).toBeUndefined();

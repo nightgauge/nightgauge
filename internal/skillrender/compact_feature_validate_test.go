@@ -29,7 +29,7 @@ const (
 
 func TestCompactFeatureValidate_FitsBudget(t *testing.T) {
 	_, compact := renderStagePair(t, "feature-validate")
-	got := Fit("feature-validate", compact.Content, compactTestWindow)
+	got := fitCompact(t, "feature-validate", compact.Content)
 	if !got.Fits {
 		t.Errorf("Fit(feature-validate compact, %d) = %+v, want Fits=true", compactTestWindow, got)
 	}

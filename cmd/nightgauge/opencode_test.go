@@ -151,7 +151,7 @@ func TestOpenCodeConfigVerbShape(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &fields); err != nil {
 		t.Fatalf("the verb's output is not a JSON object: %v\n%s", err, out)
 	}
-	for _, key := range []string{"schema_version", "config_content", "env", "env_withhold", "plugin_dir", "run_dir", "non_loopback"} {
+	for _, key := range []string{"schema_version", "config_content", "env", "env_withhold", "plugin_dir", "run_dir", "non_loopback", "binary", "plugin_version"} {
 		if _, ok := fields[key]; !ok {
 			t.Errorf("the verb's output has no %q:\n%s", key, out)
 		}

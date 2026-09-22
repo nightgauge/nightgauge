@@ -1,6 +1,6 @@
 /**
  * OpenCodeAdapter (#1637): registration, the argv the Go adapter emits, the
- * inert-until-#1648 run config, the fail-closed version floor, the model and
+ * run config's checks, the fail-closed version floor, the model and
  * credential checks, the child environment a real spawn gets, the redaction
  * of stderr and of the model's text, and killing the run's process group on
  * abort and when this process exits or is interrupted.
@@ -17,7 +17,7 @@ import {
 } from "node:fs";
 import { spawn as spawnProcess } from "node:child_process";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -56,7 +56,7 @@ afterEach(() => {
  * verb output, not test-only additions; a fixture missing them let the SDK's
  * allowlist gap in each pass unnoticed).
  */
-function runConfig(root: string): OpenCodeRunConfig {
+function runConfig(root: string, binary = "/nonexistent/bin/opencode"): OpenCodeRunConfig {
   const env: Record<string, string> = {
     HOME: join(root, "home"),
     XDG_CONFIG_HOME: join(root, "config"),
@@ -91,8 +91,24 @@ function runConfig(root: string): OpenCodeRunConfig {
     configContent: JSON.stringify({ model: LOCAL_MODEL, share: "disabled" }),
     env,
     runDir: root,
+    pluginVersion: "1",
+    binary,
+    envWithhold: { prefixes: ["OPENCODE_"], names: [] },
+    runId: basename(root),
   };
 }
+
+/** A stand-in opencode that prints the research sample's stream. */
+function researchStub(): string {
+  const bin = writeStub(
+    tmp("oc-stub-"),
+    `  cat '${join(TESTDATA, "opencode_stream_research_sample.jsonl")}'`
+  );
+  return join(bin, "opencode");
+}
+
+/** The verb's cleanup stand-in: a fixture root is left to the test's tmp sweep. */
+const noClean = async () => {};
 
 function providerFor(config: OpenCodeRunConfig): OpenCodeRunConfigProvider {
   return async () => config;
@@ -116,12 +132,20 @@ function writeStub(dir: string, runBody: string): string {
       { info: { role: "assistant", providerID: "lmstudio", modelID: "qwen/qwen3.8-27b" } },
     ],
   });
+  // Like the real plugin's init, `run` writes the handshake sentinel before
+  // any event (dated in the past, as a plugin that loaded before every tool
+  // call would have), unless NO_SENTINEL is set.
   const script = `#!/bin/sh
 case "$1" in
 run)
   printf '%s\\n' "$@" > '${dir}/argv'
   env > '${dir}/env'
   cat > '${dir}/stdin'
+  if [ -z "$NO_SENTINEL" ] && [ -n "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL" ]; then
+    mkdir -p "$(dirname "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL")"
+    printf '{"nonce":"%s","plugin_version":"1","hooks":[]}' "$NIGHTGAUGE_OPENCODE_PLUGIN_NONCE" > "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL"
+    touch -t 202001010000 "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL"
+  fi
 ${runBody}
   ;;
 export)
@@ -137,6 +161,23 @@ esac
   writeFileSync(path, script);
   chmodSync(path, 0o755);
   return bin;
+}
+
+/**
+ * Create the query function and run one query: the run config is obtained
+ * per query, so a refused config surfaces here, before anything is spawned.
+ */
+async function runOnce(
+  adapter: OpenCodeAdapter,
+  opts: { cwd: string; stage?: string; skillDir?: string }
+): Promise<SDKMessage[]> {
+  const query = await adapter.createQueryFunction({ cwd: opts.cwd, stage: opts.stage });
+  return drain(
+    query({
+      prompt: "p",
+      options: { cwd: opts.cwd, ...(opts.skillDir !== undefined && { skillDir: opts.skillDir }) },
+    })
+  );
 }
 
 async function drain(gen: AsyncGenerator<SDKMessage>): Promise<SDKMessage[]> {
@@ -213,19 +254,79 @@ describe("OpenCodeAdapter argv (#1637)", () => {
   });
 });
 
-describe("OpenCodeAdapter without a run config provider (#1637)", () => {
-  it("createQueryFunction fails CONFIG_INVALID naming #1648 and spawns nothing", async () => {
+describe("OpenCodeAdapter run config (#1637, #1648)", () => {
+  it("by default obtains it from `nightgauge opencode config`, and spawns nothing when that fails", async () => {
     const spawn = vi.fn();
     const adapter = new OpenCodeAdapter({
-      env: { PATH: "/usr/bin" },
+      env: { PATH: "/usr/bin", NIGHTGAUGE_BIN: join(tmp("oc-nobin-"), "nightgauge") },
       model: LOCAL_MODEL,
       spawn: spawn as never,
     });
-    const err = await adapter.createQueryFunction({ cwd: tmp("oc-wt-") }).catch((e: unknown) => e);
+    const err = await runOnce(adapter, {
+      cwd: tmp("oc-wt-"),
+      stage: "feature-dev",
+      skillDir: join(tmp("oc-skills-"), "skills", "nightgauge-feature-dev"),
+    }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(AdapterError);
-    expect((err as AdapterError).category).toBe("CONFIG_INVALID");
-    expect((err as AdapterError).message).toContain("#1648");
+    expect((err as AdapterError).category).toBe("BINARY_NOT_FOUND");
+    expect((err as AdapterError).message).toContain("nightgauge opencode config");
     expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("refuses a run config without the plugin handshake", async () => {
+    for (const drop of [
+      "NIGHTGAUGE_OPENCODE_PLUGIN_NONCE",
+      "NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL",
+      "NIGHTGAUGE_OPENCODE_PLUGIN_PATH",
+    ]) {
+      const config = runConfig(tmp("oc-run-"));
+      const env = { ...config.env };
+      delete env[drop];
+      const adapter = new OpenCodeAdapter({
+        env: {},
+        model: LOCAL_MODEL,
+        runConfigProvider: providerFor({ ...config, env }),
+        runRootCleaner: noClean,
+      });
+      await expect(runOnce(adapter, { cwd: tmp("oc-wt-") }), drop).rejects.toThrow(
+        new RegExp(`it sets no ${drop}`)
+      );
+    }
+    const adapter = new OpenCodeAdapter({
+      env: {},
+      model: LOCAL_MODEL,
+      runConfigProvider: providerFor({ ...runConfig(tmp("oc-run-")), pluginVersion: "" }),
+      runRootCleaner: noClean,
+    });
+    await expect(runOnce(adapter, { cwd: tmp("oc-wt-") })).rejects.toThrow(
+      /names no plugin version/
+    );
+  });
+
+  it("refuses a run config without the vetted binary, the withheld set or the run id naming its root", async () => {
+    const cases: Array<[string, (c: OpenCodeRunConfig) => unknown, RegExp]> = [
+      ["no binary", ({ binary: _b, ...c }) => c, /binary is not an absolute path/],
+      [
+        "a relative binary",
+        (c) => ({ ...c, binary: "opencode" }),
+        /binary is not an absolute path/,
+      ],
+      ["no envWithhold", ({ envWithhold: _w, ...c }) => c, /withheld-variable set/],
+      ["no runId", ({ runId: _r, ...c }) => c, /run id does not name its run directory/],
+      ["another runId", (c) => ({ ...c, runId: "other" }), /run id does not name/],
+    ];
+    for (const [name, mutate, want] of cases) {
+      const spawn = vi.fn();
+      const adapter = new OpenCodeAdapter({
+        env: {},
+        model: LOCAL_MODEL,
+        spawn: spawn as never,
+        runConfigProvider: async () => mutate(runConfig(tmp("oc-run-"))) as OpenCodeRunConfig,
+        runRootCleaner: noClean,
+      });
+      await expect(runOnce(adapter, { cwd: tmp("oc-wt-") }), name).rejects.toThrow(want);
+      expect(spawn, name).not.toHaveBeenCalled();
+    }
   });
 
   it("a run config provider that returns nothing usable is refused too", async () => {
@@ -235,8 +336,9 @@ describe("OpenCodeAdapter without a run config provider (#1637)", () => {
       model: LOCAL_MODEL,
       spawn: spawn as never,
       runConfigProvider: async () => ({}) as OpenCodeRunConfig,
+      runRootCleaner: noClean,
     });
-    await expect(adapter.createQueryFunction({ cwd: tmp("oc-wt-") })).rejects.toMatchObject({
+    await expect(runOnce(adapter, { cwd: tmp("oc-wt-") })).rejects.toMatchObject({
       category: "CONFIG_INVALID",
     });
     expect(spawn).not.toHaveBeenCalled();
@@ -253,7 +355,7 @@ describe("OpenCodeAdapter without a run config provider (#1637)", () => {
         env: { ...config.env, OPENCODE_PERMISSION: '{"*":"allow"}' },
       }),
     });
-    await expect(adapter.createQueryFunction({ cwd: tmp("oc-wt-") })).rejects.toThrow(
+    await expect(runOnce(adapter, { cwd: tmp("oc-wt-") })).rejects.toThrow(
       /OPENCODE_PERMISSION, which is not a run variable/
     );
   });
@@ -270,11 +372,11 @@ describe("OpenCodeAdapter without a run config provider (#1637)", () => {
     const adapter = new OpenCodeAdapter({
       env: {},
       model: LOCAL_MODEL,
-      runConfigProvider: providerFor(runConfig(root)),
+      runConfigProvider: providerFor(runConfig(root, researchStub())),
+      runRootCleaner: noClean,
     });
-    await expect(adapter.createQueryFunction({ cwd: tmp("oc-wt-") })).resolves.toBeInstanceOf(
-      Function
-    );
+    const messages = await runOnce(adapter, { cwd: tmp("oc-wt-") });
+    expect(messages.some((m) => m.type === "result")).toBe(true);
   });
 
   // A NIGHTGAUGE_OPENCODE_PLUGIN_PATH/_SENTINEL outside the run's own root is
@@ -294,7 +396,7 @@ describe("OpenCodeAdapter without a run config provider (#1637)", () => {
           env: { ...config.env, [name]: "/etc/passwd" },
         }),
       });
-      await expect(adapter.createQueryFunction({ cwd: tmp("oc-wt-") }), name).rejects.toThrow(
+      await expect(runOnce(adapter, { cwd: tmp("oc-wt-") }), name).rejects.toThrow(
         new RegExp(`its ${name} is not an absolute path in the run's root`)
       );
     }
@@ -315,7 +417,7 @@ describe("OpenCodeAdapter without a run config provider (#1637)", () => {
   // "OpenCodeAdapter spawn" describe block below.
   it("accepts NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK, an operator directory path, without forwarding it", async () => {
     const root = tmp("oc-run-");
-    const config = runConfig(root);
+    const config = runConfig(root, researchStub());
     const adapter = new OpenCodeAdapter({
       env: {},
       model: LOCAL_MODEL,
@@ -327,9 +429,8 @@ describe("OpenCodeAdapter without a run config provider (#1637)", () => {
         },
       }),
     });
-    await expect(adapter.createQueryFunction({ cwd: tmp("oc-wt-") })).resolves.toBeInstanceOf(
-      Function
-    );
+    const messages = await runOnce(adapter, { cwd: tmp("oc-wt-") });
+    expect(messages.some((m) => m.type === "result")).toBe(true);
   });
 });
 
@@ -409,6 +510,7 @@ describe("OpenCodeAdapter model check (#1637)", () => {
         model,
         spawn: spawn as never,
         runConfigProvider: provider,
+        runRootCleaner: noClean,
       });
       await expect(adapter.createQueryFunction({ cwd: tmp("oc-wt-") })).rejects.toMatchObject({
         category: "CONFIG_INVALID",
@@ -442,11 +544,12 @@ describe("OpenCodeAdapter spawn (#1637)", () => {
     const dir = tmp("oc-stub-");
     const bin = writeStub(dir, runBody);
     const worktree = tmp("oc-wt-");
-    const config = runConfig(tmp("oc-run-"));
+    const config = runConfig(tmp("oc-run-"), join(bin, "opencode"));
     const adapter = new OpenCodeAdapter({
       env: { ...PARENT, PATH: `${bin}:${process.env.PATH}`, ...extraEnv },
       model,
       runConfigProvider: providerFor(config),
+      runRootCleaner: noClean,
     });
     const query = await adapter.createQueryFunction({ cwd: worktree, stage: "feature-dev" });
     return { dir, worktree, config, query };
@@ -521,7 +624,7 @@ describe("OpenCodeAdapter spawn (#1637)", () => {
     const dir = tmp("oc-stub-");
     const bin = writeStub(dir, `  cat '${research}'`);
     const worktree = tmp("oc-wt-");
-    const config = runConfig(tmp("oc-run-"));
+    const config = runConfig(tmp("oc-run-"), join(bin, "opencode"));
     const adapter = new OpenCodeAdapter({
       env: { ...PARENT, PATH: `${bin}:${process.env.PATH}` },
       model: LOCAL_MODEL,
@@ -648,6 +751,7 @@ const adapter = new OpenCodeAdapter({
   env: { PATH: process.env.STUB_PATH, HOME: process.env.HOME },
   model: ${JSON.stringify(LOCAL_MODEL)},
   runConfigProvider: async () => config,
+  runRootCleaner: async () => {},
 });
 const query = await adapter.createQueryFunction({ cwd: worktree, stage: "feature-dev" });
 if (mode === "handled") process.on("SIGINT", () => {});
@@ -704,7 +808,7 @@ process.kill(process.pid, "SIGINT");
           HOME: process.env.HOME,
           ADAPTER_URL,
           STUB_PATH: `${bin}:${process.env.PATH}`,
-          RUN_CONFIG: JSON.stringify(runConfig(tmp("oc-run-"))),
+          RUN_CONFIG: JSON.stringify(runConfig(tmp("oc-run-"), join(bin, "opencode"))),
         },
         stdio: ["ignore", "pipe", "pipe"],
       }
