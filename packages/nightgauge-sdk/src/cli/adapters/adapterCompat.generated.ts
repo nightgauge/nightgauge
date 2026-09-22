@@ -27,15 +27,19 @@ export interface AdapterCompatEntry {
 }
 
 export type AdapterCompatKey =
-  "claude-headless" | "codex" | "copilot" | "gemini" | "grok" | "opencode";
+  | "claude-headless"
+  | "codex"
+  | "copilot"
+  | "gemini"
+  | "grok"
+  | "opencode";
 
-export const ADAPTER_COMPAT: Readonly<Record<AdapterCompatKey, AdapterCompatEntry>> = Object.freeze(
-  {
+export const ADAPTER_COMPAT: Readonly<Record<AdapterCompatKey, AdapterCompatEntry>> =
+  Object.freeze({
     "claude-headless": { minVersion: "2.1.223", maxTested: "2.1.258", floorPolicy: "warn" },
-    codex: { minVersion: "0.111.0", maxTested: "0.145.0", floorPolicy: "warn" },
-    copilot: { minVersion: "", maxTested: "", floorPolicy: "warn" },
-    gemini: { minVersion: "0.29.0", maxTested: "", floorPolicy: "warn" },
-    grok: { minVersion: "1.0.0", maxTested: "1.0.4", floorPolicy: "warn" },
-    opencode: { minVersion: "1.18.30", maxTested: "1.18.30", floorPolicy: "fail_closed" },
-  }
-);
+    "codex": { minVersion: "0.111.0", maxTested: "0.145.0", floorPolicy: "warn" },
+    "copilot": { minVersion: "", maxTested: "", floorPolicy: "warn" },
+    "gemini": { minVersion: "0.29.0", maxTested: "", floorPolicy: "warn" },
+    "grok": { minVersion: "1.0.0", maxTested: "1.0.4", floorPolicy: "warn" },
+    "opencode": { minVersion: "1.18.30", maxTested: "1.18.30", floorPolicy: "fail_closed" },
+  });
