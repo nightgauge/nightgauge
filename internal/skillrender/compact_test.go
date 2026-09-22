@@ -87,12 +87,12 @@ func TestCompactProfile_FallsBackToFullWithWarning(t *testing.T) {
 // ─── Marker parity ──────────────────────────────────────────────────────────
 
 // stagesWithCompactProfile lists every (stage, root) this repository ships a
-// compact profile for. pr-merge is the only one #1654 builds; a future
-// consumer (#1660-#1664) adds its stage here.
+// compact profile for. #1654 built pr-merge; each consumer (#1660-#1664) adds
+// its stage here.
 func stagesWithCompactProfile(t *testing.T) map[string]string {
 	t.Helper()
 	root := realSkillsRoot(t)
-	return map[string]string{"pr-merge": root}
+	return map[string]string{"pr-merge": root, "issue-pickup": root, "feature-validate": root}
 }
 
 // TestCompactMarkerParity is the mechanical check AC2 asks for: every
