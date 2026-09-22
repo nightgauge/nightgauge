@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/models"
 )
 
 // Stage execution time budgets (#73).
@@ -92,23 +94,56 @@ func stageTimeoutModelScale(model string) float64 {
 	}
 }
 
+// openCodeAdapterName is the adapter id (execution/adapters/registry.go)
+// ResolveStageTimeout keys the local-provider factor on.
+const openCodeAdapterName = "opencode"
+
+// openCodeLocalTimeoutFactor replaces stageTimeoutModelScale's family match
+// when adapter is opencode and model resolves to a local provider (lm-studio,
+// ollama): research on a local Qwen3.8 27B saw a 76s cold prefill and ~8
+// tok/s decode (#1646) — timing nothing in the Claude-tier scale accounts
+// for, and a stage this slow is healthy, not stalled. Deliberately generous,
+// like the base ceilings themselves, and bounded by openCodeLocalTimeoutCap so
+// a genuinely wedged local run is still killed.
+const openCodeLocalTimeoutFactor = 3.0
+
+// openCodeLocalTimeoutCap is the absolute ceiling an OpenCode local-provider
+// stage's timeout reaches, whatever the base or factor (#1646). A future
+// #1652 wall-clock budget, once its accessor exists, further tightens this
+// per run when configured below it — not wired here; #1652 depends on this
+// issue's row existing first (see stage_timeout_test.go).
+const openCodeLocalTimeoutCap = 4 * time.Hour
+
 // ResolveStageTimeout returns the last-resort context deadline for a stage
-// given the resolved model. The result is stage-aware and model-aware so a
-// frontier-mode Fable `feature-dev` run (100 min × 2.0 = 200 min) is never
-// killed by a deadline tuned for Opus-era Sonnet runtimes, while a mechanical
-// Haiku `pr-create` keeps a tight 45-minute bound.
+// given the resolved adapter and model. The result is stage-, adapter- and
+// model-aware so a frontier-mode Fable `feature-dev` run (100 min × 2.0 = 200
+// min) is never killed by a deadline tuned for Opus-era Sonnet runtimes, a
+// mechanical Haiku `pr-create` keeps a tight 45-minute bound, and an OpenCode
+// stage on a local model server gets openCodeLocalTimeoutFactor's wider,
+// capped head-room instead of the Claude-tier family scale, which a local
+// model id never matches anyway.
 //
 // An operator can override any stage's ceiling without recompiling via
 // `NIGHTGAUGE_STAGE_TIMEOUT_<STAGE>` (minutes, hyphens → underscores, e.g.
 // `NIGHTGAUGE_STAGE_TIMEOUT_FEATURE_DEV=240`). The override is taken verbatim —
-// it is not model-scaled — so it acts as an explicit absolute ceiling.
-func ResolveStageTimeout(stage, model string) time.Duration {
+// it is not model- or adapter-scaled — so it acts as an explicit absolute
+// ceiling, and it still wins over the local cap.
+func ResolveStageTimeout(stage, adapter, model string) time.Duration {
 	if override, ok := stageTimeoutEnvOverride(stage); ok {
 		return override
 	}
 	base, ok := stageTimeoutBase[stage]
 	if !ok {
 		base = defaultStageTimeout
+	}
+	if adapter == openCodeAdapterName {
+		if provider, _, _ := models.ParseOpenCodeModel(model); models.IsLocalProvider(provider) {
+			d := time.Duration(float64(base) * openCodeLocalTimeoutFactor)
+			if d > openCodeLocalTimeoutCap {
+				d = openCodeLocalTimeoutCap
+			}
+			return d
+		}
 	}
 	return time.Duration(float64(base) * stageTimeoutModelScale(model))
 }
