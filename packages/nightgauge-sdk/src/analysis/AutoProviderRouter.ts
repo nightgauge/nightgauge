@@ -52,7 +52,7 @@ import {
 } from "./auto-router-types.js";
 import { defaultRegistry } from "../cli/adapters/AdapterRegistry.js";
 import type { OrchestrationCapability } from "../cli/adapters/ICliAdapter.js";
-import { resolveModelForAdapter } from "../eval/modelRegistry.js";
+import { parseOpenCodeModel, resolveModelForAdapter } from "../eval/modelRegistry.js";
 
 /**
  * Per-adapter context window in tokens, used by the context-window sub-score.
@@ -71,9 +71,13 @@ const ADAPTER_CONTEXT_WINDOW_TOKENS: Record<RouterExecutionAdapter, number> = {
   ollama: 32_000,
   copilot: 64_000,
   grok: 500_000,
-  // Conservative placeholder: OpenCode's window is the resolved model's, which
-  // may be a small local model. #1645 replaces it with the window from the
-  // resolved model descriptor.
+  // Fallback ONLY: used when the caller supplies neither
+  // `opencode_context_window` nor a registry-resolvable `opencode_model`
+  // (#1645) — e.g. an unresolved local descriptor, which is the fail-open
+  // condition the Go OverlayKeys cascade also uses (ADR 016 §2). OpenCode's
+  // real window is the resolved model's, which may be a small local model or
+  // a large hosted one; this constant is deliberately conservative for the
+  // "we truly do not know" case, not a substitute for resolving it.
   opencode: 32_000,
 };
 
@@ -269,6 +273,7 @@ export class AutoProviderRouter {
 
     const stageCategory = categorizeStage(stage);
     const expectedTokens = STAGE_EXPECTED_TOKENS[stage] ?? DEFAULT_STAGE_EXPECTED_TOKENS;
+    const opencodeWindow = resolveOpenCodeContextWindow(ctx);
     const budgetPressure = computeBudgetPressureFactor(
       ctx.remaining_budget_usd,
       ctx.stage_estimated_cost_usd
@@ -286,7 +291,7 @@ export class AutoProviderRouter {
     for (const adapter of candidates) {
       const cost = scoreCost(adapter, ctx.recent_history) * budgetPressure;
       const capability = CAPABILITY_MATRIX[stageCategory][adapter] ?? 0.5;
-      const context = scoreContextWindow(adapter, expectedTokens);
+      const context = scoreContextWindow(adapter, expectedTokens, opencodeWindow);
       // Workflow sub-score is `0` for non-workflow routing, so it contributes
       // nothing when `weights.workflow` is also `0` — the non-workflow path is
       // byte-for-byte identical to the pre-#3912 behaviour.
@@ -451,13 +456,58 @@ function scoreWorkflow(adapter: RouterExecutionAdapter): number {
  * stage volume (ratio ≥ 1), linear penalty below. Saturates intentionally so
  * giant windows (Gemini 1M) do not dominate the score for stages that already
  * fit comfortably in 200K.
+ *
+ * `opencodeWindow` carries the RESOLVED window for `opencode`'s dispatch
+ * model (#1645, ADR 023 Q10) — the caller-supplied `opencode_context_window`
+ * when set, else a registry lookup by `opencode_model`, resolved by
+ * {@link resolveOpenCodeContextWindow}. Every other adapter is unaffected:
+ * its window still comes straight from the static table.
  */
-function scoreContextWindow(adapter: RouterExecutionAdapter, expectedTokens: number): number {
-  const window = ADAPTER_CONTEXT_WINDOW_TOKENS[adapter];
+function scoreContextWindow(
+  adapter: RouterExecutionAdapter,
+  expectedTokens: number,
+  opencodeWindow?: number
+): number {
+  const window =
+    adapter === "opencode" && opencodeWindow !== undefined
+      ? opencodeWindow
+      : ADAPTER_CONTEXT_WINDOW_TOKENS[adapter];
   if (window <= 0 || expectedTokens <= 0) return 0;
   const ratio = window / expectedTokens;
   if (ratio >= 1) return 1.0;
   return Math.max(0, ratio);
+}
+
+/**
+ * Resolve the context window to score `opencode`'s dispatch against
+ * (#1645, ADR 023 Q10). Precedence:
+ *
+ *  1. `ctx.opencode_context_window` — the Go authority already resolved it
+ *     (`nightgauge opencode config --json`'s `limit.context`), the only path
+ *     that can see a local LM Studio/Ollama discovery (#1633's `ResolveLocal`
+ *     is Go-only; nothing it discovers is ever written to the registry this
+ *     SDK reads).
+ *  2. A registry lookup of `ctx.opencode_model` via `resolveModelForAdapter`
+ *     — resolves a concrete hosted id (e.g. `anthropic/<id>`, split to its
+ *     bare id by {@link providerFor}'s `opencode` handling upstream of this
+ *     call) against the static registry.
+ *  3. `undefined` — {@link scoreContextWindow} falls back to the static
+ *     `ADAPTER_CONTEXT_WINDOW_TOKENS.opencode` placeholder, unchanged from
+ *     before this issue.
+ */
+function resolveOpenCodeContextWindow(ctx: AutoRouterContext): number | undefined {
+  if (ctx.opencode_context_window !== undefined) {
+    return ctx.opencode_context_window;
+  }
+  if (ctx.opencode_model) {
+    // ADR-022's `<provider>/<id>` dispatch string never matches a bare
+    // registry id directly (e.g. "anthropic/claude-sonnet-5" vs.
+    // "claude-sonnet-5") — split it first, exactly as the Go OverlayKeys
+    // cascade does before its own registry lookup (ParseOpenCodeModel).
+    const { bareId } = parseOpenCodeModel(ctx.opencode_model);
+    return resolveModelForAdapter("opencode", bareId || ctx.opencode_model)?.context_window;
+  }
+  return undefined;
 }
 
 /**

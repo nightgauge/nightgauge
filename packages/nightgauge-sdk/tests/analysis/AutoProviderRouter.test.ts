@@ -351,6 +351,93 @@ describe("AutoProviderRouter — opencode priors (#1615)", () => {
   }
 });
 
+// ── #1645 — opencode scored by the resolved model's window (ADR 023) ────────
+
+describe("AutoProviderRouter — opencode resolved-window scoring (#1645)", () => {
+  const router = new AutoProviderRouter();
+
+  function scoreOpencode(overrides: Partial<AutoRouterContext> = {}) {
+    const ctx = makeCtx({
+      available_adapters: ["claude-headless", "opencode"],
+      confidence_threshold: 0,
+      weights: { cost: 0, capability: 0, context_window: 1, workflow: 0 },
+      ...overrides,
+    });
+    const result = router.selectForStage(ctx.stage, ctx);
+    expect(result).not.toBeNull();
+    return result!.scores!.opencode!;
+  }
+
+  it("scores a 131072-window local Qwen fixture differently from a 200000-window one", () => {
+    const small = scoreOpencode({ opencode_context_window: 131_072 });
+    const big = scoreOpencode({ opencode_context_window: 200_000 });
+    // Both saturate to 1.0 once STAGE_EXPECTED_TOKENS is comfortably covered
+    // by either window, so use a stage whose expected volume sits BETWEEN
+    // the two windows to actually see them diverge.
+    const smallOverStage = scoreOpencode({
+      stage: "feature-dev", // STAGE_EXPECTED_TOKENS["feature-dev"] = 150_000
+      opencode_context_window: 131_072,
+    });
+    const bigOverStage = scoreOpencode({
+      stage: "feature-dev",
+      opencode_context_window: 200_000,
+    });
+    expect(smallOverStage).toBeLessThan(1.0);
+    expect(bigOverStage).toBe(1.0);
+    expect(bigOverStage).toBeGreaterThan(smallOverStage);
+    // Sanity: both resolved windows differ from the static 32_000 placeholder
+    // in a way that would be indistinguishable from each other pre-#1645.
+    expect(small).toBeGreaterThan(0);
+    expect(big).toBeGreaterThan(0);
+  });
+
+  it("reverting to the static ADAPTER_CONTEXT_WINDOW_TOKENS constant would fail this assertion", () => {
+    // Pinned against the real registry id so a revert to the static 32_000
+    // placeholder changes the score and turns this red.
+    const resolved = scoreOpencode({
+      stage: "feature-dev",
+      opencode_model: "anthropic/claude-sonnet-5", // registry context_window: 1_000_000
+    });
+    const placeholderOnly = scoreOpencode({ stage: "feature-dev" }); // no override: static 32_000
+    expect(resolved).toBe(1.0);
+    expect(placeholderOnly).toBeLessThan(1.0);
+  });
+
+  it("scores the registry value for a resolvable anthropic/<id> dispatch string", () => {
+    const got = scoreOpencode({
+      stage: "feature-dev",
+      opencode_model: "anthropic/claude-sonnet-5",
+    });
+    // claude-sonnet-5's registry context_window (1_000_000) comfortably
+    // covers feature-dev's 150_000 expected tokens: saturates to 1.0.
+    expect(got).toBe(1.0);
+  });
+
+  it("falls back to the static placeholder for an unresolvable opencode_model", () => {
+    const got = scoreOpencode({
+      stage: "feature-dev",
+      opencode_model: "lmstudio/some-unknown-local-model",
+    });
+    const staticOnly = scoreOpencode({ stage: "feature-dev" });
+    expect(got).toBe(staticOnly);
+  });
+
+  it("grok still reads its fixed 500000 window, unaffected by the opencode fields", () => {
+    const ctx = makeCtx({
+      stage: "feature-dev",
+      available_adapters: ["grok", "opencode"],
+      confidence_threshold: 0,
+      weights: { cost: 0, capability: 0, context_window: 1, workflow: 0 },
+      opencode_context_window: 131_072,
+    });
+    const result = router.selectForStage(ctx.stage, ctx);
+    expect(result).not.toBeNull();
+    // grok's window (500_000) comfortably covers feature-dev's 150_000
+    // expected tokens regardless of anything opencode-specific on ctx.
+    expect(result!.scores!.grok).toBe(1.0);
+  });
+});
+
 // ── #3912 — RouterExecutionAdapter derived from NightgaugeAdapter ────────────────
 
 describe("AutoProviderRouter — RouterExecutionAdapter derivation (#3912)", () => {

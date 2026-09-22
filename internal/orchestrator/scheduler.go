@@ -5197,6 +5197,71 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			return
 		}
 
+		// Context-budget fit check (ADR 023, #1645). skillData.ContextWindow
+		// is the SAME descriptor OverlayKeys just resolved for the render
+		// above — not re-derived — so this can never disagree with what the
+		// overlay cascade actually keyed off. Zero means unknown/unresolved
+		// (a hosted model absent from the registry, or a local provider
+		// OverlayKeys could not resolve): ADR 023 §4's fail-open branch, so
+		// dispatch proceeds unchecked exactly as it did before this issue —
+		// only the branch taken is logged, so a trace can distinguish
+		// "checked and passed" from "not checked".
+		if skillData.ContextWindow > 0 {
+			fit := skillrender.Fit(string(stage), skillData.Content, skillData.ContextWindow)
+			if !fit.Fits {
+				log.Printf("#%d: stage %s context budget exceeded: estimated %d tokens against a %d-token budget (window %d, share %.2f) — attempting one re-route",
+					item.Number, stage, fit.EstimatedTokens, fit.Budget, fit.Window, fit.Share)
+				rerouted := false
+				if alt, ok := nextContextBudgetReroute(skillData.Provider, skillData.ResolvedModel, skillData.ContextWindow); ok {
+					altSkillData, altErr := skillrender.Render(skillrender.Options{
+						Stage:       string(stage),
+						Model:       alt.ID,
+						Adapter:     adapterName,
+						SkillsRoots: skillrender.DefaultRoots(workspaceRoot),
+						Warn:        func(msg string) { log.Printf("#%d: %s", item.Number, msg) },
+					})
+					if altErr == nil {
+						altFit := skillrender.Fit(string(stage), altSkillData.Content, alt.ContextWindow)
+						log.Printf("#%d: stage %s context-budget re-route: %s (window %d) -> %s (window %d), fits=%v",
+							item.Number, stage, skillData.ResolvedModel, skillData.ContextWindow, alt.ID, alt.ContextWindow, altFit.Fits)
+						if altFit.Fits {
+							model = alt.ID
+							skillData = altSkillData
+							rerouted = true
+						} else {
+							fit = altFit
+						}
+					}
+				}
+				// Bounded at exactly one hop (AC5): whether or not a
+				// candidate existed to try, a re-routed attempt that still
+				// does not fit — or no candidate at all — refuses here. This
+				// never loops back to try a second candidate, and it never
+				// retries the (stage, model) pair the FIRST Fit already
+				// rejected.
+				if !rerouted {
+					reason := fmt.Sprintf(
+						"context_window_exceeded: stage %s estimated %d tokens exceeds its %d-token budget (window %d, share %.2f)",
+						stage, fit.EstimatedTokens, fit.Budget, fit.Window, fit.Share)
+					_, workRecovered = s.refusePreDispatch(item, runtime, workspaceRoot, stage, tracer,
+						"context-budget", reason)
+					// refusePreDispatch's own return is always
+					// TerminalKindValidationError (#620's fallback for every
+					// caller); this is the first production call site that
+					// overrides it, classifying the refusal into the
+					// terminal kind #1631 declared and parked specifically
+					// for this recovery (failure_handler.go).
+					terminalFailureKind = TerminalKindContextWindowExceeded
+					return
+				}
+			} else {
+				log.Printf("#%d: stage %s context budget: fits (estimated %d tokens, budget %d, window %d, share %.2f)",
+					item.Number, stage, fit.EstimatedTokens, fit.Budget, fit.Window, fit.Share)
+			}
+		} else {
+			log.Printf("#%d: stage %s context budget: unknown-window branch (no resolved model descriptor) — dispatching unchecked", item.Number, stage)
+		}
+
 		// Platform skill resolution for paid tiers
 		var resolvedSkillContent string
 		var skillFallbackUsed bool

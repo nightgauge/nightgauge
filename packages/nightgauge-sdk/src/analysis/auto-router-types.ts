@@ -152,6 +152,27 @@ export interface AutoRouterContext {
   weights?: Partial<AutoRouterWeights>;
   /** Optional confidence threshold; default `DEFAULT_AUTO_ROUTER_CONFIDENCE_THRESHOLD`. */
   confidence_threshold?: number;
+  /**
+   * The `opencode` dispatch model, when `"opencode"` is among
+   * `available_adapters` — a registry id/tier, or an ADR-022
+   * `<provider>/<id>` dispatch string. Used to score `opencode`'s
+   * context-window sub-score against the model it will actually run instead
+   * of the static `ADAPTER_CONTEXT_WINDOW_TOKENS.opencode` placeholder
+   * (#1645, ADR 023 Q10). Ignored for every other adapter.
+   */
+  opencode_model?: string;
+  /**
+   * A pre-resolved context window for `opencode_model`, when the caller has
+   * already queried the Go authority (`nightgauge opencode config --json`'s
+   * `limit.context`) — the ONLY path that can see a local LM Studio/Ollama
+   * discovery (`ResolveLocal`, internal/models/local.go, #1633): local
+   * descriptors are discovered at dispatch time and are never written to the
+   * registry this SDK reads, so `resolveModelForAdapter` can never resolve
+   * them here. When set, this wins over a registry lookup by
+   * `opencode_model`; when unset, `opencode_model` is looked up in the
+   * registry instead (covers a concrete hosted id, e.g. `anthropic/<id>`).
+   */
+  opencode_context_window?: number;
 }
 
 /**
