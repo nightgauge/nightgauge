@@ -1677,15 +1677,12 @@ knowledge:
 
 ### Git Tracking
 
-Like repo-level knowledge, workspace knowledge can be committed to git or
-gitignored. To ignore workspace knowledge:
-
-```gitignore
-# In workspace root .gitignore
-.nightgauge/knowledge/
-```
-
-To track it, commit `.nightgauge/knowledge/` in the workspace root.
+Workspace knowledge follows the same rule as repo-level knowledge: when the
+workspace root is an initialized repository, its generated
+`.nightgauge/.gitignore` ignores `/knowledge/` by default. To commit the
+workspace knowledge tree instead, add the `!/knowledge/` rules from step 5 of
+[Adopting the knowledge base](#adopting-the-knowledge-base-in-an-existing-repository)
+below that file's `Local additions (kept on upgrade)` line.
 Workspace knowledge is separate from each repo's knowledge directories — each
 has its own git tracking decision.
 

@@ -21,6 +21,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/atomicfile"
 	"github.com/nightgauge/nightgauge/internal/flock"
 	"github.com/nightgauge/nightgauge/internal/intelligence/actualsize"
+	"github.com/nightgauge/nightgauge/internal/scaffold"
 	"gopkg.in/yaml.v3"
 )
 
@@ -737,29 +738,28 @@ func (s *OutcomeService) ensureLocalModelGitignore() error {
 // info/exclude when dir/.gitignore is tracked. It reports handled=false,
 // leaving the caller to edit the file, when dir is not in a git work tree or
 // its .gitignore is untracked (no committed state to dirty).
+//
+// The tracked check and the info/exclude resolution (common dir in a linked
+// worktree, symlinks refused) are internal/scaffold's, shared with the
+// .nightgauge/ ignore rules `config init` and `serve` ensure.
 func excludeLocallyIfTracked(dir, missing string) (bool, error) {
-	tracked := exec.Command("git", "ls-files", "--error-unmatch", "--", ".gitignore")
-	tracked.Dir = dir
-	tracked.Stdout, tracked.Stderr = io.Discard, io.Discard
-	if tracked.Run() != nil {
+	if !scaffold.IsTracked(dir, ".gitignore") {
 		return false, nil
 	}
-	rev := exec.Command("git", "rev-parse", "--path-format=absolute", "--git-common-dir", "--show-prefix")
+	rev := exec.Command("git", "rev-parse", "--show-prefix")
 	rev.Dir = dir
 	out, err := rev.Output()
 	if err != nil {
 		return false, nil
 	}
-	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
-	if len(lines) < 1 || lines[0] == "" {
+	prefix := strings.TrimSuffix(strings.TrimSpace(string(out)), "/")
+	excludePath, err := scaffold.LocalExcludePath(dir)
+	if errors.Is(err, scaffold.ErrNotGitWorkTree) {
 		return false, nil
 	}
-	commonDir := lines[0]
-	prefix := ""
-	if len(lines) > 1 {
-		prefix = strings.TrimSuffix(lines[1], "/")
+	if err != nil {
+		return true, err
 	}
-	excludePath := filepath.Join(commonDir, "info", "exclude")
 	existing, err := os.ReadFile(excludePath)
 	if err != nil && !os.IsNotExist(err) {
 		return true, fmt.Errorf("read %s: %w", excludePath, err)
