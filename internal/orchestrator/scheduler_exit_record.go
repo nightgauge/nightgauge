@@ -359,3 +359,13 @@ func truncExitRecordStderrTail(s string) string {
 	}
 	return s[len(s)-exitRecordStderrTailMaxBytes:]
 }
+
+// recordTerminatingStageTokens books a failed stage's spend for the run
+// record's per-stage synthesis. inputTokens is the non-cached pool the
+// scheduler holds; RecordTerminatingStageTokens takes input COMBINED with
+// cache reads (BuildV2Record books Input = InputTokens - CacheRead), so a
+// stage with 1200 input and 97000 cache-read tokens would otherwise book
+// input = -95800 (#1651 review).
+func recordTerminatingStageTokens(rt *state.RuntimeState, stage state.PipelineStage, inputTokens, outputTokens, cacheReadTokens int, costUsd float64) {
+	rt.RecordTerminatingStageTokens(stage, inputTokens+cacheReadTokens, outputTokens, cacheReadTokens, costUsd)
+}

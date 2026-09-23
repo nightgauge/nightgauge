@@ -1870,6 +1870,10 @@ func (rs *RuntimeState) ClearStageOutputTail(stage PipelineStage) {
 // stage on the failure path, so BuildV2Record's synthesis branch can populate
 // tokens.per_stage even when the stage never reached CompleteStage (Issue
 // #146). A multi-attempt run's most recent record for a stage wins.
+// inputTokens is COMBINED input — non-cached plus cache reads — the way
+// CompleteStage's StageResult carries it and BuildV2Record reads it (Input =
+// InputTokens - CacheRead). A caller holding the non-cached pool adds
+// cacheReadTokens to it.
 //
 // KNOWN GAP (#682, mirrors the pre-existing CostUnstamped gap noted at the
 // call site below): this constructor has no costSource parameter, so the

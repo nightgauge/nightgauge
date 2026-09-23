@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -140,7 +141,7 @@ func resolveOpenCodeReadiness(worktreeDir, model string) openCodeReadinessVerdic
 // else the window discovered from the server). 0 for a hosted model, and
 // when the config or the limit does not resolve — the fail-open "unknown
 // window" every consumer already handles.
-func openCodeDispatchWindow(worktreeDir, model string) int {
+func openCodeDispatchWindow(ctx context.Context, worktreeDir, model string) int {
 	loadSettings := openCodeReadinessLoadSettings
 	if loadSettings == nil {
 		loadSettings = config.LoadOpenCodeConfig
@@ -149,7 +150,7 @@ func openCodeDispatchWindow(worktreeDir, model string) int {
 	if err != nil {
 		return 0
 	}
-	window, err := adapters.OpenCodeContextWindow(settings, model)
+	window, err := adapters.OpenCodeContextWindow(ctx, settings, model)
 	if err != nil {
 		log.Printf("opencode: the context window of %s did not resolve, so it is treated as unknown: %v", model, err)
 		return 0

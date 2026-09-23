@@ -552,13 +552,19 @@ func OpenCodeConfigInputFor(settings config.OpenCodeConfig, run RunOptions, runR
 // (models.ResolveLocal), or what a test binary swapped in for it
 // (SwapOpenCodeLocalDiscoveryForTest).
 func openCodeLocalDiscovery(ep OpenCodeEndpoint, model string) (models.LocalDescriptor, error) {
+	return openCodeLocalDiscoveryContext(context.Background(), ep, model)
+}
+
+// openCodeLocalDiscoveryContext is openCodeLocalDiscovery that stops waiting
+// when ctx is done (models.ResolveLocalContext).
+func openCodeLocalDiscoveryContext(ctx context.Context, ep OpenCodeEndpoint, model string) (models.LocalDescriptor, error) {
 	openCodeLocalDiscoveryMu.RLock()
 	override := openCodeLocalDiscoveryOverride
 	openCodeLocalDiscoveryMu.RUnlock()
 	if override != nil {
 		return override(ep, model)
 	}
-	return models.ResolveLocal("opencode", model, models.LocalEndpoint{ID: ep.ID, Provider: ep.Provider, BaseURL: ep.BaseURL})
+	return models.ResolveLocalContext(ctx, "opencode", model, models.LocalEndpoint{ID: ep.ID, Provider: ep.Provider, BaseURL: ep.BaseURL})
 }
 
 var (
@@ -1144,7 +1150,7 @@ func (ep OpenCodeEndpoint) dispatchLimit(model, modelID string, maxTokens int, d
 // names no declared endpoint (a hosted provider, whose window the model
 // registry describes), and 0 with the reason when the endpoint's limit does
 // not resolve.
-func OpenCodeContextWindow(settings config.OpenCodeConfig, model string) (int, error) {
+func OpenCodeContextWindow(ctx context.Context, settings config.OpenCodeConfig, model string) (int, error) {
 	m, err := OpenCodeModelArg(model)
 	if err != nil {
 		return 0, err
@@ -1158,7 +1164,10 @@ func OpenCodeContextWindow(settings config.OpenCodeConfig, model string) (int, e
 	if !declared {
 		return 0, nil
 	}
-	limit, _, err := ep.dispatchLimit(m, modelID, 0, openCodeLocalDiscovery)
+	discover := func(ep OpenCodeEndpoint, model string) (models.LocalDescriptor, error) {
+		return openCodeLocalDiscoveryContext(ctx, ep, model)
+	}
+	limit, _, err := ep.dispatchLimit(m, modelID, 0, discover)
 	if err != nil {
 		return 0, err
 	}

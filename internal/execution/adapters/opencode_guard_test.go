@@ -550,13 +550,28 @@ func TestOpenCodeExternalDirectoryGateRootsMatchAllowList(t *testing.T) {
 	roots := OpenCodeExternalDirectoryAllowRoots(opts)
 	allowList := openCodeExternalDirectoryAllowList(opts)
 
+	// Derived here, not with openCodeDirPatterns: each directory as given
+	// and, when it differs, resolved. This assumes no /tmp alias form
+	// applies: macOS's default TMPDIR is under /var/folders, and Linux's /tmp
+	// is not a symlink. A TMPDIR under macOS's /tmp would add one.
+	givenAndResolved := func(dir string) []string {
+		out := []string{filepath.Clean(dir) + "/**"}
+		r, err := filepath.EvalSymlinks(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c := filepath.Clean(r) + "/**"; c != out[0] {
+			out = append(out, c)
+		}
+		return out
+	}
 	// The worktree's own forms lead the list (#1651); the roots follow.
-	wantPatterns := openCodeDirPatterns(worktree)
+	wantPatterns := givenAndResolved(worktree)
 	for _, root := range roots {
 		if root == opencodeallow.TmpRoot || root == opencodeallow.PrivateTmpRoot {
 			continue
 		}
-		wantPatterns = append(wantPatterns, openCodeDirPatterns(root)...)
+		wantPatterns = append(wantPatterns, givenAndResolved(root)...)
 	}
 	wantPatterns = append(wantPatterns, openCodeTmpDirAllowPatterns...)
 

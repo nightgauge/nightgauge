@@ -175,6 +175,15 @@ axis to switch on (Q5), and building one is a separate, larger change than
 "the ADR plus one fit function and its two dispatch consumers" this issue
 scoped itself to.
 
+**Amendment (#1651, #1662): the compact hop is wired.** The scheduler now
+takes the order this section reserved: (1) the full render when it fits;
+(2) otherwise, when the stage has a `_profiles/compact.md`, the compact
+render when it fits (`skillrender.DecideProfile`), which is then the render
+dispatched; (3) otherwise the model-swap hop above; (4) otherwise refusal,
+whose reason says the compact render did not fit either. The profile
+dispatched is logged and recorded as `skill_profile` on the stage-start
+trace event. A model swapped in by (3) is dispatched on its full render.
+
 ### Q4 — Unknown window
 
 Fail-open, consistent with `OverlayKeys`' own documented contract for an
@@ -186,6 +195,12 @@ unchecked, exactly as it did before this issue. The branch taken is logged at
 the scheduler's call site (`"context budget: unknown-window branch"`) so a
 trace can tell "checked and passed" from "not checked" — the one thing that
 actually changes for this population.
+
+**Amendment (#1651).** A local model's window is no longer unknown when its
+OpenCode endpoint is declared: the scheduler reads the `limit.context` the
+dispatch's OpenCode config is built with (Q10), so local dispatches are
+checked. The fail-open branch remains for a hosted model absent from the
+registry and for a local endpoint whose limit does not resolve.
 
 ### Q5 — Compact render profile vs. ADR-010 and ADR-016
 
@@ -259,7 +274,9 @@ policy never engaged. For an `opencode` dispatch whose model names an
 endpoint the machine-tier `opencode:` block declares, the window is now the
 `limit.context` the run's OpenCode config is built with: the declared value,
 clamped to the loaded window, else the window discovered from the server
-(`adapters.OpenCodeContextWindow`). The fit check (Q10) reads the same value.
+(`adapters.OpenCodeContextWindow`). The fit check reads the same value, so
+at a small window feature-dev also gets the compact render (Q3 amendment),
+and each sub-session's prompt starts with that compact render.
 
 ### Q8 — Non-USD budgets (#1652)
 
@@ -304,6 +321,13 @@ writes nothing to either registry file):
 adapter (AC4's "single-provider adapters keep the static table"): a router
 choosing _which_ adapter to use cannot yet have resolved a per-model
 descriptor for candidates it has not picked.
+
+**Amendment (#1651): the local-endpoint rung.** In the scheduler, between 2
+and 3: for an `opencode` dispatch whose model names an endpoint the
+machine-tier `opencode:` block declares, the window is the `limit.context`
+the run's OpenCode config is built with (`adapters.OpenCodeContextWindow`):
+the declared value, clamped to the window the server has loaded, else the
+window discovered from the server.
 
 ### Q11 — Relation to #80
 

@@ -4265,7 +4265,7 @@ func runCmd() *cobra.Command {
 				if err != nil {
 					fmt.Printf("[#%d] stage %s FAILED: %v\n", issue, stage, err)
 				} else {
-					fmt.Printf("[#%d] stage %s complete — tokens: %d in (%d cached) / %d out, cost: $%.4f\n",
+					fmt.Printf("[#%d] stage %s complete — tokens: %d in + %d cache read / %d out, cost: $%.4f\n",
 						issue, stage, inputTokens, cacheReadTokens, outputTokens, costUsd)
 				}
 			})

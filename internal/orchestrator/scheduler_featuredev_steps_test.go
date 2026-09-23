@@ -211,14 +211,14 @@ func TestOpenCodeDispatchWindow_LocalModelEngagesSubSessions(t *testing.T) {
 	server := newLoadedLMStudioStub(t, "qwen/qwen3.8-27b", 131072)
 	withMachineOpenCodeConfig(t, fmt.Sprintf("opencode:\n  provider: lm-studio\n  base_url: %s\n  limit:\n    context: 131072\n", server.URL))
 
-	window := openCodeDispatchWindow(t.TempDir(), openCodeReadinessModel)
+	window := openCodeDispatchWindow(context.Background(), t.TempDir(), openCodeReadinessModel)
 	if window != 131072 {
 		t.Fatalf("window = %d, want the declared limit.context 131072", window)
 	}
 	if !resolveFeatureDevStepPolicy(window).Enabled {
 		t.Errorf("policy for window %d is off, want sub-sessions on", window)
 	}
-	if got := openCodeDispatchWindow(t.TempDir(), "anthropic/claude-sonnet-5"); got != 0 {
+	if got := openCodeDispatchWindow(context.Background(), t.TempDir(), "anthropic/claude-sonnet-5"); got != 0 {
 		t.Errorf("hosted model window = %d, want 0 (the registry describes it)", got)
 	}
 }
