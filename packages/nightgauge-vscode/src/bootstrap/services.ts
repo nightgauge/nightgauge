@@ -7,7 +7,12 @@
  * @see docs/ARCHITECTURE.md for architectural overview
  */
 
-import { pipelineStateDir, plansDir as clonePlansDir } from "../utils/cloneLayout";
+import {
+  pipelineStateDir,
+  plansDir as clonePlansDir,
+  resolveCloneSetting,
+  RELATIVE_PIPELINE_STATE_DIR,
+} from "../utils/cloneLayout";
 import * as vscode from "vscode";
 import * as fs from "node:fs/promises";
 import { readFileSync } from "node:fs";
@@ -2702,8 +2707,16 @@ export async function initializeServices(
 
   // Initialize context file viewer
   // Use nightgaugeRoot (git root) for correct .nightgauge directory location
+  // The default context path resolves through the clone-layout helper; a
+  // user override keeps being joined onto the root as before (#2036).
   const contextPath = nightgaugeRoot
-    ? `${nightgaugeRoot}/${settings.contextPath}`
+    ? resolveCloneSetting(
+        nightgaugeRoot,
+        settings.contextPath,
+        RELATIVE_PIPELINE_STATE_DIR,
+        pipelineStateDir,
+        (root, rel) => `${root}/${rel}`
+      )
     : settings.contextPath;
   const contextViewer = new ContextFileViewer(contextPath);
 

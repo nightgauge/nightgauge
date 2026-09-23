@@ -44,6 +44,7 @@ import {
   retrosDir as cloneRetrosDir,
   cloneLogsDir,
   RELATIVE_PIPELINE_STATE_DIR,
+  isUsableWorkspaceRoot,
 } from "../utils/cloneLayout";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -1303,7 +1304,9 @@ export class AutoRetroService {
       // path, not the same path twice.
       const roots = [deliverableRoot, workspaceRoot].filter(
         (root, index, all): root is string =>
-          typeof root === "string" && root.length > 0 && all.indexOf(root) === index
+          // Unusable (empty or relative) roots are dropped: the layout helper
+          // refuses them rather than resolve against the host's cwd (#2036).
+          isUsableWorkspaceRoot(root) && all.indexOf(root) === index
       );
       const tried: string[] = [];
       let read: { contextFile: string; contextContent: string } | undefined;

@@ -13,6 +13,8 @@ import {
   retrosDir,
   cloneLogsDir,
   isUsableWorkspaceRoot,
+  isAbsoluteRoot,
+  resolveCloneSetting,
   RELATIVE_PIPELINE_STATE_DIR,
   RELATIVE_PLANS_DIR,
   RELATIVE_RETROS_DIR,
@@ -68,5 +70,91 @@ describe("cloneLayout", () => {
     expect(isUsableWorkspaceRoot(undefined)).toBe(false);
     expect(isUsableWorkspaceRoot(null)).toBe(false);
     expect(isUsableWorkspaceRoot("relative/repo")).toBe(false);
+  });
+
+  describe("isAbsoluteRoot", () => {
+    it("accepts POSIX absolute roots and refuses relative ones", () => {
+      expect(isAbsoluteRoot("/repo", path.posix)).toBe(true);
+      expect(isAbsoluteRoot("repo", path.posix)).toBe(false);
+      expect(isAbsoluteRoot("", path.posix)).toBe(false);
+    });
+
+    it("on win32 accepts drive and UNC roots", () => {
+      expect(isAbsoluteRoot("C:\\repo", path.win32)).toBe(true);
+      expect(isAbsoluteRoot("c:/repo", path.win32)).toBe(true);
+      expect(isAbsoluteRoot("\\\\server\\share\\repo", path.win32)).toBe(true);
+      expect(isAbsoluteRoot("//server/share", path.win32)).toBe(true);
+    });
+
+    it("on win32 refuses drive-relative and relative roots", () => {
+      expect(isAbsoluteRoot("\\repo", path.win32)).toBe(false);
+      expect(isAbsoluteRoot("/repo", path.win32)).toBe(false);
+      expect(isAbsoluteRoot("C:repo", path.win32)).toBe(false);
+      expect(isAbsoluteRoot("repo\\sub", path.win32)).toBe(false);
+      expect(isAbsoluteRoot("\\\\server", path.win32)).toBe(false);
+    });
+
+    it("uses the host path by default", () => {
+      expect(isAbsoluteRoot(root)).toBe(true);
+    });
+  });
+
+  describe("resolveCloneSetting", () => {
+    const resolver = (r: string) => `resolved:${r}`;
+
+    it("resolves an unset or empty value through the resolver", () => {
+      expect(resolveCloneSetting(root, undefined, RELATIVE_PIPELINE_STATE_DIR, resolver)).toBe(
+        `resolved:${root}`
+      );
+      expect(resolveCloneSetting(root, null, RELATIVE_PIPELINE_STATE_DIR, resolver)).toBe(
+        `resolved:${root}`
+      );
+      expect(resolveCloneSetting(root, "  ", RELATIVE_PIPELINE_STATE_DIR, resolver)).toBe(
+        `resolved:${root}`
+      );
+    });
+
+    it("resolves the default value, however spelled, through the resolver", () => {
+      for (const value of [
+        ".nightgauge/pipeline",
+        "./.nightgauge/pipeline",
+        ".nightgauge/pipeline/",
+        ".nightgauge\\pipeline",
+      ]) {
+        expect(resolveCloneSetting(root, value, RELATIVE_PIPELINE_STATE_DIR, resolver)).toBe(
+          `resolved:${root}`
+        );
+      }
+    });
+
+    it("joins a user override onto the root as before", () => {
+      expect(
+        resolveCloneSetting(root, "custom/ctx", RELATIVE_PIPELINE_STATE_DIR, pipelineStateDir)
+      ).toBe(path.join(root, "custom/ctx"));
+      expect(
+        resolveCloneSetting(
+          root,
+          "custom/ctx",
+          RELATIVE_PIPELINE_STATE_DIR,
+          pipelineStateDir,
+          (r, v) => `${r}/${v}`
+        )
+      ).toBe(`${root}/custom/ctx`);
+    });
+
+    it("the default resolves to the helper's path", () => {
+      expect(
+        resolveCloneSetting(root, RELATIVE_CLONE_LOGS_DIR, RELATIVE_CLONE_LOGS_DIR, cloneLogsDir)
+      ).toBe(path.join(root, ".nightgauge", "logs"));
+    });
+
+    it("rejects an unusable root for defaults and overrides alike", () => {
+      expect(() =>
+        resolveCloneSetting("", undefined, RELATIVE_PIPELINE_STATE_DIR, pipelineStateDir)
+      ).toThrow(/empty/);
+      expect(() =>
+        resolveCloneSetting("rel", "custom/ctx", RELATIVE_PIPELINE_STATE_DIR, pipelineStateDir)
+      ).toThrow(/relative/);
+    });
   });
 });

@@ -32,7 +32,7 @@
  * @see Issue #1173 — A watermark past EOF silently killed the stream
  */
 
-import { pipelineStateDir, RELATIVE_PIPELINE_STATE_DIR } from "../utils/cloneLayout";
+import { pipelineStateDir } from "../utils/cloneLayout";
 import * as vscode from "vscode";
 import * as path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
@@ -94,8 +94,8 @@ const WATERMARK_FILENAME = ".upload-watermarks.json";
  * `parseDailyHistoryDate` on the same directory (#1023).
  */
 const DAILY_HISTORY_FILE = /^\d{4}-\d{2}-\d{2}\.jsonl$/u;
-/** Root-relative trace dir; a trace stream's `filePath` is keyed relative to the root. */
-const TRACE_SUBDIR = path.join(RELATIVE_PIPELINE_STATE_DIR, "trace");
+/** Trace dir name inside the pipeline state dir. */
+const TRACE_SUBDIR = "trace";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -134,7 +134,7 @@ interface WatermarkStore {
 
 interface StreamConfig {
   stream: TelemetryStream;
-  /** Relative path from nightgaugeRoot to the JSONL file. */
+  /** Path of the JSONL file relative to the root's pipeline state dir (`pipelineStateDir`). */
   filePath: string;
   /** Absolute path segment appended to platformUrl (e.g. "/v1/telemetry/health-snapshot"). */
   endpoint: string;
@@ -185,14 +185,14 @@ type TelemetryBatch = unknown[];
 
 const HEALTH_STREAM_CONFIG: StreamConfig = {
   stream: "health",
-  filePath: path.join(RELATIVE_PIPELINE_STATE_DIR, "health-history.jsonl"),
+  filePath: "health-history.jsonl",
   endpoint: "/v1/telemetry/health-snapshot",
   maxBatchSize: MAX_BATCH_SIZE_HEALTH,
 };
 
 const RECOMMENDATION_STREAM_CONFIG: StreamConfig = {
   stream: "recommendation",
-  filePath: path.join(RELATIVE_PIPELINE_STATE_DIR, "recommendation-history.jsonl"),
+  filePath: "recommendation-history.jsonl",
   endpoint: "/v1/telemetry/recommendation-outcome",
   maxBatchSize: MAX_BATCH_SIZE_RECOMMENDATION,
   filterRecord: (r) => r["metric_after"] != null,
@@ -1058,7 +1058,7 @@ export class TelemetryUploaderService implements vscode.Disposable {
     let anyRotated = false;
 
     for (const root of this.resolveHistoryScanRoots()) {
-      const traceDirUri = vscode.Uri.file(path.join(pipelineStateDir(root), "trace"));
+      const traceDirUri = vscode.Uri.file(path.join(pipelineStateDir(root), TRACE_SUBDIR));
 
       let entries: [string, vscode.FileType][];
       try {
@@ -1120,7 +1120,7 @@ export class TelemetryUploaderService implements vscode.Disposable {
     root: string = this.nightgaugeRoot
   ): Promise<StreamSummary> {
     const watermarkUri = vscode.Uri.file(path.join(pipelineStateDir(root), WATERMARK_FILENAME));
-    const fileUri = vscode.Uri.file(path.join(root, cfg.filePath));
+    const fileUri = vscode.Uri.file(path.join(pipelineStateDir(root), cfg.filePath));
     const watermarkKey = cfg.watermarkKey ?? path.basename(cfg.filePath);
 
     // Size guard

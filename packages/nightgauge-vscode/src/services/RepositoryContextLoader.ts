@@ -12,13 +12,7 @@
 import * as vscode from "vscode";
 import * as fs from "fs/promises";
 import * as path from "path";
-import {
-  pipelineStateDir,
-  plansDir as clonePlansDir,
-  RELATIVE_PIPELINE_STATE_DIR,
-  RELATIVE_PLANS_DIR,
-  isUsableWorkspaceRoot,
-} from "../utils/cloneLayout";
+import { pipelineStateDir, plansDir as clonePlansDir } from "../utils/cloneLayout";
 import type { WorkspaceManager } from "./WorkspaceManager";
 import type { Repository } from "../models/Repository";
 import { resolveActiveRepository } from "../utils/resolveActiveRepository";
@@ -220,11 +214,9 @@ export class RepositoryContextLoader implements vscode.Disposable {
     if (!repo) {
       // Fallback to workspace root if no repository
       const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
-      // No workspace folder: keep the historical root-relative path rather than
-      // throw from the helper, which rejects an empty root (#2036).
-      if (!isUsableWorkspaceRoot(workspaceRoot)) {
-        return path.join(workspaceRoot, RELATIVE_PIPELINE_STATE_DIR);
-      }
+      // No workspace folder: the helper throws rather than resolve against
+      // the host's cwd (#2036). Only pipeline execution reaches this, and it
+      // cannot run without a workspace.
       return pipelineStateDir(workspaceRoot);
     }
 
@@ -286,11 +278,9 @@ export class RepositoryContextLoader implements vscode.Disposable {
 
     if (!repo) {
       const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
-      // No workspace folder: keep the historical root-relative path rather than
-      // throw from the helper, which rejects an empty root (#2036).
-      if (!isUsableWorkspaceRoot(workspaceRoot)) {
-        return path.join(workspaceRoot, RELATIVE_PLANS_DIR);
-      }
+      // No workspace folder: the helper throws rather than resolve against
+      // the host's cwd (#2036). Only pipeline execution reaches this, and it
+      // cannot run without a workspace.
       return clonePlansDir(workspaceRoot);
     }
 

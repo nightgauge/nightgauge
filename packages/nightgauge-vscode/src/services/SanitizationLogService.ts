@@ -14,7 +14,7 @@
 import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
-import { cloneLogsDir, RELATIVE_CLONE_LOGS_DIR } from "../utils/cloneLayout";
+import { cloneLogsDir } from "../utils/cloneLayout";
 import type {
   SanitizationEvent,
   RawSanitizationLogEntry,
@@ -215,9 +215,12 @@ export class SanitizationLogService implements vscode.Disposable {
    * Start watching the log file for changes
    */
   private startWatching(): void {
+    // Base stays the workspace root (it exists before the log dir does); the
+    // glob is the helper-resolved log path relative to it (#2036). #2037 must
+    // revisit this if the log dir leaves the working tree.
     const pattern = new vscode.RelativePattern(
       this.workspaceRoot,
-      `${RELATIVE_CLONE_LOGS_DIR}/sanitization.log`
+      path.relative(this.workspaceRoot, this.logFilePath).split(path.sep).join("/")
     );
 
     this.watcher = vscode.workspace.createFileSystemWatcher(pattern);

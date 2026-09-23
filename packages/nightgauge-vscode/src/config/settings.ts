@@ -69,32 +69,6 @@ export function getSettings(): NightgaugeSettings {
 }
 
 /**
- * Get absolute path to context directory for the current workspace
- */
-export function getContextPath(): string | undefined {
-  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-  if (!workspaceFolder) {
-    return undefined;
-  }
-
-  const settings = getSettings();
-  return vscode.Uri.joinPath(workspaceFolder.uri, settings.contextPath).fsPath;
-}
-
-/**
- * Get absolute path to plans directory for the current workspace
- */
-export function getPlansPath(): string | undefined {
-  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-  if (!workspaceFolder) {
-    return undefined;
-  }
-
-  const settings = getSettings();
-  return vscode.Uri.joinPath(workspaceFolder.uri, settings.plansPath).fsPath;
-}
-
-/**
  * Get the current workspace root path
  */
 export function getWorkspaceRoot(): string | undefined {
