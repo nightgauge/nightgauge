@@ -648,6 +648,19 @@ func TerminalKindRemediation(kind string) string {
 	return ""
 }
 
+// ParkedRemediation is TerminalKindRemediation with the failure text in hand:
+// a context_window_exceeded that the capacity check produced (#1655) is not
+// a prompt that outgrew a loaded window, so it gets its own next step.
+func ParkedRemediation(kind, detail string) string {
+	if kind == TerminalKindContextWindowExceeded && strings.Contains(detail, capacityRefusalPhrase) {
+		return "the issue's size exceeds the capacity the ADR-023 table gives the context window of a model " +
+			"this run's size-sensitive stages resolve to; decompose the issue into sub-issues within the cap, " +
+			"or route those stages to a model with a larger window (pipeline.size_gate.routes.reject_action: " +
+			"soft-route with capacity_fallback_models, or the stage's model configuration), " + parkedReleaseStep
+	}
+	return TerminalKindRemediation(kind)
+}
+
 // Hold* name the human action that releases a Failed entry whose terminal kind
 // records a human DECISION POINT rather than a fault. They answer the question
 // the scheduler's state could not answer before #1486: given that this issue is

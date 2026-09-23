@@ -61,7 +61,9 @@ func runScopeGate(t *testing.T, c scopeGateCase) scopeGateRun {
 		}
 	}
 	file := filepath.Join(work, "scope-gate.sh")
-	if err := os.WriteFile(file, []byte(script), 0o644); err != nil {
+	// pipefail, as the stage's shell may run it: a marker check that pipes
+	// into `grep -q` can lose a found marker to SIGPIPE under it.
+	if err := os.WriteFile(file, []byte("set -o pipefail\n"+script), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -128,6 +130,19 @@ func TestScopeGateCapacity(t *testing.T) {
 			wantExit: 1,
 			want:     []string{"requires human decomposition", "Decomposition stops at one level"},
 			notWant:  []string{"decomposition required"},
+		},
+		{
+			name:     "an unsized issue on a 32k target is not forced to decompose",
+			c:        scopeGateCase{size: "", typeLabel: "feature", body: "## Summary", capacityJSON: capS},
+			wantExit: 0,
+			want:     []string{"capacity: size unknown", "Phase 2.85: PASS"},
+			notWant:  []string{"decomposition required"},
+		},
+		{
+			name:     "a marker ahead of a long body is still found under pipefail",
+			c:        scopeGateCase{size: "M", typeLabel: "feature", body: "<!-- nightgauge:capacity-decomposed -->\n" + strings.Repeat("filler line\n", 8000), capacityJSON: capS},
+			wantExit: 1,
+			want:     []string{"requires human decomposition"},
 		},
 		{
 			name:     "an unknown window applies no cap and says so",

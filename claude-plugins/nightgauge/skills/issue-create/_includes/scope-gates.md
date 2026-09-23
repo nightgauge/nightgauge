@@ -133,6 +133,9 @@ DISTINCT_TARGETS=$(printf '%s' "${ISSUE_BODY}" \
 # --- Signal 2: predicted size == XL (data-driven, from the sizing phase) ---
 # PREDICTED_SIZE is the SizeLabel resolved earlier (complexity model or
 # `nightgauge size predict <num> --json`). Default to the heuristic label.
+# The size before that default, for Signal 4: an assumed M is not a size, and
+# the capacity cap applies only to a size something actually predicted.
+PREDICTED_SIZE_RAW="${PREDICTED_SIZE:-${SIZE_LABEL:-}}"
 PREDICTED_SIZE="${PREDICTED_SIZE:-${SIZE_LABEL:-M}}"
 
 # --- Signal 3: independent acceptance-criteria groups ---
@@ -158,25 +161,30 @@ size_rank() {
 }
 OVER_CAPACITY=false
 if [ -z "${CAPACITY_MAX}" ]; then
-  echo "capacity: window unknown — no capacity cap applied (size=${PREDICTED_SIZE})"
-elif [ "$(size_rank "${PREDICTED_SIZE}")" -eq 0 ]; then
+  echo "capacity: window unknown — no capacity cap applied (size=${PREDICTED_SIZE_RAW:-unknown})"
+elif [ "$(size_rank "${PREDICTED_SIZE_RAW}")" -eq 0 ]; then
   echo "capacity: size unknown — no capacity cap applied (cap=${CAPACITY_MAX})"
-elif [ "$(size_rank "${PREDICTED_SIZE}")" -gt "$(size_rank "${CAPACITY_MAX}")" ]; then
+elif [ "$(size_rank "${PREDICTED_SIZE_RAW}")" -gt "$(size_rank "${CAPACITY_MAX}")" ]; then
   OVER_CAPACITY=true
 fi
+
+# Marker checks match with `case` on a lowercased copy, never
+# `printf | grep -q`: under pipefail, grep -q exiting at its first match can
+# SIGPIPE printf and turn a found marker into a failed test.
+ISSUE_BODY_LC=$(tr '[:upper:]' '[:lower:]' <<< "${ISSUE_BODY}")
 
 # A child a capacity-forced decomposition created carries this marker. One
 # level of decomposition is all the gate ever forces.
 CAPACITY_CHILD=false
-if printf '%s' "${ISSUE_BODY}" | grep -q "nightgauge:capacity-decomposed"; then
-  CAPACITY_CHILD=true
-fi
+case "${ISSUE_BODY_LC}" in
+  *"nightgauge:capacity-decomposed"*) CAPACITY_CHILD=true ;;
+esac
 
 # --- Override marker (mirrors the Phase 2.9 marker pattern) ---
 SCOPE_OVERRIDE=false
-if printf '%s' "${ISSUE_BODY}" | grep -qi "nightgauge:oversized-scope-accepted\|oversized scope accepted"; then
-  SCOPE_OVERRIDE=true
-fi
+case "${ISSUE_BODY_LC}" in
+  *"nightgauge:oversized-scope-accepted"* | *"oversized scope accepted"*) SCOPE_OVERRIDE=true ;;
+esac
 
 # --- Thresholds: ≥6 distinct targets, OR size==XL, OR ≥6 independent AC groups ---
 OVERSIZED=false
@@ -205,7 +213,7 @@ if [ "$OVER_CAPACITY" = "true" ] && [ "$CAPACITY_CHILD" = "true" ]; then
 ERROR: capacity-gate — requires human decomposition
 
   This issue is already a sub-issue of a capacity-forced decomposition, and its
-  predicted size ${PREDICTED_SIZE} still exceeds the target model's capacity
+  predicted size ${PREDICTED_SIZE_RAW} still exceeds the target model's capacity
   (max ${CAPACITY_MAX}). Decomposition stops at one level: split it by hand, or
   target a model with a larger context window.
 GATE_ERROR
@@ -217,7 +225,7 @@ elif [ "$OVER_CAPACITY" = "true" ] && ! { printf '%s\n' "${TYPE_LABEL}" | grep -
   cat >&2 << GATE_ERROR
 ERROR: capacity-gate — decomposition required
 
-  Predicted size ${PREDICTED_SIZE} exceeds the target model's capacity
+  Predicted size ${PREDICTED_SIZE_RAW} exceeds the target model's capacity
   (max ${CAPACITY_MAX}, from \`nightgauge size-gate capacity\`). Decompose it into a
   type:epic with sub-issues each of size ${CAPACITY_MAX} or smaller (Path A below),
   and start each sub-issue body with the line

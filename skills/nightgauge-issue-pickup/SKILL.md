@@ -5,7 +5,7 @@ description: Claim a GitHub issue, extract requirements, and set up the developm
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.20.0"
+  version: "1.21.0"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task
 context: fork

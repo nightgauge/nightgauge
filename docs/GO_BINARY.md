@@ -4256,7 +4256,8 @@ nightgauge version-downgrade check [--issue <N>] [--baseline main] [--config <pa
 ```
 
 **`size-gate` capacity (#1655)**: `--context-window`, or `--adapter`/`--model`
-(resolved to the window the scheduler would dispatch with), adds a capacity
+(given together; either alone is an error; resolved to the window the
+scheduler would dispatch with), adds a capacity
 check to `size-gate check`: an issue whose `size:*` label exceeds the cap the
 ADR-023 capacity table gives that window is rejected, with a recovery of
 `decompose`, or `requires human decomposition` when its body carries

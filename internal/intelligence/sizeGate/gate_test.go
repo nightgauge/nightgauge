@@ -415,25 +415,54 @@ func TestCapacityGate_WindowAgainstSize(t *testing.T) {
 	}
 }
 
-// Without the capacity input the gate is exactly the pre-#1655 gate: same
-// verdict, reason and heuristics for every case, and no capacity verdict.
+// Without the capacity input the gate is exactly the pre-#1655 gate: each
+// case's verdict, reason and heuristics are pinned to the values it produced
+// before capacity existed, and no capacity verdict or log line appears.
 func TestCapacityGate_NoCapacityInputIsUnchanged(t *testing.T) {
-	cases := []GateInput{
-		{Title: "Add login button", Labels: []string{"size:M"}},
-		{Title: "Refactor 8,500 LOC", Labels: []string{"size:S"}},
-		{Title: "Big work", Labels: []string{"size:L"}, SubIssues: 0},
-		{Title: "Big work", Labels: []string{"size:XL"}, SubIssues: 2},
-		{Title: "No size"},
+	cases := []struct {
+		in         GateInput
+		allowed    bool
+		reason     string
+		heuristics []string
+	}{
+		{GateInput{Title: "Add login button", Labels: []string{"size:M"}}, true, "", []string{}},
+		{GateInput{Title: "Refactor 8,500 LOC", Labels: []string{"size:S"}}, false,
+			"issue title references 8500 LOC (threshold: 5000) — issue is too large for a single pipeline run",
+			[]string{"loc-in-title"}},
+		{GateInput{Title: "Big work", Labels: []string{"size:L"}}, false,
+			"size:L issue has 0 sub-issue(s) but requires at least 2 for pipeline processing",
+			[]string{"size-without-decomposition"}},
+		{GateInput{Title: "Big work", Labels: []string{"size:XL"}, SubIssues: 2}, true, "", []string{}},
+		{GateInput{Title: "No size", Body: "<!-- " + CapacityDecomposedMarker + " -->", Size: "XL"}, true, "", []string{}},
 	}
-	for _, in := range cases {
-		cfg := DefaultGateConfig()
-		legacy := NewGateEvaluator(cfg).Evaluate(in.Title, in.Labels, in.SubIssues)
-		got, logs := evaluateWithCapacity(t, cfg, in)
-		if !reflect.DeepEqual(got, legacy) {
-			t.Errorf("%+v: EvaluateIssue = %+v, Evaluate = %+v", in, got, legacy)
+	for _, c := range cases {
+		got, logs := evaluateWithCapacity(t, DefaultGateConfig(), c.in)
+		if got.Allowed != c.allowed || got.Reason != c.reason || !reflect.DeepEqual(got.HeuristicsApplied, c.heuristics) {
+			t.Errorf("%+v: got allowed=%v reason=%q heuristics=%v, want %v %q %v",
+				c.in, got.Allowed, got.Reason, got.HeuristicsApplied, c.allowed, c.reason, c.heuristics)
 		}
-		if got.Capacity != nil || len(logs.lines) != 0 {
-			t.Errorf("%+v: capacity ran without being requested: %+v %v", in, got.Capacity, logs.lines)
+		if got.Capacity != nil || got.RoutedModel != "" || len(logs.lines) != 0 {
+			t.Errorf("%+v: capacity ran without being requested: %+v %q %v", c.in, got.Capacity, got.RoutedModel, logs.lines)
+		}
+	}
+}
+
+// The table's row boundaries, each side of every threshold.
+func TestMaxSizeForWindow_Boundaries(t *testing.T) {
+	for _, tc := range []struct {
+		window int
+		want   string
+		known  bool
+	}{
+		{-1, "", false}, {0, "", false}, {1, "XS", true},
+		{31999, "XS", true}, {32000, "S", true}, {32768, "S", true},
+		{127999, "S", true}, {128000, "M", true}, {131072, "M", true},
+		{199999, "M", true}, {200000, "L", true},
+		{399999, "L", true}, {400000, "XL", true}, {1000000, "XL", true},
+	} {
+		got, known := MaxSizeForWindow(tc.window)
+		if got != tc.want || known != tc.known {
+			t.Errorf("MaxSizeForWindow(%d) = (%q, %v), want (%q, %v)", tc.window, got, known, tc.want, tc.known)
 		}
 	}
 }

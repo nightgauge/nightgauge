@@ -23,18 +23,27 @@ changelog, and the release workflow refuses a tag that does not.
   up to XL. It is enforced at three points. `nightgauge size-gate check`
   gains `--context-window N` and `--adapter A --model M`, and rejects an
   issue whose `size:*` label exceeds the cap, naming the size, the window and
-  the cap; without those flags it behaves as before. The scheduler checks
-  every stage before spawn against the window of the model that stage
-  resolved to, and refuses an over-capacity issue as
-  `context_window_exceeded` with a recovery of `decompose`. It reads the size
-  from the run's routing decision, else from `planning-{N}.json`'s
-  `complexity_assessment.size_label`. The new `nightgauge size-gate capacity`
-  command (`--adapter A --model M`, or `--context-window N`, with `--json`)
+  the cap; without those flags it behaves as before. **Behaviour change: the
+  scheduler now enforces the table by default at dispatch** (turned off only
+  by `pipeline.size_gate.enabled: false`). It caps the size-sensitive stages
+  — feature-planning, feature-dev, feature-validate — and judges the size
+  at every dispatch against the smallest window among the current stage and
+  those still ahead, so a labelled size is refused at issue-pickup before
+  anything is spent. Affected: a Claude run whose size-sensitive stage
+  resolves to haiku (200k) refuses XL; Copilot's gpt-4o and gpt-4o-mini
+  (128k) refuse L and XL; a local OpenCode model is capped by its endpoint's
+  `limit.context` (a 32k model takes XS and S). Hosted models with 400k or
+  more, and issue-pickup, pr-create and pr-merge, are not affected. A refusal
+  is `context_window_exceeded` with a recovery of `decompose`, parked with its
+  own remediation. The size comes from the run's routing decision, else from
+  `planning-{N}.json`'s `complexity_assessment.size_label`. The new
+  `nightgauge size-gate capacity` command (`--adapter A --model M`, or `--context-window N`, with `--json`)
   reports the cap for a model, by default the repository's feature-dev
   target, and issue-create's Phase 2.85 scope gate uses it to force
-  decomposition of work above the cap (issue-create 1.25.0). With
-  `pipeline.size_gate.routes.reject_action: soft-route`, an over-capacity
-  issue moves to the first entry of the new
+  decomposition of work above the cap (issue-create 1.25.0); issue-pickup's
+  Phase 2.7 passes the same target to `size-gate check` (issue-pickup
+  1.21.0). With `pipeline.size_gate.routes.reject_action: soft-route`, an
+  over-capacity issue moves to the first entry of the new
   `pipeline.size_gate.routes.capacity_fallback_models` whose window admits
   its size, and is rejected when none does. Decomposition goes one level
   deep: an issue whose body carries `<!-- nightgauge:capacity-decomposed -->`

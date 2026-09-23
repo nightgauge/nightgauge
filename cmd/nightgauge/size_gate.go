@@ -63,6 +63,9 @@ func sizeGateCheckCmd() *cobra.Command {
 			if window < 0 {
 				return fmt.Errorf("--context-window must not be negative")
 			}
+			if err := requireAdapterModelPair(adapter, model); err != nil {
+				return err
+			}
 			if window > 0 || model != "" {
 				capacity = resolveCapacityInput(cmd.Context(), cfg, window, adapter, model)
 			}
@@ -190,12 +193,25 @@ func resolveCapacityInput(ctx context.Context, cfg sizeGate.GateConfig, window i
 	}
 	if cfg.SoftRoute {
 		for _, m := range cfg.CapacityFallbackModels {
-			in.Fallbacks = append(in.Fallbacks, sizeGate.CapacityCandidate{
-				Model: m, Window: orchestrator.DispatchContextWindow(ctx, root, adapter, m),
-			})
+			w := orchestrator.DispatchContextWindow(ctx, root, adapter, m)
+			if w <= 0 {
+				stderrLogf("capacity: fallback %s skipped: its context window did not resolve on adapter %q", m, adapter)
+				continue
+			}
+			in.Fallbacks = append(in.Fallbacks, sizeGate.CapacityCandidate{Model: m, Window: w})
 		}
 	}
 	return in
+}
+
+// requireAdapterModelPair refuses --adapter without --model and the reverse:
+// either alone names no model whose window could be resolved, and silently
+// ignoring it would run the gate without the capacity check the caller asked for.
+func requireAdapterModelPair(adapter, model string) error {
+	if (adapter == "") != (model == "") {
+		return fmt.Errorf("--adapter and --model must be given together")
+	}
+	return nil
 }
 
 // capacityWorkspaceRoot is the directory whose .nightgauge config describes
@@ -231,6 +247,9 @@ func sizeGateCapacityCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if window < 0 {
 				return fmt.Errorf("--context-window must not be negative")
+			}
+			if err := requireAdapterModelPair(adapter, model); err != nil {
+				return err
 			}
 			root := capacityWorkspaceRoot()
 			if window == 0 && adapter == "" && model == "" {

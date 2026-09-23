@@ -508,3 +508,23 @@ func TestSizeGateCapacity_ReportsTheTableCap(t *testing.T) {
 		}
 	}
 }
+
+// --adapter without --model (or the reverse) names no model whose window
+// could be resolved; the command refuses rather than skipping the check.
+func TestSizeGate_AdapterAndModelMustBeGivenTogether(t *testing.T) {
+	sizeGateEnv(t)
+	for _, args := range [][]string{
+		{"size-gate", "check", "--issue", "1", "--adapter", "claude"},
+		{"size-gate", "check", "--issue", "1", "--model", "sonnet"},
+		{"size-gate", "capacity", "--adapter", "opencode"},
+	} {
+		root := rootCmd()
+		root.SetOut(io.Discard)
+		root.SetErr(io.Discard)
+		root.SetArgs(args)
+		err := root.Execute()
+		if err == nil || !strings.Contains(err.Error(), "--adapter and --model must be given together") {
+			t.Errorf("%v: err = %v, want the pairing error", args, err)
+		}
+	}
+}

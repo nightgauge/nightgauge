@@ -810,7 +810,7 @@ func TestContextBudgetRefusal_UnknownWindowFailsOpenAndLogsTheBranch(t *testing.
 // local131 a 131,072-token one.
 func capacityTestEndpoints(t *testing.T) {
 	t.Helper()
-	server := newOpenAICompatibleStub(t, "qwen-32k", "qwen-131k")
+	server := newOpenAICompatibleStub(t, "qwen-32k", "qwen-32k-b", "qwen-131k")
 	t.Cleanup(server.Close)
 	withOpenCodeReadinessConfig(t, config.OpenCodeConfig{
 		Endpoints: []config.OpenCodeEndpointConfig{
@@ -858,11 +858,12 @@ func runCapacityScenario(t *testing.T, number int, configYAML string) (*refusalC
 	return runner, root, logs
 }
 
-// TestCapacityRefusal_OverCapacityIssueNeverSpawns: a size-M issue whose
-// feature-dev resolves to a 32k model is refused before spawn — the ADR 023
-// capacity table caps a 32k window at S — and classified
-// context_window_exceeded with a recovery of decompose.
-func TestCapacityRefusal_OverCapacityIssueNeverSpawns(t *testing.T) {
+// TestCapacityRefusal_PlannerOnlySizeRefusedAtTheSizeSensitiveStage: the
+// issue carries no size until feature-planning assesses it M, so the stages
+// before are not capped; feature-dev, resolving to a 32k model, is refused
+// before spawn — the ADR 023 capacity table caps a 32k window at S — and
+// classified context_window_exceeded with a recovery of decompose.
+func TestCapacityRefusal_PlannerOnlySizeRefusedAtTheSizeSensitiveStage(t *testing.T) {
 	runner, root, logs := runCapacityScenario(t, 1655, "")
 
 	if got := runner.count(state.StageFeaturePlanning); got != 1 {
@@ -885,15 +886,24 @@ func TestCapacityRefusal_OverCapacityIssueNeverSpawns(t *testing.T) {
 	if rec.TerminalFailureKind != TerminalKindContextWindowExceeded {
 		t.Errorf("rec.TerminalFailureKind = %q, want %q", rec.TerminalFailureKind, TerminalKindContextWindowExceeded)
 	}
+	// The CLI autonomous wrapper re-derives the kind from the failed stage:
+	// the structured gate result must carry it, since prose never does.
+	gates := snap.StageGateResults[string(state.StageFeatureDev)]
+	if len(gates) == 0 || ResolveTerminalKind(true, gates[len(gates)-1].TerminalKind, reason) != TerminalKindContextWindowExceeded {
+		t.Errorf("gate results %+v do not resolve to %q", gates, TerminalKindContextWindowExceeded)
+	}
+	if got := ParkedRemediation(TerminalKindContextWindowExceeded, reason); !strings.Contains(got, "decompose the issue") {
+		t.Errorf("remediation %q is not the capacity remediation", got)
+	}
 }
 
 // TestCapacityRefusal_SoftRouteDispatchesToTheFallback: under
 // reject_action: soft-route the same issue moves to the first
 // capacity_fallback_models entry whose window admits M — the 131k model,
-// not the 32k one listed ahead of it — and dispatches there.
+// not the distinct 32k model listed ahead of it — and dispatches there.
 func TestCapacityRefusal_SoftRouteDispatchesToTheFallback(t *testing.T) {
 	cfg := "pipeline:\n  size_gate:\n    routes:\n      reject_action: soft-route\n" +
-		"      capacity_fallback_models:\n        - local32/qwen-32k\n        - local131/qwen-131k\n"
+		"      capacity_fallback_models:\n        - local32/qwen-32k-b\n        - local131/qwen-131k\n"
 	runner, _, logs := runCapacityScenario(t, 1656, cfg)
 
 	if got := runner.count(state.StageFeatureDev); got == 0 {
@@ -907,5 +917,64 @@ func TestCapacityRefusal_SoftRouteDispatchesToTheFallback(t *testing.T) {
 	}
 	if !strings.Contains(logs, "soft-routed to local131/qwen-131k (window 131072)") {
 		t.Errorf("expected the soft-route to be logged:\n%s", logs)
+	}
+}
+
+// TestCapacityGate_OnlySizeSensitiveStagesAreCapped: an XL issue on the
+// Claude adapter's default routing is not refused. issue-pickup and
+// pr-create run on haiku (200k, whose cap is L), but they are not
+// size-sensitive; the size-sensitive stages resolve to 1M-window models.
+func TestCapacityGate_OnlySizeSensitiveStagesAreCapped(t *testing.T) {
+	root := t.TempDir()
+	seedRefusalRepo(t, root, allRefusalStageSkills)
+	runner := newRefusalCapturingStageRunner()
+	s := newRefusalScheduler(root, runner)
+
+	item := types.BoardItem{Number: 1700, Repo: "nightgauge/nightgauge", ID: "item-1700", Labels: []string{"size:XL"}}
+	logs := captureLog(t, func() { s.runPipeline(context.Background(), item) })
+
+	for _, st := range []state.PipelineStage{state.StageIssuePickup, state.StageFeatureDev, state.StagePRCreate} {
+		if runner.count(st) == 0 {
+			t.Errorf("%s was never dispatched\n%s", st, logs)
+		}
+	}
+	runner.mu.Lock()
+	pickupModel := runner.models[state.StageIssuePickup]
+	runner.mu.Unlock()
+	if pickupModel != "haiku" {
+		t.Errorf("issue-pickup ran on %q; this test needs the default haiku routing to mean anything", pickupModel)
+	}
+	if strings.Contains(logs, "exceeds the capacity cap") {
+		t.Errorf("an XL issue was capped although every size-sensitive stage has a 1M window:\n%s", logs)
+	}
+}
+
+// TestCapacityRefusal_KnownSizeRefusedAtTheFirstStage: a size known before
+// planning (a size:XL label) against a feature-dev model whose window caps
+// it (haiku, 200k → L) is refused at issue-pickup, before any stage spawns.
+func TestCapacityRefusal_KnownSizeRefusedAtTheFirstStage(t *testing.T) {
+	t.Setenv("NIGHTGAUGE_PIPELINE_STAGE_MODEL_FEATURE_DEV", "haiku")
+	root := t.TempDir()
+	seedRefusalRepo(t, root, allRefusalStageSkills)
+	runner := newRefusalCapturingStageRunner()
+	s := newRefusalScheduler(root, runner)
+
+	item := types.BoardItem{Number: 1701, Repo: "nightgauge/nightgauge", ID: "item-1701", Labels: []string{"size:XL"}}
+	logs := captureLog(t, func() { s.runPipeline(context.Background(), item) })
+
+	runner.mu.Lock()
+	spawned := len(runner.calls)
+	runner.mu.Unlock()
+	if spawned != 0 {
+		t.Fatalf("%d stage(s) spawned — a known over-capacity size must be refused before anything runs\n%s", spawned, logs)
+	}
+	rec := recordForIssue(t, root, 1701)
+	if rec.TerminalFailureKind != TerminalKindContextWindowExceeded {
+		t.Errorf("rec.TerminalFailureKind = %q, want %q", rec.TerminalFailureKind, TerminalKindContextWindowExceeded)
+	}
+	for _, want := range []string{"refused at stage issue-pickup", "stage feature-dev on haiku", "size XL", "cap L", "200000"} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("logs missing %q\n%s", want, logs)
+		}
 	}
 }
