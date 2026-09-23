@@ -13,6 +13,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { pipelineStateDir, plansDir as clonePlansDir } from "../../utils/cloneLayout";
 import { execFile } from "child_process";
 import { promisify } from "util";
 
@@ -299,7 +300,7 @@ export class ContextAssembler {
    * Overwrite `planning.ac_reconcile` from the deterministic report on disk.
    *
    * `nightgauge preflight ac-reconcile` writes a complete seven-field report to
-   * `.nightgauge/pipeline/ac-reconcile-{N}.json`. Before #1011 the only
+   * `pipelineStateDir(root)/ac-reconcile-{N}.json`. Before #1011 the only
    * instruction to get it into `planning-{N}.json` was prose in the planning
    * SKILL.md, and the shell phase that ran the reconciler exposed just three
    * scalars — so the model re-typed the block by hand and dropped
@@ -379,7 +380,7 @@ export class ContextAssembler {
       return this.contextLoader.getContextFile(type, issueNumber);
     }
     const workspaceRoot = this.workspaceRootProvider();
-    return path.join(workspaceRoot, ".nightgauge", "pipeline", `${type}-${issueNumber}.json`);
+    return path.join(pipelineStateDir(workspaceRoot), `${type}-${issueNumber}.json`);
   }
 
   // ---------------------------------------------------------------------------
@@ -1202,7 +1203,7 @@ export class ContextAssembler {
 
       let baseBranch = "main";
       let nativeParent: number | null = null;
-      const branchContextPath = path.join(workspaceRoot, ".nightgauge", "plans", ".branch-context");
+      const branchContextPath = path.join(clonePlansDir(workspaceRoot), ".branch-context");
       try {
         if (fs.existsSync(branchContextPath)) {
           const content = fs.readFileSync(branchContextPath, "utf-8");
@@ -1943,7 +1944,7 @@ export class ContextAssembler {
           ? `Implement: ${title}. Acceptance criteria: ${acceptanceCriteria.slice(0, 3).join("; ")}`
           : `Implement: ${title}`;
 
-      const planDir = path.join(workspaceRoot, ".nightgauge", "plans");
+      const planDir = clonePlansDir(workspaceRoot);
       if (!fs.existsSync(planDir)) {
         fs.mkdirSync(planDir, { recursive: true });
       }

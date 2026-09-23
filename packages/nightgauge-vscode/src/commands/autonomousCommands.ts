@@ -11,6 +11,7 @@
  * @see Issue #2373 — Autonomous mode UX
  */
 
+import { RELATIVE_CLONE_LOGS_DIR } from "../utils/cloneLayout";
 import * as vscode from "vscode";
 import { IpcClient } from "../services/IpcClient";
 import { IpcClientBase } from "../services/IpcClient";
@@ -598,7 +599,7 @@ async function handleBackendDisconnected(logger: Logger): Promise<void> {
   const channel = getOutputChannel();
   channel.appendLine(
     `[${new Date().toISOString()}] Backend disconnected — autonomous mode stopped unexpectedly. ` +
-      `Check .nightgauge/logs/autonomous-exits.jsonl for crash details.`
+      `Check ${RELATIVE_CLONE_LOGS_DIR}/autonomous-exits.jsonl for crash details.`
   );
 
   const action = await vscode.window.showWarningMessage(
@@ -1094,7 +1095,7 @@ function formatStatus(status: AutonomousStatusResult, now: Date = new Date()): s
     lines.push("Autonomous Mode: BACKEND DISCONNECTED");
     lines.push("The Go backend process stopped unexpectedly.");
     lines.push(
-      'Check .nightgauge/logs/autonomous-exits.jsonl for crash details, or click "Start Autonomous" to restart.'
+      `Check ${RELATIVE_CLONE_LOGS_DIR}/autonomous-exits.jsonl for crash details, or click "Start Autonomous" to restart.`
     );
     return lines.join("\n");
   }

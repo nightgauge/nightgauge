@@ -19,6 +19,7 @@
  * @see docs/CONFIGURATION.md — pipeline.adaptive_budget flag
  */
 
+import { pipelineStateDir } from "./cloneLayout";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as readline from "node:readline";
@@ -193,7 +194,7 @@ export async function loadAdaptiveBudgetOverrides(
 
   try {
     const mainRoot = resolveMainRepoRoot(workspaceRoot);
-    const exitRecordsDir = path.join(mainRoot, ".nightgauge", "pipeline", "exit-records");
+    const exitRecordsDir = path.join(pipelineStateDir(mainRoot), "exit-records");
 
     let entries: string[];
     try {

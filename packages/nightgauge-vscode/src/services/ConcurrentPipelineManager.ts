@@ -8,6 +8,7 @@
  * @see Issue #1621 - Git worktree-based concurrent pipeline execution
  */
 
+import { pipelineStateDir } from "../utils/cloneLayout";
 import * as vscode from "vscode";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -1202,9 +1203,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     // conflicting PR, and the new push won't be rejected as non-fast-forward.
     let deleteRemoteBranch = false;
     const conflictSignalPath = path.join(
-      slotWorktreeManager.getRepoRoot(),
-      ".nightgauge",
-      "pipeline",
+      pipelineStateDir(slotWorktreeManager.getRepoRoot()),
       `conflict-restart-${item.issueNumber}.json`
     );
     try {
@@ -2265,7 +2264,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * Reconcile a slot failure against the failed stage's own exit-record.
    *
    * The Go scheduler writes one `StageExitRecord` per stage to
-   * `.nightgauge/pipeline/exit-records/<UTC-day>.jsonl` carrying a
+   * `pipelineStateDir(root)/exit-records/<UTC-day>.jsonl` carrying a
    * `success` flag (`scheduler_exit_record.go`). The notifier is a SEPARATE
    * paging surface from that writer — Case 2 paged "failed at pr-create" while
    * the pr-create exit-record said `success:true`. Reading the record directly
@@ -2290,7 +2289,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     const root = slot.worktreeManager?.getRepoRoot() || this.repoRoot;
     if (!root) return false;
 
-    const dir = path.join(root, ".nightgauge", "pipeline", "exit-records");
+    const dir = path.join(pipelineStateDir(root), "exit-records");
     const dayFiles = this.recentExitRecordDayFiles();
 
     let latestSuccess: boolean | undefined;
@@ -2373,7 +2372,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       // A run that stopped because its work is blocked on other issues has
       // ALREADY done everything a halt exists to provoke: #1142 classified it
       // as blocked rather than failed, and #1147 wrote the durable finding to
-      // .nightgauge/pipeline/blocked-findings/, posted the issue comment, and
+      // pipelineStateDir(root)/blocked-findings/, posted the issue comment, and
       // raised the out-of-scope-blocker card. Pickup consults that finding and
       // defers at zero cost on re-dispatch. Freezing the queue on top of that
       // adds no information and no decision — it only stops unrelated work.

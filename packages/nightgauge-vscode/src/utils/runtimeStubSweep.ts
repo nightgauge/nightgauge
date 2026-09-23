@@ -2,7 +2,7 @@
  * runtimeStubSweep - classify stale / cross-contaminated pipeline runtime stubs.
  *
  * Startup restore (bootstrap/services.ts, Issue #2008) scans
- * `.nightgauge/pipeline/runtime-<N>.json` files to resurrect paused runs. In a
+ * `pipelineStateDir(root)/runtime-<N>.json` files to resurrect paused runs. In a
  * multi-repo workspace, concurrent dispatch used to strand orphan stubs in the
  * WRONG repo: the Go IPC server persisted a run's first "initialized" snapshot —
  * before the run's repo slug was seeded — into the shared launch root, leaving a

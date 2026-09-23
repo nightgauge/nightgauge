@@ -289,7 +289,7 @@ export type Stages = z.infer<typeof StagesSchema>;
 
 /*
  * The top-level pipeline-state object schema and its inferred type used to sit
- * here: the wire format of <worktree>/.nightgauge/pipeline/<the writer-less
+ * here: the wire format of pipelineStateDir(<worktree>)/<the writer-less
  * state file>. Retired by #471.
  *
  * It had ZERO consumers in src. Nothing in Go, TypeScript or any skill has ever

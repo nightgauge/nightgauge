@@ -931,7 +931,7 @@ export async function getTimeEstimateWithFeedback(
 /**
  * Validate a size estimate against calibration history.
  *
- * Reads the calibration table from .nightgauge/pipeline/calibration.json
+ * Reads the calibration table from pipelineStateDir(root)/calibration.json
  * and checks if the estimated cost for the given size is an outlier under the
  * active performance mode (issue #3216). Falls back to the same-size `elevated`
  * bucket when the active mode bucket is empty. Returns null when calibration

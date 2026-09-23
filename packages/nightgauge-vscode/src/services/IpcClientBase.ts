@@ -11,6 +11,7 @@
  * @see internal/ipc/protocol.go — Go-side protocol definition
  */
 
+import { cloneLogsDir } from "../utils/cloneLayout";
 import { ChildProcess, spawn } from "child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -1620,7 +1621,7 @@ export interface KnowledgeMetricsResult {
  *
  * Mirrors `internal/ipc.RecordStageExitResult`. `recorded` is true when the
  * Go-side `WriteStageExitRecord` appended a JSONL line to today's
- * `.nightgauge/pipeline/exit-records/<UTC-day>.jsonl` file. False
+ * `pipelineStateDir(root)/exit-records/<UTC-day>.jsonl` file. False
  * results are reserved for forward-compat — current implementation either
  * returns `true` or surfaces an error via the IPC envelope.
  */
@@ -2617,21 +2618,21 @@ export abstract class IpcClientBase implements vscode.Disposable {
 
   /**
    * Write a log line to the persistent IPC log file.
-   * The file is created lazily in .nightgauge/logs/ipc-client.log
+   * The file is created lazily in cloneLogsDir(root)/ipc-client.log
    * and survives extension reloads / output channel disposal.
    */
   private writeToLogFile(line: string): void {
     if (!this.logFileStream && this.workspaceRoot) {
       try {
         // Skip persistent logging in uninitialized repos. Creating
-        // .nightgauge/logs/ here would re-spawn the scaffolding we
+        // cloneLogsDir(root)/ here would re-spawn the scaffolding we
         // intentionally avoid before /nightgauge:repo-init has run —
         // the output channel still captures the same content.
         const configPath = path.join(this.workspaceRoot, ".nightgauge", "config.yaml");
         if (!fs.existsSync(configPath)) {
           return;
         }
-        const logDir = path.join(this.workspaceRoot, ".nightgauge", "logs");
+        const logDir = cloneLogsDir(this.workspaceRoot);
         fs.mkdirSync(logDir, { recursive: true });
         const logPath = path.join(logDir, "ipc-client.log");
 

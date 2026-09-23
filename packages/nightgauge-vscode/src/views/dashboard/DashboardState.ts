@@ -8,6 +8,7 @@
  * @see docs/ARCHITECTURE.md for WebView patterns
  */
 
+import { pipelineStateDir } from "../../utils/cloneLayout";
 import * as vscode from "vscode";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -1329,7 +1330,7 @@ export class DashboardState {
       // memento serialization to multi-MB which blocks the extension host
       // event loop and causes VSCode to kill the host as unresponsive.
       // Tool calls are loaded on-demand from the TelemetryStore (JSONL files
-      // in .nightgauge/pipeline/history/) via preloadMostRecentToolCalls
+      // in pipelineStateDir(root)/history/) via preloadMostRecentToolCalls
       // and the dashboard's lazy-load pattern. Memento is only a metadata
       // cache for fast startup per Issue #1007.
       toolCalls: [],
@@ -2503,8 +2504,8 @@ export class DashboardState {
   /**
    * Backfill dashboard history from pipeline run artifacts on disk
    *
-   * Reads completed pipeline state files from .nightgauge/pipeline/
-   * AND execution history JSONL files from .nightgauge/pipeline/history/
+   * Reads completed pipeline state files from pipelineStateDir(root)/
+   * AND execution history JSONL files from pipelineStateDir(root)/history/
    * and imports them into dashboard history if not already present.
    * This ensures the dashboard shows historical data even when the
    * VSCode workspace state (Memento) is empty or was cleared.
@@ -2530,7 +2531,7 @@ export class DashboardState {
 
     if (!this.workspaceRoot) return 0;
 
-    const pipelineDir = path.join(this.workspaceRoot, ".nightgauge", "pipeline");
+    const pipelineDir = pipelineStateDir(this.workspaceRoot);
 
     // Rescrub: clear existing history to rebuild from disk
     if (options.rescrub) {
@@ -3270,7 +3271,7 @@ export class DashboardState {
     if (!this.workspaceRoot) return null;
 
     try {
-      const historyDir = path.join(this.workspaceRoot, ".nightgauge", "pipeline", "history");
+      const historyDir = path.join(pipelineStateDir(this.workspaceRoot), "history");
 
       // Read all JSONL files from history directory
       let files: string[];
@@ -3688,7 +3689,7 @@ export class DashboardState {
     }
 
     try {
-      const historyDir = path.join(this.workspaceRoot, ".nightgauge", "pipeline", "history");
+      const historyDir = path.join(pipelineStateDir(this.workspaceRoot), "history");
 
       // Try to find a JSONL record matching this run's issue number
       let files: string[];

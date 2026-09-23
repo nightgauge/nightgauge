@@ -15,6 +15,7 @@
  * @see docs/ARCHITECTURE.md - Context-Isolated Pipeline Architecture
  */
 
+import { pipelineStateDir, plansDir as clonePlansDir } from "../utils/cloneLayout";
 import * as vscode from "vscode";
 import type { HeadlessOrchestrator } from "../services/HeadlessOrchestrator";
 import type { ConcurrentPipelineManager } from "../services/ConcurrentPipelineManager";
@@ -345,8 +346,8 @@ export function registerAbortPipelineCommand(
       }
 
       // Step 4: Delete context files, plan files, prune knowledge
-      const contextDir = `${workspaceRoot}/.nightgauge/pipeline`;
-      const plansDir = `${workspaceRoot}/.nightgauge/plans`;
+      const contextDir = pipelineStateDir(workspaceRoot);
+      const plansDir = clonePlansDir(workspaceRoot);
 
       // Collect file lists for ALL affected issues
       const allPlanPatterns = affectedIssues.map((num) =>
@@ -362,7 +363,7 @@ export function registerAbortPipelineCommand(
 
       // Run clearPipeline and file deletions concurrently.
       //
-      // `contextFiles` is EVERY *.json in .nightgauge/pipeline/, not just the
+      // `contextFiles` is EVERY *.json in pipelineStateDir(root)/, not just the
       // per-issue context files, so this filter is load-bearing: it is what
       // keeps the durable `run-state.json`, `queue-state.json` and
       // `batch-state.json` from being deleted on abort. Until #471 the suffix

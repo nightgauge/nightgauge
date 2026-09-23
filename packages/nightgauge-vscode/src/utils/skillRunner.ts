@@ -37,6 +37,7 @@ import * as vscode from "vscode";
 import { spawn, execFileSync, type ChildProcess } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
+import { pipelineStateDir, isUsableWorkspaceRoot } from "./cloneLayout";
 import * as os from "os";
 import { randomUUID } from "crypto";
 import type { PipelineStage } from "@nightgauge/sdk";
@@ -417,7 +418,7 @@ export interface SkillRunResult {
 
   // ─── Issue #3605 stage-exit diagnostic fields ───────────────────────────
   // Forwarded verbatim to Go via pipeline.stageResult so the daily exit-record
-  // (.nightgauge/pipeline/exit-records/<UTC-day>.jsonl) carries enough
+  // (pipelineStateDir(root)/exit-records/<UTC-day>.jsonl) carries enough
   // forensic detail to debug failures without re-running. All optional —
   // empty fields are dropped at the IPC boundary so healthy runs stay terse.
 
@@ -1792,7 +1793,7 @@ function writeDiagnosticWithMirror(
 
   for (const target of targets) {
     try {
-      const histDir = path.join(target, ".nightgauge", "pipeline", "history", String(issueNumber));
+      const histDir = path.join(pipelineStateDir(target), "history", String(issueNumber));
       fs.mkdirSync(histDir, { recursive: true });
       const diagFile = path.join(histDir, filename);
       fs.writeFileSync(diagFile, content, "utf-8");
@@ -5408,12 +5409,16 @@ export function runStageSkillHeadless(
   // silent (but now debug-logged) no-op recorder — a per-stage caller must
   // never invent a run id or one run's trace would split across files.
   // Fail-open by contract.
-  const traceRecorder = TraceRecorder.open({
-    pipelineDir: path.join(workspaceRoot, ".nightgauge", "pipeline"),
-    ...(targetRepo ? { repo: targetRepo } : {}),
-    ...(issueNumber && issueNumber > 0 ? { issue: issueNumber } : {}),
-    ...(runId ? { runId } : {}),
-  });
+  // Fail-open: with an unusable root the trace is skipped rather than written
+  // relative to the host's cwd or thrown from the layout helper (#2036).
+  const traceRecorder = isUsableWorkspaceRoot(workspaceRoot)
+    ? TraceRecorder.open({
+        pipelineDir: pipelineStateDir(workspaceRoot),
+        ...(targetRepo ? { repo: targetRepo } : {}),
+        ...(issueNumber && issueNumber > 0 ? { issue: issueNumber } : {}),
+        ...(runId ? { runId } : {}),
+      })
+    : undefined;
 
   // Session ID for conversation resumption (Issue #118)
   let capturedSessionId: string | undefined;
@@ -6883,7 +6888,7 @@ export function runStageSkillHeadless(
       }
       const inferred = advance.marker;
       lastPhaseName = inferred.name;
-      traceRecorder.phaseTransition(stage, inferred);
+      traceRecorder?.phaseTransition(stage, inferred);
       callbacks?.onPhaseStart?.(stage, inferred.name, inferred.index, inferred.total);
     }
 
@@ -6937,7 +6942,7 @@ export function runStageSkillHeadless(
       const startMarker = phaseInference.start();
       if (startMarker) {
         lastPhaseName = startMarker.name;
-        traceRecorder.phaseTransition(stage, startMarker);
+        traceRecorder?.phaseTransition(stage, startMarker);
         callbacks?.onPhaseStart?.(stage, startMarker.name, startMarker.index, startMarker.total);
       }
     }
@@ -7153,7 +7158,7 @@ export function runStageSkillHeadless(
               callbacks?.onPhasePassed?.(stage, p.name, p.index, p.total); // gap the marker revealed (#1924)
             }
             progressMonitor.recordSignal("phase_marker");
-            traceRecorder.phaseTransition(stage, marker);
+            traceRecorder?.phaseTransition(stage, marker);
             callbacks?.onPhaseStart?.(stage, marker.name, marker.index, marker.total);
           }
         }
@@ -7165,7 +7170,7 @@ export function runStageSkillHeadless(
           for (const p of phaseInference.observeRealMarker(marker.index)) {
             callbacks?.onPhasePassed?.(stage, p.name, p.index, p.total); // gap the marker revealed (#1924)
           }
-          traceRecorder.phaseTransition(stage, marker);
+          traceRecorder?.phaseTransition(stage, marker);
           callbacks?.onPhaseStart?.(stage, marker.name, marker.index, marker.total);
         }
         phaseContentBuffer = "";
@@ -7215,7 +7220,7 @@ export function runStageSkillHeadless(
             callbacks?.onPhasePassed?.(stage, p.name, p.index, p.total); // gap the marker revealed (#1924)
           }
           progressMonitor.recordSignal("phase_marker");
-          traceRecorder.phaseTransition(stage, marker);
+          traceRecorder?.phaseTransition(stage, marker);
           callbacks?.onPhaseStart?.(stage, marker.name, marker.index, marker.total);
         }
       }
@@ -7408,7 +7413,7 @@ export function runStageSkillHeadless(
     stageCompleted = true;
     clearStallTicker();
     // Drain the lifecycle trace recorder's append chain (fail-open, #180).
-    void traceRecorder.flush();
+    void traceRecorder?.flush();
     if (stallWarningShown) {
       callbacks?.onStallWarningClear?.();
     }

@@ -2,7 +2,7 @@
  * LocalAuditFallbackService — Local telemetry fallback for the Audit Log tab.
  *
  * When the platform audit API is unreachable (non-401/403 failure), this service
- * reads `.nightgauge/pipeline/history/index.json` via TelemetryStore and maps
+ * reads `pipelineStateDir(root)/history/index.json` via TelemetryStore and maps
  * HistoryIndexEntry records to AuditLogEntry objects that the AuditTabHtml renderer
  * can display.
  *

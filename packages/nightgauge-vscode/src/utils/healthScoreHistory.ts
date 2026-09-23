@@ -3,13 +3,14 @@
  *
  * Static utility classes following the ExecutionHistoryWriter/Reader pattern.
  * Persists health score snapshots to a single JSONL file:
- *   .nightgauge/pipeline/health-history.jsonl
+ *   pipelineStateDir(root)/health-history.jsonl
  *
  * Non-critical: all operations log warnings on failure, never throw.
  *
  * @see Issue #789 - Persist Health Scores to Disk with 30-Day Trend
  */
 
+import { pipelineStateDir } from "./cloneLayout";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
@@ -22,8 +23,8 @@ import {
 import type { TrendAnalysis, TrendChartDay } from "../views/dashboard/HealthWidgetTypes";
 import { writeFileAtomic } from "./atomicWrite";
 
-/** Relative path from workspace root to the health history file */
-const HEALTH_HISTORY_FILE = ".nightgauge/pipeline/health-history.jsonl";
+/** Health history file name inside the pipeline state dir */
+const HEALTH_HISTORY_FILE = "health-history.jsonl";
 
 /** Default retention period in days (supports up to 90d range) */
 const DEFAULT_RETENTION_DAYS = 90;
@@ -129,7 +130,7 @@ export class HealthScoreHistoryWriter {
    * Returns the absolute path to the health history file.
    */
   static getFilePath(workspaceRoot: string): string {
-    return path.join(workspaceRoot, HEALTH_HISTORY_FILE);
+    return path.join(pipelineStateDir(workspaceRoot), HEALTH_HISTORY_FILE);
   }
 }
 

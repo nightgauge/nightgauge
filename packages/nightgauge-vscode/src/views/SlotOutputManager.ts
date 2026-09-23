@@ -11,6 +11,7 @@
  * @see Issue #1621 - Git worktree-based concurrent pipeline execution
  */
 
+import { RELATIVE_CLONE_LOGS_DIR } from "../utils/cloneLayout";
 import * as vscode from "vscode";
 import { redactSecrets } from "../utils/redaction";
 import type { PipelineStage } from "@nightgauge/sdk";
@@ -248,7 +249,7 @@ export class SlotOutputManager implements vscode.Disposable {
    * lines of output in the Output panel after a reload — the channels remain
    * visible until the host process actually exits.
    *
-   * Persistent logs are always available in .nightgauge/logs/.
+   * Persistent logs are always available in cloneLogsDir(root)/.
    */
   dispose(): void {
     // Write a final message to each channel so the user knows logs survive
@@ -256,7 +257,7 @@ export class SlotOutputManager implements vscode.Disposable {
       try {
         slot.channel.appendLine("");
         slot.channel.appendLine(
-          "[Extension deactivating — full logs persisted to .nightgauge/logs/]"
+          `[Extension deactivating — full logs persisted to ${RELATIVE_CLONE_LOGS_DIR}/]`
         );
       } catch {
         // Channel may already be invalid

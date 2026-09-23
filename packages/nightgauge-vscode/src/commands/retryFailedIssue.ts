@@ -10,6 +10,7 @@
 import * as vscode from "vscode";
 import * as fs from "node:fs/promises";
 import * as path from "path";
+import { pipelineStateDir } from "../utils/cloneLayout";
 import { uuidV7, type PipelineStage } from "@nightgauge/sdk";
 import { CompletedIssuesService } from "../services/CompletedIssuesService";
 import type { HeadlessOrchestrator, StageRunResult } from "../services/HeadlessOrchestrator";
@@ -93,9 +94,7 @@ export function registerRetryFailedIssueCommand(
         }
 
         const contextFile = path.join(
-          workspaceRoot,
-          ".nightgauge",
-          "pipeline",
+          pipelineStateDir(workspaceRoot),
           `${failedIssue.failed_stage.replace("feature-", "")}-${issueNumber}.json`
         );
 

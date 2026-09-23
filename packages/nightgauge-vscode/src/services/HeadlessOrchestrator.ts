@@ -18,6 +18,7 @@
 import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
+import { pipelineStateDir, RELATIVE_PIPELINE_STATE_DIR } from "../utils/cloneLayout";
 import { exec, execFile } from "child_process";
 import { promisify } from "util";
 
@@ -1303,7 +1304,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * factory seeds it once from `resolveAgentRunnerRoot`, so every slot shares
    * it even when a cross-repo item runs out of a sibling repo's worktree. The
    * budget-ceiling remedy needs the other one. `budget.raiseCeiling` persists
-   * `.nightgauge/pipeline/budget-override.json` under the CARD's repo root
+   * `pipelineStateDir(root)/budget-override.json` under the CARD's repo root
    * (`Server.repoRoot(repo)`, the same per-repo registry that scopes
    * runtime-{N}.json), so a run that reads its ceiling from anywhere else — the
    * runner root, or `workspaceFolders[0]`, which is what the read side used
@@ -1803,9 +1804,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   private readCurrentRunId(issueNumber: number): string {
     try {
       const runStatePath = path.join(
-        this.getWorkingDirectory(),
-        ".nightgauge",
-        "pipeline",
+        pipelineStateDir(this.getWorkingDirectory()),
         "run-state.json"
       );
       const parsed = JSON.parse(fs.readFileSync(runStatePath, "utf-8")) as {
@@ -1891,7 +1890,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
 
   /**
    * Root of the repo THIS RUN targets — the one whose
-   * `.nightgauge/pipeline/budget-override.json` the daemon writes when the
+   * `pipelineStateDir(root)/budget-override.json` the daemon writes when the
    * operator resolves a budget-ceiling card. @see runRepoRoot
    *
    * Falls back to the persistent root (interactive path, and any slot started
@@ -2840,7 +2839,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           `decision that must be human-approved before feature-dev implements it. Why: ${reasons}. ` +
           `This is NOT a failure and NO development or validation cost was incurred — the pipeline ` +
           `halted before implementation. To proceed: add the \`approved:architecture\` label to the ` +
-          `issue (or write .nightgauge/pipeline/approval-${issueNumber}.json with ` +
+          `issue (or write ${RELATIVE_PIPELINE_STATE_DIR}/approval-${issueNumber}.json with ` +
           `{"approved": true}), then re-queue. To turn the gate off entirely, set ` +
           `pipeline.architecture_approval.enabled: false.`
       );
@@ -2934,7 +2933,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   private verifyPostValidateState(issueNumber: number): Error | null {
     try {
       const cwd = this.pinnedWorkspaceRoot ?? this.getWorkingDirectory();
-      const ctxPath = path.join(cwd, ".nightgauge", "pipeline", `validate-${issueNumber}.json`);
+      const ctxPath = path.join(pipelineStateDir(cwd), `validate-${issueNumber}.json`);
       if (!fs.existsSync(ctxPath)) {
         // No verdict to judge — the pre-condition gate handles a missing file.
         return null;
@@ -3013,7 +3012,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    */
   private async enforceValidateCommitContract(issueNumber: number): Promise<Error | null> {
     const cwd = this.pinnedWorkspaceRoot ?? this.getWorkingDirectory();
-    const pipelineDir = path.join(cwd, ".nightgauge", "pipeline");
+    const pipelineDir = pipelineStateDir(cwd);
 
     // 1. What did feature-dev claim to implement?
     let claimedFiles: string[];
@@ -4465,7 +4464,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   private async checkPrMergedForIssue(issueNumber: number): Promise<{ prNumber: number } | null> {
     try {
       const cwd = this.getWorkingDirectory();
-      const prContextPath = path.join(cwd, ".nightgauge", "pipeline", `pr-${issueNumber}.json`);
+      const prContextPath = path.join(pipelineStateDir(cwd), `pr-${issueNumber}.json`);
       let prNumber: number | undefined;
       try {
         if (fs.existsSync(prContextPath)) {
@@ -4700,7 +4699,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   ): Promise<{ prNumber: number; state: "OPEN" | "MERGED" } | null> {
     try {
       const cwd = this.getWorkingDirectory();
-      const prContextPath = path.join(cwd, ".nightgauge", "pipeline", `pr-${issueNumber}.json`);
+      const prContextPath = path.join(pipelineStateDir(cwd), `pr-${issueNumber}.json`);
       let prNumber: number | undefined;
       try {
         if (fs.existsSync(prContextPath)) {
@@ -4774,7 +4773,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   } | null> {
     try {
       const cwd = this.getWorkingDirectory();
-      const prContextPath = path.join(cwd, ".nightgauge", "pipeline", `pr-${issueNumber}.json`);
+      const prContextPath = path.join(pipelineStateDir(cwd), `pr-${issueNumber}.json`);
       let prNumber: number | undefined;
       try {
         if (fs.existsSync(prContextPath)) {
@@ -5192,7 +5191,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       for (const { stage, type } of stageContextTypes) {
         const stageState = state.stages[stage as PipelineStage];
         if (stageState?.status === "complete") {
-          const contextPath = `${wsRoot}/.nightgauge/pipeline/${type}-${issueNumber}.json`;
+          const contextPath = path.join(pipelineStateDir(wsRoot), `${type}-${issueNumber}.json`);
           if (!fs.existsSync(contextPath)) {
             try {
               fs.writeFileSync(
@@ -5450,7 +5449,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     lifecycle: "running" | "paused" | "aborted" | "none";
   } {
     const ws = this.getWorkingDirectory();
-    const runStatePath = path.join(ws, ".nightgauge", "pipeline", "run-state.json");
+    const runStatePath = path.join(pipelineStateDir(ws), "run-state.json");
     if (!fs.existsSync(runStatePath)) {
       return { lifecycle: "none" };
     }
@@ -5528,7 +5527,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
 
         case "open-run-state-directory": {
           const ws = this.getWorkingDirectory();
-          const dir = path.join(ws, ".nightgauge", "pipeline");
+          const dir = pipelineStateDir(ws);
           await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(dir));
           return { success: true };
         }
@@ -6993,7 +6992,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * Issue #3619: PR #3608 wired `WriteStageExitRecord` only to the Go
    * scheduler's `runPipeline()` path. The user's autonomous workflow runs
    * through this TS-side `HeadlessOrchestrator.runPipeline()` which never
-   * round-trips Go's scheduler, so `.nightgauge/pipeline/exit-records/`
+   * round-trips Go's scheduler, so `pipelineStateDir(root)/exit-records/`
    * never got written. Every IPC-mode failure went into a black box — see
    * the #3340 retro where four Anthropic-500 retries burned $2.41 with no
    * persisted record. This helper closes that gap by calling the
@@ -7735,7 +7734,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * the pipeline dir and the mixed-version warning to it.
    */
   private resolveRuntimeSnapshotPath(workspaceRoot: string, issueNumber: number): string | null {
-    const pipelineDir = path.join(workspaceRoot, ".nightgauge", "pipeline");
+    const pipelineDir = pipelineStateDir(workspaceRoot);
     return resolveRuntimeSnapshotPath(pipelineDir, issueNumber, (legacyFile) => {
       this.logger.warn(
         "Runtime snapshot is still on the pre-ADR-017 name — gate results for this run are unreadable until the backend restarts",
@@ -7750,7 +7749,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * The Go scheduler (in-process) and `nightgauge gate verify --record` (this
    * TS path, Issue #210) both persist through
    * `internal/state.RuntimeState.Persist`, which since ADR-017 (#370) writes
-   * `{workspace}/.nightgauge/pipeline/runtime-{issue}-{runId}.json`. Returns an
+   * `pipelineStateDir({workspace})/runtime-{issue}-{runId}.json`. Returns an
    * empty map when the file is missing or the field is absent — callers fall
    * through to their own legacy heuristics in that case. Exposed as a method
    * so subclasses / tests can override the read path.
@@ -7985,7 +7984,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       const fs = require("fs");
       // Primary source: issue-{N}.json (if it still exists)
       let baseBranch = "";
-      const contextPath = `${workspaceRoot}/.nightgauge/pipeline/issue-${issueNumber}.json`;
+      const contextPath = path.join(pipelineStateDir(workspaceRoot), `issue-${issueNumber}.json`);
       if (fs.existsSync(contextPath)) {
         const ctx = JSON.parse(fs.readFileSync(contextPath, "utf-8"));
         baseBranch = ctx.base_branch ?? "";
@@ -7995,7 +7994,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       // @see Issue #137 — base_branch stays "main" when
       // create-feature-branch.sh detects an epic branch after state init.
       if (!baseBranch.startsWith("epic/")) {
-        const prContextPath = `${workspaceRoot}/.nightgauge/pipeline/pr-${issueNumber}.json`;
+        const prContextPath = path.join(pipelineStateDir(workspaceRoot), `pr-${issueNumber}.json`);
         if (fs.existsSync(prContextPath)) {
           const prCtx = JSON.parse(fs.readFileSync(prContextPath, "utf-8"));
           if (prCtx.base_branch?.startsWith("epic/")) {
@@ -8660,7 +8659,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   private computeHealthTrendSlope(): number {
     try {
       const workspaceRoot = this.getWorkingDirectory();
-      const filePath = path.join(workspaceRoot, ".nightgauge", "pipeline", "health-history.jsonl");
+      const filePath = path.join(pipelineStateDir(workspaceRoot), "health-history.jsonl");
 
       if (!fs.existsSync(filePath)) return 0;
 
@@ -8715,7 +8714,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   private computeStageFailureRate(stage: PipelineStage): number {
     try {
       const workspaceRoot = this.getWorkingDirectory();
-      const historyDir = path.join(workspaceRoot, ".nightgauge", "pipeline", "history");
+      const historyDir = path.join(pipelineStateDir(workspaceRoot), "history");
 
       if (!fs.existsSync(historyDir)) return 0;
 
@@ -10661,7 +10660,10 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                 const contextType = STAGE_OUTPUT_CONTEXT_TYPE[stage];
                 const wsRoot = this.getWorkingDirectory();
                 if (contextType && wsRoot) {
-                  const contextPath = `${wsRoot}/.nightgauge/pipeline/${contextType}-${issueNumber}.json`;
+                  const contextPath = path.join(
+                    pipelineStateDir(wsRoot),
+                    `${contextType}-${issueNumber}.json`
+                  );
                   if (!fs.existsSync(contextPath)) {
                     this.logger.warn(
                       `Resume: stage ${stage} marked complete but context file missing (${contextType}-${issueNumber}.json). Re-running stage.`
@@ -11362,9 +11364,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         if (stage === "feature-validate" && this.auditClient) {
           try {
             const validateCtxPath = path.join(
-              this.getWorkingDirectory(),
-              ".nightgauge",
-              "pipeline",
+              pipelineStateDir(this.getWorkingDirectory()),
               `validate-${issueNumber}.json`
             );
             if (fs.existsSync(validateCtxPath)) {
@@ -12490,9 +12490,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       if (this.ceilingCheckpointWritten) {
         try {
           const signalPath = path.join(
-            this.getWorkingDirectory(),
-            ".nightgauge",
-            "pipeline",
+            pipelineStateDir(this.getWorkingDirectory()),
             `checkpoint-signal-${issueNumber}.json`
           );
           if (fs.existsSync(signalPath)) {
@@ -12507,9 +12505,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       // Clean up wind-down signal file if it was written (Issue #2338)
       try {
         const winddownPath = path.join(
-          this.getWorkingDirectory(),
-          ".nightgauge",
-          "pipeline",
+          pipelineStateDir(this.getWorkingDirectory()),
           `winddown-signal-${issueNumber}.json`
         );
         if (fs.existsSync(winddownPath)) {
@@ -14340,7 +14336,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           });
           this.eventDispatcher.onStderr(stage, `${decision.message}\n`);
           try {
-            const signalDir = path.join(this.getWorkingDirectory(), ".nightgauge", "pipeline");
+            const signalDir = pipelineStateDir(this.getWorkingDirectory());
             const signalPath = path.join(signalDir, `winddown-signal-${issueNumber}.json`);
             const signalContent = JSON.stringify(
               {
@@ -14722,9 +14718,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                 // Write checkpoint signal file for the agent to detect
                 try {
                   const signalPath = path.join(
-                    this.getWorkingDirectory(),
-                    ".nightgauge",
-                    "pipeline",
+                    pipelineStateDir(this.getWorkingDirectory()),
                     `checkpoint-signal-${issueNumber}.json`
                   );
                   const signalContent = JSON.stringify(
@@ -15536,7 +15530,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
 
               // Write budget overrun context file for Go scheduler retry (Issue #2338)
               try {
-                const overrunDir = path.join(this.getWorkingDirectory(), ".nightgauge", "pipeline");
+                const overrunDir = pipelineStateDir(this.getWorkingDirectory());
                 const overrunPath = path.join(overrunDir, `budget-overrun-${issueNumber}.json`);
                 let wipBranch = "";
                 try {

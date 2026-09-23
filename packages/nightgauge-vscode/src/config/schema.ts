@@ -12,6 +12,11 @@
  * @see Issue #432 - Comprehensive Zod Schema for Config Fields
  */
 
+import {
+  RELATIVE_PIPELINE_STATE_DIR,
+  RELATIVE_PLANS_DIR,
+  RELATIVE_CLONE_LOGS_DIR,
+} from "../utils/cloneLayout";
 import { z } from "zod";
 import {
   CODEX_DEFAULT_BASE_MODEL,
@@ -1334,7 +1339,7 @@ export const PipelineConfigSchema = z.object({
    * plan is classified high-impact (production-touching area, major dependency
    * bumps, dense architectural trade-off language, or risk_high routing) until
    * a human approves. Approval evidence is the `approved:architecture` issue
-   * label or a `.nightgauge/pipeline/approval-<N>.json` file. Evaluated
+   * label or a `pipelineStateDir(root)/approval-<N>.json` file. Evaluated
    * by the Go binary (`nightgauge approval-gate <N>`), which merges
    * machine → project → local config from the pipeline worktree.
    *
@@ -3898,7 +3903,7 @@ export const DEFAULT_CONFIG: NightgaugeConfig = {
     },
     logs: {
       retain: true,
-      dir: ".nightgauge/logs",
+      dir: RELATIVE_CLONE_LOGS_DIR,
     },
     default_mode: "headless",
     stall_thresholds: {
@@ -4063,8 +4068,8 @@ export const DEFAULT_CONFIG: NightgaugeConfig = {
       adapter: "claude",
       auth_provider: "max",
       default_model: "sonnet",
-      context_path: ".nightgauge/pipeline",
-      plans_path: ".nightgauge/plans",
+      context_path: RELATIVE_PIPELINE_STATE_DIR,
+      plans_path: RELATIVE_PLANS_DIR,
       gemini: {
         auth_method: "api-key",
         model: "gemini-2.5-flash",
