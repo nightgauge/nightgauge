@@ -1321,6 +1321,36 @@
       "signal": ""
     },
     {
+      "input": "[dev-step-cap-reached]",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: [dev-step-cap-reached]",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[DEV-STEP-CAP-REACHED]",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "dev_step_cap_reached",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: dev_step_cap_reached",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "DEV_STEP_CAP_REACHED",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
       "input": "invalid auth method",
       "kind": "git_transport_auth_failed",
       "signal": ""
@@ -2631,6 +2661,11 @@
       "signal": ""
     },
     {
+      "input": "network unavailable: extended github connectivity loss | [dev-step-cap-reached]",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
       "input": "network unavailable: extended github connectivity loss | invalid auth method",
       "kind": "network_unavailable",
       "signal": ""
@@ -2842,6 +2877,11 @@
     },
     {
       "input": "adapter_incompatible | [dev-handoff-missing]",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | [dev-step-cap-reached]",
       "kind": "adapter_incompatible",
       "signal": ""
     },
@@ -3061,6 +3101,11 @@
       "signal": "stream_idle_timeout"
     },
     {
+      "input": "stream idle timeout | [dev-step-cap-reached]",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
       "input": "stream idle timeout | invalid auth method",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -3272,6 +3317,11 @@
     },
     {
       "input": "overloaded | [dev-handoff-missing]",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "overloaded | [dev-step-cap-reached]",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
     },
@@ -3491,6 +3541,11 @@
       "signal": "api_connection_lost"
     },
     {
+      "input": "socket connection was closed | [dev-step-cap-reached]",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
       "input": "socket connection was closed | invalid auth method",
       "kind": "api_connection_lost",
       "signal": "api_connection_lost"
@@ -3702,6 +3757,11 @@
     },
     {
       "input": "[rate-limit-quota-exhausted] | [dev-handoff-missing]",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[rate-limit-quota-exhausted] | [dev-step-cap-reached]",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
     },
@@ -3921,6 +3981,11 @@
       "signal": "adapter_auth_failed"
     },
     {
+      "input": "[adapter-auth-failed] | [dev-step-cap-reached]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
       "input": "[adapter-auth-failed] | invalid auth method",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
@@ -4132,6 +4197,11 @@
     },
     {
       "input": "ai_apicallerror context_length_exceeded | [dev-handoff-missing]",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | [dev-step-cap-reached]",
       "kind": "context_window_exceeded",
       "signal": ""
     },
@@ -4351,6 +4421,11 @@
       "signal": ""
     },
     {
+      "input": "not_found_error model | [dev-step-cap-reached]",
+      "kind": "model_unavailable",
+      "signal": ""
+    },
+    {
       "input": "not_found_error model | invalid auth method",
       "kind": "model_unavailable",
       "signal": ""
@@ -4562,6 +4637,11 @@
     },
     {
       "input": "pipeline-start-failure issue-closed | [dev-handoff-missing]",
+      "kind": "issue_closed",
+      "signal": ""
+    },
+    {
+      "input": "pipeline-start-failure issue-closed | [dev-step-cap-reached]",
       "kind": "issue_closed",
       "signal": ""
     },
@@ -4781,6 +4861,11 @@
       "signal": ""
     },
     {
+      "input": "[blocked-dependency] | [dev-step-cap-reached]",
+      "kind": "blocked_dependency",
+      "signal": ""
+    },
+    {
       "input": "[blocked-dependency] | invalid auth method",
       "kind": "blocked_dependency",
       "signal": ""
@@ -4992,6 +5077,11 @@
     },
     {
       "input": "architecture approval required | [dev-handoff-missing]",
+      "kind": "architecture_approval_required",
+      "signal": "architecture_approval_required"
+    },
+    {
+      "input": "architecture approval required | [dev-step-cap-reached]",
       "kind": "architecture_approval_required",
       "signal": "architecture_approval_required"
     },
@@ -5211,6 +5301,11 @@
       "signal": "github_quota_low"
     },
     {
+      "input": "github-quota-low | [dev-step-cap-reached]",
+      "kind": "github_quota_low",
+      "signal": "github_quota_low"
+    },
+    {
       "input": "github-quota-low | invalid auth method",
       "kind": "github_quota_low",
       "signal": "github_quota_low"
@@ -5422,6 +5517,11 @@
     },
     {
       "input": "github-network-outage | [dev-handoff-missing]",
+      "kind": "github_network_outage",
+      "signal": "github_network_outage"
+    },
+    {
+      "input": "github-network-outage | [dev-step-cap-reached]",
       "kind": "github_network_outage",
       "signal": "github_network_outage"
     },
@@ -5641,6 +5741,11 @@
       "signal": ""
     },
     {
+      "input": "secondary rate limit | [dev-step-cap-reached]",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
       "input": "secondary rate limit | invalid auth method",
       "kind": "github_rate_limited",
       "signal": ""
@@ -5852,6 +5957,11 @@
     },
     {
       "input": "[pr-merge-unmerged | [dev-handoff-missing]",
+      "kind": "pr_merge_unmerged",
+      "signal": ""
+    },
+    {
+      "input": "[pr-merge-unmerged | [dev-step-cap-reached]",
       "kind": "pr_merge_unmerged",
       "signal": ""
     },
@@ -6071,6 +6181,11 @@
       "signal": ""
     },
     {
+      "input": "[stage:worktree-containment] | [dev-step-cap-reached]",
+      "kind": "containment_breach",
+      "signal": ""
+    },
+    {
       "input": "[stage:worktree-containment] | invalid auth method",
       "kind": "containment_breach",
       "signal": ""
@@ -6282,6 +6397,11 @@
     },
     {
       "input": "[not-pipeline-actionable] | [dev-handoff-missing]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | [dev-step-cap-reached]",
       "kind": "not_pipeline_actionable",
       "signal": ""
     },
@@ -6501,6 +6621,11 @@
       "signal": ""
     },
     {
+      "input": "[dev-produced-no-changes] | [dev-step-cap-reached]",
+      "kind": "dev_produced_no_changes",
+      "signal": ""
+    },
+    {
       "input": "[dev-produced-no-changes] | invalid auth method",
       "kind": "dev_produced_no_changes",
       "signal": ""
@@ -6716,6 +6841,11 @@
       "signal": ""
     },
     {
+      "input": "[dev-handoff-missing] | [dev-step-cap-reached]",
+      "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
       "input": "[dev-handoff-missing] | invalid auth method",
       "kind": "dev_handoff_missing",
       "signal": ""
@@ -6836,6 +6966,226 @@
       "signal": ""
     },
     {
+      "input": "[dev-step-cap-reached] | network unavailable: extended github connectivity loss",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | stream idle timeout",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "[dev-step-cap-reached] | overloaded",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "[dev-step-cap-reached] | socket connection was closed",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "[dev-step-cap-reached] | [rate-limit-quota-exhausted]",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[dev-step-cap-reached] | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[dev-step-cap-reached] | ai_apicallerror context_length_exceeded",
+      "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | not_found_error model",
+      "kind": "model_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | pipeline-start-failure issue-closed",
+      "kind": "issue_closed",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | [blocked-dependency]",
+      "kind": "blocked_dependency",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | architecture approval required",
+      "kind": "architecture_approval_required",
+      "signal": "architecture_approval_required"
+    },
+    {
+      "input": "[dev-step-cap-reached] | github-quota-low",
+      "kind": "github_quota_low",
+      "signal": "github_quota_low"
+    },
+    {
+      "input": "[dev-step-cap-reached] | github-network-outage",
+      "kind": "github_network_outage",
+      "signal": "github_network_outage"
+    },
+    {
+      "input": "[dev-step-cap-reached] | secondary rate limit",
+      "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | [pr-merge-unmerged",
+      "kind": "pr_merge_unmerged",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | [stage:worktree-containment]",
+      "kind": "containment_breach",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | [not-pipeline-actionable]",
+      "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | [dev-produced-no-changes]",
+      "kind": "dev_produced_no_changes",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | [dev-handoff-missing]",
+      "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | invalid auth method",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | premature turn end",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | worktree_uncommitted",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | budget_ceiling_hit",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | [runaway-progress-exceeded]",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | [runaway-ceiling-exceeded]",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | [cost-cap-exceeded]",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | stage-no-output-timeout",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | [stall-killed]",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | pipeline_budget_exceeded",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | schema validation",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | [no-changes-produced]",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | [validation-failed]",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | [validation-inconclusive]",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | [branch-forked]",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | [commit-orphaned]",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | [adapter-permission-rejected]",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | [permission-denied]",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | stage_context_unreadable",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | dev_build_verification_missing",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | dev_build_verification_failed",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | dev_tests_failed",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | pr_merge_lookup_failed",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | subagent crash",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
       "input": "invalid auth method | network unavailable: extended github connectivity loss",
       "kind": "network_unavailable",
       "signal": ""
@@ -6933,6 +7283,11 @@
     {
       "input": "invalid auth method | [dev-handoff-missing]",
       "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "invalid auth method | [dev-step-cap-reached]",
+      "kind": "dev_step_cap_reached",
       "signal": ""
     },
     {
@@ -7151,6 +7506,11 @@
       "signal": ""
     },
     {
+      "input": "premature turn end | [dev-step-cap-reached]",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
       "input": "premature turn end | invalid auth method",
       "kind": "git_transport_auth_failed",
       "signal": ""
@@ -7363,6 +7723,11 @@
     {
       "input": "worktree_uncommitted | [dev-handoff-missing]",
       "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "worktree_uncommitted | [dev-step-cap-reached]",
+      "kind": "dev_step_cap_reached",
       "signal": ""
     },
     {
@@ -7581,6 +7946,11 @@
       "signal": ""
     },
     {
+      "input": "budget_ceiling_hit | [dev-step-cap-reached]",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
       "input": "budget_ceiling_hit | invalid auth method",
       "kind": "git_transport_auth_failed",
       "signal": ""
@@ -7793,6 +8163,11 @@
     {
       "input": "[runaway-progress-exceeded] | [dev-handoff-missing]",
       "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "[runaway-progress-exceeded] | [dev-step-cap-reached]",
+      "kind": "dev_step_cap_reached",
       "signal": ""
     },
     {
@@ -8011,6 +8386,11 @@
       "signal": ""
     },
     {
+      "input": "[runaway-ceiling-exceeded] | [dev-step-cap-reached]",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
       "input": "[runaway-ceiling-exceeded] | invalid auth method",
       "kind": "git_transport_auth_failed",
       "signal": ""
@@ -8223,6 +8603,11 @@
     {
       "input": "[cost-cap-exceeded] | [dev-handoff-missing]",
       "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "[cost-cap-exceeded] | [dev-step-cap-reached]",
+      "kind": "dev_step_cap_reached",
       "signal": ""
     },
     {
@@ -8441,6 +8826,11 @@
       "signal": ""
     },
     {
+      "input": "stage-no-output-timeout | [dev-step-cap-reached]",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
       "input": "stage-no-output-timeout | invalid auth method",
       "kind": "git_transport_auth_failed",
       "signal": ""
@@ -8653,6 +9043,11 @@
     {
       "input": "[stall-killed] | [dev-handoff-missing]",
       "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "[stall-killed] | [dev-step-cap-reached]",
+      "kind": "dev_step_cap_reached",
       "signal": ""
     },
     {
@@ -8871,6 +9266,11 @@
       "signal": ""
     },
     {
+      "input": "pipeline_budget_exceeded | [dev-step-cap-reached]",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
       "input": "pipeline_budget_exceeded | invalid auth method",
       "kind": "git_transport_auth_failed",
       "signal": ""
@@ -9083,6 +9483,11 @@
     {
       "input": "schema validation | [dev-handoff-missing]",
       "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "schema validation | [dev-step-cap-reached]",
+      "kind": "dev_step_cap_reached",
       "signal": ""
     },
     {
@@ -9301,6 +9706,11 @@
       "signal": ""
     },
     {
+      "input": "[no-changes-produced] | [dev-step-cap-reached]",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
       "input": "[no-changes-produced] | invalid auth method",
       "kind": "git_transport_auth_failed",
       "signal": ""
@@ -9513,6 +9923,11 @@
     {
       "input": "[validation-failed] | [dev-handoff-missing]",
       "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "[validation-failed] | [dev-step-cap-reached]",
+      "kind": "dev_step_cap_reached",
       "signal": ""
     },
     {
@@ -9731,6 +10146,11 @@
       "signal": ""
     },
     {
+      "input": "[validation-inconclusive] | [dev-step-cap-reached]",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
       "input": "[validation-inconclusive] | invalid auth method",
       "kind": "git_transport_auth_failed",
       "signal": ""
@@ -9943,6 +10363,11 @@
     {
       "input": "[branch-forked] | [dev-handoff-missing]",
       "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "[branch-forked] | [dev-step-cap-reached]",
+      "kind": "dev_step_cap_reached",
       "signal": ""
     },
     {
@@ -10161,6 +10586,11 @@
       "signal": ""
     },
     {
+      "input": "[commit-orphaned] | [dev-step-cap-reached]",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
       "input": "[commit-orphaned] | invalid auth method",
       "kind": "git_transport_auth_failed",
       "signal": ""
@@ -10373,6 +10803,11 @@
     {
       "input": "[adapter-permission-rejected] | [dev-handoff-missing]",
       "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | [dev-step-cap-reached]",
+      "kind": "dev_step_cap_reached",
       "signal": ""
     },
     {
@@ -10591,6 +11026,11 @@
       "signal": ""
     },
     {
+      "input": "[permission-denied] | [dev-step-cap-reached]",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
       "input": "[permission-denied] | invalid auth method",
       "kind": "git_transport_auth_failed",
       "signal": ""
@@ -10803,6 +11243,11 @@
     {
       "input": "stage_context_unreadable | [dev-handoff-missing]",
       "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | [dev-step-cap-reached]",
+      "kind": "dev_step_cap_reached",
       "signal": ""
     },
     {
@@ -11021,6 +11466,11 @@
       "signal": ""
     },
     {
+      "input": "dev_build_verification_missing | [dev-step-cap-reached]",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
       "input": "dev_build_verification_missing | invalid auth method",
       "kind": "git_transport_auth_failed",
       "signal": ""
@@ -11233,6 +11683,11 @@
     {
       "input": "dev_build_verification_failed | [dev-handoff-missing]",
       "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | [dev-step-cap-reached]",
+      "kind": "dev_step_cap_reached",
       "signal": ""
     },
     {
@@ -11451,6 +11906,11 @@
       "signal": ""
     },
     {
+      "input": "dev_tests_failed | [dev-step-cap-reached]",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
       "input": "dev_tests_failed | invalid auth method",
       "kind": "git_transport_auth_failed",
       "signal": ""
@@ -11666,6 +12126,11 @@
       "signal": ""
     },
     {
+      "input": "pr_merge_lookup_failed | [dev-step-cap-reached]",
+      "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
       "input": "pr_merge_lookup_failed | invalid auth method",
       "kind": "git_transport_auth_failed",
       "signal": ""
@@ -11878,6 +12343,11 @@
     {
       "input": "subagent crash | [dev-handoff-missing]",
       "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "subagent crash | [dev-step-cap-reached]",
+      "kind": "dev_step_cap_reached",
       "signal": ""
     },
     {

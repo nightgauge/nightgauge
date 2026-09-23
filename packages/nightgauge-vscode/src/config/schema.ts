@@ -1145,6 +1145,15 @@ export const PipelineConfigSchema = z.object({
     })
     .optional(),
   /**
+   * feature-dev as bounded sub-sessions (#1651): on a dispatch model whose
+   * context window is below 200,000 tokens, the Go scheduler runs one fresh
+   * session per unchecked plan task. `false` opts out. Default: on. Read by
+   * the Go scheduler only.
+   *
+   * @env NIGHTGAUGE_FEATURE_DEV_SUB_SESSIONS
+   */
+  feature_dev_sub_sessions: z.boolean().optional(),
+  /**
    * Pipeline-level token budget ceiling.
    *
    * Enforces a maximum total cost (USD) across all stages in a single pipeline

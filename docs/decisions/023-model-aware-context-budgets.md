@@ -225,6 +225,34 @@ steps hand off through the working tree or through commits (feature-dev does
 not commit today, AGENTS.md #1608), and how sub-sessions relate to in-session
 compaction. No code ships for this in the current PR.
 
+**Amendment (#1651): the policy as implemented.** The slot above named no
+number, so #1651 fixed one. feature-dev runs as sub-sessions when the
+dispatch model's resolved window (the same `skillData.ContextWindow` the fit
+check reads, Q10) is known and below **200,000 tokens**. That covers the
+131,072-token local models the compaction loop was observed on, and keeps
+every 200k-and-larger hosted window, and every unknown window (Q4's
+fail-open), on the single session. The hard cap is **12 sessions** per
+feature-dev dispatch, whatever the plan's task count. The two open questions:
+steps hand off through the **working tree**, not commits (feature-dev still
+does not commit), with the scheduler writing a git-derived `dev-{N}.json`
+(`handoff_source: derived`, `step`) after each step. Each step is a **fresh
+session**, never a resume, so it does not rely on in-session compaction at
+all. The session's prompt is the stable rendered-skill prefix first and the
+step text last. The scheduler only splits the stage when its runner delivers
+the scheduler's prompt: the IPC runner, where the extension composes the
+prompt, keeps the single session. A step is a top-level, unfenced checkbox in
+the plan's implementation section (or, with no such section, in any section
+but acceptance criteria and checklists); the plan is re-read before every
+step, so a task an earlier session already checked is never dispatched. The
+bound is the unchecked-step count the stage started with, never more than
+12; spending it with steps still unchecked fails the stage as
+`dev_step_cap_reached`, and a retry resumes from the next unchecked step. The
+sessions share the stage's timeout and cost ceiling. Operators opt out with
+`pipeline.feature_dev_sub_sessions: false` or
+`NIGHTGAUGE_FEATURE_DEV_SUB_SESSIONS=false`; the default is on, as ADR-020
+requires of a correctness feature with no footprint or cost reason to be off.
+Code: `internal/orchestrator/featuredev_steps.go`.
+
 ### Q8 — Non-USD budgets (#1652)
 
 Out of scope for implementation here. A context-window refusal is a ceiling
@@ -335,7 +363,7 @@ against the _dispatch model's_ window, at render/dispatch time.
 - [x] Scheduler dispatch-time fit check, re-route, refusal
 - [x] `AutoProviderRouter` opencode window fix + tests
 - [x] `docs/decisions/README.md` index row
-- [ ] #1651 bounded sub-sessions (decision slot only, tracked separately)
+- [x] #1651 bounded sub-sessions (policy recorded in the Q7 amendment)
 - [ ] #1652 non-USD budgets (decision slot only, tracked separately)
 - [ ] #1655 capacity-aware sizing (decision slot only, tracked separately)
 - [x] A `compact` render profile (#1654: `internal/skillrender`'s Profile

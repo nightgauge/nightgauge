@@ -1276,6 +1276,12 @@ type PipelineConfig struct {
 	// instead of hand-parsing the project file.
 	TokenBudgetCeiling *TokenBudgetCeilingConfig `yaml:"token_budget_ceiling,omitempty" json:"tokenBudgetCeiling,omitempty"`
 
+	// FeatureDevSubSessions is pipeline.feature_dev_sub_sessions (#1651):
+	// false opts out of running feature-dev as one bounded session per plan
+	// step on small context windows. nil means the default, which is on.
+	// Read through FeatureDevSubSessionsEnabled.
+	FeatureDevSubSessions *bool `yaml:"feature_dev_sub_sessions,omitempty" json:"featureDevSubSessions,omitempty"`
+
 	// StageAdapters maps a pipeline stage to the execution adapter that runs
 	// it — the canonical pipeline.stage_adapters.<stage> schema shared with
 	// the VSCode resolver and the SDK CLI (#54). Values use the collapsed
@@ -2351,4 +2357,14 @@ func resolveEnvRef(ref string) (string, error) {
 		return "", fmt.Errorf("environment variable %q referenced by config token is not set or empty", varName)
 	}
 	return val, nil
+}
+
+// FeatureDevSubSessionsEnabled resolves pipeline.feature_dev_sub_sessions
+// (#1651). Default on; only an explicit false turns it off. Safe on a nil
+// receiver.
+func (p *PipelineConfig) FeatureDevSubSessionsEnabled() bool {
+	if p == nil || p.FeatureDevSubSessions == nil {
+		return true
+	}
+	return *p.FeatureDevSubSessions
 }
