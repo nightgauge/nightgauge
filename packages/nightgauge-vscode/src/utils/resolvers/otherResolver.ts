@@ -8,6 +8,7 @@
  * @see Issue #2742 - Refactor VSCode nightgaugeConfig.ts into focused domain modules
  */
 
+import { pipelineStateDir } from "../cloneLayout";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
@@ -1114,7 +1115,7 @@ const DEFAULT_PIPELINE_CEILING_CONFIG: PipelineCeilingConfig = {
 
 /** Where `budget.raiseCeiling` persists a runtime ceiling raise. Mirrors Go's
  * `budgetOverrideRelPath` (internal/orchestrator/attention_verb_primitives.go). */
-const BUDGET_OVERRIDE_REL_PATH = [".nightgauge", "pipeline", "budget-override.json"];
+const BUDGET_OVERRIDE_FILENAME = "budget-override.json";
 
 /**
  * Read the runtime USD ceiling override the Action Center's
@@ -1123,7 +1124,7 @@ const BUDGET_OVERRIDE_REL_PATH = [".nightgauge", "pipeline", "budget-override.js
  * THE EXTENSION HAD NO READER OF THIS FILE AT ALL, which made the
  * budget-ceiling card's primary remedy inert on the path #305 wired it onto.
  * Resolving "Raise to $X & retry" ran `orchestrator.WriteBudgetCeilingOverride`
- * → `.nightgauge/pipeline/budget-override.json`, and exactly one function in
+ * → `pipelineStateDir(root)/budget-override.json`, and exactly one function in
  * the tree read it back: Go's `PipelineBudgetCeilingUSD`. The extension
  * resolved its ceiling here, from env vars and config.yaml only — so the
  * re-dispatched run enforced the OLD ceiling, tripped the same between-stage
@@ -1139,7 +1140,10 @@ const BUDGET_OVERRIDE_REL_PATH = [".nightgauge", "pipeline", "budget-override.js
 function readRuntimeCeilingOverrideUsd(root: string | undefined): number {
   if (!root) return 0;
   try {
-    const raw = fs.readFileSync(path.join(root, ...BUDGET_OVERRIDE_REL_PATH), "utf-8");
+    const raw = fs.readFileSync(
+      path.join(pipelineStateDir(root), BUDGET_OVERRIDE_FILENAME),
+      "utf-8"
+    );
     const parsed = JSON.parse(raw) as { ceiling_usd?: unknown };
     const value = typeof parsed.ceiling_usd === "number" ? parsed.ceiling_usd : 0;
     return Number.isFinite(value) && value > 0 ? value : 0;

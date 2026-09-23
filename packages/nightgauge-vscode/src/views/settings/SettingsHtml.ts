@@ -9,6 +9,7 @@
  * @see Issue #440 - Multi-tier config GUI support
  */
 
+import { RELATIVE_PIPELINE_STATE_DIR, RELATIVE_PLANS_DIR } from "../../utils/cloneLayout";
 import * as vscode from "vscode";
 import { TIER_BANDS, type TierBand } from "@nightgauge/sdk";
 import type { NightgaugeConfig, ViewTier, TierViewState } from "./types";
@@ -1723,8 +1724,8 @@ function getCoreSectionHtml(
         "ui.core.context_path",
         "Context Path",
         "Directory for pipeline context JSON artifacts",
-        core.context_path ?? ".nightgauge/pipeline",
-        ".nightgauge/pipeline",
+        core.context_path ?? RELATIVE_PIPELINE_STATE_DIR,
+        RELATIVE_PIPELINE_STATE_DIR,
         disabled,
         g("ui.core.context_path"),
         showBadges,
@@ -1734,8 +1735,8 @@ function getCoreSectionHtml(
         "ui.core.plans_path",
         "Plans Path",
         "Directory for generated plan markdown artifacts",
-        core.plans_path ?? ".nightgauge/plans",
-        ".nightgauge/plans",
+        core.plans_path ?? RELATIVE_PLANS_DIR,
+        RELATIVE_PLANS_DIR,
         disabled,
         g("ui.core.plans_path"),
         showBadges,

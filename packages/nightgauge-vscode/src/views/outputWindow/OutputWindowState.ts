@@ -7,6 +7,7 @@
  * @see docs/ARCHITECTURE.md for WebView patterns
  */
 
+import { RELATIVE_CLONE_LOGS_DIR } from "../../utils/cloneLayout";
 import * as vscode from "vscode";
 import type { PipelineStage } from "@nightgauge/sdk";
 import type { ToolType, ToolCallSummary } from "./ToolCallIndicator";
@@ -345,12 +346,12 @@ export class OutputWindowState {
     this.logConfig = config
       ? {
           retain: config.retain ?? true,
-          dir: config.dir ?? ".nightgauge/logs",
+          dir: config.dir ?? RELATIVE_CLONE_LOGS_DIR,
           max_age_days: config.max_age_days,
           max_count: config.max_count,
           max_entry_chars: config.max_entry_chars,
         }
-      : { retain: true, dir: ".nightgauge/logs" };
+      : { retain: true, dir: RELATIVE_CLONE_LOGS_DIR };
   }
 
   /**

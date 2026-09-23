@@ -6,6 +6,7 @@
  * only accepts a runtime snapshot when the root's current-run sidecar agrees
  * on repository + issue and the owning process is still alive.
  */
+import { pipelineStateDir } from "../utils/cloneLayout";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { Disposable } from "vscode";
@@ -147,7 +148,7 @@ async function readActiveRun(
   isProcessAlive: (pid: number) => boolean,
   onLegacySnapshotName?: (info: { root: string; issueNumber: number; runId: string }) => void
 ): Promise<ReconciledCliRun | null> {
-  const stateDir = path.join(root.path, ".nightgauge", "pipeline");
+  const stateDir = pipelineStateDir(root.path);
   try {
     const sidecar = JSON.parse(
       await fs.readFile(path.join(stateDir, "current-run.json"), "utf8")

@@ -17,6 +17,7 @@
  * @see packages/nightgauge-sdk/src/analysis/ModelPerformanceAnalyzer.ts
  */
 
+import { pipelineStateDir } from "../utils/cloneLayout";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { exec, execFile } from "node:child_process";
@@ -117,7 +118,7 @@ export interface PostPipelineAnalysisResult {
   } | null;
   /**
    * Aggregate V4 workflow-orchestration calibration signal folded from the
-   * canonical schemaVersion-4 WorkflowEvent journals in `.nightgauge/pipeline/`
+   * canonical schemaVersion-4 WorkflowEvent journals in `pipelineStateDir(root)/`
    * (Issue #3915, epic #3899). `null` when no workflow run was recorded — the
    * consumer no longer references the deleted flat event shape.
    */
@@ -394,7 +395,7 @@ export class PostPipelineAnalyzer {
       // Skill self-assessment synthesis (non-critical) — Issue #1986
       let selfAssessmentSynthesis: PostPipelineAnalysisResult["selfAssessmentSynthesis"] = null;
       try {
-        const assessmentsDir = path.join(workspaceRoot, ".nightgauge/pipeline/assessments");
+        const assessmentsDir = path.join(pipelineStateDir(workspaceRoot), "assessments");
         let assessmentFiles: string[] = [];
         try {
           assessmentFiles = (await fs.readdir(assessmentsDir)).filter(
@@ -629,10 +630,7 @@ export class PostPipelineAnalyzer {
           // Read PR number from context file
           let prNumber: number | null = null;
           try {
-            const prCtxPath = path.join(
-              workspaceRoot,
-              `.nightgauge/pipeline/pr-${issueNumber}.json`
-            );
+            const prCtxPath = path.join(pipelineStateDir(workspaceRoot), `pr-${issueNumber}.json`);
             const prCtx = JSON.parse(await fs.readFile(prCtxPath, "utf-8"));
             prNumber = typeof prCtx.pr_number === "number" ? prCtx.pr_number : null;
           } catch {
@@ -1124,7 +1122,7 @@ export class PostPipelineAnalyzer {
 
   /**
    * Read every canonical schemaVersion-4 workflow event journal under
-   * `.nightgauge/pipeline/` and return the concatenated emission stream.
+   * `pipelineStateDir(root)/` and return the concatenated emission stream.
    *
    * Journals are named `workflow-{runId}.jsonl` (one node emission per line).
    * The fold ({@link foldWorkflowOutcomes}) buckets a multi-run stream back into
@@ -1135,7 +1133,7 @@ export class PostPipelineAnalyzer {
    * @see Issue #3915 — V4 outcome-recording consumer
    */
   static async readWorkflowJournals(workspaceRoot: string): Promise<WorkflowEvent[]> {
-    const pipelineDir = path.join(workspaceRoot, ".nightgauge/pipeline");
+    const pipelineDir = pipelineStateDir(workspaceRoot);
     let files: string[];
     try {
       files = (await fs.readdir(pipelineDir)).filter(

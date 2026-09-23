@@ -747,7 +747,7 @@ export function getStageHardCapMs(stage: string, workspaceRoot?: string): number
  *
  * Calibration (Issue #3208, 2026-05-06):
  *   Base caps are p95 × 2 (rounded to the nearest dollar) over the last 90
- *   days of `complete | cancelled` runs in `.nightgauge/pipeline/history`.
+ *   days of `complete | cancelled` runs in `pipelineStateDir(root)/history`.
  *   The factor of 2 gives ~50% headroom above the typical-but-real productive
  *   cost — comfortably above the median run yet tight enough to cut off
  *   runaways well before $200+ outliers like the 2026-05-04 incident.

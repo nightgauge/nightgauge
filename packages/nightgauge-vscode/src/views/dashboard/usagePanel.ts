@@ -391,7 +391,7 @@ export function computeUsageBurnRate(
  * Derive everything the usage panel renders.
  *
  * `null` means "there is no usage service at all" — no workspace root, so no
- * `.nightgauge/pipeline/history/` to read and nothing to name. The panel is
+ * `pipelineStateDir(root)/history/` to read and nothing to name. The panel is
  * omitted entirely in that case. That is distinct from a snapshot whose
  * `plan.kind` is `"unknown"`, which *is* an answer ("nothing can describe this
  * adapter") and renders as an explanatory empty state naming the adapter, per

@@ -4,6 +4,7 @@
  * chart library (ADR-003).
  */
 
+import { RELATIVE_PIPELINE_STATE_DIR } from "../../utils/cloneLayout";
 import type { KnowledgeMetricsResult } from "../../services/IpcClientBase";
 import {
   computeDelta,
@@ -143,7 +144,7 @@ function renderDisabledState(): string {
     <p>
       Once enabled, knowledge-base operations (reads, writes, recalls,
       graduations) emit events to
-      <code>.nightgauge/pipeline/history/knowledge-events.jsonl</code>.
+      <code>${RELATIVE_PIPELINE_STATE_DIR}/history/knowledge-events.jsonl</code>.
     </p>
   </div>`;
 }

@@ -17,12 +17,16 @@
  * @see docs/AUTOMATIONS.md - Automation configuration and usage
  */
 
+import { cloneLogsDir, RELATIVE_CLONE_LOGS_DIR, resolveCloneSetting } from "../utils/cloneLayout";
 import * as vscode from "vscode";
 import * as fs from "node:fs/promises";
 import { open as fsOpen } from "node:fs/promises";
 import * as path from "node:path";
 import type { PipelineStateService } from "./PipelineStateService";
 import { resolveConfigPath, logDeprecationWarning } from "../utils/configPathResolver";
+
+/** The automation log's default `log_file`, root-relative. */
+const AUTOMATION_LOG_DEFAULT_REL = `${RELATIVE_CLONE_LOGS_DIR}/automation.log`;
 
 /**
  * Automation log entry (JSONL format from automation-dispatch.sh)
@@ -91,7 +95,7 @@ export class AutomationService implements vscode.Disposable {
    * Get the automation log file path from config.yaml
    */
   private async getLogFilePath(): Promise<string | undefined> {
-    const defaultLogPath = path.join(this.workspaceRoot, ".nightgauge", "logs", "automation.log");
+    const defaultLogPath = path.join(cloneLogsDir(this.workspaceRoot), "automation.log");
 
     // Resolve config path with fallback to legacy
     const pathResult = await resolveConfigPath(this.workspaceRoot);
@@ -111,7 +115,7 @@ export class AutomationService implements vscode.Disposable {
       const match = configContent.match(
         /automations:\s*\n(?:\s+\w+:[^\n]*\n)*?\s+log_file:\s*["']?([^"'\n]+)["']?/
       );
-      const logFile = match ? match[1].trim() : ".nightgauge/logs/automation.log";
+      const logFile = match ? match[1].trim() : AUTOMATION_LOG_DEFAULT_REL;
 
       // Validate no path traversal
       if (logFile.includes("..") || path.isAbsolute(logFile)) {
@@ -121,7 +125,14 @@ export class AutomationService implements vscode.Disposable {
         return defaultLogPath;
       }
 
-      return path.join(this.workspaceRoot, logFile);
+      // The default resolves through the clone-layout helper; a user override
+      // keeps being joined onto the root (#2036).
+      return resolveCloneSetting(
+        this.workspaceRoot,
+        logFile,
+        AUTOMATION_LOG_DEFAULT_REL,
+        () => defaultLogPath
+      );
     } catch (error) {
       console.warn(
         "[AutomationService] Could not read config for log path:",

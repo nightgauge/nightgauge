@@ -11,7 +11,7 @@
  *
  * WHERE IT LIVES, AND WHY NOT SOMEWHERE THAT ALREADY EXISTS:
  *
- *  - **Not `.nightgauge/retros/`.** A retro is a dated post-mortem
+ *  - **Not `retrosDir(root)/`.** A retro is a dated post-mortem
  *    (`YYYY-MM-DD_<issue>_retro.json`) read by the escalated-retry path for
  *    *diagnostic* context. This is a single-valued, standing per-issue FACT
  *    that has to be looked up by issue number and cleared when it stops being
@@ -24,7 +24,7 @@
  *    daemon's to write, and its records are the *presentation* of a condition
  *    (dedup, journal, lifecycle). The finding is the condition itself, and it
  *    must be readable with no daemon running.
- *  - **Not flat under `.nightgauge/pipeline/`.** That is where the per-run
+ *  - **Not flat under `pipelineStateDir(root)/`.** That is where the per-run
  *    context files live, and `runstate.ArchiveRun` moves EVERY `*-<issue>.json`
  *    directly under `pipeline/` into `pipeline/history/<runId>/` when the run
  *    ends. A finding written as `blocked-1147.json` would be archived out of
@@ -32,7 +32,7 @@
  *    "discarded context file" #1147 exists to stop. `ArchiveRun` skips
  *    directories, so the finding lives in a subdirectory of the same tree.
  *
- * Hence `<repoRoot>/.nightgauge/pipeline/blocked-findings/<issue>.json`, rooted
+ * Hence `pipelineStateDir(<repoRoot>)/blocked-findings/<issue>.json`, rooted
  * at the RUN'S repo root (`getRunRepoRoot()`) rather than the worktree — a
  * finding written into a worktree dies with it at cleanup.
  *
@@ -42,9 +42,10 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { pipelineStateDir } from "./cloneLayout";
 import type { Logger } from "./logger";
 
-/** Directory name under `.nightgauge/pipeline/`. A DIRECTORY on purpose — see the module doc. */
+/** Directory name under `pipelineStateDir(root)/`. A DIRECTORY on purpose — see the module doc. */
 export const BLOCKED_FINDINGS_DIRNAME = "blocked-findings";
 
 /**
@@ -76,12 +77,12 @@ export interface BlockedFinding {
   recorded_at: string;
 }
 
-/** `<root>/.nightgauge/pipeline/blocked-findings` */
+/** `pipelineStateDir(<root>)/blocked-findings` */
 export function blockedFindingsDir(root: string): string {
-  return path.join(root, ".nightgauge", "pipeline", BLOCKED_FINDINGS_DIRNAME);
+  return path.join(pipelineStateDir(root), BLOCKED_FINDINGS_DIRNAME);
 }
 
-/** `<root>/.nightgauge/pipeline/blocked-findings/<issue>.json` */
+/** `pipelineStateDir(<root>)/blocked-findings/<issue>.json` */
 export function blockedFindingPath(root: string, issueNumber: number): string {
   return path.join(blockedFindingsDir(root), `${issueNumber}.json`);
 }

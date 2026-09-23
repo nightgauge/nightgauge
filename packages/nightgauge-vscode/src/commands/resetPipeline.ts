@@ -8,6 +8,7 @@
  * @see Issue #115 - Reset pipeline should verify PR merged and cleanup local branch
  */
 
+import { pipelineStateDir, plansDir as clonePlansDir } from "../utils/cloneLayout";
 import * as vscode from "vscode";
 import type { Logger } from "../utils/logger";
 import type { PipelineStateService } from "../services/PipelineStateService";
@@ -275,8 +276,8 @@ export function registerResetPipelineCommand(
         }
 
         // Find context, plan, and corrupt backup files concurrently
-        const contextDir = `${workspaceRoot}/.nightgauge/pipeline`;
-        const plansDir = `${workspaceRoot}/.nightgauge/plans`;
+        const contextDir = pipelineStateDir(workspaceRoot);
+        const plansDir = clonePlansDir(workspaceRoot);
         // Always scan ALL *.json files in the pipeline dir so that stale context
         // files from previously completed issues (#1209) are also removed.
         // Files are filtered below to target only pipeline context files.

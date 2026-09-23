@@ -6,6 +6,7 @@
  * @see Issue #476 - Refactor to use ConfigBridge instead of direct VSCode reads
  */
 
+import { RELATIVE_PIPELINE_STATE_DIR, RELATIVE_PLANS_DIR } from "../utils/cloneLayout";
 import * as vscode from "vscode";
 import {
   getCoreSettings,
@@ -46,8 +47,8 @@ export const DEFAULT_SETTINGS: NightgaugeSettings = {
   executionAdapter: "claude",
   authProvider: "max",
   defaultModel: "sonnet",
-  contextPath: ".nightgauge/pipeline",
-  plansPath: ".nightgauge/plans",
+  contextPath: RELATIVE_PIPELINE_STATE_DIR,
+  plansPath: RELATIVE_PLANS_DIR,
 };
 
 /**
@@ -65,32 +66,6 @@ export function getSettings(): NightgaugeSettings {
     contextPath: coreSettings.contextPath,
     plansPath: coreSettings.plansPath,
   };
-}
-
-/**
- * Get absolute path to context directory for the current workspace
- */
-export function getContextPath(): string | undefined {
-  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-  if (!workspaceFolder) {
-    return undefined;
-  }
-
-  const settings = getSettings();
-  return vscode.Uri.joinPath(workspaceFolder.uri, settings.contextPath).fsPath;
-}
-
-/**
- * Get absolute path to plans directory for the current workspace
- */
-export function getPlansPath(): string | undefined {
-  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-  if (!workspaceFolder) {
-    return undefined;
-  }
-
-  const settings = getSettings();
-  return vscode.Uri.joinPath(workspaceFolder.uri, settings.plansPath).fsPath;
 }
 
 /**

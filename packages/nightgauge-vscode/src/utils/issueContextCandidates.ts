@@ -27,11 +27,25 @@
  * @see Issue #994, #1206
  */
 
+import {
+  pipelineStateDir,
+  RELATIVE_PIPELINE_STATE_DIR,
+  isUsableWorkspaceRoot,
+} from "./cloneLayout";
 import * as path from "node:path";
 
-/** Where every writer puts a run's issue context, relative to its own root. */
+/** A run's issue-context file name inside its root's pipeline state dir. */
+function issueContextFileName(issueNumber: number): string {
+  return `issue-${issueNumber}.json`;
+}
+
+/**
+ * Where every writer puts a run's issue context, relative to its own root.
+ * Display only: resolve against a root with {@link issueContextCandidates},
+ * which goes through `pipelineStateDir`.
+ */
 export function issueContextRelPath(issueNumber: number): string {
-  return path.join(".nightgauge", "pipeline", `issue-${issueNumber}.json`);
+  return path.join(RELATIVE_PIPELINE_STATE_DIR, issueContextFileName(issueNumber));
 }
 
 /**
@@ -47,7 +61,7 @@ export function issueContextCandidates(
   repo: string,
   issueNumber: number
 ): string[] {
-  const rel = issueContextRelPath(issueNumber);
+  const fileName = issueContextFileName(issueNumber);
   const roots: string[] = [];
 
   if (worktreeDir) {
@@ -69,7 +83,10 @@ export function issueContextCandidates(
   const seen = new Set<string>();
   const paths: string[] = [];
   for (const root of roots) {
-    const p = path.join(root, rel);
+    // A root the layout helper refuses (relative) would resolve against the
+    // host's cwd; skip it rather than throw from a best-effort lookup.
+    if (!isUsableWorkspaceRoot(root)) continue;
+    const p = path.join(pipelineStateDir(root), fileName);
     if (seen.has(p)) continue;
     seen.add(p);
     paths.push(p);
@@ -78,7 +95,7 @@ export function issueContextCandidates(
 }
 
 /**
- * The same list for a sibling file in `.nightgauge/pipeline/` — `planning-N.json`
+ * The same list for a sibling file in `pipelineStateDir(root)/` — `planning-N.json`
  * lives beside `issue-N.json` and moves with it.
  */
 export function pipelineFileCandidates(

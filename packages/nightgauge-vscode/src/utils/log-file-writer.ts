@@ -1,13 +1,19 @@
 /**
  * LogFileWriter - Utility for persisting pipeline logs to disk
  *
- * Writes log entries to .nightgauge/logs/ directory with timestamp prefixes.
+ * Writes log entries to cloneLogsDir(root)/ directory with timestamp prefixes.
  * Respects pipeline.logs config from config.yaml.
  *
  * @see Issue #190 - Pipeline logs persistence
  * @see docs/ARCHITECTURE.md for utility patterns
  */
 
+import {
+  cloneLogsDir,
+  isUsableWorkspaceRoot,
+  RELATIVE_CLONE_LOGS_DIR,
+  resolveCloneSetting,
+} from "./cloneLayout";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { redactSecrets } from "./redaction";
@@ -45,7 +51,7 @@ export interface LogFileDescriptor {
 export interface LogFileConfig {
   /** Whether to write logs to files (default: true) */
   retain: boolean;
-  /** Directory for log files relative to workspace root (default: .nightgauge/logs) */
+  /** Directory for log files relative to workspace root (default: RELATIVE_CLONE_LOGS_DIR) */
   dir: string;
   /** Maximum age in days before cleanup (optional) */
   max_age_days?: number;
@@ -73,7 +79,7 @@ export const DEFAULT_DISK_LOG_MAX_ENTRY_CHARS = 64 * 1024;
  */
 const DEFAULT_CONFIG: LogFileConfig = {
   retain: true,
-  dir: ".nightgauge/logs",
+  dir: RELATIVE_CLONE_LOGS_DIR,
 };
 
 /**
@@ -88,7 +94,7 @@ const DEFAULT_CONFIG: LogFileConfig = {
  *   'INFO',
  *   'feature-dev',
  *   'Starting implementation...',
- *   { retain: true, dir: '.nightgauge/logs' }
+ *   { retain: true, dir: RELATIVE_CLONE_LOGS_DIR }
  * );
  *
  * // Generate filename for current session
@@ -97,6 +103,15 @@ const DEFAULT_CONFIG: LogFileConfig = {
  * ```
  */
 export class LogFileWriter {
+  /**
+   * The log directory for `workspaceRoot`. The default `dir` resolves through
+   * the clone-layout helper; a configured override is joined onto the root as
+   * before (#2036). Throws on an unusable root.
+   */
+  private static resolveLogDir(workspaceRoot: string, dir: string): string {
+    return resolveCloneSetting(workspaceRoot, dir, RELATIVE_CLONE_LOGS_DIR, cloneLogsDir);
+  }
+
   /**
    * Append a log entry to the session log file
    *
@@ -117,18 +132,19 @@ export class LogFileWriter {
   ): Promise<void> {
     const mergedConfig = { ...DEFAULT_CONFIG, ...config };
 
-    // Respect retain: false to disable file logging
-    if (!mergedConfig.retain) {
+    // Respect retain: false to disable file logging. An unusable root would
+    // resolve against the host's cwd, so the write is skipped (#2036).
+    if (!mergedConfig.retain || !isUsableWorkspaceRoot(workspaceRoot)) {
       return;
     }
 
-    const logDir = path.join(workspaceRoot, mergedConfig.dir);
+    const logDir = this.resolveLogDir(workspaceRoot, mergedConfig.dir);
     const filename = this.generateFilename(issueNumber);
     const logPath = path.join(logDir, filename);
     const timestamp = new Date().toISOString();
     const stageTag = stage ? `[${stage}] ` : "";
     // Redact secrets before they hit disk: stage stdout / tool_result output can
-    // echo tokens or PEM blocks, and these logs persist under .nightgauge/logs/
+    // echo tokens or PEM blocks, and these logs persist under cloneLogsDir(root)/
     // (#170). Truncation is not redaction, so scrub the message content here.
     const safeMessage = redactSecrets(message);
     const line = `[${timestamp}] [${level.toUpperCase()}] ${stageTag}${safeMessage}\n`;
@@ -177,7 +193,7 @@ export class LogFileWriter {
     config?: Partial<LogFileConfig>
   ): string {
     const mergedConfig = { ...DEFAULT_CONFIG, ...config };
-    const logDir = path.join(workspaceRoot, mergedConfig.dir);
+    const logDir = this.resolveLogDir(workspaceRoot, mergedConfig.dir);
     const filename = this.generateFilename(issueNumber);
     return path.join(logDir, filename);
   }
@@ -195,6 +211,7 @@ export class LogFileWriter {
     issueNumber: number | null,
     config?: Partial<LogFileConfig>
   ): Promise<boolean> {
+    if (!isUsableWorkspaceRoot(workspaceRoot)) return false;
     const logPath = this.getLogPath(workspaceRoot, issueNumber, config);
     try {
       await fs.access(logPath);
@@ -225,9 +242,9 @@ export class LogFileWriter {
     config?: Partial<LogFileConfig>
   ): Promise<LogFileEntry[]> {
     const mergedConfig = { ...DEFAULT_CONFIG, ...config };
-    if (!mergedConfig.retain) return [];
+    if (!mergedConfig.retain || !isUsableWorkspaceRoot(workspaceRoot)) return [];
 
-    const logDir = path.join(workspaceRoot, mergedConfig.dir);
+    const logDir = this.resolveLogDir(workspaceRoot, mergedConfig.dir);
 
     let filenames: string[];
     try {
@@ -276,9 +293,9 @@ export class LogFileWriter {
     config?: Partial<LogFileConfig>
   ): Promise<string | null> {
     const mergedConfig = { ...DEFAULT_CONFIG, ...config };
-    if (!mergedConfig.retain) return null;
+    if (!mergedConfig.retain || !isUsableWorkspaceRoot(workspaceRoot)) return null;
 
-    const logDir = path.join(workspaceRoot, mergedConfig.dir);
+    const logDir = this.resolveLogDir(workspaceRoot, mergedConfig.dir);
     let filenames: string[];
     try {
       filenames = await fs.readdir(logDir);
@@ -317,9 +334,9 @@ export class LogFileWriter {
     config?: Partial<LogFileConfig>
   ): Promise<LogFileDescriptor[]> {
     const mergedConfig = { ...DEFAULT_CONFIG, ...config };
-    if (!mergedConfig.retain) return [];
+    if (!mergedConfig.retain || !isUsableWorkspaceRoot(workspaceRoot)) return [];
 
-    const logDir = path.join(workspaceRoot, mergedConfig.dir);
+    const logDir = this.resolveLogDir(workspaceRoot, mergedConfig.dir);
 
     let filenames: string[];
     try {
@@ -386,7 +403,8 @@ export class LogFileWriter {
     config?: Partial<LogFileConfig>
   ): Promise<{ kept: number; deleted: number; failed: number }> {
     const mergedConfig = { ...DEFAULT_CONFIG, ...config };
-    const logDir = path.join(workspaceRoot, mergedConfig.dir);
+    if (!isUsableWorkspaceRoot(workspaceRoot)) return { kept: 0, deleted: 0, failed: 0 };
+    const logDir = this.resolveLogDir(workspaceRoot, mergedConfig.dir);
 
     let filenames: string[];
     try {
