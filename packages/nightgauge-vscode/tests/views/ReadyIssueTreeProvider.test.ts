@@ -267,6 +267,41 @@ describe("ReadyIssueTreeProvider", () => {
 
   // ── Provider independence ─────────────────────────────────────────────────
 
+  // ── Optional methods ──────────────────────────────────────────────────────
+  // The Repositories tree tests for these and changes behaviour on their
+  // presence, so the wrapper must neither drop them nor invent them.
+
+  describe("getOpenIssues()", () => {
+    it("is forwarded when the delegate has it", async () => {
+      const open = [makeWorkItem({ number: 7, status: "Backlog" })];
+      const delegate = Object.assign(makeMockProvider([]), {
+        getOpenIssues: vi.fn().mockResolvedValue(open),
+      });
+      const provider = new ReadyIssueTreeProvider(delegate);
+
+      expect(typeof provider.getOpenIssues).toBe("function");
+      await expect(provider.getOpenIssues!()).resolves.toBe(open);
+      expect(delegate.getOpenIssues).toHaveBeenCalledTimes(1);
+    });
+
+    it("is absent when the delegate lacks it, so callers fall back per status", () => {
+      expect(readyProvider.getOpenIssues).toBeUndefined();
+    });
+  });
+
+  describe("getObservedComponents()", () => {
+    it("is forwarded when the delegate has it", () => {
+      const delegate = Object.assign(makeMockProvider([]), {
+        getObservedComponents: vi.fn().mockReturnValue(["ipc"]),
+      });
+      expect(new ReadyIssueTreeProvider(delegate).getObservedComponents!()).toEqual(["ipc"]);
+    });
+
+    it("is absent when the delegate lacks it", () => {
+      expect(readyProvider.getObservedComponents).toBeUndefined();
+    });
+  });
+
   describe("provider injection", () => {
     it("accepts any IWorkItemProvider implementation", () => {
       const differentProvider = makeMockProvider([]);

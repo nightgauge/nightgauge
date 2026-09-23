@@ -26,6 +26,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/depgraph"
 	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/focus"
+	"github.com/nightgauge/nightgauge/internal/forge"
 	"github.com/nightgauge/nightgauge/internal/forge/boardcache"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/intelligence/baselineGate"
@@ -1173,6 +1174,13 @@ type AutonomousScheduler struct {
 	// via SetBoardCache so a build inside the TTL of a sweep — or of the
 	// previous cycle — issues no board read at all (#845, #847).
 	boardProvider depgraph.BoardProvider
+
+	// boardCache is the same shared snapshot cache, held so the scheduler's
+	// own board WRITES (every MoveStatus below) invalidate it. Reading through
+	// a cache while writing around it would let the daemon serve its pre-move
+	// open snapshot — to board.listOpen, board.counts and the sweeps — for up
+	// to a TTL after the scheduler moved an issue. Nil outside the daemon.
+	boardCache *boardcache.Cache
 
 	// resolveDepStatesFn batch-resolves the true GitHub state ("OPEN"/"CLOSED")
 	// of dependency keys ("owner/repo#number") that have NO node in the graph
@@ -6014,7 +6022,7 @@ func (as *AutonomousScheduler) revertFailedIssueStatus(parent context.Context, r
 
 	ctx, cancel := context.WithTimeout(parent, boardRecoveryTimeout)
 	defer cancel()
-	projSvc := gh.NewProjectService(as.ghClient, owner, projectNum, ownerType)
+	projSvc := as.projectService(owner, projectNum, ownerType)
 	if err := projSvc.MoveStatus(ctx, owner, repoName, issue, "Ready"); err != nil {
 		log.Printf("autonomous: revert-status: failed to move %s#%d back to Ready after pipeline failure: %v",
 			repo, issue, err)
@@ -6048,7 +6056,7 @@ func (as *AutonomousScheduler) moveIssueToDone(parent context.Context, repo stri
 
 	ctx, cancel := context.WithTimeout(parent, boardRecoveryTimeout)
 	defer cancel()
-	projSvc := gh.NewProjectService(as.ghClient, owner, projectNum, ownerType)
+	projSvc := as.projectService(owner, projectNum, ownerType)
 	if err := projSvc.MoveStatus(ctx, owner, repoName, issue, "Done"); err != nil {
 		log.Printf("autonomous: move-to-done: failed to move %s#%d to Done after issue-closed: %v",
 			repo, issue, err)
@@ -6086,7 +6094,7 @@ func (as *AutonomousScheduler) moveIssueToInReview(parent context.Context, repo 
 
 	ctx, cancel := context.WithTimeout(parent, boardRecoveryTimeout)
 	defer cancel()
-	projSvc := gh.NewProjectService(as.ghClient, owner, projectNum, ownerType)
+	projSvc := as.projectService(owner, projectNum, ownerType)
 	if err := projSvc.MoveStatus(ctx, owner, repoName, issue, "In review"); err != nil {
 		log.Printf("autonomous: move-to-in-review: failed to move %s#%d to In review after unmerged PR: %v",
 			repo, issue, err)
@@ -6123,7 +6131,7 @@ func (as *AutonomousScheduler) moveIssueToInProgress(parent context.Context, rep
 
 	ctx, cancel := context.WithTimeout(parent, boardRecoveryTimeout)
 	defer cancel()
-	projSvc := gh.NewProjectService(as.ghClient, owner, projectNum, ownerType)
+	projSvc := as.projectService(owner, projectNum, ownerType)
 	if err := projSvc.MoveStatus(ctx, owner, repoName, issue, "In progress"); err != nil {
 		log.Printf("autonomous: move-to-in-progress: failed to move %s#%d to In progress (%s): %v",
 			repo, issue, reason, err)
@@ -6254,6 +6262,19 @@ func (as *AutonomousScheduler) buildGraph(ctx context.Context) (*depgraph.Graph,
 // Wiring-time only: call before Run or RecoverOrphanedRunning.
 func (as *AutonomousScheduler) SetBoardCache(cache *boardcache.Cache) {
 	as.boardProvider = depgraph.CachedBoardProvider(as.ghClient, cache)
+	as.boardCache = cache
+	if as.scheduler != nil {
+		as.scheduler.boardCache = cache
+	}
+}
+
+// projectService is the one constructor for the scheduler's board writes. It
+// wraps the forge service with boardcache.WrapProject so every status move
+// drops that board's snapshots in the shared cache (a no-op wrapper when no
+// cache is set). Reads that decide dispatch — PickNext's Ready read — do not
+// come through here and stay uncached.
+func (as *AutonomousScheduler) projectService(owner string, projectNum int, ownerType gh.OwnerType) forge.ProjectService {
+	return boardcache.WrapProject(as.boardCache, gh.NewProjectService(as.ghClient, owner, projectNum, ownerType), owner, projectNum)
 }
 
 // recoverOrphanedRunningState is the orphan half of recoverOrphanedRunning:
@@ -6315,7 +6336,7 @@ func (as *AutonomousScheduler) recoverOrphanedRunningItems(ctx context.Context, 
 			continue
 		}
 
-		projSvc := gh.NewProjectService(as.ghClient, owner, projectNum, ownerType)
+		projSvc := as.projectService(owner, projectNum, ownerType)
 		if err := projSvc.MoveStatus(opCtx, owner, repoName, item.Number, "Ready"); err != nil {
 			log.Printf("autonomous: recovery: failed to move %s#%d back to Ready: %v",
 				item.Repo, item.Number, err)
@@ -6489,7 +6510,7 @@ func (as *AutonomousScheduler) promoteUnblockedOnStartup(ctx context.Context) {
 			continue
 		}
 
-		projSvc := gh.NewProjectService(as.ghClient, owner, projectNum, ownerType)
+		projSvc := as.projectService(owner, projectNum, ownerType)
 		if err := projSvc.MoveStatus(opCtx, owner, repoName, node.Number, "Ready"); err != nil {
 			log.Printf("autonomous: startup promotion: failed to promote %s#%d to Ready: %v",
 				node.Repo, node.Number, err)
@@ -6617,7 +6638,7 @@ func (as *AutonomousScheduler) promoteUnblockedToReady(parent context.Context, c
 			continue
 		}
 
-		projSvc := gh.NewProjectService(as.ghClient, owner, projectNum, ownerType)
+		projSvc := as.projectService(owner, projectNum, ownerType)
 		if err := projSvc.MoveStatus(ctx, owner, repoName, node.Number, "Ready"); err != nil {
 			log.Printf("autonomous: promoteUnblockedToReady: failed to promote %s#%d to Ready: %v",
 				node.Repo, node.Number, err)
@@ -8168,7 +8189,7 @@ func (as *AutonomousScheduler) refineIssue(ctx context.Context, owner, repo stri
 	// Move status on project board (best-effort — may not be on board yet)
 	for _, rc := range as.repos {
 		if rc.Owner == owner && rc.Name == repo && rc.Project > 0 {
-			projSvc := gh.NewProjectService(as.ghClient, owner, rc.Project, rc.OwnerType)
+			projSvc := as.projectService(owner, rc.Project, rc.OwnerType)
 			if err := projSvc.MoveStatus(ctx, owner, repo, issue.Number, targetStatus); err != nil {
 				log.Printf("[refinement] #%d: failed to move to %s: %v", issue.Number, targetStatus, err)
 			}

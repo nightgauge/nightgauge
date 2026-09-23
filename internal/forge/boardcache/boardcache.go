@@ -105,6 +105,29 @@ type ChangeProbe interface {
 	ProjectUpdatedAt(ctx context.Context) (time.Time, error)
 }
 
+// OpenStatusSubset is an OPTIONAL capability on a forge.BoardService: a
+// promise that, for the given status, ListItems(ctx, status) returns exactly
+// the items of ListOpenItems whose Status equals that status (compared
+// case-insensitively), read with the same relationship lists.
+//
+// When a board makes that promise, a status read can be answered from a fresh
+// open-item snapshot instead of issuing its own `items(query:"status:X
+// is:open")` read. The Repositories tree asks for Ready, In progress and
+// Backlog on every repository row, the attention sweeps and board.counts read
+// the open snapshot, and before this each of those was a separate 17-point
+// page on the same board inside the same minute.
+//
+// It is a capability rather than an assumption because it is a property of
+// the adapter's query, not of boards in general: GitHub's filtered read is
+// `status:"X" is:open` over the same item query ListOpenItems uses, so the
+// subset holds; "Done" is read WITHOUT is:open there, so it does not. An
+// adapter that has not been checked simply does not implement this and keeps
+// its own per-status reads. TestGitHubBoardServiceImplementsOpenStatusSubset
+// pins the real adapter against this interface.
+type OpenStatusSubset interface {
+	StatusReadIsOpenSubset(status string) bool
+}
+
 // Snapshot is one board read, with the time it was taken. FetchedAt is exported
 // because a cache that cannot report its own age is indistinguishable from a
 // cache that is lying: a consumer showing an operator "nothing is stranded" has
@@ -236,13 +259,13 @@ func (c *Cache) InvalidateAll() {
 	c.probes = map[string]probeMemo{}
 }
 
-// Peek reports the cached snapshot for a query without fetching, and whether
-// one is present and unexpired. It is how a surface answers "how old is this?"
-// without provoking a read.
-func (c *Cache) Peek(owner string, project int, query string) (Snapshot, bool) {
+// peekKey is Peek for a full key: the completed, successful, unexpired
+// snapshot held for it, if any. Never fetches and never waits on an in-flight
+// read.
+func (c *Cache) peekKey(key string) (Snapshot, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	e, ok := c.entries[boardPrefix(owner, project)+query]
+	e, ok := c.entries[key]
 	if !ok || !c.freshLocked(e) {
 		return Snapshot{}, false
 	}
@@ -250,8 +273,28 @@ func (c *Cache) Peek(owner string, project int, query string) (Snapshot, bool) {
 	case <-e.done:
 		return e.snap, e.err == nil
 	default:
-		return Snapshot{}, false // still in flight
+		return Snapshot{}, false
 	}
+}
+
+// itemsWithStatus returns the items whose Status equals status,
+// case-insensitively (the forge's `status:"X"` filter is), in board order.
+// A fresh slice, so a caller cannot mutate the shared snapshot through it.
+func itemsWithStatus(items []forgetypes.BoardItem, status string) []forgetypes.BoardItem {
+	out := make([]forgetypes.BoardItem, 0, len(items))
+	for _, it := range items {
+		if strings.EqualFold(it.Status, status) {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+// Peek reports the cached snapshot for a query without fetching, and whether
+// one is present and unexpired. It is how a surface answers "how old is this?"
+// without provoking a read.
+func (c *Cache) Peek(owner string, project int, query string) (Snapshot, bool) {
+	return c.peekKey(boardPrefix(owner, project) + query)
 }
 
 // freshLocked reports whether an entry may still be served. An in-flight entry
@@ -367,7 +410,8 @@ func (c *Cache) Wrap(board forge.BoardService, owner string, project int) forge.
 	if board == nil || c == nil {
 		return board
 	}
-	return &cachedBoard{cache: c, inner: board, prefix: boardPrefix(owner, project), probe: probeFor(board)}
+	subset, _ := board.(OpenStatusSubset)
+	return &cachedBoard{cache: c, inner: board, prefix: boardPrefix(owner, project), probe: probeFor(board), openSubset: subset}
 }
 
 // probeFor extracts the optional change-probe capability from a board service,
@@ -389,6 +433,9 @@ type cachedBoard struct {
 	// supported state and not a degraded one: every nil-probe path refetches
 	// exactly as it did before #847.
 	probe func(context.Context) (time.Time, error)
+	// openSubset is nil for an adapter that has not promised its status reads
+	// are slices of its open read; see OpenStatusSubset.
+	openSubset OpenStatusSubset
 }
 
 func (b *cachedBoard) ListOpenItems(ctx context.Context) ([]forgetypes.BoardItem, int, error) {
@@ -400,6 +447,17 @@ func (b *cachedBoard) ListOpenItems(ctx context.Context) ([]forgetypes.BoardItem
 }
 
 func (b *cachedBoard) ListItems(ctx context.Context, statusFilter string) ([]forgetypes.BoardItem, error) {
+	// A status read on a board that promises it is a slice of the open read is
+	// answered from a FRESH open snapshot when one is held, for zero requests.
+	// Only a fresh one: this never starts the (larger) open read on a status
+	// read's behalf, so a caller that only ever asks for Ready pays exactly
+	// what it paid before, and an expired open snapshot is not renewed here —
+	// the per-status entry below keeps its own freshness and probe.
+	if b.openSubset != nil && statusFilter != "" && b.openSubset.StatusReadIsOpenSubset(statusFilter) {
+		if open, ok := b.cache.peekKey(b.prefix + "open"); ok {
+			return itemsWithStatus(open.Items, statusFilter), nil
+		}
+	}
 	snap, err := b.cache.get(ctx, b.prefix+"items:"+statusFilter, b.probe, func(ctx context.Context) (Snapshot, error) {
 		items, err := b.inner.ListItems(ctx, statusFilter)
 		return Snapshot{Items: items, Total: len(items)}, err

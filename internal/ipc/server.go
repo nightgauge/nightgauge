@@ -1389,6 +1389,29 @@ func (s *Server) registerMethods() {
 			Board.ListItems(ctx, p.Status)
 	}
 
+	// board.listOpen returns every OPEN item on the board, all statuses, from
+	// the daemon's cached `is:open` snapshot — the same snapshot board.counts
+	// and the attention sweeps read. It exists for the Repositories tree, which
+	// needs per-repository, epic-excluded counts for Ready / In progress /
+	// Backlog: before this verb it asked board.list once per status, three
+	// separate `items(query:"status:X is:open")` reads per board at 17 points
+	// a page, none of them shared with anything else. One read, already warm
+	// when a sweep has run, answers all three.
+	//ipc:method boardListOpen params:BoardListOpenParams result:BoardItem[] nullable
+	s.methods["board.listOpen"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
+		var p BoardListOpenParams
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, fmt.Errorf("invalid params: %w", err)
+		}
+		c, err := s.clientForUser(p.GitHubUser)
+		if err != nil {
+			return nil, err
+		}
+		items, _, err := s.boardServicesFor(c, p.Owner, p.ProjectNumber, gh.ParseOwnerType(p.OwnerType)).
+			Board.ListOpenItems(ctx)
+		return items, err
+	}
+
 	//ipc:method boardCounts params:BoardCountsParams result:StatusCounts
 	s.methods["board.counts"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
 		var p BoardCountsParams

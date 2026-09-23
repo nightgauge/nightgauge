@@ -63,6 +63,18 @@ export const ALL_ITEMS_SCOPE = "__all_items__";
  */
 export const COUNTS_SCOPE = "__counts__";
 
+/**
+ * Scope value for the every-OPEN-item read (`board.listOpen`).
+ *
+ * The Repositories tree needs per-repository Ready / In progress / Backlog
+ * counts with epics and any active filters applied, which `board.counts` (a
+ * board-wide tally) cannot give it. It used to take one `board.list` per
+ * status - three board reads per board per refresh. One open read answers all
+ * three, and daemon-side it is the same snapshot `board.counts` and the
+ * attention sweeps already hold.
+ */
+export const OPEN_ITEMS_SCOPE = "__open_items__";
+
 export interface BoardStoreMetrics {
   /** Served from a snapshot inside the caller's TTL. */
   hits: number;

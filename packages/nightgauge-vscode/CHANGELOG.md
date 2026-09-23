@@ -9,6 +9,13 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- The Repositories view reads each project board once per refresh instead of
+  three times per repository, and serves re-expands and daemon reconnects from
+  cache without touching GitHub. Row counts on a board shared by several
+  repositories now show each repository's own issues.
+
 ### Changed
 
 - OpenCode stages now run from the editor. They check the experimental

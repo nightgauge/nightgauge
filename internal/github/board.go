@@ -115,6 +115,17 @@ func (b *BoardService) listItemsFiltered(ctx context.Context, statusFilter strin
 	return items, nil
 }
 
+// StatusReadIsOpenSubset reports whether ListItems(ctx, status) is exactly the
+// items of ListOpenItems with that Status (boardcache.OpenStatusSubset). It is
+// for every status listItemsFiltered reads with `is:open` — all but "Done",
+// which it deliberately reads without it — because both reads are the same
+// `items(query:)` document over the same item fields and relationship lists,
+// and the filtered one only adds `status:"X"`. Keep this in step with the
+// `statusFilter != "Done"` condition in listItemsFiltered.
+func (b *BoardService) StatusReadIsOpenSubset(status string) bool {
+	return status != "" && status != "Done"
+}
+
 // ListOpenItems fetches only open items from the board using server-side
 // "is:open" filtering. Much faster than ListItems("") for boards with many
 // closed entries — avoids paginating through hundreds of archived items.

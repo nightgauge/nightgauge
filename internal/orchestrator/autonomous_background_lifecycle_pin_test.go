@@ -59,7 +59,7 @@ var spawnPinTable = map[string]spawnFileSpec{
 		601: "runSubagent — joined via the done-channel select below (ctx.Done()/<-done)",
 	}},
 	"epic.go": {allowedLines: map[int]string{
-		72: "checkEpicCompletion — process-lifetime, 35s-bounded, WithoutCancel; documented at the call site",
+		75: "checkEpicCompletion — process-lifetime, 35s-bounded, WithoutCancel; documented at the call site",
 	}},
 }
 

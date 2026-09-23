@@ -95,7 +95,7 @@ func (as *AutonomousScheduler) reconcileStuckInReviewPRs(ctx context.Context, gr
 				continue
 			}
 
-			projSvc := gh.NewProjectService(as.ghClient, owner, projectNum, ownerType)
+			projSvc := as.projectService(owner, projectNum, ownerType)
 			if err := projSvc.MoveStatus(ctx, owner, repoName, node.Number, "Ready"); err != nil {
 				log.Printf("autonomous: stuck-in-review: failed to move %s In review → Ready: %v", key, err)
 				continue

@@ -134,6 +134,13 @@ export interface IWorkItemProvider {
   /** Fetch issue counts per board status */
   getAggregatedStatusCounts(): Promise<Record<string, number>>;
 
+  /**
+   * Every open issue of this repository, all statuses, from one board read.
+   * Optional: a provider without it is asked per status instead. The
+   * Repositories tree derives its per-row counts from this when present.
+   */
+  getOpenIssues?(): Promise<WorkItem[]>;
+
   /** Eagerly prefetch and cache all items */
   prefetchAllItems(options?: { force?: boolean }): Promise<void>;
 
