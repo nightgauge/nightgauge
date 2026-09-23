@@ -228,10 +228,14 @@ has opted in.
   watchdog and writes `model_provider`, `upstream_model` and `endpoint` to the
   stage record (§ 2, § 3), so the row is gone.
 - **Stage limits and subagent cost.** The stage's token cap on a hosted model
-  is not passed to OpenCode; that row stays with #1652's per-stage token
-  ceiling. The USD watchdog cannot stop a stage while its subagents spend,
-  because their steps never reach the stream (§ 3); that row stays with #1748
-  until a change bounds them while the stage runs.
+  is not passed to OpenCode. #1652's stage budgets (ADR-023 Q8) now bound
+  every stage on its stream (its steps, its wall clock and its tokens), and
+  the row's line says so, but the row stays: it is also the disclosure that a
+  hosted model's limits come from OpenCode's catalog and that a lower config
+  layer can replace them, which no stage budget changes. The USD watchdog
+  cannot stop a stage while its subagents spend, because their steps never
+  reach the stream (§ 3); that row stays with #1748 until a change bounds
+  them while the stage runs.
 - **ADR-020.** The switch is a default-off setting. ADR-020 requires its reason
   beside it, and the reason is security: a dispatch runs without controls every
   other adapter has.
@@ -526,7 +530,11 @@ opencode:
 
 A stage's turn cap becomes the steps cap of the build agent and each
 subagent, and a stage with none gets 200 steps, room for a long stage on a
-local model that still ends a session caught in a loop. A dispatch to an
+local model that still ends a session caught in a loop. Since #1652 every
+stage has one, its `max_turns` stage budget (ADR-023 Q8), whose zero-cost
+default is the same 200; only a hosted stage whose budget is set to -1 has
+none. The steps cap is not a hard stop (#1811), so the manager also counts
+`step_finish` events and stops the stage itself. A dispatch to an
 endpoint model whose `limit.context` or `limit.output` neither the machine-tier
 `limit` nor discovery from the server (§ 13) gives is refused before spawn, as
 is a local provider key no endpoint declares, and any other

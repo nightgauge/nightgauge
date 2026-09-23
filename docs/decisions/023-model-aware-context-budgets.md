@@ -280,9 +280,51 @@ and each sub-session's prompt starts with that compact render.
 
 ### Q8 — Non-USD budgets (#1652)
 
-Out of scope for implementation here. A context-window refusal is a ceiling
-this PR enforces; turn/wall-clock/token ceilings are a distinct, later
-mechanism #1652 owns. No code ships for this in the current PR.
+A context-window refusal is a ceiling this ADR enforces; turn, wall-clock and
+token ceilings are a distinct mechanism, and this ADR originally shipped no
+code for it and set no defaults.
+
+**Amendment (#1652).** The mechanism is `pipeline.stage_budgets`, keyed by
+`default` or a stage name, each entry holding `max_turns`, `max_wall_clock`
+and `max_tokens`. The Go executor enforces it on the stage's stream while the
+stage runs (`internal/execution/stage_budget.go`); the extension-hosted runner
+does not yet. Decided:
+
+- **Defaults.** 400 turns, 4h wall clock, 25,000,000 tokens; a zero-cost stage
+  gets 200 turns. Each sits above what a normal hosted stage uses, so a
+  default only ever stops a runaway: the largest recorded claude stage took
+  287 turns; 4h is the largest stage timeout routing assigns (the OpenCode
+  local cap), and the wall-clock deadline is min(stage timeout, the budget),
+  so no stage gets less time than today; 25M is above any recorded hosted
+  stage's input, output and cache-write tokens. 200 turns keeps the steps cap
+  OpenCode stages already ran under (ADR-022). No per-stage default: stage
+  timeouts already vary per stage, and the wall clock composes with them.
+- **Tokens counted.** Input, output (reasoning included) and cache writes.
+  Cache reads are left out: a hosted stage re-reads its cached context every
+  turn, which its USD cap prices, and a local server reports its whole prompt
+  as input.
+- **Inheritance.** 0 or absent inherits (stage → `default` → built-in).
+  Unlimited is only an explicit `-1`, logged on every dispatch.
+- **Zero-cost rule.** A stage on a zero-cost provider, a model server the
+  operator runs or a model the registry prices at $0, has no USD cap that can
+  stop it, so it always gets non-zero ceilings: `-1` is refused there with a
+  warning and the built-in default applies. A hosted model the registry
+  cannot price is not zero-cost: that is a registry gap, and counting it
+  would give a hosted stage the local turn default.
+- **Turns.** Passed as the adapter's native cap where one exists and counted
+  on the stream for every adapter with a turn boundary; the stage is stopped
+  when its last allowed turn asks for another. For OpenCode the stream count
+  is the enforcement, because its steps cap is not a hard stop (ADR-022,
+  #1811).
+- **Breach.** SIGTERM to the process group, SIGKILL after 10s, a check once
+  the stage is reaped that no member is left, and the stamp
+  `stage_budget_exceeded:<turns|wall_clock|tokens>` with the observed value
+  and the limit. The existing budget-enforcer terminal rule classifies it as
+  `budget_exceeded`, and the scheduler does not retry a `budget_exceeded`
+  stage.
+
+The operator reference is `docs/GUARDRAILS_AND_BUDGETS.md` § Per-stage non-USD
+budgets.
 
 ### Q9 — Capacity-aware sizing (#1655)
 

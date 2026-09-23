@@ -49,6 +49,7 @@ whether to fire. That is what makes it a backstop against the LLM itself.
 | **Per-stage cost caps**              | Cost runaway on a single stage        | [CONFIGURATION → `pipeline.stage_cost_caps`](CONFIGURATION.md#pipelinestage_cost_caps) — hard, deterministic USD ceiling per stage                                               |
 | **BudgetEnforcer**                   | Run-level cost runaway                | [CONFIGURATION → `pipeline.stage_cost_caps`](CONFIGURATION.md#pipelinestage_cost_caps) — `pipeline.budget_mode` / `budget_grace_percent`, estimate-vs-actual with a grace buffer |
 | **Adaptive forward-progress budget** | Spend-without-progress                | [ADAPTIVE_PIPELINE.md](ADAPTIVE_PIPELINE.md) — semantic forward-progress awareness replaces the dollar-ceiling hard-kill                                                         |
+| **Per-stage non-USD budgets**        | Turn/time/token runaway at $0         | [Per-stage non-USD budgets](#per-stage-non-usd-budgets-1652) — `pipeline.stage_budgets`: turns, wall clock and tokens, enforced on the stream; bind $0 local models              |
 | **Stage timeouts + stall detection** | Silent stall / stuck stage            | idle-vs-elapsed split (#3160); [STAGE_EXIT_DIAGNOSTIC.md](STAGE_EXIT_DIAGNOSTIC.md) for the forensics                                                                            |
 | **Stage gates**                      | Masked failure ("skill said success") | [STAGE_GATES.md](STAGE_GATES.md) — deterministic post-condition checks, independent of LLM claims                                                                                |
 | **Cascade circuit breaker**          | Cross-pipeline cascading failure      | [CASCADE_CIRCUIT_BREAKER.md](CASCADE_CIRCUIT_BREAKER.md) — sliding-window auto-pause, operator-cleared                                                                           |
@@ -61,6 +62,61 @@ breaker is the **blast-radius limiter**. Defense in depth — no single mechanis
 is trusted to catch everything.
 
 ---
+
+### Per-stage non-USD budgets (#1652)
+
+Every guardrail above that stops a stage is denominated in USD, and a local
+model is priced at $0, so none of them binds it. `pipeline.stage_budgets` adds
+three ceilings that bind every stage the Go executor runs (Go-direct and
+daemon), whether or not a USD cap is set:
+
+```yaml
+pipeline:
+  stage_budgets:
+    default: # every stage inherits these
+      max_turns: 300
+    feature-dev: # a stage's own entry wins
+      max_wall_clock: 90m
+      max_tokens: 10000000
+```
+
+| Key              | Built-in default              | Counted as                                                           |
+| ---------------- | ----------------------------- | -------------------------------------------------------------------- |
+| `max_turns`      | 400; 200 on a zero-cost stage | model turns on the stream (below), and passed as the native turn cap |
+| `max_wall_clock` | 4h                            | time since spawn; the deadline is min(stage timeout, this)           |
+| `max_tokens`     | 25,000,000                    | input + output + cache-write tokens; cache reads do not count        |
+
+- **Inheritance.** For each key, 0 or absent inherits: a stage entry from
+  `default`, `default` from the built-in value. The defaults sit above what a
+  normal hosted stage uses (the largest recorded claude stage took 287 turns;
+  4h is the largest stage timeout routing assigns), so they only stop
+  runaways.
+- **Unlimited is explicit.** Only `-1` lifts a ceiling, and every dispatch
+  that runs with one lifted logs a `[stage-budget]` warning.
+- **Zero-cost rule.** A stage on a zero-cost provider (a model server you run,
+  such as LM Studio or Ollama, or a model the registry prices at $0) has no USD
+  cap that can stop it, so it always runs under non-zero ceilings: a `-1`
+  there is refused, with a warning, and the built-in default applies. Its turn
+  default stays at the 200 steps OpenCode stages already had. A hosted model
+  the registry cannot price is not zero-cost.
+- **Turns.** The ceiling is passed as the adapter's own cap (`--max-turns` for
+  claude, grok and the claude-CLI adapters; the agents' `steps` for OpenCode)
+  and is also counted on the stream for every adapter that has a turn
+  boundary: a main-thread assistant message (claude), a `step_finish`
+  (OpenCode), a `usage` event (grok), a completed tool item (codex), a
+  `tool_use` event (gemini). The stage is stopped when its last allowed turn
+  asks for another. For OpenCode the stream count is the enforcement: its
+  `steps` cap is not a hard stop (ADR-022, #1811). Copilot prints no turn
+  boundary; its wall clock and stage timeout bound it.
+- **On a breach** the manager sends SIGTERM to the stage's process group,
+  SIGKILL after 10s, checks once the stage is reaped that no member of the
+  group is left, and ends the stage's stderr with
+  `stage_budget_exceeded:<turns|wall_clock|tokens> observed=… limit=…`. The
+  same values are on `RunResult.StageBudgetExceeded`. The run is classified
+  `budget_exceeded` and is not retried: a stronger model under the same budget
+  would spend it again.
+- **Scope.** Stages the VS Code extension runs in its own runner are not
+  covered yet.
 
 ### Pre-flight cost estimate (#1213)
 
