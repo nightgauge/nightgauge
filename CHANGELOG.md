@@ -365,6 +365,15 @@ create --body-file` call, so the compact profile (and its tests) pin
 
 ### Fixed
 
+- **feature-dev sub-sessions work in a repository whose `.gitignore` ignores
+  `.nightgauge/`.** Each step's progress is proven by fingerprinting the work
+  tree, and the fingerprint staged with `git add -A -- . :(exclude).nightgauge`.
+  When the repository's own `.gitignore` ignores that directory, git 2.54 exits
+  1 on the exclusion ("paths are ignored … use -f"), so every step failed as
+  `dev-step-progress-unproven`. Found in the live #1651 run. The fingerprint
+  now stages `.` and then drops the bookkeeping directories from its scratch
+  index, which works whatever the repository ignores.
+
 - **The Repositories view costs one board read per board, not three per
   repository.** Opening the extension and expanding the view was measured
   moving the shared 5,000-point GraphQL budget from 88 to 521 points in about

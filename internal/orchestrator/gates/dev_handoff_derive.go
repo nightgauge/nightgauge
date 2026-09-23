@@ -521,11 +521,22 @@ func WorkTreeFingerprint(workspace string) (string, error) {
 		}
 	}
 	env := append(os.Environ(), "GIT_INDEX_FILE="+tmpIndex)
-	add := exec.Command("git", append([]string{"add", "-A", "--"}, ci.DeliverablePathspec()...)...)
+	// Stage everything, then drop the bookkeeping dirs from the scratch index.
+	// Not `git add -A -- ci.DeliverablePathspec()`: when the repo's own
+	// .gitignore ignores a bookkeeping dir (`.nightgauge/`), git exits 1 on
+	// the `:(exclude)` pathspec naming it ("paths are ignored ... use -f"),
+	// which failed every step with dev-step-progress-unproven.
+	add := exec.Command("git", "add", "-A", "--", ".")
 	add.Dir = workspace
 	add.Env = env
 	if out, aerr := add.CombinedOutput(); aerr != nil {
 		return "", fmt.Errorf("stage into scratch index: %v: %s", aerr, strings.TrimSpace(string(out)))
+	}
+	drop := exec.Command("git", append([]string{"rm", "-r", "-q", "--cached", "--ignore-unmatch", "--"}, ci.BookkeepingDirs...)...)
+	drop.Dir = workspace
+	drop.Env = env
+	if out, derr := drop.CombinedOutput(); derr != nil {
+		return "", fmt.Errorf("drop bookkeeping from scratch index: %v: %s", derr, strings.TrimSpace(string(out)))
 	}
 	write := exec.Command("git", "write-tree")
 	write.Dir = workspace
