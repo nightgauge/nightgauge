@@ -224,10 +224,16 @@ on startup and after every write:
 - the CLI has no key: the extension's key is written;
 - the CLI still holds the last confirmed key: the extension's newer key never
   reached it (a failed write), so it is written again;
+- no usable fingerprint (an older binary, a failed or unparseable status):
+  the extension keeps its key and asks for a newer binary;
+- the keys differ but no sync was ever recorded: both are kept and the user
+  is asked to activate one key;
 - otherwise the key was changed outside VS Code, for example rotated with
   `auth license set` in a terminal. The CLI's key wins. The extension drops
   its stale copy and tells the user to run **Nightgauge: Activate License**
-  with the current key.
+  with the current key. This is the only case in which the extension deletes
+  its copy: it needs positive evidence, a well-formed fingerprint that
+  differs from the one recorded at the last confirmed sync.
 
 The CLI's key wins because it is the key a person changed deliberately and
 the one every other process uses. The extension cannot read it (the CLI never

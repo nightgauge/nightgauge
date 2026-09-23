@@ -514,6 +514,61 @@ describe("migrateLicenseKeyAtStartup", () => {
   });
 });
 
+describe("reconcile never deletes the key without evidence of rotation", () => {
+  const synced = { [SECRET_KEY]: OLD_KEY, [LICENSE_SYNCED_FINGERPRINT_SECRET]: fp(OLD_KEY) };
+
+  for (const [name, fingerprint] of [
+    ["missing", undefined],
+    ["malformed", "not-a-fingerprint"],
+    ["too short", "d34399"],
+    ["uppercase", "D34399CF362C"],
+  ] as const) {
+    it(`keeps the key and asks for a newer binary when the fingerprint is ${name}`, async () => {
+      const { bridge, calls, warn } = bridgeWith(() => ({
+        stdout: JSON.stringify({ source: "keychain", keychainAvailable: true, fingerprint }),
+      }));
+      const secrets = memSecrets({ ...synced });
+      const { d } = migrationDeps({}, secrets, bridge);
+
+      expect(await migrateLicenseKeyAtStartup(d)).toBe(OLD_KEY);
+
+      expect(secrets.deleteSecret).not.toHaveBeenCalled();
+      expect(secrets.map.get(SECRET_KEY)).toBe(OLD_KEY);
+      expect(calls.map((x) => x.args[2])).toEqual(["status"]); // no write either
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0][0])).toMatch(/update the nightgauge binary/i);
+    });
+  }
+
+  it("keeps the key when status fails or prints nothing parseable", async () => {
+    for (const reply of [
+      { code: 1, stderr: "Error: boom" },
+      { stdout: "not json" },
+      { error: new Error("spawn ENOENT") },
+    ]) {
+      const { bridge } = bridgeWith(() => reply);
+      const secrets = memSecrets({ ...synced });
+      const { d } = migrationDeps({}, secrets, bridge);
+      expect(await migrateLicenseKeyAtStartup(d)).toBe(OLD_KEY);
+      expect(secrets.deleteSecret).not.toHaveBeenCalled();
+    }
+  });
+
+  it("keeps both keys when they differ but no sync was ever recorded", async () => {
+    const c = cli(KEY);
+    const { bridge, calls, inform } = bridgeWith(c.reply);
+    const secrets = memSecrets({ [SECRET_KEY]: OLD_KEY });
+    const { d } = migrationDeps({}, secrets, bridge);
+
+    expect(await migrateLicenseKeyAtStartup(d)).toBe(OLD_KEY);
+
+    expect(secrets.deleteSecret).not.toHaveBeenCalled();
+    expect(c.state.key).toBe(KEY);
+    expect(calls.map((x) => x.args[2])).toEqual(["status"]);
+    expect(inform).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("whenLicenseReconciled", () => {
   it("waits for the startup reconciliation, bounded", async () => {
     let done = false;

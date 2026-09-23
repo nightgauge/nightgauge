@@ -51,6 +51,11 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_OUTPUT = 8_192;
 
 /** Non-reversible key identifier; the same function as Go's keychain.Fingerprint. */
+/** A fingerprint as the binary prints it: exactly 12 lowercase hex characters. */
+export function isWellFormedFingerprint(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{12}$/.test(value);
+}
+
 export function licenseKeyFingerprint(key: string): string {
   return key ? createHash("sha256").update(key).digest("hex").slice(0, 12) : "";
 }
@@ -194,10 +199,15 @@ export class LicenseKeychainBridge {
       return {
         source,
         keychainAvailable: parsed?.keychainAvailable === true,
-        fingerprint: typeof parsed?.fingerprint === "string" ? parsed.fingerprint : undefined,
+        fingerprint: isWellFormedFingerprint(parsed?.fingerprint) ? parsed.fingerprint : undefined,
       };
     }
     return null;
+  }
+
+  /** Warn (once per bridge) that the binary cannot take part in the sync. */
+  reportOutdated(): void {
+    this.fail("set", OUTDATED);
   }
 
   /** Show one information message per bridge. */
@@ -360,7 +370,7 @@ export interface LicenseSecrets {
   deleteSecret: (key: string) => Promise<void>;
 }
 
-type BridgeLike = Pick<LicenseKeychainBridge, "store" | "status" | "informOnce">;
+type BridgeLike = Pick<LicenseKeychainBridge, "store" | "status" | "informOnce" | "reportOutdated">;
 
 export interface LicenseMigrationDeps {
   fs: {
@@ -432,6 +442,12 @@ export async function forgetLicenseKey(
  * Bring SecretStorage and the CLI's store into agreement. Returns the key the
  * extension may use (and hand the daemon), or undefined when it has none it
  * can trust. The rule is in the module comment.
+ *
+ * The SecretStorage copy is deleted only on positive evidence of rotation: a
+ * well-formed fingerprint from the CLI that differs from both the extension's
+ * key and the fingerprint recorded at the last confirmed sync. Anything less
+ * (no binary, a failed or unparseable status, a missing or malformed
+ * fingerprint, no recorded sync) keeps the key.
  */
 export async function reconcileLicenseKey(
   deps: Pick<LicenseMigrationDeps, "secrets" | "bridge" | "secretKey" | "log">
@@ -446,6 +462,15 @@ export async function reconcileLicenseKey(
 
   if (status.source === "none") {
     await push();
+    return ext;
+  }
+  if (!isWellFormedFingerprint(status.fingerprint)) {
+    // A binary that reports a stored key but no usable fingerprint cannot
+    // take part in the comparison. Keep the key; ask for a newer binary.
+    deps.log?.(
+      "[licenseKeychainBridge] status reported no usable fingerprint; keeping the VS Code key"
+    );
+    bridge.reportOutdated();
     return ext;
   }
   if (status.fingerprint === fp) {
@@ -465,8 +490,20 @@ export async function reconcileLicenseKey(
     await push();
     return ext;
   }
+  if (!isWellFormedFingerprint(synced)) {
+    // The keys differ but there is no record of a confirmed sync, so there
+    // is no evidence which side changed. Keep both; let the user pick.
+    deps.log?.(
+      "[licenseKeychainBridge] the CLI's license key differs and no sync is recorded; keeping both"
+    );
+    bridge.informOnce(
+      "Nightgauge: the license key in VS Code differs from the one the CLI uses. Run 'Nightgauge: Activate License' with the current key to use one key everywhere."
+    );
+    return ext;
+  }
 
-  // The key was changed outside VS Code. The shared entry wins.
+  // Positive evidence: the CLI's key differs from the one last confirmed in
+  // sync, so it was changed outside VS Code. The shared entry wins.
   deps.log?.(
     "[licenseKeychainBridge] the license key was changed outside VS Code; dropping the VS Code copy"
   );
