@@ -279,6 +279,25 @@ create --body-file` call, so the compact profile (and its tests) pin
 
 ### Fixed
 
+- **Skill-eval scenarios no longer fail a correct answer for naming the
+  forbidden thing to reject it.** `not_contains` cannot tell a recommendation
+  from a warning. Measured on 2026-09-23, the live sonnet answer to
+  `pc-body-flag` was correct ("the Go binary has no `--body-file` flag, so …
+  pass it inline with `--body`") and failed `not_contains "--body-file"`;
+  `ip-no-direct-main`, whose prompt asks the model to confirm it never commits
+  to main and then forbade the words `commit to main`, was noisy on both
+  profiles in every live run, and the mock fixtures had been phrased around
+  the defect. A new `not_matches_regex` assertion fails only when its pattern
+  matches, and nine scenarios (`pc-body-flag`, `pm-no-admin-flag`,
+  `ip-no-direct-main`, `ip-status-move-inprogress`, `fv-no-flaky-dismissal`,
+  `fv-dev-handoff-missing-proceeds`, `fv-verify-ui-skip-reason-recorded`,
+  `ct-cannot-reproduce-stops`, `fp-no-dead-commands`) now forbid the
+  recommending or invoking form behind a clause-local negation guard. Each is
+  tested with a correct answer that names the thing negatively (passes) and a
+  wrong answer that recommends it (fails on the new assertion itself). Two
+  `not_contains` stay: `requestReviews` and "visual assertion passed so it's
+  fine" appear only when the model does the wrong thing.
+
 - **A cancelled or timed-out Go-direct stage now kills its whole process
   group (#1651).** `execution.Manager` spawned stages as group leaders but
   let the stage context's cancel signal only the direct child, so a process

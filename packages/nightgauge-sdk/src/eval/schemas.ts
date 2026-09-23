@@ -112,6 +112,19 @@ export const EvalAssertionSchema = z.discriminatedUnion("type", [
     description: z.string().optional(),
   }),
   z.object({
+    type: z.literal("not_matches_regex"),
+    /**
+     * JavaScript regex source the output MUST NOT match. The negation-aware
+     * counterpart of `not_contains`: write the pattern to match only the
+     * recommending or invoking form of a forbidden behaviour, so a correct
+     * answer that names the forbidden thing in order to reject it still passes.
+     */
+    pattern: z.string().min(1),
+    /** Regex flags (e.g. "i", "m", "s"). */
+    flags: z.string().optional(),
+    description: z.string().optional(),
+  }),
+  z.object({
     type: z.literal("json_path_exists"),
     /**
      * Dot/bracket path into a JSON object parsed from the output. Supports

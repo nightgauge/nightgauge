@@ -76,7 +76,7 @@ A scenario is a declarative JSON file at `evals/scenarios/<skill>/<name>.json`:
   "prompt": "You are creating a PR with the Go binary and have the body in a temp file. Which flag do you pass the body with?",
   "assertions": [
     { "type": "contains", "value": "--body" },
-    { "type": "not_contains", "value": "--body-file" }
+    { "type": "not_matches_regex", "pattern": "<--body-file, unless negated>", "flags": "i" }
   ],
   "models": ["haiku", "sonnet", "opus"]
 }
@@ -102,13 +102,14 @@ Assertions are intentionally **coarse** (contract-shape checks) so they tolerate
 phrasing variation while still catching the documented failure mode. Prefer
 key-presence / JSON-shape / substring checks over full-output equality.
 
-| `type`             | Fields                  | Passes when                                                      |
-| ------------------ | ----------------------- | ---------------------------------------------------------------- |
-| `contains`         | `value`, `ignore_case?` | Output contains the substring.                                   |
-| `not_contains`     | `value`, `ignore_case?` | Output does **not** contain the substring.                       |
-| `matches_regex`    | `pattern`, `flags?`     | Output matches the JS regex (invalid regex → fail, not throw).   |
-| `json_path_exists` | `path`                  | First balanced JSON in the output resolves the dot/bracket path. |
-| `exit_code`        | `value`                 | Process exit code equals `value` (live mode / mock-supplied).    |
+| `type`              | Fields                  | Passes when                                                      |
+| ------------------- | ----------------------- | ---------------------------------------------------------------- |
+| `contains`          | `value`, `ignore_case?` | Output contains the substring.                                   |
+| `not_contains`      | `value`, `ignore_case?` | Output does **not** contain the substring.                       |
+| `matches_regex`     | `pattern`, `flags?`     | Output matches the JS regex (invalid regex → fail, not throw).   |
+| `not_matches_regex` | `pattern`, `flags?`     | Output does **not** match the JS regex (invalid regex → fail).   |
+| `json_path_exists`  | `path`                  | First balanced JSON in the output resolves the dot/bracket path. |
+| `exit_code`         | `value`                 | Process exit code equals `value` (live mode / mock-supplied).    |
 
 `json_path_exists` extracts the first balanced JSON object/array from the output
 (tolerating prose or code fences around it) and supports `a.b.c` and
@@ -126,8 +127,29 @@ not have distinguished that from "I will bisect".
 
 What discriminates is the **correct statement being present**, not the wrong
 word being absent. Assert that the run says the check is "not a regression";
-keep `not_contains` for tokens that are wrong under any phrasing (a flag the
-binary rejects, a command that must not appear).
+keep `not_contains` for tokens that appear only when the model does the wrong
+thing.
+
+### Forbid the recommending form, not the word
+
+`not_contains` also fails the opposite way: it cannot tell a recommendation from
+a warning, so a **correct** answer that names the forbidden thing in order to
+reject it goes red. Measured live on `pc-body-flag`, sonnet answered
+"`--body "$PR_BODY"` — the Go binary has no `--body-file` flag …", which is
+right, and failed `not_contains "--body-file"`. Scenario fixtures had been bent
+around the defect ("an override flag", "the trunk") instead.
+
+Forbid a behaviour with `not_matches_regex`, written to match only the
+recommending or invoking form. The shipped scenarios wrap the forbidden
+expression `X` in a clause-local negation guard: `X` is ignored when a negator
+(`not`, `never`, `don't`, `rather than`, …) precedes it in the same clause, when
+`no` or `without` sits within a word of it, or when a denial (`doesn't exist`,
+`isn't supported`, …) follows it. A clause ends at punctuation, an em dash, or a
+connective such as `so` or `because`, so "no flow is registered, so it counts as
+passed" is still caught. Pair every such assertion with a unit test in
+`packages/nightgauge-sdk/tests/eval/negationAwareScenarios.test.ts` that feeds a
+correct answer naming `X` negatively (must pass) and a wrong answer recommending
+`X` (must fail on the `not_matches_regex` itself).
 
 ## Mock vs. live mode
 

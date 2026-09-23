@@ -16,9 +16,10 @@
       "description": "deterministic status command"
     },
     {
-      "type": "not_contains",
-      "value": "addProjectV2ItemById",
-      "description": "no improvised GraphQL"
+      "type": "not_matches_regex",
+      "pattern": "(?<!\\b(?:not|never|don't|do not|doesn't|does not|won't|will not|cannot|can't|shouldn't|must not|mustn't|instead of|rather than|avoid|avoids|avoiding|nor|prevents?|forbids?|forbidden|refuses?)\\b(?:(?!\\b(?:so|then|thus|therefore|hence|because|since|but|and then)\\b)[^.;:,!?\\n—]){0,50})(?<!\\b(?:no|without)(?:\\W+\\w+)?\\W{1,3})(?:\\b(?:addProjectV2ItemById|updateProjectV2ItemFieldValue)\\b|\\bgh\\s+api\\s+graphql\\b)(?![^.;,!?\\n—]{0,20}\\b(?:doesn't|does not|isn't|is not|won't|will not|aren't|are not|not supported|unsupported|not a real|would fail|would abort|fails|aborts|is rejected|is forbidden|is not allowed|is wrong)\\b)",
+      "flags": "i",
+      "description": "an improvised GraphQL mutation or gh api graphql call; rejecting raw GraphQL is fine"
     }
   ]
 }

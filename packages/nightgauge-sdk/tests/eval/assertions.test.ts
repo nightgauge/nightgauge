@@ -68,6 +68,50 @@ describe("evaluateAssertions — matches_regex", () => {
   });
 });
 
+describe("evaluateAssertions — not_matches_regex", () => {
+  it("passes when the pattern does not match", () => {
+    const r = evaluateAssertions({ text: "gh pr merge --squash" }, [
+      { type: "not_matches_regex", pattern: "gh pr merge[^\\n]*--admin" },
+    ]);
+    expect(r.passed).toBe(true);
+  });
+
+  it("fails when the pattern matches and records the matched text", () => {
+    const r = evaluateAssertions({ text: "run gh pr merge 12 --squash --admin now" }, [
+      { type: "not_matches_regex", pattern: "gh pr merge[^\\n]*--admin" },
+    ]);
+    expect(r.passed).toBe(false);
+    expect(r.failures[0].type).toBe("not_matches_regex");
+    expect(r.failures[0].reason).toContain("gh pr merge 12 --squash --admin");
+  });
+
+  it("honors flags", () => {
+    const text = "SKIP THE TEST";
+    expect(
+      evaluateAssertions({ text }, [{ type: "not_matches_regex", pattern: "skip the test" }]).passed
+    ).toBe(true);
+    expect(
+      evaluateAssertions({ text }, [
+        { type: "not_matches_regex", pattern: "skip the test", flags: "i" },
+      ]).passed
+    ).toBe(false);
+  });
+
+  it("treats an invalid regex as a failure rather than throwing", () => {
+    const r = evaluateAssertions({ text: "anything" }, [
+      { type: "not_matches_regex", pattern: "(" },
+    ]);
+    expect(r.passed).toBe(false);
+    expect(r.failures[0].reason).toMatch(/invalid regex/);
+  });
+
+  it("is repeatable with the g flag (no lastIndex carry-over)", () => {
+    const a: EvalAssertion[] = [{ type: "not_matches_regex", pattern: "x", flags: "g" }];
+    expect(evaluateAssertions({ text: "x" }, a).passed).toBe(false);
+    expect(evaluateAssertions({ text: "x" }, a).passed).toBe(false);
+  });
+});
+
 describe("evaluateAssertions — json_path_exists", () => {
   it("finds a nested path in fenced JSON", () => {
     const text = '```json\n{ "complexity_assessment": { "computed_score": 5 } }\n```';

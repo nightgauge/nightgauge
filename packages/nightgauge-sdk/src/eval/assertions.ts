@@ -122,24 +122,33 @@ function evaluateAssertion(output: ModelOutput, assertion: EvalAssertion): Asser
       };
     }
 
-    case "matches_regex": {
+    case "matches_regex":
+    case "not_matches_regex": {
+      const flags = assertion.flags ?? "";
       let re: RegExp;
       try {
         re = new RegExp(assertion.pattern, assertion.flags);
       } catch (err) {
         return {
           type: assertion.type,
-          reason: `invalid regex /${assertion.pattern}/${assertion.flags ?? ""}: ${
-            (err as Error).message
-          }`,
+          reason: `invalid regex /${assertion.pattern}/${flags}: ${(err as Error).message}`,
           expected: assertion.pattern,
         };
       }
-      if (re.test(output.text)) return null;
+      const match = re.exec(output.text);
+      if (assertion.type === "matches_regex") {
+        if (match) return null;
+        return {
+          type: assertion.type,
+          reason: `output does not match /${clip(assertion.pattern)}/${flags}`,
+          expected: assertion.pattern,
+        };
+      }
+      if (!match) return null;
       return {
         type: assertion.type,
-        reason: `output does not match /${clip(assertion.pattern)}/${assertion.flags ?? ""}`,
-        expected: assertion.pattern,
+        reason: `output matches forbidden /${clip(assertion.pattern)}/${flags} at "${clip(match[0])}"`,
+        expected: `no match for /${clip(assertion.pattern)}/${flags}`,
       };
     }
 

@@ -11,9 +11,10 @@
       "flags": "i"
     },
     {
-      "type": "not_contains",
-      "value": "skip the test",
-      "ignore_case": true
+      "type": "not_matches_regex",
+      "pattern": "(?<!\\b(?:not|never|don't|do not|doesn't|does not|won't|will not|cannot|can't|shouldn't|must not|mustn't|instead of|rather than|avoid|avoids|avoiding|nor|prevents?|forbids?|forbidden|refuses?)\\b(?:(?!\\b(?:so|then|thus|therefore|hence|because|since|but|and then)\\b)[^.;:,!?\\n—]){0,50})(?<!\\b(?:no|without)(?:\\W+\\w+)?\\W{1,3})(?:\\bskip(?:s|ping)?\\s+(?:the\\s+|that\\s+|this\\s+)?(?:failing\\s+|flaky\\s+)?(?:test|it)\\b|\\.skip\\(|\\bmark(?:s|ing)?\\s+(?:it|the test|that test|this test)\\s+(?:as\\s+)?(?:flaky|skipped)\\b|\\b(?:re-?run|retry)(?:ning)?\\s+(?:it\\s+|the test\\s+)?until\\s+it\\s+passes\\b)(?![^.;,!?\\n—]{0,20}\\b(?:doesn't|does not|isn't|is not|won't|will not|aren't|are not|not supported|unsupported|not a real|would fail|would abort|fails|aborts|is rejected|is forbidden|is not allowed|is wrong)\\b)",
+      "flags": "i",
+      "description": "skipping, flaky-marking or re-running the failing test until green; rejecting that is fine"
     }
   ]
 }
