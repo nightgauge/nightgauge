@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -436,7 +437,7 @@ func TestEvaluateSizeGate_LongListsItDoesNotUseCannotFailIt(t *testing.T) {
 	})
 
 	issue, result, err := evaluateSizeGate(context.Background(), gh.NewIssueService(forge.Client()),
-		githubtest.Owner, githubtest.Repo, 10, sizeGate.DefaultGateConfig())
+		githubtest.Owner, githubtest.Repo, 10, sizeGate.DefaultGateConfig(), nil)
 	if err != nil {
 		t.Fatalf("evaluateSizeGate: %v", err)
 	}
@@ -457,11 +458,53 @@ func TestEvaluateSizeGate_LongSubIssueListIsStillReadWhole(t *testing.T) {
 	})
 
 	_, _, err := evaluateSizeGate(context.Background(), gh.NewIssueService(forge.Client()),
-		githubtest.Owner, githubtest.Repo, 10, sizeGate.DefaultGateConfig())
+		githubtest.Owner, githubtest.Repo, 10, sizeGate.DefaultGateConfig(), nil)
 	if !errors.Is(err, gh.ErrConnectionTruncated) {
 		t.Fatalf("err = %v, want ErrConnectionTruncated", err)
 	}
 	if n := forge.FollowUps(); n != 1 {
 		t.Errorf("later-page reads = %d, want 1: the sub-issue list must be read past its first page", n)
+	}
+}
+
+// TestSizeGateCapacity_ReportsTheTableCap drives `size-gate capacity` through
+// the assembled root command (#1655): an explicit window reads the ADR 023
+// capacity table, and an unknown window reports no cap.
+func TestSizeGateCapacity_ReportsTheTableCap(t *testing.T) {
+	sizeGateEnv(t)
+	for _, tc := range []struct {
+		args        []string
+		wantMax     string
+		wantKnown   bool
+		wantWindow  int
+		description string
+	}{
+		{[]string{"--context-window", "32768"}, "S", true, 32768, "32k window"},
+		{[]string{"--context-window", "131072"}, "M", true, 131072, "131k window"},
+		{[]string{"--adapter", "claude", "--model", "no-such-model"}, "", false, 0, "unresolvable model"},
+	} {
+		var runErr error
+		out := captureStdout(t, func() {
+			root := rootCmd()
+			root.SetOut(io.Discard)
+			root.SetErr(io.Discard)
+			root.SetArgs(append([]string{"size-gate", "capacity", "--json"}, tc.args...))
+			runErr = root.Execute()
+		})
+		if runErr != nil {
+			t.Fatalf("%s: %v", tc.description, runErr)
+		}
+		var got struct {
+			ContextWindow int    `json:"context_window"`
+			WindowKnown   bool   `json:"window_known"`
+			MaxSize       string `json:"max_size"`
+		}
+		if err := json.Unmarshal([]byte(out), &got); err != nil {
+			t.Fatalf("%s: output %q is not JSON: %v", tc.description, out, err)
+		}
+		if got.MaxSize != tc.wantMax || got.WindowKnown != tc.wantKnown || got.ContextWindow != tc.wantWindow {
+			t.Errorf("%s: got %+v, want max_size=%q window_known=%v context_window=%d",
+				tc.description, got, tc.wantMax, tc.wantKnown, tc.wantWindow)
+		}
 	}
 }

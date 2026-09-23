@@ -16,6 +16,32 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **Capacity-aware size gates (#1655).** A model's context window now caps
+  the largest issue size it may take, from one table in
+  `internal/skillrender/budget.go` (ADR-023 Q9): under 32k tokens XS only,
+  32k up to S, 128k (131,072 included) up to M, 200k up to L, 400k and more
+  up to XL. It is enforced at three points. `nightgauge size-gate check`
+  gains `--context-window N` and `--adapter A --model M`, and rejects an
+  issue whose `size:*` label exceeds the cap, naming the size, the window and
+  the cap; without those flags it behaves as before. The scheduler checks
+  every stage before spawn against the window of the model that stage
+  resolved to, and refuses an over-capacity issue as
+  `context_window_exceeded` with a recovery of `decompose`. It reads the size
+  from the run's routing decision, else from `planning-{N}.json`'s
+  `complexity_assessment.size_label`. The new `nightgauge size-gate capacity`
+  command (`--adapter A --model M`, or `--context-window N`, with `--json`)
+  reports the cap for a model, by default the repository's feature-dev
+  target, and issue-create's Phase 2.85 scope gate uses it to force
+  decomposition of work above the cap (issue-create 1.25.0). With
+  `pipeline.size_gate.routes.reject_action: soft-route`, an over-capacity
+  issue moves to the first entry of the new
+  `pipeline.size_gate.routes.capacity_fallback_models` whose window admits
+  its size, and is rejected when none does. Decomposition goes one level
+  deep: an issue whose body carries `<!-- nightgauge:capacity-decomposed -->`
+  and is still over the cap is reported as `requires human decomposition`.
+  An unknown window or size applies no cap and logs one `capacity:` line
+  saying so.
+
 - **Per-stage context-window utilization and compaction count (#1653).** A
   stage's history record now says how close it came to its model's window
   and whether its session compacted, so "does this stage fit this model?" is

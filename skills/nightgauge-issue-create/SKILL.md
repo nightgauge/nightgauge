@@ -6,7 +6,7 @@ description: Create well-structured GitHub issues with SDLC metadata, project bo
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.24.0"
+  version: "1.25.0"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task AskUserQuestion
 ---
@@ -129,7 +129,7 @@ Classify the issue (implementation vs spike), draft a concise, actionable title 
 
 ### Phase 2.85: Oversized-Scope Hard-Gate
 
-**Gate**: Runs UNCONDITIONALLY for **every issue type**. **Blocking** — an issue bundling many independent targets/refactors MUST be decomposed into an epic, or carry an explicit `<!-- nightgauge:oversized-scope-accepted -->` marker, before any GitHub mutation (the #3811 $112-runaway defense).
+**Gate**: Runs UNCONDITIONALLY for **every issue type**. **Blocking** — an issue bundling many independent targets/refactors MUST be decomposed into an epic, or carry an explicit `<!-- nightgauge:oversized-scope-accepted -->` marker, before any GitHub mutation (the #3811 $112-runaway defense). An issue whose predicted size exceeds the target model's capacity (`nightgauge size-gate capacity`) MUST be decomposed, one level deep.
 
 > **Read `_includes/scope-gates.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 

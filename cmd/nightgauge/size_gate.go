@@ -8,11 +8,12 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/nightgauge/nightgauge/internal/config"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/intelligence/sizeGate"
+	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/nightgauge/nightgauge/pkg/types"
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 )
 
 // sizeGateCmd returns the top-level "size-gate" command.
@@ -22,6 +23,7 @@ func sizeGateCmd() *cobra.Command {
 		Short: "Issue size gate preflight checks",
 	}
 	cmd.AddCommand(sizeGateCheckCmd())
+	cmd.AddCommand(sizeGateCapacityCmd())
 	return cmd
 }
 
@@ -37,6 +39,9 @@ func sizeGateCheckCmd() *cobra.Command {
 		issueNum   int
 		configPath string
 		outputJSON bool
+		window     int
+		adapter    string
+		model      string
 	)
 
 	cmd := &cobra.Command{
@@ -49,7 +54,18 @@ func sizeGateCheckCmd() *cobra.Command {
 			}
 
 			// Load gate config from YAML, falling back to defaults when absent.
-			cfg := loadSizeGateConfigFromYAML(configPath)
+			cfg := sizeGate.LoadGateConfigFromYAML(configPath)
+
+			// The capacity check (#1655) runs only when a window, or the
+			// model that resolves one, is named; without these flags the
+			// gate is exactly what it was before.
+			var capacity *sizeGate.CapacityInput
+			if window < 0 {
+				return fmt.Errorf("--context-window must not be negative")
+			}
+			if window > 0 || model != "" {
+				capacity = resolveCapacityInput(cmd.Context(), cfg, window, adapter, model)
+			}
 
 			// Fail before the client is built and before any network call: an
 			// empty owner or repo would be stitched into a malformed "owner/"
@@ -65,7 +81,7 @@ func sizeGateCheckCmd() *cobra.Command {
 				return fmt.Errorf("create GitHub client: %w", err)
 			}
 
-			issue, result, err := evaluateSizeGate(cmd.Context(), gh.NewIssueService(client), ownerPart, repoPart, issueNum, cfg)
+			issue, result, err := evaluateSizeGate(cmd.Context(), gh.NewIssueService(client), ownerPart, repoPart, issueNum, cfg, capacity)
 			if err != nil {
 				return fmt.Errorf("fetch issue #%d: %w", issueNum, enrichError(err))
 			}
@@ -77,6 +93,10 @@ func sizeGateCheckCmd() *cobra.Command {
 					Severity          string   `json:"severity,omitempty"`
 					SuggestedAction   string   `json:"suggested_action,omitempty"`
 					HeuristicsApplied []string `json:"heuristics_applied"`
+					ContextWindow     int      `json:"context_window,omitempty"`
+					MaxSize           string   `json:"max_size,omitempty"`
+					Recovery          string   `json:"recovery,omitempty"`
+					RoutedModel       string   `json:"routed_model,omitempty"`
 				}
 				out := jsonResult{
 					Allowed:           result.Allowed,
@@ -84,6 +104,12 @@ func sizeGateCheckCmd() *cobra.Command {
 					Severity:          result.Severity,
 					SuggestedAction:   result.SuggestedAction,
 					HeuristicsApplied: result.HeuristicsApplied,
+					RoutedModel:       result.RoutedModel,
+				}
+				if result.Capacity != nil {
+					out.ContextWindow = result.Capacity.Window
+					out.MaxSize = result.Capacity.MaxSize
+					out.Recovery = result.Capacity.Recovery
 				}
 				enc := json.NewEncoder(os.Stdout)
 				enc.SetIndent("", "  ")
@@ -93,6 +119,9 @@ func sizeGateCheckCmd() *cobra.Command {
 			if result.Allowed {
 				fmt.Printf("Size gate: PASSED\n")
 				fmt.Printf("Issue #%d: %q\n", issue.Number, issue.Title)
+				if result.RoutedModel != "" {
+					fmt.Printf("Soft-routed to: %s\n", result.RoutedModel)
+				}
 				return nil
 			}
 
@@ -112,6 +141,9 @@ func sizeGateCheckCmd() *cobra.Command {
 	cmd.Flags().IntVar(&issueNum, "issue", 0, "GitHub issue number to evaluate (required)")
 	cmd.Flags().StringVar(&configPath, "config", ".nightgauge/config.yaml", "Path to config.yaml")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output result as JSON")
+	cmd.Flags().IntVar(&window, "context-window", 0, "Context window (tokens) of the model that will run the issue; enables the capacity check")
+	cmd.Flags().StringVar(&adapter, "adapter", "", "Adapter the issue will run on (with --model, resolves the context window)")
+	cmd.Flags().StringVar(&model, "model", "", "Model the issue will run on; enables the capacity check with the model's resolved window")
 	_ = cmd.MarkFlagRequired("issue")
 
 	return cmd
@@ -122,13 +154,141 @@ func sizeGateCheckCmd() *cobra.Command {
 // follows the sub-issue list to its end and no other list. A long blocking or
 // blocked-by list must not fail the read: the issue-pickup skill records any
 // failure of `size-gate check` as the issue being too large.
-func evaluateSizeGate(ctx context.Context, issues issueReader, owner, repo string, number int, cfg sizeGate.GateConfig) (*types.Issue, *sizeGate.GateResult, error) {
+//
+// capacity, when non-nil, adds the capacity check (#1655) against the size:*
+// labels; its one log line goes to stderr.
+func evaluateSizeGate(ctx context.Context, issues issueReader, owner, repo string, number int, cfg sizeGate.GateConfig, capacity *sizeGate.CapacityInput) (*types.Issue, *sizeGate.GateResult, error) {
 	issue, err := issues.GetIssueWithRelations(ctx, owner, repo, number, gh.RelationSubIssues)
 	if err != nil {
 		return nil, nil, err
 	}
-	result := sizeGate.NewGateEvaluator(cfg).Evaluate(issue.Title, issue.Labels, len(issue.SubIssues))
+	result := sizeGate.NewGateEvaluator(cfg).WithLogger(stderrLogf).EvaluateIssue(sizeGate.GateInput{
+		Title:     issue.Title,
+		Labels:    issue.Labels,
+		SubIssues: len(issue.SubIssues),
+		Body:      issue.Body,
+		Capacity:  capacity,
+	})
 	return issue, result, nil
+}
+
+// stderrLogf writes one line to stderr, keeping stdout for the verdict and
+// the --json document.
+func stderrLogf(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, format+"\n", args...)
+}
+
+// resolveCapacityInput builds the capacity check's model side: an explicit
+// --context-window wins, else the window adapter/model dispatches with
+// (orchestrator.DispatchContextWindow, the scheduler's own resolution). The
+// soft-route fallbacks are resolved on the same adapter.
+func resolveCapacityInput(ctx context.Context, cfg sizeGate.GateConfig, window int, adapter, model string) *sizeGate.CapacityInput {
+	root := capacityWorkspaceRoot()
+	in := &sizeGate.CapacityInput{Window: window}
+	if in.Window <= 0 && model != "" {
+		in.Window = orchestrator.DispatchContextWindow(ctx, root, adapter, model)
+	}
+	if cfg.SoftRoute {
+		for _, m := range cfg.CapacityFallbackModels {
+			in.Fallbacks = append(in.Fallbacks, sizeGate.CapacityCandidate{
+				Model: m, Window: orchestrator.DispatchContextWindow(ctx, root, adapter, m),
+			})
+		}
+	}
+	return in
+}
+
+// capacityWorkspaceRoot is the directory whose .nightgauge config describes
+// the models: the working directory.
+func capacityWorkspaceRoot() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	return wd
+}
+
+// sizeGateCapacityCmd reports the largest issue size a model may take — the
+// ADR 023 capacity table read for one model's context window. issue-create's
+// scope gate calls it to force decomposition of work above the cap (#1655).
+//
+// The model is --context-window, or --adapter/--model, or — with neither —
+// the repository's configured target: the adapter feature-dev resolves to and,
+// for opencode, the machine-tier opencode.model, otherwise
+// pipeline.stage_models.feature-dev. An unknown window reports no cap
+// (max_size "") and logs one line saying so.
+func sizeGateCapacityCmd() *cobra.Command {
+	var (
+		window     int
+		adapter    string
+		model      string
+		outputJSON bool
+	)
+	cmd := &cobra.Command{
+		Use:          "capacity",
+		Short:        "Report the largest issue size a model's context window admits",
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if window < 0 {
+				return fmt.Errorf("--context-window must not be negative")
+			}
+			root := capacityWorkspaceRoot()
+			if window == 0 && adapter == "" && model == "" {
+				adapter, model = configuredCapacityTarget(root)
+			}
+			if window == 0 && model != "" {
+				window = orchestrator.DispatchContextWindow(cmd.Context(), root, adapter, model)
+			}
+			maxSize, known := sizeGate.MaxSizeForWindow(window)
+			if !known {
+				stderrLogf("capacity: window unknown — no capacity cap applied (adapter %q, model %q)", adapter, model)
+			}
+			if outputJSON {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(struct {
+					Adapter       string `json:"adapter,omitempty"`
+					Model         string `json:"model,omitempty"`
+					ContextWindow int    `json:"context_window"`
+					WindowKnown   bool   `json:"window_known"`
+					MaxSize       string `json:"max_size"`
+				}{adapter, model, window, known, maxSize})
+			}
+			if !known {
+				fmt.Println("Capacity: no cap (context window unknown)")
+				return nil
+			}
+			fmt.Printf("Capacity: up to size %s (context window %d)\n", maxSize, window)
+			return nil
+		},
+	}
+	cmd.Flags().IntVar(&window, "context-window", 0, "Context window in tokens (wins over --adapter/--model)")
+	cmd.Flags().StringVar(&adapter, "adapter", "", "Adapter the model runs on")
+	cmd.Flags().StringVar(&model, "model", "", "Model whose context window decides the cap")
+	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output result as JSON")
+	return cmd
+}
+
+// configuredCapacityTarget is the repository's configured target model for
+// capacity purposes: the adapter feature-dev resolves to and, on opencode,
+// the machine-tier opencode.model, else pipeline.stage_models.feature-dev.
+// Either value may be "" when nothing is configured.
+func configuredCapacityTarget(root string) (adapter, model string) {
+	cfg, err := config.Load(root)
+	if err != nil {
+		cfg = nil
+	}
+	adapter = config.ResolveStageAdapter(cfg, "feature-dev", os.Getenv).Adapter
+	if adapter == "opencode" {
+		if oc, err := config.LoadOpenCodeConfig(root); err == nil {
+			model = oc.Model
+		}
+		return adapter, model
+	}
+	if cfg != nil && cfg.Pipeline != nil {
+		model = cfg.Pipeline.StageModels["feature-dev"]
+	}
+	return adapter, model
 }
 
 // repoBackfillConfigPath returns the project-tier config.yaml path that
@@ -201,66 +361,4 @@ var fetchGateIssueLabels = func(ctx context.Context, owner, repo string, issueNu
 		return nil, fmt.Errorf("fetch issue #%d: %w", issueNum, enrichError(err))
 	}
 	return issue.Labels, nil
-}
-
-// sizeGateYAML is the YAML shape for pipeline.size_gate config section.
-type sizeGateYAML struct {
-	Pipeline struct {
-		SizeGate struct {
-			Enabled           *bool `yaml:"enabled"`
-			RejectOnOversized *bool `yaml:"reject_on_oversized"`
-			Thresholds        struct {
-				MaxLocInTitle      *int `yaml:"max_loc_in_title"`
-				DecomposedItemsMin *int `yaml:"decomposed_items_min"`
-			} `yaml:"thresholds"`
-			Heuristics struct {
-				LocPatternEnabled         *bool `yaml:"loc_pattern_enabled"`
-				DecompositionCheckEnabled *bool `yaml:"decomposition_check_enabled"`
-			} `yaml:"heuristics"`
-		} `yaml:"size_gate"`
-	} `yaml:"pipeline"`
-}
-
-// loadSizeGateConfigFromYAML reads pipeline.size_gate from the YAML config file,
-// applying defaults for any missing fields. When the file is absent or cannot be
-// parsed, all defaults are used — the gate is never disabled by a missing config.
-func loadSizeGateConfigFromYAML(configPath string) sizeGate.GateConfig {
-	cfg := sizeGate.DefaultGateConfig()
-
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		return cfg // config absent — use defaults
-	}
-
-	var y sizeGateYAML
-	if err := yaml.Unmarshal(data, &y); err != nil {
-		return cfg // parse error — use defaults
-	}
-
-	sg := y.Pipeline.SizeGate
-
-	// Respect explicit disable: if enabled is explicitly false, disable all heuristics.
-	if sg.Enabled != nil && !*sg.Enabled {
-		cfg.LocPatternEnabled = false
-		cfg.DecompositionCheckEnabled = false
-		return cfg
-	}
-
-	if sg.RejectOnOversized != nil {
-		cfg.RejectOnOversized = *sg.RejectOnOversized
-	}
-	if sg.Thresholds.MaxLocInTitle != nil {
-		cfg.MaxLocInTitle = *sg.Thresholds.MaxLocInTitle
-	}
-	if sg.Thresholds.DecomposedItemsMin != nil {
-		cfg.DecomposedItemsMin = *sg.Thresholds.DecomposedItemsMin
-	}
-	if sg.Heuristics.LocPatternEnabled != nil {
-		cfg.LocPatternEnabled = *sg.Heuristics.LocPatternEnabled
-	}
-	if sg.Heuristics.DecompositionCheckEnabled != nil {
-		cfg.DecompositionCheckEnabled = *sg.Heuristics.DecompositionCheckEnabled
-	}
-
-	return cfg
 }

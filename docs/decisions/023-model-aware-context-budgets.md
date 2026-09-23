@@ -338,6 +338,23 @@ Out of scope for implementation here. `internal/skillrender/budget.go` is
 named as the file a future window → maximum-issue-size table would extend.
 No code ships for this in the current PR.
 
+**Amendment (#1655): the capacity table.** `capacityTable` in
+`internal/skillrender/budget.go`, read through `MaxIssueSizeForWindow`
+(and `sizeGate.MaxSizeForWindow`), maps a known window to the largest issue
+size it admits: below 32,000 tokens XS; 32,000 S; 128,000 M; 200,000 L;
+400,000 XL. Three points read it: `nightgauge size-gate check
+--context-window | --adapter --model`, `nightgauge size-gate capacity`
+(issue-create's Phase 2.85 scope gate), and the scheduler, which checks each
+stage against the window of the model that stage resolved to (this ADR's
+Q10 order) before the fit check, so a run is held to its smallest-window
+stage model. An over-capacity dispatch is refused as
+`context_window_exceeded` with a recovery of decompose, or re-routed under
+`size_gate.routes.reject_action: soft-route` to the first
+`capacity_fallback_models` entry that admits the size. Decomposition is one
+level deep: an issue carrying `<!-- nightgauge:capacity-decomposed -->` that
+is still over capacity requires human decomposition. An unknown window or
+size applies no cap, as Q4.
+
 ### Q10 — Window source precedence
 
 In order:
@@ -445,7 +462,7 @@ against the _dispatch model's_ window, at render/dispatch time.
 - [x] `docs/decisions/README.md` index row
 - [x] #1651 bounded sub-sessions (policy recorded in the Q7 amendment)
 - [ ] #1652 non-USD budgets (decision slot only, tracked separately)
-- [ ] #1655 capacity-aware sizing (decision slot only, tracked separately)
+- [x] #1655 capacity-aware sizing (the Q9 amendment)
 - [x] A `compact` render profile (#1654: `internal/skillrender`'s Profile
       option, `--profile compact`, `DecideProfile`, and pr-merge's own
       `_profiles/compact.md` as the first consumer. `DecideProfile` is the

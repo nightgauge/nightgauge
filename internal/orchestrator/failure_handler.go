@@ -582,9 +582,10 @@ const (
 	// model server has the model loaded with. Classified only from the model
 	// request's own failure (opencode's `AI_APICallError: <server message>`),
 	// never from model text. Not an agent failure. Re-routing to a model that
-	// fits (#1645) and decomposing the issue (#1655) are the recoveries this
-	// record exists for; until they land the issue is parked with the
-	// remediation.
+	// fits (#1645) and decomposing the issue (#1655) are its recoveries. The
+	// scheduler's own pre-dispatch refusals (the context-budget fit check and
+	// the capacity check) are classified into it too, and the issue is parked
+	// with the remediation.
 	TerminalKindContextWindowExceeded = "context_window_exceeded"
 	// TerminalKindAdapterPermissionRejected: the adapter auto-rejected a tool
 	// the stage's allowed tools grant (#1624's

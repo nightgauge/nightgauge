@@ -4237,7 +4237,12 @@ nightgauge size predict <issue-number> [--owner ORG] [--repo REPO] [--json]
 
 ```bash
 # Issue size gate — invoked by issue-pickup
-nightgauge size-gate check --issue <N> [--config <path>] [--json]
+nightgauge size-gate check --issue <N> [--config <path>] [--json] \
+  [--context-window <tokens> | --adapter <a> --model <m>]
+
+# Largest issue size a model's context window admits (ADR-023 capacity table)
+# — invoked by issue-create Phase 2.85
+nightgauge size-gate capacity [--adapter <a> --model <m> | --context-window <tokens>] [--json]
 
 # Baseline-CI dependency gate — invoked by issue-pickup (Issue #3004)
 nightgauge baseline-gate check --issue <N> [--branch main] [--config <path>] [--json] [--pause-queue=true]
@@ -4249,6 +4254,21 @@ nightgauge scope-drift check --issue <N> [--config <path>] [--workdir <path>] [-
 # Version-downgrade gate — invoked by feature-validate Phase 2.6 (Issue #3042)
 nightgauge version-downgrade check [--issue <N>] [--baseline main] [--config <path>] [--workdir <path>] [--allow-override] [--json]
 ```
+
+**`size-gate` capacity (#1655)**: `--context-window`, or `--adapter`/`--model`
+(resolved to the window the scheduler would dispatch with), adds a capacity
+check to `size-gate check`: an issue whose `size:*` label exceeds the cap the
+ADR-023 capacity table gives that window is rejected, with a recovery of
+`decompose`, or `requires human decomposition` when its body carries
+`<!-- nightgauge:capacity-decomposed -->`. Without those flags the gate is
+unchanged. `size-gate capacity --json` prints `{adapter, model,
+context_window, window_known, max_size}`; with no model flags it reports the
+repository's feature-dev target (on opencode, the machine-tier
+`opencode.model`). An unknown window reports `max_size: ""` and logs
+`capacity: window unknown`. Under `pipeline.size_gate.routes.reject_action:
+soft-route`, `check` allows an over-capacity issue on the first
+`routes.capacity_fallback_models` entry whose window admits it and prints it
+as `routed_model`.
 
 **`scope-drift check` flags**:
 
