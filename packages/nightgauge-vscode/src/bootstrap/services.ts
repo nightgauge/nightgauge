@@ -126,6 +126,7 @@ import { SecretStorageService, SECRET_KEYS } from "../services/SecretStorageServ
 import { getGlobalConfigPath } from "../utils/globalConfigResolver";
 import {
   migrateLicenseKeyAtStartup,
+  setLicenseReconciliation,
   vscodeLicenseKeychainBridge,
 } from "../services/licenseKeychainBridge";
 import { migrateLegacyGeminiApiKey } from "../commands/migrateConfig";
@@ -516,7 +517,7 @@ export async function initializeServices(
 
   const primaryWorkspaceForMigration = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (secretService) {
-    void (async () => {
+    const reconciliation = (async () => {
       const fsLib = await import("fs");
       const pathLib = await import("path");
       cachedLicenseKey = await migrateLicenseKeyAtStartup({
@@ -529,7 +530,11 @@ export async function initializeServices(
           : undefined,
         machineConfigPath: getGlobalConfigPath(),
       });
-    })().catch((err) =>
+    })();
+    // The daemon spawn waits (bounded) for this, so it is never handed a
+    // SecretStorage key that reconciliation drops (IpcClientBase).
+    setLicenseReconciliation(reconciliation);
+    reconciliation.catch((err) =>
       console.warn(
         "[services] license key migration failed:",
         err instanceof Error ? err.message : err

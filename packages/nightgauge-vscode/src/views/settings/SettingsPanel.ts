@@ -42,10 +42,7 @@ import { getOpenCodeModel } from "../../utils/resolvers/modelResolver";
 import { Logger } from "../../utils/logger";
 import type { LmStudioModelInfo } from "../../services/LmStudioService";
 import { SecretStorageService, SECRET_KEYS } from "../../services/SecretStorageService";
-import {
-  persistLicenseKey,
-  vscodeLicenseKeychainBridge,
-} from "../../services/licenseKeychainBridge";
+import { forgetLicenseKey, persistLicenseKey } from "../../services/licenseKeychainBridge";
 import { IpcClient } from "../../services/IpcClient";
 import type { ForgeInstanceRow } from "./ForgeInstancesSection";
 import type { ForgeListEntry, TierAuditEntry } from "../../services/IpcClientBase";
@@ -959,9 +956,10 @@ export class SettingsPanel implements vscode.Disposable {
               // terminal.
               const previous = await secretSvc.getSecret(storageKey);
               if (value === "") {
-                await secretSvc.deleteSecret(storageKey);
                 if (previous && storageKey === SECRET_KEYS.platformLicenseKey) {
-                  await vscodeLicenseKeychainBridge().clear();
+                  await forgetLicenseKey(secretSvc, storageKey);
+                } else {
+                  await secretSvc.deleteSecret(storageKey);
                 }
               } else if (value !== previous) {
                 if (storageKey === SECRET_KEYS.platformLicenseKey) {

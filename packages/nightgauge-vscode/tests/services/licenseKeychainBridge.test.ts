@@ -2,7 +2,8 @@
  * licenseKeychainBridge (#2027): the extension stores the license key in the
  * Go binary's shared OS-keychain entry by piping it to
  * `nightgauge auth license set`, so the CLI and a terminal-started daemon keep
- * working after the extension moves the key out of YAML.
+ * working after the extension moves the key out of YAML. The shared entry is
+ * the source of truth; SecretStorage is reconciled against it.
  */
 
 import { describe, it, expect, vi } from "vitest";
@@ -13,18 +14,28 @@ import type { spawn } from "child_process";
 import {
   LicenseKeychainBridge,
   LICENSE_CLEAR_ARGS,
+  LICENSE_COMMAND,
   LICENSE_KEYCHAIN_ACCOUNT,
   LICENSE_KEYCHAIN_SERVICE,
   LICENSE_SET_ARGS,
+  LICENSE_STATUS_ARGS,
+  LICENSE_SYNCED_FINGERPRINT_SECRET,
   MANUAL_LICENSE_SET_COMMAND,
+  forgetLicenseKey,
+  licenseKeyFingerprint,
   migrateLicenseKeyAtStartup,
+  persistLicenseKey,
+  setLicenseReconciliation,
+  whenLicenseReconciled,
   type LicenseMigrationDeps,
 } from "../../src/services/licenseKeychainBridge";
 
 const KEY = "ib_live_bridge_test_key";
+const OLD_KEY = "ib_live_bridge_old_key";
 const SECRET_KEY = "nightgauge.platform.licenseKey";
 const MACHINE = "/machine/config.yaml";
 const PROJECT = "/workspace/.nightgauge/config.yaml";
+const fp = licenseKeyFingerprint;
 
 interface SpawnCall {
   binary: string;
@@ -33,10 +44,13 @@ interface SpawnCall {
   stdin: string;
 }
 
+type Reply = { stdout?: string; stderr?: string; code?: number; error?: Error };
+
 /** A spawn double: records each call and answers with the scripted reply. */
-function fakeSpawn(
-  reply: (args: string[]) => { stdout?: string; stderr?: string; code?: number; error?: Error }
-): { spawnImpl: typeof spawn; calls: SpawnCall[] } {
+function fakeSpawn(reply: (call: SpawnCall) => Reply): {
+  spawnImpl: typeof spawn;
+  calls: SpawnCall[];
+} {
   const calls: SpawnCall[] = [];
   const spawnImpl = ((binary: string, args: string[], opts: { env: NodeJS.ProcessEnv }) => {
     const call: SpawnCall = { binary, args: [...args], env: opts.env, stdin: "" };
@@ -56,7 +70,7 @@ function fakeSpawn(
     };
     proc.stdin = stdin;
     setImmediate(() => {
-      const r = reply(call.args);
+      const r = reply(call);
       if (r.error) {
         proc.emit("error", r.error);
         return;
@@ -70,24 +84,48 @@ function fakeSpawn(
   return { spawnImpl, calls };
 }
 
-function bridgeWith(reply: Parameters<typeof fakeSpawn>[0]) {
+function bridgeWith(reply: (call: SpawnCall) => Reply) {
   const { spawnImpl, calls } = fakeSpawn(reply);
   const warn = vi.fn();
+  const inform = vi.fn();
   const log = vi.fn();
   const bridge = new LicenseKeychainBridge({
     resolveBinary: async () => "/bin/nightgauge",
     spawnImpl,
     warn,
+    inform,
     log,
     env: { PATH: "/bin", NIGHTGAUGE_LICENSE_KEY: "ib_live_from_env" },
   });
-  return { bridge, calls, warn, log };
+  return { bridge, calls, warn, inform, log };
 }
 
-const keychainReply = (args: string[]) =>
-  args.includes("status")
-    ? { stdout: '{"source":"none","keychainAvailable":true}\n' }
-    : { stdout: '{"source":"keychain"}\n' };
+/**
+ * A CLI double with a keychain: `set` stores the stdin key, `status` reports
+ * its fingerprint, `clear` empties it.
+ */
+function cli(initial?: string) {
+  const state = { key: initial };
+  const reply = (call: SpawnCall): Reply => {
+    switch (call.args[2]) {
+      case "set":
+        state.key = call.stdin;
+        return { stdout: JSON.stringify({ source: "keychain", fingerprint: fp(call.stdin) }) };
+      case "status":
+        return {
+          stdout: JSON.stringify(
+            state.key
+              ? { source: "keychain", keychainAvailable: true, fingerprint: fp(state.key) }
+              : { source: "none", keychainAvailable: true }
+          ),
+        };
+      default:
+        state.key = undefined;
+        return { stdout: JSON.stringify({ keychainCleared: true, fileCleared: false }) };
+    }
+  };
+  return { state, reply };
+}
 
 /** An in-memory fs holding the given files. */
 function memFs(files: Record<string, string>) {
@@ -108,40 +146,95 @@ function memFs(files: Record<string, string>) {
   };
 }
 
-function memSecrets(initial?: string) {
-  let value = initial;
+function memSecrets(initial: Record<string, string> = {}) {
+  const map = new Map(Object.entries(initial));
   return {
-    getSecret: vi.fn(async () => value),
-    setSecret: vi.fn(async (_k: string, v: string) => {
-      value = v;
+    map,
+    getSecret: vi.fn(async (k: string) => map.get(k)),
+    setSecret: vi.fn(async (k: string, v: string) => {
+      map.set(k, v);
     }),
-    get value() {
-      return value;
-    },
+    deleteSecret: vi.fn(async (k: string) => {
+      map.delete(k);
+    }),
   };
 }
 
 const machineYaml = `platform:\n  api_url: https://example.test\n  license_key: ${KEY}\n`;
 
-describe("entry contract", () => {
-  // The Go side owns the entry; these strings must match its constants.
-  it("matches the Go keychain package's service and account", () => {
-    expect(LICENSE_KEYCHAIN_SERVICE).toBe("nightgauge");
-    expect(LICENSE_KEYCHAIN_ACCOUNT).toBe("platform.license_key");
-    const goSource = fs.readFileSync(
-      path.resolve(__dirname, "../../../../internal/keychain/keychain.go"),
+function migrationDeps(
+  files: Record<string, string>,
+  secrets: ReturnType<typeof memSecrets>,
+  bridge: LicenseKeychainBridge
+) {
+  const mem = memFs(files);
+  const d: LicenseMigrationDeps = {
+    fs: mem.fs,
+    secrets,
+    bridge,
+    secretKey: SECRET_KEY,
+    projectConfigPath: PROJECT,
+    machineConfigPath: MACHINE,
+  };
+  return { d, store: mem.store };
+}
+
+// ---------------------------------------------------------------------------
+
+describe("CLI contract (cmd/nightgauge/testdata/auth-license-contract.json)", () => {
+  const contract = JSON.parse(
+    fs.readFileSync(
+      path.resolve(__dirname, "../../../../cmd/nightgauge/testdata/auth-license-contract.json"),
       "utf-8"
-    );
-    expect(goSource).toMatch(new RegExp(`Service\\s*=\\s*"${LICENSE_KEYCHAIN_SERVICE}"`));
-    expect(goSource).toMatch(
-      new RegExp(`AccountLicenseKey\\s*=\\s*"${LICENSE_KEYCHAIN_ACCOUNT.replace(".", "\\.")}"`)
-    );
+    )
+  ) as {
+    keychain: { service: string; account: string };
+    command: string[];
+    subcommands: string[];
+    fingerprint: { key: string; value: string };
+    outputs: Record<"set" | "status" | "clear", Record<string, unknown>>;
+  };
+
+  it("uses the entry, subcommands and fingerprint the Go side pins", () => {
+    expect(LICENSE_KEYCHAIN_SERVICE).toBe(contract.keychain.service);
+    expect(LICENSE_KEYCHAIN_ACCOUNT).toBe(contract.keychain.account);
+    expect([...LICENSE_COMMAND]).toEqual(contract.command);
+    const used = [LICENSE_SET_ARGS, LICENSE_STATUS_ARGS, LICENSE_CLEAR_ARGS].map((a) => a[2]);
+    expect([...used].sort()).toEqual([...contract.subcommands].sort());
+    for (const args of [LICENSE_SET_ARGS, LICENSE_STATUS_ARGS, LICENSE_CLEAR_ARGS]) {
+      expect(args.slice(0, 2)).toEqual(contract.command);
+      expect(args[3]).toBe("--json");
+    }
+    expect(licenseKeyFingerprint(contract.fingerprint.key)).toBe(contract.fingerprint.value);
+  });
+
+  it("parses the set, status and clear samples", async () => {
+    const out = (call: SpawnCall): Reply => ({
+      stdout: JSON.stringify(contract.outputs[call.args[2] as "set" | "status" | "clear"]),
+    });
+    const { bridge, warn } = bridgeWith(out);
+
+    expect(await bridge.store(contract.fingerprint.key)).toEqual({
+      ok: true,
+      source: contract.outputs.set.source,
+    });
+    expect(await bridge.status()).toEqual({
+      source: contract.outputs.status.source,
+      keychainAvailable: contract.outputs.status.keychainAvailable,
+      fingerprint: contract.outputs.status.fingerprint,
+    });
+    expect(await bridge.clear()).toEqual({
+      keychainCleared: contract.outputs.clear.keychainCleared,
+      fileCleared: contract.outputs.clear.fileCleared,
+      localCleared: contract.outputs.clear.localCleared,
+    });
+    expect(warn).not.toHaveBeenCalled();
   });
 });
 
 describe("LicenseKeychainBridge.store", () => {
   it("spawns `auth license set` with the key on stdin only", async () => {
-    const { bridge, calls, warn } = bridgeWith(keychainReply);
+    const { bridge, calls, warn } = bridgeWith(cli().reply);
 
     const outcome = await bridge.store(KEY);
 
@@ -158,15 +251,29 @@ describe("LicenseKeychainBridge.store", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("reports the machine-file fallback on a host with no keychain", async () => {
-    const { bridge } = bridgeWith(() => ({
-      stdout: '{"source":"machine-file","path":"/m/config.yaml","keychainError":"no dbus"}\n',
+  it("shows one information message when the key lands in the plaintext file", async () => {
+    const { bridge, inform, warn } = bridgeWith(() => ({
+      stdout: JSON.stringify({ source: "machine-file", fingerprint: fp(KEY), path: "/m" }),
     }));
     expect(await bridge.store(KEY)).toEqual({ ok: true, source: "machine-file" });
+    expect(await bridge.store(KEY)).toEqual({ ok: true, source: "machine-file" });
+    expect(inform).toHaveBeenCalledTimes(1);
+    expect(String(inform.mock.calls[0][0])).not.toContain(KEY);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("fails when the binary does not confirm this key's fingerprint", async () => {
+    const { bridge } = bridgeWith(() => ({
+      stdout: JSON.stringify({ source: "keychain", fingerprint: fp(OLD_KEY) }),
+    }));
+    expect((await bridge.store(KEY)).ok).toBe(false);
   });
 
   it("warns once, naming the manual command, and never the key", async () => {
-    const { bridge, warn, log } = bridgeWith(() => ({ code: 1, stderr: "Error: boom\n" }));
+    const { bridge, warn, log } = bridgeWith(() => ({
+      code: 1,
+      stderr: "Error: store license key: the OS keychain did not respond within 3s\n",
+    }));
 
     const first = await bridge.store(KEY);
     const second = await bridge.store(KEY);
@@ -180,6 +287,18 @@ describe("LicenseKeychainBridge.store", () => {
     for (const [line] of log.mock.calls) expect(String(line)).not.toContain(KEY);
   });
 
+  it("tells the user to update a binary that has no `auth license` command", async () => {
+    const { bridge, warn } = bridgeWith(() => ({
+      code: 1,
+      stderr:
+        'Error: unknown command "license" for "nightgauge auth"\nRun \'nightgauge auth --help\' for usage.\n',
+    }));
+    expect((await bridge.store(KEY)).ok).toBe(false);
+    const message = String(warn.mock.calls[0][0]);
+    expect(message).toMatch(/update the nightgauge binary/i);
+    expect(message).not.toContain(MANUAL_LICENSE_SET_COMMAND);
+  });
+
   it("fails cleanly when no binary resolves", async () => {
     const warn = vi.fn();
     const bridge = new LicenseKeychainBridge({ resolveBinary: async () => null, warn });
@@ -190,41 +309,78 @@ describe("LicenseKeychainBridge.store", () => {
 });
 
 describe("LicenseKeychainBridge.clear", () => {
-  it("spawns `auth license clear` with nothing on stdin", async () => {
-    const { bridge, calls } = bridgeWith(() => ({ stdout: "Removed.\n" }));
-    expect(await bridge.clear()).toBe(true);
+  it("spawns `auth license clear --json` and returns what it removed", async () => {
+    const { bridge, calls } = bridgeWith(() => ({
+      stdout: JSON.stringify({ keychainCleared: true, fileCleared: true }),
+    }));
+    expect(await bridge.clear()).toEqual({
+      keychainCleared: true,
+      fileCleared: true,
+      localCleared: false,
+    });
     expect(calls[0].args).toEqual([...LICENSE_CLEAR_ARGS]);
     expect(calls[0].stdin).toBe("");
+  });
+
+  // An old binary prints `auth` help and exits 0: that is not a clear.
+  it("treats a binary that printed help (exit 0) as a failure", async () => {
+    const { bridge, warn } = bridgeWith(() => ({
+      stdout:
+        "Authentication operations\n\nUsage:\n  nightgauge auth [command]\n\nAvailable Commands:\n  check\n",
+    }));
+    expect(await bridge.clear()).toBeNull();
+    expect(String(warn.mock.calls[0][0])).toMatch(/update the nightgauge binary/i);
+  });
+
+  it("fails when the keychain could not be reached", async () => {
+    const { bridge, warn } = bridgeWith(() => ({
+      code: 1,
+      stdout: JSON.stringify({
+        keychainCleared: false,
+        fileCleared: true,
+        keychainError: "no dbus",
+      }),
+    }));
+    expect(await bridge.clear()).toBeNull();
+    expect(String(warn.mock.calls[0][0])).toContain("no dbus");
+  });
+
+  it("forgetLicenseKey drops the SecretStorage copy and the sync record", async () => {
+    const c = cli(KEY);
+    const { bridge } = bridgeWith(c.reply);
+    const secrets = memSecrets({ [SECRET_KEY]: KEY, [LICENSE_SYNCED_FINGERPRINT_SECRET]: fp(KEY) });
+    expect(await forgetLicenseKey(secrets, SECRET_KEY, bridge)).toBe(true);
+    expect(secrets.map.size).toBe(0);
+    expect(c.state.key).toBeUndefined();
+  });
+});
+
+describe("persistLicenseKey", () => {
+  it("records the fingerprint only when the CLI confirmed the write", async () => {
+    const ok = bridgeWith(cli().reply);
+    const secrets = memSecrets();
+    await persistLicenseKey(secrets, SECRET_KEY, KEY, ok.bridge);
+    expect(secrets.map.get(LICENSE_SYNCED_FINGERPRINT_SECRET)).toBe(fp(KEY));
+
+    const failing = bridgeWith(() => ({ error: new Error("spawn ENOENT") }));
+    await persistLicenseKey(secrets, SECRET_KEY, OLD_KEY, failing.bridge);
+    expect(secrets.map.get(SECRET_KEY)).toBe(OLD_KEY); // SecretStorage kept
+    expect(secrets.map.get(LICENSE_SYNCED_FINGERPRINT_SECRET)).toBe(fp(KEY)); // record did not move
   });
 });
 
 describe("migrateLicenseKeyAtStartup", () => {
-  function deps(
-    files: Record<string, string>,
-    secrets: ReturnType<typeof memSecrets>,
-    bridge: LicenseKeychainBridge
-  ) {
-    const mem = memFs(files);
-    const d: LicenseMigrationDeps = {
-      fs: mem.fs,
-      secrets,
-      bridge,
-      secretKey: SECRET_KEY,
-      projectConfigPath: PROJECT,
-      machineConfigPath: MACHINE,
-    };
-    return { d, store: mem.store };
-  }
-
   it("moves a machine-config key into SecretStorage and the keychain, then deletes the YAML line", async () => {
-    const { bridge, calls } = bridgeWith(keychainReply);
+    const c = cli();
+    const { bridge, calls } = bridgeWith(c.reply);
     const secrets = memSecrets();
-    const { d, store } = deps({ [MACHINE]: machineYaml }, secrets, bridge);
+    const { d, store } = migrationDeps({ [MACHINE]: machineYaml }, secrets, bridge);
 
     expect(await migrateLicenseKeyAtStartup(d)).toBe(KEY);
 
-    expect(secrets.value).toBe(KEY);
-    expect(calls.map((c) => c.args)).toEqual([[...LICENSE_SET_ARGS]]);
+    expect(secrets.map.get(SECRET_KEY)).toBe(KEY);
+    expect(c.state.key).toBe(KEY);
+    expect(calls.map((x) => x.args)).toEqual([[...LICENSE_SET_ARGS]]);
     expect(store.get(MACHINE)).not.toContain("license_key");
     expect(store.get(MACHINE)).toContain("api_url");
   });
@@ -233,18 +389,20 @@ describe("migrateLicenseKeyAtStartup", () => {
   it("leaves the machine YAML untouched and warns once when the spawn fails", async () => {
     const { bridge, warn } = bridgeWith(() => ({ error: new Error("spawn ENOENT") }));
     const secrets = memSecrets();
-    const { d, store } = deps({ [MACHINE]: machineYaml }, secrets, bridge);
+    const { d, store } = migrationDeps({ [MACHINE]: machineYaml }, secrets, bridge);
 
     expect(await migrateLicenseKeyAtStartup(d)).toBe(KEY);
 
     expect(store.get(MACHINE)).toBe(machineYaml);
-    expect(secrets.value).toBe(KEY); // the SecretStorage copy is kept
+    expect(secrets.map.get(SECRET_KEY)).toBe(KEY); // the SecretStorage copy is kept
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the machine YAML when the CLI could only use its file fallback", async () => {
-    const { bridge } = bridgeWith(() => ({ stdout: '{"source":"machine-file"}\n' }));
-    const { d, store } = deps({ [MACHINE]: machineYaml }, memSecrets(), bridge);
+    const { bridge } = bridgeWith(() => ({
+      stdout: JSON.stringify({ source: "machine-file", fingerprint: fp(KEY) }),
+    }));
+    const { d, store } = migrationDeps({ [MACHINE]: machineYaml }, memSecrets(), bridge);
 
     await migrateLicenseKeyAtStartup(d);
 
@@ -252,35 +410,105 @@ describe("migrateLicenseKeyAtStartup", () => {
   });
 
   it("strips a committed project key and stores it in both places", async () => {
-    const { bridge, calls } = bridgeWith(keychainReply);
+    const c = cli();
+    const { bridge, calls } = bridgeWith(c.reply);
     const secrets = memSecrets();
-    const { d, store } = deps({ [PROJECT]: `platform:\n  license_key: ${KEY}\n` }, secrets, bridge);
+    const { d, store } = migrationDeps(
+      { [PROJECT]: `platform:\n  license_key: ${KEY}\n` },
+      secrets,
+      bridge
+    );
 
     expect(await migrateLicenseKeyAtStartup(d)).toBe(KEY);
 
     expect(store.get(PROJECT)).not.toContain(KEY);
-    expect(secrets.value).toBe(KEY);
+    expect(secrets.map.get(SECRET_KEY)).toBe(KEY);
     expect(calls[0].stdin).toBe(KEY);
   });
 
   it("copies an already-migrated SecretStorage key to the keychain when the CLI has none", async () => {
-    const { bridge, calls } = bridgeWith(keychainReply);
-    const { d } = deps({}, memSecrets(KEY), bridge);
+    const c = cli();
+    const { bridge, calls } = bridgeWith(c.reply);
+    const secrets = memSecrets({ [SECRET_KEY]: KEY });
+    const { d } = migrationDeps({}, secrets, bridge);
 
     expect(await migrateLicenseKeyAtStartup(d)).toBe(KEY);
 
-    expect(calls.map((c) => c.args[2])).toEqual(["status", "set"]);
-    expect(calls[1].stdin).toBe(KEY);
+    expect(calls.map((x) => x.args[2])).toEqual(["status", "set"]);
+    expect(c.state.key).toBe(KEY);
+    expect(secrets.map.get(LICENSE_SYNCED_FINGERPRINT_SECRET)).toBe(fp(KEY));
   });
 
-  it("does not rewrite the keychain when the CLI already has a stored key", async () => {
-    const { bridge, calls } = bridgeWith(() => ({
-      stdout: '{"source":"keychain","keychainAvailable":true}\n',
-    }));
-    const { d } = deps({}, memSecrets(KEY), bridge);
+  it("does not rewrite the keychain when the CLI already holds the same key", async () => {
+    const { bridge, calls } = bridgeWith(cli(KEY).reply);
+    const secrets = memSecrets({ [SECRET_KEY]: KEY });
+    const { d } = migrationDeps({}, secrets, bridge);
 
-    await migrateLicenseKeyAtStartup(d);
+    expect(await migrateLicenseKeyAtStartup(d)).toBe(KEY);
 
-    expect(calls.map((c) => c.args[2])).toEqual(["status"]);
+    expect(calls.map((x) => x.args[2])).toEqual(["status"]);
+    expect(secrets.map.get(LICENSE_SYNCED_FINGERPRINT_SECRET)).toBe(fp(KEY));
+  });
+
+  // Rotated from a terminal: the CLI no longer holds the key last synced, so
+  // the shared entry wins and VS Code stops using (and handing the daemon)
+  // its stale copy.
+  it("drops the stale VS Code copy when the key was rotated from a terminal", async () => {
+    const c = cli(KEY); // terminal ran `auth license set` with KEY
+    const { bridge, calls, inform } = bridgeWith(c.reply);
+    const secrets = memSecrets({
+      [SECRET_KEY]: OLD_KEY,
+      [LICENSE_SYNCED_FINGERPRINT_SECRET]: fp(OLD_KEY),
+    });
+    const { d } = migrationDeps({}, secrets, bridge);
+
+    expect(await migrateLicenseKeyAtStartup(d)).toBeUndefined();
+
+    expect(secrets.map.has(SECRET_KEY)).toBe(false);
+    expect(secrets.map.has(LICENSE_SYNCED_FINGERPRINT_SECRET)).toBe(false);
+    expect(c.state.key).toBe(KEY); // the terminal's key is untouched
+    expect(calls.map((x) => x.args[2])).toEqual(["status"]);
+    expect(inform).toHaveBeenCalledTimes(1);
+    expect(String(inform.mock.calls[0][0])).not.toContain(KEY);
+  });
+
+  // The extension activated KEY but its keychain write failed: the CLI still
+  // holds the key last synced, so the extension's newer key is pushed.
+  it("retries the extension's newer key after a failed set", async () => {
+    const c = cli(OLD_KEY);
+    const { bridge, inform } = bridgeWith(c.reply);
+    const secrets = memSecrets({
+      [SECRET_KEY]: KEY,
+      [LICENSE_SYNCED_FINGERPRINT_SECRET]: fp(OLD_KEY),
+    });
+    const { d } = migrationDeps({}, secrets, bridge);
+
+    expect(await migrateLicenseKeyAtStartup(d)).toBe(KEY);
+
+    expect(c.state.key).toBe(KEY);
+    expect(secrets.map.get(LICENSE_SYNCED_FINGERPRINT_SECRET)).toBe(fp(KEY));
+    expect(inform).not.toHaveBeenCalled();
+  });
+});
+
+describe("whenLicenseReconciled", () => {
+  it("waits for the startup reconciliation, bounded", async () => {
+    let done = false;
+    setLicenseReconciliation(
+      new Promise<void>((resolve) =>
+        setTimeout(() => {
+          done = true;
+          resolve();
+        }, 20)
+      )
+    );
+    await whenLicenseReconciled(1_000);
+    expect(done).toBe(true);
+
+    setLicenseReconciliation(new Promise<void>(() => undefined)); // never settles
+    const started = Date.now();
+    await whenLicenseReconciled(30);
+    expect(Date.now() - started).toBeLessThan(1_000);
+    setLicenseReconciliation(Promise.resolve());
   });
 });

@@ -12,9 +12,22 @@
  *
  * The key never appears in argv, in the child's environment, or in any log
  * or message this module writes.
+ *
+ * Source of truth: the shared keychain entry. SecretStorage is the copy the
+ * extension can read, and it is trusted only while its fingerprint matches
+ * the CLI's (`auth license status --json`). The fingerprint of the key last
+ * confirmed in the keychain is recorded, so a mismatch can be told apart: if
+ * the CLI still holds that recorded key, the extension's newer write never
+ * reached it and is retried; otherwise the key was changed outside VS Code,
+ * the CLI's key wins, and the stale SecretStorage copy is dropped so the
+ * daemon the extension spawns is never handed it.
+ *
+ * The CLI contract (subcommands and JSON fields) is pinned on both sides by
+ * cmd/nightgauge/testdata/auth-license-contract.json.
  */
 
 import { spawn as nodeSpawn } from "child_process";
+import { createHash } from "crypto";
 import * as vscode from "vscode";
 import { BinaryResolver } from "./BinaryResolver";
 
@@ -22,16 +35,25 @@ import { BinaryResolver } from "./BinaryResolver";
 export const LICENSE_KEYCHAIN_SERVICE = "nightgauge";
 export const LICENSE_KEYCHAIN_ACCOUNT = "platform.license_key";
 
-export const LICENSE_SET_ARGS: readonly string[] = ["auth", "license", "set", "--json"];
-export const LICENSE_STATUS_ARGS: readonly string[] = ["auth", "license", "status", "--json"];
-export const LICENSE_CLEAR_ARGS: readonly string[] = ["auth", "license", "clear"];
+export const LICENSE_COMMAND: readonly string[] = ["auth", "license"];
+export const LICENSE_SET_ARGS: readonly string[] = [...LICENSE_COMMAND, "set", "--json"];
+export const LICENSE_STATUS_ARGS: readonly string[] = [...LICENSE_COMMAND, "status", "--json"];
+export const LICENSE_CLEAR_ARGS: readonly string[] = [...LICENSE_COMMAND, "clear", "--json"];
 
 /** What a user runs by hand when the extension could not. */
 export const MANUAL_LICENSE_SET_COMMAND = "nightgauge auth license set";
 export const MANUAL_LICENSE_CLEAR_COMMAND = "nightgauge auth license clear";
 
+/** SecretStorage key recording the fingerprint last confirmed in the keychain. */
+export const LICENSE_SYNCED_FINGERPRINT_SECRET = "nightgauge.platform.licenseKeySyncedFingerprint";
+
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_OUTPUT = 8_192;
+
+/** Non-reversible key identifier; the same function as Go's keychain.Fingerprint. */
+export function licenseKeyFingerprint(key: string): string {
+  return key ? createHash("sha256").update(key).digest("hex").slice(0, 12) : "";
+}
 
 /** Where the binary put the key: the keychain, or the 0600 fallback file. */
 export type LicenseStoreSource = "keychain" | "machine-file";
@@ -42,6 +64,13 @@ export type LicenseStoreOutcome =
 export interface LicenseStatus {
   source: "env" | "keychain" | "machine-file" | "none";
   keychainAvailable: boolean;
+  fingerprint?: string;
+}
+
+export interface LicenseClearResult {
+  keychainCleared: boolean;
+  fileCleared: boolean;
+  localCleared: boolean;
 }
 
 export interface LicenseKeychainBridgeDeps {
@@ -49,6 +78,8 @@ export interface LicenseKeychainBridgeDeps {
   resolveBinary: () => Promise<string | null>;
   /** User-facing warning. Called at most once per bridge. */
   warn: (message: string) => void;
+  /** User-facing information message. Called at most once per bridge. */
+  inform?: (message: string) => void;
   /** Diagnostic log line. Never receives the key. */
   log?: (message: string) => void;
   spawnImpl?: typeof nodeSpawn;
@@ -62,51 +93,83 @@ interface RunResult {
   stderr: string;
 }
 
+/** A failure whose cure is a newer binary, not a manual command. */
+const OUTDATED = "outdated";
+
+function parseJSON(stdout: string): Record<string, unknown> | null {
+  try {
+    const v: unknown = JSON.parse(stdout.trim());
+    return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
 export class LicenseKeychainBridge {
   private warned = false;
+  private informed = false;
 
   constructor(private readonly deps: LicenseKeychainBridgeDeps) {}
 
   /**
-   * Store the key where the CLI and daemon read it. On failure the caller's
-   * SecretStorage copy is untouched and one warning names the manual command.
+   * Store the key where the CLI and daemon read it, and confirm (by
+   * fingerprint) that the binary stored this key. On failure the caller's
+   * SecretStorage copy is untouched and one warning says what to do.
    */
   async store(key: string): Promise<LicenseStoreOutcome> {
     const result = await this.run(LICENSE_SET_ARGS, key);
     if ("error" in result) {
       return this.fail("set", result.error);
     }
+    const parsed = parseJSON(result.stdout);
+    if (!parsed || typeof parsed.source !== "string") {
+      return this.fail("set", unparsedReason(result));
+    }
     if (result.code !== 0) {
       return this.fail("set", describeExit(result));
     }
-    try {
-      const parsed = JSON.parse(result.stdout.trim()) as { source?: string };
-      if (parsed.source === "keychain" || parsed.source === "machine-file") {
-        if (parsed.source === "machine-file") {
-          this.deps.log?.(
-            "[licenseKeychainBridge] no OS keychain on this host; the CLI keeps the key in its machine-tier file"
-          );
-        }
-        return { ok: true, source: parsed.source };
-      }
-    } catch {
-      // fall through
+    if (parsed.fingerprint !== licenseKeyFingerprint(key)) {
+      return this.fail("set", "the binary did not confirm the key it stored");
     }
-    return this.fail("set", "unexpected output from the nightgauge binary");
+    if (parsed.source === "machine-file") {
+      this.informOnce(
+        "Nightgauge: this machine has no OS keychain, so the CLI keeps the license key in its machine config file (readable only by your user). Install a keychain service (for example gnome-keyring) to keep it out of files."
+      );
+      return { ok: true, source: "machine-file" };
+    }
+    if (parsed.source === "keychain") {
+      return { ok: true, source: "keychain" };
+    }
+    return this.fail("set", OUTDATED);
   }
 
-  /** Remove the CLI's stored copies. Returns whether the command succeeded. */
-  async clear(): Promise<boolean> {
+  /**
+   * Remove every copy the CLI stores. Returns null unless a binary that
+   * reached the keychain reported what it removed.
+   */
+  async clear(): Promise<LicenseClearResult | null> {
     const result = await this.run(LICENSE_CLEAR_ARGS);
     if ("error" in result) {
       this.fail("clear", result.error);
-      return false;
+      return null;
+    }
+    const parsed = parseJSON(result.stdout);
+    if (!parsed || typeof parsed.keychainCleared !== "boolean") {
+      this.fail("clear", unparsedReason(result));
+      return null;
     }
     if (result.code !== 0) {
-      this.fail("clear", describeExit(result));
-      return false;
+      this.fail(
+        "clear",
+        typeof parsed.keychainError === "string" ? parsed.keychainError : describeExit(result)
+      );
+      return null;
     }
-    return true;
+    return {
+      keychainCleared: parsed.keychainCleared,
+      fileCleared: parsed.fileCleared === true,
+      localCleared: parsed.localCleared === true,
+    };
   }
 
   /** Where the CLI would read the key from, ignoring the environment variable. */
@@ -115,34 +178,49 @@ export class LicenseKeychainBridge {
     if ("error" in result || result.code !== 0) {
       return null;
     }
-    try {
-      const parsed = JSON.parse(result.stdout.trim()) as Partial<LicenseStatus>;
-      if (
-        parsed.source === "env" ||
-        parsed.source === "keychain" ||
-        parsed.source === "machine-file" ||
-        parsed.source === "none"
-      ) {
-        return { source: parsed.source, keychainAvailable: parsed.keychainAvailable === true };
-      }
-    } catch {
-      // fall through
+    const parsed = parseJSON(result.stdout);
+    const source = parsed?.source;
+    if (
+      source === "env" ||
+      source === "keychain" ||
+      source === "machine-file" ||
+      source === "none"
+    ) {
+      return {
+        source,
+        keychainAvailable: parsed?.keychainAvailable === true,
+        fingerprint: typeof parsed?.fingerprint === "string" ? parsed.fingerprint : undefined,
+      };
     }
     return null;
   }
 
+  /** Show one information message per bridge. */
+  informOnce(message: string): void {
+    if (!this.informed && this.deps.inform) {
+      this.informed = true;
+      this.deps.inform(message);
+    }
+  }
+
   private fail(action: "set" | "clear", reason: string): LicenseStoreOutcome {
-    this.deps.log?.(`[licenseKeychainBridge] auth license ${action} failed: ${reason}`);
+    const shown =
+      reason === OUTDATED ? "the nightgauge binary has no `auth license` command" : reason;
+    this.deps.log?.(`[licenseKeychainBridge] auth license ${action} failed: ${shown}`);
     if (!this.warned) {
       this.warned = true;
-      const command = action === "set" ? MANUAL_LICENSE_SET_COMMAND : MANUAL_LICENSE_CLEAR_COMMAND;
-      this.deps.warn(
-        action === "set"
-          ? `Nightgauge: the license key is saved in VS Code, but the CLI and daemon outside VS Code can't see it (${reason}). Run \`${command}\` in a terminal and paste the key.`
-          : `Nightgauge: the license key was removed from VS Code, but the CLI's stored copy could not be removed (${reason}). Run \`${command}\` in a terminal.`
-      );
+      let message: string;
+      if (reason === OUTDATED) {
+        message =
+          "Nightgauge: your nightgauge binary is too old to share the license key with the CLI and daemon (it has no `auth license` command). Update the nightgauge binary; until then the CLI outside VS Code can't see the key.";
+      } else if (action === "set") {
+        message = `Nightgauge: the license key is saved in VS Code, but the CLI and daemon outside VS Code can't see it (${reason}). Run \`${MANUAL_LICENSE_SET_COMMAND}\` in a terminal and paste the key.`;
+      } else {
+        message = `Nightgauge: the license key was removed from VS Code, but the CLI's stored copy may remain (${reason}). Run \`${MANUAL_LICENSE_CLEAR_COMMAND}\` in a terminal.`;
+      }
+      this.deps.warn(message);
     }
-    return { ok: false, reason };
+    return { ok: false, reason: shown };
   }
 
   private async run(
@@ -167,10 +245,11 @@ export class LicenseKeychainBridge {
 
     return new Promise((resolve) => {
       let settled = false;
+      let timer: NodeJS.Timeout | undefined;
       const settle = (value: RunResult | { error: string }) => {
         if (!settled) {
           settled = true;
-          clearTimeout(timer);
+          if (timer) clearTimeout(timer);
           resolve(value);
         }
       };
@@ -183,10 +262,10 @@ export class LicenseKeychainBridge {
           windowsHide: true,
         });
       } catch (err) {
-        resolve({ error: `could not start the nightgauge binary: ${errorMessage(err)}` });
+        settle({ error: `could not start the nightgauge binary: ${errorMessage(err)}` });
         return;
       }
-      const timer = setTimeout(() => {
+      timer = setTimeout(() => {
         proc.kill();
         settle({ error: `the nightgauge binary did not finish within ${timeoutMs / 1000}s` });
       }, timeoutMs);
@@ -210,6 +289,22 @@ export class LicenseKeychainBridge {
   }
 }
 
+/**
+ * Why a run printed no parseable result. A binary that predates
+ * `auth license` prints cobra help (exit 0) or an unknown-command usage error;
+ * both mean "update the binary", not "run a command".
+ */
+function unparsedReason(result: RunResult): string {
+  const out = `${result.stdout}\n${result.stderr}`;
+  if (
+    result.code === 0 ||
+    /unknown (command|flag)|Available Commands:|for more information about a command/i.test(out)
+  ) {
+    return OUTDATED;
+  }
+  return describeExit(result);
+}
+
 function describeExit(result: RunResult): string {
   const detail = result.stderr.trim().split("\n").pop()?.slice(0, 200);
   return detail ? `exit ${result.code}: ${detail}` : `exit ${result.code}`;
@@ -220,7 +315,7 @@ function errorMessage(err: unknown): string {
 }
 
 // ---------------------------------------------------------------------------
-// Startup migration
+// Reconciliation and startup migration
 // ---------------------------------------------------------------------------
 
 /** Extract platform.license_key from a YAML file via a line scan (no parser). */
@@ -254,17 +349,22 @@ export function extractLicenseKeyLine(raw: string): { key?: string; lineIndex: n
   return { lineIndex: -1 };
 }
 
+export interface LicenseSecrets {
+  getSecret: (key: string) => Promise<string | undefined>;
+  setSecret: (key: string, value: string) => Promise<void>;
+  deleteSecret: (key: string) => Promise<void>;
+}
+
+type BridgeLike = Pick<LicenseKeychainBridge, "store" | "status" | "informOnce">;
+
 export interface LicenseMigrationDeps {
   fs: {
     existsSync: (path: string) => boolean;
     readFileSync: (path: string, encoding: "utf-8") => string;
     writeFileSync: (path: string, data: string, encoding: "utf-8") => void;
   };
-  secrets: {
-    getSecret: (key: string) => Promise<string | undefined>;
-    setSecret: (key: string, value: string) => Promise<void>;
-  };
-  bridge: Pick<LicenseKeychainBridge, "store" | "status">;
+  secrets: LicenseSecrets;
+  bridge: BridgeLike;
   /** SecretStorage key of the license key. */
   secretKey: string;
   /** The workspace's committed .nightgauge/config.yaml, when there is a workspace. */
@@ -283,22 +383,107 @@ function readLicenseLine(
   return { raw, ...extractLicenseKeyLine(raw) };
 }
 
-function removeLine(fs: LicenseMigrationDeps["fs"], path: string, raw: string, index: number) {
-  const lines = raw.split("\n");
-  lines.splice(index, 1);
+/** Remove the license_key line from path as it reads now, if it holds key. */
+function removeLicenseLine(fs: LicenseMigrationDeps["fs"], path: string, key: string): void {
+  const current = readLicenseLine(fs, path);
+  if (!current || current.key !== key) return;
+  const lines = current.raw.split("\n");
+  lines.splice(current.lineIndex, 1);
   fs.writeFileSync(path, lines.join("\n"), "utf-8");
 }
 
 /**
- * Startup license-key migration. Returns the key the extension should use.
+ * Store a key the user gave the extension: SecretStorage, then the CLI's
+ * store. On success the key's fingerprint is recorded as the one the keychain
+ * holds; on failure the SecretStorage copy stays and the record does not
+ * move, so the next startup retries the write.
+ */
+export async function persistLicenseKey(
+  secrets: Pick<LicenseSecrets, "setSecret">,
+  secretKey: string,
+  key: string,
+  bridge: Pick<LicenseKeychainBridge, "store"> = vscodeLicenseKeychainBridge()
+): Promise<LicenseStoreOutcome> {
+  await secrets.setSecret(secretKey, key);
+  const outcome = await bridge.store(key);
+  if (outcome.ok) {
+    await secrets.setSecret(LICENSE_SYNCED_FINGERPRINT_SECRET, licenseKeyFingerprint(key));
+  }
+  return outcome;
+}
+
+/** Clear the key everywhere: SecretStorage, the sync record, and the CLI's store. */
+export async function forgetLicenseKey(
+  secrets: Pick<LicenseSecrets, "deleteSecret">,
+  secretKey: string,
+  bridge: Pick<LicenseKeychainBridge, "clear"> = vscodeLicenseKeychainBridge()
+): Promise<boolean> {
+  await secrets.deleteSecret(secretKey);
+  await secrets.deleteSecret(LICENSE_SYNCED_FINGERPRINT_SECRET);
+  return (await bridge.clear()) !== null;
+}
+
+/**
+ * Bring SecretStorage and the CLI's store into agreement. Returns the key the
+ * extension may use (and hand the daemon), or undefined when it has none it
+ * can trust. The rule is in the module comment.
+ */
+export async function reconcileLicenseKey(
+  deps: Pick<LicenseMigrationDeps, "secrets" | "bridge" | "secretKey" | "log">
+): Promise<string | undefined> {
+  const { secrets, bridge, secretKey } = deps;
+  const ext = await secrets.getSecret(secretKey);
+  if (!ext) return undefined;
+  const status = await bridge.status();
+  if (!status) return ext; // no usable binary: nothing to compare against
+  const fp = licenseKeyFingerprint(ext);
+  const push = () => persistLicenseKey(secrets, secretKey, ext, bridge);
+
+  if (status.source === "none") {
+    await push();
+    return ext;
+  }
+  if (status.fingerprint === fp) {
+    if (status.source === "machine-file" && status.keychainAvailable) {
+      await push(); // move it into the keychain; the CLI drops the plaintext copy
+    } else if ((await secrets.getSecret(LICENSE_SYNCED_FINGERPRINT_SECRET)) !== fp) {
+      await secrets.setSecret(LICENSE_SYNCED_FINGERPRINT_SECRET, fp);
+    }
+    return ext;
+  }
+
+  const synced = await secrets.getSecret(LICENSE_SYNCED_FINGERPRINT_SECRET);
+  if (synced === status.fingerprint || (synced === undefined && status.source === "machine-file")) {
+    // The CLI still holds the key last synced (or a pre-keychain plaintext
+    // copy): the extension's newer key never reached it. Retry the write.
+    deps.log?.("[licenseKeychainBridge] the CLI holds an older license key; updating it");
+    await push();
+    return ext;
+  }
+
+  // The key was changed outside VS Code. The shared entry wins.
+  deps.log?.(
+    "[licenseKeychainBridge] the license key was changed outside VS Code; dropping the VS Code copy"
+  );
+  await secrets.deleteSecret(secretKey);
+  await secrets.deleteSecret(LICENSE_SYNCED_FINGERPRINT_SECRET);
+  bridge.informOnce(
+    "Nightgauge: the license key was changed outside VS Code (nightgauge auth license set), so VS Code stopped using its older copy. Run 'Nightgauge: Activate License' with the current key to use it in VS Code too."
+  );
+  return undefined;
+}
+
+/**
+ * Startup license-key migration and reconciliation. Returns the key the
+ * extension should use.
  *
- *  1. A key in the committed project config is moved to SecretStorage and the
- *     CLI's store, and always stripped from the file.
- *  2. A key only in the machine-tier file is copied to SecretStorage and the
- *     CLI's store; the file line is removed only once the keychain holds it,
- *     so a failed write never leaves the CLI with no key.
- *  3. A key already in SecretStorage (moved there before the CLI had a
- *     keychain store) is copied to the CLI's store when the CLI has none.
+ *  1. A key in the committed project config is stripped from the file and
+ *     stored in SecretStorage and the CLI's store.
+ *  2. A key only in the machine-tier file is stored in SecretStorage and the
+ *     CLI's store. The binary removes the plaintext line once the keychain
+ *     holds the key; a failed write leaves the file untouched, so the CLI
+ *     never ends up with no key.
+ *  3. Otherwise SecretStorage and the CLI are reconciled.
  */
 export async function migrateLicenseKeyAtStartup(
   deps: LicenseMigrationDeps
@@ -308,43 +493,50 @@ export async function migrateLicenseKeyAtStartup(
   if (deps.projectConfigPath) {
     const project = readLicenseLine(fs, deps.projectConfigPath);
     if (project?.key) {
-      await secrets.setSecret(secretKey, project.key);
-      removeLine(fs, deps.projectConfigPath, project.raw, project.lineIndex);
-      await bridge.store(project.key);
+      removeLicenseLine(fs, deps.projectConfigPath, project.key);
+      await persistLicenseKey(secrets, secretKey, project.key, bridge);
       return project.key;
     }
   }
 
-  const machine = readLicenseLine(fs, deps.machineConfigPath);
-  const existing = await secrets.getSecret(secretKey);
-
-  if (!existing) {
+  if (!(await secrets.getSecret(secretKey))) {
+    const machine = readLicenseLine(fs, deps.machineConfigPath);
     if (!machine?.key) return undefined;
-    await secrets.setSecret(secretKey, machine.key);
-    const outcome = await bridge.store(machine.key);
+    const outcome = await persistLicenseKey(secrets, secretKey, machine.key, bridge);
     if (outcome.ok && outcome.source === "keychain") {
-      removeLine(fs, deps.machineConfigPath, machine.raw, machine.lineIndex);
+      // The binary already removed it; this covers a file it could not edit.
+      removeLicenseLine(fs, deps.machineConfigPath, machine.key);
     }
     return machine.key;
   }
 
-  const status = await bridge.status();
-  if (!status) return existing;
-  if (status.source === "none") {
-    await bridge.store(existing);
-  } else if (status.source === "machine-file" && status.keychainAvailable) {
-    if (machine?.key === existing) {
-      const outcome = await bridge.store(existing);
-      if (outcome.ok && outcome.source === "keychain") {
-        removeLine(fs, deps.machineConfigPath, machine.raw, machine.lineIndex);
-      }
-    } else {
-      deps.log?.(
-        "[licenseKeychainBridge] the machine-tier license key differs from the one in VS Code; leaving both in place"
-      );
-    }
-  }
-  return existing;
+  return reconcileLicenseKey(deps);
+}
+
+// ---------------------------------------------------------------------------
+// Startup ordering
+// ---------------------------------------------------------------------------
+
+let reconciliation: Promise<unknown> = Promise.resolve();
+
+/** Record the startup reconciliation so the daemon spawn can wait for it. */
+export function setLicenseReconciliation(p: Promise<unknown>): void {
+  reconciliation = p.catch(() => undefined);
+}
+
+/**
+ * Wait (bounded) for the startup reconciliation, so the daemon is not spawned
+ * with a SecretStorage key that reconciliation is about to drop.
+ */
+export async function whenLicenseReconciled(timeoutMs = 5_000): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  await Promise.race([
+    reconciliation,
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, timeoutMs);
+    }),
+  ]);
+  if (timer) clearTimeout(timer);
 }
 
 // ---------------------------------------------------------------------------
@@ -373,26 +565,12 @@ export function setLicenseKeychainBridgeForTest(bridge: LicenseKeychainBridge | 
   shared = bridge;
 }
 
-/** The shared bridge wired to the resolved binary and a VS Code warning. */
+/** The shared bridge wired to the resolved binary and VS Code messages. */
 export function vscodeLicenseKeychainBridge(): LicenseKeychainBridge {
   return getLicenseKeychainBridge(() => ({
     resolveBinary: () => BinaryResolver.fromVSCode().resolve(),
     warn: (message) => void vscode.window.showWarningMessage(message),
+    inform: (message) => void vscode.window.showInformationMessage(message),
     log: (message) => console.warn(message),
   }));
-}
-
-/**
- * Store a license key the user just activated: SecretStorage for the
- * extension, then the CLI's store. A failed CLI write keeps the SecretStorage
- * copy and warns once.
- */
-export async function persistLicenseKey(
-  secrets: { setSecret: (key: string, value: string) => Promise<void> },
-  secretKey: string,
-  key: string,
-  bridge: Pick<LicenseKeychainBridge, "store"> = vscodeLicenseKeychainBridge()
-): Promise<LicenseStoreOutcome> {
-  await secrets.setSecret(secretKey, key);
-  return bridge.store(key);
 }

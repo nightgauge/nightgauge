@@ -24,7 +24,10 @@ and this project adheres to
   through `nightgauge auth license set`, so `nightgauge serve` and
   `nightgauge pipeline backfill` from a terminal still find it. The key is
   removed from `~/.nightgauge/config.yaml` only after that succeeds; if it
-  fails, the key stays and one warning names the command to run.
+  fails, the key stays and one warning names the command to run. If you
+  change the key from a terminal (`nightgauge auth license set`), VS Code
+  notices on the next start, stops using its old copy, and asks you to
+  activate the current key.
 
 - An attention sweep that outlives the 30-second request deadline no longer
   leaves the window "never swept": the daemon finishes it and its cards still
