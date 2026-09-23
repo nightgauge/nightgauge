@@ -910,7 +910,33 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	// == "" guards it); an operator's own Stop is not this and must not be
 	// misreported as one (execution.stopRequested guards it — CancelWithGrace
 	// sets it before this goroutine barrier is ever reached).
-	if handshakeFailure == "" && operatorInstallTimedOut.Load() && !execution.stopRequested.Load() {
+	//
+	// The watchdog is not the only way such a stall ends (#1954): its bound
+	// is capped by execCtx's own deadline (operatorInstallWaitBound), so
+	// when the stage timeout is the shorter of the two both fire at the same
+	// instant, and exec.CommandContext's own kill can win — the readers
+	// finish, stopOperatorInstallWatchdog closes, and the watchdog returns
+	// without ever recording a timeout. The same silent stall is therefore
+	// also recognised from the evidence itself, read after the barrier
+	// above: no output at all, execCtx ended by its deadline, and the
+	// directory still unsatisfied. operatorInstallStallClassified holds the
+	// rule and every guard.
+	sawOutput := false
+	select {
+	case <-firstOutput:
+		sawOutput = true
+	default:
+	}
+	riskDir := operatorInstallRisk
+	if operatorInstallStallClassified(operatorInstallStallEvidence{
+		armed:            operatorInstallRisk != "",
+		handshakeFailed:  handshakeFailure != "",
+		stopRequested:    execution.stopRequested.Load(),
+		watchdogTimedOut: operatorInstallTimedOut.Load(),
+		sawOutput:        sawOutput,
+		execErr:          execCtx.Err(),
+		satisfied:        func() bool { return opencodeplugin.OperatorInstallSatisfied(riskDir) },
+	}) {
 		handshakeFailure = openCodePluginHandshakeMarker(&opencodeplugin.IncompatibleError{
 			Reason: fmt.Sprintf(
 				"opencode produced no output at all: OpenCode's own @opencode-ai/plugin install into the operator-owned OpenCode config directory %s may be waiting on an unreachable registry. "+
@@ -1397,6 +1423,51 @@ func operatorInstallWaitBound(
 		return configured
 	}
 	return min(configured, max(deadline.Sub(now), 0))
+}
+
+// operatorInstallStallEvidence is what RunStage knows, once its readers and
+// the operator-install-risk watchdog have both finished, about whether a
+// stage stalled silently on OpenCode's own install into an operator-owned
+// config directory (#1635/A11 round 6; #1954).
+type operatorInstallStallEvidence struct {
+	// armed: the stage ran with an operator install risk at all.
+	armed bool
+	// handshakeFailed: a plugin handshake failure was already classified;
+	// it is more specific and wins.
+	handshakeFailed bool
+	// stopRequested: an operator Stop ended the stage; never misreported.
+	stopRequested bool
+	// watchdogTimedOut: the watchdog's own bound fired and killed the stage.
+	watchdogTimedOut bool
+	// sawOutput: stdout or stderr produced at least one line.
+	sawOutput bool
+	// execErr: the stage context's error after the readers finished.
+	execErr error
+	// satisfied re-checks the operator directory; called only when the
+	// cheaper evidence already points at a stall.
+	satisfied func() bool
+}
+
+// operatorInstallStallClassified decides whether a stage is classified as
+// an operator-install stall. The watchdog's own timeout is sufficient. So
+// is the race it can lose (#1954): its bound is capped by the stage
+// deadline, so when the stage timeout is the shorter bound, the deadline's
+// own kill can end the child first and the watchdog stands down without
+// recording anything. The deadline path requires the same facts the
+// watchdog would have acted on: no output at all, the stage context ended
+// by its deadline (not by a caller's cancel), and the directory still
+// unsatisfied.
+func operatorInstallStallClassified(e operatorInstallStallEvidence) bool {
+	if !e.armed || e.handshakeFailed || e.stopRequested {
+		return false
+	}
+	if e.watchdogTimedOut {
+		return true
+	}
+	if e.sawOutput || !errors.Is(e.execErr, context.DeadlineExceeded) {
+		return false
+	}
+	return e.satisfied == nil || !e.satisfied()
 }
 
 // openCodeOperatorInstallPollInterval is how often the operator-install-risk

@@ -268,6 +268,75 @@ func TestOperatorInstallWaitBound(t *testing.T) {
 	}
 }
 
+// TestOperatorInstallStallClassified covers the classification rule and
+// every guard deterministically (#1954): the watchdog's own timeout, and the
+// race it can lose to the stage deadline's own kill, both classify; output,
+// a handshake failure, an operator Stop, a caller's cancel, a satisfied
+// directory and an unarmed stage never do.
+func TestOperatorInstallStallClassified(t *testing.T) {
+	unsatisfied := func() bool { return false }
+	satisfied := func() bool { return true }
+	// deadlineWon is the #1954 shape: the stage deadline killed a silent
+	// child before the watchdog recorded its own timeout.
+	deadlineWon := operatorInstallStallEvidence{
+		armed:     true,
+		execErr:   context.DeadlineExceeded,
+		satisfied: unsatisfied,
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(*operatorInstallStallEvidence)
+		want   bool
+	}{
+		{name: "stage deadline won the race", mutate: func(*operatorInstallStallEvidence) {}, want: true},
+		{name: "wrapped deadline error", mutate: func(e *operatorInstallStallEvidence) {
+			e.execErr = fmt.Errorf("stage: %w", context.DeadlineExceeded)
+		}, want: true},
+		{name: "watchdog timed out", mutate: func(e *operatorInstallStallEvidence) {
+			e.watchdogTimedOut = true
+			e.execErr = nil
+		}, want: true},
+		{name: "not armed", mutate: func(e *operatorInstallStallEvidence) {
+			e.armed = false
+			e.watchdogTimedOut = true
+		}, want: false},
+		{name: "handshake failure wins over watchdog", mutate: func(e *operatorInstallStallEvidence) {
+			e.handshakeFailed = true
+			e.watchdogTimedOut = true
+		}, want: false},
+		{name: "handshake failure wins over deadline", mutate: func(e *operatorInstallStallEvidence) {
+			e.handshakeFailed = true
+		}, want: false},
+		{name: "operator stop with watchdog", mutate: func(e *operatorInstallStallEvidence) {
+			e.stopRequested = true
+			e.watchdogTimedOut = true
+		}, want: false},
+		{name: "operator stop at deadline", mutate: func(e *operatorInstallStallEvidence) {
+			e.stopRequested = true
+		}, want: false},
+		{name: "child produced output", mutate: func(e *operatorInstallStallEvidence) {
+			e.sawOutput = true
+		}, want: false},
+		{name: "fast failure, context still live", mutate: func(e *operatorInstallStallEvidence) {
+			e.execErr = nil
+		}, want: false},
+		{name: "caller cancelled", mutate: func(e *operatorInstallStallEvidence) {
+			e.execErr = context.Canceled
+		}, want: false},
+		{name: "directory became satisfied", mutate: func(e *operatorInstallStallEvidence) {
+			e.satisfied = satisfied
+		}, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := deadlineWon
+			tc.mutate(&e)
+			if got := operatorInstallStallClassified(e); got != tc.want {
+				t.Fatalf("operatorInstallStallClassified(%+v) = %t, want %t", e, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestOpenCodeOperatorInstallRiskDoesNotMisclassifyAFastFailure: a stage
 // that fails quickly for an unrelated reason (here, the fake opencode exits
 // nonzero immediately after printing a line) must not be misclassified as
