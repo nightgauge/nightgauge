@@ -24,6 +24,7 @@ import (
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/intelligence/batch"
 	"github.com/nightgauge/nightgauge/internal/intelligence/teams"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
@@ -648,7 +649,10 @@ func (wo *WaveOrchestrator) runSubagent(ctx context.Context, si teams.SubIssue, 
 
 // readPipelineState reads the persisted pipeline state for an issue.
 func (wo *WaveOrchestrator) readPipelineState(issueNumber int) (bool, *state.RuntimeState) {
-	stateDir := filepath.Join(wo.scheduler.execMgr.WorkspaceRoot(), ".nightgauge", "pipeline")
+	stateDir, err := layout.PipelineStateDir(wo.scheduler.execMgr.WorkspaceRoot())
+	if err != nil {
+		return false, nil
+	}
 	// Issue-addressed: the wave orchestrator asks "did sub-issue #N succeed?",
 	// which is a question about the run it just drove. Standard pick — prefer
 	// non-terminal, then newest StartedAt (ADR-017 Decision 8).
@@ -741,7 +745,11 @@ func (wo *WaveOrchestrator) buildSummary(totalDuration time.Duration) *WaveSumma
 
 // persistWavePlan writes the wave plan to disk for observability.
 func (wo *WaveOrchestrator) persistWavePlan(workspaceRoot string) {
-	dir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline")
+	dir, err := layout.PipelineStateDir(workspaceRoot)
+	if err != nil {
+		log.Printf("epic #%d: pipeline dir not resolved: %v", wo.epicNumber, err)
+		return
+	}
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		log.Printf("epic #%d: failed to create pipeline dir: %v", wo.epicNumber, err)
 		return
@@ -779,7 +787,11 @@ func (wo *WaveOrchestrator) persistWavePlan(workspaceRoot string) {
 
 // persistWaveStatus writes the final wave execution status to disk.
 func (wo *WaveOrchestrator) persistWaveStatus(workspaceRoot string, summary *WaveSummary) {
-	dir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline")
+	dir, err := layout.PipelineStateDir(workspaceRoot)
+	if err != nil {
+		log.Printf("epic #%d: pipeline dir not resolved: %v", wo.epicNumber, err)
+		return
+	}
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		log.Printf("epic #%d: failed to create pipeline dir: %v", wo.epicNumber, err)
 		return
@@ -867,7 +879,7 @@ type sharedResearch struct {
 // epicContextPath returns the path to the epic context file. Delegates to the
 // shared helper so the accumulator and the prompt-injection read side
 // (epic_context_prompt.go) compute the same path.
-func (wo *WaveOrchestrator) epicContextPath() string {
+func (wo *WaveOrchestrator) epicContextPath() (string, error) {
 	return epicContextFilePath(wo.scheduler.execMgr.WorkspaceRoot(), wo.epicNumber)
 }
 
@@ -878,8 +890,11 @@ func (wo *WaveOrchestrator) readEpicContext() *epicContext {
 
 // writeEpicContext writes the epic context file atomically.
 func (wo *WaveOrchestrator) writeEpicContext(ec *epicContext) error {
-	dir := filepath.Dir(wo.epicContextPath())
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	path, err := wo.epicContextPath()
+	if err != nil {
+		return fmt.Errorf("resolve epic context path: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return fmt.Errorf("create pipeline dir: %w", err)
 	}
 	data, err := json.MarshalIndent(ec, "", "  ")
@@ -887,11 +902,11 @@ func (wo *WaveOrchestrator) writeEpicContext(ec *epicContext) error {
 		return fmt.Errorf("marshal epic context: %w", err)
 	}
 	// Atomic write via temp file + rename
-	tmpPath := wo.epicContextPath() + ".tmp"
+	tmpPath := path + ".tmp"
 	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
 		return fmt.Errorf("write temp file: %w", err)
 	}
-	if err := os.Rename(tmpPath, wo.epicContextPath()); err != nil {
+	if err := os.Rename(tmpPath, path); err != nil {
 		os.Remove(tmpPath) // best-effort cleanup
 		return fmt.Errorf("rename temp file: %w", err)
 	}

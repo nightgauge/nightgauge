@@ -310,7 +310,7 @@ func runFeatureDevSteps(ctx context.Context, runner StageRunner, params StageRun
 	if ctxPath == "" {
 		ctxPath = stagecontext.ContextPath(workspace, params.IssueNumber, "dev")
 	}
-	sentinel := filepath.Join(workspace, ".nightgauge", "pipeline", fmt.Sprintf("stop-hook-status-%d.json", params.IssueNumber))
+	sentinel := pipelineStatePath(workspace, fmt.Sprintf("stop-hook-status-%d.json", params.IssueNumber))
 	var deadline time.Time
 	if params.Timeout > 0 {
 		deadline = now().Add(params.Timeout)

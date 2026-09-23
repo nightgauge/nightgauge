@@ -15,6 +15,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/depgraph"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/notify"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
@@ -503,7 +504,11 @@ func (as *AutonomousScheduler) latestRunRecord(repo string, number int) (*state.
 	if as.stuckEpicHistoryFn != nil {
 		return as.stuckEpicHistoryFn(repo, number)
 	}
-	return latestRunRecordFromDir(filepath.Join(as.workspaceRoot, ".nightgauge", "pipeline", "history"), repo, number)
+	dir, err := layout.PipelineStateDir(as.workspaceRoot)
+	if err != nil {
+		return nil, false
+	}
+	return latestRunRecordFromDir(filepath.Join(dir, "history"), repo, number)
 }
 
 // parseRecordTime prefers completed_at, falling back to recorded_at. Returns

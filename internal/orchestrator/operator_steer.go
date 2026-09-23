@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // OperatorSteerSignalType is the closed signal_type enum entry for operator
@@ -66,7 +68,10 @@ func WriteOperatorSteer(workspaceRoot string, issueNumber int, steerText, stageH
 	if !pipelineStages[stage] {
 		stage = defaultOperatorSteerStage
 	}
-	dir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline")
+	dir, err := layout.PipelineStateDir(workspaceRoot)
+	if err != nil {
+		return fmt.Errorf("operator steer: %w", err)
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("operator steer: mkdir: %w", err)
 	}

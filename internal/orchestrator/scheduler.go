@@ -43,6 +43,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 	"github.com/nightgauge/nightgauge/internal/knowledge"
 	kbworkspace "github.com/nightgauge/nightgauge/internal/knowledge/workspace"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/models"
 	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
 	"github.com/nightgauge/nightgauge/internal/orchestrator/recovery"
@@ -4039,10 +4040,11 @@ func schedulerTerminalOutcome(success bool, terminalFailureKind string) string {
 // StageRunParams.WorktreePath. Returns "" only when neither is available.
 // Issue #3542.
 func loadWorktreePath(workspaceRoot string, issueNumber int) string {
-	baseDir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline")
-	if rs, err := runstate.Load(baseDir); err == nil && rs != nil &&
-		rs.IssueNumber == issueNumber && rs.WorktreePath != nil && *rs.WorktreePath != "" {
-		return *rs.WorktreePath
+	if baseDir, err := layout.PipelineStateDir(workspaceRoot); err == nil {
+		if rs, err := runstate.Load(baseDir); err == nil && rs != nil &&
+			rs.IssueNumber == issueNumber && rs.WorktreePath != nil && *rs.WorktreePath != "" {
+			return *rs.WorktreePath
+		}
 	}
 	return workspaceRoot
 }
@@ -4353,13 +4355,14 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			}
 		}
 		if runID == "" {
-			baseDir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline")
-			if rs, err := runstate.Load(baseDir); err == nil && rs != nil && rs.RunID != "" {
-				if runstate.IsIdentity(rs.RunID) {
-					runID = rs.RunID
-				} else {
-					log.Printf("#%d: ignoring non-identity run id %q from run-state.json — minting locally (ADR-017 Decision 1)",
-						item.Number, rs.RunID)
+			if baseDir, dirErr := layout.PipelineStateDir(workspaceRoot); dirErr == nil {
+				if rs, err := runstate.Load(baseDir); err == nil && rs != nil && rs.RunID != "" {
+					if runstate.IsIdentity(rs.RunID) {
+						runID = rs.RunID
+					} else {
+						log.Printf("#%d: ignoring non-identity run id %q from run-state.json — minting locally (ADR-017 Decision 1)",
+							item.Number, rs.RunID)
+					}
 				}
 			}
 		}
@@ -4881,7 +4884,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// because they leave three different things on disk (the extension
 		// path's seal at internal/ipc/server.go makes the same three-way
 		// distinction, and for the same reason).
-		if stateDir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline"); workspaceRoot != "" {
+		if stateDir, dirErr := layout.PipelineStateDir(workspaceRoot); dirErr == nil {
 			if err := runtime.SealAndRemove(stateDir); err != nil {
 				switch {
 				case errors.Is(err, state.ErrNotRunOwner):
@@ -5652,7 +5655,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// can adopt this run's non-terminal snapshot (loadRunSnapshot in
 		// internal/ipc/run_registry.go), seal the FILE from there, and this
 		// scheduler's own unsealed runtime re-creates it at the next stage start.
-		if persistErr := runtime.Persist(filepath.Join(workspaceRoot, ".nightgauge", "pipeline")); persistErr != nil {
+		if persistErr := persistPipelineState(runtime, workspaceRoot); persistErr != nil {
 			log.Printf("#%d: failed to persist state at %s start: %v", item.Number, stage, persistErr)
 		}
 
@@ -6409,8 +6412,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		}
 
 		// Persist state to disk after each stage completes
-		stateDir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline")
-		if persistErr := runtime.Persist(stateDir); persistErr != nil {
+		if persistErr := persistPipelineState(runtime, workspaceRoot); persistErr != nil {
 			log.Printf("#%d: failed to persist state: %v", item.Number, persistErr)
 		}
 
@@ -6596,8 +6598,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// WIP-retry path that still uses the WIPBranch field. Resolves
 			// via loadWorktreePath so single-repo runs still find the file.
 			overrunBase := loadWorktreePath(workspaceRoot, item.Number)
-			overrunFile := filepath.Join(overrunBase, ".nightgauge", "pipeline",
-				fmt.Sprintf("budget-overrun-%d.json", item.Number))
+			overrunFile := pipelineStatePath(overrunBase, fmt.Sprintf("budget-overrun-%d.json", item.Number))
 			if overrun, readErr := ReadBudgetOverrun(overrunFile); readErr == nil {
 				stageKey := fmt.Sprintf("%s:%d", string(stage), item.Number)
 				if overrun.ShippedPartially {
@@ -6734,8 +6735,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 						log.Printf("#%d: stall-recovery: failed to write feedback context: %v",
 							item.Number, writeErr)
 					} else {
-						feedbackPath := filepath.Join(workspaceRoot, ".nightgauge", "pipeline",
-							fmt.Sprintf("feedback-%d.json", item.Number))
+						feedbackPath := pipelineStatePath(workspaceRoot, fmt.Sprintf("feedback-%d.json", item.Number))
 						decision, btErr := s.retryEngine.EvaluateBacktrack(feedbackPath)
 						if btErr != nil {
 							log.Printf("#%d: stall-recovery: failed to evaluate backtrack: %v",
@@ -6885,7 +6885,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 					// runtime-{issue}-{runId}.json snapshot reflects it before the
 					// next iteration runs; the success block's persist
 					// is skipped on the failure→recovery path.
-					if persistErr := runtime.Persist(filepath.Join(workspaceRoot, ".nightgauge", "pipeline")); persistErr != nil {
+					if persistErr := persistPipelineState(runtime, workspaceRoot); persistErr != nil {
 						log.Printf("#%d: failed to persist state after recovery attempt: %v", item.Number, persistErr)
 					}
 					if s.telemetrySvc != nil && s.telemetryEnabled {
@@ -6967,8 +6967,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 						// conflict-only evaluator (not the generic one) keeps this the
 						// SOLE consumer of the conflict signal — the generic post-stage
 						// rewind sites skip it, avoiding a feature-dev self-loop (#4072).
-						feedbackFile := filepath.Join(workspaceRoot, ".nightgauge", "pipeline",
-							fmt.Sprintf("feedback-%d.json", item.Number))
+						feedbackFile := pipelineStatePath(workspaceRoot, fmt.Sprintf("feedback-%d.json", item.Number))
 						decision, btErr := s.retryEngine.EvaluateConflictBacktrack(feedbackFile)
 						if btErr != nil {
 							log.Printf("#%d: recovery %s requested resume but backtrack eval failed: %v",
@@ -7442,8 +7441,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// exit 0, so detect the sentinel here and recover any uncommitted work
 		// into a commit before continuing to feature-validate.
 		if stage == state.StageFeatureDev {
-			sentinelPath := filepath.Join(workspaceRoot, ".nightgauge", "pipeline",
-				fmt.Sprintf("stop-hook-status-%d.json", item.Number))
+			sentinelPath := pipelineStatePath(workspaceRoot, fmt.Sprintf("stop-hook-status-%d.json", item.Number))
 			if _, statErr := os.Stat(sentinelPath); statErr == nil {
 				// Consume the sentinel before recovering — it is a one-shot
 				// signal, and removing it first keeps it out of the recovery
@@ -7467,8 +7465,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		}
 
 		// Stage succeeded — check for feedback signals (backtrack evaluation)
-		feedbackFile := filepath.Join(workspaceRoot, ".nightgauge", "pipeline",
-			fmt.Sprintf("feedback-%d.json", item.Number))
+		feedbackFile := pipelineStatePath(workspaceRoot, fmt.Sprintf("feedback-%d.json", item.Number))
 		if _, statErr := os.Stat(feedbackFile); statErr == nil {
 			backtrack, btErr := s.retryEngine.EvaluateBacktrack(feedbackFile)
 			if btErr != nil {
@@ -8329,7 +8326,10 @@ func schedulerSkippableStages(skip []string) map[state.PipelineStage]bool {
 // loadLatestRetro reads the most recent retro file for an issue and returns
 // a summary of findings for injection into escalated retry context.
 func loadLatestRetro(workspaceRoot string, issueNumber int, failedStage string) string {
-	retroDir := filepath.Join(workspaceRoot, ".nightgauge", "retros")
+	retroDir, err := layout.RetrosDir(workspaceRoot)
+	if err != nil {
+		return ""
+	}
 	entries, err := os.ReadDir(retroDir)
 	if err != nil {
 		return ""
@@ -8445,8 +8445,7 @@ func resolveFeatureBranch(runtime *state.RuntimeState, workspaceRoot string, iss
 
 // loadFeatureBranch reads the branch name from the issue context JSON.
 func loadFeatureBranch(workspaceRoot string, issueNumber int) string {
-	path := filepath.Join(workspaceRoot, ".nightgauge", "pipeline",
-		fmt.Sprintf("issue-%d.json", issueNumber))
+	path := pipelineStatePath(workspaceRoot, fmt.Sprintf("issue-%d.json", issueNumber))
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""
@@ -8745,8 +8744,7 @@ func (s *Scheduler) reRouteContext(ctx context.Context, workspaceRoot, worktreeD
 func rewriteIssueContextRouting(workspaceRoot, worktreeDir, repo string, issueNumber int, edit func(routingRaw map[string]interface{})) error {
 	contextPath := resolveIssueContextPath(workspaceRoot, worktreeDir, repo, issueNumber)
 	if contextPath == "" {
-		contextPath = filepath.Join(workspaceRoot, ".nightgauge", "pipeline",
-			fmt.Sprintf("issue-%d.json", issueNumber))
+		contextPath = pipelineStatePath(workspaceRoot, fmt.Sprintf("issue-%d.json", issueNumber))
 	}
 
 	data, err := os.ReadFile(contextPath)
@@ -8831,8 +8829,7 @@ func loadPrUrl(workspaceRoot string, issueNumber int) string {
 // to dispatch on. Returns 0 when the file is absent or malformed — the
 // recovery actions treat 0 as "unknown PR" and decline accordingly.
 func loadPRNumberForRecovery(workspaceRoot string, issueNumber int) int {
-	path := filepath.Join(workspaceRoot, ".nightgauge", "pipeline",
-		fmt.Sprintf("pr-%d.json", issueNumber))
+	path := pipelineStatePath(workspaceRoot, fmt.Sprintf("pr-%d.json", issueNumber))
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return 0
@@ -9371,8 +9368,7 @@ func (s *Scheduler) resolveDispatchModel(
 // build_verification.ran=true and build_verification.status="passed".
 // Returns false on any read/parse error (safe default: don't allow haiku).
 func devContextBuildPassed(workspaceRoot string, issueNumber int) bool {
-	p := filepath.Join(workspaceRoot, ".nightgauge", "pipeline",
-		fmt.Sprintf("dev-%d.json", issueNumber))
+	p := pipelineStatePath(workspaceRoot, fmt.Sprintf("dev-%d.json", issueNumber))
 	data, err := os.ReadFile(p)
 	if err != nil {
 		return false
@@ -9779,7 +9775,7 @@ func (s *Scheduler) verifyPRMergeForStage(ctx context.Context, item types.BoardI
 			runtime.SetMainCheckOutcome(string(mc.Verdict), mc.FailingNames())
 		}
 		if runRoot := s.runRoot(item.Repo); runRoot != "" {
-			if persistErr := runtime.Persist(filepath.Join(runRoot, ".nightgauge", "pipeline")); persistErr != nil {
+			if persistErr := persistPipelineState(runtime, runRoot); persistErr != nil {
 				log.Printf("#%d: warning: failed to persist merge breadcrumb: %v", item.Number, persistErr)
 			}
 		}

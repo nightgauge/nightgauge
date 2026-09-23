@@ -555,7 +555,7 @@
       "file": "internal/orchestrator/scheduler.go",
       "begin": "terminal-parity:begin runPipeline-terminal-defer",
       "end": "terminal-parity:end runPipeline-terminal-defer",
-      "sha256": "d23fe3234eded31060dce54fb83b29736c9853b87438f32752849c9412be084a"
+      "sha256": "bf51ec65da2b79d7becfef4d038ceb1839de48a65374de937f30706859c04226"
     },
     {
       "id": "extension-runSlotPipeline-finally",

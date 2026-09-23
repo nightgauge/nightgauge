@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // --- budget.raiseCeiling -----------------------------------------------------
@@ -112,9 +114,12 @@ type EscalationOverride struct {
 	ForcedAt      string `json:"forced_at"`
 }
 
-func escalationOverridePath(workspaceRoot string, issue int) string {
-	return filepath.Join(workspaceRoot, ".nightgauge", "pipeline",
-		fmt.Sprintf("escalation-override-%d.json", issue))
+func escalationOverridePath(workspaceRoot string, issue int) (string, error) {
+	dir, err := layout.PipelineStateDir(workspaceRoot)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, fmt.Sprintf("escalation-override-%d.json", issue)), nil
 }
 
 // WriteEscalationOverride persists a per-issue forced model tier (e.g. "opus"),
@@ -136,7 +141,10 @@ func WriteEscalationOverride(workspaceRoot string, issue int, tier, actor string
 	if err != nil {
 		return fmt.Errorf("run.retryWithEscalation: marshal: %w", err)
 	}
-	path := escalationOverridePath(workspaceRoot, issue)
+	path, err := escalationOverridePath(workspaceRoot, issue)
+	if err != nil {
+		return fmt.Errorf("run.retryWithEscalation: %w", err)
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("run.retryWithEscalation: mkdir: %w", err)
 	}
@@ -158,7 +166,10 @@ func ConsumeEscalationOverride(workspaceRoot string, issue int) (string, bool) {
 	if workspaceRoot == "" {
 		return "", false
 	}
-	path := escalationOverridePath(workspaceRoot, issue)
+	path, err := escalationOverridePath(workspaceRoot, issue)
+	if err != nil {
+		return "", false
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", false
