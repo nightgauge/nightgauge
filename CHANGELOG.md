@@ -279,6 +279,28 @@ create --body-file` call, so the compact profile (and its tests) pin
 
 ### Fixed
 
+- **feature-dev sub-sessions engage for local OpenCode models, and four
+  defects a live run on one found (#1651).**
+  - The window the sub-session policy and the context-budget fit check read
+    came only from the model registry, which lists no local model, so on a
+    local model it was 0 and the policy never engaged. An `opencode`
+    dispatch whose model names an endpoint the machine-tier `opencode:` block
+    declares now uses the `limit.context` its run config is built with: the
+    declared value, clamped to the loaded window, else the window discovered
+    from the server.
+  - A Go-direct stage's cache-read and cache-creation tokens were dropped
+    between the executor's result and the stage's, so every such stage, and
+    each sub-session phase, recorded cache reads as 0.
+  - The feature-dev gate reported `handoff_source=authored` for a
+    `dev-{N}.json` the step loop derived from git. A document that says
+    `handoff_source: derived` is now reported as derived.
+  - A worktree reached through `/tmp` (a symlink to `/private/tmp` on macOS)
+    had tool calls naming its `/tmp` form refused. The OpenCode
+    `external_directory` allow-list now lists the worktree, and lists it
+    and the skill and context directories as given, resolved, and re-rooted
+    on `/tmp` when `/tmp` resolves to their prefix. The project-config edit
+    deny covers those forms too.
+
 - **A cancelled or timed-out Go-direct stage now kills its whole process
   group (#1651).** `execution.Manager` spawned stages as group leaders but
   let the stage context's cancel signal only the direct child, so a process

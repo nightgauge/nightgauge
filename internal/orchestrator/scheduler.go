@@ -618,6 +618,10 @@ func cliRunResultToStageResult(result *adapters.RunResult) *StageRunResult {
 		Cancelled:    result.Cancelled,
 		InputTokens:  result.InputTokens,
 		OutputTokens: result.OutputTokens,
+		// The cache pools the adapter stream measured (#1651): dropping them
+		// here recorded every Go-direct stage's cache reads as 0.
+		CacheReadTokens:     result.CacheReadTokens,
+		CacheCreationTokens: result.CacheCreationTokens,
 		// #91 served-model attribution, tracked by the execution manager's
 		// stream reader, and a multi-provider adapter's ADR-022 § 2 identity.
 		ServedModel:             result.ServedModel,
@@ -5225,10 +5229,17 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			return
 		}
 
+		// A model on a local OpenCode endpoint is in no registry, so
+		// OverlayKeys resolves no window for it. Its window is the context
+		// limit the dispatch's own OpenCode config is built with (#1651).
+		if skillData.ContextWindow <= 0 && adapterName == "opencode" {
+			skillData.ContextWindow = openCodeDispatchWindow(workspaceRoot, model)
+		}
+
 		// Context-budget fit check (ADR 023, #1645). skillData.ContextWindow
-		// is the SAME descriptor OverlayKeys just resolved for the render
-		// above — not re-derived — so this can never disagree with what the
-		// overlay cascade actually keyed off. Zero means unknown/unresolved
+		// is the descriptor OverlayKeys just resolved for the render above,
+		// or, for a local OpenCode model, the limit its run config uses — so
+		// this can never disagree with what the dispatch runs with. Zero means unknown/unresolved
 		// (a hosted model absent from the registry, or a local provider
 		// OverlayKeys could not resolve): ADR 023 §4's fail-open branch, so
 		// dispatch proceeds unchecked exactly as it did before this issue —

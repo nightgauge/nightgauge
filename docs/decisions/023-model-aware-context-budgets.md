@@ -253,6 +253,14 @@ sessions share the stage's timeout and cost ceiling. Operators opt out with
 requires of a correctness feature with no footprint or cost reason to be off.
 Code: `internal/orchestrator/featuredev_steps.go`.
 
+**Correction (#1651, AC7 run).** The registry lists no local model, so for
+a model on a local OpenCode endpoint `skillData.ContextWindow` was 0 and the
+policy never engaged. For an `opencode` dispatch whose model names an
+endpoint the machine-tier `opencode:` block declares, the window is now the
+`limit.context` the run's OpenCode config is built with: the declared value,
+clamped to the loaded window, else the window discovered from the server
+(`adapters.OpenCodeContextWindow`). The fit check (Q10) reads the same value.
+
 ### Q8 — Non-USD budgets (#1652)
 
 Out of scope for implementation here. A context-window refusal is a ceiling

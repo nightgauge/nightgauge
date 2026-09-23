@@ -550,7 +550,8 @@ func TestOpenCodeExternalDirectoryGateRootsMatchAllowList(t *testing.T) {
 	roots := OpenCodeExternalDirectoryAllowRoots(opts)
 	allowList := openCodeExternalDirectoryAllowList(opts)
 
-	var wantPatterns []string
+	// The worktree's own forms lead the list (#1651); the roots follow.
+	wantPatterns := openCodeDirPatterns(worktree)
 	for _, root := range roots {
 		if root == opencodeallow.TmpRoot || root == opencodeallow.PrivateTmpRoot {
 			continue
@@ -831,5 +832,91 @@ func TestOpenCodeTamperGateSpawnsNothing(t *testing.T) {
 	}
 	if _, statErr := os.Stat(marker); statErr == nil {
 		t.Error("the fake opencode binary on PATH was invoked; the tamper gate must spawn nothing")
+	}
+}
+
+// openCodePatternAction is what opencode 1.18.30 resolves request to under
+// pm: the action of the LAST pattern that matches it (ADR-022 § 8), "" when
+// none does.
+func openCodePatternAction(pm *openCodePatternMap, request string) string {
+	action := ""
+	for _, k := range pm.keys {
+		if openCodeWildcardMatch(request, k) {
+			action = pm.values[k]
+		}
+	}
+	return action
+}
+
+// #1651 AC7 finding: a worktree reached through a symlink was refused when a
+// tool call named it by the other form. OpenCode asks external_directory for
+// dirname(file)+"/*" of a path outside its instance directory, which it
+// compares lexically, so both forms of the worktree must be allowed. This
+// uses a real symlinked temp dir.
+func TestOpenCodeExternalDirectoryAllowsBothFormsOfASymlinkedWorktree(t *testing.T) {
+	realDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(realDir, "internal", "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "worktree-link")
+	if err := os.Symlink(realDir, link); err != nil {
+		t.Skipf("cannot create a symlink here: %v", err)
+	}
+	resolvedReal, err := filepath.EvalSymlinks(realDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pm := openCodeExternalDirectoryPermission(openCodeExternalDirectoryAllowList(RunOptions{WorktreeDir: link}))
+	for _, request := range []string{
+		link + "/internal/pkg/*",
+		resolvedReal + "/internal/pkg/*",
+		link + "/*",
+	} {
+		if got := openCodePatternAction(pm, request); got != openCodeAllow {
+			t.Errorf("external_directory %q = %q, want allow", request, got)
+		}
+	}
+	if got := openCodePatternAction(pm, filepath.Dir(resolvedReal)+"/elsewhere/*"); got != openCodeDeny {
+		t.Errorf("a sibling of the worktree = %q, want deny", got)
+	}
+}
+
+// The live case: the worktree is handed over already resolved
+// (/private/tmp/...) and a step names it through the /tmp symlink, which
+// EvalSymlinks cannot find from the resolved side. The edit backstop must
+// follow the allow-list to that form: the project config stays denied.
+func TestOpenCodePermissionMapCoversTheSystemAliasOfAResolvedWorktree(t *testing.T) {
+	target, err := filepath.EvalSymlinks("/tmp")
+	if err != nil || target == "/tmp" {
+		t.Skip("/tmp is not a symlink on this system")
+	}
+	wt, err := os.MkdirTemp(target, "ng-1651-alias-")
+	if err != nil {
+		t.Skipf("cannot create a directory under %s: %v", target, err)
+	}
+	t.Cleanup(func() { os.RemoveAll(wt) })
+	if err := os.Mkdir(filepath.Join(wt, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join("/tmp", filepath.Base(wt))
+
+	perm := openCodePermissionMap(RunOptions{WorktreeDir: wt, AllowedTools: []string{"Read", "Edit"}}, "")
+	if got := openCodePatternAction(perm.ExternalDirectory, alias+"/src/*"); got != openCodeAllow {
+		t.Errorf("external_directory %q = %q, want allow", alias+"/src/*", got)
+	}
+	// OpenCode's worktree is the resolved directory; an edit is asked as its
+	// path relative to it.
+	for _, file := range []string{"opencode.json", ".opencode/plugins/x.ts"} {
+		rel, err := filepath.Rel(wt, filepath.Join(alias, file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := openCodePatternAction(perm.Edit, filepath.ToSlash(rel)); got != openCodeDeny {
+			t.Errorf("edit %q = %q, want deny", rel, got)
+		}
+	}
+	rel, _ := filepath.Rel(wt, filepath.Join(alias, "src", "main.go"))
+	if got := openCodePatternAction(perm.Edit, filepath.ToSlash(rel)); got != openCodeAllow {
+		t.Errorf("edit %q = %q, want allow (a deliverable file through the alias)", rel, got)
 	}
 }

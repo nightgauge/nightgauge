@@ -806,11 +806,7 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 	_, catalogKey := openCodeCatalogEnv[key]
 	switch ep, declared := findOpenCodeEndpoint(in.Endpoints, key); {
 	case declared:
-		desc, discoverErr := models.LocalDescriptor{}, errors.New("nothing discovers it")
-		if in.Discover != nil {
-			desc, discoverErr = in.Discover(ep, model)
-		}
-		limit, warnings, err := ep.resolveLimit(modelID, in.Run.MaxTokens, desc, discoverErr)
+		limit, warnings, err := ep.dispatchLimit(model, modelID, in.Run.MaxTokens, in.Discover)
 		if err != nil {
 			return OpenCodeRunConfig{}, err
 		}
@@ -1127,6 +1123,46 @@ func (ep OpenCodeEndpoint) resolveLimit(modelID string, maxTokens int, desc mode
 		limit.Output = maxTokens
 	}
 	return limit, warnings, nil
+}
+
+// dispatchLimit is the limits a dispatch of model ("<key>/<modelID>") gets on
+// ep: resolveLimit over what discover finds on the server, or over nothing
+// when discover is nil.
+func (ep OpenCodeEndpoint) dispatchLimit(model, modelID string, maxTokens int, discover func(OpenCodeEndpoint, string) (models.LocalDescriptor, error)) (config.OpenCodeLimit, []string, error) {
+	desc, discoverErr := models.LocalDescriptor{}, errors.New("nothing discovers it")
+	if discover != nil {
+		desc, discoverErr = discover(ep, model)
+	}
+	return ep.resolveLimit(modelID, maxTokens, desc, discoverErr)
+}
+
+// OpenCodeContextWindow is the context limit a dispatch of model, the -m
+// value "<key>/<model-id>", gets on this machine: the same limit
+// BuildOpenCodeConfig writes into the run's config for a declared endpoint
+// (the machine-tier limit.context, clamped to the loaded window, else the
+// window discovered from the server). It is 0 with a nil error when model
+// names no declared endpoint (a hosted provider, whose window the model
+// registry describes), and 0 with the reason when the endpoint's limit does
+// not resolve.
+func OpenCodeContextWindow(settings config.OpenCodeConfig, model string) (int, error) {
+	m, err := OpenCodeModelArg(model)
+	if err != nil {
+		return 0, err
+	}
+	key, modelID, _ := strings.Cut(m, "/")
+	endpoints, err := OpenCodeEndpoints(settings)
+	if err != nil {
+		return 0, err
+	}
+	ep, declared := findOpenCodeEndpoint(endpoints, key)
+	if !declared {
+		return 0, nil
+	}
+	limit, _, err := ep.dispatchLimit(m, modelID, 0, openCodeLocalDiscovery)
+	if err != nil {
+		return 0, err
+	}
+	return limit.Context, nil
 }
 
 func findOpenCodeEndpoint(endpoints []OpenCodeEndpoint, key string) (OpenCodeEndpoint, bool) {

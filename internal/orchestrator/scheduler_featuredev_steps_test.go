@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -12,8 +14,11 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution"
+	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
+	"github.com/nightgauge/nightgauge/internal/platform"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
@@ -160,5 +165,109 @@ func TestScheduler_FeatureDevSubSessions_RecordedAsPhases(t *testing.T) {
 	}
 	if tok.Input != 6000 {
 		t.Errorf("stage input tokens = %d, want 6000 (1000+2000+3000)", tok.Input)
+	}
+}
+
+// newLoadedLMStudioStub serves LM Studio's GET /api/v0/models with one model
+// loaded at loadedContext, and 404s every other path — so discovery's v1
+// request falls back to v0 exactly as it does against an LM Studio that
+// has no v1 listing.
+func newLoadedLMStudioStub(t *testing.T, model string, loadedContext int) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v0/models" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{{
+			"id": model, "state": "loaded", "loaded_context_length": loadedContext,
+			"capabilities": []string{"tool_use"},
+		}}})
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+// withMachineOpenCodeConfig writes body as the machine-tier config file and
+// points the real loader at it, so a test reads the opencode: block the way
+// a dispatch does.
+func withMachineOpenCodeConfig(t *testing.T, body string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(config.SwapMachineConfigPathForTest(func() (string, error) { return path, nil }))
+}
+
+// #1651 AC7 finding: a local model's window came only from the model
+// registry, which lists no local model, so the window was 0 and the policy
+// never engaged in production. The window a dispatch of a local model runs
+// with is the limit.context its OpenCode config is built with; read from a
+// real machine-tier config file, it engages the policy. A hosted model on
+// the same machine still resolves no window here.
+func TestOpenCodeDispatchWindow_LocalModelEngagesSubSessions(t *testing.T) {
+	server := newLoadedLMStudioStub(t, "qwen/qwen3.8-27b", 131072)
+	withMachineOpenCodeConfig(t, fmt.Sprintf("opencode:\n  provider: lm-studio\n  base_url: %s\n  limit:\n    context: 131072\n", server.URL))
+
+	window := openCodeDispatchWindow(t.TempDir(), openCodeReadinessModel)
+	if window != 131072 {
+		t.Fatalf("window = %d, want the declared limit.context 131072", window)
+	}
+	if !resolveFeatureDevStepPolicy(window).Enabled {
+		t.Errorf("policy for window %d is off, want sub-sessions on", window)
+	}
+	if got := openCodeDispatchWindow(t.TempDir(), "anthropic/claude-sonnet-5"); got != 0 {
+		t.Errorf("hosted model window = %d, want 0 (the registry describes it)", got)
+	}
+}
+
+// The same finding end to end: a run whose feature-dev dispatches the local
+// model through the OpenCode adapter runs one session per plan task, with the
+// real window resolution and the real policy — nothing forces it on.
+func TestScheduler_FeatureDevSubSessions_EngageForLocalOpenCodeModel(t *testing.T) {
+	stubReconcileGhUnreachable(t)
+	server := newLoadedLMStudioStub(t, "qwen/qwen3.8-27b", 131072)
+	withMachineOpenCodeConfig(t, fmt.Sprintf("opencode:\n  provider: lm-studio\n  base_url: %s\n  limit:\n    context: 131072\n", server.URL))
+
+	root := gitWorkspace(t)
+	for _, dir := range []string{
+		"nightgauge-issue-pickup", "nightgauge-feature-planning", "nightgauge-feature-dev",
+		"nightgauge-feature-validate", "nightgauge-pr-create", "nightgauge-pr-merge",
+	} {
+		writeSkillFile(t, root, dir)
+	}
+	gitIn(t, root, "add", ".")
+	gitIn(t, root, "commit", "-m", "fixture")
+
+	runner := &steppedPipelineRunner{root: root}
+	s := &Scheduler{
+		repoRunning:    make(map[string]int),
+		mergeLocks:     make(map[string]*sync.Mutex),
+		retryEngine:    NewRetryEngine(RetryConfig{MaxBacktracks: 0, MaxEscalationsPerStage: 0}),
+		budgetEngine:   NewBudgetEnforcer(DefaultBudgetConfig()),
+		ralphEngine:    NewRalphLoopController(DefaultRalphConfig()),
+		issueSvc:       newMockIssueSvc(),
+		execMgr:        execution.NewManager(root, adapters.NewOpenCodeAdapter()),
+		stageRunner:    runner,
+		budgetRetries:  make(map[string]int),
+		workspaceRoot:  root,
+		prCreateRunner: alwaysPuntPRCreateRunner{},
+	}
+	// RecordEscalation is the unfiltered model-override seam (see
+	// TestOpenCodeReadinessRefusal_NeverDispatches); it is set after
+	// runPipeline's own retry-engine reset.
+	s.telemetrySvc = &hookTelemetry{onEvent: func(e platform.PipelineEvent) {
+		if e.EventType == "stage_completed" && e.Stage == string(state.StageIssuePickup) {
+			s.retryEngine.RecordEscalation(string(state.StageFeatureDev), openCodeReadinessModel)
+		}
+	}}
+	s.telemetryEnabled = true
+
+	s.runPipeline(context.Background(), types.BoardItem{Number: 1651, Repo: "nightgauge/test", ID: "item-1651"})
+
+	if runner.devCalls != 3 {
+		t.Fatalf("feature-dev sessions = %d, want 3 (one per plan task)", runner.devCalls)
 	}
 }

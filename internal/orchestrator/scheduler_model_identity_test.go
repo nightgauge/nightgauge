@@ -44,6 +44,22 @@ func TestCLIRunResultCarriesTheModelIdentity(t *testing.T) {
 	}
 }
 
+// TestCLIRunResultCarriesTheCachePools (#1651 AC7): the executor's cache
+// pools reach the stage result. Dropping them recorded every Go-direct
+// stage's cache reads as 0 — 97k-182k per OpenCode feature-dev session on the
+// live run — so the stage and phase token totals undercounted.
+func TestCLIRunResultCarriesTheCachePools(t *testing.T) {
+	got := cliRunResultToStageResult(&adapters.RunResult{
+		InputTokens:         1200,
+		OutputTokens:        2900,
+		CacheReadTokens:     97000,
+		CacheCreationTokens: 450,
+	})
+	if got.CacheReadTokens != 97000 || got.CacheCreationTokens != 450 {
+		t.Errorf("(cache read, cache creation) = (%d, %d), want (97000, 450)", got.CacheReadTokens, got.CacheCreationTokens)
+	}
+}
+
 // TestRunPipeline_RecordsTheStageModelIdentity: the identity a stage's result
 // carries reaches the run's record of that stage (ADR-022 § 2), and the
 // dispatched -m survives as the upstream model when another model served the
