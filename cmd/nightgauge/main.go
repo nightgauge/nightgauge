@@ -4923,13 +4923,14 @@ func serveCmd() *cobra.Command {
 			// --api-key, and --license-key with os.Getenv(...) defaults, so
 			// the flag variables above already encode "flag or env, flag
 			// wins" by the time cobra hands control to RunE — the only
-			// remaining fallback is the merged config file's platform
-			// section, which an extension-spawned daemon (no flags, no env)
-			// otherwise never consults. Without this, cfg.PlatformURL /
+			// remaining fallback is the stored license key (OS keychain,
+			// then machine-tier file) and the merged config's URL, which an
+			// extension-spawned daemon (no flags, no env) otherwise never
+			// consults. Without this, cfg.PlatformURL /
 			// cfg.LicenseKey are silently ignored and both the remote-command
 			// poller (below) and the #330 Action Center bridge stay dormant
 			// in the product's primary deployment mode.
-			resolvedPlatform := resolvePlatformConfig(platformURL, apiKey, licenseKey, cfg)
+			resolvedPlatform := resolvePlatformConfig(platformURL, apiKey, licenseKey, cfg, newLicenseStore().ResolveLicenseKey)
 			platformURL, apiKey, licenseKey = resolvedPlatform.URL, resolvedPlatform.APIKey, resolvedPlatform.LicenseKey
 			if resolvedPlatform.Configured() {
 				apiURLForLog := platformURL
@@ -11817,7 +11818,7 @@ func authCmd() *cobra.Command {
 		Use:   "auth",
 		Short: "Authentication operations",
 	}
-	cmd.AddCommand(authCheckCmd())
+	cmd.AddCommand(authCheckCmd(), authLicenseCmd())
 	return cmd
 }
 

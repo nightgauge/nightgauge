@@ -6864,10 +6864,10 @@ platform:
 extension does **not** hold a platform client — it routes all platform calls
 through the Go binary via IPC.
 
-| Config Consumer            | What It Uses                                                                                                                                                                                                                                                              |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Go binary** (`serve`)    | `enabled`, `api_url`, and `license_key` — explicit flags/environment variables opt in directly; config-derived values are used only when `platform.enabled: true`. `connection_timeout_ms` and `retry_policy` are schema-validated but not yet consumed by the Go binary. |
-| **Extension** (TypeScript) | Reads `platform.enabled` only to decide whether to display platform-related UI (license badge, skill tier badge). Does **not** make direct platform API calls.                                                                                                            |
+| Config Consumer            | What It Uses                                                                                                                                                                                                                                                                                                                                          |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Go binary** (`serve`)    | `enabled`, `api_url`, and the license key — explicit flags/environment variables opt in directly; the stored license key (OS keychain, then machine-tier `license_key`) and config-derived values are used only when `platform.enabled: true`. `connection_timeout_ms` and `retry_policy` are schema-validated but not yet consumed by the Go binary. |
+| **Extension** (TypeScript) | Reads `platform.enabled` only to decide whether to display platform-related UI (license badge, skill tier badge). Does **not** make direct platform API calls.                                                                                                                                                                                        |
 
 ### Behavior
 
@@ -6881,6 +6881,11 @@ through the Go binary via IPC.
   remove all flags from lower tiers — not merge with them.
 - Config files that omit the `platform:` section entirely continue to work
   unchanged — all fields default to the values shown above.
+- The license key belongs in the OS keychain, not in YAML: store it with
+  `printf '%s' "$KEY" | nightgauge auth license set`. A `platform.license_key`
+  in the machine-tier file is the fallback for hosts with no keychain. The
+  resolution order and the keychain entry are in
+  [GO_BINARY.md § Platform license key](GO_BINARY.md#platform-license-key).
 
 ### Environment Variables
 

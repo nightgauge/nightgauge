@@ -18,6 +18,17 @@ and this project adheres to
 
 ### Fixed
 
+- The license key no longer disappears for the CLI and daemon once the
+  extension has run. Activating a license, starting a trial, saving the key in
+  Settings and the startup migration now also store it in the OS keychain
+  through `nightgauge auth license set`, so `nightgauge serve` and
+  `nightgauge pipeline backfill` from a terminal still find it. The key is
+  removed from `~/.nightgauge/config.yaml` only after that succeeds; if it
+  fails, the key stays and one warning names the command to run. If you
+  change the key from a terminal (`nightgauge auth license set`), VS Code
+  notices on the next start, stops using its old copy, and asks you to
+  activate the current key.
+
 - The generated `.nightgauge/.gitignore` (template version 15) now ignores
   `.nightgauge/worktrees/`, so a pipeline worktree no longer shows up in
   `git status` as an embedded repository, and the per-machine files it

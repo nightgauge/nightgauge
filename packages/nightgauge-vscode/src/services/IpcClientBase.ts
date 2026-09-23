@@ -20,6 +20,7 @@ import { BinaryResolver } from "./BinaryResolver";
 import { getActiveCallSource, setActiveCallSource } from "./callSource";
 import { getGitHubAuthToken, getGitHubAuthTokens } from "../utils/nightgaugeConfig";
 import { SecretStorageService, SECRET_KEYS } from "./SecretStorageService";
+import { whenLicenseReconciled } from "./licenseKeychainBridge";
 import { TokenStorage } from "../platform/TokenStorage";
 import { PlatformCredentialBridge } from "../platform/PlatformCredentialBridge";
 import { redactSecrets } from "../utils/redaction";
@@ -2425,6 +2426,9 @@ export abstract class IpcClientBase implements vscode.Disposable {
     }
     const svc = SecretStorageService.getInstance();
     if (!svc) return;
+    // Startup reconciliation may drop a SecretStorage key that is stale
+    // against the CLI's keychain entry (#2027); never hand the daemon one.
+    await whenLicenseReconciled();
     const key = await svc.getSecret(SECRET_KEYS.platformLicenseKey);
     if (key) {
       this.resolvedLicenseKey = key;

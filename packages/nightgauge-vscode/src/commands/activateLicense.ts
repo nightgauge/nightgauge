@@ -14,7 +14,9 @@
  *  3. On success, persist the key to SecretStorage under
  *     SECRET_KEYS.platformLicenseKey — the source of truth that
  *     IpcClientBase.resolveLicenseKey() reads and forwardPlatformEnv() injects
- *     into the Go IPC server as NIGHTGAUGE_LICENSE_KEY on the next spawn.
+ *     into the Go IPC server as NIGHTGAUGE_LICENSE_KEY on the next spawn —
+ *     and, through `nightgauge auth license set`, to the OS-keychain entry
+ *     the CLI reads (#2027).
  *  4. The running Go server still holds the previous key, so the new license
  *     applies after a window reload, which we offer inline.
  *
@@ -27,6 +29,7 @@ import * as vscode from "vscode";
 import { IpcClient } from "../services/IpcClient";
 import { MachineFingerprint } from "../platform/MachineFingerprint";
 import { SecretStorageService, SECRET_KEYS } from "../services/SecretStorageService";
+import { persistLicenseKey } from "../services/licenseKeychainBridge";
 import type { LicensePreflight } from "../platform/LicensePreflight";
 import { messageForBlockedStatus } from "../platform/LicensePreflight";
 import type { TrialStateStore } from "../platform/TrialState";
@@ -126,7 +129,10 @@ export function registerActivateLicenseCommand(
       );
       return;
     }
-    await secrets.setSecret(SECRET_KEYS.platformLicenseKey, key);
+    // SecretStorage for the extension, and the Go binary's keychain entry for
+    // the CLI and a terminal-started daemon (#2027). A failed keychain write
+    // keeps the SecretStorage copy and warns once.
+    await persistLicenseKey(secrets, SECRET_KEYS.platformLicenseKey, key);
     // Drop any cached community/old-tier result so the next validate re-checks.
     licensePreflight?.clearCache();
     // Activating an explicit key supersedes any in-progress trial — clear the
