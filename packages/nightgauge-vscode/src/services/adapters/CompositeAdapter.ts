@@ -336,6 +336,56 @@ export class CompositeAdapter implements IWorkItemProvider {
   }
 
   /**
+   * Every open issue, all statuses, merged across both sources — the read the
+   * Repositories tree derives its per-row counts from.
+   *
+   * The board half is the board source's own open read when it has one (one
+   * shared `board.listOpen` snapshot instead of the unfiltered all-items read,
+   * Done pages included). Merge rules match getAllItems: the board item wins by
+   * issue number, repo-only issues keep their inferred status. Done is dropped
+   * either way: a closed repo issue infers Done, and the open board read never
+   * carries a closed one.
+   */
+  async getOpenIssues(): Promise<WorkItem[]> {
+    const boardOpen = this.boardSource?.getOpenIssues;
+    if (typeof boardOpen !== "function") {
+      const all = await this.getAllItems();
+      return all.filter((item) => (item.status ?? "").toLowerCase() !== "done");
+    }
+
+    const repoSource = await this.ensureRepoSource();
+    const [repoItems, boardItems] = await Promise.all([
+      repoSource
+        ? repoSource.getAllItems().catch((err) => {
+            console.error(`[CompositeAdapter] repo source getAllItems failed: ${err}`);
+            return [] as WorkItem[];
+          })
+        : Promise.resolve([] as WorkItem[]),
+      boardOpen.call(this.boardSource).catch((err: unknown) => {
+        console.warn(
+          `[CompositeAdapter] board source getOpenIssues failed (degraded mode): ${err}`
+        );
+        return [] as WorkItem[];
+      }),
+    ]);
+
+    const merged = new Map<number, WorkItem>(repoItems.map((item) => [item.number, item]));
+    for (const boardItem of boardItems) merged.set(boardItem.number, boardItem);
+    return Array.from(merged.values()).filter(
+      (item) => (item.status ?? "").toLowerCase() !== "done"
+    );
+  }
+
+  /** Component filter options, from whichever source has cached items. */
+  getObservedComponents(): string[] {
+    const seen = new Set<string>([
+      ...(this.boardSource?.getObservedComponents?.() ?? []),
+      ...(this.repoSource?.getObservedComponents?.() ?? []),
+    ]);
+    return [...seen].sort((a, b) => a.localeCompare(b));
+  }
+
+  /**
    * Return issue counts keyed by status, merged across both sources.
    */
   async getAggregatedStatusCounts(): Promise<Record<string, number>> {

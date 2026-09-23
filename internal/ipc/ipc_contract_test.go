@@ -47,6 +47,7 @@ var contractTestedMethods = map[string]bool{
 	"board.counts":       true,
 	"board.changed":      true,
 	"board.list":         true,
+	"board.listOpen":     true,
 	"board.updateStatus": true,
 	// Branch
 	"branch.cleanup": true,
@@ -381,6 +382,13 @@ func TestContract_Board(t *testing.T) {
 			"owner": "test-org", "projectNumber": 1,
 		})
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "board.list")
+	})
+
+	t.Run("board.listOpen/registered", func(t *testing.T) {
+		id := h.sendRequest("board.listOpen", map[string]interface{}{
+			"owner": "test-org", "projectNumber": 1,
+		})
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "board.listOpen")
 	})
 
 	t.Run("board.counts/registered", func(t *testing.T) {
