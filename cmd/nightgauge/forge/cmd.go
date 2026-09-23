@@ -111,6 +111,13 @@ func BuildRouter(ownerOverride string, projectOverride int, ownerTypeOverride st
 func BuildRouterAt(root string, ownerOverride string, projectOverride int, ownerTypeOverride string) (*forge.Router, error) {
 	cfg, err := config.Load(root)
 	if err != nil {
+		// A refused config (a plaintext credential in a repository tier,
+		// #2023) fails closed: continuing would resolve the default gh
+		// account and act as another identity. `forge auth refresh` and
+		// `logout`, which clean such a config up, never build a router.
+		if errors.Is(err, config.ErrRepoTierCredential) {
+			return nil, fmt.Errorf("load config: %w", err)
+		}
 		// A missing or malformed config is recoverable — the user can
 		// still pass --owner/--token explicitly. Continue with an
 		// empty config.
