@@ -12,8 +12,9 @@ and this project adheres to
 ### Changed
 
 - OpenCode stages now run from the editor. They check the experimental
-  switch, the `opencode` CLI and the Nightgauge binary before launch, and
-  refuse interactive mode. The model comes from the stage or
+  switch, the `opencode` CLI, the Nightgauge binary and a configured model
+  before launch, and refuse interactive mode. Each model step and tool call
+  counts as activity while the stage runs. The model comes from the stage or
   `opencode.model`. Stage cost, the cost cap and stall thresholds follow the
   model's provider. A local model costs $0, uses time-cap mode, and gets its
   own stall calibration with a floor that its thresholds never go below.

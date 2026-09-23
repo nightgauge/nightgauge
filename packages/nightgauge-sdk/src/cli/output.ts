@@ -8,6 +8,7 @@
 import type { PipelineResult, StageResult } from "../orchestrator/PipelineOrchestrator.js";
 import type { PipelineStage } from "../events/EventBus.js";
 import type { WorkflowEvent } from "../cli/workflow/WorkflowEvent.js";
+import type { AdapterActivity } from "./adapters/ICliAdapter.js";
 
 /**
  * Output format type
@@ -132,6 +133,32 @@ export class OutputFormatter {
     } else {
       console.warn(`Warning: ${message}`);
     }
+  }
+
+  /**
+   * Report an adapter's sign of life while its child runs (#1657).
+   *
+   * In JSON mode this is written whatever the log level, as the same
+   * `{"level":…,"message":…,"data":…}` line every other log line on stdout
+   * is: a caller reading the stage's output (the VS Code extension) counts
+   * any output as activity, and this is its only output while OpenCode runs
+   * a slow local model. It carries no `type`, so no stream-json or workflow
+   * node reader takes it for an event. stdout, not stderr: in JSON mode every
+   * error is on stdout too, and a failed stage's last stderr lines are what
+   * the extension reports as its error. In text mode it is a debug line.
+   */
+  activity(activity: AdapterActivity): void {
+    if (this.format === "json") {
+      console.log(
+        JSON.stringify({
+          level: "debug",
+          message: "adapter activity",
+          data: { adapter: activity.adapter, event: activity.event },
+        })
+      );
+      return;
+    }
+    if (this.shouldLog("debug")) console.log(`[DEBUG] ${activity.adapter} ${activity.event}`);
   }
 
   /**

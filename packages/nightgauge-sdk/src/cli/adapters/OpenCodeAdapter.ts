@@ -550,6 +550,7 @@ export class OpenCodeAdapter implements ICliAdapter {
         cleanRunRoot: this.runRootCleaner,
         parentEnv: this.env,
         spawn: this.spawn,
+        onActivity: options?.onActivity,
       },
     });
   }

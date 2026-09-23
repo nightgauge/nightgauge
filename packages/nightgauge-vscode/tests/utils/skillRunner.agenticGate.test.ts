@@ -25,6 +25,16 @@ vi.mock("vscode", () => ({
   extensions: { getExtension: vi.fn(() => null) },
 }));
 
+// The operator's `opencode.model`; the real getter would read the machine's
+// own ~/.nightgauge config.
+const configuredOpenCodeModel = vi.hoisted(() => ({ value: "" as string | undefined }));
+vi.mock("../../src/utils/resolvers/modelResolver", async () => {
+  const actual = await vi.importActual<Record<string, unknown>>(
+    "../../src/utils/resolvers/modelResolver"
+  );
+  return { ...actual, getOpenCodeModel: vi.fn(() => configuredOpenCodeModel.value) };
+});
+
 import { isAgenticAdapter } from "@nightgauge/sdk";
 import { agenticPipelineAdapters, validateAdapterPrerequisites } from "../../src/utils/skillRunner";
 import type { ExecutionAdapter } from "../../src/utils/resolvers/modelResolver";
@@ -97,6 +107,7 @@ describe("validateAdapterPrerequisites — opencode (#1657)", () => {
 
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "ng-opencode-prereq-"));
+    configuredOpenCodeModel.value = "lmstudio/qwen/qwen3.8-27b";
   });
 
   afterEach(() => {
@@ -140,5 +151,23 @@ describe("validateAdapterPrerequisites — opencode (#1657)", () => {
     const err = validateAdapterPrerequisites("opencode", workspace, "interactive");
     expect(err).toMatch(/^OpenCode adapter supports headless execution only\./);
     expect(err).toMatch(/Nightgauge: Run Stage/);
+  });
+
+  it("refuses, naming opencode.model, when no model is configured and the stage names no provider", () => {
+    const { workspace } = fixture(ALL);
+    configuredOpenCodeModel.value = undefined;
+    for (const stageModel of [undefined, "sonnet", "claude-sonnet-5"]) {
+      const err = validateAdapterPrerequisites("opencode", workspace, "headless", stageModel);
+      expect(err, String(stageModel)).toMatch(/`opencode\.model`/);
+      expect(err, String(stageModel)).toMatch(/<provider>\/<model>/);
+    }
+  });
+
+  it("passes without opencode.model when the stage model names its provider", () => {
+    const { workspace } = fixture(ALL);
+    configuredOpenCodeModel.value = undefined;
+    expect(
+      validateAdapterPrerequisites("opencode", workspace, "headless", "lmstudio/qwen/qwen3.8-27b")
+    ).toBeNull();
   });
 });

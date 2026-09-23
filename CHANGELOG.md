@@ -20,7 +20,8 @@ changelog, and the release workflow refuses a tag that does not.
   OpenCode used to fall through to the Codex prerequisites and launch. It
   now needs `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1`, `opencode` on `PATH`, the
   Nightgauge binary for `nightgauge opencode config`, and the SDK CLI with
-  `node`, `git` and `gh`. Each missing one refuses the stage with a message
+  `node`, `git` and `gh`, and a model: `opencode.model`, or a stage model
+  that names its provider. Each missing one refuses the stage with a message
   that says what to fix. Interactive mode refuses OpenCode as headless-only,
   because ADR-022 records no interactive decision. The chat-only adapter
   refusal now builds its list of agentic adapters from the SDK registry.
@@ -55,6 +56,17 @@ changelog, and the release workflow refuses a tag that does not.
     observed 76 s cold prefill and ~8 tok/s decode on opencode 1.18.30 with
     LM Studio. A disabled kill stays disabled, and the Nx runaway kill still
     bounds the stage.
+  - **Liveness.** OpenCode holds its output until it exits. The SDK now
+    forwards each `step_start`, `step_finish` and `tool_use` event while the
+    process runs, through a new `onActivity` query option. The stage and
+    run commands print it as a
+    `{"level":"debug","message":"adapter activity",…}` line on stdout, in
+    JSON mode at any log level. Only the event type is sent, and the line has
+    no `type`, so stream readers ignore it. It goes to stdout because in JSON
+    mode errors go there too, and the extension reports a failed stage's last
+    stderr lines as its error. Each line resets the extension's idle clock,
+    so a slow local stage is no longer silent until it exits. The stage's
+    buffered result is unchanged.
 
 - **feature-dev runs as bounded sub-sessions on small context windows
   (#1651).** When the dispatch model's resolved window is known and below

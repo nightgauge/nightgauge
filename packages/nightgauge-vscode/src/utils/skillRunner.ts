@@ -3201,12 +3201,17 @@ export function agenticPipelineAdapters(): ExecutionAdapter[] {
  *     stage's per-run config by running `nightgauge opencode config` (#1648),
  *     from NIGHTGAUGE_BIN or `nightgauge` on PATH, and fails the stage
  *     without it;
+ *   - no model to dispatch: `opencode.model` is unset and the stage's own
+ *     model (`stageModel`, the dispatch model when the caller has one) names
+ *     no provider, so a band has nothing to resolve against and OpenCode
+ *     would fall back to whatever model its own config names;
  *   - the SDK stage CLI, `node`, `git` or `gh` is missing, as for the other
  *     SDK-path adapters.
  */
 function validateOpenCodePrerequisites(
   workspaceRoot: string,
-  mode: SkillExecutionMode
+  mode: SkillExecutionMode,
+  stageModel: string | undefined
 ): string | null {
   if (mode === "interactive") {
     return (
@@ -3216,6 +3221,14 @@ function validateOpenCodePrerequisites(
   }
   if (!isOpenCodeSwitchOn()) {
     return openCodeGateMessage();
+  }
+  if (!getOpenCodeModel(workspaceRoot) && !stageModel?.includes("/")) {
+    return (
+      "OpenCode adapter needs a model, and none is configured: set `opencode.model` to a " +
+      "<provider>/<model> (such as lmstudio/<model-id> or anthropic/<model-id>) in " +
+      "~/.nightgauge/config.yaml, or name the stage model as <provider>/<model>. " +
+      "Without one, OpenCode would run whatever model its own config names."
+    );
   }
   if (!commandExists("opencode")) {
     return (
@@ -3247,7 +3260,9 @@ function validateOpenCodePrerequisites(
 export function validateAdapterPrerequisites(
   adapter: ExecutionAdapter,
   workspaceRoot: string,
-  mode: SkillExecutionMode
+  mode: SkillExecutionMode,
+  /** The stage's dispatch model when the caller has one; only `opencode` reads it. */
+  stageModel?: string
 ): string | null {
   // Agentic truth-gate (#57): chat-completion-only adapters (gemini-sdk,
   // ollama, lm-studio) have no tool loop — a pipeline stage dispatched to
@@ -3265,7 +3280,7 @@ export function validateAdapterPrerequisites(
   }
 
   if (adapter === "opencode") {
-    return validateOpenCodePrerequisites(workspaceRoot, mode);
+    return validateOpenCodePrerequisites(workspaceRoot, mode, stageModel);
   }
 
   if (adapter === "claude") {
@@ -4093,7 +4108,7 @@ export function runStageSkillHeadless(
   let adapter: ExecutionAdapter = pinnedAdapter ?? initialDecision.adapter;
   let adapterSource: AdapterSource = pinnedAdapter ? "cap-fallback" : initialDecision.source;
   let routerRationale: string | undefined = pinnedAdapter ? undefined : initialDecision.rationale;
-  let prereqError = validateAdapterPrerequisites(adapter, workspaceRoot, "headless");
+  let prereqError = validateAdapterPrerequisites(adapter, workspaceRoot, "headless", modelOverride);
 
   // Issue #3231 — track every adapter the dispatcher considers at stage start,
   // in order. Element 0 is always the primary; subsequent elements are
@@ -4118,7 +4133,8 @@ export function runStageSkillHeadless(
     const walk = walkAdapterFallback(
       adapter,
       prereqError,
-      (candidate) => validateAdapterPrerequisites(candidate, workspaceRoot, "headless"),
+      (candidate) =>
+        validateAdapterPrerequisites(candidate, workspaceRoot, "headless", modelOverride),
       workspaceRoot,
       stage,
       initialDecision.source === "auto-router" || initialDecision.source === "default"

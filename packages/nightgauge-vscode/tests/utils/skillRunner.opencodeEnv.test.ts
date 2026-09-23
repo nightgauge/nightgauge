@@ -102,6 +102,7 @@ import { LOCAL_PROVIDER_STALL_FLOOR } from "../../src/utils/resolvers/monitoring
 import { DEFAULT_STALL_THRESHOLDS } from "../../src/utils/resolvers/monitoringResolver";
 import { createMockChildProcess, type MockChildProcess } from "../mocks/child-process";
 import { curateOpenCodeChildEnv } from "@nightgauge/sdk/dist/cli/adapters/childEnv";
+import { OutputFormatter } from "@nightgauge/sdk/dist/cli/output";
 
 const MOCK_SKILL_CONTENT = `---
 name: test-skill
@@ -251,11 +252,22 @@ describe("opencode model resolution (#1657)", () => {
     expect(onModelResolved.mock.calls[0][3]).not.toBe("config");
   });
 
-  it("an inherited NIGHTGAUGE_MODEL never becomes the dispatch model", () => {
+  it("with no opencode.model, a band is refused before spawn, whatever NIGHTGAUGE_MODEL says", () => {
     configuredOpenCodeModel.value = "";
     process.env.NIGHTGAUGE_MODEL = "lmstudio/operator-shell-model";
-    dispatch("feature-dev", "opus");
-    expect(lastSpawnEnv()).not.toHaveProperty("NIGHTGAUGE_MODEL");
+    const onComplete = vi.fn();
+    dispatch("feature-dev", "opus", { onComplete });
+    expect(spawn).not.toHaveBeenCalled();
+    const outcome = onComplete.mock.calls[0]?.[0] as { success: boolean; error?: Error };
+    expect(outcome.success).toBe(false);
+    expect(String(outcome.error?.message)).toMatch(/`opencode\.model`/);
+  });
+
+  it("with no opencode.model, a provider-qualified stage model is dispatched as is", () => {
+    configuredOpenCodeModel.value = "";
+    process.env.NIGHTGAUGE_MODEL = "lmstudio/operator-shell-model";
+    dispatch("feature-dev", "ollama/qwen3-coder:30b");
+    expect(lastSpawnEnv().NIGHTGAUGE_MODEL).toBe("ollama/qwen3-coder:30b");
   });
 });
 
@@ -267,12 +279,21 @@ describe("opencode model resolution (#1657)", () => {
  */
 describe("opencode liveness (#1657)", () => {
   const IDLE_KILL_MS = 120_000;
-  const STEP_START = JSON.stringify({
-    type: "step_start",
-    timestamp: 0,
-    sessionID: "ses_fixture",
-    part: { type: "step-start" },
-  });
+
+  /**
+   * What the SDK stage CLI prints on stdout when the OpenCode adapter reports
+   * a `step_start` while its process runs (#1657), taken from the SDK's own
+   * formatter rather than restated.
+   */
+  function sdkActivityLine(): string {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      new OutputFormatter("json", "info").activity({ adapter: "opencode", event: "step_start" });
+      return log.mock.calls[0][0] as string;
+    } finally {
+      log.mockRestore();
+    }
+  }
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -283,7 +304,9 @@ describe("opencode liveness (#1657)", () => {
     return onStallEvent.mock.calls.filter(([e]) => (e as { action: string }).action === "kill");
   }
 
-  it("step_start lines for 10 simulated minutes keep a stage alive past its idle budget", () => {
+  it("the SDK's step_start activity lines for 10 simulated minutes keep a stage alive past its idle budget", () => {
+    const STEP_START = sdkActivityLine();
+    expect(STEP_START).toContain('"event":"step_start"');
     const onStallEvent = vi.fn();
     // A hosted model: no local floor, so only activity keeps it alive.
     dispatch("feature-planning", "anthropic/claude-sonnet-5", { onStallEvent });
