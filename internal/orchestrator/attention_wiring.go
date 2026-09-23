@@ -1635,9 +1635,13 @@ const BlockedFindingsDirName = "blocked-findings"
 // the Go side. The extension writes it (utils/blockedFinding.ts) and reads it
 // at issue-pickup to defer for zero tokens; the daemon only ever DELETES it,
 // when an operator resolves the card below.
+//
+// For an empty or relative repoRoot it returns "" (layout.PipelineStateDir
+// refuses to resolve one), so a remove or stat of the result fails as
+// not-exist instead of touching a path under the process's working directory.
 func BlockedFindingPath(repoRoot string, issue int) string {
-	return filepath.Join(repoRoot, ".nightgauge", "pipeline", BlockedFindingsDirName,
-		fmt.Sprintf("%d.json", issue))
+	return pipelineStatePath(repoRoot, filepath.Join(BlockedFindingsDirName,
+		fmt.Sprintf("%d.json", issue)))
 }
 
 // BuildOutOfScopeBlocker constructs the card for a run that terminated `blocked`

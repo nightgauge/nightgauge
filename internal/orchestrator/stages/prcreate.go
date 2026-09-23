@@ -22,6 +22,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/deliverable"
 	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // PRCreatePath is the outcome of a deterministic pr-create attempt.
@@ -746,7 +747,10 @@ func defaultWritePRContext(workdir string, p prContextPayload) error {
 		p.CreatedAt = time.Now().UTC().Format(time.RFC3339)
 	}
 
-	dir := filepath.Join(workdir, ".nightgauge", "pipeline")
+	dir, err := layout.PipelineStateDir(workdir)
+	if err != nil {
+		return fmt.Errorf("resolve pr context dir: %w", err)
+	}
 	path := filepath.Join(dir, fmt.Sprintf("pr-%d.json", p.IssueNumber))
 	data, err := json.MarshalIndent(p, "", "  ")
 	if err != nil {
@@ -758,6 +762,18 @@ func defaultWritePRContext(workdir string, p prContextPayload) error {
 	return writeFileAtomic(path, data)
 }
 
+// pipelineContextPath is name inside workdir's pipeline state directory
+// (layout.PipelineStateDir, #2033), or "" for an empty or relative workdir, so
+// a read fails as not-exist instead of resolving against the process's
+// working directory.
+func pipelineContextPath(workdir, name string) string {
+	dir, err := layout.PipelineStateDir(workdir)
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, name)
+}
+
 // defaultReadCreateContext loads issue/dev/validate/planning context from
 // .nightgauge/pipeline/ and projects them into a PRCreateSnapshot.
 // Missing dev-{N}.json sets HasDev=false (decision rule punts). Missing
@@ -767,13 +783,13 @@ func defaultReadCreateContext(workdir string, issueNumber int) (PRCreateSnapshot
 	snap := PRCreateSnapshot{}
 
 	// dev-batch-{E}.json — when present, force batch mode regardless of other fields.
-	batchPath := filepath.Join(workdir, ".nightgauge", "pipeline", fmt.Sprintf("dev-batch-%d.json", issueNumber))
+	batchPath := pipelineContextPath(workdir, fmt.Sprintf("dev-batch-%d.json", issueNumber))
 	if _, err := readFile(batchPath); err == nil {
 		snap.BatchPresent = true
 	}
 
 	// issue-{N}.json
-	if data, err := readFile(filepath.Join(workdir, ".nightgauge", "pipeline", fmt.Sprintf("issue-%d.json", issueNumber))); err == nil {
+	if data, err := readFile(pipelineContextPath(workdir, fmt.Sprintf("issue-%d.json", issueNumber))); err == nil {
 		var raw struct {
 			IssueNumber  int      `json:"issue_number"`
 			Title        string   `json:"title"`
@@ -796,7 +812,7 @@ func defaultReadCreateContext(workdir string, issueNumber int) (PRCreateSnapshot
 	}
 
 	// dev-{N}.json
-	if data, err := readFile(filepath.Join(workdir, ".nightgauge", "pipeline", fmt.Sprintf("dev-%d.json", issueNumber))); err == nil {
+	if data, err := readFile(pipelineContextPath(workdir, fmt.Sprintf("dev-%d.json", issueNumber))); err == nil {
 		var raw struct {
 			FilesChanged struct {
 				Created  []string `json:"created"`
@@ -838,7 +854,7 @@ func defaultReadCreateContext(workdir string, issueNumber int) (PRCreateSnapshot
 	}
 
 	// validate-{N}.json
-	if data, err := readFile(filepath.Join(workdir, ".nightgauge", "pipeline", fmt.Sprintf("validate-%d.json", issueNumber))); err == nil {
+	if data, err := readFile(pipelineContextPath(workdir, fmt.Sprintf("validate-%d.json", issueNumber))); err == nil {
 		var raw struct {
 			ValidationStatus string `json:"validation_status"`
 			ErrorCategory    string `json:"errorCategory"`
@@ -891,7 +907,7 @@ func defaultReadCreateContext(workdir string, issueNumber int) (PRCreateSnapshot
 
 	// planning-{N}.json — picks up knowledge_path when not already set.
 	if snap.KnowledgePath == "" {
-		if data, err := readFile(filepath.Join(workdir, ".nightgauge", "pipeline", fmt.Sprintf("planning-%d.json", issueNumber))); err == nil {
+		if data, err := readFile(pipelineContextPath(workdir, fmt.Sprintf("planning-%d.json", issueNumber))); err == nil {
 			var raw struct {
 				KnowledgePath string `json:"knowledge_path"`
 			}

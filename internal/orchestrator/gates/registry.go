@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -39,7 +40,14 @@ func LookupByStageName(name string) (StageGate, bool) {
 // Type strings match the ContextFileType union in
 // `packages/nightgauge-vscode/src/services/RepositoryContextLoader.ts`
 // (`issue`, `planning`, `dev`, `validate`, `pr`).
+//
+// For an empty or relative workspace it returns "" (layout.PipelineStateDir
+// refuses to resolve one), which every gate reads as a missing context rather
+// than resolving against the process's working directory.
 func contextFilePath(workspace, contextType string, issueNumber int) string {
-	return filepath.Join(workspace, ".nightgauge", "pipeline",
-		fmt.Sprintf("%s-%d.json", contextType, issueNumber))
+	dir, err := layout.PipelineStateDir(workspace)
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, fmt.Sprintf("%s-%d.json", contextType, issueNumber))
 }

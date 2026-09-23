@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 )
 
@@ -441,6 +442,15 @@ func terminalTailProtects(snap *RuntimeState, info os.FileInfo, now time.Time) b
 // pipelineStateDir starts from a repo SLUG, resolves it to a root, and then calls
 // THIS — the slug resolution is the server's business, the layout is not. Same
 // for internal/state's offline store.
+//
+// It delegates to layout.PipelineStateDir, which owns the location (ADR-024).
+// That resolver rejects an empty or relative root; this wrapper keeps its
+// string-only contract for its existing callers by returning the unvalidated
+// join for such a root, exactly as before (#2033). New code calls
+// layout.PipelineStateDir and handles the error.
 func PipelineStateDir(repoRoot string) string {
+	if dir, err := layout.PipelineStateDir(repoRoot); err == nil {
+		return dir
+	}
 	return filepath.Join(repoRoot, ".nightgauge", "pipeline")
 }
