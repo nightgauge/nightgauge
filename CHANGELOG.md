@@ -319,6 +319,46 @@ create --body-file` call, so the compact profile (and its tests) pin
   that picks the next issue to dispatch still bypasses the cache and goes to
   GitHub every time.
 
+- **The test-quality hook no longer drops a warning when the machine is busy.**
+  It ran under `set -o pipefail` and tested each pattern with
+  `echo "$CONTENT" | grep -q`. `grep -q` exits at its first match. The
+  line-buffered `echo` then wrote into a closed pipe and took SIGPIPE, and
+  pipefail turned the match into a miss. A short file lost that race only under
+  load, which is how a full local gate caught it; a match early in a long file
+  lost it every time. The hook now greps a here-string. A parity case with
+  20,000 trailing lines fails against the old script on any machine.
+
+- **Skill-eval scenarios judge the model's decision, not its prose, so a
+  correct answer is no longer failed for naming the forbidden thing to reject
+  it.** `not_contains` cannot tell a recommendation from a warning. Measured on
+  2026-09-23, the live sonnet answer to `pc-body-flag` was correct ("the Go
+  binary has no `--body-file` flag, so … pass it inline with `--body`") and
+  failed `not_contains "--body-file"`; `ip-no-direct-main`, whose prompt asks
+  the model to confirm it never commits to main and then forbade the words
+  `commit to main`, was noisy on both profiles in every live run; and the mock
+  fixtures had been phrased around the defect, and `fd-declines-unobserved-retry`
+  and `fd-validates-its-own-diagnostic` required `do not add` or `not ship it`
+  in prose, so "I don't add it" and "I don't ship it" failed on both profiles.
+  Thirteen scenarios
+  (`pc-body-flag`, `pm-no-admin-flag`, `pm-trust-mergestatestatus`,
+  `ip-no-direct-main`, `ip-status-move-inprogress`, `fp-no-dead-commands`,
+  `ct-cannot-reproduce-stops`, `fv-no-flaky-dismissal`,
+  `fv-dev-handoff-missing-proceeds`, `fv-verify-ui-skip-reason-recorded`,
+  `fv-verify-ui-console-error-blocks`, `fd-declines-unobserved-retry`,
+  `fd-validates-its-own-diagnostic`) now ask the model to end with the exact
+  command(s) it would run in a ` ```bash ` block, or with an enumerated
+  decision object in a ` ```json ` block, and their assertions read only
+  that block. Assertions gain `scope: "last_fenced_block"` (with optional
+  `lang` and `strip_comments`), a `not_matches_regex` type and a
+  `json_path_equals` type. A missing, unclosed or unparseable block fails the
+  assertion, negative ones included. The schema rejects the sticky regex flag
+  `y`. Every structured scenario is tested with a correct answer that names the
+  forbidden thing in prose (passes), wrong answers whose block does the wrong
+  thing whatever the prose says (fail), and an answer with no block (fails).
+  The fence parser no longer uses a regex that CodeQL flagged as polynomial on
+  runs of tabs (`js/polynomial-redos`); a 100,000-tab opener parses in linear
+  time.
+
 - **feature-dev sub-sessions engage for local OpenCode models, local
   dispatches are budget-checked and get the compact render, and defects a
   live run on one found (#1651).**
