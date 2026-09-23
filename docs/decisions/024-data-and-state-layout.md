@@ -76,30 +76,33 @@ tree needs no rule at all.
 - **ESLint, Prettier and Renovate** each have one committed team config file; everything they
   cache or log lives elsewhere.
 
-### Decided in Phase 0
+### Implemented in Phase 0
 
-These decisions were taken in the Phase 0 issues and are recorded here as settled. This ADR
-merges after their pull requests; it describes the decisions and does not re-decide them.
+These decisions were taken and implemented in the Phase 0 issues, and are on `main`. This ADR
+records them as settled and does not re-decide them.
 
-- **Ignore rules from the Go binary** (#1090, #2026; merged in PR #2047): `nightgauge config init`
-  and `nightgauge serve` write `.nightgauge/.gitignore` from `internal/scaffold`'s embedded
-  template (version 15). When the committed file is tracked and older, it is left alone and the
-  current rules go to the common dir's `info/exclude` in a marked block. Version 15 ignores
+- **Ignore rules from the Go binary** (#1090, #2026; PR #2047): `nightgauge config init` and
+  `nightgauge serve` write `.nightgauge/.gitignore` from `internal/scaffold`'s embedded template
+  (version 15). When the committed file is tracked and older, it is left alone and the current
+  rules go to the common dir's `info/exclude` in a marked block. Version 15 ignores
   `/knowledge/`; § 12 keeps that default.
-- **Plaintext credentials refused in repository tiers** (#2023, #2024; pull request pending): the
-  loader rejects a plaintext `github_auth.token`, `github_auth.tokens.*` or
-  `platform.license_key` in `.nightgauge/config.yaml` or `.nightgauge/config.local.yaml`, and
-  accepts only `env:` references there. The machine-tier file gets one Go resolver,
-  `internal/configpath`. A `nightgauge doctor` check, `tracked_secrets`, reports a committed
-  credential with the value redacted.
-- **OS keychain store** (#2025, #2027; PR #2048): a Go package, `internal/keychain`, stores
-  credentials under service `nightgauge`, account = the credential's dotted machine-tier path
+- **Plaintext credentials refused in repository tiers** (#2023, #2024; PR #2049): the loader
+  rejects a plaintext `github_auth.token`, `github_auth.tokens.*` or `platform.license_key` in
+  `.nightgauge/config.yaml` or `.nightgauge/config.local.yaml`, and accepts only `env:` references
+  there. `internal/configpath` is the one Go resolver of the machine-tier file, and
+  `internal/credshape` is the one list of credential shapes that both the loader and `nightgauge
+doctor`'s `tracked_secrets` check read; that check reports a committed credential with the value
+  redacted.
+- **OS keychain store** (#2025, #2027; PR #2048): `internal/keychain` stores credentials under
+  service `nightgauge`, account = the credential's dotted machine-tier path
   (`platform.license_key`). License-key resolution is `NIGHTGAUGE_LICENSE_KEY`, then the keychain
   entry, then the 0600 machine-tier file. The keychain entry is the source of truth; the
-  extension's `SecretStorage` copy is trusted only while its fingerprint matches the one
-  `nightgauge auth license status` reports, and the extension writes the key by piping it to
-  `nightgauge auth license set` on stdin.
-- **Cache home** (PR #2020, merged): the GitHub conditional-request (ETag) store resolves to
+  extension's `SecretStorage` copy is trusted only while its fingerprint (the first 12 hex
+  characters of scrypt over the key with the salt `nightgauge/license-fingerprint/v1`) matches the
+  one `nightgauge auth license status` reports, and the extension writes the key by piping it to
+  `nightgauge auth license set` on stdin. The extension's startup migration of an existing key
+  reads only the machine tier: a key in the committed project config is never imported.
+- **Cache home** (PR #2020): the GitHub conditional-request (ETag) store resolves to
   `$NIGHTGAUGE_CACHE_HOME/github-conditional`, else
   `os.UserCacheDir()/nightgauge/github-conditional`.
 
@@ -147,7 +150,7 @@ default when the variable is unset. A `NIGHTGAUGE_*` override beats the XDG vari
 | Per-clone config                                                                                                                                  | `<repo>/.nightgauge/config.local.yaml`                                  | none                                          | no (ignored)               | the user; default UI write target · `internal/config`                         | kept                                                 | #2023                                   |
 | Credentials Nightgauge issues or receives (license key, device key)                                                                               | OS keychain, service `nightgauge`; fallback `CONFIG/config.yaml` (0600) | `NIGHTGAUGE_LICENSE_KEY`                      | never                      | `nightgauge auth license set` (stdin) · `internal/keychain`                   | until cleared                                        | #2025, #2027                            |
 | GitHub tokens                                                                                                                                     | gh's credential store; fallback `CONFIG/config.yaml` (0600)             | `GITHUB_TOKEN`, `GH_TOKEN`; `env:` refs       | never                      | `nightgauge forge auth login` / `refresh` (stdin to `gh`) · `internal/github` | until cleared                                        | #2023, #2024                            |
-| Every other credential (§ 5 list)                                                                                                                 | environment only                                                        | the named variable                            | never                      | the operator or CI                                                            | process lifetime                                     | #2023 (argv flag)                       |
+| Every other credential (§ 5 list)                                                                                                                 | environment only                                                        | the named variable                            | never                      | the operator or CI                                                            | process lifetime                                     | follow-up (argv flag)                   |
 | Credentials entered in the extension UI (webhooks, Slack, Mattermost, Gemini, platform tokens)                                                    | VS Code `SecretStorage`; handed to Go children in their environment     | none                                          | never                      | the extension                                                                 | until cleared                                        | settled                                 |
 | Caches (GitHub ETag store, recall index, any derived index)                                                                                       | `CACHE/<name>/`; recall at `CACHE/recall/<root-key>/`                   | `NIGHTGAUGE_CACHE_HOME`, `XDG_CACHE_HOME`     | never                      | the component that derives it · `internal/layout.CacheHome`                   | disposable; deleting it costs one rebuild            | PR #2020 (ETag); #2028                  |
 | Issue- and run-keyed pipeline data (`history/`, contexts, results, ADR-013 traces, `runtime-{issue}-{runId}.json`)                                | `CLONE/pipeline/`                                                       | none                                          | never                      | Go orchestrator and CLI · `internal/layout`                                   | history: `pipeline.logs.history_retention_days` (90) | #2033–#2037                             |
@@ -620,8 +623,9 @@ Where an issue body and this ADR differ, the ADR governs, and the issue is corre
 - **#2044:** extends the rule to code-supplying and credential-receiving URL settings (§ 14).
 - **#1883:** says to store the device key in `SecretStorage` as `startTrial` does; it must store
   it through the keychain entry (§ 5).
-- **#2025:** in CI (`CI=true`) no credential is written to disk (§ 5).
-- **#2023:** the `--api-key` flag that takes `NIGHTGAUGE_API_KEY` on argv is removed (§ 5).
+- **#2025 and #2023 (closed; their pull requests merged):** two rules in § 5 postdate them and
+  need a follow-up issue: in CI (`CI=true`) no credential is written to disk, and the `--api-key`
+  flag that takes `NIGHTGAUGE_API_KEY` on argv is removed.
 - **#2022 (this issue):** asks for machine state "under the XDG state directory on every OS";
   `XDG_STATE_HOME` is honoured on every OS when set, and the defaults are per platform (§ 8). It
   also asks for knowledge to follow the #1090 resolution; § 12 records why it does not.
