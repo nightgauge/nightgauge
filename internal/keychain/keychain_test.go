@@ -284,8 +284,10 @@ func TestKeychainSetRemovesPlaintextCopy(t *testing.T) {
 }
 
 func TestFingerprintIsStableAndShort(t *testing.T) {
-	// sha256("ib_live_abc") — pinned so the TypeScript side can compute the same.
-	if got := Fingerprint("ib_live_abc"); got != "d34399cf362c" || got == Fingerprint("ib_live_abd") {
+	// scrypt("ib_live_abc", fingerprintSalt, 32768, 8, 1, 32)[:12 hex] — the
+	// vector cmd/nightgauge/testdata/auth-license-contract.json pins, which
+	// the TypeScript side asserts too.
+	if got := Fingerprint("ib_live_abc"); got != "61ecedb83dd6" || got == Fingerprint("ib_live_abd") {
 		t.Fatalf("Fingerprint = %q", got)
 	}
 	if Fingerprint("") != "" {

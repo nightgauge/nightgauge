@@ -27,7 +27,7 @@
  */
 
 import { spawn as nodeSpawn } from "child_process";
-import { createHash } from "crypto";
+import { scrypt } from "crypto";
 import * as vscode from "vscode";
 import { BinaryResolver } from "./BinaryResolver";
 
@@ -44,8 +44,32 @@ export const LICENSE_CLEAR_ARGS: readonly string[] = [...LICENSE_COMMAND, "clear
 export const MANUAL_LICENSE_SET_COMMAND = "nightgauge auth license set";
 export const MANUAL_LICENSE_CLEAR_COMMAND = "nightgauge auth license clear";
 
-/** SecretStorage key recording the fingerprint last confirmed in the keychain. */
-export const LICENSE_SYNCED_FINGERPRINT_SECRET = "nightgauge.platform.licenseKeySyncedFingerprint";
+/**
+ * SecretStorage key recording the fingerprint last confirmed in the keychain.
+ * Versioned with the fingerprint scheme: a record from the earlier SHA-256
+ * scheme lives under the unversioned name and is ignored, which reads as "no
+ * recorded sync" and so never counts as evidence of rotation.
+ */
+export const LICENSE_SYNCED_FINGERPRINT_SECRET =
+  "nightgauge.platform.licenseKeySyncedFingerprint.scrypt-v1";
+/** The pre-scrypt record; only ever deleted. */
+export const LEGACY_LICENSE_SYNCED_FINGERPRINT_SECRET =
+  "nightgauge.platform.licenseKeySyncedFingerprint";
+
+/**
+ * The fingerprint KDF, identical to Go's keychain.Fingerprint: scrypt with a
+ * fixed domain-separation salt, N=32768, r=8, p=1, 32 bytes, first 12 hex.
+ * A slow KDF makes an offline guess against a stored or printed fingerprint
+ * expensive whatever the key's entropy. Changing any of these changes every
+ * fingerprint: bump the salt version and the record key above together.
+ */
+export const LICENSE_FINGERPRINT_SALT = "nightgauge/license-fingerprint/v1";
+export const LICENSE_FINGERPRINT_SCRYPT = {
+  N: 32768,
+  r: 8,
+  p: 1,
+  maxmem: 64 * 1024 * 1024,
+} as const;
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_OUTPUT = 8_192;
@@ -55,9 +79,18 @@ export function isWellFormedFingerprint(value: unknown): value is string {
   return typeof value === "string" && /^[0-9a-f]{12}$/.test(value);
 }
 
-/** Non-reversible key identifier; the same function as Go's keychain.Fingerprint. */
-export function licenseKeyFingerprint(key: string): string {
-  return key ? createHash("sha256").update(key).digest("hex").slice(0, 12) : "";
+/**
+ * Non-reversible key identifier; the same function as Go's
+ * keychain.Fingerprint. Asynchronous so the KDF runs off the extension host's
+ * main thread.
+ */
+export function licenseKeyFingerprint(key: string): Promise<string> {
+  if (!key) return Promise.resolve("");
+  return new Promise((resolve, reject) => {
+    scrypt(key, LICENSE_FINGERPRINT_SALT, 32, LICENSE_FINGERPRINT_SCRYPT, (err, derived) =>
+      err ? reject(err) : resolve(derived.toString("hex").slice(0, 12))
+    );
+  });
 }
 
 /** Where the binary put the key: the keychain, or the 0600 fallback file. */
@@ -135,7 +168,7 @@ export class LicenseKeychainBridge {
     if (result.code !== 0) {
       return this.fail("set", describeExit(result));
     }
-    if (parsed.fingerprint !== licenseKeyFingerprint(key)) {
+    if (parsed.fingerprint !== (await licenseKeyFingerprint(key))) {
       return this.fail("set", "the binary did not confirm the key it stored");
     }
     if (parsed.source === "machine-file") {
@@ -422,7 +455,7 @@ export async function persistLicenseKey(
   await secrets.setSecret(secretKey, key);
   const outcome = await bridge.store(key);
   if (outcome.ok) {
-    await secrets.setSecret(LICENSE_SYNCED_FINGERPRINT_SECRET, licenseKeyFingerprint(key));
+    await secrets.setSecret(LICENSE_SYNCED_FINGERPRINT_SECRET, await licenseKeyFingerprint(key));
   }
   return outcome;
 }
@@ -435,6 +468,7 @@ export async function forgetLicenseKey(
 ): Promise<boolean> {
   await secrets.deleteSecret(secretKey);
   await secrets.deleteSecret(LICENSE_SYNCED_FINGERPRINT_SECRET);
+  await secrets.deleteSecret(LEGACY_LICENSE_SYNCED_FINGERPRINT_SECRET);
   return (await bridge.clear()) !== null;
 }
 
@@ -457,7 +491,7 @@ export async function reconcileLicenseKey(
   if (!ext) return undefined;
   const status = await bridge.status();
   if (!status) return ext; // no usable binary: nothing to compare against
-  const fp = licenseKeyFingerprint(ext);
+  const fp = await licenseKeyFingerprint(ext);
   const push = () => persistLicenseKey(secrets, secretKey, ext, bridge);
 
   if (status.source === "none") {

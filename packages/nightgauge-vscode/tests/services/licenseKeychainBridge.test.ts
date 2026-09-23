@@ -11,9 +11,13 @@ import { EventEmitter } from "events";
 import * as fs from "fs";
 import * as path from "path";
 import type { spawn } from "child_process";
+import { scryptSync } from "crypto";
 import {
   LicenseKeychainBridge,
   LICENSE_CLEAR_ARGS,
+  LEGACY_LICENSE_SYNCED_FINGERPRINT_SECRET,
+  LICENSE_FINGERPRINT_SALT,
+  LICENSE_FINGERPRINT_SCRYPT,
   LICENSE_COMMAND,
   LICENSE_KEYCHAIN_ACCOUNT,
   LICENSE_KEYCHAIN_SERVICE,
@@ -35,7 +39,20 @@ const OLD_KEY = "ib_live_bridge_old_key";
 const SECRET_KEY = "nightgauge.platform.licenseKey";
 const MACHINE = "/machine/config.yaml";
 const PROJECT = "/workspace/.nightgauge/config.yaml";
-const fp = licenseKeyFingerprint;
+// A synchronous copy of the KDF for building fixtures; the contract test
+// below pins it and the production (async) function to the same vector.
+const fpCache = new Map<string, string>();
+const fp = (key: string): string => {
+  if (!fpCache.has(key)) {
+    fpCache.set(
+      key,
+      scryptSync(key, LICENSE_FINGERPRINT_SALT, 32, LICENSE_FINGERPRINT_SCRYPT)
+        .toString("hex")
+        .slice(0, 12)
+    );
+  }
+  return fpCache.get(key)!;
+};
 
 interface SpawnCall {
   binary: string;
@@ -195,7 +212,7 @@ describe("CLI contract (cmd/nightgauge/testdata/auth-license-contract.json)", ()
     outputs: Record<"set" | "status" | "clear", Record<string, unknown>>;
   };
 
-  it("uses the entry, subcommands and fingerprint the Go side pins", () => {
+  it("uses the entry, subcommands and fingerprint the Go side pins", async () => {
     expect(LICENSE_KEYCHAIN_SERVICE).toBe(contract.keychain.service);
     expect(LICENSE_KEYCHAIN_ACCOUNT).toBe(contract.keychain.account);
     expect([...LICENSE_COMMAND]).toEqual(contract.command);
@@ -205,7 +222,9 @@ describe("CLI contract (cmd/nightgauge/testdata/auth-license-contract.json)", ()
       expect(args.slice(0, 2)).toEqual(contract.command);
       expect(args[3]).toBe("--json");
     }
-    expect(licenseKeyFingerprint(contract.fingerprint.key)).toBe(contract.fingerprint.value);
+    expect(await licenseKeyFingerprint(contract.fingerprint.key)).toBe(contract.fingerprint.value);
+    expect(fp(contract.fingerprint.key)).toBe(contract.fingerprint.value);
+    expect(await licenseKeyFingerprint("")).toBe("");
   });
 
   it("parses the set, status and clear samples", async () => {
@@ -552,6 +571,24 @@ describe("reconcile never deletes the key without evidence of rotation", () => {
       expect(await migrateLicenseKeyAtStartup(d)).toBe(OLD_KEY);
       expect(secrets.deleteSecret).not.toHaveBeenCalled();
     }
+  });
+
+  // A record written by the earlier SHA-256 scheme lives under the legacy
+  // name and is ignored: that reads as "no recorded sync", never as evidence.
+  it("ignores a sync record from the pre-scrypt scheme", async () => {
+    const c = cli(KEY);
+    const { bridge, inform } = bridgeWith(c.reply);
+    const secrets = memSecrets({
+      [SECRET_KEY]: OLD_KEY,
+      [LEGACY_LICENSE_SYNCED_FINGERPRINT_SECRET]: "d34399cf362c",
+    });
+    const { d } = migrationDeps({}, secrets, bridge);
+
+    expect(await migrateLicenseKeyAtStartup(d)).toBe(OLD_KEY);
+
+    expect(secrets.deleteSecret).not.toHaveBeenCalled();
+    expect(c.state.key).toBe(KEY);
+    expect(inform).toHaveBeenCalledTimes(1);
   });
 
   it("keeps both keys when they differ but no sync was ever recorded", async () => {

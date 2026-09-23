@@ -175,8 +175,13 @@ nightgauge auth license clear                      # every stored copy; non-zero
 Each subcommand takes `--json`. The field names are a contract with the VS
 Code extension, pinned on both sides by
 `cmd/nightgauge/testdata/auth-license-contract.json`. The `fingerprint` field
-is the first 12 hex characters of the key's SHA-256: it identifies a key
-without revealing it.
+is the first 12 hex characters of
+`scrypt(key, "nightgauge/license-fingerprint/v1", N=32768, r=8, p=1, 32 bytes)`.
+It identifies a key without revealing it, and the slow KDF makes an offline
+guess against a printed or stored fingerprint expensive whatever the key's
+entropy. Changing the salt or any parameter changes every fingerprint; the
+extension versions its stored sync record with the scheme, so a record from
+an older scheme is ignored rather than read as a rotation.
 
 - `set` removes any plaintext copy from the machine-tier file once the
   keychain holds the key, so rotating the key never leaves the old one on

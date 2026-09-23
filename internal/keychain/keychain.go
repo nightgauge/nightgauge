@@ -33,7 +33,6 @@
 package keychain
 
 import (
-	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -47,6 +46,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/zalando/go-keyring"
+	"golang.org/x/crypto/scrypt"
 )
 
 const (
@@ -124,15 +124,26 @@ type Result struct {
 // later), so it is never followed by a plaintext fallback.
 var ErrTimeout = errors.New("the OS keychain did not respond")
 
+// fingerprintSalt domain-separates the fingerprint KDF. Changing it (or any
+// scrypt parameter below) changes every fingerprint: bump the version and the
+// extension's sync-record key together.
+const fingerprintSalt = "nightgauge/license-fingerprint/v1"
+
 // Fingerprint is a non-reversible identifier of a key: the first 12 hex
-// characters of its SHA-256. It lets two holders of a key compare copies
-// without either printing the key.
+// characters of scrypt(key, fingerprintSalt, N=32768, r=8, p=1, 32 bytes). It
+// lets two holders of a key compare copies without either printing the key,
+// and a slow KDF makes an offline guess against a printed or stored
+// fingerprint expensive whatever the key's entropy. The VS Code extension
+// computes the same function (licenseKeychainBridge.ts).
 func Fingerprint(key string) string {
 	if key == "" {
 		return ""
 	}
-	sum := sha256.Sum256([]byte(key))
-	return hex.EncodeToString(sum[:])[:12]
+	sum, err := scrypt.Key([]byte(key), []byte(fingerprintSalt), 32768, 8, 1, 32)
+	if err != nil {
+		return "" // unreachable: the parameters are valid constants
+	}
+	return hex.EncodeToString(sum)[:12]
 }
 
 // call runs fn with the store's timeout. A call that overruns is abandoned:

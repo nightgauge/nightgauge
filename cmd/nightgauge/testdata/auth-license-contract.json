@@ -3,13 +3,13 @@
   "keychain": { "service": "nightgauge", "account": "platform.license_key" },
   "command": ["auth", "license"],
   "subcommands": ["set", "status", "clear"],
-  "fingerprint": { "key": "ib_live_abc", "value": "d34399cf362c" },
+  "fingerprint": { "key": "ib_live_abc", "value": "61ecedb83dd6" },
   "outputs": {
     "set": {
       "source": "machine-file",
       "path": "/home/u/.config/nightgauge/config.yaml",
       "keychainError": "no secret service",
-      "fingerprint": "d34399cf362c",
+      "fingerprint": "61ecedb83dd6",
       "removedFileCopy": true
     },
     "status": {
@@ -17,7 +17,7 @@
       "path": "/home/u/.config/nightgauge/config.yaml",
       "keychainAvailable": true,
       "keychainError": "no secret service",
-      "fingerprint": "d34399cf362c"
+      "fingerprint": "61ecedb83dd6"
     },
     "clear": {
       "keychainCleared": true,
