@@ -171,6 +171,52 @@ func openCodeCompactionCount(path string) int {
 	return n
 }
 
+// stageContextProbe carries one stage attempt's context-telemetry baseline
+// (#1653) from before its session to after it. The zero value is an attempt
+// that ran no model session (a deterministic, refused or rate-limited arm).
+type stageContextProbe struct {
+	session           bool
+	eventsPath        string
+	eventsOK          bool
+	compactionsBefore int
+}
+
+// beginStageContext starts a session attempt's probe. The events file is per
+// run and per output file, so a retry of a stage appends to the file its
+// earlier attempts wrote: the baseline taken here makes the attempt's count
+// the file's growth across its own dispatch. Only OpenCode writes the file.
+func beginStageContext(adapterName, outputFile, runID string) stageContextProbe {
+	p := stageContextProbe{session: true}
+	if adapterName == "opencode" {
+		p.eventsPath, p.eventsOK = opencodeplugin.EventsPath(outputFile, runID)
+	}
+	if p.eventsOK {
+		p.compactionsBefore = openCodeCompactionCount(p.eventsPath)
+	}
+	return p
+}
+
+// record replaces the stage's context entry with this attempt's: the
+// result's peak, the dispatch window and the compaction delta for a session
+// attempt, and an empty entry, which clears the stage's, for an attempt that
+// ran no session.
+func (p stageContextProbe) record(rt *state.RuntimeState, stage state.PipelineStage, result *StageRunResult, window int) {
+	if !p.session {
+		rt.RecordStageContext(stage, 0, 0, nil)
+		return
+	}
+	var compactions *int
+	if p.eventsOK {
+		n := max(openCodeCompactionCount(p.eventsPath)-p.compactionsBefore, 0)
+		compactions = &n
+	}
+	peak := 0
+	if result != nil {
+		peak = result.PeakStepInputTokens
+	}
+	rt.RecordStageContext(stage, peak, window, compactions)
+}
+
 // StageRunResult is the cross-mode stage execution result.
 type StageRunResult struct {
 	ExitCode int
@@ -5803,6 +5849,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// block below short-circuits this to the environmental recovery path
 		// (#3896) via a github-quota-low marker. Issue #3976.
 		prStageRateLimited := mergeRateLimited || createRateLimited
+		var ctxProbe stageContextProbe // zero: this attempt ran no session
 		switch {
 		case deterministicMerged || deterministicCreated:
 			result = &StageRunResult{ExitCode: 0}
@@ -5818,18 +5865,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			result = &StageRunResult{ExitCode: 1}
 			stageRunErr = fmt.Errorf("github-quota-low: %s deterministic path rate-limited; deferring until GitHub bucket reset (LLM fallback skipped to avoid quota/token burn) [#3976]", stage)
 		default:
-			// Compaction baseline (#1653): the events file is per run and per
-			// output file, so a retry of this stage appends to the file its
-			// earlier attempts wrote. This attempt's count is the growth
-			// across its own dispatch.
-			eventsPath, eventsOK := "", false
-			if adapterName == "opencode" {
-				eventsPath, eventsOK = opencodeplugin.EventsPath(outputFile, runtime.RunID)
-			}
-			compactionsBefore := 0
-			if eventsOK {
-				compactionsBefore = openCodeCompactionCount(eventsPath)
-			}
+			// Context-window telemetry baseline (#1653), taken before the
+			// session so its compaction count is this attempt's alone.
+			ctxProbe = beginStageContext(adapterName, outputFile, runtime.RunID)
 			// Wrap the stage context so CancelAllForNetworkOutage can abort
 			// this LLM subprocess directly when the TS watchdog detects an
 			// extended connectivity outage (Issue #3296).
@@ -5849,23 +5887,14 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				stageRunErr = ErrNetworkUnavailable
 			}
 			cancelStage(nil) // release ctx resources
-
-			// Context-window telemetry (#1653), recorded for every session
-			// attempt so a retry on another adapter replaces the last one.
-			// The window is the one this dispatch ran with: the registry
-			// context_window for a hosted id, or the limit.context the
-			// OpenCode run config was built with for a local model.
-			var compactions *int
-			if eventsOK {
-				n := max(openCodeCompactionCount(eventsPath)-compactionsBefore, 0)
-				compactions = &n
-			}
-			peak := 0
-			if result != nil {
-				peak = result.PeakStepInputTokens
-			}
-			runtime.RecordStageContext(stage, peak, skillData.ContextWindow, compactions)
 		}
+		// Every arm records this attempt's context telemetry, so a retry that
+		// took a deterministic, refused or rate-limited arm clears what an
+		// earlier session attempt left (#1653). The window is the one this
+		// dispatch ran with: the registry context_window for a hosted id, or
+		// the limit.context the OpenCode run config was built with for a
+		// local model.
+		ctxProbe.record(runtime, stage, result, skillData.ContextWindow)
 		err = stageRunErr
 
 		exitCode := 0
