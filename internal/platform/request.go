@@ -54,6 +54,14 @@ const (
 // exactly these two ("License key (ib_live_*, ib_ci_*) or JWT session token").
 var licenseKeyPrefixes = []string{"ib_live_", "ib_ci_"}
 
+// LicenseKeyPrefixes returns the license-key prefixes the platform issues, for
+// callers that recognise a key by shape without classifying a bearer (the
+// doctor's tracked-credential scan). A copy, so the parser's list cannot be
+// changed from outside.
+func LicenseKeyPrefixes() []string {
+	return append([]string(nil), licenseKeyPrefixes...)
+}
+
 // credentialKindOf classifies a bearer string by shape.
 //
 // A JWT is three base64url segments separated by dots; a license key carries

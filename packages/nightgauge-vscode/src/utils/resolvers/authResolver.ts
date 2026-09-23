@@ -12,6 +12,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { resolveConfigPathSync, logDeprecationWarning } from "../configPathResolver";
+import { getGlobalConfigPath, getPlatform } from "../globalConfigResolver";
 
 /**
  * Auth provider type for Claude API backend
@@ -130,7 +131,6 @@ export function getGitHubUser(workspaceRoot?: string): string | null {
   const root = workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (!root) return null;
 
-  const os = require("os") as typeof import("os");
   const configPaths: string[] = [];
 
   // Local (.nightgauge/config.local.yaml) first — highest precedence and
@@ -148,7 +148,7 @@ export function getGitHubUser(workspaceRoot?: string): string | null {
   if (pathResult.exists) {
     configPaths.push(pathResult.path);
   }
-  const globalConfig = path.join(os.homedir(), ".nightgauge", "config.yaml");
+  const globalConfig = machineConfigPathInUse();
   if (fs.existsSync(globalConfig)) {
     configPaths.push(globalConfig);
   }
@@ -241,6 +241,45 @@ export function expandEnvVar(value: string): string | null {
 }
 
 /**
+ * The machine-tier file the Go loader reads, resolved the same way
+ * (internal/configpath): NIGHTGAUGE_CONFIG_HOME, then XDG_CONFIG_HOME, then
+ * the platform default (~/.nightgauge on macOS, ~/.config/nightgauge on Linux,
+ * %APPDATA%\nightgauge on Windows) — or, on Linux with no override, the legacy
+ * ~/.nightgauge/config.yaml when only that file exists.
+ */
+export function machineConfigPathInUse(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = getPlatform()
+): string {
+  const canonical = getGlobalConfigPath(env, platform);
+  if (
+    platform === "linux" &&
+    !env.NIGHTGAUGE_CONFIG_HOME &&
+    !env.XDG_CONFIG_HOME &&
+    !fs.existsSync(canonical)
+  ) {
+    const os = require("os") as typeof import("os");
+    const legacy = path.join(os.homedir(), ".nightgauge", "config.yaml");
+    if (fs.existsSync(legacy)) return legacy;
+  }
+  return canonical;
+}
+
+/**
+ * Resolve one configured token value from the tier it was read from.
+ *
+ * The repository tiers (`.nightgauge/config.yaml`, `.nightgauge/config.local.yaml`)
+ * accept only an `env:VAR_NAME` reference, matching the Go loader, which
+ * refuses a literal there. A literal in a repository tier is ignored rather
+ * than exported as GH_TOKEN. The machine file accepts a literal.
+ */
+function readTierTokenValue(rawValue: string, isMachineTier: boolean): string | null {
+  const value = rawValue.replace(/^['"]|['"]$/g, "").trim();
+  if (!isMachineTier && !value.startsWith("env:")) return null;
+  return expandEnvVar(value);
+}
+
+/**
  * Read the project-level GitHub auth token from config.yaml.
  *
  * Reads `github_auth.token` from workspace config first, then global config.
@@ -250,9 +289,8 @@ export function expandEnvVar(value: string): string | null {
  * Example config.yaml:
  * ```yaml
  * github_auth:
- *   token: ghp_abc123       # literal PAT
- *   # or:
  *   token: env:MY_PAT       # resolved from process.env.MY_PAT
+ *   # a literal PAT is honoured only in the machine file (~/.nightgauge/config.yaml)
  * ```
  *
  * @param workspaceRoot - Workspace root path (optional, auto-detected)
@@ -265,15 +303,15 @@ export function getGitHubAuthToken(workspaceRoot?: string): string | null {
   const root = workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (!root) return null;
 
-  const os = require("os") as typeof import("os");
   const configPaths: string[] = [];
 
   // Tier 4 (highest precedence): local developer overrides at
-  // .nightgauge/config.local.yaml — gitignored (see ensureGitignore.ts),
-  // the secret-safe place for a per-repo GitHub token. Checked BEFORE the
-  // committed project config.yaml and the machine config so a per-repo token
-  // wins. This is what lets concurrent sessions/workspaces owned by different
-  // GitHub users share one machine, each gh call using that repo's own token.
+  // .nightgauge/config.local.yaml — gitignored (see ensureGitignore.ts).
+  // Checked BEFORE the committed project config.yaml and the machine config so
+  // a per-repo token wins. This is what lets concurrent sessions/workspaces
+  // owned by different GitHub users share one machine, each gh call using that
+  // repo's own token. Both repository tiers accept only `env:` references
+  // (see readTierTokenValue); a literal token belongs in the machine file.
   const localConfig = path.join(root, ".nightgauge", "config.local.yaml");
   if (fs.existsSync(localConfig)) {
     configPaths.push(localConfig);
@@ -283,7 +321,7 @@ export function getGitHubAuthToken(workspaceRoot?: string): string | null {
   if (pathResult.exists) {
     configPaths.push(pathResult.path);
   }
-  const globalConfig = path.join(os.homedir(), ".nightgauge", "config.yaml");
+  const globalConfig = machineConfigPathInUse();
   if (fs.existsSync(globalConfig)) {
     configPaths.push(globalConfig);
   }
@@ -317,7 +355,7 @@ export function getGitHubAuthToken(workspaceRoot?: string): string | null {
         if (inGithubAuth && trimmed.startsWith("token:")) {
           const rawValue = trimmed.replace("token:", "").trim();
           if (rawValue) {
-            return expandEnvVar(rawValue);
+            return readTierTokenValue(rawValue, configPath === globalConfig);
           }
         }
       }
@@ -339,8 +377,8 @@ export function getGitHubAuthToken(workspaceRoot?: string): string | null {
  * ```yaml
  * github_auth:
  *   tokens:
- *     acme: ghp_abc123        # literal PAT for org "acme"
  *     myorg: env:MYORG_PAT    # resolved from process.env.MYORG_PAT
+ *     acme: ghp_abc123        # literal: honoured only in the machine file
  * ```
  *
  * @param workspaceRoot - Workspace root path (optional, auto-detected)
@@ -353,15 +391,15 @@ export function getGitHubAuthTokens(workspaceRoot?: string): Record<string, stri
   const root = workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (!root) return {};
 
-  const os = require("os") as typeof import("os");
   const configPaths: string[] = [];
 
   // Tier 4 (highest precedence): local developer overrides at
-  // .nightgauge/config.local.yaml — gitignored (see ensureGitignore.ts),
-  // the secret-safe place for a per-repo GitHub token. Checked BEFORE the
-  // committed project config.yaml and the machine config so a per-repo token
-  // wins. This is what lets concurrent sessions/workspaces owned by different
-  // GitHub users share one machine, each gh call using that repo's own token.
+  // .nightgauge/config.local.yaml — gitignored (see ensureGitignore.ts).
+  // Checked BEFORE the committed project config.yaml and the machine config so
+  // a per-repo token wins. This is what lets concurrent sessions/workspaces
+  // owned by different GitHub users share one machine, each gh call using that
+  // repo's own token. Both repository tiers accept only `env:` references
+  // (see readTierTokenValue); a literal token belongs in the machine file.
   const localConfig = path.join(root, ".nightgauge", "config.local.yaml");
   if (fs.existsSync(localConfig)) {
     configPaths.push(localConfig);
@@ -371,7 +409,7 @@ export function getGitHubAuthTokens(workspaceRoot?: string): Record<string, stri
   if (pathResult.exists) {
     configPaths.push(pathResult.path);
   }
-  const globalConfig = path.join(os.homedir(), ".nightgauge", "config.yaml");
+  const globalConfig = machineConfigPathInUse();
   if (fs.existsSync(globalConfig)) {
     configPaths.push(globalConfig);
   }
@@ -423,7 +461,7 @@ export function getGitHubAuthTokens(workspaceRoot?: string): Record<string, stri
           if (match) {
             const owner = match[1];
             const rawValue = match[2].trim();
-            const resolved = expandEnvVar(rawValue);
+            const resolved = readTierTokenValue(rawValue, configPath === globalConfig);
             if (resolved && !result[owner]) {
               result[owner] = resolved;
             }

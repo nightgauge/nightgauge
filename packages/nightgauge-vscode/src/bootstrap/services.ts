@@ -125,6 +125,7 @@ import { IpcClient } from "../services/IpcClient";
 import { SecretStorageService, SECRET_KEYS } from "../services/SecretStorageService";
 import { getGlobalConfigPath } from "../utils/globalConfigResolver";
 import {
+  extractLicenseKeyLine,
   migrateLicenseKeyAtStartup,
   setLicenseReconciliation,
   vscodeLicenseKeychainBridge,
@@ -507,11 +508,12 @@ export async function initializeServices(
   // The license key lives in SecretStorage for the extension's runtime
   // readers (LicensePreflight, forwardPlatformEnv) and in the Go binary's
   // OS-keychain entry for the CLI and a terminal-started daemon, written
-  // through `nightgauge auth license set` (licenseKeychainBridge). On startup
-  // migrateLicenseKeyAtStartup strips any key from the committed project
-  // config, moves a machine-config key into both stores (deleting the YAML
-  // line only once the keychain holds it), and copies an already-migrated
-  // SecretStorage key to the keychain when the CLI has none.
+  // through `nightgauge auth license set` (licenseKeychainBridge). On startup:
+  //   1. Warn about a license key embedded in the PROJECT config.yaml, and
+  //      never import it (#2023): a repository file must not choose the key.
+  //   2. migrateLicenseKeyAtStartup moves a MACHINE-config key into both
+  //      stores (deleting the YAML line only once the keychain holds it) and
+  //      reconciles SecretStorage with the keychain entry (#2027).
   // Cache the resolved key for sync consumers (LicensePreflight, TelemetryUploader).
   let cachedLicenseKey: string | undefined;
 
@@ -520,14 +522,32 @@ export async function initializeServices(
     const reconciliation = (async () => {
       const fsLib = await import("fs");
       const pathLib = await import("path");
+
+      // 1. A key in the project config is never imported (#2023): the file
+      //    comes from the repository, so importing it would let any clone
+      //    replace the operator's key. Tell the user to remove it instead; the
+      //    binary refuses the config until they do.
+      if (primaryWorkspaceForMigration) {
+        const cfgPath = pathLib.join(primaryWorkspaceForMigration, ".nightgauge", "config.yaml");
+        if (fsLib.existsSync(cfgPath)) {
+          const { key: foundKey } = extractLicenseKeyLine(fsLib.readFileSync(cfgPath, "utf-8"));
+          if (foundKey) {
+            void vscode.window.showWarningMessage(
+              "Nightgauge: .nightgauge/config.yaml sets platform.license_key. It was not imported: " +
+                "a repository file must not supply your license key. Remove the line, rotate the " +
+                "key if it was ever committed, and set your own key in Nightgauge settings."
+            );
+          }
+        }
+      }
+
+      // 2. Seed SecretStorage from the machine config when it has no value
+      //    yet, store it in the keychain, and reconcile the two stores.
       cachedLicenseKey = await migrateLicenseKeyAtStartup({
         fs: fsLib,
         secrets: secretService,
         bridge: vscodeLicenseKeychainBridge(),
         secretKey: SECRET_KEYS.platformLicenseKey,
-        projectConfigPath: primaryWorkspaceForMigration
-          ? pathLib.join(primaryWorkspaceForMigration, ".nightgauge", "config.yaml")
-          : undefined,
         machineConfigPath: getGlobalConfigPath(),
       });
     })();

@@ -38,7 +38,6 @@ const KEY = "ib_live_bridge_test_key";
 const OLD_KEY = "ib_live_bridge_old_key";
 const SECRET_KEY = "nightgauge.platform.licenseKey";
 const MACHINE = "/machine/config.yaml";
-const PROJECT = "/workspace/.nightgauge/config.yaml";
 // A synchronous copy of the KDF for building fixtures; the contract test
 // below pins it and the production (async) function to the same vector.
 const fpCache = new Map<string, string>();
@@ -190,7 +189,6 @@ function migrationDeps(
     secrets,
     bridge,
     secretKey: SECRET_KEY,
-    projectConfigPath: PROJECT,
     machineConfigPath: MACHINE,
   };
   return { d, store: mem.store };
@@ -451,21 +449,20 @@ describe("migrateLicenseKeyAtStartup", () => {
     expect(store.get(MACHINE)).toBe(machineYaml);
   });
 
-  it("strips a committed project key and stores it in both places", async () => {
-    const c = cli();
-    const { bridge, calls } = bridgeWith(c.reply);
+  // #2023: only the machine tier is a migration source; the startup code
+  // warns about a project-tier key and never passes it here.
+  it("never reads a project config, so a repository file can never supply the key", async () => {
+    const project = "/workspace/.nightgauge/config.yaml";
+    const projectYaml = `platform:\n  license_key: ${KEY}\n`;
+    const { bridge, calls } = bridgeWith(cli().reply);
     const secrets = memSecrets();
-    const { d, store } = migrationDeps(
-      { [PROJECT]: `platform:\n  license_key: ${KEY}\n` },
-      secrets,
-      bridge
-    );
+    const { d, store } = migrationDeps({ [project]: projectYaml }, secrets, bridge);
 
-    expect(await migrateLicenseKeyAtStartup(d)).toBe(KEY);
+    expect(await migrateLicenseKeyAtStartup(d)).toBeUndefined();
 
-    expect(store.get(PROJECT)).not.toContain(KEY);
-    expect(secrets.map.get(SECRET_KEY)).toBe(KEY);
-    expect(calls[0].stdin).toBe(KEY);
+    expect(secrets.setSecret).not.toHaveBeenCalled();
+    expect(calls).toHaveLength(0);
+    expect(store.get(project)).toBe(projectYaml);
   });
 
   it("copies an already-migrated SecretStorage key to the keychain when the CLI has none", async () => {

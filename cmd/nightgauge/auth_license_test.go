@@ -353,20 +353,3 @@ func TestAuthLicenseClearRemovesLocalTierKey(t *testing.T) {
 		t.Fatalf("local tier after clear:\n%s", data)
 	}
 }
-
-func TestConfigShowNotesIgnoredLicenseKey(t *testing.T) {
-	wd := t.TempDir()
-	project := config.ProjectConfigPath(wd)
-	if err := os.MkdirAll(filepath.Dir(project), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(project, []byte("platform:\n  license_key: ib_live_project\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	var buf bytes.Buffer
-	warnIgnoredLicenseKeys(&buf, wd)
-	if !strings.Contains(buf.String(), project) || !strings.Contains(buf.String(), "ignored") ||
-		strings.Contains(buf.String(), "ib_live_project") {
-		t.Fatalf("note = %q", buf.String())
-	}
-}

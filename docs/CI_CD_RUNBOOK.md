@@ -18,13 +18,15 @@ CI/CD environments typically lack the `gh` CLI. Without a configured token, the
 pipeline will fail with:
 
 ```
-warning: Using gh CLI for token resolution — configure github_auth.token in config.yaml for reliable multi-org support
+warning: Using gh CLI for token resolution — for reliable multi-org support set github_auth.token (or github_auth.tokens.<owner>) in /home/runner/.config/nightgauge/config.yaml, or reference an environment variable from any tier with `token: env:VAR_NAME`
 no GitHub token available (tried config, GITHUB_TOKEN env, and gh CLI): gh auth token: ...
 ```
 
 The solution is to configure `github_auth.token` (or `github_auth.tokens[owner]`
 for multi-org) with an `env:VAR_NAME` reference, and set that variable as a
-secret in your CI/CD system.
+secret in your CI/CD system. The repository's config files accept only the
+`env:` form; a literal token there fails the load
+([CONFIGURATION.md § Where a token may live](./CONFIGURATION.md#where-a-token-may-live)).
 
 ---
 

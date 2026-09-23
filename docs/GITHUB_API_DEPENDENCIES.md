@@ -312,7 +312,8 @@ table to ensure your Personal Access Token (PAT) includes the required scopes.
 ### Token Configuration
 
 Configure tokens in `.nightgauge/config.yaml` using the `github_auth`
-section. See [CONFIGURATION.md § github_auth](CONFIGURATION.md#github_auth) for
+section, as `env:VAR_NAME` references (a literal token is accepted only in the
+machine-tier file). See [CONFIGURATION.md § github_auth](CONFIGURATION.md#github_auth) for
 single-org and multi-org setup guides.
 
 For CI/CD environments, see [CI/CD Runbook](./CI_CD_RUNBOOK.md).

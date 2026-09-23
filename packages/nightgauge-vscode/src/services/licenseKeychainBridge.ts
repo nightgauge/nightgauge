@@ -415,8 +415,6 @@ export interface LicenseMigrationDeps {
   bridge: BridgeLike;
   /** SecretStorage key of the license key. */
   secretKey: string;
-  /** The workspace's committed .nightgauge/config.yaml, when there is a workspace. */
-  projectConfigPath?: string;
   /** The machine-tier config file. */
   machineConfigPath: string;
   log?: (message: string) => void;
@@ -553,27 +551,20 @@ export async function reconcileLicenseKey(
  * Startup license-key migration and reconciliation. Returns the key the
  * extension should use.
  *
- *  1. A key in the committed project config is stripped from the file and
- *     stored in SecretStorage and the CLI's store.
- *  2. A key only in the machine-tier file is stored in SecretStorage and the
+ * Only the machine tier is a migration source. A key in the committed
+ * project config is never imported (#2023): a repository file must not choose
+ * the operator's key; the caller warns about it instead.
+ *
+ *  1. A key only in the machine-tier file is stored in SecretStorage and the
  *     CLI's store. The binary removes the plaintext line once the keychain
  *     holds the key; a failed write leaves the file untouched, so the CLI
  *     never ends up with no key.
- *  3. Otherwise SecretStorage and the CLI are reconciled.
+ *  2. Otherwise SecretStorage and the CLI are reconciled.
  */
 export async function migrateLicenseKeyAtStartup(
   deps: LicenseMigrationDeps
 ): Promise<string | undefined> {
   const { fs, secrets, bridge, secretKey } = deps;
-
-  if (deps.projectConfigPath) {
-    const project = readLicenseLine(fs, deps.projectConfigPath);
-    if (project?.key) {
-      removeLicenseLine(fs, deps.projectConfigPath, project.key);
-      await persistLicenseKey(secrets, secretKey, project.key, bridge);
-      return project.key;
-    }
-  }
 
   if (!(await secrets.getSecret(secretKey))) {
     const machine = readLicenseLine(fs, deps.machineConfigPath);

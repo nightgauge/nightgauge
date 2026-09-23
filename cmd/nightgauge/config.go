@@ -5,14 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	gh "github.com/nightgauge/nightgauge/internal/github"
-	"github.com/nightgauge/nightgauge/internal/keychain"
 	"github.com/nightgauge/nightgauge/internal/scaffold"
 	"github.com/spf13/cobra"
 )
@@ -99,7 +97,6 @@ excluded until #3313 Phase 3 wires runtime enforcement to the Go side.`,
 				return err
 			}
 			fmt.Fprint(cmd.OutOrStdout(), out)
-			warnIgnoredLicenseKeys(cmd.ErrOrStderr(), workdir)
 			return nil
 		},
 	}
@@ -249,6 +246,18 @@ Exits non-zero when validation errors are found.`,
 			cfg, err := config.LoadYAML(configPath)
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
+			}
+			// Any file but the machine tier is repository-controlled: hold it
+			// to the rule the loader enforces, so validate never passes a file
+			// every other command refuses (#2023).
+			// ValidateRepoTierSecrets accepts the machine-tier file itself
+			// (canonical or legacy, compared after resolving symlinks).
+			data, rerr := os.ReadFile(configPath)
+			if rerr != nil {
+				return fmt.Errorf("load config: %w", rerr)
+			}
+			if verr := config.ValidateRepoTierSecrets(data, configPath); verr != nil {
+				return verr
 			}
 
 			var repos map[string]*config.RepositoryConfig
@@ -571,16 +580,4 @@ func emitInitJSON(cmd *cobra.Command, path string, wrote bool, ignore *scaffold.
 	enc := json.NewEncoder(cmd.OutOrStdout())
 	enc.SetIndent("", "  ")
 	return enc.Encode(payload)
-}
-
-// warnIgnoredLicenseKeys notes a platform.license_key in the project or local
-// tier: the merged view shows it, but the CLI and daemon never read it (they
-// resolve NIGHTGAUGE_LICENSE_KEY, the OS keychain, then the machine tier).
-func warnIgnoredLicenseKeys(w io.Writer, workdir string) {
-	for _, path := range []string{config.ProjectConfigPath(workdir), config.LocalConfigPath(workdir)} {
-		if v, _ := config.ReadFileString(path, keychain.AccountLicenseKey); v != "" {
-			fmt.Fprintf(w, "note: platform.license_key in %s is ignored; store the key with "+
-				"`nightgauge auth license set` and remove it from that file\n", path)
-		}
-	}
 }
