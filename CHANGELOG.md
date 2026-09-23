@@ -446,6 +446,15 @@ create --body-file` call, so the compact profile (and its tests) pin
 
 ### Changed
 
+- **The VS Code extension builds every per-clone path through one helper
+  (#2036).** `src/utils/cloneLayout.ts` exports `pipelineStateDir`,
+  `plansDir`, `retrosDir` and `cloneLogsDir`, mirroring the Go class
+  resolvers of ADR-024, and every extension caller now uses them instead of
+  joining `.nightgauge` and a class name by hand. The locations do not move:
+  each helper still returns `<root>/.nightgauge/<class>`. The helpers refuse
+  an empty or relative workspace root, so no path resolves against the
+  extension host's working directory.
+
 - **Security: the config loader refuses a plaintext GitHub token or license
   key in the repository's config files (#2023).** A literal
   `github_auth.token`, `github_auth.tokens.<owner>` or `platform.license_key`

@@ -3,20 +3,20 @@
  * recommendation-outcome JSONL streams to the platform telemetry endpoints.
  *
  * Streams:
- *   - `pipeline-run`: daily JSONL files in `.nightgauge/pipeline/history/`
+ *   - `pipeline-run`: daily JSONL files in `pipelineStateDir(root)/history/`
  *                     → POST /v1/telemetry/pipeline-run
- *   - `health`:       single file `.nightgauge/pipeline/health-history.jsonl`
+ *   - `health`:       single file `pipelineStateDir(root)/health-history.jsonl`
  *                     → POST /v1/telemetry/health-snapshot
- *   - `recommendation`: single file `.nightgauge/pipeline/recommendation-history.jsonl`
+ *   - `recommendation`: single file `pipelineStateDir(root)/recommendation-history.jsonl`
  *                       → POST /v1/telemetry/recommendation-outcome
  *                       (only finalized records where `metric_after` is populated)
- *   - `trace`:        per-run JSONL files in `.nightgauge/pipeline/trace/`
+ *   - `trace`:        per-run JSONL files in `pipelineStateDir(root)/trace/`
  *                     → POST /v1/telemetry/pipeline-trace
  *                     (lifecycle decision trace, ADR 013 / Issue #180; events
  *                     upload verbatim — the (run_id, producer, seq) key makes
  *                     re-upload idempotent server-side)
  *
- * Maintains a per-file upload cursor at `.nightgauge/pipeline/.upload-watermarks.json`.
+ * Maintains a per-file upload cursor at `pipelineStateDir(root)/.upload-watermarks.json`.
  * Each cursor is a line count PLUS an anchor digest of the last uploaded line,
  * so a rotated / pruned / truncated file is detected instead of silently
  * yielding an empty slice forever (#1173). POSTs batches respecting per-stream
@@ -32,6 +32,7 @@
  * @see Issue #1173 — A watermark past EOF silently killed the stream
  */
 
+import { pipelineStateDir, RELATIVE_PIPELINE_STATE_DIR } from "../utils/cloneLayout";
 import * as vscode from "vscode";
 import * as path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
@@ -87,15 +88,14 @@ const RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 16000, 60000];
  */
 const MAX_REJECTION_RETRY_CYCLES = 5;
 const WATERMARK_FILENAME = ".upload-watermarks.json";
-const HISTORY_SUBDIR = path.join(".nightgauge", "pipeline", "history");
 
 /**
  * A daily run-history file: `YYYY-MM-DD.jsonl`. Mirrors the Go reader's
  * `parseDailyHistoryDate` on the same directory (#1023).
  */
 const DAILY_HISTORY_FILE = /^\d{4}-\d{2}-\d{2}\.jsonl$/u;
-const TRACE_SUBDIR = path.join(".nightgauge", "pipeline", "trace");
-const WATERMARK_SUBDIR = path.join(".nightgauge", "pipeline");
+/** Root-relative trace dir; a trace stream's `filePath` is keyed relative to the root. */
+const TRACE_SUBDIR = path.join(RELATIVE_PIPELINE_STATE_DIR, "trace");
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -185,14 +185,14 @@ type TelemetryBatch = unknown[];
 
 const HEALTH_STREAM_CONFIG: StreamConfig = {
   stream: "health",
-  filePath: path.join(".nightgauge", "pipeline", "health-history.jsonl"),
+  filePath: path.join(RELATIVE_PIPELINE_STATE_DIR, "health-history.jsonl"),
   endpoint: "/v1/telemetry/health-snapshot",
   maxBatchSize: MAX_BATCH_SIZE_HEALTH,
 };
 
 const RECOMMENDATION_STREAM_CONFIG: StreamConfig = {
   stream: "recommendation",
-  filePath: path.join(".nightgauge", "pipeline", "recommendation-history.jsonl"),
+  filePath: path.join(RELATIVE_PIPELINE_STATE_DIR, "recommendation-history.jsonl"),
   endpoint: "/v1/telemetry/recommendation-outcome",
   maxBatchSize: MAX_BATCH_SIZE_RECOMMENDATION,
   filterRecord: (r) => r["metric_after"] != null,
@@ -746,7 +746,7 @@ export class TelemetryUploaderService implements vscode.Disposable {
   }
 
   /**
-   * Scan a single repo root's `.nightgauge/pipeline/history/` directory and
+   * Scan a single repo root's `pipelineStateDir(root)/history/` directory and
    * upload any unwatermarked lines. Extracted from the (formerly
    * single-root) `uploadPipelineRunStream` so it can be run once per
    * workspace repo root (#247).
@@ -755,8 +755,8 @@ export class TelemetryUploaderService implements vscode.Disposable {
     token: string,
     root: string
   ): Promise<{ uploaded: number; skipped: boolean; aborted: boolean; rotated: boolean }> {
-    const historyDirUri = vscode.Uri.file(path.join(root, HISTORY_SUBDIR));
-    const watermarkUri = vscode.Uri.file(path.join(root, WATERMARK_SUBDIR, WATERMARK_FILENAME));
+    const historyDirUri = vscode.Uri.file(path.join(pipelineStateDir(root), "history"));
+    const watermarkUri = vscode.Uri.file(path.join(pipelineStateDir(root), WATERMARK_FILENAME));
 
     // Enumerate JSONL files
     let entries: [string, vscode.FileType][];
@@ -769,7 +769,7 @@ export class TelemetryUploaderService implements vscode.Disposable {
 
     // Date-stamped daily history files ONLY (#1023).
     //
-    // `.nightgauge/pipeline/history/` is not exclusively run history: the
+    // `pipelineStateDir(root)/history/` is not exclusively run history: the
     // learning corpus (`outcomes.jsonl`) and other non-run journals are
     // co-located there by their own writers. A bare `.jsonl` suffix test fed
     // every one of them to a run-record mapper they can never satisfy — each
@@ -801,7 +801,7 @@ export class TelemetryUploaderService implements vscode.Disposable {
       // day. Qualify the poison-message retry counter by root so a stuck
       // file in one repo can never bleed its cycle count into another.
       const retryKey = `${root}::${filename}`;
-      const fileUri = vscode.Uri.file(path.join(root, HISTORY_SUBDIR, filename));
+      const fileUri = vscode.Uri.file(path.join(pipelineStateDir(root), "history", filename));
 
       // Size guard — skip files larger than 10 MB
       try {
@@ -1044,7 +1044,7 @@ export class TelemetryUploaderService implements vscode.Disposable {
 
   /**
    * Upload the lifecycle trace stream (ADR 013 / Issue #180): every per-run
-   * JSONL under `.nightgauge/pipeline/trace/` uploads verbatim through the
+   * JSONL under `pipelineStateDir(root)/trace/` uploads verbatim through the
    * consolidated-stream driver (per-file watermark keyed by the run-id
    * filename; server-side (run_id, producer, seq) idempotency makes any
    * re-send harmless). Scans every workspace repo root (#247) — trace files
@@ -1058,7 +1058,7 @@ export class TelemetryUploaderService implements vscode.Disposable {
     let anyRotated = false;
 
     for (const root of this.resolveHistoryScanRoots()) {
-      const traceDirUri = vscode.Uri.file(path.join(root, TRACE_SUBDIR));
+      const traceDirUri = vscode.Uri.file(path.join(pipelineStateDir(root), "trace"));
 
       let entries: [string, vscode.FileType][];
       try {
@@ -1119,7 +1119,7 @@ export class TelemetryUploaderService implements vscode.Disposable {
      */
     root: string = this.nightgaugeRoot
   ): Promise<StreamSummary> {
-    const watermarkUri = vscode.Uri.file(path.join(root, WATERMARK_SUBDIR, WATERMARK_FILENAME));
+    const watermarkUri = vscode.Uri.file(path.join(pipelineStateDir(root), WATERMARK_FILENAME));
     const fileUri = vscode.Uri.file(path.join(root, cfg.filePath));
     const watermarkKey = cfg.watermarkKey ?? path.basename(cfg.filePath);
 

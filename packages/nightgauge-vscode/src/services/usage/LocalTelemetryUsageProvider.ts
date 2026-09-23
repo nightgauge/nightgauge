@@ -4,7 +4,7 @@
  *
  * The first `UsageProvider`, and the only one that needs no provider quota
  * API: it reads the per-stage token/cost records written to
- * `.nightgauge/pipeline/history/YYYY-MM-DD.jsonl` and buckets the dollars
+ * `pipelineStateDir(root)/history/YYYY-MM-DD.jsonl` and buckets the dollars
  * attributed to one adapter into session / daily / monthly windows.
  *
  * ## Why this does not reuse `DashboardState.getAggregates()`

@@ -15,6 +15,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { pipelineStateDir } from "../utils/cloneLayout";
 import type { PipelineStage } from "@nightgauge/sdk";
 import {
   runStageSkillHeadless,
@@ -502,9 +503,7 @@ export class SkillRunner {
             if (result.costCapExceeded && stage === "pr-create") {
               try {
                 const prContextPath = path.join(
-                  params.worktreeDir,
-                  ".nightgauge",
-                  "pipeline",
+                  pipelineStateDir(params.worktreeDir),
                   `pr-${issueNumber}.json`
                 );
                 if (fs.existsSync(prContextPath)) {

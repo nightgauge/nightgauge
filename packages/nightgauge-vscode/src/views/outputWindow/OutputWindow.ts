@@ -445,7 +445,7 @@ export class OutputWindow implements vscode.Disposable {
   /**
    * Configure disk logging for pipeline output
    *
-   * Enables writing log entries to .nightgauge/logs/ directory.
+   * Enables writing log entries to cloneLogsDir(root)/ directory.
    * Must be called after construction with workspace root path.
    *
    * @param workspaceRoot - Absolute path to workspace root

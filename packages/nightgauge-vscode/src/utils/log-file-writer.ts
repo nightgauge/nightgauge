@@ -1,13 +1,14 @@
 /**
  * LogFileWriter - Utility for persisting pipeline logs to disk
  *
- * Writes log entries to .nightgauge/logs/ directory with timestamp prefixes.
+ * Writes log entries to cloneLogsDir(root)/ directory with timestamp prefixes.
  * Respects pipeline.logs config from config.yaml.
  *
  * @see Issue #190 - Pipeline logs persistence
  * @see docs/ARCHITECTURE.md for utility patterns
  */
 
+import { RELATIVE_CLONE_LOGS_DIR } from "./cloneLayout";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { redactSecrets } from "./redaction";
@@ -45,7 +46,7 @@ export interface LogFileDescriptor {
 export interface LogFileConfig {
   /** Whether to write logs to files (default: true) */
   retain: boolean;
-  /** Directory for log files relative to workspace root (default: .nightgauge/logs) */
+  /** Directory for log files relative to workspace root (default: RELATIVE_CLONE_LOGS_DIR) */
   dir: string;
   /** Maximum age in days before cleanup (optional) */
   max_age_days?: number;
@@ -73,7 +74,7 @@ export const DEFAULT_DISK_LOG_MAX_ENTRY_CHARS = 64 * 1024;
  */
 const DEFAULT_CONFIG: LogFileConfig = {
   retain: true,
-  dir: ".nightgauge/logs",
+  dir: RELATIVE_CLONE_LOGS_DIR,
 };
 
 /**
@@ -88,7 +89,7 @@ const DEFAULT_CONFIG: LogFileConfig = {
  *   'INFO',
  *   'feature-dev',
  *   'Starting implementation...',
- *   { retain: true, dir: '.nightgauge/logs' }
+ *   { retain: true, dir: RELATIVE_CLONE_LOGS_DIR }
  * );
  *
  * // Generate filename for current session
@@ -128,7 +129,7 @@ export class LogFileWriter {
     const timestamp = new Date().toISOString();
     const stageTag = stage ? `[${stage}] ` : "";
     // Redact secrets before they hit disk: stage stdout / tool_result output can
-    // echo tokens or PEM blocks, and these logs persist under .nightgauge/logs/
+    // echo tokens or PEM blocks, and these logs persist under cloneLogsDir(root)/
     // (#170). Truncation is not redaction, so scrub the message content here.
     const safeMessage = redactSecrets(message);
     const line = `[${timestamp}] [${level.toUpperCase()}] ${stageTag}${safeMessage}\n`;

@@ -12,6 +12,7 @@
  * @see docs/ARCHITECTURE.md for utility patterns
  */
 
+import { pipelineStateDir } from "../utils/cloneLayout";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
@@ -34,7 +35,6 @@ import type {
 const ANALYSIS_DIR = ".nightgauge/analysis";
 const EXPERIMENTS_DIR = ".nightgauge/analysis/experiments";
 const HEALTH_REPORT_PREFIX = "health-report-";
-const PIPELINE_DIR = ".nightgauge/pipeline";
 
 /** Source names used in quality metrics */
 const SOURCE_NAMES = {
@@ -245,7 +245,7 @@ export class DataAggregator {
     workspaceRoot: string,
     filter: DateRangeFilter
   ): Promise<HealthReport[]> {
-    const pipelineDir = path.join(workspaceRoot, PIPELINE_DIR);
+    const pipelineDir = pipelineStateDir(workspaceRoot);
     const reports: HealthReport[] = [];
 
     let entries: string[];

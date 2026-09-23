@@ -17,6 +17,7 @@
  * @see docs/AUTOMATIONS.md - Automation configuration and usage
  */
 
+import { cloneLogsDir, RELATIVE_CLONE_LOGS_DIR } from "../utils/cloneLayout";
 import * as vscode from "vscode";
 import * as fs from "node:fs/promises";
 import { open as fsOpen } from "node:fs/promises";
@@ -91,7 +92,7 @@ export class AutomationService implements vscode.Disposable {
    * Get the automation log file path from config.yaml
    */
   private async getLogFilePath(): Promise<string | undefined> {
-    const defaultLogPath = path.join(this.workspaceRoot, ".nightgauge", "logs", "automation.log");
+    const defaultLogPath = path.join(cloneLogsDir(this.workspaceRoot), "automation.log");
 
     // Resolve config path with fallback to legacy
     const pathResult = await resolveConfigPath(this.workspaceRoot);
@@ -111,7 +112,7 @@ export class AutomationService implements vscode.Disposable {
       const match = configContent.match(
         /automations:\s*\n(?:\s+\w+:[^\n]*\n)*?\s+log_file:\s*["']?([^"'\n]+)["']?/
       );
-      const logFile = match ? match[1].trim() : ".nightgauge/logs/automation.log";
+      const logFile = match ? match[1].trim() : `${RELATIVE_CLONE_LOGS_DIR}/automation.log`;
 
       // Validate no path traversal
       if (logFile.includes("..") || path.isAbsolute(logFile)) {

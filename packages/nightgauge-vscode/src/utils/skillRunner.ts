@@ -37,6 +37,11 @@ import * as vscode from "vscode";
 import { spawn, execFileSync, type ChildProcess } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
+import {
+  pipelineStateDir,
+  RELATIVE_PIPELINE_STATE_DIR,
+  isUsableWorkspaceRoot,
+} from "./cloneLayout";
 import * as os from "os";
 import { randomUUID } from "crypto";
 import type { PipelineStage } from "@nightgauge/sdk";
@@ -417,7 +422,7 @@ export interface SkillRunResult {
 
   // ─── Issue #3605 stage-exit diagnostic fields ───────────────────────────
   // Forwarded verbatim to Go via pipeline.stageResult so the daily exit-record
-  // (.nightgauge/pipeline/exit-records/<UTC-day>.jsonl) carries enough
+  // (pipelineStateDir(root)/exit-records/<UTC-day>.jsonl) carries enough
   // forensic detail to debug failures without re-running. All optional —
   // empty fields are dropped at the IPC boundary so healthy runs stay terse.
 
@@ -1792,7 +1797,7 @@ function writeDiagnosticWithMirror(
 
   for (const target of targets) {
     try {
-      const histDir = path.join(target, ".nightgauge", "pipeline", "history", String(issueNumber));
+      const histDir = path.join(pipelineStateDir(target), "history", String(issueNumber));
       fs.mkdirSync(histDir, { recursive: true });
       const diagFile = path.join(histDir, filename);
       fs.writeFileSync(diagFile, content, "utf-8");
@@ -5409,7 +5414,11 @@ export function runStageSkillHeadless(
   // never invent a run id or one run's trace would split across files.
   // Fail-open by contract.
   const traceRecorder = TraceRecorder.open({
-    pipelineDir: path.join(workspaceRoot, ".nightgauge", "pipeline"),
+    // Fail-open: an unusable root keeps its historical root-relative dir
+    // instead of throwing from the helper before the recorder opens (#2036).
+    pipelineDir: isUsableWorkspaceRoot(workspaceRoot)
+      ? pipelineStateDir(workspaceRoot)
+      : path.join(workspaceRoot, RELATIVE_PIPELINE_STATE_DIR),
     ...(targetRepo ? { repo: targetRepo } : {}),
     ...(issueNumber && issueNumber > 0 ? { issue: issueNumber } : {}),
     ...(runId ? { runId } : {}),

@@ -27,11 +27,12 @@
  * @see Issue #994, #1206
  */
 
+import { RELATIVE_PIPELINE_STATE_DIR } from "./cloneLayout";
 import * as path from "node:path";
 
 /** Where every writer puts a run's issue context, relative to its own root. */
 export function issueContextRelPath(issueNumber: number): string {
-  return path.join(".nightgauge", "pipeline", `issue-${issueNumber}.json`);
+  return path.join(RELATIVE_PIPELINE_STATE_DIR, `issue-${issueNumber}.json`);
 }
 
 /**
@@ -78,7 +79,7 @@ export function issueContextCandidates(
 }
 
 /**
- * The same list for a sibling file in `.nightgauge/pipeline/` — `planning-N.json`
+ * The same list for a sibling file in `pipelineStateDir(root)/` — `planning-N.json`
  * lives beside `issue-N.json` and moves with it.
  */
 export function pipelineFileCandidates(

@@ -7,6 +7,7 @@
  * @see docs/ARCHITECTURE.md for architectural overview
  */
 
+import { pipelineStateDir, plansDir as clonePlansDir } from "../utils/cloneLayout";
 import * as vscode from "vscode";
 import * as fs from "node:fs/promises";
 import { readFileSync } from "node:fs";
@@ -445,12 +446,7 @@ export function readIssueLabels(issueNumber: number): string[] | undefined {
     return undefined;
   }
   try {
-    const filePath = path.join(
-      nightgaugeRoot,
-      ".nightgauge",
-      "pipeline",
-      `issue-${issueNumber}.json`
-    );
+    const filePath = path.join(pipelineStateDir(nightgaugeRoot), `issue-${issueNumber}.json`);
     const raw = readFileSync(filePath, "utf8");
     const parsed = JSON.parse(raw) as { labels?: unknown };
     if (Array.isArray(parsed.labels)) {
@@ -886,7 +882,7 @@ export async function initializeServices(
 
     // Initialize AutomationService for workflow automation triggers (Issue #137).
     // Skip on uninitialized repos — initialize() calls fs.mkdir on
-    // .nightgauge/logs which would resurrect the folder we just
+    // cloneLogsDir(root) which would resurrect the folder we just
     // intentionally skipped in ensureGitignore.
     if (await isRepoInitialized(nightgaugeRoot)) {
       automationService = new AutomationService(pipelineStateService, nightgaugeRoot);
@@ -1282,7 +1278,7 @@ export async function initializeServices(
   // concurrent multi-repo run — ignore it AND delete it so it can never be
   // resurrected as a zombie run in a repo that never ran the issue.
   if (nightgaugeRoot) {
-    const pipelineDir = path.join(nightgaugeRoot, ".nightgauge", "pipeline");
+    const pipelineDir = pipelineStateDir(nightgaugeRoot);
     // Best-effort: the "owner/repo" (or short name) of the repo that owns this
     // pipeline dir, for the repo-mismatch check. Undefined → mismatch check is
     // skipped (empty-identity check still applies).
@@ -1830,12 +1826,7 @@ export async function initializeServices(
         if (funnelTarget) {
           const { owner: failOwner, repo: failRepo } = funnelTarget;
           const signalPath = nightgaugeRoot
-            ? path.join(
-                nightgaugeRoot,
-                ".nightgauge",
-                "pipeline",
-                `conflict-restart-${issueNumber}.json`
-              )
+            ? path.join(pipelineStateDir(nightgaugeRoot), `conflict-restart-${issueNumber}.json`)
             : null;
           const conflictRestartCheck = signalPath
             ? fs
@@ -2066,7 +2057,7 @@ export async function initializeServices(
     });
 
     // A second, TypeScript-side stale-slot scanner used to run here (#1643).
-    // It was deleted with #427: it scanned `<worktree>/.nightgauge/pipeline/
+    // It was deleted with #427: it scanned `pipelineStateDir(<worktree>)/
     // state.json`, a file nothing in this tree has ever written, so it returned
     // [] on every activation, and its repair path built an identity-less
     // PipelineStateService whose failStage could reach neither the wire nor the
@@ -2810,7 +2801,7 @@ export async function initializeServices(
   // Adapter usage meter (Issue #659) — the first production consumer of
   // AdapterUsageService (#658 shipped it with none; see ADR 018's
   // Consequences). Requires nightgaugeRoot: with no workspace/git root there is
-  // no `.nightgauge/pipeline/history/` to read, so the meter stays hidden
+  // no `pipelineStateDir(root)/history/` to read, so the meter stays hidden
   // rather than wired against a path that cannot exist.
   //
   // The Claude subscription-window provider (Issue #709) needs a place to
@@ -3169,7 +3160,7 @@ export async function initializeServices(
   // ── 13. Context watcher ───────────────────────────────────────────────
 
   // Initialize context watcher for Ready Issues → Pipeline integration
-  // This watches .nightgauge/pipeline/ for context files created by Claude Code terminal
+  // This watches pipelineStateDir(root)/ for context files created by Claude Code terminal
   // Use nightgaugeRoot (git root) so we watch the correct directory
   if (nightgaugeRoot) {
     const contextWatcher = new ContextWatcherService(nightgaugeRoot, logger);
@@ -3759,8 +3750,8 @@ export async function initializeServices(
         await pipelineStateService?.clearPipeline();
 
         // Delete context files
-        const contextDir = `${nightgaugeRoot}/.nightgauge/pipeline`;
-        const plansDir = `${nightgaugeRoot}/.nightgauge/plans`;
+        const contextDir = pipelineStateDir(nightgaugeRoot);
+        const plansDir = clonePlansDir(nightgaugeRoot);
 
         if (issueNumber) {
           // Clean up specific issue files

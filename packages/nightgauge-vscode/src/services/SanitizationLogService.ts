@@ -14,6 +14,7 @@
 import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
+import { cloneLogsDir, RELATIVE_CLONE_LOGS_DIR } from "../utils/cloneLayout";
 import type {
   SanitizationEvent,
   RawSanitizationLogEntry,
@@ -65,7 +66,7 @@ export class SanitizationLogService implements vscode.Disposable {
   public readonly onEventsChanged = this._onEventsChanged.event;
 
   constructor(private readonly workspaceRoot: string) {
-    this.logFilePath = path.join(workspaceRoot, ".nightgauge", "logs", "sanitization.log");
+    this.logFilePath = path.join(cloneLogsDir(workspaceRoot), "sanitization.log");
   }
 
   /**
@@ -216,7 +217,7 @@ export class SanitizationLogService implements vscode.Disposable {
   private startWatching(): void {
     const pattern = new vscode.RelativePattern(
       this.workspaceRoot,
-      ".nightgauge/logs/sanitization.log"
+      `${RELATIVE_CLONE_LOGS_DIR}/sanitization.log`
     );
 
     this.watcher = vscode.workspace.createFileSystemWatcher(pattern);

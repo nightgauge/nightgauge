@@ -12,6 +12,13 @@
 import * as vscode from "vscode";
 import * as fs from "fs/promises";
 import * as path from "path";
+import {
+  pipelineStateDir,
+  plansDir as clonePlansDir,
+  RELATIVE_PIPELINE_STATE_DIR,
+  RELATIVE_PLANS_DIR,
+  isUsableWorkspaceRoot,
+} from "../utils/cloneLayout";
 import type { WorkspaceManager } from "./WorkspaceManager";
 import type { Repository } from "../models/Repository";
 import { resolveActiveRepository } from "../utils/resolveActiveRepository";
@@ -61,7 +68,7 @@ export interface DocFileResult {
  * RepositoryContextLoader - Singleton service for repository-scoped context paths
  *
  * Coordinates with WorkspaceManager to provide correct paths for:
- * - Pipeline context files (.nightgauge/pipeline/)
+ * - Pipeline context files (pipelineStateDir(root)/)
  * - CLAUDE.md files
  * - docs/ documentation
  * - standards/ files
@@ -202,7 +209,7 @@ export class RepositoryContextLoader implements vscode.Disposable {
   /**
    * Get the context directory for the current or specified repository
    *
-   * Returns the path to .nightgauge/pipeline/ directory.
+   * Returns the path to pipelineStateDir(root)/ directory.
    *
    * @param repository - Optional repository (defaults to current)
    * @returns Absolute path to context directory
@@ -213,10 +220,15 @@ export class RepositoryContextLoader implements vscode.Disposable {
     if (!repo) {
       // Fallback to workspace root if no repository
       const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
-      return path.join(workspaceRoot, ".nightgauge", "pipeline");
+      // No workspace folder: keep the historical root-relative path rather than
+      // throw from the helper, which rejects an empty root (#2036).
+      if (!isUsableWorkspaceRoot(workspaceRoot)) {
+        return path.join(workspaceRoot, RELATIVE_PIPELINE_STATE_DIR);
+      }
+      return pipelineStateDir(workspaceRoot);
     }
 
-    return path.join(repo.path, ".nightgauge", "pipeline");
+    return pipelineStateDir(repo.path);
   }
 
   /**
@@ -267,17 +279,22 @@ export class RepositoryContextLoader implements vscode.Disposable {
    * Get the plans directory for the current or specified repository
    *
    * @param repository - Optional repository (defaults to current)
-   * @returns Absolute path to .nightgauge/plans/ directory
+   * @returns Absolute path to plansDir(root)/ directory
    */
   getPlansDir(repository?: Repository): string {
     const repo = repository ?? this.getCurrentRepository();
 
     if (!repo) {
       const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
-      return path.join(workspaceRoot, ".nightgauge", "plans");
+      // No workspace folder: keep the historical root-relative path rather than
+      // throw from the helper, which rejects an empty root (#2036).
+      if (!isUsableWorkspaceRoot(workspaceRoot)) {
+        return path.join(workspaceRoot, RELATIVE_PLANS_DIR);
+      }
+      return clonePlansDir(workspaceRoot);
     }
 
-    return path.join(repo.path, ".nightgauge", "plans");
+    return clonePlansDir(repo.path);
   }
 
   /**
