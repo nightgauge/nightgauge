@@ -503,10 +503,10 @@ export async function initializeServices(
   // ~/.nightgauge/config.yaml and is mirrored to SecretStorage so the
   // SecretStorage-first runtime readers (LicensePreflight, forwardPlatformEnv)
   // see it. On startup we:
-  //   1. Strip any license key still embedded in the PROJECT config.yaml — it
-  //      must never sit in a committed file — seeding SecretStorage from it.
-  //   2. Otherwise seed SecretStorage from the MACHINE config.yaml when
-  //      SecretStorage is empty (fresh machine / new install).
+  //   1. Warn about a license key embedded in the PROJECT config.yaml, and
+  //      never import it (#2023): a repository file must not choose the key.
+  //   2. Seed SecretStorage from the MACHINE config.yaml when SecretStorage is
+  //      empty (fresh machine / new install).
   // Cache the resolved key for sync consumers (LicensePreflight, TelemetryUploader).
   let cachedLicenseKey: string | undefined;
 
@@ -547,19 +547,20 @@ export async function initializeServices(
       const fsLib = await import("fs");
       const pathLib = await import("path");
 
-      // 1. Strip + migrate any key embedded in the project config (committed).
+      // 1. A key in the project config is never imported (#2023): the file
+      //    comes from the repository, so importing it would let any clone
+      //    replace the operator's key. Tell the user to remove it instead; the
+      //    binary refuses the config until they do.
       if (primaryWorkspaceForMigration) {
         const cfgPath = pathLib.join(primaryWorkspaceForMigration, ".nightgauge", "config.yaml");
         if (fsLib.existsSync(cfgPath)) {
-          const raw = fsLib.readFileSync(cfgPath, "utf-8");
-          const { key: foundKey, lineIndex } = extractLicenseKeyLine(raw);
+          const { key: foundKey } = extractLicenseKeyLine(fsLib.readFileSync(cfgPath, "utf-8"));
           if (foundKey) {
-            await secretService.setSecret(SECRET_KEYS.platformLicenseKey, foundKey);
-            cachedLicenseKey = foundKey;
-            const lines = raw.split("\n");
-            lines.splice(lineIndex, 1);
-            fsLib.writeFileSync(cfgPath, lines.join("\n"), "utf-8");
-            return;
+            void vscode.window.showWarningMessage(
+              "Nightgauge: .nightgauge/config.yaml sets platform.license_key. It was not imported: " +
+                "a repository file must not supply your license key. Remove the line, rotate the " +
+                "key if it was ever committed, and set your own key in Nightgauge settings."
+            );
           }
         }
       }

@@ -781,3 +781,24 @@ func TestResolveTokenChain_UnmappedOwnerDoesNotLeakWorkspaceUser(t *testing.T) {
 		t.Errorf("token = %q, want ghp_env_token (ambient env for an owner with no configured identity)", tok)
 	}
 }
+
+// TestGhFallbackWarningNamesPath pins #2023: the gh-fallback warning names the
+// resolved machine-tier file and the env: form. A bare "config.yaml" steered
+// operators to the committed project file, where a pasted token is pushed to
+// every clone.
+func TestGhFallbackWarningNamesPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("NIGHTGAUGE_CONFIG_HOME", home)
+	want := filepath.Join(home, "config.yaml")
+
+	got := captureStderr(t, func() { warnGHFallback(nil) })
+	if !strings.Contains(got, want) {
+		t.Errorf("warning does not name the machine-tier path %q:\n%s", want, got)
+	}
+	if !strings.Contains(got, "env:VAR_NAME") {
+		t.Errorf("warning does not name the env: form:\n%s", got)
+	}
+	if strings.Contains(got, "in config.yaml") {
+		t.Errorf("warning still points at a bare config.yaml:\n%s", got)
+	}
+}

@@ -45,6 +45,19 @@ and this project adheres to
 
 ### Changed
 
+- A GitHub token in `.nightgauge/config.yaml` or `.nightgauge/config.local.yaml`
+  is used only when it is an `env:VAR_NAME` reference (#2023). A literal token
+  there is no longer exported to terminals and subprocesses as `GH_TOKEN`; the
+  binary refuses such a config. Put a literal token in the machine config file,
+  or name the account in `github_user` and let `gh` hold it. The extension now
+  finds that file where the binary does (`NIGHTGAUGE_CONFIG_HOME`,
+  `XDG_CONFIG_HOME`, `~/.config/nightgauge` on Linux), not only in
+  `~/.nightgauge`.
+- A `platform.license_key` in the workspace's `.nightgauge/config.yaml` is no
+  longer imported into the extension's secret storage at startup, so a cloned
+  repository cannot replace your license key (#2023). The extension warns
+  instead, and leaves the file alone.
+
 - OpenCode stages now run from the editor. They check the experimental
   switch, the `opencode` CLI, the Nightgauge binary and a configured model
   before launch, and refuse interactive mode. Each model step and tool call
