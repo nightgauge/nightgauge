@@ -83,6 +83,13 @@ export interface StatusJSONOutput {
  * formatter.pipelineResult(result);
  * ```
  */
+/**
+ * The `message` of {@link OutputFormatter.activity}'s JSON line: the key a
+ * reader uses to recognize an activity line and leave it out of what it
+ * renders (#1657).
+ */
+export const ADAPTER_ACTIVITY_MESSAGE = "adapter activity";
+
 export class OutputFormatter {
   constructor(
     private format: OutputFormat = "text",
@@ -142,17 +149,20 @@ export class OutputFormatter {
    * `{"level":…,"message":…,"data":…}` line every other log line on stdout
    * is: a caller reading the stage's output (the VS Code extension) counts
    * any output as activity, and this is its only output while OpenCode runs
-   * a slow local model. It carries no `type`, so no stream-json or workflow
-   * node reader takes it for an event. stdout, not stderr: in JSON mode every
-   * error is on stdout too, and a failed stage's last stderr lines are what
-   * the extension reports as its error. In text mode it is a debug line.
+   * a slow local model. It carries no `type`, so it is never parsed as a
+   * stream-json or workflow event; but a reader that renders
+   * `{"level","message"}` log lines would show it, so every such reader must
+   * drop it by {@link ADAPTER_ACTIVITY_MESSAGE} (the extension does). stdout,
+   * not stderr: in JSON mode every error is on stdout too, and a failed
+   * stage's last stderr lines are what the extension reports as its error. In
+   * text mode it is a debug line.
    */
   activity(activity: AdapterActivity): void {
     if (this.format === "json") {
       console.log(
         JSON.stringify({
           level: "debug",
-          message: "adapter activity",
+          message: ADAPTER_ACTIVITY_MESSAGE,
           data: { adapter: activity.adapter, event: activity.event },
         })
       );

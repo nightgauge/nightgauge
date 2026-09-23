@@ -34,7 +34,11 @@ import {
   getExecutionAdapter,
   type StageExecutionMode,
 } from "../utils/nightgaugeConfig";
-import { isStreamJsonEnvelope, isEnvelopeFragment } from "../utils/streamJsonFilter";
+import {
+  isAdapterActivityLine,
+  isStreamJsonEnvelope,
+  isEnvelopeFragment,
+} from "../utils/streamJsonFilter";
 import { parsePhaseMarker, uuidV7 } from "@nightgauge/sdk";
 import { createPhaseTracker } from "../utils/phaseTracker";
 import { createToolCallData, type ToolCallData } from "../views/outputWindow/ToolCallIndicator";
@@ -287,6 +291,10 @@ export function parseStreamOutput(data: string): ParsedOutputItem[] {
           type: "text",
           text: `Tokens: ${input.toLocaleString()} in, ${output.toLocaleString()} out, $${cost.toFixed(4)}`,
         });
+      } else if (isAdapterActivityLine(line)) {
+        // The SDK CLI's liveness line (#1657): it moves the idle clock, and
+        // is never shown.
+        continue;
       } else if (parsed.level && parsed.message) {
         items.push({
           type: "text",

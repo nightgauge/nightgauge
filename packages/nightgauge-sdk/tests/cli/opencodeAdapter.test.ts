@@ -866,9 +866,10 @@ process.kill(process.pid, "SIGINT");
 // ---------------------------------------------------------------------------
 
 /**
- * #1657: OpenCode holds its stream until it exits, and prints nothing while a
- * step generates, so the SDK forwards each step and tool event while the
- * process runs — the extension's only sign that a slow local stage is alive.
+ * #1657: the SDK's OpenCode adapter reads the process's stream only once it
+ * exits, and OpenCode prints nothing while a step generates, so the SDK
+ * forwards each step and tool event while the process runs — the extension's
+ * only sign that a slow local stage is alive.
  */
 describe("OpenCode activity while the process runs (#1657)", () => {
   const RESEARCH = join(TESTDATA, "opencode_stream_research_sample.jsonl");

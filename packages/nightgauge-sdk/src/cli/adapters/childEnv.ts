@@ -152,7 +152,10 @@ export function curateChildEnv(
 //   - the forge variables the bash tool's `gh` and `git` need;
 //   - the variables OpenCode's catalog binds to the dispatched provider, and
 //     no other provider's;
-//   - the pipeline's own NIGHTGAUGE_* configuration;
+//   - the NIGHTGAUGE_* variables the stage and its plugin read
+//     (OPENCODE_NIGHTGAUGE_ALLOW), and no other: the namespace also holds
+//     operator secrets such as NIGHTGAUGE_LM_STUDIO_API_KEY and
+//     NIGHTGAUGE_JIRA_TOKEN;
 //   - no inherited OPENCODE_* variable at all. The OPENCODE_* names a spawn
 //     carries are the ones Nightgauge sets, from the run's config or the
 //     adapter, never the operator's OPENCODE_PERMISSION, OPENCODE_AUTO_SHARE,
@@ -306,6 +309,41 @@ export function isOpenCodeRunEnvAccepted(name: string): boolean {
   return isOpenCodeRunEnvName(name) || OPENCODE_RUN_ENV_WITHHELD_NAMES.has(name);
 }
 
+/**
+ * The inherited NIGHTGAUGE_* variables an opencode child keeps (#1657). The
+ * rest of the namespace — operator settings and secrets such as
+ * NIGHTGAUGE_LM_STUDIO_API_KEY, NIGHTGAUGE_JIRA_TOKEN or
+ * NIGHTGAUGE_AUDIT_API_KEY — never reaches it. The set is exactly what is read
+ * or exported for the child, and tests/cli/childEnv.test.ts derives it from
+ * those sources and fails when this list differs:
+ *   - the Nightgauge OpenCode plugin's reads
+ *     (internal/execution/opencodeplugin/plugin/): NIGHTGAUGE_BIN,
+ *     NIGHTGAUGE_EDIT_HOOK_DIAGNOSTICS, NIGHTGAUGE_OUTPUT_FILE,
+ *     NIGHTGAUGE_RUN_ID (its NIGHTGAUGE_OPENCODE_* handshake variables come
+ *     from the run config only);
+ *   - the Go opencode adapter's per-spawn contract (BuildCommand in
+ *     opencode.go) and the manager's exports (composeStageEnv:
+ *     NIGHTGAUGE_BIN, NIGHTGAUGE_SKILL_DIR);
+ *   - what the SDK OpenCodeAdapter reads for its stage (NIGHTGAUGE_MODEL,
+ *     NIGHTGAUGE_REPO, NIGHTGAUGE_TARGET_REPO).
+ */
+export const OPENCODE_NIGHTGAUGE_ALLOW: ReadonlySet<string> = new Set([
+  "NIGHTGAUGE_ADAPTER",
+  "NIGHTGAUGE_BIN",
+  "NIGHTGAUGE_CONTEXT_FILE",
+  "NIGHTGAUGE_DISPATCH_MODEL",
+  "NIGHTGAUGE_EDIT_HOOK_DIAGNOSTICS",
+  "NIGHTGAUGE_ISSUE_NUMBER",
+  "NIGHTGAUGE_MODEL",
+  "NIGHTGAUGE_OUTPUT_FILE",
+  "NIGHTGAUGE_OUTPUT_FORMAT",
+  "NIGHTGAUGE_REPO",
+  "NIGHTGAUGE_RUN_ID",
+  "NIGHTGAUGE_SKILL_DIR",
+  "NIGHTGAUGE_STAGE",
+  "NIGHTGAUGE_TARGET_REPO",
+]);
+
 /** The forge variables an opencode stage keeps: its bash tool runs `gh` and `git`. */
 const OPENCODE_FORGE_ALLOW: ReadonlySet<string> = new Set(["GH_TOKEN", "GITHUB_TOKEN", "GH_HOST"]);
 
@@ -324,8 +362,8 @@ const OPENCODE_ISOLATION_XDG_SET: ReadonlySet<string> = new Set(OPENCODE_ISOLATI
  * dispatched to `model` (a `<provider>/<model>` value). Decided on the name
  * alone, so nothing it withholds can be logged. Exported for the drift guard.
  *
- * `NIGHTGAUGE_OPENCODE_` is denied alongside `OPENCODE_`, not just swept in
- * by the general `NIGHTGAUGE_` prefix passthrough below: without this, a
+ * `NIGHTGAUGE_OPENCODE_` is denied alongside `OPENCODE_` explicitly, although
+ * no such name is in {@link OPENCODE_NIGHTGAUGE_ALLOW} either: without it, a
  * nested SDK spawn (an opencode stage's own subprocess reaching for another
  * dispatch) would inherit the *parent* run's plugin path, handshake nonce and
  * sentinel path from `process.env` — letting a nested child write to the
@@ -344,7 +382,7 @@ export function isOpenCodeChildEnvAllowed(key: string, model: string): boolean {
     SYSTEM_ALLOW.has(key) ||
     OPENCODE_FORGE_ALLOW.has(key) ||
     OPENCODE_TOOL_ALLOW.has(key) ||
-    key.startsWith("NIGHTGAUGE_") ||
+    OPENCODE_NIGHTGAUGE_ALLOW.has(key) ||
     openCodeProviderEnv(model).includes(key)
   );
 }

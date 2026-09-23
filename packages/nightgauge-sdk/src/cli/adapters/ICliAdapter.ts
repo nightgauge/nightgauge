@@ -50,8 +50,9 @@ export type NightgaugeAdapter =
  * One sign of life from an adapter's child process while it runs (#1657): an
  * event the child printed, named by its type and nothing else, so no model
  * text or tool input travels with it. OpenCode prints nothing while a model
- * step generates and holds its stream until it exits, so these are the only
- * way a caller can tell a slow stage from a stalled one before the end.
+ * step generates, and the SDK's OpenCode adapter reads the stream it did
+ * print only once the process exits, so these are the only way a caller can
+ * tell a slow stage from a stalled one before the end.
  */
 export interface AdapterActivity {
   readonly adapter: NightgaugeAdapter;

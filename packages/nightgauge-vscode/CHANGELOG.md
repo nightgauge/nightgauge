@@ -17,7 +17,10 @@ and this project adheres to
   counts as activity while the stage runs. The model comes from the stage or
   `opencode.model`. Stage cost, the cost cap and stall thresholds follow the
   model's provider. A local model costs $0, uses time-cap mode, and gets its
-  own stall calibration with a floor that its thresholds never go below.
+  own stall calibration with a floor that its thresholds never go below. A
+  hosted model with no registry price also runs in time-cap mode, and
+  time-cap mode now defaults to a 4-hour cap when none is configured. The
+  activity lines never appear in Run Stage or the slot output channels.
 
 - Stages routed to the `opus` band now run Claude Opus 5.5
   (`claude-opus-5-5`), and stage cost is priced at its $4/$20 per MTok rates.

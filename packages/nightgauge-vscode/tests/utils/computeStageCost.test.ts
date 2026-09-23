@@ -13,7 +13,11 @@
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { getModelDescriptor } from "@nightgauge/sdk";
-import { computeStageCost, type StageCostTokens } from "../../src/utils/computeStageCost";
+import {
+  computeStageCost,
+  isLocalExecution,
+  type StageCostTokens,
+} from "../../src/utils/computeStageCost";
 
 const sampleTokens: StageCostTokens = {
   input: 100_000,
@@ -405,6 +409,26 @@ describe("computeStageCost", () => {
       expect(computeStageCost("opencode", "ollama/claude-opus-5", sampleTokens)).toEqual({
         cost_usd: 0,
         source: "computed",
+      });
+    });
+
+    it("a local model in its recorded, normalized form is local too", () => {
+      expect(isLocalExecution("opencode", "lm-studio/qwen/qwen3.8-27b")).toBe(true);
+      expect(isLocalExecution("opencode", "lmstudio/qwen/qwen3.8-27b")).toBe(true);
+      expect(isLocalExecution("opencode", "ollama/qwen3-coder:30b")).toBe(true);
+      expect(isLocalExecution("opencode", "lm-studio/")).toBe(false);
+      expect(isLocalExecution("opencode", "anthropic/claude-sonnet-5")).toBe(false);
+      expect(isLocalExecution("codex", "lm-studio/qwen")).toBe(false);
+      expect(computeStageCost("opencode", "lm-studio/claude-sonnet-5", sampleTokens)).toEqual({
+        cost_usd: 0,
+        source: "computed",
+      });
+    });
+
+    it("a registry id under a provider that does not serve it is unstamped", () => {
+      expect(computeStageCost("opencode", "openrouter/claude-sonnet-5", sampleTokens)).toEqual({
+        cost_usd: 0,
+        source: "unknown",
       });
     });
 

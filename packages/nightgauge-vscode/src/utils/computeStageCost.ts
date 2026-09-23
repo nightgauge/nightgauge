@@ -110,17 +110,36 @@ function round6(n: number): number {
  * provider bills it. Decided by the PROVIDER OF THE MODEL, not the adapter
  * name: `lm-studio` and `ollama` serve only local models, and an `opencode`
  * stage is local exactly when its `<provider>/<model>` names a local provider
- * key (`lmstudio/…`, `ollama/…`; ADR-022 § 1, § 3). Every other adapter, and
- * an `opencode` model whose provider is hosted or unrecognized (`other`), is
- * not local. The SDK's `providerFor` / `isLocalProvider` are the single
- * authority, mirroring the Go `models.ProviderFor` / `models.IsLocalProvider`.
+ * key (`lmstudio/…`, `ollama/…`; ADR-022 § 1, § 3) — or, in the form a stage
+ * record carries (ADR-022 § 2), the normalized provider itself
+ * (`lm-studio/…`), as the SDK's `openCodeServing` reads it. Every other
+ * adapter, and an `opencode` model whose provider is hosted or unrecognized
+ * (`other`), is not local. The SDK's `providerFor` / `isLocalProvider` are
+ * the single authority, mirroring the Go `models.ProviderFor` /
+ * `models.IsLocalProvider`.
  *
  * A local model string must NEVER reach a registry lookup: a user who names
  * their local checkpoint `claude-sonnet-5` would otherwise be billed at
  * Anthropic's frontier rates for inference that costs them nothing.
  */
 export function isLocalExecution(adapter: ExecutionAdapter | string, model: string): boolean {
-  return isLocalProvider(providerFor(adapter, model));
+  if (isLocalProvider(providerFor(adapter, model))) return true;
+  if (adapter !== "opencode") return false;
+  const slash = model.indexOf("/");
+  return slash > 0 && slash < model.length - 1 && isLocalProvider(model.slice(0, slash));
+}
+
+/**
+ * True when the registry can price an `opencode` model: its provider is
+ * hosted and the registry lists the model's id UNDER THAT PROVIDER, the rule
+ * the SDK's `openCodeStageCostUsd` and the Go `CalculateCostFor("opencode")`
+ * apply. `openrouter/claude-sonnet-5` is not priceable: the registry knows
+ * `claude-sonnet-5`, but as Anthropic's, and OpenRouter bills its own rates.
+ */
+export function isPriceableOpenCodeModel(model: string): boolean {
+  if (isLocalExecution("opencode", model)) return false;
+  const { provider, bareId } = parseOpenCodeModel(model);
+  return isKnownModel(bareId) && getModelDescriptor(bareId)?.provider === provider;
 }
 
 /**
@@ -176,6 +195,7 @@ function computeFromRegistry(
   tokens: StageCostTokens
 ): number | null {
   if (isLocalExecution(adapter, model)) return null;
+  if (adapter === "opencode" && !isPriceableOpenCodeModel(model)) return null;
   const id = registryPricingId(adapter, model);
   if (!isKnownModel(id)) return null;
   return round6(

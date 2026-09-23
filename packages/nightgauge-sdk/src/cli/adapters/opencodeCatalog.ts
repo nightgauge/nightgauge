@@ -293,3 +293,54 @@ export function openCodeProviderEnv(model: string): readonly string[] {
   const key = openCodeProviderKey(model);
   return Object.hasOwn(OPENCODE_CATALOG_ENV, key) ? OPENCODE_CATALOG_ENV[key] : [];
 }
+
+/**
+ * The provider base-URL variables an opencode dispatch withholds whatever its
+ * provider, a copy of `openCodeEndpointEnv` in
+ * internal/execution/adapters/opencode_isolation.go (the drift guard in
+ * tests/cli/childEnv.test.ts parses it).
+ */
+export const OPENCODE_ENDPOINT_ENV: readonly string[] = Object.freeze([
+  "ANTHROPIC_BASE_URL",
+  "OPENAI_BASE_URL",
+]);
+
+/** The prefix of OpenCode's own variables, every one of which is withheld. */
+export const OPENCODE_WITHHELD_PREFIX = "OPENCODE_";
+
+const OPENCODE_CATALOG_NAMES: ReadonlySet<string> = new Set(
+  Object.values(OPENCODE_CATALOG_ENV).flat()
+);
+const OPENCODE_PLATFORM_NAMES: ReadonlySet<string> = new Set(
+  OPENCODE_PLATFORM_PROVIDERS.flatMap((p) => OPENCODE_CATALOG_ENV[p] ?? [])
+);
+
+/**
+ * Whether an inherited variable named `key` is withheld from an opencode
+ * dispatch to `model`: the TS twin of `OpenCodeWithholdsEnv`
+ * (opencode_isolation.go). Every `OPENCODE_*` variable, the provider base
+ * URLs, and every catalog variable of a model service other than the
+ * dispatched one; a platform provider's variables (the forge token, the cloud
+ * credentials) never. Decided on the name alone.
+ */
+export function openCodeWithholdsEnv(model: string, key: string): boolean {
+  if (key.startsWith(OPENCODE_WITHHELD_PREFIX) || OPENCODE_ENDPOINT_ENV.includes(key)) return true;
+  if (!OPENCODE_CATALOG_NAMES.has(key) || OPENCODE_PLATFORM_NAMES.has(key)) return false;
+  return !openCodeProviderEnv(model.trim()).includes(key);
+}
+
+/**
+ * {@link openCodeWithholdsEnv} for one dispatch, as data: the TS twin of
+ * `OpenCodeEnvWithholdFor` (opencode_config.go), the `env_withhold` that
+ * `nightgauge opencode config` prints. Names are sorted and unique.
+ */
+export function openCodeEnvWithholdFor(model: string): {
+  prefixes: string[];
+  names: string[];
+} {
+  const names = new Set<string>(OPENCODE_ENDPOINT_ENV);
+  for (const name of OPENCODE_CATALOG_NAMES) {
+    if (openCodeWithholdsEnv(model, name)) names.add(name);
+  }
+  return { prefixes: [OPENCODE_WITHHELD_PREFIX], names: [...names].sort() };
+}

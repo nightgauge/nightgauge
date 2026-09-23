@@ -20,7 +20,7 @@ import type { ClaudeEffort } from "./stageResolver";
 import type { ExecutionAdapter } from "../../config/schema";
 import { CodexModelCatalogService } from "../../services/CodexModelCatalogService";
 import type { ProgressMonitorConfig } from "../progressMonitor";
-import { isLocalExecution, localExecutionKey } from "../computeStageCost";
+import { isLocalExecution, isPriceableOpenCodeModel, localExecutionKey } from "../computeStageCost";
 
 // ============================================================================
 // Stall Detection (Issue #769, #1620, #2654, #2656)
@@ -1083,9 +1083,17 @@ const OPENCODE_PROVIDER_SCALE_ADAPTER: Partial<
  * scale follows the `<provider>/<model>` it dispatches:
  *   - a local provider (`lmstudio/…`, `ollama/…`) → `0.0`, the time-cap
  *     sentinel, exactly as the lm-studio / ollama adapters;
- *   - `anthropic/…` → Claude's scale, `openai/…` → Codex's, `xai/…` → Grok's,
- *     `google/…` → Gemini's;
- *   - anything else, or no model → `1.0`.
+ *   - a hosted model the registry cannot price (`openrouter/…`, `groq/…`,
+ *     an id the registry lists under another provider) → `0.0` too: its cost
+ *     is unstamped $0, so a cost cap could never bind, and time-cap mode
+ *     bounds it by {@link getTimeCapModeStageCapMs} instead;
+ *   - a priced `anthropic/…` → Claude's scale, `openai/…` → Codex's, `xai/…`
+ *     → Grok's, `google/…` → Gemini's;
+ *   - no model → `1.0`.
+ *
+ * An `opencode` stage's usage reaches the extension only at stage end (the
+ * SDK reports it once the process exits), so for a priced hosted model the
+ * cost cap acts on the stage-end total, not mid-run.
  *
  * Env and config overrides are layered on top by {@link getCostCapProviderScale};
  * this is only the default they override.
@@ -1097,7 +1105,7 @@ export function costCapProviderScale(
   if (!adapter) return 1.0;
   if (adapter !== "opencode") return DEFAULT_COST_CAP_PROVIDER_SCALE[adapter] ?? 1.0;
   if (!model) return 1.0;
-  if (isLocalExecution(adapter, model)) return 0.0;
+  if (isLocalExecution(adapter, model) || !isPriceableOpenCodeModel(model)) return 0.0;
   const borrowed = OPENCODE_PROVIDER_SCALE_ADAPTER[providerFor(adapter, model)];
   return borrowed ? DEFAULT_COST_CAP_PROVIDER_SCALE[borrowed] : 1.0;
 }
@@ -1343,6 +1351,27 @@ export function getStageCostCapPerProviderUsd(
  *   out-of-scope per AC #4)
  */
 export const DEFAULT_STAGE_TIME_CAPS: Record<string, number> = {};
+
+/**
+ * The stage time cap in time-cap mode (`provider_scale = 0`) when none is
+ * configured: 4 hours, the ceiling the Go path gives an OpenCode stage on a
+ * local model (`openCodeLocalTimeoutCap`,
+ * internal/intelligence/routing/stage_timeout.go). Time-cap mode switches the
+ * cost cap off, and with {@link DEFAULT_STAGE_TIME_CAPS} empty it used to
+ * leave such a stage with no wall-clock bound at all (#1657).
+ */
+export const TIME_CAP_MODE_DEFAULT_SEC = 4 * 60 * 60;
+
+/**
+ * The time cap a stage in time-cap mode runs under: the configured
+ * {@link getStageTimeCapMs} when it is above 0, else
+ * {@link TIME_CAP_MODE_DEFAULT_SEC}. A configured 0 cannot remove the bound
+ * in this mode; configure a larger cap instead.
+ */
+export function getTimeCapModeStageCapMs(stage: string, workspaceRoot?: string): number {
+  const configured = getStageTimeCapMs(stage, workspaceRoot);
+  return configured > 0 ? configured : TIME_CAP_MODE_DEFAULT_SEC * 1000;
+}
 
 /**
  * Get the per-stage time cap (in milliseconds).

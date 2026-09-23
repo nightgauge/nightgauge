@@ -173,14 +173,11 @@ import {
 import { ExecutionAdapterSchema } from "../config/schema";
 import { isOpenCodeSwitchOn, openCodeGateMessage } from "./openCodeExperimentalGate";
 import { getOpenCodeModel } from "./resolvers/modelResolver";
-import { applyLocalStallFloorMs } from "./resolvers/monitoringResolver";
+import { applyLocalStallFloorMs, getTimeCapModeStageCapMs } from "./resolvers/monitoringResolver";
 import { isLocalExecution } from "./computeStageCost";
-// OpenCode's provider catalog (#1637): the variables it binds to each provider
-// key. Not on the SDK's package entry point, so imported from its build.
-import {
-  OPENCODE_CATALOG_ENV,
-  openCodeProviderEnv,
-} from "@nightgauge/sdk/dist/cli/adapters/opencodeCatalog";
+// The dispatch's withheld-variable set (#1657), the TS twin of the Go verb's
+// env_withhold. Not on the SDK's package entry point, so imported from its build.
+import { openCodeEnvWithholdFor } from "@nightgauge/sdk/dist/cli/adapters/opencodeCatalog";
 // Direct resolver import (#569): the registry effort gate for non-Claude
 // adapter dispatches. Deliberately not routed through the nightgaugeConfig
 // barrel — this is dispatch preflight, not configuration reading.
@@ -3202,9 +3199,11 @@ export function agenticPipelineAdapters(): ExecutionAdapter[] {
  *     from NIGHTGAUGE_BIN or `nightgauge` on PATH, and fails the stage
  *     without it;
  *   - no model to dispatch: `opencode.model` is unset and the stage's own
- *     model (`stageModel`, the dispatch model when the caller has one) names
- *     no provider, so a band has nothing to resolve against and OpenCode
- *     would fall back to whatever model its own config names;
+ *     model (`stageModel`: the model input dispatch resolves from, the
+ *     caller's model else `resolveModel`'s) names no provider, so a band has
+ *     nothing to resolve against and OpenCode would fall back to whatever
+ *     model its own config names. `pipeline.stage_models` and the per-stage
+ *     env override take only bands, so neither can name one;
  *   - the SDK stage CLI, `node`, `git` or `gh` is missing, as for the other
  *     SDK-path adapters.
  */
@@ -3777,48 +3776,33 @@ export function resolvePluginRoot(): string | undefined {
 }
 
 /**
- * The forge credentials an OpenCode stage keeps whatever its provider: its
- * bash tool runs `gh` and `git` (the SDK's OPENCODE_FORGE_ALLOW). OpenCode's
- * catalog binds GITHUB_TOKEN to `github-copilot`, so without this exemption
- * the stage would lose its forge token.
- */
-const OPENCODE_FORGE_ENV: ReadonlySet<string> = new Set(["GH_TOKEN", "GITHUB_TOKEN", "GH_HOST"]);
-
-/**
- * Remove from an `opencode` stage's spawn env what the operator's environment
- * must not hand it (Issue #1657). A spread can override a name but never
- * remove one, so this runs after composition, like the run-identity
- * reconcile. Mutates `env`:
+ * Remove from an `opencode` stage's spawn env what the dispatch withholds
+ * (Issue #1657). A spread can override a name but never remove one, so this
+ * runs after composition, like the run-identity reconcile. Mutates `env`.
  *
- *   - every `OPENCODE_*` and `NIGHTGAUGE_OPENCODE_*` variable. The stage's
- *     OpenCode variables come only from `nightgauge opencode config` (#1648),
- *     which the SDK adapter runs per stage; an inherited OPENCODE_PERMISSION,
- *     OPENCODE_CONFIG_CONTENT or plugin handshake variable is the operator's
- *     or an outer run's;
- *   - every variable OpenCode's provider catalog binds to a provider other
- *     than `model`'s, so no other provider's key is in reach. The forge
- *     credentials stay;
- *   - `NIGHTGAUGE_MODEL` when there is no dispatch model, so an inherited
- *     value never becomes one.
+ * The withheld set is exactly the dispatch's `env_withhold`: the SDK's
+ * `openCodeEnvWithholdFor`, the TS twin of the Go `OpenCodeEnvWithholdFor`
+ * that `nightgauge opencode config` prints (a parity test holds it to the
+ * verb's golden output). That is every `OPENCODE_*` variable, the provider
+ * base URLs, and every catalog variable of a model service other than the
+ * dispatched one; a platform provider's variables, the forge token among
+ * them, stay. `NIGHTGAUGE_MODEL` also goes when there is no dispatch model,
+ * so an inherited value never becomes one.
  *
- * `XDG_*` is NOT removed here, and deliberately: this env is the SDK stage
+ * `XDG_*` is not withheld, here or by the Go verb: this env is the SDK stage
  * CLI's, not OpenCode's. The `nightgauge opencode config` run it starts reads
  * the operator's XDG_CONFIG_HOME / XDG_CACHE_HOME to find the machine-tier
  * config and to pin gh's config directory, the Go build cache and (with
  * `opencode.inherit_user_config`) the operator's OpenCode config back to where
  * they resolve outside the run. The SDK then replaces all four XDG
- * directories, and drops every inherited `OPENCODE_*`, when it builds the
- * `opencode` process's env (`curateOpenCodeChildEnv`).
+ * directories when it builds the `opencode` process's env
+ * (`curateOpenCodeChildEnv`).
  */
 export function reconcileOpenCodeSpawnEnv(env: NodeJS.ProcessEnv, model: string | undefined): void {
-  const keep = new Set(model ? openCodeProviderEnv(model) : []);
+  const withhold = openCodeEnvWithholdFor(model ?? "");
+  const names = new Set(withhold.names);
   for (const name of Object.keys(env)) {
-    if (name.startsWith("OPENCODE_") || name.startsWith("NIGHTGAUGE_OPENCODE_")) delete env[name];
-  }
-  for (const names of Object.values(OPENCODE_CATALOG_ENV)) {
-    for (const name of names) {
-      if (!keep.has(name) && !OPENCODE_FORGE_ENV.has(name)) delete env[name];
-    }
+    if (names.has(name) || withhold.prefixes.some((p) => name.startsWith(p))) delete env[name];
   }
   if (!model) delete env.NIGHTGAUGE_MODEL;
 }
@@ -4108,7 +4092,27 @@ export function runStageSkillHeadless(
   let adapter: ExecutionAdapter = pinnedAdapter ?? initialDecision.adapter;
   let adapterSource: AdapterSource = pinnedAdapter ? "cap-fallback" : initialDecision.source;
   let routerRationale: string | undefined = pinnedAdapter ? undefined : initialDecision.rationale;
-  let prereqError = validateAdapterPrerequisites(adapter, workspaceRoot, "headless", modelOverride);
+  // The model input dispatch resolves an opencode stage's model from
+  // (`requestedModel` below): the caller's model, else resolveModel's. Only
+  // an opencode candidate needs it, so it is resolved at most once, on demand.
+  let openCodeModelInput: { model: string | undefined } | undefined;
+  const openCodeDispatchModelInput = (): string | undefined =>
+    (openCodeModelInput ??= {
+      model:
+        modelOverride ??
+        resolveModel(
+          stage,
+          workspaceRoot,
+          pauseAutoRouting ? undefined : issueMetadata,
+          issueNumber
+        ).model,
+    }).model;
+  let prereqError = validateAdapterPrerequisites(
+    adapter,
+    workspaceRoot,
+    "headless",
+    adapter === "opencode" ? openCodeDispatchModelInput() : undefined
+  );
 
   // Issue #3231 — track every adapter the dispatcher considers at stage start,
   // in order. Element 0 is always the primary; subsequent elements are
@@ -4134,7 +4138,12 @@ export function runStageSkillHeadless(
       adapter,
       prereqError,
       (candidate) =>
-        validateAdapterPrerequisites(candidate, workspaceRoot, "headless", modelOverride),
+        validateAdapterPrerequisites(
+          candidate,
+          workspaceRoot,
+          "headless",
+          candidate === "opencode" ? openCodeDispatchModelInput() : undefined
+        ),
       workspaceRoot,
       stage,
       initialDecision.source === "auto-router" || initialDecision.source === "default"
@@ -5638,7 +5647,13 @@ export function runStageSkillHeadless(
   // scale fires the "switch to time-cap" sentinel we OR this value with
   // the existing `hardCapMs` ticker — whichever is smaller and `> 0`
   // wins, leaving the absolute hard-cap escape hatch intact.
-  const stageTimeCapMs = getStageTimeCapMs(stage, workspaceRoot);
+  // In time-cap mode a configured cap applies, else a default one (#1657):
+  // with the cost cap off, an unconfigured stage would otherwise have no
+  // wall-clock bound.
+  const stageTimeCapMs =
+    costCapProviderScale === 0
+      ? getTimeCapModeStageCapMs(stage, workspaceRoot)
+      : getStageTimeCapMs(stage, workspaceRoot);
   const timeCapActive = costCapUsd === 0 && costCapProviderScale === 0 && stageTimeCapMs > 0;
   const effectiveHardCapMs = timeCapActive
     ? hardCapMs > 0

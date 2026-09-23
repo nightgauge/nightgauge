@@ -43,6 +43,10 @@ import {
   getCostCapProviderScale,
   getEffectiveStageCostCap,
   getStageCostCapPerProviderUsd,
+  DEFAULT_STAGE_TIME_CAPS,
+  getStageTimeCapMs,
+  getTimeCapModeStageCapMs,
+  TIME_CAP_MODE_DEFAULT_SEC,
 } from "../../../src/utils/resolvers/monitoringResolver";
 
 const PROVIDER_ENV_KEYS = [
@@ -151,9 +155,20 @@ describe("costCapProviderScale — opencode follows the model's provider (#1657)
     );
   });
 
-  it("an unknown provider, a malformed model or no model is 1.0", () => {
-    expect(costCapProviderScale("opencode", "openrouter/meta-llama/llama-4")).toBe(1.0);
-    expect(costCapProviderScale("opencode", "claude-sonnet-5")).toBe(1.0);
+  it("a hosted model the registry cannot price is 0.0: its cost is unstamped, so time-cap mode bounds it", () => {
+    for (const model of [
+      "openrouter/meta-llama/llama-4",
+      "groq/llama-4-scout",
+      // Known id, but not under the provider that serves it.
+      "openrouter/claude-sonnet-5",
+      "anthropic/claude-sonnet-99-preview",
+      "claude-sonnet-5",
+    ]) {
+      expect(costCapProviderScale("opencode", model), model).toBe(0.0);
+    }
+  });
+
+  it("no model is 1.0", () => {
     expect(costCapProviderScale("opencode", undefined)).toBe(1.0);
   });
 
@@ -670,5 +685,23 @@ describe("getEffectiveStageCostCap — adapter-switch recompute (Issue #3231)", 
     expect(gemini.effectiveCap).not.toBe(claude.effectiveCap);
     // Gemini's provider scale is lower than claude's, so the cap is tighter.
     expect(gemini.effectiveCap).toBeLessThan(claude.effectiveCap);
+  });
+});
+
+describe("getTimeCapModeStageCapMs — time-cap mode is never unbounded (#1657)", () => {
+  afterEach(() => {
+    delete process.env.NIGHTGAUGE_PIPELINE_STAGE_TIME_CAP_FEATURE_DEV;
+  });
+
+  it("with nothing configured, time-cap mode gets TIME_CAP_MODE_DEFAULT_SEC", () => {
+    expect(DEFAULT_STAGE_TIME_CAPS["feature-dev"]).toBeUndefined();
+    expect(getStageTimeCapMs("feature-dev")).toBe(0);
+    expect(getTimeCapModeStageCapMs("feature-dev")).toBe(TIME_CAP_MODE_DEFAULT_SEC * 1000);
+    expect(TIME_CAP_MODE_DEFAULT_SEC).toBe(4 * 60 * 60);
+  });
+
+  it("a configured cap wins", () => {
+    process.env.NIGHTGAUGE_PIPELINE_STAGE_TIME_CAP_FEATURE_DEV = "1800";
+    expect(getTimeCapModeStageCapMs("feature-dev")).toBe(1_800_000);
   });
 });
