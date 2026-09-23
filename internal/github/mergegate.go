@@ -13,12 +13,21 @@ package github
 //     the PR run tested exactly what landed;
 //  2. every required check on that PR head concluded successfully — the gate
 //     actually passed (skipped and neutral count as passing, as everywhere);
-//  3. whatever still runs on the merge commit itself (CodeQL's default-branch
-//     baseline) is green, or still running.
+//  3. whatever else still runs on the merge commit itself is green, or still
+//     running.
 //
 // cache-warm is never part of the verdict (InformationalCheck). It tests
 // nothing: it restores and saves caches. A network blip failing it would
 // otherwise read as "main is red, fix it now" with nothing to fix.
+//
+// CodeQL (the "Analyze (<language>)" jobs and the "CodeQL" code-scanning
+// check, CodeQLCheck) is informational on the tree-equal path only. It keeps
+// running on push to main because it is the default-branch baseline for the
+// Security tab and for PR "new alerts" comparisons, but it analyses the same
+// tree with the same queries as the PR's own CodeQL run, which is required
+// and already passed in (2). Its merge-commit runs are reported as info,
+// never RED and never NOT-YET. On the tree-mismatch fallback below they count
+// like every other check, because nothing has analysed the landed tree.
 //
 // When the trees differ — which the strict policy prevents, so it means a
 // ruleset bypass such as `--admin` or a branch without the policy — the PR run
@@ -215,6 +224,22 @@ func informationalWorkflow(name string) bool {
 	return strings.EqualFold(strings.TrimSpace(name), "cache warm")
 }
 
+// CodeQLCheck reports whether a check is one of CodeQL's, matched the way
+// .github/workflows/codeql.yml names them: the "Analyze (<language>)" matrix
+// jobs and the "CodeQL" code-scanning check that the analysis upload creates.
+// On a merge commit whose tree equals the PR head's they are informational
+// (#2055): the PR's own required CodeQL run already analysed that tree.
+func CodeQLCheck(name string) bool {
+	n := strings.ToLower(strings.TrimSpace(name))
+	return n == "codeql" || (strings.HasPrefix(n, "analyze (") && strings.HasSuffix(n, ")"))
+}
+
+// codeQLWorkflow is CodeQLCheck for the per-run cross-check: the jobs run in
+// the "CodeQL" workflow.
+func codeQLWorkflow(name string) bool {
+	return strings.EqualFold(strings.TrimSpace(name), "codeql")
+}
+
 // DecidingChecks drops the informational checks from a merge commit's list.
 func DecidingChecks(checks []CheckDetail) []CheckDetail {
 	out := make([]CheckDetail, 0, len(checks))
@@ -274,10 +299,25 @@ func EvaluateMergedCommit(e MergeEvidence) (ChecksCompleteVerdict, []string) {
 		return ChecksNotYet, []string{unknownRequiredReason}
 	}
 
+	// CodeQL is informational here: the PR head's required CodeQL run
+	// analysed this same tree. Its presence still proves the push workflows
+	// were created, so it ends the empty-list grace.
+	anyPushCheck := len(e.MergeChecks) > 0
+	pushChecks, codeql := splitCodeQL(e.MergeChecks)
+	var pushRuns []WorkflowRunSummary
+	if e.Runs != nil {
+		pushRuns = make([]WorkflowRunSummary, 0, len(e.Runs))
+		for _, r := range e.Runs {
+			if !codeQLWorkflow(r.Name) {
+				pushRuns = append(pushRuns, r)
+			}
+		}
+	}
+
 	headVerdict, headReasons := EvaluateChecksComplete(e.HeadChecks, e.RequiredNames)
-	mergeVerdict, mergeReasons := evaluatePushChecks(e.MergeChecks, p.MergedAt, e.Now)
+	mergeVerdict, mergeReasons := evaluatePushChecks(pushChecks, anyPushCheck, p.MergedAt, e.Now)
 	if mergeVerdict != ChecksNotYet {
-		if agree, cross := CrossCheckWorkflowRuns(e.MergeChecks, e.Runs); !agree {
+		if agree, cross := CrossCheckWorkflowRuns(pushChecks, pushRuns); !agree {
 			mergeVerdict, mergeReasons = ChecksNotYet, append(mergeReasons, cross...)
 		}
 	}
@@ -289,14 +329,50 @@ func EvaluateMergedCommit(e MergeEvidence) (ChecksCompleteVerdict, []string) {
 	for _, r := range mergeReasons {
 		reasons = append(reasons, fmt.Sprintf("merge commit %s: %s", shortRef(p.MergeSHA), r))
 	}
+	info := codeQLInfo(codeql, p.MergeSHA)
 	switch {
 	case headVerdict == ChecksNotYet || mergeVerdict == ChecksNotYet:
-		return ChecksNotYet, reasons
+		return ChecksNotYet, append(reasons, info...)
 	case headVerdict == ChecksIncomplete || mergeVerdict == ChecksIncomplete:
-		return ChecksIncomplete, reasons
+		return ChecksIncomplete, append(reasons, info...)
 	default:
-		return ChecksComplete, nil
+		return ChecksComplete, info
 	}
+}
+
+// splitCodeQL separates CodeQL's checks (CodeQLCheck) from the rest.
+func splitCodeQL(checks []CheckDetail) (rest, codeql []CheckDetail) {
+	for _, c := range checks {
+		if CodeQLCheck(c.Name) {
+			codeql = append(codeql, c)
+		} else {
+			rest = append(rest, c)
+		}
+	}
+	return rest, codeql
+}
+
+// codeQLInfo reports the CodeQL merge-commit checks that are not a concluded
+// pass, as information only: they never decide the tree-equal verdict.
+func codeQLInfo(codeql []CheckDetail, mergeSHA string) []string {
+	var running, failed []string
+	for _, c := range codeql {
+		switch {
+		case !isChecksCompleteConcluded(c):
+			running = append(running, c.Name)
+		case !passingCheckConclusions[strings.ToUpper(strings.TrimSpace(c.Conclusion))]:
+			failed = append(failed, fmt.Sprintf("%s (%s)", c.Name, strings.ToLower(c.Conclusion)))
+		}
+	}
+	const why = "informational: the PR's required CodeQL run analysed this same tree; this run is the default-branch baseline"
+	var out []string
+	if len(failed) > 0 {
+		out = append(out, fmt.Sprintf("merge commit %s: CodeQL did not pass: %s (%s)", shortRef(mergeSHA), strings.Join(failed, ", "), why))
+	}
+	if len(running) > 0 {
+		out = append(out, fmt.Sprintf("merge commit %s: CodeQL still running: %s (%s)", shortRef(mergeSHA), strings.Join(running, ", "), why))
+	}
+	return out
 }
 
 // untestedForGood reports that waiting cannot make a tree-mismatched merge
@@ -334,10 +410,12 @@ func neverGreenIfUnknown(verdict ChecksCompleteVerdict, reasons []string, known 
 // the gate: every check present must conclude and pass, and none is required
 // to exist. An empty list is NOT-YET inside MergeCommitCheckGrace of the merge
 // (the push workflows may not have been created yet) and passes after it (a
-// repository that runs nothing on push has nothing to wait for).
-func evaluatePushChecks(checks []CheckDetail, mergedAt, now time.Time) (ChecksCompleteVerdict, []string) {
+// repository that runs nothing on push has nothing to wait for). anySeen is
+// true when an informational check (CodeQL) was on the list before it was
+// filtered: the push workflows exist, so there is nothing to wait for.
+func evaluatePushChecks(checks []CheckDetail, anySeen bool, mergedAt, now time.Time) (ChecksCompleteVerdict, []string) {
 	if len(checks) == 0 {
-		if now.Sub(mergedAt) < MergeCommitCheckGrace {
+		if !anySeen && now.Sub(mergedAt) < MergeCommitCheckGrace {
 			return ChecksNotYet, []string{fmt.Sprintf("no checks on the merge commit yet (within %s of the merge)", MergeCommitCheckGrace)}
 		}
 		return ChecksComplete, nil

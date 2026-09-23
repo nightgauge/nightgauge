@@ -327,8 +327,12 @@ func TestPollChecksComplete_MergedPRHeadIsTheGate(t *testing.T) {
 		want     gh.ChecksCompleteVerdict
 	}{
 		{"tree equal and green", "t1", [][]gh.CheckDetail{{detail("CodeQL", "COMPLETED", "SUCCESS")}}, gh.ChecksComplete},
-		{"push job running", "t1", [][]gh.CheckDetail{{detail("CodeQL", "IN_PROGRESS", "")}}, gh.ChecksNotYet},
-		{"push job red", "t1", [][]gh.CheckDetail{{detail("CodeQL", "COMPLETED", "FAILURE")}}, gh.ChecksIncomplete},
+		{"push job running", "t1", [][]gh.CheckDetail{{detail("publish", "IN_PROGRESS", "")}}, gh.ChecksNotYet},
+		{"push job red", "t1", [][]gh.CheckDetail{{detail("publish", "COMPLETED", "FAILURE")}}, gh.ChecksIncomplete},
+		// CodeQL re-analyses the tree the PR's required CodeQL run passed.
+		{"tree equal, CodeQL running: informational", "t1", [][]gh.CheckDetail{{detail("Analyze (go)", "IN_PROGRESS", ""), detail("CodeQL", "QUEUED", "")}}, gh.ChecksComplete},
+		{"tree equal, CodeQL red: informational", "t1", [][]gh.CheckDetail{{detail("Analyze (go)", "COMPLETED", "FAILURE"), detail("CodeQL", "COMPLETED", "FAILURE")}}, gh.ChecksComplete},
+		{"tree differs, CodeQL red, required checks present: red", "t2", [][]gh.CheckDetail{{detail("Go build & test", "COMPLETED", "SUCCESS"), detail("cla", "COMPLETED", "SUCCESS"), detail("CodeQL", "COMPLETED", "FAILURE")}}, gh.ChecksIncomplete},
 		// An hour after the merge with no required check on the merge commit:
 		// the landed tree was never tested, and waiting will not change it.
 		{"tree differs", "t2", [][]gh.CheckDetail{{detail("CodeQL", "COMPLETED", "SUCCESS")}}, gh.ChecksIncomplete},

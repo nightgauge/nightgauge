@@ -446,6 +446,15 @@ create --body-file` call, so the compact profile (and its tests) pin
 
 ### Changed
 
+- **CodeQL on `main` is informational in the post-merge verdict (#2055).**
+  CodeQL still runs on push to `main` as the default-branch code-scanning
+  baseline, but when the merge commit's tree equals the PR head's, its
+  `Analyze (…)` and `CodeQL` checks there no longer decide the verdict of
+  `scripts/post-merge-check.sh`, `nightgauge ci checks-complete` or
+  `nightgauge hook post-merge`: the PR's own required CodeQL run already
+  analysed that tree. A running or failed CodeQL is reported, not exit 1 or 2.
+  On a tree mismatch it counts as before.
+
 - **The PR run is the gate; the full suites no longer re-run on push to
   `main` (#2055).** `main`'s ruleset merges a pull request only when it is up
   to date, so the squash commit's tree is the tree its required checks passed

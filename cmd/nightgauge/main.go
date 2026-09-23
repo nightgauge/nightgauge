@@ -7471,8 +7471,10 @@ func pollChecksComplete(ctx context.Context, reader checksCompleteReader, owner,
 //
 // When the SHA is a merged pull request's merge commit (#2055), the PR run is
 // the gate: the merge commit's tree must equal the PR head's tree, the PR
-// head's required checks must all have passed, and whatever still runs on the
-// merge commit (CodeQL, cache-warm) must be green, still running being NOT-YET.
+// head's required checks must all have passed, and whatever else still runs
+// on the merge commit must be green, still running being NOT-YET. cache-warm
+// never counts; CodeQL's merge-commit runs are informational (reported, never
+// deciding), because the PR's required CodeQL run analysed the same tree.
 // If the trees differ (a ruleset bypass), or the SHA has no merged PR, the
 // rule is the SHA's own checks: every check run and commit status counts, a
 // failed optional check is RED, a still-running one is NOT-YET, and required
@@ -7496,7 +7498,8 @@ func ciChecksCompleteCmd() *cobra.Command {
 		Short: "Answer \"did this SHA's CI go green?\" — for a merge commit, the merged PR head's required checks on the same tree plus the merge commit's own runs",
 		Long: "Answer \"did this SHA's CI go green?\" with the post-merge rule of #2055: for a merged PR's\n" +
 			"merge commit, the merge commit's tree must equal the PR head's, the head's required checks\n" +
-			"must have passed, and the checks still running on the merge commit (not cache-warm) must be\n" +
+			"must have passed, and the checks still running on the merge commit (not cache-warm; CodeQL is\n" +
+			"reported but informational, since the PR's own CodeQL run analysed the same tree) must be\n" +
 			"green. Exit 0 green, 1 red, 2 not yet observable.\n\n" +
 			// scripts/post-merge-check.sh greps --help for this exact line
 			// before handing off; a binary without it gets the script's own

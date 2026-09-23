@@ -3,6 +3,7 @@ package hooks
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -64,7 +65,7 @@ func TestVerifyMergeCommit_PRHeadIsTheGate(t *testing.T) {
 
 	t.Run("push job still running keeps the hook polling, then pending", func(t *testing.T) {
 		r := &provenReader{
-			scriptedChecks: scriptedChecks{required: required, frames: [][]forgetypes.CheckDetail{{run("CodeQL", "IN_PROGRESS", "")}}},
+			scriptedChecks: scriptedChecks{required: required, frames: [][]forgetypes.CheckDetail{{run("publish", "IN_PROGRESS", "")}}},
 			prov:           mergeProv("t1", "t1"), headChecks: headGreen,
 		}
 		res := VerifyMergeCommit(context.Background(), r, "o", "r", "main", "abc1234", provWait(4, late))
@@ -76,8 +77,8 @@ func TestVerifyMergeCommit_PRHeadIsTheGate(t *testing.T) {
 	t.Run("push job goes green on a later poll", func(t *testing.T) {
 		r := &provenReader{
 			scriptedChecks: scriptedChecks{required: required, frames: [][]forgetypes.CheckDetail{
-				{run("CodeQL", "IN_PROGRESS", "")},
-				{run("CodeQL", "COMPLETED", "SUCCESS")},
+				{run("publish", "IN_PROGRESS", "")},
+				{run("publish", "COMPLETED", "SUCCESS")},
 			}},
 			prov: mergeProv("t1", "t1"), headChecks: headGreen,
 		}
@@ -87,9 +88,43 @@ func TestVerifyMergeCommit_PRHeadIsTheGate(t *testing.T) {
 		}
 	})
 
+	t.Run("tree equal, CodeQL still running: green on the first poll", func(t *testing.T) {
+		r := &provenReader{
+			scriptedChecks: scriptedChecks{required: required, frames: [][]forgetypes.CheckDetail{{run("Analyze (go)", "IN_PROGRESS", ""), run("CodeQL", "QUEUED", "")}}},
+			prov:           mergeProv("t1", "t1"), headChecks: headGreen,
+		}
+		res := VerifyMergeCommit(context.Background(), r, "o", "r", "main", "abc1234", provWait(4, provMergedAt.Add(time.Minute)))
+		if res.Verdict != MainChecksGreen || res.Polls != 1 {
+			t.Fatalf("result = %+v, want green on poll 1: CodeQL is informational on the same tree", res)
+		}
+	})
+
+	t.Run("tree equal, CodeQL failed: green, reported as info", func(t *testing.T) {
+		r := &provenReader{
+			scriptedChecks: scriptedChecks{required: required, frames: [][]forgetypes.CheckDetail{{run("Analyze (go)", "COMPLETED", "FAILURE"), run("CodeQL", "COMPLETED", "FAILURE")}}},
+			prov:           mergeProv("t1", "t1"), headChecks: headGreen,
+		}
+		res := VerifyMergeCommit(context.Background(), r, "o", "r", "main", "abc1234", provWait(2, late))
+		if res.Verdict != MainChecksGreen || len(res.Reasons) == 0 || !strings.Contains(res.Reasons[0], "informational") {
+			t.Fatalf("result = %+v, want green with an informational CodeQL reason", res)
+		}
+	})
+
+	t.Run("tree differs, required CodeQL failed on the merge commit: red", func(t *testing.T) {
+		req := append([]string{"CodeQL"}, required...)
+		r := &provenReader{
+			scriptedChecks: scriptedChecks{required: req, frames: [][]forgetypes.CheckDetail{{run("Go build & test", "COMPLETED", "SUCCESS"), run("lint", "COMPLETED", "SUCCESS"), run("CodeQL", "COMPLETED", "FAILURE")}}},
+			prov:           mergeProv("t1", "t2"), headChecks: headGreen,
+		}
+		res := VerifyMergeCommit(context.Background(), r, "o", "r", "main", "abc1234", provWait(2, late))
+		if res.Verdict != MainChecksRed || len(res.Failing) != 1 || res.Failing[0].Name != "CodeQL" || !res.Failing[0].Required {
+			t.Fatalf("result = %+v, want red naming the required CodeQL check", res)
+		}
+	})
+
 	t.Run("PR head's required check red names it on the card", func(t *testing.T) {
 		r := &provenReader{
-			scriptedChecks: scriptedChecks{required: required, frames: [][]forgetypes.CheckDetail{{run("CodeQL", "COMPLETED", "SUCCESS")}}},
+			scriptedChecks: scriptedChecks{required: required, frames: [][]forgetypes.CheckDetail{{run("CodeQL", "COMPLETED", "FAILURE")}}},
 			prov:           mergeProv("t1", "t1"), headChecks: headRed,
 		}
 		res := VerifyMergeCommit(context.Background(), r, "o", "r", "main", "abc1234", provWait(3, late))

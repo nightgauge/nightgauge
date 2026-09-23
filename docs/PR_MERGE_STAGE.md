@@ -519,10 +519,14 @@ tie the merge commit to its merged PR (`internal/github.GetMergeProvenance`),
 
 1. the merge commit's tree must equal the PR head's tree;
 2. every required check on the PR head must have passed;
-3. every check on the merge commit (CodeQL) must be green. Still running keeps
+3. every other check on the merge commit must be green. Still running keeps
    the poll going. `cache-warm` is informational
    (`internal/github.InformationalCheck`): it tests nothing, so it never fails
-   the verdict or holds the wait. An empty list is `pending` for
+   the verdict or holds the wait. CodeQL's merge-commit runs
+   (`internal/github.CodeQLCheck`: the `Analyze (…)` jobs and the `CodeQL`
+   check) are informational too, because the PR's required CodeQL run
+   analysed the same tree: they appear in the reasons, never fail the verdict
+   and never hold the wait. On the tree-mismatch path below they count. An empty list is `pending` for
    `MergeCommitCheckGrace` (5 min) after the merge and passes after that,
    because a repository that runs nothing on push has nothing to wait for.
 
