@@ -622,6 +622,12 @@ create --body-file` call, so the compact profile (and its tests) pin
 
 ### Fixed
 
+- **`scripts/post-merge-check.sh` no longer waits an hour on an untested tree
+  under jq 1.6 (#2058).** The merge's age came from jq's `fromdateiso8601`,
+  which jq 1.6 reads an hour late, so the five-minute grace did not expire and
+  a landed tree that no PR tested read "not yet" instead of red. The age now
+  comes from `date`. Re-copy the script into each repository that vendors it.
+
 - **An OpenCode stage stuck silently on its operator-directory install is
   classified even when the stage deadline ends it (#1954).** The
   operator-install watchdog's bound is capped by the stage's remaining

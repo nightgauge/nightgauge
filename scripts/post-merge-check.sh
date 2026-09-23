@@ -317,9 +317,16 @@ resolve_required() {
   fi
 }
 
-# merge_age — seconds since MERGED_AT.
+# merge_age — seconds since MERGED_AT. Not jq's fromdateiso8601: jq 1.6 reads
+# it an hour late across DST, so the grace never expired (BSD date, then GNU).
 merge_age() {
-  jq -n --arg t "$MERGED_AT" 'now - ($t | fromdateiso8601) | floor' 2>/dev/null || echo 0
+  local t
+  t=$(date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$MERGED_AT" +%s 2>/dev/null ||
+    date -u -d "$MERGED_AT" +%s 2>/dev/null) || {
+    echo 0
+    return
+  }
+  echo $(($(date -u +%s) - t))
 }
 
 # --- Which evidence applies (#2055) ---------------------------------------

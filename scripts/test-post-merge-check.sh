@@ -353,6 +353,19 @@ expect "a tree-differs verdict says why" 2 "differs from PR #42 head"
 stub_gh "$PUSH_GREEN"
 stub_pr tree-b "$HEAD_GREEN" "$CLA_OK"
 expect "tree differs, required checks absent after the grace: RED" 1 "run the suites on main via workflow_dispatch"
+# The age must not come from jq's date functions: jq 1.6 reads a UTC time an
+# hour late, so a merge ten minutes old stayed inside the grace for an hour. A
+# jq that refuses fromdateiso8601 stands in for it; the verdict must still be RED.
+TEN_MIN_AGO=$(($(date -u +%s) - 600))
+TEN_MIN_AGO=$(date -u -r "$TEN_MIN_AGO" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null ||
+  date -u -d "@$TEN_MIN_AGO" +%Y-%m-%dT%H:%M:%SZ)
+REAL_JQ=$(command -v jq)
+stub_gh "$PUSH_GREEN"
+stub_pr tree-b "$HEAD_GREEN" "$CLA_OK" "$TEN_MIN_AGO"
+printf '#!/usr/bin/env bash\ncase "$*" in *fromdateiso8601*) exit 5 ;; esac\nexec %s "$@"\n' "$REAL_JQ" >"$FAKE_BIN/jq"
+chmod +x "$FAKE_BIN/jq"
+expect "a merge ten minutes old is past the grace without jq date parsing: RED" 1 "run the suites on main via workflow_dispatch"
+rm -f "$FAKE_BIN/jq"
 stub_gh '{"check_runs": [
   {"name": "build", "status": "in_progress", "conclusion": null}
 ]}'
