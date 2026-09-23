@@ -29,6 +29,9 @@ import { deriveComponentOptions } from "../types/FilterConfig";
 import { getPrefixedMainChannel } from "../utils/logger";
 import { isRepoInitialized } from "../utils/repoInitialized";
 
+/** Board statuses an open read covers, lower-cased as the per-status cache keys them. */
+const OPEN_BOARD_STATUSES = ["ready", "in progress", "in review", "backlog"] as const;
+
 // ---------------------------------------------------------------------------
 // Output channel
 // ---------------------------------------------------------------------------
@@ -719,11 +722,43 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
         if (!(await this.checkRateLimit())) throw new RateLimitedError();
         return this.ipc.boardListOpen(owner, projectNumber, this.ownerType, this.githubUser);
       });
-      return this.boardItemsToReadyIssues(items);
+      const issues = this.boardItemsToReadyIssues(items);
+      this.fillStatusCacheFromOpen(issues);
+      return issues;
     } catch (err) {
       if (!(err instanceof RateLimitedError)) log(`IPC board.listOpen failed: ${err}`);
       const stale = this.snapshots.stale(key);
       return stale ? this.boardItemsToReadyIssues(stale) : [];
+    }
+  }
+
+  /**
+   * Seeds the per-status `cache` from an open read, as prefetchAllItems does
+   * from the all-items read. The cache-only readers depend on it: the filter
+   * picker's Component section (getObservedComponents) and epic metadata
+   * (getEpicMetadataFromCache) scan it and find nothing when the per-status
+   * reads it used to be filled by are not made.
+   *
+   * Keys follow prefetchAllItems (`<project>:<lower-cased board status>`).
+   * Every open status is rewritten, including one that emptied since the last
+   * read, so a moved issue does not linger in its old bucket. Done is left
+   * alone: the open read never carries it.
+   */
+  private fillStatusCacheFromOpen(issues: ReadyIssue[]): void {
+    const byStatus = new Map<string, ReadyIssue[]>();
+    for (const status of OPEN_BOARD_STATUSES) byStatus.set(status, []);
+    for (const issue of issues) {
+      const status = (issue.status || "Backlog").toLowerCase();
+      if (status === "done") continue;
+      const bucket = byStatus.get(status);
+      if (bucket) bucket.push(issue);
+      else byStatus.set(status, [issue]);
+    }
+    const now = Date.now();
+    for (const [status, bucket] of byStatus) {
+      const cacheKey = `${this.projectNumber}:${status}`;
+      this.cache.set(cacheKey, bucket);
+      this.cacheTimes.set(cacheKey, now);
     }
   }
 
@@ -906,6 +941,17 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
       this.cache.delete(cacheKey);
       this.cacheTimes.delete(cacheKey);
       this.inFlightRequests.delete(cacheKey);
+      // The open read seeds buckets under the board's spelling ("in progress")
+      // while callers name the status by key ("in-progress"); drop both.
+      const boardSpelling = `${this.projectNumber}:${status.toLowerCase().replace(/-/g, " ")}`;
+      this.cache.delete(boardSpelling);
+      this.cacheTimes.delete(boardSpelling);
+      // The shared per-status snapshot is what getIssuesByStatus actually
+      // serves from, so it must expire too, or a drilldown keeps showing the
+      // pre-move list while the row count (from the open read) has moved on.
+      // Expired, not dropped: it stays the stale-if-error fallback (#485).
+      const statusKey = this.snapshotKey(status);
+      if (statusKey) this.snapshots.expireScope(statusKey);
     }
     // Counts changed — force a fresh fetch on next getAggregatedStatusCounts(),
     // but keep the last-known-good counts as the stale-if-error fallback

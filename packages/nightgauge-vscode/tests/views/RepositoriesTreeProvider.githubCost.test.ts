@@ -6,9 +6,13 @@
  * extension and expanding this view was measured moving that budget from 88 to
  * 521 points in about sixteen minutes, with nothing else running.
  *
- * These tests drive the REAL tree provider over REAL ProjectBoardService
- * instances, with only the IPC client faked, and count every IPC verb the view
- * sends. The verbs are the unit because each GitHub-bound verb maps to a
+ * These tests drive the REAL tree provider over the REAL per-repository
+ * providers, wired the way the extension wires them (bootstrap/services.ts:
+ * `setProjectBoardServices` with one `ReadyIssueTreeProvider` around
+ * `createWorkItemProvider(...)` per repository), with only the IPC client
+ * faked, and count every IPC verb the view sends. Wiring bare
+ * ProjectBoardService instances instead once hid that the wrapper dropped the
+ * open read, so production kept paying three board reads per repository. The verbs are the unit because each GitHub-bound verb maps to a
  * known daemon handler (internal/ipc/server.go) and from there to a known
  * number of GraphQL reads:
  *
@@ -31,7 +35,9 @@ import { RepositoriesTreeProvider } from "../../src/views/RepositoriesTreeProvid
 import { RepositoryTreeItem } from "../../src/views/items/RepositoryTreeItem";
 import { IssueSummaryTreeItem } from "../../src/views/items/IssueSummaryTreeItem";
 import { ProjectBoardService } from "../../src/services/ProjectBoardService";
-import { BoardSnapshotStore } from "../../src/services/BoardSnapshotStore";
+import { sharedBoardSnapshots } from "../../src/services/BoardSnapshotStore";
+import { ReadyIssueTreeProvider } from "../../src/views/ReadyIssueTreeProvider";
+import { createWorkItemProvider } from "../../src/bootstrap/workItemProviderFactory";
 import { PollingVisibilityGate } from "../../src/services/AttentionSweepService";
 import type { WorkspaceManager } from "../../src/services/WorkspaceManager";
 import type { Repository } from "../../src/models/Repository";
@@ -102,6 +108,11 @@ const fakeIpc: Record<string, unknown> = {
   boardListOpen: async (_owner: string, projectNumber: number) =>
     openItemsFor(repoForProject(projectNumber)),
   boardCounts: async () => ({ ready: 2, inProgress: 1, inReview: 1, backlog: 2 }),
+  // Composite mode's repo source: every repository issue, board-less ones included.
+  issueList: async (_owner: string, repo: string) => [
+    ...openItemsFor(repo).map((i) => ({ ...i, state: "OPEN" })),
+    { number: 99, title: "Off-board", url: "", labels: [], state: "OPEN" },
+  ],
   autonomousStatus: async () => ({ status: "stopped" }),
 };
 
@@ -119,6 +130,10 @@ const countingIpc = new Proxy(fakeIpc, {
 vi.mock("../../src/services/IpcClient", () => ({
   IpcClient: { getInstance: () => countingIpc },
   IpcClientBase: class {},
+}));
+
+vi.mock("../../src/utils/configPathResolver", () => ({
+  getRepoIdentity: async (root: string) => ({ owner: "acme", repo: String(root).split("/").pop() }),
 }));
 
 vi.mock("../../src/utils/nightgaugeConfig", () => ({
@@ -230,6 +245,35 @@ function githubBoundCalls(): string[] {
   return ipcCalls.filter((c) => GITHUB_VERBS.has(c.verb)).map((c) => c.verb);
 }
 
+/**
+ * The extension's own wiring (bootstrap/services.ts, onWorkspaceChanged and the
+ * startup sync): one ReadyIssueTreeProvider around the configured provider per
+ * repository, handed to the view through setProjectBoardServices.
+ */
+function wireLikeProduction(
+  provider: RepositoriesTreeProvider,
+  repos: Repository[],
+  mode: "github" | "composite" = "github"
+): void {
+  const services = new Map<string, IWorkItemProvider>();
+  for (const repo of repos) {
+    services.set(
+      repo.name,
+      new ReadyIssueTreeProvider(createWorkItemProvider({ mode }, repo.path))
+    );
+  }
+  provider.setProjectBoardServices(services);
+}
+
+function makeProvider(repos: Repository[], mode: "github" | "composite" = "github") {
+  const provider = new RepositoriesTreeProvider(
+    makeWorkspaceManager(repos),
+    (path) => new ProjectBoardService(path)
+  );
+  wireLikeProduction(provider, repos, mode);
+  return provider;
+}
+
 /** What VS Code does when the view opens or re-renders from the root. */
 async function expandView(provider: RepositoriesTreeProvider): Promise<IssueSummaryTreeItem[][]> {
   const rows = (await provider.getChildren()).filter(
@@ -245,17 +289,14 @@ async function expandView(provider: RepositoriesTreeProvider): Promise<IssueSumm
 
 describe("RepositoriesTreeProvider — GitHub cost of the view", () => {
   let provider: RepositoriesTreeProvider;
-  let store: BoardSnapshotStore;
 
   beforeEach(() => {
     ipcCalls.length = 0;
     eventHandlers.clear();
-    store = new BoardSnapshotStore();
+    // Production services use the process-wide store; start each test cold.
+    sharedBoardSnapshots.clear();
     PollingVisibilityGate.instance.setViewVisible("repositoriesView", true);
-    provider = new RepositoriesTreeProvider(
-      makeWorkspaceManager(REPOS.map(makeRepo)),
-      (repoPath) => new ProjectBoardService(repoPath, undefined, store) as IWorkItemProvider
-    );
+    provider = makeProvider(REPOS.map(makeRepo));
   });
 
   afterEach(() => {
@@ -332,13 +373,28 @@ describe("RepositoriesTreeProvider — GitHub cost of the view", () => {
       path: `/workspace/alpha`, // same config → same board (project 1)
       name,
     })) as unknown as Repository[];
-    provider = new RepositoriesTreeProvider(
-      makeWorkspaceManager(sharedRepos),
-      (repoPath) => new ProjectBoardService(repoPath, undefined, store) as IWorkItemProvider
-    );
+    provider = makeProvider(sharedRepos);
 
     await expandView(provider);
 
     expect(githubBoundCalls().filter((v) => v.startsWith("board")).length).toBe(1);
+  });
+
+  it("composite mode reads each board's open snapshot, not the per-status lists", async () => {
+    provider.dispose();
+    ipcCalls.length = 0;
+    provider = makeProvider(REPOS.map(makeRepo), "composite");
+
+    const children = await expandView(provider);
+
+    const verbs = githubBoundCalls();
+    expect(verbs).not.toContain("boardList");
+    expect(verbs.filter((v) => v === "boardListOpen").length).toBe(5);
+    // The off-board repository issue (#99) counts under its inferred status
+    // (Ready: open, unlabelled, unblocked), as composite reads always counted it.
+    for (const row of children) {
+      const counts = Object.fromEntries(row.map((c) => [c.statusType, c.count]));
+      expect(counts).toEqual({ ready: 3, inProgress: 1, backlog: 1 });
+    }
   });
 });
