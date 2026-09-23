@@ -26,8 +26,10 @@ func TestEvaluateMergedCommit(t *testing.T) {
 	headGreen := []CheckDetail{check("build", "COMPLETED", "SUCCESS"), check("lint", "COMPLETED", "SKIPPED"), check("advisory", "COMPLETED", "FAILURE")}
 	headRed := []CheckDetail{check("build", "COMPLETED", "FAILURE"), check("lint", "COMPLETED", "SUCCESS")}
 	pushGreen := []CheckDetail{check("CodeQL", "COMPLETED", "SUCCESS"), check("cache-warm", "COMPLETED", "SUCCESS")}
-	pushRunning := []CheckDetail{check("CodeQL", "IN_PROGRESS", ""), check("cache-warm", "COMPLETED", "SUCCESS")}
-	pushRed := []CheckDetail{check("CodeQL", "COMPLETED", "FAILURE")}
+	pushRunning := []CheckDetail{check("publish", "IN_PROGRESS", ""), check("cache-warm", "COMPLETED", "SUCCESS")}
+	pushRed := []CheckDetail{check("publish", "COMPLETED", "FAILURE")}
+	codeqlRunning := []CheckDetail{check("Analyze (go)", "IN_PROGRESS", ""), check("Analyze (actions)", "QUEUED", ""), check("CodeQL", "IN_PROGRESS", "")}
+	codeqlRed := []CheckDetail{check("Analyze (go)", "COMPLETED", "FAILURE"), check("Analyze (javascript-typescript)", "COMPLETED", "SUCCESS"), check("CodeQL", "COMPLETED", "FAILURE")}
 	late := mergedAt.Add(time.Hour)
 
 	cases := []struct {
@@ -40,12 +42,27 @@ func TestEvaluateMergedCommit(t *testing.T) {
 		{"a failing advisory check on the head does not make the merge red", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen, MergeChecks: pushGreen, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksComplete, ""},
 		{"PR head's required check red", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headRed, MergeChecks: pushGreen, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksIncomplete, "PR #7 head"},
 		{"a required check absent from the head is not-yet", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen[:1], MergeChecks: pushGreen, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksNotYet, "lint"},
-		{"push job still running", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen, MergeChecks: pushRunning, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksNotYet, "CodeQL"},
+		{"push job still running", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen, MergeChecks: pushRunning, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksNotYet, "publish"},
 		{"push job red", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen, MergeChecks: pushRed, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksIncomplete, "merge commit"},
 		{"no push checks yet, inside the grace", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen, RequiredNames: required, RequiredKnown: true, Now: mergedAt.Add(time.Minute)}, ChecksNotYet, "no checks on the merge commit yet"},
 		{"no push checks after the grace: nothing runs on push", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksComplete, ""},
 		{"a workflow run still in flight is not-yet", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen, MergeChecks: pushGreen, RequiredNames: required, RequiredKnown: true, Now: late,
-			Runs: []WorkflowRunSummary{{Name: "CodeQL", Status: "IN_PROGRESS"}}}, ChecksNotYet, "still in flight"},
+			Runs: []WorkflowRunSummary{{Name: "Publish", Status: "IN_PROGRESS"}}}, ChecksNotYet, "still in flight"},
+		// CodeQL on the merge commit re-analyses the tree the PR's required
+		// CodeQL run already passed: informational when the trees match.
+		{"tree equal, CodeQL still running: green", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen, MergeChecks: codeqlRunning, RequiredNames: required, RequiredKnown: true, Now: mergedAt.Add(time.Minute),
+			Runs: []WorkflowRunSummary{{Name: "CodeQL", Status: "IN_PROGRESS"}}}, ChecksComplete, "CodeQL still running: Analyze (go), Analyze (actions), CodeQL"},
+		{"tree equal, CodeQL failed: green, reported as info", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen, MergeChecks: append(codeqlRed, pushGreen...), RequiredNames: required, RequiredKnown: true, Now: late},
+			ChecksComplete, "CodeQL did not pass: Analyze (go) (failure), CodeQL (failure) (informational"},
+		{"tree equal, CodeQL failed, head red: red, CodeQL still only info", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headRed, MergeChecks: codeqlRed, RequiredNames: required, RequiredKnown: true, Now: late},
+			ChecksIncomplete, "informational"},
+		// Trees differ: nothing analysed the landed tree, so CodeQL counts.
+		{"tree differs, required CodeQL failed on the merge commit: red", MergeEvidence{Provenance: prov("t1", "t2"),
+			MergeChecks: append([]CheckDetail{check("build", "COMPLETED", "SUCCESS"), check("lint", "COMPLETED", "SUCCESS")}, codeqlRed...), RequiredNames: []string{"build", "lint", "CodeQL"}, RequiredKnown: true, Now: late}, ChecksIncomplete, "Analyze (go)"},
+		{"tree differs, required CodeQL still running: not-yet", MergeEvidence{Provenance: prov("t1", "t2"),
+			MergeChecks: append([]CheckDetail{check("build", "COMPLETED", "SUCCESS"), check("lint", "COMPLETED", "SUCCESS")}, codeqlRunning...), RequiredNames: []string{"build", "lint", "CodeQL"}, RequiredKnown: true, Now: late}, ChecksNotYet, "differs"},
+		{"tree differs, CodeQL green but the other required checks absent: red, never tested", MergeEvidence{Provenance: prov("t1", "t2"),
+			MergeChecks: []CheckDetail{check("Analyze (go)", "COMPLETED", "SUCCESS"), check("CodeQL", "COMPLETED", "SUCCESS")}, RequiredNames: []string{"build", "lint", "CodeQL"}, RequiredKnown: true, Now: late}, ChecksIncomplete, "build, lint"},
 		// Trees differ: the PR run is not evidence; the merge commit must
 		// carry every required check itself, which it does not here.
 		{"tree differs, required absent, inside the grace: not-yet", MergeEvidence{Provenance: prov("t1", "t2"), HeadChecks: headGreen, MergeChecks: pushGreen, RequiredNames: required, RequiredKnown: true, Now: mergedAt.Add(time.Minute)}, ChecksNotYet, "differs from PR #7"},
@@ -77,6 +94,17 @@ func TestEvaluateMergedCommit(t *testing.T) {
 				t.Errorf("reasons %v do not mention %q", reasons, tc.reason)
 			}
 		})
+	}
+}
+
+func TestCodeQLCheck(t *testing.T) {
+	for name, want := range map[string]bool{
+		"CodeQL": true, " codeql ": true, "Analyze (go)": true, "Analyze (javascript-typescript)": true, "Analyze (actions)": true,
+		"Analyze": false, "analyze-go": false, "CodeQL Extra": false, "build": false, "cache-warm": false,
+	} {
+		if got := CodeQLCheck(name); got != want {
+			t.Errorf("CodeQLCheck(%q) = %v, want %v", name, got, want)
+		}
 	}
 }
 

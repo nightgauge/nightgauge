@@ -33,9 +33,11 @@ package hooks
 // longer re-run on push to main, because the strict ruleset already made the
 // PR head's tree the merge commit's tree. The verdict is then
 // github.EvaluateMergedCommit: the trees must match, the PR head's required
-// checks must have passed, and whatever still runs on the merge commit
-// (CodeQL, cache-warm) must be green; still running keeps the poll going. If
-// the trees differ, the merge commit's own checks must carry every required
+// checks must have passed, and whatever else still runs on the merge commit
+// must be green; still running keeps the poll going. cache-warm never counts,
+// and CodeQL is informational when the trees match (github.CodeQLCheck): the
+// PR's required CodeQL run analysed the same tree. If the trees differ, the
+// merge commit's own checks, CodeQL included, must carry every required
 // check, the pre-#2055 rule, which reads pending where the suites do not run.
 //
 // The wait is bounded and the verdict vocabulary is closed. Budget exhaustion
@@ -366,7 +368,15 @@ func VerifyMergeCommit(ctx context.Context, reader MainCheckReader, owner, repo,
 				res.Verdict = MainChecksRed
 				failing := runs
 				if ev.PRHeadIsEvidence() {
-					failing = append(append([]forgetypes.CheckDetail{}, runs...), requiredOnly(ev.HeadChecks, requiredNames)...)
+					// CodeQL on a tree-equal merge commit is informational
+					// (gh.CodeQLCheck): it never names a failure here.
+					failing = nil
+					for _, c := range runs {
+						if !gh.CodeQLCheck(c.Name) {
+							failing = append(failing, c)
+						}
+					}
+					failing = append(failing, requiredOnly(ev.HeadChecks, requiredNames)...)
 				}
 				res.Failing = failingChecks(failing)
 				markRequired(res.Failing, requiredNames)

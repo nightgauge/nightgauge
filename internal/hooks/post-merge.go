@@ -460,8 +460,13 @@ func verifyMain(ctx context.Context, input PostMergeInput, out PostMergeResult) 
 	case MainChecksGreen:
 		if res.TreesMatch != nil && *res.TreesMatch {
 			// #2055: the PR run was the gate for this exact tree.
-			fmt.Fprintf(os.Stderr, "Post-merge: %s is green at merge commit %s — same tree as PR #%d's head %s, whose required checks passed; %d check(s) on the merge commit green (%d polls)\n",
+			fmt.Fprintf(os.Stderr, "Post-merge: %s is green at merge commit %s — same tree as PR #%d's head %s, whose required checks passed; %d check(s) on the merge commit (%d polls)\n",
 				out.BaseRef, shortSHA(out.MergedCommitSha), res.PRNumber, shortSHA(res.PRHeadSha), res.Total, res.Polls)
+			// CodeQL on the merge commit is informational (#2055): say what
+			// it is doing without letting it decide the verdict.
+			for _, r := range res.Reasons {
+				fmt.Fprintf(os.Stderr, "Post-merge: note: %s\n", r)
+			}
 			break
 		}
 		fmt.Fprintf(os.Stderr, "Post-merge: %s is green at merge commit %s (%d checks, %d polls)\n",

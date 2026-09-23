@@ -298,17 +298,39 @@ stub_pr tree-a "$HEAD_GREEN"
 expect "a required check absent from the PR head is NOT-YET" 2 "required check(s) absent: cla"
 
 stub_gh '{"check_runs": [
-  {"name": "CodeQL",     "status": "in_progress", "conclusion": null},
+  {"name": "publish",    "status": "in_progress", "conclusion": null},
   {"name": "cache-warm", "status": "completed",   "conclusion": "success"}
 ]}'
 stub_pr tree-a "$HEAD_GREEN" "$CLA_OK"
-expect "a push job still running on the merge commit is NOT-YET" 2 "still running: CodeQL"
+expect "a push job still running on the merge commit is NOT-YET" 2 "still running: publish"
 
 stub_gh '{"check_runs": [
-  {"name": "CodeQL", "status": "completed", "conclusion": "failure", "html_url": "https://example.invalid/run/8"}
+  {"name": "publish", "status": "completed", "conclusion": "failure", "html_url": "https://example.invalid/run/8"}
 ]}'
 stub_pr tree-a "$HEAD_GREEN" "$CLA_OK"
 expect "a red push job on the merge commit is RED" 1 "failed on the merge commit"
+
+# CodeQL on the merge commit re-analyses the tree the PR's required CodeQL run
+# already passed: with equal trees it is reported as INFO and never decides.
+CODEQL_RUNNING='{"check_runs": [
+  {"name": "Analyze (go)",      "status": "in_progress", "conclusion": null},
+  {"name": "Analyze (actions)", "status": "queued",      "conclusion": null},
+  {"name": "CodeQL",            "status": "in_progress", "conclusion": null}
+]}'
+CODEQL_RED='{"check_runs": [
+  {"name": "Analyze (go)", "status": "completed", "conclusion": "failure", "html_url": "https://example.invalid/run/7"},
+  {"name": "CodeQL",       "status": "completed", "conclusion": "failure"},
+  {"name": "cache-warm",   "status": "completed", "conclusion": "success"}
+]}'
+stub_gh "$CODEQL_RUNNING"
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK" 2999-01-01T00:00:00Z
+expect "tree equal, CodeQL still running on the merge commit: GREEN" 0 "CodeQL still running (informational): Analyze (go), Analyze (actions), CodeQL"
+stub_gh "$CODEQL_RED"
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK"
+expect "tree equal, CodeQL failed on the merge commit: GREEN" 0 "GREEN"
+stub_gh "$CODEQL_RED"
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK"
+expect "tree equal, a failed CodeQL is reported as INFO" 0 "INFO     merge commit deadbeef: CodeQL did not pass: Analyze (go) (failure), CodeQL (failure)"
 
 stub_gh '{"check_runs": []}'
 stub_pr tree-a "$HEAD_GREEN" "$CLA_OK" 2999-01-01T00:00:00Z
@@ -341,6 +363,25 @@ stub_gh '{"check_runs": [
 ]}' -- "$CLA_OK"
 stub_pr tree-b "$HEAD_GREEN" "$CLA_OK"
 expect "tree differs but the merge commit carries every required check: GREEN" 0 "GREEN"
+# On the untested-tree path CodeQL counts like every other check.
+stub_gh '{"check_runs": [
+  {"name": "build",        "status": "completed", "conclusion": "success"},
+  {"name": "Analyze (go)", "status": "completed", "conclusion": "failure"}
+]}' -- "$CLA_OK"
+stub_pr tree-b "$HEAD_GREEN" "$CLA_OK"
+expect "tree differs, required checks green but CodeQL failed there: RED" 1 "Analyze (go)"
+stub_gh '{"check_runs": [
+  {"name": "build",  "status": "completed",   "conclusion": "success"},
+  {"name": "CodeQL", "status": "in_progress", "conclusion": null}
+]}' -- "$CLA_OK"
+stub_pr tree-b "$HEAD_GREEN" "$CLA_OK"
+expect "tree differs, CodeQL still running there: NOT-YET" 2 "still running"
+stub_gh '{"check_runs": [
+  {"name": "Analyze (go)", "status": "completed", "conclusion": "success"},
+  {"name": "CodeQL",       "status": "completed", "conclusion": "success"}
+]}'
+stub_pr tree-b "$HEAD_GREEN" "$CLA_OK"
+expect "tree differs, CodeQL green but required checks absent after the grace: RED" 1 "never ran on"
 
 # cache-warm tests nothing: its failure is never main being red.
 stub_gh '{"check_runs": [

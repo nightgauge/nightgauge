@@ -30,15 +30,21 @@
 #   a. the merge commit's tree must equal the PR head commit's tree;
 #   b. every required check on the PR head must have concluded success
 #      (skipped and neutral count as passing);
-#   c. every check that still runs on the merge commit itself (CodeQL's
-#      default-branch baseline) must be green; still running is NOT-YET. An
-#      empty list is NOT-YET for five minutes after the merge (the push
-#      workflows may not exist yet) and passes after that. cache-warm never
-#      counts: it tests nothing, so its failure is not main being red.
+#   c. every other check that still runs on the merge commit itself must be
+#      green; still running is NOT-YET. An empty list is NOT-YET for five
+#      minutes after the merge (the push workflows may not exist yet) and
+#      passes after that. cache-warm never counts: it tests nothing, so its
+#      failure is not main being red. CodeQL's merge-commit runs (the
+#      "Analyze (<language>)" jobs and the "CodeQL" code-scanning check) are
+#      informational: they are the default-branch baseline for code scanning,
+#      but they analyse the same tree with the same queries as the PR's own
+#      required CodeQL run, which passed in (b). They are reported as INFO,
+#      never RED or NOT-YET.
 #
 # If the trees differ (a ruleset bypass, or a branch without the strict
 # policy) the PR run is not evidence about the landed tree, so the merge commit
-# must carry every required check itself, the pre-#2055 rule. Where the suites
+# must carry every required check itself, the pre-#2055 rule, and CodeQL there
+# counts like any other check. Where the suites
 # no longer run on push the required checks are absent: NOT-YET for five
 # minutes after the merge, then RED if no required check is running there,
 # because the landed tree was never tested and waiting cannot change that. The
@@ -386,14 +392,35 @@ if [[ "$REQ_KNOWN" -ne 1 ]]; then
   exit 2
 fi
 
-# Trees match: the PR head's required checks are the gate, and whatever still
-# runs on the merge commit (CodeQL; cache-warm is dropped) must be green or
-# still running.
+# Trees match: the PR head's required checks are the gate, and whatever else
+# still runs on the merge commit must be green or still running. cache-warm is
+# dropped by read_checks. CodeQL is split off as information: the PR's own
+# required CodeQL run analysed this same tree, so the merge commit's re-run is
+# the default-branch baseline, not a gate. Its presence still shows the push
+# workflows were created, so it ends the empty-list grace.
+# shellcheck disable=SC2016 # jq program, not shell
+CODEQL='def codeql: (.name | ascii_downcase | gsub("^\\s+|\\s+$"; "")) as $k | $k == "codeql" or ($k | test("^analyze \\(.*\\)$"));'
 head_checks=$(read_checks "$HEAD_SHA") || { printf '%s\n' "$head_checks"; exit 2; }
 head_j=$(printf '%s' "$head_checks" | jq -c --argjson req "$REQ" "$JUDGE")
 merge_checks=$(read_checks "$SHA") || { printf '%s\n' "$merge_checks"; exit 2; }
+merge_seen=$(jq 'length' <<<"$merge_checks")
+codeql_checks=$(jq -c "$CODEQL [ .[] | select(codeql) ]" <<<"$merge_checks")
+merge_checks=$(jq -c "$CODEQL [ .[] | select(codeql | not) ]" <<<"$merge_checks")
 merge_j=$(printf '%s' "$merge_checks" | jq -c --argjson req null "$JUDGE")
 merge_total=$(jq '.total' <<<"$merge_j")
+codeql_j=$(printf '%s' "$codeql_checks" | jq -c --argjson req null "$JUDGE")
+info=()
+[[ $(jq '.failed | length' <<<"$codeql_j") -gt 0 ]] &&
+  info+=("merge commit ${SHA:0:8}: CodeQL did not pass: $(jq -r '[ .[] | select(.status == "completed" and .conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral") | "\(.name) (\(.conclusion // "?"))" ] | join(", ")' <<<"$codeql_checks") (informational: the PR's required CodeQL run analysed this same tree; this run is the default-branch baseline)")
+[[ $(jq '.pending | length' <<<"$codeql_j") -gt 0 ]] &&
+  info+=("merge commit ${SHA:0:8}: CodeQL still running (informational): $(jq -r '.pending | join(", ")' <<<"$codeql_j")")
+print_info() {
+  [[ ${#info[@]} -gt 0 ]] || return 0
+  local line
+  for line in "${info[@]}"; do
+    echo "INFO     $line"
+  done
+}
 
 notyet=()
 [[ $(jq '.missing | length' <<<"$head_j") -gt 0 ]] &&
@@ -404,13 +431,14 @@ notyet=()
   notyet+=("PR #$PR_NUMBER head ${HEAD_SHA:0:8}: still running: $(jq -r '.pending | join(", ")' <<<"$head_j")")
 [[ $(jq '.pending | length' <<<"$merge_j") -gt 0 ]] &&
   notyet+=("merge commit ${SHA:0:8}: still running: $(jq -r '.pending | join(", ")' <<<"$merge_j")")
-if [[ "$merge_total" -eq 0 ]]; then
+if [[ "$merge_seen" -eq 0 ]]; then
   [[ $(merge_age) -lt "$GRACE_SECONDS" ]] &&
     notyet+=("merge commit ${SHA:0:8}: no checks yet (within ${GRACE_SECONDS}s of the merge)")
 fi
 if [[ ${#notyet[@]} -gt 0 ]]; then
   echo "NOT-YET  $REPO@${SHA:0:8} (PR #$PR_NUMBER, same tree as its head):"
   printf '         %s\n' "${notyet[@]}"
+  print_info
   exit 2
 fi
 
@@ -427,9 +455,11 @@ if [[ "$head_failed" -gt 0 || "$merge_failed" -gt 0 ]]; then
     jq -r '.failed[]' <<<"$merge_j"
   fi
   echo "         main is red and it is yours to fix immediately."
+  print_info
   exit 1
 fi
 
 echo "GREEN    $REPO@${SHA:0:8} has the same tree as PR #$PR_NUMBER head ${HEAD_SHA:0:8}, whose required checks passed;"
-echo "         $merge_total check(s) on the merge commit completed successfully"
+echo "         $merge_total deciding check(s) on the merge commit completed successfully"
+print_info
 exit 0

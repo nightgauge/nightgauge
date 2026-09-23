@@ -203,16 +203,22 @@ For the merge commit of a merged pull request it verifies three things:
    skipped and neutral count as passing. A failed required check is `1`, and an
    absent one is `2`. If the required-check set cannot be read, this cannot be
    verified, and the answer is `2`, never `0`.
-3. **What still runs on `main` is green.** Every check run and commit status on
-   the merge commit itself (CodeQL) concluded successfully; a failure is `1`, a
-   running one is `2`. An empty list is `2` for five minutes after the merge,
-   while the push workflows may not exist yet. `cache-warm` never counts: it
-   tests nothing, and a network blip failing it is not a red `main`.
+3. **What else still runs on `main` is green.** Every other check run and
+   commit status on the merge commit itself concluded successfully; a failure
+   is `1`, a running one is `2`. An empty list is `2` for five minutes after
+   the merge, while the push workflows may not exist yet. `cache-warm` never
+   counts: it tests nothing, and a network blip failing it is not a red
+   `main`. CodeQL's merge-commit runs (the `Analyze (…)` jobs and the `CodeQL`
+   code-scanning check) are informational here: they are the default-branch
+   baseline for the Security tab and for pull requests' "new alerts"
+   comparison, but they analyse the same tree with the same queries as the
+   PR's own CodeQL run, which is required and already passed. A running or
+   failed CodeQL on the merge commit is reported, never `1` or `2`.
 
 If the trees differ, which the strict policy prevents (so it means a ruleset
 bypass such as `--admin`), the PR run is not evidence about the landed tree.
 The merge commit must then carry every required check itself, the rule before
-#2055. In this repository the suites no longer run on push, so the required
+#2055, and CodeQL there counts like any other check. In this repository the suites no longer run on push, so the required
 checks are absent: that is `2` for five minutes after the merge, and then `1`
 once no required check is running there, because the landed tree was never
 tested and waiting will not change that. The remedy is to run the suites on
