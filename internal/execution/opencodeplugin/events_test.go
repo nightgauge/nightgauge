@@ -482,3 +482,56 @@ func TestEventsPath(t *testing.T) {
 		})
 	}
 }
+
+// --- ReadRunEvents: containment and read bound (#1653) ---
+
+// TestReadRunEventsRefusesASymlinkOutOfItsRunDir: an events path that is a
+// symlink to a file outside its run dir is refused, not read; a symlink to
+// a file inside the run dir is read.
+func TestReadRunEventsRefusesASymlinkOutOfItsRunDir(t *testing.T) {
+	line := `{"v":1,"ts":"t","kind":"compaction","session_id":"s","child":false,"detail":{}}` + "\n"
+	outside := filepath.Join(t.TempDir(), "elsewhere.jsonl")
+	if err := os.WriteFile(outside, []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runDir := t.TempDir()
+	path := filepath.Join(runDir, EventsFileName("run-1"))
+	if err := os.Symlink(outside, path); err != nil {
+		t.Fatal(err)
+	}
+	events, err := ReadRunEvents(path)
+	if err == nil || !strings.Contains(err.Error(), "refusing") {
+		t.Fatalf("ReadRunEvents(symlink out of run dir) = %d events, err %v; want a refusal", len(events), err)
+	}
+
+	inside := filepath.Join(runDir, "real.jsonl")
+	if err := os.WriteFile(inside, []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	inDir := filepath.Join(runDir, EventsFileName("run-2"))
+	if err := os.Symlink(inside, inDir); err != nil {
+		t.Fatal(err)
+	}
+	if events, err := ReadRunEvents(inDir); err != nil || len(events) != 1 {
+		t.Errorf("ReadRunEvents(symlink inside run dir) = %d events, err %v; want 1, nil", len(events), err)
+	}
+}
+
+// TestReadRunEventsReadsNoFurtherThanItsBound: a file far larger than the
+// writers' 1 MiB cap is read only up to eventsReadMaxBytes, so the reader
+// returns the complete lines within the bound and nothing past it.
+func TestReadRunEventsReadsNoFurtherThanItsBound(t *testing.T) {
+	line := `{"v":1,"ts":"t","kind":"compaction","session_id":"s","child":false,"detail":{}}` + "\n"
+	path := filepath.Join(t.TempDir(), EventsFileName("run-1"))
+	total := (5 << 20) / len(line)
+	if err := os.WriteFile(path, []byte(strings.Repeat(line, total)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	events, err := ReadRunEvents(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := eventsReadMaxBytes / len(line); len(events) != want {
+		t.Errorf("ReadRunEvents returned %d of %d lines, want the %d complete lines within %d bytes", len(events), total, want, eventsReadMaxBytes)
+	}
+}

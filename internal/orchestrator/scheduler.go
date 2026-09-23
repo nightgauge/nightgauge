@@ -29,6 +29,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
 	stagecontext "github.com/nightgauge/nightgauge/internal/execution/context"
+	"github.com/nightgauge/nightgauge/internal/execution/opencodeplugin"
 	"github.com/nightgauge/nightgauge/internal/forge"
 	"github.com/nightgauge/nightgauge/internal/forge/boardcache"
 	"github.com/nightgauge/nightgauge/internal/git"
@@ -148,6 +149,74 @@ type StageRunParams struct {
 	ResumeSessionID string
 }
 
+// openCodeCompactionCount reports how many "compaction" events the run's
+// OpenCode events file at path holds (#1653), through the one reader of that
+// file, opencodeplugin.CompactionCount, which contains the path to its run
+// dir, bounds the read and keeps no line content. A missing file counts 0.
+// A file the reader refuses (a symlink out of the run dir, a non-regular
+// file) or cannot read also counts 0, and the refusal is logged rather than
+// failing the stage: this is telemetry.
+//
+// The count needs no wait for the file to settle. session.js appends a
+// compaction line synchronously inside the opencode process, while the
+// session.compacted event is handled, so every compaction line is on disk
+// before the CLI exits. Only the terminal "stop_verify" line is written
+// after exit (#1810), and that is what WaitForRunEvent exists for.
+func openCodeCompactionCount(path string) int {
+	n, err := opencodeplugin.CompactionCount(path)
+	if err != nil {
+		log.Printf("context telemetry: compaction count unavailable, counting 0: %v", err)
+		return 0
+	}
+	return n
+}
+
+// stageContextProbe carries one stage attempt's context-telemetry baseline
+// (#1653) from before its session to after it. The zero value is an attempt
+// that ran no model session (a deterministic, refused or rate-limited arm).
+type stageContextProbe struct {
+	session           bool
+	eventsPath        string
+	eventsOK          bool
+	compactionsBefore int
+}
+
+// beginStageContext starts a session attempt's probe. The events file is per
+// run and per output file, so a retry of a stage appends to the file its
+// earlier attempts wrote: the baseline taken here makes the attempt's count
+// the file's growth across its own dispatch. Only OpenCode writes the file.
+func beginStageContext(adapterName, outputFile, runID string) stageContextProbe {
+	p := stageContextProbe{session: true}
+	if adapterName == "opencode" {
+		p.eventsPath, p.eventsOK = opencodeplugin.EventsPath(outputFile, runID)
+	}
+	if p.eventsOK {
+		p.compactionsBefore = openCodeCompactionCount(p.eventsPath)
+	}
+	return p
+}
+
+// record replaces the stage's context entry with this attempt's: the
+// result's peak, the dispatch window and the compaction delta for a session
+// attempt, and an empty entry, which clears the stage's, for an attempt that
+// ran no session.
+func (p stageContextProbe) record(rt *state.RuntimeState, stage state.PipelineStage, result *StageRunResult, window int) {
+	if !p.session {
+		rt.RecordStageContext(stage, 0, 0, nil)
+		return
+	}
+	var compactions *int
+	if p.eventsOK {
+		n := max(openCodeCompactionCount(p.eventsPath)-p.compactionsBefore, 0)
+		compactions = &n
+	}
+	peak := 0
+	if result != nil {
+		peak = result.PeakStepInputTokens
+	}
+	rt.RecordStageContext(stage, peak, window, compactions)
+}
+
 // StageRunResult is the cross-mode stage execution result.
 type StageRunResult struct {
 	ExitCode int
@@ -226,6 +295,11 @@ type StageRunResult struct {
 	// captured by the executor at terminal failure — populated on the matching
 	// V3 record's StageDetail.last_output_lines so retros have evidence.
 	LastOutputLines string
+	// PeakStepInputTokens is the largest prompt a single model step sent
+	// (adapters.RunResult.PeakStepInputTokens): the numerator of the stage's
+	// context-window utilization (#1653). 0 means the adapter exposes no
+	// per-step prompt size.
+	PeakStepInputTokens int
 
 	// ── #3605 stage-exit diagnostic record fields ─────────────────────
 	// Forwarded verbatim from StageResultParams (IPC mode) for persistence
@@ -576,6 +650,8 @@ func (r *ExecutionManagerRunner) RunStage(ctx context.Context, params StageRunPa
 			// wins for classification, but LastOutputLines is what lands on
 			// the V3 record's StageDetail for retros regardless of err.
 			out.ErrorText, out.LastOutputLines = cliFailureText(result.Stdout, result.Stderr)
+			// A failed stage's peak is the one that says it hit the window.
+			out.PeakStepInputTokens = result.PeakStepInputTokens
 		}
 		return out, err
 	}
@@ -628,6 +704,7 @@ func cliRunResultToStageResult(result *adapters.RunResult) *StageRunResult {
 		// here recorded every Go-direct stage's cache reads as 0.
 		CacheReadTokens:     result.CacheReadTokens,
 		CacheCreationTokens: result.CacheCreationTokens,
+		PeakStepInputTokens: result.PeakStepInputTokens,
 		// #91 served-model attribution, tracked by the execution manager's
 		// stream reader, and a multi-provider adapter's ADR-022 § 2 identity.
 		ServedModel:             result.ServedModel,
@@ -5772,6 +5849,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// block below short-circuits this to the environmental recovery path
 		// (#3896) via a github-quota-low marker. Issue #3976.
 		prStageRateLimited := mergeRateLimited || createRateLimited
+		var ctxProbe stageContextProbe // zero: this attempt ran no session
 		switch {
 		case deterministicMerged || deterministicCreated:
 			result = &StageRunResult{ExitCode: 0}
@@ -5787,6 +5865,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			result = &StageRunResult{ExitCode: 1}
 			stageRunErr = fmt.Errorf("github-quota-low: %s deterministic path rate-limited; deferring until GitHub bucket reset (LLM fallback skipped to avoid quota/token burn) [#3976]", stage)
 		default:
+			// Context-window telemetry baseline (#1653), taken before the
+			// session so its compaction count is this attempt's alone.
+			ctxProbe = beginStageContext(adapterName, outputFile, runtime.RunID)
 			// Wrap the stage context so CancelAllForNetworkOutage can abort
 			// this LLM subprocess directly when the TS watchdog detects an
 			// extended connectivity outage (Issue #3296).
@@ -5807,6 +5888,13 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			}
 			cancelStage(nil) // release ctx resources
 		}
+		// Every arm records this attempt's context telemetry, so a retry that
+		// took a deterministic, refused or rate-limited arm clears what an
+		// earlier session attempt left (#1653). The window is the one this
+		// dispatch ran with: the registry context_window for a hosted id, or
+		// the limit.context the OpenCode run config was built with for a
+		// local model.
+		ctxProbe.record(runtime, stage, result, skillData.ContextWindow)
 		err = stageRunErr
 
 		exitCode := 0

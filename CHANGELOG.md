@@ -16,6 +16,26 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **Per-stage context-window utilization and compaction count (#1653).** A
+  stage's history record now says how close it came to its model's window
+  and whether its session compacted, so "does this stage fit this model?" is
+  measured, not guessed. An OpenCode stage records
+  `peak_step_input_tokens` (the largest single step's prompt: input plus
+  cache read and write, never the summed pools), `context_window_tokens`
+  (the window it ran with) and `context_window_utilization` (peak ÷ window,
+  to 4 places), plus `compaction_count`: the compaction lines the stage's
+  latest attempt added to the run's events file, 0 when that file is absent,
+  and left out for stages with no events file path to count, such as every
+  non-OpenCode stage. Stages with no per-step prompt size or no known window
+  leave the keys out, so existing records parse unchanged. The SDK feeder
+  maps utilization to `contextWindowUtilization`, and the extension's
+  history schema keeps the four keys, so `TokenEfficiencyAnalyzer` now
+  receives it: an OpenCode stage whose mean utilization is under its 0.3
+  minimum is reported as a low-utilization pattern. The events-file reader
+  now refuses a path that resolves outside its run dir, a symlink or a FIFO,
+  and reads no further than the
+  file's 1 MiB cap plus the 4 KiB its writers may overshoot it by.
+
 - **Per-stage turn, wall-clock and token budgets that bind $0 local models
   (#1652).** Every guardrail that stopped a runaway stage was priced in USD,
   so a stage on a local model had none. `pipeline.stage_budgets`

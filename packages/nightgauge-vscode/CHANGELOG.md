@@ -9,6 +9,13 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- Pipeline health reads each OpenCode stage's context-window utilization and
+  compaction count from the run history (#1653), so a stage that uses under
+  30% of its model's window on average is reported as a low-utilization
+  pattern.
+
 ### Fixed
 
 - The Repositories view reads each project board once per refresh instead of

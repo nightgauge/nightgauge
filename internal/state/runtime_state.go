@@ -311,6 +311,13 @@ type RuntimeState struct {
 	// BuildV2Record projects it onto V2ModelSelect.
 	StageModelIdentities map[string]StageModelIdentity `json:"stageModelIdentities,omitempty"`
 
+	// StageContexts captures, for each stage the executor observed per step,
+	// how close the stage's largest single prompt came to the context window
+	// it ran with and how many times its session compacted (#1653). The
+	// stage's latest attempt wins, like StageModelIdentities. BuildV2Record
+	// projects it onto V2StageDetail's context fields.
+	StageContexts map[string]StageContext `json:"stageContexts,omitempty"`
+
 	// StageEfforts captures the EFFORT_LEVELS rung actually in force for each
 	// stage's dispatch, when Go has direct, first-party evidence of it (Issue
 	// #580). Today that evidence exists only for the grok-family adapters'
@@ -2177,6 +2184,41 @@ func (rs *RuntimeState) RecordStageModelIdentity(stage PipelineStage, id StageMo
 	rs.StageModelIdentities[string(stage)] = id
 }
 
+// StageContext is one stage attempt's context-window telemetry (#1653).
+// Every field follows the empty-means-unobserved convention: a zero
+// PeakStepInputTokens means the adapter exposed no per-step prompt size, a
+// zero ContextWindowTokens means no window was known, and a nil Compactions
+// means the stage had no events path to count. A counted 0, including a count
+// taken when the events file is absent, is recorded as 0.
+type StageContext struct {
+	PeakStepInputTokens int  `json:"peakStepInputTokens,omitempty"`
+	ContextWindowTokens int  `json:"contextWindowTokens,omitempty"`
+	Compactions         *int `json:"compactions,omitempty"`
+}
+
+// RecordStageContext records a stage attempt's peak single-step prompt size,
+// the context window it ran with, and its compaction count (#1653), replacing
+// any earlier attempt's. It sits beside CompleteStageWithCost at the
+// scheduler's stage completion. Negative values are treated as unobserved;
+// an attempt with nothing observed records nothing.
+func (rs *RuntimeState) RecordStageContext(stage PipelineStage, peak, window int, compactions *int) {
+	sc := StageContext{PeakStepInputTokens: max(peak, 0), ContextWindowTokens: max(window, 0)}
+	if compactions != nil {
+		n := max(*compactions, 0)
+		sc.Compactions = &n
+	}
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if sc == (StageContext{}) {
+		delete(rs.StageContexts, string(stage))
+		return
+	}
+	if rs.StageContexts == nil {
+		rs.StageContexts = make(map[string]StageContext)
+	}
+	rs.StageContexts[string(stage)] = sc
+}
+
 // StageModelIdentityOf returns the recorded identity of a stage, or the zero
 // identity when none was reported.
 func (rs *RuntimeState) StageModelIdentityOf(stage PipelineStage) StageModelIdentity {
@@ -3059,6 +3101,16 @@ func (rs *RuntimeState) snapshotLocked() *RuntimeState {
 		snap.StageModelIdentities = make(map[string]StageModelIdentity, len(rs.StageModelIdentities))
 		for k, v := range rs.StageModelIdentities {
 			snap.StageModelIdentities[k] = v
+		}
+	}
+	if len(rs.StageContexts) > 0 {
+		snap.StageContexts = make(map[string]StageContext, len(rs.StageContexts))
+		for k, v := range rs.StageContexts {
+			if v.Compactions != nil {
+				n := *v.Compactions
+				v.Compactions = &n
+			}
+			snap.StageContexts[k] = v
 		}
 	}
 	if len(rs.StageEfforts) > 0 {
