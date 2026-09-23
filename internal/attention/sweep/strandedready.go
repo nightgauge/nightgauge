@@ -42,6 +42,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/forge"
+	"github.com/nightgauge/nightgauge/internal/forge/boardcache"
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 )
@@ -198,16 +199,11 @@ func (p *StrandedReadyItems) boardUnreachable(ctx context.Context, in Input) (*b
 		return nil, fmt.Errorf("stranded-ready-items: %s has no issue/board service to verify reachability against", in.Repo)
 	}
 
-	openIssues, err := in.Forge.Issues().ListIssues(ctx, in.Owner, in.Name, nil)
-	if err != nil {
-		return nil, fmt.Errorf("stranded-ready-items: list open issues for %s: %w", in.Repo, err)
-	}
-	if len(openIssues) == 0 {
-		// No open work — an empty board is correct, not stranded.
-		return nil, nil
-	}
-
-	items, _, err := in.Forge.Board().ListOpenItems(ctx)
+	// The board first: it is the shared summary snapshot every other reader
+	// of this board already paid for (free while unchanged), and a board
+	// holding ANY of this repo's items answers the question on its own — the
+	// repo's open-issue count is only needed to describe an unreachable one.
+	items, _, err := boardcache.ListOpenSummary(ctx, in.Forge.Board())
 	if err != nil {
 		return nil, fmt.Errorf("stranded-ready-items: list open items on the polled board for %s: %w", in.Repo, err)
 	}
@@ -223,7 +219,31 @@ func (p *StrandedReadyItems) boardUnreachable(ctx context.Context, in Input) (*b
 	if onBoard > 0 {
 		return nil, nil
 	}
-	return &boardCoverage{OpenIssues: len(openIssues), OnPolledBoard: 0}, nil
+
+	openIssues, err := countOpenIssues(ctx, in)
+	if err != nil {
+		return nil, fmt.Errorf("stranded-ready-items: list open issues for %s: %w", in.Repo, err)
+	}
+	if openIssues == 0 {
+		// No open work — an empty board is correct, not stranded.
+		return nil, nil
+	}
+	return &boardCoverage{OpenIssues: openIssues, OnPolledBoard: 0}, nil
+}
+
+// openIssueCounter is the optional capability of counting a repository's open
+// issues without reading them: the GitHub adapter answers it with conditional
+// REST pages (free when unchanged); any other forge is asked ListIssues.
+type openIssueCounter interface {
+	CountOpenIssues(ctx context.Context, owner, repo string) (int, error)
+}
+
+func countOpenIssues(ctx context.Context, in Input) (int, error) {
+	if c, ok := in.Forge.Issues().(openIssueCounter); ok {
+		return c.CountOpenIssues(ctx, in.Owner, in.Name)
+	}
+	issues, err := in.Forge.Issues().ListIssues(ctx, in.Owner, in.Name, nil)
+	return len(issues), err
 }
 
 // repoMatches reports whether a manifest repositories[].name entry (which may

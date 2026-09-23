@@ -81,6 +81,15 @@ export interface AttentionSweepDeps {
    * cards instead of a new sweep — the probe said no board moved — so the
    * surface still re-renders what the store holds. */
   onRerender?: () => void;
+  /**
+   * Where the last sweep's start time survives a window reload (the
+   * workspace memento). Without it every reload is "never swept" and sweeps
+   * unconditionally; with it activation asks the board probe first, like
+   * every other event-driven trigger. The daemon restarts with the window, so
+   * this is the only memory of the last sweep a reload keeps — and the cards
+   * that sweep wrote are on disk in the attention store.
+   */
+  lastSweepStore?: { get(): number | undefined; set(ms: number): void };
   /** Overrides the config read (tests). */
   readConfig?: () => AttentionSweepConfig;
   /** Overrides the clock (tests). */
@@ -401,7 +410,18 @@ export class AttentionSweepService implements vscode.Disposable {
   private lastSweepAt = 0;
   private started = false;
 
-  constructor(private readonly deps: AttentionSweepDeps) {}
+  constructor(private readonly deps: AttentionSweepDeps) {
+    const persisted = deps.lastSweepStore?.get();
+    // A time in the future (a clock that moved backwards) is no baseline.
+    if (typeof persisted === "number" && persisted > 0 && persisted <= this.now()) {
+      this.lastSweepAt = persisted;
+    }
+  }
+
+  private recordSweepStart(startedAt: number): void {
+    this.lastSweepAt = startedAt;
+    this.deps.lastSweepStore?.set(startedAt);
+  }
 
   private get config(): AttentionSweepConfig {
     return (this.deps.readConfig ?? readSweepConfig)();
@@ -544,13 +564,20 @@ export class AttentionSweepService implements vscode.Disposable {
    *
    *   manual  — always. The operator pressed the button; a "nothing changed"
    *             answer from a probe reads as a broken button.
-   *   timer   — always. It IS the cadence, and the only trigger that catches
-   *             what the board probe is blind to (CI on the default branch,
-   *             dependabot alerts, branch protection — none move a board).
    *   others  — only when a full interval has elapsed since the last sweep,
    *             or the daemon's board probe says a bound board moved since
    *             it. A window that has never swept has no cards to serve, so
-   *             it sweeps.
+   *             it sweeps. Activation after a reload asks the probe too,
+   *             against the last sweep time the workspace remembers
+   *             (lastSweepStore).
+   *   timer   — the cadence that catches what the probe is blind to (CI on
+   *             the default branch, dependabot alerts, branch protection), so
+   *             it sweeps without the probe once the interval has NEARLY
+   *             elapsed. "Nearly" matters: the baseline is stamped when a
+   *             sweep starts, after the repo list resolved, so the next tick
+   *             lands slightly short of a full interval. Held to the exact
+   *             interval, that tick asked the probe, an idle board said "no",
+   *             and the blind-spot signals arrived at twice the interval.
    *
    * The probe fails open. Any answer that is not a confident "nothing moved"
    * — an IPC error, a daemon built without the verb, `unavailable` — sweeps.
@@ -560,7 +587,7 @@ export class AttentionSweepService implements vscode.Disposable {
     config: AttentionSweepConfig,
     repos: string[]
   ): Promise<boolean> {
-    if (trigger === "manual" || trigger === "timer") return true;
+    if (trigger === "manual") return true;
     if (this.lastSweepAt === 0) return true;
 
     // With the timer disabled ("only sweep when I do something"), the default
@@ -569,6 +596,7 @@ export class AttentionSweepService implements vscode.Disposable {
       config.intervalMs > 0 ? config.intervalMs : DEFAULT_SWEEP_INTERVAL_MINUTES * 60_000;
     const elapsed = this.now() - this.lastSweepAt;
     if (elapsed >= intervalMs) return true;
+    if (trigger === "timer" && elapsed >= intervalMs - timerTolerance(intervalMs)) return true;
 
     try {
       const probe = await this.deps.ipc.boardChanged(
@@ -616,11 +644,27 @@ export class AttentionSweepService implements vscode.Disposable {
         // Only a sweep that actually looked moves the baseline. A declined
         // one leaves the previous sweep's cards — and its timestamp — as the
         // thing the next probe compares against.
-        this.lastSweepAt = startedAt;
+        this.recordSweepStart(startedAt);
       }
       this.report(trigger, repos, result);
       return result;
     } catch (err) {
+      if (isIpcTimeout(err)) {
+        // The IPC deadline expired, not the sweep: the daemon keeps going and
+        // its cards reach the tree through the `attention.event` push. The
+        // sweep DID start, so it is the baseline — otherwise this window
+        // stays "never swept" and every later trigger sweeps again without
+        // asking the probe, which is how one slow sweep became a sweep per
+        // focus change.
+        // In memory only: the memento is the record of a sweep that
+        // COMPLETED. A reload must not trust a sweep nobody saw finish.
+        this.lastSweepAt = startedAt;
+        this.deps.logger.info("Attention sweep outlived the IPC deadline; the daemon finishes it", {
+          trigger,
+          repos: repos.length,
+        });
+        return undefined;
+      }
       // A daemon that is down, restarting, or built without the method is not
       // an operator-facing problem. Log and wait for the next trigger.
       this.deps.logger.warn("Attention sweep failed", {
@@ -684,4 +728,17 @@ export class AttentionSweepService implements vscode.Disposable {
     this.disposables.length = 0;
     this.started = false;
   }
+}
+
+/** How far short of a full interval a timer tick may land and still count as
+ * the interval having elapsed: 10% of it, at most a minute. */
+function timerTolerance(intervalMs: number): number {
+  return Math.min(intervalMs * 0.1, 60_000);
+}
+
+/** True for the IPC client's request-deadline error ("IPC request X timed out
+ * after Nms"), which says the reply was late, not that the work failed. */
+function isIpcTimeout(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /IPC request .* timed out after \d+ms/.test(message);
 }

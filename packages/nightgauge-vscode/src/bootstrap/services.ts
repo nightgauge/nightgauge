@@ -2357,6 +2357,12 @@ export async function initializeServices(
     // An event-driven trigger the board probe answered with "nothing moved"
     // still re-renders what the store holds — the operator asked to look.
     onRerender: () => void attentionTreeProvider.refresh(),
+    // The last sweep's start survives a reload, so activation asks the board
+    // probe instead of re-sweeping a workspace nothing has changed in.
+    lastSweepStore: {
+      get: () => context.workspaceState.get<number>("nightgauge.attention.lastSweepAt"),
+      set: (ms) => void context.workspaceState.update("nightgauge.attention.lastSweepAt", ms),
+    },
   });
   context.subscriptions.push(attentionSweepService);
 

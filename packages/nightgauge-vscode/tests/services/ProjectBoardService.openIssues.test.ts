@@ -112,6 +112,42 @@ describe("ProjectBoardService.getOpenIssues", () => {
     expect(mockBoardList).not.toHaveBeenCalled();
   });
 
+  // board.listOpen carries blocker COUNTS, not lists. The lists a status read
+  // already fetched are kept while they still agree with the count, so epic
+  // headers and leaves render the blockers they rendered before; once the
+  // count disagrees, the stale list is dropped rather than shown.
+  it("keeps a status read's blocker list while the open read's count agrees with it", async () => {
+    const summary = (open: number) => ({
+      relationSummary: {
+        blockedByOpen: open,
+        blockedByTotal: 1,
+        blockingOpen: 0,
+        blockingTotal: 0,
+        subIssuesTotal: 0,
+        subIssuesCompleted: 0,
+      },
+    });
+    mockBoardList.mockResolvedValue([
+      item(1, "Ready", { blockedBy: [{ number: 9, title: "blocker", state: "OPEN" }] }),
+    ]);
+    mockBoardListOpen.mockResolvedValue([item(1, "Ready", summary(1))]);
+    const svc = service();
+
+    await svc.getIssuesByStatus("Ready");
+    await svc.getOpenIssues();
+    const kept = svc.getItemsByStatusFromCache("Ready")[0];
+    expect(kept.blockedBy?.map((b) => b.number)).toEqual([9]);
+    expect(kept.openBlockerCount).toBe(1);
+
+    // The blocker closed: the open read now counts none open.
+    sharedBoardSnapshots.clear();
+    mockBoardListOpen.mockResolvedValue([item(1, "Ready", summary(0))]);
+    await svc.getOpenIssues();
+    const fresh = svc.getItemsByStatusFromCache("Ready")[0];
+    expect(fresh.blockedBy).toBeUndefined();
+    expect(fresh.openBlockerCount).toBe(0);
+  });
+
   it("empties a status bucket whose last issue moved out of it", async () => {
     const svc = service();
     await svc.getOpenIssues();

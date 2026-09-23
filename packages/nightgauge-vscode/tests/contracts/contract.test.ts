@@ -31,6 +31,7 @@ const BOARD_ITEM_TS_FIELDS: Record<string, string> = {
   subIssues: "object", // array
   parentIssueNumber: "number",
   parentIssueTitle: "string",
+  relationSummary: "object",
 };
 
 // Fields Go serializes but TS BoardItem does not declare.

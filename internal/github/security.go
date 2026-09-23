@@ -2,8 +2,11 @@ package github
 
 // GitHub implementation of forge.SecurityService — Dependabot alerts (#343).
 //
-// TRANSPORT: GraphQL carries the answer; REST is asked exactly one question
-// GraphQL cannot answer.
+// TRANSPORT: REST first (ListOpenAlerts): the conditional open-alert list
+// answers "clean", "disabled", "unauthorized" and "rate limited" by itself,
+// free when unchanged. GraphQL carries the answer only for a repository WITH
+// open alerts, because only GraphQL has the remediation fact described below.
+// The notes that follow describe that GraphQL read (listOpenAlertsGraphQL).
 //
 // The obvious endpoint is REST `GET /repos/{o}/{r}/dependabot/alerts`. It was
 // probed against a live repository before this file was written, and its
@@ -52,10 +55,12 @@ package github
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/shurcooL/graphql"
 
@@ -141,14 +146,124 @@ type vulnerabilityAlertNode struct {
 	}
 }
 
+// alertsRemediationMaxAge bounds how long a stored GraphQL alert answer may be
+// reused on the strength of its REST gate alone. The gate (the alert list's
+// ETag and the open-PR list's ETag) moves on every alert change and every
+// remediation PR opening or closing; what it cannot see is Dependabot
+// recording that it could NOT open a PR (dependabotUpdate.error) with nothing
+// else changing. This is the width of that blind spot, stated.
+const alertsRemediationMaxAge = time.Hour
+
 // ListOpenAlerts implements forge.SecurityService.
 //
-// One GraphQL request always; one additional REST request only on the
-// ambiguous empty answer (see the file header).
+// REST first, GraphQL only for what REST cannot say. One conditional REST
+// read of the open-alert list answers the common cases outright and for free
+// when unchanged:
+//
+//   - 200/304 with no alerts: scanning is on, the token may read the alerts
+//     (REST refuses loudly otherwise — the property the file header relies
+//     on), and there is nothing to remediate. No GraphQL.
+//   - 403 "Dependabot alerts are disabled for this repository.": scanning is
+//     off (verified live against a repository with alerts disabled). No
+//     GraphQL.
+//   - 401 / rate limited: reported as such.
+//
+// Only a repository WITH open alerts needs the GraphQL read, for
+// dependabotUpdate (the remediation PR or the forge's reason there is none),
+// which REST's alert object does not carry. That answer is stored keyed by the
+// REST alert list's ETag and the open-PR list's ETag and reused while both are
+// unchanged, up to alertsRemediationMaxAge. Any other REST answer (another
+// 403, a 404) falls back to the GraphQL read, which classifies it as before.
 func (s *SecurityService) ListOpenAlerts(ctx context.Context, owner, repo string) (*forgetypes.SecurityAlerts, error) {
 	if strings.TrimSpace(owner) == "" || strings.TrimSpace(repo) == "" {
 		return nil, fmt.Errorf("security alerts: owner and name are required")
 	}
+	resp, err := s.client.condGet(ctx, alertsListPath(owner, repo), "alerts-digest/v1", func(body []byte) (any, error) {
+		var raw []json.RawMessage
+		if err := json.Unmarshal(body, &raw); err != nil {
+			return nil, err
+		}
+		return alertsDigest{Count: len(raw)}, nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("security alerts %s/%s: %w", owner, repo, err)
+	}
+	switch {
+	case resp.Status == http.StatusOK || resp.Status == http.StatusNotModified:
+		var d alertsDigest
+		if err := json.Unmarshal(resp.Payload, &d); err != nil {
+			return nil, fmt.Errorf("security alerts %s/%s: decode: %w", owner, repo, err)
+		}
+		if d.Count == 0 {
+			return &forgetypes.SecurityAlerts{Status: forgetypes.SecurityAlertsEnabled, Alerts: []forgetypes.SecurityAlert{}}, nil
+		}
+		return s.alertsWithRemediation(ctx, owner, repo, resp.ETag)
+	case resp.Status == http.StatusForbidden && alertsDisabledBody(resp.Body):
+		return &forgetypes.SecurityAlerts{Status: forgetypes.SecurityAlertsDisabled}, nil
+	case resp.Status == http.StatusUnauthorized:
+		return nil, fmt.Errorf("security alerts %s/%s: the forge rejected the credential (REST %d): %w",
+			owner, repo, resp.Status, forge.ErrUnauthorized)
+	case (resp.Status == http.StatusForbidden || resp.Status == http.StatusTooManyRequests) && restBodyLooksRateLimited(resp.Body):
+		return nil, fmt.Errorf("security alerts %s/%s: rate limited (REST %d): %w",
+			owner, repo, resp.Status, forge.ErrRateLimited)
+	default:
+		return s.listOpenAlertsGraphQL(ctx, owner, repo)
+	}
+}
+
+// alertsDigest is the stored form of the open-alert list's first page.
+type alertsDigest struct {
+	Count int `json:"count"`
+}
+
+// alertsListPath is the REST open-alert list read by ListOpenAlerts.
+func alertsListPath(owner, repo string) string {
+	return fmt.Sprintf("/repos/%s/%s/dependabot/alerts?state=open&per_page=%d",
+		url.PathEscape(owner), url.PathEscape(repo), forge.MaxSecurityAlertsPerRequest)
+}
+
+// alertsDisabledBody reports GitHub's "alerts are disabled" refusal, which is
+// a 403 like a permission denial but says so in its message.
+func alertsDisabledBody(body []byte) bool {
+	return strings.Contains(strings.ToLower(string(body)), "alerts are disabled")
+}
+
+// alertsWithRemediation returns the GraphQL alert answer, reusing the stored
+// one while the REST gate it was taken under is unchanged.
+func (s *SecurityService) alertsWithRemediation(ctx context.Context, owner, repo, alertsETag string) (*forgetypes.SecurityAlerts, error) {
+	gate := ""
+	if _, pullsETag, err := s.client.openPulls(ctx, owner, repo); err == nil && alertsETag != "" && pullsETag != "" {
+		gate = alertsETag + "|" + pullsETag
+	}
+	s.client.mu.Lock()
+	store, identity := s.client.cond, s.client.identity
+	s.client.mu.Unlock()
+	key := "graphql:vulnerabilityAlerts/v1:" + owner + "/" + repo
+	if gate != "" {
+		if e, ok := store.get(identity, key); ok && e.ETag == gate && time.Since(e.StoredAt) < alertsRemediationMaxAge {
+			var res forgetypes.SecurityAlerts
+			if json.Unmarshal(e.Payload, &res) == nil {
+				return &res, nil
+			}
+		}
+	}
+	res, err := s.listOpenAlertsGraphQL(ctx, owner, repo)
+	if err != nil || gate == "" {
+		return res, err
+	}
+	if payload, merr := json.Marshal(res); merr == nil {
+		store.put(identity, key, condEntry{ETag: gate, Payload: payload, StoredAt: time.Now().UTC()})
+	}
+	return res, nil
+}
+
+// listOpenAlertsGraphQL is the GraphQL alert read: one GraphQL request
+// always; one additional REST request only on the ambiguous empty answer (see
+// the file header).
+//
+// GraphQL retained for repositories with open alerts: dependabotUpdate (the
+// remediation PR, or the typed reason there cannot be one) exists only here.
+func (s *SecurityService) listOpenAlertsGraphQL(ctx context.Context, owner, repo string) (*forgetypes.SecurityAlerts, error) {
 	first, err := checkedGraphQLInt("first", forge.MaxSecurityAlertsPerRequest)
 	if err != nil {
 		return nil, err

@@ -18,6 +18,15 @@ and this project adheres to
 
 ### Fixed
 
+- An attention sweep that outlives the 30-second request deadline no longer
+  leaves the window "never swept": the daemon finishes it and its cards still
+  arrive, and later triggers in that window ask the board change probe
+  instead of sweeping again. A window reload remembers the last completed
+  sweep, so activation asks the probe too; only the Attention Sweep command
+  always sweeps. The timer keeps its schedule even when a sweep started a
+  little late, so checks the probe cannot see (default-branch CI, Dependabot,
+  branch protection) are not delayed to twice the interval.
+
 - The Repositories view reads each project board once per refresh instead of
   three times per repository, and serves re-expands and daemon reconnects from
   cache without touching GitHub. Row counts on a board shared by several

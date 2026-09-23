@@ -16,13 +16,23 @@
  * known daemon handler (internal/ipc/server.go) and from there to a known
  * number of GraphQL reads:
  *
- *   - `board.list {status}`  one `items(query:"status:X is:open")` read per
- *                            board and status, 17 points per 100-item page;
- *   - `board.listOpen`       one `items(query:"is:open")` read per board, the
- *                            SAME daemon snapshot `board.counts` and the
- *                            attention sweeps read, 17 points per page;
+ *   - `board.list {status}`  one REST `items?q=status:X is:open` read per
+ *                            board and status, plus one REST list per
+ *                            non-empty relationship — all conditional, so an
+ *                            unchanged board answers 304 and costs nothing;
+ *   - `board.listOpen`       one REST `items?q=is:open` SUMMARY read per board
+ *                            (relationship counts, not lists), the SAME daemon
+ *                            snapshot `board.counts` and the attention sweeps
+ *                            read; conditional, so free while unchanged. It is
+ *                            a GraphQL read (17 points a page) only on GitHub
+ *                            Enterprise Server;
  *   - `board.counts`         derived from that same open snapshot;
- *   - `github.rateLimit`     one GraphQL `rateLimit` read per user per 15s;
+ *   - `github.rateLimit`     the daemon's tracker, else the GraphQL `rateLimit`
+ *                            query, which GitHub does not charge;
+ *
+ * The daemon-side price of each verb is pinned in Go
+ * (internal/ipc/github_cost_test.go); these tests pin how many verbs the view
+ * sends.
  *   - `config.getProjectConfig`, `autonomous.status`  local, no GitHub.
  *
  * "Expanding the view" is what VS Code does: ask the root for its rows, then
@@ -70,10 +80,46 @@ function boardItem(number: number, repo: string, status: string, labels: string[
 /** Each repository sits on its own board: project number = index + 1. */
 const REPOS = ["alpha", "beta", "gamma", "delta", "epsilon"];
 
+/**
+ * How the fake daemon reports relationships on the open read: as lists (the
+ * GraphQL read GHES still gets) or as counts (the REST summary github.com
+ * gets). Item 2 is blocked by one OPEN issue; item 1 only by a CLOSED one.
+ */
+let relationForm: "lists" | "summary" = "summary";
+
+function withRelations(
+  item: ReturnType<typeof boardItem>,
+  openBlockers: number,
+  totalBlockers: number
+) {
+  if (relationForm === "summary") {
+    return {
+      ...item,
+      relationSummary: {
+        blockedByOpen: openBlockers,
+        blockedByTotal: totalBlockers,
+        blockingOpen: 0,
+        blockingTotal: 0,
+        subIssuesTotal: 0,
+        subIssuesCompleted: 0,
+      },
+    };
+  }
+  const blockedBy = [];
+  for (let i = 0; i < totalBlockers; i++) {
+    blockedBy.push({
+      number: 900 + i,
+      title: "blocker",
+      state: i < openBlockers ? "OPEN" : "CLOSED",
+    });
+  }
+  return totalBlockers > 0 ? { ...item, blockedBy } : item;
+}
+
 function openItemsFor(repo: string) {
   return [
-    boardItem(1, repo, "Ready"),
-    boardItem(2, repo, "Ready"),
+    withRelations(boardItem(1, repo, "Ready"), 0, 1),
+    withRelations(boardItem(2, repo, "Ready"), 1, 1),
     boardItem(3, repo, "In progress"),
     boardItem(4, repo, "Backlog"),
     boardItem(5, repo, "Backlog", ["type:epic"]),
@@ -325,6 +371,28 @@ describe("RepositoriesTreeProvider — GitHub cost of the view", () => {
       expect(counts).toEqual({ ready: 2, inProgress: 1, backlog: 1 });
     }
   });
+
+  // The open read now carries blocker COUNTS instead of blocker lists. The
+  // tree must count exactly what it counted from the lists: hide-blocked drops
+  // the issue with an OPEN blocker and keeps the one whose only blocker is
+  // closed, and epic exclusion is unchanged.
+  it.each(["summary", "lists"] as const)(
+    "hide-blocked counts the same from a %s read",
+    async (form) => {
+      relationForm = form;
+      try {
+        for (const repo of REPOS) provider.setFilterForStatus(repo, "ready", { hideBlocked: true });
+        const children = await expandView(provider);
+        expect(children).toHaveLength(5);
+        for (const row of children) {
+          const counts = Object.fromEntries(row.map((c) => [c.statusType, c.count]));
+          expect(counts).toEqual({ ready: 1, inProgress: 1, backlog: 1 });
+        }
+      } finally {
+        relationForm = "summary";
+      }
+    }
+  );
 
   it("a second expand within the cache TTL issues no GitHub-bound call", async () => {
     await expandView(provider);

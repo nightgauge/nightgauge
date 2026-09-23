@@ -1390,13 +1390,18 @@ func (s *Server) registerMethods() {
 	}
 
 	// board.listOpen returns every OPEN item on the board, all statuses, from
-	// the daemon's cached `is:open` snapshot — the same snapshot board.counts
-	// and the attention sweeps read. It exists for the Repositories tree, which
-	// needs per-repository, epic-excluded counts for Ready / In progress /
-	// Backlog: before this verb it asked board.list once per status, three
-	// separate `items(query:"status:X is:open")` reads per board at 17 points
-	// a page, none of them shared with anything else. One read, already warm
-	// when a sweep has run, answers all three.
+	// the daemon's cached `is:open` SUMMARY snapshot — the same snapshot
+	// board.counts and the attention sweeps read. It exists for the
+	// Repositories tree, which needs per-repository, epic-excluded,
+	// blocked-aware counts for Ready / In progress / Backlog: one read answers
+	// all three.
+	//
+	// Items carry relationship COUNTS (relationSummary), not lists: that is
+	// everything the counts need (blocked = relationSummary.blockedByOpen > 0),
+	// and it is what lets the read be conditional REST — free while the board
+	// is unchanged, across daemon restarts — instead of a GraphQL read billed
+	// 17 points a page every time. A caller that needs the lists asks
+	// board.list for a status.
 	//ipc:method boardListOpen params:BoardListOpenParams result:BoardItem[] nullable
 	s.methods["board.listOpen"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
 		var p BoardListOpenParams
@@ -1407,8 +1412,8 @@ func (s *Server) registerMethods() {
 		if err != nil {
 			return nil, err
 		}
-		items, _, err := s.boardServicesFor(c, p.Owner, p.ProjectNumber, gh.ParseOwnerType(p.OwnerType)).
-			Board.ListOpenItems(ctx)
+		items, _, err := boardcache.ListOpenSummary(ctx,
+			s.boardServicesFor(c, p.Owner, p.ProjectNumber, gh.ParseOwnerType(p.OwnerType)).Board)
 		return items, err
 	}
 
@@ -1422,9 +1427,9 @@ func (s *Server) registerMethods() {
 		if err != nil {
 			return nil, err
 		}
-		// Derived from the cached open-item snapshot, never asked of the
-		// forge: inside the TTL this costs zero requests, and after it one
-		// 1-point change probe (#TBD-board-counts).
+		// Derived from the cached open-item summary snapshot, never asked of
+		// the forge as a count: inside the TTL this costs zero requests, and
+		// after it conditional REST reads that are free while unchanged.
 		return boardcache.CountsByStatus(ctx,
 			s.boardServicesFor(c, p.Owner, p.ProjectNumber, gh.ParseOwnerType(p.OwnerType)).Board)
 	}

@@ -112,6 +112,9 @@ func TestBoardItemContractValues(t *testing.T) {
 			{NodeID: "I_block202", Number: 44, Title: "Add photo gallery view", State: "OPEN", Repo: "nightgauge/nightgauge"},
 		},
 		AuthorAssociation: "OWNER",
+		RelationSummary: &types.RelationSummary{
+			BlockedByOpen: 0, BlockedByTotal: 1, BlockingOpen: 1, BlockingTotal: 1, SubIssuesTotal: 1, SubIssuesCompleted: 0,
+		},
 	}
 
 	got, err := json.Marshal(item)

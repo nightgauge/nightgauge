@@ -4773,6 +4773,30 @@ func serveCmd() *cobra.Command {
 			// request lands in the ledger of the workspace it serves (#1913).
 			gh.SetAPILedgerWorkspaceRoot(workspaceRoot)
 
+			// The persistent conditional-request store, installed before the
+			// first client exists so every client this daemon builds shares it:
+			// an unchanged board, repository or alert list answers 304 — free —
+			// and keeps doing so after a window reload restarts this process.
+			// Without a user cache directory the clients keep per-process
+			// memory stores, which are correct, just cold after a restart.
+			// Mock mode (an injected GraphQL URL) never touches the real store.
+			if githubGraphQLURL == "" {
+				if dir, derr := gh.ConditionalStoreDir(); derr != nil {
+					fmt.Fprintf(os.Stderr, "warning: no user cache directory (%v); GitHub conditional requests are remembered in memory only\n", derr)
+				} else {
+					store := gh.NewConditionalStore(dir)
+					// Pruned now and daily, off the startup path, for the life
+					// of this daemon: entries unwritten for 14 days go, and the
+					// oldest go first past 256 MiB.
+					maintCtx := cmd.Context()
+					if maintCtx == nil {
+						maintCtx = context.Background()
+					}
+					go store.RunMaintenance(maintCtx, 14*24*time.Hour, 256<<20, 24*time.Hour)
+					gh.SetProcessConditionalStore(store)
+				}
+			}
+
 			var client *gh.Client
 			if githubGraphQLURL != "" {
 				token := os.Getenv("GITHUB_TOKEN")
