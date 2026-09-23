@@ -475,10 +475,10 @@ func planCompleteCount(planPath string) int {
 	return status.Complete
 }
 
-// foldSubSession adds one session's result to the stage's. Spend is summed;
-// everything that describes how the stage ended (exit code, served model,
-// failure text, …) is the latest session's, because the latest session is how
-// it ended.
+// foldSubSession adds one session's result to the stage's. Spend is summed,
+// the peak single-step prompt is the largest session's, and everything that
+// describes how the stage ended (exit code, served model, failure text, …) is
+// the latest session's, because the latest session is how it ended.
 func foldSubSession(agg *StageRunResult, res *StageRunResult) {
 	if res == nil {
 		agg.ExitCode = 1
@@ -486,6 +486,7 @@ func foldSubSession(agg *StageRunResult, res *StageRunResult) {
 	}
 	in, out, cr, cc := agg.InputTokens, agg.OutputTokens, agg.CacheReadTokens, agg.CacheCreationTokens
 	cost, elapsed, tools := agg.CostUsd, agg.ElapsedMs, agg.ToolCalls
+	peak := agg.PeakStepInputTokens
 	*agg = *res
 	agg.InputTokens = in + res.InputTokens
 	agg.OutputTokens = out + res.OutputTokens
@@ -494,6 +495,8 @@ func foldSubSession(agg *StageRunResult, res *StageRunResult) {
 	agg.CostUsd = cost + res.CostUsd
 	agg.ElapsedMs = elapsed + res.ElapsedMs
 	agg.ToolCalls = append(tools, res.ToolCalls...)
+	// The stage's peak prompt is its largest session's, never a sum (#1653).
+	agg.PeakStepInputTokens = max(peak, res.PeakStepInputTokens)
 }
 
 // subSessionPhaseName carries the session's tokens in the phase name: the
