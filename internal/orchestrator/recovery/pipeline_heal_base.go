@@ -11,6 +11,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
 	"github.com/nightgauge/nightgauge/internal/heal"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
@@ -107,8 +108,15 @@ func (a *PipelineHealBase) Execute(ctx context.Context, failure StageFailure) Re
 	}
 
 	// 1. Locate and parse baseline file.
-	baselinePath := filepath.Join(failure.Workspace, ".nightgauge", "pipeline",
-		fmt.Sprintf("auto-fix-baseline-%d.json", failure.PRNumber))
+	pipelineDir, dirErr := layout.PipelineStateDir(failure.Workspace)
+	if dirErr != nil {
+		return RecoveryResult{
+			Action:   a.Name(),
+			Reason:   fmt.Sprintf("baseline file not readable — %v", dirErr),
+			FollowUp: FollowUpNoAction,
+		}
+	}
+	baselinePath := filepath.Join(pipelineDir, fmt.Sprintf("auto-fix-baseline-%d.json", failure.PRNumber))
 	data, err := os.ReadFile(baselinePath)
 	if err != nil {
 		return RecoveryResult{
@@ -414,9 +422,8 @@ func healBaseApprovalRelPath(prNumber int) string {
 // approved" — it never auto-approves. The file is checked first so the gh call
 // is skipped when a local approval is already present.
 func healBaseApprovalGranted(ctx context.Context, workspace, repo string, prNumber int) bool {
-	if workspace != "" {
-		path := filepath.Join(workspace, ".nightgauge", "pipeline",
-			fmt.Sprintf("approval-heal-base-%d.json", prNumber))
+	if pipelineDir, dirErr := layout.PipelineStateDir(workspace); dirErr == nil {
+		path := filepath.Join(pipelineDir, fmt.Sprintf("approval-heal-base-%d.json", prNumber))
 		if b, err := os.ReadFile(path); err == nil {
 			var v struct {
 				Approved bool `json:"approved"`

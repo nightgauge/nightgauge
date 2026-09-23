@@ -446,6 +446,17 @@ create --body-file` call, so the compact profile (and its tests) pin
 
 ### Changed
 
+- **The orchestrator resolves its per-clone directories through one package
+  (#2033).** A new leaf package, `internal/layout`, has one resolver per
+  per-clone class: `PipelineStateDir`, `PlansDir`, `RetrosDir` and
+  `CloneLogsDir`. Each still returns `<root>/.nightgauge/<class>`, so nothing
+  moves on disk; ADR-024 moves these directories in a later change. Every file
+  under `internal/orchestrator/` now gets these paths from the resolvers
+  instead of building them by hand, and `state.PipelineStateDir` calls the
+  same resolver. The resolvers refuse an empty or relative repository root,
+  so a path can no longer resolve against the process's working directory. A
+  read from such a root now finds no file, and a write fails with an error
+  where it used to write under the working directory.
 - **Machine state moves out of `~/.nightgauge` into its own root (#2031).**
   The serve daemon's claim registry (`serve/`), the rate-limit hints
   (`rate-limit.json`, `ratelimit-gitlab-<host>.json`), `machine-id` and the

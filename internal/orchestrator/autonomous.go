@@ -31,6 +31,7 @@ import (
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/intelligence/baselineGate"
 	"github.com/nightgauge/nightgauge/internal/intelligence/routing"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/skillrender"
 	"github.com/nightgauge/nightgauge/internal/state"
@@ -6942,7 +6943,11 @@ func (as *AutonomousScheduler) writeExitEvent(reason string) {
 	if as.workspaceRoot == "" {
 		return
 	}
-	logDir := filepath.Join(as.workspaceRoot, ".nightgauge", "logs")
+	logDir, err := layout.CloneLogsDir(as.workspaceRoot)
+	if err != nil {
+		log.Printf("autonomous: exit event not recorded: %v", err)
+		return
+	}
 	_ = os.MkdirAll(logDir, 0755)
 	logPath := filepath.Join(logDir, "autonomous-exits.jsonl")
 
@@ -6990,7 +6995,11 @@ func (as *AutonomousScheduler) writeCrashExitEvent(panicMsg, stackTrace string) 
 	if as.workspaceRoot == "" {
 		return
 	}
-	logDir := filepath.Join(as.workspaceRoot, ".nightgauge", "logs")
+	logDir, err := layout.CloneLogsDir(as.workspaceRoot)
+	if err != nil {
+		log.Printf("autonomous: exit event not recorded: %v", err)
+		return
+	}
 	_ = os.MkdirAll(logDir, 0755)
 	logPath := filepath.Join(logDir, "autonomous-exits.jsonl")
 
@@ -7398,7 +7407,7 @@ func (as *AutonomousScheduler) architectureApprovalFileGranted(repo string, issu
 	if root == "" {
 		return false
 	}
-	b, err := os.ReadFile(filepath.Join(root, ".nightgauge", "pipeline", fmt.Sprintf("approval-%d.json", issue)))
+	b, err := os.ReadFile(pipelineStatePath(root, fmt.Sprintf("approval-%d.json", issue)))
 	if err != nil {
 		return false
 	}
