@@ -775,7 +775,8 @@ The pipeline resolves a GitHub token using this chain (highest to lowest). The
 chain **branches** on whether a `github_user` is configured for the target
 owner (#4068):
 
-1. `--token` CLI flag (one-shot override)
+1. **On a CI host** (`CI=true` in any case, or `CI=1`): `GITHUB_TOKEN`, then
+   `GH_TOKEN`, ahead of every stored token; `github_user` is ignored.
 2. `github_auth.token` — per-project PAT from config
 3. `github_auth.tokens[owner]` — per-org PAT map (global config)
 4. **If a `github_user` is configured for the owner** (explicit `github_user`,
@@ -786,6 +787,12 @@ owner (#4068):
 5. **If no `github_user` is configured:** `GITHUB_TOKEN` environment variable,
    then `gh auth token` (default gh account) — the single-identity / CI path,
    unchanged.
+
+There is no command-line tier: the binary takes no `--token` flag, because a
+token on argv is visible through `ps` (ADR-024 § 5). For a one-shot override,
+set `GITHUB_TOKEN` or `GH_TOKEN` in the command's environment, e.g.
+`GH_TOKEN=$(gh auth token --user <account>) nightgauge …`. Outside CI, a
+configured `github_user` or a config token still takes precedence over it.
 
 The key change from earlier versions: when a repo declares a specific identity,
 the github_user-scoped token (step 4) is tried **before** the ambient

@@ -3435,12 +3435,14 @@ export type RemoteConfig = z.infer<typeof RemoteConfigSchema>;
  * Maps org/owner names to gh CLI usernames for token resolution.
  *
  * Token resolution priority (highest to lowest):
- *  1. GITHUB_TOKEN env var (CI/CD override)
- *  2. --token CLI flag (one-shot override)
- *  3. token field (per-project PAT, project config)
- *  4. tokens[owner] (per-org PAT mapping, global config)
- *  5. gh auth token --user <user>  (gh CLI fallback)
- *  6. gh auth token               (default gh user)
+ *  1. On a CI host: GITHUB_TOKEN, then GH_TOKEN env var
+ *  2. token field (per-project PAT, project config)
+ *  3. tokens[owner] (per-org PAT mapping, global config)
+ *  4. gh auth token --user <user>  (gh CLI fallback)
+ *  5. With no github_user: GITHUB_TOKEN env var, then
+ *     gh auth token               (default gh user)
+ *
+ * No token is accepted on argv (ADR-024 § 5, #2031).
  *
  * Token values support env:VAR_NAME syntax to avoid plaintext PATs in YAML.
  * Example: token: env:GITHUB_TOKEN_NIGHTGAUGE

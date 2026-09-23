@@ -3525,7 +3525,8 @@ nightgauge release fetch --source <owner/repo> [flags]
 | `2`  | Hard error (bad flag, transport failure, non-2xx status, decode error) |
 
 **Authentication:** the verb sends `Authorization: Bearer <token>` when one is
-available — order: `--token` CLI flag → `GITHUB_TOKEN` env var. An absent
+available — order: `GITHUB_TOKEN` → `GH_TOKEN` env var (there is no `--token`
+flag; a token on argv is visible through `ps`). An absent
 token still works for public repos but at the lower 60/hr rate limit.
 
 **JSON output schema (`FetchResult`):**

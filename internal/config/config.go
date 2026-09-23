@@ -118,12 +118,14 @@ func (s *SanitizationConfig) ResolvedMode() SanitizationMode {
 // Used when per-repo github_user is not set — resolves the gh CLI user for each org.
 //
 // Token resolution priority (highest to lowest):
-//  1. GITHUB_TOKEN env var (CI/CD override)
-//  2. --token CLI flag (one-shot override)
-//  3. Token field (per-project PAT, this struct)
-//  4. Tokens[owner] (per-org PAT mapping, global config)
-//  5. gh auth token --user <user> (gh CLI fallback, deprecated)
-//  6. gh auth token (default gh CLI user, deprecated)
+//  1. On a CI host: GITHUB_TOKEN, then GH_TOKEN env var
+//  2. Token field (per-project PAT, this struct)
+//  3. Tokens[owner] (per-org PAT mapping, global config)
+//  4. gh auth token --user <user> (gh CLI fallback, deprecated)
+//  5. With no github_user: GITHUB_TOKEN env var, then gh auth token (default
+//     gh CLI user, deprecated)
+//
+// No token is accepted on argv (ADR-024 § 5, #2031).
 //
 // Token values support env:VAR_NAME syntax to avoid plaintext PATs in YAML.
 // Example: token: env:GITHUB_TOKEN_NIGHTGAUGE

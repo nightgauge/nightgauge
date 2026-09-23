@@ -297,9 +297,6 @@ func getOwnerType(cmd *cobra.Command) gh.OwnerType {
 	return gh.OwnerTypeOrg
 }
 
-// globalToken holds the --token CLI flag value. Set by rootCmd PersistentPreRunE.
-var globalToken string
-
 // explicitWorkspaceRoot returns the workspace this invocation was explicitly
 // pointed at via --workspace or --workdir, or "" when it was given neither
 // (in which case the process cwd is already the right answer).
@@ -316,17 +313,19 @@ func explicitWorkspaceRoot(cmd *cobra.Command) string {
 	return ""
 }
 
-// clientFromConfig creates a GitHub client using the full resolution chain:
-//  1. --token CLI flag (globalToken)
+// clientFromConfig creates a GitHub client using the full resolution chain.
+// There is no argv tier: the root --token flag was removed because a token on
+// the command line is visible through `ps` (ADR-024 § 5, #2031).
+//  1. On a CI host: GITHUB_TOKEN, then GH_TOKEN, ahead of everything else
 //  2. Per-project or per-org token from config (github_auth.token / github_auth.tokens)
-//  3. GITHUB_TOKEN env var
-//  4. gh auth token --user <user> (from config github_user / github_auth.users) —
+//  3. gh auth token --user <user> (from config github_user / github_auth.users) —
 //     scoped to the configured identity, never the ambient active account (#3700)
-//  5. gh auth token (default gh user) — only when no github_user is configured
+//  4. With no github_user configured: GITHUB_TOKEN env var, then
+//     gh auth token (default gh user)
 func clientFromConfig() (*gh.Client, error) {
 	workdir, err := os.Getwd()
 	if err != nil {
-		return gh.NewClientFromConfig(nil, "", globalToken)
+		return gh.NewClientFromConfig(nil, "", "")
 	}
 	cfg, err := config.Load(workdir)
 	if err != nil {
@@ -336,9 +335,9 @@ func clientFromConfig() (*gh.Client, error) {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
 	if cfg == nil {
-		return gh.NewClientFromConfig(nil, "", globalToken)
+		return gh.NewClientFromConfig(nil, "", "")
 	}
-	return gh.NewClientFromConfig(cfg, cfg.Owner, globalToken)
+	return gh.NewClientFromConfig(cfg, cfg.Owner, "")
 }
 
 // exportConfiguredGitHubToken resolves the pipeline's GitHub token via the same
@@ -559,10 +558,9 @@ func rootCmd() *cobra.Command {
 	// Defaults to "org"; set to "user" for user-owned GitHub project boards.
 	root.PersistentFlags().String("owner-type", "org", "GitHub owner type: org or user")
 
-	// Global --token flag for one-shot PAT override. Takes highest precedence
-	// over all config-based tokens. Avoid using in scripts — prefer env:VAR_NAME
-	// in config.yaml to avoid token exposure in shell history.
-	root.PersistentFlags().StringVar(&globalToken, "token", "", "GitHub PAT for one-shot operations (overrides all config tokens)")
+	// No --token flag: a credential on argv is visible through `ps`
+	// (ADR-024 § 5, #2031). The token comes from the resolution chain in
+	// clientFromConfig; for a one-shot override, set GITHUB_TOKEN or GH_TOKEN.
 
 	root.AddCommand(
 		adapterCmd(),

@@ -413,7 +413,9 @@ func NewClient() (*Client, error) {
 
 // NewClientFromConfig creates a GitHub GraphQL client using the resolution
 // priority chain:
-//  1. cliToken (--token flag) if non-empty
+//  1. cliToken if non-empty — a token the caller already holds. No command
+//     passes one from argv: the root --token flag was removed (ADR-024 § 5,
+//     #2031); on a CI host GITHUB_TOKEN / GH_TOKEN come next, ahead of config
 //  2. cfg.ResolveToken(owner) — per-project or per-org config token
 //     3a. When a github_user is configured: the github_user-scoped token
 //     (gh auth token --user, ambient env stripped) — authoritative over
@@ -434,7 +436,7 @@ func NewClientFromConfig(cfg TokenResolver, owner string, cliToken string) (*Cli
 	return newClientFromChain(cfg, owner, execGHAuthTokenForUser, execGHAuthToken)
 }
 
-// NewClientFromConfigContext is NewClientFromConfig with no --token flag and
+// NewClientFromConfigContext is NewClientFromConfig with no cliToken and
 // every gh CLI call it makes run under ctx, so the gh fallback cannot hold the
 // caller past ctx's deadline. The tiers and the identity rules are
 // NewClientFromConfig's.
@@ -538,7 +540,7 @@ func ciEnvironmentToken() string {
 }
 
 // ResolveTokenChain resolves the GitHub token using the same priority chain
-// as NewClientFromConfig (skipping the CLI --token flag tier):
+// as NewClientFromConfig (skipping the cliToken tier):
 //  1. cfg.ResolveToken(owner) — per-project or per-org config token
 //     2a. When a github_user is configured: the github_user-scoped token
 //     (gh auth token --user, ambient env stripped) — authoritative over the

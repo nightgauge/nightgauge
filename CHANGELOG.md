@@ -478,10 +478,13 @@ create --body-file` call, so the compact profile (and its tests) pin
   token, `github_user` is ignored (a committed repository tier could otherwise
   pick any identity gh has stored on the runner), and `nightgauge doctor`
   reports a credential in the machine-tier file (`ci_machine_credentials`).
-  `nightgauge serve --api-key` and `--license-key` are removed and
-  `nightgauge forge auth login --token` is replaced by stdin: each put a
-  credential on argv, visible through `ps`. Set `NIGHTGAUGE_API_KEY` /
-  `NIGHTGAUGE_LICENSE_KEY`, or pipe the token to `forge auth login`.
+  `nightgauge serve --api-key` and `--license-key` and the root `--token`
+  flag are removed, and `nightgauge forge auth login --token` is replaced by
+  stdin: each put a credential on argv, visible through `ps`. Set
+  `NIGHTGAUGE_API_KEY` / `NIGHTGAUGE_LICENSE_KEY`, pipe the token to
+  `forge auth login`, and give a one-shot GitHub token as `GITHUB_TOKEN` /
+  `GH_TOKEN` in the command's environment, which the existing resolution
+  chain reads (`release fetch` reads `GITHUB_TOKEN`, then `GH_TOKEN`).
   The docs now state the keychain's threat model: any same-user process,
   pipeline agents included, can read an item created through macOS
   `security`.
