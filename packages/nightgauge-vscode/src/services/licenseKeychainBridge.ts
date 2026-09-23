@@ -50,12 +50,12 @@ export const LICENSE_SYNCED_FINGERPRINT_SECRET = "nightgauge.platform.licenseKey
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_OUTPUT = 8_192;
 
-/** Non-reversible key identifier; the same function as Go's keychain.Fingerprint. */
 /** A fingerprint as the binary prints it: exactly 12 lowercase hex characters. */
 export function isWellFormedFingerprint(value: unknown): value is string {
   return typeof value === "string" && /^[0-9a-f]{12}$/.test(value);
 }
 
+/** Non-reversible key identifier; the same function as Go's keychain.Fingerprint. */
 export function licenseKeyFingerprint(key: string): string {
   return key ? createHash("sha256").update(key).digest("hex").slice(0, 12) : "";
 }
