@@ -246,7 +246,7 @@ func TestCompactPrMerge_FitsBudgetAndKeepsDenyRules(t *testing.T) {
 	root := realSkillsRoot(t)
 	compact := mustRender(t, Options{Stage: "pr-merge", SkillsRoots: []string{root}, Profile: ProfileCompact})
 
-	got := Fit("pr-merge", compact.Content, 32768)
+	got := fitCompact(t, "pr-merge", compact.Content)
 	if !got.Fits {
 		t.Errorf("Fit(pr-merge compact, 32768) = %+v, want Fits=true", got)
 	}

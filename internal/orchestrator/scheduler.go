@@ -618,6 +618,10 @@ func cliRunResultToStageResult(result *adapters.RunResult) *StageRunResult {
 		Cancelled:    result.Cancelled,
 		InputTokens:  result.InputTokens,
 		OutputTokens: result.OutputTokens,
+		// The cache pools the adapter stream measured (#1651): dropping them
+		// here recorded every Go-direct stage's cache reads as 0.
+		CacheReadTokens:     result.CacheReadTokens,
+		CacheCreationTokens: result.CacheCreationTokens,
 		// #91 served-model attribution, tracked by the execution manager's
 		// stream reader, and a multi-provider adapter's ADR-022 § 2 identity.
 		ServedModel:             result.ServedModel,
@@ -5225,17 +5229,58 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			return
 		}
 
+		// A model on a local OpenCode endpoint is in no registry, so
+		// OverlayKeys resolves no window for it. Its window is the context
+		// limit the dispatch's own OpenCode config is built with (#1651).
+		if skillData.ContextWindow <= 0 && adapterName == "opencode" {
+			skillData.ContextWindow = openCodeDispatchWindow(ctx, workspaceRoot, model)
+		}
+
 		// Context-budget fit check (ADR 023, #1645). skillData.ContextWindow
-		// is the SAME descriptor OverlayKeys just resolved for the render
-		// above — not re-derived — so this can never disagree with what the
-		// overlay cascade actually keyed off. Zero means unknown/unresolved
+		// is the descriptor OverlayKeys just resolved for the render above,
+		// or, for a local OpenCode model, the limit its run config is built
+		// with, so the check reads the window the dispatch runs with. Zero means unknown/unresolved
 		// (a hosted model absent from the registry, or a local provider
-		// OverlayKeys could not resolve): ADR 023 §4's fail-open branch, so
+		// whose limit did not resolve): ADR 023 §4's fail-open branch, so
 		// dispatch proceeds unchecked exactly as it did before this issue —
 		// only the branch taken is logged, so a trace can distinguish
 		// "checked and passed" from "not checked".
+		//
+		// ADR 023 Q3/Q5 order: the full render when it fits; else the
+		// stage's compact profile when it has one and it fits; else the
+		// one-hop re-route, else refusal.
 		if skillData.ContextWindow > 0 {
 			fit := skillrender.Fit(string(stage), skillData.Content, skillData.ContextWindow)
+			compactNote := ""
+			if !fit.Fits {
+				compactData, compactErr := skillrender.Render(skillrender.Options{
+					Stage:       string(stage),
+					Model:       model,
+					Adapter:     adapterName,
+					SkillsRoots: skillrender.DefaultRoots(workspaceRoot),
+					Profile:     skillrender.ProfileCompact,
+					Warn:        func(msg string) { log.Printf("#%d: %s", item.Number, msg) },
+				})
+				hasCompact := compactErr == nil && compactData.Profile == skillrender.ProfileCompact
+				compactContent := ""
+				if hasCompact {
+					compactContent = compactData.Content
+				}
+				decision, decided := skillrender.DecideProfile(string(stage), skillData.Content, skillData.ContextWindow, hasCompact, compactContent)
+				if decision == skillrender.DecisionCompact {
+					log.Printf("#%d: stage %s context budget: full render estimated %d tokens against a %d-token budget (window %d) — dispatching the compact profile (estimated %d tokens)",
+						item.Number, stage, fit.EstimatedTokens, fit.Budget, fit.Window, decided.EstimatedTokens)
+					// The compact render resolved the same descriptor; a
+					// local window came from the endpoint, not the render.
+					compactData.ContextWindow = skillData.ContextWindow
+					skillData = compactData
+					fit = decided
+				} else if hasCompact {
+					compactNote = fmt.Sprintf("; its compact profile estimated %d tokens and does not fit either", decided.EstimatedTokens)
+					log.Printf("#%d: stage %s context budget: the compact profile does not fit either (estimated %d tokens against %d)",
+						item.Number, stage, decided.EstimatedTokens, decided.Budget)
+				}
+			}
 			if !fit.Fits {
 				log.Printf("#%d: stage %s context budget exceeded: estimated %d tokens against a %d-token budget (window %d, share %.2f) — attempting one re-route",
 					item.Number, stage, fit.EstimatedTokens, fit.Budget, fit.Window, fit.Share)
@@ -5269,8 +5314,8 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				// rejected.
 				if !rerouted {
 					reason := fmt.Sprintf(
-						"context_window_exceeded: stage %s estimated %d tokens exceeds its %d-token budget (window %d, share %.2f)",
-						stage, fit.EstimatedTokens, fit.Budget, fit.Window, fit.Share)
+						"context_window_exceeded: stage %s estimated %d tokens exceeds its %d-token budget (window %d, share %.2f)%s",
+						stage, fit.EstimatedTokens, fit.Budget, fit.Window, fit.Share, compactNote)
 					_, workRecovered = s.refusePreDispatch(item, runtime, workspaceRoot, stage, tracer,
 						"context-budget", reason)
 					// refusePreDispatch's own return is always
@@ -5283,8 +5328,8 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 					return
 				}
 			} else {
-				log.Printf("#%d: stage %s context budget: fits (estimated %d tokens, budget %d, window %d, share %.2f)",
-					item.Number, stage, fit.EstimatedTokens, fit.Budget, fit.Window, fit.Share)
+				log.Printf("#%d: stage %s context budget: fits (profile %s, estimated %d tokens, budget %d, window %d, share %.2f)",
+					item.Number, stage, renderProfileName(skillData), fit.EstimatedTokens, fit.Budget, fit.Window, fit.Share)
 			}
 		} else {
 			log.Printf("#%d: stage %s context budget: unknown-window branch (no resolved model descriptor) — dispatching unchecked", item.Number, stage)
@@ -5556,6 +5601,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			Model:           model,
 			PerformanceMode: string(stagePerfMode),
 			EscalatedRetry:  s.retryEngine.CurrentModel(string(stage)) != "",
+			SkillProfile:    renderProfileName(skillData),
 		})
 
 		if s.onStageStart != nil {
@@ -6254,7 +6300,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// through CompletedStages normally; recording it unconditionally would
 		// let a stale synthesized entry mask a real per-stage bug there.
 		if exitCode != 0 || err != nil {
-			runtime.RecordTerminatingStageTokens(stage, inputTokens, outputTokens, cacheReadTokens, actualCostUsd)
+			recordTerminatingStageTokens(runtime, stage, inputTokens, outputTokens, cacheReadTokens, actualCostUsd)
 		}
 
 		prStateAtExit := detMergePRState
@@ -7330,7 +7376,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// source=llm: All Go-scheduler stages run via LLM in this iteration.
 		// Deterministic-first is TypeScript-only (Issue #2614); this field
 		// enables future Go-side deterministic-first tracking.
-		log.Printf("#%d: stage %s complete — model=%s source=llm, tokens: %d in (%d cached) / %d out, cost: $%.4f",
+		log.Printf("#%d: stage %s complete — model=%s source=llm, tokens: %d in + %d cache read / %d out, cost: $%.4f",
 			item.Number, stage, model, inputTokens, cacheReadTokens, outputTokens, stageCost)
 
 		// Post-stage verification for pr-merge: the skill's exit code is not

@@ -1,7 +1,9 @@
 package orchestrator
 
 import (
+	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 
@@ -130,4 +132,28 @@ func resolveOpenCodeReadiness(worktreeDir, model string) openCodeReadinessVerdic
 		}
 	}
 	return openCodeReadinessVerdict{Ready: true}
+}
+
+// openCodeDispatchWindow is the context window an OpenCode dispatch of model
+// runs with when model names an endpoint the machine-tier opencode: block
+// declares: adapters.OpenCodeContextWindow, the limit.context the run's
+// config is built with (the declared value, clamped to the loaded window,
+// else the window discovered from the server). 0 for a hosted model, and
+// when the config or the limit does not resolve — the fail-open "unknown
+// window" every consumer already handles.
+func openCodeDispatchWindow(ctx context.Context, worktreeDir, model string) int {
+	loadSettings := openCodeReadinessLoadSettings
+	if loadSettings == nil {
+		loadSettings = config.LoadOpenCodeConfig
+	}
+	settings, err := loadSettings(worktreeDir)
+	if err != nil {
+		return 0
+	}
+	window, err := adapters.OpenCodeContextWindow(ctx, settings, model)
+	if err != nil {
+		log.Printf("opencode: the context window of %s did not resolve, so it is treated as unknown: %v", model, err)
+		return 0
+	}
+	return window
 }

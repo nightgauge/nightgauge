@@ -118,6 +118,12 @@ func (s *Scheduler) runFeatureDevStage(ctx context.Context, params StageRunParam
 	return runFeatureDevSteps(ctx, s.stageRunner, params, workspace, planPath, tasks, policy.HardCap, time.Now)
 }
 
+// featureDevProgressUnprovenMarker leads the stage error when the work tree
+// cannot be fingerprinted around a step: before the session (none is
+// dispatched), or after one that checked no task. The terminal-kind table
+// classifies it as dev_step_progress_unproven.
+const featureDevProgressUnprovenMarker = "[dev-step-progress-unproven]"
+
 // featureDevSubSessionsEnvVar overrides pipeline.feature_dev_sub_sessions for
 // the scheduler process.
 const featureDevSubSessionsEnvVar = "NIGHTGAUGE_FEATURE_DEV_SUB_SESSIONS"
@@ -348,6 +354,15 @@ func runFeatureDevSteps(ctx context.Context, runner StageRunner, params StageRun
 		dispatched[task.Text] = true
 
 		fpBefore, fpErr := gates.WorkTreeFingerprint(workspace)
+		if fpErr != nil {
+			// Fail closed before spending a session: with no fingerprint to
+			// compare against, this step's progress could never be proven.
+			log.Printf("#%d: feature-dev sub-session %d of %d: work tree fingerprint failed before dispatch: %v",
+				params.IssueNumber, k, total, fpErr)
+			agg.ExitCode = 1
+			agg.ErrorText = fmt.Sprintf("%s feature-dev sub-session %d of %d not started: the work tree could not be fingerprinted, so the step's progress could not be proven; the step loop stopped (the scheduler log has git's error)", featureDevProgressUnprovenMarker, k, total)
+			return agg, errors.New(agg.ErrorText)
+		}
 		doneBefore := planCompleteCount(planPath)
 		handoffBefore, _ := os.ReadFile(ctxPath)
 
@@ -405,8 +420,23 @@ func runFeatureDevSteps(ctx context.Context, runner StageRunner, params StageRun
 
 		if status == "complete" {
 			fpAfter, fpAfterErr := gates.WorkTreeFingerprint(workspace)
-			unchanged := fpErr == nil && fpAfterErr == nil && fpAfter == fpBefore
-			if unchanged && planCompleteCount(planPath) <= doneBefore {
+			checkedTask := planCompleteCount(planPath) > doneBefore
+			switch {
+			case checkedTask:
+				// A checked task is progress on its own.
+			case fpAfterErr != nil:
+				// Fail closed: without both fingerprints the loop cannot tell
+				// a step that changed files from one that changed nothing,
+				// and counting it as progress would let no-change steps run
+				// the bound out. git's error goes to the log, not the stage's
+				// error text, whose words the terminal-kind table classifies.
+				log.Printf("#%d: feature-dev sub-session %d of %d: work tree fingerprint failed after the session: %v",
+					params.IssueNumber, k, total, fpAfterErr)
+				recordSubSessionPhase(params.Runtime, k, total, res, "failed", startedAt, completedAt)
+				agg.ExitCode = 1
+				agg.ErrorText = fmt.Sprintf("%s feature-dev sub-session %d of %d marked no plan task done, and the work tree could not be fingerprinted to show it changed a deliverable file, so its progress cannot be proven; the step loop stopped (the scheduler log has git's error)", featureDevProgressUnprovenMarker, k, total)
+				return agg, errors.New(agg.ErrorText)
+			case fpAfter == fpBefore:
 				recordSubSessionPhase(params.Runtime, k, total, res, "failed", startedAt, completedAt)
 				agg.ExitCode = 1
 				agg.ErrorText = fmt.Sprintf("[dev-produced-no-changes] feature-dev sub-session %d of %d changed no deliverable file and marked no plan task done; the step loop stopped", k, total)

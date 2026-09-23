@@ -505,6 +505,58 @@ func TestFeatureDevSteps_NoChangeStopsTheLoop(t *testing.T) {
 	}
 }
 
+// A step whose progress cannot be proven is not progress: when the work tree
+// cannot be fingerprinted after a session that checked no task, the loop
+// stops instead of counting the step and dispatching the next, as
+// dev_step_progress_unproven — not dev_produced_no_changes (nothing showed
+// the tree unchanged), and not subagent_crash, which git's "exit status"
+// text would classify it as if it reached the stage error.
+func TestFeatureDevSteps_UnfingerprintableStepIsNotProgress(t *testing.T) {
+	f := newStepFixture(t, "One", "Two", "Three")
+	r := &fakeStepRunner{honours: true, act: func(k int, _ StageRunParams) (*StageRunResult, error) {
+		writeFileT(t, filepath.Join(f.ws, "step.go"), "package x\n")
+		// The work tree stops being a git repository mid-stage, so the
+		// fingerprint after the session fails.
+		if err := os.Rename(filepath.Join(f.ws, ".git"), filepath.Join(f.ws, ".git-gone")); err != nil {
+			t.Error(err)
+		}
+		return &StageRunResult{}, nil
+	}}
+	res, err := runSteps(t, f, r, localWindow)
+	if err == nil {
+		t.Fatal("a step whose progress could not be proven did not stop the stage")
+	}
+	if len(r.calls) != 1 {
+		t.Errorf("RunStage calls = %d, want 1", len(r.calls))
+	}
+	if res.ExitCode == 0 || !strings.HasPrefix(res.ErrorText, featureDevProgressUnprovenMarker) {
+		t.Errorf("result = exit %d %q, want a failure led by %s", res.ExitCode, res.ErrorText, featureDevProgressUnprovenMarker)
+	}
+	if got := ClassifyTerminalKind(res.ErrorText); got != TerminalKindDevStepProgressUnproven {
+		t.Errorf("terminal kind = %q, want %q", got, TerminalKindDevStepProgressUnproven)
+	}
+}
+
+// A work tree that cannot be fingerprinted before a step spends no session on
+// it: the loop stops before dispatch, with the same kind.
+func TestFeatureDevSteps_UnfingerprintableTreeDispatchesNoSession(t *testing.T) {
+	f := newStepFixture(t, "One", "Two")
+	if err := os.Rename(filepath.Join(f.ws, ".git"), filepath.Join(f.ws, ".git-gone")); err != nil {
+		t.Fatal(err)
+	}
+	r := &fakeStepRunner{honours: true}
+	res, err := runSteps(t, f, r, localWindow)
+	if err == nil {
+		t.Fatal("an unfingerprintable work tree did not stop the stage")
+	}
+	if len(r.calls) != 0 {
+		t.Errorf("RunStage calls = %d, want 0: no session may be spent on a step whose progress cannot be proven", len(r.calls))
+	}
+	if got := ClassifyTerminalKind(res.ErrorText); got != TerminalKindDevStepProgressUnproven {
+		t.Errorf("terminal kind = %q, want %q", got, TerminalKindDevStepProgressUnproven)
+	}
+}
+
 // AC3's "marks no task done" half: a session that only checks its box made
 // progress and does not stop the loop. And a later no-change session stops
 // it there, not at the first step.

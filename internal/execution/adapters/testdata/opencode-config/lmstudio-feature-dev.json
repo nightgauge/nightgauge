@@ -180,6 +180,7 @@
     "doom_loop": "deny",
     "external_directory": {
       "*": "deny",
+      "/nightgauge-test-worktree/**": "allow",
       "/tmp/?": "allow",
       "/private/tmp/?": "allow"
     }

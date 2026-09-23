@@ -58,13 +58,16 @@ of materialized issue numbers. Do not pre-populate the list.
 
 ## Supporting files (load on demand)
 
-- `_includes/context-load.md` — Phases 1 and 1.5 (parallel context gathering,
+In the `_includes/` directory beside SKILL.md; each phase below gives the
+full path the first time it reads one.
+
+- context-load.md — Phases 1 and 1.5 (parallel context gathering,
   stage-start signal, batch detection)
-- `_includes/pr-sections.md` — Phases 1.7 and 1.8 (Knowledge and What-to-Test
+- pr-sections.md — Phases 1.7 and 1.8 (Knowledge and What-to-Test
   PR-body sections)
-- `_includes/security-and-scope.md` — Phases 2.5 and 2.6 (security re-scan,
+- security-and-scope.md — Phases 2.5 and 2.6 (security re-scan,
   scope drift gate)
-- `_includes/create-and-ci.md` — Phases 3, 3.6, and 3.5 (create PR, verify PR
+- create-and-ci.md — Phases 3, 3.6, and 3.5 (create PR, verify PR
   exists, snapshot CI)
 
 ## Orchestration
@@ -205,8 +208,7 @@ printf '<!-- phase:start name="batch-detection" index=2 total=14 stage="pr-creat
 **PURPOSE**: Detect batch mode when `dev-batch-{E}.json` exists and create a
 single PR with multi-issue closing keywords.
 
-> **Read `_includes/context-load.md` (same directory as this SKILL.md) now and
-> follow its instructions before continuing this phase.**
+> **Follow this phase's section of the context-load include, read in Phase 1 above.**
 
 ### Phase 1.7: Build Knowledge Section
 
@@ -230,8 +232,7 @@ printf '<!-- phase:start name="build-what-to-test-section" index=4 total=14 stag
 and the feature branch diff. **No-op** when the dependency graph file is
 absent or the diff produces no output.
 
-> **Read `_includes/pr-sections.md` (same directory as this SKILL.md) now and
-> follow its instructions before continuing this phase.**
+> **Follow this phase's section of the pr-sections include, read in Phase 1.7 above.**
 
 ### Phase 2: Preflight Checks
 
@@ -300,8 +301,7 @@ printf '<!-- phase:start name="scope-drift-gate" index=8 total=14 stage="pr-crea
 files fall within the configured allowlist. Out-of-scope changes indicate
 scope drift (platform incident).
 
-> **Read `_includes/security-and-scope.md` (same directory as this SKILL.md) now
-> and follow its instructions before continuing this phase.**
+> **Follow this phase's section of the security-and-scope include, read in Phase 2.5 above.**
 
 The resulting `$SCOPE_DRIFT_STATUS` flows into `preflight_results.scope_drift_check`
 when `pr-{N}.json` is written in Phase 4.
@@ -384,8 +384,7 @@ and `CI_NOTES`, and exit.
 gracefully (sets `CI_MONITORED=false`) if it is absent. **Headless safe**: no
 interactive prompts.
 
-> **Read `_includes/create-and-ci.md` (same directory as this SKILL.md) now and
-> follow its instructions before continuing this phase.** It carries Steps
+> **Follow this phase's section of the create-and-ci include, read in Phase 3.6 above.** It carries Steps
 > 3.5.1–3.5.5, including the full list of `CI_*` variables passed to Phase 4.
 
 ---

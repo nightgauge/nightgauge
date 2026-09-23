@@ -1,6 +1,9 @@
 package orchestrator
 
-import "github.com/nightgauge/nightgauge/internal/models"
+import (
+	"github.com/nightgauge/nightgauge/internal/models"
+	"github.com/nightgauge/nightgauge/internal/skillrender"
+)
 
 // nextContextBudgetReroute is the one re-route hop ADR 023 §3 allows a stage
 // that fails its context-budget fit check: the largest-window, non-deprecated
@@ -36,4 +39,13 @@ func nextContextBudgetReroute(provider, currentID string, currentWindow int) (mo
 		}
 	}
 	return best, found
+}
+
+// renderProfileName is the profile a render was composed from, for logs and
+// the stage-start trace: "compact" or "full".
+func renderProfileName(r *skillrender.Result) string {
+	if r != nil && r.Profile == skillrender.ProfileCompact {
+		return skillrender.ProfileCompact
+	}
+	return "full"
 }

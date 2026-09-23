@@ -284,6 +284,13 @@
       "why": "feature-dev ran as bounded sub-sessions (#1651) and used every session its bound allows — the plan's unchecked-task count when the stage started, never more than the hard cap — with plan tasks still unchecked. The work so far is on disk and a retry resumes from the next unchecked task, so it must not read as dev_produced_no_changes or as a crash. Its only producer is the step loop's own marker."
     },
     {
+      "id": "dev-step-progress-unproven",
+      "kind": "dev_step_progress_unproven",
+      "signal": false,
+      "clauses": [["[dev-step-progress-unproven]"], ["dev_step_progress_unproven"]],
+      "why": "The feature-dev step loop (#1651) could not fingerprint the work tree (git failed on it) around a sub-session that checked no plan task, so it cannot tell a step that changed files from one that changed nothing; it stops rather than count the step as progress. Environment class: the worktree is the fault, not the model or the issue, and the earlier steps' work is on disk. It must not read as dev_produced_no_changes, which it has not shown, or as subagent_crash, which git's own `exit status` text would otherwise match. Its only producer is the step loop's own marker."
+    },
+    {
       "id": "git-transport-auth-failed",
       "kind": "git_transport_auth_failed",
       "signal": false,

@@ -127,6 +127,17 @@ type LocalDescriptor struct {
 // the endpoint by id; a caller fails closed on it. The descriptor is never a
 // default and its context window never 0.
 func ResolveLocal(adapter, model string, endpoints ...LocalEndpoint) (LocalDescriptor, error) {
+	return ResolveLocalContext(context.Background(), adapter, model, endpoints...)
+}
+
+// ResolveLocalContext is ResolveLocal that stops waiting when ctx is done.
+// The discovery itself still runs to its own LocalDiscoveryTimeout and is
+// cached as ResolveLocal's is: a caller that gave up does not leave a failed
+// result behind for the next one.
+func ResolveLocalContext(ctx context.Context, adapter, model string, endpoints ...LocalEndpoint) (LocalDescriptor, error) {
+	if err := ctx.Err(); err != nil {
+		return LocalDescriptor{}, fmt.Errorf("the descriptor of model %s was not resolved: %w", model, err)
+	}
 	if adapter != openCodeAdapter {
 		return LocalDescriptor{}, fmt.Errorf("local model descriptors are discovered for the %s adapter only, not %q", openCodeAdapter, adapter)
 	}
@@ -138,7 +149,21 @@ func ResolveLocal(adapter, model string, endpoints ...LocalEndpoint) (LocalDescr
 	if err != nil {
 		return LocalDescriptor{}, err
 	}
-	return discoverLocalOnce(ep, id)
+	type resolved struct {
+		desc LocalDescriptor
+		err  error
+	}
+	done := make(chan resolved, 1)
+	go func() {
+		desc, err := discoverLocalOnce(ep, id)
+		done <- resolved{desc, err}
+	}()
+	select {
+	case r := <-done:
+		return r.desc, r.err
+	case <-ctx.Done():
+		return LocalDescriptor{}, fmt.Errorf("the descriptor of model %s on endpoint %s was not resolved: %w", id, ep.ID, ctx.Err())
+	}
 }
 
 // localEndpointFor is the endpoint a model with provider key key runs on.

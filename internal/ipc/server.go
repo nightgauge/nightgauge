@@ -3249,7 +3249,9 @@ func (s *Server) registerMethods() {
 					CacheCreation5m: cacheCreation5m, CacheCreation1h: cacheCreation1h,
 				}, p.Model, p.Adapter)
 			}
-			rt.RecordTerminatingStageTokens(stage, p.InputTokens, p.OutputTokens, p.CacheReadTokens, p.CostUsd)
+			// Combined input (non-cached + cache read), as BuildV2Record reads
+			// it; p.InputTokens is the non-cached pool CompleteStage takes.
+			rt.RecordTerminatingStageTokens(stage, p.InputTokens+p.CacheReadTokens, p.OutputTokens, p.CacheReadTokens, p.CostUsd)
 			rt.SetStageError(stage, p.Error)
 			// NOTE: Do NOT delete the runtime here (#232). notifyComplete is the
 			// interactive terminal funnel and fires right after this with
