@@ -199,3 +199,48 @@ func Fit(stage string, content string, window int) FitResult {
 		Share:           share,
 	}
 }
+
+// CapacityRow is one row of the ADR-023 Q9 capacity table: a model whose
+// context window is at least MinWindow tokens may take issues up to MaxSize.
+type CapacityRow struct {
+	MinWindow int
+	MaxSize   string
+}
+
+// capacityTable is the ONE window → maximum-issue-size table (ADR 023 Q9,
+// #1655). Every enforcement point reads it through MaxIssueSizeForWindow:
+// `nightgauge size-gate check --context-window`, `nightgauge size-gate
+// capacity` (which issue-create's scope gate calls) and the scheduler's
+// dispatch-time capacity check. Rows ascend by MinWindow, and the last row a
+// window reaches decides.
+//
+// The fit check above bounds one rendered stage prompt; this table bounds the
+// work a whole run accumulates on top of it, which grows with the issue's
+// size. The boundaries sit on the windows vendors quote (32k, 128k, 200k,
+// 400k), so a model advertised as "32k" lands in the same row whether it
+// reports 32,000 or 32,768 tokens. Below 32k only XS work is admitted; a 32k
+// model takes XS and S; a 128k model (131,072 included) takes up to M; L and
+// XL need the 200k and 400k windows.
+var capacityTable = []CapacityRow{
+	{MinWindow: 1, MaxSize: "XS"},
+	{MinWindow: 32_000, MaxSize: "S"},
+	{MinWindow: 128_000, MaxSize: "M"},
+	{MinWindow: 200_000, MaxSize: "L"},
+	{MinWindow: 400_000, MaxSize: "XL"},
+}
+
+// MaxIssueSizeForWindow returns the largest issue size a model with window
+// tokens of context may take, per capacityTable. ok is false for an unknown
+// window (window <= 0): no row applies and the caller applies no cap, the
+// same fail-open rule Fit follows (ADR 023 § 4).
+func MaxIssueSizeForWindow(window int) (maxSize string, ok bool) {
+	if window <= 0 {
+		return "", false
+	}
+	for i := len(capacityTable) - 1; i >= 0; i-- {
+		if window >= capacityTable[i].MinWindow {
+			return capacityTable[i].MaxSize, true
+		}
+	}
+	return "", false
+}

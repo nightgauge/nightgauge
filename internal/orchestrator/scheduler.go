@@ -5337,6 +5337,21 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			skillData.ContextWindow = openCodeDispatchWindow(ctx, workspaceRoot, model)
 		}
 
+		// Capacity-aware sizing (#1655): the issue's size against the cap the
+		// ADR 023 capacity table gives the smallest window among this and the
+		// remaining size-sensitive stages.
+		capacity := s.enforceIssueCapacity(ctx, capacityDispatch{
+			item: item, runtime: runtime, workspaceRoot: workspaceRoot, stage: stage,
+			remaining: stages[stageIdx+1:], tracer: tracer, adapterName: adapterName,
+			model: model, skillData: skillData, decision: routingDecision,
+			predictedModel: predictedModel, modelFloors: modelFloors, jobClass: issueJobClass,
+		})
+		if capacity.refused {
+			terminalFailureKind, workRecovered = TerminalKindContextWindowExceeded, capacity.workRecovered
+			return
+		}
+		model, skillData = capacity.model, capacity.skillData
+
 		// Context-budget fit check (ADR 023, #1645). skillData.ContextWindow
 		// is the descriptor OverlayKeys just resolved for the render above,
 		// or, for a local OpenCode model, the limit its run config is built

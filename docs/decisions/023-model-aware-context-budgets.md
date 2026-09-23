@@ -338,6 +338,31 @@ Out of scope for implementation here. `internal/skillrender/budget.go` is
 named as the file a future window → maximum-issue-size table would extend.
 No code ships for this in the current PR.
 
+**Amendment (#1655): the capacity table.** `capacityTable` in
+`internal/skillrender/budget.go`, read through `MaxIssueSizeForWindow`
+(and `sizeGate.MaxSizeForWindow`), maps a known window to the largest issue
+size it admits: below 32,000 tokens XS; 32,000 S; 128,000 M; 200,000 L;
+400,000 XL. Three points read it: `nightgauge size-gate check
+--context-window | --adapter --model`, `nightgauge size-gate capacity`
+(issue-create's Phase 2.85 scope gate, and issue-pickup's Phase 2.7), and
+the scheduler before the fit check. The cap binds only the size-sensitive
+stages — feature-planning, feature-dev and feature-validate — whose context
+grows with the issue; issue-pickup, pr-create and pr-merge are not capped. At
+every dispatch the scheduler judges the size against the smallest known
+window (this ADR's Q10 order) among the current stage, when size-sensitive,
+and the size-sensitive stages still ahead, at the models they resolve to
+then. A size known before planning (label, board field, foundation) is
+therefore judged at the run's first stage; a size known only from
+`planning-{N}.json` is judged from the next dispatch on. A model resolved
+later by escalation or a sticky downgrade is judged when its own stage
+dispatches. An over-capacity issue is refused as `context_window_exceeded`
+with a recovery of decompose, or, under `size_gate.routes.reject_action:
+soft-route`, the binding stage moves to the first `capacity_fallback_models`
+entry that admits the size. Decomposition is one
+level deep: an issue carrying `<!-- nightgauge:capacity-decomposed -->` that
+is still over capacity requires human decomposition. An unknown window or
+size applies no cap, as Q4.
+
 ### Q10 — Window source precedence
 
 In order:
@@ -445,7 +470,7 @@ against the _dispatch model's_ window, at render/dispatch time.
 - [x] `docs/decisions/README.md` index row
 - [x] #1651 bounded sub-sessions (policy recorded in the Q7 amendment)
 - [ ] #1652 non-USD budgets (decision slot only, tracked separately)
-- [ ] #1655 capacity-aware sizing (decision slot only, tracked separately)
+- [x] #1655 capacity-aware sizing (the Q9 amendment)
 - [x] A `compact` render profile (#1654: `internal/skillrender`'s Profile
       option, `--profile compact`, `DecideProfile`, and pr-merge's own
       `_profiles/compact.md` as the first consumer. `DecideProfile` is the
