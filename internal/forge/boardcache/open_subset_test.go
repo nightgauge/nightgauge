@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nightgauge/nightgauge/internal/github"
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
+	"github.com/nightgauge/nightgauge/internal/github"
 )
 
 // subsetBoard is a countingBoard that promises its non-Done status reads are
