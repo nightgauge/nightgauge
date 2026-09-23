@@ -87,27 +87,50 @@ pipeline:
 | `max_tokens`     | 25,000,000                    | input + output + cache-write tokens; cache reads do not count        |
 
 - **Inheritance.** For each key, 0 or absent inherits: a stage entry from
-  `default`, `default` from the built-in value. The defaults sit above what a
+  `default`, `default` from the built-in value. A refused or invalid value is
+  warned about and falls through the same way, so a stage entry's refused
+  `-1` still gets the `default` entry's limit. The defaults sit above what a
   normal hosted stage uses (the largest recorded claude stage took 287 turns;
   4h is the largest stage timeout routing assigns), so they only stop
   runaways.
+- **Native turn cap rises from 200 to 400.** Before stage budgets, claude,
+  claude-sdk, grok, lm-studio and ollama dispatches passed `--max-turns 200`
+  and OpenCode stages ran with 200 steps. A hosted stage now gets the turn
+  budget, 400 by default, as that cap; a zero-cost stage keeps 200.
 - **Unlimited is explicit.** Only `-1` lifts a ceiling, and every dispatch
-  that runs with one lifted logs a `[stage-budget]` warning.
-- **Zero-cost rule.** A stage on a zero-cost provider (a model server you run,
-  such as LM Studio or Ollama, or a model the registry prices at $0) has no USD
-  cap that can stop it, so it always runs under non-zero ceilings: a `-1`
-  there is refused, with a warning, and the built-in default applies. Its turn
-  default stays at the 200 steps OpenCode stages already had. A hosted model
-  the registry cannot price is not zero-cost.
+  that runs with one lifted logs a `[stage-budget]` warning. A lifted
+  `max_turns` stops the stream count and passes no budget to the adapter, so
+  the adapter's own default still applies: `--max-turns 200` for the
+  claude-CLI adapters and grok, 200 OpenCode steps, none for codex, gemini and
+  copilot.
+- **Zero-cost rule.** A stage on a zero-cost provider has no USD cap that can
+  stop it, so it always runs under non-zero ceilings: a `-1` there is refused,
+  with a warning. Zero-cost means a model server you run (LM Studio, Ollama,
+  or an OpenCode endpoint the machine-tier `opencode:` block declares as
+  `lm-studio` or `ollama` under its own id) or a model the registry prices at
+  $0. Its turn default stays at the 200 steps OpenCode stages already had.
+  A hosted model the registry cannot price is not zero-cost and keeps the
+  hosted defaults, but no USD cap binds it either, so its `-1` is refused
+  too.
 - **Turns.** The ceiling is passed as the adapter's own cap (`--max-turns` for
   claude, grok and the claude-CLI adapters; the agents' `steps` for OpenCode)
   and is also counted on the stream for every adapter that has a turn
-  boundary: a main-thread assistant message (claude), a `step_finish`
-  (OpenCode), a `usage` event (grok), a completed tool item (codex), a
-  `tool_use` event (gemini). The stage is stopped when its last allowed turn
-  asks for another. For OpenCode the stream count is the enforcement: its
+  boundary: a main-thread assistant message (claude; each message without an
+  id counts on its own), a `step_finish` (OpenCode), a `usage` event (grok),
+  every completed codex item that is not the agent's message or reasoning
+  (commands, file changes, tool calls), and every gemini `tool_use` event.
+  For codex and gemini that counts tool calls, not model requests, so a
+  stage that runs several tools per request reaches the limit sooner. The
+  stage is stopped when its last allowed turn asks for another. For OpenCode the stream count is the enforcement: its
   `steps` cap is not a hard stop (ADR-022, #1811). Copilot prints no turn
   boundary; its wall clock and stage timeout bound it.
+- **Tokens mid-run.** The token count is checked after every usage event:
+  claude and OpenCode report usage per turn or step, and grok's per-turn
+  snapshots are summed. Codex reports usage only on `turn.completed` and
+  gemini only on its final `result`, so their token limit cannot stop them
+  mid-run; for them only the turn count and the wall clock do.
+- **Wall clock.** It runs from spawn until the stage is reaped, so a child
+  that closes its output and keeps running is still stopped.
 - **On a breach** the manager sends SIGTERM to the stage's process group,
   SIGKILL after 10s, checks once the stage is reaped that no member of the
   group is left, and ends the stage's stderr with

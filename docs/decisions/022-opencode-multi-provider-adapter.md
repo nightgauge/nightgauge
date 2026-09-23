@@ -532,8 +532,8 @@ A stage's turn cap becomes the steps cap of the build agent and each
 subagent, and a stage with none gets 200 steps, room for a long stage on a
 local model that still ends a session caught in a loop. Since #1652 every
 stage has one, its `max_turns` stage budget (ADR-023 Q8), whose zero-cost
-default is the same 200; only a hosted stage whose budget is set to -1 has
-none. The steps cap is not a hard stop (#1811), so the manager also counts
+default is the same 200. A hosted stage whose `max_turns` is set to -1
+passes none, so it gets these 200 steps. The steps cap is not a hard stop (#1811), so the manager also counts
 `step_finish` events and stops the stage itself. A dispatch to an
 endpoint model whose `limit.context` or `limit.output` neither the machine-tier
 `limit` nor discovery from the server (§ 13) gives is refused before spawn, as

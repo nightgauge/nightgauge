@@ -303,14 +303,20 @@ does not yet. Decided:
   Cache reads are left out: a hosted stage re-reads its cached context every
   turn, which its USD cap prices, and a local server reports its whole prompt
   as input.
-- **Inheritance.** 0 or absent inherits (stage → `default` → built-in).
-  Unlimited is only an explicit `-1`, logged on every dispatch.
+- **Inheritance.** 0 or absent inherits (stage → `default` → built-in), and
+  a refused or invalid value falls through the same way. Unlimited is only an
+  explicit `-1`, logged on every dispatch; a lifted `max_turns` leaves the
+  adapter's own default cap (200) in place.
+- **Native cap.** The turn budget replaces the `--max-turns 200` the
+  claude-CLI adapters and grok passed and OpenCode's 200 steps, so a hosted
+  stage's native cap rises to 400.
 - **Zero-cost rule.** A stage on a zero-cost provider, a model server the
-  operator runs or a model the registry prices at $0, has no USD cap that can
-  stop it, so it always gets non-zero ceilings: `-1` is refused there with a
-  warning and the built-in default applies. A hosted model the registry
-  cannot price is not zero-cost: that is a registry gap, and counting it
-  would give a hosted stage the local turn default.
+  operator runs (including an OpenCode endpoint the machine tier declares as
+  `lm-studio` or `ollama`) or a model the registry prices at $0, has no USD
+  cap that can stop it, so it always gets non-zero ceilings: `-1` is refused
+  there with a warning. A hosted model the registry cannot price is not
+  zero-cost, which would give it the local turn default, but no USD cap binds
+  it either, so its `-1` is refused as well (fail closed).
 - **Turns.** Passed as the adapter's native cap where one exists and counted
   on the stream for every adapter with a turn boundary; the stage is stopped
   when its last allowed turn asks for another. For OpenCode the stream count
