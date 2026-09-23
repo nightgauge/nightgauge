@@ -329,7 +329,13 @@ func clientFromConfig() (*gh.Client, error) {
 		return gh.NewClientFromConfig(nil, "", globalToken)
 	}
 	cfg, err := config.Load(workdir)
-	if err != nil || cfg == nil {
+	if err != nil {
+		// Fail closed. A config that exists and was refused — a plaintext
+		// credential in a repository tier (#2023), or any other load error —
+		// must not quietly become the machine's default gh identity.
+		return nil, fmt.Errorf("load config: %w", err)
+	}
+	if cfg == nil {
 		return gh.NewClientFromConfig(nil, "", globalToken)
 	}
 	return gh.NewClientFromConfig(cfg, cfg.Owner, globalToken)
@@ -4917,13 +4923,14 @@ func serveCmd() *cobra.Command {
 			// --api-key, and --license-key with os.Getenv(...) defaults, so
 			// the flag variables above already encode "flag or env, flag
 			// wins" by the time cobra hands control to RunE — the only
-			// remaining fallback is the merged config file's platform
-			// section, which an extension-spawned daemon (no flags, no env)
-			// otherwise never consults. Without this, cfg.PlatformURL /
+			// remaining fallback is the stored license key (OS keychain,
+			// then machine-tier file) and the merged config's URL, which an
+			// extension-spawned daemon (no flags, no env) otherwise never
+			// consults. Without this, cfg.PlatformURL /
 			// cfg.LicenseKey are silently ignored and both the remote-command
 			// poller (below) and the #330 Action Center bridge stay dormant
 			// in the product's primary deployment mode.
-			resolvedPlatform := resolvePlatformConfig(platformURL, apiKey, licenseKey, cfg)
+			resolvedPlatform := resolvePlatformConfig(platformURL, apiKey, licenseKey, cfg, newLicenseStore().ResolveLicenseKey)
 			platformURL, apiKey, licenseKey = resolvedPlatform.URL, resolvedPlatform.APIKey, resolvedPlatform.LicenseKey
 			if resolvedPlatform.Configured() {
 				apiURLForLog := platformURL
@@ -11811,7 +11818,7 @@ func authCmd() *cobra.Command {
 		Use:   "auth",
 		Short: "Authentication operations",
 	}
-	cmd.AddCommand(authCheckCmd())
+	cmd.AddCommand(authCheckCmd(), authLicenseCmd())
 	return cmd
 }
 
@@ -11941,7 +11948,7 @@ var doctorCheckOrder = []string{
 	"binary", "gh", "github_auth", "api_user", "scopes", "rate_limit", "github_api_budget", "config", "project",
 	"complexity_model", "ai_adapter",
 	"compose_orphans", "worktree_leaks", "stranded_branches", "pipeline_stashes", "preserved_wip", "orphaned_processes",
-	"serve_lease", "ledger_daemon_coverage",
+	"serve_lease", "ledger_daemon_coverage", "tracked_secrets",
 	"survival_backlog", "survival_coverage", "corpus_calibration", "scheduled_automations",
 }
 
@@ -11961,6 +11968,7 @@ func doctorCmd() *cobra.Command {
   - Project number and owner configuration
   - Complexity model presence (nightgauge outcome init repairs it)
   - At least one usable AI coding agent (Issue #862)
+  - No GitHub token or license key in tracked files under .nightgauge/
 
 The AI-agent row answers one question: can this machine run a stage at all?
 Zero usable adapters is a warning (degraded), never a hard failure — see
@@ -11983,7 +11991,7 @@ Use --json for machine-readable output (skills parse this format).`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			workdir, _ := os.Getwd()
-			cfg, _ := config.Load(workdir)
+			cfg, cfgErr := config.Load(workdir)
 
 			client, clientErr := clientFromConfig()
 			if clientErr != nil {
@@ -11991,7 +11999,7 @@ Use --json for machine-readable output (skills parse this format).`,
 			}
 
 			adapters := parseAdaptersFlag(adaptersFlag)
-			result := doctor.RunDoctor(cmd.Context(), cfg, client, adapters)
+			result := doctor.RunDoctorWithConfigError(cmd.Context(), cfg, cfgErr, client, adapters)
 
 			if jsonOutput {
 				if err := printJSON(result); err != nil {

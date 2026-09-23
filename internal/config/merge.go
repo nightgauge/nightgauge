@@ -12,6 +12,8 @@ import (
 	"sync"
 
 	yaml "gopkg.in/yaml.v3"
+
+	"github.com/nightgauge/nightgauge/internal/configpath"
 )
 
 // errConfigNotFound is the sentinel returned when a tier file is absent.
@@ -69,34 +71,9 @@ var machineConfigPathFn = defaultMachineConfigPath
 var machineGOOSFn = func() string { return runtime.GOOS }
 
 func defaultMachineConfigPath() (string, error) {
-	// Env-override parity with the TS globalConfigResolver
-	// (packages/nightgauge-vscode/src/utils/globalConfigResolver.ts):
-	// NIGHTGAUGE_CONFIG_HOME wins, then XDG_CONFIG_HOME/nightgauge,
-	// then the ~/.nightgauge default. This also lets tests point the
-	// machine tier at a fixture directory instead of the developer's real
-	// ~/.nightgauge/config.yaml.
-	if dir := os.Getenv("NIGHTGAUGE_CONFIG_HOME"); dir != "" {
-		return filepath.Join(dir, "config.yaml"), nil
-	}
-	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		return filepath.Join(xdg, "nightgauge", "config.yaml"), nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	switch machineGOOSFn() {
-	case "linux":
-		return filepath.Join(home, ".config", "nightgauge", "config.yaml"), nil
-	case "windows":
-		base := os.Getenv("APPDATA")
-		if base == "" {
-			base = filepath.Join(home, "AppData", "Roaming")
-		}
-		return filepath.Join(base, "nightgauge", "config.yaml"), nil
-	default:
-		return filepath.Join(home, ".nightgauge", "config.yaml"), nil
-	}
+	// The resolution order lives in internal/configpath so packages this one
+	// imports (internal/github's gh-fallback warning) can name the same file.
+	return configpath.ForGOOS(machineGOOSFn())
 }
 
 // MachineConfigPath returns the absolute path of the machine-tier config
@@ -171,21 +148,13 @@ func readMachineConfigBytes() ([]byte, error) {
 }
 
 func legacyMachineConfigPath() string {
-	if os.Getenv("NIGHTGAUGE_CONFIG_HOME") != "" || os.Getenv("XDG_CONFIG_HOME") != "" ||
-		machineGOOSFn() != "linux" {
-		return ""
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".nightgauge", "config.yaml")
+	return configpath.LegacyForGOOS(machineGOOSFn())
 }
 
 // readProjectConfigBytes returns the raw bytes of the project-tier YAML
 // file, or (nil, errConfigNotFound) if it does not exist.
 func readProjectConfigBytes(workspaceRoot string) ([]byte, error) {
-	path := filepath.Join(workspaceRoot, ".nightgauge", "config.yaml")
+	path := ProjectConfigPath(workspaceRoot)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -199,7 +168,7 @@ func readProjectConfigBytes(workspaceRoot string) ([]byte, error) {
 // readLocalConfigBytes returns the raw bytes of the local-tier YAML
 // file (.nightgauge/config.local.yaml), or (nil, errConfigNotFound).
 func readLocalConfigBytes(workspaceRoot string) ([]byte, error) {
-	path := filepath.Join(workspaceRoot, ".nightgauge", "config.local.yaml")
+	path := LocalConfigPath(workspaceRoot)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -244,6 +213,22 @@ func LoadMerged(workspaceRoot string) (*Config, error) {
 	hasProject := projectErr == nil
 	hasLocal := localErr == nil
 
+	// A credential in a repository-controlled tier is refused outright, before
+	// anything is merged and before any caller can build a client from it: the
+	// project file is committed and pushed to every clone, and the local file
+	// is one `git add -f` from the same fate. Only env: references are accepted
+	// there; the literal value belongs in the machine tier (#2023).
+	if hasProject {
+		if err := ValidateRepoTierSecrets(projectData, ProjectConfigPath(workspaceRoot)); err != nil {
+			return nil, err
+		}
+	}
+	if hasLocal {
+		if err := ValidateRepoTierSecrets(localData, LocalConfigPath(workspaceRoot)); err != nil {
+			return nil, err
+		}
+	}
+
 	// Surface shadow warnings only when both machine and project YAML define
 	// the same key (actual conflict), not just when the project has the key.
 	//
@@ -262,11 +247,16 @@ func LoadMerged(workspaceRoot string) (*Config, error) {
 	// Platform credentials and preferences are machine-owned. Never allow a
 	// repository-controlled file (including local checkout overrides) to shadow
 	// the machine identity used by the backend.
-	if hasProject {
-		projectData = removeTopLevelYAMLKey(projectData, "platform")
-	}
-	if hasLocal {
-		localData = removeTopLevelYAMLKey(localData, "platform")
+	for _, k := range repoTierProtectedKeys {
+		if !k.hardStrip {
+			continue
+		}
+		if hasProject {
+			projectData = removeTopLevelYAMLKey(projectData, k.root)
+		}
+		if hasLocal {
+			localData = removeTopLevelYAMLKey(localData, k.root)
+		}
 	}
 
 	// No tier present at all — return defaults.
@@ -431,10 +421,15 @@ func resetShadowWarnDedup() {
 // warnShadowOnce / #360), not once per config merge.
 // isHardStrippedMachineKey reports whether LoadMerged deletes this key from the
 // project/local tiers outright, rather than merely letting the machine tier
-// outrank it. Today that is `platform` alone; keep this in step with the
-// removeTopLevelYAMLKey calls in LoadMerged (#1049).
+// outrank it (#1049). It reads repoTierProtectedKeys, the same list the strip
+// in LoadMerged and the plaintext-secret rejection read.
 func isHardStrippedMachineKey(key string) bool {
-	return key == "platform"
+	for _, k := range repoTierProtectedKeys {
+		if k.hardStrip && k.root == key {
+			return true
+		}
+	}
+	return false
 }
 
 func warnMachineKeysInProjectYAML(projectData, machineData []byte) {

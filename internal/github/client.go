@@ -23,6 +23,8 @@ import (
 	"github.com/shurcooL/graphql"
 	"golang.org/x/oauth2"
 	"golang.org/x/time/rate"
+
+	"github.com/nightgauge/nightgauge/internal/configpath"
 )
 
 // ErrRateLimitGated is returned by query/mutate/REST helpers when the
@@ -413,7 +415,7 @@ func NewClient() (*Client, error) {
 //     default gh account — the single-identity / CI path is unchanged.
 //
 // A deprecation warning is emitted to stderr when the gh CLI fallback is used.
-// Suppress it by setting github_auth.suppress_gh_warning: true in config.yaml.
+// Suppress it by setting github_auth.suppress_gh_warning: true in config.
 //
 // Never logs the token value; only env:VAR_NAME references appear in logs.
 func NewClientFromConfig(cfg TokenResolver, owner string, cliToken string) (*Client, error) {
@@ -480,8 +482,22 @@ func warnGHFallback(cfg TokenResolver) {
 	if cfg != nil && cfg.SuppressGHWarning() {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "warning: Using gh CLI for token resolution — "+
-		"configure github_auth.token in config.yaml for reliable multi-org support\n")
+	fmt.Fprint(os.Stderr, ghFallbackWarning())
+}
+
+// ghFallbackWarning is the gh CLI fallback notice. It names the machine-tier
+// file the loader actually reads (canonical, or the Linux legacy file when only
+// that exists), and the env: form, because a bare "config.yaml"
+// steered operators to the committed project file, where a pasted token is
+// pushed to every clone (#2023). The loader refuses a plaintext token there.
+func ghFallbackWarning() string {
+	machine := "the machine-tier config file"
+	if p, err := configpath.InUse(); err == nil && p != "" {
+		machine = p
+	}
+	return "warning: Using gh CLI for token resolution — for reliable multi-org support set " +
+		"github_auth.token (or github_auth.tokens.<owner>) in " + machine +
+		", or reference an environment variable from any tier with `token: env:VAR_NAME`\n"
 }
 
 // ResolveTokenChain resolves the GitHub token using the same priority chain
@@ -1216,8 +1232,7 @@ func (g headroomGate) poolLabel() string {
 // A deprecation warning is emitted to stderr unless suppressWarning is true.
 func ResolveTokenForUser(user string, suppressWarning bool) (string, error) {
 	if !suppressWarning {
-		fmt.Fprintf(os.Stderr, "warning: Using gh CLI for token resolution — "+
-			"configure github_auth.token in config.yaml for reliable multi-org support\n")
+		fmt.Fprint(os.Stderr, ghFallbackWarning())
 	}
 	return execGHAuthTokenForUser(user)
 }

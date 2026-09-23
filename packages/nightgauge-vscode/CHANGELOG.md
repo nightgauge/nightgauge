@@ -18,6 +18,17 @@ and this project adheres to
 
 ### Fixed
 
+- The license key no longer disappears for the CLI and daemon once the
+  extension has run. Activating a license, starting a trial, saving the key in
+  Settings and the startup migration now also store it in the OS keychain
+  through `nightgauge auth license set`, so `nightgauge serve` and
+  `nightgauge pipeline backfill` from a terminal still find it. The key is
+  removed from `~/.nightgauge/config.yaml` only after that succeeds; if it
+  fails, the key stays and one warning names the command to run. If you
+  change the key from a terminal (`nightgauge auth license set`), VS Code
+  notices on the next start, stops using its old copy, and asks you to
+  activate the current key.
+
 - The generated `.nightgauge/.gitignore` (template version 15) now ignores
   `.nightgauge/worktrees/`, so a pipeline worktree no longer shows up in
   `git status` as an embedded repository, and the per-machine files it
@@ -44,6 +55,19 @@ and this project adheres to
   repositories now show each repository's own issues.
 
 ### Changed
+
+- A GitHub token in `.nightgauge/config.yaml` or `.nightgauge/config.local.yaml`
+  is used only when it is an `env:VAR_NAME` reference (#2023). A literal token
+  there is no longer exported to terminals and subprocesses as `GH_TOKEN`; the
+  binary refuses such a config. Put a literal token in the machine config file,
+  or name the account in `github_user` and let `gh` hold it. The extension now
+  finds that file where the binary does (`NIGHTGAUGE_CONFIG_HOME`,
+  `XDG_CONFIG_HOME`, `~/.config/nightgauge` on Linux), not only in
+  `~/.nightgauge`.
+- A `platform.license_key` in the workspace's `.nightgauge/config.yaml` is no
+  longer imported into the extension's secret storage at startup, so a cloned
+  repository cannot replace your license key (#2023). The extension warns
+  instead, and leaves the file alone.
 
 - OpenCode stages now run from the editor. They check the experimental
   switch, the `opencode` CLI, the Nightgauge binary and a configured model

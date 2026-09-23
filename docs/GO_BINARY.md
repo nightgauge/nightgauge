@@ -143,6 +143,116 @@ variable, falling back to `gh auth token` output if available.
 export GITHUB_TOKEN=$(gh auth token)
 ```
 
+### Platform license key
+
+The CLI and the daemon (`serve`, `pipeline backfill`) resolve the platform
+license key once, in `internal/keychain`, highest precedence first:
+
+1. the `NIGHTGAUGE_LICENSE_KEY` environment variable (source `env`);
+2. the OS keychain entry (source `keychain`);
+3. `platform.license_key` in the machine-tier config file (source
+   `machine-file`).
+
+`serve` consults the stored key (2 and 3) only when `platform.enabled: true`;
+an explicit `--license-key` or the environment variable opts in on its own.
+
+The keychain entry contract is fixed; the VS Code extension depends on it:
+
+| Field   | Value                                                              |
+| ------- | ------------------------------------------------------------------ |
+| Service | `nightgauge`                                                       |
+| Account | `platform.license_key` (the same string as the config path)        |
+| Store   | macOS Keychain, Windows Credential Manager, Secret Service (Linux) |
+
+Manage it with `nightgauge auth license`:
+
+```bash
+printf '%s' "$KEY" | nightgauge auth license set   # key on stdin, never argv
+nightgauge auth license status                     # source and fingerprint, never the key
+nightgauge auth license clear                      # every stored copy; non-zero if an entry may remain
+```
+
+Each subcommand takes `--json`. The field names are a contract with the VS
+Code extension, pinned on both sides by
+`cmd/nightgauge/testdata/auth-license-contract.json`. The `fingerprint` field
+is the first 12 hex characters of
+`scrypt(key, "nightgauge/license-fingerprint/v1", N=32768, r=8, p=1, 32 bytes)`.
+It identifies a key without revealing it, and the slow KDF makes an offline
+guess against a printed or stored fingerprint expensive whatever the key's
+entropy. Changing the salt or any parameter changes every fingerprint; the
+extension versions its stored sync record with the scheme, so a record from
+an older scheme is ignored rather than read as a rotation.
+
+- `set` removes any plaintext copy from the machine-tier file once the
+  keychain holds the key, so rotating the key never leaves the old one on
+  disk.
+- `clear` removes the keychain entry, the machine-tier copy and a copy in the
+  workspace's `.nightgauge/config.local.yaml`, and reports a copy in the
+  committed `.nightgauge/config.yaml` (which it does not edit). It exits
+  non-zero only when a keychain entry may remain (a timeout or an unexpected
+  keychain error). A host with no keychain service at all (no backend, no
+  D-Bus session, no Secret Service) is where `set` uses the file, so there
+  `clear` succeeds once the file copy is gone and reports `noKeychain`.
+
+On a host with no keychain service — a headless Linux runner without a
+Secret Service, a container, an SSH session whose login keychain refuses
+interaction — `set` says so and writes the machine-tier file instead,
+atomically, with mode `0600`, and refuses a symlinked file. Each keychain call
+is bounded (3 s). A read that times out falls back to the file. A write that
+times out is an error and is not written to the file, because the abandoned
+write can still complete (for example after an unlock prompt is answered) and
+the key would then exist in two places. `status` reports the keychain as
+unavailable and why. The environment variable works everywhere.
+
+The keychain protects the key at rest and keeps it out of files; it does not
+isolate it from other programs. Any process running as the same user can read
+the item without a prompt (on macOS through `/usr/bin/security`, which
+created it). That is the same exposure as `gh`'s token or a `0600` file.
+
+#### The VS Code extension and the single source of truth
+
+The extension keeps a copy in VS Code SecretStorage, because its own runtime
+needs the value and the CLI never prints it. It writes the shared entry
+through the same command: activating a license, starting a trial, saving a
+key in Settings and the startup migration all pipe the key to
+`nightgauge auth license set --json` on stdin (never argv or environment).
+Clearing the key in Settings runs `auth license clear --json`. A binary that
+predates `auth license` is reported as needing an update.
+
+**The shared keychain entry is the source of truth.** The extension records
+the fingerprint of the last key the CLI confirmed and compares fingerprints
+on startup and after every write:
+
+- same fingerprint: in sync;
+- the CLI has no key: the extension's key is written;
+- the CLI still holds the last confirmed key: the extension's newer key never
+  reached it (a failed write), so it is written again;
+- no usable fingerprint (an older binary, a failed or unparseable status):
+  the extension keeps its key and asks for a newer binary;
+- the keys differ but no sync was ever recorded: both are kept and the user
+  is asked to activate one key;
+- otherwise the key was changed outside VS Code, for example rotated with
+  `auth license set` in a terminal. The CLI's key wins. The extension drops
+  its stale copy and tells the user to run **Nightgauge: Activate License**
+  with the current key. This is the only case in which the extension deletes
+  its copy: it needs positive evidence, a well-formed fingerprint that
+  differs from the one recorded at the last confirmed sync.
+
+The CLI's key wins because it is the key a person changed deliberately and
+the one every other process uses. The extension cannot read it (the CLI never
+prints the key), so it must not keep handing its own. The daemon spawn waits
+for this reconciliation, bounded at 5 s, so the daemon is never given a
+stale `NIGHTGAUGE_LICENSE_KEY`.
+
+The extension removes `platform.license_key` from the machine-tier file only
+after the keychain write succeeded. When the write fails, the SecretStorage
+copy stays and one warning names the command to run by hand. When the key
+could only go to the plaintext file, one information message says so.
+
+On macOS the stored value carries go-keyring's `go-keyring-base64:` prefix, so
+read it through `nightgauge auth license status`, not by decoding `security`
+output.
+
 ## CLI Command Reference
 
 This section is the canonical reference for all `nightgauge` subcommands.
@@ -5224,9 +5334,10 @@ pipeline skill calls this as Phase 0 preflight via `skills/_shared/PREFLIGHT.md`
 | `api_user`    | `GET /user` returns non-empty login             | required   |
 | `scopes`      | Token has `repo`, `project`, `read:org` scopes  | required   |
 | `rate_limit`  | API requests remaining (warn < 500, warn < 100) | warning    |
-| `config`      | `.nightgauge/config.yaml` parseable        | required\* |
+| `config`      | `.nightgauge/config.yaml` loads; a refused config (for example a plaintext token, #2023) fails here | required\* |
 | `project`     | `project_number` and `owner` set in config      | required\* |
 | `complexity_model` | `.nightgauge/complexity-model.yaml` exists; missing output points to `nightgauge outcome init` | warning |
+| `tracked_secrets` | No GitHub token or license key in files git tracks under `.nightgauge/` (#2024); each hit is `path:line`, redacted to its prefix, with structured `findings` in `--json`. Files over 1 MiB and binary files are skipped with a note; skipped outside a git work tree | warning |
 
 Plus the leaked-machine-state checks (#330 / #332 / #341), all **warning-only**:
 

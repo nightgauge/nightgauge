@@ -1,7 +1,10 @@
 package main
 
 import (
+	"log"
+
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/keychain"
 )
 
 // platformConfigSource identifies where a serve invocation's effective
@@ -17,9 +20,13 @@ const (
 	// from an explicit --flag or its backing environment variable (the two
 	// are indistinguishable here — see resolvePlatformConfig doc comment).
 	platformSourceFlagEnv platformConfigSource = "flag/env"
-	// platformSourceConfig means nothing came from flag/env, but the merged
-	// config file (project + machine + local tiers) supplied a value.
+	// platformSourceConfig means nothing came from flag/env, but the config
+	// file supplied a value: the URL from the merged tiers, the license key
+	// from the machine-tier file.
 	platformSourceConfig platformConfigSource = "config"
+	// platformSourceKeychain means the license key came from the OS keychain
+	// entry (`nightgauge auth license set`).
+	platformSourceKeychain platformConfigSource = "keychain"
 	// platformSourceAbsent means no platform is configured anywhere — the
 	// fully-local, zero-behavior-change default.
 	platformSourceAbsent platformConfigSource = "absent"
@@ -57,16 +64,21 @@ func (r resolvedPlatformConfig) Configured() bool {
 //
 // cfg is the result of config.Load(workspaceRoot) — already merged across
 // the machine (~/.nightgauge/config.yaml), project (.nightgauge/config.yaml),
-// and local tiers, so a workspace config lacking a platform: section still
-// picks up the developer's global license key. cfg may be nil (config.Load
-// failed) — treated the same as "config has no platform section".
+// and local tiers. It supplies the URL and the platform.enabled opt-in. cfg
+// may be nil (config.Load failed) — treated the same as "config has no
+// platform section".
+//
+// storedLicense is the shared license-key resolution (internal/keychain:
+// NIGHTGAUGE_LICENSE_KEY, then the OS keychain, then the machine-tier file).
+// It is consulted only when flag/env supplied no key and platform.enabled is
+// true: a stored credential is not an opt-in on its own.
 //
 // There is no config-file source for the API key: the VSCode extension's
 // PlatformConfigSchema (packages/nightgauge-vscode/src/config/schema.ts)
 // has no platform.api_key field, only platform.api_url and
 // platform.license_key — so API key resolution is flag/env only, unchanged
 // from pre-#333 behavior.
-func resolvePlatformConfig(flagURL, flagAPIKey, flagLicenseKey string, cfg *config.Config) resolvedPlatformConfig {
+func resolvePlatformConfig(flagURL, flagAPIKey, flagLicenseKey string, cfg *config.Config, storedLicense func() (keychain.Result, error)) resolvedPlatformConfig {
 	r := resolvedPlatformConfig{URL: flagURL, APIKey: flagAPIKey, LicenseKey: flagLicenseKey}
 
 	// licenseFromFlagEnv is captured before the config fallback below
@@ -76,7 +88,7 @@ func resolvePlatformConfig(flagURL, flagAPIKey, flagLicenseKey string, cfg *conf
 	licenseFromFlagEnv := r.LicenseKey != ""
 
 	urlFromFlagEnv := r.URL != ""
-	licenseFromConfig, urlFromConfig := false, false
+	licenseFromConfig, licenseFromKeychain, urlFromConfig := false, false, false
 	// Explicit flags/environment variables remain an opt-in even when the file
 	// setting is absent or false. Config-file credentials are used only when
 	// platform.enabled is explicitly true; omitted is the local-only default.
@@ -86,9 +98,25 @@ func resolvePlatformConfig(flagURL, flagAPIKey, flagLicenseKey string, cfg *conf
 			r.URL = cfg.PlatformURL
 			urlFromConfig = true
 		}
-		if r.LicenseKey == "" && cfg.LicenseKey != "" {
-			r.LicenseKey = cfg.LicenseKey
-			licenseFromConfig = true
+		if r.LicenseKey == "" && storedLicense != nil {
+			res, err := storedLicense()
+			if err != nil {
+				log.Printf("serve: license key lookup failed: %v", err)
+			}
+			if res.KeychainErr != nil {
+				log.Printf("serve: OS keychain unavailable (%v); using the machine-tier file", res.KeychainErr)
+			}
+			if res.Value != "" {
+				r.LicenseKey = res.Value
+				switch res.Source {
+				case keychain.SourceKeychain:
+					licenseFromKeychain = true
+				case keychain.SourceEnv:
+					licenseFromFlagEnv = true
+				default:
+					licenseFromConfig = true
+				}
+			}
 		}
 	}
 
@@ -97,6 +125,8 @@ func resolvePlatformConfig(flagURL, flagAPIKey, flagLicenseKey string, cfg *conf
 		r.Source = platformSourceAbsent
 	case licenseFromFlagEnv || (r.LicenseKey == "" && (urlFromFlagEnv || r.APIKey != "")):
 		r.Source = platformSourceFlagEnv
+	case licenseFromKeychain:
+		r.Source = platformSourceKeychain
 	case licenseFromConfig || urlFromConfig:
 		r.Source = platformSourceConfig
 	default:

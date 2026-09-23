@@ -16,6 +16,34 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **The license key lives in the OS keychain (#2025).**
+  `nightgauge auth license set` reads the platform license key from stdin
+  (never argv) and stores it in the OS keychain — macOS Keychain, Windows Credential Manager,
+  or the Secret Service on Linux — under service `nightgauge`, account
+  `platform.license_key`. `auth license status` prints where the key comes
+  from (`env`, `keychain`, `machine-file` or `none`), never the key, and
+  `auth license clear` removes every stored copy. The CLI and the daemon
+  (`serve`, `pipeline backfill`) now resolve the key once, in this order:
+  `NIGHTGAUGE_LICENSE_KEY`, the keychain entry, then `platform.license_key`
+  in the machine-tier config file. On a host with no keychain the key falls
+  back to that file, written with mode 0600 and never through a symlink, and
+  a stalled keychain times out instead of hanging. `serve` still uses a
+  stored key only when `platform.enabled: true`.
+
+- **`nightgauge doctor` reports credentials committed under `.nightgauge/`
+  (#2024).** A new `tracked_secrets` row scans only the files git tracks
+  there (`git ls-files -- .nightgauge`) for GitHub tokens (`ghp_`, `gho_`,
+  `ghu_`, `ghs_`, `ghr_`, `github_pat_`) and for the license-key prefixes the
+  platform client already recognises. Each hit is reported as
+  `path:line pattern prefix…` (a token glued to an identifier still counts;
+  a tracked path that resolves outside the repository is skipped with a
+  note), and `--json` carries the same fields under
+  `checks.tracked_secrets.findings`; the matched value never appears, only its
+  prefix and `…`. The remediation names the two steps, rotating the credential
+  and removing it from history, and doctor does neither itself. Files over
+  1 MiB and binary files are skipped with a note, and the check is skipped
+  outside a git work tree. A finding is a warning (exit 1), not a failure.
+
 - **Capacity-aware size gates (#1655).** A model's context window now caps
   the largest issue size it may take, from one table in
   `internal/skillrender/budget.go` (ADR-023 Q9): under 32k tokens XS only,
@@ -418,6 +446,33 @@ create --body-file` call, so the compact profile (and its tests) pin
 
 ### Changed
 
+- **Security: the config loader refuses a plaintext GitHub token or license
+  key in the repository's config files (#2023).** A literal
+  `github_auth.token`, `github_auth.tokens.<owner>` or `platform.license_key`
+  in `.nightgauge/config.yaml` or `.nightgauge/config.local.yaml` now stops
+  the load, before any network call, with an error naming the file and the key
+  and never the value. Use an `env:VAR_NAME` reference there, or put the
+  literal value in the machine-tier file (`~/.nightgauge/config.yaml` or its
+  XDG / `NIGHTGAUGE_CONFIG_HOME` equivalent), which still accepts it.
+  Previously the value was loaded and used, and only `platform` was stripped.
+  The gh-fallback warning now names the resolved machine-tier path and the
+  `env:` form instead of a bare "config.yaml", which had steered users to the
+  committed file. `nightgauge config validate` applies the same rule to any
+  file other than the machine tier; `nightgauge forge auth token` fails on a
+  refused config instead of printing the active gh account's token; and
+  `nightgauge doctor` reports a config that failed to load as a failed
+  `config` check rather than as a fresh repository. The VS Code extension no
+  longer exports a literal token from either repository file as `GH_TOKEN`.
+  The check reads each file as the loader decodes it, so YAML anchors and `<<`
+  merge keys cannot slip a literal past it, and it covers the legacy
+  `.nightgauge/config.json` (whose platform settings are now stripped as
+  well). An `env:` reference whose name is itself a token is refused, and
+  such a name is never echoed in an error. Run from the home directory, where
+  `.nightgauge/config.yaml` is the machine file, nothing is refused. Commands
+  and `nightgauge serve` requests for a repository with a refused config now
+  fail instead of falling back to the default gh account. The error names
+  `nightgauge forge auth refresh` and the machine file actually in use.
+
 - **The daemon reads GitHub with conditional REST requests, remembered across
   restarts (part of #842).** A window open used to cost ~182 GraphQL points,
   eight 17-point board pages among them. The board reads behind the
@@ -470,6 +525,22 @@ create --body-file` call, so the compact profile (and its tests) pin
   [CONFIGURATION.md § Routing by cost per closed issue](docs/CONFIGURATION.md#routing-by-cost-per-closed-issue).
 
 ### Fixed
+
+- **The CLI and daemon keep the license key after the extension runs
+  (#2027).** The extension moved the key out of the machine config into VS
+  Code SecretStorage, which only VS Code can read, so a later
+  `nightgauge serve` or `pipeline backfill` from a terminal found no license. Every flow
+  that stores the key — activation, trial start, the Settings panel and the
+  startup migration — now also runs `nightgauge auth license set` with the key
+  on stdin, and clearing it in Settings runs `auth license clear`. The
+  machine-config line is deleted only after the keychain write succeeds; on
+  failure the key stays where it was and one warning names the command to run.
+  A key migrated by an earlier version is copied to the keychain on the next
+  activation. The shared keychain entry is the source of truth: the extension
+  compares key fingerprints (never the key) with `auth license status` on
+  startup and after each write. If the key was rotated from a terminal, VS
+  Code drops its stale copy instead of handing it to the daemon, and asks you
+  to activate the current key.
 
 - **A clone set up by the CLI alone now ignores Nightgauge's runtime files
   (#2026).** Only the VS Code extension wrote the `.nightgauge/` ignore rules,

@@ -216,8 +216,16 @@ func authTokenCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("getwd: %w", err)
 			}
-			cfg, err := config.Load(wd)
-			if err != nil || cfg == nil {
+			cfg, loadErr := config.Load(wd)
+			if loadErr != nil || cfg == nil {
+				// Printing a token here means exporting an identity. A config
+				// that exists and was refused — a plaintext token in a
+				// repository tier (#2023) among others — must not quietly
+				// become the machine's default gh account. --identity-only
+				// stays silent below, as its caller requires.
+				if loadErr != nil && !identityOnly {
+					return fmt.Errorf("load config: %w", loadErr)
+				}
 				cfg = &config.Config{}
 			}
 			owner := ownerOverride

@@ -277,6 +277,15 @@ vi.mock("vscode", () => ({
 // later cannot forget to, and the failure mode this prevents is a confusing
 // one - assertions fail with another test's data, which reads like a mapping
 // bug rather than a shared-state bug.
-beforeEach(() => {
+beforeEach(async () => {
   sharedBoardSnapshots.clear();
+  // Every flow that stores the license key also runs `nightgauge auth license
+  // set` (#2027). A unit test must never spawn the binary on PATH and write
+  // the operator's OS keychain, so the shared bridge resolves no binary.
+  // Imported here rather than at the top: a static import would load
+  // BinaryResolver before a test file's vi.mock of it could apply.
+  const bridge = await import("../src/services/licenseKeychainBridge");
+  bridge.setLicenseKeychainBridgeForTest?.(
+    new bridge.LicenseKeychainBridge({ resolveBinary: async () => null, warn: () => undefined })
+  );
 });

@@ -11,6 +11,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/hometest"
 	"github.com/nightgauge/nightgauge/internal/models"
 	"github.com/nightgauge/nightgauge/internal/runstate"
+	"github.com/zalando/go-keyring"
 )
 
 // The serve and autonomous verbs take the scheduler lease and write the serve
@@ -20,6 +21,9 @@ import (
 // #1426. See internal/hometest.
 func TestMain(m *testing.M) {
 	cleanup := hometest.Isolate()
+	// No test here reads or writes the operator's OS keychain: go-keyring's
+	// in-memory provider stands in for it (internal/keychain).
+	keyring.MockInit()
 	// No test here reaches GitHub for an OpenCode stage's MCP servers; one
 	// that reads them swaps in a forge of its own.
 	restoreForge := adapters.SwapOpenCodeMcpForgeForTest(openCodeVerbForge{err: errors.New("the cmd test binary reads no forge")})

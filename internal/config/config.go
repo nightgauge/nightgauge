@@ -2145,6 +2145,11 @@ func load(workspaceRoot string) (*Config, error) {
 		if err := json.Unmarshal(data, legacy); err != nil {
 			return nil, fmt.Errorf("parse config: %w", err)
 		}
+		// The legacy JSON file is a repository tier like config.yaml: the
+		// same credential rule and platform strip apply (#2023).
+		if err := ValidateLegacyJSONCredentials(legacy, jsonPath); err != nil {
+			return nil, err
+		}
 		return legacy, nil
 	}
 	return LoadMerged(workspaceRoot)
@@ -2559,7 +2564,13 @@ func resolveEnvRef(ref string) (string, error) {
 	}
 	varName := ref[len(prefix):]
 	if varName == "" {
-		return "", fmt.Errorf("invalid env: reference %q: variable name is empty", ref)
+		return "", fmt.Errorf("invalid env: reference: variable name is empty")
+	}
+	// Never echo a name shaped like a credential: `env:ghp_…` is a token
+	// pasted after the prefix, and this message reaches stderr and IPC logs.
+	shown := redactCredentialShaped(varName)
+	if shown != varName {
+		return "", fmt.Errorf("invalid env: reference %s: that is a credential, not an environment variable name (value redacted)", shown)
 	}
 	val := os.Getenv(varName)
 	if val == "" {
