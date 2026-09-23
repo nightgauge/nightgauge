@@ -19,8 +19,9 @@ import (
 // because the defect this file closes was a reader and a writer that never
 // agreed on a shape at all.
 
-// isolatedHome points the machine-global claim directory (os.UserHomeDir →
-// $HOME) at a temp dir and returns it.
+// isolatedHome points HOME at a temp dir, and the machine-state root that holds
+// the claim directory (NIGHTGAUGE_STATE_HOME, layout.StateHome) at
+// <home>/state, and returns the home.
 //
 // Mandatory, not hygiene: since the claim store is per-user and machine-global,
 // a test without this would write into the developer's real
@@ -30,6 +31,7 @@ func isolatedHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("NIGHTGAUGE_STATE_HOME", filepath.Join(home, "state"))
 	return home
 }
 
@@ -94,7 +96,7 @@ func TestServeSidecarPath_IsMachineGlobalAndKeyedPerWorkspace(t *testing.T) {
 		t.Fatalf("resolve path: %v", err)
 	}
 
-	if want := filepath.Join(home, ".nightgauge", "serve"); filepath.Dir(path) != want {
+	if want := filepath.Join(home, "state", "serve"); filepath.Dir(path) != want {
 		t.Errorf("the claim lives in %q, want the machine-global dir %q", filepath.Dir(path), want)
 	}
 	if strings.HasPrefix(path, workspace) {
@@ -453,10 +455,10 @@ func TestServeHeartbeat_AFailedWriteLogsAndKeepsTicking(t *testing.T) {
 	home := isolatedHome(t)
 	root := t.TempDir()
 	// The claim directory is a FILE here, so every MkdirAll under it fails.
-	if err := os.MkdirAll(filepath.Join(home, ".nightgauge"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(home, "state"), 0o700); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(home, ".nightgauge", "serve"), []byte("not a directory\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(home, "state", "serve"), []byte("not a directory\n"), 0o644); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	log := &capturingLog{}
@@ -561,7 +563,7 @@ func TestWriteServeSidecar_IsAtomicUnderConcurrentWritersSoNoReaderSeesAMix(t *t
 
 	// …and no temp file the renames went through is left behind for doctor's
 	// directory scan to trip over.
-	residue, err := filepath.Glob(filepath.Join(home, ".nightgauge", "serve", "*.tmp"))
+	residue, err := filepath.Glob(filepath.Join(home, "state", "serve", "*.tmp"))
 	if err != nil {
 		t.Fatalf("glob: %v", err)
 	}

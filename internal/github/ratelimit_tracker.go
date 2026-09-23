@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // SharedTrackerMinCheckIntervalSecs is how long a cached rate-limit reading is
@@ -66,21 +68,23 @@ type SharedRateLimitTracker struct {
 	mu   sync.Mutex
 }
 
-// NewSharedRateLimitTracker constructs a tracker rooted at
-// $HOME/.nightgauge/rate-limit.json. Pass an explicit path in tests.
+// NewSharedRateLimitTracker constructs a tracker over the file at path —
+// normally DefaultSharedTrackerPath. Pass an explicit path in tests.
 func NewSharedRateLimitTracker(path string) *SharedRateLimitTracker {
 	return &SharedRateLimitTracker{path: path}
 }
 
-// DefaultSharedTrackerPath returns the path under $HOME the tracker uses by
-// default. Returns an error when $HOME is unresolvable (very rare).
+// DefaultSharedTrackerPath returns <STATE>/rate-limit.json, the machine-wide
+// tracker file under the machine-state root (layout.StateHome, ADR-024 § 8).
+// A pre-ADR-024 ~/.nightgauge/rate-limit.json is moved there on first use.
+// The file is a cold-start hint: its absence is not an error, and an error
+// here (no usable state root) leaves callers ungated, never failing.
 func DefaultSharedTrackerPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("resolve home dir: %w", err)
-	}
-	return filepath.Join(home, ".nightgauge", "rate-limit.json"), nil
+	return layout.StateHintFile(sharedTrackerFileName)
 }
+
+// sharedTrackerFileName is the tracker file's name under the state root.
+const sharedTrackerFileName = "rate-limit.json"
 
 // keyFor normalizes the GitHub user key used in the tracker file. Empty user
 // collapses to "default" so workspaces with no explicit gh user still share
@@ -305,7 +309,7 @@ func (t *SharedRateLimitTracker) readLocked() (*sharedTrackerFile, error) {
 // directory as the target so os.Rename remains atomic on every major OS.
 func (t *SharedRateLimitTracker) writeLocked(file *sharedTrackerFile) error {
 	dir := filepath.Dir(t.path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dir, err)
 	}
 	data, err := json.MarshalIndent(file, "", "  ")

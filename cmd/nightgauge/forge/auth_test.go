@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/config"
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
 )
 
@@ -197,7 +199,8 @@ func TestAuthLogin_UsesKeyring(t *testing.T) {
 	stdout := &bytes.Buffer{}
 	root.SetOut(stdout)
 	root.SetErr(&bytes.Buffer{})
-	root.SetArgs([]string{"auth", "login", "--token", "ghp_xxxxxxxxyyyyyyyy", "--json"})
+	root.SetIn(strings.NewReader("ghp_xxxxxxxxyyyyyyyy\n"))
+	root.SetArgs([]string{"auth", "login", "--json"})
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -437,5 +440,27 @@ func TestAuthRefresh_ReadsGhAndWrites(t *testing.T) {
 	}
 	if strings.Contains(stdout.String(), "ghp_refreshed_token_value_abcdef") {
 		t.Errorf("raw token leaked: %s", stdout.String())
+	}
+}
+
+// On a CI host the real store refuses before gh is ever run, so no token
+// reaches gh's keychain entry or hosts file (ADR-024 § 5).
+func TestStoreTokenInKeyring_RefusesInCI(t *testing.T) {
+	t.Setenv("CI", "true")
+	// A PATH with no gh proves the refusal precedes the exec.
+	t.Setenv("PATH", t.TempDir())
+	err := storeTokenInKeyring("ghp_xxxxxxxxyyyyyyyy")
+	if !errors.Is(err, config.ErrCredentialWriteInCI) {
+		t.Fatalf("storeTokenInKeyring in CI = %v, want ErrCredentialWriteInCI", err)
+	}
+	if strings.Contains(err.Error(), "ghp_") {
+		t.Fatal("the error quotes the token")
+	}
+}
+
+// The token never travels on argv (ADR-024 § 5): there is no --token flag.
+func TestAuthLogin_HasNoTokenFlag(t *testing.T) {
+	if f := authLoginCmd().Flags().Lookup("token"); f != nil {
+		t.Fatal("forge auth login still accepts --token, which puts the token on argv")
 	}
 }

@@ -168,7 +168,7 @@ func prStageCreateCmd() *cobra.Command {
 
 			// Build the client scoped to the run's workspace config (not the
 			// process cwd) so worktree-mode invocations resolve the pipeline
-			// identity for the target repo. Falls back to env/CLI token when no
+			// identity for the target repo. Falls back to the env token when no
 			// config is present. A typed-nil *config.Config must NOT be boxed into
 			// the interface (it would read as non-nil and nil-deref), so pass a
 			// nil resolver explicitly in that case.
@@ -178,7 +178,7 @@ func prStageCreateCmd() *cobra.Command {
 				resolver = cfg
 				owner = cfg.Owner
 			}
-			client, clientErr := gh.NewClientFromConfig(resolver, owner, globalToken)
+			client, clientErr := gh.NewClientFromConfig(resolver, owner, "")
 			if clientErr != nil {
 				return fmt.Errorf("build GitHub client: %w", clientErr)
 			}

@@ -524,6 +524,14 @@ func RunDoctorWithConfigError(ctx context.Context, cfg *config.Config, cfgErr er
 		warnings = append(warnings, trackedCredsWarning)
 	}
 
+	// A machine-file credential on a CI host (ADR-024 § 5): a shared runner
+	// would hand it to the next job.
+	ciCreds, ciCredsWarning := checkCIMachineCredentials(ciGetenv)
+	result.Checks[ciMachineCredentialsCheck] = ciCreds
+	if ciCredsWarning != "" {
+		warnings = append(warnings, ciCredsWarning)
+	}
+
 	processLeaks, processWarning := checkOrphanedProcesses(cwd, now)
 	result.Checks["orphaned_processes"] = processLeaks
 	if processWarning != "" {

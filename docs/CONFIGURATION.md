@@ -221,6 +221,36 @@ The global config path is determined by platform and environment:
 | 3        | Linux default                | `~/.config/nightgauge/config.yaml`        |
 | 3        | Windows default              | `%APPDATA%/nightgauge/config.yaml`        |
 
+### Machine State Location
+
+Machine state that is not configuration (the serve daemon's claim registry
+`serve/`, the rate-limit hints `rate-limit.json` and
+`ratelimit-gitlab-<host>.json`, this device's `machine-id`, and the
+`telemetry-notice-v1` marker) lives in one directory, created with mode `0700`
+(ADR-024 § 8):
+
+| Priority | Check                       | Path                                |
+| -------- | --------------------------- | ----------------------------------- |
+| 1        | `NIGHTGAUGE_STATE_HOME` env | `$NIGHTGAUGE_STATE_HOME` (absolute) |
+| 2        | `XDG_STATE_HOME` env        | `$XDG_STATE_HOME/nightgauge`        |
+| 3        | macOS default               | `~/.nightgauge/state`               |
+| 3        | Linux default               | `~/.local/state/nightgauge`         |
+| 3        | Windows default             | `%LOCALAPPDATA%/nightgauge/state`   |
+
+Files an earlier release kept directly in `~/.nightgauge/` are moved on first
+use, byte for byte, with mode `0600`. `machine-id` is copied instead and the
+legacy file kept (mode `0600`) so an older binary still running on the machine
+reads the same id; it is never regenerated, because a new id is a new device to
+the platform. The new location is authoritative: if the two `machine-id` files
+differ, the new one is used and a warning is logged. For any other moved file,
+if both locations hold different contents nothing is overwritten and the error
+names both paths: Nightgauge reads only the new one, so keep it and delete the
+legacy file, or move the legacy file over it if that is the value you need.
+Serve claims are not moved.
+With no home directory, or an unwritable state directory, a command that needs
+it fails with an error naming `NIGHTGAUGE_STATE_HOME`; nothing is written into
+the working tree.
+
 ### Creating a Global Config
 
 ```bash
@@ -745,7 +775,8 @@ The pipeline resolves a GitHub token using this chain (highest to lowest). The
 chain **branches** on whether a `github_user` is configured for the target
 owner (#4068):
 
-1. `--token` CLI flag (one-shot override)
+1. **On a CI host** (`CI=true` in any case, or `CI=1`): `GITHUB_TOKEN`, then
+   `GH_TOKEN`, ahead of every stored token; `github_user` is ignored.
 2. `github_auth.token` — per-project PAT from config
 3. `github_auth.tokens[owner]` — per-org PAT map (global config)
 4. **If a `github_user` is configured for the owner** (explicit `github_user`,
@@ -756,6 +787,12 @@ owner (#4068):
 5. **If no `github_user` is configured:** `GITHUB_TOKEN` environment variable,
    then `gh auth token` (default gh account) — the single-identity / CI path,
    unchanged.
+
+There is no command-line tier: the binary takes no `--token` flag, because a
+token on argv is visible through `ps` (ADR-024 § 5). For a one-shot override,
+set `GITHUB_TOKEN` or `GH_TOKEN` in the command's environment, e.g.
+`GH_TOKEN=$(gh auth token --user <account>) nightgauge …`. Outside CI, a
+configured `github_user` or a config token still takes precedence over it.
 
 The key change from earlier versions: when a repo declares a specific identity,
 the github_user-scoped token (step 4) is tried **before** the ambient

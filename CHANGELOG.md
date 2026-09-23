@@ -490,6 +490,48 @@ create --body-file` call, so the compact profile (and its tests) pin
   each helper still returns `<root>/.nightgauge/<class>`. The helpers refuse
   an empty or relative workspace root, so no path resolves against the
   extension host's working directory.
+- **Machine state moves out of `~/.nightgauge` into its own root (#2031).**
+  The serve daemon's claim registry (`serve/`), the rate-limit hints
+  (`rate-limit.json`, `ratelimit-gitlab-<host>.json`), `machine-id` and the
+  `telemetry-notice-v1` marker now live in the machine-state directory
+  (ADR-024 § 8): `NIGHTGAUGE_STATE_HOME`, then `$XDG_STATE_HOME/nightgauge`,
+  then `~/.local/state/nightgauge` on Linux, `~/.nightgauge/state` on macOS
+  and `%LOCALAPPDATA%\nightgauge\state` on Windows, created with mode 0700.
+  Existing files are moved on first use, byte for byte, mode 0600, and safely
+  when several processes start at once; a file whose two copies differ is
+  never overwritten, and the error names both paths and which to keep.
+  `machine-id` is copied rather than moved, keeping the legacy file as a
+  compatibility copy for an older binary, and is never regenerated (a new id
+  would count as a new device against the account's machine limit); when the
+  copies differ the new location wins with a warning. Serve claims are not
+  moved, but a lease also holds the legacy lock while `~/.nightgauge/serve`
+  exists, so a daemon from the previous release and one from this release
+  never schedule the same workspace together. OpenCode stages are pinned to
+  the operator's state root (`NIGHTGAUGE_STATE_HOME`), so the per-run
+  `XDG_STATE_HOME` does not give them a throwaway one. An existing state
+  directory looser than 0700 is narrowed, and one owned by another user is
+  refused. With no home directory or an unwritable state directory, commands
+  that need it fail naming `NIGHTGAUGE_STATE_HOME`.
+
+- **Security: no credential is written to disk in CI, and none is taken on
+  argv (#2031).** On a CI host (`CI=true` in any case, or `CI=1`),
+  `nightgauge auth license set` and `nightgauge forge auth login` / `refresh`
+  refuse to store a credential in the OS keychain or the machine-tier file, so
+  a shared self-hosted runner cannot carry one job's key into the next; the
+  GitHub token resolves from `GITHUB_TOKEN` / `GH_TOKEN` ahead of every stored
+  token, `github_user` is ignored (a committed repository tier could otherwise
+  pick any identity gh has stored on the runner), and `nightgauge doctor`
+  reports a credential in the machine-tier file (`ci_machine_credentials`).
+  `nightgauge serve --api-key` and `--license-key` and the root `--token`
+  flag are removed, and `nightgauge forge auth login --token` is replaced by
+  stdin: each put a credential on argv, visible through `ps`. Set
+  `NIGHTGAUGE_API_KEY` / `NIGHTGAUGE_LICENSE_KEY`, pipe the token to
+  `forge auth login`, and give a one-shot GitHub token as `GITHUB_TOKEN` /
+  `GH_TOKEN` in the command's environment, which the existing resolution
+  chain reads (`release fetch` reads `GITHUB_TOKEN`, then `GH_TOKEN`).
+  The docs now state the keychain's threat model: any same-user process,
+  pipeline agents included, can read an item created through macOS
+  `security`.
 
 - **Security: the config loader refuses a plaintext GitHub token or license
   key in the repository's config files (#2023).** A literal
@@ -570,6 +612,18 @@ create --body-file` call, so the compact profile (and its tests) pin
   [CONFIGURATION.md § Routing by cost per closed issue](docs/CONFIGURATION.md#routing-by-cost-per-closed-issue).
 
 ### Fixed
+
+- **An OpenCode stage stuck silently on its operator-directory install is
+  classified even when the stage deadline ends it (#1954).** The
+  operator-install watchdog's bound is capped by the stage's remaining
+  deadline, so with a stage timeout shorter than the bound both fired at the
+  same instant. When the deadline's own kill won, the watchdog stood down
+  without recording a timeout and the stage was reported as a plain timeout
+  instead of `adapter_incompatible`. The stall is now also recognised from the
+  evidence after the run: no output at all, the stage context ended by its
+  deadline, and the operator directory still unsatisfied. A handshake failure
+  still wins, an operator Stop is still never misreported, and a stage that
+  printed anything is never classified this way.
 
 - **The CLI and daemon keep the license key after the extension runs
   (#2027).** The extension moved the key out of the machine config into VS

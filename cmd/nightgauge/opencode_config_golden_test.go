@@ -85,6 +85,8 @@ func TestOpenCodeConfigGolden(t *testing.T) {
 	t.Setenv("HOME", dir("home"))
 	t.Setenv("GOCACHE", dir("gocache"))
 	t.Setenv("GH_CONFIG_DIR", dir("gh"))
+	// The machine-state root both paths pin into the child (ADR-024 § 8).
+	t.Setenv("NIGHTGAUGE_STATE_HOME", dir("state"))
 	machine := dir("machine")
 	t.Setenv("NIGHTGAUGE_CONFIG_HOME", machine)
 	if err := os.WriteFile(filepath.Join(machine, "config.yaml"), []byte(openCodeVerbMachineConfig), 0o600); err != nil {

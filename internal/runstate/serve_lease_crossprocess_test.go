@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -69,6 +70,9 @@ func TestLeaseRefusesASecondProcessAndNamesItsPID(t *testing.T) {
 	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	// The child inherits this through os.Environ, so both processes resolve
+	// the same claim directory.
+	t.Setenv("NIGHTGAUGE_STATE_HOME", filepath.Join(home, "state"))
 	root := t.TempDir()
 
 	cmd := exec.Command(os.Args[0])

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 )
 
@@ -614,7 +615,8 @@ type OpenCodeIsolation struct {
 //   - the tools the XDG move would otherwise take from the operator, pinned
 //     back to what they resolve to outside the run: GH_CONFIG_DIR to the
 //     operator's gh config directory (gh keeps its hosts and auth there);
-//     NIGHTGAUGE_CONFIG_HOME to the machine-tier config directory; and, when
+//     NIGHTGAUGE_CONFIG_HOME to the machine-tier config directory;
+//     NIGHTGAUGE_STATE_HOME to the operator's machine-state root; and, when
 //     the operator has not set GOCACHE, GOCACHE to the Go build cache the
 //     operator's go uses, so builds are not cold in every stage (the Linux
 //     default moves with XDG_CACHE_HOME). git, and every other tool that
@@ -660,6 +662,18 @@ func OpenCodeIsolationEnv(in OpenCodeIsolation) (map[string]string, error) {
 		env["GH_CONFIG_DIR"] = filepath.Join(operatorConfigHome, "gh")
 	}
 	env["NIGHTGAUGE_CONFIG_HOME"] = in.MachineConfigDir
+	// The XDG_STATE_HOME move above would otherwise hand every nightgauge
+	// command the stage runs a throwaway machine-state root (ADR-024 § 8):
+	// its own rate-limit.json (splitting the machine-wide gate), its own
+	// serve claims, possibly a new machine-id, and, through the stage HOME's
+	// link to the real ~/.nightgauge, a one-time move of the operator's legacy
+	// files into a directory deleted with the run. Pin it to the root the
+	// operator's own process resolves.
+	stateHome, err := layout.StateHomePathFrom(in.GOOS, in.Home, in.Lookup)
+	if err != nil {
+		return nil, fmt.Errorf("opencode isolation: resolve the machine-state root: %w", err)
+	}
+	env[layout.EnvStateHome] = stateHome
 	if v, ok := in.Lookup("GOCACHE"); !ok || v == "" {
 		env["GOCACHE"] = filepath.Join(operatorUserCacheDir(in), "go-build")
 	}

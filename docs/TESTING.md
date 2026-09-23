@@ -833,18 +833,20 @@ own daemon:
    a gated call still proves the verb is registered.
 2. **A machine-global state file read from inside the test process.** The
    rate-limit gate persists to `gh.DefaultSharedTrackerPath()`, which
-   resolves `$HOME/.nightgauge/rate-limit.json` — the same file the
+   resolves `<STATE>/rate-limit.json` (the machine-state root,
+   `NIGHTGAUGE_STATE_HOME`, ADR-024 § 8) — the same file the
    developer's or CI runner's own `nightgauge serve` writes. A test harness
    that inherits `os.Environ()` unmodified (every harness in
    `internal/ipc` does, via `cmd.Env = append(os.Environ(), …)`) hands that
    real, mutable, machine-wide file to the spawned binary. `TestMain` also
-   isolates `HOME` to a package-lifetime temp directory for this reason, so
+   isolates `HOME` and `NIGHTGAUGE_STATE_HOME` to a package-lifetime temp
+   directory for this reason, so
    the daemon's own read of its rate-limit state is under test control, not
    the operator's.
 
 `TestContract_Board_RegisteredSurvivesExhaustedQuota` is the fixture-backed
 regression guard: it writes `remaining: 0` into the _isolated_
-`$HOME/.nightgauge/rate-limit.json` (via `gh.SharedRateLimitTracker.Set`, not
+`<STATE>/rate-limit.json` (via `gh.SharedRateLimitTracker.Set`, not
 hand-rolled JSON) and asserts the `board.list/registered` request still
 completes in under 2 seconds. Before both isolations above, the equivalent
 assertion timed out at the harness's 10s `nextLine` ceiling — proving the

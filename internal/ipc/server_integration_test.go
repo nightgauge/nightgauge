@@ -82,11 +82,12 @@ func TestMain(m *testing.M) {
 	defer os.RemoveAll(machineConfigHome)
 	os.Setenv("NIGHTGAUGE_CONFIG_HOME", machineConfigHome)
 
-	// Point every spawned `serve` subprocess's $HOME at a package-lifetime
-	// directory instead of the real developer/CI account's home. The
-	// daemon's GitHub rate-limit gate persists to
-	// gh.DefaultSharedTrackerPath(), which resolves $HOME/.nightgauge/
-	// rate-limit.json (internal/github/ratelimit_tracker.go), and every
+	// Point every spawned `serve` subprocess's $HOME, and its machine-state
+	// root (NIGHTGAUGE_STATE_HOME, ADR-024 § 8), at a package-lifetime
+	// directory instead of the real developer/CI account's. The daemon's
+	// GitHub rate-limit gate persists to gh.DefaultSharedTrackerPath(), which
+	// resolves <STATE>/rate-limit.json (internal/github/ratelimit_tracker.go),
+	// and every
 	// harness in this package inherits os.Environ() — including HOME —
 	// into the subprocess env. Without this, a machine whose real GraphQL
 	// quota is exhausted makes "verb is registered" contract subtests read
@@ -100,6 +101,7 @@ func TestMain(m *testing.M) {
 	}
 	defer os.RemoveAll(ipcTestHomeDir)
 	os.Setenv("HOME", ipcTestHomeDir)
+	os.Setenv("NIGHTGAUGE_STATE_HOME", filepath.Join(ipcTestHomeDir, "state"))
 	ipcTestHome = ipcTestHomeDir
 
 	// Disable the rate-limit gate's wait-for-reset behavior

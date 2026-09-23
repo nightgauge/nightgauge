@@ -95,7 +95,7 @@ var (
 // ─── Platform-aware harness ────────────────────────────────────────────────
 
 // newIpcTestHarnessWithPlatform creates a temp workspace, starts the binary
-// with --platform-url and --api-key flags pointing at the given platform
+// with --platform-url and NIGHTGAUGE_API_KEY pointing at the given platform
 // server, and returns a harness ready to send IPC requests.
 func newIpcTestHarnessWithPlatform(t *testing.T, platformURL, apiKey string) *ipcTestHarness {
 	t.Helper()
@@ -115,12 +115,12 @@ func newIpcTestHarnessWithPlatform(t *testing.T, platformURL, apiKey string) *ip
 	if platformURL != "" {
 		args = append(args, "--platform-url", platformURL)
 	}
-	if apiKey != "" {
-		args = append(args, "--api-key", apiKey)
-	}
 
 	cmd := exec.Command(binaryPath, args...)
 	cmd.Env = append(os.Environ(), "GITHUB_TOKEN=fake-token-for-integration-test")
+	// The API key is env-only: the --api-key flag was removed so the key is
+	// never on argv (ADR-024 § 5).
+	cmd.Env = append(cmd.Env, "NIGHTGAUGE_API_KEY="+apiKey)
 
 	stdinPipe, err := cmd.StdinPipe()
 	if err != nil {

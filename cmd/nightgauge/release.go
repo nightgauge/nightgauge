@@ -324,12 +324,15 @@ func printNotifyHuman(r release.NotifyResult) {
 }
 
 // resolveReleaseToken returns the bearer token for release fetch operations.
-// Order: --token CLI flag (globalToken) → GITHUB_TOKEN env var. An empty
-// return value means "send no Authorization header" — public-repo fetches
-// still work, just at the lower 60/hr unauthenticated rate limit.
+// Order: GITHUB_TOKEN env var → GH_TOKEN env var. There is no argv tier: a
+// token on the command line is visible through `ps` (ADR-024 § 5, #2031). An
+// empty return value means "send no Authorization header" — public-repo
+// fetches still work, just at the lower 60/hr unauthenticated rate limit.
 func resolveReleaseToken() string {
-	if globalToken != "" {
-		return globalToken
+	for _, name := range []string{"GITHUB_TOKEN", "GH_TOKEN"} {
+		if tok := strings.TrimSpace(os.Getenv(name)); tok != "" {
+			return tok
+		}
 	}
-	return os.Getenv("GITHUB_TOKEN")
+	return ""
 }

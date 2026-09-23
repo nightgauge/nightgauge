@@ -239,10 +239,14 @@ output.
 
 const longAuthLogin = `Store a token in the system GitHub CLI keyring.
 
-GitLab equivalent: glab auth login --token. Use --from-stdin to pass
-the token via standard input (preferred — keeps tokens out of shell
-history). Literal credentials in Nightgauge YAML are scrubbed after the
-keyring write succeeds.
+GitLab equivalent: glab auth login --stdin. The token is read from
+standard input only, never from an argument, because arguments are visible
+to every local user through ps:
+
+  printf '%s' "$TOKEN" | nightgauge forge auth login
+
+Literal credentials in Nightgauge YAML are scrubbed after the keyring write
+succeeds. With CI=true nothing is stored; the job's GITHUB_TOKEN is used.
 `
 
 const longAuthLogout = `Clear the token from the system GitHub CLI keyring.

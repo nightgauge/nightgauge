@@ -51,14 +51,11 @@ func (r resolvedPlatformConfig) Configured() bool {
 // resolvePlatformConfig applies flag > env > config precedence to the
 // platform client's connection settings (#333).
 //
-// flagURL / flagAPIKey / flagLicenseKey are the cobra flag variables as
-// bound by serveCmd, taken AFTER flag parsing. serveCmd registers each
-// flag's *default* as os.Getenv(...) (e.g. `--license-key` defaults to
-// NIGHTGAUGE_LICENSE_KEY), so an explicit --flag and its backing env var
-// are already indistinguishable by the time RunE observes them: an empty
-// string means neither was set, and a non-empty string means "flag or env,
-// flag taking precedence when both are present" — cobra's own flag-parsing
-// already enforces that ordering. This function therefore only has one real
+// flagURL is the --platform-url flag variable, taken AFTER flag parsing;
+// serveCmd registers its *default* as os.Getenv("NIGHTGAUGE_PLATFORM_URL"),
+// so an empty string means neither was set. flagAPIKey / flagLicenseKey are
+// NIGHTGAUGE_API_KEY / NIGHTGAUGE_LICENSE_KEY: the keys have no flag, because
+// a flag puts a credential on argv (ADR-024 § 5). This function therefore only has one real
 // decision left to make: fall back to the merged config file's platform
 // section when flag/env supplied nothing.
 //
@@ -76,8 +73,8 @@ func (r resolvedPlatformConfig) Configured() bool {
 // There is no config-file source for the API key: the VSCode extension's
 // PlatformConfigSchema (packages/nightgauge-vscode/src/config/schema.ts)
 // has no platform.api_key field, only platform.api_url and
-// platform.license_key — so API key resolution is flag/env only, unchanged
-// from pre-#333 behavior.
+// platform.license_key — so the API key comes from NIGHTGAUGE_API_KEY only;
+// the --api-key flag was removed because it put the key on argv (ADR-024 § 5).
 func resolvePlatformConfig(flagURL, flagAPIKey, flagLicenseKey string, cfg *config.Config, storedLicense func() (keychain.Result, error)) resolvedPlatformConfig {
 	r := resolvedPlatformConfig{URL: flagURL, APIKey: flagAPIKey, LicenseKey: flagLicenseKey}
 
