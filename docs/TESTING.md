@@ -166,8 +166,8 @@ and the 61-test Playwright suite that _did_ collect ran in no CI workflow at
 all — a regression in any of those tests reached `main` unnoticed. Both were
 fixed in #744: every browser-driven file was consolidated into
 `tests/playwright/**` under the single `*.playwright.ts` convention, and the
-`playwright` CI job above runs the full suite on every PR and push to `main`,
-with the Chromium binary cached by Playwright's own version.
+`playwright` CI job above runs the full suite on every PR (not on push to
+`main`, since #2055: the PR run is the gate), with the Chromium binary cached by Playwright's own version.
 
 #### The host smoke tier (#745)
 

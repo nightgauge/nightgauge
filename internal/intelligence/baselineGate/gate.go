@@ -68,8 +68,16 @@ type GateResult struct {
 // WorkflowRunsLister abstracts the GitHub Actions list-runs/list-jobs surface
 // the gate calls into. Backed by `github.CIService` in production and by a
 // stub in tests.
+//
+// ListBaselineRuns, not the branch's own runs (#2055): the full suites no
+// longer run on push to the branch, so ci.yml's branch runs are frozen and a
+// gate reading them could never see the baseline recover. The baseline is the
+// pull_request runs that gated the last merges (the strict ruleset makes each
+// merged head's tree the merge commit's tree) together with whatever still
+// runs on the branch itself, such as a scheduled workflow. See
+// github.CIService.ListBaselineRuns.
 type WorkflowRunsLister interface {
-	ListWorkflowRuns(ctx context.Context, owner, repo, workflowFile, branch string, perPage int) ([]gh.WorkflowRun, error)
+	ListBaselineRuns(ctx context.Context, owner, repo, workflowFile, branch string, n int) ([]gh.WorkflowRun, error)
 	ListRunJobs(ctx context.Context, owner, repo string, runID int64) ([]gh.WorkflowRunJob, error)
 }
 
@@ -128,7 +136,7 @@ func (e *Evaluator) evaluateMatch(ctx context.Context, m ACMatch, owner, repo, b
 		return nil, fmt.Errorf("baselineGate: runner is nil — cannot query workflow runs for %q", m.Workflow)
 	}
 
-	runs, err := e.runner.ListWorkflowRuns(ctx, owner, repo, m.Workflow, branch, e.cfg.LookbackRuns)
+	runs, err := e.runner.ListBaselineRuns(ctx, owner, repo, m.Workflow, branch, e.cfg.LookbackRuns)
 	if err != nil {
 		return nil, fmt.Errorf("list runs for %s on %s: %w", m.Workflow, branch, err)
 	}
@@ -215,7 +223,7 @@ func (e *Evaluator) IsLastNGreen(ctx context.Context, owner, repo, workflow, bra
 	if n <= 0 {
 		n = e.cfg.GreenThreshold
 	}
-	runs, err := e.runner.ListWorkflowRuns(ctx, owner, repo, workflow, branch, n)
+	runs, err := e.runner.ListBaselineRuns(ctx, owner, repo, workflow, branch, n)
 	if err != nil {
 		return false, nil, err
 	}

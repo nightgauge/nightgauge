@@ -230,13 +230,13 @@ type RuntimeState struct {
 	MergedCommitSha string `json:"mergedCommitSha,omitempty"`
 	MergedAt        string `json:"mergedAt,omitempty"`
 
-	// MainCheckVerdict + MainCheckFailing are the post-merge observation of the
-	// base branch (#1249): whether the merge commit's own check runs went
-	// green, red, were still pending when the bounded wait ran out, never
-	// appeared, or could not be read (hooks.MainCheckVerdict vocabulary).
-	// Empty until the post-merge hook has run. This is the run record's copy of
-	// AGENTS.md's "main's own run is the observation" — the PR gate's green is
-	// on GateResults; this is what main actually did.
+	// MainCheckVerdict + MainCheckFailing are the post-merge verification of
+	// the base branch (#1249, #2055): whether the merge was green (the merge
+	// commit's tree is the merged PR head's, the head's required checks passed,
+	// and what still runs on the merge commit passed), red, still pending when
+	// the bounded wait ran out, showed no checks, or could not be read
+	// (hooks.MainCheckVerdict vocabulary). Empty until the post-merge hook has
+	// run.
 	MainCheckVerdict string   `json:"mainCheckVerdict,omitempty"`
 	MainCheckFailing []string `json:"mainCheckFailing,omitempty"`
 

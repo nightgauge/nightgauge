@@ -1,11 +1,16 @@
 # Lint — formatting, ESLint, license-header guard, skill metadata.
 name: Lint
 
+# No push to main (#2055): the strict ruleset merges only an up-to-date PR whose
+# squash tree is the tree this PR run already linted, so a push run re-checks
+# an identical tree.
 on:
   pull_request:
     branches: [main]
-  push:
-    branches: [main]
+  # workflow_dispatch is the remedy post-merge verification names when a merge
+  # commit's tree was never tested (a ruleset bypass): dispatching on main puts
+  # the required checks on main's head (#2055).
+  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -150,8 +155,6 @@ jobs:
       # execute cla-check.mjs itself and fail on the missing environment.
       - name: CLA gate regression suite
         run: node --test .github/scripts/cla-check.test.mjs
-      - name: Main CLA observation regression suite
-        run: node --test .github/scripts/main-cla-status.test.mjs
       - name: Agent-guidance gate self-test
         run: bash scripts/test-agent-guidance-check.sh
       - name: Agent-guidance architecture

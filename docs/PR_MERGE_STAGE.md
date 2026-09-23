@@ -510,7 +510,33 @@ not just `Closes #epic`.
 
 ## Post-merge verification of the base branch (#1249)
 
-`AGENTS.md` states the rule: _a green PR check is a prediction; `main`'s own run
+**Since #2055 the PR run is the gate.** `main`'s ruleset sets
+`strict_required_status_checks_policy`, so the squash commit's tree is the tree
+the PR head's required checks passed on, and the full suites no longer re-run
+on push to `main`; only CodeQL and the `cache-warm` job do. When the forge can
+tie the merge commit to its merged PR (`internal/github.GetMergeProvenance`),
+`VerifyMergeCommit` decides through `internal/github.EvaluateMergedCommit`:
+
+1. the merge commit's tree must equal the PR head's tree;
+2. every required check on the PR head must have passed;
+3. every check on the merge commit (CodeQL) must be green. Still running keeps
+   the poll going. `cache-warm` is informational
+   (`internal/github.InformationalCheck`): it tests nothing, so it never fails
+   the verdict or holds the wait. An empty list is `pending` for
+   `MergeCommitCheckGrace` (5 min) after the merge and passes after that,
+   because a repository that runs nothing on push has nothing to wait for.
+
+If the trees differ (a ruleset bypass), or the commit has no merged PR, the
+merge commit must carry every required check itself, the rule described below.
+Where the suites no longer run on push that reads `pending` inside the grace
+and `red` after it, once no required check is running there: the landed tree
+was never tested, and the card names the remedy (run the suites on `main` via
+`workflow_dispatch`). The required set is the merged PR's base branch's; if it
+cannot be read the verdict is never `green`. The hook result's `mainChecks` carries
+`prNumber`, `prHeadSha` and `treesMatch`. The rest of this section describes
+the merge-commit rule, which still applies in those two cases.
+
+`AGENTS.md` stated the rule at #1249: _a green PR check is a prediction; `main`'s own run
 is the observation._ Until #1249 only interactive sessions honoured it — the
 pipeline verified the PR reached `MERGED`, captured the merge SHA, and stopped.
 The three failure classes the PR gate structurally cannot see (nondeterministic
@@ -549,7 +575,9 @@ whatever the rollup did return.
 **The hook and `nightgauge ci checks-complete` are one implementation
 (#1674, #1681).** Both read the commit through
 `internal/github.CIService.GetCommitChecks` and decide through
-`internal/github.EvaluateCommitChecks`. A required context can be published on
+`internal/github.EvaluateMergedCommit`, which applies
+`internal/github.EvaluateCommitChecks` when the merge commit is its own
+evidence. A required context can be published on
 either GitHub status surface — a CLA status is a commit status, not a check
 run — and a commit can carry more than one page of either. A reader of check
 runs alone, or of the first page alone, found such a required context

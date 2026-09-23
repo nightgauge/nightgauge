@@ -71,8 +71,9 @@ type Record struct {
 	ObservedAt     string  `json:"observed_at,omitempty"` // when finalized (RFC3339)
 	Evidence       string  `json:"evidence,omitempty"`    // one of the Evidence* constants
 	// MainCheckVerdict + MainCheckFailing are the IMMEDIATE post-merge
-	// observation (#1249): what the merge commit's own check runs did on the
-	// base branch, polled to completion within the hook's bounded wait — the
+	// verification (#1249, #2055): whether the merge was green — its tree is
+	// the merged PR head's, the head's required checks passed, and what still
+	// runs on the merge commit passed — polled to completion within the hook's bounded wait — the
 	// hooks.MainCheckVerdict vocabulary (green / red / pending / no_checks /
 	// error / skipped). Distinct from Verdict, which is decided days later by the
 	// survival sweep from reverts and ancestry-correlated breakage; a record can

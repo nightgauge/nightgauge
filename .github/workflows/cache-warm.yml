@@ -1,0 +1,104 @@
+# Cache warm — the one cheap job that runs on push to main (#2055).
+#
+# The PR run is the gate. main's ruleset sets
+# strict_required_status_checks_policy, so a PR merges only when it is up to
+# date with main, and its squash commit's tree is the tree the PR's required
+# checks already passed on. The full suites therefore no longer re-run on push
+# to main (ci.yml, lint.yml, publication-boundary.yml, agent-guidance.yml,
+# credential-scan.yml, adapter-canary.yml, cla.yml).
+#
+# What main's push runs still did that nothing else does is SAVE CACHES. A
+# cache saved on a pull request's ref is visible only to that PR; a cache saved
+# on main is visible to every PR. setup-go, setup-node and actions/cache key on
+# go.sum, package-lock.json and the Playwright version, independent of which
+# workflow saved them, so this job restores each and populates only what
+# missed. On a warm cache every step after the restores is skipped and the job
+# takes seconds; nothing is tested here.
+#
+# NOT a required check, and must never become one: it does not run on pull
+# requests, so a required `cache-warm` would block every PR forever.
+# Nor is it part of post-merge verification (github.InformationalCheck):
+# it tests nothing, so a network blip failing it must not read as "main is
+# red, fix it now" with nothing to fix.
+name: Cache warm
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# No concurrency group: cancelling an older run would leave a `cancelled`
+# conclusion on a merge commit, which post-merge verification reads as red.
+# Two runs saving the same key is harmless; the loser logs a warning.
+
+env:
+  TZ: UTC
+
+jobs:
+  cache-warm:
+    name: cache-warm
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Same key as ci.yml's Go jobs (go.mod's version + go.sum). setup-go
+      # saves in its post step only on a primary-key miss, so the build below
+      # runs only then.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        id: setup-go
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+      # Compile, never run: `-exec true` links every test binary (plain and
+      # -race, the two passes ci.yml's `Go build & test` makes) into the build
+      # cache and then runs /bin/true instead of the tests.
+      - name: Populate the Go module and build cache (build, vet, compile tests)
+        if: ${{ steps.setup-go.outputs.cache-hit != 'true' }}
+        run: |
+          set -euo pipefail
+          go build ./...
+          go vet ./...
+          go test -count=1 -exec true ./... > /dev/null
+          go test -race -count=1 -exec true ./... > /dev/null
+
+      # Same key as ci.yml's Node jobs (package-lock.json). setup-node saves
+      # ~/.npm in its post step only on a miss, and `npm ci` fills it.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        id: setup-node
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Populate the npm cache
+        if: ${{ steps.setup-node.outputs.cache-hit != 'true' }}
+        run: npm ci
+
+      # Same key as ci.yml's `Playwright webview tests` job. lookup-only: a hit
+      # downloads nothing.
+      - name: Get Playwright version
+        id: playwright-version
+        run: echo "version=$(node -p "require('./packages/nightgauge-vscode/package.json').devDependencies['@playwright/test']")" >> "$GITHUB_OUTPUT"
+      - name: Look up the Playwright browser cache
+        id: playwright-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-browsers-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+          lookup-only: true
+      - name: Install the Playwright browser (cache miss)
+        if: ${{ steps.playwright-cache.outputs.cache-hit != 'true' }}
+        run: |
+          set -euo pipefail
+          [ -d node_modules ] || npm ci
+          npx -w nightgauge-vscode playwright install chromium
+      - name: Save the Playwright browser cache (cache miss)
+        if: ${{ steps.playwright-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-browsers-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}

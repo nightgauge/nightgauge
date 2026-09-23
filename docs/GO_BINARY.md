@@ -4114,7 +4114,9 @@ supersedes its pending line on fold).
 Every record also carries the **immediate** post-merge observation of the base
 branch (#1249) — `main_check_verdict` (`green` | `red` | `pending` |
 `no_checks` | `error` | `skipped`) and `main_check_failing` — written by the same
-hook that seeds it, from a bounded poll of the merge commit's own check runs
+hook that seeds it, from a bounded poll of the merge commit (since #2055: its
+tree against the merged PR head's, the head's required checks, and the checks
+still running on the merge commit itself)
 (`nightgauge hook post-merge --main-check-wait <duration>`, default 20m; `0` is
 one read). It is distinct from `verdict`, which the sweep decides days later
 from reverts and ancestry-correlated breakage: a record can be
@@ -4957,8 +4959,16 @@ Two rules follow directly from that:
   legacy Commit Statuses — and counts every context on the SHA, required or
   not: a failed check is RED and a running one is NOT-YET. It resolves required
   contexts from branch protection and rulesets and additionally returns
-  NOT-YET when one has not appeared or either surface is unavailable. The
-  post-merge hook evaluates a merge commit through the same function.
+  NOT-YET when one has not appeared or either surface is unavailable. For a
+  merged PR's merge commit (#2055) the PR run is the gate instead: the merge
+  commit's tree must equal the PR head's tree, the head's required checks must
+  have passed, and whatever still runs on the merge commit (CodeQL; never
+  `cache-warm`, which tests nothing) must be green, still running being
+  NOT-YET. A tree mismatch with no required check on the merge commit turns
+  RED five minutes after the merge; an unreadable required set is never GREEN.
+  `ci checks-complete --help` prints `capability: merged-pr-gate`, which the
+  script checks before handing off. The post-merge
+  hook evaluates a merge commit through the same function.
 
   Exit codes: `0` GREEN, `1` RED, `2` NOT-YET. Exit `1` means a completed
   check run or commit status failed, and nothing else. An error that prevents
