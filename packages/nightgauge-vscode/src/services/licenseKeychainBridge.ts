@@ -71,6 +71,8 @@ export interface LicenseClearResult {
   keychainCleared: boolean;
   fileCleared: boolean;
   localCleared: boolean;
+  /** The host has no keychain service, so nothing can remain there. */
+  noKeychain: boolean;
 }
 
 export interface LicenseKeychainBridgeDeps {
@@ -144,8 +146,10 @@ export class LicenseKeychainBridge {
   }
 
   /**
-   * Remove every copy the CLI stores. Returns null unless a binary that
-   * reached the keychain reported what it removed.
+   * Remove every copy the CLI stores. Returns null unless the binary reported
+   * what it removed and exited zero: it exits non-zero only when a keychain
+   * entry may remain (a timeout or an unexpected error), not on a host that
+   * has no keychain at all.
    */
   async clear(): Promise<LicenseClearResult | null> {
     const result = await this.run(LICENSE_CLEAR_ARGS);
@@ -169,6 +173,7 @@ export class LicenseKeychainBridge {
       keychainCleared: parsed.keychainCleared,
       fileCleared: parsed.fileCleared === true,
       localCleared: parsed.localCleared === true,
+      noKeychain: parsed.noKeychain === true,
     };
   }
 

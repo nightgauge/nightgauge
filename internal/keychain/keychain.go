@@ -37,8 +37,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 
@@ -227,9 +230,42 @@ type Removed struct {
 	Keychain    bool
 	MachineFile bool
 	Path        string
-	// KeychainErr is non-nil when the keychain could not be reached, so an
-	// entry may remain there.
+	// KeychainErr is non-nil when the keychain could not be used.
 	KeychainErr error
+	// NoKeychain reports that KeychainErr means this host has no keychain
+	// service at all (no backend, no D-Bus session, no Secret Service), so
+	// no entry can exist. Otherwise (a timeout or an unexpected error) an
+	// entry may remain.
+	NoKeychain bool
+}
+
+// noKeychainMarkers are the error texts of a host with no keychain service:
+// no D-Bus session bus, no Secret Service on it, or no backend binary.
+var noKeychainMarkers = []string{
+	"couldn't determine address of session bus",
+	"org.freedesktop.DBus.Error.ServiceUnknown",
+	"org.freedesktop.secrets was not provided",
+	"dbus-launch",
+}
+
+// IsNoKeychain reports whether err says the host has no keychain service, as
+// opposed to a keychain that timed out or failed in a way that may leave an
+// entry behind.
+func IsNoKeychain(err error) bool {
+	if err == nil || errors.Is(err, ErrTimeout) {
+		return false
+	}
+	if errors.Is(err, exec.ErrNotFound) || errors.Is(err, fs.ErrNotExist) ||
+		errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED) {
+		return true
+	}
+	msg := err.Error()
+	for _, m := range noKeychainMarkers {
+		if strings.Contains(msg, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // Delete removes account from the keychain and from the machine-tier file, so
@@ -242,6 +278,7 @@ func (s *Store) Delete(account string) (Removed, error) {
 		out.Keychain = true
 	case !errors.Is(err, keyring.ErrNotFound):
 		out.KeychainErr = err
+		out.NoKeychain = IsNoKeychain(err)
 	}
 	value, path, ferr := config.ReadMachineString(account)
 	out.Path = path

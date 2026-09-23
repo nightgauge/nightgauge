@@ -25,7 +25,8 @@
       "path": "/home/u/.config/nightgauge/config.yaml",
       "localCleared": true,
       "localPath": "/w/.nightgauge/config.local.yaml",
-      "keychainError": "no secret service"
+      "keychainError": "no secret service",
+      "noKeychain": true
     }
   }
 }

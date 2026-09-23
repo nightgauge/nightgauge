@@ -199,6 +199,9 @@ type licenseClearResult struct {
 	LocalCleared    bool   `json:"localCleared,omitempty"`
 	LocalPath       string `json:"localPath,omitempty"`
 	KeychainError   string `json:"keychainError,omitempty"`
+	// NoKeychain: the host has no keychain service, so nothing can remain
+	// there and the command succeeds.
+	NoKeychain bool `json:"noKeychain,omitempty"`
 }
 
 // errKeychainNotCleared makes `clear` exit non-zero when it could not reach
@@ -213,7 +216,8 @@ func authLicenseClearCmd() *cobra.Command {
 		Long: `Deletes the license key from the OS keychain, from the machine-tier config
 file, and from this workspace's gitignored .nightgauge/config.local.yaml.
 A key in the committed .nightgauge/config.yaml is reported, not edited.
-Exits non-zero when the keychain could not be reached.`,
+Exits non-zero when the keychain timed out or failed in a way that may leave
+an entry behind; a host with no keychain service at all is not a failure.`,
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -227,6 +231,7 @@ Exits non-zero when the keychain could not be reached.`,
 			}
 			if removed.KeychainErr != nil {
 				r.KeychainError = removed.KeychainErr.Error()
+				r.NoKeychain = removed.NoKeychain
 			}
 			errOut := cmd.ErrOrStderr()
 			if wd, wdErr := os.Getwd(); wdErr == nil {
@@ -261,11 +266,14 @@ Exits non-zero when the keychain could not be reached.`,
 				if r.LocalCleared {
 					fmt.Fprintf(out, "Removed platform.license_key from %s.\n", r.LocalPath)
 				}
-				if !r.KeychainCleared && !r.FileCleared && !r.LocalCleared && r.KeychainError == "" {
+				if r.NoKeychain {
+					fmt.Fprintf(out, "This host has no OS keychain (%s); nothing is stored there.\n", r.KeychainError)
+				}
+				if !r.KeychainCleared && !r.FileCleared && !r.LocalCleared && (r.KeychainError == "" || r.NoKeychain) {
 					fmt.Fprintln(out, "No stored license key to remove.")
 				}
 			}
-			if removed.KeychainErr != nil {
+			if removed.KeychainErr != nil && !removed.NoKeychain {
 				return fmt.Errorf("%w (%v)", errKeychainNotCleared, removed.KeychainErr)
 			}
 			return nil

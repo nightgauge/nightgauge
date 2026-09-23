@@ -292,3 +292,20 @@ func TestFingerprintIsStableAndShort(t *testing.T) {
 		t.Fatal("empty key has a fingerprint")
 	}
 }
+
+func TestIsNoKeychain(t *testing.T) {
+	for _, err := range []error{
+		errors.New("dbus: couldn't determine address of session bus"),
+		errors.New("The name org.freedesktop.secrets was not provided by any .service files"),
+		&os.PathError{Op: "exec", Path: "/usr/bin/security", Err: os.ErrNotExist},
+	} {
+		if !IsNoKeychain(err) {
+			t.Errorf("IsNoKeychain(%v) = false", err)
+		}
+	}
+	for _, err := range []error{nil, ErrTimeout, errors.New("exit status 36")} {
+		if IsNoKeychain(err) {
+			t.Errorf("IsNoKeychain(%v) = true", err)
+		}
+	}
+}

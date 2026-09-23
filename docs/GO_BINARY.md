@@ -169,7 +169,7 @@ Manage it with `nightgauge auth license`:
 ```bash
 printf '%s' "$KEY" | nightgauge auth license set   # key on stdin, never argv
 nightgauge auth license status                     # source and fingerprint, never the key
-nightgauge auth license clear                      # every stored copy; non-zero if the keychain was unreachable
+nightgauge auth license clear                      # every stored copy; non-zero if an entry may remain
 ```
 
 Each subcommand takes `--json`. The field names are a contract with the VS
@@ -184,7 +184,10 @@ without revealing it.
 - `clear` removes the keychain entry, the machine-tier copy and a copy in the
   workspace's `.nightgauge/config.local.yaml`, and reports a copy in the
   committed `.nightgauge/config.yaml` (which it does not edit). It exits
-  non-zero when the keychain could not be reached, since an entry may remain.
+  non-zero only when a keychain entry may remain (a timeout or an unexpected
+  keychain error). A host with no keychain service at all (no backend, no
+  D-Bus session, no Secret Service) is where `set` uses the file, so there
+  `clear` succeeds once the file copy is gone and reports `noKeychain`.
 - `config show` notes a `platform.license_key` in the project or local tier:
   those tiers are never read for the license key.
 

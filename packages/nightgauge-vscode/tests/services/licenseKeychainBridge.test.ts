@@ -227,6 +227,7 @@ describe("CLI contract (cmd/nightgauge/testdata/auth-license-contract.json)", ()
       keychainCleared: contract.outputs.clear.keychainCleared,
       fileCleared: contract.outputs.clear.fileCleared,
       localCleared: contract.outputs.clear.localCleared,
+      noKeychain: contract.outputs.clear.noKeychain,
     });
     expect(warn).not.toHaveBeenCalled();
   });
@@ -317,6 +318,7 @@ describe("LicenseKeychainBridge.clear", () => {
       keychainCleared: true,
       fileCleared: true,
       localCleared: false,
+      noKeychain: false,
     });
     expect(calls[0].args).toEqual([...LICENSE_CLEAR_ARGS]);
     expect(calls[0].stdin).toBe("");
@@ -332,7 +334,28 @@ describe("LicenseKeychainBridge.clear", () => {
     expect(String(warn.mock.calls[0][0])).toMatch(/update the nightgauge binary/i);
   });
 
-  it("fails when the keychain could not be reached", async () => {
+  // No keychain service at all (the host where `set` falls back to the
+  // file): removing the file copy is a complete clear.
+  it("succeeds on a host with no keychain once the file copy is removed", async () => {
+    const { bridge, warn } = bridgeWith(() => ({
+      stdout: JSON.stringify({
+        keychainCleared: false,
+        fileCleared: true,
+        keychainError: "dbus: couldn't determine address of session bus",
+        noKeychain: true,
+      }),
+    }));
+    expect(await bridge.clear()).toEqual({
+      keychainCleared: false,
+      fileCleared: true,
+      localCleared: false,
+      noKeychain: true,
+    });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  // A timeout or unexpected error may leave the entry: the CLI exits 1.
+  it("fails when the keychain entry may remain", async () => {
     const { bridge, warn } = bridgeWith(() => ({
       code: 1,
       stdout: JSON.stringify({

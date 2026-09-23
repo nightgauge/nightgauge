@@ -282,7 +282,7 @@ func TestAuthLicenseContractMatchesFixture(t *testing.T) {
 		"status": licenseStatus{Source: "keychain", Path: "p", KeychainAvailable: true, KeychainError: "e",
 			Fingerprint: "f"},
 		"clear": licenseClearResult{KeychainCleared: true, FileCleared: true, Path: "p", LocalCleared: true,
-			LocalPath: "l", KeychainError: "e"},
+			LocalPath: "l", KeychainError: "e", NoKeychain: true},
 	}
 	for name, v := range full {
 		got, want := jsonKeys(t, v), fixtureKeys(c.Outputs[name])
@@ -292,18 +292,39 @@ func TestAuthLicenseContractMatchesFixture(t *testing.T) {
 	}
 }
 
-func TestAuthLicenseClearFailsWhenKeychainUnreachable(t *testing.T) {
+// A keychain that failed in a way that may leave the entry behind (here an
+// unexplained `security` exit) makes clear exit non-zero.
+func TestAuthLicenseClearFailsWhenKeychainErrs(t *testing.T) {
 	path := licenseFixture(t)
 	if err := os.WriteFile(path, []byte("platform:\n  license_key: ib_live_file\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	keyring.MockInitWithError(errors.New("no secret service"))
+	keyring.MockInitWithError(errors.New("exit status 36"))
 	out, _, err := runLicenseCmd(t, "", "clear", "--json")
 	if err == nil {
-		t.Fatal("clear exited zero with the keychain unreachable")
+		t.Fatal("clear exited zero although the keychain entry may remain")
 	}
 	var r licenseClearResult
-	if jerr := json.Unmarshal([]byte(out), &r); jerr != nil || r.KeychainCleared || !r.FileCleared || r.KeychainError == "" {
+	if jerr := json.Unmarshal([]byte(out), &r); jerr != nil || r.KeychainCleared || !r.FileCleared ||
+		r.KeychainError == "" || r.NoKeychain {
+		t.Fatalf("clear --json = %q (%v)", out, jerr)
+	}
+}
+
+// On a host with no keychain service (the condition under which set falls
+// back to the file), clearing the file copy is complete: exit zero.
+func TestAuthLicenseClearSucceedsWithoutAKeychain(t *testing.T) {
+	path := licenseFixture(t)
+	if err := os.WriteFile(path, []byte("platform:\n  license_key: ib_live_file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	keyring.MockInitWithError(errors.New("dbus: couldn't determine address of session bus"))
+	out, _, err := runLicenseCmd(t, "", "clear", "--json")
+	if err != nil {
+		t.Fatalf("clear without a keychain: %v", err)
+	}
+	var r licenseClearResult
+	if jerr := json.Unmarshal([]byte(out), &r); jerr != nil || !r.FileCleared || !r.NoKeychain {
 		t.Fatalf("clear --json = %q (%v)", out, jerr)
 	}
 }
