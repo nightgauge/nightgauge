@@ -143,6 +143,48 @@ variable, falling back to `gh auth token` output if available.
 export GITHUB_TOKEN=$(gh auth token)
 ```
 
+### Platform license key
+
+The CLI and the daemon (`serve`, `pipeline backfill`) resolve the platform
+license key once, in `internal/keychain`, highest precedence first:
+
+1. the `NIGHTGAUGE_LICENSE_KEY` environment variable (source `env`);
+2. the OS keychain entry (source `keychain`);
+3. `platform.license_key` in the machine-tier config file (source
+   `machine-file`).
+
+`serve` consults the stored key (2 and 3) only when `platform.enabled: true`;
+an explicit `--license-key` or the environment variable opts in on its own.
+
+The keychain entry contract is fixed; the VS Code extension depends on it:
+
+| Field   | Value                                                              |
+| ------- | ------------------------------------------------------------------ |
+| Service | `nightgauge`                                                       |
+| Account | `platform.license_key` (the same string as the config path)        |
+| Store   | macOS Keychain, Windows Credential Manager, Secret Service (Linux) |
+
+Manage it with `nightgauge auth license`:
+
+```bash
+printf '%s' "$KEY" | nightgauge auth license set   # key on stdin, never argv
+printf '%s' "$KEY" | nightgauge auth license set --json  # {"source": "keychain" | "machine-file", ...}
+nightgauge auth license status                     # prints the source, never the key
+nightgauge auth license status --json              # {"source": ..., "keychainAvailable": ...}
+nightgauge auth license clear                      # removes the keychain entry and the file copy
+```
+
+On a host with no keychain service — a headless Linux runner without a
+Secret Service, a container, an SSH session whose login keychain is locked —
+`set` says so and writes the machine-tier file instead, atomically, with mode
+`0600`, and refuses a symlinked file. Each keychain call is bounded (3 s), so
+a stalled D-Bus degrades to the file rather than hanging. `status` reports the
+keychain as unavailable and why. The environment variable works everywhere.
+
+On macOS the stored value carries go-keyring's `go-keyring-base64:` prefix, so
+read it through `nightgauge auth license status`, not by decoding `security`
+output.
+
 ## CLI Command Reference
 
 This section is the canonical reference for all `nightgauge` subcommands.

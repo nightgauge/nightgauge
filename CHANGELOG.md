@@ -16,6 +16,21 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **The license key lives in the OS keychain (#2025).**
+  `nightgauge auth license set` reads the platform license key from stdin
+  (never argv) and stores it in the OS keychain — macOS Keychain, Windows Credential Manager,
+  or the Secret Service on Linux — under service `nightgauge`, account
+  `platform.license_key`. `auth license status` prints where the key comes
+  from (`env`, `keychain`, `machine-file` or `none`), never the key, and
+  `auth license clear` removes every stored copy. The CLI and the daemon
+  (`serve`, `pipeline backfill`) now resolve the key once, in this order:
+  `NIGHTGAUGE_LICENSE_KEY`, the keychain entry, then `platform.license_key`
+  in the machine-tier config file. On a host with no keychain the key falls
+  back to that file, written with mode 0600 and never through a symlink, and
+  a stalled keychain times out instead of hanging. `serve` still uses a
+  stored key only when `platform.enabled: true`, and no longer reads a
+  license key from the project or local config tiers.
+
 - **Capacity-aware size gates (#1655).** A model's context window now caps
   the largest issue size it may take, from one table in
   `internal/skillrender/budget.go` (ADR-023 Q9): under 32k tokens XS only,

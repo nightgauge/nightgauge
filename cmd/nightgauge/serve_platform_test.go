@@ -4,7 +4,15 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/keychain"
 )
+
+// storedAt returns a stored-license lookup that reports value from source.
+func storedAt(value string, source keychain.Source) func() (keychain.Result, error) {
+	return func() (keychain.Result, error) {
+		return keychain.Result{Value: value, Source: source}, nil
+	}
+}
 
 // TestResolvePlatformConfig_PrecedenceTable exercises the flag > env >
 // config > absent precedence #333 requires. flag and env are collapsed into
@@ -15,12 +23,13 @@ import (
 func TestResolvePlatformConfig_PrecedenceTable(t *testing.T) {
 	enabled := true
 	disabled := false
-	cfgWithBoth := &config.Config{PlatformEnabled: &enabled, PlatformURL: "https://cfg.example.com", LicenseKey: "lic_cfg"}
-	cfgURLOnly := &config.Config{PlatformEnabled: &enabled, PlatformURL: "https://cfg.example.com"}
-	cfgLicenseOnly := &config.Config{PlatformEnabled: &enabled, LicenseKey: "lic_cfg"}
-	cfgDisabled := &config.Config{PlatformEnabled: &disabled, PlatformURL: "https://cfg.example.com", LicenseKey: "lic_cfg"}
-	cfgOmitted := &config.Config{PlatformURL: "https://cfg.example.com", LicenseKey: "lic_cfg"}
+	cfgURL := &config.Config{PlatformEnabled: &enabled, PlatformURL: "https://cfg.example.com"}
+	cfgEnabledOnly := &config.Config{PlatformEnabled: &enabled}
+	cfgDisabled := &config.Config{PlatformEnabled: &disabled, PlatformURL: "https://cfg.example.com"}
+	cfgOmitted := &config.Config{PlatformURL: "https://cfg.example.com"}
 	cfgEmpty := &config.Config{}
+	fileLicense := storedAt("lic_cfg", keychain.SourceMachineFile)
+	keychainLicense := storedAt("lic_keychain", keychain.SourceKeychain)
 
 	tests := []struct {
 		name           string
@@ -28,6 +37,7 @@ func TestResolvePlatformConfig_PrecedenceTable(t *testing.T) {
 		flagAPIKey     string
 		flagLicenseKey string
 		cfg            *config.Config
+		stored         func() (keychain.Result, error)
 		wantURL        string
 		wantAPIKey     string
 		wantLicense    string
@@ -37,12 +47,14 @@ func TestResolvePlatformConfig_PrecedenceTable(t *testing.T) {
 		{
 			name:           "config explicitly disabled is ignored",
 			cfg:            cfgDisabled,
+			stored:         fileLicense,
 			wantSource:     platformSourceAbsent,
 			wantConfigured: false,
 		},
 		{
 			name:           "omitted enabled defaults to local only",
 			cfg:            cfgOmitted,
+			stored:         fileLicense,
 			wantSource:     platformSourceAbsent,
 			wantConfigured: false,
 		},
@@ -50,6 +62,7 @@ func TestResolvePlatformConfig_PrecedenceTable(t *testing.T) {
 			name:           "explicit flag remains an opt in over disabled config",
 			flagLicenseKey: "lic_flag",
 			cfg:            cfgDisabled,
+			stored:         fileLicense,
 			wantLicense:    "lic_flag",
 			wantSource:     platformSourceFlagEnv,
 			wantConfigured: true,
@@ -58,7 +71,8 @@ func TestResolvePlatformConfig_PrecedenceTable(t *testing.T) {
 			name:           "flag/env wins over config when both set",
 			flagURL:        "https://flag.example.com",
 			flagLicenseKey: "lic_flag",
-			cfg:            cfgWithBoth,
+			cfg:            cfgURL,
+			stored:         fileLicense,
 			wantURL:        "https://flag.example.com",
 			wantLicense:    "lic_flag",
 			wantSource:     platformSourceFlagEnv,
@@ -66,7 +80,8 @@ func TestResolvePlatformConfig_PrecedenceTable(t *testing.T) {
 		},
 		{
 			name:           "config fills in when flag/env absent",
-			cfg:            cfgWithBoth,
+			cfg:            cfgURL,
+			stored:         fileLicense,
 			wantURL:        "https://cfg.example.com",
 			wantLicense:    "lic_cfg",
 			wantSource:     platformSourceConfig,
@@ -74,14 +89,15 @@ func TestResolvePlatformConfig_PrecedenceTable(t *testing.T) {
 		},
 		{
 			name:           "config supplies url only",
-			cfg:            cfgURLOnly,
+			cfg:            cfgURL,
 			wantURL:        "https://cfg.example.com",
 			wantSource:     platformSourceConfig,
 			wantConfigured: true,
 		},
 		{
 			name:           "config supplies license only",
-			cfg:            cfgLicenseOnly,
+			cfg:            cfgEnabledOnly,
+			stored:         fileLicense,
 			wantLicense:    "lic_cfg",
 			wantSource:     platformSourceConfig,
 			wantConfigured: true,
@@ -89,11 +105,27 @@ func TestResolvePlatformConfig_PrecedenceTable(t *testing.T) {
 		{
 			name:           "flag license overrides config license, config url still used",
 			flagLicenseKey: "lic_flag",
-			cfg:            cfgURLOnly,
+			cfg:            cfgURL,
 			wantURL:        "https://cfg.example.com",
 			wantLicense:    "lic_flag",
 			wantSource:     platformSourceFlagEnv,
 			wantConfigured: true,
+		},
+		{
+			name:           "keychain supplies the license",
+			cfg:            cfgURL,
+			stored:         keychainLicense,
+			wantURL:        "https://cfg.example.com",
+			wantLicense:    "lic_keychain",
+			wantSource:     platformSourceKeychain,
+			wantConfigured: true,
+		},
+		{
+			name:           "stored keychain license is ignored when platform is not enabled",
+			cfg:            cfgOmitted,
+			stored:         keychainLicense,
+			wantSource:     platformSourceAbsent,
+			wantConfigured: false,
 		},
 		{
 			name:           "nothing anywhere is absent",
@@ -120,7 +152,7 @@ func TestResolvePlatformConfig_PrecedenceTable(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := resolvePlatformConfig(tt.flagURL, tt.flagAPIKey, tt.flagLicenseKey, tt.cfg)
+			got := resolvePlatformConfig(tt.flagURL, tt.flagAPIKey, tt.flagLicenseKey, tt.cfg, tt.stored)
 			if got.URL != tt.wantURL {
 				t.Errorf("URL = %q, want %q", got.URL, tt.wantURL)
 			}
@@ -154,10 +186,9 @@ func TestResolvePlatformConfig_ExtensionSpawnedDaemon(t *testing.T) {
 	cfg := &config.Config{
 		PlatformEnabled: &enabled,
 		PlatformURL:     "https://api.nightgauge.dev",
-		LicenseKey:      "lic_from_global_config",
 	}
 
-	got := resolvePlatformConfig("", "", "", cfg)
+	got := resolvePlatformConfig("", "", "", cfg, storedAt("lic_from_global_config", keychain.SourceMachineFile))
 
 	if got.LicenseKey != "lic_from_global_config" {
 		t.Fatalf("LicenseKey = %q, want lic_from_global_config — the #330 bridge and remote-command poller gates both check this value", got.LicenseKey)
@@ -175,7 +206,7 @@ func TestResolvePlatformConfig_ExtensionSpawnedDaemon(t *testing.T) {
 // config file section) behaves identically to pre-#333 — platformClient
 // stays nil and nothing is configured.
 func TestResolvePlatformConfig_FullyOfflineUnchanged(t *testing.T) {
-	got := resolvePlatformConfig("", "", "", &config.Config{})
+	got := resolvePlatformConfig("", "", "", &config.Config{}, storedAt("", keychain.SourceNone))
 	if got.Configured() {
 		t.Fatalf("Configured() = true, want false for a fully local config: %+v", got)
 	}
