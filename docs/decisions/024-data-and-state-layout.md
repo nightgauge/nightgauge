@@ -115,15 +115,15 @@ override, and a documented default per OS.
 alike, as the machine-config resolver already does for `XDG_CONFIG_HOME`. The table gives the
 default when the variable is unset. A `NIGHTGAUGE_*` override beats the XDG variable.
 
-| Root       | Default on Linux                  | Default on macOS                  | Default on Windows                | Override                           | Resolver                       |
-| ---------- | --------------------------------- | --------------------------------- | --------------------------------- | ---------------------------------- | ------------------------------ |
-| `CONFIG`   | `~/.config/nightgauge`            | `~/.nightgauge`                   | `%APPDATA%\nightgauge`            | `NIGHTGAUGE_CONFIG_HOME`           | `internal/configpath` (#2023)  |
-| `CACHE`    | `~/.cache/nightgauge`             | `~/Library/Caches/nightgauge`     | `%LOCALAPPDATA%\nightgauge\cache` | `NIGHTGAUGE_CACHE_HOME`            | `internal/layout.CacheHome`    |
-| `STATE`    | `~/.local/state/nightgauge`       | `~/.nightgauge/state`             | `%LOCALAPPDATA%\nightgauge\state` | `NIGHTGAUGE_STATE_HOME`            | `internal/layout.StateHome`    |
-| `RUNTIME`  | `<os.TempDir()>/nightgauge-<uid>` | `<os.TempDir()>/nightgauge-<uid>` | not applicable (no Unix socket)   | `NIGHTGAUGE_RUNTIME_DIR`           | `internal/layout.RuntimeDir`   |
-| `CLONE`    | `<git-common-dir>/nightgauge`     | same                              | same                              | none (§ 7)                         | `internal/layout.CloneDir`     |
-| `CHECKOUT` | `<git-dir>/nightgauge-worktree`   | same                              | same                              | none (§ 7)                         | `internal/layout.CheckoutDir`  |
-| `WTBASE`   | `STATE/worktrees/<repo-key>`      | same                              | same                              | `pipeline.worktree_base` (machine) | `internal/layout.WorktreeBase` |
+| Root       | Default on Linux                  | Default on macOS                  | Default on Windows                | Override                                         | Resolver                       |
+| ---------- | --------------------------------- | --------------------------------- | --------------------------------- | ------------------------------------------------ | ------------------------------ |
+| `CONFIG`   | `~/.config/nightgauge`            | `~/.nightgauge`                   | `%APPDATA%\nightgauge`            | `NIGHTGAUGE_CONFIG_HOME`                         | `internal/configpath` (#2023)  |
+| `CACHE`    | `~/.cache/nightgauge`             | `~/Library/Caches/nightgauge`     | `%LOCALAPPDATA%\nightgauge\cache` | `NIGHTGAUGE_CACHE_HOME`                          | `internal/layout.CacheHome`    |
+| `STATE`    | `~/.local/state/nightgauge`       | `~/.nightgauge/state`             | `%LOCALAPPDATA%\nightgauge\state` | `NIGHTGAUGE_STATE_HOME`                          | `internal/layout.StateHome`    |
+| `RUNTIME`  | `<os.TempDir()>/nightgauge-<uid>` | `<os.TempDir()>/nightgauge-<uid>` | not applicable (no Unix socket)   | `NIGHTGAUGE_RUNTIME_DIR`                         | `internal/layout.RuntimeDir`   |
+| `CLONE`    | `<git-common-dir>/nightgauge`     | same                              | same                              | none (§ 7)                                       | `internal/layout.CloneDir`     |
+| `CHECKOUT` | `<git-dir>/nightgauge-worktree`   | same                              | same                              | none (§ 7)                                       | `internal/layout.CheckoutDir`  |
+| `WTBASE`   | `STATE/worktrees/<repo-key>`      | same                              | same                              | `pipeline.worktree_base` (machine or local tier) | `internal/layout.WorktreeBase` |
 
 - `<git-common-dir>` is `git rev-parse --path-format=absolute --git-common-dir`: every linked
   worktree of a clone resolves to the main clone's directory. `<git-dir>` is
