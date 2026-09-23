@@ -238,6 +238,8 @@ export function registerStageCommand(cli: CAC, config: CLIConfig): void {
         const queryFn = await createAdapterQueryFunction(finalConfig.adapter, {
           stage,
           cwd: process.cwd(),
+          // Signs of life while the adapter's child runs (#1657).
+          onActivity: (activity) => formatter.activity(activity),
         });
         const orchestrator = new PipelineOrchestrator(queryFn, {
           stageTimeoutMs: finalConfig.stageTimeoutMs,

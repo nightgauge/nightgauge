@@ -293,3 +293,129 @@ export function openCodeProviderEnv(model: string): readonly string[] {
   const key = openCodeProviderKey(model);
   return Object.hasOwn(OPENCODE_CATALOG_ENV, key) ? OPENCODE_CATALOG_ENV[key] : [];
 }
+
+/**
+ * The inherited NIGHTGAUGE_* variables an opencode child keeps (#1657). The
+ * rest of the namespace — operator settings and secrets such as
+ * NIGHTGAUGE_LM_STUDIO_API_KEY, NIGHTGAUGE_JIRA_TOKEN or
+ * NIGHTGAUGE_AUDIT_API_KEY — never reaches it. The set is exactly what is read
+ * or exported for the child, and tests/cli/childEnv.test.ts derives it from
+ * those sources, and compares it to the Go OpenCodeNightgaugeEnvAllow in
+ * the golden (`nightgauge_env_allow`), failing when they differ. A variable
+ * the per-run config references as {env:NAME} is kept too
+ * ({@link openCodeWithholdsNightgaugeEnv}). The sources:
+ *   - the Nightgauge OpenCode plugin's reads
+ *     (internal/execution/opencodeplugin/plugin/): NIGHTGAUGE_BIN,
+ *     NIGHTGAUGE_EDIT_HOOK_DIAGNOSTICS, NIGHTGAUGE_OUTPUT_FILE,
+ *     NIGHTGAUGE_RUN_ID (its NIGHTGAUGE_OPENCODE_* handshake variables come
+ *     from the run config only);
+ *   - the Go opencode adapter's per-spawn contract (BuildCommand in
+ *     opencode.go) and the manager's exports (composeStageEnv:
+ *     NIGHTGAUGE_BIN, NIGHTGAUGE_SKILL_DIR);
+ *   - what the SDK OpenCodeAdapter reads for its stage (NIGHTGAUGE_MODEL,
+ *     NIGHTGAUGE_REPO, NIGHTGAUGE_TARGET_REPO).
+ */
+export const OPENCODE_NIGHTGAUGE_ALLOW: ReadonlySet<string> = new Set([
+  "NIGHTGAUGE_ADAPTER",
+  "NIGHTGAUGE_BIN",
+  "NIGHTGAUGE_CONTEXT_FILE",
+  "NIGHTGAUGE_DISPATCH_MODEL",
+  "NIGHTGAUGE_EDIT_HOOK_DIAGNOSTICS",
+  "NIGHTGAUGE_ISSUE_NUMBER",
+  "NIGHTGAUGE_MODEL",
+  "NIGHTGAUGE_OUTPUT_FILE",
+  "NIGHTGAUGE_OUTPUT_FORMAT",
+  "NIGHTGAUGE_REPO",
+  "NIGHTGAUGE_RUN_ID",
+  "NIGHTGAUGE_SKILL_DIR",
+  "NIGHTGAUGE_STAGE",
+  "NIGHTGAUGE_TARGET_REPO",
+]);
+
+/**
+ * Whether an inherited NIGHTGAUGE_* variable named `key` is withheld from an
+ * opencode child whose per-run config is `configContent` (#1657): every one
+ * outside {@link OPENCODE_NIGHTGAUGE_ALLOW}, except one the config itself
+ * references as `{env:KEY}` (an MCP server's token, an endpoint's
+ * api_key_env), which OpenCode resolves in its own environment. The twin of
+ * `OpenCodeWithholdsNightgaugeEnv` (opencode_isolation.go). A name outside the
+ * namespace is not decided here.
+ */
+export function openCodeWithholdsNightgaugeEnv(key: string, configContent: string): boolean {
+  if (!key.startsWith("NIGHTGAUGE_") || OPENCODE_NIGHTGAUGE_ALLOW.has(key)) return false;
+  return !configContent.includes(`{env:${key}}`);
+}
+
+/**
+ * The provider base-URL variables an opencode dispatch withholds whatever its
+ * provider, a copy of `openCodeEndpointEnv` in
+ * internal/execution/adapters/opencode_isolation.go (the drift guard in
+ * tests/cli/childEnv.test.ts parses it).
+ */
+export const OPENCODE_ENDPOINT_ENV: readonly string[] = Object.freeze([
+  "ANTHROPIC_BASE_URL",
+  "OPENAI_BASE_URL",
+]);
+
+/** The prefix of OpenCode's own variables, every one of which is withheld. */
+export const OPENCODE_WITHHELD_PREFIX = "OPENCODE_";
+
+const OPENCODE_CATALOG_NAMES: ReadonlySet<string> = new Set(
+  Object.values(OPENCODE_CATALOG_ENV).flat()
+);
+const OPENCODE_PLATFORM_NAMES: ReadonlySet<string> = new Set(
+  OPENCODE_PLATFORM_PROVIDERS.flatMap((p) => OPENCODE_CATALOG_ENV[p] ?? [])
+);
+
+/**
+ * Whether an inherited variable named `key` is withheld from an opencode
+ * dispatch to `model`: the TS twin of `OpenCodeWithholdsEnv`
+ * (opencode_isolation.go). Every `OPENCODE_*` variable, the provider base
+ * URLs, and every catalog variable of a model service other than the
+ * dispatched one; a platform provider's variables (the forge token, the cloud
+ * credentials) never. Decided on the name alone.
+ */
+export function openCodeWithholdsEnv(model: string, key: string): boolean {
+  if (key.startsWith(OPENCODE_WITHHELD_PREFIX) || OPENCODE_ENDPOINT_ENV.includes(key)) return true;
+  if (!OPENCODE_CATALOG_NAMES.has(key) || OPENCODE_PLATFORM_NAMES.has(key)) return false;
+  return !openCodeProviderEnv(model.trim()).includes(key);
+}
+
+/**
+ * The withheld set of an opencode dispatch to `model` whose per-run config is
+ * `configContent`, as data: the TS twin of `OpenCodeEnvWithholdFor`
+ * (opencode_config.go), the `env_withhold` that `nightgauge opencode config`
+ * prints. An inherited variable is withheld when it is one of `names`, or
+ * when it starts with one of `prefixes` and is not one of `keep`
+ * ({@link openCodeEnvWithholdHas}). Names and keep are sorted and unique.
+ */
+export function openCodeEnvWithholdFor(
+  model: string,
+  configContent = ""
+): { prefixes: string[]; names: string[]; keep: string[] } {
+  const names = new Set<string>(OPENCODE_ENDPOINT_ENV);
+  for (const name of OPENCODE_CATALOG_NAMES) {
+    if (openCodeWithholdsEnv(model, name)) names.add(name);
+  }
+  const keep = new Set<string>(OPENCODE_NIGHTGAUGE_ALLOW);
+  for (const m of configContent.matchAll(/\{env:([^}]*)\}/g)) {
+    if (m[1].startsWith("NIGHTGAUGE_") && !openCodeWithholdsNightgaugeEnv(m[1], configContent)) {
+      keep.add(m[1]);
+    }
+  }
+  return {
+    prefixes: [OPENCODE_WITHHELD_PREFIX, "NIGHTGAUGE_"],
+    names: [...names].sort(),
+    keep: [...keep].sort(),
+  };
+}
+
+/** Whether a withheld set (`env_withhold`) withholds an inherited variable named `name`. */
+export function openCodeEnvWithholdHas(
+  withhold: { prefixes: readonly string[]; names: readonly string[]; keep?: readonly string[] },
+  name: string
+): boolean {
+  if (withhold.names.includes(name)) return true;
+  if (!withhold.prefixes.some((p) => name.startsWith(p))) return false;
+  return !(withhold.keep ?? []).includes(name);
+}

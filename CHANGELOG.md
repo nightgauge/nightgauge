@@ -16,6 +16,92 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **The VS Code extension runs `opencode` stages (#1657).** Choosing
+  OpenCode used to fall through to the Codex prerequisites and launch. It
+  now needs `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1`, `opencode` on `PATH`, the
+  Nightgauge binary for `nightgauge opencode config`, and the SDK CLI with
+  `node`, `git` and `gh`, and a model: `opencode.model`, or a dispatch
+  model that names its provider (`pipeline.stage_models` takes bands only,
+  so it cannot). Each missing one refuses OpenCode with a message that says
+  what to fix, and the stage then goes through the operator's adapter
+  fallback chain like any other refused adapter. Interactive mode refuses OpenCode as headless-only,
+  because ADR-022 records no interactive decision. The chat-only adapter
+  refusal now builds its list of agentic adapters from the SDK registry.
+  - **Model.** The stage runs the model it names when that is already a
+    `<provider>/<model>`. A band is translated through the SDK's
+    `dispatchModelFor` against `opencode.model`. A local configured model
+    serves every band, so the run keeps it and records the source as
+    `config`. The model reaches the SDK adapter as `NIGHTGAUGE_MODEL`.
+  - **Environment.** The spawn env withholds exactly what the dispatch's
+    `env_withhold` names: every `OPENCODE_*` variable, the provider base
+    URLs, and every catalog variable of a provider other than the dispatched
+    one. Platform credentials, the forge token among them, stay. The SDK's
+    new `openCodeEnvWithholdFor` is the TS twin of the Go
+    `OpenCodeEnvWithholdFor`, and a test holds it to the verb's golden
+    output. Inherited `XDG_*` stays at this layer, because the
+    `nightgauge opencode config` run reads it to pin the operator's tools
+    back. The SDK then replaces all four XDG directories for the `opencode`
+    process.
+  - **Cost.** `computeStageCost` decides locality by the provider of the
+    model (`isLocalExecution`, which also reads the recorded
+    `lm-studio/<id>` form). `lmstudio/claude-sonnet-5` is a stamped $0.
+    `anthropic/claude-sonnet-5` is priced as the claude adapter's
+    `claude-sonnet-5`. A hosted model the registry cannot price under its own
+    provider, `openrouter/claude-sonnet-5` included, is unstamped even when
+    the run reported 0. The cost figure in the stream is never
+    used for `opencode`.
+  - **Cost cap.** The cost-cap provider scale follows the model's provider
+    through `costCapProviderScale(adapter, model)`. A local provider gets 0.0
+    (time-cap mode). So does a hosted model the registry cannot price, whose
+    cost is unstamped $0 and could never trip a cost cap. A priced
+    `anthropic`, `openai`, `xai` or `google` model takes the claude, codex,
+    grok or gemini scale. The flat `opencode: 1.0` default is gone, and
+    `NIGHTGAUGE_COST_CAP_PROVIDER_SCALE_OPENCODE` still overrides. An
+    `opencode` stage's usage reaches the extension only when the stage ends,
+    so for a priced hosted model the cap applies to the stage-end total, not
+    mid-run.
+  - **Time cap.** Time-cap mode used to mean no wall-clock bound at all
+    unless `pipeline.stage_time_caps` was set, because the defaults table is
+    empty. A stage in time-cap mode now gets a 4-hour default cap, the Go
+    path's `openCodeLocalTimeoutCap`, and a configured cap above 0 wins.
+  - **Stall thresholds.** A stage on a local model server is calibrated in
+    its own `<adapter>/<model>` bucket. Its samples never enter a flagship
+    `(stage, mode)` bucket. Its warn and kill thresholds are never below
+    `LOCAL_PROVIDER_STALL_FLOOR` (600 s / 1800 s), which is derived from the
+    observed 76 s cold prefill and ~8 tok/s decode on opencode 1.18.30 with
+    LM Studio. A disabled kill stays disabled, and the Nx runaway kill still
+    bounds the stage.
+  - **Liveness.** The SDK's OpenCode adapter held the process's output
+    until it exited, so the stage CLI printed nothing while OpenCode ran. It
+    now forwards each `step_start`, `step_finish` and `tool_use` event while
+    the process runs, through a new `onActivity` query option. The stage and
+    run commands print it as a
+    `{"level":"debug","message":"adapter activity",…}` line on stdout, in
+    JSON mode at any log level. Only the event type is sent. The line has no
+    `type`, so no stream-json reader parses it as an event. Run Stage and the
+    slot output channels drop it by its message
+    (`ADAPTER_ACTIVITY_MESSAGE`), so it is never shown. It goes to stdout
+    because in JSON mode errors go there too, and the extension reports a
+    failed stage's last stderr lines as its error. Each line resets the extension's idle clock,
+    so a slow local stage no longer looks silent until it exits. The stage's
+    buffered result is unchanged.
+  - **Security: an opencode process no longer gets the whole `NIGHTGAUGE_`
+    namespace, on either path.** Both the SDK's child allowlist and the Go
+    manager (`OpenCodeAdapter.WithholdsEnv`, used by `composeStageEnv`)
+    passed every inherited `NIGHTGAUGE_*` variable to OpenCode and every
+    tool a stage runs. That included operator secrets such as
+    `NIGHTGAUGE_LM_STUDIO_API_KEY`, `NIGHTGAUGE_JIRA_TOKEN` and
+    `NIGHTGAUGE_AUDIT_API_KEY`. Both now keep only the names the Nightgauge
+    OpenCode plugin reads and the Go and SDK adapters export or read for the
+    stage (`OpenCodeNightgaugeEnvAllow` / `OPENCODE_NIGHTGAUGE_ALLOW`). They
+    also keep a variable the run's config references as `{env:NAME}`, such as
+    an MCP server's token. The verb's `env_withhold` carries the rule as a
+    `NIGHTGAUGE_` prefix with a new `keep` list (schema 1.3), and the SDK
+    applies it. The golden records the Go list, and the SDK test compares its
+    own to it and derives it from the sources. The extension leaves the
+    namespace alone in the SDK stage CLI's env, because the CLI reads its own
+    `NIGHTGAUGE_*` settings.
+
 - **feature-dev runs as bounded sub-sessions on small context windows
   (#1651).** When the dispatch model's resolved window is known and below
   200,000 tokens (ADR-023 Q7, amended with the concrete policy), the Go

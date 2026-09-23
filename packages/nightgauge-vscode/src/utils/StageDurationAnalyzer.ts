@@ -16,9 +16,11 @@
  * @see Issue #2652 - Replace hardcoded stall thresholds with data-driven p95
  * @see Issue #2662 - Adaptive stall detection
  * @see Issue #3216 - Calibration bucketing by (size, mode)
+ * @see Issue #1657 - Local-provider stages get their own (adapter, model) buckets
  */
 
 import type { ExecutionHistoryRunRecordV2 } from "../schemas/executionHistory";
+import { localExecutionKey } from "./computeStageCost";
 import type { PerformanceMode } from "./modeProfiles";
 import { ExecutionHistoryReader } from "./executionHistoryReader";
 
@@ -96,6 +98,14 @@ export interface StageDurationAnalysisResult {
    * @see Issue #3216
    */
   stagesByMode: StagesByMode;
+  /**
+   * Per-mode per-stage statistics of the stages that ran on a local model
+   * server, keyed by {@link localExecutionKey}. These samples are NOT
+   * in `stagesByMode`, so they neither consume nor pollute a flagship
+   * `(stage, mode)` bucket (#1657). They are still in the mode-agnostic
+   * `stages` map.
+   */
+  stagesByLocalExecution: Record<string, StagesByMode>;
   /** Total number of completed run records that were analyzed */
   total_runs_analyzed: number;
   /** Human-readable notes about data quality or analysis limitations */
@@ -190,6 +200,30 @@ function computeCutoffDate(staleDurationDays: number): Date | null {
   const cutoff = new Date();
   cutoff.setUTCDate(cutoff.getUTCDate() - staleDurationDays);
   return cutoff;
+}
+
+/** Empty per-mode raw-duration map factory. */
+function emptyDurationsByMode(): Record<PerformanceMode, Map<string, number[]>> {
+  return {
+    efficiency: new Map(),
+    elevated: new Map(),
+    maximum: new Map(),
+    frontier: new Map(),
+  };
+}
+
+/** Per-mode per-stage stats from per-mode raw durations. */
+function buildStagesByMode(
+  durationsByMode: Record<PerformanceMode, Map<string, number[]>>
+): StagesByMode {
+  const stagesByMode = emptyStagesByMode();
+  for (const mode of Object.keys(stagesByMode) as PerformanceMode[]) {
+    for (const [stageName, durations] of durationsByMode[mode]) {
+      if (durations.length === 0) continue;
+      stagesByMode[mode][stageName] = buildStageStats(stageName, durations);
+    }
+  }
+  return stagesByMode;
 }
 
 /** Empty per-mode stage map factory. */
@@ -289,12 +323,11 @@ export class StageDurationAnalyzer {
       // Both are populated in a single pass — calling getStageStatsByMode
       // for any mode therefore costs no extra I/O.
       const stageDurations = new Map<string, number[]>();
-      const stageDurationsByMode: Record<PerformanceMode, Map<string, number[]>> = {
-        efficiency: new Map(),
-        elevated: new Map(),
-        maximum: new Map(),
-        frontier: new Map(),
-      };
+      const stageDurationsByMode = emptyDurationsByMode();
+      const localDurationsByMode: Record<
+        string,
+        Record<PerformanceMode, Map<string, number[]>>
+      > = {};
 
       let skippedStageEntries = 0;
       for (const run of windowedRuns) {
@@ -315,6 +348,21 @@ export class StageDurationAnalyzer {
           // bucket them under `elevated` only (conservative default,
           // matches calibration migration policy).
           const mode: PerformanceMode = stageDetail.performance_mode ?? "elevated";
+          const selection = stageDetail.model_selection;
+          const localKey = localExecutionKey(
+            selection?.adapter,
+            selection?.upstream_model ?? selection?.model,
+            selection?.model_provider
+          );
+          if (localKey !== undefined) {
+            // A local-model stage lands in its own (adapter, model) bucket
+            // and never in the flagship per-mode one (#1657).
+            const byMode = (localDurationsByMode[localKey] ??= emptyDurationsByMode());
+            const localForMode = byMode[mode].get(stageName) ?? [];
+            localForMode.push(durationMs);
+            byMode[mode].set(stageName, localForMode);
+            continue;
+          }
           const modeMap = stageDurationsByMode[mode];
           const existingForMode = modeMap.get(stageName) ?? [];
           existingForMode.push(durationMs);
@@ -342,13 +390,10 @@ export class StageDurationAnalyzer {
       }
 
       // Build per-mode per-stage stats
-      const stagesByMode: StagesByMode = emptyStagesByMode();
-      for (const mode of Object.keys(stagesByMode) as PerformanceMode[]) {
-        const modeMap = stageDurationsByMode[mode];
-        for (const [stageName, durations] of modeMap) {
-          if (durations.length === 0) continue;
-          stagesByMode[mode][stageName] = buildStageStats(stageName, durations);
-        }
+      const stagesByMode = buildStagesByMode(stageDurationsByMode);
+      const stagesByLocalExecution: Record<string, StagesByMode> = {};
+      for (const [key, byMode] of Object.entries(localDurationsByMode)) {
+        stagesByLocalExecution[key] = buildStagesByMode(byMode);
       }
 
       if (stageDurations.size === 0 && windowedRuns.length === 0) {
@@ -361,6 +406,7 @@ export class StageDurationAnalyzer {
         data_window_days: staleDurationDays,
         stages,
         stagesByMode,
+        stagesByLocalExecution,
         total_runs_analyzed: windowedRuns.length,
         analysis_notes: notes,
       };
@@ -380,6 +426,7 @@ export class StageDurationAnalyzer {
         data_window_days: staleDurationDays,
         stages: {},
         stagesByMode: emptyStagesByMode(),
+        stagesByLocalExecution: {},
         total_runs_analyzed: 0,
         analysis_notes: ["Analysis failed due to unexpected error — see console for details."],
       };
@@ -430,6 +477,34 @@ export class StageDurationAnalyzer {
   ): Promise<StageStats | undefined> {
     const result = await this.analyzeStageDurations(workspaceRoot, staleDurationDays);
     return result.stagesByMode[mode]?.[stage];
+  }
+
+  /**
+   * Get duration statistics for a stage that ran on one local model server
+   * `(adapter, model)` in one performance mode (#1657). `executionKey` is
+   * {@link localExecutionKey}'s. `undefined` when that bucket is empty.
+   */
+  static async getLocalStageStatsByMode(
+    workspaceRoot: string,
+    executionKey: string,
+    stage: string,
+    mode: PerformanceMode,
+    staleDurationDays: number = 30
+  ): Promise<StageStats | undefined> {
+    const result = await this.analyzeStageDurations(workspaceRoot, staleDurationDays);
+    return result.stagesByLocalExecution[executionKey]?.[mode]?.[stage];
+  }
+
+  /**
+   * Local-model execution keys with at least one completed stage in history
+   * (#1657), each a {@link localExecutionKey}.
+   */
+  static async getLocalExecutionKeys(
+    workspaceRoot: string,
+    staleDurationDays: number = 30
+  ): Promise<string[]> {
+    const result = await this.analyzeStageDurations(workspaceRoot, staleDurationDays);
+    return Object.keys(result.stagesByLocalExecution);
   }
 
   /**

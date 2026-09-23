@@ -36,11 +36,17 @@ vi.mock("vscode", () => ({
   },
 }));
 
+import { AdapterEnumSchema } from "../../../src/config/schema";
 import {
   DEFAULT_COST_CAP_PROVIDER_SCALE,
+  costCapProviderScale,
   getCostCapProviderScale,
   getEffectiveStageCostCap,
   getStageCostCapPerProviderUsd,
+  DEFAULT_STAGE_TIME_CAPS,
+  getStageTimeCapMs,
+  getTimeCapModeStageCapMs,
+  TIME_CAP_MODE_DEFAULT_SEC,
 } from "../../../src/utils/resolvers/monitoringResolver";
 
 const PROVIDER_ENV_KEYS = [
@@ -51,6 +57,7 @@ const PROVIDER_ENV_KEYS = [
   "NIGHTGAUGE_COST_CAP_PROVIDER_SCALE_COPILOT",
   "NIGHTGAUGE_COST_CAP_PROVIDER_SCALE_LM_STUDIO",
   "NIGHTGAUGE_COST_CAP_PROVIDER_SCALE_OLLAMA",
+  "NIGHTGAUGE_COST_CAP_PROVIDER_SCALE_OPENCODE",
 ];
 
 const OVERRIDE_ENV_KEYS = [
@@ -116,24 +123,99 @@ describe("DEFAULT_COST_CAP_PROVIDER_SCALE table", () => {
     expect(DEFAULT_COST_CAP_PROVIDER_SCALE.ollama).toBe(0.0);
   });
 
-  it("covers every ExecutionAdapter union member — drift guard", () => {
+  it("covers every single-provider ExecutionAdapter — drift guard", () => {
+    // opencode has no row: its scale follows the provider of the model it
+    // dispatches (costCapProviderScale, #1657).
     expect(Object.keys(DEFAULT_COST_CAP_PROVIDER_SCALE).sort()).toEqual(
-      [
-        "claude",
-        "codex",
-        "copilot",
-        "gemini",
-        "gemini-sdk",
-        "grok",
-        "lm-studio",
-        "ollama",
-        "opencode",
-      ].sort()
+      AdapterEnumSchema.options.filter((a) => a !== "opencode").sort()
+    );
+  });
+});
+
+describe("costCapProviderScale — opencode follows the model's provider (#1657)", () => {
+  it("a local provider is 0.0, the time-cap sentinel", () => {
+    expect(costCapProviderScale("opencode", "lmstudio/qwen/qwen3.8-27b")).toBe(0.0);
+    expect(costCapProviderScale("opencode", "ollama/qwen3-coder:30b")).toBe(0.0);
+    // Locality is the provider's, not the model id's.
+    expect(costCapProviderScale("opencode", "lmstudio/claude-sonnet-5")).toBe(0.0);
+  });
+
+  it("a hosted provider borrows the scale of the adapter that serves it", () => {
+    expect(costCapProviderScale("opencode", "anthropic/claude-sonnet-5")).toBe(
+      DEFAULT_COST_CAP_PROVIDER_SCALE.claude
+    );
+    expect(costCapProviderScale("opencode", "openai/gpt-5.5")).toBe(
+      DEFAULT_COST_CAP_PROVIDER_SCALE.codex
+    );
+    expect(costCapProviderScale("opencode", "xai/grok-4.6")).toBe(
+      DEFAULT_COST_CAP_PROVIDER_SCALE.grok
+    );
+    expect(costCapProviderScale("opencode", "google/gemini-2.5-pro")).toBe(
+      DEFAULT_COST_CAP_PROVIDER_SCALE.gemini
     );
   });
 
-  it("opencode is 1.0× — unscaled pending per-provider calibration (#1657)", () => {
-    expect(DEFAULT_COST_CAP_PROVIDER_SCALE.opencode).toBe(1.0);
+  it("a hosted model the registry cannot price is 0.0: its cost is unstamped, so time-cap mode bounds it", () => {
+    for (const model of [
+      "openrouter/meta-llama/llama-4",
+      "groq/llama-4-scout",
+      // Known id, but not under the provider that serves it.
+      "openrouter/claude-sonnet-5",
+      "anthropic/claude-sonnet-99-preview",
+      "claude-sonnet-5",
+    ]) {
+      expect(costCapProviderScale("opencode", model), model).toBe(0.0);
+    }
+  });
+
+  it("no model is 1.0", () => {
+    expect(costCapProviderScale("opencode", undefined)).toBe(1.0);
+  });
+
+  it("a single-provider adapter keeps its row whatever the model", () => {
+    expect(costCapProviderScale("codex", "lmstudio/qwen")).toBe(
+      DEFAULT_COST_CAP_PROVIDER_SCALE.codex
+    );
+  });
+
+  it("getCostCapProviderScale defaults to it, and NIGHTGAUGE_COST_CAP_PROVIDER_SCALE_OPENCODE overrides it", () => {
+    expect(getCostCapProviderScale("opencode", undefined, "lmstudio/qwen")).toBe(0.0);
+    expect(getCostCapProviderScale("opencode", undefined, "anthropic/claude-sonnet-5")).toBe(
+      DEFAULT_COST_CAP_PROVIDER_SCALE.claude
+    );
+    process.env.NIGHTGAUGE_COST_CAP_PROVIDER_SCALE_OPENCODE = "0.3";
+    expect(getCostCapProviderScale("opencode", undefined, "lmstudio/qwen")).toBe(0.3);
+    expect(getCostCapProviderScale("opencode", undefined, "anthropic/claude-sonnet-5")).toBe(0.3);
+  });
+
+  it("a local opencode stage switches getEffectiveStageCostCap to time-cap mode", () => {
+    const local = getEffectiveStageCostCap(
+      "feature-dev",
+      undefined,
+      undefined,
+      "elevated",
+      "opencode",
+      "lmstudio/qwen/qwen3.8-27b"
+    );
+    expect(local.providerScale).toBe(0);
+    expect(local.effectiveCap).toBe(0);
+    const hosted = getEffectiveStageCostCap(
+      "feature-dev",
+      undefined,
+      undefined,
+      "elevated",
+      "opencode",
+      "anthropic/claude-sonnet-5"
+    );
+    const claude = getEffectiveStageCostCap(
+      "feature-dev",
+      undefined,
+      undefined,
+      "elevated",
+      "claude"
+    );
+    expect(hosted.effectiveCap).toBeGreaterThan(0);
+    expect(hosted.effectiveCap).toBe(claude.effectiveCap);
   });
 });
 
@@ -603,5 +685,23 @@ describe("getEffectiveStageCostCap — adapter-switch recompute (Issue #3231)", 
     expect(gemini.effectiveCap).not.toBe(claude.effectiveCap);
     // Gemini's provider scale is lower than claude's, so the cap is tighter.
     expect(gemini.effectiveCap).toBeLessThan(claude.effectiveCap);
+  });
+});
+
+describe("getTimeCapModeStageCapMs — time-cap mode is never unbounded (#1657)", () => {
+  afterEach(() => {
+    delete process.env.NIGHTGAUGE_PIPELINE_STAGE_TIME_CAP_FEATURE_DEV;
+  });
+
+  it("with nothing configured, time-cap mode gets TIME_CAP_MODE_DEFAULT_SEC", () => {
+    expect(DEFAULT_STAGE_TIME_CAPS["feature-dev"]).toBeUndefined();
+    expect(getStageTimeCapMs("feature-dev")).toBe(0);
+    expect(getTimeCapModeStageCapMs("feature-dev")).toBe(TIME_CAP_MODE_DEFAULT_SEC * 1000);
+    expect(TIME_CAP_MODE_DEFAULT_SEC).toBe(4 * 60 * 60);
+  });
+
+  it("a configured cap wins", () => {
+    process.env.NIGHTGAUGE_PIPELINE_STAGE_TIME_CAP_FEATURE_DEV = "1800";
+    expect(getTimeCapModeStageCapMs("feature-dev")).toBe(1_800_000);
   });
 });

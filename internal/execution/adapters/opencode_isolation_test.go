@@ -1258,3 +1258,47 @@ func TestOpenCodePrepareRunRoot(t *testing.T) {
 		t.Errorf("the root is not named by a run identity: %s", first.Dir)
 	}
 }
+
+// TestOpenCodeWithholdsNightgaugeEnv: the opencode child inherits only the
+// NIGHTGAUGE_* names in OpenCodeNightgaugeEnvAllow, plus one its per-run
+// config references as {env:NAME} (#1657). Other namespaces are not decided
+// here, and the adapter's hook applies both rules.
+func TestOpenCodeWithholdsNightgaugeEnv(t *testing.T) {
+	content := `{"mcp":{"n":{"headers":{"Authorization":"Bearer {env:NIGHTGAUGE_MCP_TOKEN}"}}}}`
+	for _, k := range []string{"NIGHTGAUGE_JIRA_TOKEN", "NIGHTGAUGE_LM_STUDIO_API_KEY", "NIGHTGAUGE_AUDIT_API_KEY", "NIGHTGAUGE_OPENCODE_PLUGIN_NONCE"} {
+		if !OpenCodeWithholdsNightgaugeEnv(k, content) {
+			t.Errorf("%s is not withheld", k)
+		}
+	}
+	for _, k := range OpenCodeNightgaugeEnvAllow {
+		if OpenCodeWithholdsNightgaugeEnv(k, "") {
+			t.Errorf("%s, which the child needs, is withheld", k)
+		}
+	}
+	if OpenCodeWithholdsNightgaugeEnv("NIGHTGAUGE_MCP_TOKEN", content) {
+		t.Error("a variable the run's config references is withheld")
+	}
+	if !OpenCodeWithholdsNightgaugeEnv("NIGHTGAUGE_MCP_TOKEN", "") {
+		t.Error("a variable no config references is kept")
+	}
+	if OpenCodeWithholdsNightgaugeEnv("GH_TOKEN", "") || OpenCodeWithholdsNightgaugeEnv("PATH", "") {
+		t.Error("a name outside the namespace is decided here")
+	}
+	if !slices.IsSorted(OpenCodeNightgaugeEnvAllow) {
+		t.Error("OpenCodeNightgaugeEnvAllow is not sorted")
+	}
+
+	a := NewOpenCodeAdapter()
+	opts := RunOptions{Model: "lmstudio/x", RunRoot: &RunRoot{Env: map[string]string{openCodeConfigContentEnvVar: content}}}
+	for key, want := range map[string]bool{
+		"NIGHTGAUGE_JIRA_TOKEN": true,
+		"NIGHTGAUGE_MCP_TOKEN":  false,
+		"NIGHTGAUGE_STAGE":      false,
+		"OPENAI_API_KEY":        true,
+		"GITHUB_TOKEN":          false,
+	} {
+		if got := a.WithholdsEnv(opts, key); got != want {
+			t.Errorf("WithholdsEnv(%s) = %v, want %v", key, got, want)
+		}
+	}
+}

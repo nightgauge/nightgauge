@@ -668,7 +668,8 @@ export class SettingsPanel implements vscode.Disposable {
         const modeModel = getModeStageAdapterModel(
           modeMode,
           stage as PipelineStage,
-          decision.adapter as ExecutionAdapter
+          decision.adapter as ExecutionAdapter,
+          decision.adapter === "opencode" ? getOpenCodeModel(this.workspaceRoot) : undefined
         );
         return {
           stage,

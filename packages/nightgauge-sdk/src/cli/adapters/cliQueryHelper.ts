@@ -21,7 +21,7 @@ import type {
   SDKQueryFunction,
   SDKQueryOptions,
 } from "../../orchestrator/StageExecutor.js";
-import type { NightgaugeAdapter } from "./ICliAdapter.js";
+import type { AdapterActivity, NightgaugeAdapter } from "./ICliAdapter.js";
 import type { OpenCodeRunConfig, OpenCodeRunConfigRequest } from "./OpenCodeAdapter.js";
 import { applyCodexSandboxProfile } from "./codexSandbox.js";
 import {
@@ -32,7 +32,7 @@ import {
   curateOpenCodeChildEnv,
 } from "./childEnv.js";
 import { AdapterError } from "./errors.js";
-import { openCodeProviderEnv } from "./opencodeCatalog.js";
+import { openCodeEnvWithholdHas, openCodeProviderEnv } from "./opencodeCatalog.js";
 import { classifyOpenCodeRun, openCodeRedactor, type OpenCodeHelper } from "./opencodeStream.js";
 import { OpenCodeHandshakeWatch, openCodeHandshakeFromEnv } from "./opencodeHandshake.js";
 import {
@@ -418,6 +418,46 @@ export interface OpenCodeQueryContext {
   parentEnv: NodeJS.ProcessEnv;
   /** Spawns processes; default `node:child_process` spawn. */
   spawn?: SpawnFn;
+  /**
+   * Told of each {@link OPENCODE_ACTIVITY_EVENTS} event as the process prints
+   * it, while it runs (#1657). The stream itself is still read only once the
+   * process has ended.
+   */
+  onActivity?: (activity: AdapterActivity) => void;
+}
+
+/**
+ * The OpenCode events that are signs of life while a stage runs (#1657):
+ * one `step_start` and one `step_finish` per model step, and one `tool_use`
+ * per completed tool call (opencode 1.18.30; the captures in
+ * internal/execution/testdata/opencode_stream_*.jsonl). OpenCode prints
+ * nothing while a step generates or a tool runs.
+ */
+export const OPENCODE_ACTIVITY_EVENTS: ReadonlySet<string> = new Set([
+  "step_start",
+  "step_finish",
+  "tool_use",
+]);
+
+/**
+ * Tell `onActivity` about one stdout line of a running opencode process when
+ * it is an {@link OPENCODE_ACTIVITY_EVENTS} event. Only the event's type is
+ * passed on. Never throws: a malformed line, or a callback that throws, is
+ * ignored, so it can never change how the stage is run or read.
+ */
+export function forwardOpenCodeActivity(
+  line: string,
+  onActivity: ((activity: AdapterActivity) => void) | undefined
+): void {
+  if (onActivity === undefined || !line.includes('"type"')) return;
+  try {
+    const event = (JSON.parse(line) as { type?: unknown }).type;
+    if (typeof event === "string" && OPENCODE_ACTIVITY_EVENTS.has(event)) {
+      onActivity({ adapter: "opencode", event });
+    }
+  } catch {
+    // Not an event line, or the callback failed: neither affects the stage.
+  }
 }
 
 /** How long a post-run `opencode` helper (export, db) may run. */
@@ -747,7 +787,8 @@ async function* openCodeStage(
     ...curateOpenCodeChildEnv(
       withholdInherited(run.parentEnv, runConfig.envWithhold),
       model,
-      runConfig.env
+      runConfig.env,
+      runConfig.configContent
     ),
     [OPENCODE_CONFIG_CONTENT_ENV]: runConfig.configContent,
     [OPENCODE_SERVER_PASSWORD_ENV]: password,
@@ -762,7 +803,11 @@ async function* openCodeStage(
     env,
     stdin: queryOptions.prompt,
     signal,
-    onStdoutLine: (line) => watch.observe(line),
+    onStdoutLine: (line) => {
+      const kill = watch.observe(line);
+      forwardOpenCodeActivity(line, run.onActivity);
+      return kill;
+    },
   });
   if (result.aborted) {
     throw new Error("opencode query aborted: its process group was killed");
@@ -838,10 +883,9 @@ function withholdInherited(
   withhold: OpenCodeRunConfig["envWithhold"]
 ): NodeJS.ProcessEnv {
   if (withhold === undefined) return parentEnv;
-  const names = new Set(withhold.names);
   const kept: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(parentEnv)) {
-    if (names.has(name) || withhold.prefixes.some((p) => name.startsWith(p))) continue;
+    if (openCodeEnvWithholdHas(withhold, name)) continue;
     kept[name] = value;
   }
   return kept;

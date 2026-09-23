@@ -33,6 +33,12 @@ import { defaultRegistry, isAgenticAdapter } from "../../src/cli/adapters/Adapte
 import { AdapterError } from "../../src/cli/adapters/errors.js";
 import type { PreflightCommandRunner } from "../../src/cli/codexPreflight.js";
 import type { SDKMessage } from "../../src/orchestrator/StageExecutor.js";
+import {
+  OPENCODE_ACTIVITY_EVENTS,
+  forwardOpenCodeActivity,
+} from "../../src/cli/adapters/cliQueryHelper.js";
+import type { AdapterActivity } from "../../src/cli/adapters/ICliAdapter.js";
+import { OutputFormatter } from "../../src/cli/output.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 const TESTDATA = join(REPO_ROOT, "internal/execution/testdata");
@@ -855,4 +861,110 @@ process.kill(process.pid, "SIGINT");
     expect(r.pids).toHaveLength(2);
     expect(r.survivors).toEqual([]);
   }, 20_000);
+});
+
+// ---------------------------------------------------------------------------
+
+/**
+ * #1657: the SDK's OpenCode adapter reads the process's stream only once it
+ * exits, and OpenCode prints nothing while a step generates, so the SDK
+ * forwards each step and tool event while the process runs — the extension's
+ * only sign that a slow local stage is alive.
+ */
+describe("OpenCode activity while the process runs (#1657)", () => {
+  const RESEARCH = join(TESTDATA, "opencode_stream_research_sample.jsonl");
+
+  /** The event types of the research capture, in order: the fixture's truth. */
+  function captureEvents(): string[] {
+    return readFileSync(RESEARCH, "utf-8")
+      .split("\n")
+      .filter((l) => l.trim() !== "")
+      .map((l) => (JSON.parse(l) as { type: string }).type);
+  }
+
+  async function run(onActivity?: (a: AdapterActivity) => void) {
+    const dir = tmp("oc-stub-");
+    // One captured line every 150 ms, then two quiet seconds before exit.
+    const bin = writeStub(
+      dir,
+      `  while IFS= read -r line; do printf '%s\\n' "$line"; sleep 0.15; done < '${RESEARCH}'\n  sleep 2`
+    );
+    const worktree = tmp("oc-wt-");
+    const adapter = new OpenCodeAdapter({
+      env: { PATH: `${bin}:${process.env.PATH}`, HOME: "/home/fixture" },
+      model: LOCAL_MODEL,
+      runConfigProvider: providerFor(runConfig(tmp("oc-run-"), join(bin, "opencode"))),
+      runRootCleaner: noClean,
+    });
+    const query = await adapter.createQueryFunction({
+      cwd: worktree,
+      stage: "feature-dev",
+      ...(onActivity && { onActivity }),
+    });
+    const messages = await drain(query({ prompt: "p", options: { cwd: worktree } }));
+    return { messages, endedAt: Date.now() };
+  }
+
+  it("forwards each step and tool event while the process runs, not at exit", async () => {
+    const seen: { event: string; at: number }[] = [];
+    const { endedAt } = await run((a) => {
+      expect(a.adapter).toBe("opencode");
+      seen.push({ event: a.event, at: Date.now() });
+    });
+
+    const expected = captureEvents().filter((t) => OPENCODE_ACTIVITY_EVENTS.has(t));
+    expect(expected).toContain("step_start");
+    expect(expected).toContain("step_finish");
+    expect(seen.map((s) => s.event)).toEqual(expected);
+    // Spread out as the process printed them, and all of it well before the
+    // query ended: the process was still in its two quiet seconds.
+    expect(seen[seen.length - 1].at - seen[0].at).toBeGreaterThanOrEqual(100);
+    expect(endedAt - seen[seen.length - 1].at).toBeGreaterThanOrEqual(1500);
+  }, 20_000);
+
+  it("leaves the query's messages exactly as they are without it", async () => {
+    const withActivity = await run(() => {});
+    const without = await run();
+    expect(withActivity.messages).toEqual(without.messages);
+    expect(withActivity.messages.find((m) => m.type === "result")?.usage).toBeDefined();
+  }, 30_000);
+
+  it("forwards only the event type, and ignores other lines and a throwing callback", () => {
+    const got: AdapterActivity[] = [];
+    const push = (a: AdapterActivity) => got.push(a);
+    forwardOpenCodeActivity('{"type":"text","part":{"text":"secret model text"}}', push);
+    forwardOpenCodeActivity("not json", push);
+    forwardOpenCodeActivity('{"type":"step_start"', push);
+    forwardOpenCodeActivity('{"type":"tool_use","part":{"tool":"bash"}}', push);
+    expect(got).toEqual([{ adapter: "opencode", event: "tool_use" }]);
+    expect(() =>
+      forwardOpenCodeActivity('{"type":"step_finish"}', () => {
+        throw new Error("boom");
+      })
+    ).not.toThrow();
+  });
+});
+
+describe("OutputFormatter.activity (#1657)", () => {
+  it("writes one JSON log line with no type in JSON mode, whatever the log level", () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      new OutputFormatter("json", "error").activity({ adapter: "opencode", event: "step_start" });
+      expect(log).toHaveBeenCalledTimes(1);
+      const line = log.mock.calls[0][0] as string;
+      expect(line).not.toContain("\n");
+      const parsed = JSON.parse(line) as Record<string, unknown>;
+      expect(parsed).toEqual({
+        level: "debug",
+        message: "adapter activity",
+        data: { adapter: "opencode", event: "step_start" },
+      });
+      expect(parsed).not.toHaveProperty("type");
+      expect(err).not.toHaveBeenCalled();
+    } finally {
+      log.mockRestore();
+      err.mockRestore();
+    }
+  });
 });

@@ -292,24 +292,16 @@ func TestOpenCodeConfigVerbMatchesTheAdapter(t *testing.T) {
 	// The inherited variables the verb says to withhold are the ones the Go
 	// path keeps from the child, so a caller composes the same environment.
 	var withhold struct {
-		EnvWithhold struct {
-			Prefixes []string `json:"prefixes"`
-			Names    []string `json:"names"`
-		} `json:"env_withhold"`
+		EnvWithhold adapters.OpenCodeEnvWithhold `json:"env_withhold"`
 	}
 	if err := json.Unmarshal([]byte(out), &withhold); err != nil {
 		t.Fatal(err)
 	}
-	covers := func(name string) bool {
-		for _, p := range withhold.EnvWithhold.Prefixes {
-			if strings.HasPrefix(name, p) {
-				return true
-			}
-		}
-		return slices.Contains(withhold.EnvWithhold.Names, name)
-	}
-	names := append([]string{"OPENCODE_AUTH_CONTENT", "OPENCODE_CONFIG_DIR", "ANTHROPIC_API_KEY", "OPENAI_BASE_URL", "LMSTUDIO_API_KEY", "GITHUB_TOKEN", "AWS_REGION", "PATH"},
+	covers := withhold.EnvWithhold.Withholds
+	names := append([]string{"OPENCODE_AUTH_CONTENT", "OPENCODE_CONFIG_DIR", "ANTHROPIC_API_KEY", "OPENAI_BASE_URL", "LMSTUDIO_API_KEY", "GITHUB_TOKEN", "AWS_REGION", "PATH",
+		"NIGHTGAUGE_JIRA_TOKEN", "NIGHTGAUGE_STAGE", "NIGHTGAUGE_BIN"},
 		withhold.EnvWithhold.Names...)
+	names = append(names, withhold.EnvWithhold.Keep...)
 	for _, kv := range os.Environ() {
 		name, _, _ := strings.Cut(kv, "=")
 		names = append(names, name)

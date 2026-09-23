@@ -20,7 +20,13 @@
  * @see Issue #1637 - the OpenCode curation, {@link curateOpenCodeChildEnv}
  */
 
-import { openCodeProviderEnv } from "./opencodeCatalog.js";
+import {
+  OPENCODE_NIGHTGAUGE_ALLOW,
+  openCodeProviderEnv,
+  openCodeWithholdsNightgaugeEnv,
+} from "./opencodeCatalog.js";
+
+export { OPENCODE_NIGHTGAUGE_ALLOW, openCodeWithholdsNightgaugeEnv };
 
 /**
  * System/runtime variables a spawned CLI needs to function. Notably PATH (to
@@ -152,7 +158,10 @@ export function curateChildEnv(
 //   - the forge variables the bash tool's `gh` and `git` need;
 //   - the variables OpenCode's catalog binds to the dispatched provider, and
 //     no other provider's;
-//   - the pipeline's own NIGHTGAUGE_* configuration;
+//   - the NIGHTGAUGE_* variables the stage and its plugin read
+//     (OPENCODE_NIGHTGAUGE_ALLOW), and no other: the namespace also holds
+//     operator secrets such as NIGHTGAUGE_LM_STUDIO_API_KEY and
+//     NIGHTGAUGE_JIRA_TOKEN;
 //   - no inherited OPENCODE_* variable at all. The OPENCODE_* names a spawn
 //     carries are the ones Nightgauge sets, from the run's config or the
 //     adapter, never the operator's OPENCODE_PERMISSION, OPENCODE_AUTO_SHARE,
@@ -324,15 +333,15 @@ const OPENCODE_ISOLATION_XDG_SET: ReadonlySet<string> = new Set(OPENCODE_ISOLATI
  * dispatched to `model` (a `<provider>/<model>` value). Decided on the name
  * alone, so nothing it withholds can be logged. Exported for the drift guard.
  *
- * `NIGHTGAUGE_OPENCODE_` is denied alongside `OPENCODE_`, not just swept in
- * by the general `NIGHTGAUGE_` prefix passthrough below: without this, a
+ * `NIGHTGAUGE_OPENCODE_` is denied alongside `OPENCODE_` explicitly, although
+ * no such name is in {@link OPENCODE_NIGHTGAUGE_ALLOW} either: without it, a
  * nested SDK spawn (an opencode stage's own subprocess reaching for another
  * dispatch) would inherit the *parent* run's plugin path, handshake nonce and
  * sentinel path from `process.env` — letting a nested child write to the
  * parent run's own sentinel file — instead of minting its own through its own
  * `runConfigProvider` call, the only legitimate source of these names.
  */
-export function isOpenCodeChildEnvAllowed(key: string, model: string): boolean {
+export function isOpenCodeChildEnvAllowed(key: string, model: string, configContent = ""): boolean {
   if (
     key.startsWith("OPENCODE_") ||
     key.startsWith("NIGHTGAUGE_OPENCODE_") ||
@@ -344,7 +353,7 @@ export function isOpenCodeChildEnvAllowed(key: string, model: string): boolean {
     SYSTEM_ALLOW.has(key) ||
     OPENCODE_FORGE_ALLOW.has(key) ||
     OPENCODE_TOOL_ALLOW.has(key) ||
-    key.startsWith("NIGHTGAUGE_") ||
+    (key.startsWith("NIGHTGAUGE_") && !openCodeWithholdsNightgaugeEnv(key, configContent)) ||
     openCodeProviderEnv(model).includes(key)
   );
 }
@@ -355,17 +364,20 @@ export function isOpenCodeChildEnvAllowed(key: string, model: string): boolean {
  * own isolation variables and per-run config, which replace any inherited
  * value of the same name. A `runEnv` name outside the run's variables
  * ({@link isOpenCodeRunEnvName}) is not applied; the adapter refuses such a
- * run config before it gets here. Pure: mutates neither input.
+ * run config before it gets here. `configContent` is the run's per-run config,
+ * whose `{env:NAME}` references keep those NIGHTGAUGE_* variables; it defaults
+ * to `runEnv`'s OPENCODE_CONFIG_CONTENT. Pure: mutates neither input.
  */
 export function curateOpenCodeChildEnv(
   parentEnv: NodeJS.ProcessEnv,
   model: string,
-  runEnv: Readonly<Record<string, string>>
+  runEnv: Readonly<Record<string, string>>,
+  configContent: string = runEnv[OPENCODE_CONFIG_CONTENT_ENV] ?? ""
 ): NodeJS.ProcessEnv {
   const curated: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(parentEnv)) {
     if (value === undefined) continue;
-    if (isOpenCodeChildEnvAllowed(key, model)) curated[key] = value;
+    if (isOpenCodeChildEnvAllowed(key, model, configContent)) curated[key] = value;
   }
   for (const [key, value] of Object.entries(runEnv)) {
     if (isOpenCodeRunEnvName(key)) curated[key] = value;

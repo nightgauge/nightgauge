@@ -90,7 +90,11 @@ import { getInitialExecutionMode } from "../utils/nightgaugeConfig";
 import { createStreamOutputHandler } from "../utils/streamOutputHandler";
 import { classifyTerminalKindForSignal } from "../services/terminalKindSignal";
 import { createPhaseTracker } from "../utils/phaseTracker";
-import { isStreamJsonEnvelope, isEnvelopeFragment } from "../utils/streamJsonFilter";
+import {
+  isStreamJsonEnvelope,
+  isEnvelopeFragment,
+  stripAdapterActivityLines,
+} from "../utils/streamJsonFilter";
 import { ensureGitignore, ensureWorkspaceGitignores } from "../utils/ensureGitignore";
 import {
   ANY_RUNTIME_FILE,
@@ -1649,7 +1653,11 @@ export async function initializeServices(
       onSlotStageCompleted: (_slotIndex, issueNumber, stage) => {
         slotPhaseTrackers.get(issueNumber)?.completeStagePhases(stage);
       },
-      onSlotOutput: (_slotIndex, issueNumber, data, stage) => {
+      onSlotOutput: (_slotIndex, issueNumber, rawData, stage) => {
+        // The SDK CLI's liveness lines (#1657) move the idle clock and are
+        // never shown.
+        const data = stripAdapterActivityLines(rawData);
+        if (!data.trim()) return;
         // Detect phase markers in stdout for progress display (2/16 - [phase])
         if (stage) {
           const marker = parsePhaseMarker(data);

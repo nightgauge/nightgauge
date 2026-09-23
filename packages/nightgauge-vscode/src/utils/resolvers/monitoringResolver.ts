@@ -12,7 +12,7 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import type { PipelineStage } from "@nightgauge/sdk";
 import type { AuditConfig } from "@nightgauge/sdk";
-import { EFFORT_LEVELS, TIER_BANDS } from "@nightgauge/sdk";
+import { EFFORT_LEVELS, TIER_BANDS, providerFor, type Provider } from "@nightgauge/sdk";
 import { resolveConfigPathSync, logDeprecationWarning } from "../configPathResolver";
 import { readEffectiveConfigTextSync } from "../mergedConfigReader";
 import type { DefaultModel } from "./modelResolver";
@@ -20,6 +20,7 @@ import type { ClaudeEffort } from "./stageResolver";
 import type { ExecutionAdapter } from "../../config/schema";
 import { CodexModelCatalogService } from "../../services/CodexModelCatalogService";
 import type { ProgressMonitorConfig } from "../progressMonitor";
+import { isLocalExecution, isPriceableOpenCodeModel, localExecutionKey } from "../computeStageCost";
 
 // ============================================================================
 // Stall Detection (Issue #769, #1620, #2654, #2656)
@@ -1043,7 +1044,10 @@ export function getCostCapModeMultiplier(
  * @see Issue #391 — `providerPricing.ts` (the original seed-ratio derivation
  *      source) deleted; the model registry is the single pricing authority
  */
-export const DEFAULT_COST_CAP_PROVIDER_SCALE: Record<ExecutionAdapter, number> = {
+export const DEFAULT_COST_CAP_PROVIDER_SCALE: Record<
+  Exclude<ExecutionAdapter, "opencode">,
+  number
+> = {
   claude: 1.0,
   codex: 0.7,
   gemini: 0.4,
@@ -1052,11 +1056,59 @@ export const DEFAULT_COST_CAP_PROVIDER_SCALE: Record<ExecutionAdapter, number> =
   grok: 0.6,
   "lm-studio": 0.0,
   ollama: 0.0,
-  // opencode dispatches to whichever provider its configured model names, so
-  // there is no single opencode-specific cost ratio to calibrate yet — 1.0
-  // keeps it unscaled (same as claude) until per-provider data exists (#1657).
-  opencode: 1.0,
 };
+
+/**
+ * The single-provider adapter whose calibrated scale an `opencode` stage on a
+ * hosted provider borrows: the same provider, billed at the same registry
+ * rates, so the same cost ratio. A provider with no entry here (`other`, and
+ * every hosted provider no single-provider adapter serves) has no calibrated
+ * ratio and gets 1.0, the configured cap as a literal ceiling.
+ */
+const OPENCODE_PROVIDER_SCALE_ADAPTER: Partial<
+  Record<Provider, Exclude<ExecutionAdapter, "opencode">>
+> = {
+  anthropic: "claude",
+  openai: "codex",
+  xai: "grok",
+  google: "gemini",
+};
+
+/**
+ * The default cost-cap provider scale for a stage, decided by the provider of
+ * the model it runs rather than the adapter name (#1657).
+ *
+ * Every single-provider adapter has its {@link DEFAULT_COST_CAP_PROVIDER_SCALE}
+ * entry whatever the model. `opencode` is multi-provider (ADR-022), so its
+ * scale follows the `<provider>/<model>` it dispatches:
+ *   - a local provider (`lmstudio/…`, `ollama/…`) → `0.0`, the time-cap
+ *     sentinel, exactly as the lm-studio / ollama adapters;
+ *   - a hosted model the registry cannot price (`openrouter/…`, `groq/…`,
+ *     an id the registry lists under another provider) → `0.0` too: its cost
+ *     is unstamped $0, so a cost cap could never bind, and time-cap mode
+ *     bounds it by {@link getTimeCapModeStageCapMs} instead;
+ *   - a priced `anthropic/…` → Claude's scale, `openai/…` → Codex's, `xai/…`
+ *     → Grok's, `google/…` → Gemini's;
+ *   - no model → `1.0`.
+ *
+ * An `opencode` stage's usage reaches the extension only at stage end (the
+ * SDK reports it once the process exits), so for a priced hosted model the
+ * cost cap acts on the stage-end total, not mid-run.
+ *
+ * Env and config overrides are layered on top by {@link getCostCapProviderScale};
+ * this is only the default they override.
+ */
+export function costCapProviderScale(
+  adapter: ExecutionAdapter | undefined,
+  model?: string
+): number {
+  if (!adapter) return 1.0;
+  if (adapter !== "opencode") return DEFAULT_COST_CAP_PROVIDER_SCALE[adapter] ?? 1.0;
+  if (!model) return 1.0;
+  if (isLocalExecution(adapter, model) || !isPriceableOpenCodeModel(model)) return 0.0;
+  const borrowed = OPENCODE_PROVIDER_SCALE_ADAPTER[providerFor(adapter, model)];
+  return borrowed ? DEFAULT_COST_CAP_PROVIDER_SCALE[borrowed] : 1.0;
+}
 
 /**
  * Read an env-var override for the provider scale.
@@ -1078,7 +1130,8 @@ function readProviderScaleEnvOverride(adapter: ExecutionAdapter): number | undef
 }
 
 /**
- * Resolve the cost-cap provider scale for a given adapter (Issue #3229).
+ * Resolve the cost-cap provider scale for a given adapter (Issue #3229) and,
+ * for the multi-provider `opencode` adapter, the model it dispatches (#1657).
  *
  * Composes multiplicatively atop the existing model/mode multipliers in
  * {@link getEffectiveStageCostCap}.
@@ -1088,7 +1141,9 @@ function readProviderScaleEnvOverride(adapter: ExecutionAdapter): number | undef
  *      (uppercased, hyphens → underscores)
  *   2. Config `pipeline.cost_cap_provider_scale.<adapter>` (line-by-line
  *      YAML parser, mirrors {@link getCostCapModeMultiplier})
- *   3. {@link DEFAULT_COST_CAP_PROVIDER_SCALE}[adapter]
+ *   3. {@link costCapProviderScale}(adapter, model): the adapter's
+ *      {@link DEFAULT_COST_CAP_PROVIDER_SCALE} entry, or for `opencode` the
+ *      scale of the model's provider
  *   4. `1.0` for unknown adapters / undefined adapter (defensive default
  *      that preserves the configured cap as a literal ceiling)
  *
@@ -1100,10 +1155,11 @@ function readProviderScaleEnvOverride(adapter: ExecutionAdapter): number | undef
  */
 export function getCostCapProviderScale(
   adapter: ExecutionAdapter | undefined,
-  workspaceRoot?: string
+  workspaceRoot?: string,
+  model?: string
 ): number {
   if (!adapter) return 1.0;
-  const fallback = DEFAULT_COST_CAP_PROVIDER_SCALE[adapter] ?? 1.0;
+  const fallback = costCapProviderScale(adapter, model);
 
   const envOverride = readProviderScaleEnvOverride(adapter);
   if (envOverride !== undefined) return envOverride;
@@ -1297,6 +1353,27 @@ export function getStageCostCapPerProviderUsd(
 export const DEFAULT_STAGE_TIME_CAPS: Record<string, number> = {};
 
 /**
+ * The stage time cap in time-cap mode (`provider_scale = 0`) when none is
+ * configured: 4 hours, the ceiling the Go path gives an OpenCode stage on a
+ * local model (`openCodeLocalTimeoutCap`,
+ * internal/intelligence/routing/stage_timeout.go). Time-cap mode switches the
+ * cost cap off, and with {@link DEFAULT_STAGE_TIME_CAPS} empty it used to
+ * leave such a stage with no wall-clock bound at all (#1657).
+ */
+export const TIME_CAP_MODE_DEFAULT_SEC = 4 * 60 * 60;
+
+/**
+ * The time cap a stage in time-cap mode runs under: the configured
+ * {@link getStageTimeCapMs} when it is above 0, else
+ * {@link TIME_CAP_MODE_DEFAULT_SEC}. A configured 0 cannot remove the bound
+ * in this mode; configure a larger cap instead.
+ */
+export function getTimeCapModeStageCapMs(stage: string, workspaceRoot?: string): number {
+  const configured = getStageTimeCapMs(stage, workspaceRoot);
+  return configured > 0 ? configured : TIME_CAP_MODE_DEFAULT_SEC * 1000;
+}
+
+/**
  * Get the per-stage time cap (in milliseconds).
  *
  * The time cap is the fallback hard ceiling for adapters where token
@@ -1407,7 +1484,8 @@ export function getStageTimeCapMs(stage: string, workspaceRoot?: string): number
  * (no multiplier ever resurrects a disabled cap).
  *
  * `providerScale === 0` is the explicit "switch to time-based cap"
- * signal for local adapters (lm-studio, ollama); when it fires we
+ * signal for local execution (the lm-studio / ollama adapters, and an
+ * `opencode` stage whose `adapterModel` names a local provider); when it fires we
  * short-circuit `effectiveCap` to 0 and the caller routes to
  * `getStageTimeCapMs` for the hard-cap ticker.
  *
@@ -1421,7 +1499,8 @@ export function getEffectiveStageCostCap(
   modelInfo?: { model?: string; effort?: string },
   workspaceRoot?: string,
   mode?: PerformanceMode,
-  adapter?: ExecutionAdapter
+  adapter?: ExecutionAdapter,
+  adapterModel?: string
 ): {
   baseCap: number;
   scale: number;
@@ -1440,7 +1519,7 @@ export function getEffectiveStageCostCap(
       effectiveCap: 0,
     };
   }
-  const providerScale = getCostCapProviderScale(adapter, workspaceRoot);
+  const providerScale = getCostCapProviderScale(adapter, workspaceRoot, adapterModel);
   if (providerScale === 0) {
     // Explicit "switch to time-cap" signal (lm-studio / ollama). Skip
     // the model/mode multipliers entirely — they don't apply when the
@@ -2205,6 +2284,87 @@ const _calibratedStallCache = new Map<
 >();
 
 /**
+ * Pre-computed calibrated stall data for stages that run on a local model
+ * server, keyed `[workspaceRoot][executionKey][stage][mode]`, where
+ * `executionKey` is `localExecutionKey`'s `<adapter>/<model>` (#1657).
+ * Held apart from {@link _calibratedStallCache} so a local model's samples
+ * neither consume nor pollute the flagship `(stage, mode)` bucket. Stored
+ * unfloored; {@link getCalibratedStallData} applies
+ * {@link LOCAL_PROVIDER_STALL_FLOOR} on the way out.
+ */
+const _localCalibratedStallCache = new Map<
+  string,
+  Record<string, Record<string, Partial<Record<PerformanceMode, CalibratedStallData>>>>
+>();
+
+/**
+ * The execution a stall threshold is looked up for: the adapter and the model
+ * it launches (for `opencode`, the `<provider>/<model>` passed on `-m`).
+ */
+export interface StallExecution {
+  adapter: string;
+  model: string;
+}
+
+/**
+ * Observed on opencode 1.18.30 driving LM Studio (a local Qwen3.8 27B,
+ * #1646): the first model step's cold prefill took 76 s, and decode ran at
+ * about 8 tokens per second.
+ */
+const LOCAL_OBSERVED_COLD_PREFILL_SEC = 76;
+const LOCAL_OBSERVED_DECODE_TOKENS_PER_SEC = 8;
+
+/**
+ * The output one model step may take on that server before its silence is
+ * treated as a stall: an assumption, sized for a step that writes a large
+ * file in one tool call. OpenCode prints nothing while a step generates.
+ */
+const LOCAL_STEP_OUTPUT_TOKENS = 4096;
+
+/**
+ * The stall thresholds no warn or kill threshold of a stage on a local model
+ * server may undercut (#1657), whatever calibration, config, env or the
+ * static defaults say.
+ *
+ *   - warn: one cold prefill plus decoding one {@link LOCAL_STEP_OUTPUT_TOKENS}
+ *     step at the observed rate, rounded up to 30 s — 76 s + 4096 / 8 s =
+ *     588 s → 600 s;
+ *   - kill: {@link computeKillThreshold}'s floor of three warnings — 1800 s.
+ *
+ * A disabled kill (0) stays disabled. The Nx runaway kill
+ * (`NX_RUNAWAY_KILL_MULTIPLE` × the warn threshold) still bounds a runaway
+ * local stage.
+ *
+ * The Go path has no idle stall detector to share this value with: #1646
+ * bounds a local OpenCode stage by widening its stage timeout instead
+ * (`openCodeLocalTimeoutFactor`, internal/intelligence/routing/stage_timeout.go).
+ */
+export const LOCAL_PROVIDER_STALL_FLOOR: Readonly<{ warnSec: number; killSec: number }> = (() => {
+  const warnSec = roundUpTo30s(
+    LOCAL_OBSERVED_COLD_PREFILL_SEC +
+      LOCAL_STEP_OUTPUT_TOKENS / LOCAL_OBSERVED_DECODE_TOKENS_PER_SEC
+  );
+  return Object.freeze({ warnSec, killSec: computeKillThreshold(0, warnSec) });
+})();
+
+/**
+ * Raise a warn/kill pair (ms) to {@link LOCAL_PROVIDER_STALL_FLOOR}. A kill
+ * of 0 — disabled — stays 0.
+ */
+export function applyLocalStallFloorMs(thresholds: { warnMs: number; killMs: number }): {
+  warnMs: number;
+  killMs: number;
+} {
+  return {
+    warnMs: Math.max(thresholds.warnMs, LOCAL_PROVIDER_STALL_FLOOR.warnSec * 1000),
+    killMs:
+      thresholds.killMs > 0
+        ? Math.max(thresholds.killMs, LOCAL_PROVIDER_STALL_FLOOR.killSec * 1000)
+        : 0,
+  };
+}
+
+/**
  * Round a number of seconds UP to the nearest 30-second boundary.
  *
  * @example roundUpTo30s(601) → 630  (≈ 10.5 min)
@@ -2447,6 +2607,87 @@ export async function precomputeCalibratedStallThresholds(workspaceRoot: string)
   }
 
   _calibratedStallCache.set(workspaceRoot, result);
+  _localCalibratedStallCache.set(
+    workspaceRoot,
+    await precomputeLocalStallBuckets(workspaceRoot, minRuns, result)
+  );
+}
+
+/**
+ * The per-(local execution, stage, mode) calibrated stall data (#1657). Each
+ * local execution is calibrated against its own samples only; an empty cell
+ * falls back to the same execution's `elevated` cell, else cold-starts — it
+ * never borrows a flagship cell, except an env or config override, which
+ * applies to every execution of the stage.
+ */
+async function precomputeLocalStallBuckets(
+  workspaceRoot: string,
+  minRuns: number,
+  flagship: Record<string, Partial<Record<PerformanceMode, CalibratedStallData>>>
+): Promise<Record<string, Record<string, Partial<Record<PerformanceMode, CalibratedStallData>>>>> {
+  const { StageDurationAnalyzer } = await import("../StageDurationAnalyzer");
+  let keys: string[];
+  try {
+    keys = await StageDurationAnalyzer.getLocalExecutionKeys(workspaceRoot);
+  } catch (err) {
+    console.error("[Nightgauge] precomputeCalibratedStallThresholds: local executions:", err);
+    return {};
+  }
+  const local: Record<
+    string,
+    Record<string, Partial<Record<PerformanceMode, CalibratedStallData>>>
+  > = {};
+  for (const key of keys) {
+    local[key] = {};
+    for (const stage of Object.keys(DEFAULT_STALL_THRESHOLDS)) {
+      const override = flagship[stage]?.elevated;
+      if (override && (override.source === "env" || override.source === "config")) {
+        local[key][stage] = { ...flagship[stage] };
+        continue;
+      }
+      const own: Partial<Record<PerformanceMode, CalibratedStallData>> = {};
+      for (const mode of CALIBRATION_MODES) {
+        try {
+          const stats = await StageDurationAnalyzer.getLocalStageStatsByMode(
+            workspaceRoot,
+            key,
+            stage,
+            mode,
+            30
+          );
+          if (stats && stats.count >= minRuns) {
+            const warnSec = roundUpTo30s((stats.p95_ms / 1000) * 1.5);
+            own[mode] = {
+              warnSec,
+              killSec: computeKillThreshold(stats.max_ms / 1000, warnSec),
+              source: "calibrated",
+              isColdStart: false,
+            };
+          }
+        } catch (err) {
+          console.error(
+            `[Nightgauge] precomputeCalibratedStallThresholds: failed for '${key}' stage '${stage}' mode '${mode}':`,
+            err
+          );
+        }
+      }
+      local[key][stage] = {};
+      for (const mode of CALIBRATION_MODES) {
+        local[key][stage][mode] = own[mode] ?? own.elevated ?? coldStartStallData(stage);
+      }
+    }
+  }
+  return local;
+}
+
+/** Cold start: warn at the static default, kill disabled. */
+function coldStartStallData(stage: string): CalibratedStallData {
+  return {
+    warnSec: DEFAULT_STALL_THRESHOLDS[stage],
+    killSec: 0,
+    source: "static",
+    isColdStart: true,
+  };
 }
 
 /**
@@ -2464,22 +2705,51 @@ export async function precomputeCalibratedStallThresholds(workspaceRoot: string)
  * @param workspaceRoot - Absolute path to the repository root
  * @param stage - Pipeline stage name (e.g., 'feature-dev')
  * @param mode - Performance mode (defaults to active mode resolved per workspace)
+ * Issue #1657: when `execution` runs on a local model server, the lookup
+ * reads that execution's own `(stage, mode)` bucket instead of the flagship
+ * one, cold-starting when it has none, and raises the result to
+ * {@link LOCAL_PROVIDER_STALL_FLOOR}.
+ *
  * @param _size - Reserved for future per-size calibration keying; currently ignored
+ * @param execution - The adapter and the model it launches; omitted = flagship
  * @returns Calibrated stall data or undefined if not pre-computed
  *
  * @see Issue #2654 - History-calibrated stall thresholds
  * @see Issue #3216 - Calibration bucketing by (size, mode)
+ * @see Issue #1657 - Local-provider buckets and floor
  */
 export function getCalibratedStallData(
   workspaceRoot: string,
   stage: string,
   mode?: PerformanceMode,
-  _size?: string
+  _size?: string,
+  execution?: StallExecution
 ): CalibratedStallData | undefined {
   const stageBuckets = _calibratedStallCache.get(workspaceRoot)?.[stage];
   if (!stageBuckets) return undefined;
   const resolvedMode: PerformanceMode = mode ?? getPerformanceMode(workspaceRoot);
-  return stageBuckets[resolvedMode];
+  const localKey = execution ? localExecutionKey(execution.adapter, execution.model) : undefined;
+  if (localKey === undefined) return stageBuckets[resolvedMode];
+  const data =
+    _localCalibratedStallCache.get(workspaceRoot)?.[localKey]?.[stage]?.[resolvedMode] ??
+    localFallbackStallData(stage, stageBuckets[resolvedMode]);
+  const floored = applyLocalStallFloorMs({
+    warnMs: data.warnSec * 1000,
+    killMs: data.killSec * 1000,
+  });
+  return { ...data, warnSec: floored.warnMs / 1000, killSec: floored.killMs / 1000 };
+}
+
+/**
+ * A local execution with no samples of its own: an env or config override
+ * of the stage still applies, anything else cold-starts.
+ */
+function localFallbackStallData(
+  stage: string,
+  flagship: CalibratedStallData | undefined
+): CalibratedStallData {
+  if (flagship && (flagship.source === "env" || flagship.source === "config")) return flagship;
+  return coldStartStallData(stage);
 }
 
 // ============================================================================

@@ -32,7 +32,13 @@
  * @see Issue #3009
  */
 import type { ModelEnvelope, PipelineStage } from "@nightgauge/sdk";
-import { resolveModelForAdapter, TIER_BANDS_STRONGEST_FIRST } from "@nightgauge/sdk";
+import {
+  dispatchModelFor,
+  isLocalProvider,
+  parseOpenCodeModel,
+  resolveModelForAdapter,
+  TIER_BANDS_STRONGEST_FIRST,
+} from "@nightgauge/sdk";
 import type { ClaudeEffort, DefaultModel } from "./nightgaugeConfig";
 import type { ExecutionAdapter } from "./resolvers/modelResolver";
 
@@ -338,18 +344,22 @@ export function isPerformanceMode(value: unknown): value is PerformanceMode {
  * Returns `{ model, mismatch: false }` when the registry resolves the tier;
  * the dispatcher uses this id directly.
  *
+ * For `opencode`, `configuredModel` is the operator's `opencode.model`; see
+ * {@link getAdapterModelForBand}.
+ *
  * @see docs/PERFORMANCE_MODES.md
  * @see Issue #3214
  */
 export function getModeStageAdapterModel(
   mode: PerformanceMode,
   stage: PipelineStage,
-  adapter: ExecutionAdapter
+  adapter: ExecutionAdapter,
+  configuredModel?: string
 ): AdapterModelMapping | undefined {
   if (adapter === "claude") return undefined;
   const profile = getModeStageProfile(mode, stage);
   if (!profile?.model) return undefined;
-  return getAdapterModelForBand(profile.model, adapter);
+  return getAdapterModelForBand(profile.model, adapter, configuredModel);
 }
 
 /**
@@ -360,12 +370,33 @@ export function getModeStageAdapterModel(
  * Local adapters deliberately have no registry hierarchy. They return a
  * mismatch so the dispatcher can retain the configured local model instead of
  * leaking a tier alias to the process.
+ *
+ * `opencode` serves whichever provider its model names (ADR-022), so its band
+ * is translated by the SDK's `dispatchModelFor` against `configuredModel`, the
+ * operator's `opencode.model` (`<provider>/<model>`):
+ *   - a hosted provider with a registry model in the band → that model as
+ *     `<provider>/<id>`, no mismatch;
+ *   - a local provider → a mismatch: its configured local model serves every
+ *     band, so the dispatcher keeps it and records the source as `config`;
+ *   - no configured model, or a provider with no model in the band → a
+ *     mismatch, for the same fallback.
  */
 export function getAdapterModelForBand(
   band: DefaultModel,
-  adapter: ExecutionAdapter
+  adapter: ExecutionAdapter,
+  configuredModel?: string
 ): AdapterModelMapping | undefined {
   if (adapter === "claude") return undefined;
+  if (adapter === "opencode") {
+    const configured = configuredModel ?? "";
+    if (isLocalProvider(parseOpenCodeModel(configured).provider)) {
+      return { model: band, mismatch: true };
+    }
+    const dispatched = dispatchModelFor(adapter, band, configured);
+    return dispatched.ok
+      ? { model: dispatched.model, mismatch: false }
+      : { model: band, mismatch: true };
+  }
   const resolved = resolveModelForAdapter(adapter, band);
   if (resolved) return { model: resolved.id, mismatch: false };
   return { model: band, mismatch: true };

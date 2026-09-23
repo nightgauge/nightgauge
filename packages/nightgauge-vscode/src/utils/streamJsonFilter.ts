@@ -13,6 +13,8 @@
  * @see Issue #792 - Filter raw JSON tool result envelopes
  */
 
+import { ADAPTER_ACTIVITY_MESSAGE } from "@nightgauge/sdk/dist/cli/output";
+
 /**
  * Stream-json envelope type prefixes that should be filtered from output.
  *
@@ -105,4 +107,31 @@ export function isEnvelopeFragment(line: string): boolean {
   }
 
   return FRAGMENT_PATTERNS.some((pattern) => trimmed.includes(pattern));
+}
+
+/**
+ * Whether a stdout line is the SDK stage CLI's adapter activity line (#1657):
+ * a `{"level":…,"message":"adapter activity","data":{"event":…}}` log line the
+ * CLI prints for each OpenCode step or tool call while the process runs. It
+ * exists only to move the idle clock, so nothing renders it. Keyed on the
+ * exact message and a string `data.event`, so no other log line matches.
+ */
+export function isAdapterActivityLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("{") || !trimmed.includes(ADAPTER_ACTIVITY_MESSAGE)) return false;
+  try {
+    const parsed = JSON.parse(trimmed) as { message?: unknown; data?: { event?: unknown } };
+    return parsed.message === ADAPTER_ACTIVITY_MESSAGE && typeof parsed.data?.event === "string";
+  } catch {
+    return false;
+  }
+}
+
+/** `data` without its adapter activity lines; see {@link isAdapterActivityLine}. */
+export function stripAdapterActivityLines(data: string): string {
+  if (!data.includes(ADAPTER_ACTIVITY_MESSAGE)) return data;
+  return data
+    .split("\n")
+    .filter((line) => !isAdapterActivityLine(line))
+    .join("\n");
 }

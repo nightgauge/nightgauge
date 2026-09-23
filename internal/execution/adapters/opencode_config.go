@@ -93,8 +93,9 @@ import (
 // config --json`. A caller refuses an output whose major version it does not
 // know (#1648). 1.1 added binary and plugin_version, which the SDK spawn path
 // needs to run the binary the verb vetted and to verify the plugin handshake;
-// 1.2 added run_id, so it can delete the root when the run ends.
-const OpenCodeConfigSchemaVersion = "1.2"
+// 1.2 added run_id, so it can delete the root when the run ends; 1.3 added
+// env_withhold.keep and the NIGHTGAUGE_ prefix it qualifies (#1657).
+const OpenCodeConfigSchemaVersion = "1.3"
 
 // openCodeConfigContentEnvVar is the inline config layer OpenCode merges last
 // of every layer Nightgauge does not refuse.
@@ -1360,7 +1361,7 @@ type OpenCodeRun struct {
 	Env map[string]string `json:"env"`
 	// EnvWithhold is what the spawn must not inherit: a caller removes every
 	// inherited variable it names before it adds Env, as the manager does for
-	// the Go path (OpenCodeWithholdsEnv).
+	// the Go path (OpenCodeAdapter.WithholdsEnv).
 	EnvWithhold OpenCodeEnvWithhold `json:"env_withhold"`
 	// PluginDir is where InstallNightgaugePlugin writes the plugin tree,
 	// inside the run's OpenCode config directory but deliberately NOT named
@@ -1409,19 +1410,42 @@ type OpenCodeRun struct {
 	Endpoints []string `json:"-"`
 }
 
-// OpenCodeEnvWithhold is OpenCodeWithholdsEnv for one dispatch, as data: an
-// inherited variable is withheld when its name starts with one of Prefixes
-// or is one of Names. Names are sorted.
+// OpenCodeEnvWithhold is OpenCodeAdapter.WithholdsEnv for one dispatch, as
+// data: an inherited variable is withheld when it is one of Names, or when
+// its name starts with one of Prefixes and it is not one of Keep (#1657).
+// Names and Keep are sorted.
 type OpenCodeEnvWithhold struct {
 	Prefixes []string `json:"prefixes"`
 	Names    []string `json:"names"`
+	// Keep are the names under a prefix that are not withheld: the NIGHTGAUGE_*
+	// variables the child needs (OpenCodeNightgaugeEnvAllow) and those the
+	// run's config references as {env:NAME} (OpenCodeWithholdsNightgaugeEnv).
+	Keep []string `json:"keep"`
 }
 
-// OpenCodeEnvWithholdFor is the withheld set of a dispatch to model. It holds
-// exactly the names OpenCodeWithholdsEnv withholds: every OPENCODE_* variable,
-// the provider base-URL variables, and every catalog variable of a model
-// service other than the dispatched one.
-func OpenCodeEnvWithholdFor(model string) OpenCodeEnvWithhold {
+// Withholds reports whether the set withholds an inherited variable named name.
+func (w OpenCodeEnvWithhold) Withholds(name string) bool {
+	if slices.Contains(w.Names, name) {
+		return true
+	}
+	for _, p := range w.Prefixes {
+		if strings.HasPrefix(name, p) {
+			return !slices.Contains(w.Keep, name)
+		}
+	}
+	return false
+}
+
+// openCodeConfigEnvRef matches a {env:NAME} reference in a per-run config.
+var openCodeConfigEnvRef = regexp.MustCompile(`\{env:([^}]*)\}`)
+
+// OpenCodeEnvWithholdFor is the withheld set of a dispatch to model whose
+// per-run config is configContent. It withholds exactly what
+// OpenCodeAdapter.WithholdsEnv does: every OPENCODE_* variable, the provider
+// base-URL variables, every catalog variable of a model service other than
+// the dispatched one, and every NIGHTGAUGE_* variable but the ones the child
+// needs or its config references.
+func OpenCodeEnvWithholdFor(model, configContent string) OpenCodeEnvWithhold {
 	names := slices.Clone(openCodeEndpointEnv)
 	for name := range openCodeCatalogEnvNames {
 		if OpenCodeWithholdsEnv(model, name) {
@@ -1429,7 +1453,18 @@ func OpenCodeEnvWithholdFor(model string) OpenCodeEnvWithhold {
 		}
 	}
 	slices.Sort(names)
-	return OpenCodeEnvWithhold{Prefixes: []string{openCodeWithheldPrefix}, Names: slices.Compact(names)}
+	keep := slices.Clone(OpenCodeNightgaugeEnvAllow)
+	for _, m := range openCodeConfigEnvRef.FindAllStringSubmatch(configContent, -1) {
+		if strings.HasPrefix(m[1], openCodeNightgaugePrefix) && !OpenCodeWithholdsNightgaugeEnv(m[1], configContent) {
+			keep = append(keep, m[1])
+		}
+	}
+	slices.Sort(keep)
+	return OpenCodeEnvWithhold{
+		Prefixes: []string{openCodeWithheldPrefix, openCodeNightgaugePrefix},
+		Names:    slices.Compact(names),
+		Keep:     slices.Compact(keep),
+	}
 }
 
 // PrepareOpenCodeRun builds the config for req.Run, and only when that
@@ -1539,7 +1574,7 @@ func PrepareOpenCodeRun(req OpenCodeRunRequest) (*OpenCodeRun, error) {
 		SchemaVersion: OpenCodeConfigSchemaVersion,
 		ConfigContent: built.Content,
 		Env:           env,
-		EnvWithhold:   OpenCodeEnvWithholdFor(req.Run.Model),
+		EnvWithhold:   OpenCodeEnvWithholdFor(req.Run.Model, built.Content),
 		PluginDir:     filepath.Join(root, "config", "opencode", "nightgauge-plugin"),
 		RunDir:        root,
 		Home:          req.Home,
