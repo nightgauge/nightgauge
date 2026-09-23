@@ -16,6 +16,46 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **The VS Code extension runs `opencode` stages (#1657).** Choosing
+  OpenCode used to fall through to the Codex prerequisites and launch. It
+  now needs `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1`, `opencode` on `PATH`, the
+  Nightgauge binary for `nightgauge opencode config`, and the SDK CLI with
+  `node`, `git` and `gh`. Each missing one refuses the stage with a message
+  that says what to fix. Interactive mode refuses OpenCode as headless-only,
+  because ADR-022 records no interactive decision. The chat-only adapter
+  refusal now builds its list of agentic adapters from the SDK registry.
+  - **Model.** The stage runs the model it names when that is already a
+    `<provider>/<model>`. A band is translated through the SDK's
+    `dispatchModelFor` against `opencode.model`. A local configured model
+    serves every band, so the run keeps it and records the source as
+    `config`. The model reaches the SDK adapter as `NIGHTGAUGE_MODEL`.
+  - **Environment.** The spawn env drops every inherited `OPENCODE_*` and
+    `NIGHTGAUGE_OPENCODE_*` variable, and every variable OpenCode's provider
+    catalog binds to a provider other than the dispatched one. The forge
+    tokens stay. Inherited `XDG_*` stays at this layer, because the
+    `nightgauge opencode config` run reads it to pin the operator's tools
+    back. The SDK then replaces all four XDG directories for the `opencode`
+    process.
+  - **Cost.** `computeStageCost` decides locality by the provider of the
+    model (`isLocalExecution`). `lmstudio/claude-sonnet-5` is a stamped $0.
+    `anthropic/claude-sonnet-5` is priced as the claude adapter's
+    `claude-sonnet-5`. A hosted model the registry cannot price is unstamped
+    even when the run reported 0. The cost figure in the stream is never
+    used for `opencode`.
+  - **Cost cap.** The cost-cap provider scale follows the model's provider
+    through `costCapProviderScale(adapter, model)`. A local provider gets 0.0
+    (time-cap mode). `anthropic`, `openai`, `xai` and `google` take the claude,
+    codex, grok and gemini scales, and any other provider gets 1.0. The flat
+    `opencode: 1.0` default is gone, and
+    `NIGHTGAUGE_COST_CAP_PROVIDER_SCALE_OPENCODE` still overrides.
+  - **Stall thresholds.** A stage on a local model server is calibrated in
+    its own `<adapter>/<model>` bucket. Its samples never enter a flagship
+    `(stage, mode)` bucket. Its warn and kill thresholds are never below
+    `LOCAL_PROVIDER_STALL_FLOOR` (600 s / 1800 s), which is derived from the
+    observed 76 s cold prefill and ~8 tok/s decode on opencode 1.18.30 with
+    LM Studio. A disabled kill stays disabled, and the Nx runaway kill still
+    bounds the stage.
+
 - **feature-dev runs as bounded sub-sessions on small context windows
   (#1651).** When the dispatch model's resolved window is known and below
   200,000 tokens (ADR-023 Q7, amended with the concrete policy), the Go

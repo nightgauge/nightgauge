@@ -171,6 +171,16 @@ import {
 // arriving over the IPC wire. A pin the schema does not recognise falls back to
 // local resolution rather than failing the stage on a typo.
 import { ExecutionAdapterSchema } from "../config/schema";
+import { isOpenCodeSwitchOn, openCodeGateMessage } from "./openCodeExperimentalGate";
+import { getOpenCodeModel } from "./resolvers/modelResolver";
+import { applyLocalStallFloorMs } from "./resolvers/monitoringResolver";
+import { isLocalExecution } from "./computeStageCost";
+// OpenCode's provider catalog (#1637): the variables it binds to each provider
+// key. Not on the SDK's package entry point, so imported from its build.
+import {
+  OPENCODE_CATALOG_ENV,
+  openCodeProviderEnv,
+} from "@nightgauge/sdk/dist/cli/adapters/opencodeCatalog";
 // Direct resolver import (#569): the registry effort gate for non-Claude
 // adapter dispatches. Deliberately not routed through the nightgaugeConfig
 // barrel — this is dispatch preflight, not configuration reading.
@@ -3171,6 +3181,69 @@ export function resolveSdkCliPath(workspaceRoot?: string): string | null {
   );
 }
 
+/**
+ * The adapters a pipeline stage may be dispatched to: every execution adapter
+ * the SDK registry reports as driving an agentic tool loop, in enum order.
+ * Derived, never hand-typed, so a new agentic adapter appears in the
+ * remediation the moment it is registered.
+ */
+export function agenticPipelineAdapters(): ExecutionAdapter[] {
+  return ExecutionAdapterSchema.options.filter((a) => isAgenticAdapter(a));
+}
+
+/**
+ * The `opencode` prerequisites (#1657). Each failure names its remedy:
+ *   - interactive mode: ADR-022 records no interactive decision, so OpenCode
+ *     runs headless only (the Grok message shape);
+ *   - the experimental switch (ADR-022 § The enable gate) is off;
+ *   - `opencode` is not on PATH;
+ *   - the Nightgauge Go binary is not resolvable: the SDK adapter builds every
+ *     stage's per-run config by running `nightgauge opencode config` (#1648),
+ *     from NIGHTGAUGE_BIN or `nightgauge` on PATH, and fails the stage
+ *     without it;
+ *   - the SDK stage CLI, `node`, `git` or `gh` is missing, as for the other
+ *     SDK-path adapters.
+ */
+function validateOpenCodePrerequisites(
+  workspaceRoot: string,
+  mode: SkillExecutionMode
+): string | null {
+  if (mode === "interactive") {
+    return (
+      "OpenCode adapter supports headless execution only. " +
+      'Use "Nightgauge: Run Stage" (headless) or switch adapter back to Claude for interactive mode.'
+    );
+  }
+  if (!isOpenCodeSwitchOn()) {
+    return openCodeGateMessage();
+  }
+  if (!commandExists("opencode")) {
+    return (
+      "OpenCode adapter selected, but the `opencode` CLI is not available in PATH. " +
+      "Install OpenCode (https://opencode.ai), then reopen VS Code, or switch adapter."
+    );
+  }
+  if (!resolveBinaryDiscoveryEnv().NIGHTGAUGE_BIN && !commandExists("nightgauge")) {
+    return (
+      "OpenCode adapter needs the Nightgauge binary to build each stage's OpenCode config " +
+      "(`nightgauge opencode config`), but it was not found: set nightgauge.backend.binaryPath, " +
+      "set NIGHTGAUGE_GO_BINARY_PATH, or put `nightgauge` on PATH."
+    );
+  }
+  if (!resolveSdkCliPath(workspaceRoot)) {
+    return "Packaged Nightgauge SDK CLI not found. Reinstall the Nightgauge extension.";
+  }
+  for (const requiredTool of ["node", "git", "gh"]) {
+    if (!commandExists(requiredTool)) {
+      return (
+        `OpenCode adapter requires \`${requiredTool}\` in PATH. ` +
+        `Install it or switch adapter to Claude.`
+      );
+    }
+  }
+  return null;
+}
+
 export function validateAdapterPrerequisites(
   adapter: ExecutionAdapter,
   workspaceRoot: string,
@@ -3186,8 +3259,13 @@ export function validateAdapterPrerequisites(
     return (
       `The ${adapter} adapter is chat-completion-only (no agentic tool loop): ` +
       `pipeline stages cannot edit files, run shell commands, or call gh through it. ` +
-      'Switch to an agentic adapter (claude, codex, gemini, copilot, grok) via "Nightgauge: Switch Execution Adapter".'
+      `Switch to an agentic adapter (${agenticPipelineAdapters().join(", ")}) via ` +
+      '"Nightgauge: Switch Execution Adapter".'
     );
+  }
+
+  if (adapter === "opencode") {
+    return validateOpenCodePrerequisites(workspaceRoot, mode);
   }
 
   if (adapter === "claude") {
@@ -3681,6 +3759,53 @@ export function resolvePluginRoot(): string | undefined {
   }
 
   return undefined;
+}
+
+/**
+ * The forge credentials an OpenCode stage keeps whatever its provider: its
+ * bash tool runs `gh` and `git` (the SDK's OPENCODE_FORGE_ALLOW). OpenCode's
+ * catalog binds GITHUB_TOKEN to `github-copilot`, so without this exemption
+ * the stage would lose its forge token.
+ */
+const OPENCODE_FORGE_ENV: ReadonlySet<string> = new Set(["GH_TOKEN", "GITHUB_TOKEN", "GH_HOST"]);
+
+/**
+ * Remove from an `opencode` stage's spawn env what the operator's environment
+ * must not hand it (Issue #1657). A spread can override a name but never
+ * remove one, so this runs after composition, like the run-identity
+ * reconcile. Mutates `env`:
+ *
+ *   - every `OPENCODE_*` and `NIGHTGAUGE_OPENCODE_*` variable. The stage's
+ *     OpenCode variables come only from `nightgauge opencode config` (#1648),
+ *     which the SDK adapter runs per stage; an inherited OPENCODE_PERMISSION,
+ *     OPENCODE_CONFIG_CONTENT or plugin handshake variable is the operator's
+ *     or an outer run's;
+ *   - every variable OpenCode's provider catalog binds to a provider other
+ *     than `model`'s, so no other provider's key is in reach. The forge
+ *     credentials stay;
+ *   - `NIGHTGAUGE_MODEL` when there is no dispatch model, so an inherited
+ *     value never becomes one.
+ *
+ * `XDG_*` is NOT removed here, and deliberately: this env is the SDK stage
+ * CLI's, not OpenCode's. The `nightgauge opencode config` run it starts reads
+ * the operator's XDG_CONFIG_HOME / XDG_CACHE_HOME to find the machine-tier
+ * config and to pin gh's config directory, the Go build cache and (with
+ * `opencode.inherit_user_config`) the operator's OpenCode config back to where
+ * they resolve outside the run. The SDK then replaces all four XDG
+ * directories, and drops every inherited `OPENCODE_*`, when it builds the
+ * `opencode` process's env (`curateOpenCodeChildEnv`).
+ */
+export function reconcileOpenCodeSpawnEnv(env: NodeJS.ProcessEnv, model: string | undefined): void {
+  const keep = new Set(model ? openCodeProviderEnv(model) : []);
+  for (const name of Object.keys(env)) {
+    if (name.startsWith("OPENCODE_") || name.startsWith("NIGHTGAUGE_OPENCODE_")) delete env[name];
+  }
+  for (const names of Object.values(OPENCODE_CATALOG_ENV)) {
+    for (const name of names) {
+      if (!keep.has(name) && !OPENCODE_FORGE_ENV.has(name)) delete env[name];
+    }
+  }
+  if (!model) delete env.NIGHTGAUGE_MODEL;
 }
 
 /**
@@ -4788,6 +4913,43 @@ export function runStageSkillHeadless(
     callbacks?.onStderr?.(`[skillRunner] LM Studio timeout: ${lmStudioTimeoutMs}ms\n`);
   }
 
+  // OpenCode model (Issue #1657). The SDK OpenCodeAdapter the stage CLI runs
+  // reads its `<provider>/<model>` from NIGHTGAUGE_MODEL and passes the same
+  // value to `nightgauge opencode config --model` (#1648), so this is the one
+  // value the per-run config and `-m` are both built from. A stage model that
+  // already names a provider is dispatched as is; a band is translated through
+  // the SDK resolver against `opencode.model`, and a band a local provider
+  // cannot honour keeps the configured local model, recorded as `config`.
+  const opencodeEnv: Record<string, string> = {};
+  if (adapter === "opencode") {
+    const configuredOpenCodeModel = getOpenCodeModel(workspaceRoot) ?? "";
+    let openCodeModel: string;
+    let modelSourceLabel = "";
+    const bandMapping = requestedBand
+      ? getAdapterModelForBand(requestedBand, adapter, configuredOpenCodeModel)
+      : undefined;
+    if (requestedModel.includes("/")) {
+      openCodeModel = requestedModel;
+    } else if (bandMapping && !bandMapping.mismatch) {
+      openCodeModel = bandMapping.model;
+      modelSourceLabel = " (dispatched band)";
+    } else {
+      if (bandMapping?.mismatch) {
+        callbacks?.onStderr?.(
+          `[skillRunner] OpenCode cannot honor dispatched tier "${bandMapping.model}" on ` +
+            `"${configuredOpenCodeModel || "(no opencode.model)"}" — using the configured model.\n`
+        );
+      }
+      openCodeModel = configuredOpenCodeModel;
+      modelDecision.source = "config";
+    }
+    modelDecision.model = openCodeModel;
+    if (openCodeModel) opencodeEnv.NIGHTGAUGE_MODEL = openCodeModel;
+    callbacks?.onStderr?.(
+      `[skillRunner] OpenCode model: ${openCodeModel || "(unconfigured)"}${modelSourceLabel}\n`
+    );
+  }
+
   // Generate GEMINI.md for Gemini-based adapters before spawn (Issue #1055)
   if (adapter === "gemini" || adapter === "gemini-sdk") {
     try {
@@ -4968,7 +5130,9 @@ export function runStageSkillHeadless(
           ? copilotEnv.NIGHTGAUGE_COPILOT_MODEL
           : adapter === "lm-studio"
             ? lmStudioEnv.NIGHTGAUGE_LM_STUDIO_MODEL
-            : undefined) || modelDecision.model;
+            : adapter === "opencode"
+              ? opencodeEnv.NIGHTGAUGE_MODEL
+              : undefined) || modelDecision.model;
 
   // ── Worktree write containment: baseline (Issue #129) ─────────────────
   // Snapshot the dirty state of every configured workspace repo the stage does
@@ -5022,6 +5186,7 @@ export function runStageSkillHeadless(
     ...codexEnv, // Merge Codex model config env vars (Issue #1656)
     ...copilotEnv, // Merge Copilot model + auth env vars (Issue #1946)
     ...lmStudioEnv, // Merge LM Studio config env vars (Issue #2057)
+    ...opencodeEnv, // OpenCode dispatch model (Issue #1657)
     ...perRepoTokenEnv, // Merge per-repo GitHub token (Issue #2487)
     // Always inject absolute CLAUDE_PLUGIN_ROOT so hook scripts resolve correctly
     // when the active repo (e.g. acme-platform) has no claude-plugins/.
@@ -5061,6 +5226,12 @@ export function runStageSkillHeadless(
   // Mirrors composeStageEnv's reconcile on the Go side.
   if (!runId) {
     delete spawnEnv.NIGHTGAUGE_RUN_ID;
+  }
+
+  // The OpenCode stage's inherited overrides and foreign credentials go, and a
+  // spread cannot remove them (Issue #1657).
+  if (adapter === "opencode") {
+    reconcileOpenCodeSpawnEnv(spawnEnv, opencodeEnv.NIGHTGAUGE_MODEL);
   }
 
   // The dispatch's model decision, reported ONCE and synchronously before the
@@ -5255,8 +5426,16 @@ export function runStageSkillHeadless(
   // mode-aware bucketing). Thread the active performance mode so the
   // (stage, mode) bucket is consulted; size is reserved for future per-size
   // keying and is currently passed through but unused by the lookup.
+  //
+  // Issue #1657: the execution (adapter + launched model) is passed too, so a
+  // stage on a local model server reads its own bucket and never the
+  // flagship one, and gets LOCAL_PROVIDER_STALL_FLOOR.
+  const localStallExecution = isLocalExecution(adapter, launchedModel);
   const calibratedData = workspaceRoot
-    ? getCalibratedStallData(workspaceRoot, stage, getPerformanceMode(workspaceRoot))
+    ? getCalibratedStallData(workspaceRoot, stage, getPerformanceMode(workspaceRoot), undefined, {
+        adapter,
+        model: launchedModel,
+      })
     : undefined;
 
   let stallThresholdSec: number;
@@ -5296,6 +5475,25 @@ export function runStageSkillHeadless(
         calibratedData ? calibratedData.killSec : (stallThresholdMs * stallKillMultiplier) / 1000
       }s) (Issue #3484)`
     );
+  }
+
+  // A stage on a local model server: no threshold resolved above — static,
+  // calibrated, config, env or stall_idle_ms — may undercut the local floor
+  // (Issue #1657). A 27B model that takes 76 s to prefill and decodes at
+  // ~8 tok/s is slow, not stalled. A disabled kill stays disabled; the Nx
+  // runaway kill below still bounds a runaway local stage.
+  if (localStallExecution) {
+    const floored = applyLocalStallFloorMs({ warnMs: stallThresholdMs, killMs: stallKillMs });
+    if (floored.warnMs !== stallThresholdMs || floored.killMs !== stallKillMs) {
+      logStageDiagnostic(
+        `[skillRunner] Local-model stall floor for ${stage} (${launchedModel}): warn ` +
+          `${stallThresholdMs / 1000}s → ${floored.warnMs / 1000}s, kill ` +
+          `${stallKillMs / 1000}s → ${floored.killMs / 1000}s (Issue #1657)`
+      );
+    }
+    stallThresholdMs = floored.warnMs;
+    stallThresholdSec = stallThresholdMs / 1000;
+    stallKillMs = floored.killMs;
   }
 
   // Idle budget after ANY rate-limit signal before the quota fast-fail fires
@@ -5343,7 +5541,9 @@ export function runStageSkillHeadless(
     adapter === "claude" ? { model: modelDecision.model, effort: modelDecision.effort } : undefined,
     workspaceRoot,
     performanceModeForCostCap,
-    adapter
+    adapter,
+    // opencode's provider scale follows the model it launches (#1657).
+    adapter === "opencode" ? launchedModel : undefined
   );
   let costCapExceeded = false;
   let costAtTerminationUsd = 0;

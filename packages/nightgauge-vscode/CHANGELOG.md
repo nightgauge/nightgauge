@@ -11,6 +11,13 @@ and this project adheres to
 
 ### Changed
 
+- OpenCode stages now run from the editor. They check the experimental
+  switch, the `opencode` CLI and the Nightgauge binary before launch, and
+  refuse interactive mode. The model comes from the stage or
+  `opencode.model`. Stage cost, the cost cap and stall thresholds follow the
+  model's provider. A local model costs $0, uses time-cap mode, and gets its
+  own stall calibration with a floor that its thresholds never go below.
+
 - Stages routed to the `opus` band now run Claude Opus 5.5
   (`claude-opus-5-5`), and stage cost is priced at its $4/$20 per MTok rates.
 

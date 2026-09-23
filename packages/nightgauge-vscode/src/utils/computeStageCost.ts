@@ -46,7 +46,14 @@
  * @see Issue #3228 — Unified `computeStageCost` across all adapters
  */
 
-import { computeCostUsd, getModelDescriptor, isKnownModel } from "@nightgauge/sdk";
+import {
+  computeCostUsd,
+  getModelDescriptor,
+  isKnownModel,
+  isLocalProvider,
+  parseOpenCodeModel,
+  providerFor,
+} from "@nightgauge/sdk";
 import type { ExecutionAdapter } from "../config/schema";
 
 /**
@@ -99,18 +106,62 @@ function round6(n: number): number {
 }
 
 /**
- * Adapters whose model catalog is user-defined and therefore unknowable to the
- * registry. Their model string must NEVER reach a registry lookup: a user who
- * names their local checkpoint `claude-sonnet-5` would otherwise be billed at
+ * True when the stage's model runs on a server the operator runs, so no
+ * provider bills it. Decided by the PROVIDER OF THE MODEL, not the adapter
+ * name: `lm-studio` and `ollama` serve only local models, and an `opencode`
+ * stage is local exactly when its `<provider>/<model>` names a local provider
+ * key (`lmstudio/…`, `ollama/…`; ADR-022 § 1, § 3). Every other adapter, and
+ * an `opencode` model whose provider is hosted or unrecognized (`other`), is
+ * not local. The SDK's `providerFor` / `isLocalProvider` are the single
+ * authority, mirroring the Go `models.ProviderFor` / `models.IsLocalProvider`.
+ *
+ * A local model string must NEVER reach a registry lookup: a user who names
+ * their local checkpoint `claude-sonnet-5` would otherwise be billed at
  * Anthropic's frontier rates for inference that costs them nothing.
  */
-function isLocalAdapter(adapter: ExecutionAdapter): boolean {
-  return adapter === "lm-studio" || adapter === "ollama";
+export function isLocalExecution(adapter: ExecutionAdapter | string, model: string): boolean {
+  return isLocalProvider(providerFor(adapter, model));
+}
+
+/**
+ * The key a stage that ran on a local model server is bucketed under for
+ * stall calibration, or `undefined` for every other stage (#1657).
+ *
+ * A local model is a different machine from the flagship providers: a 27B
+ * model on LM Studio takes 76 s to prefill and decodes at ~8 tok/s, so its
+ * stage durations say nothing about a Claude stage's and vice versa. Local
+ * stages are therefore bucketed by `<adapter>/<model>` — the `-m` value an
+ * `opencode` stage was dispatched with — and never enter the flagship
+ * `(stage, mode)` buckets.
+ *
+ * Locality is the provider of the model (`isLocalExecution`). A recorded
+ * `model_provider` (ADR-022 § 2, the provider that actually served the stage)
+ * wins over the one derived from the model string when present.
+ */
+export function localExecutionKey(
+  adapter: string | undefined,
+  model: string | undefined,
+  modelProvider?: string
+): string | undefined {
+  if (!adapter || !model) return undefined;
+  const local =
+    modelProvider !== undefined ? isLocalProvider(modelProvider) : isLocalExecution(adapter, model);
+  return local ? `${adapter}/${model}` : undefined;
+}
+
+/**
+ * The registry id a stage's model is priced as. An `opencode` model is
+ * `<provider>/<id>` and the registry keys by bare id (ADR-022 § 2), so
+ * `anthropic/claude-sonnet-5` prices as `claude-sonnet-5` — the same rate card
+ * the claude adapter's stage uses. Every other adapter launches a bare id.
+ */
+function registryPricingId(adapter: ExecutionAdapter, model: string): string {
+  return adapter === "opencode" ? parseOpenCodeModel(model).bareId : model;
 }
 
 /**
  * Registry cost for a stage, or `null` when the registry does not know this
- * model id (or the adapter is local, where no id is meaningful).
+ * model id (or the model runs locally, where no id is meaningful).
  *
  * The `isKnownModel` gate is load-bearing, not defensive: `getModelDescriptor`
  * — which `computeCostUsd` calls — falls back to a TIER-band lookup when the
@@ -124,10 +175,11 @@ function computeFromRegistry(
   model: string,
   tokens: StageCostTokens
 ): number | null {
-  if (isLocalAdapter(adapter)) return null;
-  if (!isKnownModel(model)) return null;
+  if (isLocalExecution(adapter, model)) return null;
+  const id = registryPricingId(adapter, model);
+  if (!isKnownModel(id)) return null;
   return round6(
-    computeCostUsd(model, {
+    computeCostUsd(id, {
       input: tokens.input,
       output: tokens.output,
       cacheRead: tokens.cache_read,
@@ -191,6 +243,9 @@ export function computeStageCost(
   tokens: StageCostTokens,
   native?: number
 ): StageCostResult {
+  if (adapter === "opencode") {
+    return computeOpenCodeStageCost(model, tokens);
+  }
   if (native !== undefined && native > 0) {
     const computed = computeFromRegistry(adapter, model, tokens);
     if (computed !== null && computed > 0) {
@@ -221,8 +276,8 @@ export function computeStageCost(
   const computed = computeFromRegistry(adapter, model, tokens);
   if (computed === null) {
     // Two distinct populations land here, and `'unknown'` is right for both:
-    //   - local adapters (lm-studio/ollama), whose catalog the registry
-    //     deliberately does not carry; and
+    //   - local-adapter stages (lm-studio/ollama), whose catalog the
+    //     registry deliberately does not carry; and
     //   - any model id the registry has never heard of.
     // Both are "$0 because we cannot price it", NOT "$0 because it is free".
     // Copilot is the opposite case and does NOT land here: its registry
@@ -232,5 +287,28 @@ export function computeStageCost(
     // information than `'unknown'`.
     return { cost_usd: 0, source: "unknown" };
   }
+  return { cost_usd: computed, source: "computed" };
+}
+
+/**
+ * An `opencode` stage's cost (ADR-022 § 3). The stream's own cost figure is
+ * never read: OpenCode's `cost` comes from its catalog, not the bill, and it
+ * reads 0 for a provider it cannot price, so a native value is ignored here
+ * whatever it is.
+ *
+ *   - A local provider (`lmstudio/…`, `ollama/…`) is a stamped zero
+ *     (`'computed'`, like Copilot's registry zero): no provider bills it, and
+ *     its model id — even one spelled `claude-sonnet-5` — never reaches the
+ *     registry.
+ *   - A hosted model the registry knows is priced as its bare id, the same
+ *     cost the model's own vendor adapter books.
+ *   - Anything else — a hosted model the registry cannot price, an `other`
+ *     provider — is unstamped (`'unknown'`, $0): an unknown cost is never
+ *     booked as a stamped zero, even when the run reported 0.
+ */
+function computeOpenCodeStageCost(model: string, tokens: StageCostTokens): StageCostResult {
+  if (isLocalExecution("opencode", model)) return { cost_usd: 0, source: "computed" };
+  const computed = computeFromRegistry("opencode", model, tokens);
+  if (computed === null) return { cost_usd: 0, source: "unknown" };
   return { cost_usd: computed, source: "computed" };
 }
