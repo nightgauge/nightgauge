@@ -318,12 +318,27 @@ EOF
 
 ### Gitignore Entry
 
-Ensure `.nightgauge/config.local.yaml` is gitignored. Nightgauge's
-`smart-setup` skill automatically adds this, but you can add it manually:
+`.nightgauge/config.local.yaml` is ignored by the generated
+`.nightgauge/.gitignore` (its `/config.local.yaml` rule), so there is nothing to
+add by hand.
 
-```bash
-echo ".nightgauge/config.local.yaml" >> .gitignore
-```
+That file is generator-owned. It carries a `nightgauge-gitignore-version:`
+marker, and when the template's version is newer:
+
+- An **untracked** copy is rewritten: everything above its
+  `Local additions (kept on upgrade)` line is replaced with the current
+  template, and every line below that marker is kept. That section is the one
+  place to put this repository's own rules for `.nightgauge/` paths (for
+  example, un-ignoring `/knowledge/`, as
+  [KNOWLEDGE_BASE.md](KNOWLEDGE_BASE.md#adopting-the-knowledge-base-in-an-existing-repository)
+  describes). An edit above the marker is lost at the next version bump.
+- A **committed** copy is never edited. The current rules are written per
+  machine to the repository's `info/exclude`, in a block between
+  `# nightgauge:begin nightgauge-gitignore` and its matching `end` line, and
+  the committed file is upgraded by pull request.
+
+Rules for paths outside `.nightgauge/` belong in the repository-root
+`.gitignore`, which Nightgauge never edits.
 
 ### Viewing Local Overrides
 

@@ -10,8 +10,11 @@
  * with a change nothing committed, and discarded the repository's own rules.
  * Its current rules are applied per machine through info/exclude instead
  * (./localGitExclude), and the committed file is upgraded by pull request.
- * Lines below LOCAL_ADDITIONS_MARKER belong to the repository and survive
- * every rewrite.
+ * The file is generator-owned: a rewrite replaces everything above
+ * LOCAL_ADDITIONS_MARKER wholesale, so an edit there is lost at the next
+ * version bump. Lines below the marker belong to the repository and survive
+ * every rewrite; that section is where a repository opts back in to paths the
+ * template ignores (docs/KNOWLEDGE_BASE.md un-ignores /knowledge/ there).
  */
 
 import * as fs from "node:fs/promises";

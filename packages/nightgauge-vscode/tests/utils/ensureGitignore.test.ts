@@ -253,6 +253,33 @@ describe("ensureGitignore on a git checkout (#1875)", () => {
     expect(fs.existsSync(path.join(root, ".nightgauge", "plans", ".gitkeep"))).toBe(false);
   });
 
+  it("ignores plans and knowledge by default, and the documented opt-in commits knowledge", async () => {
+    // #1090. Plans are per-run exhaust (docs/ARCHITECTURE.md § Cleanup deletes
+    // them at merge, with no git history behind them), and the knowledge tree
+    // is ignored unless the repository opts in below the Local additions
+    // marker, exactly as docs/KNOWLEDGE_BASE.md step 5 instructs.
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "ng-optin-"));
+    git(root, "init", "-q");
+    await ensureGitignore(root);
+    const ignorePath = path.join(root, ".nightgauge", ".gitignore");
+    await fsp.mkdir(path.join(root, ".nightgauge", "knowledge"), { recursive: true });
+    await fsp.writeFile(path.join(root, ".nightgauge", "knowledge", "index.md"), "# k\n");
+    await fsp.writeFile(path.join(root, ".nightgauge", "plans", "7-x.md"), "plan\n");
+
+    const status = () =>
+      git(root, "status", "--porcelain", "--untracked-files=all")
+        .split("\n")
+        .filter(Boolean)
+        .map((l) => l.slice(3));
+    expect(status()).not.toContain(".nightgauge/plans/7-x.md");
+    expect(status()).not.toContain(".nightgauge/knowledge/index.md");
+    expect(status()).toContain(".nightgauge/plans/.gitkeep");
+
+    await fsp.appendFile(ignorePath, "!/knowledge/\n/knowledge/.recall-cache/\n");
+    expect(status()).toContain(".nightgauge/knowledge/index.md");
+    expect(status()).not.toContain(".nightgauge/plans/7-x.md");
+  });
+
   it("keeps local additions when it rewrites an untracked older file", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "ng-untracked-"));
     const old = renderGeneratedGitignore()

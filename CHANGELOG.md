@@ -471,6 +471,16 @@ create --body-file` call, so the compact profile (and its tests) pin
 
 ### Fixed
 
+- **The docs now agree with what the generated `.nightgauge/.gitignore`
+  ignores (#1090).** `docs/ARCHITECTURE.md` no longer claims the plan deleted
+  at merge is "preserved in git history": `plans/*` is ignored, so that delete
+  is final, and a decision worth keeping belongs in the knowledge base's
+  `decisions.md`. The workspace-level section of `docs/KNOWLEDGE_BASE.md` no
+  longer tells you to add an ignore rule the template already carries; it
+  points at the same `Local additions` opt-in as repo-level knowledge.
+  `docs/CONFIGURATION.md` states that the file is generator-owned: an edit
+  above the `Local additions` line is replaced at the next version bump.
+
 - **`branch-merged-check.sh` no longer calls an update-branch merge KEEP under
   load.** The parent-of-merged-head test piped `printf` into `grep -qx` under
   `pipefail`; when `grep` exited at the first match, `printf` took SIGPIPE and
