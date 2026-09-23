@@ -53,6 +53,38 @@ func TestWorkTreeFingerprint_ContentNotPathSet(t *testing.T) {
 	}
 }
 
+// A consumer repo whose own .gitignore ignores `.nightgauge/` wholesale made
+// `git add -A -- . :(exclude).nightgauge` exit 1 (git 2.54), so every
+// sub-session step failed as unproven. The fingerprint must work there too.
+func TestWorkTreeFingerprint_BookkeepingDirIgnoredByTheRepo(t *testing.T) {
+	dir := gitRepo(t)
+	write := func(rel, body string) {
+		t.Helper()
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(".gitignore", ".nightgauge/\n")
+	write(".nightgauge/pipeline/dev-1.json", "{}")
+	before, err := WorkTreeFingerprint(dir)
+	if err != nil {
+		t.Fatalf("WorkTreeFingerprint with .nightgauge/ ignored by the repo: %v", err)
+	}
+	write(".nightgauge/pipeline/dev-2.json", "{}")
+	write(".claude/settings.local.json", "{}")
+	if fp, err := WorkTreeFingerprint(dir); err != nil || fp != before {
+		t.Errorf("bookkeeping moved the fingerprint (err %v)", err)
+	}
+	write("feature.go", "package x\n")
+	if fp, err := WorkTreeFingerprint(dir); err != nil || fp == before {
+		t.Errorf("a deliverable file did not move the fingerprint (err %v)", err)
+	}
+}
+
 // DeriveStepHandoff (#1651) stamps the step, keeps the stage's narrative, and
 // writes nothing over an empty tree.
 func TestDeriveStepHandoff(t *testing.T) {
