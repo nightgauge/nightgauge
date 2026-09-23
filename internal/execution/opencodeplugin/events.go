@@ -36,6 +36,7 @@ package opencodeplugin
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -101,18 +102,34 @@ func EventsPath(outputFile, runID string) (path string, ok bool) {
 	return filepath.Join(filepath.Dir(outputFile), EventsFileName(runID)), true
 }
 
+// eventsReadMaxBytes bounds how much of an events file ReadRunEvents reads
+// (#1653): the file's own 1 MiB cap plus the overshoot its writers may
+// legitimately leave past it — the one line that crossed the cap and the
+// single "truncated" sentinel after it, both a few hundred bytes. Whatever a
+// buggy or hostile writer put beyond that is never read, so a run dir file of
+// any size costs the reader at most this much memory.
+const eventsReadMaxBytes = eventsMaxBytes + 4<<10
+
 // ReadRunEvents parses path's JSONL events. A line that is not valid JSON,
 // or whose top level or "detail" object carries a "text" key, is dropped
 // rather than returned or treated as a read failure: the retention contract
 // is enforced by exclusion, not by failing the whole read over one bad line.
 // A missing file is not an error: ([]Event)(nil), nil.
+//
+// The path is contained before it is read (#1653): it must resolve, through
+// every symlink, to a regular file directly inside its own (resolved)
+// directory, the run dir. A path that resolves anywhere else, or to a FIFO or
+// device, is refused with an error rather than read, so a symlink planted in
+// the run dir can never point this reader at another file. At most
+// eventsReadMaxBytes are read; a trailing line the bound cut is dropped as
+// unparseable.
 func ReadRunEvents(path string) ([]Event, error) {
-	data, err := os.ReadFile(path)
+	data, err := readContainedEventsFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("opencodeplugin: reading run events %s: %w", path, err)
+		return nil, err
 	}
 
 	var events []Event
@@ -143,6 +160,43 @@ func ReadRunEvents(path string) ([]Event, error) {
 		events = append(events, ev)
 	}
 	return events, nil
+}
+
+// readContainedEventsFile reads at most eventsReadMaxBytes of path after
+// checking that it resolves to a regular file inside its own directory. A
+// missing file returns an error satisfying os.IsNotExist.
+func readContainedEventsFile(path string) ([]byte, error) {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("opencodeplugin: resolving run events %s: %w", path, err)
+	}
+	runDir, err := filepath.EvalSymlinks(filepath.Dir(path))
+	if err != nil {
+		return nil, fmt.Errorf("opencodeplugin: resolving run dir of %s: %w", path, err)
+	}
+	if filepath.Dir(resolved) != runDir {
+		return nil, fmt.Errorf("opencodeplugin: refusing to read run events %s: it resolves to %s, outside its run dir %s", path, resolved, runDir)
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return nil, fmt.Errorf("opencodeplugin: reading run events %s: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("opencodeplugin: refusing to read run events %s: it is not a regular file (%s)", path, info.Mode().Type())
+	}
+	f, err := os.Open(resolved)
+	if err != nil {
+		return nil, fmt.Errorf("opencodeplugin: reading run events %s: %w", path, err)
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, eventsReadMaxBytes))
+	if err != nil {
+		return nil, fmt.Errorf("opencodeplugin: reading run events %s: %w", path, err)
+	}
+	return data, nil
 }
 
 // detailHoldsOnlyScalars reports whether every value in detail is a scalar
