@@ -509,6 +509,46 @@ create --body-file` call, so the compact profile (and its tests) pin
   Code drops its stale copy instead of handing it to the daemon, and asks you
   to activate the current key.
 
+- **A clone set up by the CLI alone now ignores Nightgauge's runtime files
+  (#2026).** Only the VS Code extension wrote the `.nightgauge/` ignore rules,
+  so on a terminal-only or CI clone `git add -A` committed logs and pipeline
+  state and turned each `.nightgauge/worktrees/*` checkout into an embedded
+  repository. `nightgauge config init` and `nightgauge serve` now ensure them
+  the way the extension does: a missing `.nightgauge/.gitignore` is written, an
+  older untracked one is rewritten keeping its local additions, and an older
+  committed one is left alone while the current rules go to the repository's
+  `info/exclude` (the shared one in a linked worktree; a symlinked target is
+  refused). Repeat runs change nothing, a repository without
+  `.nightgauge/config.yaml` or outside git is left untouched, and
+  `config init --json` reports the outcome as `ignore_rules`. The binary embeds
+  the template from `internal/scaffold/nightgauge.gitignore`; tests on both
+  sides fail if the extension's copy, that file or the committed
+  `.nightgauge/.gitignore` differ. The template (now version 15) also ignores
+  runtime paths it missed: `worktrees/` (the scheduler's worktrees),
+  `notifications/` (the chat-command authorization log, which records user
+  identities), `graph/`, `focus.yaml`, `performance-mode.yaml`,
+  `supercharge.yaml.migrated`, `careful.lock`, `audit-queue.json`,
+  `test-scaffold-report.json` and `audit/scope-drift-stats.json`; the rest of
+  `audit/` stays tracked. A committed version-13 file picks these up per
+  machine until it is upgraded by pull request. No rule was removed. Both
+  writers now act only on an older file or `info/exclude` block (the block
+  carries its own version), so an older extension or binary never downgrades
+  a newer one, and a rewrite of an untracked file moves custom rules it finds
+  outside the `Local additions` section into it instead of dropping them.
+  `config init` ensures the rules even when it refuses to overwrite an
+  existing `config.yaml`, and a failure to do so is a warning, not an exit
+  code.
+
+- **The docs now agree with what the generated `.nightgauge/.gitignore`
+  ignores (#1090).** `docs/ARCHITECTURE.md` no longer claims the plan deleted
+  at merge is "preserved in git history": `plans/*` is ignored, so that delete
+  is final, and a decision worth keeping belongs in the knowledge base's
+  `decisions.md`. The workspace-level section of `docs/KNOWLEDGE_BASE.md` no
+  longer tells you to add an ignore rule the template already carries; it
+  points at the same `Local additions` opt-in as repo-level knowledge.
+  `docs/CONFIGURATION.md` states that the file is generator-owned: an edit
+  above the `Local additions` line is replaced at the next version bump.
+
 - **`branch-merged-check.sh` no longer calls an update-branch merge KEEP under
   load.** The parent-of-merged-head test piped `printf` into `grep -qx` under
   `pipefail`; when `grep` exited at the first match, `printf` took SIGPIPE and

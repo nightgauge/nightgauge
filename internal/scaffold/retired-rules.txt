@@ -1,0 +1,6 @@
+# Rule lines earlier .nightgauge/.gitignore templates carried and the current
+# one dropped. A rewrite does not carry them into Local additions. Append a
+# line whenever a rule leaves the template; the extension test pins its copy.
+!/release-watch/
+!/release-watch/last-seen.json
+/release-watch/reports/

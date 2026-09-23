@@ -948,8 +948,12 @@ rm -f .nightgauge/pipeline/pr-${ISSUE_NUMBER}.json
 rm -f .nightgauge/plans/${ISSUE_NUMBER}-*.md
 ```
 
-This keeps the repository clean while preserving all implementation details in
-git history.
+Plans and context files are per-run pipeline exhaust: the generated
+`.nightgauge/.gitignore` ignores `plans/*` and `pipeline/*`, so they were never
+committed and this delete is final. A decision worth keeping belongs in the
+issue's `decisions.md` in the knowledge base (see
+[KNOWLEDGE_BASE.md](KNOWLEDGE_BASE.md)) or, when it spans the codebase, in
+`docs/`, not in a plan.
 
 ### Pipeline Status Synchronization
 
