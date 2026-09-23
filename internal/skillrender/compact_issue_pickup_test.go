@@ -248,22 +248,82 @@ func TestCompactIssuePickup_CodeBlocksAreVerbatim(t *testing.T) {
 	assertProfileCodeBlocksAreVerbatim(t, "issue-pickup")
 }
 
-// fitRefRoot stands in for the checkout root when a compact render is
-// measured. The render carries the absolute skill root in every Read
-// directive (feature-dev: 27 of them), so its size — and whether it fits —
-// otherwise depends on where the repository is checked out: an 87-character
-// ADR-013 worktree path costs ~590 tokens and failed the 32768-token fit that
-// the CI runner's 39-character path passes. The reference is the CI runner's
-// root, the checkout the budget was measured against.
-const fitRefRoot = "/home/runner/work/nightgauge/nightgauge"
+// fitWorstCaseRoot stands in for the checkout root when a compact render is
+// measured. The render carries the absolute skill root in its Read
+// directives (they must be absolute: a stage runs in the target repository's
+// worktree, which has no skills/ directory), so its size grows with the
+// checkout path. The budget is therefore measured at a worst case, not at a
+// short root: #1662 passed at the CI runner's 39-character root and failed at
+// the 96-character `.nightgauge/worktrees/program-*` root the pipeline runs
+// feature-dev in. This root makes a 128-character skills root, a chosen worst
+// case.
+const fitWorstCaseRoot = "/Users/operator-long-name/Repositories/organisation-long-name/nightgauge-checkout/.nightgauge/worktrees/program-a1b2c3d4e"
 
-// fitCompact is Fit on content with the checkout root replaced by fitRefRoot,
-// so the budget tests give the same answer in every checkout.
-func fitCompact(t *testing.T, stage, content string) FitResult {
+// fitWorstCaseSkillsRootLen is the length of fitWorstCaseRoot + "/skills".
+const fitWorstCaseSkillsRootLen = 128
+
+// fitCompactAt is Fit on content with the checkout root replaced by root.
+func fitCompactAt(t *testing.T, stage, content, root string) FitResult {
 	t.Helper()
 	abs, err := filepath.Abs(realSkillsRoot(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Fit(stage, strings.ReplaceAll(content, filepath.Dir(abs), fitRefRoot), compactTestWindow)
+	return Fit(stage, strings.ReplaceAll(content, filepath.Dir(abs), root), compactTestWindow)
+}
+
+// fitCompact is Fit on content at the worst-case checkout root, so the
+// budget tests give the same answer in every checkout and no compact profile
+// fits only because the checkout it was measured in has a short path.
+func fitCompact(t *testing.T, stage, content string) FitResult {
+	t.Helper()
+	return fitCompactAt(t, stage, content, fitWorstCaseRoot)
+}
+
+// compactProfileStages are the stages that ship a compact profile.
+var compactProfileStages = []string{
+	"issue-pickup", "feature-planning", "feature-dev",
+	"feature-validate", "pr-create", "pr-merge",
+}
+
+// #1662: every compact profile fits at the worst-case checkout root, with no
+// host overlay and with the opencode host overlay (which adds tokens, and is
+// the adapter that runs small windows), and the measurement really is taken
+// there: the render carries this checkout's root (so the substitution happens
+// rather than silently doing nothing), and the substituted skills root is the
+// documented worst-case length. Each verdict logs its headroom.
+func TestCompactProfiles_FitAtWorstCaseRoot(t *testing.T) {
+	if n := len(fitWorstCaseRoot + "/skills"); n != fitWorstCaseSkillsRootLen {
+		t.Fatalf("worst-case skills root is %d characters, want %d", n, fitWorstCaseSkillsRootLen)
+	}
+	abs, err := filepath.Abs(realSkillsRoot(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, adapter := range []string{"", "opencode"} {
+		for _, stage := range compactProfileStages {
+			name := stage
+			if adapter != "" {
+				name = adapter + "/" + stage
+			}
+			t.Run(name, func(t *testing.T) {
+				compact := mustRender(t, Options{Stage: stage, Adapter: adapter, SkillsRoots: []string{abs}, Profile: ProfileCompact})
+				if compact.Profile != ProfileCompact {
+					t.Fatalf("stage %q rendered without its compact profile", stage)
+				}
+				if !strings.Contains(compact.Content, filepath.Dir(abs)) {
+					t.Fatalf("the %q compact render never names the checkout root, so the worst-case substitution measures nothing", stage)
+				}
+				got := fitCompact(t, stage, compact.Content)
+				adjusted := int(float64(got.EstimatedTokens) * safetyMargin)
+				t.Logf("%s: estimated %d, adjusted %d, budget %d, headroom %d (%.1f%%)",
+					name, got.EstimatedTokens, adjusted, got.Budget, got.Budget-adjusted,
+					100*float64(got.Budget-adjusted)/float64(got.Budget))
+				if !got.Fits {
+					t.Errorf("Fit(%s compact, %d) at a %d-character skills root = %+v, want Fits=true",
+						name, compactTestWindow, fitWorstCaseSkillsRootLen, got)
+				}
+			})
+		}
+	}
 }

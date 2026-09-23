@@ -190,6 +190,10 @@ type StageStartPayload struct {
 	// EscalatedRetry is true when this dispatch is a retry on an escalated
 	// model (the retry engine holds an override for this stage).
 	EscalatedRetry bool `json:"escalated_retry,omitempty"`
+	// SkillProfile is the render profile dispatched: "full", or "compact"
+	// when the full render did not fit the model's window and the stage's
+	// compact profile did (ADR 023 Q3/Q5).
+	SkillProfile string `json:"skill_profile,omitempty"`
 }
 
 // StageExitPayload summarizes a stage exit. Full forensics (signal, stderr

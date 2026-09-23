@@ -981,9 +981,12 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	// constraint); every other consumer reads RunResult.Cancelled instead of
 	// re-deriving it from ctx.Err() or exit code.
 	result.Cancelled = execution.stopRequested.Load()
-	// The scheduler's legacy runner projection intentionally remains untouched:
-	// stage-keyed runtime handoff lets its existing CompleteStage call consume
-	// the cache pools without widening or editing scheduler.go.
+	// The stage-keyed runtime handoff: CompleteStage merges these cache pools
+	// into the stage's record by max. The scheduler's runner projection
+	// (cliRunResultToStageResult) now also carries CacheReadTokens and
+	// CacheCreationTokens on the stage result (#1651), which is what sums
+	// feature-dev's sub-sessions and what the exit record and the other
+	// result consumers read.
 	recordRunResultTokenCounts(opts.Runtime, opts.Stage, result)
 	if fb := modelTracker.Fallback; fb != nil {
 		result.RefusalFallbackFrom = fb.OriginalModel

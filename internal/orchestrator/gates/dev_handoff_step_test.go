@@ -1,9 +1,11 @@
 package gates
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -88,5 +90,27 @@ func TestDeriveStepHandoff(t *testing.T) {
 	created := doc["files_changed"].(map[string]any)["created"].([]any)
 	if len(created) != 1 || created[0] != "a.go" {
 		t.Errorf("created = %v, want git's [a.go], not the stage's stale list", created)
+	}
+}
+
+// #1651 AC7 finding: when the last sub-session writes no handoff, the step
+// loop's DeriveStepHandoff document is the one the gate judges. The gate must
+// report that pass as derived, not as a handoff the stage authored.
+func TestFeatureDevGate_StepLoopDerivedHandoffIsReportedDerived(t *testing.T) {
+	ws := gitRepo(t)
+	writeFile(t, filepath.Join(ws, "internal", "step", "step.go"), "package step\n")
+	ctxPath := contextFilePath(ws, "dev", 1651)
+	if h, err := DeriveStepHandoff(ws, 1651, ctxPath, 3, time.Now()); err != nil || !h.Written {
+		t.Fatalf("DeriveStepHandoff: written=%v err=%v", h.Written, err)
+	}
+
+	gr := FeatureDevGate{}.Verify(context.Background(), 1651, ws)
+
+	if !gr.Passed {
+		t.Fatalf("expected pass over the derived step handoff; reason=%q evidence=%v", gr.Reason, gr.Evidence)
+	}
+	joined := strings.Join(gr.Evidence, "\n")
+	if !strings.Contains(joined, "handoff_source=derived") || strings.Contains(joined, "handoff_source=authored") {
+		t.Errorf("evidence does not report the loop's derivation as derived:\n%s", joined)
 	}
 }

@@ -279,6 +279,66 @@ create --body-file` call, so the compact profile (and its tests) pin
 
 ### Fixed
 
+- **feature-dev sub-sessions engage for local OpenCode models, local
+  dispatches are budget-checked and get the compact render, and defects a
+  live run on one found (#1651).**
+  - The window the sub-session policy and the context-budget fit check read
+    came only from the model registry, which lists no local model, so on a
+    local model it was 0: the policy never engaged and the fit check never
+    ran. An `opencode` dispatch whose model names an endpoint the
+    machine-tier `opencode:` block declares now uses the `limit.context` its
+    run config is built with: the declared value, clamped to the loaded
+    window, else the window discovered from the server.
+  - Behaviour change: with the window known, local dispatches are checked
+    against it. When a stage's full render does not fit and the stage has a
+    compact profile that does, the scheduler now dispatches the compact
+    render (ADR-023 Q3, first hop), logs it and records `skill_profile` on
+    the stage-start trace event. At a 32,768-token window every stage's full
+    render is over budget, so local runs at small windows get the compact
+    render; a stage is refused as `context_window_exceeded` only when its
+    compact render does not fit either (or it has none). feature-dev's
+    sub-sessions each start with the compact render.
+  - `cliRunResultToStageResult` dropped the executor's cache-read and
+    cache-creation tokens from the stage result. The run record still got
+    them through the executor's own hand-off, which `CompleteStage` merges
+    by max, so what was wrong was narrower: each `sub-session-K` phase
+    recorded `cache_read=0`, feature-dev's stage total took the largest
+    session's cache reads rather than the sum across sessions, and the exit
+    record, the stage-complete callback, the anomaly cost and the
+    terminating-stage booking saw 0.
+  - A failed stage's terminating-token booking, which takes input combined
+    with cache reads, was given the non-cached input by the scheduler and
+    by the IPC server, so a stage with 1,200 input and 97,000 cache-read
+    tokens booked input as -95,800. Both now pass the combined figure, and
+    the CLI's stage line reads `N in + M cache read`.
+  - The feature-dev gate reported `handoff_source=authored` for a
+    `dev-{N}.json` the step loop derived from git. A document that says
+    `handoff_source: derived` is now reported as derived.
+  - A worktree reached through `/tmp` (a symlink to `/private/tmp` on macOS)
+    had tool calls naming its `/tmp` form refused. The OpenCode
+    `external_directory` allow-list now lists the worktree, and lists it
+    and the skill and context directories as given, resolved, and re-rooted
+    on `/tmp` when `/tmp` resolves to their prefix. The project-config edit
+    deny covers those forms too.
+  - A sub-session that checked no plan task counted as progress when the
+    work tree could not be fingerprinted, so steps that changed nothing could
+    run the bound out. The loop now stops with the new terminal kind
+    `dev_step_progress_unproven` (environment class), and checks the
+    fingerprint before dispatching a step, so a broken work tree spends no
+    session; git's error goes to the scheduler log.
+
+- **Compact skill renders no longer depend on a short checkout path to fit
+  (#1662).** A compact render carries the absolute skills root in its Read
+  directives, so feature-dev's compact render fit the 32,768-token budget
+  at a 61-character skills root and failed it at the 96-character
+  `.nightgauge/worktrees/program-*` root the pipeline runs feature-dev in.
+  The feature-dev, pr-create and feature-planning compact profiles now give
+  each include's path once, at the first phase that reads it; later phases
+  refer back to it, and the supporting-files list names the files without
+  paths. The budget tests measure every compact profile, with and without
+  the opencode host overlay, at a 128-character skills root instead of
+  rewriting it to a short one.
+
 - **A cancelled or timed-out Go-direct stage now kills its whole process
   group (#1651).** `execution.Manager` spawned stages as group leaders but
   let the stage context's cancel signal only the direct child, so a process
