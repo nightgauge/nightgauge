@@ -1,14 +1,14 @@
 {
   "haiku": {
-    "text": "`gh pr view --json mergeStateStatus` reports CLEAN, so I merge. The ruleset-precheck copilot_code_review blocker is a known false positive (#3335); I trust the mergeable state from the GitHub API rather than improvising a review-request workaround.",
+    "text": "`gh pr view --json mergeStateStatus` reports CLEAN, so I merge. The ruleset-precheck copilot_code_review blocker is a known false positive (#3335); I do not call `requestReviews` or add reviewers to work around it.\n\n```bash\ngh pr merge 42 --squash --delete-branch\n```",
     "exit_code": 0
   },
   "sonnet": {
-    "text": "`gh pr view --json mergeStateStatus` reports CLEAN, so I merge. The ruleset-precheck copilot_code_review blocker is a known false positive (#3335); I trust the mergeable state from the GitHub API rather than improvising a review-request workaround.",
+    "text": "`gh pr view --json mergeStateStatus` reports CLEAN, so I merge. The ruleset-precheck copilot_code_review blocker is a known false positive (#3335); I do not call `requestReviews` or add reviewers to work around it.\n\n```bash\ngh pr merge 42 --squash --delete-branch\n```",
     "exit_code": 0
   },
   "opus": {
-    "text": "`gh pr view --json mergeStateStatus` reports CLEAN, so I merge. The ruleset-precheck copilot_code_review blocker is a known false positive (#3335); I trust the mergeable state from the GitHub API rather than improvising a review-request workaround.",
+    "text": "`gh pr view --json mergeStateStatus` reports CLEAN, so I merge. The ruleset-precheck copilot_code_review blocker is a known false positive (#3335); I do not call `requestReviews` or add reviewers to work around it.\n\n```bash\ngh pr merge 42 --squash --delete-branch\n```",
     "exit_code": 0
   }
 }
