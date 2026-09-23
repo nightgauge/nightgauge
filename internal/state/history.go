@@ -336,12 +336,13 @@ type V2StageDetail struct {
 	PeakStepInputTokens      int     `json:"peak_step_input_tokens,omitempty"`
 	ContextWindowTokens      int     `json:"context_window_tokens,omitempty"`
 	ContextWindowUtilization float64 `json:"context_window_utilization,omitempty"`
-	// CompactionCount is how many times the stage's OpenCode session
-	// compacted, counted from the run's events file (#1641, #1653). A pointer
-	// so that an observed zero is written as 0 while a stage with no events
-	// file to count (every non-OpenCode stage, and every record written
-	// before #1653) leaves the key absent: 0 would claim an observation that
-	// was never made.
+	// CompactionCount is how many compaction lines the stage's latest
+	// OpenCode attempt added to the run's events file (#1641, #1653). It is 0
+	// when that file is absent: the plugin writes a line for every
+	// session.compacted it sees, so no file means no compaction was recorded.
+	// A pointer so that 0 is written, while a stage with no events path to
+	// count (a non-OpenCode adapter, an OpenCode dispatch without an absolute
+	// output file, or any record written before #1653) leaves the key absent.
 	CompactionCount *int `json:"compaction_count,omitempty"`
 }
 

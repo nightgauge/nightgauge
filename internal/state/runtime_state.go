@@ -2188,7 +2188,8 @@ func (rs *RuntimeState) RecordStageModelIdentity(stage PipelineStage, id StageMo
 // Every field follows the empty-means-unobserved convention: a zero
 // PeakStepInputTokens means the adapter exposed no per-step prompt size, a
 // zero ContextWindowTokens means no window was known, and a nil Compactions
-// means the stage had no events file to count, never "no compactions".
+// means the stage had no events path to count. A counted 0, including a count
+// taken when the events file is absent, is recorded as 0.
 type StageContext struct {
 	PeakStepInputTokens int  `json:"peakStepInputTokens,omitempty"`
 	ContextWindowTokens int  `json:"contextWindowTokens,omitempty"`
