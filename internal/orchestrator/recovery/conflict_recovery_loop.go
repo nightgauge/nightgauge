@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
@@ -228,7 +229,17 @@ const unknownBranch = "unknown"
 // feedback signal and defers to the scheduler's rewind. No LLM, no conflict
 // resolution here.
 func (a *ConflictRecoveryLoop) Execute(ctx context.Context, failure StageFailure) RecoveryResult {
-	pipelineDir := filepath.Join(failure.Workspace, ".nightgauge", "pipeline")
+	pipelineDir, dirErr := layout.PipelineStateDir(failure.Workspace)
+	if dirErr != nil {
+		// No pipeline directory can be resolved, so no conflict context can be
+		// read: the same escalation as a missing context, naming why.
+		return RecoveryResult{
+			Action:   a.Name(),
+			Reason:   fmt.Sprintf("conflict-context-%d.json not readable — cannot re-dispatch feature-dev with conflict context: %v", failure.IssueNumber, dirErr),
+			Evidence: []string{fmt.Sprintf("pr=%d", failure.PRNumber)},
+			FollowUp: FollowUpHumanTriageRequired,
+		}
+	}
 	contextPath := filepath.Join(pipelineDir, fmt.Sprintf("conflict-context-%d.json", failure.IssueNumber))
 
 	data, err := os.ReadFile(contextPath)
@@ -899,7 +910,11 @@ func buildConflictFiles(ctx context.Context, workspace string, paths []unmergedP
 // debris that no tool ever cleans up, and its presence would misreport the
 // conflict as preserved.
 func preserveConflictEvidence(ctx context.Context, workspace string, issue, pr int, branch, baseRef string, paths []unmergedPath, op conflictOperation) (dumpDir string, err error) {
-	dir := filepath.Join(workspace, ".nightgauge", "pipeline", fmt.Sprintf("conflict-evidence-%d", issue))
+	pipelineDir, dirErr := layout.PipelineStateDir(workspace)
+	if dirErr != nil {
+		return "", fmt.Errorf("resolve evidence dir: %w", dirErr)
+	}
+	dir := filepath.Join(pipelineDir, fmt.Sprintf("conflict-evidence-%d", issue))
 	// A dump from an earlier attempt describes an earlier conflict; leaving it
 	// merged with this one would produce an artifact that is true of neither.
 	if rerr := os.RemoveAll(dir); rerr != nil {
@@ -1043,7 +1058,15 @@ func captureConflictContextFromIndex(ctx context.Context, workspace string, issu
 	if baseRef == "" {
 		baseRef = "main"
 	}
-	pipelineDir := filepath.Join(workspace, ".nightgauge", "pipeline")
+	pipelineDir, dirErr := layout.PipelineStateDir(workspace)
+	if dirErr != nil {
+		// Nothing enumerated and nowhere to write: a failed capture, with no
+		// evidence directory, so the caller does not abort the operation.
+		return conflictCapture{
+			Outcome: captureFailed,
+			Err:     fmt.Errorf("resolve pipeline dir: %w", dirErr),
+		}
+	}
 	contextPath := filepath.Join(pipelineDir, fmt.Sprintf("conflict-context-%d.json", issue))
 
 	// Enumerate the conflicted index. An ERROR here is not "no conflicting

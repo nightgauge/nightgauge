@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // epic_context_prompt.go closes the epic project-memory loop (#4096).
@@ -34,18 +36,23 @@ const (
 // epicContextFilePath returns the epic-context file path for a given workspace
 // and epic number. Single source of truth shared with the WaveOrchestrator
 // accumulator.
-func epicContextFilePath(workspaceRoot string, epicNumber int) string {
-	return filepath.Join(
-		workspaceRoot, ".nightgauge", "pipeline",
-		fmt.Sprintf("epic-context-%d.json", epicNumber),
-	)
+func epicContextFilePath(workspaceRoot string, epicNumber int) (string, error) {
+	dir, err := layout.PipelineStateDir(workspaceRoot)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, fmt.Sprintf("epic-context-%d.json", epicNumber)), nil
 }
 
 // readEpicContextFile reads + parses an epic-context file, returning nil when it
 // is absent or unparseable (never an error — a missing file just means "no
 // accumulated context yet").
 func readEpicContextFile(workspaceRoot string, epicNumber int) *epicContext {
-	data, err := os.ReadFile(epicContextFilePath(workspaceRoot, epicNumber))
+	path, err := epicContextFilePath(workspaceRoot, epicNumber)
+	if err != nil {
+		return nil
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil
 	}
