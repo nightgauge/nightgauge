@@ -1,7 +1,9 @@
 package orchestrator
 
 import (
+	"log"
 	"path/filepath"
+	"sync"
 
 	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/state"
@@ -15,13 +17,24 @@ import (
 // returns "" — every os call on "" fails with a not-exist error — rather than a
 // path relative to the process's working directory. A site that WRITES calls
 // layout.PipelineStateDir itself and handles the error.
+//
+// The resolver error is logged once per root, so an unresolvable root is
+// distinguishable from an absent file in the log without repeating on every
+// read.
 func pipelineStatePath(root, name string) string {
 	dir, err := layout.PipelineStateDir(root)
 	if err != nil {
+		if _, seen := unresolvedPipelineRoots.LoadOrStore(root, struct{}{}); !seen {
+			log.Printf("WARN orchestrator: pipeline state directory not resolved, reading as absent: %v", err)
+		}
 		return ""
 	}
 	return filepath.Join(dir, name)
 }
+
+// unresolvedPipelineRoots records the roots pipelineStatePath has already
+// logged a resolver error for.
+var unresolvedPipelineRoots sync.Map
 
 // persistPipelineState writes runtime's snapshot into root's pipeline state
 // directory. An empty or relative root is an error (layout.PipelineStateDir),

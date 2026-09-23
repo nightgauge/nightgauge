@@ -2,6 +2,7 @@ package state
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -121,6 +122,13 @@ func ActiveIssuesFromSnapshots(stateDir string) (ActiveIssues, error) {
 // classifyCandidate takes for the reconciler's table.
 func activeIssuesFromSnapshotsAt(stateDir string, now time.Time) (ActiveIssues, error) {
 	res := ActiveIssues{Issues: map[int]bool{}, Protected: map[int]string{}}
+
+	// "" is an unresolved directory (PipelineStateDir), not an empty one: an
+	// os.ReadDir("") not-exist would answer "nothing is running", and the
+	// worktree sweep deletes on that answer (#296, #2033).
+	if stateDir == "" {
+		return res, errors.New("scan runtime snapshots: no pipeline state directory resolved")
+	}
 
 	entries, err := os.ReadDir(stateDir)
 	if err != nil {
@@ -444,13 +452,27 @@ func terminalTailProtects(snap *RuntimeState, info os.FileInfo, now time.Time) b
 // for internal/state's offline store.
 //
 // It delegates to layout.PipelineStateDir, which owns the location (ADR-024).
-// That resolver rejects an empty or relative root; this wrapper keeps its
-// string-only contract for its existing callers by returning the unvalidated
-// join for such a root, exactly as before (#2033). New code calls
-// layout.PipelineStateDir and handles the error.
+// New code calls layout.PipelineStateDir and handles the error; this wrapper
+// keeps its string-only contract for its existing callers (#2033):
+//
+//   - An empty or relative root (layout.ErrRootNotAbsolute) returns the
+//     unvalidated join, exactly as before, so no existing caller changes
+//     behaviour in this behaviour-preserving step.
+//   - Any other resolver error (for example "not a git repository", once the
+//     directory moves under the git directory, #2037) returns "". The old
+//     working-tree path would name a directory the data no longer lives in, so
+//     it is never returned for such an error. Every caller treats "" as
+//     unresolved: the IPC server's callers check for "", OfflineStore.Save
+//     fails at MkdirAll, and ActiveIssuesFromSnapshots refuses "" with an
+//     error rather than answering "nothing is running".
 func PipelineStateDir(repoRoot string) string {
-	if dir, err := layout.PipelineStateDir(repoRoot); err == nil {
+	dir, err := layout.PipelineStateDir(repoRoot)
+	switch {
+	case err == nil:
 		return dir
+	case errors.Is(err, layout.ErrRootNotAbsolute):
+		return filepath.Join(repoRoot, ".nightgauge", "pipeline")
+	default:
+		return ""
 	}
-	return filepath.Join(repoRoot, ".nightgauge", "pipeline")
 }

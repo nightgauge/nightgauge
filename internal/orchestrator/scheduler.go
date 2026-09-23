@@ -4355,13 +4355,14 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			}
 		}
 		if runID == "" {
-			baseDir, dirErr := layout.PipelineStateDir(workspaceRoot)
-			if rs, err := runstate.Load(baseDir); dirErr == nil && err == nil && rs != nil && rs.RunID != "" {
-				if runstate.IsIdentity(rs.RunID) {
-					runID = rs.RunID
-				} else {
-					log.Printf("#%d: ignoring non-identity run id %q from run-state.json — minting locally (ADR-017 Decision 1)",
-						item.Number, rs.RunID)
+			if baseDir, dirErr := layout.PipelineStateDir(workspaceRoot); dirErr == nil {
+				if rs, err := runstate.Load(baseDir); err == nil && rs != nil && rs.RunID != "" {
+					if runstate.IsIdentity(rs.RunID) {
+						runID = rs.RunID
+					} else {
+						log.Printf("#%d: ignoring non-identity run id %q from run-state.json — minting locally (ADR-017 Decision 1)",
+							item.Number, rs.RunID)
+					}
 				}
 			}
 		}
