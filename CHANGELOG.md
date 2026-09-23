@@ -424,13 +424,16 @@ create --body-file` call, so the compact profile (and its tests) pin
   Repositories tree, `board.counts` and the attention sweep now use GitHub's
   REST project items, carrying relationship counts (`relationSummary`, open
   blockers only) instead of lists; status lists use REST pages plus one REST
-  list per non-empty relationship. Repository metadata (repository, then the
+  list per non-empty relationship, and an item whose counts are missing has
+  its lists read rather than being taken as unblocked. Repository metadata (repository, then the
   default branch by name, so an empty repository still reports none), the
   Dependabot alert list, the open-PR list and the open-issue count moved to
   REST too. Every one of these requests carries the ETag it last saw, from a
-  store under `~/.nightgauge/cache/github-conditional/` keyed by token
-  identity, so an unchanged answer is a 304 GitHub does not count — including
-  right after a window reload restarts the daemon. The board change probe
+  store in the per-user cache directory (docs/GO_BINARY.md says where)
+  keyed by token identity, so an unchanged answer is a 304 GitHub does not
+  count — including right after a window reload restarts the daemon. REST
+  requests share one process-wide bound on requests in flight, and a
+  Retry-After pauses all of them. The board change probe
   reads the owner's REST project list: one request for every board. GraphQL
   remains where REST cannot answer: the open-PR review, merge and check
   rollup (skipped when the repository has no open PR), the remediation PR of

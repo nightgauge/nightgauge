@@ -178,7 +178,7 @@ func (s *SecurityService) ListOpenAlerts(ctx context.Context, owner, repo string
 	if strings.TrimSpace(owner) == "" || strings.TrimSpace(repo) == "" {
 		return nil, fmt.Errorf("security alerts: owner and name are required")
 	}
-	resp, err := s.client.condGet(ctx, alertsListPath(owner, repo), func(body []byte) (any, error) {
+	resp, err := s.client.condGet(ctx, alertsListPath(owner, repo), "alerts-digest/v1", func(body []byte) (any, error) {
 		var raw []json.RawMessage
 		if err := json.Unmarshal(body, &raw); err != nil {
 			return nil, err
@@ -238,7 +238,7 @@ func (s *SecurityService) alertsWithRemediation(ctx context.Context, owner, repo
 	s.client.mu.Lock()
 	store, identity := s.client.cond, s.client.identity
 	s.client.mu.Unlock()
-	key := "graphql:vulnerabilityAlerts:" + owner + "/" + repo
+	key := "graphql:vulnerabilityAlerts/v1:" + owner + "/" + repo
 	if gate != "" {
 		if e, ok := store.get(identity, key); ok && e.ETag == gate && time.Since(e.StoredAt) < alertsRemediationMaxAge {
 			var res forgetypes.SecurityAlerts

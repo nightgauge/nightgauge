@@ -487,7 +487,7 @@ type openPullsDigest struct {
 // openPulls reads the first page of the repository's open PRs conditionally
 // and returns its digest and the ETag it is current under.
 func (c *Client) openPulls(ctx context.Context, owner, repo string) (openPullsDigest, string, error) {
-	resp, err := c.condGet(ctx, openPullsPath(owner, repo), func(body []byte) (any, error) {
+	resp, err := c.condGet(ctx, openPullsPath(owner, repo), "open-pulls/v1", func(body []byte) (any, error) {
 		var raw []json.RawMessage
 		if err := json.Unmarshal(body, &raw); err != nil {
 			return nil, err

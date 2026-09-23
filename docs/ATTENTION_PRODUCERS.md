@@ -473,17 +473,23 @@ conditional request for all of an owner's boards, free when none moved.
 | Trigger                                                            | Sweeps when                                                                   |
 | ------------------------------------------------------------------ | ----------------------------------------------------------------------------- |
 | `nightgauge.attentionSweep` (the operator's command)               | Always — a "nothing changed" answer reads as a broken button.                 |
-| Timer (`sweepIntervalMinutes`, default 15, floor 5, window active) | A full interval has elapsed — which it always has when the timer fires.       |
+| Timer (`sweepIntervalMinutes`, default 15, floor 5, window active) | The interval has elapsed, within 10% (at most a minute); else as refresh.     |
 | Activation                                                         | Never swept in this workspace, or as below against the remembered last sweep. |
 | Repository / Action Center refresh                                 | A bound board moved since the last sweep, OR a full interval has elapsed.     |
 | Run terminated (`pipeline.complete` / `pipeline.error`)            | Same as refresh.                                                              |
 | Window focus regained (#484)                                       | Same as refresh.                                                              |
 
-The last sweep's start time is kept in the workspace memento, so a window
-reload (which restarts the daemon) asks the probe instead of re-sweeping. A
-sweep that outlives the extension's IPC deadline still counts as the last
-sweep: the daemon finishes it and its cards arrive through the
-`attention.event` push.
+The timer's tolerance exists because the baseline is stamped when a sweep
+starts, so the next tick can land slightly short of a full interval; held to
+the exact interval, that tick would ask the probe, and on idle boards the
+conditions the probe cannot see would refresh at twice the interval.
+
+The start time of the last COMPLETED sweep is kept in the workspace memento,
+so a window reload (which restarts the daemon) asks the probe instead of
+re-sweeping. A sweep that outlives the extension's IPC deadline counts as the
+last sweep for the rest of that window only: the daemon finishes it and its
+cards arrive through the `attention.event` push, but a reload does not trust a
+sweep nobody saw finish.
 
 When the probe answers "nothing moved", the trigger re-renders the cards the
 store already holds and issues no forge traffic beyond the probe. The probe

@@ -42,12 +42,14 @@ package github
 // it may not tear.
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -55,10 +57,9 @@ import (
 	"github.com/nightgauge/nightgauge/internal/atomicfile"
 )
 
-// condStoreVersion is bumped whenever the reduced payload shape of any caller
-// changes incompatibly. It is part of every file key, so an old entry is
-// simply never found (and its ETag never sent) rather than decoded into the
-// wrong struct.
+// condStoreVersion is the ENTRY layout's version (condEntry). A reducer's
+// payload shape is versioned separately, by the schema tag each condGet caller
+// passes, so a change to one reducer invalidates only its own entries.
 const condStoreVersion = "v1"
 
 // condStoreMaxMemEntries bounds the in-memory mirror. Past it the mirror is
@@ -83,22 +84,39 @@ type ConditionalStore struct {
 }
 
 // NewConditionalStore returns a store persisting under dir ("" = memory only).
+// The directory is created 0700, and an existing one is tightened to 0700:
+// the entries hold forge answers read with a private token.
 func NewConditionalStore(dir string) *ConditionalStore {
+	if dir != "" {
+		if err := os.MkdirAll(dir, 0o700); err == nil {
+			_ = os.Chmod(dir, 0o700)
+		}
+	}
 	return &ConditionalStore{dir: dir, mem: map[string]condEntry{}}
 }
 
-// DefaultConditionalStoreDir is $HOME/.nightgauge/cache/github-conditional.
+// cacheHomeEnv overrides the cache root: the store is then
+// $NIGHTGAUGE_CACHE_HOME/github-conditional.
+const cacheHomeEnv = "NIGHTGAUGE_CACHE_HOME"
+
+// ConditionalStoreDir is THE one place the store's location is decided:
+// $NIGHTGAUGE_CACHE_HOME/github-conditional when that is set, else the OS
+// user cache directory's nightgauge/github-conditional (os.UserCacheDir:
+// ~/Library/Caches on macOS, $XDG_CACHE_HOME or ~/.cache on Linux,
+// %LocalAppData% on Windows).
 //
-// Per user, not per repository: the entries are keyed by token identity and
-// hold forge answers, not repository state, and a path under a checkout's
-// .nightgauge/ is not ignored by git there (only named subdirectories are).
-// The home directory already holds the machine-wide rate-limit hint beside it.
-func DefaultConditionalStoreDir() (string, error) {
-	home, err := os.UserHomeDir()
+// Per user and never inside a repository: the entries are keyed by token
+// identity and hold forge answers, not repository state. An error means there
+// is no cache directory; the caller then keeps memory-only stores.
+func ConditionalStoreDir() (string, error) {
+	if root := os.Getenv(cacheHomeEnv); root != "" {
+		return filepath.Join(root, "github-conditional"), nil
+	}
+	base, err := os.UserCacheDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".nightgauge", "cache", "github-conditional"), nil
+	return filepath.Join(base, "nightgauge", "github-conditional"), nil
 }
 
 // processCondStore is the store every client built by NewClientWithToken
@@ -283,23 +301,72 @@ func (s *ConditionalStore) putDisk(identity, url string, e condEntry) {
 }
 
 // Prune deletes stored entries not written for maxAge, so URLs nobody asks for
-// any more (a merged PR's reviews, a deleted branch) do not accumulate. Called
-// once at daemon start; errors are ignored for the same reason writes are. A
-// 304 does not rewrite its entry, so an entry answered 304 for the whole of
-// maxAge is pruned too and read in full once more: one request per URL per
-// maxAge, the price of not writing on every revalidation.
-func (s *ConditionalStore) Prune(maxAge time.Duration) {
+// any more (a merged PR's reviews, a deleted branch) do not accumulate, and
+// then — if what is left exceeds maxBytes — the oldest entries until it does
+// not. Errors are ignored for the same reason writes are. A 304 does not
+// rewrite its entry, so an entry answered 304 for the whole of maxAge is
+// pruned too and read in full once more: one request per URL per maxAge, the
+// price of not writing on every revalidation.
+func (s *ConditionalStore) Prune(maxAge time.Duration, maxBytes int64) {
 	if s == nil || s.dir == "" {
 		return
 	}
+	type file struct {
+		path string
+		mod  time.Time
+		size int64
+	}
+	var kept []file
+	var total int64
 	cutoff := time.Now().Add(-maxAge)
 	_ = filepath.WalkDir(s.dir, func(p string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
 		}
-		if info, ierr := d.Info(); ierr == nil && info.ModTime().Before(cutoff) {
-			_ = os.Remove(p)
+		info, ierr := d.Info()
+		if ierr != nil {
+			return nil
 		}
+		if info.ModTime().Before(cutoff) {
+			_ = os.Remove(p)
+			return nil
+		}
+		kept = append(kept, file{p, info.ModTime(), info.Size()})
+		total += info.Size()
 		return nil
 	})
+	if maxBytes <= 0 || total <= maxBytes {
+		return
+	}
+	sort.Slice(kept, func(i, j int) bool { return kept[i].mod.Before(kept[j].mod) })
+	for _, f := range kept {
+		if total <= maxBytes {
+			break
+		}
+		if os.Remove(f.path) == nil {
+			total -= f.size
+		}
+	}
+	// The memory mirror may still hold entries whose files are gone; they are
+	// only an optimisation, so drop it rather than track which.
+	s.mu.Lock()
+	s.mem = map[string]condEntry{}
+	s.mu.Unlock()
+}
+
+// RunMaintenance prunes now and then every `every` until ctx ends — the
+// long-lived daemon's housekeeping, so the store stays bounded however long
+// the daemon lives.
+func (s *ConditionalStore) RunMaintenance(ctx context.Context, maxAge time.Duration, maxBytes int64, every time.Duration) {
+	s.Prune(maxAge, maxBytes)
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.Prune(maxAge, maxBytes)
+		}
+	}
 }

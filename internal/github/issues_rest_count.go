@@ -16,7 +16,7 @@ import (
 // the issues; ListIssues answers it with a GraphQL read of every open issue.
 func (s *IssueService) CountOpenIssues(ctx context.Context, owner, repo string) (int, error) {
 	first := fmt.Sprintf("/repos/%s/%s/issues?state=open&per_page=100", url.PathEscape(owner), url.PathEscape(repo))
-	pages, _, err := s.client.condGetAll(ctx, first, func(body []byte) (any, error) {
+	pages, _, err := s.client.condGetAll(ctx, first, "open-issue-count/v1", func(body []byte) (any, error) {
 		var raw []struct {
 			PullRequest json.RawMessage `json:"pull_request"`
 		}

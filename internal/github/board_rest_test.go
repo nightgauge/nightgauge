@@ -9,9 +9,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
 // restFake is an api.github.com transport for the REST board reads. Each path
@@ -127,13 +131,13 @@ func TestCondGet_NotModifiedServesTheStoredPayloadAcrossARestart(t *testing.T) {
 		return v.FullName, err
 	}
 
-	first, err := restClient(f, store, "tok:a").condGet(context.Background(), "/repos/o/r", reduce)
+	first, err := restClient(f, store, "tok:a").condGet(context.Background(), "/repos/o/r", "test-fullname/v1", reduce)
 	if err != nil || first.Status != 200 || first.NotModified || string(first.Payload) != `"o/r"` {
 		t.Fatalf("first read = %+v, %v", first, err)
 	}
 	// Restart: a new client, a new memory mirror, the same directory.
 	restarted := restClient(f, NewConditionalStore(store.dir), "tok:a")
-	second, err := restarted.condGet(context.Background(), "/repos/o/r", reduce)
+	second, err := restarted.condGet(context.Background(), "/repos/o/r", "test-fullname/v1", reduce)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +179,7 @@ func TestCondGetAll_RewalksAChangedListAndAcceptsAnUnchangedOne(t *testing.T) {
 	c := restClient(f, NewConditionalStore(""), "tok:a")
 	reduce := func(b []byte) (any, error) { var v []int; err := json.Unmarshal(b, &v); return v, err }
 
-	pages, changed, err := c.condGetAll(context.Background(), "/list?page=1", reduce)
+	pages, changed, err := c.condGetAll(context.Background(), "/list?page=1", "test-ints/v1", reduce)
 	if err != nil || !changed || len(pages) != 2 {
 		t.Fatalf("cold walk = %v changed=%v err=%v", pages, changed, err)
 	}
@@ -184,7 +188,7 @@ func TestCondGetAll_RewalksAChangedListAndAcceptsAnUnchangedOne(t *testing.T) {
 	}
 
 	f.reset()
-	if _, changed, _ = c.condGetAll(context.Background(), "/list?page=1", reduce); changed {
+	if _, changed, _ = c.condGetAll(context.Background(), "/list?page=1", "test-ints/v1", reduce); changed {
 		t.Fatal("an unchanged list reported a change")
 	}
 	if n := len(f.requests()); n != 2 {
@@ -194,7 +198,7 @@ func TestCondGetAll_RewalksAChangedListAndAcceptsAnUnchangedOne(t *testing.T) {
 	// Page 2 changes: the walk re-reads it and re-walks once to confirm.
 	f.reset()
 	f.bodies["/list?page=2"] = `[3,4]`
-	pages, changed, err = c.condGetAll(context.Background(), "/list?page=1", reduce)
+	pages, changed, err = c.condGetAll(context.Background(), "/list?page=1", "test-ints/v1", reduce)
 	if err != nil || !changed || string(pages[1]) != `[3,4]` {
 		t.Fatalf("changed walk = %s changed=%v err=%v", pages, changed, err)
 	}
@@ -380,5 +384,135 @@ func TestProjectUpdatedAt_OneListAnswersEveryBoard(t *testing.T) {
 	}
 	if reqs := f.requests(); !strings.Contains(reqs[1], "inm=W/") {
 		t.Fatalf("restarted probe did not revalidate: %v", reqs)
+	}
+}
+
+// The same underlying issue, read by the GraphQL status read and by the REST
+// status read (after relationship completion), is the same BoardItem — the
+// only difference being the counts REST also carries.
+func TestRESTAndGraphQLStatusReadsAgree(t *testing.T) {
+	gql := newRESTFake(t)
+	gql.gql = `{"data":{"organization":{"projectV2":{"items":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[{
+		"id":"PVTI_1",
+		"content":{"__typename":"Issue","id":"I_1","number":1,"title":"t1","state":"OPEN",
+			"url":"https://github.com/acme/web/issues/1","createdAt":"2026-09-01T00:00:00Z","updatedAt":"2026-09-02T00:00:00Z",
+			"authorAssociation":"MEMBER","labels":{"totalCount":1,"nodes":[{"name":"priority:high"}]},
+			"repository":{"nameWithOwner":"acme/web"},
+			"subIssues":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[]},
+			"blockedBy":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[
+				{"id":"I_7","number":7,"title":"open blocker","state":"OPEN","repository":{"nameWithOwner":"acme/api"}},
+				{"id":"I_8","number":8,"title":"closed blocker","state":"CLOSED","repository":{"nameWithOwner":"acme/web"}}]},
+			"blocking":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[]},
+			"parent":{"number":9,"title":"the epic"}},
+		"fieldValues":{"nodes":[{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"Ready","field":{"name":"Status"}}]}
+	}]}}}}}`
+	ghes := NewClientWithHTTPClient(&http.Client{Transport: gql})
+	ghes.graphqlURL = "https://ghes.example.com/api/graphql"
+	fromGraphQL, err := NewBoardService(ghes, "acme", 3, OwnerTypeOrg).ListItems(context.Background(), "Ready")
+	if err != nil || len(fromGraphQL) != 1 {
+		t.Fatalf("GraphQL read = %v, %v", fromGraphQL, err)
+	}
+
+	rest := newRESTFake(t)
+	rest.bodies["/orgs/acme/projectsV2/3/fields"] = restBoardFields
+	rest.bodies["/orgs/acme/projectsV2/3/items"] = "[" + restIssueItem("PVTI_1", 1, "Ready", []string{"priority:high"}, 1, 2, 0, 9) + "]"
+	rest.bodies["/repos/acme/web/issues/1/dependencies/blocked_by"] = `[
+		{"node_id":"I_7","number":7,"title":"open blocker","state":"open","repository":{"full_name":"acme/api"}},
+		{"node_id":"I_8","number":8,"title":"closed blocker","state":"closed","repository_url":"https://api.github.com/repos/acme/web"}]`
+	fromREST, err := NewBoardService(restClient(rest, NewConditionalStore(""), "tok:a"), "acme", 3, OwnerTypeOrg).ListItems(context.Background(), "Ready")
+	if err != nil || len(fromREST) != 1 {
+		t.Fatalf("REST read = %v, %v", fromREST, err)
+	}
+
+	want, got := fromGraphQL[0], fromREST[0]
+	if got.RelationSummary == nil || got.RelationSummary.BlockedByOpen != 1 {
+		t.Fatalf("REST summary = %+v", got.RelationSummary)
+	}
+	got.RelationSummary = nil
+	if !reflect.DeepEqual(want, got) {
+		t.Fatalf("GraphQL and REST disagree:\n graphql %+v\n rest    %+v", want, got)
+	}
+}
+
+// An issue whose dependency summary is absent is not "zero blockers": its
+// lists are read, and its counts derived from them, on the summary read as
+// well as the status read.
+func TestRESTBoard_MissingSummaryReadsTheLists(t *testing.T) {
+	f := newRESTFake(t)
+	f.bodies["/orgs/acme/projectsV2/3/fields"] = restBoardFields
+	f.bodies["/orgs/acme/projectsV2/3/items"] = `[{"node_id":"PVTI_1","content_type":"Issue","content":{"number":1,"title":"t","state":"open",
+		"html_url":"https://github.com/acme/web/issues/1","repository":{"full_name":"acme/web"},"labels":[]},
+		"fields":[{"name":"Status","value":{"name":{"raw":"Ready"}}}]},
+		{"node_id":"PVTI_2","content_type":"Issue","content":null,"fields":[]}]`
+	f.bodies["/repos/acme/web/issues/1/dependencies/blocked_by"] = `[{"node_id":"I_7","number":7,"title":"b","state":"open","repository":{"full_name":"acme/web"}}]`
+	f.bodies["/repos/acme/web/issues/1/dependencies/blocking"] = `[]`
+	f.bodies["/repos/acme/web/issues/1/sub_issues"] = `[]`
+	b := NewBoardService(restClient(f, NewConditionalStore(""), "tok:a"), "acme", 3, OwnerTypeOrg)
+
+	for name, read := range map[string]func() ([]types.BoardItem, error){
+		"summary": func() ([]types.BoardItem, error) {
+			items, _, err := b.ListOpenItemsSummary(context.Background())
+			return items, err
+		},
+		"status": func() ([]types.BoardItem, error) { return b.ListItems(context.Background(), "Ready") },
+	} {
+		items, err := read()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if len(items) != 1 {
+			t.Fatalf("%s: %d items, want 1 (the null-content item dropped)", name, len(items))
+		}
+		it := items[0]
+		if len(it.BlockedBy) != 1 || it.RelationSummary == nil || it.RelationSummary.BlockedByOpen != 1 {
+			t.Fatalf("%s: blockedBy=%+v summary=%+v, want the open blocker read from the list", name, it.BlockedBy, it.RelationSummary)
+		}
+	}
+}
+
+// Archived items are left out, as the GraphQL items connection leaves them.
+func TestRESTBoard_DropsArchivedItems(t *testing.T) {
+	f := newRESTFake(t)
+	f.bodies["/orgs/acme/projectsV2/3/fields"] = restBoardFields
+	archived := strings.Replace(restIssueItem("PVTI_2", 2, "Ready", nil, 0, 0, 0, 0), `"node_id":"PVTI_2",`, `"node_id":"PVTI_2","archived_at":"2026-09-01T00:00:00Z",`, 1)
+	f.bodies["/orgs/acme/projectsV2/3/items"] = "[" + restIssueItem("PVTI_1", 1, "Ready", nil, 0, 0, 0, 0) + "," + archived + "]"
+	items, _, err := NewBoardService(restClient(f, NewConditionalStore(""), "tok:a"), "acme", 3, OwnerTypeOrg).ListOpenItemsSummary(context.Background())
+	if err != nil || len(items) != 1 || items[0].Number != 1 {
+		t.Fatalf("items = %+v, %v; want only #1", items, err)
+	}
+}
+
+// A 403 that is not a rate limit is a refusal of the REST surface, not of the
+// board: this read falls back to GraphQL, and the next one tries REST again.
+func TestRESTBoard_Non403RateLimitFallsBackForTheCallOnly(t *testing.T) {
+	f := newRESTFake(t)
+	f.gql = emptyGraphQLBoard
+	f.status["/orgs/acme/projectsV2/3/fields"] = http.StatusForbidden
+	b := NewBoardService(restClient(f, NewConditionalStore(""), "tok:a"), "acme", 3, OwnerTypeOrg)
+	for i := 0; i < 2; i++ {
+		if _, _, err := b.ListOpenItemsSummary(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := countPrefix(f.requests(), "GET "); n != 2 || f.gqlN != 2 {
+		t.Fatalf("REST tries = %d, GraphQL = %d; want REST tried each time, GraphQL answering each", n, f.gqlN)
+	}
+}
+
+// A 404 is remembered for ONE board, and only for a while.
+func TestRESTBoard_404IsRememberedPerBoardWithATTL(t *testing.T) {
+	c := NewClientWithHTTPClient(&http.Client{Transport: newRESTFake(t)})
+	c.markRESTProjectsUnavailable("acme", 3, errors.New("404"))
+	if c.restProjectsUsable("acme", 3) {
+		t.Fatal("board 3 still usable right after its 404")
+	}
+	if !c.restProjectsUsable("acme", 4) {
+		t.Fatal("board 4 was switched off by board 3's 404")
+	}
+	c.mu.Lock()
+	c.restProjects404[restBoardKey("acme", 3)] = time.Now().Add(-time.Second)
+	c.mu.Unlock()
+	if !c.restProjectsUsable("acme", 3) {
+		t.Fatal("board 3's 404 outlived its TTL")
 	}
 }

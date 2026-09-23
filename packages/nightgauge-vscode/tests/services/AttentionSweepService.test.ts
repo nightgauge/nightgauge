@@ -492,7 +492,8 @@ describe("AttentionSweepService", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(ipc.calls).toHaveLength(1);
     const startedAt = Date.now();
-    expect(store.peek()).toBe(startedAt);
+    // In memory only: a reload must not trust a sweep nobody saw finish.
+    expect(store.peek()).toBeUndefined();
 
     ipc.error = null;
     await vi.advanceTimersByTimeAsync(60_000);
@@ -502,6 +503,47 @@ describe("AttentionSweepService", () => {
     expect(ipc.probes[0].since).toBe(new Date(startedAt).toISOString());
     expect(ipc.calls).toHaveLength(1); // nothing moved: no second sweep
 
+    service.dispose();
+  });
+
+  it("a completed sweep is persisted for the next window", async () => {
+    const store = memento();
+    const { service, ipc } = makeService({ lastSweepStore: store });
+
+    service.start();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(ipc.calls).toHaveLength(1);
+    expect(store.peek()).toBe(Date.now());
+    service.dispose();
+  });
+
+  // The baseline is stamped when a sweep STARTS, after the repo list resolved,
+  // so each timer tick lands a little short of a full interval. The timer must
+  // still sweep without asking the probe, or the conditions the probe cannot
+  // see (default-branch CI, alerts, protection) refresh at twice the interval.
+  it("the timer sweeps without the probe when repo resolution delays each sweep", async () => {
+    // Activation resolves the repo list slowly (the workspace is still
+    // loading); later resolutions are instant, so every tick lands delayMs
+    // short of a full interval after the stamped start.
+    const delayMs = 2_000;
+    let first = true;
+    const { service, ipc } = makeService({
+      config: { intervalMs: 15 * 60_000 },
+      repos: () => {
+        if (!first) return ["octocat/acme-web"];
+        first = false;
+        return new Promise<string[]>((r) => setTimeout(() => r(["octocat/acme-web"]), delayMs));
+      },
+    });
+
+    service.start();
+    await vi.advanceTimersByTimeAsync(delayMs);
+    expect(ipc.calls.map((c) => c.reason)).toEqual(["activation"]);
+
+    await vi.advanceTimersByTimeAsync(15 * 60_000 - delayMs);
+    expect(ipc.calls.map((c) => c.reason)).toEqual(["activation", "timer"]);
+    expect(ipc.probes).toHaveLength(0);
     service.dispose();
   });
 

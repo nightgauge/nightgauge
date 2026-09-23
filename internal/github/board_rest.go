@@ -22,15 +22,17 @@ package github
 //     caller that needs the lists gets them from the per-issue REST list
 //     endpoints (restCompleteRelations), one request per non-empty list.
 //
-// Fallbacks: GitHub Enterprise Server (any API host but api.github.com) and a
-// 404 from the projects endpoints go to the GraphQL reads, which remain the
-// reference behaviour. A 404 is remembered for the life of the client.
+// Fallbacks: GitHub Enterprise Server (any API host but api.github.com), a 404
+// from the projects endpoints (remembered per board for an hour), and a
+// non-rate-limit 403 go to the GraphQL reads, which remain the reference
+// behaviour.
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -54,24 +56,42 @@ var errRESTBoardUnavailable = errors.New("REST projects endpoints unavailable")
 // restProjectsHost is the only API host whose REST projects surface is used.
 const restProjectsHost = "https://api.github.com"
 
+// restProjects404TTL is how long a 404 from one board's REST projects
+// endpoints sends that board's reads to GraphQL before REST is tried again. A
+// 404 can be transient (a board just created, a token just granted access), so
+// it is remembered long enough to stop paying for it on every read, not for
+// the life of the daemon.
+const restProjects404TTL = time.Hour
+
+func restBoardKey(owner string, project int) string {
+	return fmt.Sprintf("%s#%d", strings.ToLower(owner), project)
+}
+
 // restProjectsUsable reports whether this client may try the REST projects
-// endpoints for owner at all: never on GHES, never after a 404 for the owner.
-func (c *Client) restProjectsUsable(owner string) bool {
+// endpoints for one board: never on GHES, and not within restProjects404TTL
+// of a 404 for that board.
+func (c *Client) restProjectsUsable(owner string, project int) bool {
 	if c.restBaseURL() != restProjectsHost {
 		return false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return !c.restProjects404[strings.ToLower(owner)]
+	until, ok := c.restProjects404[restBoardKey(owner, project)]
+	return !ok || time.Now().After(until)
 }
 
-func (c *Client) markRESTProjectsUnavailable(owner string) {
+func (c *Client) markRESTProjectsUnavailable(owner string, project int, cause error) {
+	key := restBoardKey(owner, project)
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.restProjects404 == nil {
-		c.restProjects404 = map[string]bool{}
+		c.restProjects404 = map[string]time.Time{}
 	}
-	c.restProjects404[strings.ToLower(owner)] = true
+	_, already := c.restProjects404[key]
+	c.restProjects404[key] = time.Now().Add(restProjects404TTL)
+	c.mu.Unlock()
+	if !already {
+		log.Printf("github: REST projects endpoints answered 404 for board %s; using GraphQL for it for %s: %v", key, restProjects404TTL, cause)
+	}
 }
 
 // restProjectsPath is the REST collection for the owner's projects.
@@ -87,9 +107,13 @@ func (b *BoardService) restBase() string {
 }
 
 // restFallback converts a REST failure into errRESTBoardUnavailable when the
-// GraphQL read should answer instead: a 404 (the surface does not exist for
-// this owner — remembered), or a 400/422 (the request was refused as shaped,
-// e.g. a field id the board no longer has — this call only).
+// GraphQL read should answer instead: a 404 (the surface does not serve this
+// board — remembered for restProjects404TTL), a 400/422 (the request was
+// refused as shaped, e.g. a field id the board no longer has), or a 403 that
+// is not a rate limit (e.g. "Resource not accessible by integration": a token
+// the REST surface refuses may still be served by GraphQL) — those two for
+// this call only. A rate-limited 403/429 stays an error: GraphQL would be
+// asked to pay for a limit REST already hit.
 func (b *BoardService) restFallback(err error) error {
 	var se *restStatusError
 	if !errors.As(err, &se) {
@@ -97,10 +121,14 @@ func (b *BoardService) restFallback(err error) error {
 	}
 	switch se.Status {
 	case http.StatusNotFound:
-		b.client.markRESTProjectsUnavailable(b.owner)
+		b.client.markRESTProjectsUnavailable(b.owner, b.projectNumber, err)
 		return fmt.Errorf("%w: %v", errRESTBoardUnavailable, err)
 	case http.StatusBadRequest, http.StatusUnprocessableEntity:
 		return fmt.Errorf("%w: %v", errRESTBoardUnavailable, err)
+	case http.StatusForbidden:
+		if !restBodyLooksRateLimited(se.Body) {
+			return fmt.Errorf("%w: %v", errRESTBoardUnavailable, err)
+		}
 	}
 	return err
 }
@@ -115,7 +143,7 @@ type restField struct {
 // unchanged schema is a free 304) and returns the ids of the fields the item
 // mapping uses, in a stable order.
 func (b *BoardService) restBoardFieldIDs(ctx context.Context) ([]int64, error) {
-	pages, _, err := b.client.condGetAll(ctx, b.restBase()+"/fields?per_page=100", func(body []byte) (any, error) {
+	pages, _, err := b.client.condGetAll(ctx, b.restBase()+"/fields?per_page=100", "board-fields/v1", func(body []byte) (any, error) {
 		var raw []restField
 		if err := json.Unmarshal(body, &raw); err != nil {
 			return nil, err
@@ -157,24 +185,27 @@ func (b *BoardService) restItemsURL(q string, fieldIDs []int64) string {
 // restItem is the reduced, stored form of one REST project item: exactly the
 // fields BoardItem is built from, so a 2.5 MB page is stored as a few KB.
 type restItem struct {
-	ID                string                `json:"id"`
-	Type              string                `json:"type"`
-	Number            int                   `json:"number,omitempty"`
-	Title             string                `json:"title,omitempty"`
-	State             string                `json:"state,omitempty"`
-	URL               string                `json:"url,omitempty"`
-	Repo              string                `json:"repo,omitempty"`
-	CreatedAt         string                `json:"createdAt,omitempty"`
-	UpdatedAt         string                `json:"updatedAt,omitempty"`
-	AuthorAssociation string                `json:"authorAssociation,omitempty"`
-	Labels            []string              `json:"labels,omitempty"`
-	Status            string                `json:"status,omitempty"`
-	Priority          string                `json:"priority,omitempty"`
-	Size              string                `json:"size,omitempty"`
-	PipelineStage     string                `json:"pipelineStage,omitempty"`
-	ParentNumber      int                   `json:"parentNumber,omitempty"`
-	ParentTitle       string                `json:"parentTitle,omitempty"`
-	Relations         types.RelationSummary `json:"relations"`
+	ID                string   `json:"id"`
+	Type              string   `json:"type"`
+	Number            int      `json:"number,omitempty"`
+	Title             string   `json:"title,omitempty"`
+	State             string   `json:"state,omitempty"`
+	URL               string   `json:"url,omitempty"`
+	Repo              string   `json:"repo,omitempty"`
+	CreatedAt         string   `json:"createdAt,omitempty"`
+	UpdatedAt         string   `json:"updatedAt,omitempty"`
+	AuthorAssociation string   `json:"authorAssociation,omitempty"`
+	Labels            []string `json:"labels,omitempty"`
+	Status            string   `json:"status,omitempty"`
+	Priority          string   `json:"priority,omitempty"`
+	Size              string   `json:"size,omitempty"`
+	PipelineStage     string   `json:"pipelineStage,omitempty"`
+	ParentNumber      int      `json:"parentNumber,omitempty"`
+	ParentTitle       string   `json:"parentTitle,omitempty"`
+	// Relations is nil when the item did not carry BOTH summaries: an absent
+	// summary is "unknown", never "zero blockers" — the reader then fetches
+	// the lists (restCompleteRelations).
+	Relations *types.RelationSummary `json:"relations,omitempty"`
 }
 
 // restIssueRepo is the subset of a REST issue / pull request / repository
@@ -304,15 +335,15 @@ func reduceItemsPage(body []byte) (any, error) {
 			for _, l := range c.Labels {
 				it.Labels = append(it.Labels, l.Name)
 			}
-			if s := c.SubIssuesSummary; s != nil {
-				it.Relations.SubIssuesTotal = s.Total
-				it.Relations.SubIssuesCompleted = s.Completed
-			}
-			if d := c.IssueDependenciesSummary; d != nil {
-				it.Relations.BlockedByOpen = d.BlockedBy
-				it.Relations.BlockedByTotal = d.TotalBlockedBy
-				it.Relations.BlockingOpen = d.Blocking
-				it.Relations.BlockingTotal = d.TotalBlocking
+			if s, d := c.SubIssuesSummary, c.IssueDependenciesSummary; s != nil && d != nil {
+				it.Relations = &types.RelationSummary{
+					SubIssuesTotal:     s.Total,
+					SubIssuesCompleted: s.Completed,
+					BlockedByOpen:      d.BlockedBy,
+					BlockedByTotal:     d.TotalBlockedBy,
+					BlockingOpen:       d.Blocking,
+					BlockingTotal:      d.TotalBlocking,
+				}
 			}
 		}
 		for _, f := range r.Fields {
@@ -353,6 +384,11 @@ func (it restItem) toBoardItem() (types.BoardItem, bool) {
 	if it.Type != "Issue" && it.Type != "PullRequest" {
 		return types.BoardItem{}, false
 	}
+	// An issue or PR whose content the token could not see arrives with null
+	// content: no number, no repository. It is not an item anyone can act on.
+	if it.Number == 0 || it.Repo == "" {
+		return types.BoardItem{}, false
+	}
 	item := types.BoardItem{
 		ID:                it.ID,
 		Number:            it.Number,
@@ -371,11 +407,14 @@ func (it restItem) toBoardItem() (types.BoardItem, bool) {
 	item.CreatedAt, _ = time.Parse(time.RFC3339, it.CreatedAt)
 	item.UpdatedAt, _ = time.Parse(time.RFC3339, it.UpdatedAt)
 	if !item.IsPR {
-		item.IsEpic = it.Relations.SubIssuesTotal > 0 || hasTypeEpicLabel(item.Labels)
+		item.IsEpic = hasTypeEpicLabel(item.Labels)
+		if it.Relations != nil {
+			item.IsEpic = item.IsEpic || it.Relations.SubIssuesTotal > 0
+			rel := *it.Relations
+			item.RelationSummary = &rel
+		}
 		item.ParentNumber = it.ParentNumber
 		item.ParentTitle = it.ParentTitle
-		rel := it.Relations
-		item.RelationSummary = &rel
 	}
 	if item.Priority == "" {
 		item.Priority = priorityFromLabels(item.Labels)
@@ -387,16 +426,19 @@ func (it restItem) toBoardItem() (types.BoardItem, bool) {
 }
 
 // restListItems reads every item matching q over REST, returning the mapped
-// items (relationship lists empty) and the raw item count.
-func (b *BoardService) restListItems(ctx context.Context, q string) ([]types.BoardItem, int, error) {
-	if !b.client.restProjectsUsable(b.owner) {
+// items and the raw item count. With withLists, every issue's relationship
+// lists are read whole; without, only the issues whose summaries were absent
+// get their lists read (so their counts are known, not assumed zero), and the
+// rest carry counts only.
+func (b *BoardService) restListItems(ctx context.Context, q string, withLists bool) ([]types.BoardItem, int, error) {
+	if !b.client.restProjectsUsable(b.owner, b.projectNumber) {
 		return nil, 0, errRESTBoardUnavailable
 	}
 	fieldIDs, err := b.restBoardFieldIDs(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
-	pages, _, err := b.client.condGetAll(ctx, b.restItemsURL(q, fieldIDs), reduceItemsPage)
+	pages, _, err := b.client.condGetAll(ctx, b.restItemsURL(q, fieldIDs), "board-items/v2", reduceItemsPage)
 	if err != nil {
 		return nil, 0, b.restFallback(err)
 	}
@@ -421,6 +463,9 @@ func (b *BoardService) restListItems(ctx context.Context, q string) ([]types.Boa
 			}
 		}
 	}
+	if err := b.client.restCompleteRelations(ctx, items, !withLists); err != nil {
+		return nil, 0, err
+	}
 	return items, raw, nil
 }
 
@@ -434,7 +479,7 @@ func (b *BoardService) restListItems(ctx context.Context, q string) ([]types.Boa
 // Falls back to the GraphQL ListOpenItems (and derives the counts from its
 // lists) on GHES or when the REST endpoints answer 404.
 func (b *BoardService) ListOpenItemsSummary(ctx context.Context) ([]types.BoardItem, int, error) {
-	items, raw, err := b.restListItems(ctx, "is:open")
+	items, raw, err := b.restListItems(ctx, "is:open", false)
 	if err == nil {
 		return items, raw, nil
 	}
@@ -463,14 +508,8 @@ func withDerivedSummaries(items []types.BoardItem) []types.BoardItem {
 // restListItemsWithRelations is restListItems plus every issue's relationship
 // lists read whole over REST (restCompleteRelations).
 func (b *BoardService) restListItemsWithRelations(ctx context.Context, q string) ([]types.BoardItem, error) {
-	items, _, err := b.restListItems(ctx, q)
-	if err != nil {
-		return nil, err
-	}
-	if err := b.client.restCompleteRelations(ctx, items); err != nil {
-		return nil, err
-	}
-	return items, nil
+	items, _, err := b.restListItems(ctx, q, true)
+	return items, err
 }
 
 // restRef is the stored form of one related issue.
@@ -502,7 +541,7 @@ func reduceRefsPage(body []byte) (any, error) {
 
 // restRefs reads one relationship list whole (all pages).
 func (c *Client) restRefs(ctx context.Context, path string) ([]restRef, error) {
-	pages, _, err := c.condGetAll(ctx, path, reduceRefsPage)
+	pages, _, err := c.condGetAll(ctx, path, "issue-refs/v1", reduceRefsPage)
 	if err != nil {
 		return nil, err
 	}
@@ -519,22 +558,36 @@ func (c *Client) restRefs(ctx context.Context, path string) ([]restRef, error) {
 
 // restCompleteRelations fills each issue's SubIssues, BlockedBy and Blocking
 // lists from the per-issue REST list endpoints, asking only for the lists the
-// item's summary says are non-empty. Every list is read whole or the read
-// fails — a short list would read as "not blocked", which is the answer
-// callers act on. Each list is conditional, so an unchanged one is free.
-func (c *Client) restCompleteRelations(ctx context.Context, items []types.BoardItem) error {
+// item's summary says are non-empty — and for all three when the item carried
+// no summary, whose counts are then derived from the lists. With onlyUnknown,
+// items that did carry a summary are left alone. Every list is read whole or
+// the read fails — a short list would read as "not blocked", which is the
+// answer callers act on. Each list is conditional, so an unchanged one is free.
+func (c *Client) restCompleteRelations(ctx context.Context, items []types.BoardItem, onlyUnknown bool) error {
 	type job struct {
 		idx  int
 		kind int // 0 sub-issues, 1 blocked-by, 2 blocking
 		path string
 	}
 	var jobs []job
+	unknown := map[int]bool{}
 	for i := range items {
 		it := &items[i]
-		if it.IsPR || it.RelationSummary == nil || it.Repo == "" || it.Number == 0 {
+		if it.IsPR || it.Repo == "" || it.Number == 0 {
 			continue
 		}
 		base := fmt.Sprintf("/repos/%s/issues/%d", it.Repo, it.Number)
+		if it.RelationSummary == nil {
+			unknown[i] = true
+			jobs = append(jobs,
+				job{i, 0, base + "/sub_issues?per_page=100"},
+				job{i, 1, base + "/dependencies/blocked_by?per_page=100"},
+				job{i, 2, base + "/dependencies/blocking?per_page=100"})
+			continue
+		}
+		if onlyUnknown {
+			continue
+		}
 		if it.RelationSummary.SubIssuesTotal > 0 {
 			jobs = append(jobs, job{i, 0, base + "/sub_issues?per_page=100"})
 		}
@@ -595,6 +648,11 @@ func (c *Client) restCompleteRelations(ctx context.Context, items []types.BoardI
 			}
 		}
 	}
+	for i := range unknown {
+		s := types.SummarizeRelations(items[i])
+		items[i].RelationSummary = &s
+		items[i].IsEpic = items[i].IsEpic || s.SubIssuesTotal > 0
+	}
 	return nil
 }
 
@@ -619,7 +677,7 @@ const projectListTTL = 10 * time.Second
 // list: ONE conditional request answers for every board the owner has, and an
 // unchanged list is a free 304.
 func (b *BoardService) restProjectUpdatedAt(ctx context.Context) (time.Time, error) {
-	if !b.client.restProjectsUsable(b.owner) {
+	if !b.client.restProjectsUsable(b.owner, b.projectNumber) {
 		return time.Time{}, errRESTBoardUnavailable
 	}
 	key := string(b.ownerType) + "|" + strings.ToLower(b.owner)
@@ -627,7 +685,7 @@ func (b *BoardService) restProjectUpdatedAt(ctx context.Context) (time.Time, err
 	memo, ok := b.client.projectLists[key]
 	b.client.mu.Unlock()
 	if !ok || time.Since(memo.at) >= projectListTTL {
-		pages, _, err := b.client.condGetAll(ctx, restProjectsPath(b.ownerType, b.owner)+"?per_page=100", func(body []byte) (any, error) {
+		pages, _, err := b.client.condGetAll(ctx, restProjectsPath(b.ownerType, b.owner)+"?per_page=100", "project-list/v1", func(body []byte) (any, error) {
 			var raw []struct {
 				Number    int    `json:"number"`
 				UpdatedAt string `json:"updated_at"`
@@ -685,4 +743,6 @@ func (b *BoardService) CacheIdentity() string { return b.client.CacheIdentity() 
 // REST summary read right now (boardcache.SummaryAvailability). False on
 // GHES and after a 404 for the owner, where it would answer from the GraphQL
 // open read.
-func (b *BoardService) SummaryReadAvailable() bool { return b.client.restProjectsUsable(b.owner) }
+func (b *BoardService) SummaryReadAvailable() bool {
+	return b.client.restProjectsUsable(b.owner, b.projectNumber)
+}

@@ -3,6 +3,7 @@ package sweep
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/forge"
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
@@ -137,3 +138,35 @@ type issuesOverride struct {
 }
 
 func (o *issuesOverride) Issues() forge.IssueService { return o.issues }
+
+// deadlineSecurity fails the first call with the caller's own deadline, then
+// answers.
+type deadlineSecurity struct{ calls int }
+
+func (d *deadlineSecurity) ListOpenAlerts(ctx context.Context, _, _ string) (*forgetypes.SecurityAlerts, error) {
+	d.calls++
+	if d.calls == 1 {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return &forgetypes.SecurityAlerts{Status: forgetypes.SecurityAlertsEnabled}, nil
+}
+
+// One repo's sweep running out of time must not become another producer's
+// answer: the next caller reads again under its own deadline.
+func TestSharedReads_ALeadersDeadlineIsNotShared(t *testing.T) {
+	sec := &deadlineSecurity{}
+	shared := NewSharedReads()
+	short, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if _, err := shared.Wrap(&covForge{sec: sec}).Security().ListOpenAlerts(short, "acme", "web"); err == nil {
+		t.Fatal("the leader's own deadline was not reported to it")
+	}
+	res, err := shared.Wrap(&covForge{sec: sec}).Security().ListOpenAlerts(context.Background(), "acme", "web")
+	if err != nil || res == nil || !res.Enabled() {
+		t.Fatalf("a later caller got %+v, %v; want its own successful read", res, err)
+	}
+	if sec.calls != 2 {
+		t.Fatalf("reads = %d, want 2", sec.calls)
+	}
+}

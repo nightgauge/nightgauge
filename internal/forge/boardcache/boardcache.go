@@ -379,11 +379,19 @@ func itemsWithStatus(items []forgetypes.BoardItem, status string) []forgetypes.B
 	return out
 }
 
-// Peek reports the cached snapshot for a query without fetching, and whether
-// one is present and unexpired. It is how a surface answers "how old is this?"
-// without provoking a read.
+// PeekIdentity reports the cached snapshot for a query without fetching, and
+// whether one is present and unexpired. It is how a surface answers "how old
+// is this?" without provoking a read. identity is the reading token's identity
+// (the board's CacheIdentity), because entries are keyed by it exactly as
+// reads are: a snapshot read with one token is not reported to another.
+func (c *Cache) PeekIdentity(owner string, project int, identity, query string) (Snapshot, bool) {
+	return c.peekKey(identityPrefix(owner, project, identity) + query)
+}
+
+// Peek is PeekIdentity for a board that reports no token identity (the key a
+// board without IdentityReporter is cached under).
 func (c *Cache) Peek(owner string, project int, query string) (Snapshot, bool) {
-	return c.peekKey(boardPrefix(owner, project) + query)
+	return c.PeekIdentity(owner, project, "", query)
 }
 
 // freshLocked reports whether an entry may still be served. An in-flight entry

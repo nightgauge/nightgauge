@@ -116,9 +116,9 @@ type Client struct {
 	cond     *ConditionalStore
 	identity string
 
-	// restProjects404 remembers owners whose REST projects endpoints answered
-	// 404, so every later board read goes straight to GraphQL (board_rest.go).
-	restProjects404 map[string]bool
+	// restProjects404 remembers, per board, until when its REST projects
+	// endpoints are skipped after a 404 (board_rest.go).
+	restProjects404 map[string]time.Time
 	// projectLists memoises each owner's REST project list briefly, so the
 	// change probes of several boards in one burst share one request.
 	projectLists map[string]projectListMemo
@@ -861,7 +861,10 @@ func (t *rateLimitHeaderTransport) RoundTrip(req *http.Request) (*http.Response,
 	// rewriting it into a 200 would hide exactly the answer condGet reads.
 	if t.etags != nil && req.Method == http.MethodGet && t.apiHost != "" && req.URL.Host == t.apiHost &&
 		req.Context().Value(callerConditionalKey{}) == nil {
-		cacheKey = req.URL.String()
+		// The Accept header is part of the key: the same URL answers a
+		// different representation per media type (raw, diff, JSON), and a
+		// 304 must hand back the one this caller asked for.
+		cacheKey = req.Header.Get("Accept") + " " + req.URL.String()
 		e, ok := t.etags.get(cacheKey)
 		if !ok && t.client != nil {
 			// A daemon restart empties the in-memory layer; the persistent
@@ -1528,6 +1531,7 @@ func (c *Client) restDoURL(ctx context.Context, method, url, label string, body 
 		return nil, 0, nil, err
 	}
 
+	retriedGateway := false
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		var reqBody io.Reader
 		if data != nil {
@@ -1548,14 +1552,37 @@ func (c *Client) restDoURL(ctx context.Context, method, url, label string, body 
 			}
 		}
 
+		// Process-wide: every REST request in this process shares one bound on
+		// requests in flight and one pause, so a burst of goroutines cannot
+		// walk into GitHub's secondary limits together, and one Retry-After
+		// holds all of them rather than only the goroutine that received it.
+		if err := processRESTGate.acquire(ctx); err != nil {
+			return nil, 0, nil, err
+		}
 		resp, err := c.http.Do(req)
 		if err != nil {
+			processRESTGate.release()
 			return nil, 0, nil, fmt.Errorf("REST %s %s: %w", method, path, err)
 		}
 		respBody, readErr := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		processRESTGate.release()
 		if readErr != nil {
 			return nil, 0, nil, fmt.Errorf("read REST %s response body: %w", method, readErr)
+		}
+
+		// A gateway error (502/503/504) is GitHub's front end, not the
+		// request: one retry after a short jittered pause, then it is the
+		// caller's answer.
+		if isGatewayStatus(resp.StatusCode) && !retriedGateway {
+			retriedGateway = true
+			attempt--
+			select {
+			case <-time.After(gatewayRetryDelay()):
+				continue
+			case <-ctx.Done():
+				return nil, 0, nil, ctx.Err()
+			}
 		}
 
 		// 403/429 with a rate-limit signal → wait out the reset and retry
@@ -1572,12 +1599,10 @@ func (c *Client) restDoURL(ctx context.Context, method, url, label string, body 
 				rlErr = fmt.Errorf("status %d: retry after %s seconds: %s", resp.StatusCode, ra, string(respBody))
 			}
 			backoff := c.computeRateLimitBackoff(ctx, rlErr, attempt)
-			select {
-			case <-time.After(backoff):
-				continue
-			case <-ctx.Done():
-				return nil, 0, nil, ctx.Err()
-			}
+			// The pause is shared: the next acquire — this goroutine's retry
+			// and every other REST caller's next request — waits it out.
+			processRESTGate.pause(backoff)
+			continue
 		}
 
 		return respBody, resp.StatusCode, resp.Header, nil

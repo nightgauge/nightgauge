@@ -939,8 +939,8 @@ saves one point per tick, for as long as the wait lasts.
 The "within one process" qualifier used to be load-bearing: the ETag cache was
 in-memory and hung off a single `*Client`, so a read repeated across CLI runs,
 or across a daemon restart, started cold. **`nightgauge serve` now backs it
-with a persistent store** (`internal/github/condstore.go`, under
-`~/.nightgauge/cache/github-conditional/`, keyed by token identity and URL): a
+with a persistent store** (`internal/github/condstore.go`; its location is in
+`docs/GO_BINARY.md`), keyed by token identity and URL: a
 restarted daemon revalidates with the same ETags and is answered 304. Reads
 that go through `condGet` store their REDUCED payload rather than the body,
 which is what lets a 2.5 MB Projects item page be conditional at all (the

@@ -40,11 +40,16 @@ type condResponse struct {
 // value worth keeping; its JSON is what the store holds and what a later 304
 // hands back, so a 2.5 MB page can be kept as the few fields it maps to.
 //
+// schema names the reducer's output shape ("board-items/v2"). It is part of the
+// store key, so changing a reducer's shape and bumping its tag makes every old
+// payload a miss rather than something decoded into the wrong struct; each
+// reducer carries its own tag, so one change invalidates only its own entries.
+//
 // A 304 costs no rate limit (GitHub does not count a conditional request it
 // answers 304 when it carries an Authorization header), so a read repeated
 // with nothing changed is free — across daemon restarts too, when the store is
 // disk-backed.
-func (c *Client) condGet(ctx context.Context, target string, reduce func(body []byte) (any, error)) (*condResponse, error) {
+func (c *Client) condGet(ctx context.Context, target, schema string, reduce func(body []byte) (any, error)) (*condResponse, error) {
 	url := target
 	if strings.HasPrefix(target, "/") {
 		url = c.restBaseURL() + target
@@ -53,8 +58,9 @@ func (c *Client) condGet(ctx context.Context, target string, reduce func(body []
 	store, identity := c.cond, c.identity
 	c.mu.Unlock()
 
+	storeKey := schema + " " + url
 	var hdr http.Header
-	cached, haveCached := store.get(identity, url)
+	cached, haveCached := store.get(identity, storeKey)
 	if haveCached {
 		hdr = http.Header{"If-None-Match": []string{cached.ETag}}
 	}
@@ -81,7 +87,7 @@ func (c *Client) condGet(ctx context.Context, target string, reduce func(body []
 		next := nextLink(respHdr.Get("Link"))
 		etag := respHdr.Get("ETag")
 		if etag != "" {
-			store.put(identity, url, condEntry{ETag: etag, Next: next, Payload: payload, StoredAt: time.Now().UTC()})
+			store.put(identity, storeKey, condEntry{ETag: etag, Next: next, Payload: payload, StoredAt: time.Now().UTC()})
 		}
 		return &condResponse{Status: status, Payload: payload, Next: next, ETag: etag}, nil
 	default:
@@ -119,7 +125,7 @@ func nextLink(link string) string {
 // again, up to maxWalks, while it keeps finding changes. A walk in which every
 // page answered 304 is, by construction, a set of pages that all describe the
 // same server state as the stored ones, so it is accepted as consistent.
-func (c *Client) condGetAll(ctx context.Context, first string, reduce func([]byte) (any, error)) (pages []json.RawMessage, changed bool, err error) {
+func (c *Client) condGetAll(ctx context.Context, first, schema string, reduce func([]byte) (any, error)) (pages []json.RawMessage, changed bool, err error) {
 	const maxWalks = 3
 	const maxPages = 50
 	for walk := 0; walk < maxWalks; walk++ {
@@ -130,7 +136,7 @@ func (c *Client) condGetAll(ctx context.Context, first string, reduce func([]byt
 			if n >= maxPages {
 				return nil, false, fmt.Errorf("REST GET %s: more than %d pages", first, maxPages)
 			}
-			resp, err := c.condGet(ctx, next, reduce)
+			resp, err := c.condGet(ctx, next, schema, reduce)
 			if err != nil {
 				return nil, false, err
 			}

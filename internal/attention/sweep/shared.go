@@ -2,6 +2,7 @@ package sweep
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 
@@ -76,22 +77,43 @@ type sharedSecurity struct {
 
 func (s *sharedSecurity) ListOpenAlerts(ctx context.Context, owner, repo string) (*forgetypes.SecurityAlerts, error) {
 	key := s.identity + "|" + strings.ToLower(owner+"/"+repo)
-	s.reads.mu.Lock()
-	call, ok := s.reads.alerts[key]
-	if !ok {
-		call = &sharedAlerts{done: make(chan struct{})}
-		s.reads.alerts[key] = call
-	}
-	s.reads.mu.Unlock()
-	if ok {
+	for {
+		s.reads.mu.Lock()
+		call, ok := s.reads.alerts[key]
+		if !ok {
+			call = &sharedAlerts{done: make(chan struct{})}
+			s.reads.alerts[key] = call
+		}
+		s.reads.mu.Unlock()
+		if !ok {
+			call.res, call.err = s.inner.ListOpenAlerts(ctx, owner, repo)
+			if isContextErr(call.err) {
+				// The leader ran out of ITS time (each repo has its own
+				// deadline). That says nothing about the repository, so it is
+				// not the pass's answer: forget it, and let each waiter read
+				// again under its own deadline.
+				s.reads.mu.Lock()
+				delete(s.reads.alerts, key)
+				s.reads.mu.Unlock()
+			}
+			close(call.done)
+			return call.res, call.err
+		}
 		select {
 		case <-call.done:
+			if isContextErr(call.err) {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				continue
+			}
 			return call.res, call.err
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
 	}
-	call.res, call.err = s.inner.ListOpenAlerts(ctx, owner, repo)
-	close(call.done)
-	return call.res, call.err
+}
+
+func isContextErr(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }

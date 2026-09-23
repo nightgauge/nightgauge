@@ -99,6 +99,12 @@ func TestCacheIsKeyedByIdentity(t *testing.T) {
 	if a.summaries() != 1 || b.summaries() != 1 {
 		t.Fatalf("reads a=%d b=%d, want one each — identity b must not be served a's snapshot", a.summaries(), b.summaries())
 	}
+	if _, ok := cache.PeekIdentity("acme", 3, "tok:a", "open-summary"); !ok {
+		t.Error("Peek does not find identity a's entry")
+	}
+	if _, ok := cache.Peek("acme", 3, "open-summary"); ok {
+		t.Error("Peek without an identity found an identity-keyed entry")
+	}
 	cache.Invalidate("acme", 3)
 	for _, inner := range []*summaryBoard{a, b} {
 		if _, _, err := cache.Wrap(inner, "acme", 3).(*cachedBoard).ListOpenItemsSummary(ctx); err != nil {

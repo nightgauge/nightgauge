@@ -83,7 +83,7 @@ func (r *RepoService) RepoMetadata(ctx context.Context, owner, name string) (*fo
 		Name          string `json:"name"`
 		DefaultBranch string `json:"defaultBranch"`
 	}
-	resp, err := r.client.condGet(ctx, base, func(body []byte) (any, error) {
+	resp, err := r.client.condGet(ctx, base, "repo-meta/v1", func(body []byte) (any, error) {
 		var raw struct {
 			FullName string `json:"full_name"`
 			Name     string `json:"name"`
@@ -111,7 +111,7 @@ func (r *RepoService) RepoMetadata(ctx context.Context, owner, name string) (*fo
 	if meta.DefaultBranch == "" {
 		return out, nil
 	}
-	br, err := r.client.condGet(ctx, base+"/branches/"+url.PathEscape(meta.DefaultBranch), func(body []byte) (any, error) {
+	br, err := r.client.condGet(ctx, base+"/branches/"+url.PathEscape(meta.DefaultBranch), "branch-name/v1", func(body []byte) (any, error) {
 		var raw struct {
 			Name string `json:"name"`
 		}

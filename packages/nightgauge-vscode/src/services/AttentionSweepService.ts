@@ -567,12 +567,17 @@ export class AttentionSweepService implements vscode.Disposable {
    *   others  — only when a full interval has elapsed since the last sweep,
    *             or the daemon's board probe says a bound board moved since
    *             it. A window that has never swept has no cards to serve, so
-   *             it sweeps. The timer fires once per interval, so it always
-   *             finds the interval elapsed and sweeps: it stays the cadence
-   *             that catches what the probe is blind to (CI on the default
-   *             branch, dependabot alerts, branch protection). Activation
-   *             after a reload asks the probe too, against the last sweep
-   *             time the workspace remembers (lastSweepStore).
+   *             it sweeps. Activation after a reload asks the probe too,
+   *             against the last sweep time the workspace remembers
+   *             (lastSweepStore).
+   *   timer   — the cadence that catches what the probe is blind to (CI on
+   *             the default branch, dependabot alerts, branch protection), so
+   *             it sweeps without the probe once the interval has NEARLY
+   *             elapsed. "Nearly" matters: the baseline is stamped when a
+   *             sweep starts, after the repo list resolved, so the next tick
+   *             lands slightly short of a full interval. Held to the exact
+   *             interval, that tick asked the probe, an idle board said "no",
+   *             and the blind-spot signals arrived at twice the interval.
    *
    * The probe fails open. Any answer that is not a confident "nothing moved"
    * — an IPC error, a daemon built without the verb, `unavailable` — sweeps.
@@ -591,6 +596,7 @@ export class AttentionSweepService implements vscode.Disposable {
       config.intervalMs > 0 ? config.intervalMs : DEFAULT_SWEEP_INTERVAL_MINUTES * 60_000;
     const elapsed = this.now() - this.lastSweepAt;
     if (elapsed >= intervalMs) return true;
+    if (trigger === "timer" && elapsed >= intervalMs - timerTolerance(intervalMs)) return true;
 
     try {
       const probe = await this.deps.ipc.boardChanged(
@@ -650,7 +656,9 @@ export class AttentionSweepService implements vscode.Disposable {
         // stays "never swept" and every later trigger sweeps again without
         // asking the probe, which is how one slow sweep became a sweep per
         // focus change.
-        this.recordSweepStart(startedAt);
+        // In memory only: the memento is the record of a sweep that
+        // COMPLETED. A reload must not trust a sweep nobody saw finish.
+        this.lastSweepAt = startedAt;
         this.deps.logger.info("Attention sweep outlived the IPC deadline; the daemon finishes it", {
           trigger,
           repos: repos.length,
@@ -720,6 +728,12 @@ export class AttentionSweepService implements vscode.Disposable {
     this.disposables.length = 0;
     this.started = false;
   }
+}
+
+/** How far short of a full interval a timer tick may land and still count as
+ * the interval having elapsed: 10% of it, at most a minute. */
+function timerTolerance(intervalMs: number): number {
+  return Math.min(intervalMs * 0.1, 60_000);
 }
 
 /** True for the IPC client's request-deadline error ("IPC request X timed out
