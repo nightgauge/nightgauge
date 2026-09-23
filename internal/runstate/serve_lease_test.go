@@ -1,6 +1,7 @@
 package runstate
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -268,4 +269,74 @@ func deadPID(t *testing.T) int {
 		t.Skipf("pid %d was recycled immediately; skipping rather than asserting on a race", pid)
 	}
 	return pid
+}
+
+// A daemon from the release before #2031 holds its lease in
+// ~/.nightgauge/serve. A new acquire must see it as held, or two schedulers
+// run one workspace (#1349); and a new holder must hold the legacy lock too,
+// so an older daemon started afterwards refuses in turn.
+func TestLeaseHonoursAPreviousReleasesLegacyLock(t *testing.T) {
+	if !flock.Supported {
+		t.Skip("no advisory file lock on this platform")
+	}
+	home := isolatedHome(t)
+	root := t.TempDir()
+	legacyDir := filepath.Join(home, ".nightgauge", "serve")
+	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	base := strings.TrimSuffix(ServeSidecarName(root), serveRecordSuffix)
+	legacyLock := filepath.Join(legacyDir, base+serveLockSuffix)
+	rec, _ := json.Marshal(ServeSidecar{PID: 4242, StartedAt: time.Now(), LastHeartbeatAt: time.Now(), WorkspaceRoot: root})
+	if err := os.WriteFile(filepath.Join(legacyDir, base+serveRecordSuffix), rec, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// The old daemon holds its legacy lock.
+	old, err := os.OpenFile(legacyLock, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := flock.Exclusive(old, 0); err != nil {
+		t.Fatal(err)
+	}
+	_, err = AcquireServeLease(root)
+	var held *ServeLeaseError
+	if !errors.As(err, &held) || held.Holder.PID != 4242 {
+		t.Fatalf("AcquireServeLease beside a live legacy holder = %v, want ServeLeaseError naming pid 4242", err)
+	}
+	// The refusal left the new lease free.
+	_ = flock.Unlock(old)
+	_ = old.Close()
+
+	lease, err := AcquireServeLease(root)
+	if err != nil {
+		t.Fatalf("AcquireServeLease after the old daemon exited: %v", err)
+	}
+	// Now an old daemon starting up finds its legacy lock taken.
+	probe, err := os.OpenFile(legacyLock, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer probe.Close()
+	if err := flock.Exclusive(probe, 0); !errors.Is(err, flock.ErrWouldBlock) {
+		t.Errorf("the new lease does not hold the legacy lock: %v", err)
+	}
+	lease.Release()
+	if err := flock.Exclusive(probe, 0); err != nil {
+		t.Errorf("Release did not free the legacy lock: %v", err)
+	}
+}
+
+// No legacy directory, no legacy lock: nothing is created in ~/.nightgauge.
+func TestLeaseCreatesNoLegacyDirectory(t *testing.T) {
+	home := isolatedHome(t)
+	lease, err := AcquireServeLease(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Release()
+	if _, err := os.Lstat(filepath.Join(home, ".nightgauge", "serve")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the lease created the legacy directory: %v", err)
+	}
 }

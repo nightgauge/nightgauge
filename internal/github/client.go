@@ -47,7 +47,7 @@ const rateLimitFloorEnv = "NIGHTGAUGE_GITHUB_RATELIMIT_FLOOR"
 // harnesses that spawn the real daemon binary — a "verb is registered"
 // contract test must never block on GitHub's real reset window (bounded by
 // maxFullExhaustionWait, up to 75m) or on the machine's persisted
-// ~/.nightgauge/rate-limit.json quota state. See
+// <STATE>/rate-limit.json quota state (layout.StateHome). See
 // internal/ipc/server_integration_test.go and Issue #1348.
 const rateLimitNoWaitEnv = "NIGHTGAUGE_GITHUB_RATELIMIT_NO_WAIT"
 
@@ -275,7 +275,15 @@ type OwnerGitHubUserResolver interface {
 // unmapped cross-org target (#4068). The zero-arg GitHubUserResolver is consulted
 // only for resolvers that do not implement the owner-aware form. A nil resolver
 // (or one implementing neither) yields "".
+//
+// Under CI it yields "" (ADR-024 § 5): github_user can come from the committed
+// repository tier, so honouring it there would let a pull request select any
+// identity gh has stored on a shared runner. A CI job's identity is the token
+// in its environment.
 func configuredGitHubUser(cfg TokenResolver, owner string) string {
+	if ciHost() {
+		return ""
+	}
 	if ur, ok := cfg.(OwnerGitHubUserResolver); ok {
 		return ur.ResolveGitHubUserForOwner(owner)
 	}
@@ -405,7 +413,9 @@ func NewClient() (*Client, error) {
 
 // NewClientFromConfig creates a GitHub GraphQL client using the resolution
 // priority chain:
-//  1. cliToken (--token flag) if non-empty
+//  1. cliToken if non-empty — a token the caller already holds. No command
+//     passes one from argv: the root --token flag was removed (ADR-024 § 5,
+//     #2031); on a CI host GITHUB_TOKEN / GH_TOKEN come next, ahead of config
 //  2. cfg.ResolveToken(owner) — per-project or per-org config token
 //     3a. When a github_user is configured: the github_user-scoped token
 //     (gh auth token --user, ambient env stripped) — authoritative over
@@ -426,7 +436,7 @@ func NewClientFromConfig(cfg TokenResolver, owner string, cliToken string) (*Cli
 	return newClientFromChain(cfg, owner, execGHAuthTokenForUser, execGHAuthToken)
 }
 
-// NewClientFromConfigContext is NewClientFromConfig with no --token flag and
+// NewClientFromConfigContext is NewClientFromConfig with no cliToken and
 // every gh CLI call it makes run under ctx, so the gh fallback cannot hold the
 // caller past ctx's deadline. The tiers and the identity rules are
 // NewClientFromConfig's.
@@ -439,6 +449,11 @@ func NewClientFromConfigContext(ctx context.Context, cfg TokenResolver, owner st
 // newClientFromChain is tiers 2 and 3 of NewClientFromConfig, resolving a gh
 // CLI token through forUser and byDefault.
 func newClientFromChain(cfg TokenResolver, owner string, forUser func(string) (string, error), byDefault func() (string, error)) (*Client, error) {
+	// CI: the job's environment first, ahead of any token left on disk.
+	if tok := ciEnvironmentToken(); tok != "" {
+		return NewClientWithToken(tok), nil
+	}
+
 	// 2. Config-based token (per-project or per-org).
 	if cfg != nil {
 		tok, err := cfg.ResolveToken(owner)
@@ -500,8 +515,32 @@ func ghFallbackWarning() string {
 		", or reference an environment variable from any tier with `token: env:VAR_NAME`\n"
 }
 
+// ciHost reports `CI=true` (any case) or `CI=1`, matching config.CIHost,
+// which this package cannot import.
+func ciHost() bool {
+	ci := strings.TrimSpace(os.Getenv("CI"))
+	return strings.EqualFold(ci, "true") || ci == "1"
+}
+
+// ciEnvironmentToken is the CI rule of ADR-024 § 5: when `CI=true`,
+// credentials resolve from the environment first, so a token a previous job
+// left in the machine-tier file or in gh's store cannot shadow the one this
+// job was given. GITHUB_TOKEN, then GH_TOKEN, with no exception; it returns ""
+// off CI or when neither is set.
+func ciEnvironmentToken() string {
+	if !ciHost() {
+		return ""
+	}
+	for _, name := range []string{"GITHUB_TOKEN", "GH_TOKEN"} {
+		if tok := strings.TrimSpace(os.Getenv(name)); tok != "" {
+			return tok
+		}
+	}
+	return ""
+}
+
 // ResolveTokenChain resolves the GitHub token using the same priority chain
-// as NewClientFromConfig (skipping the CLI --token flag tier):
+// as NewClientFromConfig (skipping the cliToken tier):
 //  1. cfg.ResolveToken(owner) — per-project or per-org config token
 //     2a. When a github_user is configured: the github_user-scoped token
 //     (gh auth token --user, ambient env stripped) — authoritative over the
@@ -512,6 +551,9 @@ func ghFallbackWarning() string {
 // The returned token can be fingerprinted without creating a client.
 // Returns empty string and error if no token is found.
 func ResolveTokenChain(cfg TokenResolver, owner string) (string, error) {
+	if tok := ciEnvironmentToken(); tok != "" {
+		return tok, nil
+	}
 	if cfg != nil {
 		tok, err := cfg.ResolveToken(owner)
 		if err == nil && tok != "" {

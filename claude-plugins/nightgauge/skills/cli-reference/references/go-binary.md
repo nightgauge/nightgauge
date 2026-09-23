@@ -59,8 +59,9 @@ repo `nightgauge` — pass `--owner` / `--repo` for other targets.
 - Prefer the binary over hand-rolled GraphQL/bash for board, epic, and sub-issue
   operations — it encodes the routing/field rules that caused incidents like
   #3232 when done by hand.
-- For one-shot auth, binary commands accept `--token "$TOKEN"`; otherwise they use
-  the config/gh token chain.
+- No binary command takes a GitHub token on argv (it would be visible through
+  `ps`). For one-shot auth set `GITHUB_TOKEN` / `GH_TOKEN` in the command's
+  environment; otherwise they use the config/gh token chain.
 - In multi-account workspaces, scope a token per-command —
   `GH_TOKEN=$(gh auth token --user <acct>) nightgauge …` — rather than
   `gh auth switch`, which changes the **global** active account and silently

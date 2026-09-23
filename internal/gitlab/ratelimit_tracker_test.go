@@ -221,11 +221,11 @@ func TestDefaultSharedTrackerPath(t *testing.T) {
 	if !strings.Contains(path, "ratelimit-gitlab-") {
 		t.Fatalf("path should contain 'ratelimit-gitlab-': %s", path)
 	}
+	if !strings.HasPrefix(path, os.Getenv("NIGHTGAUGE_STATE_HOME")) {
+		t.Fatalf("path %s is not under the isolated state root", path)
+	}
 	if !strings.Contains(path, "gitlab-mycompany-com") {
 		t.Fatalf("path should contain sanitized host 'gitlab-mycompany-com': %s", path)
-	}
-	if !strings.Contains(path, ".nightgauge") {
-		t.Fatalf("path should be under .nightgauge: %s", path)
 	}
 }
 

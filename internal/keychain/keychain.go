@@ -30,6 +30,21 @@
 //
 // No value is ever logged; a [Result] carries the value for the caller and a
 // source label for everything else.
+//
+// # CI hosts
+//
+// When `CI=true`, [Store.Set] refuses to write anywhere (ADR-024 § 5): a
+// self-hosted runner shared between jobs would otherwise carry one job's key
+// into the next. Credentials in CI come from the environment.
+//
+// # Threat model
+//
+// The keychain protects a credential from other OS users, from backups and
+// sync of plain files, and from commits. It does not protect it from code
+// running as the same user: an item created through macOS's `security` tool
+// (which go-keyring uses) can be read back by any same-user process running
+// `/usr/bin/security` without a prompt, and pipeline agents are same-user
+// processes. The license key is therefore per device and revocable.
 package keychain
 
 import (
@@ -202,9 +217,21 @@ func (s *Store) Get(account string) (Result, error) {
 // Source SourceMachineFile with the reason in KeychainErr. A keychain that
 // does not answer in time is an error, not a fallback: the abandoned write can
 // still land, and a second copy on disk is what the keychain exists to avoid.
+//
+// On a CI host (`CI=true`) it writes nothing, neither to the keychain nor to
+// the machine-tier file, and returns an error wrapping
+// config.ErrCredentialWriteInCI (ADR-024 § 5): a runner shared between jobs
+// would otherwise hand one job's key to the next.
 func (s *Store) Set(account, value string) (Result, error) {
 	if value == "" {
 		return Result{}, errors.New("refusing to store an empty value")
+	}
+	if config.CIHost(s.getenv) {
+		hint := ""
+		if account == AccountLicenseKey {
+			hint = "; set " + EnvLicenseKey + " in the job's environment"
+		}
+		return Result{}, fmt.Errorf("%w%s", config.ErrCredentialWriteInCI, hint)
 	}
 	_, err := s.call(func() (string, error) { return "", s.backend.Set(Service, account, value) })
 	if err == nil {
@@ -306,7 +333,9 @@ func (s *Store) Delete(account string) (Removed, error) {
 }
 
 // ResolveLicenseKey resolves the platform license key: the environment
-// variable, then the keychain entry, then the machine-tier file.
+// variable, then the keychain entry, then the machine-tier file. The
+// environment is always consulted first, which is the order ADR-024 § 5
+// requires on a CI host.
 func (s *Store) ResolveLicenseKey() (Result, error) {
 	if v := strings.TrimSpace(s.getenv(EnvLicenseKey)); v != "" {
 		return Result{Value: v, Source: SourceEnv}, nil

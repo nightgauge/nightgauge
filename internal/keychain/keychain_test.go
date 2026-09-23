@@ -311,3 +311,47 @@ func TestIsNoKeychain(t *testing.T) {
 		}
 	}
 }
+
+// On a CI host nothing is written: not the keychain, not the machine file
+// (ADR-024 § 5). A shared runner would otherwise carry the key to the next job.
+func TestSetInCIWritesNothing(t *testing.T) {
+	for _, ci := range []string{"true", "TRUE", "1"} {
+		t.Run(ci, func(t *testing.T) {
+			keyring.MockInit()
+			path := machineFile(t)
+			s := newStore(map[string]string{"CI": ci})
+
+			res, err := s.Set(AccountLicenseKey, "ib_live_ci")
+			if !errors.Is(err, config.ErrCredentialWriteInCI) {
+				t.Fatalf("Set in CI = %+v, %v; want ErrCredentialWriteInCI", res, err)
+			}
+			if !strings.Contains(err.Error(), EnvLicenseKey) {
+				t.Errorf("error %q does not name %s", err, EnvLicenseKey)
+			}
+			if strings.Contains(err.Error(), "ib_live_ci") {
+				t.Fatal("the error quotes the credential")
+			}
+			if v, gerr := keyring.Get(Service, AccountLicenseKey); gerr == nil {
+				t.Errorf("the keychain holds %q after a CI write", v)
+			}
+			if _, serr := os.Stat(path); !errors.Is(serr, os.ErrNotExist) {
+				t.Errorf("the machine file was written in CI: %v", serr)
+			}
+		})
+	}
+}
+
+// Environment first, on every host and so on a CI host: a key left in the
+// keychain by an earlier job never shadows the job's own.
+func TestResolveLicenseKeyInCIPrefersEnvironment(t *testing.T) {
+	keyring.MockInit()
+	machineFile(t)
+	if err := keyring.Set(Service, AccountLicenseKey, "ib_live_stale"); err != nil {
+		t.Fatal(err)
+	}
+	s := newStore(map[string]string{"CI": "true", EnvLicenseKey: "ib_live_job"})
+	got, err := s.ResolveLicenseKey()
+	if err != nil || got.Value != "ib_live_job" || got.Source != SourceEnv {
+		t.Fatalf("ResolveLicenseKey in CI = %+v, %v; want the environment's key", got, err)
+	}
+}

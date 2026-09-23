@@ -937,7 +937,7 @@ func isolateOpenCodeHome(t *testing.T) string {
 	t.Setenv("HOME", home)
 	for _, k := range []string{
 		"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME",
-		"GH_CONFIG_DIR", "GOCACHE", "NIGHTGAUGE_CONFIG_HOME",
+		"GH_CONFIG_DIR", "GOCACHE", "NIGHTGAUGE_CONFIG_HOME", "NIGHTGAUGE_STATE_HOME",
 	} {
 		t.Setenv(k, "")
 	}
@@ -1308,7 +1308,7 @@ func TestOpenCodeSpawnWithholdsNightgaugeSecrets(t *testing.T) {
 	}
 	for k := range env {
 		if strings.HasPrefix(k, "NIGHTGAUGE_") && !strings.HasPrefix(k, "NIGHTGAUGE_OPENCODE_") &&
-			!slices.Contains(adapters.OpenCodeNightgaugeEnvAllow, k) && k != "NIGHTGAUGE_CONFIG_HOME" {
+			!slices.Contains(adapters.OpenCodeNightgaugeEnvAllow, k) && k != "NIGHTGAUGE_CONFIG_HOME" && k != "NIGHTGAUGE_STATE_HOME" {
 			t.Errorf("%s reached the opencode child but is neither allowed nor a run variable", k)
 		}
 	}

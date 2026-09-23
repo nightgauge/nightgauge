@@ -297,9 +297,6 @@ func getOwnerType(cmd *cobra.Command) gh.OwnerType {
 	return gh.OwnerTypeOrg
 }
 
-// globalToken holds the --token CLI flag value. Set by rootCmd PersistentPreRunE.
-var globalToken string
-
 // explicitWorkspaceRoot returns the workspace this invocation was explicitly
 // pointed at via --workspace or --workdir, or "" when it was given neither
 // (in which case the process cwd is already the right answer).
@@ -316,17 +313,19 @@ func explicitWorkspaceRoot(cmd *cobra.Command) string {
 	return ""
 }
 
-// clientFromConfig creates a GitHub client using the full resolution chain:
-//  1. --token CLI flag (globalToken)
+// clientFromConfig creates a GitHub client using the full resolution chain.
+// There is no argv tier: the root --token flag was removed because a token on
+// the command line is visible through `ps` (ADR-024 § 5, #2031).
+//  1. On a CI host: GITHUB_TOKEN, then GH_TOKEN, ahead of everything else
 //  2. Per-project or per-org token from config (github_auth.token / github_auth.tokens)
-//  3. GITHUB_TOKEN env var
-//  4. gh auth token --user <user> (from config github_user / github_auth.users) —
+//  3. gh auth token --user <user> (from config github_user / github_auth.users) —
 //     scoped to the configured identity, never the ambient active account (#3700)
-//  5. gh auth token (default gh user) — only when no github_user is configured
+//  4. With no github_user configured: GITHUB_TOKEN env var, then
+//     gh auth token (default gh user)
 func clientFromConfig() (*gh.Client, error) {
 	workdir, err := os.Getwd()
 	if err != nil {
-		return gh.NewClientFromConfig(nil, "", globalToken)
+		return gh.NewClientFromConfig(nil, "", "")
 	}
 	cfg, err := config.Load(workdir)
 	if err != nil {
@@ -336,9 +335,9 @@ func clientFromConfig() (*gh.Client, error) {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
 	if cfg == nil {
-		return gh.NewClientFromConfig(nil, "", globalToken)
+		return gh.NewClientFromConfig(nil, "", "")
 	}
-	return gh.NewClientFromConfig(cfg, cfg.Owner, globalToken)
+	return gh.NewClientFromConfig(cfg, cfg.Owner, "")
 }
 
 // exportConfiguredGitHubToken resolves the pipeline's GitHub token via the same
@@ -559,10 +558,9 @@ func rootCmd() *cobra.Command {
 	// Defaults to "org"; set to "user" for user-owned GitHub project boards.
 	root.PersistentFlags().String("owner-type", "org", "GitHub owner type: org or user")
 
-	// Global --token flag for one-shot PAT override. Takes highest precedence
-	// over all config-based tokens. Avoid using in scripts — prefer env:VAR_NAME
-	// in config.yaml to avoid token exposure in shell history.
-	root.PersistentFlags().StringVar(&globalToken, "token", "", "GitHub PAT for one-shot operations (overrides all config tokens)")
+	// No --token flag: a credential on argv is visible through `ps`
+	// (ADR-024 § 5, #2031). The token comes from the resolution chain in
+	// clientFromConfig; for a one-shot override, set GITHUB_TOKEN or GH_TOKEN.
 
 	root.AddCommand(
 		adapterCmd(),
@@ -4918,11 +4916,18 @@ func serveCmd() *cobra.Command {
 				}
 			}
 
-			// Resolve platform credentials with flag > env > config
-			// precedence (#333). serveCmd registers --platform-url,
-			// --api-key, and --license-key with os.Getenv(...) defaults, so
-			// the flag variables above already encode "flag or env, flag
-			// wins" by the time cobra hands control to RunE — the only
+			// The platform API key and license key are read from the
+			// environment only (ADR-024 § 5): the --api-key and --license-key
+			// flags they once also took put them on argv, where every local
+			// user sees them through `ps`.
+			apiKey = os.Getenv("NIGHTGAUGE_API_KEY")
+			licenseKey = os.Getenv("NIGHTGAUGE_LICENSE_KEY")
+
+			// Resolve platform credentials with flag/env > config
+			// precedence (#333). serveCmd registers --platform-url with an
+			// os.Getenv(...) default, so the URL variable above already
+			// encodes "flag or env, flag wins" by the time cobra hands
+			// control to RunE; the keys come from the environment — the only
 			// remaining fallback is the stored license key (OS keychain,
 			// then machine-tier file) and the merged config's URL, which an
 			// extension-spawned daemon (no flags, no env) otherwise never
@@ -5408,8 +5413,6 @@ func serveCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&workspaceDir, "workspace", "", "Workspace root directory (default: CWD)")
 	cmd.Flags().StringVar(&platformURL, "platform-url", os.Getenv("NIGHTGAUGE_PLATFORM_URL"), "Platform API base URL")
-	cmd.Flags().StringVar(&apiKey, "api-key", os.Getenv("NIGHTGAUGE_API_KEY"), "Platform API key")
-	cmd.Flags().StringVar(&licenseKey, "license-key", os.Getenv("NIGHTGAUGE_LICENSE_KEY"), "License key")
 	cmd.Flags().StringVar(&githubGraphQLURL, "github-graphql-url", "", "Override GitHub GraphQL URL (for tests only)")
 	cmd.Flags().MarkHidden("github-graphql-url") //nolint:errcheck
 
@@ -11948,7 +11951,7 @@ var doctorCheckOrder = []string{
 	"binary", "gh", "github_auth", "api_user", "scopes", "rate_limit", "github_api_budget", "config", "project",
 	"complexity_model", "ai_adapter",
 	"compose_orphans", "worktree_leaks", "stranded_branches", "pipeline_stashes", "preserved_wip", "orphaned_processes",
-	"serve_lease", "ledger_daemon_coverage", "tracked_secrets",
+	"serve_lease", "ledger_daemon_coverage", "tracked_secrets", "ci_machine_credentials",
 	"survival_backlog", "survival_coverage", "corpus_calibration", "scheduled_automations",
 }
 

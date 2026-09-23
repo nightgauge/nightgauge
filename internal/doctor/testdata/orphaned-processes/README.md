@@ -21,7 +21,8 @@ serve` daemon, which is the reason it is in the fixture: `serve` is the one
 long-lived nightgauge process a healthy workstation always has, so it is the
 row that decides whether the classifier gets ownership right. Until #388 it
 was excepted by argv and could never be reported; it is now carried by the
-heartbeat claim it writes (`~/.nightgauge/serve/<hash>.json`) and is reported
+heartbeat claim it writes (`<STATE>/serve/<key>.json`, `~/.nightgauge/serve/`
+when this fixture was captured) and is reported
 like anything else without one. A fixture without this row could not express
 either half of that.
 

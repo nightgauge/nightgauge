@@ -174,7 +174,7 @@ func TestResolvePlatformConfig_PrecedenceTable(t *testing.T) {
 
 // TestResolvePlatformConfig_ExtensionSpawnedDaemon reproduces the exact
 // scenario from #333's bug report: `nightgauge serve --workspace <root>`
-// with no --license-key flag and no NIGHTGAUGE_LICENSE_KEY env (the
+// with no NIGHTGAUGE_LICENSE_KEY env (the
 // extension's actual invocation), but a merged config carrying a platform
 // section (as it would after config.Load merges in
 // ~/.nightgauge/config.yaml). Both downstream gates in serveCmd's RunE
