@@ -66,9 +66,24 @@ describe("ensureGitignore", () => {
       "/health/",
       "/autonomous/",
       "/complexity-model.lock",
+      "/worktrees/",
     ]) {
       expect(generated).toContain(rule);
     }
+  });
+
+  it("writes exactly the Go binary's embedded template (#2026)", async () => {
+    // `nightgauge config init` and `serve` write the same file from
+    // internal/scaffold/nightgauge.gitignore. Compare what this module
+    // actually writes, not a regex over its source, so a change to either
+    // writer alone turns this red.
+    const goTemplate = fs.readFileSync(
+      path.join(repoRoot, "internal/scaffold/nightgauge.gitignore"),
+      "utf8"
+    );
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "ng-parity-"));
+    await ensureGitignore(root);
+    expect(fs.readFileSync(path.join(root, ".nightgauge", ".gitignore"), "utf8")).toBe(goTemplate);
   });
 
   it("carries a version marker the updater can compare against", () => {

@@ -18,6 +18,13 @@ and this project adheres to
 
 ### Fixed
 
+- The generated `.nightgauge/.gitignore` (template version 14) now ignores
+  `.nightgauge/worktrees/`, so a pipeline worktree no longer shows up in
+  `git status` as an embedded repository in a repository whose root
+  `.gitignore` does not already ignore it. The Nightgauge CLI now writes the
+  same file from `config init` and `serve`, so a clone that never opened VS
+  Code gets it too.
+
 - An attention sweep that outlives the 30-second request deadline no longer
   leaves the window "never swept": the daemon finishes it and its cards still
   arrive, and later triggers in that window ask the board change probe

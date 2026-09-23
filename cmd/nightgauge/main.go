@@ -60,6 +60,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/platform"
 	ibqueue "github.com/nightgauge/nightgauge/internal/queue"
 	"github.com/nightgauge/nightgauge/internal/runstate"
+	"github.com/nightgauge/nightgauge/internal/scaffold"
 	"github.com/nightgauge/nightgauge/internal/scan"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/internal/telemetrynotice"
@@ -4814,6 +4815,16 @@ func serveCmd() *cobra.Command {
 			// Set up persistent file-based logging (tees to stderr + file)
 			closeLog := setupServeLogging(workspaceRoot)
 			defer closeLog()
+
+			// The .nightgauge/ ignore rules (#2026). The extension ensures them
+			// on activation, but a CLI-only or CI clone never runs it, and
+			// there `git add -A` commits logs and pipeline state. Non-fatal:
+			// the IPC server is worth more than an ignore file.
+			if res, ierr := scaffold.EnsureIgnoreRules(workspaceRoot); ierr != nil {
+				log.Printf("serve: ensure .nightgauge/ ignore rules: %v", ierr)
+			} else if res.Action != scaffold.IgnoreCurrent {
+				log.Printf("serve: %s", describeIgnoreResult(res))
+			}
 
 			// Claim this workspace's serve record in the machine-global claim
 			// directory and heartbeat it (#388). Without this marker `doctor`

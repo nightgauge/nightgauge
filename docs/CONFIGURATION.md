@@ -322,7 +322,11 @@ EOF
 `.nightgauge/.gitignore` (its `/config.local.yaml` rule), so there is nothing to
 add by hand.
 
-That file is generator-owned. It carries a `nightgauge-gitignore-version:`
+That file is generator-owned. The VS Code extension ensures it on activation,
+and the CLI does the same from `nightgauge config init` and `nightgauge serve`,
+so a clone driven only from a terminal or CI gets it too; both write one
+template (`internal/scaffold/nightgauge.gitignore`). Outside a git work tree
+the CLI writes nothing. The file carries a `nightgauge-gitignore-version:`
 marker, and when the template's version is newer:
 
 - An **untracked** copy is rewritten: everything above its

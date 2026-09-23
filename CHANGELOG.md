@@ -471,6 +471,26 @@ create --body-file` call, so the compact profile (and its tests) pin
 
 ### Fixed
 
+- **A clone set up by the CLI alone now ignores Nightgauge's runtime files
+  (#2026).** Only the VS Code extension wrote the `.nightgauge/` ignore rules,
+  so on a terminal-only or CI clone `git add -A` committed logs and pipeline
+  state and turned each `.nightgauge/worktrees/*` checkout into an embedded
+  repository. `nightgauge config init` and `nightgauge serve` now ensure them
+  the way the extension does: a missing `.nightgauge/.gitignore` is written, an
+  older untracked one is rewritten keeping its local additions, and an older
+  committed one is left alone while the current rules go to the repository's
+  `info/exclude` (the shared one in a linked worktree; a symlinked target is
+  refused). Repeat runs change nothing, a repository without
+  `.nightgauge/config.yaml` or outside git is left untouched, and
+  `config init --json` reports the outcome as `ignore_rules`. The binary embeds
+  the template from `internal/scaffold/nightgauge.gitignore`; tests on both
+  sides fail if the extension's copy, that file or the committed
+  `.nightgauge/.gitignore` differ. The template (now version 14) also ignores
+  `.nightgauge/worktrees/`, where the scheduler creates its worktrees; before,
+  only a repository's own root `.gitignore` could keep them out. A committed
+  version-13 file picks the rule up per machine until it is upgraded by pull
+  request. No rule was removed.
+
 - **The docs now agree with what the generated `.nightgauge/.gitignore`
   ignores (#1090).** `docs/ARCHITECTURE.md` no longer claims the plan deleted
   at merge is "preserved in git history": `plans/*` is ignored, so that delete

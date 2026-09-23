@@ -7190,6 +7190,20 @@ parser.
 | `--no-fetch`      | `false`                        | Skip GitHub queries even when `--project` is set; emit field-ID placeholders    |
 | `--json`          | `false`                        | After writing, print `{"path":"...","wrote":true}` to stdout (machine-readable) |
 
+**Ignore rules**: when the written file is a `.nightgauge/config.yaml`, the
+verb also ensures the `.nightgauge/` ignore rules in that repository, as the
+extension does on activation and `serve` does at startup. A missing
+`.nightgauge/.gitignore` is written from the template the binary embeds
+(`internal/scaffold/nightgauge.gitignore`); an older untracked copy is
+rewritten, keeping its `Local additions`; an older committed copy is left
+untouched and the current rules go to the repository's `info/exclude`
+(`git rev-parse --git-path info/exclude`, so a linked worktree writes the
+shared one; a symlinked target is refused). Outside a git work tree nothing is
+written. The outcome is printed to stderr as `ignore rules: <action> ...` and,
+with `--json`, added as an `ignore_rules` object with `action` (`created`,
+`updated`, `deferred`, `current` or `skipped`), `path` and `note`. See
+[CONFIGURATION.md § Gitignore Entry](CONFIGURATION.md#gitignore-entry).
+
 **Exit codes**:
 
 | Code | Meaning                                                                       |

@@ -11,6 +11,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/scaffold"
 	"github.com/spf13/cobra"
 )
 
@@ -170,12 +171,19 @@ The verb refuses to overwrite an existing file unless --force is given. Use
 			if err != nil {
 				return err
 			}
+			ignore, err := ensureInitIgnoreRules(path)
+			if err != nil {
+				return err
+			}
 
 			if outputJSON {
-				return emitInitJSON(cmd, path, wrote)
+				return emitInitJSON(cmd, path, wrote, ignore)
 			}
 			if path != "" && wrote {
 				fmt.Fprintf(cmd.ErrOrStderr(), "wrote %s\n", path)
+			}
+			if ignore != nil {
+				fmt.Fprintln(cmd.ErrOrStderr(), describeIgnoreResult(*ignore))
 			}
 			return nil
 		},
@@ -486,12 +494,51 @@ func writeTemplate(cmd *cobra.Command, body, outPath string, force bool) (string
 	return outPath, true, nil
 }
 
+// ensureInitIgnoreRules makes the .nightgauge/ ignore rules take effect in the
+// repository whose .nightgauge/config.yaml init just wrote or found (#2026).
+// Without it a clone set up by the CLI alone has no rules at all, and
+// `git add -A` commits logs and pipeline state. It returns nil when path is
+// not a .nightgauge/config.yaml (stdout, or a custom --out elsewhere).
+func ensureInitIgnoreRules(path string) (*scaffold.IgnoreResult, error) {
+	if path == "" {
+		return nil, nil
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve %s: %w", path, err)
+	}
+	if filepath.Base(abs) != "config.yaml" || filepath.Base(filepath.Dir(abs)) != ".nightgauge" {
+		return nil, nil
+	}
+	res, err := scaffold.EnsureIgnoreRules(filepath.Dir(filepath.Dir(abs)))
+	if err != nil {
+		return nil, fmt.Errorf("ensure .nightgauge/ ignore rules: %w", err)
+	}
+	return &res, nil
+}
+
+// describeIgnoreResult renders one stderr line for an ensure outcome.
+func describeIgnoreResult(res scaffold.IgnoreResult) string {
+	line := "ignore rules: " + string(res.Action)
+	if res.Path != "" {
+		line += " " + res.Path
+	}
+	if res.Note != "" {
+		line += " (" + res.Note + ")"
+	}
+	return line
+}
+
 // emitInitJSON writes a stable {"path": ..., "wrote": ...} envelope to stdout
 // so calling skills/scripts can branch on the outcome without parsing prose.
-func emitInitJSON(cmd *cobra.Command, path string, wrote bool) error {
+// "ignore_rules" is added when init ensured the .nightgauge/ ignore rules.
+func emitInitJSON(cmd *cobra.Command, path string, wrote bool, ignore *scaffold.IgnoreResult) error {
 	payload := map[string]any{
 		"path":  path,
 		"wrote": wrote,
+	}
+	if ignore != nil {
+		payload["ignore_rules"] = ignore
 	}
 	enc := json.NewEncoder(cmd.OutOrStdout())
 	enc.SetIndent("", "  ")
