@@ -9,6 +9,9 @@ name: CodeQL
 # so the job name and the existing matrix entries must not be renamed.
 
 on:
+  # Kept on push to main (#2055), unlike the test suites: code scanning
+  # compares each PR's alerts against the default branch's latest analysis, so
+  # main needs its own baseline upload. Post-merge verification waits for it.
   push:
     branches: [main]
   pull_request:

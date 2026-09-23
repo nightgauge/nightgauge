@@ -18,10 +18,11 @@ name: publication-boundary
 # that cannot run is a failure, never a skip. A guard that passes when it cannot
 # tell is worse than no guard, because it manufactures confidence.
 
+# No push to main (#2055): the strict ruleset merges only an up-to-date PR whose
+# squash tree is the tree this PR run already classified, so a push run
+# re-checks an identical tree. The guard still fails closed where it runs.
 on:
   pull_request:
-  push:
-    branches: [main]
 
 permissions:
   contents: read

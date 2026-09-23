@@ -176,12 +176,12 @@ the discovery regex and the atomic-write contract. This section documents the
 | Outcome        | `gateResults`, `prUrl`, `mergedCommitSha`, `mergedAt`, `mainCheckVerdict`, `mainCheckFailing`, `license`, `licenseExpiredMidRun`, `toolCalls`, `modelRefusalFallbacks`                                                                                                                                                                                                                                |
 
 `mainCheckVerdict` / `mainCheckFailing` are the post-merge observation of the
-base branch (#1249): what the merge commit's own check runs did once the
-pipeline had merged — `green` | `red` | `pending` (bounded wait ran out with
+base branch (#1249): once the pipeline had merged, whether the merged PR head's
+required checks passed on the merge commit's tree and the checks still running
+on the merge commit went green (#2055) — `green` | `red` | `pending` (bounded wait ran out with
 checks still running) | `no_checks` (none appeared within the grace) | `error` |
-`skipped` — and the distinct failing check names when red. `gateResults` is the
-PR gate's prediction; this is the observation, and only `green` means main
-passed.
+`skipped` — and the distinct failing check names when red. Only `green` means
+main passed.
 
 `terminalOutcome` has a closed vocabulary — `complete` | `cancelled` | `failed`
 — shared deliberately with the extension path so the two cannot drift.

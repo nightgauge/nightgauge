@@ -458,6 +458,12 @@ func verifyMain(ctx context.Context, input PostMergeInput, out PostMergeResult) 
 		fmt.Fprintf(os.Stderr, "Warning: post-merge: %s is RED at merge commit %s — %d check(s) failed: %s\n",
 			out.BaseRef, shortSHA(out.MergedCommitSha), res.Bad, strings.Join(res.FailingNames(), ", "))
 	case MainChecksGreen:
+		if res.TreesMatch != nil && *res.TreesMatch {
+			// #2055: the PR run was the gate for this exact tree.
+			fmt.Fprintf(os.Stderr, "Post-merge: %s is green at merge commit %s — same tree as PR #%d's head %s, whose required checks passed; %d check(s) on the merge commit green (%d polls)\n",
+				out.BaseRef, shortSHA(out.MergedCommitSha), res.PRNumber, shortSHA(res.PRHeadSha), res.Total, res.Polls)
+			break
+		}
 		fmt.Fprintf(os.Stderr, "Post-merge: %s is green at merge commit %s (%d checks, %d polls)\n",
 			out.BaseRef, shortSHA(out.MergedCommitSha), res.Total, res.Polls)
 	case MainChecksPending:

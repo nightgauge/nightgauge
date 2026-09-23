@@ -446,6 +446,25 @@ create --body-file` call, so the compact profile (and its tests) pin
 
 ### Changed
 
+- **The PR run is the gate; the full suites no longer re-run on push to
+  `main` (#2055).** `main`'s ruleset merges a pull request only when it is up
+  to date, so the squash commit's tree is the tree its required checks passed
+  on, and re-running them on `main` only re-rolled nondeterministic tests.
+  `ci.yml`, `lint.yml`, `publication-boundary.yml`, `agent-guidance.yml`,
+  `credential-scan.yml` and `adapter-canary.yml` now run on pull requests only
+  (the canary keeps its daily schedule), and `cla.yml` drops its push-only
+  `cla-main-observation` job. CodeQL still runs on `main` for the code-scanning
+  baseline, and a new non-required `cache-warm` workflow saves the Go, npm and
+  Playwright caches pull requests restore, building only on a cache miss.
+  `scripts/post-merge-check.sh`, `nightgauge ci checks-complete` and
+  `nightgauge hook post-merge` now verify, for a merged PR's merge commit, that
+  its tree equals the PR head's tree, that the head's required checks passed,
+  and that whatever still runs on the merge commit is green (still running is
+  exit 2, and the hook keeps polling). If the trees differ, the merge commit
+  must carry every required check itself, which reads exit 2 where the suites
+  no longer run. The exit codes are unchanged: 0 green, 1 red, 2 not yet
+  observable.
+
 - **The orchestrator resolves its per-clone directories through one package
   (#2033).** A new leaf package, `internal/layout`, has one resolver per
   per-clone class: `PipelineStateDir`, `PlansDir`, `RetrosDir` and

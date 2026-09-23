@@ -40,6 +40,14 @@ trap cleanup EXIT
 # the script's real jq programs rather than returning pre-filtered output.
 # Omitted status pages mean "no commit statuses". An empty first argument
 # makes the fake exit non-zero, standing in for an API failure or unknown sha.
+#
+# #2055: the fake also serves the merge commit itself (sha $MERGE_SHA, tree
+# tree-a), its pull requests (none by default, so the pre-#2055 cases below
+# keep the merge-commit-only rule), and the base branch's rulesets. stub_pr
+# adds a merged PR and its head's checks. An endpoint with no page file is a
+# non-zero exit, as `gh api` is on a 404.
+MERGE_SHA=deadbeef00000000000000000000000000000000
+HEAD_SHA=feedface00000000000000000000000000000000
 stub_gh() {
   [ -n "$FAKE_BIN" ] && rm -rf "$FAKE_BIN"
   FAKE_BIN=$(mktemp -d)
@@ -60,11 +68,15 @@ stub_gh() {
     printf '%s\n' "$page" >"$FAKE_BIN/pages/$surface.$n.json"
   done
   [ -e "$FAKE_BIN/pages/status.1.json" ] || echo '{"statuses": []}' >"$FAKE_BIN/pages/status.1.json"
+  printf '{"sha": "%s", "commit": {"tree": {"sha": "tree-a"}}}\n' "$MERGE_SHA" >"$FAKE_BIN/pages/commit.1.json"
+  echo '[]' >"$FAKE_BIN/pages/pulls.1.json"
+  echo '[]' >"$FAKE_BIN/pages/rules.1.json"
   {
     echo '#!/usr/bin/env bash'
     echo "pages='$FAKE_BIN/pages'"
+    echo "head_sha='$HEAD_SHA'"
     cat <<'GH_STUB'
-paginate=0 expr="" endpoint=""
+paginate=0 expr="" endpoint="" prefix=""
 while [ $# -gt 0 ]; do
   case "$1" in
   --paginate) paginate=1 ;;
@@ -74,10 +86,17 @@ while [ $# -gt 0 ]; do
     ;;
   */check-runs*) endpoint=check-runs ;;
   */status*) endpoint=status ;;
+  */pulls*) endpoint=pulls ;;
+  */rules/branches/*) endpoint=rules ;;
+  */protection/*) endpoint=protection ;;
+  */commits/*) endpoint=commit ;;
   esac
+  case "$1" in *"$head_sha"*) prefix=head- ;; esac
   shift
 done
 [ -n "$endpoint" ] || exit 1
+endpoint="$prefix$endpoint"
+[ -e "$pages/$endpoint.1.json" ] || exit 1
 n=1
 while [ -e "$pages/$endpoint.$n.json" ]; do
   if [ -n "$expr" ]; then
@@ -91,6 +110,20 @@ done
 GH_STUB
   } >"$FAKE_BIN/gh"
   chmod +x "$FAKE_BIN/gh"
+}
+
+# stub_pr <head-tree> <head-check-runs-page> [<head-status-page> [<merged-at>]]
+# — after stub_gh: the merge commit is PR #42's, whose head has the given tree
+# and checks. The base branch requires `build` and `cla`. merged-at defaults to
+# long ago, past the empty-merge-commit grace.
+stub_pr() {
+  printf '[{"number": 42, "merge_commit_sha": "%s", "merged_at": "%s", "head": {"sha": "%s"}, "base": {"ref": "main"}}]\n' \
+    "$MERGE_SHA" "${4:-2020-01-01T00:00:00Z}" "$HEAD_SHA" >"$FAKE_BIN/pages/pulls.1.json"
+  printf '{"sha": "%s", "commit": {"tree": {"sha": "%s"}}}\n' "$HEAD_SHA" "$1" >"$FAKE_BIN/pages/head-commit.1.json"
+  printf '%s\n' "$2" >"$FAKE_BIN/pages/head-check-runs.1.json"
+  printf '%s\n' "${3:-{\"statuses\": []\}}" >"$FAKE_BIN/pages/head-status.1.json"
+  echo '[{"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "build"}, {"context": "cla"}]}}]' \
+    >"$FAKE_BIN/pages/rules.1.json"
 }
 
 # success_runs <count> — a check-runs page of <count> completed, successful runs.
@@ -190,7 +223,7 @@ expect "a red verdict names the failing run" 1 "build"
 # (f) An API failure is not evidence of anything. Reading a network blip as a
 # clean bill of health is the same mistake as (a), one layer down.
 stub_gh ''
-expect "an unreadable API is NOT-YET, not green" 2 "could not read check-runs"
+expect "an unreadable API is NOT-YET, not green" 2 "could not read"
 
 # (g) A cancelled or timed-out run is a completed non-success, so it is RED
 # rather than something the vocabulary quietly drops.
@@ -230,6 +263,72 @@ stub_gh '{"check_runs": [
 expect "a successful commit status is counted" 0 "all 2 check(s)"
 stub_gh '{"check_runs": []}' -- '{"statuses": [{"context": "cla", "state": "success"}]}'
 expect "a status-only commit is GREEN, not empty" 0 "all 1 check(s)"
+
+# (k) #2055: the PR run is the gate. The merge commit's tree equals PR #42's
+# head's tree, so the head's REQUIRED checks decide, and the merge commit only
+# has to be green (or still running) in what it still runs on push.
+PUSH_GREEN='{"check_runs": [
+  {"name": "CodeQL",     "status": "completed", "conclusion": "success"},
+  {"name": "cache-warm", "status": "completed", "conclusion": "success"}
+]}'
+HEAD_GREEN='{"check_runs": [
+  {"name": "build",    "status": "completed", "conclusion": "success"},
+  {"name": "advisory", "status": "completed", "conclusion": "failure"}
+]}'
+CLA_OK='{"statuses": [{"context": "cla", "state": "success"}]}'
+
+stub_gh "$PUSH_GREEN"
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK"
+expect "tree equal, head's required checks green, push jobs green is GREEN" 0 "same tree as PR #42 head"
+
+stub_gh "$PUSH_GREEN"
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK"
+expect "a failing advisory check on the PR head does not make the merge red" 0 "GREEN"
+
+stub_gh "$PUSH_GREEN"
+stub_pr tree-a '{"check_runs": [
+  {"name": "build", "status": "completed", "conclusion": "failure", "html_url": "https://example.invalid/run/9"}
+]}' "$CLA_OK"
+expect "a red required check on the PR head is RED" 1 "required check(s) failed on PR #42 head"
+
+stub_gh "$PUSH_GREEN"
+stub_pr tree-a "$HEAD_GREEN"
+expect "a required check absent from the PR head is NOT-YET" 2 "required check(s) absent: cla"
+
+stub_gh '{"check_runs": [
+  {"name": "CodeQL",     "status": "in_progress", "conclusion": null},
+  {"name": "cache-warm", "status": "completed",   "conclusion": "success"}
+]}'
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK"
+expect "a push job still running on the merge commit is NOT-YET" 2 "still running: CodeQL"
+
+stub_gh '{"check_runs": [
+  {"name": "CodeQL", "status": "completed", "conclusion": "failure", "html_url": "https://example.invalid/run/8"}
+]}'
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK"
+expect "a red push job on the merge commit is RED" 1 "failed on the merge commit"
+
+stub_gh '{"check_runs": []}'
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK" 2999-01-01T00:00:00Z
+expect "an empty merge commit inside the grace is NOT-YET" 2 "no checks yet"
+
+stub_gh '{"check_runs": []}'
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK"
+expect "an empty merge commit after the grace is GREEN: nothing runs on push" 0 "GREEN"
+
+# Trees differ: strict should prevent it, so it is a bypass and the PR run is
+# not evidence. The merge commit must carry every required check itself.
+stub_gh "$PUSH_GREEN"
+stub_pr tree-b "$HEAD_GREEN" "$CLA_OK"
+expect "tree differs and the merge commit lacks the required checks: NOT-YET" 2 "required check(s) absent from"
+stub_gh "$PUSH_GREEN"
+stub_pr tree-b "$HEAD_GREEN" "$CLA_OK"
+expect "a tree-differs verdict says why" 2 "differs from PR #42 head"
+stub_gh '{"check_runs": [
+  {"name": "build", "status": "completed", "conclusion": "success"}
+]}' -- "$CLA_OK"
+stub_pr tree-b "$HEAD_GREEN" "$CLA_OK"
+expect "tree differs but the merge commit carries every required check: GREEN" 0 "GREEN"
 
 # (h) #1540: when a `nightgauge` binary CAN be resolved, the script must
 # delegate to it entirely and never touch its own gh/jq fallback logic — the

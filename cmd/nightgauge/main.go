@@ -7311,6 +7311,12 @@ type checksCompleteResult struct {
 	RequiredNames []string                 `json:"requiredNames,omitempty"`
 	Polls         int                      `json:"polls"`
 	CrossChecked  bool                     `json:"crossChecked"`
+	// PRNumber, PRHeadSha and TreesMatch describe the merged pull request
+	// behind sha (#2055); all empty when sha has none. TreesMatch true means
+	// the PR head's required checks were the gate for this merge.
+	PRNumber   int    `json:"prNumber,omitempty"`
+	PRHeadSha  string `json:"prHeadSha,omitempty"`
+	TreesMatch *bool  `json:"treesMatch,omitempty"`
 	// CouldNotRun is why the commit was not measured at all (#1691). Set only
 	// with verdict not-yet and exit 2: a failure to measure is never red.
 	CouldNotRun string `json:"couldNotRun,omitempty"`
@@ -7338,6 +7344,10 @@ type checksCompleteReader interface {
 	GetWorkflowRunsForRef(ctx context.Context, owner, repo, sha string) ([]gh.WorkflowRunSummary, error)
 }
 
+// checksCompleteNow is the clock EvaluateMergedCommit's merge-commit grace
+// reads; tests pin it.
+var checksCompleteNow = time.Now
+
 // pollChecksComplete is ciChecksCompleteCmd's polling loop, extracted for
 // testability. It confirms a terminal-looking verdict (green/red) across two
 // consecutive polls before trusting it (#1540 §3) — a verdict that changes
@@ -7362,8 +7372,26 @@ func pollChecksComplete(ctx context.Context, reader checksCompleteReader, owner,
 	res := checksCompleteResult{Sha: sha, Branch: branch, RequiredNames: requiredNames, CrossChecked: !skipCrossCheck}
 	var lastVerdict gh.ChecksCompleteVerdict
 
+	// #2055: when sha is a merged PR's merge commit, the PR head's required
+	// checks are the gate (gh.EvaluateMergedCommit). Re-asked each poll until
+	// found (the commit-to-PR association can trail a merge by a moment), then
+	// fixed: a merged PR's head and trees do not change. A reader without the
+	// capability, or a sha with no merged PR, keeps the merge-commit-only rule.
+	provReader, canProve := reader.(gh.MergeProvenanceReader)
+	var prov *gh.MergeProvenance
+
 	for poll := 1; ; poll++ {
 		res.Polls = poll
+		if canProve && prov == nil {
+			p, err := provReader.GetMergeProvenance(ctx, owner, repo, sha)
+			if err != nil {
+				return res, err
+			}
+			if prov = p; prov != nil {
+				match := prov.TreesMatch()
+				res.PRNumber, res.PRHeadSha, res.TreesMatch = prov.PRNumber, prov.HeadSHA, &match
+			}
+		}
 		checks, err := reader.GetCommitChecks(ctx, owner, repo, sha)
 		if err != nil {
 			return res, err
@@ -7377,7 +7405,13 @@ func pollChecksComplete(ctx context.Context, reader checksCompleteReader, owner,
 			runs, _ = reader.GetWorkflowRunsForRef(ctx, owner, repo, sha)
 		}
 
-		verdict, reasons := gh.EvaluateCommitChecksCrossChecked(checks, requiredNames, runs)
+		ev := gh.MergeEvidence{Provenance: prov, MergeChecks: checks, RequiredNames: requiredNames, Runs: runs, Now: checksCompleteNow()}
+		if ev.PRHeadIsEvidence() {
+			if ev.HeadChecks, err = reader.GetCommitChecks(ctx, owner, repo, prov.HeadSHA); err != nil {
+				return res, err
+			}
+		}
+		verdict, reasons := gh.EvaluateMergedCommit(ev)
 		res.Verdict, res.Reasons = verdict, reasons
 
 		confirmed := false
@@ -7409,9 +7443,14 @@ func pollChecksComplete(ctx context.Context, reader checksCompleteReader, owner,
 // green?" (github.EvaluateCommitChecks, cross-checked) behind both callers —
 // the same evaluation the post-merge hook applies to a merge commit (#1674).
 //
-// Every check run and commit status on the SHA counts: a failed optional check
-// is RED, and a still-running one is NOT-YET. Required contexts are resolved
-// from branch protection and rulesets and must additionally be present.
+// When the SHA is a merged pull request's merge commit (#2055), the PR run is
+// the gate: the merge commit's tree must equal the PR head's tree, the PR
+// head's required checks must all have passed, and whatever still runs on the
+// merge commit (CodeQL, cache-warm) must be green, still running being NOT-YET.
+// If the trees differ (a ruleset bypass), or the SHA has no merged PR, the
+// rule is the SHA's own checks: every check run and commit status counts, a
+// failed optional check is RED, a still-running one is NOT-YET, and required
+// contexts resolved from branch protection and rulesets must be present.
 //
 // Exit codes match post-merge-check.sh's contract so the script's delegation
 // is a drop-in: 0 GREEN, 1 RED, 2 NOT-YET. Exit 1 is reserved for a completed
@@ -7428,7 +7467,7 @@ func ciChecksCompleteCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:          "checks-complete <sha>",
-		Short:        "Answer \"did this SHA's CI go green?\" — every check run and status must pass; required ones must be present",
+		Short:        "Answer \"did this SHA's CI go green?\" — for a merge commit, the merged PR head's required checks on the same tree plus the merge commit's own runs",
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		Example: `  nightgauge ci checks-complete abc1234 --repo nightgauge/nightgauge

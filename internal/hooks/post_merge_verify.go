@@ -2,8 +2,8 @@ package hooks
 
 // Post-merge verification of the default branch (#1249).
 //
-// AGENTS.md states the rule: "A green PR check is a prediction; main's own run
-// is the observation." Every hand merge is followed by a check-runs query
+// The rule at #1249 was "a green PR check is a prediction; main's own run is
+// the observation" (#2055 replaced it: see below). Every hand merge is followed by a check-runs query
 // against the merge commit. The pipeline — which performs most merges — never
 // did this: EvaluatePostMerge verified the PR reached MERGED, captured the merge
 // SHA, and stopped. The three failure classes only the post-merge run can catch
@@ -27,6 +27,16 @@ package hooks
 // github.CIService.GetCommitChecks — every check run and commit status on the
 // commit, every page — the same function and reader `nightgauge ci
 // checks-complete` uses, so the hook and the verb cannot disagree (#1674).
+//
+// #2055: when the forge can tie the merge commit to its merged pull request
+// (github.MergeProvenanceReader), the PR run is the gate. The full suites no
+// longer re-run on push to main, because the strict ruleset already made the
+// PR head's tree the merge commit's tree. The verdict is then
+// github.EvaluateMergedCommit: the trees must match, the PR head's required
+// checks must have passed, and whatever still runs on the merge commit
+// (CodeQL, cache-warm) must be green; still running keeps the poll going. If
+// the trees differ, the merge commit's own checks must carry every required
+// check, the pre-#2055 rule, which reads pending where the suites do not run.
 //
 // The wait is bounded and the verdict vocabulary is closed. Budget exhaustion
 // with checks still pending is a distinct verdict, not a failure: still-pending
@@ -75,6 +85,9 @@ type MainCheckWait struct {
 	NoCheckGrace time.Duration
 	// Sleep overrides the inter-poll sleep (tests). Nil sleeps on a timer.
 	Sleep func(ctx context.Context, d time.Duration) error
+	// Now is the clock for github.MergeCommitCheckGrace (tests). Nil is
+	// time.Now.
+	Now func() time.Time
 	// Progress receives one line per poll while the wait is still going.
 	//
 	// WHY THIS EXISTS (#1414). The wait is bounded — maxPolls below — but it
@@ -129,6 +142,13 @@ func (w MainCheckWait) progress(format string, args ...any) {
 		return
 	}
 	fmt.Fprintln(os.Stderr, line)
+}
+
+func (w MainCheckWait) now() time.Time {
+	if w.Now != nil {
+		return w.Now()
+	}
+	return time.Now()
 }
 
 func (w MainCheckWait) noCheckGrace() time.Duration {
@@ -196,6 +216,12 @@ type MainCheckResult struct {
 	Reasons []string `json:"reasons,omitempty"`
 	// Error is the read failure behind MainChecksError.
 	Error string `json:"error,omitempty"`
+	// PRNumber, PRHeadSha and TreesMatch describe the merged pull request
+	// behind the merge commit (#2055); empty when none was found. TreesMatch
+	// true means the PR head's required checks were the gate.
+	PRNumber   int    `json:"prNumber,omitempty"`
+	PRHeadSha  string `json:"prHeadSha,omitempty"`
+	TreesMatch *bool  `json:"treesMatch,omitempty"`
 }
 
 // FailingNames returns the failing check names in stable order.
@@ -269,7 +295,26 @@ func VerifyMergeCommit(ctx context.Context, reader MainCheckReader, owner, repo,
 		requiredNames = nil
 	}
 
+	// #2055: the merged PR behind this commit, re-asked each poll until found
+	// (the commit-to-PR association can trail the merge by a moment), then
+	// fixed: a merged PR's head and trees never change.
+	provReader, canProve := reader.(gh.MergeProvenanceReader)
+	var prov *gh.MergeProvenance
+
 	for {
+		if canProve && prov == nil {
+			p, err := provReader.GetMergeProvenance(ctx, owner, repo, sha)
+			if err != nil {
+				res.Polls++
+				res.Verdict = MainChecksError
+				res.Error = err.Error()
+				return res
+			}
+			if prov = p; prov != nil {
+				match := prov.TreesMatch()
+				res.PRNumber, res.PRHeadSha, res.TreesMatch = prov.PRNumber, prov.HeadSHA, &match
+			}
+		}
 		runs, err := reader.GetCommitChecks(ctx, owner, repo, sha)
 		res.Polls++
 		if err != nil {
@@ -280,15 +325,28 @@ func VerifyMergeCommit(ctx context.Context, reader MainCheckReader, owner, repo,
 		total, pending, bad := threeNumbers(runs)
 		res.Total, res.Pending, res.Bad = total, pending, bad
 
+		ev := gh.MergeEvidence{Provenance: prov, MergeChecks: runs, RequiredNames: requiredNames, Now: wait.now()}
+		if ev.PRHeadIsEvidence() {
+			if ev.HeadChecks, err = reader.GetCommitChecks(ctx, owner, repo, prov.HeadSHA); err != nil {
+				res.Verdict = MainChecksError
+				res.Error = err.Error()
+				return res
+			}
+		}
+
 		// The verdict is the same function `nightgauge ci checks-complete`
 		// applies to the same commit (#1674): every check run and commit
 		// status concluded and passing, and every required context PRESENT
 		// (#1540 — a required check absent from the rollup contributes to
 		// neither total nor pending, so the three numbers alone can read final
 		// while it is still in flight or published on the other surface).
-		verdict, reasons := gh.EvaluateCommitChecks(runs, requiredNames)
+		//
+		// With the PR head as the gate, an empty merge-commit list is the
+		// evaluator's call (github.MergeCommitCheckGrace), not "no checks":
+		// a repository that runs nothing on push has nothing to wait for.
+		verdict, reasons := gh.EvaluateMergedCommit(ev)
 		res.Reasons = reasons
-		if total == 0 {
+		if total == 0 && !ev.PRHeadIsEvidence() {
 			if res.Polls >= gracePolls {
 				res.Verdict = MainChecksNone
 				return res
@@ -300,7 +358,11 @@ func VerifyMergeCommit(ctx context.Context, reader MainCheckReader, owner, repo,
 				return res
 			case gh.ChecksIncomplete:
 				res.Verdict = MainChecksRed
-				res.Failing = failingChecks(runs)
+				failing := runs
+				if ev.PRHeadIsEvidence() {
+					failing = append(append([]forgetypes.CheckDetail{}, runs...), requiredOnly(ev.HeadChecks, requiredNames)...)
+				}
+				res.Failing = failingChecks(failing)
 				markRequired(res.Failing, requiredNames)
 				return res
 			default:
@@ -350,6 +412,26 @@ func threeNumbers(runs []forgetypes.CheckDetail) (total, pending, bad int) {
 		}
 	}
 	return total, pending, len(badNames)
+}
+
+// requiredOnly narrows the PR head's checks to the required set, the only
+// ones the head is judged on; with no resolved set every check counts, as in
+// github.EvaluateChecksComplete.
+func requiredOnly(checks []forgetypes.CheckDetail, required []string) []forgetypes.CheckDetail {
+	if len(required) == 0 {
+		return checks
+	}
+	want := make(map[string]bool, len(required))
+	for _, name := range required {
+		want[strings.ToLower(strings.TrimSpace(name))] = true
+	}
+	var out []forgetypes.CheckDetail
+	for _, c := range checks {
+		if want[strings.ToLower(strings.TrimSpace(c.Name))] {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // isConcluded reports whether a check run has a conclusion at all. Adapters
@@ -461,7 +543,7 @@ func BuildMainRedCard(owner, repo, branch string, issue, pr int, res MainCheckRe
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "The pipeline merged PR #%d (issue #%d) onto %s as commit %s. ", pr, issue, branch, short)
-	b.WriteString("The PR's own checks were green; the merge commit's run on the branch was not.\n\n")
+	b.WriteString("A check that decides this merge's verdict did not pass: one that ran on the merge commit (CodeQL, cache-warm, or any other push-triggered run), or a required check on the merged PR's head.\n\n")
 	for _, f := range res.Failing {
 		fmt.Fprintf(&b, "- %s — %s", f.Name, f.Conclusion)
 		if f.Required {
@@ -472,8 +554,8 @@ func BuildMainRedCard(owner, repo, branch string, issue, pr int, res MainCheckRe
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("\nA green PR check is a prediction; this is the observation. ")
-	b.WriteString("Three things only the post-merge run can catch: a nondeterministic test, merge skew with another PR, or an environment difference (secrets and permissions main has and PR runs do not). ")
+	b.WriteString("\nThe PR run is the gate (#2055): the strict ruleset makes the merge commit's tree the PR head's tested tree. ")
+	b.WriteString("A red here means a push-only job failed on main, or a required check was bypassed at merge. ")
 	b.WriteString("Nightgauge cannot fix this: the next action is a human's. ")
 	b.WriteString("The card retracts on its own when the next pipeline merge onto this branch observes green.")
 

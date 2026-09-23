@@ -286,3 +286,63 @@ func TestChecksCompleteAndHookAgree(t *testing.T) {
 		})
 	}
 }
+
+// provenChecksReader adds #2055's merge provenance to the fake: the merge
+// commit's reads come from the embedded script, the PR head's are fixed.
+type provenChecksReader struct {
+	fakeChecksCompleteReader
+	prov       *gh.MergeProvenance
+	headChecks []gh.CheckDetail
+}
+
+func (p *provenChecksReader) GetCommitChecks(ctx context.Context, owner, repo, ref string) ([]gh.CheckDetail, error) {
+	if ref == p.prov.HeadSHA {
+		return p.headChecks, nil
+	}
+	return p.fakeChecksCompleteReader.GetCommitChecks(ctx, owner, repo, ref)
+}
+
+func (p *provenChecksReader) GetMergeProvenance(context.Context, string, string, string) (*gh.MergeProvenance, error) {
+	return p.prov, nil
+}
+
+// TestPollChecksComplete_MergedPRHeadIsTheGate: for a merge commit, the verb
+// judges the merged PR head's required checks (same tree) plus what still
+// runs on the merge commit, and never requires the suites on main (#2055).
+func TestPollChecksComplete_MergedPRHeadIsTheGate(t *testing.T) {
+	mergedAt := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	t.Cleanup(func() { checksCompleteNow = time.Now })
+	checksCompleteNow = func() time.Time { return mergedAt.Add(time.Hour) }
+	required := []string{"Go build & test", "cla"}
+	head := []gh.CheckDetail{detail("Go build & test", "COMPLETED", "SUCCESS"), detail("cla", "COMPLETED", "SUCCESS")}
+	prov := func(headTree string) *gh.MergeProvenance {
+		return &gh.MergeProvenance{PRNumber: 7, MergeSHA: "m", MergeTree: "t1", HeadSHA: "h", HeadTree: headTree, MergedAt: mergedAt}
+	}
+
+	cases := []struct {
+		name     string
+		headTree string
+		frames   [][]gh.CheckDetail
+		want     gh.ChecksCompleteVerdict
+	}{
+		{"tree equal and green", "t1", [][]gh.CheckDetail{{detail("CodeQL", "COMPLETED", "SUCCESS")}}, gh.ChecksComplete},
+		{"push job running", "t1", [][]gh.CheckDetail{{detail("CodeQL", "IN_PROGRESS", "")}}, gh.ChecksNotYet},
+		{"push job red", "t1", [][]gh.CheckDetail{{detail("CodeQL", "COMPLETED", "FAILURE")}}, gh.ChecksIncomplete},
+		{"tree differs", "t2", [][]gh.CheckDetail{{detail("CodeQL", "COMPLETED", "SUCCESS")}}, gh.ChecksNotYet},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &provenChecksReader{fakeChecksCompleteReader: fakeChecksCompleteReader{checkFrames: tc.frames}, prov: prov(tc.headTree), headChecks: head}
+			res, err := pollChecksComplete(context.Background(), r, "o", "r", "m", "main", required, 2, time.Second, true, noSleepCmd, nil)
+			if err != nil {
+				t.Fatalf("pollChecksComplete: %v", err)
+			}
+			if res.Verdict != tc.want {
+				t.Fatalf("verdict = %q (%v), want %q", res.Verdict, res.Reasons, tc.want)
+			}
+			if res.PRNumber != 7 || res.TreesMatch == nil || *res.TreesMatch != (tc.headTree == "t1") {
+				t.Errorf("result = %+v, want PR #7 and treesMatch %v", res, tc.headTree == "t1")
+			}
+		})
+	}
+}
