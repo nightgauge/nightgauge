@@ -164,6 +164,101 @@ func TestGetRequiredCheckNames_UnionDedupes(t *testing.T) {
 	}
 }
 
+// TestGetRequiredCheckNames_ClassicBestEffort pins #2055: rulesets are
+// primary and authoritative for errors, classic protection is best-effort.
+func TestGetRequiredCheckNames_ClassicBestEffort(t *testing.T) {
+	const rulesOK = `[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"ruleset-check"}]}}]`
+	tests := []struct {
+		name          string
+		classicStatus int
+		classicBody   string
+		rulesStatus   int
+		rulesBody     string
+		want          []string
+		wantErr       bool
+	}{
+		{
+			name:          "classic 403, rulesets OK",
+			classicStatus: 403,
+			classicBody:   `{"message":"Resource not accessible by integration"}`,
+			rulesStatus:   200,
+			rulesBody:     rulesOK,
+			want:          []string{"ruleset-check"},
+		},
+		{
+			name:          "classic 404, rulesets OK",
+			classicStatus: 404,
+			rulesStatus:   200,
+			rulesBody:     rulesOK,
+			want:          []string{"ruleset-check"},
+		},
+		{
+			name:          "classic 500 contributes nothing",
+			classicStatus: 500,
+			rulesStatus:   200,
+			rulesBody:     rulesOK,
+			want:          []string{"ruleset-check"},
+		},
+		{
+			name:          "both present, union",
+			classicStatus: 200,
+			classicBody:   `{"contexts":["CI","ruleset-check"]}`,
+			rulesStatus:   200,
+			rulesBody:     rulesOK,
+			want:          []string{"CI", "ruleset-check"},
+		},
+		{
+			name:          "rulesets error fails the call",
+			classicStatus: 200,
+			classicBody:   `{"contexts":["CI"]}`,
+			rulesStatus:   500,
+			rulesBody:     `{"message":"boom"}`,
+			wantErr:       true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case strings.Contains(r.URL.Path, "/protection/required_status_checks"):
+					w.WriteHeader(tc.classicStatus)
+					_, _ = w.Write([]byte(tc.classicBody))
+				case strings.Contains(r.URL.Path, "/rules/branches/"):
+					w.WriteHeader(tc.rulesStatus)
+					_, _ = w.Write([]byte(tc.rulesBody))
+				default:
+					w.WriteHeader(500)
+				}
+			}))
+			defer srv.Close()
+
+			svc := newCIServiceForRESTTest(srv)
+			names, err := svc.GetRequiredCheckNames(context.Background(), "owner", "repo", "main")
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("want error, got names %v", names)
+				}
+				if names != nil {
+					t.Errorf("want nil names on error, got %v", names)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(names) != len(tc.want) {
+				t.Fatalf("want %v, got %v", tc.want, names)
+			}
+			for i := range tc.want {
+				if names[i] != tc.want[i] {
+					t.Errorf("names[%d] = %q, want %q", i, names[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestGetRequiredCheckNames_NoProtection(t *testing.T) {
 	srv := httptest.NewServer(requiredChecksHandler("", ""))
 	defer srv.Close()

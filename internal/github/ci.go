@@ -128,15 +128,21 @@ var passingCheckConclusions = map[string]bool{
 // is invisible to the protection endpoint, and probing only that endpoint made
 // merges loop against "No required status checks found" (#184).
 // Returns (nil, nil) when neither source requires any checks.
+//
+// Rulesets are primary and authoritative for errors: a rules API failure
+// fails the call. Classic protection is best-effort, matching
+// resolve_required in scripts/post-merge-check.sh: its endpoint needs admin
+// rights, so a 403 (or a 404, or any other error) contributes nothing rather
+// than making the required set unknown for every non-admin token (#2055).
 func (s *CIService) GetRequiredCheckNames(ctx context.Context, owner, repo, branch string) ([]string, error) {
-	classic, err := s.getProtectionRequiredChecks(ctx, owner, repo, branch)
+	ruleset, err := s.getRulesetRequiredChecks(ctx, owner, repo, branch)
 	if err != nil {
 		return nil, err
 	}
 
-	ruleset, err := s.getRulesetRequiredChecks(ctx, owner, repo, branch)
+	classic, err := s.getProtectionRequiredChecks(ctx, owner, repo, branch)
 	if err != nil {
-		return nil, err
+		classic = nil
 	}
 
 	seen := make(map[string]bool)
