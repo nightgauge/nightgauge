@@ -300,6 +300,21 @@ create --body-file` call, so the compact profile (and its tests) pin
     and the skill and context directories as given, resolved, and re-rooted
     on `/tmp` when `/tmp` resolves to their prefix. The project-config edit
     deny covers those forms too.
+  - A sub-session that checked no plan task counted as progress when the
+    work tree could not be fingerprinted, so steps that changed nothing could
+    run the bound out. The loop now stops there with
+    `[dev-step-progress-unproven]`; git's error goes to the scheduler log.
+
+- **Compact skill renders no longer fit or fail by checkout path length
+  (#1662).** A compact render carries the absolute skills root in its Read
+  directives, so feature-dev's compact render fit the 32,768-token budget
+  at a 61-character skills root and failed it at the 96-character
+  `.nightgauge/worktrees/program-*` root the pipeline runs feature-dev in.
+  The feature-dev, pr-create and feature-planning compact profiles now give
+  each include's path once, at the first phase that reads it; later phases
+  refer back to it, and the supporting-files list names the files without
+  paths. The budget tests measure every compact profile at a 128-character
+  skills root instead of rewriting it to a short one.
 
 - **A cancelled or timed-out Go-direct stage now kills its whole process
   group (#1651).** `execution.Manager` spawned stages as group leaders but

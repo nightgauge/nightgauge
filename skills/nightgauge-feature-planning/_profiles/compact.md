@@ -52,13 +52,16 @@ template content here; read docs on demand.
 
 ## Supporting files (load on demand)
 
-- `_includes/feedback-and-context.md` — Phases 0, 1, 1.5 (feedback/revision
+In the `_includes/` directory beside SKILL.md; each phase below gives the
+full path the first time it reads one.
+
+- feedback-and-context.md — Phases 0, 1, 1.5 (feedback/revision
   detection, context load + stage start, batch detection)
-- `_includes/pattern-and-docs.md` — Phases 2.5, 3 (pattern mining,
+- pattern-and-docs.md — Phases 2.5, 3 (pattern mining,
   documentation-first analysis)
-- `_includes/knowledge-recall.md` — Phases 3.5, 3.7 (knowledge base read,
+- knowledge-recall.md — Phases 3.5, 3.7 (knowledge base read,
   recall prior decisions)
-- `_includes/plan-and-enrichment.md` — Phases 4, 5.5 (produce plan file,
+- plan-and-enrichment.md — Phases 4, 5.5 (produce plan file,
   knowledge base enrichment)
 - Full arguments, prerequisites and configuration keys: Read
   `skills/nightgauge-feature-planning/SKILL.md` and
@@ -355,7 +358,7 @@ jq . "$CONTEXT_FILE" > /dev/null || { echo "ERROR: issue context JSON invalid af
 printf '<!-- phase:start name="knowledge-base-enrichment" index=11 total=14 stage="feature-planning" -->\n'
 ```
 
-> **Read `_includes/plan-and-enrichment.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
+> **Follow this phase's section of the plan-and-enrichment include, read in Phase 4 above.**
 
 It covers enriching the scaffolded `PRD.md` in place, populating
 `decisions.md` with ADR blocks, deferred scaffolding, patching
