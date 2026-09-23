@@ -287,21 +287,37 @@ create --body-file` call, so the compact profile (and its tests) pin
   `board.list` once each for Ready, In progress and Backlog, three separate
   17-point-per-page reads that nothing else shared. Each read was also gated
   by a `github.rateLimit` round-trip, even when the answer came from cache.
-  Measured through the real provider with a counting IPC client, five
-  repositories on five boards went from 15 `board.list` + 15
-  `github.rateLimit` calls to 5 `board.listOpen` + 5 `github.rateLimit`
-  calls when the view opens. A re-expand or a daemon restart (`ipc.ready`)
-  inside the cache window went from 15 `github.rateLimit` calls to none;
-  the reconnect still re-renders the view. Three repositories on one shared
-  board went from 3 board reads to 1. The row counts now come from the new
-  daemon verb `board.listOpen`, which returns the daemon's cached `is:open`
-  snapshot, the one `board.counts` and the attention sweeps already read.
-  When that snapshot is fresh, the daemon answers `board.list` for any
-  status except Done from it without another request. A status drilldown
-  after the rows load therefore costs nothing either. The unfiltered row
-  counts are now this repository's own on a shared board. Before, they were
-  `board.counts`, which tallies the whole board. An explicit Refresh still
-  refetches.
+  Measured through the extension's own wiring (the per-repository provider
+  wrapper and factory it uses in a multi-repository workspace) with a
+  counting IPC client, five repositories on five boards went from 15
+  `board.list` + 15 `github.rateLimit` calls to 5 `board.listOpen` + 5
+  `github.rateLimit` calls when the view opens. A re-expand or a daemon
+  restart (`ipc.ready`) inside the cache window went from 15
+  `github.rateLimit` calls to none; the reconnect still re-renders the view.
+  Three repositories on one shared board went from 3 board reads to 1. The
+  row counts now come from the new daemon verb `board.listOpen`, which
+  returns the daemon's cached `is:open` snapshot, the one `board.counts` and
+  the attention sweeps already read. The unfiltered row counts are now this
+  repository's own on a shared board. Before, they were `board.counts`,
+  which tallies the whole board. An explicit Refresh still refetches.
+
+  Expanding a status row is not free. The drilldown still sends its own
+  `board.list` for that status, behind a `github.rateLimit` gate, once per
+  cache window. The daemon answers that `board.list` without a GitHub
+  request only while its open snapshot is fresh (90 seconds by default), so
+  a drilldown soon after the rows load costs the IPC round-trips and no
+  board read. After that it costs a change probe or a status read of 17
+  points a page. A pipeline status move now expires the extension's cached
+  drilldown lists along with the row counts, so a drilldown after a move
+  agrees with its row.
+
+  The autonomous scheduler's board status moves now invalidate the daemon's
+  board cache. The scheduler already read boards through that cache for its
+  dependency-graph builds, but it wrote its status moves around it, so for up
+  to 90 seconds after a move the daemon could serve the pre-move board to
+  `board.listOpen`, `board.counts` and the attention sweeps. The Ready read
+  that picks the next issue to dispatch still bypasses the cache and goes to
+  GitHub every time.
 
 - **feature-dev sub-sessions engage for local OpenCode models, local
   dispatches are budget-checked and get the compact render, and defects a

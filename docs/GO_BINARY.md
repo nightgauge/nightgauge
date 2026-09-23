@@ -4928,10 +4928,38 @@ exactly the open read filtered by status. For such a board, `ListItems` for
 any status except Done is answered from a fresh open snapshot with no request.
 The GitHub adapter implements it, because its filtered read is the same
 document plus `status:"X"`. Done is read without `is:open` and so is excluded.
-A status read never starts the larger open read on its own behalf, so a
-Ready-only caller such as the scheduler pays what it paid before.
+A status read never starts the larger open read on its own behalf. A caller
+that only ever reads one status therefore pays what it paid before, and an
+expired open snapshot is not renewed by a status read.
+
+What this saves, and what it does not:
+
+- **Row counts** cost one `board.listOpen` per board per extension cache
+  window, shared by every repository on that board. Inside the daemon's TTL
+  (`DefaultTTL`, 90 seconds) the answer comes from the snapshot the sweeps
+  and `board.counts` already hold.
+- **Status drilldowns are not free.** Expanding a status row sends its own
+  `board.list` for that status, behind a `github.rateLimit` gate, and the
+  extension caches it per status. The daemon answers that request from the
+  open snapshot only while the snapshot is fresh. After it expires, the
+  request goes through the status entry's own probe and read. A pipeline
+  status move expires the extension's per-status entries along with the
+  counts, so the next drilldown refetches instead of showing the pre-move
+  list.
+- **The autonomous scheduler** reads through this cache only for its
+  dependency-graph builds (`SetBoardCache` → `depgraph.CachedBoardProvider`,
+  which calls `ListOpenItems`). `PickNext`'s Ready read uses its own
+  `gh.BoardService` and never touches the cache, because dispatch must not
+  act on a snapshot. The scheduler's status moves go through
+  `boardcache.WrapProject` (`AutonomousScheduler.projectService`), so each
+  move drops that board's snapshots. The per-run `Scheduler`'s post-merge
+  board sync (`checkEpicCompletion`) still writes with a bare
+  `gh.ProjectService`, and those writes do not invalidate the cache.
+
 `TestStatusReadsAreServedFromAFreshOpenSnapshot` and
-`TestBoardListOpen_SharesOneBoardReadWithCountsAndStatusReads` pin the counts.
+`TestBoardListOpen_SharesOneBoardReadWithCountsAndStatusReads` pin the counts;
+`TestSchedulerStatusMovesInvalidateSharedBoardCache` pins the scheduler's
+writes.
 
 **Attribution through the cache (#860).** Inserting the cache initially moved
 every board read's attribution off the producers and onto `boardcache` — a
