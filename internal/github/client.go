@@ -109,6 +109,19 @@ type Client struct {
 	gateJitterMax time.Duration
 	gateRand      func() float64
 	gateGovernor  *gateReleaseGovernor
+
+	// cond is the conditional-GET store condGet revalidates against, and
+	// identity the token-derived half of its key (see condstore.go). Set at
+	// construction; WithConditionalStore replaces both.
+	cond     *ConditionalStore
+	identity string
+
+	// restProjects404 remembers owners whose REST projects endpoints answered
+	// 404, so every later board read goes straight to GraphQL (board_rest.go).
+	restProjects404 map[string]bool
+	// projectLists memoises each owner's REST project list briefly, so the
+	// change probes of several boards in one burst share one request.
+	projectLists map[string]projectListMemo
 }
 
 // defaultGateJitterMax is the spread added to every gated wait. Every process
@@ -511,7 +524,9 @@ func NewClientWithToken(token string) *Client {
 		http:       httpClient,
 		limiter:    rate.NewLimiter(rate.Every(time.Second), 5), // 5 req/s
 		graphqlURL: "https://api.github.com/graphql",
+		identity:   tokenIdentity(token),
 	}
+	c.adoptProcessConditionalStore()
 	c.installHeaderInterceptor()
 	c.gql = graphql.NewClient(c.graphqlURL, c.http)
 	return c
@@ -526,6 +541,8 @@ func NewClientWithURL(token, graphqlURL string) *Client {
 		http:       httpClient,
 		limiter:    rate.NewLimiter(rate.Every(time.Second), 5),
 		graphqlURL: graphqlURL,
+		identity:   tokenIdentity(token),
+		cond:       NewConditionalStore(""),
 	}
 	c.installHeaderInterceptor()
 	c.gql = graphql.NewClient(c.graphqlURL, c.http)
@@ -540,10 +557,41 @@ func NewClientWithHTTPClient(httpClient *http.Client) *Client {
 		http:       httpClient,
 		limiter:    rate.NewLimiter(rate.Every(time.Second), 5),
 		graphqlURL: "https://api.github.com/graphql",
+		cond:       NewConditionalStore(""),
 	}
 	c.installHeaderInterceptor()
 	c.gql = graphql.NewClient(c.graphqlURL, c.http)
 	return c
+}
+
+// adoptProcessConditionalStore points the client at the process-wide store
+// when one is installed (the serve daemon), else at a private memory store.
+func (c *Client) adoptProcessConditionalStore() {
+	if s := processCondStore.Load(); s != nil {
+		c.cond = s
+		return
+	}
+	c.cond = NewConditionalStore("")
+}
+
+// WithConditionalStore replaces the client's conditional-GET store and the
+// identity its entries are keyed under. Tests use it to model a daemon
+// restart: a NEW client over the SAME store and identity.
+func (c *Client) WithConditionalStore(store *ConditionalStore, identity string) *Client {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cond = store
+	c.identity = identity
+	return c
+}
+
+// CacheIdentity is the token-derived identity this client's cached answers
+// are keyed under. Caches above the client (boardcache) key by it too, so a
+// snapshot read with one token is never served to a caller holding another.
+func (c *Client) CacheIdentity() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.identity
 }
 
 // WithRateLimitTracker attaches a SharedRateLimitTracker to the client so that
@@ -808,9 +856,22 @@ func (t *rateLimitHeaderTransport) RoundTrip(req *http.Request) (*http.Response,
 	// ETags for them here. Host-scoped — see the apiHost doc on the struct.
 	var cacheKey string
 	var cached *etagCacheEntry
-	if t.etags != nil && req.Method == http.MethodGet && t.apiHost != "" && req.URL.Host == t.apiHost {
+	// A request that carries its own If-None-Match (condGet, backed by the
+	// persistent ConditionalStore) must see the server's real 304: this layer
+	// rewriting it into a 200 would hide exactly the answer condGet reads.
+	if t.etags != nil && req.Method == http.MethodGet && t.apiHost != "" && req.URL.Host == t.apiHost &&
+		req.Context().Value(callerConditionalKey{}) == nil {
 		cacheKey = req.URL.String()
-		if e, ok := t.etags.get(cacheKey); ok {
+		e, ok := t.etags.get(cacheKey)
+		if !ok && t.client != nil {
+			// A daemon restart empties the in-memory layer; the persistent
+			// store still holds the last validator and body for this URL.
+			if pe, pok := t.client.persistedResponse(cacheKey); pok {
+				t.etags.set(cacheKey, pe.etag, pe.body, pe.header)
+				e, ok = pe, true
+			}
+		}
+		if ok {
 			cached = e
 			req = req.Clone(req.Context())
 			req.Header.Set("If-None-Match", e.etag)
@@ -822,6 +883,11 @@ func (t *rateLimitHeaderTransport) RoundTrip(req *http.Request) (*http.Response,
 		// Captured before the 304-to-200 rewrite below, so the ledger records
 		// what the server actually answered.
 		ledgerRec.Status = resp.StatusCode
+		// A 304 answered to condGet's own If-None-Match is as free as one
+		// answered to this layer's, so the ledger marks both.
+		if resp.StatusCode == http.StatusNotModified {
+			ledgerRec.Cached = true
+		}
 	}
 	if ledger != nil {
 		defer func() {
@@ -901,6 +967,9 @@ func (t *rateLimitHeaderTransport) RoundTrip(req *http.Request) (*http.Response,
 					// Also replaces any existing (now-stale) cache entry for
 					// this URL — changed upstream data always wins.
 					t.etags.set(cacheKey, etag, head, resp.Header.Clone())
+					if t.client != nil {
+						t.client.persistResponse(cacheKey, etag, head, resp.Header)
+					}
 					resp.Body = io.NopCloser(bytes.NewReader(head))
 					resp.ContentLength = int64(len(head))
 				}
@@ -1431,21 +1500,32 @@ func (c *Client) restDo(ctx context.Context, method, path string, body interface
 // problems" cascade. The X-GitHub-Api-Version header is always set; Content-Type
 // only when there is a body.
 func (c *Client) restDoStatus(ctx context.Context, method, path string, body interface{}) ([]byte, int, error) {
-	// Derive REST base URL from graphqlURL (strip /graphql suffix if present).
-	baseURL := strings.TrimSuffix(c.graphqlURL, "/graphql")
-	url := baseURL + path
+	respBody, status, _, err := c.restDoURL(ctx, method, c.restBaseURL()+path, path, body, nil)
+	return respBody, status, err
+}
+
+// restBaseURL is the REST API root derived from graphqlURL (the /graphql
+// suffix stripped), so GHES and test servers are addressed the same way.
+func (c *Client) restBaseURL() string {
+	return strings.TrimSuffix(c.graphqlURL, "/graphql")
+}
+
+// restDoURL is restDoStatus over an absolute URL with extra request headers,
+// also returning the response headers. label names the request in errors.
+func (c *Client) restDoURL(ctx context.Context, method, url, label string, body interface{}, extra http.Header) ([]byte, int, http.Header, error) {
+	path := label
 
 	var data []byte
 	if body != nil {
 		var err error
 		data, err = json.Marshal(body)
 		if err != nil {
-			return nil, 0, fmt.Errorf("marshal REST %s body: %w", method, err)
+			return nil, 0, nil, fmt.Errorf("marshal REST %s body: %w", method, err)
 		}
 	}
 
 	if err := c.waitRateLimitGate(ctx, ResourceCore); err != nil {
-		return nil, 0, err
+		return nil, 0, nil, err
 	}
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
@@ -1455,22 +1535,27 @@ func (c *Client) restDoStatus(ctx context.Context, method, path string, body int
 		}
 		req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
 		if err != nil {
-			return nil, 0, fmt.Errorf("create REST %s request: %w", method, err)
+			return nil, 0, nil, fmt.Errorf("create REST %s request: %w", method, err)
 		}
 		if data != nil {
 			req.Header.Set("Content-Type", "application/json")
 		}
 		req.Header.Set("Accept", "application/vnd.github+json")
 		req.Header.Set("X-GitHub-Api-Version", "2026-03-10")
+		for k, vv := range extra {
+			for _, v := range vv {
+				req.Header.Add(k, v)
+			}
+		}
 
 		resp, err := c.http.Do(req)
 		if err != nil {
-			return nil, 0, fmt.Errorf("REST %s %s: %w", method, path, err)
+			return nil, 0, nil, fmt.Errorf("REST %s %s: %w", method, path, err)
 		}
 		respBody, readErr := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if readErr != nil {
-			return nil, 0, fmt.Errorf("read REST %s response body: %w", method, readErr)
+			return nil, 0, nil, fmt.Errorf("read REST %s response body: %w", method, readErr)
 		}
 
 		// 403/429 with a rate-limit signal → wait out the reset and retry
@@ -1491,13 +1576,13 @@ func (c *Client) restDoStatus(ctx context.Context, method, path string, body int
 			case <-time.After(backoff):
 				continue
 			case <-ctx.Done():
-				return nil, 0, ctx.Err()
+				return nil, 0, nil, ctx.Err()
 			}
 		}
 
-		return respBody, resp.StatusCode, nil
+		return respBody, resp.StatusCode, resp.Header, nil
 	}
-	return nil, 0, fmt.Errorf("REST %s %s: exhausted retries", method, path)
+	return nil, 0, nil, fmt.Errorf("REST %s %s: exhausted retries", method, path)
 }
 
 // restBodyLooksRateLimited reports whether a GitHub REST error body carries a
@@ -1556,6 +1641,10 @@ type RateLimitInfo struct {
 
 // GetRateLimit checks the current GitHub GraphQL API rate limit without
 // consuming a rate-limited request (uses the rateLimit query).
+//
+// GraphQL retained on purpose: GitHub does not charge the rateLimit query
+// (docs/GITHUB_GRAPHQL_SCHEMA.md § GetRateLimit is free), so moving it gains
+// nothing, and the GraphQL pool is best read from a GraphQL response.
 func (c *Client) GetRateLimit(ctx context.Context) (*RateLimitInfo, error) {
 	var q struct {
 		RateLimit struct {

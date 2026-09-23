@@ -18,6 +18,12 @@ and this project adheres to
 
 ### Fixed
 
+- An attention sweep that outlives the 30-second request deadline no longer
+  leaves the window "never swept": the daemon finishes it and its cards still
+  arrive, and later triggers ask the board change probe instead of sweeping
+  again. A window reload remembers the last sweep, so activation asks the
+  probe too; only the Attention Sweep command always sweeps.
+
 - The Repositories view reads each project board once per refresh instead of
   three times per repository, and serves re-expands and daemon reconnects from
   cache without touching GitHub. Row counts on a board shared by several

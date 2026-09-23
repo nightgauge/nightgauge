@@ -52,7 +52,7 @@ func TestRateLimitGate_WaitsThenProceeds_WhenEnabled(t *testing.T) {
 	disableGateJitter(c)
 
 	start := time.Now()
-	if _, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
+	if _, err := (graphQLProbeService{c}).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
 		t.Fatalf("expected success after waiting out the reset, got %v", err)
 	}
 	if waited := time.Since(start); waited < 500*time.Millisecond {
@@ -83,7 +83,7 @@ func TestRateLimitGate_WaitRespectsContext(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
-	_, err := NewRepoService(c).RepoMetadata(ctx, "nightgauge", "nightgauge")
+	_, err := (graphQLProbeService{c}).RepoMetadata(ctx, "nightgauge", "nightgauge")
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected context.DeadlineExceeded from the bounded wait, got %v", err)
 	}

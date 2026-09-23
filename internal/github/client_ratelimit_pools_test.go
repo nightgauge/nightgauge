@@ -198,7 +198,7 @@ func TestCLIClientGatesOnTheMachineBudget(t *testing.T) {
 	c.graphqlURL = srv.URL
 	c.gateLogger = func(string, ...interface{}) {}
 
-	if _, err := NewRepoService(c).RepoMetadata(context.Background(), "o", "r"); err == nil {
+	if _, err := (graphQLProbeService{c}).RepoMetadata(context.Background(), "o", "r"); err == nil {
 		t.Fatal("a CLI client dispatched on an exhausted GraphQL budget")
 	}
 	if got := atomic.LoadInt32(&calls); got != 0 {

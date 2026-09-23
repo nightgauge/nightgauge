@@ -94,26 +94,32 @@ func TestForgeAdapter_AuthIsClient(t *testing.T) {
 // These live here rather than in a sibling file so the adapter's newest service
 // is exercised next to the assertions that keep the aggregate honest.
 
-// securityStub is a stub GitHub API with BOTH surfaces the service uses: the
-// GraphQL endpoint that carries the answer, and the REST dependabot/alerts
-// endpoint the empty-answer guard consults. It records the GraphQL query it was
-// sent and counts REST probes, so a test can assert the mapping, the wire
-// query, and the traffic.
+// securityStub is a stub GitHub API with every surface the service uses: the
+// REST open-alert list it reads first, the GraphQL endpoint that carries the
+// remediation answer, the REST empty-answer probe (per_page=1) the GraphQL
+// path consults, and the REST open-PR list that keys the stored GraphQL
+// answer. It records the GraphQL query it was sent and counts each kind of
+// request, so a test can assert the mapping, the wire query, and the traffic.
 type securityStub struct {
 	// graphQLStatus / graphQLBody answer the GraphQL POST. Zero status means 200.
 	graphQLStatus int
 	graphQLBody   string
 
-	// restStatus / restBody answer GET /repos/{o}/{r}/dependabot/alerts. Zero
-	// status means the live shape for a readable, genuinely clean repository:
-	// 200 with an empty array (verified against api.github.com).
+	// restStatus / restBody answer GET /repos/{o}/{r}/dependabot/alerts — the
+	// list read AND the probe, as the real endpoint does. Zero status means
+	// "the REST answer consistent with the GraphQL fixture": 401 when GraphQL
+	// rejects the credential, GitHub's 403 "disabled" refusal when scanning is
+	// off, else 200 with one element per alert node (an empty array for a
+	// clean repository — the live shape, verified against api.github.com).
 	restStatus int
 	restBody   string
 	// restHeader is set on the REST response before the status is written.
 	restHeader map[string]string
 
-	seenQuery string
-	restCalls int
+	seenQuery    string
+	restCalls    int // empty-answer probes (per_page=1)
+	listCalls    int // open-alert list reads
+	graphQLCalls int
 }
 
 func newSecurityStub(t *testing.T, stub *securityStub) *SecurityService {
@@ -122,12 +128,24 @@ func newSecurityStub(t *testing.T, stub *securityStub) *SecurityService {
 		stub.graphQLStatus = http.StatusOK
 	}
 	if stub.restStatus == 0 {
-		stub.restStatus = http.StatusOK
-		stub.restBody = "[]"
+		switch {
+		case stub.graphQLStatus == http.StatusUnauthorized:
+			stub.restStatus, stub.restBody = http.StatusUnauthorized, `{"message":"Bad credentials"}`
+		case strings.Contains(stub.graphQLBody, `"hasVulnerabilityAlertsEnabled":false`):
+			stub.restStatus, stub.restBody = http.StatusForbidden, `{"message":"Dependabot alerts are disabled for this repository."}`
+		default:
+			n := strings.Count(stub.graphQLBody, `"dependabotUpdate"`)
+			stub.restStatus, stub.restBody = http.StatusOK, "["+strings.TrimSuffix(strings.Repeat("{},", n), ",")+"]"
+		}
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, "/dependabot/alerts") {
-			stub.restCalls++
+		switch {
+		case strings.Contains(r.URL.Path, "/dependabot/alerts"):
+			if r.URL.Query().Get("per_page") == "1" {
+				stub.restCalls++
+			} else {
+				stub.listCalls++
+			}
 			for k, v := range stub.restHeader {
 				w.Header().Set(k, v)
 			}
@@ -135,7 +153,12 @@ func newSecurityStub(t *testing.T, stub *securityStub) *SecurityService {
 			w.WriteHeader(stub.restStatus)
 			_, _ = w.Write([]byte(stub.restBody))
 			return
+		case strings.HasSuffix(r.URL.Path, "/pulls"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte("[]"))
+			return
 		}
+		stub.graphQLCalls++
 		raw, _ := io.ReadAll(r.Body)
 		stub.seenQuery = string(raw)
 		w.Header().Set("Content-Type", "application/json")
@@ -461,8 +484,11 @@ func TestSecurityService_CleanRepoIsCleanWhateverTheViewersRole(t *testing.T) {
 	if !got.Enabled() || len(got.Alerts) != 0 || got.TotalOpen != 0 {
 		t.Errorf("result = %+v, want enabled with zero alerts", got)
 	}
-	if stub.restCalls != 1 {
-		t.Errorf("REST probes = %d, want exactly 1 — the empty answer is ambiguous and is confirmed once", stub.restCalls)
+	// The REST list IS the forge's verdict: it answers a token that may not
+	// read the alerts with a loud 403, so its 200 [] needs no second opinion,
+	// and there is nothing to remediate — so no GraphQL request at all.
+	if stub.listCalls != 1 || stub.graphQLCalls != 0 || stub.restCalls != 0 {
+		t.Errorf("list reads = %d, GraphQL = %d, probes = %d; want 1, 0, 0", stub.listCalls, stub.graphQLCalls, stub.restCalls)
 	}
 }
 

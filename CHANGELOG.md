@@ -383,6 +383,33 @@ create --body-file` call, so the compact profile (and its tests) pin
 
 ### Changed
 
+- **The daemon reads GitHub with conditional REST requests, remembered across
+  restarts (part of #842).** A window open used to cost ~182 GraphQL points,
+  eight 17-point board pages among them. The board reads behind the
+  Repositories tree, `board.counts` and the attention sweep now use GitHub's
+  REST project items, carrying relationship counts (`relationSummary`, open
+  blockers only) instead of lists; status lists use REST pages plus one REST
+  list per non-empty relationship. Repository metadata (repository, then the
+  default branch by name, so an empty repository still reports none), the
+  Dependabot alert list, the open-PR list and the open-issue count moved to
+  REST too. Every one of these requests carries the ETag it last saw, from a
+  store under `~/.nightgauge/cache/github-conditional/` keyed by token
+  identity, so an unchanged answer is a 304 GitHub does not count — including
+  right after a window reload restarts the daemon. The board change probe
+  reads the owner's REST project list: one request for every board. GraphQL
+  remains where REST cannot answer: the open-PR review, merge and check
+  rollup (skipped when the repository has no open PR), the remediation PR of
+  a repository with open Dependabot alerts (reused while the alert and PR
+  lists are unchanged, for up to an hour), the dependency graph's relationship
+  lists, and writes. GitHub Enterprise Server and a 404 from the REST projects
+  endpoints keep the GraphQL board reads. Measured against a priced fake
+  where half the repositories have open PRs and one in ten has alerts: a cold
+  window open with 6 repositories costs 4 GraphQL points and 47 REST
+  requests, with 20 repositories 12 points and 150 requests, and a re-open
+  after a restart costs neither. A sweep also reads each repository's
+  Dependabot alerts once instead of three times, and evaluates up to four
+  repositories at a time.
+
 - **Implementation is routed by cost per closed issue (#1909).** On the Go
   scheduler's dispatch path, `feature-dev` now runs on Opus for an issue
   whose known size is M or larger after the priority adjustment. The size

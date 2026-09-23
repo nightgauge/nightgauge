@@ -4773,6 +4773,20 @@ func serveCmd() *cobra.Command {
 			// request lands in the ledger of the workspace it serves (#1913).
 			gh.SetAPILedgerWorkspaceRoot(workspaceRoot)
 
+			// The persistent conditional-request store, installed before the
+			// first client exists so every client this daemon builds shares it:
+			// an unchanged board, repository or alert list answers 304 — free —
+			// and keeps doing so after a window reload restarts this process.
+			// Without a home directory the clients keep per-process memory
+			// stores, which are correct, just cold after a restart. Mock mode
+			// (an injected GraphQL URL) never touches the real store.
+			if dir, derr := gh.DefaultConditionalStoreDir(); derr == nil && githubGraphQLURL == "" {
+				store := gh.NewConditionalStore(dir)
+				// Off the startup path: a large cache must not delay the socket.
+				go store.Prune(14 * 24 * time.Hour)
+				gh.SetProcessConditionalStore(store)
+			}
+
 			var client *gh.Client
 			if githubGraphQLURL != "" {
 				token := os.Getenv("GITHUB_TOKEN")

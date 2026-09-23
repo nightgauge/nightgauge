@@ -109,6 +109,14 @@ export interface ReadyIssue {
   isEpic?: boolean;
   /** Issue numbers of native sub-issues (populated for epics only) */
   subIssueNumbers?: number[];
+  /**
+   * How many OPEN issues block this one, when the board read carried the
+   * relationship COUNTS rather than the lists (`board.listOpen`, the daemon's
+   * conditional REST summary). On such an issue `blockedBy` / `blocks` /
+   * `subIssueNumbers` were not read — absent means "not asked", not "none" —
+   * so blocked-ness comes from this count. Undefined on list reads.
+   */
+  openBlockerCount?: number;
 }
 
 export type SortBy = "board" | "priority" | "number" | "size" | "dependencies" | "smart";
@@ -745,6 +753,29 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
    * alone: the open read never carries it.
    */
   private fillStatusCacheFromOpen(issues: ReadyIssue[]): void {
+    // The open read carries relationship COUNTS, not lists. An issue whose
+    // lists an earlier status read already holds keeps them while they still
+    // agree with the count, so the cache-only readers (epic headers' blocker
+    // lines above all) render exactly what they rendered from a list read.
+    const hasLists = (i: ReadyIssue) => !!(i.blockedBy || i.blocks || i.subIssueNumbers);
+    const previous = new Map<number, ReadyIssue>();
+    for (const bucket of this.cache.values()) {
+      for (const issue of bucket) {
+        if (hasLists(issue)) previous.set(issue.number, issue);
+      }
+    }
+    issues = issues.map((issue) => {
+      const prior = previous.get(issue.number);
+      if (!prior || hasLists(issue) || issue.openBlockerCount === undefined) return issue;
+      const priorOpen = (prior.blockedBy ?? []).filter((b) => b.state === "OPEN").length;
+      if (priorOpen !== issue.openBlockerCount) return issue;
+      return {
+        ...issue,
+        blockedBy: prior.blockedBy,
+        blocks: prior.blocks,
+        subIssueNumbers: prior.subIssueNumbers,
+      };
+    });
     const byStatus = new Map<string, ReadyIssue[]>();
     for (const status of OPEN_BOARD_STATUSES) byStatus.set(status, []);
     for (const issue of issues) {
@@ -1005,6 +1036,7 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
             title: issue.title,
             url: issue.url,
             blockedBy: issue.blockedBy,
+            openBlockerCount: issue.openBlockerCount,
             labels: issue.labels,
           });
         }
@@ -1020,6 +1052,7 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
             title: issue.title,
             url: issue.url,
             blockedBy: issue.blockedBy,
+            openBlockerCount: issue.openBlockerCount,
             labels: issue.labels,
           });
         }
@@ -1243,6 +1276,7 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
         url: "",
         state: b.state as "OPEN" | "CLOSED",
       })),
+      openBlockerCount: item.relationSummary?.blockedByOpen,
     }));
   }
 

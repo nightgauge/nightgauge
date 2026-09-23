@@ -2,8 +2,10 @@ package github
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/forge"
@@ -54,6 +56,11 @@ func (s *PRService) GetPRMergeInfo(ctx context.Context, owner, repo string, numb
 }
 
 // GetPR fetches a single pull request with review and check status.
+//
+// GraphQL retained: one document carries the PR's state, labels, review
+// decision and check rollup; REST needs a request per facet and has no review
+// decision. The attention sweep reads it only for a Dependabot remediation PR
+// already past its staleness threshold, not every pass.
 func (s *PRService) GetPR(ctx context.Context, owner, repo string, number int) (*types.PullRequest, error) {
 	graphQLNumber, err := checkedGraphQLInt("pull request number", number)
 	if err != nil {
@@ -109,6 +116,13 @@ func (s *PRService) GetPR(ctx context.Context, owner, repo string, number int) (
 }
 
 // ListPRs lists pull requests filtered by state and optionally by head ref.
+//
+// GraphQL retained: each PR carries reviewDecision, mergeStateStatus and the
+// head commit's statusCheckRollup, none of which the REST pull list reports
+// (REST has no review decision at all, and mergeable_state only on the
+// single-PR read), so REST would be several requests per PR. The attention
+// sweep asks HasOpenPRs first — a free conditional REST read — and skips
+// this call when there is no open PR.
 func (s *PRService) ListPRs(ctx context.Context, owner, repo string, state string, headRef string) ([]types.PullRequest, error) {
 	stateFilter := []PullRequestState{PullRequestState("OPEN")}
 	if state != "" {
@@ -456,4 +470,52 @@ func (s *PRService) UpdatePRBranch(ctx context.Context, owner, repo string, numb
 		return fmt.Errorf("update branch for %s/%s#%d: status %d: %s", owner, repo, number, status, string(body))
 	}
 	return nil
+}
+
+// openPullsPath is the open-PR list's first page. Kept as one function so every
+// reader of this URL stores the SAME reduced shape under it: the conditional
+// store is keyed by URL, and a 304 hands back whatever the last 200 stored.
+func openPullsPath(owner, repo string) string {
+	return fmt.Sprintf("/repos/%s/%s/pulls?state=open&per_page=100", url.PathEscape(owner), url.PathEscape(repo))
+}
+
+// openPullsDigest is the stored form of the open-PR list's first page.
+type openPullsDigest struct {
+	Count int `json:"count"`
+}
+
+// openPulls reads the first page of the repository's open PRs conditionally
+// and returns its digest and the ETag it is current under.
+func (c *Client) openPulls(ctx context.Context, owner, repo string) (openPullsDigest, string, error) {
+	resp, err := c.condGet(ctx, openPullsPath(owner, repo), func(body []byte) (any, error) {
+		var raw []json.RawMessage
+		if err := json.Unmarshal(body, &raw); err != nil {
+			return nil, err
+		}
+		return openPullsDigest{Count: len(raw)}, nil
+	})
+	if err != nil {
+		return openPullsDigest{}, "", fmt.Errorf("list open PRs for %s/%s: %w", owner, repo, err)
+	}
+	if resp.Status != http.StatusOK && resp.Status != http.StatusNotModified {
+		return openPullsDigest{}, "", fmt.Errorf("list open PRs for %s/%s: REST %d: %s", owner, repo, resp.Status, restErrorSummary(resp.Body))
+	}
+	var d openPullsDigest
+	if err := json.Unmarshal(resp.Payload, &d); err != nil {
+		return openPullsDigest{}, "", fmt.Errorf("list open PRs for %s/%s: decode: %w", owner, repo, err)
+	}
+	return d, resp.ETag, nil
+}
+
+// HasOpenPRs reports whether the repository has any open pull request, from
+// one conditional REST request: free while the open-PR list is unchanged.
+// The attention sweep asks this before ListPRs, whose GraphQL read (review
+// decision, merge state, check rollup) it only needs when there is a PR to
+// classify.
+func (s *PRService) HasOpenPRs(ctx context.Context, owner, repo string) (bool, error) {
+	d, _, err := s.client.openPulls(ctx, owner, repo)
+	if err != nil {
+		return false, err
+	}
+	return d.Count > 0, nil
 }

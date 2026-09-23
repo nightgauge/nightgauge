@@ -128,6 +128,80 @@ type OpenStatusSubset interface {
 	StatusReadIsOpenSubset(status string) bool
 }
 
+// OpenSummaryReader is an OPTIONAL capability on a forge.BoardService: the
+// board's open items with relationship COUNTS (BoardItem.RelationSummary)
+// instead of lists. It is what every consumer that only asks "which status /
+// blocked / epic" should read — the Repositories tree, board counts and the
+// attention sweep — because on GitHub it is a conditional REST read that costs
+// nothing while the board is unchanged, where the list-carrying ListOpenItems
+// is a GraphQL read billed every time.
+//
+// It is cached as its OWN entry ("open-summary"), separate from "open": the
+// two are different reads with different contents, and serving a summary to
+// a caller that needs lists (the dependency graph) would silently empty its
+// edges. An adapter without the capability is answered by deriving the counts
+// from its ListOpenItems snapshot (see cachedBoard.ListOpenItemsSummary), so
+// GitLab and test fakes behave exactly as before.
+type OpenSummaryReader interface {
+	ListOpenItemsSummary(ctx context.Context) ([]forgetypes.BoardItem, int, error)
+}
+
+// IdentityReporter is an OPTIONAL capability on a forge.BoardService: the
+// token identity its reads are made with. The cache keys every entry by it,
+// so a snapshot one token was allowed to read is never served to a caller
+// holding another. An adapter without it shares one namespace per board, as
+// before.
+type IdentityReporter interface {
+	CacheIdentity() string
+}
+
+// SummaryAvailability is an OPTIONAL refinement of OpenSummaryReader: whether
+// the adapter's summary read is its own cheap read right now. When it is not
+// (GitHub Enterprise Server, or a github.com owner whose REST projects surface
+// answered 404) the adapter would answer the summary from its full open read
+// anyway, so the cache derives the summary from its "open" entry instead of
+// holding a second copy of the same read — which keeps status reads answered
+// from that one snapshot exactly as before (OpenStatusSubset).
+type SummaryAvailability interface {
+	SummaryReadAvailable() bool
+}
+
+func summaryReadAvailable(r OpenSummaryReader) bool {
+	if a, ok := r.(SummaryAvailability); ok {
+		return a.SummaryReadAvailable()
+	}
+	return true
+}
+
+// ListOpenSummary reads the board's open items in summary form: through
+// OpenSummaryReader when the board offers it (a cached board always does),
+// else from ListOpenItems with the counts derived from the lists.
+func ListOpenSummary(ctx context.Context, board forge.BoardService) ([]forgetypes.BoardItem, int, error) {
+	if r, ok := board.(OpenSummaryReader); ok {
+		return r.ListOpenItemsSummary(ctx)
+	}
+	items, total, err := board.ListOpenItems(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	return summarize(items), total, nil
+}
+
+// summarize returns a copy of items with RelationSummary set from each
+// item's lists (pull requests carry none).
+func summarize(items []forgetypes.BoardItem) []forgetypes.BoardItem {
+	out := make([]forgetypes.BoardItem, len(items))
+	copy(out, items)
+	for i := range out {
+		if out[i].IsPR || out[i].RelationSummary != nil {
+			continue
+		}
+		s := forgetypes.SummarizeRelations(out[i])
+		out[i].RelationSummary = &s
+	}
+	return out
+}
+
 // Snapshot is one board read, with the time it was taken. FetchedAt is exported
 // because a cache that cannot report its own age is indistinguishable from a
 // cache that is lying: a consumer showing an operator "nothing is stranded" has
@@ -242,12 +316,27 @@ func (c *Cache) Invalidate(owner string, project int) {
 	prefix := boardPrefix(owner, project)
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// Every identity's entries for the board: a write we issued changed the
+	// board for every token that reads it.
 	for k := range c.entries {
 		if strings.HasPrefix(k, prefix) {
 			delete(c.entries, k)
 		}
 	}
-	delete(c.probes, prefix)
+	for k := range c.probes {
+		if strings.HasPrefix(k, prefix) {
+			delete(c.probes, k)
+		}
+	}
+}
+
+// identityPrefix is the key namespace for one board as read by one token
+// identity. The empty identity keeps the board's bare prefix.
+func identityPrefix(owner string, project int, identity string) string {
+	if identity == "" {
+		return boardPrefix(owner, project)
+	}
+	return boardPrefix(owner, project) + "@" + identity + "|"
 }
 
 // InvalidateAll drops every board. Used when the mutating caller cannot name
@@ -411,7 +500,12 @@ func (c *Cache) Wrap(board forge.BoardService, owner string, project int) forge.
 		return board
 	}
 	subset, _ := board.(OpenStatusSubset)
-	return &cachedBoard{cache: c, inner: board, prefix: boardPrefix(owner, project), probe: probeFor(board), openSubset: subset}
+	summary, _ := board.(OpenSummaryReader)
+	identity := ""
+	if r, ok := board.(IdentityReporter); ok {
+		identity = r.CacheIdentity()
+	}
+	return &cachedBoard{cache: c, inner: board, prefix: identityPrefix(owner, project, identity), identity: identity, probe: probeFor(board), openSubset: subset, summary: summary}
 }
 
 // probeFor extracts the optional change-probe capability from a board service,
@@ -436,6 +530,33 @@ type cachedBoard struct {
 	// openSubset is nil for an adapter that has not promised its status reads
 	// are slices of its open read; see OpenStatusSubset.
 	openSubset OpenStatusSubset
+	// summary is nil for an adapter with no summary read; the summary entry is
+	// then derived from the "open" entry.
+	summary OpenSummaryReader
+	// identity is the wrapped board's token identity ("" when it reports none).
+	identity string
+}
+
+// CacheIdentity passes the wrapped board's identity through, so a caller
+// holding only the cached board can key its own memo the same way.
+func (b *cachedBoard) CacheIdentity() string { return b.identity }
+
+// ListOpenItemsSummary is the board's open items with relationship counts,
+// cached as its own "open-summary" entry with the same TTL, single-flight and
+// probe renewal as every other read.
+func (b *cachedBoard) ListOpenItemsSummary(ctx context.Context) ([]forgetypes.BoardItem, int, error) {
+	if b.summary == nil || !summaryReadAvailable(b.summary) {
+		items, total, err := b.ListOpenItems(ctx)
+		if err != nil {
+			return nil, 0, err
+		}
+		return summarize(items), total, nil
+	}
+	snap, err := b.cache.get(ctx, b.prefix+"open-summary", b.probe, func(ctx context.Context) (Snapshot, error) {
+		items, total, err := b.summary.ListOpenItemsSummary(ctx)
+		return Snapshot{Items: items, Total: total}, err
+	})
+	return snap.Items, snap.Total, err
 }
 
 func (b *cachedBoard) ListOpenItems(ctx context.Context) ([]forgetypes.BoardItem, int, error) {
@@ -527,7 +648,7 @@ func (b *cachedBoard) GetItem(ctx context.Context, owner, repo string, issueNumb
 // Ready / In progress / Backlog, and the dashboard derives its own counts from
 // the item list it already holds.
 func CountsByStatus(ctx context.Context, board forge.BoardService) (*forgetypes.StatusCounts, error) {
-	items, _, err := board.ListOpenItems(ctx)
+	items, _, err := ListOpenSummary(ctx, board)
 	if err != nil {
 		return nil, err
 	}

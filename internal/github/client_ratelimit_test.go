@@ -14,6 +14,10 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/shurcooL/graphql"
+
+	types "github.com/nightgauge/nightgauge/internal/forge/types"
 )
 
 // graphQLProbeServer returns an httptest server that responds to any GraphQL
@@ -21,13 +25,14 @@ import (
 // X-RateLimit-* response headers. The server records the count of incoming
 // requests so tests can assert "no GraphQL call dispatched" semantics.
 //
-// The probe call these tests drive is RepoService.RepoMetadata, chosen because
-// docs/GITHUB_GRAPHQL_SCHEMA.md classifies it requires-GraphQL: REST reports a
-// default_branch for a repository that has none, so it can never be migrated.
-// A probe that CAN move takes this coverage with it when it does — #849 moved
+// The probe call these tests drive is graphQLProbeService.RepoMetadata: the
+// repository query issued straight through Client.query. A probe that CAN move
+// takes this coverage with it when it does — #849 moved
 // Client.GetRepositoryID to REST and these tests silently became REST-gate
 // tests, duplicating TestREST_* below while leaving the GraphQL gate untested.
-// Pick a probe whose transport is pinned by a documented reason.
+// RepoService.RepoMetadata was the probe until it, too, moved to REST
+// (conditional GET); so the probe is now the GraphQL path itself, which
+// cannot move.
 func graphQLProbeServer(t *testing.T, headers map[string]string, calls *int32) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -133,7 +138,7 @@ func TestRateLimitGate_TripsBelowFloor(t *testing.T) {
 
 	t.Setenv(rateLimitFloorEnv, "100")
 
-	_, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge")
+	_, err := (graphQLProbeService{c}).RepoMetadata(context.Background(), "nightgauge", "nightgauge")
 	if err == nil {
 		t.Fatal("expected ErrRateLimitGated, got nil")
 	}
@@ -181,7 +186,7 @@ func TestRateLimitGate_NoOpAboveFloor(t *testing.T) {
 	c := NewClientWithURL("test-token", srv.URL).WithRateLimitTracker(tr, "alice")
 	t.Setenv(rateLimitFloorEnv, "100")
 
-	meta, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge")
+	meta, err := (graphQLProbeService{c}).RepoMetadata(context.Background(), "nightgauge", "nightgauge")
 	if err != nil {
 		t.Fatalf("expected success above floor, got: %v", err)
 	}
@@ -229,7 +234,7 @@ func TestRateLimitGate_StaleExhaustionStillGates(t *testing.T) {
 	c := NewClientWithURL("test-token", srv.URL).WithRateLimitTracker(tr, "alice")
 	t.Setenv(rateLimitFloorEnv, "100")
 
-	if _, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err == nil {
+	if _, err := (graphQLProbeService{c}).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err == nil {
 		t.Fatal("stale below-floor entry inside its reset window must gate, got a dispatched call")
 	}
 	if got := atomic.LoadInt32(&calls); got != 0 {
@@ -264,7 +269,7 @@ func TestRateLimitGate_NoOpWhenStaleAndNoReset(t *testing.T) {
 	c := NewClientWithURL("test-token", srv.URL).WithRateLimitTracker(tr, "alice")
 	t.Setenv(rateLimitFloorEnv, "100")
 
-	if _, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
+	if _, err := (graphQLProbeService{c}).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
 		t.Fatalf("stale entry with no reset must not gate: %v", err)
 	}
 	if got := atomic.LoadInt32(&calls); got != 1 {
@@ -292,7 +297,7 @@ func TestRateLimitGate_NoOpWhenResetPassed(t *testing.T) {
 	c := NewClientWithURL("test-token", srv.URL).WithRateLimitTracker(tr, "alice")
 	t.Setenv(rateLimitFloorEnv, "100")
 
-	if _, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
+	if _, err := (graphQLProbeService{c}).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
 		t.Fatalf("expected pass-through when reset window elapsed, got %v", err)
 	}
 	if got := atomic.LoadInt32(&calls); got != 1 {
@@ -308,7 +313,7 @@ func TestRateLimitGate_NoOpWithoutTracker(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClientWithURL("test-token", srv.URL)
-	if _, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
+	if _, err := (graphQLProbeService{c}).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
 		t.Fatalf("untracked client must still work: %v", err)
 	}
 	if got := atomic.LoadInt32(&calls); got != 1 {
@@ -337,7 +342,7 @@ func TestRateLimitGate_EnvOverride(t *testing.T) {
 
 	// With the default floor (100), 200 is above → call passes.
 	t.Setenv(rateLimitFloorEnv, "")
-	if _, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
+	if _, err := (graphQLProbeService{c}).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
 		t.Fatalf("default floor should let 200 through: %v", err)
 	}
 	if got := atomic.LoadInt32(&calls); got != 1 {
@@ -346,7 +351,7 @@ func TestRateLimitGate_EnvOverride(t *testing.T) {
 
 	// Raise the floor to 500 → now 200 is below → call gates.
 	t.Setenv(rateLimitFloorEnv, "500")
-	_, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge")
+	_, err := (graphQLProbeService{c}).RepoMetadata(context.Background(), "nightgauge", "nightgauge")
 	if !errors.Is(err, ErrRateLimitGated) {
 		t.Fatalf("expected ErrRateLimitGated under raised floor, got %v", err)
 	}
@@ -373,7 +378,7 @@ func TestHeaderInterceptor_FeedsTracker(t *testing.T) {
 	c := NewClientWithURL("test-token", srv.URL).WithRateLimitTracker(tr, "alice")
 	t.Setenv(rateLimitFloorEnv, "100")
 
-	if _, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
+	if _, err := (graphQLProbeService{c}).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
 		t.Fatalf("call: %v", err)
 	}
 
@@ -404,7 +409,7 @@ func TestHeaderInterceptor_NoTrackerNoOp(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClientWithURL("test-token", srv.URL)
-	if _, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
+	if _, err := (graphQLProbeService{c}).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
 		t.Fatalf("call: %v", err)
 	}
 	// No assertion on tracker — there isn't one. Just ensure no panic /
@@ -426,7 +431,7 @@ func TestHeaderInterceptor_SkipsResponsesWithoutHeaders(t *testing.T) {
 	tr := NewSharedRateLimitTracker(path)
 
 	c := NewClientWithURL("test-token", srv.URL).WithRateLimitTracker(tr, "alice")
-	if _, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
+	if _, err := (graphQLProbeService{c}).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
 		t.Fatalf("call: %v", err)
 	}
 	entry, _, err := tr.Get("alice", ResourceGraphQL)
@@ -473,7 +478,7 @@ func TestHeaderInterceptor_NoDoubleCount(t *testing.T) {
 	c := NewClientWithURL("test-token", srv.URL).WithRateLimitTracker(tr, "alice")
 
 	for i := 0; i < 2; i++ {
-		if _, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
+		if _, err := (graphQLProbeService{c}).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
 			t.Fatalf("call %d: %v", i, err)
 		}
 	}
@@ -592,4 +597,24 @@ func TestHeadroomGate_MatchesClientDecisions(t *testing.T) {
 			}
 		})
 	}
+}
+
+// graphQLProbeService issues one GraphQL repository query through the
+// client's query path — the gate these tests exist to pin.
+type graphQLProbeService struct{ c *Client }
+
+func (p graphQLProbeService) RepoMetadata(ctx context.Context, owner, name string) (*types.Repo, error) {
+	var q struct {
+		Repository struct {
+			NameWithOwner    graphql.String
+			Owner            struct{ Login graphql.String }
+			Name             graphql.String
+			DefaultBranchRef *struct{ Name graphql.String }
+		} `graphql:"repository(owner: $owner, name: $name)"`
+	}
+	vars := map[string]interface{}{"owner": graphql.String(owner), "name": graphql.String(name)}
+	if err := p.c.Query(ctx, &q, vars); err != nil {
+		return nil, err
+	}
+	return &types.Repo{NameWithOwner: string(q.Repository.NameWithOwner), Owner: string(q.Repository.Owner.Login), Name: string(q.Repository.Name)}, nil
 }

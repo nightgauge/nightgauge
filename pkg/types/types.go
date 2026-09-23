@@ -1,7 +1,10 @@
 // Package types defines shared domain types for the nightgauge CLI.
 package types
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // Priority represents issue priority levels.
 type Priority string
@@ -63,6 +66,62 @@ type BoardItem struct {
 	// FIRST_TIMER, NONE, MANNEQUIN). Used by the autonomous pipeline's
 	// author-trust gate (#270) — empty/unknown values are untrusted.
 	AuthorAssociation string `json:"authorAssociation,omitempty"`
+
+	// RelationSummary carries the COUNTS of the item's relationships. It is
+	// set by the summary read (ListOpenItemsSummary), which reads counts
+	// instead of lists: on such an item SubIssues, BlockedBy and Blocking are
+	// NOT READ, so an empty list there means "not asked", never "none". A
+	// consumer deciding "is this item blocked?" from a summary read must use
+	// RelationSummary.BlockedByOpen. Nil on reads that return the lists.
+	RelationSummary *RelationSummary `json:"relationSummary,omitempty"`
+}
+
+// RelationSummary is an item's relationship counts, as GitHub's issue
+// summaries report them. BlockedByOpen counts OPEN blockers only (verified
+// against the blocked-by list: 3 of 4 blockers open reads blocked_by=3,
+// total_blocked_by=4), which is exactly the "is this blocked?" question.
+type RelationSummary struct {
+	BlockedByOpen      int `json:"blockedByOpen"`
+	BlockedByTotal     int `json:"blockedByTotal"`
+	BlockingOpen       int `json:"blockingOpen"`
+	BlockingTotal      int `json:"blockingTotal"`
+	SubIssuesTotal     int `json:"subIssuesTotal"`
+	SubIssuesCompleted int `json:"subIssuesCompleted"`
+}
+
+// SummarizeRelations derives an item's RelationSummary from its relationship
+// lists, for a reader that holds the lists but must answer in summary form
+// (a fallback path, or a forge with no summary read). "Open" is any state
+// other than CLOSED/MERGED, case-insensitively.
+func SummarizeRelations(item BoardItem) RelationSummary {
+	var s RelationSummary
+	for _, b := range item.BlockedBy {
+		s.BlockedByTotal++
+		if isOpenState(b.State) {
+			s.BlockedByOpen++
+		}
+	}
+	for _, b := range item.Blocking {
+		s.BlockingTotal++
+		if isOpenState(b.State) {
+			s.BlockingOpen++
+		}
+	}
+	for _, si := range item.SubIssues {
+		s.SubIssuesTotal++
+		if !isOpenState(si.State) {
+			s.SubIssuesCompleted++
+		}
+	}
+	return s
+}
+
+func isOpenState(state string) bool {
+	switch strings.ToUpper(state) {
+	case "CLOSED", "MERGED":
+		return false
+	}
+	return true
 }
 
 // Issue represents a GitHub issue with sub-issue and blocking relationships.

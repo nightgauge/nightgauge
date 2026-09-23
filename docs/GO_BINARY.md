@@ -4962,6 +4962,24 @@ What this saves, and what it does not:
 `TestSchedulerStatusMovesInvalidateSharedBoardCache` pins the scheduler's
 writes.
 
+**On github.com the open read is a conditional REST summary.** `board.listOpen`,
+`board.counts` and the sweep's board reads use `boardcache.ListOpenSummary`,
+which the GitHub adapter serves from REST project items (`q=is:open`) with
+relationship COUNTS (`BoardItem.RelationSummary`) instead of lists. It is
+cached as its own `open-summary` entry, apart from the list-carrying `open`
+entry the dependency graph reads over GraphQL. Every page is revalidated with
+its stored ETag, and the store (`internal/github/condstore.go`) is on disk
+under `~/.nightgauge/cache/github-conditional/`, keyed by token identity, so an
+unchanged board costs nothing even right after a daemon restart; the cache is
+keyed by token identity too. Status reads (`ListItems(status)`) are REST pages
+plus one REST list per non-empty relationship. The change probe reads the
+owner's REST project list — one conditional request for every board. GHES, or
+a 404 from the REST projects endpoints, uses the GraphQL reads above, and the
+summary is then derived from the one `open` snapshot so status reads are still
+answered from it. `internal/ipc/github_cost_test.go` prices a window open:
+cold, 6 repos cost 4 GraphQL points and 47 counted REST requests, 20 repos 12
+points and 150; a re-open after a daemon restart costs 0 and 0.
+
 **Attribution through the cache (#860).** Inserting the cache initially moved
 every board read's attribution off the producers and onto `boardcache` — a
 silent regression in the one instrument the rest of #842 depends on, since

@@ -458,21 +458,32 @@ producer's forge traffic is therefore recurring, not one-off:
 
 ### When a sweep actually runs
 
-A full sweep is ~64 GraphQL points plus 18 REST calls across a six-repo
-workspace, against an intended cadence of four an hour. The extension's
-`AttentionSweepService` therefore gates every trigger except the timer and the
-operator's own command behind the daemon's one-point board change probe
-(`board.changed`, over `ProjectUpdatedAt` from the board cache), memoised for
-`boardcache.ProbeTTL` so a burst of triggers costs one point.
+Most of a sweep's reads are conditional REST requests that GitHub does not
+count when nothing changed (board summary, repository and default branch,
+Dependabot alert list, open-PR list, CI reads). What a sweep still pays in
+GraphQL is one point per repository with open PRs (`human-gate`'s review
+decision, merge state and check rollup) and one per repository with open
+Dependabot alerts, and the latter is reused while the alert and PR lists are
+unchanged (`internal/ipc/github_cost_test.go` pins the budgets). The
+extension's `AttentionSweepService` still gates every trigger except the
+operator's own command behind the daemon's board change probe
+(`board.changed`, over `ProjectUpdatedAt` from the board cache): one
+conditional request for all of an owner's boards, free when none moved.
 
-| Trigger                                                            | Sweeps when                                                               |
-| ------------------------------------------------------------------ | ------------------------------------------------------------------------- |
-| Timer (`sweepIntervalMinutes`, default 15, floor 5, window active) | Always — this is the cadence.                                             |
-| `nightgauge.attentionSweep` (the operator's command)               | Always — a "nothing changed" answer reads as a broken button.             |
-| Activation                                                         | First sweep of the window always; thereafter as below.                    |
-| Repository / Action Center refresh                                 | A bound board moved since the last sweep, OR a full interval has elapsed. |
-| Run terminated (`pipeline.complete` / `pipeline.error`)            | Same as refresh.                                                          |
-| Window focus regained (#484)                                       | Same as refresh.                                                          |
+| Trigger                                                            | Sweeps when                                                                   |
+| ------------------------------------------------------------------ | ----------------------------------------------------------------------------- |
+| `nightgauge.attentionSweep` (the operator's command)               | Always — a "nothing changed" answer reads as a broken button.                 |
+| Timer (`sweepIntervalMinutes`, default 15, floor 5, window active) | A full interval has elapsed — which it always has when the timer fires.       |
+| Activation                                                         | Never swept in this workspace, or as below against the remembered last sweep. |
+| Repository / Action Center refresh                                 | A bound board moved since the last sweep, OR a full interval has elapsed.     |
+| Run terminated (`pipeline.complete` / `pipeline.error`)            | Same as refresh.                                                              |
+| Window focus regained (#484)                                       | Same as refresh.                                                              |
+
+The last sweep's start time is kept in the workspace memento, so a window
+reload (which restarts the daemon) asks the probe instead of re-sweeping. A
+sweep that outlives the extension's IPC deadline still counts as the last
+sweep: the daemon finishes it and its cards arrive through the
+`attention.event` push.
 
 When the probe answers "nothing moved", the trigger re-renders the cards the
 store already holds and issues no forge traffic beyond the probe. The probe

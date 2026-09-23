@@ -2,6 +2,11 @@ package github
 
 import (
 	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/pkg/types"
@@ -12,43 +17,97 @@ import (
 // trunk would otherwise be checked against a branch that does not exist —
 // producing a 404 that reads as a permanent producer failure.
 
-func TestRepoMetadata_ReportsDefaultBranch(t *testing.T) {
-	response := `{"data":{"repository":{
-		"nameWithOwner":"octocat/acme",
-		"owner":{"login":"octocat"},
-		"name":"acme",
-		"defaultBranchRef":{"name":"trunk"}
-	}}}`
-	client, cleanup := mockGraphQLServer(t, response)
-	defer cleanup()
+// repoRESTServer answers GET /repos/{o}/{r} with default_branch=branch and
+// GET /repos/{o}/{r}/branches/{branch} with 200 when branchExists, else 404 —
+// the two answers GitHub gives for a repository with and without commits.
+// Every request is recorded as "METHOD path" with its If-None-Match.
+func repoRESTServer(t *testing.T, owner, name, branch string, branchExists bool) (*Client, *[]string) {
+	t.Helper()
+	var mu sync.Mutex
+	seen := &[]string{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		*seen = append(*seen, r.Method+" "+r.URL.Path+" inm="+r.Header.Get("If-None-Match"))
+		mu.Unlock()
+		switch r.URL.Path {
+		case "/repos/" + owner + "/" + name:
+			if r.Header.Get("If-None-Match") == `"repo-v1"` {
+				w.WriteHeader(http.StatusNotModified)
+				return
+			}
+			w.Header().Set("ETag", `"repo-v1"`)
+			fmt.Fprintf(w, `{"full_name":%q,"name":%q,"owner":{"login":%q},"default_branch":%q,"size":0}`, owner+"/"+name, name, owner, branch)
+		case "/repos/" + owner + "/" + name + "/branches/" + branch:
+			if !branchExists {
+				w.WriteHeader(http.StatusNotFound)
+				fmt.Fprint(w, `{"message":"Branch not found"}`)
+				return
+			}
+			if r.Header.Get("If-None-Match") == `"br-v1"` {
+				w.WriteHeader(http.StatusNotModified)
+				return
+			}
+			w.Header().Set("ETag", `"br-v1"`)
+			fmt.Fprintf(w, `{"name":%q}`, branch)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusTeapot)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return NewClientWithURL("test-token", srv.URL), seen
+}
 
+func TestRepoMetadata_ReportsDefaultBranch(t *testing.T) {
+	client, seen := repoRESTServer(t, "octocat", "acme", "trunk", true)
 	got, err := NewRepoService(client).RepoMetadata(context.Background(), "octocat", "acme")
 	if err != nil {
 		t.Fatalf("RepoMetadata: %v", err)
 	}
-	if got.DefaultBranch != "trunk" {
-		t.Errorf("DefaultBranch = %q, want trunk", got.DefaultBranch)
+	if got.DefaultBranch != "trunk" || got.NameWithOwner != "octocat/acme" || got.Owner != "octocat" || got.Name != "acme" {
+		t.Errorf("RepoMetadata = %+v", got)
+	}
+	if len(*seen) != 2 {
+		t.Fatalf("requests = %v, want the repo and the branch", *seen)
 	}
 }
 
 func TestRepoMetadata_EmptyRepoHasNoDefaultBranch(t *testing.T) {
-	// defaultBranchRef is null on a repository with no commits. Callers must
-	// see "" and decline to observe, not fall back to a guess.
-	response := `{"data":{"repository":{
-		"nameWithOwner":"octocat/fresh",
-		"owner":{"login":"octocat"},
-		"name":"fresh",
-		"defaultBranchRef":null
-	}}}`
-	client, cleanup := mockGraphQLServer(t, response)
-	defer cleanup()
-
+	// REST names a default_branch for a repository with no commits; the
+	// branch itself 404s. Callers must see "" and decline to observe, not
+	// fall back to the name REST reported.
+	client, _ := repoRESTServer(t, "octocat", "fresh", "main", false)
 	got, err := NewRepoService(client).RepoMetadata(context.Background(), "octocat", "fresh")
 	if err != nil {
 		t.Fatalf("RepoMetadata: %v", err)
 	}
 	if got.DefaultBranch != "" {
 		t.Errorf("DefaultBranch = %q, want empty", got.DefaultBranch)
+	}
+	if got.NameWithOwner != "octocat/fresh" {
+		t.Errorf("NameWithOwner = %q", got.NameWithOwner)
+	}
+}
+
+func TestRepoMetadata_RepeatIsConditional(t *testing.T) {
+	// The sweep asks every pass. The second ask must revalidate both reads
+	// with their stored ETags, so an unchanged repository answers 304 twice.
+	client, seen := repoRESTServer(t, "octocat", "acme", "main", true)
+	svc := NewRepoService(client)
+	for i := 0; i < 2; i++ {
+		got, err := svc.RepoMetadata(context.Background(), "octocat", "acme")
+		if err != nil || got.DefaultBranch != "main" {
+			t.Fatalf("RepoMetadata #%d = %+v, %v", i+1, got, err)
+		}
+	}
+	want := []string{
+		"GET /repos/octocat/acme inm=",
+		"GET /repos/octocat/acme/branches/main inm=",
+		`GET /repos/octocat/acme inm="repo-v1"`,
+		`GET /repos/octocat/acme/branches/main inm="br-v1"`,
+	}
+	if strings.Join(*seen, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("requests =\n%s\nwant\n%s", strings.Join(*seen, "\n"), strings.Join(want, "\n"))
 	}
 }
 

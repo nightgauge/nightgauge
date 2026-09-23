@@ -33,6 +33,7 @@ import (
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
+	"github.com/nightgauge/nightgauge/internal/forge/boardcache"
 )
 
 // ProducerCoverageGap is the stable producer id — half of the sticky
@@ -119,7 +120,10 @@ func (p *CoverageGap) discoverBoard(ctx context.Context, in WorkspaceInput) ([]s
 	if in.Forge == nil || in.Forge.Board() == nil {
 		return nil, fmt.Errorf("coverage-gap: no board service")
 	}
-	items, _, err := in.Forge.Board().ListOpenItems(ctx)
+	// The summary read: this producer needs each item's Repo and nothing of
+	// its relationship lists, and the summary is the conditional REST read
+	// the tree and board counts share — free while the board is unchanged.
+	items, _, err := boardcache.ListOpenSummary(ctx, in.Forge.Board())
 	if err != nil {
 		return nil, err
 	}
