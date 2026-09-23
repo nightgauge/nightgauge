@@ -441,6 +441,12 @@ create --body-file` call, so the compact profile (and its tests) pin
 
 ### Fixed
 
+- **`branch-merged-check.sh` no longer calls an update-branch merge KEEP under
+  load.** The parent-of-merged-head test piped `printf` into `grep -qx` under
+  `pipefail`; when `grep` exited at the first match, `printf` took SIGPIPE and
+  the match read as a miss. It now greps a here-string. Found by a local gate
+  run beside another agent's `go test`.
+
 - **feature-dev sub-sessions work in a repository whose `.gitignore` ignores
   `.nightgauge/`.** Each step's progress is proven by fingerprinting the work
   tree, and the fingerprint staged with `git add -A -- . :(exclude).nightgauge`.
