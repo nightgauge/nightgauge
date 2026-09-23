@@ -119,6 +119,16 @@ func TestRESTDo_RetriesAGatewayErrorOnce(t *testing.T) {
 	if _, status, _ := c.restDoStatus(context.Background(), http.MethodGet, "/x", nil); status != 503 || always.calls.Load() != 2 {
 		t.Fatalf("status %d after %d calls, want 503 after exactly 2", status, always.calls.Load())
 	}
+
+	// A write is never repeated: GitHub may have applied it behind the
+	// gateway that dropped the response.
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
+		write := &gateTransport{respond: func(int32, *http.Request) (int, http.Header, string) { return 502, http.Header{}, "bad gateway" }}
+		c = NewClientWithHTTPClient(&http.Client{Transport: write})
+		if _, status, _ := c.restDoStatus(context.Background(), method, "/x", map[string]string{"k": "v"}); status != 502 || write.calls.Load() != 1 {
+			t.Fatalf("%s: status %d after %d calls, want 502 after exactly 1", method, status, write.calls.Load())
+		}
+	}
 }
 
 // The transport's ETag layer keys by Accept as well as URL: one URL answers a

@@ -1573,8 +1573,11 @@ func (c *Client) restDoURL(ctx context.Context, method, url, label string, body 
 
 		// A gateway error (502/503/504) is GitHub's front end, not the
 		// request: one retry after a short jittered pause, then it is the
-		// caller's answer.
-		if isGatewayStatus(resp.StatusCode) && !retriedGateway {
+		// caller's answer. Reads only: a write may already have been applied
+		// behind a gateway that dropped the response, so repeating it is not
+		// safe.
+		if isGatewayStatus(resp.StatusCode) && !retriedGateway &&
+			(method == http.MethodGet || method == http.MethodHead) {
 			retriedGateway = true
 			attempt--
 			select {
