@@ -16,6 +16,18 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **`nightgauge doctor` reports credentials committed under `.nightgauge/`
+  (#2024).** A new `tracked_secrets` row scans only the files git tracks
+  there (`git ls-files -- .nightgauge`) for GitHub tokens (`ghp_`, `gho_`,
+  `ghu_`, `ghs_`, `ghr_`, `github_pat_`) and for the license-key prefixes the
+  platform client already recognises. Each hit is reported as
+  `path:line pattern prefix…`, and `--json` carries the same fields under
+  `checks.tracked_secrets.findings`; the matched value never appears, only its
+  prefix and `…`. The remediation names the two steps, rotating the credential
+  and removing it from history, and doctor does neither itself. Files over
+  1 MiB and binary files are skipped with a note, and the check is skipped
+  outside a git work tree. A finding is a warning (exit 1), not a failure.
+
 - **Capacity-aware size gates (#1655).** A model's context window now caps
   the largest issue size it may take, from one table in
   `internal/skillrender/budget.go` (ADR-023 Q9): under 32k tokens XS only,
@@ -417,6 +429,24 @@ create --body-file` call, so the compact profile (and its tests) pin
   ADR-022 § 18 stands.
 
 ### Changed
+
+- **Security: the config loader refuses a plaintext GitHub token or license
+  key in the repository's config files (#2023).** A literal
+  `github_auth.token`, `github_auth.tokens.<owner>` or `platform.license_key`
+  in `.nightgauge/config.yaml` or `.nightgauge/config.local.yaml` now stops
+  the load, before any network call, with an error naming the file and the key
+  and never the value. Use an `env:VAR_NAME` reference there, or put the
+  literal value in the machine-tier file (`~/.nightgauge/config.yaml` or its
+  XDG / `NIGHTGAUGE_CONFIG_HOME` equivalent), which still accepts it.
+  Previously the value was loaded and used, and only `platform` was stripped.
+  The gh-fallback warning now names the resolved machine-tier path and the
+  `env:` form instead of a bare "config.yaml", which had steered users to the
+  committed file. `nightgauge config validate` applies the same rule to any
+  file other than the machine tier; `nightgauge forge auth token` fails on a
+  refused config instead of printing the active gh account's token; and
+  `nightgauge doctor` reports a config that failed to load as a failed
+  `config` check rather than as a fresh repository. The VS Code extension no
+  longer exports a literal token from either repository file as `GH_TOKEN`.
 
 - **The daemon reads GitHub with conditional REST requests, remembered across
   restarts (part of #842).** A window open used to cost ~182 GraphQL points,

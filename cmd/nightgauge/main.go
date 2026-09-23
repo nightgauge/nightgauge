@@ -11928,7 +11928,7 @@ var doctorCheckOrder = []string{
 	"binary", "gh", "github_auth", "api_user", "scopes", "rate_limit", "github_api_budget", "config", "project",
 	"complexity_model", "ai_adapter",
 	"compose_orphans", "worktree_leaks", "stranded_branches", "pipeline_stashes", "preserved_wip", "orphaned_processes",
-	"serve_lease", "ledger_daemon_coverage",
+	"serve_lease", "ledger_daemon_coverage", "tracked_secrets",
 	"survival_backlog", "survival_coverage", "corpus_calibration", "scheduled_automations",
 }
 
@@ -11948,6 +11948,7 @@ func doctorCmd() *cobra.Command {
   - Project number and owner configuration
   - Complexity model presence (nightgauge outcome init repairs it)
   - At least one usable AI coding agent (Issue #862)
+  - No GitHub token or license key in tracked files under .nightgauge/
 
 The AI-agent row answers one question: can this machine run a stage at all?
 Zero usable adapters is a warning (degraded), never a hard failure — see
@@ -11970,7 +11971,7 @@ Use --json for machine-readable output (skills parse this format).`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			workdir, _ := os.Getwd()
-			cfg, _ := config.Load(workdir)
+			cfg, cfgErr := config.Load(workdir)
 
 			client, clientErr := clientFromConfig()
 			if clientErr != nil {
@@ -11978,7 +11979,7 @@ Use --json for machine-readable output (skills parse this format).`,
 			}
 
 			adapters := parseAdaptersFlag(adaptersFlag)
-			result := doctor.RunDoctor(cmd.Context(), cfg, client, adapters)
+			result := doctor.RunDoctorWithConfigError(cmd.Context(), cfg, cfgErr, client, adapters)
 
 			if jsonOutput {
 				if err := printJSON(result); err != nil {

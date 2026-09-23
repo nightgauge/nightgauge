@@ -34,6 +34,12 @@ and this project adheres to
 
 ### Changed
 
+- A GitHub token in `.nightgauge/config.yaml` or `.nightgauge/config.local.yaml`
+  is used only when it is an `env:VAR_NAME` reference (#2023). A literal token
+  there is no longer exported to terminals and subprocesses as `GH_TOKEN`; the
+  binary refuses such a config. Put a literal token in `~/.nightgauge/config.yaml`,
+  or name the account in `github_user` and let `gh` hold it.
+
 - OpenCode stages now run from the editor. They check the experimental
   switch, the `opencode` CLI, the Nightgauge binary and a configured model
   before launch, and refuse interactive mode. Each model step and tool call

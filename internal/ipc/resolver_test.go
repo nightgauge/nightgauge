@@ -216,7 +216,8 @@ func TestClientResolver_AttachesTrackerToResolvedClient(t *testing.T) {
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	configYAML := "project:\n  owner: test-org\n  number: 1\ngithub_user: alice\ngithub_auth:\n  tokens:\n    test-org: test-token-tracker-wire\n"
+	configYAML := "project:\n  owner: test-org\n  number: 1\ngithub_user: alice\ngithub_auth:\n  tokens:\n    test-org: env:NG_TEST_TRACKER_TOKEN\n"
+	t.Setenv("NG_TEST_TRACKER_TOKEN", "test-token-tracker-wire")
 	if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(configYAML), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}

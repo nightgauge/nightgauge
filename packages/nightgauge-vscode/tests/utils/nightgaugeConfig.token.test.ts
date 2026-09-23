@@ -87,6 +87,9 @@ describe("getGitHubAuthToken", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Drop queued once-implementations a test left unconsumed (a tier that
+    // short-circuits never reads the next file), so tests stay independent.
+    mockReadFileSync.mockReset();
     process.env = { ...originalEnv };
 
     // Default: workspace config exists
@@ -113,12 +116,26 @@ describe("getGitHubAuthToken", () => {
     expect(getGitHubAuthToken("/test/workspace")).toBeNull();
   });
 
-  it("returns literal token from github_auth.token", () => {
+  it("ignores a literal token in the workspace config (repository tier: env: only)", () => {
     mockReadFileSync.mockReturnValue(`
 github_auth:
   token: ghp_literal_token
 `);
-    expect(getGitHubAuthToken("/test/workspace")).toBe("ghp_literal_token");
+    expect(getGitHubAuthToken("/test/workspace")).toBeNull();
+  });
+
+  it("returns a literal token from the machine config", () => {
+    mockResolveConfigPathSync.mockReturnValue({
+      path: "/test/workspace/.nightgauge/config.yaml",
+      isLegacy: false,
+      exists: false,
+    });
+    mockExistsSync.mockImplementation((p) => !String(p).includes("/test/workspace/"));
+    mockReadFileSync.mockReturnValue(`
+github_auth:
+  token: ghp_machine_literal
+`);
+    expect(getGitHubAuthToken("/test/workspace")).toBe("ghp_machine_literal");
   });
 
   it("prefers config.local.yaml (local tier) over the committed workspace config", () => {
@@ -126,10 +143,12 @@ github_auth:
     // token must win so concurrent workspaces owned by different GitHub users
     // each resolve their own per-repo token.
     mockExistsSync.mockImplementation((p) => String(p).endsWith(".nightgauge/config.local.yaml"));
+    process.env.LOCAL_TIER_PAT = "ghp_local_tier";
+    process.env.PROJECT_TIER_PAT = "ghp_project_tier";
     mockReadFileSync.mockImplementation((p) =>
       String(p).endsWith("config.local.yaml")
-        ? "github_auth:\n  token: ghp_local_tier\n"
-        : "github_auth:\n  token: ghp_project_tier\n"
+        ? "github_auth:\n  token: env:LOCAL_TIER_PAT\n"
+        : "github_auth:\n  token: env:PROJECT_TIER_PAT\n"
     );
     expect(getGitHubAuthToken("/test/workspace")).toBe("ghp_local_tier");
   });
@@ -171,12 +190,13 @@ pipeline:
 
   it("prefers workspace config over global config", () => {
     mockExistsSync.mockImplementation((p) => String(p).includes(".nightgauge/config.yaml"));
+    process.env.WORKSPACE_PAT = "ghp_workspace_token";
     // Workspace config has token
     mockReadFileSync
       .mockImplementationOnce(
         () => `
 github_auth:
-  token: ghp_workspace_token
+  token: env:WORKSPACE_PAT
 `
       )
       .mockImplementationOnce(
@@ -189,20 +209,13 @@ github_auth:
   });
 
   it("falls back to global config when workspace config has no token", () => {
-    // Workspace config exists but has no token
-    mockReadFileSync.mockImplementationOnce(
-      () => `
-pipeline:
-  auto_fix: true
-`
-    );
-    // Global config exists and has token
+    // Workspace tiers exist but carry no token; the machine config has a
+    // literal one, which only that tier may hold.
     mockExistsSync.mockReturnValue(true);
-    mockReadFileSync.mockImplementationOnce(
-      () => `
-github_auth:
-  token: ghp_global_token
-`
+    mockReadFileSync.mockImplementation((p) =>
+      String(p).includes("/test/workspace/")
+        ? "pipeline:\n  auto_fix: true\n"
+        : "github_auth:\n  token: ghp_global_token\n"
     );
     expect(getGitHubAuthToken("/test/workspace")).toBe("ghp_global_token");
   });
@@ -220,6 +233,9 @@ describe("getGitHubAuthTokens", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Drop queued once-implementations a test left unconsumed (a tier that
+    // short-circuits never reads the next file), so tests stay independent.
+    mockReadFileSync.mockReset();
     process.env = { ...originalEnv };
 
     mockResolveConfigPathSync.mockReturnValue({
@@ -253,16 +269,27 @@ github_auth:
   });
 
   it("returns org-to-token mapping from github_auth.tokens", () => {
+    process.env.ACME_PAT = "ghp_acme_token";
+    process.env.MYORG_PAT = "ghp_myorg_token";
     mockReadFileSync.mockReturnValue(`
 github_auth:
   tokens:
-    acme: ghp_acme_token
-    myorg: ghp_myorg_token
+    acme: env:ACME_PAT
+    myorg: env:MYORG_PAT
 `);
     expect(getGitHubAuthTokens("/test/workspace")).toEqual({
       acme: "ghp_acme_token",
       myorg: "ghp_myorg_token",
     });
+  });
+
+  it("ignores literal tokens in the workspace config (repository tier: env: only)", () => {
+    mockReadFileSync.mockReturnValue(`
+github_auth:
+  tokens:
+    acme: ghp_acme_literal
+`);
+    expect(getGitHubAuthTokens("/test/workspace")).toEqual({});
   });
 
   it("expands env:VAR_NAME in token values", () => {
@@ -300,23 +327,14 @@ pipeline:
   });
 
   it("merges workspace and global config without duplicating entries", () => {
-    // Workspace config has org1
-    mockReadFileSync.mockImplementationOnce(
-      () => `
-github_auth:
-  tokens:
-    org1: ghp_workspace_org1
-`
-    );
-    // Global config has org1 + org2
-    mockExistsSync.mockReturnValue(true);
-    mockReadFileSync.mockImplementationOnce(
-      () => `
-github_auth:
-  tokens:
-    org1: ghp_global_org1
-    org2: ghp_global_org2
-`
+    // Workspace config has org1 (as an env: reference, the only form a
+    // repository tier accepts); the machine config has org1 + org2 literals.
+    process.env.WORKSPACE_ORG1_PAT = "ghp_workspace_org1";
+    mockExistsSync.mockImplementation((p) => !String(p).endsWith("config.local.yaml"));
+    mockReadFileSync.mockImplementation((p) =>
+      String(p).includes("/test/workspace/")
+        ? "github_auth:\n  tokens:\n    org1: env:WORKSPACE_ORG1_PAT\n"
+        : "github_auth:\n  tokens:\n    org1: ghp_global_org1\n    org2: ghp_global_org2\n"
     );
     const result = getGitHubAuthTokens("/test/workspace");
     // org1 from workspace takes precedence; org2 comes from global

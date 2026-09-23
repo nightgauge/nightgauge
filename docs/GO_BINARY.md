@@ -5224,9 +5224,10 @@ pipeline skill calls this as Phase 0 preflight via `skills/_shared/PREFLIGHT.md`
 | `api_user`    | `GET /user` returns non-empty login             | required   |
 | `scopes`      | Token has `repo`, `project`, `read:org` scopes  | required   |
 | `rate_limit`  | API requests remaining (warn < 500, warn < 100) | warning    |
-| `config`      | `.nightgauge/config.yaml` parseable        | required\* |
+| `config`      | `.nightgauge/config.yaml` loads; a refused config (for example a plaintext token, #2023) fails here | required\* |
 | `project`     | `project_number` and `owner` set in config      | required\* |
 | `complexity_model` | `.nightgauge/complexity-model.yaml` exists; missing output points to `nightgauge outcome init` | warning |
+| `tracked_secrets` | No GitHub token or license key in files git tracks under `.nightgauge/` (#2024); each hit is `path:line`, redacted to its prefix, with structured `findings` in `--json`. Files over 1 MiB and binary files are skipped with a note; skipped outside a git work tree | warning |
 
 Plus the leaked-machine-state checks (#330 / #332 / #341), all **warning-only**:
 

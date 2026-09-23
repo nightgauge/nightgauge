@@ -661,9 +661,11 @@ nightgauge forge auth assert --repo <owner>/<repo>   # preflight permission chec
 ```
 
 > Both `github_user` and `github_auth.token` are honored from
-> `config.local.yaml` (tier 4, highest precedence). Prefer `github_user` for a
-> secret-free per-repo identity; use `github_auth.token` only when a specific PAT
-> is required (e.g. a fine-grained token with narrower scopes).
+> `config.local.yaml` (tier 4, highest precedence), but there the token must be
+> an `env:VAR_NAME` reference (see [Where a token may live](#where-a-token-may-live)).
+> Prefer `github_user` for a secret-free per-repo identity; use
+> `github_auth.token` only when a specific PAT is required (e.g. a fine-grained
+> token with narrower scopes).
 
 ### github_auth
 
@@ -677,6 +679,24 @@ backwards compatibility.
 | `github_auth.tokens`              | map\<string\> | -       | Per-org PAT map for multi-org workspaces         |
 | `github_auth.users`               | map\<string\> | -       | Maps org/owner name → gh CLI username (legacy)   |
 | `github_auth.suppress_gh_warning` | boolean       | `false` | Suppress deprecation warning on gh CLI fallback  |
+
+#### Where a token may live
+
+`github_auth.token`, every `github_auth.tokens.<owner>` and
+`platform.license_key` are credentials. In the repository tiers,
+`.nightgauge/config.yaml` and `.nightgauge/config.local.yaml`, the loader
+accepts them only as an `env:VAR_NAME` reference. A literal value there stops
+the load before any network call, with an error that names the file and the
+key and never the value. A literal value is accepted only in the machine-tier
+file (`~/.nightgauge/config.yaml`, or `$XDG_CONFIG_HOME/nightgauge/config.yaml`
+or `$NIGHTGAUGE_CONFIG_HOME/config.yaml` when set), which lives outside every
+repository. To use the OS keychain instead, name the account in `github_user`
+and let `gh auth login` hold the token.
+
+If a literal token was ever committed, rotate it: removing the line does not
+remove it from the repository's history. `nightgauge doctor` reports tracked
+files under `.nightgauge/` that contain a GitHub token or license key, as the
+`tracked_secrets` row.
 
 #### Token Resolution Priority
 
@@ -706,9 +726,12 @@ that configured only `github_user`.
 When the gh CLI fallback is used, a warning is printed to stderr:
 
 ```
-warning: Using gh CLI for token resolution — configure github_auth.token
-in config.yaml for reliable multi-org support
+warning: Using gh CLI for token resolution — for reliable multi-org support set
+github_auth.token (or github_auth.tokens.<owner>) in /Users/you/.nightgauge/config.yaml,
+or reference an environment variable from any tier with `token: env:VAR_NAME`
 ```
+
+The path is the resolved machine-tier file on the machine that printed it.
 
 This warning is intentionally non-blocking. The pipeline continues, but CI/CD
 environments without `gh` installed will fail at this step — in CI, set
@@ -782,9 +805,11 @@ env:
   GITHUB_TOKEN_NIGHTGAUGE: ${{ secrets.GITHUB_TOKEN_NIGHTGAUGE }}
 ```
 
-**In local development** (`.nightgauge/config.local.yaml`, gitignored):
+**In local development**, export the variable in your shell, or put the
+literal token in the machine-tier file, never in `config.local.yaml`:
 
 ```yaml
+# ~/.nightgauge/config.yaml (machine tier — outside every repository)
 github_auth:
   token: ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
