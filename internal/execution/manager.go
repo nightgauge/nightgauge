@@ -292,6 +292,20 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	// Build command from adapter
 	runOpts := buildRunOptions(opts, worktreeDir)
 
+	// Stage budgets (#1652, ADR-023 Q8): the stage's turn, wall-clock and
+	// token ceilings, enforced on the stream below. A model no USD cap can
+	// bind gets bounded ceilings whatever the config says. The turn ceiling
+	// is also the adapter's own cap where it has one (--max-turns, OpenCode's
+	// steps), set here so every hook below sees it.
+	stageLabel := fmt.Sprintf("%s#%d %s", opts.Repo, opts.IssueNumber, opts.Stage)
+	budget := config.ResolveStageBudget(opts.StageBudgets, opts.Stage, stageCost(adapter.Name(), runOpts.Model, worktreeDir))
+	for _, warning := range budget.Warnings {
+		fmt.Fprintf(os.Stderr, "%s %s: %s\n", StageBudgetMarker, stageLabel, warning)
+	}
+	if budget.MaxTurns > 0 && (runOpts.MaxTurns <= 0 || budget.MaxTurns < runOpts.MaxTurns) {
+		runOpts.MaxTurns = budget.MaxTurns
+	}
+
 	// Pre-dispatch gate (ADR-022): an adapter that can refuse a dispatch for a
 	// reason other than its model or effort exposes the optional PreDispatch
 	// hook — the opencode adapter's experimental enable gate is the first. It
@@ -497,6 +511,11 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	m.mu.Lock()
 	m.running[execKey] = execution
 	m.mu.Unlock()
+
+	// The wall clock runs from the spawn. It is the smaller of the stage
+	// budget and opts.Timeout; nothing extends it.
+	stageBudget := newStageBudgetEnforcer(budget, StreamFormatForAdapter(adapter.Name()), opts.Timeout)
+	stageBudget.arm(cmd.Process, execution.done)
 
 	if opts.Runtime != nil {
 		opts.Runtime.SetProcess(cmd.Process.Pid, worktreeDir)
@@ -721,6 +740,11 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 				fmt.Fprintf(os.Stderr, "%s#%d %s: %s\n", opts.Repo, opts.IssueNumber, opts.Stage, costCap.notice())
 				costCap.stop(cmd.Process, execution.done)
 			}
+			// Stage budgets (#1652): turns and tokens are checked on every
+			// event, as it arrives, never once the stage has ended.
+			if stageBudget.observe(event, stepAdded, tokenAcc) {
+				stageBudget.stop()
+			}
 			// Nightgauge OpenCode plugin handshake (#1635): step_start is the
 			// earliest point at which a tool call could possibly exist, so
 			// checking the instant the FIRST one is observed proves the
@@ -906,6 +930,18 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	// keeps the window a concurrent CancelWithGrace could still be blocked in
 	// its own Process.Wait() as short as possible.
 	close(execution.done)
+	// The stage is reaped, so its wall clock stops here, not when its output
+	// closed: a child that closes stdout and stderr and keeps running is
+	// still bounded (#1652).
+	stageBudget.disarm()
+	// A stage stopped at a stage budget: check that its whole process group
+	// is gone, now the leader is reaped, and end its stderr with the marker
+	// the budget-enforcer terminal rule classifies.
+	stageBudget.settle(cmd.Process.Pid)
+	if notice := stageBudget.notice(); notice != "" {
+		fmt.Fprintf(os.Stderr, "%s: %s\n", stageLabel, notice)
+		keepStderr([]byte(notice))
+	}
 
 	// Unregister execution
 	m.mu.Lock()
@@ -981,6 +1017,7 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	// constraint); every other consumer reads RunResult.Cancelled instead of
 	// re-deriving it from ctx.Err() or exit code.
 	result.Cancelled = execution.stopRequested.Load()
+	result.StageBudgetExceeded = stageBudget.result()
 	// The stage-keyed runtime handoff: CompleteStage merges these cache pools
 	// into the stage's record by max. The scheduler's runner projection
 	// (cliRunResultToStageResult) now also carries CacheReadTokens and
@@ -1009,6 +1046,10 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	// SIGTERM, and so did one its subagents took past it or whose subagent
 	// usage was only partly read.
 	if costCap != nil && costCap.fired && result.ExitCode == 0 {
+		result.ExitCode = 1
+	}
+	// So did a stage stopped at a stage budget (#1652).
+	if result.StageBudgetExceeded != nil && result.ExitCode == 0 {
 		result.ExitCode = 1
 	}
 	// A failed Nightgauge OpenCode plugin handshake (#1635) must fail the
@@ -1489,6 +1530,11 @@ type StageOptions struct {
 	MaxTurns     int      // Max conversation turns
 	CostBudget   float64  // Max cost in USD
 	TargetRepo   string   // Expected repo for skill verification (owner/repo)
+
+	// StageBudgets is pipeline.stage_budgets (#1652): the manager resolves
+	// the stage's turn, wall-clock and token ceilings from it and enforces
+	// them on the stream. nil means the built-in defaults.
+	StageBudgets map[string]config.StageBudget
 
 	// ResumeSessionID threads to adapters.RunOptions.ResumeSessionID — see
 	// its doc comment (#1643). Only the opencode adapter consumes it.

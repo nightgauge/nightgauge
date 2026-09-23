@@ -16,6 +16,27 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **Per-stage turn, wall-clock and token budgets that bind $0 local models
+  (#1652).** Every guardrail that stopped a runaway stage was priced in USD,
+  so a stage on a local model had none. `pipeline.stage_budgets`
+  (`default` or a stage name → `max_turns`, `max_wall_clock`, `max_tokens`)
+  now bounds every stage the Go executor runs, with or without a USD cap.
+  The defaults are 400 turns (200 on a zero-cost stage), 4h and 25M
+  processed tokens, set above what a normal hosted stage uses. The limits
+  are checked on the stream as it arrives, and the turn limit is also
+  passed as `--max-turns` or OpenCode's steps cap, so the native cap on
+  claude, claude-sdk and grok dispatches and on hosted OpenCode steps rises
+  from 200 to 400. A breach stops the stage's process group (SIGTERM, then
+  SIGKILL after 10s), checks that nothing in it survived, and stamps
+  `stage_budget_exceeded:<turns|wall_clock|tokens>` with the observed value
+  and the limit. The run is classified `budget_exceeded`, and the scheduler
+  no longer escalates a `budget_exceeded` stage to a stronger model. Only
+  `-1` lifts a limit, with a warning on every dispatch. A stage on a
+  zero-cost provider (a local model server or declared local OpenCode
+  endpoint, or a model priced at $0) or on a model the registry cannot price
+  cannot lift one. Stages the VS Code extension runs in its own runner are not
+  covered yet. See `docs/GUARDRAILS_AND_BUDGETS.md` § Per-stage non-USD
+  budgets and the ADR-023 Q8 amendment.
 - **The VS Code extension runs `opencode` stages (#1657).** Choosing
   OpenCode used to fall through to the Codex prerequisites and launch. It
   now needs `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1`, `opencode` on `PATH`, the

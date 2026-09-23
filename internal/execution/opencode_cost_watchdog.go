@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"syscall"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
@@ -167,14 +166,5 @@ func (w *openCodeCostWatchdog) notice() string {
 // budget stop is not an operator's stop, so it never marks the execution
 // stopped, and RunResult.Cancelled stays false.
 func (w *openCodeCostWatchdog) stop(proc *os.Process, exited <-chan struct{}) {
-	signalProcessTree(proc, syscall.SIGTERM)
-	go func() {
-		timer := time.NewTimer(w.grace)
-		defer timer.Stop()
-		select {
-		case <-exited:
-		case <-timer.C:
-			signalProcessTree(proc, syscall.SIGKILL)
-		}
-	}()
+	terminateProcessTree(proc, exited, w.grace)
 }

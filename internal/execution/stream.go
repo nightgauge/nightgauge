@@ -39,6 +39,12 @@ type StreamEvent struct {
 	// Session ID for conversation resumption
 	SessionID string `json:"session_id,omitempty"`
 
+	// ParentToolUseID is set on a claude event a subagent produced: the id of
+	// the Task tool call that started it. Main-thread events carry null. The
+	// stage turn budget counts main-thread turns only, as --max-turns does
+	// (#1652).
+	ParentToolUseID string `json:"parent_tool_use_id,omitempty"`
+
 	// Subtype for tool_use events
 	Subtype string `json:"subtype,omitempty"`
 
@@ -65,6 +71,12 @@ type StreamEvent struct {
 	// tool was already running, but before the line reached the manager,
 	// still reads as late. Zero when absent or not opencode's stream.
 	OpenCodeToolStartedAt int64 `json:"-"`
+
+	// OpenCodeStepReason is a step_finish event's part.reason, set only by
+	// ParseOpenCodeStreamLine: "stop" ends the session, and anything else,
+	// "tool-calls" among them, means another step follows. The stage turn
+	// budget reads it (#1652). Empty when absent.
+	OpenCodeStepReason string `json:"-"`
 }
 
 // StreamMessage contains message-level data.
@@ -80,6 +92,34 @@ type StreamMessage struct {
 	// every assistant message reports the fallback model, so the LAST
 	// observed value is the stage's served model (#91).
 	Model string `json:"model,omitempty"`
+
+	// ContentTypes is the type of each of the message's content blocks: a
+	// tool_use block means the turn asks for another, which the stage turn
+	// budget reads (#1652).
+	ContentTypes MessageContentTypes `json:"content,omitempty"`
+}
+
+// MessageContentTypes reads a message's content as the list of its blocks'
+// types. A user message's content can be a plain string; that reads as no
+// blocks rather than failing the whole event.
+type MessageContentTypes []string
+
+// UnmarshalJSON keeps each block's type and ignores content of any other
+// shape.
+func (c *MessageContentTypes) UnmarshalJSON(data []byte) error {
+	var blocks []struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(data, &blocks) != nil {
+		*c = nil
+		return nil
+	}
+	types := make([]string, 0, len(blocks))
+	for _, b := range blocks {
+		types = append(types, b.Type)
+	}
+	*c = types
+	return nil
 }
 
 // TokenUsage holds token count data from Claude's output.
@@ -380,6 +420,10 @@ func (acc *TokenAccumulator) ParseCodexStreamLine(line string) (*StreamEvent, bo
 		if raw.Item.Type == "agent_message" {
 			event.Type = "message"
 			event.Subtype = "text"
+		} else {
+			// The completed item's own type (command_execution,
+			// file_change, ...), which the stage turn budget reads (#1652).
+			event.Subtype = raw.Item.Type
 		}
 	}
 
@@ -875,6 +919,8 @@ func (acc *TokenAccumulator) ParseOpenCodeStreamLine(line string) (*StreamEvent,
 		s.StepFinishes++
 		if ev.Part == nil || ev.Part.Reason == nil {
 			s.Drift("a step_finish event has no part.reason")
+		} else {
+			event.OpenCodeStepReason = *ev.Part.Reason
 		}
 		if ev.Part == nil || ev.Part.Tokens == nil {
 			s.Drift("a step_finish event has no part.tokens")

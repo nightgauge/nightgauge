@@ -223,6 +223,27 @@ type RunResult struct {
 	// runner cannot see it either. Set once, here, so no second predicate for
 	// "was this a stop" grows anywhere else.
 	Cancelled bool
+
+	// StageBudgetExceeded is set when the manager stopped the stage at one of
+	// its non-USD stage budgets (#1652): its turns, its wall clock or its
+	// tokens. The stage's stderr then ends with the
+	// stage_budget_exceeded:<dimension> marker the budget-enforcer terminal
+	// rule classifies as budget_exceeded, and ExitCode is non-zero.
+	StageBudgetExceeded *StageBudgetBreach
+}
+
+// StageBudgetBreach is the stage budget a stage was stopped at (#1652).
+type StageBudgetBreach struct {
+	// Dimension is "turns", "wall_clock" or "tokens".
+	Dimension string
+	// Observed is what the stage had reached when it was stopped, and Limit
+	// the stage's ceiling: turns, milliseconds for the wall clock, or
+	// processed tokens.
+	Observed int64
+	Limit    int64
+	// GroupSurvived is true when a member of the stage's process group was
+	// still present after SIGKILL, once the stage had been reaped.
+	GroupSurvived bool
 }
 
 // openCodeToolForClaudeTool maps the Claude Code tool names a skill's
