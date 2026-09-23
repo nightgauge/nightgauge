@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // fixtureToken is shaped like a classic GitHub PAT (prefix + 36 base62). It is
@@ -17,14 +19,7 @@ const fixtureToken = "ghp_" + "0123456789abcdef0123456789abcdef0123"
 
 func gitIn(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-	cmd.Env = append(os.Environ(),
-		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.invalid",
-		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.invalid",
-		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git %v: %v\n%s", args, err, out)
-	}
+	gittest.Run(t, dir, args...)
 }
 
 func newCredentialRepo(t *testing.T) string {
