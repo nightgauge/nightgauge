@@ -703,6 +703,37 @@ func TestResolveTokenChain_CIPrefersEnvironment(t *testing.T) {
 	}
 }
 
+// On a CI host the environment wins even over a configured github_user, and
+// github_user (which a committed repository tier can set) selects no stored
+// gh identity: a pull request must not pick a credential off a shared runner.
+func TestResolveTokenChain_CIIgnoresGitHubUser(t *testing.T) {
+	t.Setenv("CI", "true")
+	t.Setenv("GITHUB_TOKEN", "ghp_jobtoken")
+	resolver := &stubOwnerUserResolver{usersByOwner: map[string]string{"nightgauge": "someone-else"}}
+	calledFor := ""
+	orig := execGHAuthTokenForUser
+	execGHAuthTokenForUser = func(user string) (string, error) { calledFor = user; return "ghp_stored", nil }
+	t.Cleanup(func() { execGHAuthTokenForUser = orig })
+
+	tok, err := ResolveTokenChain(resolver, "nightgauge")
+	if err != nil || tok != "ghp_jobtoken" {
+		t.Fatalf("ResolveTokenChain in CI = %q, %v; want the job's token", tok, err)
+	}
+	if got := configuredGitHubUser(resolver, "nightgauge"); got != "" {
+		t.Errorf("configuredGitHubUser in CI = %q, want \"\"", got)
+	}
+	t.Setenv("GITHUB_TOKEN", "")
+	origDefault := execGHAuthToken
+	execGHAuthToken = func() (string, error) { return "ghp_default", nil }
+	t.Cleanup(func() { execGHAuthToken = origDefault })
+	if _, err := ResolveTokenChain(resolver, "nightgauge"); err != nil {
+		t.Fatalf("ResolveTokenChain in CI without env: %v", err)
+	}
+	if calledFor != "" {
+		t.Errorf("CI resolution asked gh for the stored token of %q", calledFor)
+	}
+}
+
 func TestResolveTokenChain_EnvFallback(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "ghp_envfallback")
 	resolver := &stubTokenResolver{token: ""}

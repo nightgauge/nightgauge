@@ -199,7 +199,8 @@ func TestAuthLogin_UsesKeyring(t *testing.T) {
 	stdout := &bytes.Buffer{}
 	root.SetOut(stdout)
 	root.SetErr(&bytes.Buffer{})
-	root.SetArgs([]string{"auth", "login", "--token", "ghp_xxxxxxxxyyyyyyyy", "--json"})
+	root.SetIn(strings.NewReader("ghp_xxxxxxxxyyyyyyyy\n"))
+	root.SetArgs([]string{"auth", "login", "--json"})
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -454,5 +455,12 @@ func TestStoreTokenInKeyring_RefusesInCI(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "ghp_") {
 		t.Fatal("the error quotes the token")
+	}
+}
+
+// The token never travels on argv (ADR-024 § 5): there is no --token flag.
+func TestAuthLogin_HasNoTokenFlag(t *testing.T) {
+	if f := authLoginCmd().Flags().Lookup("token"); f != nil {
+		t.Fatal("forge auth login still accepts --token, which puts the token on argv")
 	}
 }

@@ -4918,16 +4918,18 @@ func serveCmd() *cobra.Command {
 				}
 			}
 
-			// The platform API key is read from the environment only
-			// (ADR-024 § 5): the --api-key flag it once also took put the
-			// key on argv, where every local user sees it through `ps`.
+			// The platform API key and license key are read from the
+			// environment only (ADR-024 § 5): the --api-key and --license-key
+			// flags they once also took put them on argv, where every local
+			// user sees them through `ps`.
 			apiKey = os.Getenv("NIGHTGAUGE_API_KEY")
+			licenseKey = os.Getenv("NIGHTGAUGE_LICENSE_KEY")
 
-			// Resolve platform credentials with flag > env > config
-			// precedence (#333). serveCmd registers --platform-url and
-			// --license-key with os.Getenv(...) defaults, so
-			// the flag variables above already encode "flag or env, flag
-			// wins" by the time cobra hands control to RunE — the only
+			// Resolve platform credentials with flag/env > config
+			// precedence (#333). serveCmd registers --platform-url with an
+			// os.Getenv(...) default, so the URL variable above already
+			// encodes "flag or env, flag wins" by the time cobra hands
+			// control to RunE; the keys come from the environment — the only
 			// remaining fallback is the stored license key (OS keychain,
 			// then machine-tier file) and the merged config's URL, which an
 			// extension-spawned daemon (no flags, no env) otherwise never
@@ -5413,7 +5415,6 @@ func serveCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&workspaceDir, "workspace", "", "Workspace root directory (default: CWD)")
 	cmd.Flags().StringVar(&platformURL, "platform-url", os.Getenv("NIGHTGAUGE_PLATFORM_URL"), "Platform API base URL")
-	cmd.Flags().StringVar(&licenseKey, "license-key", os.Getenv("NIGHTGAUGE_LICENSE_KEY"), "License key")
 	cmd.Flags().StringVar(&githubGraphQLURL, "github-graphql-url", "", "Override GitHub GraphQL URL (for tests only)")
 	cmd.Flags().MarkHidden("github-graphql-url") //nolint:errcheck
 

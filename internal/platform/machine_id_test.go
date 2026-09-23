@@ -61,9 +61,10 @@ func TestResolveMachineID_PersistsAndReuses(t *testing.T) {
 	}
 }
 
-// TestMachineIDMovedFromLegacy: a pre-ADR-024 id is moved byte for byte and
-// kept, never regenerated (a new id is a new device to the platform, #1883).
-func TestMachineIDMovedFromLegacy(t *testing.T) {
+// TestMachineIDCopiedFromLegacyAndKept: a pre-ADR-024 id is copied byte for
+// byte and kept, never regenerated (a new id is a new device to the platform,
+// #1883); the legacy file stays, narrowed to 0600, for an older binary.
+func TestMachineIDCopiedFromLegacyAndKept(t *testing.T) {
 	legacy, path := isolateMachineIDState(t)
 	const content = "3f2c9a1e-legacy-id\n"
 	writeLegacyMachineID(t, legacy, content)
@@ -75,52 +76,79 @@ func TestMachineIDMovedFromLegacy(t *testing.T) {
 	if id != strings.TrimSpace(content) {
 		t.Fatalf("MachineID = %q, want the legacy id %q", id, strings.TrimSpace(content))
 	}
-	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read moved file: %v", err)
-	}
-	if string(got) != content {
-		t.Errorf("moved bytes = %q, want %q", got, content)
-	}
-	if runtime.GOOS != "windows" {
-		if info, _ := os.Stat(path); info.Mode().Perm() != 0o600 {
-			t.Errorf("moved machine-id mode = %v, want 0600", info.Mode().Perm())
+	for _, p := range []string{path, legacy} {
+		got, err := os.ReadFile(p)
+		if err != nil || string(got) != content {
+			t.Errorf("%s = %q (%v), want %q", p, got, err, content)
 		}
-	}
-	if _, err := os.Stat(legacy); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("legacy file still present after the move: %v", err)
+		if runtime.GOOS != "windows" {
+			if info, _ := os.Stat(p); info.Mode().Perm() != 0o600 {
+				t.Errorf("%s mode = %v, want 0600", p, info.Mode().Perm())
+			}
+		}
 	}
 }
 
 // TestMachineIDNotRegeneratedWhenLegacyPresent: when the legacy id and a
-// different id at the new location both exist, the lookup fails naming
-// `nightgauge doctor --fix`, neither file changes, and no id is minted.
+// different id at the new location both exist, the new file wins, nothing is
+// rewritten, no id is minted, and the lookup does not fail (a failed lookup
+// silently stops queue sync and agent registration).
 func TestMachineIDNotRegeneratedWhenLegacyPresent(t *testing.T) {
 	legacy, path := isolateMachineIDState(t)
 	writeLegacyMachineID(t, legacy, "legacy-id\n")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte("other-id\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("new-id\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	id, err := MachineID()
-	if err == nil {
-		t.Fatalf("MachineID = %q with a conflicting legacy file, want an error", id)
+	if err != nil || id != "new-id" {
+		t.Fatalf("MachineID = %q, %v; want the authoritative new-location id", id, err)
 	}
-	if !strings.Contains(err.Error(), "nightgauge doctor --fix") {
-		t.Errorf("error %q does not name `nightgauge doctor --fix`", err)
+	if got := ResolveMachineID(); got != "new-id" {
+		t.Errorf("ResolveMachineID = %q, want new-id", got)
 	}
-	if !errors.Is(err, layout.ErrStateMoveConflict) {
-		t.Errorf("error %v is not ErrStateMoveConflict", err)
-	}
-	if got := ResolveMachineID(); got != "" {
-		t.Errorf("ResolveMachineID = %q on a conflict, want \"\" (never a substitute identity)", got)
-	}
-	for p, want := range map[string]string{legacy: "legacy-id\n", path: "other-id\n"} {
+	for p, want := range map[string]string{legacy: "legacy-id\n", path: "new-id\n"} {
 		if got, _ := os.ReadFile(p); string(got) != want {
 			t.Errorf("%s = %q, want it untouched (%q)", p, got, want)
+		}
+	}
+}
+
+// An existing but empty id file is an error, never a reason to mint: with the
+// exclusive-create fallback a concurrent writer's file can be briefly empty.
+func TestMachineIDEmptyFileIsNotRegenerated(t *testing.T) {
+	_, path := isolateMachineIDState(t)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if id, err := MachineID(); err == nil {
+		t.Fatalf("MachineID = %q over an empty file, want an error", id)
+	}
+	if got, _ := os.ReadFile(path); len(got) != 0 {
+		t.Errorf("an id was minted over the empty file: %q", got)
+	}
+}
+
+// A fresh id is also written as the legacy compatibility copy when
+// ~/.nightgauge exists, so an older binary on the machine reads the same id.
+func TestMachineIDMintWritesCompatibilityCopy(t *testing.T) {
+	legacy, path := isolateMachineIDState(t)
+	if err := os.MkdirAll(filepath.Dir(legacy), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	id, err := MachineID()
+	if err != nil {
+		t.Fatalf("MachineID: %v", err)
+	}
+	for _, p := range []string{path, legacy} {
+		if got, _ := os.ReadFile(p); strings.TrimSpace(string(got)) != id {
+			t.Errorf("%s = %q, want %q", p, got, id)
 		}
 	}
 }

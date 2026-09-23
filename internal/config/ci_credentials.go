@@ -8,7 +8,7 @@ import (
 	yaml "gopkg.in/yaml.v3"
 )
 
-// CIHost reports whether the process runs under CI (`CI=true`, or `CI=1`),
+// CIHost reports whether the process runs under CI (`CI=true` in any case, or `CI=1`),
 // read through getenv. On a CI host Nightgauge never writes a credential to
 // disk, neither to the OS keychain nor to the 0600 machine-tier file, and
 // resolves credentials from the environment first (ADR-024 § 5): a

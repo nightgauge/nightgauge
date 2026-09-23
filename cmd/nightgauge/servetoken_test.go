@@ -89,6 +89,7 @@ func (r identityTokenResolver) ResolveGitHubUserForOwner(owner string) string {
 // ambient (wrong-user) GH_TOKEN is OVERRIDDEN by the resolved per-repo token —
 // the configured identity is authoritative, not the ambient env.
 func TestMaybeExportGitHubToken_OverridesAmbientWhenIdentityConfigured(t *testing.T) {
+	t.Setenv("CI", "") // off CI; in CI the job's environment wins (ADR-024 § 5)
 	t.Setenv("GH_TOKEN", "ghp_ambient_wrong_user")
 	t.Setenv("GITHUB_TOKEN", "ghp_ambient_wrong_user")
 

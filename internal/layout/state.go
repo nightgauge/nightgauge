@@ -67,26 +67,47 @@ func StateHomePath() (string, error) {
 	return StateHomePathForGOOS(runtime.GOOS)
 }
 
-// StateHomePathForGOOS is StateHomePath for an explicit goos.
+// StateHomePathForGOOS is StateHomePath for an explicit goos, read from this
+// process's environment and home directory.
 func StateHomePathForGOOS(goos string) (string, error) {
-	if v := os.Getenv(EnvStateHome); v != "" {
+	home := ""
+	if h, err := os.UserHomeDir(); err == nil {
+		home = h
+	}
+	return StateHomePathFrom(goos, home, os.LookupEnv)
+}
+
+// StateHomePathFrom resolves the machine-state root from explicit inputs: the
+// OS whose default applies, the home directory, and an environment lookup.
+// A caller that builds a child's environment uses it to resolve the root the
+// operator's own process would, from the operator's inherited environment
+// (the OpenCode per-run root pins NIGHTGAUGE_STATE_HOME to it, ADR-022 § 8).
+func StateHomePathFrom(goos, home string, lookup func(string) (string, bool)) (string, error) {
+	get := func(k string) string {
+		if lookup == nil {
+			return ""
+		}
+		v, _ := lookup(k)
+		return v
+	}
+	if v := get(EnvStateHome); v != "" {
 		if !filepath.IsAbs(v) {
 			return "", fmt.Errorf("%w: %s=%q is not an absolute path; set it to an absolute directory",
 				ErrNoStateHome, EnvStateHome, v)
 		}
 		return filepath.Clean(v), nil
 	}
-	if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" && filepath.IsAbs(xdg) {
+	if xdg := get("XDG_STATE_HOME"); xdg != "" && filepath.IsAbs(xdg) {
 		return filepath.Join(xdg, stateDirName), nil
 	}
 	if goos == "windows" {
-		if base := os.Getenv("LOCALAPPDATA"); base != "" && filepath.IsAbs(base) {
+		if base := get("LOCALAPPDATA"); base != "" && filepath.IsAbs(base) {
 			return filepath.Join(base, stateDirName, "state"), nil
 		}
 	}
-	home, err := stateUserHome()
-	if err != nil {
-		return "", err
+	if home == "" || !filepath.IsAbs(home) {
+		return "", fmt.Errorf("%w: the home directory is not set; set %s to an absolute directory",
+			ErrNoStateHome, EnvStateHome)
 	}
 	switch goos {
 	case "linux":
@@ -98,23 +119,14 @@ func StateHomePathForGOOS(goos string) (string, error) {
 	}
 }
 
-// stateUserHome is os.UserHomeDir, required to be absolute, with an error
-// that names the override.
-func stateUserHome() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" || !filepath.IsAbs(home) {
-		return "", fmt.Errorf("%w: the home directory is not set; set %s to an absolute directory",
-			ErrNoStateHome, EnvStateHome)
-	}
-	return home, nil
-}
-
 // verifiedStateRoots caches roots this process has already created and
 // probed, so the write probe runs once per root per process.
 var verifiedStateRoots sync.Map
 
-// ensureStateRoot creates root with mode 0700 when absent, refuses a symlink
-// or non-directory in its place, and proves it writable.
+// ensureStateRoot creates root with mode 0700 when absent; for an existing
+// root it refuses a symlink, a non-directory, or (on Unix) a directory owned
+// by another user, and narrows one of ours that is looser than 0700. It then
+// proves the root writable.
 func ensureStateRoot(root string) error {
 	if _, ok := verifiedStateRoots.Load(root); ok {
 		return nil
@@ -139,6 +151,12 @@ func ensureStateRoot(root string) error {
 		return fail("refusing", errors.New("the directory is a symlink"))
 	case !info.IsDir():
 		return fail("refusing", errors.New("not a directory"))
+	case stateDirOwnedByOther(info):
+		return fail("refusing", errors.New("the directory is owned by another user"))
+	case runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0:
+		if err := os.Chmod(root, 0o700); err != nil {
+			return fail("cannot narrow to mode 0700", err)
+		}
 	}
 	probe, err := os.CreateTemp(root, ".write-probe-*")
 	if err != nil {
@@ -175,7 +193,7 @@ func StateHintFile(name string) (string, error) {
 	}
 	target := filepath.Join(root, name)
 	if err := MoveLegacyStateFile(name, root); err != nil {
-		if legacy := legacyStatePath(name); legacy != "" {
+		if legacy := LegacyStatePath(name); legacy != "" {
 			if info, lerr := os.Lstat(legacy); lerr == nil && info.Mode().IsRegular() {
 				_ = os.Remove(legacy)
 			}
@@ -184,8 +202,10 @@ func StateHintFile(name string) (string, error) {
 	return target, nil
 }
 
-// legacyStatePath is $HOME/.nightgauge/name, or "" when there is no home.
-func legacyStatePath(name string) string {
+// LegacyStatePath is the pre-ADR-024 location of a machine-state entry,
+// $HOME/.nightgauge/name, or "" when there is no home. Runtime code reads it
+// only to move, copy or probe a legacy entry, never as a source of data.
+func LegacyStatePath(name string) string {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" || !filepath.IsAbs(home) {
 		return ""
@@ -201,113 +221,152 @@ const legacyTempPrefix = ".migrate-"
 // move deletes it. A younger one may belong to a move still in progress.
 const staleTempAge = 10 * time.Minute
 
+// movedFileMode caps the mode of every file moved or copied here: none of
+// them is meant for other users, and machine-id identifies the device.
+const movedFileMode fs.FileMode = 0o600
+
+// conflictError reports a legacy file and its new location holding different
+// contents. It names both paths and the manual remedy.
+//
+// #2040 adds `nightgauge doctor --fix` and its migrator; that change replaces
+// this message with one naming the command.
+func conflictError(legacy, target, why string) error {
+	return fmt.Errorf("%w: %s and %s (%s); nothing was overwritten. Nightgauge now reads only %s: "+
+		"keep it and delete %s; or, if %s holds the value you need, move it over %s",
+		ErrStateMoveConflict, legacy, target, why, target, legacy, legacy, target)
+}
+
 // MoveLegacyStateFile moves $HOME/.nightgauge/name to root/name once
 // (ADR-024 § 15). It is not a fallback: after it the legacy file is gone and
 // runtime code reads only root/name.
 //
-// Mechanics: the legacy bytes are copied to a temporary file in root with the
-// legacy file's permission bits, fsynced, and hard-linked into place, which
-// fails rather than overwrites when the target already exists; the directory
-// is fsynced and the legacy file is deleted last. So:
+// Mechanics: the legacy bytes are installed at root/name by installExclusive
+// (a temporary copy, fsynced, then hard-linked into place, or created with
+// O_EXCL where hard links are unavailable), which never overwrites an
+// existing target, with mode at most 0600; the directory is fsynced and the
+// legacy file is deleted last. So:
 //
-//   - concurrent processes cannot both install a target: exactly one link
-//     wins, and the loser finds a target equal to the source and deletes the
+//   - concurrent processes cannot both install a target: exactly one wins,
+//     and the loser finds a target equal to the source and deletes the
 //     source, or finds the source already gone;
 //   - a crash between install and delete leaves a target equal to its source,
 //     which the next call recognises as a finished move and completes;
 //   - a target that exists and differs is never overwritten: the call returns
-//     ErrStateMoveConflict naming both paths and `nightgauge doctor --fix`;
+//     ErrStateMoveConflict naming both paths and the manual remedy;
 //   - a legacy symlink or non-regular file is never followed or moved; it is
 //     reported as a conflict.
 //
 // Nothing to move (no home, no legacy file, or the legacy path is the target)
 // returns nil.
 func MoveLegacyStateFile(name, root string) error {
-	legacy := legacyStatePath(name)
-	target := filepath.Join(root, name)
-	if legacy == "" || filepath.Clean(legacy) == filepath.Clean(target) {
-		return nil
+	legacy, target, src, err := readLegacyForTarget(name, root)
+	if err != nil || src == nil {
+		return err
 	}
-	linfo, err := os.Lstat(legacy)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("move %s: stat legacy file: %w", legacy, err)
-	}
-	conflict := func(why string) error {
-		return fmt.Errorf("%w: %s and %s (%s); nothing was overwritten. Run `nightgauge doctor --fix`, or remove the one you do not want",
-			ErrStateMoveConflict, legacy, target, why)
-	}
-	if !linfo.Mode().IsRegular() {
-		return conflict("the legacy path is not a regular file")
-	}
-	src, err := os.ReadFile(legacy)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil // another process finished the move
-	}
-	if err != nil {
-		return fmt.Errorf("move %s: read legacy file: %w", legacy, err)
-	}
-
 	if _, err := os.Lstat(target); err == nil {
-		return finishOrConflict(legacy, target, src, conflict)
+		return finishOrConflict(legacy, target, src)
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("move %s: stat %s: %w", legacy, target, err)
 	}
-
 	removeStaleStateTemps(root, name)
-	tmp, err := os.CreateTemp(root, legacyTempPrefix+name+"-*")
+	won, err := installExclusive(target, src, movedFileMode)
 	if err != nil {
-		return fmt.Errorf("move %s: create temporary copy: %w", legacy, err)
-	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }()
-	if err := tmp.Chmod(linfo.Mode().Perm()); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("move %s: set mode: %w", legacy, err)
-	}
-	if _, err := tmp.Write(src); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("move %s: write temporary copy: %w", legacy, err)
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("move %s: fsync temporary copy: %w", legacy, err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("move %s: close temporary copy: %w", legacy, err)
-	}
-	if err := os.Link(tmpName, target); err != nil {
-		if errors.Is(err, fs.ErrExist) {
-			// Another process installed the target first.
-			return finishOrConflict(legacy, target, src, conflict)
-		}
 		return fmt.Errorf("move %s: install %s: %w", legacy, target, err)
 	}
-	syncStateDir(root)
+	if !won {
+		// Another process installed the target first.
+		return finishOrConflict(legacy, target, src)
+	}
 	if err := os.Remove(legacy); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("move %s: remove legacy file after copying it: %w", legacy, err)
 	}
 	return nil
 }
 
+// CopyLegacyStateFile installs a copy of $HOME/.nightgauge/name at root/name
+// when root/name does not exist, and KEEPS the legacy file, narrowed to mode
+// 0600, as a compatibility copy for an older binary still running on the
+// machine (machine-id: an older binary that found no legacy file would mint a
+// new id and bind a new seat). #2040's migrator owns removing the legacy copy.
+//
+// root/name is authoritative. When both exist and differ, root/name is kept,
+// nothing is changed, and diverged is true so the caller can warn; the
+// legacy file can only differ if something other than this binary rewrote
+// it. A legacy symlink or non-regular file is never followed; it is an error.
+func CopyLegacyStateFile(name, root string) (diverged bool, err error) {
+	legacy, target, src, err := readLegacyForTarget(name, root)
+	if err != nil || src == nil {
+		return false, err
+	}
+	if _, err := os.Lstat(target); errors.Is(err, fs.ErrNotExist) {
+		removeStaleStateTemps(root, name)
+		won, ierr := installExclusive(target, src, movedFileMode)
+		if ierr != nil {
+			return false, fmt.Errorf("copy %s: install %s: %w", legacy, target, ierr)
+		}
+		if won {
+			_ = os.Chmod(legacy, movedFileMode)
+			return false, nil
+		}
+	} else if err != nil {
+		return false, fmt.Errorf("copy %s: stat %s: %w", legacy, target, err)
+	}
+	dst, err := os.ReadFile(target)
+	if err != nil {
+		return false, fmt.Errorf("copy %s: read %s: %w", legacy, target, err)
+	}
+	_ = os.Chmod(legacy, movedFileMode)
+	return !bytes.Equal(dst, src), nil
+}
+
+// readLegacyForTarget reads the legacy file for name. src is nil (with a nil
+// error) when there is nothing to do: no home, no legacy file, or the legacy
+// path is the target. A legacy path that is not a regular file is a conflict.
+func readLegacyForTarget(name, root string) (legacy, target string, src []byte, err error) {
+	legacy = LegacyStatePath(name)
+	target = filepath.Join(root, name)
+	if legacy == "" || filepath.Clean(legacy) == filepath.Clean(target) {
+		return legacy, target, nil, nil
+	}
+	linfo, err := os.Lstat(legacy)
+	if errors.Is(err, fs.ErrNotExist) {
+		return legacy, target, nil, nil
+	}
+	if err != nil {
+		return legacy, target, nil, fmt.Errorf("stat legacy file %s: %w", legacy, err)
+	}
+	if !linfo.Mode().IsRegular() {
+		return legacy, target, nil, conflictError(legacy, target, "the legacy path is not a regular file")
+	}
+	src, err = os.ReadFile(legacy)
+	if errors.Is(err, fs.ErrNotExist) {
+		return legacy, target, nil, nil // another process finished the move
+	}
+	if err != nil {
+		return legacy, target, nil, fmt.Errorf("read legacy file %s: %w", legacy, err)
+	}
+	if src == nil {
+		src = []byte{}
+	}
+	return legacy, target, src, nil
+}
+
 // finishOrConflict handles a target that already exists: equal bytes mean the
 // move had finished (the source is deleted); different bytes are a conflict.
-func finishOrConflict(legacy, target string, src []byte, conflict func(string) error) error {
+func finishOrConflict(legacy, target string, src []byte) error {
 	tinfo, err := os.Lstat(target)
 	if err != nil {
 		return fmt.Errorf("move %s: stat %s: %w", legacy, target, err)
 	}
 	if !tinfo.Mode().IsRegular() {
-		return conflict("the target is not a regular file")
+		return conflictError(legacy, target, "the target is not a regular file")
 	}
 	dst, err := os.ReadFile(target)
 	if err != nil {
 		return fmt.Errorf("move %s: read %s: %w", legacy, target, err)
 	}
 	if !bytes.Equal(dst, src) {
-		return conflict("their contents differ")
+		return conflictError(legacy, target, "their contents differ")
 	}
 	if err := os.Remove(legacy); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("move %s: remove legacy file: %w", legacy, err)
@@ -343,41 +402,82 @@ func syncStateDir(dir string) {
 	}
 }
 
-// WriteStateFileExclusive installs data at path only if nothing is there yet,
-// atomically: a concurrent reader sees either no file or the whole file, and
-// of two concurrent writers exactly one wins. It returns the content that is
-// at path afterwards (the caller's on success, the winner's otherwise) and
-// whether the caller's write won. perm is applied to the file.
-func WriteStateFileExclusive(path string, data []byte, perm fs.FileMode) ([]byte, bool, error) {
+// stateLink is os.Link, replaceable in tests to exercise the fallback.
+var stateLink = os.Link
+
+// installExclusive puts data at path only if nothing is there yet, and
+// reports whether this call's data won. It writes a temporary file in the
+// same directory with perm, fsyncs it, and hard-links it into place: the link
+// fails rather than overwrites, and a reader sees either no file or the whole
+// file. Where hard links are unavailable (a filesystem without them, EXDEV,
+// EPERM, ENOTSUP, EMLINK) it falls back to creating path with O_EXCL, which
+// also never overwrites, then writes and fsyncs it.
+func installExclusive(path string, data []byte, perm fs.FileMode) (bool, error) {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, legacyTempPrefix+filepath.Base(path)+"-*")
 	if err != nil {
-		return nil, false, err
+		return false, err
 	}
 	tmpName := tmp.Name()
 	defer func() { _ = os.Remove(tmpName) }()
-	if err := tmp.Chmod(perm); err != nil {
-		_ = tmp.Close()
-		return nil, false, err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return nil, false, err
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return nil, false, err
-	}
-	if err := tmp.Close(); err != nil {
-		return nil, false, err
-	}
-	if err := os.Link(tmpName, path); err != nil {
-		if errors.Is(err, fs.ErrExist) {
-			existing, rerr := os.ReadFile(path)
-			return existing, false, rerr
+	werr := func() error {
+		if err := tmp.Chmod(perm); err != nil {
+			return err
 		}
-		return nil, false, err
+		if _, err := tmp.Write(data); err != nil {
+			return err
+		}
+		return tmp.Sync()
+	}()
+	if cerr := tmp.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr != nil {
+		return false, werr
+	}
+	lerr := stateLink(tmpName, path)
+	switch {
+	case lerr == nil:
+		syncStateDir(dir)
+		return true, nil
+	case errors.Is(lerr, fs.ErrExist):
+		return false, nil
+	}
+	// No hard link here: an exclusive create never overwrites either.
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+	if errors.Is(err, fs.ErrExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("link failed (%v) and exclusive create failed: %w", lerr, err)
+	}
+	_, werr = f.Write(data)
+	if werr == nil {
+		werr = f.Sync()
+	}
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr != nil {
+		_ = os.Remove(path)
+		return false, werr
 	}
 	syncStateDir(dir)
-	return data, true, nil
+	return true, nil
+}
+
+// WriteStateFileExclusive installs data at path only if nothing is there yet
+// (see installExclusive). It returns the content at path afterwards (the
+// caller's on success, the winner's otherwise) and whether the caller's write
+// won. perm is applied to the file.
+func WriteStateFileExclusive(path string, data []byte, perm fs.FileMode) ([]byte, bool, error) {
+	won, err := installExclusive(path, data, perm)
+	if err != nil {
+		return nil, false, err
+	}
+	if won {
+		return data, true, nil
+	}
+	existing, err := os.ReadFile(path)
+	return existing, false, err
 }

@@ -54,6 +54,7 @@ func TestOpenCodeIsolationEnv(t *testing.T) {
 			"OPENCODE_DISABLE_EXTERNAL_SKILLS":    "1",
 			"GH_CONFIG_DIR":                       home + "/.config/gh",
 			"NIGHTGAUGE_CONFIG_HOME":              "/machine/tier",
+			"NIGHTGAUGE_STATE_HOME":               home + "/.local/state/nightgauge",
 			"GOCACHE":                             home + "/.cache/go-build",
 			"HOME":                                root + "/home",
 		}
@@ -77,7 +78,18 @@ func TestOpenCodeIsolationEnv(t *testing.T) {
 			change:    func(w map[string]string) { w["GOCACHE"] = "/cache/go-build" }},
 		{name: "darwin go cache ignores XDG_CACHE_HOME", goos: "darwin",
 			inherited: map[string]string{"XDG_CACHE_HOME": "/cache"},
-			change:    func(w map[string]string) { w["GOCACHE"] = home + "/Library/Caches/go-build" }},
+			change: func(w map[string]string) {
+				w["GOCACHE"] = home + "/Library/Caches/go-build"
+				w["NIGHTGAUGE_STATE_HOME"] = home + "/.nightgauge/state"
+			}},
+		// The run's XDG_STATE_HOME must not become the stage's machine-state
+		// root (ADR-024 § 8): the operator's is pinned instead.
+		{name: "the operator's XDG_STATE_HOME decides the pinned state root", goos: "linux",
+			inherited: map[string]string{"XDG_STATE_HOME": "/xdg-state"},
+			change:    func(w map[string]string) { w["NIGHTGAUGE_STATE_HOME"] = "/xdg-state/nightgauge" }},
+		{name: "the operator's NIGHTGAUGE_STATE_HOME passes through", goos: "linux",
+			inherited: map[string]string{"NIGHTGAUGE_STATE_HOME": "/state", "XDG_STATE_HOME": "/xdg-state"},
+			change:    func(w map[string]string) { w["NIGHTGAUGE_STATE_HOME"] = "/state" }},
 		{name: "an operator GOCACHE passes through", goos: "linux",
 			inherited: map[string]string{"GOCACHE": "/fast/go-build"},
 			change:    func(w map[string]string) { delete(w, "GOCACHE") }},

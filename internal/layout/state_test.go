@@ -158,7 +158,7 @@ func TestStateFileMovesLegacyByteForByte(t *testing.T) {
 	root, legacyDir := stateAndLegacy(t)
 	legacy := filepath.Join(legacyDir, "machine-id")
 	content := []byte("id-bytes\n\x00tail")
-	if err := os.WriteFile(legacy, content, 0o600); err != nil {
+	if err := os.WriteFile(legacy, content, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	path, err := StateFile("machine-id")
@@ -174,7 +174,7 @@ func TestStateFileMovesLegacyByteForByte(t *testing.T) {
 	}
 	if runtime.GOOS != "windows" {
 		if info, _ := os.Stat(path); info.Mode().Perm() != 0o600 {
-			t.Errorf("mode = %v, want the legacy 0600 preserved", info.Mode().Perm())
+			t.Errorf("mode = %v, want 0600 whatever the legacy mode was", info.Mode().Perm())
 		}
 	}
 	if _, err := os.Lstat(legacy); !errors.Is(err, os.ErrNotExist) {
@@ -232,8 +232,18 @@ func TestStateFileConflictOverwritesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := StateFile("machine-id")
-	if !errors.Is(err, ErrStateMoveConflict) || !strings.Contains(err.Error(), "nightgauge doctor --fix") {
-		t.Fatalf("StateFile on a conflict = %v, want ErrStateMoveConflict naming doctor --fix", err)
+	if !errors.Is(err, ErrStateMoveConflict) {
+		t.Fatalf("StateFile on a conflict = %v, want ErrStateMoveConflict", err)
+	}
+	// The manual remedy: both paths, and which one Nightgauge reads. It must
+	// not name a command that does not exist yet (#2040 adds doctor --fix).
+	for _, want := range []string{legacy, target, "reads only"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("conflict error %q does not name %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "doctor --fix") {
+		t.Errorf("conflict error names doctor --fix, which does not exist yet: %q", err)
 	}
 	for p, want := range map[string]string{legacy: "old\n", target: "new\n"} {
 		if got, _ := os.ReadFile(p); string(got) != want {
@@ -339,5 +349,99 @@ func TestWriteStateFileExclusiveOneWinner(t *testing.T) {
 		if info, _ := os.Stat(path); info.Mode().Perm() != 0o600 {
 			t.Errorf("mode = %v, want 0600", info.Mode().Perm())
 		}
+	}
+}
+
+func TestStateHomePathFromUsesTheGivenEnvironment(t *testing.T) {
+	isolateState(t)
+	env := map[string]string{"XDG_STATE_HOME": "/operator/xdg-state"}
+	lookup := func(k string) (string, bool) { v, ok := env[k]; return v, ok }
+	got, err := StateHomePathFrom("linux", "/home/op", lookup)
+	if err != nil || got != filepath.Join("/operator/xdg-state", "nightgauge") {
+		t.Fatalf("StateHomePathFrom = %q, %v", got, err)
+	}
+	if _, err := StateHomePathFrom("linux", "", func(string) (string, bool) { return "", false }); !errors.Is(err, ErrNoStateHome) {
+		t.Errorf("no home and no override: err = %v, want ErrNoStateHome", err)
+	}
+}
+
+func TestStateHomeNarrowsALooseExistingRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX modes")
+	}
+	isolateState(t)
+	root := filepath.Join(t.TempDir(), "loose")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvStateHome, root)
+	if _, err := StateHome(); err != nil {
+		t.Fatalf("StateHome: %v", err)
+	}
+	if info, _ := os.Stat(root); info.Mode().Perm() != 0o700 {
+		t.Errorf("root mode = %v, want narrowed to 0700", info.Mode().Perm())
+	}
+}
+
+// Where hard links are unavailable the install falls back to an exclusive
+// create, which still never overwrites.
+func TestInstallExclusiveFallsBackWithoutHardLinks(t *testing.T) {
+	orig := stateLink
+	stateLink = func(string, string) error {
+		return &os.LinkError{Op: "link", Err: errors.New("operation not supported")}
+	}
+	t.Cleanup(func() { stateLink = orig })
+
+	path := filepath.Join(t.TempDir(), "machine-id")
+	got, won, err := WriteStateFileExclusive(path, []byte("first"), 0o600)
+	if err != nil || !won || string(got) != "first" {
+		t.Fatalf("first write = %q, %v, %v", got, won, err)
+	}
+	got, won, err = WriteStateFileExclusive(path, []byte("second"), 0o600)
+	if err != nil || won || string(got) != "first" {
+		t.Fatalf("second write = %q, %v, %v; want the first value kept", got, won, err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(path), legacyTempPrefix+"*")); len(left) != 0 {
+		t.Errorf("temporary files left behind: %v", left)
+	}
+}
+
+func TestCopyLegacyStateFileKeepsLegacy(t *testing.T) {
+	root, legacyDir := stateAndLegacy(t)
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	legacy, target := filepath.Join(legacyDir, "machine-id"), filepath.Join(root, "machine-id")
+	if err := os.WriteFile(legacy, []byte("id\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	diverged, err := CopyLegacyStateFile("machine-id", root)
+	if err != nil || diverged {
+		t.Fatalf("CopyLegacyStateFile = %v, %v", diverged, err)
+	}
+	for _, p := range []string{legacy, target} {
+		got, _ := os.ReadFile(p)
+		if string(got) != "id\n" {
+			t.Errorf("%s = %q", p, got)
+		}
+		if runtime.GOOS != "windows" {
+			if info, _ := os.Stat(p); info.Mode().Perm() != 0o600 {
+				t.Errorf("%s mode = %v, want 0600", p, info.Mode().Perm())
+			}
+		}
+	}
+	// A diverged legacy copy is reported, and neither file changes.
+	if err := os.WriteFile(legacy, []byte("other\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	diverged, err = CopyLegacyStateFile("machine-id", root)
+	if err != nil || !diverged {
+		t.Fatalf("diverged copy: CopyLegacyStateFile = %v, %v; want diverged", diverged, err)
+	}
+	if got, _ := os.ReadFile(target); string(got) != "id\n" {
+		t.Errorf("target rewritten: %q", got)
 	}
 }

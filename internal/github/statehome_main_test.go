@@ -13,7 +13,11 @@ import (
 // whose first use moves a legacy ~/.nightgauge/rate-limit.json into the state
 // root; without this a test run would move and write the operator's real
 // files.
+//
+// It also clears CI, which a CI runner sets and which changes token
+// resolution (ADR-024 § 5); tests of the CI rules set it themselves.
 func TestMain(m *testing.M) {
+	_ = os.Unsetenv("CI")
 	cleanup := hometest.Isolate()
 	code := m.Run()
 	cleanup()

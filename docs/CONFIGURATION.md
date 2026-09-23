@@ -238,9 +238,15 @@ Machine state that is not configuration (the serve daemon's claim registry
 | 3        | Windows default             | `%LOCALAPPDATA%/nightgauge/state`   |
 
 Files an earlier release kept directly in `~/.nightgauge/` are moved on first
-use, byte for byte; `machine-id` is never regenerated, because a new id is a new
-device to the platform. If the legacy and new `machine-id` both exist and
-differ, nothing is overwritten and the command names `nightgauge doctor --fix`.
+use, byte for byte, with mode `0600`. `machine-id` is copied instead and the
+legacy file kept (mode `0600`) so an older binary still running on the machine
+reads the same id; it is never regenerated, because a new id is a new device to
+the platform. The new location is authoritative: if the two `machine-id` files
+differ, the new one is used and a warning is logged. For any other moved file,
+if both locations hold different contents nothing is overwritten and the error
+names both paths: Nightgauge reads only the new one, so keep it and delete the
+legacy file, or move the legacy file over it if that is the value you need.
+Serve claims are not moved.
 With no home directory, or an unwritable state directory, a command that needs
 it fails with an error naming `NIGHTGAUGE_STATE_HOME`; nothing is written into
 the working tree.

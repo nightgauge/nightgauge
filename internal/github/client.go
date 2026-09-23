@@ -275,7 +275,15 @@ type OwnerGitHubUserResolver interface {
 // unmapped cross-org target (#4068). The zero-arg GitHubUserResolver is consulted
 // only for resolvers that do not implement the owner-aware form. A nil resolver
 // (or one implementing neither) yields "".
+//
+// Under CI it yields "" (ADR-024 § 5): github_user can come from the committed
+// repository tier, so honouring it there would let a pull request select any
+// identity gh has stored on a shared runner. A CI job's identity is the token
+// in its environment.
 func configuredGitHubUser(cfg TokenResolver, owner string) string {
+	if ciHost() {
+		return ""
+	}
 	if ur, ok := cfg.(OwnerGitHubUserResolver); ok {
 		return ur.ResolveGitHubUserForOwner(owner)
 	}
@@ -440,7 +448,7 @@ func NewClientFromConfigContext(ctx context.Context, cfg TokenResolver, owner st
 // CLI token through forUser and byDefault.
 func newClientFromChain(cfg TokenResolver, owner string, forUser func(string) (string, error), byDefault func() (string, error)) (*Client, error) {
 	// CI: the job's environment first, ahead of any token left on disk.
-	if tok := ciEnvironmentToken(cfg, owner); tok != "" {
+	if tok := ciEnvironmentToken(); tok != "" {
 		return NewClientWithToken(tok), nil
 	}
 
@@ -505,19 +513,20 @@ func ghFallbackWarning() string {
 		", or reference an environment variable from any tier with `token: env:VAR_NAME`\n"
 }
 
+// ciHost reports `CI=true` (any case) or `CI=1`, matching config.CIHost,
+// which this package cannot import.
+func ciHost() bool {
+	ci := strings.TrimSpace(os.Getenv("CI"))
+	return strings.EqualFold(ci, "true") || ci == "1"
+}
+
 // ciEnvironmentToken is the CI rule of ADR-024 § 5: when `CI=true`,
 // credentials resolve from the environment first, so a token a previous job
-// left in the machine-tier file cannot shadow the one this job was given.
-// GITHUB_TOKEN, then GH_TOKEN. It returns "" off CI, and when the repository
-// configures a github_user: that identity stays authoritative over an ambient
-// token (#4068), and its token comes from gh, not from Nightgauge's files.
-// The CI test matches config.CIHost, which this package cannot import.
-func ciEnvironmentToken(cfg TokenResolver, owner string) string {
-	ci := strings.TrimSpace(os.Getenv("CI"))
-	if !strings.EqualFold(ci, "true") && ci != "1" {
-		return ""
-	}
-	if configuredGitHubUser(cfg, owner) != "" {
+// left in the machine-tier file or in gh's store cannot shadow the one this
+// job was given. GITHUB_TOKEN, then GH_TOKEN, with no exception; it returns ""
+// off CI or when neither is set.
+func ciEnvironmentToken() string {
+	if !ciHost() {
 		return ""
 	}
 	for _, name := range []string{"GITHUB_TOKEN", "GH_TOKEN"} {
@@ -540,7 +549,7 @@ func ciEnvironmentToken(cfg TokenResolver, owner string) string {
 // The returned token can be fingerprinted without creating a client.
 // Returns empty string and error if no token is found.
 func ResolveTokenChain(cfg TokenResolver, owner string) (string, error) {
-	if tok := ciEnvironmentToken(cfg, owner); tok != "" {
+	if tok := ciEnvironmentToken(); tok != "" {
 		return tok, nil
 	}
 	if cfg != nil {

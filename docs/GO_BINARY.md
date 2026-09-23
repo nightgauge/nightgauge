@@ -154,7 +154,8 @@ license key once, in `internal/keychain`, highest precedence first:
    `machine-file`).
 
 `serve` consults the stored key (2 and 3) only when `platform.enabled: true`;
-an explicit `--license-key` or the environment variable opts in on its own.
+the environment variable opts in on its own. There is no `--license-key` flag:
+a flag puts the key on argv, where other local users can read it through `ps`.
 
 The keychain entry contract is fixed; the VS Code extension depends on it:
 
@@ -214,18 +215,23 @@ Credentials an agent can reach are therefore scoped to what an agent may do:
 the license key is per device and revocable, and the GitHub token should be the
 least-privileged token that runs the pipeline.
 
-**CI hosts.** When `CI=true`, Nightgauge never writes a credential to disk:
-`auth license set` and `forge auth login` / `refresh` refuse, writing neither
-the keychain nor the machine-tier file, because a self-hosted runner shared
-between jobs would carry one job's key into the next. Credentials resolve from
-the environment first (`NIGHTGAUGE_LICENSE_KEY`; `GITHUB_TOKEN`, then
-`GH_TOKEN`, ahead of a token in the machine-tier file unless the repository
-configures a `github_user`). `nightgauge doctor` reports a credential found in
-the machine-tier file on a CI host (check `ci_machine_credentials`).
+**CI hosts.** A CI host is one whose `CI` variable is `true` (in any case) or
+`1`. There Nightgauge never writes a credential to disk: `auth license set` and
+`forge auth login` / `refresh` refuse, writing neither the keychain nor the
+machine-tier file, because a self-hosted runner shared between jobs would carry
+one job's key into the next. Credentials resolve from the environment first:
+`NIGHTGAUGE_LICENSE_KEY`; for GitHub, `GITHUB_TOKEN`, then `GH_TOKEN`, ahead of
+every stored token with no exception. `github_user` is ignored in CI, because
+the committed repository tier can set it and it would otherwise let a pull
+request pick any identity gh has stored on a shared runner. `nightgauge doctor`
+reports a credential found in the machine-tier file on a CI host (check
+`ci_machine_credentials`).
 
-The platform API key is read from `NIGHTGAUGE_API_KEY` only. `serve` has no
-`--api-key` flag: a flag puts the key on argv, where other local users can read
-it through `ps`.
+The platform API key is read from `NIGHTGAUGE_API_KEY` and the license key
+from `NIGHTGAUGE_LICENSE_KEY` (or the stores above). `serve` has no `--api-key`
+or `--license-key` flag, and `forge auth login` reads its token from stdin
+only: a flag puts the credential on argv, where other local users can read it
+through `ps`.
 
 #### The VS Code extension and the single source of truth
 
@@ -1984,6 +1990,10 @@ Two caveats, both deliberate:
 `%LOCALAPPDATA%\nightgauge\state` on Windows. Before #2031 the registry lived in
 `~/.nightgauge/serve/`; claims are daemon-lifetime records, so they are not
 moved, and a daemon started by the new binary writes its claim in the new place.
+While that legacy directory exists, a lease also takes the workspace's lock in
+it: a daemon from the previous release holding it refuses the new one (and is
+named in the refusal), and a new holder keeps it so a previous-release daemon
+started later refuses in turn. #2040's migrator retires the legacy directory.
 
 `<STATE>/serve/` is the only machine-local record of which workspace roots
 have run a daemon. It holds two files per workspace — the `.json` claim record
