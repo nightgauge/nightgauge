@@ -73,12 +73,12 @@ func newIpcTelemetryHarness(t *testing.T, workDir, platformURL, apiKey string) *
 	if platformURL != "" {
 		args = append(args, "--platform-url", platformURL)
 	}
-	if apiKey != "" {
-		args = append(args, "--api-key", apiKey)
-	}
 
 	cmd := exec.Command(binaryPath, args...)
 	cmd.Env = append(os.Environ(), "GITHUB_TOKEN=fake-token-for-integration-test")
+	// The API key is env-only: the --api-key flag was removed so the key is
+	// never on argv (ADR-024 § 5).
+	cmd.Env = append(cmd.Env, "NIGHTGAUGE_API_KEY="+apiKey)
 
 	stdinPipe, err := cmd.StdinPipe()
 	if err != nil {

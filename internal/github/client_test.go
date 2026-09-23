@@ -675,6 +675,7 @@ func TestNewClientFromConfig_SuppressWarning(t *testing.T) {
 // ── ResolveTokenChain tests (#2733) ────────────────────────────────────────────
 
 func TestResolveTokenChain_ConfigTokenWins(t *testing.T) {
+	t.Setenv("CI", "") // off CI; the CI order is pinned below
 	t.Setenv("GITHUB_TOKEN", "ghp_envtoken")
 	resolver := &stubTokenResolver{token: "ghp_configtoken"}
 	tok, err := ResolveTokenChain(resolver, "nightgauge")
@@ -683,6 +684,22 @@ func TestResolveTokenChain_ConfigTokenWins(t *testing.T) {
 	}
 	if tok != "ghp_configtoken" {
 		t.Errorf("token = %q, want %q", tok, "ghp_configtoken")
+	}
+}
+
+// On a CI host the job's environment beats a token on disk (ADR-024 § 5), so
+// a machine-file token an earlier job left behind never shadows this job's.
+func TestResolveTokenChain_CIPrefersEnvironment(t *testing.T) {
+	t.Setenv("CI", "true")
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_TOKEN", "ghp_jobtoken")
+	resolver := &stubTokenResolver{token: "ghp_staleconfigtoken"}
+	tok, err := ResolveTokenChain(resolver, "nightgauge")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if tok != "ghp_jobtoken" {
+		t.Errorf("token = %q, want the job's environment token", tok)
 	}
 }
 

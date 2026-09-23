@@ -4918,9 +4918,14 @@ func serveCmd() *cobra.Command {
 				}
 			}
 
+			// The platform API key is read from the environment only
+			// (ADR-024 § 5): the --api-key flag it once also took put the
+			// key on argv, where every local user sees it through `ps`.
+			apiKey = os.Getenv("NIGHTGAUGE_API_KEY")
+
 			// Resolve platform credentials with flag > env > config
-			// precedence (#333). serveCmd registers --platform-url,
-			// --api-key, and --license-key with os.Getenv(...) defaults, so
+			// precedence (#333). serveCmd registers --platform-url and
+			// --license-key with os.Getenv(...) defaults, so
 			// the flag variables above already encode "flag or env, flag
 			// wins" by the time cobra hands control to RunE — the only
 			// remaining fallback is the stored license key (OS keychain,
@@ -5408,7 +5413,6 @@ func serveCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&workspaceDir, "workspace", "", "Workspace root directory (default: CWD)")
 	cmd.Flags().StringVar(&platformURL, "platform-url", os.Getenv("NIGHTGAUGE_PLATFORM_URL"), "Platform API base URL")
-	cmd.Flags().StringVar(&apiKey, "api-key", os.Getenv("NIGHTGAUGE_API_KEY"), "Platform API key")
 	cmd.Flags().StringVar(&licenseKey, "license-key", os.Getenv("NIGHTGAUGE_LICENSE_KEY"), "License key")
 	cmd.Flags().StringVar(&githubGraphQLURL, "github-graphql-url", "", "Override GitHub GraphQL URL (for tests only)")
 	cmd.Flags().MarkHidden("github-graphql-url") //nolint:errcheck
@@ -11948,7 +11952,7 @@ var doctorCheckOrder = []string{
 	"binary", "gh", "github_auth", "api_user", "scopes", "rate_limit", "github_api_budget", "config", "project",
 	"complexity_model", "ai_adapter",
 	"compose_orphans", "worktree_leaks", "stranded_branches", "pipeline_stashes", "preserved_wip", "orphaned_processes",
-	"serve_lease", "ledger_daemon_coverage", "tracked_secrets",
+	"serve_lease", "ledger_daemon_coverage", "tracked_secrets", "ci_machine_credentials",
 	"survival_backlog", "survival_coverage", "corpus_calibration", "scheduled_automations",
 }
 

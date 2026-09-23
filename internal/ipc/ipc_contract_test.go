@@ -439,7 +439,8 @@ func TestContract_Board_RegisteredSurvivesExhaustedQuota(t *testing.T) {
 		t.Fatal("ipcTestHome not set — TestMain must isolate HOME before this test runs")
 	}
 
-	trackerPath := filepath.Join(ipcTestHome, ".nightgauge", "rate-limit.json")
+	// TestMain points NIGHTGAUGE_STATE_HOME at <ipcTestHome>/state.
+	trackerPath := filepath.Join(ipcTestHome, "state", "rate-limit.json")
 	tracker := gh.NewSharedRateLimitTracker(trackerPath)
 	if err := tracker.Set("", gh.ResourceCore, &gh.RateLimitInfo{
 		Remaining: 0,

@@ -24,7 +24,30 @@ func licenseFixture(t *testing.T) string {
 	t.Cleanup(config.SwapMachineConfigPathForTest(func() (string, error) { return path, nil }))
 	t.Setenv(keychain.EnvLicenseKey, "")
 	t.Setenv("NIGHTGAUGE_PLATFORM_URL", "")
+	// The suite runs on CI hosts too, where a store refuses to write
+	// (ADR-024 § 5); tests that exercise storing opt back in explicitly.
+	t.Setenv("CI", "")
 	return path
+}
+
+// TestLicenseSetInCIStoresNothing: `auth license set` on a CI host fails and
+// leaves neither a keychain entry nor a machine-file copy (ADR-024 § 5).
+func TestLicenseSetInCIStoresNothing(t *testing.T) {
+	path := licenseFixture(t)
+	t.Setenv("CI", "true")
+	_, _, err := runLicenseCmd(t, "ib_live_ci_job\n", "set")
+	if !errors.Is(err, config.ErrCredentialWriteInCI) {
+		t.Fatalf("auth license set in CI: err = %v, want ErrCredentialWriteInCI", err)
+	}
+	if !strings.Contains(err.Error(), keychain.EnvLicenseKey) {
+		t.Errorf("error %q does not name %s", err, keychain.EnvLicenseKey)
+	}
+	if _, gerr := keyring.Get(keychain.Service, keychain.AccountLicenseKey); gerr == nil {
+		t.Error("the keychain holds a key written in CI")
+	}
+	if _, serr := os.Stat(path); !errors.Is(serr, os.ErrNotExist) {
+		t.Errorf("the machine file was written in CI: %v", serr)
+	}
 }
 
 func runLicenseCmd(t *testing.T, stdin string, args ...string) (string, string, error) {

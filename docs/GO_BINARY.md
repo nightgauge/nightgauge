@@ -204,10 +204,28 @@ write can still complete (for example after an unlock prompt is answered) and
 the key would then exist in two places. `status` reports the keychain as
 unavailable and why. The environment variable works everywhere.
 
-The keychain protects the key at rest and keeps it out of files; it does not
-isolate it from other programs. Any process running as the same user can read
-the item without a prompt (on macOS through `/usr/bin/security`, which
-created it). That is the same exposure as `gh`'s token or a `0600` file.
+**Threat model** (ADR-024 § 5). The keychain protects the key from other OS
+users, from backups and sync of plain files, and from commits; it does not
+isolate it from other programs running as you. Any process running as the same
+user can read the item without a prompt (on macOS through `/usr/bin/security`,
+which created it), and **pipeline agents are same-user processes**, so an agent
+can read it too. That is the same exposure as `gh`'s token or a `0600` file.
+Credentials an agent can reach are therefore scoped to what an agent may do:
+the license key is per device and revocable, and the GitHub token should be the
+least-privileged token that runs the pipeline.
+
+**CI hosts.** When `CI=true`, Nightgauge never writes a credential to disk:
+`auth license set` and `forge auth login` / `refresh` refuse, writing neither
+the keychain nor the machine-tier file, because a self-hosted runner shared
+between jobs would carry one job's key into the next. Credentials resolve from
+the environment first (`NIGHTGAUGE_LICENSE_KEY`; `GITHUB_TOKEN`, then
+`GH_TOKEN`, ahead of a token in the machine-tier file unless the repository
+configures a `github_user`). `nightgauge doctor` reports a credential found in
+the machine-tier file on a CI host (check `ci_machine_credentials`).
+
+The platform API key is read from `NIGHTGAUGE_API_KEY` only. `serve` has no
+`--api-key` flag: a flag puts the key on argv, where other local users can read
+it through `ps`.
 
 #### The VS Code extension and the single source of truth
 
@@ -1877,7 +1895,7 @@ write-temp → fsync → rename, which replaces the inode on every heartbeat. An
 advisory lock lives on an _inode_, so a flock on the sidecar would be released
 by its own holder's next heartbeat: a lock that reports success and protects
 nothing, which is worse than no lock. The lease flocks
-`~/.nightgauge/serve/<key>.lock`, created once and never renamed, beside the
+`<STATE>/serve/<key>.lock`, created once and never renamed, beside the
 `.json` the sidecar keeps. That `<key>` encodes the workspace root reversibly —
 see [The serve registry](#the-serve-registry-issue-1426), which is where a lock
 file left behind by a killed daemon gets reclaimed.
@@ -1960,7 +1978,14 @@ Two caveats, both deliberate:
 
 ### The Serve Registry (Issue #1426)
 
-`~/.nightgauge/serve/` is the only machine-local record of which workspace roots
+`<STATE>` is the machine-state root (`internal/layout.StateHome`, ADR-024 § 8):
+`NIGHTGAUGE_STATE_HOME`, then `$XDG_STATE_HOME/nightgauge`, then
+`~/.local/state/nightgauge` on Linux, `~/.nightgauge/state` on macOS and
+`%LOCALAPPDATA%\nightgauge\state` on Windows. Before #2031 the registry lived in
+`~/.nightgauge/serve/`; claims are daemon-lifetime records, so they are not
+moved, and a daemon started by the new binary writes its claim in the new place.
+
+`<STATE>/serve/` is the only machine-local record of which workspace roots
 have run a daemon. It holds two files per workspace — the `.json` claim record
 (#388) and the `.lock` file the lease flocks (#1349) — and until #1426 it could
 not be used as a registry, because almost none of it was live. Measured on a
@@ -2038,7 +2063,7 @@ hard exit.
 Neither is a timing problem to be widened away. Both are the absence of mutual
 exclusion between a compound read-modify-write ("open then flock") and a
 compound mutation ("flock then unlink"), so one guard —
-`~/.nightgauge/serve/nightgauge-registry.guard`, held across each of them and
+`<STATE>/serve/nightgauge-registry.guard`, held across each of them and
 across neither anything else — removes both. Same shape as the
 [worktree mutation guard](#serialised-worktree-mutation-issue-1163). Nobody
 holding it ever blocks on a second lock (both flock the lease file with a zero
@@ -5437,7 +5462,7 @@ There is no verb-shaped class. `serve` had one until **#388** — see below.
   it re-reads before every heartbeat, stands down when the record names another
   live PID, and its shutdown deletes the record only while that record still
   names its own pid.
-- **Serve claims are machine-global: `~/.nightgauge/serve/<key>.json`.** One
+- **Serve claims are machine-global: `<STATE>/serve/<key>.json`.** One
   file per workspace, named by a reversible encoding of the workspace root
   ([#1426](#the-serve-registry-issue-1426)), with the root itself inside the
   record as well. Not `.nightgauge/serve.json` in the workspace,
@@ -8166,15 +8191,17 @@ per ADR-006 (issue #3592).
 ### IPC Server
 
 ```bash
-nightgauge serve [--platform-url <url>] [--api-key <key>]
+NIGHTGAUGE_API_KEY=<key> nightgauge serve [--platform-url <url>]
 ```
 
 The IPC server exposes all Go binary capabilities to the VSCode extension via
 JSON-over-stdio (same pattern as LSP). The extension calls methods by writing
 newline-delimited JSON to stdin; responses arrive on stdout.
 
-**Platform namespace IPC methods** (require Go binary started with `--api-key`
-or `NIGHTGAUGE_PLATFORM_API_KEY` env var):
+**Platform namespace IPC methods** (require Go binary started with
+`NIGHTGAUGE_API_KEY` or a license key in its environment). The API key is read
+from the environment only: there is no `--api-key` flag, because a flag puts
+the key on argv, where every local user can read it through `ps` (ADR-024 § 5).
 
 ```bash
 # Platform connectivity status

@@ -1805,9 +1805,10 @@ export abstract class IpcClientBase implements vscode.Disposable {
     }
 
     // Forward platform config to Go binary via env vars (Issue #XXXX)
-    // The Go binary reads NIGHTGAUGE_PLATFORM_URL, NIGHTGAUGE_API_KEY,
-    // and NIGHTGAUGE_LICENSE_KEY as defaults for its --platform-url, --api-key,
-    // and --license-key flags. Without these, platformClient stays nil and all
+    // The Go binary reads NIGHTGAUGE_PLATFORM_URL and NIGHTGAUGE_LICENSE_KEY
+    // as defaults for its --platform-url and --license-key flags, and
+    // NIGHTGAUGE_API_KEY from the environment only (no flag: ADR-024 § 5
+    // keeps credentials off argv). Without these, platformClient stays nil and all
     // platform.* IPC methods return "platform client not configured".
     this.forwardPlatformEnv(env);
 

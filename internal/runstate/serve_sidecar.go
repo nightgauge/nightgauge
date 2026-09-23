@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // The serve daemon's heartbeat PID sidecar (#388).
@@ -23,7 +25,7 @@ import (
 // make it a claim rather than a filename, and each of them is load-bearing:
 //
 // WHERE IT LIVES — machine-global, one file per workspace, under
-// <home>/.nightgauge/serve/. The obvious home, `.nightgauge/serve.json` inside
+// <STATE>/serve/ (layout.StateHome). The obvious home, `.nightgauge/serve.json` inside
 // the workspace, does not work, because doctor's two halves have different
 // reach: it enumerates processes with `ps -axo`, which lists the WHOLE machine,
 // but it walks sidecars only under the workspace it was invoked from. A daemon
@@ -51,7 +53,7 @@ import (
 // every other unclaimed one.
 
 // serveSidecarDirName is the per-user, machine-global claim directory under
-// ~/.nightgauge. One file per workspace — see ServeSidecarName.
+// the machine-state root. One file per workspace — see ServeSidecarName.
 const serveSidecarDirName = "serve"
 
 // ServeHeartbeatInterval is how often a live, host-attached daemon rewrites
@@ -77,21 +79,22 @@ type ServeSidecar struct {
 	WorkspaceRoot string `json:"workspace_root"`
 }
 
-// ServeSidecarDir is <home>/.nightgauge/serve — the one directory every doctor
-// run reads, whatever workspace it was invoked from.
+// ServeSidecarDir is <STATE>/serve — the one directory every doctor run reads,
+// whatever workspace it was invoked from. STATE is the machine-state root
+// (layout.StateHome, ADR-024 § 8): NIGHTGAUGE_STATE_HOME, then
+// XDG_STATE_HOME/nightgauge, then the platform default. Tests isolate it by
+// setting NIGHTGAUGE_STATE_HOME.
 //
-// The home directory comes from os.UserHomeDir (i.e. $HOME), the same resolver
-// the machine-tier config root uses, so the hermetic-HOME seam the test suites
-// already rely on isolates this too.
+// The records are daemon-lifetime liveness claims, so they are not moved from
+// the pre-ADR-024 ~/.nightgauge/serve: a daemon started by the new binary
+// writes its claim here, and one still running from the old binary is not
+// read (ADR-024 § 15 forbids a dual read).
 func ServeSidecarDir() (string, error) {
-	home, err := os.UserHomeDir()
+	root, err := layout.StateHome()
 	if err != nil {
-		return "", fmt.Errorf("resolve home directory: %w", err)
+		return "", err
 	}
-	if home == "" {
-		return "", fmt.Errorf("resolve home directory: empty")
-	}
-	return filepath.Join(home, ".nightgauge", serveSidecarDirName), nil
+	return filepath.Join(root, serveSidecarDirName), nil
 }
 
 // ServeSidecarName is the file a workspace's claim occupies: the workspace
@@ -142,7 +145,7 @@ func WriteServeSidecar(workspaceRoot string, sc ServeSidecar) error {
 	if err != nil {
 		return fmt.Errorf("resolve serve sidecar path: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create serve sidecar dir: %w", err)
 	}
 	sc.WorkspaceRoot = normalizeWorkspaceRoot(workspaceRoot)

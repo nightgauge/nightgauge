@@ -221,6 +221,30 @@ The global config path is determined by platform and environment:
 | 3        | Linux default                | `~/.config/nightgauge/config.yaml`        |
 | 3        | Windows default              | `%APPDATA%/nightgauge/config.yaml`        |
 
+### Machine State Location
+
+Machine state that is not configuration (the serve daemon's claim registry
+`serve/`, the rate-limit hints `rate-limit.json` and
+`ratelimit-gitlab-<host>.json`, this device's `machine-id`, and the
+`telemetry-notice-v1` marker) lives in one directory, created with mode `0700`
+(ADR-024 § 8):
+
+| Priority | Check                       | Path                                |
+| -------- | --------------------------- | ----------------------------------- |
+| 1        | `NIGHTGAUGE_STATE_HOME` env | `$NIGHTGAUGE_STATE_HOME` (absolute) |
+| 2        | `XDG_STATE_HOME` env        | `$XDG_STATE_HOME/nightgauge`        |
+| 3        | macOS default               | `~/.nightgauge/state`               |
+| 3        | Linux default               | `~/.local/state/nightgauge`         |
+| 3        | Windows default             | `%LOCALAPPDATA%/nightgauge/state`   |
+
+Files an earlier release kept directly in `~/.nightgauge/` are moved on first
+use, byte for byte; `machine-id` is never regenerated, because a new id is a new
+device to the platform. If the legacy and new `machine-id` both exist and
+differ, nothing is overwritten and the command names `nightgauge doctor --fix`.
+With no home directory, or an unwritable state directory, a command that needs
+it fails with an error naming `NIGHTGAUGE_STATE_HOME`; nothing is written into
+the working tree.
+
 ### Creating a Global Config
 
 ```bash

@@ -149,7 +149,7 @@ func acquireServeLease(workspaceRoot string, now time.Time) (*ServeLease, error)
 	if err != nil {
 		return nil, fmt.Errorf("serve lease: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("serve lease: create claim directory: %w", err)
 	}
 

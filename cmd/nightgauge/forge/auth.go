@@ -429,7 +429,14 @@ func authRefreshCmd() *cobra.Command {
 	return cmd
 }
 
+// storeTokenInKeyring hands the token to gh's credential store on stdin. On a
+// CI host it stores nothing (ADR-024 § 5): gh would write the token to the
+// keychain or its hosts file, and a runner shared between jobs would hand it to
+// the next job. CI supplies GITHUB_TOKEN or GH_TOKEN in the environment.
 var storeTokenInKeyring = func(token string) error {
+	if config.CIHost(os.Getenv) {
+		return fmt.Errorf("%w; set GITHUB_TOKEN or GH_TOKEN in the job's environment", config.ErrCredentialWriteInCI)
+	}
 	cmd := exec.Command("gh", "auth", "login", "--hostname", "github.com", "--with-token")
 	cmd.Stdin = strings.NewReader(token + "\n")
 	if err := cmd.Run(); err != nil {

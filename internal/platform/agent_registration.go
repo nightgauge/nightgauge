@@ -76,13 +76,14 @@ func (s *AgentRegistrationService) RegisterAgent(ctx context.Context) (AgentRegi
 	if s == nil || s.client == nil {
 		return AgentRegistration{}, fmt.Errorf("agent registration: no platform client")
 	}
+	machineID, err := MachineID()
+	if err != nil {
+		return AgentRegistration{}, fmt.Errorf("agent registration: %w", err)
+	}
 	body := agentRegisterBody{
-		MachineID:    ResolveMachineID(),
+		MachineID:    machineID,
 		AgentVersion: s.agentVersion,
 		Capabilities: []string{AgentRegisterCapabilityResolve},
-	}
-	if body.MachineID == "" {
-		return AgentRegistration{}, fmt.Errorf("agent registration: machine id unavailable")
 	}
 	data, err := json.Marshal(body)
 	if err != nil {

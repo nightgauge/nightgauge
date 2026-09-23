@@ -43,7 +43,11 @@ var Home string
 // Kept so a test can assert the real registry is not what it just read.
 var RealHome string
 
-// Isolate repoints HOME at a fresh directory and returns the cleanup for it.
+// Isolate repoints HOME at a fresh directory, and the machine-state root
+// (NIGHTGAUGE_STATE_HOME, ADR-024 § 8) at a directory inside it, and returns
+// the cleanup for both. The state override is set explicitly because the root
+// does not always follow HOME: XDG_STATE_HOME or %LOCALAPPDATA% in the
+// developer's environment would otherwise lead a test to the real one.
 //
 // Call it from TestMain, before m.Run, and defer nothing: TestMain must end in
 // os.Exit, which runs no defers, so the returned func has to be called
@@ -57,6 +61,10 @@ func Isolate() (cleanup func()) {
 	}
 	if err := os.Setenv("HOME", dir); err != nil {
 		fmt.Fprintf(os.Stderr, "hometest: could not set HOME: %v\n", err)
+		os.Exit(1)
+	}
+	if err := os.Setenv("NIGHTGAUGE_STATE_HOME", filepath.Join(dir, "state")); err != nil {
+		fmt.Fprintf(os.Stderr, "hometest: could not set NIGHTGAUGE_STATE_HOME: %v\n", err)
 		os.Exit(1)
 	}
 	Home = dir

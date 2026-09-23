@@ -67,15 +67,18 @@
 # NO REDACTION NEEDED — the content is synthetic.
 #
 # The repo slug, issue number, title and run id are invented here and typed into
-# a throwaway workspace under $TMPDIR. Three redirects keep the run out of the
+# a throwaway workspace under $TMPDIR. Four redirects keep the run out of the
 # operator's environment, and each covers a different path:
 #
 #   - NIGHTGAUGE_CONFIG_HOME -> $WORK — the machine-tier config the binary reads.
 #   - HOME -> $WORK/home — everything else $HOME-derived, which that variable
-#     does NOT cover. `nightgauge serve` starts a serve sidecar whose claim
-#     directory is `os.UserHomeDir()/.nightgauge/serve`; without this the capture
-#     writes a claim file into the developer's real ~/.nightgauge (and a SIGKILL
-#     mid-capture leaks one naming a dead pid, which `nightgauge doctor` reads).
+#     does NOT cover.
+#   - NIGHTGAUGE_STATE_HOME -> $WORK/state — the machine-state root
+#     (ADR-024 § 8), which does not always follow HOME (XDG_STATE_HOME,
+#     %LOCALAPPDATA%). `nightgauge serve` starts a serve sidecar whose claim
+#     directory is `<STATE>/serve`; without this the capture could write a claim
+#     file into the developer's real state root (and a SIGKILL mid-capture leaks
+#     one naming a dead pid, which `nightgauge doctor` reads).
 #   - GITHUB_TOKEN / GH_TOKEN -> a placeholder, set UNCONDITIONALLY. Both paths
 #     construct a forge client and a token must be resolvable for construction to
 #     proceed; the Go chain reads config, then GITHUB_TOKEN, then shells out to
@@ -115,6 +118,7 @@ export NIGHTGAUGE_CONFIG_HOME="$WORK/config-home"
 mkdir -p "$NIGHTGAUGE_CONFIG_HOME"
 export HOME="$WORK/home"
 mkdir -p "$HOME"
+export NIGHTGAUGE_STATE_HOME="$WORK/state"
 export GITHUB_TOKEN="capture-placeholder-not-used"
 export GH_TOKEN="capture-placeholder-not-used"
 

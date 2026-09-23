@@ -446,6 +446,36 @@ create --body-file` call, so the compact profile (and its tests) pin
 
 ### Changed
 
+- **Machine state moves out of `~/.nightgauge` into its own root (#2031).**
+  The serve daemon's claim registry (`serve/`), the rate-limit hints
+  (`rate-limit.json`, `ratelimit-gitlab-<host>.json`), `machine-id` and the
+  `telemetry-notice-v1` marker now live in the machine-state directory
+  (ADR-024 § 8): `NIGHTGAUGE_STATE_HOME`, then `$XDG_STATE_HOME/nightgauge`,
+  then `~/.local/state/nightgauge` on Linux, `~/.nightgauge/state` on macOS
+  and `%LOCALAPPDATA%\nightgauge\state` on Windows, created with mode 0700.
+  Existing files are moved on first use, byte for byte and safely when several
+  processes start at once; `machine-id` is never regenerated (a new id would
+  count as a new device against the account's machine limit) and is now mode
+  0600, and a legacy and a new `machine-id` that differ stop with an error
+  naming `nightgauge doctor --fix` instead of either being overwritten. Serve
+  claims are not moved: a daemon still running from the previous release is
+  not seen until it restarts. With no home directory or an unwritable state
+  directory, commands that need it fail naming `NIGHTGAUGE_STATE_HOME`.
+
+- **Security: no credential is written to disk in CI, and the API key is
+  env-only (#2031).** When `CI=true`, `nightgauge auth license set` and
+  `nightgauge forge auth login` / `refresh` refuse to store a credential in the
+  OS keychain or the machine-tier file, so a shared self-hosted runner cannot
+  carry one job's key into the next; the GitHub token resolves from
+  `GITHUB_TOKEN` / `GH_TOKEN` ahead of a machine-file token (unless the
+  repository configures `github_user`), and `nightgauge doctor` reports a
+  credential in the machine-tier file on a CI host
+  (`ci_machine_credentials`). `nightgauge serve --api-key` is removed: it put
+  the key on argv, visible through `ps`; set `NIGHTGAUGE_API_KEY` instead.
+  The docs now state the keychain's threat model: any same-user process,
+  pipeline agents included, can read an item created through macOS
+  `security`.
+
 - **Security: the config loader refuses a plaintext GitHub token or license
   key in the repository's config files (#2023).** A literal
   `github_auth.token`, `github_auth.tokens.<owner>` or `platform.license_key`

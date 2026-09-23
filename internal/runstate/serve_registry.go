@@ -1,6 +1,6 @@
 package runstate
 
-// The serve registry (#1426) — <home>/.nightgauge/serve as a directory that
+// The serve registry (#1426) — <STATE>/serve as a directory that
 // can be READ, not just written into.
 //
 // It holds two kinds of file, both keyed to one workspace root: the `.json`
@@ -343,7 +343,7 @@ func lockServeRegistry() (release func(), err error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
 	path := filepath.Join(dir, serveRegistryGuardName)

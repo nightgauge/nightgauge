@@ -76,8 +76,8 @@ func (r resolvedPlatformConfig) Configured() bool {
 // There is no config-file source for the API key: the VSCode extension's
 // PlatformConfigSchema (packages/nightgauge-vscode/src/config/schema.ts)
 // has no platform.api_key field, only platform.api_url and
-// platform.license_key — so API key resolution is flag/env only, unchanged
-// from pre-#333 behavior.
+// platform.license_key — so the API key comes from NIGHTGAUGE_API_KEY only;
+// the --api-key flag was removed because it put the key on argv (ADR-024 § 5).
 func resolvePlatformConfig(flagURL, flagAPIKey, flagLicenseKey string, cfg *config.Config, storedLicense func() (keychain.Result, error)) resolvedPlatformConfig {
 	r := resolvedPlatformConfig{URL: flagURL, APIKey: flagAPIKey, LicenseKey: flagLicenseKey}
 

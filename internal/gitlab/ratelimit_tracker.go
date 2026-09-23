@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // SharedTrackerMinCheckIntervalSecs is how long a cached rate-limit reading is
@@ -82,15 +84,13 @@ func hostSlug(host string) string {
 	return slug
 }
 
-// DefaultSharedTrackerPath returns the path under $HOME the tracker uses for
-// the given GitLab instance host.
+// DefaultSharedTrackerPath returns <STATE>/ratelimit-gitlab-<host>.json for
+// the given GitLab instance host, under the machine-state root
+// (layout.StateHome, ADR-024 § 8). A pre-ADR-024 copy in ~/.nightgauge is
+// moved there on first use; the file is a cold-start hint, so its absence is
+// not an error.
 func DefaultSharedTrackerPath(host string) (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("resolve home dir: %w", err)
-	}
-	filename := "ratelimit-gitlab-" + hostSlug(host) + ".json"
-	return filepath.Join(home, ".nightgauge", filename), nil
+	return layout.StateHintFile("ratelimit-gitlab-" + hostSlug(host) + ".json")
 }
 
 // keyFor normalizes the instance key. Empty instance collapses to "default".
@@ -238,7 +238,7 @@ func (t *SharedRateLimitTracker) readLocked() (*sharedTrackerFile, error) {
 // directory as the target so os.Rename remains atomic on every major OS.
 func (t *SharedRateLimitTracker) writeLocked(file *sharedTrackerFile) error {
 	dir := filepath.Dir(t.path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dir, err)
 	}
 	data, err := json.MarshalIndent(file, "", "  ")
