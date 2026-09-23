@@ -124,7 +124,11 @@ type StageRunParams struct {
 	// it rather than sending an empty id the server's identity-bearing verbs
 	// would then hard-reject, silently, one swallowed `.catch` at a time
 	// (ADR-017 Decision 10).
-	RunID        string
+	RunID string
+	// StageBudgets is pipeline.stage_budgets (#1652): the Go executor
+	// resolves the stage's turn, wall-clock and token ceilings from it. The
+	// extension-hosted runner does not read it yet.
+	StageBudgets map[string]config.StageBudget
 	AllowedTools []string
 	Prompt       string
 	PhaseEventFn func(stage, name string, index, total int)
@@ -548,6 +552,7 @@ func stageOptionsFromParams(params StageRunParams) execution.StageOptions {
 		Effort:          params.Effort,
 		MaxTokens:       params.MaxTokens,
 		CostBudget:      params.CostBudget,
+		StageBudgets:    params.StageBudgets,
 		Timeout:         params.Timeout,
 		Runtime:         params.Runtime,
 		AllowedTools:    params.AllowedTools,
@@ -4119,6 +4124,20 @@ func PipelineBudgetCeilingUSD(workspaceRoot string) float64 {
 	return maxFloat64(base, readBudgetCeilingOverrideUSD(workspaceRoot))
 }
 
+// pipelineStageBudgets reads pipeline.stage_budgets (#1652) through the tier
+// merge. nil, the built-in defaults, when the workspace sets none or its
+// config cannot be read.
+func pipelineStageBudgets(workspaceRoot string) map[string]config.StageBudget {
+	if workspaceRoot == "" {
+		return nil
+	}
+	cfg, err := config.Load(workspaceRoot)
+	if err != nil || cfg == nil || cfg.Pipeline == nil {
+		return nil
+	}
+	return cfg.Pipeline.StageBudgets
+}
+
 func maxFloat64(a, b float64) float64 {
 	if a > b {
 		return a
@@ -5697,6 +5716,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// stages before their own progress-gated hard cap could apply.
 			Timeout:      routing.ResolveStageTimeout(string(stage), adapterName, model),
 			CostBudget:   PipelineBudgetCeilingUSD(workspaceRoot),
+			StageBudgets: pipelineStageBudgets(workspaceRoot),
 			SkillPath:    skillData.SkillPath,
 			ContextFile:  contextFile,
 			OutputFile:   outputFile,
@@ -6926,6 +6946,14 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			if parked {
 				terminalFailureKind = resolvedFailureKind
 			}
+			// A budget stop (#1652, ADR-004): the stage was stopped at a
+			// budget the operator set — a stage budget or a cost cap — and a
+			// stronger model re-dispatched under the same budget spends it
+			// again. It is recorded as the stop it is and never retried.
+			budgetStopped := resolvedFailureKind == TerminalKindBudgetExceeded
+			if budgetStopped {
+				terminalFailureKind = TerminalKindBudgetExceeded
+			}
 			// USAGE-CAP RECOVERY (#42 descent, #1545 attribution + provider
 			// walk). One decision covers both cap kinds and both dispatch
 			// paths — see DecideCapRecovery for why the order is tier ladder →
@@ -7044,7 +7072,11 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				log.Printf("#%d: stage %s failed — NOT escalating model: %s is parked, not retried (%s)",
 					item.Number, stage, resolvedFailureKind, TerminalKindRemediation(resolvedFailureKind))
 			}
-			if !modelRejected && !capRejected && !authFailed && !catBlocked && !parked {
+			if budgetStopped {
+				log.Printf("#%d: stage %s failed — NOT escalating model: it was stopped at its budget (budget_exceeded), which a retry would spend again",
+					item.Number, stage)
+			}
+			if !modelRejected && !capRejected && !authFailed && !catBlocked && !parked && !budgetStopped {
 				escalation := s.retryEngine.EvaluateEscalation(string(stage), model)
 				if escalation.ShouldEscalate {
 					log.Printf("#%d: stage %s failed — escalating model to %s",

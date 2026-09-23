@@ -1517,3 +1517,122 @@ func TestParseYAMLProjectsRejectsAmbiguity(t *testing.T) {
 		})
 	}
 }
+
+// ── #1652: pipeline.stage_budgets ────────────────────────────────────────────
+
+// TestStageBudgetsPerStageOverrideResolvesToTheOverride pins that a stage's own
+// pipeline.stage_budgets entry reaches the resolved budget through the tier
+// merge, that a field it leaves at 0 inherits the default entry, and that a
+// field neither sets gets the built-in default.
+func TestStageBudgetsPerStageOverrideResolvesToTheOverride(t *testing.T) {
+	withNoMachineConfig(t)
+	dir := t.TempDir()
+	writeProjectYAML(t, dir, `
+schema_version: "2"
+owner: nightgauge
+pipeline:
+  stage_budgets:
+    default:
+      max_turns: 300
+    feature-dev:
+      max_turns: 120
+      max_wall_clock: 90m
+`)
+	cfg, err := LoadMerged(dir)
+	if err != nil {
+		t.Fatalf("LoadMerged: %v", err)
+	}
+	got := cfg.Pipeline.ResolveStageBudget("feature-dev", false)
+	if got.MaxTurns != 120 || got.MaxWallClock != 90*time.Minute || got.MaxTokens != DefaultStageMaxTokens {
+		t.Errorf("feature-dev budget = %+v, want the override: 120 turns, 90m, the default %d tokens", got, DefaultStageMaxTokens)
+	}
+	if len(got.Warnings) != 0 {
+		t.Errorf("feature-dev warnings = %q, want none", got.Warnings)
+	}
+	other := cfg.Pipeline.ResolveStageBudget("pr-create", false)
+	if other.MaxTurns != 300 || other.MaxWallClock != DefaultStageMaxWallClock {
+		t.Errorf("pr-create budget = %+v, want the default entry's 300 turns and the built-in wall clock", other)
+	}
+}
+
+// TestStageBudgetsNoConfigResolvesToTheADRDefaults pins the ADR-023 Q8 defaults
+// for a workspace that configures nothing, hosted and zero-cost.
+func TestStageBudgetsNoConfigResolvesToTheADRDefaults(t *testing.T) {
+	var none *PipelineConfig
+	paid := none.ResolveStageBudget("feature-dev", false)
+	want := ResolvedStageBudget{MaxTurns: 400, MaxWallClock: 4 * time.Hour, MaxTokens: 25_000_000}
+	if paid.MaxTurns != want.MaxTurns || paid.MaxWallClock != want.MaxWallClock || paid.MaxTokens != want.MaxTokens || len(paid.Warnings) != 0 {
+		t.Errorf("unconfigured hosted budget = %+v, want %+v", paid, want)
+	}
+	free := none.ResolveStageBudget("feature-dev", true)
+	if free.MaxTurns != 200 || free.MaxWallClock != 4*time.Hour || free.MaxTokens != 25_000_000 {
+		t.Errorf("unconfigured zero-cost budget = %+v, want 200 turns, 4h, 25000000 tokens", free)
+	}
+}
+
+// TestStageBudgetsZeroCostStageAlwaysGetsNonZeroCeilings is the zero-cost
+// floor: a stage no USD cap can stop gets bounded ceilings whatever the
+// config says. 0 inherits the default, and an explicit -1 is refused there,
+// with a warning, while a priced stage honours the same -1 and warns.
+func TestStageBudgetsZeroCostStageAlwaysGetsNonZeroCeilings(t *testing.T) {
+	withNoMachineConfig(t)
+	dir := t.TempDir()
+	writeProjectYAML(t, dir, `
+schema_version: "2"
+owner: nightgauge
+pipeline:
+  stage_budgets:
+    default:
+      max_turns: 0
+      max_wall_clock: -1
+      max_tokens: -1
+`)
+	cfg, err := LoadMerged(dir)
+	if err != nil {
+		t.Fatalf("LoadMerged: %v", err)
+	}
+	free := cfg.Pipeline.ResolveStageBudget("feature-dev", true)
+	if free.MaxTurns <= 0 || free.MaxWallClock <= 0 || free.MaxTokens <= 0 {
+		t.Fatalf("zero-cost budget = %+v: every ceiling must be non-zero and bounded", free)
+	}
+	if free.MaxTurns != DefaultZeroCostStageMaxTurns || free.MaxWallClock != DefaultStageMaxWallClock || free.MaxTokens != DefaultStageMaxTokens {
+		t.Errorf("zero-cost budget = %+v, want the built-in defaults", free)
+	}
+	if len(free.Warnings) != 2 || !strings.Contains(strings.Join(free.Warnings, "\n"), "refused") {
+		t.Errorf("zero-cost warnings = %q, want one refusal per -1", free.Warnings)
+	}
+
+	paid := cfg.Pipeline.ResolveStageBudget("feature-dev", false)
+	if paid.MaxWallClock != StageBudgetUnlimited || paid.MaxTokens != StageBudgetUnlimited {
+		t.Errorf("hosted budget = %+v, want the explicit -1 honoured", paid)
+	}
+	if paid.MaxTurns != DefaultStageMaxTurns {
+		t.Errorf("hosted max_turns = %d, want 0 to inherit the built-in %d", paid.MaxTurns, DefaultStageMaxTurns)
+	}
+	if len(paid.Warnings) != 2 {
+		t.Errorf("hosted warnings = %q, want one per unlimited field", paid.Warnings)
+	}
+}
+
+// TestStageBudgetsRejectMalformedValues pins that only -1 means unlimited: a
+// negative duration or count is not a limit and the built-in default applies,
+// and a wall clock without a unit fails to load rather than guessing one.
+func TestStageBudgetsRejectMalformedValues(t *testing.T) {
+	got := ResolveStageBudget(map[string]StageBudget{"default": {MaxTurns: -5}}, "feature-dev", false)
+	if got.MaxTurns != DefaultStageMaxTurns || len(got.Warnings) != 1 {
+		t.Errorf("max_turns -5 resolved to %+v, want the built-in default and one warning", got)
+	}
+	withNoMachineConfig(t)
+	dir := t.TempDir()
+	writeProjectYAML(t, dir, `
+schema_version: "2"
+owner: nightgauge
+pipeline:
+  stage_budgets:
+    default:
+      max_wall_clock: 90
+`)
+	if _, err := LoadMerged(dir); err == nil || !strings.Contains(err.Error(), "max_wall_clock") {
+		t.Errorf("max_wall_clock: 90 loaded with err=%v, want a max_wall_clock error", err)
+	}
+}
