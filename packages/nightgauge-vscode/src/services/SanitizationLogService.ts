@@ -28,6 +28,19 @@ import type {
 import { EMPTY_FIREWALL_AGGREGATES } from "../views/dashboard/FirewallTypes";
 
 /**
+ * The watcher glob for `logFilePath`, relative to `workspaceRoot`. VS Code
+ * glob patterns take forward slashes on every OS, so the native separator is
+ * normalised (#2036). `pathImpl` is injectable to test the win32 case.
+ */
+export function logWatchGlob(
+  workspaceRoot: string,
+  logFilePath: string,
+  pathImpl: Pick<typeof path, "relative" | "sep"> = path
+): string {
+  return pathImpl.relative(workspaceRoot, logFilePath).split(pathImpl.sep).join("/");
+}
+
+/**
  * SanitizationLogService manages reading and watching the sanitization log file.
  *
  * @example
@@ -220,7 +233,7 @@ export class SanitizationLogService implements vscode.Disposable {
     // revisit this if the log dir leaves the working tree.
     const pattern = new vscode.RelativePattern(
       this.workspaceRoot,
-      path.relative(this.workspaceRoot, this.logFilePath).split(path.sep).join("/")
+      logWatchGlob(this.workspaceRoot, this.logFilePath)
     );
 
     this.watcher = vscode.workspace.createFileSystemWatcher(pattern);
