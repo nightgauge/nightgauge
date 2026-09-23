@@ -370,6 +370,24 @@ describe("the opencode child's NIGHTGAUGE_* allowlist (#1657)", () => {
     expect([...OPENCODE_NIGHTGAUGE_ALLOW].sort()).toEqual([...expected].sort());
   });
 
+  it("is the Go adapter's OpenCodeNightgaugeEnvAllow, as the golden records it", () => {
+    const golden = JSON.parse(
+      fs.readFileSync(path.join(GO_ADAPTERS_DIR, "testdata/opencode_config_golden.json"), "utf-8")
+    ) as { nightgauge_env_allow: string[] };
+    expect(golden.nightgauge_env_allow.length).toBeGreaterThan(5);
+    expect([...OPENCODE_NIGHTGAUGE_ALLOW].sort()).toEqual(golden.nightgauge_env_allow);
+  });
+
+  it("keeps a NIGHTGAUGE_* variable the run's config references, as Go does", () => {
+    const content =
+      '{"mcp":{"n":{"headers":{"Authorization":"Bearer {env:NIGHTGAUGE_MCP_TOKEN}"}}}}';
+    const parent = { NIGHTGAUGE_MCP_TOKEN: "t", NIGHTGAUGE_JIRA_TOKEN: "j" };
+    const env = curateOpenCodeChildEnv(parent, "lmstudio/x", {}, content);
+    expect(env.NIGHTGAUGE_MCP_TOKEN).toBe("t");
+    expect(env.NIGHTGAUGE_JIRA_TOKEN).toBeUndefined();
+    expect(curateOpenCodeChildEnv(parent, "lmstudio/x", {}).NIGHTGAUGE_MCP_TOKEN).toBeUndefined();
+  });
+
   it("keeps operator secrets in the NIGHTGAUGE_ namespace from the child", () => {
     const parent = {
       NIGHTGAUGE_LM_STUDIO_API_KEY: "lm-secret",
@@ -394,10 +412,17 @@ describe("openCodeEnvWithholdFor is the Go verb's env_withhold (#1657)", () => {
       fs.readFileSync(path.join(GO_ADAPTERS_DIR, "testdata/opencode_config_golden.json"), "utf-8")
     ) as {
       inputs: { model: string };
-      verb: { env_withhold: { prefixes: string[]; names: string[] } };
+      verb: {
+        config_content: string;
+        env_withhold: { prefixes: string[]; names: string[]; keep: string[] };
+      };
     };
     expect(golden.verb.env_withhold.names.length).toBeGreaterThan(100);
-    expect(openCodeEnvWithholdFor(golden.inputs.model)).toEqual(golden.verb.env_withhold);
+    // The golden's config references an MCP token held in the namespace.
+    expect(golden.verb.env_withhold.keep).toContain("NIGHTGAUGE_MCP_FIXTURE_TOKEN");
+    expect(openCodeEnvWithholdFor(golden.inputs.model, golden.verb.config_content)).toEqual(
+      golden.verb.env_withhold
+    );
   });
 
   it("the endpoint variables are the Go adapter's", () => {

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1183,7 +1184,9 @@ func TestOpenCodeSpawnWithholdsInheritedOpenCodeVariablesAndForeignKeys(t *testi
 	for k, v := range platform {
 		t.Setenv(k, v)
 	}
-	t.Setenv("NIGHTGAUGE_TEST_INHERITED", "kept")
+	// Not in the NIGHTGAUGE_ namespace, which an opencode child inherits only
+	// the needed names of (TestOpenCodeSpawnWithholdsNightgaugeSecrets).
+	t.Setenv("UNRELATED_TEST_INHERITED", "kept")
 
 	var result *adapters.RunResult
 	var err error
@@ -1196,7 +1199,7 @@ func TestOpenCodeSpawnWithholdsInheritedOpenCodeVariablesAndForeignKeys(t *testi
 		t.Fatalf("RunStage refused a local model with %s=1: %v", adapters.ExperimentalOpenCodeEnvVar, err)
 	}
 	env, entries := fake.env(t)
-	if env["NIGHTGAUGE_TEST_INHERITED"] != "kept" {
+	if env["UNRELATED_TEST_INHERITED"] != "kept" {
 		t.Fatal("an unrelated inherited variable did not reach the child, so its recorded environment proves nothing")
 	}
 	for k := range inherited {
@@ -1254,6 +1257,59 @@ func TestOpenCodeSpawnWithholdsInheritedOpenCodeVariablesAndForeignKeys(t *testi
 	for name, out := range map[string]string{"stderr": stderr, "result.Stdout": result.Stdout, "result.Stderr": result.Stderr} {
 		if strings.Contains(out, sentinel) {
 			t.Errorf("an inherited secret's value was written to %s", name)
+		}
+	}
+}
+
+// TestOpenCodeSpawnWithholdsNightgaugeSecrets: a Go-spawned opencode child
+// inherits no NIGHTGAUGE_* variable outside adapters.OpenCodeNightgaugeEnvAllow
+// (#1657). Operator secrets in the namespace stay out; the names the child and
+// its plugin read, inherited or exported, arrive.
+func TestOpenCodeSpawnWithholdsNightgaugeSecrets(t *testing.T) {
+	isolateOpenCodeHome(t)
+	fake := installOpenCodeFake(t, "")
+	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
+	secrets := map[string]string{
+		"NIGHTGAUGE_JIRA_TOKEN":        "fake-jira-token-1657",
+		"NIGHTGAUGE_LM_STUDIO_API_KEY": "fake-lm-studio-key-1657",
+		"NIGHTGAUGE_AUDIT_API_KEY":     "fake-audit-key-1657",
+	}
+	for k, v := range secrets {
+		t.Setenv(k, v)
+	}
+	// Needed names only ever inherited, never exported by the Go path.
+	t.Setenv("NIGHTGAUGE_EDIT_HOOK_DIAGNOSTICS", "1")
+	t.Setenv("NIGHTGAUGE_MODEL", "lmstudio/qwen/qwen3.8-27b")
+
+	var err error
+	captureStderr(t, func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_, err = NewManager(openCodeWorkspace(t), adapters.NewOpenCodeAdapter()).RunStage(ctx, openCodeStageOptions("lmstudio/qwen/qwen3.8-27b", nil))
+	})
+	if err != nil {
+		t.Fatalf("RunStage: %v", err)
+	}
+	env, entries := fake.env(t)
+	for k, v := range secrets {
+		if _, ok := env[k]; ok {
+			t.Errorf("%s reached the opencode child", k)
+		}
+		for _, kv := range entries {
+			if strings.Contains(kv, v) {
+				t.Errorf("the value of %s reached the child's environment in %.40q", k, kv)
+			}
+		}
+	}
+	for _, k := range []string{"NIGHTGAUGE_EDIT_HOOK_DIAGNOSTICS", "NIGHTGAUGE_MODEL", "NIGHTGAUGE_STAGE", "NIGHTGAUGE_ADAPTER", "NIGHTGAUGE_OPENCODE_PLUGIN_NONCE"} {
+		if env[k] == "" {
+			t.Errorf("%s did not reach the opencode child, which needs it", k)
+		}
+	}
+	for k := range env {
+		if strings.HasPrefix(k, "NIGHTGAUGE_") && !strings.HasPrefix(k, "NIGHTGAUGE_OPENCODE_") &&
+			!slices.Contains(adapters.OpenCodeNightgaugeEnvAllow, k) && k != "NIGHTGAUGE_CONFIG_HOME" {
+			t.Errorf("%s reached the opencode child but is neither allowed nor a run variable", k)
 		}
 	}
 }

@@ -32,7 +32,7 @@ import {
   curateOpenCodeChildEnv,
 } from "./childEnv.js";
 import { AdapterError } from "./errors.js";
-import { openCodeProviderEnv } from "./opencodeCatalog.js";
+import { openCodeEnvWithholdHas, openCodeProviderEnv } from "./opencodeCatalog.js";
 import { classifyOpenCodeRun, openCodeRedactor, type OpenCodeHelper } from "./opencodeStream.js";
 import { OpenCodeHandshakeWatch, openCodeHandshakeFromEnv } from "./opencodeHandshake.js";
 import {
@@ -787,7 +787,8 @@ async function* openCodeStage(
     ...curateOpenCodeChildEnv(
       withholdInherited(run.parentEnv, runConfig.envWithhold),
       model,
-      runConfig.env
+      runConfig.env,
+      runConfig.configContent
     ),
     [OPENCODE_CONFIG_CONTENT_ENV]: runConfig.configContent,
     [OPENCODE_SERVER_PASSWORD_ENV]: password,
@@ -882,10 +883,9 @@ function withholdInherited(
   withhold: OpenCodeRunConfig["envWithhold"]
 ): NodeJS.ProcessEnv {
   if (withhold === undefined) return parentEnv;
-  const names = new Set(withhold.names);
   const kept: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(parentEnv)) {
-    if (names.has(name) || withhold.prefixes.some((p) => name.startsWith(p))) continue;
+    if (openCodeEnvWithholdHas(withhold, name)) continue;
     kept[name] = value;
   }
   return kept;

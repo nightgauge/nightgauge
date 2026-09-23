@@ -20,7 +20,13 @@
  * @see Issue #1637 - the OpenCode curation, {@link curateOpenCodeChildEnv}
  */
 
-import { openCodeProviderEnv } from "./opencodeCatalog.js";
+import {
+  OPENCODE_NIGHTGAUGE_ALLOW,
+  openCodeProviderEnv,
+  openCodeWithholdsNightgaugeEnv,
+} from "./opencodeCatalog.js";
+
+export { OPENCODE_NIGHTGAUGE_ALLOW, openCodeWithholdsNightgaugeEnv };
 
 /**
  * System/runtime variables a spawned CLI needs to function. Notably PATH (to
@@ -309,41 +315,6 @@ export function isOpenCodeRunEnvAccepted(name: string): boolean {
   return isOpenCodeRunEnvName(name) || OPENCODE_RUN_ENV_WITHHELD_NAMES.has(name);
 }
 
-/**
- * The inherited NIGHTGAUGE_* variables an opencode child keeps (#1657). The
- * rest of the namespace — operator settings and secrets such as
- * NIGHTGAUGE_LM_STUDIO_API_KEY, NIGHTGAUGE_JIRA_TOKEN or
- * NIGHTGAUGE_AUDIT_API_KEY — never reaches it. The set is exactly what is read
- * or exported for the child, and tests/cli/childEnv.test.ts derives it from
- * those sources and fails when this list differs:
- *   - the Nightgauge OpenCode plugin's reads
- *     (internal/execution/opencodeplugin/plugin/): NIGHTGAUGE_BIN,
- *     NIGHTGAUGE_EDIT_HOOK_DIAGNOSTICS, NIGHTGAUGE_OUTPUT_FILE,
- *     NIGHTGAUGE_RUN_ID (its NIGHTGAUGE_OPENCODE_* handshake variables come
- *     from the run config only);
- *   - the Go opencode adapter's per-spawn contract (BuildCommand in
- *     opencode.go) and the manager's exports (composeStageEnv:
- *     NIGHTGAUGE_BIN, NIGHTGAUGE_SKILL_DIR);
- *   - what the SDK OpenCodeAdapter reads for its stage (NIGHTGAUGE_MODEL,
- *     NIGHTGAUGE_REPO, NIGHTGAUGE_TARGET_REPO).
- */
-export const OPENCODE_NIGHTGAUGE_ALLOW: ReadonlySet<string> = new Set([
-  "NIGHTGAUGE_ADAPTER",
-  "NIGHTGAUGE_BIN",
-  "NIGHTGAUGE_CONTEXT_FILE",
-  "NIGHTGAUGE_DISPATCH_MODEL",
-  "NIGHTGAUGE_EDIT_HOOK_DIAGNOSTICS",
-  "NIGHTGAUGE_ISSUE_NUMBER",
-  "NIGHTGAUGE_MODEL",
-  "NIGHTGAUGE_OUTPUT_FILE",
-  "NIGHTGAUGE_OUTPUT_FORMAT",
-  "NIGHTGAUGE_REPO",
-  "NIGHTGAUGE_RUN_ID",
-  "NIGHTGAUGE_SKILL_DIR",
-  "NIGHTGAUGE_STAGE",
-  "NIGHTGAUGE_TARGET_REPO",
-]);
-
 /** The forge variables an opencode stage keeps: its bash tool runs `gh` and `git`. */
 const OPENCODE_FORGE_ALLOW: ReadonlySet<string> = new Set(["GH_TOKEN", "GITHUB_TOKEN", "GH_HOST"]);
 
@@ -370,7 +341,7 @@ const OPENCODE_ISOLATION_XDG_SET: ReadonlySet<string> = new Set(OPENCODE_ISOLATI
  * parent run's own sentinel file — instead of minting its own through its own
  * `runConfigProvider` call, the only legitimate source of these names.
  */
-export function isOpenCodeChildEnvAllowed(key: string, model: string): boolean {
+export function isOpenCodeChildEnvAllowed(key: string, model: string, configContent = ""): boolean {
   if (
     key.startsWith("OPENCODE_") ||
     key.startsWith("NIGHTGAUGE_OPENCODE_") ||
@@ -382,7 +353,7 @@ export function isOpenCodeChildEnvAllowed(key: string, model: string): boolean {
     SYSTEM_ALLOW.has(key) ||
     OPENCODE_FORGE_ALLOW.has(key) ||
     OPENCODE_TOOL_ALLOW.has(key) ||
-    OPENCODE_NIGHTGAUGE_ALLOW.has(key) ||
+    (key.startsWith("NIGHTGAUGE_") && !openCodeWithholdsNightgaugeEnv(key, configContent)) ||
     openCodeProviderEnv(model).includes(key)
   );
 }
@@ -393,17 +364,20 @@ export function isOpenCodeChildEnvAllowed(key: string, model: string): boolean {
  * own isolation variables and per-run config, which replace any inherited
  * value of the same name. A `runEnv` name outside the run's variables
  * ({@link isOpenCodeRunEnvName}) is not applied; the adapter refuses such a
- * run config before it gets here. Pure: mutates neither input.
+ * run config before it gets here. `configContent` is the run's per-run config,
+ * whose `{env:NAME}` references keep those NIGHTGAUGE_* variables; it defaults
+ * to `runEnv`'s OPENCODE_CONFIG_CONTENT. Pure: mutates neither input.
  */
 export function curateOpenCodeChildEnv(
   parentEnv: NodeJS.ProcessEnv,
   model: string,
-  runEnv: Readonly<Record<string, string>>
+  runEnv: Readonly<Record<string, string>>,
+  configContent: string = runEnv[OPENCODE_CONFIG_CONTENT_ENV] ?? ""
 ): NodeJS.ProcessEnv {
   const curated: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(parentEnv)) {
     if (value === undefined) continue;
-    if (isOpenCodeChildEnvAllowed(key, model)) curated[key] = value;
+    if (isOpenCodeChildEnvAllowed(key, model, configContent)) curated[key] = value;
   }
   for (const [key, value] of Object.entries(runEnv)) {
     if (isOpenCodeRunEnvName(key)) curated[key] = value;

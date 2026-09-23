@@ -7161,10 +7161,10 @@ adapter's warning and notices go to stderr.
 
 | Field            | Meaning                                                                                                   |
 | ---------------- | --------------------------------------------------------------------------------------------------------- |
-| `schema_version` | Output version (`1.2`); a caller refuses an unknown major version                                         |
+| `schema_version` | Output version (`1.3`); a caller refuses an unknown major version                                         |
 | `config_content` | `OPENCODE_CONFIG_CONTENT`, the per-run OpenCode config                                                    |
 | `env`            | Every variable the spawn sets from the run, the config included; no secret                                |
-| `env_withhold`   | `prefixes` and `names` of the inherited variables the spawn must not get; remove them before adding `env` |
+| `env_withhold`   | The inherited variables the spawn must not get: every one in `names`, and every one starting with one of `prefixes` that is not in `keep`; remove them before adding `env` |
 | `plugin_dir`     | Where OpenCode loads the run's plugins from                                                               |
 | `run_dir`        | The run's private root                                                                                    |
 | `non_loopback`   | `false` only for a declared model server on this machine; `true` elsewhere and for any hosted provider    |

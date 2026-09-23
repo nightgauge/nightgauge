@@ -195,6 +195,7 @@ describe("opencode spawn env (#1657)", () => {
     process.env.OPENAI_API_KEY = "sk-operator-openai";
     process.env.LMSTUDIO_API_KEY = "lm-operator";
     process.env.GITHUB_TOKEN = "ghp-forge";
+    process.env.NIGHTGAUGE_JIRA_TOKEN = "jira-operator";
   });
 
   it("carries the dispatch model and no operator OPENCODE_* or other provider's key", () => {
@@ -245,6 +246,10 @@ describe("opencode spawn env (#1657)", () => {
     const child = curateOpenCodeChildEnv(lastSpawnEnv(), LOCAL_MODEL, verb.env);
 
     expect(child).not.toHaveProperty("OPENCODE_PERMISSION");
+    // The NIGHTGAUGE_ namespace is narrowed for the opencode process, not for
+    // the SDK stage CLI, which reads its own NIGHTGAUGE_* configuration.
+    expect(lastSpawnEnv().NIGHTGAUGE_JIRA_TOKEN).toBe("jira-operator");
+    expect(child).not.toHaveProperty("NIGHTGAUGE_JIRA_TOKEN");
     expect(child.NIGHTGAUGE_OPENCODE_PLUGIN_NONCE).toBe(verb.env.NIGHTGAUGE_OPENCODE_PLUGIN_NONCE);
     expect(child).not.toHaveProperty("OPENAI_API_KEY");
     expect(child.XDG_CONFIG_HOME).toBe(verb.env.XDG_CONFIG_HOME);

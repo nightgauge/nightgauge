@@ -3780,13 +3780,14 @@ export function resolvePluginRoot(): string | undefined {
  * (Issue #1657). A spread can override a name but never remove one, so this
  * runs after composition, like the run-identity reconcile. Mutates `env`.
  *
- * The withheld set is exactly the dispatch's `env_withhold`: the SDK's
+ * The withheld set is the dispatch's `env_withhold`: the SDK's
  * `openCodeEnvWithholdFor`, the TS twin of the Go `OpenCodeEnvWithholdFor`
  * that `nightgauge opencode config` prints (a parity test holds it to the
  * verb's golden output). That is every `OPENCODE_*` variable, the provider
  * base URLs, and every catalog variable of a model service other than the
  * dispatched one; a platform provider's variables, the forge token among
- * them, stay. `NIGHTGAUGE_MODEL` also goes when there is no dispatch model,
+ * them, stay. Its NIGHTGAUGE_ prefix is the one part not applied here (see
+ * NIGHTGAUGE_NAMESPACE). `NIGHTGAUGE_MODEL` also goes when there is no dispatch model,
  * so an inherited value never becomes one.
  *
  * `XDG_*` is not withheld, here or by the Go verb: this env is the SDK stage
@@ -3801,11 +3802,20 @@ export function resolvePluginRoot(): string | undefined {
 export function reconcileOpenCodeSpawnEnv(env: NodeJS.ProcessEnv, model: string | undefined): void {
   const withhold = openCodeEnvWithholdFor(model ?? "");
   const names = new Set(withhold.names);
+  const prefixes = withhold.prefixes.filter((p) => p !== NIGHTGAUGE_NAMESPACE);
   for (const name of Object.keys(env)) {
-    if (names.has(name) || withhold.prefixes.some((p) => name.startsWith(p))) delete env[name];
+    if (names.has(name) || prefixes.some((p) => name.startsWith(p))) delete env[name];
   }
   if (!model) delete env.NIGHTGAUGE_MODEL;
 }
+
+/**
+ * The env_withhold prefix this layer leaves to the SDK (#1657): the SDK stage
+ * CLI reads its own NIGHTGAUGE_* configuration (the OpenCode enable switch,
+ * the output format, the log level), so the namespace is narrowed where the
+ * SDK builds the `opencode` process's env, not here.
+ */
+const NIGHTGAUGE_NAMESPACE = "NIGHTGAUGE_";
 
 /**
  * Resolve the nightgauge Go binary and return env vars that make it

@@ -85,13 +85,22 @@ changelog, and the release workflow refuses a tag that does not.
     failed stage's last stderr lines as its error. Each line resets the extension's idle clock,
     so a slow local stage no longer looks silent until it exits. The stage's
     buffered result is unchanged.
-  - **Security: the opencode child no longer gets the whole `NIGHTGAUGE_`
-    namespace.** The SDK's child allowlist forwarded every `NIGHTGAUGE_*`
-    variable, operator secrets such as `NIGHTGAUGE_LM_STUDIO_API_KEY`,
-    `NIGHTGAUGE_JIRA_TOKEN` and `NIGHTGAUGE_AUDIT_API_KEY` included. It now
-    forwards only `OPENCODE_NIGHTGAUGE_ALLOW`, the names the Nightgauge
+  - **Security: an opencode process no longer gets the whole `NIGHTGAUGE_`
+    namespace, on either path.** Both the SDK's child allowlist and the Go
+    manager (`OpenCodeAdapter.WithholdsEnv`, used by `composeStageEnv`)
+    passed every inherited `NIGHTGAUGE_*` variable to OpenCode and every
+    tool a stage runs. That included operator secrets such as
+    `NIGHTGAUGE_LM_STUDIO_API_KEY`, `NIGHTGAUGE_JIRA_TOKEN` and
+    `NIGHTGAUGE_AUDIT_API_KEY`. Both now keep only the names the Nightgauge
     OpenCode plugin reads and the Go and SDK adapters export or read for the
-    stage. A test derives that set from those sources.
+    stage (`OpenCodeNightgaugeEnvAllow` / `OPENCODE_NIGHTGAUGE_ALLOW`). They
+    also keep a variable the run's config references as `{env:NAME}`, such as
+    an MCP server's token. The verb's `env_withhold` carries the rule as a
+    `NIGHTGAUGE_` prefix with a new `keep` list (schema 1.3), and the SDK
+    applies it. The golden records the Go list, and the SDK test compares its
+    own to it and derives it from the sources. The extension leaves the
+    namespace alone in the SDK stage CLI's env, because the CLI reads its own
+    `NIGHTGAUGE_*` settings.
 
 - **feature-dev runs as bounded sub-sessions on small context windows
   (#1651).** When the dispatch model's resolved window is known and below

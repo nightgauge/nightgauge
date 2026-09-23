@@ -737,9 +737,18 @@ func addNightgaugePluginToConfig(content, entry string) (string, error) {
 // OPENCODE_* variable, the provider base-URL variables, and every variable
 // OpenCode's catalog binds to a model service other than the dispatched one.
 // The forge tokens and the cloud platform credentials a stage's tools read
-// are kept (openCodePlatformProviders).
+// are kept (openCodePlatformProviders). It also narrows the NIGHTGAUGE_*
+// namespace to what the child needs (OpenCodeWithholdsNightgaugeEnv), keeping
+// a variable the run's config references.
 func (a *OpenCodeAdapter) WithholdsEnv(opts RunOptions, key string) bool {
-	return OpenCodeWithholdsEnv(opts.Model, key)
+	if OpenCodeWithholdsEnv(opts.Model, key) {
+		return true
+	}
+	var content string
+	if opts.RunRoot != nil {
+		content = opts.RunRoot.Env[openCodeConfigContentEnvVar]
+	}
+	return OpenCodeWithholdsNightgaugeEnv(key, content)
 }
 
 // RedactedEnv implements the manager's optional hook naming the variables of

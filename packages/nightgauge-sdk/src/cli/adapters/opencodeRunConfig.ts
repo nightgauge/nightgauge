@@ -50,6 +50,8 @@ const verbOutputSchema = z.object({
   env_withhold: z.object({
     prefixes: z.array(z.string()),
     names: z.array(z.string()),
+    // 1.3 (#1657): the names under a prefix that are kept.
+    keep: z.array(z.string()).default([]),
   }),
   plugin_dir: z.string().min(1),
   run_dir: z.string().min(1),

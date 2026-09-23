@@ -255,11 +255,13 @@ export interface OpenCodeRunConfig {
   readonly binary: string;
   /**
    * The inherited variables the spawn must not get (`env_withhold`): every
-   * name starting with one of `prefixes` or listed in `names`.
+   * name listed in `names`, and every name starting with one of `prefixes`
+   * that is not listed in `keep` (#1657).
    */
   readonly envWithhold: {
     readonly prefixes: readonly string[];
     readonly names: readonly string[];
+    readonly keep?: readonly string[];
   };
   /**
    * The run identity `runDir` is named by (`run_id`): the query's own run's,
@@ -390,9 +392,12 @@ function checkRunConfig(config: unknown): OpenCodeRunConfig {
     withhold === null ||
     !Array.isArray(withhold.prefixes) ||
     !Array.isArray(withhold.names) ||
-    ![...withhold.prefixes, ...withhold.names].every((n) => typeof n === "string")
+    (withhold.keep !== undefined && !Array.isArray(withhold.keep)) ||
+    ![...withhold.prefixes, ...withhold.names, ...(withhold.keep ?? [])].every(
+      (n) => typeof n === "string"
+    )
   ) {
-    invalidRunConfig("its withheld-variable set is not two lists of names");
+    invalidRunConfig("its withheld-variable set is not lists of names");
   }
   return {
     configContent: c.configContent!,
