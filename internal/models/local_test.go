@@ -2,7 +2,9 @@ package models
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -480,6 +482,37 @@ func TestLocalDescriptorsPerEndpoint(t *testing.T) {
 	// serve, then the v0 fallback.
 	if local.hits() != 2 || remote.hits() != 2 {
 		t.Errorf("hits: lmstudio %d, lmstudio-remote %d; want two each (v1 probe, v0 fallback)", local.hits(), remote.hits())
+	}
+}
+
+// TestResolveLocalContextStopsWaiting: a caller whose context ends stops
+// waiting on a slow server, and a later caller still gets the discovery's
+// own answer rather than the cancellation.
+func TestResolveLocalContextStopsWaiting(t *testing.T) {
+	resetLocalCache(t)
+	release := make(chan struct{})
+	srv := newLocalServer(t, func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+		http.NotFound(w, r)
+	})
+	ep := LocalEndpoint{ID: "lmstudio", Provider: "lm-studio", BaseURL: srv.URL + "/v1"}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := ResolveLocalContext(ctx, "opencode", "lmstudio/"+capturedLMStudioModel, ep)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want the caller's deadline", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("the caller waited %s after its context ended", elapsed)
+	}
+	close(release)
+	_, err = ResolveLocal("opencode", "lmstudio/"+capturedLMStudioModel, ep)
+	if err == nil || errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("later caller err = %v, want the discovery's own failure, not the first caller's cancellation", err)
 	}
 }
 

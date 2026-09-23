@@ -271,6 +271,13 @@ const (
 	// re-reads the plan and resumes from the next unchecked task. Distinct
 	// from DevProducedNoChanges: this stage did produce work.
 	TerminalKindDevStepCapReached = "dev_step_cap_reached"
+
+	// TerminalKindDevStepProgressUnproven: a feature-dev sub-session (#1651)
+	// could not be shown to have made progress because the work tree could
+	// not be fingerprinted (git failed on it), before or after the session.
+	// Environment class: the worktree, not the model or the issue. As with
+	// DevStepCapReached, the earlier steps' work is on disk.
+	TerminalKindDevStepProgressUnproven = "dev_step_progress_unproven"
 	// TerminalKindDevHandoffMissing is the exact inverse of
 	// DevProducedNoChanges: the dev context is absent or reports nothing, and
 	// git finds the changed files sitting in the stage workspace. The stage did

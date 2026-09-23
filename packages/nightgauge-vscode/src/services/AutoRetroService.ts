@@ -530,6 +530,9 @@ const TERMINAL_KIND_CATEGORY: Record<TerminalFailureKind, RetroFailureCategory> 
   // stage's contract says it wrote is absent, empty, or unreadable.
   orchestrator_crash: "state-management",
   stage_context_unreadable: "state-management",
+  // #1651: git could not read the worktree to fingerprint a feature-dev
+  // step. A filesystem/worktree fault, like an unreadable stage context.
+  dev_step_progress_unproven: "state-management",
 
   // The stage exited 0 and its post-condition gate found the work absent, or
   // found the contract step skipped. Inspect the gate result, not the logs.

@@ -59,15 +59,18 @@ overrides: Read [docs/CONTEXT_ARCHITECTURE.md](../../../docs/CONTEXT_ARCHITECTUR
 
 ## Supporting files (load on demand)
 
-- `_includes/context-and-feedback-intake.md` — Phases 0, 0.5, 0.7 (planning
+In the `_includes/` directory beside SKILL.md; each phase below gives the
+full path the first time it reads one.
+
+- context-and-feedback-intake.md — Phases 0, 0.5, 0.7 (planning
   context, batch detection, feedback intake)
-- `_includes/plan-knowledge-and-standards.md` — Phases 1, 1.5, 1.6, 2 (plan
+- plan-knowledge-and-standards.md — Phases 1, 1.5, 1.6, 2 (plan
   verification, knowledge base, recall, standards)
-- `_includes/implementation-and-testing.md` — Phases 3, 4, 4.5, 4b
+- implementation-and-testing.md — Phases 3, 4, 4.5, 4b
   (implementation, testing, E2E)
-- `_includes/review-and-correction.md` — Phases 5, 6, 6.5 (quality review,
+- review-and-correction.md — Phases 5, 6, 6.5 (quality review,
   self-correction, feedback signals)
-- `_includes/context-and-epilogue.md` — Phases 7, 8, 9 (write dev context,
+- context-and-epilogue.md — Phases 7, 8, 9 (write dev context,
   sync board, output summary)
 
 ## Gotchas
@@ -194,7 +197,7 @@ printf '<!-- phase:start name="read-planning-context" index=1 total=18 stage="fe
 
 **PURPOSE**: Load context from previous pipeline stage.
 
-> **Read `_includes/context-and-feedback-intake.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
+> **Read `_includes/context-and-feedback-intake.md` now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -207,7 +210,7 @@ printf '<!-- phase:start name="batch-plan-detection" index=2 total=18 stage="fea
 **PURPOSE**: Detect batch mode and route to consolidated development when
 `planning-batch-{E}.json` exists.
 
-> **Read `_includes/context-and-feedback-intake.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
+> **Follow this phase's section of the context-and-feedback-intake include, read in Phase 0 above.**
 
 ---
 
@@ -221,7 +224,7 @@ printf '<!-- phase:start name="feedback-context-check" index=3 total=18 stage="f
 and load prior failure evidence so the agent avoids repeating the same
 mistakes.
 
-> **Read `_includes/context-and-feedback-intake.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
+> **Follow this phase's section of the context-and-feedback-intake include, read in Phase 0 above.**
 
 ---
 
@@ -234,7 +237,7 @@ printf '<!-- phase:start name="plan-verification" index=4 total=18 stage="featur
 **PURPOSE**: Pre-load context files, locate and validate the plan, and
 confirm branch alignment before implementing.
 
-> **Read `_includes/plan-knowledge-and-standards.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
+> **Read `_includes/plan-knowledge-and-standards.md` now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -290,7 +293,7 @@ printf '<!-- phase:start name="knowledge-base-read" index=5 total=18 stage="feat
 files (`PRD.md`, `decisions.md`) to pre-load requirements and design
 decisions before implementing.
 
-> **Read `_includes/plan-knowledge-and-standards.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
+> **Follow this phase's section of the plan-knowledge-and-standards include, read in Phase 1 above.**
 
 ---
 
@@ -304,7 +307,7 @@ printf '<!-- phase:start name="recall-architectural-constraints" index=6 total=1
 as the search signal, and inject any prior architectural decisions that
 reference them as a constraints block above the implementation prompt.
 
-> **Read `_includes/plan-knowledge-and-standards.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
+> **Follow this phase's section of the plan-knowledge-and-standards include, read in Phase 1 above.**
 
 ---
 
@@ -317,7 +320,7 @@ printf '<!-- phase:start name="standards-loading" index=7 total=18 stage="featur
 **PURPOSE**: Load code, security, and testing standards (with graceful
 greenfield fallbacks) so implementation follows documented conventions.
 
-> **Read `_includes/plan-knowledge-and-standards.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
+> **Follow this phase's section of the plan-knowledge-and-standards include, read in Phase 1 above.**
 
 ---
 
@@ -331,7 +334,7 @@ printf '<!-- phase:start name="implementation" index=8 total=18 stage="feature-d
 files need to be created. Files with dependencies are created sequentially
 after their dependencies are complete.
 
-> **Read `_includes/implementation-and-testing.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
+> **Read `_includes/implementation-and-testing.md` now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -344,7 +347,7 @@ printf '<!-- phase:start name="testing" index=9 total=18 stage="feature-dev" -->
 **PURPOSE**: Write unit tests, run a build-before-tests gate, run the suite,
 check coverage, and fix failures.
 
-> **Read `_includes/implementation-and-testing.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
+> **Follow this phase's section of the implementation-and-testing include, read in Phase 3 above.**
 
 ### Phase 4b: E2E Testing (Conditional)
 
@@ -357,7 +360,7 @@ Cypress, Selenium), run end-to-end / integration tests for UI-touching
 changes; set `INCLUDES_E2E` accordingly. Backend-only changes with no
 framework skip gracefully.
 
-> **Read `_includes/implementation-and-testing.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
+> **Follow this phase's section of the implementation-and-testing include, read in Phase 3 above.**
 
 ---
 
@@ -374,7 +377,7 @@ result variables. On a provider without an orchestration capability, run the
 same six reviews sequentially in this agent. See
 [docs/WORKFLOW_ORCHESTRATION.md](../../../docs/WORKFLOW_ORCHESTRATION.md).
 
-> **Read `_includes/review-and-correction.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
+> **Read `_includes/review-and-correction.md` now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -393,7 +396,7 @@ feature-dev MUST NOT report success if any of them fail. Swallowing failures
 here lets a broken PR through to `pr-create`, where CI catches it and blocks
 the merge. See the CI-parity incident that motivated this gate.
 
-> **Read `_includes/review-and-correction.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
+> **Follow this phase's section of the review-and-correction include, read in Phase 5 above.**
 
 ---
 
@@ -412,7 +415,7 @@ of committing a fragile half-finished implementation.
 > problems**. Minor adaptations do NOT warrant a signal. Ask: "Would a
 > reasonable developer throw away the current approach and start over?"
 
-> **Read `_includes/review-and-correction.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
+> **Follow this phase's section of the review-and-correction include, read in Phase 5 above.**
 
 ---
 
@@ -436,7 +439,7 @@ printf '<!-- phase:start name="write-dev-context" index=14 total=18 stage="featu
 after the "IMPLEMENTATION COMPLETE" message causes the AI to stop executing
 before the context file is written.
 
-> **Read `_includes/context-and-epilogue.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
+> **Read `_includes/context-and-epilogue.md` now and follow its instructions before continuing this phase.**
 
 ---
 
@@ -449,7 +452,7 @@ printf '<!-- phase:start name="sync-project-status" index=15 total=18 stage="fea
 Sync project board to "In progress" via Go binary `project sync-status`
 (idempotent).
 
-> **Read `_includes/context-and-epilogue.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
+> **Follow this phase's section of the context-and-epilogue include, read in Phase 7 above.**
 
 ---
 
@@ -465,7 +468,7 @@ context file path, and next step (`/nightgauge-feature-validate`).
 > **Note**: No commit SHA is reported because code is not committed until
 > feature-validate passes.
 
-> **Read `_includes/context-and-epilogue.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
+> **Follow this phase's section of the context-and-epilogue include, read in Phase 7 above.**
 
 ---
 

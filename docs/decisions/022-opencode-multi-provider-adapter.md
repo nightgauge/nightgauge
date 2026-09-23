@@ -2960,6 +2960,26 @@ connections to 104.16.0.0/16:443 alongside the loopback one, reproduced across t
 The peer was not identified and nothing is asserted about the content; § 10's egress
 defaults and `scripts/opencode-egress-check.sh` own the question.
 
+## The worktree's other forms in `external_directory` (amendment 2026-09-22, #1651)
+
+A live feature-dev run on a worktree reached through `/tmp` (a symlink to
+`/private/tmp` on macOS) had a tool call naming a `/tmp/...` path refused.
+OpenCode compares a path to its instance directory lexically, and that
+directory is the resolved one, so the `/tmp` form of a worktree file asked
+`external_directory`, whose allow-list had no entry for it.
+
+- The allow-list now leads with the worktree itself, in every form a tool
+  call can name it: as given, resolved through symlinks, and the resolved form
+  re-rooted on `/tmp` when `/tmp` is a symlink to its prefix
+  (`openCodePathForms`). `EvalSymlinks` cannot find that last form, because
+  the symlink points at the path, not out of it. The NIGHTGAUGE_SKILL_DIR and
+  context-directory entries and the edit-deny directory patterns use the same
+  forms.
+- An edit through another form of the worktree asks with a path relative to
+  the resolved worktree (`../../../tmp/wt/opencode.json`), which the bare
+  project-config backstop does not match. The edit map therefore also denies
+  `opencode.json*` and `.opencode/**` under each such relative prefix.
+
 ## Consequences
 
 - The model layer's one-adapter-one-provider assumption becomes a special

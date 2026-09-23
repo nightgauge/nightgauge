@@ -167,6 +167,14 @@ func ensureDevHandoff(workspace string, issueNumber int, ctxPath string, now tim
 			// overwriting it here would destroy the evidence.
 			return authoredOutcome
 		}
+		if doc["handoff_source"] == HandoffSourceDerived {
+			// Derived before the gate ran, as the feature-dev step loop's
+			// DeriveStepHandoff (#1651) does when the last sub-session writes
+			// no handoff of its own. The document says so; reporting it as
+			// authored would hide that git, not the stage, wrote it.
+			authoredOutcome.Source = HandoffSourceDerived
+			authoredOutcome.Notes = []string{"derived from git before the gate ran (the document's own handoff_source)"}
+		}
 		if declaredFileCount(doc) > 0 {
 			// #1482: a file list is not a complete deliverable. A stage that
 			// recorded every file it touched and never wrote

@@ -601,20 +601,61 @@ func openCodeWildcardMatch(target, pattern string) bool {
 // found a tool call's own filePath reported unresolved
 // (/var/folders/.../T/skill/_includes/note.md) even though the same
 // directory's macOS TMPDIR prefix is a symlink (/var -> /private/var), so an
-// allow-list built only from the resolved form did not match it. nil when
-// dir is "".
+// allow-list built only from the resolved form did not match it. A dir given
+// already resolved also gets its system-alias form (openCodePathForms), so
+// /private/tmp/x is matched as /tmp/x too (#1651). nil when dir is "".
 func openCodeDirPatterns(dir string) []string {
-	if dir == "" {
-		return nil
-	}
-	given := filepath.Clean(dir) + "/**"
-	patterns := []string{given}
-	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
-		if p := filepath.Clean(resolved) + "/**"; p != given {
-			patterns = append(patterns, p)
-		}
+	var patterns []string
+	for _, form := range openCodePathForms(dir) {
+		patterns = append(patterns, form+"/**")
 	}
 	return patterns
+}
+
+// openCodeSystemAliases are the top-level system symlinks a worktree is
+// reached through: /tmp, which points at /private/tmp on macOS. A path the
+// operator names under a macOS TMPDIR (/var/folders/...) is named in that
+// form, which openCodePathForms keeps as given.
+var openCodeSystemAliases = []string{"/tmp"}
+
+// openCodePathForms is every form in which a tool call can name path, cleaned
+// and de-duplicated: as given, resolved through symlinks, and the resolved
+// form re-rooted on a system alias (openCodeSystemAliases) that resolves to
+// its prefix — /private/tmp/wt is also /tmp/wt on macOS, and a model handed
+// either form uses it (#1651: a step's /tmp/... path was rejected by an
+// allow-list that listed only /private/tmp/...). EvalSymlinks cannot find the
+// alias forms, which point AT the path rather than out of it. Resolution is
+// best effort: a path that does not resolve keeps only its given form. nil
+// when path is "".
+func openCodePathForms(path string) []string {
+	if path == "" {
+		return nil
+	}
+	forms := []string{filepath.Clean(path)}
+	add := func(p string) {
+		p = filepath.Clean(p)
+		for _, f := range forms {
+			if f == p {
+				return
+			}
+		}
+		forms = append(forms, p)
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return forms
+	}
+	add(resolved)
+	for _, alias := range openCodeSystemAliases {
+		target, err := filepath.EvalSymlinks(alias)
+		if err != nil || target == alias {
+			continue
+		}
+		if rel, err := filepath.Rel(target, resolved); err == nil && rel != ".." && !strings.HasPrefix(rel, "../") {
+			add(filepath.Join(alias, rel))
+		}
+	}
+	return forms
 }
 
 // openCodeWorktreeRelativeDirPatterns returns the edit-deny pattern(s) for
@@ -658,18 +699,8 @@ func openCodeWorktreeRelativeDirPatterns(worktreeDir, dir string) []string {
 			root = top
 		}
 	}
-	roots := []string{filepath.Clean(root)}
-	if r, err := filepath.EvalSymlinks(root); err == nil {
-		if c := filepath.Clean(r); c != roots[0] {
-			roots = append(roots, c)
-		}
-	}
-	dirs := []string{filepath.Clean(dir)}
-	if r, err := filepath.EvalSymlinks(dir); err == nil {
-		if c := filepath.Clean(r); c != dirs[0] {
-			dirs = append(dirs, c)
-		}
-	}
+	roots := openCodePathForms(root)
+	dirs := openCodePathForms(dir)
 	var out []string
 	seen := map[string]bool{}
 	for _, rt := range roots {
@@ -682,6 +713,44 @@ func openCodeWorktreeRelativeDirPatterns(worktreeDir, dir string) []string {
 			if !seen[p] {
 				seen[p] = true
 				out = append(out, p)
+			}
+		}
+	}
+	return out
+}
+
+// openCodeWorktreeAliasConfigDenyPatterns carries the project-config edit
+// backstop (openCodeProjectConfigDenyBackstop) to the worktree's other forms.
+// An edit's pattern is its path relative to OpenCode's worktree, so a file
+// named through another form of the worktree — /tmp/wt/opencode.json when
+// OpenCode runs in /private/tmp/wt, which the external_directory allow-list
+// now admits (#1651) — asks as "../../../tmp/wt/opencode.json", which the
+// bare "opencode.json*" pattern does not match. This denies the config paths
+// under each such relative prefix. nil when worktreeDir is "" or is not in a
+// git repository.
+func openCodeWorktreeAliasConfigDenyPatterns(worktreeDir string) []string {
+	if worktreeDir == "" {
+		return nil
+	}
+	top, ok := openCodeGitTopLevel(worktreeDir)
+	if !ok {
+		return nil
+	}
+	forms := openCodePathForms(top)
+	var out []string
+	seen := map[string]bool{}
+	for _, root := range forms {
+		for _, form := range forms {
+			rel, err := filepath.Rel(root, form)
+			if err != nil || rel == "." {
+				continue
+			}
+			for _, p := range openCodeProjectConfigDenyBackstop {
+				pattern := filepath.ToSlash(rel) + "/" + p
+				if !seen[pattern] {
+					seen[pattern] = true
+					out = append(out, pattern)
+				}
 			}
 		}
 	}
@@ -720,9 +789,10 @@ func openCodeSkillDir(opts RunOptions) string {
 }
 
 // openCodeExternalDirectoryAllowList is ADR-022 § "external_directory
-// allow-list": NIGHTGAUGE_SKILL_DIR, the context and output file dirs when
-// they are outside the worktree, and the six stage skills' /tmp literals in
-// both /tmp and /private/tmp forms.
+// allow-list": the worktree in each of its forms (ADR-022's 2026-09-22
+// amendment, #1651), NIGHTGAUGE_SKILL_DIR, the context and output file dirs
+// when they are outside the worktree, and the six stage skills' /tmp literals
+// in both /tmp and /private/tmp forms.
 //
 // The NIGHTGAUGE_BIN dir is deliberately NOT here (#1638 fix round finding
 // 5/9, item 4): a scan of the six stage skills' own committed text finds
@@ -742,7 +812,12 @@ func openCodeSkillDir(opts RunOptions) string {
 // depth, belt-and-suspenders past external_directory's own "*": "deny"
 // default already refusing everything else there).
 func openCodeExternalDirectoryAllowList(opts RunOptions) []string {
-	var allow []string
+	// The worktree itself, in every form (#1651). OpenCode needs no
+	// permission for a path inside its own instance directory, but it
+	// compares lexically, against the directory as the process sees it
+	// (resolved): a tool call naming the worktree through a symlink — /tmp/wt
+	// for /private/tmp/wt — is "external" and was refused.
+	allow := openCodeDirPatterns(opts.WorktreeDir)
 	for _, root := range OpenCodeExternalDirectoryAllowRoots(opts) {
 		if root == opencodeallow.TmpRoot || root == opencodeallow.PrivateTmpRoot {
 			// The literal, narrower openCodeTmpDirAllowPatterns below is
@@ -835,6 +910,7 @@ func openCodePermissionMap(opts RunOptions, binDir string) *openCodePermissionJS
 		openCodeWorktreeRelativeDirPatterns(opts.WorktreeDir, openCodeSkillDir(opts)),
 		openCodeWorktreeRelativeDirPatterns(opts.WorktreeDir, binDir)...,
 	)
+	editDenyDirPatterns = append(editDenyDirPatterns, openCodeWorktreeAliasConfigDenyPatterns(opts.WorktreeDir)...)
 	return &openCodePermissionJSON{
 		Wildcard:          openCodeDeny,
 		Read:              openCodeReadPermission(grants["read"]),

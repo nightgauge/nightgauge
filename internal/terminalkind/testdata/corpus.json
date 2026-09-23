@@ -1405,6 +1405,15 @@
       "rationale": "The step loop's own marker. Kept distinct from dev_produced_no_changes: the sessions did produce work, the plan simply outgrew the bound."
     },
     {
+      "id": "dev-step-progress-unproven",
+      "input": "[dev-step-progress-unproven] feature-dev sub-session 2 of 3 marked no plan task done, and the work tree could not be fingerprinted to show it changed a deliverable file, so its progress cannot be proven; the step loop stopped (the scheduler log has git's error)",
+      "expected": "dev_step_progress_unproven",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "orchestrator.runFeatureDevSteps when the work tree cannot be fingerprinted around a step (#1651)",
+      "rationale": "The step loop's own marker. Kept distinct from dev_produced_no_changes, which it has not shown, and from subagent_crash."
+    },
+    {
       "id": "dev-build-verification-missing",
       "input": "stage gate failed: dev context lacks build_verification — the dev completion contract requires the verification step (nightgauge build run)",
       "expected": "dev_build_verification_missing",
