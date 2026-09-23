@@ -30,6 +30,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
 	stagecontext "github.com/nightgauge/nightgauge/internal/execution/context"
 	"github.com/nightgauge/nightgauge/internal/forge"
+	"github.com/nightgauge/nightgauge/internal/forge/boardcache"
 	"github.com/nightgauge/nightgauge/internal/git"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/hooks"
@@ -664,6 +665,10 @@ type Scheduler struct {
 	stateSvc      *state.BoardStateService
 	owner         string
 	projectNumber int
+	// boardCache is the daemon's shared snapshot cache, set by
+	// AutonomousScheduler.SetBoardCache, so the post-merge board sync in
+	// checkEpicCompletion invalidates it. Nil outside the daemon.
+	boardCache    *boardcache.Cache
 	workspaceRoot string
 
 	// attention is the shared Action Center DecisionRequest store (ADR 015),

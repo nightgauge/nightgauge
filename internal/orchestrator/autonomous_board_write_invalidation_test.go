@@ -13,6 +13,8 @@ import (
 	"github.com/nightgauge/nightgauge/internal/depgraph"
 	"github.com/nightgauge/nightgauge/internal/forge/boardcache"
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/hooks"
+	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
 // TestSchedulerStatusMovesInvalidateSharedBoardCache pins that every board
@@ -132,5 +134,50 @@ func TestSchedulerBoardWritesHaveOneConstructor(t *testing.T) {
 	}
 	if total != 1 {
 		t.Errorf("found %d gh.NewProjectService constructions, want exactly 1 (inside projectService)", total)
+	}
+}
+
+// TestEpicPostMergeBoardSyncInvalidatesSharedBoardCache pins the one board
+// write outside AutonomousScheduler: checkEpicCompletion's post-merge sync
+// runs on the embedded per-run Scheduler in the daemon, and SetBoardCache must
+// hand it the same cache so moving the merged issue to Done drops the open
+// snapshot.
+func TestEpicPostMergeBoardSyncInvalidatesSharedBoardCache(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"errors":[{"message":"forced failure"}]}`))
+	}))
+	defer srv.Close()
+
+	client := gh.NewClientWithURL("test-token", srv.URL)
+	sched := NewScheduler(client, SchedulerConfig{WorkspaceRoot: t.TempDir(), ProjectNumber: 7})
+	as := NewAutonomousScheduler(sched, client, nil, nil, DefaultAutonomousConfig(), t.TempDir())
+	cache := boardcache.New(0)
+	as.SetBoardCache(cache)
+
+	ctx := context.Background()
+	if _, _, err := cache.Wrap(&countingBoard{}, "o", 7).ListOpenItems(ctx); err != nil {
+		t.Fatalf("seed read: %v", err)
+	}
+
+	var synced bool
+	sched.evaluatePostMergeFn = func(ctx context.Context, _ hooks.IssueFetcher, _ hooks.IssueCloser,
+		_ hooks.EpicAutoCloser, _ hooks.PRVerifier, board hooks.BoardSyncer,
+		in hooks.PostMergeInput) hooks.PostMergeResult {
+		if board == nil {
+			t.Fatal("checkEpicCompletion passed no board syncer")
+		}
+		_ = board.SyncStatus(ctx, in.RepositoryOwner, in.RepositoryName, in.IssueNumber, "Done")
+		synced = true
+		return hooks.PostMergeResult{IssueClosed: true}
+	}
+
+	sched.checkEpicCompletion(ctx, types.BoardItem{Repo: "o/r", Number: 5}, 0)
+
+	if !synced {
+		t.Fatal("the post-merge hook never ran")
+	}
+	if _, ok := cache.Peek("o", 7, "open"); ok {
+		t.Error("the post-merge Done move left the board's open snapshot in the shared cache")
 	}
 }

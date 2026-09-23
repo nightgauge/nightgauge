@@ -4952,9 +4952,10 @@ What this saves, and what it does not:
   `gh.BoardService` and never touches the cache, because dispatch must not
   act on a snapshot. The scheduler's status moves go through
   `boardcache.WrapProject` (`AutonomousScheduler.projectService`), so each
-  move drops that board's snapshots. The per-run `Scheduler`'s post-merge
-  board sync (`checkEpicCompletion`) still writes with a bare
-  `gh.ProjectService`, and those writes do not invalidate the cache.
+  move drops that board's snapshots. The post-merge board sync
+  (`Scheduler.checkEpicCompletion`, run in the daemon through the embedded
+  per-run `Scheduler`) is wrapped the same way; `SetBoardCache` hands the
+  cache to both.
 
 `TestStatusReadsAreServedFromAFreshOpenSnapshot` and
 `TestBoardListOpen_SharesOneBoardReadWithCountsAndStatusReads` pin the counts;

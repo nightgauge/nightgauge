@@ -311,8 +311,8 @@ create --body-file` call, so the compact profile (and its tests) pin
   drilldown lists along with the row counts, so a drilldown after a move
   agrees with its row.
 
-  The autonomous scheduler's board status moves now invalidate the daemon's
-  board cache. The scheduler already read boards through that cache for its
+  The autonomous scheduler's board status moves, including the post-merge
+  move to Done, now invalidate the daemon's board cache. The scheduler already read boards through that cache for its
   dependency-graph builds, but it wrote its status moves around it, so for up
   to 90 seconds after a move the daemon could serve the pre-move board to
   `board.listOpen`, `board.counts` and the attention sweeps. The Ready read

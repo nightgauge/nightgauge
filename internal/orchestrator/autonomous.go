@@ -6263,6 +6263,9 @@ func (as *AutonomousScheduler) buildGraph(ctx context.Context) (*depgraph.Graph,
 func (as *AutonomousScheduler) SetBoardCache(cache *boardcache.Cache) {
 	as.boardProvider = depgraph.CachedBoardProvider(as.ghClient, cache)
 	as.boardCache = cache
+	if as.scheduler != nil {
+		as.scheduler.boardCache = cache
+	}
 }
 
 // projectService is the one constructor for the scheduler's board writes. It
