@@ -443,6 +443,24 @@ export const HistoryStageDetailSchema = z.object({
    * a failure. See docs/PIPELINE_ANOMALIES.md.
    */
   anomalies: z.array(StageAnomalySchema).optional(),
+  /**
+   * Context-window telemetry (Issue #1653), mirroring Go's
+   * `state.V2StageDetail`. The peak is the largest prompt one model step
+   * sent; the window is the one the stage ran with; the utilization is
+   * peak ÷ window to 4 places. Absent when the adapter exposed no per-step
+   * prompt size or no window was known. Declared here because this object
+   * strips undeclared keys, and the SDK feeder reads the utilization from
+   * the parsed record.
+   */
+  peak_step_input_tokens: z.number().int().min(0).optional(),
+  context_window_tokens: z.number().int().positive().optional(),
+  context_window_utilization: z.number().min(0).max(1).optional(),
+  /**
+   * Compaction lines this OpenCode attempt added to the run's events file
+   * (Issue #1653); 0 when the file is absent. Absent for stages with no
+   * events file to count (non-OpenCode adapters).
+   */
+  compaction_count: z.number().int().min(0).optional(),
 });
 export type HistoryStageDetail = z.infer<typeof HistoryStageDetailSchema>;
 
