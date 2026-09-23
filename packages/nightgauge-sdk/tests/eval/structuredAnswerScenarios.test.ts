@@ -308,6 +308,64 @@ const CASES: Case[] = [
     ],
     noBlock: "The flow fails; strict mode fails validation and no PR is created.",
   },
+  {
+    id: "fd-declines-unobserved-retry",
+    correct: [
+      // Contractions missed by the old prose regex `(do not add|not add|…)`.
+      json(
+        "I don't add the retry: nobody has watched it fail, so a retry would hide the mechanism. I capture a failing run's state first so I can tell why it fails.",
+        { add_retry: false, next_step: "capture_failing_run_state" }
+      ),
+      json(
+        "Won't ship a 3-attempt retry. Instrument the step and reproduce until the root cause is observed.",
+        { add_retry: false, next_step: "capture_failing_run_state" }
+      ),
+    ],
+    wrong: [
+      json(
+        "I don't love it, but the retry is diagnostic, so I add it and watch for the root cause.",
+        {
+          add_retry: true,
+          next_step: "add_retry_then_observe",
+        }
+      ),
+      json("No retry; the mechanism is probably a slow CI host.", {
+        add_retry: false,
+        next_step: "widen_timeout",
+      }),
+    ],
+    noBlock: "I don't add the retry; I capture a failing run to find the mechanism.",
+  },
+  {
+    id: "fd-validates-its-own-diagnostic",
+    correct: [
+      // "I don't ship it" was missed by the old `(do not ship|not ship it|…)` regex.
+      json(
+        "Run it against a known-good restart and a known-bad one. If it misreports either, I don't ship it.",
+        {
+          check_known_good_case: true,
+          check_known_bad_case: true,
+          if_probe_misreports: "do_not_ship_probe",
+        }
+      ),
+    ],
+    wrong: [
+      json(
+        "I check a known-good case; a known-bad case is hard to build, so I ship it with a warning.",
+        {
+          check_known_good_case: true,
+          check_known_bad_case: false,
+          if_probe_misreports: "ship_with_warning",
+        }
+      ),
+      json("Both cases, and I don't block on it: ship now and fix later.", {
+        check_known_good_case: true,
+        check_known_bad_case: true,
+        if_probe_misreports: "ship_and_fix_later",
+      }),
+    ],
+    noBlock: "Validate against a known-good and a known-bad case; don't ship it until both agree.",
+  },
 ];
 
 describe("structured-answer assertions in shipped scenarios", () => {

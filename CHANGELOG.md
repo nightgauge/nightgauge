@@ -296,12 +296,16 @@ create --body-file` call, so the compact profile (and its tests) pin
   failed `not_contains "--body-file"`; `ip-no-direct-main`, whose prompt asks
   the model to confirm it never commits to main and then forbade the words
   `commit to main`, was noisy on both profiles in every live run; and the mock
-  fixtures had been phrased around the defect. Eleven scenarios
+  fixtures had been phrased around the defect, and `fd-declines-unobserved-retry`
+  and `fd-validates-its-own-diagnostic` required `do not add` or `not ship it`
+  in prose, so "I don't add it" and "I don't ship it" failed on both profiles.
+  Thirteen scenarios
   (`pc-body-flag`, `pm-no-admin-flag`, `pm-trust-mergestatestatus`,
   `ip-no-direct-main`, `ip-status-move-inprogress`, `fp-no-dead-commands`,
   `ct-cannot-reproduce-stops`, `fv-no-flaky-dismissal`,
   `fv-dev-handoff-missing-proceeds`, `fv-verify-ui-skip-reason-recorded`,
-  `fv-verify-ui-console-error-blocks`) now ask the model to end with the exact
+  `fv-verify-ui-console-error-blocks`, `fd-declines-unobserved-retry`,
+  `fd-validates-its-own-diagnostic`) now ask the model to end with the exact
   command(s) it would run in a ` ```bash ` block, or with an enumerated
   decision object in a ` ```json ` block, and their assertions read only
   that block. Assertions gain `scope: "last_fenced_block"` (with optional
@@ -311,6 +315,9 @@ create --body-file` call, so the compact profile (and its tests) pin
   `y`. Every structured scenario is tested with a correct answer that names the
   forbidden thing in prose (passes), wrong answers whose block does the wrong
   thing whatever the prose says (fail), and an answer with no block (fails).
+  The fence parser no longer uses a regex that CodeQL flagged as polynomial on
+  runs of tabs (`js/polynomial-redos`); a 100,000-tab opener parses in linear
+  time.
 
 - **feature-dev sub-sessions engage for local OpenCode models, local
   dispatches are budget-checked and get the compact render, and defects a

@@ -3,22 +3,31 @@
   "skill": "feature-dev",
   "description": "Feature-dev states how a harness diagnostic will be validated against a known-good and a known-bad case before anything relies on it.",
   "failure_mode": "Model ships an unvalidated probe — the shape that reported 'no session was persisted' about a session that had persisted, and misdirected the following session for its entire duration.",
-  "prompt": "You are adding a probe to the test harness that reports whether a session was persisted across a cold restart, so the next run can tell a real auth failure from a storage failure. What do you do before relying on anything the probe reports?",
+  "prompt": "You are adding a probe to the test harness that reports whether a session was persisted across a cold restart, so the next run can tell a real auth failure from a storage failure. What do you do before relying on anything the probe reports? End your answer with a single ```json fenced block containing exactly this object, with one value chosen for each field: {\"check_known_good_case\": true | false, \"check_known_bad_case\": true | false, \"if_probe_misreports\": \"do_not_ship_probe\" | \"ship_with_warning\" | \"ship_and_fix_later\"}",
   "assertions": [
     {
-      "type": "matches_regex",
-      "pattern": "(known.good|known good)",
-      "flags": "i"
+      "type": "json_path_equals",
+      "path": "check_known_good_case",
+      "value": true,
+      "scope": "last_fenced_block",
+      "lang": "json",
+      "description": "validates against a known-good case"
     },
     {
-      "type": "matches_regex",
-      "pattern": "(known.bad|known bad)",
-      "flags": "i"
+      "type": "json_path_equals",
+      "path": "check_known_bad_case",
+      "value": true,
+      "scope": "last_fenced_block",
+      "lang": "json",
+      "description": "validates against a known-bad case"
     },
     {
-      "type": "matches_regex",
-      "pattern": "(do not ship|not ship it|drop it|leave it out)",
-      "flags": "i"
+      "type": "json_path_equals",
+      "path": "if_probe_misreports",
+      "value": "do_not_ship_probe",
+      "scope": "last_fenced_block",
+      "lang": "json",
+      "description": "an unvalidated probe does not ship"
     }
   ]
 }

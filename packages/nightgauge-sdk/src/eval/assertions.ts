@@ -114,8 +114,15 @@ function fencedBlocks(text: string): FencedBlock[] {
   let open: { ch: string; len: number; lang: string; body: string[] } | null = null;
   for (const line of text.split(/\r?\n/)) {
     if (!open) {
-      const m = /^ {0,3}(`{3,}|~{3,})[ \t]*([^\s`]*)[^`]*$/.exec(line);
-      if (m) open = { ch: m[1][0], len: m[1].length, lang: m[2].toLowerCase(), body: [] };
+      // The info string is parsed by hand: a single regex with `[ \t]*`
+      // followed by `[^`]*` is polynomial on whitespace runs (CodeQL
+      // js/polynomial-redos).
+      const m = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+      const info = m ? line.slice(m[0].length) : "";
+      if (m && !info.includes("`")) {
+        const lang = info.trimStart().split(/\s/, 1)[0];
+        open = { ch: m[1][0], len: m[1].length, lang: lang.toLowerCase(), body: [] };
+      }
       continue;
     }
     const close = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);

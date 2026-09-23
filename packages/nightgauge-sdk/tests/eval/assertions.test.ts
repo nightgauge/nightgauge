@@ -204,6 +204,16 @@ describe("fencedBlocks / stripShellComments (internal)", () => {
     ]);
   });
 
+  it("parses a fence opener followed by 100,000 tabs in linear time (CodeQL js/polynomial-redos)", () => {
+    const tabs = "\t".repeat(100_000);
+    const start = performance.now();
+    const blocks = __testing.fencedBlocks(
+      `\`\`\`${tabs}\n${tabs}x\n\`\`\`${tabs}\n\`\`\`${tabs}\``
+    );
+    expect(performance.now() - start).toBeLessThan(1_000);
+    expect(blocks).toEqual([{ lang: "", body: `${tabs}x` }]);
+  });
+
   it("strips word-start # comments outside quotes only", () => {
     expect(
       __testing.stripShellComments(
