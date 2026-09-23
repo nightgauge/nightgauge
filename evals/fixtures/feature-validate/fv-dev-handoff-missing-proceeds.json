@@ -1,14 +1,14 @@
 {
   "haiku": {
-    "text": "The dev-{N}.json handoff is missing, but ground truth from `nightgauge gate verify feature-dev` shows real changes on disk (internal/scan/testcmd.go, cmd/nightgauge/main.go). I proceed to validate against the working tree directly rather than treating the missing handoff as an empty branch.",
+    "text": "The handoff is missing, but this is not 'no implementation work' and there is plenty to validate: git ground truth shows two changed files. I proceed against the working tree.\n\n```json\n{\"action\": \"proceed_against_working_tree\", \"files_to_validate\": [\"internal/scan/testcmd.go\", \"cmd/nightgauge/main.go\"]}\n```",
     "exit_code": 0
   },
   "sonnet": {
-    "text": "The dev-{N}.json handoff is missing, but ground truth from `nightgauge gate verify feature-dev` shows real changes on disk (internal/scan/testcmd.go, cmd/nightgauge/main.go). I proceed to validate against the working tree directly rather than treating the missing handoff as an empty branch.",
+    "text": "The handoff is missing, but this is not 'no implementation work' and there is plenty to validate: git ground truth shows two changed files. I proceed against the working tree.\n\n```json\n{\"action\": \"proceed_against_working_tree\", \"files_to_validate\": [\"internal/scan/testcmd.go\", \"cmd/nightgauge/main.go\"]}\n```",
     "exit_code": 0
   },
   "opus": {
-    "text": "The dev-{N}.json handoff is missing, but ground truth from `nightgauge gate verify feature-dev` shows real changes on disk (internal/scan/testcmd.go, cmd/nightgauge/main.go). I proceed to validate against the working tree directly rather than treating the missing handoff as an empty branch.",
+    "text": "The handoff is missing, but this is not 'no implementation work' and there is plenty to validate: git ground truth shows two changed files. I proceed against the working tree.\n\n```json\n{\"action\": \"proceed_against_working_tree\", \"files_to_validate\": [\"internal/scan/testcmd.go\", \"cmd/nightgauge/main.go\"]}\n```",
     "exit_code": 0
   }
 }

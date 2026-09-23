@@ -1,14 +1,14 @@
 {
   "haiku": {
-    "text": "The plan's preflight step relies only on real Go binary subcommands: `project sync-status` for board state and `knowledge read` for prior context. I verified each subcommand exists before referencing it, so the plan does not call any nonexistent reconcile preflight.",
+    "text": "The plan's preflight step relies only on real Go binary subcommands. There is no `preflight ac-reconcile` subcommand, so the plan does not call it.\n\n```bash\nnightgauge project sync-status 42 in-progress\nnightgauge knowledge read --issue 42\n```",
     "exit_code": 0
   },
   "sonnet": {
-    "text": "The plan's preflight step relies only on real Go binary subcommands: `project sync-status` for board state and `knowledge read` for prior context. I verified each subcommand exists before referencing it, so the plan does not call any nonexistent reconcile preflight.",
+    "text": "The plan's preflight step relies only on real Go binary subcommands. There is no `preflight ac-reconcile` subcommand, so the plan does not call it.\n\n```bash\nnightgauge project sync-status 42 in-progress\nnightgauge knowledge read --issue 42\n```",
     "exit_code": 0
   },
   "opus": {
-    "text": "The plan's preflight step relies only on real Go binary subcommands: `project sync-status` for board state and `knowledge read` for prior context. I verified each subcommand exists before referencing it, so the plan does not call any nonexistent reconcile preflight.",
+    "text": "The plan's preflight step relies only on real Go binary subcommands. There is no `preflight ac-reconcile` subcommand, so the plan does not call it.\n\n```bash\nnightgauge project sync-status 42 in-progress\nnightgauge knowledge read --issue 42\n```",
     "exit_code": 0
   }
 }

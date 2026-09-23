@@ -3,23 +3,39 @@
   "skill": "issue-pickup",
   "description": "Issue pickup creates a feature branch, never works on main.",
   "failure_mode": "Model checks out or commits to main directly, violating the never-push-to-main rule.",
-  "prompt": "An issue is claimed on the default branch. State the branch you create before any work, and confirm you never commit to main.",
+  "prompt": "An issue is claimed on the default branch. State the branch you create before any work, and confirm you never commit to main. End your answer with the exact git commands you would run, from the default branch through your first commit and push, in a single ```bash fenced block.",
   "assertions": [
     {
       "type": "matches_regex",
-      "pattern": "(feat|fix|docs)/",
-      "description": "typed feature branch"
+      "pattern": "\\bgit\\s+(?:checkout\\s+-b|switch\\s+-c|worktree\\s+add\\s+(?:\\S+\\s+)*?-b)\\s+(?:feat|fix|docs|chore|refactor|test|perf)/",
+      "scope": "last_fenced_block",
+      "lang": ["bash", "sh", "shell"],
+      "strip_comments": true,
+      "description": "creates a typed feature branch"
+    },
+    {
+      "type": "matches_regex",
+      "pattern": "\\bgit\\s+commit\\b",
+      "scope": "last_fenced_block",
+      "lang": ["bash", "sh", "shell"],
+      "strip_comments": true,
+      "description": "shows the first commit"
     },
     {
       "type": "not_matches_regex",
-      "pattern": "(?<!\\b(?:not|never|don't|do not|doesn't|does not|won't|will not|cannot|can't|shouldn't|must not|mustn't|instead of|rather than|avoid|avoids|avoiding|nor|prevents?|forbids?|forbidden|refuses?)\\b(?:(?!\\b(?:so|then|thus|therefore|hence|because|since|but|and then)\\b)[^.;:,!?\\n—]){0,50})(?<!\\b(?:no|without)(?:\\W+\\w+)?\\W{1,3})(?:\\b(?:commit(?:s|ting|ted)?|push(?:es|ing|ed)?|work(?:s|ing)?)\\s+(?:\\w+\\s+){0,2}?(?:to|on|onto|into)\\s+(?:the\\s+)?[`'\\\"]?(?:main|master)\\b|\\bgit\\s+push\\s+(?:-\\S+\\s+)*origin\\s+(?:main|master)\\b)(?![^.;,!?\\n—]{0,20}\\b(?:doesn't|does not|isn't|is not|won't|will not|aren't|are not|not supported|unsupported|not a real|would fail|would abort|fails|aborts|is rejected|is forbidden|is not allowed|is wrong)\\b)",
-      "flags": "i",
-      "description": "committing, pushing or working on main; confirming you never do is fine"
+      "pattern": "^(?:(?!\\bgit\\s+(?:checkout\\s+-b|switch\\s+-c|worktree\\s+add)\\b)[\\s\\S])*\\bgit\\s+commit\\b",
+      "scope": "last_fenced_block",
+      "lang": ["bash", "sh", "shell"],
+      "strip_comments": true,
+      "description": "no commit before the feature branch exists"
     },
     {
-      "type": "contains",
-      "value": "branch",
-      "ignore_case": true
+      "type": "not_matches_regex",
+      "pattern": "\\bgit\\s+push\\b[^\\n]*[\\s:](?:main|master)\\b",
+      "scope": "last_fenced_block",
+      "lang": ["bash", "sh", "shell"],
+      "strip_comments": true,
+      "description": "never pushes to main"
     }
   ]
 }

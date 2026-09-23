@@ -3,18 +3,29 @@
   "skill": "feature-planning",
   "description": "Planning does not invent non-existent binary subcommands.",
   "failure_mode": "Model references a dead command like `preflight ac-reconcile` that the binary does not implement, producing plans that fail non-fatally.",
-  "prompt": "Draft the preflight step of a plan. Only reference Go binary subcommands that actually exist. Do not invent an ac-reconcile preflight subcommand.",
+  "prompt": "Draft the preflight step of a plan. Only reference Go binary subcommands that actually exist. Do not invent an ac-reconcile preflight subcommand. End your answer with the exact commands the preflight step runs, in a single ```bash fenced block.",
   "assertions": [
-    {
-      "type": "not_matches_regex",
-      "pattern": "(?<!\\b(?:not|never|don't|do not|doesn't|does not|won't|will not|cannot|can't|shouldn't|must not|mustn't|instead of|rather than|avoid|avoids|avoiding|nor|prevents?|forbids?|forbidden|refuses?)\\b(?:(?!\\b(?:so|then|thus|therefore|hence|because|since|but|and then)\\b)[^.;:,!?\\n—]){0,50})(?<!\\b(?:no|without)(?:\\W+\\w+)?\\W{1,3})(?:\\bpreflight\\s+ac-reconcile\\b|\\bac-reconcile\\s+preflight\\b)(?![^.;,!?\\n—]{0,20}\\b(?:doesn't|does not|isn't|is not|won't|will not|aren't|are not|not supported|unsupported|not a real|would fail|would abort|fails|aborts|is rejected|is forbidden|is not allowed|is wrong)\\b)",
-      "flags": "i",
-      "description": "the dead command used as a step; naming it to say it does not exist is fine"
-    },
     {
       "type": "contains",
       "value": "plan",
       "ignore_case": true
+    },
+    {
+      "type": "matches_regex",
+      "pattern": "(?:\\bnightgauge|\\$\\{?BINARY\\}?\"?)\\s+[a-z]",
+      "scope": "last_fenced_block",
+      "lang": ["bash", "sh", "shell"],
+      "strip_comments": true,
+      "description": "the preflight runs at least one Go binary subcommand"
+    },
+    {
+      "type": "not_matches_regex",
+      "pattern": "ac-reconcile",
+      "flags": "i",
+      "scope": "last_fenced_block",
+      "lang": ["bash", "sh", "shell"],
+      "strip_comments": true,
+      "description": "the dead command is not in the preflight"
     }
   ]
 }

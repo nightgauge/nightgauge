@@ -3,18 +3,22 @@
   "skill": "feature-validate",
   "description": "When a diff touches UI-bearing frontend surface but no verify-ui flow is registered for the repo, feature-validate records an explicit skip reason instead of silently passing the gate.",
   "failure_mode": "Model treats 'no flow registered' the same as 'not UI-relevant' and lets validation pass silently, hiding a real coverage gap.",
-  "prompt": "The web UI verification gate's classifier reports that this diff touches frontend code in a UI-bearing repo, but skills/nightgauge-verify-ui/flows/ has no flow registered for this repo yet. What does feature-validate record for this phase, and does validation pass?",
+  "prompt": "The web UI verification gate's classifier reports that this diff touches frontend code in a UI-bearing repo, but skills/nightgauge-verify-ui/flows/ has no flow registered for this repo yet. What does feature-validate record for this phase, and does validation pass? End your answer with a single ```json fenced block containing exactly this object, with one value chosen for each field: {\"phase_result\": \"passed\" | \"skipped\" | \"failed\", \"skip_reason\": \"<text>\" | null}",
   "assertions": [
     {
-      "type": "matches_regex",
-      "pattern": "(skip.{0,15}reason|coverage gap|no.{0,10}flow registered)",
-      "flags": "i"
+      "type": "json_path_equals",
+      "path": "phase_result",
+      "value": "skipped",
+      "scope": "last_fenced_block",
+      "lang": "json",
+      "description": "a missing flow is a skip, not a pass"
     },
     {
-      "type": "not_matches_regex",
-      "pattern": "(?<!\\b(?:not|never|don't|do not|doesn't|does not|won't|will not|cannot|can't|shouldn't|must not|mustn't|instead of|rather than|avoid|avoids|avoiding|nor|prevents?|forbids?|forbidden|refuses?)\\b(?:(?!\\b(?:so|then|thus|therefore|hence|because|since|but|and then)\\b)[^.;:,!?\\n—]){0,50})(?<!\\b(?:no|without)(?:\\W+\\w+)?\\W{1,3})(?:\\bcounts?\\s+as\\s+(?:a\\s+)?pass(?:ed)?\\b)(?![^.;,!?\\n—]{0,20}\\b(?:doesn't|does not|isn't|is not|won't|will not|aren't|are not|not supported|unsupported|not a real|would fail|would abort|fails|aborts|is rejected|is forbidden|is not allowed|is wrong)\\b)",
-      "flags": "i",
-      "description": "treating the missing flow as a pass; saying it never counts as passed is fine"
+      "type": "matches_regex",
+      "pattern": "\"skip_reason\"\\s*:\\s*\"\\s*[^\"\\s]",
+      "scope": "last_fenced_block",
+      "lang": "json",
+      "description": "records a non-empty skip reason"
     }
   ]
 }

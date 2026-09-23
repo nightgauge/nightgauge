@@ -279,24 +279,29 @@ create --body-file` call, so the compact profile (and its tests) pin
 
 ### Fixed
 
-- **Skill-eval scenarios no longer fail a correct answer for naming the
-  forbidden thing to reject it.** `not_contains` cannot tell a recommendation
-  from a warning. Measured on 2026-09-23, the live sonnet answer to
-  `pc-body-flag` was correct ("the Go binary has no `--body-file` flag, so …
-  pass it inline with `--body`") and failed `not_contains "--body-file"`;
-  `ip-no-direct-main`, whose prompt asks the model to confirm it never commits
-  to main and then forbade the words `commit to main`, was noisy on both
-  profiles in every live run, and the mock fixtures had been phrased around
-  the defect. A new `not_matches_regex` assertion fails only when its pattern
-  matches, and nine scenarios (`pc-body-flag`, `pm-no-admin-flag`,
-  `ip-no-direct-main`, `ip-status-move-inprogress`, `fv-no-flaky-dismissal`,
+- **Skill-eval scenarios judge the model's decision, not its prose, so a
+  correct answer is no longer failed for naming the forbidden thing to reject
+  it.** `not_contains` cannot tell a recommendation from a warning. Measured on
+  2026-09-23, the live sonnet answer to `pc-body-flag` was correct ("the Go
+  binary has no `--body-file` flag, so … pass it inline with `--body`") and
+  failed `not_contains "--body-file"`; `ip-no-direct-main`, whose prompt asks
+  the model to confirm it never commits to main and then forbade the words
+  `commit to main`, was noisy on both profiles in every live run; and the mock
+  fixtures had been phrased around the defect. Eleven scenarios
+  (`pc-body-flag`, `pm-no-admin-flag`, `pm-trust-mergestatestatus`,
+  `ip-no-direct-main`, `ip-status-move-inprogress`, `fp-no-dead-commands`,
+  `ct-cannot-reproduce-stops`, `fv-no-flaky-dismissal`,
   `fv-dev-handoff-missing-proceeds`, `fv-verify-ui-skip-reason-recorded`,
-  `ct-cannot-reproduce-stops`, `fp-no-dead-commands`) now forbid the
-  recommending or invoking form behind a clause-local negation guard. Each is
-  tested with a correct answer that names the thing negatively (passes) and a
-  wrong answer that recommends it (fails on the new assertion itself). Two
-  `not_contains` stay: `requestReviews` and "visual assertion passed so it's
-  fine" appear only when the model does the wrong thing.
+  `fv-verify-ui-console-error-blocks`) now ask the model to end with the exact
+  command(s) it would run in a ` ```bash ` block, or with an enumerated
+  decision object in a ` ```json ` block, and their assertions read only
+  that block. Assertions gain `scope: "last_fenced_block"` (with optional
+  `lang` and `strip_comments`), a `not_matches_regex` type and a
+  `json_path_equals` type. A missing, unclosed or unparseable block fails the
+  assertion, negative ones included. The schema rejects the sticky regex flag
+  `y`. Every structured scenario is tested with a correct answer that names the
+  forbidden thing in prose (passes), wrong answers whose block does the wrong
+  thing whatever the prose says (fail), and an answer with no block (fails).
 
 - **A cancelled or timed-out Go-direct stage now kills its whole process
   group (#1651).** `execution.Manager` spawned stages as group leaders but
