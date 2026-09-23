@@ -18,6 +18,14 @@ and this project adheres to
 
 ### Fixed
 
+- The license key no longer disappears for the CLI and daemon once the
+  extension has run. Activating a license, starting a trial, saving the key in
+  Settings and the startup migration now also store it in the OS keychain
+  through `nightgauge auth license set`, so `nightgauge serve` and
+  `nightgauge pipeline backfill` from a terminal still find it. The key is
+  removed from `~/.nightgauge/config.yaml` only after that succeeds; if it
+  fails, the key stays and one warning names the command to run.
+
 - An attention sweep that outlives the 30-second request deadline no longer
   leaves the window "never swept": the daemon finishes it and its cards still
   arrive, and later triggers in that window ask the board change probe

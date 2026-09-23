@@ -20,6 +20,7 @@
 import * as vscode from "vscode";
 import { IpcClient } from "../services/IpcClient";
 import { SecretStorageService, SECRET_KEYS } from "../services/SecretStorageService";
+import { persistLicenseKey } from "../services/licenseKeychainBridge";
 import type { LicensePreflight } from "../platform/LicensePreflight";
 import type { SessionManager } from "../platform/SessionManager";
 import type { IOnDemandTokenRefresher } from "../platform/TokenRefreshManager";
@@ -139,7 +140,7 @@ export function registerStartTrialCommand(
       );
       return;
     }
-    await secrets.setSecret(SECRET_KEYS.platformLicenseKey, result.licenseKey);
+    await persistLicenseKey(secrets, SECRET_KEYS.platformLicenseKey, result.licenseKey);
     licensePreflight?.clearCache();
     // Persist the trial record so the status bar can show a countdown (the
     // license `validate` response carries neither a trial flag nor the run

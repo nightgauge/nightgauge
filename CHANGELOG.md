@@ -486,6 +486,18 @@ create --body-file` call, so the compact profile (and its tests) pin
 
 ### Fixed
 
+- **The CLI and daemon keep the license key after the extension runs
+  (#2027).** The extension moved the key out of the machine config into VS
+  Code SecretStorage, which only VS Code can read, so a later
+  `nightgauge serve` or `pipeline backfill` from a terminal found no license. Every flow
+  that stores the key — activation, trial start, the Settings panel and the
+  startup migration — now also runs `nightgauge auth license set` with the key
+  on stdin, and clearing it in Settings runs `auth license clear`. The
+  machine-config line is deleted only after the keychain write succeeds; on
+  failure the key stays where it was and one warning names the command to run.
+  A key migrated by an earlier version is copied to the keychain on the next
+  activation.
+
 - **`branch-merged-check.sh` no longer calls an update-branch merge KEEP under
   load.** The parent-of-merged-head test piped `printf` into `grep -qx` under
   `pipefail`; when `grep` exited at the first match, `printf` took SIGPIPE and

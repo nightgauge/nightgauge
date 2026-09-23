@@ -181,6 +181,16 @@ Secret Service, a container, an SSH session whose login keychain is locked —
 a stalled D-Bus degrades to the file rather than hanging. `status` reports the
 keychain as unavailable and why. The environment variable works everywhere.
 
+The VS Code extension keeps its own copy in VS Code SecretStorage and writes
+this entry through the same command: activating a license, starting a trial,
+saving a key in Settings and the startup migration all pipe the key to
+`nightgauge auth license set --json` on stdin (never argv or environment), and
+clearing the key in Settings runs `auth license clear`. The extension removes
+`platform.license_key` from the machine-tier file only after the keychain
+write succeeded; when it fails, the SecretStorage copy stays and one warning
+names the command to run by hand. On activation it copies a key already in
+SecretStorage to the keychain when the CLI has none stored.
+
 On macOS the stored value carries go-keyring's `go-keyring-base64:` prefix, so
 read it through `nightgauge auth license status`, not by decoding `security`
 output.

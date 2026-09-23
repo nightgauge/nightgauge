@@ -42,6 +42,10 @@ import { getOpenCodeModel } from "../../utils/resolvers/modelResolver";
 import { Logger } from "../../utils/logger";
 import type { LmStudioModelInfo } from "../../services/LmStudioService";
 import { SecretStorageService, SECRET_KEYS } from "../../services/SecretStorageService";
+import {
+  persistLicenseKey,
+  vscodeLicenseKeychainBridge,
+} from "../../services/licenseKeychainBridge";
 import { IpcClient } from "../../services/IpcClient";
 import type { ForgeInstanceRow } from "./ForgeInstancesSection";
 import type { ForgeListEntry, TierAuditEntry } from "../../services/IpcClientBase";
@@ -949,10 +953,22 @@ export class SettingsPanel implements vscode.Disposable {
           const storageKey = secretKeyMap[path];
           if (storageKey) {
             try {
+              // The license key also lives in the Go binary's keychain entry
+              // (#2027). Touch it only on a real change, so saving unrelated
+              // settings never spawns the CLI or clears a key set from a
+              // terminal.
+              const previous = await secretSvc.getSecret(storageKey);
               if (value === "") {
                 await secretSvc.deleteSecret(storageKey);
-              } else {
-                await secretSvc.setSecret(storageKey, value);
+                if (previous && storageKey === SECRET_KEYS.platformLicenseKey) {
+                  await vscodeLicenseKeychainBridge().clear();
+                }
+              } else if (value !== previous) {
+                if (storageKey === SECRET_KEYS.platformLicenseKey) {
+                  await persistLicenseKey(secretSvc, storageKey, value);
+                } else {
+                  await secretSvc.setSecret(storageKey, value);
+                }
               }
             } catch (err) {
               console.warn(`[SettingsPanel] SecretStorage mirror failed for ${path}:`, err);

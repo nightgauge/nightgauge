@@ -124,6 +124,10 @@ import { AgentRegistrationService } from "../services/AgentRegistrationService";
 import { IpcClient } from "../services/IpcClient";
 import { SecretStorageService, SECRET_KEYS } from "../services/SecretStorageService";
 import { getGlobalConfigPath } from "../utils/globalConfigResolver";
+import {
+  migrateLicenseKeyAtStartup,
+  vscodeLicenseKeychainBridge,
+} from "../services/licenseKeychainBridge";
 import { migrateLegacyGeminiApiKey } from "../commands/migrateConfig";
 import { NotifierStatusTracker } from "../services/notifications/NotifierStatusTracker";
 import { OAuthDeviceFlowService } from "../services/OAuthDeviceFlowService";
@@ -499,88 +503,38 @@ export async function initializeServices(
   }
 
   // ── License key — startup resolution (#3519, #3997) ────────────────────
-  // The license key is a machine-tier key: it lives in
-  // ~/.nightgauge/config.yaml and is mirrored to SecretStorage so the
-  // SecretStorage-first runtime readers (LicensePreflight, forwardPlatformEnv)
-  // see it. On startup we:
-  //   1. Strip any license key still embedded in the PROJECT config.yaml — it
-  //      must never sit in a committed file — seeding SecretStorage from it.
-  //   2. Otherwise seed SecretStorage from the MACHINE config.yaml when
-  //      SecretStorage is empty (fresh machine / new install).
+  // The license key lives in SecretStorage for the extension's runtime
+  // readers (LicensePreflight, forwardPlatformEnv) and in the Go binary's
+  // OS-keychain entry for the CLI and a terminal-started daemon, written
+  // through `nightgauge auth license set` (licenseKeychainBridge). On startup
+  // migrateLicenseKeyAtStartup strips any key from the committed project
+  // config, moves a machine-config key into both stores (deleting the YAML
+  // line only once the keychain holds it), and copies an already-migrated
+  // SecretStorage key to the keychain when the CLI has none.
   // Cache the resolved key for sync consumers (LicensePreflight, TelemetryUploader).
   let cachedLicenseKey: string | undefined;
-
-  /** Extract platform.license_key from a YAML file via a line scan (no parser). */
-  const extractLicenseKeyLine = (raw: string): { key?: string; lineIndex: number } => {
-    const lines = raw.split("\n");
-    let inPlatform = false;
-    for (let i = 0; i < lines.length; i++) {
-      const trimmed = lines[i].trim();
-      if (trimmed === "platform:") {
-        inPlatform = true;
-        continue;
-      }
-      if (
-        inPlatform &&
-        trimmed &&
-        !trimmed.startsWith("#") &&
-        /^[a-z_]+:/.test(trimmed) &&
-        !lines[i].startsWith(" ") &&
-        !lines[i].startsWith("\t")
-      ) {
-        inPlatform = false;
-        continue;
-      }
-      if (inPlatform) {
-        const m = trimmed.match(/^license_key:\s*(.+)$/);
-        if (m) {
-          return { key: m[1].replace(/^['"]|['"]$/g, "").trim(), lineIndex: i };
-        }
-      }
-    }
-    return { lineIndex: -1 };
-  };
 
   const primaryWorkspaceForMigration = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (secretService) {
     void (async () => {
       const fsLib = await import("fs");
       const pathLib = await import("path");
-
-      // 1. Strip + migrate any key embedded in the project config (committed).
-      if (primaryWorkspaceForMigration) {
-        const cfgPath = pathLib.join(primaryWorkspaceForMigration, ".nightgauge", "config.yaml");
-        if (fsLib.existsSync(cfgPath)) {
-          const raw = fsLib.readFileSync(cfgPath, "utf-8");
-          const { key: foundKey, lineIndex } = extractLicenseKeyLine(raw);
-          if (foundKey) {
-            await secretService.setSecret(SECRET_KEYS.platformLicenseKey, foundKey);
-            cachedLicenseKey = foundKey;
-            const lines = raw.split("\n");
-            lines.splice(lineIndex, 1);
-            fsLib.writeFileSync(cfgPath, lines.join("\n"), "utf-8");
-            return;
-          }
-        }
-      }
-
-      // 2. Seed SecretStorage from the machine config when it has no value yet.
-      cachedLicenseKey = await secretService.getSecret(SECRET_KEYS.platformLicenseKey);
-      if (!cachedLicenseKey) {
-        const machineCfgPath = getGlobalConfigPath();
-        if (fsLib.existsSync(machineCfgPath)) {
-          const machineRaw = fsLib.readFileSync(machineCfgPath, "utf-8");
-          const { key: machineKey, lineIndex } = extractLicenseKeyLine(machineRaw);
-          if (machineKey) {
-            await secretService.setSecret(SECRET_KEYS.platformLicenseKey, machineKey);
-            cachedLicenseKey = machineKey;
-            const lines = machineRaw.split("\n");
-            lines.splice(lineIndex, 1);
-            fsLib.writeFileSync(machineCfgPath, lines.join("\n"), "utf-8");
-          }
-        }
-      }
-    })();
+      cachedLicenseKey = await migrateLicenseKeyAtStartup({
+        fs: fsLib,
+        secrets: secretService,
+        bridge: vscodeLicenseKeychainBridge(),
+        secretKey: SECRET_KEYS.platformLicenseKey,
+        projectConfigPath: primaryWorkspaceForMigration
+          ? pathLib.join(primaryWorkspaceForMigration, ".nightgauge", "config.yaml")
+          : undefined,
+        machineConfigPath: getGlobalConfigPath(),
+      });
+    })().catch((err) =>
+      console.warn(
+        "[services] license key migration failed:",
+        err instanceof Error ? err.message : err
+      )
+    );
   }
 
   // Keep cache in sync when user updates the license key through the Settings panel.
