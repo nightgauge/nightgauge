@@ -196,6 +196,15 @@ with no block (must fail). The mock fixtures are written in the structured
 format, with prose that names the forbidden token negatively, so mock mode
 exercises the same path.
 
+Two limits are known and accepted:
+
+- Assertions match literal text. A token split on purpose
+  (`F="--adm""in"; gh pr merge $F`) evades a `not_matches_regex`. These are
+  behavioural regression checks, not a security boundary.
+- A block ends at the first bare closing fence. A heredoc inside the block
+  whose body contains a ` ``` ` line cuts it short, so a correct answer can
+  fail. No shipped scenario asks for fenced content inside its command.
+
 ## Mock vs. live mode
 
 Two tiers, mirroring the `PLATFORM_TEST_URL` pattern from #2092:
