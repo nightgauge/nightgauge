@@ -298,7 +298,7 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	// is also the adapter's own cap where it has one (--max-turns, OpenCode's
 	// steps), set here so every hook below sees it.
 	stageLabel := fmt.Sprintf("%s#%d %s", opts.Repo, opts.IssueNumber, opts.Stage)
-	budget := config.ResolveStageBudget(opts.StageBudgets, opts.Stage, stageIsZeroCost(adapter.Name(), runOpts.Model))
+	budget := config.ResolveStageBudget(opts.StageBudgets, opts.Stage, stageCost(adapter.Name(), runOpts.Model, worktreeDir))
 	for _, warning := range budget.Warnings {
 		fmt.Fprintf(os.Stderr, "%s %s: %s\n", StageBudgetMarker, stageLabel, warning)
 	}
@@ -876,8 +876,6 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 
 	// Wait for output to drain, then wait for process
 	wg.Wait()
-	// The readers are done, so the stage has ended: its wall clock stops.
-	stageBudget.disarm()
 	// The two readers are done — the process exited (or was killed) on its
 	// own, so the operator-install-risk watchdog above no longer needs to
 	// wait out the rest of its bound: tell it to stop, and wait for it to
@@ -932,6 +930,10 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	// keeps the window a concurrent CancelWithGrace could still be blocked in
 	// its own Process.Wait() as short as possible.
 	close(execution.done)
+	// The stage is reaped, so its wall clock stops here, not when its output
+	// closed: a child that closes stdout and stderr and keeps running is
+	// still bounded (#1652).
+	stageBudget.disarm()
 	// A stage stopped at a stage budget: check that its whole process group
 	// is gone, now the leader is reaped, and end its stderr with the marker
 	// the budget-enforcer terminal rule classifies.

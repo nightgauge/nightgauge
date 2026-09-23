@@ -259,6 +259,79 @@ func TestStageBudgetOpenCodeTokensStopAfterTheCrossingEvent(t *testing.T) {
 	}
 }
 
+// TestStageBudgetGrokTokensSumThePerTurnSnapshots: grok's usage events are
+// each one turn's own snapshot (testdata/README.md), which the accumulator
+// assigns rather than sums. A grok stage repeating the real capture's first
+// usage event (3593 in, 63 out, 28 reasoning: 3684 a turn) against
+// max_tokens 20000 is stopped at the sixth (22104), as it streams, not at
+// its end event.
+func TestStageBudgetGrokTokensSumThePerTurnSnapshots(t *testing.T) {
+	var usage string
+	for _, line := range strings.Split(readTestdata(t, "grok_stream_real_capture.jsonl"), "\n") {
+		if strings.HasPrefix(line, `{"type":"usage"`) {
+			usage = line
+			break
+		}
+	}
+	if !strings.Contains(usage, `"input_tokens":3593`) {
+		t.Fatalf("the capture's first usage event is not the one this test counts: %s", usage)
+	}
+	path := filepath.Join(t.TempDir(), "usage.jsonl")
+	if err := os.WriteFile(path, []byte(usage+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	adapter := &budgetFakeAdapter{
+		name:   "grok-budget-fake",
+		script: fmt.Sprintf(`for i in 1 2 3 4 5 6 7 8 9 10; do cat %q; sleep 0.15; done`, path),
+	}
+	out := runBudgetStage(t, adapter, map[string]config.StageBudget{"default": {MaxTokens: 20_000}}, 30*time.Second)
+	b := out.result.StageBudgetExceeded
+	if b == nil || b.Dimension != StageBudgetTokens || b.Observed != 22_104 || b.Limit != 20_000 {
+		t.Fatalf("StageBudgetExceeded = %+v, want tokens observed 22104 limit 20000\nstderr:\n%s", b, out.result.Stderr)
+	}
+	if n := strings.Count(out.result.Stdout, `"type":"usage"`); n > 7 {
+		t.Errorf("the stage printed %d of its 10 turns: it was not stopped at the sixth as the stream arrived", n)
+	}
+}
+
+// TestStageBudgetClaudeMessagesWithoutAnIdEachCountAsATurn: assistant events
+// that carry no message id cannot be told apart, so each counts as a turn;
+// folded into one, a stage of them would never reach its turn budget.
+func TestStageBudgetClaudeMessagesWithoutAnIdEachCountAsATurn(t *testing.T) {
+	e := newStageBudgetEnforcer(config.ResolvedStageBudget{MaxTurns: 3}, StreamFormatClaude, time.Minute)
+	acc := &TokenAccumulator{}
+	line := `{"type":"assistant","message":{"content":[{"type":"tool_use"}]}}`
+	for i := 1; i <= 5; i++ {
+		event, updated := acc.ParseLine(StreamFormatClaude, line)
+		if e.observe(event, updated, acc) {
+			if i != 3 {
+				t.Fatalf("the turn budget fired at id-less message %d, want 3", i)
+			}
+			return
+		}
+	}
+	t.Fatal("five id-less tool-using messages never reached max_turns 3")
+}
+
+// TestStageBudgetWallClockBindsAChildThatClosedItsOutput: a stage that closes
+// stdout and stderr and keeps running is still stopped at its wall clock,
+// stamped, and its group checked: the wall clock runs until the stage is
+// reaped, not until its output closes.
+func TestStageBudgetWallClockBindsAChildThatClosedItsOutput(t *testing.T) {
+	adapter := &budgetFakeAdapter{
+		name:   "claude-budget-fake",
+		script: `exec >/dev/null 2>&1; sleep 30`,
+	}
+	out := runBudgetStage(t, adapter, map[string]config.StageBudget{"default": {MaxWallClock: config.StageBudgetDuration(time.Second)}}, 15*time.Second)
+	b := out.result.StageBudgetExceeded
+	if b == nil || b.Dimension != StageBudgetWallClock {
+		t.Fatalf("StageBudgetExceeded = %+v, want a wall_clock breach (ran %s)", b, out.elapsed)
+	}
+	if out.elapsed > 8*time.Second {
+		t.Errorf("the stage ran %s: want it stopped at about 1s, well before its 15s timeout", out.elapsed)
+	}
+}
+
 // TestStageBudgetWallClockStopsAContinuouslyStreamingStage: a stage that
 // prints a line every 100 ms, so it is never idle, under max_wall_clock 1s
 // and a 10s stage timeout is stopped at about 1s by the wall-clock budget,
@@ -348,7 +421,7 @@ func TestStageBudgetUnlimitedWarnsOnEveryDispatch(t *testing.T) {
 	budgets := map[string]config.StageBudget{"default": {MaxTurns: config.StageBudgetUnlimited}}
 	for i := 1; i <= 2; i++ {
 		out := runBudgetStage(t, adapter, budgets, 10*time.Second)
-		if !strings.Contains(out.logged, StageBudgetMarker) || !strings.Contains(out.logged, "no turns limit") {
+		if !strings.Contains(out.logged, StageBudgetMarker) || !strings.Contains(out.logged, "no turn budget") {
 			t.Errorf("dispatch %d logged no unlimited-turns warning:\n%s", i, out.logged)
 		}
 		if got := adapter.maxTurns.Load(); got != 0 {
@@ -376,26 +449,46 @@ func TestStageBudgetStampsClassifyAsBudgetExceeded(t *testing.T) {
 	}
 }
 
-// TestStageIsZeroCost pins which stages the zero-cost rule covers: a model
-// server the operator runs and a model the registry prices at $0, but not a
-// hosted model the registry merely cannot price.
-func TestStageIsZeroCost(t *testing.T) {
+// TestStageCost pins which stages the zero-cost rule covers: a model server
+// the operator runs, including an endpoint the machine-tier opencode: block
+// declares as lm-studio or ollama under its own id, and a model the registry
+// prices at $0. A hosted model the registry cannot price is unpriced, not
+// zero-cost.
+func TestStageCost(t *testing.T) {
+	isolateOpenCodeHome(t)
+	writeOpenCodeMachineConfig(t, `opencode:
+  endpoints:
+    - id: gpubox
+      provider: lm-studio
+      base_url: http://127.0.0.1:1234/v1
+      limit:
+        context: 131072
+        output: 8192
+    - id: gateway
+      provider: openai-compatible
+      base_url: http://127.0.0.1:4000/v1
+      limit:
+        context: 131072
+        output: 8192
+`)
 	for _, tc := range []struct {
 		adapter, model string
-		want           bool
+		want           config.StageCost
 	}{
-		{"opencode", "lmstudio/qwen/qwen3.8-27b", true},
-		{"opencode", "ollama/llama3", true},
-		{"lm-studio", "qwen", true},
-		{"ollama", "llama3", true},
-		{"copilot", "sonnet", true},
-		{"claude", "sonnet", false},
-		{"claude", "fable", false},
-		{"opencode", "anthropic/claude-sonnet-5", false},
-		{"claude", "claude-unlisted-model", false},
+		{"opencode", "lmstudio/qwen/qwen3.8-27b", config.StageZeroCost},
+		{"opencode", "ollama/llama3", config.StageZeroCost},
+		{"opencode", "gpubox/qwen3-coder", config.StageZeroCost},
+		{"opencode", "gateway/some-model", config.StageUnpriced},
+		{"lm-studio", "qwen", config.StageZeroCost},
+		{"ollama", "llama3", config.StageZeroCost},
+		{"copilot", "sonnet", config.StageZeroCost},
+		{"claude", "sonnet", config.StagePriced},
+		{"claude", "fable", config.StagePriced},
+		{"opencode", "anthropic/claude-sonnet-5", config.StagePriced},
+		{"claude", "claude-unlisted-model", config.StageUnpriced},
 	} {
-		if got := stageIsZeroCost(tc.adapter, tc.model); got != tc.want {
-			t.Errorf("stageIsZeroCost(%q, %q) = %v, want %v", tc.adapter, tc.model, got, tc.want)
+		if got := stageCost(tc.adapter, tc.model, ""); got != tc.want {
+			t.Errorf("stageCost(%q, %q) = %v, want %v", tc.adapter, tc.model, got, tc.want)
 		}
 	}
 }

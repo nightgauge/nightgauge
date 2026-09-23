@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -49,18 +50,52 @@ var stageBudgetKillGrace = 10 * time.Second
 // member of its process group is left. A variable so a test can shorten it.
 var stageBudgetReapWindow = 2 * time.Second
 
-// stageIsZeroCost reports whether a stage dispatched on adapter with model is
-// on a zero-cost provider, one no USD cap can bind: a model server the
-// operator runs, or a model the registry prices at $0. A model the registry
-// cannot price is not zero-cost: that is a gap in the registry, not a free
-// model, and treating it as one would give a hosted stage the local turn
-// default.
-func stageIsZeroCost(adapter, model string) bool {
+// stageCost says what the model registry makes of a stage dispatched on
+// adapter with model in worktreeDir (#1652). Zero-cost is a provider no USD
+// cap can bind: a model server the operator runs, or a model the registry
+// prices at $0. For opencode that includes an endpoint the machine-tier
+// `opencode:` block declares as lm-studio or ollama, whose id
+// models.ProviderFor reads as "other". A hosted model the registry cannot
+// price is unpriced, not zero-cost: that is a registry gap, not a free model.
+func stageCost(adapter, model, worktreeDir string) config.StageCost {
 	if models.IsLocalProvider(models.ProviderFor(adapter, model)) {
-		return true
+		return config.StageZeroCost
 	}
 	cost, priced := tokens.CalculateCostFor(adapter, model, tokens.TokenCounts{Input: 1_000_000, Output: 1_000_000})
-	return priced && cost == 0
+	switch {
+	case priced && cost == 0:
+		return config.StageZeroCost
+	case priced:
+		return config.StagePriced
+	case adapter == "opencode" && openCodeDeclaredLocalEndpoint(model, worktreeDir):
+		return config.StageZeroCost
+	}
+	return config.StageUnpriced
+}
+
+// openCodeDeclaredLocalEndpoint reports whether model's provider key is an
+// endpoint the machine-tier `opencode:` block declares as a model server the
+// operator runs (lm-studio or ollama). A config that cannot be read declares
+// nothing here; the dispatch's own preparation refuses it later.
+func openCodeDeclaredLocalEndpoint(model, worktreeDir string) bool {
+	key, _, ok := strings.Cut(model, "/")
+	if !ok || key == "" {
+		return false
+	}
+	settings, err := config.LoadOpenCodeConfig(worktreeDir)
+	if err != nil {
+		return false
+	}
+	endpoints, err := adapters.OpenCodeEndpoints(settings)
+	if err != nil {
+		return false
+	}
+	for _, ep := range endpoints {
+		if ep.ID == key {
+			return models.IsLocalProvider(ep.Provider)
+		}
+	}
+	return false
 }
 
 // stageBudgetEnforcer holds one stage's budget and what the stream has used
@@ -75,6 +110,9 @@ type stageBudgetEnforcer struct {
 	// claude message ids already counted, so a turn's blocks count once.
 	turns int
 	seen  map[string]bool
+	// grokUsageSum sums grok's per-turn usage snapshots, which the
+	// accumulator does not: it assigns each, so it holds only the latest.
+	grokUsageSum int
 
 	started time.Time
 	timer   *time.Timer
@@ -126,7 +164,15 @@ func (e *stageBudgetEnforcer) observe(event *StreamEvent, tokenUpdated bool, acc
 		return false
 	}
 	if tokenUpdated && e.limits.MaxTokens > 0 {
-		if used := stageBudgetTokensUsed(acc); used > e.limits.MaxTokens {
+		used := stageBudgetTokensUsed(acc)
+		if e.format == StreamFormatGrok && event != nil && event.Type == "usage" && event.Usage != nil {
+			// Grok's usage events are each its own turn's snapshot, and the
+			// accumulator keeps the latest (the end event carries the
+			// session total), so the running total is their sum.
+			e.grokUsageSum += event.Usage.InputTokens + event.Usage.OutputTokens + event.Usage.CacheCreationInput
+		}
+		used = max(used, e.grokUsageSum)
+		if used > e.limits.MaxTokens {
 			return e.record(StageBudgetTokens, int64(used), int64(e.limits.MaxTokens))
 		}
 	}
@@ -168,7 +214,10 @@ func (e *stageBudgetEnforcer) countTurn(event *StreamEvent) bool {
 		if e.seen == nil {
 			e.seen = map[string]bool{}
 		}
-		if !e.seen[id] {
+		// A message without an id cannot be told apart from the next, so
+		// each counts as a turn of its own: over-counting stops a stage
+		// early, under-counting would never stop it.
+		if id == "" || !e.seen[id] {
 			e.seen[id] = true
 			e.turns++
 		}

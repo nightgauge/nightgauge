@@ -1542,14 +1542,14 @@ pipeline:
 	if err != nil {
 		t.Fatalf("LoadMerged: %v", err)
 	}
-	got := cfg.Pipeline.ResolveStageBudget("feature-dev", false)
+	got := cfg.Pipeline.ResolveStageBudget("feature-dev", StagePriced)
 	if got.MaxTurns != 120 || got.MaxWallClock != 90*time.Minute || got.MaxTokens != DefaultStageMaxTokens {
 		t.Errorf("feature-dev budget = %+v, want the override: 120 turns, 90m, the default %d tokens", got, DefaultStageMaxTokens)
 	}
 	if len(got.Warnings) != 0 {
 		t.Errorf("feature-dev warnings = %q, want none", got.Warnings)
 	}
-	other := cfg.Pipeline.ResolveStageBudget("pr-create", false)
+	other := cfg.Pipeline.ResolveStageBudget("pr-create", StagePriced)
 	if other.MaxTurns != 300 || other.MaxWallClock != DefaultStageMaxWallClock {
 		t.Errorf("pr-create budget = %+v, want the default entry's 300 turns and the built-in wall clock", other)
 	}
@@ -1559,12 +1559,12 @@ pipeline:
 // for a workspace that configures nothing, hosted and zero-cost.
 func TestStageBudgetsNoConfigResolvesToTheADRDefaults(t *testing.T) {
 	var none *PipelineConfig
-	paid := none.ResolveStageBudget("feature-dev", false)
+	paid := none.ResolveStageBudget("feature-dev", StagePriced)
 	want := ResolvedStageBudget{MaxTurns: 400, MaxWallClock: 4 * time.Hour, MaxTokens: 25_000_000}
 	if paid.MaxTurns != want.MaxTurns || paid.MaxWallClock != want.MaxWallClock || paid.MaxTokens != want.MaxTokens || len(paid.Warnings) != 0 {
 		t.Errorf("unconfigured hosted budget = %+v, want %+v", paid, want)
 	}
-	free := none.ResolveStageBudget("feature-dev", true)
+	free := none.ResolveStageBudget("feature-dev", StageZeroCost)
 	if free.MaxTurns != 200 || free.MaxWallClock != 4*time.Hour || free.MaxTokens != 25_000_000 {
 		t.Errorf("unconfigured zero-cost budget = %+v, want 200 turns, 4h, 25000000 tokens", free)
 	}
@@ -1591,7 +1591,7 @@ pipeline:
 	if err != nil {
 		t.Fatalf("LoadMerged: %v", err)
 	}
-	free := cfg.Pipeline.ResolveStageBudget("feature-dev", true)
+	free := cfg.Pipeline.ResolveStageBudget("feature-dev", StageZeroCost)
 	if free.MaxTurns <= 0 || free.MaxWallClock <= 0 || free.MaxTokens <= 0 {
 		t.Fatalf("zero-cost budget = %+v: every ceiling must be non-zero and bounded", free)
 	}
@@ -1602,7 +1602,7 @@ pipeline:
 		t.Errorf("zero-cost warnings = %q, want one refusal per -1", free.Warnings)
 	}
 
-	paid := cfg.Pipeline.ResolveStageBudget("feature-dev", false)
+	paid := cfg.Pipeline.ResolveStageBudget("feature-dev", StagePriced)
 	if paid.MaxWallClock != StageBudgetUnlimited || paid.MaxTokens != StageBudgetUnlimited {
 		t.Errorf("hosted budget = %+v, want the explicit -1 honoured", paid)
 	}
@@ -1618,7 +1618,7 @@ pipeline:
 // negative duration or count is not a limit and the built-in default applies,
 // and a wall clock without a unit fails to load rather than guessing one.
 func TestStageBudgetsRejectMalformedValues(t *testing.T) {
-	got := ResolveStageBudget(map[string]StageBudget{"default": {MaxTurns: -5}}, "feature-dev", false)
+	got := ResolveStageBudget(map[string]StageBudget{"default": {MaxTurns: -5}}, "feature-dev", StagePriced)
 	if got.MaxTurns != DefaultStageMaxTurns || len(got.Warnings) != 1 {
 		t.Errorf("max_turns -5 resolved to %+v, want the built-in default and one warning", got)
 	}
@@ -1634,5 +1634,33 @@ pipeline:
 `)
 	if _, err := LoadMerged(dir); err == nil || !strings.Contains(err.Error(), "max_wall_clock") {
 		t.Errorf("max_wall_clock: 90 loaded with err=%v, want a max_wall_clock error", err)
+	}
+}
+
+// TestStageBudgetsRefusedStageValueFallsBackToTheDefaultEntry: a stage
+// entry's -1 refused on a zero-cost stage, or its invalid negative, falls
+// back to the default entry's limit, not straight to the built-in one.
+func TestStageBudgetsRefusedStageValueFallsBackToTheDefaultEntry(t *testing.T) {
+	budgets := map[string]StageBudget{
+		"default":     {MaxTurns: 50, MaxTokens: 1_000_000},
+		"feature-dev": {MaxTurns: StageBudgetUnlimited, MaxTokens: -7},
+	}
+	got := ResolveStageBudget(budgets, "feature-dev", StageZeroCost)
+	if got.MaxTurns != 50 || got.MaxTokens != 1_000_000 {
+		t.Errorf("budget = %+v, want the default entry's 50 turns and 1000000 tokens", got)
+	}
+	if len(got.Warnings) != 2 {
+		t.Errorf("warnings = %q, want one per refused or invalid value", got.Warnings)
+	}
+}
+
+// TestStageBudgetsUnpricedStageKeepsHostedDefaultsButRefusesUnlimited: a
+// hosted model the registry cannot price is not zero-cost, so it keeps the
+// hosted turn default, but no USD cap binds it either, so -1 is refused.
+func TestStageBudgetsUnpricedStageKeepsHostedDefaultsButRefusesUnlimited(t *testing.T) {
+	budgets := map[string]StageBudget{"default": {MaxWallClock: StageBudgetUnlimited, MaxTokens: StageBudgetUnlimited}}
+	got := ResolveStageBudget(budgets, "feature-dev", StageUnpriced)
+	if got.MaxTurns != DefaultStageMaxTurns || got.MaxWallClock != DefaultStageMaxWallClock || got.MaxTokens != DefaultStageMaxTokens {
+		t.Errorf("unpriced budget = %+v, want the hosted defaults with -1 refused", got)
 	}
 }

@@ -1417,7 +1417,8 @@ func (p *PipelineConfig) ResolveTokenBudgetCeilingUSD() float64 {
 // For each field, 0 or absent inherits: a stage entry inherits the default
 // entry, and the default entry inherits the built-in default. -1 means
 // unlimited and is the only way to say so; it is warned about on every
-// dispatch, and it is refused on a zero-cost stage (ResolveStageBudget).
+// dispatch, and it is refused on a stage no USD cap can bind: a zero-cost or
+// unpriced one (ResolveStageBudget).
 type StageBudget struct {
 	// MaxTurns bounds the stage's model turns: an assistant message for the
 	// claude CLI, a step for OpenCode (ADR-023 Q8 lists each adapter's).
@@ -1475,8 +1476,10 @@ const StageBudgetDefaultKey = "default"
 // hosted run needs: 400 turns is above the largest turn count recorded for a
 // claude stage (287), 4 hours is the largest stage timeout routing assigns
 // (the OpenCode local cap), and 25M processed tokens is above any hosted
-// stage recorded. A zero-cost stage keeps the 200-step cap OpenCode stages
-// already had (ADR-022), because nothing priced stops it sooner.
+// stage recorded. The hosted turn default raises the native cap claude,
+// claude-sdk, grok and hosted OpenCode stages had (200) to 400. A zero-cost
+// stage keeps 200, the cap OpenCode stages already had (ADR-022), because
+// nothing priced stops it sooner.
 const (
 	DefaultStageMaxTurns         = 400
 	DefaultZeroCostStageMaxTurns = 200
@@ -1494,65 +1497,105 @@ type ResolvedStageBudget struct {
 	Warnings     []string
 }
 
-// ResolveStageBudget returns the budget stage runs under. zeroCost is true
-// when the stage is on a zero-cost provider, which no USD cap can bind: a
-// model server the operator runs, or a model the registry prices at $0. Such
-// a stage always gets non-zero, bounded ceilings: an explicit -1 is refused
-// there and the built-in default applies. Safe on a nil receiver.
-func (p *PipelineConfig) ResolveStageBudget(stage string, zeroCost bool) ResolvedStageBudget {
+// StageCost is what the model registry says about a stage's price, the one
+// input the stage budgets take from the dispatch (#1652).
+type StageCost int
+
+const (
+	// StagePriced is a model the registry prices above $0: its USD caps
+	// bind it, so an explicit -1 is honoured.
+	StagePriced StageCost = iota
+	// StageUnpriced is a hosted model the registry cannot price. It is not
+	// zero-cost, so it gets the hosted defaults, but no USD cap can bind it
+	// either, so -1 is refused (fail closed).
+	StageUnpriced
+	// StageZeroCost is a zero-cost provider: a model server the operator
+	// runs, or a model the registry prices at $0. It gets the zero-cost turn
+	// default and -1 is refused.
+	StageZeroCost
+)
+
+// ResolveStageBudget returns the budget stage runs under, given what the
+// registry says about its price. A stage no USD cap can bind (zero-cost or
+// unpriced) always gets non-zero, bounded ceilings: an explicit -1 is refused
+// there. Safe on a nil receiver.
+func (p *PipelineConfig) ResolveStageBudget(stage string, cost StageCost) ResolvedStageBudget {
 	var budgets map[string]StageBudget
 	if p != nil {
 		budgets = p.StageBudgets
 	}
-	return ResolveStageBudget(budgets, stage, zeroCost)
+	return ResolveStageBudget(budgets, stage, cost)
 }
 
 // ResolveStageBudget resolves one stage's budget from the pipeline.stage_budgets
 // entries; see (*PipelineConfig).ResolveStageBudget.
-func ResolveStageBudget(budgets map[string]StageBudget, stage string, zeroCost bool) ResolvedStageBudget {
+func ResolveStageBudget(budgets map[string]StageBudget, stage string, cost StageCost) ResolvedStageBudget {
 	own, base := budgets[stage], budgets[StageBudgetDefaultKey]
 	var out ResolvedStageBudget
 	turnsDefault := DefaultStageMaxTurns
-	if zeroCost {
+	if cost == StageZeroCost {
 		turnsDefault = DefaultZeroCostStageMaxTurns
 	}
-	out.MaxTurns = int(resolveStageBudgetField(&out.Warnings, stage, "max_turns", zeroCost,
-		int64(own.MaxTurns), int64(base.MaxTurns), int64(turnsDefault)))
-	out.MaxWallClock = time.Duration(resolveStageBudgetField(&out.Warnings, stage, "max_wall_clock", zeroCost,
-		int64(own.MaxWallClock), int64(base.MaxWallClock), int64(DefaultStageMaxWallClock)))
-	out.MaxTokens = int(resolveStageBudgetField(&out.Warnings, stage, "max_tokens", zeroCost,
-		int64(own.MaxTokens), int64(base.MaxTokens), int64(DefaultStageMaxTokens)))
+	f := stageBudgetField{warnings: &out.Warnings, stage: stage, cost: cost}
+	out.MaxTurns = int(f.resolve("max_turns", int64(own.MaxTurns), int64(base.MaxTurns), int64(turnsDefault)))
+	out.MaxWallClock = time.Duration(f.resolve("max_wall_clock", int64(own.MaxWallClock), int64(base.MaxWallClock), int64(DefaultStageMaxWallClock)))
+	out.MaxTokens = int(f.resolve("max_tokens", int64(own.MaxTokens), int64(base.MaxTokens), int64(DefaultStageMaxTokens)))
 	return out
 }
 
-// resolveStageBudgetField picks one field: the stage's own value, else the
-// default entry's, else the built-in default. -1 is unlimited, unless the
-// stage is zero-cost; any other negative value is invalid. Both are warned.
-func resolveStageBudgetField(warnings *[]string, stage, key string, zeroCost bool, own, base, builtin int64) int64 {
-	v, from := own, "stage_budgets."+stage
-	if v == 0 {
-		v, from = base, "stage_budgets."+StageBudgetDefaultKey
+// stageBudgetField resolves the fields of one stage's budget.
+type stageBudgetField struct {
+	warnings *[]string
+	stage    string
+	cost     StageCost
+}
+
+// resolve picks one field: the stage's own value, else the default entry's,
+// else the built-in default. 0 inherits. -1 is unlimited where a USD cap can
+// bind the stage; where none can, it is refused. Any other negative value is
+// invalid. A refused or invalid value is warned about and falls through to
+// the next source, so a stage entry's refused -1 still gets the default
+// entry's limit.
+func (f stageBudgetField) resolve(key string, own, base, builtin int64) int64 {
+	for _, src := range []struct {
+		v    int64
+		from string
+	}{{own, "stage_budgets." + f.stage}, {base, "stage_budgets." + StageBudgetDefaultKey}} {
+		v := src.v
+		switch {
+		case v == 0:
+			continue
+		case v > 0:
+			return v
+		case v == StageBudgetUnlimited && f.cost == StagePriced:
+			*f.warnings = append(*f.warnings, fmt.Sprintf("pipeline.%s.%s is -1: %s", src.from, key, stageBudgetUnlimitedEffect(key)))
+			return StageBudgetUnlimited
+		case v == StageBudgetUnlimited:
+			why := "the stage is on a zero-cost provider"
+			if f.cost == StageUnpriced {
+				why = "the model registry cannot price the stage's model"
+			}
+			*f.warnings = append(*f.warnings, fmt.Sprintf(
+				"pipeline.%s.%s is -1 (unlimited), refused: %s, so no USD cap can stop it; the next configured or built-in limit applies",
+				src.from, key, why))
+		default:
+			*f.warnings = append(*f.warnings, fmt.Sprintf(
+				"pipeline.%s.%s is %s, which is not a limit (only -1 means unlimited); the next configured or built-in limit applies",
+				src.from, key, formatStageBudgetValue(key, v)))
+		}
 	}
-	switch {
-	case v == 0:
-		return builtin
-	case v == StageBudgetUnlimited && zeroCost:
-		*warnings = append(*warnings, fmt.Sprintf(
-			"pipeline.%s.%s is -1 (unlimited), refused: the stage's model is not priced above $0, so no USD cap can stop it; the built-in %s applies",
-			from, key, formatStageBudgetValue(key, builtin)))
-		return builtin
-	case v == StageBudgetUnlimited:
-		*warnings = append(*warnings, fmt.Sprintf(
-			"pipeline.%s.%s is -1: the stage runs with no %s limit",
-			from, key, strings.TrimPrefix(key, "max_")))
-		return StageBudgetUnlimited
-	case v < 0:
-		*warnings = append(*warnings, fmt.Sprintf(
-			"pipeline.%s.%s is %s, which is not a limit (only -1 means unlimited); the built-in %s applies",
-			from, key, formatStageBudgetValue(key, v), formatStageBudgetValue(key, builtin)))
-		return builtin
+	return builtin
+}
+
+// stageBudgetUnlimitedEffect says what an honoured -1 leaves in place.
+func stageBudgetUnlimitedEffect(key string) string {
+	switch key {
+	case "max_turns":
+		return "no turn budget: turns are not counted on the stream and none is passed to the adapter, so only the adapter's own default cap applies (--max-turns 200 for claude, claude-sdk, grok, lm-studio and ollama; 200 OpenCode steps; none for codex, gemini and copilot)"
+	case "max_wall_clock":
+		return "no wall-clock budget: only the stage timeout bounds the stage's run time"
 	}
-	return v
+	return "no token budget: the stage's tokens are not bounded"
 }
 
 // formatStageBudgetValue renders a field's value for a warning.
