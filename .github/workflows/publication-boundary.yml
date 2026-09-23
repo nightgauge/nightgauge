@@ -23,6 +23,10 @@ name: publication-boundary
 # re-checks an identical tree. The guard still fails closed where it runs.
 on:
   pull_request:
+  # workflow_dispatch is the remedy post-merge verification names when a merge
+  # commit's tree was never tested (a ruleset bypass): dispatching on main puts
+  # the required checks on main's head (#2055).
+  workflow_dispatch: {}
 
 permissions:
   contents: read

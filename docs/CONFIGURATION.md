@@ -2520,12 +2520,22 @@ pipeline:
     green_threshold: 2 # promote when last N runs are all `success`
 ```
 
-| Field             | Type    | Default | Description                                                                                                                                   |
-| ----------------- | ------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `enabled`         | boolean | `true`  | Master toggle. When `false`, the gate is skipped during issue-pickup and `baseline-gate promote` is a no-op.                                  |
-| `lookback_runs`   | number  | `5`     | How many recent _completed_ runs of the referenced workflow on `main` to inspect when computing the failure rate. Capped at 20 by the binary. |
-| `red_threshold`   | number  | `2`     | Defer dispatch when at least this many of the last `lookback_runs` failed.                                                                    |
-| `green_threshold` | number  | `2`     | Promote (resume) a deferred item when the most-recent N completed runs are all `success`.                                                     |
+| Field             | Type    | Default | Description                                                                                                                                  |
+| ----------------- | ------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`         | boolean | `true`  | Master toggle. When `false`, the gate is skipped during issue-pickup and `baseline-gate promote` is a no-op.                                 |
+| `lookback_runs`   | number  | `5`     | How many recent _completed_ baseline runs of the referenced workflow to inspect when computing the failure rate. Capped at 20 by the binary. |
+| `red_threshold`   | number  | `2`     | Defer dispatch when at least this many of the last `lookback_runs` failed.                                                                   |
+| `green_threshold` | number  | `2`     | Promote (resume) a deferred item when the most-recent N completed runs are all `success`.                                                    |
+
+**Which runs are the baseline (#2055)**: the full suites no longer run on
+push to `main`, so a workflow's `main` runs can stop changing (`ci.yml`'s last
+push runs are frozen). The baseline is therefore the newest completed
+`pull_request` run of the workflow on the head of each of the last
+`lookback_runs` PRs merged into the branch (the strict ruleset makes each
+merged head's tree the merge commit's tree), together with the workflow's own
+completed runs on the branch (schedule, `workflow_dispatch`), newest first and
+cut to `lookback_runs`. A scheduled workflow keeps being judged by its branch
+runs; `ci.yml` is judged by the runs that gated the merges.
 
 **Trigger semantics**: the gate's classifier scans each AC item for the
 keywords `required check`, `required status`, `branch protection`, `ruleset`,

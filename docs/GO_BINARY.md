@@ -4926,8 +4926,12 @@ Two rules follow directly from that:
   NOT-YET when one has not appeared or either surface is unavailable. For a
   merged PR's merge commit (#2055) the PR run is the gate instead: the merge
   commit's tree must equal the PR head's tree, the head's required checks must
-  have passed, and whatever still runs on the merge commit (CodeQL,
-  `cache-warm`) must be green, still running being NOT-YET. The post-merge
+  have passed, and whatever still runs on the merge commit (CodeQL; never
+  `cache-warm`, which tests nothing) must be green, still running being
+  NOT-YET. A tree mismatch with no required check on the merge commit turns
+  RED five minutes after the merge; an unreadable required set is never GREEN.
+  `ci checks-complete --help` prints `capability: merged-pr-gate`, which the
+  script checks before handing off. The post-merge
   hook evaluates a merge commit through the same function.
 
   Exit codes: `0` GREEN, `1` RED, `2` NOT-YET. Exit `1` means a completed

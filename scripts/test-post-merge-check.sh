@@ -71,6 +71,7 @@ stub_gh() {
   printf '{"sha": "%s", "commit": {"tree": {"sha": "tree-a"}}}\n' "$MERGE_SHA" >"$FAKE_BIN/pages/commit.1.json"
   echo '[]' >"$FAKE_BIN/pages/pulls.1.json"
   echo '[]' >"$FAKE_BIN/pages/rules.1.json"
+  echo '{"default_branch": "main"}' >"$FAKE_BIN/pages/repo.1.json"
   {
     echo '#!/usr/bin/env bash'
     echo "pages='$FAKE_BIN/pages'"
@@ -91,6 +92,7 @@ while [ $# -gt 0 ]; do
   */protection/*) endpoint=protection ;;
   */commits/*) endpoint=commit ;;
   esac
+  [[ "$1" =~ ^repos/[^/]+/[^/]+$ ]] && endpoint=repo
   case "$1" in *"$head_sha"*) prefix=head- ;; esac
   shift
 done
@@ -319,16 +321,43 @@ expect "an empty merge commit after the grace is GREEN: nothing runs on push" 0 
 # Trees differ: strict should prevent it, so it is a bypass and the PR run is
 # not evidence. The merge commit must carry every required check itself.
 stub_gh "$PUSH_GREEN"
-stub_pr tree-b "$HEAD_GREEN" "$CLA_OK"
-expect "tree differs and the merge commit lacks the required checks: NOT-YET" 2 "required check(s) absent from"
+stub_pr tree-b "$HEAD_GREEN" "$CLA_OK" 2999-01-01T00:00:00Z
+expect "tree differs, required checks absent, inside the grace: NOT-YET" 2 "required check(s) absent from"
+stub_gh "$PUSH_GREEN"
+stub_pr tree-b "$HEAD_GREEN" "$CLA_OK" 2999-01-01T00:00:00Z
+expect "a tree-differs verdict says why" 2 "differs from PR #42 head"
+# After the grace, with no required check running there, waiting cannot help:
+# the landed tree was never tested, and the verdict says how to test it.
 stub_gh "$PUSH_GREEN"
 stub_pr tree-b "$HEAD_GREEN" "$CLA_OK"
-expect "a tree-differs verdict says why" 2 "differs from PR #42 head"
+expect "tree differs, required checks absent after the grace: RED" 1 "run the suites on main via workflow_dispatch"
+stub_gh '{"check_runs": [
+  {"name": "build", "status": "in_progress", "conclusion": null}
+]}'
+stub_pr tree-b "$HEAD_GREEN" "$CLA_OK"
+expect "tree differs, a required check still running there: NOT-YET" 2 "still running"
 stub_gh '{"check_runs": [
   {"name": "build", "status": "completed", "conclusion": "success"}
 ]}' -- "$CLA_OK"
 stub_pr tree-b "$HEAD_GREEN" "$CLA_OK"
 expect "tree differs but the merge commit carries every required check: GREEN" 0 "GREEN"
+
+# cache-warm tests nothing: its failure is never main being red.
+stub_gh '{"check_runs": [
+  {"name": "CodeQL",     "status": "completed", "conclusion": "success"},
+  {"name": "cache-warm", "status": "completed", "conclusion": "failure"}
+]}'
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK"
+expect "a red cache-warm does not make main red" 0 "GREEN"
+
+# An unreadable required set is never GREEN: the gate cannot be verified.
+stub_gh "$PUSH_GREEN"
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK"
+rm "$FAKE_BIN/pages/rules.1.json"
+expect "tree equal but the required set is unreadable: NOT-YET" 2 "could not be read"
+stub_gh "$PUSH_GREEN"
+rm "$FAKE_BIN/pages/rules.1.json"
+expect "no merged PR and the required set is unreadable: NOT-YET, never green" 2 "could not be read"
 
 # (h) #1540: when a `nightgauge` binary CAN be resolved, the script must
 # delegate to it entirely and never touch its own gh/jq fallback logic — the
@@ -340,6 +369,10 @@ stub_nightgauge() {
   FAKE_BIN=$(mktemp -d)
   cat >"$FAKE_BIN/nightgauge" <<EOF
 #!/usr/bin/env bash
+if [ "\$3" = "--help" ]; then
+  echo "capability: merged-pr-gate"
+  exit 0
+fi
 echo "delegated: \$*"
 exit $rc
 EOF
@@ -378,6 +411,32 @@ expect_delegated "a resolvable binary is delegated to and owns RED's exit code" 
 
 stub_nightgauge 2
 expect_delegated "a resolvable binary is delegated to and owns NOT-YET's exit code" 2
+
+# #2055: a binary that predates the merged-PR rule (no capability line in
+# `ci checks-complete --help`) would demand the required checks on the merge
+# commit forever. The script must not hand off to it; it applies its own rule.
+stub_gh "$PUSH_GREEN"
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK"
+cat >"$FAKE_BIN/nightgauge" <<'OLD_BINARY'
+#!/usr/bin/env bash
+if [ "$3" = "--help" ]; then
+  echo "Answer \"did this SHA's CI go green?\""
+  exit 0
+fi
+echo "delegated: $*"
+exit 2
+OLD_BINARY
+chmod +x "$FAKE_BIN/nightgauge"
+out=$(env -u NIGHTGAUGE_BIN PATH="$FAKE_BIN:$PATH" bash "$SCRIPT" deadbeef acme/widget 2>&1)
+rc=$?
+if [ "$rc" -eq 0 ] && [[ "$out" == *"same tree as PR #42 head"* ]] && [[ "$out" != *"delegated:"* ]]; then
+  echo "ok    an old binary without the capability is not handed off to"
+  PASS=$((PASS + 1))
+else
+  echo "FAIL  an old binary without the capability is not handed off to: exit $rc"
+  echo "      output: $out"
+  FAIL=$((FAIL + 1))
+fi
 
 # (i) Portability: sibling repositories vendor a byte-identical copy, so the
 # repository must come from a flag or from the checkout's own origin remote,

@@ -519,15 +519,20 @@ tie the merge commit to its merged PR (`internal/github.GetMergeProvenance`),
 
 1. the merge commit's tree must equal the PR head's tree;
 2. every required check on the PR head must have passed;
-3. every check on the merge commit (CodeQL, `cache-warm`) must be green. Still
-   running keeps the poll going. An empty list is `pending` for
+3. every check on the merge commit (CodeQL) must be green. Still running keeps
+   the poll going. `cache-warm` is informational
+   (`internal/github.InformationalCheck`): it tests nothing, so it never fails
+   the verdict or holds the wait. An empty list is `pending` for
    `MergeCommitCheckGrace` (5 min) after the merge and passes after that,
    because a repository that runs nothing on push has nothing to wait for.
 
 If the trees differ (a ruleset bypass), or the commit has no merged PR, the
 merge commit must carry every required check itself, the rule described below.
-Where the suites no longer run on push that reads `pending`, not `green`:
-nothing tested the landed tree. The hook result's `mainChecks` carries
+Where the suites no longer run on push that reads `pending` inside the grace
+and `red` after it, once no required check is running there: the landed tree
+was never tested, and the card names the remedy (run the suites on `main` via
+`workflow_dispatch`). The required set is the merged PR's base branch's; if it
+cannot be read the verdict is never `green`. The hook result's `mainChecks` carries
 `prNumber`, `prHeadSha` and `treesMatch`. The rest of this section describes
 the merge-commit rule, which still applies in those two cases.
 

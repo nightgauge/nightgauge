@@ -6329,10 +6329,11 @@ cause the command to exit non-zero.`,
 				boardSvc = gh.NewProjectService(client, ownerPart, projectNumber)
 			}
 
-			// (#1249) The check reader is what lets the hook observe main after
-			// the merge — AGENTS.md's "main's own run is the observation", run
-			// by the pipeline instead of only by hand. --main-check-wait bounds
-			// it; 0 is a single read for an operator who will not wait out CI.
+			// (#1249, #2055) The check reader is what lets the hook verify the
+			// merge: the merge commit's tree against the merged PR head's, the
+			// head's required checks, and what still runs on the merge commit
+			// (github.EvaluateMergedCommit). --main-check-wait bounds it; 0 is a
+			// single read for an operator who will not wait out CI.
 			wait := hooks.DefaultMainCheckWait()
 			wait.Timeout = mainCheckWait
 			result := hooks.EvaluatePostMerge(cmd.Context(), issueSvc, issueSvc, epicSvc, prSvc, boardSvc, hooks.PostMergeInput{
@@ -7302,6 +7303,13 @@ func ciCmd() *cobra.Command {
 	return cmd
 }
 
+// checksCompleteCapability is the line `ci checks-complete --help` prints so
+// scripts/post-merge-check.sh can tell this binary applies the #2055
+// merged-PR rule. An older binary demands the required checks on the merge
+// commit, which no longer run on push, so it would say NOT-YET forever; the
+// script falls back to its own rule instead of handing off to it.
+const checksCompleteCapability = "capability: merged-pr-gate"
+
 // checksCompleteResult is the JSON shape of `nightgauge ci checks-complete`.
 type checksCompleteResult struct {
 	Verdict       gh.ChecksCompleteVerdict `json:"verdict"`
@@ -7348,6 +7356,13 @@ type checksCompleteReader interface {
 // reads; tests pin it.
 var checksCompleteNow = time.Now
 
+// requiredCheckReader resolves a branch's required checks; *github.CIService
+// satisfies it, so pollChecksComplete can re-resolve against a merged PR's
+// base branch.
+type requiredCheckReader interface {
+	GetRequiredCheckNames(ctx context.Context, owner, repo, branch string) ([]string, error)
+}
+
 // pollChecksComplete is ciChecksCompleteCmd's polling loop, extracted for
 // testability. It confirms a terminal-looking verdict (green/red) across two
 // consecutive polls before trusting it (#1540 §3) — a verdict that changes
@@ -7357,7 +7372,7 @@ var checksCompleteNow = time.Now
 // `--main-check-wait 0` / `Timeout: 0` semantics elsewhere in this codebase.
 //
 // sleep is nil in production (real timer); tests inject a no-op.
-func pollChecksComplete(ctx context.Context, reader checksCompleteReader, owner, repo, sha, branch string, requiredNames []string, maxPolls int, interval time.Duration, skipCrossCheck bool, sleep func(context.Context, time.Duration) error, progress func(poll, maxPolls int, verdict gh.ChecksCompleteVerdict)) (checksCompleteResult, error) {
+func pollChecksComplete(ctx context.Context, reader checksCompleteReader, owner, repo, sha, branch string, requiredNames []string, requiredKnown bool, maxPolls int, interval time.Duration, skipCrossCheck bool, sleep func(context.Context, time.Duration) error, progress func(poll, maxPolls int, verdict gh.ChecksCompleteVerdict)) (checksCompleteResult, error) {
 	if sleep == nil {
 		sleep = func(ctx context.Context, d time.Duration) error {
 			select {
@@ -7390,6 +7405,14 @@ func pollChecksComplete(ctx context.Context, reader checksCompleteReader, owner,
 			if prov = p; prov != nil {
 				match := prov.TreesMatch()
 				res.PRNumber, res.PRHeadSha, res.TreesMatch = prov.PRNumber, prov.HeadSHA, &match
+				// The required set is the merged PR's base branch's, as in
+				// the bash fallback and the hook, not the default branch's.
+				if rr, ok := reader.(requiredCheckReader); ok && prov.BaseRef != "" && prov.BaseRef != branch {
+					names, err := rr.GetRequiredCheckNames(ctx, owner, repo, prov.BaseRef)
+					requiredNames, requiredKnown = names, err == nil
+					branch = prov.BaseRef
+					res.Branch, res.RequiredNames = branch, requiredNames
+				}
 			}
 		}
 		checks, err := reader.GetCommitChecks(ctx, owner, repo, sha)
@@ -7405,7 +7428,7 @@ func pollChecksComplete(ctx context.Context, reader checksCompleteReader, owner,
 			runs, _ = reader.GetWorkflowRunsForRef(ctx, owner, repo, sha)
 		}
 
-		ev := gh.MergeEvidence{Provenance: prov, MergeChecks: checks, RequiredNames: requiredNames, Runs: runs, Now: checksCompleteNow()}
+		ev := gh.MergeEvidence{Provenance: prov, MergeChecks: checks, RequiredNames: requiredNames, RequiredKnown: requiredKnown, Runs: runs, Now: checksCompleteNow()}
 		if ev.PRHeadIsEvidence() {
 			if ev.HeadChecks, err = reader.GetCommitChecks(ctx, owner, repo, prov.HeadSHA); err != nil {
 				return res, err
@@ -7466,8 +7489,16 @@ func ciChecksCompleteCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:          "checks-complete <sha>",
-		Short:        "Answer \"did this SHA's CI go green?\" — for a merge commit, the merged PR head's required checks on the same tree plus the merge commit's own runs",
+		Use:   "checks-complete <sha>",
+		Short: "Answer \"did this SHA's CI go green?\" — for a merge commit, the merged PR head's required checks on the same tree plus the merge commit's own runs",
+		Long: "Answer \"did this SHA's CI go green?\" with the post-merge rule of #2055: for a merged PR's\n" +
+			"merge commit, the merge commit's tree must equal the PR head's, the head's required checks\n" +
+			"must have passed, and the checks still running on the merge commit (not cache-warm) must be\n" +
+			"green. Exit 0 green, 1 red, 2 not yet observable.\n\n" +
+			// scripts/post-merge-check.sh greps --help for this exact line
+			// before handing off; a binary without it gets the script's own
+			// rule. Never remove or reword it.
+			checksCompleteCapability,
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		Example: `  nightgauge ci checks-complete abc1234 --repo nightgauge/nightgauge
@@ -7549,11 +7580,12 @@ func runChecksComplete(ctx context.Context, sha string, opts checksCompleteOptio
 		}
 	}
 
+	// A failed lookup leaves the set unknown, and an unknown set is never
+	// green (#2055): the gate cannot be verified without it, so the verdict
+	// is NOT-YET rather than the all-checks idiom's possible false green.
 	requiredNames, reqErr := svc.GetRequiredCheckNames(ctx, ownerPart, repoPart, branch)
-	if reqErr != nil {
-		// Best-effort (#1540 §5): a failed lookup falls back to the
-		// all-checks-concluded idiom rather than blocking the whole
-		// verb on an auxiliary lookup.
+	requiredKnown := reqErr == nil
+	if !requiredKnown {
 		requiredNames = nil
 	}
 
@@ -7570,7 +7602,7 @@ func runChecksComplete(ctx context.Context, sha string, opts checksCompleteOptio
 		}
 	}
 
-	res, err := pollChecksComplete(ctx, svc, ownerPart, repoPart, sha, branch, requiredNames, maxPolls, interval, opts.skipCrossCheck, sleep, progress)
+	res, err := pollChecksComplete(ctx, svc, ownerPart, repoPart, sha, branch, requiredNames, requiredKnown, maxPolls, interval, opts.skipCrossCheck, sleep, progress)
 	if err != nil {
 		return couldNotRun(err)
 	}

@@ -102,8 +102,8 @@ type PostMergeResult struct {
 	MergedAt        string `json:"mergedAt,omitempty"`
 	// BaseRef is the branch the merge landed on, from the same breadcrumb.
 	BaseRef string `json:"baseRef,omitempty"`
-	// MainChecks is the post-merge observation of the base branch (#1249): the
-	// merge commit's own check runs, polled to completion within
+	// MainChecks is the post-merge verification of the base branch (#1249,
+	// #2055, github.EvaluateMergedCommit), polled to completion within
 	// input.MainCheckWait. Nil when the hook refused before the merge was
 	// confirmed; MainChecksSkipped when no reader was wired or no SHA was
 	// captured. A red verdict does NOT set Failed — the hook did its job; what

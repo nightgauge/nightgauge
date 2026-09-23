@@ -2,9 +2,11 @@ package hooks
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/attention"
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 )
@@ -107,17 +109,61 @@ func TestVerifyMergeCommit_PRHeadIsTheGate(t *testing.T) {
 		}
 	})
 
-	t.Run("tree differs: required checks must be on the merge commit, so pending", func(t *testing.T) {
+	t.Run("tree differs inside the grace: pending", func(t *testing.T) {
 		r := &provenReader{
 			scriptedChecks: scriptedChecks{required: required, frames: [][]forgetypes.CheckDetail{{run("CodeQL", "COMPLETED", "SUCCESS")}}},
 			prov:           mergeProv("t1", "t2"), headChecks: headGreen,
 		}
-		res := VerifyMergeCommit(context.Background(), r, "o", "r", "main", "abc1234", provWait(2, late))
+		res := VerifyMergeCommit(context.Background(), r, "o", "r", "main", "abc1234", provWait(2, provMergedAt.Add(time.Minute)))
 		if res.Verdict != MainChecksPending || res.TreesMatch == nil || *res.TreesMatch {
 			t.Fatalf("result = %+v, want pending with trees not matching", res)
 		}
 		if r.headReads != 0 {
 			t.Errorf("the PR head was read %d times; with different trees it is not evidence", r.headReads)
+		}
+	})
+
+	t.Run("tree differs after the grace: red, and the card is raised", func(t *testing.T) {
+		r := &provenReader{
+			scriptedChecks: scriptedChecks{required: required, frames: [][]forgetypes.CheckDetail{{run("CodeQL", "COMPLETED", "SUCCESS")}}},
+			prov:           mergeProv("t1", "t2"), headChecks: headGreen,
+		}
+		res := VerifyMergeCommit(context.Background(), r, "o", "r", "main", "abc1234", provWait(2, late))
+		if res.Verdict != MainChecksRed || len(res.Failing) == 0 || !res.AnyRequiredFailing() {
+			t.Fatalf("result = %+v, want red with a required failing entry", res)
+		}
+		card := BuildMainRedCard("o", "r", "main", 1, 7, res)
+		if card.Severity != attention.SeverityBlockingFleet || card.Title == "" {
+			t.Errorf("card = %+v, want a blocking card", card)
+		}
+		found := false
+		for _, reason := range res.Reasons {
+			found = found || reason == gh.UntestedTreeReason
+		}
+		if !found {
+			t.Errorf("reasons %v do not name the remedy", res.Reasons)
+		}
+	})
+
+	t.Run("a red cache-warm is informational", func(t *testing.T) {
+		r := &provenReader{
+			scriptedChecks: scriptedChecks{required: required, frames: [][]forgetypes.CheckDetail{{run("CodeQL", "COMPLETED", "SUCCESS"), run("cache-warm", "COMPLETED", "FAILURE")}}},
+			prov:           mergeProv("t1", "t1"), headChecks: headGreen,
+		}
+		res := VerifyMergeCommit(context.Background(), r, "o", "r", "main", "abc1234", provWait(2, late))
+		if res.Verdict != MainChecksGreen {
+			t.Fatalf("result = %+v, want green: cache-warm tests nothing", res)
+		}
+	})
+
+	t.Run("an unreadable required set is never green", func(t *testing.T) {
+		r := &provenReader{
+			scriptedChecks: scriptedChecks{reqErr: errors.New("403"), frames: [][]forgetypes.CheckDetail{{run("CodeQL", "COMPLETED", "SUCCESS")}}},
+			prov:           mergeProv("t1", "t1"), headChecks: headGreen,
+		}
+		res := VerifyMergeCommit(context.Background(), r, "o", "r", "main", "abc1234", provWait(2, late))
+		if res.Verdict != MainChecksPending {
+			t.Fatalf("result = %+v, want pending: the gate cannot be verified", res)
 		}
 	})
 }

@@ -3,13 +3,13 @@ package hooks
 // Post-merge verification of the default branch (#1249).
 //
 // The rule at #1249 was "a green PR check is a prediction; main's own run is
-// the observation" (#2055 replaced it: see below). Every hand merge is followed by a check-runs query
-// against the merge commit. The pipeline — which performs most merges — never
-// did this: EvaluatePostMerge verified the PR reached MERGED, captured the merge
-// SHA, and stopped. The three failure classes only the post-merge run can catch
-// (nondeterministic tests, merge skew, environment differences) were therefore
-// invisible to the pipeline, and a red `main` was found by an operator reading
-// the Actions tab.
+// the observation" (#2055 replaced it: see below). Every hand merge was
+// followed by a check-runs query against the merge commit. The pipeline, which
+// performs most merges, never did this: EvaluatePostMerge verified the PR
+// reached MERGED, captured the merge SHA, and stopped. The three failure
+// classes the post-merge run was then held to catch (nondeterministic tests,
+// merge skew, environment differences) were therefore invisible to the
+// pipeline, and a red `main` was found by an operator reading the Actions tab.
 //
 // VerifyMergeCommit is the pipeline's copy of the operator's idiom, with the
 // three numbers evaluated in the order that makes them honest:
@@ -290,8 +290,11 @@ func VerifyMergeCommit(ctx context.Context, reader MainCheckReader, owner, repo,
 	// Best-effort: a failed lookup falls back to the pre-#1540
 	// total/pending/bad-only idiom for this call rather than blocking the
 	// whole verification on an auxiliary lookup.
+	// A failed lookup leaves the set unknown, and github.EvaluateMergedCommit
+	// never calls an unknown set green (#2055).
 	requiredNames, reqErr := reader.GetRequiredCheckNames(ctx, owner, repo, branch)
-	if reqErr != nil {
+	requiredKnown := reqErr == nil
+	if !requiredKnown {
 		requiredNames = nil
 	}
 
@@ -322,10 +325,13 @@ func VerifyMergeCommit(ctx context.Context, reader MainCheckReader, owner, repo,
 			res.Error = err.Error()
 			return res
 		}
+		// cache-warm is informational (#2055): it never counts, fails or
+		// holds the wait.
+		runs = gh.DecidingChecks(runs)
 		total, pending, bad := threeNumbers(runs)
 		res.Total, res.Pending, res.Bad = total, pending, bad
 
-		ev := gh.MergeEvidence{Provenance: prov, MergeChecks: runs, RequiredNames: requiredNames, Now: wait.now()}
+		ev := gh.MergeEvidence{Provenance: prov, MergeChecks: runs, RequiredNames: requiredNames, RequiredKnown: requiredKnown, Now: wait.now()}
 		if ev.PRHeadIsEvidence() {
 			if ev.HeadChecks, err = reader.GetCommitChecks(ctx, owner, repo, prov.HeadSHA); err != nil {
 				res.Verdict = MainChecksError
@@ -346,7 +352,7 @@ func VerifyMergeCommit(ctx context.Context, reader MainCheckReader, owner, repo,
 		// a repository that runs nothing on push has nothing to wait for.
 		verdict, reasons := gh.EvaluateMergedCommit(ev)
 		res.Reasons = reasons
-		if total == 0 && !ev.PRHeadIsEvidence() {
+		if total == 0 && prov == nil {
 			if res.Polls >= gracePolls {
 				res.Verdict = MainChecksNone
 				return res
@@ -364,6 +370,13 @@ func VerifyMergeCommit(ctx context.Context, reader MainCheckReader, owner, repo,
 				}
 				res.Failing = failingChecks(failing)
 				markRequired(res.Failing, requiredNames)
+				if len(res.Failing) == 0 {
+					// Red with nothing failed: the landed tree differs from
+					// the PR head's and the required checks never ran on it
+					// (github.UntestedTreeReason). The card must still name
+					// something, and it blocks like a required failure.
+					res.Failing = []FailingCheck{{Name: "untested merge tree", Conclusion: "never tested", Required: true}}
+				}
 				return res
 			default:
 				if res.Polls >= maxPolls {

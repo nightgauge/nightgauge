@@ -17,8 +17,9 @@
 #
 # NOT a required check, and must never become one: it does not run on pull
 # requests, so a required `cache-warm` would block every PR forever.
-# scripts/post-merge-check.sh and `nightgauge hook post-merge` do wait for it
-# on the merge commit, as they wait for every check that runs there.
+# Nor is it part of post-merge verification (github.InformationalCheck):
+# it tests nothing, so a network blip failing it must not read as "main is
+# red, fix it now" with nothing to fix.
 name: Cache warm
 
 on:

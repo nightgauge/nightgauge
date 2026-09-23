@@ -197,8 +197,9 @@ git_in "$PUSH_REPO" add -A
 git_in "$PUSH_REPO" commit -q -m docs
 PUSH_HEAD="$(git -C "$PUSH_REPO" rev-parse HEAD)"
 
-# A docs-only diff on a `push` event still runs heavy: push-to-main is the
-# merge-skew observation two green PRs cannot make for themselves (AGENTS.md).
+# A docs-only diff on a `push` event still runs heavy: every non-PR event fails
+# open. (ci.yml no longer runs on push to main (#2055); the rule is kept
+# because failing open is the safe default for any event.)
 fail_open_case "push event on a docs-only diff still runs heavy" \
   classify "$PUSH_REPO" push "$PUSH_BASE" "$PUSH_HEAD"
 fail_open_case "workflow_dispatch runs heavy" \

@@ -36,24 +36,36 @@ func TestEvaluateMergedCommit(t *testing.T) {
 		want   ChecksCompleteVerdict
 		reason string
 	}{
-		{"tree equal, head required green, push green", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen, MergeChecks: pushGreen, RequiredNames: required, Now: late}, ChecksComplete, ""},
-		{"a failing advisory check on the head does not make the merge red", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen, MergeChecks: pushGreen, RequiredNames: required, Now: late}, ChecksComplete, ""},
-		{"PR head's required check red", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headRed, MergeChecks: pushGreen, RequiredNames: required, Now: late}, ChecksIncomplete, "PR #7 head"},
-		{"a required check absent from the head is not-yet", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen[:1], MergeChecks: pushGreen, RequiredNames: required, Now: late}, ChecksNotYet, "lint"},
-		{"push job still running", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen, MergeChecks: pushRunning, RequiredNames: required, Now: late}, ChecksNotYet, "CodeQL"},
-		{"push job red", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen, MergeChecks: pushRed, RequiredNames: required, Now: late}, ChecksIncomplete, "merge commit"},
-		{"no push checks yet, inside the grace", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen, RequiredNames: required, Now: mergedAt.Add(time.Minute)}, ChecksNotYet, "no checks on the merge commit yet"},
-		{"no push checks after the grace: nothing runs on push", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen, RequiredNames: required, Now: late}, ChecksComplete, ""},
-		{"a workflow run still in flight is not-yet", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen, MergeChecks: pushGreen, RequiredNames: required, Now: late,
+		{"tree equal, head required green, push green", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen, MergeChecks: pushGreen, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksComplete, ""},
+		{"a failing advisory check on the head does not make the merge red", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen, MergeChecks: pushGreen, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksComplete, ""},
+		{"PR head's required check red", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headRed, MergeChecks: pushGreen, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksIncomplete, "PR #7 head"},
+		{"a required check absent from the head is not-yet", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen[:1], MergeChecks: pushGreen, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksNotYet, "lint"},
+		{"push job still running", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen, MergeChecks: pushRunning, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksNotYet, "CodeQL"},
+		{"push job red", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen, MergeChecks: pushRed, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksIncomplete, "merge commit"},
+		{"no push checks yet, inside the grace", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen, RequiredNames: required, RequiredKnown: true, Now: mergedAt.Add(time.Minute)}, ChecksNotYet, "no checks on the merge commit yet"},
+		{"no push checks after the grace: nothing runs on push", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksComplete, ""},
+		{"a workflow run still in flight is not-yet", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen, MergeChecks: pushGreen, RequiredNames: required, RequiredKnown: true, Now: late,
 			Runs: []WorkflowRunSummary{{Name: "CodeQL", Status: "IN_PROGRESS"}}}, ChecksNotYet, "still in flight"},
 		// Trees differ: the PR run is not evidence; the merge commit must
 		// carry every required check itself, which it does not here.
-		{"tree differs, required absent from the merge commit", MergeEvidence{Provenance: prov("t1", "t2"), HeadChecks: headGreen, MergeChecks: pushGreen, RequiredNames: required, Now: late}, ChecksNotYet, "differs from PR #7"},
+		{"tree differs, required absent, inside the grace: not-yet", MergeEvidence{Provenance: prov("t1", "t2"), HeadChecks: headGreen, MergeChecks: pushGreen, RequiredNames: required, RequiredKnown: true, Now: mergedAt.Add(time.Minute)}, ChecksNotYet, "differs from PR #7"},
+		{"tree differs, required absent, after the grace: red, never tested", MergeEvidence{Provenance: prov("t1", "t2"), HeadChecks: headGreen, MergeChecks: pushGreen, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksIncomplete, "workflow_dispatch"},
+		{"tree differs, a required check running on the merge commit: not-yet", MergeEvidence{Provenance: prov("t1", "t2"),
+			MergeChecks: []CheckDetail{check("build", "IN_PROGRESS", "")}, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksNotYet, "differs"},
 		{"tree differs, merge commit carries every required check", MergeEvidence{Provenance: prov("t1", "t2"),
-			MergeChecks: []CheckDetail{check("build", "COMPLETED", "SUCCESS"), check("lint", "COMPLETED", "SUCCESS")}, RequiredNames: required, Now: late}, ChecksComplete, ""},
-		{"an unread tree never matches", MergeEvidence{Provenance: prov("", ""), HeadChecks: headGreen, MergeChecks: pushGreen, RequiredNames: required, Now: late}, ChecksNotYet, "differs"},
-		{"no merged PR keeps the merge-commit rule", MergeEvidence{MergeChecks: pushGreen, RequiredNames: required, Now: late}, ChecksNotYet, "required check(s) absent"},
-		{"no merged PR, no required set, all green", MergeEvidence{MergeChecks: pushGreen, Now: late}, ChecksComplete, ""},
+			MergeChecks: []CheckDetail{check("build", "COMPLETED", "SUCCESS"), check("lint", "COMPLETED", "SUCCESS")}, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksComplete, ""},
+		{"an unread tree never matches", MergeEvidence{Provenance: prov("", ""), HeadChecks: headGreen, MergeChecks: pushGreen, RequiredNames: required, RequiredKnown: true, Now: mergedAt.Add(time.Minute)}, ChecksNotYet, "differs"},
+		// cache-warm tests nothing: a red one never makes main red.
+		{"a red cache-warm is informational", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen,
+			MergeChecks: []CheckDetail{check("CodeQL", "COMPLETED", "SUCCESS"), check("cache-warm", "COMPLETED", "FAILURE")}, RequiredNames: required, RequiredKnown: true, Now: late,
+			Runs: []WorkflowRunSummary{{Name: "Cache warm", Status: "IN_PROGRESS"}}}, ChecksComplete, ""},
+		// An unknown required set is never green.
+		{"tree equal, required set unknown: not-yet", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen, MergeChecks: pushGreen, Now: late}, ChecksNotYet, "could not be read"},
+		{"no merged PR, required set unknown: not-yet", MergeEvidence{MergeChecks: pushGreen, Now: late}, ChecksNotYet, "could not be read"},
+		{"tree differs, merge commit green, required set unknown: not-yet", MergeEvidence{Provenance: prov("t1", "t2"),
+			MergeChecks: []CheckDetail{check("build", "COMPLETED", "SUCCESS"), check("lint", "COMPLETED", "SUCCESS")}, Now: late}, ChecksNotYet, "could not be read"},
+		{"no merged PR keeps the merge-commit rule", MergeEvidence{MergeChecks: pushGreen, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksNotYet, "required check(s) absent"},
+		{"no merged PR, no required set, all green", MergeEvidence{MergeChecks: pushGreen, RequiredKnown: true, Now: late}, ChecksComplete, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

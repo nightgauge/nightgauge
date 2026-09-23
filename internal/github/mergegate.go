@@ -14,22 +14,31 @@ package github
 //  2. every required check on that PR head concluded successfully — the gate
 //     actually passed (skipped and neutral count as passing, as everywhere);
 //  3. whatever still runs on the merge commit itself (CodeQL's default-branch
-//     baseline, the cache-warm job) is green, or still running.
+//     baseline) is green, or still running.
+//
+// cache-warm is never part of the verdict (InformationalCheck). It tests
+// nothing: it restores and saves caches. A network blip failing it would
+// otherwise read as "main is red, fix it now" with nothing to fix.
 //
 // When the trees differ — which the strict policy prevents, so it means a
 // ruleset bypass such as `--admin` or a branch without the policy — the PR run
 // is not evidence about the landed tree. The verdict then falls back to the
 // pre-#2055 rule on the merge commit alone: every check that ran there must
-// pass AND every required check must be present there. In nightgauge/nightgauge
-// the required suites no longer run on push, so that fallback reads NOT-YET
-// ("not observable") rather than green: nothing has tested the landed tree,
-// and saying so is the honest answer. In a repository whose suites still run
-// on push, the same fallback produces a real verdict. The fallback is chosen
-// over "red" because red means a check failed, and none has.
+// pass AND every required check must be present there. In a repository whose
+// suites still run on push that produces a real verdict. Where they do not,
+// the required checks are absent: that is NOT-YET inside
+// MergeCommitCheckGrace, and RED once the grace has passed with no required
+// check running or queued on the merge commit, because the landed tree was
+// never tested and waiting will not change that. The remedy is to run the
+// suites on main via workflow_dispatch, which puts the required checks on the
+// merge commit while it is still main's head.
 //
 // A commit with no merged pull request (a direct push, or a PR head polled
 // before its merge) takes the same pre-#2055 rule, so callers that poll a PR
 // head SHA see no change.
+//
+// An unknown required-check set (the lookup failed) is never GREEN: the gate
+// cannot be verified, so the verdict is NOT-YET.
 
 import (
 	"context"
@@ -176,9 +185,11 @@ type MergeEvidence struct {
 	// HeadChecks are every check run and commit status on the PR head. Read
 	// only when the trees match.
 	HeadChecks []CheckDetail
-	// RequiredNames is the base branch's required-check set; nil when it
-	// could not be resolved.
+	// RequiredNames is the base branch's required-check set.
 	RequiredNames []string
+	// RequiredKnown is false when the required-check set could not be read.
+	// The verdict is then never green.
+	RequiredKnown bool
 	// Runs is the per-run cross-check for the merge commit; nil skips it.
 	Runs []WorkflowRunSummary
 	// Now is the evaluation time, for MergeCommitCheckGrace.
@@ -191,20 +202,76 @@ func (e MergeEvidence) PRHeadIsEvidence() bool {
 	return e.Provenance.TreesMatch()
 }
 
+// InformationalCheck reports whether a check on a merge commit is reported
+// but never decides a verdict: cache-warm (#2055) tests nothing, so its
+// failure is not main being red.
+func InformationalCheck(name string) bool {
+	return strings.EqualFold(strings.TrimSpace(name), "cache-warm")
+}
+
+// informationalWorkflow is InformationalCheck for the per-run cross-check:
+// the cache-warm job runs in the "Cache warm" workflow.
+func informationalWorkflow(name string) bool {
+	return strings.EqualFold(strings.TrimSpace(name), "cache warm")
+}
+
+// DecidingChecks drops the informational checks from a merge commit's list.
+func DecidingChecks(checks []CheckDetail) []CheckDetail {
+	out := make([]CheckDetail, 0, len(checks))
+	for _, c := range checks {
+		if !InformationalCheck(c.Name) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func decidingRuns(runs []WorkflowRunSummary) []WorkflowRunSummary {
+	if runs == nil {
+		return nil
+	}
+	out := make([]WorkflowRunSummary, 0, len(runs))
+	for _, r := range runs {
+		if !informationalWorkflow(r.Name) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// UntestedTreeReason is the reason EvaluateMergedCommit gives when a merge
+// commit's tree was never tested; callers that raise a card name it.
+const UntestedTreeReason = "the landed tree was never tested (bypass?): run the suites on main via workflow_dispatch"
+
+const unknownRequiredReason = "the required-check set could not be read, so the gate cannot be verified; not observable"
+
 // EvaluateMergedCommit is the single post-merge verdict behind `nightgauge ci
-// checks-complete`, scripts/post-merge-check.sh (which delegates to it) and
-// the post-merge hook. See the file comment for the rule.
+// checks-complete`, scripts/post-merge-check.sh (which applies the same rule
+// when no binary is available) and the post-merge hook. See the file comment.
 func EvaluateMergedCommit(e MergeEvidence) (ChecksCompleteVerdict, []string) {
+	e.MergeChecks = DecidingChecks(e.MergeChecks)
+	e.Runs = decidingRuns(e.Runs)
 	p := e.Provenance
 	if p == nil {
-		return EvaluateCommitChecksCrossChecked(e.MergeChecks, e.RequiredNames, e.Runs)
+		verdict, reasons := EvaluateCommitChecksCrossChecked(e.MergeChecks, e.RequiredNames, e.Runs)
+		return neverGreenIfUnknown(verdict, reasons, e.RequiredKnown)
 	}
 	if !p.TreesMatch() {
 		verdict, reasons := EvaluateCommitChecksCrossChecked(e.MergeChecks, e.RequiredNames, e.Runs)
 		lead := fmt.Sprintf("merge commit %s's tree %s differs from PR #%d head %s's tree %s: "+
-			"the PR run did not test the landed tree (a ruleset bypass?), so the merge commit's own checks must carry every required check",
+			"the PR run did not test the landed tree, so the merge commit's own checks must carry every required check",
 			shortRef(p.MergeSHA), shortRef(p.MergeTree), p.PRNumber, shortRef(p.HeadSHA), shortRef(p.HeadTree))
+		if verdict == ChecksNotYet && e.RequiredKnown && untestedForGood(e, p) {
+			missing := MissingRequiredChecks(e.MergeChecks, e.RequiredNames)
+			return ChecksIncomplete, []string{lead, UntestedTreeReason,
+				fmt.Sprintf("required check(s) never ran on the merge commit: %s", strings.Join(missing, ", "))}
+		}
+		verdict, reasons = neverGreenIfUnknown(verdict, reasons, e.RequiredKnown)
 		return verdict, append([]string{lead}, reasons...)
+	}
+	if !e.RequiredKnown {
+		// (b) cannot be verified without the required set.
+		return ChecksNotYet, []string{unknownRequiredReason}
 	}
 
 	headVerdict, headReasons := EvaluateChecksComplete(e.HeadChecks, e.RequiredNames)
@@ -230,6 +297,37 @@ func EvaluateMergedCommit(e MergeEvidence) (ChecksCompleteVerdict, []string) {
 	default:
 		return ChecksComplete, nil
 	}
+}
+
+// untestedForGood reports that waiting cannot make a tree-mismatched merge
+// commit observable: the grace since the merge has passed, a required check
+// is absent, and no required check is running or queued there.
+func untestedForGood(e MergeEvidence, p *MergeProvenance) bool {
+	if e.Now.Sub(p.MergedAt) < MergeCommitCheckGrace {
+		return false
+	}
+	if len(MissingRequiredChecks(e.MergeChecks, e.RequiredNames)) == 0 {
+		return false
+	}
+	required := make(map[string]bool, len(e.RequiredNames))
+	for _, name := range e.RequiredNames {
+		required[strings.ToLower(strings.TrimSpace(name))] = true
+	}
+	for _, c := range e.MergeChecks {
+		if required[strings.ToLower(strings.TrimSpace(c.Name))] && !isChecksCompleteConcluded(c) {
+			return false
+		}
+	}
+	return true
+}
+
+// neverGreenIfUnknown turns a green verdict into NOT-YET when the required
+// set could not be read: absence of a known requirement is not evidence.
+func neverGreenIfUnknown(verdict ChecksCompleteVerdict, reasons []string, known bool) (ChecksCompleteVerdict, []string) {
+	if verdict == ChecksComplete && !known {
+		return ChecksNotYet, append(reasons, unknownRequiredReason)
+	}
+	return verdict, reasons
 }
 
 // evaluatePushChecks judges what runs on the merge commit when the PR head is

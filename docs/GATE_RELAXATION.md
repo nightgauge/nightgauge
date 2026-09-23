@@ -108,9 +108,10 @@ on a gate whose only job is to decide how much work to do.
 
 `scripts/ci-change-class.sh` never exits non-zero and fails **open** on every
 error path — unknown event, missing or unresolvable SHA, unusable binary,
-classifier error all emit `run_heavy=true`. Non-`pull_request` events force the
-full suite: `push` to main is the merge-skew observation two individually green
-PRs cannot make for themselves.
+classifier error all emit `run_heavy=true`. Non-`pull_request` events (a
+`workflow_dispatch` on `main`) force the full suite. `ci.yml` no longer runs on
+`push` to `main` (#2055): the strict ruleset makes the PR run the gate on the
+merged tree, so there is no push run to fast-track.
 
 ### `change_class` → workflow gate mapping
 
@@ -163,10 +164,9 @@ No other required check substitutes. A C1 control is valid UTF-8: Prettier
 preserves it byte for byte, `check-md-links.sh` inspects links rather than
 bytes, and `validate-skill-metadata.sh` reads frontmatter. The failure is
 concrete — a docs sweep re-encodes an em-dash through a Latin-1 round trip,
-every check reports green, the PR merges, and the `push`-to-`main` run (always
-heavy) goes red. That is precisely the prediction-versus-observation gap
-AGENTS.md exists to close, and gating here would have made it systematically
-reachable for a whole class of pull request.
+every check reports green, and the PR merges with the defect. The PR run is the
+only gate that tree gets (#2055: nothing re-runs on push to `main`), so gating
+here would have let a whole class of pull request through unguarded.
 
 The cost is ~1s: `internal/preflight` is already in `cmd/nightgauge`'s
 dependency graph, so the self-test above it has warmed the build cache by the

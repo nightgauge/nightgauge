@@ -16,7 +16,7 @@ type stubRunner struct {
 	jobsErr error
 }
 
-func (s *stubRunner) ListWorkflowRuns(_ context.Context, _, _, _, _ string, perPage int) ([]gh.WorkflowRun, error) {
+func (s *stubRunner) ListBaselineRuns(_ context.Context, _, _, _, _ string, perPage int) ([]gh.WorkflowRun, error) {
 	if s.runsErr != nil {
 		return nil, s.runsErr
 	}

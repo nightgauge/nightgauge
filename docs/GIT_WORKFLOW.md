@@ -188,11 +188,11 @@ scripts/post-merge-check.sh <merge-sha>   # repo defaults to this checkout's ori
 
 It exits `0` GREEN / `1` RED / `2` NOT-YET, and only `0` is evidence:
 
-| Exit | Verdict | What to do                                                                                                                    |
-| ---- | ------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `0`  | GREEN   | Continue with the post-merge hook and cleanup.                                                                                |
-| `1`  | RED     | `main` is red and it is the merger's to fix now. Never re-run hoping for a better answer.                                     |
-| `2`  | NOT-YET | Nothing exists yet, something is still running, the merged tree was never tested, or the API was unreadable. Wait and re-run. |
+| Exit | Verdict | What to do                                                                                                            |
+| ---- | ------- | --------------------------------------------------------------------------------------------------------------------- |
+| `0`  | GREEN   | Continue with the post-merge hook and cleanup.                                                                        |
+| `1`  | RED     | `main` is red and it is the merger's to fix now. Never re-run hoping for a better answer.                             |
+| `2`  | NOT-YET | Nothing exists yet, something is still running, or the required-check set or the API was unreadable. Wait and re-run. |
 
 For the merge commit of a merged pull request it verifies three things:
 
@@ -201,20 +201,27 @@ For the merge commit of a merged pull request it verifies three things:
 2. **The gate passed.** Every required check on the PR head (resolved from the
    base branch's rulesets and branch protection) concluded successfully;
    skipped and neutral count as passing. A failed required check is `1`, and an
-   absent one is `2`.
+   absent one is `2`. If the required-check set cannot be read, this cannot be
+   verified, and the answer is `2`, never `0`.
 3. **What still runs on `main` is green.** Every check run and commit status on
-   the merge commit itself (CodeQL, `cache-warm`) concluded successfully; a
-   failure is `1`, a running one is `2`. An empty list is `2` for five minutes
-   after the merge, while the push workflows may not exist yet.
+   the merge commit itself (CodeQL) concluded successfully; a failure is `1`, a
+   running one is `2`. An empty list is `2` for five minutes after the merge,
+   while the push workflows may not exist yet. `cache-warm` never counts: it
+   tests nothing, and a network blip failing it is not a red `main`.
 
 If the trees differ, which the strict policy prevents (so it means a ruleset
 bypass such as `--admin`), the PR run is not evidence about the landed tree.
 The merge commit must then carry every required check itself, the rule before
-#2055. In this repository the suites no longer run on push, so that reads `2`:
-nothing tested the landed tree, and nothing failed either. Treat that tree as
-untested: run `bash scripts/ci-local.sh` on a checkout of the merge commit, or
-land a follow-up PR, whose run tests the tree. A commit with no merged pull
-request is judged the same way. Every page of both status surfaces is read
+#2055. In this repository the suites no longer run on push, so the required
+checks are absent: that is `2` for five minutes after the merge, and then `1`
+once no required check is running there, because the landed tree was never
+tested and waiting will not change that. The remedy is to run the suites on
+`main` via `workflow_dispatch` (`ci.yml`, `lint.yml`, `publication-boundary.yml`,
+`agent-guidance.yml`, `credential-scan.yml` and `adapter-canary.yml` accept it)
+while the merge commit is still `main`'s head. `cla` cannot be dispatched: it
+only runs for a pull request, so confirm it on the PR by hand. A commit with no
+merged pull request is judged the same way, against the default branch's
+required set. Every page of both status surfaces is read
 (#1681).
 
 Read the exit code **without a pipe** — a pipeline's status is the last
