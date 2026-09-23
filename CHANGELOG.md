@@ -588,6 +588,18 @@ create --body-file` call, so the compact profile (and its tests) pin
 
 ### Fixed
 
+- **An OpenCode stage stuck silently on its operator-directory install is
+  classified even when the stage deadline ends it (#1954).** The
+  operator-install watchdog's bound is capped by the stage's remaining
+  deadline, so with a stage timeout shorter than the bound both fired at the
+  same instant. When the deadline's own kill won, the watchdog stood down
+  without recording a timeout and the stage was reported as a plain timeout
+  instead of `adapter_incompatible`. The stall is now also recognised from the
+  evidence after the run: no output at all, the stage context ended by its
+  deadline, and the operator directory still unsatisfied. A handshake failure
+  still wins, an operator Stop is still never misreported, and a stage that
+  printed anything is never classified this way.
+
 - **The CLI and daemon keep the license key after the extension runs
   (#2027).** The extension moved the key out of the machine config into VS
   Code SecretStorage, which only VS Code can read, so a later
