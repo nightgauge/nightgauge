@@ -180,18 +180,24 @@ func readContainedEventsFile(path string) ([]byte, error) {
 	if filepath.Dir(resolved) != runDir {
 		return nil, fmt.Errorf("opencodeplugin: refusing to read run events %s: it resolves to %s, outside its run dir %s", path, resolved, runDir)
 	}
-	info, err := os.Stat(resolved)
+	// Open the checked path itself, never following a symlink swapped in
+	// since the check and never blocking on a FIFO, then judge the file by
+	// the open descriptor, so what is read is what was checked.
+	f, err := os.OpenFile(resolved, eventsOpenFlags, 0)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("opencodeplugin: refusing to read run events %s: opening %s: %w", path, resolved, err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
 	if err != nil {
 		return nil, fmt.Errorf("opencodeplugin: reading run events %s: %w", path, err)
 	}
 	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("opencodeplugin: refusing to read run events %s: it is not a regular file (%s)", path, info.Mode().Type())
 	}
-	f, err := os.Open(resolved)
-	if err != nil {
-		return nil, fmt.Errorf("opencodeplugin: reading run events %s: %w", path, err)
-	}
-	defer f.Close()
 	data, err := io.ReadAll(io.LimitReader(f, eventsReadMaxBytes))
 	if err != nil {
 		return nil, fmt.Errorf("opencodeplugin: reading run events %s: %w", path, err)
