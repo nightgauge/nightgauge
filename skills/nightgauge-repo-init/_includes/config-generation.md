@@ -27,14 +27,17 @@ done
 ```
 
 Create `.nightgauge/.gitignore` to prevent pipeline artifacts from
-polluting `git status`. If the file already exists and contains
-`nightgauge-gitignore-version:`, skip this step: a committed file is never
-rewritten in place (the extension, `nightgauge config init` and
-`nightgauge serve` apply newer rules per machine through `.git/info/exclude`),
-and upgrading it to the version below is a pull request that replaces
-everything above the `Local additions` line and keeps what is below it.
-`nightgauge config init` below also writes the file when it is missing.
-Otherwise, write the full file:
+polluting `git status`.
+
+- **The file already exists and contains `nightgauge-gitignore-version:`:**
+  skip this step. A committed file is never rewritten in place; the
+  extension, `nightgauge config init` and `nightgauge serve` apply newer rules
+  per machine through `.git/info/exclude`. Upgrading the committed file to the
+  version below is a pull request that replaces everything above its
+  `Local additions` line and keeps everything below it.
+- **The file is missing:** write the full file below now. (The
+  `nightgauge config init` call later in this phase would also write it,
+  but only when that call succeeds.)
 
 ```gitignore
 # Nightgauge Pipeline — Generated Artifacts
@@ -46,7 +49,7 @@ Otherwise, write the full file:
 #   config.yaml           — repository-wide pipeline configuration
 #   .gitignore            — this file
 #   */.gitkeep            — preserve directory structure
-# nightgauge-gitignore-version: 14
+# nightgauge-gitignore-version: 15
 
 # ─── Pipeline context, state, and execution data ─────────────────────
 pipeline/*
@@ -91,6 +94,28 @@ logs/*
 # ─── Pipeline worktrees (one linked checkout per concurrent run) ─────
 # If not ignored, "git add -A" records each one as an embedded repository.
 /worktrees/
+
+# ─── Per-machine operator state (lens, mode, guardrail lock) ────────
+# Written by the CLI and the extension for this operator; the team-wide
+# defaults live in config.yaml.
+/focus.yaml
+/performance-mode.yaml
+/supercharge.yaml.migrated
+/careful.lock
+
+# ─── Derived and queued runtime data ────────────────────────────────
+# The work graph is rebuilt from its sources (internal/graph); the audit
+# queue holds events that failed to submit, until they are retried.
+/graph/
+/audit-queue.json
+
+# ─── Inbound chat-command authorization log (user identities) ───────
+/notifications/
+
+# ─── Local counters inside the committed audit/ directory ───────────
+# audit/ itself holds authored files (for example features.yaml) and stays
+# tracked; the scope-drift gate's counter is this machine's own tally.
+/audit/scope-drift-stats.json
 
 # ─── Skill usage telemetry (local, per-machine) ─────────────────────
 /skills/
@@ -153,6 +178,7 @@ pipeline/queue-state.json
 /security-audit.json
 /modernization-plan.json
 /dep-modernize-report.json
+/test-scaffold-report.json
 
 # ─── Scheduled discovery state (release-watch, improvement runs) ─────
 # Produced on a GitHub Actions runner by release-watchdog.yml and

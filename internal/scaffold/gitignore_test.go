@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -301,5 +302,125 @@ func TestExcludeBlockDelimitersMatchExtension(t *testing.T) {
 		if !strings.Contains(src, want) {
 			t.Errorf("localGitExclude.ts no longer contains %s", want)
 		}
+	}
+}
+
+func withVersion(v string) string {
+	return strings.Replace(GitignoreTemplate, GitignoreVersionMarker(), "# nightgauge-gitignore-version: "+v, 1)
+}
+
+// A newer file or block is a newer writer's, never downgraded by this one.
+func TestEnsureIgnoreRulesVersionOrdering(t *testing.T) {
+	newer := strconv.Itoa(GitignoreVersion() + 1)
+
+	t.Run("newer untracked file is left alone", func(t *testing.T) {
+		root := initializedRepo(t)
+		ignorePath := filepath.Join(root, ".nightgauge", ".gitignore")
+		body := withVersion(newer) + "/from-the-future/\n"
+		if err := os.WriteFile(ignorePath, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		res := ensure(t, root, IgnoreCurrent)
+		if res.Changed || !strings.Contains(res.Note, "newer") {
+			t.Fatalf("res = %+v", res)
+		}
+		if read(t, ignorePath) != body {
+			t.Fatal("a newer file was rewritten")
+		}
+	})
+
+	t.Run("newer info/exclude block is left alone", func(t *testing.T) {
+		root := initializedRepo(t)
+		if err := os.WriteFile(filepath.Join(root, ".nightgauge", ".gitignore"), []byte("# nightgauge-gitignore-version: 1\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		commitAll(t, root)
+		excludePath := filepath.Join(root, ".git", "info", "exclude")
+		future := replaceBlock("", ExcludeBlockID, []string{"# nightgauge-gitignore-version: " + newer, "/.nightgauge/x/"})
+		if err := os.WriteFile(excludePath, []byte(future), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		res := ensure(t, root, IgnoreDeferred)
+		if res.Changed || read(t, excludePath) != future {
+			t.Fatalf("a newer block was replaced: %+v", res)
+		}
+	})
+
+	t.Run("older block is replaced and carries the version", func(t *testing.T) {
+		root := initializedRepo(t)
+		if err := os.WriteFile(filepath.Join(root, ".nightgauge", ".gitignore"), []byte("# nightgauge-gitignore-version: 1\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		commitAll(t, root)
+		excludePath := filepath.Join(root, ".git", "info", "exclude")
+		// A block from a writer before blocks carried a version: unparseable.
+		if err := os.WriteFile(excludePath, []byte(replaceBlock("", ExcludeBlockID, []string{"/.nightgauge/old/"})), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if res := ensure(t, root, IgnoreDeferred); !res.Changed {
+			t.Fatal("older block not replaced")
+		}
+		block, err := ReadExcludeBlock(root, ExcludeBlockID)
+		if err != nil || len(block) == 0 || block[0] != GitignoreVersionMarker() {
+			t.Fatalf("block = %q, %v", block, err)
+		}
+		if strings.Contains(read(t, excludePath), "/.nightgauge/old/") {
+			t.Fatal("old block survived")
+		}
+	})
+
+	t.Run("unparseable marker is treated as older", func(t *testing.T) {
+		root := initializedRepo(t)
+		ignorePath := filepath.Join(root, ".nightgauge", ".gitignore")
+		if err := os.WriteFile(ignorePath, []byte(withVersion("x1")), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		ensure(t, root, IgnoreUpdated)
+		if read(t, ignorePath) != GitignoreTemplate {
+			t.Fatal("unparseable marker not rewritten to the template")
+		}
+	})
+}
+
+// #4 of the review: a hand-extended untracked file with no Local additions
+// marker kept nothing on rewrite.
+func TestEnsureIgnoreRulesCarriesCustomRules(t *testing.T) {
+	root := initializedRepo(t)
+	ignorePath := filepath.Join(root, ".nightgauge", ".gitignore")
+	old := "# nightgauge-gitignore-version: 3\npipeline/*\n!/release-watch/\n/my-own/\n# a comment\n*.bak\n"
+	if err := os.WriteFile(ignorePath, []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res := ensure(t, root, IgnoreUpdated)
+	if !reflect.DeepEqual(res.Carried, []string{"/my-own/", "*.bak"}) {
+		t.Fatalf("carried = %q", res.Carried)
+	}
+	if got := read(t, ignorePath); got != GitignoreTemplate+"/my-own/\n*.bak\n" {
+		t.Fatalf("rewrite:\n%s", got)
+	}
+	// Idempotent: the carried rules are now local additions.
+	ensure(t, root, IgnoreCurrent)
+
+	// A marker-bearing file: rules above the marker are carried after the
+	// existing local additions, without duplicates.
+	withMarker := strings.Replace(withVersion("3"), "/improvement-runs/\n", "/improvement-runs/\n/above/\n/dup/\n", 1) +
+		"/below/\n/dup/\n"
+	if err := os.WriteFile(ignorePath, []byte(withMarker), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res = ensure(t, root, IgnoreUpdated)
+	if got := read(t, ignorePath); got != GitignoreTemplate+"/below/\n/dup/\n/above/\n" {
+		t.Fatalf("rewrite with marker:\n%s (carried %q)", got, res.Carried)
+	}
+}
+
+func TestExcludeBlockCRLF(t *testing.T) {
+	crlf := "*.swp\r\n" + excludeBlockBegin("x") + "\r\n# nightgauge-gitignore-version: 9\r\n/a\r\n" + excludeBlockEnd("x") + "\r\ntail\r\n"
+	if got := blockLines(crlf, "x"); !reflect.DeepEqual(got, []string{"# nightgauge-gitignore-version: 9", "/a"}) {
+		t.Fatalf("blockLines = %q", got)
+	}
+	next := replaceBlock(crlf, "x", []string{"/b"})
+	if strings.Count(next, "# nightgauge:begin x ") != 1 || !strings.Contains(next, "/b\n") || strings.Contains(next, "/a\r") {
+		t.Fatalf("CRLF block not replaced in place:\n%q", next)
 	}
 }

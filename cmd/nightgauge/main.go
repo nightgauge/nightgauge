@@ -4820,9 +4820,11 @@ func serveCmd() *cobra.Command {
 			// on activation, but a CLI-only or CI clone never runs it, and
 			// there `git add -A` commits logs and pipeline state. Non-fatal:
 			// the IPC server is worth more than an ignore file.
+			// Logged only when a file changed, so a committed older copy
+			// (deferred, block already current) is silent on every restart.
 			if res, ierr := scaffold.EnsureIgnoreRules(workspaceRoot); ierr != nil {
 				log.Printf("serve: ensure .nightgauge/ ignore rules: %v", ierr)
-			} else if res.Action != scaffold.IgnoreCurrent {
+			} else if res.Changed {
 				log.Printf("serve: %s", describeIgnoreResult(res))
 			}
 

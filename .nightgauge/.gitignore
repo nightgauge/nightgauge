@@ -7,7 +7,7 @@
 #   config.yaml           — repository-wide pipeline configuration
 #   .gitignore            — this file
 #   */.gitkeep            — preserve directory structure
-# nightgauge-gitignore-version: 14
+# nightgauge-gitignore-version: 15
 
 # ─── Pipeline context, state, and execution data ─────────────────────
 pipeline/*
@@ -52,6 +52,28 @@ logs/*
 # ─── Pipeline worktrees (one linked checkout per concurrent run) ─────
 # If not ignored, "git add -A" records each one as an embedded repository.
 /worktrees/
+
+# ─── Per-machine operator state (lens, mode, guardrail lock) ────────
+# Written by the CLI and the extension for this operator; the team-wide
+# defaults live in config.yaml.
+/focus.yaml
+/performance-mode.yaml
+/supercharge.yaml.migrated
+/careful.lock
+
+# ─── Derived and queued runtime data ────────────────────────────────
+# The work graph is rebuilt from its sources (internal/graph); the audit
+# queue holds events that failed to submit, until they are retried.
+/graph/
+/audit-queue.json
+
+# ─── Inbound chat-command authorization log (user identities) ───────
+/notifications/
+
+# ─── Local counters inside the committed audit/ directory ───────────
+# audit/ itself holds authored files (for example features.yaml) and stays
+# tracked; the scope-drift gate's counter is this machine's own tally.
+/audit/scope-drift-stats.json
 
 # ─── Skill usage telemetry (local, per-machine) ─────────────────────
 /skills/
@@ -114,6 +136,7 @@ pipeline/queue-state.json
 /security-audit.json
 /modernization-plan.json
 /dep-modernize-report.json
+/test-scaffold-report.json
 
 # ─── Scheduled discovery state (release-watch, improvement runs) ─────
 # Produced on a GitHub Actions runner by release-watchdog.yml and

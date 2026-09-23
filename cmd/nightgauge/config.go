@@ -147,6 +147,18 @@ The verb refuses to overwrite an existing file unless --force is given. Use
 		SilenceUsage:  true,
 		SilenceErrors: false,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// An existing config is the common CLI-only clone: the verb
+			// refuses to overwrite it, but the ignore rules it implies are
+			// still ensured (#2026) before the refusal, and before any
+			// GitHub query.
+			if outPath != "-" && !force {
+				if _, statErr := os.Stat(outPath); statErr == nil {
+					ignore, ignoreErr := ensureInitIgnoreRules(outPath)
+					reportIgnoreRules(cmd, ignore, ignoreErr)
+					return fmt.Errorf("config.yaml already exists at %q (use --force to overwrite)", outPath)
+				}
+			}
+
 			opts := config.InitOptions{
 				Owner:         owner,
 				OwnerType:     ownerType,
@@ -171,20 +183,15 @@ The verb refuses to overwrite an existing file unless --force is given. Use
 			if err != nil {
 				return err
 			}
-			ignore, err := ensureInitIgnoreRules(path)
-			if err != nil {
-				return err
-			}
+			ignore, ignoreErr := ensureInitIgnoreRules(path)
 
 			if outputJSON {
-				return emitInitJSON(cmd, path, wrote, ignore)
+				return emitInitJSON(cmd, path, wrote, ignore, ignoreErr)
 			}
 			if path != "" && wrote {
 				fmt.Fprintf(cmd.ErrOrStderr(), "wrote %s\n", path)
 			}
-			if ignore != nil {
-				fmt.Fprintln(cmd.ErrOrStderr(), describeIgnoreResult(*ignore))
-			}
+			reportIgnoreRules(cmd, ignore, ignoreErr)
 			return nil
 		},
 	}
@@ -517,6 +524,19 @@ func ensureInitIgnoreRules(path string) (*scaffold.IgnoreResult, error) {
 	return &res, nil
 }
 
+// reportIgnoreRules prints the ensure outcome to stderr. A failure is a
+// warning: the config write it follows has already succeeded (or been
+// refused on its own terms), so it never changes the exit code.
+func reportIgnoreRules(cmd *cobra.Command, ignore *scaffold.IgnoreResult, ignoreErr error) {
+	if ignoreErr != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: %v\n", ignoreErr)
+		return
+	}
+	if ignore != nil {
+		fmt.Fprintln(cmd.ErrOrStderr(), describeIgnoreResult(*ignore))
+	}
+}
+
 // describeIgnoreResult renders one stderr line for an ensure outcome.
 func describeIgnoreResult(res scaffold.IgnoreResult) string {
 	line := "ignore rules: " + string(res.Action)
@@ -532,13 +552,18 @@ func describeIgnoreResult(res scaffold.IgnoreResult) string {
 // emitInitJSON writes a stable {"path": ..., "wrote": ...} envelope to stdout
 // so calling skills/scripts can branch on the outcome without parsing prose.
 // "ignore_rules" is added when init ensured the .nightgauge/ ignore rules.
-func emitInitJSON(cmd *cobra.Command, path string, wrote bool, ignore *scaffold.IgnoreResult) error {
+// "ignore_rules_error" carries a failure to do so, which is a warning only.
+func emitInitJSON(cmd *cobra.Command, path string, wrote bool, ignore *scaffold.IgnoreResult, ignoreErr error) error {
 	payload := map[string]any{
 		"path":  path,
 		"wrote": wrote,
 	}
 	if ignore != nil {
 		payload["ignore_rules"] = ignore
+	}
+	if ignoreErr != nil {
+		payload["ignore_rules_error"] = ignoreErr.Error()
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: %v\n", ignoreErr)
 	}
 	enc := json.NewEncoder(cmd.OutOrStdout())
 	enc.SetIndent("", "  ")

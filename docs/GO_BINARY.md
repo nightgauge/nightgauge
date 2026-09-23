@@ -7190,8 +7190,9 @@ parser.
 | `--no-fetch`      | `false`                        | Skip GitHub queries even when `--project` is set; emit field-ID placeholders    |
 | `--json`          | `false`                        | After writing, print `{"path":"...","wrote":true}` to stdout (machine-readable) |
 
-**Ignore rules**: when the written file is a `.nightgauge/config.yaml`, the
-verb also ensures the `.nightgauge/` ignore rules in that repository, as the
+**Ignore rules**: when `--out` is a `.nightgauge/config.yaml`, the verb also
+ensures the `.nightgauge/` ignore rules in that repository (also when it
+refuses to overwrite an existing file), as the
 extension does on activation and `serve` does at startup. A missing
 `.nightgauge/.gitignore` is written from the template the binary embeds
 (`internal/scaffold/nightgauge.gitignore`); an older untracked copy is
@@ -7201,7 +7202,9 @@ untouched and the current rules go to the repository's `info/exclude`
 shared one; a symlinked target is refused). Outside a git work tree nothing is
 written. The outcome is printed to stderr as `ignore rules: <action> ...` and,
 with `--json`, added as an `ignore_rules` object with `action` (`created`,
-`updated`, `deferred`, `current` or `skipped`), `path` and `note`. See
+`updated`, `deferred`, `current` or `skipped`), `path`, `note`, `changed`
+and `carried`. Failing to ensure them is a warning on stderr (and
+`ignore_rules_error` in `--json`), never a non-zero exit. See
 [CONFIGURATION.md § Gitignore Entry](CONFIGURATION.md#gitignore-entry).
 
 **Exit codes**:

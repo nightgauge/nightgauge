@@ -327,7 +327,9 @@ and the CLI does the same from `nightgauge config init` and `nightgauge serve`,
 so a clone driven only from a terminal or CI gets it too; both write one
 template (`internal/scaffold/nightgauge.gitignore`). Outside a git work tree
 the CLI writes nothing. The file carries a `nightgauge-gitignore-version:`
-marker, and when the template's version is newer:
+marker. A file (or `info/exclude` block) at the writer's version or newer is
+left alone, so an older extension or binary never downgrades it; a missing or
+unreadable marker counts as older. When the file is older:
 
 - An **untracked** copy is rewritten: everything above its
   `Local additions (kept on upgrade)` line is replaced with the current
@@ -335,11 +337,15 @@ marker, and when the template's version is newer:
   place to put this repository's own rules for `.nightgauge/` paths (for
   example, un-ignoring `/knowledge/`, as
   [KNOWLEDGE_BASE.md](KNOWLEDGE_BASE.md#adopting-the-knowledge-base-in-an-existing-repository)
-  describes). An edit above the marker is lost at the next version bump.
+  describes). A rule found above the marker, or anywhere in a file with no
+  marker, that is not one of the template's current or retired rules is moved
+  into that section rather than dropped; edited comments and edits to the
+  template's own rules are not kept.
 - A **committed** copy is never edited. The current rules are written per
   machine to the repository's `info/exclude`, in a block between
-  `# nightgauge:begin nightgauge-gitignore` and its matching `end` line, and
-  the committed file is upgraded by pull request.
+  `# nightgauge:begin nightgauge-gitignore` and its matching `end` line that
+  carries its own version marker, and the committed file is upgraded by pull
+  request.
 
 Rules for paths outside `.nightgauge/` belong in the repository-root
 `.gitignore`, which Nightgauge never edits.

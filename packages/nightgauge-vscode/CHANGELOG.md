@@ -18,10 +18,14 @@ and this project adheres to
 
 ### Fixed
 
-- The generated `.nightgauge/.gitignore` (template version 14) now ignores
+- The generated `.nightgauge/.gitignore` (template version 15) now ignores
   `.nightgauge/worktrees/`, so a pipeline worktree no longer shows up in
-  `git status` as an embedded repository in a repository whose root
-  `.gitignore` does not already ignore it. The Nightgauge CLI now writes the
+  `git status` as an embedded repository, and the per-machine files it
+  missed: the chat-command authorization log, the work graph, the focus lens,
+  the performance mode, the careful-mode lock, the audit queue and two
+  reports. An older extension no longer downgrades a newer file, and an
+  upgrade moves custom rules found outside the `Local additions` section into
+  it instead of dropping them. The Nightgauge CLI now writes the
   same file from `config init` and `serve`, so a clone that never opened VS
   Code gets it too.
 

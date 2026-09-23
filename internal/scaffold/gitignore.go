@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/atomicfile"
@@ -42,12 +43,44 @@ const ExcludeBlockID = "nightgauge-gitignore"
 // belongs to the repository; a rewrite keeps every line below it.
 const LocalAdditionsMarker = "# ─── Local additions (kept on upgrade) ──────────────────────────────"
 
-var versionLine = regexp.MustCompile(`(?m)^# nightgauge-gitignore-version: (\d+)$`)
+var versionLine = regexp.MustCompile(`(?m)^# nightgauge-gitignore-version: (\d+)\r?$`)
 
 // GitignoreVersionMarker returns the template's version marker line.
 func GitignoreVersionMarker() string {
-	return versionLine.FindString(GitignoreTemplate)
+	return strings.TrimSuffix(versionLine.FindString(GitignoreTemplate), "\r")
 }
+
+// GitignoreVersion is the template's version number.
+func GitignoreVersion() int {
+	v, _ := parseVersion(GitignoreTemplate)
+	return v
+}
+
+// parseVersion reads the first version marker in content. ok is false when
+// there is none or it does not parse; callers treat that as older.
+func parseVersion(content string) (int, bool) {
+	m := versionLine.FindStringSubmatch(content)
+	if m == nil {
+		return 0, false
+	}
+	v, err := strconv.Atoi(m[1])
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
+// retiredRulesFile lists rule lines earlier template versions carried and
+// the current one dropped (retired-rules.txt). A rewrite recognises them as
+// the template's own, not the repository's, so it does not carry them into
+// Local additions. The extension's RETIRED_RULES is pinned to this file by
+// its test.
+//
+//go:embed retired-rules.txt
+var retiredRulesFile string
+
+// RetiredRules returns the rule lines in retired-rules.txt.
+func RetiredRules() []string { return ruleLines(retiredRulesFile) }
 
 // IgnoreAction is what EnsureIgnoreRules did.
 type IgnoreAction string
@@ -73,8 +106,13 @@ type IgnoreResult struct {
 	Action IgnoreAction `json:"action"`
 	// Path is the file written or inspected, when there is one.
 	Path string `json:"path,omitempty"`
-	// Note explains a skip or a deferral in one line.
+	// Note explains a skip, a deferral or carried lines in one line.
 	Note string `json:"note,omitempty"`
+	// Changed is true when a file on disk was written.
+	Changed bool `json:"changed"`
+	// Carried lists rules an untracked file held outside its Local additions
+	// section that the rewrite moved into it.
+	Carried []string `json:"carried,omitempty"`
 }
 
 // gitkeepDirs are the directories whose .gitkeep the template un-ignores.
@@ -128,26 +166,63 @@ func EnsureIgnoreRules(repoRoot string) (IgnoreResult, error) {
 		return IgnoreResult{}, fmt.Errorf("read %s: %w", ignorePath, err)
 	}
 	existing := string(data)
-	if hasLine(existing, GitignoreVersionMarker()) {
-		return IgnoreResult{Action: IgnoreCurrent, Path: ignorePath}, nil
+	own := GitignoreVersion()
+	if v, ok := parseVersion(existing); ok && v >= own {
+		res := IgnoreResult{Action: IgnoreCurrent, Path: ignorePath}
+		if v > own {
+			res.Note = fmt.Sprintf("version %d is newer than this writer's %d; left alone", v, own)
+		}
+		return res, nil
 	}
 
 	if IsTracked(repoRoot, ".nightgauge/.gitignore") {
-		if _, err := WriteExcludeBlock(repoRoot, ExcludeBlockID, ToRootPatterns(".nightgauge", GitignoreTemplate)); err != nil {
-			return IgnoreResult{}, err
-		}
-		excludePath, _ := LocalExcludePath(repoRoot)
-		return IgnoreResult{
-			Action: IgnoreDeferred,
-			Path:   excludePath,
-			Note:   "the committed .nightgauge/.gitignore is older; current rules applied per machine",
-		}, nil
+		return deferToExclude(repoRoot, own)
 	}
 
-	if err := atomicfile.Write(ignorePath, []byte(GitignoreTemplate+localAdditions(existing)), info.Mode().Perm()); err != nil {
+	local, carried := localAdditions(existing)
+	if err := atomicfile.Write(ignorePath, []byte(GitignoreTemplate+local), info.Mode().Perm()); err != nil {
 		return IgnoreResult{}, fmt.Errorf("write %s: %w", ignorePath, err)
 	}
-	return IgnoreResult{Action: IgnoreUpdated, Path: ignorePath}, nil
+	res := IgnoreResult{Action: IgnoreUpdated, Path: ignorePath, Changed: true, Carried: carried}
+	if len(carried) > 0 {
+		res.Note = fmt.Sprintf("kept %d rule(s) from outside the Local additions section", len(carried))
+	}
+	return res, nil
+}
+
+// deferToExclude writes the template's rules to info/exclude for a committed
+// older .nightgauge/.gitignore. The block carries its own version marker so a
+// newer writer's block is never replaced by an older one.
+func deferToExclude(repoRoot string, own int) (IgnoreResult, error) {
+	excludePath, err := LocalExcludePath(repoRoot)
+	if err != nil {
+		return IgnoreResult{}, err
+	}
+	res := IgnoreResult{
+		Action: IgnoreDeferred,
+		Path:   excludePath,
+		Note:   "the committed .nightgauge/.gitignore is older; current rules applied per machine",
+	}
+	block, err := ReadExcludeBlock(repoRoot, ExcludeBlockID)
+	if err != nil {
+		return IgnoreResult{}, err
+	}
+	if v, ok := parseVersion(strings.Join(block, "\n")); ok && v > own {
+		res.Note = fmt.Sprintf("info/exclude carries version %d, newer than this writer's %d; left alone", v, own)
+		return res, nil
+	}
+	changed, err := WriteExcludeBlock(repoRoot, ExcludeBlockID, ExcludePatterns())
+	if err != nil {
+		return IgnoreResult{}, err
+	}
+	res.Changed = changed
+	return res, nil
+}
+
+// ExcludePatterns is the info/exclude block body: the version marker, then
+// the template's rules re-anchored at the repository root.
+func ExcludePatterns() []string {
+	return append([]string{GitignoreVersionMarker()}, ToRootPatterns(".nightgauge", GitignoreTemplate)...)
 }
 
 func createIgnoreFile(ngDir, ignorePath string) (IgnoreResult, error) {
@@ -167,34 +242,56 @@ func createIgnoreFile(ngDir, ignorePath string) (IgnoreResult, error) {
 			}
 		}
 	}
-	return IgnoreResult{Action: IgnoreCreated, Path: ignorePath}, nil
+	return IgnoreResult{Action: IgnoreCreated, Path: ignorePath, Changed: true}, nil
 }
 
-// localAdditions returns what an existing file carries below its Local
-// additions marker, minus the template's own text there, exactly as the
-// extension computes it.
-func localAdditions(existing string) string {
-	at := strings.Index(existing, LocalAdditionsMarker)
-	if at < 0 {
-		return ""
+// localAdditions returns the text to keep after the template on a rewrite,
+// exactly as the extension computes it: everything an existing file carries
+// below its Local additions marker (minus the template's own text there),
+// then every rule line above the marker (or anywhere, with no marker) that is
+// neither a current nor a retired template rule and is not already kept.
+// Without the second part a hand-extended file with no marker lost its
+// custom rules silently. carried lists those moved rules.
+func localAdditions(existing string) (string, []string) {
+	head, local := existing, ""
+	if at := strings.Index(existing, LocalAdditionsMarker); at >= 0 {
+		head = existing[:at]
+		after := existing[at+len(LocalAdditionsMarker):]
+		tmplAt := strings.Index(GitignoreTemplate, LocalAdditionsMarker)
+		canonicalTail := GitignoreTemplate[tmplAt+len(LocalAdditionsMarker):]
+		local = strings.TrimPrefix(after, canonicalTail)
 	}
-	after := existing[at+len(LocalAdditionsMarker):]
-	tmplAt := strings.Index(GitignoreTemplate, LocalAdditionsMarker)
-	canonicalTail := GitignoreTemplate[tmplAt+len(LocalAdditionsMarker):]
-	if strings.HasPrefix(after, canonicalTail) {
-		return after[len(canonicalTail):]
+	known := map[string]bool{}
+	for _, l := range append(ruleLines(GitignoreTemplate), RetiredRules()...) {
+		known[l] = true
 	}
-	return after
-}
-
-func hasLine(content, line string) bool {
-	if line == "" {
-		return false
+	for _, l := range ruleLines(local) {
+		known[l] = true
 	}
-	for _, l := range strings.Split(content, "\n") {
-		if strings.TrimRight(l, "\r") == line {
-			return true
+	var carried []string
+	for _, l := range ruleLines(head) {
+		if !known[l] {
+			known[l] = true
+			carried = append(carried, l)
 		}
 	}
-	return false
+	if len(carried) > 0 {
+		if local != "" && !strings.HasSuffix(local, "\n") {
+			local += "\n"
+		}
+		local += strings.Join(carried, "\n") + "\n"
+	}
+	return local, carried
+}
+
+// ruleLines returns content's non-blank, non-comment lines, trimmed.
+func ruleLines(content string) []string {
+	var out []string
+	for _, l := range strings.Split(content, "\n") {
+		l = strings.TrimSpace(l)
+		if l != "" && !strings.HasPrefix(l, "#") {
+			out = append(out, l)
+		}
+	}
+	return out
 }

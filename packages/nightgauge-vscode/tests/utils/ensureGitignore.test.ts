@@ -312,6 +312,104 @@ describe("ensureGitignore on a git checkout (#1875)", () => {
   });
 });
 
+describe("ensureGitignore version ordering and carried rules", () => {
+  function git(cwd: string, ...args: string[]): string {
+    return execFileSync("git", args, { cwd, encoding: "utf8" });
+  }
+  const current = Number(renderGeneratedGitignore().match(/version: (\d+)/)?.[1]);
+  const withVersion = (v: string): string =>
+    renderGeneratedGitignore().replace(
+      /nightgauge-gitignore-version: \d+/,
+      `nightgauge-gitignore-version: ${v}`
+    );
+
+  async function untracked(content: string): Promise<string> {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "ng-order-"));
+    await fsp.mkdir(path.join(root, ".nightgauge"), { recursive: true });
+    await fsp.writeFile(path.join(root, ".nightgauge", ".gitignore"), content);
+    return root;
+  }
+
+  it("leaves a file from a newer writer alone", async () => {
+    const newer = withVersion(String(current + 1)) + "/from-the-future/\n";
+    const root = await untracked(newer);
+    expect(await ensureGitignore(root)).toEqual({ created: false, updated: false });
+    expect(fs.readFileSync(path.join(root, ".nightgauge", ".gitignore"), "utf8")).toBe(newer);
+  });
+
+  it("treats an unparseable marker as older", async () => {
+    const root = await untracked(withVersion("x1"));
+    expect((await ensureGitignore(root)).updated).toBe(true);
+    expect(fs.readFileSync(path.join(root, ".nightgauge", ".gitignore"), "utf8")).toBe(
+      renderGeneratedGitignore()
+    );
+  });
+
+  it("never replaces a newer info/exclude block, and versions its own", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "ng-block-"));
+    git(root, "init", "-q");
+    await fsp.mkdir(path.join(root, ".nightgauge"), { recursive: true });
+    await fsp.writeFile(
+      path.join(root, ".nightgauge", ".gitignore"),
+      "# nightgauge-gitignore-version: 1\n"
+    );
+    git(root, "add", ".");
+    git(root, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "i");
+    const exclude = path.join(root, ".git", "info", "exclude");
+
+    await ensureGitignore(root);
+    const own = fs.readFileSync(exclude, "utf8");
+    expect(own).toContain(
+      "(managed per machine; never committed, #1875)\n" +
+        `# nightgauge-gitignore-version: ${current}\n/.nightgauge/pipeline/*\n`
+    );
+
+    const future =
+      "# nightgauge:begin nightgauge-gitignore (managed per machine; never committed, #1875)\n" +
+      `# nightgauge-gitignore-version: ${current + 1}\n/.nightgauge/x/\n` +
+      "# nightgauge:end nightgauge-gitignore\n";
+    await fsp.writeFile(exclude, future);
+    expect((await ensureGitignore(root)).deferred).toBe(true);
+    expect(fs.readFileSync(exclude, "utf8")).toBe(future);
+  });
+
+  it("carries rules a marker-less file held, and drops retired template rules", async () => {
+    const root = await untracked(
+      "# nightgauge-gitignore-version: 3\npipeline/*\n!/release-watch/\n/my-own/\n# c\n*.bak\n"
+    );
+    const result = await ensureGitignore(root);
+    expect(result.carried).toEqual(["/my-own/", "*.bak"]);
+    expect(fs.readFileSync(path.join(root, ".nightgauge", ".gitignore"), "utf8")).toBe(
+      renderGeneratedGitignore() + "/my-own/\n*.bak\n"
+    );
+    expect(await ensureGitignore(root)).toEqual({ created: false, updated: false });
+  });
+
+  it("carries rules above the marker after the kept local additions, once", async () => {
+    const root = await untracked(
+      withVersion("3").replace("/improvement-runs/\n", "/improvement-runs/\n/above/\n/dup/\n") +
+        "/below/\n/dup/\n"
+    );
+    await ensureGitignore(root);
+    expect(fs.readFileSync(path.join(root, ".nightgauge", ".gitignore"), "utf8")).toBe(
+      renderGeneratedGitignore() + "/below/\n/dup/\n/above/\n"
+    );
+  });
+
+  it("recognises the same retired rules as the Go binary", () => {
+    const src = fs.readFileSync(generatorPath, "utf8");
+    const ts = src.match(/const RETIRED_RULES = \[([^\]]*)\]/);
+    expect(ts, "RETIRED_RULES not found").not.toBeNull();
+    const tsRules = [...(ts?.[1] ?? "").matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+    const goRules = fs
+      .readFileSync(path.join(repoRoot, "internal/scaffold/retired-rules.txt"), "utf8")
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l !== "" && !l.startsWith("#"));
+    expect(tsRules).toEqual(goRules);
+  });
+});
+
 describe("toRootPatterns", () => {
   it("re-anchors .nightgauge rules at the repository root", () => {
     expect(

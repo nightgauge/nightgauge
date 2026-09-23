@@ -485,11 +485,21 @@ create --body-file` call, so the compact profile (and its tests) pin
   `config init --json` reports the outcome as `ignore_rules`. The binary embeds
   the template from `internal/scaffold/nightgauge.gitignore`; tests on both
   sides fail if the extension's copy, that file or the committed
-  `.nightgauge/.gitignore` differ. The template (now version 14) also ignores
-  `.nightgauge/worktrees/`, where the scheduler creates its worktrees; before,
-  only a repository's own root `.gitignore` could keep them out. A committed
-  version-13 file picks the rule up per machine until it is upgraded by pull
-  request. No rule was removed.
+  `.nightgauge/.gitignore` differ. The template (now version 15) also ignores
+  runtime paths it missed: `worktrees/` (the scheduler's worktrees),
+  `notifications/` (the chat-command authorization log, which records user
+  identities), `graph/`, `focus.yaml`, `performance-mode.yaml`,
+  `supercharge.yaml.migrated`, `careful.lock`, `audit-queue.json`,
+  `test-scaffold-report.json` and `audit/scope-drift-stats.json`; the rest of
+  `audit/` stays tracked. A committed version-13 file picks these up per
+  machine until it is upgraded by pull request. No rule was removed. Both
+  writers now act only on an older file or `info/exclude` block (the block
+  carries its own version), so an older extension or binary never downgrades
+  a newer one, and a rewrite of an untracked file moves custom rules it finds
+  outside the `Local additions` section into it instead of dropping them.
+  `config init` ensures the rules even when it refuses to overwrite an
+  existing `config.yaml`, and a failure to do so is a warning, not an exit
+  code.
 
 - **The docs now agree with what the generated `.nightgauge/.gitignore`
   ignores (#1090).** `docs/ARCHITECTURE.md` no longer claims the plan deleted

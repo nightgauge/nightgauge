@@ -1,6 +1,7 @@
 package scaffold
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -8,9 +9,24 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/atomicfile"
 )
+
+// gitTimeout bounds every git subprocess here. `serve` calls into this package
+// at startup, and a wedged git (a stale index.lock prompt, a hung filesystem)
+// must cost it seconds, not the whole IPC server.
+const gitTimeout = 10 * time.Second
+
+// gitCmd builds a bounded `git <args...>` in dir. The returned cancel must be
+// called once the command has run.
+func gitCmd(dir string, args ...string) (*exec.Cmd, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	return cmd, cancel
+}
 
 // ErrNotGitWorkTree reports that a directory is not inside a git work tree,
 // so there is no info/exclude to write and nothing git would ignore anyway.
@@ -19,16 +35,16 @@ var ErrNotGitWorkTree = errors.New("not inside a git work tree")
 // IsTracked reports whether relPath (relative to dir) is tracked by git. It is
 // false outside a git work tree.
 func IsTracked(dir, relPath string) bool {
-	cmd := exec.Command("git", "ls-files", "--error-unmatch", "--", relPath)
-	cmd.Dir = dir
+	cmd, cancel := gitCmd(dir, "ls-files", "--error-unmatch", "--", relPath)
+	defer cancel()
 	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
 	return cmd.Run() == nil
 }
 
 // InsideWorkTree reports whether dir is inside a git work tree.
 func InsideWorkTree(dir string) bool {
-	cmd := exec.Command("git", "rev-parse", "--is-inside-work-tree")
-	cmd.Dir = dir
+	cmd, cancel := gitCmd(dir, "rev-parse", "--is-inside-work-tree")
+	defer cancel()
 	cmd.Stderr = io.Discard
 	out, err := cmd.Output()
 	return err == nil && strings.TrimSpace(string(out)) == "true"
@@ -45,9 +61,9 @@ func InsideWorkTree(dir string) bool {
 // outside the repository's git dir. Outside a git work tree it returns
 // ErrNotGitWorkTree.
 func LocalExcludePath(dir string) (string, error) {
-	cmd := exec.Command("git", "rev-parse", "--path-format=absolute",
+	cmd, cancel := gitCmd(dir, "rev-parse", "--path-format=absolute",
 		"--git-common-dir", "--git-path", "info/exclude")
-	cmd.Dir = dir
+	defer cancel()
 	cmd.Stderr = io.Discard
 	out, err := cmd.Output()
 	if err != nil {
@@ -112,6 +128,42 @@ func WriteExcludeBlock(dir, id string, patterns []string) (bool, error) {
 	return true, nil
 }
 
+// ReadExcludeBlock returns the lines inside the block named id in the
+// repository's info/exclude, or nil when there is no such block (or no
+// info/exclude at all).
+func ReadExcludeBlock(dir, id string) ([]string, error) {
+	excludePath, err := LocalExcludePath(dir)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(excludePath)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", excludePath, err)
+	}
+	return blockLines(string(data), id), nil
+}
+
+// blockLines is ReadExcludeBlock's pure half; lines have any CR trimmed.
+func blockLines(content, id string) []string {
+	var out []string
+	in := false
+	for _, l := range strings.Split(content, "\n") {
+		l = strings.TrimSuffix(l, "\r")
+		switch {
+		case !in && strings.HasPrefix(l, "# nightgauge:begin "+id+" "):
+			in = true
+		case in && l == excludeBlockEnd(id):
+			return out
+		case in:
+			out = append(out, l)
+		}
+	}
+	return nil
+}
+
 // replaceBlock is the pure half of WriteExcludeBlock, a line-for-line port of
 // the extension's algorithm so both produce the same file from the same input.
 func replaceBlock(existing, id string, patterns []string) string {
@@ -128,7 +180,7 @@ func replaceBlock(existing, id string, patterns []string) string {
 	}
 	endIdx := -1
 	for i, l := range lines {
-		if i > startIdx && l == end {
+		if i > startIdx && strings.TrimSuffix(l, "\r") == end {
 			endIdx = i
 			break
 		}
