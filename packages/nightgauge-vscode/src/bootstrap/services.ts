@@ -701,7 +701,15 @@ export async function initializeServices(
           if (result.created) {
             logger.info("Created .nightgauge/.gitignore");
           } else if (result.updated) {
-            logger.info("Updated .nightgauge/.gitignore to latest version");
+            if (result.carried) {
+              logger.warn(
+                "Updated .nightgauge/.gitignore; rules found outside its Local additions " +
+                  "section were moved into it",
+                { carried: result.carried }
+              );
+            } else {
+              logger.info("Updated .nightgauge/.gitignore to latest version");
+            }
           } else if (result.deferred) {
             logger.warn(
               "The committed .nightgauge/.gitignore is older than the current template. " +

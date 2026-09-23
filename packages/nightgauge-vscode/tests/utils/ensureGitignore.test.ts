@@ -66,9 +66,24 @@ describe("ensureGitignore", () => {
       "/health/",
       "/autonomous/",
       "/complexity-model.lock",
+      "/worktrees/",
     ]) {
       expect(generated).toContain(rule);
     }
+  });
+
+  it("writes exactly the Go binary's embedded template (#2026)", async () => {
+    // `nightgauge config init` and `serve` write the same file from
+    // internal/scaffold/nightgauge.gitignore. Compare what this module
+    // actually writes, not a regex over its source, so a change to either
+    // writer alone turns this red.
+    const goTemplate = fs.readFileSync(
+      path.join(repoRoot, "internal/scaffold/nightgauge.gitignore"),
+      "utf8"
+    );
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "ng-parity-"));
+    await ensureGitignore(root);
+    expect(fs.readFileSync(path.join(root, ".nightgauge", ".gitignore"), "utf8")).toBe(goTemplate);
   });
 
   it("carries a version marker the updater can compare against", () => {
@@ -253,6 +268,33 @@ describe("ensureGitignore on a git checkout (#1875)", () => {
     expect(fs.existsSync(path.join(root, ".nightgauge", "plans", ".gitkeep"))).toBe(false);
   });
 
+  it("ignores plans and knowledge by default, and the documented opt-in commits knowledge", async () => {
+    // #1090. Plans are per-run exhaust (docs/ARCHITECTURE.md § Cleanup deletes
+    // them at merge, with no git history behind them), and the knowledge tree
+    // is ignored unless the repository opts in below the Local additions
+    // marker, exactly as docs/KNOWLEDGE_BASE.md step 5 instructs.
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "ng-optin-"));
+    git(root, "init", "-q");
+    await ensureGitignore(root);
+    const ignorePath = path.join(root, ".nightgauge", ".gitignore");
+    await fsp.mkdir(path.join(root, ".nightgauge", "knowledge"), { recursive: true });
+    await fsp.writeFile(path.join(root, ".nightgauge", "knowledge", "index.md"), "# k\n");
+    await fsp.writeFile(path.join(root, ".nightgauge", "plans", "7-x.md"), "plan\n");
+
+    const status = () =>
+      git(root, "status", "--porcelain", "--untracked-files=all")
+        .split("\n")
+        .filter(Boolean)
+        .map((l) => l.slice(3));
+    expect(status()).not.toContain(".nightgauge/plans/7-x.md");
+    expect(status()).not.toContain(".nightgauge/knowledge/index.md");
+    expect(status()).toContain(".nightgauge/plans/.gitkeep");
+
+    await fsp.appendFile(ignorePath, "!/knowledge/\n/knowledge/.recall-cache/\n");
+    expect(status()).toContain(".nightgauge/knowledge/index.md");
+    expect(status()).not.toContain(".nightgauge/plans/7-x.md");
+  });
+
   it("keeps local additions when it rewrites an untracked older file", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "ng-untracked-"));
     const old = renderGeneratedGitignore()
@@ -267,6 +309,104 @@ describe("ensureGitignore on a git checkout (#1875)", () => {
     expect(fs.readFileSync(path.join(root, ".nightgauge", ".gitignore"), "utf8")).toBe(
       renderGeneratedGitignore() + "!/knowledge/\n"
     );
+  });
+});
+
+describe("ensureGitignore version ordering and carried rules", () => {
+  function git(cwd: string, ...args: string[]): string {
+    return execFileSync("git", args, { cwd, encoding: "utf8" });
+  }
+  const current = Number(renderGeneratedGitignore().match(/version: (\d+)/)?.[1]);
+  const withVersion = (v: string): string =>
+    renderGeneratedGitignore().replace(
+      /nightgauge-gitignore-version: \d+/,
+      `nightgauge-gitignore-version: ${v}`
+    );
+
+  async function untracked(content: string): Promise<string> {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "ng-order-"));
+    await fsp.mkdir(path.join(root, ".nightgauge"), { recursive: true });
+    await fsp.writeFile(path.join(root, ".nightgauge", ".gitignore"), content);
+    return root;
+  }
+
+  it("leaves a file from a newer writer alone", async () => {
+    const newer = withVersion(String(current + 1)) + "/from-the-future/\n";
+    const root = await untracked(newer);
+    expect(await ensureGitignore(root)).toEqual({ created: false, updated: false });
+    expect(fs.readFileSync(path.join(root, ".nightgauge", ".gitignore"), "utf8")).toBe(newer);
+  });
+
+  it("treats an unparseable marker as older", async () => {
+    const root = await untracked(withVersion("x1"));
+    expect((await ensureGitignore(root)).updated).toBe(true);
+    expect(fs.readFileSync(path.join(root, ".nightgauge", ".gitignore"), "utf8")).toBe(
+      renderGeneratedGitignore()
+    );
+  });
+
+  it("never replaces a newer info/exclude block, and versions its own", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "ng-block-"));
+    git(root, "init", "-q");
+    await fsp.mkdir(path.join(root, ".nightgauge"), { recursive: true });
+    await fsp.writeFile(
+      path.join(root, ".nightgauge", ".gitignore"),
+      "# nightgauge-gitignore-version: 1\n"
+    );
+    git(root, "add", ".");
+    git(root, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "i");
+    const exclude = path.join(root, ".git", "info", "exclude");
+
+    await ensureGitignore(root);
+    const own = fs.readFileSync(exclude, "utf8");
+    expect(own).toContain(
+      "(managed per machine; never committed, #1875)\n" +
+        `# nightgauge-gitignore-version: ${current}\n/.nightgauge/pipeline/*\n`
+    );
+
+    const future =
+      "# nightgauge:begin nightgauge-gitignore (managed per machine; never committed, #1875)\n" +
+      `# nightgauge-gitignore-version: ${current + 1}\n/.nightgauge/x/\n` +
+      "# nightgauge:end nightgauge-gitignore\n";
+    await fsp.writeFile(exclude, future);
+    expect((await ensureGitignore(root)).deferred).toBe(true);
+    expect(fs.readFileSync(exclude, "utf8")).toBe(future);
+  });
+
+  it("carries rules a marker-less file held, and drops retired template rules", async () => {
+    const root = await untracked(
+      "# nightgauge-gitignore-version: 3\npipeline/*\n!/release-watch/\n/my-own/\n# c\n*.bak\n"
+    );
+    const result = await ensureGitignore(root);
+    expect(result.carried).toEqual(["/my-own/", "*.bak"]);
+    expect(fs.readFileSync(path.join(root, ".nightgauge", ".gitignore"), "utf8")).toBe(
+      renderGeneratedGitignore() + "/my-own/\n*.bak\n"
+    );
+    expect(await ensureGitignore(root)).toEqual({ created: false, updated: false });
+  });
+
+  it("carries rules above the marker after the kept local additions, once", async () => {
+    const root = await untracked(
+      withVersion("3").replace("/improvement-runs/\n", "/improvement-runs/\n/above/\n/dup/\n") +
+        "/below/\n/dup/\n"
+    );
+    await ensureGitignore(root);
+    expect(fs.readFileSync(path.join(root, ".nightgauge", ".gitignore"), "utf8")).toBe(
+      renderGeneratedGitignore() + "/below/\n/dup/\n/above/\n"
+    );
+  });
+
+  it("recognises the same retired rules as the Go binary", () => {
+    const src = fs.readFileSync(generatorPath, "utf8");
+    const ts = src.match(/const RETIRED_RULES = \[([^\]]*)\]/);
+    expect(ts, "RETIRED_RULES not found").not.toBeNull();
+    const tsRules = [...(ts?.[1] ?? "").matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+    const goRules = fs
+      .readFileSync(path.join(repoRoot, "internal/scaffold/retired-rules.txt"), "utf8")
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l !== "" && !l.startsWith("#"));
+    expect(tsRules).toEqual(goRules);
   });
 });
 
