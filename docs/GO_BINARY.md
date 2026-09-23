@@ -4915,6 +4915,24 @@ list it already holds. `TestCountsWithinTTLReadTheSnapshotOnce` pins the
 cost claim (red before: two calls, two upstream count queries, zero snapshot
 reads).
 
+**Status reads are slices of the open snapshot, and the tree reads it once.**
+The Repositories tree needs per-repository Ready / In progress / Backlog counts
+with epics excluded (epic grouping is on by default), which a board-wide
+`board.counts` cannot give. It used to send `board.list` once per status, so
+each repository row cost three `items(query:"status:X is:open")` reads, each
+17 points a page, and none of them was shared with `board.counts` or the
+sweeps. The `board.listOpen` verb returns the cached `is:open` snapshot itself,
+and the extension groups it by status per repository. A board adapter that
+implements `boardcache.OpenStatusSubset` promises that its status read is
+exactly the open read filtered by status. For such a board, `ListItems` for
+any status except Done is answered from a fresh open snapshot with no request.
+The GitHub adapter implements it, because its filtered read is the same
+document plus `status:"X"`. Done is read without `is:open` and so is excluded.
+A status read never starts the larger open read on its own behalf, so a
+Ready-only caller such as the scheduler pays what it paid before.
+`TestStatusReadsAreServedFromAFreshOpenSnapshot` and
+`TestBoardListOpen_SharesOneBoardReadWithCountsAndStatusReads` pin the counts.
+
 **Attribution through the cache (#860).** Inserting the cache initially moved
 every board read's attribution off the producers and onto `boardcache` — a
 silent regression in the one instrument the rest of #842 depends on, since

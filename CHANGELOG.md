@@ -279,6 +279,30 @@ create --body-file` call, so the compact profile (and its tests) pin
 
 ### Fixed
 
+- **The Repositories view costs one board read per board, not three per
+  repository.** Opening the extension and expanding the view was measured
+  moving the shared 5,000-point GraphQL budget from 88 to 521 points in about
+  sixteen minutes with nothing else running. Epic grouping is on by default,
+  and the view treated it as an active filter, so every repository row sent
+  `board.list` once each for Ready, In progress and Backlog, three separate
+  17-point-per-page reads that nothing else shared. Each read was also gated
+  by a `github.rateLimit` round-trip, even when the answer came from cache.
+  Measured through the real provider with a counting IPC client, five
+  repositories on five boards went from 15 `board.list` + 15
+  `github.rateLimit` calls to 5 `board.listOpen` + 5 `github.rateLimit`
+  calls when the view opens. A re-expand or a daemon restart (`ipc.ready`)
+  inside the cache window went from 15 `github.rateLimit` calls to none;
+  the reconnect still re-renders the view. Three repositories on one shared
+  board went from 3 board reads to 1. The row counts now come from the new
+  daemon verb `board.listOpen`, which returns the daemon's cached `is:open`
+  snapshot, the one `board.counts` and the attention sweeps already read.
+  When that snapshot is fresh, the daemon answers `board.list` for any
+  status except Done from it without another request. A status drilldown
+  after the rows load therefore costs nothing either. The unfiltered row
+  counts are now this repository's own on a shared board. Before, they were
+  `board.counts`, which tallies the whole board. An explicit Refresh still
+  refetches.
+
 - **feature-dev sub-sessions engage for local OpenCode models, local
   dispatches are budget-checked and get the compact render, and defects a
   live run on one found (#1651).**

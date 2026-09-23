@@ -130,6 +130,11 @@ export class IpcClientGenerated extends IpcClientBase {
     return result ?? [];
   }
 
+  async boardListOpen(owner: string, projectNumber: number, ownerType?: string, githubUser?: string): Promise<BoardItem[]> {
+    const result = await this.call<BoardItem[] | null>('board.listOpen', { owner, projectNumber, ownerType, githubUser });
+    return result ?? [];
+  }
+
   async boardCounts(owner: string, projectNumber: number, ownerType?: string, githubUser?: string): Promise<StatusCounts> {
     return this.call<StatusCounts>('board.counts', { owner, projectNumber, ownerType, githubUser });
   }

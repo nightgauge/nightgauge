@@ -19,6 +19,7 @@ import type { IWorkItemProvider } from "./types/WorkItemProvider";
 import {
   ALL_ITEMS_SCOPE,
   COUNTS_SCOPE,
+  OPEN_ITEMS_SCOPE,
   sharedBoardSnapshots,
   type BoardSnapshotKey,
   type BoardSnapshotStore,
@@ -151,7 +152,7 @@ export interface RateLimitState {
  */
 class RateLimitedError extends Error {
   constructor() {
-    super("GitHub API rate limit exhausted; serving cached counts");
+    super("GitHub API rate limit exhausted; serving cached board data");
     this.name = "RateLimitedError";
   }
 }
@@ -572,17 +573,16 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
     const cacheKey = `${this.projectNumber}:${status}`;
     const staleItems = this.snapshots.stale(key);
 
-    // Rate limit is checked before joining the store so an exhausted quota
-    // never starts a fetch, and never registers as a miss.
-    const canProceed = await this.checkRateLimit();
-    if (!canProceed) {
-      return this.sortIssues(this.cache.get(cacheKey) ?? [], sortBy, sortDirection);
-    }
-
     try {
-      const items = await this.snapshots.fetch(key, this.cacheTtlMs, () =>
-        this.fetchIssuesForStatus(status)
-      );
+      // The rate-limit gate runs inside the fetcher, as it does for counts:
+      // it is paid once per fetch that actually goes to the network, never on
+      // a fresh-snapshot hit. Gating before the store cost one
+      // `github.rateLimit` round-trip per call, including every re-render of
+      // an expanded status node that was answered from cache anyway.
+      const items = await this.snapshots.fetch(key, this.cacheTtlMs, async () => {
+        if (!(await this.checkRateLimit())) throw new RateLimitedError();
+        return this.fetchIssuesForStatus(status);
+      });
       // Filtering happens per service, on the shared raw payload.
       const issues = this.boardItemsToReadyIssues(items);
       this.cache.set(cacheKey, issues);
@@ -591,7 +591,7 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
     } catch (err) {
       // Never cached: the store only stores fulfilled fetches, so one
       // repository's failure cannot become another's answer.
-      log(`IPC board.list failed: ${err}`);
+      if (!(err instanceof RateLimitedError)) log(`IPC board.list failed: ${err}`);
       const fallback =
         this.cache.get(cacheKey) ?? (staleItems ? this.boardItemsToReadyIssues(staleItems) : []);
       return this.sortIssues(fallback, sortBy, sortDirection);
@@ -657,21 +657,18 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
 
     const staleItems = this.snapshots.stale(key);
 
-    const canProceed = await this.checkRateLimit();
-    if (!canProceed) {
-      return this.allItemsCache ?? [];
-    }
-
     try {
-      const items = await this.snapshots.fetch(key, this.cacheTtlMs, () =>
-        this.fetchAllItemsInternal()
-      );
+      // Gate inside the fetcher — see getIssuesByStatus.
+      const items = await this.snapshots.fetch(key, this.cacheTtlMs, async () => {
+        if (!(await this.checkRateLimit())) throw new RateLimitedError();
+        return this.fetchAllItemsInternal();
+      });
       const issues = this.boardItemsToReadyIssues(items);
       this.allItemsCache = issues;
       this.allItemsCacheTime = Date.now();
       return issues;
     } catch (err) {
-      log(`IPC board.list (all) failed: ${err}`);
+      if (!(err instanceof RateLimitedError)) log(`IPC board.list (all) failed: ${err}`);
       return this.allItemsCache ?? (staleItems ? this.boardItemsToReadyIssues(staleItems) : []);
     }
   }
@@ -688,6 +685,46 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
       this.ownerType,
       this.githubUser
     );
+  }
+
+  /**
+   * Every OPEN issue of this repository on the board, all statuses, from one
+   * shared board read (`board.listOpen`).
+   *
+   * This is the read the Repositories tree derives its per-row Ready / In
+   * progress / Backlog counts from. It replaces one `board.list` per status —
+   * three board reads per board per refresh — with one, shared across every
+   * repository on the same board here and, daemon-side, with `board.counts`
+   * and the attention sweeps. Items keep their `status`, so callers group
+   * locally; Done is not included (a Done item is closed).
+   *
+   * Same freshness, coalescing and stale-if-error rules as the other reads:
+   * a fresh snapshot costs no IPC at all, the rate-limit gate is paid only by
+   * a fetch that goes to the network, and a failed or refused fetch falls
+   * back to the last successful snapshot rather than to zeros (#485).
+   */
+  async getOpenIssues(): Promise<ReadyIssue[]> {
+    await this.loadConfig();
+    if (!this.owner || !this.projectNumber) {
+      log(`getOpenIssues: skipped — owner=${this.owner}, project=${this.projectNumber}`);
+      return [];
+    }
+    const key = this.snapshotKey(OPEN_ITEMS_SCOPE);
+    if (!key) return [];
+    const owner = this.owner;
+    const projectNumber = this.projectNumber;
+
+    try {
+      const items = await this.snapshots.fetch(key, this.cacheTtlMs, async () => {
+        if (!(await this.checkRateLimit())) throw new RateLimitedError();
+        return this.ipc.boardListOpen(owner, projectNumber, this.ownerType, this.githubUser);
+      });
+      return this.boardItemsToReadyIssues(items);
+    } catch (err) {
+      if (!(err instanceof RateLimitedError)) log(`IPC board.listOpen failed: ${err}`);
+      const stale = this.snapshots.stale(key);
+      return stale ? this.boardItemsToReadyIssues(stale) : [];
+    }
   }
 
   async prefetchAllItems(options?: { force?: boolean }): Promise<void> {
@@ -881,6 +918,10 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
     // → every tab shows 0.
     const countsKey = this.snapshotKey(COUNTS_SCOPE);
     if (countsKey) this.snapshots.expireScope(countsKey);
+    // The open-item read carries the same counts (the Repositories tree
+    // derives them from it), so it expires on the same event, same discipline.
+    const openKey = this.snapshotKey(OPEN_ITEMS_SCOPE);
+    if (openKey) this.snapshots.expireScope(openKey);
     this._onStatusChanged.fire({ repoSlug, statuses });
   }
 
