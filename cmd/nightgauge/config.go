@@ -235,14 +235,14 @@ Exits non-zero when validation errors are found.`,
 			// Any file but the machine tier is repository-controlled: hold it
 			// to the rule the loader enforces, so validate never passes a file
 			// every other command refuses (#2023).
-			if machine, merr := config.MachineConfigPath(); merr != nil || filepath.Clean(machine) != filepath.Clean(configPath) {
-				data, rerr := os.ReadFile(configPath)
-				if rerr != nil {
-					return fmt.Errorf("load config: %w", rerr)
-				}
-				if verr := config.ValidateRepoTierSecrets(data, configPath); verr != nil {
-					return verr
-				}
+			// ValidateRepoTierSecrets accepts the machine-tier file itself
+			// (canonical or legacy, compared after resolving symlinks).
+			data, rerr := os.ReadFile(configPath)
+			if rerr != nil {
+				return fmt.Errorf("load config: %w", rerr)
+			}
+			if verr := config.ValidateRepoTierSecrets(data, configPath); verr != nil {
+				return verr
 			}
 
 			var repos map[string]*config.RepositoryConfig

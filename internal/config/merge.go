@@ -148,15 +148,7 @@ func readMachineConfigBytes() ([]byte, error) {
 }
 
 func legacyMachineConfigPath() string {
-	if os.Getenv("NIGHTGAUGE_CONFIG_HOME") != "" || os.Getenv("XDG_CONFIG_HOME") != "" ||
-		machineGOOSFn() != "linux" {
-		return ""
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".nightgauge", "config.yaml")
+	return configpath.LegacyForGOOS(machineGOOSFn())
 }
 
 // readProjectConfigBytes returns the raw bytes of the project-tier YAML

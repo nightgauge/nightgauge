@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"log"
 	"os"
 	"path/filepath"
@@ -975,4 +976,181 @@ func TestRepoTierProtectedKeysShareOneList(t *testing.T) {
 	if isHardStrippedMachineKey("github_user") {
 		t.Error("isHardStrippedMachineKey reports a key the list does not strip")
 	}
+}
+
+// TestPlaintextSecretRejectedThroughMergeKeys: yaml.v3 resolves `<<` merge
+// keys when the loader decodes, so the check must too — at the leaf, at the
+// block, and at the root (review finding on #2023).
+func TestPlaintextSecretRejectedThroughMergeKeys(t *testing.T) {
+	cases := map[string]string{
+		"block merge": `
+x-b: &b {token: literal-merge-token}
+github_auth:
+  <<: *b
+`,
+		"tokens merge": `
+x-b: &b {acme: literal-merge-token}
+github_auth:
+  tokens:
+    <<: *b
+`,
+		"root merge": `
+x-b: &b
+  github_auth:
+    token: literal-merge-token
+<<: *b
+`,
+		"sequence merge": `
+x-a: &a {token: literal-merge-token}
+x-c: &c {suppress_gh_warning: true}
+github_auth:
+  <<: [*c, *a]
+`,
+		"null tag": `
+github_auth:
+  token: !!null literal-merge-token
+`,
+		"mapping value": `
+github_auth:
+  token: {inner: literal-merge-token}
+`,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			withNoMachineConfig(t)
+			dir := t.TempDir()
+			writeProjectYAML(t, dir, "owner: acme\n"+body)
+			cfg, err := LoadMerged(dir)
+			if err == nil {
+				tok, _ := cfg.ResolveToken("acme")
+				t.Fatalf("loaded; ResolveToken returned %d bytes", len(tok))
+			}
+			if !errors.Is(err, ErrRepoTierCredential) {
+				t.Errorf("error is not ErrRepoTierCredential: %v", err)
+			}
+			if strings.Contains(err.Error(), "literal-merge-token") {
+				t.Errorf("error leaks the value: %v", err)
+			}
+		})
+	}
+}
+
+// TestEnvRefShapedLikeTokenRejected: `env:` followed by a token is a pasted
+// token, not a variable name. The loader refuses it and resolveEnvRef never
+// echoes it.
+func TestEnvRefShapedLikeTokenRejected(t *testing.T) {
+	tok := "ghp_" + strings.Repeat("A1", 18)
+	withNoMachineConfig(t)
+	dir := t.TempDir()
+	writeProjectYAML(t, dir, "owner: acme\ngithub_auth:\n  token: env:"+tok+"\n")
+	_, err := LoadMerged(dir)
+	if err == nil || strings.Contains(err.Error(), tok) {
+		t.Fatalf("LoadMerged = %v, want a redacted refusal", err)
+	}
+	if _, err := resolveEnvRef("env:" + tok); err == nil || strings.Contains(err.Error(), tok) {
+		t.Fatalf("resolveEnvRef = %v, want a redacted error", err)
+	}
+	// An owner name that is a pasted token is redacted too.
+	writeProjectYAML(t, dir, "owner: acme\ngithub_auth:\n  tokens:\n    "+tok+": literal\n")
+	if _, err := LoadMerged(dir); err == nil || strings.Contains(err.Error(), tok) {
+		t.Fatalf("LoadMerged = %v, want a refusal that does not echo the key", err)
+	}
+}
+
+// TestPlaintextSecretErrorNamesRefresh: the refusal names the migration
+// command that removes literal GitHub tokens from these files.
+func TestPlaintextSecretErrorNamesRefresh(t *testing.T) {
+	withNoMachineConfig(t)
+	err := ValidateRepoTierSecrets([]byte("github_auth:\n  token: literal\n"), "/repo/.nightgauge/config.yaml")
+	if err == nil || !strings.Contains(err.Error(), "nightgauge forge auth refresh") {
+		t.Fatalf("error does not name the migration command: %v", err)
+	}
+}
+
+// TestLegacyJSONCredentialsRejected: the legacy config.json is a repository
+// tier too; encoding/json matches keys case-insensitively, so the typed
+// decode is what is checked, and the license key never survives.
+func TestLegacyJSONCredentialsRejected(t *testing.T) {
+	write := func(t *testing.T, body string) string {
+		t.Helper()
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, ".nightgauge"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, ".nightgauge", "config.json"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	withNoMachineConfig(t)
+	for name, body := range map[string]string{
+		"token":        `{"owner":"acme","githubAuth":{"token":"literal-json-token"}}`,
+		"case variant": `{"owner":"acme","GITHUBAUTH":{"TOKEN":"literal-json-token"}}`,
+		"tokens":       `{"owner":"acme","githubAuth":{"tokens":{"acme":"literal-json-token"}}}`,
+		"license":      `{"owner":"acme","licenseKey":"literal-json-token"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := write(t, body)
+			_, err := Load(dir)
+			if err == nil || !errors.Is(err, ErrRepoTierCredential) || strings.Contains(err.Error(), "literal-json-token") {
+				t.Fatalf("Load = %v, want a redacted refusal", err)
+			}
+			if !strings.Contains(err.Error(), "config.json") {
+				t.Errorf("error does not name the file: %v", err)
+			}
+		})
+	}
+	t.Run("env reference loads and platform is stripped", func(t *testing.T) {
+		t.Setenv("NG_TEST_JSON_TOKEN", "from-env")
+		dir := write(t, `{"owner":"acme","githubAuth":{"token":"env:NG_TEST_JSON_TOKEN"},"platformUrl":"https://x.invalid","licenseKey":"env:NG_TEST_JSON_TOKEN"}`)
+		cfg, err := Load(dir)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if got, _ := cfg.ResolveToken("acme"); got != "from-env" {
+			t.Errorf("ResolveToken = %q", got)
+		}
+		if cfg.LicenseKey != "" || cfg.PlatformURL != "" {
+			t.Errorf("platform survived the legacy JSON tier: %q %q", cfg.LicenseKey, cfg.PlatformURL)
+		}
+	})
+}
+
+// TestHomeDirProjectIsMachineTier: run from $HOME, .nightgauge/config.yaml is
+// the machine file. It is not a repository tier, so a literal loads.
+func TestHomeDirProjectIsMachineTier(t *testing.T) {
+	t.Run("canonical", func(t *testing.T) {
+		home := t.TempDir()
+		machine := filepath.Join(home, ".nightgauge", "config.yaml")
+		prev := machineConfigPathFn
+		machineConfigPathFn = func() (string, error) { return machine, nil }
+		t.Cleanup(func() { machineConfigPathFn = prev })
+		writeProjectYAML(t, home, "owner: acme\ngithub_auth:\n  token: literal-home-token\n")
+		cfg, err := LoadMerged(home)
+		if err != nil {
+			t.Fatalf("LoadMerged from home: %v", err)
+		}
+		if got, _ := cfg.ResolveToken("acme"); got != "literal-home-token" {
+			t.Errorf("ResolveToken = %q", got)
+		}
+	})
+	t.Run("linux legacy through a symlink", func(t *testing.T) {
+		real := t.TempDir()
+		link := filepath.Join(t.TempDir(), "home")
+		if err := os.Symlink(real, link); err != nil {
+			t.Skip("symlinks unavailable")
+		}
+		t.Setenv("HOME", real)
+		t.Setenv("NIGHTGAUGE_CONFIG_HOME", "")
+		t.Setenv("XDG_CONFIG_HOME", "")
+		prevGOOS := machineGOOSFn
+		machineGOOSFn = func() string { return "linux" }
+		prev := machineConfigPathFn
+		machineConfigPathFn = defaultMachineConfigPath
+		t.Cleanup(func() { machineGOOSFn = prevGOOS; machineConfigPathFn = prev })
+		writeProjectYAML(t, real, "owner: acme\ngithub_auth:\n  token: literal-home-token\n")
+		if _, err := LoadMerged(link); err != nil {
+			t.Fatalf("LoadMerged from the legacy machine directory: %v", err)
+		}
+	})
 }

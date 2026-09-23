@@ -40,3 +40,25 @@ func TestConfigValidateRefusesPlaintextRepoToken(t *testing.T) {
 		t.Fatalf("validate refused the machine-tier file: %v", err)
 	}
 }
+
+// TestConfigValidateAcceptsMachineFileThroughSymlink: the machine-tier file is
+// recognised after resolving symlinks, not by string comparison.
+func TestConfigValidateAcceptsMachineFileThroughSymlink(t *testing.T) {
+	machineHome := t.TempDir()
+	t.Setenv("NIGHTGAUGE_CONFIG_HOME", machineHome)
+	machineFile := filepath.Join(machineHome, "config.yaml")
+	if err := os.WriteFile(machineFile, []byte("owner: acme\ngithub_auth:\n  token: literal-validate-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "machine.yaml")
+	if err := os.Symlink(machineFile, link); err != nil {
+		t.Skip("symlinks unavailable")
+	}
+	cmd := configValidateCmd()
+	cmd.SetArgs([]string{"--config", link})
+	cmd.SetOut(&strings.Builder{})
+	cmd.SetErr(&strings.Builder{})
+	if err := cmd.Execute(); err != nil && strings.Contains(err.Error(), "plaintext") {
+		t.Fatalf("validate refused the machine-tier file reached through a symlink: %v", err)
+	}
+}

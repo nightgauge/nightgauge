@@ -124,6 +124,33 @@ github_auth:
     expect(getGitHubAuthToken("/test/workspace")).toBeNull();
   });
 
+  it("ignores a literal token in config.local.yaml (repository tier: env: only)", () => {
+    // Only the local tier exists and it carries a literal: nothing is exported,
+    // matching the binary, which refuses the config.
+    mockResolveConfigPathSync.mockReturnValue({
+      path: "/test/workspace/.nightgauge/config.yaml",
+      isLegacy: false,
+      exists: false,
+    });
+    mockExistsSync.mockImplementation((p) => String(p).endsWith(".nightgauge/config.local.yaml"));
+    mockReadFileSync.mockReturnValue("github_auth:\n  token: ghp_local_literal\n");
+    expect(getGitHubAuthToken("/test/workspace")).toBeNull();
+  });
+
+  it("reads the machine config where the binary does (NIGHTGAUGE_CONFIG_HOME)", () => {
+    process.env.NIGHTGAUGE_CONFIG_HOME = "/machine-home";
+    mockResolveConfigPathSync.mockReturnValue({
+      path: "/test/workspace/.nightgauge/config.yaml",
+      isLegacy: false,
+      exists: false,
+    });
+    mockExistsSync.mockImplementation((p) => String(p) === "/machine-home/config.yaml");
+    mockReadFileSync.mockImplementation((p) =>
+      String(p) === "/machine-home/config.yaml" ? "github_auth:\n  token: ghp_machine_home\n" : ""
+    );
+    expect(getGitHubAuthToken("/test/workspace")).toBe("ghp_machine_home");
+  });
+
   it("returns a literal token from the machine config", () => {
     mockResolveConfigPathSync.mockReturnValue({
       path: "/test/workspace/.nightgauge/config.yaml",

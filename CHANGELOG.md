@@ -21,7 +21,9 @@ changelog, and the release workflow refuses a tag that does not.
   there (`git ls-files -- .nightgauge`) for GitHub tokens (`ghp_`, `gho_`,
   `ghu_`, `ghs_`, `ghr_`, `github_pat_`) and for the license-key prefixes the
   platform client already recognises. Each hit is reported as
-  `path:line pattern prefix…`, and `--json` carries the same fields under
+  `path:line pattern prefix…` (a token glued to an identifier still counts;
+  a tracked path that resolves outside the repository is skipped with a
+  note), and `--json` carries the same fields under
   `checks.tracked_secrets.findings`; the matched value never appears, only its
   prefix and `…`. The remediation names the two steps, rotating the credential
   and removing it from history, and doctor does neither itself. Files over
@@ -447,6 +449,15 @@ create --body-file` call, so the compact profile (and its tests) pin
   `nightgauge doctor` reports a config that failed to load as a failed
   `config` check rather than as a fresh repository. The VS Code extension no
   longer exports a literal token from either repository file as `GH_TOKEN`.
+  The check reads each file as the loader decodes it, so YAML anchors and `<<`
+  merge keys cannot slip a literal past it, and it covers the legacy
+  `.nightgauge/config.json` (whose platform settings are now stripped as
+  well). An `env:` reference whose name is itself a token is refused, and
+  such a name is never echoed in an error. Run from the home directory, where
+  `.nightgauge/config.yaml` is the machine file, nothing is refused. Commands
+  and `nightgauge serve` requests for a repository with a refused config now
+  fail instead of falling back to the default gh account. The error names
+  `nightgauge forge auth refresh` and the machine file actually in use.
 
 - **The daemon reads GitHub with conditional REST requests, remembered across
   restarts (part of #842).** A window open used to cost ~182 GraphQL points,

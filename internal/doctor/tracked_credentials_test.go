@@ -1,7 +1,9 @@
 package doctor
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -180,5 +182,69 @@ func TestTrackedSecretsCheckSkips(t *testing.T) {
 	item, warning = checkTrackedCredentials(outside)
 	if !item.OK || warning != "" || !strings.Contains(item.Detail, "skipped") {
 		t.Errorf("outside a work tree: %+v %q, want a skip", item, warning)
+	}
+}
+
+// TestTrackedSecretsCheckGluedAndEscaping: a token glued to an identifier is
+// still found, and a tracked path that resolves outside the repository
+// through a symlinked directory is never opened.
+func TestTrackedSecretsCheckGluedAndEscaping(t *testing.T) {
+	dir := newCredentialRepo(t)
+	writeFixture(t, dir, ".nightgauge/env.sh", "export GH_TOKEN_"+fixtureToken+"\n")
+
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "leak.yaml"), []byte("token: "+fixtureToken+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, ".nightgauge", "linked")); err != nil {
+		t.Skip("symlinks unavailable")
+	}
+	gitIn(t, dir, "add", ".nightgauge/env.sh")
+	// Track the file as if the directory were real, then swap the directory
+	// for the symlink: git records the path, the work tree leads outside.
+	if err := os.Remove(filepath.Join(dir, ".nightgauge", "linked")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, ".nightgauge", "linked"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFixture(t, dir, ".nightgauge/linked/leak.yaml", "clean: true\n")
+	gitIn(t, dir, "add", ".nightgauge/linked/leak.yaml")
+	gitIn(t, dir, "commit", "-q", "-m", "fixture")
+	if err := os.RemoveAll(filepath.Join(dir, ".nightgauge", "linked")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, ".nightgauge", "linked")); err != nil {
+		t.Fatal(err)
+	}
+
+	item, _ := checkTrackedCredentials(dir)
+	if len(item.Findings) != 1 || item.Findings[0].Path != ".nightgauge/env.sh" {
+		t.Fatalf("findings = %+v, want only the glued token in env.sh", item.Findings)
+	}
+	if !strings.Contains(item.Error, ".nightgauge/linked/leak.yaml (resolves outside the repository)") {
+		t.Errorf("escaping path not noted: %s", item.Error)
+	}
+}
+
+// TestRunDoctorRefusedConfigIsRequiredFailure: a config that exists and was
+// refused is a failed config check (exit 2), not a fresh repository.
+func TestRunDoctorRefusedConfigIsRequiredFailure(t *testing.T) {
+	result := RunDoctorWithConfigError(context.Background(), nil, errors.New("config: refused (value redacted)"), nil, nil)
+	if result.ExitCode != 2 {
+		t.Errorf("ExitCode = %d, want 2", result.ExitCode)
+	}
+	cfgCheck := result.Checks["config"]
+	if cfgCheck.OK || !strings.Contains(cfgCheck.Error, "refused") {
+		t.Errorf("config check = %+v, want a failure carrying the load error", cfgCheck)
+	}
+	found := false
+	for _, name := range result.FailedChecks {
+		if name == "config" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("FailedChecks = %v, want config", result.FailedChecks)
 	}
 }

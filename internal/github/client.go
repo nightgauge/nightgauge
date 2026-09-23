@@ -486,12 +486,13 @@ func warnGHFallback(cfg TokenResolver) {
 }
 
 // ghFallbackWarning is the gh CLI fallback notice. It names the machine-tier
-// file by its resolved path, and the env: form, because a bare "config.yaml"
+// file the loader actually reads (canonical, or the Linux legacy file when only
+// that exists), and the env: form, because a bare "config.yaml"
 // steered operators to the committed project file, where a pasted token is
 // pushed to every clone (#2023). The loader refuses a plaintext token there.
 func ghFallbackWarning() string {
 	machine := "the machine-tier config file"
-	if p, err := configpath.MachineConfigPath(); err == nil && p != "" {
+	if p, err := configpath.InUse(); err == nil && p != "" {
 		machine = p
 	}
 	return "warning: Using gh CLI for token resolution — for reliable multi-org support set " +

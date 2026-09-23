@@ -12,6 +12,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { resolveConfigPathSync, logDeprecationWarning } from "../configPathResolver";
+import { getGlobalConfigPath, getPlatform } from "../globalConfigResolver";
 
 /**
  * Auth provider type for Claude API backend
@@ -130,7 +131,6 @@ export function getGitHubUser(workspaceRoot?: string): string | null {
   const root = workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (!root) return null;
 
-  const os = require("os") as typeof import("os");
   const configPaths: string[] = [];
 
   // Local (.nightgauge/config.local.yaml) first — highest precedence and
@@ -148,7 +148,7 @@ export function getGitHubUser(workspaceRoot?: string): string | null {
   if (pathResult.exists) {
     configPaths.push(pathResult.path);
   }
-  const globalConfig = path.join(os.homedir(), ".nightgauge", "config.yaml");
+  const globalConfig = machineConfigPathInUse();
   if (fs.existsSync(globalConfig)) {
     configPaths.push(globalConfig);
   }
@@ -241,6 +241,31 @@ export function expandEnvVar(value: string): string | null {
 }
 
 /**
+ * The machine-tier file the Go loader reads, resolved the same way
+ * (internal/configpath): NIGHTGAUGE_CONFIG_HOME, then XDG_CONFIG_HOME, then
+ * the platform default (~/.nightgauge on macOS, ~/.config/nightgauge on Linux,
+ * %APPDATA%\nightgauge on Windows) — or, on Linux with no override, the legacy
+ * ~/.nightgauge/config.yaml when only that file exists.
+ */
+export function machineConfigPathInUse(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = getPlatform()
+): string {
+  const canonical = getGlobalConfigPath(env, platform);
+  if (
+    platform === "linux" &&
+    !env.NIGHTGAUGE_CONFIG_HOME &&
+    !env.XDG_CONFIG_HOME &&
+    !fs.existsSync(canonical)
+  ) {
+    const os = require("os") as typeof import("os");
+    const legacy = path.join(os.homedir(), ".nightgauge", "config.yaml");
+    if (fs.existsSync(legacy)) return legacy;
+  }
+  return canonical;
+}
+
+/**
  * Resolve one configured token value from the tier it was read from.
  *
  * The repository tiers (`.nightgauge/config.yaml`, `.nightgauge/config.local.yaml`)
@@ -278,7 +303,6 @@ export function getGitHubAuthToken(workspaceRoot?: string): string | null {
   const root = workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (!root) return null;
 
-  const os = require("os") as typeof import("os");
   const configPaths: string[] = [];
 
   // Tier 4 (highest precedence): local developer overrides at
@@ -297,7 +321,7 @@ export function getGitHubAuthToken(workspaceRoot?: string): string | null {
   if (pathResult.exists) {
     configPaths.push(pathResult.path);
   }
-  const globalConfig = path.join(os.homedir(), ".nightgauge", "config.yaml");
+  const globalConfig = machineConfigPathInUse();
   if (fs.existsSync(globalConfig)) {
     configPaths.push(globalConfig);
   }
@@ -367,7 +391,6 @@ export function getGitHubAuthTokens(workspaceRoot?: string): Record<string, stri
   const root = workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (!root) return {};
 
-  const os = require("os") as typeof import("os");
   const configPaths: string[] = [];
 
   // Tier 4 (highest precedence): local developer overrides at
@@ -386,7 +409,7 @@ export function getGitHubAuthTokens(workspaceRoot?: string): Record<string, stri
   if (pathResult.exists) {
     configPaths.push(pathResult.path);
   }
-  const globalConfig = path.join(os.homedir(), ".nightgauge", "config.yaml");
+  const globalConfig = machineConfigPathInUse();
   if (fs.existsSync(globalConfig)) {
     configPaths.push(globalConfig);
   }

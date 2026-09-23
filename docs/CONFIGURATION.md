@@ -684,14 +684,30 @@ backwards compatibility.
 
 `github_auth.token`, every `github_auth.tokens.<owner>` and
 `platform.license_key` are credentials. In the repository tiers,
-`.nightgauge/config.yaml` and `.nightgauge/config.local.yaml`, the loader
-accepts them only as an `env:VAR_NAME` reference. A literal value there stops
-the load before any network call, with an error that names the file and the
-key and never the value. A literal value is accepted only in the machine-tier
-file (`~/.nightgauge/config.yaml`, or `$XDG_CONFIG_HOME/nightgauge/config.yaml`
-or `$NIGHTGAUGE_CONFIG_HOME/config.yaml` when set), which lives outside every
-repository. To use the OS keychain instead, name the account in `github_user`
-and let `gh auth login` hold the token.
+`.nightgauge/config.yaml`, `.nightgauge/config.local.yaml` and the legacy
+`.nightgauge/config.json`, the loader accepts them only as an `env:VAR_NAME`
+reference, and the variable name may not itself be a token. The check reads
+the file as the loader does, so YAML anchors and `<<` merge keys are covered. A
+literal value there stops the load before any network call, with an error that
+names the file and the key and never the value, and commands that talk to
+GitHub fail rather than fall back to another gh account.
+
+A literal value is accepted only in the machine-tier file, which lives outside
+every repository. The binary and the VS Code extension resolve it the same way:
+
+1. `$NIGHTGAUGE_CONFIG_HOME/config.yaml`, when set;
+2. `$XDG_CONFIG_HOME/nightgauge/config.yaml`, when set;
+3. otherwise `~/.nightgauge/config.yaml` on macOS,
+   `~/.config/nightgauge/config.yaml` on Linux (or the legacy
+   `~/.nightgauge/config.yaml` when only that file exists), and
+   `%APPDATA%\nightgauge\config.yaml` on Windows.
+
+Run from the home directory, `.nightgauge/config.yaml` is that machine file,
+not a repository tier. To keep a GitHub token out of files entirely, run
+`nightgauge forge auth refresh`: it stores the gh token in the OS keychain and
+removes literal GitHub tokens from the project, local and machine files. A
+license key is not moved by that command; set it in the machine file or in the
+extension's settings.
 
 If a literal token was ever committed, rotate it: removing the line does not
 remove it from the repository's history. `nightgauge doctor` reports tracked

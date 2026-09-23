@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -289,5 +290,31 @@ func TestClientResolver_FallbackOnConfigLoadError(t *testing.T) {
 	// when a path IS registered but config load succeeds with defaults.
 	if client == nil {
 		t.Error("expected non-nil client")
+	}
+}
+
+// TestClientResolver_RefusedConfigFailsClosed: a repo whose config the loader
+// refuses (a plaintext token in a repository tier, #2023) gets an error, never
+// the default client — which would act as another identity.
+func TestClientResolver_RefusedConfigFailsClosed(t *testing.T) {
+	t.Setenv("NIGHTGAUGE_CONFIG_HOME", t.TempDir())
+	workDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workDir, ".nightgauge"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "project:\n  owner: o\n  number: 1\ngithub_auth:\n  token: literal-refused-token\n"
+	if err := os.WriteFile(filepath.Join(workDir, ".nightgauge", "config.yaml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defaultClient := fakeDefaultClient()
+	resolver := NewClientResolver(defaultClient, false)
+	resolver.RegisterRepo("o", "r", workDir)
+
+	client, err := resolver.Resolve(context.Background(), "o", "r")
+	if err == nil {
+		t.Fatalf("Resolve succeeded on a refused config (default client: %v)", client == defaultClient)
+	}
+	if strings.Contains(err.Error(), "literal-refused-token") {
+		t.Errorf("error leaks the value: %v", err)
 	}
 }

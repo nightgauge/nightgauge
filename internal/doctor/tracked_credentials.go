@@ -9,11 +9,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
-	"github.com/nightgauge/nightgauge/internal/platform"
+	"github.com/nightgauge/nightgauge/internal/credshape"
 )
 
 // Tracked credentials under .nightgauge/ (#2024).
@@ -26,7 +25,8 @@ import (
 // tracks there, so an untracked runtime file never produces a finding.
 //
 // The scan never prints, logs or returns a matched value: each finding carries
-// the pattern's prefix followed by "…", and nothing else of the match.
+// the pattern's prefix followed by "…", and nothing else of the match. The
+// shapes come from internal/credshape, the list the config loader also reads.
 
 // trackedCredentialsCheck is the check's key in DoctorResult.Checks.
 const trackedCredentialsCheck = "tracked_secrets"
@@ -47,46 +47,6 @@ type SecretFinding struct {
 	Line     int    `json:"line"`
 	Pattern  string `json:"pattern"`
 	Redacted string `json:"redacted"`
-}
-
-// credentialPattern recognises one credential shape. prefix is both what the
-// finding shows and what the regexp is anchored on.
-type credentialPattern struct {
-	name   string
-	prefix string
-	re     *regexp.Regexp
-}
-
-// credentialPatterns are GitHub's token prefixes and the license-key prefixes
-// the platform's own key parser recognises (platform.LicenseKeyPrefixes), so a
-// new key shape is picked up here without a second list.
-var credentialPatterns = buildCredentialPatterns()
-
-func buildCredentialPatterns() []credentialPattern {
-	var out []credentialPattern
-	// GitHub classic and OAuth/app tokens: prefix, then at least 20 base62
-	// characters (issued tokens carry 36), so prose such as "ghp_example"
-	// is not a finding.
-	for _, p := range []string{"ghp_", "gho_", "ghu_", "ghs_", "ghr_"} {
-		out = append(out, credentialPattern{
-			name:   "github-token",
-			prefix: p,
-			re:     regexp.MustCompile(`\b` + regexp.QuoteMeta(p) + `[A-Za-z0-9]{20,}`),
-		})
-	}
-	out = append(out, credentialPattern{
-		name:   "github-fine-grained-token",
-		prefix: "github_pat_",
-		re:     regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9_]{22,}`),
-	})
-	for _, p := range platform.LicenseKeyPrefixes() {
-		out = append(out, credentialPattern{
-			name:   "nightgauge-license-key",
-			prefix: p,
-			re:     regexp.MustCompile(`\b` + regexp.QuoteMeta(p) + `[A-Za-z0-9_-]{16,}`),
-		})
-	}
-	return out
 }
 
 // trackedFileLister lists the tracked files under .nightgauge/ in the work
@@ -132,10 +92,17 @@ func checkTrackedCredentials(dir string) (CheckItem, string) {
 			"tracked_secrets: could not list tracked files under .nightgauge/"
 	}
 
+	// The real root, so a tracked path that resolves outside it (through a
+	// symlinked directory as well as a symlinked file) is never opened.
+	realRoot, rerr := filepath.EvalSymlinks(root)
+	if rerr != nil {
+		realRoot = root
+	}
+
 	var findings []SecretFinding
 	var skipped []string
 	for _, rel := range files {
-		fileFindings, note := scanTrackedFile(filepath.Join(root, filepath.FromSlash(rel)), rel)
+		fileFindings, note := scanTrackedFile(realRoot, filepath.Join(root, filepath.FromSlash(rel)), rel)
 		findings = append(findings, fileFindings...)
 		if note != "" {
 			skipped = append(skipped, rel+" ("+note+")")
@@ -170,7 +137,7 @@ func checkTrackedCredentials(dir string) (CheckItem, string) {
 // why it was not scanned. A tracked file deleted from the work tree, or one
 // that is not a regular file (a symlink could point outside the repository),
 // is passed over without a note.
-func scanTrackedFile(abs, rel string) ([]SecretFinding, string) {
+func scanTrackedFile(realRoot, abs, rel string) ([]SecretFinding, string) {
 	info, err := os.Lstat(abs)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -180,6 +147,13 @@ func scanTrackedFile(abs, rel string) ([]SecretFinding, string) {
 	}
 	if !info.Mode().IsRegular() {
 		return nil, ""
+	}
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return nil, "unreadable"
+	}
+	if r, err := filepath.Rel(realRoot, real); err != nil || r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator)) {
+		return nil, "resolves outside the repository"
 	}
 	if info.Size() > maxScannedFileBytes {
 		return nil, "over 1 MiB"
@@ -198,13 +172,13 @@ func scanTrackedFile(abs, rel string) ([]SecretFinding, string) {
 
 	var out []SecretFinding
 	for i, line := range strings.Split(string(data), "\n") {
-		for _, p := range credentialPatterns {
-			for range p.re.FindAllStringIndex(line, -1) {
+		for _, p := range credshape.Patterns() {
+			for n := p.Count(line); n > 0; n-- {
 				out = append(out, SecretFinding{
 					Path:     rel,
 					Line:     i + 1,
-					Pattern:  p.name,
-					Redacted: p.prefix + "…",
+					Pattern:  p.Name,
+					Redacted: p.Prefix + "…",
 				})
 			}
 		}

@@ -328,7 +328,13 @@ func clientFromConfig() (*gh.Client, error) {
 		return gh.NewClientFromConfig(nil, "", globalToken)
 	}
 	cfg, err := config.Load(workdir)
-	if err != nil || cfg == nil {
+	if err != nil {
+		// Fail closed. A config that exists and was refused — a plaintext
+		// credential in a repository tier (#2023), or any other load error —
+		// must not quietly become the machine's default gh identity.
+		return nil, fmt.Errorf("load config: %w", err)
+	}
+	if cfg == nil {
 		return gh.NewClientFromConfig(nil, "", globalToken)
 	}
 	return gh.NewClientFromConfig(cfg, cfg.Owner, globalToken)
