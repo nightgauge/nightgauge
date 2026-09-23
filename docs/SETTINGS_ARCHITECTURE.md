@@ -15,6 +15,12 @@
 > still follows the [`docs/SPIKE_CONTRACT.md`](SPIKE_CONTRACT.md) shape so
 > recommendations remain grep-able by `id`.
 
+> **Data and state locations.** This document covers settings only. Where
+> caches, secrets, per-clone state, logs, worktrees, the daemon socket and the
+> knowledge base live is decided by
+> [ADR-024](decisions/024-data-and-state-layout.md), the authority for data and
+> state locations.
+
 ## Executive Summary
 
 The extension currently persists **runtime/machine-local preferences**
