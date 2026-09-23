@@ -3,17 +3,31 @@
   "skill": "pr-merge",
   "description": "pr-merge does not use the --admin flag (admin_merge:false in this repo).",
   "failure_mode": "Model passes --admin to `gh pr merge`, which the repo config forbids.",
-  "prompt": "You are merging a PR into main. The repo sets admin_merge:false. Which gh pr merge flags do you use?",
+  "prompt": "You are merging a PR into main. The repo sets admin_merge:false. Which gh pr merge flags do you use? End your answer with the exact `gh pr merge` command you would run, in a single ```bash fenced block.",
   "assertions": [
     {
       "type": "matches_regex",
-      "pattern": "(--squash|squash)",
-      "flags": "i"
+      "pattern": "\\bgh\\s+pr\\s+merge\\b",
+      "scope": "last_fenced_block",
+      "lang": ["bash", "sh", "shell"],
+      "strip_comments": true,
+      "description": "the command is a gh pr merge"
     },
     {
-      "type": "not_contains",
-      "value": "--admin",
-      "description": "admin flag forbidden"
+      "type": "matches_regex",
+      "pattern": "--squash\\b",
+      "scope": "last_fenced_block",
+      "lang": ["bash", "sh", "shell"],
+      "strip_comments": true,
+      "description": "squash merge"
+    },
+    {
+      "type": "not_matches_regex",
+      "pattern": "--admin\\b",
+      "scope": "last_fenced_block",
+      "lang": ["bash", "sh", "shell"],
+      "strip_comments": true,
+      "description": "admin flag is not in the command"
     }
   ]
 }

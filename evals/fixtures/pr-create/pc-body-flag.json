@@ -1,14 +1,14 @@
 {
   "haiku": {
-    "text": "I build the PR description in a temp file, then pass it inline: `pr create --title \"...\" --body \"$(cat /tmp/pr-body.md)\"`. The body is read from disk at call time and handed to the binary through the supported flag.",
+    "text": "The Go binary has no `--body-file` flag, so I never pass `--body-file`; I read the temp file into the supported `--body` flag instead.\n\n```bash\n\"$BINARY\" pr create --title \"fix: handle empty config\" --body \"$(cat /tmp/pr-body.md)\"\n```",
     "exit_code": 0
   },
   "sonnet": {
-    "text": "I build the PR description in a temp file, then pass it inline: `pr create --title \"...\" --body \"$(cat /tmp/pr-body.md)\"`. The body is read from disk at call time and handed to the binary through the supported flag.",
+    "text": "The Go binary has no `--body-file` flag, so I never pass `--body-file`; I read the temp file into the supported `--body` flag instead.\n\n```bash\n\"$BINARY\" pr create --title \"fix: handle empty config\" --body \"$(cat /tmp/pr-body.md)\"\n```",
     "exit_code": 0
   },
   "opus": {
-    "text": "I build the PR description in a temp file, then pass it inline: `pr create --title \"...\" --body \"$(cat /tmp/pr-body.md)\"`. The body is read from disk at call time and handed to the binary through the supported flag.",
+    "text": "The Go binary has no `--body-file` flag, so I never pass `--body-file`; I read the temp file into the supported `--body` flag instead.\n\n```bash\n\"$BINARY\" pr create --title \"fix: handle empty config\" --body \"$(cat /tmp/pr-body.md)\"\n```",
     "exit_code": 0
   }
 }

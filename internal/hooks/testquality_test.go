@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -99,7 +100,7 @@ func TestTestQualityMatchesShellScript(t *testing.T) {
 		{"empty test body", "a.test.ts", "content", `it("does nothing", () => {})`},
 		// Go RE2's \s matches \n (and \r); grep's does not span the line it
 		// is currently reading, since test-quality.sh's own
-		// `echo "$CONTENT" | grep` iterates $CONTENT one line at a time even
+		// `grep ... <<<"$CONTENT"` iterates $CONTENT one line at a time even
 		// though $CONTENT holds embedded newlines. A naive whole-content
 		// regexp match (rather than a per-line one) would warn here where
 		// the shell script stays silent.
@@ -110,6 +111,13 @@ func TestTestQualityMatchesShellScript(t *testing.T) {
 		{"console.log alongside a real assertion is clean", "a.test.ts", "content", "console.log(\"debug\");\nexpect(1).toBe(1);"},
 		{"a clean test file", "a.test.ts", "content", `it("adds", () => { expect(1 + 1).toBe(2); })`},
 		{"all three patterns at once", "a.test.ts", "content", "it(\"x\", () => {})\nexpect(true).toBe(true);\nconsole.log(\"x\");"},
+		// A match early in a long file. Under `set -o pipefail`,
+		// `echo "$CONTENT" | grep -q` lost it: grep exits at the first match,
+		// the line-buffered echo then writes into a closed pipe and takes
+		// SIGPIPE, and pipefail turns the match into a miss. With a short
+		// file that race was lost only under load; thousands of trailing
+		// lines make it certain. The script now greps a here-string.
+		{"a match early in a long file is still flagged", "a.test.ts", "content", "it(\"x\", () => {\nexpect(true).toBe(true);\n" + strings.Repeat("expect(1).toBe(1);\n", 20000) + "})"},
 		{"a non-matching extension is skipped even with every pattern present", "a.ts", "content", "it(\"x\", () => {})\nexpect(true).toBe(true);\nconsole.log(\"x\");"},
 		// An empty (not absent) file_path: test-quality.sh's own
 		// `grep -oE '"file_path"...'` still matches the empty-valued key, so

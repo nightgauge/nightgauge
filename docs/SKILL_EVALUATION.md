@@ -67,20 +67,32 @@ from that type.
 
 A scenario is a declarative JSON file at `evals/scenarios/<skill>/<name>.json`:
 
-```json
+````json
 {
   "id": "pc-body-flag",
   "skill": "pr-create",
-  "description": "pr-create uses --body (with $(cat file)), not --body-file.",
+  "description": "pr-create passes the body with --body (e.g. \"$(cat file)\"), not the unsupported --body-file.",
   "failure_mode": "The Go binary `pr create` has no --body-file flag; using it aborts PR creation.",
-  "prompt": "You are creating a PR with the Go binary and have the body in a temp file. Which flag do you pass the body with?",
+  "prompt": "… Which flag do you pass the body with? End your answer with the exact `pr create` command you would run, in a single ```bash fenced block.",
   "assertions": [
-    { "type": "contains", "value": "--body" },
-    { "type": "not_contains", "value": "--body-file" }
+    {
+      "type": "matches_regex",
+      "pattern": "(?:^|\\s)--body(?:=|\\s)",
+      "scope": "last_fenced_block",
+      "lang": ["bash", "sh", "shell"],
+      "strip_comments": true
+    },
+    {
+      "type": "not_matches_regex",
+      "pattern": "--body-file\\b",
+      "scope": "last_fenced_block",
+      "lang": ["bash", "sh", "shell"],
+      "strip_comments": true
+    }
   ],
   "models": ["haiku", "sonnet", "opus"]
 }
-```
+````
 
 | Field          | Required | Notes                                                                           |
 | -------------- | -------- | ------------------------------------------------------------------------------- |
@@ -102,17 +114,34 @@ Assertions are intentionally **coarse** (contract-shape checks) so they tolerate
 phrasing variation while still catching the documented failure mode. Prefer
 key-presence / JSON-shape / substring checks over full-output equality.
 
-| `type`             | Fields                  | Passes when                                                      |
-| ------------------ | ----------------------- | ---------------------------------------------------------------- |
-| `contains`         | `value`, `ignore_case?` | Output contains the substring.                                   |
-| `not_contains`     | `value`, `ignore_case?` | Output does **not** contain the substring.                       |
-| `matches_regex`    | `pattern`, `flags?`     | Output matches the JS regex (invalid regex → fail, not throw).   |
-| `json_path_exists` | `path`                  | First balanced JSON in the output resolves the dot/bracket path. |
-| `exit_code`        | `value`                 | Process exit code equals `value` (live mode / mock-supplied).    |
+| `type`              | Fields                         | Passes when                                                             |
+| ------------------- | ------------------------------ | ----------------------------------------------------------------------- |
+| `contains`          | `value`, `ignore_case?`, scope | The text contains the substring.                                        |
+| `not_contains`      | `value`, `ignore_case?`, scope | The text does **not** contain the substring.                            |
+| `matches_regex`     | `pattern`, `flags?`, scope     | The text matches the JS regex (invalid regex → fail, not throw).        |
+| `not_matches_regex` | `pattern`, `flags?`, scope     | The text does **not** match the JS regex (invalid regex → fail).        |
+| `json_path_exists`  | `path`, scope                  | The JSON resolves the dot/bracket path.                                 |
+| `json_path_equals`  | `path`, `value`, scope         | The JSON path resolves to exactly `value` (a scalar; no type coercion). |
+| `exit_code`         | `value`                        | Process exit code equals `value` (live mode / mock-supplied).           |
 
-`json_path_exists` extracts the first balanced JSON object/array from the output
-(tolerating prose or code fences around it) and supports `a.b.c` and
-`a.b[0].c`. A resolved `null` counts as present.
+"scope" is the optional `scope`, `lang` and `strip_comments` fields:
+
+- No `scope`: the text is the whole output, and the JSON is the first balanced
+  JSON object/array in it (tolerating prose or code fences around it).
+- `scope: "last_fenced_block"`: the text is the body of the **last** closed
+  fenced code block (` ``` ` or `~~~`), or the last one whose info-string
+  language is in `lang` (a string or list, case-insensitive). The JSON is that
+  whole body, which must parse. `strip_comments: true` removes unquoted shell
+  `#` comments first, so `gh pr merge --squash  # never --admin` is judged on
+  what would run. `lang` and `strip_comments` require `scope`.
+- **Fail closed:** when the scoped block is missing, unclosed, of the wrong
+  language, or (for JSON assertions) not valid JSON, the assertion fails. That
+  holds for `not_contains` and `not_matches_regex` too: a missing block never
+  lets a negative assertion pass.
+
+Paths support `a.b.c` and `a.b[0].c`; a resolved `null` counts as present.
+Regex `flags` may use `dgimsuv`; sticky `y` is rejected by the schema, because
+it would silently anchor a "matches anywhere" check at the start.
 
 ### Every scenario needs a positive assertion (#1267)
 
@@ -126,8 +155,55 @@ not have distinguished that from "I will bisect".
 
 What discriminates is the **correct statement being present**, not the wrong
 word being absent. Assert that the run says the check is "not a regression";
-keep `not_contains` for tokens that are wrong under any phrasing (a flag the
-binary rejects, a command that must not appear).
+keep `not_contains` for tokens that appear only when the model does the wrong
+thing.
+
+### Check the decision, not the prose
+
+A prose `not_contains` also fails the opposite way: it cannot tell a
+recommendation from a warning, so a **correct** answer that names the forbidden
+thing in order to reject it goes red. Measured live on `pc-body-flag`, sonnet
+answered "`--body "$PR_BODY"` — the Go binary has no `--body-file` flag …",
+which is right, and failed `not_contains "--body-file"`. The mock fixtures had
+been phrased around the defect ("an override flag", "the trunk") instead.
+Detecting negation in free prose with a regex is not a fix: a guard of that kind
+was tried and passed wrong answers such as "Instead of --body use --body-file."
+and "No, add --admin to get past the pending check".
+
+So a scenario that forbids a behaviour asks for the decision in a
+machine-checkable form and checks only that:
+
+- **Command scenarios** end the prompt with "End your answer with the exact
+  command(s) you would run, in a single ` ```bash ` fenced block." Both the
+  positive and the forbidden-behaviour assertions are scoped to that block with
+  `strip_comments: true`. A positive check must not be satisfiable by the wrong
+  answer: `(?:^|\s)--body(?:=|\s)`, not `contains "--body"`, which
+  `--body-file` also satisfies.
+- **Decision scenarios** end the prompt with "End your answer with a single
+  ` ```json ` fenced block containing exactly this object …" and an
+  enumerated object such as
+  `{"action": "file_spike" | "propose_fix" | "increase_timeout" | "rerun_until_green", "proposes_code_change": true | false}`.
+  `json_path_equals` on the block pins the correct value, which rejects every
+  other choice.
+
+The prose is then free to name the forbidden thing while rejecting it. No
+shipped scenario runs a negative assertion over unscoped prose; a test in
+`packages/nightgauge-sdk/tests/eval/structuredAnswerScenarios.test.ts` enforces
+that. The same file holds, for every structured scenario, correct answers whose
+prose names the forbidden thing negatively (must pass), wrong answers whose
+block does the wrong thing whatever the prose says (must fail), and an answer
+with no block (must fail). The mock fixtures are written in the structured
+format, with prose that names the forbidden token negatively, so mock mode
+exercises the same path.
+
+Two limits are known and accepted:
+
+- Assertions match literal text. A token split on purpose
+  (`F="--adm""in"; gh pr merge $F`) evades a `not_matches_regex`. These are
+  behavioural regression checks, not a security boundary.
+- A block ends at the first bare closing fence. A heredoc inside the block
+  whose body contains a ` ``` ` line cuts it short, so a correct answer can
+  fail. No shipped scenario asks for fenced content inside its command.
 
 ## Mock vs. live mode
 

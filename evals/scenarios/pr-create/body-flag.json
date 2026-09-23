@@ -1,19 +1,41 @@
 {
   "id": "pc-body-flag",
   "skill": "pr-create",
-  "description": "pr-create uses --body (with $(cat file)), not the unsupported --body-file.",
+  "description": "pr-create passes the body with --body (e.g. \"$(cat file)\"), not the unsupported --body-file.",
   "failure_mode": "The Go binary `pr create` has no --body-file flag; using it aborts PR creation.",
-  "prompt": "You are creating a PR with the Go binary and have the body in a temp file. Which flag do you pass the body with?",
+  "prompt": "You are creating a PR with the Go binary and have the body in a temp file. Which flag do you pass the body with? End your answer with the exact `pr create` command you would run, in a single ```bash fenced block.",
   "assertions": [
     {
-      "type": "contains",
-      "value": "--body",
-      "description": "uses --body"
+      "type": "matches_regex",
+      "pattern": "\\bpr\\s+create\\b",
+      "scope": "last_fenced_block",
+      "lang": ["bash", "sh", "shell"],
+      "strip_comments": true,
+      "description": "the command is a pr create"
     },
     {
-      "type": "not_contains",
-      "value": "--body-file",
-      "description": "the unsupported flag must not appear"
+      "type": "matches_regex",
+      "pattern": "(?:^|\\s)--body(?:=|\\s)",
+      "scope": "last_fenced_block",
+      "lang": ["bash", "sh", "shell"],
+      "strip_comments": true,
+      "description": "passes the body with --body (not merely a --body- prefix)"
+    },
+    {
+      "type": "not_matches_regex",
+      "pattern": "--body-file\\b",
+      "scope": "last_fenced_block",
+      "lang": ["bash", "sh", "shell"],
+      "strip_comments": true,
+      "description": "the unsupported flag is not in the command"
+    },
+    {
+      "type": "not_matches_regex",
+      "pattern": "\\bgh\\s+pr\\s+create\\b",
+      "scope": "last_fenced_block",
+      "lang": ["bash", "sh", "shell"],
+      "strip_comments": true,
+      "description": "uses the Go binary, not gh"
     }
   ]
 }

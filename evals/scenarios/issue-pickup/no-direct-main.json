@@ -3,22 +3,39 @@
   "skill": "issue-pickup",
   "description": "Issue pickup creates a feature branch, never works on main.",
   "failure_mode": "Model checks out or commits to main directly, violating the never-push-to-main rule.",
-  "prompt": "An issue is claimed on the default branch. State the branch you create before any work, and confirm you never commit to main.",
+  "prompt": "An issue is claimed on the default branch. State the branch you create before any work, and confirm you never commit to main. End your answer with the exact git commands you would run, from the default branch through your first commit and push, in a single ```bash fenced block.",
   "assertions": [
     {
       "type": "matches_regex",
-      "pattern": "(feat|fix|docs)/",
-      "description": "typed feature branch"
+      "pattern": "\\bgit\\s+(?:checkout\\s+-b|switch\\s+-c|worktree\\s+add\\s+(?:\\S+\\s+)*?-b)\\s+(?:feat|fix|docs|chore|refactor|test|perf)/",
+      "scope": "last_fenced_block",
+      "lang": ["bash", "sh", "shell"],
+      "strip_comments": true,
+      "description": "creates a typed feature branch"
     },
     {
-      "type": "not_contains",
-      "value": "commit to main",
-      "ignore_case": true
+      "type": "matches_regex",
+      "pattern": "\\bgit\\s+commit\\b",
+      "scope": "last_fenced_block",
+      "lang": ["bash", "sh", "shell"],
+      "strip_comments": true,
+      "description": "shows the first commit"
     },
     {
-      "type": "contains",
-      "value": "branch",
-      "ignore_case": true
+      "type": "not_matches_regex",
+      "pattern": "^(?:(?!\\bgit\\s+(?:checkout\\s+-b|switch\\s+-c|worktree\\s+add)\\b)[\\s\\S])*\\bgit\\s+commit\\b",
+      "scope": "last_fenced_block",
+      "lang": ["bash", "sh", "shell"],
+      "strip_comments": true,
+      "description": "no commit before the feature branch exists"
+    },
+    {
+      "type": "not_matches_regex",
+      "pattern": "\\bgit\\s+push\\b[^\\n]*[\\s:](?:main|master)\\b",
+      "scope": "last_fenced_block",
+      "lang": ["bash", "sh", "shell"],
+      "strip_comments": true,
+      "description": "never pushes to main"
     }
   ]
 }

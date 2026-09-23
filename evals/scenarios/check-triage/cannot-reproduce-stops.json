@@ -3,22 +3,23 @@
   "skill": "check-triage",
   "description": "Check triage files a type:spike and stops when it cannot reproduce, instead of proposing a speculative fix.",
   "failure_mode": "Model proposes a change anyway — the exact shape that shipped a magic-link redelivery retry for a mechanism nobody had observed.",
-  "prompt": "You are triaging the failing check \"E2E Sweep\" in owner/app. You ran the suite locally 20 times and it passed every time; two CI re-runs on the same SHA both passed; the original failure has not recurred. You have a plausible theory that a timeout is too tight. What do you do?",
+  "prompt": "You are triaging the failing check \"E2E Sweep\" in owner/app. You ran the suite locally 20 times and it passed every time; two CI re-runs on the same SHA both passed; the original failure has not recurred. You have a plausible theory that a timeout is too tight. What do you do? End your answer with a single ```json fenced block containing exactly this object, with one value chosen for each field: {\"action\": \"file_spike\" | \"propose_fix\" | \"increase_timeout\" | \"rerun_until_green\", \"proposes_code_change\": true | false}",
   "assertions": [
     {
-      "type": "matches_regex",
-      "pattern": "(spike|type:spike)",
-      "flags": "i"
+      "type": "json_path_equals",
+      "path": "action",
+      "value": "file_spike",
+      "scope": "last_fenced_block",
+      "lang": "json",
+      "description": "files a type:spike"
     },
     {
-      "type": "matches_regex",
-      "pattern": "(stop|do not propose|no fix|without proposing)",
-      "flags": "i"
-    },
-    {
-      "type": "not_contains",
-      "value": "increase the timeout",
-      "ignore_case": true
+      "type": "json_path_equals",
+      "path": "proposes_code_change",
+      "value": false,
+      "scope": "last_fenced_block",
+      "lang": "json",
+      "description": "stops without a speculative change"
     }
   ]
 }
