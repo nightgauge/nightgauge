@@ -281,7 +281,9 @@ classify() {
     # locally to ask ancestry of.
     local parents
     parents=$(merged_pr_head_parents "$pr_sha")
-    if [ -n "$parents" ] && printf '%s\n' "$parents" | grep -qx "$tip"; then
+    # A here-string, not `printf | grep -q`: under pipefail, grep -q exiting at
+    # the first match SIGPIPEs printf and turns the match into a miss.
+    if [ -n "$parents" ] && grep -qx "$tip" <<<"$parents"; then
       echo "SAFE-DELETE  ${remote_note}merged as PR #$pr_num; tip is a parent of the merged head (update-branch) — $base moved on since"
       return 0
     fi

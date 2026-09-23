@@ -582,9 +582,10 @@ const (
 	// model server has the model loaded with. Classified only from the model
 	// request's own failure (opencode's `AI_APICallError: <server message>`),
 	// never from model text. Not an agent failure. Re-routing to a model that
-	// fits (#1645) and decomposing the issue (#1655) are the recoveries this
-	// record exists for; until they land the issue is parked with the
-	// remediation.
+	// fits (#1645) and decomposing the issue (#1655) are its recoveries. The
+	// scheduler's own pre-dispatch refusals (the context-budget fit check and
+	// the capacity check) are classified into it too, and the issue is parked
+	// with the remediation.
 	TerminalKindContextWindowExceeded = "context_window_exceeded"
 	// TerminalKindAdapterPermissionRejected: the adapter auto-rejected a tool
 	// the stage's allowed tools grant (#1624's
@@ -645,6 +646,19 @@ func TerminalKindRemediation(kind string) string {
 			"or pin the adapter's binary to it, " + parkedReleaseStep
 	}
 	return ""
+}
+
+// ParkedRemediation is TerminalKindRemediation with the failure text in hand:
+// a context_window_exceeded that the capacity check produced (#1655) is not
+// a prompt that outgrew a loaded window, so it gets its own next step.
+func ParkedRemediation(kind, detail string) string {
+	if kind == TerminalKindContextWindowExceeded && strings.Contains(detail, capacityRefusalPhrase) {
+		return "the issue's size exceeds the capacity the ADR-023 table gives the context window of a model " +
+			"this run's size-sensitive stages resolve to; decompose the issue into sub-issues within the cap, " +
+			"or route those stages to a model with a larger window (pipeline.size_gate.routes.reject_action: " +
+			"soft-route with capacity_fallback_models, or the stage's model configuration), " + parkedReleaseStep
+	}
+	return TerminalKindRemediation(kind)
 }
 
 // Hold* name the human action that releases a Failed entry whose terminal kind

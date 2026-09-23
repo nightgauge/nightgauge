@@ -5605,10 +5605,10 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 				detail = "no failure text"
 			}
 			reason := fmt.Sprintf("%s (parked, no retry) — %s — %s",
-				terminalFailureKind, TerminalKindRemediation(terminalFailureKind), detail)
+				terminalFailureKind, ParkedRemediation(terminalFailureKind, detail), detail)
 			as.recordFailureLocked(repo, issue, title, now, reason, terminalFailureKind)
 			log.Printf("autonomous: %s#%d %s — parked for an operator: no retry, no lifetime-cap increment, no cascade feed, no pause — %s",
-				repo, issue, terminalFailureKind, TerminalKindRemediation(terminalFailureKind))
+				repo, issue, terminalFailureKind, ParkedRemediation(terminalFailureKind, detail))
 			if as.safetyRails != nil {
 				as.safetyRails.RecordNonFaultOutcome(0)
 				safetySnap := as.safetyRails.State()

@@ -541,6 +541,15 @@ export const SizeGateRoutesSchema = z.object({
    * subset is positional (bottom two rungs), not a re-spelled vocabulary.
    */
   soft_route_model: z.enum([TIER_BANDS[0], TIER_BANDS[1]]).optional(),
+  /**
+   * Ordered models an over-capacity issue may move to under 'soft-route'
+   * (#1655). The Go capacity check (`size-gate check --context-window` /
+   * `--model`, and the scheduler at dispatch) takes the first entry whose
+   * context window admits the issue's size per the ADR-023 capacity table;
+   * with none, the issue is rejected. Each entry is a model string for the
+   * stage's adapter, e.g. an OpenCode `<provider>/<model>`.
+   */
+  capacity_fallback_models: z.array(z.string().min(1)).optional(),
 });
 export type SizeGateRoutes = z.infer<typeof SizeGateRoutesSchema>;
 
