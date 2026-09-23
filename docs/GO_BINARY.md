@@ -168,28 +168,74 @@ Manage it with `nightgauge auth license`:
 
 ```bash
 printf '%s' "$KEY" | nightgauge auth license set   # key on stdin, never argv
-printf '%s' "$KEY" | nightgauge auth license set --json  # {"source": "keychain" | "machine-file", ...}
-nightgauge auth license status                     # prints the source, never the key
-nightgauge auth license status --json              # {"source": ..., "keychainAvailable": ...}
-nightgauge auth license clear                      # removes the keychain entry and the file copy
+nightgauge auth license status                     # source and fingerprint, never the key
+nightgauge auth license clear                      # every stored copy; non-zero if the keychain was unreachable
 ```
 
-On a host with no keychain service — a headless Linux runner without a
-Secret Service, a container, an SSH session whose login keychain is locked —
-`set` says so and writes the machine-tier file instead, atomically, with mode
-`0600`, and refuses a symlinked file. Each keychain call is bounded (3 s), so
-a stalled D-Bus degrades to the file rather than hanging. `status` reports the
-keychain as unavailable and why. The environment variable works everywhere.
+Each subcommand takes `--json`. The field names are a contract with the VS
+Code extension, pinned on both sides by
+`cmd/nightgauge/testdata/auth-license-contract.json`. The `fingerprint` field
+is the first 12 hex characters of the key's SHA-256: it identifies a key
+without revealing it.
 
-The VS Code extension keeps its own copy in VS Code SecretStorage and writes
-this entry through the same command: activating a license, starting a trial,
-saving a key in Settings and the startup migration all pipe the key to
-`nightgauge auth license set --json` on stdin (never argv or environment), and
-clearing the key in Settings runs `auth license clear`. The extension removes
-`platform.license_key` from the machine-tier file only after the keychain
-write succeeded; when it fails, the SecretStorage copy stays and one warning
-names the command to run by hand. On activation it copies a key already in
-SecretStorage to the keychain when the CLI has none stored.
+- `set` removes any plaintext copy from the machine-tier file once the
+  keychain holds the key, so rotating the key never leaves the old one on
+  disk.
+- `clear` removes the keychain entry, the machine-tier copy and a copy in the
+  workspace's `.nightgauge/config.local.yaml`, and reports a copy in the
+  committed `.nightgauge/config.yaml` (which it does not edit). It exits
+  non-zero when the keychain could not be reached, since an entry may remain.
+- `config show` notes a `platform.license_key` in the project or local tier:
+  those tiers are never read for the license key.
+
+On a host with no keychain service — a headless Linux runner without a
+Secret Service, a container, an SSH session whose login keychain refuses
+interaction — `set` says so and writes the machine-tier file instead,
+atomically, with mode `0600`, and refuses a symlinked file. Each keychain call
+is bounded (3 s). A read that times out falls back to the file. A write that
+times out is an error and is not written to the file, because the abandoned
+write can still complete (for example after an unlock prompt is answered) and
+the key would then exist in two places. `status` reports the keychain as
+unavailable and why. The environment variable works everywhere.
+
+The keychain protects the key at rest and keeps it out of files; it does not
+isolate it from other programs. Any process running as the same user can read
+the item without a prompt (on macOS through `/usr/bin/security`, which
+created it). That is the same exposure as `gh`'s token or a `0600` file.
+
+#### The VS Code extension and the single source of truth
+
+The extension keeps a copy in VS Code SecretStorage, because its own runtime
+needs the value and the CLI never prints it. It writes the shared entry
+through the same command: activating a license, starting a trial, saving a
+key in Settings and the startup migration all pipe the key to
+`nightgauge auth license set --json` on stdin (never argv or environment).
+Clearing the key in Settings runs `auth license clear --json`. A binary that
+predates `auth license` is reported as needing an update.
+
+**The shared keychain entry is the source of truth.** The extension records
+the fingerprint of the last key the CLI confirmed and compares fingerprints
+on startup and after every write:
+
+- same fingerprint: in sync;
+- the CLI has no key: the extension's key is written;
+- the CLI still holds the last confirmed key: the extension's newer key never
+  reached it (a failed write), so it is written again;
+- otherwise the key was changed outside VS Code, for example rotated with
+  `auth license set` in a terminal. The CLI's key wins. The extension drops
+  its stale copy and tells the user to run **Nightgauge: Activate License**
+  with the current key.
+
+The CLI's key wins because it is the key a person changed deliberately and
+the one every other process uses. The extension cannot read it (the CLI never
+prints the key), so it must not keep handing its own. The daemon spawn waits
+for this reconciliation, bounded at 5 s, so the daemon is never given a
+stale `NIGHTGAUGE_LICENSE_KEY`.
+
+The extension removes `platform.license_key` from the machine-tier file only
+after the keychain write succeeded. When the write fails, the SecretStorage
+copy stays and one warning names the command to run by hand. When the key
+could only go to the plaintext file, one information message says so.
 
 On macOS the stored value carries go-keyring's `go-keyring-base64:` prefix, so
 read it through `nightgauge auth license status`, not by decoding `security`

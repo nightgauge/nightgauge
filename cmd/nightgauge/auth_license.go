@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/keychain"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -41,9 +42,11 @@ The key is never printed.`,
 // licenseSetResult is the `auth license set --json` shape. It never carries
 // the key.
 type licenseSetResult struct {
-	Source        keychain.Source `json:"source"`
-	Path          string          `json:"path,omitempty"`
-	KeychainError string          `json:"keychainError,omitempty"`
+	Source          keychain.Source `json:"source"`
+	Path            string          `json:"path,omitempty"`
+	KeychainError   string          `json:"keychainError,omitempty"`
+	Fingerprint     string          `json:"fingerprint"`
+	RemovedFileCopy bool            `json:"removedFileCopy,omitempty"`
 }
 
 func authLicenseSetCmd() *cobra.Command {
@@ -72,9 +75,13 @@ on the machine. At a terminal the key is read without echo.`,
 			}
 			out := cmd.OutOrStdout()
 			if jsonOutput {
-				r := licenseSetResult{Source: res.Source, Path: res.Path}
+				r := licenseSetResult{Source: res.Source, Path: res.Path,
+					Fingerprint: keychain.Fingerprint(key), RemovedFileCopy: res.RemovedFileCopy}
 				if res.KeychainErr != nil {
 					r.KeychainError = res.KeychainErr.Error()
+				}
+				if res.FileCleanupErr != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "Warning: could not remove the plaintext copy from the machine-tier file: %v\n", res.FileCleanupErr)
 				}
 				return json.NewEncoder(out).Encode(r)
 			}
@@ -82,6 +89,12 @@ on the machine. At a terminal the key is read without echo.`,
 			case keychain.SourceKeychain:
 				fmt.Fprintf(out, "License key stored in the OS keychain (service %q, account %q).\n",
 					keychain.Service, keychain.AccountLicenseKey)
+				if res.RemovedFileCopy {
+					fmt.Fprintf(out, "Removed the plaintext copy from %s.\n", res.Path)
+				}
+				if res.FileCleanupErr != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "Warning: could not remove the plaintext copy from the machine-tier file: %v\n", res.FileCleanupErr)
+				}
 			default:
 				fmt.Fprintf(cmd.ErrOrStderr(), "No OS keychain is available: %v\n", res.KeychainErr)
 				fmt.Fprintf(out, "License key stored in %s (mode 0600) instead.\n", res.Path)
@@ -135,6 +148,9 @@ type licenseStatus struct {
 	Path              string          `json:"path,omitempty"`
 	KeychainAvailable bool            `json:"keychainAvailable"`
 	KeychainError     string          `json:"keychainError,omitempty"`
+	// Fingerprint identifies the resolved key without revealing it
+	// (keychain.Fingerprint); empty when there is no key.
+	Fingerprint string `json:"fingerprint,omitempty"`
 }
 
 func authLicenseStatusCmd() *cobra.Command {
@@ -149,7 +165,8 @@ func authLicenseStatusCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("resolve license key: %w", err)
 			}
-			st := licenseStatus{Source: res.Source, Path: res.Path, KeychainAvailable: res.KeychainErr == nil}
+			st := licenseStatus{Source: res.Source, Path: res.Path, KeychainAvailable: res.KeychainErr == nil,
+				Fingerprint: keychain.Fingerprint(res.Value)}
 			if res.KeychainErr != nil {
 				st.KeychainError = res.KeychainErr.Error()
 			}
@@ -158,6 +175,9 @@ func authLicenseStatusCmd() *cobra.Command {
 				return json.NewEncoder(out).Encode(st)
 			}
 			fmt.Fprintf(out, "source: %s\n", st.Source)
+			if st.Fingerprint != "" {
+				fmt.Fprintf(out, "fingerprint: %s\n", st.Fingerprint)
+			}
 			if st.Path != "" {
 				fmt.Fprintf(out, "path: %s\n", st.Path)
 			}
@@ -171,35 +191,86 @@ func authLicenseStatusCmd() *cobra.Command {
 	return cmd
 }
 
+// licenseClearResult is the `auth license clear --json` shape.
+type licenseClearResult struct {
+	KeychainCleared bool   `json:"keychainCleared"`
+	FileCleared     bool   `json:"fileCleared"`
+	Path            string `json:"path,omitempty"`
+	LocalCleared    bool   `json:"localCleared,omitempty"`
+	LocalPath       string `json:"localPath,omitempty"`
+	KeychainError   string `json:"keychainError,omitempty"`
+}
+
+// errKeychainNotCleared makes `clear` exit non-zero when it could not reach
+// the keychain, so a caller never reads "cleared" when an entry may remain.
+var errKeychainNotCleared = errors.New("the OS keychain could not be reached; an entry may remain there")
+
 func authLicenseClearCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:          "clear",
-		Short:        "Delete the stored license key from the keychain and the machine-tier file",
+	var jsonOutput bool
+	cmd := &cobra.Command{
+		Use:   "clear",
+		Short: "Delete every stored copy of the license key",
+		Long: `Deletes the license key from the OS keychain, from the machine-tier config
+file, and from this workspace's gitignored .nightgauge/config.local.yaml.
+A key in the committed .nightgauge/config.yaml is reported, not edited.
+Exits non-zero when the keychain could not be reached.`,
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			removed, err := newLicenseStore().Delete(keychain.AccountLicenseKey)
-			out := cmd.OutOrStdout()
-			if removed.Keychain {
-				fmt.Fprintln(out, "Removed the license key from the OS keychain.")
-			}
-			if removed.MachineFile {
-				fmt.Fprintf(out, "Removed platform.license_key from %s.\n", removed.Path)
-			}
 			if err != nil {
 				return fmt.Errorf("clear license key: %w", err)
 			}
-			if removed.KeychainErr != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: the OS keychain could not be reached (%v); an entry may remain there.\n",
-					removed.KeychainErr)
+			r := licenseClearResult{KeychainCleared: removed.Keychain, FileCleared: removed.MachineFile}
+			if removed.MachineFile {
+				r.Path = removed.Path
 			}
-			if !removed.Keychain && !removed.MachineFile && removed.KeychainErr == nil {
-				fmt.Fprintln(out, "No stored license key to remove.")
+			if removed.KeychainErr != nil {
+				r.KeychainError = removed.KeychainErr.Error()
+			}
+			errOut := cmd.ErrOrStderr()
+			if wd, wdErr := os.Getwd(); wdErr == nil {
+				local := config.LocalConfigPath(wd)
+				if v, _ := config.ReadFileString(local, keychain.AccountLicenseKey); v != "" {
+					if werr := config.WritePrivateValue(local, keychain.AccountLicenseKey, ""); werr != nil {
+						fmt.Fprintf(errOut, "Warning: could not remove platform.license_key from %s: %v\n", local, werr)
+					} else {
+						r.LocalCleared, r.LocalPath = true, local
+					}
+				}
+				project := config.ProjectConfigPath(wd)
+				if v, _ := config.ReadFileString(project, keychain.AccountLicenseKey); v != "" {
+					fmt.Fprintf(errOut, "Warning: %s (committed) still contains platform.license_key; it is ignored, remove it by hand.\n", project)
+				}
 			}
 			if os.Getenv(keychain.EnvLicenseKey) != "" {
-				fmt.Fprintf(cmd.ErrOrStderr(), "Note: %s is still set in this environment.\n", keychain.EnvLicenseKey)
+				fmt.Fprintf(errOut, "Note: %s is still set in this environment.\n", keychain.EnvLicenseKey)
+			}
+			out := cmd.OutOrStdout()
+			if jsonOutput {
+				if encErr := json.NewEncoder(out).Encode(r); encErr != nil {
+					return encErr
+				}
+			} else {
+				if r.KeychainCleared {
+					fmt.Fprintln(out, "Removed the license key from the OS keychain.")
+				}
+				if r.FileCleared {
+					fmt.Fprintf(out, "Removed platform.license_key from %s.\n", r.Path)
+				}
+				if r.LocalCleared {
+					fmt.Fprintf(out, "Removed platform.license_key from %s.\n", r.LocalPath)
+				}
+				if !r.KeychainCleared && !r.FileCleared && !r.LocalCleared && r.KeychainError == "" {
+					fmt.Fprintln(out, "No stored license key to remove.")
+				}
+			}
+			if removed.KeychainErr != nil {
+				return fmt.Errorf("%w (%v)", errKeychainNotCleared, removed.KeychainErr)
 			}
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output what was removed as JSON")
+	return cmd
 }

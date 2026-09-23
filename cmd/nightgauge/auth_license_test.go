@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -125,7 +126,8 @@ func TestAuthLicenseSetJSONReportsTheStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	var r licenseSetResult
-	if err := json.Unmarshal([]byte(out), &r); err != nil || r.Source != keychain.SourceKeychain {
+	if err := json.Unmarshal([]byte(out), &r); err != nil || r.Source != keychain.SourceKeychain ||
+		r.Fingerprint != keychain.Fingerprint(key) {
 		t.Fatalf("set --json = %q (%v)", out, err)
 	}
 	keyring.MockInitWithError(errors.New("no secret service"))
@@ -190,5 +192,160 @@ func TestAuthLicenseClearRemovesEveryStoredCopy(t *testing.T) {
 	out, _, err := runLicenseCmd(t, "", "status")
 	if err != nil || !strings.Contains(out, "source: none") {
 		t.Fatalf("status after clear = %q, %v", out, err)
+	}
+}
+
+// contract is testdata/auth-license-contract.json, the fixture the VS Code
+// extension's bridge test reads too.
+type contract struct {
+	Keychain    struct{ Service, Account string }
+	Command     []string
+	Subcommands []string
+	Fingerprint struct{ Key, Value string }
+	Outputs     map[string]map[string]any
+}
+
+func loadContract(t *testing.T) contract {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("testdata", "auth-license-contract.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c contract
+	if err := json.Unmarshal(data, &c); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// jsonKeys marshals v and returns its top-level field names.
+func jsonKeys(t *testing.T, v any) []string {
+	t.Helper()
+	data, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatal(err)
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func fixtureKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// TestAuthLicenseContractMatchesFixture fails when a subcommand or a JSON field
+// the extension parses is renamed on the Go side without the fixture (and so
+// the extension) following.
+func TestAuthLicenseContractMatchesFixture(t *testing.T) {
+	c := loadContract(t)
+	if c.Keychain.Service != keychain.Service || c.Keychain.Account != keychain.AccountLicenseKey {
+		t.Errorf("keychain entry = %+v, want %s/%s", c.Keychain, keychain.Service, keychain.AccountLicenseKey)
+	}
+	if got := keychain.Fingerprint(c.Fingerprint.Key); got != c.Fingerprint.Value {
+		t.Errorf("Fingerprint(%q) = %q, fixture says %q", c.Fingerprint.Key, got, c.Fingerprint.Value)
+	}
+	if strings.Join(c.Command, " ") != "auth license" || authCmd().Use != "auth" || authLicenseCmd().Use != "license" {
+		t.Errorf("command path drifted: fixture %v", c.Command)
+	}
+	var subs []string
+	for _, sub := range authLicenseCmd().Commands() {
+		subs = append(subs, sub.Use)
+	}
+	sort.Strings(subs)
+	want := append([]string(nil), c.Subcommands...)
+	sort.Strings(want)
+	if strings.Join(subs, ",") != strings.Join(want, ",") {
+		t.Errorf("subcommands = %v, fixture %v", subs, want)
+	}
+	for _, sub := range c.Subcommands {
+		for _, cmd := range authLicenseCmd().Commands() {
+			if cmd.Use == sub && cmd.Flags().Lookup("json") == nil {
+				t.Errorf("auth license %s has no --json flag", sub)
+			}
+		}
+	}
+	full := map[string]any{
+		"set": licenseSetResult{Source: "keychain", Path: "p", KeychainError: "e", Fingerprint: "f", RemovedFileCopy: true},
+		"status": licenseStatus{Source: "keychain", Path: "p", KeychainAvailable: true, KeychainError: "e",
+			Fingerprint: "f"},
+		"clear": licenseClearResult{KeychainCleared: true, FileCleared: true, Path: "p", LocalCleared: true,
+			LocalPath: "l", KeychainError: "e"},
+	}
+	for name, v := range full {
+		got, want := jsonKeys(t, v), fixtureKeys(c.Outputs[name])
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Errorf("%s --json fields = %v, fixture %v", name, got, want)
+		}
+	}
+}
+
+func TestAuthLicenseClearFailsWhenKeychainUnreachable(t *testing.T) {
+	path := licenseFixture(t)
+	if err := os.WriteFile(path, []byte("platform:\n  license_key: ib_live_file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	keyring.MockInitWithError(errors.New("no secret service"))
+	out, _, err := runLicenseCmd(t, "", "clear", "--json")
+	if err == nil {
+		t.Fatal("clear exited zero with the keychain unreachable")
+	}
+	var r licenseClearResult
+	if jerr := json.Unmarshal([]byte(out), &r); jerr != nil || r.KeychainCleared || !r.FileCleared || r.KeychainError == "" {
+		t.Fatalf("clear --json = %q (%v)", out, jerr)
+	}
+}
+
+func TestAuthLicenseClearRemovesLocalTierKey(t *testing.T) {
+	licenseFixture(t)
+	wd := t.TempDir()
+	t.Chdir(wd)
+	local := config.LocalConfigPath(wd)
+	if err := os.MkdirAll(filepath.Dir(local), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(local, []byte("platform:\n  license_key: ib_live_local\nlog_level: debug\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := runLicenseCmd(t, "", "clear", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var r licenseClearResult
+	if jerr := json.Unmarshal([]byte(out), &r); jerr != nil || !r.LocalCleared {
+		t.Fatalf("clear --json = %q (%v)", out, jerr)
+	}
+	data, _ := os.ReadFile(local)
+	if strings.Contains(string(data), "ib_live_local") || !strings.Contains(string(data), "log_level") {
+		t.Fatalf("local tier after clear:\n%s", data)
+	}
+}
+
+func TestConfigShowNotesIgnoredLicenseKey(t *testing.T) {
+	wd := t.TempDir()
+	project := config.ProjectConfigPath(wd)
+	if err := os.MkdirAll(filepath.Dir(project), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(project, []byte("platform:\n  license_key: ib_live_project\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	warnIgnoredLicenseKeys(&buf, wd)
+	if !strings.Contains(buf.String(), project) || !strings.Contains(buf.String(), "ignored") ||
+		strings.Contains(buf.String(), "ib_live_project") {
+		t.Fatalf("note = %q", buf.String())
 	}
 }

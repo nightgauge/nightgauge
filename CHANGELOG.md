@@ -28,8 +28,7 @@ changelog, and the release workflow refuses a tag that does not.
   in the machine-tier config file. On a host with no keychain the key falls
   back to that file, written with mode 0600 and never through a symlink, and
   a stalled keychain times out instead of hanging. `serve` still uses a
-  stored key only when `platform.enabled: true`, and no longer reads a
-  license key from the project or local config tiers.
+  stored key only when `platform.enabled: true`.
 
 - **Capacity-aware size gates (#1655).** A model's context window now caps
   the largest issue size it may take, from one table in
@@ -433,6 +432,14 @@ create --body-file` call, so the compact profile (and its tests) pin
 
 ### Changed
 
+- **`serve` no longer reads `platform.license_key` from the project or
+  local config tier (#2025).** The license key now comes only from
+  `NIGHTGAUGE_LICENSE_KEY`, the OS keychain, or the machine-tier config file.
+  A key kept in `.nightgauge/config.yaml` or `.nightgauge/config.local.yaml`
+  is ignored, and `nightgauge config show` says so. To migrate, run
+  `printf '%s' "$KEY" | nightgauge auth license set`, then delete the
+  `license_key` line from the workspace file.
+
 - **The daemon reads GitHub with conditional REST requests, remembered across
   restarts (part of #842).** A window open used to cost ~182 GraphQL points,
   eight 17-point board pages among them. The board reads behind the
@@ -496,7 +503,11 @@ create --body-file` call, so the compact profile (and its tests) pin
   machine-config line is deleted only after the keychain write succeeds; on
   failure the key stays where it was and one warning names the command to run.
   A key migrated by an earlier version is copied to the keychain on the next
-  activation.
+  activation. The shared keychain entry is the source of truth: the extension
+  compares key fingerprints (never the key) with `auth license status` on
+  startup and after each write. If the key was rotated from a terminal, VS
+  Code drops its stale copy instead of handing it to the daemon, and asks you
+  to activate the current key.
 
 - **`branch-merged-check.sh` no longer calls an update-branch merge KEEP under
   load.** The parent-of-merged-head test piped `printf` into `grep -qx` under

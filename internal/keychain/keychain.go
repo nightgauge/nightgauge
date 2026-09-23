@@ -33,6 +33,8 @@
 package keychain
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -101,16 +103,34 @@ func New() *Store {
 type Result struct {
 	Value  string
 	Source Source
-	// Path is the machine-tier file when Source is SourceMachineFile.
+	// Path is the machine-tier file when Source is SourceMachineFile, and the
+	// file a plaintext copy was removed from when RemovedFileCopy is true.
 	Path string
 	// KeychainErr is non-nil when the keychain could not be used and the
 	// machine-tier file was used instead; it says why. It never contains the
 	// credential.
 	KeychainErr error
+	// RemovedFileCopy reports that a keychain write also removed a plaintext
+	// copy from the machine-tier file; FileCleanupErr says why it could not.
+	RemovedFileCopy bool
+	FileCleanupErr  error
 }
 
-// errTimeout reports a keychain call that did not return in time.
-var errTimeout = errors.New("the OS keychain did not respond")
+// ErrTimeout reports a keychain call that did not return in time. A write
+// that times out may still complete (a macOS unlock prompt can be answered
+// later), so it is never followed by a plaintext fallback.
+var ErrTimeout = errors.New("the OS keychain did not respond")
+
+// Fingerprint is a non-reversible identifier of a key: the first 12 hex
+// characters of its SHA-256. It lets two holders of a key compare copies
+// without either printing the key.
+func Fingerprint(key string) string {
+	if key == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:])[:12]
+}
 
 // call runs fn with the store's timeout. A call that overruns is abandoned:
 // its goroutine finishes (or not) on its own, and the caller falls back.
@@ -130,7 +150,7 @@ func (s *Store) call(fn func() (string, error)) (string, error) {
 	case o := <-ch:
 		return o.v, o.err
 	case <-timer.C:
-		return "", fmt.Errorf("%w within %s", errTimeout, s.timeout)
+		return "", fmt.Errorf("%w within %s", ErrTimeout, s.timeout)
 	}
 }
 
@@ -160,16 +180,37 @@ func (s *Store) Get(account string) (Result, error) {
 	return res, nil
 }
 
-// Set stores value for account in the keychain. When the keychain cannot be
-// used it writes the machine-tier file (mode 0600, never through a symlink)
-// and returns Source SourceMachineFile with the reason in KeychainErr.
+// Set stores value for account in the keychain and removes any plaintext copy
+// from the machine-tier file, so a rotated key never leaves the old one on
+// disk. When the keychain answers that it cannot be used (no Secret Service,
+// no D-Bus, a locked keychain that refuses interaction) it writes the
+// machine-tier file instead (mode 0600, never through a symlink) and returns
+// Source SourceMachineFile with the reason in KeychainErr. A keychain that
+// does not answer in time is an error, not a fallback: the abandoned write can
+// still land, and a second copy on disk is what the keychain exists to avoid.
 func (s *Store) Set(account, value string) (Result, error) {
 	if value == "" {
 		return Result{}, errors.New("refusing to store an empty value")
 	}
 	_, err := s.call(func() (string, error) { return "", s.backend.Set(Service, account, value) })
 	if err == nil {
-		return Result{Source: SourceKeychain}, nil
+		res := Result{Source: SourceKeychain}
+		old, path, rerr := config.ReadMachineString(account)
+		switch {
+		case rerr != nil:
+			res.FileCleanupErr = rerr
+		case old != "":
+			if _, werr := config.WriteMachinePrivateValue(account, ""); werr != nil {
+				res.FileCleanupErr = werr
+			} else {
+				res.RemovedFileCopy, res.Path = true, path
+			}
+		}
+		return res, nil
+	}
+	if errors.Is(err, ErrTimeout) {
+		return Result{KeychainErr: err}, fmt.Errorf("%w; the key was not written anywhere else. "+
+			"If the keychain asked to be unlocked, unlock it and run the command again", err)
 	}
 	if errors.Is(err, keyring.ErrSetDataTooBig) {
 		return Result{}, err

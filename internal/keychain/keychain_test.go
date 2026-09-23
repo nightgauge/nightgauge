@@ -178,7 +178,7 @@ func TestStalledKeychainTimesOutAndFallsBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Source != SourceMachineFile || !errors.Is(got.KeychainErr, errTimeout) {
+	if got.Source != SourceMachineFile || !errors.Is(got.KeychainErr, ErrTimeout) {
 		t.Fatalf("Get = %+v; want machine-file after a timeout", got)
 	}
 }
@@ -244,5 +244,51 @@ func TestNormalizeLicenseKey(t *testing.T) {
 		if bad != "" && strings.Contains(err.Error(), strings.TrimSpace(bad)) && strings.TrimSpace(bad) != "" {
 			t.Errorf("error %q quotes the input", err)
 		}
+	}
+}
+
+// A write the keychain does not answer in time may still land after an unlock
+// prompt, so it must not also be written to the plaintext file.
+func TestStalledKeychainSetDoesNotFallBackToTheFile(t *testing.T) {
+	path := machineFile(t)
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	s := &Store{backend: stallingBackend{release}, timeout: 20 * time.Millisecond, getenv: func(string) string { return "" }}
+
+	res, err := s.Set(AccountLicenseKey, "ib_live_slow")
+	if err == nil || !errors.Is(err, ErrTimeout) {
+		t.Fatalf("Set = %+v, %v; want a timeout error", res, err)
+	}
+	if strings.Contains(err.Error(), "ib_live_slow") {
+		t.Fatal("the error quoted the key")
+	}
+	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("a timed-out keychain write fell back to %s", path)
+	}
+}
+
+// Rotating the key into the keychain removes the old plaintext copy.
+func TestKeychainSetRemovesPlaintextCopy(t *testing.T) {
+	keyring.MockInit()
+	path := machineFile(t)
+	writeMachine(t, path, "platform:\n  api_url: https://example.test\n  license_key: ib_live_old\n")
+
+	res, err := newStore(nil).Set(AccountLicenseKey, "ib_live_new")
+	if err != nil || res.Source != SourceKeychain || !res.RemovedFileCopy || res.Path != path {
+		t.Fatalf("Set = %+v, %v; want keychain with the file copy removed", res, err)
+	}
+	data, _ := os.ReadFile(path)
+	if strings.Contains(string(data), "ib_live_old") || !strings.Contains(string(data), "api_url") {
+		t.Fatalf("machine file after Set:\n%s", data)
+	}
+}
+
+func TestFingerprintIsStableAndShort(t *testing.T) {
+	// sha256("ib_live_abc") — pinned so the TypeScript side can compute the same.
+	if got := Fingerprint("ib_live_abc"); got != "d34399cf362c" || got == Fingerprint("ib_live_abd") {
+		t.Fatalf("Fingerprint = %q", got)
+	}
+	if Fingerprint("") != "" {
+		t.Fatal("empty key has a fingerprint")
 	}
 }
