@@ -123,7 +123,10 @@ stub_pr() {
     "$MERGE_SHA" "${4:-2020-01-01T00:00:00Z}" "$HEAD_SHA" >"$FAKE_BIN/pages/pulls.1.json"
   printf '{"sha": "%s", "commit": {"tree": {"sha": "%s"}}}\n' "$HEAD_SHA" "$1" >"$FAKE_BIN/pages/head-commit.1.json"
   printf '%s\n' "$2" >"$FAKE_BIN/pages/head-check-runs.1.json"
-  printf '%s\n' "${3:-{\"statuses\": []\}}" >"$FAKE_BIN/pages/head-status.1.json"
+  # Not "${3:-{...\}}": bash 3.2 (macOS /bin/bash) keeps the backslash.
+  local status='{"statuses": []}'
+  [ -n "${3:-}" ] && status=$3
+  printf '%s\n' "$status" >"$FAKE_BIN/pages/head-status.1.json"
   echo '[{"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "build"}, {"context": "cla"}]}}]' \
     >"$FAKE_BIN/pages/rules.1.json"
 }
