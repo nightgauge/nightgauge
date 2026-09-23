@@ -279,6 +279,15 @@ create --body-file` call, so the compact profile (and its tests) pin
 
 ### Fixed
 
+- **The test-quality hook no longer drops a warning when the machine is busy.**
+  It ran under `set -o pipefail` and tested each pattern with
+  `echo "$CONTENT" | grep -q`. `grep -q` exits at its first match. The
+  line-buffered `echo` then wrote into a closed pipe and took SIGPIPE, and
+  pipefail turned the match into a miss. A short file lost that race only under
+  load, which is how a full local gate caught it; a match early in a long file
+  lost it every time. The hook now greps a here-string. A parity case with
+  20,000 trailing lines fails against the old script on any machine.
+
 - **Skill-eval scenarios judge the model's decision, not its prose, so a
   correct answer is no longer failed for naming the forbidden thing to reject
   it.** `not_contains` cannot tell a recommendation from a warning. Measured on

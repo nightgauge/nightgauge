@@ -50,19 +50,19 @@ fi
 WARNINGS=()
 
 # 1. Tautological assertions: expect(true).toBe(true), expect(false).toBe(false)
-if echo "$CONTENT" | grep -qE 'expect\(true\)\.toBe\(true\)|expect\(false\)\.toBe\(false\)'; then
+if grep -qE 'expect\(true\)\.toBe\(true\)|expect\(false\)\.toBe\(false\)' <<<"$CONTENT"; then
   WARNINGS+=("Tautological assertion detected (expect(true).toBe(true) or expect(false).toBe(false)). Replace with meaningful assertions.")
 fi
 
 # 2. Empty test bodies: it("...", () => {})  or  it("...", () => { })
-if echo "$CONTENT" | grep -qE 'it\(.*\(\)\s*=>\s*\{\s*\}\)'; then
+if grep -qE 'it\(.*\(\)\s*=>\s*\{\s*\}\)' <<<"$CONTENT"; then
   WARNINGS+=("Empty test body detected. Tests must contain assertions.")
 fi
 
 # 3. console.log as only "assertion" — test body contains console.log but no expect/assert
 # Check for it() blocks that have console.log but lack expect(
-if echo "$CONTENT" | grep -qE 'console\.log'; then
-  if ! echo "$CONTENT" | grep -qE 'expect\(|assert[.(]'; then
+if grep -qE 'console\.log' <<<"$CONTENT"; then
+  if ! grep -qE 'expect\(|assert[.(]' <<<"$CONTENT"; then
     WARNINGS+=("Test file contains console.log but no expect()/assert() calls. Add real assertions.")
   fi
 fi
