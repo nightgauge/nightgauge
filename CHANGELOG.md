@@ -16,6 +16,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The adapter docs say which OpenCode version each upstream behaviour was
+  seen on (#1980).** Claims about what OpenCode itself does now carry
+  `(observed on opencode 1.18.30)`, so a newer release that changes one can be
+  found with a single search. The capability table now marks `json_schema`
+  output, the GitHub agent and ACP as non-goals, and the permission-rejected
+  remediation reflects the shipped permission map.
+
 - **The knowledge base is committed, and every statement of that agrees
   (#2042).** The generated `.nightgauge/.gitignore` no longer ignores
   `/knowledge/` wholesale — an enabled knowledge base used to be scaffolded,
