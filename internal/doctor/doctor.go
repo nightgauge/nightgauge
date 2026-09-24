@@ -214,6 +214,23 @@ func RunDoctorWithConfigError(ctx context.Context, cfg *config.Config, cfgErr er
 				result.Checks["rate_limit"] = CheckItem{OK: true, Detail: detail}
 			}
 		}
+
+		// github_identity — informational (#1955): which identity pipeline
+		// traffic is billed to, and that identity's hourly ceiling.
+		ceiling := ""
+		if rl != nil {
+			ceiling = fmt.Sprintf(", GraphQL ceiling %d/hr", rl.Limit)
+		}
+		if app := client.App(); app != nil {
+			item := CheckItem{OK: true, Detail: app.String() + ceiling}
+			if _, _, ok := app.CommitIdentity(); !ok {
+				item.Detail += "; commits keep the generic pipeline author until github_auth.app.slug and bot_user_id are set"
+				warnings = append(warnings, "github_auth.app has no slug/bot_user_id: pipeline commits are not attributed to the App")
+			}
+			result.Checks["github_identity"] = item
+		} else {
+			result.Checks["github_identity"] = CheckItem{OK: true, Detail: "personal token (the user's own rate-limit pool)" + ceiling}
+		}
 	}
 
 	// --- config (required; downgraded to warning for fresh/nil config) ---

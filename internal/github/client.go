@@ -118,6 +118,11 @@ type Client struct {
 	cond     *ConditionalStore
 	identity string
 
+	// app is the GitHub App this client authenticates as, nil for a user
+	// token (#1955). An installation has no GET /user; getCurrentUserLogin
+	// answers from it instead.
+	app *AppCredentials
+
 	// restProjects404 remembers, per board, until when its REST projects
 	// endpoints are skipped after a 404 (board_rest.go).
 	restProjects404 map[string]time.Time
@@ -454,6 +459,12 @@ func newClientFromChain(cfg TokenResolver, owner string, forUser func(string) (s
 		return NewClientWithToken(tok), nil
 	}
 
+	// A configured GitHub App is preferred over every personal token: its
+	// installation has its own rate-limit bucket (#1955).
+	if c := appClient(cfg, owner); c != nil {
+		return c, nil
+	}
+
 	// 2. Config-based token (per-project or per-org).
 	if cfg != nil {
 		tok, err := cfg.ResolveToken(owner)
@@ -554,6 +565,13 @@ func ResolveTokenChain(cfg TokenResolver, owner string) (string, error) {
 	if tok := ciEnvironmentToken(); tok != "" {
 		return tok, nil
 	}
+	if creds := usableApp(cfg, owner); creds != nil {
+		tok, err := appInstallationToken(context.Background(), creds, time.Now)
+		if err == nil {
+			return tok.AccessToken, nil
+		}
+		warnAppFallback(creds, err)
+	}
 	if cfg != nil {
 		tok, err := cfg.ResolveToken(owner)
 		if err == nil && tok != "" {
@@ -575,19 +593,72 @@ func ResolveTokenChain(cfg TokenResolver, owner string) (string, error) {
 
 // NewClientWithToken creates a GitHub GraphQL client with the given token.
 func NewClientWithToken(token string) *Client {
-	src := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
-	httpClient := oauth2.NewClient(context.Background(), src)
+	return newClientWithSource(oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token}), tokenIdentity(token))
+}
 
+func newClientWithSource(src oauth2.TokenSource, identity string) *Client {
 	c := &Client{
-		http:       httpClient,
+		http:       oauth2.NewClient(context.Background(), src),
 		limiter:    rate.NewLimiter(rate.Every(time.Second), 5), // 5 req/s
 		graphqlURL: "https://api.github.com/graphql",
-		identity:   tokenIdentity(token),
+		identity:   identity,
 	}
 	c.adoptProcessConditionalStore()
 	c.installHeaderInterceptor()
 	c.gql = graphql.NewClient(c.graphqlURL, c.http)
 	return c
+}
+
+// appClient returns a client authenticated as owner's GitHub App, or nil when
+// none is configured or it cannot mint a token — in which case the chain
+// continues with the personal tiers and says so on stderr (#1955).
+//
+// The first token is minted eagerly so a broken App falls back here rather
+// than failing the first request. The client then re-mints through
+// appTokenSource, so a daemon outliving the one-hour token keeps working. Its
+// rate-limit tracker slot and conditional-GET identity are the installation's,
+// never the user's: the two buckets are separate and must not be mixed.
+func appClient(cfg TokenResolver, owner string) *Client {
+	creds := usableApp(cfg, owner)
+	if creds == nil {
+		return nil
+	}
+	first, err := appInstallationToken(context.Background(), creds, time.Now)
+	if err != nil {
+		warnAppFallback(creds, err)
+		return nil
+	}
+	slot := "app:" + strconv.FormatInt(creds.InstallationID, 10)
+	c := newClientWithSource(oauth2.ReuseTokenSource(first, appTokenSource{creds: creds}), slot)
+	c.app = creds
+	if path, err := DefaultSharedTrackerPath(); err == nil {
+		c = c.WithRateLimitTracker(NewSharedRateLimitTracker(path), slot).WithRateLimitWait()
+	}
+	return c
+}
+
+// usableApp is resolveApp with a configuration error reported and treated as
+// "no App": an unreadable key must not stop the personal tiers from working.
+func usableApp(cfg TokenResolver, owner string) *AppCredentials {
+	creds, err := resolveApp(cfg, owner)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: github_auth.app is configured but unusable, using the personal token chain: %v\n", err)
+		return nil
+	}
+	return creds
+}
+
+func warnAppFallback(creds *AppCredentials, err error) {
+	fmt.Fprintf(os.Stderr, "warning: %s could not mint a token, using the personal token chain: %v\n", creds, err)
+}
+
+// App reports the GitHub App this client authenticates as, nil for a user
+// token.
+func (c *Client) App() *AppCredentials {
+	if c == nil {
+		return nil
+	}
+	return c.app
 }
 
 // NewClientWithURL creates a GitHub GraphQL client pointing at the given URL.

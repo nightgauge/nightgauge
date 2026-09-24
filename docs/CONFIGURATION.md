@@ -734,6 +734,44 @@ backwards compatibility.
 | `github_auth.tokens`              | map\<string\> | -       | Per-org PAT map for multi-org workspaces         |
 | `github_auth.users`               | map\<string\> | -       | Maps org/owner name → gh CLI username (legacy)   |
 | `github_auth.suppress_gh_warning` | boolean       | `false` | Suppress deprecation warning on gh CLI fallback  |
+| `github_auth.app`                 | object        | -       | GitHub App the pipeline authenticates as (below) |
+
+#### GitHub App identity
+
+A GitHub App installation has its own rate-limit bucket (5,000 points an hour,
+scaling to 12,500), so pipeline traffic stops drawing on the maintainer's
+personal quota, and spend is attributed to the App (#1955). Configure it in
+the machine-tier file:
+
+```yaml
+github_auth:
+  app:
+    id: 123456 # App ID (or client ID)
+    private_key_path: ~/.nightgauge/github-app.pem # or private_key: env:VAR_NAME
+    installations: # owner -> installation id
+      nightgauge: 12345678
+    slug: nightgauge-pipeline # optional: commit attribution
+    bot_user_id: 98765432 # gh api 'users/nightgauge-pipeline[bot]' --jq .id
+```
+
+- For an owner listed under `installations`, the installation token is
+  preferred over every personal token. Other owners keep the chain below.
+- The binary signs a JWT with the key, exchanges it for an installation token,
+  and caches the token (mode 0600) under the machine state directory until 10
+  minutes before it expires. Long-running processes re-mint on their own, and
+  the `GH_TOKEN` exported to `gh` subprocesses is refreshed as well.
+- If the key cannot be read or GitHub refuses the exchange, a warning is
+  printed and the personal chain is used. The key never appears in a message.
+- `private_key` and `private_key_path` are credentials. A repository tier may
+  set them only as `env:VAR_NAME`.
+- With `slug` and `bot_user_id`, pipeline commits (git subprocesses and the
+  binary's own) are authored as `<slug>[bot]`, unless `GIT_AUTHOR_*` /
+  `GIT_COMMITTER_*` are already set. PRs opened with the installation token
+  belong to the App automatically.
+- The installation needs Contents, Issues, Pull requests, Projects and Checks
+  (read and write), and Actions (read).
+- `nightgauge doctor` reports the identity in use and its GraphQL ceiling as
+  `github_identity`.
 
 #### Where a token may live
 
@@ -777,14 +815,16 @@ owner (#4068):
 
 1. **On a CI host** (`CI=true` in any case, or `CI=1`): `GITHUB_TOKEN`, then
    `GH_TOKEN`, ahead of every stored token; `github_user` is ignored.
-2. `github_auth.token` — per-project PAT from config
-3. `github_auth.tokens[owner]` — per-org PAT map (global config)
-4. **If a `github_user` is configured for the owner** (explicit `github_user`,
+2. `github_auth.app` — the GitHub App installation for the owner, when one is
+   listed (see [GitHub App identity](#github-app-identity))
+3. `github_auth.token` — per-project PAT from config
+4. `github_auth.tokens[owner]` — per-org PAT map (global config)
+5. **If a `github_user` is configured for the owner** (explicit `github_user`,
    or `github_auth.users[owner]`):
    `gh auth token --user <github_user>` — **with ambient `GH_TOKEN`/`GITHUB_TOKEN`
    stripped from the child env**. This step is **authoritative over the ambient
    `GITHUB_TOKEN` env var** so the configured per-repo identity always wins.
-5. **If no `github_user` is configured:** `GITHUB_TOKEN` environment variable,
+6. **If no `github_user` is configured:** `GITHUB_TOKEN` environment variable,
    then `gh auth token` (default gh account) — the single-identity / CI path,
    unchanged.
 

@@ -70,7 +70,7 @@ func NewService(repoPath string) (*Service, error) {
 	// Set up auth from GITHUB_TOKEN if available
 	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
 		s.auth = &http.BasicAuth{
-			Username: "token",
+			Username: pushUsername(token),
 			Password: token,
 		}
 	}
@@ -849,6 +849,28 @@ func (s *Service) Status() (*StatusResult, error) {
 	return result, nil
 }
 
+// pushUsername is the HTTPS username for token. GitHub documents
+// x-access-token for an App installation token (ghs_); a personal token
+// accepts any username and keeps the one it always had (#1955).
+func pushUsername(token string) string {
+	if strings.HasPrefix(token, "ghs_") {
+		return "x-access-token"
+	}
+	return "token"
+}
+
+// pipelineSignature is the author of commits the service makes. When the
+// binary exported a GitHub App's bot identity (GIT_AUTHOR_NAME/EMAIL, #1955)
+// the commit is the App's, matching what git subprocesses record; otherwise
+// it is the generic pipeline identity.
+func pipelineSignature(when time.Time) *object.Signature {
+	name, email := os.Getenv("GIT_AUTHOR_NAME"), os.Getenv("GIT_AUTHOR_EMAIL")
+	if name == "" || email == "" {
+		name, email = "Nightgauge Pipeline", "pipeline@nightgauge.dev"
+	}
+	return &object.Signature{Name: name, Email: email, When: when}
+}
+
 // Commit stages all changes and creates a commit.
 func (s *Service) Commit(message string) (string, error) {
 	wt, err := s.repo.Worktree()
@@ -862,11 +884,7 @@ func (s *Service) Commit(message string) (string, error) {
 	}
 
 	hash, err := wt.Commit(message, &gogit.CommitOptions{
-		Author: &object.Signature{
-			Name:  "Nightgauge Pipeline",
-			Email: "pipeline@nightgauge.dev",
-			When:  time.Now(),
-		},
+		Author: pipelineSignature(time.Now()),
 	})
 	if err != nil {
 		return "", fmt.Errorf("commit: %w", err)

@@ -130,6 +130,13 @@ func realAssertIdentity(ctx context.Context, owner, repo string, requireAdmin bo
 	if err != nil {
 		return out, fmt.Errorf("resolve client for %s: %w", expected, err)
 	}
+	if app := client.App(); app != nil {
+		// The configured GitHub App is preferred over github_user (#1955).
+		out.OK = true
+		out.ActualLogin = app.BotLogin()
+		out.Reason = fmt.Sprintf("authenticating as %s, preferred over github_user %q — identity assertion skipped", app, expected)
+		return out, nil
+	}
 
 	actor, err := client.Whoami(ctx)
 	if err != nil {

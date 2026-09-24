@@ -114,6 +114,14 @@ func (c *Client) getOAuthScopes(ctx context.Context) ([]string, bool, error) {
 
 // getCurrentUserLogin calls GET /user and returns the authenticated user's login.
 func (c *Client) getCurrentUserLogin(ctx context.Context) (string, error) {
+	// An installation token has no user: GET /user answers 403. The App's bot
+	// login is the identity it acts as (#1955).
+	if c.app != nil {
+		if login := c.app.BotLogin(); login != "" {
+			return login, nil
+		}
+		return c.app.String(), nil
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, githubAPIBase+"/user", nil)
 	if err != nil {
 		return "", err

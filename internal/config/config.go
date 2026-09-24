@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/nightgauge/nightgauge/internal/cadence"
+	gh "github.com/nightgauge/nightgauge/internal/github"
 	"os"
 	"path/filepath"
 	"sort"
@@ -119,6 +120,7 @@ func (s *SanitizationConfig) ResolvedMode() SanitizationMode {
 //
 // Token resolution priority (highest to lowest):
 //  1. On a CI host: GITHUB_TOKEN, then GH_TOKEN env var
+//     1a. App: a GitHub App installation token for the owner (#1955)
 //  2. Token field (per-project PAT, this struct)
 //  3. Tokens[owner] (per-org PAT mapping, global config)
 //  4. gh auth token --user <user> (gh CLI fallback, deprecated)
@@ -149,6 +151,33 @@ type GitHubAuthConfig struct {
 	// pipeline falls back to gh CLI for token resolution. Set to true when
 	// intentionally using gh CLI as the token source.
 	SuppressGHWarning bool `yaml:"suppress_gh_warning" json:"suppressGHWarning,omitempty"`
+
+	// App authenticates the pipeline as a GitHub App installation, preferred
+	// over every personal token for the owners it lists (#1955).
+	App *GitHubAppConfig `yaml:"app,omitempty" json:"app,omitempty"`
+}
+
+// GitHubAppConfig declares the GitHub App the pipeline authenticates as.
+// Its installation carries its own rate-limit bucket, so pipeline traffic
+// stops drawing on the maintainer's personal quota.
+//
+// The private key belongs in the machine tier: a repository tier may only
+// name it through env:VAR_NAME (ValidateRepoTierSecrets).
+type GitHubAppConfig struct {
+	// ID is the App's numeric id or client id.
+	ID string `yaml:"id" json:"id,omitempty"`
+	// PrivateKey is an env:VAR_NAME reference to a variable holding the PEM.
+	PrivateKey string `yaml:"private_key" json:"privateKey,omitempty"`
+	// PrivateKeyPath is the PEM file, e.g. ~/.nightgauge/github-app.pem.
+	// Used when PrivateKey is empty.
+	PrivateKeyPath string `yaml:"private_key_path" json:"privateKeyPath,omitempty"`
+	// Installations maps an owner (org or user) to the App's installation id
+	// there. An owner not listed keeps the personal token chain.
+	Installations map[string]int64 `yaml:"installations" json:"installations,omitempty"`
+	// Slug and BotUserID attribute pipeline commits to the App's bot user.
+	// `nightgauge doctor` prints both for the configured App.
+	Slug      string `yaml:"slug" json:"slug,omitempty"`
+	BotUserID int64  `yaml:"bot_user_id" json:"botUserId,omitempty"`
 }
 
 // PipelineExecutorConfig controls which execution substrate runs pipeline stages.
@@ -2552,6 +2581,66 @@ func (c *Config) ResolveToken(owner string) (string, error) {
 	}
 
 	return "", nil
+}
+
+// ResolveGitHubApp returns the GitHub App installation configured for owner,
+// with its private key read. (nil, nil) means no App applies to owner; an
+// error means one is configured and cannot be used. Errors never quote key
+// material.
+func (c *Config) ResolveGitHubApp(owner string) (*gh.AppCredentials, error) {
+	if c == nil || c.GitHubAuth == nil || c.GitHubAuth.App == nil || owner == "" {
+		return nil, nil
+	}
+	app := c.GitHubAuth.App
+	installation := app.Installations[owner]
+	if installation == 0 {
+		for k, v := range app.Installations {
+			if strings.EqualFold(k, owner) {
+				installation = v
+			}
+		}
+	}
+	if installation == 0 {
+		return nil, nil
+	}
+	if strings.TrimSpace(app.ID) == "" {
+		return nil, fmt.Errorf("github_auth.app.id is not set")
+	}
+	var pemBytes []byte
+	switch {
+	case app.PrivateKey != "":
+		if !strings.HasPrefix(app.PrivateKey, "env:") {
+			return nil, fmt.Errorf("github_auth.app.private_key must be an env:VAR_NAME reference; put a key file path in private_key_path")
+		}
+		v, err := resolveEnvRef(app.PrivateKey)
+		if err != nil {
+			return nil, fmt.Errorf("github_auth.app.private_key: %w", err)
+		}
+		pemBytes = []byte(v)
+	case app.PrivateKeyPath != "":
+		path := app.PrivateKeyPath
+		if rest, ok := strings.CutPrefix(path, "~/"); ok {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return nil, fmt.Errorf("github_auth.app.private_key_path: %w", err)
+			}
+			path = filepath.Join(home, rest)
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("github_auth.app.private_key_path: cannot read %s: %w", path, errors.Unwrap(err))
+		}
+		pemBytes = b
+	default:
+		return nil, fmt.Errorf("github_auth.app has neither private_key nor private_key_path")
+	}
+	return &gh.AppCredentials{
+		AppID:          strings.TrimSpace(app.ID),
+		InstallationID: installation,
+		PrivateKeyPEM:  pemBytes,
+		Slug:           app.Slug,
+		BotUserID:      app.BotUserID,
+	}, nil
 }
 
 // resolveEnvRef resolves a token value that may use env:VAR_NAME syntax.

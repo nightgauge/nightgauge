@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -146,7 +148,7 @@ func (r *ClientResolver) Resolve(_ context.Context, owner, repo string) (*gh.Cli
 		}
 		if cfg != nil {
 			tok, _ := gh.ResolveTokenChain(cfg, owner)
-			fp := tokenFingerprint(tok)
+			fp := identityFingerprint(cfg, owner, tok)
 			if fp == entry.tokenFingerprint {
 				return entry.client, nil // full cache hit
 			}
@@ -172,8 +174,16 @@ func (r *ClientResolver) Resolve(_ context.Context, owner, repo string) (*gh.Cli
 		return r.defaultClient, nil
 	}
 
+	fp := identityFingerprint(cfg, owner, tok)
 	client := gh.NewClientWithToken(tok)
-	fp := tokenFingerprint(tok)
+	if strings.HasPrefix(fp, "app:") {
+		// A GitHub App installation (#1955): the chain's own client re-mints
+		// its hourly token and answers Whoami as the bot. Rebuild it rather
+		// than freezing one token into a static client.
+		if appClient, appErr := gh.NewClientFromConfig(cfg, owner, ""); appErr == nil && appClient.App() != nil {
+			client = appClient
+		}
+	}
 	// Label the resolved identity by the TARGET owner (not the workspace root)
 	// so the rate-limit tracker key and logs reflect the cross-org identity the
 	// token actually belongs to (#4068).
@@ -186,7 +196,11 @@ func (r *ClientResolver) Resolve(_ context.Context, owner, repo string) (*gh.Cli
 		// create/merge, revert-status) wait out a rate-limit reset instead of
 		// hard-failing and leaving an issue stuck (#3976). Dispatch decisions
 		// use a separate explicit tracker read, so this never blocks dispatch.
-		client = client.WithRateLimitTracker(r.tracker, githubUser).WithRateLimitWait()
+		slot := githubUser
+		if app := client.App(); app != nil {
+			slot = fp // the installation's bucket, never the user's
+		}
+		client = client.WithRateLimitTracker(r.tracker, slot).WithRateLimitWait()
 	}
 	// Log once per resolved identity (cache miss only, not per operation).
 	log.Printf("IPC ClientResolver: resolved identity for %s (user=%q, token=...%s)", key, githubUser, fp)
@@ -210,6 +224,18 @@ func (r *ClientResolver) Invalidate(owner, repo string) {
 		delete(r.cache, key)
 		log.Printf("IPC ClientResolver: invalidated cached client for %s (401 or explicit eviction)", key)
 	}
+}
+
+// identityFingerprint is tokenFingerprint, except for a GitHub App
+// installation token: that rotates every hour by design, so the installation
+// itself is the identity and a re-mint is not a rotation (#1955).
+func identityFingerprint(cfg *config.Config, owner, tok string) string {
+	if strings.HasPrefix(tok, "ghs_") {
+		if creds, err := gh.ResolveApp(cfg, owner); err == nil && creds != nil {
+			return "app:" + strconv.FormatInt(creds.InstallationID, 10)
+		}
+	}
+	return tokenFingerprint(tok)
 }
 
 // tokenFingerprint returns the first 8 hex characters of SHA256(token).

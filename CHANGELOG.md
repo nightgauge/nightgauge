@@ -16,6 +16,20 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **The pipeline can authenticate as a GitHub App (#1955).** Set
+  `github_auth.app` (`id`, `private_key_path` or `private_key: env:VAR`, and
+  `installations` per owner) in the machine-tier config. For those owners the
+  binary mints an installation token from the App's key and prefers it over
+  every personal token. That moves pipeline traffic onto the installation's own
+  rate-limit bucket (up to 12,500 points an hour) instead of the maintainer's
+  5,000. The token is cached with mode 0600 and re-minted before it expires,
+  including the `GH_TOKEN` exported to `gh` subprocesses. With `slug` and
+  `bot_user_id`, pipeline commits are authored by the App's bot user.
+  `nightgauge doctor` reports the identity in use and its ceiling
+  (`github_identity`). A repository tier may name the key only through
+  `env:`. If the App cannot mint a token, the personal chain is used and a
+  warning is printed.
+
 - **`nightgauge git repo-slug` prints the origin remote as `owner/name`
   (#1932).** Stage skills use it when `NIGHTGAUGE_REPO` is not set. It replaces
   `nightgauge forge repo view … -q .nameWithOwner` in those skills, which never
