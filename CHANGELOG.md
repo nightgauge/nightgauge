@@ -512,6 +512,15 @@ create --body-file` call, so the compact profile (and its tests) pin
 
 ### Changed
 
+- **The workflow gate lets an agent force-push its own feature branch
+  (#2124).** After rebasing a PR branch, `git push --force-with-lease` (or
+  `-f`, `--force-if-includes`, `+branch`) no longer needs handing to the
+  operator. Force-push policy belongs to server-side rulesets; the gate now
+  blocks only a push that targets `main`/`master`, forced or not, including a
+  bare `git push -f` while `main` is checked out (read from the hook's working
+  directory, following `cd X &&` and `git -C X`) and a forced `--all` or
+  `--mirror`.
+
 - **Post-merge verification no longer waits five minutes in a repository that
   runs nothing on push (#2061).** With matching trees, an empty check list on
   the merge commit used to be NOT-YET for `MergeCommitCheckGrace`, in case push

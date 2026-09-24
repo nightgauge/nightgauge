@@ -101,8 +101,10 @@ blocked — only the actual operation is. Concretely:
 
 - `git commit -m "fix push to main bug"`, `echo "git push origin main"`, and
   `gh pr create --base main` are **allowed** (none is a `git push` to `main`).
-- `git push origin main` / `git push origin HEAD:main`, force pushes
-  (`-f`/`--force`/`--force-with-lease`/`+refspec`), and destructive verbs
+- `git push origin main` / `git push origin HEAD:main`, any force push
+  (`-f`/`--force`/`--force-with-lease`/`+refspec`) that targets main/master
+  (including a bare `git push -f` while main is checked out, and forced
+  `--all`/`--mirror`), and destructive verbs
   (`reset --hard`, `clean -f[d]`, `checkout .`/`restore .`, `branch -D`,
   `worktree remove --force`, `update-ref -d`) are still **blocked**.
 

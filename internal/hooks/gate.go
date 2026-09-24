@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -21,6 +22,7 @@ type GateDecision struct {
 type GateInput struct {
 	ToolName  string          `json:"tool_name"`
 	ToolInput json.RawMessage `json:"tool_input"`
+	Cwd       string          `json:"cwd,omitempty"`
 }
 
 // BashToolInput is the parsed tool_input for Bash tool calls.
@@ -58,7 +60,7 @@ func EvaluateGate(inputJSON []byte, mode config.SanitizationMode) GateDecision {
 
 	switch input.ToolName {
 	case "Bash":
-		return evaluateBashGate(input.ToolInput, mode)
+		return evaluateBashGate(input, mode)
 	case "Edit", "Write":
 		return evaluateFileGate(input.ToolInput)
 	default:
@@ -80,9 +82,9 @@ const skipWorkflowGateEnv = "NIGHTGAUGE_SKIP_WORKFLOW_GATE"
 // gates parse the command's real argv (per pipeline segment) rather than
 // substring-matching the raw command string, so words inside echoes, commit
 // messages, `--body` payloads, and heredocs no longer trigger false positives.
-func evaluateBashGate(rawInput json.RawMessage, mode config.SanitizationMode) GateDecision {
+func evaluateBashGate(input GateInput, mode config.SanitizationMode) GateDecision {
 	var toolInput BashToolInput
-	if err := json.Unmarshal(rawInput, &toolInput); err != nil || toolInput.Command == "" {
+	if err := json.Unmarshal(input.ToolInput, &toolInput); err != nil || toolInput.Command == "" {
 		return Allow()
 	}
 
@@ -94,13 +96,11 @@ func evaluateBashGate(rawInput json.RawMessage, mode config.SanitizationMode) Ga
 
 	if !skipOpGates {
 		// Gate 1: Block push to main/master
-		if isMainPush(segments) && !isModelUpdatePush(cmd) {
+		// A force push to any other branch is allowed (#2124): force-push policy
+		// belongs to server-side rulesets, and this gate is the local fallback
+		// that keeps main/master safe where no ruleset exists.
+		if isMainPush(segments, gateCwd(input.Cwd)) && !isModelUpdatePush(cmd) {
 			return Block("Direct push to main/master blocked. Use the PR workflow with /nightgauge:pr-create.")
-		}
-
-		// Gate 2: Block force push
-		if isForcePush(segments) {
-			return Block("Force push blocked for safety. If you need to force push, please do it manually.")
 		}
 
 		// Gate 3: Block destructive git operations
@@ -291,20 +291,131 @@ func baseName(cmd string) string {
 	return cmd
 }
 
-// isMainPush detects a real `git push` whose refspec targets main/master.
-func isMainPush(segments []Segment) bool {
-	for _, argv := range gitArgvs(segments) {
-		refs, isPush := gitPushArgs(argv)
+// isMainPush detects a real `git push` that targets main/master: a refspec
+// naming it, or a force push whose destination is the current branch (no
+// refspec, or a bare `HEAD` refspec) while that branch or its upstream is
+// main/master, or a forced `--all`/`--branches`/`--mirror`. The working
+// directory starts at cwd and follows `cd X` segments and `git -C X`, so the
+// current branch is read from the repository the push actually runs in.
+func isMainPush(segments []Segment, cwd string) bool {
+	dir := cwd
+	for _, seg := range segments {
+		argv := seg.CommandArgv()
+		if len(argv) == 0 {
+			continue
+		}
+		if argv[0] == "cd" {
+			if len(argv) > 1 {
+				dir = joinDir(dir, argv[1])
+			}
+			continue
+		}
+		if baseName(argv[0]) != "git" {
+			continue
+		}
+		gitDir := gitCOption(argv, dir)
+		norm := normalizeGitArgv(argv)
+		refs, isPush := gitPushArgs(norm)
 		if !isPush {
 			continue
 		}
+		forced := pushIsForced(norm[2:])
 		for _, f := range refs {
 			if refTargetsMain(f) {
 				return true
 			}
+			if forced && strings.TrimPrefix(f, "+") == "HEAD" && currentBranchIsMain(gitDir) {
+				return true
+			}
+		}
+		if forced && hasAnyLongFlag(norm[2:], "--all", "--branches", "--mirror") {
+			return true
+		}
+		if forced && len(refs) == 0 && currentBranchIsMain(gitDir) {
+			return true
 		}
 	}
 	return false
+}
+
+// pushIsForced reports whether `git push` args force the update: -f/--force,
+// --force-with-lease[=…], --force-if-includes, or a leading-`+` refspec.
+func pushIsForced(args []string) bool {
+	for _, a := range args {
+		switch {
+		case a == "--force", a == "--force-if-includes", strings.HasPrefix(a, "--force-with-lease"):
+			return true
+		case isShortFlagCluster(a) && strings.ContainsRune(shortCluster(a), 'f'):
+			return true
+		case strings.HasPrefix(a, "+") && !strings.HasPrefix(a, "++"):
+			return true
+		}
+	}
+	return false
+}
+
+func hasAnyLongFlag(args []string, flags ...string) bool {
+	for _, f := range flags {
+		if hasLongFlag(args, f) {
+			return true
+		}
+	}
+	return false
+}
+
+// gitCOption applies every leading `git -C <path>` to dir, as git does.
+func gitCOption(argv []string, dir string) string {
+	for i := 1; i < len(argv) && strings.HasPrefix(argv[i], "-"); i++ {
+		if argv[i] == "-C" && i+1 < len(argv) {
+			dir = joinDir(dir, argv[i+1])
+			i++
+		} else if gitGlobalValueOpts[argv[i]] {
+			i++
+		}
+	}
+	return dir
+}
+
+func joinDir(base, p string) string {
+	if filepath.IsAbs(p) || base == "" {
+		return p
+	}
+	return filepath.Join(base, p)
+}
+
+// gateCwd is the directory the hooked command runs in: the hook payload's cwd,
+// or this process's working directory when the payload has none.
+func gateCwd(cwd string) string {
+	if cwd != "" {
+		return cwd
+	}
+	wd, _ := os.Getwd()
+	return wd
+}
+
+// currentBranchIsMain reports whether dir's checked-out branch, or the branch
+// its upstream merges into, is main/master. A detached HEAD or a directory
+// outside a repository has no current branch, so it cannot push one to main.
+func currentBranchIsMain(dir string) bool {
+	branch := gitOutput(dir, "symbolic-ref", "--short", "-q", "HEAD")
+	if branch == "" {
+		return false
+	}
+	if refTargetsMain(branch) {
+		return true
+	}
+	merge := gitOutput(dir, "config", "--get", "branch."+branch+".merge")
+	return merge != "" && refTargetsMain(merge)
+}
+
+func gitOutput(dir string, args ...string) string {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // refTargetsMain reports whether a push refspec resolves to refs/heads/main or
@@ -328,28 +439,6 @@ func isModelUpdatePush(cmd string) bool {
 	// This is a simplified check — the full check also verifies last commit message
 	// and changed files, but those require git access. The CLI version delegates
 	// that check to the caller or skips it for now.
-	return false
-}
-
-// isForcePush detects a force push: a `git push` argv carrying -f / --force /
-// --force-with-lease, or a leading-`+` refspec positional.
-func isForcePush(segments []Segment) bool {
-	for _, argv := range gitArgvs(segments) {
-		if len(argv) < 2 || argv[1] != "push" {
-			continue
-		}
-		for _, a := range argv[2:] {
-			if a == "--force" || strings.HasPrefix(a, "--force-with-lease") {
-				return true
-			}
-			if isShortFlagCluster(a) && strings.ContainsRune(shortCluster(a), 'f') {
-				return true
-			}
-			if strings.HasPrefix(a, "+") && !strings.HasPrefix(a, "++") {
-				return true // +refspec is a force update
-			}
-		}
-	}
 	return false
 }
 

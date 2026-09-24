@@ -28,7 +28,7 @@ production-destructive commands with a clear reason and the safe alternative.
 When off (the default), it is a complete no-op.
 
 This complements the always-on workflow gate (which already blocks pushes to
-`main`, force-pushes, `git reset --hard`, `git clean -f`, and secret read/write)
+`main` (force or not), `git reset --hard`, `git clean -f`, and secret read/write)
 by adding the **prod-data-destruction** set that you only want guarded
 occasionally.
 
@@ -82,7 +82,7 @@ work is done — otherwise it auto-expires after the TTL (default 12h).
   prod session is guarded — check `careful status` first.
 - **Turn it off when done.** It blocks `docker compose down -v` etc. for everyone
   in the repo until `off` or TTL expiry — a forgotten lock is friction.
-- **It complements, not replaces, the always-on gate.** Force-push / main-push /
+- **It complements, not replaces, the always-on gate.** Main-push (including force) /
   secret protection are always enforced; careful adds the prod-data set.
 
 <!-- include: ../_shared/GOTCHAS.md -->

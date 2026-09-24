@@ -146,7 +146,7 @@ compare "workflow-gate: allow git status" "hooks" \
   "echo '{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git status\"}}' | '$GO_BINARY' hook workflow-gate"
 
 # Workflow gate: block dangerous commands
-compare "workflow-gate: block force push" "hooks" \
+compare "workflow-gate: block force push to main" "hooks" \
   "echo '{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git push --force origin main\"}}' | bash '$HOOKS_DIR/workflow-gate.sh'" \
   "echo '{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git push --force origin main\"}}' | '$GO_BINARY' hook workflow-gate"
 
