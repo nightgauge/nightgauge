@@ -28,16 +28,23 @@
 # example, or a false positive on a non-secret identifier.
 
 set -uo pipefail
-cd "$(git rev-parse --show-toplevel)"
+cd "$(git rev-parse --show-toplevel)" || exit 2
 
 if ! command -v gitleaks >/dev/null 2>&1; then
+  # HARNESS ERROR: ci-local.sh reports this step as INFRASTRUCTURE — the scan
+  # could not run — rather than as a finding or, worse, a pass (#2075).
+  echo "HARNESS ERROR: gitleaks is not installed, so the credential scan could not run."
   echo "ERROR: gitleaks is not installed." >&2
   echo "  brew install gitleaks    # or see https://github.com/gitleaks/gitleaks" >&2
   exit 2
 fi
 
 echo "Scanning all commits (history is the publication surface, not just HEAD)…"
-if gitleaks git --no-banner --redact; then
+# HEAD plus every branch pushed to origin: what CI scans (its checkout fetches
+# all branches) and what is published. Not `--all`: a worktree shares refs
+# with every local branch in the clone, and another session's unpushed branch
+# is neither published nor seen by CI (#2075).
+if gitleaks git --no-banner --redact --log-opts="HEAD --remotes=origin"; then
   echo ""
   echo "✓ no credentials in the tree or in any commit"
   exit 0

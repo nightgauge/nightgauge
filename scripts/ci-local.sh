@@ -1301,6 +1301,13 @@ run_step "SKILL.md metadata" bash scripts/validate-skill-metadata.sh
 #    so on its success line; one that exits non-zero names them inline.
 run_step "publication boundary" python3 scripts/publication-boundary-check.py
 
+# 5a. Credential scan — scripts/credential-scan.sh, gitleaks over full history
+#     with .gitleaksignore (mirrors .github/workflows/credential-scan.yml).
+#     The header listed it as never skipped; until #2075 no step ran it, and
+#     PR #2073 passed this gate and failed CI's scan. A missing gitleaks is
+#     INFRASTRUCTURE, never a pass.
+run_step "credential scan (tree + full history)" bash scripts/credential-scan.sh
+
 # 5b. Publication boundary self-test — proves the guard still fails closed
 #     (mirrors .github/workflows/publication-boundary.yml's second step).
 run_step "Publication boundary regression suite" bash scripts/test-publication-boundary.sh
