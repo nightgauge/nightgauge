@@ -1,0 +1,38 @@
+// OpenCode operator template for LM Studio (Nightgauge #1666).
+// Copy to ~/.config/opencode/opencode.jsonc (or a project's opencode.jsonc)
+// and edit the model id. Pipeline runs do not read this file: they build
+// their own per-run config. See README.md beside this file.
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "lmstudio/qwen3-coder-30b",
+  "small_model": "lmstudio/qwen3-coder-30b",
+  // Never upload sessions, never self-update mid-run.
+  "share": "disabled",
+  "autoupdate": false,
+  // Compact before the window fills, and prune old tool output.
+  "compaction": { "auto": true, "prune": true },
+  // Truncate large tool output instead of flooding a small local window.
+  "tool_output": { "max_lines": 1000, "max_bytes": 32768 },
+  "provider": {
+    "lmstudio": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "LM Studio (local)",
+      "options": {
+        // Loopback only.
+        "baseURL": "http://127.0.0.1:1234/v1",
+        // Local models can take minutes to load and to emit the first token.
+        "headerTimeout": 600000,
+        "chunkTimeout": 300000,
+      },
+      "models": {
+        "qwen3-coder-30b": {
+          "name": "qwen3-coder-30b",
+          "tool_call": true,
+          // Without an explicit limit OpenCode reports limit.context 0 and
+          // never compacts. Keep limit.context at or below the context length the model is LOADED with in LM Studio.
+          "limit": { "context": 32768, "output": 8192 },
+        },
+      },
+    },
+  },
+}

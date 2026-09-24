@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Regression tests for install-agent-skills.sh Claude/Codex/Grok targets.
+# Regression tests for install-agent-skills.sh Claude/Codex/Grok/OpenCode targets.
 #
 # The installer used to copy skills for Claude plugins and Codex only. Grok
 # then saw Nightgauge skills only by scanning Claude's plugin cache, so
@@ -241,6 +241,245 @@ else
   # A disabled grok install must still exit 0 (best-effort skip).
   nope "(f) patched installer exited non-zero"
   sed 's/^/    /' "$TMP/f.err"
+fi
+
+# --- (o*) OpenCode target (#1666) -------------------------------------------
+# A stub `opencode` on PATH, and npm/bun/curl stubs that record a call and exit
+# 99, so any fetch or package install shows up. The real CLIs are shadowed.
+OC_BIN="$TMP/oc-bin"
+OC_CALLS="$TMP/oc-stub-calls"
+mkdir -p "$OC_BIN"
+printf '#!/bin/sh\nexit 0\n' >"$OC_BIN/opencode"
+for tool in npm bun curl; do
+  printf '#!/bin/sh\necho "%s $*" >>"%s"\nexit 99\n' "$tool" "$OC_CALLS" >"$OC_BIN/$tool"
+done
+chmod +x "$OC_BIN"/*
+OC_PATH="$OC_BIN:$SAFE_PATH"
+cp -R "$REPO_ROOT/internal/execution/opencodeplugin/plugin" "$TMP/oc-plugin-src"
+mkdir -p "$SANDBOX/internal/execution/opencodeplugin"
+cp -R "$TMP/oc-plugin-src" "$SANDBOX/internal/execution/opencodeplugin/plugin"
+
+# oc_sandbox <dir>: a second copy of the sandbox, for arms that change skills/.
+oc_sandbox() {
+  mkdir -p "$1"
+  cp -R "$SANDBOX/." "$1/"
+}
+
+# oc_run <home> <installer> <args...>: run with a temp HOME and XDG root.
+oc_run() {
+  local home="$1" installer="$2"
+  shift 2
+  HOME="$home" XDG_CONFIG_HOME="$home/xdg" PATH="$OC_PATH" bash "$installer" "$@"
+}
+
+oc_seed() {
+  local root="$1/xdg/opencode"
+  mkdir -p "$root/skills/mine" "$root/commands" "$root/plugins"
+  echo '{"share":"manual"}' >"$root/opencode.json"
+  printf -- '---\nname: mine\ndescription: Mine.\n---\n' >"$root/skills/mine/SKILL.md"
+  echo 'mine' >"$root/commands/mine.md"
+  echo 'export const Mine = async () => ({});' >"$root/plugins/mine.js"
+}
+oc_seed_sums() {
+  local root="$1/xdg/opencode"
+  (cd "$root" && shasum -a 256 opencode.json skills/mine/SKILL.md commands/mine.md plugins/mine.js)
+}
+
+# (o1) --opencode-only --yes: skills, _includes, _shared, one command per skill;
+# no plugin without --with-plugin; seeded operator files untouched; no stub ran.
+HOME_O1="$TMP/home-o1"
+oc_seed "$HOME_O1"
+SUMS_O1="$(oc_seed_sums "$HOME_O1")"
+R1="$HOME_O1/xdg/opencode"
+if oc_run "$HOME_O1" "$INSTALLER" --opencode-only --yes >/dev/null 2>"$TMP/o1.err"; then
+  n_skills="$(find "$SANDBOX/skills" -mindepth 2 -maxdepth 2 -name SKILL.md | wc -l | tr -d ' ')"
+  n_cmds="$(find "$R1/commands" -name 'nightgauge-*.md' | wc -l | tr -d ' ')"
+  if [ -f "$R1/skills/nightgauge-issue-create/SKILL.md" ] &&
+    [ -f "$R1/skills/nightgauge-issue-create/_includes/environment-and-content.md" ] &&
+    [ -f "$R1/skills/_shared/PREFLIGHT.md" ] &&
+    [ -f "$R1/commands/nightgauge-issue-create.md" ] &&
+    grep -q 'nightgauge-issue-create' "$R1/commands/nightgauge-issue-create.md" &&
+    grep -qF "\$ARGUMENTS" "$R1/commands/nightgauge-issue-create.md" &&
+    grep -q '^name: nightgauge-smart-setup$' "$R1/skills/nightgauge-smart-setup/SKILL.md" &&
+    [ "$n_cmds" = "$n_skills" ]; then
+    ok "(o1) --opencode-only installs every skill (_includes, _shared) and one command each ($n_cmds)"
+  else
+    nope "(o1) expected OpenCode skills and commands ($n_cmds commands for $n_skills skills)"
+  fi
+  if [ ! -e "$R1/plugins/nightgauge.js" ] && [ ! -e "$R1/plugins/nightgauge" ]; then
+    ok "(o1b) no plugin without --with-plugin"
+  else
+    nope "(o1b) plugin installed without --with-plugin"
+  fi
+else
+  nope "(o1) --opencode-only --yes exited non-zero"
+  sed 's/^/    /' "$TMP/o1.err"
+fi
+if [ "$(oc_seed_sums "$HOME_O1")" = "$SUMS_O1" ] && [ ! -e "$OC_CALLS" ]; then
+  ok "(o1c) opencode.json and non-Nightgauge files byte-identical; npm/bun/curl never called"
+else
+  nope "(o1c) a seeded operator file changed, or a network/package stub was called"
+  cat "$OC_CALLS" 2>/dev/null | sed 's/^/    /'
+fi
+
+# (o2) --with-plugin installs the plugin in the opencodeplugin.Write layout
+# and warns about OpenCode's own npm install before consent.
+HOME_O2="$TMP/home-o2"
+oc_seed "$HOME_O2"
+SUMS_O2="$(oc_seed_sums "$HOME_O2")"
+R2="$HOME_O2/xdg/opencode"
+if oc_run "$HOME_O2" "$INSTALLER" --opencode-only --with-plugin --yes >/dev/null 2>"$TMP/o2.err"; then
+  if [ -f "$R2/plugins/nightgauge.js" ] && [ -f "$R2/plugins/nightgauge/gates.js" ] &&
+    grep -q '@opencode-ai/plugin' "$TMP/o2.err" &&
+    [ "$(oc_seed_sums "$HOME_O2")" = "$SUMS_O2" ] && [ ! -e "$OC_CALLS" ]; then
+    ok "(o2) --with-plugin installs the plugin, warns, and leaves plugins/mine.js alone"
+  else
+    nope "(o2) --with-plugin: plugin missing, no warning, or collateral write"
+    sed 's/^/    /' "$TMP/o2.err"
+  fi
+else
+  nope "(o2) --with-plugin exited non-zero"
+  sed 's/^/    /' "$TMP/o2.err"
+fi
+
+# (o3) --opencode-project <dir> writes under <dir>/.opencode, not the XDG root.
+HOME_O3="$TMP/home-o3"
+mkdir -p "$HOME_O3/proj"
+if oc_run "$HOME_O3" "$INSTALLER" --opencode-only --opencode-project "$HOME_O3/proj" --yes \
+  >/dev/null 2>"$TMP/o3.err"; then
+  if [ -f "$HOME_O3/proj/.opencode/skills/nightgauge-issue-create/SKILL.md" ] &&
+    [ -f "$HOME_O3/proj/.opencode/commands/nightgauge-issue-create.md" ] &&
+    [ ! -e "$HOME_O3/xdg/opencode" ]; then
+    ok "(o3) --opencode-project installs under <dir>/.opencode only"
+  else
+    nope "(o3) --opencode-project wrote the wrong root"
+  fi
+else
+  nope "(o3) --opencode-project exited non-zero"
+  sed 's/^/    /' "$TMP/o3.err"
+fi
+
+# (o4) no TTY, no --yes: exit 2 and nothing newer than the marker.
+HOME_O4="$TMP/home-o4"
+mkdir -p "$HOME_O4/xdg/opencode"
+touch "$HOME_O4/marker"
+oc_run "$HOME_O4" "$INSTALLER" --opencode-only </dev/null >/dev/null 2>"$TMP/o4.err"
+rc=$?
+newer="$(find "$HOME_O4/xdg/opencode" -newer "$HOME_O4/marker")"
+if [ "$rc" = "2" ] && [ -z "$newer" ] && grep -q -- "--yes" "$TMP/o4.err"; then
+  ok "(o4) without a TTY or --yes: exit 2, nothing written"
+else
+  nope "(o4) consent: rc=$rc (want 2), written: $newer"
+fi
+
+# (o5) the default run never touches OpenCode, even with opencode on PATH.
+HOME_O5="$TMP/home-o5"
+mkdir -p "$HOME_O5"
+if oc_run "$HOME_O5" "$INSTALLER" >/dev/null 2>"$TMP/o5.err" &&
+  [ ! -e "$HOME_O5/xdg/opencode" ]; then
+  ok "(o5) default run leaves the OpenCode root absent"
+else
+  nope "(o5) default run failed or created the OpenCode root"
+fi
+
+# (o6) skills/ symlinked outside the root: refused, nothing written there.
+HOME_O6="$TMP/home-o6"
+mkdir -p "$HOME_O6/xdg/opencode" "$HOME_O6/outside"
+ln -s "$HOME_O6/outside" "$HOME_O6/xdg/opencode/skills"
+if oc_run "$HOME_O6" "$INSTALLER" --opencode-only --yes >/dev/null 2>"$TMP/o6.err"; then
+  nope "(o6) a skills/ symlink outside the root was accepted"
+elif [ -z "$(ls -A "$HOME_O6/outside")" ] && grep -q "refusing" "$TMP/o6.err"; then
+  ok "(o6) symlinked destination outside the root refused, nothing written through it"
+else
+  nope "(o6) refused, but wrote through the symlink first"
+fi
+
+# (o6b/o6c) a destination symlink resolving to the root (or inside it) is
+# refused: rsync --delete through it would wipe opencode.json and the rest.
+for o6case in "o6b:skills/nightgauge-issue-create" "o6c:skills/_shared"; do
+  o6id="${o6case%%:*}"
+  o6rel="${o6case#*:}"
+  HOME_O6X="$TMP/home-$o6id"
+  oc_seed "$HOME_O6X"
+  ln -s .. "$HOME_O6X/xdg/opencode/$o6rel"
+  if oc_run "$HOME_O6X" "$INSTALLER" --opencode-only --yes >/dev/null 2>"$TMP/$o6id.err"; then
+    nope "($o6id) a $o6rel -> .. symlink was accepted"
+  elif [ -f "$HOME_O6X/xdg/opencode/opencode.json" ] && grep -q "refusing" "$TMP/$o6id.err"; then
+    ok "($o6id) $o6rel -> .. symlink refused, opencode.json intact"
+  else
+    nope "($o6id) $o6rel -> .. refused, but wrote through it first"
+  fi
+done
+
+# (o7) a skill without description: non-zero, nothing written.
+SB7="$TMP/sb7"
+oc_sandbox "$SB7"
+mkdir -p "$SB7/skills/nightgauge-nodesc"
+printf -- '---\nname: nightgauge-nodesc\n---\nbody\n' >"$SB7/skills/nightgauge-nodesc/SKILL.md"
+HOME_O7="$TMP/home-o7"
+mkdir -p "$HOME_O7"
+if oc_run "$HOME_O7" "$SB7/scripts/install-agent-skills.sh" --opencode-only --yes \
+  >/dev/null 2>"$TMP/o7.err"; then
+  nope "(o7) a skill without description was accepted"
+elif grep -q 'nightgauge-nodesc' "$TMP/o7.err" && [ ! -e "$HOME_O7/xdg/opencode/skills" ]; then
+  ok "(o7) skill without description: non-zero exit, nothing written"
+else
+  nope "(o7) failed for the wrong reason or wrote first"
+  sed 's/^/    /' "$TMP/o7.err"
+fi
+
+# (o8) idempotent; a skill removed from the repo is pruned, and only it.
+SB8="$TMP/sb8"
+oc_sandbox "$SB8"
+HOME_O8="$TMP/home-o8"
+oc_seed "$HOME_O8"
+R8="$HOME_O8/xdg/opencode"
+oc_run "$HOME_O8" "$SB8/scripts/install-agent-skills.sh" --opencode-only --with-plugin --yes \
+  >/dev/null 2>&1
+cp -R "$R8" "$TMP/o8-first"
+oc_run "$HOME_O8" "$SB8/scripts/install-agent-skills.sh" --opencode-only --with-plugin --yes \
+  >/dev/null 2>&1
+if [ -f "$TMP/o8-first/skills/nightgauge-retro/SKILL.md" ] &&
+  diff -r "$TMP/o8-first" "$R8" >/dev/null; then
+  ok "(o8) a second run gives the same tree"
+else
+  nope "(o8) a second run changed the tree"
+  diff -r "$TMP/o8-first" "$R8" | head | sed 's/^/    /'
+fi
+rm -r "$SB8/skills/nightgauge-retro"
+oc_run "$HOME_O8" "$SB8/scripts/install-agent-skills.sh" --opencode-only --with-plugin --yes \
+  >/dev/null 2>&1
+o8diff="$(diff -r "$TMP/o8-first" "$R8" | sort)"
+o8want="$(printf '%s\n' "Only in $TMP/o8-first/commands: nightgauge-retro.md" \
+  "Only in $TMP/o8-first/skills: nightgauge-retro" | sort)"
+if [ "$o8diff" = "$o8want" ]; then
+  ok "(o8b) a skill removed from the repo is pruned (skill + command), nothing else"
+else
+  nope "(o8b) prune diff was not exactly the removed skill:"
+  printf '%s\n' "$o8diff" | sed 's/^/    /'
+fi
+
+# (o9) vacuity: with the install_opencode call disabled, (o1)'s files are absent.
+BROKEN_OC="$TMP/broken-oc-install.sh"
+python3 - "$INSTALLER" "$BROKEN_OC" "$SANDBOX" <<'PY'
+import sys
+src, dest, repo = sys.argv[1], sys.argv[2], sys.argv[3]
+text = open(src, encoding="utf-8").read()
+text = text.replace('SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"', f'SCRIPT_DIR="{repo}/scripts"', 1)
+text = text.replace('REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"', f'REPO_ROOT="{repo}"', 1)
+old = '[ "$DO_OPENCODE" = "1" ] && install_opencode'
+if old not in text:
+    raise SystemExit("install_opencode call site not found — test cannot prove vacuity")
+text = text.replace(old, ': # install_opencode disabled for vacuous-test arm', 1)
+open(dest, "w", encoding="utf-8").write(text)
+PY
+HOME_O9="$TMP/home-o9"
+mkdir -p "$HOME_O9"
+oc_run "$HOME_O9" "$BROKEN_OC" --opencode-only --yes >/dev/null 2>&1
+if [ -f "$HOME_O9/xdg/opencode/skills/nightgauge-issue-create/SKILL.md" ]; then
+  nope "(o9) skills appeared with install_opencode disabled (vacuous test)"
+else
+  ok "(o9) with install_opencode disabled, (o1)'s expected files are absent"
 fi
 
 # --- (g) the suite never wrote the checkout it runs in ----------------------
