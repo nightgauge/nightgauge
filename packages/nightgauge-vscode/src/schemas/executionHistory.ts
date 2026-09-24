@@ -173,6 +173,8 @@ export const StageAnomalySchema = z.object({
   stage_cost_usd: z.number().min(0),
   /** Human-readable predicate that should have matched. */
   deterministic_predicate: z.string().optional(),
+  /** Human-readable finding for kinds with no predicate (e.g. "cost_source_divergence"). */
+  detail: z.string().optional(),
   /** ISO 8601 timestamp of detection. */
   timestamp: z.string(),
 });

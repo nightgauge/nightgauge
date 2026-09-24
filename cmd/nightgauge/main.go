@@ -4266,12 +4266,12 @@ func runCmd() *cobra.Command {
 			sched.OnStageStart(func(repo string, issue int, stage string, title string) {
 				fmt.Printf("[#%d] stage %s started\n", issue, stage)
 			})
-			sched.OnStageComplete(func(repo string, issue int, stage string, err error, inputTokens, outputTokens, cacheReadTokens int, costUsd float64, model string) {
+			sched.OnStageComplete(func(repo string, issue int, stage string, err error, cost orchestrator.StageCost, model string) {
 				if err != nil {
 					fmt.Printf("[#%d] stage %s FAILED: %v\n", issue, stage, err)
 				} else {
-					fmt.Printf("[#%d] stage %s complete — tokens: %d in + %d cache read / %d out, cost: $%.4f\n",
-						issue, stage, inputTokens, cacheReadTokens, outputTokens, costUsd)
+					fmt.Printf("[#%d] stage %s complete — tokens: %s, cost: %s\n",
+						issue, stage, cost.TokenSummary(), cost.CostSummary())
 				}
 			})
 			// Phase progress (#1924). Until this existed the CLI showed stage

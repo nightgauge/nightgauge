@@ -2942,6 +2942,25 @@ func (rs *RuntimeState) AllStageAttempts() []StageResult {
 	return all
 }
 
+// BookedStage returns the most recent booked attempt of stage — the entry the
+// run's spend ledger and summary hold for it (#1934).
+//
+// Readers that print or act on a stage's cost must read it here rather than
+// re-deriving from the executor's result: the booking merges the executor's
+// cache pools (RecordStageTokenCounts), which a result can arrive without, so
+// a re-derivation priced the same stage without its cache tokens — 4–9x under
+// the figure this run then recorded.
+func (rs *RuntimeState) BookedStage(stage PipelineStage) (StageResult, bool) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	for i := len(rs.CompletedStages) - 1; i >= 0; i-- {
+		if rs.CompletedStages[i].Stage == stage {
+			return rs.CompletedStages[i], true
+		}
+	}
+	return StageResult{}, false
+}
+
 // HasCompletedStage reports whether the run has EVER completed the named stage,
 // counting attempts a later BeginStage superseded.
 //
