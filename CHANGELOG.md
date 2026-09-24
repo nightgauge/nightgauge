@@ -656,6 +656,14 @@ create --body-file` call, so the compact profile (and its tests) pin
   a self-edge is dropped and logged when the graph is built. On the live board
   this removed 10 false edges and no real ones.
 
+- **`nightgauge stash sweep` no longer pops another branch's stash onto
+  `HEAD` (#1938).** A restore now skips a stash recorded on a different
+  branch, or any stash when `HEAD` is detached, and reports it as
+  `other-branch`. Before, a `feat/…` baseline popped onto a clean `main`
+  conflicted and left `UU` in the checkout. If a pop still fails, the sweep
+  puts the working tree back as it found it and keeps the stash; if it
+  cannot, the error says the tree was not restored.
+
 - **Pipeline stages no longer lose the issue number between shell blocks
   (#1932).** A stage skill's phases run as separate `Bash` calls, and each call
   is a new process, so 126 blocks across the eight stage skills and

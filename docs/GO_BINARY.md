@@ -2158,15 +2158,30 @@ applied to stashes: an operator's own `git stash -m "wip before the refactor"`
 is indistinguishable from a pre-marker pipeline stash, and no heuristic over
 free-form messages is safe enough to delete on.
 
-| Skip reason      | Meaning                                                |
-| ---------------- | ------------------------------------------------------ |
-| `unowned`        | No marker — ownership unprovable, so never reclaimed   |
-| `other-issue`    | Owned, but belongs to a different issue than `--issue` |
-| `dirty-tree`     | Restoring would collide with uncommitted work          |
-| `restore-failed` | `git stash pop` refused; git leaves the stash in place |
+| Skip reason      | Meaning                                                           |
+| ---------------- | ----------------------------------------------------------------- |
+| `unowned`        | No marker — ownership unprovable, so never reclaimed              |
+| `other-issue`    | Owned, but belongs to a different issue than `--issue`            |
+| `other-branch`   | Recorded on another branch, or `HEAD` is detached (restore only)  |
+| `dirty-tree`     | Restoring would collide with uncommitted work                     |
+| `restore-failed` | `git stash pop` refused; the stash stays, the tree is rolled back |
 
 `dirty-tree` uses the same exhaust classifier as the worktree sweep — a
 scaffolded knowledge README does not count as a collision.
+
+**A restore only pops a stash recorded on the checked-out branch** (#1938).
+The stash stack is shared by every worktree, so a clean tree is no protection:
+a `feat/…` baseline popped onto `main` conflicts on files nobody touched. Run
+the sweep from the worktree of the branch the stash names. `--drop` does not
+touch the tree and ignores branches.
+
+**A pop that fails leaves the tree as the sweep found it.** A conflicting pop
+writes markers, an unmerged index and the stash's untracked files before git
+gives up. The sweep resets tracked files to `HEAD` (the dirty-tree check has
+already proved there were no tracked changes), removes only the stash's own
+untracked files that were not there before, and compares `git status` with
+the status it read before the pop. If they differ, the error says the tree
+was NOT restored.
 
 **Refs renumber on every removal** (dropping `stash@{1}` makes `stash@{2}`
 become `stash@{1}`), so the sweep re-resolves each stash by message immediately
