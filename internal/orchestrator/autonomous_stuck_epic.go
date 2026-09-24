@@ -218,12 +218,33 @@ func dispatchable(n *depgraph.Node, adj map[string][]string, graph *depgraph.Gra
 	if !disableEpicCascade && n.EpicNumber != 0 {
 		epicKey := depgraph.NodeID{Repo: n.Repo, Number: n.EpicNumber}.String()
 		if epic, ok := graph.Nodes[epicKey]; ok && strings.EqualFold(epic.State, "OPEN") {
-			if hasOpenBlocker(adj[epicKey], graph) {
+			if gating, _ := epicCascadeDeps(graph, adj, epicKey); hasOpenBlocker(gating, graph) {
 				return false
 			}
 		}
 	}
 	return true
+}
+
+// epicCascadeDeps splits an epic's dependencies into those that hold its
+// sub-issues back (gating) and edges to the epic's OWN sub-issues (ownSubs).
+//
+// An epic "blocked by" its own child states containment — the epic finishes
+// after the child — and cascading it deadlocks the child on itself or on a
+// sibling that waits on the epic. That is how #478, ready and unblocked, was
+// reported as "(via epic #477) blocked by #478" and never dispatched (#1937).
+// Both the dispatcher and the stuck-epic watchdog use this, so they cannot
+// disagree about which edges gate.
+func epicCascadeDeps(g *depgraph.Graph, adj map[string][]string, epicKey string) (gating, ownSubs []string) {
+	epic, ok := g.Nodes[epicKey]
+	for _, depKey := range adj[epicKey] {
+		if dep, found := g.Nodes[depKey]; ok && found && dep.Repo == epic.Repo && dep.EpicNumber == epic.Number {
+			ownSubs = append(ownSubs, depKey)
+			continue
+		}
+		gating = append(gating, depKey)
+	}
+	return gating, ownSubs
 }
 
 // hasOpenBlocker reports whether any dependency in depKeys is OPEN and not
@@ -287,7 +308,8 @@ func blockerReasonFor(n *depgraph.Node, adj map[string][]string, graph *depgraph
 	if !disableEpicCascade && n.EpicNumber != 0 {
 		epicKey := depgraph.NodeID{Repo: n.Repo, Number: n.EpicNumber}.String()
 		if epic, ok := graph.Nodes[epicKey]; ok && strings.EqualFold(epic.State, "OPEN") {
-			if refs := openBlockerRefs(adj[epicKey], graph); len(refs) > 0 {
+			gating, _ := epicCascadeDeps(graph, adj, epicKey)
+			if refs := openBlockerRefs(gating, graph); len(refs) > 0 {
 				return fmt.Sprintf("(via epic #%d) blocked by %s (open)", n.EpicNumber, strings.Join(refs, ", "))
 			}
 		}

@@ -755,3 +755,14 @@ func TestComputeStats_FullPipeline(t *testing.T) {
 		t.Errorf("expected no cycles, got %d", len(g.Cycles))
 	}
 }
+
+// #1937 AC2: a self-edge is a data defect, never a dependency.
+func TestAddEdge_DropsSelfEdge(t *testing.T) {
+	g := NewGraph()
+	self := NodeID{Repo: "o/r", Number: 478}
+	g.AddEdge(Edge{From: self, To: self, Type: "blockedBy"})
+	g.AddEdge(Edge{From: self, To: NodeID{Repo: "o/r", Number: 100}, Type: "blockedBy"})
+	if len(g.Edges) != 1 || g.Edges[0].To.Number != 100 {
+		t.Errorf("edges = %+v, want only 478 -> 100", g.Edges)
+	}
+}
