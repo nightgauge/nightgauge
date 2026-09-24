@@ -273,6 +273,7 @@ func runCompactionStub(t *testing.T, real string, growth, summary stubInstance) 
 
 	ctx, cancel := context.WithTimeout(context.Background(), compactionStubBudget)
 	defer cancel()
+	hookBin, waitForHooks := trackedHookBin(t, buildNightgaugeBin(t))
 	cmd := exec.CommandContext(ctx, real, "run", "please do the task, using bash as needed",
 		"-m", "lmstudio/stub-model", "--agent", "build", "--print-logs", "--log-level", "DEBUG")
 	cmd.Dir = projectDir
@@ -292,13 +293,14 @@ func runCompactionStub(t *testing.T, real string, growth, summary stubInstance) 
 		EnvNonce + "=" + nonce,
 		EnvSentinel + "=" + sentinelPath,
 		EnvPluginPath + "=" + sh.pluginEntry,
-		"NIGHTGAUGE_BIN=" + buildNightgaugeBin(t),
+		"NIGHTGAUGE_BIN=" + hookBin,
 		"NIGHTGAUGE_OUTPUT_FILE=" + outputFile,
 		"NIGHTGAUGE_RUN_ID=" + runID,
 	}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	exitErr := cmd.Run()
+	waitForHooks()
 
 	eventsPath, ok := EventsPath(outputFile, runID)
 	if !ok {
@@ -419,6 +421,7 @@ func TestPermissionAskEventAgainstRealOpenCode(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), compactionStubBudget)
 	defer cancel()
+	hookBin, waitForHooks := trackedHookBin(t, buildNightgaugeBin(t))
 	cmd := exec.CommandContext(ctx, real, "run", "please do the task, using bash as needed",
 		"-m", "lmstudio/stub-model", "--agent", "build", "--print-logs", "--log-level", "DEBUG")
 	cmd.Dir = projectDir
@@ -438,7 +441,7 @@ func TestPermissionAskEventAgainstRealOpenCode(t *testing.T) {
 		EnvNonce + "=" + nonce,
 		EnvSentinel + "=" + filepath.Join(runDir, "sentinel.json"),
 		EnvPluginPath + "=" + sh.pluginEntry,
-		"NIGHTGAUGE_BIN=" + buildNightgaugeBin(t),
+		"NIGHTGAUGE_BIN=" + hookBin,
 		"NIGHTGAUGE_OUTPUT_FILE=" + outputFile,
 		"NIGHTGAUGE_RUN_ID=" + runID,
 	}
@@ -448,6 +451,7 @@ func TestPermissionAskEventAgainstRealOpenCode(t *testing.T) {
 	// so the run itself is expected to exit non-zero — only the events file
 	// and stderr's own permission trace are asserted on.
 	_ = cmd.Run()
+	waitForHooks()
 
 	if !strings.Contains(stderr.String(), "permission=bash") {
 		t.Fatalf("test premise broken: stderr never shows opencode asking for bash permission:\n%s", stderr.String())
@@ -554,5 +558,53 @@ func assertCompactionStubGreen(t *testing.T, result compactionStubResult) {
 	exported := exportSanitized(t, result)
 	if strings.Contains(exported, continueMarker) {
 		t.Errorf("`opencode export --sanitize` contains the synthetic continue marker %q; autocontinue was not suppressed", continueMarker)
+	}
+}
+
+// trackedHookBin wraps bin so the test can tell when every hook the plugin
+// spawned has exited, and returns the wrapper path plus a function that
+// blocks until then (bounded by stopVerifyWaitBound).
+//
+// The plugin spawns its hooks — `hook notify`, `hook stop-verify`, … —
+// detached, in their own process groups, and opencode exits without waiting
+// for them (#1810, by design). They keep running in this test's TempDirs after
+// `opencode run` returns: measured on #2076, `hook notify` was still alive
+// when TempDir cleanup began, and on a slow runner cleanup failed with
+// "unlinkat …: directory not empty". Neither a process group nor an argv
+// match finds them all (`hook notify` names no directory), so each run of the
+// wrapper holds a marker file for exactly as long as the real binary runs.
+func trackedHookBin(t *testing.T, bin string) (string, func()) {
+	t.Helper()
+	dir := t.TempDir()
+	alive := filepath.Join(dir, "alive")
+	if err := os.Mkdir(alive, 0o755); err != nil {
+		t.Fatalf("HARNESS ERROR: %v", err)
+	}
+	wrapper := filepath.Join(dir, "nightgauge")
+	script := "#!/bin/sh\n" +
+		": > " + strconv.Quote(alive) + "/$$\n" +
+		strconv.Quote(bin) + " \"$@\"\n" +
+		"rc=$?\n" +
+		"rm -f " + strconv.Quote(alive) + "/$$\n" +
+		"exit $rc\n"
+	if err := os.WriteFile(wrapper, []byte(script), 0o755); err != nil {
+		t.Fatalf("HARNESS ERROR: %v", err)
+	}
+	return wrapper, func() {
+		t.Helper()
+		deadline := time.Now().Add(stopVerifyWaitBound)
+		for {
+			left, err := os.ReadDir(alive)
+			if err != nil {
+				t.Fatalf("HARNESS ERROR: reading hook markers: %v", err)
+			}
+			if len(left) == 0 {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%d plugin hook(s) still running %s after opencode exited", len(left), stopVerifyWaitBound)
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
 	}
 }
