@@ -28,6 +28,11 @@ import {
 const USER = "# Contract\n\nUser rules.\n";
 const BLOCK = `${CODEX_MANAGED_BEGIN}\nsteering\n${CODEX_MANAGED_END}\n`;
 
+// Every test here spawns ~15 git processes (one a push to a bare repo). That
+// takes ~0.5s idle and ~5.3s at the load `ci-local.sh` produces, so the 5s
+// default measured the machine, not the code (#2068).
+const GIT_TEST_TIMEOUT_MS = 30_000;
+
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, {
     cwd,
@@ -45,7 +50,7 @@ function tryShow(cwd: string, ref: string): string | null {
   }
 }
 
-describe("steeringGuard (issue 1675)", () => {
+describe("steeringGuard (issue 1675)", { timeout: GIT_TEST_TIMEOUT_MS }, () => {
   let dir: string;
 
   beforeEach(() => {
@@ -57,7 +62,7 @@ describe("steeringGuard (issue 1675)", () => {
     fs.writeFileSync(path.join(dir, "AGENTS.md"), USER);
     git(dir, "add", "-A");
     git(dir, "commit", "-qm", "contract");
-  });
+  }, GIT_TEST_TIMEOUT_MS);
 
   afterEach(() => {
     fs.rmSync(dir, { recursive: true, force: true });
