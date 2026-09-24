@@ -5,7 +5,9 @@
  * The first `UsageProvider`, and the only one that needs no provider quota
  * API: it reads the per-stage token/cost records written to
  * `pipelineStateDir(root)/history/YYYY-MM-DD.jsonl` and buckets the dollars
- * attributed to one adapter into session / daily / monthly windows.
+ * attributed to one adapter into session / daily / monthly windows. For a model
+ * that runs on the operator's own server it buckets tokens instead, under the
+ * `local` plan (Issue #1665, ADR-022 § 4).
  *
  * ## Why this does not reuse `DashboardState.getAggregates()`
  *
@@ -30,32 +32,53 @@
  * @see Issue #658 - Provider-neutral adapter usage model
  */
 
+import {
+  getModelDescriptor,
+  isLocalProvider,
+  parseOpenCodeModel,
+  providerFor,
+} from "@nightgauge/sdk";
 import type { ExecutionAdapter } from "../../config/schema";
 import type {
   ExecutionHistoryRecord,
+  HistoryStageDetail,
   HistoryStageTokenUsage,
 } from "../../schemas/executionHistory";
 import { ExecutionHistoryReader } from "../../utils/executionHistoryReader";
+import { getOpenCodeModel } from "../../utils/resolvers/modelResolver";
 import { getLimitsSettings } from "../../config/limitsSettings";
-import type { UsageConfidence, UsageProvider, UsageSnapshot, UsageWindow } from "./types";
+import type {
+  UsageConfidence,
+  UsagePlanKind,
+  UsageProvider,
+  UsageSnapshot,
+  UsageUnit,
+  UsageWindow,
+} from "./types";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Adapters this provider will describe.
  *
- * Deliberately not "all of them". A dollar meter is only meaningful where
- * dollars are the meter:
+ * Deliberately not "all of them". Each adapter here has a meter local
+ * telemetry can fill honestly:
  *
+ * - `claude`, `codex`, `gemini`, `gemini-sdk`, `grok` bill per token, so their
+ *   windows are dollars (`pay-per-token`).
  * - `lm-studio` / `ollama` run locally against the user's own hardware. Their
  *   `cost_usd` is a genuine `$0` (the Go writer documents that it never marks
- *   those `cost_unstamped`), so a budget bar for them would sit at 0% forever
- *   — exactly the silently-zeroed bar #658 forbids.
- * - `copilot` is a flat seat subscription. Its real meter is premium requests
- *   per month, a number nothing in nightgauge's telemetry records; a dollar
- *   figure would be answering a different question than the one asked.
+ *   those `cost_unstamped`), so a dollar bar for them would sit at 0% forever
+ *   — exactly the silently-zeroed bar #658 forbids. They are metered in tokens
+ *   under the `local` plan instead (ADR-022 § 4).
+ * - `opencode` is multi-provider (ADR-022): the provider of its configured
+ *   model decides the plan. A local provider is `local` (tokens); a hosted
+ *   one is `pay-per-token` (dollars) over that provider's stages only. See
+ *   `LocalTelemetryUsageProvider.meteringFor`.
  *
- * For those three the registry resolves no provider and the snapshot is
+ * `copilot` is not here: it is a flat seat subscription whose real meter is
+ * premium requests per month, a number nothing in nightgauge's telemetry
+ * records. The registry resolves no provider for it and the snapshot is
  * `plan.kind: "unknown"` with no windows, which is the honest answer.
  */
 export const LOCAL_TELEMETRY_METERED_ADAPTERS: readonly ExecutionAdapter[] = [
@@ -64,7 +87,25 @@ export const LOCAL_TELEMETRY_METERED_ADAPTERS: readonly ExecutionAdapter[] = [
   "gemini",
   "gemini-sdk",
   "grok",
+  "lm-studio",
+  "ollama",
+  "opencode",
 ];
+
+/**
+ * Supplies the configured `opencode.model` (ADR-022 § 7), or `undefined` when
+ * none is configured. `forWorkspace()` reads it from the workspace config.
+ */
+export type ConfiguredOpenCodeModel = () => string | undefined;
+
+/**
+ * What one adapter's snapshot measures, and which of its stages count.
+ *
+ * `provider` narrows a `pay-per-token` snapshot to one provider's stages: an
+ * `opencode` adapter can have run a local model and a hosted one in the same
+ * month, and a dollar window that mixed them would describe neither.
+ */
+type Metering = { plan: "local" } | { plan: "pay-per-token"; provider?: string };
 
 /**
  * Where history records come from.
@@ -88,11 +129,59 @@ export interface UsageSessionClock {
   getSessionStartTime(): Date;
 }
 
-/** One priced stage attributed to the adapter under inspection. */
-interface CostEvent {
+/** One stage attributed to the adapter under inspection. */
+interface StageEvent {
   at: Date;
   costUsd: number;
+  /** Every token the stage's model processed: input, output, cache read and cache write. */
+  tokens: number;
+  /** How far `costUsd` can be trusted. Token counts are always `measured`. */
   confidence: UsageConfidence;
+  /** The provider that served the stage (`lm-studio`, `anthropic`, `other`, ...). */
+  provider: string;
+}
+
+/**
+ * The provider of a recorded `opencode` model when the stage carries no
+ * recorded `model_provider`. A record holds the model in one of three forms
+ * (ADR-022 § 1, § 2): the `-m` value (`lmstudio/qwen/qwen3.8-27b`), the wire
+ * form of an unregistered model (`lm-studio/qwen/qwen3.8-27b`), or the bare id
+ * of a registry model (`claude-sonnet-5`). An unrecognized form is `other`,
+ * which is never local and never matches a hosted provider.
+ */
+function recordedOpenCodeProvider(model: string): string {
+  const parsed = parseOpenCodeModel(model);
+  if (parsed.provider !== "other") {
+    return parsed.provider;
+  }
+  const slash = model.indexOf("/");
+  if (slash > 0) {
+    const key = model.slice(0, slash);
+    return isLocalProvider(key) ? key : "other";
+  }
+  return getModelDescriptor(model)?.provider ?? "other";
+}
+
+/**
+ * The provider that served one stage. For `opencode` the recorded
+ * `model_provider` (ADR-022 § 2) wins, because it names the model that
+ * actually served the stage; the model string is the fallback. Every other
+ * adapter serves one provider.
+ */
+function stageProvider(
+  adapter: ExecutionAdapter,
+  usage: HistoryStageTokenUsage,
+  detail: HistoryStageDetail | undefined
+): string {
+  if (adapter !== "opencode") {
+    return providerFor(adapter, usage.model ?? "");
+  }
+  const recorded = detail?.model_selection?.model_provider;
+  if (recorded) {
+    return recorded;
+  }
+  const model = usage.model ?? detail?.model_selection?.model;
+  return model ? recordedOpenCodeProvider(model) : "other";
 }
 
 /**
@@ -145,7 +234,7 @@ export function stageCostConfidence(usage: HistoryStageTokenUsage): UsageConfide
  * from having nothing to say at all, which is signalled by returning no
  * snapshot.
  */
-function foldConfidence(events: readonly CostEvent[]): UsageConfidence {
+function foldConfidence(events: readonly StageEvent[]): UsageConfidence {
   let seenEstimated = false;
   for (const event of events) {
     if (event.confidence === "unknown") {
@@ -181,11 +270,11 @@ function startOfNextLocalMonth(now: Date): Date {
  * history schema is explicit that absence means adapter-unknown, and guessing
  * would credit one adapter with another's spend.
  */
-function collectCostEvents(
+function collectStageEvents(
   records: readonly ExecutionHistoryRecord[],
   adapter: ExecutionAdapter
-): CostEvent[] {
-  const events: CostEvent[] = [];
+): StageEvent[] {
+  const events: StageEvent[] = [];
   for (const record of records) {
     if (record.record_type !== "run") {
       continue;
@@ -198,33 +287,66 @@ function collectCostEvents(
     if (Number.isNaN(at.getTime())) {
       continue;
     }
-    for (const usage of Object.values(perStage)) {
+    for (const [stage, usage] of Object.entries(perStage)) {
       if (!usage || usage.adapter !== adapter) {
         continue;
       }
-      events.push({ at, costUsd: usage.cost_usd, confidence: stageCostConfidence(usage) });
+      events.push({
+        at,
+        costUsd: usage.cost_usd,
+        tokens: usage.input + usage.output + usage.cache_read + usage.cache_creation,
+        confidence: stageCostConfidence(usage),
+        provider: stageProvider(adapter, usage, record.stages[stage]),
+      });
     }
   }
   return events;
+}
+
+/**
+ * Whether a stage belongs in the snapshot `metering` describes. A `local`
+ * snapshot counts only stages a local provider served; a `pay-per-token`
+ * snapshot scoped to a provider counts only that provider's stages.
+ */
+function isMetered(event: StageEvent, metering: Metering): boolean {
+  if (metering.plan === "local") {
+    return isLocalProvider(event.provider);
+  }
+  return metering.provider === undefined || event.provider === metering.provider;
 }
 
 function buildWindow(
   id: string,
   label: string,
   scope: UsageWindow["scope"],
-  events: readonly CostEvent[],
+  unit: Extract<UsageUnit, "usd" | "tokens">,
+  events: readonly StageEvent[],
   since: Date,
   limit: number | null,
   resetsAt: Date | null
 ): UsageWindow {
   const inWindow = events.filter((event) => event.at.getTime() >= since.getTime());
+  if (unit === "tokens") {
+    // A token count is what the model server reported, not a price derived
+    // from it, so an unpriced stage does not weaken it.
+    return {
+      id,
+      label,
+      scope,
+      used: inWindow.reduce((sum, event) => sum + event.tokens, 0),
+      limit,
+      unit,
+      resetsAt,
+      confidence: "measured",
+    };
+  }
   return {
     id,
     label,
     scope,
     used: inWindow.reduce((sum, event) => sum + event.costUsd, 0),
     limit,
-    unit: "usd",
+    unit,
     resetsAt,
     confidence: foldConfidence(inWindow),
   };
@@ -235,10 +357,11 @@ export class LocalTelemetryUsageProvider implements UsageProvider {
 
   constructor(
     private readonly source: UsageHistorySource,
-    private readonly sessionClock: UsageSessionClock
+    private readonly sessionClock: UsageSessionClock,
+    private readonly configuredOpenCodeModel: ConfiguredOpenCodeModel = () => undefined
   ) {}
 
-  /** Wire the provider to a workspace's on-disk history. */
+  /** Wire the provider to a workspace's on-disk history and config. */
   static forWorkspace(
     workspaceRoot: string,
     sessionClock: UsageSessionClock
@@ -248,7 +371,8 @@ export class LocalTelemetryUsageProvider implements UsageProvider {
         readDateRange: (startDate, endDate) =>
           ExecutionHistoryReader.readDateRange(workspaceRoot, startDate, endDate),
       },
-      sessionClock
+      sessionClock,
+      () => getOpenCodeModel(workspaceRoot)
     );
   }
 
@@ -257,17 +381,50 @@ export class LocalTelemetryUsageProvider implements UsageProvider {
   }
 
   /**
-   * Derive session / daily / monthly dollar windows for `adapter`.
+   * What `adapter`'s snapshot measures, or `null` when nothing can be said.
+   *
+   * A single-provider adapter's provider decides: `lm-studio` and `ollama` are
+   * `local`, the rest `pay-per-token`. For `opencode` the provider of the
+   * configured model decides (ADR-022 § 1): a local provider is `local`, a
+   * hosted one is `pay-per-token` over that provider's stages. With no
+   * configured model, or one whose provider is `other`, there is no provider
+   * to describe, and the answer is `unknown`.
+   */
+  private meteringFor(adapter: ExecutionAdapter): Metering | null {
+    if (adapter !== "opencode") {
+      return isLocalProvider(providerFor(adapter, ""))
+        ? { plan: "local" }
+        : { plan: "pay-per-token" };
+    }
+    const configured = this.configuredOpenCodeModel();
+    if (!configured) {
+      return null;
+    }
+    const provider = providerFor(adapter, configured);
+    if (isLocalProvider(provider)) {
+      return { plan: "local" };
+    }
+    return provider === "other" ? null : { plan: "pay-per-token", provider };
+  }
+
+  /**
+   * Derive session / daily / monthly windows for `adapter`: dollars for a
+   * `pay-per-token` snapshot, tokens with no limit for a `local` one.
    *
    * Returns `null` — leaving the caller to emit the unknown snapshot — when
-   * the adapter is not metered in dollars, or when no record in the read
-   * horizon attributes a single stage to it. The second case is not the same
+   * the adapter is not metered here, when its metering cannot be resolved,
+   * or when no record in the read horizon attributes a single metered stage
+   * to it. The second case is not the same
    * as "$0 spent": with no attributed record we cannot tell a fresh install
    * from a quiet month, and drawing a 0% bar for either would be a claim we
    * cannot support.
    */
   async getSnapshot(adapter: ExecutionAdapter): Promise<UsageSnapshot | null> {
     if (!this.supports(adapter)) {
+      return null;
+    }
+    const metering = this.meteringFor(adapter);
+    if (metering === null) {
       return null;
     }
 
@@ -286,22 +443,40 @@ export class LocalTelemetryUsageProvider implements UsageProvider {
     const horizonEnd = new Date(now.getTime() + DAY_MS);
 
     const records = await this.source.readDateRange(horizonStart, horizonEnd);
-    const events = collectCostEvents(records, adapter);
+    const attributed = collectStageEvents(records, adapter);
+    const events = attributed.filter((event) => isMetered(event, metering));
     if (events.length === 0) {
       return null;
     }
+    // A local snapshot counts tokens, so a hosted stage's dollars have no
+    // window to go in. Carry them instead of dropping them silently. The
+    // mirror case, a hosted snapshot leaving out local stages, drops only
+    // stages no provider bills, and needs no note.
+    const excludedHosted =
+      metering.plan === "local"
+        ? attributed.filter(
+            (event) =>
+              !isLocalProvider(event.provider) && event.at.getTime() >= monthStart.getTime()
+          )
+        : [];
 
-    const monthlyBudgetUsd = getLimitsSettings().monthlyBudgetUsd;
+    const plan: UsagePlanKind = metering.plan;
+    const unit = plan === "local" ? "tokens" : "usd";
+    // The configured budget is a dollar ceiling, so it bounds only dollar
+    // windows. No provider grants a local model a token allowance, and
+    // inventing one would be a fabricated limit.
+    const monthlyBudgetUsd = unit === "usd" ? getLimitsSettings().monthlyBudgetUsd : 0;
 
     return {
       adapter,
-      plan: { kind: "pay-per-token" },
+      plan: { kind: plan },
       capturedAt: now,
       windows: [
         buildWindow(
           `${this.id}:session`,
           "This session",
           "session",
+          unit,
           events,
           sessionStart,
           null,
@@ -313,6 +488,7 @@ export class LocalTelemetryUsageProvider implements UsageProvider {
           `${this.id}:daily`,
           "Today",
           "daily",
+          unit,
           events,
           dayStart,
           null,
@@ -322,6 +498,7 @@ export class LocalTelemetryUsageProvider implements UsageProvider {
           `${this.id}:monthly`,
           "This month",
           "monthly",
+          unit,
           events,
           monthStart,
           // The configured budget is the only ceiling that exists — a local
@@ -331,6 +508,11 @@ export class LocalTelemetryUsageProvider implements UsageProvider {
           startOfNextLocalMonth(now)
         ),
       ],
+      ...(excludedHosted.length > 0
+        ? {
+            hostedSpendExcludedUsd: excludedHosted.reduce((sum, event) => sum + event.costUsd, 0),
+          }
+        : {}),
     };
   }
 }

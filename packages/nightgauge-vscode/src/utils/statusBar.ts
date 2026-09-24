@@ -11,7 +11,7 @@ import { DEFAULT_PERFORMANCE_MODE, MODE_PROFILES, type PerformanceMode } from ".
 import type { ExecutionAdapter } from "../config/schema";
 import { CLAUDE_PLAN_SETTING } from "../services/usage/claudePlanDeclaration";
 import type { UsageSnapshot, UsageWindow } from "../services/usage/types";
-import { formatUsageValue } from "../services/usage/format";
+import { formatUsageValue, hostedSpendExcludedNote } from "../services/usage/format";
 
 /**
  * Pipeline state for status bar display
@@ -1182,6 +1182,21 @@ export function buildUsageTooltip(snapshot: UsageSnapshot): vscode.MarkdownStrin
       "_No usage provider is available for this adapter — usage is unknown, not zero._\n\n"
     );
   } else {
+    if (snapshot.plan.kind === "local") {
+      // Issue #1665: no provider bills a local model, so the windows below
+      // count tokens. Saying so stops a reader looking for the missing dollars.
+      tooltip.appendMarkdown(
+        "_Local model — no provider bills these runs, so usage is counted in tokens._\n\n"
+      );
+      // Hosted stages the local snapshot left out: their spend is real, and
+      // this is the only place it would otherwise appear. The note is built
+      // from a closed adapter enum and a formatted number, so it carries no
+      // markdown of its own.
+      const excluded = hostedSpendExcludedNote(snapshot);
+      if (excluded !== null) {
+        tooltip.appendMarkdown(`_${excluded}_\n\n`);
+      }
+    }
     for (const window of snapshot.windows) {
       const limitText =
         window.limit === null ? "no limit configured" : formatUsageValue(window.limit, window.unit);

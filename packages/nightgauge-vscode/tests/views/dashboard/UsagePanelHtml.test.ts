@@ -9,7 +9,7 @@
  * @see docs/decisions/018-adapter-usage-quota-model.md
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import type { PipelineRunSummary } from "../../../src/views/dashboard/DashboardState";
 import type { UsageSnapshot, UsageWindow } from "../../../src/services/usage/types";
 import { unknownUsageSnapshot } from "../../../src/services/usage/types";
@@ -322,6 +322,68 @@ describe("plan badge and the Claude Max feed prompt (#730)", () => {
 
     expect(html).toContain("Subscription plan");
     expect(html).not.toContain("Pay per token");
+  });
+
+  it("badges a local snapshot as a local model and shows its token figure (#1665)", () => {
+    const html = render({
+      adapter: "opencode",
+      plan: { kind: "local" },
+      capturedAt: NOW,
+      windows: [makeWindow({ used: 4750, limit: null, unit: "tokens", resetsAt: null })],
+    });
+
+    expect(html).toContain("Local model");
+    expect(html).toContain("4.8k tokens");
+    expect(html).not.toContain("Pay per token");
+    expect(html).not.toContain("usage is <strong>unknown</strong>");
+  });
+
+  it("shows the hosted spend a local snapshot left out, HTML-escaped (#1665)", () => {
+    const html = render({
+      adapter: "opencode",
+      plan: { kind: "local" },
+      capturedAt: NOW,
+      windows: [makeWindow({ used: 4750, limit: null, unit: "tokens", resetsAt: null })],
+      hostedSpendExcludedUsd: 12.345,
+    });
+
+    const note = html.split('class="usage-panel-note usage-hosted-spend-excluded">')[1];
+    expect(note).toBeDefined();
+    expect(note.slice(0, note.indexOf("</p>"))).toBe(
+      "Hosted-model spend on this adapter ($12.35 this month) is not shown while " +
+        "opencode.model is a local model."
+    );
+  });
+
+  it("escapes the hosted-spend note where it is interpolated (#1665)", async () => {
+    const format = await import("../../../src/services/usage/format");
+    const spy = vi
+      .spyOn(format, "hostedSpendExcludedNote")
+      .mockReturnValue('<img src=x onerror="alert(1)">');
+    try {
+      const html = render({
+        adapter: "opencode",
+        plan: { kind: "local" },
+        capturedAt: NOW,
+        windows: [makeWindow({ used: 1, limit: null, unit: "tokens", resetsAt: null })],
+        hostedSpendExcludedUsd: 1,
+      });
+      expect(html).not.toContain("<img");
+      expect(html).toContain("&lt;img");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("shows no hosted-spend note when nothing was left out", () => {
+    const html = render({
+      adapter: "opencode",
+      plan: { kind: "local" },
+      capturedAt: NOW,
+      windows: [makeWindow({ used: 1, limit: null, unit: "tokens", resetsAt: null })],
+    });
+
+    expect(html).not.toContain("usage-hosted-spend-excluded");
   });
 
   it("badges a dollar snapshot as pay-per-token", () => {

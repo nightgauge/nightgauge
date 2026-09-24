@@ -98,6 +98,11 @@ export function usageSnapshotsEquivalent(a: UsageSnapshot | null, b: UsageSnapsh
   if (a.adapter !== b.adapter || a.plan.kind !== b.plan.kind) {
     return false;
   }
+  // The excluded hosted spend is rendered (#1665), so a change to it is a
+  // change to what the operator reads.
+  if (a.hostedSpendExcludedUsd !== b.hostedSpendExcludedUsd) {
+    return false;
+  }
   if (a.windows.length !== b.windows.length) {
     return false;
   }
