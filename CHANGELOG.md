@@ -644,6 +644,13 @@ create --body-file` call, so the compact profile (and its tests) pin
 
 ### Fixed
 
+- **The local gate runs the credential scan it always claimed to (#2075).**
+  `scripts/ci-local.sh` listed the credential scan among the checks that are
+  never skipped, yet no step ran it, so a committed secret passed locally and
+  failed only in CI. A new step runs `scripts/credential-scan.sh` (gitleaks
+  over `HEAD` and every branch pushed to origin, as CI does, with `.gitleaksignore`). A machine
+  without gitleaks gets an INFRASTRUCTURE error, not a pass.
+
 - **Skills stop calling `nightgauge` with flags it does not have (#2066).**
   42 invocations across 21 skills passed flags or subcommands the binary does
   not define, such as `forge repo view -q`, `forge issue view --jq`,
