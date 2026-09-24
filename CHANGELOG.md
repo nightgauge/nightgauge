@@ -648,7 +648,7 @@ create --body-file` call, so the compact profile (and its tests) pin
   `scripts/ci-local.sh` listed the credential scan among the checks that are
   never skipped, yet no step ran it, so a committed secret passed locally and
   failed only in CI. A new step runs `scripts/credential-scan.sh` (gitleaks
-  over every commit reachable from `HEAD`, with `.gitleaksignore`). A machine
+  over `HEAD` and every branch pushed to origin, as CI does, with `.gitleaksignore`). A machine
   without gitleaks gets an INFRASTRUCTURE error, not a pass.
 
 - **Skills stop calling `nightgauge` with flags it does not have (#2066).**

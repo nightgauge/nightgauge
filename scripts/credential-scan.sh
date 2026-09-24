@@ -40,11 +40,11 @@ if ! command -v gitleaks >/dev/null 2>&1; then
 fi
 
 echo "Scanning all commits (history is the publication surface, not just HEAD)…"
-# Every commit reachable from HEAD — this branch's whole publication surface —
-# but not `--all`: a worktree shares refs with every other branch in the clone,
-# and another branch's commits (allowlisted, if at all, by that branch's own
-# .gitleaksignore) are not this change's to answer for (#2075).
-if gitleaks git --no-banner --redact --log-opts=HEAD; then
+# HEAD plus every branch pushed to origin: what CI scans (its checkout fetches
+# all branches) and what is published. Not `--all`: a worktree shares refs
+# with every local branch in the clone, and another session's unpushed branch
+# is neither published nor seen by CI (#2075).
+if gitleaks git --no-banner --redact --log-opts="HEAD --remotes=origin"; then
   echo ""
   echo "✓ no credentials in the tree or in any commit"
   exit 0
