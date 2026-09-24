@@ -407,12 +407,22 @@ func remoteBranchExistsForCleanupTest(originDir, branch string) bool {
 // bare "origin"), so this proves BranchDeleteRemote's push-based deletion
 // works — and needs no checkout — from exactly the topology that broke the
 // old flag-based cleanup.
-func TestScheduler_PRMerge_Deterministic_CleansUpRemoteBranch(t *testing.T) {
+// prMergeCleanupFixture is the full linked-worktree topology: a primary
+// checkout holding main, a run worktree on the PR's head branch, and a real
+// bare "origin" that carries that branch.
+type prMergeCleanupFixture struct {
+	mainDir, originDir, worktreeDir string
+}
+
+const prMergeCleanupHeadBranch = "fix/42-cleanup-target"
+
+func setupPRMergeCleanupFixture(t *testing.T) prMergeCleanupFixture {
+	t.Helper()
 	root := t.TempDir()
 	mainDir := filepath.Join(root, "main")
 	originDir := filepath.Join(root, "origin.git")
 	worktreeDir := filepath.Join(root, "issue-42")
-	const headBranch = "fix/42-cleanup-target"
+	headBranch := prMergeCleanupHeadBranch
 
 	if err := os.MkdirAll(mainDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
@@ -439,6 +449,33 @@ func TestScheduler_PRMerge_Deterministic_CleansUpRemoteBranch(t *testing.T) {
 	if !remoteBranchExistsForCleanupTest(originDir, headBranch) {
 		t.Fatalf("fixture setup failed: origin does not carry refs/heads/%s", headBranch)
 	}
+
+	return prMergeCleanupFixture{mainDir: mainDir, originDir: originDir, worktreeDir: worktreeDir}
+}
+
+// runDeterministicMergeForCleanupTest drives the deterministic pr-merge path
+// to a merged result for headBranch and returns the run's state.
+func runDeterministicMergeForCleanupTest(t *testing.T, worktreeDir string) *state.RuntimeState {
+	t.Helper()
+	s := newSchedulerForDeterministicTest()
+	s.WithPRMergeRunner(&fakePRMergeRunner{result: pmstages.PRMergeResult{
+		Path: pmstages.PathMerged, PRNumber: 42, PRState: "MERGED",
+		Reason: pmstages.ReasonCleanMerged, HeadRefName: prMergeCleanupHeadBranch,
+	}})
+	rs := state.NewRuntimeState("nightgauge/nightgauge", 42, "item-id", testRunID())
+	rs.BeginStage(state.StagePRMerge)
+	item := types.BoardItem{Number: 42, Repo: "nightgauge/nightgauge"}
+	merged, _, _, _ := s.tryDeterministicPRMerge(context.Background(), state.StagePRMerge, rs, item, worktreeDir)
+	if !merged {
+		t.Fatalf("tryDeterministicPRMerge returned false, want true")
+	}
+	return rs
+}
+
+func TestScheduler_PRMerge_Deterministic_CleansUpRemoteBranch(t *testing.T) {
+	f := setupPRMergeCleanupFixture(t)
+	mainDir, originDir, worktreeDir := f.mainDir, f.originDir, f.worktreeDir
+	const headBranch = prMergeCleanupHeadBranch
 
 	s := newSchedulerForDeterministicTest()
 	det := &fakePRMergeRunner{result: pmstages.PRMergeResult{
@@ -513,5 +550,61 @@ func TestScheduler_PRMerge_NilRunner_NoOp(t *testing.T) {
 	}
 	if got := rs.StageExecutionPath(state.StagePRMerge); got != "" {
 		t.Errorf("execution_path should not be set when runner is nil, got %q", got)
+	}
+}
+
+// TestScheduler_PRMerge_Deterministic_CleansUpRemoteBranchOverSSH is #1921's
+// acceptance case. A local bare origin has no delete_branch_on_merge, so the
+// branch survives unless the pipeline deletes it. Before the fix, an SSH
+// origin with GITHUB_TOKEN set failed that delete with "invalid auth method"
+// and logged it as "likely already deleted".
+func TestScheduler_PRMerge_Deterministic_CleansUpRemoteBranchOverSSH(t *testing.T) {
+	f := setupPRMergeCleanupFixture(t)
+
+	// A fake ssh that runs git's remote command locally, so origin is a real
+	// ssh:// URL to go-git and still reachable to the git CLI.
+	fakeSSH := filepath.Join(t.TempDir(), "fake-ssh")
+	if err := os.WriteFile(fakeSSH, []byte("#!/bin/sh\nexec sh -c \"$2\"\n"), 0o755); err != nil {
+		t.Fatalf("write fake ssh: %v", err)
+	}
+	t.Setenv("GIT_SSH_COMMAND", fakeSSH)
+	t.Setenv("GIT_SSH_VARIANT", "simple")
+	t.Setenv("GITHUB_TOKEN", "ghp_fixture_token_not_real")
+	gitRunForCleanupTest(t, f.mainDir, "remote", "set-url", "origin", "ssh://fixture.invalid"+f.originDir)
+
+	rs := runDeterministicMergeForCleanupTest(t, f.worktreeDir)
+
+	if remoteBranchExistsForCleanupTest(f.originDir, prMergeCleanupHeadBranch) {
+		t.Errorf("origin still carries refs/heads/%s after the merge; stage output: %q",
+			prMergeCleanupHeadBranch, rs.StageOutputTail(state.StagePRMerge))
+	}
+	if tail := rs.StageOutputTail(state.StagePRMerge); tail != "" {
+		t.Errorf("a successful cleanup put text in the stage output: %q", tail)
+	}
+}
+
+// TestScheduler_PRMerge_Deterministic_RemoteCleanupFailureIsSurfaced: a delete
+// the remote refuses is reported as itself, in the stage's captured output,
+// without failing a stage whose merge already landed.
+func TestScheduler_PRMerge_Deterministic_RemoteCleanupFailureIsSurfaced(t *testing.T) {
+	f := setupPRMergeCleanupFixture(t)
+	t.Setenv("GITHUB_TOKEN", "")
+	hook := filepath.Join(f.originDir, "hooks", "pre-receive")
+	script := "#!/bin/sh\necho 'protected branch: deletion refused' >&2\nexit 1\n"
+	if err := os.WriteFile(hook, []byte(script), 0o755); err != nil {
+		t.Fatalf("write pre-receive hook: %v", err)
+	}
+
+	rs := runDeterministicMergeForCleanupTest(t, f.worktreeDir)
+
+	if !remoteBranchExistsForCleanupTest(f.originDir, prMergeCleanupHeadBranch) {
+		t.Fatal("fixture is not discriminating: origin lost the branch despite the refusing hook")
+	}
+	tail := rs.StageOutputTail(state.StagePRMerge)
+	if !strings.Contains(tail, "still on origin") || !strings.Contains(tail, "deletion refused") {
+		t.Errorf("stage output does not report the refused delete as itself: %q", tail)
+	}
+	if strings.Contains(tail, "already") {
+		t.Errorf("a refused delete was reported as already deleted: %q", tail)
 	}
 }
