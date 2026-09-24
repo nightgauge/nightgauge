@@ -22,13 +22,14 @@ coding assistants.
 
 ## Status
 
-| Tool       | Status    | Notes                                  |
-| ---------- | --------- | -------------------------------------- |
-| `claude/`  | Reference | Team settings example                  |
-| `copilot/` | Reference | GitHub Copilot instructions template   |
-| `cursor/`  | Reference | Cursor IDE rules template              |
-| `codex/`   | Beta      | Stage wrappers + runtime contract docs |
-| `kiro/`    | Reference | Amazon Kiro steering files             |
+| Tool        | Status    | Notes                                   |
+| ----------- | --------- | --------------------------------------- |
+| `claude/`   | Reference | Team settings example                   |
+| `copilot/`  | Reference | GitHub Copilot instructions template    |
+| `cursor/`   | Reference | Cursor IDE rules template               |
+| `codex/`    | Beta      | Stage wrappers + runtime contract docs  |
+| `kiro/`     | Reference | Amazon Kiro steering files              |
+| `opencode/` | Reference | LM Studio and Ollama operator templates |
 
 See `codex/README.md` for stage wrapper commands and runtime requirements.
 
@@ -50,12 +51,13 @@ claude plugin install nightgauge@nightgauge-plugins
 
 Copy skills directly to your tool's skills directory:
 
-| Tool           | Skills Location    |
-| -------------- | ------------------ |
-| GitHub Copilot | `.github/skills/`  |
-| OpenAI Codex   | `~/.codex/skills/` |
-| Grok Build TUI | `~/.grok/skills/`  |
-| Cursor IDE     | `.cursor/skills/`  |
+| Tool           | Skills Location                                                          |
+| -------------- | ------------------------------------------------------------------------ |
+| GitHub Copilot | `.github/skills/`                                                        |
+| OpenAI Codex   | `~/.codex/skills/`                                                       |
+| Grok Build TUI | `~/.grok/skills/`                                                        |
+| OpenCode       | `~/.config/opencode/skills/` (`install-agent-skills.sh --opencode-only`) |
+| Cursor IDE     | `.cursor/skills/`                                                        |
 
 Skills are located in the `skills/` directory at the root of this repository.
 

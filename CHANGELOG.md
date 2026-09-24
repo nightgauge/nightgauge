@@ -46,6 +46,17 @@ changelog, and the release workflow refuses a tag that does not.
   `plan: "local"`, and falls back to `unknown` for the session if the server
   rejects it. ADR-018 records the rule.
 
+- **`install-agent-skills.sh --opencode-only` installs Nightgauge into your own
+  OpenCode (#1666).** It copies every skill and adds one `/nightgauge-<name>`
+  command per skill under `~/.config/opencode`, or under `<dir>/.opencode` with
+  `--opencode-project <dir>`. It asks before writing, and without a terminal it
+  needs `--yes`. It changes only `nightgauge-*` entries, never edits
+  `opencode.json`, and downloads nothing. `--with-plugin` also installs the
+  Nightgauge OpenCode plugin; OpenCode then installs `@opencode-ai/plugin` from
+  npm on its next start. New `configs/opencode/` templates for LM Studio and
+  Ollama set explicit context limits, so OpenCode compacts, and are checked
+  against the pinned OpenCode config schema.
+
 - **The pipeline can authenticate as a GitHub App (#1955).** Set
   `github_auth.app` (`id`, `private_key_path` or `private_key: env:VAR`, and
   `installations` per owner) in the machine-tier config. For those owners the
