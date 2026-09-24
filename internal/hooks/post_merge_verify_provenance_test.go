@@ -202,3 +202,36 @@ func TestVerifyMergeCommit_PRHeadIsTheGate(t *testing.T) {
 		}
 	})
 }
+
+// pushAwareReader also reports whether any workflow can run on push (#2061).
+type pushAwareReader struct {
+	*provenReader
+	canRun bool
+	err    error
+}
+
+func (p pushAwareReader) PushWorkflowsCanRun(context.Context, string, string, string, string) (bool, error) {
+	return p.canRun, p.err
+}
+
+func TestVerifyMergeCommit_NoPushWorkflows(t *testing.T) {
+	required := []string{"Go build & test", "lint"}
+	headGreen := []forgetypes.CheckDetail{run("Go build & test", "COMPLETED", "SUCCESS"), run("lint", "COMPLETED", "SUCCESS")}
+	inGrace := provMergedAt.Add(time.Minute)
+	reader := func(canRun bool, err error) pushAwareReader {
+		return pushAwareReader{provenReader: &provenReader{
+			scriptedChecks: scriptedChecks{required: required, frames: [][]forgetypes.CheckDetail{{}}},
+			prov:           mergeProv("t1", "t1"), headChecks: headGreen,
+		}, canRun: canRun, err: err}
+	}
+
+	if res := VerifyMergeCommit(context.Background(), reader(false, nil), "o", "r", "main", "abc1234", provWait(4, inGrace)); res.Verdict != MainChecksGreen || res.Polls != 1 {
+		t.Errorf("nothing runs on push: result = %+v, want green on poll 1 inside the grace", res)
+	}
+	if res := VerifyMergeCommit(context.Background(), reader(true, nil), "o", "r", "main", "abc1234", provWait(4, inGrace)); res.Verdict == MainChecksGreen {
+		t.Errorf("a push workflow exists: result = %+v, want the grace to hold", res)
+	}
+	if res := VerifyMergeCommit(context.Background(), reader(false, errors.New("500")), "o", "r", "main", "abc1234", provWait(4, inGrace)); res.Verdict == MainChecksGreen {
+		t.Errorf("workflows unreadable: result = %+v, want the grace to hold", res)
+	}
+}

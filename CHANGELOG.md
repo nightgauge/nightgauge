@@ -446,6 +446,17 @@ create --body-file` call, so the compact profile (and its tests) pin
 
 ### Changed
 
+- **Post-merge verification no longer waits five minutes in a repository that
+  runs nothing on push (#2061).** With matching trees, an empty check list on
+  the merge commit used to be NOT-YET for `MergeCommitCheckGrace`, in case push
+  workflows had not been created yet. The gate now reads
+  `.github/workflows` at the merge commit. If none can run on a push to the
+  base branch (tag-only, pull-request, schedule and dispatch triggers), the
+  empty list is final and the verdict is GREEN at once. A `paths` filter, an
+  unmodelled branch pattern, or any read or parse failure keeps the grace.
+  `scripts/post-merge-check.sh` applies a coarser, never-greener form of the
+  rule.
+
 - **CodeQL on `main` is informational in the post-merge verdict (#2055).**
   CodeQL still runs on push to `main` as the default-branch code-scanning
   baseline, but when the merge commit's tree equals the PR head's, its

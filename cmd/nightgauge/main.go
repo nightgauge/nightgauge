@@ -7397,6 +7397,7 @@ func pollChecksComplete(ctx context.Context, reader checksCompleteReader, owner,
 	// capability, or a sha with no merged PR, keeps the merge-commit-only rule.
 	provReader, canProve := reader.(gh.MergeProvenanceReader)
 	var prov *gh.MergeProvenance
+	noPush := false
 
 	for poll := 1; ; poll++ {
 		res.Polls = poll
@@ -7416,6 +7417,7 @@ func pollChecksComplete(ctx context.Context, reader checksCompleteReader, owner,
 					branch = prov.BaseRef
 					res.Branch, res.RequiredNames = branch, requiredNames
 				}
+				noPush = gh.NoPushWorkflows(ctx, reader, owner, repo, prov)
 			}
 		}
 		checks, err := reader.GetCommitChecks(ctx, owner, repo, sha)
@@ -7431,7 +7433,7 @@ func pollChecksComplete(ctx context.Context, reader checksCompleteReader, owner,
 			runs, _ = reader.GetWorkflowRunsForRef(ctx, owner, repo, sha)
 		}
 
-		ev := gh.MergeEvidence{Provenance: prov, MergeChecks: checks, RequiredNames: requiredNames, RequiredKnown: requiredKnown, Runs: runs, Now: checksCompleteNow()}
+		ev := gh.MergeEvidence{Provenance: prov, MergeChecks: checks, RequiredNames: requiredNames, RequiredKnown: requiredKnown, Runs: runs, Now: checksCompleteNow(), NoPushWorkflows: noPush}
 		if ev.PRHeadIsEvidence() {
 			if ev.HeadChecks, err = reader.GetCommitChecks(ctx, owner, repo, prov.HeadSHA); err != nil {
 				return res, err

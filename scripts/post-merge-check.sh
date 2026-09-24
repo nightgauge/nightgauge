@@ -329,6 +329,22 @@ merge_age() {
   echo $(($(date -u +%s) - t))
 }
 
+# push_may_run — false only when every workflow file at the merge commit was
+# read and none mentions the word `push` (#2061): an empty merge commit is then
+# final, and the grace does not apply. Coarser than the binary's parser and
+# never greener: any mention (even `git push` in a step) and any read failure
+# count as "may run", which keeps the grace.
+push_may_run() {
+  local files f body
+  files=$(gh api "repos/$REPO/contents/.github/workflows?ref=$FULL_SHA" \
+    --jq '.[] | select(.type == "file" and (.name | test("\\.ya?ml$"; "i"))) | .path' 2>/dev/null) || return 0
+  for f in $files; do
+    body=$(gh api -H 'Accept: application/vnd.github.raw' "repos/$REPO/contents/$f?ref=$FULL_SHA" 2>/dev/null) || return 0
+    printf '%s\n' "$body" | sed 's/#.*//' | grep -Eq '(^|[^A-Za-z0-9_./-])push($|[^A-Za-z0-9_./-])' && return 0
+  done
+  return 1
+}
+
 # --- Which evidence applies (#2055) ---------------------------------------
 # A merged PR whose merge commit is <sha>, and both trees, read through the API
 # rather than `git rev-parse <sha>^{tree}`: the checkout may not have fetched
@@ -438,9 +454,8 @@ notyet=()
   notyet+=("PR #$PR_NUMBER head ${HEAD_SHA:0:8}: still running: $(jq -r '.pending | join(", ")' <<<"$head_j")")
 [[ $(jq '.pending | length' <<<"$merge_j") -gt 0 ]] &&
   notyet+=("merge commit ${SHA:0:8}: still running: $(jq -r '.pending | join(", ")' <<<"$merge_j")")
-if [[ "$merge_seen" -eq 0 ]]; then
-  [[ $(merge_age) -lt "$GRACE_SECONDS" ]] &&
-    notyet+=("merge commit ${SHA:0:8}: no checks yet (within ${GRACE_SECONDS}s of the merge)")
+if [[ "$merge_seen" -eq 0 ]] && [[ $(merge_age) -lt "$GRACE_SECONDS" ]] && push_may_run; then
+  notyet+=("merge commit ${SHA:0:8}: no checks yet (within ${GRACE_SECONDS}s of the merge)")
 fi
 if [[ ${#notyet[@]} -gt 0 ]]; then
   echo "NOT-YET  $REPO@${SHA:0:8} (PR #$PR_NUMBER, same tree as its head):"

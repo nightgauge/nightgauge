@@ -4968,6 +4968,11 @@ Two rules follow directly from that:
   PR's required CodeQL run analysed the same tree (on a tree mismatch they
   count). A tree mismatch with no required check on the merge commit turns
   RED five minutes after the merge; an unreadable required set is never GREEN.
+  An empty merge commit waits the same five minutes for push workflows to
+  appear, unless the workflows at the merge commit were read and none can run
+  on a push to the base branch (#2061); then it is GREEN at once. The script's
+  fallback applies a coarser form of that rule: any mention of `push`, or any
+  read failure, keeps the wait.
   `ci checks-complete --help` prints `capability: merged-pr-gate`, which the
   script checks before handing off. The post-merge
   hook evaluates a merge commit through the same function.
