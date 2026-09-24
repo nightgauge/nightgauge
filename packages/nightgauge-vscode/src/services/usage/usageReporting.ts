@@ -59,7 +59,7 @@
  * are kept in `minimal`, as a future vendor-reported token allowance would be.
  *
  * The plan kind travels unchanged, `local` included: the hosted service
- * accepts it (nightgauge/nightgauge-platform#1463). An older self-hosted
+ * accepts it. An older self-hosted
  * deployment that rejects it is handled by `AgentHeartbeatService`, which
  * downgrades that session's reports to `unknown`.
  *

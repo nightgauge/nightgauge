@@ -637,9 +637,8 @@ for the two bridges. The reason given there, that a dollar bar would sit at
 
 `buildUsageReport` sends the plan kind unchanged, so a `local` snapshot
 reports `plan: "local"`. Token windows are not monetary, so the `minimal`
-tier keeps them. The hosted service accepts `local`
-(nightgauge/nightgauge-platform#1463). A self-hosted deployment older than
-that rejects the whole body. After a 4xx on a `plan: "local"` heartbeat,
+tier keeps them. The hosted service accepts `local`. A self-hosted deployment that predates
+it rejects the whole body. After a 4xx on a `plan: "local"` heartbeat,
 `AgentHeartbeatService` resends that beat once as `unknown` with no windows,
 and it keeps sending `unknown` for the rest of the session. It logs this once.
 It is one resend and never a loop.
