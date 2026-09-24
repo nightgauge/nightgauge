@@ -23,6 +23,10 @@ changelog, and the release workflow refuses a tag that does not.
   output, the GitHub agent and ACP as non-goals, and the permission-rejected
   remediation reflects the shipped permission map.
 
+- **ADAPTER_DOCTOR documents the adapter row's `notes` field (#1649).** The
+  OpenCode section now says what `warnings` and `notes` carry, and that notes
+  never change the doctor's verdict.
+
 - **The knowledge base is committed, and every statement of that agrees
   (#2042).** The generated `.nightgauge/.gitignore` no longer ignores
   `/knowledge/` wholesale — an enabled knowledge base used to be scaffolded,
