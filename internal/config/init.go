@@ -142,7 +142,8 @@ func BuildTemplate(opts InitOptions) (string, error) {
 	b.WriteString("# Knowledge base — persistent context per issue (PRD + decision logs)\n")
 	b.WriteString("knowledge:\n")
 	b.WriteString("  enabled: true # Set to false to opt out — the two reasons are repo footprint\n")
-	b.WriteString("  # (files are written and committed under .nightgauge/knowledge/) and per-run token cost\n")
+	b.WriteString("  # (files are written under .nightgauge/knowledge/ and shown as new files to commit; teams\n")
+	b.WriteString("  # may ignore them in the root .gitignore) and per-run token cost\n")
 	b.WriteString("  auto_scaffold: true # Scaffold automatically on issue pickup (requires enabled: true)\n")
 
 	return b.String(), nil

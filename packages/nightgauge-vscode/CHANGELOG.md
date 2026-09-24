@@ -9,6 +9,13 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- The generated `.nightgauge/.gitignore` (template version 16) no longer ignores
+  `/knowledge/`, so scaffolded knowledge shows as new files to commit; only the
+  derived `/knowledge/.recall-cache/` stays ignored. Opt out in the root
+  `.gitignore` (#2042).
+
 ### Added
 
 - Pipeline health reads each OpenCode stage's context-window utilization and
