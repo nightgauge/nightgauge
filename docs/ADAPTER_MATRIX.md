@@ -635,15 +635,15 @@ disposition; see the ADR for the reasoning behind each:
 | Export                           | supported, sanitized only                     | ADR-022 § 22               |
 | Import                           | non-goal                                      | ADR-022 § 15               |
 | Usage (`opencode stats`)         | non-goal                                      | ADR-022 § 15               |
-| `json_schema` output             | deferred                                      | #1650                      |
+| `json_schema` output             | non-goal                                      | #1650                      |
 | Variants (`--variant`)           | supported                                     | #1643                      |
 | Compaction                       | supported                                     | #1625, #1641               |
 | Worktrees and workspaces         | non-goal                                      | ADR-022 § 15               |
 | Snapshots                        | off by default                                | ADR-022 § 12               |
 | LSP                              | supported, installed servers                  | ADR-022 § 12               |
 | Share                            | non-goal                                      | ADR-022 § 10               |
-| GitHub agent (`opencode github`) | deferred                                      | #1650                      |
-| ACP                              | deferred                                      | #1650                      |
+| GitHub agent (`opencode github`) | non-goal                                      | #1650                      |
+| ACP                              | non-goal                                      | #1650                      |
 | `serve` and `run --attach`       | deferred                                      | #1650                      |
 
 **Go support:** registered in `internal/execution/adapters/registry.go`;
