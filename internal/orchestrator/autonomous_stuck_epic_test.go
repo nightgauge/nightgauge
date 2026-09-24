@@ -678,3 +678,78 @@ func TestAlertStuckEpics_BuildsSlackSinkFromSharedConfig(t *testing.T) {
 		t.Fatalf("Sinks = %v, want a slack-only sink", sink)
 	}
 }
+
+// #1937 AC3 — the #477 shape. The epic carries edges to its OWN sub-issues
+// (body prose describing their wiring), and those sub-issues have DIFFERENT
+// blocked-sets: #478 none, #479 and #480 blocked by #478. Cascading the
+// epic's edges made #478 "(via epic #477) blocked by #478" and parked a
+// ready, unblocked issue. A fixture where every sub is blocked could not tell
+// the epic's edges from each sub's own.
+func issue477Graph(extraEpicBlocker bool) *depgraph.Graph {
+	id := func(n int) depgraph.NodeID { return depgraph.NodeID{Repo: "o/r", Number: n} }
+	g := depgraph.NewGraph()
+	g.AddNode(&depgraph.Node{Repo: "o/r", Number: 477, Title: "Epic", State: "OPEN", BoardStatus: "In progress", Labels: []string{"type:epic"}})
+	g.AddNode(&depgraph.Node{Repo: "o/r", Number: 478, Title: "Schema", State: "OPEN", BoardStatus: "Ready", EpicNumber: 477})
+	g.AddNode(&depgraph.Node{Repo: "o/r", Number: 479, Title: "Skills", State: "OPEN", BoardStatus: "Ready", EpicNumber: 477})
+	g.AddNode(&depgraph.Node{Repo: "o/r", Number: 480, Title: "Materializer", State: "OPEN", BoardStatus: "Ready", EpicNumber: 477})
+	g.AddEdge(depgraph.Edge{From: id(479), To: id(478), Type: "blockedBy"})
+	g.AddEdge(depgraph.Edge{From: id(480), To: id(478), Type: "blockedBy"})
+	for _, sub := range []int{478, 479, 480} {
+		g.AddEdge(depgraph.Edge{From: id(477), To: id(sub), Type: "bodyDeclared"})
+	}
+	if extraEpicBlocker {
+		g.AddNode(&depgraph.Node{Repo: "o/r", Number: 100, Title: "Upstream", State: "OPEN", BoardStatus: "In progress"})
+		g.AddEdge(depgraph.Edge{From: id(477), To: id(100), Type: "blockedBy"})
+	}
+	return g
+}
+
+func TestStuckEpics_EpicEdgesToItsOwnSubsDoNotCascade(t *testing.T) {
+	got := stuckEpicsFromGraph(issue477Graph(false), stuckEpicScanOpts{
+		now: time.Unix(1_700_000_000, 0), runningSet: map[string]bool{},
+		isRecovering: noRecovery, failureReason: noReason,
+	})
+	for _, e := range got {
+		if e.Number == 477 {
+			t.Fatalf("#478 is ready and unblocked, so epic #477 is not stalled; got %q", e.Summary())
+		}
+	}
+}
+
+func TestStuckEpics_CascadeNamesOnlyTheEpicsRealBlocker(t *testing.T) {
+	got := stuckEpicsFromGraph(issue477Graph(true), stuckEpicScanOpts{
+		now: time.Unix(1_700_000_000, 0), runningSet: map[string]bool{},
+		isRecovering: noRecovery, failureReason: noReason,
+	})
+	reasons := map[int]string{}
+	for _, e := range got {
+		if e.Number == 477 {
+			for _, b := range e.Blockers {
+				reasons[b.Number] = b.Reason
+			}
+		}
+	}
+	if want := "(via epic #477) blocked by #100 (open)"; reasons[478] != want {
+		t.Errorf("#478 reason = %q, want %q", reasons[478], want)
+	}
+	for _, sub := range []int{479, 480} {
+		if want := "blocked by #478 (open)"; reasons[sub] != want {
+			t.Errorf("#%d reason = %q, want its own blocker %q", sub, reasons[sub], want)
+		}
+	}
+}
+
+func TestPrioritize_EpicEdgesToItsOwnSubsDoNotCascade(t *testing.T) {
+	as := &AutonomousScheduler{
+		config: AutonomousConfig{MaxConcurrent: 5},
+		repos:  []depgraph.RepoConfig{{Owner: "o", Name: "r", Project: 1}},
+		state:  &AutonomousState{},
+	}
+	var got []int
+	for _, c := range as.prioritize(context.Background(), issue477Graph(false)) {
+		got = append(got, c.Number)
+	}
+	if len(got) != 1 || got[0] != 478 {
+		t.Errorf("candidates = %v, want only #478 (#479 and #480 wait on it)", got)
+	}
+}

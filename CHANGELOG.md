@@ -644,6 +644,18 @@ create --body-file` call, so the compact profile (and its tests) pin
 
 ### Fixed
 
+- **A ready issue is no longer parked behind its own epic (#1937).** The
+  dependency parser read three kinds of epic-body prose as the epic's own
+  blockers: arrow notation describing edges between its sub-issues
+  (`#479 ← #478`), a sentence ending in closing emphasis
+  (`**… depends on this epic.** … (#948)`, which inverted the direction), and
+  quoted output inside fenced code. The epic cascade then applied those edges
+  to the epic's children. That made #478 "(via epic #477) blocked by #478" and
+  kept it from being dispatched. The parser now skips all three. The dispatcher
+  and the stuck-epic watchdog ignore an epic's edges to its own sub-issues, and
+  a self-edge is dropped and logged when the graph is built. On the live board
+  this removed 10 false edges and no real ones.
+
 - **`nightgauge stash sweep` no longer pops another branch's stash onto
   `HEAD` (#1938).** A restore now skips a stash recorded on a different
   branch, or any stash when `HEAD` is detached, and reports it as

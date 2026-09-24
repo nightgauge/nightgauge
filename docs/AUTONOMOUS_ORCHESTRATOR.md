@@ -92,6 +92,13 @@ This prevents accidental out-of-order execution when epics are wired with
 **Example**: If epic E3 has `blockedBy` E1, all sub-issues of E3 are gated until
 E1 is closed or its board status reflects completed work ("In review", "Done").
 
+**An epic's edges to its own sub-issues never cascade** (#1937). "Epic blocked
+by its child" states containment, not a gate: cascading it parks the child on
+itself or on a sibling that waits on the epic. The dispatcher and the
+stuck-epic watchdog both drop such edges from the cascade (the dispatcher logs
+them once per scan as a data defect). A self-edge is dropped when the graph is
+built.
+
 **Config** (opt-out): Set `autonomous.disable_epic_blockedby_cascade: true` in
 `.nightgauge/config.yaml` to revert to individual-issue-only blocking.
 
@@ -867,7 +874,8 @@ Two rules keep the bare form from over-matching:
 - A keyword claims **its own sentence, not the rest of the line**. Each
   declaration runs from the keyword to the earliest of the next keyword on that
   line or a sentence terminator (`.`, `;`, `!`, `?` followed by whitespace or
-  end of line); a `.` inside a token — `v1.2` — is not a terminator, and a `;`
+  end of line, optionally through closing emphasis, brackets or quotes, so
+  `**Depends on this epic.** … (#948)` ends at the `.`); a `.` inside a token — `v1.2` — is not a terminator, and a `;`
   followed immediately by another reference is a list separator, so
   `Blocked by #1187; #1190` remains one enumeration. Every keyword on the line
   is honoured with its own source label, so `Blocked by #5. Depends on #6`
@@ -891,6 +899,13 @@ Two rules keep the bare form from over-matching:
   its children, deadlocking the issue and every sibling reached through the
   epic cascade (#1497). The relation must sit immediately in front of the
   reference: `- #535 — needed for the epic rollout` is still a dependency.
+- A declaration that **relates two other issues** with an arrow
+  (`#479 ← #478`, `#5 -> #6`) describes their wiring, not a dependency of the
+  issue whose body it is in. `blockedBy wiring: #479 ← #478, #480 ← #478` in
+  an epic body declares nothing for the epic (#1937).
+- **Fenced code blocks are not read.** A fence quotes pasted output, logs or an
+  attention card; `blocked by #478` inside one is evidence, not a declaration
+  (#1937).
 - A `#N` already qualified by a repo token ("platform #535",
   `acme/platform#535`) is **not** also read as a same-repo reference, which
   would block on an unrelated issue that happens to share a number.
