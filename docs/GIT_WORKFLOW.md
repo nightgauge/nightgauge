@@ -1275,7 +1275,9 @@ Four things about it are deliberate:
   that cannot answer "did a Go input change?" runs the suites.
 - **Nothing else is ever skipped**, whatever the scope: the generated-file drift
   checks, the changelog contract, the publication boundary and the credential
-  scan always run, and so do `go build ./...` and `gofmt`.
+  scan always run, and so do `go build ./...` and `gofmt`. The credential scan
+  needs `gitleaks` on `PATH` (`brew install gitleaks`, the version CI pins);
+  without it the step reports INFRASTRUCTURE rather than passing.
 
 What this buys is earlier feedback, not less safety: PR CI runs every step
 regardless, so a miss here costs a CI round trip rather than a bad merge.
