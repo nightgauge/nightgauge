@@ -130,17 +130,18 @@ describe("UsageProviderRegistry", () => {
 
 describe("unknown fallback", () => {
   it("reports plan.kind unknown with no windows when no provider claims the adapter", async () => {
-    // The real provider, the real reason: ollama has no dollar meter.
+    // The real provider, the real reason: copilot's meter is premium
+    // requests, which local telemetry does not record.
     const local = new LocalTelemetryUsageProvider(
       { readDateRange: async () => [] },
       { getSessionStartTime: () => NOW }
     );
-    const service = serviceWith(local, "ollama");
+    const service = serviceWith(local, "copilot");
 
     const snapshot = await service.getSnapshot();
 
     expect(snapshot).toEqual({
-      adapter: "ollama",
+      adapter: "copilot",
       plan: { kind: "unknown" },
       capturedAt: NOW,
       windows: [],

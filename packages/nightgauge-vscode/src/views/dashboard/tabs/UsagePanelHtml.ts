@@ -304,7 +304,7 @@ export function getUsagePanelSectionHtml(
     <div class="section-content">
       <div class="usage-limits-card">
         <p class="usage-value">No usage provider can describe the <strong>${escapeHtml(state.adapter)}</strong> adapter, so its usage is <strong>unknown</strong> &mdash; not zero.</p>
-        <p class="usage-panel-note">Local telemetry meters adapters billed per token. Adapters that run on your own hardware, or that bill a flat seat subscription, have no dollar meter to report, and nightgauge will not draw a bar it cannot fill honestly.</p>
+        <p class="usage-panel-note">Local telemetry meters adapters billed per token, and counts tokens for models that run on your own hardware. An adapter that bills a flat seat subscription, or whose model cannot be attributed to a provider, has no meter to report, and nightgauge will not draw a bar it cannot fill honestly.</p>
         ${captured}
       </div>
     </div>
@@ -342,13 +342,18 @@ export function getUsagePanelSectionHtml(
  * mean completely different things: a subscription window is an allowance that
  * refills, a pay-per-token window is spend that accumulates against a budget
  * the operator set. Naming which one is on screen is the difference between
- * "62% of my week is gone" and "$178.61 of an open-ended total".
+ * "62% of my week is gone" and "$178.61 of an open-ended total". A local model
+ * (Issue #1665) is billed by nobody, so its windows are token counts and the
+ * badge says so.
  *
  * `unknown` never reaches here — that plan renders its own empty state above.
  */
 function planBadgeHtml(planKind: UsagePlanKind): string {
   if (planKind === "subscription-window") {
     return '<span class="badge badge-info">Subscription plan</span>';
+  }
+  if (planKind === "local") {
+    return '<span class="badge badge-muted">Local model</span>';
   }
   return '<span class="badge badge-muted">Pay per token</span>';
 }

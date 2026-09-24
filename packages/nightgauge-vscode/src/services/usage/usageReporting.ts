@@ -54,9 +54,14 @@
  * actually deciding about. Today the split is exact: `usd` windows come from
  * `LocalTelemetryUsageProvider`'s rate-card reduction of this workspace's own
  * pipeline history, and `percent` windows are Claude's own statement of the
- * account's allowance. A future vendor-reported token allowance would be
- * included in `minimal`, which is correct — it is the vendor describing its own
- * ceiling, not a figure about what this operator has spent.
+ * account's allowance. `tokens` windows — a `local` plan's count of what the
+ * operator's own model server processed (Issue #1665) — are not monetary and
+ * are kept in `minimal`, as a future vendor-reported token allowance would be.
+ *
+ * The plan kind travels unchanged, `local` included: the hosted service
+ * accepts it (nightgauge/nightgauge-platform#1463). An older self-hosted
+ * deployment that rejects it is handled by `AgentHeartbeatService`, which
+ * downgrades that session's reports to `unknown`.
  *
  * ## The tier travels with the payload
  *

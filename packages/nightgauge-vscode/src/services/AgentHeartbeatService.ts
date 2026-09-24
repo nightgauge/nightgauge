@@ -16,6 +16,22 @@ import type { ReportedUsage } from "./usage/usageReporting";
  */
 export type UsageReportProvider = () => Promise<ReportedUsage | null>;
 
+/**
+ * How one heartbeat attempt ended. `rejected-after-downgrade` is a failure
+ * whose one resend has already been spent on the `local` → `unknown`
+ * downgrade, so the beat is not retried again.
+ */
+type AttemptOutcome = "ok" | "failed" | "rejected-after-downgrade";
+
+/**
+ * True for a 4xx that rejects the request itself. 401/403 are an expired
+ * token (refreshed above) and 429 is rate limiting: neither says anything
+ * about the body, so neither downgrades the plan.
+ */
+function isBodyRejection(status: number): boolean {
+  return status >= 400 && status < 500 && status !== 401 && status !== 403 && status !== 429;
+}
+
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const RETRY_DELAY_MS = 5_000;
 const MAX_CONSECUTIVE_FAILURES = 3;
@@ -28,6 +44,14 @@ export class AgentHeartbeatService implements vscode.Disposable {
   private timer: ReturnType<typeof setInterval> | null = null;
   private consecutiveFailures = 0;
   private agentId: string | null = null;
+  /**
+   * Pinned once the server has rejected a heartbeat carrying `plan: "local"`
+   * (Issue #1665). An older self-hosted deployment predates that plan kind
+   * and fails the whole body over it, so for the rest of this session every
+   * `local` report is sent as `unknown` instead. Never reset: the server does
+   * not learn the plan mid-session.
+   */
+  private localPlanDowngraded = false;
 
   constructor(
     private readonly getPlatformUrl: () => string,
@@ -61,10 +85,14 @@ export class AgentHeartbeatService implements vscode.Disposable {
 
   private async sendHeartbeat(): Promise<void> {
     if (!this.agentId) return;
-    const success = await this.attemptHeartbeat();
-    if (!success) {
-      await sleep(RETRY_DELAY_MS);
-      const retrySuccess = await this.attemptHeartbeat();
+    const outcome = await this.attemptHeartbeat();
+    if (outcome !== "ok") {
+      let retrySuccess = false;
+      // A beat whose downgrade resend was rejected has already had its one retry.
+      if (outcome === "failed") {
+        await sleep(RETRY_DELAY_MS);
+        retrySuccess = (await this.attemptHeartbeat()) === "ok";
+      }
       if (!retrySuccess) {
         this.consecutiveFailures++;
         if (this.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
@@ -78,61 +106,96 @@ export class AgentHeartbeatService implements vscode.Disposable {
     this.consecutiveFailures = 0;
   }
 
-  private async attemptHeartbeat(): Promise<boolean> {
+  private async attemptHeartbeat(): Promise<AttemptOutcome> {
     try {
       let token = await this.tokenStorage.retrieve("accessToken");
-      if (!token || !this.agentId) return false;
+      if (!token || !this.agentId) return "failed";
 
-      let response = await this.putHeartbeat(token);
+      const usage = await this.usageReport();
+      let response = await this.putHeartbeat(token, usage);
 
       // On 401/403, refresh once and retry (mirrors registration fix #3697).
       if ((response.status === 401 || response.status === 403) && this.tokenRefresher) {
         const refreshed = await this.refreshAccessToken();
         if (refreshed) {
-          response = await this.putHeartbeat(refreshed);
+          token = refreshed;
+          response = await this.putHeartbeat(token, usage);
         }
       }
 
-      return response.ok;
+      // Issue #1665: a server that predates `plan: "local"` rejects the whole
+      // body over it. Resend this beat exactly once as `unknown` and pin that
+      // for the session. Not a loop: once pinned, no report is `local` again,
+      // so this branch cannot be taken twice.
+      if (
+        !response.ok &&
+        isBodyRejection(response.status) &&
+        usage?.plan === "local" &&
+        !this.localPlanDowngraded
+      ) {
+        this.localPlanDowngraded = true;
+        this.logger.warn(
+          `AgentHeartbeatService: the server rejected usage plan "local" (HTTP ${response.status}); ` +
+            'reporting plan "unknown" for the rest of this session'
+        );
+        response = await this.putHeartbeat(token, downgradeLocalPlan(usage));
+        return response.ok ? "ok" : "rejected-after-downgrade";
+      }
+
+      return response.ok ? "ok" : "failed";
     } catch {
-      return false;
+      return "failed";
     }
   }
 
-  private async putHeartbeat(token: string): Promise<Response> {
+  private async putHeartbeat(token: string, usage: ReportedUsage | null): Promise<Response> {
     return fetch(`${this.getPlatformUrl()}/v1/agents/${this.agentId!}/heartbeat`, {
       method: "PUT",
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
-      ...(await this.usageBody()),
+      ...(usage === null ? {} : { body: JSON.stringify({ usage }) }),
     });
   }
 
   /**
-   * The request body for this beat: `{ body }` when a report is due, and an
-   * empty object — no `body` key at all — otherwise.
+   * The usage report for this beat, or `null` for a bodiless PUT — no `body`
+   * key at all. Once the session is downgraded, a `local` report is sent as
+   * `unknown`.
    *
    * A usage report must never cost the operator agent presence, so a provider
    * that throws is swallowed: the beat proceeds bodiless and the dashboard
    * keeps whatever it was last told. Losing one sample is a far better trade
    * than flipping a machine offline over telemetry.
    */
-  private async usageBody(): Promise<{ body?: string }> {
+  private async usageReport(): Promise<ReportedUsage | null> {
     if (!this.getUsageReport) {
-      return {};
+      return null;
     }
     try {
       const usage = await this.getUsageReport();
-      return usage === null ? {} : { body: JSON.stringify({ usage }) };
+      if (usage !== null && usage.plan === "local" && this.localPlanDowngraded) {
+        return downgradeLocalPlan(usage);
+      }
+      return usage;
     } catch (error) {
       this.logger.warn(`AgentHeartbeatService: usage report skipped — ${String(error)}`);
-      return {};
+      return null;
     }
   }
 
   private refreshAccessToken(): Promise<string | null> {
     return this.tokenRefresher?.forceRefresh() ?? Promise.resolve(null);
   }
+}
+
+/**
+ * A `local` report as a server that predates the plan kind accepts it:
+ * `unknown`, with its windows dropped, because ADR-018 pairs `unknown` with
+ * an empty window list and a server that cannot name the plan cannot label
+ * its windows either.
+ */
+function downgradeLocalPlan(usage: ReportedUsage): ReportedUsage {
+  return { ...usage, plan: "unknown", windows: [] };
 }

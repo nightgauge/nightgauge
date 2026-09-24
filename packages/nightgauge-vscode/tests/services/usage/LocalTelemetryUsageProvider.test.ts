@@ -12,7 +12,7 @@
  * approximately right.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, expectTypeOf, beforeEach, afterEach, vi } from "vitest";
 import {
   LocalTelemetryUsageProvider,
   LOCAL_TELEMETRY_METERED_ADAPTERS,
@@ -20,6 +20,7 @@ import {
   type UsageHistorySource,
   type UsageSessionClock,
 } from "../../../src/services/usage/LocalTelemetryUsageProvider";
+import type { UsagePlanKind } from "../../../src/services/usage/types";
 import type { ExecutionAdapter } from "../../../src/config/schema";
 import {
   ExecutionHistoryRunRecordV2Schema,
@@ -36,7 +37,8 @@ type StageUsageFixture = Partial<HistoryStageTokenUsage> & { cost_usd: number };
 /** A schema-valid v2 run record carrying the given per-stage token entries. */
 function runRecord(
   startedAt: Date,
-  perStage: Record<string, StageUsageFixture>
+  perStage: Record<string, StageUsageFixture>,
+  stages: Record<string, unknown> = {}
 ): ExecutionHistoryRecord {
   const tokens: Record<string, unknown> = {};
   for (const [stage, usage] of Object.entries(perStage)) {
@@ -54,7 +56,7 @@ function runRecord(
     completed_at: new Date(startedAt.getTime() + 60_000).toISOString(),
     total_duration_ms: 60_000,
     outcome: "complete",
-    stages: {},
+    stages,
     tokens: {
       total_input: 0,
       total_output: 0,
@@ -86,11 +88,19 @@ const sessionClock = (start: Date): UsageSessionClock => ({ getSessionStartTime:
 /** Session started at 09:00 today — inside the day, well inside the month. */
 const SESSION_START = new Date(2026, 7, 17, 9, 0, 0);
 
-function provider(records: ExecutionHistoryRecord[], sessionStart = SESSION_START) {
+function provider(
+  records: ExecutionHistoryRecord[],
+  sessionStart = SESSION_START,
+  openCodeModel?: string
+) {
   const source = new FakeHistorySource(records);
   return {
     source,
-    provider: new LocalTelemetryUsageProvider(source, sessionClock(sessionStart)),
+    provider: new LocalTelemetryUsageProvider(
+      source,
+      sessionClock(sessionStart),
+      () => openCodeModel
+    ),
   };
 }
 
@@ -110,21 +120,25 @@ describe("supports()", () => {
     expect(provider([]).provider.supports(adapter)).toBe(true);
   });
 
-  // Local inference has no dollar meter and a flat seat is metered in
-  // requests, so a dollar window for either would be an invented number.
-  it.each<ExecutionAdapter>(["lm-studio", "ollama", "copilot"])(
-    "declines %s, which is not metered in dollars",
+  it.each<ExecutionAdapter>(["lm-studio", "ollama", "opencode"])(
+    "claims %s, which it meters in tokens or dollars by provider (#1665)",
     (adapter) => {
-      expect(provider([]).provider.supports(adapter)).toBe(false);
+      expect(provider([]).provider.supports(adapter)).toBe(true);
     }
   );
 
+  // A flat seat is metered in requests, so a dollar or token window would be
+  // an invented number.
+  it("declines copilot, which is metered in neither dollars nor tokens", () => {
+    expect(provider([]).provider.supports("copilot")).toBe(false);
+  });
+
   it("returns no snapshot for an adapter it does not claim", async () => {
     const { provider: p, source } = provider([
-      runRecord(NOW, { "feature-dev": { cost_usd: 3, adapter: "ollama" } }),
+      runRecord(NOW, { "feature-dev": { cost_usd: 3, adapter: "copilot" } }),
     ]);
 
-    await expect(p.getSnapshot("ollama")).resolves.toBeNull();
+    await expect(p.getSnapshot("copilot")).resolves.toBeNull();
     // It must not even read history for an adapter it cannot describe.
     expect(source.calls).toHaveLength(0);
   });
@@ -356,4 +370,195 @@ describe("confidence", () => {
       "unknown",
     ]);
   });
+});
+
+/** The history reads the provider sees for an `opencode` month (#1665). */
+const LOCAL_MODEL = "lmstudio/qwen/qwen3.8-27b";
+
+describe("the local plan (#1665, ADR-018 amendment)", () => {
+  it("has local in the plan-kind union", async () => {
+    expectTypeOf<"local">().toMatchTypeOf<UsagePlanKind>();
+    const kinds: Record<UsagePlanKind, true> = {
+      "subscription-window": true,
+      "pay-per-token": true,
+      local: true,
+      unknown: true,
+    };
+    expect(Object.keys(kinds)).toContain("local");
+  });
+
+  it("gives opencode on a local configured model a local snapshot with token windows and no USD", async () => {
+    // Even with a dollar budget set: it bounds dollars, not tokens.
+    setMockUIConfig({ limits: { monthly_budget_usd: 50 } });
+    const { provider: p } = provider(
+      [
+        runRecord(new Date(2026, 7, 3, 12, 0), {
+          "feature-dev": {
+            cost_usd: 0,
+            adapter: "opencode",
+            model: LOCAL_MODEL,
+            input: 1000,
+            output: 200,
+            cache_read: 50,
+            cache_creation: 0,
+          },
+        }),
+        runRecord(new Date(2026, 7, 17, 9, 30), {
+          "feature-dev": {
+            cost_usd: 0,
+            adapter: "opencode",
+            model: LOCAL_MODEL,
+            input: 3000,
+            output: 400,
+            cache_read: 0,
+            cache_creation: 100,
+          },
+        }),
+      ],
+      SESSION_START,
+      LOCAL_MODEL
+    );
+
+    const snapshot = await p.getSnapshot("opencode");
+
+    expect(snapshot!.plan.kind).toBe("local");
+    expect(snapshot!.windows.map((w) => [w.scope, w.unit, w.used, w.limit])).toEqual([
+      ["session", "tokens", 3500, null],
+      ["daily", "tokens", 3500, null],
+      ["monthly", "tokens", 4750, null],
+    ]);
+    expect(snapshot!.windows.some((w) => w.unit === "usd")).toBe(false);
+    expect(snapshot!.windows.every((w) => w.confidence === "measured")).toBe(true);
+  });
+
+  it("counts only local-provider stages in a local snapshot", async () => {
+    const { provider: p } = provider(
+      [
+        runRecord(new Date(2026, 7, 17, 9, 30), {
+          "feature-dev": { cost_usd: 0, adapter: "opencode", model: LOCAL_MODEL, input: 10 },
+          "feature-validate": {
+            cost_usd: 2,
+            adapter: "opencode",
+            model: "anthropic/claude-sonnet-5",
+            input: 999,
+          },
+        }),
+      ],
+      SESSION_START,
+      LOCAL_MODEL
+    );
+
+    const snapshot = await p.getSnapshot("opencode");
+
+    expect(snapshot!.windows.map((w) => w.used)).toEqual([10, 10, 10]);
+  });
+
+  it("gives opencode on a hosted model USD windows from that provider's records only", async () => {
+    const { provider: p } = provider(
+      [
+        runRecord(
+          new Date(2026, 7, 17, 9, 30),
+          {
+            // A registry model is recorded by its bare id (ADR-022 § 2); the
+            // recorded model_provider names the provider.
+            "feature-dev": {
+              cost_usd: 1.5,
+              adapter: "opencode",
+              model: "claude-sonnet-5",
+              cost_source: "computed",
+            },
+            "feature-validate": {
+              cost_usd: 0,
+              adapter: "opencode",
+              model: LOCAL_MODEL,
+              input: 5000,
+            },
+            "pr-create": {
+              cost_usd: 4,
+              adapter: "opencode",
+              model: "openai/gpt-5.5",
+              cost_source: "computed",
+            },
+          },
+          {
+            "feature-dev": {
+              status: "complete",
+              model_selection: {
+                model: "claude-sonnet-5",
+                source: "scheduler",
+                model_provider: "anthropic",
+                upstream_model: "anthropic/claude-sonnet-5",
+              },
+            },
+          }
+        ),
+        runRecord(new Date(2026, 7, 17, 9, 45), {
+          "feature-dev": {
+            cost_usd: 0.25,
+            adapter: "opencode",
+            model: "anthropic/claude-sonnet-5",
+            cost_source: "computed",
+          },
+        }),
+      ],
+      SESSION_START,
+      "anthropic/claude-sonnet-5"
+    );
+
+    const snapshot = await p.getSnapshot("opencode");
+
+    expect(snapshot!.plan.kind).toBe("pay-per-token");
+    expect(snapshot!.windows.map((w) => [w.unit, w.used])).toEqual([
+      ["usd", 1.75],
+      ["usd", 1.75],
+      ["usd", 1.75],
+    ]);
+  });
+
+  it("returns no snapshot for opencode with no configured model, or one of provider other", async () => {
+    const records = [
+      runRecord(NOW, { "feature-dev": { cost_usd: 0, adapter: "opencode", model: LOCAL_MODEL } }),
+    ];
+
+    await expect(provider(records).provider.getSnapshot("opencode")).resolves.toBeNull();
+    await expect(
+      provider(records, SESSION_START, "openrouter/meta-llama/llama-4").provider.getSnapshot(
+        "opencode"
+      )
+    ).resolves.toBeNull();
+  });
+
+  it("returns no snapshot when a local opencode model has no local stage in the horizon", async () => {
+    const { provider: p } = provider(
+      [
+        runRecord(NOW, {
+          "feature-dev": { cost_usd: 1, adapter: "opencode", model: "anthropic/claude-sonnet-5" },
+        }),
+      ],
+      SESSION_START,
+      LOCAL_MODEL
+    );
+
+    await expect(p.getSnapshot("opencode")).resolves.toBeNull();
+  });
+
+  it.each<ExecutionAdapter>(["lm-studio", "ollama"])(
+    "gives the %s bridge a local snapshot in tokens (ADR-022 § 4)",
+    async (adapter) => {
+      const { provider: p } = provider([
+        runRecord(new Date(2026, 7, 17, 9, 30), {
+          "feature-dev": { cost_usd: 0, adapter, model: "qwen3-coder:30b", input: 70, output: 30 },
+        }),
+      ]);
+
+      const snapshot = await p.getSnapshot(adapter);
+
+      expect(snapshot!.plan.kind).toBe("local");
+      expect(snapshot!.windows.map((w) => [w.unit, w.used, w.limit])).toEqual([
+        ["tokens", 100, null],
+        ["tokens", 100, null],
+        ["tokens", 100, null],
+      ]);
+    }
+  );
 });

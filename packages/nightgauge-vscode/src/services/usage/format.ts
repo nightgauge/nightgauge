@@ -42,7 +42,8 @@ function formatTokenCount(value: number): string {
  * `utilization` (Issue #709). The formatter needed no change when that
  * landed, which was the point of honouring the unit ahead of its producer.
  *
- * `tokens` and `requests` are still reserved — no provider emits either.
+ * `tokens` is the `local` plan's unit (Issue #1665); `requests` is still
+ * reserved — no provider emits it.
  */
 export function formatUsageValue(value: number, unit: UsageUnit): string {
   switch (unit) {

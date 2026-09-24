@@ -324,6 +324,20 @@ describe("plan badge and the Claude Max feed prompt (#730)", () => {
     expect(html).not.toContain("Pay per token");
   });
 
+  it("badges a local snapshot as a local model and shows its token figure (#1665)", () => {
+    const html = render({
+      adapter: "opencode",
+      plan: { kind: "local" },
+      capturedAt: NOW,
+      windows: [makeWindow({ used: 4750, limit: null, unit: "tokens", resetsAt: null })],
+    });
+
+    expect(html).toContain("Local model");
+    expect(html).toContain("4.8k tokens");
+    expect(html).not.toContain("Pay per token");
+    expect(html).not.toContain("usage is <strong>unknown</strong>");
+  });
+
   it("badges a dollar snapshot as pay-per-token", () => {
     const html = render(makeSnapshot([makeWindow()]));
 

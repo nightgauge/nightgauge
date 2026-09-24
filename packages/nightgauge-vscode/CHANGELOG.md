@@ -18,6 +18,10 @@ and this project adheres to
 
 ### Added
 
+- The usage meter and the Dashboard's usage panel show token counts and a
+  "Local model" badge for a model running on your own LM Studio or Ollama
+  server, instead of "usage unknown" (#1665).
+
 - Pipeline health reads each OpenCode stage's context-window utilization and
   compaction count from the run history (#1653), so a stage that uses under
   30% of its model's window on average is reported as a low-utilization

@@ -45,10 +45,16 @@ import type { ClaudeFeedHealth } from "./claudeStatusLineSetup";
  *   adapter name: the `claude` adapter also covers an API-key, pay-per-token
  *   path that emits no such event and stays `pay-per-token`. A Copilot
  *   provider would be the second producer; none exists yet.
+ * - `local` — the model runs on a server the operator runs, so no provider
+ *   bills it (Issue #1665, ADR-022 § 4). Produced by
+ *   `LocalTelemetryUsageProvider` for `opencode` with a local configured model
+ *   and for the `lm-studio` and `ollama` bridges. Its windows count tokens
+ *   (`unit: "tokens"`, `limit: null`) and it never carries a `usd` window: a
+ *   $0 bar is the silently-zeroed bar #658 forbids.
  * - `unknown` — no provider could describe this adapter. Always paired with an
  *   empty `windows` list; see `unknownUsageSnapshot`.
  */
-export type UsagePlanKind = "subscription-window" | "pay-per-token" | "unknown";
+export type UsagePlanKind = "subscription-window" | "pay-per-token" | "local" | "unknown";
 
 /**
  * The period a `UsageWindow` measures.
@@ -67,18 +73,20 @@ export type UsageWindowScope = "session" | "rolling" | "daily" | "weekly" | "mon
 /**
  * What `used`/`limit` are counted in.
  *
- * Two have producers:
+ * Three have producers:
  *
- * - `usd` — every `LocalTelemetryUsageProvider` window.
+ * - `usd` — every `pay-per-token` `LocalTelemetryUsageProvider` window.
+ * - `tokens` — every `local` `LocalTelemetryUsageProvider` window (Issue
+ *   #1665): the tokens a local model server processed. It carries no limit;
+ *   no provider grants a local model an allowance.
  * - `percent` — `ClaudeRateLimitUsageProvider` (Issue #709). That channel
  *   reports `utilization` (0-100) and no denominator, so the only honest
  *   rendering is `used: utilization, limit: 100, unit: "percent"`. This is a
  *   **vendor reported** percentage; a percentage this model computed for a
  *   window whose real usage it does not know remains forbidden.
  *
- * Two are still reserved for named providers, and nothing emits them:
+ * One is still reserved for a named provider, and nothing emits it:
  *
- * - `tokens` — a provider that gets an absolute token allowance.
  * - `requests` — a Copilot provider; premium requests per month.
  */
 export type UsageUnit = "tokens" | "usd" | "requests" | "percent";

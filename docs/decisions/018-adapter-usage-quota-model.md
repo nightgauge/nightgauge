@@ -572,3 +572,72 @@ of is not opt-out; it is undisclosed collection.** The notice is the
 consideration paid for the default, not a nicety bolted on beside it — and if
 the disclosure is too awkward to write honestly, that is evidence about the
 default, not about the wording.
+
+## Amendment: `local` plan (#1665)
+
+[ADR-022 § 4](022-opencode-multi-provider-adapter.md#4-the-local-usage-plan-amends-adr-018)
+decided that a model running on a server the operator runs gets its own plan
+kind. A keyless local model run is neither `subscription-window` nor
+`pay-per-token`, and `unknown` ("cannot say") was false: Nightgauge knows
+exactly what no provider billed. `UsagePlanKind` gains `local`.
+
+### The window rules
+
+- A `local` snapshot carries local-telemetry windows (session, daily,
+  monthly) in `unit: "tokens"`, each with `limit: null`. No provider grants a
+  local model an allowance, and the dollar budget does not bound tokens, so
+  any limit would be invented. `used` is every token the model server
+  processed: input, output, cache read and cache write. Its confidence is
+  `measured`, because a token count is what the server reported and not a
+  price derived from it.
+- A `local` snapshot never carries a `usd` window. A $0 bar is the
+  silently-zeroed bar #658 forbids.
+- `windows` stays empty exactly when `plan.kind === "unknown"`. A `local`
+  snapshot always has its three windows.
+
+ADR-022 § 4 described `local` "with no windows". That wording would break the
+empty-iff-unknown invariant above, and it would leave the operator with a
+label and no meter. This amendment is the rule; the token windows are what
+#1665 implements.
+
+### Which snapshots are `local`
+
+`LocalTelemetryUsageProvider` now claims `lm-studio`, `ollama` and
+`opencode`, which reverses "deliberately does not claim every adapter" above
+for the two bridges. The reason given there, that a dollar bar would sit at
+0% forever, does not apply to a token window.
+
+- `lm-studio` and `ollama` serve only local models, so they are always
+  `local`. ADR-022 § 4 names them too.
+- `opencode` follows the provider of the configured `opencode.model`, derived
+  by the SDK's `providerFor` (ADR-022 § 1):
+  - a local provider (`lm-studio`, `ollama`) gives `local`, whose token
+    windows count only stages a local provider served;
+  - a hosted provider (`anthropic`, `openai`, `xai`, `google`) gives
+    `pay-per-token`, whose dollar windows count only that provider's stages,
+    so a month that mixed a local and a hosted model is not blended into one
+    figure;
+  - no configured model, or a provider of `other`, gives `unknown`.
+
+  A stage's provider is its recorded `model_selection.model_provider`
+  (ADR-022 § 2). A stage without one falls back to its model string.
+
+`copilot` stays `unknown`.
+
+### The wire
+
+`buildUsageReport` sends the plan kind unchanged, so a `local` snapshot
+reports `plan: "local"`. Token windows are not monetary, so the `minimal`
+tier keeps them. The hosted service accepts `local`
+(nightgauge/nightgauge-platform#1463). A self-hosted deployment older than
+that rejects the whole body. After a 4xx on a `plan: "local"` heartbeat,
+`AgentHeartbeatService` resends that beat once as `unknown` with no windows,
+and it keeps sending `unknown` for the rest of the session. It logs this once.
+It is one resend and never a loop.
+
+### Produced today, updated
+
+| Member               | Status           | Producer / reason                                                                        |
+| -------------------- | ---------------- | ---------------------------------------------------------------------------------------- |
+| `plan.kind: "local"` | Produced (#1665) | `LocalTelemetryUsageProvider` for `lm-studio`, `ollama` and `opencode` on a local model. |
+| `unit: "tokens"`     | Produced (#1665) | Every `local` window. The table above listed it as reserved.                             |

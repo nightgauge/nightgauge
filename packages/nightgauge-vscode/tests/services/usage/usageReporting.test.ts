@@ -246,3 +246,43 @@ describe("getUsageReportingLevel — consent is supplied, the tier is read (#738
     expect(getUsageReportingLevel(true)).toBe("full");
   });
 });
+
+describe("buildUsageReport — the local plan (#1665)", () => {
+  function tokenWindow(scope: UsageWindow["scope"], used: number): UsageWindow {
+    return {
+      id: `local-telemetry:${scope}`,
+      label: scope,
+      scope,
+      used,
+      limit: null,
+      unit: "tokens",
+      resetsAt: null,
+      confidence: "measured",
+    };
+  }
+
+  const local: UsageSnapshot = {
+    adapter: "opencode",
+    plan: { kind: "local" },
+    capturedAt: CAPTURED,
+    windows: [
+      tokenWindow("session", 3500),
+      tokenWindow("daily", 3500),
+      tokenWindow("monthly", 4750),
+    ],
+  };
+
+  it.each<UsageReportingLevel>(["minimal", "full"])(
+    "sends plan local with its token windows at %s — tokens are not money",
+    (level) => {
+      const report = buildUsageReport(local, level);
+
+      expect(report!.plan).toBe("local");
+      expect(report!.windows.map((w) => [w.unit, w.used, w.limit])).toEqual([
+        ["tokens", 3500, null],
+        ["tokens", 3500, null],
+        ["tokens", 4750, null],
+      ]);
+    }
+  );
+});

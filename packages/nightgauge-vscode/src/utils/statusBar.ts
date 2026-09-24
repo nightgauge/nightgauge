@@ -1182,6 +1182,13 @@ export function buildUsageTooltip(snapshot: UsageSnapshot): vscode.MarkdownStrin
       "_No usage provider is available for this adapter — usage is unknown, not zero._\n\n"
     );
   } else {
+    if (snapshot.plan.kind === "local") {
+      // Issue #1665: no provider bills a local model, so the windows below
+      // count tokens. Saying so stops a reader looking for the missing dollars.
+      tooltip.appendMarkdown(
+        "_Local model — no provider bills these runs, so usage is counted in tokens._\n\n"
+      );
+    }
     for (const window of snapshot.windows) {
       const limitText =
         window.limit === null ? "no limit configured" : formatUsageValue(window.limit, window.unit);

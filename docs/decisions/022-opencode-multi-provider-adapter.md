@@ -443,7 +443,10 @@ No provider bills those stages, so there is no allowance to meter, and today
 they fall to `unknown`, which tells the user "cannot say" about stages no
 provider bills. When any attributed stage was hosted or unstamped, the
 snapshot is the ordinary `pay-per-token` one over the priced stages. #1665
-records the amendment in ADR-018 and implements it.
+records the amendment in ADR-018 and implements it. That amendment is the
+rule where the two differ: a `local` snapshot carries token windows with no
+limit, not "no windows", and `opencode` follows its configured model's
+provider.
 
 ### 5. Open model policy
 

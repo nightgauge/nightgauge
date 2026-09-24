@@ -350,3 +350,111 @@ describe("AgentHeartbeatService — adapter usage reporting (#736)", () => {
     expect(provider.mock.calls.length).toBeGreaterThan(1);
   });
 });
+
+describe("AgentHeartbeatService — local plan downgrade (#1665)", () => {
+  const LOCAL_REPORT = {
+    level: "full" as const,
+    adapter: "opencode",
+    plan: "local" as const,
+    captured_at: "2026-09-13T15:00:00.000Z",
+    windows: [
+      {
+        id: "local-telemetry:session",
+        label: "This session",
+        scope: "session" as const,
+        used: 3500,
+        limit: null,
+        unit: "tokens" as const,
+        resets_at: null,
+        confidence: "measured" as const,
+        observed_at: null,
+      },
+    ],
+  };
+
+  let tokenStorage: ReturnType<typeof makeMockTokenStorage>;
+  let logger: ReturnType<typeof makeMockLogger>;
+  let service: AgentHeartbeatService;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn());
+    tokenStorage = makeMockTokenStorage();
+    logger = makeMockLogger();
+    service = new AgentHeartbeatService(
+      () => PLATFORM_URL,
+      tokenStorage,
+      logger,
+      undefined,
+      async () => LOCAL_REPORT
+    );
+  });
+
+  afterEach(() => {
+    service.dispose();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  function sentPlans(): string[] {
+    return vi
+      .mocked(fetch)
+      .mock.calls.map(
+        ([, init]) => JSON.parse((init as RequestInit).body as string).usage.plan as string
+      );
+  }
+
+  function downgradeWarnings(): number {
+    return vi
+      .mocked(logger.warn)
+      .mock.calls.filter(([message]) => String(message).includes('usage plan "local"')).length;
+  }
+
+  it("resends a rejected local beat once as unknown, then sends unknown without a retry", async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(makeResponse(422))
+      .mockResolvedValueOnce(makeResponse(422))
+      .mockResolvedValue(makeResponse(200));
+    service.start(AGENT_ID);
+
+    // First heartbeat: the local beat and exactly one resend, and the resend's
+    // own 422 does not buy a further attempt, not even after the retry delay.
+    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(sentPlans()).toEqual(["local", "unknown"]);
+    const resent = JSON.parse(vi.mocked(fetch).mock.calls[1][1]!.body as string);
+    expect(resent.usage.windows).toEqual([]);
+
+    // Third heartbeat POST: pinned to unknown, no resend.
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(sentPlans()).toEqual(["local", "unknown", "unknown"]);
+    expect(downgradeWarnings()).toBe(1);
+  });
+
+  it("does not resend again when a later unknown beat is rejected too", async () => {
+    vi.mocked(fetch).mockResolvedValue(makeResponse(422));
+    service.start(AGENT_ID);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    const plans = sentPlans();
+    expect(plans[0]).toBe("local");
+    expect(plans.slice(1).every((plan) => plan === "unknown")).toBe(true);
+    // Beat 1: local + its one resend. Beat 2: unknown + the ordinary retry.
+    expect(plans).toHaveLength(4);
+    expect(downgradeWarnings()).toBe(1);
+  });
+
+  it("does not downgrade on an auth rejection", async () => {
+    vi.mocked(fetch).mockResolvedValue(makeResponse(401));
+    service.start(AGENT_ID);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(sentPlans()).toEqual(["local", "local"]);
+    expect(downgradeWarnings()).toBe(0);
+  });
+});
