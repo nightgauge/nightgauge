@@ -9394,29 +9394,42 @@ func getDiffLineCount(workspaceRoot string) int {
 // service's BranchDeleteRemote: a push-based ref deletion that needs no
 // checkout at all, so it works unchanged from a linked worktree.
 //
-// Best-effort and non-blocking, matching every other post-merge branch
-// cleanup in this codebase (e.g. epic.go's BranchCleanup calls): the merge
-// itself is already confirmed by the time this runs, and a repo with
-// delete_branch_on_merge enabled (the onboarding-recommended default, see
-// `nightgauge repo enable-delete-branch`) will usually have deleted the
-// branch server-side already, so "already gone" is an expected, ignorable
-// outcome here — never a reason to fail a stage whose merge already landed.
-func (s *Scheduler) cleanupMergedRemoteBranch(issueNumber int, workdir, headRefName string) {
+// Non-blocking: the merge is already confirmed by the time this runs, so no
+// outcome fails the stage. A repo with delete_branch_on_merge enabled (see
+// `nightgauge repo enable-delete-branch`) usually has deleted the branch
+// already, and BranchDeleteRemote confirms that on the remote before it is
+// reported as "already absent".
+//
+// Any other failure (auth, network, protection) is reported as itself and
+// RETURNED ("" otherwise), so the caller can put it in the stage's captured
+// output where an operator will see it. It used to be logged as "likely
+// already deleted server-side" for every error, which hid a broken push
+// behind the one repository setting that made it harmless (#1921).
+func (s *Scheduler) cleanupMergedRemoteBranch(issueNumber int, workdir, headRefName string) string {
 	if headRefName == "" {
-		return
+		return ""
 	}
 	gitSvc, err := git.NewService(workdir)
 	if err != nil {
-		log.Printf("#%d: pr-merge deterministic path: remote branch cleanup for %s skipped — git service unavailable: %v",
+		failure := fmt.Sprintf("#%d: pr-merge deterministic path: remote branch cleanup for %s skipped — git service unavailable: %v",
 			issueNumber, headRefName, err)
-		return
+		log.Print(failure)
+		return failure
 	}
-	if err := gitSvc.BranchDeleteRemote(headRefName); err != nil {
-		log.Printf("#%d: pr-merge deterministic path: remote branch cleanup for %s failed (likely already deleted server-side): %v",
+	alreadyAbsent, err := gitSvc.BranchDeleteRemote(headRefName)
+	switch {
+	case err != nil:
+		failure := fmt.Sprintf("#%d: pr-merge deterministic path: remote branch %s is still on origin — cleanup failed: %v",
 			issueNumber, headRefName, err)
-		return
+		log.Print(failure)
+		return failure
+	case alreadyAbsent:
+		log.Printf("#%d: pr-merge deterministic path: remote branch %s already absent on origin (deleted server-side)",
+			issueNumber, headRefName)
+	default:
+		log.Printf("#%d: pr-merge deterministic path: deleted remote branch %s after merge", issueNumber, headRefName)
 	}
-	log.Printf("#%d: pr-merge deterministic path: deleted remote branch %s after merge", issueNumber, headRefName)
+	return ""
 }
 
 // ensureEpicBranchForItem creates the epic base branch when dispatching the first
@@ -9916,7 +9929,9 @@ func (s *Scheduler) tryDeterministicPRMerge(
 			idx, total := pmstages.PhasePosition("pr-merge", "post-merge-cleanup")
 			phases.PhaseStart(string(stage), "post-merge-cleanup", idx, total)
 		}
-		s.cleanupMergedRemoteBranch(item.Number, stageWS, detResult.HeadRefName)
+		if failure := s.cleanupMergedRemoteBranch(item.Number, stageWS, detResult.HeadRefName); failure != "" {
+			runtime.AppendStageOutputTail(stage, failure)
+		}
 		if phases != nil {
 			phases.PhaseComplete(string(stage), "post-merge-cleanup")
 		}

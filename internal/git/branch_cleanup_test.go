@@ -254,9 +254,9 @@ func TestBranchCleanup_ReportsFailureWhenTheRemoteHalfFails(t *testing.T) {
 
 // TestBranchCleanup_RefusesProtectedAndOptionLikeNames keeps the two guards that
 // must run BEFORE either half. The option-like name matters specifically because
-// the remote half used to go first: BranchDeleteRemote builds a refspec rather
-// than an argv, so it would happily push a delete for a name `git branch -D`
-// would have refused as a flag.
+// the remote half used to go first, and BranchDeleteRemote used to build a
+// go-git refspec rather than an argv, so it would happily push a delete for a
+// name `git branch -D` would have refused as a flag.
 func TestBranchCleanup_RefusesProtectedAndOptionLikeNames(t *testing.T) {
 	r := setupLiveRunRepo(t)
 	svc := r.service(t, r.primary)
