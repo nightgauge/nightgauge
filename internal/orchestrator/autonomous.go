@@ -4409,6 +4409,7 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 	// silently drops items at multiple gates and the only debugging path is to
 	// add ad-hoc prints. See #fix-zero-candidates-blackbox.
 	rejected := map[string]int{}
+	ownSubEdgeLogged := map[string]bool{}
 	bump := func(reason string) { rejected[reason]++ }
 
 	// Per-REPO contribution accounting (#280). The aggregate breakdown above
@@ -4610,7 +4611,13 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 		if !as.config.DisableEpicBlockedByCascade && node.EpicNumber != 0 {
 			epicKey := g.NodeKey(depgraph.NodeID{Repo: node.Repo, Number: node.EpicNumber})
 			if epicNode, ok := g.Nodes[epicKey]; ok && strings.EqualFold(epicNode.State, "OPEN") {
-				if res := evaluateDeps(adj[epicKey], g, resolvedDepStates, prBackedSet); res.blocked {
+				gating, ownSubs := epicCascadeDeps(g, adj, epicKey)
+				if len(ownSubs) > 0 && !ownSubEdgeLogged[epicKey] {
+					ownSubEdgeLogged[epicKey] = true
+					log.Printf("autonomous: ignoring epic %s's edges to its own sub-issues %v in the cascade — an epic blocked by its child is a data defect, not a gate (#1937)",
+						epicKey, ownSubs)
+				}
+				if res := evaluateDeps(gating, g, resolvedDepStates, prBackedSet); res.blocked {
 					blocked = true
 					blocker = res.blocker
 					offBoard = res.offBoard
@@ -4682,7 +4689,8 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 				continue
 			}
 			epicKey := g.NodeKey(node.ID())
-			hasOpenBlocker := evaluateDeps(adj[epicKey], g, resolvedDepStates, prBackedSet).blocked
+			gating, _ := epicCascadeDeps(g, adj, epicKey)
+			hasOpenBlocker := evaluateDeps(gating, g, resolvedDepStates, prBackedSet).blocked
 			if !hasOpenBlocker {
 				continue
 			}

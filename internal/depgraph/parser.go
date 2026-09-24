@@ -107,7 +107,24 @@ var (
 	// token from ending a sentence — "v1.2", "e.g.", "acme/repo#5.0" all carry
 	// a `.` that no author meant as a full stop. Used to bound a dependency
 	// keyword's claim to its own sentence; see depDeclarationFragments (#1502).
-	reSentenceBreak = regexp.MustCompile(`[.;!?](?:[ \t]|$)`)
+	//
+	// Closing emphasis, brackets and quotes may sit between the terminator and
+	// the whitespace: "**A consumer depends on this epic.** Post-merge (#948)"
+	// ends its sentence at the `.`, and reading on promoted #948 — an issue
+	// that depends on the epic — into the epic's own blocker (#1937).
+	reSentenceBreak = regexp.MustCompile("[.;!?][*_)\\]\"'`\u201d\u2019]*(?:[ \t]|$)")
+
+	// Two references joined by a relation arrow: "#479 ← #478", "#5 -> #6".
+	// A fragment carrying one describes an edge between OTHER issues — the
+	// epic's "blockedBy wiring: #479 ← #478, #480 ← #478" — not a dependency
+	// of the issue whose body it is in (#1937).
+	reRelationArrow = regexp.MustCompile(
+		`#\d+[ \t]*(?:←|→|⟵|⟶|<-+|-+>)[ \t]*(?:[\w-]+(?:/[\w-]+)?[ \t]*)?#\d+`,
+	)
+
+	// A fenced code block's opening or closing line: three or more backticks
+	// or tildes, indented at most three spaces.
+	reCodeFence = regexp.MustCompile("^ {0,3}(`{3,}|~{3,})")
 
 	// A reference list CONTINUING after a separator: the remainder begins with
 	// another `#N` (optionally repo-qualified). "Blocked by #1187; #1190" is one
@@ -383,6 +400,7 @@ func ParseCrossRepoRefs(body string, repoAliases map[string]string) []CrossRepoR
 	if body == "" {
 		return nil
 	}
+	body = maskFencedCode(body)
 	if repoAliases == nil {
 		repoAliases = DefaultRepoAliases
 	}
@@ -631,6 +649,9 @@ func depDeclarationFragments(body string) []depFragment {
 			if cut := sentenceEnd(text); cut >= 0 {
 				text = text[:cut]
 			}
+			if reRelationArrow.MatchString(text) {
+				continue
+			}
 			source := "body_text"
 			if strings.Contains(strings.ToLower(line[loc[0]:loc[1]]), "depend") {
 				source = "depends_on"
@@ -746,6 +767,7 @@ func ParseDependencyRefs(body, selfRepo string, repoAliases map[string]string) [
 	if body == "" || selfRepo == "" {
 		return refs
 	}
+	body = maskFencedCode(body)
 	if repoAliases == nil {
 		repoAliases = DefaultRepoAliases
 	}
@@ -776,6 +798,35 @@ func ParseDependencyRefs(body, selfRepo string, repoAliases map[string]string) [
 	}
 
 	return refs
+}
+
+// maskFencedCode blanks every line inside a fenced code block, fences
+// included, keeping the line count. A fence quotes: pasted command output, a
+// log, an attention card's text. "blocked by #478" inside one is evidence
+// someone is reporting, not a dependency the issue declares — #1937's own
+// body quoted a card and became an edge to #478.
+func maskFencedCode(body string) string {
+	if !strings.Contains(body, "```") && !strings.Contains(body, "~~~") {
+		return body
+	}
+	lines := strings.Split(body, "\n")
+	fence := ""
+	for i, line := range lines {
+		m := reCodeFence.FindStringSubmatch(line)
+		switch {
+		case fence == "" && m != nil:
+			fence = m[1]
+			lines[i] = ""
+		case fence != "":
+			// A closing fence uses the opener's character, at least as long.
+			if m != nil && m[1][0] == fence[0] && len(m[1]) >= len(fence) &&
+				strings.TrimSpace(line[len(m[0]):]) == "" {
+				fence = ""
+			}
+			lines[i] = ""
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // resolveAlias normalizes a repo reference using the alias map.
