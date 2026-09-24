@@ -101,6 +101,8 @@ fi
 When PTC is available, invoke the PTCValidationRunner via a Node.js script:
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 if [ "$PTC_AVAILABLE" = "true" ]; then
   PTC_RESULT=$(node -e "
     const { PTCValidationRunner } = require('@nightgauge/sdk');

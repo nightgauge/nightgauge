@@ -72,7 +72,8 @@ Handle: `MERGED` → exit 0, `CLOSED` → exit 1.
 #### Step 1.4: Extract Issue Number
 
 ```bash
-ISSUE_NUMBER=$(printf '%s\n' "$BRANCH" | grep -oE '[0-9]+' | head -1)
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 ```
 
 #### Step 1.5: Pre-CI Go Build Integrity Check
@@ -86,6 +87,8 @@ skip this step (the merged-state `go vet` in pre-push is strictly more thorough
 than this local check).
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # Check if pre-push validation already passed vet
 PRE_PUSH_FILE=".nightgauge/pipeline/pre-push-${ISSUE_NUMBER}.json"
 SKIP_VET=false

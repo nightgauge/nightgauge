@@ -18,6 +18,8 @@ Extract issue number from branch (`grep -oE '[0-9]+' | head -1`). Load
 #### Signal stage start
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # Go binary: project move-status
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
@@ -48,6 +50,8 @@ verification (#185). When present, attempt 1's blocker is **current state**,
 not history — start from it instead of re-deriving everything from scratch.
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 FEEDBACK_FILE=".nightgauge/pipeline/feedback-${ISSUE_NUMBER}.json"
 PR_MERGE_RETRY_CONTEXT=""
 if [ -f "$FEEDBACK_FILE" ]; then
@@ -89,6 +93,8 @@ jq --arg cls "$CLASSIFICATION" --arg rem "$REMEDIATION" \
 If context file missing, attempt auto-reconstruction from GitHub before failing:
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 CONTEXT_FILE=".nightgauge/pipeline/pr-${ISSUE_NUMBER}.json"
 if [ ! -f "$CONTEXT_FILE" ]; then
   echo "WARNING: pr-${ISSUE_NUMBER}.json not found. Attempting to reconstruct from GitHub..."

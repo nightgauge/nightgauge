@@ -5,7 +5,7 @@ description: Claim a GitHub issue, extract requirements, and set up the developm
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.21.0"
+  version: "1.21.1"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task
 context: fork
@@ -183,7 +183,9 @@ git remote -v | grep -E "(github\.com|github\.)"
 #### Step 1.3: Get Repository Info
 
 ```bash
-nightgauge forge repo view --repo $REPO --json nameWithOwner -q .nameWithOwner
+REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+: "${REPO:?set NIGHTGAUGE_REPO or run inside a clone with an origin remote}"
+nightgauge forge repo view --repo "$REPO" --json | jq -r .nameWithOwner
 ```
 
 #### Step 1.4: Verify Repo Identity

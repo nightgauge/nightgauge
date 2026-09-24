@@ -7,7 +7,7 @@ description: Analyze a raw GitHub issue and rewrite it with structured sections,
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.0.1"
+  version: "1.0.2"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Glob Grep Bash
 ---
@@ -114,6 +114,10 @@ echo "Refining issue #${ISSUE_NUMBER}..."
 #### Step 1.3: Fetch Issue Details
 
 ```bash
+REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+: "${REPO:?set NIGHTGAUGE_REPO or run inside a clone with an origin remote}"
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 ISSUE_JSON=$(nightgauge forge issue view "$ISSUE_NUMBER" --repo $REPO \
   --json number,title,body,labels,comments,state 2>/dev/null)
 
@@ -443,6 +447,10 @@ BODYEOF
 #### Step 5.2: Update Issue Body
 
 ```bash
+REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+: "${REPO:?set NIGHTGAUGE_REPO or run inside a clone with an origin remote}"
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 nightgauge forge issue edit "$ISSUE_NUMBER" --repo $REPO --body-file "$BODY_FILE"
 
 if [ $? -ne 0 ]; then
@@ -458,6 +466,8 @@ echo "Issue #${ISSUE_NUMBER} body updated."
 #### Step 5.3: Add Type Label if Missing
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 if ! printf '%s\n' "$ISSUE_LABELS" | grep -qE '(^|,)type:'; then
   nightgauge forge graphql -f query="mutation{addLabelsToLabelable(input:{labelableId:\"$ISSUE_NUMBER\",labelIds:[\"type:${ISSUE_TYPE}\"]}){clientMutationId}}" 2>/dev/null || \
     echo "WARNING: Could not add type:${ISSUE_TYPE} label (may not exist in repo)."
@@ -470,6 +480,8 @@ Call the Go binary's `mark-refined` command if available. This depends on
 issue #2533. If the command does not exist, skip silently.
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
@@ -495,8 +507,12 @@ fi
 #### Step 5.5: Report Success
 
 ```bash
-ISSUE_URL=$(nightgauge forge issue view "$ISSUE_NUMBER" --repo "$REPO" --json --jq .url 2>/dev/null || \
-  echo "https://github.com/$(nightgauge forge repo view --repo $REPO --json nameWithOwner --jq .nameWithOwner)/issues/${ISSUE_NUMBER}")
+REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+: "${REPO:?set NIGHTGAUGE_REPO or run inside a clone with an origin remote}"
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
+ISSUE_URL=$(nightgauge forge issue view "$ISSUE_NUMBER" --repo "$REPO" --json 2>/dev/null | jq -r '.url // empty')
+[ -n "$ISSUE_URL" ] || ISSUE_URL="https://github.com/${REPO}/issues/${ISSUE_NUMBER}"
 
 echo ""
 echo "✓ Issue #${ISSUE_NUMBER} refined successfully"

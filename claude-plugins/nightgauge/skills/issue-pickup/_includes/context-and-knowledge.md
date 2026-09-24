@@ -38,27 +38,24 @@ file with an empty `branch`, an empty title and no labels — a stage that exits
 
 Durable sources, in order of authority:
 
-| Field         | Source                                                                   |
-| ------------- | ------------------------------------------------------------------------ |
-| issue number  | `NIGHTGAUGE_ISSUE_NUMBER` — process environment, set by the orchestrator |
-| repo          | `NIGHTGAUGE_REPO` — same                                                 |
-| `branch`      | the worktree's own `HEAD`; branch creation checks it out                 |
-| `base_branch` | `origin/HEAD`                                                            |
-| issue content | one `nightgauge forge issue view` fetch                                  |
+| Field         | Source                                                                    |
+| ------------- | ------------------------------------------------------------------------- |
+| issue number  | `NIGHTGAUGE_ISSUE_NUMBER` (set by the orchestrator), else the branch name |
+| repo          | `NIGHTGAUGE_REPO`, else `nightgauge git repo-slug` (the origin remote)    |
+| `branch`      | the worktree's own `HEAD`; branch creation checks it out                  |
+| `base_branch` | `origin/HEAD`                                                             |
+| issue content | one `nightgauge forge issue view` fetch                                   |
 
 ```bash
 set -u
-ISSUE_NUMBER="${ISSUE_NUMBER:-${NIGHTGAUGE_ISSUE_NUMBER:-}}"
-REPO="${REPO:-${NIGHTGAUGE_REPO:-}}"
-if [ -z "$ISSUE_NUMBER" ]; then
-  echo "ERROR: no issue number (neither ISSUE_NUMBER nor NIGHTGAUGE_ISSUE_NUMBER)" >&2
-  exit 1
-fi
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
+REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+: "${REPO:?set NIGHTGAUGE_REPO or run inside a clone with an origin remote}"
 
 # The branch. HEAD is authoritative: `nightgauge git branch-create` creates AND
 # checks out, so by this phase the worktree is already on the feature branch.
-BRANCH_NAME="${BRANCH_NAME:-}"
-[ -n "$BRANCH_NAME" ] || BRANCH_NAME=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+BRANCH_NAME=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
 case "$BRANCH_NAME" in
   */"$ISSUE_NUMBER"-*) ;;
   *)
@@ -78,11 +75,7 @@ BASE_BRANCH="${BASE_BRANCH:-main}"
 # The issue itself. One fetch, only when this shell does not already hold it.
 ISSUE_JSON="${ISSUE_JSON:-}"
 if [ -z "$ISSUE_JSON" ]; then
-  if [ -n "$REPO" ]; then
-    ISSUE_JSON=$(nightgauge forge issue view "$ISSUE_NUMBER" --repo "$REPO" --json)
-  else
-    ISSUE_JSON=$(nightgauge forge issue view "$ISSUE_NUMBER" --json)
-  fi
+  ISSUE_JSON=$(nightgauge forge issue view "$ISSUE_NUMBER" --repo "$REPO" --json)
 fi
 if [ -z "$ISSUE_JSON" ] || ! printf '%s\n' "$ISSUE_JSON" | jq -e . >/dev/null 2>&1; then
   echo "ERROR: could not fetch issue #$ISSUE_NUMBER as JSON" >&2
@@ -196,6 +189,8 @@ The script wrote `"routing": null`. You must now update the routing field with a
 deterministic JSON patch using values derived from the issue labels and content:
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 ROUTING_JSON=$(jq -n \
   --arg change_type "code" \
   --argjson complexity_score 3 \
@@ -273,6 +268,8 @@ Also include `pickup_recommendation` with explicit stage skip recommendations
 ## Step 8.5: Verify final context file
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 jq . ".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json" > /dev/null && \
   echo "Context file written: .nightgauge/pipeline/issue-${ISSUE_NUMBER}.json"
 ```
@@ -280,6 +277,8 @@ jq . ".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json" > /dev/null && \
 ## Step 8.6: Signal Stage Complete
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # Go binary: project move-status
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""

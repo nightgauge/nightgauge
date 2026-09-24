@@ -214,7 +214,7 @@ func TestCompactFeatureValidate_ACGateDoesNotFailOpen(t *testing.T) {
 				"PATH=" + sandboxPath(t),
 				"HOME=" + t.TempDir(),
 				"NIGHTGAUGE_BIN=" + tc.binary(t),
-				"ISSUE_NUMBER=1663",
+				"NIGHTGAUGE_ISSUE_NUMBER=1663",
 				"AC_CHECK_REQUIRED=true",
 			}
 			out, err := cmd.CombinedOutput()

@@ -15,6 +15,8 @@ When the skill is about to exit with a non-zero code AND a PR number is known:
 #### cleanup_failed_pr function
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 cleanup_failed_pr() {
   local EXIT_CODE=$1
   local REASON=$2

@@ -20,6 +20,8 @@ ensures the plan builds on it rather than replacing it.
 **No-op when `knowledge_path` is null or unset** — silently skip to Phase 4.
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 KNOWLEDGE_PATH=$(jq -r '.knowledge_path // empty' ".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json" 2>/dev/null)
 
 if [ -n "$KNOWLEDGE_PATH" ] && [ -d "$KNOWLEDGE_PATH" ]; then
@@ -88,6 +90,8 @@ issue body + space + acceptance criteria bullets (one per line), then truncate
 to 4096 characters total.
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # Step 3.7.1: Check knowledge.enabled guard
 # Absent means ON (ADR-020) — only an explicit `false` opts out.
 KB_ENABLED=$(jq -r '.knowledge.enabled // true' .nightgauge/config.yaml 2>/dev/null || echo "true")

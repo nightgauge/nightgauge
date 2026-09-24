@@ -166,7 +166,7 @@ func runACGate(t *testing.T, binary string) acGateResult {
 		"PATH=" + sandboxPath(t),
 		"HOME=" + home,
 		"NIGHTGAUGE_BIN=" + binary,
-		"ISSUE_NUMBER=1145",
+		"NIGHTGAUGE_ISSUE_NUMBER=1145",
 		"AC_CHECK_REQUIRED=true",
 	}
 	out, err := cmd.CombinedOutput()
@@ -327,7 +327,7 @@ func runACGateWithEnv(t *testing.T, binary string, judgement string) acGateResul
 		"PATH=" + sandboxPath(t),
 		"HOME=" + home,
 		"NIGHTGAUGE_BIN=" + binary,
-		"ISSUE_NUMBER=1233",
+		"NIGHTGAUGE_ISSUE_NUMBER=1233",
 		"AC_CHECK_REQUIRED=true",
 	}
 	out, err := cmd.CombinedOutput()

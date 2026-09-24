@@ -20,6 +20,8 @@ Both `validation_phases.security` and `overall_status` must be `"passed"` to
 skip — partial gate passes are not sufficient.
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 PRE_PUSH_FILE=".nightgauge/pipeline/pre-push-${ISSUE_NUMBER}.json"
 if [ -f "$PRE_PUSH_FILE" ]; then
   PREPUSH_SECURITY=$(jq -r '.validation_phases.security // "skipped"' "$PRE_PUSH_FILE")
@@ -185,6 +187,8 @@ fi
 - Bypass label `scope:cross-cutting` (or configured equivalent) is on the issue
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 ISSUE_TYPE=$(jq -r '.type // "feature"' ".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json" 2>/dev/null)
 SCOPE_DRIFT_STATUS="skipped"
 

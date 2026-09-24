@@ -19,6 +19,8 @@ entirely** when no knowledge entries exist — never include an empty section.
 qualifying entries — the verb prints nothing and exits 0 in both cases.
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 KNOWLEDGE_SECTION=""
 
 if [ -n "$KNOWLEDGE_PATH" ]; then
@@ -66,6 +68,8 @@ continue without error.
 determined in Phase 2. Resolve it early using the same priority:
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # Early base branch resolution for diff
 BASE_BRANCH=$(jq -r '.base_branch // empty' \
   ".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json" 2>/dev/null)

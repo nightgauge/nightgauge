@@ -45,7 +45,8 @@ block below (default `planning` if the line is absent).
 
 ```bash
 BRANCH=$(git branch --show-current)
-ISSUE_NUMBER=$(printf '%s\n' "$BRANCH" | grep -oE '[0-9]+' | head -1)
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 
 # INPUT_CONTEXT_TYPE was set above by reading this prompt's own Invocation
 # Context block — substitute the value here before running.
@@ -111,6 +112,8 @@ fi
 `planning-batch-{E}.json` where E matches the issue number from the branch.
 
 ```bash
+BRANCH=$(git branch --show-current)
+: "${BRANCH:?detached HEAD: check out the issue branch}"
 EPIC_NUMBER=$(printf '%s\n' "$BRANCH" | grep -oE '[0-9]+' | head -1)
 BATCH_PLANNING=".nightgauge/pipeline/planning-batch-${EPIC_NUMBER}.json"
 
@@ -187,6 +190,8 @@ When in batch mode, skip Phase 8 (Write Dev Context) for single-issue
 ### Step 0.7.1: Check for Feedback File
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 FEEDBACK_FILE=".nightgauge/pipeline/feedback-${ISSUE_NUMBER}.json"
 RETRY_COUNT=0
 RETRY_REASONS_JSON="[]"
@@ -235,6 +240,8 @@ and **must be reused** — do NOT create a fresh branch from main, or the
 resolved work would not attach to the open PR.
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 if [ "$IS_CONFLICT_RESOLUTION" = "true" ]; then
   CONFLICT_CONTEXT=".nightgauge/pipeline/conflict-context-${ISSUE_NUMBER}.json"
 
@@ -314,6 +321,8 @@ and MUST NOT be used as a substitute. The plan file path is the same but the
 content may have been revised by `/nightgauge-feature-planning`.
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # Always re-read the plan file directly — do not rely on planning-{N}.json approach field
 PLAN_FILE=$(jq -r '.plan_file' ".nightgauge/pipeline/planning-${ISSUE_NUMBER}.json" 2>/dev/null)
 if [ -z "$PLAN_FILE" ] || [ ! -f "$PLAN_FILE" ]; then

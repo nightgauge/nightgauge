@@ -92,6 +92,8 @@ and writes `notes: "pr-merge should re-trigger CI"`, pr-merge should honor the
 signal instead of asking RALPH to modify code for a network failure.
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # Read transient-failure flags from the prior stage's handoff.
 # pr-merge reads pr-{N}.json (written by pr-create Phase 4).
 PR_CONTEXT=".nightgauge/pipeline/pr-${ISSUE_NUMBER}.json"
@@ -316,6 +318,8 @@ Otherwise stage the working tree and run the sham-commit guard **before**
 calling `git commit`:
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 git add -A
 
 # --- Sham-commit guard (deterministic, mandatory) ---

@@ -4,6 +4,17 @@ All notable changes to this skill are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Every shell block derives the pipeline identifiers it reads (#1932).** Each
+  `Bash` call is a fresh process, so a block that read `$ISSUE_NUMBER`,
+  `$BRANCH` or `$REPO` from an earlier phase read an empty string, and
+  `${VAR:-}` turned it into a valid blank. Each block now derives them itself:
+  the issue number from `NIGHTGAUGE_ISSUE_NUMBER`, else the branch name; the
+  repo from `NIGHTGAUGE_REPO`, else `nightgauge git repo-slug`; the branch from
+  `git`. A missing value fails the block instead of writing a blank.
+  `nightgauge preflight skill-shell-state` keeps it that way.
+
 ### Changed
 
 - Migrate all direct `gh` invocations to `nightgauge forge` (#3363, Wave 4 of forge-abstraction epic #3349). Skill now works against GitLab as well as GitHub via the forge abstraction.

@@ -72,6 +72,8 @@ fi
 #### Step 3.3: Get Inline Review Comments (REST API)
 
 ```bash
+REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+: "${REPO:?set NIGHTGAUGE_REPO or run inside a clone with an origin remote}"
 OWNER=$(echo "$REPO" | cut -d'/' -f1)
 REPO_NAME=$(echo "$REPO" | cut -d'/' -f2)
 INLINE_COMMENTS=$(curl -s \

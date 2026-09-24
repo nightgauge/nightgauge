@@ -29,6 +29,8 @@ If PTC is unavailable (no `ANTHROPIC_API_KEY`) or fails, spawn all three groups
 simultaneously as parallel bash operations:
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # Parallel execution timeline:
 #
 #   Sequential (before):
@@ -133,6 +135,8 @@ fi
 **Step 1.7: Signal stage start**
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # Go binary: project move-status
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
@@ -163,6 +167,8 @@ single PR with multi-issue closing keywords.
 **Detection**: After loading dev context, check for `dev-batch-{E}.json`.
 
 ```bash
+BRANCH=$(git branch --show-current)
+: "${BRANCH:?detached HEAD: check out the issue branch}"
 EPIC_NUMBER=$(printf '%s\n' "$BRANCH" | grep -oE '[0-9]+' | head -1)
 BATCH_DEV=".nightgauge/pipeline/dev-batch-${EPIC_NUMBER}.json"
 

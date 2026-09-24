@@ -26,7 +26,7 @@ import (
 func preflightCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "preflight",
-		Short: "Pre-submission gates (links, syntax, secrets, skill-includes, skill-no-direct-gh, skill-anti-patterns, skill-portability, dependency-guard, mitigation-rule, managed-steering)",
+		Short: "Pre-submission gates (links, syntax, secrets, skill-includes, skill-no-direct-gh, skill-anti-patterns, skill-shell-state, skill-portability, dependency-guard, mitigation-rule, managed-steering)",
 		Long: `Deterministic pre-submission validation gates. Each subcommand inspects the
 working tree for a specific class of defect and exits non-zero when findings
 exist, so they can be chained in CI or git pre-push hooks. Replaces the
@@ -40,6 +40,7 @@ fragile bash + python3 + sed chains in skills/pr-preflight/SKILL.md
 	cmd.AddCommand(preflightSkillNoDirectGHCmd())
 	cmd.AddCommand(preflightPlatformRawHTTPCmd())
 	cmd.AddCommand(preflightSkillAntiPatternsCmd())
+	cmd.AddCommand(preflightSkillShellStateCmd())
 	cmd.AddCommand(preflightSkillPortabilityCmd())
 	cmd.AddCommand(preflightDependencyGuardCmd())
 	cmd.AddCommand(preflightACReconcileCmd())
@@ -454,6 +455,80 @@ func printPreflightSkillAntiPatternsHuman(r *preflight.SkillAntiPatternsResult) 
 	}
 	if len(r.Findings) == 0 {
 		fmt.Println("no skill anti-patterns found ✓")
+	}
+}
+
+// preflightSkillShellStateCmd wraps `internal/preflight.RunSkillShellStateCheck`
+// and exits 1 when a stage skill's shell block reads a pipeline identifier it
+// did not derive (#1932). CI runs the same check ungated through
+// TestSkillShellState_RealTreeIsClean.
+func preflightSkillShellStateCmd() *cobra.Command {
+	var (
+		jsonOutput bool
+		root       string
+	)
+	cmd := &cobra.Command{
+		Use:   "skill-shell-state",
+		Short: "Fail when a stage skill's shell block reads an identifier it did not derive",
+		Long: `Walk the stage skills and skills/_shared/ and fail each fenced shell block
+that reads a pipeline identifier ($ISSUE_NUMBER, $BRANCH, $BRANCH_NAME, $REPO)
+without deriving it in that same block (#1932). Each Bash tool call is a fresh
+process, so a variable assigned in an earlier block is empty in a later one.
+
+  underived_identifier  the block reads the identifier before assigning it.
+  blank_fallback        the block expands it with an empty default
+                        (${ISSUE_NUMBER:-}), turning a missing value into a blank.
+
+Derive from a source that survives a new process: NIGHTGAUGE_ISSUE_NUMBER and
+NIGHTGAUGE_REPO from the environment, or git for the branch. The pattern is in
+skills/README.md.
+
+Schema version 1 — field names (v, root, files_checked, findings, warnings)
+and the check enum are stable and consumed by callers via fixed jq paths.
+
+Exit codes:
+  0  every block derives what it reads
+  1  one or more findings (gate fails)
+  2  hard error (e.g. unresolvable root)`,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			result, err := preflight.RunSkillShellStateCheck(cmd.Context(), preflight.SkillShellStateOptions{
+				Root: root,
+			})
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "preflight skill-shell-state: %v\n", err)
+				os.Exit(2)
+			}
+			if jsonOutput {
+				if err := printJSON(result); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: failed to encode JSON output: %v\n", err)
+				}
+			} else {
+				printPreflightSkillShellStateHuman(result)
+			}
+			if len(result.Findings) > 0 {
+				os.Exit(1)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output result as JSON (parsed by skills)")
+	cmd.Flags().StringVar(&root, "root", "", "Repository root (default: current working directory)")
+	return cmd
+}
+
+func printPreflightSkillShellStateHuman(r *preflight.SkillShellStateResult) {
+	fmt.Printf("nightgauge preflight skill-shell-state — schema v%d\n", r.V)
+	fmt.Printf("root: %s\n", r.Root)
+	fmt.Printf("files checked: %d  findings: %d\n", r.FilesChecked, len(r.Findings))
+	for _, f := range r.Findings {
+		fmt.Printf("  ✗ [%s] %s:%d  $%s  %s\n", f.Check, f.File, f.Line, f.Identifier, f.Match)
+	}
+	for _, w := range r.Warnings {
+		fmt.Printf("  ! %s\n", w)
+	}
+	if len(r.Findings) == 0 {
+		fmt.Println("every stage-skill shell block derives the identifiers it reads ✓")
 	}
 }
 

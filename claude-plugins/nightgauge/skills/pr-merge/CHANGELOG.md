@@ -8,6 +8,17 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Every shell block derives the pipeline identifiers it reads (#1932).** Each
+  `Bash` call is a fresh process, so a block that read `$ISSUE_NUMBER`,
+  `$BRANCH` or `$REPO` from an earlier phase read an empty string, and
+  `${VAR:-}` turned it into a valid blank. Each block now derives them itself:
+  the issue number from `NIGHTGAUGE_ISSUE_NUMBER`, else the branch name; the
+  repo from `NIGHTGAUGE_REPO`, else `nightgauge git repo-slug`; the branch from
+  `git`. A missing value fails the block instead of writing a blank.
+  `nightgauge preflight skill-shell-state` keeps it that way.
+
 ### Added
 
 - **Phase 0.5 has a real body, and batch cleanup actually runs** (#337). The

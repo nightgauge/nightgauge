@@ -6,7 +6,7 @@ description: Implement features following the approved PLAN.md and documented st
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.16.0"
+  version: "1.16.1"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task
 orchestration:
@@ -259,6 +259,8 @@ issue context present. Closes the #3863 "am I on the right issue/branch?" gap.
 ON by default (`pipeline.grounding_gate.enabled: false` disables it).
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # Full PREFLIGHT.md discovery cascade (#55 — this block had diverged to a
 # 3-rung variant, missing the canonical-repo and ~/go/bin fallbacks).
 BINARY="${NIGHTGAUGE_BIN:-}"
@@ -299,6 +301,8 @@ gate, **not** an auto-acceptable stage prompt — so it holds even under
 `auto_accept_stages: true`.
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 if [ -n "$BINARY" ]; then
   "$BINARY" approval-gate "$ISSUE_NUMBER" || {
     echo "ARCHITECTURE APPROVAL REQUIRED — do NOT implement. A human must review the"

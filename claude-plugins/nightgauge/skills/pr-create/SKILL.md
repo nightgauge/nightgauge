@@ -6,7 +6,7 @@ description: Create a pull request with correct base/head, issue linkage, valida
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.21.1"
+  version: "1.21.2"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task
 inputs:
@@ -193,7 +193,8 @@ Extract issue number from branch name (e.g., `feat/11-description` → 11).
 
 ```bash
 BRANCH=$(git branch --show-current)
-ISSUE_NUMBER=$(printf '%s\n' "$BRANCH" | grep -oE '[0-9]+' | head -1)
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 ```
 
 **Step 1.2: Determine base branch early**
@@ -202,6 +203,8 @@ Resolve base branch BEFORE parallel gathering (needed for `git diff` in Groups
 B and subsequent phases):
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 BASE_BRANCH=$(jq -r '.base_branch // empty' \
   ".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json" 2>/dev/null)
 if [ -z "$BASE_BRANCH" ]; then

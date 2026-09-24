@@ -101,6 +101,8 @@ Model escalation check (runs always):
 Gather results from prior phases:
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # From Phase 2 / Phase 3
 INTEGRATION_FAILED_TESTS="..."   # list of failing integration test names
 E2E_FAILED_TESTS="..."           # list of failing E2E test names
@@ -213,6 +215,8 @@ planning context.
 only a single file was touched (single-file changes are inherently bounded).
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 EMIT_COMPLEXITY=false
 
 if [ "$PLAN_FILE_COUNT" -gt 0 ] && [ "$ACTUAL_FILE_COUNT" -gt 0 ]; then
@@ -259,6 +263,8 @@ differ each run (progress is being made), or when failures are pre-existing
 (already failing on main).
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 EMIT_ESCALATION=false
 ESCALATION_EVIDENCE=()
 
@@ -433,6 +439,8 @@ If there are uncommitted changes (implementation files from feature-dev and/or
 RALPH loop fixes):
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 git add -A
 git commit -m "feat(#${ISSUE_NUMBER}): <brief summary from dev context>
 
