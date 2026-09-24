@@ -211,6 +211,13 @@ Every row name below is the JSON field a skill or operator greps for; see
 [ADR-022](decisions/022-opencode-multi-provider-adapter.md) for the design
 this check enforces.
 
+- **`warnings` and `notes` (on the adapter row).** `warnings` lists the
+  findings that leave the adapter usable but that the operator should act
+  on, such as a version above max-tested or a binary that changed since the
+  last dispatch; each one degrades the doctor's verdict. `notes` lists facts
+  a reader of the row needs and never changes the verdict: the version
+  floor and max-tested, the run directories, the offline posture, and
+  whether the catalog probe ran.
 - **`opencode.enabled`** — whether `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` is set
   in the process environment. While it is not, no other OpenCode check runs:
   there is nothing to check for a dispatch that never happens.
