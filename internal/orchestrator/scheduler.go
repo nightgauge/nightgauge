@@ -2518,6 +2518,57 @@ func (s *Scheduler) QueueItemRequestedPin(repo string, issueNumber int) (adapter
 	return "", "", false
 }
 
+// QueueItemRequestedPinForRemoteRun returns a queued issue's remote run
+// request pin only when the item was queued for the remote run remoteRunID
+// (the trigger's ack run id). A run that is not that request — a local run of
+// the same issue — never inherits the pin (#1656).
+func (s *Scheduler) QueueItemRequestedPinForRemoteRun(repo string, issueNumber int, remoteRunID string) (adapter, model string) {
+	if remoteRunID == "" {
+		return "", ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, item := range s.queue {
+		if item.Repo == repo && item.IssueNumber == issueNumber && item.RemoteRunID == remoteRunID {
+			return item.RequestedAdapter, item.RequestedModel
+		}
+	}
+	return "", ""
+}
+
+// QueueAddPinnedItem queues a remote run request's item only when the issue
+// is not already queued, deciding and inserting under one lock (#1656).
+// QueueAddItem skips a duplicate silently, which for a pinned item would
+// run the issue without the pin the requester asked for; this reports it.
+func (s *Scheduler) QueueAddPinnedItem(item QueueItem) (added bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.queueContainsUnlocked(item.Repo, item.IssueNumber) {
+		return false
+	}
+	if item.Status == "" {
+		item.Status = "pending"
+	}
+	if item.AddedAt.IsZero() {
+		item.AddedAt = time.Now().UTC()
+	}
+	item.Position = len(s.queue) + 1
+	s.queue = append(s.queue, item)
+	s.persistQueue()
+	s.emitQueueChangedUnlocked()
+	return true
+}
+
+// OperatorAdapter is the adapter the operator pinned for this machine
+// (`--adapter`, else NIGHTGAUGE_ADAPTER), or "". A remote run request for any
+// other adapter is refused (#1656).
+func (s *Scheduler) OperatorAdapter() string {
+	if s != nil && s.adapterExplicit != "" {
+		return s.adapterExplicit
+	}
+	return os.Getenv("NIGHTGAUGE_ADAPTER")
+}
+
 // QueueList returns the current queue as legacy entries.
 func (s *Scheduler) QueueList() []QueueEntry {
 	s.mu.Lock()
@@ -5302,8 +5353,13 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// or descent rewrites it. After a cap-hop the run is on another
 		// adapter, which the requested model does not name, so the ordinary
 		// resolution applies there.
+		// pinnedModel is the requested model while it is in force; every
+		// mechanism below that would swap the model (the capacity soft-route,
+		// the context-budget re-route) refuses the stage instead.
+		pinnedModel := ""
 		if requestedModel != "" && capPin == "" {
 			model = requestedModel
+			pinnedModel = requestedModel
 		}
 
 		// Compose SKILL.md through the one renderer (#78), overlay-aware (#79).
@@ -5382,7 +5438,13 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// A model on a local OpenCode endpoint is in no registry, so
 		// OverlayKeys resolves no window for it. Its window is the context
 		// limit the dispatch's own OpenCode config is built with (#1651).
-		if skillData.ContextWindow <= 0 && adapterName == "opencode" {
+		// On the IPC path execMgr holds no adapter; a pinned run's adapter is
+		// the requested one, so windows are resolved for the requested pair.
+		windowAdapter := adapterName
+		if windowAdapter == "" && pinnedModel != "" {
+			windowAdapter = requestedAdapter
+		}
+		if skillData.ContextWindow <= 0 && windowAdapter == "opencode" {
 			skillData.ContextWindow = openCodeDispatchWindow(ctx, workspaceRoot, model)
 		}
 
@@ -5391,9 +5453,10 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// remaining size-sensitive stages.
 		capacity := s.enforceIssueCapacity(ctx, capacityDispatch{
 			item: item, runtime: runtime, workspaceRoot: workspaceRoot, stage: stage,
-			remaining: stages[stageIdx+1:], tracer: tracer, adapterName: adapterName,
+			remaining: stages[stageIdx+1:], tracer: tracer, adapterName: windowAdapter,
 			model: model, skillData: skillData, decision: routingDecision,
 			predictedModel: predictedModel, modelFloors: modelFloors, jobClass: issueJobClass,
+			pinnedModel: pinnedModel,
 		})
 		if capacity.refused {
 			terminalFailureKind, workRecovered = TerminalKindContextWindowExceeded, capacity.workRecovered
@@ -5450,7 +5513,11 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				log.Printf("#%d: stage %s context budget exceeded: estimated %d tokens against a %d-token budget (window %d, share %.2f) — attempting one re-route",
 					item.Number, stage, fit.EstimatedTokens, fit.Budget, fit.Window, fit.Share)
 				rerouted := false
-				if alt, ok := nextContextBudgetReroute(skillData.Provider, skillData.ResolvedModel, skillData.ContextWindow); ok {
+				if pinnedModel != "" {
+					// A remote run request's model is never swapped (#1656):
+					// the stage is refused below, naming the pin.
+					compactNote += fmt.Sprintf("; the run is pinned to %s by a remote run request, so it is not re-routed to another model", pinnedModel)
+				} else if alt, ok := nextContextBudgetReroute(skillData.Provider, skillData.ResolvedModel, skillData.ContextWindow); ok {
 					altSkillData, altErr := skillrender.Render(skillrender.Options{
 						Stage:       string(stage),
 						Model:       alt.ID,

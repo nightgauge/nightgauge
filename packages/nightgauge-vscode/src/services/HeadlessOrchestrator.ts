@@ -1274,6 +1274,21 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    */
   private requestedPin: RequestedPin | null = null;
 
+  /**
+   * The refusal a model-swap retry meets on a pinned run (#1656), or null when
+   * the run is not pinned. A pinned run never swaps its model: the stage
+   * fails with `cause` and a reason naming the pin.
+   */
+  private pinnedModelSwapRefusal(swapTo: string, cause: string): Error | null {
+    const pin = this.requestedPin;
+    if (!pin) return null;
+    const pinned = pin.model ? `${pin.adapter} ${pin.model}` : pin.adapter;
+    return new Error(
+      `${cause} — not retried on ${swapTo}: this run is pinned to ${pinned} by a remote ` +
+        `run request, and a pinned run never swaps its model`
+    );
+  }
+
   /** Pending model override set via setNextRunModelOverride(), consumed by runPipeline() (Issue #1610) */
   private pendingUserModelOverride: PipelineModelOverride | null = null;
 
@@ -8541,6 +8556,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * global cooldown.
    */
   private shouldFallbackFableToOpus(stage: PipelineStage, error: Error | undefined): boolean {
+    // A pinned run never swaps its model (#1656).
+    if (this.requestedPin) return false;
     if (this.fableQuotaFallbackApplied.has(stage)) return false;
     if (!isUsageLimitError(error?.message)) return false;
     const effectiveModel =
@@ -11136,11 +11153,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         // Pass model override from escalation engine if one is set (#1343, #1394),
         // or from user override (#1610). User override source is 'user-override'.
         // Pass pinned workspace root to prevent repo-switch mid-pipeline (#1592).
-        // A remote run request's model (#1656) is dispatched as requested on
-        // every stage; nothing below rewrites it.
-        const stageModelOverride = this.requestedPin?.model
-          ? this.requestedPin.model
-          : executionAdapter === "codex"
+        const stageModelOverride =
+          executionAdapter === "codex"
             ? (this.userModelOverride ?? undefined)
             : this.stageModelOverrides.get(stage);
 
@@ -11199,8 +11213,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                 undefined,
                 stageModelOverride,
                 this.pinnedWorkspaceRoot,
-                (this.userModelOverride && stageModelOverride === this.userModelOverride) ||
-                  (this.requestedPin?.model && stageModelOverride === this.requestedPin.model)
+                this.userModelOverride && stageModelOverride === this.userModelOverride
                   ? "user-override"
                   : undefined
               );
@@ -11258,7 +11271,16 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           // for the global cooldown. Downgrade this stage and retry once; if Opus
           // ALSO limits (genuine account-wide exhaustion), fall through to the
           // normal failure path below, which routes to the quota cooldown.
-          if (this.shouldFallbackFableToOpus(stage, result.error)) {
+          const pinnedUsageLimit =
+            this.requestedPin && isUsageLimitError(result.error?.message)
+              ? this.pinnedModelSwapRefusal("opus", result.error?.message ?? "usage limit")
+              : null;
+          if (pinnedUsageLimit) {
+            // A pinned run never swaps its model (#1656): the stage fails
+            // with a reason naming the pin instead of retrying on opus. The
+            // original message leads, so the usage-limit marker still routes.
+            result.error = pinnedUsageLimit;
+          } else if (this.shouldFallbackFableToOpus(stage, result.error)) {
             this.fableQuotaFallbackApplied.add(stage);
             this.stageModelOverrides.set(stage, "opus");
             // Surface the downgrade to the notifiers (Discord/Mattermost) in
@@ -12003,6 +12025,17 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           // Enrich pipeline state with PR number for Discord/UI
           this.recordVerifiedPrNumber(issueNumber);
 
+          const pinnedPrCreate =
+            stateValidation === "retry-needed"
+              ? this.pinnedModelSwapRefusal("sonnet", "PR creation failed")
+              : null;
+          if (pinnedPrCreate) {
+            // A pinned run never swaps its model (#1656): no sonnet retry.
+            failedStage = stage;
+            error = pinnedPrCreate;
+            this.eventDispatcher.onStageError(stage, error);
+            break;
+          }
           if (stateValidation === "retry-needed") {
             if (!this.prCreateRetryAttempted.has(issueNumber)) {
               this.prCreateRetryAttempted.add(issueNumber);
@@ -13157,7 +13190,12 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    *
    * @param item - The queue item to start
    */
-  async startNextQueuedIssue(item: { issueNumber: number; title?: string }): Promise<void> {
+  async startNextQueuedIssue(item: {
+    issueNumber: number;
+    title?: string;
+    requestedAdapter?: string;
+    requestedModel?: string;
+  }): Promise<void> {
     // Initialize pipeline state for the queued issue
     if (this.stateService) {
       // Resolved BEFORE the clear+claim pair so the pair is await-free
@@ -13201,7 +13239,15 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       issueNumber: item.issueNumber,
     });
 
-    await this.runPipeline(item.issueNumber, pipelineCallbacks);
+    // #1656: a queued remote run request keeps its pin on auto-start.
+    await this.runPipeline(
+      item.issueNumber,
+      pipelineCallbacks,
+      undefined,
+      item.requestedAdapter
+        ? { adapter: item.requestedAdapter, model: item.requestedModel }
+        : undefined
+    );
   }
 
   private async handleQueueAutoStart(
@@ -13543,6 +13589,14 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     pinnedWorkspaceRoot?: string,
     modelOverrideSource?: import("../utils/skillRunner").ModelSource
   ): Promise<StageRunResult> {
+    // A remote run request's model (#1656) is applied here, centrally, so
+    // every entry — the stage loop and every same-model retry below it — runs
+    // the requested model. Nothing a caller passes can replace it; the
+    // model-swap retries refuse to run on a pinned run instead.
+    if (this.requestedPin?.model) {
+      modelOverride = this.requestedPin.model;
+      modelOverrideSource = "user-override";
+    }
     // RECEIVE OR MINT, and release only what we minted (ADR-017 Decision 10).
     //
     // `runStage` is reached two ways: from `runPipeline`'s stage loop, where

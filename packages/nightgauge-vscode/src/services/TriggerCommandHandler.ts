@@ -253,27 +253,32 @@ export class TriggerCommandHandler implements CommandHandler {
   ): Promise<{ adapter: string; model?: string } | undefined | "refused"> {
     if (payload.adapter === undefined && payload.model === undefined) return undefined;
 
+    // `reason` is the ack's public detail: a fixed category and at most an
+    // adapter id or variable names (#1656). `localReason` is the full story,
+    // logged here and never sent to the hosted service.
     let reason: string | undefined;
+    let localReason: string | undefined;
     if (
       (payload.adapter !== undefined && typeof payload.adapter !== "string") ||
       (payload.model !== undefined && typeof payload.model !== "string")
     ) {
-      reason = "the requested adapter and model must be strings";
+      reason = "invalid-request: adapter and model must be strings";
     } else if (labels.includes("type:epic")) {
-      reason =
-        "a requested adapter and model cannot apply to an epic; trigger its sub-issues instead";
+      reason = "epic-not-pinnable";
+      localReason = "a requested adapter and model cannot apply to an epic; trigger its sub-issues";
     } else {
       try {
         const verdict = await this.ipcClient.queueValidatePin(
           payload.adapter as string | undefined,
-          payload.model as string | undefined
+          payload.model as string | undefined,
+          payload.owner,
+          payload.repo,
+          payload.issueNumber
         );
-        if (!verdict.ok)
-          reason = verdict.reason || "this machine cannot serve the requested adapter and model";
+        if (!verdict.ok) reason = verdict.reason || "validation-failed";
       } catch (err) {
-        reason = `the requested adapter and model could not be checked: ${
-          err instanceof Error ? err.message : String(err)
-        }`;
+        reason = "validation-unavailable";
+        localReason = err instanceof Error ? err.message : String(err);
       }
     }
 
@@ -285,6 +290,7 @@ export class TriggerCommandHandler implements CommandHandler {
       commandId,
       issueNumber: payload.issueNumber,
       reason,
+      ...(localReason ? { localReason } : {}),
     });
     try {
       await this.ipcClient.agentAcknowledgeCommand(agentId, commandId, "rejected", reason);

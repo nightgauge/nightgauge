@@ -1346,7 +1346,14 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     // no claim race to lose (unlike the singleton mint sites, which resolve
     // before their check for exactly that reason).
     const slotRepoSlug = await this.resolveSlotRepoSlug(item, slotWorktreeManager, orchestrator);
-    stateService.beginRun(runId, slotRepoSlug, item.issueNumber);
+    // #1656: the trigger's platform run id rides on the run so Go records that
+    // trigger's remote run request pin on this run and on no other.
+    stateService.beginRun(
+      runId,
+      slotRepoSlug,
+      item.issueNumber,
+      this.pendingRemoteRunIds.get(item.issueNumber)
+    );
     // Issue #3704: seed _lastState so updateTokens() does not no-op before
     // any IPC pipeline.notifyStageTransition fires for this worktree slot.
     stateService.initEmpty();

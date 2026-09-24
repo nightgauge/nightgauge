@@ -793,4 +793,26 @@ describe("ConcurrentPipelineManager — remote run request pin (#1656)", () => {
     expect(pinned[3]).toEqual({ adapter: "opencode", model: "lmstudio/qwen/qwen3.8-27b" });
     expect(controllable.getOrchestrator(1657).runPipeline.mock.calls[0][3]).toBeUndefined();
   });
+
+  it("begins a triggered run with the trigger's platform run id, and an untriggered one without", async () => {
+    const mockQueue = createMockQueueService();
+    const controllable = createControllableFactory();
+    const manager = new ConcurrentPipelineManager(
+      "/test-repo",
+      mockQueue as any,
+      controllable.factory,
+      createMockLogger() as any,
+      { maxConcurrent: 2, worktreeBase: ".worktrees" }
+    );
+    manager.setPendingRemoteRunId(1658, "platform-run-1658");
+    mockQueue.dequeueIndependent.mockResolvedValueOnce([makeQueueItem(1658), makeQueueItem(1659)]);
+
+    await manager.fillSlots();
+    await vi.waitFor(() => {
+      expect(controllable.getStateService(1658)?.beginRun).toHaveBeenCalledTimes(1);
+      expect(controllable.getStateService(1659)?.beginRun).toHaveBeenCalledTimes(1);
+    });
+    expect(controllable.getStateService(1658).beginRun.mock.calls[0][3]).toBe("platform-run-1658");
+    expect(controllable.getStateService(1659).beginRun.mock.calls[0][3]).toBeUndefined();
+  });
 });

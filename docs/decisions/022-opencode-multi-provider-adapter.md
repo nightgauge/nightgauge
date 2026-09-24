@@ -371,55 +371,107 @@ allowed, a host name or an address can never become one.
 #### Remote run requests (amendment 2026-09-24, #1656)
 
 A dashboard or mobile trigger can ask for the adapter and model a run
-executes on. The hosted service puts two optional fields on the `trigger`
-agent command's payload, and omits both keys when the requester names
-neither:
+executes on. The rule: **a requested pair is honoured exactly, or the request
+or the stage is refused with a reason. It is never silently substituted.**
 
-- `adapter`: an adapter id from this machine's registry (`opencode`,
-  `claude-headless`, …). Exact names only; an alias is refused.
+The hosted service puts two optional fields on the `trigger` agent command's
+payload, and omits both keys when the requester names neither:
+
+- `adapter`: an id from the extension's adapter vocabulary
+  (`AdapterEnumSchema`), because the extension executes the pin: `claude`,
+  `codex`, `copilot`, `gemini`, `gemini-sdk`, `grok`, `lm-studio`, `ollama`,
+  `opencode`. `claude` is the id; the Go registry's `claude-headless` and its
+  other aliases are not accepted. `lm-studio` and `ollama` are in the
+  vocabulary but are not agentic, so they are always refused.
 - `model`: the value the dispatch passes on `-m`, in **provider-key form**
   (`lmstudio/qwen/qwen3.8-27b`), never the recorded `model` above
   (`lm-studio/qwen/qwen3.8-27b`). A provider key is what OpenCode and the
   catalog know; `model_provider` is a label the record derives from it (§ 1).
 
-The agent validates both before it acks the command, in
-`orchestrator.ValidateRemotePin`, and refuses in this order:
+The extension asks Go (`queue.validatePin`) before it acks the command, and
+`queue.add` runs the same validation again. `orchestrator.ValidateRemotePin`
+refuses in this order:
 
 1. **Shape.**
    - `model` is present without `adapter`.
+   - `adapter` is not in the vocabulary above.
    - `model` is longer than 200 bytes, contains `..`, or starts with `-`.
    - For `opencode`, `model` does not match `^[a-z0-9-]+/[A-Za-z0-9._:/-]+$`.
    - For any other adapter, `model` does not match
      `^[A-Za-z0-9][A-Za-z0-9._:/-]*$`.
-   - `adapter` is not in the registry allow-list.
 
    Nothing else runs on a value this step refuses, so no argv is built from
    it.
 
-2. **Capability.** The adapter is not agentic, or the adapter health reading
-   the cap-hop walk uses (`AdapterUsableForCapHop`) finds it unusable. That
-   reading is what refuses a gated adapter (the enable gate above) and every
-   other prerequisite. A remote request cannot lift either.
-3. **Model.** The adapter's own `ValidateModel` refuses `model`.
-4. **Credentials (`opencode`).** § 17 refuses the provider.
-5. **Catalog (`opencode`).** `opencode models` under the per-run config (the
-   #1627 probe) does not list `model`. OpenCode lists a hosted provider's
-   models only when one of its variables is set. So when the model is missing
-   and none of its provider's variables is set, the refusal names the missing
-   credentials, as the doctor's catalog check does.
+2. **Capability.**
+   - The adapter is not agentic.
+   - The operator pinned another adapter for this machine (`--adapter` or
+     `NIGHTGAUGE_ADAPTER`). Machine policy refuses; it never substitutes.
+   - The adapter health reading the cap-hop walk uses
+     (`AdapterUsableForCapHop`) finds it unusable. That reading refuses a
+     gated adapter (the enable gate above) and every other prerequisite. A
+     remote request cannot lift either.
+3. **Performance ceiling.** A model with a registry tier above the
+   performance mode's routed-tier ceiling for any pipeline stage, in the
+   workspace of the requested repository. A pinned model runs every stage, so
+   it must fit every stage's ceiling; it is refused, never clamped. A local
+   model has no tier and no ceiling applies.
+4. **Model.** The adapter's own `ValidateModel` refuses `model`.
+5. **Credentials (`opencode`).** § 17 refuses the provider.
+6. **Catalog (`opencode`).** `opencode models` under the per-run config (the
+   #1627 probe) does not list `model`. When the catalog lists nothing for the
+   provider at all and none of the provider's variables is set, the refusal
+   names the missing credentials, as the doctor's catalog check does.
 
-A refusal is the command's ack, `{outcome: "rejected", detail}`, with
-`detail` at most 2000 characters. The run is never queued. A valid pair is
-acked as before, stored on the queue item, and dispatched on every stage as a
-**requested** adapter pin plus model:
+A request for an issue that is already queued is refused too (the pin could
+not apply to it), and `queue.add` decides and inserts a pinned item under one
+lock.
+
+**The refusal** is the command's ack, `{outcome: "rejected", detail}`, and the
+run is never queued. `detail` is at most 2000 **bytes** and is only a fixed
+category, plus at most an adapter id or variable names. It never carries a
+path, a probe's output or a remediation, which stay in the agent's local log.
+The categories are `invalid-request: <fixed text>`, `adapter-not-allowed`,
+`adapter-not-agentic: <adapter>`, `operator-pinned-adapter: <adapter>`,
+`adapter-unavailable: <adapter>`, `above-performance-ceiling`,
+`model-refused: <adapter>`, `provider-not-allowed: <adapter>`,
+`credentials-missing: <variables>`, `catalog-unavailable`,
+`model-not-in-catalog`, `already-queued`, `epic-not-pinnable`,
+`validation-unavailable` and `validation-failed`.
+
+**A valid pair** is acked as before, stored on the queue item, and dispatched
+on every stage as a **requested** adapter pin plus model:
 
 - It replaces every local resolution rung, as the cap pin (#1545) does.
 - Unlike the cap pin, it never walks the fallback chain and never falls back
   on an unknown value. A pinned adapter that fails its prerequisites at
   dispatch fails the stage.
+- The model is dispatched verbatim. A band name is translated for the
+  adapter, since no CLI launches a band. No escalation, floor, descent,
+  capacity soft-route, context-budget re-route or model-swap retry (the
+  Fable → Opus usage-limit fallback, the pr-create sonnet retry) replaces it.
+  Where one would, the stage fails with a reason naming the pin.
+- **A cap-hop outranks the request.** A pinned run whose provider hits a usage
+  cap can hop to the next adapter in `pipeline.adapter_fallback_chain`, as any
+  run can, and the ordinary resolution applies there. The hop is recorded as
+  a hop with its reason, never as the request.
 - The run record keeps `requested_adapter` and `requested_model` next to the
-  served stage adapters and models. A later cap-hop is recorded as a hop
-  with its reason and never rewrites them.
+  served stage adapters and models, and nothing rewrites them. On the
+  extension path Go learns them from the queue item only for the run whose
+  `remoteRunId` is the trigger's, never for another run of the same issue.
+
+**Validate-then-dispatch is not atomic.** Adapter health, credentials, the
+catalog and the operator's settings can change between the ack and a stage's
+dispatch. The strict pin makes that loud: the stage fails at dispatch. It is
+never quietly re-pointed.
+
+**Deviation from #1656 as first specified.** The issue named the Go registry
+as the allow-list, with exact names only and aliases refused, and `claude-headless`
+as an example. The pin is executed by the extension, whose vocabulary is
+`AdapterEnumSchema`, so that is the allow-list, and a parity test ties the Go
+list to it. The hosted service's shape check is
+asked to use this vocabulary and the same 200-byte bound; the agent does not
+rely on it.
 
 ### 3. Cost
 

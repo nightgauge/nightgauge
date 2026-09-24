@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
+	"github.com/nightgauge/nightgauge/internal/state"
 )
 
 const remotePinLocalModel = "lmstudio/qwen/qwen3.8-27b"
@@ -22,6 +24,8 @@ type remotePinFakes struct {
 	env         map[string]string
 	catalog     []string
 	catalogHits int
+	operator    string
+	ceilings    map[state.PipelineStage]string
 }
 
 func newRemotePinFakes() *remotePinFakes {
@@ -38,6 +42,13 @@ func (f *remotePinFakes) deps() RemotePinDeps {
 		Catalog: func(string) ([]string, error) {
 			f.catalogHits++
 			return f.catalog, nil
+		},
+		OperatorAdapter: func() string { return f.operator },
+		StageCeiling: func(st state.PipelineStage) string {
+			if c, ok := f.ceilings[st]; ok {
+				return c
+			}
+			return "fable"
 		},
 	}
 }
@@ -160,5 +171,77 @@ func TestRemotePinAllowListMatchesTheExtension(t *testing.T) {
 		if _, err := reg.Get(name); err != nil {
 			t.Errorf("allow-listed adapter %q does not resolve in the registry: %v", name, err)
 		}
+	}
+}
+
+// A machine whose operator pinned an adapter refuses a request for another
+// one: machine policy refuses, it never substitutes. The operator's own
+// adapter, in either vocabulary, is accepted.
+func TestRemotePinOperatorPinnedAdapter(t *testing.T) {
+	f := newRemotePinFakes()
+	f.operator = "claude-headless"
+	err := ValidateRemotePin("opencode", remotePinLocalModel, f.deps())
+	if err == nil || RemotePinPublic(err) != "operator-pinned-adapter: claude" {
+		t.Fatalf("got %v (public %q), want an operator-pinned-adapter refusal", err, RemotePinPublic(err))
+	}
+	if f.catalogHits != 0 {
+		t.Error("the catalog was read for a request the operator pin refuses")
+	}
+	if err := ValidateRemotePin("claude", "", f.deps()); err != nil {
+		t.Fatalf("the operator's own adapter was refused: %v", err)
+	}
+}
+
+// A pinned model runs every stage, so one above any stage's performance
+// ceiling is refused, never clamped. A local model has no tier and is never
+// refused by a ceiling.
+func TestRemotePinAbovePerformanceCeiling(t *testing.T) {
+	f := newRemotePinFakes()
+	f.ceilings = map[state.PipelineStage]string{state.StageFeatureValidate: "sonnet"}
+	for _, model := range []string{"opus", "fable"} {
+		err := ValidateRemotePin("claude", model, f.deps())
+		if err == nil || RemotePinPublic(err) != "above-performance-ceiling" || !strings.Contains(err.Error(), "feature-validate") {
+			t.Errorf("claude %s: got %v (public %q), want above-performance-ceiling naming the stage", model, err, RemotePinPublic(err))
+		}
+	}
+	if err := ValidateRemotePin("claude", "sonnet", f.deps()); err != nil {
+		t.Errorf("a model at the ceiling was refused: %v", err)
+	}
+	f.ceilings = map[state.PipelineStage]string{state.StageFeatureValidate: "haiku"}
+	if err := ValidateRemotePin("opencode", remotePinLocalModel, f.deps()); err != nil {
+		t.Errorf("a local model was refused by a ceiling: %v", err)
+	}
+}
+
+// What reaches the hosted service is a fixed category and at most an adapter
+// id or variable names: never the model, a probe's output or a remediation.
+func TestRemotePinPublicDetailIsACategory(t *testing.T) {
+	for _, tc := range []struct {
+		adapter, model, want string
+		setup                func(*remotePinFakes)
+	}{
+		{"nope", "", "adapter-not-allowed", nil},
+		{"lm-studio", "", "adapter-not-agentic: lm-studio", nil},
+		{"opencode", remotePinLocalModel, "adapter-unavailable: opencode",
+			func(f *remotePinFakes) { f.usable, f.usableWhy = false, "see /home/someone/.config/opencode" }},
+		{"opencode", "lmstudio/qwen/other-model", "model-not-in-catalog", nil},
+		{"opencode", "openai/gpt-x", "credentials-missing: OPENAI_API_KEY", nil},
+		{"opencode", "anthropic/claude-sonnet-5", "credentials-missing: ANTHROPIC_API_KEY", nil},
+		{"opencode", "--auto", "invalid-request: the requested model must not start with '-'", nil},
+	} {
+		f := newRemotePinFakes()
+		if tc.setup != nil {
+			tc.setup(f)
+		}
+		err := ValidateRemotePin(tc.adapter, tc.model, f.deps())
+		if got := RemotePinPublic(err); got != tc.want {
+			t.Errorf("%s %q: public detail %q, want %q (reason: %v)", tc.adapter, tc.model, got, tc.want, err)
+		}
+		if tc.model != "" && strings.Contains(RemotePinPublic(err), tc.model) {
+			t.Errorf("%s: the public detail echoes the model", tc.adapter)
+		}
+	}
+	if got := RemotePinPublic(errors.New("/some/path: boom")); got != "validation-failed" {
+		t.Errorf("an unclassified error became %q", got)
 	}
 }

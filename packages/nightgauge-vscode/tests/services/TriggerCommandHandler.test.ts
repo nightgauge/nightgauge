@@ -430,7 +430,13 @@ describe("TriggerCommandHandler — remote run request (#1656)", () => {
     handler.handle(pinnedCmd({ adapter: "opencode", model: MODEL }));
 
     await vi.waitFor(() => expect(queueService.enqueue).toHaveBeenCalledTimes(1));
-    expect(ipcClient.queueValidatePin).toHaveBeenCalledWith("opencode", MODEL);
+    expect(ipcClient.queueValidatePin).toHaveBeenCalledWith(
+      "opencode",
+      MODEL,
+      "nightgauge",
+      "nightgauge",
+      42
+    );
     expect(ipcClient.agentAcknowledgeCommand).toHaveBeenCalledWith("agent-1", "cmd-1");
     const validateOrder = ipcClient.queueValidatePin.mock.invocationCallOrder[0];
     const ackOrder = ipcClient.agentAcknowledgeCommand.mock.invocationCallOrder[0];
@@ -443,8 +449,8 @@ describe("TriggerCommandHandler — remote run request (#1656)", () => {
     });
   });
 
-  it("acks a refused pair as rejected with Go's reason, and never enqueues", async () => {
-    const reason = "model lmstudio/qwen/other is not in this machine's opencode catalog";
+  it("acks a refused pair as rejected with Go's public category, and never enqueues", async () => {
+    const reason = "model-not-in-catalog";
     ipcClient.queueValidatePin.mockResolvedValue({ ok: false, reason });
     handler.handle(pinnedCmd({ adapter: "opencode", model: "lmstudio/qwen/other" }));
 
@@ -470,21 +476,40 @@ describe("TriggerCommandHandler — remote run request (#1656)", () => {
     expect(queueService.enqueue).not.toHaveBeenCalled();
   });
 
+  it("an already-queued issue is acked rejected before any accepted ack (#1656)", async () => {
+    ipcClient.queueValidatePin.mockResolvedValue({ ok: false, reason: "already-queued" });
+    handler.handle(pinnedCmd({ adapter: "opencode", model: MODEL }));
+
+    await vi.waitFor(() => expect(ipcClient.agentAcknowledgeCommand).toHaveBeenCalledTimes(1));
+    expect(ipcClient.agentAcknowledgeCommand).toHaveBeenCalledWith(
+      "agent-1",
+      "cmd-1",
+      "rejected",
+      "already-queued"
+    );
+    expect(queueService.enqueue).not.toHaveBeenCalled();
+  });
+
   it("refuses a pin on an epic, which enqueue would otherwise drop", async () => {
     ipcClient.issueView.mockResolvedValue({ number: 42, title: "Epic", labels: ["type:epic"] });
     handler.handle(pinnedCmd({ adapter: "opencode", model: MODEL }));
 
     await vi.waitFor(() => expect(ipcClient.agentAcknowledgeCommand).toHaveBeenCalledTimes(1));
     expect(ipcClient.agentAcknowledgeCommand.mock.calls[0][2]).toBe("rejected");
+    expect(ipcClient.agentAcknowledgeCommand.mock.calls[0][3]).toBe("epic-not-pinnable");
     expect(queueService.enqueue).not.toHaveBeenCalled();
   });
 
-  it("acks rejected when Go cannot be asked", async () => {
-    ipcClient.queueValidatePin.mockRejectedValue(new Error("IPC down"));
+  it("acks rejected with a fixed category when Go cannot be asked, keeping the error local", async () => {
+    ipcClient.queueValidatePin.mockRejectedValue(new Error("IPC down at /home/someone/.sock"));
     handler.handle(pinnedCmd({ adapter: "opencode", model: MODEL }));
 
     await vi.waitFor(() => expect(ipcClient.agentAcknowledgeCommand).toHaveBeenCalledTimes(1));
-    expect(ipcClient.agentAcknowledgeCommand.mock.calls[0][3]).toContain("IPC down");
+    expect(ipcClient.agentAcknowledgeCommand.mock.calls[0][3]).toBe("validation-unavailable");
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("refused"),
+      expect.objectContaining({ localReason: "IPC down at /home/someone/.sock" })
+    );
     expect(queueService.enqueue).not.toHaveBeenCalled();
   });
 

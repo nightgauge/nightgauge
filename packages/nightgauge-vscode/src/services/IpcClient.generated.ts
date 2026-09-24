@@ -286,8 +286,8 @@ export class IpcClientGenerated extends IpcClientBase {
     await this.call<void>('queue.add', { owner, repo, issueNumber, title, labels, priority, remoteRunId, adapter, model });
   }
 
-  async queueValidatePin(adapter?: string, model?: string): Promise<QueueValidatePinResult> {
-    return this.call<QueueValidatePinResult>('queue.validatePin', { adapter, model });
+  async queueValidatePin(adapter?: string, model?: string, owner?: string, repo?: string, issueNumber?: number): Promise<QueueValidatePinResult> {
+    return this.call<QueueValidatePinResult>('queue.validatePin', { adapter, model, owner, repo, issueNumber });
   }
 
   async queueList(): Promise<IpcQueueState> {

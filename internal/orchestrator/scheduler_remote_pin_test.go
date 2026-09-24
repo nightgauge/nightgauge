@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/execution"
+	"github.com/nightgauge/nightgauge/internal/execution/adapters"
+	"github.com/nightgauge/nightgauge/internal/platform"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/internal/trace"
 	"github.com/nightgauge/nightgauge/pkg/types"
@@ -222,5 +225,88 @@ func TestRemotePinCapHopIsRecordedAndTheRequestStands(t *testing.T) {
 	}
 	if hop == "" || !strings.Contains(hop, "claude") {
 		t.Fatalf("no hop with its reason in the trace:\n%s", raw)
+	}
+}
+
+// A context-budget overflow on a pinned run is refused, never re-routed to
+// another model: the reroute that dispatches an unpinned run
+// (TestContextBudgetRefusal_SuccessfulReRouteDispatches) does not run, and the
+// refusal names the pin (#1656).
+func TestRemotePinContextBudgetRefusesInsteadOfReRouting(t *testing.T) {
+	stubReconcileGhUnreachable(t)
+	root := t.TempDir()
+	writeBigSkillFile(t, root, "nightgauge-issue-pickup", contextBudgetMediumBytes)
+
+	runner := newRefusalCapturingStageRunner()
+	s := newRefusalScheduler(root, runner)
+	item := types.BoardItem{Number: 1649, Repo: "nightgauge/nightgauge", ID: "item-1649"}
+	s.queue = []QueueItem{{Repo: item.Repo, IssueNumber: item.Number, Status: "processing",
+		RequestedAdapter: "claude", RequestedModel: "haiku"}}
+	logs := captureLog(t, func() { s.runPipeline(context.Background(), item) })
+
+	if got := runner.count(state.StageIssuePickup); got != 0 {
+		t.Fatalf("issue-pickup was dispatched %d time(s) — a pinned run is refused, not re-routed\n%s", got, logs)
+	}
+	if strings.Contains(logs, "context-budget re-route:") {
+		t.Errorf("a pinned run attempted a re-route:\n%s", logs)
+	}
+	rec := recordForIssue(t, root, item.Number)
+	if rec.TerminalFailureKind != TerminalKindContextWindowExceeded {
+		t.Errorf("rec.TerminalFailureKind = %q, want %q", rec.TerminalFailureKind, TerminalKindContextWindowExceeded)
+	}
+	reason := rec.Stages[string(state.StageIssuePickup)].Error
+	for _, want := range []string{"context_window_exceeded", "pinned to haiku by a remote run request"} {
+		if !strings.Contains(reason, want) {
+			t.Errorf("stage error = %q, want it to contain %q", reason, want)
+		}
+	}
+}
+
+// A capacity overflow on a pinned run is refused under reject_action:
+// soft-route, never moved to a capacity fallback model, and the windows of the
+// stages ahead are the pinned model's (#1656).
+func TestRemotePinCapacityRefusesInsteadOfSoftRouting(t *testing.T) {
+	stubReconcileGhUnreachable(t)
+	capacityTestEndpoints(t)
+	root := t.TempDir()
+	seedRefusalRepo(t, root, allRefusalStageSkills)
+	cfg := "pipeline:\n  size_gate:\n    routes:\n      reject_action: soft-route\n" +
+		"      capacity_fallback_models:\n        - local131/qwen-131k\n"
+	if err := os.MkdirAll(filepath.Join(root, ".nightgauge"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".nightgauge", "config.yaml"), []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	const number = 1660
+	runner := newRefusalCapturingStageRunner()
+	s := newRefusalSchedulerWithAdapter(root, runner, adapters.NewOpenCodeAdapter())
+	s.telemetrySvc = &hookTelemetry{onEvent: func(e platform.PipelineEvent) {
+		if e.EventType != "stage_completed" || e.Stage != string(state.StageFeaturePlanning) {
+			return
+		}
+		plan := `{"schema_version":"1.0","issue_number":` + strconv.Itoa(number) +
+			`,"complexity_assessment":{"size_label":"M"}}`
+		if err := os.WriteFile(runner.outputFile(state.StageFeaturePlanning), []byte(plan), 0o644); err != nil {
+			t.Errorf("write planning context: %v", err)
+		}
+	}}
+	s.telemetryEnabled = true
+	item := types.BoardItem{Number: number, Repo: "nightgauge/nightgauge", ID: "item-1660"}
+	s.queue = []QueueItem{{Repo: item.Repo, IssueNumber: item.Number, Status: "processing",
+		RequestedAdapter: "opencode", RequestedModel: "local32/qwen-32k"}}
+	logs := captureLog(t, func() { s.runPipeline(context.Background(), item) })
+
+	if got := runner.count(state.StageFeatureDev); got != 0 {
+		runner.mu.Lock()
+		model := runner.models[state.StageFeatureDev]
+		runner.mu.Unlock()
+		t.Fatalf("feature-dev was dispatched %d time(s) on %q — a pinned run is refused, not soft-routed\n%s", got, model, logs)
+	}
+	reason := runner.runtime.Snapshot().StageErrors[string(state.StageFeatureDev)]
+	for _, want := range []string{"context_window_exceeded", "32768", "pinned to local32/qwen-32k by a remote run request"} {
+		if !strings.Contains(reason, want) {
+			t.Errorf("stage error = %q, want it to contain %q", reason, want)
+		}
 	}
 }

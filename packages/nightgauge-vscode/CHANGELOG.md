@@ -27,8 +27,10 @@ and this project adheres to
 
 - A dashboard or mobile trigger can name the adapter and model its run executes
   on. The extension asks the Go binary to validate the pair before acking; a
-  pair this machine cannot serve is acked `rejected` with the reason and never
-  queued, and a valid pair pins every stage without falling back (#1656).
+  pair this machine cannot serve is acked `rejected` with a short reason
+  category and never queued. A valid pair pins every stage, including retries
+  and auto-started queue items, and is never swapped for another adapter or
+  model (#1656).
 
 - Pipeline health reads each OpenCode stage's context-window utilization and
   compaction count from the run history (#1653), so a stage that uses under

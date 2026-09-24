@@ -477,8 +477,9 @@ type QueueAddParams struct {
 	RemoteRunID string `json:"remoteRunId,omitempty"`
 	// Adapter and Model are a remote run request's pin (#1656, ADR-022 § 2):
 	// the `trigger` payload's `adapter` and `model`, which the caller has
-	// already put through queue.validatePin. queue.add re-checks their shape
-	// and refuses a pin for an issue that is already queued.
+	// already put through queue.validatePin. queue.add validates them again in
+	// full and queues a pinned item only if the issue is not already queued,
+	// under one lock.
 	Adapter string `json:"adapter,omitempty"`
 	Model   string `json:"model,omitempty"`
 }
@@ -489,10 +490,19 @@ type QueueAddParams struct {
 type QueueValidatePinParams struct {
 	Adapter string `json:"adapter,omitempty"`
 	Model   string `json:"model,omitempty"`
+	// Owner, Repo and IssueNumber name the issue the trigger would queue, so
+	// a pin for an issue that is already queued is refused before the ack
+	// rather than dropped after it, and the performance ceiling is read from
+	// that repository's workspace.
+	Owner       string `json:"owner,omitempty"`
+	Repo        string `json:"repo,omitempty"`
+	IssueNumber int    `json:"issueNumber,omitempty"`
 }
 
 // QueueValidatePinResult is the result for queue.validatePin. Reason is the
-// refusal, for the command ack's `detail`, and is empty when OK is true.
+// refusal's public detail for the command ack — a fixed category and at most
+// an adapter id or variable names (orchestrator.RemotePinPublic); the full
+// reason is logged locally only. Empty when OK is true.
 type QueueValidatePinResult struct {
 	OK     bool   `json:"ok"`
 	Reason string `json:"reason,omitempty"`
@@ -1044,6 +1054,13 @@ type PipelineNotifyStageTransitionParams struct {
 	// runtime-{issue}-{runId}.json when one exists. `omitempty` is a wire
 	// economy, not an optionality: the server refuses the empty string.
 	RunID string `json:"runId,omitempty"`
+	// RemoteRunID is the platform run id of the trigger this run serves, when
+	// it serves one (the ack runId the slot adopted as its remoteRunId). It is
+	// correlation, not identity (ADR-017 Decision 2): the server uses it only
+	// to find the queue item queued for that trigger and record its remote
+	// run request pin on this run (#1656). A run without it never inherits a
+	// pin, even for the same issue.
+	RemoteRunID string `json:"remoteRunId,omitempty"`
 }
 
 // PipelineNotifyStageProgressParams are parameters for pipeline.notifyStageProgress.

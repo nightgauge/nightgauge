@@ -55,12 +55,14 @@ changelog, and the release workflow refuses a tag that does not.
   (#1656).** A dashboard or mobile `trigger` may carry `adapter` and `model`
   (the `-m` value, such as `lmstudio/qwen/qwen3.8-27b`). The agent checks them
   before it acks: the allow-list, pattern and length, adapter health (a gated
-  adapter cannot be enabled remotely), provider credentials and the local
-  OpenCode catalog. A pair it cannot serve is acked `rejected` with the reason,
-  and the run is never queued or moved to another model. A valid pair pins
-  every stage, and the run record keeps `requested_adapter`/`requested_model`
-  next to what served, so a later cap-hop shows as a hop. ADR-022 § 2 records
-  the contract.
+  adapter cannot be enabled remotely), the operator's own adapter pin, the
+  performance mode's ceiling, provider credentials and the local OpenCode
+  catalog. A pair it cannot serve is acked `rejected` with a short reason
+  category, and the run is never queued. A valid pair pins every stage
+  exactly: no fallback, re-route or model-swap retry replaces it, and a stage
+  that cannot run it fails naming the pin. The run record keeps
+  `requested_adapter`/`requested_model` next to what served, so a cap-hop
+  shows as a hop. ADR-022 § 2 records the contract.
 
 - **The pipeline can authenticate as a GitHub App (#1955).** Set
   `github_auth.app` (`id`, `private_key_path` or `private_key: env:VAR`, and

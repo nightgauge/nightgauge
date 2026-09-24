@@ -4297,12 +4297,20 @@ export function runStageSkillHeadless(
   // are about the decision, not about what the adapter launches: whether the
   // active performance mode pinned this tier, and what the served-model report
   // must be measured against.
+  // A remote run request's model (#1656) is dispatched exactly as requested
+  // on its pinned adapter: no band normalization, no configured-model
+  // fallback. A band name (`sonnet`) is still translated, because a band is
+  // not a model id any CLI launches.
+  const pinnedVerbatimModel =
+    requestedPin && modelOverride && modelTierBand(modelOverride) !== modelOverride
+      ? modelOverride
+      : undefined;
   let requestedModel: string;
   if (modelOverride) {
     requestedModel = modelOverride;
     baseDecision = {
       model:
-        adapter === "codex"
+        adapter === "codex" && !pinnedVerbatimModel
           ? resolveCodexPipelineModel(modelOverride, workspaceRoot)
           : modelOverride,
       source: modelOverrideSource ?? "user-override",
@@ -4722,7 +4730,11 @@ export function runStageSkillHeadless(
     const bandMapping = requestedBand ? getAdapterModelForBand(requestedBand, adapter) : undefined;
     let geminiModel: string;
     let modelSourceLabel = "";
-    if (bandMapping && !bandMapping.mismatch) {
+    if (pinnedVerbatimModel) {
+      geminiModel = pinnedVerbatimModel;
+      modelDecision.model = pinnedVerbatimModel;
+      modelSourceLabel = " (remote run request)";
+    } else if (bandMapping && !bandMapping.mismatch) {
       geminiModel = bandMapping.model;
       modelDecision.model = bandMapping.model;
       modelSourceLabel = " (dispatched band)";
@@ -4744,7 +4756,11 @@ export function runStageSkillHeadless(
     const bandMapping = requestedBand ? getAdapterModelForBand(requestedBand, adapter) : undefined;
     let grokModel: string | undefined;
     let modelSourceLabel = "";
-    if (bandMapping && !bandMapping.mismatch) {
+    if (pinnedVerbatimModel) {
+      grokModel = pinnedVerbatimModel;
+      modelDecision.model = pinnedVerbatimModel;
+      modelSourceLabel = " (remote run request)";
+    } else if (bandMapping && !bandMapping.mismatch) {
       grokModel = bandMapping.model;
       modelDecision.model = bandMapping.model;
       modelSourceLabel = " (dispatched band)";
@@ -4904,7 +4920,11 @@ export function runStageSkillHeadless(
     const bandMapping = requestedBand ? getAdapterModelForBand(requestedBand, adapter) : undefined;
     let copilotModel: string | undefined;
     let modelSourceLabel = "";
-    if (bandMapping && !bandMapping.mismatch) {
+    if (pinnedVerbatimModel) {
+      copilotModel = pinnedVerbatimModel;
+      modelDecision.model = pinnedVerbatimModel;
+      modelSourceLabel = " (remote run request)";
+    } else if (bandMapping && !bandMapping.mismatch) {
       copilotModel = bandMapping.model;
       modelDecision.model = bandMapping.model;
       modelSourceLabel = " (dispatched band)";

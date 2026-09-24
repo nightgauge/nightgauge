@@ -494,3 +494,96 @@ test prompt`);
     );
   });
 });
+
+/**
+ * A remote run request's model (#1656) is dispatched verbatim on its pinned
+ * single-provider adapter: no configured-model fallback and no band
+ * normalization. Only a band name is still translated.
+ */
+describe("skillRunner — requested model dispatched verbatim (Issue #1656)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockProcess = createMockChildProcess();
+    vi.mocked(spawn).mockReturnValue(mockProcess);
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readFileSync).mockReturnValue(`---
+description: test
+allowed-tools: []
+---
+test prompt`);
+    walkAdapterFallbackMock.mockReturnValue({ winner: null, hopsAttempted: [], lastError: "" });
+    resolveStageAdapterMock.mockReturnValue({ adapter: "claude", source: "stage-config" });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const run = (adapter: string, model: string, requested: boolean | undefined) =>
+    runStageSkillHeadless(
+      "feature-dev",
+      42,
+      { onComplete: vi.fn() },
+      undefined, // issueMetadata
+      undefined, // _batchContext
+      undefined, // skipToPhase
+      model, // modelOverride
+      undefined, // pauseAutoRouting
+      undefined, // pinnedWorkspaceRoot
+      "user-override", // modelOverrideSource
+      undefined, // injectedSkillContent
+      undefined, // autonomousMode
+      undefined, // warnThresholdUsd
+      undefined, // targetRepoOverride
+      undefined, // runId
+      undefined, // effortOverride
+      adapter,
+      requested
+    );
+
+  const spawnedEnv = (): Record<string, string | undefined> =>
+    (vi.mocked(spawn).mock.calls[0]?.[2] as { env?: Record<string, string> } | undefined)?.env ??
+    {};
+
+  it.each([
+    ["copilot", "NIGHTGAUGE_COPILOT_MODEL", "gpt-5.9-requested-preview"],
+    ["gemini", "NIGHTGAUGE_GEMINI_MODEL", "gemini-2.5-flash"],
+    ["grok", "NIGHTGAUGE_GROK_MODEL", "grok-9-requested-preview"],
+  ])("%s dispatches the requested model as %s verbatim", (adapter, envKey, model) => {
+    run(adapter, model, true);
+    expect(spawnedEnv()[envKey]).toBe(model);
+  });
+
+  // Gemini is a CLOSED adapter: an id its validator does not know is refused
+  // before spawn ([stage:model-invalid]), never replaced.
+  it("gemini refuses an unknown requested model rather than substituting one", () => {
+    const onComplete = vi.fn();
+    runStageSkillHeadless(
+      "feature-dev",
+      42,
+      { onComplete },
+      undefined,
+      undefined,
+      undefined,
+      "gemini-9-requested-preview",
+      undefined,
+      undefined,
+      "user-override",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "gemini",
+      true
+    );
+    expect(spawn).not.toHaveBeenCalled();
+    expect(String(onComplete.mock.calls[0]?.[0]?.error)).toContain("[stage:model-invalid]");
+  });
+
+  it("a band name on a requested pin is still translated for the adapter", () => {
+    run("gemini", "sonnet", true);
+    expect(spawnedEnv().NIGHTGAUGE_GEMINI_MODEL).not.toBe("sonnet");
+  });
+});
