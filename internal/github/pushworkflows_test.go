@@ -62,7 +62,7 @@ func TestPushWorkflowsCanRun(t *testing.T) {
 	}
 
 	can, err := run(map[string][]string{dir: {listing},
-		"/repos/o/r/contents/.github/workflows/ci.yml":      {contentPage("on: [pull_request, workflow_dispatch]\n")},
+		"/repos/o/r/contents/.github/workflows/ci.yml":         {contentPage("on: [pull_request, workflow_dispatch]\n")},
 		"/repos/o/r/contents/.github/workflows/cache-warm.yml": {contentPage("on:\n  push:\n    tags: ['v*']\n")},
 	})
 	if err != nil || can {
@@ -70,7 +70,7 @@ func TestPushWorkflowsCanRun(t *testing.T) {
 	}
 
 	can, err = run(map[string][]string{dir: {listing},
-		"/repos/o/r/contents/.github/workflows/ci.yml":      {contentPage("on: pull_request\n")},
+		"/repos/o/r/contents/.github/workflows/ci.yml":         {contentPage("on: pull_request\n")},
 		"/repos/o/r/contents/.github/workflows/cache-warm.yml": {contentPage("on:\n  push:\n    branches: [main]\n")},
 	})
 	if err != nil || !can {
@@ -89,7 +89,7 @@ func TestPushWorkflowsCanRun(t *testing.T) {
 	}
 	// So is one that does not parse.
 	if _, err = run(map[string][]string{dir: {listing},
-		"/repos/o/r/contents/.github/workflows/ci.yml":      {contentPage("on: [push\n")},
+		"/repos/o/r/contents/.github/workflows/ci.yml":         {contentPage("on: [push\n")},
 		"/repos/o/r/contents/.github/workflows/cache-warm.yml": {contentPage("on: pull_request\n")},
 	}); err == nil {
 		t.Error("an unparsable workflow file: err = nil, want an error")
