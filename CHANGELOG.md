@@ -14,6 +14,17 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The knowledge base is committed, and every statement of that agrees
+  (#2042).** The generated `.nightgauge/.gitignore` no longer ignores
+  `/knowledge/` wholesale — an enabled knowledge base used to be scaffolded,
+  ignored and lost with the worktree. Only the derived `/knowledge/.recall-cache/`
+  stays ignored, so a scaffolded PRD shows as a new file to commit. A team opts
+  out with `/.nightgauge/knowledge/` in its root `.gitignore`. The `knowledge:`
+  comment written by `nightgauge config init` and `docs/KNOWLEDGE_BASE.md` say
+  the same. Template version 16; the old `/knowledge/` rule is retired.
+
 ### Added
 
 - **The pipeline can authenticate as a GitHub App (#1955).** Set

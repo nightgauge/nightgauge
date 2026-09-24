@@ -4,3 +4,4 @@
 !/release-watch/
 !/release-watch/last-seen.json
 /release-watch/reports/
+/knowledge/

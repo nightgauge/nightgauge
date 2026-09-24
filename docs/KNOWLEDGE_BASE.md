@@ -62,7 +62,7 @@ path is correct from both.
 This used to be a bash block in the issue-pickup skill that called
 `nightgauge knowledge scaffold` from the stage's cwd. On the scheduler path that
 cwd is the run's worktree, so the PRD and decisions landed in
-`<worktree>/.nightgauge/knowledge/` — gitignored, and deleted with the worktree
+`<worktree>/.nightgauge/knowledge/` — deleted with the worktree
 at reclamation. Every later reader then found nothing (#1205). The skill's block
 is gone; there is one path, not two.
 
@@ -87,7 +87,8 @@ Set `knowledge.enabled: false` in your project config to **opt out**. There are
 exactly two legitimate reasons to:
 
 - **Repo footprint** — the knowledge base writes files under
-  `.nightgauge/knowledge/` and commits them, so the tree and its history grow.
+  `.nightgauge/knowledge/`, where they show up as new files to commit, so the
+  tree and its history grow.
 - **Per-run token cost** — recall and enrichment add tokens to every pipeline
   run.
 
@@ -1289,7 +1290,8 @@ knowledge:
 ```
 
 **Opting out.** One key, and only two reasons to use it — **repo footprint**
-(the KB writes and commits files under `.nightgauge/knowledge/`) and **per-run
+(the KB writes files under `.nightgauge/knowledge/` that show up as new files
+to commit) and **per-run
 token cost** (recall and enrichment add tokens to every run):
 
 ```yaml
@@ -1462,13 +1464,12 @@ personalized and recognizable to teammates.
    above.
 
 5. **Git tracking (your choice)**: The managed `.nightgauge/.gitignore`
-   ignores `/knowledge/` by default. To commit the knowledge tree instead, add
-   these rules below that file's `Local additions (kept on upgrade)` line,
-   where template upgrades preserve them:
+   ignores only the derived `/knowledge/.recall-cache/`, so scaffolded PRDs and
+   decisions show as new files to commit. To keep the knowledge tree out of git
+   instead, add this to your repository's root `.gitignore`:
 
    ```gitignore
-   !/knowledge/
-   /knowledge/.recall-cache/
+   /.nightgauge/knowledge/
    ```
 
    Committed knowledge files provide a durable record of decisions even after
@@ -1679,10 +1680,10 @@ knowledge:
 
 Workspace knowledge follows the same rule as repo-level knowledge: when the
 workspace root is an initialized repository, its generated
-`.nightgauge/.gitignore` ignores `/knowledge/` by default. To commit the
-workspace knowledge tree instead, add the `!/knowledge/` rules from step 5 of
-[Adopting the knowledge base](#adopting-the-knowledge-base-in-an-existing-repository)
-below that file's `Local additions (kept on upgrade)` line.
+`.nightgauge/.gitignore` ignores only `/knowledge/.recall-cache/`, so the
+workspace knowledge tree shows as new files to commit. To keep it out of git,
+add the root `.gitignore` rule from step 5 of
+[Adopting the knowledge base](#adopting-the-knowledge-base-in-an-existing-repository).
 Workspace knowledge is separate from each repo's knowledge directories — each
 has its own git tracking decision.
 

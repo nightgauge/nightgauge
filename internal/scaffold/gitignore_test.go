@@ -91,6 +91,43 @@ func ensure(t *testing.T, root string, want IgnoreAction) IgnoreResult {
 	return res
 }
 
+// #2042: the knowledge tree is committed by default. A scaffolded PRD shows as a
+// new file to commit, the derived recall cache stays ignored, and a team opts
+// out in its root .gitignore.
+func TestKnowledgeTreeIsCommittedByDefault(t *testing.T) {
+	root := initializedRepo(t)
+	ensure(t, root, IgnoreCreated)
+	kdir := filepath.Join(root, ".nightgauge", "knowledge", "features", "7-x")
+	cache := filepath.Join(root, ".nightgauge", "knowledge", ".recall-cache")
+	for _, d := range []string{kdir, cache} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, f := range []string{filepath.Join(kdir, "PRD.md"), filepath.Join(cache, "index.jsonl")} {
+		if err := os.WriteFile(f, []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	status := func() string {
+		return gittest.Run(t, root, "status", "--porcelain", "--untracked-files=all")
+	}
+	got := status()
+	if !strings.Contains(got, ".nightgauge/knowledge/features/7-x/PRD.md") {
+		t.Fatalf("PRD.md is ignored, want it shown as a new file:\n%s", got)
+	}
+	if strings.Contains(got, ".recall-cache") {
+		t.Fatalf("recall cache is not ignored:\n%s", got)
+	}
+
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("/.nightgauge/knowledge/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := status(); strings.Contains(got, "knowledge/") {
+		t.Fatalf("root .gitignore opt-out did not hide the knowledge tree:\n%s", got)
+	}
+}
+
 func TestEnsureIgnoreRules(t *testing.T) {
 	t.Run("untracked: writes the template, then does nothing", func(t *testing.T) {
 		root := initializedRepo(t)

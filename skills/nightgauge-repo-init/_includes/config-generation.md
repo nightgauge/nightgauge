@@ -49,7 +49,7 @@ polluting `git status`.
 #   config.yaml           — repository-wide pipeline configuration
 #   .gitignore            — this file
 #   */.gitkeep            — preserve directory structure
-# nightgauge-gitignore-version: 15
+# nightgauge-gitignore-version: 16
 
 # ─── Pipeline context, state, and execution data ─────────────────────
 pipeline/*
@@ -162,8 +162,10 @@ pipeline/queue-state.json
 # forensic state tied to specific run ids; regenerated every run.
 /containment/
 
-# ─── Knowledge base (scaffolded per-issue, local pipeline data) ──────
-/knowledge/
+# ─── Knowledge base (committed; only the derived cache is ignored) ───
+# PRD.md and decisions.md are durable project record and show up as new files
+# to commit. A team that does not want them opts out in its root .gitignore.
+/knowledge/.recall-cache/
 
 # ─── Auto-retro failure reports (local diagnostics) ─────────────────
 /retros/
@@ -194,8 +196,7 @@ pipeline/queue-state.json
 /improvement-runs/
 
 # ─── Local additions (kept on upgrade) ──────────────────────────────
-# Rules below this line are this repository's own (for example, un-ignoring
-# /knowledge/ to commit the knowledge tree). Template upgrades keep them.
+# Rules below this line are this repository's own. Template upgrades keep them.
 ```
 
 **Note:** The extension automatically creates and updates this file on

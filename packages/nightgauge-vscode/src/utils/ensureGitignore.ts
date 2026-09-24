@@ -13,8 +13,9 @@
  * The file is generator-owned: a rewrite replaces everything above
  * LOCAL_ADDITIONS_MARKER wholesale, so an edit there is lost at the next
  * version bump. Lines below the marker belong to the repository and survive
- * every rewrite; that section is where a repository opts back in to paths the
- * template ignores (docs/KNOWLEDGE_BASE.md un-ignores /knowledge/ there).
+ * every rewrite; that section is where a repository adds its own ignore rules.
+ * The template commits /knowledge/; a team opts out in its root .gitignore
+ * (docs/KNOWLEDGE_BASE.md).
  */
 
 import * as fs from "node:fs/promises";
@@ -31,7 +32,7 @@ import { loadWorkspaceConfig } from "./workspaceDetection";
  * Bump this when adding new patterns so the extension knows to update
  * existing .gitignore files that were written with an older version.
  */
-const GITIGNORE_VERSION = 15;
+const GITIGNORE_VERSION = 16;
 const VERSION_MARKER = `# nightgauge-gitignore-version: ${GITIGNORE_VERSION}`;
 
 /** The version in the first marker line of `content`, or null (treated as older). */
@@ -51,6 +52,7 @@ const RETIRED_RULES = [
   "!/release-watch/",
   "!/release-watch/last-seen.json",
   "/release-watch/reports/",
+  "/knowledge/",
 ];
 
 /** Non-blank, non-comment lines, trimmed. */
@@ -200,8 +202,10 @@ pipeline/queue-state.json
 # forensic state tied to specific run ids; regenerated every run.
 /containment/
 
-# ─── Knowledge base (scaffolded per-issue, local pipeline data) ──────
-/knowledge/
+# ─── Knowledge base (committed; only the derived cache is ignored) ───
+# PRD.md and decisions.md are durable project record and show up as new files
+# to commit. A team that does not want them opts out in its root .gitignore.
+/knowledge/.recall-cache/
 
 # ─── Auto-retro failure reports (local diagnostics) ─────────────────
 /retros/
@@ -232,8 +236,7 @@ pipeline/queue-state.json
 /improvement-runs/
 
 # ─── Local additions (kept on upgrade) ──────────────────────────────
-# Rules below this line are this repository's own (for example, un-ignoring
-# /knowledge/ to commit the knowledge tree). Template upgrades keep them.
+# Rules below this line are this repository's own. Template upgrades keep them.
 `;
 
 /**
