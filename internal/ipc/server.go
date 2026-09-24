@@ -4736,9 +4736,11 @@ func (s *Server) registerMethods() {
 		if p.IssueNumber <= 0 {
 			return nil, fmt.Errorf("issueNumber must be positive, got %d", p.IssueNumber)
 		}
-		return GitComposeBranchNameResult{
-			Name: gitops.ComposeBranchName(p.Labels, p.IssueNumber, p.Title),
-		}, nil
+		name, err := gitops.ComposeBranchName(p.Labels, p.IssueNumber, p.Title)
+		if err != nil {
+			return nil, err
+		}
+		return GitComposeBranchNameResult{Name: name}, nil
 	}
 
 	//ipc:method gitBranchCreate params:GitBranchCreateParams result:void

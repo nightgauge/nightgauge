@@ -1369,7 +1369,10 @@ func (s *Service) EnsureEpicBranch(epicNumber int, epicTitle string) (string, bo
 	}
 
 	// Generate the target branch name
-	branchName := GenerateBranchSlug("epic", epicNumber, epicTitle)
+	branchName, err := GenerateBranchSlug("epic", epicNumber, epicTitle)
+	if err != nil {
+		return "", false, err
+	}
 
 	// Remember current branch to restore after checkout
 	originalBranch, err := s.CurrentBranch()
@@ -1449,7 +1452,7 @@ func BranchPrefixFromLabels(labels []string) string {
 // deliberately the only entry point that takes raw labels: a second composer
 // that hardcodes a prefix brands every bug fix a feature, which is exactly
 // what `ConcurrentPipelineManager` did before this existed.
-func ComposeBranchName(labels []string, number int, title string) string {
+func ComposeBranchName(labels []string, number int, title string) (string, error) {
 	prefix := strings.TrimSuffix(BranchPrefixFromLabels(labels), "/")
 	return GenerateBranchSlug(prefix, number, title)
 }
@@ -1463,7 +1466,12 @@ func ComposeBranchName(labels []string, number int, title string) string {
 // `feat/227-227-per-operation-...`. Only a leading token that IS this issue's
 // number is dropped, so a title whose first word is some other number ("404
 // page returns 500") keeps it.
-func GenerateBranchSlug(prefix string, number int, title string) string {
+//
+// A title that leaves no slug (empty, only the issue's own number, or only
+// characters the slug drops) is an error, never `<prefix>/<number>-`. That name
+// was pushed to origin once, from an issue fetch that came back without its
+// title (#1915). Refusing here covers every caller, including future ones.
+func GenerateBranchSlug(prefix string, number int, title string) (string, error) {
 	slug := strings.ToLower(title)
 	slug = strings.Map(func(r rune) rune {
 		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
@@ -1498,7 +1506,10 @@ func GenerateBranchSlug(prefix string, number int, title string) string {
 		slug = strings.TrimRight(slug, "-")
 	}
 
-	return fmt.Sprintf("%s/%d-%s", prefix, number, slug)
+	if slug == "" {
+		return "", fmt.Errorf("cannot name a branch for #%d: title %q leaves no slug", number, title)
+	}
+	return fmt.Sprintf("%s/%d-%s", prefix, number, slug), nil
 }
 
 var branchIssuePattern = regexp.MustCompile(`^[^/]+/(\d+)-`)

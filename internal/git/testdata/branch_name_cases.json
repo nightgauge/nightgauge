@@ -64,11 +64,25 @@
       "want": "feat/99-a-very-long-title-that-goes-on-and-on-and-on-and-s"
     },
     {
-      "name": "a title that is nothing but its own number",
+      "name": "a title that is nothing but its own number leaves no slug: refused (#1915)",
       "issueNumber": 42,
       "title": "42",
       "labels": [],
-      "want": "feat/42-"
+      "wantError": true
+    },
+    {
+      "name": "an empty title (a degraded issue fetch) is refused, never fix/1911- (#1915)",
+      "issueNumber": 1911,
+      "title": "",
+      "labels": ["type:bug"],
+      "wantError": true
+    },
+    {
+      "name": "a title with no slug characters is refused (#1915)",
+      "issueNumber": 7,
+      "title": "!!! ??? ###",
+      "labels": [],
+      "wantError": true
     }
   ]
 }

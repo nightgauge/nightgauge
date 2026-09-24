@@ -177,6 +177,16 @@ func (s *IssueService) GetIssueWithRelations(ctx context.Context, owner, repo st
 		return nil, fmt.Errorf("fetch issue #%d: %w", number, err)
 	}
 	qi := &q.Repository.Issue
+	// A 200 can still carry a null or partial issue. GitHub requires every
+	// issue to have a title, so an empty one (or a missing id, or another
+	// issue's number) means the response is incomplete, not that the issue
+	// is untitled. Returned as a zero-valued struct, it became a branch named
+	// `fix/1911-` during a quota exhaustion (#1915).
+	if nodeIDString(qi.ID) == "" || int(qi.Number) != number || string(qi.Title) == "" {
+		return nil, fmt.Errorf("fetch issue #%d: incomplete response from GitHub "+
+			"(id %q, number %d, title %q); refusing to use a partial issue",
+			number, nodeIDString(qi.ID), int(qi.Number), string(qi.Title))
+	}
 	subIssues, blockedBy, blocking := rels.pages(&qi.SubIssues, &qi.BlockedBy, &qi.Blocking)
 	label := fmt.Sprintf("%s/%s#%d", owner, repo, number)
 	if err := s.client.completeIssueRelations(ctx, nodeIDString(qi.ID), label, subIssues, blockedBy, blocking); err != nil {

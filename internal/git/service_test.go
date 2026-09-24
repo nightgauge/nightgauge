@@ -302,10 +302,30 @@ func TestGenerateBranchSlug(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := GenerateBranchSlug(tt.prefix, tt.number, tt.title)
+		got, err := GenerateBranchSlug(tt.prefix, tt.number, tt.title)
+		if err != nil {
+			t.Errorf("GenerateBranchSlug(%q, %d, %q): %v", tt.prefix, tt.number, tt.title, err)
+			continue
+		}
 		if got != tt.want {
 			t.Errorf("GenerateBranchSlug(%q, %d, %q) = %q, want %q",
 				tt.prefix, tt.number, tt.title, got, tt.want)
+		}
+	}
+}
+
+// TestGenerateBranchSlug_EmptySlugIsAnError: a degraded issue fetch returned no
+// title, and the composer turned that into `fix/1911-`, which was then pushed
+// (#1915). Every title that leaves no slug must be refused at the composer.
+func TestGenerateBranchSlug_EmptySlugIsAnError(t *testing.T) {
+	for _, title := range []string{"", "   ", "1911", "#1911", "!!!"} {
+		got, err := GenerateBranchSlug("fix", 1911, title)
+		if err == nil {
+			t.Errorf("GenerateBranchSlug(fix, 1911, %q) = %q, want an error", title, got)
+			continue
+		}
+		if !strings.Contains(err.Error(), "#1911") {
+			t.Errorf("error does not name the issue: %v", err)
 		}
 	}
 }
