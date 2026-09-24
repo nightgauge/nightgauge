@@ -7,7 +7,10 @@ import (
 	"testing"
 )
 
-const testAppPEM = "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKj34GkxFhD90vcNLYLInFEX6Ppy1tPf9Cnzj4p4WGeKLs1Pt8Qu\n-----END RSA PRIVATE KEY-----\n"
+// testAppPEM stands in for key material. The config layer only reads the
+// bytes; parsing them is internal/github's job and is tested there against a
+// key generated at run time, so no key-shaped literal lives in the tree.
+const testAppPEM = "test-app-key-material-1955\n"
 
 // #1955: the App block decodes through the real loader, `id` written as a
 // YAML integer included, and resolves per owner.
@@ -67,7 +70,7 @@ func TestResolveGitHubApp_BrokenConfigurationIsAnErrorWithoutTheKey(t *testing.T
 			t.Errorf("%s: creds=%v err=%v, want an error", name, creds, err)
 			continue
 		}
-		if strings.Contains(err.Error(), "BEGIN RSA") {
+		if strings.Contains(err.Error(), "test-app-key-material") {
 			t.Errorf("%s: error quotes the key: %v", name, err)
 		}
 	}
@@ -78,7 +81,7 @@ func TestResolveGitHubApp_BrokenConfigurationIsAnErrorWithoutTheKey(t *testing.T
 func TestValidateRepoTierSecrets_RefusesAnAppKeyInARepository(t *testing.T) {
 	for _, body := range []string{
 		"github_auth:\n  app:\n    private_key_path: ./github-app.pem\n",
-		"github_auth:\n  app:\n    private_key: \"-----BEGIN RSA PRIVATE KEY-----\"\n",
+		"github_auth:\n  app:\n    private_key: literal-key-material\n",
 	} {
 		if err := ValidateRepoTierSecrets([]byte(body), "/repo/.nightgauge/config.yaml"); err == nil {
 			t.Errorf("accepted in a repository tier:\n%s", body)

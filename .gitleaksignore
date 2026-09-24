@@ -32,3 +32,5 @@ packages/nightgauge-vscode/tests/services/notifications/MattermostService.redact
 packages/nightgauge-vscode/tests/services/notifications/MattermostService.redact.test.ts:stripe-access-token:108
 packages/nightgauge-vscode/tests/services/notifications/MattermostService.test.ts:generic-api-key:37
 packages/nightgauge-vscode/tests/services/notifications/transport.test.ts:jwt:132
+# Branch history of #1955 (PR #2073): a synthetic, truncated PEM fixture, since replaced.
+2f6213626d439136688c12eaf07705acd27e49cf:internal/config/github_app_test.go:private-key:10
