@@ -71,7 +71,7 @@ All forge operations route through `nightgauge forge` (and `nightgauge` Go-binar
 | Phase | Operation              | Command                                                                        |
 | ----- | ---------------------- | ------------------------------------------------------------------------------ |
 | 0     | Token scope validation | `nightgauge forge auth status` / `nightgauge auth check`                       |
-| 1     | Owner type detection   | `nightgauge forge api users/$OWNER --jq .type`                                 |
+| 1     | Owner type detection   | `nightgauge forge graphql` (`repositoryOwner(login:) { __typename }`)          |
 | 1     | Project discovery      | `nightgauge forge graphql -f query='query{user{projectsV2...}}'`               |
 | 3     | Label existence check  | `nightgauge label list --json`                                                 |
 | 3     | Label creation         | `nightgauge label create`                                                      |

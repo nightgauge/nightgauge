@@ -273,17 +273,16 @@ echo "Queue cleared"
 When `OPERATION="from-label"`:
 
 ```bash
-# Fetch issues matching label that are open
-LIMIT_ARG=""
-if [ -n "$LIMIT" ]; then
-  LIMIT_ARG="--limit $LIMIT"
-fi
-
-MATCHING_ISSUES=$(nightgauge forge issue list --repo "$REPO" --label "$LABEL" --state open --json number,title,labels $LIMIT_ARG 2>&1)
+# Fetch issues matching label that are open (`forge issue list` returns open issues only)
+REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+MATCHING_ISSUES=$(nightgauge forge issue list --repo "$REPO" --labels "$LABEL" --json 2>&1)
 if [ $? -ne 0 ]; then
   echo "ERROR: Failed to fetch issues with label '$LABEL'"
   echo "$MATCHING_ISSUES"
   exit 1
+fi
+if [ -n "$LIMIT" ]; then
+  MATCHING_ISSUES=$(printf '%s\n' "$MATCHING_ISSUES" | jq --argjson n "$LIMIT" '.[:$n]')
 fi
 
 MATCH_COUNT=$(printf '%s\n' "$MATCHING_ISSUES" | jq 'length')
