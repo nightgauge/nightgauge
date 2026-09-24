@@ -114,9 +114,11 @@ Confirm selection: offer Yes / No, show all issues / Cancel options.
 When `-i` flag is provided or user rejects auto-selection:
 
 ```bash
-# List open issues (optionally filtered by --label)
-nightgauge issue list --state open --limit 15 --json \
-  --jq '.[] | "#\(.number) - \(.title) [\(.labels | map(.name) | join(", "))]"'
+# List open issues (`issue list` returns open issues only), first 15
+REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+: "${REPO:?set NIGHTGAUGE_REPO or run inside a clone with an origin remote}"
+nightgauge issue list --repo "$REPO" --json \
+  | jq -r '(. // [])[:15][] | "#\(.number) - \(.title) [\(.labels // [] | join(", "))]"'
 ```
 
 Present list to user and let them select an issue.
@@ -130,7 +132,7 @@ No issues with Ready status found on the project board.
 
 Options:
 1. Create a new issue: /nightgauge-issue-create
-2. Check all open issues: nightgauge issue list --state open
+2. Check all open issues: nightgauge issue list --repo <owner/name>
 3. Set an issue to Ready on the project board: `nightgauge project sync-status <number> ready`
 ```
 

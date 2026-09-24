@@ -164,7 +164,7 @@ REPO=""
 if [[ "$*" == *"--repo"* ]]; then
   REPO=$(echo "$*" | sed -n 's/.*--repo[= ]\([^ ]*\).*/\1/p')
 fi
-[ -z "$REPO" ] && REPO=$(nightgauge forge repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)
+[ -z "$REPO" ] && REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug 2>/dev/null)}"
 echo "Target repo: ${REPO:-<current>}"
 
 # --dry-run: print both drafts to stdout instead of writing the fastlane files.
@@ -206,8 +206,8 @@ fi
 # epic body lists every sub-issue as `#N` (the established pattern, cf.
 # nightgauge-retro). `forge issue view --json` exposes no sub-issue array
 # either, so body-parsing is the correct route.
-SUB_NUMBERS=$(nightgauge forge issue view "$EPIC" --repo "$REPO" --json --jq '.body' 2>/dev/null \
-  | grep -oE '#[0-9]+' | grep -oE '[0-9]+' | sort -un)
+SUB_NUMBERS=$(nightgauge forge issue view "$EPIC" --repo "$REPO" --json 2>/dev/null \
+  | jq -r '.body // empty' | grep -oE '#[0-9]+' | grep -oE '[0-9]+' | sort -un)
 if [ -z "$SUB_NUMBERS" ]; then
   echo "ERROR: no sub-issues found referenced in epic #$EPIC's body (#N links). Cannot draft release notes from an empty set."
   exit 1

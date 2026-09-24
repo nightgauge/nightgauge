@@ -644,6 +644,16 @@ create --body-file` call, so the compact profile (and its tests) pin
 
 ### Fixed
 
+- **Skills stop calling `nightgauge` with flags it does not have (#2066).**
+  42 invocations across 21 skills passed flags or subcommands the binary does
+  not define, such as `forge repo view -q`, `forge issue view --jq`,
+  `forge issue list --state`, `forge issue comment -b` and `forge api`. Most
+  sat behind `2>/dev/null`, so each one silently produced an empty value. They
+  now use real forms: `--json | jq`, `nightgauge git repo-slug`, `--body`,
+  `--labels`, `forge graphql`, and the node id where a verb requires it. A new
+  test resolves every `nightgauge` invocation in `skills/` against the command
+  tree and fails on an unknown flag or subcommand.
+
 - **`nightgauge stash sweep` no longer pops another branch's stash onto
   `HEAD` (#1938).** A restore now skips a stash recorded on a different
   branch, or any stash when `HEAD` is detached, and reports it as

@@ -732,7 +732,7 @@ if ! nightgauge forge auth status &>/dev/null; then
   exit 1
 fi
 
-REPO=$(nightgauge forge repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null)
+REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug 2>/dev/null)}"
 if [ -z "$REPO" ]; then
   echo "ERROR: Not in a GitHub repository."
   exit 1

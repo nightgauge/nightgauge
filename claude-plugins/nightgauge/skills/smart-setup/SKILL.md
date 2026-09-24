@@ -874,7 +874,7 @@ Use the `nightgauge forge` CLI to discover existing project fields
 
 ```bash
 # Get repository owner
-OWNER=$(nightgauge forge repo view --repo "$REPO" --json owner -q '.owner.login')
+OWNER=$(nightgauge forge repo view --repo "$REPO" --json | jq -r '.owner')
 
 # List all project fields (forge GraphQL passthrough)
 nightgauge forge graphql -f query='
@@ -1000,11 +1000,14 @@ If repository is not already linked to the project:
 If "Yes":
 
 ```bash
-REPO_ID=$(nightgauge forge repo view --repo "$REPO" --json id -q '.id')
+# `forge repo view` carries no node id: read it from GraphQL.
+REPO_ID=$(nightgauge forge graphql \
+  -f query='query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { id } }' \
+  -f owner="${REPO%%/*}" -f name="${REPO#*/}" | jq -r '.data.repository.id')
 PROJECT_ID=$(nightgauge forge graphql -f query='
   query($org: String!, $number: Int!) {
     organization(login: $org) { projectV2(number: $number) { id } }
-  }' -F org="$OWNER" -F number="$PROJECT_NUMBER" --jq '.data.organization.projectV2.id')
+  }' -F org="$OWNER" -F number="$PROJECT_NUMBER" | jq -r '.data.organization.projectV2.id')
 
 nightgauge forge graphql -f query='
   mutation($p: ID!, $r: ID!) {

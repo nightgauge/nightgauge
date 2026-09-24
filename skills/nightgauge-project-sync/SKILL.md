@@ -313,7 +313,9 @@ If milestone filter selected, fetch available milestones and ask user to choose:
 
 ```bash
 # Get open milestones
-nightgauge forge api repos/:owner/:repo/milestones --jq '.[].title'
+REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+nightgauge forge graphql -f query='query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { milestones(first: 100, states: OPEN) { nodes { title } } } }' \
+  -f owner="${REPO%%/*}" -f name="${REPO#*/}" | jq -r '.data.repository.milestones.nodes[].title'
 ```
 
 If label filter selected, ask user for label pattern (can use wildcards or exact
@@ -433,9 +435,11 @@ project board fields using the Go binary:
 
 ```bash
 if [ "$MODE" = "full" ] || [ "$MODE" = "dates-only" ]; then
-  # Fetch issues with milestones
-  ISSUES_WITH_MILESTONES=$(nightgauge forge issue list --state open --json number,milestone \
-    --limit 500 2>/dev/null | jq -r '.[] | select(.milestone != null) | "\(.number) \(.milestone.dueOn // empty)"')
+  # Fetch open issues with milestones (first 100; `forge issue list` carries no dueOn)
+  REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+  ISSUES_WITH_MILESTONES=$(nightgauge forge graphql -f query='query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { issues(first: 100, states: OPEN) { nodes { number milestone { dueOn } } } } }' \
+    -f owner="${REPO%%/*}" -f name="${REPO#*/}" 2>/dev/null \
+    | jq -r '.data.repository.issues.nodes[] | select(.milestone != null) | "\(.number) \(.milestone.dueOn // empty)"')
 
   while IFS=' ' read -r issue_number due_date; do
     [ -z "$issue_number" ] || [ -z "$due_date" ] && continue
@@ -563,7 +567,7 @@ If errors occurred:
 ## Action Required
 
 Some issues failed to sync. Review errors above and:
-1. Check API rate limits: nightgauge forge api rate_limit
+1. Check API rate limits: nightgauge forge graphql -f query='query { rateLimit { remaining resetAt } }'
 2. Verify milestone dates are valid ISO format
 3. Re-run sync after resolving issues
 ```

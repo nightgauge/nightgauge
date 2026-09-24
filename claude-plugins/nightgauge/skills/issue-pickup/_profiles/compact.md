@@ -335,7 +335,11 @@ The autonomous daemon resumes it once \`main\`'s recent runs of this workflow ar
 green again; \`nightgauge baseline-gate promote\` in the workspace releases it
 immediately."
 
-    nightgauge forge issue comment --subject-id "$ISSUE_NUMBER" -b "$COMMENT_BODY" 2>/dev/null || \
+    # `forge issue comment` takes the issue NODE id, not its number.
+    REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+    ISSUE_NODE_ID=$(nightgauge forge issue view "$ISSUE_NUMBER" --repo "$REPO" --json 2>/dev/null \
+      | jq -r '.nodeId // empty')
+    nightgauge forge issue comment --subject-id "$ISSUE_NODE_ID" --body "$COMMENT_BODY" 2>/dev/null || \
       echo "warning: failed to post deferral comment to #$ISSUE_NUMBER"
 
     "$BINARY" outcome record \
@@ -439,7 +443,11 @@ The pipeline has paused this item ([\`blocked_dependency\`](../../docs/FAILURE_T
 and will automatically resume dispatch when the blockers close
 (\`deps-gate promote\` sweep, or the autonomous cascade). No operator action required."
 
-    nightgauge forge issue comment --subject-id "$ISSUE_NUMBER" -b "$COMMENT_BODY" 2>/dev/null || \
+    # `forge issue comment` takes the issue NODE id, not its number.
+    REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+    ISSUE_NODE_ID=$(nightgauge forge issue view "$ISSUE_NUMBER" --repo "$REPO" --json 2>/dev/null \
+      | jq -r '.nodeId // empty')
+    nightgauge forge issue comment --subject-id "$ISSUE_NODE_ID" --body "$COMMENT_BODY" 2>/dev/null || \
       echo "warning: failed to post deferral comment to #$ISSUE_NUMBER"
 
     "$BINARY" outcome record \

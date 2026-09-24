@@ -723,9 +723,14 @@ Before creating, search for duplicates across both open and recently closed
 issues:
 
 ```bash
-nightgauge forge issue list --repo "$REPO" --search "${FINDING_KEYWORDS}" --state open --json number,title
-nightgauge forge issue list --repo "$REPO" --search "${FINDING_KEYWORDS}" --state closed --json number,title --limit 20
-nightgauge forge issue list --repo "$REPO" --label "type:epic" --state all --limit 30 --json number,title
+REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+# Open matches (`issue list --search` is scoped to open issues)
+nightgauge issue list --repo "$REPO" --search "${FINDING_KEYWORDS}" --json | jq '[(. // [])[] | {number, title}]'
+# Closed matches (no list verb reaches closed issues: GraphQL search)
+nightgauge forge graphql -f query='query($q: String!) { search(query: $q, type: ISSUE, first: 20) { nodes { ... on Issue { number title } } } }' \
+  -f q="repo:$REPO is:issue is:closed ${FINDING_KEYWORDS}" | jq '.data.search.nodes'
+# Open epics
+nightgauge forge issue list --repo "$REPO" --labels "type:epic" --json | jq '[.[:30][] | {number, title}]'
 ```
 
 Skip creation if a matching issue exists.

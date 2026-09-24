@@ -1,5 +1,11 @@
 ### Dependency Checking (Enforcement)
 
+## Contents
+
+- [Check Dependency Configuration](#check-dependency-configuration)
+- [Fetch Dependencies](#fetch-dependencies)
+- [Handle Open Dependencies](#handle-open-dependencies)
+
 **PURPOSE**: Check if an issue has open dependencies (blockers) before
 proceeding. This prevents wasted effort on issues that can't be completed until
 prerequisite work lands.
@@ -90,7 +96,11 @@ The pipeline has paused this item and will automatically resume dispatch when th
 blockers close (\`deps-gate promote\` sweep, or the autonomous cascade). No
 operator action required."
 
-  nightgauge forge issue comment --subject-id "$ISSUE_NUMBER" -b "$COMMENT_BODY" 2>/dev/null || \
+  # `forge issue comment` takes the issue NODE id, not its number.
+  REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+  ISSUE_NODE_ID=$(nightgauge forge issue view "$ISSUE_NUMBER" --repo "$REPO" --json 2>/dev/null \
+    | jq -r '.nodeId // empty')
+  nightgauge forge issue comment --subject-id "$ISSUE_NODE_ID" --body "$COMMENT_BODY" 2>/dev/null || \
     echo "warning: failed to post deferral comment to #$ISSUE_NUMBER"
 
   "$BINARY" outcome record \

@@ -846,14 +846,17 @@ Before creating, search for duplicates across **both open and recently closed**
 issues. Findings may overlap with recently completed epics.
 
 ```bash
-# Search open issues
-nightgauge forge issue list --repo "$REPO" --search "${FINDING_KEYWORDS}" --state open --json number,title
+REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
 
-# Search recently closed issues/epics (last 30 days)
-nightgauge forge issue list --repo "$REPO" --search "${FINDING_KEYWORDS}" --state closed --json number,title --limit 20
+# Search open issues (`issue list --search` is scoped to open issues)
+nightgauge issue list --repo "$REPO" --search "${FINDING_KEYWORDS}" --json | jq '[(. // [])[] | {number, title}]'
+
+# Search closed issues/epics (no list verb reaches closed issues: GraphQL search)
+nightgauge forge graphql -f query='query($q: String!) { search(query: $q, type: ISSUE, first: 20) { nodes { ... on Issue { number title } } } }' \
+  -f q="repo:$REPO is:issue is:closed ${FINDING_KEYWORDS}" | jq '.data.search.nodes'
 
 # Also check open epics that may already cover this finding
-nightgauge forge issue list --repo "$REPO" --label "type:epic" --state all --limit 30 --json number,title
+nightgauge forge issue list --repo "$REPO" --labels "type:epic" --json | jq '[.[:30][] | {number, title}]'
 ```
 
 Skip creation if a matching issue exists (open or recently closed).
@@ -867,10 +870,11 @@ using the project's deterministic hooks. This follows the
 **Step 6.3a**: Create the epic:
 
 ```bash
-nightgauge forge issue create \
+REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+nightgauge issue create --repo "$REPO" \
   --title "epic: Pipeline audit findings — ${SUMMARY}" \
   --body "${EPIC_BODY}" \
-  --label "type:epic,priority:high,size:L"
+  --labels "type:epic,priority:high,size:L"
 ```
 
 **Step 6.3b**: Create each sub-issue using the Go binary:
