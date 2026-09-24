@@ -587,7 +587,7 @@ func (s *Server) initSchedulerCallbacks(sched *orchestrator.Scheduler) {
 			"title":       title,
 		})
 	})
-	sched.OnStageComplete(func(cbRepo string, issue int, stage string, stageErr error, inputTokens, outputTokens, cacheReadTokens int, costUsd float64, model string) {
+	sched.OnStageComplete(func(cbRepo string, issue int, stage string, stageErr error, cost orchestrator.StageCost, model string) {
 		errStr := ""
 		if stageErr != nil {
 			errStr = stageErr.Error()
@@ -597,10 +597,11 @@ func (s *Server) initSchedulerCallbacks(sched *orchestrator.Scheduler) {
 			"issueNumber":     issue,
 			"stage":           stage,
 			"error":           errStr,
-			"inputTokens":     inputTokens,
-			"outputTokens":    outputTokens,
-			"cacheReadTokens": cacheReadTokens,
-			"costUsd":         costUsd,
+			"inputTokens":     cost.Input,
+			"outputTokens":    cost.Output,
+			"cacheReadTokens": cost.CacheRead,
+			"costUsd":         cost.CostUSD,
+			"costSource":      cost.Source,
 			"model":           model,
 		})
 	})

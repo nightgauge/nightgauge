@@ -633,6 +633,22 @@ create --body-file` call, so the compact profile (and its tests) pin
 
 ### Fixed
 
+- **A run reports one cost per stage, and says where it came from (#1934).**
+  The live `stage … complete` line, the CLI's stage line and the
+  `stage.complete` event used to re-price a stage from its result, which can
+  arrive without the cache tokens the run later books. They printed
+  `(0 cached)` and a cost 4–9x below the end-of-run summary for the same
+  stage. All of them now report the booked stage, the same figure as the
+  summary and the history record. The cache-inclusive figure is the correct
+  one: checked against the CLI's own `total_cost_usd` on 14 stages, leaving
+  cache tokens out priced stages 3–8x low. Stage lines now show
+  `in + cache read + cache write / out` and label the cost `cli-reported` or
+  `derived from tokens`, and the end-of-run summary uses the same format. A
+  CLI-reported cost more than 2x away from the rate-card price of the same
+  tokens is recorded as a `cost_source_divergence` stage anomaly (with a new
+  optional `detail` field) and logged, and `stage.complete` carries
+  `costSource`.
+
 - **`scripts/post-merge-check.sh` no longer waits an hour on an untested tree
   under jq 1.6 (#2058).** The merge's age came from jq's `fromdateiso8601`,
   which jq 1.6 reads an hour late, so the five-minute grace did not expire and

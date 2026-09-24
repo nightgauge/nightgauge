@@ -930,7 +930,7 @@ type Scheduler struct {
 
 	// Callbacks
 	onStageStart    func(repo string, issue int, stage string, title string)
-	onStageComplete func(repo string, issue int, stage string, err error, inputTokens, outputTokens, cacheReadTokens int, costUsd float64, model string)
+	onStageComplete func(repo string, issue int, stage string, err error, cost StageCost, model string)
 	onEpicComplete  func(repo string, epicNumber int)
 	// evaluatePostMergeFn performs the post-merge evaluation. A field, not a
 	// direct call, for the same reason buildGraphFn is one: checkEpicCompletion
@@ -3497,7 +3497,7 @@ func (s *Scheduler) OnStageStart(fn func(repo string, issue int, stage string, t
 }
 
 // OnStageComplete sets a callback for when a stage completes.
-func (s *Scheduler) OnStageComplete(fn func(repo string, issue int, stage string, err error, inputTokens, outputTokens, cacheReadTokens int, costUsd float64, model string)) {
+func (s *Scheduler) OnStageComplete(fn func(repo string, issue int, stage string, err error, cost StageCost, model string)) {
 	s.onStageComplete = fn
 }
 
@@ -6041,6 +6041,13 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				CacheCreation5m: cacheCreationTokens,
 			}, servedModel, adapterName)
 		}
+		// Every reader below reports THIS figure, never a re-derivation from
+		// result (#1934): the booking holds cache pools the result can lack.
+		stageCost, _ := stageCostFromBooking(runtime, stage)
+		if detail, diverged := recordCostDivergence(runtime, stage, stageCost, adapterName, servedModel, time.Now()); diverged {
+			log.Printf("#%d: Anomaly: cost sources disagree beyond %.0fx on stage %s — %s",
+				item.Number, costDivergenceRatio, stage, detail)
+		}
 		s.emitStateChanged(item.Repo, item.Number, runtime)
 
 		// Populate metadata after specific stages for Discord/UI enrichment
@@ -6223,17 +6230,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				// on V2StageDetail.Anomalies. Non-blocking: a successful run
 				// is not turned into a failure, only flagged.
 				if gates.IsAtomicEligible(stage) {
-					anomalyCost := actualCostUsd
-					if anomalyCost == 0 {
-						// The IPC-delivered cache-creation count is unsplit; booked as
-						// 5m per the CalculateCost convention. Per-stage 5m/1h split
-						// is #390. Adapter-aware (#585): prices at the serving
-						// provider's rates, not an anthropic default.
-						anomalyCost, _ = tokens.CalculateCostFor(adapterName, servedModel, tokens.TokenCounts{
-							Input: inputTokens, Output: outputTokens, CacheRead: cacheReadTokens,
-							CacheCreation5m: cacheCreationTokens,
-						})
-					}
+					anomalyCost := stageCost.CostUSD
 					anomalyFloor := getAnomalyFloorUSD(workspaceRoot)
 					executionPath := runtime.StageExecutionPath(stage)
 					if anomaly := gates.DetectAtomicLLMOverrun(stage, executionPath, anomalyCost, gateRes.Passed, anomalyFloor); anomaly != nil {
@@ -6464,18 +6461,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		}
 
 		if s.onStageComplete != nil {
-			stageCostForCb := actualCostUsd
-			if stageCostForCb == 0 {
-				// The IPC-delivered cache-creation count is unsplit; booked as 5m
-				// per the CalculateCost convention. Per-stage 5m/1h split is #390.
-				// Adapter-aware (#585): prices at the serving provider's rates,
-				// not an anthropic default.
-				stageCostForCb, _ = tokens.CalculateCostFor(adapterName, servedModel, tokens.TokenCounts{
-					Input: inputTokens, Output: outputTokens, CacheRead: cacheReadTokens,
-					CacheCreation5m: cacheCreationTokens,
-				})
-			}
-			s.onStageComplete(item.Repo, item.Number, string(stage), err, inputTokens, outputTokens, cacheReadTokens, stageCostForCb, servedModel)
+			s.onStageComplete(item.Repo, item.Number, string(stage), err, stageCost, servedModel)
 		}
 
 		if err != nil || exitCode != 0 {
@@ -7499,22 +7485,11 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			}
 		}
 
-		stageCost := actualCostUsd
-		if stageCost == 0 {
-			// The IPC-delivered cache-creation count is unsplit; booked as 5m per
-			// the CalculateCost convention. Per-stage 5m/1h split is #390.
-			// Adapter-aware (#585): prices at the serving provider's rates, not
-			// an anthropic default.
-			stageCost, _ = tokens.CalculateCostFor(adapterName, model, tokens.TokenCounts{
-				Input: inputTokens, Output: outputTokens, CacheRead: cacheReadTokens,
-				CacheCreation5m: cacheCreationTokens,
-			})
-		}
 		// source=llm: All Go-scheduler stages run via LLM in this iteration.
 		// Deterministic-first is TypeScript-only (Issue #2614); this field
 		// enables future Go-side deterministic-first tracking.
-		log.Printf("#%d: stage %s complete — model=%s source=llm, tokens: %d in + %d cache read / %d out, cost: $%.4f",
-			item.Number, stage, model, inputTokens, cacheReadTokens, outputTokens, stageCost)
+		log.Printf("#%d: stage %s complete — model=%s source=llm, tokens: %s, cost: %s",
+			item.Number, stage, model, stageCost.TokenSummary(), stageCost.CostSummary())
 
 		// Post-stage verification for pr-merge: the skill's exit code is not
 		// sufficient evidence that the PR actually merged. Query GitHub and
@@ -7551,8 +7526,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 	snap := runtime.Snapshot()
 	log.Printf("#%d: ═══ Pipeline Complete ═══", item.Number)
 	for _, sr := range snap.AllStageAttempts() {
-		log.Printf("#%d:   %-20s %d in / %d out  $%.4f",
-			item.Number, sr.Stage, sr.InputTokens, sr.OutputTokens, sr.CostUSD)
+		c := stageCostOf(sr)
+		log.Printf("#%d:   %-20s %s  %s",
+			item.Number, sr.Stage, c.TokenSummary(), c.CostSummary())
 	}
 	log.Printf("#%d:   %-20s TOTAL  $%.4f", item.Number, "─────────────────", snap.TotalCostUSD)
 

@@ -658,6 +658,7 @@ type Anomaly struct {
 	ExecutionPath          string  `json:"execution_path"`                    // "deterministic" | "llm"
 	StageCostUSD           float64 `json:"stage_cost_usd"`                    // observed stage cost
 	DeterministicPredicate string  `json:"deterministic_predicate,omitempty"` // human-readable predicate that should have matched
+	Detail                 string  `json:"detail,omitempty"`                  // human-readable finding for kinds with no predicate (#1934)
 	Timestamp              string  `json:"timestamp"`                         // ISO 8601
 }
 
