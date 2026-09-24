@@ -1,8 +1,11 @@
 package reclaim
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -26,8 +29,17 @@ const (
 	// uncommitted changes, which is how a pop turns into a conflict the caller
 	// cannot resolve. The stash stays; the operator pops it deliberately.
 	StashSkipDirtyTree StashSkipReason = "dirty-tree"
+	// StashSkipOtherBranch — the stash was recorded on a branch other than
+	// the one checked out, or one of the two cannot be named (detached HEAD).
+	// A clean tree is no protection here: the stash stack is shared by every
+	// worktree and session, and popping a `feat/…` baseline onto `main`
+	// conflicts on a tree nobody touched (#1938).
+	StashSkipOtherBranch StashSkipReason = "other-branch"
 	// StashSkipRestoreFailed — `git stash pop` refused (conflict, missing
-	// parent). Git leaves the stash in place on failure, so nothing is lost.
+	// parent). Git keeps the stash on failure, but a conflicting pop has
+	// already written markers and unmerged entries into the tree; the sweep
+	// puts the tree back as it found it before recording this skip, and
+	// reports an error if it could not.
 	StashSkipRestoreFailed StashSkipReason = "restore-failed"
 )
 
@@ -124,6 +136,16 @@ func SweepPipelineStashes(opts StashSweepOptions) (StashSweepResult, error) {
 	}
 	res.Scanned = len(entries)
 
+	// Only a restore touches the tree, so only a restore asks whose branch
+	// the stash came from. Drop is branch-blind by design.
+	var head string
+	if action == StashRestore {
+		head, err = currentBranch(opts.RepoRoot)
+		if err != nil {
+			return res, fmt.Errorf("stash sweep: %w", err)
+		}
+	}
+
 	// Classify everything up front against the ORIGINAL listing so the report
 	// describes the stack as it was found, then act one stash at a time.
 	var targets []StashEntry
@@ -134,6 +156,8 @@ func SweepPipelineStashes(opts StashSweepOptions) (StashSweepResult, error) {
 			res.Skipped = append(res.Skipped, SkippedStash{Ref: e.Ref, Message: e.Message, Reason: StashSkipUnowned, AgeDays: age})
 		case opts.Issue > 0 && e.Issue != opts.Issue:
 			res.Skipped = append(res.Skipped, SkippedStash{Ref: e.Ref, Message: e.Message, Reason: StashSkipOtherIssue, AgeDays: age})
+		case action == StashRestore && (head == "" || e.Branch != head):
+			res.Skipped = append(res.Skipped, SkippedStash{Ref: e.Ref, Message: e.Message, Reason: StashSkipOtherBranch, AgeDays: age})
 		default:
 			targets = append(targets, e)
 		}
@@ -145,8 +169,11 @@ func SweepPipelineStashes(opts StashSweepOptions) (StashSweepResult, error) {
 			res.Reclaimed = append(res.Reclaimed, reclaimedFrom(e, action, age))
 			continue
 		}
+		var before string
 		if action == StashRestore {
-			dirty, statusErr := treeIsDirty(opts.RepoRoot)
+			var dirty bool
+			var statusErr error
+			before, dirty, statusErr = treeIsDirty(opts.RepoRoot)
 			if statusErr != nil {
 				res.Errors = append(res.Errors, fmt.Sprintf("%s: read working tree: %v", e.Ref, statusErr))
 				res.Skipped = append(res.Skipped, SkippedStash{Ref: e.Ref, Message: e.Message, Reason: StashSkipRestoreFailed, AgeDays: age})
@@ -162,7 +189,12 @@ func SweepPipelineStashes(opts StashSweepOptions) (StashSweepResult, error) {
 			res.Errors = append(res.Errors, fmt.Sprintf("%s: vanished from the stash stack before it could be reclaimed", e.Ref))
 			continue
 		}
-		if err := runStashAction(opts.RepoRoot, action, ref); err != nil {
+		if action == StashRestore {
+			err = popRestoringTree(opts.RepoRoot, ref, before)
+		} else {
+			err = runStashAction(opts.RepoRoot, action, ref)
+		}
+		if err != nil {
 			res.Errors = append(res.Errors, err.Error())
 			res.Skipped = append(res.Skipped, SkippedStash{Ref: ref, Message: e.Message, Reason: StashSkipRestoreFailed, AgeDays: age})
 			continue
@@ -218,12 +250,108 @@ func runStashAction(repoRoot string, action StashAction, ref string) error {
 // knowledge README has no business blocking the restore of a stage's real
 // work, and treating it as a collision is the same mistake `worktree sweep`
 // made (#332).
-func treeIsDirty(repoRoot string) (bool, error) {
+//
+// The porcelain is returned too: it is the tree a failed pop must be put back
+// to, and re-reading it later would read whatever the pop left behind.
+func treeIsDirty(repoRoot string) (string, bool, error) {
+	porcelain, err := statusPorcelain(repoRoot)
+	if err != nil {
+		return "", false, err
+	}
+	return porcelain, ClassifyStatus(porcelain).Blocked(), nil
+}
+
+func statusPorcelain(repoRoot string) (string, error) {
 	cmd := exec.Command("git", "status", "--porcelain", "--untracked-files=all")
 	cmd.Dir = repoRoot
 	out, err := cmd.Output()
-	if err != nil {
-		return false, err
+	return string(out), err
+}
+
+// currentBranch returns the short name of the checked-out branch, or "" for a
+// detached HEAD.
+func currentBranch(repoRoot string) (string, error) {
+	cmd := exec.Command("git", "symbolic-ref", "--short", "-q", "HEAD")
+	cmd.Dir = repoRoot
+	out, err := cmd.Output()
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return "", nil // detached
 	}
-	return ClassifyStatus(string(out)).Blocked(), nil
+	if err != nil {
+		return "", fmt.Errorf("read current branch in %s: %w", repoRoot, err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// popRestoringTree pops ref and, if the pop fails, puts the tree back to
+// before — the porcelain read just ahead of it.
+//
+// A conflicting `git stash pop` keeps the stash but has already written
+// conflict markers, left the index unmerged, and (for a stash taken with
+// --include-untracked) written the stash's untracked files. Returning at that
+// point hands the operator a broken checkout they did not ask for (#1938).
+//
+// The rollback is only sound because the caller has proved there are no
+// tracked changes to lose: HEAD is the tracked state to return to, and the
+// untracked files to remove are exactly the stash's own that were not there
+// before. Both stay recoverable from the stash git kept.
+func popRestoringTree(repoRoot, ref, before string) error {
+	if ClassifyStatus(before).Blocked() {
+		return fmt.Errorf("git stash pop %s: refused, the tree has changes a failed pop could not be rolled back over", ref)
+	}
+	sha, err := gitOutput(repoRoot, "rev-parse", "--verify", "-q", ref)
+	if err != nil {
+		return fmt.Errorf("git stash pop %s: resolve stash commit: %w", ref, err)
+	}
+	sha = strings.TrimSpace(sha)
+	popErr := runStashAction(repoRoot, StashRestore, ref)
+	if popErr == nil {
+		return nil
+	}
+	if rbErr := rollbackFailedPop(repoRoot, sha, before); rbErr != nil {
+		return fmt.Errorf("%w; the working tree was NOT restored: %v", popErr, rbErr)
+	}
+	return popErr
+}
+
+func rollbackFailedPop(repoRoot, sha, before string) error {
+	// One-way reset of index and tracked files to HEAD, the same operation as
+	// `reset --hard` without touching untracked files.
+	if _, err := gitOutput(repoRoot, "read-tree", "--reset", "-u", "HEAD"); err != nil {
+		return fmt.Errorf("reset tracked files: %w", err)
+	}
+	present := map[string]bool{}
+	for _, p := range StatusPaths(before) {
+		present[p] = true
+	}
+	if _, err := gitOutput(repoRoot, "rev-parse", "--verify", "-q", sha+"^3"); err == nil {
+		names, lsErr := gitOutput(repoRoot, "ls-tree", "-r", "-z", "--name-only", sha+"^3")
+		if lsErr != nil {
+			return fmt.Errorf("list the stash's untracked files: %w", lsErr)
+		}
+		for _, p := range strings.Split(names, "\x00") {
+			if p == "" || present[p] {
+				continue
+			}
+			if rmErr := os.Remove(filepath.Join(repoRoot, filepath.FromSlash(p))); rmErr != nil && !os.IsNotExist(rmErr) {
+				return fmt.Errorf("remove %s: %w", p, rmErr)
+			}
+		}
+	}
+	after, err := statusPorcelain(repoRoot)
+	if err != nil {
+		return fmt.Errorf("re-read working tree: %w", err)
+	}
+	if after != before {
+		return fmt.Errorf("status differs after rollback:\n%s", strings.TrimSpace(after))
+	}
+	return nil
+}
+
+func gitOutput(repoRoot string, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = repoRoot
+	out, err := cmd.Output()
+	return string(out), err
 }

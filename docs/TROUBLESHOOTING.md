@@ -1143,6 +1143,10 @@ nightgauge stash sweep --dry-run      # classify
 nightgauge stash sweep                # restore (pop) them
 ```
 
+A restore pops only stashes recorded on the checked-out branch and reports the
+rest as `other-branch`; run it again from the worktree of the branch each
+stash names.
+
 `nightgauge doctor` reports them per repo with age, and a killed stage's
 stage-exit record names what it stranded in `unreclaimed_stashes`.
 

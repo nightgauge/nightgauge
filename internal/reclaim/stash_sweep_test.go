@@ -226,6 +226,117 @@ func TestSweepPipelineStashes_ExhaustDoesNotBlockRestore(t *testing.T) {
 	}
 }
 
+func (r *stashRepo) porcelain() string {
+	r.t.Helper()
+	return r.git("status", "--porcelain", "--untracked-files=all")
+}
+
+// stashConflicting stashes a tracked edit plus an untracked file on the
+// current branch, the shape of a feature-validate baseline taken with
+// --include-untracked.
+func (r *stashRepo) stashConflicting(message string) {
+	r.t.Helper()
+	r.write("tracked.txt", "the stage's edit\n")
+	r.write("new-from-stage.txt", "untracked work\n")
+	r.git("stash", "push", "--include-untracked", "-m", message)
+}
+
+// #1938 AC1 and AC4. A baseline recorded on feat/1643 was popped onto a clean
+// main and left `UU` in the tree. The assertion is on BOTH the stash and the
+// porcelain: asserting only on the stash is what let the defect through.
+func TestSweepPipelineStashes_NeverRestoresAnotherBranchsStash(t *testing.T) {
+	r := newStashRepo(t)
+	r.git("checkout", "-q", "-b", "feat/1643-routing")
+	r.stashConflicting(StashName(StashBaseline, 1643, "feature-validate"))
+	r.git("checkout", "-q", "main")
+	r.write("tracked.txt", "main moved on\n")
+	r.git("commit", "-q", "-am", "main edits the same line")
+	r.write(".nightgauge/knowledge/README.md", "# Knowledge Base\n")
+	before, stashes := r.porcelain(), r.stashList()
+
+	res, err := SweepPipelineStashes(StashSweepOptions{RepoRoot: r.dir})
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if len(res.Reclaimed) != 0 || len(res.Skipped) != 1 || res.Skipped[0].Reason != StashSkipOtherBranch {
+		t.Fatalf("reclaimed=%+v skipped=%+v, want one %q skip", res.Reclaimed, res.Skipped, StashSkipOtherBranch)
+	}
+	if got := r.porcelain(); got != before {
+		t.Errorf("the tree changed:\nbefore %q\nafter  %q", before, got)
+	}
+	if got := r.stashList(); got != stashes {
+		t.Errorf("the stash stack changed:\nbefore %q\nafter  %q", stashes, got)
+	}
+
+	// Drop never touches the tree, so it stays branch-blind.
+	res, err = SweepPipelineStashes(StashSweepOptions{RepoRoot: r.dir, Action: StashDrop, DryRun: true})
+	if err != nil || len(res.Reclaimed) != 1 {
+		t.Errorf("drop dry-run: reclaimed=%+v skipped=%+v err=%v", res.Reclaimed, res.Skipped, err)
+	}
+}
+
+// A detached HEAD names no branch, so no stash can be proved to belong to it.
+func TestSweepPipelineStashes_DetachedHeadRestoresNothing(t *testing.T) {
+	r := newStashRepo(t)
+	r.stashWork("stashed\n", StashName(StashBaseline, 101, "feature-validate"))
+	r.git("checkout", "-q", "--detach")
+
+	res, err := SweepPipelineStashes(StashSweepOptions{RepoRoot: r.dir})
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if len(res.Skipped) != 1 || res.Skipped[0].Reason != StashSkipOtherBranch {
+		t.Fatalf("skipped=%+v, want one %q", res.Skipped, StashSkipOtherBranch)
+	}
+}
+
+// #1938 AC2. Same branch, and the pop conflicts anyway because the branch
+// moved on under the stash. The sweep must hand back the tree it was given:
+// no conflict markers, no unmerged index, no stray untracked files from the
+// stash, and the exhaust that was already there left alone.
+func TestSweepPipelineStashes_ConflictingPopLeavesTheTreeAsFound(t *testing.T) {
+	r := newStashRepo(t)
+	r.stashConflicting(StashName(StashBaseline, 1927, "feature-validate"))
+	r.write("tracked.txt", "main moved on\n")
+	r.git("commit", "-q", "-am", "the branch edits the same line")
+	r.write(".nightgauge/knowledge/README.md", "# Knowledge Base\n")
+	before, stashes := r.porcelain(), r.stashList()
+
+	res, err := SweepPipelineStashes(StashSweepOptions{RepoRoot: r.dir})
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if len(res.Reclaimed) != 0 || len(res.Skipped) != 1 || res.Skipped[0].Reason != StashSkipRestoreFailed {
+		t.Fatalf("reclaimed=%+v skipped=%+v, want one %q", res.Reclaimed, res.Skipped, StashSkipRestoreFailed)
+	}
+	if len(res.Errors) != 1 || strings.Contains(res.Errors[0], "NOT restored") {
+		t.Errorf("errors = %q, want the pop failure alone", res.Errors)
+	}
+	if got := r.porcelain(); got != before {
+		t.Errorf("the tree was not restored:\nbefore %q\nafter  %q", before, got)
+	}
+	body, _ := os.ReadFile(filepath.Join(r.dir, "tracked.txt"))
+	if string(body) != "main moved on\n" {
+		t.Errorf("tracked.txt = %q, want HEAD's content", body)
+	}
+	if got := r.stashList(); got != stashes {
+		t.Errorf("the stash was lost:\nbefore %q\nafter  %q", stashes, got)
+	}
+}
+
+func TestStashBranch(t *testing.T) {
+	for msg, want := range map[string]string{
+		"On feat/1643-x: nightgauge:baseline:1643:feature-validate": "feat/1643-x",
+		"WIP on main: 7621613 fix: something":                       "main",
+		"On (no branch): nightgauge:baseline:1:dev":                 "(no branch)",
+		"nightgauge:baseline:1:dev":                                 "",
+	} {
+		if got := StashBranch(msg); got != want {
+			t.Errorf("StashBranch(%q) = %q, want %q", msg, got, want)
+		}
+	}
+}
+
 func TestSweepPipelineStashes_DryRunTouchesNothing(t *testing.T) {
 	r := newStashRepo(t)
 	r.stashWork("stashed\n", StashName(StashBaseline, 101, "feature-validate"))
