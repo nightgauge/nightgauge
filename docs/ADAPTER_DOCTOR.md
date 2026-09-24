@@ -211,6 +211,13 @@ Every row name below is the JSON field a skill or operator greps for; see
 [ADR-022](decisions/022-opencode-multi-provider-adapter.md) for the design
 this check enforces.
 
+- **`warnings` and `notes` (on the adapter row).** `warnings` lists the
+  findings that leave the adapter usable but that the operator should act
+  on, such as a version above max-tested or a binary that changed since the
+  last dispatch; each one degrades the doctor's verdict. `notes` lists facts
+  a reader of the row needs and never changes the verdict: the version
+  floor and max-tested, the run directories, the offline posture, and
+  whether the catalog probe ran.
 - **`opencode.enabled`** — whether `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` is set
   in the process environment. While it is not, no other OpenCode check runs:
   there is nothing to check for a dispatch that never happens.
@@ -228,13 +235,14 @@ this check enforces.
 - **`opencode.last_dispatch_version`** — the version the last dispatch on
   this machine was checked against, when one was recorded. The row warns when
   the binary it resolves now reports a different version — a PATH install
-  can change under the pipeline the way OpenCode's own TUI updates itself.
+  can change under the pipeline the way OpenCode's own TUI updates itself
+  (observed on opencode 1.18.30).
 - **The catalog probe (`catalog`, `catalog_warning`).** Runs `opencode models`
   under the per-run config built for `opencode.model`. For a declared
   endpoint's model or an `anthropic` model, the per-run config writes the
   model's own entry, so the probe shows only that the binary loads the
   config; any other hosted provider is listed only when one of its variables
-  is set in the doctor's own environment, and the row blocks and names them
+  is set in the doctor's own environment (observed on opencode 1.18.30), and the row blocks and names them
   when none is.
 - **Local-provider reachability and loaded context (`opencode.endpoints[]`,
   one `OpenCodeEndpointReadiness` per declared endpoint).** Each entry probes
@@ -247,7 +255,8 @@ this check enforces.
 - **The `limit.context 0` warning.** A model whose `limit.context` neither
   the machine-tier `limit` nor server discovery can supply is refused before
   spawn (a declared endpoint) or warned about (the always-probed default),
-  because OpenCode never compacts a session whose context limit is 0 — the
+  because OpenCode never compacts a session whose context limit is 0
+  (observed on opencode 1.18.30) — the
   stage would run into the server's loaded window instead.
 - **Effective config/data dirs (`opencode.dirs`).** `config`, `data`, `cache`,
   and `state` are the run-scoped OpenCode directories a dispatch isolates
