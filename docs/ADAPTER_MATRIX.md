@@ -611,7 +611,7 @@ like every other non-`native-workflow` adapter.
   `self_hosted: true`).
 - A hosted model the registry knows is re-priced from the registry's rate
   card, never from OpenCode's own reported `cost`, which reads `0` for a
-  provider OpenCode holds no price for.
+  provider OpenCode holds no price for (observed on opencode 1.18.30).
 - The USD watchdog bounds the stage's own steps at the registry rate of the
   dispatched model as the stream arrives; it cannot bound spend inside a
   subagent session, which is priced only after the stage ends.

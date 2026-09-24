@@ -205,7 +205,9 @@ absolute path; for `anthropic/*`, `export ANTHROPIC_API_KEY=<key>`
 **Terminal failure kinds (#1631).** Once a dispatch is running, a stage's
 failure is classified into one of the kinds
 [FAILURE_TAXONOMY.md](FAILURE_TAXONOMY.md) documents. These are the kinds
-OpenCode's own observed failure text produces (`internal/terminalkind/table.json`,
+OpenCode's own observed failure text produces (observed on opencode 1.18.30); the
+`[adapter-permission-rejected]` and `adapter_incompatible:` markers are
+Nightgauge's own (`internal/terminalkind/table.json`,
 `internal/terminalkind/testdata/opencode/`):
 
 | Kind                          | What OpenCode reported                                                                                                                                                                | Remediation                                                                                                                                                      |

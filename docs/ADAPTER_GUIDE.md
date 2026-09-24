@@ -659,11 +659,11 @@ never used for `anthropic/*`; the only credential is `ANTHROPIC_API_KEY`.
 
 **Headless permission semantics.** OpenCode auto-rejects a permission that
 resolves to `ask`: the tool call fails, the run ends after that step, and the
-process **exits 0** — a silent stop that looks like success. Nightgauge's
+process **exits 0** — a silent stop that looks like success (observed on opencode 1.18.30). Nightgauge's
 permission maps contain only `allow` and `deny`, never `ask`, and the parser
 classifies a rejected-permission tool event as a failure regardless of the
 exit code, so a stage that hits this does not report success. `--auto` and
-its hidden aliases are never emitted; approval is the permission map's job.
+its hidden aliases (observed on opencode 1.18.30) are never emitted; approval is the permission map's job.
 
 **Known Limitations:**
 
