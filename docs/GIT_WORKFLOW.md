@@ -1279,6 +1279,32 @@ Four things about it are deliberate:
   needs `gitleaks` on `PATH` (`brew install gitleaks`, the version CI pins);
   without it the step reports INFRASTRUCTURE rather than passing.
 
+**The OpenCode integration tests are not part of the local gate, by
+decision.** PR CI runs them (`-tags opencode_integration`, against an exact
+pin of `opencode-ai`) on every change. Locally they cost minutes plus a pinned
+install, and a change that does not touch OpenCode cannot regress them. Run
+them yourself before pushing when the change touches OpenCode:
+
+- `internal/execution/opencodeplugin/` (the plugin JavaScript included),
+- `internal/execution/adapters/opencode*`,
+- `internal/execution/opencode*`.
+
+Mirror CI's step "OpenCode integration" in `.github/workflows/ci.yml`: same
+pinned version and the same `-run` list, taken from that step, because the
+workflow is the source of truth for both.
+
+```bash
+prefix="$(mktemp -d)"
+npm install --prefix "$prefix" --no-fund --no-audit opencode-ai@<version CI pins>
+PATH="$prefix/node_modules/.bin:$PATH" go test -tags opencode_integration -count=1 -v \
+  -run '<the -run list from ci.yml>' \
+  ./internal/execution/ ./internal/execution/adapters/ ./internal/execution/opencodeplugin/
+```
+
+A pass on a fast machine does not clear a timing-sensitive test: #2076's race
+lost only on CI's slower runner. When such a test is in question, measure the
+ordering it depends on rather than re-running it.
+
 What this buys is earlier feedback, not less safety: PR CI runs every step
 regardless, so a miss here costs a CI round trip rather than a bad merge.
 `bash scripts/ci-local.sh --changed --scope-probe` prints the decision and its reason without running anything.
