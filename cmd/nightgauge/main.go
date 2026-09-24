@@ -8247,15 +8247,12 @@ func gitBranchCreateCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				// Naming a branch reads an issue's labels, title and parent,
-				// never its relationship lists, so none is read whole here.
 				issueSvc := gh.NewIssueService(client)
-				fetched, err := issueSvc.GetIssueWithRelations(cmd.Context(), owner, repo, issueFlag, gh.NoRelations)
+				fetched, name, err := branchNameForIssue(cmd.Context(), issueSvc, owner, repo, issueFlag)
 				if err != nil {
 					return err
 				}
-				prefix := strings.TrimSuffix(gitpkg.BranchPrefixFromLabels(fetched.Labels), "/")
-				branchName = gitpkg.GenerateBranchSlug(prefix, issueFlag, fetched.Title)
+				branchName = name
 				prefetchedIssue = fetched
 				issueNumber = issueFlag
 			} else {
@@ -8322,7 +8319,10 @@ func gitBranchCreateCmd() *cobra.Command {
 							return epicErr
 						}
 
-						epicBranch = gitpkg.GenerateBranchSlug("epic", parentIssue, epic.Title)
+						epicBranch, err = gitpkg.GenerateBranchSlug("epic", parentIssue, epic.Title)
+						if err != nil {
+							return err
+						}
 						defaultBranch, defaultErr := svc.DefaultBranch()
 						if defaultErr != nil {
 							return defaultErr

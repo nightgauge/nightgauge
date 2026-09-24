@@ -1304,6 +1304,17 @@ ls-remote origin refs/heads/<branch>` before judging anything, refusing
   means the same account — and the scheduler's three headroom reads use it.
   `Get` is unchanged for callers that genuinely want their own key.
 
+- **`branch-create` no longer names a branch from an incomplete issue
+  (#1915).** During a GraphQL quota exhaustion, an issue came back with its
+  labels but not its title. `nightgauge git branch-create --issue 1911` then
+  created and pushed a branch named `fix/1911-`. Three layers now refuse
+  this. An issue response with no id, another issue's number or an empty
+  title is an error from the issue fetch. The branch-name composer refuses a
+  title that leaves no slug, which also covers a title made only of the
+  issue's own number. `branch-create` fails and names the issue. The
+  `git.composeBranchName` IPC method returns the same error instead of a name
+  ending in `-`.
+
 ### Added
 
 - **A stage that cannot fit its model's context window is caught before

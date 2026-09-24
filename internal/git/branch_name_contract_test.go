@@ -16,6 +16,9 @@ type branchNameCase struct {
 	Title       string   `json:"title"`
 	Labels      []string `json:"labels"`
 	Want        string   `json:"want"`
+	// WantError: the triple leaves no slug, and the composer must refuse it
+	// rather than emit "<prefix>/<number>-" (#1915).
+	WantError bool `json:"wantError"`
 }
 
 func loadBranchNameCases(t *testing.T) []branchNameCase {
@@ -42,7 +45,17 @@ func loadBranchNameCases(t *testing.T) []branchNameCase {
 func TestComposeBranchNameContract(t *testing.T) {
 	for _, tc := range loadBranchNameCases(t) {
 		t.Run(tc.Name, func(t *testing.T) {
-			got := ComposeBranchName(tc.Labels, tc.IssueNumber, tc.Title)
+			got, err := ComposeBranchName(tc.Labels, tc.IssueNumber, tc.Title)
+			if tc.WantError {
+				if err == nil {
+					t.Errorf("ComposeBranchName(%v, %d, %q) = %q, want an error",
+						tc.Labels, tc.IssueNumber, tc.Title, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ComposeBranchName(%v, %d, %q): %v", tc.Labels, tc.IssueNumber, tc.Title, err)
+			}
 			if got != tc.Want {
 				t.Errorf("ComposeBranchName(%v, %d, %q)\n got %q\nwant %q",
 					tc.Labels, tc.IssueNumber, tc.Title, got, tc.Want)
@@ -56,8 +69,14 @@ func TestComposeBranchNameContract(t *testing.T) {
 // the title carries, the composed name mentions the issue number once.
 func TestComposeBranchNameEmitsIssueNumberExactlyOnce(t *testing.T) {
 	for _, tc := range loadBranchNameCases(t) {
+		if tc.WantError {
+			continue // no name is composed; TestComposeBranchNameContract covers the refusal
+		}
 		t.Run(tc.Name, func(t *testing.T) {
-			name := ComposeBranchName(tc.Labels, tc.IssueNumber, tc.Title)
+			name, err := ComposeBranchName(tc.Labels, tc.IssueNumber, tc.Title)
+			if err != nil {
+				t.Fatalf("ComposeBranchName: %v", err)
+			}
 			_, rest, ok := strings.Cut(name, "/")
 			if !ok {
 				t.Fatalf("no prefix separator in %q", name)
