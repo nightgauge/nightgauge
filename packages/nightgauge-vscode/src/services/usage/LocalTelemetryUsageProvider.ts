@@ -443,12 +443,22 @@ export class LocalTelemetryUsageProvider implements UsageProvider {
     const horizonEnd = new Date(now.getTime() + DAY_MS);
 
     const records = await this.source.readDateRange(horizonStart, horizonEnd);
-    const events = collectStageEvents(records, adapter).filter((event) =>
-      isMetered(event, metering)
-    );
+    const attributed = collectStageEvents(records, adapter);
+    const events = attributed.filter((event) => isMetered(event, metering));
     if (events.length === 0) {
       return null;
     }
+    // A local snapshot counts tokens, so a hosted stage's dollars have no
+    // window to go in. Carry them instead of dropping them silently. The
+    // mirror case, a hosted snapshot leaving out local stages, drops only
+    // stages no provider bills, and needs no note.
+    const excludedHosted =
+      metering.plan === "local"
+        ? attributed.filter(
+            (event) =>
+              !isLocalProvider(event.provider) && event.at.getTime() >= monthStart.getTime()
+          )
+        : [];
 
     const plan: UsagePlanKind = metering.plan;
     const unit = plan === "local" ? "tokens" : "usd";
@@ -498,6 +508,11 @@ export class LocalTelemetryUsageProvider implements UsageProvider {
           startOfNextLocalMonth(now)
         ),
       ],
+      ...(excludedHosted.length > 0
+        ? {
+            hostedSpendExcludedUsd: excludedHosted.reduce((sum, event) => sum + event.costUsd, 0),
+          }
+        : {}),
     };
   }
 }

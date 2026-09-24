@@ -327,6 +327,7 @@ export function getUsagePanelSectionHtml(
         ${windows}
       </div>
       ${claudeFeedPromptHtml(state)}
+      ${hostedSpendExcludedHtml(state)}
       ${familyBreakdownHtml(state.familyGroups, now)}
       ${burnRateHtml(state, now)}
       ${recentRunsHtml(state)}
@@ -356,6 +357,19 @@ function planBadgeHtml(planKind: UsagePlanKind): string {
     return '<span class="badge badge-muted">Local model</span>';
   }
   return '<span class="badge badge-muted">Pay per token</span>';
+}
+
+/**
+ * Say that a `local` snapshot left hosted spend out (Issue #1665). The
+ * windows above count tokens, so without this line the operator could read
+ * them as everything the adapter did this month.
+ */
+function hostedSpendExcludedHtml(state: UsagePanelState): string {
+  if (state.hostedSpendExcludedNote === undefined) {
+    return "";
+  }
+  return `
+      <p class="usage-panel-note usage-hosted-spend-excluded">${escapeHtml(state.hostedSpendExcludedNote)}</p>`;
 }
 
 /**

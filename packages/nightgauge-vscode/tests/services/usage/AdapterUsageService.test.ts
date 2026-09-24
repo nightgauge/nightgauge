@@ -338,6 +338,7 @@ describe("usageSnapshotsEquivalent", () => {
     expect(usageSnapshotsEquivalent({ ...a, adapter: "codex" }, b)).toBe(false);
     expect(usageSnapshotsEquivalent({ ...a, plan: { kind: "unknown" } }, b)).toBe(false);
     expect(usageSnapshotsEquivalent({ ...a, windows: [] }, b)).toBe(false);
+    expect(usageSnapshotsEquivalent({ ...a, hostedSpendExcludedUsd: 2 }, b)).toBe(false);
     expect(usageSnapshotsEquivalent({ ...a, windows: [{ ...a.windows[0], limit: 50 }] }, b)).toBe(
       false
     );

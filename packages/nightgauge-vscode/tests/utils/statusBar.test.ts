@@ -484,6 +484,21 @@ describe("StatusBarManager", () => {
       expect(tooltip).not.toContain("usage is unknown");
     });
 
+    it("names the hosted spend a local snapshot left out in the tooltip (#1665)", () => {
+      const window = makeWindow({ used: 3500, limit: null, unit: "tokens", label: "This session" });
+      statusBar.showUsageSnapshot({
+        ...makeSnapshot([window], "opencode"),
+        plan: { kind: "local" },
+        hostedSpendExcludedUsd: 2.5,
+      });
+
+      const tooltip = (mockUsageItem.tooltip as vscode.MarkdownString).value;
+      expect(tooltip).toContain(
+        "Hosted-model spend on this adapter ($2.50 this month) is not shown while " +
+          "opencode.model is a local model."
+      );
+    });
+
     it("renders an explicit 'usage unknown' state rather than hiding when no provider claims the adapter", () => {
       statusBar.showUsageSnapshot(makeSnapshot([], "ollama"));
 

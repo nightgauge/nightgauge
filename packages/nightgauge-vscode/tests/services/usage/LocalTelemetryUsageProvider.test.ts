@@ -21,6 +21,7 @@ import {
   type UsageSessionClock,
 } from "../../../src/services/usage/LocalTelemetryUsageProvider";
 import type { UsagePlanKind } from "../../../src/services/usage/types";
+import { hostedSpendExcludedNote } from "../../../src/services/usage/format";
 import type { ExecutionAdapter } from "../../../src/config/schema";
 import {
   ExecutionHistoryRunRecordV2Schema,
@@ -431,9 +432,20 @@ describe("the local plan (#1665, ADR-018 amendment)", () => {
     expect(snapshot!.windows.every((w) => w.confidence === "measured")).toBe(true);
   });
 
-  it("counts only local-provider stages in a local snapshot", async () => {
+  it("counts only local-provider stages in a local snapshot, and carries the hosted spend it left out", async () => {
     const { provider: p } = provider(
       [
+        // Last month: outside every window, so not part of this month's note.
+        runRecord(new Date(2026, 6, 31, 12, 0), {
+          "feature-dev": { cost_usd: 100, adapter: "opencode", model: "openai/gpt-5.5" },
+        }),
+        runRecord(new Date(2026, 7, 3, 12, 0), {
+          "feature-dev": {
+            cost_usd: 0.5,
+            adapter: "opencode",
+            model: "openrouter/meta-llama/llama-4",
+          },
+        }),
         runRecord(new Date(2026, 7, 17, 9, 30), {
           "feature-dev": { cost_usd: 0, adapter: "opencode", model: LOCAL_MODEL, input: 10 },
           "feature-validate": {
@@ -450,7 +462,30 @@ describe("the local plan (#1665, ADR-018 amendment)", () => {
 
     const snapshot = await p.getSnapshot("opencode");
 
-    expect(snapshot!.windows.map((w) => w.used)).toEqual([10, 10, 10]);
+    expect(snapshot!.plan.kind).toBe("local");
+    expect(snapshot!.windows.map((w) => [w.unit, w.used])).toEqual([
+      ["tokens", 10],
+      ["tokens", 10],
+      ["tokens", 10],
+    ]);
+    // The hosted ($2) and unrecognized-provider ($0.50) stages this month.
+    expect(snapshot!.hostedSpendExcludedUsd).toBe(2.5);
+    expect(hostedSpendExcludedNote(snapshot!)).toBe(
+      "Hosted-model spend on this adapter ($2.50 this month) is not shown while " +
+        "opencode.model is a local model."
+    );
+  });
+
+  it("carries no hosted-spend note when a local snapshot left nothing out", async () => {
+    const { provider: p } = provider(
+      [runRecord(NOW, { "feature-dev": { cost_usd: 0, adapter: "opencode", model: LOCAL_MODEL } })],
+      SESSION_START,
+      LOCAL_MODEL
+    );
+
+    const snapshot = await p.getSnapshot("opencode");
+
+    expect(Object.hasOwn(snapshot!, "hostedSpendExcludedUsd")).toBe(false);
   });
 
   it("gives opencode on a hosted model USD windows from that provider's records only", async () => {
@@ -508,6 +543,8 @@ describe("the local plan (#1665, ADR-018 amendment)", () => {
     const snapshot = await p.getSnapshot("opencode");
 
     expect(snapshot!.plan.kind).toBe("pay-per-token");
+    // Leaving out local $0 stages hides no spend, so there is no note.
+    expect(Object.hasOwn(snapshot!, "hostedSpendExcludedUsd")).toBe(false);
     expect(snapshot!.windows.map((w) => [w.unit, w.used])).toEqual([
       ["usd", 1.75],
       ["usd", 1.75],

@@ -435,18 +435,19 @@ bills it.
 
 ### 4. The `local` usage plan (amends ADR-018)
 
-ADR-018 gains a plan kind, `plan.kind: "local"`, with no windows. It is
-produced for an adapter whose attributed stages in the snapshot all ran on
-models known to run on the operator's endpoints: `opencode` stages § 3 stamps
-at zero, and `lm-studio` and `ollama` bridge stages on a model § 3 would stamp.
-No provider bills those stages, so there is no allowance to meter, and today
-they fall to `unknown`, which tells the user "cannot say" about stages no
-provider bills. When any attributed stage was hosted or unstamped, the
-snapshot is the ordinary `pay-per-token` one over the priced stages. #1665
-records the amendment in ADR-018 and implements it. That amendment is the
-rule where the two differ: a `local` snapshot carries token windows with no
-limit, not "no windows", and `opencode` follows its configured model's
-provider.
+ADR-018 gains a plan kind, `plan.kind: "local"`, for a model that runs on a
+server the operator runs. No provider bills it, so a dollar meter would sit at
+zero and `unknown` ("cannot say") would be false. A `local` snapshot carries
+session, daily and monthly windows in `unit: "tokens"` with `limit: null`, and
+never a USD window. The `lm-studio` and `ollama` bridges are always `local`.
+`opencode` follows the provider of its configured `opencode.model` (§ 1): a
+local provider gives `local`, over the stages a local provider served; a hosted
+provider gives `pay-per-token`, over that provider's stages only; no configured
+model, or a provider of `other`, gives `unknown`. A `local` snapshot that left
+out stages a hosted or unrecognized provider served this month carries their
+dollar total, and the status bar and usage panel say that spend is not shown.
+The rule, with the wire and the heartbeat fallback, is
+[ADR-018's `local` plan amendment](018-adapter-usage-quota-model.md#amendment-local-plan-1665).
 
 ### 5. Open model policy
 

@@ -223,6 +223,18 @@ export interface UsageSnapshot {
    * and let them answer the question differently.
    */
   claudePlanDeclared?: boolean;
+  /**
+   * Dollars this month from stages a `local` snapshot left out because a
+   * hosted or unrecognized provider served them (Issue #1665).
+   *
+   * One snapshot has one plan kind, so an `opencode` adapter configured with a
+   * local model meters only its local stages in tokens. A hosted stage it also
+   * ran this month would otherwise vanish from every surface; this carries
+   * the fact, and the amount, so the status-bar tooltip and the usage panel
+   * can say so. Present only on a `local` snapshot that excluded at least one
+   * such stage this month. Never reported to the hosted service.
+   */
+  hostedSpendExcludedUsd?: number;
 }
 
 /**

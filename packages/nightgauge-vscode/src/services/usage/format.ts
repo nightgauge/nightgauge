@@ -15,7 +15,7 @@
  * @see docs/decisions/018-adapter-usage-quota-model.md
  */
 
-import type { UsageUnit } from "./types";
+import type { UsageSnapshot, UsageUnit } from "./types";
 
 function trimTrailingZero(value: number): string {
   return value % 1 === 0 ? value.toFixed(0) : value.toFixed(1);
@@ -58,4 +58,20 @@ export function formatUsageValue(value: number, unit: UsageUnit): string {
       return `${rounded.toLocaleString()} request${rounded === 1 ? "" : "s"}`;
     }
   }
+}
+
+/**
+ * The line both usage surfaces show when a `local` snapshot left hosted
+ * spend out (Issue #1665), or `null` when it left nothing out. Plain text:
+ * a caller interpolating it into HTML escapes it.
+ */
+export function hostedSpendExcludedNote(snapshot: UsageSnapshot): string | null {
+  if (snapshot.hostedSpendExcludedUsd === undefined) {
+    return null;
+  }
+  const amount = formatUsageValue(snapshot.hostedSpendExcludedUsd, "usd");
+  return (
+    `Hosted-model spend on this adapter (${amount} this month) is not shown while ` +
+    `${snapshot.adapter}.model is a local model.`
+  );
 }

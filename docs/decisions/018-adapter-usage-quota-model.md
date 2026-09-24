@@ -595,10 +595,9 @@ exactly what no provider billed. `UsagePlanKind` gains `local`.
 - `windows` stays empty exactly when `plan.kind === "unknown"`. A `local`
   snapshot always has its three windows.
 
-ADR-022 § 4 described `local` "with no windows". That wording would break the
-empty-iff-unknown invariant above, and it would leave the operator with a
-label and no meter. This amendment is the rule; the token windows are what
-#1665 implements.
+ADR-022 § 4 first described `local` "with no windows". That would break the
+empty-iff-unknown invariant above and leave the operator a label with no
+meter, so § 4 now states these token windows.
 
 ### Which snapshots are `local`
 
@@ -621,6 +620,16 @@ for the two bridges. The reason given there, that a dollar bar would sit at
 
   A stage's provider is its recorded `model_selection.model_provider`
   (ADR-022 § 2). A stage without one falls back to its model string.
+
+- A snapshot has one plan kind, so a `local` `opencode` snapshot leaves out
+  any stage a hosted or unrecognized provider served. That spend is real, and
+  dropping it silently would hide it. When a `local` snapshot left out one or
+  more such stages this month, it carries their dollar total in
+  `hostedSpendExcludedUsd`. The status-bar tooltip and the usage panel then
+  show one line: "Hosted-model spend on this adapter ($X.XX this month) is not
+  shown while opencode.model is a local model." The field is local only; the
+  heartbeat report does not carry it. The mirror case, a hosted snapshot that
+  leaves out local stages, hides no spend and has no note.
 
 `copilot` stays `unknown`.
 

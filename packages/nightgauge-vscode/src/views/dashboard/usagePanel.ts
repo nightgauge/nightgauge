@@ -47,6 +47,7 @@ import type {
 } from "../../services/usage/types";
 import type { PipelineRunStatus, PipelineRunSummary } from "./DashboardState";
 import { BurnRateProjector } from "../../utils/budgetIntelligence";
+import { hostedSpendExcludedNote } from "../../services/usage/format";
 import type { ClaudeFeedHealthState } from "../../services/usage/claudeStatusLineSetup";
 
 /**
@@ -188,6 +189,12 @@ export interface UsagePanelState {
    * asks which plan they are on stops asking once they have answered.
    */
   claudePlanDeclared?: boolean;
+  /**
+   * The line saying a `local` snapshot left hosted spend out (#1665), carried
+   * from the snapshot. Plain text; the renderer escapes it. Absent when
+   * nothing was left out.
+   */
+  hostedSpendExcludedNote?: string;
   /** When the snapshot was derived — the input to the operator's staleness call. */
   capturedAt: Date;
   /** Windows covering every model the adapter ran. Empty on an unknown plan. */
@@ -449,6 +456,7 @@ export function buildUsagePanelState(
     // (#808) Straight through from the snapshot, like claudeFeedHealth: this
     // module is a pure derivation and must not reach for the VS Code host.
     claudePlanDeclared: snapshot.claudePlanDeclared === true,
+    hostedSpendExcludedNote: hostedSpendExcludedNote(snapshot) ?? undefined,
     capturedAt: snapshot.capturedAt,
     windows: overallWindows.map(toWindowView),
     familyGroups,

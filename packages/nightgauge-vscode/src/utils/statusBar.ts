@@ -11,7 +11,7 @@ import { DEFAULT_PERFORMANCE_MODE, MODE_PROFILES, type PerformanceMode } from ".
 import type { ExecutionAdapter } from "../config/schema";
 import { CLAUDE_PLAN_SETTING } from "../services/usage/claudePlanDeclaration";
 import type { UsageSnapshot, UsageWindow } from "../services/usage/types";
-import { formatUsageValue } from "../services/usage/format";
+import { formatUsageValue, hostedSpendExcludedNote } from "../services/usage/format";
 
 /**
  * Pipeline state for status bar display
@@ -1188,6 +1188,14 @@ export function buildUsageTooltip(snapshot: UsageSnapshot): vscode.MarkdownStrin
       tooltip.appendMarkdown(
         "_Local model — no provider bills these runs, so usage is counted in tokens._\n\n"
       );
+      // Hosted stages the local snapshot left out: their spend is real, and
+      // this is the only place it would otherwise appear. The note is built
+      // from a closed adapter enum and a formatted number, so it carries no
+      // markdown of its own.
+      const excluded = hostedSpendExcludedNote(snapshot);
+      if (excluded !== null) {
+        tooltip.appendMarkdown(`_${excluded}_\n\n`);
+      }
     }
     for (const window of snapshot.windows) {
       const limitText =

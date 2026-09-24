@@ -30,7 +30,8 @@ changelog, and the release workflow refuses a tag that does not.
 - **A local model has its own usage plan, `local` (#1665).** OpenCode on an
   LM Studio or Ollama model, and the `lm-studio` and `ollama` adapters, now
   show token counts with no dollar bar instead of "usage unknown". OpenCode on
-  a hosted model shows only that provider's spend. The heartbeat reports
+  a hosted model shows only that provider's spend, and on a local model it
+  says how much hosted spend it is not showing. The heartbeat reports
   `plan: "local"`, and falls back to `unknown` for the session if the server
   rejects it. ADR-018 records the rule.
 

@@ -275,9 +275,17 @@ describe("buildUsageReport — the local plan (#1665)", () => {
   it.each<UsageReportingLevel>(["minimal", "full"])(
     "sends plan local with its token windows at %s — tokens are not money",
     (level) => {
-      const report = buildUsageReport(local, level);
+      const report = buildUsageReport({ ...local, hostedSpendExcludedUsd: 2.5 }, level);
 
       expect(report!.plan).toBe("local");
+      // The excluded hosted spend is a local display fact; it never travels.
+      expect(Object.keys(report!).sort()).toEqual([
+        "adapter",
+        "captured_at",
+        "level",
+        "plan",
+        "windows",
+      ]);
       expect(report!.windows.map((w) => [w.unit, w.used, w.limit])).toEqual([
         ["tokens", 3500, null],
         ["tokens", 3500, null],
