@@ -529,6 +529,10 @@ tie the merge commit to its merged PR (`internal/github.GetMergeProvenance`),
    and never hold the wait. On the tree-mismatch path below they count. An empty list is `pending` for
    `MergeCommitCheckGrace` (5 min) after the merge and passes after that,
    because a repository that runs nothing on push has nothing to wait for.
+   When the workflows at the merge commit are read and none can run on a push
+   to the base branch (`internal/github.NoPushWorkflows`, #2061), an empty list
+   passes at once. A `paths` filter, a branch pattern the parser does not
+   model, or any read or parse failure keeps the grace.
 
 If the trees differ (a ruleset bypass), or the commit has no merged PR, the
 merge commit must carry every required check itself, the rule described below.

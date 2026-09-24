@@ -203,6 +203,10 @@ type MergeEvidence struct {
 	Runs []WorkflowRunSummary
 	// Now is the evaluation time, for MergeCommitCheckGrace.
 	Now time.Time
+	// NoPushWorkflows is true only when the workflows at the merge commit were
+	// read and none can run on a push to the base branch (#2061). An empty
+	// merge-commit list is then final, and the grace does not apply.
+	NoPushWorkflows bool
 }
 
 // PRHeadIsEvidence reports whether the PR head's checks are the gate for this
@@ -315,7 +319,7 @@ func EvaluateMergedCommit(e MergeEvidence) (ChecksCompleteVerdict, []string) {
 	}
 
 	headVerdict, headReasons := EvaluateChecksComplete(e.HeadChecks, e.RequiredNames)
-	mergeVerdict, mergeReasons := evaluatePushChecks(pushChecks, anyPushCheck, p.MergedAt, e.Now)
+	mergeVerdict, mergeReasons := evaluatePushChecks(pushChecks, anyPushCheck || e.NoPushWorkflows, p.MergedAt, e.Now)
 	if mergeVerdict != ChecksNotYet {
 		if agree, cross := CrossCheckWorkflowRuns(pushChecks, pushRuns); !agree {
 			mergeVerdict, mergeReasons = ChecksNotYet, append(mergeReasons, cross...)
@@ -412,7 +416,8 @@ func neverGreenIfUnknown(verdict ChecksCompleteVerdict, reasons []string, known 
 // (the push workflows may not have been created yet) and passes after it (a
 // repository that runs nothing on push has nothing to wait for). anySeen is
 // true when an informational check (CodeQL) was on the list before it was
-// filtered: the push workflows exist, so there is nothing to wait for.
+// filtered, or when no workflow can run on push (#2061): either way there is
+// nothing to wait for.
 func evaluatePushChecks(checks []CheckDetail, anySeen bool, mergedAt, now time.Time) (ChecksCompleteVerdict, []string) {
 	if len(checks) == 0 {
 		if !anySeen && now.Sub(mergedAt) < MergeCommitCheckGrace {

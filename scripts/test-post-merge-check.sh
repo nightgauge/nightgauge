@@ -91,6 +91,8 @@ while [ $# -gt 0 ]; do
   */rules/branches/*) endpoint=rules ;;
   */protection/*) endpoint=protection ;;
   */commits/*) endpoint=commit ;;
+  */contents/.github/workflows/*) endpoint=workflow-file ;;
+  */contents/.github/workflows*) endpoint=workflows ;;
   esac
   [[ "$1" =~ ^repos/[^/]+/[^/]+$ ]] && endpoint=repo
   case "$1" in *"$head_sha"*) prefix=head- ;; esac
@@ -129,6 +131,16 @@ stub_pr() {
   printf '%s\n' "$status" >"$FAKE_BIN/pages/head-status.1.json"
   echo '[{"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "build"}, {"context": "cla"}]}}]' \
     >"$FAKE_BIN/pages/rules.1.json"
+}
+
+# stub_workflows [<workflow-body>] — after stub_gh: the merge commit has one
+# workflow file, ci.yml, plus a README the reader must skip. With no body the
+# file is listed but unreadable (#2061).
+stub_workflows() {
+  echo '[{"name": "ci.yml", "path": ".github/workflows/ci.yml", "type": "file"}, {"name": "README.md", "path": ".github/workflows/README.md", "type": "file"}]' \
+    >"$FAKE_BIN/pages/workflows.1.json"
+  [ -n "${1:-}" ] && printf '%s\n' "$1" >"$FAKE_BIN/pages/workflow-file.1.json"
+  return 0
 }
 
 # success_runs <count> — a check-runs page of <count> completed, successful runs.
@@ -342,6 +354,33 @@ expect "an empty merge commit inside the grace is NOT-YET" 2 "no checks yet"
 stub_gh '{"check_runs": []}'
 stub_pr tree-a "$HEAD_GREEN" "$CLA_OK"
 expect "an empty merge commit after the grace is GREEN: nothing runs on push" 0 "GREEN"
+
+# #2061: when no workflow can run on push, nothing will ever appear on the
+# merge commit, so the grace does not apply. Any doubt keeps it.
+stub_gh '{"check_runs": []}'
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK" 2999-01-01T00:00:00Z
+stub_workflows $'on:\n  pull_request:\n  workflow_dispatch: # not a push\n  schedule:\n    - cron: "0 7 * * *"'
+expect "an empty merge commit inside the grace, no push workflows: GREEN" 0 "GREEN"
+
+stub_gh '{"check_runs": []}'
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK" 2999-01-01T00:00:00Z
+stub_workflows $'on:\n  push:\n    branches: [main]'
+expect "an empty merge commit inside the grace, a push workflow: NOT-YET" 2 "no checks yet"
+
+stub_gh '{"check_runs": []}'
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK" 2999-01-01T00:00:00Z
+stub_workflows $'on: pull_request\njobs:\n  x:\n    steps:\n      - run: git push origin HEAD'
+expect "any mention of push keeps the grace (the fallback is coarse, never greener)" 2 "no checks yet"
+
+stub_gh '{"check_runs": []}'
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK" 2999-01-01T00:00:00Z
+stub_workflows
+expect "an unreadable workflow file keeps the grace" 2 "no checks yet"
+
+stub_gh '{"check_runs": []}'
+stub_pr tree-a '{"check_runs": [{"name": "build", "status": "completed", "conclusion": "failure"}]}' "$CLA_OK" 2999-01-01T00:00:00Z
+stub_workflows 'on: pull_request'
+expect "no push workflows does not rescue a red head" 1 "RED"
 
 # Trees differ: strict should prevent it, so it is a bypass and the PR run is
 # not evidence. The merge commit must carry every required check itself.

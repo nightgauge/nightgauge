@@ -45,6 +45,11 @@ func TestEvaluateMergedCommit(t *testing.T) {
 		{"push job still running", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen, MergeChecks: pushRunning, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksNotYet, "publish"},
 		{"push job red", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen, MergeChecks: pushRed, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksIncomplete, "merge commit"},
 		{"no push checks yet, inside the grace", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen, RequiredNames: required, RequiredKnown: true, Now: mergedAt.Add(time.Minute)}, ChecksNotYet, "no checks on the merge commit yet"},
+		// #2061: when no workflow can run on push, an empty list is final.
+		{"no push checks inside the grace, no push workflows: green", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen, RequiredNames: required, RequiredKnown: true, Now: mergedAt.Add(time.Minute), NoPushWorkflows: true}, ChecksComplete, ""},
+		{"no push workflows, head red: red", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headRed, RequiredNames: required, RequiredKnown: true, Now: mergedAt.Add(time.Minute), NoPushWorkflows: true}, ChecksIncomplete, "PR #7 head"},
+		{"no push workflows, required set unknown: not-yet", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen, Now: mergedAt.Add(time.Minute), NoPushWorkflows: true}, ChecksNotYet, "could not be read"},
+		{"no push workflows does not rescue a differing tree", MergeEvidence{Provenance: prov("t1", "t2"), HeadChecks: headGreen, RequiredNames: required, RequiredKnown: true, Now: mergedAt.Add(time.Minute), NoPushWorkflows: true}, ChecksNotYet, "differs"},
 		{"no push checks after the grace: nothing runs on push", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksComplete, ""},
 		{"a workflow run still in flight is not-yet", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen, MergeChecks: pushGreen, RequiredNames: required, RequiredKnown: true, Now: late,
 			Runs: []WorkflowRunSummary{{Name: "Publish", Status: "IN_PROGRESS"}}}, ChecksNotYet, "still in flight"},

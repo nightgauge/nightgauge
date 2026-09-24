@@ -305,6 +305,7 @@ func VerifyMergeCommit(ctx context.Context, reader MainCheckReader, owner, repo,
 	// fixed: a merged PR's head and trees never change.
 	provReader, canProve := reader.(gh.MergeProvenanceReader)
 	var prov *gh.MergeProvenance
+	noPush := false
 
 	for {
 		if canProve && prov == nil {
@@ -318,6 +319,7 @@ func VerifyMergeCommit(ctx context.Context, reader MainCheckReader, owner, repo,
 			if prov = p; prov != nil {
 				match := prov.TreesMatch()
 				res.PRNumber, res.PRHeadSha, res.TreesMatch = prov.PRNumber, prov.HeadSHA, &match
+				noPush = gh.NoPushWorkflows(ctx, reader, owner, repo, prov)
 			}
 		}
 		runs, err := reader.GetCommitChecks(ctx, owner, repo, sha)
@@ -333,7 +335,7 @@ func VerifyMergeCommit(ctx context.Context, reader MainCheckReader, owner, repo,
 		total, pending, bad := threeNumbers(runs)
 		res.Total, res.Pending, res.Bad = total, pending, bad
 
-		ev := gh.MergeEvidence{Provenance: prov, MergeChecks: runs, RequiredNames: requiredNames, RequiredKnown: requiredKnown, Now: wait.now()}
+		ev := gh.MergeEvidence{Provenance: prov, MergeChecks: runs, RequiredNames: requiredNames, RequiredKnown: requiredKnown, Now: wait.now(), NoPushWorkflows: noPush}
 		if ev.PRHeadIsEvidence() {
 			if ev.HeadChecks, err = reader.GetCommitChecks(ctx, owner, repo, prov.HeadSHA); err != nil {
 				res.Verdict = MainChecksError
