@@ -658,6 +658,18 @@ create --body-file` call, so the compact profile (and its tests) pin
 
 ### Fixed
 
+- **Merged branches are deleted from origin on SSH checkouts (#1921).** After
+  a deterministic merge, the pipeline deletes the PR's head branch from
+  origin. On a checkout cloned over SSH with `GITHUB_TOKEN` set, that delete
+  always failed with `invalid auth method`, and the log called the failure
+  "likely already deleted server-side". A repository with
+  `delete_branch_on_merge` hid the problem; without that setting, every
+  merged branch stayed on origin. The delete now goes through `git`, using
+  the credentials the checkout already uses. "Already absent" is reported
+  only after origin is read and the branch is confirmed gone. Any other
+  failure, such as auth, network or a protected branch, is reported as
+  itself in the pr-merge stage's output. The stage still succeeds.
+
 - **The local gate runs the credential scan it always claimed to (#2075).**
   `scripts/ci-local.sh` listed the credential scan among the checks that are
   never skipped, yet no step ran it, so a committed secret passed locally and

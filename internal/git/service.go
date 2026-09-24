@@ -443,23 +443,42 @@ func (s *Service) BranchDelete(name string) error {
 	return nil
 }
 
-// BranchDeleteRemote deletes a branch on the remote (origin) using a zero-hash push refspec.
-func (s *Service) BranchDeleteRemote(name string) error {
-	remote, err := s.repo.Remote("origin")
-	if err != nil {
-		return fmt.Errorf("get remote: %w", err)
+// BranchDeleteRemote removes origin's copy of the branch. It reports
+// alreadyAbsent=true when origin was confirmed not to carry the ref, so the
+// caller can say which of "deleted" and "was already gone" happened.
+//
+// The push is a MUTATION and shells out, like PushBranch. It used to go through
+// go-git with the *http.BasicAuth NewService builds from GITHUB_TOKEN, which
+// go-git rejects against an SSH remote with "invalid auth method" (#1921).
+// That made the delete fail on every SSH checkout, whether or not the ref was
+// there. git resolves credentials the way the machine already does (SSH agent,
+// credential helper, insteadOf rewrites).
+//
+// "Already absent" is established by reading the remote (`git ls-remote`),
+// never inferred from a failed push: a delete that fails while the ref is still
+// there returns the push error as itself (auth, network, protection). An
+// unreadable remote is not absence either. When ls-remote fails, the delete is
+// attempted anyway, because "I could not ask" must never be recorded as "it is
+// gone".
+func (s *Service) BranchDeleteRemote(name string) (alreadyAbsent bool, err error) {
+	if err := validateRefArg("branch", name); err != nil {
+		return false, err
+	}
+	if exists, lsErr := s.RemoteBranchExists(name); lsErr == nil && !exists {
+		return true, nil
 	}
 
-	refSpec := config.RefSpec(":refs/heads/" + name)
-	if err := remote.Push(&gogit.PushOptions{
-		RemoteName: "origin",
-		RefSpecs:   []config.RefSpec{refSpec},
-		Auth:       s.auth,
-	}); err != nil {
-		return fmt.Errorf("delete remote branch %s: %w", name, err)
+	_, pushErr := s.gitExec("push", "origin", ":refs/heads/"+name)
+	if pushErr == nil {
+		return false, nil
 	}
-
-	return nil
+	// A server-side delete (delete_branch_on_merge) can land between the check
+	// and the push, making git report a missing ref. Absent after the attempt
+	// is that race, confirmed by reading the remote rather than the message.
+	if stillThere, lsErr := s.RemoteBranchExists(name); lsErr == nil && !stillThere {
+		return true, nil
+	}
+	return false, fmt.Errorf("delete remote branch %s: %w", name, pushErr)
 }
 
 // ErrBranchHeldByWorktree is the sentinel behind BranchHeldByWorktreeError, so
@@ -555,9 +574,8 @@ func (s *Service) BranchCleanup(name string) error {
 	if name == "main" || name == "master" {
 		return fmt.Errorf("refusing to delete protected branch %q", name)
 	}
-	// Before either half. BranchDelete validates too, but it no longer runs
-	// first only by luck: BranchDeleteRemote builds a refspec instead of an
-	// argv, so an option-like name it cannot detect used to reach the remote.
+	// Before either half, so an option-like name is refused before the local
+	// delete rather than only when the remote half builds its argv.
 	if err := validateRefArg("branch", name); err != nil {
 		return err
 	}
@@ -573,7 +591,7 @@ func (s *Service) BranchCleanup(name string) error {
 		return err
 	}
 
-	if err := s.deleteRemoteBranch(name); err != nil {
+	if _, err := s.BranchDeleteRemote(name); err != nil {
 		return fmt.Errorf("branch cleanup %s: remote: %w", name, err)
 	}
 
@@ -633,35 +651,6 @@ func (s *Service) classifyLocalDeleteFailure(name string, delErr error) error {
 	}
 
 	return fmt.Errorf("branch cleanup %s: local: %w", name, delErr)
-}
-
-// deleteRemoteBranch removes origin's copy of the branch, treating "already
-// absent" as success.
-//
-// The push error is not trusted on its own. go-git's transport rejects the
-// *http.BasicAuth NewService builds from GITHUB_TOKEN when the remote is SSH,
-// with transport.ErrInvalidAuthMethod — "invalid auth method" — whether or not
-// the ref was there (#593). Since that text is not diagnostic, this re-reads the
-// remote through `git ls-remote` (ListRemoteBranches), which uses the system's
-// SSH agent and credential helpers and so never takes go-git's auth path. Absent
-// after the attempt is success, whatever the attempt said.
-//
-// An unreadable remote is NOT absence: when ls-remote itself fails, the delete
-// is attempted anyway and its error is reported, because "I could not ask" must
-// never be recorded as "it is gone".
-func (s *Service) deleteRemoteBranch(name string) error {
-	if exists, err := s.RemoteBranchExists(name); err == nil && !exists {
-		return nil
-	}
-
-	pushErr := s.BranchDeleteRemote(name)
-	if pushErr == nil {
-		return nil
-	}
-	if stillThere, err := s.RemoteBranchExists(name); err == nil && !stillThere {
-		return nil
-	}
-	return pushErr
 }
 
 // FindEpicBranch searches remote branches for one matching the epic/<number>-* pattern.
@@ -765,15 +754,14 @@ func (s *Service) Push() error {
 // It used to go through go-git with the *http.BasicAuth that NewService builds
 // from GITHUB_TOKEN. That auth is only valid for an HTTPS remote: against
 // `git@github.com:owner/repo.git` go-git's transport rejects it outright with
-// transport.ErrInvalidAuthMethod — "invalid auth method" — which is exactly
-// what deleteRemoteBranch's header has documented since #593. SSH is the
+// transport.ErrInvalidAuthMethod — "invalid auth method" (#593). SSH is the
 // default remote for anyone who cloned over SSH, so on those checkouts EVERY
 // push through this method failed, and the epic-branch auto-create path
 // (CreateEpicBranch) failed the whole pipeline stage with it.
 //
-// #593's workaround was applied to the delete path and to nothing else. Routing
-// the push through git is the general fix rather than a second copy of that
-// workaround: git resolves credentials the way the user's machine already does
+// #593 only worked around this on the delete path, by re-reading the remote
+// after the failed push; BranchDeleteRemote now shells out too (#1921). Routing
+// the push through git is the general fix: git resolves credentials the way the user's machine already does
 // — SSH agent, credential helper, insteadOf rewrites — none of which go-git
 // reimplements, and all of which a user has necessarily already configured,
 // because they cloned the repository.

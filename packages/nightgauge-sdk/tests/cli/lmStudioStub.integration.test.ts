@@ -20,6 +20,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { spawn, execSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import net from "node:net";
 import path from "node:path";
 import { LmStudioAdapter } from "../../src/cli/adapters/LmStudioAdapter.js";
 
@@ -125,14 +126,31 @@ async function waitUntilDead(pid: number, timeoutMs: number): Promise<boolean> {
   return !isProcessAlive(pid);
 }
 
-/** True once the stub no longer answers — proves the real listening process, not just the `go run` wrapper, is gone. */
-async function isStubUnreachable(baseUrl: string): Promise<boolean> {
-  try {
-    await fetch(`${baseUrl}/models`, { signal: AbortSignal.timeout(300) });
-    return false;
-  } catch {
-    return true;
-  }
+/**
+ * True once nothing accepts a connection on the stub's port, which proves the
+ * real listening process, not just the `go run` wrapper, is gone.
+ *
+ * This is a bare TCP connect, deliberately not `fetch` (#1929). A poll that
+ * connects in the listener's last moments gets a socket the peer resets
+ * before the first write. undici's `writeH1` then calls `setTypeOfService` on
+ * it, which throws `EINVAL` from inside undici's own write loop. The error
+ * bypasses the awaited promise, so it reaches the process as an uncaught
+ * exception and fails a green suite. A dedicated keep-alive-free dispatcher
+ * does not avoid it, because every fresh connection takes that write path.
+ */
+function isStubUnreachable(baseUrl: string): Promise<boolean> {
+  const { hostname, port } = new URL(baseUrl);
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: hostname, port: Number(port) });
+    const settle = (unreachable: boolean) => {
+      socket.destroy();
+      resolve(unreachable);
+    };
+    socket.setTimeout(300);
+    socket.once("connect", () => settle(false));
+    socket.once("timeout", () => settle(false));
+    socket.once("error", () => settle(true));
+  });
 }
 
 async function waitUntilUnreachable(baseUrl: string, timeoutMs: number): Promise<boolean> {
