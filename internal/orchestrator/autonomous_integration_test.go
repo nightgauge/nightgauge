@@ -204,14 +204,14 @@ func (h *autonomousTestHarness) runOneCycle(t *testing.T) {
 // the 18 call sites in this file funnel through here — so the join belongs at
 // the trigger, not only in the harness cleanup.
 func (h *autonomousTestHarness) simulateCompletion(repo string, number int, success bool) {
-	h.scheduler.onPipelineComplete(repo, number, success, false, "", "")
+	h.scheduler.onPipelineComplete(repo, number, success, false, "", "", false)
 	h.scheduler.drainBackground()
 }
 
 // simulateTerminalCompletion is like simulateCompletion but lets a test
 // simulate a specific terminal failure kind (Issue #3398).
 func (h *autonomousTestHarness) simulateTerminalCompletion(repo string, number int, success bool, terminalKind string) {
-	h.scheduler.onPipelineComplete(repo, number, success, false, terminalKind, "")
+	h.scheduler.onPipelineComplete(repo, number, success, false, terminalKind, "", false)
 	h.scheduler.drainBackground()
 }
 

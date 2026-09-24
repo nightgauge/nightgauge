@@ -83,7 +83,11 @@ func waitSharedHeadroomGate(ctx context.Context) error {
 	}
 	return headroomGate{
 		tracker: NewSharedRateLimitTracker(path),
-		wait:    os.Getenv(rateLimitNoWaitEnv) == "",
+		// No resource: `gh issue view` bills GraphQL, `gh api repos/...` bills
+		// core, and the gate runs before the child names which. Empty gates on
+		// the lower of the two (GetBudgetAcrossPools).
+		resource: "",
+		wait:     os.Getenv(rateLimitNoWaitEnv) == "",
 	}.await(ctx)
 }
 

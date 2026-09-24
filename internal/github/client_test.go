@@ -675,6 +675,7 @@ func TestNewClientFromConfig_SuppressWarning(t *testing.T) {
 // ── ResolveTokenChain tests (#2733) ────────────────────────────────────────────
 
 func TestResolveTokenChain_ConfigTokenWins(t *testing.T) {
+	t.Setenv("CI", "") // off CI; the CI order is pinned below
 	t.Setenv("GITHUB_TOKEN", "ghp_envtoken")
 	resolver := &stubTokenResolver{token: "ghp_configtoken"}
 	tok, err := ResolveTokenChain(resolver, "nightgauge")
@@ -683,6 +684,53 @@ func TestResolveTokenChain_ConfigTokenWins(t *testing.T) {
 	}
 	if tok != "ghp_configtoken" {
 		t.Errorf("token = %q, want %q", tok, "ghp_configtoken")
+	}
+}
+
+// On a CI host the job's environment beats a token on disk (ADR-024 § 5), so
+// a machine-file token an earlier job left behind never shadows this job's.
+func TestResolveTokenChain_CIPrefersEnvironment(t *testing.T) {
+	t.Setenv("CI", "true")
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_TOKEN", "ghp_jobtoken")
+	resolver := &stubTokenResolver{token: "ghp_staleconfigtoken"}
+	tok, err := ResolveTokenChain(resolver, "nightgauge")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if tok != "ghp_jobtoken" {
+		t.Errorf("token = %q, want the job's environment token", tok)
+	}
+}
+
+// On a CI host the environment wins even over a configured github_user, and
+// github_user (which a committed repository tier can set) selects no stored
+// gh identity: a pull request must not pick a credential off a shared runner.
+func TestResolveTokenChain_CIIgnoresGitHubUser(t *testing.T) {
+	t.Setenv("CI", "true")
+	t.Setenv("GITHUB_TOKEN", "ghp_jobtoken")
+	resolver := &stubOwnerUserResolver{usersByOwner: map[string]string{"nightgauge": "someone-else"}}
+	calledFor := ""
+	orig := execGHAuthTokenForUser
+	execGHAuthTokenForUser = func(user string) (string, error) { calledFor = user; return "ghp_stored", nil }
+	t.Cleanup(func() { execGHAuthTokenForUser = orig })
+
+	tok, err := ResolveTokenChain(resolver, "nightgauge")
+	if err != nil || tok != "ghp_jobtoken" {
+		t.Fatalf("ResolveTokenChain in CI = %q, %v; want the job's token", tok, err)
+	}
+	if got := configuredGitHubUser(resolver, "nightgauge"); got != "" {
+		t.Errorf("configuredGitHubUser in CI = %q, want \"\"", got)
+	}
+	t.Setenv("GITHUB_TOKEN", "")
+	origDefault := execGHAuthToken
+	execGHAuthToken = func() (string, error) { return "ghp_default", nil }
+	t.Cleanup(func() { execGHAuthToken = origDefault })
+	if _, err := ResolveTokenChain(resolver, "nightgauge"); err != nil {
+		t.Fatalf("ResolveTokenChain in CI without env: %v", err)
+	}
+	if calledFor != "" {
+		t.Errorf("CI resolution asked gh for the stored token of %q", calledFor)
 	}
 }
 
@@ -779,5 +827,26 @@ func TestResolveTokenChain_UnmappedOwnerDoesNotLeakWorkspaceUser(t *testing.T) {
 	}
 	if tok != "ghp_env_token" {
 		t.Errorf("token = %q, want ghp_env_token (ambient env for an owner with no configured identity)", tok)
+	}
+}
+
+// TestGhFallbackWarningNamesPath pins #2023: the gh-fallback warning names the
+// resolved machine-tier file and the env: form. A bare "config.yaml" steered
+// operators to the committed project file, where a pasted token is pushed to
+// every clone.
+func TestGhFallbackWarningNamesPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("NIGHTGAUGE_CONFIG_HOME", home)
+	want := filepath.Join(home, "config.yaml")
+
+	got := captureStderr(t, func() { warnGHFallback(nil) })
+	if !strings.Contains(got, want) {
+		t.Errorf("warning does not name the machine-tier path %q:\n%s", want, got)
+	}
+	if !strings.Contains(got, "env:VAR_NAME") {
+		t.Errorf("warning does not name the env: form:\n%s", got)
+	}
+	if strings.Contains(got, "in config.yaml") {
+		t.Errorf("warning still points at a bare config.yaml:\n%s", got)
 	}
 }

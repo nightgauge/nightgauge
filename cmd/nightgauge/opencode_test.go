@@ -151,7 +151,7 @@ func TestOpenCodeConfigVerbShape(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &fields); err != nil {
 		t.Fatalf("the verb's output is not a JSON object: %v\n%s", err, out)
 	}
-	for _, key := range []string{"schema_version", "config_content", "env", "env_withhold", "plugin_dir", "run_dir", "non_loopback"} {
+	for _, key := range []string{"schema_version", "config_content", "env", "env_withhold", "plugin_dir", "run_dir", "non_loopback", "binary", "plugin_version"} {
 		if _, ok := fields[key]; !ok {
 			t.Errorf("the verb's output has no %q:\n%s", key, out)
 		}
@@ -292,24 +292,16 @@ func TestOpenCodeConfigVerbMatchesTheAdapter(t *testing.T) {
 	// The inherited variables the verb says to withhold are the ones the Go
 	// path keeps from the child, so a caller composes the same environment.
 	var withhold struct {
-		EnvWithhold struct {
-			Prefixes []string `json:"prefixes"`
-			Names    []string `json:"names"`
-		} `json:"env_withhold"`
+		EnvWithhold adapters.OpenCodeEnvWithhold `json:"env_withhold"`
 	}
 	if err := json.Unmarshal([]byte(out), &withhold); err != nil {
 		t.Fatal(err)
 	}
-	covers := func(name string) bool {
-		for _, p := range withhold.EnvWithhold.Prefixes {
-			if strings.HasPrefix(name, p) {
-				return true
-			}
-		}
-		return slices.Contains(withhold.EnvWithhold.Names, name)
-	}
-	names := append([]string{"OPENCODE_AUTH_CONTENT", "OPENCODE_CONFIG_DIR", "ANTHROPIC_API_KEY", "OPENAI_BASE_URL", "LMSTUDIO_API_KEY", "GITHUB_TOKEN", "AWS_REGION", "PATH"},
+	covers := withhold.EnvWithhold.Withholds
+	names := append([]string{"OPENCODE_AUTH_CONTENT", "OPENCODE_CONFIG_DIR", "ANTHROPIC_API_KEY", "OPENAI_BASE_URL", "LMSTUDIO_API_KEY", "GITHUB_TOKEN", "AWS_REGION", "PATH",
+		"NIGHTGAUGE_JIRA_TOKEN", "NIGHTGAUGE_STAGE", "NIGHTGAUGE_BIN"},
 		withhold.EnvWithhold.Names...)
+	names = append(names, withhold.EnvWithhold.Keep...)
 	for _, kv := range os.Environ() {
 		name, _, _ := strings.Cut(kv, "=")
 		names = append(names, name)
@@ -321,6 +313,68 @@ func TestOpenCodeConfigVerbMatchesTheAdapter(t *testing.T) {
 	}
 	if len(withhold.EnvWithhold.Names) == 0 {
 		t.Error("env_withhold names no variable; a local dispatch withholds every hosted model service's key")
+	}
+}
+
+// TestOpenCodeConfigVerbEnvKeysMatchGoldenFixture (#1804) is the drift guard
+// two independent reviews of this fix round both landed on: a parity test
+// that only reads opencodeplugin's exported `Env*` constants is structurally
+// blind to a variable set by a bare string literal — OPENCODE_DISABLE_PROJECT_CONFIG
+// is set inline at InstallNightgaugePlugin's call site (opencode.go), not one
+// of those constants — or set somewhere else in the isolation env entirely
+// (HOME, OpenCodeIsolationEnv, opencode_isolation.go). Both slipped past a
+// constants-only parity test once already. This test runs the real verb, the
+// same one an SDK caller runs, and pins the exact key set it prints against
+// internal/execution/testdata/opencode_config_verb_env_keys.golden.json —
+// the file tests/cli/childEnv.test.ts reads on the TS side to assert every
+// one of these keys is accepted by the TS allowlist. A key this test does not
+// know about is exactly as invisible to that TS assertion, so keeping this
+// test green is what keeps the two lists from drifting apart again.
+//
+// NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK is deliberately not in the
+// fixture: operatorInstallRisk (opencode_plugin_deps.go) only sets it when an
+// operator's OpenCode install directory is at risk, which this bare
+// invocation's fresh, empty $HOME never is. Its own accept-but-withhold
+// contract is pinned by TestOpenCodeBuildCommandWithholdsOperatorInstallRiskFromTheChild
+// on this side and by dedicated tests in opencodeAdapter.test.ts on the TS
+// side, not by this fixture.
+func TestOpenCodeConfigVerbEnvKeysMatchGoldenFixture(t *testing.T) {
+	worktree := isolateOpenCodeVerb(t, openCodeVerbMachineConfig)
+	out, err := runOpenCodeVerb(t, "--stage", "feature-dev", "--worktree", worktree, "--run-id", openCodeVerbRunID, "--json")
+	if err != nil {
+		t.Fatalf("the verb failed: %v", err)
+	}
+	var run adapters.OpenCodeRun
+	if err := json.Unmarshal([]byte(out), &run); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, 0, len(run.Env))
+	for k := range run.Env {
+		got = append(got, k)
+	}
+	slices.Sort(got)
+
+	goldenPath := filepath.Join("..", "..", "internal", "execution", "testdata", "opencode_config_verb_env_keys.golden.json")
+	raw, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("reading the golden fixture: %v", err)
+	}
+	var golden struct {
+		Keys []string `json:"keys"`
+	}
+	if err := json.Unmarshal(raw, &golden); err != nil {
+		t.Fatalf("parsing the golden fixture: %v", err)
+	}
+
+	if !slices.Equal(got, golden.Keys) {
+		t.Errorf(
+			"the verb's env keys drifted from %s.\n  golden: %v\n  got:    %v\n"+
+				"If this is a deliberate new variable, add it to childEnv.ts's "+
+				"OPENCODE_RUN_ENV_NAMES (or OPENCODE_RUN_ENV_WITHHELD_NAMES if it "+
+				"must never reach the child) first, then regenerate this fixture "+
+				"with the sorted key set above.",
+			goldenPath, golden.Keys, got,
+		)
 	}
 }
 

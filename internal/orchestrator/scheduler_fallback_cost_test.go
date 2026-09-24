@@ -39,36 +39,3 @@ func TestFallbackCostZeroTokens(t *testing.T) {
 		t.Errorf("CalculateCost with zero tokens = %f; want 0", cost)
 	}
 }
-
-// TestSchedulerFallbackCostLogic mirrors the scheduler.go fallback pattern:
-//
-//	stageCostForCb := actualCostUsd
-//	if stageCostForCb == 0 { stageCostForCb = tokens.CalculateCost(...) }
-//
-// Verifies the branch behaves correctly for both the zero and non-zero cases.
-func TestSchedulerFallbackCostLogic(t *testing.T) {
-	model := "claude-sonnet-4-6"
-	inputTokens := 1000
-	outputTokens := 500
-
-	// Case 1: CLI reported a cost — use it as-is
-	actualCostUsd := 0.0123
-	stageCostForCb := actualCostUsd
-	if stageCostForCb == 0 {
-		stageCostForCb = tokens.CalculateCost(model, tokens.TokenCounts{Input: inputTokens, Output: outputTokens})
-	}
-	if stageCostForCb != actualCostUsd {
-		t.Errorf("expected CLI cost %f to be used unchanged, got %f", actualCostUsd, stageCostForCb)
-	}
-
-	// Case 2: CLI did not report cost (total_cost_usd absent) — fallback must produce > 0
-	actualCostUsd = 0
-	stageCostForCb = actualCostUsd
-	if stageCostForCb == 0 {
-		stageCostForCb = tokens.CalculateCost(model, tokens.TokenCounts{Input: inputTokens, Output: outputTokens})
-	}
-	if stageCostForCb <= 0 {
-		t.Errorf("fallback cost for %s (%d/%d tokens) = %f; want > 0",
-			model, inputTokens, outputTokens, stageCostForCb)
-	}
-}

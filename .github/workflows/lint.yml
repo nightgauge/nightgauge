@@ -1,11 +1,16 @@
 # Lint — formatting, ESLint, license-header guard, skill metadata.
 name: Lint
 
+# No push to main (#2055): the strict ruleset merges only an up-to-date PR whose
+# squash tree is the tree this PR run already linted, so a push run re-checks
+# an identical tree.
 on:
   pull_request:
     branches: [main]
-  push:
-    branches: [main]
+  # workflow_dispatch is the remedy post-merge verification names when a merge
+  # commit's tree was never tested (a ruleset bypass): dispatching on main puts
+  # the required checks on main's head (#2055).
+  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -108,6 +113,19 @@ jobs:
       # which is #529 all over again.
       - name: Mirror drift gate self-test
         run: bash scripts/test-mirror-drift-gate.sh
+      # The local gate's own concurrency and failure-reporting contract (#1983).
+      # Runs here too because the helpers it asserts are what every other step's
+      # failure is read through, and because a gate that reports a red it cannot
+      # explain trains people to dismiss reds.
+      - name: ci-local.sh concurrency and failure-reporting contract
+        run: bash scripts/test-ci-local-concurrency.sh
+      # The local gate's change-scoping contract (#1985). `--changed` can remove
+      # the two Go suites from a local run, and this is what holds the rule that
+      # a skipped step is reported as a third state and never as a pass. CI is
+      # the right place for it precisely because CI never runs `--changed`: the
+      # property would otherwise be observed only by the people relying on it.
+      - name: ci-local.sh change-scoping contract
+        run: bash scripts/test-ci-local-changed-scope.sh
       - name: Agent-skill install target regression suite
         run: bash scripts/test-install-agent-skills-targets.sh
       # Read-only, and free to sit anywhere in this job: `--check-mirror`
@@ -137,8 +155,6 @@ jobs:
       # execute cla-check.mjs itself and fail on the missing environment.
       - name: CLA gate regression suite
         run: node --test .github/scripts/cla-check.test.mjs
-      - name: Main CLA observation regression suite
-        run: node --test .github/scripts/main-cla-status.test.mjs
       - name: Agent-guidance gate self-test
         run: bash scripts/test-agent-guidance-check.sh
       - name: Agent-guidance architecture

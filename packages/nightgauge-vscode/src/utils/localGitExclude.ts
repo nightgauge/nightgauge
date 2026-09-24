@@ -77,7 +77,7 @@ export async function writeLocalExcludeBlock(
 
   const lines = existing.split("\n");
   const startIdx = lines.findIndex((l) => l.startsWith(`# nightgauge:begin ${id} `));
-  const endIdx = lines.findIndex((l, i) => i > startIdx && l === end);
+  const endIdx = lines.findIndex((l, i) => i > startIdx && l.replace(/\r$/, "") === end);
   let next: string;
   if (startIdx >= 0 && endIdx > startIdx) {
     const before = lines.slice(0, startIdx).join("\n");
@@ -93,6 +93,40 @@ export async function writeLocalExcludeBlock(
   await fs.mkdir(path.dirname(excludePath), { recursive: true });
   await fs.writeFile(excludePath, next, "utf8");
   return true;
+}
+
+/**
+ * The lines inside the block named `id` in the repository's info/exclude
+ * (carriage returns trimmed), or null when there is no such block, no
+ * exclude file, or `repoRoot` is not in a git work tree.
+ */
+export async function readLocalExcludeBlock(
+  repoRoot: string,
+  id: string
+): Promise<string[] | null> {
+  const commonDir = await gitCommonDir(repoRoot);
+  if (!commonDir) {
+    return null;
+  }
+  let content: string;
+  try {
+    content = await fs.readFile(path.join(commonDir, "info", "exclude"), "utf8");
+  } catch {
+    return null;
+  }
+  const out: string[] = [];
+  let inside = false;
+  for (const raw of content.split("\n")) {
+    const l = raw.replace(/\r$/, "");
+    if (!inside && l.startsWith(`# nightgauge:begin ${id} `)) {
+      inside = true;
+    } else if (inside && l === `# nightgauge:end ${id}`) {
+      return out;
+    } else if (inside) {
+      out.push(l);
+    }
+  }
+  return null;
 }
 
 /**

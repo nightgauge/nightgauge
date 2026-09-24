@@ -102,9 +102,22 @@ if [ -z "$BINARY" ]; then
   echo "Size gate: nightgauge binary not found — skipping gate check"
   # Continue to Phase 3 (graceful degradation)
 else
-  GATE_OUTPUT=$("$BINARY" size-gate check \
-    --issue "$ISSUE_NUMBER" \
-    --config "${CONFIG_PATH:-.nightgauge/config.yaml}" 2>&1)
+  # Capacity (#1655): judge the issue's size against the repository's target
+  # model — `size-gate capacity` names it. A binary without that verb, or no
+  # resolvable target, runs the check without capacity, as before.
+  CAPACITY_TARGET=$("$BINARY" size-gate capacity --json 2>/dev/null || true)
+  CAP_ADAPTER=$(jq -r '.adapter // empty' 2>/dev/null <<< "$CAPACITY_TARGET" || true)
+  CAP_MODEL=$(jq -r '.model // empty' 2>/dev/null <<< "$CAPACITY_TARGET" || true)
+  if [ -n "$CAP_ADAPTER" ] && [ -n "$CAP_MODEL" ]; then
+    GATE_OUTPUT=$("$BINARY" size-gate check \
+      --issue "$ISSUE_NUMBER" \
+      --config "${CONFIG_PATH:-.nightgauge/config.yaml}" \
+      --adapter "$CAP_ADAPTER" --model "$CAP_MODEL" 2>&1)
+  else
+    GATE_OUTPUT=$("$BINARY" size-gate check \
+      --issue "$ISSUE_NUMBER" \
+      --config "${CONFIG_PATH:-.nightgauge/config.yaml}" 2>&1)
+  fi
   GATE_EXIT=$?
 
   if [ $GATE_EXIT -ne 0 ]; then
@@ -132,10 +145,12 @@ fi
 
 ### Step 2.7.3: Soft-Route Option
 
-When `pipeline.size_gate.routes.reject_action = "soft-route"` in config, the Go
-binary (`size-gate check`) exits 0 and the pipeline continues. The model
-downgrade to haiku is communicated via `NIGHTGAUGE_PIPELINE_FORCE_MODEL`
-if configured by the user in their environment.
+When `pipeline.size_gate.routes.reject_action = "soft-route"` in config,
+`size-gate check` exits 0 for an issue over the target model's **capacity**
+when an entry of `pipeline.size_gate.routes.capacity_fallback_models` admits
+its size, and prints `Soft-routed to: <model>`; the scheduler makes the same
+move at dispatch. Soft-route applies to the capacity check only: an issue
+rejected for LOC in the title or for size:L/XL without sub-issues still exits 1.
 
 **Default behavior (`reject_action: fail`)**: Exit 1 stops the pipeline.
 
@@ -220,9 +235,9 @@ but \`main\`'s recent runs are currently red:
 - **Reason**: $REASON
 
 The pipeline has paused this item ([\`baseline-ci-deferred\`](../../docs/FAILURE_TAXONOMY.md#infrastructure)).
-**It will not resume on its own.** Once \`main\`'s runs of this workflow are green
-again, an operator must run \`nightgauge baseline-gate promote\` in the workspace
-to release it back into the queue."
+The autonomous daemon resumes it once \`main\`'s recent runs of this workflow are
+green again; \`nightgauge baseline-gate promote\` in the workspace releases it
+immediately."
 
     nightgauge forge issue comment --subject-id "$ISSUE_NUMBER" -b "$COMMENT_BODY" 2>/dev/null || \
       echo "warning: failed to post deferral comment to #$ISSUE_NUMBER"

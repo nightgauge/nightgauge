@@ -1,0 +1,32 @@
+{
+  "_comment": "The `nightgauge auth license` contract the VS Code extension depends on (licenseKeychainBridge.ts). cmd/nightgauge/auth_license_test.go pins the Go side to it and packages/nightgauge-vscode/tests/services/licenseKeychainBridge.test.ts pins the TypeScript side. Every sample lists every field.",
+  "keychain": { "service": "nightgauge", "account": "platform.license_key" },
+  "command": ["auth", "license"],
+  "subcommands": ["set", "status", "clear"],
+  "fingerprint": { "key": "ib_live_abc", "value": "61ecedb83dd6" },
+  "outputs": {
+    "set": {
+      "source": "machine-file",
+      "path": "/home/u/.config/nightgauge/config.yaml",
+      "keychainError": "no secret service",
+      "fingerprint": "61ecedb83dd6",
+      "removedFileCopy": true
+    },
+    "status": {
+      "source": "keychain",
+      "path": "/home/u/.config/nightgauge/config.yaml",
+      "keychainAvailable": true,
+      "keychainError": "no secret service",
+      "fingerprint": "61ecedb83dd6"
+    },
+    "clear": {
+      "keychainCleared": true,
+      "fileCleared": true,
+      "path": "/home/u/.config/nightgauge/config.yaml",
+      "localCleared": true,
+      "localPath": "/w/.nightgauge/config.local.yaml",
+      "keychainError": "no secret service",
+      "noKeychain": true
+    }
+  }
+}

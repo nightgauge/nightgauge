@@ -636,6 +636,36 @@ func TestNodeHarnessDeniesTask(t *testing.T) {
 	})
 }
 
+// TestNodeHarnessDeniesTaskRegardlessOfCostBudget pins AC1 of #1748: a stage
+// dispatched with a CostBudget still has its `task` calls denied by AC9's
+// fallback, so no subagent session can start to spend past that budget.
+// runNodeHarness's parameters (cwd, command, NIGHTGAUGE_BIN, and an arbitrary
+// extraEnv map) do not thread RunOptions.CostBudget anywhere: OpenCode takes
+// no cost cap of its own, so CostBudget is consumed entirely on the Go side
+// by openCodeCostWatchdog (opencode_cost_watchdog.go) and never reaches the
+// plugin process this harness drives. There is therefore no "budgeted-stage"
+// input this test can pass that differs, from gates.js's perspective, from
+// TestNodeHarnessDeniesTask's plain case — the deny is unconditional and does
+// not special-case a budgeted stage into letting `task` through. This test
+// documents that and pins the current behavior with an extra environment
+// variable in the shape a cost-budget signal might one day take, to catch a
+// future change that starts threading CostBudget into the harness without
+// also preserving the unconditional deny.
+func TestNodeHarnessDeniesTaskRegardlessOfCostBudget(t *testing.T) {
+	node := requireNode(t)
+	root := t.TempDir()
+	res := runNodeHarness(t, node, root, "", "", map[string]string{
+		"NG_TOOL":                "task",
+		"NIGHTGAUGE_COST_BUDGET": "0.01",
+	})
+	if !res.Threw {
+		t.Fatal("want a throw for the task tool even with a cost budget present")
+	}
+	if !strings.HasPrefix(res.Message, "[nightgauge-gate:task-denied]") {
+		t.Errorf("message = %q, want the [nightgauge-gate:task-denied] marker", res.Message)
+	}
+}
+
 // carefulParityRow is one row of testdata/careful_parity_corpus.json.
 type carefulParityRow struct {
 	Name    string `json:"name"`

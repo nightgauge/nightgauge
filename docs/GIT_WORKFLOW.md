@@ -173,9 +173,14 @@ environment, say which part and how you know.
 
 ### Verify `main` After Every Merge
 
-A green PR check is a **prediction** about a tree that does not exist yet; the
-run on the merge commit is the **observation** of the tree that does. They can
-disagree, and when they do the disagreement is the finding:
+**The PR run is the gate (#2055).** `main`'s ruleset sets
+`strict_required_status_checks_policy`, so a pull request merges only when it
+is up to date with `main`, and the squash commit's tree is the tree the PR's
+required checks already passed on. Run every test before the merge and merge
+with confidence: the full suites do not re-run on push to `main`. What still
+runs there is CodeQL (code scanning needs a default-branch baseline) and one
+cheap `cache-warm` job that saves the Go, npm and Playwright caches PR runs
+restore. After the merge, verify what is actually meaningful:
 
 ```bash
 scripts/post-merge-check.sh <merge-sha>   # repo defaults to this checkout's origin
@@ -183,16 +188,47 @@ scripts/post-merge-check.sh <merge-sha>   # repo defaults to this checkout's ori
 
 It exits `0` GREEN / `1` RED / `2` NOT-YET, and only `0` is evidence:
 
-| Exit | Verdict | What to do                                                                                  |
-| ---- | ------- | ------------------------------------------------------------------------------------------- |
-| `0`  | GREEN   | Continue with the post-merge hook and cleanup.                                              |
-| `1`  | RED     | `main` is red and it is the merger's to fix now. Never re-run hoping for a better answer.   |
-| `2`  | NOT-YET | Nothing exists yet, something is still running, or the API was unreadable. Wait and re-run. |
+| Exit | Verdict | What to do                                                                                                            |
+| ---- | ------- | --------------------------------------------------------------------------------------------------------------------- |
+| `0`  | GREEN   | Continue with the post-merge hook and cleanup.                                                                        |
+| `1`  | RED     | `main` is red and it is the merger's to fix now. Never re-run hoping for a better answer.                             |
+| `2`  | NOT-YET | Nothing exists yet, something is still running, or the required-check set or the API was unreadable. Wait and re-run. |
 
-Every check run **and** commit status on the merge commit counts, required or
-not: a failed optional check is `1`, and a running one is `2`. Required
-contexts, resolved from branch protection and rulesets, must also be present.
-Every page of both surfaces is read (#1681).
+For the merge commit of a merged pull request it verifies three things:
+
+1. **Same tree.** The merge commit's tree equals the tree of the merged PR's
+   head commit, so the PR run tested exactly what landed.
+2. **The gate passed.** Every required check on the PR head (resolved from the
+   base branch's rulesets and branch protection) concluded successfully;
+   skipped and neutral count as passing. A failed required check is `1`, and an
+   absent one is `2`. If the required-check set cannot be read, this cannot be
+   verified, and the answer is `2`, never `0`.
+3. **What else still runs on `main` is green.** Every other check run and
+   commit status on the merge commit itself concluded successfully; a failure
+   is `1`, a running one is `2`. An empty list is `2` for five minutes after
+   the merge, while the push workflows may not exist yet. `cache-warm` never
+   counts: it tests nothing, and a network blip failing it is not a red
+   `main`. CodeQL's merge-commit runs (the `Analyze (…)` jobs and the `CodeQL`
+   code-scanning check) are informational here: they are the default-branch
+   baseline for the Security tab and for pull requests' "new alerts"
+   comparison, but they analyse the same tree with the same queries as the
+   PR's own CodeQL run, which is required and already passed. A running or
+   failed CodeQL on the merge commit is reported, never `1` or `2`.
+
+If the trees differ, which the strict policy prevents (so it means a ruleset
+bypass such as `--admin`), the PR run is not evidence about the landed tree.
+The merge commit must then carry every required check itself, the rule before
+#2055, and CodeQL there counts like any other check. In this repository the suites no longer run on push, so the required
+checks are absent: that is `2` for five minutes after the merge, and then `1`
+once no required check is running there, because the landed tree was never
+tested and waiting will not change that. The remedy is to run the suites on
+`main` via `workflow_dispatch` (`ci.yml`, `lint.yml`, `publication-boundary.yml`,
+`agent-guidance.yml`, `credential-scan.yml` and `adapter-canary.yml` accept it)
+while the merge commit is still `main`'s head. `cla` cannot be dispatched: it
+only runs for a pull request, so confirm it on the PR by hand. A commit with no
+merged pull request is judged the same way, against the default branch's
+required set. Every page of both status surfaces is read
+(#1681).
 
 Read the exit code **without a pipe** — a pipeline's status is the last
 command's, so `post-merge-check.sh <sha> | tail` always reports 0. The
@@ -234,9 +270,11 @@ shared primitive — `internal/github.MissingRequiredChecks` — that asserts th
 **positive presence** of every required check name instead of the absence of
 bad conclusions among whatever showed up. `nightgauge hook post-merge` and
 `nightgauge ci checks-complete <sha>` evaluate a commit through one function,
-`internal/github.EvaluateCommitChecks`, over one reader of both GitHub status
-surfaces (#1674), so `scripts/post-merge-check.sh` delegates to the same logic
-the hook runs instead of carrying its own third bash transcription of the rule.
+`internal/github.EvaluateMergedCommit` (which applies
+`internal/github.EvaluateCommitChecks` when the merge commit is its own
+evidence), over one reader of both GitHub status surfaces (#1674), so
+`scripts/post-merge-check.sh` delegates to the same logic the hook runs
+instead of carrying its own third bash transcription of the rule.
 
 `scripts/test-post-merge-check.sh` pins all three verdicts against stubbed
 check-run payloads, because the two states that motivated this — an empty list
@@ -244,20 +282,23 @@ and a still-running check — cannot be produced on demand against live CI.
 
 The pipeline runs this check itself (#1249): `nightgauge hook post-merge` —
 which both the extension and the Go scheduler call after every pipeline merge,
-and which `AGENTS.md` mandates after every hand merge — polls the merge commit's
-check runs to completion within a bounded budget and records the verdict on the
-run and survival records, raising a `merge-commit-checks` Action Center card
-when `main` goes red. An empty check-runs list is never read as green. See
+and which `AGENTS.md` mandates after every hand merge — applies the same three
+checks, polling while anything on the merge commit is still running, within a
+bounded budget. It records the verdict on the run and survival records, raising
+a `merge-commit-checks` Action Center card when `main` goes red. See
 [PR_MERGE_STAGE.md § Post-merge verification](PR_MERGE_STAGE.md#post-merge-verification-of-the-base-branch-1249).
 
-Three classes only the post-merge run can catch, which is why this is not
-redundant with the PR gate:
+#### Why the push run was dropped (#2055)
 
-| Class                      | Why the PR gate misses it                                                                                                                             |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Nondeterministic test**  | A coin-flip test passes the PR and fails `main` on the _identical tree_. This is exactly how #572 was found — a 5023ms test against a 5000ms timeout. |
-| **Merge skew**             | Two PRs green apart, broken together. `strict_required_status_checks_policy` closes most of this, but not the window between last check and merge.    |
-| **Environment difference** | `main` runs have secrets and permissions that PR runs — especially from forks — do not.                                                               |
+Until #2055 every suite re-ran on the merge commit, on the argument that three
+failure classes are visible only there. With the strict policy none of them
+needs that run:
+
+| Class                      | Why re-running on `main` adds nothing                                                                                                                                                                                                                                    |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Nondeterministic test**  | The push run tests the _identical tree_ again, so it only re-rolls the dice. On 2026-09-23 it turned `main` red at `437421f` for a race (#1954) that had already failed pre-merge and been re-run to green. The fix is the rule above: never dismiss a failure as flaky. |
+| **Merge skew**             | The strict policy blocks a merge until the PR is up to date with `main`, and moving `main` makes it out of date again, so two PRs cannot land untested together.                                                                                                         |
+| **Environment difference** | The suites that stopped running on push hold `contents: read` and use no secrets. What does need `main`'s environment (release, staging) runs on tags, unchanged.                                                                                                        |
 
 ### Where CI's time actually goes (#1218)
 
@@ -305,8 +346,11 @@ should**, so pick the split deliberately rather than opportunistically:
 
 - **Merging is serial.** Every merge puts every other open PR `BEHIND` and costs
   it a fresh CI run.
-- **One machine runs one `ci-local.sh` at a time.** N branches cost N sequential
-  gates however fast they were written.
+- **One machine runs several `ci-local.sh` gates at once, on one budget.**
+  Concurrent gates are supported (#855) and the gate's heavy steps draw on a
+  machine-wide budget of `CI_LOCAL_JOBS` slots shared by every worktree of the
+  repository (#1983), so N branches cost less than N sequential gates but more
+  than one — they interleave rather than stack.
 
 Two sessions on disjoint files is a real gain. Two sessions on the same area is
 strictly worse than one.
@@ -1197,6 +1241,45 @@ Two things this does not license:
   touches shared types, generated files, config schemas, or anything under
   `src/manifest/`, go straight to the package rung — those edits break things at
   a distance by their nature.
+
+### `--changed`: the opt-in fast path (#1985)
+
+```bash
+bash scripts/ci-local.sh --changed
+```
+
+`--changed` derives the changed path set from `git diff --name-only
+origin/main...HEAD` **plus the working tree** and, if nothing in it can reach Go,
+skips `go test ./...` and `go test -race ./...`. Measured 2026-09-22 on an idle
+12-core Apple M-series, those two passes are 194s and 202s of a 10m31s gate —
+about 63% of it — and on a diff that cannot reach Go neither pass can observe the
+change.
+
+Four things about it are deliberate:
+
+- **It is opt-in and will not become the default.** The rule is still "run the
+  complete local gate once before every push", and that means `ci-local.sh` with
+  no flags. A scoped default would weaken the rule everywhere while producing
+  output that looks identical.
+- **A skipped step is a third state, never a pass.** The summary names every
+  skipped step with its reason, calls the run a PARTIAL gate, and the verdict is
+  "every check that RAN passed" rather than "all checks passed". A step may be
+  skipped loudly; it may never disappear (#983).
+- **The decision is keyed on generator inputs, not file extensions.** A `.ts`
+  file rendered from Go (`IpcClient.generated.ts`), a `.json` file reached by
+  `//go:embed`, and any non-Go file sitting in a Go package directory all count
+  as Go inputs. The rules are derived from the tree — `git ls-files '*.go'`, the
+  `//go:embed` declarations, and the `go run ./cmd/...` recipes in the
+  `Makefile` — so a new generator is picked up without editing the gate.
+- **It fails closed.** No `origin/main`, an empty derivation, or anything else
+  that cannot answer "did a Go input change?" runs the suites.
+- **Nothing else is ever skipped**, whatever the scope: the generated-file drift
+  checks, the changelog contract, the publication boundary and the credential
+  scan always run, and so do `go build ./...` and `gofmt`.
+
+What this buys is earlier feedback, not less safety: PR CI runs every step
+regardless, so a miss here costs a CI round trip rather than a bad merge.
+`bash scripts/ci-local.sh --changed --scope-probe` prints the decision and its reason without running anything.
 
 ### Quick Validation Script
 

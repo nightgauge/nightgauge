@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { SanitizationLogService } from "../../src/services/SanitizationLogService";
+import { SanitizationLogService, logWatchGlob } from "../../src/services/SanitizationLogService";
 import {
   DEFAULT_FIREWALL_FILTERS,
   type FirewallFilterState,
@@ -749,5 +749,23 @@ describe("SanitizationLogService - Time Series", () => {
 
       expect(timeSeries).toHaveLength(0);
     });
+  });
+});
+
+describe("logWatchGlob (#2036)", () => {
+  it("is the log path relative to the root, forward-slashed on POSIX", () => {
+    expect(
+      logWatchGlob(
+        "/test/workspace",
+        "/test/workspace/.nightgauge/logs/sanitization.log",
+        path.posix
+      )
+    ).toBe(".nightgauge/logs/sanitization.log");
+  });
+
+  it("uses forward slashes on win32", () => {
+    expect(logWatchGlob("C:\\ws", "C:\\ws\\.nightgauge\\logs\\sanitization.log", path.win32)).toBe(
+      ".nightgauge/logs/sanitization.log"
+    );
   });
 });

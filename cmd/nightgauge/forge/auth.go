@@ -216,8 +216,16 @@ func authTokenCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("getwd: %w", err)
 			}
-			cfg, err := config.Load(wd)
-			if err != nil || cfg == nil {
+			cfg, loadErr := config.Load(wd)
+			if loadErr != nil || cfg == nil {
+				// Printing a token here means exporting an identity. A config
+				// that exists and was refused — a plaintext token in a
+				// repository tier (#2023) among others — must not quietly
+				// become the machine's default gh account. --identity-only
+				// stays silent below, as its caller requires.
+				if loadErr != nil && !identityOnly {
+					return fmt.Errorf("load config: %w", loadErr)
+				}
 				cfg = &config.Config{}
 			}
 			owner := ownerOverride
@@ -314,26 +322,20 @@ func authStatusCmd() *cobra.Command {
 }
 
 func authLoginCmd() *cobra.Command {
-	var (
-		token     string
-		fromStdin bool
-	)
+	var fromStdin bool
 	cmd := &cobra.Command{
 		Use:          "login",
 		Short:        "Store a token in OS credential storage",
 		Long:         longAuthLogin,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !fromStdin && token == "" {
-				return emitError(cmd, fmt.Errorf("provide --token <value> or --from-stdin"))
-			}
-			t := token
-			if fromStdin {
-				v, err := readTokenFromStdin(cmd.InOrStdin())
-				if err != nil {
-					return emitError(cmd, fmt.Errorf("read token from stdin: %w", err))
-				}
-				t = v
+			// The token is read from stdin only: a --token flag put it on
+			// argv, where every local user can read it through `ps`
+			// (ADR-024 § 5). --from-stdin is kept for existing scripts.
+			_ = fromStdin
+			t, err := readTokenFromStdin(cmd.InOrStdin())
+			if err != nil {
+				return emitError(cmd, fmt.Errorf("read token from stdin (pipe it: printf '%%s' \"$TOKEN\" | nightgauge forge auth login): %w", err))
 			}
 			t = strings.TrimSpace(t)
 			if t == "" {
@@ -357,8 +359,7 @@ func authLoginCmd() *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().StringVar(&token, "token", "", "Token value (avoid in shells; prefer --from-stdin)")
-	cmd.Flags().BoolVar(&fromStdin, "from-stdin", false, "Read token from standard input")
+	cmd.Flags().BoolVar(&fromStdin, "from-stdin", true, "Read the token from standard input (always; kept for compatibility)")
 	return cmd
 }
 
@@ -421,7 +422,14 @@ func authRefreshCmd() *cobra.Command {
 	return cmd
 }
 
+// storeTokenInKeyring hands the token to gh's credential store on stdin. On a
+// CI host it stores nothing (ADR-024 § 5): gh would write the token to the
+// keychain or its hosts file, and a runner shared between jobs would hand it to
+// the next job. CI supplies GITHUB_TOKEN or GH_TOKEN in the environment.
 var storeTokenInKeyring = func(token string) error {
+	if config.CIHost(os.Getenv) {
+		return fmt.Errorf("%w; set GITHUB_TOKEN or GH_TOKEN in the job's environment", config.ErrCredentialWriteInCI)
+	}
 	cmd := exec.Command("gh", "auth", "login", "--hostname", "github.com", "--with-token")
 	cmd.Stdin = strings.NewReader(token + "\n")
 	if err := cmd.Run(); err != nil {

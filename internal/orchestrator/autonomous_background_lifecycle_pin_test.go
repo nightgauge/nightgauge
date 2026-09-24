@@ -54,12 +54,12 @@ type spawnFileSpec struct {
 var spawnPinTable = map[string]spawnFileSpec{
 	"autonomous.go": {trackedFunc: "goTracked"},
 	"wave_orchestrator.go": {allowedLines: map[int]string{
-		495: "runWaveParallel — joined via wg.Wait() before the function returns",
-		552: "runWaveScaled — joined via wg.Wait() before the batch loop continues",
-		601: "runSubagent — joined via the done-channel select below (ctx.Done()/<-done)",
+		496: "runWaveParallel — joined via wg.Wait() before the function returns",
+		553: "runWaveScaled — joined via wg.Wait() before the batch loop continues",
+		602: "runSubagent — joined via the done-channel select below (ctx.Done()/<-done)",
 	}},
 	"epic.go": {allowedLines: map[int]string{
-		72: "checkEpicCompletion — process-lifetime, 35s-bounded, WithoutCancel; documented at the call site",
+		75: "checkEpicCompletion — process-lifetime, 35s-bounded, WithoutCancel; documented at the call site",
 	}},
 }
 
@@ -230,7 +230,7 @@ func TestWaitBackgroundBlocksUntilTrackedWorkReturns(t *testing.T) {
 	addRunning(as, "acme/platform", 900, "awaiting architecture approval")
 	as.onPipelineComplete("acme/platform", 900, false, false,
 		TerminalKindArchitectureApprovalRequired,
-		"ARCHITECTURE APPROVAL REQUIRED — a human must approve this decision")
+		"ARCHITECTURE APPROVAL REQUIRED — a human must approve this decision", false)
 
 	waited := make(chan struct{})
 	go func() { as.waitBackground(); close(waited) }()

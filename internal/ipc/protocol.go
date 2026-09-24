@@ -216,6 +216,14 @@ type BoardListParams struct {
 	GitHubUser    string `json:"githubUser,omitempty"` // per-repo gh CLI user for multi-identity auth
 }
 
+// BoardListOpenParams are parameters for board.listOpen.
+type BoardListOpenParams struct {
+	Owner         string `json:"owner"`
+	ProjectNumber int    `json:"projectNumber"`
+	OwnerType     string `json:"ownerType,omitempty"`  // "org" (default) or "user"
+	GitHubUser    string `json:"githubUser,omitempty"` // per-repo gh CLI user for multi-identity auth
+}
+
 // BoardCountsParams are parameters for board.counts.
 type BoardCountsParams struct {
 	Owner         string `json:"owner"`

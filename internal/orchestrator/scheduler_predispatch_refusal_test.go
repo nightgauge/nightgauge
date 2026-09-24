@@ -3,13 +3,17 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution"
+	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/platform"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
@@ -32,12 +36,14 @@ type refusalCapturingStageRunner struct {
 	runtime     *state.RuntimeState
 	calls       map[state.PipelineStage]int
 	outputFiles map[state.PipelineStage]string
+	models      map[state.PipelineStage]string
 }
 
 func newRefusalCapturingStageRunner() *refusalCapturingStageRunner {
 	return &refusalCapturingStageRunner{
 		calls:       make(map[state.PipelineStage]int),
 		outputFiles: make(map[state.PipelineStage]string),
+		models:      make(map[state.PipelineStage]string),
 	}
 }
 
@@ -57,6 +63,7 @@ func (r *refusalCapturingStageRunner) RunStage(_ context.Context, params StageRu
 	r.mu.Lock()
 	r.calls[params.Stage]++
 	r.outputFiles[params.Stage] = params.OutputFile
+	r.models[params.Stage] = params.Model
 	if r.runtime == nil {
 		r.runtime = params.Runtime
 	}
@@ -613,5 +620,361 @@ func TestPreDispatchRefusal_CleanWorktreeStaysValidationError(t *testing.T) {
 	}
 	if !strings.Contains(gotReason, "missing prerequisite") {
 		t.Errorf("stage error = %q, want it to name the missing prerequisite", gotReason)
+	}
+}
+
+// ─── Context-budget fit check refusal (#1645, ADR 023) ──────────────────────
+
+// writeBigSkillFile writes a minimal SKILL.md at the expected location for a
+// stage, with a body padded to approximately bodyBytes — big enough to drive
+// skillrender.Fit's estimate (bytes/4) past a chosen budget without needing a
+// stub model in the registry: the padding is the control knob instead.
+func writeBigSkillFile(t *testing.T, workspaceRoot string, stageDir string, bodyBytes int) {
+	t.Helper()
+	dir := filepath.Join(workspaceRoot, "skills", stageDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("create skill dir: %v", err)
+	}
+	var body strings.Builder
+	body.WriteString("---\nname: test-stage\nallowed-tools: Read Write\n---\n# Test Stage\n\n")
+	for body.Len() < bodyBytes {
+		body.WriteString("This line pads the rendered content out to a measurable token count.\n")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body.String()), 0o644); err != nil {
+		t.Fatalf("write SKILL.md: %v", err)
+	}
+}
+
+// newRefusalSchedulerWithAdapter is newRefusalScheduler with a real
+// execution.Manager adapter wired in, so AdapterName()/HasAdapter() report a
+// specific adapter without ever spawning it — RunStage is still served by the
+// refusalCapturingStageRunner double.
+func newRefusalSchedulerWithAdapter(root string, runner StageRunner, adapter adapters.SkillRunner) *Scheduler {
+	s := newRefusalScheduler(root, runner)
+	s.execMgr = execution.NewManager(root, adapter)
+	return s
+}
+
+// contextBudgetBigBytes exceeds even the largest non-deprecated anthropic
+// window (claude-opus-5 / claude-sonnet-5, 1,000,000 tokens) once the fit
+// check's 1.15x safety margin is applied: budget(1_000_000) is 837678 tokens
+// (usableWindow's reserves, ADR 023 §1), so estimate must exceed 837678/1.15
+// ≈ 728,415 tokens, i.e. content past 2,913,660 bytes.
+const contextBudgetBigBytes = 3_200_000
+
+// contextBudgetMediumBytes exceeds haiku's window budget (157678 x1.15 ⇒ over
+// past 548,445 bytes) but stays under the 1,000,000-window budget above — the
+// content a successful one-hop re-route needs.
+const contextBudgetMediumBytes = 600_000
+
+// TestContextBudgetRefusal_NoLargerModelRefusesImmediately starts the dispatch
+// on the anthropic provider's biggest non-deprecated window (claude-sonnet-5,
+// tier "sonnet", 1,000,000 tokens — tied by claude-opus-5 and
+// claude-fable-5-1, none strictly bigger). No re-route candidate exists, so
+// the stage is refused on the FIRST Fit failure with no re-render attempted.
+func TestContextBudgetRefusal_NoLargerModelRefusesImmediately(t *testing.T) {
+	t.Setenv("NIGHTGAUGE_PIPELINE_STAGE_MODEL_PR_MERGE", "sonnet")
+
+	root := t.TempDir()
+	for _, dir := range []string{
+		"nightgauge-issue-pickup", "nightgauge-feature-planning", "nightgauge-feature-dev",
+		"nightgauge-feature-validate", "nightgauge-pr-create",
+	} {
+		writeSkillFile(t, root, dir)
+	}
+	writeBigSkillFile(t, root, "nightgauge-pr-merge", contextBudgetBigBytes)
+
+	runner := newRefusalCapturingStageRunner()
+	s := newRefusalScheduler(root, runner)
+
+	item := types.BoardItem{Number: 1645, Repo: "nightgauge/nightgauge", ID: "item-1645"}
+	s.runPipeline(context.Background(), item)
+
+	if got := runner.count(state.StagePRMerge); got != 0 {
+		t.Fatalf("pr-merge was dispatched %d time(s) — the context-budget gate refuses BEFORE dispatch", got)
+	}
+	if runner.runtime == nil {
+		t.Fatal("stage runner never captured a *state.RuntimeState")
+	}
+	snap := runner.runtime.Snapshot()
+	if snap.Stage != state.StagePRMerge {
+		t.Fatalf("snap.Stage = %q, want %q", snap.Stage, state.StagePRMerge)
+	}
+	gotReason := snap.StageErrors[string(state.StagePRMerge)]
+	for _, want := range []string{"context_window_exceeded", "pr-merge", "1000000"} {
+		if !strings.Contains(gotReason, want) {
+			t.Errorf("stage error = %q, want it to contain %q", gotReason, want)
+		}
+	}
+
+	rec := recordForIssue(t, root, item.Number)
+	if rec.TerminalFailureKind != TerminalKindContextWindowExceeded {
+		t.Errorf("rec.TerminalFailureKind = %q, want %q — the first production caller of this kind",
+			rec.TerminalFailureKind, TerminalKindContextWindowExceeded)
+	}
+}
+
+// TestContextBudgetRefusal_ReRouteStillFailsRefusesAfterOneHop targets
+// issue-pickup, which routes to haiku (200000 tokens, the smallest
+// non-deprecated anthropic window) with NO override needed — unlike pr-merge,
+// whose "LLM path runs only on deterministic punts" flooring raises haiku to
+// sonnet before this fit check ever runs. Content is sized to fail even after
+// the one re-route hop lands on the provider's biggest window (1,000,000):
+// exactly two Fit evaluations happen — the original and the re-routed
+// candidate's — and the stage is refused after exactly one hop, never a
+// second.
+func TestContextBudgetRefusal_ReRouteStillFailsRefusesAfterOneHop(t *testing.T) {
+	root := t.TempDir()
+	writeBigSkillFile(t, root, "nightgauge-issue-pickup", contextBudgetBigBytes)
+
+	runner := newRefusalCapturingStageRunner()
+	s := newRefusalScheduler(root, runner)
+
+	item := types.BoardItem{Number: 1646, Repo: "nightgauge/nightgauge", ID: "item-1646"}
+	logs := captureLog(t, func() { s.runPipeline(context.Background(), item) })
+
+	if got := runner.count(state.StageIssuePickup); got != 0 {
+		t.Fatalf("issue-pickup was dispatched %d time(s) — a re-route that still fails must still refuse before dispatch", got)
+	}
+	// Exactly one re-route attempt: one "context-budget re-route" log line,
+	// naming the failed hop, never a second.
+	if got := strings.Count(logs, "context-budget re-route:"); got != 1 {
+		t.Errorf("re-route log lines = %d, want exactly 1 (bounded to one hop, AC5)\n%s", got, logs)
+	}
+	rec := recordForIssue(t, root, item.Number)
+	if rec.TerminalFailureKind != TerminalKindContextWindowExceeded {
+		t.Errorf("rec.TerminalFailureKind = %q, want %q", rec.TerminalFailureKind, TerminalKindContextWindowExceeded)
+	}
+}
+
+// TestContextBudgetRefusal_SuccessfulReRouteDispatches targets issue-pickup
+// (haiku, 200000 tokens by default routing) with content that fails haiku's
+// budget but fits after the one re-route hop to the provider's biggest
+// window — the stage dispatches on the re-routed model, never refused.
+func TestContextBudgetRefusal_SuccessfulReRouteDispatches(t *testing.T) {
+	root := t.TempDir()
+	writeBigSkillFile(t, root, "nightgauge-issue-pickup", contextBudgetMediumBytes)
+
+	runner := newRefusalCapturingStageRunner()
+	s := newRefusalScheduler(root, runner)
+
+	item := types.BoardItem{Number: 1647, Repo: "nightgauge/nightgauge", ID: "item-1647"}
+	logs := captureLog(t, func() { s.runPipeline(context.Background(), item) })
+
+	if got := runner.count(state.StageIssuePickup); got != 1 {
+		t.Fatalf("issue-pickup was dispatched %d time(s), want 1 — a re-route that fits must still dispatch", got)
+	}
+	if !strings.Contains(logs, "context-budget re-route:") {
+		t.Errorf("expected a re-route log line:\n%s", logs)
+	}
+	if !strings.Contains(logs, "fits=true") {
+		t.Errorf("expected the re-routed candidate's fit to be logged as fits=true:\n%s", logs)
+	}
+}
+
+// TestContextBudgetRefusal_UnknownWindowFailsOpenAndLogsTheBranch dispatches
+// pr-merge on the ollama adapter — a local provider OverlayKeys never
+// resolves a registry descriptor for by design (ADR 016 §2) — so
+// skillData.ContextWindow is 0 and the fit check takes ADR 023 §4's
+// unknown-window branch: dispatch proceeds unchecked, and the branch taken is
+// logged so a trace can tell "checked and passed" from "not checked".
+func TestContextBudgetRefusal_UnknownWindowFailsOpenAndLogsTheBranch(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{
+		"nightgauge-issue-pickup", "nightgauge-feature-planning", "nightgauge-feature-dev",
+		"nightgauge-feature-validate", "nightgauge-pr-create",
+	} {
+		writeSkillFile(t, root, dir)
+	}
+	// Any body works — the unknown-window branch never reaches Fit at all.
+	writeBigSkillFile(t, root, "nightgauge-pr-merge", contextBudgetBigBytes)
+
+	runner := newRefusalCapturingStageRunner()
+	s := newRefusalSchedulerWithAdapter(root, runner, adapters.NewOllamaAdapter())
+
+	item := types.BoardItem{Number: 1648, Repo: "nightgauge/nightgauge", ID: "item-1648"}
+	logs := captureLog(t, func() { s.runPipeline(context.Background(), item) })
+
+	if got := runner.count(state.StagePRMerge); got != 1 {
+		t.Fatalf("pr-merge was dispatched %d time(s), want 1 — an unresolved local descriptor must fail open", got)
+	}
+	if !strings.Contains(logs, "unknown-window") {
+		t.Errorf("expected the unknown-window branch to be logged by name:\n%s", logs)
+	}
+}
+
+// ─── Capacity-aware sizing refusal (#1655, ADR 023 Q9) ──────────────────────
+
+// capacityTestEndpoints serves two local OpenCode endpoints from one
+// OpenAI-compatible stub: local32 declares a 32,768-token context and
+// local131 a 131,072-token one.
+func capacityTestEndpoints(t *testing.T) {
+	t.Helper()
+	server := newOpenAICompatibleStub(t, "qwen-32k", "qwen-32k-b", "qwen-131k")
+	t.Cleanup(server.Close)
+	withOpenCodeReadinessConfig(t, config.OpenCodeConfig{
+		Endpoints: []config.OpenCodeEndpointConfig{
+			{ID: "local32", Provider: "openai-compatible", BaseURL: server.URL, Limit: config.OpenCodeLimit{Context: 32768, Output: 4096}},
+			{ID: "local131", Provider: "openai-compatible", BaseURL: server.URL, Limit: config.OpenCodeLimit{Context: 131072, Output: 4096}},
+		},
+	})
+}
+
+// runCapacityScenario runs a pipeline on the opencode adapter where
+// feature-planning assesses the issue as size M (planning-{N}.json
+// complexity_assessment.size_label) and feature-dev is routed to the 32k
+// local model. configYAML, when set, is the workspace's .nightgauge/config.yaml.
+func runCapacityScenario(t *testing.T, number int, configYAML string) (*refusalCapturingStageRunner, string, string) {
+	t.Helper()
+	capacityTestEndpoints(t)
+	root := t.TempDir()
+	seedRefusalRepo(t, root, allRefusalStageSkills)
+	if configYAML != "" {
+		if err := os.MkdirAll(filepath.Join(root, ".nightgauge"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, ".nightgauge", "config.yaml"), []byte(configYAML), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	runner := newRefusalCapturingStageRunner()
+	s := newRefusalSchedulerWithAdapter(root, runner, adapters.NewOpenCodeAdapter())
+	s.telemetrySvc = &hookTelemetry{onEvent: func(e platform.PipelineEvent) {
+		if e.EventType != "stage_completed" || e.Stage != string(state.StageFeaturePlanning) {
+			return
+		}
+		plan := `{"schema_version":"1.0","issue_number":` + strconv.Itoa(number) +
+			`,"complexity_assessment":{"size_label":"M"}}`
+		if err := os.WriteFile(runner.outputFile(state.StageFeaturePlanning), []byte(plan), 0o644); err != nil {
+			t.Errorf("write planning context: %v", err)
+		}
+		s.retryEngine.RecordEscalation(string(state.StageFeatureDev), "local32/qwen-32k")
+	}}
+	s.telemetryEnabled = true
+
+	item := types.BoardItem{Number: number, Repo: "nightgauge/nightgauge", ID: fmt.Sprintf("item-%d", number)}
+	logs := captureLog(t, func() { s.runPipeline(context.Background(), item) })
+	return runner, root, logs
+}
+
+// TestCapacityRefusal_PlannerOnlySizeRefusedAtTheSizeSensitiveStage: the
+// issue carries no size until feature-planning assesses it M, so the stages
+// before are not capped; feature-dev, resolving to a 32k model, is refused
+// before spawn — the ADR 023 capacity table caps a 32k window at S — and
+// classified context_window_exceeded with a recovery of decompose.
+func TestCapacityRefusal_PlannerOnlySizeRefusedAtTheSizeSensitiveStage(t *testing.T) {
+	runner, root, logs := runCapacityScenario(t, 1655, "")
+
+	if got := runner.count(state.StageFeaturePlanning); got != 1 {
+		t.Fatalf("feature-planning ran %d time(s), want 1\n%s", got, logs)
+	}
+	if got := runner.count(state.StageFeatureDev); got != 0 {
+		t.Fatalf("feature-dev was dispatched %d time(s) — the capacity gate refuses BEFORE spawn\n%s", got, logs)
+	}
+	snap := runner.runtime.Snapshot()
+	if snap.Stage != state.StageFeatureDev {
+		t.Fatalf("snap.Stage = %q, want %q", snap.Stage, state.StageFeatureDev)
+	}
+	reason := snap.StageErrors[string(state.StageFeatureDev)]
+	for _, want := range []string{"context_window_exceeded", "size M", "32768", "cap S", "recovery: decompose"} {
+		if !strings.Contains(reason, want) {
+			t.Errorf("stage error = %q, want it to contain %q", reason, want)
+		}
+	}
+	rec := recordForIssue(t, root, 1655)
+	if rec.TerminalFailureKind != TerminalKindContextWindowExceeded {
+		t.Errorf("rec.TerminalFailureKind = %q, want %q", rec.TerminalFailureKind, TerminalKindContextWindowExceeded)
+	}
+	// The CLI autonomous wrapper re-derives the kind from the failed stage:
+	// the structured gate result must carry it, since prose never does.
+	gates := snap.StageGateResults[string(state.StageFeatureDev)]
+	if len(gates) == 0 || ResolveTerminalKind(true, gates[len(gates)-1].TerminalKind, reason) != TerminalKindContextWindowExceeded {
+		t.Errorf("gate results %+v do not resolve to %q", gates, TerminalKindContextWindowExceeded)
+	}
+	if got := ParkedRemediation(TerminalKindContextWindowExceeded, reason); !strings.Contains(got, "decompose the issue") {
+		t.Errorf("remediation %q is not the capacity remediation", got)
+	}
+}
+
+// TestCapacityRefusal_SoftRouteDispatchesToTheFallback: under
+// reject_action: soft-route the same issue moves to the first
+// capacity_fallback_models entry whose window admits M — the 131k model,
+// not the distinct 32k model listed ahead of it — and dispatches there.
+func TestCapacityRefusal_SoftRouteDispatchesToTheFallback(t *testing.T) {
+	cfg := "pipeline:\n  size_gate:\n    routes:\n      reject_action: soft-route\n" +
+		"      capacity_fallback_models:\n        - local32/qwen-32k-b\n        - local131/qwen-131k\n"
+	runner, _, logs := runCapacityScenario(t, 1656, cfg)
+
+	if got := runner.count(state.StageFeatureDev); got == 0 {
+		t.Fatalf("feature-dev was never dispatched — soft-route must move it to the 131k fallback\n%s", logs)
+	}
+	runner.mu.Lock()
+	model := runner.models[state.StageFeatureDev]
+	runner.mu.Unlock()
+	if model != "local131/qwen-131k" {
+		t.Errorf("feature-dev dispatched on %q, want the 131k fallback", model)
+	}
+	if !strings.Contains(logs, "soft-routed to local131/qwen-131k (window 131072)") {
+		t.Errorf("expected the soft-route to be logged:\n%s", logs)
+	}
+}
+
+// TestCapacityGate_OnlySizeSensitiveStagesAreCapped: an XL issue on the
+// Claude adapter's default routing is not refused. issue-pickup and
+// pr-create run on haiku (200k, whose cap is L), but they are not
+// size-sensitive; the size-sensitive stages resolve to 1M-window models.
+func TestCapacityGate_OnlySizeSensitiveStagesAreCapped(t *testing.T) {
+	root := t.TempDir()
+	seedRefusalRepo(t, root, allRefusalStageSkills)
+	runner := newRefusalCapturingStageRunner()
+	s := newRefusalScheduler(root, runner)
+
+	item := types.BoardItem{Number: 1700, Repo: "nightgauge/nightgauge", ID: "item-1700", Labels: []string{"size:XL"}}
+	logs := captureLog(t, func() { s.runPipeline(context.Background(), item) })
+
+	for _, st := range []state.PipelineStage{state.StageIssuePickup, state.StageFeatureDev, state.StagePRCreate} {
+		if runner.count(st) == 0 {
+			t.Errorf("%s was never dispatched\n%s", st, logs)
+		}
+	}
+	runner.mu.Lock()
+	pickupModel := runner.models[state.StageIssuePickup]
+	runner.mu.Unlock()
+	if pickupModel != "haiku" {
+		t.Errorf("issue-pickup ran on %q; this test needs the default haiku routing to mean anything", pickupModel)
+	}
+	if strings.Contains(logs, "exceeds the capacity cap") {
+		t.Errorf("an XL issue was capped although every size-sensitive stage has a 1M window:\n%s", logs)
+	}
+}
+
+// TestCapacityRefusal_KnownSizeRefusedAtTheFirstStage: a size known before
+// planning (a size:XL label) against a feature-dev model whose window caps
+// it (haiku, 200k → L) is refused at issue-pickup, before any stage spawns.
+func TestCapacityRefusal_KnownSizeRefusedAtTheFirstStage(t *testing.T) {
+	t.Setenv("NIGHTGAUGE_PIPELINE_STAGE_MODEL_FEATURE_DEV", "haiku")
+	root := t.TempDir()
+	seedRefusalRepo(t, root, allRefusalStageSkills)
+	runner := newRefusalCapturingStageRunner()
+	s := newRefusalScheduler(root, runner)
+
+	item := types.BoardItem{Number: 1701, Repo: "nightgauge/nightgauge", ID: "item-1701", Labels: []string{"size:XL"}}
+	logs := captureLog(t, func() { s.runPipeline(context.Background(), item) })
+
+	runner.mu.Lock()
+	spawned := len(runner.calls)
+	runner.mu.Unlock()
+	if spawned != 0 {
+		t.Fatalf("%d stage(s) spawned — a known over-capacity size must be refused before anything runs\n%s", spawned, logs)
+	}
+	rec := recordForIssue(t, root, 1701)
+	if rec.TerminalFailureKind != TerminalKindContextWindowExceeded {
+		t.Errorf("rec.TerminalFailureKind = %q, want %q", rec.TerminalFailureKind, TerminalKindContextWindowExceeded)
+	}
+	for _, want := range []string{"refused at stage issue-pickup", "stage feature-dev on haiku", "size XL", "cap L", "200000"} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("logs missing %q\n%s", want, logs)
+		}
 	}
 }

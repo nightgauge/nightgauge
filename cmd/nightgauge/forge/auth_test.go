@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/config"
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
 )
 
@@ -22,7 +24,8 @@ func TestAuthTokenCmd_PrintsConfigToken(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, ".nightgauge"), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	cfgYAML := "owner: TestOrg\ngithub_auth:\n  token: direct-test-token\n"
+	t.Setenv("NG_TEST_DIRECT_TOKEN", "direct-test-token")
+	cfgYAML := "owner: TestOrg\ngithub_auth:\n  token: env:NG_TEST_DIRECT_TOKEN\n"
 	if err := os.WriteFile(filepath.Join(dir, ".nightgauge", "config.yaml"), []byte(cfgYAML), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -48,6 +51,8 @@ func TestAuthTokenCmd_PrintsConfigToken(t *testing.T) {
 // gh account).
 func TestAuthTokenCmd_IdentityOnly(t *testing.T) {
 	t.Setenv("HOME", t.TempDir()) // isolate from the machine ~/.nightgauge github_user
+	t.Setenv("NG_TEST_DIRECT_TOKEN", "direct-test-token")
+	t.Setenv("NG_TEST_IDENTITY_TOKEN", "identity-tok")
 
 	run := func(t *testing.T, cfgYAML string) string {
 		dir := t.TempDir()
@@ -72,7 +77,7 @@ func TestAuthTokenCmd_IdentityOnly(t *testing.T) {
 	t.Run("no github_user prints nothing", func(t *testing.T) {
 		// A config token is present but NO github_user → no per-repo identity →
 		// --identity-only emits nothing (guard.sh keeps the ambient token).
-		if got := run(t, "owner: TestOrg\ngithub_auth:\n  token: direct-test-token\n"); got != "" {
+		if got := run(t, "owner: TestOrg\ngithub_auth:\n  token: env:NG_TEST_DIRECT_TOKEN\n"); got != "" {
 			t.Errorf("identity-only with no github_user = %q, want empty", got)
 		}
 	})
@@ -80,10 +85,42 @@ func TestAuthTokenCmd_IdentityOnly(t *testing.T) {
 	t.Run("configured github_user prints the resolved token", func(t *testing.T) {
 		// github_user IS configured → emit the resolved token (tier-2 config token
 		// here, so no gh subprocess is needed).
-		if got := run(t, "owner: TestOrg\ngithub_user: someuser\ngithub_auth:\n  token: identity-tok\n"); got != "identity-tok" {
+		if got := run(t, "owner: TestOrg\ngithub_user: someuser\ngithub_auth:\n  token: env:NG_TEST_IDENTITY_TOKEN\n"); got != "identity-tok" {
 			t.Errorf("identity-only with github_user = %q, want identity-tok", got)
 		}
 	})
+}
+
+// TestAuthTokenCmd_RefusesPlaintextRepoToken: a plaintext token in the
+// committed config fails the command, naming the key and not the value, rather
+// than falling through to whatever gh account is active (#2023).
+func TestAuthTokenCmd_RefusesPlaintextRepoToken(t *testing.T) {
+	t.Setenv("NIGHTGAUGE_CONFIG_HOME", t.TempDir())
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".nightgauge"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	cfgYAML := "owner: TestOrg\ngithub_auth:\n  token: literal-test-token\n"
+	if err := os.WriteFile(filepath.Join(dir, ".nightgauge", "config.yaml"), []byte(cfgYAML), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Chdir(dir)
+
+	root := Cmd()
+	stdout := &bytes.Buffer{}
+	root.SetOut(stdout)
+	root.SetErr(&bytes.Buffer{})
+	root.SetArgs([]string{"auth", "token"})
+	err := root.ExecuteContext(context.Background())
+	if err == nil {
+		t.Fatalf("auth token succeeded with a plaintext repository token; printed %d bytes", stdout.Len())
+	}
+	if stdout.Len() != 0 {
+		t.Error("auth token printed a token despite the refused config")
+	}
+	if !strings.Contains(err.Error(), "github_auth.token") || strings.Contains(err.Error(), "literal-test-token") {
+		t.Errorf("error should name the key and not the value: %v", err)
+	}
 }
 
 func TestMaskToken(t *testing.T) {
@@ -162,7 +199,8 @@ func TestAuthLogin_UsesKeyring(t *testing.T) {
 	stdout := &bytes.Buffer{}
 	root.SetOut(stdout)
 	root.SetErr(&bytes.Buffer{})
-	root.SetArgs([]string{"auth", "login", "--token", "ghp_xxxxxxxxyyyyyyyy", "--json"})
+	root.SetIn(strings.NewReader("ghp_xxxxxxxxyyyyyyyy\n"))
+	root.SetArgs([]string{"auth", "login", "--json"})
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -402,5 +440,27 @@ func TestAuthRefresh_ReadsGhAndWrites(t *testing.T) {
 	}
 	if strings.Contains(stdout.String(), "ghp_refreshed_token_value_abcdef") {
 		t.Errorf("raw token leaked: %s", stdout.String())
+	}
+}
+
+// On a CI host the real store refuses before gh is ever run, so no token
+// reaches gh's keychain entry or hosts file (ADR-024 § 5).
+func TestStoreTokenInKeyring_RefusesInCI(t *testing.T) {
+	t.Setenv("CI", "true")
+	// A PATH with no gh proves the refusal precedes the exec.
+	t.Setenv("PATH", t.TempDir())
+	err := storeTokenInKeyring("ghp_xxxxxxxxyyyyyyyy")
+	if !errors.Is(err, config.ErrCredentialWriteInCI) {
+		t.Fatalf("storeTokenInKeyring in CI = %v, want ErrCredentialWriteInCI", err)
+	}
+	if strings.Contains(err.Error(), "ghp_") {
+		t.Fatal("the error quotes the token")
+	}
+}
+
+// The token never travels on argv (ADR-024 § 5): there is no --token flag.
+func TestAuthLogin_HasNoTokenFlag(t *testing.T) {
+	if f := authLoginCmd().Flags().Lookup("token"); f != nil {
+		t.Fatal("forge auth login still accepts --token, which puts the token on argv")
 	}
 }

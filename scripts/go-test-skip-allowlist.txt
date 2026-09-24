@@ -17,6 +17,14 @@
 # portable substitute.
 github.com/nightgauge/nightgauge/internal/e2e.TestRunCmd_Timeout_SurvivorHoldsPipe_ReturnsPromptly
 
+# Platform-conditional, the other way round: the OS's own /tmp -> /private/tmp
+# alias exists on macOS and not on Linux CI. The test checks that a worktree
+# handed over already resolved still admits its /tmp form, which EvalSymlinks
+# cannot recover. The alias is the system's, so it cannot be built in a temp
+# dir. It runs in every macOS local gate, where the live defect (#1651 AC7
+# finding 4) was seen.
+github.com/nightgauge/nightgauge/internal/execution/adapters.TestOpenCodePermissionMapCoversTheSystemAliasOfAResolvedWorktree
+
 # Network/auth-gated: these assert the SHAPE of real GitHub responses, which is
 # the one thing a fixture cannot check. They skip without ambient credentials.
 github.com/nightgauge/nightgauge/internal/github.TestNoDeprecatedFieldsUsed

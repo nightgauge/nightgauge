@@ -57,10 +57,14 @@ type OpenCodeConfig struct {
 	// from a private file in its own root, never from the environment.
 	BaseURL string `yaml:"base_url,omitempty" json:"base_url,omitempty"`
 
-	// Limit is what the server has loaded, which applies to every model it
-	// serves. Keep Context at or below the context the server has loaded,
-	// not the model's maximum: OpenCode compacts a session only when it
-	// knows the window, and a server that reports 0 never compacts.
+	// Limit is an optional override of the limits discovery reads from the
+	// server (#1633), applying to every model it serves. It is no longer the
+	// sole source: discovery fills an unset Context or Output from the
+	// server's own reported loaded context, and Limit only overrides what
+	// discovery would otherwise supply. Keep an explicit Context at or below
+	// the context the server has loaded, not the model's maximum: OpenCode
+	// compacts a session only when it knows the window, and a server that
+	// reports 0 never compacts.
 	Limit OpenCodeLimit `yaml:"limit,omitempty" json:"limit,omitempty"`
 
 	// Timeouts bound the wait for the server's response headers and between

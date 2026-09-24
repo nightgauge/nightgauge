@@ -29,7 +29,7 @@ func TestAnAttributedCapDoesNotSuspendEveryRepo(t *testing.T) {
 
 	addRunning(as, "acme/dashboard", 96, "fable cap, ladder still had rungs")
 	as.onPipelineComplete("acme/dashboard", 96, false, false,
-		TerminalKindModelUnavailable, capRejectionMarker)
+		TerminalKindModelUnavailable, capRejectionMarker, false)
 	as.drainBackground()
 
 	if as.state.QuotaCooldownUntil != "" {
@@ -59,7 +59,7 @@ func TestASurvivingAccountWideRejectionStillSuspendsTheFleet(t *testing.T) {
 
 	addRunning(as, "acme/dashboard", 96, "ladder and chain both exhausted")
 	as.onPipelineComplete("acme/dashboard", 96, false, false,
-		TerminalKindRateLimitQuotaExhausted, capRejectionMarker)
+		TerminalKindRateLimitQuotaExhausted, capRejectionMarker, false)
 	as.drainBackground()
 
 	if as.state.QuotaCooldownUntil == "" {

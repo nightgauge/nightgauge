@@ -46,5 +46,13 @@
       "repo": "nightgauge/nightgauge"
     }
   ],
-  "authorAssociation": "OWNER"
+  "authorAssociation": "OWNER",
+  "relationSummary": {
+    "blockedByOpen": 0,
+    "blockedByTotal": 1,
+    "blockingOpen": 1,
+    "blockingTotal": 1,
+    "subIssuesTotal": 1,
+    "subIssuesCompleted": 0
+  }
 }

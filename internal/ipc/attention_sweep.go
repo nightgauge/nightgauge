@@ -125,6 +125,11 @@ var sweepMu sync.Mutex
 // underneath that — two windows on one daemon, or a manual sweep spammed.
 const SweepMinGap = 60 * time.Second
 
+// sweepRepoConcurrency bounds how many repositories one sweep evaluates at
+// once. Small on purpose: GitHub's secondary limits punish bursts, and four
+// is enough to bring a six-repo pass inside the extension's IPC deadline.
+const sweepRepoConcurrency = 4
+
 // sweepNow is time.Now behind a variable so a test can cross the gap without
 // sleeping through it.
 var sweepNow = time.Now
@@ -192,9 +197,30 @@ func (s *Server) handleAttentionSweep(ctx context.Context, raw json.RawMessage) 
 		}
 	}
 
-	for _, repo := range repos {
-		res.Repos = append(res.Repos, s.sweepOneRepo(ctx, store, repo))
+	// One memo per pass: the producers that read the same repository's
+	// Dependabot alerts (per repo, and again from the workspace pass) share
+	// one read of it.
+	shared := sweep.NewSharedReads()
+
+	// Repositories are swept concurrently, at most sweepRepoConcurrency at a
+	// time. Each repo's producers already run under their own per-repo
+	// timeout; running the repos one after another made a six-repo pass take
+	// ~40 s — longer than the extension's 30 s IPC deadline, so the caller saw
+	// a timeout for a sweep that went on to succeed. The store serialises its
+	// own writes, and the order of res.Repos is the request order regardless.
+	res.Repos = make([]AttentionSweepRepoResult, len(repos))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, sweepRepoConcurrency)
+	for i, repo := range repos {
+		wg.Add(1)
+		go func(i int, repo string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			res.Repos[i] = s.sweepOneRepo(ctx, store, repo, shared)
+		}(i, repo)
 	}
+	wg.Wait()
 	for _, r := range res.Repos {
 		res.Created += r.Created
 		res.Updated += r.Updated
@@ -206,7 +232,7 @@ func (s *Server) handleAttentionSweep(ctx context.Context, raw json.RawMessage) 
 	// given the same repo list (#260). They exist to reason about that list as
 	// an object — most importantly, about what is missing from it, which no
 	// per-repo producer can observe.
-	s.sweepWorkspace(ctx, store, repos, &res)
+	s.sweepWorkspace(ctx, store, repos, &res, shared)
 
 	// Stamped only after a sweep that actually looked. An Unavailable or
 	// empty-repo-list call returns earlier and must not start the gap, or a
@@ -219,14 +245,14 @@ func (s *Server) handleAttentionSweep(ctx context.Context, raw json.RawMessage) 
 // sweepWorkspace evaluates the workspace-scoped producers. It never fails the
 // call: a workspace producer erroring must not invalidate the per-repo results
 // already collected.
-func (s *Server) sweepWorkspace(ctx context.Context, store *attention.Store, repos []string, res *AttentionSweepResult) {
+func (s *Server) sweepWorkspace(ctx context.Context, store *attention.Store, repos []string, res *AttentionSweepResult, shared *sweep.SharedReads) {
 	// Any repo's client will do — workspace producers use it only for
 	// board-level discovery, and every repo in a workspace shares the board.
 	// Without one, local-checkout discovery still runs.
 	var client forge.ForgeClient
 	if len(repos) > 0 && s.forgeClientFn != nil {
 		if c, err := s.forgeClientFn(repos[0]); err == nil {
-			client = c
+			client = shared.Wrap(c)
 		}
 	}
 	sweeper := &sweep.Sweeper{
@@ -248,7 +274,7 @@ func (s *Server) sweepWorkspace(ctx context.Context, store *attention.Store, rep
 
 // sweepOneRepo runs the registry against a single repo. It never returns an
 // error: everything is folded into the per-repo result.
-func (s *Server) sweepOneRepo(ctx context.Context, store *attention.Store, repo string) AttentionSweepRepoResult {
+func (s *Server) sweepOneRepo(ctx context.Context, store *attention.Store, repo string, shared *sweep.SharedReads) AttentionSweepRepoResult {
 	out := AttentionSweepRepoResult{Repo: repo}
 	client, err := s.forgeClientFn(repo)
 	if err != nil {
@@ -256,6 +282,7 @@ func (s *Server) sweepOneRepo(ctx context.Context, store *attention.Store, repo 
 		log.Printf("attention.sweep: no forge client for %s (skipped): %v", repo, err)
 		return out
 	}
+	client = shared.Wrap(client)
 	sweeper := &sweep.Sweeper{
 		Store:         store,
 		Registry:      sweep.Default,

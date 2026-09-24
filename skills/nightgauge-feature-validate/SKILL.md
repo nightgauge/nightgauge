@@ -63,7 +63,7 @@ Trusts the dev context handoff (no build/unit-test/security re-runs that already
 | `--checklist-only` | Generate checklist without running tests       |
 | `--auto-pass`      | Auto-pass all checklist items (CI/automated)   |
 
-## Exit Contract — Read This First (#3114)
+## Exit Contract — Read This First
 
 **This stage is NOT complete until `.nightgauge/pipeline/validate-{N}.json` exists on disk.** On any error, budget exhaustion, or bail-out, STILL execute Phase 6 and write it (`validation_status: "failed"` plus the matching `errorCategory` — enum: `build-failed`, `tests-failed`, `integration-failed`, `dead-code-blocked`, `mobile-apk-build-failed`, `mobile-mcp-tests-failed`, `verify-ui-gate-failed`). Exiting without it triggers a repo-blind orchestrator fallback that may misreport tests. The very last act before signaling completion MUST be:
 
@@ -93,10 +93,12 @@ The `orchestration:` frontmatter models validation as an ordered pipeline — bu
 
 ## Gotchas
 
-- **Exit Contract (#3114)**: write `validate-{N}.json` before exiting — even on failure. The orchestrator fallback is repo-blind.
+- **Exit Contract**: write `validate-{N}.json` before exiting — even on failure. The orchestrator fallback is repo-blind.
 - **Build hard gate**: when the build runs it MUST pass — no flag (`--auto-pass` included) bypasses it; unit tests alone miss build breaks.
 - **Failed validation** → do NOT commit or push; leave the tree for triage.
 - **Never skip the Phase 5 commit because `git log` shows a similar commit** — that commit is a _previous issue's_ (feature-dev never commits, #1608); skipping on a branch with zero commits ahead of base loses the entire implementation when the worktree is pruned. Only valid skip evidence: `git rev-list --count origin/<base>..HEAD` > 0.
+- **Honesty rule — record every gate result as observed.** Never turn a catch into a pass by weakening the check: no lint-disable comments, skipped or deleted tests, loosened assertions or edited gate config. Fixing the code so it is genuinely correct is allowed (Ralph Loop); laundering the finding is not, and `validate-{N}.json` reports what actually ran.
+- **Never dismiss a failing test as flaky without root-causing it.** Re-running until green is not a fix; a failure you cannot explain is recorded as a failure.
 - **Env vars do NOT persist across Bash invocations** — re-derive `VALIDATION_STATUS` (and other gate inputs) inside the same cell that uses them; a stale/empty value spuriously skips the commit phase.
 - See also [`_shared/GOTCHAS.md`](../_shared/GOTCHAS.md).
 
@@ -296,7 +298,7 @@ Display summary (branch, issue, status, commit SHA, build/test results, checklis
 # Resolve the nightgauge binary (standard cascade, as prior phases), then
 # best-effort: "$BINARY" project move-status "$ISSUE_NUMBER" "in-progress".
 
-# #3114: enforce the Exit Contract — fail loudly if Phase 6 was skipped (the
+# Enforce the Exit Contract — fail loudly if Phase 6 was skipped (the
 # orchestrator's repo-blind fallback may misreport test status; always write
 # the file ourselves).
 CONTEXT_FILE=".nightgauge/pipeline/validate-${ISSUE_NUMBER}.json"

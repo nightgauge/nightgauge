@@ -1,8 +1,11 @@
 package orchestrator
 
 import (
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/doctor"
 )
 
 // The observed failure text from #1545: skillRunner's stamp for a structured
@@ -379,5 +382,42 @@ func TestOpenCodeIsNeverACapHopTargetWhileGated(t *testing.T) {
 	}
 	if !strings.Contains(reason, "NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1") {
 		t.Errorf("the unusable verdict says %q; it must name the enable switch the doctor reports", reason)
+	}
+}
+
+// TestAdapterUsableForCapHop_SelectsRowByNameNotPosition pins #1712's second
+// finding: doctor.CheckAdapters prepends a "compat-manifests" row ahead of
+// every requested adapter when the embedded compat manifests fail to load
+// (checkAdaptersWithProbe), so reading health[0] as the requested adapter's
+// row misreads a manifest load failure as that adapter's own verdict.
+// AdapterUsableForCapHop must select the row by name instead.
+func TestAdapterUsableForCapHop_SelectsRowByNameNotPosition(t *testing.T) {
+	restore := doctor.SwapCompatManifestLoadForTest(errors.New("manifest boom for the #1712 regression"))
+	defer restore()
+
+	const adapter = "claude-headless"
+	rows := doctor.CheckAdapters([]string{adapter})
+	if len(rows) != 2 || rows[0].Adapter == adapter {
+		t.Fatalf("test setup: want the compat-manifests row ahead of %s's own row, got %+v", adapter, rows)
+	}
+	want := rows[1]
+	wantOK := want.OK
+	wantReason := want.Remediation
+	if wantOK {
+		wantReason = ""
+	} else if wantReason == "" {
+		wantReason = "not usable"
+	}
+
+	usable, reason := AdapterUsableForCapHop(adapter)
+	if usable != wantOK {
+		t.Fatalf("AdapterUsableForCapHop(%q) usable=%v, want %v — it read health[0] (the compat-manifests "+
+			"failure) instead of %s's own row", adapter, usable, wantOK, adapter)
+	}
+	if reason != wantReason {
+		t.Fatalf("AdapterUsableForCapHop(%q) reason=%q, want %q", adapter, reason, wantReason)
+	}
+	if strings.Contains(reason, "Version floors are not enforced") {
+		t.Fatalf("reason %q leaked the compat-manifests row's own remediation instead of %s's", reason, adapter)
 	}
 }

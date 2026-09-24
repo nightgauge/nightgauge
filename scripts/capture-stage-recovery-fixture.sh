@@ -68,6 +68,9 @@ mkdir -p "$WS"
 # Machine-tier config isolation: never read the developer's ~/.nightgauge.
 export NIGHTGAUGE_CONFIG_HOME="$WORK/config-home"
 mkdir -p "$NIGHTGAUGE_CONFIG_HOME"
+# Machine-state isolation (ADR-024 § 8): serve claims, rate-limit hints and the
+# machine id stay out of the developer's real state root.
+export NIGHTGAUGE_STATE_HOME="$WORK/state"
 
 mkdir -p "$(dirname "$OUT")"
 

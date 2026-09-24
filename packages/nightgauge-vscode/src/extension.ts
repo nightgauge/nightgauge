@@ -10,6 +10,7 @@
  * @see docs/ARCHITECTURE.md for architectural overview
  */
 
+import { RELATIVE_CLONE_LOGS_DIR } from "./utils/cloneLayout";
 import * as vscode from "vscode";
 import type { PipelineStage } from "@nightgauge/sdk";
 import { getStageLabel, killAllActiveProcesses } from "./utils/skillRunner";
@@ -880,7 +881,7 @@ export function deactivate(): void {
 
   logger?.info(
     "Deactivating Nightgauge extension — " +
-      "persistent logs in .nightgauge/logs/ " +
+      `persistent logs in ${RELATIVE_CLONE_LOGS_DIR}/ ` +
       "(go-backend.log, ipc-client.log, autonomous-exits.jsonl)"
   );
 

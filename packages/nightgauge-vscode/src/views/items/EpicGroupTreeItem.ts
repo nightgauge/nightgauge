@@ -27,6 +27,12 @@ export interface EpicInfo {
    */
   blockedBy?: BlockingIssue[];
   /**
+   * The epic's open-blocker COUNT when it came from a summary read (see
+   * ReadyIssue.openBlockerCount), so a blocked epic reads as blocked even
+   * when its blocker list was not read.
+   */
+  openBlockerCount?: number;
+  /**
    * The epic issue's own GitHub labels (Issue #656, AC 1 remainder —
    * distinguishing "mislabelled" from "not yet decomposed" for an empty
    * epic requires reading `needs-decomposition` off the epic itself).
@@ -381,6 +387,7 @@ export function groupIssuesByEpic(
           title: issue.title,
           url: issue.url,
           blockedBy: issue.blockedBy,
+          openBlockerCount: issue.openBlockerCount,
           labels: issue.labels,
         });
       }

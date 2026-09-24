@@ -96,6 +96,9 @@ async function main(): Promise<void> {
         // Keep the tier off the developer's real machine-tier config, the
         // same way tests/setup.ts does for vitest.
         NIGHTGAUGE_CONFIG_HOME: path.join(scratch, "no-machine-tier"),
+        // Keep the daemon's serve claim, rate-limit hints and machine id off
+        // the developer's real machine-state root (ADR-024 § 8).
+        NIGHTGAUGE_STATE_HOME: path.join(scratch, "state"),
         NIGHTGAUGE_SKIP_AUTH_PREFLIGHT: "1",
       },
       launchArgs: [

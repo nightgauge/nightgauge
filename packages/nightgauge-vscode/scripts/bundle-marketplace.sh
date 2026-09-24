@@ -38,7 +38,7 @@ SHARED_DIR="$REPO_ROOT/skills/_shared"
 for skill in nightgauge-issue-pickup nightgauge-feature-planning \
              nightgauge-feature-dev nightgauge-feature-validate \
              nightgauge-pr-create nightgauge-pr-merge \
-             nightgauge-issue-refine; do
+             nightgauge-issue-refine nightgauge-spike-materialize; do
   src="$REPO_ROOT/skills/$skill"
   if [ -d "$src" ]; then
     dest="$SKILLS_DIR/$skill"
@@ -50,6 +50,14 @@ for skill in nightgauge-issue-pickup nightgauge-feature-planning \
     # directives, so the bundled skill is incomplete without them.
     if [ -d "$src/_includes" ]; then
       rsync -a "$src/_includes/" "$dest/_includes/"
+    fi
+    # Bundle the compact render profile (ADR 023 §Q5, #1654) the same way:
+    # `nightgauge skill render --profile compact` resolves
+    # <skillDir>/_profiles/<profile>.md relative to wherever SKILL.md
+    # actually lives, so a customer repo running only against this bundle
+    # needs the file on disk here too, not just in the source tree.
+    if [ -d "$src/_profiles" ]; then
+      rsync -a "$src/_profiles/" "$dest/_profiles/"
     fi
   fi
 done

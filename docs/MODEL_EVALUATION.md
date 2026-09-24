@@ -50,5 +50,12 @@ remain available when telemetry is disabled.
    is a request nobody confirmed. See
    [OUTCOME_RECORDING.md](OUTCOME_RECORDING.md#effort-is-unverifiable-on-the-claude-adapter--read-the-empty-field-as-unknown).
 
+7. **Per-run cost is not cost per closed issue.** Routing advice compares pass
+   rate, quality and cost per evaluation run. It carries no term for turns per
+   stage or for the rework rounds a weaker result causes, and those dominate
+   what an implementation stage costs. Read a cheaper-per-run result for
+   implementation work with that in mind. See
+   [CONFIGURATION.md § Routing by cost per closed issue](CONFIGURATION.md#routing-by-cost-per-closed-issue).
+
 Use the CLI help and [CONFIGURATION.md](CONFIGURATION.md) for current commands
 and schema fields.

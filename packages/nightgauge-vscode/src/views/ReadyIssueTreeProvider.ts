@@ -56,8 +56,26 @@ export class ReadyIssueTreeProvider implements IWorkItemProvider {
    * @param workItemProvider - The underlying work-item source to delegate to.
    *   Can be any IWorkItemProvider implementation.
    */
+  /**
+   * Every open issue, all statuses, from one board read. Present only when the
+   * delegate has it: the Repositories tree tests for the method and falls back
+   * to one read per status without it, so defining it unconditionally would
+   * hide that choice, and omitting it (as this wrapper once did) silently put
+   * every production row back on three board reads.
+   */
+  readonly getOpenIssues?: () => Promise<WorkItem[]>;
+
+  /** Component filter options from cache. Present only when the delegate has it. */
+  readonly getObservedComponents?: () => string[];
+
   constructor(workItemProvider: IWorkItemProvider) {
     this.delegate = workItemProvider;
+    if (typeof workItemProvider.getOpenIssues === "function") {
+      this.getOpenIssues = () => workItemProvider.getOpenIssues!();
+    }
+    if (typeof workItemProvider.getObservedComponents === "function") {
+      this.getObservedComponents = () => workItemProvider.getObservedComponents!();
+    }
   }
 
   // -------------------------------------------------------------------------

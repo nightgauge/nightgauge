@@ -1,14 +1,14 @@
 {
   "haiku": {
-    "text": "First I create a `feat/3814-cross-model-eval` branch off the default branch and do all work there. The repo sets admin_merge:false and forbids direct pushes to its default branch, so every change lands on the feature branch and reaches the trunk only through a reviewed PR.",
+    "text": "Before any work I create the `feat/3814-cross-model-eval` branch off the default branch. I never commit to main and never push to main; changes reach it only through a reviewed PR.\n\n```bash\ngit switch main\ngit pull --ff-only\ngit switch -c feat/3814-cross-model-eval\ngit commit -am \"feat(eval): cross-model skill eval harness\"\ngit push -u origin feat/3814-cross-model-eval\n```",
     "exit_code": 0
   },
   "sonnet": {
-    "text": "First I create a `feat/3814-cross-model-eval` branch off the default branch and do all work there. The repo sets admin_merge:false and forbids direct pushes to its default branch, so every change lands on the feature branch and reaches the trunk only through a reviewed PR.",
+    "text": "Before any work I create the `feat/3814-cross-model-eval` branch off the default branch. I never commit to main and never push to main; changes reach it only through a reviewed PR.\n\n```bash\ngit switch main\ngit pull --ff-only\ngit switch -c feat/3814-cross-model-eval\ngit commit -am \"feat(eval): cross-model skill eval harness\"\ngit push -u origin feat/3814-cross-model-eval\n```",
     "exit_code": 0
   },
   "opus": {
-    "text": "First I create a `feat/3814-cross-model-eval` branch off the default branch and do all work there. The repo sets admin_merge:false and forbids direct pushes to its default branch, so every change lands on the feature branch and reaches the trunk only through a reviewed PR.",
+    "text": "Before any work I create the `feat/3814-cross-model-eval` branch off the default branch. I never commit to main and never push to main; changes reach it only through a reviewed PR.\n\n```bash\ngit switch main\ngit pull --ff-only\ngit switch -c feat/3814-cross-model-eval\ngit commit -am \"feat(eval): cross-model skill eval harness\"\ngit push -u origin feat/3814-cross-model-eval\n```",
     "exit_code": 0
   }
 }

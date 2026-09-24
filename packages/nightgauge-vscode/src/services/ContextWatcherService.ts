@@ -1,11 +1,12 @@
 /**
- * ContextWatcherService - Watches .nightgauge/pipeline/ for pipeline context files
+ * ContextWatcherService - Watches pipelineStateDir(root)/ for pipeline context files
  *
  * Emits events when context files are created, modified, or deleted,
  * allowing the extension to react to pipeline state changes from the
  * Claude Code terminal (e.g., when /nightgauge:issue-pickup completes).
  */
 
+import { pipelineStateDir } from "../utils/cloneLayout";
 import * as vscode from "vscode";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -79,7 +80,7 @@ export class ContextWatcherService implements vscode.Disposable {
    *
    * In concurrent pipeline mode each slot has its own PipelineStateService
    * and writes context files inside its git worktree. The main repo's
-   * `.nightgauge/pipeline/` directory may contain stale files from
+   * `pipelineStateDir(root)/` directory may contain stale files from
    * previous runs. Firing events for those files would corrupt the
    * singleton PipelineStateService and show ghost entries in the tree view.
    *
@@ -149,7 +150,7 @@ export class ContextWatcherService implements vscode.Disposable {
    * Initialize file system watchers for context files
    */
   private initializeWatchers(): void {
-    const contextDir = path.join(this.workspaceRoot, ".nightgauge", "pipeline");
+    const contextDir = pipelineStateDir(this.workspaceRoot);
 
     // Watch for issue context files
     const issuePattern = new vscode.RelativePattern(contextDir, "issue-*.json");
@@ -322,7 +323,7 @@ export class ContextWatcherService implements vscode.Disposable {
       return;
     }
 
-    const contextDir = path.join(this.workspaceRoot, ".nightgauge", "pipeline");
+    const contextDir = pipelineStateDir(this.workspaceRoot);
 
     try {
       const files = await fs.readdir(contextDir);
@@ -419,7 +420,7 @@ export class ContextWatcherService implements vscode.Disposable {
    * Remove stale pipeline context files from the main repo.
    *
    * In concurrent mode, each slot writes context files to its own worktree.
-   * The main repo's `.nightgauge/pipeline/` may contain leftover files
+   * The main repo's `pipelineStateDir(root)/` may contain leftover files
    * from previous runs that confuse the tree view and state service.
    *
    * Removes: issue-*.json, planning-*.json, dev-*.json, validate-*.json,
@@ -434,7 +435,7 @@ export class ContextWatcherService implements vscode.Disposable {
   async cleanStaleContextFiles(): Promise<number> {
     if (!this.workspaceRoot) return 0;
 
-    const contextDir = path.join(this.workspaceRoot, ".nightgauge", "pipeline");
+    const contextDir = pipelineStateDir(this.workspaceRoot);
 
     const CONTEXT_PREFIXES = [
       "issue-",

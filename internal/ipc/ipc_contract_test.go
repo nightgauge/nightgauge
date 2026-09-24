@@ -47,6 +47,7 @@ var contractTestedMethods = map[string]bool{
 	"board.counts":       true,
 	"board.changed":      true,
 	"board.list":         true,
+	"board.listOpen":     true,
 	"board.updateStatus": true,
 	// Branch
 	"branch.cleanup": true,
@@ -383,6 +384,13 @@ func TestContract_Board(t *testing.T) {
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "board.list")
 	})
 
+	t.Run("board.listOpen/registered", func(t *testing.T) {
+		id := h.sendRequest("board.listOpen", map[string]interface{}{
+			"owner": "test-org", "projectNumber": 1,
+		})
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "board.listOpen")
+	})
+
 	t.Run("board.counts/registered", func(t *testing.T) {
 		id := h.sendRequest("board.counts", map[string]interface{}{
 			"owner": "test-org", "projectNumber": 1,
@@ -431,9 +439,10 @@ func TestContract_Board_RegisteredSurvivesExhaustedQuota(t *testing.T) {
 		t.Fatal("ipcTestHome not set — TestMain must isolate HOME before this test runs")
 	}
 
-	trackerPath := filepath.Join(ipcTestHome, ".nightgauge", "rate-limit.json")
+	// TestMain points NIGHTGAUGE_STATE_HOME at <ipcTestHome>/state.
+	trackerPath := filepath.Join(ipcTestHome, "state", "rate-limit.json")
 	tracker := gh.NewSharedRateLimitTracker(trackerPath)
-	if err := tracker.Set("", &gh.RateLimitInfo{
+	if err := tracker.Set("", gh.ResourceCore, &gh.RateLimitInfo{
 		Remaining: 0,
 		Limit:     5000,
 		ResetAt:   time.Now().Add(45 * time.Minute).Unix(),

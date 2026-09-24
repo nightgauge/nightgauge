@@ -26,10 +26,12 @@ import (
 	"github.com/nightgauge/nightgauge/internal/depgraph"
 	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/focus"
+	"github.com/nightgauge/nightgauge/internal/forge"
 	"github.com/nightgauge/nightgauge/internal/forge/boardcache"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/intelligence/baselineGate"
 	"github.com/nightgauge/nightgauge/internal/intelligence/routing"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/skillrender"
 	"github.com/nightgauge/nightgauge/internal/state"
@@ -1174,6 +1176,13 @@ type AutonomousScheduler struct {
 	// previous cycle — issues no board read at all (#845, #847).
 	boardProvider depgraph.BoardProvider
 
+	// boardCache is the same shared snapshot cache, held so the scheduler's
+	// own board WRITES (every MoveStatus below) invalidate it. Reading through
+	// a cache while writing around it would let the daemon serve its pre-move
+	// open snapshot — to board.listOpen, board.counts and the sweeps — for up
+	// to a TTL after the scheduler moved an issue. Nil outside the daemon.
+	boardCache *boardcache.Cache
+
 	// resolveDepStatesFn batch-resolves the true GitHub state ("OPEN"/"CLOSED")
 	// of dependency keys ("owner/repo#number") that have NO node in the graph
 	// — the graph only builds nodes from project-board items (depgraph/
@@ -1519,8 +1528,19 @@ func (as *AutonomousScheduler) Run(ctx context.Context) error {
 		// (#3398)
 		terminalKind := ""
 		failureDetail := ""
+		// merged carries the post-merge ground-truth breadcrumb
+		// (RuntimeState.MergedCommitSha, set only after verifyPRMergeForStage
+		// confirms the run's own PR is MERGED) into as.onPipelineComplete
+		// (#1969). scheduler.go's runPipeline terminal defer already
+		// skips ITS OWN board revert on this signal (shouldSkipBoardRevert),
+		// but that defer returns before this callback fires, so without
+		// threading the flag through, this wrapper independently re-applies
+		// failure accounting, the cascade feed, and its OWN board revert to
+		// a run whose merge already landed — #1650's exact repro.
+		merged := false
 		if !success && runtime != nil {
 			snap := runtime.Snapshot()
+			merged = snap.MergedCommitSha != ""
 			if snap.Stage != "" {
 				if errMsg, ok := snap.StageErrors[string(snap.Stage)]; ok {
 					// Prefer the failing stage's gate-sourced structured kind
@@ -1536,7 +1556,7 @@ func (as *AutonomousScheduler) Run(ctx context.Context) error {
 				}
 			}
 		}
-		as.onPipelineComplete(repo, issue, success, false, terminalKind, failureDetail)
+		as.onPipelineComplete(repo, issue, success, false, terminalKind, failureDetail, merged)
 		// Chain to any previously registered callback.
 		if prevCallback != nil {
 			prevCallback(repo, issue, runtime, success)
@@ -1839,7 +1859,14 @@ func (as *AutonomousScheduler) NotifyComplete(repo string, issueNumber int, succ
 			terminalFailureKind = reclassified
 		}
 	}
-	as.onPipelineComplete(repo, issueNumber, success, conflictRestart, terminalFailureKind, failureDetail)
+	// merged is always false on this path (#1969): the
+	// post-merge ground-truth breadcrumb is Go-only
+	// (RuntimeState.MergedCommitSha) and has no extension-side equivalent —
+	// nothing on the IPC/extension path reads or writes it, so there is no
+	// signal to thread through here. See terminal_behaviors.json's
+	// board-status-failure-sync note for the fuller "no extension change
+	// owed" analysis this mirrors.
+	as.onPipelineComplete(repo, issueNumber, success, conflictRestart, terminalFailureKind, failureDetail, false)
 }
 
 // FilterRepos restricts the scheduler to only scan repos in the given set.
@@ -2193,7 +2220,7 @@ func (as *AutonomousScheduler) RateLimitRemaining() int {
 	if tracker == nil {
 		return -1
 	}
-	entry, _, err := tracker.Get(as.ghClient.RateLimitTrackerUser())
+	entry, _, err := tracker.GetBudgetAcrossPools(as.ghClient.RateLimitTrackerUser())
 	if err != nil || entry == nil {
 		return -1
 	}
@@ -2213,7 +2240,7 @@ func (as *AutonomousScheduler) gitHubQuotaSnapshot() (remaining, limit int, rese
 	if tracker == nil {
 		return 0, 0, time.Time{}, false
 	}
-	entry, _, err := tracker.Get(as.ghClient.RateLimitTrackerUser())
+	entry, _, err := tracker.GetBudgetAcrossPools(as.ghClient.RateLimitTrackerUser())
 	if err != nil || entry == nil {
 		return 0, 0, time.Time{}, false
 	}
@@ -4854,7 +4881,20 @@ func (as *AutonomousScheduler) enqueueItem(ctx context.Context, item CandidateIt
 // extract `resetsAt=<unix>` for quota-exhausted failures so the global
 // Anthropic-quota cooldown runs until the actual bucket reset (#3431).
 // Optional — empty falls back to a 1-hour floor.
-func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, success bool, conflictRestart bool, terminalFailureKind string, failureDetail string) {
+//
+// merged is the post-merge ground-truth breadcrumb (#1969):
+// true when this run's own PR was confirmed MERGED before a LATER stage
+// failed (RuntimeState.MergedCommitSha != ""). scheduler.go's runPipeline
+// terminal defer computes and acts on the equivalent signal for its OWN
+// board write (shouldSkipBoardRevert) before this callback ever fires, but
+// that defer's skip does not carry over here — this function independently
+// increments failure counters, feeds the cascade breaker, and reverts the
+// board in the GENERIC branch, so a merged run's later-stage failure must
+// tell THIS function too, or it relitigates a verdict the forge already
+// gave (#1650: PR #1966 merged, spike-materialize failed downstream). Always
+// false from the extension/IPC path (NotifyComplete) — that breadcrumb has
+// no extension-side equivalent.
+func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, success bool, conflictRestart bool, terminalFailureKind string, failureDetail string, merged bool) {
 	as.mu.Lock()
 	defer as.mu.Unlock()
 
@@ -4926,6 +4966,49 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		as.goTrackedBoardOp(func(genCtx context.Context) { as.promoteUnblockedToReady(genCtx, repo, issue) })
 	} else {
 		key := fmt.Sprintf("%s#%d", repo, issue)
+
+		// #1969: the forge already gave a
+		// verdict this failure must not relitigate. merged is true only when
+		// the run's own PR was confirmed MERGED (scheduler.go's
+		// verifyPRMergeForStage / RuntimeState.MergedCommitSha, the
+		// ground-truth breadcrumb) before a LATER stage failed — the
+		// shouldSkipBoardRevert condition scheduler.go's own runPipeline
+		// terminal defer already applies to its OWN board write. That defer
+		// runs and returns before as.onPipelineComplete is ever called
+		// (scheduler.go's callback fires after it), so its skip does not
+		// reach this wrapper: this wrapper carries no memory of the previous
+		// call and independently increments perIssueFailureCount,
+		// LifetimeIssueFailures, feeds the cascade breaker, and reverts the
+		// board to Ready in the GENERIC branch (below) for exactly this
+		// shape of run (#1650's own repro: PR #1966 merged, spike-materialize
+		// failed downstream because it was unregistered — Ask 1 of the same
+		// issue). Same remedy, same reasoning as branch_forked/
+		// commit_orphaned above: no lifetime-cap increment, no cascade feed (a
+		// merged run says nothing about the health of the factory), no board
+		// revert. The Action Center card (raised below via
+		// recordFailureLocked) is the way back in, not an automatic retry
+		// that would re-dispatch the issue into redoing already-shipped work.
+		if merged {
+			detail := failureDetail
+			if detail == "" {
+				detail = "a later stage failed after this run's own PR was confirmed merged"
+			}
+			as.recordFailureLocked(repo, issue, title, now, detail, terminalFailureKind)
+			log.Printf("autonomous: %s#%d failed at %s but the run's PR already merged — "+
+				"skipping failure accounting, cascade feed and board revert (left for human triage, queue continues) — %s",
+				repo, issue, terminalFailureKind, detail)
+			if as.safetyRails != nil {
+				as.safetyRails.RecordNonFaultOutcome(0)
+				safetySnap := as.safetyRails.State()
+				as.state.Safety = &safetySnap
+			}
+			as.persistStateLocked()
+			select {
+			case as.rescanCh <- struct{}{}:
+			default:
+			}
+			return
+		}
 
 		// LEGACY fresh-branch conflict restart (#4072 gating). The modern
 		// conflict path resolves in-place via the conflict-recovery loop's
@@ -5363,6 +5446,53 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			return
 		}
 
+		// A network_unavailable readiness refusal (#1989) means the local
+		// endpoint (e.g. LM Studio) was unreachable when the readiness check
+		// probed it at dispatch time — the pipeline never dispatched into it.
+		// That is environmental, exactly the condition the readiness check
+		// exists to detect instead of burning a dispatch on, and by
+		// construction not the issue's fault. #1989 (AC4 gap in #1646): this
+		// kind fell through to the generic path with no block of its own,
+		// counting an endpoint blip toward the cascade breaker the same as an
+		// unclassified pipeline failure — a flapping or briefly-sleeping local
+		// endpoint could trip the breaker and halt autonomous mode.
+		//
+		// Unlike model_unavailable (an unloaded model/plan tier that will not
+		// come back without operator action, so it gets the long
+		// rate-limit-window backoff), an unreachable local endpoint routinely
+		// clears on its own within minutes — the process restarts, the model
+		// finishes loading, a transient DNS/socket hiccup resolves. So this
+		// DOES schedule a retry, like model_unavailable, but with the shorter
+		// stallKillBackoff already used for the other short-lived local/infra
+		// blips above (adapter_auth_failed, worktree_uncommitted) rather than
+		// streamIdleTimeoutBackoff's hour-long wait, which is sized for a
+		// remote rate-limit window and would be far too long for a local
+		// endpoint that is often back within a minute or two. No max-attempts
+		// cap (like worktree_uncommitted/budget_ceiling_hit above): a
+		// long-flapping endpoint should keep retrying at a fixed cadence
+		// rather than eventually pausing re-dispatch, since each individual
+		// refusal is still environmental, not a sign of a wedged issue.
+		if terminalFailureKind == TerminalKindNetworkUnavailable {
+			as.recordFailureLocked(repo, issue, title, now,
+				"network unavailable (local endpoint unreachable at dispatch, environmental) — will retry after backoff", terminalFailureKind)
+			as.scheduleRetryLocked(key, terminalFailureKind, "local endpoint unreachable at dispatch", time.Now().Add(stallKillBackoff))
+			log.Printf("autonomous: network_unavailable for %s — environmental, retry in %v (no lifetime-cap increment, no cascade feed, no pause)",
+				key, stallKillBackoff)
+			as.persistStateLocked()
+			as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
+			select {
+			case as.rescanCh <- struct{}{}:
+			default:
+			}
+			if as.safetyRails != nil {
+				as.safetyRails.RecordNonFaultOutcome(0)
+				safetySnap := as.safetyRails.State()
+				as.state.Safety = &safetySnap
+			}
+			as.persistStateLocked()
+			return
+		}
+
 		// Issue #3542: worktree_uncommitted and budget_ceiling_hit are
 		// recoverable events, not code defects. worktree_uncommitted means the
 		// scheduler preserved the work into a recovery commit; budget_ceiling_hit
@@ -5476,10 +5606,10 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 				detail = "no failure text"
 			}
 			reason := fmt.Sprintf("%s (parked, no retry) — %s — %s",
-				terminalFailureKind, TerminalKindRemediation(terminalFailureKind), detail)
+				terminalFailureKind, ParkedRemediation(terminalFailureKind, detail), detail)
 			as.recordFailureLocked(repo, issue, title, now, reason, terminalFailureKind)
 			log.Printf("autonomous: %s#%d %s — parked for an operator: no retry, no lifetime-cap increment, no cascade feed, no pause — %s",
-				repo, issue, terminalFailureKind, TerminalKindRemediation(terminalFailureKind))
+				repo, issue, terminalFailureKind, ParkedRemediation(terminalFailureKind, detail))
 			if as.safetyRails != nil {
 				as.safetyRails.RecordNonFaultOutcome(0)
 				safetySnap := as.safetyRails.State()
@@ -5893,7 +6023,7 @@ func (as *AutonomousScheduler) revertFailedIssueStatus(parent context.Context, r
 
 	ctx, cancel := context.WithTimeout(parent, boardRecoveryTimeout)
 	defer cancel()
-	projSvc := gh.NewProjectService(as.ghClient, owner, projectNum, ownerType)
+	projSvc := as.projectService(owner, projectNum, ownerType)
 	if err := projSvc.MoveStatus(ctx, owner, repoName, issue, "Ready"); err != nil {
 		log.Printf("autonomous: revert-status: failed to move %s#%d back to Ready after pipeline failure: %v",
 			repo, issue, err)
@@ -5927,7 +6057,7 @@ func (as *AutonomousScheduler) moveIssueToDone(parent context.Context, repo stri
 
 	ctx, cancel := context.WithTimeout(parent, boardRecoveryTimeout)
 	defer cancel()
-	projSvc := gh.NewProjectService(as.ghClient, owner, projectNum, ownerType)
+	projSvc := as.projectService(owner, projectNum, ownerType)
 	if err := projSvc.MoveStatus(ctx, owner, repoName, issue, "Done"); err != nil {
 		log.Printf("autonomous: move-to-done: failed to move %s#%d to Done after issue-closed: %v",
 			repo, issue, err)
@@ -5965,7 +6095,7 @@ func (as *AutonomousScheduler) moveIssueToInReview(parent context.Context, repo 
 
 	ctx, cancel := context.WithTimeout(parent, boardRecoveryTimeout)
 	defer cancel()
-	projSvc := gh.NewProjectService(as.ghClient, owner, projectNum, ownerType)
+	projSvc := as.projectService(owner, projectNum, ownerType)
 	if err := projSvc.MoveStatus(ctx, owner, repoName, issue, "In review"); err != nil {
 		log.Printf("autonomous: move-to-in-review: failed to move %s#%d to In review after unmerged PR: %v",
 			repo, issue, err)
@@ -6002,7 +6132,7 @@ func (as *AutonomousScheduler) moveIssueToInProgress(parent context.Context, rep
 
 	ctx, cancel := context.WithTimeout(parent, boardRecoveryTimeout)
 	defer cancel()
-	projSvc := gh.NewProjectService(as.ghClient, owner, projectNum, ownerType)
+	projSvc := as.projectService(owner, projectNum, ownerType)
 	if err := projSvc.MoveStatus(ctx, owner, repoName, issue, "In progress"); err != nil {
 		log.Printf("autonomous: move-to-in-progress: failed to move %s#%d to In progress (%s): %v",
 			repo, issue, reason, err)
@@ -6133,6 +6263,19 @@ func (as *AutonomousScheduler) buildGraph(ctx context.Context) (*depgraph.Graph,
 // Wiring-time only: call before Run or RecoverOrphanedRunning.
 func (as *AutonomousScheduler) SetBoardCache(cache *boardcache.Cache) {
 	as.boardProvider = depgraph.CachedBoardProvider(as.ghClient, cache)
+	as.boardCache = cache
+	if as.scheduler != nil {
+		as.scheduler.boardCache = cache
+	}
+}
+
+// projectService is the one constructor for the scheduler's board writes. It
+// wraps the forge service with boardcache.WrapProject so every status move
+// drops that board's snapshots in the shared cache (a no-op wrapper when no
+// cache is set). Reads that decide dispatch — PickNext's Ready read — do not
+// come through here and stay uncached.
+func (as *AutonomousScheduler) projectService(owner string, projectNum int, ownerType gh.OwnerType) forge.ProjectService {
+	return boardcache.WrapProject(as.boardCache, gh.NewProjectService(as.ghClient, owner, projectNum, ownerType), owner, projectNum)
 }
 
 // recoverOrphanedRunningState is the orphan half of recoverOrphanedRunning:
@@ -6194,7 +6337,7 @@ func (as *AutonomousScheduler) recoverOrphanedRunningItems(ctx context.Context, 
 			continue
 		}
 
-		projSvc := gh.NewProjectService(as.ghClient, owner, projectNum, ownerType)
+		projSvc := as.projectService(owner, projectNum, ownerType)
 		if err := projSvc.MoveStatus(opCtx, owner, repoName, item.Number, "Ready"); err != nil {
 			log.Printf("autonomous: recovery: failed to move %s#%d back to Ready: %v",
 				item.Repo, item.Number, err)
@@ -6368,7 +6511,7 @@ func (as *AutonomousScheduler) promoteUnblockedOnStartup(ctx context.Context) {
 			continue
 		}
 
-		projSvc := gh.NewProjectService(as.ghClient, owner, projectNum, ownerType)
+		projSvc := as.projectService(owner, projectNum, ownerType)
 		if err := projSvc.MoveStatus(opCtx, owner, repoName, node.Number, "Ready"); err != nil {
 			log.Printf("autonomous: startup promotion: failed to promote %s#%d to Ready: %v",
 				node.Repo, node.Number, err)
@@ -6496,7 +6639,7 @@ func (as *AutonomousScheduler) promoteUnblockedToReady(parent context.Context, c
 			continue
 		}
 
-		projSvc := gh.NewProjectService(as.ghClient, owner, projectNum, ownerType)
+		projSvc := as.projectService(owner, projectNum, ownerType)
 		if err := projSvc.MoveStatus(ctx, owner, repoName, node.Number, "Ready"); err != nil {
 			log.Printf("autonomous: promoteUnblockedToReady: failed to promote %s#%d to Ready: %v",
 				node.Repo, node.Number, err)
@@ -6675,7 +6818,7 @@ func (as *AutonomousScheduler) hasDispatchHeadroom() (bool, string) {
 	if floor <= 0 {
 		return true, ""
 	}
-	entry, _, err := tracker.Get(as.ghClient.RateLimitTrackerUser())
+	entry, _, err := tracker.GetBudgetAcrossPools(as.ghClient.RateLimitTrackerUser())
 	if err != nil || entry == nil {
 		return true, ""
 	}
@@ -6800,7 +6943,11 @@ func (as *AutonomousScheduler) writeExitEvent(reason string) {
 	if as.workspaceRoot == "" {
 		return
 	}
-	logDir := filepath.Join(as.workspaceRoot, ".nightgauge", "logs")
+	logDir, err := layout.CloneLogsDir(as.workspaceRoot)
+	if err != nil {
+		log.Printf("autonomous: exit event not recorded: %v", err)
+		return
+	}
 	_ = os.MkdirAll(logDir, 0755)
 	logPath := filepath.Join(logDir, "autonomous-exits.jsonl")
 
@@ -6848,7 +6995,11 @@ func (as *AutonomousScheduler) writeCrashExitEvent(panicMsg, stackTrace string) 
 	if as.workspaceRoot == "" {
 		return
 	}
-	logDir := filepath.Join(as.workspaceRoot, ".nightgauge", "logs")
+	logDir, err := layout.CloneLogsDir(as.workspaceRoot)
+	if err != nil {
+		log.Printf("autonomous: exit event not recorded: %v", err)
+		return
+	}
 	_ = os.MkdirAll(logDir, 0755)
 	logPath := filepath.Join(logDir, "autonomous-exits.jsonl")
 
@@ -7256,7 +7407,7 @@ func (as *AutonomousScheduler) architectureApprovalFileGranted(repo string, issu
 	if root == "" {
 		return false
 	}
-	b, err := os.ReadFile(filepath.Join(root, ".nightgauge", "pipeline", fmt.Sprintf("approval-%d.json", issue)))
+	b, err := os.ReadFile(pipelineStatePath(root, fmt.Sprintf("approval-%d.json", issue)))
 	if err != nil {
 		return false
 	}
@@ -8047,7 +8198,7 @@ func (as *AutonomousScheduler) refineIssue(ctx context.Context, owner, repo stri
 	// Move status on project board (best-effort — may not be on board yet)
 	for _, rc := range as.repos {
 		if rc.Owner == owner && rc.Name == repo && rc.Project > 0 {
-			projSvc := gh.NewProjectService(as.ghClient, owner, rc.Project, rc.OwnerType)
+			projSvc := as.projectService(owner, rc.Project, rc.OwnerType)
 			if err := projSvc.MoveStatus(ctx, owner, repo, issue.Number, targetStatus); err != nil {
 				log.Printf("[refinement] #%d: failed to move to %s: %v", issue.Number, targetStatus, err)
 			}

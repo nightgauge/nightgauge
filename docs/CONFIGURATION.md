@@ -221,6 +221,36 @@ The global config path is determined by platform and environment:
 | 3        | Linux default                | `~/.config/nightgauge/config.yaml`        |
 | 3        | Windows default              | `%APPDATA%/nightgauge/config.yaml`        |
 
+### Machine State Location
+
+Machine state that is not configuration (the serve daemon's claim registry
+`serve/`, the rate-limit hints `rate-limit.json` and
+`ratelimit-gitlab-<host>.json`, this device's `machine-id`, and the
+`telemetry-notice-v1` marker) lives in one directory, created with mode `0700`
+(ADR-024 § 8):
+
+| Priority | Check                       | Path                                |
+| -------- | --------------------------- | ----------------------------------- |
+| 1        | `NIGHTGAUGE_STATE_HOME` env | `$NIGHTGAUGE_STATE_HOME` (absolute) |
+| 2        | `XDG_STATE_HOME` env        | `$XDG_STATE_HOME/nightgauge`        |
+| 3        | macOS default               | `~/.nightgauge/state`               |
+| 3        | Linux default               | `~/.local/state/nightgauge`         |
+| 3        | Windows default             | `%LOCALAPPDATA%/nightgauge/state`   |
+
+Files an earlier release kept directly in `~/.nightgauge/` are moved on first
+use, byte for byte, with mode `0600`. `machine-id` is copied instead and the
+legacy file kept (mode `0600`) so an older binary still running on the machine
+reads the same id; it is never regenerated, because a new id is a new device to
+the platform. The new location is authoritative: if the two `machine-id` files
+differ, the new one is used and a warning is logged. For any other moved file,
+if both locations hold different contents nothing is overwritten and the error
+names both paths: Nightgauge reads only the new one, so keep it and delete the
+legacy file, or move the legacy file over it if that is the value you need.
+Serve claims are not moved.
+With no home directory, or an unwritable state directory, a command that needs
+it fails with an error naming `NIGHTGAUGE_STATE_HOME`; nothing is written into
+the working tree.
+
 ### Creating a Global Config
 
 ```bash
@@ -318,12 +348,37 @@ EOF
 
 ### Gitignore Entry
 
-Ensure `.nightgauge/config.local.yaml` is gitignored. Nightgauge's
-`smart-setup` skill automatically adds this, but you can add it manually:
+`.nightgauge/config.local.yaml` is ignored by the generated
+`.nightgauge/.gitignore` (its `/config.local.yaml` rule), so there is nothing to
+add by hand.
 
-```bash
-echo ".nightgauge/config.local.yaml" >> .gitignore
-```
+That file is generator-owned. The VS Code extension ensures it on activation,
+and the CLI does the same from `nightgauge config init` and `nightgauge serve`,
+so a clone driven only from a terminal or CI gets it too; both write one
+template (`internal/scaffold/nightgauge.gitignore`). Outside a git work tree
+the CLI writes nothing. The file carries a `nightgauge-gitignore-version:`
+marker. A file (or `info/exclude` block) at the writer's version or newer is
+left alone, so an older extension or binary never downgrades it; a missing or
+unreadable marker counts as older. When the file is older:
+
+- An **untracked** copy is rewritten: everything above its
+  `Local additions (kept on upgrade)` line is replaced with the current
+  template, and every line below that marker is kept. That section is the one
+  place to put this repository's own rules for `.nightgauge/` paths (for
+  example, un-ignoring `/knowledge/`, as
+  [KNOWLEDGE_BASE.md](KNOWLEDGE_BASE.md#adopting-the-knowledge-base-in-an-existing-repository)
+  describes). A rule found above the marker, or anywhere in a file with no
+  marker, that is not one of the template's current or retired rules is moved
+  into that section rather than dropped; edited comments and edits to the
+  template's own rules are not kept.
+- A **committed** copy is never edited. The current rules are written per
+  machine to the repository's `info/exclude`, in a block between
+  `# nightgauge:begin nightgauge-gitignore` and its matching `end` line that
+  carries its own version marker, and the committed file is upgraded by pull
+  request.
+
+Rules for paths outside `.nightgauge/` belong in the repository-root
+`.gitignore`, which Nightgauge never edits.
 
 ### Viewing Local Overrides
 
@@ -496,22 +551,23 @@ Everything below is on for a workspace that has configured nothing. Each row
 names what turning it off buys you, so the opt-out is a decision rather than a
 guess.
 
-| Key                                           | Default                    | What it costs while on                                                                                                                                                                                                          |
-| --------------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pipeline.adversarial_review.enabled`         | `true`                     | **Per-run cost.** One or more extra LLM critic passes on every `feature-validate`. It is the fresh-eyes read the implementing model cannot give itself                                                                          |
-| `pipeline.grounding_gate.enabled`             | `true`                     | **Nothing measurable.** Deterministic pre-`feature-dev` check that the worktree is on the branch the run thinks it is. No model call                                                                                            |
-| `pipeline.test_execution`                     | `true`                     | **Nothing measurable.** Inert in a repo whose test command excludes nothing; it has no off switch by design (see its section)                                                                                                   |
-| `pipeline.progress_runaway.*`                 | `true`                     | **Nothing measurable.** Replaces the dollar-ceiling kill with a forward-progress signal, so a slow-but-working stage is no longer killed for being slow                                                                         |
-| `pipeline.survival.window_days`               | `7`                        | **Repository footprint**, small: one survival record per merge under `.nightgauge/`, aged out automatically                                                                                                                     |
-| `pipeline.gemini_context.*`                   | `true`                     | **Repository footprint.** Writes a `GEMINI.md` into the tree for the Gemini adapter. Irrelevant unless that adapter is selected                                                                                                 |
-| `autonomous.discipline_gate.enabled`          | `true`                     | **Nothing measurable.** A local readiness score (`min_score: 30`, `mode: block`) that steers an under-prepared repo — no real test suite, no CI — toward human-in-the-loop rather than full autonomy                            |
-| `autonomous.stuck_epic_detection.enabled`     | `true`                     | **Per-run cost**, negligible: one Discord message per stalled epic, at most once per `re_alert_after` (6h). Needs a webhook env var to deliver anything                                                                         |
-| `ready_to_ship.enabled`                       | `true`                     | **Per-run cost**, negligible: one Discord message when an epic fully closes. It posts the deploy command; it never runs it                                                                                                      |
-| `remote_commands.enabled`                     | `true`                     | **Per-run cost** in GitHub API quota: the polling loop that lets the dashboard drive a local daemon. Inert without a platform                                                                                                   |
-| `attention.dependabot_stale_remediation_days` | `7`                        | **Nothing measurable.** Threshold, not a switch: how long a Dependabot remediation PR may sit before the Action Center cards it. It is also the card's re-alert bucket width                                                    |
-| `audit.*`                                     | follows `platform.enabled` | **Per-run cost**, negligible, and only when a platform is configured: batched event POSTs with an offline queue. There is no independent `audit.enabled` — see ADR-021                                                          |
-| `epic.summary.enabled`                        | `true`                     | **Repository footprint and per-run cost** at the full tier: an LLM pass that commits a summary document. The tier classifier decides which epics get it                                                                         |
-| `automations.enabled`                         | `true`                     | **Nothing until you configure it.** Inert while `automations.triggers` is empty — which is the shipped state. Worth knowing because the action set includes `run_script`, so a populated `triggers` list executes what it names |
+| Key                                           | Default                    | What it costs while on                                                                                                                                                                                                                                               |
+| --------------------------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pipeline.adversarial_review.enabled`         | `true`                     | **Per-run cost.** One or more extra LLM critic passes on every `feature-validate`. It is the fresh-eyes read the implementing model cannot give itself                                                                                                               |
+| `pipeline.grounding_gate.enabled`             | `true`                     | **Nothing measurable.** Deterministic pre-`feature-dev` check that the worktree is on the branch the run thinks it is. No model call                                                                                                                                 |
+| `pipeline.feature_dev_sub_sessions`           | `true`                     | **Nothing measurable** on windows of 200,000 tokens or more, where it never engages. Below that, feature-dev runs as one fresh session per plan task, which re-sends the cacheable skill prefix once per step. See [its section](#pipelinefeature_dev_sub_sessions). |
+| `pipeline.test_execution`                     | `true`                     | **Nothing measurable.** Inert in a repo whose test command excludes nothing; it has no off switch by design (see its section)                                                                                                                                        |
+| `pipeline.progress_runaway.*`                 | `true`                     | **Nothing measurable.** Replaces the dollar-ceiling kill with a forward-progress signal, so a slow-but-working stage is no longer killed for being slow                                                                                                              |
+| `pipeline.survival.window_days`               | `7`                        | **Repository footprint**, small: one survival record per merge under `.nightgauge/`, aged out automatically                                                                                                                                                          |
+| `pipeline.gemini_context.*`                   | `true`                     | **Repository footprint.** Writes a `GEMINI.md` into the tree for the Gemini adapter. Irrelevant unless that adapter is selected                                                                                                                                      |
+| `autonomous.discipline_gate.enabled`          | `true`                     | **Nothing measurable.** A local readiness score (`min_score: 30`, `mode: block`) that steers an under-prepared repo — no real test suite, no CI — toward human-in-the-loop rather than full autonomy                                                                 |
+| `autonomous.stuck_epic_detection.enabled`     | `true`                     | **Per-run cost**, negligible: one Discord message per stalled epic, at most once per `re_alert_after` (6h). Needs a webhook env var to deliver anything                                                                                                              |
+| `ready_to_ship.enabled`                       | `true`                     | **Per-run cost**, negligible: one Discord message when an epic fully closes. It posts the deploy command; it never runs it                                                                                                                                           |
+| `remote_commands.enabled`                     | `true`                     | **Per-run cost** in GitHub API quota: the polling loop that lets the dashboard drive a local daemon. Inert without a platform                                                                                                                                        |
+| `attention.dependabot_stale_remediation_days` | `7`                        | **Nothing measurable.** Threshold, not a switch: how long a Dependabot remediation PR may sit before the Action Center cards it. It is also the card's re-alert bucket width                                                                                         |
+| `audit.*`                                     | follows `platform.enabled` | **Per-run cost**, negligible, and only when a platform is configured: batched event POSTs with an offline queue. There is no independent `audit.enabled` — see ADR-021                                                                                               |
+| `epic.summary.enabled`                        | `true`                     | **Repository footprint and per-run cost** at the full tier: an LLM pass that commits a summary document. The tier classifier decides which epics get it                                                                                                              |
+| `automations.enabled`                         | `true`                     | **Nothing until you configure it.** Inert while `automations.triggers` is empty — which is the shipped state. Worth knowing because the action set includes `run_script`, so a populated `triggers` list executes what it names                                      |
 
 ## Off by default, and why
 
@@ -660,9 +716,11 @@ nightgauge forge auth assert --repo <owner>/<repo>   # preflight permission chec
 ```
 
 > Both `github_user` and `github_auth.token` are honored from
-> `config.local.yaml` (tier 4, highest precedence). Prefer `github_user` for a
-> secret-free per-repo identity; use `github_auth.token` only when a specific PAT
-> is required (e.g. a fine-grained token with narrower scopes).
+> `config.local.yaml` (tier 4, highest precedence), but there the token must be
+> an `env:VAR_NAME` reference (see [Where a token may live](#where-a-token-may-live)).
+> Prefer `github_user` for a secret-free per-repo identity; use
+> `github_auth.token` only when a specific PAT is required (e.g. a fine-grained
+> token with narrower scopes).
 
 ### github_auth
 
@@ -677,13 +735,48 @@ backwards compatibility.
 | `github_auth.users`               | map\<string\> | -       | Maps org/owner name → gh CLI username (legacy)   |
 | `github_auth.suppress_gh_warning` | boolean       | `false` | Suppress deprecation warning on gh CLI fallback  |
 
+#### Where a token may live
+
+`github_auth.token`, every `github_auth.tokens.<owner>` and
+`platform.license_key` are credentials. In the repository tiers,
+`.nightgauge/config.yaml`, `.nightgauge/config.local.yaml` and the legacy
+`.nightgauge/config.json`, the loader accepts them only as an `env:VAR_NAME`
+reference, and the variable name may not itself be a token. The check reads
+the file as the loader does, so YAML anchors and `<<` merge keys are covered. A
+literal value there stops the load before any network call, with an error that
+names the file and the key and never the value, and commands that talk to
+GitHub fail rather than fall back to another gh account.
+
+A literal value is accepted only in the machine-tier file, which lives outside
+every repository. The binary and the VS Code extension resolve it the same way:
+
+1. `$NIGHTGAUGE_CONFIG_HOME/config.yaml`, when set;
+2. `$XDG_CONFIG_HOME/nightgauge/config.yaml`, when set;
+3. otherwise `~/.nightgauge/config.yaml` on macOS,
+   `~/.config/nightgauge/config.yaml` on Linux (or the legacy
+   `~/.nightgauge/config.yaml` when only that file exists), and
+   `%APPDATA%\nightgauge\config.yaml` on Windows.
+
+Run from the home directory, `.nightgauge/config.yaml` is that machine file,
+not a repository tier. To keep a GitHub token out of files entirely, run
+`nightgauge forge auth refresh`: it stores the gh token in the OS keychain and
+removes literal GitHub tokens from the project, local and machine files. A
+license key is not moved by that command; set it in the machine file or in the
+extension's settings.
+
+If a literal token was ever committed, rotate it: removing the line does not
+remove it from the repository's history. `nightgauge doctor` reports tracked
+files under `.nightgauge/` that contain a GitHub token or license key, as the
+`tracked_secrets` row.
+
 #### Token Resolution Priority
 
 The pipeline resolves a GitHub token using this chain (highest to lowest). The
 chain **branches** on whether a `github_user` is configured for the target
 owner (#4068):
 
-1. `--token` CLI flag (one-shot override)
+1. **On a CI host** (`CI=true` in any case, or `CI=1`): `GITHUB_TOKEN`, then
+   `GH_TOKEN`, ahead of every stored token; `github_user` is ignored.
 2. `github_auth.token` — per-project PAT from config
 3. `github_auth.tokens[owner]` — per-org PAT map (global config)
 4. **If a `github_user` is configured for the owner** (explicit `github_user`,
@@ -695,6 +788,12 @@ owner (#4068):
    then `gh auth token` (default gh account) — the single-identity / CI path,
    unchanged.
 
+There is no command-line tier: the binary takes no `--token` flag, because a
+token on argv is visible through `ps` (ADR-024 § 5). For a one-shot override,
+set `GITHUB_TOKEN` or `GH_TOKEN` in the command's environment, e.g.
+`GH_TOKEN=$(gh auth token --user <account>) nightgauge …`. Outside CI, a
+configured `github_user` or a config token still takes precedence over it.
+
 The key change from earlier versions: when a repo declares a specific identity,
 the github_user-scoped token (step 4) is tried **before** the ambient
 `GITHUB_TOKEN` env var, and the env is stripped so `gh` cannot return the
@@ -705,9 +804,12 @@ that configured only `github_user`.
 When the gh CLI fallback is used, a warning is printed to stderr:
 
 ```
-warning: Using gh CLI for token resolution — configure github_auth.token
-in config.yaml for reliable multi-org support
+warning: Using gh CLI for token resolution — for reliable multi-org support set
+github_auth.token (or github_auth.tokens.<owner>) in /Users/you/.nightgauge/config.yaml,
+or reference an environment variable from any tier with `token: env:VAR_NAME`
 ```
+
+The path is the resolved machine-tier file on the machine that printed it.
 
 This warning is intentionally non-blocking. The pipeline continues, but CI/CD
 environments without `gh` installed will fail at this step — in CI, set
@@ -781,9 +883,11 @@ env:
   GITHUB_TOKEN_NIGHTGAUGE: ${{ secrets.GITHUB_TOKEN_NIGHTGAUGE }}
 ```
 
-**In local development** (`.nightgauge/config.local.yaml`, gitignored):
+**In local development**, export the variable in your shell, or put the
+literal token in the machine-tier file, never in `config.local.yaml`:
 
 ```yaml
+# ~/.nightgauge/config.yaml (machine tier — outside every repository)
 github_auth:
   token: ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
@@ -2302,6 +2406,34 @@ pipeline:
 
 ---
 
+#### pipeline.feature_dev_sub_sessions
+
+When the dispatch model's resolved context window is known and below 200,000
+tokens, the Go scheduler runs feature-dev as bounded sub-sessions: one fresh
+session per unchecked task of the plan named by `planning-{N}.json`, at most
+12 ([ADR-023](decisions/023-model-aware-context-budgets.md) Q7). Each step
+hands off through the working tree; the feature-dev gate runs once, after the
+last step. Windows of 200,000 tokens or more, unknown windows and the VS Code
+(IPC) runner always use one session.
+
+| Option                     | Type    | Default | Description                                         |
+| -------------------------- | ------- | ------- | --------------------------------------------------- |
+| `feature_dev_sub_sessions` | boolean | `true`  | `false` keeps feature-dev on one session everywhere |
+
+The environment variable `NIGHTGAUGE_FEATURE_DEV_SUB_SESSIONS` overrides the
+key for the scheduler process: `0`, `false` or `off` opts out, and `1`,
+`true` or `on` restores the default. It never forces sub-sessions onto a
+window the policy leaves on one session.
+
+**Example:**
+
+```yaml
+pipeline:
+  feature_dev_sub_sessions: false
+```
+
+---
+
 #### pipeline.max_concurrent
 
 Unified concurrent-slot ceiling — the **single source of truth** for both
@@ -2425,12 +2557,22 @@ pipeline:
     green_threshold: 2 # promote when last N runs are all `success`
 ```
 
-| Field             | Type    | Default | Description                                                                                                                                   |
-| ----------------- | ------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `enabled`         | boolean | `true`  | Master toggle. When `false`, the gate is skipped during issue-pickup and `baseline-gate promote` is a no-op.                                  |
-| `lookback_runs`   | number  | `5`     | How many recent _completed_ runs of the referenced workflow on `main` to inspect when computing the failure rate. Capped at 20 by the binary. |
-| `red_threshold`   | number  | `2`     | Defer dispatch when at least this many of the last `lookback_runs` failed.                                                                    |
-| `green_threshold` | number  | `2`     | Promote (resume) a deferred item when the most-recent N completed runs are all `success`.                                                     |
+| Field             | Type    | Default | Description                                                                                                                                  |
+| ----------------- | ------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`         | boolean | `true`  | Master toggle. When `false`, the gate is skipped during issue-pickup and `baseline-gate promote` is a no-op.                                 |
+| `lookback_runs`   | number  | `5`     | How many recent _completed_ baseline runs of the referenced workflow to inspect when computing the failure rate. Capped at 20 by the binary. |
+| `red_threshold`   | number  | `2`     | Defer dispatch when at least this many of the last `lookback_runs` failed.                                                                   |
+| `green_threshold` | number  | `2`     | Promote (resume) a deferred item when the most-recent N completed runs are all `success`.                                                    |
+
+**Which runs are the baseline (#2055)**: the full suites no longer run on
+push to `main`, so a workflow's `main` runs can stop changing (`ci.yml`'s last
+push runs are frozen). The baseline is therefore the newest completed
+`pull_request` run of the workflow on the head of each of the last
+`lookback_runs` PRs merged into the branch (the strict ruleset makes each
+merged head's tree the merge commit's tree), together with the workflow's own
+completed runs on the branch (schedule, `workflow_dispatch`), newest first and
+cut to `lookback_runs`. A scheduled workflow keeps being judged by its branch
+runs; `ci.yml` is judged by the runs that gated the merges.
 
 **Trigger semantics**: the gate's classifier scans each AC item for the
 keywords `required check`, `required status`, `branch protection`, `ruleset`,
@@ -3626,6 +3768,92 @@ continues.
 | `sonnet_max` | number | `6`     | Max complexity score for Sonnet (0-10) |
 
 Scores above `sonnet_max` route to Opus.
+
+#### Routing by cost per closed issue
+
+The design rule for automatic routing is **expected cost per closed issue**,
+not price per token. Each turn re-reads the context it inherits, so an
+implementation stage costs roughly its turn count times its context, and every
+rework round a missed requirement causes is another paid stage. A tier that is
+half the price per token but takes twice the turns, and ships more rework, is
+not cheaper.
+
+**Evidence.** Measured in September 2026 across interactive sessions that
+mirror the pipeline's stages:
+
+- On implementation, Sonnet took about twice the turns of Opus: 226–244 tool
+  calls on small-to-medium work, against 128 for Opus on a harder
+  medium-to-large security change. It also deferred or missed more, which cost
+  extra paid rounds. At half the price per token that is break-even or worse
+  per closed issue.
+- Sonnet was cheap and clean on narrow, bounded work: audits, delta
+  re-reviews and verification.
+- An earlier measurement found that Opus implementers still ship defects that
+  Opus reviewers catch, so the review stage stays on a strong tier.
+
+**What the Go scheduler applies** (the autonomous dispatch path, in
+`resolveDispatchModel`):
+
+| Stage              | Rule                                                                                                                                                                                                                                                                                        |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `feature-dev`      | **Opus** when the issue's size is known and, after the priority adjustment, is M or larger (`routing.ImplementationBand`). XS and S, and any issue whose size was assumed, keep the tier they would otherwise run: the run's routed tier, then `ui.core.default_model`, then Sonnet.        |
+| `feature-validate` | Not moved by size; only the high-risk floor below applies. It closes with the adversarial review judge.                                                                                                                                                                                     |
+| High-risk issue    | An **Opus floor** on `feature-dev` and `feature-validate` (`routing.RiskFloorBand`). High-risk is the label rule that already forces the full pipeline: a label containing `security`, `auth`, `billing`, `payment`, `migration`, `public-api`, `breaking` or `credential`, or `risk:high`. |
+
+The size comes from the board's Size field, then a `size:*` label, then the
+planner's assessment. A docs or config change never qualifies, because its
+complexity is capped below M.
+
+**How the rule interacts with the other controls:**
+
+- The implementation band sits in the router's slot. An explicit per-stage
+  model (`pipeline.stage_models`, `NIGHTGAUGE_PIPELINE_STAGE_MODEL_*`, or the
+  `manual`-mode table) wins over it, and so does the `maximum` pin. When
+  `use_eval_recommendations` is on, eval advice may re-pick it. The stage's
+  routed-tier envelope clamps it.
+- The high-risk floor is applied with the `minimum_model` floors, so eval
+  advice or a cheaper workspace default cannot lower it. A
+  `NIGHTGAUGE_MODEL_ROUTING_MIN_MODEL_<STAGE>` environment floor replaces it,
+  as it replaces a configured floor.
+- **The performance mode still caps both.** Under `efficiency` the ceiling is
+  Sonnet, so a high-risk or M-and-larger implementation runs on Sonnet.
+  `model_routing.max_model` caps it the same way.
+
+**Unsized issues.** When an issue has no board size and no `size:*` label,
+routing assumes M. `nightgauge issue route --json` reports that as
+`"size_source": "default"`, and the rationale says the size was assumed. An
+assumed size never selects Opus for implementation. Once `feature-planning`
+has assessed a size, the scheduler re-derives the run's routing from it. From
+that point, `feature-dev`'s tier and the route recorded on the run record
+follow the planner's size, and a second change-class trace event records the
+re-derived decision. The re-derivation never skips a stage the run had kept: a
+planner's small size does not remove `feature-validate` mid-run.
+
+**The size rule is not a cell in the router's table.** The router's
+recommendation table (`selectModel`) is unchanged: `feature-dev` is Sonnet at
+complexity 4–6. Its `feature-dev` row also sets the run's routed tier: the
+re-route after a performance-mode change writes it into
+`pickup_recommendation.dev_model`, and every reasoning stage, not only
+`feature-dev`, dispatches on that tier. Putting the size rule in the table
+would move planning, validation and merge to Opus too. So
+`ImplementationBand` is applied to `feature-dev`'s dispatch alone, and it only
+ever raises that stage to Opus.
+
+**Manual mode.** Under `model_routing.mode: manual` every stage takes its
+model from the manual table (or `pipeline.stage_models`), which wins over the
+router's slot, so the size rule does not apply. Only the high-risk Opus floor
+reaches a manual-mode workspace.
+
+**What the eval loop does not measure yet.** `use_eval_recommendations`
+advice compares pass rate, quality and cost **per run**. It does not see turns
+per stage or rework rounds per closed issue. The advice file carries no turn
+or rework field, so a term for either one needs the eval lane to aggregate it
+first. Until then, advice can prefer a tier that is cheaper per run but
+costlier per closed issue. That is one reason advice is off by default and
+bounded by the envelope.
+
+The extension-orchestrated path (`AutoModelSelector`'s size × stage matrix)
+does not apply this rule. The Go scheduler above is what autonomous runs use.
 
 **Mode Behavior with `getStageModel()`:**
 
@@ -6683,10 +6911,10 @@ platform:
 extension does **not** hold a platform client — it routes all platform calls
 through the Go binary via IPC.
 
-| Config Consumer            | What It Uses                                                                                                                                                                                                                                                              |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Go binary** (`serve`)    | `enabled`, `api_url`, and `license_key` — explicit flags/environment variables opt in directly; config-derived values are used only when `platform.enabled: true`. `connection_timeout_ms` and `retry_policy` are schema-validated but not yet consumed by the Go binary. |
-| **Extension** (TypeScript) | Reads `platform.enabled` only to decide whether to display platform-related UI (license badge, skill tier badge). Does **not** make direct platform API calls.                                                                                                            |
+| Config Consumer            | What It Uses                                                                                                                                                                                                                                                                                                                                          |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Go binary** (`serve`)    | `enabled`, `api_url`, and the license key — explicit flags/environment variables opt in directly; the stored license key (OS keychain, then machine-tier `license_key`) and config-derived values are used only when `platform.enabled: true`. `connection_timeout_ms` and `retry_policy` are schema-validated but not yet consumed by the Go binary. |
+| **Extension** (TypeScript) | Reads `platform.enabled` only to decide whether to display platform-related UI (license badge, skill tier badge). Does **not** make direct platform API calls.                                                                                                                                                                                        |
 
 ### Behavior
 
@@ -6700,6 +6928,11 @@ through the Go binary via IPC.
   remove all flags from lower tiers — not merge with them.
 - Config files that omit the `platform:` section entirely continue to work
   unchanged — all fields default to the values shown above.
+- The license key belongs in the OS keychain, not in YAML: store it with
+  `printf '%s' "$KEY" | nightgauge auth license set`. A `platform.license_key`
+  in the machine-tier file is the fallback for hosts with no keychain. The
+  resolution order and the keychain entry are in
+  [GO_BINARY.md § Platform license key](GO_BINARY.md#platform-license-key).
 
 ### Environment Variables
 

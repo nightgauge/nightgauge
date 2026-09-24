@@ -1,14 +1,14 @@
 {
   "haiku": {
-    "text": "The flow's status is failed, not passed. A new console error at step 3 is a hard failure just like a wrong element — it doesn't matter that the visual assertion held. In strict mode this sets validation_status to failed with errorCategory verify-ui-gate-failed, so no PR is created.",
+    "text": "It is not a case of 'the visual assertion passed so it's fine': a new console error at step 3 is a hard failure. In strict mode validation_status is failed with errorCategory verify-ui-gate-failed, so no PR is created.\n\n```json\n{\"flow_status\": \"failed\", \"validation_status\": \"failed\", \"pr_created\": false}\n```",
     "exit_code": 0
   },
   "sonnet": {
-    "text": "The flow's status is failed, not passed. A new console error at step 3 is a hard failure just like a wrong element — it doesn't matter that the visual assertion held. In strict mode this sets validation_status to failed with errorCategory verify-ui-gate-failed, so no PR is created.",
+    "text": "It is not a case of 'the visual assertion passed so it's fine': a new console error at step 3 is a hard failure. In strict mode validation_status is failed with errorCategory verify-ui-gate-failed, so no PR is created.\n\n```json\n{\"flow_status\": \"failed\", \"validation_status\": \"failed\", \"pr_created\": false}\n```",
     "exit_code": 0
   },
   "opus": {
-    "text": "The flow's status is failed, not passed. A new console error at step 3 is a hard failure just like a wrong element — it doesn't matter that the visual assertion held. In strict mode this sets validation_status to failed with errorCategory verify-ui-gate-failed, so no PR is created.",
+    "text": "It is not a case of 'the visual assertion passed so it's fine': a new console error at step 3 is a hard failure. In strict mode validation_status is failed with errorCategory verify-ui-gate-failed, so no PR is created.\n\n```json\n{\"flow_status\": \"failed\", \"validation_status\": \"failed\", \"pr_created\": false}\n```",
     "exit_code": 0
   }
 }

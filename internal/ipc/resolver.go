@@ -139,7 +139,11 @@ func (r *ClientResolver) Resolve(_ context.Context, owner, repo string) (*gh.Cli
 
 	if entry, ok := r.cache[key]; ok && entry.configMtime.Equal(currentMtime) {
 		// Mtime hit — still need to verify token fingerprint hasn't changed.
-		cfg, _ := config.Load(repoPath)
+		cfg, loadErr := config.Load(repoPath)
+		if loadErr != nil {
+			// A refused config never serves from the cache either (#2023).
+			return nil, fmt.Errorf("load config for %s: %w", key, loadErr)
+		}
 		if cfg != nil {
 			tok, _ := gh.ResolveTokenChain(cfg, owner)
 			fp := tokenFingerprint(tok)
@@ -156,8 +160,10 @@ func (r *ClientResolver) Resolve(_ context.Context, owner, repo string) (*gh.Cli
 	// Cache miss or invalidated — full resolution.
 	cfg, err := config.Load(repoPath)
 	if err != nil {
-		log.Printf("IPC ClientResolver: failed to load config for %s: %v — using default client", key, err)
-		return r.defaultClient, nil
+		// Fail closed: falling back to the default client would act as
+		// another identity for a repo whose config was refused — a plaintext
+		// credential in a repository tier (#2023), or any other load error.
+		return nil, fmt.Errorf("load config for %s: %w", key, err)
 	}
 
 	tok, err := gh.ResolveTokenChain(cfg, owner)

@@ -143,6 +143,140 @@ variable, falling back to `gh auth token` output if available.
 export GITHUB_TOKEN=$(gh auth token)
 ```
 
+### Platform license key
+
+The CLI and the daemon (`serve`, `pipeline backfill`) resolve the platform
+license key once, in `internal/keychain`, highest precedence first:
+
+1. the `NIGHTGAUGE_LICENSE_KEY` environment variable (source `env`);
+2. the OS keychain entry (source `keychain`);
+3. `platform.license_key` in the machine-tier config file (source
+   `machine-file`).
+
+`serve` consults the stored key (2 and 3) only when `platform.enabled: true`;
+the environment variable opts in on its own. There is no `--license-key` flag:
+a flag puts the key on argv, where other local users can read it through `ps`.
+
+The keychain entry contract is fixed; the VS Code extension depends on it:
+
+| Field   | Value                                                              |
+| ------- | ------------------------------------------------------------------ |
+| Service | `nightgauge`                                                       |
+| Account | `platform.license_key` (the same string as the config path)        |
+| Store   | macOS Keychain, Windows Credential Manager, Secret Service (Linux) |
+
+Manage it with `nightgauge auth license`:
+
+```bash
+printf '%s' "$KEY" | nightgauge auth license set   # key on stdin, never argv
+nightgauge auth license status                     # source and fingerprint, never the key
+nightgauge auth license clear                      # every stored copy; non-zero if an entry may remain
+```
+
+Each subcommand takes `--json`. The field names are a contract with the VS
+Code extension, pinned on both sides by
+`cmd/nightgauge/testdata/auth-license-contract.json`. The `fingerprint` field
+is the first 12 hex characters of
+`scrypt(key, "nightgauge/license-fingerprint/v1", N=32768, r=8, p=1, 32 bytes)`.
+It identifies a key without revealing it, and the slow KDF makes an offline
+guess against a printed or stored fingerprint expensive whatever the key's
+entropy. Changing the salt or any parameter changes every fingerprint; the
+extension versions its stored sync record with the scheme, so a record from
+an older scheme is ignored rather than read as a rotation.
+
+- `set` removes any plaintext copy from the machine-tier file once the
+  keychain holds the key, so rotating the key never leaves the old one on
+  disk.
+- `clear` removes the keychain entry, the machine-tier copy and a copy in the
+  workspace's `.nightgauge/config.local.yaml`, and reports a copy in the
+  committed `.nightgauge/config.yaml` (which it does not edit). It exits
+  non-zero only when a keychain entry may remain (a timeout or an unexpected
+  keychain error). A host with no keychain service at all (no backend, no
+  D-Bus session, no Secret Service) is where `set` uses the file, so there
+  `clear` succeeds once the file copy is gone and reports `noKeychain`.
+
+On a host with no keychain service — a headless Linux runner without a
+Secret Service, a container, an SSH session whose login keychain refuses
+interaction — `set` says so and writes the machine-tier file instead,
+atomically, with mode `0600`, and refuses a symlinked file. Each keychain call
+is bounded (3 s). A read that times out falls back to the file. A write that
+times out is an error and is not written to the file, because the abandoned
+write can still complete (for example after an unlock prompt is answered) and
+the key would then exist in two places. `status` reports the keychain as
+unavailable and why. The environment variable works everywhere.
+
+**Threat model** (ADR-024 § 5). The keychain protects the key from other OS
+users, from backups and sync of plain files, and from commits; it does not
+isolate it from other programs running as you. Any process running as the same
+user can read the item without a prompt (on macOS through `/usr/bin/security`,
+which created it), and **pipeline agents are same-user processes**, so an agent
+can read it too. That is the same exposure as `gh`'s token or a `0600` file.
+Credentials an agent can reach are therefore scoped to what an agent may do:
+the license key is per device and revocable, and the GitHub token should be the
+least-privileged token that runs the pipeline.
+
+**CI hosts.** A CI host is one whose `CI` variable is `true` (in any case) or
+`1`. There Nightgauge never writes a credential to disk: `auth license set` and
+`forge auth login` / `refresh` refuse, writing neither the keychain nor the
+machine-tier file, because a self-hosted runner shared between jobs would carry
+one job's key into the next. Credentials resolve from the environment first:
+`NIGHTGAUGE_LICENSE_KEY`; for GitHub, `GITHUB_TOKEN`, then `GH_TOKEN`, ahead of
+every stored token with no exception. `github_user` is ignored in CI, because
+the committed repository tier can set it and it would otherwise let a pull
+request pick any identity gh has stored on a shared runner. `nightgauge doctor`
+reports a credential found in the machine-tier file on a CI host (check
+`ci_machine_credentials`).
+
+The platform API key is read from `NIGHTGAUGE_API_KEY` and the license key
+from `NIGHTGAUGE_LICENSE_KEY` (or the stores above). `serve` has no `--api-key`
+or `--license-key` flag, and `forge auth login` reads its token from stdin
+only: a flag puts the credential on argv, where other local users can read it
+through `ps`.
+
+#### The VS Code extension and the single source of truth
+
+The extension keeps a copy in VS Code SecretStorage, because its own runtime
+needs the value and the CLI never prints it. It writes the shared entry
+through the same command: activating a license, starting a trial, saving a
+key in Settings and the startup migration all pipe the key to
+`nightgauge auth license set --json` on stdin (never argv or environment).
+Clearing the key in Settings runs `auth license clear --json`. A binary that
+predates `auth license` is reported as needing an update.
+
+**The shared keychain entry is the source of truth.** The extension records
+the fingerprint of the last key the CLI confirmed and compares fingerprints
+on startup and after every write:
+
+- same fingerprint: in sync;
+- the CLI has no key: the extension's key is written;
+- the CLI still holds the last confirmed key: the extension's newer key never
+  reached it (a failed write), so it is written again;
+- no usable fingerprint (an older binary, a failed or unparseable status):
+  the extension keeps its key and asks for a newer binary;
+- the keys differ but no sync was ever recorded: both are kept and the user
+  is asked to activate one key;
+- otherwise the key was changed outside VS Code, for example rotated with
+  `auth license set` in a terminal. The CLI's key wins. The extension drops
+  its stale copy and tells the user to run **Nightgauge: Activate License**
+  with the current key. This is the only case in which the extension deletes
+  its copy: it needs positive evidence, a well-formed fingerprint that
+  differs from the one recorded at the last confirmed sync.
+
+The CLI's key wins because it is the key a person changed deliberately and
+the one every other process uses. The extension cannot read it (the CLI never
+prints the key), so it must not keep handing its own. The daemon spawn waits
+for this reconciliation, bounded at 5 s, so the daemon is never given a
+stale `NIGHTGAUGE_LICENSE_KEY`.
+
+The extension removes `platform.license_key` from the machine-tier file only
+after the keychain write succeeded. When the write fails, the SecretStorage
+copy stays and one warning names the command to run by hand. When the key
+could only go to the plaintext file, one information message says so.
+
+On macOS the stored value carries go-keyring's `go-keyring-base64:` prefix, so
+read it through `nightgauge auth license status`, not by decoding `security`
+output.
+
 ## CLI Command Reference
 
 This section is the canonical reference for all `nightgauge` subcommands.
@@ -865,9 +999,18 @@ When `--json` is set the verb emits:
   "documentation_scope": "standard",
   "rationale": "Standard path: M size, code change, complexity 3, high priority. Full pipeline execution.",
   "effective_size": "M",
+  "size_source": "board",
   "effective_priority": "high"
 }
 ```
+
+`size_source` says where `effective_size` came from: `foundation`, `board`,
+`label`, `planner` or `default`. `default` means nothing named a size and the
+verb assumed M, so the complexity, route and documentation scope were derived
+from that assumption; the rationale then reads "M size assumed" instead of
+"M size". An issue with no size still routes as M at pickup. The scheduler
+re-derives the routing once feature-planning has assessed a size (see
+[CONFIGURATION.md § Routing by cost per closed issue](CONFIGURATION.md#routing-by-cost-per-closed-issue)).
 
 Offline mode — pass issue number `0` plus all of `--size`, `--priority`,
 `--type` to derive a decision without touching GitHub. Useful for tests and
@@ -1758,7 +1901,7 @@ write-temp → fsync → rename, which replaces the inode on every heartbeat. An
 advisory lock lives on an _inode_, so a flock on the sidecar would be released
 by its own holder's next heartbeat: a lock that reports success and protects
 nothing, which is worse than no lock. The lease flocks
-`~/.nightgauge/serve/<key>.lock`, created once and never renamed, beside the
+`<STATE>/serve/<key>.lock`, created once and never renamed, beside the
 `.json` the sidecar keeps. That `<key>` encodes the workspace root reversibly —
 see [The serve registry](#the-serve-registry-issue-1426), which is where a lock
 file left behind by a killed daemon gets reclaimed.
@@ -1841,7 +1984,18 @@ Two caveats, both deliberate:
 
 ### The Serve Registry (Issue #1426)
 
-`~/.nightgauge/serve/` is the only machine-local record of which workspace roots
+`<STATE>` is the machine-state root (`internal/layout.StateHome`, ADR-024 § 8):
+`NIGHTGAUGE_STATE_HOME`, then `$XDG_STATE_HOME/nightgauge`, then
+`~/.local/state/nightgauge` on Linux, `~/.nightgauge/state` on macOS and
+`%LOCALAPPDATA%\nightgauge\state` on Windows. Before #2031 the registry lived in
+`~/.nightgauge/serve/`; claims are daemon-lifetime records, so they are not
+moved, and a daemon started by the new binary writes its claim in the new place.
+While that legacy directory exists, a lease also takes the workspace's lock in
+it: a daemon from the previous release holding it refuses the new one (and is
+named in the refusal), and a new holder keeps it so a previous-release daemon
+started later refuses in turn. #2040's migrator retires the legacy directory.
+
+`<STATE>/serve/` is the only machine-local record of which workspace roots
 have run a daemon. It holds two files per workspace — the `.json` claim record
 (#388) and the `.lock` file the lease flocks (#1349) — and until #1426 it could
 not be used as a registry, because almost none of it was live. Measured on a
@@ -1919,7 +2073,7 @@ hard exit.
 Neither is a timing problem to be widened away. Both are the absence of mutual
 exclusion between a compound read-modify-write ("open then flock") and a
 compound mutation ("flock then unlink"), so one guard —
-`~/.nightgauge/serve/nightgauge-registry.guard`, held across each of them and
+`<STATE>/serve/nightgauge-registry.guard`, held across each of them and
 across neither anything else — removes both. Same shape as the
 [worktree mutation guard](#serialised-worktree-mutation-issue-1163). Nobody
 holding it ever blocks on a second lock (both flock the lease file with a zero
@@ -3371,7 +3525,8 @@ nightgauge release fetch --source <owner/repo> [flags]
 | `2`  | Hard error (bad flag, transport failure, non-2xx status, decode error) |
 
 **Authentication:** the verb sends `Authorization: Bearer <token>` when one is
-available — order: `--token` CLI flag → `GITHUB_TOKEN` env var. An absent
+available — order: `GITHUB_TOKEN` → `GH_TOKEN` env var (there is no `--token`
+flag; a token on argv is visible through `ps`). An absent
 token still works for public repos but at the lower 60/hr rate limit.
 
 **JSON output schema (`FetchResult`):**
@@ -3959,7 +4114,9 @@ supersedes its pending line on fold).
 Every record also carries the **immediate** post-merge observation of the base
 branch (#1249) — `main_check_verdict` (`green` | `red` | `pending` |
 `no_checks` | `error` | `skipped`) and `main_check_failing` — written by the same
-hook that seeds it, from a bounded poll of the merge commit's own check runs
+hook that seeds it, from a bounded poll of the merge commit (since #2055: its
+tree against the merged PR head's, the head's required checks, and the checks
+still running on the merge commit itself)
 (`nightgauge hook post-merge --main-check-wait <duration>`, default 20m; `0` is
 one read). It is distinct from `verdict`, which the sweep decides days later
 from reverts and ancestry-correlated breakage: a record can be
@@ -4228,7 +4385,12 @@ nightgauge size predict <issue-number> [--owner ORG] [--repo REPO] [--json]
 
 ```bash
 # Issue size gate — invoked by issue-pickup
-nightgauge size-gate check --issue <N> [--config <path>] [--json]
+nightgauge size-gate check --issue <N> [--config <path>] [--json] \
+  [--context-window <tokens> | --adapter <a> --model <m>]
+
+# Largest issue size a model's context window admits (ADR-023 capacity table)
+# — invoked by issue-create Phase 2.85
+nightgauge size-gate capacity [--adapter <a> --model <m> | --context-window <tokens>] [--json]
 
 # Baseline-CI dependency gate — invoked by issue-pickup (Issue #3004)
 nightgauge baseline-gate check --issue <N> [--branch main] [--config <path>] [--json] [--pause-queue=true]
@@ -4240,6 +4402,22 @@ nightgauge scope-drift check --issue <N> [--config <path>] [--workdir <path>] [-
 # Version-downgrade gate — invoked by feature-validate Phase 2.6 (Issue #3042)
 nightgauge version-downgrade check [--issue <N>] [--baseline main] [--config <path>] [--workdir <path>] [--allow-override] [--json]
 ```
+
+**`size-gate` capacity (#1655)**: `--context-window`, or `--adapter`/`--model`
+(given together; either alone is an error; resolved to the window the
+scheduler would dispatch with), adds a capacity
+check to `size-gate check`: an issue whose `size:*` label exceeds the cap the
+ADR-023 capacity table gives that window is rejected, with a recovery of
+`decompose`, or `requires human decomposition` when its body carries
+`<!-- nightgauge:capacity-decomposed -->`. Without those flags the gate is
+unchanged. `size-gate capacity --json` prints `{adapter, model,
+context_window, window_known, max_size}`; with no model flags it reports the
+repository's feature-dev target (on opencode, the machine-tier
+`opencode.model`). An unknown window reports `max_size: ""` and logs
+`capacity: window unknown`. Under `pipeline.size_gate.routes.reject_action:
+soft-route`, `check` allows an over-capacity issue on the first
+`routes.capacity_fallback_models` entry whose window admits it and prints it
+as `routed_model`.
 
 **`scope-drift check` flags**:
 
@@ -4781,8 +4959,23 @@ Two rules follow directly from that:
   legacy Commit Statuses — and counts every context on the SHA, required or
   not: a failed check is RED and a running one is NOT-YET. It resolves required
   contexts from branch protection and rulesets and additionally returns
-  NOT-YET when one has not appeared or either surface is unavailable. The
-  post-merge hook evaluates a merge commit through the same function.
+  NOT-YET when one has not appeared or either surface is unavailable. For a
+  merged PR's merge commit (#2055) the PR run is the gate instead: the merge
+  commit's tree must equal the PR head's tree, the head's required checks must
+  have passed, and whatever else still runs on the merge commit must be
+  green, still running being NOT-YET. `cache-warm`, which tests nothing, never
+  counts; CodeQL's merge-commit runs are reported as information, because the
+  PR's required CodeQL run analysed the same tree (on a tree mismatch they
+  count). A tree mismatch with no required check on the merge commit turns
+  RED five minutes after the merge; an unreadable required set is never GREEN.
+  An empty merge commit waits the same five minutes for push workflows to
+  appear, unless the workflows at the merge commit were read and none can run
+  on a push to the base branch (#2061); then it is GREEN at once. The script's
+  fallback applies a coarser form of that rule: any mention of `push`, or any
+  read failure, keeps the wait.
+  `ci checks-complete --help` prints `capability: merged-pr-gate`, which the
+  script checks before handing off. The post-merge
+  hook evaluates a merge commit through the same function.
 
   Exit codes: `0` GREEN, `1` RED, `2` NOT-YET. Exit `1` means a completed
   check run or commit status failed, and nothing else. An error that prevents
@@ -4905,6 +5098,77 @@ In progress / Backlog, and the dashboard derives its own counts from the item
 list it already holds. `TestCountsWithinTTLReadTheSnapshotOnce` pins the
 cost claim (red before: two calls, two upstream count queries, zero snapshot
 reads).
+
+**Status reads are slices of the open snapshot, and the tree reads it once.**
+The Repositories tree needs per-repository Ready / In progress / Backlog counts
+with epics excluded (epic grouping is on by default), which a board-wide
+`board.counts` cannot give. It used to send `board.list` once per status, so
+each repository row cost three `items(query:"status:X is:open")` reads, each
+17 points a page, and none of them was shared with `board.counts` or the
+sweeps. The `board.listOpen` verb returns the cached `is:open` snapshot itself,
+and the extension groups it by status per repository. A board adapter that
+implements `boardcache.OpenStatusSubset` promises that its status read is
+exactly the open read filtered by status. For such a board, `ListItems` for
+any status except Done is answered from a fresh open snapshot with no request.
+The GitHub adapter implements it, because its filtered read is the same
+document plus `status:"X"`. Done is read without `is:open` and so is excluded.
+A status read never starts the larger open read on its own behalf. A caller
+that only ever reads one status therefore pays what it paid before, and an
+expired open snapshot is not renewed by a status read.
+
+What this saves, and what it does not:
+
+- **Row counts** cost one `board.listOpen` per board per extension cache
+  window, shared by every repository on that board. Inside the daemon's TTL
+  (`DefaultTTL`, 90 seconds) the answer comes from the snapshot the sweeps
+  and `board.counts` already hold.
+- **Status drilldowns are not free.** Expanding a status row sends its own
+  `board.list` for that status, behind a `github.rateLimit` gate, and the
+  extension caches it per status. The daemon answers that request from the
+  open snapshot only while the snapshot is fresh. After it expires, the
+  request goes through the status entry's own probe and read. A pipeline
+  status move expires the extension's per-status entries along with the
+  counts, so the next drilldown refetches instead of showing the pre-move
+  list.
+- **The autonomous scheduler** reads through this cache only for its
+  dependency-graph builds (`SetBoardCache` → `depgraph.CachedBoardProvider`,
+  which calls `ListOpenItems`). `PickNext`'s Ready read uses its own
+  `gh.BoardService` and never touches the cache, because dispatch must not
+  act on a snapshot. The scheduler's status moves go through
+  `boardcache.WrapProject` (`AutonomousScheduler.projectService`), so each
+  move drops that board's snapshots. The post-merge board sync
+  (`Scheduler.checkEpicCompletion`, run in the daemon through the embedded
+  per-run `Scheduler`) is wrapped the same way; `SetBoardCache` hands the
+  cache to both.
+
+`TestStatusReadsAreServedFromAFreshOpenSnapshot` and
+`TestBoardListOpen_SharesOneBoardReadWithCountsAndStatusReads` pin the counts;
+`TestSchedulerStatusMovesInvalidateSharedBoardCache` pins the scheduler's
+writes.
+
+**On github.com the open read is a conditional REST summary.** `board.listOpen`,
+`board.counts` and the sweep's board reads use `boardcache.ListOpenSummary`,
+which the GitHub adapter serves from REST project items (`q=is:open`) with
+relationship COUNTS (`BoardItem.RelationSummary`) instead of lists. It is
+cached as its own `open-summary` entry, apart from the list-carrying `open`
+entry the dependency graph reads over GraphQL. Every page is revalidated with
+its stored ETag, and the store (`internal/github/condstore.go`) is on disk,
+keyed by token identity, so an unchanged board costs nothing even right after
+a daemon restart; the snapshot cache is keyed by token identity too. The store
+lives in `nightgauge/github-conditional` under the OS user cache directory
+(`os.UserCacheDir`: `~/Library/Caches` on macOS, `$XDG_CACHE_HOME` or
+`~/.cache` on Linux, `%LocalAppData%` on Windows), or in
+`$NIGHTGAUGE_CACHE_HOME/github-conditional` when that variable is set — never
+inside a repository. Without a user cache directory the daemon keeps it in
+memory only. Directories are 0700 and entries 0600; the daemon prunes entries
+unwritten for 14 days, and the oldest first past 256 MiB, at start and daily. Status reads (`ListItems(status)`) are REST pages
+plus one REST list per non-empty relationship. The change probe reads the
+owner's REST project list — one conditional request for every board. GHES, or
+a 404 from the REST projects endpoints, uses the GraphQL reads above, and the
+summary is then derived from the one `open` snapshot so status reads are still
+answered from it. `internal/ipc/github_cost_test.go` prices a window open:
+cold, 6 repos cost 4 GraphQL points and 47 counted REST requests, 20 repos 12
+points and 150; a re-open after a daemon restart costs 0 and 0.
 
 **Attribution through the cache (#860).** Inserting the cache initially moved
 every board read's attribution off the producers and onto `boardcache` — a
@@ -5123,9 +5387,10 @@ pipeline skill calls this as Phase 0 preflight via `skills/_shared/PREFLIGHT.md`
 | `api_user`    | `GET /user` returns non-empty login             | required   |
 | `scopes`      | Token has `repo`, `project`, `read:org` scopes  | required   |
 | `rate_limit`  | API requests remaining (warn < 500, warn < 100) | warning    |
-| `config`      | `.nightgauge/config.yaml` parseable        | required\* |
+| `config`      | `.nightgauge/config.yaml` loads; a refused config (for example a plaintext token, #2023) fails here | required\* |
 | `project`     | `project_number` and `owner` set in config      | required\* |
 | `complexity_model` | `.nightgauge/complexity-model.yaml` exists; missing output points to `nightgauge outcome init` | warning |
+| `tracked_secrets` | No GitHub token or license key in files git tracks under `.nightgauge/` (#2024); each hit is `path:line`, redacted to its prefix, with structured `findings` in `--json`. Files over 1 MiB and binary files are skipped with a note; skipped outside a git work tree | warning |
 
 Plus the leaked-machine-state checks (#330 / #332 / #341), all **warning-only**:
 
@@ -5225,7 +5490,7 @@ There is no verb-shaped class. `serve` had one until **#388** — see below.
   it re-reads before every heartbeat, stands down when the record names another
   live PID, and its shutdown deletes the record only while that record still
   names its own pid.
-- **Serve claims are machine-global: `~/.nightgauge/serve/<key>.json`.** One
+- **Serve claims are machine-global: `<STATE>/serve/<key>.json`.** One
   file per workspace, named by a reversible encoding of the workspace root
   ([#1426](#the-serve-registry-issue-1426)), with the root itself inside the
   record as well. Not `.nightgauge/serve.json` in the workspace,
@@ -5515,7 +5780,16 @@ A Go test holds the doctor to the manifest.
 Its `required_flags` are exactly the flags the adapter's `BuildCommand` emits,
 and the flag-contract tests (`internal/execution/adapters/flag_contract_test.go`)
 check each of them against the CLI's own `--help`, captured at the newest
-tested version by `scripts/capture-cli-help.sh`.
+tested version by `scripts/capture-cli-help.sh` — for `claude-headless`,
+`codex`, `grok` and `opencode`. `gemini` and `copilot` have no capture
+(neither CLI is installed on the maintainer's machine, `helpNotCaptured` in
+the test); their `required_flags` is still held equal to what `BuildCommand`
+emits, but not against either CLI's real `--help`.
+The script runs each install and `--help` in a process group of its own and,
+after it exits or times out, kills that group and every descendant its 0.2s
+poll saw, including one that called `setsid()`; it re-identifies each by pid
+and start time first, so a recycled pid is never signalled. A daemon that
+double-forks within one poll interval is never seen and can outlive the call.
 A CLI below its floor gets `version_ok: false` and a remediation naming the
 floor. Codex, gemini and grok also get `ok: false`. Claude's floor
 is the oldest version a captured fixture backs, not a known break, so a claude
@@ -7080,6 +7354,23 @@ parser.
 | `--no-fetch`      | `false`                        | Skip GitHub queries even when `--project` is set; emit field-ID placeholders    |
 | `--json`          | `false`                        | After writing, print `{"path":"...","wrote":true}` to stdout (machine-readable) |
 
+**Ignore rules**: when `--out` is a `.nightgauge/config.yaml`, the verb also
+ensures the `.nightgauge/` ignore rules in that repository (also when it
+refuses to overwrite an existing file), as the
+extension does on activation and `serve` does at startup. A missing
+`.nightgauge/.gitignore` is written from the template the binary embeds
+(`internal/scaffold/nightgauge.gitignore`); an older untracked copy is
+rewritten, keeping its `Local additions`; an older committed copy is left
+untouched and the current rules go to the repository's `info/exclude`
+(`git rev-parse --git-path info/exclude`, so a linked worktree writes the
+shared one; a symlinked target is refused). Outside a git work tree nothing is
+written. The outcome is printed to stderr as `ignore rules: <action> ...` and,
+with `--json`, added as an `ignore_rules` object with `action` (`created`,
+`updated`, `deferred`, `current` or `skipped`), `path`, `note`, `changed`
+and `carried`. Failing to ensure them is a warning on stderr (and
+`ignore_rules_error` in `--json`), never a non-zero exit. See
+[CONFIGURATION.md § Gitignore Entry](CONFIGURATION.md#gitignore-entry).
+
 **Exit codes**:
 
 | Code | Meaning                                                                       |
@@ -7143,17 +7434,48 @@ adapter's warning and notices go to stderr.
 
 | Field            | Meaning                                                                                                   |
 | ---------------- | --------------------------------------------------------------------------------------------------------- |
-| `schema_version` | Output version (`1.0`); a caller refuses an unknown major version                                         |
+| `schema_version` | Output version (`1.3`); a caller refuses an unknown major version                                         |
 | `config_content` | `OPENCODE_CONFIG_CONTENT`, the per-run OpenCode config                                                    |
 | `env`            | Every variable the spawn sets from the run, the config included; no secret                                |
-| `env_withhold`   | `prefixes` and `names` of the inherited variables the spawn must not get; remove them before adding `env` |
+| `env_withhold`   | The inherited variables the spawn must not get: every one in `names`, and every one starting with one of `prefixes` that is not in `keep`; remove them before adding `env` |
 | `plugin_dir`     | Where OpenCode loads the run's plugins from                                                               |
 | `run_dir`        | The run's private root                                                                                    |
 | `non_loopback`   | `false` only for a declared model server on this machine; `true` elsewhere and for any hosted provider    |
+| `binary`         | Absolute path of the `opencode` the version policy checked; spawn this one                               |
+| `run_id`         | The run identity `run_dir` is named by: `--run-id`, or the one minted                                     |
+| `plugin_version` | The `plugin_version` the plugin's handshake sentinel (`env`'s `NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL`) must carry |
 
 A caller that removes the `env_withhold` variables from its environment, then
 adds `env`, gives the child what the Go path gives it, apart from the
 adapter's per-spawn exports (such as `OPENCODE_SERVER_PASSWORD`).
+
+The SDK's OpenCode adapter runs this verb for every stage
+(`packages/nightgauge-sdk/src/cli/adapters/opencodeRunConfig.ts`, #1648): the
+binary is `NIGHTGAUGE_BIN`, else `nightgauge` on `PATH`, run in the stage's
+worktree. It passes the stage's turn budget as `--max-turns`, the pipeline
+run's UUIDv7 identity as `--run-id` and the root of the stage's own SKILL.md
+as `--skills-root`, and the stage fails
+before any `opencode` starts when the verb fails, times out (15 s) or prints a
+`schema_version` whose major it does not know. It checks the plugin handshake
+the way the Go manager does (#1804). `TestOpenCodeConfigGolden` pins the
+verb's output and the Go spawn's environment for fixed inputs to
+`internal/execution/adapters/testdata/opencode_config_golden.json`, which the
+SDK's tests feed through the SDK path.
+
+With `--skills-root` named, a stage whose SKILL.md is not found under it fails
+the verb rather than printing a config whose permission map denies every tool;
+without it, the verb still prints that config with a stderr notice.
+
+```bash
+nightgauge opencode cleanup --run-id <uuid>
+```
+
+Deletes the per-run root `nightgauge opencode config` created for a run id
+(`adapters.RemoveOpenCodeRunRoot`: an id that is not a run identity, or a root
+that is a link or outside the runs directory, is refused; a missing root is
+not an error). The SDK runs it when a query whose root was minted for it ends,
+and when a pipeline run whose stages shared a root ends, as the Go scheduler
+deletes the root at every terminal outcome (ADR-022 § 22).
 
 It exits 1, with nothing on stdout, wherever the adapter refuses a dispatch
 before spawning: without `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1`, a model that is
@@ -7897,15 +8219,17 @@ per ADR-006 (issue #3592).
 ### IPC Server
 
 ```bash
-nightgauge serve [--platform-url <url>] [--api-key <key>]
+NIGHTGAUGE_API_KEY=<key> nightgauge serve [--platform-url <url>]
 ```
 
 The IPC server exposes all Go binary capabilities to the VSCode extension via
 JSON-over-stdio (same pattern as LSP). The extension calls methods by writing
 newline-delimited JSON to stdin; responses arrive on stdout.
 
-**Platform namespace IPC methods** (require Go binary started with `--api-key`
-or `NIGHTGAUGE_PLATFORM_API_KEY` env var):
+**Platform namespace IPC methods** (require Go binary started with
+`NIGHTGAUGE_API_KEY` or a license key in its environment). The API key is read
+from the environment only: there is no `--api-key` flag, because a flag puts
+the key on argv, where every local user can read it through `ps` (ADR-024 § 5).
 
 ```bash
 # Platform connectivity status

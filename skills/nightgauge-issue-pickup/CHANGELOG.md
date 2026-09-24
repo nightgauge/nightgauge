@@ -8,6 +8,16 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Phase 2.7 checks capacity (#1655, 1.21.0).** The size gate now asks
+  `nightgauge size-gate capacity --json` for the repository's target adapter
+  and model and passes them to `size-gate check`, which rejects an issue
+  whose size exceeds that model's capacity. A binary without the verb, or no
+  resolvable target, runs the check as before. Step 2.7.3 now says what
+  soft-route does: it lets an over-capacity issue through on a fallback
+  model, and nothing else.
+
 ### Fixed
 
 - **Phase 8 no longer inherits shell variables from earlier phases (#1919).**

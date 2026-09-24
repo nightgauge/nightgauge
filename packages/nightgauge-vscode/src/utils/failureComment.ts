@@ -8,6 +8,7 @@
  * @see Issue #2628 post-mortem — cross-repo failures were silent
  */
 
+import { RELATIVE_PIPELINE_STATE_DIR } from "./cloneLayout";
 import { exec } from "child_process";
 import { promisify } from "util";
 import type { PipelineStage } from "@nightgauge/sdk";
@@ -225,7 +226,7 @@ function buildBlockedFindingBody(finding: BlockedFinding): string {
   sections.push(
     "### What happens next\n",
     "- The finding is recorded at " +
-      `\`.nightgauge/pipeline/blocked-findings/${finding.issue_number}.json\`, and **a ` +
+      `\`${RELATIVE_PIPELINE_STATE_DIR}/blocked-findings/${finding.issue_number}.json\`, and **a ` +
       "re-dispatch of this issue now defers at pickup for zero tokens** instead of re-running " +
       "three stages.",
     "- **Nothing was written to this issue's dependency graph.** The blocking work is named in " +
@@ -432,7 +433,7 @@ function getRecommendations(
   if (errMessage.includes(ARCHITECTURE_APPROVAL_REQUIRED_MARKER)) {
     return [
       "- ✅ **Approve the architecture** — add the `approved:architecture` label to this issue " +
-        `(or write \`.nightgauge/pipeline/approval-${issueNumber}.json\` with ` +
+        `(or write \`${RELATIVE_PIPELINE_STATE_DIR}/approval-${issueNumber}.json\` with ` +
         '`{"approved": true}`), then re-queue. feature-dev implements once approved.',
       "- \u{1F6AB} **Don't want this gate?** Set `pipeline.architecture_approval.enabled: false` in " +
         "`.nightgauge/config.yaml` so green CI + auto-merge decide everything.",

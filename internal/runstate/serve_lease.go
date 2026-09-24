@@ -34,6 +34,7 @@ package runstate
 // REPORT (who holds it, and does it look healthy?), not as the decision.
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -42,6 +43,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/flock"
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // ServeLeaseStaleAfter is how long a lease may go without a heartbeat before
@@ -106,6 +108,10 @@ func (e *ServeLeaseError) Unwrap() error { return ErrServeLeaseHeld }
 type ServeLease struct {
 	f    *os.File
 	path string
+	// legacy is the lock this lease also holds in the pre-ADR-024
+	// ~/.nightgauge/serve, when that directory exists (see
+	// acquireLegacyServeLock); nil otherwise.
+	legacy *os.File
 }
 
 // ServeLeasePath is the lock file for a workspace: the sidecar's name with a
@@ -149,7 +155,7 @@ func acquireServeLease(workspaceRoot string, now time.Time) (*ServeLease, error)
 	if err != nil {
 		return nil, fmt.Errorf("serve lease: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("serve lease: create claim directory: %w", err)
 	}
 
@@ -192,7 +198,13 @@ func acquireServeLease(workspaceRoot string, now time.Time) (*ServeLease, error)
 	lockErr := flock.Exclusive(f, 0)
 	switch {
 	case lockErr == nil:
-		return &ServeLease{f: f, path: path}, nil
+		legacy, err := acquireLegacyServeLock(workspaceRoot, path, now)
+		if err != nil {
+			_ = flock.Unlock(f)
+			f.Close()
+			return nil, err
+		}
+		return &ServeLease{f: f, path: path, legacy: legacy}, nil
 
 	case errors.Is(lockErr, flock.ErrWouldBlock):
 		f.Close()
@@ -225,6 +237,74 @@ func (l *ServeLease) Release() {
 	_ = flock.Unlock(l.f)
 	_ = l.f.Close()
 	l.f = nil
+	if l.legacy != nil {
+		_ = flock.Unlock(l.legacy)
+		_ = l.legacy.Close()
+		l.legacy = nil
+	}
+}
+
+// acquireLegacyServeLock takes this workspace's lock in the pre-ADR-024
+// ~/.nightgauge/serve as well, so a daemon from the previous release and one
+// from this release cannot both schedule the same workspace (#1349, #2031).
+// The previous release locks only there; without this probe it would be
+// invisible to this one, and this one invisible to it.
+//
+// A live holder of the legacy lock is a held lease (ServeLeaseError, named
+// from the legacy claim record). A free one is taken and held for the life of
+// the lease, so an older daemon started later refuses in turn. Nothing is
+// done when that directory does not exist: no older daemon ran here, and
+// none is created. A platform without flock has no legacy lock to honour.
+// #2040's migrator retires this once the legacy directory is gone.
+func acquireLegacyServeLock(workspaceRoot, currentPath string, now time.Time) (*os.File, error) {
+	dir := layout.LegacyStatePath(serveSidecarDirName)
+	if dir == "" || filepath.Clean(dir) == filepath.Clean(filepath.Dir(currentPath)) {
+		return nil, nil
+	}
+	if info, err := os.Lstat(dir); err != nil || !info.IsDir() {
+		return nil, nil
+	}
+	base := strings.TrimSuffix(ServeSidecarName(workspaceRoot), serveRecordSuffix)
+	legacyPath := filepath.Join(dir, base+serveLockSuffix)
+	f, err := os.OpenFile(legacyPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("serve lease: open legacy lock %s: %w", legacyPath, err)
+	}
+	switch lockErr := flock.Exclusive(f, 0); {
+	case lockErr == nil:
+		return f, nil
+	case errors.Is(lockErr, flock.ErrUnsupported):
+		f.Close()
+		return nil, nil
+	case errors.Is(lockErr, flock.ErrWouldBlock):
+		f.Close()
+		return nil, &ServeLeaseError{Holder: readLegacyServeLeaseHolder(filepath.Join(dir, base+serveRecordSuffix), workspaceRoot, now)}
+	default:
+		f.Close()
+		return nil, fmt.Errorf("serve lease: lock legacy %s: %w", legacyPath, lockErr)
+	}
+}
+
+// readLegacyServeLeaseHolder describes a previous-release daemon from its
+// claim record in the legacy directory; an unreadable record downgrades the
+// description, never the refusal.
+func readLegacyServeLeaseHolder(recordPath, workspaceRoot string, now time.Time) ServeLeaseHolder {
+	data, err := os.ReadFile(recordPath)
+	if err != nil {
+		return ServeLeaseHolder{}
+	}
+	var sc ServeSidecar
+	if err := json.Unmarshal(data, &sc); err != nil {
+		return ServeLeaseHolder{}
+	}
+	return ServeLeaseHolder{
+		PID:             sc.PID,
+		WorkspaceRoot:   firstNonEmpty(sc.WorkspaceRoot, normalizeWorkspaceRoot(workspaceRoot)),
+		StartedAt:       sc.StartedAt,
+		LastHeartbeatAt: sc.LastHeartbeatAt,
+		Stale:           serveHeartbeatStale(sc, now),
+		Known:           true,
+	}
 }
 
 // readServeLeaseHolder describes the process holding the lock, from the

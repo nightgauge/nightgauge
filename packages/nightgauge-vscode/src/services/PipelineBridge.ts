@@ -713,7 +713,7 @@ export class PipelineBridge {
 
       // Send result back to Go via pipeline.stageResult request.
       // errorText / lastOutputLines drive ClassifyTerminalKind on the Go side
-      // so the V3 RunRecord written to .nightgauge/pipeline/history/<day>.jsonl
+      // so the V3 RunRecord written to pipelineStateDir(root)/history/<day>.jsonl
       // carries terminal_failure_kind=stall_kill (or budget_exceeded) instead of
       // dropping the record or mis-classifying it as subagent_crash. (Issue #3207)
       await this.ipcClient.call("pipeline.stageResult", {

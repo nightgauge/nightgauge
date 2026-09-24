@@ -375,8 +375,10 @@ func TestPrepareOpenCodeRunDiscoversFromTheMachineTierEndpoint(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(hits) != 1 || hits["machine GET /api/v0/models"] != 1 {
-		t.Errorf("requests = %v; want one GET /api/v0/models to the machine-tier endpoint and none to the repository's", hits)
+	// The fixture serves the v0 listing on every path, so the /api/v1 probe
+	// finds no v1 shape and discovery falls back to /api/v0.
+	if len(hits) != 2 || hits["machine GET /api/v1/models"] != 1 || hits["machine GET /api/v0/models"] != 1 {
+		t.Errorf("requests = %v; want one GET /api/v1/models then one GET /api/v0/models to the machine-tier endpoint and none to the repository's", hits)
 	}
 	if !strings.Contains(stderr, "[opencode] opencode.limit.context (200000) is larger than the 65536 tokens endpoint lmstudio has loaded") {
 		t.Errorf("stderr lacks the clamp's warning:\n%s", stderr)
@@ -1139,10 +1141,7 @@ func TestPrepareOpenCodeRunNamesWhatTheSpawnMustNotInherit(t *testing.T) {
 			t.Fatal(err)
 		}
 		var out struct {
-			EnvWithhold *struct {
-				Prefixes []string `json:"prefixes"`
-				Names    []string `json:"names"`
-			} `json:"env_withhold"`
+			EnvWithhold *OpenCodeEnvWithhold `json:"env_withhold"`
 		}
 		if err := json.Unmarshal(raw, &out); err != nil {
 			t.Fatal(err)
@@ -1150,23 +1149,18 @@ func TestPrepareOpenCodeRunNamesWhatTheSpawnMustNotInherit(t *testing.T) {
 		if out.EnvWithhold == nil {
 			t.Fatalf("%s: the prepared run names no env_withhold, so a caller cannot compose the child's environment:\n%s", model, raw)
 		}
-		covers := func(name string) bool {
-			for _, p := range out.EnvWithhold.Prefixes {
-				if strings.HasPrefix(name, p) {
-					return true
-				}
-			}
-			return slices.Contains(out.EnvWithhold.Names, name)
-		}
 		candidates := []string{
 			"OPENCODE_AUTH_CONTENT", "OPENCODE_CONFIG_DIR", "OPENCODE_ANYTHING_LATER",
 			"ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "PATH", "HOME", "GH_TOKEN",
+			"NIGHTGAUGE_JIRA_TOKEN", "NIGHTGAUGE_LM_STUDIO_API_KEY", "NIGHTGAUGE_OPENCODE_PLUGIN_NONCE",
 		}
+		candidates = append(candidates, OpenCodeNightgaugeEnvAllow...)
 		for _, vars := range openCodeCatalogEnv {
 			candidates = append(candidates, vars...)
 		}
+		opts := RunOptions{Model: model, RunRoot: &RunRoot{Env: map[string]string{openCodeConfigContentEnvVar: run.ConfigContent}}}
 		for _, name := range candidates {
-			if got, want := covers(name), OpenCodeWithholdsEnv(model, name); got != want {
+			if got, want := out.EnvWithhold.Withholds(name), NewOpenCodeAdapter().WithholdsEnv(opts, name); got != want {
 				t.Errorf("%s: env_withhold covers %s = %v, but the Go path withholds it = %v", model, name, got, want)
 			}
 		}

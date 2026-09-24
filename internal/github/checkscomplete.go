@@ -294,13 +294,14 @@ func CrossCheckWorkflowRuns(checks []CheckDetail, runs []WorkflowRunSummary) (ag
 }
 
 // EvaluateCommitChecks answers "did this commit's own CI go green?" — the
-// contract of `nightgauge ci checks-complete`, scripts/post-merge-check.sh and
-// the post-merge hook's verification of a merge commit, which all evaluate a
-// commit through this one function.
+// rule EvaluateMergedCommit applies when a commit is its own evidence: a
+// commit with no merged PR (a direct push, or a PR head polled before merge),
+// or a merge commit whose tree differs from its PR head's (#2055).
 //
 // Every context on the commit counts, required or not: a check run or commit
 // status that concluded outside success / skipped / neutral makes the commit
-// red, because "main's own run is green" means all of it. Required-ness only
+// red, because a commit that is its own evidence is green only if all of it
+// is. Required-ness only
 // adds a presence assertion (#1540): a required name with no observation at
 // all is not-yet, never "nothing to fail". EvaluateChecksComplete, by
 // contrast, is the required-only PR merge gate, where a failing advisory check

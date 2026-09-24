@@ -7,6 +7,12 @@
  * @see docs/ARCHITECTURE.md for architectural overview
  */
 
+import {
+  pipelineStateDir,
+  plansDir as clonePlansDir,
+  resolveCloneSetting,
+  RELATIVE_PIPELINE_STATE_DIR,
+} from "../utils/cloneLayout";
 import * as vscode from "vscode";
 import * as fs from "node:fs/promises";
 import { readFileSync } from "node:fs";
@@ -90,7 +96,11 @@ import { getInitialExecutionMode } from "../utils/nightgaugeConfig";
 import { createStreamOutputHandler } from "../utils/streamOutputHandler";
 import { classifyTerminalKindForSignal } from "../services/terminalKindSignal";
 import { createPhaseTracker } from "../utils/phaseTracker";
-import { isStreamJsonEnvelope, isEnvelopeFragment } from "../utils/streamJsonFilter";
+import {
+  isStreamJsonEnvelope,
+  isEnvelopeFragment,
+  stripAdapterActivityLines,
+} from "../utils/streamJsonFilter";
 import { ensureGitignore, ensureWorkspaceGitignores } from "../utils/ensureGitignore";
 import {
   ANY_RUNTIME_FILE,
@@ -120,6 +130,12 @@ import { AgentRegistrationService } from "../services/AgentRegistrationService";
 import { IpcClient } from "../services/IpcClient";
 import { SecretStorageService, SECRET_KEYS } from "../services/SecretStorageService";
 import { getGlobalConfigPath } from "../utils/globalConfigResolver";
+import {
+  extractLicenseKeyLine,
+  migrateLicenseKeyAtStartup,
+  setLicenseReconciliation,
+  vscodeLicenseKeychainBridge,
+} from "../services/licenseKeychainBridge";
 import { migrateLegacyGeminiApiKey } from "../commands/migrateConfig";
 import { NotifierStatusTracker } from "../services/notifications/NotifierStatusTracker";
 import { OAuthDeviceFlowService } from "../services/OAuthDeviceFlowService";
@@ -435,12 +451,7 @@ export function readIssueLabels(issueNumber: number): string[] | undefined {
     return undefined;
   }
   try {
-    const filePath = path.join(
-      nightgaugeRoot,
-      ".nightgauge",
-      "pipeline",
-      `issue-${issueNumber}.json`
-    );
+    const filePath = path.join(pipelineStateDir(nightgaugeRoot), `issue-${issueNumber}.json`);
     const raw = readFileSync(filePath, "utf8");
     const parsed = JSON.parse(raw) as { labels?: unknown };
     if (Array.isArray(parsed.labels)) {
@@ -495,88 +506,61 @@ export async function initializeServices(
   }
 
   // ── License key — startup resolution (#3519, #3997) ────────────────────
-  // The license key is a machine-tier key: it lives in
-  // ~/.nightgauge/config.yaml and is mirrored to SecretStorage so the
-  // SecretStorage-first runtime readers (LicensePreflight, forwardPlatformEnv)
-  // see it. On startup we:
-  //   1. Strip any license key still embedded in the PROJECT config.yaml — it
-  //      must never sit in a committed file — seeding SecretStorage from it.
-  //   2. Otherwise seed SecretStorage from the MACHINE config.yaml when
-  //      SecretStorage is empty (fresh machine / new install).
+  // The license key lives in SecretStorage for the extension's runtime
+  // readers (LicensePreflight, forwardPlatformEnv) and in the Go binary's
+  // OS-keychain entry for the CLI and a terminal-started daemon, written
+  // through `nightgauge auth license set` (licenseKeychainBridge). On startup:
+  //   1. Warn about a license key embedded in the PROJECT config.yaml, and
+  //      never import it (#2023): a repository file must not choose the key.
+  //   2. migrateLicenseKeyAtStartup moves a MACHINE-config key into both
+  //      stores (deleting the YAML line only once the keychain holds it) and
+  //      reconciles SecretStorage with the keychain entry (#2027).
   // Cache the resolved key for sync consumers (LicensePreflight, TelemetryUploader).
   let cachedLicenseKey: string | undefined;
 
-  /** Extract platform.license_key from a YAML file via a line scan (no parser). */
-  const extractLicenseKeyLine = (raw: string): { key?: string; lineIndex: number } => {
-    const lines = raw.split("\n");
-    let inPlatform = false;
-    for (let i = 0; i < lines.length; i++) {
-      const trimmed = lines[i].trim();
-      if (trimmed === "platform:") {
-        inPlatform = true;
-        continue;
-      }
-      if (
-        inPlatform &&
-        trimmed &&
-        !trimmed.startsWith("#") &&
-        /^[a-z_]+:/.test(trimmed) &&
-        !lines[i].startsWith(" ") &&
-        !lines[i].startsWith("\t")
-      ) {
-        inPlatform = false;
-        continue;
-      }
-      if (inPlatform) {
-        const m = trimmed.match(/^license_key:\s*(.+)$/);
-        if (m) {
-          return { key: m[1].replace(/^['"]|['"]$/g, "").trim(), lineIndex: i };
-        }
-      }
-    }
-    return { lineIndex: -1 };
-  };
-
   const primaryWorkspaceForMigration = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (secretService) {
-    void (async () => {
+    const reconciliation = (async () => {
       const fsLib = await import("fs");
       const pathLib = await import("path");
 
-      // 1. Strip + migrate any key embedded in the project config (committed).
+      // 1. A key in the project config is never imported (#2023): the file
+      //    comes from the repository, so importing it would let any clone
+      //    replace the operator's key. Tell the user to remove it instead; the
+      //    binary refuses the config until they do.
       if (primaryWorkspaceForMigration) {
         const cfgPath = pathLib.join(primaryWorkspaceForMigration, ".nightgauge", "config.yaml");
         if (fsLib.existsSync(cfgPath)) {
-          const raw = fsLib.readFileSync(cfgPath, "utf-8");
-          const { key: foundKey, lineIndex } = extractLicenseKeyLine(raw);
+          const { key: foundKey } = extractLicenseKeyLine(fsLib.readFileSync(cfgPath, "utf-8"));
           if (foundKey) {
-            await secretService.setSecret(SECRET_KEYS.platformLicenseKey, foundKey);
-            cachedLicenseKey = foundKey;
-            const lines = raw.split("\n");
-            lines.splice(lineIndex, 1);
-            fsLib.writeFileSync(cfgPath, lines.join("\n"), "utf-8");
-            return;
+            void vscode.window.showWarningMessage(
+              "Nightgauge: .nightgauge/config.yaml sets platform.license_key. It was not imported: " +
+                "a repository file must not supply your license key. Remove the line, rotate the " +
+                "key if it was ever committed, and set your own key in Nightgauge settings."
+            );
           }
         }
       }
 
-      // 2. Seed SecretStorage from the machine config when it has no value yet.
-      cachedLicenseKey = await secretService.getSecret(SECRET_KEYS.platformLicenseKey);
-      if (!cachedLicenseKey) {
-        const machineCfgPath = getGlobalConfigPath();
-        if (fsLib.existsSync(machineCfgPath)) {
-          const machineRaw = fsLib.readFileSync(machineCfgPath, "utf-8");
-          const { key: machineKey, lineIndex } = extractLicenseKeyLine(machineRaw);
-          if (machineKey) {
-            await secretService.setSecret(SECRET_KEYS.platformLicenseKey, machineKey);
-            cachedLicenseKey = machineKey;
-            const lines = machineRaw.split("\n");
-            lines.splice(lineIndex, 1);
-            fsLib.writeFileSync(machineCfgPath, lines.join("\n"), "utf-8");
-          }
-        }
-      }
+      // 2. Seed SecretStorage from the machine config when it has no value
+      //    yet, store it in the keychain, and reconcile the two stores.
+      cachedLicenseKey = await migrateLicenseKeyAtStartup({
+        fs: fsLib,
+        secrets: secretService,
+        bridge: vscodeLicenseKeychainBridge(),
+        secretKey: SECRET_KEYS.platformLicenseKey,
+        machineConfigPath: getGlobalConfigPath(),
+      });
     })();
+    // The daemon spawn waits (bounded) for this, so it is never handed a
+    // SecretStorage key that reconciliation drops (IpcClientBase).
+    setLicenseReconciliation(reconciliation);
+    reconciliation.catch((err) =>
+      console.warn(
+        "[services] license key migration failed:",
+        err instanceof Error ? err.message : err
+      )
+    );
   }
 
   // Keep cache in sync when user updates the license key through the Settings panel.
@@ -696,7 +680,15 @@ export async function initializeServices(
           if (result.created) {
             logger.info("Created .nightgauge/.gitignore");
           } else if (result.updated) {
-            logger.info("Updated .nightgauge/.gitignore to latest version");
+            if (result.carried) {
+              logger.warn(
+                "Updated .nightgauge/.gitignore; rules found outside its Local additions " +
+                  "section were moved into it",
+                { carried: result.carried }
+              );
+            } else {
+              logger.info("Updated .nightgauge/.gitignore to latest version");
+            }
           } else if (result.deferred) {
             logger.warn(
               "The committed .nightgauge/.gitignore is older than the current template. " +
@@ -895,7 +887,7 @@ export async function initializeServices(
 
     // Initialize AutomationService for workflow automation triggers (Issue #137).
     // Skip on uninitialized repos — initialize() calls fs.mkdir on
-    // .nightgauge/logs which would resurrect the folder we just
+    // cloneLogsDir(root) which would resurrect the folder we just
     // intentionally skipped in ensureGitignore.
     if (await isRepoInitialized(nightgaugeRoot)) {
       automationService = new AutomationService(pipelineStateService, nightgaugeRoot);
@@ -1291,7 +1283,7 @@ export async function initializeServices(
   // concurrent multi-repo run — ignore it AND delete it so it can never be
   // resurrected as a zombie run in a repo that never ran the issue.
   if (nightgaugeRoot) {
-    const pipelineDir = path.join(nightgaugeRoot, ".nightgauge", "pipeline");
+    const pipelineDir = pipelineStateDir(nightgaugeRoot);
     // Best-effort: the "owner/repo" (or short name) of the repo that owns this
     // pipeline dir, for the repo-mismatch check. Undefined → mismatch check is
     // skipped (empty-identity check still applies).
@@ -1649,7 +1641,11 @@ export async function initializeServices(
       onSlotStageCompleted: (_slotIndex, issueNumber, stage) => {
         slotPhaseTrackers.get(issueNumber)?.completeStagePhases(stage);
       },
-      onSlotOutput: (_slotIndex, issueNumber, data, stage) => {
+      onSlotOutput: (_slotIndex, issueNumber, rawData, stage) => {
+        // The SDK CLI's liveness lines (#1657) move the idle clock and are
+        // never shown.
+        const data = stripAdapterActivityLines(rawData);
+        if (!data.trim()) return;
         // Detect phase markers in stdout for progress display (2/16 - [phase])
         if (stage) {
           const marker = parsePhaseMarker(data);
@@ -1835,12 +1831,7 @@ export async function initializeServices(
         if (funnelTarget) {
           const { owner: failOwner, repo: failRepo } = funnelTarget;
           const signalPath = nightgaugeRoot
-            ? path.join(
-                nightgaugeRoot,
-                ".nightgauge",
-                "pipeline",
-                `conflict-restart-${issueNumber}.json`
-              )
+            ? path.join(pipelineStateDir(nightgaugeRoot), `conflict-restart-${issueNumber}.json`)
             : null;
           const conflictRestartCheck = signalPath
             ? fs
@@ -2071,7 +2062,7 @@ export async function initializeServices(
     });
 
     // A second, TypeScript-side stale-slot scanner used to run here (#1643).
-    // It was deleted with #427: it scanned `<worktree>/.nightgauge/pipeline/
+    // It was deleted with #427: it scanned `pipelineStateDir(<worktree>)/
     // state.json`, a file nothing in this tree has ever written, so it returned
     // [] on every activation, and its repair path built an identity-less
     // PipelineStateService whose failStage could reach neither the wire nor the
@@ -2349,6 +2340,12 @@ export async function initializeServices(
     // An event-driven trigger the board probe answered with "nothing moved"
     // still re-renders what the store holds — the operator asked to look.
     onRerender: () => void attentionTreeProvider.refresh(),
+    // The last sweep's start survives a reload, so activation asks the board
+    // probe instead of re-sweeping a workspace nothing has changed in.
+    lastSweepStore: {
+      get: () => context.workspaceState.get<number>("nightgauge.attention.lastSweepAt"),
+      set: (ms) => void context.workspaceState.update("nightgauge.attention.lastSweepAt", ms),
+    },
   });
   context.subscriptions.push(attentionSweepService);
 
@@ -2710,8 +2707,16 @@ export async function initializeServices(
 
   // Initialize context file viewer
   // Use nightgaugeRoot (git root) for correct .nightgauge directory location
+  // The default context path resolves through the clone-layout helper; a
+  // user override keeps being joined onto the root as before (#2036).
   const contextPath = nightgaugeRoot
-    ? `${nightgaugeRoot}/${settings.contextPath}`
+    ? resolveCloneSetting(
+        nightgaugeRoot,
+        settings.contextPath,
+        RELATIVE_PIPELINE_STATE_DIR,
+        pipelineStateDir,
+        (root, rel) => `${root}/${rel}`
+      )
     : settings.contextPath;
   const contextViewer = new ContextFileViewer(contextPath);
 
@@ -2809,7 +2814,7 @@ export async function initializeServices(
   // Adapter usage meter (Issue #659) — the first production consumer of
   // AdapterUsageService (#658 shipped it with none; see ADR 018's
   // Consequences). Requires nightgaugeRoot: with no workspace/git root there is
-  // no `.nightgauge/pipeline/history/` to read, so the meter stays hidden
+  // no `pipelineStateDir(root)/history/` to read, so the meter stays hidden
   // rather than wired against a path that cannot exist.
   //
   // The Claude subscription-window provider (Issue #709) needs a place to
@@ -3168,7 +3173,7 @@ export async function initializeServices(
   // ── 13. Context watcher ───────────────────────────────────────────────
 
   // Initialize context watcher for Ready Issues → Pipeline integration
-  // This watches .nightgauge/pipeline/ for context files created by Claude Code terminal
+  // This watches pipelineStateDir(root)/ for context files created by Claude Code terminal
   // Use nightgaugeRoot (git root) so we watch the correct directory
   if (nightgaugeRoot) {
     const contextWatcher = new ContextWatcherService(nightgaugeRoot, logger);
@@ -3758,8 +3763,8 @@ export async function initializeServices(
         await pipelineStateService?.clearPipeline();
 
         // Delete context files
-        const contextDir = `${nightgaugeRoot}/.nightgauge/pipeline`;
-        const plansDir = `${nightgaugeRoot}/.nightgauge/plans`;
+        const contextDir = pipelineStateDir(nightgaugeRoot);
+        const plansDir = clonePlansDir(nightgaugeRoot);
 
         if (issueNumber) {
           // Clean up specific issue files

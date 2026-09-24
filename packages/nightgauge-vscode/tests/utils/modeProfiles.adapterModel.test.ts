@@ -11,7 +11,7 @@ import { describe, it, expect } from "vitest";
 import { getAdapterModelForBand, getModeStageAdapterModel } from "../../src/utils/modeProfiles";
 import type { ExecutionAdapter } from "../../src/utils/resolvers/modelResolver";
 import type { PipelineStage } from "@nightgauge/sdk";
-import { resolveModelForAdapter } from "@nightgauge/sdk";
+import { getModelDescriptor, resolveModelForAdapter } from "@nightgauge/sdk";
 
 const STAGES: PipelineStage[] = [
   "issue-pickup",
@@ -173,6 +173,48 @@ describe("getAdapterModelForBand (Issue #387)", () => {
   it("keeps configured local models as the explicit tier-mapping exception", () => {
     expect(getAdapterModelForBand("opus", "lm-studio")).toEqual({
       model: "opus",
+      mismatch: true,
+    });
+  });
+});
+
+/**
+ * #1657: opencode's band follows the provider of its configured model
+ * (`opencode.model`), through the SDK's dispatchModelFor.
+ */
+describe("getAdapterModelForBand / getModeStageAdapterModel — opencode (#1657)", () => {
+  it("a local configured model is a mismatch for every band, so dispatch keeps it", () => {
+    for (const configured of ["lmstudio/qwen/qwen3.8-27b", "ollama/qwen3-coder:30b"]) {
+      for (const tier of ["haiku", "sonnet", "opus", "fable"] as const) {
+        expect(
+          getAdapterModelForBand(tier, "opencode", configured),
+          `${configured} ${tier}`
+        ).toEqual({ model: tier, mismatch: true });
+      }
+      for (const stage of STAGES) {
+        expect(getModeStageAdapterModel("maximum", stage, "opencode", configured)?.mismatch).toBe(
+          true
+        );
+      }
+    }
+  });
+
+  it("a hosted configured provider translates the band to that provider's registry model", () => {
+    const opus = getModelDescriptor("opus", "anthropic");
+    expect(opus?.provider).toBe("anthropic");
+    expect(getAdapterModelForBand("opus", "opencode", "anthropic/claude-sonnet-5")).toEqual({
+      model: `anthropic/${opus!.id}`,
+      mismatch: false,
+    });
+    // The band's Claude id is never returned bare: opencode needs <provider>/<model>.
+    expect(getAdapterModelForBand("opus", "opencode", "anthropic/claude-sonnet-5")?.model).not.toBe(
+      opus!.id
+    );
+  });
+
+  it("no configured model is a mismatch", () => {
+    expect(getAdapterModelForBand("sonnet", "opencode")).toEqual({
+      model: "sonnet",
       mismatch: true,
     });
   });

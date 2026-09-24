@@ -40,11 +40,13 @@ func TestAutonomousRun_SweepsTheClaimRegistryAfterTakingItsLease(t *testing.T) {
 	t.Chdir(t.TempDir())
 	// The token the client would otherwise resolve from the ambient `gh`
 	// account, which is present on a maintainer machine and absent in CI. A
-	// non-empty --token short-circuits clientFromConfig with no network call,
-	// so the stop below is the same one everywhere.
-	prevToken := globalToken
-	globalToken = "test-token-not-a-credential"
-	t.Cleanup(func() { globalToken = prevToken })
+	// GITHUB_TOKEN with no config (so no github_user) resolves in
+	// clientFromConfig with no network call and no gh subprocess, in CI and
+	// out of it, so the stop below is the same one everywhere.
+	t.Setenv("GITHUB_TOKEN", "test-token-not-a-credential")
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("NIGHTGAUGE_CONFIG_HOME", t.TempDir())
+	t.Setenv("NIGHTGAUGE_STATE_HOME", t.TempDir())
 
 	// A dead record and an orphaned lock: the two shapes the issue measured
 	// 143 and 174 of.

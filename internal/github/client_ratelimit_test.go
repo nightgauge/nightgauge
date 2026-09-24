@@ -14,6 +14,10 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/shurcooL/graphql"
+
+	types "github.com/nightgauge/nightgauge/internal/forge/types"
 )
 
 // graphQLProbeServer returns an httptest server that responds to any GraphQL
@@ -21,13 +25,14 @@ import (
 // X-RateLimit-* response headers. The server records the count of incoming
 // requests so tests can assert "no GraphQL call dispatched" semantics.
 //
-// The probe call these tests drive is RepoService.RepoMetadata, chosen because
-// docs/GITHUB_GRAPHQL_SCHEMA.md classifies it requires-GraphQL: REST reports a
-// default_branch for a repository that has none, so it can never be migrated.
-// A probe that CAN move takes this coverage with it when it does — #849 moved
+// The probe call these tests drive is graphQLProbeService.RepoMetadata: the
+// repository query issued straight through Client.query. A probe that CAN move
+// takes this coverage with it when it does — #849 moved
 // Client.GetRepositoryID to REST and these tests silently became REST-gate
 // tests, duplicating TestREST_* below while leaving the GraphQL gate untested.
-// Pick a probe whose transport is pinned by a documented reason.
+// RepoService.RepoMetadata was the probe until it, too, moved to REST
+// (conditional GET); so the probe is now the GraphQL path itself, which
+// cannot move.
 func graphQLProbeServer(t *testing.T, headers map[string]string, calls *int32) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -123,7 +128,7 @@ func TestRateLimitGate_TripsBelowFloor(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rate-limit.json")
 	tr := NewSharedRateLimitTracker(path)
 	resetAt := time.Now().Add(20 * time.Minute).Unix()
-	if err := tr.Set("alice", &RateLimitInfo{Remaining: 50, Limit: 5000, ResetAt: resetAt}); err != nil {
+	if err := tr.Set("alice", ResourceGraphQL, &RateLimitInfo{Remaining: 50, Limit: 5000, ResetAt: resetAt}); err != nil {
 		t.Fatalf("seed tracker: %v", err)
 	}
 
@@ -133,7 +138,7 @@ func TestRateLimitGate_TripsBelowFloor(t *testing.T) {
 
 	t.Setenv(rateLimitFloorEnv, "100")
 
-	_, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge")
+	_, err := (graphQLProbeService{c}).RepoMetadata(context.Background(), "nightgauge", "nightgauge")
 	if err == nil {
 		t.Fatal("expected ErrRateLimitGated, got nil")
 	}
@@ -171,7 +176,7 @@ func TestRateLimitGate_NoOpAboveFloor(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "rate-limit.json")
 	tr := NewSharedRateLimitTracker(path)
-	if err := tr.Set("alice", &RateLimitInfo{
+	if err := tr.Set("alice", ResourceGraphQL, &RateLimitInfo{
 		Remaining: 4500, Limit: 5000,
 		ResetAt: time.Now().Add(30 * time.Minute).Unix(),
 	}); err != nil {
@@ -181,7 +186,7 @@ func TestRateLimitGate_NoOpAboveFloor(t *testing.T) {
 	c := NewClientWithURL("test-token", srv.URL).WithRateLimitTracker(tr, "alice")
 	t.Setenv(rateLimitFloorEnv, "100")
 
-	meta, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge")
+	meta, err := (graphQLProbeService{c}).RepoMetadata(context.Background(), "nightgauge", "nightgauge")
 	if err != nil {
 		t.Fatalf("expected success above floor, got: %v", err)
 	}
@@ -193,16 +198,24 @@ func TestRateLimitGate_NoOpAboveFloor(t *testing.T) {
 	}
 }
 
-// TestRateLimitGate_NoOpWhenStale verifies that a stale tracker entry does
-// NOT gate (since we have no recent confidence in the count).
-func TestRateLimitGate_NoOpWhenStale(t *testing.T) {
+// TestRateLimitGate_StaleExhaustionStillGates is the end-to-end form of the
+// rule corrected on 2026-09-21. This test previously asserted the opposite —
+// "a stale entry does NOT gate, since we have no recent confidence in the
+// count" — and that rationale is the defect: staleness costs us confidence in
+// HOW MUCH is left, but none at all in whether the window has RESET, and a
+// below-floor reading can only move further down before it does. Because every
+// short-lived process and every between-burst producer starts with an entry
+// older than SharedTrackerMinCheckIntervalSecs, the old rule left the gate
+// open essentially always; the machine's tracker was 7h44m stale while the
+// account exhausted its GraphQL quota twice.
+func TestRateLimitGate_StaleExhaustionStillGates(t *testing.T) {
 	var calls int32
 	srv := graphQLProbeServer(t, nil, &calls)
 	defer srv.Close()
 
 	path := filepath.Join(t.TempDir(), "rate-limit.json")
 	tr := NewSharedRateLimitTracker(path)
-	if err := tr.Set("alice", &RateLimitInfo{
+	if err := tr.Set("alice", ResourceGraphQL, &RateLimitInfo{
 		Remaining: 5, Limit: 5000,
 		ResetAt: time.Now().Add(30 * time.Minute).Unix(),
 	}); err != nil {
@@ -213,7 +226,7 @@ func TestRateLimitGate_NoOpWhenStale(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	file.Entries["alice"].CheckedAt = time.Now().Unix() - int64(SharedTrackerMinCheckIntervalSecs) - 30
+	file.Entries["alice|graphql"].CheckedAt = time.Now().Unix() - int64(SharedTrackerMinCheckIntervalSecs) - 30
 	if err := tr.writeLocked(file); err != nil {
 		t.Fatal(err)
 	}
@@ -221,11 +234,46 @@ func TestRateLimitGate_NoOpWhenStale(t *testing.T) {
 	c := NewClientWithURL("test-token", srv.URL).WithRateLimitTracker(tr, "alice")
 	t.Setenv(rateLimitFloorEnv, "100")
 
-	if _, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
-		t.Fatalf("stale entry must not gate: %v", err)
+	if _, err := (graphQLProbeService{c}).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err == nil {
+		t.Fatal("stale below-floor entry inside its reset window must gate, got a dispatched call")
+	}
+	if got := atomic.LoadInt32(&calls); got != 0 {
+		t.Fatalf("expected the call to be gated before dispatch, got %d dispatched", got)
+	}
+}
+
+// TestRateLimitGate_NoOpWhenStaleAndNoReset keeps the "no recent confidence"
+// no-op for the one state where it is still the right answer: an entry that
+// carries no reset second at all, so there is nothing to say the window has
+// not already turned over.
+func TestRateLimitGate_NoOpWhenStaleAndNoReset(t *testing.T) {
+	var calls int32
+	srv := graphQLProbeServer(t, nil, &calls)
+	defer srv.Close()
+
+	path := filepath.Join(t.TempDir(), "rate-limit.json")
+	tr := NewSharedRateLimitTracker(path)
+	if err := tr.Set("alice", ResourceGraphQL, &RateLimitInfo{Remaining: 5, Limit: 5000}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	file, err := tr.readLocked()
+	if err != nil {
+		t.Fatal(err)
+	}
+	file.Entries["alice|graphql"].ResetAt = 0
+	file.Entries["alice|graphql"].CheckedAt = time.Now().Unix() - int64(SharedTrackerMinCheckIntervalSecs) - 30
+	if err := tr.writeLocked(file); err != nil {
+		t.Fatal(err)
+	}
+
+	c := NewClientWithURL("test-token", srv.URL).WithRateLimitTracker(tr, "alice")
+	t.Setenv(rateLimitFloorEnv, "100")
+
+	if _, err := (graphQLProbeService{c}).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
+		t.Fatalf("stale entry with no reset must not gate: %v", err)
 	}
 	if got := atomic.LoadInt32(&calls); got != 1 {
-		t.Fatalf("expected the call to dispatch (stale → no-op), got %d", got)
+		t.Fatalf("expected the call to dispatch, got %d", got)
 	}
 }
 
@@ -239,7 +287,7 @@ func TestRateLimitGate_NoOpWhenResetPassed(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "rate-limit.json")
 	tr := NewSharedRateLimitTracker(path)
-	if err := tr.Set("alice", &RateLimitInfo{
+	if err := tr.Set("alice", ResourceGraphQL, &RateLimitInfo{
 		Remaining: 5, Limit: 5000,
 		ResetAt: time.Now().Add(-1 * time.Minute).Unix(),
 	}); err != nil {
@@ -249,7 +297,7 @@ func TestRateLimitGate_NoOpWhenResetPassed(t *testing.T) {
 	c := NewClientWithURL("test-token", srv.URL).WithRateLimitTracker(tr, "alice")
 	t.Setenv(rateLimitFloorEnv, "100")
 
-	if _, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
+	if _, err := (graphQLProbeService{c}).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
 		t.Fatalf("expected pass-through when reset window elapsed, got %v", err)
 	}
 	if got := atomic.LoadInt32(&calls); got != 1 {
@@ -265,7 +313,7 @@ func TestRateLimitGate_NoOpWithoutTracker(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClientWithURL("test-token", srv.URL)
-	if _, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
+	if _, err := (graphQLProbeService{c}).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
 		t.Fatalf("untracked client must still work: %v", err)
 	}
 	if got := atomic.LoadInt32(&calls); got != 1 {
@@ -282,7 +330,7 @@ func TestRateLimitGate_EnvOverride(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "rate-limit.json")
 	tr := NewSharedRateLimitTracker(path)
-	if err := tr.Set("alice", &RateLimitInfo{
+	if err := tr.Set("alice", ResourceGraphQL, &RateLimitInfo{
 		Remaining: 200, Limit: 5000,
 		ResetAt: time.Now().Add(30 * time.Minute).Unix(),
 	}); err != nil {
@@ -294,7 +342,7 @@ func TestRateLimitGate_EnvOverride(t *testing.T) {
 
 	// With the default floor (100), 200 is above → call passes.
 	t.Setenv(rateLimitFloorEnv, "")
-	if _, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
+	if _, err := (graphQLProbeService{c}).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
 		t.Fatalf("default floor should let 200 through: %v", err)
 	}
 	if got := atomic.LoadInt32(&calls); got != 1 {
@@ -303,7 +351,7 @@ func TestRateLimitGate_EnvOverride(t *testing.T) {
 
 	// Raise the floor to 500 → now 200 is below → call gates.
 	t.Setenv(rateLimitFloorEnv, "500")
-	_, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge")
+	_, err := (graphQLProbeService{c}).RepoMetadata(context.Background(), "nightgauge", "nightgauge")
 	if !errors.Is(err, ErrRateLimitGated) {
 		t.Fatalf("expected ErrRateLimitGated under raised floor, got %v", err)
 	}
@@ -330,11 +378,11 @@ func TestHeaderInterceptor_FeedsTracker(t *testing.T) {
 	c := NewClientWithURL("test-token", srv.URL).WithRateLimitTracker(tr, "alice")
 	t.Setenv(rateLimitFloorEnv, "100")
 
-	if _, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
+	if _, err := (graphQLProbeService{c}).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
 		t.Fatalf("call: %v", err)
 	}
 
-	entry, fresh, err := tr.Get("alice")
+	entry, fresh, err := tr.Get("alice", ResourceGraphQL)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -361,7 +409,7 @@ func TestHeaderInterceptor_NoTrackerNoOp(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClientWithURL("test-token", srv.URL)
-	if _, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
+	if _, err := (graphQLProbeService{c}).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
 		t.Fatalf("call: %v", err)
 	}
 	// No assertion on tracker — there isn't one. Just ensure no panic /
@@ -383,10 +431,10 @@ func TestHeaderInterceptor_SkipsResponsesWithoutHeaders(t *testing.T) {
 	tr := NewSharedRateLimitTracker(path)
 
 	c := NewClientWithURL("test-token", srv.URL).WithRateLimitTracker(tr, "alice")
-	if _, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
+	if _, err := (graphQLProbeService{c}).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
 		t.Fatalf("call: %v", err)
 	}
-	entry, _, err := tr.Get("alice")
+	entry, _, err := tr.Get("alice", ResourceGraphQL)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -430,12 +478,12 @@ func TestHeaderInterceptor_NoDoubleCount(t *testing.T) {
 	c := NewClientWithURL("test-token", srv.URL).WithRateLimitTracker(tr, "alice")
 
 	for i := 0; i < 2; i++ {
-		if _, err := NewRepoService(c).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
+		if _, err := (graphQLProbeService{c}).RepoMetadata(context.Background(), "nightgauge", "nightgauge"); err != nil {
 			t.Fatalf("call %d: %v", i, err)
 		}
 	}
 
-	entry, _, _ := tr.Get("alice")
+	entry, _, _ := tr.Get("alice", ResourceGraphQL)
 	if entry == nil {
 		t.Fatal("expected entry")
 	}
@@ -486,7 +534,15 @@ func TestHeadroomGate_MatchesClientDecisions(t *testing.T) {
 		{"one below the floor", &RateLimitInfo{Remaining: 99, Limit: 5000, ResetAt: future}, 0, true},
 		{"exhausted", &RateLimitInfo{Remaining: 0, Limit: 5000, ResetAt: future}, 0, true},
 		{"below floor but the window already reset", &RateLimitInfo{Remaining: 5, Limit: 5000, ResetAt: time.Now().Add(-time.Minute).Unix()}, 0, false},
-		{"below floor but the reading is stale", &RateLimitInfo{Remaining: 5, Limit: 5000, ResetAt: future}, time.Now().Add(-time.Hour).Unix(), false},
+		// A stale below-floor reading STILL gates. ResetAt, not CheckedAt, is
+		// the expiry for an exhaustion reading: until that second elapses the
+		// budget cannot have recovered, however old the reading is. This row
+		// asserted `false` until 2026-09-21, which is why the gate was dead
+		// code for most of its wall-clock life — every short-lived process and
+		// every between-burst producer starts with an entry older than 15s.
+		{"below floor and stale, but the window has not reset", &RateLimitInfo{Remaining: 5, Limit: 5000, ResetAt: future}, time.Now().Add(-time.Hour).Unix(), true},
+		// Freshness still governs when there is no reset to reason about.
+		{"below floor, stale, and no reset recorded", &RateLimitInfo{Remaining: 5, Limit: 5000, ResetAt: 0}, time.Now().Add(-time.Hour).Unix(), false},
 	}
 
 	for _, tc := range tests {
@@ -495,14 +551,14 @@ func TestHeadroomGate_MatchesClientDecisions(t *testing.T) {
 			tr := NewSharedRateLimitTracker(path)
 			if tc.entry != nil {
 				if tc.checkedAt == 0 {
-					if err := tr.Set("alice", tc.entry); err != nil {
+					if err := tr.Set("alice", ResourceGraphQL, tc.entry); err != nil {
 						t.Fatalf("seed tracker: %v", err)
 					}
 				} else {
 					// Written by hand: Set always stamps CheckedAt with now, and
 					// the stale row is the one case that needs an older stamp.
 					file := sharedTrackerFile{Version: sharedTrackerFileVersion, Entries: map[string]*SharedTrackerEntry{
-						"alice": {
+						"alice|graphql": {
 							Remaining: tc.entry.Remaining,
 							Limit:     tc.entry.Limit,
 							ResetAt:   tc.entry.ResetAt,
@@ -523,7 +579,7 @@ func TestHeadroomGate_MatchesClientDecisions(t *testing.T) {
 			c := NewClientWithURL("test-token", "https://example.invalid/graphql").
 				WithRateLimitTracker(tr, "alice")
 			c.gateLogger = silent
-			clientWait, clientGated := c.rateLimitResetWait()
+			clientWait, clientGated := c.rateLimitResetWait(ResourceGraphQL)
 
 			gateWait, gateGated := headroomGate{tracker: tr, user: "alice", logger: silent}.resetWait()
 
@@ -541,4 +597,24 @@ func TestHeadroomGate_MatchesClientDecisions(t *testing.T) {
 			}
 		})
 	}
+}
+
+// graphQLProbeService issues one GraphQL repository query through the
+// client's query path — the gate these tests exist to pin.
+type graphQLProbeService struct{ c *Client }
+
+func (p graphQLProbeService) RepoMetadata(ctx context.Context, owner, name string) (*types.Repo, error) {
+	var q struct {
+		Repository struct {
+			NameWithOwner    graphql.String
+			Owner            struct{ Login graphql.String }
+			Name             graphql.String
+			DefaultBranchRef *struct{ Name graphql.String }
+		} `graphql:"repository(owner: $owner, name: $name)"`
+	}
+	vars := map[string]interface{}{"owner": graphql.String(owner), "name": graphql.String(name)}
+	if err := p.c.Query(ctx, &q, vars); err != nil {
+		return nil, err
+	}
+	return &types.Repo{NameWithOwner: string(q.Repository.NameWithOwner), Owner: string(q.Repository.Owner.Login), Name: string(q.Repository.Name)}, nil
 }

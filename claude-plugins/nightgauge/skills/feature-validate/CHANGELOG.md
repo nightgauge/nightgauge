@@ -10,6 +10,18 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Compact render profile (#1663)** — `_profiles/compact.md`, selected by
+  `nightgauge skill render --profile compact`, fits a 32768-token window while
+  keeping every phase marker, gate and the `validate-{N}.json` contract.
+- **Honesty and no-flaky-dismissal Gotchas (#1663)** — record every gate
+  result as observed, never weakening a check to turn a catch into a pass; and
+  never dismiss a failing test as flaky without root-causing it.
+
+### Changed
+
+- The Exit Contract heading, its Gotcha and the Phase 8 comment drop a
+  predecessor-tracker issue citation that cannot resolve in this repository.
+
 - **Step 2.5 — Evidence of Execution Gate (#1261)** — Phase 2 now closes with
   `nightgauge gate check-test-execution`, which fails when the change adds test
   files the repo's own test command structurally cannot run (a Dart suite tagged

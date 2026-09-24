@@ -1,12 +1,15 @@
 package doctor
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/hometest"
+	"github.com/nightgauge/nightgauge/internal/models"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 )
 
@@ -22,7 +25,21 @@ import (
 // what stands between this suite and the operator's state.
 func TestMain(m *testing.M) {
 	cleanup := hometest.Isolate()
+	// checkOpenCode builds a per-run config through
+	// adapters.OpenCodeConfigInputFor/BuildOpenCodeConfig for every row this
+	// package checks, and that unconditionally asks in.Discover for the
+	// declared endpoint's limits (#1761) — so, unless a test opts back into
+	// the real thing (SwapOpenCodeLocalDiscoveryForTest(nil), matching
+	// cmd/nightgauge, internal/execution and internal/execution/adapters),
+	// every row here was asking whatever model server this machine runs.
+	// TestOpenCodeProbeRedactsBaseURL named the cost precisely: building a
+	// row for an RFC 5737 base_url sent a real discovery request there and
+	// blocked for the full ~2.4s timeout, next to ~0.2s for its own probe.
+	restoreDiscovery := adapters.SwapOpenCodeLocalDiscoveryForTest(func(adapters.OpenCodeEndpoint, string) (models.LocalDescriptor, error) {
+		return models.LocalDescriptor{}, errors.New("this package's TestMain asks no model server; a test that discovers swaps in a discovery of its own")
+	})
 	code := m.Run()
+	restoreDiscovery()
 	cleanup()
 	os.Exit(code)
 }

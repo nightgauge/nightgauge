@@ -114,7 +114,10 @@ export function registerRunCommand(cli: CAC, config: CLIConfig): void {
       formatter.info(`Starting pipeline for issue #${issueNumber}...`);
 
       try {
-        const queryFn = await createAdapterQueryFunction(finalConfig.adapter);
+        const queryFn = await createAdapterQueryFunction(finalConfig.adapter, {
+          // Signs of life while the adapter's child runs (#1657).
+          onActivity: (activity) => formatter.activity(activity),
+        });
         const orchestrator = new PipelineOrchestrator(queryFn, {
           stages,
           autoApprove: finalConfig.autoApprove,

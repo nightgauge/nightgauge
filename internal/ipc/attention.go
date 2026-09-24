@@ -784,6 +784,12 @@ type blockedFindingClearer struct{ server *Server }
 // then the hold IS still in place and the card must survive to say so.
 func (c blockedFindingClearer) ClearBlockedFinding(_ context.Context, repo string, issue int) error {
 	path := orchestrator.BlockedFindingPath(c.server.repoRoot(repo), issue)
+	if path == "" {
+		// No absolute root resolves, so we cannot tell whether the hold is on
+		// disk. os.Remove("") would report not-exist and resolve the card
+		// while the finding may still defer the issue (#2033).
+		return fmt.Errorf("attention: clear blocked finding for %s#%d: no repository root resolves", repo, issue)
+	}
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("attention: clear blocked finding for %s#%d: %w", repo, issue, err)
 	}

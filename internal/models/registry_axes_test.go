@@ -216,6 +216,7 @@ func TestTransportAndProvenanceValuesMatchSpikeInventory(t *testing.T) {
 	subscription := want{cli: &yes, provenance: RateProvenanceSubscription}
 
 	wants := map[string]want{
+		"claude-opus-5-5":           declaredBoth,
 		"claude-opus-5":             declaredBoth,
 		"claude-opus-4-8":           declaredBoth,
 		"claude-sonnet-5":           declaredBoth,

@@ -1,11 +1,19 @@
 # CI — build and test on isolated GitHub-hosted runners.
 name: CI
 
+# Pull requests only (#2055). The PR run IS the gate: main's ruleset sets
+# strict_required_status_checks_policy, so a PR merges only when it is up to
+# date with main, and its squash commit's tree is the PR head's tested tree.
+# Re-running these suites on push to main adds no evidence about the diff, it
+# only re-rolls nondeterministic tests. The PR caches these jobs restore are
+# saved on main by cache-warm.yml instead.
 on:
   pull_request:
     branches: [main]
-  push:
-    branches: [main]
+  # workflow_dispatch is the remedy post-merge verification names when a merge
+  # commit's tree was never tested (a ruleset bypass): dispatching on main puts
+  # the required checks on main's head (#2055).
+  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -55,9 +63,9 @@ jobs:
           cache: true
           cache-dependency-path: go.sum
       # The classification comes from the diff between the PR's base and head
-      # commits — not the branch name, not the PR title. On `push` (merge-skew)
-      # there is no pull_request payload, the SHAs are empty, and the script
-      # forces the full suite.
+      # commits — not the branch name, not the PR title. Any other event (this
+      # workflow runs on pull_request only since #2055) has no pull_request
+      # payload, the SHAs are empty, and the script forces the full suite.
       - name: Classify the pull request diff
         id: classify
         env:
@@ -117,9 +125,9 @@ jobs:
       # SKILL.md or docs/ edit is exactly a docs_only PR. Nothing else in the 12
       # required checks covers it: a C1 control is valid UTF-8, so Prettier
       # reformats around it and check-md-links.sh never looks at bytes. A
-      # mojibake docs sweep would have merged with all checks green and turned
-      # `main` red on the push run, which is the prediction-vs-observation gap
-      # AGENTS.md forbids. ~1s: the step above already warmed the build cache
+      # mojibake docs sweep would have merged with all checks green, and the PR
+      # run is the only gate this tree gets (#2055: nothing re-runs it on
+      # push to main). ~1s: the step above already warmed the build cache
       # for this package (internal/preflight is in cmd/nightgauge's graph).
       - name: Working-tree content guards (encoding, skill includes, portability)
         run: go test ./internal/preflight/ -count=1

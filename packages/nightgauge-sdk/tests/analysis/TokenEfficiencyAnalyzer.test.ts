@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { TokenEfficiencyAnalyzer } from "../../src/analysis/TokenEfficiencyAnalyzer.js";
+import { ANTHROPIC_TIER_COST_RATES } from "../../src/analysis/types.js";
 import type {
   ExecutionHistoryRecord,
   ExecutionHistoryRecordExtended,
@@ -1090,13 +1091,16 @@ describe("TokenEfficiencyAnalyzer", () => {
     });
 
     it("returns Opus cost rates for opus model", () => {
+      // Derived from the registry-backed default rates rather than a pinned
+      // price — a band rotation changes the concrete rate (see 31b5cbe9).
       const analyzer = new TokenEfficiencyAnalyzer();
       const rate = analyzer.getCostRateForModel("opus");
+      const want = ANTHROPIC_TIER_COST_RATES.opus!;
 
-      expect(rate.inputPerMillion).toBe(5.0);
-      expect(rate.outputPerMillion).toBe(25.0);
-      expect(rate.cacheReadPerMillion).toBe(0.5);
-      expect(rate.cacheCreationPerMillion).toBe(6.25);
+      expect(rate.inputPerMillion).toBe(want.inputPerMillion);
+      expect(rate.outputPerMillion).toBe(want.outputPerMillion);
+      expect(rate.cacheReadPerMillion).toBe(want.cacheReadPerMillion);
+      expect(rate.cacheCreationPerMillion).toBe(want.cacheCreationPerMillion);
     });
 
     it("falls back to defaultCostRate for unknown model", () => {
@@ -1141,12 +1145,13 @@ describe("TokenEfficiencyAnalyzer", () => {
         },
       });
 
-      // Sonnet and Opus should still have their defaults
+      // Sonnet and Opus should still have their defaults, read from the
+      // registry-backed rates rather than pinned (see 31b5cbe9).
       const sonnetRate = analyzer.getCostRateForModel("sonnet");
       expect(sonnetRate.inputPerMillion).toBe(3.0);
 
       const opusRate = analyzer.getCostRateForModel("opus");
-      expect(opusRate.inputPerMillion).toBe(5.0);
+      expect(opusRate.inputPerMillion).toBe(ANTHROPIC_TIER_COST_RATES.opus!.inputPerMillion);
     });
   });
 });

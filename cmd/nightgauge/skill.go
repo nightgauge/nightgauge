@@ -40,7 +40,8 @@ resolution, and absolute-path rewriting (ADR 016).`,
 // depth 0 and is what encodes.
 type renderEnvelope struct {
 	*skillrender.Result
-	Content string `json:"content,omitempty"`
+	Content string                 `json:"content,omitempty"`
+	Budget  *skillrender.FitResult `json:"budget,omitempty"`
 }
 
 // skillRenderCmd implements `nightgauge skill render` (#78).
@@ -52,10 +53,18 @@ func skillRenderCmd() *cobra.Command {
 		roots          []string
 		jsonOutput     bool
 		includeContent bool
+		contextWindow  int
+		profile        string
 	)
 	cmd := &cobra.Command{
 		Use:   "render",
 		Short: "Compose a stage's skill with includes and model overlays applied",
+		// The --context-window verdict path already wrote its own output
+		// (content plus a verdict line, or the --json envelope) before
+		// returning a non-zero exit via verdictExit; cobra's own "Error:
+		// exit status 1" plus a full Usage dump over that output would be
+		// noise, not help (main.go's verdictExit doc comment).
+		SilenceUsage: true,
 		Long: `Compose the executable skill text for a (stage, model) pair.
 
 Resolution is additive and fail-open (ADR 016 §2-§4). Overlay keys are derived
@@ -87,7 +96,13 @@ and the frontmatter tool lists renders once rather than twice.`,
   nightgauge skill render --stage pr-merge --model opus --skills-root ./skills --json
 
   # Body and provenance in one spawn (the extension's path — #79)
-  nightgauge skill render --stage pr-merge --model opus --skills-root ./skills --json --include-content`,
+  nightgauge skill render --stage pr-merge --model opus --skills-root ./skills --json --include-content
+
+  # Context-budget fit check against a model's window (ADR 023, #1645)
+  nightgauge skill render --stage pr-merge --skills-root ./skills --context-window 32768
+
+  # Compact profile: stage skeleton + on-demand Read directives (ADR 023 §Q5, #1654)
+  nightgauge skill render --stage pr-merge --skills-root ./skills --profile compact`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if stage == "" {
 				return fmt.Errorf("--stage is required (one of: %s)", strings.Join(knownStages(), ", "))
@@ -98,11 +113,19 @@ and the frontmatter tool lists renders once rather than twice.`,
 			if includeContent && !jsonOutput {
 				return fmt.Errorf("--include-content requires --json (without it the composed text is already stdout)")
 			}
+			// Same refusal shape as --include-content above: an unrecognized
+			// value silently rendering full (rather than erroring) is exactly
+			// the "flag that no-ops" defect class. "" and "full" both mean
+			// "no compact" (skillrender.Options.Profile's own contract).
+			if profile != "" && profile != "full" && profile != skillrender.ProfileCompact {
+				return fmt.Errorf("--profile must be \"full\" or %q (or omitted), got %q", skillrender.ProfileCompact, profile)
+			}
 			res, err := skillrender.Render(skillrender.Options{
 				Stage:       stage,
 				Model:       model,
 				Adapter:     adapter,
 				SkillsRoots: roots,
+				Profile:     profile,
 				// Warnings go to stderr so they never corrupt piped stdout,
 				// which is the composed prompt a caller feeds to an agent.
 				Warn: func(msg string) { fmt.Fprintln(os.Stderr, "warning:", msg) },
@@ -110,16 +133,45 @@ and the frontmatter tool lists renders once rather than twice.`,
 			if err != nil {
 				return err
 			}
+
+			// --context-window is gated at 0 so the no-flag path below stays
+			// byte-identical to today (ADR 023's own AC): Fit runs only when
+			// the caller asked for a verdict, never unconditionally.
+			var fit *skillrender.FitResult
+			if contextWindow > 0 {
+				f := skillrender.Fit(stage, res.Content, contextWindow)
+				fit = &f
+			}
+
 			if jsonOutput {
 				enc := json.NewEncoder(cmd.OutOrStdout())
 				enc.SetIndent("", "  ")
+				env := renderEnvelope{Result: res, Budget: fit}
 				if includeContent {
-					return enc.Encode(renderEnvelope{Result: res, Content: res.Content})
+					env.Content = res.Content
 				}
-				return enc.Encode(res)
+				if err := enc.Encode(env); err != nil {
+					return err
+				}
+			} else {
+				if _, err := fmt.Fprint(cmd.OutOrStdout(), res.Content); err != nil {
+					return err
+				}
+				if fit != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(),
+						"context budget: stage=%s estimated_tokens=%d budget=%d window=%d share=%.2f fits=%v\n",
+						stage, fit.EstimatedTokens, fit.Budget, fit.Window, fit.Share, fit.Fits)
+				}
 			}
-			_, err = fmt.Fprint(cmd.OutOrStdout(), res.Content)
-			return err
+
+			// verdictExit (main.go): the command has already written its
+			// output above; this only carries the non-zero exit code a
+			// failing fit requires, without cobra printing a second "Error:"
+			// line over output that already explains itself.
+			if fit != nil && !fit.Fits {
+				return verdictExit{code: 1}
+			}
+			return nil
 		},
 	}
 	cmd.Flags().StringVar(&stage, "stage", "", "Pipeline stage to render ("+strings.Join(knownStages(), ", ")+")")
@@ -128,6 +180,8 @@ and the frontmatter tool lists renders once rather than twice.`,
 	cmd.Flags().StringArrayVar(&roots, "skills-root", nil, "Directory containing skill directories (repeatable; first match wins)")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit the provenance envelope instead of the composed text")
 	cmd.Flags().BoolVar(&includeContent, "include-content", false, "With --json, carry the composed text in the envelope's \"content\" field (one spawn instead of two)")
+	cmd.Flags().IntVar(&contextWindow, "context-window", 0, "Model context window in tokens; when > 0, checks the render fits the stage's ADR-023 share and exits non-zero when it does not (0: no check, byte-identical to today)")
+	cmd.Flags().StringVar(&profile, "profile", "", "Render profile: \"full\" (default, omitting the flag is identical) or \"compact\" (ADR 023 §Q5, #1654). A stage with no compact profile falls back to full, with a warning.")
 	return cmd
 }
 

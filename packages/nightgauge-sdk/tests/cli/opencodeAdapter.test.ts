@@ -1,6 +1,6 @@
 /**
  * OpenCodeAdapter (#1637): registration, the argv the Go adapter emits, the
- * inert-until-#1648 run config, the fail-closed version floor, the model and
+ * run config's checks, the fail-closed version floor, the model and
  * credential checks, the child environment a real spawn gets, the redaction
  * of stderr and of the model's text, and killing the run's process group on
  * abort and when this process exits or is interrupted.
@@ -17,7 +17,7 @@ import {
 } from "node:fs";
 import { spawn as spawnProcess } from "node:child_process";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -33,6 +33,12 @@ import { defaultRegistry, isAgenticAdapter } from "../../src/cli/adapters/Adapte
 import { AdapterError } from "../../src/cli/adapters/errors.js";
 import type { PreflightCommandRunner } from "../../src/cli/codexPreflight.js";
 import type { SDKMessage } from "../../src/orchestrator/StageExecutor.js";
+import {
+  OPENCODE_ACTIVITY_EVENTS,
+  forwardOpenCodeActivity,
+} from "../../src/cli/adapters/cliQueryHelper.js";
+import type { AdapterActivity } from "../../src/cli/adapters/ICliAdapter.js";
+import { OutputFormatter } from "../../src/cli/output.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 const TESTDATA = join(REPO_ROOT, "internal/execution/testdata");
@@ -49,14 +55,31 @@ afterEach(() => {
   for (const d of tmpDirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
-/** A run config the way `nightgauge opencode config` would build one, under `root`. */
-function runConfig(root: string): OpenCodeRunConfig {
+/**
+ * A run config the way `nightgauge opencode config` would build one, under
+ * `root` — every key a real invocation of the verb prints (#1804: HOME,
+ * OPENCODE_DISABLE_PROJECT_CONFIG and the plugin/handshake trio are real
+ * verb output, not test-only additions; a fixture missing them let the SDK's
+ * allowlist gap in each pass unnoticed).
+ */
+function runConfig(root: string, binary = "/nonexistent/bin/opencode"): OpenCodeRunConfig {
   const env: Record<string, string> = {
+    HOME: join(root, "home"),
     XDG_CONFIG_HOME: join(root, "config"),
     XDG_DATA_HOME: join(root, "data"),
     XDG_CACHE_HOME: join(root, "cache"),
     XDG_STATE_HOME: join(root, "state"),
     GH_CONFIG_DIR: join(root, "gh"),
+    OPENCODE_DISABLE_PROJECT_CONFIG: "1",
+    NIGHTGAUGE_OPENCODE_PLUGIN_PATH: join(
+      root,
+      "config",
+      "opencode",
+      "nightgauge-plugin",
+      "nightgauge.js"
+    ),
+    NIGHTGAUGE_OPENCODE_PLUGIN_NONCE: "fixture-nonce",
+    NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL: join(root, ".opencode-plugin-fixture.json"),
   };
   for (const flag of [
     "OPENCODE_DISABLE_MODELS_FETCH",
@@ -74,8 +97,24 @@ function runConfig(root: string): OpenCodeRunConfig {
     configContent: JSON.stringify({ model: LOCAL_MODEL, share: "disabled" }),
     env,
     runDir: root,
+    pluginVersion: "1",
+    binary,
+    envWithhold: { prefixes: ["OPENCODE_"], names: [] },
+    runId: basename(root),
   };
 }
+
+/** A stand-in opencode that prints the research sample's stream. */
+function researchStub(): string {
+  const bin = writeStub(
+    tmp("oc-stub-"),
+    `  cat '${join(TESTDATA, "opencode_stream_research_sample.jsonl")}'`
+  );
+  return join(bin, "opencode");
+}
+
+/** The verb's cleanup stand-in: a fixture root is left to the test's tmp sweep. */
+const noClean = async () => {};
 
 function providerFor(config: OpenCodeRunConfig): OpenCodeRunConfigProvider {
   return async () => config;
@@ -99,12 +138,20 @@ function writeStub(dir: string, runBody: string): string {
       { info: { role: "assistant", providerID: "lmstudio", modelID: "qwen/qwen3.8-27b" } },
     ],
   });
+  // Like the real plugin's init, `run` writes the handshake sentinel before
+  // any event (dated in the past, as a plugin that loaded before every tool
+  // call would have), unless NO_SENTINEL is set.
   const script = `#!/bin/sh
 case "$1" in
 run)
   printf '%s\\n' "$@" > '${dir}/argv'
   env > '${dir}/env'
   cat > '${dir}/stdin'
+  if [ -z "$NO_SENTINEL" ] && [ -n "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL" ]; then
+    mkdir -p "$(dirname "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL")"
+    printf '{"nonce":"%s","plugin_version":"1","hooks":[]}' "$NIGHTGAUGE_OPENCODE_PLUGIN_NONCE" > "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL"
+    touch -t 202001010000 "$NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL"
+  fi
 ${runBody}
   ;;
 export)
@@ -120,6 +167,23 @@ esac
   writeFileSync(path, script);
   chmodSync(path, 0o755);
   return bin;
+}
+
+/**
+ * Create the query function and run one query: the run config is obtained
+ * per query, so a refused config surfaces here, before anything is spawned.
+ */
+async function runOnce(
+  adapter: OpenCodeAdapter,
+  opts: { cwd: string; stage?: string; skillDir?: string }
+): Promise<SDKMessage[]> {
+  const query = await adapter.createQueryFunction({ cwd: opts.cwd, stage: opts.stage });
+  return drain(
+    query({
+      prompt: "p",
+      options: { cwd: opts.cwd, ...(opts.skillDir !== undefined && { skillDir: opts.skillDir }) },
+    })
+  );
 }
 
 async function drain(gen: AsyncGenerator<SDKMessage>): Promise<SDKMessage[]> {
@@ -196,19 +260,79 @@ describe("OpenCodeAdapter argv (#1637)", () => {
   });
 });
 
-describe("OpenCodeAdapter without a run config provider (#1637)", () => {
-  it("createQueryFunction fails CONFIG_INVALID naming #1648 and spawns nothing", async () => {
+describe("OpenCodeAdapter run config (#1637, #1648)", () => {
+  it("by default obtains it from `nightgauge opencode config`, and spawns nothing when that fails", async () => {
     const spawn = vi.fn();
     const adapter = new OpenCodeAdapter({
-      env: { PATH: "/usr/bin" },
+      env: { PATH: "/usr/bin", NIGHTGAUGE_BIN: join(tmp("oc-nobin-"), "nightgauge") },
       model: LOCAL_MODEL,
       spawn: spawn as never,
     });
-    const err = await adapter.createQueryFunction({ cwd: tmp("oc-wt-") }).catch((e: unknown) => e);
+    const err = await runOnce(adapter, {
+      cwd: tmp("oc-wt-"),
+      stage: "feature-dev",
+      skillDir: join(tmp("oc-skills-"), "skills", "nightgauge-feature-dev"),
+    }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(AdapterError);
-    expect((err as AdapterError).category).toBe("CONFIG_INVALID");
-    expect((err as AdapterError).message).toContain("#1648");
+    expect((err as AdapterError).category).toBe("BINARY_NOT_FOUND");
+    expect((err as AdapterError).message).toContain("nightgauge opencode config");
     expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("refuses a run config without the plugin handshake", async () => {
+    for (const drop of [
+      "NIGHTGAUGE_OPENCODE_PLUGIN_NONCE",
+      "NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL",
+      "NIGHTGAUGE_OPENCODE_PLUGIN_PATH",
+    ]) {
+      const config = runConfig(tmp("oc-run-"));
+      const env = { ...config.env };
+      delete env[drop];
+      const adapter = new OpenCodeAdapter({
+        env: {},
+        model: LOCAL_MODEL,
+        runConfigProvider: providerFor({ ...config, env }),
+        runRootCleaner: noClean,
+      });
+      await expect(runOnce(adapter, { cwd: tmp("oc-wt-") }), drop).rejects.toThrow(
+        new RegExp(`it sets no ${drop}`)
+      );
+    }
+    const adapter = new OpenCodeAdapter({
+      env: {},
+      model: LOCAL_MODEL,
+      runConfigProvider: providerFor({ ...runConfig(tmp("oc-run-")), pluginVersion: "" }),
+      runRootCleaner: noClean,
+    });
+    await expect(runOnce(adapter, { cwd: tmp("oc-wt-") })).rejects.toThrow(
+      /names no plugin version/
+    );
+  });
+
+  it("refuses a run config without the vetted binary, the withheld set or the run id naming its root", async () => {
+    const cases: Array<[string, (c: OpenCodeRunConfig) => unknown, RegExp]> = [
+      ["no binary", ({ binary: _b, ...c }) => c, /binary is not an absolute path/],
+      [
+        "a relative binary",
+        (c) => ({ ...c, binary: "opencode" }),
+        /binary is not an absolute path/,
+      ],
+      ["no envWithhold", ({ envWithhold: _w, ...c }) => c, /withheld-variable set/],
+      ["no runId", ({ runId: _r, ...c }) => c, /run id does not name its run directory/],
+      ["another runId", (c) => ({ ...c, runId: "other" }), /run id does not name/],
+    ];
+    for (const [name, mutate, want] of cases) {
+      const spawn = vi.fn();
+      const adapter = new OpenCodeAdapter({
+        env: {},
+        model: LOCAL_MODEL,
+        spawn: spawn as never,
+        runConfigProvider: async () => mutate(runConfig(tmp("oc-run-"))) as OpenCodeRunConfig,
+        runRootCleaner: noClean,
+      });
+      await expect(runOnce(adapter, { cwd: tmp("oc-wt-") }), name).rejects.toThrow(want);
+      expect(spawn, name).not.toHaveBeenCalled();
+    }
   });
 
   it("a run config provider that returns nothing usable is refused too", async () => {
@@ -218,8 +342,9 @@ describe("OpenCodeAdapter without a run config provider (#1637)", () => {
       model: LOCAL_MODEL,
       spawn: spawn as never,
       runConfigProvider: async () => ({}) as OpenCodeRunConfig,
+      runRootCleaner: noClean,
     });
-    await expect(adapter.createQueryFunction({ cwd: tmp("oc-wt-") })).rejects.toMatchObject({
+    await expect(runOnce(adapter, { cwd: tmp("oc-wt-") })).rejects.toMatchObject({
       category: "CONFIG_INVALID",
     });
     expect(spawn).not.toHaveBeenCalled();
@@ -236,9 +361,82 @@ describe("OpenCodeAdapter without a run config provider (#1637)", () => {
         env: { ...config.env, OPENCODE_PERMISSION: '{"*":"allow"}' },
       }),
     });
-    await expect(adapter.createQueryFunction({ cwd: tmp("oc-wt-") })).rejects.toThrow(
+    await expect(runOnce(adapter, { cwd: tmp("oc-wt-") })).rejects.toThrow(
       /OPENCODE_PERMISSION, which is not a run variable/
     );
+  });
+
+  // #1804: InstallNightgaugePlugin (internal/execution/adapters/opencode.go)
+  // sets the plugin path, handshake and OPENCODE_DISABLE_PROJECT_CONFIG
+  // variables on every run with a run identity, and OpenCodeIsolationEnv
+  // sets the isolated HOME — all real `nightgauge opencode config --json`
+  // output (verified against the built verb). runConfig() now carries every
+  // one of them by default, so every test in this file that spawns through it
+  // already exercises acceptance; this asserts it directly too.
+  it("accepts a run config carrying the plugin/handshake variables, HOME and OPENCODE_DISABLE_PROJECT_CONFIG", async () => {
+    const root = tmp("oc-run-");
+    const adapter = new OpenCodeAdapter({
+      env: {},
+      model: LOCAL_MODEL,
+      runConfigProvider: providerFor(runConfig(root, researchStub())),
+      runRootCleaner: noClean,
+    });
+    const messages = await runOnce(adapter, { cwd: tmp("oc-wt-") });
+    expect(messages.some((m) => m.type === "result")).toBe(true);
+  });
+
+  // A NIGHTGAUGE_OPENCODE_PLUGIN_PATH/_SENTINEL outside the run's own root is
+  // refused rather than trusted: the plugin's init writes the sentinel file
+  // verbatim at this path (fs.writeFileSync, plugin/nightgauge.js), so an
+  // arbitrary absolute path would let a run config truncate a file anywhere
+  // on disk the SDK process can write to.
+  it("refuses a plugin path or sentinel outside the run's own root", async () => {
+    for (const name of ["NIGHTGAUGE_OPENCODE_PLUGIN_PATH", "NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL"]) {
+      const root = tmp("oc-run-");
+      const config = runConfig(root);
+      const adapter = new OpenCodeAdapter({
+        env: {},
+        model: LOCAL_MODEL,
+        runConfigProvider: providerFor({
+          ...config,
+          env: { ...config.env, [name]: "/etc/passwd" },
+        }),
+      });
+      await expect(runOnce(adapter, { cwd: tmp("oc-wt-") }), name).rejects.toThrow(
+        new RegExp(`its ${name} is not an absolute path in the run's root`)
+      );
+    }
+  });
+
+  // #1802's child-env half (the Go adapter forwarding this operator directory
+  // path to the opencode child) is already closed: BuildCommand deletes
+  // opencodeplugin.EnvOperatorInstallRisk from the child's env right before
+  // returning it (opencode.go, pinned by
+  // TestOpenCodeBuildCommandWithholdsOperatorInstallRiskFromTheChild). Only
+  // the config verb's *printed* env still carries it, because the verb prints
+  // RunRoot.Env directly, not BuildCommand's output. checkRunConfig must
+  // accept the name — refusing it would fail CONFIG_INVALID closed on every
+  // machine where an operator's $HOME/.opencode happens to be unsatisfied,
+  // which the operator neither set nor controls — while never letting it
+  // reach the child, mirroring BuildCommand's own delete. The spawn-level
+  // proof (the value is absent from the actual child env) lives in the
+  // "OpenCodeAdapter spawn" describe block below.
+  it("accepts NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK, an operator directory path, without forwarding it", async () => {
+    const root = tmp("oc-run-");
+    const config = runConfig(root, researchStub());
+    const adapter = new OpenCodeAdapter({
+      env: {},
+      model: LOCAL_MODEL,
+      runConfigProvider: providerFor({
+        ...config,
+        env: {
+          ...config.env,
+          NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK: "/home/operator/.opencode",
+        },
+      }),
+    });
+    const messages = await runOnce(adapter, { cwd: tmp("oc-wt-") });
+    expect(messages.some((m) => m.type === "result")).toBe(true);
   });
 });
 
@@ -318,6 +516,7 @@ describe("OpenCodeAdapter model check (#1637)", () => {
         model,
         spawn: spawn as never,
         runConfigProvider: provider,
+        runRootCleaner: noClean,
       });
       await expect(adapter.createQueryFunction({ cwd: tmp("oc-wt-") })).rejects.toMatchObject({
         category: "CONFIG_INVALID",
@@ -351,11 +550,12 @@ describe("OpenCodeAdapter spawn (#1637)", () => {
     const dir = tmp("oc-stub-");
     const bin = writeStub(dir, runBody);
     const worktree = tmp("oc-wt-");
-    const config = runConfig(tmp("oc-run-"));
+    const config = runConfig(tmp("oc-run-"), join(bin, "opencode"));
     const adapter = new OpenCodeAdapter({
       env: { ...PARENT, PATH: `${bin}:${process.env.PATH}`, ...extraEnv },
       model,
       runConfigProvider: providerFor(config),
+      runRootCleaner: noClean,
     });
     const query = await adapter.createQueryFunction({ cwd: worktree, stage: "feature-dev" });
     return { dir, worktree, config, query };
@@ -419,6 +619,33 @@ describe("OpenCodeAdapter spawn (#1637)", () => {
     expect(env.GH_TOKEN).toBe(PARENT.GH_TOKEN);
     expect(env.NIGHTGAUGE_ADAPTER).toBe("opencode");
     expect(env.NIGHTGAUGE_DISPATCH_MODEL).toBe(LOCAL_MODEL);
+  });
+
+  // #1804/#1802: checkRunConfig accepts NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK
+  // (see the acceptance test above), but curateOpenCodeChildEnv must never
+  // apply it — the TS twin of the Go adapter's BuildCommand deleting it from
+  // the child's own env right before returning it.
+  it("accepts NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK but never forwards it to the child", async () => {
+    const research = join(TESTDATA, "opencode_stream_research_sample.jsonl");
+    const dir = tmp("oc-stub-");
+    const bin = writeStub(dir, `  cat '${research}'`);
+    const worktree = tmp("oc-wt-");
+    const config = runConfig(tmp("oc-run-"), join(bin, "opencode"));
+    const adapter = new OpenCodeAdapter({
+      env: { ...PARENT, PATH: `${bin}:${process.env.PATH}` },
+      model: LOCAL_MODEL,
+      runConfigProvider: providerFor({
+        ...config,
+        env: {
+          ...config.env,
+          NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK: "/home/operator/.opencode",
+        },
+      }),
+    });
+    const query = await adapter.createQueryFunction({ cwd: worktree, stage: "feature-dev" });
+    await drain(query({ prompt: "p" }));
+    const env = readEnvFile(join(dir, "env"));
+    expect(env.NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK).toBeUndefined();
   });
 
   it("gives an anthropic run ANTHROPIC_API_KEY and no other provider's key", async () => {
@@ -530,6 +757,7 @@ const adapter = new OpenCodeAdapter({
   env: { PATH: process.env.STUB_PATH, HOME: process.env.HOME },
   model: ${JSON.stringify(LOCAL_MODEL)},
   runConfigProvider: async () => config,
+  runRootCleaner: async () => {},
 });
 const query = await adapter.createQueryFunction({ cwd: worktree, stage: "feature-dev" });
 if (mode === "handled") process.on("SIGINT", () => {});
@@ -586,7 +814,7 @@ process.kill(process.pid, "SIGINT");
           HOME: process.env.HOME,
           ADAPTER_URL,
           STUB_PATH: `${bin}:${process.env.PATH}`,
-          RUN_CONFIG: JSON.stringify(runConfig(tmp("oc-run-"))),
+          RUN_CONFIG: JSON.stringify(runConfig(tmp("oc-run-"), join(bin, "opencode"))),
         },
         stdio: ["ignore", "pipe", "pipe"],
       }
@@ -633,4 +861,110 @@ process.kill(process.pid, "SIGINT");
     expect(r.pids).toHaveLength(2);
     expect(r.survivors).toEqual([]);
   }, 20_000);
+});
+
+// ---------------------------------------------------------------------------
+
+/**
+ * #1657: the SDK's OpenCode adapter reads the process's stream only once it
+ * exits, and OpenCode prints nothing while a step generates, so the SDK
+ * forwards each step and tool event while the process runs — the extension's
+ * only sign that a slow local stage is alive.
+ */
+describe("OpenCode activity while the process runs (#1657)", () => {
+  const RESEARCH = join(TESTDATA, "opencode_stream_research_sample.jsonl");
+
+  /** The event types of the research capture, in order: the fixture's truth. */
+  function captureEvents(): string[] {
+    return readFileSync(RESEARCH, "utf-8")
+      .split("\n")
+      .filter((l) => l.trim() !== "")
+      .map((l) => (JSON.parse(l) as { type: string }).type);
+  }
+
+  async function run(onActivity?: (a: AdapterActivity) => void) {
+    const dir = tmp("oc-stub-");
+    // One captured line every 150 ms, then two quiet seconds before exit.
+    const bin = writeStub(
+      dir,
+      `  while IFS= read -r line; do printf '%s\\n' "$line"; sleep 0.15; done < '${RESEARCH}'\n  sleep 2`
+    );
+    const worktree = tmp("oc-wt-");
+    const adapter = new OpenCodeAdapter({
+      env: { PATH: `${bin}:${process.env.PATH}`, HOME: "/home/fixture" },
+      model: LOCAL_MODEL,
+      runConfigProvider: providerFor(runConfig(tmp("oc-run-"), join(bin, "opencode"))),
+      runRootCleaner: noClean,
+    });
+    const query = await adapter.createQueryFunction({
+      cwd: worktree,
+      stage: "feature-dev",
+      ...(onActivity && { onActivity }),
+    });
+    const messages = await drain(query({ prompt: "p", options: { cwd: worktree } }));
+    return { messages, endedAt: Date.now() };
+  }
+
+  it("forwards each step and tool event while the process runs, not at exit", async () => {
+    const seen: { event: string; at: number }[] = [];
+    const { endedAt } = await run((a) => {
+      expect(a.adapter).toBe("opencode");
+      seen.push({ event: a.event, at: Date.now() });
+    });
+
+    const expected = captureEvents().filter((t) => OPENCODE_ACTIVITY_EVENTS.has(t));
+    expect(expected).toContain("step_start");
+    expect(expected).toContain("step_finish");
+    expect(seen.map((s) => s.event)).toEqual(expected);
+    // Spread out as the process printed them, and all of it well before the
+    // query ended: the process was still in its two quiet seconds.
+    expect(seen[seen.length - 1].at - seen[0].at).toBeGreaterThanOrEqual(100);
+    expect(endedAt - seen[seen.length - 1].at).toBeGreaterThanOrEqual(1500);
+  }, 20_000);
+
+  it("leaves the query's messages exactly as they are without it", async () => {
+    const withActivity = await run(() => {});
+    const without = await run();
+    expect(withActivity.messages).toEqual(without.messages);
+    expect(withActivity.messages.find((m) => m.type === "result")?.usage).toBeDefined();
+  }, 30_000);
+
+  it("forwards only the event type, and ignores other lines and a throwing callback", () => {
+    const got: AdapterActivity[] = [];
+    const push = (a: AdapterActivity) => got.push(a);
+    forwardOpenCodeActivity('{"type":"text","part":{"text":"secret model text"}}', push);
+    forwardOpenCodeActivity("not json", push);
+    forwardOpenCodeActivity('{"type":"step_start"', push);
+    forwardOpenCodeActivity('{"type":"tool_use","part":{"tool":"bash"}}', push);
+    expect(got).toEqual([{ adapter: "opencode", event: "tool_use" }]);
+    expect(() =>
+      forwardOpenCodeActivity('{"type":"step_finish"}', () => {
+        throw new Error("boom");
+      })
+    ).not.toThrow();
+  });
+});
+
+describe("OutputFormatter.activity (#1657)", () => {
+  it("writes one JSON log line with no type in JSON mode, whatever the log level", () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      new OutputFormatter("json", "error").activity({ adapter: "opencode", event: "step_start" });
+      expect(log).toHaveBeenCalledTimes(1);
+      const line = log.mock.calls[0][0] as string;
+      expect(line).not.toContain("\n");
+      const parsed = JSON.parse(line) as Record<string, unknown>;
+      expect(parsed).toEqual({
+        level: "debug",
+        message: "adapter activity",
+        data: { adapter: "opencode", event: "step_start" },
+      });
+      expect(parsed).not.toHaveProperty("type");
+      expect(err).not.toHaveBeenCalled();
+    } finally {
+      log.mockRestore();
+      err.mockRestore();
+    }
+  });
 });

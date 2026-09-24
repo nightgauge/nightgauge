@@ -118,12 +118,14 @@ func (s *SanitizationConfig) ResolvedMode() SanitizationMode {
 // Used when per-repo github_user is not set — resolves the gh CLI user for each org.
 //
 // Token resolution priority (highest to lowest):
-//  1. GITHUB_TOKEN env var (CI/CD override)
-//  2. --token CLI flag (one-shot override)
-//  3. Token field (per-project PAT, this struct)
-//  4. Tokens[owner] (per-org PAT mapping, global config)
-//  5. gh auth token --user <user> (gh CLI fallback, deprecated)
-//  6. gh auth token (default gh CLI user, deprecated)
+//  1. On a CI host: GITHUB_TOKEN, then GH_TOKEN env var
+//  2. Token field (per-project PAT, this struct)
+//  3. Tokens[owner] (per-org PAT mapping, global config)
+//  4. gh auth token --user <user> (gh CLI fallback, deprecated)
+//  5. With no github_user: GITHUB_TOKEN env var, then gh auth token (default
+//     gh CLI user, deprecated)
+//
+// No token is accepted on argv (ADR-024 § 5, #2031).
 //
 // Token values support env:VAR_NAME syntax to avoid plaintext PATs in YAML.
 // Example: token: env:GITHUB_TOKEN_NIGHTGAUGE
@@ -1276,6 +1278,19 @@ type PipelineConfig struct {
 	// instead of hand-parsing the project file.
 	TokenBudgetCeiling *TokenBudgetCeilingConfig `yaml:"token_budget_ceiling,omitempty" json:"tokenBudgetCeiling,omitempty"`
 
+	// StageBudgets is pipeline.stage_budgets (#1652): per-stage turn,
+	// wall-clock and token ceilings, keyed by "default" or a stage name. They
+	// bind every stage the Go executor runs whether or not a USD cap is set,
+	// so a stage on a $0 local model is bounded too. Resolve with
+	// ResolveStageBudget.
+	StageBudgets map[string]StageBudget `yaml:"stage_budgets,omitempty" json:"stageBudgets,omitempty"`
+
+	// FeatureDevSubSessions is pipeline.feature_dev_sub_sessions (#1651):
+	// false opts out of running feature-dev as one bounded session per plan
+	// step on small context windows. nil means the default, which is on.
+	// Read through FeatureDevSubSessionsEnabled.
+	FeatureDevSubSessions *bool `yaml:"feature_dev_sub_sessions,omitempty" json:"featureDevSubSessions,omitempty"`
+
 	// StageAdapters maps a pipeline stage to the execution adapter that runs
 	// it — the canonical pipeline.stage_adapters.<stage> schema shared with
 	// the VSCode resolver and the SDK CLI (#54). Values use the collapsed
@@ -1389,6 +1404,208 @@ func (p *PipelineConfig) ResolveTokenBudgetCeilingUSD() float64 {
 		return DefaultTokenBudgetCeilingUSD
 	}
 	return p.TokenBudgetCeiling.CeilingUSD
+}
+
+// StageBudget is one entry of pipeline.stage_budgets (#1652, ADR-023 Q8).
+//
+//	pipeline:
+//	  stage_budgets:
+//	    default:
+//	      max_turns: 300
+//	    feature-dev:
+//	      max_wall_clock: 90m
+//	      max_tokens: 10000000
+//
+// For each field, 0 or absent inherits: a stage entry inherits the default
+// entry, and the default entry inherits the built-in default. -1 means
+// unlimited and is the only way to say so; it is warned about on every
+// dispatch, and it is refused on a stage no USD cap can bind: a zero-cost or
+// unpriced one (ResolveStageBudget).
+type StageBudget struct {
+	// MaxTurns bounds the stage's model turns: an assistant message for the
+	// claude CLI, a step for OpenCode (ADR-023 Q8 lists each adapter's).
+	MaxTurns int `yaml:"max_turns,omitempty" json:"maxTurns,omitempty"`
+	// MaxWallClock bounds the stage's run time, as a duration ("90m"). The
+	// stage's deadline is the smaller of this and its stage timeout.
+	MaxWallClock StageBudgetDuration `yaml:"max_wall_clock,omitempty" json:"maxWallClock,omitempty"`
+	// MaxTokens bounds the tokens the stage's model processed: input, output
+	// and cache writes, summed over the stream. Cache reads do not count.
+	MaxTokens int `yaml:"max_tokens,omitempty" json:"maxTokens,omitempty"`
+}
+
+// StageBudgetUnlimited is the one value that lifts a stage budget.
+const StageBudgetUnlimited = -1
+
+// StageBudgetDuration is max_wall_clock: a duration string ("90m", "2h"), or
+// the bare -1 that means unlimited, which YAMLDuration would read as -1ns.
+type StageBudgetDuration time.Duration
+
+// UnmarshalYAML reads a duration string, 0, or -1.
+func (d *StageBudgetDuration) UnmarshalYAML(value *yaml.Node) error {
+	var s string
+	if err := value.Decode(&s); err != nil {
+		return fmt.Errorf("max_wall_clock: %w", err)
+	}
+	switch strings.TrimSpace(s) {
+	case "-1":
+		*d = StageBudgetUnlimited
+		return nil
+	case "0":
+		*d = 0
+		return nil
+	}
+	dur, err := time.ParseDuration(strings.TrimSpace(s))
+	if err != nil {
+		return fmt.Errorf("max_wall_clock %q: want a duration such as 90m, or -1 for unlimited: %w", s, err)
+	}
+	*d = StageBudgetDuration(dur)
+	return nil
+}
+
+// MarshalYAML writes the form UnmarshalYAML reads.
+func (d StageBudgetDuration) MarshalYAML() (any, error) {
+	if d == StageBudgetUnlimited {
+		return StageBudgetUnlimited, nil
+	}
+	return time.Duration(d).String(), nil
+}
+
+// StageBudgetDefaultKey is the pipeline.stage_budgets entry every stage
+// inherits from.
+const StageBudgetDefaultKey = "default"
+
+// The built-in stage budgets (ADR-023 Q8). None is tighter than what a normal
+// hosted run needs: 400 turns is above the largest turn count recorded for a
+// claude stage (287), 4 hours is the largest stage timeout routing assigns
+// (the OpenCode local cap), and 25M processed tokens is above any hosted
+// stage recorded. The hosted turn default raises the native cap claude,
+// claude-sdk, grok and hosted OpenCode stages had (200) to 400. A zero-cost
+// stage keeps 200, the cap OpenCode stages already had (ADR-022), because
+// nothing priced stops it sooner.
+const (
+	DefaultStageMaxTurns         = 400
+	DefaultZeroCostStageMaxTurns = 200
+	DefaultStageMaxWallClock     = 4 * time.Hour
+	DefaultStageMaxTokens        = 25_000_000
+)
+
+// ResolvedStageBudget is the stage budget a dispatch runs under. A positive
+// field is a ceiling; StageBudgetUnlimited means none. Warnings holds the
+// lines to log for this dispatch.
+type ResolvedStageBudget struct {
+	MaxTurns     int
+	MaxWallClock time.Duration
+	MaxTokens    int
+	Warnings     []string
+}
+
+// StageCost is what the model registry says about a stage's price, the one
+// input the stage budgets take from the dispatch (#1652).
+type StageCost int
+
+const (
+	// StagePriced is a model the registry prices above $0: its USD caps
+	// bind it, so an explicit -1 is honoured.
+	StagePriced StageCost = iota
+	// StageUnpriced is a hosted model the registry cannot price. It is not
+	// zero-cost, so it gets the hosted defaults, but no USD cap can bind it
+	// either, so -1 is refused (fail closed).
+	StageUnpriced
+	// StageZeroCost is a zero-cost provider: a model server the operator
+	// runs, or a model the registry prices at $0. It gets the zero-cost turn
+	// default and -1 is refused.
+	StageZeroCost
+)
+
+// ResolveStageBudget returns the budget stage runs under, given what the
+// registry says about its price. A stage no USD cap can bind (zero-cost or
+// unpriced) always gets non-zero, bounded ceilings: an explicit -1 is refused
+// there. Safe on a nil receiver.
+func (p *PipelineConfig) ResolveStageBudget(stage string, cost StageCost) ResolvedStageBudget {
+	var budgets map[string]StageBudget
+	if p != nil {
+		budgets = p.StageBudgets
+	}
+	return ResolveStageBudget(budgets, stage, cost)
+}
+
+// ResolveStageBudget resolves one stage's budget from the pipeline.stage_budgets
+// entries; see (*PipelineConfig).ResolveStageBudget.
+func ResolveStageBudget(budgets map[string]StageBudget, stage string, cost StageCost) ResolvedStageBudget {
+	own, base := budgets[stage], budgets[StageBudgetDefaultKey]
+	var out ResolvedStageBudget
+	turnsDefault := DefaultStageMaxTurns
+	if cost == StageZeroCost {
+		turnsDefault = DefaultZeroCostStageMaxTurns
+	}
+	f := stageBudgetField{warnings: &out.Warnings, stage: stage, cost: cost}
+	out.MaxTurns = int(f.resolve("max_turns", int64(own.MaxTurns), int64(base.MaxTurns), int64(turnsDefault)))
+	out.MaxWallClock = time.Duration(f.resolve("max_wall_clock", int64(own.MaxWallClock), int64(base.MaxWallClock), int64(DefaultStageMaxWallClock)))
+	out.MaxTokens = int(f.resolve("max_tokens", int64(own.MaxTokens), int64(base.MaxTokens), int64(DefaultStageMaxTokens)))
+	return out
+}
+
+// stageBudgetField resolves the fields of one stage's budget.
+type stageBudgetField struct {
+	warnings *[]string
+	stage    string
+	cost     StageCost
+}
+
+// resolve picks one field: the stage's own value, else the default entry's,
+// else the built-in default. 0 inherits. -1 is unlimited where a USD cap can
+// bind the stage; where none can, it is refused. Any other negative value is
+// invalid. A refused or invalid value is warned about and falls through to
+// the next source, so a stage entry's refused -1 still gets the default
+// entry's limit.
+func (f stageBudgetField) resolve(key string, own, base, builtin int64) int64 {
+	for _, src := range []struct {
+		v    int64
+		from string
+	}{{own, "stage_budgets." + f.stage}, {base, "stage_budgets." + StageBudgetDefaultKey}} {
+		v := src.v
+		switch {
+		case v == 0:
+			continue
+		case v > 0:
+			return v
+		case v == StageBudgetUnlimited && f.cost == StagePriced:
+			*f.warnings = append(*f.warnings, fmt.Sprintf("pipeline.%s.%s is -1: %s", src.from, key, stageBudgetUnlimitedEffect(key)))
+			return StageBudgetUnlimited
+		case v == StageBudgetUnlimited:
+			why := "the stage is on a zero-cost provider"
+			if f.cost == StageUnpriced {
+				why = "the model registry cannot price the stage's model"
+			}
+			*f.warnings = append(*f.warnings, fmt.Sprintf(
+				"pipeline.%s.%s is -1 (unlimited), refused: %s, so no USD cap can stop it; the next configured or built-in limit applies",
+				src.from, key, why))
+		default:
+			*f.warnings = append(*f.warnings, fmt.Sprintf(
+				"pipeline.%s.%s is %s, which is not a limit (only -1 means unlimited); the next configured or built-in limit applies",
+				src.from, key, formatStageBudgetValue(key, v)))
+		}
+	}
+	return builtin
+}
+
+// stageBudgetUnlimitedEffect says what an honoured -1 leaves in place.
+func stageBudgetUnlimitedEffect(key string) string {
+	switch key {
+	case "max_turns":
+		return "no turn budget: turns are not counted on the stream and none is passed to the adapter, so only the adapter's own default cap applies (--max-turns 200 for claude, claude-sdk, grok, lm-studio and ollama; 200 OpenCode steps; none for codex, gemini and copilot)"
+	case "max_wall_clock":
+		return "no wall-clock budget: only the stage timeout bounds the stage's run time"
+	}
+	return "no token budget: the stage's tokens are not bounded"
+}
+
+// formatStageBudgetValue renders a field's value for a warning.
+func formatStageBudgetValue(key string, v int64) string {
+	if key == "max_wall_clock" {
+		return time.Duration(v).String()
+	}
+	return fmt.Sprintf("%d", v)
 }
 
 // SurvivalConfig is the pipeline.survival: block (#4151, spike #4134).
@@ -1930,6 +2147,11 @@ func load(workspaceRoot string) (*Config, error) {
 		if err := json.Unmarshal(data, legacy); err != nil {
 			return nil, fmt.Errorf("parse config: %w", err)
 		}
+		// The legacy JSON file is a repository tier like config.yaml: the
+		// same credential rule and platform strip apply (#2023).
+		if err := ValidateLegacyJSONCredentials(legacy, jsonPath); err != nil {
+			return nil, err
+		}
 		return legacy, nil
 	}
 	return LoadMerged(workspaceRoot)
@@ -2344,11 +2566,27 @@ func resolveEnvRef(ref string) (string, error) {
 	}
 	varName := ref[len(prefix):]
 	if varName == "" {
-		return "", fmt.Errorf("invalid env: reference %q: variable name is empty", ref)
+		return "", fmt.Errorf("invalid env: reference: variable name is empty")
+	}
+	// Never echo a name shaped like a credential: `env:ghp_…` is a token
+	// pasted after the prefix, and this message reaches stderr and IPC logs.
+	shown := redactCredentialShaped(varName)
+	if shown != varName {
+		return "", fmt.Errorf("invalid env: reference %s: that is a credential, not an environment variable name (value redacted)", shown)
 	}
 	val := os.Getenv(varName)
 	if val == "" {
 		return "", fmt.Errorf("environment variable %q referenced by config token is not set or empty", varName)
 	}
 	return val, nil
+}
+
+// FeatureDevSubSessionsEnabled resolves pipeline.feature_dev_sub_sessions
+// (#1651). Default on; only an explicit false turns it off. Safe on a nil
+// receiver.
+func (p *PipelineConfig) FeatureDevSubSessionsEnabled() bool {
+	if p == nil || p.FeatureDevSubSessions == nil {
+		return true
+	}
+	return *p.FeatureDevSubSessions
 }

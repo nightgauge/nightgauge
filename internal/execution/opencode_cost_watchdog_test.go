@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 	"github.com/nightgauge/nightgauge/internal/models"
@@ -37,6 +38,8 @@ type costStage struct {
 	childInput int
 	// exportFails makes every export exit 1, so no session's usage is read.
 	exportFails bool
+	// stageBudgets is the stage's pipeline.stage_budgets (#1652).
+	stageBudgets map[string]config.StageBudget
 }
 
 // costStageOutcome is what one stage left behind.
@@ -110,6 +113,7 @@ STEPS=%q
 
 	opts := openCodeStageOptions(stage.model, nil)
 	opts.CostBudget = stage.budget
+	opts.StageBudgets = stage.stageBudgets
 	opts.Timeout = 20 * time.Second
 	manager := NewManager(openCodeWorkspace(t), adapters.NewOpenCodeAdapter())
 	var result *adapters.RunResult

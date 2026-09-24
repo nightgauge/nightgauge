@@ -26,6 +26,62 @@ func TestRouter_MediumComplexity_UsesSonnet(t *testing.T) {
 	}
 }
 
+// TestSelectModel_Table pins the whole stage × complexity table, so a change
+// to any cell is a deliberate edit here rather than a side effect. Its
+// feature-dev row is the run-wide tier (dev_model) every reasoning stage
+// shares, so the #1909 implementation rule is deliberately NOT in it.
+func TestSelectModel_Table(t *testing.T) {
+	stages := []string{"issue-pickup", "feature-planning", "feature-dev", "feature-validate", "pr-create", "pr-merge"}
+	// Columns: complexity 2 (≤3), 5 (≤6), 9 (>6).
+	want := map[string][3]string{
+		"issue-pickup":     {ModelHaiku, ModelHaiku, ModelHaiku},
+		"feature-planning": {ModelSonnet, ModelSonnet, ModelSonnet},
+		"feature-dev":      {ModelHaiku, ModelSonnet, ModelOpus},
+		"feature-validate": {ModelHaiku, ModelSonnet, ModelOpus},
+		"pr-create":        {ModelHaiku, ModelHaiku, ModelHaiku},
+		"pr-merge":         {ModelHaiku, ModelHaiku, ModelHaiku},
+	}
+	for _, stage := range stages {
+		for i, score := range []int{2, 5, 9} {
+			if got := selectModel(stage, score); got != want[stage][i] {
+				t.Errorf("selectModel(%q, %d) = %s, want %s", stage, score, got, want[stage][i])
+			}
+		}
+	}
+}
+
+func TestImplementationBand(t *testing.T) {
+	tests := []struct {
+		name   string
+		labels []string
+		board  string
+		plan   string
+		want   string
+	}{
+		{"XS keeps today's tier", []string{"type:feature", "size:XS"}, "", "", ""},
+		{"S keeps today's tier", []string{"type:feature", "size:S"}, "", "", ""},
+		{"M label → opus", []string{"type:feature", "size:M"}, "", "", "opus"},
+		{"L label → opus", []string{"type:feature", "size:L"}, "", "", "opus"},
+		{"XL label → opus", []string{"type:feature", "size:XL"}, "", "", "opus"},
+		{"M board → opus", []string{"type:feature"}, "M", "", "opus"},
+		{"unsized (default M) keeps today's tier", []string{"type:feature"}, "", "", ""},
+		{"unsized, planner assessed M → opus", []string{"type:feature"}, "", "M", "opus"},
+		{"unsized, planner assessed S → today's tier", []string{"type:feature"}, "", "S", ""},
+		{"docs M is capped below the band", []string{"type:docs", "size:M"}, "", "", ""},
+		{"M at low priority scores as S", []string{"type:feature", "size:M", "priority:low"}, "", "", ""},
+		{"S at critical priority scores as M", []string{"type:feature", "size:S", "priority:critical"}, "", "", "opus"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := Derive(DeriveInput{Title: "t", Labels: tt.labels, BoardSize: tt.board, PlannerSize: tt.plan})
+			if got := ImplementationBand(d); got != tt.want {
+				t.Errorf("ImplementationBand(size %s from %s, complexity %d) = %q, want %q",
+					d.EffectiveSize, d.SizeSource, d.ComplexityScore, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRouter_HighComplexity_UsesOpus(t *testing.T) {
 	r := NewRouter(nil, "")
 	rec := r.Route(context.Background(), "feature-dev", complexity.Score{Value: 9})
@@ -244,17 +300,33 @@ func TestRouter_AutomaticRouting_NeverSelectsFable(t *testing.T) {
 	}
 }
 
-func TestModelPricing_FableIsTwiceOpus(t *testing.T) {
+// TestModelPricing_FablePricedAboveOpus pins modelPricing to the registry's
+// own rates rather than hardcoded absolutes — a band rotation changes the
+// concrete price, and a pinned dollar figure is exactly what let a stale
+// model id go unnoticed (see 31b5cbe9). Fable's registry entry is
+// independently priced at a premium over whichever model currently holds
+// the opus band; this test asserts that premium relationship, derived from
+// the registry, not a hardcoded ratio.
+func TestModelPricing_FablePricedAboveOpus(t *testing.T) {
+	opus, ok := models.Get(models.BandOpus)
+	if !ok {
+		t.Fatal("registry has no non-deprecated opus-band model")
+	}
+	fable, ok := models.Get(models.BandFable)
+	if !ok {
+		t.Fatal("registry has no non-deprecated fable-band model")
+	}
+
 	oi, oo := modelPricing(ModelOpus)
 	fi, fo := modelPricing(ModelFable)
-	if oi != 5.00 || oo != 25.00 {
-		t.Errorf("opus pricing = %.2f/%.2f, want 5.00/25.00", oi, oo)
+	if oi != opus.Rates.Input || oo != opus.Rates.Output {
+		t.Errorf("opus pricing = %.2f/%.2f, want registry %.2f/%.2f", oi, oo, opus.Rates.Input, opus.Rates.Output)
 	}
-	if fi != 10.00 || fo != 50.00 {
-		t.Errorf("fable pricing = %.2f/%.2f, want 10.00/50.00", fi, fo)
+	if fi != fable.Rates.Input || fo != fable.Rates.Output {
+		t.Errorf("fable pricing = %.2f/%.2f, want registry %.2f/%.2f", fi, fo, fable.Rates.Input, fable.Rates.Output)
 	}
-	if fi != oi*2 || fo != oo*2 {
-		t.Errorf("fable should be 2× opus: fable=%.2f/%.2f opus=%.2f/%.2f", fi, fo, oi, oo)
+	if fi <= oi || fo <= oo {
+		t.Errorf("fable should price above opus: fable=%.2f/%.2f opus=%.2f/%.2f", fi, fo, oi, oo)
 	}
 }
 

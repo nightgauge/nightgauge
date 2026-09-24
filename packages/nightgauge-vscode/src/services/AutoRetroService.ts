@@ -2,7 +2,7 @@
  * AutoRetroService - Automatic failure analysis after pipeline failures
  *
  * Performs deterministic failure classification and writes a structured retro
- * JSON to .nightgauge/retros/. Optionally creates GitHub issues for
+ * JSON to retrosDir(root)/. Optionally creates GitHub issues for
  * actionable findings.
  *
  * Design rules:
@@ -39,6 +39,13 @@
  * @see Issue #3204 - Auto-retro misclassifies network outages as 'validation-failure'
  */
 
+import {
+  pipelineStateDir,
+  retrosDir as cloneRetrosDir,
+  cloneLogsDir,
+  RELATIVE_PIPELINE_STATE_DIR,
+  isUsableWorkspaceRoot,
+} from "../utils/cloneLayout";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { Logger } from "../utils/logger";
@@ -509,6 +516,10 @@ const TERMINAL_KIND_CATEGORY: Record<TerminalFailureKind, RetroFailureCategory> 
 
   // Nightgauge's OWN configured ceilings tripped. Actionable in config.
   budget_exceeded: "budget-exceeded",
+  // #1651: the feature-dev sub-session bound, not a dollar budget, was spent
+  // with plan tasks unchecked; the remedy is the same shape — more room, or a
+  // smaller issue.
+  dev_step_cap_reached: "budget-exceeded",
   budget_ceiling_hit: "budget-exceeded",
 
   // A quality gate ran and honestly failed. There is a failing test, type
@@ -526,6 +537,9 @@ const TERMINAL_KIND_CATEGORY: Record<TerminalFailureKind, RetroFailureCategory> 
   // stage's contract says it wrote is absent, empty, or unreadable.
   orchestrator_crash: "state-management",
   stage_context_unreadable: "state-management",
+  // #1651: git could not read the worktree to fingerprint a feature-dev
+  // step. A filesystem/worktree fault, like an unreadable stage context.
+  dev_step_progress_unproven: "state-management",
 
   // The stage exited 0 and its post-condition gate found the work absent, or
   // found the contract step skipped. Inspect the gate result, not the logs.
@@ -983,7 +997,7 @@ export class AutoRetroService {
      * (`HeadlessOrchestrator.getRunRepoRoot()`) and is where the retro's own
      * output, `.nightgauge/config.yaml` and the daemon's logs live. Stage
      * DELIVERABLES do not live there in worktree mode: `feature-dev` writes
-     * `.worktrees/issue-210/.nightgauge/pipeline/dev-210.json`, and the repo
+     * `pipelineStateDir(<repo>/.worktrees/issue-210)/dev-210.json`, and the repo
      * root's `pipeline/` holds only `calibration.json` / `queue-state.json`.
      *
      * `getRunRepoRoot()` is deliberately NOT the authority here — see
@@ -1038,7 +1052,7 @@ export class AutoRetroService {
       }
 
       // Step 4: Ensure output directory
-      const retrosDir = path.join(workspaceRoot, ".nightgauge", "retros");
+      const retrosDir = cloneRetrosDir(workspaceRoot);
       await fs.mkdir(retrosDir, { recursive: true });
 
       // Step 5: Write retro JSON
@@ -1177,7 +1191,7 @@ export class AutoRetroService {
    * Each source is optional — missing sources are skipped silently.
    *
    * Sources collected (in order):
-   *   1. Per-issue session log: `.nightgauge/logs/<date>_<issue>_session.log`
+   *   1. Per-issue session log: `cloneLogsDir(root)/<date>_<issue>_session.log`
    *      — preferred when present (per-issue scope), falls back to dated
    *      whole-day logs.
    *   2. Pipeline context file for the failed stage.
@@ -1227,7 +1241,7 @@ export class AutoRetroService {
     // else the most recent dated log. The per-issue file is much smaller
     // and only contains lines tagged for this run.
     try {
-      const logsDir = path.join(workspaceRoot, ".nightgauge", "logs");
+      const logsDir = cloneLogsDir(workspaceRoot);
       const logFiles = await fs.readdir(logsDir);
       const today = new Date().toISOString().slice(0, 10);
       const perIssue = `${today}_${issueNumber}_session.log`;
@@ -1280,7 +1294,7 @@ export class AutoRetroService {
       // #1178 — the DIRECTORY, which #1143 left wrong while fixing the
       // filename. In worktree mode the stage wrote its deliverable inside the
       // worktree; the run's repo root holds only `calibration.json` and
-      // `queue-state.json`, so reading `<repo>/.nightgauge/pipeline/dev-210.json`
+      // `queue-state.json`, so reading `pipelineStateDir(<repo>)/dev-210.json`
       // is a guaranteed ENOENT for exactly the runs the retro exists to explain.
       //
       // Ordered worktree-first, repo-root-second rather than picking one: the
@@ -1290,13 +1304,15 @@ export class AutoRetroService {
       // path, not the same path twice.
       const roots = [deliverableRoot, workspaceRoot].filter(
         (root, index, all): root is string =>
-          typeof root === "string" && root.length > 0 && all.indexOf(root) === index
+          // Unusable (empty or relative) roots are dropped: the layout helper
+          // refuses them rather than resolve against the host's cwd (#2036).
+          isUsableWorkspaceRoot(root) && all.indexOf(root) === index
       );
       const tried: string[] = [];
       let read: { contextFile: string; contextContent: string } | undefined;
       let lastError = "no candidate root";
       for (const root of roots) {
-        const contextFile = path.join(root, ".nightgauge", "pipeline", contextFileName);
+        const contextFile = path.join(pipelineStateDir(root), contextFileName);
         tried.push(contextFile);
         try {
           read = { contextFile, contextContent: await fs.readFile(contextFile, "utf-8") };
@@ -1348,7 +1364,7 @@ export class AutoRetroService {
     // concatenated sources, one of which is the agent's own session log.
     let recordKind = "";
     try {
-      const historyDir = path.join(workspaceRoot, ".nightgauge", "pipeline", "history");
+      const historyDir = path.join(pipelineStateDir(workspaceRoot), "history");
       const historyFiles = await fs.readdir(historyDir);
       const jsonlFiles = historyFiles.filter((f) => f.endsWith(".jsonl")).sort();
       const lastFile = jsonlFiles[jsonlFiles.length - 1];
@@ -1372,9 +1388,7 @@ export class AutoRetroService {
     for (const diagName of [`${failedStage}-stalled.log`, `${failedStage}-cost-capped.log`]) {
       try {
         const diagPath = path.join(
-          workspaceRoot,
-          ".nightgauge",
-          "pipeline",
+          pipelineStateDir(workspaceRoot),
           "history",
           String(issueNumber),
           diagName
@@ -1894,7 +1908,9 @@ export class AutoRetroService {
       "validation-failure":
         "Review failing tests or type errors. Fix implementation before re-running.",
       "stall-kill":
-        "Open the stall diagnostic at .nightgauge/pipeline/history/<issue>/<stage>-stalled.log to see the last stdout/stderr captured before the kill. Common causes: a Bash command hung in the subagent, an infinite tool loop, or a stop-hook deadlock. Increase pipeline.stage_hard_caps if the stage is legitimately long; otherwise resume after addressing the hang.",
+        "Open the stall diagnostic at " +
+        RELATIVE_PIPELINE_STATE_DIR +
+        "/history/<issue>/<stage>-stalled.log to see the last stdout/stderr captured before the kill. Common causes: a Bash command hung in the subagent, an infinite tool loop, or a stop-hook deadlock. Increase pipeline.stage_hard_caps if the stage is legitimately long; otherwise resume after addressing the hang.",
       "cost-cap":
         "The per-stage cost cap fired before BudgetEnforcer's estimate-vs-actual grace landed, which usually indicates a runaway tool loop. Inspect token usage by tool to find the loop, then either increase the cap (pipeline.stage_cost_caps) or fix the loop. Re-running without addressing the cause will hit the cap again.",
       "infrastructure-outage":
@@ -1902,7 +1918,9 @@ export class AutoRetroService {
       "stop-hook-error":
         "The Claude CLI's stop-hook fired with an error and the subagent went silent. The most common source (#3234) is the nightgauge plugin's own Stop hook (`claude-plugins/nightgauge/hooks/stop-verification.sh`) failing because the `nightgauge` Go binary is not resolvable — typically when a stage runs in a worktree (`pipeline.worktree.enabled: true`) where `bin/nightgauge` was never built. Verify the binary is on PATH (`command -v nightgauge`) or in the canonical repo's `bin/`. After PR #3234 ships, the hook skips gracefully when the binary is unresolvable; if you still see this category, check `~/.claude/settings.json` for a user-defined Stop hook and inspect the failing hook's stderr.",
       "skill-no-op":
-        "The stage's LLM path reported success but the deterministic post-condition gate found the work never landed (pr-merge: the PR is not merged; pr-create: no open PR exists). Inspect `.nightgauge/pipeline/<stage>-<N>.json` for the verification result, then verify the gate/fallback path in PR_MERGE_STAGE.md / PR_CREATE_STAGE.md. Re-running without addressing the gate will repeat the no-op.",
+        "The stage's LLM path reported success but the deterministic post-condition gate found the work never landed (pr-merge: the PR is not merged; pr-create: no open PR exists). Inspect `" +
+        RELATIVE_PIPELINE_STATE_DIR +
+        "/<stage>-<N>.json` for the verification result, then verify the gate/fallback path in PR_MERGE_STAGE.md / PR_CREATE_STAGE.md. Re-running without addressing the gate will repeat the no-op.",
       "merge-blocked":
         "The PR cannot merge as-is and the pipeline correctly declined — this is not a pipeline bug. Resolve the named blocker on the PR: fix/re-run the failing check, satisfy the required review, or rebase a behind/conflicting branch. The issue is parked in 'In review'; re-queue once the PR is mergeable, or merge it manually if the failing check is non-blocking.",
       "adapter-unavailable":
@@ -1928,7 +1946,9 @@ export class AutoRetroService {
       "containment-breach":
         "The stage wrote into a repository it does not own (#129). It exited 0 and reported success, so no other signal marks the run failed. Attribute the out-of-worktree writes before touching anything: the containment record names the files and the repository. Then fix why the stage reached outside — usually a hard-coded path or a sibling-repo edit that belongs in its own session — rather than re-running and writing there again.",
       "validation-inconclusive":
-        "A validation tier ran and executed zero tests, so the suite proved nothing while reporting no failures. There is no failing test to open. Check the tier's target paths and tag filters (`exclude-tags`, the test-execution record under `.nightgauge/pipeline/`) against where the change actually landed — a green suite that ran nothing is the failure mode this kind exists to name.",
+        "A validation tier ran and executed zero tests, so the suite proved nothing while reporting no failures. There is no failing test to open. Check the tier's target paths and tag filters (`exclude-tags`, the test-execution record under `" +
+        RELATIVE_PIPELINE_STATE_DIR +
+        "/`) against where the change actually landed — a green suite that ran nothing is the failure mode this kind exists to name.",
       "credential-failure":
         "Fix the machine's git/forge credentials, then re-queue — the work itself was never attempted. Check the remote's scheme against what is configured (`git remote -v`): an SSH remote needs a loaded agent key, an HTTPS remote needs a credential helper or a token the forge still accepts. `Bad credentials` / HTTP 401 from the API means the token is present but rejected, so every board read, PR create and merge in the run would have failed the same way. Do NOT re-run at a higher model tier: no model can supply a credential, which is why the escalation gate declines this class (#878).",
       "context-window-exceeded":
@@ -2182,12 +2202,7 @@ export class AutoRetroService {
     logger: Logger
   ): Promise<{ prNumber: number } | null> {
     try {
-      const prContextPath = path.join(
-        workspaceRoot,
-        ".nightgauge",
-        "pipeline",
-        `pr-${issueNumber}.json`
-      );
+      const prContextPath = path.join(pipelineStateDir(workspaceRoot), `pr-${issueNumber}.json`);
       let prNumber: number | undefined;
       try {
         const raw = await fs.readFile(prContextPath, "utf-8");

@@ -113,7 +113,9 @@ func NewClient(cfg Config) (*Client, error) {
 //  1. the signed-in user's session JWT, pushed at runtime over IPC
 //     (platform.setSessionToken) and re-pushed on every token refresh;
 //  2. an explicit API key (env NIGHTGAUGE_API_KEY);
-//  3. the license key (config license_key / NIGHTGAUGE_LICENSE_KEY).
+//  3. the license key, as resolved by internal/keychain for the CLI and the
+//     daemon: NIGHTGAUGE_LICENSE_KEY, then the OS keychain entry, then
+//     platform.license_key in the machine-tier config file.
 //
 // The session token has to win. Several hosted routes — /v1/analytics/health,
 // /v1/analytics/trends, /v1/analytics/cost, /v1/audit/reports — authorise a

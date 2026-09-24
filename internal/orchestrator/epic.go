@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/forge/boardcache"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/hooks"
 	"github.com/nightgauge/nightgauge/pkg/types"
@@ -33,7 +34,9 @@ func (s *Scheduler) checkEpicCompletion(ctx context.Context, item types.BoardIte
 	if s.client != nil {
 		prVerifier = gh.NewPRService(s.client)
 		if s.projectNumber > 0 {
-			boardSvc = gh.NewProjectService(s.client, ownerPart, s.projectNumber)
+			// Through boardcache.WrapProject, so moving the issue to Done drops
+			// the daemon's open snapshot for this board (no-op without a cache).
+			boardSvc = boardcache.WrapProject(s.boardCache, gh.NewProjectService(s.client, ownerPart, s.projectNumber), ownerPart, s.projectNumber)
 		}
 	}
 

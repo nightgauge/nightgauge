@@ -18,6 +18,8 @@ type WorkflowRun struct {
 	ID         int64  `json:"id"`
 	Name       string `json:"name"`
 	HeadBranch string `json:"head_branch"`
+	HeadSHA    string `json:"head_sha"`
+	Event      string `json:"event"`
 	// Conclusion is one of: success, failure, cancelled, timed_out, skipped, action_required, neutral, stale, "" (in-flight).
 	Conclusion string `json:"conclusion"`
 	// Status is one of: queued, in_progress, completed.

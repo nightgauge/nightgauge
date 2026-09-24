@@ -29,7 +29,9 @@ import (
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
 	stagecontext "github.com/nightgauge/nightgauge/internal/execution/context"
+	"github.com/nightgauge/nightgauge/internal/execution/opencodeplugin"
 	"github.com/nightgauge/nightgauge/internal/forge"
+	"github.com/nightgauge/nightgauge/internal/forge/boardcache"
 	"github.com/nightgauge/nightgauge/internal/git"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/hooks"
@@ -41,6 +43,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 	"github.com/nightgauge/nightgauge/internal/knowledge"
 	kbworkspace "github.com/nightgauge/nightgauge/internal/knowledge/workspace"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/models"
 	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
 	"github.com/nightgauge/nightgauge/internal/orchestrator/recovery"
@@ -123,7 +126,11 @@ type StageRunParams struct {
 	// it rather than sending an empty id the server's identity-bearing verbs
 	// would then hard-reject, silently, one swallowed `.catch` at a time
 	// (ADR-017 Decision 10).
-	RunID        string
+	RunID string
+	// StageBudgets is pipeline.stage_budgets (#1652): the Go executor
+	// resolves the stage's turn, wall-clock and token ceilings from it. The
+	// extension-hosted runner does not read it yet.
+	StageBudgets map[string]config.StageBudget
 	AllowedTools []string
 	Prompt       string
 	PhaseEventFn func(stage, name string, index, total int)
@@ -141,6 +148,74 @@ type StageRunParams struct {
 	// (resolveResumeSessionID). Empty on every ordinary dispatch and every
 	// adapter/model/worktree hop.
 	ResumeSessionID string
+}
+
+// openCodeCompactionCount reports how many "compaction" events the run's
+// OpenCode events file at path holds (#1653), through the one reader of that
+// file, opencodeplugin.CompactionCount, which contains the path to its run
+// dir, bounds the read and keeps no line content. A missing file counts 0.
+// A file the reader refuses (a symlink out of the run dir, a non-regular
+// file) or cannot read also counts 0, and the refusal is logged rather than
+// failing the stage: this is telemetry.
+//
+// The count needs no wait for the file to settle. session.js appends a
+// compaction line synchronously inside the opencode process, while the
+// session.compacted event is handled, so every compaction line is on disk
+// before the CLI exits. Only the terminal "stop_verify" line is written
+// after exit (#1810), and that is what WaitForRunEvent exists for.
+func openCodeCompactionCount(path string) int {
+	n, err := opencodeplugin.CompactionCount(path)
+	if err != nil {
+		log.Printf("context telemetry: compaction count unavailable, counting 0: %v", err)
+		return 0
+	}
+	return n
+}
+
+// stageContextProbe carries one stage attempt's context-telemetry baseline
+// (#1653) from before its session to after it. The zero value is an attempt
+// that ran no model session (a deterministic, refused or rate-limited arm).
+type stageContextProbe struct {
+	session           bool
+	eventsPath        string
+	eventsOK          bool
+	compactionsBefore int
+}
+
+// beginStageContext starts a session attempt's probe. The events file is per
+// run and per output file, so a retry of a stage appends to the file its
+// earlier attempts wrote: the baseline taken here makes the attempt's count
+// the file's growth across its own dispatch. Only OpenCode writes the file.
+func beginStageContext(adapterName, outputFile, runID string) stageContextProbe {
+	p := stageContextProbe{session: true}
+	if adapterName == "opencode" {
+		p.eventsPath, p.eventsOK = opencodeplugin.EventsPath(outputFile, runID)
+	}
+	if p.eventsOK {
+		p.compactionsBefore = openCodeCompactionCount(p.eventsPath)
+	}
+	return p
+}
+
+// record replaces the stage's context entry with this attempt's: the
+// result's peak, the dispatch window and the compaction delta for a session
+// attempt, and an empty entry, which clears the stage's, for an attempt that
+// ran no session.
+func (p stageContextProbe) record(rt *state.RuntimeState, stage state.PipelineStage, result *StageRunResult, window int) {
+	if !p.session {
+		rt.RecordStageContext(stage, 0, 0, nil)
+		return
+	}
+	var compactions *int
+	if p.eventsOK {
+		n := max(openCodeCompactionCount(p.eventsPath)-p.compactionsBefore, 0)
+		compactions = &n
+	}
+	peak := 0
+	if result != nil {
+		peak = result.PeakStepInputTokens
+	}
+	rt.RecordStageContext(stage, peak, window, compactions)
 }
 
 // StageRunResult is the cross-mode stage execution result.
@@ -221,6 +296,11 @@ type StageRunResult struct {
 	// captured by the executor at terminal failure — populated on the matching
 	// V3 record's StageDetail.last_output_lines so retros have evidence.
 	LastOutputLines string
+	// PeakStepInputTokens is the largest prompt a single model step sent
+	// (adapters.RunResult.PeakStepInputTokens): the numerator of the stage's
+	// context-window utilization (#1653). 0 means the adapter exposes no
+	// per-step prompt size.
+	PeakStepInputTokens int
 
 	// ── #3605 stage-exit diagnostic record fields ─────────────────────
 	// Forwarded verbatim from StageResultParams (IPC mode) for persistence
@@ -547,6 +627,7 @@ func stageOptionsFromParams(params StageRunParams) execution.StageOptions {
 		Effort:          params.Effort,
 		MaxTokens:       params.MaxTokens,
 		CostBudget:      params.CostBudget,
+		StageBudgets:    params.StageBudgets,
 		Timeout:         params.Timeout,
 		Runtime:         params.Runtime,
 		AllowedTools:    params.AllowedTools,
@@ -570,6 +651,8 @@ func (r *ExecutionManagerRunner) RunStage(ctx context.Context, params StageRunPa
 			// wins for classification, but LastOutputLines is what lands on
 			// the V3 record's StageDetail for retros regardless of err.
 			out.ErrorText, out.LastOutputLines = cliFailureText(result.Stdout, result.Stderr)
+			// A failed stage's peak is the one that says it hit the window.
+			out.PeakStepInputTokens = result.PeakStepInputTokens
 		}
 		return out, err
 	}
@@ -618,6 +701,11 @@ func cliRunResultToStageResult(result *adapters.RunResult) *StageRunResult {
 		Cancelled:    result.Cancelled,
 		InputTokens:  result.InputTokens,
 		OutputTokens: result.OutputTokens,
+		// The cache pools the adapter stream measured (#1651): dropping them
+		// here recorded every Go-direct stage's cache reads as 0.
+		CacheReadTokens:     result.CacheReadTokens,
+		CacheCreationTokens: result.CacheCreationTokens,
+		PeakStepInputTokens: result.PeakStepInputTokens,
 		// #91 served-model attribution, tracked by the execution manager's
 		// stream reader, and a multi-provider adapter's ADR-022 § 2 identity.
 		ServedModel:             result.ServedModel,
@@ -660,6 +748,10 @@ type Scheduler struct {
 	stateSvc      *state.BoardStateService
 	owner         string
 	projectNumber int
+	// boardCache is the daemon's shared snapshot cache, set by
+	// AutonomousScheduler.SetBoardCache, so the post-merge board sync in
+	// checkEpicCompletion invalidates it. Nil outside the daemon.
+	boardCache    *boardcache.Cache
 	workspaceRoot string
 
 	// attention is the shared Action Center DecisionRequest store (ADR 015),
@@ -838,7 +930,7 @@ type Scheduler struct {
 
 	// Callbacks
 	onStageStart    func(repo string, issue int, stage string, title string)
-	onStageComplete func(repo string, issue int, stage string, err error, inputTokens, outputTokens, cacheReadTokens int, costUsd float64, model string)
+	onStageComplete func(repo string, issue int, stage string, err error, cost StageCost, model string)
 	onEpicComplete  func(repo string, epicNumber int)
 	// evaluatePostMergeFn performs the post-merge evaluation. A field, not a
 	// direct call, for the same reason buildGraphFn is one: checkEpicCompletion
@@ -3405,7 +3497,7 @@ func (s *Scheduler) OnStageStart(fn func(repo string, issue int, stage string, t
 }
 
 // OnStageComplete sets a callback for when a stage completes.
-func (s *Scheduler) OnStageComplete(fn func(repo string, issue int, stage string, err error, inputTokens, outputTokens, cacheReadTokens int, costUsd float64, model string)) {
+func (s *Scheduler) OnStageComplete(fn func(repo string, issue int, stage string, err error, cost StageCost, model string)) {
 	s.onStageComplete = fn
 }
 
@@ -3948,10 +4040,11 @@ func schedulerTerminalOutcome(success bool, terminalFailureKind string) string {
 // StageRunParams.WorktreePath. Returns "" only when neither is available.
 // Issue #3542.
 func loadWorktreePath(workspaceRoot string, issueNumber int) string {
-	baseDir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline")
-	if rs, err := runstate.Load(baseDir); err == nil && rs != nil &&
-		rs.IssueNumber == issueNumber && rs.WorktreePath != nil && *rs.WorktreePath != "" {
-		return *rs.WorktreePath
+	if baseDir, err := layout.PipelineStateDir(workspaceRoot); err == nil {
+		if rs, err := runstate.Load(baseDir); err == nil && rs != nil &&
+			rs.IssueNumber == issueNumber && rs.WorktreePath != nil && *rs.WorktreePath != "" {
+			return *rs.WorktreePath
+		}
 	}
 	return workspaceRoot
 }
@@ -4110,6 +4203,20 @@ func PipelineBudgetCeilingUSD(workspaceRoot string) float64 {
 	return maxFloat64(base, readBudgetCeilingOverrideUSD(workspaceRoot))
 }
 
+// pipelineStageBudgets reads pipeline.stage_budgets (#1652) through the tier
+// merge. nil, the built-in defaults, when the workspace sets none or its
+// config cannot be read.
+func pipelineStageBudgets(workspaceRoot string) map[string]config.StageBudget {
+	if workspaceRoot == "" {
+		return nil
+	}
+	cfg, err := config.Load(workspaceRoot)
+	if err != nil || cfg == nil || cfg.Pipeline == nil {
+		return nil
+	}
+	return cfg.Pipeline.StageBudgets
+}
+
 func maxFloat64(a, b float64) float64 {
 	if a > b {
 		return a
@@ -4124,6 +4231,33 @@ func maxFloat64(a, b float64) float64 {
 // defer, so the run is still booked), which is exactly the kind of claim that
 // rots silently if nothing exercises it. Production never reassigns this.
 var newRunID = runstate.NewRunID
+
+// shouldSkipBoardRevert decides whether a failed run's board Status write
+// (back to Ready/Backlog, see the call site below) must be skipped rather
+// than applied. Extracted to a pure function so #1969's new condition —
+// mergedCommitSha != "" — is unit-testable without standing up the whole of
+// runPipeline.
+//
+// Issue #3542 supplies the first two terminal-kind conditions
+// (worktree_uncommitted, budget_ceiling_hit); #163 and #266 add
+// branch_forked and commit_orphaned. All four, plus workRecovered, share one
+// reason: re-dispatching regenerates work that already exists somewhere the
+// revert does not see (a recovery commit, spent budget, a branch that will
+// only fork again). #1969 adds a fifth for the opposite direction — not
+// "there's unseen work," but "the forge already gave a verdict and it must
+// not be relitigated": mergedCommitSha is runtime's post-merge ground-truth
+// breadcrumb, set ONLY after verifyPRMergeForStage confirms the PR's
+// MERGED state and checkEpicCompletion has run. A later stage failing (the
+// unregistered spike-materialize stage, #1969's own bug) must not undo a
+// Status write the successful merge already justified.
+func shouldSkipBoardRevert(workRecovered bool, terminalFailureKind string, mergedCommitSha string) bool {
+	return workRecovered ||
+		terminalFailureKind == TerminalKindWorktreeUncommitted ||
+		terminalFailureKind == TerminalKindBudgetCeiling ||
+		terminalFailureKind == TerminalKindBranchForked ||
+		terminalFailureKind == TerminalKindCommitOrphaned ||
+		mergedCommitSha != ""
+}
 
 // runPipeline executes the full 6-stage pipeline for a board item.
 //
@@ -4221,13 +4355,14 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			}
 		}
 		if runID == "" {
-			baseDir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline")
-			if rs, err := runstate.Load(baseDir); err == nil && rs != nil && rs.RunID != "" {
-				if runstate.IsIdentity(rs.RunID) {
-					runID = rs.RunID
-				} else {
-					log.Printf("#%d: ignoring non-identity run id %q from run-state.json — minting locally (ADR-017 Decision 1)",
-						item.Number, rs.RunID)
+			if baseDir, dirErr := layout.PipelineStateDir(workspaceRoot); dirErr == nil {
+				if rs, err := runstate.Load(baseDir); err == nil && rs != nil && rs.RunID != "" {
+					if runstate.IsIdentity(rs.RunID) {
+						runID = rs.RunID
+					} else {
+						log.Printf("#%d: ignoring non-identity run id %q from run-state.json — minting locally (ADR-017 Decision 1)",
+							item.Number, rs.RunID)
+					}
 				}
 			}
 		}
@@ -4703,39 +4838,10 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// Revert board status on failure so the autonomous scheduler can re-dispatch.
 		// Skips revert if issue is already "In Review" (PR was opened before failure),
 		// if its current status cannot be read (FailPipeline reports why), or if
-		// configured as "unchanged" (legacy behavior).
-		//
-		// Issue #3542: also skip the scheduler-side revert for the two
-		// recoverable terminal kinds. worktree_uncommitted means the work was
-		// preserved into a recovery commit; budget_ceiling_hit means the cost
-		// was real spend, not a code defect. Leaving the issue "In Progress"
-		// lets the pipeline (or operator) re-run the next stage. In autonomous
-		// mode, revertFailedIssueStatus still resets it to Ready for
-		// re-dispatch — but without a LifetimeIssueFailures increment.
-		//
-		// Issue #163 adds a third, for the opposite reason: branch_forked is NOT
-		// recoverable by re-running. Reverting the board to Ready re-dispatches
-		// the issue straight back into the same non-fast-forward rejection, which
-		// is the loop that burned a full pipeline per cycle. The issue stays put
-		// and its Action Center card is the way back in.
-		// commit_orphaned (#266) joins branch_forked for the same reason:
-		// reverting to Ready re-dispatches into a fresh worktree that redoes the
-		// work, while the commit the pipeline actually produced sits preserved
-		// (by the CleanupWorktree/CleanupLocalBranch ahead-of-base guard) on a
-		// branch nobody re-runs against automatically. The way back in is the
-		// Action Center card, not an automatic retry.
-		// workRecovered, not the kind (#875). The revert is harmful whenever a
-		// recovery commit exists — re-dispatch regenerates the work in a fresh
-		// worktree while the preserved commit sits on a branch nobody re-runs —
-		// and that is true regardless of what NAME the run's failure ended up
-		// with. Keying it on terminalFailureKind meant the protection could only
-		// be kept by also renaming the failure after the rescue. Strictly wider
-		// than the previous condition: every kind listed below still skips.
-		skipBoardRevert := workRecovered ||
-			terminalFailureKind == TerminalKindWorktreeUncommitted ||
-			terminalFailureKind == TerminalKindBudgetCeiling ||
-			terminalFailureKind == TerminalKindBranchForked ||
-			terminalFailureKind == TerminalKindCommitOrphaned
+		// configured as "unchanged" (legacy behavior), or if shouldSkipBoardRevert
+		// (above runPipeline) says this failure's cause must not be relitigated
+		// by a re-dispatch — see its doc comment for the five reasons.
+		skipBoardRevert := shouldSkipBoardRevert(workRecovered, terminalFailureKind, snap.MergedCommitSha)
 		if !pipelineSuccess && !skipBoardRevert && s.stateSvc != nil && s.onFailureStatus != "unchanged" {
 			var targetStatus state.BoardStatus
 			switch s.onFailureStatus {
@@ -4778,7 +4884,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// because they leave three different things on disk (the extension
 		// path's seal at internal/ipc/server.go makes the same three-way
 		// distinction, and for the same reason).
-		if stateDir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline"); workspaceRoot != "" {
+		if stateDir, dirErr := layout.PipelineStateDir(workspaceRoot); dirErr == nil {
 			if err := runtime.SealAndRemove(stateDir); err != nil {
 				switch {
 				case errors.Is(err, state.ErrNotRunOwner):
@@ -4934,6 +5040,10 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		ChangeType:        routingDecision.ChangeType,
 		ComplexityScore:   routingDecision.ComplexityScore,
 	})
+	// High-risk model floor: feature-dev and feature-validate dispatch on at
+	// least Opus for a risk_high issue, applied with the minimum_model floors
+	// so the performance mode's ceiling still caps it.
+	modelFloors = raiseRiskFloors(modelFloors, routingDecision)
 	if skips := schedulerSkippableStages(routingDecision.SkipStages); len(skips) > 0 {
 		kept := make([]state.PipelineStage, 0, len(stages))
 		for _, st := range stages {
@@ -5144,7 +5254,11 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// alias — so every escalation, floor, and downgrade below has to have
 		// been applied by the time Render runs. The behavioral preamble still
 		// applies after the prompt is assembled; only the resolution moves.
-		model := s.resolveDispatchModel(stage, item.Number, workspaceRoot, predictedModel, modelFloors, issueJobClass)
+		// The run's routed tier is per stage for feature-dev: the Decision's
+		// size can put implementation on Opus (routedStageModel), while every
+		// other stage keeps the run-wide prediction.
+		model := s.resolveDispatchModel(stage, item.Number, workspaceRoot,
+			routedStageModel(stage, predictedModel, routingDecision), modelFloors, issueJobClass)
 
 		// Compose SKILL.md through the one renderer (#78), overlay-aware (#79).
 		// With no overlay files present this is byte-identical to a base-only
@@ -5153,6 +5267,28 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		if s.execMgr != nil && s.execMgr.HasAdapter() {
 			adapterName = s.execMgr.AdapterName()
 		}
+
+		// Dispatch-time OpenCode readiness (#1646, ADR-022 § Endpoints):
+		// before anything is created, probe the SPECIFIC local endpoint this
+		// stage would dispatch to — never "some local server somewhere"
+		// (2026-09-12 multiple-endpoints amendment). A slow-but-healthy local
+		// model is not this check's business (#1657 watches liveness once
+		// the stage is running); this refuses only a server that does not
+		// answer or a model it has not loaded, before a subagent spawns and
+		// the failure would otherwise land as a generic subagent_crash.
+		if adapterName == "opencode" {
+			if verdict := resolveOpenCodeReadiness(workspaceRoot, model); !verdict.Ready {
+				reason := fmt.Sprintf("opencode readiness: %s", verdict.Reason)
+				terminalFailureKind, workRecovered = s.refusePreDispatch(item, runtime, workspaceRoot, stage, tracer,
+					"opencode-readiness", reason)
+				// refusePreDispatch's own return is always
+				// TerminalKindValidationError; this dispatch already knows the
+				// precise environmental kind the probe found.
+				terminalFailureKind = verdict.Kind
+				return
+			}
+		}
+
 		// descentProvider names the provider this dispatch will execute on
 		// (#611) — execMgr's adapter on the Go-direct path, and on the IPC
 		// path what the adapter itself reported for this stage's previous
@@ -5195,6 +5331,127 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			terminalFailureKind, workRecovered = s.refusePreDispatch(item, runtime, workspaceRoot, stage, tracer,
 				"skill-render", reason)
 			return
+		}
+
+		// A model on a local OpenCode endpoint is in no registry, so
+		// OverlayKeys resolves no window for it. Its window is the context
+		// limit the dispatch's own OpenCode config is built with (#1651).
+		if skillData.ContextWindow <= 0 && adapterName == "opencode" {
+			skillData.ContextWindow = openCodeDispatchWindow(ctx, workspaceRoot, model)
+		}
+
+		// Capacity-aware sizing (#1655): the issue's size against the cap the
+		// ADR 023 capacity table gives the smallest window among this and the
+		// remaining size-sensitive stages.
+		capacity := s.enforceIssueCapacity(ctx, capacityDispatch{
+			item: item, runtime: runtime, workspaceRoot: workspaceRoot, stage: stage,
+			remaining: stages[stageIdx+1:], tracer: tracer, adapterName: adapterName,
+			model: model, skillData: skillData, decision: routingDecision,
+			predictedModel: predictedModel, modelFloors: modelFloors, jobClass: issueJobClass,
+		})
+		if capacity.refused {
+			terminalFailureKind, workRecovered = TerminalKindContextWindowExceeded, capacity.workRecovered
+			return
+		}
+		model, skillData = capacity.model, capacity.skillData
+
+		// Context-budget fit check (ADR 023, #1645). skillData.ContextWindow
+		// is the descriptor OverlayKeys just resolved for the render above,
+		// or, for a local OpenCode model, the limit its run config is built
+		// with, so the check reads the window the dispatch runs with. Zero means unknown/unresolved
+		// (a hosted model absent from the registry, or a local provider
+		// whose limit did not resolve): ADR 023 §4's fail-open branch, so
+		// dispatch proceeds unchecked exactly as it did before this issue —
+		// only the branch taken is logged, so a trace can distinguish
+		// "checked and passed" from "not checked".
+		//
+		// ADR 023 Q3/Q5 order: the full render when it fits; else the
+		// stage's compact profile when it has one and it fits; else the
+		// one-hop re-route, else refusal.
+		if skillData.ContextWindow > 0 {
+			fit := skillrender.Fit(string(stage), skillData.Content, skillData.ContextWindow)
+			compactNote := ""
+			if !fit.Fits {
+				compactData, compactErr := skillrender.Render(skillrender.Options{
+					Stage:       string(stage),
+					Model:       model,
+					Adapter:     adapterName,
+					SkillsRoots: skillrender.DefaultRoots(workspaceRoot),
+					Profile:     skillrender.ProfileCompact,
+					Warn:        func(msg string) { log.Printf("#%d: %s", item.Number, msg) },
+				})
+				hasCompact := compactErr == nil && compactData.Profile == skillrender.ProfileCompact
+				compactContent := ""
+				if hasCompact {
+					compactContent = compactData.Content
+				}
+				decision, decided := skillrender.DecideProfile(string(stage), skillData.Content, skillData.ContextWindow, hasCompact, compactContent)
+				if decision == skillrender.DecisionCompact {
+					log.Printf("#%d: stage %s context budget: full render estimated %d tokens against a %d-token budget (window %d) — dispatching the compact profile (estimated %d tokens)",
+						item.Number, stage, fit.EstimatedTokens, fit.Budget, fit.Window, decided.EstimatedTokens)
+					// The compact render resolved the same descriptor; a
+					// local window came from the endpoint, not the render.
+					compactData.ContextWindow = skillData.ContextWindow
+					skillData = compactData
+					fit = decided
+				} else if hasCompact {
+					compactNote = fmt.Sprintf("; its compact profile estimated %d tokens and does not fit either", decided.EstimatedTokens)
+					log.Printf("#%d: stage %s context budget: the compact profile does not fit either (estimated %d tokens against %d)",
+						item.Number, stage, decided.EstimatedTokens, decided.Budget)
+				}
+			}
+			if !fit.Fits {
+				log.Printf("#%d: stage %s context budget exceeded: estimated %d tokens against a %d-token budget (window %d, share %.2f) — attempting one re-route",
+					item.Number, stage, fit.EstimatedTokens, fit.Budget, fit.Window, fit.Share)
+				rerouted := false
+				if alt, ok := nextContextBudgetReroute(skillData.Provider, skillData.ResolvedModel, skillData.ContextWindow); ok {
+					altSkillData, altErr := skillrender.Render(skillrender.Options{
+						Stage:       string(stage),
+						Model:       alt.ID,
+						Adapter:     adapterName,
+						SkillsRoots: skillrender.DefaultRoots(workspaceRoot),
+						Warn:        func(msg string) { log.Printf("#%d: %s", item.Number, msg) },
+					})
+					if altErr == nil {
+						altFit := skillrender.Fit(string(stage), altSkillData.Content, alt.ContextWindow)
+						log.Printf("#%d: stage %s context-budget re-route: %s (window %d) -> %s (window %d), fits=%v",
+							item.Number, stage, skillData.ResolvedModel, skillData.ContextWindow, alt.ID, alt.ContextWindow, altFit.Fits)
+						if altFit.Fits {
+							model = alt.ID
+							skillData = altSkillData
+							rerouted = true
+						} else {
+							fit = altFit
+						}
+					}
+				}
+				// Bounded at exactly one hop (AC5): whether or not a
+				// candidate existed to try, a re-routed attempt that still
+				// does not fit — or no candidate at all — refuses here. This
+				// never loops back to try a second candidate, and it never
+				// retries the (stage, model) pair the FIRST Fit already
+				// rejected.
+				if !rerouted {
+					reason := fmt.Sprintf(
+						"context_window_exceeded: stage %s estimated %d tokens exceeds its %d-token budget (window %d, share %.2f)%s",
+						stage, fit.EstimatedTokens, fit.Budget, fit.Window, fit.Share, compactNote)
+					_, workRecovered = s.refusePreDispatch(item, runtime, workspaceRoot, stage, tracer,
+						"context-budget", reason)
+					// refusePreDispatch's own return is always
+					// TerminalKindValidationError (#620's fallback for every
+					// caller); this is the first production call site that
+					// overrides it, classifying the refusal into the
+					// terminal kind #1631 declared and parked specifically
+					// for this recovery (failure_handler.go).
+					terminalFailureKind = TerminalKindContextWindowExceeded
+					return
+				}
+			} else {
+				log.Printf("#%d: stage %s context budget: fits (profile %s, estimated %d tokens, budget %d, window %d, share %.2f)",
+					item.Number, stage, renderProfileName(skillData), fit.EstimatedTokens, fit.Budget, fit.Window, fit.Share)
+			}
+		} else {
+			log.Printf("#%d: stage %s context budget: unknown-window branch (no resolved model descriptor) — dispatching unchecked", item.Number, stage)
 		}
 
 		// Platform skill resolution for paid tiers
@@ -5398,7 +5655,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// can adopt this run's non-terminal snapshot (loadRunSnapshot in
 		// internal/ipc/run_registry.go), seal the FILE from there, and this
 		// scheduler's own unsealed runtime re-creates it at the next stage start.
-		if persistErr := runtime.Persist(filepath.Join(workspaceRoot, ".nightgauge", "pipeline")); persistErr != nil {
+		if persistErr := persistPipelineState(runtime, workspaceRoot); persistErr != nil {
 			log.Printf("#%d: failed to persist state at %s start: %v", item.Number, stage, persistErr)
 		}
 
@@ -5463,6 +5720,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			Model:           model,
 			PerformanceMode: string(stagePerfMode),
 			EscalatedRetry:  s.retryEngine.CurrentModel(string(stage)) != "",
+			SkillProfile:    renderProfileName(skillData),
 		})
 
 		if s.onStageStart != nil {
@@ -5551,8 +5809,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// Stage-aware + model-aware last-resort context deadline (#73).
 			// Replaces a blind 30-min literal that killed frontier-mode Fable
 			// stages before their own progress-gated hard cap could apply.
-			Timeout:      routing.ResolveStageTimeout(string(stage), model),
+			Timeout:      routing.ResolveStageTimeout(string(stage), adapterName, model),
 			CostBudget:   PipelineBudgetCeilingUSD(workspaceRoot),
+			StageBudgets: pipelineStageBudgets(workspaceRoot),
 			SkillPath:    skillData.SkillPath,
 			ContextFile:  contextFile,
 			OutputFile:   outputFile,
@@ -5608,6 +5867,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// block below short-circuits this to the environmental recovery path
 		// (#3896) via a github-quota-low marker. Issue #3976.
 		prStageRateLimited := mergeRateLimited || createRateLimited
+		var ctxProbe stageContextProbe // zero: this attempt ran no session
 		switch {
 		case deterministicMerged || deterministicCreated:
 			result = &StageRunResult{ExitCode: 0}
@@ -5623,12 +5883,20 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			result = &StageRunResult{ExitCode: 1}
 			stageRunErr = fmt.Errorf("github-quota-low: %s deterministic path rate-limited; deferring until GitHub bucket reset (LLM fallback skipped to avoid quota/token burn) [#3976]", stage)
 		default:
+			// Context-window telemetry baseline (#1653), taken before the
+			// session so its compaction count is this attempt's alone.
+			ctxProbe = beginStageContext(adapterName, outputFile, runtime.RunID)
 			// Wrap the stage context so CancelAllForNetworkOutage can abort
 			// this LLM subprocess directly when the TS watchdog detects an
 			// extended connectivity outage (Issue #3296).
 			stageCtx, cancelStage := context.WithCancelCause(ctx)
 			s.registerActiveStage(item.Number, cancelStage)
-			result, stageRunErr = s.stageRunner.RunStage(stageCtx, stageParams)
+			if stage == state.StageFeatureDev {
+				// Bounded sub-sessions when ADR-023 Q7 enables them (#1651).
+				result, stageRunErr = s.runFeatureDevStage(stageCtx, stageParams, skillData.ContextWindow, ws)
+			} else {
+				result, stageRunErr = s.stageRunner.RunStage(stageCtx, stageParams)
+			}
 			s.unregisterActiveStage(item.Number)
 			// If the cancellation cause was ErrNetworkUnavailable, surface a
 			// typed error to the failure handler so it can classify the
@@ -5638,6 +5906,13 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			}
 			cancelStage(nil) // release ctx resources
 		}
+		// Every arm records this attempt's context telemetry, so a retry that
+		// took a deterministic, refused or rate-limited arm clears what an
+		// earlier session attempt left (#1653). The window is the one this
+		// dispatch ran with: the registry context_window for a hosted id, or
+		// the limit.context the OpenCode run config was built with for a
+		// local model.
+		ctxProbe.record(runtime, stage, result, skillData.ContextWindow)
 		err = stageRunErr
 
 		exitCode := 0
@@ -5765,6 +6040,13 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				// CalculateCost convention. Per-stage 5m/1h split is #390.
 				CacheCreation5m: cacheCreationTokens,
 			}, servedModel, adapterName)
+		}
+		// Every reader below reports THIS figure, never a re-derivation from
+		// result (#1934): the booking holds cache pools the result can lack.
+		stageCost, _ := stageCostFromBooking(runtime, stage)
+		if detail, diverged := recordCostDivergence(runtime, stage, stageCost, adapterName, servedModel, time.Now()); diverged {
+			log.Printf("#%d: Anomaly: cost sources disagree beyond %.0fx on stage %s — %s",
+				item.Number, costDivergenceRatio, stage, detail)
 		}
 		s.emitStateChanged(item.Repo, item.Number, runtime)
 
@@ -5948,17 +6230,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				// on V2StageDetail.Anomalies. Non-blocking: a successful run
 				// is not turned into a failure, only flagged.
 				if gates.IsAtomicEligible(stage) {
-					anomalyCost := actualCostUsd
-					if anomalyCost == 0 {
-						// The IPC-delivered cache-creation count is unsplit; booked as
-						// 5m per the CalculateCost convention. Per-stage 5m/1h split
-						// is #390. Adapter-aware (#585): prices at the serving
-						// provider's rates, not an anthropic default.
-						anomalyCost, _ = tokens.CalculateCostFor(adapterName, servedModel, tokens.TokenCounts{
-							Input: inputTokens, Output: outputTokens, CacheRead: cacheReadTokens,
-							CacheCreation5m: cacheCreationTokens,
-						})
-					}
+					anomalyCost := stageCost.CostUSD
 					anomalyFloor := getAnomalyFloorUSD(workspaceRoot)
 					executionPath := runtime.StageExecutionPath(stage)
 					if anomaly := gates.DetectAtomicLLMOverrun(stage, executionPath, anomalyCost, gateRes.Passed, anomalyFloor); anomaly != nil {
@@ -6137,8 +6409,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		}
 
 		// Persist state to disk after each stage completes
-		stateDir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline")
-		if persistErr := runtime.Persist(stateDir); persistErr != nil {
+		if persistErr := persistPipelineState(runtime, workspaceRoot); persistErr != nil {
 			log.Printf("#%d: failed to persist state: %v", item.Number, persistErr)
 		}
 
@@ -6156,7 +6427,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// through CompletedStages normally; recording it unconditionally would
 		// let a stale synthesized entry mask a real per-stage bug there.
 		if exitCode != 0 || err != nil {
-			runtime.RecordTerminatingStageTokens(stage, inputTokens, outputTokens, cacheReadTokens, actualCostUsd)
+			recordTerminatingStageTokens(runtime, stage, inputTokens, outputTokens, cacheReadTokens, actualCostUsd)
 		}
 
 		prStateAtExit := detMergePRState
@@ -6190,18 +6461,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		}
 
 		if s.onStageComplete != nil {
-			stageCostForCb := actualCostUsd
-			if stageCostForCb == 0 {
-				// The IPC-delivered cache-creation count is unsplit; booked as 5m
-				// per the CalculateCost convention. Per-stage 5m/1h split is #390.
-				// Adapter-aware (#585): prices at the serving provider's rates,
-				// not an anthropic default.
-				stageCostForCb, _ = tokens.CalculateCostFor(adapterName, servedModel, tokens.TokenCounts{
-					Input: inputTokens, Output: outputTokens, CacheRead: cacheReadTokens,
-					CacheCreation5m: cacheCreationTokens,
-				})
-			}
-			s.onStageComplete(item.Repo, item.Number, string(stage), err, inputTokens, outputTokens, cacheReadTokens, stageCostForCb, servedModel)
+			s.onStageComplete(item.Repo, item.Number, string(stage), err, stageCost, servedModel)
 		}
 
 		if err != nil || exitCode != 0 {
@@ -6324,8 +6584,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// WIP-retry path that still uses the WIPBranch field. Resolves
 			// via loadWorktreePath so single-repo runs still find the file.
 			overrunBase := loadWorktreePath(workspaceRoot, item.Number)
-			overrunFile := filepath.Join(overrunBase, ".nightgauge", "pipeline",
-				fmt.Sprintf("budget-overrun-%d.json", item.Number))
+			overrunFile := pipelineStatePath(overrunBase, fmt.Sprintf("budget-overrun-%d.json", item.Number))
 			if overrun, readErr := ReadBudgetOverrun(overrunFile); readErr == nil {
 				stageKey := fmt.Sprintf("%s:%d", string(stage), item.Number)
 				if overrun.ShippedPartially {
@@ -6462,8 +6721,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 						log.Printf("#%d: stall-recovery: failed to write feedback context: %v",
 							item.Number, writeErr)
 					} else {
-						feedbackPath := filepath.Join(workspaceRoot, ".nightgauge", "pipeline",
-							fmt.Sprintf("feedback-%d.json", item.Number))
+						feedbackPath := pipelineStatePath(workspaceRoot, fmt.Sprintf("feedback-%d.json", item.Number))
 						decision, btErr := s.retryEngine.EvaluateBacktrack(feedbackPath)
 						if btErr != nil {
 							log.Printf("#%d: stall-recovery: failed to evaluate backtrack: %v",
@@ -6613,7 +6871,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 					// runtime-{issue}-{runId}.json snapshot reflects it before the
 					// next iteration runs; the success block's persist
 					// is skipped on the failure→recovery path.
-					if persistErr := runtime.Persist(filepath.Join(workspaceRoot, ".nightgauge", "pipeline")); persistErr != nil {
+					if persistErr := persistPipelineState(runtime, workspaceRoot); persistErr != nil {
 						log.Printf("#%d: failed to persist state after recovery attempt: %v", item.Number, persistErr)
 					}
 					if s.telemetrySvc != nil && s.telemetryEnabled {
@@ -6695,8 +6953,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 						// conflict-only evaluator (not the generic one) keeps this the
 						// SOLE consumer of the conflict signal — the generic post-stage
 						// rewind sites skip it, avoiding a feature-dev self-loop (#4072).
-						feedbackFile := filepath.Join(workspaceRoot, ".nightgauge", "pipeline",
-							fmt.Sprintf("feedback-%d.json", item.Number))
+						feedbackFile := pipelineStatePath(workspaceRoot, fmt.Sprintf("feedback-%d.json", item.Number))
 						decision, btErr := s.retryEngine.EvaluateConflictBacktrack(feedbackFile)
 						if btErr != nil {
 							log.Printf("#%d: recovery %s requested resume but backtrack eval failed: %v",
@@ -6776,6 +7033,14 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			parked := TerminalKindParks(resolvedFailureKind)
 			if parked {
 				terminalFailureKind = resolvedFailureKind
+			}
+			// A budget stop (#1652, ADR-004): the stage was stopped at a
+			// budget the operator set — a stage budget or a cost cap — and a
+			// stronger model re-dispatched under the same budget spends it
+			// again. It is recorded as the stop it is and never retried.
+			budgetStopped := resolvedFailureKind == TerminalKindBudgetExceeded
+			if budgetStopped {
+				terminalFailureKind = TerminalKindBudgetExceeded
 			}
 			// USAGE-CAP RECOVERY (#42 descent, #1545 attribution + provider
 			// walk). One decision covers both cap kinds and both dispatch
@@ -6895,7 +7160,11 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				log.Printf("#%d: stage %s failed — NOT escalating model: %s is parked, not retried (%s)",
 					item.Number, stage, resolvedFailureKind, TerminalKindRemediation(resolvedFailureKind))
 			}
-			if !modelRejected && !capRejected && !authFailed && !catBlocked && !parked {
+			if budgetStopped {
+				log.Printf("#%d: stage %s failed — NOT escalating model: it was stopped at its budget (budget_exceeded), which a retry would spend again",
+					item.Number, stage)
+			}
+			if !modelRejected && !capRejected && !authFailed && !catBlocked && !parked && !budgetStopped {
 				escalation := s.retryEngine.EvaluateEscalation(string(stage), model)
 				if escalation.ShouldEscalate {
 					log.Printf("#%d: stage %s failed — escalating model to %s",
@@ -7120,6 +7389,36 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				item.Labels, workspaceRoot, stageWorkspace(runtime, workspaceRoot))
 		}
 
+		// #1909: a size-less issue was routed at pickup from an assumed M.
+		// Now that the planner has assessed a size, re-derive the Decision so
+		// feature-dev's tier and the recorded route come from that size.
+		if stage == state.StageFeaturePlanning {
+			if next, ok := plannerRoutingDecision(workspaceRoot, stageWorkspace(runtime, workspaceRoot), item, routingDecision); ok {
+				log.Printf("#%d: re-routed from the planner's size %s (was an assumed M): route %s → %s, complexity %d → %d (#1909)",
+					item.Number, next.EffectiveSize, routingDecision.SuggestedRoute, next.SuggestedRoute,
+					routingDecision.ComplexityScore, next.ComplexityScore)
+				routingDecision = next
+				issueRoutingPath = next.SuggestedRoute
+				// The run record reads complexity and route from here, and
+				// recordOutcome re-reads them from the issue context, so both
+				// carry the planner's size rather than the assumed M.
+				complexityScore = next.ComplexityScore
+				if err := recordPlannerRoutingDecision(workspaceRoot, stageWorkspace(runtime, workspaceRoot), item, next); err != nil {
+					log.Printf("#%d: could not write the re-derived routing into the issue context (non-fatal): %v", item.Number, err)
+				}
+				tracer.Emit(trace.KindChangeClass, "", trace.ChangeClassPayload{
+					SuggestedRoute:    next.SuggestedRoute,
+					MatchedChangeRule: next.MatchedChangeRule,
+					SkipStages:        next.SkipStages,
+					Rationale:         next.Rationale,
+					RiskHigh:          next.RiskHigh,
+					RiskReasons:       next.RiskReasons,
+					ChangeType:        next.ChangeType,
+					ComplexityScore:   next.ComplexityScore,
+				})
+			}
+		}
+
 		// Issue #3542: after a successful feature-dev stage, check whether the
 		// Stop hook signaled incomplete tasks (stop-hook-status-{N}.json). In
 		// the #3365 incident the stop hook returned OK=false while the agent
@@ -7128,8 +7427,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// exit 0, so detect the sentinel here and recover any uncommitted work
 		// into a commit before continuing to feature-validate.
 		if stage == state.StageFeatureDev {
-			sentinelPath := filepath.Join(workspaceRoot, ".nightgauge", "pipeline",
-				fmt.Sprintf("stop-hook-status-%d.json", item.Number))
+			sentinelPath := pipelineStatePath(workspaceRoot, fmt.Sprintf("stop-hook-status-%d.json", item.Number))
 			if _, statErr := os.Stat(sentinelPath); statErr == nil {
 				// Consume the sentinel before recovering — it is a one-shot
 				// signal, and removing it first keeps it out of the recovery
@@ -7153,8 +7451,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		}
 
 		// Stage succeeded — check for feedback signals (backtrack evaluation)
-		feedbackFile := filepath.Join(workspaceRoot, ".nightgauge", "pipeline",
-			fmt.Sprintf("feedback-%d.json", item.Number))
+		feedbackFile := pipelineStatePath(workspaceRoot, fmt.Sprintf("feedback-%d.json", item.Number))
 		if _, statErr := os.Stat(feedbackFile); statErr == nil {
 			backtrack, btErr := s.retryEngine.EvaluateBacktrack(feedbackFile)
 			if btErr != nil {
@@ -7188,22 +7485,11 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			}
 		}
 
-		stageCost := actualCostUsd
-		if stageCost == 0 {
-			// The IPC-delivered cache-creation count is unsplit; booked as 5m per
-			// the CalculateCost convention. Per-stage 5m/1h split is #390.
-			// Adapter-aware (#585): prices at the serving provider's rates, not
-			// an anthropic default.
-			stageCost, _ = tokens.CalculateCostFor(adapterName, model, tokens.TokenCounts{
-				Input: inputTokens, Output: outputTokens, CacheRead: cacheReadTokens,
-				CacheCreation5m: cacheCreationTokens,
-			})
-		}
 		// source=llm: All Go-scheduler stages run via LLM in this iteration.
 		// Deterministic-first is TypeScript-only (Issue #2614); this field
 		// enables future Go-side deterministic-first tracking.
-		log.Printf("#%d: stage %s complete — model=%s source=llm, tokens: %d in (%d cached) / %d out, cost: $%.4f",
-			item.Number, stage, model, inputTokens, cacheReadTokens, outputTokens, stageCost)
+		log.Printf("#%d: stage %s complete — model=%s source=llm, tokens: %s, cost: %s",
+			item.Number, stage, model, stageCost.TokenSummary(), stageCost.CostSummary())
 
 		// Post-stage verification for pr-merge: the skill's exit code is not
 		// sufficient evidence that the PR actually merged. Query GitHub and
@@ -7240,8 +7526,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 	snap := runtime.Snapshot()
 	log.Printf("#%d: ═══ Pipeline Complete ═══", item.Number)
 	for _, sr := range snap.AllStageAttempts() {
-		log.Printf("#%d:   %-20s %d in / %d out  $%.4f",
-			item.Number, sr.Stage, sr.InputTokens, sr.OutputTokens, sr.CostUSD)
+		c := stageCostOf(sr)
+		log.Printf("#%d:   %-20s %s  %s",
+			item.Number, sr.Stage, c.TokenSummary(), c.CostSummary())
 	}
 	log.Printf("#%d:   %-20s TOTAL  $%.4f", item.Number, "─────────────────", snap.TotalCostUSD)
 
@@ -7833,17 +8120,52 @@ func traceAlternatives(alts []routing.Alternative) []trace.RoutingAlternative {
 }
 
 func deriveRoutingDecision(workspaceRoot string, item types.BoardItem) routing.Decision {
+	return deriveRoutingDecisionWithPlannerSize(workspaceRoot, item, "")
+}
+
+// deriveRoutingDecisionWithPlannerSize is deriveRoutingDecision with the size
+// feature-planning assessed as the last size source before the default M
+// (#1909). A board size or `size:*` label still wins over it.
+func deriveRoutingDecisionWithPlannerSize(workspaceRoot string, item types.BoardItem, plannerSize string) routing.Decision {
 	in := routing.DeriveInput{
 		Title:         item.Title,
 		Labels:        item.Labels,
 		BoardSize:     string(item.Size),
 		BoardPriority: string(item.Priority),
+		PlannerSize:   plannerSize,
 	}
 	if cfg, err := config.Load(workspaceRoot); err == nil && cfg != nil && cfg.Routing != nil {
 		in.ForceFullPipeline = cfg.Routing.ForceFullPipeline
 		in.ChangeRules = cfg.Routing.ChangeRules
 	}
 	return routing.Derive(in)
+}
+
+// plannerRoutingDecision re-derives a run's routing Decision from the size
+// feature-planning assessed, when the Decision the run started from had no
+// size and assumed M (#1909). ok=false leaves prior in force: the size came
+// from a real source, or the plan named no usable size.
+//
+// Routing is decided at pickup and the planner's size only exists after
+// feature-planning, so without this the default M routed the whole run. The
+// re-derived Decision replaces the run's for everything still ahead of it —
+// feature-dev's implementation tier (ImplementationBand) and the route the run
+// record carries. It does NOT newly skip a stage: the only skippable stage
+// still ahead is feature-validate, and a planner's smaller size removing
+// validation mid-run would trade rigor for a size nobody set. The skip set
+// stays the one the run started with.
+func plannerRoutingDecision(workspaceRoot, worktreeDir string, item types.BoardItem, prior routing.Decision) (routing.Decision, bool) {
+	if prior.SizeSource != routing.SizeSourceDefault {
+		return prior, false
+	}
+	assessment := execution.LoadPlannerAssessment(workspaceRoot, worktreeDir, item.Repo, item.Number)
+	size := PlannerSizeFromAssessment(assessment.SizeLabel, assessment.Score)
+	if size == "" {
+		return prior, false
+	}
+	next := deriveRoutingDecisionWithPlannerSize(workspaceRoot, item, size)
+	next.SkipStages = prior.SkipStages
+	return next, true
 }
 
 // gateRelaxContext returns ctx augmented with the gate-relaxation flag (#4128)
@@ -7980,7 +8302,10 @@ func schedulerSkippableStages(skip []string) map[state.PipelineStage]bool {
 // loadLatestRetro reads the most recent retro file for an issue and returns
 // a summary of findings for injection into escalated retry context.
 func loadLatestRetro(workspaceRoot string, issueNumber int, failedStage string) string {
-	retroDir := filepath.Join(workspaceRoot, ".nightgauge", "retros")
+	retroDir, err := layout.RetrosDir(workspaceRoot)
+	if err != nil {
+		return ""
+	}
 	entries, err := os.ReadDir(retroDir)
 	if err != nil {
 		return ""
@@ -8096,8 +8421,7 @@ func resolveFeatureBranch(runtime *state.RuntimeState, workspaceRoot string, iss
 
 // loadFeatureBranch reads the branch name from the issue context JSON.
 func loadFeatureBranch(workspaceRoot string, issueNumber int) string {
-	path := filepath.Join(workspaceRoot, ".nightgauge", "pipeline",
-		fmt.Sprintf("issue-%d.json", issueNumber))
+	path := pipelineStatePath(workspaceRoot, fmt.Sprintf("issue-%d.json", issueNumber))
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""
@@ -8353,66 +8677,28 @@ func (s *Scheduler) shouldReRoute(workspaceRoot, worktreeDir, repo string, issue
 // full recommendation so the caller can trace the decision with its
 // reasoning and rejected alternatives (#179).
 func (s *Scheduler) reRouteContext(ctx context.Context, workspaceRoot, worktreeDir, repo string, issueNumber int, oldModel string) (routing.Recommendation, error) {
-	// Rewrite the file the stages actually read. Writing to the workspace root
-	// unconditionally would leave the real context — in the worktree —
-	// untouched while creating a decoy beside it (#994).
-	contextPath := resolveIssueContextPath(workspaceRoot, worktreeDir, repo, issueNumber)
-	if contextPath == "" {
-		contextPath = filepath.Join(workspaceRoot, ".nightgauge", "pipeline",
-			fmt.Sprintf("issue-%d.json", issueNumber))
-	}
-
-	data, err := os.ReadFile(contextPath)
-	if err != nil {
-		return routing.Recommendation{}, fmt.Errorf("read context: %w", err)
-	}
-
-	var raw map[string]interface{}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return routing.Recommendation{}, fmt.Errorf("unmarshal context: %w", err)
-	}
-
-	// Extract complexity score (preserved — not re-estimated)
-	complexityScore := 0
-	if routingRaw, ok := raw["routing"].(map[string]interface{}); ok {
+	var rec routing.Recommendation
+	err := rewriteIssueContextRouting(workspaceRoot, worktreeDir, repo, issueNumber, func(routingRaw map[string]interface{}) {
+		// Extract complexity score (preserved — not re-estimated)
+		complexityScore := 0
 		if cs, ok := routingRaw["complexity_score"].(float64); ok {
 			complexityScore = int(cs)
 		}
-	}
 
-	// Get fresh recommendation using the stateless router (reads current perf-mode)
-	router := routing.NewRouter(nil, workspaceRoot)
-	rec := router.Route(ctx, "feature-dev", complexity.Score{Value: complexityScore})
+		// Get fresh recommendation using the stateless router (reads current perf-mode)
+		router := routing.NewRouter(nil, workspaceRoot)
+		rec = router.Route(ctx, "feature-dev", complexity.Score{Value: complexityScore})
 
-	// Update only routing fields — complexity and other invariants are unchanged
-	if routingRaw, ok := raw["routing"].(map[string]interface{}); ok {
+		// Update only routing fields — complexity and other invariants are unchanged
 		if pickupRec, ok := routingRaw["pickup_recommendation"].(map[string]interface{}); ok {
 			pickupRec["dev_model"] = rec.Model
 		} else {
 			routingRaw["pickup_recommendation"] = map[string]interface{}{"dev_model": rec.Model}
 		}
 		routingRaw["rationale"] = rec.Reasoning
-	}
-
-	updated, err := json.MarshalIndent(raw, "", "  ")
+	})
 	if err != nil {
-		return routing.Recommendation{}, fmt.Errorf("marshal context: %w", err)
-	}
-
-	// Validate JSON before writing
-	var check interface{}
-	if err := json.Unmarshal(updated, &check); err != nil {
-		return routing.Recommendation{}, fmt.Errorf("validate updated context: %w", err)
-	}
-
-	// Atomic write: temp file + rename to avoid partial writes
-	tmpPath := contextPath + ".tmp"
-	if err := os.WriteFile(tmpPath, updated, 0o644); err != nil {
-		return routing.Recommendation{}, fmt.Errorf("write temp context: %w", err)
-	}
-	if err := os.Rename(tmpPath, contextPath); err != nil {
-		_ = os.Remove(tmpPath)
-		return routing.Recommendation{}, fmt.Errorf("rename context: %w", err)
+		return routing.Recommendation{}, err
 	}
 
 	if rec.Model != oldModel {
@@ -8421,6 +8707,69 @@ func (s *Scheduler) reRouteContext(ctx context.Context, workspaceRoot, worktreeD
 	}
 
 	return rec, nil
+}
+
+// rewriteIssueContextRouting is the one read-modify-write of the issue
+// context's `routing` object (issue-{N}.json) the scheduler performs: it
+// resolves the file the stages actually read (the worktree's on an isolated
+// run — writing to the root unconditionally would leave the real context
+// untouched while creating a decoy beside it, #994), hands `routing` to edit,
+// and writes the result atomically (temp + rename). A context whose routing is
+// absent or null is left without one — a partial object would fail the
+// schema's required fields — while edit still runs, on a detached map.
+func rewriteIssueContextRouting(workspaceRoot, worktreeDir, repo string, issueNumber int, edit func(routingRaw map[string]interface{})) error {
+	contextPath := resolveIssueContextPath(workspaceRoot, worktreeDir, repo, issueNumber)
+	if contextPath == "" {
+		contextPath = pipelineStatePath(workspaceRoot, fmt.Sprintf("issue-%d.json", issueNumber))
+	}
+
+	data, err := os.ReadFile(contextPath)
+	if err != nil {
+		return fmt.Errorf("read context: %w", err)
+	}
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("unmarshal context: %w", err)
+	}
+
+	routingRaw, ok := raw["routing"].(map[string]interface{})
+	if !ok {
+		routingRaw = map[string]interface{}{}
+	}
+	edit(routingRaw)
+
+	updated, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal context: %w", err)
+	}
+
+	// Atomic write: temp file + rename to avoid partial writes
+	tmpPath := contextPath + ".tmp"
+	if err := os.WriteFile(tmpPath, updated, 0o644); err != nil {
+		return fmt.Errorf("write temp context: %w", err)
+	}
+	if err := os.Rename(tmpPath, contextPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("rename context: %w", err)
+	}
+	return nil
+}
+
+// recordPlannerRoutingDecision writes a planner-re-derived Decision (#1909)
+// into the issue context the later stages and the run record read: the route
+// (`suggested_route`), the complexity (`complexity_score`, the same Fibonacci
+// scale the schema carries) and the rationale. skip_stages is not touched —
+// the re-derivation keeps the skip set the run started with — and neither is
+// pickup_recommendation.dev_model: the run-wide tier every reasoning stage
+// shares stays the router's, and only feature-dev's dispatch is raised
+// (routedStageModel).
+func recordPlannerRoutingDecision(workspaceRoot, worktreeDir string, item types.BoardItem, d routing.Decision) error {
+	return rewriteIssueContextRouting(workspaceRoot, worktreeDir, item.Repo, item.Number, func(routingRaw map[string]interface{}) {
+		routingRaw["suggested_route"] = d.SuggestedRoute
+		routingRaw["complexity_score"] = d.ComplexityScore
+		routingRaw["rationale"] = d.Rationale
+	})
 }
 
 // loadGateResults reads quality gate results for the given issue.
@@ -8456,8 +8805,7 @@ func loadPrUrl(workspaceRoot string, issueNumber int) string {
 // to dispatch on. Returns 0 when the file is absent or malformed — the
 // recovery actions treat 0 as "unknown PR" and decline accordingly.
 func loadPRNumberForRecovery(workspaceRoot string, issueNumber int) int {
-	path := filepath.Join(workspaceRoot, ".nightgauge", "pipeline",
-		fmt.Sprintf("pr-%d.json", issueNumber))
+	path := pipelineStatePath(workspaceRoot, fmt.Sprintf("pr-%d.json", issueNumber))
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return 0
@@ -8881,7 +9229,7 @@ func (s *Scheduler) resolveDispatchModel(
 	// reflects the floored tier.
 	if floor := stageModelFloor(modelFloors, string(stage)); floor != "" {
 		if raised := enforceMinimumModel(model, floor); raised != model {
-			log.Printf("#%d: stage %s — model_routing.minimum_model floor %q raised %s → %s",
+			log.Printf("#%d: stage %s — minimum-model floor %q raised %s → %s",
 				issueNumber, stage, floor, model, raised)
 			model = raised
 		}
@@ -8996,8 +9344,7 @@ func (s *Scheduler) resolveDispatchModel(
 // build_verification.ran=true and build_verification.status="passed".
 // Returns false on any read/parse error (safe default: don't allow haiku).
 func devContextBuildPassed(workspaceRoot string, issueNumber int) bool {
-	p := filepath.Join(workspaceRoot, ".nightgauge", "pipeline",
-		fmt.Sprintf("dev-%d.json", issueNumber))
+	p := pipelineStatePath(workspaceRoot, fmt.Sprintf("dev-%d.json", issueNumber))
 	data, err := os.ReadFile(p)
 	if err != nil {
 		return false
@@ -9404,7 +9751,7 @@ func (s *Scheduler) verifyPRMergeForStage(ctx context.Context, item types.BoardI
 			runtime.SetMainCheckOutcome(string(mc.Verdict), mc.FailingNames())
 		}
 		if runRoot := s.runRoot(item.Repo); runRoot != "" {
-			if persistErr := runtime.Persist(filepath.Join(runRoot, ".nightgauge", "pipeline")); persistErr != nil {
+			if persistErr := persistPipelineState(runtime, runRoot); persistErr != nil {
 				log.Printf("#%d: warning: failed to persist merge breadcrumb: %v", item.Number, persistErr)
 			}
 		}

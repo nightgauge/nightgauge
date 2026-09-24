@@ -6,6 +6,13 @@ import pkgtypes "github.com/nightgauge/nightgauge/pkg/types"
 // Aliased from pkg/types.BoardItem.
 type BoardItem = pkgtypes.BoardItem
 
+// RelationSummary is a board item's relationship counts. Aliased from
+// pkg/types.RelationSummary.
+type RelationSummary = pkgtypes.RelationSummary
+
+// SummarizeRelations derives a RelationSummary from an item's lists.
+func SummarizeRelations(item BoardItem) RelationSummary { return pkgtypes.SummarizeRelations(item) }
+
 // StatusCounts holds per-status item counts from the project board.
 type StatusCounts = pkgtypes.StatusCounts
 

@@ -3,6 +3,7 @@ package state
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -323,6 +324,47 @@ type V2StageDetail struct {
 	// Additive `omitempty` per ADR-002 — older records omit the field;
 	// readers default to nil/empty.
 	RecoveryAttempts []RecoveryAttempt `json:"recovery_attempts,omitempty"`
+	// PeakStepInputTokens, ContextWindowTokens and ContextWindowUtilization
+	// say how close this stage came to the context window it ran with
+	// (#1653). The numerator is the largest prompt a single model step sent
+	// (input + cache read + cache write), never the summed pools, which grow
+	// with every turn. ContextWindowUtilization is peak ÷ window rounded to 4
+	// places. Additive `omitempty`: absent, never 0, when the adapter exposes
+	// no per-step prompt size; the window and the utilization are also absent
+	// when no window was known, because the window is recorded only as the
+	// utilization's denominator.
+	PeakStepInputTokens      int     `json:"peak_step_input_tokens,omitempty"`
+	ContextWindowTokens      int     `json:"context_window_tokens,omitempty"`
+	ContextWindowUtilization float64 `json:"context_window_utilization,omitempty"`
+	// CompactionCount is how many compaction lines the stage's latest
+	// OpenCode attempt added to the run's events file (#1641, #1653). It is 0
+	// when that file is absent: the plugin writes a line for every
+	// session.compacted it sees, so no file means no compaction was recorded.
+	// A pointer so that 0 is written, while a stage with no events path to
+	// count (a non-OpenCode adapter, an OpenCode dispatch without an absolute
+	// output file, or any record written before #1653) leaves the key absent.
+	CompactionCount *int `json:"compaction_count,omitempty"`
+}
+
+// applyStageContext projects one stage's recorded context telemetry onto its
+// V2 detail, leaving every unobserved field absent (#1653).
+func applyStageContext(detail *V2StageDetail, sc StageContext) {
+	if sc.PeakStepInputTokens > 0 {
+		detail.PeakStepInputTokens = sc.PeakStepInputTokens
+		if sc.ContextWindowTokens > 0 {
+			detail.ContextWindowTokens = sc.ContextWindowTokens
+			detail.ContextWindowUtilization = contextWindowUtilization(sc.PeakStepInputTokens, sc.ContextWindowTokens)
+		}
+	}
+	if sc.Compactions != nil {
+		n := *sc.Compactions
+		detail.CompactionCount = &n
+	}
+}
+
+// contextWindowUtilization is peak ÷ window rounded to 4 places.
+func contextWindowUtilization(peak, window int) float64 {
+	return math.Round(float64(peak)/float64(window)*1e4) / 1e4
 }
 
 // RecoveryAttempt records the outcome of one FailureRecovery registry attempt
@@ -616,6 +658,7 @@ type Anomaly struct {
 	ExecutionPath          string  `json:"execution_path"`                    // "deterministic" | "llm"
 	StageCostUSD           float64 `json:"stage_cost_usd"`                    // observed stage cost
 	DeterministicPredicate string  `json:"deterministic_predicate,omitempty"` // human-readable predicate that should have matched
+	Detail                 string  `json:"detail,omitempty"`                  // human-readable finding for kinds with no predicate (#1934)
 	Timestamp              string  `json:"timestamp"`                         // ISO 8601
 }
 
@@ -1601,6 +1644,14 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 			copied := make([]RecoveryAttempt, len(attempts))
 			copy(copied, attempts)
 			detail.RecoveryAttempts = copied
+			stages[stageName] = detail
+		}
+	}
+
+	// Attach per-stage context-window telemetry (#1653). Same pattern.
+	for stageName, sc := range snap.StageContexts {
+		if detail, ok := stages[stageName]; ok {
+			applyStageContext(&detail, sc)
 			stages[stageName] = detail
 		}
 	}

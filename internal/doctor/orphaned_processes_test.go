@@ -375,17 +375,19 @@ func stamp(ago time.Duration) string {
 	return scanClock.Add(-ago).Format(time.RFC3339)
 }
 
-// isolateMachineState points the per-user machine-global state root
-// (os.UserHomeDir → $HOME, the same seam internal/ipc and the binary-resolution
-// suite use) at a temp dir.
+// isolateMachineState points HOME and the per-user machine-global state root
+// (NIGHTGAUGE_STATE_HOME, layout.StateHome) at temp dirs of this test's own.
 //
 // Mandatory for every test that reads claims: since #388 the serve daemons'
-// claims live in <home>/.nightgauge/serve/, so without this a developer's own
-// running daemon would leak into the fixtures — and, worse, a test that plants
-// a claim would write into the real directory and could delete a live one.
+// claims live in <STATE>/serve/, so without this a developer's own running
+// daemon would leak into the fixtures — and, worse, a test that plants a claim
+// would write into the real directory and could delete a live one. The state
+// root is set explicitly because it does not follow HOME on every OS.
 func isolateMachineState(t *testing.T) {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("NIGHTGAUGE_STATE_HOME", filepath.Join(home, "state"))
 }
 
 // writeServeSidecar plants a serve daemon's marker (#388) through the

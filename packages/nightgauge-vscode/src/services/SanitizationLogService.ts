@@ -14,6 +14,7 @@
 import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
+import { cloneLogsDir } from "../utils/cloneLayout";
 import type {
   SanitizationEvent,
   RawSanitizationLogEntry,
@@ -25,6 +26,19 @@ import type {
   TimeSeriesGranularity,
 } from "../views/dashboard/FirewallTypes";
 import { EMPTY_FIREWALL_AGGREGATES } from "../views/dashboard/FirewallTypes";
+
+/**
+ * The watcher glob for `logFilePath`, relative to `workspaceRoot`. VS Code
+ * glob patterns take forward slashes on every OS, so the native separator is
+ * normalised (#2036). `pathImpl` is injectable to test the win32 case.
+ */
+export function logWatchGlob(
+  workspaceRoot: string,
+  logFilePath: string,
+  pathImpl: Pick<typeof path, "relative" | "sep"> = path
+): string {
+  return pathImpl.relative(workspaceRoot, logFilePath).split(pathImpl.sep).join("/");
+}
 
 /**
  * SanitizationLogService manages reading and watching the sanitization log file.
@@ -65,7 +79,7 @@ export class SanitizationLogService implements vscode.Disposable {
   public readonly onEventsChanged = this._onEventsChanged.event;
 
   constructor(private readonly workspaceRoot: string) {
-    this.logFilePath = path.join(workspaceRoot, ".nightgauge", "logs", "sanitization.log");
+    this.logFilePath = path.join(cloneLogsDir(workspaceRoot), "sanitization.log");
   }
 
   /**
@@ -214,9 +228,12 @@ export class SanitizationLogService implements vscode.Disposable {
    * Start watching the log file for changes
    */
   private startWatching(): void {
+    // Base stays the workspace root (it exists before the log dir does); the
+    // glob is the helper-resolved log path relative to it (#2036). #2037 must
+    // revisit this if the log dir leaves the working tree.
     const pattern = new vscode.RelativePattern(
       this.workspaceRoot,
-      ".nightgauge/logs/sanitization.log"
+      logWatchGlob(this.workspaceRoot, this.logFilePath)
     );
 
     this.watcher = vscode.workspace.createFileSystemWatcher(pattern);

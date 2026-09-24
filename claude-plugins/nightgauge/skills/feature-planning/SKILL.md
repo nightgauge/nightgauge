@@ -89,6 +89,11 @@ from in feature-dev. See [docs/SPIKE_CONTRACT.md](../../../../docs/SPIKE_CONTRAC
   stage that proposes an approach but never writes its
   `.nightgauge/pipeline/planning-{N}.json` leaves feature-dev with nothing
   to implement against.
+- **Write each implementation step as a `- [ ] task` checkbox** in the
+  Step-by-step implementation plan section. `parsePlanFile`
+  (`internal/hooks/context.go`/`stop.go`) counts `- [ ]` / `- [x]` lines to
+  report plan completion; a step written as prose or a numbered list is
+  invisible to it.
 - See also the cross-cutting gotchas in
   [`_shared/GOTCHAS.md`](../_shared/GOTCHAS.md).
 

@@ -3,22 +3,24 @@
   "skill": "issue-pickup",
   "description": "Issue pickup moves the board status to In Progress via the Go binary.",
   "failure_mode": "Model improvises a gh GraphQL mutation instead of calling `project sync-status`/`project move-status`, drifting from the deterministic board-sync contract.",
-  "prompt": "An issue has been claimed. State the single command you run to move its project board status to In Progress. Use the deterministic Go binary, not raw GraphQL.",
+  "prompt": "An issue has been claimed. State the single command you run to move its project board status to In Progress. Use the deterministic Go binary, not raw GraphQL. End your answer with the exact command you would run, in a single ```bash fenced block.",
   "assertions": [
     {
-      "type": "contains",
-      "value": "project",
-      "description": "uses project subcommand"
-    },
-    {
       "type": "matches_regex",
-      "pattern": "(sync-status|move-status)",
-      "description": "deterministic status command"
+      "pattern": "(?:\\bnightgauge|\\$\\{?BINARY\\}?\"?)\\s+project\\s+(?:sync-status|move-status)\\b",
+      "scope": "last_fenced_block",
+      "lang": ["bash", "sh", "shell"],
+      "strip_comments": true,
+      "description": "deterministic Go-binary status command"
     },
     {
-      "type": "not_contains",
-      "value": "addProjectV2ItemById",
-      "description": "no improvised GraphQL"
+      "type": "not_matches_regex",
+      "pattern": "\\bgh\\s+(?:api|project)\\b|graphql|ProjectV2|\\bmutation\\b",
+      "flags": "i",
+      "scope": "last_fenced_block",
+      "lang": ["bash", "sh", "shell"],
+      "strip_comments": true,
+      "description": "no improvised GraphQL or gh project call"
     }
   ]
 }

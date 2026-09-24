@@ -14,6 +14,7 @@
  * @see Issue #1187 - Cancel pipeline with outcome tracking
  */
 
+import { pipelineStateDir } from "../utils/cloneLayout";
 import * as vscode from "vscode";
 import * as path from "node:path";
 import type { HeadlessOrchestrator } from "../services/HeadlessOrchestrator";
@@ -157,7 +158,7 @@ export function registerStopPipelineCommand(
       try {
         const workspaceRoot = getWorkspaceRoot();
         if (workspaceRoot) {
-          const rsm = new RunStateManager(path.join(workspaceRoot, ".nightgauge", "pipeline"));
+          const rsm = new RunStateManager(pipelineStateDir(workspaceRoot));
           const existing = await rsm.read();
           if (existing && existing.state === "running") {
             await rsm.markPaused(

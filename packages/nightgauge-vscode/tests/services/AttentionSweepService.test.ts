@@ -9,8 +9,9 @@
  *
  * A sweep is the most expensive thing the extension asks the daemon to do, so
  * the second thing pinned is that the event-driven triggers consult the
- * one-point board probe first and sweep only when a board moved or the
- * interval has elapsed — while the timer and the operator's command never ask.
+ * board probe first and sweep only when a board moved or the interval has
+ * elapsed — while the operator's command never asks, and the timer, which
+ * fires once per interval, always finds the interval elapsed.
  *
  * Fake timers throughout — a test that waits out a 15-minute interval is not a
  * test, it is a hang.
@@ -101,6 +102,7 @@ function makeService(
     repos?: string[] | (() => Promise<string[]> | string[]);
     onChanged?: () => void;
     onRerender?: () => void;
+    lastSweepStore?: { get(): number | undefined; set(ms: number): void };
   } = {}
 ) {
   const ipc = overrides.ipc ?? new FakeIpc();
@@ -119,8 +121,21 @@ function makeService(
     onRerender: overrides.onRerender,
     readConfig: () => config,
     now: () => Date.now(),
+    lastSweepStore: overrides.lastSweepStore,
   });
   return { service, ipc, logger };
+}
+
+/** A workspace memento stand-in. */
+function memento(initial?: number) {
+  let value = initial;
+  return {
+    get: () => value,
+    set: (ms: number) => {
+      value = ms;
+    },
+    peek: () => value,
+  };
 }
 
 describe("AttentionSweepService", () => {
@@ -460,6 +475,123 @@ describe("AttentionSweepService", () => {
     AutonomousActivityState.instance.setStatus("running");
     await vi.advanceTimersByTimeAsync(60_000);
     expect(ipc.calls.map((c) => c.reason)).toEqual(["activation", "timer"]);
+
+    service.dispose();
+  });
+
+  // The daemon's sweep can outlive the extension's 30 s IPC deadline and still
+  // finish (its cards arrive through the attention.event push). The sweep
+  // started, so it is the baseline: without that, the window stayed "never
+  // swept" and every later trigger swept again without asking the probe.
+  it("an IPC timeout still records the sweep, so the next trigger asks the probe", async () => {
+    const store = memento();
+    const { service, ipc } = makeService({ lastSweepStore: store });
+    ipc.error = new Error("IPC request attention.sweep timed out after 30000ms");
+
+    service.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ipc.calls).toHaveLength(1);
+    const startedAt = Date.now();
+    // In memory only: a reload must not trust a sweep nobody saw finish.
+    expect(store.peek()).toBeUndefined();
+
+    ipc.error = null;
+    await vi.advanceTimersByTimeAsync(60_000);
+    await service.sweep("visibility-regained");
+
+    expect(ipc.probes).toHaveLength(1);
+    expect(ipc.probes[0].since).toBe(new Date(startedAt).toISOString());
+    expect(ipc.calls).toHaveLength(1); // nothing moved: no second sweep
+
+    service.dispose();
+  });
+
+  it("a completed sweep is persisted for the next window", async () => {
+    const store = memento();
+    const { service, ipc } = makeService({ lastSweepStore: store });
+
+    service.start();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(ipc.calls).toHaveLength(1);
+    expect(store.peek()).toBe(Date.now());
+    service.dispose();
+  });
+
+  // The baseline is stamped when a sweep STARTS, after the repo list resolved,
+  // so each timer tick lands a little short of a full interval. The timer must
+  // still sweep without asking the probe, or the conditions the probe cannot
+  // see (default-branch CI, alerts, protection) refresh at twice the interval.
+  it("the timer sweeps without the probe when repo resolution delays each sweep", async () => {
+    // Activation resolves the repo list slowly (the workspace is still
+    // loading); later resolutions are instant, so every tick lands delayMs
+    // short of a full interval after the stamped start.
+    const delayMs = 2_000;
+    let first = true;
+    const { service, ipc } = makeService({
+      config: { intervalMs: 15 * 60_000 },
+      repos: () => {
+        if (!first) return ["octocat/acme-web"];
+        first = false;
+        return new Promise<string[]>((r) => setTimeout(() => r(["octocat/acme-web"]), delayMs));
+      },
+    });
+
+    service.start();
+    await vi.advanceTimersByTimeAsync(delayMs);
+    expect(ipc.calls.map((c) => c.reason)).toEqual(["activation"]);
+
+    await vi.advanceTimersByTimeAsync(15 * 60_000 - delayMs);
+    expect(ipc.calls.map((c) => c.reason)).toEqual(["activation", "timer"]);
+    expect(ipc.probes).toHaveLength(0);
+    service.dispose();
+  });
+
+  it("any other sweep failure leaves the baseline alone", async () => {
+    const store = memento();
+    const { service, ipc } = makeService({ lastSweepStore: store });
+    ipc.error = new Error("daemon not connected");
+
+    service.start();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(store.peek()).toBeUndefined();
+    ipc.error = null;
+    await service.sweep("view-refresh");
+    expect(ipc.probes).toHaveLength(0); // still never swept: it sweeps
+    expect(ipc.calls).toHaveLength(2);
+
+    service.dispose();
+  });
+
+  // A window reload restarts the daemon. The last sweep's start survives in
+  // the workspace memento, so activation asks the probe like any other
+  // trigger instead of re-sweeping a workspace in which nothing moved.
+  it("activation after a reload asks the probe against the remembered sweep", async () => {
+    const remembered = Date.now() - 5 * 60_000;
+    const { service, ipc } = makeService({ lastSweepStore: memento(remembered) });
+
+    service.start();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(ipc.probes).toHaveLength(1);
+    expect(ipc.probes[0].since).toBe(new Date(remembered).toISOString());
+    expect(ipc.calls).toHaveLength(0);
+
+    service.dispose();
+  });
+
+  it("activation sweeps when the remembered sweep is older than the interval", async () => {
+    const { service, ipc } = makeService({
+      config: { intervalMs: 15 * 60_000 },
+      lastSweepStore: memento(Date.now() - 16 * 60_000),
+    });
+
+    service.start();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(ipc.calls.map((c) => c.reason)).toEqual(["activation"]);
+    expect(ipc.probes).toHaveLength(0);
 
     service.dispose();
   });

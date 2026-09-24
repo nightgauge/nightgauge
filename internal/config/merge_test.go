@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"log"
 	"os"
 	"path/filepath"
@@ -192,8 +193,10 @@ project:
   owner: nightgauge
   number: 1
 platform:
-  license_key: "lic_project"
+  api_url: "https://project.example.invalid"
+  license_key: env:NG_TEST_PROJECT_LICENSE
 `)
+	t.Setenv("NG_TEST_PROJECT_LICENSE", "lic_project")
 
 	cfg, err := LoadMerged(dir)
 	if err != nil {
@@ -201,6 +204,9 @@ platform:
 	}
 	if cfg.LicenseKey != "lic_machine" {
 		t.Errorf("LicenseKey resolved from project tier; want machine-tier value")
+	}
+	if cfg.PlatformURL != "" {
+		t.Errorf("PlatformURL = %q resolved from project tier; want the block stripped", cfg.PlatformURL)
 	}
 }
 
@@ -784,4 +790,367 @@ platform:
 	if cfg.PlatformEnabled == nil || !*cfg.PlatformEnabled {
 		t.Errorf("machine tier must still win: PlatformEnabled = %v, want true", cfg.PlatformEnabled)
 	}
+}
+
+// TestPlaintextSecretRejected pins #2023: a repository tier (the committed
+// project file or the local override) may carry a credential only as an env:
+// reference. A literal value fails the load, naming the file and the key and
+// never the value.
+func TestPlaintextSecretRejected(t *testing.T) {
+	const secret = "ghp_example"
+	keys := []struct {
+		name string
+		yaml func(v string) string
+	}{
+		{"github_auth.token", func(v string) string { return "github_auth:\n  token: " + v + "\n" }},
+		{"github_auth.tokens.acme", func(v string) string { return "github_auth:\n  tokens:\n    acme: " + v + "\n" }},
+		{"platform.license_key", func(v string) string { return "platform:\n  license_key: " + v + "\n" }},
+	}
+	const base = "schema_version: \"2\"\nproject:\n  owner: acme\n  number: 1\n"
+
+	for _, tier := range []string{"project", "local"} {
+		for _, k := range keys {
+			write := func(t *testing.T, dir, body string) string {
+				t.Helper()
+				if tier == "project" {
+					return writeProjectYAML(t, dir, base+body)
+				}
+				writeProjectYAML(t, dir, base)
+				writeLocalYAML(t, dir, body)
+				return filepath.Join(dir, ".nightgauge", "config.local.yaml")
+			}
+
+			t.Run(tier+"/"+k.name+"/plaintext", func(t *testing.T) {
+				withNoMachineConfig(t)
+				dir := t.TempDir()
+				path := write(t, dir, k.yaml(secret))
+				_, err := LoadMerged(dir)
+				if err == nil {
+					t.Fatalf("LoadMerged accepted a plaintext %s in the %s tier", k.name, tier)
+				}
+				msg := err.Error()
+				if !strings.Contains(msg, path) {
+					t.Errorf("error does not name the file %q: %s", path, msg)
+				}
+				if !strings.Contains(msg, k.name) {
+					t.Errorf("error does not name the key %q: %s", k.name, msg)
+				}
+				if strings.Contains(msg, secret) || strings.Contains(msg, "ghp_") {
+					t.Errorf("error leaks the value: %s", msg)
+				}
+				// Load, the entry point every command uses, refuses it too.
+				if _, err := Load(dir); err == nil {
+					t.Errorf("Load accepted a plaintext %s in the %s tier", k.name, tier)
+				}
+			})
+
+			t.Run(tier+"/"+k.name+"/env", func(t *testing.T) {
+				withNoMachineConfig(t)
+				t.Setenv("TEST_TOKEN", "resolved-from-env")
+				dir := t.TempDir()
+				write(t, dir, k.yaml("env:TEST_TOKEN"))
+				cfg, err := LoadMerged(dir)
+				if err != nil {
+					t.Fatalf("LoadMerged rejected an env: reference: %v", err)
+				}
+				switch k.name {
+				case "github_auth.token":
+					if got, _ := cfg.ResolveToken("acme"); got != "resolved-from-env" {
+						t.Errorf("ResolveToken = %q, want the env value", got)
+					}
+				case "github_auth.tokens.acme":
+					if got, _ := cfg.ResolveToken("acme"); got != "resolved-from-env" {
+						t.Errorf("ResolveToken(acme) = %q, want the env value", got)
+					}
+				case "platform.license_key":
+					// platform is stripped from repository tiers (#1049): the
+					// reference loads, and the machine tier stays the source.
+					if cfg.LicenseKey != "" {
+						t.Errorf("LicenseKey = %q, want the repository value stripped", cfg.LicenseKey)
+					}
+				}
+			})
+		}
+	}
+}
+
+// TestPlaintextSecretRejectedLists every offending key once and follows YAML
+// aliases, so an anchor cannot smuggle a literal past the check.
+func TestPlaintextSecretRejectedAliasAndMany(t *testing.T) {
+	withNoMachineConfig(t)
+	dir := t.TempDir()
+	writeProjectYAML(t, dir, `
+owner: acme
+x-pat: &pat ghp_anchored
+github_auth:
+  token: *pat
+  tokens:
+    acme: literal-one
+    other: env:OTHER
+`)
+	_, err := LoadMerged(dir)
+	if err == nil {
+		t.Fatal("LoadMerged accepted an aliased plaintext token")
+	}
+	msg := err.Error()
+	for _, want := range []string{"github_auth.token", "github_auth.tokens.acme"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error does not name %s: %s", want, msg)
+		}
+	}
+	for _, leak := range []string{"ghp_anchored", "literal-one", "github_auth.tokens.other"} {
+		if strings.Contains(msg, leak) {
+			t.Errorf("error contains %q: %s", leak, msg)
+		}
+	}
+}
+
+// TestMachineTierPlaintextAllowed: the machine tier lives outside every
+// repository, so a literal token and license key load from it.
+func TestMachineTierPlaintextAllowed(t *testing.T) {
+	withMachineConfig(t, `
+github_auth:
+  token: ghp_machine_literal
+  tokens:
+    acme: ghp_machine_acme
+platform:
+  license_key: lic_machine_literal
+`)
+	dir := t.TempDir()
+	writeProjectYAML(t, dir, "schema_version: \"2\"\nproject:\n  owner: acme\n  number: 1\n")
+	cfg, err := LoadMerged(dir)
+	if err != nil {
+		t.Fatalf("LoadMerged rejected a machine-tier plaintext value: %v", err)
+	}
+	if got, _ := cfg.ResolveToken("acme"); got != "ghp_machine_literal" {
+		t.Errorf("ResolveToken = %q, want the machine-tier token", got)
+	}
+	if cfg.LicenseKey != "lic_machine_literal" {
+		t.Errorf("LicenseKey = %q, want the machine-tier key", cfg.LicenseKey)
+	}
+}
+
+// TestPlaintextSecretErrorNamesMachinePath: the error tells the operator where
+// a literal value is accepted, by the path the loader actually reads.
+func TestPlaintextSecretErrorNamesMachinePath(t *testing.T) {
+	withMachineConfig(t, "")
+	machine, _ := machineConfigPathFn()
+	err := ValidateRepoTierSecrets([]byte("github_auth:\n  token: literal\n"), "/repo/.nightgauge/config.yaml")
+	if err == nil || !strings.Contains(err.Error(), machine) {
+		t.Fatalf("error does not name the machine-tier path %q: %v", machine, err)
+	}
+}
+
+// TestRepoTierProtectedKeysShareOneList pins the single list behind both
+// protections: every hard-stripped block is recognised by
+// isHardStrippedMachineKey, and every protected block names a credential path
+// that ValidateRepoTierSecrets enforces.
+func TestRepoTierProtectedKeysShareOneList(t *testing.T) {
+	stripped := 0
+	for _, k := range repoTierProtectedKeys {
+		if k.hardStrip != isHardStrippedMachineKey(k.root) {
+			t.Errorf("%s: hardStrip=%v but isHardStrippedMachineKey=%v", k.root, k.hardStrip, isHardStrippedMachineKey(k.root))
+		}
+		if k.hardStrip {
+			stripped++
+		}
+		for _, secret := range k.secrets {
+			path := k.root + "." + strings.ReplaceAll(secret, "*", "someowner")
+			segs := strings.Split(path, ".")
+			body := ""
+			for i, seg := range segs {
+				body += strings.Repeat("  ", i) + seg + ":"
+				if i < len(segs)-1 {
+					body += "\n"
+				}
+			}
+			body += " literal\n"
+			if err := ValidateRepoTierSecrets([]byte(body), "f.yaml"); err == nil || !strings.Contains(err.Error(), path) {
+				t.Errorf("%s is listed but not enforced: %v", path, err)
+			}
+		}
+	}
+	if stripped == 0 || !isHardStrippedMachineKey("platform") {
+		t.Error("platform must stay hard-stripped from repository tiers (#1049)")
+	}
+	if isHardStrippedMachineKey("github_user") {
+		t.Error("isHardStrippedMachineKey reports a key the list does not strip")
+	}
+}
+
+// TestPlaintextSecretRejectedThroughMergeKeys: yaml.v3 resolves `<<` merge
+// keys when the loader decodes, so the check must too — at the leaf, at the
+// block, and at the root (review finding on #2023).
+func TestPlaintextSecretRejectedThroughMergeKeys(t *testing.T) {
+	cases := map[string]string{
+		"block merge": `
+x-b: &b {token: literal-merge-token}
+github_auth:
+  <<: *b
+`,
+		"tokens merge": `
+x-b: &b {acme: literal-merge-token}
+github_auth:
+  tokens:
+    <<: *b
+`,
+		"root merge": `
+x-b: &b
+  github_auth:
+    token: literal-merge-token
+<<: *b
+`,
+		"sequence merge": `
+x-a: &a {token: literal-merge-token}
+x-c: &c {suppress_gh_warning: true}
+github_auth:
+  <<: [*c, *a]
+`,
+		"null tag": `
+github_auth:
+  token: !!null literal-merge-token
+`,
+		"mapping value": `
+github_auth:
+  token: {inner: literal-merge-token}
+`,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			withNoMachineConfig(t)
+			dir := t.TempDir()
+			writeProjectYAML(t, dir, "owner: acme\n"+body)
+			cfg, err := LoadMerged(dir)
+			if err == nil {
+				tok, _ := cfg.ResolveToken("acme")
+				t.Fatalf("loaded; ResolveToken returned %d bytes", len(tok))
+			}
+			if !errors.Is(err, ErrRepoTierCredential) {
+				t.Errorf("error is not ErrRepoTierCredential: %v", err)
+			}
+			if strings.Contains(err.Error(), "literal-merge-token") {
+				t.Errorf("error leaks the value: %v", err)
+			}
+		})
+	}
+}
+
+// TestEnvRefShapedLikeTokenRejected: `env:` followed by a token is a pasted
+// token, not a variable name. The loader refuses it and resolveEnvRef never
+// echoes it.
+func TestEnvRefShapedLikeTokenRejected(t *testing.T) {
+	tok := "ghp_" + strings.Repeat("A1", 18)
+	withNoMachineConfig(t)
+	dir := t.TempDir()
+	writeProjectYAML(t, dir, "owner: acme\ngithub_auth:\n  token: env:"+tok+"\n")
+	_, err := LoadMerged(dir)
+	if err == nil || strings.Contains(err.Error(), tok) {
+		t.Fatalf("LoadMerged = %v, want a redacted refusal", err)
+	}
+	if _, err := resolveEnvRef("env:" + tok); err == nil || strings.Contains(err.Error(), tok) {
+		t.Fatalf("resolveEnvRef = %v, want a redacted error", err)
+	}
+	// An owner name that is a pasted token is redacted too.
+	writeProjectYAML(t, dir, "owner: acme\ngithub_auth:\n  tokens:\n    "+tok+": literal\n")
+	if _, err := LoadMerged(dir); err == nil || strings.Contains(err.Error(), tok) {
+		t.Fatalf("LoadMerged = %v, want a refusal that does not echo the key", err)
+	}
+}
+
+// TestPlaintextSecretErrorNamesRefresh: the refusal names the migration
+// command that removes literal GitHub tokens from these files.
+func TestPlaintextSecretErrorNamesRefresh(t *testing.T) {
+	withNoMachineConfig(t)
+	err := ValidateRepoTierSecrets([]byte("github_auth:\n  token: literal\n"), "/repo/.nightgauge/config.yaml")
+	if err == nil || !strings.Contains(err.Error(), "nightgauge forge auth refresh") {
+		t.Fatalf("error does not name the migration command: %v", err)
+	}
+}
+
+// TestLegacyJSONCredentialsRejected: the legacy config.json is a repository
+// tier too; encoding/json matches keys case-insensitively, so the typed
+// decode is what is checked, and the license key never survives.
+func TestLegacyJSONCredentialsRejected(t *testing.T) {
+	write := func(t *testing.T, body string) string {
+		t.Helper()
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, ".nightgauge"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, ".nightgauge", "config.json"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	withNoMachineConfig(t)
+	for name, body := range map[string]string{
+		"token":        `{"owner":"acme","githubAuth":{"token":"literal-json-token"}}`,
+		"case variant": `{"owner":"acme","GITHUBAUTH":{"TOKEN":"literal-json-token"}}`,
+		"tokens":       `{"owner":"acme","githubAuth":{"tokens":{"acme":"literal-json-token"}}}`,
+		"license":      `{"owner":"acme","licenseKey":"literal-json-token"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := write(t, body)
+			_, err := Load(dir)
+			if err == nil || !errors.Is(err, ErrRepoTierCredential) || strings.Contains(err.Error(), "literal-json-token") {
+				t.Fatalf("Load = %v, want a redacted refusal", err)
+			}
+			if !strings.Contains(err.Error(), "config.json") {
+				t.Errorf("error does not name the file: %v", err)
+			}
+		})
+	}
+	t.Run("env reference loads and platform is stripped", func(t *testing.T) {
+		t.Setenv("NG_TEST_JSON_TOKEN", "from-env")
+		dir := write(t, `{"owner":"acme","githubAuth":{"token":"env:NG_TEST_JSON_TOKEN"},"platformUrl":"https://x.invalid","licenseKey":"env:NG_TEST_JSON_TOKEN"}`)
+		cfg, err := Load(dir)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if got, _ := cfg.ResolveToken("acme"); got != "from-env" {
+			t.Errorf("ResolveToken = %q", got)
+		}
+		if cfg.LicenseKey != "" || cfg.PlatformURL != "" {
+			t.Errorf("platform survived the legacy JSON tier: %q %q", cfg.LicenseKey, cfg.PlatformURL)
+		}
+	})
+}
+
+// TestHomeDirProjectIsMachineTier: run from $HOME, .nightgauge/config.yaml is
+// the machine file. It is not a repository tier, so a literal loads.
+func TestHomeDirProjectIsMachineTier(t *testing.T) {
+	t.Run("canonical", func(t *testing.T) {
+		home := t.TempDir()
+		machine := filepath.Join(home, ".nightgauge", "config.yaml")
+		prev := machineConfigPathFn
+		machineConfigPathFn = func() (string, error) { return machine, nil }
+		t.Cleanup(func() { machineConfigPathFn = prev })
+		writeProjectYAML(t, home, "owner: acme\ngithub_auth:\n  token: literal-home-token\n")
+		cfg, err := LoadMerged(home)
+		if err != nil {
+			t.Fatalf("LoadMerged from home: %v", err)
+		}
+		if got, _ := cfg.ResolveToken("acme"); got != "literal-home-token" {
+			t.Errorf("ResolveToken = %q", got)
+		}
+	})
+	t.Run("linux legacy through a symlink", func(t *testing.T) {
+		real := t.TempDir()
+		link := filepath.Join(t.TempDir(), "home")
+		if err := os.Symlink(real, link); err != nil {
+			t.Skip("symlinks unavailable")
+		}
+		t.Setenv("HOME", real)
+		t.Setenv("NIGHTGAUGE_CONFIG_HOME", "")
+		t.Setenv("XDG_CONFIG_HOME", "")
+		prevGOOS := machineGOOSFn
+		machineGOOSFn = func() string { return "linux" }
+		prev := machineConfigPathFn
+		machineConfigPathFn = defaultMachineConfigPath
+		t.Cleanup(func() { machineGOOSFn = prevGOOS; machineConfigPathFn = prev })
+		writeProjectYAML(t, real, "owner: acme\ngithub_auth:\n  token: literal-home-token\n")
+		if _, err := LoadMerged(link); err != nil {
+			t.Fatalf("LoadMerged from the legacy machine directory: %v", err)
+		}
+	})
 }

@@ -102,6 +102,14 @@ it. This gate is the cheapest place to stop the whole class: an issue bundling
 many independent refactors must be decomposed into sub-issues under an epic
 **before** any GitHub mutation, not discovered at $112 of feature-dev churn.
 
+**Capacity (#1655).** The gate also refuses an issue whose predicted size
+exceeds the capacity of the repository's target model — the largest size the
+ADR-023 capacity table admits for that model's context window — unless it is
+being decomposed into an epic now. The oversized-scope marker does not
+override this, and decomposition is forced one level deep only: a sub-issue
+of a capacity-forced decomposition that is still over the cap is reported for
+human decomposition.
+
 **Reuses the file/size signals already computed in the sizing phase** (Size
 Prediction & File-Based Sizing Heuristics, lines ~200-258): the set of distinct
 top-level target files referenced in the technical notes, and the predicted size
@@ -125,6 +133,9 @@ DISTINCT_TARGETS=$(printf '%s' "${ISSUE_BODY}" \
 # --- Signal 2: predicted size == XL (data-driven, from the sizing phase) ---
 # PREDICTED_SIZE is the SizeLabel resolved earlier (complexity model or
 # `nightgauge size predict <num> --json`). Default to the heuristic label.
+# The size before that default, for Signal 4: an assumed M is not a size, and
+# the capacity cap applies only to a size something actually predicted.
+PREDICTED_SIZE_RAW="${PREDICTED_SIZE:-${SIZE_LABEL:-}}"
 PREDICTED_SIZE="${PREDICTED_SIZE:-${SIZE_LABEL:-M}}"
 
 # --- Signal 3: independent acceptance-criteria groups ---
@@ -134,11 +145,46 @@ PREDICTED_SIZE="${PREDICTED_SIZE:-${SIZE_LABEL:-M}}"
 AC_GROUP_COUNT=$(printf '%s\n' "${ISSUE_BODY}" \
   | grep -ciE '^[[:space:]]*([-*]|[0-9]+\.)[[:space:]]+(refactor|migrate|convert|split|rewrite|extract|decompose|reduce|trim)[[:space:]]')
 
+# --- Signal 4: predicted size above the target model's capacity (#1655) ---
+# `nightgauge size-gate capacity` reads the ADR-023 capacity table for the
+# repository's configured target model: the adapter feature-dev resolves to
+# and its model (on opencode, the machine-tier opencode.model). When the issue
+# targets another model, add `--adapter <a> --model <m>`. The same table caps
+# `size-gate check` at pickup and the scheduler at dispatch, so the three
+# enforcement points agree. An unknown window applies no cap.
+CAPACITY_MAX=$(nightgauge size-gate capacity --json 2>/dev/null \
+  | jq -r '.max_size // empty' 2>/dev/null || true)
+size_rank() {
+  case "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')" in
+    XS) echo 1 ;; S) echo 2 ;; M) echo 3 ;; L) echo 4 ;; XL) echo 5 ;; *) echo 0 ;;
+  esac
+}
+OVER_CAPACITY=false
+if [ -z "${CAPACITY_MAX}" ]; then
+  echo "capacity: window unknown — no capacity cap applied (size=${PREDICTED_SIZE_RAW:-unknown})"
+elif [ "$(size_rank "${PREDICTED_SIZE_RAW}")" -eq 0 ]; then
+  echo "capacity: size unknown — no capacity cap applied (cap=${CAPACITY_MAX})"
+elif [ "$(size_rank "${PREDICTED_SIZE_RAW}")" -gt "$(size_rank "${CAPACITY_MAX}")" ]; then
+  OVER_CAPACITY=true
+fi
+
+# Marker checks match with `case` on a lowercased copy, never
+# `printf | grep -q`: under pipefail, grep -q exiting at its first match can
+# SIGPIPE printf and turn a found marker into a failed test.
+ISSUE_BODY_LC=$(tr '[:upper:]' '[:lower:]' <<< "${ISSUE_BODY}")
+
+# A child a capacity-forced decomposition created carries this marker. One
+# level of decomposition is all the gate ever forces.
+CAPACITY_CHILD=false
+case "${ISSUE_BODY_LC}" in
+  *"nightgauge:capacity-decomposed"*) CAPACITY_CHILD=true ;;
+esac
+
 # --- Override marker (mirrors the Phase 2.9 marker pattern) ---
 SCOPE_OVERRIDE=false
-if printf '%s' "${ISSUE_BODY}" | grep -qi "nightgauge:oversized-scope-accepted\|oversized scope accepted"; then
-  SCOPE_OVERRIDE=true
-fi
+case "${ISSUE_BODY_LC}" in
+  *"nightgauge:oversized-scope-accepted"* | *"oversized scope accepted"*) SCOPE_OVERRIDE=true ;;
+esac
 
 # --- Thresholds: ≥6 distinct targets, OR size==XL, OR ≥6 independent AC groups ---
 OVERSIZED=false
@@ -160,7 +206,36 @@ fi
 **Gate decision**:
 
 ```bash
-if [ "$OVERSIZED" = "true" ]; then
+if [ "$OVER_CAPACITY" = "true" ] && [ "$CAPACITY_CHILD" = "true" ]; then
+  # A capacity-forced child that is still over the cap: the one automatic
+  # level is spent. Report it; never decompose it again.
+  cat >&2 << GATE_ERROR
+ERROR: capacity-gate — requires human decomposition
+
+  This issue is already a sub-issue of a capacity-forced decomposition, and its
+  predicted size ${PREDICTED_SIZE_RAW} still exceeds the target model's capacity
+  (max ${CAPACITY_MAX}). Decomposition stops at one level: split it by hand, or
+  target a model with a larger context window.
+GATE_ERROR
+  exit 1
+
+elif [ "$OVER_CAPACITY" = "true" ] && ! { printf '%s\n' "${TYPE_LABEL}" | grep -qi "epic" && [ "${SUB_ISSUE_COUNT:-0}" -gt 0 ]; }; then
+  # Above the cap and not being decomposed now. The oversized-scope marker
+  # does not override this: the model cannot hold the work, however atomic.
+  cat >&2 << GATE_ERROR
+ERROR: capacity-gate — decomposition required
+
+  Predicted size ${PREDICTED_SIZE_RAW} exceeds the target model's capacity
+  (max ${CAPACITY_MAX}, from \`nightgauge size-gate capacity\`). Decompose it into a
+  type:epic with sub-issues each of size ${CAPACITY_MAX} or smaller (Path A below),
+  and start each sub-issue body with the line
+  <!-- nightgauge:capacity-decomposed -->
+  so a sub-issue still over the cap is reported for human decomposition
+  instead of being decomposed again.
+GATE_ERROR
+  exit 1
+
+elif [ "$OVERSIZED" = "true" ]; then
 
   # An epic that is BEING decomposed now (sub-issues planned in Phase 2) is the
   # CORRECT shape for oversized scope — that is exactly what the gate wants.
@@ -203,9 +278,15 @@ GATE_ERROR
   fi
 
 else
-  echo "Phase 2.85: PASS — scope within single-ticket bounds (targets=${DISTINCT_TARGETS:-0}, size=${PREDICTED_SIZE}, ac_groups=${AC_GROUP_COUNT:-0})"
+  echo "Phase 2.85: PASS — scope within single-ticket bounds (targets=${DISTINCT_TARGETS:-0}, size=${PREDICTED_SIZE}, ac_groups=${AC_GROUP_COUNT:-0}, capacity=${CAPACITY_MAX:-none})"
 fi
 ```
+
+An epic whose sub-issues are planned now is never refused for capacity: the
+decomposition is the recovery. Every sub-issue a capacity-forced
+decomposition creates starts its body with
+`<!-- nightgauge:capacity-decomposed -->` (the first line, so the scheduler's
+bounded copy of the body still contains it) and is sized within the cap.
 
 ## Phase 2.9: Epic Decomposition Hard-Gate
 

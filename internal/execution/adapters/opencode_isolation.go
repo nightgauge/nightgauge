@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 )
 
@@ -235,6 +236,60 @@ func OpenCodeWithholdsEnv(model, key string) bool {
 		return false
 	}
 	return !slices.Contains(openCodeCatalogEnv[openCodeDispatchProvider(model)], key)
+}
+
+// OpenCodeNightgaugeEnvAllow is every NIGHTGAUGE_* variable an opencode child
+// may inherit (#1657). The rest of the namespace holds operator settings and
+// secrets, such as NIGHTGAUGE_LM_STUDIO_API_KEY, NIGHTGAUGE_JIRA_TOKEN and
+// NIGHTGAUGE_AUDIT_API_KEY, which OpenCode and every tool a stage runs would
+// otherwise receive. The set is what is read or exported for the child:
+//
+//   - the Nightgauge OpenCode plugin's reads (opencodeplugin/plugin/):
+//     NIGHTGAUGE_BIN, NIGHTGAUGE_EDIT_HOOK_DIAGNOSTICS, NIGHTGAUGE_OUTPUT_FILE,
+//     NIGHTGAUGE_RUN_ID;
+//   - BuildCommand's exports and the manager's (composeStageEnv:
+//     NIGHTGAUGE_BIN, NIGHTGAUGE_SKILL_DIR);
+//   - what the SDK OpenCodeAdapter reads for its stage (NIGHTGAUGE_MODEL,
+//     NIGHTGAUGE_REPO, NIGHTGAUGE_TARGET_REPO).
+//
+// The handshake variables (NIGHTGAUGE_OPENCODE_*) are not here: the run's own
+// values are exported after the withhold, and an inherited one is an outer
+// run's. The SDK keeps the same set (OPENCODE_NIGHTGAUGE_ALLOW in
+// packages/nightgauge-sdk/src/cli/adapters/opencodeCatalog.ts); TestOpenCodeConfigGolden
+// writes this list into the golden, and the SDK's test compares its own to it
+// and derives both from the sources above. Sorted.
+var OpenCodeNightgaugeEnvAllow = []string{
+	"NIGHTGAUGE_ADAPTER",
+	"NIGHTGAUGE_BIN",
+	"NIGHTGAUGE_CONTEXT_FILE",
+	"NIGHTGAUGE_DISPATCH_MODEL",
+	"NIGHTGAUGE_EDIT_HOOK_DIAGNOSTICS",
+	"NIGHTGAUGE_ISSUE_NUMBER",
+	"NIGHTGAUGE_MODEL",
+	"NIGHTGAUGE_OUTPUT_FILE",
+	"NIGHTGAUGE_OUTPUT_FORMAT",
+	"NIGHTGAUGE_REPO",
+	"NIGHTGAUGE_RUN_ID",
+	"NIGHTGAUGE_SKILL_DIR",
+	"NIGHTGAUGE_STAGE",
+	"NIGHTGAUGE_TARGET_REPO",
+}
+
+// openCodeNightgaugePrefix is the namespace OpenCodeWithholdsNightgaugeEnv
+// narrows to OpenCodeNightgaugeEnvAllow.
+const openCodeNightgaugePrefix = "NIGHTGAUGE_"
+
+// OpenCodeWithholdsNightgaugeEnv reports whether an inherited NIGHTGAUGE_*
+// variable named key is withheld from an opencode child whose per-run config
+// is configContent (#1657): every one outside OpenCodeNightgaugeEnvAllow,
+// except one the config itself references as {env:KEY}, such as an MCP
+// server's token or an endpoint's api_key_env, which OpenCode resolves in its
+// own environment. A name outside the namespace is not decided here.
+func OpenCodeWithholdsNightgaugeEnv(key, configContent string) bool {
+	if !strings.HasPrefix(key, openCodeNightgaugePrefix) || slices.Contains(OpenCodeNightgaugeEnvAllow, key) {
+		return false
+	}
+	return !strings.Contains(configContent, "{env:"+key+"}")
 }
 
 // openCodeWithheldProviderEnv returns, sorted, the name of every variable in
@@ -560,7 +615,8 @@ type OpenCodeIsolation struct {
 //   - the tools the XDG move would otherwise take from the operator, pinned
 //     back to what they resolve to outside the run: GH_CONFIG_DIR to the
 //     operator's gh config directory (gh keeps its hosts and auth there);
-//     NIGHTGAUGE_CONFIG_HOME to the machine-tier config directory; and, when
+//     NIGHTGAUGE_CONFIG_HOME to the machine-tier config directory;
+//     NIGHTGAUGE_STATE_HOME to the operator's machine-state root; and, when
 //     the operator has not set GOCACHE, GOCACHE to the Go build cache the
 //     operator's go uses, so builds are not cold in every stage (the Linux
 //     default moves with XDG_CACHE_HOME). git, and every other tool that
@@ -606,6 +662,18 @@ func OpenCodeIsolationEnv(in OpenCodeIsolation) (map[string]string, error) {
 		env["GH_CONFIG_DIR"] = filepath.Join(operatorConfigHome, "gh")
 	}
 	env["NIGHTGAUGE_CONFIG_HOME"] = in.MachineConfigDir
+	// The XDG_STATE_HOME move above would otherwise hand every nightgauge
+	// command the stage runs a throwaway machine-state root (ADR-024 § 8):
+	// its own rate-limit.json (splitting the machine-wide gate), its own
+	// serve claims, possibly a new machine-id, and, through the stage HOME's
+	// link to the real ~/.nightgauge, a one-time move of the operator's legacy
+	// files into a directory deleted with the run. Pin it to the root the
+	// operator's own process resolves.
+	stateHome, err := layout.StateHomePathFrom(in.GOOS, in.Home, in.Lookup)
+	if err != nil {
+		return nil, fmt.Errorf("opencode isolation: resolve the machine-state root: %w", err)
+	}
+	env[layout.EnvStateHome] = stateHome
 	if v, ok := in.Lookup("GOCACHE"); !ok || v == "" {
 		env["GOCACHE"] = filepath.Join(operatorUserCacheDir(in), "go-build")
 	}

@@ -144,7 +144,7 @@
   "provider_bands": {
     "anthropic|fable": "claude-fable-5-1",
     "anthropic|haiku": "claude-haiku-4-5-20251001",
-    "anthropic|opus": "claude-opus-5",
+    "anthropic|opus": "claude-opus-5-5",
     "anthropic|sonnet": "claude-sonnet-5",
     "copilot|fable": "claude-sonnet-4.5",
     "copilot|haiku": "gpt-4o-mini",

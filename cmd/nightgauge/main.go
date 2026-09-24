@@ -60,6 +60,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/platform"
 	ibqueue "github.com/nightgauge/nightgauge/internal/queue"
 	"github.com/nightgauge/nightgauge/internal/runstate"
+	"github.com/nightgauge/nightgauge/internal/scaffold"
 	"github.com/nightgauge/nightgauge/internal/scan"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/internal/telemetrynotice"
@@ -296,9 +297,6 @@ func getOwnerType(cmd *cobra.Command) gh.OwnerType {
 	return gh.OwnerTypeOrg
 }
 
-// globalToken holds the --token CLI flag value. Set by rootCmd PersistentPreRunE.
-var globalToken string
-
 // explicitWorkspaceRoot returns the workspace this invocation was explicitly
 // pointed at via --workspace or --workdir, or "" when it was given neither
 // (in which case the process cwd is already the right answer).
@@ -315,23 +313,31 @@ func explicitWorkspaceRoot(cmd *cobra.Command) string {
 	return ""
 }
 
-// clientFromConfig creates a GitHub client using the full resolution chain:
-//  1. --token CLI flag (globalToken)
+// clientFromConfig creates a GitHub client using the full resolution chain.
+// There is no argv tier: the root --token flag was removed because a token on
+// the command line is visible through `ps` (ADR-024 § 5, #2031).
+//  1. On a CI host: GITHUB_TOKEN, then GH_TOKEN, ahead of everything else
 //  2. Per-project or per-org token from config (github_auth.token / github_auth.tokens)
-//  3. GITHUB_TOKEN env var
-//  4. gh auth token --user <user> (from config github_user / github_auth.users) —
+//  3. gh auth token --user <user> (from config github_user / github_auth.users) —
 //     scoped to the configured identity, never the ambient active account (#3700)
-//  5. gh auth token (default gh user) — only when no github_user is configured
+//  4. With no github_user configured: GITHUB_TOKEN env var, then
+//     gh auth token (default gh user)
 func clientFromConfig() (*gh.Client, error) {
 	workdir, err := os.Getwd()
 	if err != nil {
-		return gh.NewClientFromConfig(nil, "", globalToken)
+		return gh.NewClientFromConfig(nil, "", "")
 	}
 	cfg, err := config.Load(workdir)
-	if err != nil || cfg == nil {
-		return gh.NewClientFromConfig(nil, "", globalToken)
+	if err != nil {
+		// Fail closed. A config that exists and was refused — a plaintext
+		// credential in a repository tier (#2023), or any other load error —
+		// must not quietly become the machine's default gh identity.
+		return nil, fmt.Errorf("load config: %w", err)
 	}
-	return gh.NewClientFromConfig(cfg, cfg.Owner, globalToken)
+	if cfg == nil {
+		return gh.NewClientFromConfig(nil, "", "")
+	}
+	return gh.NewClientFromConfig(cfg, cfg.Owner, "")
 }
 
 // exportConfiguredGitHubToken resolves the pipeline's GitHub token via the same
@@ -552,10 +558,9 @@ func rootCmd() *cobra.Command {
 	// Defaults to "org"; set to "user" for user-owned GitHub project boards.
 	root.PersistentFlags().String("owner-type", "org", "GitHub owner type: org or user")
 
-	// Global --token flag for one-shot PAT override. Takes highest precedence
-	// over all config-based tokens. Avoid using in scripts — prefer env:VAR_NAME
-	// in config.yaml to avoid token exposure in shell history.
-	root.PersistentFlags().StringVar(&globalToken, "token", "", "GitHub PAT for one-shot operations (overrides all config tokens)")
+	// No --token flag: a credential on argv is visible through `ps`
+	// (ADR-024 § 5, #2031). The token comes from the resolution chain in
+	// clientFromConfig; for a one-shot override, set GITHUB_TOKEN or GH_TOKEN.
 
 	root.AddCommand(
 		adapterCmd(),
@@ -4261,12 +4266,12 @@ func runCmd() *cobra.Command {
 			sched.OnStageStart(func(repo string, issue int, stage string, title string) {
 				fmt.Printf("[#%d] stage %s started\n", issue, stage)
 			})
-			sched.OnStageComplete(func(repo string, issue int, stage string, err error, inputTokens, outputTokens, cacheReadTokens int, costUsd float64, model string) {
+			sched.OnStageComplete(func(repo string, issue int, stage string, err error, cost orchestrator.StageCost, model string) {
 				if err != nil {
 					fmt.Printf("[#%d] stage %s FAILED: %v\n", issue, stage, err)
 				} else {
-					fmt.Printf("[#%d] stage %s complete — tokens: %d in (%d cached) / %d out, cost: $%.4f\n",
-						issue, stage, inputTokens, cacheReadTokens, outputTokens, costUsd)
+					fmt.Printf("[#%d] stage %s complete — tokens: %s, cost: %s\n",
+						issue, stage, cost.TokenSummary(), cost.CostSummary())
 				}
 			})
 			// Phase progress (#1924). Until this existed the CLI showed stage
@@ -4773,6 +4778,30 @@ func serveCmd() *cobra.Command {
 			// request lands in the ledger of the workspace it serves (#1913).
 			gh.SetAPILedgerWorkspaceRoot(workspaceRoot)
 
+			// The persistent conditional-request store, installed before the
+			// first client exists so every client this daemon builds shares it:
+			// an unchanged board, repository or alert list answers 304 — free —
+			// and keeps doing so after a window reload restarts this process.
+			// Without a user cache directory the clients keep per-process
+			// memory stores, which are correct, just cold after a restart.
+			// Mock mode (an injected GraphQL URL) never touches the real store.
+			if githubGraphQLURL == "" {
+				if dir, derr := gh.ConditionalStoreDir(); derr != nil {
+					fmt.Fprintf(os.Stderr, "warning: no user cache directory (%v); GitHub conditional requests are remembered in memory only\n", derr)
+				} else {
+					store := gh.NewConditionalStore(dir)
+					// Pruned now and daily, off the startup path, for the life
+					// of this daemon: entries unwritten for 14 days go, and the
+					// oldest go first past 256 MiB.
+					maintCtx := cmd.Context()
+					if maintCtx == nil {
+						maintCtx = context.Background()
+					}
+					go store.RunMaintenance(maintCtx, 14*24*time.Hour, 256<<20, 24*time.Hour)
+					gh.SetProcessConditionalStore(store)
+				}
+			}
+
 			var client *gh.Client
 			if githubGraphQLURL != "" {
 				token := os.Getenv("GITHUB_TOKEN")
@@ -4790,6 +4819,18 @@ func serveCmd() *cobra.Command {
 			// Set up persistent file-based logging (tees to stderr + file)
 			closeLog := setupServeLogging(workspaceRoot)
 			defer closeLog()
+
+			// The .nightgauge/ ignore rules (#2026). The extension ensures them
+			// on activation, but a CLI-only or CI clone never runs it, and
+			// there `git add -A` commits logs and pipeline state. Non-fatal:
+			// the IPC server is worth more than an ignore file.
+			// Logged only when a file changed, so a committed older copy
+			// (deferred, block already current) is silent on every restart.
+			if res, ierr := scaffold.EnsureIgnoreRules(workspaceRoot); ierr != nil {
+				log.Printf("serve: ensure .nightgauge/ ignore rules: %v", ierr)
+			} else if res.Changed {
+				log.Printf("serve: %s", describeIgnoreResult(res))
+			}
 
 			// Claim this workspace's serve record in the machine-global claim
 			// directory and heartbeat it (#388). Without this marker `doctor`
@@ -4875,18 +4916,26 @@ func serveCmd() *cobra.Command {
 				}
 			}
 
-			// Resolve platform credentials with flag > env > config
-			// precedence (#333). serveCmd registers --platform-url,
-			// --api-key, and --license-key with os.Getenv(...) defaults, so
-			// the flag variables above already encode "flag or env, flag
-			// wins" by the time cobra hands control to RunE — the only
-			// remaining fallback is the merged config file's platform
-			// section, which an extension-spawned daemon (no flags, no env)
-			// otherwise never consults. Without this, cfg.PlatformURL /
+			// The platform API key and license key are read from the
+			// environment only (ADR-024 § 5): the --api-key and --license-key
+			// flags they once also took put them on argv, where every local
+			// user sees them through `ps`.
+			apiKey = os.Getenv("NIGHTGAUGE_API_KEY")
+			licenseKey = os.Getenv("NIGHTGAUGE_LICENSE_KEY")
+
+			// Resolve platform credentials with flag/env > config
+			// precedence (#333). serveCmd registers --platform-url with an
+			// os.Getenv(...) default, so the URL variable above already
+			// encodes "flag or env, flag wins" by the time cobra hands
+			// control to RunE; the keys come from the environment — the only
+			// remaining fallback is the stored license key (OS keychain,
+			// then machine-tier file) and the merged config's URL, which an
+			// extension-spawned daemon (no flags, no env) otherwise never
+			// consults. Without this, cfg.PlatformURL /
 			// cfg.LicenseKey are silently ignored and both the remote-command
 			// poller (below) and the #330 Action Center bridge stay dormant
 			// in the product's primary deployment mode.
-			resolvedPlatform := resolvePlatformConfig(platformURL, apiKey, licenseKey, cfg)
+			resolvedPlatform := resolvePlatformConfig(platformURL, apiKey, licenseKey, cfg, newLicenseStore().ResolveLicenseKey)
 			platformURL, apiKey, licenseKey = resolvedPlatform.URL, resolvedPlatform.APIKey, resolvedPlatform.LicenseKey
 			if resolvedPlatform.Configured() {
 				apiURLForLog := platformURL
@@ -5364,8 +5413,6 @@ func serveCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&workspaceDir, "workspace", "", "Workspace root directory (default: CWD)")
 	cmd.Flags().StringVar(&platformURL, "platform-url", os.Getenv("NIGHTGAUGE_PLATFORM_URL"), "Platform API base URL")
-	cmd.Flags().StringVar(&apiKey, "api-key", os.Getenv("NIGHTGAUGE_API_KEY"), "Platform API key")
-	cmd.Flags().StringVar(&licenseKey, "license-key", os.Getenv("NIGHTGAUGE_LICENSE_KEY"), "License key")
 	cmd.Flags().StringVar(&githubGraphQLURL, "github-graphql-url", "", "Override GitHub GraphQL URL (for tests only)")
 	cmd.Flags().MarkHidden("github-graphql-url") //nolint:errcheck
 
@@ -6285,10 +6332,11 @@ cause the command to exit non-zero.`,
 				boardSvc = gh.NewProjectService(client, ownerPart, projectNumber)
 			}
 
-			// (#1249) The check reader is what lets the hook observe main after
-			// the merge — AGENTS.md's "main's own run is the observation", run
-			// by the pipeline instead of only by hand. --main-check-wait bounds
-			// it; 0 is a single read for an operator who will not wait out CI.
+			// (#1249, #2055) The check reader is what lets the hook verify the
+			// merge: the merge commit's tree against the merged PR head's, the
+			// head's required checks, and what still runs on the merge commit
+			// (github.EvaluateMergedCommit). --main-check-wait bounds it; 0 is a
+			// single read for an operator who will not wait out CI.
 			wait := hooks.DefaultMainCheckWait()
 			wait.Timeout = mainCheckWait
 			result := hooks.EvaluatePostMerge(cmd.Context(), issueSvc, issueSvc, epicSvc, prSvc, boardSvc, hooks.PostMergeInput{
@@ -7258,6 +7306,13 @@ func ciCmd() *cobra.Command {
 	return cmd
 }
 
+// checksCompleteCapability is the line `ci checks-complete --help` prints so
+// scripts/post-merge-check.sh can tell this binary applies the #2055
+// merged-PR rule. An older binary demands the required checks on the merge
+// commit, which no longer run on push, so it would say NOT-YET forever; the
+// script falls back to its own rule instead of handing off to it.
+const checksCompleteCapability = "capability: merged-pr-gate"
+
 // checksCompleteResult is the JSON shape of `nightgauge ci checks-complete`.
 type checksCompleteResult struct {
 	Verdict       gh.ChecksCompleteVerdict `json:"verdict"`
@@ -7267,6 +7322,12 @@ type checksCompleteResult struct {
 	RequiredNames []string                 `json:"requiredNames,omitempty"`
 	Polls         int                      `json:"polls"`
 	CrossChecked  bool                     `json:"crossChecked"`
+	// PRNumber, PRHeadSha and TreesMatch describe the merged pull request
+	// behind sha (#2055); all empty when sha has none. TreesMatch true means
+	// the PR head's required checks were the gate for this merge.
+	PRNumber   int    `json:"prNumber,omitempty"`
+	PRHeadSha  string `json:"prHeadSha,omitempty"`
+	TreesMatch *bool  `json:"treesMatch,omitempty"`
 	// CouldNotRun is why the commit was not measured at all (#1691). Set only
 	// with verdict not-yet and exit 2: a failure to measure is never red.
 	CouldNotRun string `json:"couldNotRun,omitempty"`
@@ -7294,6 +7355,17 @@ type checksCompleteReader interface {
 	GetWorkflowRunsForRef(ctx context.Context, owner, repo, sha string) ([]gh.WorkflowRunSummary, error)
 }
 
+// checksCompleteNow is the clock EvaluateMergedCommit's merge-commit grace
+// reads; tests pin it.
+var checksCompleteNow = time.Now
+
+// requiredCheckReader resolves a branch's required checks; *github.CIService
+// satisfies it, so pollChecksComplete can re-resolve against a merged PR's
+// base branch.
+type requiredCheckReader interface {
+	GetRequiredCheckNames(ctx context.Context, owner, repo, branch string) ([]string, error)
+}
+
 // pollChecksComplete is ciChecksCompleteCmd's polling loop, extracted for
 // testability. It confirms a terminal-looking verdict (green/red) across two
 // consecutive polls before trusting it (#1540 §3) — a verdict that changes
@@ -7303,7 +7375,7 @@ type checksCompleteReader interface {
 // `--main-check-wait 0` / `Timeout: 0` semantics elsewhere in this codebase.
 //
 // sleep is nil in production (real timer); tests inject a no-op.
-func pollChecksComplete(ctx context.Context, reader checksCompleteReader, owner, repo, sha, branch string, requiredNames []string, maxPolls int, interval time.Duration, skipCrossCheck bool, sleep func(context.Context, time.Duration) error, progress func(poll, maxPolls int, verdict gh.ChecksCompleteVerdict)) (checksCompleteResult, error) {
+func pollChecksComplete(ctx context.Context, reader checksCompleteReader, owner, repo, sha, branch string, requiredNames []string, requiredKnown bool, maxPolls int, interval time.Duration, skipCrossCheck bool, sleep func(context.Context, time.Duration) error, progress func(poll, maxPolls int, verdict gh.ChecksCompleteVerdict)) (checksCompleteResult, error) {
 	if sleep == nil {
 		sleep = func(ctx context.Context, d time.Duration) error {
 			select {
@@ -7318,8 +7390,36 @@ func pollChecksComplete(ctx context.Context, reader checksCompleteReader, owner,
 	res := checksCompleteResult{Sha: sha, Branch: branch, RequiredNames: requiredNames, CrossChecked: !skipCrossCheck}
 	var lastVerdict gh.ChecksCompleteVerdict
 
+	// #2055: when sha is a merged PR's merge commit, the PR head's required
+	// checks are the gate (gh.EvaluateMergedCommit). Re-asked each poll until
+	// found (the commit-to-PR association can trail a merge by a moment), then
+	// fixed: a merged PR's head and trees do not change. A reader without the
+	// capability, or a sha with no merged PR, keeps the merge-commit-only rule.
+	provReader, canProve := reader.(gh.MergeProvenanceReader)
+	var prov *gh.MergeProvenance
+	noPush := false
+
 	for poll := 1; ; poll++ {
 		res.Polls = poll
+		if canProve && prov == nil {
+			p, err := provReader.GetMergeProvenance(ctx, owner, repo, sha)
+			if err != nil {
+				return res, err
+			}
+			if prov = p; prov != nil {
+				match := prov.TreesMatch()
+				res.PRNumber, res.PRHeadSha, res.TreesMatch = prov.PRNumber, prov.HeadSHA, &match
+				// The required set is the merged PR's base branch's, as in
+				// the bash fallback and the hook, not the default branch's.
+				if rr, ok := reader.(requiredCheckReader); ok && prov.BaseRef != "" && prov.BaseRef != branch {
+					names, err := rr.GetRequiredCheckNames(ctx, owner, repo, prov.BaseRef)
+					requiredNames, requiredKnown = names, err == nil
+					branch = prov.BaseRef
+					res.Branch, res.RequiredNames = branch, requiredNames
+				}
+				noPush = gh.NoPushWorkflows(ctx, reader, owner, repo, prov)
+			}
+		}
 		checks, err := reader.GetCommitChecks(ctx, owner, repo, sha)
 		if err != nil {
 			return res, err
@@ -7333,7 +7433,13 @@ func pollChecksComplete(ctx context.Context, reader checksCompleteReader, owner,
 			runs, _ = reader.GetWorkflowRunsForRef(ctx, owner, repo, sha)
 		}
 
-		verdict, reasons := gh.EvaluateCommitChecksCrossChecked(checks, requiredNames, runs)
+		ev := gh.MergeEvidence{Provenance: prov, MergeChecks: checks, RequiredNames: requiredNames, RequiredKnown: requiredKnown, Runs: runs, Now: checksCompleteNow(), NoPushWorkflows: noPush}
+		if ev.PRHeadIsEvidence() {
+			if ev.HeadChecks, err = reader.GetCommitChecks(ctx, owner, repo, prov.HeadSHA); err != nil {
+				return res, err
+			}
+		}
+		verdict, reasons := gh.EvaluateMergedCommit(ev)
 		res.Verdict, res.Reasons = verdict, reasons
 
 		confirmed := false
@@ -7365,9 +7471,16 @@ func pollChecksComplete(ctx context.Context, reader checksCompleteReader, owner,
 // green?" (github.EvaluateCommitChecks, cross-checked) behind both callers —
 // the same evaluation the post-merge hook applies to a merge commit (#1674).
 //
-// Every check run and commit status on the SHA counts: a failed optional check
-// is RED, and a still-running one is NOT-YET. Required contexts are resolved
-// from branch protection and rulesets and must additionally be present.
+// When the SHA is a merged pull request's merge commit (#2055), the PR run is
+// the gate: the merge commit's tree must equal the PR head's tree, the PR
+// head's required checks must all have passed, and whatever else still runs
+// on the merge commit must be green, still running being NOT-YET. cache-warm
+// never counts; CodeQL's merge-commit runs are informational (reported, never
+// deciding), because the PR's required CodeQL run analysed the same tree.
+// If the trees differ (a ruleset bypass), or the SHA has no merged PR, the
+// rule is the SHA's own checks: every check run and commit status counts, a
+// failed optional check is RED, a still-running one is NOT-YET, and required
+// contexts resolved from branch protection and rulesets must be present.
 //
 // Exit codes match post-merge-check.sh's contract so the script's delegation
 // is a drop-in: 0 GREEN, 1 RED, 2 NOT-YET. Exit 1 is reserved for a completed
@@ -7383,8 +7496,17 @@ func ciChecksCompleteCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:          "checks-complete <sha>",
-		Short:        "Answer \"did this SHA's CI go green?\" — every check run and status must pass; required ones must be present",
+		Use:   "checks-complete <sha>",
+		Short: "Answer \"did this SHA's CI go green?\" — for a merge commit, the merged PR head's required checks on the same tree plus the merge commit's own runs",
+		Long: "Answer \"did this SHA's CI go green?\" with the post-merge rule of #2055: for a merged PR's\n" +
+			"merge commit, the merge commit's tree must equal the PR head's, the head's required checks\n" +
+			"must have passed, and the checks still running on the merge commit (not cache-warm; CodeQL is\n" +
+			"reported but informational, since the PR's own CodeQL run analysed the same tree) must be\n" +
+			"green. Exit 0 green, 1 red, 2 not yet observable.\n\n" +
+			// scripts/post-merge-check.sh greps --help for this exact line
+			// before handing off; a binary without it gets the script's own
+			// rule. Never remove or reword it.
+			checksCompleteCapability,
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		Example: `  nightgauge ci checks-complete abc1234 --repo nightgauge/nightgauge
@@ -7466,11 +7588,12 @@ func runChecksComplete(ctx context.Context, sha string, opts checksCompleteOptio
 		}
 	}
 
+	// A failed lookup leaves the set unknown, and an unknown set is never
+	// green (#2055): the gate cannot be verified without it, so the verdict
+	// is NOT-YET rather than the all-checks idiom's possible false green.
 	requiredNames, reqErr := svc.GetRequiredCheckNames(ctx, ownerPart, repoPart, branch)
-	if reqErr != nil {
-		// Best-effort (#1540 §5): a failed lookup falls back to the
-		// all-checks-concluded idiom rather than blocking the whole
-		// verb on an auxiliary lookup.
+	requiredKnown := reqErr == nil
+	if !requiredKnown {
 		requiredNames = nil
 	}
 
@@ -7487,7 +7610,7 @@ func runChecksComplete(ctx context.Context, sha string, opts checksCompleteOptio
 		}
 	}
 
-	res, err := pollChecksComplete(ctx, svc, ownerPart, repoPart, sha, branch, requiredNames, maxPolls, interval, opts.skipCrossCheck, sleep, progress)
+	res, err := pollChecksComplete(ctx, svc, ownerPart, repoPart, sha, branch, requiredNames, requiredKnown, maxPolls, interval, opts.skipCrossCheck, sleep, progress)
 	if err != nil {
 		return couldNotRun(err)
 	}
@@ -11774,7 +11897,7 @@ func authCmd() *cobra.Command {
 		Use:   "auth",
 		Short: "Authentication operations",
 	}
-	cmd.AddCommand(authCheckCmd())
+	cmd.AddCommand(authCheckCmd(), authLicenseCmd())
 	return cmd
 }
 
@@ -11904,7 +12027,7 @@ var doctorCheckOrder = []string{
 	"binary", "gh", "github_auth", "api_user", "scopes", "rate_limit", "github_api_budget", "config", "project",
 	"complexity_model", "ai_adapter",
 	"compose_orphans", "worktree_leaks", "stranded_branches", "pipeline_stashes", "preserved_wip", "orphaned_processes",
-	"serve_lease", "ledger_daemon_coverage",
+	"serve_lease", "ledger_daemon_coverage", "tracked_secrets", "ci_machine_credentials",
 	"survival_backlog", "survival_coverage", "corpus_calibration", "scheduled_automations",
 }
 
@@ -11924,6 +12047,7 @@ func doctorCmd() *cobra.Command {
   - Project number and owner configuration
   - Complexity model presence (nightgauge outcome init repairs it)
   - At least one usable AI coding agent (Issue #862)
+  - No GitHub token or license key in tracked files under .nightgauge/
 
 The AI-agent row answers one question: can this machine run a stage at all?
 Zero usable adapters is a warning (degraded), never a hard failure — see
@@ -11946,7 +12070,7 @@ Use --json for machine-readable output (skills parse this format).`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			workdir, _ := os.Getwd()
-			cfg, _ := config.Load(workdir)
+			cfg, cfgErr := config.Load(workdir)
 
 			client, clientErr := clientFromConfig()
 			if clientErr != nil {
@@ -11954,7 +12078,7 @@ Use --json for machine-readable output (skills parse this format).`,
 			}
 
 			adapters := parseAdaptersFlag(adaptersFlag)
-			result := doctor.RunDoctor(cmd.Context(), cfg, client, adapters)
+			result := doctor.RunDoctorWithConfigError(cmd.Context(), cfg, cfgErr, client, adapters)
 
 			if jsonOutput {
 				if err := printJSON(result); err != nil {

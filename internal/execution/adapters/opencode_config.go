@@ -91,8 +91,11 @@ import (
 
 // OpenCodeConfigSchemaVersion is the schema_version of `nightgauge opencode
 // config --json`. A caller refuses an output whose major version it does not
-// know (#1648).
-const OpenCodeConfigSchemaVersion = "1.0"
+// know (#1648). 1.1 added binary and plugin_version, which the SDK spawn path
+// needs to run the binary the verb vetted and to verify the plugin handshake;
+// 1.2 added run_id, so it can delete the root when the run ends; 1.3 added
+// env_withhold.keep and the NIGHTGAUGE_ prefix it qualifies (#1657).
+const OpenCodeConfigSchemaVersion = "1.3"
 
 // openCodeConfigContentEnvVar is the inline config layer OpenCode merges last
 // of every layer Nightgauge does not refuse.
@@ -550,13 +553,19 @@ func OpenCodeConfigInputFor(settings config.OpenCodeConfig, run RunOptions, runR
 // (models.ResolveLocal), or what a test binary swapped in for it
 // (SwapOpenCodeLocalDiscoveryForTest).
 func openCodeLocalDiscovery(ep OpenCodeEndpoint, model string) (models.LocalDescriptor, error) {
+	return openCodeLocalDiscoveryContext(context.Background(), ep, model)
+}
+
+// openCodeLocalDiscoveryContext is openCodeLocalDiscovery that stops waiting
+// when ctx is done (models.ResolveLocalContext).
+func openCodeLocalDiscoveryContext(ctx context.Context, ep OpenCodeEndpoint, model string) (models.LocalDescriptor, error) {
 	openCodeLocalDiscoveryMu.RLock()
 	override := openCodeLocalDiscoveryOverride
 	openCodeLocalDiscoveryMu.RUnlock()
 	if override != nil {
 		return override(ep, model)
 	}
-	return models.ResolveLocal("opencode", model, models.LocalEndpoint{ID: ep.ID, Provider: ep.Provider, BaseURL: ep.BaseURL})
+	return models.ResolveLocalContext(ctx, "opencode", model, models.LocalEndpoint{ID: ep.ID, Provider: ep.Provider, BaseURL: ep.BaseURL})
 }
 
 var (
@@ -726,9 +735,12 @@ type openCodeAnthropicOptionsJSON struct {
 	APIKey  string `json:"apiKey"`
 }
 
-// BuildOpenCodeConfig builds the per-run config for in.Run. It is pure: it
-// reads no file and no environment beyond in.Lookup, and the same input gives
-// the same bytes.
+// BuildOpenCodeConfig builds the per-run config for in.Run. It reads no file
+// and no environment beyond in.Lookup, but it is not pure: for a declared
+// endpoint's model it always calls in.Discover, which queries the endpoint
+// over HTTP (even when a machine-tier limit overrides what it reports), so
+// the result can depend on what that server says. With in.Discover nil the
+// same input gives the same bytes.
 //
 // It sets:
 //
@@ -801,11 +813,7 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 	_, catalogKey := openCodeCatalogEnv[key]
 	switch ep, declared := findOpenCodeEndpoint(in.Endpoints, key); {
 	case declared:
-		desc, discoverErr := models.LocalDescriptor{}, errors.New("nothing discovers it")
-		if in.Discover != nil {
-			desc, discoverErr = in.Discover(ep, model)
-		}
-		limit, warnings, err := ep.resolveLimit(modelID, in.Run.MaxTokens, desc, discoverErr)
+		limit, warnings, err := ep.dispatchLimit(model, modelID, in.Run.MaxTokens, in.Discover)
 		if err != nil {
 			return OpenCodeRunConfig{}, err
 		}
@@ -1124,6 +1132,49 @@ func (ep OpenCodeEndpoint) resolveLimit(modelID string, maxTokens int, desc mode
 	return limit, warnings, nil
 }
 
+// dispatchLimit is the limits a dispatch of model ("<key>/<modelID>") gets on
+// ep: resolveLimit over what discover finds on the server, or over nothing
+// when discover is nil.
+func (ep OpenCodeEndpoint) dispatchLimit(model, modelID string, maxTokens int, discover func(OpenCodeEndpoint, string) (models.LocalDescriptor, error)) (config.OpenCodeLimit, []string, error) {
+	desc, discoverErr := models.LocalDescriptor{}, errors.New("nothing discovers it")
+	if discover != nil {
+		desc, discoverErr = discover(ep, model)
+	}
+	return ep.resolveLimit(modelID, maxTokens, desc, discoverErr)
+}
+
+// OpenCodeContextWindow is the context limit a dispatch of model, the -m
+// value "<key>/<model-id>", gets on this machine: the same limit
+// BuildOpenCodeConfig writes into the run's config for a declared endpoint
+// (the machine-tier limit.context, clamped to the loaded window, else the
+// window discovered from the server). It is 0 with a nil error when model
+// names no declared endpoint (a hosted provider, whose window the model
+// registry describes), and 0 with the reason when the endpoint's limit does
+// not resolve.
+func OpenCodeContextWindow(ctx context.Context, settings config.OpenCodeConfig, model string) (int, error) {
+	m, err := OpenCodeModelArg(model)
+	if err != nil {
+		return 0, err
+	}
+	key, modelID, _ := strings.Cut(m, "/")
+	endpoints, err := OpenCodeEndpoints(settings)
+	if err != nil {
+		return 0, err
+	}
+	ep, declared := findOpenCodeEndpoint(endpoints, key)
+	if !declared {
+		return 0, nil
+	}
+	discover := func(ep OpenCodeEndpoint, model string) (models.LocalDescriptor, error) {
+		return openCodeLocalDiscoveryContext(ctx, ep, model)
+	}
+	limit, _, err := ep.dispatchLimit(m, modelID, 0, discover)
+	if err != nil {
+		return 0, err
+	}
+	return limit.Context, nil
+}
+
 func findOpenCodeEndpoint(endpoints []OpenCodeEndpoint, key string) (OpenCodeEndpoint, bool) {
 	for _, ep := range endpoints {
 		if ep.ID == key {
@@ -1310,7 +1361,7 @@ type OpenCodeRun struct {
 	Env map[string]string `json:"env"`
 	// EnvWithhold is what the spawn must not inherit: a caller removes every
 	// inherited variable it names before it adds Env, as the manager does for
-	// the Go path (OpenCodeWithholdsEnv).
+	// the Go path (OpenCodeAdapter.WithholdsEnv).
 	EnvWithhold OpenCodeEnvWithhold `json:"env_withhold"`
 	// PluginDir is where InstallNightgaugePlugin writes the plugin tree,
 	// inside the run's OpenCode config directory but deliberately NOT named
@@ -1325,6 +1376,23 @@ type OpenCodeRun struct {
 	PluginDir string `json:"plugin_dir"`
 	// RunDir is the run's root.
 	RunDir string `json:"run_dir"`
+	// Binary is the absolute path of the opencode binary the adapter's
+	// version policy vetted for this dispatch (ResolveOpenCodeBinary: the
+	// opencode.binary pin, else the opencode on PATH). Only
+	// `nightgauge opencode config` sets it, so an SDK caller (#1648) spawns
+	// the binary the verb checked rather than whatever opencode its own PATH
+	// finds. The Go spawn path takes the pin from PrepareRunRoot instead.
+	Binary string `json:"binary,omitempty"`
+	// RunID is the run identity RunDir is named by: the verb's --run-id, or
+	// the one it minted. Only `nightgauge opencode config` sets it, so an SDK
+	// caller can delete the root with `nightgauge opencode cleanup` at the
+	// run's end, as the Go scheduler does (ADR-022 § 22).
+	RunID string `json:"run_id,omitempty"`
+	// PluginVersion is the plugin_version the Nightgauge plugin's handshake
+	// sentinel must carry (opencodeplugin.PluginVersion), set by
+	// InstallNightgaugePlugin, so a caller outside this binary verifies the
+	// handshake against the version the verb installed, not a copy of it.
+	PluginVersion string `json:"plugin_version,omitempty"`
 	// Home is the OS home directory (OpenCodeRunRequest.Home) the run was
 	// built for. InstallNightgaugePlugin uses it, not exported in Env, to
 	// find the operator's $HOME/.opencode (#1635 fix round finding 3):
@@ -1342,19 +1410,42 @@ type OpenCodeRun struct {
 	Endpoints []string `json:"-"`
 }
 
-// OpenCodeEnvWithhold is OpenCodeWithholdsEnv for one dispatch, as data: an
-// inherited variable is withheld when its name starts with one of Prefixes
-// or is one of Names. Names are sorted.
+// OpenCodeEnvWithhold is OpenCodeAdapter.WithholdsEnv for one dispatch, as
+// data: an inherited variable is withheld when it is one of Names, or when
+// its name starts with one of Prefixes and it is not one of Keep (#1657).
+// Names and Keep are sorted.
 type OpenCodeEnvWithhold struct {
 	Prefixes []string `json:"prefixes"`
 	Names    []string `json:"names"`
+	// Keep are the names under a prefix that are not withheld: the NIGHTGAUGE_*
+	// variables the child needs (OpenCodeNightgaugeEnvAllow) and those the
+	// run's config references as {env:NAME} (OpenCodeWithholdsNightgaugeEnv).
+	Keep []string `json:"keep"`
 }
 
-// OpenCodeEnvWithholdFor is the withheld set of a dispatch to model. It holds
-// exactly the names OpenCodeWithholdsEnv withholds: every OPENCODE_* variable,
-// the provider base-URL variables, and every catalog variable of a model
-// service other than the dispatched one.
-func OpenCodeEnvWithholdFor(model string) OpenCodeEnvWithhold {
+// Withholds reports whether the set withholds an inherited variable named name.
+func (w OpenCodeEnvWithhold) Withholds(name string) bool {
+	if slices.Contains(w.Names, name) {
+		return true
+	}
+	for _, p := range w.Prefixes {
+		if strings.HasPrefix(name, p) {
+			return !slices.Contains(w.Keep, name)
+		}
+	}
+	return false
+}
+
+// openCodeConfigEnvRef matches a {env:NAME} reference in a per-run config.
+var openCodeConfigEnvRef = regexp.MustCompile(`\{env:([^}]*)\}`)
+
+// OpenCodeEnvWithholdFor is the withheld set of a dispatch to model whose
+// per-run config is configContent. It withholds exactly what
+// OpenCodeAdapter.WithholdsEnv does: every OPENCODE_* variable, the provider
+// base-URL variables, every catalog variable of a model service other than
+// the dispatched one, and every NIGHTGAUGE_* variable but the ones the child
+// needs or its config references.
+func OpenCodeEnvWithholdFor(model, configContent string) OpenCodeEnvWithhold {
 	names := slices.Clone(openCodeEndpointEnv)
 	for name := range openCodeCatalogEnvNames {
 		if OpenCodeWithholdsEnv(model, name) {
@@ -1362,7 +1453,18 @@ func OpenCodeEnvWithholdFor(model string) OpenCodeEnvWithhold {
 		}
 	}
 	slices.Sort(names)
-	return OpenCodeEnvWithhold{Prefixes: []string{openCodeWithheldPrefix}, Names: slices.Compact(names)}
+	keep := slices.Clone(OpenCodeNightgaugeEnvAllow)
+	for _, m := range openCodeConfigEnvRef.FindAllStringSubmatch(configContent, -1) {
+		if strings.HasPrefix(m[1], openCodeNightgaugePrefix) && !OpenCodeWithholdsNightgaugeEnv(m[1], configContent) {
+			keep = append(keep, m[1])
+		}
+	}
+	slices.Sort(keep)
+	return OpenCodeEnvWithhold{
+		Prefixes: []string{openCodeWithheldPrefix, openCodeNightgaugePrefix},
+		Names:    slices.Compact(names),
+		Keep:     slices.Compact(keep),
+	}
 }
 
 // PrepareOpenCodeRun builds the config for req.Run, and only when that
@@ -1472,7 +1574,7 @@ func PrepareOpenCodeRun(req OpenCodeRunRequest) (*OpenCodeRun, error) {
 		SchemaVersion: OpenCodeConfigSchemaVersion,
 		ConfigContent: built.Content,
 		Env:           env,
-		EnvWithhold:   OpenCodeEnvWithholdFor(req.Run.Model),
+		EnvWithhold:   OpenCodeEnvWithholdFor(req.Run.Model, built.Content),
 		PluginDir:     filepath.Join(root, "config", "opencode", "nightgauge-plugin"),
 		RunDir:        root,
 		Home:          req.Home,

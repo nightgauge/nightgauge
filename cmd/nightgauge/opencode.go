@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -28,6 +29,7 @@ func opencodeCmd() *cobra.Command {
 			"docs/decisions/022-opencode-multi-provider-adapter.md.",
 	}
 	cmd.AddCommand(opencodeConfigCmd())
+	cmd.AddCommand(opencodeCleanupCmd())
 	return cmd
 }
 
@@ -64,6 +66,12 @@ func opencodeConfigCmd() *cobra.Command {
                   names before adding env, as the Go adapter does
   plugin_dir      where OpenCode loads the run's plugins from
   run_dir         the run's private root
+  binary          the absolute path of the opencode binary the version
+                  policy checked: spawn this one
+  run_id          the run identity naming run_dir: --run-id, or the one
+                  minted; ` + "`nightgauge opencode cleanup --run-id`" + ` deletes it
+  plugin_version  the plugin_version the plugin's handshake sentinel (at
+                  env's NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL) must carry
   non_loopback    false only for a declared model server on this machine;
                   true for one elsewhere and for every hosted provider
 
@@ -175,7 +183,10 @@ func openCodeConfigForStage(ctx context.Context, f openCodeConfigFlags) (*adapte
 	if model == "" {
 		return nil, errors.New("no model: pass --model <provider>/<model>, or set opencode.model in the machine-tier config (~/.nightgauge/config.yaml)")
 	}
-	allowedTools, skillPath := openCodeVerbStageTools(stage, f.skillsRoot)
+	allowedTools, skillPath, err := openCodeVerbStageTools(stage, f.skillsRoot)
+	if err != nil {
+		return nil, err
+	}
 	run := adapters.RunOptions{
 		Stage:        stage,
 		WorktreeDir:  worktree,
@@ -240,12 +251,21 @@ func openCodeConfigForStage(ctx context.Context, f openCodeConfigFlags) (*adapte
 	// own field) is never set by this command, while id is always a run
 	// identity (validated or minted above) — the same thing req.ID is for the
 	// adapter's own PrepareRunRoot call (opencode.go, #1635 fix round finding
-	// 1/5). This verb never spawns opencode, so nothing ever checks the
-	// minted handshake; it exists only so the printed config matches what a
-	// real spawn with the same id would get, byte for byte.
+	// 1/5). This verb never spawns opencode itself: the SDK caller that
+	// spawns from its output verifies the minted handshake (#1648, #1804,
+	// opencodeHandshake.ts), against the sentinel path and nonce in env and
+	// the plugin_version printed beside them.
 	if err := adapters.InstallNightgaugePlugin(ctx, prepared, run.OutputFile, id); err != nil {
 		return nil, err
 	}
+	// The binary PreDispatch's version policy just vetted, resolved by the
+	// same function from the same pin, so an SDK caller spawns exactly it.
+	bin, err := adapters.ResolveOpenCodeBinary(settings.Binary, exec.LookPath)
+	if err != nil {
+		return nil, err
+	}
+	prepared.Binary = bin.Path
+	prepared.RunID = id
 	return prepared, nil
 }
 
@@ -269,12 +289,17 @@ func openCodeConfigForStage(ctx context.Context, f openCodeConfigFlags) (*adapte
 // bundleSkillsRoot) still finds an installed layout's skills regardless of
 // either.
 //
-// A resolution failure (no SKILL.md for stage under any searched root) is
-// never fatal to the command: it prints a stderr notice and returns nil,
-// nil, so the caller still gets a config — one with every permission key
-// denied, the shape every caller of this verb got before this fix round, and
-// still useful for every other field (env, isolation, run_dir).
-func openCodeVerbStageTools(stage, skillsRoot string) (allowedTools []string, skillPath string) {
+// Without --skills-root, a resolution failure (no SKILL.md for stage under
+// any searched root) is not fatal to the command: it prints a stderr notice
+// and returns no tools, so the caller still gets a config — one with every
+// permission key denied, the shape every caller of this verb got before this
+// fix round, and still useful for every other field (env, isolation,
+// run_dir). With --skills-root the caller named where the stage's skill is,
+// so a failure is an error and nothing is printed on stdout: a caller that
+// spawns from the output (the SDK, #1648) must never run a stage under an
+// all-deny map it did not ask for. The Go dispatch path does not use this
+// function.
+func openCodeVerbStageTools(stage, skillsRoot string) (allowedTools []string, skillPath string, err error) {
 	root := skillsRoot
 	if root == "" {
 		if cwd, err := os.Getwd(); err == nil {
@@ -287,8 +312,45 @@ func openCodeVerbStageTools(stage, skillsRoot string) (allowedTools []string, sk
 		SkillsRoots: skillrender.DefaultRoots(root),
 	})
 	if err != nil {
+		if skillsRoot != "" {
+			return nil, "", fmt.Errorf("--skills-root %q: could not resolve %s's SKILL.md, so the stage's permission map cannot be built: %w", skillsRoot, stage, err)
+		}
 		fmt.Fprintf(os.Stderr, "[opencode] could not resolve %s's SKILL.md under %q (pass --skills-root, or run from the nightgauge checkout, to fix this): %v; printing the config with every permission key denied\n", stage, root, err)
-		return nil, ""
+		return nil, "", nil
 	}
-	return skillrender.FilterHeadlessTools(skillData.AllowedTools), skillData.SkillPath
+	return skillrender.FilterHeadlessTools(skillData.AllowedTools), skillData.SkillPath, nil
+}
+
+// opencodeCleanupCmd deletes one run's OpenCode per-run root, the SDK path's
+// twin of the Go scheduler's CleanupOpenCodeRunRoot at every terminal outcome
+// (ADR-022 § 22, #1648). The root's location stays Go's alone
+// (adapters.RemoveOpenCodeRunRoot): the caller names only the run identity
+// `nightgauge opencode config` printed as run_id.
+func opencodeCleanupCmd() *cobra.Command {
+	var runID string
+	cmd := &cobra.Command{
+		Use:   "cleanup",
+		Short: "Delete a run's OpenCode per-run root",
+		Long: `Delete the per-run root ` + "`nightgauge opencode config`" + ` created for --run-id,
+with the session database and transcripts in it. A root that does not exist is
+not an error. An id that is not a run identity (a canonical lowercase UUIDv7),
+a root that is a symbolic link, is not a directory or is not directly under the
+runs directory is refused, and nothing inside the root is followed.`,
+		Example:      `  nightgauge opencode cleanup --run-id 01890a5d-ac96-774b-bcce-b30209a81625`,
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if !runstate.IsIdentity(runID) {
+				return fmt.Errorf("--run-id %q is not a run identity (a canonical lowercase UUIDv7)", runID)
+			}
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return fmt.Errorf("the opencode per-run root needs the home directory: %w", err)
+			}
+			return adapters.RemoveOpenCodeRunRoot(home, runID)
+		},
+	}
+	cmd.Flags().StringVar(&runID, "run-id", "", "Run identity whose root to delete (required)")
+	_ = cmd.MarkFlagRequired("run-id")
+	return cmd
 }

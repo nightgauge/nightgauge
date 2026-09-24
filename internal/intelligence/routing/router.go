@@ -167,6 +167,14 @@ func (r *Router) routeLocal(stage string, cplx complexity.Score) Recommendation 
 }
 
 // selectModel implements the local routing heuristic.
+//
+// Its feature-dev row is ALSO the run-wide tier: the scheduler's re-route
+// (reRouteContext) writes Route("feature-dev", …) into dev_model, and
+// stageBaseModel applies that one tier to every reasoning stage. So the
+// cost-per-closed-issue implementation rule (#1909) is NOT a cell in this
+// table — moving the mid-band feature-dev cell here would put planning,
+// validation and merge on Opus too. It lives in ImplementationBand, which the
+// scheduler applies to feature-dev's dispatch only.
 func selectModel(stage string, complexityScore int) string {
 	// Lightweight stages always use haiku
 	switch stage {
@@ -189,6 +197,45 @@ func selectModel(stage string, complexityScore int) string {
 		}
 		return ModelSonnet
 	}
+}
+
+// implementationOpusSizes are the size buckets whose implementation routes
+// to Opus by cost per closed issue (#1909): M and up.
+//
+// The rule is cost per CLOSED issue, not price per token. A turn re-reads the
+// context it inherits, so an implementation stage's cost is dominated by how
+// many turns it takes and how many paid rework rounds follow it. Measured on
+// implementation work, the mid tier took roughly twice the turns of Opus and
+// deferred or missed more; at half the price per token that is break-even or
+// worse per closed issue. The mid tier stays where it measured cheap and clean
+// — narrow, bounded work (XS, S) — and every other stage keeps selectModel's
+// table. See docs/CONFIGURATION.md § Routing by cost per closed issue.
+var implementationOpusSizes = map[string]bool{"M": true, "L": true, "XL": true}
+
+// ImplementationBand returns the band the scheduler dispatches feature-dev on
+// for an issue with Decision d, or "" when this issue's implementation keeps
+// the tier it would otherwise run.
+//
+// It applies to feature-dev's dispatch ONLY, never to the run-wide tier
+// (dev_model) that every reasoning stage shares — that stays selectModel's.
+// It only ever RAISES to Opus: an XS or S bucket returns "" rather than a
+// downgrade. The bucket is the Decision's priority-adjusted complexity mapped
+// back through SizeForBaseScore, so a docs/config change (capped at 2) never
+// qualifies and an S issue at priority:critical scores as M.
+//
+// A DEFAULTED size never qualifies (#1909): Derive assumes M when no board
+// size, `size:*` label or planner assessment names one, and routing every
+// unsized issue's implementation to Opus on that guess would spend the premium
+// on no evidence. The scheduler re-derives once feature-planning has assessed a
+// size, so an unsized issue that plans is routed from the planner's size.
+func ImplementationBand(d Decision) string {
+	if d.SizeSource == SizeSourceDefault {
+		return ""
+	}
+	if !implementationOpusSizes[SizeForBaseScore(d.ComplexityScore)] {
+		return ""
+	}
+	return models.BandOpus
 }
 
 // estimateTokens predicts token usage by stage and complexity.

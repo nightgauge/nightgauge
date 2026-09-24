@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -900,8 +899,7 @@ func (r *DeterministicRunner) waitForCleanMergeState(ctx context.Context, gh ghC
 // readPRContextNumber reads .nightgauge/pipeline/pr-{N}.json and returns
 // pr_number. Default ctxReader for production runs.
 func readPRContextNumber(workdir string, issueNumber int) (int, error) {
-	prContextPath := filepath.Join(workdir, ".nightgauge", "pipeline",
-		fmt.Sprintf("pr-%d.json", issueNumber))
+	prContextPath := pipelineContextPath(workdir, fmt.Sprintf("pr-%d.json", issueNumber))
 	data, err := readFile(prContextPath)
 	if err != nil {
 		return 0, fmt.Errorf("read pr context: %w", err)

@@ -26,9 +26,11 @@
 #    skip work are a successfully computed `docs_only` or `empty` diff. A
 #    change CI could not classify is never a change CI under-tests.
 #
-# Non-`pull_request` events always run heavy: `push` to main is the merge-skew
-# observation (two PRs green apart, broken together — AGENTS.md), and a
-# scheduled run exists to catch environment drift. Neither is fast-trackable.
+# Non-`pull_request` events always run heavy: a scheduled or dispatched run
+# exists to catch environment drift, which is never fast-trackable. (ci.yml no
+# longer runs on `push` to main (#2055): the strict ruleset makes the PR run
+# the gate on the merged tree, so merge skew cannot reach main unobserved. The
+# rule stays because failing open is the safe default for any event.)
 #
 # Inputs (environment). Each has exactly ONE source — notably NG_EVENT_NAME does
 # NOT fall back to the runner's ambient GITHUB_EVENT_NAME. A gate with two ways

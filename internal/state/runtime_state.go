@@ -230,13 +230,13 @@ type RuntimeState struct {
 	MergedCommitSha string `json:"mergedCommitSha,omitempty"`
 	MergedAt        string `json:"mergedAt,omitempty"`
 
-	// MainCheckVerdict + MainCheckFailing are the post-merge observation of the
-	// base branch (#1249): whether the merge commit's own check runs went
-	// green, red, were still pending when the bounded wait ran out, never
-	// appeared, or could not be read (hooks.MainCheckVerdict vocabulary).
-	// Empty until the post-merge hook has run. This is the run record's copy of
-	// AGENTS.md's "main's own run is the observation" — the PR gate's green is
-	// on GateResults; this is what main actually did.
+	// MainCheckVerdict + MainCheckFailing are the post-merge verification of
+	// the base branch (#1249, #2055): whether the merge was green (the merge
+	// commit's tree is the merged PR head's, the head's required checks passed,
+	// and what still runs on the merge commit passed), red, still pending when
+	// the bounded wait ran out, showed no checks, or could not be read
+	// (hooks.MainCheckVerdict vocabulary). Empty until the post-merge hook has
+	// run.
 	MainCheckVerdict string   `json:"mainCheckVerdict,omitempty"`
 	MainCheckFailing []string `json:"mainCheckFailing,omitempty"`
 
@@ -310,6 +310,13 @@ type RuntimeState struct {
 	// (adapters.RunResult.ModelProvider, UpstreamModel and Endpoint).
 	// BuildV2Record projects it onto V2ModelSelect.
 	StageModelIdentities map[string]StageModelIdentity `json:"stageModelIdentities,omitempty"`
+
+	// StageContexts captures, for each stage the executor observed per step,
+	// how close the stage's largest single prompt came to the context window
+	// it ran with and how many times its session compacted (#1653). The
+	// stage's latest attempt wins, like StageModelIdentities. BuildV2Record
+	// projects it onto V2StageDetail's context fields.
+	StageContexts map[string]StageContext `json:"stageContexts,omitempty"`
 
 	// StageEfforts captures the EFFORT_LEVELS rung actually in force for each
 	// stage's dispatch, when Go has direct, first-party evidence of it (Issue
@@ -1533,6 +1540,31 @@ func (rs *RuntimeState) SupersedePhase(stage PipelineStage, name string, index, 
 	})
 }
 
+// RecordSettledPhase appends a phase record that is terminal on arrival and
+// carries its own measured bounds (#1651).
+//
+// The scheduler's feature-dev sub-sessions use it to record one entry per
+// session. BeginPhase cannot: each session's own skill markers call
+// BeginPhase too, which settles every running phase of the stage, so a
+// sub-session record opened with it would be closed by the first marker the
+// session emitted and report that instant as its duration. Recording after
+// the session returns, with the times the scheduler measured, is the only
+// shape that keeps the duration true.
+func (rs *RuntimeState) RecordSettledPhase(stage PipelineStage, name string, index, total int, status string, startedAt, completedAt time.Time) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	done := completedAt
+	rs.PhaseHistory = append(rs.PhaseHistory, PhaseRecord{
+		Stage:       stage,
+		Name:        name,
+		Index:       index,
+		Total:       total,
+		Status:      status,
+		StartedAt:   startedAt,
+		CompletedAt: &done,
+	})
+}
+
 // CloseRunningPhases terminates any phase of `stage` still marked running
 // (#1009), returning how many it closed.
 //
@@ -1845,6 +1877,10 @@ func (rs *RuntimeState) ClearStageOutputTail(stage PipelineStage) {
 // stage on the failure path, so BuildV2Record's synthesis branch can populate
 // tokens.per_stage even when the stage never reached CompleteStage (Issue
 // #146). A multi-attempt run's most recent record for a stage wins.
+// inputTokens is COMBINED input — non-cached plus cache reads — the way
+// CompleteStage's StageResult carries it and BuildV2Record reads it (Input =
+// InputTokens - CacheRead). A caller holding the non-cached pool adds
+// cacheReadTokens to it.
 //
 // KNOWN GAP (#682, mirrors the pre-existing CostUnstamped gap noted at the
 // call site below): this constructor has no costSource parameter, so the
@@ -2146,6 +2182,41 @@ func (rs *RuntimeState) RecordStageModelIdentity(stage PipelineStage, id StageMo
 		rs.StageModelIdentities = make(map[string]StageModelIdentity)
 	}
 	rs.StageModelIdentities[string(stage)] = id
+}
+
+// StageContext is one stage attempt's context-window telemetry (#1653).
+// Every field follows the empty-means-unobserved convention: a zero
+// PeakStepInputTokens means the adapter exposed no per-step prompt size, a
+// zero ContextWindowTokens means no window was known, and a nil Compactions
+// means the stage had no events path to count. A counted 0, including a count
+// taken when the events file is absent, is recorded as 0.
+type StageContext struct {
+	PeakStepInputTokens int  `json:"peakStepInputTokens,omitempty"`
+	ContextWindowTokens int  `json:"contextWindowTokens,omitempty"`
+	Compactions         *int `json:"compactions,omitempty"`
+}
+
+// RecordStageContext records a stage attempt's peak single-step prompt size,
+// the context window it ran with, and its compaction count (#1653), replacing
+// any earlier attempt's. It sits beside CompleteStageWithCost at the
+// scheduler's stage completion. Negative values are treated as unobserved;
+// an attempt with nothing observed records nothing.
+func (rs *RuntimeState) RecordStageContext(stage PipelineStage, peak, window int, compactions *int) {
+	sc := StageContext{PeakStepInputTokens: max(peak, 0), ContextWindowTokens: max(window, 0)}
+	if compactions != nil {
+		n := max(*compactions, 0)
+		sc.Compactions = &n
+	}
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if sc == (StageContext{}) {
+		delete(rs.StageContexts, string(stage))
+		return
+	}
+	if rs.StageContexts == nil {
+		rs.StageContexts = make(map[string]StageContext)
+	}
+	rs.StageContexts[string(stage)] = sc
 }
 
 // StageModelIdentityOf returns the recorded identity of a stage, or the zero
@@ -2871,6 +2942,25 @@ func (rs *RuntimeState) AllStageAttempts() []StageResult {
 	return all
 }
 
+// BookedStage returns the most recent booked attempt of stage — the entry the
+// run's spend ledger and summary hold for it (#1934).
+//
+// Readers that print or act on a stage's cost must read it here rather than
+// re-deriving from the executor's result: the booking merges the executor's
+// cache pools (RecordStageTokenCounts), which a result can arrive without, so
+// a re-derivation priced the same stage without its cache tokens — 4–9x under
+// the figure this run then recorded.
+func (rs *RuntimeState) BookedStage(stage PipelineStage) (StageResult, bool) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	for i := len(rs.CompletedStages) - 1; i >= 0; i-- {
+		if rs.CompletedStages[i].Stage == stage {
+			return rs.CompletedStages[i], true
+		}
+	}
+	return StageResult{}, false
+}
+
 // HasCompletedStage reports whether the run has EVER completed the named stage,
 // counting attempts a later BeginStage superseded.
 //
@@ -3030,6 +3120,16 @@ func (rs *RuntimeState) snapshotLocked() *RuntimeState {
 		snap.StageModelIdentities = make(map[string]StageModelIdentity, len(rs.StageModelIdentities))
 		for k, v := range rs.StageModelIdentities {
 			snap.StageModelIdentities[k] = v
+		}
+	}
+	if len(rs.StageContexts) > 0 {
+		snap.StageContexts = make(map[string]StageContext, len(rs.StageContexts))
+		for k, v := range rs.StageContexts {
+			if v.Compactions != nil {
+				n := *v.Compactions
+				v.Compactions = &n
+			}
+			snap.StageContexts[k] = v
 		}
 	}
 	if len(rs.StageEfforts) > 0 {

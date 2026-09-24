@@ -1080,55 +1080,72 @@ export class RepositoriesTreeProvider
       // Set isFetching guard to prevent onItemsUpdated → refreshAll() feedback loop
       this.isFetching = true;
       try {
-        // Check whether any filters are active for any status in this repo.
-        // When no filters: use lightweight boardCounts (1 API call, ~200 bytes).
-        // When filters active: fetch full data and filter locally (Issue #2252).
-        const hasActiveFilters = ["ready", "inProgress", "backlog"].some((st) => {
-          const fs = this.getFilterForStatus(repoName, st);
-          return (
-            fs.priority !== "all" ||
-            fs.size !== "all" ||
-            fs.component !== "all" ||
-            fs.searchText !== "" ||
-            fs.hideBlocked ||
-            this.groupByEpic // epic grouping excludes type:epic from count
-          );
-        });
+        const applyFilters = (issues: ReadyIssue[], statusType: string): ReadyIssue[] => {
+          const fs = this.getFilterForStatus(repoName, statusType);
+          let filtered = issues;
+          if (fs.priority !== "all") {
+            filtered = filtered.filter((i) => matchesPriorityFilter(i.priority, fs.priority));
+          }
+          if (fs.size !== "all") {
+            filtered = filtered.filter((i) => matchesSizeFilter(i.size, fs.size));
+          }
+          if (fs.component !== "all") {
+            filtered = filtered.filter((i) => matchesComponentFilter(i.labels ?? [], fs.component));
+          }
+          if (fs.searchText) {
+            filtered = filtered.filter((i) => matchesSearchText(i.title, i.number, fs.searchText));
+          }
+          if (fs.hideBlocked) {
+            filtered = filtered.filter((i) => !isBlocked(i));
+          }
+          if (this.groupByEpic) {
+            filtered = filtered.filter((i) => !i.labels?.includes("type:epic"));
+          }
+          return filtered;
+        };
 
         // #360 — tag every GitHub call this fetch makes with a real source so
         // the log names the caller (`src=repositories:<repo>`) instead of
-        // `src=unknown`. Spans both the rate-limit probe and the board.list(s).
+        // `src=unknown`. Spans both the rate-limit probe and the board read.
         await withCallSource(`repositories:${repoName}`, async () => {
-          if (hasActiveFilters) {
-            // Full data fetch needed for accurate filtered counts
-            const applyFilters = (issues: ReadyIssue[], statusType: string): ReadyIssue[] => {
-              const fs = this.getFilterForStatus(repoName, statusType);
-              let filtered = issues;
-              if (fs.priority !== "all") {
-                filtered = filtered.filter((i) => matchesPriorityFilter(i.priority, fs.priority));
-              }
-              if (fs.size !== "all") {
-                filtered = filtered.filter((i) => matchesSizeFilter(i.size, fs.size));
-              }
-              if (fs.component !== "all") {
-                filtered = filtered.filter((i) =>
-                  matchesComponentFilter(i.labels ?? [], fs.component)
-                );
-              }
-              if (fs.searchText) {
-                filtered = filtered.filter((i) =>
-                  matchesSearchText(i.title, i.number, fs.searchText)
-                );
-              }
-              if (fs.hideBlocked) {
-                filtered = filtered.filter((i) => !isBlocked(i));
-              }
-              if (this.groupByEpic) {
-                filtered = filtered.filter((i) => !i.labels?.includes("type:epic"));
-              }
-              return filtered;
-            };
+          if (typeof service.getOpenIssues === "function") {
+            // ONE board read answers all three rows: every open issue of this
+            // repository with its status, grouped here. This used to be one
+            // `board.list` per status whenever any filter was active — and
+            // epic grouping, ON by default, counts as one, so in practice it
+            // was always three board reads per repository per refresh, none
+            // of them shared with `board.counts` or the daemon's sweeps. The
+            // open read is shared with both (daemon-side snapshot) and across
+            // every repository on the same board (BoardSnapshotStore). It is
+            // also per-repository, which `board.counts` — a board-wide tally —
+            // never was, so the unfiltered path now counts this repo's issues
+            // on a shared board instead of the whole board's.
+            const byStatus = new Map<string, ReadyIssue[]>();
+            for (const issue of (await service.getOpenIssues()) as ReadyIssue[]) {
+              const status = (issue.status ?? "").toLowerCase();
+              const bucket = byStatus.get(status);
+              if (bucket) bucket.push(issue);
+              else byStatus.set(status, [issue]);
+            }
+            readyCount = applyFilters(byStatus.get("ready") ?? [], "ready").length;
+            inProgressCount = applyFilters(byStatus.get("in progress") ?? [], "inProgress").length;
+            backlogCount = applyFilters(byStatus.get("backlog") ?? [], "backlog").length;
+            return;
+          }
 
+          // Providers without an open-item read (non-board adapters).
+          const hasActiveFilters = ["ready", "inProgress", "backlog"].some((st) => {
+            const fs = this.getFilterForStatus(repoName, st);
+            return (
+              fs.priority !== "all" ||
+              fs.size !== "all" ||
+              fs.component !== "all" ||
+              fs.searchText !== "" ||
+              fs.hideBlocked ||
+              this.groupByEpic // epic grouping excludes type:epic from count
+            );
+          });
+          if (hasActiveFilters) {
             const [readyIssues, inProgressIssues, backlogIssues] = await Promise.all([
               service.getIssuesByStatus("ready"),
               service.getIssuesByStatus("in-progress"),
@@ -1138,8 +1155,6 @@ export class RepositoriesTreeProvider
             inProgressCount = applyFilters(inProgressIssues, "inProgress").length;
             backlogCount = applyFilters(backlogIssues, "backlog").length;
           } else {
-            // No filters active — use lightweight counts-only API (1 GraphQL call
-            // with aliases returning only totalCount, ~200 bytes per repo).
             const counts = await service.getAggregatedStatusCounts();
             readyCount = counts["ready"] ?? 0;
             inProgressCount = counts["inProgress"] ?? 0;

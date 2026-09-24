@@ -87,6 +87,12 @@ func TestThinkingEffort_UnknownModelSkipped(t *testing.T) {
 // Tier aliases resolve through the registry, so a stage pinned to "opus"
 // inherits whichever model currently serves the band.
 func TestThinkingEffort_ResolvesTierAlias(t *testing.T) {
+	// The resolved concrete id is read from the registry rather than pinned —
+	// a pinned id is what let a band rotation go unnoticed (see 31b5cbe9).
+	currentOpus, ok := models.Get(models.BandOpus)
+	if !ok {
+		t.Fatal("registry has no non-deprecated opus-band model")
+	}
 	r := RunThinkingEffortCheck(ThinkingEffortOptions{
 		Efforts:                  map[string]ModelEffort{"s": {Model: "opus", Effort: "max"}},
 		ThinkingDisabledOverride: boolPtr(true),
@@ -94,8 +100,8 @@ func TestThinkingEffort_ResolvesTierAlias(t *testing.T) {
 	if len(r.Findings) != 1 {
 		t.Fatalf("findings = %d, want 1 (opus band resolves to a constrained model)", len(r.Findings))
 	}
-	if r.Findings[0].Model != "claude-opus-5" {
-		t.Errorf("Model = %q, want the resolved concrete id", r.Findings[0].Model)
+	if r.Findings[0].Model != currentOpus.ID {
+		t.Errorf("Model = %q, want the resolved concrete id %q", r.Findings[0].Model, currentOpus.ID)
 	}
 }
 

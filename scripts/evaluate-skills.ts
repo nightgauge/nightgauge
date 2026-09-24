@@ -12,6 +12,7 @@
  *   npx tsx scripts/evaluate-skills.ts --skills feature-planning,pr-create
  *   npx tsx scripts/evaluate-skills.ts --models haiku,sonnet,opus
  *   npx tsx scripts/evaluate-skills.ts --baseline .nightgauge/skill-evals/baseline.jsonl
+ *   npx tsx scripts/evaluate-skills.ts --render-profile compact --skills pr-merge
  *   NIGHTGAUGE_SKILL_EVAL_LIVE=1 npx tsx scripts/evaluate-skills.ts --mode live --skills pr-merge
  *
  * Defaults to mock mode (deterministic, zero API cost). Live mode requires
@@ -20,13 +21,28 @@
  * missing/unparseable/empty, the run fails CLOSED (exit 1) so the CI gate can
  * never silently pass against a non-existent baseline (#4092).
  *
+ * --render-profile <full|compact> is the #1654 measurement lane: it prepends
+ * `nightgauge skill render --stage <skill> --profile <profile>`'s output to
+ * every scenario prompt before the runner sees it, so a live run actually
+ * exercises the profile a scenario's skill would carry in the real pipeline
+ * — the harness otherwise sends only the bare scenario prompt (the skill
+ * text is never part of it), which cannot distinguish a full render from a
+ * compact one. Mock mode ignores prompt content by construction
+ * (MockModelRunner is fixture-keyed), so the flag is inert there except for
+ * tagging the recorded JSONL with `render_profile` on every cell.
+ *
  * @see Issue #3814 - Build a cross-model skill evaluation harness
  * @see Issue #4092 - Wire the harness into CI as a required regression gate
+ * @see Issue #1654 - compact render profile mechanism + pr-merge compact skill
  */
 
+import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import * as fs from "fs/promises";
 import * as path from "path";
+
+const execFileAsync = promisify(execFile);
 import {
   EvalRecorder,
   LiveClaudeModelRunner,
@@ -59,11 +75,15 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 const SCENARIOS_DIR = path.join(REPO_ROOT, "evals/scenarios");
 const FIXTURES_DIR = path.join(REPO_ROOT, "evals/fixtures");
 
+/** The #1654 render profiles `nightgauge skill render --profile` accepts. */
+type RenderProfile = "full" | "compact";
+
 interface CliArgs {
   skills: EvalSkill[];
   models: ModelTier[];
   mode: EvalMode;
   baseline?: string;
+  renderProfile?: RenderProfile;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -71,6 +91,7 @@ function parseArgs(argv: string[]): CliArgs {
   let models: ModelTier[] = [...ALL_MODELS];
   let mode: EvalMode = "mock";
   let baseline: string | undefined;
+  let renderProfile: RenderProfile | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -90,10 +111,16 @@ function parseArgs(argv: string[]): CliArgs {
     } else if (arg === "--baseline" && next) {
       baseline = next;
       i++;
+    } else if (arg === "--render-profile" && next) {
+      if (next !== "full" && next !== "compact") {
+        throw new Error(`--render-profile must be "full" or "compact", got "${next}"`);
+      }
+      renderProfile = next;
+      i++;
     }
   }
 
-  return { skills, models, mode, baseline };
+  return { skills, models, mode, baseline, renderProfile };
 }
 
 function validateSkills(values: string[]): EvalSkill[] {
@@ -139,6 +166,60 @@ function renderMatrix(report: EvalRunReport): string {
   return lines.join("\n");
 }
 
+/**
+ * Resolve the `nightgauge` Go binary the same fallback chain the skills'
+ * own shell procedures use (e.g. `_includes/post-merge.md`'s "Step 8.1"):
+ * `NIGHTGAUGE_BIN` env var, then the repo-root `bin/nightgauge` build
+ * output, then whatever `nightgauge` resolves to on `PATH`. Kept in this
+ * script rather than the SDK because #1654's file ownership scopes the
+ * render-profile measurement lane to `scripts/evaluate-skills.ts` alone.
+ */
+async function resolveNightgaugeBinary(): Promise<string> {
+  const envBin = process.env.NIGHTGAUGE_BIN;
+  if (envBin) {
+    try {
+      await fs.access(envBin);
+      return envBin;
+    } catch {
+      // fall through to the other candidates
+    }
+  }
+  const repoRootBin = path.join(REPO_ROOT, "bin", "nightgauge");
+  try {
+    await fs.access(repoRootBin);
+    return repoRootBin;
+  } catch {
+    // fall through to PATH resolution
+  }
+  return "nightgauge";
+}
+
+/**
+ * Render one stage's skill at the given profile via
+ * `nightgauge skill render --stage <stage> --profile <profile>`, exactly the
+ * command #1654's issue body names. Throws (rather than falling back
+ * silently) on a non-zero exit — a broken render is a measurement-lane
+ * defect the caller should see, not a scenario prompt quietly missing its
+ * skill text.
+ */
+async function renderSkillProfile(
+  bin: string,
+  stage: string,
+  profile: RenderProfile
+): Promise<string> {
+  const { stdout } = await execFileAsync(bin, [
+    "skill",
+    "render",
+    "--stage",
+    stage,
+    "--profile",
+    profile,
+    "--skills-root",
+    path.join(REPO_ROOT, "skills"),
+  ]);
+  return stdout;
+}
+
 async function loadBaseline(baselinePath: string): Promise<EvalRunReport | null> {
   try {
     const jsonl = await fs.readFile(baselinePath, "utf-8");
@@ -180,6 +261,49 @@ async function main(): Promise<void> {
   const scenarios = await loadScenarios({ skills: args.skills, scenariosDir: SCENARIOS_DIR });
   console.log(`Loaded ${scenarios.length} scenarios.`);
 
+  if (args.renderProfile) {
+    console.log(
+      `Render profile: ${args.renderProfile} — prepending ` +
+        `\`nightgauge skill render --profile ${args.renderProfile}\` output to each scenario prompt.`
+    );
+    const bin = await resolveNightgaugeBinary();
+    const renderedByStage = new Map<string, string>();
+    for (const scenario of scenarios) {
+      if (!renderedByStage.has(scenario.skill)) {
+        try {
+          renderedByStage.set(
+            scenario.skill,
+            await renderSkillProfile(bin, scenario.skill, args.renderProfile)
+          );
+        } catch (err) {
+          // A skill this harness evaluates but the Go binary cannot render
+          // (e.g. "check-triage", which is not a pipeline stage) is not a
+          // measurement-lane failure — skip it and leave that scenario's
+          // prompt as the bare scenario text, same as --render-profile unset.
+          // Anything else (a stale binary without --profile, a broken render)
+          // is: skipping it would measure bare prompts and report them as the
+          // profile, which is how a live run silently compared nothing.
+          if (!String((err as Error).message).includes("no skill directory for stage")) {
+            throw new Error(
+              `could not render "${scenario.skill}" at profile "${args.renderProfile}" with ${bin} ` +
+                `(set NIGHTGAUGE_BIN to a current build): ${(err as Error).message}`,
+              { cause: err }
+            );
+          }
+          console.error(
+            `WARNING: could not render "${scenario.skill}" at profile "${args.renderProfile}": ` +
+              `${(err as Error).message}`
+          );
+          renderedByStage.set(scenario.skill, "");
+        }
+      }
+      const rendered = renderedByStage.get(scenario.skill);
+      if (rendered) {
+        scenario.prompt = `${rendered}\n\n---\n\n${scenario.prompt}`;
+      }
+    }
+  }
+
   let runner: EvalModelRunner;
   if (args.mode === "live") {
     console.log("Mode: LIVE — spawning `claude --print --model <tier>` per cell.");
@@ -204,6 +328,21 @@ async function main(): Promise<void> {
   const recorder = new EvalRecorder();
   const recordPath = await recorder.record(report);
   console.log(`Run record written to ${recordPath}`);
+
+  if (args.renderProfile) {
+    // Tag every recorded cell with the profile this run measured — the
+    // schema itself is EvalRecorder's (outside #1654's file ownership), so
+    // this stamps the JSONL after the fact rather than growing the SDK's
+    // record shape. `render_profile: compact` (or "full") lands on every
+    // line, which is what #1660-#1664's cross-profile comparison reads.
+    const raw = await fs.readFile(recordPath, "utf-8");
+    const tagged = raw
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.stringify({ ...JSON.parse(line), render_profile: args.renderProfile }))
+      .join("\n");
+    await fs.writeFile(recordPath, tagged + "\n");
+  }
 
   let exitCode = 0;
 

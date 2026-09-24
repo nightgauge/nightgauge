@@ -11,7 +11,6 @@ import (
 	"github.com/nightgauge/nightgauge/internal/platform"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/spf13/cobra"
-	yaml "gopkg.in/yaml.v3"
 )
 
 // backfillPlatformCreds holds the platform base URL + license key resolved for
@@ -21,47 +20,32 @@ type backfillPlatformCreds struct {
 	licenseKey string
 }
 
-// resolvePlatformCreds resolves the platform base URL and license key the same
-// way the binary does for `serve`: env vars (NIGHTGAUGE_PLATFORM_URL /
-// NIGHTGAUGE_LICENSE_KEY) win, otherwise fall back to the machine-tier
-// config (~/.nightgauge/config.yaml) `platform.api_url` / `platform.license_key`.
-// Falls back to the prod default base URL when neither is set. NEVER prints the key.
+// resolvePlatformCreds resolves the platform base URL and license key for the
+// backfill command. The license key comes from the one resolution the CLI and
+// daemon share (internal/keychain): NIGHTGAUGE_LICENSE_KEY, then the OS
+// keychain entry, then platform.license_key in the machine-tier config. The
+// base URL is NIGHTGAUGE_PLATFORM_URL, else the machine-tier platform.api_url,
+// else the prod default. NEVER prints the key.
 func resolvePlatformCreds() (backfillPlatformCreds, error) {
-	creds := backfillPlatformCreds{
-		baseURL:    os.Getenv("NIGHTGAUGE_PLATFORM_URL"),
-		licenseKey: os.Getenv("NIGHTGAUGE_LICENSE_KEY"),
-	}
-
-	// Read the machine-tier config for any fields the env did not supply.
-	if creds.baseURL == "" || creds.licenseKey == "" {
-		path, err := config.MachineConfigPath()
-		if err == nil {
-			if data, readErr := os.ReadFile(path); readErr == nil {
-				var parsed struct {
-					Platform struct {
-						APIURL     string `yaml:"api_url"`
-						LicenseKey string `yaml:"license_key"`
-					} `yaml:"platform"`
-				}
-				if yaml.Unmarshal(data, &parsed) == nil {
-					if creds.baseURL == "" {
-						creds.baseURL = parsed.Platform.APIURL
-					}
-					if creds.licenseKey == "" {
-						creds.licenseKey = parsed.Platform.LicenseKey
-					}
-				}
-			}
+	creds := backfillPlatformCreds{baseURL: os.Getenv("NIGHTGAUGE_PLATFORM_URL")}
+	if creds.baseURL == "" {
+		if url, _, err := config.ReadMachineString("platform.api_url"); err == nil {
+			creds.baseURL = url
 		}
 	}
-
-	// Prod default when no base URL is configured anywhere.
 	if creds.baseURL == "" {
 		creds.baseURL = platform.DefaultConfig().BaseURL
 	}
 
+	res, err := newLicenseStore().ResolveLicenseKey()
+	if err != nil {
+		return creds, fmt.Errorf("resolve license key: %w", err)
+	}
+	creds.licenseKey = res.Value
 	if creds.licenseKey == "" {
-		return creds, fmt.Errorf("no license key configured (set platform.license_key in ~/.nightgauge/config.yaml or export NIGHTGAUGE_LICENSE_KEY)")
+		return creds, fmt.Errorf("no license key configured: run `nightgauge auth license set` " +
+			"(it reads the key from stdin), export NIGHTGAUGE_LICENSE_KEY, or set " +
+			"platform.license_key in the machine-tier config file")
 	}
 	return creds, nil
 }
@@ -95,10 +79,11 @@ the backfill is safe to retry; a re-sync is reconciled server-side rather than
 duplicated. The historical startedAt is preserved, so old runs appear on their
 real dates.
 
-The license key and platform base URL are resolved the same way as 'serve':
-env (NIGHTGAUGE_PLATFORM_URL / NIGHTGAUGE_LICENSE_KEY) wins, else the
-machine-tier ~/.nightgauge/config.yaml platform: block. The license key is
-never printed.`,
+The license key is resolved the same way as 'serve': NIGHTGAUGE_LICENSE_KEY,
+then the OS keychain entry ('nightgauge auth license set'), then
+platform.license_key in the machine-tier config file. The platform base URL is
+NIGHTGAUGE_PLATFORM_URL, else the machine-tier platform.api_url. The license
+key is never printed.`,
 		Example: `  nightgauge pipeline backfill --repo nightgauge/nightgauge --dry-run
   nightgauge pipeline backfill --repo nightgauge/nightgauge`,
 		SilenceUsage: true,

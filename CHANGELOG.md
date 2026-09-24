@@ -14,6 +14,1232 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Added
+
+- **The license key lives in the OS keychain (#2025).**
+  `nightgauge auth license set` reads the platform license key from stdin
+  (never argv) and stores it in the OS keychain — macOS Keychain, Windows Credential Manager,
+  or the Secret Service on Linux — under service `nightgauge`, account
+  `platform.license_key`. `auth license status` prints where the key comes
+  from (`env`, `keychain`, `machine-file` or `none`), never the key, and
+  `auth license clear` removes every stored copy. The CLI and the daemon
+  (`serve`, `pipeline backfill`) now resolve the key once, in this order:
+  `NIGHTGAUGE_LICENSE_KEY`, the keychain entry, then `platform.license_key`
+  in the machine-tier config file. On a host with no keychain the key falls
+  back to that file, written with mode 0600 and never through a symlink, and
+  a stalled keychain times out instead of hanging. `serve` still uses a
+  stored key only when `platform.enabled: true`.
+
+- **`nightgauge doctor` reports credentials committed under `.nightgauge/`
+  (#2024).** A new `tracked_secrets` row scans only the files git tracks
+  there (`git ls-files -- .nightgauge`) for GitHub tokens (`ghp_`, `gho_`,
+  `ghu_`, `ghs_`, `ghr_`, `github_pat_`) and for the license-key prefixes the
+  platform client already recognises. Each hit is reported as
+  `path:line pattern prefix…` (a token glued to an identifier still counts;
+  a tracked path that resolves outside the repository is skipped with a
+  note), and `--json` carries the same fields under
+  `checks.tracked_secrets.findings`; the matched value never appears, only its
+  prefix and `…`. The remediation names the two steps, rotating the credential
+  and removing it from history, and doctor does neither itself. Files over
+  1 MiB and binary files are skipped with a note, and the check is skipped
+  outside a git work tree. A finding is a warning (exit 1), not a failure.
+
+- **Capacity-aware size gates (#1655).** A model's context window now caps
+  the largest issue size it may take, from one table in
+  `internal/skillrender/budget.go` (ADR-023 Q9): under 32k tokens XS only,
+  32k up to S, 128k (131,072 included) up to M, 200k up to L, 400k and more
+  up to XL. It is enforced at three points. `nightgauge size-gate check`
+  gains `--context-window N` and `--adapter A --model M`, and rejects an
+  issue whose `size:*` label exceeds the cap, naming the size, the window and
+  the cap; without those flags it behaves as before. **Behaviour change: the
+  scheduler now enforces the table by default at dispatch** (turned off only
+  by `pipeline.size_gate.enabled: false`). It caps the size-sensitive stages
+  — feature-planning, feature-dev, feature-validate — and judges the size
+  at every dispatch against the smallest window among the current stage and
+  those still ahead, so a labelled size is refused at issue-pickup before
+  anything is spent. Affected: a Claude run whose size-sensitive stage
+  resolves to haiku (200k) refuses XL; Copilot's gpt-4o and gpt-4o-mini
+  (128k) refuse L and XL; a local OpenCode model is capped by its endpoint's
+  `limit.context` (a 32k model takes XS and S). Hosted models with 400k or
+  more, and issue-pickup, pr-create and pr-merge, are not affected. A refusal
+  is `context_window_exceeded` with a recovery of `decompose`, parked with its
+  own remediation. The size comes from the run's routing decision, else from
+  `planning-{N}.json`'s `complexity_assessment.size_label`. The new
+  `nightgauge size-gate capacity` command (`--adapter A --model M`, or `--context-window N`, with `--json`)
+  reports the cap for a model, by default the repository's feature-dev
+  target, and issue-create's Phase 2.85 scope gate uses it to force
+  decomposition of work above the cap (issue-create 1.25.0); issue-pickup's
+  Phase 2.7 passes the same target to `size-gate check` (issue-pickup
+  1.21.0). With `pipeline.size_gate.routes.reject_action: soft-route`, an
+  over-capacity issue moves to the first entry of the new
+  `pipeline.size_gate.routes.capacity_fallback_models` whose window admits
+  its size, and is rejected when none does. Decomposition goes one level
+  deep: an issue whose body carries `<!-- nightgauge:capacity-decomposed -->`
+  and is still over the cap is reported as `requires human decomposition`.
+  An unknown window or size applies no cap and logs one `capacity:` line
+  saying so.
+
+- **Per-stage context-window utilization and compaction count (#1653).** A
+  stage's history record now says how close it came to its model's window
+  and whether its session compacted, so "does this stage fit this model?" is
+  measured, not guessed. An OpenCode stage records
+  `peak_step_input_tokens` (the largest single step's prompt: input plus
+  cache read and write, never the summed pools), `context_window_tokens`
+  (the window it ran with) and `context_window_utilization` (peak ÷ window,
+  to 4 places), plus `compaction_count`: the compaction lines the stage's
+  latest attempt added to the run's events file, 0 when that file is absent,
+  and left out for stages with no events file path to count, such as every
+  non-OpenCode stage. Stages with no per-step prompt size or no known window
+  leave the keys out, so existing records parse unchanged. The SDK feeder
+  maps utilization to `contextWindowUtilization`, and the extension's
+  history schema keeps the four keys, so `TokenEfficiencyAnalyzer` now
+  receives it: an OpenCode stage whose mean utilization is under its 0.3
+  minimum is reported as a low-utilization pattern. The events-file reader
+  now refuses a path that resolves outside its run dir, a symlink or a FIFO,
+  and reads no further than the
+  file's 1 MiB cap plus the 4 KiB its writers may overshoot it by.
+
+- **Per-stage turn, wall-clock and token budgets that bind $0 local models
+  (#1652).** Every guardrail that stopped a runaway stage was priced in USD,
+  so a stage on a local model had none. `pipeline.stage_budgets`
+  (`default` or a stage name → `max_turns`, `max_wall_clock`, `max_tokens`)
+  now bounds every stage the Go executor runs, with or without a USD cap.
+  The defaults are 400 turns (200 on a zero-cost stage), 4h and 25M
+  processed tokens, set above what a normal hosted stage uses. The limits
+  are checked on the stream as it arrives, and the turn limit is also
+  passed as `--max-turns` or OpenCode's steps cap, so the native cap on
+  claude, claude-sdk and grok dispatches and on hosted OpenCode steps rises
+  from 200 to 400. A breach stops the stage's process group (SIGTERM, then
+  SIGKILL after 10s), checks that nothing in it survived, and stamps
+  `stage_budget_exceeded:<turns|wall_clock|tokens>` with the observed value
+  and the limit. The run is classified `budget_exceeded`, and the scheduler
+  no longer escalates a `budget_exceeded` stage to a stronger model. Only
+  `-1` lifts a limit, with a warning on every dispatch. A stage on a
+  zero-cost provider (a local model server or declared local OpenCode
+  endpoint, or a model priced at $0) or on a model the registry cannot price
+  cannot lift one. Stages the VS Code extension runs in its own runner are not
+  covered yet. See `docs/GUARDRAILS_AND_BUDGETS.md` § Per-stage non-USD
+  budgets and the ADR-023 Q8 amendment.
+- **The VS Code extension runs `opencode` stages (#1657).** Choosing
+  OpenCode used to fall through to the Codex prerequisites and launch. It
+  now needs `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1`, `opencode` on `PATH`, the
+  Nightgauge binary for `nightgauge opencode config`, and the SDK CLI with
+  `node`, `git` and `gh`, and a model: `opencode.model`, or a dispatch
+  model that names its provider (`pipeline.stage_models` takes bands only,
+  so it cannot). Each missing one refuses OpenCode with a message that says
+  what to fix, and the stage then goes through the operator's adapter
+  fallback chain like any other refused adapter. Interactive mode refuses OpenCode as headless-only,
+  because ADR-022 records no interactive decision. The chat-only adapter
+  refusal now builds its list of agentic adapters from the SDK registry.
+  - **Model.** The stage runs the model it names when that is already a
+    `<provider>/<model>`. A band is translated through the SDK's
+    `dispatchModelFor` against `opencode.model`. A local configured model
+    serves every band, so the run keeps it and records the source as
+    `config`. The model reaches the SDK adapter as `NIGHTGAUGE_MODEL`.
+  - **Environment.** The spawn env withholds exactly what the dispatch's
+    `env_withhold` names: every `OPENCODE_*` variable, the provider base
+    URLs, and every catalog variable of a provider other than the dispatched
+    one. Platform credentials, the forge token among them, stay. The SDK's
+    new `openCodeEnvWithholdFor` is the TS twin of the Go
+    `OpenCodeEnvWithholdFor`, and a test holds it to the verb's golden
+    output. Inherited `XDG_*` stays at this layer, because the
+    `nightgauge opencode config` run reads it to pin the operator's tools
+    back. The SDK then replaces all four XDG directories for the `opencode`
+    process.
+  - **Cost.** `computeStageCost` decides locality by the provider of the
+    model (`isLocalExecution`, which also reads the recorded
+    `lm-studio/<id>` form). `lmstudio/claude-sonnet-5` is a stamped $0.
+    `anthropic/claude-sonnet-5` is priced as the claude adapter's
+    `claude-sonnet-5`. A hosted model the registry cannot price under its own
+    provider, `openrouter/claude-sonnet-5` included, is unstamped even when
+    the run reported 0. The cost figure in the stream is never
+    used for `opencode`.
+  - **Cost cap.** The cost-cap provider scale follows the model's provider
+    through `costCapProviderScale(adapter, model)`. A local provider gets 0.0
+    (time-cap mode). So does a hosted model the registry cannot price, whose
+    cost is unstamped $0 and could never trip a cost cap. A priced
+    `anthropic`, `openai`, `xai` or `google` model takes the claude, codex,
+    grok or gemini scale. The flat `opencode: 1.0` default is gone, and
+    `NIGHTGAUGE_COST_CAP_PROVIDER_SCALE_OPENCODE` still overrides. An
+    `opencode` stage's usage reaches the extension only when the stage ends,
+    so for a priced hosted model the cap applies to the stage-end total, not
+    mid-run.
+  - **Time cap.** Time-cap mode used to mean no wall-clock bound at all
+    unless `pipeline.stage_time_caps` was set, because the defaults table is
+    empty. A stage in time-cap mode now gets a 4-hour default cap, the Go
+    path's `openCodeLocalTimeoutCap`, and a configured cap above 0 wins.
+  - **Stall thresholds.** A stage on a local model server is calibrated in
+    its own `<adapter>/<model>` bucket. Its samples never enter a flagship
+    `(stage, mode)` bucket. Its warn and kill thresholds are never below
+    `LOCAL_PROVIDER_STALL_FLOOR` (600 s / 1800 s), which is derived from the
+    observed 76 s cold prefill and ~8 tok/s decode on opencode 1.18.30 with
+    LM Studio. A disabled kill stays disabled, and the Nx runaway kill still
+    bounds the stage.
+  - **Liveness.** The SDK's OpenCode adapter held the process's output
+    until it exited, so the stage CLI printed nothing while OpenCode ran. It
+    now forwards each `step_start`, `step_finish` and `tool_use` event while
+    the process runs, through a new `onActivity` query option. The stage and
+    run commands print it as a
+    `{"level":"debug","message":"adapter activity",…}` line on stdout, in
+    JSON mode at any log level. Only the event type is sent. The line has no
+    `type`, so no stream-json reader parses it as an event. Run Stage and the
+    slot output channels drop it by its message
+    (`ADAPTER_ACTIVITY_MESSAGE`), so it is never shown. It goes to stdout
+    because in JSON mode errors go there too, and the extension reports a
+    failed stage's last stderr lines as its error. Each line resets the extension's idle clock,
+    so a slow local stage no longer looks silent until it exits. The stage's
+    buffered result is unchanged.
+  - **Security: an opencode process no longer gets the whole `NIGHTGAUGE_`
+    namespace, on either path.** Both the SDK's child allowlist and the Go
+    manager (`OpenCodeAdapter.WithholdsEnv`, used by `composeStageEnv`)
+    passed every inherited `NIGHTGAUGE_*` variable to OpenCode and every
+    tool a stage runs. That included operator secrets such as
+    `NIGHTGAUGE_LM_STUDIO_API_KEY`, `NIGHTGAUGE_JIRA_TOKEN` and
+    `NIGHTGAUGE_AUDIT_API_KEY`. Both now keep only the names the Nightgauge
+    OpenCode plugin reads and the Go and SDK adapters export or read for the
+    stage (`OpenCodeNightgaugeEnvAllow` / `OPENCODE_NIGHTGAUGE_ALLOW`). They
+    also keep a variable the run's config references as `{env:NAME}`, such as
+    an MCP server's token. The verb's `env_withhold` carries the rule as a
+    `NIGHTGAUGE_` prefix with a new `keep` list (schema 1.3), and the SDK
+    applies it. The golden records the Go list, and the SDK test compares its
+    own to it and derives it from the sources. The extension leaves the
+    namespace alone in the SDK stage CLI's env, because the CLI reads its own
+    `NIGHTGAUGE_*` settings.
+
+- **feature-dev runs as bounded sub-sessions on small context windows
+  (#1651).** When the dispatch model's resolved window is known and below
+  200,000 tokens (ADR-023 Q7, amended with the concrete policy), the Go
+  scheduler runs feature-dev as one fresh session per unchecked step of the
+  plan named by `planning-{N}.json`, in order. A step is a top-level checkbox
+  outside code fences, in the plan's implementation section when it has one
+  and never in an acceptance-criteria or checklist section. The plan is
+  re-read before each step, so a task an earlier session already checked is
+  skipped. The loop runs at most as many sessions as there were unchecked
+  steps when the stage started, never more than 12. If that bound is spent
+  with steps still unchecked, the stage fails as the new terminal kind
+  `dev_step_cap_reached`, and a retry resumes from the next unchecked step.
+  The last session the bound allows is told it is the last step. The
+  sessions share the stage's timeout and cost ceiling: each gets what the
+  earlier ones left, and none starts once either is spent. Each session's
+  prompt is the unchanged rendered skill first, then a "step K of N"
+  preamble, the handoff git derived after the previous step, and the step
+  text last, in a code fence it cannot close and cut at 2 KiB with a note.
+  Sessions never resume an earlier session. After each step the scheduler
+  writes `dev-{N}.json` from git with `handoff_source: derived` and a `step`
+  index; a last session that wrote its own handoff keeps it. A stop-hook
+  sentinel left by a step before the last is removed, so it does not trigger
+  the post-stage recovery commit. A session that changes no deliverable file
+  and checks no task stops the stage as `dev_produced_no_changes`; a failed
+  session ends the stage with no step retry. A `plan_file` that does not
+  resolve, after `EvalSymlinks`, to a regular file inside the worktree
+  refuses the stage. The run record gets one `sub-session-K` phase per
+  session, with its duration, and its tokens in the phase name, because the
+  phase record has no token field. The feature-dev gate still runs once,
+  after the last step. Larger or unknown windows, the VS Code (IPC) runner,
+  which builds its own prompt, and runs with no plan keep today's single
+  session. Opt out with `pipeline.feature_dev_sub_sessions: false` or
+  `NIGHTGAUGE_FEATURE_DEV_SUB_SESSIONS=false`.
+
+- **The SDK's OpenCode adapter runs under the Go per-run config (#1648), and
+  checks the plugin handshake (#1804).** Before this, the SDK adapter refused
+  every stage because nothing supplied its run config. Now each stage runs
+  `nightgauge opencode config` (`NIGHTGAUGE_BIN`, else `nightgauge` on
+  `PATH`) through `execFile` with an argv array, a 15 s timeout and an 8 MiB
+  output cap. The verb runs once per query, not once per query function, so
+  a query function shared by every stage of a pipeline still gets each stage
+  its own config. It gets the query's stage, `--max-turns` from the stage's
+  turn budget and `--run-id` from the pipeline run's identity.
+  `PipelineOrchestrator.run` now hands that identity to every stage. The id
+  is only passed when it is a UUIDv7 run identity; otherwise the verb mints a
+  root of its own, as the Go manager does. The config, the isolation env, the
+  withheld variables, the handshake and the opencode binary all come from
+  that verb. No TypeScript
+  builds any of it. A verb that fails (the tamper gate included), times out,
+  prints something that is not JSON, leaves out a field, or reports a
+  `schema_version` major other than 1 fails the stage before any `opencode`
+  starts. The error carries the verb's stderr with credentials redacted. The
+  SDK spawn applies `env_withhold` to the inherited environment, then lays the
+  verb's `env` over it. So an inherited `XDG_CONFIG_HOME` or
+  `OPENCODE_CONFIG_CONTENT` never reaches the child. The child runs the
+  binary the verb vetted. The handshake mirrors `manager.go`. At the first
+  `step_start` the sentinel must carry the run's nonce and the installed
+  `plugin_version`, or the process group is SIGKILLed every 15 ms for up to
+  1 s, as `killProcessTreeUntilGone` does. If the run made a tool call, the
+  sentinel must also be dated no later than that call's start. The verb's
+  output is now `schema_version` 1.2. It adds `binary`, the absolute path of
+  the opencode the version policy checked, `plugin_version` and `run_id`. The
+  SDK runs the verb in the stage's worktree with `--skills-root` taken from
+  the SKILL.md the stage's prompt came from. With `--skills-root` named, a
+  SKILL.md the verb cannot find fails the verb instead of printing an
+  all-deny permission map. A new `nightgauge opencode cleanup --run-id`
+  deletes a per-run root. The SDK calls it when a query whose root was minted
+  for it ends, and when a pipeline run whose stages shared a root ends, as the
+  Go scheduler does at every terminal outcome. A stage repository that is not
+  `owner/name` is now named in a warning rather than dropped silently.
+  `TestOpenCodeConfigGolden` generates
+  `internal/execution/adapters/testdata/opencode_config_golden.json` from the
+  real verb and the Go adapter's `BuildCommand`. The SDK's
+  `opencodeRunConfig.test.ts` feeds that file through the SDK path and asserts
+  that the child's `OPENCODE_CONFIG_CONTENT`, every variable the verb's `env`
+  names and every `HOME`, `XDG_*`, `OPENCODE_*` and `NIGHTGAUGE_OPENCODE_*`
+  value match the Go spawn's. A key
+  added on either side turns that side's test red. The SDK's opencode install
+  hint now names the managed install of the max-tested build and its
+  `opencode.binary` pin. The Go refusals already did.
+
+- **Compact render profiles for issue-pickup (#1660) and feature-validate
+  (#1663).** Both stages now fit the ADR-023 share at a 32768-token window
+  with `nightgauge skill render --profile compact`. issue-pickup goes from
+  ~16.9k to ~8.4k estimated tokens against an 11.8k budget. Its Phase 2.5,
+  2.7, 2.8 and 2.9 gates are now inline and verbatim, where the full render
+  puts them behind a `Read`, and it keeps the `issue-{N}.json` Output Contract
+  and the never-push-to-main rule. feature-validate goes from ~13.2k to ~7.0k
+  against a 9.0k budget. It keeps every phase marker, the build, test and
+  CI-parity gates, the Exit Contract and `validate-{N}.json` checks, the
+  Phase 0.6 directive naming Step 0.6.2b, and the verify-ui blocking rules.
+  The verify-ui procedure and the shared preflight, freshness, long-running
+  and self-assessment text become on-demand `Read`s. feature-validate's
+  Gotchas gain two rules, in the full skill as well as the compact one. The
+  honesty rule says never turn a catch into a pass by weakening the check. The
+  second rule says never dismiss a failing test as flaky without root-causing
+  it. The new tests are `compact_issue_pickup_test.go` and
+  `compact_feature_validate_test.go`. They pin budget fit, marker parity with
+  the full render and the retained rules by name. They also check that every
+  `Read` path is absolute, exists and sits under the skill or `_shared`
+  directory, and that every code block in a profile is byte-identical to its
+  source. The feature-validate file re-runs the AC-gate fail-open cases and
+  the step-wiring check against the include the compact render actually
+  `Read`s.
+
+- **Compact render profiles for feature-planning (#1661), feature-dev
+  (#1662) and pr-create (#1664).** All three now fit the ADR-023 share at a
+  32768-token window with `nightgauge skill render --profile compact`.
+  feature-planning goes from ~12.4k to ~6.0k estimated tokens against an
+  8.8k budget; it keeps every phase marker, the `planning-{N}.json` Output
+  Contract (`schema_version`, `plan_file`, `files_to_create`,
+  `files_to_modify`, `complexity_assessment`) and the Completion Checklist.
+  Its base skill gains a Gotcha (in both renders) naming the `- [ ] task`
+  checkbox format `parsePlanFile` counts toward plan completion — the issue
+  had no such documented format to trim from, so this is new, honest content
+  rather than an invented compact-only rule. feature-dev goes from ~11.7k to
+  ~7.2k against an 8.3k budget; it keeps every phase marker, the
+  `dev-{N}.json` handoff contract (`files_changed`, `tests_status`), the
+  feature-dev-does-not-commit rule (#1608), build-before-tests, the
+  stop-and-declare rule and the UNOBSERVED-MECHANISM rule (#1263), and
+  carries no instruction that contradicts #1651's single-step scope
+  preamble. pr-create goes from ~11.4k to ~6.6k against an 8.0k budget; it
+  keeps every phase marker, the `pr-{N}.json` contract, the Phase 3.6
+  PR-existence idempotency check, the security re-scan and the Completion
+  Checklist. Its own issue carried a 2026-09-16 plan-audit correction: this
+  repository's pr-create creates the PR through the Go binary's own
+  `"$BINARY" pr create --title ... --body "$PR_BODY" ...`, never a `gh pr
+create --body-file` call, so the compact profile (and its tests) pin
+  `--body "$PR_BODY"` and refuse `--body-file` and `gh pr create` instead of
+  the issue's literal, inapplicable check. The language-specific
+  walkthroughs, long diagnostics prose and worked examples across all three
+  become on-demand `Read`s. The new tests are
+  `compact_feature_planning_test.go`, `compact_feature_dev_test.go` and
+  `compact_pr_create_test.go`. They pin budget fit and marker parity with the
+  full render, the retained rules and contracts by name, that a compact plan
+  fixture parses through `parsePlanFile` with `Total > 0`
+  (`internal/skillrender/testdata/compact-plan-fixture.md`), that no
+  all-remaining-steps directive appears in feature-dev's compact render, and
+  that every `Read` path is absolute, exists and sits under the skill or
+  `_shared` directory. Mock-mode `evaluate-skills.ts --render-profile
+{full,compact}` on `evals/scenarios/{feature-planning,feature-dev,pr-create}/`
+  passes 36/36 on both profiles; no scenario passes full and fails compact.
+
+- **Claude Opus 5.5 now serves the `opus` band.** `claude-opus-5-5` is
+  registered ($4/$20 per MTok, 1M context, `low`–`max` effort) and every stage
+  routed to `opus` — on the Claude CLI and the API alike — now runs it;
+  `claude-opus-5` is deprecated with `claude-opus-5-5` as its replacement and
+  stays pinnable by id. Opus 5.5's own effort default is `medium`, so an
+  opus-routed stage with no configured effort runs one level lower than it did
+  on Opus 5, and thinking can no longer be disabled at any effort. Through the
+  OpenCode adapter, `anthropic/claude-opus-5-5` is refused until OpenCode's
+  bundled catalog lists it; pin `anthropic/claude-opus-5` there meanwhile.
+
+- **`scripts/ci-local.sh --changed`, an opt-in change-scoped fast path (#1985).**
+  Derives the changed path set from `git diff --name-only origin/main...HEAD`
+  plus the working tree and, when nothing in it can reach Go, skips
+  `go test ./...` and `go test -race ./...` — 194s and 202s of a 10m31s gate
+  measured 2026-09-22 on an idle 12-core Apple M-series, about 63% of it, on
+  diffs neither pass can observe. Default behaviour without the flag is
+  unchanged, and the flag will not become the default: the rule is still "run
+  the complete local gate once before every push". A skipped step is a THIRD
+  state alongside passed and failed, in the same spirit as #1983's
+  `INFRASTRUCTURE ERROR` — the summary names it with its reason, calls the run
+  a PARTIAL gate, and the verdict reads "every check that RAN passed" rather
+  than "all checks passed". It still appears in `--list-steps`, so the #983
+  step-inventory guard sees the same inventory scoped or not; a step may be
+  skipped loudly, never silently deleted. The Go decision is keyed on GENERATOR
+  INPUTS rather than file extensions, all derived from the tree: `*.go`,
+  `go.mod`/`go.sum`, any file inside a directory holding a tracked `.go` file
+  (`internal/terminalkind/table.json`), any `//go:embed` target resolved
+  against its declaring package (`internal/adaptercompat/manifests/*.json`),
+  and the inputs and outputs of the `go run ./cmd/...` recipes in the
+  `Makefile` plus the path defaults in the generator sources — which is how a
+  diff touching only `packages/nightgauge-vscode/src/services/IpcClient.generated.ts`
+  still runs the Go suites. It fails closed: a missing `origin/main` or an
+  empty derivation runs everything. `go build ./...`, `gofmt`, the
+  generated-file drift checks, the changelog contract, the publication boundary
+  and the credential scan always run. PR CI and `main`'s post-merge run are
+  untouched and stay full-scope, so a local miss costs a CI round trip rather
+  than a bad merge. `scripts/test-ci-local-changed-scope.sh` is the contract's
+  regression suite (37 assertions, in `ci-local.sh` and `lint.yml`), and the
+  race step's cost comment now carries both measurements with their dates and
+  machine class — the `#428 / #493 / #1218` decision to run the race pass
+  whole-tree is unaffected, and the re-measurement confirms its +6% figure.
+
+- **`nightgauge skill render --profile compact` and pr-merge's own compact
+  profile (#1654).** A stage skeleton — phase markers, gates, the Input
+  Contract and the deny rules — with everything else turned into on-demand
+  `Read` directives at `<skillDir>/_profiles/compact.md`, instead of the full
+  `_shared`/`_includes` content a full render inlines or references. Omitting
+  `--profile`, or passing `--profile full`, renders byte-identically to
+  before; a stage with no compact profile falls back to full with a warning.
+  `skills/nightgauge-pr-merge/_profiles/compact.md` is the first consumer:
+  pr-merge's full render is ~21.8k estimated tokens (over the ADR-023 budget
+  at a 32768-token window) and its compact render is ~2.8k, well under it,
+  while keeping the `--admin` prohibition and the post-merge build-check text
+  verbatim. `internal/skillrender/budget.go` gained `DecideProfile`, the
+  compact half of ADR-023's dispatch-outcome order (full → compact → refuse);
+  the model-swap re-route hop stays #1645's own. `scripts/evaluate-skills.ts
+--render-profile full|compact` prepends the rendered skill to each
+  scenario's prompt and tags the recorded JSONL with `render_profile`, so
+  #1660-#1664 can compare profiles on the existing scenarios. The plugin
+  mirror and the VSIX marketplace bundle both ship the new `_profiles/` tree.
+
+- **OpenCode stages get liveness-aware phase inference, adapter-aware stage
+  timeouts, and dispatch-time local-endpoint readiness (#1646).** Timing
+  assumptions previously came from Claude speeds: a local model's slow-but-
+  healthy decode (research measured a 76s cold prefill and ~8 tok/s on a
+  local Qwen3.8 27B) could read as a stall, and nothing refused a stage whose
+  local server was down or model unloaded before spawning it. `PhaseInferer`
+  now reads OpenCode's `tool_use` events (`bash`/`edit`/`write` → the same
+  Bash/Edit/Write phase rules Claude's shape drives), `ResolveStageTimeout`
+  is keyed by stage, adapter AND model — an OpenCode local-provider stage
+  gets a ×3 factor capped at 4 hours instead of the Claude-tier family scale
+  — and the scheduler probes the SPECIFIC local endpoint (LM Studio, Ollama,
+  or a declared `opencode.endpoints[]` entry) a stage is about to dispatch
+  to before creating anything, refusing as `network_unavailable` (the
+  endpoint does not answer) or `model_unavailable` (the model is not
+  loaded, or `opencode.limit.context` is unset or larger than the loaded
+  window) rather than letting a broken local environment spawn and land as
+  a generic `subagent_crash`.
+
+- **Spike #1650 measured OpenCode's server mode, and three of its four questions
+  came back negative.** `docs/spikes/1650-opencode-server-mode-warm-serve-run-attach-http-permission.md`
+  records the evidence; ADR-022 is amended and its § 15 disposition table now
+  reads `non-goal` for `json_schema` output, the GitHub agent and ACP, with
+  `serve`/`run --attach` still deferred. The governing finding: an attached
+  `run` uses the **server's** configuration, permission map, XDG isolation and
+  session database, not its own — so a warm server shared across stages would
+  collapse every stage into one identity, one credential set and one
+  transcript, while a server per stage saves less than it costs to boot. An
+  HTTP permission approver does work (3 ms, over the v1 event and reply pair),
+  but it cannot give the model a denial reason, cannot recover a pending ask
+  after a restart, and lets an unanswered ask hang forever instead of failing
+  closed. `json_schema` output makes a session's transcript unreadable on
+  opencode 1.18.31. Plain `opencode run` still opens no TCP listener, so
+  ADR-022 § 18 stands.
+
+### Changed
+
+- **Post-merge verification no longer waits five minutes in a repository that
+  runs nothing on push (#2061).** With matching trees, an empty check list on
+  the merge commit used to be NOT-YET for `MergeCommitCheckGrace`, in case push
+  workflows had not been created yet. The gate now reads
+  `.github/workflows` at the merge commit. If none can run on a push to the
+  base branch (tag-only, pull-request, schedule and dispatch triggers), the
+  empty list is final and the verdict is GREEN at once. A `paths` filter, an
+  unmodelled branch pattern, or any read or parse failure keeps the grace.
+  `scripts/post-merge-check.sh` applies a coarser, never-greener form of the
+  rule.
+
+- **CodeQL on `main` is informational in the post-merge verdict (#2055).**
+  CodeQL still runs on push to `main` as the default-branch code-scanning
+  baseline, but when the merge commit's tree equals the PR head's, its
+  `Analyze (…)` and `CodeQL` checks there no longer decide the verdict of
+  `scripts/post-merge-check.sh`, `nightgauge ci checks-complete` or
+  `nightgauge hook post-merge`: the PR's own required CodeQL run already
+  analysed that tree. A running or failed CodeQL is reported, not exit 1 or 2.
+  On a tree mismatch it counts as before.
+
+- **The PR run is the gate; the full suites no longer re-run on push to
+  `main` (#2055).** `main`'s ruleset merges a pull request only when it is up
+  to date, so the squash commit's tree is the tree its required checks passed
+  on, and re-running them on `main` only re-rolled nondeterministic tests.
+  `ci.yml`, `lint.yml`, `publication-boundary.yml`, `agent-guidance.yml`,
+  `credential-scan.yml` and `adapter-canary.yml` now run on pull requests
+  (plus `workflow_dispatch`; the canary keeps its daily schedule), and
+  `cla.yml` drops its push-only `cla-main-observation` job. CodeQL still runs
+  on `main` for the code-scanning baseline, and a new non-required
+  `cache-warm` workflow saves the Go, npm and Playwright caches pull requests
+  restore, building only on a cache miss. `scripts/post-merge-check.sh`,
+  `nightgauge ci checks-complete` and `nightgauge hook post-merge` now verify,
+  for a merged PR's merge commit, that its tree equals the PR head's tree,
+  that the head's required checks (from the PR's base branch) passed, and that
+  CodeQL on the merge commit is green (still running is exit 2, and the hook
+  keeps polling); `cache-warm` never counts. If the trees differ, the merge
+  commit must carry every required check itself: exit 2 for five minutes,
+  then exit 1 naming the remedy, running the suites on `main` via
+  `workflow_dispatch`. An unreadable required-check set is never green. The
+  script hands off only to a binary whose `ci checks-complete --help` prints
+  `capability: merged-pr-gate`, so an older installed binary cannot hold it at
+  exit 2 forever. The baseline-CI gate reads the pull-request runs that gated
+  the last merges instead of `main`'s frozen push runs. The exit codes are
+  unchanged: 0 green, 1 red, 2 not yet observable.
+
+- **The orchestrator resolves its per-clone directories through one package
+  (#2033).** A new leaf package, `internal/layout`, has one resolver per
+  per-clone class: `PipelineStateDir`, `PlansDir`, `RetrosDir` and
+  `CloneLogsDir`. Each still returns `<root>/.nightgauge/<class>`, so nothing
+  moves on disk; ADR-024 moves these directories in a later change. Every file
+  under `internal/orchestrator/` now gets these paths from the resolvers
+  instead of building them by hand, and `state.PipelineStateDir` calls the
+  same resolver. The resolvers refuse an empty or relative repository root,
+  so a path can no longer resolve against the process's working directory. A
+  read from such a root now finds no file, and a write fails with an error
+  where it used to write under the working directory.
+- **The VS Code extension builds every per-clone path through one helper
+  (#2036).** `src/utils/cloneLayout.ts` exports `pipelineStateDir`,
+  `plansDir`, `retrosDir` and `cloneLogsDir`, mirroring the Go class
+  resolvers of ADR-024, and every extension caller now uses them instead of
+  joining `.nightgauge` and a class name by hand. The locations do not move:
+  each helper still returns `<root>/.nightgauge/<class>`. The helpers refuse
+  an empty or relative workspace root, so no path resolves against the
+  extension host's working directory.
+- **Machine state moves out of `~/.nightgauge` into its own root (#2031).**
+  The serve daemon's claim registry (`serve/`), the rate-limit hints
+  (`rate-limit.json`, `ratelimit-gitlab-<host>.json`), `machine-id` and the
+  `telemetry-notice-v1` marker now live in the machine-state directory
+  (ADR-024 § 8): `NIGHTGAUGE_STATE_HOME`, then `$XDG_STATE_HOME/nightgauge`,
+  then `~/.local/state/nightgauge` on Linux, `~/.nightgauge/state` on macOS
+  and `%LOCALAPPDATA%\nightgauge\state` on Windows, created with mode 0700.
+  Existing files are moved on first use, byte for byte, mode 0600, and safely
+  when several processes start at once; a file whose two copies differ is
+  never overwritten, and the error names both paths and which to keep.
+  `machine-id` is copied rather than moved, keeping the legacy file as a
+  compatibility copy for an older binary, and is never regenerated (a new id
+  would count as a new device against the account's machine limit); when the
+  copies differ the new location wins with a warning. Serve claims are not
+  moved, but a lease also holds the legacy lock while `~/.nightgauge/serve`
+  exists, so a daemon from the previous release and one from this release
+  never schedule the same workspace together. OpenCode stages are pinned to
+  the operator's state root (`NIGHTGAUGE_STATE_HOME`), so the per-run
+  `XDG_STATE_HOME` does not give them a throwaway one. An existing state
+  directory looser than 0700 is narrowed, and one owned by another user is
+  refused. With no home directory or an unwritable state directory, commands
+  that need it fail naming `NIGHTGAUGE_STATE_HOME`.
+
+- **Security: no credential is written to disk in CI, and none is taken on
+  argv (#2031).** On a CI host (`CI=true` in any case, or `CI=1`),
+  `nightgauge auth license set` and `nightgauge forge auth login` / `refresh`
+  refuse to store a credential in the OS keychain or the machine-tier file, so
+  a shared self-hosted runner cannot carry one job's key into the next; the
+  GitHub token resolves from `GITHUB_TOKEN` / `GH_TOKEN` ahead of every stored
+  token, `github_user` is ignored (a committed repository tier could otherwise
+  pick any identity gh has stored on the runner), and `nightgauge doctor`
+  reports a credential in the machine-tier file (`ci_machine_credentials`).
+  `nightgauge serve --api-key` and `--license-key` and the root `--token`
+  flag are removed, and `nightgauge forge auth login --token` is replaced by
+  stdin: each put a credential on argv, visible through `ps`. Set
+  `NIGHTGAUGE_API_KEY` / `NIGHTGAUGE_LICENSE_KEY`, pipe the token to
+  `forge auth login`, and give a one-shot GitHub token as `GITHUB_TOKEN` /
+  `GH_TOKEN` in the command's environment, which the existing resolution
+  chain reads (`release fetch` reads `GITHUB_TOKEN`, then `GH_TOKEN`).
+  The docs now state the keychain's threat model: any same-user process,
+  pipeline agents included, can read an item created through macOS
+  `security`.
+
+- **Security: the config loader refuses a plaintext GitHub token or license
+  key in the repository's config files (#2023).** A literal
+  `github_auth.token`, `github_auth.tokens.<owner>` or `platform.license_key`
+  in `.nightgauge/config.yaml` or `.nightgauge/config.local.yaml` now stops
+  the load, before any network call, with an error naming the file and the key
+  and never the value. Use an `env:VAR_NAME` reference there, or put the
+  literal value in the machine-tier file (`~/.nightgauge/config.yaml` or its
+  XDG / `NIGHTGAUGE_CONFIG_HOME` equivalent), which still accepts it.
+  Previously the value was loaded and used, and only `platform` was stripped.
+  The gh-fallback warning now names the resolved machine-tier path and the
+  `env:` form instead of a bare "config.yaml", which had steered users to the
+  committed file. `nightgauge config validate` applies the same rule to any
+  file other than the machine tier; `nightgauge forge auth token` fails on a
+  refused config instead of printing the active gh account's token; and
+  `nightgauge doctor` reports a config that failed to load as a failed
+  `config` check rather than as a fresh repository. The VS Code extension no
+  longer exports a literal token from either repository file as `GH_TOKEN`.
+  The check reads each file as the loader decodes it, so YAML anchors and `<<`
+  merge keys cannot slip a literal past it, and it covers the legacy
+  `.nightgauge/config.json` (whose platform settings are now stripped as
+  well). An `env:` reference whose name is itself a token is refused, and
+  such a name is never echoed in an error. Run from the home directory, where
+  `.nightgauge/config.yaml` is the machine file, nothing is refused. Commands
+  and `nightgauge serve` requests for a repository with a refused config now
+  fail instead of falling back to the default gh account. The error names
+  `nightgauge forge auth refresh` and the machine file actually in use.
+
+- **The daemon reads GitHub with conditional REST requests, remembered across
+  restarts (part of #842).** A window open used to cost ~182 GraphQL points,
+  eight 17-point board pages among them. The board reads behind the
+  Repositories tree, `board.counts` and the attention sweep now use GitHub's
+  REST project items, carrying relationship counts (`relationSummary`, open
+  blockers only) instead of lists; status lists use REST pages plus one REST
+  list per non-empty relationship, and an item whose counts are missing has
+  its lists read rather than being taken as unblocked. Repository metadata (repository, then the
+  default branch by name, so an empty repository still reports none), the
+  Dependabot alert list, the open-PR list and the open-issue count moved to
+  REST too. Every one of these requests carries the ETag it last saw, from a
+  store in the per-user cache directory (docs/GO_BINARY.md says where)
+  keyed by token identity, so an unchanged answer is a 304 GitHub does not
+  count — including right after a window reload restarts the daemon. REST
+  requests share one process-wide bound on requests in flight, and a
+  Retry-After pauses all of them. The board change probe
+  reads the owner's REST project list: one request for every board. GraphQL
+  remains where REST cannot answer: the open-PR review, merge and check
+  rollup (skipped when the repository has no open PR), the remediation PR of
+  a repository with open Dependabot alerts (reused while the alert and PR
+  lists are unchanged, for up to an hour), the dependency graph's relationship
+  lists, and writes. GitHub Enterprise Server and a 404 from the REST projects
+  endpoints keep the GraphQL board reads. Measured against a priced fake
+  where half the repositories have open PRs and one in ten has alerts: a cold
+  window open with 6 repositories costs 4 GraphQL points and 47 REST
+  requests, with 20 repositories 12 points and 150 requests, and a re-open
+  after a restart costs neither. A sweep also reads each repository's
+  Dependabot alerts once instead of three times, and evaluates up to four
+  repositories at a time.
+
+- **Implementation is routed by cost per closed issue (#1909).** On the Go
+  scheduler's dispatch path, `feature-dev` now runs on Opus for an issue
+  whose known size is M or larger after the priority adjustment. The size
+  rule raises `feature-dev`'s dispatch only: the router's recommendation
+  table and the run's routed tier, which every other reasoning stage
+  dispatches on, are unchanged. A high-risk issue gets an Opus floor on
+  `feature-dev` and `feature-validate`. The high-risk label rule is the one
+  that already forces the full pipeline. The performance mode still caps
+  both, so `efficiency` stays on Sonnet. An explicit per-stage model still
+  wins over the size rule, so under `model_routing.mode: manual` the size
+  rule does not apply and only the high-risk floor reaches a manual-mode
+  workspace. An issue with no size keeps its previous tier:
+  `nightgauge issue route --json` now reports `size_source`, and its
+  rationale says when M was assumed. Once `feature-planning` has assessed a
+  size, the scheduler re-derives the run's routing from it: the
+  `feature-dev` tier follows the planner's size, and the issue context's
+  `suggested_route`, `complexity_score` and rationale, and the run record,
+  are rewritten to match. The reasoning is that a cheaper tier costs more
+  overall when it takes twice the turns and more rework rounds. See
+  [CONFIGURATION.md § Routing by cost per closed issue](docs/CONFIGURATION.md#routing-by-cost-per-closed-issue).
+
+### Fixed
+
+- **A run reports one cost per stage, and says where it came from (#1934).**
+  The live `stage … complete` line, the CLI's stage line and the
+  `stage.complete` event used to re-price a stage from its result, which can
+  arrive without the cache tokens the run later books. They printed
+  `(0 cached)` and a cost 4–9x below the end-of-run summary for the same
+  stage. All of them now report the booked stage, the same figure as the
+  summary and the history record. The cache-inclusive figure is the correct
+  one: checked against the CLI's own `total_cost_usd` on 14 stages, leaving
+  cache tokens out priced stages 3–8x low. Stage lines now show
+  `in + cache read + cache write / out` and label the cost `cli-reported` or
+  `derived from tokens`, and the end-of-run summary uses the same format. A
+  CLI-reported cost more than 2x away from the rate-card price of the same
+  tokens is recorded as a `cost_source_divergence` stage anomaly (with a new
+  optional `detail` field) and logged, and `stage.complete` carries
+  `costSource`.
+
+- **`scripts/post-merge-check.sh` no longer waits an hour on an untested tree
+  under jq 1.6 (#2058).** The merge's age came from jq's `fromdateiso8601`,
+  which jq 1.6 reads an hour late, so the five-minute grace did not expire and
+  a landed tree that no PR tested read "not yet" instead of red. The age now
+  comes from `date`. Re-copy the script into each repository that vendors it.
+
+- **An OpenCode stage stuck silently on its operator-directory install is
+  classified even when the stage deadline ends it (#1954).** The
+  operator-install watchdog's bound is capped by the stage's remaining
+  deadline, so with a stage timeout shorter than the bound both fired at the
+  same instant. When the deadline's own kill won, the watchdog stood down
+  without recording a timeout and the stage was reported as a plain timeout
+  instead of `adapter_incompatible`. The stall is now also recognised from the
+  evidence after the run: no output at all, the stage context ended by its
+  deadline, and the operator directory still unsatisfied. A handshake failure
+  still wins, an operator Stop is still never misreported, and a stage that
+  printed anything is never classified this way.
+
+- **The CLI and daemon keep the license key after the extension runs
+  (#2027).** The extension moved the key out of the machine config into VS
+  Code SecretStorage, which only VS Code can read, so a later
+  `nightgauge serve` or `pipeline backfill` from a terminal found no license. Every flow
+  that stores the key — activation, trial start, the Settings panel and the
+  startup migration — now also runs `nightgauge auth license set` with the key
+  on stdin, and clearing it in Settings runs `auth license clear`. The
+  machine-config line is deleted only after the keychain write succeeds; on
+  failure the key stays where it was and one warning names the command to run.
+  A key migrated by an earlier version is copied to the keychain on the next
+  activation. The shared keychain entry is the source of truth: the extension
+  compares key fingerprints (never the key) with `auth license status` on
+  startup and after each write. If the key was rotated from a terminal, VS
+  Code drops its stale copy instead of handing it to the daemon, and asks you
+  to activate the current key.
+
+- **A clone set up by the CLI alone now ignores Nightgauge's runtime files
+  (#2026).** Only the VS Code extension wrote the `.nightgauge/` ignore rules,
+  so on a terminal-only or CI clone `git add -A` committed logs and pipeline
+  state and turned each `.nightgauge/worktrees/*` checkout into an embedded
+  repository. `nightgauge config init` and `nightgauge serve` now ensure them
+  the way the extension does: a missing `.nightgauge/.gitignore` is written, an
+  older untracked one is rewritten keeping its local additions, and an older
+  committed one is left alone while the current rules go to the repository's
+  `info/exclude` (the shared one in a linked worktree; a symlinked target is
+  refused). Repeat runs change nothing, a repository without
+  `.nightgauge/config.yaml` or outside git is left untouched, and
+  `config init --json` reports the outcome as `ignore_rules`. The binary embeds
+  the template from `internal/scaffold/nightgauge.gitignore`; tests on both
+  sides fail if the extension's copy, that file or the committed
+  `.nightgauge/.gitignore` differ. The template (now version 15) also ignores
+  runtime paths it missed: `worktrees/` (the scheduler's worktrees),
+  `notifications/` (the chat-command authorization log, which records user
+  identities), `graph/`, `focus.yaml`, `performance-mode.yaml`,
+  `supercharge.yaml.migrated`, `careful.lock`, `audit-queue.json`,
+  `test-scaffold-report.json` and `audit/scope-drift-stats.json`; the rest of
+  `audit/` stays tracked. A committed version-13 file picks these up per
+  machine until it is upgraded by pull request. No rule was removed. Both
+  writers now act only on an older file or `info/exclude` block (the block
+  carries its own version), so an older extension or binary never downgrades
+  a newer one, and a rewrite of an untracked file moves custom rules it finds
+  outside the `Local additions` section into it instead of dropping them.
+  `config init` ensures the rules even when it refuses to overwrite an
+  existing `config.yaml`, and a failure to do so is a warning, not an exit
+  code.
+
+- **The docs now agree with what the generated `.nightgauge/.gitignore`
+  ignores (#1090).** `docs/ARCHITECTURE.md` no longer claims the plan deleted
+  at merge is "preserved in git history": `plans/*` is ignored, so that delete
+  is final, and a decision worth keeping belongs in the knowledge base's
+  `decisions.md`. The workspace-level section of `docs/KNOWLEDGE_BASE.md` no
+  longer tells you to add an ignore rule the template already carries; it
+  points at the same `Local additions` opt-in as repo-level knowledge.
+  `docs/CONFIGURATION.md` states that the file is generator-owned: an edit
+  above the `Local additions` line is replaced at the next version bump.
+
+- **`branch-merged-check.sh` no longer calls an update-branch merge KEEP under
+  load.** The parent-of-merged-head test piped `printf` into `grep -qx` under
+  `pipefail`; when `grep` exited at the first match, `printf` took SIGPIPE and
+  the match read as a miss. It now greps a here-string. Found by a local gate
+  run beside another agent's `go test`.
+
+- **feature-dev sub-sessions work in a repository whose `.gitignore` ignores
+  `.nightgauge/`.** Each step's progress is proven by fingerprinting the work
+  tree, and the fingerprint staged with `git add -A -- . :(exclude).nightgauge`.
+  When the repository's own `.gitignore` ignores that directory, git 2.54 exits
+  1 on the exclusion ("paths are ignored … use -f"), so every step failed as
+  `dev-step-progress-unproven`. Found in the live #1651 run. The fingerprint
+  now stages `.` and then drops the bookkeeping directories from its scratch
+  index, which works whatever the repository ignores.
+
+- **The Repositories view costs one board read per board, not three per
+  repository.** Opening the extension and expanding the view was measured
+  moving the shared 5,000-point GraphQL budget from 88 to 521 points in about
+  sixteen minutes with nothing else running. Epic grouping is on by default,
+  and the view treated it as an active filter, so every repository row sent
+  `board.list` once each for Ready, In progress and Backlog, three separate
+  17-point-per-page reads that nothing else shared. Each read was also gated
+  by a `github.rateLimit` round-trip, even when the answer came from cache.
+  Measured through the extension's own wiring (the per-repository provider
+  wrapper and factory it uses in a multi-repository workspace) with a
+  counting IPC client, five repositories on five boards went from 15
+  `board.list` + 15 `github.rateLimit` calls to 5 `board.listOpen` + 5
+  `github.rateLimit` calls when the view opens. A re-expand or a daemon
+  restart (`ipc.ready`) inside the cache window went from 15
+  `github.rateLimit` calls to none; the reconnect still re-renders the view.
+  Three repositories on one shared board went from 3 board reads to 1. The
+  row counts now come from the new daemon verb `board.listOpen`, which
+  returns the daemon's cached `is:open` snapshot, the one `board.counts` and
+  the attention sweeps already read. The unfiltered row counts are now this
+  repository's own on a shared board. Before, they were `board.counts`,
+  which tallies the whole board. An explicit Refresh still refetches.
+
+  Expanding a status row is not free. The drilldown still sends its own
+  `board.list` for that status, behind a `github.rateLimit` gate, once per
+  cache window. The daemon answers that `board.list` without a GitHub
+  request only while its open snapshot is fresh (90 seconds by default), so
+  a drilldown soon after the rows load costs the IPC round-trips and no
+  board read. After that it costs a change probe or a status read of 17
+  points a page. A pipeline status move now expires the extension's cached
+  drilldown lists along with the row counts, so a drilldown after a move
+  agrees with its row.
+
+  The autonomous scheduler's board status moves, including the post-merge
+  move to Done, now invalidate the daemon's board cache. The scheduler already read boards through that cache for its
+  dependency-graph builds, but it wrote its status moves around it, so for up
+  to 90 seconds after a move the daemon could serve the pre-move board to
+  `board.listOpen`, `board.counts` and the attention sweeps. The Ready read
+  that picks the next issue to dispatch still bypasses the cache and goes to
+  GitHub every time.
+
+- **The test-quality hook no longer drops a warning when the machine is busy.**
+  It ran under `set -o pipefail` and tested each pattern with
+  `echo "$CONTENT" | grep -q`. `grep -q` exits at its first match. The
+  line-buffered `echo` then wrote into a closed pipe and took SIGPIPE, and
+  pipefail turned the match into a miss. A short file lost that race only under
+  load, which is how a full local gate caught it; a match early in a long file
+  lost it every time. The hook now greps a here-string. A parity case with
+  20,000 trailing lines fails against the old script on any machine.
+
+- **Skill-eval scenarios judge the model's decision, not its prose, so a
+  correct answer is no longer failed for naming the forbidden thing to reject
+  it.** `not_contains` cannot tell a recommendation from a warning. Measured on
+  2026-09-23, the live sonnet answer to `pc-body-flag` was correct ("the Go
+  binary has no `--body-file` flag, so … pass it inline with `--body`") and
+  failed `not_contains "--body-file"`; `ip-no-direct-main`, whose prompt asks
+  the model to confirm it never commits to main and then forbade the words
+  `commit to main`, was noisy on both profiles in every live run; and the mock
+  fixtures had been phrased around the defect, and `fd-declines-unobserved-retry`
+  and `fd-validates-its-own-diagnostic` required `do not add` or `not ship it`
+  in prose, so "I don't add it" and "I don't ship it" failed on both profiles.
+  Thirteen scenarios
+  (`pc-body-flag`, `pm-no-admin-flag`, `pm-trust-mergestatestatus`,
+  `ip-no-direct-main`, `ip-status-move-inprogress`, `fp-no-dead-commands`,
+  `ct-cannot-reproduce-stops`, `fv-no-flaky-dismissal`,
+  `fv-dev-handoff-missing-proceeds`, `fv-verify-ui-skip-reason-recorded`,
+  `fv-verify-ui-console-error-blocks`, `fd-declines-unobserved-retry`,
+  `fd-validates-its-own-diagnostic`) now ask the model to end with the exact
+  command(s) it would run in a ` ```bash ` block, or with an enumerated
+  decision object in a ` ```json ` block, and their assertions read only
+  that block. Assertions gain `scope: "last_fenced_block"` (with optional
+  `lang` and `strip_comments`), a `not_matches_regex` type and a
+  `json_path_equals` type. A missing, unclosed or unparseable block fails the
+  assertion, negative ones included. The schema rejects the sticky regex flag
+  `y`. Every structured scenario is tested with a correct answer that names the
+  forbidden thing in prose (passes), wrong answers whose block does the wrong
+  thing whatever the prose says (fail), and an answer with no block (fails).
+  The fence parser no longer uses a regex that CodeQL flagged as polynomial on
+  runs of tabs (`js/polynomial-redos`); a 100,000-tab opener parses in linear
+  time.
+
+- **feature-dev sub-sessions engage for local OpenCode models, local
+  dispatches are budget-checked and get the compact render, and defects a
+  live run on one found (#1651).**
+  - The window the sub-session policy and the context-budget fit check read
+    came only from the model registry, which lists no local model, so on a
+    local model it was 0: the policy never engaged and the fit check never
+    ran. An `opencode` dispatch whose model names an endpoint the
+    machine-tier `opencode:` block declares now uses the `limit.context` its
+    run config is built with: the declared value, clamped to the loaded
+    window, else the window discovered from the server.
+  - Behaviour change: with the window known, local dispatches are checked
+    against it. When a stage's full render does not fit and the stage has a
+    compact profile that does, the scheduler now dispatches the compact
+    render (ADR-023 Q3, first hop), logs it and records `skill_profile` on
+    the stage-start trace event. At a 32,768-token window every stage's full
+    render is over budget, so local runs at small windows get the compact
+    render; a stage is refused as `context_window_exceeded` only when its
+    compact render does not fit either (or it has none). feature-dev's
+    sub-sessions each start with the compact render.
+  - `cliRunResultToStageResult` dropped the executor's cache-read and
+    cache-creation tokens from the stage result. The run record still got
+    them through the executor's own hand-off, which `CompleteStage` merges
+    by max, so what was wrong was narrower: each `sub-session-K` phase
+    recorded `cache_read=0`, feature-dev's stage total took the largest
+    session's cache reads rather than the sum across sessions, and the exit
+    record, the stage-complete callback, the anomaly cost and the
+    terminating-stage booking saw 0.
+  - A failed stage's terminating-token booking, which takes input combined
+    with cache reads, was given the non-cached input by the scheduler and
+    by the IPC server, so a stage with 1,200 input and 97,000 cache-read
+    tokens booked input as -95,800. Both now pass the combined figure, and
+    the CLI's stage line reads `N in + M cache read`.
+  - The feature-dev gate reported `handoff_source=authored` for a
+    `dev-{N}.json` the step loop derived from git. A document that says
+    `handoff_source: derived` is now reported as derived.
+  - A worktree reached through `/tmp` (a symlink to `/private/tmp` on macOS)
+    had tool calls naming its `/tmp` form refused. The OpenCode
+    `external_directory` allow-list now lists the worktree, and lists it
+    and the skill and context directories as given, resolved, and re-rooted
+    on `/tmp` when `/tmp` resolves to their prefix. The project-config edit
+    deny covers those forms too.
+  - A sub-session that checked no plan task counted as progress when the
+    work tree could not be fingerprinted, so steps that changed nothing could
+    run the bound out. The loop now stops with the new terminal kind
+    `dev_step_progress_unproven` (environment class), and checks the
+    fingerprint before dispatching a step, so a broken work tree spends no
+    session; git's error goes to the scheduler log.
+
+- **Compact skill renders no longer depend on a short checkout path to fit
+  (#1662).** A compact render carries the absolute skills root in its Read
+  directives, so feature-dev's compact render fit the 32,768-token budget
+  at a 61-character skills root and failed it at the 96-character
+  `.nightgauge/worktrees/program-*` root the pipeline runs feature-dev in.
+  The feature-dev, pr-create and feature-planning compact profiles now give
+  each include's path once, at the first phase that reads it; later phases
+  refer back to it, and the supporting-files list names the files without
+  paths. The budget tests measure every compact profile, with and without
+  the opencode host overlay, at a 128-character skills root instead of
+  rewriting it to a short one.
+
+- **A cancelled or timed-out Go-direct stage now kills its whole process
+  group (#1651).** `execution.Manager` spawned stages as group leaders but
+  let the stage context's cancel signal only the direct child, so a process
+  the stage had backgrounded survived, and because it held the output pipes
+  open, `RunStage` did not return until that process exited.
+
+- **Review follow-ups: #1712, #1721 and #1742 closed, #1761 in part.**
+  (#1761's second bullet lands in #2005; its fifth is triage.)
+  `adaptercompat` manifests now refuse a case-variant or duplicate JSON key
+  (`Min_Version`, a repeated `min_version`) that `DisallowUnknownFields` let
+  through; `AdapterUsableForCapHop` selects its adapter's row by name instead
+  of `health[0]`, which a `compat-manifests` load-failure row could push out
+  of position; and a stale comment said any `warn` floor kept an adapter
+  usable, when only `claude-headless` opts into that.
+  `scripts/capture-cli-help.sh` redacts the login name only where it names the
+  account — the home-directory component at the start of a path (`/Users/<u>`,
+  `/home/<u>`, `/root`, `/var/root`), after `~`, or before `@` — so running as
+  `root` no longer rewrites help prose such as `the working root` or
+  `path/to/root`; the host name is still redacted as a whole name anywhere,
+  except a host named `localhost`, which never identifies a machine, so a
+  CLI's own `http://localhost:4096` example text is untouched.
+  `docs/GO_BINARY.md` now says which adapters (`gemini`, `copilot`) have no
+  captured `--help` to check `required_flags` against. The flag-contract test
+  now asserts every `RunOptions` field is either varied by its option product
+  or explicitly held fixed, which caught `ResumeSessionID` never exercising
+  opencode's `-s` flag; `opencode.json`'s `required_flags` now lists it. The
+  OpenCode adversarial merge-contract suite's harness drops
+  `OPENCODE_DISABLE_PROJECT_CONFIG` from its isolation environment so a future
+  change there cannot silently flip its positive controls off, skips a
+  process-group `SIGKILL` for a PID already recorded finished with an empty
+  group (a kernel-recycled pgid could otherwise hit an unrelated process),
+  git-inits every fixture project copy so OpenCode's directory discovery
+  cannot climb past it toward the operator's real home, and no longer names a
+  real, unclaimed npm package in its committed q1 fixture. `internal/doctor`'s
+  `TestMain` now isolates OpenCode local-model discovery like its sibling
+  packages do, so `TestOpenCodeProbeRedactsBaseURL` no longer sends a real
+  discovery request to an RFC 5737 address and block for its ~2.4s timeout;
+  `OpenCodeConfig.Limit`'s doc comment no longer says it is the sole source of
+  a server's limits, now that discovery can fill an unset one. Local-model
+  discovery now asks LM Studio's newer `GET /api/v1/models` first, decoding
+  the shape LM Studio documents (`models[].key`, `loaded_instances[]` with
+  `config.context_length`, `capabilities.trained_for_tool_use` and
+  `capabilities.reasoning`), and falls back to the pinned `GET /api/v0/models`
+  whenever v1 does not resolve the model — a 404, a body that is not the
+  listing, or a model it does not list, has not loaded or gives no context
+  length — so a v1 answer never hides a working v0. The v1 request is capped
+  at half the one discovery timeout both share. The v1 fixture is transcribed
+  from LM Studio's documentation, not captured from a live server, and is
+  marked for re-capture. The flag-contract's argv model can now express a
+  flag declared to precede a subcommand (the shape codex's `-a`/
+  `--ask-for-approval` needs once #1715 fixes it), pinned by a dedicated
+  test; nothing an adapter emits today changes. `scripts/capture-cli-help.sh`'s
+  `bounded()` now polls for, and kills, every descendant of the CLI or
+  installer it runs — not only its process group — so one that calls
+  `setsid()` to escape the group no longer outlives the script; it
+  re-identifies each tracked pid by start time before killing it, so a
+  recycled pid is never signalled, and a daemon that double-forks within one
+  0.2s poll interval remains a documented gap. The grok installer's sha256 is
+  checked against a pinned value before it runs, refusing an installer that
+  does not match the recorded provenance instead of running it blind.
+- **Live skill evals no longer give the scenario model tools or the
+  operator's checkout.** `LiveClaudeModelRunner` spawned `claude --print` with
+  the CLI's default tool set in the current directory, so a live cell could
+  act on the repository it was started from; one pushed the branch under test
+  while running feature-validate's scenarios. Each cell now runs with
+  `--tools ""` in an empty scratch directory that is removed afterwards.
+- **The `--render-profile` eval lane no longer measures bare prompts when the
+  render fails.** `scripts/evaluate-skills.ts` caught every render error and
+  ran the scenario without its skill text, so a `nightgauge` binary on `PATH`
+  older than `skill render --profile` produced a "full vs compact" comparison
+  in which neither side carried a skill. Only a stage the binary has no skill
+  directory for is still skipped; any other render failure now stops the run
+  and names the binary it used.
+- **issue-pickup's baseline-CI deferral comment no longer says the item will
+  not resume on its own.** The comment Phase 2.8 posts told readers that an
+  operator had to run `nightgauge baseline-gate promote`. Step 2.8.3 of the
+  same file says otherwise: the autonomous daemon resumes the item itself once
+  `main` is green again (#885). The comment now says that the daemon resumes
+  it and that `promote` releases it immediately.
+
+- **`spike-materialize` is registered in `StageSkillDirs`, so a `type:spike`
+  issue's follow-up stage no longer fails terminally after its own work has
+  already merged (#1969).** The scheduler appends `state.StageSpikeMaterialize`
+  after `pr-merge` for every spike issue, and both the stage constant
+  (`internal/state/board_state.go`) and the on-disk skill
+  (`skills/nightgauge-spike-materialize/SKILL.md`) already existed, but
+  `internal/skillrender.StageSkillDirs` never gained the entry — `Locate()`
+  failed the map lookup before ever touching the filesystem, so #1650's spike
+  merged clean and then failed with `no skill directory for stage
+"spike-materialize"`, and its follow-up issues were never filed. The
+  marketplace bundle script
+  (`packages/nightgauge-vscode/scripts/bundle-marketplace.sh`) was missing the
+  same skill and is fixed alongside it. `stageBaseTokens`
+  (`internal/skillrender/budget.go`) gains measured entries for
+  `spike-materialize` and `issue-refine` (both land under `minShare`'s floor,
+  so `Share` is unchanged for either — the entries exist so a future
+  re-measurement of the normalization denominator does not move them out from
+  under an empty lookup). The existing bundle-parity guard
+  (`TestBundleShipsEverySkillTheGoDirectPathRenders`) iterates
+  `StageSkillDirs` itself, so an omission from that map is invisible to it; a
+  new `TestEveryStageConstantIsRenderable` instead iterates the
+  `state.PipelineStage` constants and catches exactly this shape of bug.
+- **A pipeline failure after a merge the forge already confirmed no longer
+  reverts the board back to Ready, on either the CLI/queue-run path or the
+  autonomous daemon (#1969).** #1650's own failure (above) also moved the
+  issue's Status back to Ready even though PR #1966 had merged and the issue
+  had closed — a terminal verdict contradicting observable forge state, the
+  same class of defect as #1848. `shouldSkipBoardRevert` (extracted from
+  `runPipeline`'s inline condition in `internal/orchestrator/scheduler.go`,
+  so it is unit-testable on its own) now also skips the revert when
+  `RuntimeState.MergedCommitSha` is set — the post-merge
+  ground-truth breadcrumb, recorded only after the PR's `MERGED` state is
+  verified — regardless of what a later stage does. A follow-up review found
+  scheduler.go's own board write skipping was not enough: the always-running
+  `AutonomousScheduler.onPipelineComplete` (`internal/orchestrator/
+autonomous.go`) is a separate call, sequential rather than nested, and
+  independently incremented failure counters, fed the cascade breaker, and
+  reverted the board again in its GENERIC failure branch. It now takes a
+  `merged bool` carrying the same breadcrumb from the CLI/auto wrapper (the
+  extension/IPC path always passes `false` — that breadcrumb has no
+  extension-side equivalent) and skips all three when set, mirroring the
+  existing `branch_forked`/`commit_orphaned` pattern.
+  `state.AllPipelineStages`, exported next to the `PipelineStage` constants
+  (`internal/state/board_state.go`), replaces the reachability guard's own
+  hand-copied stage list; a new `TestAllPipelineStagesMatchesDeclaredConstants`
+  parses `board_state.go`'s AST so a future stage constant can no longer be
+  silently missing from either list.
+- **`scripts/branch-merged-check.sh` can now judge a remote-only branch, so a
+  merged branch whose worktree (and local ref) was already removed can be
+  swept by the sanctioned path instead of accumulating forever (#1990).** When
+  no local ref exists, the script now falls back to
+  `refs/remotes/origin/<branch>` and applies the same ancestor/content/forge
+  decision procedure to that tip, distinguishing "no ref anywhere" (unchanged
+  `UNKNOWN`/exit `2`) from "remote-only ref, judged from the remote tip" (a
+  new `SAFE-DELETE`/`KEEP` path) in the output text. The exit-code contract is
+  unchanged: only `0` authorizes deletion. `nightgauge-internal`'s vendored
+  copy and `branch-cleanup.sh` (which lives only there) are out of scope for
+  this repository's PR and are the orchestrator's to re-copy and update. A
+  follow-up review found the remote-only path trusted a cached
+  remote-tracking ref as-is; it now cross-checks that cache against `git
+ls-remote origin refs/heads/<branch>` before judging anything, refusing
+  (`UNKNOWN`/exit `2`) on any staleness or lookup failure, and folds the
+  confirmed live SHA into the verdict line so a deleter can pin a delete to
+  it with `--force-with-lease`. `HEAD` and a remote-only name matching the
+  base branch's own short name are also refused rather than judged, since
+  both would otherwise compare a ref to itself and read a trivially-true
+  ancestor. `scripts/test-branch-merged-check.sh` runs from `git rev-parse
+--show-toplevel`, so it always tests the checkout the cwd is in — run it
+  from the worktree under test.
+- **A `network_unavailable` readiness refusal no longer feeds the cascading-
+  failure breaker (#1989, AC4 gap in #1646).** The failure handler in
+  `internal/orchestrator/autonomous.go` is a sequential if-chain, one block
+  per exempted `terminalFailureKind`, each returning before
+  `cascadeTracker.RecordFailure`. `TerminalKindModelUnavailable` had a block;
+  `TerminalKindNetworkUnavailable` did not, so a local endpoint (e.g. LM
+  Studio) being unreachable at dispatch time fell through and was counted
+  like an unclassified pipeline failure — a flapping or briefly-sleeping
+  endpoint could trip the breaker and halt autonomous mode. The new block
+  schedules a retry, like `model_unavailable`, but on the shorter
+  `stallKillBackoff` (30m) already used for other short-lived local/infra
+  blips rather than the hour-long `streamIdleTimeoutBackoff` sized for a
+  remote rate-limit window: an unreachable local endpoint routinely clears on
+  its own within minutes, unlike an unloaded model or plan-tier rejection.
+- **`scripts/ci-local.sh` could exit non-zero having named nothing, and now
+  cannot (#1983).** Three gates running at once in three worktrees produced a
+  red "Mirror drift gate regression suite" whose log held 16 assertions, every
+  one of them a pass, under the summary line "(no recognised failure marker —
+  see the log above for detail)". Two defects combined. The summary's marker
+  grep was ANSI-blind — `^[[:space:]]*(×|✗|…)` against
+  `  \033[31m✗\033[0m <desc>`, so no coloured failure in any suite in this
+  repository had ever matched it — and a grouped step whose child was killed
+  under load never wrote an exit code, which the group runner turned into a
+  plain `exit 1`, the same shape as a check that asserted false. The reporting
+  helpers moved to `scripts/lib/ci_local_failures.sh`, strip ANSI first, and
+  print the log's last 20 lines when nothing matches instead of describing the
+  absence of a message; a step the harness could not run is reported as `!`
+  `[INFRASTRUCTURE — the check could not run]` and counted separately, because
+  it asserted nothing about the diff either way. `test-mirror-drift-gate.sh`
+  now announces every arm, reports the arm it was inside from its EXIT and
+  signal traps, holds each arm to a declared assertion count so a partial arm
+  is named rather than showing up as a wrong total, exits 2 with a
+  `HARNESS ERROR` line when the harness itself cannot run (no temp space, a
+  fixture `git` failure) and retries through `index.lock` contention first.
+  `scripts/test-ci-local-concurrency.sh` is the new self-test.
+- **`scripts/ci-local.sh`'s concurrency budget is machine-wide again, so
+  concurrent gates stop oversubscribing the box (#1983).** #855 made the gate
+  concurrency-safe and the workspace has relied on "gates run in parallel, only
+  merges serialise" since. #1217/#1219 then made the gate internally parallel
+  and bounded it with `CI_LOCAL_JOBS=4` PER PROCESS: three gates asked for
+  twelve heavy steps — three `go test ./...`, three `-race` passes, three vitest
+  runs — on a 12-core box, reached load 58, and children were killed before they
+  could record an exit code. `CI_LOCAL_JOBS` now bounds the MACHINE. Slots live
+  in one directory keyed on the repository's shared git dir, so every worktree
+  of a repository draws on one budget while an unrelated checkout keeps its own;
+  a slot is reclaimed only when its owner pid is dead, never on age (#1697's
+  cleanup deleted a live sandbox on an age rule), and a release is a no-op unless
+  the slot still carries this gate's `owner` stamp — slot paths are numbered and
+  reused, so a child that hands its slot back, a second gate that takes the same
+  path, and this gate's exit-time sweep are exactly the sequence in which an
+  unguarded release deletes another gate's LIVE slot and silently shrinks the
+  budget, and only when gates overlap. Gates stay parallel and simply take
+  longer together. A
+  single-instance lock was rejected: it would answer a resource-accounting bug
+  by removing a capability ADR-013 is built on. The gate also reaps its
+  concurrent steps' children by pid on interrupt and verifies they are dead,
+  after `go test` children were seen outliving the gate that spawned them.
+
+  **Measured on merge, alone on an idle 12-core Apple M-series: `10m5s` wall
+  clock at 419% CPU**, of which `go test -race` is `217s` and the plain pass
+  `197s` — so the two Go passes are `414s`, **68% of the gate**, and neither can
+  observe a TypeScript-only diff (the argument #1985 makes). The new concurrency
+  contract suite costs `112s` of that total. `docs/GIT_WORKFLOW.md` claimed one
+  machine runs one gate at a time, contradicting #855, and is corrected.
+
+  **Corrected while landing #1985:** this entry originally also called the race
+  step's `2m48s -> 2m58s` comment wrong. It is not. That comment states the plain
+  pass alone against plain-and-race run CONCURRENTLY, which is how `ci.yml`'s
+  "Test (plain and race, concurrently)" step works — `168s -> 178s`, and an idle
+  re-measurement the same day got `166s / 174s`. `ci-local.sh` runs the two as
+  separate sequential steps, so a gate log shows `194s` and `202s`, which SUM to
+  ~396s. Comparing that sum to a concurrent wall clock is what produced a bogus
+  "1.8x stale" claim. The `+6%` conclusion stands and the comment needed no
+  correction.
+
+- **The SDK's OpenCode run-env allowlist rejected several variables real
+  `nightgauge opencode config --json` output carries, so `checkRunConfig`
+  would have rejected the verb's own output on every machine, once #1648
+  wires it in.** `childEnv.ts`'s `OPENCODE_RUN_ENV_NAMES` was missing
+  `NIGHTGAUGE_OPENCODE_PLUGIN_PATH`/`_NONCE`/`_SENTINEL` (the TS twin of
+  `opencodeplugin.EnvPluginPath`/`EnvNonce`/`EnvSentinel`,
+  `internal/execution/opencodeplugin/plugin.go`), `OPENCODE_DISABLE_PROJECT_CONFIG`
+  (a bare string literal `InstallNightgaugePlugin` sets at its call site in
+  `opencode.go`, not one of `opencodeplugin`'s exported constants — the reason
+  an earlier version of this fix's own parity test, which read only those
+  constants, missed it) and `HOME` (the isolated per-run home
+  `OpenCodeIsolationEnv` sets, `internal/execution/adapters/opencode_isolation.go`).
+  The `HOME` gap was an isolation defeat, not just a rejection: `SYSTEM_ALLOW`
+  already passes an _inherited_ `HOME` through to every opencode child, so
+  without a run variable able to override it, a future looser run-config
+  provider would have left the operator's real `HOME` in place and let
+  OpenCode read the operator's own `~/.opencode` — exactly what ADR-022 § 8
+  isolation exists to prevent. All four are now allowlisted and forwarded.
+  `NIGHTGAUGE_OPENCODE_PLUGIN_PATH`/`_SENTINEL` are also now checked to be
+  absolute paths inside the run's own root, matching
+  `opencodeplugin.SentinelPath`'s formula, since the plugin's own init writes
+  the sentinel file at this path verbatim (`fs.writeFileSync`).
+
+  `NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK` is accepted by `checkRunConfig`
+  too, via a second set (`OPENCODE_RUN_ENV_WITHHELD_NAMES`) consulted only
+  there — refusing it would fail `CONFIG_INVALID` closed on any machine where
+  an operator's `$HOME/.opencode` happens to be unsatisfied, a condition the
+  operator neither sets nor controls. It is never forwarded to the child:
+  `curateOpenCodeChildEnv` still applies only `OPENCODE_RUN_ENV_NAMES`, the
+  TS twin of the Go adapter's own `BuildCommand`, which deletes this same name
+  from the child's env right before returning it (`opencode.go`, pinned by
+  `TestOpenCodeBuildCommandWithholdsOperatorInstallRiskFromTheChild`) — #1802's
+  child-env leak is already closed there; only the config verb's _printed_
+  `env` still carries the name, since the verb prints `RunRoot.Env` directly
+  rather than `BuildCommand`'s output.
+
+  `isOpenCodeChildEnvAllowed` (the _inherited_-environment path, used for a
+  nested SDK spawn) now also denies every `NIGHTGAUGE_OPENCODE_`-prefixed
+  name, not only `OPENCODE_`-prefixed ones: without this, a nested opencode
+  dispatch would have inherited its parent run's plugin path, handshake nonce
+  and sentinel path from `process.env`, letting a nested child write to the
+  parent run's own sentinel file, instead of minting its own.
+
+  A Go/TS parity test now derives its expectation from the real verb's
+  output rather than from `opencodeplugin`'s constant definitions:
+  `TestOpenCodeConfigVerbEnvKeysMatchGoldenFixture`
+  (`cmd/nightgauge/opencode_test.go`) pins the exact `env` key set a
+  reference invocation of `nightgauge opencode config --json` prints against
+  a checked-in fixture
+  (`internal/execution/testdata/opencode_config_verb_env_keys.golden.json`),
+  and `childEnv.test.ts` reads the same fixture to assert every key is
+  accepted by the TS allowlist — closing the blind spot that let both
+  `OPENCODE_DISABLE_PROJECT_CONFIG` and `HOME` through a constants-only parity
+  test undetected (#1804, refs #1648).
+
+- **ADR-022's "subagent cost" gap read as a live risk; it is currently
+  unreachable.** § 3's watchdog passage, its § 15 `Subagents (task)` row, and
+  the `openCodeUnenforcedControls` "subagent cost" warning
+  (`internal/execution/adapters/opencode.go`) described a stage's subagents
+  as able to spend past its cost budget before the watchdog's settle-time
+  check catches it. `gates.js` denies every `task` tool call unconditionally
+  as AC9's fallback, so no subagent session can start at all today — zero
+  dollars of subagent spend is possible through that path. The docs now say
+  so, and a new test
+  (`TestNodeHarnessDeniesTaskRegardlessOfCostBudget`) pins that the denial
+  holds regardless of a cost budget (#1748).
+
+- **The rate-limit gate was never installed on the CLI path.**
+  `WithRateLimitTracker` was called in three places, all inside
+  `internal/ipc`, so the shared tracker was a daemon-only mechanism. Every
+  one-shot process — `nightgauge run` and all six pipeline stages, the
+  post-merge hooks, `issue route` — built a client with a nil tracker, and a
+  nil tracker makes the gate return "not gated" at its first line. Those
+  processes were never held before a call and never wrote a reading back, so
+  they learned about exhaustion only by taking a 403. Every CLI constructor now
+  attaches the machine-wide tracker and waits out a reset rather than failing an
+  in-flight issue. This is the wiring the other two fixes depend on.
+
+- **The tracker conflated the core and graphql budgets into one slot.** GitHub
+  bills REST and GraphQL separately, each with its own remaining count and
+  reset second, and the response-header interceptor wrote whichever pool
+  answered last into a single per-user slot. Core is almost always the
+  healthier pool, so a REST reply routinely erased the GraphQL exhaustion the
+  gate existed to see — measured at 20:11Z on 2026-09-21: `graphql remaining=110`
+  and `core remaining=4988` in the same window, one number stored. Entries are
+  keyed `(user, pool)` from tracker version 2 (v1 entries are dropped on read),
+  the pool comes from GitHub's own `X-RateLimit-Resource` header, and each gate
+  consults the pool its call will actually spend. A `gh` subprocess, whose
+  shape is not known before it starts, consults the more constrained of the two.
+
+- **The machine-wide GitHub rate-limit gate was dead code for most of its
+  wall-clock life.** `headroomGate.resetWait` discarded any tracker reading
+  older than 15 seconds as "no data" and opened the gate — so a budget already
+  measured as exhausted was spent into anyway by every short-lived CLI process
+  and by every producer that runs between the attention sweep's bursts.
+  Freshness and expiry answer different questions: staleness costs confidence
+  in _how much_ is left, but none in whether the window has _reset_, and a
+  below-floor reading can only move further down before it does. `ResetAt` is
+  now the authority for a below-floor entry, and freshness is required only
+  when the entry carries no reset to reason about. Measured on 2026-09-21: the
+  tracker had not been written for 7h44m while the account exhausted its
+  GraphQL quota twice.
+
+- **One account's budget was tracked under two keys, and each saw half the
+  spend.** The IPC server wires the shared tracker with an empty user (which
+  collapses to `default`) while the per-repo resolver and the per-user clients
+  wire it with the resolved gh username. Both spend one pool, so both gates
+  believed roughly twice the real budget remained and neither ever observed
+  the other's exhaustion. `SharedRateLimitTracker.GetBudget` now reports the
+  most constrained entry sharing the caller's reset window — the same second
+  means the same account — and the scheduler's three headroom reads use it.
+  `Get` is unchanged for callers that genuinely want their own key.
+
+### Added
+
+- **A stage that cannot fit its model's context window is caught before
+  spawn, not after a provider overflow.** `nightgauge skill render
+--context-window N` reports estimated tokens, the stage's ADR-023 budget,
+  and a verdict (exits non-zero over budget; unchanged, byte-identical output
+  without the flag). At dispatch, the Go scheduler now runs the same check:
+  when the resolved model's window is known and the rendered stage exceeds
+  its share, it re-routes once to the largest-window model on the same
+  provider, or refuses with a `context_window_exceeded` reason naming the
+  stage, estimated tokens, window and share. `AutoProviderRouter` scores the
+  `opencode` adapter by the actually-resolved model's window instead of a
+  static 32k placeholder. See
+  [ADR-023](docs/decisions/023-model-aware-context-budgets.md) (#1645).
+
+- **The OpenCode adapter is documented across the four adapter reference
+  docs.** ADAPTER_GUIDE.md, ADAPTER_MATRIX.md, ADAPTER_DOCTOR.md and
+  ADAPTER_ERROR_HANDLING.md now cover its Experimental status, its
+  per-feature disposition table (ADR-022), its doctor rows, and its terminal
+  failure kinds and remediations — and fix several pre-existing Grok
+  omissions in the same files, including a missing deep-dive section
+  (#1649).
+
+## [0.4.6] - 2026-09-21
+
 ### Changed
 
 - **Every binary now carries a vendor identifier.** Avast's clean software
@@ -77,8 +1303,9 @@ changelog, and the release workflow refuses a tag that does not.
   closed when the floor is not met. Size limits are raised for the same reason
   — the .vsix already scans to 77.40 MiB against ClamAV's own 100 MB default
   `--max-scansize`, so the scan was within 23% of silently skipping content.
-  `scripts/test-malware-scan.sh` covers all of it, including a real EICAR
-  sample so the stubbed arms cannot drift from the tool they imitate.
+  `scripts/test-malware-scan.sh` covers all of it, including an arm that
+  asserts the real `clamscan` still emits every summary field the script
+  parses, so the stubbed arms cannot drift from the tool they imitate.
 
 - **The npm dependency tree is scanned.** `govulncheck` covered the Go module
   graph only, while the extension bundles its entire npm tree into

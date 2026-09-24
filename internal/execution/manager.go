@@ -292,6 +292,20 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	// Build command from adapter
 	runOpts := buildRunOptions(opts, worktreeDir)
 
+	// Stage budgets (#1652, ADR-023 Q8): the stage's turn, wall-clock and
+	// token ceilings, enforced on the stream below. A model no USD cap can
+	// bind gets bounded ceilings whatever the config says. The turn ceiling
+	// is also the adapter's own cap where it has one (--max-turns, OpenCode's
+	// steps), set here so every hook below sees it.
+	stageLabel := fmt.Sprintf("%s#%d %s", opts.Repo, opts.IssueNumber, opts.Stage)
+	budget := config.ResolveStageBudget(opts.StageBudgets, opts.Stage, stageCost(adapter.Name(), runOpts.Model, worktreeDir))
+	for _, warning := range budget.Warnings {
+		fmt.Fprintf(os.Stderr, "%s %s: %s\n", StageBudgetMarker, stageLabel, warning)
+	}
+	if budget.MaxTurns > 0 && (runOpts.MaxTurns <= 0 || budget.MaxTurns < runOpts.MaxTurns) {
+		runOpts.MaxTurns = budget.MaxTurns
+	}
+
 	// Pre-dispatch gate (ADR-022): an adapter that can refuse a dispatch for a
 	// reason other than its model or effort exposes the optional PreDispatch
 	// hook — the opencode adapter's experimental enable gate is the first. It
@@ -396,6 +410,22 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	// group, which is what we want for a headless child: an operator's Ctrl-C
 	// reaches the daemon, and the daemon decides how to tear the stage down.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// A cancelled or timed-out stage context kills the whole group, not only
+	// the direct child (#1651). exec.CommandContext's default Cancel is
+	// Process.Kill, which reaches one pid: a grandchild the stage backgrounded
+	// survived the cancel, reparented to PID 1, and — because it inherited the
+	// stdout/stderr pipes — held this function's readers open until it exited
+	// on its own. feature-dev sub-sessions cancel the running session when the
+	// stage is cancelled, so that leak would repeat once per step. The group
+	// kill goes through signalProcessTree, the helper every other kill path
+	// uses, and returns what the default does for an already-exited child
+	// (os.ErrProcessDone), so cmd.Wait reports the same errors it did before.
+	cmd.Cancel = func() error {
+		if signalProcessTree(cmd.Process, syscall.SIGKILL) {
+			return nil
+		}
+		return os.ErrProcessDone
+	}
 
 	// Merge environment. An adapter whose CLI must not inherit some host
 	// variables decides which through the optional WithholdsEnv hook, found
@@ -481,6 +511,11 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	m.mu.Lock()
 	m.running[execKey] = execution
 	m.mu.Unlock()
+
+	// The wall clock runs from the spawn. It is the smaller of the stage
+	// budget and opts.Timeout; nothing extends it.
+	stageBudget := newStageBudgetEnforcer(budget, StreamFormatForAdapter(adapter.Name()), opts.Timeout)
+	stageBudget.arm(cmd.Process, execution.done)
 
 	if opts.Runtime != nil {
 		opts.Runtime.SetProcess(cmd.Process.Pid, worktreeDir)
@@ -705,6 +740,11 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 				fmt.Fprintf(os.Stderr, "%s#%d %s: %s\n", opts.Repo, opts.IssueNumber, opts.Stage, costCap.notice())
 				costCap.stop(cmd.Process, execution.done)
 			}
+			// Stage budgets (#1652): turns and tokens are checked on every
+			// event, as it arrives, never once the stage has ended.
+			if stageBudget.observe(event, stepAdded, tokenAcc) {
+				stageBudget.stop()
+			}
 			// Nightgauge OpenCode plugin handshake (#1635): step_start is the
 			// earliest point at which a tool call could possibly exist, so
 			// checking the instant the FIRST one is observed proves the
@@ -870,7 +910,33 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	// == "" guards it); an operator's own Stop is not this and must not be
 	// misreported as one (execution.stopRequested guards it — CancelWithGrace
 	// sets it before this goroutine barrier is ever reached).
-	if handshakeFailure == "" && operatorInstallTimedOut.Load() && !execution.stopRequested.Load() {
+	//
+	// The watchdog is not the only way such a stall ends (#1954): its bound
+	// is capped by execCtx's own deadline (operatorInstallWaitBound), so
+	// when the stage timeout is the shorter of the two both fire at the same
+	// instant, and exec.CommandContext's own kill can win — the readers
+	// finish, stopOperatorInstallWatchdog closes, and the watchdog returns
+	// without ever recording a timeout. The same silent stall is therefore
+	// also recognised from the evidence itself, read after the barrier
+	// above: no output at all, execCtx ended by its deadline, and the
+	// directory still unsatisfied. operatorInstallStallClassified holds the
+	// rule and every guard.
+	sawOutput := false
+	select {
+	case <-firstOutput:
+		sawOutput = true
+	default:
+	}
+	riskDir := operatorInstallRisk
+	if operatorInstallStallClassified(operatorInstallStallEvidence{
+		armed:            operatorInstallRisk != "",
+		handshakeFailed:  handshakeFailure != "",
+		stopRequested:    execution.stopRequested.Load(),
+		watchdogTimedOut: operatorInstallTimedOut.Load(),
+		sawOutput:        sawOutput,
+		execErr:          execCtx.Err(),
+		satisfied:        func() bool { return opencodeplugin.OperatorInstallSatisfied(riskDir) },
+	}) {
 		handshakeFailure = openCodePluginHandshakeMarker(&opencodeplugin.IncompatibleError{
 			Reason: fmt.Sprintf(
 				"opencode produced no output at all: OpenCode's own @opencode-ai/plugin install into the operator-owned OpenCode config directory %s may be waiting on an unreachable registry. "+
@@ -890,6 +956,18 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	// keeps the window a concurrent CancelWithGrace could still be blocked in
 	// its own Process.Wait() as short as possible.
 	close(execution.done)
+	// The stage is reaped, so its wall clock stops here, not when its output
+	// closed: a child that closes stdout and stderr and keeps running is
+	// still bounded (#1652).
+	stageBudget.disarm()
+	// A stage stopped at a stage budget: check that its whole process group
+	// is gone, now the leader is reaped, and end its stderr with the marker
+	// the budget-enforcer terminal rule classifies.
+	stageBudget.settle(cmd.Process.Pid)
+	if notice := stageBudget.notice(); notice != "" {
+		fmt.Fprintf(os.Stderr, "%s: %s\n", stageLabel, notice)
+		keepStderr([]byte(notice))
+	}
 
 	// Unregister execution
 	m.mu.Lock()
@@ -965,9 +1043,13 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	// constraint); every other consumer reads RunResult.Cancelled instead of
 	// re-deriving it from ctx.Err() or exit code.
 	result.Cancelled = execution.stopRequested.Load()
-	// The scheduler's legacy runner projection intentionally remains untouched:
-	// stage-keyed runtime handoff lets its existing CompleteStage call consume
-	// the cache pools without widening or editing scheduler.go.
+	result.StageBudgetExceeded = stageBudget.result()
+	// The stage-keyed runtime handoff: CompleteStage merges these cache pools
+	// into the stage's record by max. The scheduler's runner projection
+	// (cliRunResultToStageResult) now also carries CacheReadTokens and
+	// CacheCreationTokens on the stage result (#1651), which is what sums
+	// feature-dev's sub-sessions and what the exit record and the other
+	// result consumers read.
 	recordRunResultTokenCounts(opts.Runtime, opts.Stage, result)
 	if fb := modelTracker.Fallback; fb != nil {
 		result.RefusalFallbackFrom = fb.OriginalModel
@@ -990,6 +1072,10 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	// SIGTERM, and so did one its subagents took past it or whose subagent
 	// usage was only partly read.
 	if costCap != nil && costCap.fired && result.ExitCode == 0 {
+		result.ExitCode = 1
+	}
+	// So did a stage stopped at a stage budget (#1652).
+	if result.StageBudgetExceeded != nil && result.ExitCode == 0 {
 		result.ExitCode = 1
 	}
 	// A failed Nightgauge OpenCode plugin handshake (#1635) must fail the
@@ -1339,6 +1425,51 @@ func operatorInstallWaitBound(
 	return min(configured, max(deadline.Sub(now), 0))
 }
 
+// operatorInstallStallEvidence is what RunStage knows, once its readers and
+// the operator-install-risk watchdog have both finished, about whether a
+// stage stalled silently on OpenCode's own install into an operator-owned
+// config directory (#1635/A11 round 6; #1954).
+type operatorInstallStallEvidence struct {
+	// armed: the stage ran with an operator install risk at all.
+	armed bool
+	// handshakeFailed: a plugin handshake failure was already classified;
+	// it is more specific and wins.
+	handshakeFailed bool
+	// stopRequested: an operator Stop ended the stage; never misreported.
+	stopRequested bool
+	// watchdogTimedOut: the watchdog's own bound fired and killed the stage.
+	watchdogTimedOut bool
+	// sawOutput: stdout or stderr produced at least one line.
+	sawOutput bool
+	// execErr: the stage context's error after the readers finished.
+	execErr error
+	// satisfied re-checks the operator directory; called only when the
+	// cheaper evidence already points at a stall.
+	satisfied func() bool
+}
+
+// operatorInstallStallClassified decides whether a stage is classified as
+// an operator-install stall. The watchdog's own timeout is sufficient. So
+// is the race it can lose (#1954): its bound is capped by the stage
+// deadline, so when the stage timeout is the shorter bound, the deadline's
+// own kill can end the child first and the watchdog stands down without
+// recording anything. The deadline path requires the same facts the
+// watchdog would have acted on: no output at all, the stage context ended
+// by its deadline (not by a caller's cancel), and the directory still
+// unsatisfied.
+func operatorInstallStallClassified(e operatorInstallStallEvidence) bool {
+	if !e.armed || e.handshakeFailed || e.stopRequested {
+		return false
+	}
+	if e.watchdogTimedOut {
+		return true
+	}
+	if e.sawOutput || !errors.Is(e.execErr, context.DeadlineExceeded) {
+		return false
+	}
+	return e.satisfied == nil || !e.satisfied()
+}
+
 // openCodeOperatorInstallPollInterval is how often the operator-install-risk
 // watchdog re-checks, read-only, whether its target directory has become
 // satisfied while it waits (#1635/A11 round 8, ADR-022 amendment
@@ -1470,6 +1601,11 @@ type StageOptions struct {
 	MaxTurns     int      // Max conversation turns
 	CostBudget   float64  // Max cost in USD
 	TargetRepo   string   // Expected repo for skill verification (owner/repo)
+
+	// StageBudgets is pipeline.stage_budgets (#1652): the manager resolves
+	// the stage's turn, wall-clock and token ceilings from it and enforces
+	// them on the stream. nil means the built-in defaults.
+	StageBudgets map[string]config.StageBudget
 
 	// ResumeSessionID threads to adapters.RunOptions.ResumeSessionID — see
 	// its doc comment (#1643). Only the opencode adapter consumes it.

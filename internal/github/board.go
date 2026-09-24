@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -67,9 +68,37 @@ func (b *BoardService) ListItems(ctx context.Context, statusFilter string) ([]ty
 // page, which every board read selects, is enough to tell.
 func (b *BoardService) ListItemsWithRelations(ctx context.Context, statusFilter string, rels IssueRelations) ([]types.BoardItem, error) {
 	if statusFilter != "" {
+		if rels == AllRelations {
+			// A status read (the Repositories tree's status lists, the
+			// scheduler's Ready read) is served over REST: one conditional
+			// page plus one conditional list per non-empty relationship, all
+			// free when unchanged. GHES / a 404 falls through to GraphQL.
+			items, err := b.restListItemsWithRelations(ctx, restStatusQuery(statusFilter))
+			if err == nil {
+				return items, nil
+			}
+			if !errors.Is(err, errRESTBoardUnavailable) {
+				return nil, fmt.Errorf("fetch board items (filtered, REST): %w", err)
+			}
+		}
 		return b.listItemsFiltered(ctx, statusFilter, rels)
 	}
+	// GraphQL retained: the unfiltered read (every item, closed included)
+	// needs every item's relationship lists, which REST can only supply with
+	// one request per non-empty list — measured at ~61 lists per 100 items —
+	// so the REST walk would be hundreds of requests where this is a handful
+	// of batched pages. It is not on the tree's or the sweep's path.
 	return b.listItemsAll(ctx, rels)
+}
+
+// restStatusQuery is the REST `q` for a status read, mirroring
+// listItemsFiltered's GraphQL query: `is:open` for every status but Done.
+func restStatusQuery(status string) string {
+	q := fmt.Sprintf("status:%q", status)
+	if status != "Done" {
+		q += " is:open"
+	}
+	return q
 }
 
 // listItemsFiltered uses server-side filtering via the query: parameter.
@@ -115,12 +144,29 @@ func (b *BoardService) listItemsFiltered(ctx context.Context, statusFilter strin
 	return items, nil
 }
 
+// StatusReadIsOpenSubset reports whether ListItems(ctx, status) is exactly the
+// items of ListOpenItems with that Status (boardcache.OpenStatusSubset). It is
+// for every status listItemsFiltered reads with `is:open` — all but "Done",
+// which it deliberately reads without it — because both reads are the same
+// `items(query:)` document over the same item fields and relationship lists,
+// and the filtered one only adds `status:"X"`. Keep this in step with the
+// `statusFilter != "Done"` condition in listItemsFiltered.
+func (b *BoardService) StatusReadIsOpenSubset(status string) bool {
+	return status != "" && status != "Done"
+}
+
 // ListOpenItems fetches only open items from the board using server-side
 // "is:open" filtering. Much faster than ListItems("") for boards with many
 // closed entries — avoids paginating through hundreds of archived items.
 // Returns the filtered items, the total raw node count from GraphQL (before
 // nodeToItem filtering), and any error. Like ListItems, it reads every item's
 // relationship lists whole and fails when one cannot be.
+//
+// GraphQL retained, for the dependency graph and the scheduler's blocker
+// checks: they need every open item's relationship LISTS, which REST supplies
+// only as one extra request per non-empty list (~61 per 100 items on the
+// workspace board), so the batched GraphQL page is the cheaper read of the
+// two. Callers that need only counts use ListOpenItemsSummary, which is REST.
 func (b *BoardService) ListOpenItems(ctx context.Context) ([]types.BoardItem, int, error) {
 	return b.ListOpenItemsWithRelations(ctx, AllRelations)
 }
@@ -382,6 +428,10 @@ func (b *BoardService) GetItemFields(ctx context.Context, itemID string) (*ItemF
 //
 // The item's sub-issue, blocked-by and blocking lists are read whole, as
 // ListItems reads them, so the read fails when one of them cannot be.
+//
+// GraphQL retained: this is the lookup in front of board writes (it yields the
+// project item id the field mutations take) and every write is GraphQL, so it
+// is not a polled read and gains nothing from a conditional request.
 func (b *BoardService) GetItem(ctx context.Context, owner, repo string, issueNumber int) (*types.BoardItem, error) {
 	// Use a server-side query filter for the issue number, then walk the
 	// returned items looking for the matching repo + number. This keeps the
@@ -499,7 +549,19 @@ func sizeFromLabels(labels []string) types.Size {
 // MaxRenewedAge rather than indefinitely: BoardItem carries Title, Labels,
 // BlockedBy and SubIssues, and this probe is structurally blind to all four.
 // Reads never bump it, so polling the probe cannot make the probe fire.
+//
+// On github.com the answer comes from the owner's REST project list — one
+// conditional request that answers for every board the owner has, free when
+// nothing moved (restProjectUpdatedAt). GHES, a 404, or a board missing from
+// the list uses the GraphQL probe below. Both read the same updatedAt.
 func (b *BoardService) ProjectUpdatedAt(ctx context.Context) (time.Time, error) {
+	ts, err := b.restProjectUpdatedAt(ctx)
+	if err == nil {
+		return ts, nil
+	}
+	if !errors.Is(err, errRESTBoardUnavailable) {
+		return time.Time{}, fmt.Errorf("probe board updatedAt (REST): %w", err)
+	}
 	vars := map[string]interface{}{
 		"owner":         graphql.String(b.owner),
 		"projectNumber": graphql.Int(b.projectNumber),
@@ -514,7 +576,7 @@ func (b *BoardService) ProjectUpdatedAt(ctx context.Context) (time.Time, error) 
 		// rather than trusting a zero value.
 		return time.Time{}, fmt.Errorf("probe board updatedAt: empty timestamp")
 	}
-	ts, err := time.Parse(time.RFC3339, raw)
+	ts, err = time.Parse(time.RFC3339, raw)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("probe board updatedAt: parse %q: %w", raw, err)
 	}

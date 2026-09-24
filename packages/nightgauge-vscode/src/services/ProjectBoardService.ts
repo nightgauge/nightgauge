@@ -19,6 +19,7 @@ import type { IWorkItemProvider } from "./types/WorkItemProvider";
 import {
   ALL_ITEMS_SCOPE,
   COUNTS_SCOPE,
+  OPEN_ITEMS_SCOPE,
   sharedBoardSnapshots,
   type BoardSnapshotKey,
   type BoardSnapshotStore,
@@ -27,6 +28,9 @@ import type { EpicInfo } from "../views/items/EpicGroupTreeItem";
 import { deriveComponentOptions } from "../types/FilterConfig";
 import { getPrefixedMainChannel } from "../utils/logger";
 import { isRepoInitialized } from "../utils/repoInitialized";
+
+/** Board statuses an open read covers, lower-cased as the per-status cache keys them. */
+const OPEN_BOARD_STATUSES = ["ready", "in progress", "in review", "backlog"] as const;
 
 // ---------------------------------------------------------------------------
 // Output channel
@@ -105,6 +109,14 @@ export interface ReadyIssue {
   isEpic?: boolean;
   /** Issue numbers of native sub-issues (populated for epics only) */
   subIssueNumbers?: number[];
+  /**
+   * How many OPEN issues block this one, when the board read carried the
+   * relationship COUNTS rather than the lists (`board.listOpen`, the daemon's
+   * conditional REST summary). On such an issue `blockedBy` / `blocks` /
+   * `subIssueNumbers` were not read — absent means "not asked", not "none" —
+   * so blocked-ness comes from this count. Undefined on list reads.
+   */
+  openBlockerCount?: number;
 }
 
 export type SortBy = "board" | "priority" | "number" | "size" | "dependencies" | "smart";
@@ -151,7 +163,7 @@ export interface RateLimitState {
  */
 class RateLimitedError extends Error {
   constructor() {
-    super("GitHub API rate limit exhausted; serving cached counts");
+    super("GitHub API rate limit exhausted; serving cached board data");
     this.name = "RateLimitedError";
   }
 }
@@ -572,17 +584,16 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
     const cacheKey = `${this.projectNumber}:${status}`;
     const staleItems = this.snapshots.stale(key);
 
-    // Rate limit is checked before joining the store so an exhausted quota
-    // never starts a fetch, and never registers as a miss.
-    const canProceed = await this.checkRateLimit();
-    if (!canProceed) {
-      return this.sortIssues(this.cache.get(cacheKey) ?? [], sortBy, sortDirection);
-    }
-
     try {
-      const items = await this.snapshots.fetch(key, this.cacheTtlMs, () =>
-        this.fetchIssuesForStatus(status)
-      );
+      // The rate-limit gate runs inside the fetcher, as it does for counts:
+      // it is paid once per fetch that actually goes to the network, never on
+      // a fresh-snapshot hit. Gating before the store cost one
+      // `github.rateLimit` round-trip per call, including every re-render of
+      // an expanded status node that was answered from cache anyway.
+      const items = await this.snapshots.fetch(key, this.cacheTtlMs, async () => {
+        if (!(await this.checkRateLimit())) throw new RateLimitedError();
+        return this.fetchIssuesForStatus(status);
+      });
       // Filtering happens per service, on the shared raw payload.
       const issues = this.boardItemsToReadyIssues(items);
       this.cache.set(cacheKey, issues);
@@ -591,7 +602,7 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
     } catch (err) {
       // Never cached: the store only stores fulfilled fetches, so one
       // repository's failure cannot become another's answer.
-      log(`IPC board.list failed: ${err}`);
+      if (!(err instanceof RateLimitedError)) log(`IPC board.list failed: ${err}`);
       const fallback =
         this.cache.get(cacheKey) ?? (staleItems ? this.boardItemsToReadyIssues(staleItems) : []);
       return this.sortIssues(fallback, sortBy, sortDirection);
@@ -657,21 +668,18 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
 
     const staleItems = this.snapshots.stale(key);
 
-    const canProceed = await this.checkRateLimit();
-    if (!canProceed) {
-      return this.allItemsCache ?? [];
-    }
-
     try {
-      const items = await this.snapshots.fetch(key, this.cacheTtlMs, () =>
-        this.fetchAllItemsInternal()
-      );
+      // Gate inside the fetcher — see getIssuesByStatus.
+      const items = await this.snapshots.fetch(key, this.cacheTtlMs, async () => {
+        if (!(await this.checkRateLimit())) throw new RateLimitedError();
+        return this.fetchAllItemsInternal();
+      });
       const issues = this.boardItemsToReadyIssues(items);
       this.allItemsCache = issues;
       this.allItemsCacheTime = Date.now();
       return issues;
     } catch (err) {
-      log(`IPC board.list (all) failed: ${err}`);
+      if (!(err instanceof RateLimitedError)) log(`IPC board.list (all) failed: ${err}`);
       return this.allItemsCache ?? (staleItems ? this.boardItemsToReadyIssues(staleItems) : []);
     }
   }
@@ -688,6 +696,101 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
       this.ownerType,
       this.githubUser
     );
+  }
+
+  /**
+   * Every OPEN issue of this repository on the board, all statuses, from one
+   * shared board read (`board.listOpen`).
+   *
+   * This is the read the Repositories tree derives its per-row Ready / In
+   * progress / Backlog counts from. It replaces one `board.list` per status —
+   * three board reads per board per refresh — with one, shared across every
+   * repository on the same board here and, daemon-side, with `board.counts`
+   * and the attention sweeps. Items keep their `status`, so callers group
+   * locally; Done is not included (a Done item is closed).
+   *
+   * Same freshness, coalescing and stale-if-error rules as the other reads:
+   * a fresh snapshot costs no IPC at all, the rate-limit gate is paid only by
+   * a fetch that goes to the network, and a failed or refused fetch falls
+   * back to the last successful snapshot rather than to zeros (#485).
+   */
+  async getOpenIssues(): Promise<ReadyIssue[]> {
+    await this.loadConfig();
+    if (!this.owner || !this.projectNumber) {
+      log(`getOpenIssues: skipped — owner=${this.owner}, project=${this.projectNumber}`);
+      return [];
+    }
+    const key = this.snapshotKey(OPEN_ITEMS_SCOPE);
+    if (!key) return [];
+    const owner = this.owner;
+    const projectNumber = this.projectNumber;
+
+    try {
+      const items = await this.snapshots.fetch(key, this.cacheTtlMs, async () => {
+        if (!(await this.checkRateLimit())) throw new RateLimitedError();
+        return this.ipc.boardListOpen(owner, projectNumber, this.ownerType, this.githubUser);
+      });
+      const issues = this.boardItemsToReadyIssues(items);
+      this.fillStatusCacheFromOpen(issues);
+      return issues;
+    } catch (err) {
+      if (!(err instanceof RateLimitedError)) log(`IPC board.listOpen failed: ${err}`);
+      const stale = this.snapshots.stale(key);
+      return stale ? this.boardItemsToReadyIssues(stale) : [];
+    }
+  }
+
+  /**
+   * Seeds the per-status `cache` from an open read, as prefetchAllItems does
+   * from the all-items read. The cache-only readers depend on it: the filter
+   * picker's Component section (getObservedComponents) and epic metadata
+   * (getEpicMetadataFromCache) scan it and find nothing when the per-status
+   * reads it used to be filled by are not made.
+   *
+   * Keys follow prefetchAllItems (`<project>:<lower-cased board status>`).
+   * Every open status is rewritten, including one that emptied since the last
+   * read, so a moved issue does not linger in its old bucket. Done is left
+   * alone: the open read never carries it.
+   */
+  private fillStatusCacheFromOpen(issues: ReadyIssue[]): void {
+    // The open read carries relationship COUNTS, not lists. An issue whose
+    // lists an earlier status read already holds keeps them while they still
+    // agree with the count, so the cache-only readers (epic headers' blocker
+    // lines above all) render exactly what they rendered from a list read.
+    const hasLists = (i: ReadyIssue) => !!(i.blockedBy || i.blocks || i.subIssueNumbers);
+    const previous = new Map<number, ReadyIssue>();
+    for (const bucket of this.cache.values()) {
+      for (const issue of bucket) {
+        if (hasLists(issue)) previous.set(issue.number, issue);
+      }
+    }
+    issues = issues.map((issue) => {
+      const prior = previous.get(issue.number);
+      if (!prior || hasLists(issue) || issue.openBlockerCount === undefined) return issue;
+      const priorOpen = (prior.blockedBy ?? []).filter((b) => b.state === "OPEN").length;
+      if (priorOpen !== issue.openBlockerCount) return issue;
+      return {
+        ...issue,
+        blockedBy: prior.blockedBy,
+        blocks: prior.blocks,
+        subIssueNumbers: prior.subIssueNumbers,
+      };
+    });
+    const byStatus = new Map<string, ReadyIssue[]>();
+    for (const status of OPEN_BOARD_STATUSES) byStatus.set(status, []);
+    for (const issue of issues) {
+      const status = (issue.status || "Backlog").toLowerCase();
+      if (status === "done") continue;
+      const bucket = byStatus.get(status);
+      if (bucket) bucket.push(issue);
+      else byStatus.set(status, [issue]);
+    }
+    const now = Date.now();
+    for (const [status, bucket] of byStatus) {
+      const cacheKey = `${this.projectNumber}:${status}`;
+      this.cache.set(cacheKey, bucket);
+      this.cacheTimes.set(cacheKey, now);
+    }
   }
 
   async prefetchAllItems(options?: { force?: boolean }): Promise<void> {
@@ -869,6 +972,17 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
       this.cache.delete(cacheKey);
       this.cacheTimes.delete(cacheKey);
       this.inFlightRequests.delete(cacheKey);
+      // The open read seeds buckets under the board's spelling ("in progress")
+      // while callers name the status by key ("in-progress"); drop both.
+      const boardSpelling = `${this.projectNumber}:${status.toLowerCase().replace(/-/g, " ")}`;
+      this.cache.delete(boardSpelling);
+      this.cacheTimes.delete(boardSpelling);
+      // The shared per-status snapshot is what getIssuesByStatus actually
+      // serves from, so it must expire too, or a drilldown keeps showing the
+      // pre-move list while the row count (from the open read) has moved on.
+      // Expired, not dropped: it stays the stale-if-error fallback (#485).
+      const statusKey = this.snapshotKey(status);
+      if (statusKey) this.snapshots.expireScope(statusKey);
     }
     // Counts changed — force a fresh fetch on next getAggregatedStatusCounts(),
     // but keep the last-known-good counts as the stale-if-error fallback
@@ -881,6 +995,10 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
     // → every tab shows 0.
     const countsKey = this.snapshotKey(COUNTS_SCOPE);
     if (countsKey) this.snapshots.expireScope(countsKey);
+    // The open-item read carries the same counts (the Repositories tree
+    // derives them from it), so it expires on the same event, same discipline.
+    const openKey = this.snapshotKey(OPEN_ITEMS_SCOPE);
+    if (openKey) this.snapshots.expireScope(openKey);
     this._onStatusChanged.fire({ repoSlug, statuses });
   }
 
@@ -918,6 +1036,7 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
             title: issue.title,
             url: issue.url,
             blockedBy: issue.blockedBy,
+            openBlockerCount: issue.openBlockerCount,
             labels: issue.labels,
           });
         }
@@ -933,6 +1052,7 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
             title: issue.title,
             url: issue.url,
             blockedBy: issue.blockedBy,
+            openBlockerCount: issue.openBlockerCount,
             labels: issue.labels,
           });
         }
@@ -1156,6 +1276,7 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
         url: "",
         state: b.state as "OPEN" | "CLOSED",
       })),
+      openBlockerCount: item.relationSummary?.blockedByOpen,
     }));
   }
 

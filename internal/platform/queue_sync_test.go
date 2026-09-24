@@ -6,8 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -195,29 +193,5 @@ func TestResolveMachineID_EnvOverride(t *testing.T) {
 	t.Setenv(machineIDEnv, "cloud-runner-7")
 	if got := ResolveMachineID(); got != "cloud-runner-7" {
 		t.Errorf("ResolveMachineID() = %q, want cloud-runner-7", got)
-	}
-}
-
-// TestResolveMachineID_PersistsAndReuses verifies a UUID is minted once and
-// reused on subsequent calls (stable per machine).
-func TestResolveMachineID_PersistsAndReuses(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home) // Windows home resolution
-	if v := os.Getenv(machineIDEnv); v != "" {
-		t.Setenv(machineIDEnv, "")
-	}
-
-	first := ResolveMachineID()
-	if first == "" {
-		t.Fatal("ResolveMachineID() returned empty")
-	}
-	// File should now exist.
-	if _, err := os.Stat(filepath.Join(home, machineIDFile)); err != nil {
-		t.Fatalf("machine-id file not persisted: %v", err)
-	}
-	second := ResolveMachineID()
-	if second != first {
-		t.Errorf("machine id not stable: first=%q second=%q", first, second)
 	}
 }

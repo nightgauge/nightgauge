@@ -22,7 +22,10 @@ import type { ReadyIssue, BlockingIssue } from "../services/ProjectBoardService"
  * @param issue - The issue (or issue-like object) to check
  * @returns True if the issue has at least one open blocker
  */
-export function isBlocked(issue: Pick<ReadyIssue, "blockedBy">): boolean {
+export function isBlocked(issue: Pick<ReadyIssue, "blockedBy" | "openBlockerCount">): boolean {
+  // A summary read carries the open-blocker COUNT instead of the list; either
+  // one saying "blocked" is enough.
+  if ((issue.openBlockerCount ?? 0) > 0) return true;
   if (!issue.blockedBy || issue.blockedBy.length === 0) {
     return false;
   }
@@ -39,11 +42,8 @@ export function isBlocked(issue: Pick<ReadyIssue, "blockedBy">): boolean {
  * @returns Number of open blockers (0 if none)
  */
 export function getBlockerCount(issue: ReadyIssue): number {
-  if (!issue.blockedBy || issue.blockedBy.length === 0) {
-    return 0;
-  }
-
-  return issue.blockedBy.filter((blocker) => blocker.state === "OPEN").length;
+  const fromList = (issue.blockedBy ?? []).filter((blocker) => blocker.state === "OPEN").length;
+  return Math.max(fromList, issue.openBlockerCount ?? 0);
 }
 
 /**

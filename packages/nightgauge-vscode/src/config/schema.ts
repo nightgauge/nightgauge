@@ -12,6 +12,11 @@
  * @see Issue #432 - Comprehensive Zod Schema for Config Fields
  */
 
+import {
+  RELATIVE_PIPELINE_STATE_DIR,
+  RELATIVE_PLANS_DIR,
+  RELATIVE_CLONE_LOGS_DIR,
+} from "../utils/cloneLayout";
 import { z } from "zod";
 import {
   CODEX_DEFAULT_BASE_MODEL,
@@ -541,6 +546,15 @@ export const SizeGateRoutesSchema = z.object({
    * subset is positional (bottom two rungs), not a re-spelled vocabulary.
    */
   soft_route_model: z.enum([TIER_BANDS[0], TIER_BANDS[1]]).optional(),
+  /**
+   * Ordered models an over-capacity issue may move to under 'soft-route'
+   * (#1655). The Go capacity check (`size-gate check --context-window` /
+   * `--model`, and the scheduler at dispatch) takes the first entry whose
+   * context window admits the issue's size per the ADR-023 capacity table;
+   * with none, the issue is rejected. Each entry is a model string for the
+   * stage's adapter, e.g. an OpenCode `<provider>/<model>`.
+   */
+  capacity_fallback_models: z.array(z.string().min(1)).optional(),
 });
 export type SizeGateRoutes = z.infer<typeof SizeGateRoutesSchema>;
 
@@ -1145,6 +1159,15 @@ export const PipelineConfigSchema = z.object({
     })
     .optional(),
   /**
+   * feature-dev as bounded sub-sessions (#1651): on a dispatch model whose
+   * context window is below 200,000 tokens, the Go scheduler runs one fresh
+   * session per unchecked plan task. `false` opts out. Default: on. Read by
+   * the Go scheduler only.
+   *
+   * @env NIGHTGAUGE_FEATURE_DEV_SUB_SESSIONS
+   */
+  feature_dev_sub_sessions: z.boolean().optional(),
+  /**
    * Pipeline-level token budget ceiling.
    *
    * Enforces a maximum total cost (USD) across all stages in a single pipeline
@@ -1316,7 +1339,7 @@ export const PipelineConfigSchema = z.object({
    * plan is classified high-impact (production-touching area, major dependency
    * bumps, dense architectural trade-off language, or risk_high routing) until
    * a human approves. Approval evidence is the `approved:architecture` issue
-   * label or a `.nightgauge/pipeline/approval-<N>.json` file. Evaluated
+   * label or a `pipelineStateDir(root)/approval-<N>.json` file. Evaluated
    * by the Go binary (`nightgauge approval-gate <N>`), which merges
    * machine → project → local config from the pipeline worktree.
    *
@@ -3417,12 +3440,14 @@ export type RemoteConfig = z.infer<typeof RemoteConfigSchema>;
  * Maps org/owner names to gh CLI usernames for token resolution.
  *
  * Token resolution priority (highest to lowest):
- *  1. GITHUB_TOKEN env var (CI/CD override)
- *  2. --token CLI flag (one-shot override)
- *  3. token field (per-project PAT, project config)
- *  4. tokens[owner] (per-org PAT mapping, global config)
- *  5. gh auth token --user <user>  (gh CLI fallback)
- *  6. gh auth token               (default gh user)
+ *  1. On a CI host: GITHUB_TOKEN, then GH_TOKEN env var
+ *  2. token field (per-project PAT, project config)
+ *  3. tokens[owner] (per-org PAT mapping, global config)
+ *  4. gh auth token --user <user>  (gh CLI fallback)
+ *  5. With no github_user: GITHUB_TOKEN env var, then
+ *     gh auth token               (default gh user)
+ *
+ * No token is accepted on argv (ADR-024 § 5, #2031).
  *
  * Token values support env:VAR_NAME syntax to avoid plaintext PATs in YAML.
  * Example: token: env:GITHUB_TOKEN_NIGHTGAUGE
@@ -3880,7 +3905,7 @@ export const DEFAULT_CONFIG: NightgaugeConfig = {
     },
     logs: {
       retain: true,
-      dir: ".nightgauge/logs",
+      dir: RELATIVE_CLONE_LOGS_DIR,
     },
     default_mode: "headless",
     stall_thresholds: {
@@ -4045,8 +4070,8 @@ export const DEFAULT_CONFIG: NightgaugeConfig = {
       adapter: "claude",
       auth_provider: "max",
       default_model: "sonnet",
-      context_path: ".nightgauge/pipeline",
-      plans_path: ".nightgauge/plans",
+      context_path: RELATIVE_PIPELINE_STATE_DIR,
+      plans_path: RELATIVE_PLANS_DIR,
       gemini: {
         auth_method: "api-key",
         model: "gemini-2.5-flash",

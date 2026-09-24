@@ -18,6 +18,9 @@
  */
 
 import { spawn } from "child_process";
+import { mkdtemp, rm } from "fs/promises";
+import { tmpdir } from "os";
+import { join } from "path";
 import type { ModelTier } from "../analysis/AutoModelSelector.js";
 import type { EvalScenario } from "./schemas.js";
 import type { ModelOutput } from "./assertions.js";
@@ -121,7 +124,11 @@ const defaultSpawn: SpawnFn = (command, args, prompt, cwd, timeoutMs) =>
 export interface LiveClaudeModelRunnerOptions {
   /** CLI command (defaults to `claude` or `NIGHTGAUGE_CLAUDE_CLI_COMMAND`). */
   command?: string;
-  /** Working directory for the spawned CLI. */
+  /**
+   * Working directory for the spawned CLI. Defaults to a fresh empty temp
+   * directory per cell, removed afterwards, so a scenario never reads or
+   * writes the operator's checkout.
+   */
   cwd?: string;
   /** Per-invocation timeout. */
   timeoutMs?: number;
@@ -139,27 +146,37 @@ export class LiveClaudeModelRunner implements EvalModelRunner {
   readonly mode = "live" as const;
 
   private readonly command: string;
-  private readonly cwd: string;
+  private readonly cwd: string | undefined;
   private readonly timeoutMs: number;
   private readonly spawnFn: SpawnFn;
 
   constructor(options: LiveClaudeModelRunnerOptions = {}) {
     this.command = options.command ?? process.env.NIGHTGAUGE_CLAUDE_CLI_COMMAND ?? "claude";
-    this.cwd = options.cwd ?? process.cwd();
+    this.cwd = options.cwd;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_LIVE_TIMEOUT_MS;
     this.spawnFn = options.spawnFn ?? defaultSpawn;
   }
 
   async run(scenario: EvalScenario, model: ModelTier): Promise<ModelOutput> {
-    const args = ["--print", "--output-format", "text", "--model", model];
-    const result = await this.spawnFn(
-      this.command,
-      args,
-      scenario.prompt,
-      this.cwd,
-      this.timeoutMs
-    );
-    return { text: result.stdout, exit_code: result.code };
+    // Scenarios assert on the reply text only, so the model gets no tools
+    // (`--tools ""`) and an empty scratch cwd. With the CLI's default tool
+    // set a live cell acts on whatever checkout it was started in: one pushed
+    // the operator's branch while "measuring" feature-validate, and the
+    // environment-dependent "cannot run here" replies drowned the signal.
+    const args = ["--print", "--output-format", "text", "--model", model, "--tools", ""];
+    const scratch = this.cwd ? undefined : await mkdtemp(join(tmpdir(), "ng-skill-eval-"));
+    try {
+      const result = await this.spawnFn(
+        this.command,
+        args,
+        scenario.prompt,
+        this.cwd ?? (scratch as string),
+        this.timeoutMs
+      );
+      return { text: result.stdout, exit_code: result.code };
+    } finally {
+      if (scratch) await rm(scratch, { recursive: true, force: true });
+    }
   }
 }
 

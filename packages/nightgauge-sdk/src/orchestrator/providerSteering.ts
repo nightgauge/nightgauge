@@ -12,7 +12,9 @@
  *    never gets the `claude_code` preset even when its model is Anthropic's
  *    (ADR-022) — the OpenCode CLI does not consume that preset, and steering
  *    here is keyed by the HOST ADAPTER, never by the resolved provider; its
- *    guidance is the AGENTS.md file #1626 provisions.
+ *    guidance is the per-run config's `instructions` #1626 provisions (the
+ *    repository's steering files and the run's own steering.md), not a file
+ *    written into the worktree.
  *
  * @see Issue #4028 - Provider-aware system steering
  * @see Issue #1622 - opencode is model-aware for provider resolution

@@ -13,7 +13,7 @@ func TestSharedTracker_GetMissingFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rate-limit.json")
 	tr := NewSharedRateLimitTracker(path)
 
-	entry, fresh, err := tr.Get("alice")
+	entry, fresh, err := tr.Get("alice", ResourceCore)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -27,11 +27,11 @@ func TestSharedTracker_SetThenGet(t *testing.T) {
 	tr := NewSharedRateLimitTracker(path)
 
 	info := &RateLimitInfo{Remaining: 4200, Limit: 5000, ResetAt: time.Now().Add(30 * time.Minute).Unix()}
-	if err := tr.Set("alice", info); err != nil {
+	if err := tr.Set("alice", ResourceCore, info); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 
-	entry, fresh, err := tr.Get("alice")
+	entry, fresh, err := tr.Get("alice", ResourceCore)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestSharedTracker_StalenessBoundary(t *testing.T) {
 
 	// Manually write an entry whose CheckedAt is older than the freshness window.
 	info := &RateLimitInfo{Remaining: 100, Limit: 5000, ResetAt: time.Now().Add(30 * time.Minute).Unix()}
-	if err := tr.Set("alice", info); err != nil {
+	if err := tr.Set("alice", ResourceCore, info); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 	// Rewrite the file with a stale CheckedAt.
@@ -63,12 +63,12 @@ func TestSharedTracker_StalenessBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("readLocked: %v", err)
 	}
-	file.Entries["alice"].CheckedAt = time.Now().Unix() - int64(SharedTrackerMinCheckIntervalSecs) - 5
+	file.Entries["alice|core"].CheckedAt = time.Now().Unix() - int64(SharedTrackerMinCheckIntervalSecs) - 5
 	if err := tr.writeLocked(file); err != nil {
 		t.Fatalf("writeLocked: %v", err)
 	}
 
-	entry, fresh, err := tr.Get("alice")
+	entry, fresh, err := tr.Get("alice", ResourceCore)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestSharedTracker_CorruptFile(t *testing.T) {
 
 	// Corrupt file should not error — it should be treated as empty so the
 	// next Set() can bootstrap a valid file.
-	entry, fresh, err := tr.Get("alice")
+	entry, fresh, err := tr.Get("alice", ResourceCore)
 	if err != nil {
 		t.Fatalf("Get on corrupt: %v", err)
 	}
@@ -98,10 +98,10 @@ func TestSharedTracker_CorruptFile(t *testing.T) {
 	}
 
 	info := &RateLimitInfo{Remaining: 50, Limit: 5000, ResetAt: time.Now().Add(1 * time.Hour).Unix()}
-	if err := tr.Set("alice", info); err != nil {
+	if err := tr.Set("alice", ResourceCore, info); err != nil {
 		t.Fatalf("Set after corrupt: %v", err)
 	}
-	entry, fresh, err = tr.Get("alice")
+	entry, fresh, err = tr.Get("alice", ResourceCore)
 	if err != nil {
 		t.Fatalf("Get after recovery: %v", err)
 	}
@@ -114,13 +114,13 @@ func TestSharedTracker_MultipleUsers(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rate-limit.json")
 	tr := NewSharedRateLimitTracker(path)
 
-	if err := tr.Set("alice", &RateLimitInfo{Remaining: 1, Limit: 5000, ResetAt: 123}); err != nil {
+	if err := tr.Set("alice", ResourceCore, &RateLimitInfo{Remaining: 1, Limit: 5000, ResetAt: 123}); err != nil {
 		t.Fatal(err)
 	}
-	if err := tr.Set("bob", &RateLimitInfo{Remaining: 2, Limit: 5000, ResetAt: 456}); err != nil {
+	if err := tr.Set("bob", ResourceCore, &RateLimitInfo{Remaining: 2, Limit: 5000, ResetAt: 456}); err != nil {
 		t.Fatal(err)
 	}
-	if err := tr.Set("", &RateLimitInfo{Remaining: 3, Limit: 5000, ResetAt: 789}); err != nil {
+	if err := tr.Set("", ResourceCore, &RateLimitInfo{Remaining: 3, Limit: 5000, ResetAt: 789}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -128,7 +128,7 @@ func TestSharedTracker_MultipleUsers(t *testing.T) {
 		user string
 		want int
 	}{{"alice", 1}, {"bob", 2}, {"", 3}} {
-		entry, _, err := tr.Get(tc.user)
+		entry, _, err := tr.Get(tc.user, ResourceCore)
 		if err != nil || entry == nil {
 			t.Fatalf("Get(%q): err=%v entry=%v", tc.user, err, entry)
 		}
@@ -150,12 +150,12 @@ func TestSharedTracker_ConcurrentWrites(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			_ = tr.Set("alice", &RateLimitInfo{Remaining: i, Limit: 5000, ResetAt: int64(i)})
+			_ = tr.Set("alice", ResourceCore, &RateLimitInfo{Remaining: i, Limit: 5000, ResetAt: int64(i)})
 		}(i)
 	}
 	wg.Wait()
 
-	entry, _, err := tr.Get("alice")
+	entry, _, err := tr.Get("alice", ResourceCore)
 	if err != nil {
 		t.Fatalf("Get after concurrent writes: %v", err)
 	}
@@ -171,16 +171,17 @@ func TestSharedTracker_EmptyUserCollapsesToDefault(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rate-limit.json")
 	tr := NewSharedRateLimitTracker(path)
 
-	if err := tr.Set("", &RateLimitInfo{Remaining: 7, Limit: 5000, ResetAt: 100}); err != nil {
+	if err := tr.Set("", ResourceCore, &RateLimitInfo{Remaining: 7, Limit: 5000, ResetAt: 100}); err != nil {
 		t.Fatal(err)
 	}
-	// Reading under "default" should find the entry written under "".
+	// The empty user still collapses to "default"; from v2 the key also
+	// carries the pool, so the entry lands under "default|core".
 	file, err := tr.readLocked()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := file.Entries["default"]; !ok {
-		t.Fatalf("empty user should have been stored under 'default', got keys: %v", keys(file.Entries))
+	if _, ok := file.Entries["default|core"]; !ok {
+		t.Fatalf("empty user should have been stored under 'default|core', got keys: %v", keys(file.Entries))
 	}
 }
 
@@ -200,8 +201,7 @@ func TestSharedTracker_SetFromHeaders_Valid(t *testing.T) {
 
 	resetUnix := time.Now().Add(45 * time.Minute).Unix()
 	updated, err := tr.SetFromHeaders(
-		"alice",
-		"4321",
+		"alice", ResourceCore, "4321",
 		"5000",
 		fmt.Sprintf("%d", resetUnix),
 	)
@@ -212,7 +212,7 @@ func TestSharedTracker_SetFromHeaders_Valid(t *testing.T) {
 		t.Fatalf("expected updated=true for valid headers")
 	}
 
-	entry, fresh, err := tr.Get("alice")
+	entry, fresh, err := tr.Get("alice", ResourceCore)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -238,14 +238,14 @@ func TestSharedTracker_SetFromHeaders_EmptyIsNoOp(t *testing.T) {
 		{"missing reset", "100", "5000", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			updated, err := tr.SetFromHeaders("alice", tc.r, tc.l, tc.rs)
+			updated, err := tr.SetFromHeaders("alice", ResourceCore, tc.r, tc.l, tc.rs)
 			if err != nil {
 				t.Fatalf("err = %v", err)
 			}
 			if updated {
 				t.Fatalf("empty header should be a no-op (updated=false)")
 			}
-			entry, _, _ := tr.Get("alice")
+			entry, _, _ := tr.Get("alice", ResourceCore)
 			if entry != nil {
 				t.Fatalf("no entry should be persisted, got %+v", entry)
 			}
@@ -264,7 +264,7 @@ func TestSharedTracker_SetFromHeaders_NonIntegerIsNoOp(t *testing.T) {
 		{"float remaining", "1.5", "5000", "1700000000"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			updated, err := tr.SetFromHeaders("alice", tc.r, tc.l, tc.rs)
+			updated, err := tr.SetFromHeaders("alice", ResourceCore, tc.r, tc.l, tc.rs)
 			if err != nil {
 				t.Fatalf("err = %v", err)
 			}
@@ -283,16 +283,16 @@ func TestSharedTracker_SetFromHeaders_NoDoubleCount(t *testing.T) {
 	tr := NewSharedRateLimitTracker(path)
 
 	resetUnix := time.Now().Add(30 * time.Minute).Unix()
-	if _, err := tr.SetFromHeaders("alice", "4500", "5000", fmt.Sprintf("%d", resetUnix)); err != nil {
+	if _, err := tr.SetFromHeaders("alice", ResourceCore, "4500", "5000", fmt.Sprintf("%d", resetUnix)); err != nil {
 		t.Fatalf("first SetFromHeaders: %v", err)
 	}
 	// A subsequent GraphQL probe (Set) reports a slightly newer remaining
 	// value. The persisted entry should reflect the newer value exactly,
 	// not the sum or any aggregate.
-	if err := tr.Set("alice", &RateLimitInfo{Remaining: 4480, Limit: 5000, ResetAt: resetUnix}); err != nil {
+	if err := tr.Set("alice", ResourceCore, &RateLimitInfo{Remaining: 4480, Limit: 5000, ResetAt: resetUnix}); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
-	entry, _, err := tr.Get("alice")
+	entry, _, err := tr.Get("alice", ResourceCore)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -301,10 +301,10 @@ func TestSharedTracker_SetFromHeaders_NoDoubleCount(t *testing.T) {
 	}
 
 	// And the reverse direction: header update after a Set must not double-count.
-	if _, err := tr.SetFromHeaders("alice", "4470", "5000", fmt.Sprintf("%d", resetUnix)); err != nil {
+	if _, err := tr.SetFromHeaders("alice", ResourceCore, "4470", "5000", fmt.Sprintf("%d", resetUnix)); err != nil {
 		t.Fatalf("second SetFromHeaders: %v", err)
 	}
-	entry, _, _ = tr.Get("alice")
+	entry, _, _ = tr.Get("alice", ResourceCore)
 	if entry.Remaining != 4470 {
 		t.Fatalf("expected exactly 4470, got %d", entry.Remaining)
 	}

@@ -54,6 +54,7 @@ func TestOpenCodeIsolationEnv(t *testing.T) {
 			"OPENCODE_DISABLE_EXTERNAL_SKILLS":    "1",
 			"GH_CONFIG_DIR":                       home + "/.config/gh",
 			"NIGHTGAUGE_CONFIG_HOME":              "/machine/tier",
+			"NIGHTGAUGE_STATE_HOME":               home + "/.local/state/nightgauge",
 			"GOCACHE":                             home + "/.cache/go-build",
 			"HOME":                                root + "/home",
 		}
@@ -77,7 +78,18 @@ func TestOpenCodeIsolationEnv(t *testing.T) {
 			change:    func(w map[string]string) { w["GOCACHE"] = "/cache/go-build" }},
 		{name: "darwin go cache ignores XDG_CACHE_HOME", goos: "darwin",
 			inherited: map[string]string{"XDG_CACHE_HOME": "/cache"},
-			change:    func(w map[string]string) { w["GOCACHE"] = home + "/Library/Caches/go-build" }},
+			change: func(w map[string]string) {
+				w["GOCACHE"] = home + "/Library/Caches/go-build"
+				w["NIGHTGAUGE_STATE_HOME"] = home + "/.nightgauge/state"
+			}},
+		// The run's XDG_STATE_HOME must not become the stage's machine-state
+		// root (ADR-024 § 8): the operator's is pinned instead.
+		{name: "the operator's XDG_STATE_HOME decides the pinned state root", goos: "linux",
+			inherited: map[string]string{"XDG_STATE_HOME": "/xdg-state"},
+			change:    func(w map[string]string) { w["NIGHTGAUGE_STATE_HOME"] = "/xdg-state/nightgauge" }},
+		{name: "the operator's NIGHTGAUGE_STATE_HOME passes through", goos: "linux",
+			inherited: map[string]string{"NIGHTGAUGE_STATE_HOME": "/state", "XDG_STATE_HOME": "/xdg-state"},
+			change:    func(w map[string]string) { w["NIGHTGAUGE_STATE_HOME"] = "/state" }},
 		{name: "an operator GOCACHE passes through", goos: "linux",
 			inherited: map[string]string{"GOCACHE": "/fast/go-build"},
 			change:    func(w map[string]string) { delete(w, "GOCACHE") }},
@@ -1256,5 +1268,49 @@ func TestOpenCodePrepareRunRoot(t *testing.T) {
 	}
 	if !runstate.IsIdentity(filepath.Base(first.Dir)) {
 		t.Errorf("the root is not named by a run identity: %s", first.Dir)
+	}
+}
+
+// TestOpenCodeWithholdsNightgaugeEnv: the opencode child inherits only the
+// NIGHTGAUGE_* names in OpenCodeNightgaugeEnvAllow, plus one its per-run
+// config references as {env:NAME} (#1657). Other namespaces are not decided
+// here, and the adapter's hook applies both rules.
+func TestOpenCodeWithholdsNightgaugeEnv(t *testing.T) {
+	content := `{"mcp":{"n":{"headers":{"Authorization":"Bearer {env:NIGHTGAUGE_MCP_TOKEN}"}}}}`
+	for _, k := range []string{"NIGHTGAUGE_JIRA_TOKEN", "NIGHTGAUGE_LM_STUDIO_API_KEY", "NIGHTGAUGE_AUDIT_API_KEY", "NIGHTGAUGE_OPENCODE_PLUGIN_NONCE"} {
+		if !OpenCodeWithholdsNightgaugeEnv(k, content) {
+			t.Errorf("%s is not withheld", k)
+		}
+	}
+	for _, k := range OpenCodeNightgaugeEnvAllow {
+		if OpenCodeWithholdsNightgaugeEnv(k, "") {
+			t.Errorf("%s, which the child needs, is withheld", k)
+		}
+	}
+	if OpenCodeWithholdsNightgaugeEnv("NIGHTGAUGE_MCP_TOKEN", content) {
+		t.Error("a variable the run's config references is withheld")
+	}
+	if !OpenCodeWithholdsNightgaugeEnv("NIGHTGAUGE_MCP_TOKEN", "") {
+		t.Error("a variable no config references is kept")
+	}
+	if OpenCodeWithholdsNightgaugeEnv("GH_TOKEN", "") || OpenCodeWithholdsNightgaugeEnv("PATH", "") {
+		t.Error("a name outside the namespace is decided here")
+	}
+	if !slices.IsSorted(OpenCodeNightgaugeEnvAllow) {
+		t.Error("OpenCodeNightgaugeEnvAllow is not sorted")
+	}
+
+	a := NewOpenCodeAdapter()
+	opts := RunOptions{Model: "lmstudio/x", RunRoot: &RunRoot{Env: map[string]string{openCodeConfigContentEnvVar: content}}}
+	for key, want := range map[string]bool{
+		"NIGHTGAUGE_JIRA_TOKEN": true,
+		"NIGHTGAUGE_MCP_TOKEN":  false,
+		"NIGHTGAUGE_STAGE":      false,
+		"OPENAI_API_KEY":        true,
+		"GITHUB_TOKEN":          false,
+	} {
+		if got := a.WithholdsEnv(opts, key); got != want {
+			t.Errorf("WithholdsEnv(%s) = %v, want %v", key, got, want)
+		}
 	}
 }

@@ -9,6 +9,82 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- Pipeline health reads each OpenCode stage's context-window utilization and
+  compaction count from the run history (#1653), so a stage that uses under
+  30% of its model's window on average is reported as a low-utilization
+  pattern.
+
+### Fixed
+
+- The license key no longer disappears for the CLI and daemon once the
+  extension has run. Activating a license, starting a trial, saving the key in
+  Settings and the startup migration now also store it in the OS keychain
+  through `nightgauge auth license set`, so `nightgauge serve` and
+  `nightgauge pipeline backfill` from a terminal still find it. The key is
+  removed from `~/.nightgauge/config.yaml` only after that succeeds; if it
+  fails, the key stays and one warning names the command to run. If you
+  change the key from a terminal (`nightgauge auth license set`), VS Code
+  notices on the next start, stops using its old copy, and asks you to
+  activate the current key.
+
+- The generated `.nightgauge/.gitignore` (template version 15) now ignores
+  `.nightgauge/worktrees/`, so a pipeline worktree no longer shows up in
+  `git status` as an embedded repository, and the per-machine files it
+  missed: the chat-command authorization log, the work graph, the focus lens,
+  the performance mode, the careful-mode lock, the audit queue and two
+  reports. An older extension no longer downgrades a newer file, and an
+  upgrade moves custom rules found outside the `Local additions` section into
+  it instead of dropping them. The Nightgauge CLI now writes the
+  same file from `config init` and `serve`, so a clone that never opened VS
+  Code gets it too.
+
+- An attention sweep that outlives the 30-second request deadline no longer
+  leaves the window "never swept": the daemon finishes it and its cards still
+  arrive, and later triggers in that window ask the board change probe
+  instead of sweeping again. A window reload remembers the last completed
+  sweep, so activation asks the probe too; only the Attention Sweep command
+  always sweeps. The timer keeps its schedule even when a sweep started a
+  little late, so checks the probe cannot see (default-branch CI, Dependabot,
+  branch protection) are not delayed to twice the interval.
+
+- The Repositories view reads each project board once per refresh instead of
+  three times per repository, and serves re-expands and daemon reconnects from
+  cache without touching GitHub. Row counts on a board shared by several
+  repositories now show each repository's own issues.
+
+### Changed
+
+- A GitHub token in `.nightgauge/config.yaml` or `.nightgauge/config.local.yaml`
+  is used only when it is an `env:VAR_NAME` reference (#2023). A literal token
+  there is no longer exported to terminals and subprocesses as `GH_TOKEN`; the
+  binary refuses such a config. Put a literal token in the machine config file,
+  or name the account in `github_user` and let `gh` hold it. The extension now
+  finds that file where the binary does (`NIGHTGAUGE_CONFIG_HOME`,
+  `XDG_CONFIG_HOME`, `~/.config/nightgauge` on Linux), not only in
+  `~/.nightgauge`.
+- A `platform.license_key` in the workspace's `.nightgauge/config.yaml` is no
+  longer imported into the extension's secret storage at startup, so a cloned
+  repository cannot replace your license key (#2023). The extension warns
+  instead, and leaves the file alone.
+
+- OpenCode stages now run from the editor. They check the experimental
+  switch, the `opencode` CLI, the Nightgauge binary and a configured model
+  before launch, and refuse interactive mode. Each model step and tool call
+  counts as activity while the stage runs. The model comes from the stage or
+  `opencode.model`. Stage cost, the cost cap and stall thresholds follow the
+  model's provider. A local model costs $0, uses time-cap mode, and gets its
+  own stall calibration with a floor that its thresholds never go below. A
+  hosted model with no registry price also runs in time-cap mode, and
+  time-cap mode now defaults to a 4-hour cap when none is configured. The
+  activity lines never appear in Run Stage or the slot output channels.
+
+- Stages routed to the `opus` band now run Claude Opus 5.5
+  (`claude-opus-5-5`), and stage cost is priced at its $4/$20 per MTok rates.
+
+## [0.4.6] - 2026-09-21
+
 ### Changed
 
 - The Go binary bundled in this extension is now built with `-trimpath`, so it

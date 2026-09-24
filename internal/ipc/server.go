@@ -587,7 +587,7 @@ func (s *Server) initSchedulerCallbacks(sched *orchestrator.Scheduler) {
 			"title":       title,
 		})
 	})
-	sched.OnStageComplete(func(cbRepo string, issue int, stage string, stageErr error, inputTokens, outputTokens, cacheReadTokens int, costUsd float64, model string) {
+	sched.OnStageComplete(func(cbRepo string, issue int, stage string, stageErr error, cost orchestrator.StageCost, model string) {
 		errStr := ""
 		if stageErr != nil {
 			errStr = stageErr.Error()
@@ -597,10 +597,11 @@ func (s *Server) initSchedulerCallbacks(sched *orchestrator.Scheduler) {
 			"issueNumber":     issue,
 			"stage":           stage,
 			"error":           errStr,
-			"inputTokens":     inputTokens,
-			"outputTokens":    outputTokens,
-			"cacheReadTokens": cacheReadTokens,
-			"costUsd":         costUsd,
+			"inputTokens":     cost.Input,
+			"outputTokens":    cost.Output,
+			"cacheReadTokens": cost.CacheRead,
+			"costUsd":         cost.CostUSD,
+			"costSource":      cost.Source,
 			"model":           model,
 		})
 	})
@@ -1389,6 +1390,34 @@ func (s *Server) registerMethods() {
 			Board.ListItems(ctx, p.Status)
 	}
 
+	// board.listOpen returns every OPEN item on the board, all statuses, from
+	// the daemon's cached `is:open` SUMMARY snapshot — the same snapshot
+	// board.counts and the attention sweeps read. It exists for the
+	// Repositories tree, which needs per-repository, epic-excluded,
+	// blocked-aware counts for Ready / In progress / Backlog: one read answers
+	// all three.
+	//
+	// Items carry relationship COUNTS (relationSummary), not lists: that is
+	// everything the counts need (blocked = relationSummary.blockedByOpen > 0),
+	// and it is what lets the read be conditional REST — free while the board
+	// is unchanged, across daemon restarts — instead of a GraphQL read billed
+	// 17 points a page every time. A caller that needs the lists asks
+	// board.list for a status.
+	//ipc:method boardListOpen params:BoardListOpenParams result:BoardItem[] nullable
+	s.methods["board.listOpen"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
+		var p BoardListOpenParams
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, fmt.Errorf("invalid params: %w", err)
+		}
+		c, err := s.clientForUser(p.GitHubUser)
+		if err != nil {
+			return nil, err
+		}
+		items, _, err := boardcache.ListOpenSummary(ctx,
+			s.boardServicesFor(c, p.Owner, p.ProjectNumber, gh.ParseOwnerType(p.OwnerType)).Board)
+		return items, err
+	}
+
 	//ipc:method boardCounts params:BoardCountsParams result:StatusCounts
 	s.methods["board.counts"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
 		var p BoardCountsParams
@@ -1399,9 +1428,9 @@ func (s *Server) registerMethods() {
 		if err != nil {
 			return nil, err
 		}
-		// Derived from the cached open-item snapshot, never asked of the
-		// forge: inside the TTL this costs zero requests, and after it one
-		// 1-point change probe (#TBD-board-counts).
+		// Derived from the cached open-item summary snapshot, never asked of
+		// the forge as a count: inside the TTL this costs zero requests, and
+		// after it conditional REST reads that are free while unchanged.
 		return boardcache.CountsByStatus(ctx,
 			s.boardServicesFor(c, p.Owner, p.ProjectNumber, gh.ParseOwnerType(p.OwnerType)).Board)
 	}
@@ -1418,7 +1447,7 @@ func (s *Server) registerMethods() {
 		// tracker, at most one query fires per SharedTrackerMinCheckIntervalSecs
 		// regardless of how many windows are open.
 		if s.rateLimitTracker != nil {
-			if entry, fresh, err := s.rateLimitTracker.Get(p.GitHubUser); err == nil && fresh && entry != nil {
+			if entry, fresh, err := s.rateLimitTracker.Get(p.GitHubUser, gh.ResourceGraphQL); err == nil && fresh && entry != nil {
 				return &gh.RateLimitInfo{
 					Remaining: entry.Remaining,
 					Limit:     entry.Limit,
@@ -1437,7 +1466,7 @@ func (s *Server) registerMethods() {
 		if s.rateLimitTracker != nil {
 			// Persist is best-effort — if the tracker file is unwritable we
 			// still return fresh data to the caller rather than failing.
-			_ = s.rateLimitTracker.Set(p.GitHubUser, info)
+			_ = s.rateLimitTracker.Set(p.GitHubUser, gh.ResourceGraphQL, info)
 		}
 		return info, nil
 	}
@@ -1465,7 +1494,7 @@ func (s *Server) registerMethods() {
 		// caller treats "no reading" as "not exhausted on this signal".
 		var haveBucket bool
 		if s.rateLimitTracker != nil {
-			if entry, _, err := s.rateLimitTracker.Get(p.GitHubUser); err == nil && entry != nil {
+			if entry, _, err := s.rateLimitTracker.GetBudgetAcrossPools(p.GitHubUser); err == nil && entry != nil {
 				result.Remaining = entry.Remaining
 				result.Limit = entry.Limit
 				result.ResetsAt = entry.ResetAt
@@ -3249,7 +3278,9 @@ func (s *Server) registerMethods() {
 					CacheCreation5m: cacheCreation5m, CacheCreation1h: cacheCreation1h,
 				}, p.Model, p.Adapter)
 			}
-			rt.RecordTerminatingStageTokens(stage, p.InputTokens, p.OutputTokens, p.CacheReadTokens, p.CostUsd)
+			// Combined input (non-cached + cache read), as BuildV2Record reads
+			// it; p.InputTokens is the non-cached pool CompleteStage takes.
+			rt.RecordTerminatingStageTokens(stage, p.InputTokens+p.CacheReadTokens, p.OutputTokens, p.CacheReadTokens, p.CostUsd)
 			rt.SetStageError(stage, p.Error)
 			// NOTE: Do NOT delete the runtime here (#232). notifyComplete is the
 			// interactive terminal funnel and fires right after this with

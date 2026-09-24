@@ -23,6 +23,8 @@ import (
 	"github.com/shurcooL/graphql"
 	"golang.org/x/oauth2"
 	"golang.org/x/time/rate"
+
+	"github.com/nightgauge/nightgauge/internal/configpath"
 )
 
 // ErrRateLimitGated is returned by query/mutate/REST helpers when the
@@ -45,7 +47,7 @@ const rateLimitFloorEnv = "NIGHTGAUGE_GITHUB_RATELIMIT_FLOOR"
 // harnesses that spawn the real daemon binary — a "verb is registered"
 // contract test must never block on GitHub's real reset window (bounded by
 // maxFullExhaustionWait, up to 75m) or on the machine's persisted
-// ~/.nightgauge/rate-limit.json quota state. See
+// <STATE>/rate-limit.json quota state (layout.StateHome). See
 // internal/ipc/server_integration_test.go and Issue #1348.
 const rateLimitNoWaitEnv = "NIGHTGAUGE_GITHUB_RATELIMIT_NO_WAIT"
 
@@ -109,6 +111,19 @@ type Client struct {
 	gateJitterMax time.Duration
 	gateRand      func() float64
 	gateGovernor  *gateReleaseGovernor
+
+	// cond is the conditional-GET store condGet revalidates against, and
+	// identity the token-derived half of its key (see condstore.go). Set at
+	// construction; WithConditionalStore replaces both.
+	cond     *ConditionalStore
+	identity string
+
+	// restProjects404 remembers, per board, until when its REST projects
+	// endpoints are skipped after a 404 (board_rest.go).
+	restProjects404 map[string]time.Time
+	// projectLists memoises each owner's REST project list briefly, so the
+	// change probes of several boards in one burst share one request.
+	projectLists map[string]projectListMemo
 }
 
 // defaultGateJitterMax is the spread added to every gated wait. Every process
@@ -260,7 +275,15 @@ type OwnerGitHubUserResolver interface {
 // unmapped cross-org target (#4068). The zero-arg GitHubUserResolver is consulted
 // only for resolvers that do not implement the owner-aware form. A nil resolver
 // (or one implementing neither) yields "".
+//
+// Under CI it yields "" (ADR-024 § 5): github_user can come from the committed
+// repository tier, so honouring it there would let a pull request select any
+// identity gh has stored on a shared runner. A CI job's identity is the token
+// in its environment.
 func configuredGitHubUser(cfg TokenResolver, owner string) string {
+	if ciHost() {
+		return ""
+	}
 	if ur, ok := cfg.(OwnerGitHubUserResolver); ok {
 		return ur.ResolveGitHubUserForOwner(owner)
 	}
@@ -346,18 +369,53 @@ func envWithout(env []string, keys ...string) []string {
 	return out
 }
 
+// withMachineTracker attaches the machine-wide shared rate-limit tracker to a
+// client built for a one-shot process.
+//
+// Until this existed, WithRateLimitTracker was called in exactly three places,
+// all inside internal/ipc — so the gate was a DAEMON-ONLY mechanism. Every CLI
+// invocation (`nightgauge run` and the whole six-stage pipeline, the post-merge
+// hooks, issue route, pr_stage) built a client with a nil tracker, and a nil
+// tracker makes headroomGate.resetWait return at its first line: never gated,
+// and never writing a reading back. That is why the machine's tracker file sat
+// unwritten for 7h44m on 2026-09-21 while thousands of calls went out, and why
+// the pipeline only ever discovered exhaustion by taking a 403 from GitHub.
+//
+// WithRateLimitWait matches the daemon's choice (internal/ipc/server.go): a
+// one-shot that is out of budget should wait for the window — bounded by
+// maxFullExhaustionWait and the caller's context — rather than hard-fail an
+// issue that is mid-flight. The user key is empty, which collapses to
+// "default"; GetBudget reconciles that against whatever key the daemon writes,
+// since the same reset second is the same account.
+//
+// Best-effort: an unresolvable tracker path leaves the client exactly as it
+// was, because failing to build a client over a missing cache file would be a
+// worse outcome than an ungated call.
+func withMachineTracker(c *Client) *Client {
+	if c == nil {
+		return c
+	}
+	path, err := DefaultSharedTrackerPath()
+	if err != nil {
+		return c
+	}
+	return c.WithRateLimitTracker(NewSharedRateLimitTracker(path), "").WithRateLimitWait()
+}
+
 // NewClient creates a GitHub GraphQL client using the GITHUB_TOKEN env var.
 func NewClient() (*Client, error) {
 	token := os.Getenv("GITHUB_TOKEN")
 	if token == "" {
 		return nil, fmt.Errorf("GITHUB_TOKEN environment variable is required")
 	}
-	return NewClientWithToken(token), nil
+	return withMachineTracker(NewClientWithToken(token)), nil
 }
 
 // NewClientFromConfig creates a GitHub GraphQL client using the resolution
 // priority chain:
-//  1. cliToken (--token flag) if non-empty
+//  1. cliToken if non-empty — a token the caller already holds. No command
+//     passes one from argv: the root --token flag was removed (ADR-024 § 5,
+//     #2031); on a CI host GITHUB_TOKEN / GH_TOKEN come next, ahead of config
 //  2. cfg.ResolveToken(owner) — per-project or per-org config token
 //     3a. When a github_user is configured: the github_user-scoped token
 //     (gh auth token --user, ambient env stripped) — authoritative over
@@ -367,18 +425,18 @@ func NewClient() (*Client, error) {
 //     default gh account — the single-identity / CI path is unchanged.
 //
 // A deprecation warning is emitted to stderr when the gh CLI fallback is used.
-// Suppress it by setting github_auth.suppress_gh_warning: true in config.yaml.
+// Suppress it by setting github_auth.suppress_gh_warning: true in config.
 //
 // Never logs the token value; only env:VAR_NAME references appear in logs.
 func NewClientFromConfig(cfg TokenResolver, owner string, cliToken string) (*Client, error) {
 	// 1. CLI flag override.
 	if cliToken != "" {
-		return NewClientWithToken(cliToken), nil
+		return withMachineTracker(NewClientWithToken(cliToken)), nil
 	}
 	return newClientFromChain(cfg, owner, execGHAuthTokenForUser, execGHAuthToken)
 }
 
-// NewClientFromConfigContext is NewClientFromConfig with no --token flag and
+// NewClientFromConfigContext is NewClientFromConfig with no cliToken and
 // every gh CLI call it makes run under ctx, so the gh fallback cannot hold the
 // caller past ctx's deadline. The tiers and the identity rules are
 // NewClientFromConfig's.
@@ -391,6 +449,11 @@ func NewClientFromConfigContext(ctx context.Context, cfg TokenResolver, owner st
 // newClientFromChain is tiers 2 and 3 of NewClientFromConfig, resolving a gh
 // CLI token through forUser and byDefault.
 func newClientFromChain(cfg TokenResolver, owner string, forUser func(string) (string, error), byDefault func() (string, error)) (*Client, error) {
+	// CI: the job's environment first, ahead of any token left on disk.
+	if tok := ciEnvironmentToken(); tok != "" {
+		return NewClientWithToken(tok), nil
+	}
+
 	// 2. Config-based token (per-project or per-org).
 	if cfg != nil {
 		tok, err := cfg.ResolveToken(owner)
@@ -398,7 +461,7 @@ func newClientFromChain(cfg TokenResolver, owner string, forUser func(string) (s
 			// Log as warning only — fall through to next tier.
 			fmt.Fprintf(os.Stderr, "warning: config token resolution failed: %v\n", err)
 		} else if tok != "" {
-			return NewClientWithToken(tok), nil
+			return withMachineTracker(NewClientWithToken(tok)), nil
 		}
 	}
 
@@ -411,7 +474,7 @@ func newClientFromChain(cfg TokenResolver, owner string, forUser func(string) (s
 		if err != nil {
 			return nil, fmt.Errorf("no GitHub token available for configured github_user %q (tried config and gh auth token --user; ambient GITHUB_TOKEN is intentionally NOT used for a configured identity): %w", user, err)
 		}
-		return NewClientWithToken(tok), nil
+		return withMachineTracker(NewClientWithToken(tok)), nil
 	}
 
 	// 3b. No github_user configured — ambient GITHUB_TOKEN env var first.
@@ -425,7 +488,7 @@ func newClientFromChain(cfg TokenResolver, owner string, forUser func(string) (s
 	if err != nil {
 		return nil, fmt.Errorf("no GitHub token available (tried config, GITHUB_TOKEN env, and gh CLI): %w", err)
 	}
-	return NewClientWithToken(tok), nil
+	return withMachineTracker(NewClientWithToken(tok)), nil
 }
 
 // warnGHFallback emits the gh CLI deprecation warning to stderr unless the
@@ -434,12 +497,50 @@ func warnGHFallback(cfg TokenResolver) {
 	if cfg != nil && cfg.SuppressGHWarning() {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "warning: Using gh CLI for token resolution — "+
-		"configure github_auth.token in config.yaml for reliable multi-org support\n")
+	fmt.Fprint(os.Stderr, ghFallbackWarning())
+}
+
+// ghFallbackWarning is the gh CLI fallback notice. It names the machine-tier
+// file the loader actually reads (canonical, or the Linux legacy file when only
+// that exists), and the env: form, because a bare "config.yaml"
+// steered operators to the committed project file, where a pasted token is
+// pushed to every clone (#2023). The loader refuses a plaintext token there.
+func ghFallbackWarning() string {
+	machine := "the machine-tier config file"
+	if p, err := configpath.InUse(); err == nil && p != "" {
+		machine = p
+	}
+	return "warning: Using gh CLI for token resolution — for reliable multi-org support set " +
+		"github_auth.token (or github_auth.tokens.<owner>) in " + machine +
+		", or reference an environment variable from any tier with `token: env:VAR_NAME`\n"
+}
+
+// ciHost reports `CI=true` (any case) or `CI=1`, matching config.CIHost,
+// which this package cannot import.
+func ciHost() bool {
+	ci := strings.TrimSpace(os.Getenv("CI"))
+	return strings.EqualFold(ci, "true") || ci == "1"
+}
+
+// ciEnvironmentToken is the CI rule of ADR-024 § 5: when `CI=true`,
+// credentials resolve from the environment first, so a token a previous job
+// left in the machine-tier file or in gh's store cannot shadow the one this
+// job was given. GITHUB_TOKEN, then GH_TOKEN, with no exception; it returns ""
+// off CI or when neither is set.
+func ciEnvironmentToken() string {
+	if !ciHost() {
+		return ""
+	}
+	for _, name := range []string{"GITHUB_TOKEN", "GH_TOKEN"} {
+		if tok := strings.TrimSpace(os.Getenv(name)); tok != "" {
+			return tok
+		}
+	}
+	return ""
 }
 
 // ResolveTokenChain resolves the GitHub token using the same priority chain
-// as NewClientFromConfig (skipping the CLI --token flag tier):
+// as NewClientFromConfig (skipping the cliToken tier):
 //  1. cfg.ResolveToken(owner) — per-project or per-org config token
 //     2a. When a github_user is configured: the github_user-scoped token
 //     (gh auth token --user, ambient env stripped) — authoritative over the
@@ -450,6 +551,9 @@ func warnGHFallback(cfg TokenResolver) {
 // The returned token can be fingerprinted without creating a client.
 // Returns empty string and error if no token is found.
 func ResolveTokenChain(cfg TokenResolver, owner string) (string, error) {
+	if tok := ciEnvironmentToken(); tok != "" {
+		return tok, nil
+	}
 	if cfg != nil {
 		tok, err := cfg.ResolveToken(owner)
 		if err == nil && tok != "" {
@@ -478,7 +582,9 @@ func NewClientWithToken(token string) *Client {
 		http:       httpClient,
 		limiter:    rate.NewLimiter(rate.Every(time.Second), 5), // 5 req/s
 		graphqlURL: "https://api.github.com/graphql",
+		identity:   tokenIdentity(token),
 	}
+	c.adoptProcessConditionalStore()
 	c.installHeaderInterceptor()
 	c.gql = graphql.NewClient(c.graphqlURL, c.http)
 	return c
@@ -493,6 +599,8 @@ func NewClientWithURL(token, graphqlURL string) *Client {
 		http:       httpClient,
 		limiter:    rate.NewLimiter(rate.Every(time.Second), 5),
 		graphqlURL: graphqlURL,
+		identity:   tokenIdentity(token),
+		cond:       NewConditionalStore(""),
 	}
 	c.installHeaderInterceptor()
 	c.gql = graphql.NewClient(c.graphqlURL, c.http)
@@ -507,10 +615,41 @@ func NewClientWithHTTPClient(httpClient *http.Client) *Client {
 		http:       httpClient,
 		limiter:    rate.NewLimiter(rate.Every(time.Second), 5),
 		graphqlURL: "https://api.github.com/graphql",
+		cond:       NewConditionalStore(""),
 	}
 	c.installHeaderInterceptor()
 	c.gql = graphql.NewClient(c.graphqlURL, c.http)
 	return c
+}
+
+// adoptProcessConditionalStore points the client at the process-wide store
+// when one is installed (the serve daemon), else at a private memory store.
+func (c *Client) adoptProcessConditionalStore() {
+	if s := processCondStore.Load(); s != nil {
+		c.cond = s
+		return
+	}
+	c.cond = NewConditionalStore("")
+}
+
+// WithConditionalStore replaces the client's conditional-GET store and the
+// identity its entries are keyed under. Tests use it to model a daemon
+// restart: a NEW client over the SAME store and identity.
+func (c *Client) WithConditionalStore(store *ConditionalStore, identity string) *Client {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cond = store
+	c.identity = identity
+	return c
+}
+
+// CacheIdentity is the token-derived identity this client's cached answers
+// are keyed under. Caches above the client (boardcache) key by it too, so a
+// snapshot read with one token is never served to a caller holding another.
+func (c *Client) CacheIdentity() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.identity
 }
 
 // WithRateLimitTracker attaches a SharedRateLimitTracker to the client so that
@@ -775,9 +914,25 @@ func (t *rateLimitHeaderTransport) RoundTrip(req *http.Request) (*http.Response,
 	// ETags for them here. Host-scoped — see the apiHost doc on the struct.
 	var cacheKey string
 	var cached *etagCacheEntry
-	if t.etags != nil && req.Method == http.MethodGet && t.apiHost != "" && req.URL.Host == t.apiHost {
-		cacheKey = req.URL.String()
-		if e, ok := t.etags.get(cacheKey); ok {
+	// A request that carries its own If-None-Match (condGet, backed by the
+	// persistent ConditionalStore) must see the server's real 304: this layer
+	// rewriting it into a 200 would hide exactly the answer condGet reads.
+	if t.etags != nil && req.Method == http.MethodGet && t.apiHost != "" && req.URL.Host == t.apiHost &&
+		req.Context().Value(callerConditionalKey{}) == nil {
+		// The Accept header is part of the key: the same URL answers a
+		// different representation per media type (raw, diff, JSON), and a
+		// 304 must hand back the one this caller asked for.
+		cacheKey = req.Header.Get("Accept") + " " + req.URL.String()
+		e, ok := t.etags.get(cacheKey)
+		if !ok && t.client != nil {
+			// A daemon restart empties the in-memory layer; the persistent
+			// store still holds the last validator and body for this URL.
+			if pe, pok := t.client.persistedResponse(cacheKey); pok {
+				t.etags.set(cacheKey, pe.etag, pe.body, pe.header)
+				e, ok = pe, true
+			}
+		}
+		if ok {
 			cached = e
 			req = req.Clone(req.Context())
 			req.Header.Set("If-None-Match", e.etag)
@@ -789,6 +944,11 @@ func (t *rateLimitHeaderTransport) RoundTrip(req *http.Request) (*http.Response,
 		// Captured before the 304-to-200 rewrite below, so the ledger records
 		// what the server actually answered.
 		ledgerRec.Status = resp.StatusCode
+		// A 304 answered to condGet's own If-None-Match is as free as one
+		// answered to this layer's, so the ledger marks both.
+		if resp.StatusCode == http.StatusNotModified {
+			ledgerRec.Cached = true
+		}
 	}
 	if ledger != nil {
 		defer func() {
@@ -868,6 +1028,9 @@ func (t *rateLimitHeaderTransport) RoundTrip(req *http.Request) (*http.Response,
 					// Also replaces any existing (now-stale) cache entry for
 					// this URL — changed upstream data always wins.
 					t.etags.set(cacheKey, etag, head, resp.Header.Clone())
+					if t.client != nil {
+						t.client.persistResponse(cacheKey, etag, head, resp.Header)
+					}
 					resp.Body = io.NopCloser(bytes.NewReader(head))
 					resp.ContentLength = int64(len(head))
 				}
@@ -898,9 +1061,41 @@ func (t *rateLimitHeaderTransport) RoundTrip(req *http.Request) (*http.Response,
 	if tracker == nil {
 		return resp, err
 	}
+	// GitHub names the pool it charged, and that is the authority: it is the
+	// same header the ledger records as Kind, and it is right for endpoints
+	// that bill somewhere unexpected. When it is absent — a proxy that strips
+	// it, a test server — fall back to the request path rather than to core,
+	// because silently filing a GraphQL reading under core is precisely the
+	// masking this split exists to end.
+	resource := resp.Header.Get("X-RateLimit-Resource")
+	if resource == "" {
+		resource = c.resourceForRequest(resp.Request)
+	}
 	// Best-effort: a tracker write failure must never break a request.
-	_, _ = tracker.SetFromHeaders(user, remaining, limit, reset)
+	_, _ = tracker.SetFromHeaders(user, resource, remaining, limit, reset)
 	return resp, err
+}
+
+// resourceForRequest infers the rate-limit pool from the request itself, for
+// responses that carry no X-RateLimit-Resource header (a proxy that strips it,
+// a test server). The client already knows the endpoint it sends GraphQL to,
+// so compare against that rather than pattern-matching a path: httptest
+// servers have no path at all, and getting this wrong files a GraphQL reading
+// under core, which is the masking this split exists to end.
+func (c *Client) resourceForRequest(req *http.Request) string {
+	if req == nil || req.URL == nil {
+		return ResourceCore
+	}
+	c.mu.Lock()
+	gqlURL := c.graphqlURL
+	c.mu.Unlock()
+	if gqlURL != "" && strings.HasPrefix(req.URL.String(), gqlURL) {
+		return ResourceGraphQL
+	}
+	if req.URL.Path == "/graphql" || strings.HasSuffix(req.URL.Path, "/graphql") {
+		return ResourceGraphQL
+	}
+	return ResourceCore
 }
 
 // rateLimitResetWait reports whether the attached tracker shows a fresh
@@ -910,8 +1105,8 @@ func (t *rateLimitHeaderTransport) RoundTrip(req *http.Request) (*http.Response,
 // (the next API response will refresh us, so gating would be pointlessly
 // pessimistic). The one-line "rate limit gated" decision is logged here so the
 // fail-fast and wait paths share identical operator-visible output.
-func (c *Client) rateLimitResetWait() (time.Duration, bool) {
-	return c.headroomGate().resetWait()
+func (c *Client) rateLimitResetWait(resource string) (time.Duration, bool) {
+	return c.headroomGate(resource).resetWait()
 }
 
 // headroomGate is the rate-limit gate as a value, decoupled from *Client.
@@ -926,6 +1121,9 @@ func (c *Client) rateLimitResetWait() (time.Duration, bool) {
 type headroomGate struct {
 	tracker *SharedRateLimitTracker
 	user    string
+	// resource is the pool this gate protects (ResourceCore / ResourceGraphQL).
+	// Empty means "the caller cannot know", and gates on the lower of the two.
+	resource string
 	// wait flips fail-fast (ErrRateLimitGated) to wait-for-reset.
 	wait     bool
 	logger   func(format string, args ...interface{})
@@ -934,13 +1132,14 @@ type headroomGate struct {
 }
 
 // headroomGate builds the gate this client pays from its own wiring.
-func (c *Client) headroomGate() headroomGate {
+func (c *Client) headroomGate(resource string) headroomGate {
 	c.mu.Lock()
 	g := headroomGate{
-		tracker: c.tracker,
-		user:    c.trackerUser,
-		wait:    c.rateLimitWaitOnGate,
-		logger:  c.gateLogger,
+		tracker:  c.tracker,
+		user:     c.trackerUser,
+		resource: resource,
+		wait:     c.rateLimitWaitOnGate,
+		logger:   c.gateLogger,
 	}
 	c.mu.Unlock()
 	g.jitter = c.gateJitter
@@ -964,8 +1163,15 @@ func (g headroomGate) resetWait() (time.Duration, bool) {
 	if tracker == nil {
 		return 0, false
 	}
-	entry, fresh, err := tracker.Get(user)
-	if err != nil || entry == nil || !fresh {
+	var entry *SharedTrackerEntry
+	var fresh bool
+	var err error
+	if g.resource == "" {
+		entry, fresh, err = tracker.GetBudgetAcrossPools(user)
+	} else {
+		entry, fresh, err = tracker.GetBudget(user, g.resource)
+	}
+	if err != nil || entry == nil {
 		return 0, false
 	}
 	floor := rateLimitFloor()
@@ -976,9 +1182,26 @@ func (g headroomGate) resetWait() (time.Duration, bool) {
 	if entry.ResetAt > 0 && entry.ResetAt <= now {
 		return 0, false
 	}
+	// A below-floor reading is NOT discarded for being stale. Freshness and
+	// expiry answer different questions, and conflating them is what made this
+	// gate dead code for most of its wall-clock life: producers, short-lived
+	// CLI processes and the attention sweep each start with a tracker entry
+	// older than SharedTrackerMinCheckIntervalSecs (15s), so `!fresh` opened
+	// the gate on a budget already known to be exhausted, and they spent into
+	// a zero balance. On 2026-09-21 the machine's tracker was 7h44m stale while
+	// the account exhausted its GraphQL quota twice.
+	//
+	// ResetAt is the authority for an exhaustion reading: until that second
+	// elapses the budget CANNOT have recovered, however old the reading is, and
+	// the check above already releases the gate once it has. Staleness only
+	// matters when there is no reset to reason about, so freshness is required
+	// only for an entry that carries no ResetAt.
+	if entry.ResetAt <= 0 && !fresh {
+		return 0, false
+	}
 	resetIn := time.Duration(entry.ResetAt-now) * time.Second
-	logger("github: rate limit gated (remaining=%d floor=%d reset_in=%s user=%q)",
-		entry.Remaining, floor, resetIn, user)
+	logger("github: rate limit gated (pool=%s remaining=%d floor=%d reset_in=%s user=%q)",
+		g.poolLabel(), entry.Remaining, floor, resetIn, user)
 	return resetIn, true
 }
 
@@ -1033,8 +1256,16 @@ func (g headroomGate) await(ctx context.Context) error {
 // returns nil so the call proceeds (the response path absorbs any residual
 // 429). A context that expires mid-wait returns ctx.Err(), so a short-ctx call
 // bails fast while a long-ctx recovery op waits the reset out. Issue #3976.
-func (c *Client) waitRateLimitGate(ctx context.Context) error {
-	return c.headroomGate().await(ctx)
+func (c *Client) waitRateLimitGate(ctx context.Context, resource string) error {
+	return c.headroomGate(resource).await(ctx)
+}
+
+// poolLabel names the gate's pool for operator output.
+func (g headroomGate) poolLabel() string {
+	if g.resource == "" {
+		return "core+graphql"
+	}
+	return g.resource
 }
 
 // ResolveTokenForUser returns the GitHub token for the given gh CLI user.
@@ -1043,8 +1274,7 @@ func (c *Client) waitRateLimitGate(ctx context.Context) error {
 // A deprecation warning is emitted to stderr unless suppressWarning is true.
 func ResolveTokenForUser(user string, suppressWarning bool) (string, error) {
 	if !suppressWarning {
-		fmt.Fprintf(os.Stderr, "warning: Using gh CLI for token resolution — "+
-			"configure github_auth.token in config.yaml for reliable multi-org support\n")
+		fmt.Fprint(os.Stderr, ghFallbackWarning())
 	}
 	return execGHAuthTokenForUser(user)
 }
@@ -1153,7 +1383,7 @@ func (c *Client) Mutate(ctx context.Context, m interface{}, input map[string]int
 
 // query executes a GraphQL query with rate limiting and retry on rate limit errors.
 func (c *Client) query(ctx context.Context, q interface{}, variables map[string]interface{}) error {
-	if err := c.waitRateLimitGate(ctx); err != nil {
+	if err := c.waitRateLimitGate(ctx, ResourceGraphQL); err != nil {
 		return err
 	}
 	for attempt := 0; attempt <= maxRetries; attempt++ {
@@ -1182,7 +1412,7 @@ func (c *Client) query(ctx context.Context, q interface{}, variables map[string]
 
 // mutate executes a GraphQL mutation with rate limiting and retry.
 func (c *Client) mutate(ctx context.Context, m interface{}, input map[string]interface{}) error {
-	if err := c.waitRateLimitGate(ctx); err != nil {
+	if err := c.waitRateLimitGate(ctx, ResourceGraphQL); err != nil {
 		return err
 	}
 	for attempt := 0; attempt <= maxRetries; attempt++ {
@@ -1330,23 +1560,35 @@ func (c *Client) restDo(ctx context.Context, method, path string, body interface
 // problems" cascade. The X-GitHub-Api-Version header is always set; Content-Type
 // only when there is a body.
 func (c *Client) restDoStatus(ctx context.Context, method, path string, body interface{}) ([]byte, int, error) {
-	// Derive REST base URL from graphqlURL (strip /graphql suffix if present).
-	baseURL := strings.TrimSuffix(c.graphqlURL, "/graphql")
-	url := baseURL + path
+	respBody, status, _, err := c.restDoURL(ctx, method, c.restBaseURL()+path, path, body, nil)
+	return respBody, status, err
+}
+
+// restBaseURL is the REST API root derived from graphqlURL (the /graphql
+// suffix stripped), so GHES and test servers are addressed the same way.
+func (c *Client) restBaseURL() string {
+	return strings.TrimSuffix(c.graphqlURL, "/graphql")
+}
+
+// restDoURL is restDoStatus over an absolute URL with extra request headers,
+// also returning the response headers. label names the request in errors.
+func (c *Client) restDoURL(ctx context.Context, method, url, label string, body interface{}, extra http.Header) ([]byte, int, http.Header, error) {
+	path := label
 
 	var data []byte
 	if body != nil {
 		var err error
 		data, err = json.Marshal(body)
 		if err != nil {
-			return nil, 0, fmt.Errorf("marshal REST %s body: %w", method, err)
+			return nil, 0, nil, fmt.Errorf("marshal REST %s body: %w", method, err)
 		}
 	}
 
-	if err := c.waitRateLimitGate(ctx); err != nil {
-		return nil, 0, err
+	if err := c.waitRateLimitGate(ctx, ResourceCore); err != nil {
+		return nil, 0, nil, err
 	}
 
+	retriedGateway := false
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		var reqBody io.Reader
 		if data != nil {
@@ -1354,22 +1596,53 @@ func (c *Client) restDoStatus(ctx context.Context, method, path string, body int
 		}
 		req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
 		if err != nil {
-			return nil, 0, fmt.Errorf("create REST %s request: %w", method, err)
+			return nil, 0, nil, fmt.Errorf("create REST %s request: %w", method, err)
 		}
 		if data != nil {
 			req.Header.Set("Content-Type", "application/json")
 		}
 		req.Header.Set("Accept", "application/vnd.github+json")
 		req.Header.Set("X-GitHub-Api-Version", "2026-03-10")
+		for k, vv := range extra {
+			for _, v := range vv {
+				req.Header.Add(k, v)
+			}
+		}
 
+		// Process-wide: every REST request in this process shares one bound on
+		// requests in flight and one pause, so a burst of goroutines cannot
+		// walk into GitHub's secondary limits together, and one Retry-After
+		// holds all of them rather than only the goroutine that received it.
+		if err := processRESTGate.acquire(ctx); err != nil {
+			return nil, 0, nil, err
+		}
 		resp, err := c.http.Do(req)
 		if err != nil {
-			return nil, 0, fmt.Errorf("REST %s %s: %w", method, path, err)
+			processRESTGate.release()
+			return nil, 0, nil, fmt.Errorf("REST %s %s: %w", method, path, err)
 		}
 		respBody, readErr := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		processRESTGate.release()
 		if readErr != nil {
-			return nil, 0, fmt.Errorf("read REST %s response body: %w", method, readErr)
+			return nil, 0, nil, fmt.Errorf("read REST %s response body: %w", method, readErr)
+		}
+
+		// A gateway error (502/503/504) is GitHub's front end, not the
+		// request: one retry after a short jittered pause, then it is the
+		// caller's answer. Reads only: a write may already have been applied
+		// behind a gateway that dropped the response, so repeating it is not
+		// safe.
+		if isGatewayStatus(resp.StatusCode) && !retriedGateway &&
+			(method == http.MethodGet || method == http.MethodHead) {
+			retriedGateway = true
+			attempt--
+			select {
+			case <-time.After(gatewayRetryDelay()):
+				continue
+			case <-ctx.Done():
+				return nil, 0, nil, ctx.Err()
+			}
 		}
 
 		// 403/429 with a rate-limit signal → wait out the reset and retry
@@ -1386,17 +1659,15 @@ func (c *Client) restDoStatus(ctx context.Context, method, path string, body int
 				rlErr = fmt.Errorf("status %d: retry after %s seconds: %s", resp.StatusCode, ra, string(respBody))
 			}
 			backoff := c.computeRateLimitBackoff(ctx, rlErr, attempt)
-			select {
-			case <-time.After(backoff):
-				continue
-			case <-ctx.Done():
-				return nil, 0, ctx.Err()
-			}
+			// The pause is shared: the next acquire — this goroutine's retry
+			// and every other REST caller's next request — waits it out.
+			processRESTGate.pause(backoff)
+			continue
 		}
 
-		return respBody, resp.StatusCode, nil
+		return respBody, resp.StatusCode, resp.Header, nil
 	}
-	return nil, 0, fmt.Errorf("REST %s %s: exhausted retries", method, path)
+	return nil, 0, nil, fmt.Errorf("REST %s %s: exhausted retries", method, path)
 }
 
 // restBodyLooksRateLimited reports whether a GitHub REST error body carries a
@@ -1455,6 +1726,10 @@ type RateLimitInfo struct {
 
 // GetRateLimit checks the current GitHub GraphQL API rate limit without
 // consuming a rate-limited request (uses the rateLimit query).
+//
+// GraphQL retained on purpose: GitHub does not charge the rateLimit query
+// (docs/GITHUB_GRAPHQL_SCHEMA.md § GetRateLimit is free), so moving it gains
+// nothing, and the GraphQL pool is best read from a GraphQL response.
 func (c *Client) GetRateLimit(ctx context.Context) (*RateLimitInfo, error) {
 	var q struct {
 		RateLimit struct {
@@ -1598,7 +1873,7 @@ func (c *Client) computeRateLimitBackoff(ctx context.Context, err error, attempt
 		// Probe also failed (rate limited). Fall back to the tracker's cached
 		// ResetAt so we still wait for the actual reset rather than using the
 		// short exponential fallback.
-		if entry, _, trackerErr := c.tracker.Get(c.trackerUser); trackerErr == nil && entry != nil && entry.ResetAt > 0 {
+		if entry, _, trackerErr := c.tracker.Get(c.trackerUser, ResourceGraphQL); trackerErr == nil && entry != nil && entry.ResetAt > 0 {
 			until := time.Duration(entry.ResetAt-time.Now().Unix())*time.Second + 500*time.Millisecond
 			if until > 0 {
 				log.Printf("github: rate limit fully exhausted, probe failed — using cached reset (user=%q), waiting %s",

@@ -11,6 +11,7 @@
  * @see internal/ipc/protocol.go — Go-side protocol definition
  */
 
+import { cloneLogsDir } from "../utils/cloneLayout";
 import { ChildProcess, spawn } from "child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -20,6 +21,7 @@ import { BinaryResolver } from "./BinaryResolver";
 import { getActiveCallSource, setActiveCallSource } from "./callSource";
 import { getGitHubAuthToken, getGitHubAuthTokens } from "../utils/nightgaugeConfig";
 import { SecretStorageService, SECRET_KEYS } from "./SecretStorageService";
+import { whenLicenseReconciled } from "./licenseKeychainBridge";
 import { TokenStorage } from "../platform/TokenStorage";
 import { PlatformCredentialBridge } from "../platform/PlatformCredentialBridge";
 import { redactSecrets } from "../utils/redaction";
@@ -244,6 +246,19 @@ export interface BoardItem {
   /** GitHub author_association (OWNER, MEMBER, COLLABORATOR, NONE, ...). Used
    * by the autonomous pipeline's author-trust gate (#270). */
   authorAssociation?: string;
+  /**
+   * Relationship COUNTS, set by the summary read (`board.listOpen`). On such an
+   * item `blockedBy`, `blocking` and `subIssues` were not read: absent means
+   * "not asked". `blockedByOpen` counts OPEN blockers only.
+   */
+  relationSummary?: {
+    blockedByOpen: number;
+    blockedByTotal: number;
+    blockingOpen: number;
+    blockingTotal: number;
+    subIssuesTotal: number;
+    subIssuesCompleted: number;
+  };
 }
 
 /**
@@ -1606,7 +1621,7 @@ export interface KnowledgeMetricsResult {
  *
  * Mirrors `internal/ipc.RecordStageExitResult`. `recorded` is true when the
  * Go-side `WriteStageExitRecord` appended a JSONL line to today's
- * `.nightgauge/pipeline/exit-records/<UTC-day>.jsonl` file. False
+ * `pipelineStateDir(root)/exit-records/<UTC-day>.jsonl` file. False
  * results are reserved for forward-compat — current implementation either
  * returns `true` or surfaces an error via the IPC envelope.
  */
@@ -1791,9 +1806,10 @@ export abstract class IpcClientBase implements vscode.Disposable {
     }
 
     // Forward platform config to Go binary via env vars (Issue #XXXX)
-    // The Go binary reads NIGHTGAUGE_PLATFORM_URL, NIGHTGAUGE_API_KEY,
-    // and NIGHTGAUGE_LICENSE_KEY as defaults for its --platform-url, --api-key,
-    // and --license-key flags. Without these, platformClient stays nil and all
+    // The Go binary reads NIGHTGAUGE_PLATFORM_URL as the default for its
+    // --platform-url flag, and NIGHTGAUGE_API_KEY and NIGHTGAUGE_LICENSE_KEY
+    // from the environment only (no flag: ADR-024 § 5 keeps credentials off
+    // argv). Without these, platformClient stays nil and all
     // platform.* IPC methods return "platform client not configured".
     this.forwardPlatformEnv(env);
 
@@ -2412,6 +2428,9 @@ export abstract class IpcClientBase implements vscode.Disposable {
     }
     const svc = SecretStorageService.getInstance();
     if (!svc) return;
+    // Startup reconciliation may drop a SecretStorage key that is stale
+    // against the CLI's keychain entry (#2027); never hand the daemon one.
+    await whenLicenseReconciled();
     const key = await svc.getSecret(SECRET_KEYS.platformLicenseKey);
     if (key) {
       this.resolvedLicenseKey = key;
@@ -2600,21 +2619,21 @@ export abstract class IpcClientBase implements vscode.Disposable {
 
   /**
    * Write a log line to the persistent IPC log file.
-   * The file is created lazily in .nightgauge/logs/ipc-client.log
+   * The file is created lazily in cloneLogsDir(root)/ipc-client.log
    * and survives extension reloads / output channel disposal.
    */
   private writeToLogFile(line: string): void {
     if (!this.logFileStream && this.workspaceRoot) {
       try {
         // Skip persistent logging in uninitialized repos. Creating
-        // .nightgauge/logs/ here would re-spawn the scaffolding we
+        // cloneLogsDir(root)/ here would re-spawn the scaffolding we
         // intentionally avoid before /nightgauge:repo-init has run —
         // the output channel still captures the same content.
         const configPath = path.join(this.workspaceRoot, ".nightgauge", "config.yaml");
         if (!fs.existsSync(configPath)) {
           return;
         }
-        const logDir = path.join(this.workspaceRoot, ".nightgauge", "logs");
+        const logDir = cloneLogsDir(this.workspaceRoot);
         fs.mkdirSync(logDir, { recursive: true });
         const logPath = path.join(logDir, "ipc-client.log");
 

@@ -42,7 +42,7 @@ func TestWorkflowQuotaState_NoSignals(t *testing.T) {
 func TestWorkflowQuotaState_HealthyBucket(t *testing.T) {
 	tracker := gh.NewSharedRateLimitTracker(filepath.Join(t.TempDir(), "rate-limit.json"))
 	reset := time.Now().Add(30 * time.Minute).Unix()
-	if err := tracker.Set("", &gh.RateLimitInfo{Remaining: 4200, Limit: 5000, ResetAt: reset}); err != nil {
+	if err := tracker.Set("", gh.ResourceCore, &gh.RateLimitInfo{Remaining: 4200, Limit: 5000, ResetAt: reset}); err != nil {
 		t.Fatalf("seed tracker: %v", err)
 	}
 	s := NewServer(gh.NewClientWithToken("t"), WithRateLimitTracker(tracker))
@@ -68,7 +68,7 @@ func TestWorkflowQuotaState_HealthyBucket(t *testing.T) {
 func TestWorkflowQuotaState_DepletedBucketGatesFanout(t *testing.T) {
 	tracker := gh.NewSharedRateLimitTracker(filepath.Join(t.TempDir(), "rate-limit.json"))
 	reset := time.Now().Add(20 * time.Minute).Unix()
-	if err := tracker.Set("", &gh.RateLimitInfo{Remaining: 0, Limit: 5000, ResetAt: reset}); err != nil {
+	if err := tracker.Set("", gh.ResourceCore, &gh.RateLimitInfo{Remaining: 0, Limit: 5000, ResetAt: reset}); err != nil {
 		t.Fatalf("seed tracker: %v", err)
 	}
 	s := NewServer(gh.NewClientWithToken("t"), WithRateLimitTracker(tracker))

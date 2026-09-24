@@ -81,53 +81,122 @@ export const EVAL_SKILLS = [...PIPELINE_SKILLS, "check-triage"] as const;
 // ---------------------------------------------------------------------------
 
 /**
+ * Where a text/regex/JSON assertion looks. Absent → the whole output.
+ *
+ * `last_fenced_block` → only the body of the LAST fenced code block in the
+ * output (optionally the last one whose info-string language is in `lang`).
+ * This is how a scenario checks the model's actual decision rather than its
+ * prose: the prompt asks it to end with the command(s) it would run in a
+ * ```bash block, or with a small decision object in a ```json block, and the
+ * forbidden-behaviour assertion reads only that block. Prose may then name the
+ * forbidden thing freely to reject it. A missing block (or, for JSON
+ * assertions, an unparseable one) FAILS the assertion — fail closed — for
+ * negative assertions too.
+ */
+const ScopeFields = {
+  scope: z.literal("last_fenced_block").optional(),
+  /** Info-string language(s) the block must carry, e.g. "bash" or ["bash","sh"]. Case-insensitive. */
+  lang: z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]).optional(),
+  /**
+   * Strip unquoted shell `#` comments from the scoped block before matching,
+   * so `gh pr merge --squash  # never --admin` checks only what would run.
+   */
+  strip_comments: z.boolean().optional(),
+};
+
+/**
+ * JavaScript regex flags. `y` (sticky) is rejected: it anchors at lastIndex 0,
+ * silently turning a "matches anywhere" assertion into "matches at the start".
+ */
+const RegexFlags = z
+  .string()
+  .regex(/^[dgimsuv]*$/, 'regex flags may only use "dgimsuv" (sticky "y" is rejected)');
+
+/**
  * Deterministic checks against a model's output. Each assertion is a
  * discriminated-union member keyed by `type`. Assertions are intentionally
  * coarse (contract-shape checks) so they tolerate phrasing variation while
  * still catching documented failure modes.
  */
-export const EvalAssertionSchema = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("contains"),
-    /** Substring that MUST appear in the output. */
-    value: z.string().min(1),
-    /** Case-insensitive match (default false). */
-    ignore_case: z.boolean().optional(),
-    /** Human-readable description of what this guards. */
-    description: z.string().optional(),
-  }),
-  z.object({
-    type: z.literal("not_contains"),
-    /** Substring that MUST NOT appear in the output. */
-    value: z.string().min(1),
-    ignore_case: z.boolean().optional(),
-    description: z.string().optional(),
-  }),
-  z.object({
-    type: z.literal("matches_regex"),
-    /** JavaScript regex source the output MUST match. */
-    pattern: z.string().min(1),
-    /** Regex flags (e.g. "i", "m", "s"). */
-    flags: z.string().optional(),
-    description: z.string().optional(),
-  }),
-  z.object({
-    type: z.literal("json_path_exists"),
-    /**
-     * Dot/bracket path into a JSON object parsed from the output. Supports
-     * `a.b.c` and `a.b[0].c`. The assertion passes if the path resolves to a
-     * value that is not `undefined`.
-     */
-    path: z.string().min(1),
-    description: z.string().optional(),
-  }),
-  z.object({
-    type: z.literal("exit_code"),
-    /** Expected process exit code (live mode only; mock fixtures supply it). */
-    value: z.number().int(),
-    description: z.string().optional(),
-  }),
-]);
+export const EvalAssertionSchema = z
+  .discriminatedUnion("type", [
+    z.object({
+      type: z.literal("contains"),
+      /** Substring that MUST appear in the output. */
+      value: z.string().min(1),
+      /** Case-insensitive match (default false). */
+      ignore_case: z.boolean().optional(),
+      /** Human-readable description of what this guards. */
+      description: z.string().optional(),
+      ...ScopeFields,
+    }),
+    z.object({
+      type: z.literal("not_contains"),
+      /** Substring that MUST NOT appear in the output. */
+      value: z.string().min(1),
+      ignore_case: z.boolean().optional(),
+      description: z.string().optional(),
+      ...ScopeFields,
+    }),
+    z.object({
+      type: z.literal("matches_regex"),
+      /** JavaScript regex source the output MUST match. */
+      pattern: z.string().min(1),
+      /** Regex flags (e.g. "i", "m", "s"). */
+      flags: RegexFlags.optional(),
+      description: z.string().optional(),
+      ...ScopeFields,
+    }),
+    z.object({
+      type: z.literal("not_matches_regex"),
+      /**
+       * JavaScript regex source the output MUST NOT match. To forbid a
+       * behaviour, scope it to the structured part of the answer
+       * (`scope: "last_fenced_block"`) so a correct answer whose prose names
+       * the forbidden thing to reject it still passes.
+       */
+      pattern: z.string().min(1),
+      flags: RegexFlags.optional(),
+      description: z.string().optional(),
+      ...ScopeFields,
+    }),
+    z.object({
+      type: z.literal("json_path_exists"),
+      /**
+       * Dot/bracket path into a JSON object parsed from the output. Supports
+       * `a.b.c` and `a.b[0].c`. The assertion passes if the path resolves to a
+       * value that is not `undefined`. Unscoped, the first balanced JSON in
+       * the output is used; scoped, the whole block body must parse.
+       */
+      path: z.string().min(1),
+      description: z.string().optional(),
+      ...ScopeFields,
+    }),
+    z.object({
+      type: z.literal("json_path_equals"),
+      /** Dot/bracket path, as for `json_path_exists`. */
+      path: z.string().min(1),
+      /** The JSON scalar the path MUST resolve to (strict equality, no coercion). */
+      value: z.union([z.string(), z.number(), z.boolean(), z.null()]),
+      description: z.string().optional(),
+      ...ScopeFields,
+    }),
+    z.object({
+      type: z.literal("exit_code"),
+      /** Expected process exit code (live mode only; mock fixtures supply it). */
+      value: z.number().int(),
+      description: z.string().optional(),
+    }),
+  ])
+  .superRefine((a, ctx) => {
+    if (a.type === "exit_code" || a.scope !== undefined) return;
+    if (a.lang !== undefined || a.strip_comments !== undefined) {
+      ctx.addIssue({
+        code: "custom",
+        message: '"lang" and "strip_comments" require scope: "last_fenced_block"',
+      });
+    }
+  });
 
 export type EvalAssertion = z.infer<typeof EvalAssertionSchema>;
 export type EvalAssertionType = EvalAssertion["type"];

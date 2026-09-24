@@ -16,7 +16,11 @@ import {
   type EnvelopeRung,
 } from "../../src/eval/selectionQuery.js";
 import { TIER_BANDS, TIER_BANDS_STRONGEST_FIRST, isTierBand } from "../../src/eval/tierBands.js";
-import { providerFor, transportForAdapter } from "../../src/eval/modelRegistry.js";
+import {
+  providerFor,
+  transportForAdapter,
+  getModelDescriptor,
+} from "../../src/eval/modelRegistry.js";
 
 describe("tier band authority", () => {
   it("declares the one ascending order and derives strongest-first from it", () => {
@@ -34,25 +38,33 @@ describe("tier band authority", () => {
 describe("candidateLadder — anthropic (rungs span models)", () => {
   const ladder = candidateLadder("anthropic");
 
+  // Model id, declared effort and declared thinking are resolved through the
+  // registry rather than pinned — a pinned id/effort pair is what let this
+  // ladder drift behind a band rotation unnoticed (see 31b5cbe9, and the Go
+  // twin TestCandidateLadderAnthropicSpansModels).
+  const bands = ["fable", "opus", "sonnet", "haiku"] as const;
+  const wantRungs: EnvelopeRung[] = bands.map((band) => {
+    const desc = getModelDescriptor(band, "anthropic");
+    if (!desc) throw new Error(`registry has no anthropic model for band ${band}`);
+    return {
+      band,
+      modelId: desc.id,
+      effort: desc.behavior?.effort_default as EnvelopeRung["effort"],
+      thinking: desc.behavior?.thinking_default,
+    };
+  });
+
   it("derives one rung per band, strongest first, from registry membership", () => {
-    expect(ladder.map((r) => [r.band, r.modelId])).toEqual([
-      ["fable", "claude-fable-5-1"],
-      ["opus", "claude-opus-5"],
-      ["sonnet", "claude-sonnet-5"],
-      ["haiku", "claude-haiku-4-5-20251001"],
-    ]);
+    expect(ladder.map((r) => [r.band, r.modelId])).toEqual(
+      wantRungs.map((r) => [r.band, r.modelId])
+    );
   });
 
   it("carries each single-band model's DECLARED default effort and thinking — absent when undeclared", () => {
     // The FULL four-rung envelope, mirroring the Go twin
     // (TestCandidateLadderAnthropicSpansModels) rung for rung — the twin
     // pins must be symmetric, not spot-checked on one side.
-    expect(ladder).toEqual<EnvelopeRung[]>([
-      { band: "fable", modelId: "claude-fable-5-1", effort: "high", thinking: "on" },
-      { band: "opus", modelId: "claude-opus-5", effort: "high", thinking: "on" },
-      { band: "sonnet", modelId: "claude-sonnet-5", effort: "high", thinking: "on" },
-      { band: "haiku", modelId: "claude-haiku-4-5-20251001", effort: undefined, thinking: "off" },
-    ]);
+    expect(ladder).toEqual<EnvelopeRung[]>(wantRungs);
   });
 });
 

@@ -1,0 +1,27 @@
+{
+  "_comment": "Golden fixture (#1804): the sorted set of `env` keys `nightgauge opencode config --json` prints for the reference machine config (openCodeVerbMachineConfig, lmstudio/qwen/qwen3.8-27b) and a bare `--stage feature-dev --worktree <repo> --run-id <id>` invocation, with no operator-install-risk directory present. TestOpenCodeConfigVerbEnvKeysMatchGoldenFixture (cmd/nightgauge/opencode_test.go) regenerates this list from the real verb and fails the Go build if it drifts; tests/cli/childEnv.test.ts reads this same file and asserts every key is accepted by the TS allowlist (isOpenCodeRunEnvAccepted), so a variable InstallNightgaugePlugin or OpenCodeIsolationEnv starts setting cannot silently ship without the TS side admitting it. NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK is deliberately absent here (it only appears when an operator's OpenCode install directory is at risk) and is covered by its own dedicated accept-but-withhold tests instead.",
+  "keys": [
+    "GH_CONFIG_DIR",
+    "GOCACHE",
+    "HOME",
+    "NIGHTGAUGE_CONFIG_HOME",
+    "NIGHTGAUGE_OPENCODE_PLUGIN_NONCE",
+    "NIGHTGAUGE_OPENCODE_PLUGIN_PATH",
+    "NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL",
+    "NIGHTGAUGE_STATE_HOME",
+    "OPENCODE_CONFIG_CONTENT",
+    "OPENCODE_DISABLE_AUTOUPDATE",
+    "OPENCODE_DISABLE_CLAUDE_CODE_PROMPT",
+    "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS",
+    "OPENCODE_DISABLE_DEFAULT_PLUGINS",
+    "OPENCODE_DISABLE_EXTERNAL_SKILLS",
+    "OPENCODE_DISABLE_LSP_DOWNLOAD",
+    "OPENCODE_DISABLE_MODELS_FETCH",
+    "OPENCODE_DISABLE_PROJECT_CONFIG",
+    "OPENCODE_DISABLE_SHARE",
+    "XDG_CACHE_HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_STATE_HOME"
+  ]
+}

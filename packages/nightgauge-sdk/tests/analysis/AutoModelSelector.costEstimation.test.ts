@@ -11,7 +11,7 @@ import {
   type IssueMetadata,
   type PipelineCostEstimate,
 } from "../../src/analysis/AutoModelSelector.js";
-import { providerFor } from "../../src/eval/modelRegistry.js";
+import { providerFor, ratesForProviderTier } from "../../src/eval/modelRegistry.js";
 
 function makeMetadata(overrides: Partial<IssueMetadata> = {}): IssueMetadata {
   return {
@@ -81,7 +81,7 @@ describe("AutoModelSelector.estimatePipelineCost", () => {
     expect(result.totalEstimatedCost).toBeLessThanOrEqual(result.comparisonAllSonnet);
   });
 
-  it("L/XL issues may cost more than all-sonnet (opus premium)", () => {
+  it("L/XL issues route heavy stages to opus, priced at an opus premium over sonnet", () => {
     const result = selector.estimatePipelineCost(
       makeMetadata({
         labels: ["size:XL", "type:feature"],
@@ -89,8 +89,21 @@ describe("AutoModelSelector.estimatePipelineCost", () => {
       }),
       { provider: "anthropic" }
     );
-    // XL uses opus for planning/dev which is more expensive than sonnet
-    expect(result.totalEstimatedCost).toBeGreaterThan(result.comparisonAllSonnet);
+    // XL uses opus for planning/dev. Previously this asserted the PIPELINE
+    // TOTAL exceeds comparisonAllSonnet, but that total also nets in
+    // unrelated per-stage downgrades to haiku (pr-create), which shrink the
+    // total independently of the opus premium. Opus 5.5 prices at a smaller
+    // premium over Sonnet than Opus 5 did (model-registry.json), and that
+    // narrower premium no longer outweighs the haiku savings elsewhere in an
+    // XL pipeline — the aggregate comparison flips sign even though opus is
+    // still, and must remain, pricier than sonnet per token. Asserting the
+    // per-token premium directly isolates the actual claim from that mix.
+    const opusStages = result.stages.filter((s) => s.model === "opus" && !s.skipped);
+    expect(opusStages.length).toBeGreaterThan(0);
+    const opusRates = ratesForProviderTier("anthropic", "opus")!;
+    const sonnetRates = ratesForProviderTier("anthropic", "sonnet")!;
+    expect(opusRates.inputPerMillion).toBeGreaterThan(sonnetRates.inputPerMillion);
+    expect(opusRates.outputPerMillion).toBeGreaterThan(sonnetRates.outputPerMillion);
   });
 
   it("includes complexity and timestamp", () => {

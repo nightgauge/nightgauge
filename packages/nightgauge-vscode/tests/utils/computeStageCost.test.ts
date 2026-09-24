@@ -13,7 +13,11 @@
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { getModelDescriptor } from "@nightgauge/sdk";
-import { computeStageCost, type StageCostTokens } from "../../src/utils/computeStageCost";
+import {
+  computeStageCost,
+  isLocalExecution,
+  type StageCostTokens,
+} from "../../src/utils/computeStageCost";
 
 const sampleTokens: StageCostTokens = {
   input: 100_000,
@@ -387,6 +391,76 @@ describe("computeStageCost", () => {
       // inference that costs the user nothing — so the local short-circuit runs
       // BEFORE any id lookup.
       expect(computeStageCost("ollama", "claude-opus-5", sampleTokens)).toEqual({
+        cost_usd: 0,
+        source: "unknown",
+      });
+    });
+  });
+
+  describe("opencode — locality and price follow the model's provider (#1657, ADR-022 § 3)", () => {
+    it("a local provider is a stamped zero, even for a model spelled like a registry id", () => {
+      // `claude-sonnet-5` IS a registry id, so keying locality on the adapter
+      // name (opencode is not lm-studio/ollama) would price this local run at
+      // Anthropic rates.
+      expect(computeStageCost("opencode", "lmstudio/claude-sonnet-5", sampleTokens)).toEqual({
+        cost_usd: 0,
+        source: "computed",
+      });
+      expect(computeStageCost("opencode", "ollama/claude-opus-5", sampleTokens)).toEqual({
+        cost_usd: 0,
+        source: "computed",
+      });
+    });
+
+    it("a local model in its recorded, normalized form is local too", () => {
+      expect(isLocalExecution("opencode", "lm-studio/qwen/qwen3.8-27b")).toBe(true);
+      expect(isLocalExecution("opencode", "lmstudio/qwen/qwen3.8-27b")).toBe(true);
+      expect(isLocalExecution("opencode", "ollama/qwen3-coder:30b")).toBe(true);
+      expect(isLocalExecution("opencode", "lm-studio/")).toBe(false);
+      expect(isLocalExecution("opencode", "anthropic/claude-sonnet-5")).toBe(false);
+      expect(isLocalExecution("codex", "lm-studio/qwen")).toBe(false);
+      expect(computeStageCost("opencode", "lm-studio/claude-sonnet-5", sampleTokens)).toEqual({
+        cost_usd: 0,
+        source: "computed",
+      });
+    });
+
+    it("a registry id under a provider that does not serve it is unstamped", () => {
+      expect(computeStageCost("opencode", "openrouter/claude-sonnet-5", sampleTokens)).toEqual({
+        cost_usd: 0,
+        source: "unknown",
+      });
+    });
+
+    it("a local provider ignores the stream's own cost figure", () => {
+      expect(computeStageCost("opencode", "lmstudio/qwen/qwen3.8-27b", sampleTokens, 1.25)).toEqual(
+        { cost_usd: 0, source: "computed" }
+      );
+    });
+
+    it("anthropic/claude-sonnet-5 costs what the claude adapter's claude-sonnet-5 stage costs", () => {
+      const viaClaude = computeStageCost("claude", "claude-sonnet-5", sampleTokens);
+      expect(viaClaude.source).toBe("computed");
+      expect(viaClaude.cost_usd).toBeGreaterThan(0);
+      expect(computeStageCost("opencode", "anthropic/claude-sonnet-5", sampleTokens)).toEqual(
+        viaClaude
+      );
+    });
+
+    it("a hosted run the registry cannot price is unstamped, not a stamped zero", () => {
+      // The run reported cost 0: OpenCode's catalog has no price for it.
+      for (const model of ["openai/gpt-9-preview", "openrouter/meta-llama/llama-4"]) {
+        expect(computeStageCost("opencode", model, sampleTokens, 0), model).toEqual({
+          cost_usd: 0,
+          source: "unknown",
+        });
+      }
+    });
+
+    it("never trusts OpenCode's own cost for a hosted model either", () => {
+      const viaCodex = computeStageCost("codex", "gpt-5.5", sampleTokens);
+      expect(computeStageCost("opencode", "openai/gpt-5.5", sampleTokens, 99)).toEqual(viaCodex);
+      expect(computeStageCost("opencode", "openai/gpt-9-preview", sampleTokens, 99)).toEqual({
         cost_usd: 0,
         source: "unknown",
       });

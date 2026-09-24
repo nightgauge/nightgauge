@@ -19,7 +19,7 @@ export const CONTEXT_URI_SCHEME = "nightgauge-context";
  *
  * @example
  * ```typescript
- * const viewer = new ContextFileViewer('/workspace/.nightgauge/pipeline');
+ * const viewer = new ContextFileViewer(pipelineStateDir('/workspace'));
  * context.subscriptions.push(
  *   vscode.workspace.registerTextDocumentContentProvider(
  *     CONTEXT_URI_SCHEME,

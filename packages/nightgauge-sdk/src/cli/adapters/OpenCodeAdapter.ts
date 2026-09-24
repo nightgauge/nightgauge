@@ -9,18 +9,19 @@
  * (childEnv.ts), and the same stream parsing, failure detection, subagent
  * roll-up and cost (opencodeStream.ts).
  *
- * Every spawn runs under a per-run OpenCode config and isolation environment
- * that Nightgauge builds ({@link OpenCodeRunConfigProvider}). The SDK does not
- * build them yet — #1648 wires them from `nightgauge opencode config` — so
- * until a provider is wired the adapter refuses to create a query function
- * and spawns nothing.
+ * Every spawn runs under the per-run OpenCode config, isolation environment,
+ * plugin handshake and vetted binary that `nightgauge opencode config` prints
+ * ({@link OpenCodeRunConfigProvider}, opencodeRunConfig.ts, #1648): the Go
+ * verb is the one authority, and no TypeScript builds any part of the config.
+ * A spawn whose plugin handshake fails is killed and fails the stage
+ * (opencodeHandshake.ts, #1804).
  *
  * @see docs/decisions/022-opencode-multi-provider-adapter.md
  * @see Issue #1637
  */
 
 import type { spawn as nodeSpawn } from "node:child_process";
-import { isAbsolute, resolve } from "node:path";
+import { basename, isAbsolute, relative, resolve } from "node:path";
 
 import type { SDKQueryFunction } from "../../orchestrator/StageExecutor.js";
 import { isLocalProvider, providerFor } from "../../eval/modelRegistry.js";
@@ -37,8 +38,16 @@ import {
   OPENCODE_CONFIG_CONTENT_ENV,
   OPENCODE_DISABLE_FLAGS,
   OPENCODE_ISOLATION_XDG,
-  isOpenCodeRunEnvName,
+  OPENCODE_PLUGIN_NONCE_ENV,
+  OPENCODE_PLUGIN_PATH_ENV,
+  OPENCODE_PLUGIN_SENTINEL_ENV,
+  isOpenCodeRunEnvAccepted,
 } from "./childEnv.js";
+import {
+  createOpenCodeRunConfigProvider,
+  createOpenCodeRunRootCleaner,
+  type OpenCodeRunRootCleaner,
+} from "./opencodeRunConfig.js";
 import {
   OPENCODE_PLATFORM_PROVIDERS,
   openCodeProviderEnv,
@@ -48,7 +57,17 @@ import { createCliQueryFn } from "./cliQueryHelper.js";
 
 const ADAPTER_NAME = "OpenCode";
 const OPENCODE_DOCS_URL = "https://opencode.ai/docs/cli/";
-const OPENCODE_INSTALL_CMD = "npm install -g opencode-ai";
+/**
+ * The remediation for a missing or refused opencode: the managed install of
+ * the max-tested build and its pin, as the Go refusals word it
+ * (`OpenCodeManagedInstall` in opencode_preflight.go). A global install of
+ * the latest build would be refused again by the version policy once it is
+ * newer than max-tested.
+ */
+const OPENCODE_INSTALL_CMD =
+  `npm i --prefix ~/.nightgauge/tools/opencode opencode-ai@${ADAPTER_COMPAT.opencode.maxTested}, ` +
+  "then pin it with opencode.binary: ~/.nightgauge/tools/opencode/node_modules/.bin/opencode " +
+  "(as an absolute path) in ~/.nightgauge/config.yaml";
 const ADR = "docs/decisions/022-opencode-multi-provider-adapter.md";
 
 /**
@@ -224,6 +243,32 @@ export interface OpenCodeRunConfig {
   readonly env: Readonly<Record<string, string>>;
   /** The run's private root (`run_dir`), where the post-run helpers run. */
   readonly runDir: string;
+  /**
+   * The `plugin_version` the Nightgauge plugin's handshake sentinel must
+   * carry (`plugin_version`); the nonce and the sentinel path are in `env`.
+   */
+  readonly pluginVersion: string;
+  /**
+   * The absolute path of the opencode binary the verb's version policy vetted
+   * (`binary`), spawned instead of whatever `opencode` PATH finds.
+   */
+  readonly binary: string;
+  /**
+   * The inherited variables the spawn must not get (`env_withhold`): every
+   * name listed in `names`, and every name starting with one of `prefixes`
+   * that is not listed in `keep` (#1657).
+   */
+  readonly envWithhold: {
+    readonly prefixes: readonly string[];
+    readonly names: readonly string[];
+    readonly keep?: readonly string[];
+  };
+  /**
+   * The run identity `runDir` is named by (`run_id`): the query's own run's,
+   * or one the verb minted for this query alone, whose root the query
+   * deletes when it ends.
+   */
+  readonly runId: string;
 }
 
 /** What the config is built for. */
@@ -232,31 +277,31 @@ export interface OpenCodeRunConfigRequest {
   readonly model: string;
   /** The absolute worktree the stage runs in. */
   readonly worktree: string;
-  /** The pipeline stage, when known. */
+  /** The pipeline stage; the verb needs it. */
   readonly stage?: string;
+  /** The repository the stage works on, as `owner/name`: its MCP servers come from its default branch. */
+  readonly repo?: string;
+  /**
+   * The stage's turn budget (the query's `maxTurns`), the verb's --max-turns:
+   * the steps cap of the build agent and each subagent.
+   */
+  readonly maxTurns?: number;
+  /**
+   * The pipeline run's identity (the query's `runId`), the verb's --run-id:
+   * the stages of one run share its per-run root, as on the Go path.
+   */
+  readonly runId?: string;
+  /**
+   * The directory of the stage's SKILL.md, as the SDK resolved it for the
+   * stage's prompt (loadStageSkill); the verb's --skills-root comes from it.
+   */
+  readonly skillDir?: string;
 }
 
-/** Builds a stage's per-run config and isolation environment. #1648 supplies the real one. */
+/** Builds a stage's per-run config and isolation environment (opencodeRunConfig.ts). */
 export type OpenCodeRunConfigProvider = (
   request: OpenCodeRunConfigRequest
 ) => Promise<OpenCodeRunConfig>;
-
-/**
- * The provider in place until #1648 wires the SDK to `nightgauge opencode
- * config`: it refuses, so the adapter spawns nothing without the per-run
- * config and the isolation environment that keep OpenCode out of the
- * operator's own config, logins and sessions.
- */
-export const unwiredOpenCodeRunConfigProvider: OpenCodeRunConfigProvider = async () => {
-  throw new AdapterError(
-    "the per-run OpenCode config and isolation environment are not wired into the SDK yet " +
-      "(#1648, the SDK side of `nightgauge opencode config`): without them an opencode spawn would " +
-      "read the operator's own OpenCode config, logins and sessions, so the SDK opencode adapter " +
-      `spawns nothing. Run OpenCode stages through the Go pipeline until #1648 lands. See ${ADR} § 8`,
-    "CONFIG_INVALID",
-    ADAPTER_NAME
-  );
-};
 
 function invalidRunConfig(reason: string): never {
   throw new AdapterError(
@@ -285,7 +330,7 @@ function checkRunConfig(config: unknown): OpenCodeRunConfig {
   if (typeof c.env !== "object" || c.env === null) invalidRunConfig("it has no environment");
   const env = c.env as Record<string, unknown>;
   for (const [name, value] of Object.entries(env)) {
-    if (!isOpenCodeRunEnvName(name))
+    if (!isOpenCodeRunEnvAccepted(name))
       invalidRunConfig(`it sets ${name}, which is not a run variable`);
     if (typeof value !== "string") invalidRunConfig(`its ${name} is not a string`);
   }
@@ -298,13 +343,71 @@ function checkRunConfig(config: unknown): OpenCodeRunConfig {
   for (const name of OPENCODE_DISABLE_FLAGS) {
     if (env[name] !== "1") invalidRunConfig(`it does not set ${name}=1`);
   }
+  // NIGHTGAUGE_OPENCODE_PLUGIN_PATH is `run.PluginDir`-rooted
+  // (`filepath.Join(root, "config", "opencode", "nightgauge-plugin")`,
+  // opencode_config.go), and NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL is
+  // `opencodeplugin.SentinelPath`'s `runDir` branch — both always under the
+  // run's own root for a config this provider builds. The plugin's own init
+  // writes the sentinel file verbatim at this path (fs.writeFileSync,
+  // plugin/nightgauge.js), truncating whatever is already there, so an
+  // out-of-root or relative value here is refused rather than trusted.
+  for (const name of [OPENCODE_PLUGIN_PATH_ENV, OPENCODE_PLUGIN_SENTINEL_ENV]) {
+    const v = env[name];
+    if (v === undefined) continue;
+    const rel = relative(c.runDir!, v as string);
+    if (!isAbsolute(v as string) || rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
+      invalidRunConfig(`its ${name} is not an absolute path in the run's root`);
+    }
+  }
   if (
     env[OPENCODE_CONFIG_CONTENT_ENV] !== undefined &&
     env[OPENCODE_CONFIG_CONTENT_ENV] !== c.configContent
   ) {
     invalidRunConfig(`its env ${OPENCODE_CONFIG_CONTENT_ENV} differs from its config`);
   }
-  return { configContent: c.configContent!, env: env as Record<string, string>, runDir: c.runDir! };
+  // The plugin handshake (#1804): without it a spawn could run with the
+  // careful-gate plugin never loaded and nothing would notice.
+  for (const name of [
+    OPENCODE_PLUGIN_PATH_ENV,
+    OPENCODE_PLUGIN_NONCE_ENV,
+    OPENCODE_PLUGIN_SENTINEL_ENV,
+  ]) {
+    if (typeof env[name] !== "string" || env[name] === "") {
+      invalidRunConfig(`it sets no ${name}, so the plugin handshake cannot be verified`);
+    }
+  }
+  if (typeof c.pluginVersion !== "string" || c.pluginVersion === "") {
+    invalidRunConfig("it names no plugin version, so the plugin handshake cannot be verified");
+  }
+  if (typeof c.binary !== "string" || !isAbsolute(c.binary)) {
+    invalidRunConfig("its opencode binary is not an absolute path");
+  }
+  if (typeof c.runId !== "string" || c.runId === "" || basename(c.runDir!) !== c.runId) {
+    invalidRunConfig("its run id does not name its run directory");
+  }
+  const withhold = c.envWithhold;
+  if (
+    withhold === undefined ||
+    typeof withhold !== "object" ||
+    withhold === null ||
+    !Array.isArray(withhold.prefixes) ||
+    !Array.isArray(withhold.names) ||
+    (withhold.keep !== undefined && !Array.isArray(withhold.keep)) ||
+    ![...withhold.prefixes, ...withhold.names, ...(withhold.keep ?? [])].every(
+      (n) => typeof n === "string"
+    )
+  ) {
+    invalidRunConfig("its withheld-variable set is not lists of names");
+  }
+  return {
+    configContent: c.configContent!,
+    env: env as Record<string, string>,
+    runDir: c.runDir!,
+    pluginVersion: c.pluginVersion!,
+    binary: c.binary,
+    envWithhold: withhold,
+    runId: c.runId,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -313,18 +416,26 @@ function checkRunConfig(config: unknown): OpenCodeRunConfig {
 
 /** What an {@link OpenCodeAdapter} is built from; every field has a production default. */
 export interface OpenCodeAdapterOptions {
-  /** Builds each stage's per-run config; the default refuses until #1648. */
+  /**
+   * Builds each stage's per-run config; default: `nightgauge opencode config`
+   * (createOpenCodeRunConfigProvider) run in {@link env}.
+   */
   runConfigProvider?: OpenCodeRunConfigProvider;
   /** The environment the adapter reads and curates for the child; default `process.env`. */
   env?: NodeJS.ProcessEnv;
   /**
    * The dispatched `<provider>/<model>`; default NIGHTGAUGE_MODEL. A tier band
-   * is refused: resolving one against the configured `opencode.model` is
-   * #1648's config wiring.
+   * is refused. The same model is passed to `nightgauge opencode config` as
+   * --model, so the per-run config and `-m` always name the same model.
    */
   model?: string;
   /** Spawns processes; default `node:child_process` spawn. */
   spawn?: typeof nodeSpawn;
+  /**
+   * Deletes a per-run root the verb minted for one query; default
+   * `nightgauge opencode cleanup` run in {@link env}.
+   */
+  runRootCleaner?: OpenCodeRunRootCleaner;
 }
 
 export class OpenCodeAdapter implements ICliAdapter {
@@ -338,10 +449,13 @@ export class OpenCodeAdapter implements ICliAdapter {
   private readonly env: NodeJS.ProcessEnv;
   private readonly model?: string;
   private readonly spawn?: typeof nodeSpawn;
+  private readonly runRootCleaner: OpenCodeRunRootCleaner;
 
   constructor(options: OpenCodeAdapterOptions = {}) {
-    this.runConfigProvider = options.runConfigProvider ?? unwiredOpenCodeRunConfigProvider;
     this.env = options.env ?? process.env;
+    this.runConfigProvider =
+      options.runConfigProvider ?? createOpenCodeRunConfigProvider({ env: this.env });
+    this.runRootCleaner = options.runRootCleaner ?? createOpenCodeRunRootCleaner({ env: this.env });
     this.model = options.model;
     this.spawn = options.spawn;
   }
@@ -400,10 +514,11 @@ export class OpenCodeAdapter implements ICliAdapter {
   }
 
   /**
-   * Check the model and its credentials, then build the stage's per-run config
-   * through the run config provider — which refuses until #1648 wires one — and
-   * return the query function. Nothing is spawned here, and nothing at all when
-   * a check refuses.
+   * Check the model and its credentials and return the query function. Each
+   * query first obtains its stage's per-run config through the run config
+   * provider (`nightgauge opencode config` by default), with the query's
+   * stage, `maxTurns` and `runId`; no opencode process is spawned when a check
+   * or the provider refuses.
    */
   async createQueryFunction(options?: QueryFunctionOptions): Promise<SDKQueryFunction> {
     const model = this.dispatchModel();
@@ -420,13 +535,28 @@ export class OpenCodeAdapter implements ICliAdapter {
     openCodeCredentialRefusal(model, this.env);
     const worktree = resolve(options?.cwd ?? process.cwd());
     const stage = options?.stage;
-    const runConfig = checkRunConfig(await this.runConfigProvider({ model, worktree, stage }));
+    const repo = this.env.NIGHTGAUGE_TARGET_REPO || this.env.NIGHTGAUGE_REPO || undefined;
+    const provider = this.runConfigProvider;
     return createCliQueryFn({
       command: this.cliCommand,
       args: buildOpenCodeArgv(model, worktree),
       adapter: this.name,
       promptDelivery: "stdin",
-      openCode: { model, worktree, stage, runConfig, parentEnv: this.env, spawn: this.spawn },
+      openCode: {
+        model,
+        worktree,
+        stage,
+        // One run config per query: the stage, its turn budget and the run
+        // identity are the query's, so a query function shared by every stage
+        // of a pipeline (run.ts) still gets each stage its own config.
+        runConfig: async (request) =>
+          checkRunConfig(await provider({ ...request, ...(repo && { repo }) })),
+        argv: (dir) => buildOpenCodeArgv(model, dir),
+        cleanRunRoot: this.runRootCleaner,
+        parentEnv: this.env,
+        spawn: this.spawn,
+        onActivity: options?.onActivity,
+      },
     });
   }
 

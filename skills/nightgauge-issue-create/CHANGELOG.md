@@ -6,6 +6,18 @@ documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.25.0] - 2026-09-23
+
+### Added
+
+- **Capacity-aware scope gate** (Phase 2.85). The gate reads
+  `nightgauge size-gate capacity --json` for the repository's target model
+  and refuses an issue whose predicted size exceeds the model's capacity
+  unless it is being decomposed into an epic now; the oversized-scope marker
+  does not override it. Each sub-issue of a capacity-forced decomposition
+  starts with `<!-- nightgauge:capacity-decomposed -->`, and one still over
+  the cap is reported for human decomposition rather than decomposed again.
+
 ## [1.24.0] - 2026-08-29
 
 ### Changed

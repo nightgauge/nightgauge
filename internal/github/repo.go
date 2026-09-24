@@ -5,9 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
-
-	"github.com/shurcooL/graphql"
 
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
 )
@@ -42,8 +41,6 @@ func (c *Client) collaboratorPermission(ctx context.Context, login, owner, repo 
 }
 
 // RepoService is the github adapter's implementation of forge.RepoService.
-// It performs a single GraphQL query equivalent to `gh repo view --json
-// nameWithOwner,owner,name`.
 type RepoService struct {
 	client *Client
 }
@@ -53,67 +50,86 @@ func NewRepoService(client *Client) *RepoService {
 	return &RepoService{client: client}
 }
 
-// RepoMetadata returns the canonical name/owner pair for the named
-// repository. The implementation issues a single repository(owner,name)
-// GraphQL query.
+// RepoMetadata returns the canonical name/owner pair and default branch for
+// the named repository, over REST with conditional requests: `GET
+// /repos/{o}/{r}` plus `GET /repos/{o}/{r}/branches/{default}`. Both carry
+// ETags, so the attention sweep asking every repository every pass pays
+// nothing while neither changes — and the answer survives a daemon restart
+// through the persistent ConditionalStore.
 //
-// **This read is requires-GraphQL. Do not "migrate" it to REST.** It looks
-// like the easiest win in internal/github — four scalar fields, no node ID
-// needed, and `GET /repos/{o}/{r}` is ETag-able — and #849 classified it
-// better-as-REST on exactly that reasoning. A paired probe against one
-// repository, taken at the same moment, settles it the other way
-// (2026-08-26):
-//
-//	zero commits: GraphQL defaultBranchRef=null  isEmpty=true   REST default_branch="main"
-//	one commit:   GraphQL defaultBranchRef=main  isEmpty=false  REST default_branch="main"
-//
-// REST reports a default_branch for a repository that HAS no branch, and
-// reports it identically in both states — the field carries no information
-// about whether the ref exists. That matters because the empty string is a
+// Why TWO requests. REST's `default_branch` names a branch even for a
+// repository that has none — measured on one repository before and after its
+// first commit (2026-08-26): REST said "main" both times, while GraphQL's
+// defaultBranchRef was null until the commit landed. The empty string is a
 // load-bearing signal: attention/sweep.DefaultBranchHealth.Evaluate treats an
-// empty DefaultBranch as "decline to observe", and its own comment explains
-// that guessing a branch name produces a 404 which reads as a producer failing
-// forever. A REST migration silently converts every empty repository into a
-// permanently failing producer.
+// empty DefaultBranch as "decline to observe", because guessing a branch that
+// does not exist produces a 404 that reads as a producer failing forever. So
+// the branch is asked for by name, and a 404 means exactly what a null
+// defaultBranchRef meant: the ref does not exist, DefaultBranch stays "".
+// (`size` and `pushed_at` were checked as cheaper guards and neither is one:
+// `size` is 0 on a repository WITH a commit, and `pushed_at` did not move on
+// push.) The second request used to be the argument against this migration —
+// it doubled a one-point read. Conditional, both are free when unchanged.
 //
-// There is also no cheap REST field to guard it with. `size` is 0 on a repo
-// WITH a commit (verified), so it is not an emptiness test, and `pushed_at` is
-// stamped at creation and did not update on push. The only REST guards are a
-// SECOND call (`/commits` → 409, or `/branches`), which erases the saving that
-// motivated the migration. GraphQL's `isEmpty` is a fact REST does not carry —
-// the same shape as SecurityService.ListOpenAlerts and dependabotUpdate.
-//
-// Pinned by TestRepoMetadata_EmptyRepoHasNoDefaultBranch. See
-// docs/GITHUB_GRAPHQL_SCHEMA.md § Transport Classification.
+// Pinned by TestRepoMetadata_EmptyRepoHasNoDefaultBranch.
 func (r *RepoService) RepoMetadata(ctx context.Context, owner, name string) (*forgetypes.Repo, error) {
 	if owner == "" || name == "" {
 		return nil, fmt.Errorf("repo metadata: owner and name are required")
 	}
-	var q struct {
-		Repository struct {
-			NameWithOwner graphql.String
-			Owner         struct{ Login graphql.String }
-			Name          graphql.String
-			// Null on a repository with no commits, hence the pointer.
-			DefaultBranchRef *struct {
-				Name graphql.String
-			}
-		} `graphql:"repository(owner: $owner, name: $name)"`
+	base := fmt.Sprintf("/repos/%s/%s", url.PathEscape(owner), url.PathEscape(name))
+	type repoReduced struct {
+		FullName      string `json:"fullName"`
+		Owner         string `json:"owner"`
+		Name          string `json:"name"`
+		DefaultBranch string `json:"defaultBranch"`
 	}
-	vars := map[string]interface{}{
-		"owner": graphql.String(owner),
-		"name":  graphql.String(name),
-	}
-	if err := r.client.Query(ctx, &q, vars); err != nil {
+	resp, err := r.client.condGet(ctx, base, "repo-meta/v1", func(body []byte) (any, error) {
+		var raw struct {
+			FullName string `json:"full_name"`
+			Name     string `json:"name"`
+			Owner    struct {
+				Login string `json:"login"`
+			} `json:"owner"`
+			DefaultBranch string `json:"default_branch"`
+		}
+		if err := json.Unmarshal(body, &raw); err != nil {
+			return nil, err
+		}
+		return repoReduced{FullName: raw.FullName, Owner: raw.Owner.Login, Name: raw.Name, DefaultBranch: raw.DefaultBranch}, nil
+	})
+	if err != nil {
 		return nil, fmt.Errorf("repo view %s/%s: %w", owner, name, err)
 	}
-	out := &forgetypes.Repo{
-		NameWithOwner: string(q.Repository.NameWithOwner),
-		Owner:         string(q.Repository.Owner.Login),
-		Name:          string(q.Repository.Name),
+	if resp.Status != http.StatusOK && resp.Status != http.StatusNotModified {
+		return nil, fmt.Errorf("repo view %s/%s: REST %d: %s", owner, name, resp.Status, restErrorSummary(resp.Body))
 	}
-	if ref := q.Repository.DefaultBranchRef; ref != nil {
-		out.DefaultBranch = string(ref.Name)
+	var meta repoReduced
+	if err := json.Unmarshal(resp.Payload, &meta); err != nil {
+		return nil, fmt.Errorf("repo view %s/%s: decode: %w", owner, name, err)
+	}
+	out := &forgetypes.Repo{NameWithOwner: meta.FullName, Owner: meta.Owner, Name: meta.Name}
+	if meta.DefaultBranch == "" {
+		return out, nil
+	}
+	br, err := r.client.condGet(ctx, base+"/branches/"+url.PathEscape(meta.DefaultBranch), "branch-name/v1", func(body []byte) (any, error) {
+		var raw struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(body, &raw); err != nil {
+			return nil, err
+		}
+		return raw.Name, nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("repo view %s/%s: default branch: %w", owner, name, err)
+	}
+	switch br.Status {
+	case http.StatusOK, http.StatusNotModified:
+		out.DefaultBranch = meta.DefaultBranch
+	case http.StatusNotFound:
+		// No such ref: a repository with no commits. DefaultBranch stays "".
+	default:
+		return nil, fmt.Errorf("repo view %s/%s: default branch: REST %d: %s", owner, name, br.Status, restErrorSummary(br.Body))
 	}
 	return out, nil
 }

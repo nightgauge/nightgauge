@@ -10,8 +10,8 @@
 //
 // The notice is deliberately cheap to ignore and impossible to miss twice: it
 // goes to stderr (never stdout, which carries machine-readable output that a
-// stray paragraph would corrupt), and a marker file beneath the account root
-// keeps it to a single appearance per machine.
+// stray paragraph would corrupt), and a marker file in the machine-state root
+// (layout.StateHome, ADR-024 § 8) keeps it to a single appearance per machine.
 package telemetrynotice
 
 import (
@@ -19,13 +19,15 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
-// markerRel is the sentinel recording that this machine has seen the notice.
+// markerName is the sentinel recording that this machine has seen the notice.
 // The version suffix is load-bearing: a future material change to what is
 // collected needs a new marker so the notice is shown again, rather than being
 // suppressed by a file that attests to a different disclosure.
-const markerRel = ".nightgauge/telemetry-notice-v1"
+const markerName = "telemetry-notice-v1"
 
 // Text is the disclosure itself. It states what is happening now, not what
 // might happen, and it leads with the off switch — an operator scanning this
@@ -46,22 +48,26 @@ const Text = `
 └────────────────────────────────────────────────────────────────────────────┘
 `
 
-// Notifier prints the disclosure at most once per account root.
+// Notifier prints the disclosure at most once per state root.
 type Notifier struct{ markerPath string }
 
-// New builds a Notifier rooted at an explicit directory. Tests pass a temp
+// New builds a Notifier whose marker lives in stateRoot. Tests pass a temp
 // directory; production uses ForAccount.
-func New(accountRoot string) *Notifier {
-	return &Notifier{markerPath: filepath.Join(accountRoot, markerRel)}
+func New(stateRoot string) *Notifier {
+	return &Notifier{markerPath: filepath.Join(stateRoot, markerName)}
 }
 
-// ForAccount builds a Notifier beneath the current user's home directory.
+// ForAccount builds a Notifier in the machine-state root. A marker left in
+// the pre-ADR-024 ~/.nightgauge by an earlier release is moved there first, so
+// an upgrade does not show the notice a second time. A move that cannot
+// complete leaves the notice to be shown again at worst, which is not worth
+// failing a command over, so only an unusable state root is an error.
 func ForAccount() (*Notifier, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("resolve home directory: %w", err)
+	path, err := layout.StateFile(markerName)
+	if path == "" {
+		return nil, fmt.Errorf("resolve the telemetry-notice marker: %w", err)
 	}
-	return New(home), nil
+	return &Notifier{markerPath: path}, nil
 }
 
 // alreadyShown reports whether the marker exists. An unreadable marker counts
@@ -96,7 +102,7 @@ func (n *Notifier) MaybePrint(w io.Writer, enabled, explicitlySet bool) (bool, e
 }
 
 func (n *Notifier) recordShown() error {
-	if err := os.MkdirAll(filepath.Dir(n.markerPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(n.markerPath), 0o700); err != nil {
 		return fmt.Errorf("create marker directory: %w", err)
 	}
 	if err := os.WriteFile(n.markerPath, []byte(""), 0o644); err != nil {

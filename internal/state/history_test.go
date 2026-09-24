@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/diagnostics"
+	"github.com/nightgauge/nightgauge/internal/execution/opencodeplugin"
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 )
 
@@ -2009,5 +2010,200 @@ func TestBuildV2Record_SizeSourceAndPlannerSize(t *testing.T) {
 	}
 	if rec.SizeSource != "" {
 		t.Errorf("SizeSource = %q with no size, want \"\"", rec.SizeSource)
+	}
+}
+
+// --- per-stage context-window telemetry (#1653) ---
+
+// contextStageWire builds a V2 record for one feature-dev attempt that
+// recorded the given context telemetry, and returns the record's JSON and
+// its feature-dev stage decoded as a generic map, so every assertion below
+// reads the wire exactly as the SDK feeder does.
+func contextStageWire(t *testing.T, peak, window int, compactions *int) (string, map[string]any) {
+	t.Helper()
+	rs := NewRuntimeState("nightgauge/nightgauge", 1653, "item", testRunID())
+	rs.BeginStage(StageFeatureDev)
+	rs.RecordStageContext(StageFeatureDev, peak, window, compactions)
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 100}, "", "opencode")
+	rec := NewHistoryWriter(t.TempDir()).BuildV2Record(rs, true, "", V2RunInput{Title: "t"}, time.Now())
+	data, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		Stages map[string]map[string]any `json:"stages"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		t.Fatal(err)
+	}
+	return string(data), wire.Stages["feature-dev"]
+}
+
+// countedCompactions reads path through the one events-file reader, as the
+// scheduler does, and returns the count it would record.
+func countedCompactions(t *testing.T, path string) (*int, error) {
+	t.Helper()
+	n, err := opencodeplugin.CompactionCount(path)
+	return &n, err
+}
+
+func writeEventsFile(t *testing.T, dir string, lines ...string) string {
+	t.Helper()
+	path := filepath.Join(dir, opencodeplugin.EventsFileName("run-1653"))
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+const compactionLine = `{"v":1,"ts":"t","kind":"compaction","session_id":"ses_1","child":false,"detail":{}}`
+
+// TestV2Record_CompactionCountIsTheEventsFileCount: a run dir whose events
+// file holds three compaction lines (among other kinds) gives
+// compaction_count 3, and a run dir with no events file gives an explicit 0,
+// not an absent key: the stage was observed and did not compact.
+func TestV2Record_CompactionCountIsTheEventsFileCount(t *testing.T) {
+	path := writeEventsFile(t, t.TempDir(),
+		compactionLine,
+		`{"v":1,"ts":"t","kind":"idle","session_id":"ses_1","child":false,"detail":{}}`,
+		compactionLine,
+		compactionLine,
+		`{"v":1,"ts":"t","kind":"stop_verify","session_id":"ses_1","child":false,"detail":{"verdict":"complete"}}`,
+	)
+	n, err := countedCompactions(t, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, stage := contextStageWire(t, 12010, 131072, n)
+	if got := stage["compaction_count"]; got != float64(3) {
+		t.Errorf("compaction_count = %v, want 3", got)
+	}
+
+	n, err = countedCompactions(t, filepath.Join(t.TempDir(), opencodeplugin.EventsFileName("run-1653")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, stage := contextStageWire(t, 12010, 131072, n)
+	got, present := stage["compaction_count"]
+	if !present || got != float64(0) {
+		t.Errorf("compaction_count = %v (present %v) with no events file, want an explicit 0", got, present)
+	}
+	if !strings.Contains(raw, `"compaction_count":0`) {
+		t.Errorf("record does not carry compaction_count:0 on the wire: %s", raw)
+	}
+}
+
+// TestV2Record_ClaudeShapedStageOmitsContextFields: a stage whose adapter
+// exposes no per-step prompt size (Claude) and has no events file records a
+// window from the registry and nothing else. The record omits every context
+// key: absent, never 0.
+func TestV2Record_ClaudeShapedStageOmitsContextFields(t *testing.T) {
+	_, stage := contextStageWire(t, 0, 200000, nil)
+	for _, key := range []string{"peak_step_input_tokens", "context_window_tokens", "context_window_utilization", "compaction_count"} {
+		if v, ok := stage[key]; ok {
+			t.Errorf("%s = %v on a stage with no observable peak, want the key absent", key, v)
+		}
+	}
+
+	// A peak with no known window keeps the peak and omits the ratio.
+	_, stage = contextStageWire(t, 12010, 0, nil)
+	if got := stage["peak_step_input_tokens"]; got != float64(12010) {
+		t.Errorf("peak_step_input_tokens = %v, want 12010", got)
+	}
+	for _, key := range []string{"context_window_tokens", "context_window_utilization"} {
+		if v, ok := stage[key]; ok {
+			t.Errorf("%s = %v with no known window, want the key absent", key, v)
+		}
+	}
+}
+
+// preContextTelemetryRecord is a V2 record as the pre-#1653 writer marshalled
+// it (the redacted outcome-gap fixture in internal/ipc/testdata, reduced to
+// two stages). It must round-trip through today's V2RunRecord byte for byte:
+// any new field that is not omitted when unset would appear on re-marshal.
+const preContextTelemetryRecord = `{"schema_version":"2","record_type":"run","issue_number":1001,"run_id":"00000000-0000-7000-8000-000000000000","repo":"acme/widget","title":"REDACTED — real issue title removed for public fixture","branch":"feat/1001-redacted","base_branch":"main","execution_mode":"automatic","started_at":"2026-07-28T17:54:00-06:00","completed_at":"2026-07-28T18:34:47-06:00","total_duration_ms":2447000,"outcome":"complete","size":null,"type":null,"stages":{"feature-dev":{"status":"complete","started_at":"2026-07-28T17:59:50-06:00","completed_at":"2026-07-28T18:11:33-06:00","duration_ms":703000,"model_selection":{"model":"claude-sonnet-5","source":"scheduler"}},"pr-merge":{"status":"complete","started_at":"2026-07-28T18:28:57-06:00","completed_at":"2026-07-28T18:34:45-06:00","duration_ms":348000,"model_selection":{"model":"claude-sonnet-5","source":"scheduler"},"execution_path":"llm","punt_reason":"REDACTED"}},"tokens":{"total_input":13590958,"total_output":71175,"total_cache_read":13590435,"total_cache_creation":0,"estimated_cost_usd":11.977663099999997,"per_stage":{"feature-dev":{"input":44,"output":5853,"cache_read":1653604,"cache_creation":0,"cost_usd":3.042758249999999,"cache_hit_rate":0.9999733921608468,"adapter":"claude"},"pr-merge":{"input":74,"output":14170,"cache_read":4416719,"cache_creation":0,"cost_usd":2.2692416999999994,"cache_hit_rate":0.9999832457622533,"adapter":"claude"}}},"files":{"read_count":0,"written_count":0},"routing":{"complexity_score":0,"path":"standard","skip_stages":[]},"recorded_at":"2026-07-28T18:34:47-06:00"}`
+
+func TestV2Record_PreContextTelemetryRecordRoundTripsByteIdentically(t *testing.T) {
+	var rec V2RunRecord
+	if err := json.Unmarshal([]byte(preContextTelemetryRecord), &rec); err != nil {
+		t.Fatal(err)
+	}
+	out, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != preContextTelemetryRecord {
+		t.Errorf("a pre-#1653 record does not round-trip byte-identically:\n got %s\nwant %s", out, preContextTelemetryRecord)
+	}
+}
+
+// TestV2Record_CompactionSymlinkOutOfRunDirIsRefused: an events path that is
+// a symlink to /etc/hosts is refused by the reader rather than read, so the
+// stage records 0 and the refusal is the reader's error (the scheduler logs
+// it; see openCodeCompactionCount).
+func TestV2Record_CompactionSymlinkOutOfRunDirIsRefused(t *testing.T) {
+	if _, err := os.Stat("/etc/hosts"); err != nil {
+		t.Skip("no /etc/hosts on this machine")
+	}
+	path := filepath.Join(t.TempDir(), opencodeplugin.EventsFileName("run-1653"))
+	if err := os.Symlink("/etc/hosts", path); err != nil {
+		t.Fatal(err)
+	}
+	n, err := countedCompactions(t, path)
+	if err == nil || !strings.Contains(err.Error(), "refusing") {
+		t.Fatalf("reading a symlink to /etc/hosts returned err %v, want a refusal", err)
+	}
+	_, stage := contextStageWire(t, 12010, 131072, n)
+	if got := stage["compaction_count"]; got != float64(0) {
+		t.Errorf("compaction_count = %v for a refused events file, want 0", got)
+	}
+}
+
+// TestV2Record_CompactionReadIsBoundedAtOneMiB: a 5 MiB events file of
+// compaction lines is read only up to the file's 1 MiB cap (plus the few KiB
+// its writers may legitimately overshoot it by), so the count is the lines
+// within the first MiB, not the whole file's.
+func TestV2Record_CompactionReadIsBoundedAtOneMiB(t *testing.T) {
+	line := compactionLine + "\n"
+	total := (5 << 20) / len(line)
+	path := filepath.Join(t.TempDir(), opencodeplugin.EventsFileName("run-1653"))
+	if err := os.WriteFile(path, []byte(strings.Repeat(line, total)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	n, err := countedCompactions(t, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lo, hi := (1<<20)/len(line), (1<<20+4<<10)/len(line)
+	if *n < lo || *n > hi {
+		t.Errorf("counted %d compactions in a %d-line 5 MiB file, want the lines in its first MiB (%d..%d)", *n, total, lo, hi)
+	}
+	_, stage := contextStageWire(t, 12010, 131072, n)
+	if got := stage["compaction_count"]; got != float64(*n) {
+		t.Errorf("compaction_count = %v, want %d", got, *n)
+	}
+}
+
+// TestV2Record_CarriesNoEventsFileContent: summary text in the events file,
+// whether in a line the reader drops (a top-level "text" field) or in a line
+// it counts (a scalar detail value), never reaches the serialized record.
+// Only the count does.
+func TestV2Record_CarriesNoEventsFileContent(t *testing.T) {
+	const sentinel = "SENTINEL-compaction-summary-7f3a"
+	path := writeEventsFile(t, t.TempDir(),
+		compactionLine,
+		`{"v":1,"ts":"t","kind":"compaction","session_id":"ses_1","text":"`+sentinel+`"}`,
+		`{"v":1,"ts":"t","kind":"compaction","session_id":"ses_1","detail":{"summary":"`+sentinel+`"}}`,
+	)
+	n, err := countedCompactions(t, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, stage := contextStageWire(t, 12010, 131072, n)
+	if got := stage["compaction_count"]; got != float64(2) {
+		t.Errorf("compaction_count = %v, want 2 (the line carrying free text is dropped)", got)
+	}
+	if strings.Contains(raw, sentinel) {
+		t.Errorf("the serialized record carries events-file content: %s", raw)
 	}
 }

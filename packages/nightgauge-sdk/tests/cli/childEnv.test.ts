@@ -8,10 +8,16 @@ import {
   curateOpenCodeChildEnv,
   isChildEnvAllowed,
   isOpenCodeChildEnvAllowed,
+  isOpenCodeRunEnvAccepted,
+  isOpenCodeRunEnvName,
+  OPENCODE_NIGHTGAUGE_ALLOW,
 } from "../../src/cli/adapters/childEnv.js";
 import {
   OPENCODE_CATALOG_ENV,
+  OPENCODE_ENDPOINT_ENV,
   OPENCODE_PLATFORM_PROVIDERS,
+  openCodeEnvWithholdFor,
+  openCodeWithholdsEnv,
 } from "../../src/cli/adapters/opencodeCatalog.js";
 
 const ADAPTERS_DIR = path.resolve(
@@ -223,6 +229,66 @@ describe("curateOpenCodeChildEnv (#1637)", () => {
     expect(notForwarded).toEqual([]);
   });
 
+  // #1804: two independent reviews of this fix round found that a parity test
+  // reading opencodeplugin.go's Env* CONSTANT DEFINITIONS is structurally
+  // blind to a variable set any other way — OPENCODE_DISABLE_PROJECT_CONFIG is
+  // a bare string literal at InstallNightgaugePlugin's call site
+  // (opencode.go), not one of those constants, and HOME is set by
+  // OpenCodeIsolationEnv (opencode_isolation.go) — and both slipped through an
+  // earlier version of this exact test that only checked definitions, the
+  // same blind spot #1969 already named. This test instead reads the KEY SET
+  // `nightgauge opencode config --json` actually prints, pinned by
+  // TestOpenCodeConfigVerbEnvKeysMatchGoldenFixture (cmd/nightgauge/opencode_test.go)
+  // against the same fixture, so a newly-set variable fails a Go test first
+  // and this one second — never neither.
+  it("parity: every key nightgauge opencode config --json prints is accepted by the TS run-env allowlist", () => {
+    const golden = JSON.parse(
+      fs.readFileSync(
+        path.join(
+          GO_ADAPTERS_DIR,
+          "../../execution/testdata/opencode_config_verb_env_keys.golden.json"
+        ),
+        "utf-8"
+      )
+    ) as { keys: string[] };
+    expect(golden.keys.length).toBeGreaterThan(15);
+    // Sanity: the fixture is what this test's own doc comment claims —
+    // guards against a typo'd path silently reading an empty/stale file.
+    expect(golden.keys).toContain("HOME");
+    expect(golden.keys).toContain("OPENCODE_DISABLE_PROJECT_CONFIG");
+    expect(golden.keys).toContain("NIGHTGAUGE_OPENCODE_PLUGIN_NONCE");
+
+    const notAccepted = golden.keys.filter((k) => !isOpenCodeRunEnvAccepted(k));
+    expect(
+      notAccepted,
+      `these keys a real nightgauge opencode config --json prints are refused by ` +
+        `checkRunConfig — add them to childEnv.ts's OPENCODE_RUN_ENV_NAMES:\n` +
+        notAccepted.join("\n")
+    ).toEqual([]);
+    // Every key in this fixture is meant to reach the child (none of them is
+    // the operator-risk name), so isOpenCodeRunEnvName (forwarded), not just
+    // isOpenCodeRunEnvAccepted, must be true for each.
+    const notForwarded = golden.keys.filter((k) => !isOpenCodeRunEnvName(k));
+    expect(notForwarded).toEqual([]);
+  });
+
+  // The operator-risk name is the one key checkRunConfig accepts but
+  // curateOpenCodeChildEnv must never forward — accepting it prevents a
+  // fail-closed CONFIG_INVALID on a machine where an operator's OpenCode
+  // install directory happens to be at risk (a condition the operator neither
+  // set nor controls), while withholding it mirrors the Go adapter's own
+  // BuildCommand, which deletes opencodeplugin.EnvOperatorInstallRisk from
+  // the child's env right before returning it (opencode.go, pinned by
+  // TestOpenCodeBuildCommandWithholdsOperatorInstallRiskFromTheChild) —
+  // #1802's child-env leak is already closed there; only the config verb's
+  // printed env still carries the name, since the verb prints RunRoot.Env
+  // directly rather than BuildCommand's output.
+  it("accepts NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK but never forwards it", () => {
+    const name = "NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK";
+    expect(isOpenCodeRunEnvAccepted(name)).toBe(true);
+    expect(isOpenCodeRunEnvName(name)).toBe(false);
+  });
+
   it("OpenCode's catalog, platform providers and switches are the Go adapter's", () => {
     const catalog = fs.readFileSync(path.join(GO_ADAPTERS_DIR, "opencode_catalog_env.go"), "utf-8");
     const goCatalog: Record<string, string[]> = {};
@@ -240,5 +306,138 @@ describe("curateOpenCodeChildEnv (#1637)", () => {
     };
     expect([...OPENCODE_PLATFORM_PROVIDERS]).toEqual(block("openCodePlatformProviders"));
     expect([...OPENCODE_DISABLE_FLAGS]).toEqual(block("openCodeDisableFlags"));
+  });
+});
+
+/**
+ * #1657 (N-9): the opencode child keeps only the NIGHTGAUGE_* names that are
+ * read or exported for it, derived here from those sources, never from a
+ * retyped list.
+ */
+describe("the opencode child's NIGHTGAUGE_* allowlist (#1657)", () => {
+  const REPO = path.resolve(GO_ADAPTERS_DIR, "../../..");
+  const PLUGIN_DIR = path.join(REPO, "internal/execution/opencodeplugin/plugin");
+
+  function pluginReads(): Set<string> {
+    const files = [
+      path.join(PLUGIN_DIR, "nightgauge.js"),
+      ...fs
+        .readdirSync(path.join(PLUGIN_DIR, "nightgauge"))
+        .map((f) => path.join(PLUGIN_DIR, "nightgauge", f)),
+    ];
+    const names = new Set<string>();
+    for (const f of files) {
+      const src = fs.readFileSync(f, "utf-8");
+      for (const m of src.matchAll(/process\.env\.(NIGHTGAUGE_[A-Z0-9_]+)/g)) names.add(m[1]);
+      // A name held in a string constant and read through process.env[...].
+      for (const m of src.matchAll(/"(NIGHTGAUGE_[A-Z0-9_]+)"/g)) names.add(m[1]);
+    }
+    return names;
+  }
+
+  function goExports(): Set<string> {
+    const names = new Set<string>();
+    const adapter = fs.readFileSync(path.join(GO_ADAPTERS_DIR, "opencode.go"), "utf-8");
+    const start = adapter.indexOf("env := map[string]string{");
+    const body = adapter.slice(start, adapter.indexOf("return", start));
+    for (const m of body.matchAll(/"(NIGHTGAUGE_[A-Z0-9_]+)"/g)) names.add(m[1]);
+    if (body.includes("env[RunIDEnvVar]")) {
+      const def = fs
+        .readFileSync(path.join(GO_ADAPTERS_DIR, "adapter.go"), "utf-8")
+        .match(/const RunIDEnvVar = "([A-Z_]+)"/);
+      names.add(def![1]);
+    }
+    const manager = fs.readFileSync(path.join(GO_ADAPTERS_DIR, "../manager.go"), "utf-8");
+    const cs = manager.indexOf("func composeStageEnv(");
+    const csBody = manager.slice(cs, manager.indexOf("\n}\n", cs));
+    for (const m of csBody.matchAll(/upsertEnvVar\(env, "(NIGHTGAUGE_[A-Z0-9_]+)"/g)) {
+      names.add(m[1]);
+    }
+    return names;
+  }
+
+  function sdkAdapterReads(): Set<string> {
+    const src = fs.readFileSync(path.join(ADAPTERS_DIR, "OpenCodeAdapter.ts"), "utf-8");
+    return new Set([...src.matchAll(/\benv\.(NIGHTGAUGE_[A-Z0-9_]+)/g)].map((m) => m[1]));
+  }
+
+  it("is exactly what the plugin reads and the Go and SDK adapters export or read", () => {
+    const expected = new Set([...pluginReads(), ...goExports(), ...sdkAdapterReads()]);
+    // The handshake variables reach the child from the run config only.
+    for (const n of [...expected]) if (n.startsWith("NIGHTGAUGE_OPENCODE_")) expected.delete(n);
+    expect(expected.has("NIGHTGAUGE_BIN")).toBe(true);
+    expect(expected.has("NIGHTGAUGE_SKILL_DIR")).toBe(true);
+    expect([...OPENCODE_NIGHTGAUGE_ALLOW].sort()).toEqual([...expected].sort());
+  });
+
+  it("is the Go adapter's OpenCodeNightgaugeEnvAllow, as the golden records it", () => {
+    const golden = JSON.parse(
+      fs.readFileSync(path.join(GO_ADAPTERS_DIR, "testdata/opencode_config_golden.json"), "utf-8")
+    ) as { nightgauge_env_allow: string[] };
+    expect(golden.nightgauge_env_allow.length).toBeGreaterThan(5);
+    expect([...OPENCODE_NIGHTGAUGE_ALLOW].sort()).toEqual(golden.nightgauge_env_allow);
+  });
+
+  it("keeps a NIGHTGAUGE_* variable the run's config references, as Go does", () => {
+    const content =
+      '{"mcp":{"n":{"headers":{"Authorization":"Bearer {env:NIGHTGAUGE_MCP_TOKEN}"}}}}';
+    const parent = { NIGHTGAUGE_MCP_TOKEN: "t", NIGHTGAUGE_JIRA_TOKEN: "j" };
+    const env = curateOpenCodeChildEnv(parent, "lmstudio/x", {}, content);
+    expect(env.NIGHTGAUGE_MCP_TOKEN).toBe("t");
+    expect(env.NIGHTGAUGE_JIRA_TOKEN).toBeUndefined();
+    expect(curateOpenCodeChildEnv(parent, "lmstudio/x", {}).NIGHTGAUGE_MCP_TOKEN).toBeUndefined();
+  });
+
+  it("keeps operator secrets in the NIGHTGAUGE_ namespace from the child", () => {
+    const parent = {
+      NIGHTGAUGE_LM_STUDIO_API_KEY: "lm-secret",
+      NIGHTGAUGE_JIRA_TOKEN: "jira-secret",
+      NIGHTGAUGE_AUDIT_API_KEY: "audit-secret",
+      NIGHTGAUGE_STAGE: "feature-dev",
+      NIGHTGAUGE_BIN: "/opt/nightgauge",
+    };
+    const env = curateOpenCodeChildEnv(parent, "lmstudio/x", {});
+    expect(env.NIGHTGAUGE_LM_STUDIO_API_KEY).toBeUndefined();
+    expect(env.NIGHTGAUGE_JIRA_TOKEN).toBeUndefined();
+    expect(env.NIGHTGAUGE_AUDIT_API_KEY).toBeUndefined();
+    expect(env.NIGHTGAUGE_STAGE).toBe("feature-dev");
+    expect(env.NIGHTGAUGE_BIN).toBe("/opt/nightgauge");
+  });
+});
+
+/** #1657 (N-3): the TS twin of the Go dispatch's env_withhold. */
+describe("openCodeEnvWithholdFor is the Go verb's env_withhold (#1657)", () => {
+  it("equals what the real verb printed for the golden's model", () => {
+    const golden = JSON.parse(
+      fs.readFileSync(path.join(GO_ADAPTERS_DIR, "testdata/opencode_config_golden.json"), "utf-8")
+    ) as {
+      inputs: { model: string };
+      verb: {
+        config_content: string;
+        env_withhold: { prefixes: string[]; names: string[]; keep: string[] };
+      };
+    };
+    expect(golden.verb.env_withhold.names.length).toBeGreaterThan(100);
+    // The golden's config references an MCP token held in the namespace.
+    expect(golden.verb.env_withhold.keep).toContain("NIGHTGAUGE_MCP_FIXTURE_TOKEN");
+    expect(openCodeEnvWithholdFor(golden.inputs.model, golden.verb.config_content)).toEqual(
+      golden.verb.env_withhold
+    );
+  });
+
+  it("the endpoint variables are the Go adapter's", () => {
+    const isolation = fs.readFileSync(path.join(GO_ADAPTERS_DIR, "opencode_isolation.go"), "utf-8");
+    const line = isolation.match(/var openCodeEndpointEnv = \[\]string\{([^}]*)\}/);
+    expect([...OPENCODE_ENDPOINT_ENV]).toEqual(
+      [...line![1].matchAll(/"([^"]+)"/g)].map((m) => m[1])
+    );
+  });
+
+  it("keeps the dispatched provider's and the platform providers' variables", () => {
+    expect(openCodeWithholdsEnv("anthropic/claude-sonnet-5", "ANTHROPIC_API_KEY")).toBe(false);
+    expect(openCodeWithholdsEnv("anthropic/claude-sonnet-5", "OPENAI_API_KEY")).toBe(true);
+    expect(openCodeWithholdsEnv("lmstudio/x", "GITHUB_TOKEN")).toBe(false);
+    expect(openCodeWithholdsEnv("lmstudio/x", "OPENCODE_PERMISSION")).toBe(true);
+    expect(openCodeWithholdsEnv("lmstudio/x", "XDG_CONFIG_HOME")).toBe(false);
   });
 });

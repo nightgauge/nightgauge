@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/gittest"
+	"github.com/nightgauge/nightgauge/internal/models"
 )
 
 // ─── Migrated regression tests ───────────────────────────────────────────────
@@ -208,6 +209,14 @@ func TestLocateUnknownStage(t *testing.T) {
 // ─── Overlay key cascade ─────────────────────────────────────────────────────
 
 func TestOverlayKeysCascade(t *testing.T) {
+	// The "tier alias" case below resolves the "opus" BAND through the
+	// registry rather than pinning the concrete id it currently resolves to —
+	// a pinned id is what let a band rotation go unnoticed (see 31b5cbe9).
+	currentOpus, ok := models.Get(models.BandOpus)
+	if !ok {
+		t.Fatal("registry has no non-deprecated opus-band model")
+	}
+
 	for _, tt := range []struct {
 		name, model, adapter string
 		want                 []string
@@ -219,7 +228,7 @@ func TestOverlayKeysCascade(t *testing.T) {
 		// disk, so rendered output is unchanged).
 		// No adapter, no host segment: unchanged from before ADR-022 §14.
 		{"concrete anthropic id", "claude-opus-5", "", []string{"anthropic", "claude-opus-5"}},
-		{"tier alias", "opus", "", []string{"anthropic", "claude-opus-5"}},
+		{"tier alias", "opus", "", []string{"anthropic", currentOpus.ID}},
 		// A non-empty adapter is now also the HOST segment, most general of
 		// all (ADR-016 amendment / ADR-022 §14): it leads the cascade.
 		{"multi-band model keys off the concrete id", "gpt-5.6-sol", "codex",
@@ -574,7 +583,14 @@ func TestRenderIsDeterministic(t *testing.T) {
 }
 
 func TestJSONEnvelopeReportsProvenance(t *testing.T) {
-	root := overlayFixture(t, map[string]string{"anthropic": "S"}, map[string]string{"claude-opus-5": "K"}, "")
+	// The "opus" tier alias is resolved through the registry rather than
+	// pinning the concrete id it currently resolves to — see the note on
+	// TestOverlayKeysCascade (31b5cbe9).
+	currentOpus, ok := models.Get(models.BandOpus)
+	if !ok {
+		t.Fatal("registry has no non-deprecated opus-band model")
+	}
+	root := overlayFixture(t, map[string]string{"anthropic": "S"}, map[string]string{currentOpus.ID: "K"}, "")
 	res := mustRender(t, Options{Stage: "feature-dev", Model: "opus", SkillsRoots: []string{root}})
 
 	var envelope map[string]any
@@ -586,7 +602,7 @@ func TestJSONEnvelopeReportsProvenance(t *testing.T) {
 			t.Errorf("envelope missing %q", key)
 		}
 	}
-	if envelope["resolved_model_id"] != "claude-opus-5" {
+	if envelope["resolved_model_id"] != currentOpus.ID {
 		t.Errorf("tier alias should report the concrete id it resolved to, got %v", envelope["resolved_model_id"])
 	}
 	// Content goes to stdout, never into the envelope.

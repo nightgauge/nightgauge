@@ -1,4 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   PipelineOrchestrator,
   DEFAULT_STAGES,
@@ -6,6 +9,7 @@ import {
 } from "../../src/orchestrator/PipelineOrchestrator.js";
 import { createMockQuery, createFailingQuery, createMockResult } from "../mocks/agent-sdk.js";
 import type { SDKQueryFunction } from "../../src/orchestrator/StageExecutor.js";
+import { RUN_IDENTITY_PATTERN } from "../../src/context/runIdentity.js";
 
 /**
  * Wait until the orchestrator is parked on its approval gate (#1423).
@@ -140,6 +144,58 @@ describe("PipelineOrchestrator", () => {
       expect(result.success).toBe(true);
       expect(result.stagesCompleted).toContain("issue-pickup");
       expect(stageOrder).toContain("issue-pickup");
+    });
+
+    it("gives every stage's query its stage, its turn budget and the run's one identity (#1648)", async () => {
+      const seen: Array<{ stage?: string; maxTurns?: number; runId?: string }> = [];
+      const query: SDKQueryFunction = async function* (q) {
+        seen.push({
+          stage: q.options?.stage,
+          maxTurns: q.options?.maxTurns,
+          runId: q.options?.runId,
+        });
+        yield createMockResult();
+      };
+      const orchestrator = new PipelineOrchestrator(query, {
+        stages: ["issue-pickup", "feature-planning"],
+        autoApprove: true,
+        maxTurnsPerStage: 33,
+      });
+      const result = await orchestrator.run(42);
+
+      expect(result.success).toBe(true);
+      expect(seen.map((s) => s.stage)).toEqual(["issue-pickup", "feature-planning"]);
+      expect(seen.map((s) => s.maxTurns)).toEqual([33, 33]);
+      // One run identity for the whole run, a canonical UUIDv7 when no
+      // run-state names one.
+      expect(seen[0].runId).toMatch(RUN_IDENTITY_PATTERN);
+      expect(seen[1].runId).toBe(seen[0].runId);
+    });
+
+    it("deletes an opencode run's shared per-run root when the run ends, through the Go verb (#1648)", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "po-clean-"));
+      const bin = join(dir, "nightgauge");
+      writeFileSync(bin, `#!/bin/sh\necho "$@" >> '${dir}/calls'\n`);
+      chmodSync(bin, 0o755);
+      const prev = process.env.NIGHTGAUGE_BIN;
+      process.env.NIGHTGAUGE_BIN = bin;
+      try {
+        let runId: string | undefined;
+        const query: SDKQueryFunction = async function* (q) {
+          runId = q.options?.runId;
+          yield createMockResult();
+        };
+        for (const adapter of ["claude-headless", "opencode"]) {
+          await new PipelineOrchestrator(query, { stages: ["issue-pickup"], adapter }).run(42);
+        }
+        const calls = readFileSync(join(dir, "calls"), "utf-8").trim().split("\n");
+        // Only the opencode run, once, for the identity its stages were given.
+        expect(calls).toEqual([`opencode cleanup --run-id ${runId}`]);
+      } finally {
+        if (prev === undefined) delete process.env.NIGHTGAUGE_BIN;
+        else process.env.NIGHTGAUGE_BIN = prev;
+        rmSync(dir, { recursive: true, force: true });
+      }
     });
 
     it("should stop on stage failure", async () => {

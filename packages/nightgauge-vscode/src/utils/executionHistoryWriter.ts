@@ -4,7 +4,7 @@
  * Static utility class with no VSCode dependency, testable from SDK context.
  *
  * Resolves and maintains daily JSONL history files at:
- *   .nightgauge/pipeline/history/YYYY-MM-DD.jsonl
+ *   pipelineStateDir(root)/history/YYYY-MM-DD.jsonl
  *
  * Run records are produced exclusively by the Go pipeline runtime; the
  * extension reads, indexes, and applies retention to those records.
@@ -13,6 +13,7 @@
  * @see docs/ARCHITECTURE.md for utility patterns
  */
 
+import { pipelineStateDir } from "./cloneLayout";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
@@ -154,8 +155,8 @@ export interface HistoryIndex {
   entries: HistoryIndexEntry[];
 }
 
-/** Default history directory relative to workspace root */
-const HISTORY_DIR = ".nightgauge/pipeline/history";
+/** History directory name inside the pipeline state dir */
+const HISTORY_DIR = "history";
 
 /** Default retention period in days */
 const DEFAULT_RETENTION_DAYS = 90;
@@ -335,7 +336,7 @@ export class ExecutionHistoryWriter {
    * Returns the absolute path to the history directory.
    */
   static getHistoryDir(workspaceRoot: string): string {
-    return path.join(workspaceRoot, HISTORY_DIR);
+    return path.join(pipelineStateDir(workspaceRoot), HISTORY_DIR);
   }
 
   /**

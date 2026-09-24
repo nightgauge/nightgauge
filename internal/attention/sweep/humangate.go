@@ -74,6 +74,20 @@ func (p *HumanGate) maxIndividual() int {
 
 // Evaluate implements Producer.
 func (p *HumanGate) Evaluate(ctx context.Context, in Input) ([]attention.DecisionRequest, error) {
+	// A repository with no open PR has nothing to classify. The GitHub adapter
+	// answers that from a conditional REST read (free while the open-PR list is
+	// unchanged), so the GraphQL ListPRs below — kept for the review decision,
+	// merge state and check rollup REST does not report — runs only when there
+	// is a PR to look at. A positive empty observation, which retracts cards.
+	if probe, ok := in.Forge.PRs().(openPRProbe); ok {
+		has, err := probe.HasOpenPRs(ctx, in.Owner, in.Name)
+		if err != nil {
+			return nil, fmt.Errorf("list open PRs for %s: %w", in.Repo, err)
+		}
+		if !has {
+			return nil, nil
+		}
+	}
 	prs, err := in.Forge.PRs().ListPRs(ctx, in.Owner, in.Name, "OPEN", "")
 	if err != nil {
 		return nil, fmt.Errorf("list open PRs for %s: %w", in.Repo, err)
@@ -308,4 +322,10 @@ func (p *HumanGate) waitedFor(createdAt string) string {
 		return ""
 	}
 	return humanizeDuration(p.now().Sub(ts))
+}
+
+// openPRProbe is the optional capability of answering "does this repository
+// have an open PR?" cheaply (github.PRService.HasOpenPRs).
+type openPRProbe interface {
+	HasOpenPRs(ctx context.Context, owner, repo string) (bool, error)
 }

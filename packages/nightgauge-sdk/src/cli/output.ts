@@ -8,6 +8,7 @@
 import type { PipelineResult, StageResult } from "../orchestrator/PipelineOrchestrator.js";
 import type { PipelineStage } from "../events/EventBus.js";
 import type { WorkflowEvent } from "../cli/workflow/WorkflowEvent.js";
+import type { AdapterActivity } from "./adapters/ICliAdapter.js";
 
 /**
  * Output format type
@@ -82,6 +83,13 @@ export interface StatusJSONOutput {
  * formatter.pipelineResult(result);
  * ```
  */
+/**
+ * The `message` of {@link OutputFormatter.activity}'s JSON line: the key a
+ * reader uses to recognize an activity line and leave it out of what it
+ * renders (#1657).
+ */
+export const ADAPTER_ACTIVITY_MESSAGE = "adapter activity";
+
 export class OutputFormatter {
   constructor(
     private format: OutputFormat = "text",
@@ -132,6 +140,35 @@ export class OutputFormatter {
     } else {
       console.warn(`Warning: ${message}`);
     }
+  }
+
+  /**
+   * Report an adapter's sign of life while its child runs (#1657).
+   *
+   * In JSON mode this is written whatever the log level, as the same
+   * `{"level":…,"message":…,"data":…}` line every other log line on stdout
+   * is: a caller reading the stage's output (the VS Code extension) counts
+   * any output as activity, and this is its only output while OpenCode runs
+   * a slow local model. It carries no `type`, so it is never parsed as a
+   * stream-json or workflow event; but a reader that renders
+   * `{"level","message"}` log lines would show it, so every such reader must
+   * drop it by {@link ADAPTER_ACTIVITY_MESSAGE} (the extension does). stdout,
+   * not stderr: in JSON mode every error is on stdout too, and a failed
+   * stage's last stderr lines are what the extension reports as its error. In
+   * text mode it is a debug line.
+   */
+  activity(activity: AdapterActivity): void {
+    if (this.format === "json") {
+      console.log(
+        JSON.stringify({
+          level: "debug",
+          message: ADAPTER_ACTIVITY_MESSAGE,
+          data: { adapter: activity.adapter, event: activity.event },
+        })
+      );
+      return;
+    }
+    if (this.shouldLog("debug")) console.log(`[DEBUG] ${activity.adapter} ${activity.event}`);
   }
 
   /**

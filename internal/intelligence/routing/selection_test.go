@@ -34,12 +34,22 @@ func TestIsTierBand(t *testing.T) {
 
 func TestCandidateLadderAnthropicSpansModels(t *testing.T) {
 	// Parity with the TS test: single-band models rung at their DECLARED
-	// default effort; haiku declares no effort axis and thinking off.
-	want := []EnvelopeRung{
-		{Band: "fable", ModelID: "claude-fable-5-1", Effort: "high", Thinking: "on"},
-		{Band: "opus", ModelID: "claude-opus-5", Effort: "high", Thinking: "on"},
-		{Band: "sonnet", ModelID: "claude-sonnet-5", Effort: "high", Thinking: "on"},
-		{Band: "haiku", ModelID: "claude-haiku-4-5-20251001", Effort: "", Thinking: "off"},
+	// default effort; haiku declares no effort axis and thinking off. Model id
+	// and declared effort/thinking are resolved through the registry rather
+	// than pinned — a pinned id/effort pair is what let this ladder drift
+	// behind a band rotation unnoticed (see 31b5cbe9).
+	want := make([]EnvelopeRung, 0, 4)
+	for _, band := range []string{"fable", "opus", "sonnet", "haiku"} {
+		desc, ok := models.Resolve("anthropic", band)
+		if !ok {
+			t.Fatalf("registry has no anthropic model for band %q", band)
+		}
+		want = append(want, EnvelopeRung{
+			Band:     band,
+			ModelID:  desc.ID,
+			Effort:   desc.EffortDefault(),
+			Thinking: declaredThinking(desc),
+		})
 	}
 	if got := CandidateLadder("anthropic", ""); !reflect.DeepEqual(got, want) {
 		t.Fatalf("CandidateLadder(anthropic) = %+v, want %+v", got, want)

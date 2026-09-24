@@ -10,6 +10,7 @@
  * @see Issue #1104 - Pipeline Health VSCode Command & Dashboard Integration
  */
 
+import { pipelineStateDir } from "../utils/cloneLayout";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { flattenRunRecords } from "@nightgauge/sdk";
@@ -22,8 +23,6 @@ import type {
   HealthFinding,
   HealthSeverity,
 } from "../types/pipelineHealth";
-
-const PIPELINE_DIR = ".nightgauge/pipeline";
 
 export class PipelineHealthRunner {
   /**
@@ -208,7 +207,7 @@ export class PipelineHealthRunner {
     workspaceRoot: string,
     report: HealthCheckReport
   ): Promise<string> {
-    const dir = path.join(workspaceRoot, PIPELINE_DIR);
+    const dir = pipelineStateDir(workspaceRoot);
     await fs.mkdir(dir, { recursive: true });
 
     const dateStr = new Date().toISOString().split("T")[0];

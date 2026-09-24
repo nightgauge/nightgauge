@@ -34,6 +34,24 @@ import (
 // SchemaVersion is the JSON envelope version for `skill render --json`.
 const SchemaVersion = 1
 
+// ProfileCompact selects the compact render profile (ADR 023 §Q5, #1654):
+// the stage skeleton — phase markers, artifact contracts, gates and the
+// Completion Checklist — with the rest turned into on-demand `Read`
+// directives instead of the full `_shared`/`_includes` content this package
+// otherwise inlines or references.
+//
+// There is no ProfileFull constant: the empty string and "full" are
+// equivalent and both mean "no compact profile" — Options.Profile's zero
+// value is the byte-identical-to-today path, so a symmetrical constant would
+// invite `Profile: skillrender.ProfileFull` call sites that quietly stop
+// being the zero value the first time someone edits them.
+const ProfileCompact = "compact"
+
+// profilesDir is the fixed subdirectory a compact profile lives under,
+// relative to a skill's own directory (ADR 023 §Q5's decision slot, filled by
+// #1654): `<skillDir>/_profiles/<profile>.md`.
+const profilesDir = "_profiles"
+
 // OverlayAnchor optionally marks where the composed block is injected. When a
 // base skill contains it, it wins over the positional fallback.
 const OverlayAnchor = "<!-- overlay -->"
@@ -67,13 +85,14 @@ const (
 // searched. Every key here must also be shipped by the marketplace bundle —
 // see TestBundleShipsEverySkillTheGoDirectPathRenders.
 var StageSkillDirs = map[string]string{
-	"issue-pickup":     "nightgauge-issue-pickup",
-	"feature-planning": "nightgauge-feature-planning",
-	"feature-dev":      "nightgauge-feature-dev",
-	"feature-validate": "nightgauge-feature-validate",
-	"pr-create":        "nightgauge-pr-create",
-	"pr-merge":         "nightgauge-pr-merge",
-	"issue-refine":     "nightgauge-issue-refine",
+	"issue-pickup":      "nightgauge-issue-pickup",
+	"feature-planning":  "nightgauge-feature-planning",
+	"feature-dev":       "nightgauge-feature-dev",
+	"feature-validate":  "nightgauge-feature-validate",
+	"pr-create":         "nightgauge-pr-create",
+	"pr-merge":          "nightgauge-pr-merge",
+	"issue-refine":      "nightgauge-issue-refine",
+	"spike-materialize": "nightgauge-spike-materialize",
 }
 
 // Options parameterize a render.
@@ -88,6 +107,12 @@ type Options struct {
 	// SkillsRoots are searched in order; first match wins. A root is a
 	// directory CONTAINING skill directories (e.g. <repo>/skills).
 	SkillsRoots []string
+	// Profile selects the render density axis (ADR 023 §Q5, #1654). Empty or
+	// "full" is today's render, byte-identical. ProfileCompact looks for
+	// <skillDir>/_profiles/compact.md; a stage with none falls back to full
+	// with a warning rather than erroring — the same fail-open convention
+	// every other resolution step in this package already uses.
+	Profile string
 	// Warn receives non-fatal diagnostics (unreadable fragments). nil discards.
 	Warn func(string)
 }
@@ -101,14 +126,28 @@ type Fragment struct {
 
 // Result is the render output plus the provenance `--json` reports.
 type Result struct {
-	V             int      `json:"v"`
-	Stage         string   `json:"stage"`
-	Model         string   `json:"model,omitempty"`
-	Provider      string   `json:"provider,omitempty"`
-	ResolvedModel string   `json:"resolved_model_id,omitempty"`
-	SkillPath     string   `json:"skill_path"`
-	SkillName     string   `json:"skill_name,omitempty"`
-	AllowedTools  []string `json:"allowed_tools,omitempty"`
+	V             int    `json:"v"`
+	Stage         string `json:"stage"`
+	Model         string `json:"model,omitempty"`
+	Provider      string `json:"provider,omitempty"`
+	ResolvedModel string `json:"resolved_model_id,omitempty"`
+	// ContextWindow is the resolved model descriptor's context window, when
+	// one resolved (ADR 023 § "Prior Art" #5). Zero when the model is unknown
+	// or unresolved — dispatch-time fit-check callers (internal/orchestrator)
+	// read it straight off this Result rather than re-deriving the same
+	// descriptor OverlayKeys already resolved a second time.
+	ContextWindow int `json:"context_window,omitempty"`
+	// Profile is ProfileCompact when the compact profile actually composed
+	// this render. Empty (omitted from --json) for a full render, INCLUDING
+	// a compact request that fell back to full because the stage has no
+	// _profiles/compact.md — the fallback is reported through Warnings, not
+	// this field, so a JSON consumer's happy-path check ("did compact apply")
+	// does not have to distinguish "asked for full" from "asked for compact,
+	// got full" by re-reading the warning text.
+	Profile      string   `json:"profile,omitempty"`
+	SkillPath    string   `json:"skill_path"`
+	SkillName    string   `json:"skill_name,omitempty"`
+	AllowedTools []string `json:"allowed_tools,omitempty"`
 	// ProgrammaticTools and MCPTools are the remaining frontmatter tool
 	// declarations. Carried so a `--json` consumer building a tool allowlist
 	// (#79's plugin wrappers) reads them from the renderer rather than
@@ -296,10 +335,29 @@ func Render(opts Options) (*Result, error) {
 	res.SkillPath = skillPath
 	skillDir := filepath.Dir(skillPath)
 
+	// Compact-profile source selection happens BEFORE overlay resolution so a
+	// compact render still resolves overlays the same way a full one does
+	// (ADR 023 §Q5's composition order: includes/overlays first, compact trim
+	// last — here, "last" means the compact skeleton IS the trimmed body, so
+	// overlay injection below still runs against it). No _profiles/compact.md
+	// on disk is not an error: it is the AC1 fallback, warned and left on the
+	// full base path.
+	baseSourcePath := skillPath
+	if opts.Profile == ProfileCompact {
+		candidate := filepath.Join(skillDir, profilesDir, ProfileCompact+".md")
+		if st, err := os.Stat(candidate); err == nil && !st.IsDir() {
+			baseSourcePath = candidate
+			res.Profile = ProfileCompact
+		} else {
+			warn(fmt.Sprintf("no compact profile for stage %q (%s not found), falling back to full render", opts.Stage, candidate))
+		}
+	}
+
 	keys, descriptor, resolved := OverlayKeys(opts.Model, opts.Adapter)
 	if resolved {
 		res.Provider = descriptor.Provider
 		res.ResolvedModel = descriptor.ID
+		res.ContextWindow = descriptor.ContextWindow
 	}
 	res.Keys = append(res.Keys, keys...)
 	hostKey := opts.Adapter
@@ -325,11 +383,25 @@ func Render(opts Options) (*Result, error) {
 		return res, nil
 	}
 
-	rawBytes, err := os.ReadFile(skillPath)
+	rawBytes, err := os.ReadFile(baseSourcePath)
 	if err != nil {
 		return nil, fmt.Errorf("read skill: %w", err)
 	}
 	body, fm := splitFrontmatter(string(rawBytes))
+	if baseSourcePath != skillPath {
+		// A compact profile is a body-only skeleton (no frontmatter of its
+		// own — see skills/nightgauge-pr-merge/_profiles/compact.md). The
+		// tool declarations (allowed-tools, programmatic-tools, mcp-tools)
+		// still have to come from somewhere: re-reading them off the base
+		// SKILL.md means a compact render carries the SAME tool allowlist a
+		// full render would, rather than silently losing it because the
+		// skeleton file never declared one.
+		baseRaw, err := os.ReadFile(skillPath)
+		if err != nil {
+			return nil, fmt.Errorf("read skill: %w", err)
+		}
+		_, fm = splitFrontmatter(string(baseRaw))
+	}
 	res.applyFrontmatter(fm)
 
 	// Collect fragments: shared before skill-specific, general before specific
@@ -631,4 +703,67 @@ func bundleSkillsRoot(exe string) string {
 		return candidate
 	}
 	return ""
+}
+
+// phaseMarkerRE matches the literal phase-marker HTML comment the Phase
+// Marker Protocol emits (`<!-- phase:start name="..." index=N total=T
+// stage="..." -->`) — the orchestrator counts these, so it is the one element
+// class in CompactionMarkers with an unambiguous, machine-checkable shape.
+var phaseMarkerRE = regexp.MustCompile(`<!-- phase:start name="[^"]*" index=\d+ total=\d+ stage="[^"]*" -->`)
+
+// mustSurviveHeadingRE matches a markdown heading naming a gate, an artifact
+// contract or the Completion Checklist — the other three ADR 023 §Q5
+// must-survive-compaction element classes, which (unlike the phase marker)
+// have no single fixed literal string and are instead identified by their
+// heading text. `#{2,4}`, not `#{1,4}`: every skill's bash code fences carry
+// single-`#` shell comments ("# Skip CI check gate...", a bypass-tracking
+// issue reference in skills/_shared/CI_GATE.md),
+// and a level-1 minimum would treat every one that happens to say "gate" as a
+// must-survive heading — noise this package's own skills are full of, not a
+// real heading.
+var mustSurviveHeadingRE = regexp.MustCompile(`(?mi)^#{2,4}[ \t]*.*\b(gate|contract|checklist)\b.*$`)
+
+// denyRuleRE matches a bold deny-rule line — "**NEVER ...**" / "**...MUST
+// NOT...**" on a SINGLE markdown line. The shape every deny rule in this
+// repo's skills already uses (e.g. `**NEVER** write your own polling loop`).
+// Deliberately line-bounded (`[^*\n]*`, no `(?s)`): markdown bold spans are
+// used pervasively for plain emphasis (`**Clean state**`), and a multi-line
+// variant risks its non-greedy search leaping from one unrelated bold run's
+// closing `**` to a much later one, swallowing everything between. A deny
+// rule that itself wraps across a markdown line (pr-merge's "NEVER pass
+// `--admin`" rule) is not caught by this generic scan — compact_test.go
+// checks THAT one directly with `strings.Contains`, verbatim, which is a
+// tighter and more honest guarantee than a regex spanning arbitrary bold
+// text would be.
+var denyRuleRE = regexp.MustCompile(`(?m)\*\*[^*\n]*\b(NEVER|MUST NOT)\b[^*\n]*\*\*`)
+
+// CompactionMarkers extracts the ADR 023 §Q5 must-survive-compaction elements
+// from rendered stage content: phase markers, gate/artifact-contract/
+// Completion-Checklist headings, and bold deny-rule lines. Sorted and
+// deduplicated so two renders' marker sets compare with a plain "is B a
+// superset of A" check (compact_test.go's marker-parity table test) instead
+// of a line-by-line diff that would be sensitive to reordering that changes
+// nothing load-bearing.
+func CompactionMarkers(content string) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s == "" || seen[s] {
+			return
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	for _, m := range phaseMarkerRE.FindAllString(content, -1) {
+		add(m)
+	}
+	for _, m := range mustSurviveHeadingRE.FindAllString(content, -1) {
+		add(m)
+	}
+	for _, m := range denyRuleRE.FindAllString(content, -1) {
+		add(m)
+	}
+	sort.Strings(out)
+	return out
 }

@@ -7,34 +7,28 @@ name: adapter-canary
 # together, files a drift issue when something breaks, and blocks a PR that
 # bumps a manifest's max_tested while the canary is red at that version.
 #
-# Runs daily, on workflow_dispatch, on every pull_request, and on every push
-# to main (#1639: main's own branch-protection ruleset requires the
-# flag-contracts and opencode-canary status contexts, and a push trigger is
-# the only way those contexts ever report on a main commit — pull_request
-# alone never produces them there). A workflow-level `paths:` filter would
-# leave this a required check pending forever on an unrelated PR or push, so
+# Runs daily, on workflow_dispatch and on every pull_request. It no longer runs
+# on push to main (#2055; #1639 had added the push trigger only so the required
+# flag-contracts and opencode-canary contexts reported on main's own commit).
+# Required checks gate the PR, not main's commit: the strict ruleset merges an
+# up-to-date PR whose squash tree is the tree this PR run already canaried at
+# the same pinned max_tested, so a push run repeated identical work. The daily
+# schedule is what watches for upstream drift. A workflow-level `paths:` filter
+# would leave this a required check pending forever on an unrelated PR, so
 # `changed` decides at runtime instead and every other job is skipped (not
 # filtered out of the run) when nothing under internal/adaptercompat/
 # manifests/ changed.
 #
 # On a schedule or workflow_dispatch every manifest CLI installs at its npm
-# dist-tag `latest`; on a pull_request or a push every manifest CLI installs
-# at its OWN manifest's current max_tested — the proposed version for
-# whichever manifest the PR/push bumped, the already-approved one for every
-# other, both read from the checked-out ref, not from a separate input. A
-# push to main only ever carries an already-reviewed, already-approved
-# max_tested (it got there through a merged PR), so `latest` would add
-# nothing a push run needs; `pinned` keeps push and pull_request identical.
+# dist-tag `latest`; on a pull_request every manifest CLI installs at its OWN
+# manifest's current max_tested — the proposed version for whichever manifest
+# the PR bumped, the already-approved one for every other, both read from the
+# checked-out ref, not from a separate input.
 #
-# report (the drift-issue job) runs on schedule, workflow_dispatch and push,
-# never on pull_request — a PR's own red check is the signal there, not a
-# filed issue. On push it is gated the same way as everywhere else: `changed`
-# must say a manifest changed (never true for a push that touched nothing
-# under internal/adaptercompat/manifests/), and cmd_report itself only files
-# or comments on FAILING rows (see scripts/adapter-canary.sh's report
-# command), so a push whose canary passed writes no issue. That is the
-# existing schedule/workflow_dispatch behaviour unchanged; push simply joins
-# it instead of getting a new rule.
+# report (the drift-issue job) runs on schedule and workflow_dispatch, never
+# on pull_request — a PR's own red check is the signal there, not a filed
+# issue. cmd_report only files or comments on FAILING rows (see
+# scripts/adapter-canary.sh's report command), so a green run writes no issue.
 #
 # install/flag-contracts/opencode-canary hold only `contents: read` and
 # receive no secret: `latest` from npm is unreviewed code, and it runs with
@@ -47,15 +41,13 @@ on:
   workflow_dispatch: {}
   pull_request:
     branches: [main]
-  push:
-    branches: [main]
 
 permissions:
   contents: read
 
 concurrency:
   # One group per ref: a PR's own ref (refs/pull/<n>/merge) never collides
-  # with main's, and main's own schedule/workflow_dispatch/push runs share a
+  # with main's, and main's own schedule/workflow_dispatch runs share a
   # single group instead of piling up — cancel-in-progress supersedes an
   # older main run with a newer one rather than queuing them.
   group: adapter-canary-${{ github.ref }}
@@ -63,9 +55,9 @@ concurrency:
 
 env:
   # schedule and workflow_dispatch install the newest release of every
-  # manifest CLI; pull_request and push install each manifest's own current
+  # manifest CLI; pull_request installs each manifest's own current
   # max_tested (adapter-canary.sh install <adapter> "$VERSION_MODE").
-  VERSION_MODE: ${{ (github.event_name == 'pull_request' || github.event_name == 'push') && 'pinned' || 'latest' }}
+  VERSION_MODE: ${{ github.event_name == 'pull_request' && 'pinned' || 'latest' }}
 
 jobs:
   changed:
@@ -95,36 +87,6 @@ jobs:
             else
               echo "run=false" >> "$GITHUB_OUTPUT"
               echo "internal/adaptercompat/manifests/ unchanged: nothing to canary on this PR"
-            fi
-            exit 0
-          fi
-
-          if [ "${{ github.event_name }}" = "push" ]; then
-            # github.event.before is all-zeros for a brand-new branch (nothing
-            # to diff against) and can point at a commit this fetch-depth: 0
-            # checkout of the pushed ref never fetched, e.g. a force-push that
-            # discarded it. Either way, fall back to HEAD^ (the previous tip
-            # of the same history); if even that is unreachable (an orphan
-            # first commit), there is no usable before SHA at all and the
-            # canary runs rather than silently never running.
-            before="${{ github.event.before }}"
-            if [ -z "$before" ] || [ "$before" = "0000000000000000000000000000000000000000" ] \
-                || ! git cat-file -e "${before}^{commit}" 2>/dev/null; then
-              before="HEAD^"
-              git cat-file -e "${before}^{commit}" 2>/dev/null || before=""
-            fi
-            if [ -z "$before" ]; then
-              echo "run=true" >> "$GITHUB_OUTPUT"
-              echo "push: no usable before SHA (new or orphan branch history): running"
-              exit 0
-            fi
-            if git diff --name-only "$before" HEAD \
-                -- internal/adaptercompat/manifests/ | grep -q .; then
-              echo "run=true" >> "$GITHUB_OUTPUT"
-              echo "internal/adaptercompat/manifests/ changed since $before: running"
-            else
-              echo "run=false" >> "$GITHUB_OUTPUT"
-              echo "internal/adaptercompat/manifests/ unchanged since $before: nothing to canary on this push"
             fi
             exit 0
           fi
@@ -316,12 +278,9 @@ jobs:
     needs: [changed, flag-contracts, opencode-canary]
     # always() so a failed leg is still reported; skipped entirely when
     # `changed` said there was nothing to canary, and never on a pull_request
-    # — a PR's own red check is the signal there, not a filed issue. push
-    # joins schedule/workflow_dispatch here on purpose: it is already gated
-    # on needs.changed.outputs.run == 'true' (a push that touched no manifest
-    # never reaches this job), and cmd_report itself only files or comments
-    # on FAILING rows, so a push whose canary passed writes nothing. No
-    # separate push-only rule is needed or added.
+    # — a PR's own red check is the signal there, not a filed issue.
+    # cmd_report itself only files or comments on FAILING rows, so a
+    # scheduled run whose canary passed writes nothing.
     if: ${{ always() && needs.changed.outputs.run == 'true' && github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10

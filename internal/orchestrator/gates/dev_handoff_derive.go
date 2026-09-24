@@ -4,9 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/ci"
 	"github.com/nightgauge/nightgauge/internal/deliverable"
 )
 
@@ -163,6 +166,14 @@ func ensureDevHandoff(workspace string, issueNumber int, ctxPath string, now tim
 			// Malformed. The gate's decode path reports this precisely;
 			// overwriting it here would destroy the evidence.
 			return authoredOutcome
+		}
+		if doc["handoff_source"] == HandoffSourceDerived {
+			// Derived before the gate ran, as the feature-dev step loop's
+			// DeriveStepHandoff (#1651) does when the last sub-session writes
+			// no handoff of its own. The document says so; reporting it as
+			// authored would hide that git, not the stage, wrote it.
+			authoredOutcome.Source = HandoffSourceDerived
+			authoredOutcome.Notes = []string{"derived from git before the gate ran (the document's own handoff_source)"}
 		}
 		if declaredFileCount(doc) > 0 {
 			// #1482: a file list is not a complete deliverable. A stage that
@@ -430,4 +441,109 @@ func declaredFileCount(doc map[string]any) int {
 		}
 	}
 	return n
+}
+
+// StepHandoff reports what DeriveStepHandoff wrote (#1651).
+type StepHandoff struct {
+	// Written is false when git found no deliverable work, or could not
+	// answer; the file on disk was then left exactly as it was.
+	Written  bool
+	Created  []string
+	Modified []string
+	Deleted  []string
+}
+
+// DeriveStepHandoff writes the intermediate `dev-{N}.json` between two
+// feature-dev sub-sessions (#1651).
+//
+// It is the same derivation the gate performs for a missing handoff —
+// inspectDevWork's uncapped file set and derivedDevContext's document — with
+// two differences that make it a between-steps record rather than a repair:
+// it always runs (a sub-session's own partial handoff is superseded by git's
+// file list, keeping its narrative fields exactly as the gate's derivation
+// does), and it stamps the 1-based `step` the tree was derived after. The
+// sub-sessions hand off through the working tree, not commits: feature-dev
+// does not commit (#1608).
+func DeriveStepHandoff(workspace string, issueNumber int, ctxPath string, step int, now time.Time) (StepHandoff, error) {
+	work := inspectDevWork(workspace, nil)
+	if !work.Determined || work.AllFiles.Total() == 0 {
+		return StepHandoff{}, nil
+	}
+	var authored map[string]any
+	if raw, err := os.ReadFile(ctxPath); err == nil {
+		// A malformed stage-authored document contributes no narrative; git's
+		// file list is still the authority for what changed.
+		_ = json.Unmarshal(raw, &authored)
+	}
+	doc := derivedDevContext(issueNumber, work, authored,
+		fmt.Sprintf("feature-dev sub-session step %d handoff", step), now)
+	doc["step"] = step
+	if err := writeDevContext(ctxPath, doc); err != nil {
+		return StepHandoff{}, err
+	}
+	return StepHandoff{
+		Written:  true,
+		Created:  nonNil(work.AllFiles.Created),
+		Modified: nonNil(work.AllFiles.Modified),
+		Deleted:  nonNil(work.AllFiles.Deleted),
+	}, nil
+}
+
+// WorkTreeFingerprint names the content of the workspace's deliverable tree
+// — tracked, modified and untracked files, with the pipeline's bookkeeping
+// directories excluded exactly as the gate's own status probe excludes them —
+// as one git tree id (#1651).
+//
+// Two equal fingerprints mean no deliverable file changed between them, even
+// when the set of changed paths is unchanged (a sub-session editing a file an
+// earlier one already modified). It stages into a throwaway copy of the
+// index, so the real index, HEAD and the working tree are left as they were;
+// `git add` does write the staged content as loose blobs into the object
+// store, where they are unreferenced and git's own gc prunes them.
+func WorkTreeFingerprint(workspace string) (string, error) {
+	indexPath, err := gitOutput(workspace, "rev-parse", "--git-path", "index")
+	if err != nil {
+		return "", fmt.Errorf("resolve index: %w", err)
+	}
+	indexPath = strings.TrimSpace(indexPath)
+	if !filepath.IsAbs(indexPath) {
+		indexPath = filepath.Join(workspace, indexPath)
+	}
+	tmpDir, err := os.MkdirTemp("", "ng-worktree-fingerprint-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(tmpDir)
+	tmpIndex := filepath.Join(tmpDir, "index")
+	if data, rerr := os.ReadFile(indexPath); rerr == nil {
+		if werr := os.WriteFile(tmpIndex, data, 0o600); werr != nil {
+			return "", werr
+		}
+	}
+	env := append(os.Environ(), "GIT_INDEX_FILE="+tmpIndex)
+	// Stage everything, then drop the bookkeeping dirs from the scratch index.
+	// Not `git add -A -- ci.DeliverablePathspec()`: when the repo's own
+	// .gitignore ignores a bookkeeping dir (`.nightgauge/`), git exits 1 on
+	// the `:(exclude)` pathspec naming it ("paths are ignored ... use -f"),
+	// which failed every step with dev-step-progress-unproven.
+	add := exec.Command("git", "add", "-A", "--", ".")
+	add.Dir = workspace
+	add.Env = env
+	if out, aerr := add.CombinedOutput(); aerr != nil {
+		return "", fmt.Errorf("stage into scratch index: %v: %s", aerr, strings.TrimSpace(string(out)))
+	}
+	drop := exec.Command("git", append([]string{"rm", "-r", "-q", "--cached", "--ignore-unmatch", "--"}, ci.BookkeepingDirs...)...)
+	drop.Dir = workspace
+	drop.Env = env
+	if out, derr := drop.CombinedOutput(); derr != nil {
+		return "", fmt.Errorf("drop bookkeeping from scratch index: %v: %s", derr, strings.TrimSpace(string(out)))
+	}
+	write := exec.Command("git", "write-tree")
+	write.Dir = workspace
+	write.Env = env
+	out, err := write.Output()
+	if err != nil {
+		return "", fmt.Errorf("write-tree: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -68,7 +69,7 @@ func TestPollChecksComplete_MissingRequiredCheckIsNotYet(t *testing.T) {
 	}}}
 
 	res, err := pollChecksComplete(context.Background(), reader, "o", "r", "abc123", "main",
-		[]string{"build", "lint"}, 3, time.Millisecond, true, noSleepCmd, nil)
+		[]string{"build", "lint"}, true, 3, time.Millisecond, true, noSleepCmd, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -86,7 +87,7 @@ func TestPollChecksComplete_AllRequiredPresentIsGreenAfterConfirmation(t *testin
 	}}}
 
 	res, err := pollChecksComplete(context.Background(), reader, "o", "r", "abc123", "main",
-		[]string{"build"}, 5, time.Millisecond, true, noSleepCmd, nil)
+		[]string{"build"}, true, 5, time.Millisecond, true, noSleepCmd, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -107,7 +108,7 @@ func TestPollChecksComplete_RequiredCommitStatusSatisfiesPresence(t *testing.T) 
 	}
 
 	res, err := pollChecksComplete(context.Background(), reader, "o", "r", "abc123", "main",
-		[]string{"build", "cla"}, 2, time.Millisecond, true, noSleepCmd, nil)
+		[]string{"build", "cla"}, true, 2, time.Millisecond, true, noSleepCmd, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -122,7 +123,7 @@ func TestPollChecksComplete_SingleReadBudgetReturnsUnconfirmed(t *testing.T) {
 	}}}
 
 	res, err := pollChecksComplete(context.Background(), reader, "o", "r", "abc123", "main",
-		[]string{"build"}, 1, time.Millisecond, true, noSleepCmd, nil)
+		[]string{"build"}, true, 1, time.Millisecond, true, noSleepCmd, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -141,7 +142,7 @@ func TestPollChecksComplete_CrossCheckDisagreementIsNotYet(t *testing.T) {
 	}
 
 	res, err := pollChecksComplete(context.Background(), reader, "o", "r", "abc123", "main",
-		[]string{"lint"}, 2, time.Millisecond, false, noSleepCmd, nil)
+		[]string{"lint"}, true, 2, time.Millisecond, false, noSleepCmd, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -157,7 +158,7 @@ func TestPollChecksComplete_CrossCheckSkippedWhenDisabled(t *testing.T) {
 	}
 
 	res, err := pollChecksComplete(context.Background(), reader, "o", "r", "abc123", "main",
-		[]string{"lint"}, 2, time.Millisecond, true, noSleepCmd, nil)
+		[]string{"lint"}, true, 2, time.Millisecond, true, noSleepCmd, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -175,7 +176,7 @@ func TestPollChecksComplete_RequiredCheckFailedIsRed(t *testing.T) {
 	}}}
 
 	res, err := pollChecksComplete(context.Background(), reader, "o", "r", "abc123", "main",
-		[]string{"build"}, 5, time.Millisecond, true, noSleepCmd, nil)
+		[]string{"build"}, true, 5, time.Millisecond, true, noSleepCmd, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -191,7 +192,7 @@ func TestPollChecksComplete_ReadErrorIsReturned(t *testing.T) {
 	}
 
 	_, err := pollChecksComplete(context.Background(), reader, "o", "r", "abc123", "main",
-		nil, 3, time.Millisecond, true, noSleepCmd, nil)
+		nil, true, 3, time.Millisecond, true, noSleepCmd, nil)
 	if err == nil {
 		t.Fatal("want an error from the failed read")
 	}
@@ -221,7 +222,7 @@ func TestPollChecksComplete_EveryContextCounts(t *testing.T) {
 				statusFrames: [][]gh.CheckDetail{{detail("cla", "COMPLETED", "SUCCESS")}},
 			}
 			res, err := pollChecksComplete(context.Background(), reader, "o", "r", "abc123", "main",
-				[]string{"build", "cla"}, 3, time.Millisecond, true, noSleepCmd, nil)
+				[]string{"build", "cla"}, true, 3, time.Millisecond, true, noSleepCmd, nil)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -274,7 +275,7 @@ func TestChecksCompleteAndHookAgree(t *testing.T) {
 				return r
 			}
 			res, err := pollChecksComplete(context.Background(), frames(), "o", "r", "abc123", "main",
-				required, 1, time.Millisecond, true, noSleepCmd, nil)
+				required, true, 1, time.Millisecond, true, noSleepCmd, nil)
 			if err != nil {
 				t.Fatalf("pollChecksComplete: %v", err)
 			}
@@ -284,5 +285,87 @@ func TestChecksCompleteAndHookAgree(t *testing.T) {
 				t.Fatalf("verb = %q, hook = %q; want %q and %q", res.Verdict, hookRes.Verdict, tc.verb, tc.hook)
 			}
 		})
+	}
+}
+
+// provenChecksReader adds #2055's merge provenance to the fake: the merge
+// commit's reads come from the embedded script, the PR head's are fixed.
+type provenChecksReader struct {
+	fakeChecksCompleteReader
+	prov       *gh.MergeProvenance
+	headChecks []gh.CheckDetail
+}
+
+func (p *provenChecksReader) GetCommitChecks(ctx context.Context, owner, repo, ref string) ([]gh.CheckDetail, error) {
+	if ref == p.prov.HeadSHA {
+		return p.headChecks, nil
+	}
+	return p.fakeChecksCompleteReader.GetCommitChecks(ctx, owner, repo, ref)
+}
+
+func (p *provenChecksReader) GetMergeProvenance(context.Context, string, string, string) (*gh.MergeProvenance, error) {
+	return p.prov, nil
+}
+
+// TestPollChecksComplete_MergedPRHeadIsTheGate: for a merge commit, the verb
+// judges the merged PR head's required checks (same tree) plus what still
+// runs on the merge commit, and never requires the suites on main (#2055).
+func TestPollChecksComplete_MergedPRHeadIsTheGate(t *testing.T) {
+	mergedAt := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	t.Cleanup(func() { checksCompleteNow = time.Now })
+	checksCompleteNow = func() time.Time { return mergedAt.Add(time.Hour) }
+	required := []string{"Go build & test", "cla"}
+	head := []gh.CheckDetail{detail("Go build & test", "COMPLETED", "SUCCESS"), detail("cla", "COMPLETED", "SUCCESS")}
+	prov := func(headTree string) *gh.MergeProvenance {
+		return &gh.MergeProvenance{PRNumber: 7, MergeSHA: "m", MergeTree: "t1", HeadSHA: "h", HeadTree: headTree, MergedAt: mergedAt}
+	}
+
+	cases := []struct {
+		name     string
+		headTree string
+		frames   [][]gh.CheckDetail
+		want     gh.ChecksCompleteVerdict
+	}{
+		{"tree equal and green", "t1", [][]gh.CheckDetail{{detail("CodeQL", "COMPLETED", "SUCCESS")}}, gh.ChecksComplete},
+		{"push job running", "t1", [][]gh.CheckDetail{{detail("publish", "IN_PROGRESS", "")}}, gh.ChecksNotYet},
+		{"push job red", "t1", [][]gh.CheckDetail{{detail("publish", "COMPLETED", "FAILURE")}}, gh.ChecksIncomplete},
+		// CodeQL re-analyses the tree the PR's required CodeQL run passed.
+		{"tree equal, CodeQL running: informational", "t1", [][]gh.CheckDetail{{detail("Analyze (go)", "IN_PROGRESS", ""), detail("CodeQL", "QUEUED", "")}}, gh.ChecksComplete},
+		{"tree equal, CodeQL red: informational", "t1", [][]gh.CheckDetail{{detail("Analyze (go)", "COMPLETED", "FAILURE"), detail("CodeQL", "COMPLETED", "FAILURE")}}, gh.ChecksComplete},
+		{"tree differs, CodeQL red, required checks present: red", "t2", [][]gh.CheckDetail{{detail("Go build & test", "COMPLETED", "SUCCESS"), detail("cla", "COMPLETED", "SUCCESS"), detail("CodeQL", "COMPLETED", "FAILURE")}}, gh.ChecksIncomplete},
+		// An hour after the merge with no required check on the merge commit:
+		// the landed tree was never tested, and waiting will not change it.
+		{"tree differs", "t2", [][]gh.CheckDetail{{detail("CodeQL", "COMPLETED", "SUCCESS")}}, gh.ChecksIncomplete},
+		{"a red cache-warm is informational", "t1", [][]gh.CheckDetail{{detail("CodeQL", "COMPLETED", "SUCCESS"), detail("cache-warm", "COMPLETED", "FAILURE")}}, gh.ChecksComplete},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &provenChecksReader{fakeChecksCompleteReader: fakeChecksCompleteReader{checkFrames: tc.frames}, prov: prov(tc.headTree), headChecks: head}
+			res, err := pollChecksComplete(context.Background(), r, "o", "r", "m", "main", required, true, 2, time.Second, true, noSleepCmd, nil)
+			if err != nil {
+				t.Fatalf("pollChecksComplete: %v", err)
+			}
+			if res.Verdict != tc.want {
+				t.Fatalf("verdict = %q (%v), want %q", res.Verdict, res.Reasons, tc.want)
+			}
+			if res.PRNumber != 7 || res.TreesMatch == nil || *res.TreesMatch != (tc.headTree == "t1") {
+				t.Errorf("result = %+v, want PR #7 and treesMatch %v", res, tc.headTree == "t1")
+			}
+		})
+	}
+}
+
+// TestChecksCompleteHelpAdvertisesTheCapability: scripts/post-merge-check.sh
+// hands off to a binary only when its --help carries this line (#2055).
+func TestChecksCompleteHelpAdvertisesTheCapability(t *testing.T) {
+	cmd := ciChecksCompleteCmd()
+	var out strings.Builder
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("--help: %v", err)
+	}
+	if !strings.Contains(out.String(), "capability: merged-pr-gate") {
+		t.Fatalf("--help does not advertise the capability:\n%s", out.String())
 	}
 }

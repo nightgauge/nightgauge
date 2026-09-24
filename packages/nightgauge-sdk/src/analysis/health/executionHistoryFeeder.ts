@@ -23,7 +23,7 @@
  * failure against whatever model its selection block names.
  */
 
-import type { ExecutionHistoryRecord, ModelSelectionSource } from "../types.js";
+import type { ExecutionHistoryRecordExtended, ModelSelectionSource } from "../types.js";
 import { MODEL_SELECTION_SOURCES } from "../types.js";
 
 /** Structural view of a wire `stages[<name>]` entry — only what the feeder reads. */
@@ -34,6 +34,8 @@ export interface HistoryRunStageInput {
   auto_retry_count?: number;
   manual_retry_count?: number;
   failure_category?: "infrastructure" | "agent" | "organic";
+  /** Largest single-step prompt ÷ the window the stage ran with, 0–1 (#1653). */
+  context_window_utilization?: number;
   model_selection?: {
     model?: string;
     source?: string;
@@ -86,11 +88,16 @@ function asSelectionSource(value: string | undefined): ModelSelectionSource | un
  * a record — token, cost, duration and reliability dimensions need every
  * executed stage — with `model` / `selectionSource` left undefined; callers
  * that only care about routed stages filter on `model !== undefined`.
+ *
+ * `context_window_utilization` (#1653) is copied to `contextWindowUtilization`
+ * only when the stage carries it: Go omits it when the adapter exposed no
+ * per-step prompt size or no window was known, and the analyzer tells
+ * "unmeasured" from "measured" by the key's presence.
  */
 export function flattenRunRecords(
   rawRecords: ReadonlyArray<HistoryRunRecordInput | Record<string, unknown>>
-): ExecutionHistoryRecord[] {
-  const result: ExecutionHistoryRecord[] = [];
+): ExecutionHistoryRecordExtended[] {
+  const result: ExecutionHistoryRecordExtended[] = [];
 
   for (const raw of rawRecords) {
     const run = raw as HistoryRunRecordInput;
@@ -131,6 +138,9 @@ export function flattenRunRecords(
         // zero is a pricing-registry placeholder (`cost_unstamped`, #585).
         isLocalModel:
           costUsd === 0 && inputTokens + outputTokens > 0 && tokens?.cost_unstamped !== true,
+        ...(typeof stage.context_window_utilization === "number"
+          ? { contextWindowUtilization: stage.context_window_utilization }
+          : {}),
       });
     }
   }

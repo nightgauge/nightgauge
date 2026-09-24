@@ -20,7 +20,13 @@
  * @see Issue #1637 - the OpenCode curation, {@link curateOpenCodeChildEnv}
  */
 
-import { openCodeProviderEnv } from "./opencodeCatalog.js";
+import {
+  OPENCODE_NIGHTGAUGE_ALLOW,
+  openCodeProviderEnv,
+  openCodeWithholdsNightgaugeEnv,
+} from "./opencodeCatalog.js";
+
+export { OPENCODE_NIGHTGAUGE_ALLOW, openCodeWithholdsNightgaugeEnv };
 
 /**
  * System/runtime variables a spawned CLI needs to function. Notably PATH (to
@@ -152,7 +158,10 @@ export function curateChildEnv(
 //   - the forge variables the bash tool's `gh` and `git` need;
 //   - the variables OpenCode's catalog binds to the dispatched provider, and
 //     no other provider's;
-//   - the pipeline's own NIGHTGAUGE_* configuration;
+//   - the NIGHTGAUGE_* variables the stage and its plugin read
+//     (OPENCODE_NIGHTGAUGE_ALLOW), and no other: the namespace also holds
+//     operator secrets such as NIGHTGAUGE_LM_STUDIO_API_KEY and
+//     NIGHTGAUGE_JIRA_TOKEN;
 //   - no inherited OPENCODE_* variable at all. The OPENCODE_* names a spawn
 //     carries are the ones Nightgauge sets, from the run's config or the
 //     adapter, never the operator's OPENCODE_PERMISSION, OPENCODE_AUTO_SHARE,
@@ -195,26 +204,116 @@ export const OPENCODE_SERVER_PASSWORD_ENV = "OPENCODE_SERVER_PASSWORD";
 export const OPENCODE_CONFIG_CONTENT_ENV = "OPENCODE_CONFIG_CONTENT";
 
 /**
- * Every variable the run's own environment may set on an opencode spawn: the
- * isolation variables `nightgauge opencode config` prints as `env` (ADR-022
- * § 8, OpenCodeIsolationEnv in the Go adapter) and the per-run config. These
- * are the only OPENCODE_* names a spawn carries besides the adapter's own
- * {@link OPENCODE_SERVER_PASSWORD_ENV}; OPENCODE_CONFIG_DIR is set only when
- * the operator opted into their own OpenCode config (opencode.inherit_user_config).
+ * The nightgauge plugin's path and handshake variables, the TS twin of
+ * `opencodeplugin.EnvPluginPath` / `EnvNonce` / `EnvSentinel`
+ * (internal/execution/opencodeplugin/plugin.go): `InstallNightgaugePlugin`
+ * (internal/execution/adapters/opencode.go) sets all three on every run with
+ * a run identity, and `nightgauge opencode config --json` prints the same
+ * three for parity with the Go adapter's own spawn path (#1804). Their
+ * values are a per-run plugin file path, a minted nonce and a per-run
+ * sentinel file path — none of them an operator path — so forwarding them to
+ * an opencode child carries no leak.
+ */
+export const OPENCODE_PLUGIN_PATH_ENV = "NIGHTGAUGE_OPENCODE_PLUGIN_PATH";
+export const OPENCODE_PLUGIN_NONCE_ENV = "NIGHTGAUGE_OPENCODE_PLUGIN_NONCE";
+export const OPENCODE_PLUGIN_SENTINEL_ENV = "NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL";
+
+/**
+ * `OPENCODE_DISABLE_PROJECT_CONFIG` is set by `InstallNightgaugePlugin`
+ * itself (opencode.go, literal at the call site, not one of
+ * `opencodeplugin`'s exported `Env*` constants), not by the blanket
+ * `openCodeDisableFlags` every spawn sets regardless (opencode_isolation.go's
+ * doc comment on that slice says so explicitly) — but
+ * `InstallNightgaugePlugin` runs on every OpenCode dispatch today, so it is
+ * every spawn all the same (ADR-022 amendment 2026-09-14). Its value is
+ * always the literal `"1"`, forwarded the same as the blanket disable flags.
+ */
+export const OPENCODE_DISABLE_PROJECT_CONFIG_ENV = "OPENCODE_DISABLE_PROJECT_CONFIG";
+
+/**
+ * The isolated per-run HOME `OpenCodeIsolationEnv` sets whenever
+ * `opencode.inherit_user_config` is false — the default
+ * (internal/execution/adapters/opencode_isolation.go, `env["HOME"] =
+ * filepath.Join(in.Root, "home")`) — carried in `OpenCodeRun.Env` alongside
+ * the XDG directories (opencode_config.go). Forwarding it is not optional:
+ * `SYSTEM_ALLOW` already passes an *inherited* HOME through to every child
+ * ({@link isOpenCodeChildEnvAllowed}), so without this run variable able to
+ * override it, an opencode child would silently keep the operator's real
+ * HOME instead of the run's isolated one — precisely the isolation ADR-022
+ * § 8 exists to prevent.
+ */
+const OPENCODE_HOME_ENV = "HOME";
+
+/**
+ * Every variable the run's own environment may set on an opencode spawn AND
+ * have actually reach the child (curateOpenCodeChildEnv applies exactly this
+ * set): the isolation variables `nightgauge opencode config` prints as `env`
+ * (ADR-022 § 8, OpenCodeIsolationEnv in the Go adapter), the per-run config,
+ * the isolated HOME, `OPENCODE_DISABLE_PROJECT_CONFIG`, and the plugin/
+ * handshake variables above. OPENCODE_CONFIG_DIR is set only when the
+ * operator opted into their own OpenCode config (opencode.inherit_user_config).
+ *
+ * A run config may carry one more name, `NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK`
+ * ({@link OPENCODE_RUN_ENV_WITHHELD_NAMES}): `checkRunConfig` accepts it —
+ * `nightgauge opencode config --json` legitimately prints it — but it is not
+ * in this set, so it is never applied to the child.
  */
 const OPENCODE_RUN_ENV_NAMES: ReadonlySet<string> = new Set<string>([
   ...OPENCODE_ISOLATION_XDG,
   ...OPENCODE_DISABLE_FLAGS,
   OPENCODE_CONFIG_CONTENT_ENV,
+  OPENCODE_DISABLE_PROJECT_CONFIG_ENV,
+  OPENCODE_HOME_ENV,
   "OPENCODE_CONFIG_DIR",
   "GH_CONFIG_DIR",
   "NIGHTGAUGE_CONFIG_HOME",
+  "NIGHTGAUGE_STATE_HOME",
   "GOCACHE",
+  OPENCODE_PLUGIN_PATH_ENV,
+  OPENCODE_PLUGIN_NONCE_ENV,
+  OPENCODE_PLUGIN_SENTINEL_ENV,
 ]);
 
-/** Whether the run's own environment may set `name` on an opencode spawn. */
+/**
+ * `NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK` (`opencodeplugin.EnvOperatorInstallRisk`,
+ * internal/execution/opencodeplugin/plugin.go), accepted by `checkRunConfig`
+ * but never applied to a child's environment — the TS twin of the Go
+ * adapter's own `BuildCommand`, which deletes this name from the child's env
+ * right before returning it (`opencode.go`, `delete(env,
+ * opencodeplugin.EnvOperatorInstallRisk)`, pinned by
+ * `TestOpenCodeBuildCommandWithholdsOperatorInstallRiskFromTheChild`) with the
+ * comment "this marker is manager-only ... must not reach the opencode child
+ * process". #1802's child-env half of that leak is already closed on the Go
+ * side by that delete; only the config verb's *printed* `env` still carries
+ * the name, because the verb prints `RunRoot.Env` directly without going
+ * through `BuildCommand`'s own withhold. So `checkRunConfig` must accept the
+ * name — refusing it would fail closed on every machine where an operator's
+ * `$HOME/.opencode` or an inherited `OPENCODE_CONFIG_DIR` happens to be
+ * unsatisfied, which the operator neither set nor controls — while
+ * `curateOpenCodeChildEnv` must still never apply it, mirroring
+ * `BuildCommand`'s delete rather than reopening the leak on this spawn path.
+ * A separate set (rather than adding the name to {@link OPENCODE_RUN_ENV_NAMES})
+ * is required because that set has exactly one meaning used on both axes:
+ * `checkRunConfig` accepts a name in it, and `curateOpenCodeChildEnv` forwards
+ * one. This name needs "accepted" true and "forwarded" false, which only a
+ * second set can express.
+ */
+const OPENCODE_RUN_ENV_WITHHELD_NAMES: ReadonlySet<string> = new Set<string>([
+  "NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK",
+]);
+
+/** Whether the run's own environment may set `name` on an opencode spawn, applied to the child. */
 export function isOpenCodeRunEnvName(name: string): boolean {
   return OPENCODE_RUN_ENV_NAMES.has(name);
+}
+
+/**
+ * Whether `checkRunConfig` accepts `name` in a run config at all — every
+ * forwarded run-env name, plus the names {@link OPENCODE_RUN_ENV_WITHHELD_NAMES}
+ * accepts but `curateOpenCodeChildEnv` never applies.
+ */
+export function isOpenCodeRunEnvAccepted(name: string): boolean {
+  return isOpenCodeRunEnvName(name) || OPENCODE_RUN_ENV_WITHHELD_NAMES.has(name);
 }
 
 /** The forge variables an opencode stage keeps: its bash tool runs `gh` and `git`. */
@@ -234,14 +333,28 @@ const OPENCODE_ISOLATION_XDG_SET: ReadonlySet<string> = new Set(OPENCODE_ISOLATI
  * Whether an inherited variable named `key` may reach an opencode child
  * dispatched to `model` (a `<provider>/<model>` value). Decided on the name
  * alone, so nothing it withholds can be logged. Exported for the drift guard.
+ *
+ * `NIGHTGAUGE_OPENCODE_` is denied alongside `OPENCODE_` explicitly, although
+ * no such name is in {@link OPENCODE_NIGHTGAUGE_ALLOW} either: without it, a
+ * nested SDK spawn (an opencode stage's own subprocess reaching for another
+ * dispatch) would inherit the *parent* run's plugin path, handshake nonce and
+ * sentinel path from `process.env` — letting a nested child write to the
+ * parent run's own sentinel file — instead of minting its own through its own
+ * `runConfigProvider` call, the only legitimate source of these names.
  */
-export function isOpenCodeChildEnvAllowed(key: string, model: string): boolean {
-  if (key.startsWith("OPENCODE_") || OPENCODE_ISOLATION_XDG_SET.has(key)) return false;
+export function isOpenCodeChildEnvAllowed(key: string, model: string, configContent = ""): boolean {
+  if (
+    key.startsWith("OPENCODE_") ||
+    key.startsWith("NIGHTGAUGE_OPENCODE_") ||
+    OPENCODE_ISOLATION_XDG_SET.has(key)
+  ) {
+    return false;
+  }
   return (
     SYSTEM_ALLOW.has(key) ||
     OPENCODE_FORGE_ALLOW.has(key) ||
     OPENCODE_TOOL_ALLOW.has(key) ||
-    key.startsWith("NIGHTGAUGE_") ||
+    (key.startsWith("NIGHTGAUGE_") && !openCodeWithholdsNightgaugeEnv(key, configContent)) ||
     openCodeProviderEnv(model).includes(key)
   );
 }
@@ -252,17 +365,20 @@ export function isOpenCodeChildEnvAllowed(key: string, model: string): boolean {
  * own isolation variables and per-run config, which replace any inherited
  * value of the same name. A `runEnv` name outside the run's variables
  * ({@link isOpenCodeRunEnvName}) is not applied; the adapter refuses such a
- * run config before it gets here. Pure: mutates neither input.
+ * run config before it gets here. `configContent` is the run's per-run config,
+ * whose `{env:NAME}` references keep those NIGHTGAUGE_* variables; it defaults
+ * to `runEnv`'s OPENCODE_CONFIG_CONTENT. Pure: mutates neither input.
  */
 export function curateOpenCodeChildEnv(
   parentEnv: NodeJS.ProcessEnv,
   model: string,
-  runEnv: Readonly<Record<string, string>>
+  runEnv: Readonly<Record<string, string>>,
+  configContent: string = runEnv[OPENCODE_CONFIG_CONTENT_ENV] ?? ""
 ): NodeJS.ProcessEnv {
   const curated: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(parentEnv)) {
     if (value === undefined) continue;
-    if (isOpenCodeChildEnvAllowed(key, model)) curated[key] = value;
+    if (isOpenCodeChildEnvAllowed(key, model, configContent)) curated[key] = value;
   }
   for (const [key, value] of Object.entries(runEnv)) {
     if (isOpenCodeRunEnvName(key)) curated[key] = value;

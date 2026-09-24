@@ -61,7 +61,7 @@ func TestSilentWhenOperatorChoseItThemselves(t *testing.T) {
 // per-process.
 func TestExistingMarkerSuppresses(t *testing.T) {
 	root := t.TempDir()
-	marker := filepath.Join(root, markerRel)
+	marker := filepath.Join(root, markerName)
 	if err := os.MkdirAll(filepath.Dir(marker), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -82,13 +82,13 @@ func TestExistingMarkerSuppresses(t *testing.T) {
 func TestMarkerWriteFailureStillPrints(t *testing.T) {
 	root := t.TempDir()
 	// Occupy the marker's parent path with a file so MkdirAll cannot succeed.
-	blocker := filepath.Join(root, ".nightgauge")
+	blocker := filepath.Join(root, "state")
 	if err := os.WriteFile(blocker, []byte("not a directory"), 0o644); err != nil {
 		t.Fatalf("write blocker: %v", err)
 	}
 
 	var buf bytes.Buffer
-	printed, err := New(root).MaybePrint(&buf, true, false)
+	printed, err := New(blocker).MaybePrint(&buf, true, false)
 	if !printed {
 		t.Error("the notice must still reach the operator when the marker cannot be saved")
 	}
@@ -100,13 +100,43 @@ func TestMarkerWriteFailureStillPrints(t *testing.T) {
 	}
 }
 
-func TestForAccountUsesHomeDirectory(t *testing.T) {
+func TestForAccountUsesStateHome(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	state := filepath.Join(t.TempDir(), "state")
+	t.Setenv("NIGHTGAUGE_STATE_HOME", state)
 	n, err := ForAccount()
 	if err != nil {
 		t.Fatalf("ForAccount: %v", err)
 	}
-	if !strings.HasSuffix(n.markerPath, markerRel) {
-		t.Errorf("marker path %q must end in %q", n.markerPath, markerRel)
+	if want := filepath.Join(state, markerName); n.markerPath != want {
+		t.Errorf("marker path %q, want %q", n.markerPath, want)
+	}
+}
+
+// An operator who saw the notice under a release that kept the marker in
+// ~/.nightgauge must not see it again after the upgrade (ADR-024 § 8).
+func TestForAccountMovesLegacyMarker(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("NIGHTGAUGE_STATE_HOME", filepath.Join(t.TempDir(), "state"))
+	legacy := filepath.Join(home, ".nightgauge", markerName)
+	if err := os.MkdirAll(filepath.Dir(legacy), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacy, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := ForAccount()
+	if err != nil {
+		t.Fatalf("ForAccount: %v", err)
+	}
+	var buf bytes.Buffer
+	if printed, _ := n.MaybePrint(&buf, true, false); printed {
+		t.Error("the notice was shown again after the legacy marker was moved")
+	}
+	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+		t.Errorf("legacy marker still present: %v", err)
 	}
 }

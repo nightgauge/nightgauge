@@ -40,6 +40,14 @@ trap cleanup EXIT
 # the script's real jq programs rather than returning pre-filtered output.
 # Omitted status pages mean "no commit statuses". An empty first argument
 # makes the fake exit non-zero, standing in for an API failure or unknown sha.
+#
+# #2055: the fake also serves the merge commit itself (sha $MERGE_SHA, tree
+# tree-a), its pull requests (none by default, so the pre-#2055 cases below
+# keep the merge-commit-only rule), and the base branch's rulesets. stub_pr
+# adds a merged PR and its head's checks. An endpoint with no page file is a
+# non-zero exit, as `gh api` is on a 404.
+MERGE_SHA=deadbeef00000000000000000000000000000000
+HEAD_SHA=feedface00000000000000000000000000000000
 stub_gh() {
   [ -n "$FAKE_BIN" ] && rm -rf "$FAKE_BIN"
   FAKE_BIN=$(mktemp -d)
@@ -60,11 +68,16 @@ stub_gh() {
     printf '%s\n' "$page" >"$FAKE_BIN/pages/$surface.$n.json"
   done
   [ -e "$FAKE_BIN/pages/status.1.json" ] || echo '{"statuses": []}' >"$FAKE_BIN/pages/status.1.json"
+  printf '{"sha": "%s", "commit": {"tree": {"sha": "tree-a"}}}\n' "$MERGE_SHA" >"$FAKE_BIN/pages/commit.1.json"
+  echo '[]' >"$FAKE_BIN/pages/pulls.1.json"
+  echo '[]' >"$FAKE_BIN/pages/rules.1.json"
+  echo '{"default_branch": "main"}' >"$FAKE_BIN/pages/repo.1.json"
   {
     echo '#!/usr/bin/env bash'
     echo "pages='$FAKE_BIN/pages'"
+    echo "head_sha='$HEAD_SHA'"
     cat <<'GH_STUB'
-paginate=0 expr="" endpoint=""
+paginate=0 expr="" endpoint="" prefix=""
 while [ $# -gt 0 ]; do
   case "$1" in
   --paginate) paginate=1 ;;
@@ -74,10 +87,20 @@ while [ $# -gt 0 ]; do
     ;;
   */check-runs*) endpoint=check-runs ;;
   */status*) endpoint=status ;;
+  */pulls*) endpoint=pulls ;;
+  */rules/branches/*) endpoint=rules ;;
+  */protection/*) endpoint=protection ;;
+  */commits/*) endpoint=commit ;;
+  */contents/.github/workflows/*) endpoint=workflow-file ;;
+  */contents/.github/workflows*) endpoint=workflows ;;
   esac
+  [[ "$1" =~ ^repos/[^/]+/[^/]+$ ]] && endpoint=repo
+  case "$1" in *"$head_sha"*) prefix=head- ;; esac
   shift
 done
 [ -n "$endpoint" ] || exit 1
+endpoint="$prefix$endpoint"
+[ -e "$pages/$endpoint.1.json" ] || exit 1
 n=1
 while [ -e "$pages/$endpoint.$n.json" ]; do
   if [ -n "$expr" ]; then
@@ -91,6 +114,33 @@ done
 GH_STUB
   } >"$FAKE_BIN/gh"
   chmod +x "$FAKE_BIN/gh"
+}
+
+# stub_pr <head-tree> <head-check-runs-page> [<head-status-page> [<merged-at>]]
+# — after stub_gh: the merge commit is PR #42's, whose head has the given tree
+# and checks. The base branch requires `build` and `cla`. merged-at defaults to
+# long ago, past the empty-merge-commit grace.
+stub_pr() {
+  printf '[{"number": 42, "merge_commit_sha": "%s", "merged_at": "%s", "head": {"sha": "%s"}, "base": {"ref": "main"}}]\n' \
+    "$MERGE_SHA" "${4:-2020-01-01T00:00:00Z}" "$HEAD_SHA" >"$FAKE_BIN/pages/pulls.1.json"
+  printf '{"sha": "%s", "commit": {"tree": {"sha": "%s"}}}\n' "$HEAD_SHA" "$1" >"$FAKE_BIN/pages/head-commit.1.json"
+  printf '%s\n' "$2" >"$FAKE_BIN/pages/head-check-runs.1.json"
+  # Not "${3:-{...\}}": bash 3.2 (macOS /bin/bash) keeps the backslash.
+  local status='{"statuses": []}'
+  [ -n "${3:-}" ] && status=$3
+  printf '%s\n' "$status" >"$FAKE_BIN/pages/head-status.1.json"
+  echo '[{"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "build"}, {"context": "cla"}]}}]' \
+    >"$FAKE_BIN/pages/rules.1.json"
+}
+
+# stub_workflows [<workflow-body>] — after stub_gh: the merge commit has one
+# workflow file, ci.yml, plus a README the reader must skip. With no body the
+# file is listed but unreadable (#2061).
+stub_workflows() {
+  echo '[{"name": "ci.yml", "path": ".github/workflows/ci.yml", "type": "file"}, {"name": "README.md", "path": ".github/workflows/README.md", "type": "file"}]' \
+    >"$FAKE_BIN/pages/workflows.1.json"
+  [ -n "${1:-}" ] && printf '%s\n' "$1" >"$FAKE_BIN/pages/workflow-file.1.json"
+  return 0
 }
 
 # success_runs <count> — a check-runs page of <count> completed, successful runs.
@@ -190,7 +240,7 @@ expect "a red verdict names the failing run" 1 "build"
 # (f) An API failure is not evidence of anything. Reading a network blip as a
 # clean bill of health is the same mistake as (a), one layer down.
 stub_gh ''
-expect "an unreadable API is NOT-YET, not green" 2 "could not read check-runs"
+expect "an unreadable API is NOT-YET, not green" 2 "could not read"
 
 # (g) A cancelled or timed-out run is a completed non-success, so it is RED
 # rather than something the vocabulary quietly drops.
@@ -231,6 +281,180 @@ expect "a successful commit status is counted" 0 "all 2 check(s)"
 stub_gh '{"check_runs": []}' -- '{"statuses": [{"context": "cla", "state": "success"}]}'
 expect "a status-only commit is GREEN, not empty" 0 "all 1 check(s)"
 
+# (k) #2055: the PR run is the gate. The merge commit's tree equals PR #42's
+# head's tree, so the head's REQUIRED checks decide, and the merge commit only
+# has to be green (or still running) in what it still runs on push.
+PUSH_GREEN='{"check_runs": [
+  {"name": "CodeQL",     "status": "completed", "conclusion": "success"},
+  {"name": "cache-warm", "status": "completed", "conclusion": "success"}
+]}'
+HEAD_GREEN='{"check_runs": [
+  {"name": "build",    "status": "completed", "conclusion": "success"},
+  {"name": "advisory", "status": "completed", "conclusion": "failure"}
+]}'
+CLA_OK='{"statuses": [{"context": "cla", "state": "success"}]}'
+
+stub_gh "$PUSH_GREEN"
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK"
+expect "tree equal, head's required checks green, push jobs green is GREEN" 0 "same tree as PR #42 head"
+
+stub_gh "$PUSH_GREEN"
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK"
+expect "a failing advisory check on the PR head does not make the merge red" 0 "GREEN"
+
+stub_gh "$PUSH_GREEN"
+stub_pr tree-a '{"check_runs": [
+  {"name": "build", "status": "completed", "conclusion": "failure", "html_url": "https://example.invalid/run/9"}
+]}' "$CLA_OK"
+expect "a red required check on the PR head is RED" 1 "required check(s) failed on PR #42 head"
+
+stub_gh "$PUSH_GREEN"
+stub_pr tree-a "$HEAD_GREEN"
+expect "a required check absent from the PR head is NOT-YET" 2 "required check(s) absent: cla"
+
+stub_gh '{"check_runs": [
+  {"name": "publish",    "status": "in_progress", "conclusion": null},
+  {"name": "cache-warm", "status": "completed",   "conclusion": "success"}
+]}'
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK"
+expect "a push job still running on the merge commit is NOT-YET" 2 "still running: publish"
+
+stub_gh '{"check_runs": [
+  {"name": "publish", "status": "completed", "conclusion": "failure", "html_url": "https://example.invalid/run/8"}
+]}'
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK"
+expect "a red push job on the merge commit is RED" 1 "failed on the merge commit"
+
+# CodeQL on the merge commit re-analyses the tree the PR's required CodeQL run
+# already passed: with equal trees it is reported as INFO and never decides.
+CODEQL_RUNNING='{"check_runs": [
+  {"name": "Analyze (go)",      "status": "in_progress", "conclusion": null},
+  {"name": "Analyze (actions)", "status": "queued",      "conclusion": null},
+  {"name": "CodeQL",            "status": "in_progress", "conclusion": null}
+]}'
+CODEQL_RED='{"check_runs": [
+  {"name": "Analyze (go)", "status": "completed", "conclusion": "failure", "html_url": "https://example.invalid/run/7"},
+  {"name": "CodeQL",       "status": "completed", "conclusion": "failure"},
+  {"name": "cache-warm",   "status": "completed", "conclusion": "success"}
+]}'
+stub_gh "$CODEQL_RUNNING"
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK" 2999-01-01T00:00:00Z
+expect "tree equal, CodeQL still running on the merge commit: GREEN" 0 "CodeQL still running (informational): Analyze (go), Analyze (actions), CodeQL"
+stub_gh "$CODEQL_RED"
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK"
+expect "tree equal, CodeQL failed on the merge commit: GREEN" 0 "GREEN"
+stub_gh "$CODEQL_RED"
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK"
+expect "tree equal, a failed CodeQL is reported as INFO" 0 "INFO     merge commit deadbeef: CodeQL did not pass: Analyze (go) (failure), CodeQL (failure)"
+
+stub_gh '{"check_runs": []}'
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK" 2999-01-01T00:00:00Z
+expect "an empty merge commit inside the grace is NOT-YET" 2 "no checks yet"
+
+stub_gh '{"check_runs": []}'
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK"
+expect "an empty merge commit after the grace is GREEN: nothing runs on push" 0 "GREEN"
+
+# #2061: when no workflow can run on push, nothing will ever appear on the
+# merge commit, so the grace does not apply. Any doubt keeps it.
+stub_gh '{"check_runs": []}'
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK" 2999-01-01T00:00:00Z
+stub_workflows $'on:\n  pull_request:\n  workflow_dispatch: # not a push\n  schedule:\n    - cron: "0 7 * * *"'
+expect "an empty merge commit inside the grace, no push workflows: GREEN" 0 "GREEN"
+
+stub_gh '{"check_runs": []}'
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK" 2999-01-01T00:00:00Z
+stub_workflows $'on:\n  push:\n    branches: [main]'
+expect "an empty merge commit inside the grace, a push workflow: NOT-YET" 2 "no checks yet"
+
+stub_gh '{"check_runs": []}'
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK" 2999-01-01T00:00:00Z
+stub_workflows $'on: pull_request\njobs:\n  x:\n    steps:\n      - run: git push origin HEAD'
+expect "any mention of push keeps the grace (the fallback is coarse, never greener)" 2 "no checks yet"
+
+stub_gh '{"check_runs": []}'
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK" 2999-01-01T00:00:00Z
+stub_workflows
+expect "an unreadable workflow file keeps the grace" 2 "no checks yet"
+
+stub_gh '{"check_runs": []}'
+stub_pr tree-a '{"check_runs": [{"name": "build", "status": "completed", "conclusion": "failure"}]}' "$CLA_OK" 2999-01-01T00:00:00Z
+stub_workflows 'on: pull_request'
+expect "no push workflows does not rescue a red head" 1 "RED"
+
+# Trees differ: strict should prevent it, so it is a bypass and the PR run is
+# not evidence. The merge commit must carry every required check itself.
+stub_gh "$PUSH_GREEN"
+stub_pr tree-b "$HEAD_GREEN" "$CLA_OK" 2999-01-01T00:00:00Z
+expect "tree differs, required checks absent, inside the grace: NOT-YET" 2 "required check(s) absent from"
+stub_gh "$PUSH_GREEN"
+stub_pr tree-b "$HEAD_GREEN" "$CLA_OK" 2999-01-01T00:00:00Z
+expect "a tree-differs verdict says why" 2 "differs from PR #42 head"
+# After the grace, with no required check running there, waiting cannot help:
+# the landed tree was never tested, and the verdict says how to test it.
+stub_gh "$PUSH_GREEN"
+stub_pr tree-b "$HEAD_GREEN" "$CLA_OK"
+expect "tree differs, required checks absent after the grace: RED" 1 "run the suites on main via workflow_dispatch"
+# The age must not come from jq's date functions: jq 1.6 reads a UTC time an
+# hour late, so a merge ten minutes old stayed inside the grace for an hour. A
+# jq that refuses fromdateiso8601 stands in for it; the verdict must still be RED.
+TEN_MIN_AGO=$(($(date -u +%s) - 600))
+TEN_MIN_AGO=$(date -u -r "$TEN_MIN_AGO" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null ||
+  date -u -d "@$TEN_MIN_AGO" +%Y-%m-%dT%H:%M:%SZ)
+REAL_JQ=$(command -v jq)
+stub_gh "$PUSH_GREEN"
+stub_pr tree-b "$HEAD_GREEN" "$CLA_OK" "$TEN_MIN_AGO"
+printf '#!/usr/bin/env bash\ncase "$*" in *fromdateiso8601*) exit 5 ;; esac\nexec %s "$@"\n' "$REAL_JQ" >"$FAKE_BIN/jq"
+chmod +x "$FAKE_BIN/jq"
+expect "a merge ten minutes old is past the grace without jq date parsing: RED" 1 "run the suites on main via workflow_dispatch"
+rm -f "$FAKE_BIN/jq"
+stub_gh '{"check_runs": [
+  {"name": "build", "status": "in_progress", "conclusion": null}
+]}'
+stub_pr tree-b "$HEAD_GREEN" "$CLA_OK"
+expect "tree differs, a required check still running there: NOT-YET" 2 "still running"
+stub_gh '{"check_runs": [
+  {"name": "build", "status": "completed", "conclusion": "success"}
+]}' -- "$CLA_OK"
+stub_pr tree-b "$HEAD_GREEN" "$CLA_OK"
+expect "tree differs but the merge commit carries every required check: GREEN" 0 "GREEN"
+# On the untested-tree path CodeQL counts like every other check.
+stub_gh '{"check_runs": [
+  {"name": "build",        "status": "completed", "conclusion": "success"},
+  {"name": "Analyze (go)", "status": "completed", "conclusion": "failure"}
+]}' -- "$CLA_OK"
+stub_pr tree-b "$HEAD_GREEN" "$CLA_OK"
+expect "tree differs, required checks green but CodeQL failed there: RED" 1 "Analyze (go)"
+stub_gh '{"check_runs": [
+  {"name": "build",  "status": "completed",   "conclusion": "success"},
+  {"name": "CodeQL", "status": "in_progress", "conclusion": null}
+]}' -- "$CLA_OK"
+stub_pr tree-b "$HEAD_GREEN" "$CLA_OK"
+expect "tree differs, CodeQL still running there: NOT-YET" 2 "still running"
+stub_gh '{"check_runs": [
+  {"name": "Analyze (go)", "status": "completed", "conclusion": "success"},
+  {"name": "CodeQL",       "status": "completed", "conclusion": "success"}
+]}'
+stub_pr tree-b "$HEAD_GREEN" "$CLA_OK"
+expect "tree differs, CodeQL green but required checks absent after the grace: RED" 1 "never ran on"
+
+# cache-warm tests nothing: its failure is never main being red.
+stub_gh '{"check_runs": [
+  {"name": "CodeQL",     "status": "completed", "conclusion": "success"},
+  {"name": "cache-warm", "status": "completed", "conclusion": "failure"}
+]}'
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK"
+expect "a red cache-warm does not make main red" 0 "GREEN"
+
+# An unreadable required set is never GREEN: the gate cannot be verified.
+stub_gh "$PUSH_GREEN"
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK"
+rm "$FAKE_BIN/pages/rules.1.json"
+expect "tree equal but the required set is unreadable: NOT-YET" 2 "could not be read"
+stub_gh "$PUSH_GREEN"
+rm "$FAKE_BIN/pages/rules.1.json"
+expect "no merged PR and the required set is unreadable: NOT-YET, never green" 2 "could not be read"
+
 # (h) #1540: when a `nightgauge` binary CAN be resolved, the script must
 # delegate to it entirely and never touch its own gh/jq fallback logic — the
 # stub binary below never even looks at `gh`, so a mismatched exit code here
@@ -241,6 +465,10 @@ stub_nightgauge() {
   FAKE_BIN=$(mktemp -d)
   cat >"$FAKE_BIN/nightgauge" <<EOF
 #!/usr/bin/env bash
+if [ "\$3" = "--help" ]; then
+  echo "capability: merged-pr-gate"
+  exit 0
+fi
 echo "delegated: \$*"
 exit $rc
 EOF
@@ -279,6 +507,32 @@ expect_delegated "a resolvable binary is delegated to and owns RED's exit code" 
 
 stub_nightgauge 2
 expect_delegated "a resolvable binary is delegated to and owns NOT-YET's exit code" 2
+
+# #2055: a binary that predates the merged-PR rule (no capability line in
+# `ci checks-complete --help`) would demand the required checks on the merge
+# commit forever. The script must not hand off to it; it applies its own rule.
+stub_gh "$PUSH_GREEN"
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK"
+cat >"$FAKE_BIN/nightgauge" <<'OLD_BINARY'
+#!/usr/bin/env bash
+if [ "$3" = "--help" ]; then
+  echo "Answer \"did this SHA's CI go green?\""
+  exit 0
+fi
+echo "delegated: $*"
+exit 2
+OLD_BINARY
+chmod +x "$FAKE_BIN/nightgauge"
+out=$(env -u NIGHTGAUGE_BIN PATH="$FAKE_BIN:$PATH" bash "$SCRIPT" deadbeef acme/widget 2>&1)
+rc=$?
+if [ "$rc" -eq 0 ] && [[ "$out" == *"same tree as PR #42 head"* ]] && [[ "$out" != *"delegated:"* ]]; then
+  echo "ok    an old binary without the capability is not handed off to"
+  PASS=$((PASS + 1))
+else
+  echo "FAIL  an old binary without the capability is not handed off to: exit $rc"
+  echo "      output: $out"
+  FAIL=$((FAIL + 1))
+fi
 
 # (i) Portability: sibling repositories vendor a byte-identical copy, so the
 # repository must come from a flag or from the checkout's own origin remote,

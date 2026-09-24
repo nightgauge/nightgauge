@@ -47,6 +47,10 @@ type CheckItem struct {
 	OK     bool   `json:"ok"`               // true when this check passed
 	Detail string `json:"detail,omitempty"` // human-readable success detail
 	Error  string `json:"error,omitempty"`  // human-readable failure reason
+	// Findings is the structured form of a tracked_secrets failure (#2024):
+	// path, line and pattern per hit, with the value redacted. Additive to
+	// schema v1 and populated by no other check.
+	Findings []SecretFinding `json:"findings,omitempty"`
 }
 
 // doctorOwner / doctorRepo are the nil-safe accessors the cadence probes need:
@@ -103,6 +107,14 @@ const installMsg = "nightgauge is not in PATH.\n" +
 // warning. When empty/nil, the adapter section is omitted entirely (the
 // default environment-only doctor behavior).
 func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapters []string) DoctorResult {
+	return RunDoctorWithConfigError(ctx, cfg, nil, client, adapters)
+}
+
+// RunDoctorWithConfigError is RunDoctor for a caller that loaded cfg itself
+// and got cfgErr. A nil cfg with a non-nil cfgErr is a config that exists and
+// was refused — for example a plaintext token in the committed file (#2023) —
+// and is reported as a failed config check rather than as a fresh repository.
+func RunDoctorWithConfigError(ctx context.Context, cfg *config.Config, cfgErr error, client *gh.Client, adapters []string) DoctorResult {
 	result := DoctorResult{
 		V:      1,
 		Checks: make(map[string]CheckItem),
@@ -205,7 +217,14 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 	}
 
 	// --- config (required; downgraded to warning for fresh/nil config) ---
-	if cfg == nil {
+	if cfg == nil && cfgErr != nil {
+		loadErr := "configuration failed to load: " + cfgErr.Error()
+		result.Checks["config"] = CheckItem{OK: false, Error: loadErr}
+		result.Checks["project"] = CheckItem{OK: false, Error: "skipped: configuration failed to load"}
+		errors = append(errors, loadErr)
+		hasRequiredFailure = true
+		result.FailedChecks = append(result.FailedChecks, "config")
+	} else if cfg == nil {
 		result.Checks["config"] = CheckItem{OK: false, Detail: "no .nightgauge/config.yaml found (fresh repository)"}
 		result.Checks["project"] = CheckItem{OK: false, Detail: "no configuration (fresh repository)"}
 		warnings = append(warnings, "no .nightgauge/config.yaml — run `nightgauge repo-init` to configure")
@@ -494,6 +513,23 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 	result.Checks["ledger_daemon_coverage"] = ledgerCoverage
 	if ledgerCoverageWarning != "" {
 		warnings = append(warnings, ledgerCoverageWarning)
+	}
+
+	// Credentials committed under .nightgauge/ (#2024). The loader now refuses
+	// a plaintext secret in the config tiers; this reports one that is already
+	// in the repository, in any tracked file there.
+	trackedCreds, trackedCredsWarning := checkTrackedCredentials(cwd)
+	result.Checks[trackedCredentialsCheck] = trackedCreds
+	if trackedCredsWarning != "" {
+		warnings = append(warnings, trackedCredsWarning)
+	}
+
+	// A machine-file credential on a CI host (ADR-024 § 5): a shared runner
+	// would hand it to the next job.
+	ciCreds, ciCredsWarning := checkCIMachineCredentials(ciGetenv)
+	result.Checks[ciMachineCredentialsCheck] = ciCreds
+	if ciCredsWarning != "" {
+		warnings = append(warnings, ciCredsWarning)
 	}
 
 	processLeaks, processWarning := checkOrphanedProcesses(cwd, now)

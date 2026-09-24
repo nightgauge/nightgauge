@@ -1,7 +1,7 @@
 # Adapter Capability Matrix
 
-**Version:** 1.2
-**Updated:** 2026-08-26
+**Version:** 1.3
+**Updated:** 2026-09-21
 **Author:** nightgauge
 
 ---
@@ -9,7 +9,7 @@
 ## Overview
 
 This document is the canonical reference for what each Nightgauge AI CLI adapter
-actually supports. It was produced by a systematic audit of all nine adapter implementations
+actually supports. It was produced by a systematic audit of the adapter implementations
 in both the TypeScript SDK layer and the Go binary layer, with code-level verification of
 every claim against source.
 
@@ -24,17 +24,18 @@ Capability flags such as streaming and token tracking do not imply that an
 adapter can run a coding pipeline. Pipeline dispatch requires an agentic tool
 loop capable of editing files, running commands, and calling `gh`.
 
-| Adapter         | Agentic pipeline eligible | Release status                                  |
-| --------------- | :-----------------------: | ----------------------------------------------- |
-| claude-headless |             ✓             | Recommended; primary tested path                |
-| claude-sdk      |             ✓             | Advanced optional SDK integration               |
-| codex           |             ✓             | **Beta**; live six-stage matrix pending         |
-| gemini          |             ✓             | **Experimental**; live six-stage matrix pending |
-| copilot         |             ✓             | **Experimental**; live six-stage matrix pending |
-| grok            |             ✓             | **Beta**; six-stage run + beta bar met (#528)   |
-| gemini-sdk      |             ✗             | Chat-completion-only                            |
-| ollama          |             ✗             | Chat-completion-only                            |
-| lm-studio       |             ✗             | Chat-completion-only                            |
+| Adapter         | Agentic pipeline eligible | Release status                                    |
+| --------------- | :-----------------------: | ------------------------------------------------- |
+| claude-headless |             ✓             | Recommended; primary tested path                  |
+| claude-sdk      |             ✓             | Advanced optional SDK integration                 |
+| codex           |             ✓             | **Beta**; live six-stage matrix pending           |
+| gemini          |             ✓             | **Experimental**; live six-stage matrix pending   |
+| copilot         |             ✓             | **Experimental**; live six-stage matrix pending   |
+| grok            |             ✓             | **Beta**; six-stage run + beta bar met (#528)     |
+| opencode        |             ✓             | **Experimental**; live six-stage evidence pending |
+| gemini-sdk      |             ✗             | Chat-completion-only                              |
+| ollama          |             ✗             | Chat-completion-only                              |
+| lm-studio       |             ✗             | Chat-completion-only                              |
 
 The runtime's `isAgenticAdapter()` check is authoritative. Chat-only adapters
 remain supported for evaluation, judging, and summarization but are rejected at
@@ -62,20 +63,23 @@ below are the whole declared surface: `agentic` (:87),
 - **direct API key** — `requiresDirectApiKey()`; `true` means a raw provider key
   is mandatory rather than a CLI session.
 
-| Adapter         | agentic | orchestration     | direct API key | `runWorkflow?()`       | Auth method                                                                  | Min version    |
-| --------------- | :-----: | ----------------- | :------------: | ---------------------- | ---------------------------------------------------------------------------- | -------------- |
-| claude-headless |    ✓    | `native-workflow` |       ✗        | ✓ (gated ≥ `v2.1.154`) | `claude auth status` (OAuth)                                                 | none declared  |
-| claude-sdk      |    ✓    | `native-workflow` |       ✓        | ✓ (gated ≥ `v2.1.154`) | `ANTHROPIC_API_KEY` (checked in `validateAuth`)                              | N/A (SDK)      |
-| codex           |    ✓    | `sdk-fanout`      |       ✗        | —                      | `codex login status`                                                         | `0.111.0` warn |
-| gemini          |    ✓    | `sdk-fanout`      |       ✗        | —                      | Cascade: `GEMINI_API_KEY` / Vertex / `gcloud`                                | `0.29.0` warn  |
-| gemini-sdk      |    ✗    | `sdk-fanout`      |       ✓        | —                      | `GEMINI_API_KEY` or `GOOGLE_API_KEY` (checked in `validateAuth`)             | N/A (SDK)      |
-| grok            |    ✓    | `sdk-fanout`      |       ✗        | —                      | `grok login` session or `XAI_API_KEY`                                        | `1.0.0` warn   |
-| copilot         |    ✓    | `sdk-fanout`      |       ✗        | —                      | `GH_TOKEN` / `GITHUB_TOKEN` / `COPILOT_GITHUB_TOKEN` → `copilot auth status` | none declared  |
-| lm-studio       |    ✗    | `sdk-fanout`      |       ✗        | —                      | None (local HTTP server)                                                     | N/A (HTTP)     |
-| ollama          |    ✗    | `sdk-fanout`      |       ✗        | —                      | None (local HTTP server)                                                     | N/A (HTTP)     |
+| Adapter         | agentic | orchestration     | direct API key | `runWorkflow?()`       | Auth method                                                                                             | Min version           |
+| --------------- | :-----: | ----------------- | :------------: | ---------------------- | ------------------------------------------------------------------------------------------------------- | --------------------- |
+| claude-headless |    ✓    | `native-workflow` |       ✗        | ✓ (gated ≥ `v2.1.154`) | `claude auth status` (OAuth)                                                                            | none declared         |
+| claude-sdk      |    ✓    | `native-workflow` |       ✓        | ✓ (gated ≥ `v2.1.154`) | `ANTHROPIC_API_KEY` (checked in `validateAuth`)                                                         | N/A (SDK)             |
+| codex           |    ✓    | `sdk-fanout`      |       ✗        | —                      | `codex login status`                                                                                    | `0.111.0` warn        |
+| gemini          |    ✓    | `sdk-fanout`      |       ✗        | —                      | Cascade: `GEMINI_API_KEY` / Vertex / `gcloud`                                                           | `0.29.0` warn         |
+| gemini-sdk      |    ✗    | `sdk-fanout`      |       ✓        | —                      | `GEMINI_API_KEY` or `GOOGLE_API_KEY` (checked in `validateAuth`)                                        | N/A (SDK)             |
+| grok            |    ✓    | `sdk-fanout`      |       ✗        | —                      | `grok login` session or `XAI_API_KEY`                                                                   | `1.0.0` warn          |
+| copilot         |    ✓    | `sdk-fanout`      |       ✗        | —                      | `GH_TOKEN` / `GITHUB_TOKEN` / `COPILOT_GITHUB_TOKEN` → `copilot auth status`                            | none declared         |
+| opencode        |    ✓    | `sdk-fanout`      |       ✗        | —                      | Per-model, at dispatch (ADR-022 § 17): `ANTHROPIC_API_KEY` for `anthropic/*`; none for a local endpoint | `1.18.30` fail-closed |
+| lm-studio       |    ✗    | `sdk-fanout`      |       ✗        | —                      | None (local HTTP server)                                                                                | N/A (HTTP)            |
+| ollama          |    ✗    | `sdk-fanout`      |       ✗        | —                      | None (local HTTP server)                                                                                | N/A (HTTP)            |
 
-`grok` has no per-adapter deep dive below by design — its verified behaviour is
-recorded in [§ Grok Live-Run Evidence (#528)](#grok-live-run-evidence-528).
+Beyond this surface, `opencode` is gated: `Manager.RunStage` refuses every
+dispatch unless `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` is set in the process
+environment (ADR-022 § The enable gate). See
+[§ 10. opencode](#10-opencode) for the deep dive.
 
 ### Go Binary Adapter Coverage
 
@@ -93,6 +97,7 @@ The Go adapters are the **scheduler-driven execution path** (not the VSCode IPC 
 | ollama          |    ✓ (bridge)     |         ✓          | Go uses claude CLI as SDK bridge                                                                                       |
 | copilot         |         ✓         |         ✓          | CLI contract exists in both layers; live verification remains                                                          |
 | grok            |         ✓         |         ✓          | Beta since 2026-08-15 (#528) — see § Grok Live-Run Evidence                                                            |
+| opencode        |         ✓         |         ✓          | Experimental; both layers refuse every dispatch until `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` is set (ADR-022)            |
 
 **Note on claude-sdk Go adapter:** The Go `ClaudeSdkAdapter` spawns `claude -p --output-format stream-json`
 using `ANTHROPIC_API_KEY`. This is NOT the same as the TypeScript `ClaudeSdkAdapter` which imports
@@ -515,6 +520,141 @@ is still pending.
 
 ---
 
+### 9. grok
+
+**File:** `packages/nightgauge-sdk/src/cli/adapters/GrokAdapter.ts`
+
+**Release status:** Beta (verified 2026-08-15, see
+[§ Grok Live-Run Evidence (#528)](#grok-live-run-evidence-528)).
+
+| Property               | Value                                                                              |
+| ---------------------- | ---------------------------------------------------------------------------------- |
+| CLI command            | `grok`                                                                             |
+| Auth method            | `XAI_API_KEY` / a `grok login` session / `grok inspect --json`                     |
+| Prompt delivery        | prompt-file                                                                        |
+| Default args           | `--output-format streaming-json --always-approve --no-auto-update --max-turns 200` |
+| Min version            | `1.0.0` (warn, not block)                                                          |
+| `requiresDirectApiKey` | `false`                                                                            |
+
+**Auth validation quality:** Good — a cheapest-first cascade:
+
+1. `XAI_API_KEY` env var (instant, no subprocess)
+2. A `grok login` session file, checked for existence
+3. `grok inspect --json`, a cheap subprocess probe that exits 0 when a session
+   can be loaded
+
+Error message: `Grok CLI is not authenticated. Run 'grok login' (SuperGrok /
+grok.com session) or set XAI_API_KEY.`
+
+**Special behaviors:**
+
+- **Model routing:** `NIGHTGAUGE_GROK_MODEL` → `NIGHTGAUGE_MODEL` resolves and
+  validates against the registry (`resolveAndValidateModel`); the resolved id
+  is passed as `--model`.
+- **Effort:** `NIGHTGAUGE_GROK_EFFORT` maps to `--effort` when set
+  (`grokCliEffortFlag`).
+- **Command override:** `NIGHTGAUGE_GROK_CLI_COMMAND` and
+  `NIGHTGAUGE_GROK_CLI_ARGS` override the binary and default args, the same
+  pattern as `claude-headless` and `gemini`.
+
+**Go adapter (`internal/execution/adapters/grok.go`):** `Agentic()` is `true`;
+`BuildCommand` mirrors the TypeScript default args and applies the same
+provider-global `NIGHTGAUGE_GROK_EFFORT` override before the dispatch effort.
+`UsesStdin()` is `false` — the prompt goes through the same prompt-file
+delivery as the SDK adapter.
+
+**No open gaps.** The beta bar (#585, #591 fixed and merged; the re-run auth
+probe landing `adapter_auth_failed`) is recorded in
+[§ Grok Live-Run Evidence (#528)](#grok-live-run-evidence-528).
+
+---
+
+### 10. opencode
+
+**Files:** `packages/nightgauge-sdk/src/cli/adapters/OpenCodeAdapter.ts` (TS),
+`internal/execution/adapters/opencode.go` (Go). Full design record:
+[ADR-022](decisions/022-opencode-multi-provider-adapter.md).
+
+**Release status:** Experimental. `Manager.RunStage` (Go) and
+`OpenCodeAdapter.validateAuth`/`createQueryFunction` (TS) refuse every dispatch
+unless `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` is set in the process environment,
+and the allowed dispatch still prints, on stderr, every control ADR-022 lists
+as not yet enforced (ADR-022 § The enable gate). No live six-stage evidence is
+recorded yet (pending #1659).
+
+| Property               | Value                                                                                                                                                                                                                 |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CLI command            | `opencode`                                                                                                                                                                                                            |
+| Auth method            | Per model, at dispatch: `ANTHROPIC_API_KEY` for `anthropic/*`; no credential for a local endpoint; a platform-provider key (`github-copilot`, `gitlab`, `amazon-bedrock`, `google-vertex*`) is refused (ADR-022 § 17) |
+| Prompt delivery        | stdin                                                                                                                                                                                                                 |
+| Default args           | `run --format json --print-logs --log-level ERROR`                                                                                                                                                                    |
+| Min version            | `1.18.30` (fail-closed below floor; above max-tested, hosted dispatch warns and runs a self-test, a declared local endpoint is refused — ADR-022 § 20)                                                                |
+| `requiresDirectApiKey` | `false`                                                                                                                                                                                                               |
+
+One adapter id reaches every provider: the provider is a property of the
+dispatched model id (`<provider>/<model>`, split on the first `/`), never of
+the adapter (ADR-022 § 1). `lmstudio/qwen/qwen3.8-27b` is provider key
+`lmstudio`, model `qwen/qwen3.8-27b`; `anthropic/claude-sonnet-5` is provider
+key `anthropic`, model `claude-sonnet-5`. A bare registry id or a tier band
+(`sonnet`) is refused with remediation to name the provider — the adapter
+never infers one.
+
+**Orchestration:** `sdk-fanout` (ADR-022 § 16). OpenCode's own `task` subagents
+are not Nightgauge's workflow runtime; fan-out runs on the portable executors
+like every other non-`native-workflow` adapter.
+
+**Cost recording (ADR-022 § 3) — mechanics, not claims:**
+
+- A stage records `cost_usd: 0` with `cost_unstamped: false` only when its
+  model is known to run on the endpoint that served it (a declared
+  `lm-studio`/`ollama` endpoint, or an `openai-compatible` endpoint declared
+  `self_hosted: true`).
+- A hosted model the registry knows is re-priced from the registry's rate
+  card, never from OpenCode's own reported `cost`, which reads `0` for a
+  provider OpenCode holds no price for.
+- The USD watchdog bounds the stage's own steps at the registry rate of the
+  dispatched model as the stream arrives; it cannot bound spend inside a
+  subagent session, which is priced only after the stage ends.
+- Every other zero — a hosted or unknown model the registry cannot price, or
+  an `openai-compatible` endpoint not declared `self_hosted` — is recorded
+  `cost_usd: 0` with `cost_unstamped: true`.
+
+**Capability disposition (ADR-022 § 15).** Every OpenCode capability has one
+disposition; see the ADR for the reasoning behind each:
+
+| Capability                       | Disposition                                   | Owning issue(s)            |
+| -------------------------------- | --------------------------------------------- | -------------------------- |
+| Skills                           | supported                                     | #1666                      |
+| Commands                         | supported                                     | #1666                      |
+| Subagents (`task`)               | denied (AC9 fallback)                         | #1624                      |
+| Plugins                          | supported, Nightgauge's only                  | #1635, #1640, #1641, #1642 |
+| MCP                              | config: supported; tool calls: blocked closed | #1626, #1640               |
+| Permissions                      | supported                                     | #1638                      |
+| Sandboxing                       | non-goal                                      | ADR-022 § 15               |
+| Resume and fork                  | deferred                                      | #1643                      |
+| Export                           | supported, sanitized only                     | ADR-022 § 22               |
+| Import                           | non-goal                                      | ADR-022 § 15               |
+| Usage (`opencode stats`)         | non-goal                                      | ADR-022 § 15               |
+| `json_schema` output             | deferred                                      | #1650                      |
+| Variants (`--variant`)           | supported                                     | #1643                      |
+| Compaction                       | supported                                     | #1625, #1641               |
+| Worktrees and workspaces         | non-goal                                      | ADR-022 § 15               |
+| Snapshots                        | off by default                                | ADR-022 § 12               |
+| LSP                              | supported, installed servers                  | ADR-022 § 12               |
+| Share                            | non-goal                                      | ADR-022 § 10               |
+| GitHub agent (`opencode github`) | deferred                                      | #1650                      |
+| ACP                              | deferred                                      | #1650                      |
+| `serve` and `run --attach`       | deferred                                      | #1650                      |
+
+**Go support:** registered in `internal/execution/adapters/registry.go`;
+`Agentic()` is `true`. Both layers share the same enable gate and the same
+`ANTHROPIC_API_KEY` refusal (ADR-022 § The enable gate, § 17).
+
+**No open gaps beyond the promotion criteria.** ADR-022 § 23 lists what moves
+`opencode` from Experimental to Beta and from Beta to GA.
+
+---
+
 ## Gaps and Decisions
 
 ### Gap #1: claude-headless TypeScript vs Go Parity
@@ -647,6 +787,16 @@ This document should be updated when:
    loses a member
 5. A gap is resolved (delete the gap section and its Follow-Up row rather than
    leaving a closed entry behind)
+6. OpenCode's compat manifest (`internal/adaptercompat/manifests/opencode.json`)
+   bumps its floor or max-tested version — re-capture
+   `internal/execution/adapters/testdata/opencode-cli/` and
+   `internal/doctor/testdata/opencode-capture/` in the same change, and update
+   § 10's Min version row and ADR-022 § 20
+7. OpenCode's capability disposition table (ADR-022 § 15) gains, loses, or
+   re-classifies a row — update § 10's disposition table to match, row for
+   row
+8. OpenCode's per-run config schema pins a new key, or the schema built by
+   `BuildOpenCodeConfig` changes shape
 
 **Last verified:** 2026-08-26 — the Adapter Surface table, the Go Binary Adapter
 Coverage table, and every gap section were re-read against

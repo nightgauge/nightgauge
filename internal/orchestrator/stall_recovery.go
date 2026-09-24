@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/internal/terminalkind"
 )
@@ -92,8 +93,7 @@ func ClassifyStallSignal(killedStage state.PipelineStage, errorText string, work
 		return signal
 	}
 
-	planningPath := filepath.Join(workspaceRoot, ".nightgauge", "pipeline",
-		fmt.Sprintf("planning-%d.json", issueNumber))
+	planningPath := pipelineStatePath(workspaceRoot, fmt.Sprintf("planning-%d.json", issueNumber))
 	data, err := os.ReadFile(planningPath)
 	if err != nil {
 		// Plan file missing — fall through to PLAN_REVISION_NEEDED.
@@ -168,7 +168,10 @@ func WriteSyntheticFeedbackContext(workspaceRoot string, issueNumber int, signal
 	if workspaceRoot == "" {
 		return fmt.Errorf("workspaceRoot is required")
 	}
-	dir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline")
+	dir, err := layout.PipelineStateDir(workspaceRoot)
+	if err != nil {
+		return fmt.Errorf("resolve pipeline dir: %w", err)
+	}
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("create pipeline dir: %w", err)
 	}

@@ -3,12 +3,12 @@ package orchestrator
 import (
 	"fmt"
 	"log"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/diagnostics"
 	"github.com/nightgauge/nightgauge/internal/intelligence/actualsize"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/reclaim"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
@@ -218,7 +218,12 @@ func captureSchedulerActualSize(workspaceRoot string, issueNumber int, runtime *
 	// Persist again because the ordinary stage snapshot is written immediately
 	// before writeStageExitRecord. This second atomic write is what makes the
 	// measurement visible to Recorder.Record and crash recovery.
-	stateDir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline")
+	stateDir, err := layout.PipelineStateDir(workspaceRoot)
+	if err != nil {
+		log.Printf("#%d: pre-merge actual-size measurement captured (%d lines) but runtime persistence skipped: %v",
+			issueNumber, lines, err)
+		return
+	}
 	if err := runtime.Persist(stateDir); err != nil {
 		log.Printf("#%d: pre-merge actual-size measurement captured (%d lines) but runtime persistence failed: %v",
 			issueNumber, lines, err)
@@ -272,7 +277,7 @@ func (s *Scheduler) rateLimitRemainingAtExit() int {
 	if user == "" {
 		return -1
 	}
-	entry, ok, err := tracker.Get(user)
+	entry, ok, err := tracker.GetBudgetAcrossPools(user)
 	if err != nil || !ok || entry == nil {
 		return -1
 	}
@@ -358,4 +363,14 @@ func truncExitRecordStderrTail(s string) string {
 		return s
 	}
 	return s[len(s)-exitRecordStderrTailMaxBytes:]
+}
+
+// recordTerminatingStageTokens books a failed stage's spend for the run
+// record's per-stage synthesis. inputTokens is the non-cached pool the
+// scheduler holds; RecordTerminatingStageTokens takes input COMBINED with
+// cache reads (BuildV2Record books Input = InputTokens - CacheRead), so a
+// stage with 1200 input and 97000 cache-read tokens would otherwise book
+// input = -95800 (#1651 review).
+func recordTerminatingStageTokens(rt *state.RuntimeState, stage state.PipelineStage, inputTokens, outputTokens, cacheReadTokens int, costUsd float64) {
+	rt.RecordTerminatingStageTokens(stage, inputTokens+cacheReadTokens, outputTokens, cacheReadTokens, costUsd)
 }

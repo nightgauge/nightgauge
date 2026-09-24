@@ -1,6 +1,10 @@
 package execution
 
-import "testing"
+import (
+	"os"
+	"strings"
+	"testing"
+)
 
 func TestPhaseInferer_FeatureDevStartsAtValidateEnvironment(t *testing.T) {
 	inf := NewPhaseInferer("feature-dev")
@@ -202,5 +206,81 @@ func TestExtractToolUses(t *testing.T) {
 	// Malformed JSON yields nothing.
 	if got := extractToolUses("not json"); got != nil {
 		t.Fatalf("expected nil for malformed line, got %+v", got)
+	}
+}
+
+// TestExtractToolUses_OpenCode covers ADR-022's `tool_use` shape (#1646):
+// opencode 1.18.30 emits it only once a call completes or errors, never on
+// start, with the tool's own lowercase id at part.tool and its input at
+// part.state.input.
+func TestExtractToolUses_OpenCode(t *testing.T) {
+	line := `{"type":"tool_use","sessionID":"s1","part":{"type":"tool","tool":"edit","state":{"status":"completed","input":{"filePath":"calc.py"}}}}`
+	uses := extractToolUses(line)
+	if len(uses) != 1 {
+		t.Fatalf("expected 1 tool use, got %d", len(uses))
+	}
+	if uses[0].Name != "Edit" {
+		t.Fatalf("tool %q did not map to Edit: %+v", "edit", uses[0])
+	}
+	// filePath is copied to file_path so the SAME rule that reads Claude's
+	// Write/Edit input matches, without a second rule table.
+	if got := inputStr(uses[0].Input, "file_path"); got != "calc.py" {
+		t.Fatalf("file_path = %q, want calc.py", got)
+	}
+
+	bash := extractToolUses(`{"type":"tool_use","part":{"type":"tool","tool":"bash","state":{"input":{"command":"go test ./..."}}}}`)
+	if len(bash) != 1 || bash[0].Name != "Bash" || inputStr(bash[0].Input, "command") != "go test ./..." {
+		t.Fatalf("unexpected bash tool use: %+v", bash)
+	}
+
+	// A tool with no Claude-name mapping (task, webfetch, ...) yields nothing
+	// — it advances no phase rule, exactly like an unrecognized Claude tool.
+	if got := extractToolUses(`{"type":"tool_use","part":{"type":"tool","tool":"webfetch","state":{"input":{}}}}`); got != nil {
+		t.Fatalf("expected nil for an unmapped OpenCode tool, got %+v", got)
+	}
+	// A non-tool_use OpenCode event (step_start) yields nothing.
+	if got := extractToolUses(`{"type":"step_start","part":{"type":"step-start"}}`); got != nil {
+		t.Fatalf("expected nil for step_start, got %+v", got)
+	}
+}
+
+// TestPhaseInferer_OpenCodeFixtureAdvancesOnEdit feeds #1629's real-model
+// OpenCode capture (testdata/opencode_stream_research_sample.jsonl, ADR-022)
+// through the exact loop internal/execution/manager.go drives: extractToolUses
+// then ObserveToolUse, one line at a time. The fixture's one `tool_use` is an
+// `edit` of calc.py, which a feature-dev inferer must reach the
+// "implementation" waypoint (index 8) on — an edit-heavy OpenCode stage is
+// this issue's whole premise (#1646 "slow local models are not stalls").
+//
+// Deleting the OpenCode branch from extractToolUses (openCodeToolNameToClaudeName
+// gone, or extractOpenCodeToolUse's call removed) leaves every line
+// unrecognized: the cursor never leaves phase 0 ("validate-environment") and
+// this test goes red.
+func TestPhaseInferer_OpenCodeFixtureAdvancesOnEdit(t *testing.T) {
+	data, err := os.ReadFile("testdata/opencode_stream_research_sample.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+
+	inf := NewPhaseInferer("feature-dev")
+	inf.Start()
+	if inf.cursor != 0 {
+		t.Fatalf("cursor after Start = %d, want 0", inf.cursor)
+	}
+
+	reached := -1
+	for _, line := range lines {
+		for _, tu := range extractToolUses(line) {
+			if m, _, ok := inf.ObserveToolUse(tu.Name, tu.Input); ok {
+				reached = m.Index
+			}
+		}
+	}
+	if reached != 8 {
+		t.Fatalf("phase index after the fixture = %d, want 8 (implementation)", reached)
+	}
+	if inf.cursor != 8 {
+		t.Fatalf("cursor after the fixture = %d, want 8", inf.cursor)
 	}
 }

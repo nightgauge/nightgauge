@@ -181,9 +181,11 @@ to exit non-zero on a degraded sweep instead.`,
 				return fmt.Errorf("resolve forge client for %s: %w", repo, err)
 			}
 			s := &sweep.Sweeper{
-				Store:         attention.New(root),
-				Registry:      sweep.Default,
-				Forge:         client,
+				Store:    attention.New(root),
+				Registry: sweep.Default,
+				// One memo for the pass: the repo producers and the workspace
+				// producers that read the same alerts share one read.
+				Forge:         sweep.NewSharedReads().Wrap(client),
 				WorkspaceRoot: root,
 				Timeout:       timeout,
 			}
