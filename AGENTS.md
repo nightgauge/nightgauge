@@ -36,6 +36,9 @@ the SHA-256 of the lines between the markers.
   `.nightgauge/session-handoff.md` is per-machine runtime state, not a handoff.
 - **GitHub identity:** scope each command with
   `GH_TOKEN=$(gh auth token --user <account>) gh ...`. Never `gh auth switch`.
+  That form stays correct for actions the maintainer owns (merges, their
+  comments). Pipeline traffic authenticates as the GitHub App installation
+  when `github_auth.app` is configured, on the installation's own quota.
 - Use a feature branch and a pull request; never push to `main`. Run this
   repository's complete local gate, defined in this file, once before pushing.
 - **Merge** with `gh pr merge --squash` once required checks are green. Never
@@ -79,7 +82,7 @@ the SHA-256 of the lines between the markers.
 - Instruction files are regular files. Never symlink them and never import
   across repositories.
 
-<!-- nightgauge-workspace-rules:end sha256=183af6685226d1c5cc3fbd542466dc04743916ce4c60c0a9bc953283a55a1ea6 -->
+<!-- nightgauge-workspace-rules:end sha256=31ef89af7ea5177c92587f1330dc2a9f882880f932e4d114f08e0f0c7e429df1 -->
 
 ## Repository operating contract
 

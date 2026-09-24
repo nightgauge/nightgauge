@@ -71,6 +71,13 @@ func (c *ConfigIdentityChecker) CheckIdentity(ctx context.Context, owner, repo s
 		return true, ""
 	}
 
+	// A GitHub App installation preferred over the configured github_user is
+	// the identity by configuration (#1955): there is no user login to match,
+	// and the installation's own permissions are what gate its writes.
+	if client.App() != nil {
+		return true, ""
+	}
+
 	actor, err := client.Whoami(ctx)
 	if err != nil {
 		log.Printf("#%d: identity preflight: could not verify identity for %q on %s/%s — allowing (infra, not a permission denial): %v",

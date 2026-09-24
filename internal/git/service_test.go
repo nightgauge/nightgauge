@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
@@ -1877,5 +1878,28 @@ func TestResetLocalBranchToRemote_MovesTreeWhenOwnWorktreeHoldsBranch(t *testing
 	// The point of the whole issue: the tree followed the ref.
 	if status := gitExecTest(t, workDir, "status", "--porcelain"); strings.TrimSpace(status) != "" {
 		t.Errorf("tree did not follow the ref move — phantom dirt:\n%s", status)
+	}
+}
+
+// #1955: GitHub documents x-access-token for an installation token over
+// HTTPS; a personal token keeps its username.
+func TestPushUsername(t *testing.T) {
+	if got := pushUsername("ghs_installation"); got != "x-access-token" {
+		t.Errorf("installation token username = %q", got)
+	}
+	if got := pushUsername("ghp_personal"); got != "token" {
+		t.Errorf("personal token username = %q", got)
+	}
+}
+
+func TestPipelineSignature_UsesTheExportedAppIdentity(t *testing.T) {
+	t.Setenv("GIT_AUTHOR_NAME", "nightgauge-pipeline[bot]")
+	t.Setenv("GIT_AUTHOR_EMAIL", "99+nightgauge-pipeline[bot]@users.noreply.github.com")
+	if s := pipelineSignature(time.Now()); s.Name != "nightgauge-pipeline[bot]" {
+		t.Errorf("author = %q", s.Name)
+	}
+	t.Setenv("GIT_AUTHOR_NAME", "")
+	if s := pipelineSignature(time.Now()); s.Name != "Nightgauge Pipeline" {
+		t.Errorf("default author = %q", s.Name)
 	}
 }

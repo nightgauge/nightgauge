@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -367,7 +368,56 @@ func exportConfiguredGitHubToken(resolver gh.TokenResolver, owner string) string
 	}
 	_ = os.Setenv("GH_TOKEN", tok)
 	_ = os.Setenv("GITHUB_TOKEN", tok)
+	exportGitHubAppIdentity(resolver, owner, tok)
 	return tok
+}
+
+// appTokenRefresher starts at most one env refresher per process.
+var appTokenRefresher sync.Once
+
+// exportGitHubAppIdentity finishes the export when tok is owner's GitHub App
+// installation token (#1955):
+//
+//   - git subprocesses commit as the App's bot user, when its slug and bot
+//     user id are configured and the operator has not set GIT_AUTHOR_* /
+//     GIT_COMMITTER_* themselves;
+//   - the exported token is re-minted before it expires. An installation token
+//     lasts one hour, and the serve daemon's `gh` subprocesses read GH_TOKEN
+//     for as long as it runs.
+func exportGitHubAppIdentity(resolver gh.TokenResolver, owner, tok string) {
+	creds, err := gh.ResolveApp(resolver, owner)
+	if err != nil || creds == nil || !strings.HasPrefix(tok, "ghs_") {
+		return
+	}
+	if name, email, ok := creds.CommitIdentity(); ok {
+		for k, v := range map[string]string{
+			"GIT_AUTHOR_NAME": name, "GIT_AUTHOR_EMAIL": email,
+			"GIT_COMMITTER_NAME": name, "GIT_COMMITTER_EMAIL": email,
+		} {
+			if os.Getenv(k) == "" {
+				_ = os.Setenv(k, v)
+			}
+		}
+	}
+	appTokenRefresher.Do(func() {
+		go func() {
+			for {
+				wait := time.Minute
+				if at, ok := gh.AppTokenExpiry(resolver, owner); ok {
+					if d := time.Until(at); d > wait {
+						wait = d
+					}
+				}
+				time.Sleep(wait)
+				fresh, err := gh.ResolveTokenChain(resolver, owner)
+				if err != nil || fresh == "" {
+					continue
+				}
+				_ = os.Setenv("GH_TOKEN", fresh)
+				_ = os.Setenv("GITHUB_TOKEN", fresh)
+			}
+		}()
+	})
 }
 
 // ownerGitHubUserResolver is the optional interface a resolver implements to

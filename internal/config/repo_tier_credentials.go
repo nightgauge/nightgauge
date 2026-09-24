@@ -40,7 +40,7 @@ type repoTierProtectedKey struct {
 // repository's history, and only the operator can rotate it.
 var repoTierProtectedKeys = []repoTierProtectedKey{
 	{root: "platform", hardStrip: true, secrets: []string{"license_key"}},
-	{root: "github_auth", secrets: []string{"token", "tokens.*"}},
+	{root: "github_auth", secrets: []string{"token", "tokens.*", "app.private_key", "app.private_key_path"}},
 }
 
 // ErrRepoTierCredential marks a load refused because a repository tier holds a
@@ -60,6 +60,10 @@ type repoTierCredentialView struct {
 	GitHubAuth struct {
 		Token  yaml.Node            `yaml:"token"`
 		Tokens map[string]yaml.Node `yaml:"tokens"`
+		App    struct {
+			PrivateKey     yaml.Node `yaml:"private_key"`
+			PrivateKeyPath yaml.Node `yaml:"private_key_path"`
+		} `yaml:"app"`
 	} `yaml:"github_auth"`
 	Platform struct {
 		LicenseKey yaml.Node `yaml:"license_key"`
@@ -75,6 +79,8 @@ type credentialValue struct {
 func repoTierCredentialFields(v *repoTierCredentialView) []credentialValue {
 	out := []credentialValue{
 		{path: "github_auth.token", node: v.GitHubAuth.Token},
+		{path: "github_auth.app.private_key", node: v.GitHubAuth.App.PrivateKey},
+		{path: "github_auth.app.private_key_path", node: v.GitHubAuth.App.PrivateKeyPath},
 		{path: "platform.license_key", node: v.Platform.LicenseKey},
 	}
 	for owner, n := range v.GitHubAuth.Tokens {
