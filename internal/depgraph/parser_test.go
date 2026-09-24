@@ -2,6 +2,7 @@ package depgraph
 
 import (
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -1333,5 +1334,56 @@ func TestParseDependencyRefs_Issue1505Specimen(t *testing.T) {
 	}
 	if len(got) != len(want) {
 		t.Errorf("got %v, want exactly %v", got, want)
+	}
+}
+
+// #1937 — epic #477's body, verbatim where it matters. None of these lines
+// declares a dependency OF THE EPIC: one describes edges between its
+// sub-issues, one says another issue depends on the epic, and one is quoted
+// output. The parser made all three into the epic's blockers.
+func TestParseDependencyRefs_Issue477ShapeDeclaresNothing(t *testing.T) {
+	body := strings.Join([]string{
+		"## Sub-issues (created)",
+		"",
+		"blockedBy wiring: #479 ← #478, #480 ← #478, #481 ← #479 + #480 (native addBlockedBy, set at creation).",
+		"",
+		"**A second consumer now depends on this epic.** Post-merge impact-set computation (#948) routes its findings through the #480 materializer.",
+		"",
+		"```text",
+		"epic #477 stalled: #478 (via epic #477) blocked by #478, #479, #480, #948 (open)",
+		"```",
+		"",
+		"~~~",
+		"Depends on #12",
+		"~~~",
+	}, "\n")
+	if refs := ParseDependencyRefs(body, "o/r", nil); len(refs) != 0 {
+		t.Errorf("refs = %+v, want none", refs)
+	}
+}
+
+// The fixes must not cost a real declaration beside them.
+func TestParseDependencyRefs_RealDeclarationsSurviveTheIssue477Fixes(t *testing.T) {
+	body := strings.Join([]string{
+		"**Depends on #5.** Also mentions #6 in prose.",
+		"Blocked by #7 -> needs the schema first",
+		"```",
+		"Blocked by #8",
+		"```",
+		"Blocked by #9",
+	}, "\n")
+	got := map[int]bool{}
+	for _, r := range ParseDependencyRefs(body, "o/r", nil) {
+		got[r.Number] = true
+	}
+	for _, want := range []int{5, 7, 9} {
+		if !got[want] {
+			t.Errorf("lost the declaration of #%d; got %v", want, got)
+		}
+	}
+	for _, not := range []int{6, 8} {
+		if got[not] {
+			t.Errorf("#%d is not a dependency; got %v", not, got)
+		}
 	}
 }

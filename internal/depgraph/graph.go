@@ -6,6 +6,7 @@ package depgraph
 
 import (
 	"fmt"
+	"log"
 	"strings"
 )
 
@@ -104,7 +105,16 @@ func (g *Graph) AddNode(node *Node) {
 
 // AddEdge appends a dependency edge. Duplicates are NOT checked here;
 // dedup is the caller's responsibility.
+//
+// A self-edge is a data defect, never a dependency: an issue cannot wait on
+// itself, and one kept here renders as "#478 blocked by #478" (#1937). It is
+// dropped and logged so the source can be corrected.
 func (g *Graph) AddEdge(edge Edge) {
+	if edge.From == edge.To {
+		log.Printf("depgraph: dropped self-edge %s -> %s (type=%s source=%s): an issue cannot block itself",
+			edge.From, edge.To, edge.Type, edge.Source)
+		return
+	}
 	g.Edges = append(g.Edges, edge)
 }
 

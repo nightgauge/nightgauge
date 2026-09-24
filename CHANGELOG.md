@@ -644,6 +644,18 @@ create --body-file` call, so the compact profile (and its tests) pin
 
 ### Fixed
 
+- **A ready issue is no longer parked behind its own epic (#1937).** The
+  dependency parser read three kinds of epic-body prose as the epic's own
+  blockers: arrow notation describing edges between its sub-issues
+  (`#479 ← #478`), a sentence ending in closing emphasis
+  (`**… depends on this epic.** … (#948)`, which inverted the direction), and
+  quoted output inside fenced code. The epic cascade then applied those edges
+  to the epic's children. That made #478 "(via epic #477) blocked by #478" and
+  kept it from being dispatched. The parser now skips all three. The dispatcher
+  and the stuck-epic watchdog ignore an epic's edges to its own sub-issues, and
+  a self-edge is dropped and logged when the graph is built. On the live board
+  this removed 10 false edges and no real ones.
+
 - **Pipeline stages no longer lose the issue number between shell blocks
   (#1932).** A stage skill's phases run as separate `Bash` calls, and each call
   is a new process, so 126 blocks across the eight stage skills and
