@@ -24,18 +24,22 @@ nightgauge forge webhook     # Manage forge webhook receivers
 ```bash
 # Auth / identity
 nightgauge forge auth status
-nightgauge forge repo view --repo "$REPO" --json nameWithOwner -q .nameWithOwner
+nightgauge git repo-slug                                   # current repo as owner/name
+nightgauge forge repo view --repo "$REPO" --json | jq -r .owner   # --repo is required
 
 # Issues
 nightgauge forge issue view <number> --repo "$REPO" --json
-nightgauge forge issue create --repo "$REPO" --title "…" --body-file body.md
+nightgauge forge issue view <number> --repo "$REPO" --json | jq -r .nodeId
+nightgauge forge issue create --repo-id <REPO_NODE_ID> --title "…" --body "$(cat body.md)" \
+  --labels type:bug,priority:high
 nightgauge forge issue edit --node-id <NODE_ID> --body "Updated body"
-nightgauge forge issue comment <number> --repo "$REPO" --body "…"
+nightgauge forge issue comment --subject-id <NODE_ID> --body "…"
 
 # PRs
-nightgauge forge pr create --repo "$REPO" --base main --head "$BRANCH" --title "…" --body-file b.md
+nightgauge forge pr create --repo-id <REPO_NODE_ID> --base main --head "$BRANCH" --title "…" \
+  --body "$(cat b.md)"
 nightgauge forge pr checks <number> --repo "$REPO"
-nightgauge forge pr merge <number> --repo "$REPO" --squash
+nightgauge forge pr merge --node-id <PR_NODE_ID> --strategy squash
 
 # Project board
 nightgauge forge project item-add --repo "$REPO" --project <N> <issue>
@@ -58,6 +62,8 @@ GitLab caveat: the GitLab adapter does **not** yet expose a GraphQL transport �
 
 ## Gotchas
 
+- There is no `-q`/`--jq` on any `forge` verb, and no `--body-file`: pipe
+  `--json` output to `jq -r '<expr>'`, and pass a file as `--body "$(cat f)"`.
 - The `no-direct-gh` lint (`scripts/lint-skills/no-direct-gh.sh`, wired into
   `.github/workflows/lint.yml`) fails CI if a non-allowlisted `skills/*/SKILL.md`
   contains a bare `gh ` call. Legacy exceptions live in

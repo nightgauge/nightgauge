@@ -49,7 +49,7 @@ SHARED_PROJECT=$(grep "shared_project_number:" "$WORKSPACE_YAML" 2>/dev/null | a
 if [ -n "$SHARED_PROJECT" ]; then
   # Query linked repos to check if the target repo is already linked to the project
   LINKED_REPOS=$(nightgauge workspace repos-from-project \
-    --project "$SHARED_PROJECT" --json 2>/dev/null || echo "[]")
+    --project "$SHARED_PROJECT" 2>/dev/null || echo "[]")
   ALREADY_LINKED=$(printf '%s\n' "$LINKED_REPOS" | jq -r --arg name "$REPO_BASENAME" \
     '[.[] | select(.name == $name)] | length')
 

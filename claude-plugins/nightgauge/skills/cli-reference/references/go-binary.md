@@ -22,7 +22,7 @@ Then `nightgauge doctor --json` confirms the environment is healthy.
 ```bash
 # Project board (deterministic board sync)
 nightgauge project add <issue> --status Backlog        # add + set Status
-nightgauge project move-status <issue> --status "In progress"
+nightgauge project move-status <issue> in-progress
 nightgauge project ensure-fields                       # idempotent field setup
 
 # Epics

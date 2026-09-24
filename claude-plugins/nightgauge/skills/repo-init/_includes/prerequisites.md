@@ -39,7 +39,7 @@ Capture the active forge account once and pin it. **Never switch to another acco
 during this skill — fail with a clear error instead.**
 
 ```bash
-ACTIVE_USER=$(nightgauge forge auth whoami --json --jq .login 2>/dev/null)
+ACTIVE_USER=$(nightgauge forge auth whoami --json 2>/dev/null | jq -r '.login // empty')
 if [ -z "$ACTIVE_USER" ]; then
   echo "ERROR: Could not detect active forge account — run: nightgauge forge auth login"
   exit 1
@@ -130,9 +130,10 @@ fi
 ## Step 0.2: Get Repo Identity
 
 ```bash
-REPO=$(nightgauge forge repo view --json nameWithOwner -q .nameWithOwner)
-OWNER=$(nightgauge forge repo view --json owner -q .owner.login)
-REPO_NAME=$(nightgauge forge repo view --json name -q .name)
+REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+REPO_JSON=$(nightgauge forge repo view --repo "$REPO" --json)
+OWNER=$(printf '%s\n' "$REPO_JSON" | jq -r '.owner')
+REPO_NAME=$(printf '%s\n' "$REPO_JSON" | jq -r '.name')
 echo "Repository: $REPO"
 ```
 

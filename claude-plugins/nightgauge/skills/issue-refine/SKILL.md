@@ -452,7 +452,7 @@ REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
 : "${REPO:?set NIGHTGAUGE_REPO or run inside a clone with an origin remote}"
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-nightgauge forge issue edit "$ISSUE_NUMBER" --repo $REPO --body-file "$BODY_FILE"
+nightgauge issue edit "$ISSUE_NUMBER" --repo "$REPO" --body "$(cat "$BODY_FILE")"
 
 if [ $? -ne 0 ]; then
   echo "ERROR: Failed to update issue #${ISSUE_NUMBER} body."

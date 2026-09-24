@@ -21,8 +21,10 @@ project discovery entirely.
 
 ```bash
 # Determine whether OWNER is an org or a user (used throughout Phase 1 and Phase 4)
-OWNER_TYPE=$(nightgauge forge api "users/$OWNER" --jq '.type' 2>/dev/null)
-# GitHub API returns "Organization" or "User"
+OWNER_TYPE=$(nightgauge forge graphql \
+  -f query='query($login: String!) { repositoryOwner(login: $login) { __typename } }' \
+  -f login="$OWNER" 2>/dev/null | jq -r '.data.repositoryOwner.__typename // empty')
+# repositoryOwner.__typename is "Organization" or "User"
 
 # repository.projectsV2 works regardless of org vs user — no branching needed here
 LINKED_PROJECTS=$(nightgauge forge graphql -f query='

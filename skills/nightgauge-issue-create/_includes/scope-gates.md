@@ -377,7 +377,7 @@ priority/size/status metadata.
 
 - \`gh api graphql\` on the parent epic returns at least one sub-issue, and
   every sub-issue carries a Status of Ready on the project board
-  (\`nightgauge project audit --epic ${EPIC_NUMBER}\` reports no
+  (\`/nightgauge:issue-audit --epic ${EPIC_NUMBER}\` reports no
   MISSING_FROM_BOARD).
 - This chore is closed and the epic body's \`## Sub-Issues\` lists the
   created children."

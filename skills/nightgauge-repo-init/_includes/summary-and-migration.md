@@ -87,9 +87,11 @@ native sub-issues (GitHub's parent/child feature) for epic grouping and ordering
 in the project board. Body-based references alone are not sufficient.
 
 ```bash
-# Count issues with "Part of #" in body
-BODY_REFS=$(nightgauge forge issue list --repo "$REPO" --state all --limit 500 \
-  --json number,body | jq '[.[] | select(.body != null) | select(.body | test("(?i)part of #[0-9]+"))] | length')
+# Count issues (open and closed, 100 most recent) with "Part of #" in body
+BODY_REFS=$(nightgauge forge graphql \
+  -f query='query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { issues(first: 100, orderBy: {field: CREATED_AT, direction: DESC}) { nodes { body } } } }' \
+  -f owner="${REPO%%/*}" -f name="${REPO#*/}" \
+  | jq '[.data.repository.issues.nodes[] | select(.body != null) | select(.body | test("(?i)part of #[0-9]+"))] | length')
 
 if [[ "$BODY_REFS" -gt 0 ]]; then
   echo ""
