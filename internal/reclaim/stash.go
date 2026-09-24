@@ -74,6 +74,10 @@ type StashEntry struct {
 	// Owned is true when Message carries the canonical marker. Only an owned
 	// stash may be reclaimed.
 	Owned bool `json:"owned"`
+	// Branch is the branch git recorded the stash on: "<b>" from
+	// "On <b>: …" or "WIP on <b>: …", "(no branch)" for a detached HEAD, and
+	// "" when the subject carries neither.
+	Branch string `json:"branch,omitempty"`
 	// Purpose, Issue and Stage are populated only when Owned.
 	Purpose StashPurpose `json:"purpose,omitempty"`
 	Issue   int          `json:"issue,omitempty"`
@@ -110,6 +114,19 @@ func ParseStashMessage(message string) (purpose StashPurpose, issue int, stage s
 	return StashPurpose(fields[0]), n, fields[2], true
 }
 
+// StashBranch extracts the branch from a stash reflog subject. A refname
+// cannot contain ':', so the first colon after the prefix ends the name.
+func StashBranch(message string) string {
+	for _, prefix := range []string{"On ", "WIP on "} {
+		if rest, ok := strings.CutPrefix(message, prefix); ok {
+			if i := strings.Index(rest, ":"); i > 0 {
+				return rest[:i]
+			}
+		}
+	}
+	return ""
+}
+
 // ListStashes returns every stash in repoRoot, classified by ownership.
 //
 // The custom format is what makes this deterministic: %gd is the selector,
@@ -138,7 +155,7 @@ func ListStashes(repoRoot string) ([]StashEntry, error) {
 		if len(parts) != 3 {
 			continue
 		}
-		e := StashEntry{Ref: parts[0], Message: parts[1]}
+		e := StashEntry{Ref: parts[0], Message: parts[1], Branch: StashBranch(parts[1])}
 		if secs, convErr := strconv.ParseInt(parts[2], 10, 64); convErr == nil {
 			e.CreatedAt = time.Unix(secs, 0)
 		}
