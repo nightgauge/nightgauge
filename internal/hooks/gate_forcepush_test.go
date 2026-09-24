@@ -2,11 +2,11 @@ package hooks
 
 import (
 	"encoding/json"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // forcePushFixture builds a clone whose current branch is feat/x tracking
@@ -14,16 +14,7 @@ import (
 func forcePushFixture(t *testing.T) (repo, detached, onMain string) {
 	t.Helper()
 	root := t.TempDir()
-	run := func(dir string, args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		cmd.Env = append(cmd.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
-			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com")
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
+	run := func(dir string, args ...string) { gittest.Run(t, dir, args...) }
 	remote := filepath.Join(root, "remote.git")
 	seed := filepath.Join(root, "seed")
 	run(root, "init", "-q", "--bare", "-b", "main", remote)
