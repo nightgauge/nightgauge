@@ -54,7 +54,7 @@ func contentPage(yaml string) string {
 
 func TestPushWorkflowsCanRun(t *testing.T) {
 	const dir = "/repos/o/r/contents/.github/workflows"
-	listing := `[{"name":"ci.yml","path":".github/workflows/ci.yml","type":"file"},{"name":"README.md","path":".github/workflows/README.md","type":"file"},{"name":"deploy.yaml","path":".github/workflows/deploy.yaml","type":"file"}]`
+	listing := `[{"name":"ci.yml","path":".github/workflows/ci.yml","type":"file"},{"name":"README.md","path":".github/workflows/README.md","type":"file"},{"name":"cache-warm.yml","path":".github/workflows/cache-warm.yml","type":"file"}]`
 	run := func(pages map[string][]string) (bool, error) {
 		srv := httptest.NewServer(PagedFixture{T: t, Pages: pages})
 		defer srv.Close()
@@ -63,7 +63,7 @@ func TestPushWorkflowsCanRun(t *testing.T) {
 
 	can, err := run(map[string][]string{dir: {listing},
 		"/repos/o/r/contents/.github/workflows/ci.yml":      {contentPage("on: [pull_request, workflow_dispatch]\n")},
-		"/repos/o/r/contents/.github/workflows/deploy.yaml": {contentPage("on:\n  push:\n    tags: ['v*']\n")},
+		"/repos/o/r/contents/.github/workflows/cache-warm.yml": {contentPage("on:\n  push:\n    tags: ['v*']\n")},
 	})
 	if err != nil || can {
 		t.Errorf("PR-only and tag-only workflows: can = %v, err = %v; want false, nil", can, err)
@@ -71,7 +71,7 @@ func TestPushWorkflowsCanRun(t *testing.T) {
 
 	can, err = run(map[string][]string{dir: {listing},
 		"/repos/o/r/contents/.github/workflows/ci.yml":      {contentPage("on: pull_request\n")},
-		"/repos/o/r/contents/.github/workflows/deploy.yaml": {contentPage("on:\n  push:\n    branches: [main]\n")},
+		"/repos/o/r/contents/.github/workflows/cache-warm.yml": {contentPage("on:\n  push:\n    branches: [main]\n")},
 	})
 	if err != nil || !can {
 		t.Errorf("a push-to-main deploy: can = %v, err = %v; want true, nil", can, err)
@@ -90,7 +90,7 @@ func TestPushWorkflowsCanRun(t *testing.T) {
 	// So is one that does not parse.
 	if _, err = run(map[string][]string{dir: {listing},
 		"/repos/o/r/contents/.github/workflows/ci.yml":      {contentPage("on: [push\n")},
-		"/repos/o/r/contents/.github/workflows/deploy.yaml": {contentPage("on: pull_request\n")},
+		"/repos/o/r/contents/.github/workflows/cache-warm.yml": {contentPage("on: pull_request\n")},
 	}); err == nil {
 		t.Error("an unparsable workflow file: err = nil, want an error")
 	}
