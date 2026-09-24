@@ -368,6 +368,59 @@ allowed, a host name or an address can never become one.
   the whole upload. This is the same local-first pattern `cost_unstamped`
   follows in `internal/platform/execution_history_mapper.go`.
 
+#### Remote run requests (amendment 2026-09-24, #1656)
+
+A dashboard or mobile trigger can ask for the adapter and model a run
+executes on. The hosted service puts two optional fields on the `trigger`
+agent command's payload, and omits both keys when the requester names
+neither:
+
+- `adapter`: an adapter id from this machine's registry (`opencode`,
+  `claude-headless`, …). Exact names only; an alias is refused.
+- `model`: the value the dispatch passes on `-m`, in **provider-key form**
+  (`lmstudio/qwen/qwen3.8-27b`), never the recorded `model` above
+  (`lm-studio/qwen/qwen3.8-27b`). A provider key is what OpenCode and the
+  catalog know; `model_provider` is a label the record derives from it (§ 1).
+
+The agent validates both before it acks the command, in
+`orchestrator.ValidateRemotePin`, and refuses in this order:
+
+1. **Shape.**
+   - `model` is present without `adapter`.
+   - `model` is longer than 200 bytes, contains `..`, or starts with `-`.
+   - For `opencode`, `model` does not match `^[a-z0-9-]+/[A-Za-z0-9._:/-]+$`.
+   - For any other adapter, `model` does not match
+     `^[A-Za-z0-9][A-Za-z0-9._:/-]*$`.
+   - `adapter` is not in the registry allow-list.
+
+   Nothing else runs on a value this step refuses, so no argv is built from
+   it.
+
+2. **Capability.** The adapter is not agentic, or the adapter health reading
+   the cap-hop walk uses (`AdapterUsableForCapHop`) finds it unusable. That
+   reading is what refuses a gated adapter (the enable gate above) and every
+   other prerequisite. A remote request cannot lift either.
+3. **Model.** The adapter's own `ValidateModel` refuses `model`.
+4. **Credentials (`opencode`).** § 17 refuses the provider.
+5. **Catalog (`opencode`).** `opencode models` under the per-run config (the
+   #1627 probe) does not list `model`. OpenCode lists a hosted provider's
+   models only when one of its variables is set. So when the model is missing
+   and none of its provider's variables is set, the refusal names the missing
+   credentials, as the doctor's catalog check does.
+
+A refusal is the command's ack, `{outcome: "rejected", detail}`, with
+`detail` at most 2000 characters. The run is never queued. A valid pair is
+acked as before, stored on the queue item, and dispatched on every stage as a
+**requested** adapter pin plus model:
+
+- It replaces every local resolution rung, as the cap pin (#1545) does.
+- Unlike the cap pin, it never walks the fallback chain and never falls back
+  on an unknown value. A pinned adapter that fails its prerequisites at
+  dispatch fails the stage.
+- The run record keeps `requested_adapter` and `requested_model` next to the
+  served stage adapters and models. A later cap-hop is recorded as a hop
+  with its reason and never rewrites them.
+
 ### 3. Cost
 
 `cost_usd` is what a provider bills for the tokens a stage used. Nightgauge

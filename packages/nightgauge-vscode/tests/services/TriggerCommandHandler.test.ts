@@ -395,3 +395,108 @@ describe("TriggerCommandHandler — workspace-aware repo resolution (#4117)", ()
     await vi.waitFor(() => expect(queueService.enqueue).toHaveBeenCalledTimes(1));
   });
 });
+
+describe("TriggerCommandHandler — remote run request (#1656)", () => {
+  const MODEL = "lmstudio/qwen/qwen3.8-27b";
+  let ipcClient: ReturnType<typeof makeIpcClient> & { queueValidatePin: ReturnType<typeof vi.fn> };
+  let concurrentManager: ReturnType<typeof makeConcurrentManager>;
+  let queueService: ReturnType<typeof makeQueueService>;
+  let logger: ReturnType<typeof makeLogger>;
+  let handler: TriggerCommandHandler;
+
+  function pinnedCmd(fields: Record<string, unknown>): ReceivedCommand {
+    const cmd = makeTriggerCmd(42);
+    return { ...cmd, payload: { ...(cmd.payload as object), ...fields } };
+  }
+
+  beforeEach(() => {
+    ipcClient = {
+      ...makeIpcClient(),
+      queueValidatePin: vi.fn().mockResolvedValue({ ok: true }),
+    };
+    concurrentManager = makeConcurrentManager();
+    queueService = makeQueueService();
+    logger = makeLogger();
+    handler = new TriggerCommandHandler(
+      ipcClient as never,
+      concurrentManager as never,
+      queueService as never,
+      logger as never
+    );
+    handler.setAgentId("agent-1");
+  });
+
+  it("validates a requested pair before the ack, then enqueues it with the pair", async () => {
+    handler.handle(pinnedCmd({ adapter: "opencode", model: MODEL }));
+
+    await vi.waitFor(() => expect(queueService.enqueue).toHaveBeenCalledTimes(1));
+    expect(ipcClient.queueValidatePin).toHaveBeenCalledWith("opencode", MODEL);
+    expect(ipcClient.agentAcknowledgeCommand).toHaveBeenCalledWith("agent-1", "cmd-1");
+    const validateOrder = ipcClient.queueValidatePin.mock.invocationCallOrder[0];
+    const ackOrder = ipcClient.agentAcknowledgeCommand.mock.invocationCallOrder[0];
+    expect(validateOrder).toBeLessThan(ackOrder);
+    expect(queueService.enqueue.mock.calls[0][4]).toEqual({
+      repoOverride: { owner: "nightgauge", repo: "nightgauge" },
+      remoteRunId: "run-abc",
+      requestedAdapter: "opencode",
+      requestedModel: MODEL,
+    });
+  });
+
+  it("acks a refused pair as rejected with Go's reason, and never enqueues", async () => {
+    const reason = "model lmstudio/qwen/other is not in this machine's opencode catalog";
+    ipcClient.queueValidatePin.mockResolvedValue({ ok: false, reason });
+    handler.handle(pinnedCmd({ adapter: "opencode", model: "lmstudio/qwen/other" }));
+
+    await vi.waitFor(() => expect(ipcClient.agentAcknowledgeCommand).toHaveBeenCalledTimes(1));
+    expect(ipcClient.agentAcknowledgeCommand).toHaveBeenCalledWith(
+      "agent-1",
+      "cmd-1",
+      "rejected",
+      reason
+    );
+    await new Promise((r) => setTimeout(r, 10));
+    expect(queueService.enqueue).not.toHaveBeenCalled();
+    expect(concurrentManager.setPendingRemoteRunId).not.toHaveBeenCalled();
+    expect(concurrentManager.fillSlots).not.toHaveBeenCalled();
+  });
+
+  it("refuses a non-string field without asking Go, and never enqueues", async () => {
+    handler.handle(pinnedCmd({ adapter: ["opencode"], model: MODEL }));
+
+    await vi.waitFor(() => expect(ipcClient.agentAcknowledgeCommand).toHaveBeenCalledTimes(1));
+    expect(ipcClient.agentAcknowledgeCommand.mock.calls[0][2]).toBe("rejected");
+    expect(ipcClient.queueValidatePin).not.toHaveBeenCalled();
+    expect(queueService.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("refuses a pin on an epic, which enqueue would otherwise drop", async () => {
+    ipcClient.issueView.mockResolvedValue({ number: 42, title: "Epic", labels: ["type:epic"] });
+    handler.handle(pinnedCmd({ adapter: "opencode", model: MODEL }));
+
+    await vi.waitFor(() => expect(ipcClient.agentAcknowledgeCommand).toHaveBeenCalledTimes(1));
+    expect(ipcClient.agentAcknowledgeCommand.mock.calls[0][2]).toBe("rejected");
+    expect(queueService.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("acks rejected when Go cannot be asked", async () => {
+    ipcClient.queueValidatePin.mockRejectedValue(new Error("IPC down"));
+    handler.handle(pinnedCmd({ adapter: "opencode", model: MODEL }));
+
+    await vi.waitFor(() => expect(ipcClient.agentAcknowledgeCommand).toHaveBeenCalledTimes(1));
+    expect(ipcClient.agentAcknowledgeCommand.mock.calls[0][3]).toContain("IPC down");
+    expect(queueService.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("a payload without the fields never asks Go and enqueues exactly as before", async () => {
+    handler.handle(makeTriggerCmd(42));
+
+    await vi.waitFor(() => expect(queueService.enqueue).toHaveBeenCalledTimes(1));
+    expect(ipcClient.queueValidatePin).not.toHaveBeenCalled();
+    expect(ipcClient.agentAcknowledgeCommand).toHaveBeenCalledWith("agent-1", "cmd-1");
+    expect(Object.keys(queueService.enqueue.mock.calls[0][4]).sort()).toEqual([
+      "remoteRunId",
+      "repoOverride",
+    ]);
+  });
+});

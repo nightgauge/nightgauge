@@ -34,7 +34,7 @@ import (
 // unless the operator sets ExperimentalOpenCodeEnvVar=1, and prints what is
 // missing on every dispatch it lets through. It refuses an anthropic/ model
 // while ANTHROPIC_API_KEY is unset, and a model on a provider that runs on the
-// forge's or a cloud platform's credentials (openCodeCredentialRefusal).
+// forge's or a cloud platform's credentials (OpenCodeCredentialRefusal).
 // Once the switch is set it holds the binary to the compat manifest's version
 // policy (checkVersionPolicy, opencode_preflight.go), and a binary
 // opencode.binary pins is the one spawned.
@@ -167,7 +167,7 @@ var openCodeUnenforcedControls = []openCodeControl{
 // worktree setup at all (ADR-022 § 8), and a tampered worktree is refused
 // whatever the switch or a model's credentials say.
 //
-// The credential refusals come next (openCodeCredentialRefusal): the switch
+// The credential refusals come next (OpenCodeCredentialRefusal): the switch
 // cannot satisfy them, so they are the reason to state, and no
 // enabled-dispatch warning precedes them. Then the gate. Then the version
 // policy (checkVersionPolicy): a binary below the compat manifest's floor, or
@@ -190,7 +190,7 @@ func (a *OpenCodeAdapter) PreDispatch(ctx context.Context, opts RunOptions) erro
 	if err := openCodeProjectConfigTamperCheck(ctx, opts.WorktreeDir); err != nil {
 		return err
 	}
-	if err := openCodeCredentialRefusal(opts.Model, os.LookupEnv); err != nil {
+	if err := OpenCodeCredentialRefusal(opts.Model, os.LookupEnv); err != nil {
 		return err
 	}
 	if err := openCodeGate(os.Getenv(ExperimentalOpenCodeEnvVar), os.Stderr); err != nil {
@@ -206,11 +206,11 @@ func (a *OpenCodeAdapter) PreDispatch(ctx context.Context, opts RunOptions) erro
 	return nil
 }
 
-// openCodeCredentialRefusal is ADR-022 § 17 at dispatch: an anthropic/ model
+// OpenCodeCredentialRefusal is ADR-022 § 17 at dispatch: an anthropic/ model
 // needs ANTHROPIC_API_KEY (openCodeAnthropicRefusal), and a model on a
 // provider whose credentials are the forge's or a cloud platform's is refused
 // (openCodePlatformProviderRefusal).
-func openCodeCredentialRefusal(model string, lookup func(string) (string, bool)) error {
+func OpenCodeCredentialRefusal(model string, lookup func(string) (string, bool)) error {
 	if err := openCodeAnthropicRefusal(model, lookup); err != nil {
 		return err
 	}

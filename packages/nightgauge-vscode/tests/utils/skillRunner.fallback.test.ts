@@ -385,3 +385,112 @@ test prompt`);
     );
   });
 });
+
+/**
+ * A remote run request's pin (#1656, ADR-022 § 2) arrives on the same
+ * `adapterPin` argument with `adapterPinRequested` set. It outranks local
+ * resolution like a cap pin, but it is strict: the requester chose the
+ * adapter, so a pin that cannot be served fails the stage and names the pin.
+ * It never walks the fallback chain and never falls back on an unknown value.
+ */
+describe("skillRunner — remote run request pin (Issue #1656)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockProcess = createMockChildProcess();
+    vi.mocked(spawn).mockReturnValue(mockProcess);
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readFileSync).mockReturnValue(`---
+description: test
+allowed-tools: []
+---
+test prompt`);
+    // A walk that WOULD succeed, so a requested pin that consulted it would
+    // visibly land on codex instead of failing.
+    walkAdapterFallbackMock.mockReturnValue({
+      winner: { adapter: "codex", source: "fallback" },
+      hopsAttempted: ["lm-studio", "codex"],
+      lastError: "",
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const runWithPin = (
+    pin: string | undefined,
+    requested: boolean | undefined,
+    onComplete: (r: unknown) => void
+  ) =>
+    runStageSkillHeadless(
+      "feature-dev",
+      42,
+      { onComplete },
+      undefined, // issueMetadata
+      undefined, // _batchContext
+      undefined, // skipToPhase
+      undefined, // modelOverride
+      undefined, // pauseAutoRouting
+      undefined, // pinnedWorkspaceRoot
+      undefined, // modelOverrideSource
+      undefined, // injectedSkillContent
+      undefined, // autonomousMode
+      undefined, // warnThresholdUsd
+      undefined, // targetRepoOverride
+      undefined, // runId
+      undefined, // effortOverride
+      pin,
+      requested
+    );
+
+  it("runs the stage on the requested adapter, recorded as remote-request", () => {
+    resolveStageAdapterMock.mockReturnValue({ adapter: "claude", source: "stage-config" });
+    const onComplete = vi.fn();
+    runWithPin("codex", true, onComplete);
+    mockProcess.emit("close", 0);
+
+    expect(onComplete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapterDecision: expect.objectContaining({ adapter: "codex", source: "remote-request" }),
+      })
+    );
+  });
+
+  it("fails the stage when the requested adapter fails its prerequisites, and never walks the chain", () => {
+    resolveStageAdapterMock.mockReturnValue({ adapter: "claude", source: "stage-config" });
+    const onComplete = vi.fn();
+    runWithPin("lm-studio", true, onComplete);
+
+    expect(walkAdapterFallbackMock).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+    const result = onComplete.mock.calls[0]?.[0];
+    expect(result.success).toBe(false);
+    expect(String(result.error)).toContain("[stage:adapter-unavailable] adapter=lm-studio");
+    expect(String(result.error)).toContain("source=remote-request");
+  });
+
+  it("fails the stage on a requested adapter the enum does not recognise", () => {
+    resolveStageAdapterMock.mockReturnValue({ adapter: "claude", source: "stage-config" });
+    const onComplete = vi.fn();
+    runWithPin("clawed", true, onComplete);
+
+    expect(spawn).not.toHaveBeenCalled();
+    const result = onComplete.mock.calls[0]?.[0];
+    expect(result.success).toBe(false);
+    expect(String(result.error)).toContain('the requested adapter "clawed"');
+  });
+
+  it("a cap pin that fails its prerequisites still walks the chain as before", () => {
+    resolveStageAdapterMock.mockReturnValue({ adapter: "claude", source: "stage-config" });
+    const onComplete = vi.fn();
+    runWithPin("lm-studio", undefined, onComplete);
+    mockProcess.emit("close", 0);
+
+    expect(walkAdapterFallbackMock).toHaveBeenCalledTimes(1);
+    expect(onComplete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapterDecision: expect.objectContaining({ adapter: "codex" }),
+      })
+    );
+  });
+});

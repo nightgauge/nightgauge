@@ -72,6 +72,10 @@ import { readEffectiveConfigTextSync } from "../mergedConfigReader";
  *                       layer's own stage-start PREREQ walk: same chain, a
  *                       different trigger, and a different bound — see the
  *                       adapterPin parameter on `runStageSkillHeadless`.
+ * - `"remote-request"` — A remote run request pinned this adapter (#1656,
+ *                       ADR-022 § 2). Wins like `"cap-fallback"`, but never
+ *                       walks the fallback chain: see the adapterPinRequested
+ *                       parameter on `runStageSkillHeadless`.
  */
 export const AdapterSourceSchema = z.enum([
   "env",
@@ -80,6 +84,7 @@ export const AdapterSourceSchema = z.enum([
   "auto-router",
   "fallback",
   "cap-fallback",
+  "remote-request",
   "default",
 ]);
 export type AdapterSource = z.infer<typeof AdapterSourceSchema>;

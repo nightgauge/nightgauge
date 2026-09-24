@@ -199,6 +199,31 @@ func parseOpenCodeCatalog(output string) (ids []string, defaultID string, ok boo
 	return ids, "", len(ids) > 0
 }
 
+// OpenCodeCatalog lists what `opencode models` shows under the per-run config
+// a dispatch of model gets on this machine: the #1627 catalog probe, for a
+// caller that must decide whether a model is selectable before it queues a
+// run (a remote run request, #1656). Output with no provider/model line is an
+// error, never an empty catalog.
+func OpenCodeCatalog(model string) ([]string, error) {
+	settings, err := config.LoadOpenCodeConfig("")
+	if err != nil {
+		return nil, err
+	}
+	bin, err := adapters.ResolveOpenCodeBinary(settings.Binary, exec.LookPath)
+	if err != nil {
+		return nil, err
+	}
+	out, err := runOpenCodeModels(bin.Path, settings, model)
+	if err != nil {
+		return nil, err
+	}
+	ids, _, ok := parseOpenCodeCatalog(out)
+	if !ok {
+		return nil, fmt.Errorf("`opencode models` listed no provider/model line")
+	}
+	return ids, nil
+}
+
 // openCodeGateRemediation is the remediation of the row while the enable gate
 // is closed.
 const openCodeGateRemediation = "the opencode adapter is experimental and dispatches only with " +

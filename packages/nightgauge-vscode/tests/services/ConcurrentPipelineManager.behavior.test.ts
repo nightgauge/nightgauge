@@ -758,3 +758,39 @@ describe("ConcurrentPipelineManager — behavioral tests", () => {
     );
   });
 });
+
+// #1656: a remote run request's pin rides on the dequeued queue item and is
+// handed to the slot's orchestrator, which dispatches every stage on it. An
+// item without one hands over nothing.
+describe("ConcurrentPipelineManager — remote run request pin (#1656)", () => {
+  it("passes the dequeued item's requested pin to runPipeline, and none for an unpinned item", async () => {
+    const mockQueue = createMockQueueService();
+    const controllable = createControllableFactory();
+    const manager = new ConcurrentPipelineManager(
+      "/test-repo",
+      mockQueue as any,
+      controllable.factory,
+      createMockLogger() as any,
+      { maxConcurrent: 2, worktreeBase: ".worktrees" }
+    );
+    mockQueue.dequeueIndependent.mockResolvedValueOnce([
+      {
+        ...makeQueueItem(1656),
+        requestedAdapter: "opencode",
+        requestedModel: "lmstudio/qwen/qwen3.8-27b",
+      },
+      makeQueueItem(1657),
+    ]);
+
+    await manager.fillSlots();
+    await vi.waitFor(() => {
+      expect(controllable.getOrchestrator(1656)?.runPipeline).toHaveBeenCalledTimes(1);
+      expect(controllable.getOrchestrator(1657)?.runPipeline).toHaveBeenCalledTimes(1);
+    });
+
+    const pinned = controllable.getOrchestrator(1656).runPipeline.mock.calls[0];
+    expect(pinned[0]).toBe(1656);
+    expect(pinned[3]).toEqual({ adapter: "opencode", model: "lmstudio/qwen/qwen3.8-27b" });
+    expect(controllable.getOrchestrator(1657).runPipeline.mock.calls[0][3]).toBeUndefined();
+  });
+});

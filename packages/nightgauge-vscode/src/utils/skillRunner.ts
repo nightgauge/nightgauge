@@ -4013,7 +4013,16 @@ export function runStageSkillHeadless(
    * adapter that fails its own prereq check still falls through the chain rather
    * than failing the stage outright.
    */
-  adapterPin?: string
+  adapterPin?: string,
+  /**
+   * Marks `adapterPin` as a remote run request's pin (#1656, ADR-022 § 2)
+   * rather than a cap-recovery hop. The requester chose the adapter, so it
+   * wins over every local rung like a cap pin, but it NEVER walks the
+   * fallback chain and never falls back on an unknown value: an adapter that
+   * cannot serve the request fails the stage, naming the pin, because the
+   * requester must not be served by another adapter without being told.
+   */
+  adapterPinRequested?: boolean
 ): SkillProcessHandle {
   // When a pinned workspace root is provided (from HeadlessOrchestrator),
   // use it directly to prevent repo-switch mid-pipeline from changing CWD.
@@ -4100,8 +4109,14 @@ export function runStageSkillHeadless(
     adapterPin && ExecutionAdapterSchema.safeParse(adapterPin).success
       ? (adapterPin as ExecutionAdapter)
       : undefined;
+  // A remote run request's pin (#1656) is strict: see `adapterPinRequested`.
+  const requestedPin = adapterPinRequested === true && !!adapterPin;
   let adapter: ExecutionAdapter = pinnedAdapter ?? initialDecision.adapter;
-  let adapterSource: AdapterSource = pinnedAdapter ? "cap-fallback" : initialDecision.source;
+  let adapterSource: AdapterSource = pinnedAdapter
+    ? requestedPin
+      ? "remote-request"
+      : "cap-fallback"
+    : initialDecision.source;
   let routerRationale: string | undefined = pinnedAdapter ? undefined : initialDecision.rationale;
   // The model input dispatch resolves an opencode stage's model from
   // (`requestedModel` below): the caller's model, else resolveModel's. Only
@@ -4118,12 +4133,15 @@ export function runStageSkillHeadless(
           issueNumber
         ).model,
     }).model;
-  let prereqError = validateAdapterPrerequisites(
-    adapter,
-    workspaceRoot,
-    "headless",
-    adapter === "opencode" ? openCodeDispatchModelInput() : undefined
-  );
+  let prereqError =
+    requestedPin && !pinnedAdapter
+      ? `the requested adapter "${adapterPin}" is not one this extension runs`
+      : validateAdapterPrerequisites(
+          adapter,
+          workspaceRoot,
+          "headless",
+          adapter === "opencode" ? openCodeDispatchModelInput() : undefined
+        );
 
   // Issue #3231 — track every adapter the dispatcher considers at stage start,
   // in order. Element 0 is always the primary; subsequent elements are
@@ -4138,7 +4156,9 @@ export function runStageSkillHeadless(
   const primaryPrereqError = prereqError;
   let chainExhausted = false;
 
-  if (prereqError) {
+  // A remote run request's pin never walks the chain (#1656): the stage fails
+  // below with [stage:adapter-unavailable] source=remote-request instead.
+  if (prereqError && !requestedPin) {
     // AC #3 — when the resolved adapter's prereq validation fails, walk the
     // effective fallback chain (per-stage override → global chain → built-in
     // default — AC #1, #2). Strict mode (`pipeline.disable_fallback: true` —

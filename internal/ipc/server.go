@@ -80,6 +80,11 @@ type Server struct {
 	execMgr   *execution.Manager
 	scheduler *orchestrator.Scheduler
 
+	// validateRemotePin decides a remote run request's adapter and model
+	// (#1656): orchestrator.ValidateRemotePin with this machine's deps. A
+	// field so a test can replace the machine.
+	validateRemotePin func(adapter, model string) error
+
 	// platformClient and every service built on it (below) are normally set
 	// once, before Run(), by WithPlatformClient — safe to read unguarded
 	// after that point since nothing mutates them again.
@@ -306,6 +311,9 @@ func NewServer(client *gh.Client, opts ...ServerOption) *Server {
 		// wedged scheduler cannot hang an IPC request. On expiry the handler
 		// still answers with the scheduler's ACTUAL state.
 		autonomousWaitTimeout: defaultAutonomousWaitTimeout,
+		validateRemotePin: func(adapter, model string) error {
+			return orchestrator.ValidateRemotePin(adapter, model, orchestrator.RemotePinDeps{})
+		},
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -3117,6 +3125,12 @@ func (s *Server) registerMethods() {
 			// REGISTRY's mutex, which is a torn read against any concurrent
 			// snapshot or persist (Decision 12).
 			repo = rt.SeedRunContext(p.Repo, p.Title, p.Branch)
+			// A remote run request's pin (#1656) rides on the queue item,
+			// which stays queued for the whole run. The extension runs the
+			// stages itself, so this is where its run record learns what was
+			// requested; SetRequestedPin is set-once, so a later hop never
+			// rewrites it.
+			s.seedRequestedPin(rt, repo, p.IssueNumber)
 			// The entry's index key follows the runtime's repo, so the derived
 			// issue index (Decision 6) can rank without ever taking rs.mu.
 			if res.entry != nil && repo != "" {
@@ -4374,6 +4388,20 @@ func (s *Server) registerMethods() {
 			return nil, fmt.Errorf("issue #%d carries human-only label %q (autonomous.exclude_labels) and was not queued", p.IssueNumber, label)
 		}
 		repo := fmt.Sprintf("%s/%s", p.Owner, p.Repo)
+		// A remote run request's pin (#1656). The caller validated it in full
+		// with queue.validatePin before acking; the pure shape and allow-list
+		// half runs again here so no caller can queue a value that could reach
+		// argv. A pin for an issue already queued is refused, never dropped:
+		// QueueAddItem skips a duplicate, and the run would then execute
+		// without the pin the requester asked for.
+		if p.Adapter != "" || p.Model != "" {
+			if err := orchestrator.ValidateRemotePinShape(p.Adapter, p.Model); err != nil {
+				return nil, fmt.Errorf("issue #%d was not queued: %w", p.IssueNumber, err)
+			}
+			if _, _, queued := s.scheduler.QueueItemRequestedPin(repo, p.IssueNumber); queued {
+				return nil, fmt.Errorf("issue #%d is already queued, so the requested adapter and model cannot apply to it; it was not queued again", p.IssueNumber)
+			}
+		}
 		s.scheduler.QueueAddItem(orchestrator.QueueItem{
 			Repo:        repo,
 			IssueNumber: p.IssueNumber,
@@ -4382,9 +4410,25 @@ func (s *Server) registerMethods() {
 			// Adopt the platform-assigned run_id (dashboard-trigger ack) when
 			// present so the scheduler's runtime.RunID matches the command's
 			// ack runId — keeping the dashboard's run deep-link resolvable (#4120).
-			RemoteRunID: p.RemoteRunID,
+			RemoteRunID:      p.RemoteRunID,
+			RequestedAdapter: p.Adapter,
+			RequestedModel:   p.Model,
 		})
 		return map[string]string{"status": "ok"}, nil
+	}
+
+	//ipc:method queueValidatePin params:QueueValidatePinParams result:QueueValidatePinResult
+	s.methods["queue.validatePin"] = func(_ context.Context, params json.RawMessage) (interface{}, error) {
+		var p QueueValidatePinParams
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, fmt.Errorf("invalid params: %w", err)
+		}
+		// A refusal is a result, not an error: the caller acks the command
+		// with it as the rejected ack's detail (#1656).
+		if err := s.validateRemotePin(p.Adapter, p.Model); err != nil {
+			return QueueValidatePinResult{OK: false, Reason: err.Error()}, nil
+		}
+		return QueueValidatePinResult{OK: true}, nil
 	}
 
 	//ipc:method queueList params:none result:IpcQueueState
@@ -5964,4 +6008,16 @@ func isOwnKnowledgeDir(path string, issueNumber int) bool {
 		}
 	}
 	return false
+}
+
+// seedRequestedPin copies a queued issue's remote run request pin (#1656) onto
+// the runtime the extension-driven run records into. A run with no scheduler,
+// no queued item, or no pin is left untouched.
+func (s *Server) seedRequestedPin(rt *state.RuntimeState, repo string, issueNumber int) {
+	if s.scheduler == nil || rt == nil || repo == "" {
+		return
+	}
+	if adapter, model, _ := s.scheduler.QueueItemRequestedPin(repo, issueNumber); adapter != "" {
+		rt.SetRequestedPin(adapter, model)
+	}
 }

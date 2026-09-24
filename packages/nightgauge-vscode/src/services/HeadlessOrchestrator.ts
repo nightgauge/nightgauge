@@ -417,6 +417,16 @@ export type PipelineStartRefusal =
   /** The operator cancelled at the pre-flight budget warning. A deliberate stop, mirroring the existing `slot.userCancelled` suppression. */
   | "budget-cancelled-by-user";
 
+/**
+ * A remote run request's pin (#1656, ADR-022 § 2): the adapter and model a
+ * dashboard or mobile trigger asked this run to execute on, already accepted
+ * by Go's queue.validatePin. `model` is the `-m` value for opencode.
+ */
+export interface RequestedPin {
+  adapter: string;
+  model?: string;
+}
+
 export interface PipelineRunResult {
   success: boolean;
   completedStages: PipelineStage[];
@@ -1256,6 +1266,13 @@ export class HeadlessOrchestrator implements vscode.Disposable {
 
   /** Whether the current run has a user-initiated model override (Issue #1610) */
   private userModelOverride: PipelineModelOverride | null = null;
+
+  /**
+   * The current run's remote run request pin (#1656), or null. Every stage
+   * dispatches on it as a strict adapter pin plus model: no escalation,
+   * fallback or band translation rewrites it.
+   */
+  private requestedPin: RequestedPin | null = null;
 
   /** Pending model override set via setNextRunModelOverride(), consumed by runPipeline() (Issue #1610) */
   private pendingUserModelOverride: PipelineModelOverride | null = null;
@@ -9686,7 +9703,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   async runPipeline(
     issueNumber: number,
     callbacks?: PipelineCallbacks,
-    modelOverride?: PipelineModelOverride
+    modelOverride?: PipelineModelOverride,
+    requestedPin?: RequestedPin
   ): Promise<PipelineRunResult> {
     // Per-issue in-flight registry, second line of defense behind the
     // dispatch-boundary guard in ConcurrentPipelineManager (#188). The
@@ -9713,7 +9731,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     }
     HeadlessOrchestrator.activePipelineIssues.add(issueNumber);
     try {
-      return await this.runPipelineInner(issueNumber, callbacks, modelOverride);
+      return await this.runPipelineInner(issueNumber, callbacks, modelOverride, requestedPin);
     } finally {
       HeadlessOrchestrator.activePipelineIssues.delete(issueNumber);
     }
@@ -9725,7 +9743,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   private async runPipelineInner(
     issueNumber: number,
     callbacks?: PipelineCallbacks,
-    modelOverride?: PipelineModelOverride
+    modelOverride?: PipelineModelOverride,
+    requestedPin?: RequestedPin
   ): Promise<PipelineRunResult> {
     if (this.isRunning) {
       throw new Error("Pipeline is already running");
@@ -9767,6 +9786,14 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // Pre-populate model overrides for all skill stages when user selects
     // a model override via "Run Pipeline with Model" (#1610).
     this.userModelOverride = modelOverride ?? null;
+    this.requestedPin = requestedPin?.adapter ? requestedPin : null;
+    if (this.requestedPin) {
+      this.logger.info("Remote run request pin applied to every stage (#1656)", {
+        issueNumber,
+        adapter: this.requestedPin.adapter,
+        model: this.requestedPin.model,
+      });
+    }
     const executionAdapter = getExecutionAdapter(this.getWorkingDirectory());
     if (modelOverride && executionAdapter === "claude") {
       for (const stage of SKILL_STAGES) {
@@ -11109,8 +11136,11 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         // Pass model override from escalation engine if one is set (#1343, #1394),
         // or from user override (#1610). User override source is 'user-override'.
         // Pass pinned workspace root to prevent repo-switch mid-pipeline (#1592).
-        const stageModelOverride =
-          executionAdapter === "codex"
+        // A remote run request's model (#1656) is dispatched as requested on
+        // every stage; nothing below rewrites it.
+        const stageModelOverride = this.requestedPin?.model
+          ? this.requestedPin.model
+          : executionAdapter === "codex"
             ? (this.userModelOverride ?? undefined)
             : this.stageModelOverrides.get(stage);
 
@@ -11169,7 +11199,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                 undefined,
                 stageModelOverride,
                 this.pinnedWorkspaceRoot,
-                this.userModelOverride && stageModelOverride === this.userModelOverride
+                (this.userModelOverride && stageModelOverride === this.userModelOverride) ||
+                  (this.requestedPin?.model && stageModelOverride === this.requestedPin.model)
                   ? "user-override"
                   : undefined
               );
@@ -12439,6 +12470,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       this.fableQuotaFallbackApplied.clear(); // Clear Fable→Opus usage-limit fallback guard
       this.fableFallbacks = []; // Clear surfaced Fable→Opus fallback list (#26)
       this.userModelOverride = null; // Clear user model override (#1610)
+      this.requestedPin = null; // Clear the remote run request pin (#1656)
       this.proactiveEscalationApplied = false; // Clear proactive escalation guard (#1394)
       this.ceilingOverrideUsd = null; // Clear per-run ceiling override (#253)
       this.policyRetryBudgetIncrease = 0; // Clear health policy retry budget (#1395)
@@ -15825,7 +15857,11 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         // NIGHTGAUGE_RUN_ID, at parity with the Go scheduler's spawn. Absent
         // (undefined, not "") when this orchestrator holds no run — the child
         // must not inherit the OUTER run's id in the dogfood case.
-        this.stateService?.getRunId() ?? undefined
+        this.stateService?.getRunId() ?? undefined,
+        undefined, // effortOverride
+        // #1656: a remote run request's adapter, pinned strictly on every stage.
+        this.requestedPin?.adapter,
+        this.requestedPin ? true : undefined
       );
 
       // ADR-017 §7.2: the ONE `running` transition for this stage attempt,

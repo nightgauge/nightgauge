@@ -91,6 +91,11 @@ export interface RunStageParams {
    * cost the run a stage.
    */
   adapterPin?: string;
+  /**
+   * Marks `adapterPin` as a remote run request's pin (#1656) rather than a
+   * cap-recovery hop: it never walks the fallback chain.
+   */
+  adapterPinRequested?: boolean;
   maxTokens?: number;
   timeout: number; // ms
   skillContent?: string; // Resolved SKILL.md body from platform (paid tiers); empty = use local file
@@ -645,7 +650,10 @@ export class SkillRunner {
         // #1545: a cap-recovery provider hop the Go scheduler decided. Absent
         // on every ordinary dispatch; when present it pins the adapter above
         // every local resolution rung.
-        params.adapterPin
+        params.adapterPin,
+        // #1656: a remote run request's pin is strict — see
+        // runStageSkillHeadless's adapterPinRequested.
+        params.adapterPinRequested
       );
 
       this.activeHandle = handle;

@@ -106,15 +106,20 @@ type StageRunParams struct {
 	// and it is useless unless the next dispatch actually lands there. The
 	// extension honours it above every other rung for the same reason: the
 	// configured adapter is the one whose cap just cost the run a stage.
-	AdapterPin   string
-	MaxTokens    int
-	CostBudget   float64
-	Timeout      time.Duration
-	SkillPath    string
-	ContextFile  string
-	OutputFile   string
-	TargetRepo   string
-	WorktreePath string // Absolute path for Claude CLI working directory (IPC mode only)
+	AdapterPin string
+	// AdapterPinRequested marks AdapterPin as a remote run request's pin
+	// (#1656) rather than a cap-recovery hop. A requested pin never walks the
+	// fallback chain: an adapter that cannot serve it fails the stage, because
+	// the requester asked for it and must not be served by another.
+	AdapterPinRequested bool
+	MaxTokens           int
+	CostBudget          float64
+	Timeout             time.Duration
+	SkillPath           string
+	ContextFile         string
+	OutputFile          string
+	TargetRepo          string
+	WorktreePath        string // Absolute path for Claude CLI working directory (IPC mode only)
 	// Runtime is NON-OPTIONAL for production dispatches (ADR-017 step 0b).
 	// runPipeline constructs the runtime before it can reach a stage, so a nil
 	// Runtime here is a programming error, not a supported configuration —
@@ -1065,6 +1070,12 @@ type QueueItem struct {
 	// remote-triggered runs. Preferred over the locally-generated runstate
 	// UUID when set (#3557).
 	RemoteRunID string `json:"remoteRunId,omitempty"`
+	// RequestedAdapter and RequestedModel are a remote run request's pin
+	// (#1656, ADR-022 § 2), already accepted by ValidateRemotePin. Every
+	// stage of the run dispatches on them, and the run record keeps them next
+	// to what served. Empty on every other item.
+	RequestedAdapter string `json:"requestedAdapter,omitempty"`
+	RequestedModel   string `json:"requestedModel,omitempty"`
 }
 
 // QueuePausedReason explains why a queue item is paused.
@@ -1287,7 +1298,7 @@ func warnProjectMappingMismatch(runtimeCfg *config.Config, workspaceRoot string)
 // per-stage selection there) and only when the invocation did not pin the
 // adapter explicitly. An unresolvable adapter name is a stage failure with
 // remediation, never a silent fallback.
-func (s *Scheduler) applyStageAdapter(stage, workspaceRoot, capPin string) error {
+func (s *Scheduler) applyStageAdapter(stage, workspaceRoot, pin, pinSource string) error {
 	cfg, err := config.Load(workspaceRoot)
 	if err != nil {
 		cfg = nil // no readable config — resolution falls through to the run default
@@ -1299,9 +1310,11 @@ func (s *Scheduler) applyStageAdapter(stage, workspaceRoot, capPin string) error
 	// just cost this run a stage, and re-pointing back to it here would send
 	// the very next stage into the same wall. The pin is run-scoped state —
 	// see RuntimeState.PinCapAdapter for why it cannot live on the Scheduler.
-	if capPin != "" {
-		target = capPin
-		res.Source = "cap-fallback"
+	// A remote run request's pin (#1656) outranks them the same way: the
+	// requester chose the adapter, and ValidateRemotePin already accepted it.
+	if pin != "" {
+		target = pin
+		res.Source = pinSource
 	}
 	if target == "" || res.Source == "adapter-env" {
 		// Nothing stage-specific resolved (adapter-env is the invocation
@@ -2489,6 +2502,20 @@ func (s *Scheduler) queueItemRemoteRunID(repo string, issueNumber int) string {
 		}
 	}
 	return ""
+}
+
+// QueueItemRequestedPin returns the remote run request's adapter and model
+// for a queued issue (#1656), and whether the issue is queued at all. An item
+// stays queued, marked processing, for the whole of its run.
+func (s *Scheduler) QueueItemRequestedPin(repo string, issueNumber int) (adapter, model string, queued bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, item := range s.queue {
+		if item.Repo == repo && item.IssueNumber == issueNumber {
+			return item.RequestedAdapter, item.RequestedModel, true
+		}
+	}
+	return "", "", false
 }
 
 // QueueList returns the current queue as legacy entries.
@@ -4400,6 +4427,10 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 
 	runtime := state.NewRuntimeState(item.Repo, item.Number, item.ID, runID)
 	runtime.Title = item.Title
+	// A remote run request's pin (#1656) is a fact of the run from its start.
+	if reqAdapter, reqModel, _ := s.QueueItemRequestedPin(item.Repo, item.Number); reqAdapter != "" {
+		runtime.SetRequestedPin(reqAdapter, reqModel)
+	}
 	// Capture the issue body at pickup (#183) so the run record + telemetry can
 	// show the issue context (title, labels, body) on the dashboard run-detail
 	// page without leaving the dashboard. Title/labels are already on the board
@@ -5245,8 +5276,16 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// PREFER, and a provider that has just refused the run for the next
 		// seven days cannot be served by preferring it harder.
 		capPin := runtime.CapAdapterPin()
-		if (s.adapterExplicit == "" || capPin != "") && s.execMgr != nil && s.execMgr.HasAdapter() {
-			adapterResolveErr = s.applyStageAdapter(string(stage), workspaceRoot, capPin)
+		// A remote run request (#1656) pins the adapter and model for every
+		// stage. A cap-hop still outranks it, as a hop: the requested pair
+		// stays on the record untouched, and the hop is recorded beside it.
+		requestedAdapter, requestedModel := runtime.RequestedPin()
+		stagePin, stagePinSource := capPin, "cap-fallback"
+		if capPin == "" && requestedAdapter != "" {
+			stagePin, stagePinSource = requestedAdapter, "remote-request"
+		}
+		if (s.adapterExplicit == "" || stagePin != "") && s.execMgr != nil && s.execMgr.HasAdapter() {
+			adapterResolveErr = s.applyStageAdapter(string(stage), workspaceRoot, stagePin, stagePinSource)
 		}
 
 		// Resolve the dispatch model BEFORE composing the skill (#79). Overlays
@@ -5259,6 +5298,13 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// other stage keeps the run-wide prediction.
 		model := s.resolveDispatchModel(stage, item.Number, workspaceRoot,
 			routedStageModel(stage, predictedModel, routingDecision), modelFloors, issueJobClass)
+		// The requested model is dispatched as requested: no escalation, floor
+		// or descent rewrites it. After a cap-hop the run is on another
+		// adapter, which the requested model does not name, so the ordinary
+		// resolution applies there.
+		if requestedModel != "" && capPin == "" {
+			model = requestedModel
+		}
 
 		// Compose SKILL.md through the one renderer (#78), overlay-aware (#79).
 		// With no overlay files present this is byte-identical to a base-only
@@ -5805,7 +5851,8 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// Empty on every ordinary dispatch; set only after a usage cap
 			// exhausted the tier ladder and the provider walk re-pointed the
 			// run (#1545). See StageRunParams.AdapterPin.
-			AdapterPin: capPin,
+			AdapterPin:          stagePin,
+			AdapterPinRequested: capPin == "" && requestedAdapter != "",
 			// Stage-aware + model-aware last-resort context deadline (#73).
 			// Replaces a blind 30-min literal that killed frontier-mode Fable
 			// stages before their own progress-gated hard cap could apply.

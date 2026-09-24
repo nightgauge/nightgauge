@@ -475,6 +475,27 @@ type QueueAddParams struct {
 	// queue item's RemoteRunID (#3557); this just lets the enqueue populate it.
 	// See #4120.
 	RemoteRunID string `json:"remoteRunId,omitempty"`
+	// Adapter and Model are a remote run request's pin (#1656, ADR-022 § 2):
+	// the `trigger` payload's `adapter` and `model`, which the caller has
+	// already put through queue.validatePin. queue.add re-checks their shape
+	// and refuses a pin for an issue that is already queued.
+	Adapter string `json:"adapter,omitempty"`
+	Model   string `json:"model,omitempty"`
+}
+
+// QueueValidatePinParams are parameters for queue.validatePin: a remote run
+// request's `adapter` and `model`, exactly as the `trigger` payload carries
+// them (#1656).
+type QueueValidatePinParams struct {
+	Adapter string `json:"adapter,omitempty"`
+	Model   string `json:"model,omitempty"`
+}
+
+// QueueValidatePinResult is the result for queue.validatePin. Reason is the
+// refusal, for the command ack's `detail`, and is empty when OK is true.
+type QueueValidatePinResult struct {
+	OK     bool   `json:"ok"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // QueueRemoveParams are parameters for queue.remove.
@@ -1259,6 +1280,11 @@ type RemotePollingStatus struct {
 type AgentAcknowledgeCommandParams struct {
 	AgentID   string `json:"agentId"`
 	CommandID string `json:"commandId"`
+	// Outcome is empty for an ordinary ack, or "rejected" to refuse the
+	// command with Detail as the reason the requester sees (#1656). Any other
+	// value is an error.
+	Outcome string `json:"outcome,omitempty"`
+	Detail  string `json:"detail,omitempty"`
 }
 
 // AgentAcknowledgeCommandResult is the result for agent.acknowledgeCommand.

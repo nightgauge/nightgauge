@@ -275,6 +275,14 @@ type RuntimeState struct {
 	// DefaultAdapter when a stage has no entry.
 	StageAdapters map[string]string `json:"stageAdapters,omitempty"`
 
+	// RequestedAdapter and RequestedModel are a remote run request's pin
+	// (#1656, ADR-022 § 2): what the requester asked the run to execute on.
+	// Set once when the run starts and never rewritten, so they sit next to
+	// StageAdapters/StageModels (what served) and a cap-hop shows as the
+	// difference between the two. Empty on every other run.
+	RequestedAdapter string `json:"requestedAdapter,omitempty"`
+	RequestedModel   string `json:"requestedModel,omitempty"`
+
 	// StageModels captures the model that ACTUALLY executed each stage
 	// (Issue #42) — after escalation overrides and model-unavailable tier
 	// downgrades, which can differ from the run-level predicted model.
@@ -2028,6 +2036,33 @@ func (rs *RuntimeState) CapAdapterPin() string {
 	return rs.capHopAdapter
 }
 
+// SetRequestedPin records a remote run request's adapter and model (#1656).
+// It is set-once: the first non-empty adapter wins and nothing afterwards,
+// a cap-hop included, rewrites it.
+func (rs *RuntimeState) SetRequestedPin(adapter, model string) {
+	if adapter == "" {
+		return
+	}
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if rs.RequestedAdapter != "" {
+		return
+	}
+	rs.RequestedAdapter = adapter
+	rs.RequestedModel = model
+}
+
+// RequestedPin returns the remote run request's adapter and model, or two
+// empty strings when the run was not requested with a pin.
+func (rs *RuntimeState) RequestedPin() (adapter, model string) {
+	if rs == nil {
+		return "", ""
+	}
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	return rs.RequestedAdapter, rs.RequestedModel
+}
+
 // CapAdaptersTried returns a COPY of the adapters this run has already hopped
 // to. A copy because the walk reads it outside the lock; handing out the live
 // map would reintroduce the race this scope move exists to remove.
@@ -3009,6 +3044,8 @@ func (rs *RuntimeState) snapshotLocked() *RuntimeState {
 		Body:                     rs.Body,
 		Branch:                   rs.Branch,
 		RunID:                    rs.RunID,
+		RequestedAdapter:         rs.RequestedAdapter,
+		RequestedModel:           rs.RequestedModel,
 		Stage:                    rs.Stage,
 		StartedAt:                rs.StartedAt,
 		StageStart:               rs.StageStart,

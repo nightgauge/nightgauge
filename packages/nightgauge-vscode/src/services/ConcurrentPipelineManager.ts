@@ -112,7 +112,7 @@ function isTransientNetworkFailureText(errMsg: string): boolean {
 
 import type { IssueQueueService } from "./IssueQueueService";
 import type { HeadlessOrchestrator } from "./HeadlessOrchestrator";
-import type { PipelineRunResult } from "./HeadlessOrchestrator";
+import type { PipelineRunResult, RequestedPin } from "./HeadlessOrchestrator";
 import type { PipelineStateService } from "./PipelineStateService";
 import type { Logger } from "../utils/logger";
 import type { ActiveSlot, QueueItem } from "../types/queue";
@@ -215,6 +215,11 @@ interface PipelineSlot {
    * conflated. See ADR-017 Decision 2.
    */
   remoteRunId?: string;
+  /**
+   * A remote run request's pin (#1656), carried on the dequeued queue item:
+   * every stage of this slot's run dispatches on it.
+   */
+  requestedPin?: RequestedPin;
   /** Issue number being processed */
   issueNumber: number;
   /** Issue title for display */
@@ -1390,6 +1395,9 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       startedAt: new Date().toISOString(),
       epicOrder: item.epicOrder,
       remoteRunId: pendingRemoteRunId,
+      requestedPin: item.requestedAdapter
+        ? { adapter: item.requestedAdapter, model: item.requestedModel }
+        : undefined,
     };
 
     this.slots.set(item.issueNumber, slot);
@@ -1499,48 +1507,54 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     }
 
     try {
-      const result = await slot.orchestrator.runPipeline(slot.issueNumber, {
-        onStageStart: (stage) => {
-          slot.currentStage = stage;
-          this.emitSlotsChanged();
-          this.callbacks.onSlotStageChanged?.(slot.index, slot.issueNumber, stage);
-        },
-        // #1055: the slot never wired onStageComplete, so nothing closed a
-        // stage's phases on the concurrent path. onStageComplete is already
-        // declared on PipelineCallbacks and already fires on every success and
-        // failure path, so no orchestrator change is needed.
-        onStageComplete: (stage) => {
-          this.callbacks.onSlotStageCompleted?.(slot.index, slot.issueNumber, stage);
-        },
-        onStdout: (stage, data) => {
-          this.callbacks.onSlotOutput?.(slot.index, slot.issueNumber, data, stage);
-        },
-        onPhaseStart: (stage, name, index, total) => {
-          this.callbacks.onSlotPhaseStart?.(
-            slot.index,
-            slot.issueNumber,
-            stage,
-            name,
-            index,
-            total
-          );
-        },
-        onStderr: (stage, data) => {
-          // Apply the same keyword-based classification as streamOutputHandler
-          // so informational stderr lines (e.g. "[skillRunner] Stage: ...",
-          // "[PRE-FLIGHT] cost estimate") don't appear as [ERROR] in the output.
-          for (const line of data.split("\n")) {
-            if (!line.trim()) continue;
-            const lower = line.toLowerCase();
-            const isError = lower.includes("error") || lower.includes("failed");
-            if (isError) {
-              this.callbacks.onSlotError?.(slot.index, slot.issueNumber, line, stage);
-            } else {
-              this.callbacks.onSlotOutput?.(slot.index, slot.issueNumber, line, stage);
+      const result = await slot.orchestrator.runPipeline(
+        slot.issueNumber,
+        {
+          onStageStart: (stage) => {
+            slot.currentStage = stage;
+            this.emitSlotsChanged();
+            this.callbacks.onSlotStageChanged?.(slot.index, slot.issueNumber, stage);
+          },
+          // #1055: the slot never wired onStageComplete, so nothing closed a
+          // stage's phases on the concurrent path. onStageComplete is already
+          // declared on PipelineCallbacks and already fires on every success and
+          // failure path, so no orchestrator change is needed.
+          onStageComplete: (stage) => {
+            this.callbacks.onSlotStageCompleted?.(slot.index, slot.issueNumber, stage);
+          },
+          onStdout: (stage, data) => {
+            this.callbacks.onSlotOutput?.(slot.index, slot.issueNumber, data, stage);
+          },
+          onPhaseStart: (stage, name, index, total) => {
+            this.callbacks.onSlotPhaseStart?.(
+              slot.index,
+              slot.issueNumber,
+              stage,
+              name,
+              index,
+              total
+            );
+          },
+          onStderr: (stage, data) => {
+            // Apply the same keyword-based classification as streamOutputHandler
+            // so informational stderr lines (e.g. "[skillRunner] Stage: ...",
+            // "[PRE-FLIGHT] cost estimate") don't appear as [ERROR] in the output.
+            for (const line of data.split("\n")) {
+              if (!line.trim()) continue;
+              const lower = line.toLowerCase();
+              const isError = lower.includes("error") || lower.includes("failed");
+              if (isError) {
+                this.callbacks.onSlotError?.(slot.index, slot.issueNumber, line, stage);
+              } else {
+                this.callbacks.onSlotOutput?.(slot.index, slot.issueNumber, line, stage);
+              }
             }
-          }
+          },
         },
-      });
+        undefined,
+        // #1656: a remote run request's pin, or undefined for every other run.
+        slot.requestedPin
+      );
 
       pipelineResult = result;
       pipelineSucceeded = result.success;

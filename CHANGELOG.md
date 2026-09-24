@@ -27,6 +27,11 @@ changelog, and the release workflow refuses a tag that does not.
   OpenCode section now says what `warnings` and `notes` carry, and that notes
   never change the doctor's verdict.
 
+- **A cap-recovery adapter hop now reaches the extension's pipeline stages
+  (#1656).** The extension forwarded the #1545 hop pin only to the refinement
+  stage, so a capped run the Go scheduler moved to another provider still
+  dispatched its later stages on the capped one.
+
 - **The knowledge base is committed, and every statement of that agrees
   (#2042).** The generated `.nightgauge/.gitignore` no longer ignores
   `/knowledge/` wholesale — an enabled knowledge base used to be scaffolded,
@@ -45,6 +50,17 @@ changelog, and the release workflow refuses a tag that does not.
   says how much hosted spend it is not showing. The heartbeat reports
   `plan: "local"`, and falls back to `unknown` for the session if the server
   rejects it. ADR-018 records the rule.
+
+- **A remote trigger can choose the adapter and model its run executes on
+  (#1656).** A dashboard or mobile `trigger` may carry `adapter` and `model`
+  (the `-m` value, such as `lmstudio/qwen/qwen3.8-27b`). The agent checks them
+  before it acks: the allow-list, pattern and length, adapter health (a gated
+  adapter cannot be enabled remotely), provider credentials and the local
+  OpenCode catalog. A pair it cannot serve is acked `rejected` with the reason,
+  and the run is never queued or moved to another model. A valid pair pins
+  every stage, and the run record keeps `requested_adapter`/`requested_model`
+  next to what served, so a later cap-hop shows as a hop. ADR-022 § 2 records
+  the contract.
 
 - **The pipeline can authenticate as a GitHub App (#1955).** Set
   `github_auth.app` (`id`, `private_key_path` or `private_key: env:VAR`, and

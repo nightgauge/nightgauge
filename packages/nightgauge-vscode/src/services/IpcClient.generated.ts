@@ -79,6 +79,7 @@ import type {
   PlatformSyncTelemetryResult,
   PortalSessionResult,
   PullRequestDetail,
+  QueueValidatePinResult,
   RateLimitInfo,
   RecordStageExitResult,
   RemoteGetCommandHistoryResult,
@@ -281,8 +282,12 @@ export class IpcClientGenerated extends IpcClientBase {
   // Queue
   // -------------------------------------------------------------------------
 
-  async queueAdd(owner: string, repo: string, issueNumber: number, title?: string, labels?: string[], priority?: string, remoteRunId?: string): Promise<void> {
-    await this.call<void>('queue.add', { owner, repo, issueNumber, title, labels, priority, remoteRunId });
+  async queueAdd(owner: string, repo: string, issueNumber: number, title?: string, labels?: string[], priority?: string, remoteRunId?: string, adapter?: string, model?: string): Promise<void> {
+    await this.call<void>('queue.add', { owner, repo, issueNumber, title, labels, priority, remoteRunId, adapter, model });
+  }
+
+  async queueValidatePin(adapter?: string, model?: string): Promise<QueueValidatePinResult> {
+    return this.call<QueueValidatePinResult>('queue.validatePin', { adapter, model });
   }
 
   async queueList(): Promise<IpcQueueState> {
@@ -535,8 +540,8 @@ export class IpcClientGenerated extends IpcClientBase {
   // Agent
   // -------------------------------------------------------------------------
 
-  async agentAcknowledgeCommand(agentId: string, commandId: string): Promise<AgentAcknowledgeCommandResult> {
-    return this.call<AgentAcknowledgeCommandResult>('agent.acknowledgeCommand', { agentId, commandId });
+  async agentAcknowledgeCommand(agentId: string, commandId: string, outcome?: string, detail?: string): Promise<AgentAcknowledgeCommandResult> {
+    return this.call<AgentAcknowledgeCommandResult>('agent.acknowledgeCommand', { agentId, commandId, outcome, detail });
   }
 
 

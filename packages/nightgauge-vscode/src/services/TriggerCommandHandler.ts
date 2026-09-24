@@ -20,6 +20,12 @@
  * @see Issue #4117 — Resolve the target repo against the open workspace before
  *   ack/enqueue so a repo that isn't open in a multi-root .code-workspace
  *   fails fast instead of acking a command the runner can never execute
+ * A trigger may carry a remote run request (#1656, ADR-022 § 2): optional
+ * `adapter` and `model` fields naming what the run must execute on. Go decides
+ * whether this machine can serve them (`queue.validatePin`) BEFORE the ack. A
+ * refusal is acked `{outcome: "rejected", detail}` and nothing is queued, so
+ * the requester sees why and is never served by another adapter or model.
+ *
  * @see AgentCommandStreamService — SSE source that dispatches commands here
  */
 
@@ -35,6 +41,10 @@ interface TriggerPayload {
   repo: string;
   issueNumber: number;
   stage?: string;
+  /** Remote run request (#1656): the adapter id the run must execute on. */
+  adapter?: unknown;
+  /** Remote run request (#1656): the `-m` value, provider-key form. */
+  model?: unknown;
 }
 
 export class TriggerCommandHandler implements CommandHandler {
@@ -143,6 +153,13 @@ export class TriggerCommandHandler implements CommandHandler {
       });
     }
 
+    // Remote run request (#1656). Go is the one authority on whether this
+    // machine can serve the pair; a refusal is acked as rejected with the
+    // reason, and nothing is queued. A payload without the fields skips this
+    // entirely and behaves exactly as before.
+    const requested = await this.checkRequestedPin(agentId, cmd.id, payload, labels);
+    if (requested === "refused") return;
+
     // Ack must complete before pipeline starts (AC#1). The ack returns the
     // platform runId the dashboard polls for status and that CancelCommandHandler
     // uses to route a cancel to the right slot.
@@ -183,6 +200,11 @@ export class TriggerCommandHandler implements CommandHandler {
         // dashboard's run deep-link resolves instead of 404ing (#4120). This is
         // the same value passed to setPendingRemoteRunId above for cancel-routing.
         remoteRunId: runId,
+        // Only a remote run request adds keys; without one the options are
+        // exactly what they were before #1656.
+        ...(requested
+          ? { requestedAdapter: requested.adapter, requestedModel: requested.model }
+          : {}),
       });
       if (!queued) {
         this.logger.error(
@@ -216,5 +238,62 @@ export class TriggerCommandHandler implements CommandHandler {
         err: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+
+  /**
+   * Validate a trigger's remote run request (#1656). Returns undefined when
+   * the payload names neither field, the accepted pair, or "refused" after
+   * acking the command as rejected with the reason.
+   */
+  private async checkRequestedPin(
+    agentId: string,
+    commandId: string,
+    payload: TriggerPayload,
+    labels: string[]
+  ): Promise<{ adapter: string; model?: string } | undefined | "refused"> {
+    if (payload.adapter === undefined && payload.model === undefined) return undefined;
+
+    let reason: string | undefined;
+    if (
+      (payload.adapter !== undefined && typeof payload.adapter !== "string") ||
+      (payload.model !== undefined && typeof payload.model !== "string")
+    ) {
+      reason = "the requested adapter and model must be strings";
+    } else if (labels.includes("type:epic")) {
+      reason =
+        "a requested adapter and model cannot apply to an epic; trigger its sub-issues instead";
+    } else {
+      try {
+        const verdict = await this.ipcClient.queueValidatePin(
+          payload.adapter as string | undefined,
+          payload.model as string | undefined
+        );
+        if (!verdict.ok)
+          reason = verdict.reason || "this machine cannot serve the requested adapter and model";
+      } catch (err) {
+        reason = `the requested adapter and model could not be checked: ${
+          err instanceof Error ? err.message : String(err)
+        }`;
+      }
+    }
+
+    if (reason === undefined) {
+      return { adapter: payload.adapter as string, model: (payload.model as string) || undefined };
+    }
+
+    this.logger.warn("TriggerCommandHandler: remote run request refused — acking as rejected", {
+      commandId,
+      issueNumber: payload.issueNumber,
+      reason,
+    });
+    try {
+      await this.ipcClient.agentAcknowledgeCommand(agentId, commandId, "rejected", reason);
+    } catch (err) {
+      this.logger.error("TriggerCommandHandler: rejected ack failed", {
+        commandId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return "refused";
   }
 }

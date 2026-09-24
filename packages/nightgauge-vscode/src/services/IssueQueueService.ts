@@ -120,6 +120,13 @@ export class IssueQueueService implements vscode.Disposable {
        * id identical so the dashboard run deep-link resolves (#4120).
        */
       remoteRunId?: string;
+      /**
+       * A remote run request's adapter and model (#1656), already accepted
+       * by `queueValidatePin`. Go re-checks their shape and stores them on the
+       * queue item.
+       */
+      requestedAdapter?: string;
+      requestedModel?: string;
     }
   ): Promise<QueueItem | null> {
     // Stop-control guard — refuse new items while a stop is in progress.
@@ -171,7 +178,9 @@ export class IssueQueueService implements vscode.Disposable {
       title,
       resolvedLabels,
       undefined,
-      _options?.remoteRunId
+      _options?.remoteRunId,
+      _options?.requestedAdapter,
+      _options?.requestedModel
     );
 
     const item: QueueItem = {
@@ -505,6 +514,8 @@ export class IssueQueueService implements vscode.Disposable {
       epicOrder: item.epicOrder,
       epicNumber: item.epicNumber,
       repoName: item.repo || undefined,
+      requestedAdapter: item.requestedAdapter || undefined,
+      requestedModel: item.requestedModel || undefined,
     };
   }
 
