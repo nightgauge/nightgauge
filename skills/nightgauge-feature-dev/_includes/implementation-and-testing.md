@@ -33,6 +33,8 @@ signal file is present, commit the current work-in-progress immediately, then
 delete the signal so it does not re-fire.
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # Issue #3542: WIP checkpoint — commit in-progress work when the orchestrator
 # signals the pipeline is approaching its budget ceiling.
 CHECKPOINT_SIGNAL=".nightgauge/pipeline/checkpoint-signal-${ISSUE_NUMBER}.json"

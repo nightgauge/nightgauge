@@ -5,7 +5,7 @@ description: Wait for PR reviews, address feedback, and merge. Completes the Iss
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.17.0"
+  version: "1.17.1"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task
 model: haiku
@@ -465,6 +465,8 @@ Ready for the next issue: /nightgauge-issue-pickup
 #### Step 8.1: Signal Stage Complete
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # Go binary: project move-status
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""

@@ -36,12 +36,15 @@ invocation:
 
 ```bash
 BRANCH=$(git branch --show-current)
-ISSUE_NUMBER=$(printf '%s\n' "$BRANCH" | grep -oE '[0-9]+' | head -1)
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 ```
 
 ### Step 1.2: Locate Plan by Issue Number
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # Look for plan matching issue number first
 if [ -n "$ISSUE_NUMBER" ]; then
   ls .nightgauge/plans/${ISSUE_NUMBER}-*.md 2>/dev/null
@@ -75,6 +78,8 @@ proceeding.
 **No-op when `knowledge_path` is null or unset** — silently skip to Phase 2.
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # Read knowledge_path from planning context, fall back to issue context
 KNOWLEDGE_PATH=$(jq -r '.knowledge_path // empty' ".nightgauge/pipeline/planning-${ISSUE_NUMBER}.json" 2>/dev/null)
 if [ -z "$KNOWLEDGE_PATH" ]; then
@@ -152,6 +157,8 @@ When `cross_repo_knowledge` is present in `planning-{N}.json` and non-empty,
 pre-load the referenced sibling-repo knowledge files before implementing.
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 CROSS_REPO=$(jq -r '.cross_repo_knowledge // []' ".nightgauge/pipeline/planning-${ISSUE_NUMBER}.json" 2>/dev/null)
 REPO_COUNT=$(printf '%s\n' "$CROSS_REPO" | jq 'length' 2>/dev/null || echo "0")
 

@@ -20,6 +20,8 @@ DEP_TRANSITIVE=$(yq -r '.enforcement.dependencies.check_transitive // "false"' .
 #### Fetch Dependencies
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
@@ -65,6 +67,8 @@ print `signal=deferred`, and exit **0** so the orchestrator records a deferral
 (not a failure) and auto-requeues when the blockers close.
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # $BINARY was resolved in the "Fetch Dependencies" block above.
 GATE_OUTPUT=$("$BINARY" deps-gate check --issue "$ISSUE_NUMBER" --json 2>&1)
 GATE_EXIT=$?

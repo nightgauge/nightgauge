@@ -8067,6 +8067,7 @@ func gitCmd() *cobra.Command {
 	}
 	cmd.AddCommand(
 		gitCurrentBranchCmd(),
+		gitRepoSlugCmd(),
 		gitBranchCreateCmd(),
 		gitCheckoutCmd(),
 		gitStatusGitCmd(),
@@ -8109,6 +8110,37 @@ func gitCurrentBranchCmd() *cobra.Command {
 				return printJSON(map[string]string{"branch": branch})
 			}
 			fmt.Println(branch)
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
+	return cmd
+}
+
+// gitRepoSlugCmd prints the owner/name of the origin remote. Skills use it as
+// the fallback when NIGHTGAUGE_REPO is not in the environment, so every shell
+// block can derive its repo without inheriting one from an earlier block
+// (#1932).
+func gitRepoSlugCmd() *cobra.Command {
+	var outputJSON bool
+
+	cmd := &cobra.Command{
+		Use:   "repo-slug",
+		Short: "Output the origin remote as owner/name",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			svc, err := openGitService()
+			if err != nil {
+				return err
+			}
+			slug, err := svc.RemoteRepoSlug()
+			if err != nil {
+				return err
+			}
+			if outputJSON {
+				return printJSON(map[string]string{"repo": slug})
+			}
+			fmt.Println(slug)
 			return nil
 		},
 	}

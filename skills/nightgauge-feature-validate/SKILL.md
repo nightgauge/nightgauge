@@ -6,7 +6,7 @@ description: Validate feature implementation with integration/E2E tests and manu
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.20.0"
+  version: "1.20.1"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task
 orchestration:
@@ -68,6 +68,8 @@ Trusts the dev context handoff (no build/unit-test/security re-runs that already
 **This stage is NOT complete until `.nightgauge/pipeline/validate-{N}.json` exists on disk.** On any error, budget exhaustion, or bail-out, STILL execute Phase 6 and write it (`validation_status: "failed"` plus the matching `errorCategory` — enum: `build-failed`, `tests-failed`, `integration-failed`, `dead-code-blocked`, `mobile-apk-build-failed`, `mobile-mcp-tests-failed`, `verify-ui-gate-failed`). Exiting without it triggers a repo-blind orchestrator fallback that may misreport tests. The very last act before signaling completion MUST be:
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 test -s ".nightgauge/pipeline/validate-${ISSUE_NUMBER}.json" || \
   { echo "ERROR: validate-${ISSUE_NUMBER}.json missing — Phase 6 was skipped" >&2; exit 1; }
 ```
@@ -295,6 +297,8 @@ printf '<!-- phase:start name="output-summary" index=21 total=23 stage="feature-
 Display summary (branch, issue, status, commit SHA, build/test results, checklist). Next step: `passed`/`partial`/`skipped` → `/nightgauge-pr-create`; `failed` → fix issues first.
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # Resolve the nightgauge binary (standard cascade, as prior phases), then
 # best-effort: "$BINARY" project move-status "$ISSUE_NUMBER" "in-progress".
 

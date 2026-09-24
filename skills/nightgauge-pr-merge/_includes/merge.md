@@ -104,6 +104,8 @@ knowledge base is local, gitignored, per-machine state, so a stale entry from
 an unrelated issue must never block this merge.
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 if [ -n "$BINARY" ] && [ -d ".nightgauge/knowledge" ]; then
   KNOWLEDGE_CONF=$("$BINARY" knowledge validate "$ISSUE_NUMBER" --json 2>/dev/null) || true
   if [ -n "$KNOWLEDGE_CONF" ]; then
@@ -172,6 +174,8 @@ MAIN worktree first, and on a worktree-isolated run the readers are all looking
 at the stage worktree).
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # capture_conflict_and_signal: writes conflict-context-{ISSUE}.json (conflicting
 # files + ours/theirs blobs) and merges a CONFLICT_RESOLUTION_NEEDED signal into
 # feedback-{ISSUE}.json. Branch is preserved (NO conflict-restart-{N}.json,
@@ -660,6 +664,8 @@ fi
 #### Step 6.3: Execute Merge
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 DELETE_FLAG=""
 if [ "$ARG_NO_CLEANUP" != "true" ]; then
   DELETE_FLAG="--delete-branch"

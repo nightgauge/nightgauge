@@ -18,6 +18,8 @@ change-detection and routing decision, and produce the requirements summary.
 ## Step 3.1: Fetch Full Issue Details
 
 ```bash
+REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+: "${REPO:?set NIGHTGAUGE_REPO or run inside a clone with an origin remote}"
 nightgauge forge issue view <number> --repo "$REPO" --json
 ```
 
@@ -56,6 +58,8 @@ the same fields the rest of this phase consumes — see
 **B4** in [docs/SKILL_DETERMINISM_AUDIT.md](../../../../../docs/SKILL_DETERMINISM_AUDIT.md).
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
@@ -102,6 +106,8 @@ identical when the binary is present or absent — see ADR-003 in
 ### Extract Routing Labels
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # type:* stays label-based (labels are authoritative for type)
 TYPE_LABEL=$(printf '%s\n' "$LABELS" | grep -oE "type:(feature|bug|docs|refactor|chore)" | cut -d: -f2)
 
@@ -116,7 +122,8 @@ fi
 
 # Fallback: query board directly if context not yet available
 if [[ -z "$SIZE_LABEL" || -z "$PRIORITY_BOARD" ]]; then
-  REPO=$(nightgauge forge repo view --repo $REPO --json nameWithOwner -q '.nameWithOwner' 2>/dev/null)
+  REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+  : "${REPO:?set NIGHTGAUGE_REPO or run inside a clone with an origin remote}"
   OWNER="${REPO%/*}"
   REPO_NAME="${REPO#*/}"
   BOARD_RESULT=$(nightgauge forge graphql -f query="

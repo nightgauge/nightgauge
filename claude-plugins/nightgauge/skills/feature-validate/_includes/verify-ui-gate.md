@@ -107,6 +107,8 @@ fi
 ### Step 2.45.1: Start Dev Server (if not already reachable)
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 DEV_SERVER_PID=""
 DEV_SERVER_STARTED_BY_SKILL=false
 
@@ -185,6 +187,8 @@ fi
 ### Step 2.45.4: Gate on Results and Record Gate-Metric
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 if [ "$VERIFY_UI_ACTIVE" = "true" ]; then
   VERIFY_UI_RAN=true
   VERIFY_UI_STATUS=$(printf '%s\n' "$VERIFY_UI_REPORT_JSON" | jq -r '.status // "error"')

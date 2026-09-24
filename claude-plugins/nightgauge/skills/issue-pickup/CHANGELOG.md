@@ -20,6 +20,15 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Every shell block derives the pipeline identifiers it reads (#1932).** Each
+  `Bash` call is a fresh process, so a block that read `$ISSUE_NUMBER`,
+  `$BRANCH` or `$REPO` from an earlier phase read an empty string, and
+  `${VAR:-}` turned it into a valid blank. Each block now derives them itself:
+  the issue number from `NIGHTGAUGE_ISSUE_NUMBER`, else the branch name; the
+  repo from `NIGHTGAUGE_REPO`, else `nightgauge git repo-slug`; the branch from
+  `git`. A missing value fails the block instead of writing a blank.
+  `nightgauge preflight skill-shell-state` keeps it that way.
+
 - **Phase 8 no longer inherits shell variables from earlier phases (#1919).**
   `BRANCH_NAME`, `ISSUE_JSON`, `TITLE`, `ISSUE_TYPE` and `BASE_BRANCH` were
   assigned in Phase 3 / Phase 5 and read back in Phase 8, in a different shell

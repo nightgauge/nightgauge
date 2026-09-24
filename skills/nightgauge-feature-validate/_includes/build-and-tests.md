@@ -58,6 +58,8 @@ fi
 Then run and gate:
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 BUILD_GATE_START_MS=$(date +%s%3N)
 SELF_HEALED=false
 SDK_REBUILD_ATTEMPTED=false
@@ -300,6 +302,8 @@ For each failing test file, stash feature changes, re-run the test on baseline
 code (60s timeout per file), then restore:
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # Stash changes (uncommitted → git stash; committed → merge-base compare).
 # The message is MANDATORY and its exact shape is a contract (#330): only a
 # stash carrying the `nightgauge:` marker can be reclaimed by
@@ -1049,6 +1053,8 @@ merged without ever being run once.
 ### Step 2.5.1: Ask the binary
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 nightgauge gate check-test-execution --issue "$ISSUE_NUMBER" --json > /tmp/ng-test-exec-$$.json
 CHECK_EXIT=$?
 cat /tmp/ng-test-exec-$$.json
@@ -1065,6 +1071,8 @@ Every finding names the file, the exclusion mechanism, and a **runnable
 remediation command**. Run that command. Then record what happened:
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 nightgauge gate record-test-execution --issue "$ISSUE_NUMBER" \
   --file "integration_test/app_e2e/setup_flow_test.dart" \
   --outcome pass \

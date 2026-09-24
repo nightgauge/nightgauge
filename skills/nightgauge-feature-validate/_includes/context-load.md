@@ -26,7 +26,8 @@ this is "no implementation work" — see below.
 
 ```bash
 BRANCH=$(git branch --show-current)
-ISSUE_NUMBER=$(printf '%s\n' "$BRANCH" | grep -oE '[0-9]+' | head -1)
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 CONTEXT_FILE=".nightgauge/pipeline/dev-${ISSUE_NUMBER}.json"
 
 # Resolve the nightgauge binary now — needed both for the missing-context
@@ -112,6 +113,8 @@ consolidated validation — run build and tests once for all changes.
 **Detection**: After loading dev context, check for `dev-batch-{E}.json`.
 
 ```bash
+BRANCH=$(git branch --show-current)
+: "${BRANCH:?detached HEAD: check out the issue branch}"
 EPIC_NUMBER=$(printf '%s\n' "$BRANCH" | grep -oE '[0-9]+' | head -1)
 BATCH_DEV=".nightgauge/pipeline/dev-batch-${EPIC_NUMBER}.json"
 
@@ -150,6 +153,8 @@ prose and `technical_notes` YAML examples that the previous shell parser
 counted. See `docs/SKILL_DETERMINISM_AUDIT.md` row **B14**.
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
@@ -232,6 +237,8 @@ sentence?_ A criterion you cannot substantiate stays unchecked and stops the
 line, which is the correct outcome.
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 AC_SUBSTANTIATED=""
 AC_EVIDENCE_JSON="[]"
 AC_ITEMS_JSON="[]"
@@ -265,6 +272,8 @@ fi
 > the reason a criterion could not be verified is the diagnostic a human needs.
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 if [ "${AC_STATUS:-}" = "failed" ] && [ -n "$AC_SUBSTANTIATED" ]; then
   AC_MARK_ARGS=""
   for i in $AC_SUBSTANTIATED; do AC_MARK_ARGS="$AC_MARK_ARGS --check $i"; done

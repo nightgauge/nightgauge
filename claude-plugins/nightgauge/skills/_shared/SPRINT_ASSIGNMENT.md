@@ -4,6 +4,8 @@
 an issue. Uses `sync-project-iteration.sh` for sprint assignment.
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 HOOKS_DIR="${CLAUDE_PLUGIN_ROOT:-claude-plugins/nightgauge}/hooks/lib"
 SPRINT_ENABLED=$(yq -r '.project.sprint.enabled // "false"' .nightgauge/config.yaml 2>/dev/null || echo "false")
 

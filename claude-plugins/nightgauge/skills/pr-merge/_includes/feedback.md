@@ -135,6 +135,8 @@ Merge the retrospective data into the existing `pr-${ISSUE_NUMBER}.json` context
 file using a safe temp-file swap:
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 CONTEXT_FILE=".nightgauge/pipeline/pr-${ISSUE_NUMBER}.json"
 CAPTURED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
@@ -167,6 +169,8 @@ fi
 Only when `WHAT_TO_IMPROVE` is non-empty, write a minimal improvement record:
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 if [ -n "$WHAT_TO_IMPROVE" ]; then
   ASSESSMENT_DIR=".nightgauge/pipeline/assessments"
   mkdir -p "$ASSESSMENT_DIR"

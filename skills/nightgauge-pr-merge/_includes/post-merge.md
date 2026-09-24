@@ -54,6 +54,10 @@ If `POST_MERGE_BUILD_FAILED=true`, warn prominently in Phase 8 summary.
 board sync needed.
 
 ```bash
+REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+: "${REPO:?set NIGHTGAUGE_REPO or run inside a clone with an origin remote}"
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
@@ -93,7 +97,7 @@ CLOSE_VERIFIED=false
 if [ "$ISSUE_CLOSED" = "true" ]; then
   echo "Verifying issue #$ISSUE_NUMBER is closed..."
 
-  ISSUE_STATE=$(nightgauge forge issue view "$ISSUE_NUMBER" --repo "$REPO" --json --jq '.state' 2>/dev/null || echo "ERROR")
+  ISSUE_STATE=$(nightgauge forge issue view "$ISSUE_NUMBER" --repo "$REPO" --json 2>/dev/null | jq -r '.state // "ERROR"')
 
   if [ "$ISSUE_STATE" = "CLOSED" ]; then
     CLOSE_VERIFIED=true
@@ -102,7 +106,7 @@ if [ "$ISSUE_CLOSED" = "true" ]; then
     echo "Issue state is $ISSUE_STATE (not CLOSED yet), retrying in 5s..."
     sleep 5
 
-    ISSUE_STATE=$(nightgauge forge issue view "$ISSUE_NUMBER" --repo "$REPO" --json --jq '.state' 2>/dev/null || echo "ERROR")
+    ISSUE_STATE=$(nightgauge forge issue view "$ISSUE_NUMBER" --repo "$REPO" --json 2>/dev/null | jq -r '.state // "ERROR"')
     if [ "$ISSUE_STATE" = "CLOSED" ]; then
       CLOSE_VERIFIED=true
       echo "Issue #$ISSUE_NUMBER verified CLOSED (after retry)"
@@ -265,7 +269,12 @@ Unless `--no-cleanup` flag is set. When merged into an epic branch, return to
 the epic branch (not main):
 
 ```bash
-# NOTE: Already on the correct base branch from Step 7.0 checkout.
+# NOTE: Already on the correct base branch from Step 7.0 checkout, so the
+# feature branch comes from the pickup context, not from HEAD.
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
+BRANCH=$(jq -r '.branch // empty' ".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json")
+: "${BRANCH:?no branch recorded in .nightgauge/pipeline/issue-${ISSUE_NUMBER}.json}"
 # Branch cleanup (local + remote + prune)
 git fetch --prune
 git branch -d "$BRANCH" 2>/dev/null || git branch -D "$BRANCH" 2>/dev/null || true
@@ -302,6 +311,8 @@ for continuous calibration. This step is **non-critical** — failures are logge
 as warnings and do not block the pipeline.
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # Read context files (all guaranteed available at this phase)
 ISSUE_NUMBER=$(jq -r '.issue_number' ".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json" 2>/dev/null || echo "$ISSUE_NUMBER")
 PR_NUMBER=$(jq -r '.pr_number' ".nightgauge/pipeline/pr-${ISSUE_NUMBER}.json" 2>/dev/null || echo "$PR_NUMBER")

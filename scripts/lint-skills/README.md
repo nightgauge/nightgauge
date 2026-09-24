@@ -110,6 +110,20 @@ it locally with:
 nightgauge preflight skill-includes            # or --json
 ```
 
+## Shell state — Go only, no shell mirror
+
+`nightgauge preflight skill-shell-state` fails a stage-skill shell block that
+reads `$ISSUE_NUMBER`, `$BRANCH`, `$BRANCH_NAME` or `$REPO` without deriving it
+in that block, or expands one with an empty default (#1932). Its scope is
+`skillrender.StageSkillDirs` plus `skills/_shared/`, and its enforcement is
+`TestSkillShellState_RealTreeIsClean`, which CI runs with the rest of
+`internal/preflight`. The pattern it enforces is in
+[skills/README.md](../../skills/README.md#shell-state-between-blocks).
+
+```bash
+nightgauge preflight skill-shell-state         # or --json
+```
+
 ## Adding a new skill linter
 
 1. Add a shell script in this directory with a sibling Go implementation in

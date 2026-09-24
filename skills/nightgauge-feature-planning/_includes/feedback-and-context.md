@@ -23,7 +23,8 @@ Silently skip to Phase 1.
 
 ```bash
 BRANCH=$(git branch --show-current)
-ISSUE_NUMBER=$(printf '%s\n' "$BRANCH" | grep -oE '[0-9]+' | head -1)
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 FEEDBACK_FILE=".nightgauge/pipeline/feedback-${ISSUE_NUMBER}.json"
 
 REVISION_COUNT=0
@@ -125,6 +126,8 @@ rather than producing a re-written plan that ignores the original failures.
 3. Read title, requirements, acceptance criteria, and labels.
 4. Signal stage start using Go binary `project move-status`:
    ```bash
+   ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+   : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
    # Go binary: project move-status
    BINARY="${NIGHTGAUGE_BIN:-}"
    [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
@@ -156,6 +159,8 @@ rather than producing a re-written plan that ignores the original failures.
 is the `parent_issue` (epic number) from the issue context JSON.
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 EPIC_NUMBER=$(jq -r '.parent_issue // empty' ".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json" 2>/dev/null)
 BATCH_CONTEXT=".nightgauge/pipeline/batch-${EPIC_NUMBER}.json"
 

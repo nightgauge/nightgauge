@@ -76,7 +76,9 @@ git remote -v | grep -E "(github\.com|github\.)"
 ```
 
 ```bash
-nightgauge forge repo view --repo $REPO --json nameWithOwner -q .nameWithOwner
+REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+: "${REPO:?set NIGHTGAUGE_REPO or run inside a clone with an origin remote}"
+nightgauge forge repo view --repo "$REPO" --json | jq -r .nameWithOwner
 ```
 
 #### Step 1.4: Verify Repo Identity
@@ -113,6 +115,8 @@ this stage has started.
 `$ISSUE_NUMBER` variable.
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # Go binary: project move-status
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
@@ -171,6 +175,8 @@ fi
 When `GATE_ENABLED=true` and `ISSUE_NUMBER` is set:
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
@@ -276,6 +282,8 @@ fi
 When `GATE_ENABLED=true` and `ISSUE_NUMBER` is set:
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
@@ -390,6 +398,8 @@ fi
 When `DEP_ENABLED=true`, `DEP_MODE=block`, and `ISSUE_NUMBER` is set:
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
@@ -566,6 +576,8 @@ detailed in the reference file already loaded for this phase (Steps 8.3–8.7).
 Step 8.5 verifies the final context file:
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 jq . ".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json" > /dev/null && \
   echo "Context file written: .nightgauge/pipeline/issue-${ISSUE_NUMBER}.json"
 ```

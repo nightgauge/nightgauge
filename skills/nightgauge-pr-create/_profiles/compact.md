@@ -180,12 +180,15 @@ printf '<!-- phase:start name="load-context" index=1 total=14 stage="pr-create" 
 
 ```bash
 BRANCH=$(git branch --show-current)
-ISSUE_NUMBER=$(printf '%s\n' "$BRANCH" | grep -oE '[0-9]+' | head -1)
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 ```
 
 **Step 1.2**: Resolve base branch BEFORE parallel gathering:
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 BASE_BRANCH=$(jq -r '.base_branch // empty' \
   ".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json" 2>/dev/null)
 if [ -z "$BASE_BRANCH" ]; then

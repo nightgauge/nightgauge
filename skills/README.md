@@ -295,6 +295,33 @@ Each stage:
 
 See [docs/CONTEXT_ARCHITECTURE.md](../docs/CONTEXT_ARCHITECTURE.md) for complete schemas and examples.
 
+### Shell State Between Blocks
+
+An agent runs each fenced shell block in its own `Bash` call, and each call is
+a new process. A variable assigned in one block is empty in the next, so a
+stage skill's block derives every pipeline identifier it reads, in that block,
+from a source that survives:
+
+```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
+REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+: "${REPO:?set NIGHTGAUGE_REPO or run inside a clone with an origin remote}"
+BRANCH=$(git branch --show-current)
+: "${BRANCH:?detached HEAD: check out the issue branch}"
+```
+
+The orchestrator exports `NIGHTGAUGE_ISSUE_NUMBER` and `NIGHTGAUGE_REPO` to
+every stage; the fallbacks cover an interactive run. The `:?` line matters as
+much as the derivation: `${ISSUE_NUMBER:-}` turns a missing value into a blank
+that a later command records as if it were real (#1919, #1932). After a
+checkout moves `HEAD` off the feature branch, read the branch from the pickup
+context (`jq -r .branch .nightgauge/pipeline/issue-<N>.json`) instead.
+
+`nightgauge preflight skill-shell-state` fails a stage-skill block that reads
+`$ISSUE_NUMBER`, `$BRANCH`, `$BRANCH_NAME` or `$REPO` without deriving it, or
+expands one with an empty default.
+
 ---
 
 ## Shared Utilities

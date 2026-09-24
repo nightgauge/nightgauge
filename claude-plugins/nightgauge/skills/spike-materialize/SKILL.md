@@ -6,7 +6,7 @@ description: Parse a spike artifact's YAML recommendations block and create
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.0.0"
+  version: "1.0.1"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Bash Read Write
 context: fork
@@ -57,7 +57,8 @@ The Go binary owns the deterministic logic — the skill only orchestrates.
 
 ```bash
 BRANCH=$(git branch --show-current)
-ISSUE_NUMBER=$(printf '%s\n' "$BRANCH" | grep -oE '[0-9]+' | head -1)
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 if [ -z "$ISSUE_NUMBER" ]; then
   echo "ERROR: cannot infer issue number from branch '$BRANCH'"
   exit 1
@@ -90,6 +91,8 @@ fi
 Run the Go subcommand with `--json` output so the skill can parse the result.
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 mkdir -p .nightgauge/pipeline
 OUTPUT_FILE=".nightgauge/pipeline/spike-materialize-${ISSUE_NUMBER}.json"
 
@@ -109,6 +112,11 @@ append a `## Created Follow-up Issues` section listing the materialized
 numbers. Use `gh` because it handles both open and merged PRs.
 
 ```bash
+BRANCH=$(git branch --show-current)
+: "${BRANCH:?detached HEAD: check out the spike branch}"
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
+OUTPUT_FILE=".nightgauge/pipeline/spike-materialize-${ISSUE_NUMBER}.json"
 PR_NUMBER=$(gh pr list --state merged --search "head:${BRANCH}" --json number --jq '.[0].number' 2>/dev/null)
 if [ -n "$PR_NUMBER" ] && [ "$PR_NUMBER" != "null" ]; then
   ISSUES_LIST=$(jq -r '.issues[] | select(.skipped != true and .issue_number > 0) | "- #\(.issue_number) \(.title)"' "$OUTPUT_FILE")
@@ -128,6 +136,8 @@ Post a comment summarizing the materialized issues so the spike has a single
 visible record of its follow-ups.
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 COMMENT=$(jq -r '
   "Spike materialize complete:\n\n" +
   ([.issues[] |
@@ -147,6 +157,8 @@ fi
 ### Phase 4: Move Spike to Done
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 "$BINARY" project move-status "$ISSUE_NUMBER" "Done" 2>/dev/null || true
 ```
 

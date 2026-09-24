@@ -17,6 +17,8 @@ correct closing keywords), and handles reviewer assignment with self-reviewer
 guard. Append `KNOWLEDGE_SECTION` to the PR body when non-empty:
 
 ```bash
+BRANCH_NAME=$(git branch --show-current)
+: "${BRANCH_NAME:?detached HEAD: check out the issue branch}"
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
@@ -136,6 +138,8 @@ it is omitted entirely — never include an empty section.
 Assign reviewers after PR creation (skip if reviewer is the PR author):
 
 ```bash
+REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+: "${REPO:?set NIGHTGAUGE_REPO or run inside a clone with an origin remote}"
 if [ -n "$REVIEWER" ] && [ "$REVIEWER" != "$PR_AUTHOR" ]; then
   # Add reviewer via GitHub REST API (no forge CLI dependency)
   OWNER=$(echo "$REPO" | cut -d'/' -f1)
@@ -169,6 +173,10 @@ command).
 **Step 3.6.1: Query GitHub for PR on this branch**
 
 ```bash
+REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+: "${REPO:?set NIGHTGAUGE_REPO or run inside a clone with an origin remote}"
+BRANCH=$(git branch --show-current)
+: "${BRANCH:?detached HEAD: check out the issue branch}"
 PR_CHECK=$("$BINARY" forge pr list --repo "$REPO" \
   --head "$BRANCH" \
   --state all \
@@ -185,6 +193,10 @@ NOT trust a single empty result — cross-check with `gh` directly (which querie
 the live GitHub API by head ref) before concluding the PR is missing:
 
 ```bash
+REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+: "${REPO:?set NIGHTGAUGE_REPO or run inside a clone with an origin remote}"
+BRANCH=$(git branch --show-current)
+: "${BRANCH:?detached HEAD: check out the issue branch}"
 if [ "$PR_EXISTS" -eq 0 ]; then
   # Second opinion: gh queries the API directly by head ref.
   GH_CHECK=$(gh pr list --repo "$REPO" --head "$BRANCH" --state all \
@@ -200,6 +212,8 @@ If BOTH `forge` and `gh` agree no PR exists, the PR was never created — this i
 hard failure. Do not paper over it:
 
 ```bash
+BRANCH=$(git branch --show-current)
+: "${BRANCH:?detached HEAD: check out the issue branch}"
 if [ "$PR_EXISTS" -eq 0 ]; then
   echo ""
   echo "ERROR: PR creation reported success but no PR found on GitHub for branch: $BRANCH"
@@ -251,6 +265,8 @@ gracefully (sets `CI_MONITORED=false`) if it is absent.
 ### Step 3.5.1: Take the CI snapshot
 
 ```bash
+REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
+: "${REPO:?set NIGHTGAUGE_REPO or run inside a clone with an origin remote}"
 CI_MONITORED=false
 CI_FINAL_STATUS="pending"
 CI_STATE="PENDING"

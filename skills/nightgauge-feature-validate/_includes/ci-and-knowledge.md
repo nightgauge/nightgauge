@@ -152,6 +152,8 @@ decisions.md do not exist at the knowledge path.
 ### Step 2.6.1: Load Knowledge Path from Dev Context
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 KNOWLEDGE_PATH=$(jq -r '.knowledge_path // empty' ".nightgauge/pipeline/dev-${ISSUE_NUMBER}.json" 2>/dev/null)
 COVERAGE_MAP_PATH=""
 
@@ -176,6 +178,8 @@ fi
 When PRD.md and decisions.md are loaded:
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 if [ -n "$KNOWLEDGE_PATH" ] && [ -f "$PRD_FILE" ]; then
   "$BINARY" telemetry emit \
     --type knowledge.read \
@@ -215,6 +219,8 @@ fi
 ### Step 2.6.4: Compute Coverage Map via Go Binary
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 if [ -n "$KNOWLEDGE_PATH" ] && [ -f "$PRD_FILE" ]; then
   COVERAGE_MAP_PATH=".nightgauge/pipeline/coverage-map-${ISSUE_NUMBER}.json"
 
@@ -299,6 +305,8 @@ validation left — failures that would otherwise be caught during `pr-create` o
 ### Step 2.7.1: Resolve Binary and Run Gate
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
@@ -389,6 +397,8 @@ Fix any **real** defect found (not a nitpick) and re-review. Then record exactly
 one verdict — a `catch` fails validation through the existing gate:
 
 ```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # Only when a REAL, unfixed blocking defect remains after the fix loop:
 "$BINARY" gate record-metric --issue "$ISSUE_NUMBER" --gate adversarial-review \
   --result catch --error-summary "<lens>: <one-line defect>"

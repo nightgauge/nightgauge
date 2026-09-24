@@ -16,6 +16,17 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **`nightgauge git repo-slug` prints the origin remote as `owner/name`
+  (#1932).** Stage skills use it when `NIGHTGAUGE_REPO` is not set. It replaces
+  `nightgauge forge repo view … -q .nameWithOwner` in those skills, which never
+  worked: `forge repo view` requires `--repo` and has no `-q` flag, and the
+  error was discarded.
+
+- **`nightgauge preflight skill-shell-state` (#1932).** Fails a stage-skill
+  shell block that reads `$ISSUE_NUMBER`, `$BRANCH`, `$BRANCH_NAME` or `$REPO`
+  without deriving it in that block, or expands one with an empty default.
+  CI runs it on every change through `internal/preflight`'s tests.
+
 - **The license key lives in the OS keychain (#2025).**
   `nightgauge auth license set` reads the platform license key from stdin
   (never argv) and stores it in the OS keychain — macOS Keychain, Windows Credential Manager,
@@ -632,6 +643,21 @@ create --body-file` call, so the compact profile (and its tests) pin
   [CONFIGURATION.md § Routing by cost per closed issue](docs/CONFIGURATION.md#routing-by-cost-per-closed-issue).
 
 ### Fixed
+
+- **Pipeline stages no longer lose the issue number between shell blocks
+  (#1932).** A stage skill's phases run as separate `Bash` calls, and each call
+  is a new process, so 126 blocks across the eight stage skills and
+  `skills/_shared/` read `$ISSUE_NUMBER`, `$BRANCH` or `$REPO` as an empty
+  string whenever they ran alone. In `feature-validate` that recorded
+  quality-gate metrics against `--issue ""`, and the post-condition gate
+  reported finished, pushed work as skipped. Every block now derives what it
+  reads, from `NIGHTGAUGE_ISSUE_NUMBER` / `NIGHTGAUGE_REPO` or `git`, and a
+  missing value stops the block instead of writing a blank.
+
+- **`pr-merge` verifies the issue closed instead of always waiting 5 seconds
+  and reporting it open (#1932).** Its check called `forge issue view --jq`,
+  a flag that does not exist, so it read `ERROR` on every run. It now pipes
+  `--json` through `jq`. `issue-refine`'s issue-URL lookup had the same flag.
 
 - **A run reports one cost per stage, and says where it came from (#1934).**
   The live `stage … complete` line, the CLI's stage line and the
