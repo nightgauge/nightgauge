@@ -3097,6 +3097,32 @@ directory is the resolved one, so the `/tmp` form of a worktree file asked
   project-config backstop does not match. The edit map therefore also denies
   `opencode.json*` and `.opencode/**` under each such relative prefix.
 
+## Operator install target: the plugin is opt-in (amendment 2026-09-24, #1666)
+
+#1666 assumed that the Nightgauge plugin loads from an operator's OpenCode
+`plugins/` directory with no network install. That is false. With skills and
+commands installed into a throwaway config root and no plugin, `opencode debug
+skill` returned at once and listed every `nightgauge-*` skill. With
+`plugins/nightgauge.js` added, `opencode debug skill` and `opencode debug config`
+both stopped at config load until a 40-second cap killed them, with the npm
+registry pointed at an unreachable loopback port. OpenCode had written a
+`.gitignore` for `node_modules`, `package.json` and `bun.lock` into the config
+root, which means it had started its own dependency install. This was observed on
+opencode 1.18.32. § 10 and the `internal/execution/opencodeplugin/deps.go`
+comment already say the same for 1.18.30: OpenCode installs
+`@opencode-ai/plugin` into any config directory whose resolved config carries a
+plugin, and waits on the registry.
+
+The other assumptions held on 1.18.32. `skills/`, `commands/` and `plugins/`
+load, and so do their singular spellings. A skill with no `description` is not
+surfaced to the model.
+
+**Decision.** `install-agent-skills.sh --opencode-only` installs skills, their
+`_shared/` includes and one `/nightgauge-<name>` command per skill. The plugin
+is installed only with `--with-plugin`, which warns before consent that OpenCode
+will npm-install `@opencode-ai/plugin` into the config root on its next start
+and block there when offline. The installer itself still fetches nothing.
+
 ## Consequences
 
 - The model layer's one-adapter-one-provider assumption becomes a special

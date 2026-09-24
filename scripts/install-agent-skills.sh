@@ -6,6 +6,7 @@
 #   - Claude Code (standalone)  -> /nightgauge:<name>   (plugin marketplace)
 #   - OpenAI Codex              -> $nightgauge-<name>    (~/.codex/skills)
 #   - Grok Build TUI            -> /nightgauge-<name>    (~/.grok/skills)
+#   - OpenCode (on request)     -> /nightgauge-<name>    (~/.config/opencode)
 #
 # The VS Code extension is handled separately by dev-install.sh, which bundles
 # the pipeline skills into the .vsix. This script covers the three GLOBAL,
@@ -16,6 +17,8 @@
 #   ./scripts/install-agent-skills.sh --claude-only   # only Claude Code plugins
 #   ./scripts/install-agent-skills.sh --codex-only    # only Codex ~/.codex/skills
 #   ./scripts/install-agent-skills.sh --grok-only     # only Grok ~/.grok/skills (+ plugin)
+#   ./scripts/install-agent-skills.sh --opencode-only [--opencode-project <dir>] [--with-plugin] [--yes]
+#                                     # only OpenCode (never part of the default run)
 #   ./scripts/install-agent-skills.sh --generate-only # regenerate the mirror, no tool refresh
 #   ./scripts/install-agent-skills.sh --check-mirror  # ASSERT the mirror, non-mutating
 #
@@ -40,26 +43,64 @@ PLUGIN_SKILLS="$REPO_ROOT/$MIRROR_REL"
 DO_CLAUDE=1
 DO_CODEX=1
 DO_GROK=1
+# OpenCode is never part of the default run: its plugin is in-process code in
+# the operator's own editor sessions, so it is installed only on request.
+DO_OPENCODE=0
+OPENCODE_YES=0
+OPENCODE_PLUGIN=0
+OPENCODE_PROJECT=""
 MODE="install"
-case "${1:-}" in
-  --claude-only) DO_CODEX=0; DO_GROK=0 ;;
-  --codex-only) DO_CLAUDE=0; DO_GROK=0 ;;
-  --grok-only) DO_CLAUDE=0; DO_CODEX=0 ;;
-  # Regenerate the committed plugin skills tree in place and stop. No tool
-  # refresh, no assertions — this is the FIX command a contributor runs after
-  # editing `skills/` (CONTRIBUTING.md § Authoring Checklist). It mutates the
-  # working tree on purpose.
-  --generate-only) MODE="generate" ;;
-  # ASSERT the committed mirror equals generator output, and change nothing.
-  # Callers: `.github/workflows/lint.yml` (job `lint`) and `scripts/ci-local.sh`.
-  --check-mirror) MODE="check" ;;
-  "") ;;
-  *)
-    echo "Unknown argument: $1" >&2
-    echo "Usage: $0 [--claude-only|--codex-only|--grok-only|--generate-only|--check-mirror]" >&2
+TARGET=""
+usage() {
+  echo "Usage: $0 [--claude-only|--codex-only|--grok-only|--generate-only|--check-mirror]" >&2
+  echo "       $0 --opencode-only [--opencode-project <dir>] [--with-plugin] [--yes]" >&2
+}
+set_target() {
+  if [ -n "$TARGET" ]; then
+    echo "Only one of the target/mode flags may be given (got $TARGET and $1)." >&2
+    usage
     exit 2
-    ;;
-esac
+  fi
+  TARGET="$1"
+}
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --claude-only) set_target "$1"; DO_CODEX=0; DO_GROK=0 ;;
+    --codex-only) set_target "$1"; DO_CLAUDE=0; DO_GROK=0 ;;
+    --grok-only) set_target "$1"; DO_CLAUDE=0; DO_CODEX=0 ;;
+    --opencode-only) set_target "$1"; DO_CLAUDE=0; DO_CODEX=0; DO_GROK=0; DO_OPENCODE=1 ;;
+    --opencode-project)
+      if [ "$#" -lt 2 ] || [ -z "$2" ]; then
+        echo "--opencode-project needs a directory." >&2
+        usage
+        exit 2
+      fi
+      OPENCODE_PROJECT="$2"
+      shift
+      ;;
+    --yes) OPENCODE_YES=1 ;;
+    --with-plugin) OPENCODE_PLUGIN=1 ;;
+    # Regenerate the committed plugin skills tree in place and stop. No tool
+    # refresh, no assertions — this is the FIX command a contributor runs after
+    # editing `skills/` (CONTRIBUTING.md § Authoring Checklist). It mutates the
+    # working tree on purpose.
+    --generate-only) set_target "$1"; MODE="generate" ;;
+    # ASSERT the committed mirror equals generator output, and change nothing.
+    # Callers: `.github/workflows/lint.yml` (job `lint`) and `scripts/ci-local.sh`.
+    --check-mirror) set_target "$1"; MODE="check" ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      usage
+      exit 2
+      ;;
+  esac
+  shift
+done
+if [ "$DO_OPENCODE" = "0" ] && { [ -n "$OPENCODE_PROJECT" ] || [ "$OPENCODE_YES" = "1" ] || [ "$OPENCODE_PLUGIN" = "1" ]; }; then
+  echo "--opencode-project, --yes and --with-plugin apply only to --opencode-only." >&2
+  usage
+  exit 2
+fi
 
 # ---------------------------------------------------------------------------
 # Plugin skills: generate the Claude Code plugin's `skills/` tree from EVERY
@@ -313,6 +354,213 @@ install_grok() {
       printf '%s\n' "$out" >&2
     fi
   fi
+}
+
+# ---------------------------------------------------------------------------
+# OpenCode (--opencode-only): skills, one `/nightgauge-<name>` command per
+# skill, and, only with --with-plugin, the Nightgauge OpenCode plugin (#1635), into
+# ${XDG_CONFIG_HOME:-$HOME/.config}/opencode, or <dir>/.opencode with
+# --opencode-project <dir>. Directory names are the ones opencode loads:
+# `skills/<name>/SKILL.md`, `commands/<name>.md` and `plugins/*.js` (it also
+# accepts the singular spellings; ADR-022 § 8).
+#
+# Guarantees (tests: scripts/test-install-agent-skills-targets.sh, arms o*):
+#   - consent: every destination is printed before the first write; a TTY is
+#     asked y/N, and without a TTY nothing is written and the exit is 2 unless
+#     --yes was passed;
+#   - nothing is fetched or installed: no npm, bun, curl or `opencode plugin`,
+#     and opencode.json / opencode.jsonc are never touched;
+#   - only `nightgauge-*` entries, the skills' `_shared/` includes and the
+#     plugin's own files (plugins/nightgauge.js, plugins/nightgauge/) are
+#     written or pruned; everything else in those directories is left alone;
+#   - a destination that is a symlink resolving outside the target root is
+#     refused, and so is a skill without `description` frontmatter (OpenCode
+#     never surfaces such a skill to the model).
+# The plugin is opt-in because OpenCode npm-installs @opencode-ai/plugin into
+# any config root holding a plugin on its next start, and blocks there when
+# the registry is unreachable (ADR-022 amendment 2026-09-24).
+# The plugin is copied as files, the layout opencodeplugin.Write gives a run.
+# It is safe outside a pipeline run: without NIGHTGAUGE_OPENCODE_PLUGIN_NONCE
+# its handshake is a no-op, not an abort.
+# ---------------------------------------------------------------------------
+OPENCODE_PLUGIN_SRC="$REPO_ROOT/internal/execution/opencodeplugin/plugin"
+OPENCODE_COMMANDS_DIR="commands"
+
+# opencode_skill_description <SKILL.md>: the first frontmatter block's
+# `description`, folded onto one line; empty when there is none.
+opencode_skill_description() {
+  python3 - "$1" <<'PY'
+import re, sys
+lines = open(sys.argv[1], encoding="utf-8").read().split("\n")
+if not lines or lines[0].strip() != "---":
+    sys.exit(0)
+out, grab = [], False
+for line in lines[1:]:
+    if line.strip() == "---":
+        break
+    if grab:
+        if line[:1] in (" ", "\t") or not line.strip():
+            out.append(line.strip())
+            continue
+        break
+    m = re.match(r"description:\s*(.*)$", line)
+    if m:
+        grab = True
+        first = m.group(1).strip()
+        if first not in (">", "|", ">-", "|-", ">+", "|+"):
+            out.append(first)
+text = " ".join(p for p in out if p).strip()
+if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
+    text = text[1:-1]
+print(text)
+PY
+}
+
+# opencode_refuse_escape <path> <root>: exit 1 when path is a symlink. Every
+# path checked is one this script writes, creates or rsync --deletes through;
+# a symlink there, even one resolving to root itself or inside it, would let
+# rsync --delete wipe the directory it points at (opencode.json included).
+opencode_refuse_escape() {
+  [ -L "$1" ] || return 0
+  echo "==> OpenCode: refusing $1: it is a symlink; the installer writes under $2 only through real paths." >&2
+  exit 1
+}
+
+install_opencode() {
+  local root
+  if [ -n "$OPENCODE_PROJECT" ]; then
+    if [ ! -d "$OPENCODE_PROJECT" ]; then
+      echo "==> OpenCode: --opencode-project $OPENCODE_PROJECT is not a directory." >&2
+      exit 2
+    fi
+    root="$(cd "$OPENCODE_PROJECT" && pwd)/.opencode"
+  else
+    root="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
+  fi
+  if ! command -v opencode >/dev/null 2>&1 && [ ! -d "$root" ]; then
+    echo "==> OpenCode: neither 'opencode' CLI nor $root found — skipping."
+    return 0
+  fi
+  if [ "$OPENCODE_PLUGIN" = "1" ] && { [ ! -d "$OPENCODE_PLUGIN_SRC" ] || [ ! -f "$OPENCODE_PLUGIN_SRC/nightgauge.js" ]; }; then
+    echo "==> OpenCode: plugin source $OPENCODE_PLUGIN_SRC is missing." >&2
+    exit 1
+  fi
+
+  # Everything is checked before anything is written.
+  local src name short desc missing=0
+  local -a names=()
+  for src in "$SKILLS_SRC"/*/; do
+    [ -f "$src/SKILL.md" ] || continue
+    name="$(basename "$src")"
+    desc="$(opencode_skill_description "$src/SKILL.md")"
+    if [ -z "$desc" ]; then
+      echo "==> OpenCode: $name/SKILL.md has no description frontmatter; OpenCode would drop it." >&2
+      missing=1
+    fi
+    names+=("$name")
+  done
+  [ "$missing" = "0" ] || exit 1
+
+  local skills_dir="$root/skills"
+  local cmd_dir="$root/$OPENCODE_COMMANDS_DIR"
+  local plugins_dir="$root/plugins"
+  local d
+  for d in "$skills_dir" "$cmd_dir" "$plugins_dir" \
+    "$skills_dir/_shared" "$plugins_dir/nightgauge.js" "$plugins_dir/nightgauge"; do
+    opencode_refuse_escape "$d" "$root"
+  done
+  for name in "${names[@]}"; do
+    short="nightgauge-${name#nightgauge-}"
+    opencode_refuse_escape "$skills_dir/$short" "$root"
+    opencode_refuse_escape "$cmd_dir/$short.md" "$root"
+  done
+
+  echo "==> OpenCode: this writes only these paths:"
+  echo "      $skills_dir/nightgauge-<name>/  (${#names[@]} skills) and $skills_dir/_shared/"
+  echo "      $cmd_dir/nightgauge-<name>.md  (one command per skill)"
+  if [ "$OPENCODE_PLUGIN" = "1" ]; then
+    echo "      $plugins_dir/nightgauge.js and $plugins_dir/nightgauge/"
+  fi
+  echo "    Stale nightgauge-* entries there are removed. Nothing else is changed,"
+  echo "    opencode.json* is not edited, and nothing is downloaded."
+  if [ "$OPENCODE_PLUGIN" = "1" ]; then
+    echo "    WARNING: with the plugin installed, OpenCode npm-installs @opencode-ai/plugin" >&2
+    echo "    into $root on its next start, and blocks there when offline." >&2
+  fi
+  if [ "$OPENCODE_YES" != "1" ]; then
+    if [ ! -t 0 ]; then
+      echo "==> OpenCode: no terminal to confirm on; nothing written. Re-run with --yes." >&2
+      exit 2
+    fi
+    local answer=""
+    read -r -p "    Install? [y/N] " answer || true
+    case "$answer" in
+      y | Y | yes | YES) ;;
+      *)
+        echo "==> OpenCode: declined; nothing written."
+        return 0
+        ;;
+    esac
+  fi
+
+  mkdir -p "$skills_dir" "$cmd_dir"
+  local count=0 dest
+  for name in "${names[@]}"; do
+    short="nightgauge-${name#nightgauge-}"
+    dest="$skills_dir/$short"
+    rsync -a --delete "$SKILLS_SRC/$name/" "$dest/"
+    # OpenCode wants the skill `name` to match its folder, so a skill whose
+    # canonical directory has no nightgauge- prefix is renamed in the copy.
+    if [ "$short" != "$name" ]; then
+      python3 - "$dest/SKILL.md" "$short" <<'PY'
+import re, sys
+path, new = sys.argv[1], sys.argv[2]
+text = open(path, encoding="utf-8").read()
+text = re.sub(r"(?m)^name:.*$", f"name: {new}", text, count=1)
+open(path, "w", encoding="utf-8").write(text)
+PY
+    fi
+    desc="$(opencode_skill_description "$SKILLS_SRC/$name/SKILL.md")"
+    python3 - "$cmd_dir/$short.md" "$short" "$desc" <<'PY'
+import json, sys
+path, skill, desc = sys.argv[1], sys.argv[2], sys.argv[3]
+body = (
+    "---\n"
+    f"description: {json.dumps(desc, ensure_ascii=False)}\n"
+    "---\n\n"
+    f"Load the `{skill}` skill with the skill tool and follow it.\n\n"
+    "Arguments: $ARGUMENTS\n"
+)
+open(path, "w", encoding="utf-8").write(body)
+PY
+    count=$((count + 1))
+  done
+  if [ -d "$SKILLS_SRC/_shared" ]; then
+    rsync -a --delete "$SKILLS_SRC/_shared/" "$skills_dir/_shared/"
+  fi
+
+  # Prune Nightgauge entries whose skill no longer exists in this checkout.
+  local keep entry base
+  keep=" $(for name in "${names[@]}"; do printf 'nightgauge-%s ' "${name#nightgauge-}"; done)"
+  for entry in "$skills_dir"/nightgauge-*; do
+    [ -e "$entry" ] || [ -L "$entry" ] || continue
+    base="$(basename "$entry")"
+    case "$keep" in *" $base "*) ;; *) rm -rf "$entry" ;; esac
+  done
+  for entry in "$cmd_dir"/nightgauge-*.md; do
+    [ -e "$entry" ] || [ -L "$entry" ] || continue
+    base="$(basename "$entry" .md)"
+    case "$keep" in *" $base "*) ;; *) rm -f "$entry" ;; esac
+  done
+
+  local what="$count skills and $count commands"
+  if [ "$OPENCODE_PLUGIN" = "1" ]; then
+    mkdir -p "$plugins_dir"
+    rsync -a "$OPENCODE_PLUGIN_SRC/nightgauge.js" "$plugins_dir/nightgauge.js"
+    rsync -a --delete "$OPENCODE_PLUGIN_SRC/nightgauge/" "$plugins_dir/nightgauge/"
+    what="$what and the plugin"
+  fi
+  echo "    Synced $what to $root."
 }
 
 # ---------------------------------------------------------------------------
@@ -668,5 +916,6 @@ fi
 [ "$DO_CODEX" = "1" ] && install_codex
 [ "$DO_CLAUDE" = "1" ] && install_claude
 [ "$DO_GROK" = "1" ] && install_grok
+[ "$DO_OPENCODE" = "1" ] && install_opencode
 
 echo "==> Agent skill sync complete."
