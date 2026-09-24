@@ -282,22 +282,82 @@ func TestRunE2E_UnknownFramework_Skipped(t *testing.T) {
 
 // --- runCmd timeout / streaming tests ---
 
-func TestRunCmd_Timeout_KillsProcessGroup(t *testing.T) {
-	dir := t.TempDir()
-	pidFile := filepath.Join(dir, "child.pid")
+// setupDelay is prepended to every script whose assertion depends on the
+// shell's own setup. It makes the shell lose any race against a fixed kill
+// clock on every run, so these tests stay green only while no assertion
+// depends on that race (#1916).
+const setupDelay = "sleep 0.3; "
 
-	// Forks a background child that outlives the parent shell, writing its
-	// PID to a file so the test can assert it does not survive the kill.
-	script := "echo $$ > /dev/null; (sleep 999 & echo $! > '" + pidFile + "'); sleep 999"
+// cancelWhenReady returns a context that is cancelled once readyFile exists.
+// runCmd kills the process group on its context's Done for any cause, so this
+// drives the same kill path as its timeout, but only after the script has
+// finished the setup the test asserts on. A load-dependent 200ms clock had
+// been killing the shell before its setup ran (#1916).
+func cancelWhenReady(t *testing.T, readyFile string) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() {
+		defer cancel()
+		deadline := time.Now().Add(30 * time.Second)
+		for time.Now().Before(deadline) {
+			if _, err := os.Stat(readyFile); err == nil {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+	return ctx
+}
 
-	_, err := runCmd(context.Background(), dir, 200*time.Millisecond, "sh", "-c", script)
+// requireReady fails the test when the script never signalled readiness,
+// which would mean the kill came from cancelWhenReady's ceiling instead.
+func requireReady(t *testing.T, readyFile string) {
+	t.Helper()
+	if _, err := os.Stat(readyFile); err != nil {
+		t.Fatalf("script never completed its setup: %v", err)
+	}
+}
+
+// requireDead waits for pid to disappear. A killed child whose parent already
+// exited is reaped by init, so it can linger briefly as a zombie that still
+// answers signal 0.
+func requireDead(t *testing.T, pid int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for syscall.Kill(pid, 0) == nil {
+		if time.Now().After(deadline) {
+			t.Fatalf("expected pid %d to be dead after process-group kill, but it is still alive", pid)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestRunCmd_Timeout_FiresOnItsOwn(t *testing.T) {
+	start := time.Now()
+	_, err := runCmd(context.Background(), t.TempDir(), 200*time.Millisecond, "sleep", "999")
 	if !errors.Is(err, errE2ETimeout) {
 		t.Fatalf("expected errE2ETimeout, got %v", err)
 	}
+	if elapsed := time.Since(start); elapsed > 200*time.Millisecond+reapGrace+3*time.Second {
+		t.Fatalf("runCmd returned after %v; the timeout did not bound it", elapsed)
+	}
+}
 
-	// Give the killed child's PID a moment to be reaped by the OS if it were
-	// somehow still alive.
-	time.Sleep(300 * time.Millisecond)
+func TestRunCmd_Timeout_KillsProcessGroup(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "child.pid")
+	ready := filepath.Join(dir, "ready")
+
+	// Forks a background child that outlives the parent shell, writing its
+	// PID to a file so the test can assert it does not survive the kill.
+	script := setupDelay + "(sleep 999 & echo $! > '" + pidFile + "'); touch '" + ready + "'; sleep 999"
+
+	_, err := runCmd(cancelWhenReady(t, ready), dir, time.Minute, "sh", "-c", script)
+	if !errors.Is(err, errE2ETimeout) {
+		t.Fatalf("expected errE2ETimeout, got %v", err)
+	}
+	requireReady(t, ready)
 
 	pidBytes, readErr := os.ReadFile(pidFile)
 	if readErr != nil {
@@ -307,19 +367,19 @@ func TestRunCmd_Timeout_KillsProcessGroup(t *testing.T) {
 	if convErr != nil {
 		t.Fatalf("invalid child pid: %v", convErr)
 	}
-	if err := syscall.Kill(childPID, 0); err == nil {
-		t.Fatalf("expected child pid %d to be dead after process-group kill, but it is still alive", childPID)
-	}
+	requireDead(t, childPID)
 }
 
 func TestRunCmd_Timeout_PartialOutputCaptured(t *testing.T) {
 	dir := t.TempDir()
-	script := "echo before-timeout; sleep 999"
+	ready := filepath.Join(dir, "ready")
+	script := setupDelay + "echo before-timeout; touch '" + ready + "'; sleep 999"
 
-	out, err := runCmd(context.Background(), dir, 200*time.Millisecond, "sh", "-c", script)
+	out, err := runCmd(cancelWhenReady(t, ready), dir, time.Minute, "sh", "-c", script)
 	if !errors.Is(err, errE2ETimeout) {
 		t.Fatalf("expected errE2ETimeout, got %v", err)
 	}
+	requireReady(t, ready)
 	if !strings.Contains(out, "before-timeout") {
 		t.Errorf("expected partial output to contain %q, got %q", "before-timeout", out)
 	}
@@ -331,29 +391,42 @@ func TestRunCmd_Timeout_SurvivorHoldsPipe_ReturnsPromptly(t *testing.T) {
 	}
 
 	dir := t.TempDir()
+	ready := filepath.Join(dir, "ready")
+	survivorPID := filepath.Join(dir, "survivor.pid")
 	// The grandchild detaches into its own session via setsid, inheriting
-	// stdout, and outlives the timeout's process-group kill — so the pipe's
-	// write end stays open after the parent shell is killed.
-	script := "echo before-timeout; setsid sh -c 'sleep 999 >&1' & sleep 999"
+	// stdout, and outlives the process-group kill, so the pipe's write end
+	// stays open after the parent shell is killed. It signals readiness only
+	// once it is running, so the kill always lands with the pipe held open.
+	script := setupDelay + "echo before-timeout; " +
+		"setsid sh -c 'echo $$ > \"" + survivorPID + "\"; touch \"" + ready + "\"; exec sleep 999 >&1' & sleep 999"
+	t.Cleanup(func() {
+		if b, err := os.ReadFile(survivorPID); err == nil {
+			if pid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil {
+				_ = syscall.Kill(pid, syscall.SIGKILL)
+			}
+		}
+	})
 
-	deadline := time.Now().Add(200*time.Millisecond + reapGrace + 3*time.Second)
+	ctx := cancelWhenReady(t, ready)
 	done := make(chan struct{})
 	var out string
 	var err error
 	go func() {
-		out, err = runCmd(context.Background(), dir, 200*time.Millisecond, "sh", "-c", script)
+		out, err = runCmd(ctx, dir, time.Minute, "sh", "-c", script)
 		close(done)
 	}()
 
+	<-ctx.Done()
 	select {
 	case <-done:
-	case <-time.After(time.Until(deadline)):
-		t.Fatal("runCmd did not return within timeout + reapGrace + margin; unbounded reap regression")
+	case <-time.After(reapGrace + 3*time.Second):
+		t.Fatal("runCmd did not return within reapGrace + margin of the kill; unbounded reap regression")
 	}
 
 	if !errors.Is(err, errE2ETimeout) {
 		t.Fatalf("expected errE2ETimeout, got %v", err)
 	}
+	requireReady(t, ready)
 	if !strings.Contains(out, "before-timeout") {
 		t.Errorf("expected partial output to contain %q, got %q", "before-timeout", out)
 	}
