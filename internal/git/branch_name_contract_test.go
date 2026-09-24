@@ -69,10 +69,10 @@ func TestComposeBranchNameContract(t *testing.T) {
 // the title carries, the composed name mentions the issue number once.
 func TestComposeBranchNameEmitsIssueNumberExactlyOnce(t *testing.T) {
 	for _, tc := range loadBranchNameCases(t) {
+		if tc.WantError {
+			continue // no name is composed; TestComposeBranchNameContract covers the refusal
+		}
 		t.Run(tc.Name, func(t *testing.T) {
-			if tc.WantError {
-				t.Skip("no name is composed for this case")
-			}
 			name, err := ComposeBranchName(tc.Labels, tc.IssueNumber, tc.Title)
 			if err != nil {
 				t.Fatalf("ComposeBranchName: %v", err)
