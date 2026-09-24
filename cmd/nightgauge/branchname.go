@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	gh "github.com/nightgauge/nightgauge/internal/github"
 	gitpkg "github.com/nightgauge/nightgauge/internal/git"
+	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
