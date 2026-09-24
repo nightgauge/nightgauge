@@ -416,19 +416,14 @@ print(text)
 PY
 }
 
-# opencode_refuse_escape <path> <root>: exit 1 when path is a symlink whose
-# target resolves outside root.
+# opencode_refuse_escape <path> <root>: exit 1 when path is a symlink. Every
+# path checked is one this script writes, creates or rsync --deletes through;
+# a symlink there, even one resolving to root itself or inside it, would let
+# rsync --delete wipe the directory it points at (opencode.json included).
 opencode_refuse_escape() {
   [ -L "$1" ] || return 0
-  if ! python3 - "$1" "$2" <<'PY'
-import os, sys
-path, root = os.path.realpath(sys.argv[1]), os.path.realpath(sys.argv[2])
-sys.exit(0 if path == root or path.startswith(root + os.sep) else 1)
-PY
-  then
-    echo "==> OpenCode: refusing $1: it is a symlink resolving outside $2." >&2
-    exit 1
-  fi
+  echo "==> OpenCode: refusing $1: it is a symlink; the installer writes under $2 only through real paths." >&2
+  exit 1
 }
 
 install_opencode() {

@@ -30,3 +30,9 @@ To install the Nightgauge skills and `/nightgauge-*` commands into OpenCode,
 run `./scripts/install-agent-skills.sh --opencode-only`. Add `--with-plugin`
 for the Nightgauge OpenCode plugin; OpenCode then installs
 `@opencode-ai/plugin` from npm into its config directory on its next start.
+A plugin installed by an earlier `--with-plugin` run is not pruned by a later
+run without the flag, so that npm install keeps firing until you delete
+`plugins/nightgauge.js` and `plugins/nightgauge/` yourself.
+
+The templates carry no `permission` block: they do not restrict OpenCode's
+`bash`, `edit` or `task` tools. Add one yourself if you want those gated.

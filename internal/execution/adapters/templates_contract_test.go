@@ -84,6 +84,21 @@ func readTemplate(t *testing.T, name string) (string, map[string]any) {
 	return content, doc
 }
 
+// walkKeys calls fn for every object key in v, at any depth.
+func walkKeys(v any, fn func(string)) {
+	switch x := v.(type) {
+	case map[string]any:
+		for k, e := range x {
+			fn(k)
+			walkKeys(e, fn)
+		}
+	case []any:
+		for _, e := range x {
+			walkKeys(e, fn)
+		}
+	}
+}
+
 // walkStrings calls fn for every string value in v.
 func walkStrings(v any, fn func(string)) {
 	switch x := v.(type) {
@@ -131,6 +146,11 @@ func TestOpenCodeTemplatesContract(t *testing.T) {
 			if nModels == 0 {
 				t.Error("no provider model declares a limit")
 			}
+			walkKeys(doc, func(k string) {
+				if k == "apiKey" || k == "headers" {
+					t.Errorf("credential-bearing key %q; templates hold no credentials", k)
+				}
+			})
 			walkStrings(doc, func(s string) {
 				if templateCredential.MatchString(s) {
 					t.Errorf("credential-shaped value %q", s)

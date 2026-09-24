@@ -394,6 +394,23 @@ else
   nope "(o6) refused, but wrote through the symlink first"
 fi
 
+# (o6b/o6c) a destination symlink resolving to the root (or inside it) is
+# refused: rsync --delete through it would wipe opencode.json and the rest.
+for o6case in "o6b:skills/nightgauge-issue-create" "o6c:skills/_shared"; do
+  o6id="${o6case%%:*}"
+  o6rel="${o6case#*:}"
+  HOME_O6X="$TMP/home-$o6id"
+  oc_seed "$HOME_O6X"
+  ln -s .. "$HOME_O6X/xdg/opencode/$o6rel"
+  if oc_run "$HOME_O6X" "$INSTALLER" --opencode-only --yes >/dev/null 2>"$TMP/$o6id.err"; then
+    nope "($o6id) a $o6rel -> .. symlink was accepted"
+  elif [ -f "$HOME_O6X/xdg/opencode/opencode.json" ] && grep -q "refusing" "$TMP/$o6id.err"; then
+    ok "($o6id) $o6rel -> .. symlink refused, opencode.json intact"
+  else
+    nope "($o6id) $o6rel -> .. refused, but wrote through it first"
+  fi
+done
+
 # (o7) a skill without description: non-zero, nothing written.
 SB7="$TMP/sb7"
 oc_sandbox "$SB7"
