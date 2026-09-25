@@ -14,6 +14,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Example GitHub tokens in docs no longer look like real credentials
+  (#2139).** `docs/MCP_INTEGRATION.md` and `docs/CONFIGURATION.md` used
+  `ghp_`-shaped placeholder values; both now use non-token-shaped
+  placeholders so the secret-shape grep (`ghp_|sk-...|credentialed URL`)
+  stays clean.
+
 ### Changed
 
 - **Endpoint-aware OpenCode dispatch (#1679).** When several declared
