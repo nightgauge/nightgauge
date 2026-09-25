@@ -27,8 +27,9 @@ active, the `careful-gate` PreToolUse(Bash) hook **blocks** the documented
 production-destructive commands with a clear reason and the safe alternative.
 When off (the default), it is a complete no-op.
 
-This complements the always-on workflow gate (which already blocks pushes to
-`main` (force or not), `git reset --hard`, `git clean -f`, and secret read/write)
+This complements the always-on workflow gate (which already blocks
+`git reset --hard`, `git clean -f`, secret read/write, and pushes to any branch
+listed in the opt-in `hooks.push_gate.protected_branches`)
 by adding the **prod-data-destruction** set that you only want guarded
 occasionally.
 
