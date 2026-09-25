@@ -1888,7 +1888,7 @@ export class AutoRetroService {
       "adapter-permission-rejected":
         "The adapter rejected a tool the stage is allowed to use — an `ask` rule refused it headless: OpenCode's own guard on reading `.env` files, or one in the repository's or the user's OpenCode configuration",
       "adapter-incompatible":
-        "The adapter's binary cannot serve the dispatch — its version is below the tested floor, unreadable, or above max-tested and failed its self-test",
+        "The adapter's binary cannot serve the dispatch — its version is below the tested floor or unreadable",
       unknown: "Pipeline failure detected but category could not be determined",
     };
 
@@ -1956,7 +1956,7 @@ export class AutoRetroService {
       "adapter-permission-rejected":
         "OpenCode asked before a tool the stage's allowed tools grant, and a headless run rejects every ask. Nightgauge generates no OpenCode permission map yet, so the `ask` rule is OpenCode's own default guard on reading `*.env` and `*.env.*` files, or one in the repository's or the user's opencode.json. Retrying under the same rule is rejected identically, and a retry would let the model or the issue text loop the issue, so the issue is parked after one dispatch and charged nothing. Find the rule for the permission the `[adapter-permission-rejected] tool=<permission>` line names. For `tool=read`, check whether the issue text asks the stage to read secret files and remove that ask. Change a rule only if the stage should have that tool, never by loosening a rule that guards secret files, then release the issue with `nightgauge autonomous clear-failures <owner/repo#N>`.",
       "adapter-incompatible":
-        "The dispatch was refused before anything ran: the adapter's binary is below the compat manifest's floor, its version could not be read, or it is newer than max-tested and failed the self-test. Install the max-tested build the refusal names and pin the adapter's binary to it (for OpenCode, `opencode.binary` in ~/.nightgauge/config.yaml; see `nightgauge doctor`), then release the issue with `nightgauge autonomous clear-failures <owner/repo#N>`. A retry on the same binary is refused the same way.",
+        "The dispatch was refused before anything ran: the adapter's binary is below the compat manifest's floor or its version could not be read. Install a build at or above the floor (the refusal names the tested one) and pin the adapter's binary to it (for OpenCode, `opencode.binary` in ~/.nightgauge/config.yaml; see `nightgauge doctor`), then release the issue with `nightgauge autonomous clear-failures <owner/repo#N>`. A retry on the same binary is refused the same way.",
       unknown: "Review logs manually. Run /nightgauge:retro for AI-powered root cause analysis.",
     };
 

@@ -3,20 +3,16 @@ package adapters
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -25,7 +21,6 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/adaptercompat"
-	"github.com/nightgauge/nightgauge/internal/config"
 )
 
 // OpenCode's version policy, binary pin, endpoint readiness, and the OpenCode
@@ -51,14 +46,15 @@ const OpenCodeIncompatible = "adapter_incompatible"
 
 // OpenCodeIncompatibleError refuses a dispatch the installed opencode binary
 // cannot serve: its version is below the compat manifest's floor or could not
-// be read, or it is newer than max-tested and either failed the self-test or
-// would run a model server the operator runs.
+// be read. A version newer than max-tested is never refused (ADR-022 § 20,
+// 2026-09-25 amendment).
 type OpenCodeIncompatibleError struct {
 	// Binary is the binary the dispatch would spawn.
 	Binary string
 	// Version is its version, "" when it could not be read.
 	Version string
-	// MinVersion and MaxTested are the compat manifest's.
+	// MinVersion and MaxTested are the compat manifest's. MaxTested is only
+	// the newest version Nightgauge was verified against, never a ceiling.
 	MinVersion string
 	MaxTested  string
 	// Reason says why the binary cannot serve the dispatch, and Remediation
@@ -175,9 +171,8 @@ func ResolveOpenCodeBinary(pin string, lookPath func(string) (string, error)) (O
 	return OpenCodeBinary{Path: abs}, nil
 }
 
-// openCodeProbeTimeout bounds every probe spawn: the version read, each half
-// of the self-test and the doctor's catalog probe. A variable only so a test
-// can shorten it.
+// openCodeProbeTimeout bounds every probe spawn: the version read and the
+// doctor's catalog probe. A variable only so a test can shorten it.
 var openCodeProbeTimeout = 20 * time.Second
 
 // openCodeProbeMaxOutput caps what a probe keeps of each stream. `debug
@@ -436,10 +431,6 @@ type OpenCodeVersionPolicy struct {
 	// which reports it and lets the dispatch run. Under a fail_closed floor,
 	// the opencode manifest's, CheckOpenCodeVersion refuses it instead.
 	BelowFloor bool
-	// AboveMaxTested is set for a version newer than MaxTested: a dispatch
-	// warns, refuses a model server the operator runs, and runs the
-	// self-test before its first stage on the version.
-	AboveMaxTested bool
 }
 
 // CheckOpenCodeVersion applies the compat manifest's version policy to bin,
@@ -480,396 +471,7 @@ func CheckOpenCodeVersion(bin OpenCodeBinary, version string, versionErr error, 
 			"opencode %s (%s) is below the minimum tested version %s, and no OpenCode behaviour this adapter relies on was observed below it",
 			version, bin.Path, m.MinVersion))
 	}
-	if m.MaxTested != "" && compareOpenCodeVersions(version, m.MaxTested) > 0 {
-		p.AboveMaxTested = true
-	}
 	return p, nil
-}
-
-// openCodeCanaryRelax is nil in every production build. The #1639 canary leg
-// exists to run the INSTALLED latest release of opencode through this exact
-// refusal path, not just warn about it — otherwise the daily run can never
-// tell "new and working" from "new and broken" for a model server endpoint.
-// Only opencode_preflight_canary.go, gated behind the "canary" build tag that
-// reaches nothing but `go test -tags canary` (scripts/adapter-canary.sh's own
-// invocation; no production build ever adds that tag — see
-// scripts/clean-install-e2e.sh and the cmd/nightgauge build), sets this at
-// init(), and even then only relaxes once the explicit NIGHTGAUGE_CANARY=true
-// signal is read from the environment at call time. A production binary
-// therefore cannot reach the relaxation by any dispatch input: the var stays
-// nil regardless of environment. TestOpenCodeAboveMaxTestedRefusesAnEndpoint
-// EvenWithTheCanaryEnvSet (opencode_preflight_test.go, no build tag, run by
-// the default `go test ./...`) proves it.
-var openCodeCanaryRelax func(model string) bool
-
-// OpenCodeEndpointAboveMaxTested refuses a dispatch of model to a model server
-// the operator runs (a declared endpoint, or the lmstudio or ollama key) on a
-// binary newer than max-tested (ADR-022 § 20, § Endpoints), and returns nil
-// for any other model. Which provider keys a binary bundles, and so which
-// endpoint ids are safe, is read from the max-tested binary's catalog, and no
-// self-test can re-check it. The caller has established p.AboveMaxTested.
-func OpenCodeEndpointAboveMaxTested(p OpenCodeVersionPolicy, model string, endpoints []OpenCodeEndpoint, home string) error {
-	if openCodeCanaryRelax != nil && openCodeCanaryRelax(model) {
-		fmt.Fprintf(os.Stderr, "[opencode] WARNING: canary relaxation lets opencode %s (%s) dispatch model %q above the max-tested %s: the self-test below still runs\n",
-			p.Version, p.Binary.Path, model, p.MaxTested)
-		return nil
-	}
-	key := openCodeDispatchProvider(model)
-	if _, declared := findOpenCodeEndpoint(endpoints, key); !declared && !openCodeIsLocalKey(model) {
-		return nil
-	}
-	m, _ := openCodeManifest()
-	return &OpenCodeIncompatibleError{
-		Binary: p.Binary.Path, Version: p.Version, MinVersion: p.MinVersion, MaxTested: p.MaxTested,
-		Reason: fmt.Sprintf(
-			"opencode %s (%s) is newer than the max-tested %s, and model %q runs on endpoint %s, a model server you run: which provider keys a build bundles, and so which endpoint ids are safe, is read from the max-tested build, so no endpoint is dispatched above it",
-			p.Version, p.Binary.Path, p.MaxTested, model, key),
-		Remediation: openCodeInstallRemedy(m, home),
-	}
-}
-
-// openCodeSelfTestWorktree stands in for the worktree when the self-test asks
-// BuildCommand which flags it emits, so --dir is always among them.
-const openCodeSelfTestWorktree = "/nightgauge-self-test-worktree"
-
-// openCodeSelfTestDir holds one file per passed self-test, named by the hash
-// of the binary, its version and the per-run config it passed with.
-func openCodeSelfTestDir(home string) string {
-	return filepath.Join(home, ".nightgauge", "opencode", "self-test")
-}
-
-// openCodeSelfTestKey names a self-test: the binary, its version, and the
-// per-run config with the probe's directory taken out of it, so the same
-// dispatch on the same binary hashes the same wherever its probe ran.
-func openCodeSelfTestKey(bin, version, content, probeRoot string) string {
-	sum := sha256.Sum256([]byte(bin + "\x00" + version + "\x00" + strings.ReplaceAll(content, probeRoot, "<run-root>")))
-	return hex.EncodeToString(sum[:])
-}
-
-// openCodeSelfTestPass is what a passed self-test's file records.
-type openCodeSelfTestPass struct {
-	Binary   string    `json:"binary"`
-	Version  string    `json:"version"`
-	Key      string    `json:"key"`
-	PassedAt time.Time `json:"passed_at"`
-}
-
-func openCodeSelfTestPassed(home, key string) bool {
-	_, err := os.Stat(filepath.Join(openCodeSelfTestDir(home), key+".pass"))
-	return err == nil
-}
-
-// runOpenCodeSelfTest is the self-test a dispatch runs on a binary newer than
-// max-tested before its first stage with this per-run config (ADR-022 § 20):
-//
-//   - `opencode debug config` under the per-run config a dispatch of opts gets,
-//     built by BuildOpenCodeConfig as `nightgauge opencode config` builds it,
-//     must exit 0 and print a merged config that holds every key the per-run
-//     config sets (EvaluateOpenCodeDebugConfig). No model is called.
-//   - `opencode run --help` must define every flag BuildCommand emits, and
-//     list each value it passes among the option's choices
-//     (CheckOpenCodeRunHelp).
-//
-// A pass is recorded under home and not repeated for the same binary,
-// version and per-run config; a failure is an *OpenCodeIncompatibleError and
-// is tried again on the next dispatch. A probe ctx stopped is neither: its
-// error wraps ctx's, and nothing is recorded.
-func (a *OpenCodeAdapter) runOpenCodeSelfTest(ctx context.Context, home string, p OpenCodeVersionPolicy, opts RunOptions, settings config.OpenCodeConfig) error {
-	probe, err := NewOpenCodeProbe()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = probe.Close() }()
-	input, err := OpenCodeConfigInputFor(settings, opts, probe.Root(), os.LookupEnv)
-	if err != nil {
-		return err
-	}
-	built, err := BuildOpenCodeConfig(input)
-	if err != nil {
-		return err
-	}
-	key := openCodeSelfTestKey(p.Binary.Path, p.Version, built.Content, probe.Root())
-	if home != "" && openCodeSelfTestPassed(home, key) {
-		return nil
-	}
-
-	m, _ := openCodeManifest()
-	failed := func(reason string) error {
-		return &OpenCodeIncompatibleError{
-			Binary: p.Binary.Path, Version: p.Version, MinVersion: p.MinVersion, MaxTested: p.MaxTested,
-			Reason: fmt.Sprintf("opencode %s (%s) is newer than the max-tested %s, and its self-test failed: %s",
-				p.Version, p.Binary.Path, p.MaxTested, reason),
-			Remediation: openCodeInstallRemedy(m, home),
-		}
-	}
-	probeFailed := func(err error) error {
-		if ctx.Err() != nil {
-			return err
-		}
-		return failed(err.Error())
-	}
-	redact := slices.Collect(maps.Values(built.Files))
-	res, err := probe.Run(ctx, p.Binary.Path, []string{"debug", "config"}, built.Content, built.Files)
-	if err != nil {
-		return probeFailed(err)
-	}
-	if err := EvaluateOpenCodeDebugConfig(built.Content, res, redact); err != nil {
-		return failed(err.Error())
-	}
-	_, argv, _ := a.BuildCommand(RunOptions{Model: opts.Model, WorktreeDir: openCodeSelfTestWorktree})
-	help, err := probe.Run(ctx, p.Binary.Path, []string{"run", "--help"}, "", nil)
-	if err != nil {
-		return probeFailed(err)
-	}
-	if err := CheckOpenCodeRunHelp(help, argv); err != nil {
-		return failed(err.Error())
-	}
-
-	if home != "" {
-		pass := openCodeSelfTestPass{Binary: p.Binary.Path, Version: p.Version, Key: key, PassedAt: time.Now().UTC()}
-		if err := writeOpenCodeStateJSON(filepath.Join(openCodeSelfTestDir(home), key+".pass"), pass); err != nil {
-			fmt.Fprintf(os.Stderr, "[opencode] the self-test passed, but the pass could not be recorded, so the next dispatch runs it again: %v\n", err)
-		}
-	}
-	fmt.Fprintf(os.Stderr, "[opencode] self-test passed on opencode %s (%s): it accepts the per-run config and every flag the adapter passes\n",
-		p.Version, p.Binary.Path)
-	return nil
-}
-
-// EvaluateOpenCodeDebugConfig decides whether `opencode debug config`, run
-// with content as OPENCODE_CONFIG_CONTENT, accepted it: the exit code must be
-// 0, and the merged config it prints must hold every key content sets, with
-// the value content sets.
-//
-// The exit code alone is not enough. Observed on 1.18.30
-// (internal/doctor/testdata/opencode-capture), a value of the wrong type
-// exits 1, but an unknown key exits 0 and is dropped without a word, so a key
-// a newer version stops accepting would pass. A value that is an {env:...} or
-// {file:...} reference is resolved in the output, so only its key is
-// required.
-//
-// The error names keys, never a value, and quotes at most two lines of
-// OpenCode's stderr with every string in redact removed from them, such as an
-// endpoint's base URL.
-func EvaluateOpenCodeDebugConfig(content string, res OpenCodeProbeResult, redact []string) error {
-	if res.ExitCode != 0 {
-		return fmt.Errorf("`opencode debug config` exited %d on the per-run config: %s",
-			res.ExitCode, openCodeStderrSummary(res.Stderr, redact))
-	}
-	var want map[string]any
-	if err := json.Unmarshal([]byte(content), &want); err != nil {
-		return fmt.Errorf("the per-run config is not a JSON object: %w", err)
-	}
-	var got map[string]any
-	if err := json.Unmarshal(res.Stdout, &got); err != nil {
-		return errors.New("`opencode debug config` exited 0 but printed no JSON config")
-	}
-	var lost []string
-	openCodeConfigDiff(want, got, nil, &lost)
-	if len(lost) == 0 {
-		return nil
-	}
-	slices.Sort(lost)
-	shown := lost
-	if len(shown) > 10 {
-		shown = append(slices.Clone(shown[:10]), fmt.Sprintf("and %d more", len(lost)-10))
-	}
-	return fmt.Errorf("`opencode debug config` dropped or changed %d key(s) of the per-run config, so this version would not run a stage the way the config says: %s",
-		len(lost), strings.Join(shown, ", "))
-}
-
-// openCodeConfigDiff appends to lost the path of every key of want that got
-// lacks or holds another value for. An empty object in want sets no key.
-func openCodeConfigDiff(want, got any, path []string, lost *[]string) {
-	wm, isObject := want.(map[string]any)
-	if isObject {
-		if len(wm) == 0 {
-			return
-		}
-		gm, _ := got.(map[string]any)
-		for k, wv := range wm {
-			p := append(slices.Clone(path), k)
-			gv, ok := gm[k]
-			if !ok {
-				if sub, empty := wv.(map[string]any); empty && len(sub) == 0 {
-					continue
-				}
-				*lost = append(*lost, strings.Join(p, "."))
-				continue
-			}
-			openCodeConfigDiff(wv, gv, p, lost)
-		}
-		return
-	}
-	if s, ok := want.(string); ok && (strings.Contains(s, "{env:") || strings.Contains(s, "{file:")) {
-		return
-	}
-	if !reflect.DeepEqual(want, got) {
-		*lost = append(*lost, strings.Join(path, "."))
-	}
-}
-
-// openCodeANSIRE matches a terminal colour sequence.
-var openCodeANSIRE = regexp.MustCompile("\x1b\\[[0-9;]*[A-Za-z]")
-
-// openCodeStderrSummary is at most the first two non-empty lines of stderr,
-// colour removed, each at most 200 bytes, with every string in redact (and
-// the host of each that is a URL) replaced.
-func openCodeStderrSummary(stderr []byte, redact []string) string {
-	var lines []string
-	for _, line := range strings.Split(openCodeANSIRE.ReplaceAllString(string(stderr), ""), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		if len(line) > 200 {
-			line = line[:200] + "..."
-		}
-		lines = append(lines, line)
-		if len(lines) == 2 {
-			break
-		}
-	}
-	if len(lines) == 0 {
-		return "it printed nothing on stderr"
-	}
-	return openCodeRedact(strings.Join(lines, " "), redact)
-}
-
-// openCodeRedact replaces every string in secrets, and the host of each that
-// is a URL, with "[redacted]".
-func openCodeRedact(text string, secrets []string) string {
-	var olds []string
-	for _, s := range secrets {
-		s = strings.TrimSpace(s)
-		if s == "" {
-			continue
-		}
-		olds = append(olds, s)
-		if u, err := url.Parse(s); err == nil && u.Host != "" {
-			olds = append(olds, u.Host)
-			if h := u.Hostname(); h != "" {
-				olds = append(olds, h)
-			}
-		}
-	}
-	// Longest first, so a URL is replaced whole before its host.
-	slices.SortFunc(olds, func(a, b string) int { return len(b) - len(a) })
-	for _, s := range olds {
-		text = strings.ReplaceAll(text, s, "[redacted]")
-	}
-	return text
-}
-
-// openCodeHelpChoicesRE and openCodeHelpChoiceRE read an option's declared
-// choices from yargs help: [choices: "default", "json"].
-var (
-	openCodeHelpChoicesRE = regexp.MustCompile(`\[choices: ([^\]]*)\]`)
-	openCodeHelpChoiceRE  = regexp.MustCompile(`"([^"]*)"`)
-)
-
-// parseOpenCodeRunHelp reads the options section of `opencode run --help`
-// (testdata/opencode-cli/run-help.txt holds 1.18.30's): each option's names,
-// such as -m and --model, mapped to its declared choices, nil when it
-// declares none. A yargs option wraps its type and choices onto the next line
-// when they do not fit, so a line that starts no option belongs to the one
-// before it.
-func parseOpenCodeRunHelp(help string) map[string][]string {
-	options := map[string][]string{}
-	inOptions := false
-	var current []string
-	var text strings.Builder
-	flush := func() {
-		if len(current) == 0 {
-			return
-		}
-		var choices []string
-		if m := openCodeHelpChoicesRE.FindStringSubmatch(text.String()); m != nil {
-			for _, c := range openCodeHelpChoiceRE.FindAllStringSubmatch(m[1], -1) {
-				choices = append(choices, c[1])
-			}
-		}
-		for _, name := range current {
-			options[name] = choices
-		}
-		current = nil
-		text.Reset()
-	}
-	for _, line := range strings.Split(help, "\n") {
-		trimmed := strings.TrimSpace(line)
-		switch {
-		case trimmed == "Options:":
-			inOptions = true
-			continue
-		case !inOptions:
-			continue
-		case strings.HasPrefix(trimmed, "-"):
-			flush()
-			spec, rest, _ := strings.Cut(trimmed, "  ")
-			for _, name := range strings.Split(spec, ",") {
-				if name = strings.TrimSpace(name); strings.HasPrefix(name, "-") {
-					current = append(current, name)
-				}
-			}
-			text.WriteString(rest)
-		case trimmed == "":
-			flush()
-		default:
-			text.WriteString(" " + trimmed)
-		}
-	}
-	flush()
-	return options
-}
-
-// CheckOpenCodeRunHelp checks `opencode run --help` against argv, the
-// arguments BuildCommand passes: the help must exit 0, define every flag argv
-// holds, and list each value argv gives an option with declared choices among
-// them. A flag the binary no longer defines would make `run` exit 1 and print
-// its help instead of running the stage.
-//
-// 1.18.30 prints its help on stderr and nothing on stdout
-// (testdata/opencode-cli/README.md), so the options are read from stdout when
-// it holds them, and otherwise from stderr.
-func CheckOpenCodeRunHelp(res OpenCodeProbeResult, argv []string) error {
-	if res.ExitCode != 0 {
-		return fmt.Errorf("`opencode run --help` exited %d", res.ExitCode)
-	}
-	options := parseOpenCodeRunHelp(string(res.Stdout))
-	if len(options) == 0 {
-		options = parseOpenCodeRunHelp(string(res.Stderr))
-	}
-	if len(options) == 0 {
-		return errors.New("`opencode run --help` printed no options on stdout or stderr")
-	}
-	var missing, refused []string
-	for i, arg := range argv {
-		if i == 0 && arg == "run" {
-			continue
-		}
-		if !strings.HasPrefix(arg, "-") {
-			continue
-		}
-		choices, ok := options[arg]
-		if !ok {
-			missing = append(missing, arg)
-			continue
-		}
-		if len(choices) > 0 && i+1 < len(argv) && !strings.HasPrefix(argv[i+1], "-") && !slices.Contains(choices, argv[i+1]) {
-			refused = append(refused, fmt.Sprintf("%s %s (choices: %s)", arg, argv[i+1], strings.Join(choices, ", ")))
-		}
-	}
-	var problems []string
-	if len(missing) > 0 {
-		problems = append(problems, "`opencode run` does not define "+strings.Join(missing, ", ")+", which the adapter passes")
-	}
-	if len(refused) > 0 {
-		problems = append(problems, "`opencode run` does not accept "+strings.Join(refused, "; "))
-	}
-	if len(problems) > 0 {
-		return errors.New(strings.Join(problems, "; "))
-	}
-	return nil
 }
 
 // OpenCodeMachineConfigRefusals are the refusals PrepareOpenCodeRun(req) makes
@@ -982,9 +584,9 @@ func writeOpenCodeStateJSON(path string, v any) error {
 //   - below the compat manifest's floor, or with a version that cannot be
 //     read, the dispatch is refused as adapter_incompatible, naming both
 //     versions and the managed install (CheckOpenCodeVersion);
-//   - newer than max-tested, a stage on a model server the operator runs is
-//     refused the same way, and any other stage warns and runs only once the
-//     self-test has passed for this binary, version and per-run config;
+//   - newer than max-tested is not a condition at all: max-tested only says
+//     how far Nightgauge was verified, and a newer build dispatches exactly
+//     like a tested one, with no warning (ADR-022 § 20, 2026-09-25 amendment);
 //   - the binary and version the dispatch passed with are recorded for the
 //     doctor's drift check.
 //
@@ -1000,9 +602,8 @@ func (a *OpenCodeAdapter) checkVersionPolicy(ctx context.Context, opts RunOption
 	if err != nil {
 		return err
 	}
-	// Without a home directory there is nowhere to keep a self-test pass or
-	// the dispatch record, so the self-test runs every time and nothing is
-	// recorded; neither is a reason to refuse the dispatch.
+	// Without a home directory there is nowhere to keep the dispatch record,
+	// which is not a reason to refuse the dispatch.
 	home, _ := os.UserHomeDir()
 	version, versionErr := OpenCodeVersionOf(ctx, bin.Path)
 	if versionErr != nil && ctx.Err() != nil {
@@ -1014,20 +615,6 @@ func (a *OpenCodeAdapter) checkVersionPolicy(ctx context.Context, opts RunOption
 	}
 	if p.BelowFloor {
 		fmt.Fprintf(os.Stderr, "[opencode] WARNING: opencode %s (%s) is below the minimum tested version %s\n", p.Version, bin.Path, p.MinVersion)
-	}
-	if p.AboveMaxTested {
-		endpoints, err := OpenCodeEndpoints(settings)
-		if err != nil {
-			return err
-		}
-		if err := OpenCodeEndpointAboveMaxTested(p, opts.Model, endpoints, home); err != nil {
-			return err
-		}
-		fmt.Fprintf(os.Stderr, "[opencode] WARNING: opencode %s (%s) is newer than the max-tested %s: a stage runs on it only once a self-test of its per-run config and run flags has passed on this version\n",
-			p.Version, bin.Path, p.MaxTested)
-		if err := a.runOpenCodeSelfTest(ctx, home, p, opts, settings); err != nil {
-			return err
-		}
 	}
 	if home != "" {
 		rec := OpenCodeDispatchRecord{Binary: bin.Path, Version: p.Version, RecordedAt: time.Now().UTC()}

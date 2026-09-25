@@ -5,7 +5,7 @@
   "min_version_reason": "Every OpenCode behaviour ADR-022 relies on was observed on 1.18.30 (ADR-022 section 20).",
   "floor_policy": "fail_closed",
   "max_tested": "1.18.30",
-  "max_tested_reason": "The only version observed; above it, dispatch warns and self-tests, and endpoint dispatch stops (ADR-022 section 20).",
+  "max_tested_reason": "The newest version observed: Nightgauge is tested up to it. A newer version is never refused, degraded or warned about (ADR-022 section 20, 2026-09-25 amendment).",
   "feeds": [
     { "kind": "npm", "ref": "opencode-ai" },
     {

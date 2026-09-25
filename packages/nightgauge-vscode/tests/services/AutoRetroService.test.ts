@@ -705,7 +705,7 @@ describe("AutoRetroService", () => {
         "adapter_incompatible",
         "adapter-incompatible",
         'exit 0: dispatch refused for adapter "opencode": adapter_incompatible: opencode 1.17.2 is below the minimum tested version 1.18.30',
-        "max-tested",
+        "at or above the floor",
       ],
     ])(
       "names the remediation for the parked kind %s (Issue #1631)",

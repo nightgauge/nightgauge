@@ -171,9 +171,8 @@ var openCodeUnenforcedControls = []openCodeControl{
 // cannot satisfy them, so they are the reason to state, and no
 // enabled-dispatch warning precedes them. Then the gate. Then the version
 // policy (checkVersionPolicy): a binary below the compat manifest's floor, or
-// newer than max-tested and failing its self-test or dispatched to a model
-// server the operator runs, is refused as adapter_incompatible before
-// anything is created. Last, a stderr line
+// whose version cannot be read, is refused as adapter_incompatible before
+// anything is created; a newer version than max-tested never is. Last, a stderr line
 // names every provider variable the environment holds that the stage, and so
 // every tool it runs, will not get (openCodeWithheldProviderEnv), by name
 // alone.
@@ -184,8 +183,7 @@ var openCodeUnenforcedControls = []openCodeControl{
 // the target repository, a zero limit, an undeclared endpoint, a malformed
 // base_url, and, unless the operator opted into their own OpenCode config, a
 // $HOME/.opencode holding config or the machine's managed OpenCode config.
-// The version policy reads the block for its binary pin and, above
-// max-tested, for the self-test's per-run config.
+// The version policy reads the block for its binary pin.
 func (a *OpenCodeAdapter) PreDispatch(ctx context.Context, opts RunOptions) error {
 	if err := openCodeProjectConfigTamperCheck(ctx, opts.WorktreeDir); err != nil {
 		return err

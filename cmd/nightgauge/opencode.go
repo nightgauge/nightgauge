@@ -98,9 +98,8 @@ The model defaults to opencode.model in the machine-tier config. The command
 runs the adapter's own checks, so it fails, and prints nothing on stdout,
 wherever the adapter refuses a dispatch before spawning: without
 ` + adapters.ExperimentalOpenCodeEnvVar + `=1, an opencode binary below the compat
-manifest's floor or whose version cannot be read, one newer than max-tested
-that fails its self-test or would run a model server you run, an
-opencode.binary that is not the absolute path of an executable, a model it
+manifest's floor or whose version cannot be read (a newer version than the
+one Nightgauge is tested up to is never refused), an opencode.binary that is not the absolute path of an executable, a model it
 cannot dispatch, an anthropic/ model while ANTHROPIC_API_KEY is unset, an
 anthropic/ model OpenCode's bundled catalog does not list or one of its
 fast-mode entries, a

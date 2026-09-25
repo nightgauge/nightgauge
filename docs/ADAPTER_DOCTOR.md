@@ -183,22 +183,22 @@ this check enforces.
 
 - **`warnings` and `notes` (on the adapter row).** `warnings` lists the
   findings that leave the adapter usable but that the operator should act
-  on, such as a version above max-tested or a binary that changed since the
-  last dispatch; each one degrades the doctor's verdict. `notes` lists facts
-  a reader of the row needs and never changes the verdict: the version
-  floor and max-tested, the run directories, the offline posture, and
-  whether the catalog probe ran.
+  on, such as a version below a warn floor or a stored login; each one
+  degrades the doctor's verdict. `notes` lists facts a reader of the row
+  needs and never changes the verdict: the version floor and the version
+  Nightgauge is tested up to, a binary that changed since the last dispatch,
+  the run directories, the offline posture, and whether the catalog probe
+  ran.
 - **`opencode.enabled`** — whether `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` is set
   in the process environment. While it is not, no other OpenCode check runs:
   there is nothing to check for a dispatch that never happens.
 - **Version policy (`version_ok`, `min_version`, `opencode.max_tested`,
   `opencode.floor_policy`).** Below the compat manifest's floor, or when the
   version cannot be read, the row blocks — the floor policy is
-  `fail_closed`. Above max-tested, the row warns instead of blocking:
-  `opencode.above_max_tested` is set, a hosted dispatch continues under a
-  self-test, and a dispatch to a model server the operator runs (a declared
-  endpoint, or the `lmstudio`/`ollama` provider key) is refused because the
-  self-test cannot re-verify which provider keys the newer binary bundles.
+  `fail_closed`. `opencode.max_tested` is the version Nightgauge is tested up
+  to and is information only: a newer binary neither blocks nor warns, and
+  dispatches, to a hosted model or a model server the operator runs, exactly
+  as a tested one does (ADR-022 § 20, 2026-09-25 amendment).
 - **`opencode.pinned`** — whether `opencode.binary` (the machine-tier config
   key) pins the binary an absolute path resolves, rather than falling back to
   whatever `opencode` resolves on `PATH`.

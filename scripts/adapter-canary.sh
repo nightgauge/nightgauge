@@ -426,15 +426,13 @@ cmd_opencode_canary() {
   version="${2:-}"
   [ -n "$version" ] || version="$(manifest_field opencode '.max_tested // ""')"
   out="$(mktemp "${TMPDIR:-/tmp}/adapter-canary-opencode.XXXXXX")"
-  # Also ./internal/execution/adapters: TestOpenCodeCanaryRelax* there is the
-  # #1639 round-3 regression for openCodeCanaryRelax (opencode_preflight.go),
-  # the canary-only relaxation that lets THIS run's dispatch through the
-  # endpoint-above-max-tested refusal. It needs no live binary (a fake, like
-  # the rest of that package's tests), so running it here costs nothing and
-  # means the relaxation itself is proven on every canary invocation, not
-  # just by hand.
+  # No relaxation is needed to dispatch the installed build: a version newer
+  # than max_tested dispatches exactly like a tested one (ADR-022 § 20,
+  # 2026-09-25 amendment), so this leg exercises the real dispatch path on
+  # the newest release. NIGHTGAUGE_CANARY=true only relaxes the test
+  # harness's own exact-version pin (realOpenCode, internal/execution).
   ( cd "$REPO_ROOT" && PATH="$dir:$PATH" CI=true NIGHTGAUGE_CANARY=true \
-      bounded "$GOTEST_TIMEOUT" go test -tags canary ./internal/execution ./internal/execution/adapters \
+      bounded "$GOTEST_TIMEOUT" go test -tags canary ./internal/execution \
         -run 'TestOpenCodeCanary' -count=1 ) >"$out" 2>&1 || rc=$?
   if [ "$rc" -eq 0 ]; then
     json_row adapter=opencode version="$version" check=opencode-canary result=pass detail=""

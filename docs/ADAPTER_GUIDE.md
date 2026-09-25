@@ -672,8 +672,8 @@ its hidden aliases (observed on opencode 1.18.30) are never emitted; approval is
 - `Subagents (task)` are denied under the current plugin gate (see
   [ADAPTER_MATRIX.md § 10. opencode](ADAPTER_MATRIX.md#10-opencode) for the
   full capability disposition table)
-- A model server the operator runs is refused above the compat manifest's
-  max-tested version, even though a hosted dispatch continues under a warning
+- A version newer than the compat manifest's max-tested (tested up to)
+  version runs unchanged, with no warning; only the floor is enforced
 - The machine's own managed OpenCode config, when one exists, refuses every
   dispatch unless `inherit_user_config` is explicitly turned on
 
@@ -683,7 +683,6 @@ its hidden aliases (observed on opencode 1.18.30) are never emitted; approval is
 | ----------------------------------------- | ----------------------------------------------------------------------------------- |
 | Dispatch refused, gate not enabled        | Set `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` where the pipeline runs                    |
 | `anthropic/*` refused                     | Set `ANTHROPIC_API_KEY`; a subscription or OAuth login is never accepted here       |
-| A local endpoint's dispatch refused       | Check the binary's version against the compat manifest's max-tested version         |
 | Stage fails on an auto-rejected tool call | Widen the stage's allowed tools so the permission map generates `allow`, not `deny` |
 | CLI not found                             | `npm install -g opencode-ai`, or pin `opencode.binary` to an absolute path          |
 

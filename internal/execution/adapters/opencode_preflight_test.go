@@ -110,37 +110,23 @@ type fakeOpenCode struct {
 	log  string
 }
 
-// fakeOpenCodeBehavior is what a fake prints for `debug config` and `run
-// --help`. debugConfig and runHelp are shell fragments.
+// fakeOpenCodeBehavior is the version a fake prints. Any other invocation,
+// such as `debug config` or `run --help`, exits 97.
 type fakeOpenCodeBehavior struct {
-	version     string
-	debugConfig string
-	runHelp     string
+	version string
 }
-
-// echoContent is a `debug config` that prints the per-run config back, as a
-// binary that accepts every key of it does.
-const echoContent = `printf '%s' "$OPENCODE_CONFIG_CONTENT"; exit 0`
 
 func installFakeOpenCode(t *testing.T, b fakeOpenCodeBehavior) fakeOpenCode {
 	t.Helper()
 	dir := t.TempDir()
 	f := fakeOpenCode{path: filepath.Join(dir, "opencode"), log: filepath.Join(dir, "invocations.log")}
-	if b.debugConfig == "" {
-		b.debugConfig = "echo 'debug config was not expected' >&2; exit 98"
-	}
-	if b.runHelp == "" {
-		b.runHelp = "echo 'run --help was not expected' >&2; exit 98"
-	}
 	script := fmt.Sprintf(`#!/bin/sh
 printf '%%s\n' "$*" >> %q
 case "$1 $2" in
 "--version ") echo %s; exit 0 ;;
-"debug config") %s ;;
-"run --help") %s ;;
 esac
 exit 97
-`, f.log, b.version, b.debugConfig, b.runHelp)
+`, f.log, b.version)
 	if err := os.WriteFile(f.path, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -169,29 +155,6 @@ func (f fakeOpenCode) count(t *testing.T, args string) int {
 		}
 	}
 	return n
-}
-
-// capturedRunHelp is 1.18.30's `opencode run --help`
-// (testdata/opencode-cli/run-help.txt).
-func capturedRunHelp(t *testing.T) string {
-	t.Helper()
-	b, err := os.ReadFile(filepath.Join("testdata", "opencode-cli", "run-help.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(b)
-}
-
-// helpScript is a `run --help` fragment that prints help, from a file, on
-// stderr with nothing on stdout, as 1.18.30 does
-// (testdata/opencode-cli/README.md).
-func helpScript(t *testing.T, help string) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "help.txt")
-	if err := os.WriteFile(path, []byte(help), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return fmt.Sprintf("cat %q >&2; exit 0", path)
 }
 
 // preflightEnv opens the gate and isolates HOME for one test, and returns
@@ -260,163 +223,41 @@ func TestOpenCodeUnreadableVersionIsIncompatible(t *testing.T) {
 	}
 }
 
-// aboveMaxTestedAnthropic is an above-max-tested fake dispatched to a hosted
-// model, the dispatch the self-test runs for.
-func aboveMaxTestedAnthropic(t *testing.T, b fakeOpenCodeBehavior) (*OpenCodeAdapter, fakeOpenCode, RunOptions) {
-	t.Helper()
+// TestOpenCodeAboveMaxTestedDispatchesLikeATestedVersion: max_tested is only
+// the version Nightgauge is tested up to (ADR-022 § 20, 2026-09-25
+// amendment). A newer opencode dispatches a hosted model and a model server
+// the operator runs exactly as a tested one does: no refusal, no warning, and
+// no probe beyond the version read. The fake fails any `debug config` or
+// `run --help` it is asked for, so a returning self-test gate turns this red.
+func TestOpenCodeAboveMaxTestedDispatchesLikeATestedVersion(t *testing.T) {
 	m := openCodeManifestForTest(t)
-	b.version = patchStep(t, m.MaxTested, 1)
-	fake := installFakeOpenCode(t, b)
-	t.Setenv("ANTHROPIC_API_KEY", "set-by-the-test")
-	return pinnedAdapter(config.OpenCodeConfig{}, fake.path), fake,
-		RunOptions{Stage: "feature-dev", Model: "anthropic/claude-sonnet-5", WorktreeDir: gitInitTestWorktree(t)}
-}
-
-// TestOpenCodeSelfTestRefusesAConfigDebugConfigRejects: above max-tested, a
-// `debug config` that exits 1 on the per-run config refuses the dispatch.
-func TestOpenCodeSelfTestRefusesAConfigDebugConfigRejects(t *testing.T) {
-	home := preflightEnv(t)
-	a, fake, run := aboveMaxTestedAnthropic(t, fakeOpenCodeBehavior{
-		debugConfig: `echo 'Error: Configuration is invalid at OPENCODE_CONFIG_CONTENT' >&2; exit 1`,
-	})
-	var err error
-	stderr := captureAdapterStderr(t, func() { err = a.PreDispatch(context.Background(), run) })
-	if err == nil || !strings.Contains(err.Error(), "adapter_incompatible") ||
-		!strings.Contains(err.Error(), "`opencode debug config` exited 1") ||
-		!strings.Contains(err.Error(), "Configuration is invalid") {
-		t.Fatalf("PreDispatch = %v, want the self-test's refusal", err)
-	}
-	if !strings.Contains(stderr, "newer than the max-tested") {
-		t.Errorf("an above-max-tested dispatch did not warn:\n%s", stderr)
-	}
-	if n := fake.count(t, "run --help"); n != 0 {
-		t.Errorf("the flag probe ran %d time(s) after `debug config` failed", n)
-	}
-	if entries, _ := os.ReadDir(openCodeSelfTestDir(home)); len(entries) != 0 {
-		t.Errorf("a failed self-test was recorded as passed: %v", entries)
-	}
-}
-
-// TestOpenCodeSelfTestRefusesAConfigDebugConfigDrops: a `debug config` that
-// exits 0 but drops a key the per-run config sets, as 1.18.30 does with a key
-// it does not know, refuses the dispatch too, naming the key.
-func TestOpenCodeSelfTestRefusesAConfigDebugConfigDrops(t *testing.T) {
-	preflightEnv(t)
-	a, _, run := aboveMaxTestedAnthropic(t, fakeOpenCodeBehavior{
-		debugConfig: `printf '%s' "$OPENCODE_CONFIG_CONTENT" | sed 's/"share":"disabled",//'; exit 0`,
-	})
-	var err error
-	captureAdapterStderr(t, func() { err = a.PreDispatch(context.Background(), run) })
-	if err == nil || !strings.Contains(err.Error(), "dropped or changed 1 key(s)") || !strings.Contains(err.Error(), "share") {
-		t.Fatalf("PreDispatch = %v, want a refusal naming the dropped key share", err)
-	}
-}
-
-// TestOpenCodeSelfTestRefusesARunHelpWithoutAFlag: above max-tested, a `run
-// --help` that no longer defines --dir, which BuildCommand passes, refuses
-// the dispatch.
-func TestOpenCodeSelfTestRefusesARunHelpWithoutAFlag(t *testing.T) {
-	preflightEnv(t)
-	var kept []string
-	for _, line := range strings.Split(capturedRunHelp(t), "\n") {
-		if !strings.HasPrefix(strings.TrimSpace(line), "--dir ") {
-			kept = append(kept, line)
+	for _, above := range []string{patchStep(t, m.MaxTested, 1), "99.0.0"} {
+		for name, tc := range map[string]struct {
+			settings config.OpenCodeConfig
+			model    string
+		}{
+			"endpoint": {lmStudioSettings(), "lmstudio/qwen/qwen3.8-27b"},
+			"hosted":   {config.OpenCodeConfig{}, "anthropic/claude-sonnet-5"},
+		} {
+			home := preflightEnv(t)
+			t.Setenv("ANTHROPIC_API_KEY", "set-by-the-test")
+			fake := installFakeOpenCode(t, fakeOpenCodeBehavior{version: above})
+			run := RunOptions{Stage: "feature-dev", Model: tc.model, WorktreeDir: gitInitTestWorktree(t)}
+			var err error
+			stderr := captureAdapterStderr(t, func() { err = pinnedAdapter(tc.settings, fake.path).PreDispatch(context.Background(), run) })
+			if err != nil {
+				t.Fatalf("%s on opencode %s: PreDispatch = %v, want the dispatch allowed", name, above, err)
+			}
+			if strings.Contains(stderr, "max-tested") || strings.Contains(stderr, "newer than") || strings.Contains(stderr, "self-test") {
+				t.Errorf("%s on opencode %s warned about the version:\n%s", name, above, stderr)
+			}
+			if got := fake.count(t, "debug config") + fake.count(t, "run --help"); got != 0 {
+				t.Errorf("%s on opencode %s ran %d probe(s) beyond the version read", name, above, got)
+			}
+			if rec, ok, _ := ReadOpenCodeDispatchRecord(home); !ok || rec.Version != above {
+				t.Errorf("%s on opencode %s: dispatch record = %+v, %v; want the version recorded", name, above, rec, ok)
+			}
 		}
-	}
-	a, fake, run := aboveMaxTestedAnthropic(t, fakeOpenCodeBehavior{
-		debugConfig: echoContent,
-		runHelp:     helpScript(t, strings.Join(kept, "\n")),
-	})
-	var err error
-	captureAdapterStderr(t, func() { err = a.PreDispatch(context.Background(), run) })
-	if err == nil || !strings.Contains(err.Error(), "adapter_incompatible") || !strings.Contains(err.Error(), "does not define --dir") {
-		t.Fatalf("PreDispatch = %v, want a refusal naming --dir", err)
-	}
-	if n := fake.count(t, "debug config"); n != 1 {
-		t.Errorf("`debug config` ran %d time(s), want 1", n)
-	}
-}
-
-// TestOpenCodeSelfTestPassRunsOnceAcrossStages: a passing self-test is
-// recorded, so the next stage on the same binary, version and per-run config
-// does not run it again; both stages still warn, and both are recorded.
-func TestOpenCodeSelfTestPassRunsOnceAcrossStages(t *testing.T) {
-	home := preflightEnv(t)
-	a, fake, run := aboveMaxTestedAnthropic(t, fakeOpenCodeBehavior{
-		debugConfig: echoContent,
-		runHelp:     helpScript(t, capturedRunHelp(t)),
-	})
-	for _, stage := range []string{"feature-planning", "feature-dev"} {
-		run.Stage = stage
-		var err error
-		stderr := captureAdapterStderr(t, func() { err = a.PreDispatch(context.Background(), run) })
-		if err != nil {
-			t.Fatalf("stage %s: PreDispatch = %v, want the dispatch allowed", stage, err)
-		}
-		if !strings.Contains(stderr, "newer than the max-tested") {
-			t.Errorf("stage %s did not warn:\n%s", stage, stderr)
-		}
-	}
-	if n := fake.count(t, "debug config"); n != 1 {
-		t.Errorf("`debug config` ran %d time(s) across two stages, want 1", n)
-	}
-	if n := fake.count(t, "run --help"); n != 1 {
-		t.Errorf("`run --help` ran %d time(s) across two stages, want 1", n)
-	}
-	rec, ok, err := ReadOpenCodeDispatchRecord(home)
-	if err != nil || !ok || rec.Version != patchStep(t, openCodeManifestForTest(t).MaxTested, 1) || rec.Binary != fake.path {
-		t.Errorf("dispatch record = %+v, %v, %v; want the fake and its version", rec, ok, err)
-	}
-}
-
-// TestOpenCodeAboveMaxTestedRefusesAnEndpoint: above max-tested, a stage on a
-// model server the operator runs is refused without a self-test, naming the
-// installed version and max-tested.
-func TestOpenCodeAboveMaxTestedRefusesAnEndpoint(t *testing.T) {
-	preflightEnv(t)
-	m := openCodeManifestForTest(t)
-	above := patchStep(t, m.MaxTested, 1)
-	fake := installFakeOpenCode(t, fakeOpenCodeBehavior{version: above, debugConfig: echoContent})
-	err := pinnedAdapter(lmStudioSettings(), fake.path).PreDispatch(context.Background(), RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"})
-	if err == nil {
-		t.Fatal("an endpoint dispatch above max-tested was allowed")
-	}
-	for _, want := range []string{"adapter_incompatible", above, m.MaxTested, "endpoint lmstudio"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("the refusal does not name %q: %v", want, err)
-		}
-	}
-	if n := fake.count(t, "debug config"); n != 0 {
-		t.Errorf("the self-test ran for a dispatch that is refused anyway")
-	}
-}
-
-// TestOpenCodeAboveMaxTestedRefusesAnEndpointEvenWithTheCanaryEnvSet is the
-// production side of #1639's canary relaxation: openCodeCanaryRelax
-// (opencode_preflight.go) is nil in this default build — only
-// opencode_preflight_canary.go, gated behind the "canary" build tag no
-// production build ever adds, sets it — so setting NIGHTGAUGE_CANARY=true
-// alone, without that tag, must not relax the refusal this file's own
-// TestOpenCodeAboveMaxTestedRefusesAnEndpoint proves. Without this test, a
-// future change that reads the env var directly here instead of through the
-// nil-by-default hook would relax production silently.
-func TestOpenCodeAboveMaxTestedRefusesAnEndpointEvenWithTheCanaryEnvSet(t *testing.T) {
-	t.Setenv("NIGHTGAUGE_CANARY", "true")
-	preflightEnv(t)
-	m := openCodeManifestForTest(t)
-	above := patchStep(t, m.MaxTested, 1)
-	fake := installFakeOpenCode(t, fakeOpenCodeBehavior{version: above, debugConfig: echoContent})
-	err := pinnedAdapter(lmStudioSettings(), fake.path).PreDispatch(context.Background(), RunOptions{Model: "lmstudio/qwen/qwen3.8-27b"})
-	if err == nil {
-		t.Fatal("an endpoint dispatch above max-tested was allowed with NIGHTGAUGE_CANARY=true set in a non-canary build")
-	}
-	for _, want := range []string{"adapter_incompatible", above, m.MaxTested, "endpoint lmstudio"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("the refusal does not name %q: %v", want, err)
-		}
-	}
-	if n := fake.count(t, "debug config"); n != 0 {
-		t.Errorf("the self-test ran for a dispatch that is refused anyway")
 	}
 }
 
@@ -484,42 +325,6 @@ func TestOpenCodeRejectsARelativeOrUnrunnablePin(t *testing.T) {
 		if _, err := a.PrepareRunRoot(RunRootRequest{ID: testRunID, MachineConfigDir: filepath.Join(home, ".nightgauge"), Run: run}); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("PrepareRunRoot with opencode.binary %q = %v, want %q", pin, err, want)
 		}
-	}
-}
-
-// TestCheckOpenCodeRunHelpAgainstTheCapture: the captured 1.18.30 `run
-// --help` defines every flag BuildCommand emits with a value among its
-// choices, read from stderr, where 1.18.30 prints it, or from stdout; a help
-// without a flag, or without a choice the adapter passes, does not.
-func TestCheckOpenCodeRunHelpAgainstTheCapture(t *testing.T) {
-	help := capturedRunHelp(t)
-	_, argv, _ := NewOpenCodeAdapter().BuildCommand(RunOptions{Model: "lmstudio/qwen/qwen3.8-27b", WorktreeDir: openCodeSelfTestWorktree})
-	if err := CheckOpenCodeRunHelp(OpenCodeProbeResult{Stderr: []byte(help)}, argv); err != nil {
-		t.Fatalf("the captured help, on stderr as 1.18.30 prints it, fails the flag probe: %v", err)
-	}
-	if err := CheckOpenCodeRunHelp(OpenCodeProbeResult{Stdout: []byte(help)}, argv); err != nil {
-		t.Fatalf("the captured help, on stdout, fails the flag probe: %v", err)
-	}
-	if err := CheckOpenCodeRunHelp(OpenCodeProbeResult{Stdout: []byte("\n"), Stderr: []byte("Error: something went wrong\n")}, argv); err == nil || !strings.Contains(err.Error(), "printed no options") {
-		t.Errorf("a help with no options on either stream = %v, want it refused", err)
-	}
-	options := parseOpenCodeRunHelp(help)
-	if got := strings.Join(options["--format"], ","); got != "default,json" {
-		t.Errorf("--format choices = %q, want the wrapped [choices: \"default\", \"json\"]", got)
-	}
-	if got := strings.Join(options["-m"], ","); got != "" || options["--model"] != nil {
-		t.Errorf("-m declares choices %q; it declares none", got)
-	}
-	if _, ok := options["-m"]; !ok {
-		t.Error("the parser did not read -m, --model")
-	}
-
-	noJSON := strings.Replace(help, `[choices: "default", "json"]`, `[choices: "default", "ndjson"]`, 1)
-	if err := CheckOpenCodeRunHelp(OpenCodeProbeResult{Stderr: []byte(noJSON)}, argv); err == nil || !strings.Contains(err.Error(), "--format json") {
-		t.Errorf("a help whose --format lacks json = %v, want it refused", err)
-	}
-	if err := CheckOpenCodeRunHelp(OpenCodeProbeResult{ExitCode: 1, Stderr: []byte(help)}, argv); err == nil {
-		t.Error("a `run --help` that exited 1 passed")
 	}
 }
 
@@ -750,9 +555,8 @@ func TestOpenCodeProbeHonoursItsContext(t *testing.T) {
 }
 
 // TestOpenCodeStoppedDispatchIsNotIncompatible: a dispatch whose context is
-// done runs no probe, and one stopped during its self-test is refused with
-// the context's error. Neither calls the binary incompatible, and neither
-// records a self-test pass or the dispatch (#1627).
+// done runs no probe and is refused with the context's error. It does not call
+// the binary incompatible, and it does not record the dispatch (#1627).
 func TestOpenCodeStoppedDispatchIsNotIncompatible(t *testing.T) {
 	home := preflightEnv(t)
 	var incompatible *OpenCodeIncompatibleError
@@ -771,28 +575,6 @@ func TestOpenCodeStoppedDispatchIsNotIncompatible(t *testing.T) {
 		t.Errorf("a dispatch whose context was done ran the binary: %q", got)
 	}
 
-	started := filepath.Join(t.TempDir(), "started")
-	a, selfTested, run := aboveMaxTestedAnthropic(t, fakeOpenCodeBehavior{debugConfig: fmt.Sprintf("touch %q; sleep 30", started)})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() {
-		for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-			if _, err := os.Stat(started); err == nil {
-				break
-			}
-		}
-		cancel()
-	}()
-	captureAdapterStderr(t, func() { err = a.PreDispatch(ctx, run) })
-	if !errors.Is(err, context.Canceled) || errors.As(err, &incompatible) {
-		t.Fatalf("PreDispatch stopped during the self-test = %v, want the context's error and no adapter_incompatible", err)
-	}
-	if selfTested.count(t, "run --help") != 0 {
-		t.Error("the self-test went on after its context was cancelled")
-	}
-	if passes, _ := filepath.Glob(filepath.Join(openCodeSelfTestDir(home), "*.pass")); len(passes) != 0 {
-		t.Errorf("a stopped self-test recorded a pass: %q", passes)
-	}
 	if _, ok, _ := ReadOpenCodeDispatchRecord(home); ok {
 		t.Error("a stopped dispatch was recorded as the last dispatch")
 	}

@@ -155,13 +155,13 @@ func TestOpenCodeIncompatibleRefusalsClassify(t *testing.T) {
 	bin := adapters.OpenCodeBinary{Path: "/usr/local/bin/opencode"}
 	_, belowFloor := adapters.CheckOpenCodeVersion(bin, "1.17.2", nil, "/Users/fixture")
 	_, unreadable := adapters.CheckOpenCodeVersion(bin, "", fmt.Errorf("exit status 1"), "/Users/fixture")
-	above, err := adapters.CheckOpenCodeVersion(bin, "99.0.0", nil, "/Users/fixture")
-	if err != nil || !above.AboveMaxTested {
-		t.Fatalf("CheckOpenCodeVersion(99.0.0) = %+v, %v; want an above-max-tested policy", above, err)
+	// A version newer than max-tested is never refused (ADR-022 § 20,
+	// 2026-09-25 amendment), so there is no third refusal to classify.
+	if _, err := adapters.CheckOpenCodeVersion(bin, "99.0.0", nil, "/Users/fixture"); err != nil {
+		t.Fatalf("CheckOpenCodeVersion(99.0.0) = %v, want no refusal above max-tested", err)
 	}
-	endpoint := adapters.OpenCodeEndpointAboveMaxTested(above, "lmstudio/qwen/qwen3.8-27b", nil, "/Users/fixture")
 
-	for name, refusal := range map[string]error{"below-floor": belowFloor, "unreadable": unreadable, "endpoint-above-max-tested": endpoint} {
+	for name, refusal := range map[string]error{"below-floor": belowFloor, "unreadable": unreadable} {
 		t.Run(name, func(t *testing.T) {
 			if refusal == nil {
 				t.Fatal("the adapter raised no refusal")

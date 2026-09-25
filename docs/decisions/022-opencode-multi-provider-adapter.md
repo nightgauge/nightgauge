@@ -1555,10 +1555,24 @@ allowed is not needed.
 
 ### 20. Version policy
 
+> **Amendment, 2026-09-25 (owner decision).** Nightgauge never refuses to run,
+> blocks, gates, degrades or warns because OpenCode, Claude Code or any other
+> model harness or CLI is newer than the version it was tested against.
+> Operators update their harnesses daily. `max_tested` in every compat
+> manifest is information only, the version Nightgauge is "tested up to": the
+> doctor reports it as a note and docs/ADAPTER_MATRIX.md lists it. The
+> above-max-tested warning, the dispatch-time self-test, the refusal of an
+> endpoint dispatch above max-tested, its canary relaxation hook, and the
+> doctor's warning when the version differs from the last dispatch's are
+> removed. The minimum-version floor is unchanged. The bullets below that
+> described the removed behaviour are rewritten to match; the provider-key
+> collision the endpoint refusal cited is decided under "Endpoints are not
+> version-gated".
+
 The compat manifest (#1613) is the single source for the floor and the
-max-tested version; the doctor (#1627) and `PreDispatch` enforce it, through
-the same functions (`internal/execution/adapters/opencode_preflight.go`). A
-refusal is `adapter_incompatible`: it names the installed version and the
+max-tested version; the doctor (#1627) and `PreDispatch` enforce the floor,
+through the same functions (`internal/execution/adapters/opencode_preflight.go`).
+A refusal is `adapter_incompatible`: it names the installed version and the
 manifest's, and its remediation is the managed install,
 `npm i --prefix ~/.nightgauge/tools/opencode opencode-ai@<max-tested>`, with a
 `binary` pin (§ 7) to what it installs.
@@ -1578,57 +1592,37 @@ manifest's, and its remediation is the managed install,
 - **Floor: 1.18.30**, the version every observation here was made on. Below
   it, or with a version that cannot be read, dispatch fails closed before
   anything is created.
-- **Max-tested: 1.18.30.** Above it, dispatch warns and runs a self-test before
-  the first stage on each binary, version and per-run config, and records a
-  pass under `~/.nightgauge/opencode/self-test/`, so no later stage repeats it.
-  The self-test checks the per-run config and the argv without a model call:
-  `opencode debug config` under the `OPENCODE_CONFIG_CONTENT` the builder makes
-  for the stage must exit 0 and print a merged config that holds every key the
-  content sets, with its value, and `opencode run --help`, which 1.18.30
-  prints on stderr, must define every flag `BuildCommand` emits and list each
-  value it passes among the option's choices. A failure refuses the stage.
-  The behavioural checks of the observation method above (stdin delivery, the
-  `--format json` event types, `ask` auto-rejection, the absence of a TCP
-  listener and the project-config switch) need a model endpoint, so they are
-  #1639's scheduled canary against the newest release rather than a
-  dispatch-time check.
-- **Why the self-test compares keys.** #1627 assumed that `debug config` exits
+- **Max-tested (tested up to): 1.18.30.** Information only (amendment
+  above). A newer version dispatches exactly like a tested one: no warning, no
+  extra probe, no refusal. The behavioural checks of the observation method
+  above (stdin delivery, the `--format json` event types, `ask`
+  auto-rejection, the absence of a TCP listener and the project-config switch)
+  are #1639's scheduled canary against the newest release, which now runs the
+  real dispatch path with no relaxation.
+- **`debug config` and unknown keys.** #1627 assumed that `debug config` exits
   non-zero on an unknown key. Observed on 1.18.30
   (`internal/doctor/testdata/opencode-capture/`), it exits 1 on a value of the
   wrong type in `OPENCODE_CONFIG_CONTENT`, and exits 0 on an unknown top-level
-  key, which it drops without a word. A version that stopped accepting a key
-  Nightgauge sets would pass on the exit code alone, so the self-test also
-  requires every key in the merged output.
-- **Endpoints stop at max-tested.** The self-test cannot re-check the reserved
-  endpoint ids or the `lmstudio` exception (§ Endpoints). Which provider keys a
-  binary bundles and which keys its custom loaders claim are read from its
-  bundled catalog and source, and a stub provider observes neither.
-  Above max-tested, a dispatch to a model server the operator runs (a declared
-  endpoint, or the `lmstudio` or `ollama` key of § 1) is therefore refused
-  before spawn, and no endpoint block is written into any run's config. The
-  refusal names the installed version and max-tested, and its remediation is a
-  `binary` pin to a max-tested build. Hosted dispatch continues under the
-  warning and self-test above.
-  **The #1639 canary's own leg is the one exception**, and only there: this
-  same refusal is what would otherwise keep the daily/PR canary from ever
-  driving a real newer release through the endpoint the stub provider serves
-  on (`lmstudio`), leaving it unable to tell "new and working" from "new and
-  broken." `OpenCodeEndpointAboveMaxTested`'s refusal is skipped when a
-  package-level hook, `openCodeCanaryRelax`, is both non-nil and returns true
-  for the dispatched model; the self-test below still runs. The hook is set
-  only by `opencode_preflight_canary.go`, a file gated behind the `canary`
-  build tag no production build (`cmd/nightgauge`, the VS Code extension
-  bundle, `scripts/clean-install-e2e.sh`) ever adds, and even then only once
-  the explicit `NIGHTGAUGE_CANARY=true` signal `scripts/adapter-canary.sh`'s
-  `cmd_opencode_canary` sets is read at call time. A default build's
-  `openCodeCanaryRelax` is nil regardless of environment, so the refusal above
-  holds for every real dispatch;
-  `TestOpenCodeAboveMaxTestedRefusesAnEndpointEvenWithTheCanaryEnvSet`
-  (`opencode_preflight_test.go`, no build tag, run by the default
-  `go test ./...`) is the regression for that.
-- **Drift.** Every dispatch that passes records the binary and version it was
-  checked against in `~/.nightgauge/opencode/last-dispatch.json`, and the
-  doctor warns when the binary it resolves now reports another version.
+  key, which it drops without a word. The removed self-test relied on this;
+  the capture stays as evidence.
+- **Endpoints are not version-gated.** Until the amendment, a dispatch to a
+  model server the operator runs was refused on any version above
+  max-tested, because a newer build could bundle a provider key equal to a
+  declared endpoint id. That refusal is dropped, and not replaced by a runtime
+  catalog check, because: (1) it never detected a collision, it refused every
+  endpoint dispatch on every newer version; (2) OpenCode exposes no complete
+  list of its bundled provider keys (`opencode models` lists a hosted
+  provider only when one of its variables is set, and which variables those
+  are is itself read from the snapshot), so a check against the running
+  binary could not name a real collision reliably; (3) the harm the collision
+  was observed to cause, an environment credential sent to the endpoint, is
+  already cut by the complete endpoint blocks of § Endpoints (`env: []` and an
+  explicit `apiKey`), which do not depend on the version; and (4) the
+  reserved-id refusal at config load, against the captured catalog, still
+  catches every known collision.
+- **Drift.** Every dispatch that passes records the binary and version it ran
+  in `~/.nightgauge/opencode/last-dispatch.json`, and the doctor notes, for
+  information only, when the binary it resolves now reports another version.
 - **The doctor's catalog probe.** The doctor runs `opencode models` under the
   per-run config for `opencode.model`. For a declared endpoint's model and an
   `anthropic` model the config writes the model's own entry, so the listing
@@ -1645,7 +1639,7 @@ manifest's, and its remediation is the managed install,
   variables set, and one holding a model entry for it adds the model to the
   listing. So with the opt-in, a listing that lacks the model, empty or not,
   is a warning that says the probe left that config out, never a block.
-- Raising max-tested re-captures `testdata/opencode-cli/`, the reserved
+- Raising max-tested (re-verifying a newer version) re-captures `testdata/opencode-cli/`, the reserved
   endpoint ids and the `lmstudio` exception (§ Endpoints) included, and
   `internal/doctor/testdata/opencode-capture/`, in the same change, and
   re-reads the catalog snapshots `openCodeCatalogVersion` names:
@@ -1796,7 +1790,9 @@ Studio beside Ollama. Each is a named **endpoint** in `opencode.endpoints[]`
   `OPENCODE_MODELS_PATH` goes with every inherited `OPENCODE_*` variable (§ 8).
   No observed run wrote a catalog to its cache. A newer binary can bundle a key
   equal to an endpoint id, or give `lmstudio` a custom loader, and only a
-  re-capture shows it, so no endpoint is dispatched above max-tested (§ 20).
+  re-capture shows it. Endpoint dispatch is nevertheless not gated on the
+  version (§ 20, 2026-09-25 amendment): the complete blocks below cut the
+  credential binding whatever the catalog holds.
 
 - **Complete endpoint blocks.** Every provider block Nightgauge injects for a
   model server the operator runs, the `lmstudio` and `ollama` keys of § 1
@@ -3203,10 +3199,8 @@ issue's notes, this records what was built.
   in `--adapter` errors, but dispatching it takes a deliberate environment
   switch, and every such dispatch says what it lacks.
 - Two OpenCode behaviours contradicted the plan, and the decisions follow what
-  was observed. On a version above max-tested, § 20's self-test re-checks the
-  behaviours it lists before the first dispatch. It cannot re-check the
-  catalog behind the reserved endpoint ids, so endpoint dispatch stops at
-  max-tested until a re-capture raises it.
+  was observed. A version above max-tested is not gated (§ 20, 2026-09-25
+  amendment); #1639's canary exercises the newest release daily.
 - ADR-020 gains two reasons for a default to be off, security and privacy, each
   valid only when written down with its row.
 
