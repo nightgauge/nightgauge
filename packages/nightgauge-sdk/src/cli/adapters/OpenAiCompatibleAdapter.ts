@@ -113,9 +113,9 @@ export function resolveOpenAiCompatibleConfig(
   const p = PRESETS[name];
   const rawTimeout = env[`${p.envPrefix}_TIMEOUT_MS`];
   const parsedTimeout = rawTimeout ? parseInt(rawTimeout, 10) : NaN;
-  const baseUrl = (config.baseUrl ?? env[`${p.envPrefix}_BASE_URL`] ?? p.defaultBaseUrl)
-    .trim()
-    .replace(/\/+$/, "");
+  let baseUrl = (config.baseUrl ?? env[`${p.envPrefix}_BASE_URL`] ?? p.defaultBaseUrl).trim();
+  // A loop, not /\/+$/: that regex backtracks polynomially on many slashes.
+  while (baseUrl.endsWith("/")) baseUrl = baseUrl.slice(0, -1);
   const apiKeyEnv =
     config.apiKeyEnv ?? (env[`${p.envPrefix}_API_KEY_ENV`] || undefined) ?? p.defaultApiKeyEnv;
   return {
