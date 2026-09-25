@@ -642,6 +642,11 @@ type OpenCodeEndpointTarget struct {
 	// BaseURL is the server's OpenAI-compatible API root as the machine-tier
 	// config declares it. The probe requests it and never reports it.
 	BaseURL string
+	// APIKeyEnv names the environment variable holding the endpoint's
+	// credential (OpenCodeEndpoint.APIKeyEnv), or is empty. When set, the
+	// generic probe sends its value as a Bearer token, the same credential a
+	// run sends (#2158); the value is never reported.
+	APIKeyEnv string
 	// Legacy is true only for the one endpoint the flat machine-tier keys
 	// describe (OpenCodeEndpoint.Legacy). It alone gets the LM-Studio/Ollama
 	// -specific probe; every declared opencode.endpoints[] entry, whatever
@@ -696,9 +701,9 @@ type OpenCodeEndpointReadiness struct {
 // endpoint per call, so a caller with
 // several endpoints (#1678) probes each.
 //
-// Only the server behind target.BaseURL is requested, with no credential, no
-// proxy, no redirect followed, no retry, and OpenCodeReadinessTimeout per
-// request. LM Studio is read from GET /api/v0/models (state and
+// Only the server behind target.BaseURL is requested, with no proxy, no redirect followed, no retry, and OpenCodeReadinessTimeout per
+// request, and with no credential except the endpoint's own api_key_env on
+// the generic probe (#2158). LM Studio is read from GET /api/v0/models (state and
 // loaded_context_length); Ollama from POST /api/show (num_ctx) and GET
 // /api/ps (whether the model is loaded). client nil uses such a client.
 func ProbeOpenCodeEndpoint(client *http.Client, target OpenCodeEndpointTarget, model string, injectedContext int) OpenCodeEndpointReadiness {
@@ -718,7 +723,19 @@ func ProbeOpenCodeEndpoint(client *http.Client, target OpenCodeEndpointTarget, m
 		// OpenAI-compatible probe regardless of its Kind label: lm-studio and
 		// ollama are optional labels there, with no protocol-specific probe
 		// of their own (2026-09-20 scope narrowing, ADR-022 § Endpoints).
-		probeOpenAICompatible(client, root, target.ID, &r)
+		// The generic probe addresses the API under base_url's own path
+		// (".../v1/models"), unlike the legacy probes, which read the
+		// server's native API at its root (#2158).
+		apiRoot := root + strings.TrimRight(u.Path, "/")
+		bearer := ""
+		if target.APIKeyEnv != "" {
+			bearer = os.Getenv(target.APIKeyEnv)
+			if bearer == "" {
+				r.Problem = fmt.Sprintf("endpoint %s declares api_key_env %s, but that variable is not set in this environment", target.ID, target.APIKeyEnv)
+				return r
+			}
+		}
+		probeOpenAICompatible(client, apiRoot, bearer, target.ID, &r)
 	case target.Kind == "lm-studio":
 		probeLMStudio(client, root, target.ID, &r)
 	case target.Kind == "ollama":
@@ -736,8 +753,8 @@ func ProbeOpenCodeEndpoint(client *http.Client, target OpenCodeEndpointTarget, m
 // OpenAI-compatible /models response carries one, and the 2026-09-20 scope
 // narrowing drops the loaded-vs-declared-context comparison for this probe
 // rather than half-trust a server-reported number (LoadedContext stays 0).
-func probeOpenAICompatible(client *http.Client, root, id string, r *OpenCodeEndpointReadiness) {
-	status, body, failure := openCodeReadinessRequest(client, http.MethodGet, root+"/models", nil)
+func probeOpenAICompatible(client *http.Client, root, bearer, id string, r *OpenCodeEndpointReadiness) {
+	status, body, failure := openCodeReadinessRequest(client, http.MethodGet, root+"/models", nil, bearer)
 	switch {
 	case status == 0:
 		r.Problem = fmt.Sprintf("endpoint %s is not answering (%s): start the model server, or correct its base_url", id, failure)
@@ -793,13 +810,18 @@ func openCodeReadinessClient() *http.Client {
 // openCodeReadinessRequest sends one request and returns the status and body.
 // A transport failure is described by its kind alone, because Go's error text
 // quotes the URL.
-func openCodeReadinessRequest(client *http.Client, method, target string, body io.Reader) (int, []byte, string) {
+// bearer, when non-empty, is sent as the Authorization header and never
+// appears in any returned string.
+func openCodeReadinessRequest(client *http.Client, method, target string, body io.Reader, bearer string) (int, []byte, string) {
 	req, err := http.NewRequest(method, target, body)
 	if err != nil {
 		return 0, nil, "the request could not be built"
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -842,7 +864,7 @@ type lmStudioModel struct {
 }
 
 func probeLMStudio(client *http.Client, root, id string, r *OpenCodeEndpointReadiness) {
-	status, body, failure := openCodeReadinessRequest(client, http.MethodGet, root+"/api/v0/models", nil)
+	status, body, failure := openCodeReadinessRequest(client, http.MethodGet, root+"/api/v0/models", nil, "")
 	switch {
 	case status == 0:
 		r.Problem = fmt.Sprintf("endpoint %s is not answering (%s): start LM Studio's server, or correct opencode.base_url", id, failure)
@@ -892,7 +914,7 @@ func probeLMStudio(client *http.Client, root, id string, r *OpenCodeEndpointRead
 
 func probeOllama(client *http.Client, root, id string, r *OpenCodeEndpointReadiness) {
 	if r.Model == "" {
-		status, _, failure := openCodeReadinessRequest(client, http.MethodGet, root+"/api/tags", nil)
+		status, _, failure := openCodeReadinessRequest(client, http.MethodGet, root+"/api/tags", nil, "")
 		if status == 0 {
 			r.Problem = fmt.Sprintf("endpoint %s is not answering (%s): start Ollama, or correct opencode.base_url", id, failure)
 			return
@@ -905,7 +927,7 @@ func probeOllama(client *http.Client, root, id string, r *OpenCodeEndpointReadin
 		return
 	}
 	payload, _ := json.Marshal(map[string]string{"model": r.Model})
-	status, body, failure := openCodeReadinessRequest(client, http.MethodPost, root+"/api/show", bytes.NewReader(payload))
+	status, body, failure := openCodeReadinessRequest(client, http.MethodPost, root+"/api/show", bytes.NewReader(payload), "")
 	if status == 0 {
 		r.Problem = fmt.Sprintf("endpoint %s is not answering (%s): start Ollama, or correct opencode.base_url", id, failure)
 		return
@@ -933,7 +955,7 @@ func probeOllama(client *http.Client, root, id string, r *OpenCodeEndpointReadin
 
 	// Ollama loads a model on its first request, so a model that is not
 	// loaded does not stop a stage; the context it loads with does matter.
-	if status, body, _ := openCodeReadinessRequest(client, http.MethodGet, root+"/api/ps", nil); status == http.StatusOK {
+	if status, body, _ := openCodeReadinessRequest(client, http.MethodGet, root+"/api/ps", nil, ""); status == http.StatusOK {
 		var ps struct {
 			Models []struct {
 				Name          string `json:"name"`

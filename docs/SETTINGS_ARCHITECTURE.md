@@ -338,6 +338,48 @@ opencode:
 - Timeouts are durations such as `3m`; a bare number is read as nanoseconds
   and refused.
 
+#### Several servers, or any OpenAI-compatible server: `endpoints[]`
+
+The flat keys above describe one LM Studio or Ollama server. Any other
+OpenAI-compatible server (MTPLX, oMLX, vLLM, llama.cpp, LocalAI), or more than
+one server, is declared as a named entry under `opencode.endpoints`. A stage
+names a model on it as `<id>/<model id>`.
+
+```yaml
+opencode:
+  model: local/qwen3.8-27b # default model: <endpoint id>/<model id>
+  endpoints:
+    - id: local # lowercase, digits and -; the OpenCode provider key
+      provider: openai-compatible # or the labels lm-studio / ollama
+      base_url: http://127.0.0.1:8000/v1 # probed at <base_url>/models
+      api_key_env: LOCAL_MODEL_KEY # optional: variable NAME, never the key
+      self_hosted: true # priced at $0; false for a proxy to a hosted API
+      max_concurrency: 1 # declared slots, shown by the doctor
+      limit: # required here: an endpoint is never probed for its window
+        context: 131072 # at or below what the server loads
+        output: 8192
+      models:
+        - id: qwen3.8-27b
+    - id: local-2
+      provider: openai-compatible
+      base_url: http://model-box.lan:8000/v1 # must resolve to a private address
+      allow_lan: true # required for a host that is not this machine
+      limit:
+        context: 131072
+      models:
+        - id: qwen3.8-27b
+```
+
+- `limit` must be set: unlike the flat endpoint, an `endpoints[]` entry is
+  never asked for its loaded window, so the declared value is the source of
+  truth.
+- `api_key_env` is sent as a Bearer token by both a run and the readiness
+  probe (`nightgauge doctor`, and the check before each dispatch). A declared
+  variable that is not set is reported by name; its value never is.
+- `allow_lan` admits a private-network address only. A server on another
+  machine over plain `http` is reported by the doctor, because a stage's
+  prompts and repository content cross the network unencrypted.
+
 ## Tier 3: Runtime
 
 Ephemeral state the UI flips often. Stored in VSCode mementos

@@ -14,6 +14,16 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`nightgauge doctor` and the pre-dispatch check now reach OpenAI-compatible
+  endpoints correctly (#2158).** An `opencode.endpoints[]` server was probed
+  at `/models` instead of its base URL's `/v1/models`, so a healthy MTPLX,
+  vLLM or llama.cpp server reported HTTP 404 and was marked not ready. The
+  probe also now sends the endpoint's `api_key_env` credential, as a run
+  does, so a key-protected server no longer reports HTTP 401. The
+  `endpoints[]` block is now documented in `SETTINGS_ARCHITECTURE.md`.
+
 ## [0.4.8] - 2026-09-25
 
 ### Security

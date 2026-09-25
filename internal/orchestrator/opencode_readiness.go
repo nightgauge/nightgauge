@@ -111,10 +111,11 @@ func resolveOpenCodeReadiness(worktreeDir, model string) openCodeReadinessVerdic
 	}
 
 	result := adapters.ProbeOpenCodeEndpoint(openCodeReadinessHTTPClient, adapters.OpenCodeEndpointTarget{
-		ID:      target.ID,
-		Kind:    target.Provider,
-		BaseURL: target.BaseURL,
-		Legacy:  target.Legacy,
+		ID:        target.ID,
+		Kind:      target.Provider,
+		BaseURL:   target.BaseURL,
+		APIKeyEnv: target.APIKeyEnv,
+		Legacy:    target.Legacy,
 	}, bareID, target.Limit.Context)
 
 	if !result.Reachable {
