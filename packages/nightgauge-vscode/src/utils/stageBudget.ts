@@ -68,7 +68,6 @@ let registeredResolver: StageBudgetResolver | null = null;
  */
 export function setStageBudgetResolver(resolver: StageBudgetResolver | null): void {
   registeredResolver = resolver;
-  resolutions.clear();
 }
 
 /** The registered resolver, or null. */
@@ -76,45 +75,14 @@ export function getStageBudgetResolver(): StageBudgetResolver | null {
   return registeredResolver;
 }
 
-type Resolution = { ok: true; budgets: StageBudgets } | { ok: false; error: string };
-
 /**
- * The last resolution of each dispatch shape. `runStageSkillHeadless` is
- * synchronous by contract, so the first dispatch of a shape resolves while
- * its process starts; every later dispatch of the same shape is armed, and
- * refused when it must be, before its process is spawned.
- */
-const resolutions = new Map<string, Resolution>();
-
-function resolutionKey(request: StageBudgetRequest): string {
-  return JSON.stringify([request.repo, request.stage, request.adapter, request.model]);
-}
-
-/** The cached resolution for a dispatch shape, or undefined. */
-export function cachedStageBudgetResolution(request: StageBudgetRequest): Resolution | undefined {
-  return resolutions.get(resolutionKey(request));
-}
-
-/**
- * Resolve a dispatch's budgets through the registered resolver, caching the
- * outcome. Rejects when no resolver is registered or the resolver fails.
+ * Resolve a dispatch's budgets through the registered resolver. Rejects when
+ * no resolver is registered or the resolver fails.
  */
 export async function resolveStageBudgets(request: StageBudgetRequest): Promise<StageBudgets> {
   const resolver = registeredResolver;
   if (!resolver) throw new Error("no stage budget resolver is registered");
-  try {
-    const budgets = await resolver(request);
-    if (resolver === registeredResolver) {
-      resolutions.set(resolutionKey(request), { ok: true, budgets });
-    }
-    return budgets;
-  } catch (err) {
-    const error = err instanceof Error ? err.message : String(err);
-    if (resolver === registeredResolver) {
-      resolutions.set(resolutionKey(request), { ok: false, error });
-    }
-    throw err instanceof Error ? err : new Error(error);
-  }
+  return resolver(request);
 }
 
 /** One stage's first budget breach. */
@@ -275,7 +243,15 @@ export class StageBudgetEnforcer {
    * event, with `step_finish` carrying the step's reason and tokens.
    */
   private observeActivity(line: string): void {
-    let data: { event?: unknown; reason?: unknown; tokens?: Partial<StepTokens> } | undefined;
+    let data:
+      | {
+          event?: unknown;
+          reason?: unknown;
+          tokens?: Partial<StepTokens>;
+          turn?: unknown;
+          asksAnother?: unknown;
+        }
+      | undefined;
     try {
       data = (JSON.parse(line) as { data?: typeof data }).data;
     } catch {
@@ -290,6 +266,16 @@ export class StageBudgetEnforcer {
     } else if (data.event === "step_start") {
       // A step begun past the budget is a turn begun.
       this.checkTurns(true);
+    } else if (data.turn === true) {
+      // codex, gemini and grok: the SDK stage CLI marks the turns the Go
+      // executor counts (forwardCliTurnActivity).
+      this.turns++;
+      this.lastAsksAnother = data.asksAnother === true;
+      this.checkTurns(false);
+    } else if (data.asksAnother === true) {
+      // grok: a tool call asks for another turn.
+      this.lastAsksAnother = true;
+      this.checkTurns(false);
     }
   }
 

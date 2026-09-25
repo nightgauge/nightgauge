@@ -124,7 +124,7 @@ export class GeminiAdapter implements ICliAdapter {
     );
   }
 
-  async createQueryFunction(_options?: QueryFunctionOptions): Promise<SDKQueryFunction> {
+  async createQueryFunction(options?: QueryFunctionOptions): Promise<SDKQueryFunction> {
     const command = process.env.NIGHTGAUGE_GEMINI_CLI_COMMAND ?? this.cliCommand;
     const args = parseCliArgs(process.env.NIGHTGAUGE_GEMINI_CLI_ARGS, [
       "--output-format",
@@ -148,6 +148,7 @@ export class GeminiAdapter implements ICliAdapter {
       command,
       args,
       adapter: this.name,
+      onActivity: options?.onActivity,
       promptDelivery: "positional",
     });
   }

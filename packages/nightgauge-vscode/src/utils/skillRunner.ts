@@ -35,6 +35,8 @@
 
 import * as vscode from "vscode";
 import { spawn, execFileSync, type ChildProcess } from "child_process";
+import { EventEmitter } from "events";
+import { countOpenCodeCompactions } from "./openCodeEvents";
 import * as fs from "fs";
 import * as path from "path";
 import { pipelineStateDir, isUsableWorkspaceRoot } from "./cloneLayout";
@@ -95,13 +97,13 @@ import { BinaryResolver } from "../services/BinaryResolver";
 import { killProcessTree, DescendantTracker } from "./processTree";
 import {
   StageBudgetEnforcer,
-  cachedStageBudgetResolution,
   getStageBudgetResolver,
   resolveStageBudgets,
   stageBudgetErrorMessage,
   stageBudgetUnresolvedMessage,
   terminateStageProcessTree,
   type StageBudgetBreach,
+  type StageBudgetRequest,
   type StageBudgets,
   type StageTreeTermination,
 } from "./stageBudget";
@@ -313,6 +315,11 @@ export interface SkillRunResult {
   peakStepInputTokens?: number;
   /** The context window the stage ran with (#1668); absent when unknown. */
   contextWindowTokens?: number;
+  /**
+   * Compaction events the OpenCode plugin recorded for the stage (#1668);
+   * absent when the stage had no events file to count.
+   */
+  compactionCount?: number;
   success: boolean;
   exitCode: number | null;
   error?: Error;
@@ -3915,7 +3922,7 @@ function errorStageDiagnostic(message: string, ...args: unknown[]): void {
  * @param injectedSkillContent - Optional platform-resolved SKILL.md body (Issue #1473)
  * @returns Handle to control the process
  */
-export function runStageSkillHeadless(
+function runStageSkillHeadlessImpl(
   stage: PipelineStage,
   issueNumber?: number,
   callbacks?: SkillRunCallbacks,
@@ -4004,6 +4011,8 @@ export function runStageSkillHeadless(
    */
   adapterPinRequested?: boolean
 ): SkillProcessHandle {
+  // The stage budget gate this call runs under (#1668); see runStageSkillHeadless.
+  const dispatchGate = takeDispatchGate();
   // When a pinned workspace root is provided (from HeadlessOrchestrator),
   // use it directly to prevent repo-switch mid-pipeline from changing CWD.
   // @see Issue #1592 - Pin workspace root for duration of pipeline run
@@ -5151,6 +5160,15 @@ export function runStageSkillHeadless(
             ? opencodeEnv.NIGHTGAUGE_MODEL
             : undefined) || modelDecision.model;
 
+  // A budget probe (#1668) stops here, before anything this dispatch does
+  // outside itself: the dispatch shape is all it wanted.
+  if (dispatchGate?.mode === "probe") {
+    return probeResult({
+      request: { repo: targetRepo ?? "", stage, adapter, model: launchedModel ?? "" },
+      zeroCostHint: !!launchedModel && isLocalExecution(adapter, launchedModel),
+    });
+  }
+
   // ── Worktree write containment: baseline (Issue #129) ─────────────────
   // Snapshot the dirty state of every configured workspace repo the stage does
   // NOT own, so the close handler can tell what the stage wrote from what the
@@ -5250,6 +5268,31 @@ export function runStageSkillHeadless(
     reconcileOpenCodeSpawnEnv(spawnEnv, opencodeEnv.NIGHTGAUGE_MODEL);
   }
 
+  // The Nightgauge OpenCode plugin writes its events file (#1641), and with
+  // it the compaction count (#1653), beside NIGHTGAUGE_OUTPUT_FILE and named
+  // for NIGHTGAUGE_RUN_ID. An OpenCode dispatch with a run identity gets a
+  // fresh directory of its own for it (#1668); any other dispatch passes no
+  // output file, so no value inherited from an outer run can point it
+  // elsewhere.
+  delete spawnEnv.NIGHTGAUGE_OUTPUT_FILE;
+  let openCodeEventsDir: string | undefined;
+  if (adapter === "opencode" && runId) {
+    try {
+      const dir = path.join(
+        workspaceRoot,
+        ".nightgauge",
+        "pipeline",
+        "opencode-events",
+        `${stage}-${issueNumber ?? "no-issue"}-${Date.now()}-${process.pid}`
+      );
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      openCodeEventsDir = dir;
+      spawnEnv.NIGHTGAUGE_OUTPUT_FILE = path.join(dir, "stage-output.log");
+    } catch {
+      // Telemetry: without the directory the stage runs uncounted.
+    }
+  }
+
   // The dispatch's model decision, reported ONCE and synchronously before the
   // spawn — so a stage killed early still has its model on record (#367).
   //
@@ -5262,48 +5305,41 @@ export function runStageSkillHeadless(
   callbacks?.onModelResolved?.(stage, modelDecision.model, adapter, modelDecision.source);
 
   // ── Non-USD stage budgets (#1668) ──────────────────────────────────────
-  // The Go binary resolves the stage's turn, wall-clock and token ceilings
-  // (#1652) over pipeline.resolveStageBudgets; nothing here re-implements the
-  // defaults or the zero-cost floor. This function is synchronous by
-  // contract, so a dispatch shape the extension has resolved before is armed
-  // (and its native turn cap passed) before spawn, and a first dispatch is
-  // armed the moment its resolution arrives; the counters run from spawn
-  // either way, so nothing the stream shows in between goes unjudged.
-  const stageBudgetRequest = {
-    repo: targetRepo ?? "",
-    stage,
-    adapter,
-    model: launchedModel ?? "",
-  };
-  const stageBudgetActive = getStageBudgetResolver() !== null;
+  // The Go binary resolved the stage's turn, wall-clock and token ceilings
+  // (#1652) over pipeline.resolveStageBudgets before this call
+  // (runStageSkillHeadless); nothing here re-implements the defaults or the
+  // zero-cost floor. A stage on a local model whose budgets did not resolve
+  // has no binding bound, since no USD cap can stop a $0 model, so it is
+  // refused before spawn.
+  const stageBudgetOutcome = dispatchGate?.mode === "run" ? dispatchGate.outcome : undefined;
   const stageBudgetZeroCostHint = !!launchedModel && isLocalExecution(adapter, launchedModel);
-  const cachedStageBudget = stageBudgetActive
-    ? cachedStageBudgetResolution(stageBudgetRequest)
-    : undefined;
-  if (cachedStageBudget && !cachedStageBudget.ok && stageBudgetZeroCostHint) {
-    // A zero-cost stage whose budgets do not resolve has no binding bound:
-    // no USD cap can stop a $0 model. Refused before spawn.
-    const error = new Error(
-      stageBudgetUnresolvedMessage(stage, launchedModel ?? "", cachedStageBudget.error)
+  const resolvedStageBudget = stageBudgetOutcome?.ok ? stageBudgetOutcome.budgets : undefined;
+  if (stageBudgetOutcome && !stageBudgetOutcome.ok) {
+    if (stageBudgetZeroCostHint) {
+      const error = new Error(
+        stageBudgetUnresolvedMessage(stage, launchedModel ?? "", stageBudgetOutcome.error)
+      );
+      callbacks?.onStderr?.(`${error.message}\n`);
+      callbacks?.onError?.(error);
+      callbacks?.onComplete?.({ success: false, exitCode: null, error });
+      return {
+        process: null as unknown as ChildProcess,
+        stage,
+        issueNumber,
+        kill: () => {},
+      };
+    }
+    callbacks?.onStderr?.(
+      `[stage-budget] warning: ${stage}'s stage budgets did not resolve ` +
+        `(${stageBudgetOutcome.error}); it runs under its USD caps only (#1668)\n`
     );
-    callbacks?.onStderr?.(`${error.message}\n`);
-    callbacks?.onError?.(error);
-    callbacks?.onComplete?.({ success: false, exitCode: null, error });
-    // Resolve again for the next dispatch: the failure may have been transient.
-    void resolveStageBudgets(stageBudgetRequest).catch(() => undefined);
-    return {
-      process: null as unknown as ChildProcess,
-      stage,
-      issueNumber,
-      kill: () => {},
-    };
   }
   // Only this dispatch's own budget may set the SDK's turn cap, never a value
   // inherited from an outer run's environment.
   delete spawnEnv.NIGHTGAUGE_STAGE_MAX_TURNS;
-  if (cachedStageBudget?.ok && cachedStageBudget.budgets.maxTurns > 0) {
+  if (resolvedStageBudget && resolvedStageBudget.maxTurns > 0) {
     // The adapter's native turn cap, where it has one.
-    const budgetTurns = cachedStageBudget.budgets.maxTurns;
+    const budgetTurns = resolvedStageBudget.maxTurns;
     if (adapter === "claude") {
       const at = args.indexOf("--max-turns");
       if (at >= 0 && at + 1 < args.length) {
@@ -5313,7 +5349,9 @@ export function runStageSkillHeadless(
         args.push("--max-turns", String(budgetTurns));
       }
     } else {
-      // OpenCode's `steps` cap, through the SDK stage CLI's per-run config.
+      // Through the SDK stage CLI: OpenCode's `steps` cap and grok's
+      // --max-turns; codex and gemini have no native cap, so the stream
+      // count is their bound.
       spawnEnv.NIGHTGAUGE_STAGE_MAX_TURNS = String(budgetTurns);
     }
   }
@@ -5832,28 +5870,8 @@ export function runStageSkillHeadless(
     );
     stageBudgetEnforcer.arm(budgets);
   };
-  if (cachedStageBudget?.ok) {
-    armStageBudget(cachedStageBudget.budgets, true);
-  }
-  if (stageBudgetActive) {
-    const armedFromCache = cachedStageBudget?.ok === true;
-    resolveStageBudgets(stageBudgetRequest).then(
-      (budgets) => {
-        if (!armedFromCache && !stageCompleted) armStageBudget(budgets, true);
-      },
-      (err: unknown) => {
-        const reason = err instanceof Error ? err.message : String(err);
-        if (armedFromCache || stageCompleted) return;
-        if (stageBudgetZeroCostHint) {
-          stopStageForBudget(stageBudgetUnresolvedMessage(stage, launchedModel ?? "", reason));
-          return;
-        }
-        callbacks?.onStderr?.(
-          `[stage-budget] warning: ${stage}'s stage budgets did not resolve (${reason}); ` +
-            `it runs under its USD caps only (#1668)\n`
-        );
-      }
-    );
+  if (resolvedStageBudget) {
+    armStageBudget(resolvedStageBudget, true);
   }
   // Bash forensics are a bounded ring rather than a single slot (#156): the
   // record is the only evidence that outlives the stage, and one command deep
@@ -7761,6 +7779,17 @@ export function runStageSkillHeadless(
       }
     }
 
+    // The stage's compaction count (#1668), then its events directory goes.
+    let compactionCount: number | undefined;
+    if (openCodeEventsDir && runId) {
+      compactionCount = countOpenCodeCompactions(openCodeEventsDir, runId);
+      try {
+        fs.rmSync(openCodeEventsDir, { recursive: true, force: true });
+      } catch {
+        /* best-effort */
+      }
+    }
+
     // A stage stopped at a stage budget (#1668) fails with the reason #1652
     // stamps, once its whole process tree is verified gone.
     let stageBudgetError: Error | undefined;
@@ -7788,6 +7817,7 @@ export function runStageSkillHeadless(
       ...(stageBudgetEnforcer.contextWindowTokens > 0
         ? { contextWindowTokens: stageBudgetEnforcer.contextWindowTokens }
         : {}),
+      ...(compactionCount !== undefined ? { compactionCount } : {}),
       wipCommitSha,
       tokenUsage: bookedUsage?.usage,
       costEstimated: bookedUsage?.estimated || undefined,
@@ -7950,6 +7980,128 @@ export function runStageSkillHeadless(
  * @param _callbacks - Not used in terminal mode
  * @returns The terminal instance
  */
+/** How long a dispatch waits for its stage budgets before spawn (#1668). */
+export const STAGE_BUDGET_RESOLVE_TIMEOUT_MS = 5_000;
+
+type StageBudgetOutcome = { ok: true; budgets: StageBudgets } | { ok: false; error: string };
+
+type DispatchGate = { mode: "probe" } | { mode: "run"; outcome: StageBudgetOutcome | undefined };
+
+interface DispatchProbe {
+  readonly __stageBudgetProbe: true;
+  request: StageBudgetRequest;
+  zeroCostHint: boolean;
+}
+
+let pendingDispatchGate: DispatchGate | undefined;
+
+/** The gate the next impl call runs under; consumed on read. */
+function takeDispatchGate(): DispatchGate | undefined {
+  const gate = pendingDispatchGate;
+  pendingDispatchGate = undefined;
+  return gate;
+}
+
+function probeResult(probe: Omit<DispatchProbe, "__stageBudgetProbe">): SkillProcessHandle {
+  return { __stageBudgetProbe: true, ...probe } as unknown as SkillProcessHandle;
+}
+
+function isProbe(value: unknown): value is DispatchProbe {
+  return (value as Partial<DispatchProbe> | null)?.__stageBudgetProbe === true;
+}
+
+function runGated(
+  gate: DispatchGate,
+  args: Parameters<typeof runStageSkillHeadlessImpl>
+): SkillProcessHandle {
+  pendingDispatchGate = gate;
+  try {
+    return runStageSkillHeadlessImpl(...args);
+  } finally {
+    pendingDispatchGate = undefined;
+  }
+}
+
+async function resolveBudgetOutcome(request: StageBudgetRequest): Promise<StageBudgetOutcome> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const budgets = await Promise.race([
+      resolveStageBudgets(request),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`no answer within ${STAGE_BUDGET_RESOLVE_TIMEOUT_MS}ms`)),
+          STAGE_BUDGET_RESOLVE_TIMEOUT_MS
+        );
+      }),
+    ]);
+    return { ok: true, budgets };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+/**
+ * Run a pipeline stage headlessly: see runStageSkillHeadlessImpl for the
+ * parameters. When a stage budget resolver is registered (#1668), the
+ * dispatch's budget is fetched from the Go binary BEFORE its process is
+ * spawned: a silent probe pass resolves the dispatch's adapter and model,
+ * the budget is fetched with a short timeout, and only then is the stage
+ * dispatched with it. The handle is returned at once; its process is bound
+ * when the stage spawns, and killing it before then cancels the dispatch.
+ */
+export function runStageSkillHeadless(
+  ...args: Parameters<typeof runStageSkillHeadlessImpl>
+): SkillProcessHandle {
+  if (getStageBudgetResolver() === null) {
+    return runGated({ mode: "run", outcome: undefined }, args);
+  }
+  const [stage, issueNumber, callbacks] = args;
+  const probeArgs = [...args] as Parameters<typeof runStageSkillHeadlessImpl>;
+  probeArgs[2] = {};
+  const probe = runGated({ mode: "probe" }, probeArgs);
+  if (!isProbe(probe)) {
+    // The dispatch ends before spawn whatever its budget (no workspace, an
+    // unavailable adapter, ...): run it for real so it reports that itself.
+    return runGated({ mode: "run", outcome: undefined }, args);
+  }
+
+  let cancelled = false;
+  const placeholder = new EventEmitter() as ChildProcess;
+  const processKey = `${stage}-${issueNumber ?? "no-issue"}`;
+  const handle: SkillProcessHandle = {
+    process: placeholder,
+    stage,
+    issueNumber,
+    kill: () => {
+      placeholder.kill("SIGKILL");
+    },
+  };
+  placeholder.kill = ((sig?: NodeJS.Signals | number) => {
+    if (cancelled) return false;
+    cancelled = true;
+    if (activeProcesses.get(processKey) === handle) activeProcesses.delete(processKey);
+    const error = new Error(`stage ${stage} was cancelled before it started`);
+    callbacks?.onComplete?.({ success: false, exitCode: null, error });
+    setImmediate(() => placeholder.emit("exit", null, sig ?? "SIGTERM"));
+    return true;
+  }) as ChildProcess["kill"];
+  activeProcesses.set(processKey, handle);
+
+  void resolveBudgetOutcome(probe.request).then((outcome) => {
+    if (cancelled) return;
+    if (activeProcesses.get(processKey) === handle) activeProcesses.delete(processKey);
+    const real = runGated({ mode: "run", outcome }, args);
+    const pendingListeners = placeholder;
+    Object.assign(handle, real);
+    if (real.process) {
+      real.process.once("exit", (code, sig) => pendingListeners.emit("exit", code, sig));
+    }
+  });
+  return handle;
+}
+
 export function runStageSkill(
   stage: PipelineStage,
   issueNumber?: number,

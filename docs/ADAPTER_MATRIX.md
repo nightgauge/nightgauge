@@ -462,6 +462,15 @@ fabricating a count. See [Gap #2](#gap-2-copilot-stream-parsing-model-control-an
 for what remains: a live confirmation of the footer wording, not the token
 question.
 
+**Stage turn budget (#1652, #1668):** copilot has no turn boundary to count.
+It runs with `--allow-all-tools` and prints plain text (no `--output-format`
+JSON mode is passed), and the only structure in that text is the stats footer
+printed once at exit, which `summarizeCopilotOutput()` reads after the process
+ends. Neither the Go executor (`countTurn` in
+`internal/execution/stage_budget.go`) nor the extension counts copilot turns,
+so its stage is bounded by the wall-clock budget and its stage timeout. It
+emits no token counts either (above), so the token budget cannot bind it.
+
 **Go support:** `CopilotAdapter` is registered in the Go execution layer and its
 plain-text stats stream is parsed there. Live entitlement-backed verification
 is still pending.

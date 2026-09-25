@@ -15207,7 +15207,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             // so the "complete" notify carries it to RecordStageContext.
             if (
               this.stateService &&
-              (result.peakStepInputTokens !== undefined || result.contextWindowTokens !== undefined)
+              (result.peakStepInputTokens !== undefined ||
+                result.contextWindowTokens !== undefined ||
+                result.compactionCount !== undefined)
             ) {
               try {
                 await this.stateService.updateTokens({
@@ -15216,6 +15218,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                   stage,
                   peakStepInputTokens: result.peakStepInputTokens,
                   contextWindowTokens: result.contextWindowTokens,
+                  compactionCount: result.compactionCount,
                 });
               } catch (err) {
                 this.logger.warn("Failed to record stage context telemetry", { stage, err });

@@ -196,7 +196,7 @@ export class CodexAdapter implements ICliAdapter {
       args.push("-c", `model_reasoning_effort=${reasoningEffort}`);
     }
 
-    return createCliQueryFn({ command, args, adapter: this.name });
+    return createCliQueryFn({ command, args, adapter: this.name, onActivity: options?.onActivity });
   }
 
   getDefaultArgs(): string[] {

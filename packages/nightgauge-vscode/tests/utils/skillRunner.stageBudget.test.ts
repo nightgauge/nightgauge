@@ -18,6 +18,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { spawn } from "child_process";
 import * as fs from "fs";
+import { uuidV7 } from "@nightgauge/sdk";
 
 vi.mock("vscode", () => ({
   workspace: {
@@ -96,7 +97,11 @@ vi.mock("../../src/services/RepositoryContextLoader", () => ({
   },
 }));
 
-import { runStageSkillHeadless, killAllActiveProcesses } from "../../src/utils/skillRunner";
+import {
+  runStageSkillHeadless,
+  killAllActiveProcesses,
+  STAGE_BUDGET_RESOLVE_TIMEOUT_MS,
+} from "../../src/utils/skillRunner";
 import type { SkillRunResult } from "../../src/utils/skillRunner";
 import {
   StageBudgetEnforcer,
@@ -232,6 +237,46 @@ describe("StageBudgetEnforcer replaying an OpenCode stream (#1668)", () => {
   });
 });
 
+describe("StageBudgetEnforcer counting SDK turn activity (#1668)", () => {
+  const turnLine = (
+    adapter: string,
+    event: string,
+    turn: boolean | undefined,
+    asksAnother: boolean
+  ) =>
+    JSON.stringify({
+      level: "debug",
+      message: "adapter activity",
+      data: { adapter, event, ...(turn !== undefined ? { turn } : {}), asksAnother },
+    });
+
+  it.each([
+    ["codex", "item.completed"],
+    ["gemini", "tool_use"],
+  ])("%s: stops at the turn that reaches the budget and asks for another", (adapter, event) => {
+    const breaches: StageBudgetBreach[] = [];
+    const e = new StageBudgetEnforcer({ format: "sdk", onBreach: (b) => breaches.push(b) });
+    e.start();
+    e.arm({ ...BUDGETS, maxTurns: 3 });
+    for (let i = 0; i < 2; i++) e.observeLine(turnLine(adapter, event, true, true));
+    expect(breaches).toEqual([]);
+    e.observeLine(turnLine(adapter, event, true, true));
+    expect(breaches).toEqual([{ dimension: "turns", observed: 3, ceiling: 3 }]);
+  });
+
+  it("grok: a usage event is a turn; a tool call after the last allowed turn stops it", () => {
+    const breaches: StageBudgetBreach[] = [];
+    const e = new StageBudgetEnforcer({ format: "sdk", onBreach: (b) => breaches.push(b) });
+    e.start();
+    e.arm({ ...BUDGETS, maxTurns: 2 });
+    e.observeLine(turnLine("grok", "usage", true, false));
+    e.observeLine(turnLine("grok", "usage", true, false));
+    expect(breaches).toEqual([]);
+    e.observeLine(turnLine("grok", "tool_call", undefined, true));
+    expect(breaches).toEqual([{ dimension: "turns", observed: 2, ceiling: 2 }]);
+  });
+});
+
 // ── The real dispatch path ────────────────────────────────────────────────
 
 const originalEnv = process.env;
@@ -340,18 +385,30 @@ describe("runStageSkillHeadless under a stage budget (#1668)", () => {
     expect(result.signalSource).toBe("stage-budget");
   });
 
-  it("passes a resolved turn budget to OpenCode's steps cap on the next dispatch", async () => {
-    setStageBudgetResolver(async () => ({ ...BUDGETS, maxTurns: 17 }));
-    dispatch();
+  it("resolves the budget before spawn and passes the turn budget as OpenCode's steps cap", async () => {
+    let answer: (b: StageBudgets) => void = () => {};
+    setStageBudgetResolver(() => new Promise<StageBudgets>((resolve) => (answer = resolve)));
+    const handle = dispatch();
     await flush();
-    proc.emit("close", 0);
-    await flush();
-    proc = killableChild(4_000_001);
-    vi.mocked(spawn).mockReturnValue(proc);
-    dispatch();
-    const calls = vi.mocked(spawn).mock.calls;
-    const env = (calls[calls.length - 1][2] as { env: Record<string, string> }).env;
+    expect(vi.mocked(spawn)).not.toHaveBeenCalled();
+    expect(handle.process).toBeTruthy();
+    answer({ ...BUDGETS, maxTurns: 17 });
+    await vi.waitFor(() => expect(vi.mocked(spawn)).toHaveBeenCalledTimes(1));
+    const env = (vi.mocked(spawn).mock.calls[0][2] as { env: Record<string, string> }).env;
     expect(env.NIGHTGAUGE_STAGE_MAX_TURNS).toBe("17");
+    expect(handle.process).toBe(proc);
+  });
+
+  it("cancels a dispatch killed while its budget is being fetched, without spawning", async () => {
+    setStageBudgetResolver(() => new Promise<StageBudgets>(() => {}));
+    const results: SkillRunResult[] = [];
+    const handle = dispatch({ onComplete: (r) => results.push(r) });
+    const exited = new Promise<void>((resolve) => handle.process.once("exit", () => resolve()));
+    handle.process.kill("SIGTERM");
+    await exited;
+    expect(vi.mocked(spawn)).not.toHaveBeenCalled();
+    expect(results).toHaveLength(1);
+    expect(results[0].error?.message).toMatch(/cancelled before it started/);
   });
 
   it("stops a stage that streams continuously at its wall clock, not its stage timeout", async () => {
@@ -373,25 +430,29 @@ describe("runStageSkillHeadless under a stage budget (#1668)", () => {
     }
   });
 
-  it("refuses a zero-cost stage whose budgets do not resolve", async () => {
+  it("refuses a zero-cost stage whose budgets do not resolve, before spawn", async () => {
     setStageBudgetResolver(async () => {
       throw new Error("ipc down");
     });
-    // The first dispatch of a shape resolves while its process starts, so it
-    // is stopped as soon as the resolution fails, before any turn.
-    const first = dispatchUntilComplete();
-    const firstResult = await first.complete;
-    expect(firstResult.success).toBe(false);
-    expect(firstResult.error?.message).toMatch(/\[stage-budget\] refused: .*ipc down/);
-    expect(vi.mocked(spawn)).toHaveBeenCalledTimes(1);
-
-    // Every later dispatch of it is refused before spawn.
-    vi.mocked(spawn).mockClear();
-    const second = dispatchUntilComplete();
-    const secondResult = await second.complete;
+    const { complete } = dispatchUntilComplete();
+    const result = await complete;
     expect(vi.mocked(spawn)).toHaveBeenCalledTimes(0);
-    expect(secondResult.success).toBe(false);
-    expect(secondResult.error?.message).toMatch(/\[stage-budget\] refused: /);
+    expect(result.success).toBe(false);
+    expect(result.error?.message).toMatch(/\[stage-budget\] refused: .*ipc down/);
+  });
+
+  it("refuses a zero-cost stage whose budget fetch times out, before spawn", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      setStageBudgetResolver(() => new Promise<StageBudgets>(() => {}));
+      const { complete } = dispatchUntilComplete();
+      await vi.advanceTimersByTimeAsync(STAGE_BUDGET_RESOLVE_TIMEOUT_MS);
+      const result = await complete;
+      expect(vi.mocked(spawn)).toHaveBeenCalledTimes(0);
+      expect(result.error?.message).toMatch(/refused: .*no answer within 5000ms/);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("runs a priced stage whose budgets do not resolve under its USD caps, with a warning", async () => {
@@ -408,8 +469,7 @@ describe("runStageSkillHeadless under a stage budget (#1668)", () => {
       undefined,
       "anthropic/claude-sonnet-5"
     );
-    await flush();
-    await flush();
+    await vi.waitFor(() => expect(vi.mocked(spawn)).toHaveBeenCalledTimes(1));
     expect(proc.kill).not.toHaveBeenCalled();
     expect(stderr.join("")).toContain("did not resolve (ipc down)");
   });
@@ -438,5 +498,42 @@ describe("runStageSkillHeadless under a stage budget (#1668)", () => {
     const bareResult = await bare.complete;
     expect(bareResult).not.toHaveProperty("peakStepInputTokens");
     expect(bareResult).not.toHaveProperty("contextWindowTokens");
+  });
+
+  it("gives an OpenCode dispatch with a run identity its own events directory, and no other", () => {
+    process.env.NIGHTGAUGE_OUTPUT_FILE = "/outer/run/output.log";
+    const runId = uuidV7();
+    runStageSkillHeadless(
+      "feature-dev",
+      42,
+      {},
+      undefined,
+      undefined,
+      undefined,
+      LOCAL_MODEL,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      runId
+    );
+    let env = (vi.mocked(spawn).mock.calls[0][2] as { env: Record<string, string> }).env;
+    expect(env.NIGHTGAUGE_RUN_ID).toBe(runId);
+    expect(env.NIGHTGAUGE_OUTPUT_FILE).toMatch(
+      /^\/test\/workspace\/\.nightgauge\/pipeline\/opencode-events\/feature-dev-42-[^/]+\/stage-output\.log$/
+    );
+    expect(vi.mocked(fs.mkdirSync)).toHaveBeenCalledWith(
+      expect.stringContaining("/opencode-events/feature-dev-42-"),
+      { recursive: true, mode: 0o700 }
+    );
+
+    // No run identity: the plugin could not name the file, so none is set,
+    // and the outer run's value is not inherited.
+    dispatch();
+    env = (vi.mocked(spawn).mock.calls[1][2] as { env: Record<string, string> }).env;
+    expect(env).not.toHaveProperty("NIGHTGAUGE_OUTPUT_FILE");
   });
 });
