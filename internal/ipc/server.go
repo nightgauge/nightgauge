@@ -3081,6 +3081,15 @@ func (s *Server) registerMethods() {
 
 	// --- Pipeline state notifications (HeadlessOrchestrator path) ---
 
+	//ipc:method pipelineResolveStageBudgets params:PipelineResolveStageBudgetsParams result:PipelineResolveStageBudgetsResult
+	s.methods["pipeline.resolveStageBudgets"] = func(ctx context.Context, raw json.RawMessage) (interface{}, error) {
+		var p PipelineResolveStageBudgetsParams
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return nil, fmt.Errorf("invalid params: %w", err)
+		}
+		return s.resolveStageBudgets(ctx, p)
+	}
+
 	//ipc:method pipelineNotifyStageTransition params:PipelineNotifyStageTransitionParams result:void skip
 	s.methods["pipeline.notifyStageTransition"] = func(_ context.Context, params json.RawMessage) (interface{}, error) {
 		var p PipelineNotifyStageTransitionParams
@@ -3233,6 +3242,11 @@ func (s *Server) registerMethods() {
 					Input: p.InputTokens, Output: p.OutputTokens, CacheRead: p.CacheReadTokens,
 					CacheCreation5m: cacheCreation5m, CacheCreation1h: cacheCreation1h,
 				}, p.Model, p.Adapter)
+			}
+			// Context-window telemetry for an editor-launched stage (#1668),
+			// recorded exactly as the scheduler path records it (#1653).
+			if sc, ok := notifyStageContext(p); ok {
+				rt.RecordStageContext(stage, sc.PeakStepInputTokens, sc.ContextWindowTokens, sc.Compactions)
 			}
 			// NOTE: Do NOT delete the runtime here on IsComplete().
 			// The HeadlessOrchestrator path has 8 stages (6 pipeline stages

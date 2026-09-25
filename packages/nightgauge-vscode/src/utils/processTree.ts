@@ -43,6 +43,16 @@ async function collectDescendants(rootPid: number, acc: Set<number>): Promise<vo
   }
 }
 
+/**
+ * Every pid in `rootPid`'s process tree, the root included, as `pgrep -P`
+ * sees it now (#1668). Best-effort: a missing pgrep yields just the root.
+ */
+export async function listProcessTree(rootPid: number): Promise<number[]> {
+  const all = new Set<number>();
+  await collectDescendants(rootPid, all);
+  return Array.from(all);
+}
+
 function killOne(pid: number, signal: NodeJS.Signals): boolean {
   try {
     process.kill(pid, signal);

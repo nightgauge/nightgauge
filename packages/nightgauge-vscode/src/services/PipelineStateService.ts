@@ -253,6 +253,14 @@ export interface TokenUsageUpdate {
    * can attribute billed cost vs. rate-card-computed cost.
    */
   costSource?: "native" | "computed" | "unknown";
+  /**
+   * Context-window telemetry (#1668). Not deltas: `peakStepInputTokens` is
+   * the largest prompt one model step sent, kept as a max per stage, never
+   * summed; the window and compaction count are latest-wins.
+   */
+  peakStepInputTokens?: number;
+  contextWindowTokens?: number;
+  compactionCount?: number;
 }
 
 export interface PipelineStageTokens {
@@ -275,6 +283,12 @@ export interface PipelineStageTokens {
    * undefined to `'native'` only when `cost_usd > 0`.
    */
   cost_source?: "native" | "computed" | "unknown";
+  /** Largest single-step prompt (#1668): a max over steps, never a sum. */
+  peak_step_input_tokens?: number;
+  /** The context window the stage ran with (#1668). */
+  context_window_tokens?: number;
+  /** Compaction events the stage's run dir recorded (#1668). */
+  compaction_count?: number;
 }
 
 export interface PipelineIssueTokens {
@@ -1115,6 +1129,28 @@ export class PipelineStateService implements vscode.Disposable {
     };
   }
 
+  /**
+   * The stage's context-window telemetry for its "complete" notify (#1668),
+   * each field omitted when not observed.
+   */
+  private stageContextParams(
+    stage: string
+  ): Pick<
+    NotifyStageTransitionParams,
+    "peakStepInputTokens" | "contextWindowTokens" | "compactionCount"
+  > {
+    const usage = this._lastState?.tokens?.per_stage?.[stage];
+    return {
+      ...((usage?.peak_step_input_tokens ?? 0) > 0
+        ? { peakStepInputTokens: usage?.peak_step_input_tokens }
+        : {}),
+      ...((usage?.context_window_tokens ?? 0) > 0
+        ? { contextWindowTokens: usage?.context_window_tokens }
+        : {}),
+      ...(usage?.compaction_count !== undefined ? { compactionCount: usage.compaction_count } : {}),
+    };
+  }
+
   private markStageUsageBooked(stage: string): void {
     this.bookedStageUsage.set(stage, this.currentStageUsage(stage));
   }
@@ -1161,6 +1197,7 @@ export class PipelineStateService implements vscode.Disposable {
           // terminal transition zeroes the pid so the PID-reuse window is
           // bounded by one stage rather than by the whole run.
           stagePid: 0,
+          ...this.stageContextParams(stage),
           runId,
         } satisfies NotifyStageTransitionParams);
         this.markStageUsageBooked(stage);
@@ -1945,7 +1982,10 @@ export class PipelineStateService implements vscode.Disposable {
       (update.outputTokens ?? 0) === 0 &&
       (update.cacheReadTokens ?? 0) === 0 &&
       (update.cacheCreationTokens ?? 0) === 0 &&
-      (update.costUsd ?? 0) === 0
+      (update.costUsd ?? 0) === 0 &&
+      !((update.peakStepInputTokens ?? 0) > 0) &&
+      !((update.contextWindowTokens ?? 0) > 0) &&
+      update.compactionCount === undefined
     ) {
       return;
     }
@@ -1980,6 +2020,25 @@ export class PipelineStateService implements vscode.Disposable {
         // within a single stage all chunks resolve via the same accumulator,
         // so they all carry the same source value.
         cost_source: update.costSource ?? existing?.cost_source,
+        // Context-window telemetry (#1668): the peak is a max, never a sum.
+        ...((update.peakStepInputTokens ?? 0) > 0 || existing?.peak_step_input_tokens !== undefined
+          ? {
+              peak_step_input_tokens: Math.max(
+                existing?.peak_step_input_tokens ?? 0,
+                update.peakStepInputTokens ?? 0
+              ),
+            }
+          : {}),
+        ...((update.contextWindowTokens ?? 0) > 0
+          ? { context_window_tokens: update.contextWindowTokens }
+          : existing?.context_window_tokens !== undefined
+            ? { context_window_tokens: existing.context_window_tokens }
+            : {}),
+        ...(update.compactionCount !== undefined && update.compactionCount >= 0
+          ? { compaction_count: update.compactionCount }
+          : existing?.compaction_count !== undefined
+            ? { compaction_count: existing.compaction_count }
+            : {}),
       };
     }
     // Update totals (HeadlessOrchestrator sends deltas, so accumulate)

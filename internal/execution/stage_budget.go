@@ -82,6 +82,17 @@ func stageCost(adapter, model, worktreeDir string) config.StageCost {
 	return pricedStageCost(adapter, model)
 }
 
+// ResolveDispatchStageBudget is the stage budget a dispatch of stage on
+// adapter with model in worktreeDir runs under, from the pipeline.stage_budgets
+// entries in budgets, and what the model registry makes of its price. It is
+// the resolution the manager runs before it spawns a stage, exported so the
+// IPC server answers pipeline.resolveStageBudgets (#1668) for a stage the
+// editor launches with exactly the ceilings this package would enforce.
+func ResolveDispatchStageBudget(budgets map[string]config.StageBudget, stage, adapter, model, worktreeDir string) (config.ResolvedStageBudget, config.StageCost) {
+	cost := stageCost(adapter, model, worktreeDir)
+	return config.ResolveStageBudget(budgets, stage, cost), cost
+}
+
 // pricedStageCost is what the registry's rates make of a model that does not
 // run on a server the operator runs.
 func pricedStageCost(adapter, model string) config.StageCost {

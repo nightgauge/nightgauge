@@ -298,7 +298,7 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	// is also the adapter's own cap where it has one (--max-turns, OpenCode's
 	// steps), set here so every hook below sees it.
 	stageLabel := fmt.Sprintf("%s#%d %s", opts.Repo, opts.IssueNumber, opts.Stage)
-	budget := config.ResolveStageBudget(opts.StageBudgets, opts.Stage, stageCost(adapter.Name(), runOpts.Model, worktreeDir))
+	budget, _ := ResolveDispatchStageBudget(opts.StageBudgets, opts.Stage, adapter.Name(), runOpts.Model, worktreeDir)
 	for _, warning := range budget.Warnings {
 		fmt.Fprintf(os.Stderr, "%s %s: %s\n", StageBudgetMarker, stageLabel, warning)
 	}

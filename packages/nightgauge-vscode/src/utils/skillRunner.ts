@@ -93,6 +93,18 @@ import { shouldEmitSnapshot } from "./budgetStreamEnforcement";
 import { resolveExtensionBundleRoot } from "./extensionBundle";
 import { BinaryResolver } from "../services/BinaryResolver";
 import { killProcessTree, DescendantTracker } from "./processTree";
+import {
+  StageBudgetEnforcer,
+  cachedStageBudgetResolution,
+  getStageBudgetResolver,
+  resolveStageBudgets,
+  stageBudgetErrorMessage,
+  stageBudgetUnresolvedMessage,
+  terminateStageProcessTree,
+  type StageBudgetBreach,
+  type StageBudgets,
+  type StageTreeTermination,
+} from "./stageBudget";
 import { RepositoryContextLoader } from "../services/RepositoryContextLoader";
 import { ConnectivityStateBus } from "../platform/ConnectivityStateBus";
 import type { ConnectionState } from "../platform/types";
@@ -293,6 +305,14 @@ const STAGE_ORDER: PipelineStage[] = [
  * Result from running a skill
  */
 export interface SkillRunResult {
+  /**
+   * The largest prompt one model step sent (input + cache read + cache
+   * write), the max over steps (#1668). Absent when the stream reported no
+   * per-step usage.
+   */
+  peakStepInputTokens?: number;
+  /** The context window the stage ran with (#1668); absent when unknown. */
+  contextWindowTokens?: number;
   success: boolean;
   exitCode: number | null;
   error?: Error;
@@ -776,6 +796,8 @@ const activeProcesses: Map<string, SkillProcessHandle> = new Map();
 const OUTPUT_ERROR_TAIL_MAX_CHARS = 8192;
 /** Check interval for stall detection (decoupled from warning threshold) */
 const HEADLESS_STALL_CHECK_INTERVAL_MS = 30_000;
+/** How long a stage stopped at a stage budget has to exit on SIGTERM (#1668). */
+const STAGE_BUDGET_KILL_GRACE_MS = 10_000;
 
 /**
  * Stall-threshold multiple at which the previously no-op Nx escalation warning
@@ -5239,6 +5261,63 @@ export function runStageSkillHeadless(
   // to four adapters. This is the first point where the values are final.
   callbacks?.onModelResolved?.(stage, modelDecision.model, adapter, modelDecision.source);
 
+  // ── Non-USD stage budgets (#1668) ──────────────────────────────────────
+  // The Go binary resolves the stage's turn, wall-clock and token ceilings
+  // (#1652) over pipeline.resolveStageBudgets; nothing here re-implements the
+  // defaults or the zero-cost floor. This function is synchronous by
+  // contract, so a dispatch shape the extension has resolved before is armed
+  // (and its native turn cap passed) before spawn, and a first dispatch is
+  // armed the moment its resolution arrives; the counters run from spawn
+  // either way, so nothing the stream shows in between goes unjudged.
+  const stageBudgetRequest = {
+    repo: targetRepo ?? "",
+    stage,
+    adapter,
+    model: launchedModel ?? "",
+  };
+  const stageBudgetActive = getStageBudgetResolver() !== null;
+  const stageBudgetZeroCostHint = !!launchedModel && isLocalExecution(adapter, launchedModel);
+  const cachedStageBudget = stageBudgetActive
+    ? cachedStageBudgetResolution(stageBudgetRequest)
+    : undefined;
+  if (cachedStageBudget && !cachedStageBudget.ok && stageBudgetZeroCostHint) {
+    // A zero-cost stage whose budgets do not resolve has no binding bound:
+    // no USD cap can stop a $0 model. Refused before spawn.
+    const error = new Error(
+      stageBudgetUnresolvedMessage(stage, launchedModel ?? "", cachedStageBudget.error)
+    );
+    callbacks?.onStderr?.(`${error.message}\n`);
+    callbacks?.onError?.(error);
+    callbacks?.onComplete?.({ success: false, exitCode: null, error });
+    // Resolve again for the next dispatch: the failure may have been transient.
+    void resolveStageBudgets(stageBudgetRequest).catch(() => undefined);
+    return {
+      process: null as unknown as ChildProcess,
+      stage,
+      issueNumber,
+      kill: () => {},
+    };
+  }
+  // Only this dispatch's own budget may set the SDK's turn cap, never a value
+  // inherited from an outer run's environment.
+  delete spawnEnv.NIGHTGAUGE_STAGE_MAX_TURNS;
+  if (cachedStageBudget?.ok && cachedStageBudget.budgets.maxTurns > 0) {
+    // The adapter's native turn cap, where it has one.
+    const budgetTurns = cachedStageBudget.budgets.maxTurns;
+    if (adapter === "claude") {
+      const at = args.indexOf("--max-turns");
+      if (at >= 0 && at + 1 < args.length) {
+        const configured = Number(args[at + 1]);
+        if (!(configured > 0) || budgetTurns < configured) args[at + 1] = String(budgetTurns);
+      } else {
+        args.push("--max-turns", String(budgetTurns));
+      }
+    } else {
+      // OpenCode's `steps` cap, through the SDK stage CLI's per-run config.
+      spawnEnv.NIGHTGAUGE_STAGE_MAX_TURNS = String(budgetTurns);
+    }
+  }
+
   const proc = spawn(cmd, args, {
     cwd: workspaceRoot,
     shell: false,
@@ -5717,6 +5796,65 @@ export function runStageSkillHeadless(
   // "which limit fired?" — the question #161's triage ran aground on. Captured
   // at signal-delivery time alongside exitSignal/exitSignalSource.
   let exitKillCeiling: KillCeiling | undefined;
+
+  // The stage budget enforcer (#1668). See the resolution block before spawn.
+  let stageBudgetStopReason: string | undefined;
+  let stageBudgetTermination: Promise<StageTreeTermination> | undefined;
+  const stopStageForBudget = (reason: string): void => {
+    if (stageBudgetTermination || stageCompleted) return;
+    stageBudgetStopReason = reason;
+    exitSignal = "SIGTERM";
+    exitSignalSource = "stage-budget";
+    callbacks?.onStderr?.(`[stage-budget] ${reason}\n`);
+    if (!proc.pid) return;
+    stageBudgetTermination = terminateStageProcessTree(proc.pid, {
+      graceMs: STAGE_BUDGET_KILL_GRACE_MS,
+      isRootGone: () => proc.exitCode !== null || proc.signalCode !== null,
+      signalRoot: (sig) => proc.kill(sig),
+      log: (line) => callbacks?.onStderr?.(line),
+    });
+  };
+  const stageBudgetEnforcer = new StageBudgetEnforcer({
+    format: adapter === "claude" ? "claude" : "sdk",
+    onBreach: (breach: StageBudgetBreach) => stopStageForBudget(stageBudgetErrorMessage(breach)),
+  });
+  stageBudgetEnforcer.start();
+  const armStageBudget = (budgets: StageBudgets, logWarnings: boolean): void => {
+    if (logWarnings) {
+      for (const warning of budgets.warnings ?? []) {
+        callbacks?.onStderr?.(`[stage-budget] ${stage}: ${warning}\n`);
+      }
+    }
+    callbacks?.onStderr?.(
+      `[skillRunner] Stage budget for ${stage}: turns=${budgets.maxTurns}, ` +
+        `wall_clock=${budgets.maxWallClockMs}ms, tokens=${budgets.maxTokens}` +
+        `${budgets.zeroCost ? " (zero-cost)" : ""} (#1668)\n`
+    );
+    stageBudgetEnforcer.arm(budgets);
+  };
+  if (cachedStageBudget?.ok) {
+    armStageBudget(cachedStageBudget.budgets, true);
+  }
+  if (stageBudgetActive) {
+    const armedFromCache = cachedStageBudget?.ok === true;
+    resolveStageBudgets(stageBudgetRequest).then(
+      (budgets) => {
+        if (!armedFromCache && !stageCompleted) armStageBudget(budgets, true);
+      },
+      (err: unknown) => {
+        const reason = err instanceof Error ? err.message : String(err);
+        if (armedFromCache || stageCompleted) return;
+        if (stageBudgetZeroCostHint) {
+          stopStageForBudget(stageBudgetUnresolvedMessage(stage, launchedModel ?? "", reason));
+          return;
+        }
+        callbacks?.onStderr?.(
+          `[stage-budget] warning: ${stage}'s stage budgets did not resolve (${reason}); ` +
+            `it runs under its USD caps only (#1668)\n`
+        );
+      }
+    );
+  }
   // Bash forensics are a bounded ring rather than a single slot (#156): the
   // record is the only evidence that outlives the stage, and one command deep
   // cannot distinguish "ran the suite, then a no-op tail" from "ran nothing".
@@ -6919,6 +7057,9 @@ export function runStageSkillHeadless(
 
     // Process complete lines
     for (const line of lines) {
+      // Turns, tokens and the per-step peak, checked as the stream runs (#1668).
+      stageBudgetEnforcer.observeLine(line);
+
       // A stage declaring a long external process it is waiting on (#1488).
       if (observeExternalProgressDeclarations(line)) {
         continue;
@@ -7204,7 +7345,15 @@ export function runStageSkillHeadless(
         tokenAccumulator.add(parsed.usage);
 
         // Notify callback with updated usage
-        callbacks?.onTokenUsage?.(tokenAccumulator.getTotal());
+        const runningUsage = tokenAccumulator.getTotal();
+        callbacks?.onTokenUsage?.(runningUsage);
+
+        // The token budget (#1668): input, output and cache writes so far.
+        stageBudgetEnforcer.observeTokenTotal(
+          runningUsage.inputTokens +
+            runningUsage.outputTokens +
+            (runningUsage.cacheCreationTokens ?? 0)
+        );
 
         // Push-based cost enforcement (Issue #3180, #3783): bound overshoot to a
         // single tool-use's incremental cost rather than the 30s ticker poll.
@@ -7370,6 +7519,7 @@ export function runStageSkillHeadless(
   proc.on("close", async (exitCode) => {
     stageCompleted = true;
     clearStallTicker();
+    stageBudgetEnforcer.disarm();
     // Drain the lifecycle trace recorder's append chain (fail-open, #180).
     void traceRecorder?.flush();
     if (stallWarningShown) {
@@ -7611,11 +7761,33 @@ export function runStageSkillHeadless(
       }
     }
 
+    // A stage stopped at a stage budget (#1668) fails with the reason #1652
+    // stamps, once its whole process tree is verified gone.
+    let stageBudgetError: Error | undefined;
+    if (stageBudgetStopReason !== undefined) {
+      stageBudgetError = new Error(stageBudgetStopReason);
+      if (stageBudgetTermination) {
+        const termination = await stageBudgetTermination;
+        if (termination.survivors.length > 0) {
+          stageBudgetError = new Error(
+            `${stageBudgetStopReason}; ${termination.survivors.length} member(s) of its process tree survived SIGKILL`
+          );
+        }
+      }
+    }
+
     activeProcesses.delete(processKey);
     callbacks?.onComplete?.({
-      success: containmentError ? false : success,
+      success: containmentError || stageBudgetError ? false : success,
       exitCode,
-      error: containmentError ?? inferredError,
+      error: containmentError ?? stageBudgetError ?? inferredError,
+      // Context-window telemetry (#1668): omitted when not observed.
+      ...(stageBudgetEnforcer.peakStepInputTokens > 0
+        ? { peakStepInputTokens: stageBudgetEnforcer.peakStepInputTokens }
+        : {}),
+      ...(stageBudgetEnforcer.contextWindowTokens > 0
+        ? { contextWindowTokens: stageBudgetEnforcer.contextWindowTokens }
+        : {}),
       wipCommitSha,
       tokenUsage: bookedUsage?.usage,
       costEstimated: bookedUsage?.estimated || undefined,

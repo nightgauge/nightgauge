@@ -36,6 +36,7 @@ import type { SDKMessage } from "../../src/orchestrator/StageExecutor.js";
 import {
   OPENCODE_ACTIVITY_EVENTS,
   forwardOpenCodeActivity,
+  openCodeStageMaxTurns,
 } from "../../src/cli/adapters/cliQueryHelper.js";
 import type { AdapterActivity } from "../../src/cli/adapters/ICliAdapter.js";
 import { OutputFormatter } from "../../src/cli/output.js";
@@ -943,6 +944,36 @@ describe("OpenCode activity while the process runs (#1657)", () => {
       })
     ).not.toThrow();
   });
+
+  it("carries a step_finish's reason and token counts, and nothing else of it (#1668)", () => {
+    const got: AdapterActivity[] = [];
+    forwardOpenCodeActivity(
+      '{"type":"step_finish","part":{"reason":"tool-calls","snapshot":"x","tokens":{"input":2010,"output":40,"reasoning":5,"cache":{"read":9000,"write":1000}}}}',
+      (a) => got.push(a)
+    );
+    forwardOpenCodeActivity('{"type":"step_finish","part":{}}', (a) => got.push(a));
+    expect(got).toEqual([
+      {
+        adapter: "opencode",
+        event: "step_finish",
+        reason: "tool-calls",
+        tokens: { input: 2010, output: 40, reasoning: 5, cacheRead: 9000, cacheWrite: 1000 },
+      },
+      { adapter: "opencode", event: "step_finish" },
+    ]);
+  });
+});
+
+describe("openCodeStageMaxTurns (#1668)", () => {
+  it("lowers the query's cap to the stage's turn budget, and ignores a bad value", () => {
+    expect(openCodeStageMaxTurns(undefined, {})).toBeUndefined();
+    expect(openCodeStageMaxTurns(40, {})).toBe(40);
+    expect(openCodeStageMaxTurns(undefined, { NIGHTGAUGE_STAGE_MAX_TURNS: "200" })).toBe(200);
+    expect(openCodeStageMaxTurns(40, { NIGHTGAUGE_STAGE_MAX_TURNS: "200" })).toBe(40);
+    expect(openCodeStageMaxTurns(400, { NIGHTGAUGE_STAGE_MAX_TURNS: "200" })).toBe(200);
+    expect(openCodeStageMaxTurns(40, { NIGHTGAUGE_STAGE_MAX_TURNS: "-1" })).toBe(40);
+    expect(openCodeStageMaxTurns(40, { NIGHTGAUGE_STAGE_MAX_TURNS: "abc" })).toBe(40);
+  });
 });
 
 describe("OutputFormatter.activity (#1657)", () => {
@@ -962,6 +993,20 @@ describe("OutputFormatter.activity (#1657)", () => {
       });
       expect(parsed).not.toHaveProperty("type");
       expect(err).not.toHaveBeenCalled();
+
+      // A step_finish's reason and tokens ride in data (#1668).
+      const tokens = { input: 1, output: 2, reasoning: 0, cacheRead: 3, cacheWrite: 4 };
+      new OutputFormatter("json", "error").activity({
+        adapter: "opencode",
+        event: "step_finish",
+        reason: "stop",
+        tokens,
+      });
+      expect(JSON.parse(log.mock.calls[1][0] as string)).toEqual({
+        level: "debug",
+        message: "adapter activity",
+        data: { adapter: "opencode", event: "step_finish", reason: "stop", tokens },
+      });
     } finally {
       log.mockRestore();
       err.mockRestore();

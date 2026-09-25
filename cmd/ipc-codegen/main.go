@@ -383,6 +383,7 @@ func collectImportTypes(methods []MethodDef) []string {
 		"FocusShowResult":                    true,
 		"FocusListResult":                    true,
 		"PipelineMaxConcurrentResult":        true,
+		"PipelineResolveStageBudgetsResult":  true, // #1668 — editor-launched stage budgets
 		"RateLimitInfo":                      true,
 		"GitCleanupMergedBranchesResult":     true,
 		"GitComposeBranchNameResult":         true, // Issue #889

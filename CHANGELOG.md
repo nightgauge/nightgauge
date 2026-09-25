@@ -14,6 +14,20 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Added
+
+- **Stage budgets and context telemetry for stages the editor launches
+  (#1668).** A stage the VS Code extension runs itself now stops at the same
+  turn, wall-clock and token budgets as a stage the Go executor runs (#1652):
+  the extension asks the Go binary for them over the new
+  `pipeline.resolveStageBudgets` IPC method, counts turns and tokens on the
+  stream, kills the stage's whole process tree on a breach, and fails it with
+  `stage_budget_exceeded:<dimension>`, which is not retried. A local-model
+  stage whose budgets cannot be resolved is refused. The "complete" transition
+  now carries the stage's per-step peak prompt size and context window
+  (#1653), so its run record shows `context_window_utilization`; the server
+  drops negative or implausible values.
+
 ### Fixed
 
 - **Example GitHub tokens in docs no longer look like real credentials

@@ -1135,6 +1135,24 @@ export interface StuckEpicsResult {
   stuckEpics: StuckEpic[];
 }
 
+/**
+ * Result from pipeline.resolveStageBudgets (#1668): the non-USD stage budget
+ * (#1652) the Go executor enforces for the same dispatch. A positive ceiling
+ * binds; -1 is unlimited and only ever returned for a priced stage.
+ * Mirrors `PipelineResolveStageBudgetsResult` (internal/ipc/protocol.go).
+ */
+export interface PipelineResolveStageBudgetsResult {
+  maxTurns: number;
+  maxWallClockMs: number;
+  maxTokens: number;
+  /** A stage no USD cap binds: a local or $0-priced model. */
+  zeroCost: boolean;
+  /** The context window the dispatch runs with; absent when unknown. */
+  contextWindowTokens?: number;
+  /** The lines the executor logs for this dispatch, such as a refused -1. */
+  warnings?: string[];
+}
+
 /** Result from pipeline.setMaxConcurrent / pipeline.getMaxConcurrent. */
 export interface PipelineMaxConcurrentResult {
   maxConcurrent: number;
