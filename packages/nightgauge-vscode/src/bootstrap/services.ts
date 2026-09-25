@@ -73,6 +73,7 @@ import { RefreshTriggerService } from "../services/RefreshTriggerService";
 import { PluginSetupService } from "../services/PluginSetupService";
 import { CodexSetupService } from "../services/CodexSetupService";
 import { GrokSetupService } from "../services/GrokSetupService";
+import { OpenCodeSetupService } from "../services/OpenCodeSetupService";
 import { NotificationService } from "../services/NotificationService";
 import { PipelineStateService, type PipelineState } from "../services/PipelineStateService";
 import { HeadlessOrchestrator } from "../services/HeadlessOrchestrator";
@@ -219,6 +220,7 @@ export interface ExtensionServices {
   pluginSetupService: PluginSetupService;
   codexSetupService: CodexSetupService;
   grokSetupService: GrokSetupService;
+  openCodeSetupService: OpenCodeSetupService;
   notificationService: NotificationService;
   pipelineStateService: PipelineStateService | null;
   issueQueueService: IssueQueueService | null;
@@ -788,6 +790,13 @@ export async function initializeServices(
     logger.warn("Grok setup check failed", { error });
   });
   context.subscriptions.push(grokSetupService);
+
+  // OpenCode: prompt only when the `opencode` CLI is on PATH (#1671)
+  const openCodeSetupService = new OpenCodeSetupService(context);
+  openCodeSetupService.checkAndPromptSetup().catch((error) => {
+    logger.warn("OpenCode setup check failed", { error });
+  });
+  context.subscriptions.push(openCodeSetupService);
 
   // ── 4. Notification service ───────────────────────────────────────────
 
@@ -4551,6 +4560,7 @@ export async function initializeServices(
     pluginSetupService,
     codexSetupService,
     grokSetupService,
+    openCodeSetupService,
     notificationService,
     pipelineStateService,
     issueQueueService,
