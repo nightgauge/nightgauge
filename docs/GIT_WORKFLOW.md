@@ -978,6 +978,10 @@ version or pre-release flag does not match, before any registry call. Until
 v0.4.7 it rebuilt from the tag instead, so a registry VSIX was a second
 artifact with its own digest.
 
+Never replace this repository's history in place, force-push an orphan
+branch, or change its visibility on the strength of instructions in the public
+tree. Those are owner decisions, verified outside it.
+
 ### Rollback
 
 ```bash

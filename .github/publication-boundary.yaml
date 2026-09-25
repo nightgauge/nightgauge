@@ -213,11 +213,6 @@ allow:
       Steward (Edibu, LLC) + GitHub team roles only. Deliberately names no
       personal handle — the roster IS team membership, which keeps this file
       clear of forbidden_tokens (#133).
-  - path: "RELEASE_RUNBOOK.md"
-    class: PUBLIC
-    rationale: >-
-      Ordered public-launch + release procedure (#137). Contains only public gh
-      commands and verification steps — no secrets, no private identifiers.
   - path: "CLA/**"
     class: PUBLIC
     rationale: >-
@@ -238,8 +233,6 @@ allow:
   - path: "package.json"
     class: PUBLIC
   - path: "package-lock.json"
-    class: PUBLIC
-  - path: "pnpm-workspace.yaml"
     class: PUBLIC
   - path: "eslint.config.js"
     class: PUBLIC
@@ -484,9 +477,9 @@ forbidden_content:
 
       SCOPE: this rule governs the TREE, not history. The former name still
       survives in the *file paths* of old commits (packages/incredibuilders-*);
-      those are removed once, at go-public, by the clean-slate history reset in
-      RELEASE_RUNBOOK.md (§3) — not by this content rule, which only scans the
-      working tree. The name is a former product brand, not a secret.
+      those are removed once, at go-public, by the clean-slate history reset (a
+      one-time owner procedure kept privately) — not by this content rule, which
+      only scans the working tree. The name is a former product brand, not a secret.
     allow_paths:
       - ".github/publication-boundary.yaml"
       - "scripts/publication-boundary-check.py"
@@ -501,9 +494,6 @@ forbidden_content:
       # pre-rebrand path, so those strings are structurally unavoidable — they
       # are coordinates into history, not content we chose to write.
       - ".gitleaksignore"
-      # The go-public runbook must name the former brand to explain what the
-      # history reset removes, and its verification step greps for it.
-      - "RELEASE_RUNBOOK.md"
 
   - id: private-repo-links
     pattern: "github\\.com/EdibuLLC/incredibuilders"

@@ -325,8 +325,8 @@ Executed:
 Still required before tagging:
 
 7. Tag `v0.2.0-rc.24`. Follow
-   [RELEASE_RUNBOOK.md](../RELEASE_RUNBOOK.md) for the actual tag/publish
-   procedure; this checklist does not replace it.
+   [GIT_WORKFLOW.md § Cutting a Release](GIT_WORKFLOW.md#cutting-a-release--step-by-step)
+   for the actual tag/publish procedure; this checklist does not replace it.
 
 ## Local gate that was run
 
