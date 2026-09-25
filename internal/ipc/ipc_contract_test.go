@@ -115,6 +115,7 @@ var contractTestedMethods = map[string]bool{
 	"pipeline.run":                          true,
 	"pipeline.runItem":                      true,
 	"pipeline.setPaused":                    true,
+	"pipeline.resolveStageBudgets":          true,
 	"pipeline.status":                       true,
 	"pipeline.runningSummary":               true,
 	"pipeline.stop":                         true,
@@ -758,6 +759,13 @@ func TestContract_Pipeline(t *testing.T) {
 	t.Run("pipeline.resume/registered", func(t *testing.T) {
 		id := h.sendRequest("pipeline.resume", nil)
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "pipeline.resume")
+	})
+
+	t.Run("pipeline.resolveStageBudgets", func(t *testing.T) {
+		id := h.sendRequest("pipeline.resolveStageBudgets", map[string]interface{}{
+			"repo": "", "stage": "feature-dev", "adapter": "opencode", "model": "lm-studio/qwen/qwen3.8-27b",
+		})
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "pipeline.resolveStageBudgets")
 	})
 
 	t.Run("pipeline.setPaused/registered", func(t *testing.T) {
