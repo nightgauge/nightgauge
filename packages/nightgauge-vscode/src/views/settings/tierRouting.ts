@@ -30,6 +30,9 @@ export const MACHINE_TIER_KEY_PATHS = new Set<string>([
   "notifications.discord.webhook_env",
   "notifications.mattermost.webhook_env",
   "platform.license_key",
+  // The whole `opencode:` block is machine tier (ADR-022 § 7): the Go loader
+  // refuses it in a committed project config (#2138).
+  "opencode",
 ]);
 
 /**
