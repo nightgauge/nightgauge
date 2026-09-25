@@ -929,3 +929,47 @@ func TestOpenCodeRowEndpointSlotsInUse(t *testing.T) {
 		t.Errorf("a ledger whose writer has exited reported %d slot(s) in use", *h.OpenCode.Endpoints[0].SlotsInUse)
 	}
 }
+
+// TestProbeOpenCodeEndpointGenericUsesBasePathAndKey pins #2158: a declared
+// opencode.endpoints[] entry is probed at its base_url's own path
+// (".../v1/models", not "/models"), and with the Bearer credential its
+// api_key_env names, which never appears in the result.
+func TestProbeOpenCodeEndpointGenericUsesBasePathAndKey(t *testing.T) {
+	const secret = "sk-test-2158-never-printed"
+	var gotPath, gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotAuth = r.URL.Path, r.Header.Get("Authorization")
+		if r.URL.Path != "/v1/models" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer "+secret {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"mtplx-qwen"}]}`))
+	}))
+	defer srv.Close()
+	target := adapters.OpenCodeEndpointTarget{ID: "mtplx", Kind: "openai-compatible", BaseURL: srv.URL + "/v1/", APIKeyEnv: "NG_TEST_2158_KEY"}
+
+	t.Setenv("NG_TEST_2158_KEY", secret)
+	r := adapters.ProbeOpenCodeEndpoint(nil, target, "mtplx-qwen", 131072)
+	if !r.Ready || r.Problem != "" || gotPath != "/v1/models" || gotAuth != "Bearer "+secret {
+		t.Fatalf("want ready via /v1/models with the key; got ready=%v problem=%q path=%q", r.Ready, r.Problem, gotPath)
+	}
+	if strings.Contains(fmt.Sprintf("%+v", r), secret) {
+		t.Fatal("the credential leaked into the readiness result")
+	}
+
+	t.Setenv("NG_TEST_2158_KEY", "")
+	r = adapters.ProbeOpenCodeEndpoint(nil, target, "mtplx-qwen", 131072)
+	if r.Ready || !strings.Contains(r.Problem, "NG_TEST_2158_KEY") {
+		t.Fatalf("an unset api_key_env must be named as the problem; got ready=%v problem=%q", r.Ready, r.Problem)
+	}
+
+	target.APIKeyEnv = ""
+	r = adapters.ProbeOpenCodeEndpoint(nil, target, "mtplx-qwen", 131072)
+	if r.Ready || gotAuth != "" || !strings.Contains(r.Problem, "HTTP 401") {
+		t.Fatalf("with no api_key_env the probe sends no credential; got ready=%v auth=%q problem=%q", r.Ready, gotAuth, r.Problem)
+	}
+}

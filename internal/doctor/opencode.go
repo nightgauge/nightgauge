@@ -551,7 +551,7 @@ func checkOpenCodeEndpoints(p openCodeProbe, settings config.OpenCodeConfig, end
 				injected = openCodeInjectedContext(run.Content, ep.ID, modelID)
 			}
 		}
-		r := p.endpoint(adapters.OpenCodeEndpointTarget{ID: ep.ID, Kind: ep.Provider, BaseURL: ep.BaseURL, Legacy: ep.Legacy}, model, injected)
+		r := p.endpoint(adapters.OpenCodeEndpointTarget{ID: ep.ID, Kind: ep.Provider, BaseURL: ep.BaseURL, APIKeyEnv: ep.APIKeyEnv, Legacy: ep.Legacy}, model, injected)
 		r.Slots = ep.MaxConcurrency
 		if inUse != nil {
 			n := inUse[ep.ID]
