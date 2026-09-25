@@ -1,10 +1,10 @@
 /**
- * Stub provider — LmStudioAdapter integration (real subprocess)
+ * Stub provider — OpenAiCompatibleAdapter integration (real subprocess)
  *
  * Spawns the real Go `stub-provider` binary (`go run ./cmd/stub-provider
  * --script tool-edit-stop`), a deterministic, loopback-only, scripted
  * OpenAI-compatible server (see internal/stubprovider). It reads the
- * `base_url` the process prints on stdout, points `LmStudioAdapter` at it via
+ * `base_url` the process prints on stdout, points `OpenAiCompatibleAdapter` at it via
  * `NIGHTGAUGE_LM_STUDIO_BASE_URL`, and drives one streamed chat completion
  * end to end. This proves the stub works for any base-URL adapter, not just
  * an experimental OpenCode stage.
@@ -22,7 +22,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { spawn, execSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import net from "node:net";
 import path from "node:path";
-import { LmStudioAdapter } from "../../src/cli/adapters/LmStudioAdapter.js";
+import { OpenAiCompatibleAdapter } from "../../src/cli/adapters/OpenAiCompatibleAdapter.js";
 
 const repoRoot = path.resolve(__dirname, "../../../..");
 
@@ -163,7 +163,7 @@ async function waitUntilUnreachable(baseUrl: string, timeoutMs: number): Promise
 }
 
 describe.skipIf(!isGoAvailable())(
-  "stub-provider — LmStudioAdapter integration (real subprocess)",
+  "stub-provider — OpenAiCompatibleAdapter integration (real subprocess)",
   () => {
     let stub: StubProvider;
     let savedBaseUrl: string | undefined;
@@ -205,7 +205,7 @@ describe.skipIf(!isGoAvailable())(
       process.env.NIGHTGAUGE_LM_STUDIO_BASE_URL = stub.baseUrl;
       process.env.NIGHTGAUGE_LM_STUDIO_MODEL = "stub/stub-model";
 
-      const adapter = new LmStudioAdapter();
+      const adapter = new OpenAiCompatibleAdapter("lm-studio");
       const queryFn = await adapter.createQueryFunction();
 
       const messages: Array<Record<string, unknown>> = [];

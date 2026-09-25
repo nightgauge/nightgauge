@@ -1,7 +1,7 @@
 /**
  * SdkFanoutExecutors — the provider-execution bindings that drive the
- * `sdk-fanout` participants (Codex + gemini / gemini-sdk / copilot / lm-studio /
- * ollama) through the portable `SdkFanoutRunner` floor (epic #3899, #3911).
+ * `sdk-fanout` participants (Codex + gemini / gemini-sdk / copilot /
+ * openai-compatible) through the portable `SdkFanoutRunner` floor (epic #3899, #3911).
  *
  * `runSdkFanout` is execution-agnostic: it takes a `{ runAgent, runJudge }`
  * bindings object and owns concurrency, the ceiling, and the event tree. This
@@ -48,6 +48,7 @@ import {
 } from "./SdkFanoutRunner.js";
 import type { ICliAdapter, QueryFunctionOptions } from "../adapters/ICliAdapter.js";
 import { isLocalProvider, providerFor } from "../../eval/modelRegistry.js";
+import { OpenAiCompatibleAdapter } from "../adapters/OpenAiCompatibleAdapter.js";
 
 /**
  * Raw outcome of running ONE ephemeral unit (agent or judge) through a provider.
@@ -146,7 +147,12 @@ function usageFromExec(
   const resolvedModel = result.model ?? model ?? "";
   const isOpencodeCloud =
     adapter.name === "opencode" && !isLocalProvider(providerFor(adapter.name, resolvedModel));
-  const costIsFlatRateEstimate = adapter.name === "copilot" || isOpencodeCloud;
+  // The generic OpenAI-compatible backend (#2128) is local, and so an exact
+  // $0, only when its declared base URL is loopback or private; a hosted
+  // endpoint is billed at a cost this module never sees.
+  const isOpenAiCompatibleRemote = adapter instanceof OpenAiCompatibleAdapter && !adapter.isLocal();
+  const costIsFlatRateEstimate =
+    adapter.name === "copilot" || isOpencodeCloud || isOpenAiCompatibleRemote;
 
   return {
     inputTokens,

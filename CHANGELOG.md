@@ -14,6 +14,21 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Changed
+
+- **One OpenAI-compatible backend now serves the LM Studio and Ollama judges
+  (#2128, part 2).** The SDK's `LmStudioAdapter` and `OllamaAdapter` were the
+  same chat-completions client with different defaults. Both are deleted, with
+  their tests. `OpenAiCompatibleAdapter` replaces them and takes a base URL, a
+  model and, optionally, the name of an environment variable that holds the
+  API key (`NIGHTGAUGE_<LM_STUDIO|OLLAMA>_API_KEY_ENV`). It sends an
+  `Authorization` header only when that variable is set, so a local server no
+  longer receives a placeholder key. Whether the endpoint is local follows its
+  base URL, using the part-1 rule. A judge on a hosted base URL now reports
+  its cost as an estimate, not as an exact $0. The `lm-studio` and `ollama`
+  adapter names keep their environment variables and defaults until part 3
+  renames them.
+
 ### Fixed
 
 - **A model on a declared local endpoint now counts as local, whatever its

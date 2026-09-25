@@ -12,8 +12,7 @@ import { ClaudeHeadlessAdapter } from "./ClaudeHeadlessAdapter.js";
 import { CodexAdapter } from "./CodexAdapter.js";
 import { GeminiAdapter } from "./GeminiAdapter.js";
 import { GeminiSdkAdapter } from "./GeminiSdkAdapter.js";
-import { LmStudioAdapter } from "./LmStudioAdapter.js";
-import { OllamaAdapter } from "./OllamaAdapter.js";
+import { OpenAiCompatibleAdapter } from "./OpenAiCompatibleAdapter.js";
 import { CopilotCliAdapter } from "./CopilotCliAdapter.js";
 import { GrokAdapter } from "./GrokAdapter.js";
 import { OpenCodeAdapter } from "./OpenCodeAdapter.js";
@@ -65,8 +64,10 @@ function createDefaultRegistry(): AdapterRegistry {
   registry.register(new CodexAdapter());
   registry.register(new GeminiAdapter());
   registry.register(new GeminiSdkAdapter());
-  registry.register(new LmStudioAdapter());
-  registry.register(new OllamaAdapter()); // Issue #2591
+  // #2128: one generic OpenAI-compatible eval/judge backend, under the
+  // legacy names until part 3 moves the enum to `openai-compatible`.
+  registry.register(new OpenAiCompatibleAdapter("lm-studio"));
+  registry.register(new OpenAiCompatibleAdapter("ollama"));
   registry.register(new CopilotCliAdapter());
   registry.register(new GrokAdapter());
   registry.register(new OpenCodeAdapter()); // Issue #1637, ADR-022

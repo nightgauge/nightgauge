@@ -16,7 +16,8 @@
  *      subscription cost.
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import { OpenAiCompatibleAdapter } from "../../cli/adapters/OpenAiCompatibleAdapter.js";
 import {
   WORKFLOW_SCHEMA_VERSION,
   FANOUT_CEILING,
@@ -354,6 +355,32 @@ describe("SdkFanoutExecutors (#3911)", () => {
       expect(agentResult.usage.outputTokens).toBe(90);
       // Real tokens, but flat-rate subscription cost → still estimated.
       expect(agentResult.usage.estimated).toBe(true);
+    });
+
+    it("follows the openai-compatible endpoint's locality for the cost flag (#2128)", async () => {
+      const sse = () =>
+        new Response(
+          'data: {"choices":[{"delta":{"content":"ok"}}]}\n' +
+            'data: {"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":1}}\n'
+        );
+      const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => sse());
+      try {
+        const run = async (baseUrl: string) =>
+          makeSdkFanoutBindings(
+            new OpenAiCompatibleAdapter("lm-studio", { baseUrl, model: "judge" }, {})
+          ).runAgent({ agentId: "j0", prompt: "judge", provider: "lm-studio" });
+
+        const local = await run("http://127.0.0.1:8000/v1");
+        expect(local.terminalKind).toBe("success");
+        expect(local.usage.inputTokens).toBe(5);
+        expect(local.usage.estimated).toBe(false);
+
+        const hosted = await run("https://api.example.com/v1");
+        expect(hosted.terminalKind).toBe("success");
+        expect(hosted.usage.estimated).toBe(true);
+      } finally {
+        spy.mockRestore();
+      }
     });
 
     it("flags opencode estimated:false for a local model, even with reported tokens (#1622)", async () => {
