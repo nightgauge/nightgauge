@@ -229,19 +229,16 @@ copilot:
 > [docs/CONFIGURATION.md](docs/CONFIGURATION.md#copilot-adapter-environment-variables)
 > for all configuration options.
 
-### LM Studio (Local Model Adapter)
+### Local models
 
-LM Studio is supported as a chat-completion adapter for offline and zero-cost
-evaluation, judging, and summarization. It does not provide the agentic tool loop
-required to run pipeline stages or edit a repository. See
-[docs/MULTI_BACKEND_SETUP.md](docs/MULTI_BACKEND_SETUP.md#lm-studio-local-model)
-for setup instructions and
-[docs/CONFIGURATION.md](docs/CONFIGURATION.md#lm-studio-adapter-environment-variables)
-for configuration reference.
-
-**Use LM Studio when:** running offline evaluations, privacy-sensitive
-summarization, or cost-free experimentation. Use an agentic adapter for pipeline
-execution.
+Local models run through the OpenCode adapter against any OpenAI-compatible
+server (LM Studio, Ollama, oMLX, MTPLX, …). The chat-only `openai-compatible`
+backend serves evaluation, judging and summarization on the same kind of
+server. See
+[docs/MULTI_BACKEND_SETUP.md](docs/MULTI_BACKEND_SETUP.md#local-models-opencode)
+for setup and
+[docs/CONFIGURATION.md](docs/CONFIGURATION.md#openai-compatible-adapter-environment-variables)
+for the judge's configuration.
 
 ### Adapter Scope (verified July 22, 2026)
 
@@ -279,8 +276,8 @@ chat-completion-only and are limited to evaluation, judging, and summarization.
 | Gemini CLI         | Agentic pipeline execution                   | **Experimental**; live matrix pending |
 | GitHub Copilot CLI | Agentic pipeline execution                   | **Experimental**; live matrix pending |
 | Gemini SDK         | Evaluation/judging/summarization only        | Chat-completion-only                  |
-| Ollama             | Evaluation/judging/summarization only        | Chat-completion-only                  |
-| LM Studio          | Evaluation/judging/summarization only        | Chat-completion-only                  |
+| OpenCode           | Agentic, hosted or local models              | **Experimental**                      |
+| OpenAI-compatible  | Evaluation/judging/summarization only        | Chat-completion-only                  |
 
 The VS Code extension uses the separately installed Claude CLI for its Claude
 adapter. It does not bundle Anthropic's Agent SDK. Direct Agent SDK mode is an

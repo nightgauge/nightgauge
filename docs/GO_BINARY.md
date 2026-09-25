@@ -447,8 +447,8 @@ otherwise immediately after the skill's context includes (the
 `PIPELINE_CONTEXT.md` / `AUTONOMY_CONTRACT.md` region), which is read before
 the procedure rather than buried under it; otherwise the top of the body.
 
-**Fail-open at every step, exit 0.** An unknown model, a local provider
-(ollama/lm-studio have no registry entries by design), or an unreadable
+**Fail-open at every step, exit 0.** An unknown model, a local model
+(a local OpenCode endpoint has no registry entries by design), or an unreadable
 fragment all render base-only. A malformed overlay must never take down a run.
 
 **The path rewrite runs exactly once, here.** It is deliberately _not_
@@ -2526,7 +2526,7 @@ paths of `pr-create`/`pr-merge` run compiled Go, spend no tokens, and cost an
 exact `$0`; nothing was looked up, so the pricing registry did not miss. Those
 stages record `cost_source: "deterministic"` in the per-stage history and leave
 `cost_unstamped` unset — the same carve-out the flag already makes for a
-genuinely free local-provider (`ollama`/`lm-studio`) run. Before #890 they
+genuinely free local-model run. Before #890 they
 priced through the unresolvable `(anthropic, "")` pair and were flagged, and
 because at least four of them appear in every run, the run-level OR was true
 for **every** run ever recorded: `unstamped_runs == runs` in every bucket, and
@@ -5711,7 +5711,6 @@ Per adapter the doctor reports:
 | ------ | -------------------------------- | ------------------------- | -------------------------------------- |
 | `cli`  | claude, codex, gemini, copilot   | binary on PATH            | `version`, `version_ok`, `min_version` |
 | `sdk`  | claude-sdk, gemini-sdk           | API-key env set           | —                                      |
-| `http` | ollama, lm-studio                | model configured (env or machine-tier) | `server_url`, `server_reachable`, `model`, `model_ok` |
 
 For `codex`, an `mcp` sub-object reports whether `$CODEX_HOME/config.toml` exists
 and whether the nightgauge MCP managed block is present.

@@ -380,12 +380,12 @@ neither:
 
   If an adapter has no registry mapping for a recognized band, the extension
   launches its configured adapter model and records the source as `config`
-  rather than passing an unsupported alias. `lm-studio` remains the deliberate
-  exception (#3214): local model catalogs have no registry tier hierarchy, so
-  every band takes that fallback and the loaded local model serves the run.
-  The agentic-adapter gate currently bars `gemini-sdk` and `lm-studio` from
-  pipeline-stage execution (#57); their mapping/fallback rules still govern
-  extension surfaces where those adapters are eligible.
+  rather than passing an unsupported alias. Local model catalogs have no
+  registry tier hierarchy (#3214), so a local model takes that fallback for
+  every band. The agentic-adapter gate bars the chat-only `gemini-sdk` and
+  `openai-compatible` from pipeline-stage execution (#57); their
+  mapping/fallback rules still govern extension surfaces where those adapters
+  are eligible.
   The Go executor's adapters (`internal/execution/adapters`, the
   `nightgauge run` path) use the same remote-provider mappings; local adapters
   likewise do not invent a tier hierarchy.
@@ -526,8 +526,8 @@ through:
   and the executor resolves a backend: a Claude **native-workflow** offload when
   the adapter declares it, exposes `runWorkflow`, `prefer_native_offload` is on
   for the stage, and the version preflight (≥ v2.1.154) passes — otherwise the
-  portable **`sdk-fanout`** floor (Codex / Gemini / Copilot / LM Studio /
-  Ollama). The chain `native-workflow → sdk-fanout → single-agent` degrades
+  portable **`sdk-fanout`** floor (Codex / Gemini / Copilot /
+  OpenAI-compatible). The chain `native-workflow → sdk-fanout → single-agent` degrades
   gracefully, so a workflow-eligible stage never hard-fails for lack of a
   backend.
 

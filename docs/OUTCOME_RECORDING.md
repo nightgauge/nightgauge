@@ -107,13 +107,11 @@ A provider refusal or fallback can still serve a weaker registered model and
 book a genuine MISS. A model with no registry band records `""` and is excluded
 from the accuracy denominator rather than fabricating one.
 
-Local adapters remain different by design: `lm-studio` has no registry tier
-hierarchy, so extension dispatch falls back to the configured loaded model for
+Local models remain different by design: a local model catalog has no
+registry tier hierarchy, so dispatch falls back to the configured model for
 every requested band. If that model has no registry band, its corpus pair is
 excluded while the run record's per-stage `model_selection` still retains the
-concrete id for attribution. The agentic-adapter gate currently prevents LM
-Studio from running pipeline stages (#57); this rule applies on extension
-surfaces where the adapter is eligible.
+concrete id for attribution.
 
 Attribution of what actually ran is kept where a concrete id belongs: the run
 record's per-stage `model_selection`.

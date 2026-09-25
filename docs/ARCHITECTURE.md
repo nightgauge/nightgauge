@@ -618,7 +618,7 @@ process/concurrency ceilings, budget, quota gating, and a durable journal for
 cross-process resume) that **orchestrates** probabilistic subagents: it fans out
 agents, adversarially verifies "done" claims with judge agents, and routes a
 stage to a Claude native-workflow offload or the portable `SdkFanoutRunner` floor
-(Codex / Gemini / Copilot / LM Studio / Ollama) with graceful downgrade. The
+(Codex / Gemini / Copilot / OpenAI-compatible) with graceful downgrade. The
 engine — not any one CLI adapter — owns orchestration. It is off by default and
 opt-in per stage via `orchestration:` skill frontmatter. See
 [docs/WORKFLOW_ORCHESTRATION.md](WORKFLOW_ORCHESTRATION.md) for the full design

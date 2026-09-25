@@ -15,10 +15,11 @@ paths.
 | `Supercharge` toggle, `pipeline.supercharge` config, `is_supercharge` history field, `pipeline_mode: "supercharge"` outcome value | #3009          | one release after #3009 | Replaced by `pipeline.performance_mode` and `mode: maximum`    | [PERFORMANCE_MODES.md](PERFORMANCE_MODES.md)                                  |
 | `autonomous.max_concurrent` config key                                                                                            | #3195          | one release after #3195 | Replaced by `pipeline.max_concurrent` (single source of truth) | See section below                                                             |
 | `github_user` config key                                                                                                          | #3338          | two minors after #3646  | Migrated to machine tier (`~/.nightgauge/config.yaml`)         | See section below                                                             |
-| `lm_studio` config key                                                                                                            | #3338          | two minors after #3646  | Migrated to machine tier (`~/.nightgauge/config.yaml`)         | See section below                                                             |
+| `lm_studio` config key                                                                                                            | #3338          | two minors after #3646  | Removed with the `lm-studio` adapter (#2128)                   | See section below                                                             |
 | `autonomous.enabled_repos` config key                                                                                             | #3643          | two minors after #3646  | Reclassified to Machine tier; runtime tier owns the value      | See section below                                                             |
 | `autonomous.repositories.<repo>.sequential` config key                                                                            | #3643          | two minors after #3646  | Reclassified to Machine tier; use machine tier per-repo config | See section below                                                             |
 | `autonomous.repositories.<repo>.max_concurrent` config key                                                                        | #3643          | two minors after #3646  | Reclassified to Machine tier; use machine tier per-repo config | See section below                                                             |
+| `lm-studio` and `ollama` adapters                                                                                                 | #2128          | #2128                   | Removed; naming either fails with a migration error            | [See below](#lm-studio-and-ollama-adapters--opencode-and-openai-compatible)   |
 
 ---
 
@@ -165,7 +166,8 @@ and the config is still loaded normally.
 **Affected keys**:
 
 - `github_user` — GitHub username for commit authorship. Migrate to `~/.nightgauge/config.yaml`.
-- `lm_studio` — LM Studio local inference config. Migrate to `~/.nightgauge/config.yaml`.
+- `lm_studio` — LM Studio local inference config. Removed with the `lm-studio` adapter (#2128);
+  see [below](#lm-studio-and-ollama-adapters--opencode-and-openai-compatible).
 - `autonomous.enabled_repos` — Allowlist of repos the autonomous scheduler may scan. Now
   owned by the runtime tier (`nightgauge.runtime.autonomous.enabled_repos`); toggling
   repos in the Repositories tree writes through that tier automatically.
@@ -182,3 +184,35 @@ full tier hierarchy and machine-tier path resolution.
 **Removal milestone**: Two minor releases after #3646 ships, the Zod schema will be
 updated to strip these keys (or hard-error in strict mode), and the JSDoc `@deprecated`
 comments will be removed along with the corresponding schema fields.
+
+---
+
+## `lm-studio` and `ollama` adapters → `opencode` and `openai-compatible`
+
+**Removed**: #2128 (no deprecation window; the project is pre-customer)
+
+The `lm-studio` and `ollama` adapters were chat-completion clients with
+different defaults and no tool loop. They are gone, along with the `lm_studio`
+and `ollama` config blocks, the `NIGHTGAUGE_LM_STUDIO_*` and
+`NIGHTGAUGE_OLLAMA_*` adapter variables, the doctor's local-HTTP adapter checks
+and the settings UI's LM Studio and Ollama panels.
+
+A config, flag or environment variable that still names `lm-studio`,
+`lmstudio` or `ollama` as an adapter (`ui.core.adapter`,
+`pipeline.stage_adapters.<stage>`, `NIGHTGAUGE_ADAPTER`) fails with an error
+that names the setting and the replacement. There is no fallback.
+
+**Migration**:
+
+- **Pipeline stages on a local model:** set the adapter to `opencode` and
+  declare the server (LM Studio, Ollama, oMLX, MTPLX, llama.cpp, vLLM or any
+  other OpenAI-compatible server) under `opencode.endpoints` in
+  `~/.nightgauge/config.yaml`. A model is local when its endpoint is declared
+  as `lm-studio` or `ollama`, or its base URL is `localhost`, loopback or
+  private. See [ADAPTER_GUIDE.md § OpenCode](ADAPTER_GUIDE.md#opencode).
+- **Evaluation and judging:** set the adapter to `openai-compatible` and
+  configure `NIGHTGAUGE_OPENAI_COMPATIBLE_BASE_URL` (required, no default),
+  `NIGHTGAUGE_OPENAI_COMPATIBLE_MODEL`, and optionally
+  `NIGHTGAUGE_OPENAI_COMPATIBLE_API_KEY_ENV` and
+  `NIGHTGAUGE_OPENAI_COMPATIBLE_TIMEOUT_MS`. See
+  [ADAPTER_GUIDE.md § OpenAI-compatible](ADAPTER_GUIDE.md#openai-compatible-evaluation-and-judging).

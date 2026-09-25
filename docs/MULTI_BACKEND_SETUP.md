@@ -8,14 +8,14 @@ Cloud Vertex as alternative backends for Nightgauge.
 Nightgauge supports multiple AI backends. The table distinguishes agentic
 pipeline backends from chat-completion-only evaluation backends:
 
-| Backend     | Flag         | Use Case                            | Pricing           |
-| ----------- | ------------ | ----------------------------------- | ----------------- |
-| Claude Max  | (default)    | Direct Anthropic API access         | Anthropic rates   |
-| AWS Bedrock | `--bedrock`  | Enterprise AWS integration          | AWS Bedrock rates |
-| GCP Vertex  | `--vertex`   | Enterprise Google Cloud integration | GCP Vertex rates  |
-| Gemini CLI  | `gemini`     | Experimental agentic pipeline       | Google AI rates   |
-| Gemini SDK  | `gemini-sdk` | Chat-only evaluation via API key    | Google AI rates   |
-| LM Studio   | `lm-studio`  | Chat-only local evaluation          | Free (local)      |
+| Backend     | Flag         | Use Case                                    | Pricing           |
+| ----------- | ------------ | ------------------------------------------- | ----------------- |
+| Claude Max  | (default)    | Direct Anthropic API access                 | Anthropic rates   |
+| AWS Bedrock | `--bedrock`  | Enterprise AWS integration                  | AWS Bedrock rates |
+| GCP Vertex  | `--vertex`   | Enterprise Google Cloud integration         | GCP Vertex rates  |
+| Gemini CLI  | `gemini`     | Experimental agentic pipeline               | Google AI rates   |
+| Gemini SDK  | `gemini-sdk` | Chat-only evaluation via API key            | Google AI rates   |
+| OpenCode    | `opencode`   | Local models on an OpenAI-compatible server | Free (local)      |
 
 **When to use alternative backends:**
 
@@ -359,152 +359,36 @@ project context (analogous to `CLAUDE.md`). See
 
 ---
 
-## LM Studio (Local Model)
+## Local Models (OpenCode)
 
-LM Studio runs models locally on your machine using an OpenAI-compatible REST
-API. No API key or internet connection is required after models are downloaded.
+Local models run through the `opencode` adapter against any OpenAI-compatible
+server you run: LM Studio, Ollama, oMLX, MTPLX, llama.cpp, vLLM and the like.
+OpenCode drives a real tool loop, so a local model can run pipeline stages.
+The `lm-studio` and `ollama` adapters were removed (#2128); a config that still
+names either fails with a migration error.
 
-LM Studio is chat-completion-only: Nightgauge supports it for evaluation,
-judging, and summarization, not pipeline execution. It cannot edit files, run
-shell commands, or call `gh`.
+Declare the server as an endpoint in the machine tier
+(`~/.nightgauge/config.yaml`, never the committed project config), and name its
+models as `<endpoint id>/<model>`. A model counts as local when its endpoint is
+declared local or its base URL is a loopback or private address. Setup, the
+endpoint fields and the isolation rules are in
+[ADAPTER_GUIDE.md § OpenCode](ADAPTER_GUIDE.md#opencode) and
+[SETTINGS_ARCHITECTURE.md § The `opencode` block](SETTINGS_ARCHITECTURE.md#the-opencode-block);
+operator templates are in `configs/opencode/`.
 
-### When to use LM Studio
+For evaluation and judging on the same kind of server, use the chat-only
+`openai-compatible` backend, configured by `NIGHTGAUGE_OPENAI_COMPATIBLE_*`
+(see [ADAPTER_GUIDE.md § OpenAI-compatible](ADAPTER_GUIDE.md#openai-compatible-evaluation-and-judging)).
 
-**Recommended when:**
+**Local model limits to expect:**
 
-- You want zero-cost local inference for development and experimentation
-- Data cannot leave your machine (air-gapped, compliance, privacy requirements)
-- You are running offline or on unreliable internet
-- You want to evaluate pipeline behavior with open-weight models
-
-**Not recommended when:**
-
-- You need reliable tool calling (model-dependent, disabled by default)
-- You require performance parity with hosted Claude/Gemini models
-- You need to run any pipeline stage — LM Studio does not provide Nightgauge's
-  required agentic tool loop
-- Token context limits matter — local models often have smaller context windows
-  than hosted providers
-
-### Prerequisites
-
-1. LM Studio v0.3.x or later installed (<https://lmstudio.ai/>)
-2. At least one chat model downloaded in LM Studio
-3. LM Studio local server enabled (Settings → Local Server, port 1234)
-4. A model that supports text generation (tool calling requires additional model
-   capability — see [Local Model Limitations](#local-model-limitations) below)
-
-### Step 1: Enable LM Studio Local Server
-
-1. Open LM Studio
-2. Go to Settings → Local Server (or the server icon in the left sidebar)
-3. Enable the server — it starts on `http://localhost:1234` by default
-4. Load the model you want to use in the chat window (or via the server
-   controls)
-5. Verify the server is running:
-
-```bash
-curl http://localhost:1234/v1/models
-```
-
-### Step 2: Configure Nightgauge
-
-```yaml
-# .nightgauge/config.yaml
-ui:
-  core:
-    adapter: lm-studio
-    default_model: sonnet # Ignored for LM Studio — model set via lm_studio.model
-
-lm_studio:
-  model: "lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF" # Your loaded model name
-  base_url: "http://localhost:1234/v1" # Default; change if using non-standard port
-  api_key: "lm-studio" # LM Studio ignores this value; required by protocol
-  timeout_ms: 180000 # 3 minutes — local inference can be slow
-  max_tokens: 8192
-  stream_options:
-    include_usage: true # Required for token count reporting
-  tool_calling: false # Disabled by default; model-dependent
-```
-
-### Step 3: Verify Setup
-
-```bash
-# Verify LM Studio server responds and list available models
-curl -s http://localhost:1234/v1/models | jq '.data[].id'
-```
-
-### LM Studio Adapter Environment Variables
-
-| Variable                          | Description                          | Default                    |
-| --------------------------------- | ------------------------------------ | -------------------------- |
-| `NIGHTGAUGE_LM_STUDIO_BASE_URL`   | LM Studio server base URL            | `http://localhost:1234/v1` |
-| `NIGHTGAUGE_LM_STUDIO_MODEL`      | Model name to use                    | _(required)_               |
-| `NIGHTGAUGE_LM_STUDIO_API_KEY`    | API key (value ignored by LM Studio) | `lm-studio`                |
-| `NIGHTGAUGE_LM_STUDIO_TIMEOUT_MS` | Request timeout in milliseconds      | `180000`                   |
-
-### Local Model Limitations
-
-LM Studio support is intentionally scoped to avoid misrepresenting local
-inference capabilities:
-
-**Performance:**
-
-- Inference speed depends on your hardware — expect 10–100× slower generation
-  than hosted providers on typical developer machines
-- Large pipeline stages (feature-dev, feature-planning) involve long prompts and
-  can take 10–30 minutes per stage on CPU-only machines
-
-**Model-level tool calling:**
-
-- Disabled by default (`tool_calling: false`)
-- Tool calling is model-dependent — not all models that claim OpenAI
-  compatibility implement function calling reliably
-- When enabled (`tool_calling: true`), results vary widely by model. This does
-  not turn LM Studio into a Nightgauge pipeline adapter.
-
-**Token accounting:**
-
-- Token counts are reported from LM Studio when
-  `stream_options.include_usage: true` is set (required in streaming mode)
-- Token usage in non-streaming mode is always available in the response body
-- Cost display shows `$0.0000` for all local inference — this is correct; local
-  models have no API cost
-
-**Context window:**
-
-- Local models vary in context window size — commonly 4K–32K tokens
-- The pipeline stages were designed for models with 100K+ context windows;
-  stages may truncate or fail with smaller context windows
-- Check your model's context limit in LM Studio before running full pipelines
-
-**Phase marker detection:**
-
-- LM Studio can pass through HTML comments (phase markers) in model output;
-  validate the behavior against the model and LM Studio version you deploy
-- Actual passthrough fidelity depends on the loaded model and its
-  instruction-following capability; results vary across models
-- Streaming phase markers require accumulation across SSE chunks — live
-  validation required before relying on this in production
-
-**Quality variability:**
-
-- Open-weight local models produce significantly more variable output than
-  frontier models (Claude, Gemini)
-- Pipeline stages that depend on structured JSON output (context files, plan
-  files) may fail more often with local models
-- Expect higher retry rates and more manual intervention
-
-### Troubleshooting
-
-| Error                               | Likely Cause                         | Solution                                                 |
-| ----------------------------------- | ------------------------------------ | -------------------------------------------------------- |
-| `Connection refused localhost:1234` | LM Studio server not running         | Enable local server in LM Studio settings                |
-| `Model not loaded`                  | No model selected in LM Studio       | Load a model in LM Studio chat or server controls        |
-| `Request timeout`                   | Inference too slow for timeout       | Increase `lm_studio.timeout_ms` or use a smaller model   |
-| `Empty response / no content`       | Model context window exceeded        | Use a smaller prompt or switch to a larger-context model |
-| `Tool call failed`                  | Model does not support tool calling  | Set `lm_studio.tool_calling: false`                      |
-| `$0.0000 cost shown`                | Expected — local models have no cost | This is correct behavior                                 |
+- Inference speed depends on your hardware; long stages (feature-dev,
+  feature-planning) can take far longer than on a hosted provider.
+- The pipeline stages were designed for models with 100K+ context windows. Set
+  the endpoint's declared context to what the server has actually loaded.
+- Open-weight models produce more variable output than frontier models; stages
+  that depend on structured output may fail and retry more often.
+- Local inference records `$0.0000` cost. That is correct.
 
 ---
 

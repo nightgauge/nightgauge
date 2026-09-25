@@ -24,18 +24,17 @@ Capability flags such as streaming and token tracking do not imply that an
 adapter can run a coding pipeline. Pipeline dispatch requires an agentic tool
 loop capable of editing files, running commands, and calling `gh`.
 
-| Adapter         | Agentic pipeline eligible | Release status                                    |
-| --------------- | :-----------------------: | ------------------------------------------------- |
-| claude-headless |             ✓             | Recommended; primary tested path                  |
-| claude-sdk      |             ✓             | Advanced optional SDK integration                 |
-| codex           |             ✓             | **Beta**; live six-stage matrix pending           |
-| gemini          |             ✓             | **Experimental**; live six-stage matrix pending   |
-| copilot         |             ✓             | **Experimental**; live six-stage matrix pending   |
-| grok            |             ✓             | **Beta**; six-stage run + beta bar met (#528)     |
-| opencode        |             ✓             | **Experimental**; live six-stage evidence pending |
-| gemini-sdk      |             ✗             | Chat-completion-only                              |
-| ollama          |             ✗             | Chat-completion-only                              |
-| lm-studio       |             ✗             | Chat-completion-only                              |
+| Adapter           | Agentic pipeline eligible | Release status                                    |
+| ----------------- | :-----------------------: | ------------------------------------------------- |
+| claude-headless   |             ✓             | Recommended; primary tested path                  |
+| claude-sdk        |             ✓             | Advanced optional SDK integration                 |
+| codex             |             ✓             | **Beta**; live six-stage matrix pending           |
+| gemini            |             ✓             | **Experimental**; live six-stage matrix pending   |
+| copilot           |             ✓             | **Experimental**; live six-stage matrix pending   |
+| grok              |             ✓             | **Beta**; six-stage run + beta bar met (#528)     |
+| opencode          |             ✓             | **Experimental**; live six-stage evidence pending |
+| gemini-sdk        |             ✗             | Chat-completion-only                              |
+| openai-compatible |             ✗             | Chat-completion-only                              |
 
 The runtime's `isAgenticAdapter()` check is authoritative. Chat-only adapters
 remain supported for evaluation, judging, and summarization but are rejected at
@@ -63,18 +62,17 @@ below are the whole declared surface: `agentic` (:87),
 - **direct API key** — `requiresDirectApiKey()`; `true` means a raw provider key
   is mandatory rather than a CLI session.
 
-| Adapter         | agentic | orchestration     | direct API key | `runWorkflow?()`       | Auth method                                                                                             | Min version           |
-| --------------- | :-----: | ----------------- | :------------: | ---------------------- | ------------------------------------------------------------------------------------------------------- | --------------------- |
-| claude-headless |    ✓    | `native-workflow` |       ✗        | ✓ (gated ≥ `v2.1.154`) | `claude auth status` (OAuth)                                                                            | none declared         |
-| claude-sdk      |    ✓    | `native-workflow` |       ✓        | ✓ (gated ≥ `v2.1.154`) | `ANTHROPIC_API_KEY` (checked in `validateAuth`)                                                         | N/A (SDK)             |
-| codex           |    ✓    | `sdk-fanout`      |       ✗        | —                      | `codex login status`                                                                                    | `0.111.0` warn        |
-| gemini          |    ✓    | `sdk-fanout`      |       ✗        | —                      | Cascade: `GEMINI_API_KEY` / Vertex / `gcloud`                                                           | `0.29.0` warn         |
-| gemini-sdk      |    ✗    | `sdk-fanout`      |       ✓        | —                      | `GEMINI_API_KEY` or `GOOGLE_API_KEY` (checked in `validateAuth`)                                        | N/A (SDK)             |
-| grok            |    ✓    | `sdk-fanout`      |       ✗        | —                      | `grok login` session or `XAI_API_KEY`                                                                   | `1.0.0` warn          |
-| copilot         |    ✓    | `sdk-fanout`      |       ✗        | —                      | `GH_TOKEN` / `GITHUB_TOKEN` / `COPILOT_GITHUB_TOKEN` → `copilot auth status`                            | none declared         |
-| opencode        |    ✓    | `sdk-fanout`      |       ✗        | —                      | Per-model, at dispatch (ADR-022 § 17): `ANTHROPIC_API_KEY` for `anthropic/*`; none for a local endpoint | `1.18.30` fail-closed |
-| lm-studio       |    ✗    | `sdk-fanout`      |       ✗        | —                      | None (local HTTP server)                                                                                | N/A (HTTP)            |
-| ollama          |    ✗    | `sdk-fanout`      |       ✗        | —                      | None (local HTTP server)                                                                                | N/A (HTTP)            |
+| Adapter           | agentic | orchestration     | direct API key | `runWorkflow?()`       | Auth method                                                                                             | Min version           |
+| ----------------- | :-----: | ----------------- | :------------: | ---------------------- | ------------------------------------------------------------------------------------------------------- | --------------------- |
+| claude-headless   |    ✓    | `native-workflow` |       ✗        | ✓ (gated ≥ `v2.1.154`) | `claude auth status` (OAuth)                                                                            | none declared         |
+| claude-sdk        |    ✓    | `native-workflow` |       ✓        | ✓ (gated ≥ `v2.1.154`) | `ANTHROPIC_API_KEY` (checked in `validateAuth`)                                                         | N/A (SDK)             |
+| codex             |    ✓    | `sdk-fanout`      |       ✗        | —                      | `codex login status`                                                                                    | `0.111.0` warn        |
+| gemini            |    ✓    | `sdk-fanout`      |       ✗        | —                      | Cascade: `GEMINI_API_KEY` / Vertex / `gcloud`                                                           | `0.29.0` warn         |
+| gemini-sdk        |    ✗    | `sdk-fanout`      |       ✓        | —                      | `GEMINI_API_KEY` or `GOOGLE_API_KEY` (checked in `validateAuth`)                                        | N/A (SDK)             |
+| grok              |    ✓    | `sdk-fanout`      |       ✗        | —                      | `grok login` session or `XAI_API_KEY`                                                                   | `1.0.0` warn          |
+| copilot           |    ✓    | `sdk-fanout`      |       ✗        | —                      | `GH_TOKEN` / `GITHUB_TOKEN` / `COPILOT_GITHUB_TOKEN` → `copilot auth status`                            | none declared         |
+| opencode          |    ✓    | `sdk-fanout`      |       ✗        | —                      | Per-model, at dispatch (ADR-022 § 17): `ANTHROPIC_API_KEY` for `anthropic/*`; none for a local endpoint | `1.18.30` fail-closed |
+| openai-compatible |    ✗    | `sdk-fanout`      |       ✗        | —                      | Optional key, from the variable `NIGHTGAUGE_OPENAI_COMPATIBLE_API_KEY_ENV` names                        | N/A (HTTP)            |
 
 Beyond this surface, `opencode` is gated: `Manager.RunStage` refuses every
 dispatch unless `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` is set in the process
@@ -86,18 +84,16 @@ environment (ADR-022 § The enable gate). See
 The Go binary (`cmd/nightgauge`) has its own adapter layer (`internal/execution/adapters/`).
 The Go adapters are the **scheduler-driven execution path** (not the VSCode IPC path).
 
-| Adapter         | Go Binary Support | TypeScript Support | Gap?                                                                                                                   |
-| --------------- | :---------------: | :----------------: | ---------------------------------------------------------------------------------------------------------------------- |
-| claude-headless |         ✓         |         ✓          | Stream-JSON parity (see [Gap #4](#gap-4-claude-headless-typescript-plain-text-output-and-token-reporting))             |
-| claude-sdk      |         ✓         |         ✓          | Different implementation (see note)                                                                                    |
-| codex           |         ✓         |         ✓          | Session resume, ephemeral, sandbox (see #2589)                                                                         |
-| gemini          |         ✓         |         ✓          | Parity (#4032): positional prompt + `--output-format stream-json`                                                      |
-| gemini-sdk      |         ✓         |         ✓          | Stream-JSON flag in Go (uses `--output-format stream-json`)                                                            |
-| lm-studio       |    ✓ (bridge)     |         ✓          | Registered at `internal/execution/adapters/registry.go:38` (alias `lmstudio` at :45); Go uses claude CLI as SDK bridge |
-| ollama          |    ✓ (bridge)     |         ✓          | Go uses claude CLI as SDK bridge                                                                                       |
-| copilot         |         ✓         |         ✓          | CLI contract exists in both layers; live verification remains                                                          |
-| grok            |         ✓         |         ✓          | Beta since 2026-08-15 (#528) — see § Grok Live-Run Evidence                                                            |
-| opencode        |         ✓         |         ✓          | Experimental; both layers refuse every dispatch until `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` is set (ADR-022)            |
+| Adapter         | Go Binary Support | TypeScript Support | Gap?                                                                                                        |
+| --------------- | :---------------: | :----------------: | ----------------------------------------------------------------------------------------------------------- |
+| claude-headless |         ✓         |         ✓          | Stream-JSON parity (see [Gap #4](#gap-4-claude-headless-typescript-plain-text-output-and-token-reporting))  |
+| claude-sdk      |         ✓         |         ✓          | Different implementation (see note)                                                                         |
+| codex           |         ✓         |         ✓          | Session resume, ephemeral, sandbox (see #2589)                                                              |
+| gemini          |         ✓         |         ✓          | Parity (#4032): positional prompt + `--output-format stream-json`                                           |
+| gemini-sdk      |         ✓         |         ✓          | Stream-JSON flag in Go (uses `--output-format stream-json`)                                                 |
+| copilot         |         ✓         |         ✓          | CLI contract exists in both layers; live verification remains                                               |
+| grok            |         ✓         |         ✓          | Beta since 2026-08-15 (#528) — see § Grok Live-Run Evidence                                                 |
+| opencode        |         ✓         |         ✓          | Experimental; both layers refuse every dispatch until `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` is set (ADR-022) |
 
 **Note on claude-sdk Go adapter:** The Go `ClaudeSdkAdapter` spawns `claude -p --output-format stream-json`
 using `ANTHROPIC_API_KEY`. This is NOT the same as the TypeScript `ClaudeSdkAdapter` which imports
@@ -391,86 +387,38 @@ neither is set. `createQueryFunction()` repeats the check before importing
 
 ---
 
-### 6. lm-studio
+### 6. openai-compatible
 
-**File:** `packages/nightgauge-sdk/src/cli/adapters/LmStudioAdapter.ts`
+**File:** `packages/nightgauge-sdk/src/cli/adapters/OpenAiCompatibleAdapter.ts`
 
 **Pipeline role:** Chat-completion-only; supported for evaluation, judging, and
-summarization, not repository-changing pipeline stages.
+summarization, not repository-changing pipeline stages. TypeScript only: the Go
+binary has no `openai-compatible` adapter.
 
-| Property               | Value                                                          |
-| ---------------------- | -------------------------------------------------------------- |
-| CLI command            | `lm-studio` (declared but not used — uses fetch API)           |
-| Auth method            | Always returns "passed" (LM Studio accepts any API key string) |
-| Prompt delivery        | HTTP POST to `/v1/chat/completions` (OpenAI-compatible)        |
-| Default args           | `[]` (HTTP-based)                                              |
-| Min version            | N/A (HTTP server)                                              |
-| `requiresDirectApiKey` | `false`                                                        |
-
-**Auth validation quality:** Minimal — `validateAuth()` always passes. Real validation happens at
-request time: HTTP 404/400 → actionable "model not loaded" error; other HTTP errors → status code
-reported. Server connectivity errors surface at request time.
-
-**LM Studio-specific error messages:**
-
-- Model not loaded: `LM Studio model '${model}' is not loaded. Load the model before retrying.`
-- Connection refused: `LM Studio server returned HTTP ${status}: ${statusText}`
+| Property               | Value                                                                            |
+| ---------------------- | -------------------------------------------------------------------------------- |
+| Prompt delivery        | HTTP POST to `<base URL>/chat/completions`                                       |
+| Auth                   | `Authorization` header only when the named key variable is set                   |
+| Locality               | Local when the base URL is loopback or private; a hosted URL's cost is estimated |
+| `requiresDirectApiKey` | `false`                                                                          |
 
 **Environment variables:**
 
-- `NIGHTGAUGE_LM_STUDIO_BASE_URL` — Server URL (default: `http://localhost:1234/v1`)
-- `NIGHTGAUGE_LM_STUDIO_MODEL` — **Required** — model name
-- `NIGHTGAUGE_LM_STUDIO_API_KEY` — API key (default: `lm-studio`)
-- `NIGHTGAUGE_LM_STUDIO_TIMEOUT_MS` — Request timeout (default: 180000ms / 3 minutes)
-
-**Go binary adapter (bridge mode):** registered at
-`internal/execution/adapters/registry.go:38` with the alias `lmstudio` at
-`registry.go:45`. `internal/execution/adapters/lmstudio.go` spawns
-`claude -p --output-format stream-json --verbose` and sets
-`NIGHTGAUGE_ADAPTER=lm-studio` so the TypeScript `LmStudioAdapter` handles the
-HTTP call — the same SDK-bridge shape as the Go Ollama adapter, and it likewise
-requires the `claude` CLI to be installed. `Agentic()` returns `false`, so the
-Go path is available for eval/judge, not pipeline dispatch.
+- `NIGHTGAUGE_OPENAI_COMPATIBLE_BASE_URL` — **Required** — server base URL; no default
+- `NIGHTGAUGE_OPENAI_COMPATIBLE_MODEL` — **Required** — model id as the server lists it
+- `NIGHTGAUGE_OPENAI_COMPATIBLE_API_KEY_ENV` — name of the variable holding the key
+  (default: `NIGHTGAUGE_OPENAI_COMPATIBLE_API_KEY`)
+- `NIGHTGAUGE_OPENAI_COMPATIBLE_TIMEOUT_MS` — request timeout (default: 180000ms)
 
 ---
 
-### 7. ollama
+### 7. lm-studio and ollama (removed)
 
-**File:** `packages/nightgauge-sdk/src/cli/adapters/OllamaAdapter.ts`
-
-**Pipeline role:** Chat-completion-only; supported for evaluation, judging, and
-summarization, not repository-changing pipeline stages.
-
-| Property               | Value                                                       |
-| ---------------------- | ----------------------------------------------------------- |
-| CLI command            | `ollama` (declared but not used — uses fetch API)           |
-| Auth method            | Always returns "passed" (Ollama accepts any API key string) |
-| Prompt delivery        | HTTP POST to `/v1/chat/completions` (OpenAI-compatible)     |
-| Default args           | `[]` (HTTP-based)                                           |
-| Min version            | N/A (HTTP server)                                           |
-| `requiresDirectApiKey` | `false`                                                     |
-
-**Auth validation quality:** Same as LM Studio — always passes. Actionable error messages at request time:
-
-- Model not pulled: `Run 'ollama pull ${model}' to download the model, then retry.`
-- Server not running: `Make sure Ollama is running: 'ollama serve'`
-
-**Environment variables:**
-
-- `NIGHTGAUGE_OLLAMA_BASE_URL` — Server URL (default: `http://localhost:11434/v1`)
-- `NIGHTGAUGE_OLLAMA_MODEL` — **Required** — model name (e.g., `llama3.1`, `codellama`)
-- `NIGHTGAUGE_OLLAMA_API_KEY` — API key (default: `ollama`; real key for remote deployments)
-- `NIGHTGAUGE_OLLAMA_TIMEOUT_MS` — Request timeout (default: 300000ms / 5 minutes)
-
-**Go binary adapter (bridge mode):**
-The Go `OllamaAdapter` uses the Claude CLI (`claude`) as an SDK bridge:
-
-- Spawns `claude -p --output-format stream-json --verbose` (same as Go ClaudeAdapter)
-- Sets `NIGHTGAUGE_ADAPTER=ollama` env var so the TypeScript SDK routes to `OllamaAdapter`
-- Passes through all `NIGHTGAUGE_OLLAMA_*` env vars
-- Supports `--allowedTools`, `--max-tokens`, `--max-turns`, `--max-budget-usd` (same as Go ClaudeAdapter)
-
-This is architecturally elegant but creates a dependency: Go Ollama path requires `claude` CLI installed.
+Both adapters were removed (#2128). Local models run through
+[§ 10. opencode](#10-opencode) against a declared OpenAI-compatible endpoint;
+the eval judge uses [§ 6. openai-compatible](#6-openai-compatible). A config,
+flag or environment variable that names either adapter fails with a migration
+error. See [DEPRECATIONS.md](DEPRECATIONS.md#lm-studio-and-ollama-adapters--opencode-and-openai-compatible).
 
 ---
 
