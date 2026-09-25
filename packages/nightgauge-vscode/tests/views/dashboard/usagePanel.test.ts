@@ -93,10 +93,10 @@ describe("buildUsagePanelState — plan kinds (Issue #661)", () => {
   });
 
   it("renders the unknown plan as an empty state that still names the adapter", () => {
-    const state = buildUsagePanelState(unknownUsageSnapshot("ollama", NOW), [makeRun()], NOW)!;
+    const state = buildUsagePanelState(unknownUsageSnapshot("copilot", NOW), [makeRun()], NOW)!;
 
     expect(state.planKind).toBe("unknown");
-    expect(state.adapter).toBe("ollama");
+    expect(state.adapter).toBe("copilot");
     expect(state.windows).toEqual([]);
     expect(state.familyGroups).toEqual([]);
     // An adapter-blind run strip under "we cannot describe this adapter"

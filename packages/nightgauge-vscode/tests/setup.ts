@@ -34,7 +34,6 @@ export const mockConfigBridgeInstance = {
   onConfigChanged: vi.fn().mockReturnValue({ dispose: vi.fn() }),
   getEffectiveConfig: vi.fn().mockReturnValue({ config: DEFAULT_CONFIG }),
   getPipeline: vi.fn().mockReturnValue(DEFAULT_CONFIG.pipeline),
-  getLmStudio: vi.fn().mockReturnValue(DEFAULT_CONFIG.lm_studio),
 };
 
 /**
@@ -83,7 +82,6 @@ export function setMockUIConfig(uiOverrides: Partial<typeof DEFAULT_CONFIG.ui>) 
 export function resetMockConfigBridge() {
   mockConfigBridgeInstance.isInitialized.mockReturnValue(true);
   mockConfigBridgeInstance.getUI.mockReturnValue(DEFAULT_CONFIG.ui);
-  mockConfigBridgeInstance.getLmStudio.mockReturnValue(DEFAULT_CONFIG.lm_studio);
   mockConfigBridgeInstance.onConfigChanged.mockReturnValue({
     dispose: vi.fn(),
   });

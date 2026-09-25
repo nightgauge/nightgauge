@@ -22,17 +22,14 @@ const STAGES: PipelineStage[] = [
   "pr-merge",
 ];
 
-const MAPPED_ADAPTERS: Exclude<ExecutionAdapter, "claude" | "lm-studio" | "ollama">[] = [
+const MAPPED_ADAPTERS: Exclude<ExecutionAdapter, "claude" | "openai-compatible">[] = [
   "codex",
   "gemini",
   "gemini-sdk",
   "copilot",
 ];
 
-const UNMAPPED_ADAPTERS: Extract<ExecutionAdapter, "lm-studio" | "ollama">[] = [
-  "lm-studio",
-  "ollama",
-];
+const UNMAPPED_ADAPTERS: Extract<ExecutionAdapter, "openai-compatible">[] = ["openai-compatible"];
 
 describe("registry tier bands per adapter (Issue #3214, #56)", () => {
   it("each mapped adapter covers haiku, sonnet, opus, fable", () => {
@@ -142,12 +139,12 @@ describe("getModeStageAdapterModel (Issue #3214, #19)", () => {
     }
   });
 
-  it("returns mismatch:true with the opus alias for lm-studio/ollama under maximum", () => {
-    expect(getModeStageAdapterModel("maximum", "feature-dev", "lm-studio")).toEqual({
+  it("returns mismatch:true with the opus alias for openai-compatible under maximum", () => {
+    expect(getModeStageAdapterModel("maximum", "feature-dev", "openai-compatible")).toEqual({
       model: "opus",
       mismatch: true,
     });
-    expect(getModeStageAdapterModel("maximum", "pr-create", "ollama")).toEqual({
+    expect(getModeStageAdapterModel("maximum", "pr-create", "openai-compatible")).toEqual({
       model: "opus",
       mismatch: true,
     });
@@ -171,7 +168,7 @@ describe("getAdapterModelForBand (Issue #387)", () => {
   });
 
   it("keeps configured local models as the explicit tier-mapping exception", () => {
-    expect(getAdapterModelForBand("opus", "lm-studio")).toEqual({
+    expect(getAdapterModelForBand("opus", "openai-compatible")).toEqual({
       model: "opus",
       mismatch: true,
     });

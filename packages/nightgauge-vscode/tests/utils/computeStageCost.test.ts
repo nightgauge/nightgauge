@@ -13,6 +13,7 @@
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { getModelDescriptor } from "@nightgauge/sdk";
+import type { ExecutionAdapter } from "../../src/config/schema";
 import {
   computeStageCost,
   isLocalExecution,
@@ -367,19 +368,23 @@ describe("computeStageCost", () => {
   });
 
   describe("local adapters", () => {
+    // History records written before #2128 still name the removed lm-studio
+    // and ollama adapters, so the cost path keeps pricing them.
     // The registry deliberately carries no ollama/lm-studio entries: the
     // user-configured local model serves every band. `'unknown'` (not
     // `'computed'`) is the truthful label — the cost is $0 because it cannot
     // be priced, not because the vendor charges nothing per token.
     it("lm-studio returns { 0, 'unknown' } regardless of model string", () => {
-      expect(computeStageCost("lm-studio", "any-local-model", sampleTokens)).toEqual({
+      expect(
+        computeStageCost("lm-studio" as ExecutionAdapter, "any-local-model", sampleTokens)
+      ).toEqual({
         cost_usd: 0,
         source: "unknown",
       });
     });
 
     it("ollama returns { 0, 'unknown' } regardless of model string", () => {
-      expect(computeStageCost("ollama", "llama3.2", sampleTokens)).toEqual({
+      expect(computeStageCost("ollama" as ExecutionAdapter, "llama3.2", sampleTokens)).toEqual({
         cost_usd: 0,
         source: "unknown",
       });
@@ -390,10 +395,12 @@ describe("computeStageCost", () => {
       // Routing that string into the registry would bill Anthropic's rates for
       // inference that costs the user nothing — so the local short-circuit runs
       // BEFORE any id lookup.
-      expect(computeStageCost("ollama", "claude-opus-5", sampleTokens)).toEqual({
-        cost_usd: 0,
-        source: "unknown",
-      });
+      expect(computeStageCost("ollama" as ExecutionAdapter, "claude-opus-5", sampleTokens)).toEqual(
+        {
+          cost_usd: 0,
+          source: "unknown",
+        }
+      );
     });
   });
 
