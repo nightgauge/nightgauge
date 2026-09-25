@@ -979,3 +979,27 @@ func TestOpenCodeSelfTestEvaluatesTheCapturedDebugConfig(t *testing.T) {
 		t.Errorf("a redacted string reached the self-test's error: %v", secret)
 	}
 }
+
+// TestOpenCodeRowEndpointSlotsInUse: the row reports the slots a live
+// scheduler's endpoint-aware dispatch holds (#1679), read from the ledger it
+// publishes, and none when the writer has exited.
+func TestOpenCodeRowEndpointSlotsInUse(t *testing.T) {
+	srv := lmStudioServer(t, lmStudioListing("loaded", 0))
+	settings := openCodeLMStudio()
+	settings.BaseURL = srv.URL + "/v1"
+	f := newOpenCodeFixture(t, settings)
+	path := adapters.OpenCodeEndpointSlotsPath(f.home)
+	if err := adapters.WriteOpenCodeEndpointSlots(path, adapters.OpenCodeEndpointSlots{PID: os.Getpid(), InUse: map[string]int{"lmstudio": 1}}); err != nil {
+		t.Fatal(err)
+	}
+	h := f.check()
+	if len(h.OpenCode.Endpoints) != 1 || h.OpenCode.Endpoints[0].SlotsInUse == nil || *h.OpenCode.Endpoints[0].SlotsInUse != 1 {
+		t.Fatalf("endpoints = %+v, want lmstudio with 1 slot in use", h.OpenCode.Endpoints)
+	}
+	if err := adapters.WriteOpenCodeEndpointSlots(path, adapters.OpenCodeEndpointSlots{PID: 1 << 30, InUse: map[string]int{"lmstudio": 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if h := f.check(); h.OpenCode.Endpoints[0].SlotsInUse != nil {
+		t.Errorf("a ledger whose writer has exited reported %d slot(s) in use", *h.OpenCode.Endpoints[0].SlotsInUse)
+	}
+}

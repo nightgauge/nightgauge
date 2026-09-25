@@ -319,6 +319,12 @@ type RuntimeState struct {
 	// BuildV2Record projects it onto V2ModelSelect.
 	StageModelIdentities map[string]StageModelIdentity `json:"stageModelIdentities,omitempty"`
 
+	// StageEndpointFailovers records, for each stage, every move of an
+	// OpenCode dispatch from one declared endpoint to another serving the
+	// same model id (#1679), as [from, to] endpoint ids in order. BuildV2Record
+	// projects it onto V2StageDetail.EndpointFailover.
+	StageEndpointFailovers map[string][][2]string `json:"stageEndpointFailovers,omitempty"`
+
 	// StageContexts captures, for each stage the executor observed per step,
 	// how close the stage's largest single prompt came to the context window
 	// it ran with and how many times its session compacted (#1653). The
@@ -2219,6 +2225,17 @@ func (rs *RuntimeState) RecordStageModelIdentity(stage PipelineStage, id StageMo
 	rs.StageModelIdentities[string(stage)] = id
 }
 
+// RecordEndpointFailover appends one [from, to] endpoint move to stage's
+// failover record (#1679).
+func (rs *RuntimeState) RecordEndpointFailover(stage PipelineStage, from, to string) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if rs.StageEndpointFailovers == nil {
+		rs.StageEndpointFailovers = make(map[string][][2]string)
+	}
+	rs.StageEndpointFailovers[string(stage)] = append(rs.StageEndpointFailovers[string(stage)], [2]string{from, to})
+}
+
 // StageContext is one stage attempt's context-window telemetry (#1653).
 // Every field follows the empty-means-unobserved convention: a zero
 // PeakStepInputTokens means the adapter exposed no per-step prompt size, a
@@ -3157,6 +3174,12 @@ func (rs *RuntimeState) snapshotLocked() *RuntimeState {
 		snap.StageModelIdentities = make(map[string]StageModelIdentity, len(rs.StageModelIdentities))
 		for k, v := range rs.StageModelIdentities {
 			snap.StageModelIdentities[k] = v
+		}
+	}
+	if len(rs.StageEndpointFailovers) > 0 {
+		snap.StageEndpointFailovers = make(map[string][][2]string, len(rs.StageEndpointFailovers))
+		for k, v := range rs.StageEndpointFailovers {
+			snap.StageEndpointFailovers[k] = append([][2]string(nil), v...)
 		}
 	}
 	if len(rs.StageContexts) > 0 {

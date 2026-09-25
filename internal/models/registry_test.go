@@ -259,8 +259,8 @@ type providerForCases struct {
 		Adapter   string `json:"adapter"`
 		Model     string `json:"model"`
 		Endpoints []struct {
-			ID       string `json:"id"`
-			Provider string `json:"provider"`
+			ID         string `json:"id"`
+			Provider   string `json:"provider"`
 			BaseURL    string `json:"base_url"`
 			SelfHosted *bool  `json:"self_hosted"`
 		} `json:"endpoints"`
