@@ -74,6 +74,19 @@ func (r *Registry) Names() []string {
 	return names
 }
 
+// AgenticNames returns the sorted names (excluding aliases) of the
+// registered adapters that drive a real tool loop, so remediation text that
+// tells a user which adapter to pick can never drift from the registry.
+func (r *Registry) AgenticNames() []string {
+	names := make([]string, 0, len(r.factories))
+	for _, name := range r.Names() {
+		if r.factories[name]().Agentic() {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
 // List returns metadata about all registered adapters, including
 // whether their CLI binary is available on PATH.
 func (r *Registry) List() []AdapterInfo {

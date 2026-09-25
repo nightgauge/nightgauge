@@ -245,6 +245,23 @@ func TestRunStage_NonAgenticAdapter_RejectedBeforeSpawn(t *testing.T) {
 			t.Errorf("expected error to contain %q, got: %v", want, err)
 		}
 	}
+	// The remediation list is generated from the registry (#1670): every
+	// agentic adapter, grok and opencode included, must be named.
+	agentic := adapters.NewRegistry().AgenticNames()
+	for _, want := range []string{"grok", "opencode"} {
+		found := false
+		for _, n := range agentic {
+			found = found || n == want
+		}
+		if !found {
+			t.Errorf("registry AgenticNames() = %v, missing %q", agentic, want)
+		}
+	}
+	for _, name := range agentic {
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("expected error to name agentic adapter %q, got: %v", name, err)
+		}
+	}
 }
 
 // TestBuildRunOptions_ThreadsRunIDFromRuntime covers the one place where the

@@ -190,6 +190,32 @@ authoring care.
   (see feature-validate's UI gates, which degrade to a logged skip — the skip
   is visible in gate metrics, never silent).
 
+### OpenCode host (Experimental)
+
+How the `opencode` adapter
+([ADR-022](decisions/022-opencode-multi-provider-adapter.md)) hosts a skill:
+
+- **Skill delivery.** For pipeline runs the stage's skills are rendered into
+  the prompt (`nightgauge skill render`); OpenCode's own Claude-skill and
+  Claude-prompt discovery is switched off, so the operator's `~/.claude`
+  skills never load.
+- **`_includes` access.** A skill's `Read` of `_includes/…` lands outside the
+  worktree, so it depends on the per-run `external_directory` allow-list,
+  which grants the `NIGHTGAUGE_SKILL_DIR` directory read-only (both its given
+  and symlink-resolved path forms), with a matching `edit` deny.
+- **Hooks map to the Nightgauge OpenCode plugin.** Claude `PreToolUse` gates
+  run as the plugin's `tool.execute.before` handler; completion checks are Go
+  StageGates, as for every non-Claude host. A tool the plugin cannot map is
+  blocked closed.
+- **Headless permissions.** A permission that resolves to `ask` is
+  auto-rejected and the process still exits 0 (opencode 1.18.30), so
+  Nightgauge's permission maps contain only `allow` and `deny`, and a
+  rejected-permission tool event is classified as a failure.
+- **Frontmatter that degrades.** `model:` is advisory (the dispatched
+  `<provider>/<model>` wins), `agent:` / `context: fork` run inline, and
+  body-level `Task` fan-out falls back inline because subagents are denied
+  under the current plugin gate.
+
 ## 5. Validation
 
 | Tier                    | What                                                                                                                                      | Where                                                                                               | CI?                                                |

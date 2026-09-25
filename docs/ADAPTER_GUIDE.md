@@ -640,7 +640,7 @@ opencode:
     - id: lmstudio # becomes the OpenCode provider key
       provider: lm-studio # lm-studio | ollama | openai-compatible
       base_url: http://127.0.0.1:1234/v1
-      limits:
+      limit:
         context: 131072 # overrides the value discovered from the server
         output: 16384
 ```
@@ -695,8 +695,8 @@ its hidden aliases (observed on opencode 1.18.30) are never emitted; approval is
 | `NIGHTGAUGE_MODEL`                 | The `<provider>/<model>` this dispatch sends on `-m`                        |
 | `ANTHROPIC_API_KEY`                | Required for any `anthropic/*` model; no other Anthropic credential is read |
 
-<!-- Forward link: #1670's MULTI_BACKEND_SETUP section will cover running several
-local model servers side by side; the anchor does not exist yet. -->
+Step-by-step LM Studio and Ollama setup:
+[MULTI_BACKEND_SETUP.md § Local models through OpenCode](MULTI_BACKEND_SETUP.md#local-models-through-opencode-agentic).
 
 ---
 

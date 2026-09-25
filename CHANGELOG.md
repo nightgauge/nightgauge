@@ -16,6 +16,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **Adapter lists now come from the registry (#1670).** The agentic-gate
+  error in `RunStage` and the `--adapter` help of `nightgauge run` and
+  `nightgauge autonomous run` are generated from the adapter registry, so they
+  name `grok` and `opencode` and cannot go stale again. The setup docs gain a
+  "Local models through OpenCode" walk-through (LM Studio and Ollama blocks,
+  the loaded-context rule, doctor readiness), an `opencode:` key reference in
+  CONFIGURATION, an OpenCode MCP subsection, an OpenCode skill-host entry, and
+  a "Choose an Adapter" paragraph in GETTING_STARTED.
+
 - **Breaking: the `lm-studio` and `ollama` adapters are removed (#2128,
   part 3).** Local models now run through the `opencode` adapter against any
   OpenAI-compatible server (LM Studio, Ollama, llama.cpp, vLLM), declared under

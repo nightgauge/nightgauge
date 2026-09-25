@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/intelligence/failure"
 	"github.com/spf13/cobra"
 )
@@ -2254,6 +2255,29 @@ func TestGateRepoFlagsOptIntoBackfill(t *testing.T) {
 		}
 		if got := cmd.Annotations[repoBackfillAnnotation]; got != "" {
 			t.Errorf("%s: Annotations[%q] = %q, want unset — its --repo is an owner/name slug and must never be back-filled (#222)", strings.Join(path, " "), repoBackfillAnnotation, got)
+		}
+	}
+}
+
+// TestAdapterFlagUsage_ListsEveryRegisteredAdapter guards #1670: both
+// --adapter help strings are generated from the registry, so a literal list
+// that omits an adapter (grok and opencode were missed before) fails here.
+func TestAdapterFlagUsage_ListsEveryRegisteredAdapter(t *testing.T) {
+	names := adapters.NewRegistry().Names()
+	for _, want := range []string{"grok", "opencode"} {
+		if !strings.Contains(strings.Join(names, ","), want) {
+			t.Fatalf("registry Names() = %v, missing %q", names, want)
+		}
+	}
+	for label, cmd := range map[string]*cobra.Command{"run": runCmd(), "autonomous run": autonomousRunCmd()} {
+		flag := cmd.Flags().Lookup("adapter")
+		if flag == nil {
+			t.Fatalf("%s: no --adapter flag", label)
+		}
+		for _, name := range names {
+			if !strings.Contains(flag.Usage, name) {
+				t.Errorf("%s --adapter usage %q does not name registry adapter %q", label, flag.Usage, name)
+			}
 		}
 	}
 }
