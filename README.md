@@ -1,19 +1,79 @@
+<div align="center">
+
+<a href="https://nightgauge.dev"><img src="packages/nightgauge-vscode/resources/nightgauge-icon.png" width="96" alt="Nightgauge logo"></a>
+
 # Nightgauge
 
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](go.mod)
+**Work the day shift. Ship the night shift.**
+
+An open-source, local-first issue-to-PR pipeline for AI coding agents,<br>
+with a quality gate at every stage between the issue and the merge.
+
+[![CI](https://github.com/nightgauge/nightgauge/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/nightgauge/nightgauge/actions/workflows/ci.yml?query=branch%3Amain)
+[![CodeQL](https://github.com/nightgauge/nightgauge/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/nightgauge/nightgauge/actions/workflows/codeql.yml?query=branch%3Amain)
+[![Release](https://img.shields.io/github/v/release/nightgauge/nightgauge?sort=semver&label=release)](https://github.com/nightgauge/nightgauge/releases/latest)
 [![Open VSX](https://img.shields.io/open-vsx/v/nightgauge/nightgauge-vscode?label=Open%20VSX)](https://open-vsx.org/extension/nightgauge/nightgauge-vscode)
+[![Open VSX downloads](https://img.shields.io/open-vsx/dt/nightgauge/nightgauge-vscode?label=downloads)](https://open-vsx.org/extension/nightgauge/nightgauge-vscode)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache_2.0-blue.svg)](LICENSE)
+[![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](go.mod)
 
-![Nightgauge](packages/nightgauge-vscode/resources/nightgauge-icon.png)
+[Website](https://nightgauge.dev) ·
+[Quick start](#quick-start) ·
+[How it works](#the-pipeline) ·
+[Adapters](#adapters) ·
+[Docs](#documentation) ·
+[Releases](https://github.com/nightgauge/nightgauge/releases) ·
+[Contributing](CONTRIBUTING.md)
 
-**AI-powered Issue-to-PR pipeline with enforced quality gates.**
+<img src="docs/images/demo.gif" width="800" alt="31-second tour: an issue goes in, six gated stages run, a pull request comes out, watched from VS Code, the dashboard and chat">
 
-Nightgauge transforms how teams build software by guiding AI agents through
-a structured development workflow—from issue creation to merged pull request.
-Every step enforces documentation-first practices, acceptance criteria
-validation, and automated quality checks.
+</div>
 
-<!-- A real pipeline-run screenshot/GIF will be added after public launch. -->
+## What you get
+
+<table>
+<tr>
+<td width="33%" valign="top">
+
+**One issue in, one PR out.** Six stages take a GitHub issue from pickup
+through planning, implementation and validation to a merged pull request.
+
+</td>
+<td width="33%" valign="top">
+
+**Gates, not vibes.** Every stage is checked by deterministic
+[quality gates](#quality-gates), not just a model saying it worked.
+
+</td>
+<td width="33%" valign="top">
+
+**Budgets and guardrails.** Turn, wall-clock and token limits are enforced
+outside the model, and a stage that breaches one is stopped.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**Bring your own agent.** Claude Code is the primary path; Codex is beta;
+Gemini CLI, Copilot CLI and OpenCode are experimental. See
+[Adapters](#adapters).
+
+</td>
+<td valign="top">
+
+**Watch it anywhere.** VS Code dashboard and board views, the CLI, and live
+status in Discord, Slack or Mattermost.
+
+</td>
+<td valign="top">
+
+**Local-first and Apache-2.0.** Runs on your machine with your credentials.
+No account and no hosted service required.
+
+</td>
+</tr>
+</table>
 
 ## Open-source and local-first
 
@@ -86,6 +146,9 @@ for extension development and intentionally produces a non-release build.
   [Discord](docs/CONFIGURATION.md#discord-notifications),
   [Slack](docs/SLACK_INTEGRATION.md) or
   [Mattermost](docs/MATTERMOST_INTEGRATION.md)
+
+<details>
+<summary><strong>Other ways to run it: Claude Code CLI, Grok Build, Codex CLI, Copilot CLI, local models</strong></summary>
 
 ### Claude Code CLI (Alternative)
 
@@ -240,6 +303,8 @@ for setup and
 [docs/CONFIGURATION.md](docs/CONFIGURATION.md#openai-compatible-adapter-environment-variables)
 for the judge's configuration.
 
+</details>
+
 ### Adapter Scope (verified July 22, 2026)
 
 | Capability Group                                                          | Status    | Notes                                                             |
@@ -301,14 +366,13 @@ adapter capabilities with code-level verification.
 
 ## The Pipeline
 
-```
-┌─────────────┐   ┌──────────────────┐   ┌─────────────┐   ┌───────────────────┐   ┌───────────┐   ┌──────────┐
-│ issue-pickup│ → │ feature-planning │ → │ feature-dev │ → │ feature-validate  │ → │ pr-create │ → │ pr-merge │
-└─────────────┘   └──────────────────┘   └─────────────┘   └───────────────────┘   └───────────┘   └──────────┘
-     ↓                    ↓                      ↓                   ↓                    ↓               ↓
- Claim issue        Read docs/            Implement per       Build & test         Pre-flight      Address
- Create branch      Design PLAN.md        approved plan       validation           checks          reviews
- Extract specs      Get approval                                                   Link issue      Merge
+```mermaid
+flowchart LR
+    A["<b>issue-pickup</b><br/>claim issue<br/>create branch<br/>extract specs"] --> B["<b>feature-planning</b><br/>read docs<br/>design PLAN.md<br/>get approval"]
+    B --> C["<b>feature-dev</b><br/>implement the<br/>approved plan"]
+    C --> D["<b>feature-validate</b><br/>build and test<br/>validation"]
+    D --> E["<b>pr-create</b><br/>pre-flight checks<br/>link the issue"]
+    E --> F["<b>pr-merge</b><br/>address reviews<br/>merge"]
 ```
 
 ### Why This Matters
