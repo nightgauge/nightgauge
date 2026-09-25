@@ -85,6 +85,11 @@ interface IpcRunStageParams {
    * cost the run a stage.
    */
   adapterPin?: string;
+  /**
+   * Marks `adapterPin` as a remote run request's pin (#1656) rather than a
+   * cap-recovery hop: it never walks the fallback chain.
+   */
+  adapterPinRequested?: boolean;
   maxTokens?: number;
   timeoutMs: number;
   skillContent?: string;
@@ -266,6 +271,7 @@ export class PipelineBridge {
       // otherwise (#1545). Forwarded verbatim — the bridge never invents or
       // second-guesses it.
       adapterPin: ipcParams.adapterPin,
+      adapterPinRequested: ipcParams.adapterPinRequested,
       maxTokens: ipcParams.maxTokens,
       timeout: ipcParams.timeoutMs,
       skillContent: ipcParams.skillContent,
@@ -370,6 +376,11 @@ export class PipelineBridge {
       // SkillRunner executes the Go-resolved effort instead of re-resolving.
       effort: ipcParams.effort,
       thinking: ipcParams.thinking,
+      // The adapter pin (#1545 cap hop, #1656 remote run request), forwarded
+      // verbatim. Before #1656 only the refinement stage forwarded it, so a
+      // pipeline stage never received either pin on this path.
+      adapterPin: ipcParams.adapterPin,
+      adapterPinRequested: ipcParams.adapterPinRequested,
       maxTokens: ipcParams.maxTokens,
       timeout: ipcParams.timeoutMs,
       skillContent: ipcParams.skillContent,

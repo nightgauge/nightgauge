@@ -717,6 +717,10 @@ export interface IpcQueueItem {
   epicNumber?: number;
   addedAt: string;
   position: number;
+  /** A remote run request's adapter pin (#1656); absent on every other item. */
+  requestedAdapter?: string;
+  /** A remote run request's model, the `-m` value (#1656). */
+  requestedModel?: string;
 }
 
 /** IPC-layer queue state (matches Go orchestrator.QueueState). */
@@ -881,9 +885,22 @@ export interface RemoteGetCommandHistoryResult {
   commands: RemoteCommandHistoryEntry[];
 }
 
-/** Result from agent.acknowledgeCommand — runId assigned by the platform. */
+/**
+ * Result from agent.acknowledgeCommand — runId assigned by the platform. Empty
+ * for a `rejected` ack, which starts no run (#1656).
+ */
 export interface AgentAcknowledgeCommandResult {
   runId: string;
+}
+
+/**
+ * Result from queue.validatePin (#1656): whether this machine can serve a
+ * remote run request's adapter and model, and, when it cannot, the reason the
+ * rejected ack carries as its `detail`.
+ */
+export interface QueueValidatePinResult {
+  ok: boolean;
+  reason?: string;
 }
 
 /** Result from remote.getPollingStatus. */

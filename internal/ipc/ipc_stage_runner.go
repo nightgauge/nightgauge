@@ -110,17 +110,18 @@ func (r *IpcStageRunner) RunStage(ctx context.Context, params orchestrator.Stage
 		Thinking: params.Thinking,
 		// Empty on every ordinary dispatch (#611 unchanged); non-empty only for
 		// a cap-recovery provider hop (#1545). See RunStageParams.AdapterPin.
-		AdapterPin:        params.AdapterPin,
-		MaxTokens:         params.MaxTokens,
-		TimeoutMs:         int(params.Timeout / time.Millisecond),
-		SkillContent:      params.SkillContent,
-		ContextFile:       params.ContextFile,
-		OutputFile:        params.OutputFile,
-		WorktreeDir:       params.WorktreePath,
-		Repo:              params.Repo,
-		AllowedTools:      params.AllowedTools,
-		SkillFallbackUsed: params.SkillFallbackUsed,
-		AutonomousMode:    r.AutonomousMode,
+		AdapterPin:          params.AdapterPin,
+		AdapterPinRequested: params.AdapterPinRequested,
+		MaxTokens:           params.MaxTokens,
+		TimeoutMs:           int(params.Timeout / time.Millisecond),
+		SkillContent:        params.SkillContent,
+		ContextFile:         params.ContextFile,
+		OutputFile:          params.OutputFile,
+		WorktreeDir:         params.WorktreePath,
+		Repo:                params.Repo,
+		AllowedTools:        params.AllowedTools,
+		SkillFallbackUsed:   params.SkillFallbackUsed,
+		AutonomousMode:      r.AutonomousMode,
 		// The run identity the scheduler minted and stamped on this dispatch
 		// (#228, ADR-017). Read from params.RunID and never re-derived from
 		// params.Runtime: one authority per value, so the two cannot disagree.

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+	"unicode/utf8"
 
 	api "github.com/nightgauge/nightgauge/api/generated/go/platform"
 )
@@ -145,6 +146,44 @@ func (s *CommandService) AcknowledgeCommand(ctx context.Context, cmdID string, r
 // AcknowledgeAgentCommand POSTs to /v1/agents/{agentId}/commands/{commandId}/ack
 // to signal receipt of a trigger command. Returns the runId assigned by the platform.
 func (s *CommandService) AcknowledgeAgentCommand(ctx context.Context, agentId, commandId string) (string, error) {
+	return s.ackAgentCommand(ctx, agentId, commandId, struct{}{}, true)
+}
+
+// AgentCommandRejectedOutcome is the ack outcome that refuses a command.
+const AgentCommandRejectedOutcome = "rejected"
+
+// AgentCommandAckDetailMax bounds a rejected ack's detail, the hosted
+// service's limit on the field.
+const AgentCommandAckDetailMax = 2000
+
+// RejectAgentCommand acks a command as refused, with detail as the reason the
+// requester sees (#1656): {outcome: "rejected", detail}. The command is
+// consumed and nothing runs. detail is cut to AgentCommandAckDetailMax bytes
+// on a UTF-8 boundary.
+func (s *CommandService) RejectAgentCommand(ctx context.Context, agentId, commandId, detail string) error {
+	body := struct {
+		Outcome string `json:"outcome"`
+		Detail  string `json:"detail"`
+	}{AgentCommandRejectedOutcome, truncateAckDetail(detail)}
+	_, err := s.ackAgentCommand(ctx, agentId, commandId, body, false)
+	return err
+}
+
+func truncateAckDetail(detail string) string {
+	if len(detail) <= AgentCommandAckDetailMax {
+		return detail
+	}
+	cut := AgentCommandAckDetailMax
+	for cut > 0 && !utf8.RuneStart(detail[cut]) {
+		cut--
+	}
+	return detail[:cut]
+}
+
+// ackAgentCommand POSTs payload as the ack body. wantRunID parses the
+// runId an accepting ack returns; a rejected ack starts no run, so its
+// response body is not read for one.
+func (s *CommandService) ackAgentCommand(ctx context.Context, agentId, commandId string, payload any, wantRunID bool) (string, error) {
 	if agentId == "" {
 		return "", fmt.Errorf("acknowledge agent command: agentId is required")
 	}
@@ -152,7 +191,7 @@ func (s *CommandService) AcknowledgeAgentCommand(ctx context.Context, agentId, c
 		return "", fmt.Errorf("acknowledge agent command: commandId is required")
 	}
 
-	body, err := json.Marshal(struct{}{})
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return "", fmt.Errorf("acknowledge agent command: marshal body: %w", err)
 	}
@@ -183,6 +222,9 @@ func (s *CommandService) AcknowledgeAgentCommand(ctx context.Context, agentId, c
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("acknowledge agent command: HTTP %d: %s", resp.StatusCode, string(respBody))
+	}
+	if !wantRunID {
+		return "", nil
 	}
 
 	var result struct {
