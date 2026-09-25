@@ -92,14 +92,17 @@ describe("IssueQueueService (IPC delegation)", () => {
     it("delegates to IPC queueAdd with correct params", async () => {
       const result = await service.enqueue(42, "Test issue", ["type:feature"]);
 
-      // Trailing args are priority (unused here) and remoteRunId (#4120) — both
-      // undefined for a plain enqueue with no repoOverride/runId.
+      // Trailing args are priority (unused here), remoteRunId (#4120) and the
+      // remote run request's adapter and model (#1656) — all undefined for a
+      // plain enqueue with no repoOverride/runId/pin.
       expect(mockQueueAdd).toHaveBeenCalledWith(
         "test-owner",
         "test-repo",
         42,
         "Test issue",
         ["type:feature"],
+        undefined,
+        undefined,
         undefined,
         undefined
       );
@@ -121,7 +124,29 @@ describe("IssueQueueService (IPC delegation)", () => {
         "Test issue",
         ["type:feature"],
         undefined,
-        "49b2019e-6ab7-4866-935e-235a32765bc7"
+        "49b2019e-6ab7-4866-935e-235a32765bc7",
+        undefined,
+        undefined
+      );
+    });
+
+    it("forwards a remote run request's adapter and model to IPC queueAdd (#1656)", async () => {
+      await service.enqueue(42, "Test issue", ["type:feature"], undefined, {
+        remoteRunId: "49b2019e-6ab7-4866-935e-235a32765bc7",
+        requestedAdapter: "opencode",
+        requestedModel: "lmstudio/qwen/qwen3.8-27b",
+      });
+
+      expect(mockQueueAdd).toHaveBeenCalledWith(
+        "test-owner",
+        "test-repo",
+        42,
+        "Test issue",
+        ["type:feature"],
+        undefined,
+        "49b2019e-6ab7-4866-935e-235a32765bc7",
+        "opencode",
+        "lmstudio/qwen/qwen3.8-27b"
       );
     });
 

@@ -182,6 +182,7 @@ var contractTestedMethods = map[string]bool{
 	"queue.enqueueEpic":        true,
 	"queue.list":               true,
 	"queue.remove":             true,
+	"queue.validatePin":        true,
 	// Autonomous
 	"autonomous.start":              true,
 	"autonomous.pause":              true,
@@ -864,6 +865,11 @@ func TestContract_Queue(t *testing.T) {
 			"owner": "test-org", "repo": "test-repo", "issueNumber": 42,
 		})
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "queue.add")
+	})
+
+	t.Run("queue.validatePin/registered", func(t *testing.T) {
+		id := h.sendRequest("queue.validatePin", map[string]interface{}{})
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "queue.validatePin")
 	})
 
 	t.Run("queue.dequeueIndependent/registered", func(t *testing.T) {

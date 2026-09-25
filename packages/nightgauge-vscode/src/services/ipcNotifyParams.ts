@@ -74,6 +74,12 @@ export interface NotifyStageTransitionParams {
   stagePid?: number;
   /** The run this transition belongs to. Accepted and ignored until step 4. */
   runId: string;
+  /**
+   * The platform run id of the trigger this run serves, when it serves one
+   * (#1656). Correlation, not identity (ADR-017 Decision 2): Go uses it only
+   * to record the trigger's remote run request pin on this run.
+   */
+  remoteRunId?: string;
 }
 
 /** Mirrors `PipelineNotifyStageProgressParams` (internal/ipc/protocol.go). */

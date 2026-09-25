@@ -527,6 +527,13 @@ export class PipelineStateService implements vscode.Disposable {
    */
   private runRepo = "";
   /**
+   * The platform run id of the trigger the active run serves, if any (#1656),
+   * installed by {@link beginRun}. Sent on the `initialized` and `running`
+   * transitions so Go records that trigger's remote run request pin on this
+   * run and on no other run of the same issue.
+   */
+  private remoteRunId: string | undefined;
+  /**
    * THE ONE identity this service speaks for — ADR-017 Decision 10, #370.
    *
    * Installed by {@link beginRun}, released by {@link endRun}, and read by
@@ -844,7 +851,7 @@ export class PipelineStateService implements vscode.Disposable {
    *   that case: the running run keeps its identity, its repo and its issue,
    *   and the operator gets a message naming what is already running.
    */
-  beginRun(runId: string, repo: string, issueNumber: number): void {
+  beginRun(runId: string, repo: string, issueNumber: number, remoteRunId?: string): void {
     if (!isRunIdentity(runId)) {
       throw new Error(
         `Refusing to begin a run with a malformed identity: ${JSON.stringify(runId)}. ` +
@@ -862,6 +869,7 @@ export class PipelineStateService implements vscode.Disposable {
     this.runId = runId;
     this.runRepo = repo ?? "";
     this.issueNumber = issueNumber;
+    this.remoteRunId = remoteRunId || undefined;
     this.bookedStageUsage.clear();
   }
 
@@ -892,6 +900,7 @@ export class PipelineStateService implements vscode.Disposable {
     }
     this.runId = null;
     this.runRepo = "";
+    this.remoteRunId = undefined;
   }
 
   /** The identity this service speaks for, or `null` when no run is installed. */
@@ -1000,6 +1009,7 @@ export class PipelineStateService implements vscode.Disposable {
         branch,
         baseBranch: baseBranch ?? "",
         runId,
+        ...(this.remoteRunId ? { remoteRunId: this.remoteRunId } : {}),
       } satisfies NotifyStageTransitionParams);
     } catch (err) {
       handleIpcRejection({
@@ -1046,6 +1056,7 @@ export class PipelineStateService implements vscode.Disposable {
           status: "running",
           ...(stagePid ? { stagePid } : {}),
           runId,
+          ...(this.remoteRunId ? { remoteRunId: this.remoteRunId } : {}),
         } satisfies NotifyStageTransitionParams);
         return;
       } catch (err) {

@@ -11,6 +11,9 @@ and this project adheres to
 
 ### Fixed
 
+- A cap-recovery adapter hop from the Go scheduler now reaches every pipeline
+  stage, not only refinement (#1656).
+
 - The generated `.nightgauge/.gitignore` (template version 16) no longer ignores
   `/knowledge/`, so scaffolded knowledge shows as new files to commit; only the
   derived `/knowledge/.recall-cache/` stays ignored. Opt out in the root
@@ -21,6 +24,13 @@ and this project adheres to
 - The usage meter and the Dashboard's usage panel show token counts and a
   "Local model" badge for a model running on your own LM Studio or Ollama
   server, instead of "usage unknown" (#1665).
+
+- A dashboard or mobile trigger can name the adapter and model its run executes
+  on. The extension asks the Go binary to validate the pair before acking; a
+  pair this machine cannot serve is acked `rejected` with a short reason
+  category and never queued. A valid pair pins every stage, including retries
+  and auto-started queue items, and is never swapped for another adapter or
+  model (#1656).
 
 - Pipeline health reads each OpenCode stage's context-window utilization and
   compaction count from the run history (#1653), so a stage that uses under

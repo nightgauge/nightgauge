@@ -144,3 +144,73 @@ func TestAgentAcknowledgeCommand_ServerError(t *testing.T) {
 		t.Errorf("error = %q, want to contain '400'", err.Error())
 	}
 }
+
+// ackBodyRecorder serves the ack route and keeps each request's JSON body.
+func ackBodyRecorder(t *testing.T, bodies *[]map[string]any) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("ack body is not JSON: %v", err)
+		}
+		*bodies = append(*bodies, body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"runId":"run-1"}`))
+	}))
+}
+
+// A refused remote run request is acked {outcome: "rejected", detail} (#1656),
+// and an ordinary ack still POSTs {} and returns the runId.
+func TestAgentAcknowledgeCommand_RejectedCarriesOutcomeAndDetail(t *testing.T) {
+	var bodies []map[string]any
+	srv := ackBodyRecorder(t, &bodies)
+	defer srv.Close()
+	s := NewServer(nil, WithPlatformClient(newTestPlatformClientFor(t, srv.URL, "k")))
+	s.writer = &bytes.Buffer{}
+
+	params, _ := json.Marshal(AgentAcknowledgeCommandParams{
+		AgentID: "agent-1", CommandID: "cmd-1",
+		Outcome: "rejected", Detail: "model x is not in this machine's opencode catalog",
+	})
+	res, err := s.handleAgentAcknowledgeCommand(context.Background(), params)
+	if err != nil {
+		t.Fatalf("rejected ack: %v", err)
+	}
+	if got := res.(AgentAcknowledgeCommandResult).RunID; got != "" {
+		t.Errorf("a rejected ack returned runId %q; no run starts", got)
+	}
+	params, _ = json.Marshal(AgentAcknowledgeCommandParams{AgentID: "agent-1", CommandID: "cmd-2"})
+	res, err = s.handleAgentAcknowledgeCommand(context.Background(), params)
+	if err != nil || res.(AgentAcknowledgeCommandResult).RunID != "run-1" {
+		t.Fatalf("ordinary ack: %v %v", res, err)
+	}
+	if len(bodies) != 2 {
+		t.Fatalf("%d acks posted, want 2", len(bodies))
+	}
+	if bodies[0]["outcome"] != "rejected" || bodies[0]["detail"] != "model x is not in this machine's opencode catalog" {
+		t.Errorf("rejected ack body = %v", bodies[0])
+	}
+	if len(bodies[1]) != 0 {
+		t.Errorf("ordinary ack body = %v, want {}", bodies[1])
+	}
+}
+
+func TestAgentAcknowledgeCommand_OutcomeIsClosed(t *testing.T) {
+	var bodies []map[string]any
+	srv := ackBodyRecorder(t, &bodies)
+	defer srv.Close()
+	s := NewServer(nil, WithPlatformClient(newTestPlatformClientFor(t, srv.URL, "k")))
+	s.writer = &bytes.Buffer{}
+	for _, p := range []AgentAcknowledgeCommandParams{
+		{AgentID: "a", CommandID: "c", Outcome: "applied"},
+		{AgentID: "a", CommandID: "c", Outcome: "rejected"},
+	} {
+		params, _ := json.Marshal(p)
+		if _, err := s.handleAgentAcknowledgeCommand(context.Background(), params); err == nil {
+			t.Errorf("%+v was accepted", p)
+		}
+	}
+	if len(bodies) != 0 {
+		t.Errorf("%d acks posted for refused params", len(bodies))
+	}
+}

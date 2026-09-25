@@ -80,6 +80,11 @@ type Server struct {
 	execMgr   *execution.Manager
 	scheduler *orchestrator.Scheduler
 
+	// validateRemotePin decides a remote run request's adapter and model
+	// (#1656): orchestrator.ValidateRemotePin with this machine's deps. A
+	// field so a test can replace the machine.
+	validateRemotePin func(adapter, model string, deps orchestrator.RemotePinDeps) error
+
 	// platformClient and every service built on it (below) are normally set
 	// once, before Run(), by WithPlatformClient — safe to read unguarded
 	// after that point since nothing mutates them again.
@@ -306,6 +311,9 @@ func NewServer(client *gh.Client, opts ...ServerOption) *Server {
 		// wedged scheduler cannot hang an IPC request. On expiry the handler
 		// still answers with the scheduler's ACTUAL state.
 		autonomousWaitTimeout: defaultAutonomousWaitTimeout,
+		validateRemotePin: func(adapter, model string, deps orchestrator.RemotePinDeps) error {
+			return orchestrator.ValidateRemotePin(adapter, model, deps)
+		},
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -3117,6 +3125,13 @@ func (s *Server) registerMethods() {
 			// REGISTRY's mutex, which is a torn read against any concurrent
 			// snapshot or persist (Decision 12).
 			repo = rt.SeedRunContext(p.Repo, p.Title, p.Branch)
+			// A remote run request's pin (#1656) rides on the queue item,
+			// which stays queued for the whole run. The extension runs the
+			// stages itself, so this is where its run record learns what was
+			// requested — only for the run that serves that trigger (its
+			// remoteRunId matches the item's). SetRequestedPin is set-once, so
+			// a later hop never rewrites it.
+			s.seedRequestedPin(rt, repo, p.IssueNumber, p.RemoteRunID)
 			// The entry's index key follows the runtime's repo, so the derived
 			// issue index (Decision 6) can rank without ever taking rs.mu.
 			if res.entry != nil && repo != "" {
@@ -4374,6 +4389,29 @@ func (s *Server) registerMethods() {
 			return nil, fmt.Errorf("issue #%d carries human-only label %q (autonomous.exclude_labels) and was not queued", p.IssueNumber, label)
 		}
 		repo := fmt.Sprintf("%s/%s", p.Owner, p.Repo)
+		// A remote run request's pin (#1656). The caller validated it with
+		// queue.validatePin before acking; it is validated again here in full,
+		// so no caller of queue.add can queue a pin this machine cannot serve.
+		// A pinned item is queued only when the issue is not already queued,
+		// decided and inserted under one lock: QueueAddItem would skip the
+		// duplicate silently, and the run would execute without the pin.
+		if p.Adapter != "" || p.Model != "" {
+			if err := s.validateRemotePin(p.Adapter, p.Model, s.remotePinDeps(repo)); err != nil {
+				return nil, fmt.Errorf("issue #%d was not queued: %w", p.IssueNumber, err)
+			}
+			if !s.scheduler.QueueAddPinnedItem(orchestrator.QueueItem{
+				Repo:             repo,
+				IssueNumber:      p.IssueNumber,
+				Title:            p.Title,
+				Labels:           p.Labels,
+				RemoteRunID:      p.RemoteRunID,
+				RequestedAdapter: p.Adapter,
+				RequestedModel:   p.Model,
+			}) {
+				return nil, fmt.Errorf("issue #%d is already queued, so the requested adapter and model cannot apply to it; it was not queued again", p.IssueNumber)
+			}
+			return map[string]string{"status": "ok"}, nil
+		}
 		s.scheduler.QueueAddItem(orchestrator.QueueItem{
 			Repo:        repo,
 			IssueNumber: p.IssueNumber,
@@ -4385,6 +4423,31 @@ func (s *Server) registerMethods() {
 			RemoteRunID: p.RemoteRunID,
 		})
 		return map[string]string{"status": "ok"}, nil
+	}
+
+	//ipc:method queueValidatePin params:QueueValidatePinParams result:QueueValidatePinResult
+	s.methods["queue.validatePin"] = func(_ context.Context, params json.RawMessage) (interface{}, error) {
+		var p QueueValidatePinParams
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, fmt.Errorf("invalid params: %w", err)
+		}
+		// A refusal is a result, not an error: the caller acks the command
+		// with its public detail (#1656). The full reason stays in this log.
+		repo := ""
+		if p.Owner != "" && p.Repo != "" {
+			repo = p.Owner + "/" + p.Repo
+		}
+		if s.scheduler != nil && repo != "" && p.IssueNumber > 0 {
+			if _, _, queued := s.scheduler.QueueItemRequestedPin(repo, p.IssueNumber); queued {
+				log.Printf("queue.validatePin: %s#%d is already queued, so a requested pin cannot apply to it — refused (#1656)", repo, p.IssueNumber)
+				return QueueValidatePinResult{OK: false, Reason: "already-queued"}, nil
+			}
+		}
+		if err := s.validateRemotePin(p.Adapter, p.Model, s.remotePinDeps(repo)); err != nil {
+			log.Printf("queue.validatePin: %s#%d refused (#1656): %v", repo, p.IssueNumber, err)
+			return QueueValidatePinResult{OK: false, Reason: orchestrator.RemotePinPublic(err)}, nil
+		}
+		return QueueValidatePinResult{OK: true}, nil
 	}
 
 	//ipc:method queueList params:none result:IpcQueueState
@@ -5964,4 +6027,29 @@ func isOwnKnowledgeDir(path string, issueNumber int) bool {
 		}
 	}
 	return false
+}
+
+// seedRequestedPin copies a queued issue's remote run request pin (#1656) onto
+// the runtime the extension-driven run records into, when the run serves the
+// trigger the item was queued for (remoteRunID equals the item's
+// RemoteRunID). A run with no scheduler, no matching item, or no pin is left
+// untouched.
+func (s *Server) seedRequestedPin(rt *state.RuntimeState, repo string, issueNumber int, remoteRunID string) {
+	if s.scheduler == nil || rt == nil || repo == "" {
+		return
+	}
+	if adapter, model := s.scheduler.QueueItemRequestedPinForRemoteRun(repo, issueNumber, remoteRunID); adapter != "" {
+		rt.SetRequestedPin(adapter, model)
+	}
+}
+
+// remotePinDeps are ValidateRemotePin's dependencies for a request against
+// repo: the performance ceiling of that repository's workspace, and the
+// operator's adapter pin from the scheduler when one is wired.
+func (s *Server) remotePinDeps(repo string) orchestrator.RemotePinDeps {
+	deps := orchestrator.RemotePinDeps{WorkspaceRoot: s.repoRoot(repo)}
+	if s.scheduler != nil {
+		deps.OperatorAdapter = s.scheduler.OperatorAdapter
+	}
+	return deps
 }
