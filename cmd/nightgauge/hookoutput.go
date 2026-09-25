@@ -99,6 +99,20 @@ func resolveSanitizationMode() config.SanitizationMode {
 	return cfg.Sanitization.ResolvedMode()
 }
 
+// resolvePushGate loads hooks.push_gate from config.yaml. Any failure yields
+// nil, the off default (#2124): the hook then blocks no push.
+func resolvePushGate() *config.PushGateConfig {
+	workdir, err := os.Getwd()
+	if err != nil {
+		return nil
+	}
+	cfg, loadErr := config.Load(workdir)
+	if loadErr != nil || cfg == nil {
+		return nil
+	}
+	return cfg.Hooks.PushGateOrNil()
+}
+
 func readHookInput(cmd *cobra.Command) []byte {
 	data, err := io.ReadAll(cmd.InOrStdin())
 	if err != nil {

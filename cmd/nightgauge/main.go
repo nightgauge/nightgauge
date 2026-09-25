@@ -5956,7 +5956,7 @@ func hookWorkflowGateCmd() *cobra.Command {
 		Short:        "Evaluate PreToolUse workflow gate (reads JSON from stdin)",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return printPreToolUse(hooks.EvaluateGate(readHookInput(cmd), resolveSanitizationMode()))
+			return printPreToolUse(hooks.EvaluateGateWithPushGate(readHookInput(cmd), resolveSanitizationMode(), resolvePushGate()))
 		},
 	}
 }

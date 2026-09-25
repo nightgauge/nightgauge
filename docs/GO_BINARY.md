@@ -3813,7 +3813,7 @@ Gate subcommands print Claude Code's PreToolUse schema, **not** the internal
   "hookSpecificOutput": {
     "hookEventName": "PreToolUse",
     "permissionDecision": "deny",
-    "permissionDecisionReason": "Direct push to main/master blocked. ..."
+    "permissionDecisionReason": "Direct push to protected branch 'main' blocked by hooks.push_gate.protected_branches. ..."
   }
 }
 ```

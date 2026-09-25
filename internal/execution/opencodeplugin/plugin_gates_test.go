@@ -90,6 +90,20 @@ func writeSanitizationBlockConfig(t *testing.T, root string) {
 	}
 }
 
+// writeProtectedMainConfig opts root into hooks.push_gate.protected_branches
+// [main]; the shipped default blocks no push (#2124).
+func writeProtectedMainConfig(t *testing.T, root string) {
+	t.Helper()
+	dir := filepath.Join(root, ".nightgauge")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	yaml := "owner: nightgauge\nhooks:\n  push_gate:\n    protected_branches: [main]\n"
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // nodeGenericToolDriver drives one tool.execute.before call through the
 // real embedded nightgauge.js, for an arbitrary tool id and args object —
 // generalizing plugin_test.go's bash-only nodeHarnessDriver to every tool id
@@ -322,6 +336,7 @@ func TestBashChainOrderAndMarkers(t *testing.T) {
 
 	t.Run("workflow-gate blocks a push to main", func(t *testing.T) {
 		root := t.TempDir()
+		writeProtectedMainConfig(t, root)
 		res := runToolHarness(t, node, root, "bash", marshalJSON(t, map[string]any{"command": "git push origin main"}), bin, home)
 		if !res.Threw {
 			t.Fatal("want a throw, got none")
@@ -569,6 +584,7 @@ func TestStageGateSeesRunningStage(t *testing.T) {
 
 	t.Run("a push to main throws in feature-planning", func(t *testing.T) {
 		root := t.TempDir()
+		writeProtectedMainConfig(t, root)
 		env := map[string]string{"NIGHTGAUGE_STAGE": "feature-planning"}
 		for k, v := range home {
 			env[k] = v

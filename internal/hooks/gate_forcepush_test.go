@@ -35,9 +35,70 @@ func forcePushFixture(t *testing.T) (repo, detached, onMain string) {
 
 func gateWithCwd(t *testing.T, cmd, cwd string) GateDecision {
 	t.Helper()
+	return gateWithPolicy(t, cmd, cwd, mainProtected)
+}
+
+func gateWithPolicy(t *testing.T, cmd, cwd string, policy *config.PushGateConfig) GateDecision {
+	t.Helper()
 	ti, _ := json.Marshal(BashToolInput{Command: cmd})
 	data, _ := json.Marshal(GateInput{ToolName: "Bash", ToolInput: ti, Cwd: cwd})
-	return EvaluateGate(data, config.SanitizationModeBlock)
+	return EvaluateGateWithPushGate(data, config.SanitizationModeBlock, policy)
+}
+
+// TestBlockForcePushGate covers hooks.push_gate.block_force_push (#2124).
+func TestBlockForcePushGate(t *testing.T) {
+	t.Setenv(skipWorkflowGateEnv, "")
+	repo, detached, onMain := forcePushFixture(t)
+	anyBranch := &config.PushGateConfig{BlockForcePush: true}
+	both := &config.PushGateConfig{BlockForcePush: true, ProtectedBranches: []string{"main"}}
+	cases := []struct {
+		name, cmd, cwd string
+		policy         *config.PushGateConfig
+		want           string
+	}{
+		// block_force_push alone: every forced push, any branch.
+		{"any: -f feature", "git push -f origin feat/x", repo, anyBranch, "block"},
+		{"any: lease bare", "git push --force-with-lease", repo, anyBranch, "block"},
+		{"any: +refspec", "git push origin +feat/x", repo, anyBranch, "block"},
+		{"any: detached", "git push -f origin", detached, anyBranch, "block"},
+		{"any: bash -c", "bash -c 'git push -f origin feat/x'", repo, anyBranch, "block"},
+		{"any: env", "env A=1 git push --force origin feat/x", repo, anyBranch, "block"},
+		{"any: git -C", "git -C " + repo + " push -f", onMain, anyBranch, "block"},
+		{"any: plain push main", "git push origin main", repo, anyBranch, "allow"},
+		{"any: plain push feature", "git push origin feat/x", repo, anyBranch, "allow"},
+		// block_force_push with protected_branches: only protected targets.
+		{"both: -f feature", "git push -f origin feat/x", repo, both, "allow"},
+		{"both: -f main", "git push -f origin main", repo, both, "block"},
+		{"both: bare -f on main", "git push -f", onMain, both, "block"},
+		{"both: plain push main", "git push origin main", repo, both, "block"},
+		{"both: master unprotected", "git push -f origin master", repo, both, "allow"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := gateWithPolicy(t, tc.cmd, tc.cwd, tc.policy)
+			if got.Decision != tc.want {
+				t.Errorf("%q in %s: got %s (%s), want %s", tc.cmd, tc.cwd, got.Decision, got.Reason, tc.want)
+			}
+		})
+	}
+}
+
+// TestProtectedBranchesCustomList checks a non-main list generalizes.
+func TestProtectedBranchesCustomList(t *testing.T) {
+	t.Setenv(skipWorkflowGateEnv, "")
+	repo, _, onMain := forcePushFixture(t)
+	release := &config.PushGateConfig{ProtectedBranches: []string{"release"}}
+	for _, tc := range []struct{ cmd, cwd, want string }{
+		{"git push origin release", repo, "block"},
+		{"git push origin HEAD:refs/heads/release", repo, "block"},
+		{"git push origin main", repo, "allow"},
+		{"git push -f", onMain, "allow"},
+		{"git push -f origin feat/x", repo, "allow"},
+	} {
+		if got := gateWithPolicy(t, tc.cmd, tc.cwd, release); got.Decision != tc.want {
+			t.Errorf("%q: got %s (%s), want %s", tc.cmd, got.Decision, got.Reason, tc.want)
+		}
+	}
 }
 
 func TestForcePushGate(t *testing.T) {
@@ -62,7 +123,7 @@ func TestForcePushGate(t *testing.T) {
 		{"git -C push", "git -C " + repo + " push --force-with-lease", onMain, "allow"},
 		{"detached, no refspec", "git push -f origin", detached, "allow"},
 
-		// Blocked: every form that targets main/master.
+		// Blocked (protected_branches [main, master]): every form that targets them.
 		{"-f main", "git push -f origin main", repo, "block"},
 		{"lease HEAD:main", "git push --force-with-lease origin HEAD:main", repo, "block"},
 		{"+main", "git push origin +main", repo, "block"},

@@ -17,6 +17,36 @@ func makeGateInput(toolName string, toolInput interface{}) []byte {
 	return data
 }
 
+// mainProtected is the push-gate policy that reproduces the pre-#2124
+// hardcoded main/master gate.
+var mainProtected = &config.PushGateConfig{ProtectedBranches: []string{"main", "master"}}
+
+func evalMainProtected(input []byte, mode config.SanitizationMode) GateDecision {
+	return EvaluateGateWithPushGate(input, mode, mainProtected)
+}
+
+// TestGateDefaultsBlockNoPush locks the #2124 default: with no hooks.push_gate
+// configuration the hook blocks no push; repository rulesets decide.
+func TestGateDefaultsBlockNoPush(t *testing.T) {
+	t.Setenv(skipWorkflowGateEnv, "")
+	for _, cmd := range []string{
+		"git push origin main",
+		"git push -f origin main",
+		"git push --force origin master",
+		"git push origin +main",
+		"git push --mirror --force origin",
+		"bash -c 'git push -f origin main'",
+	} {
+		input := makeGateInput("Bash", BashToolInput{Command: cmd})
+		if got := EvaluateGate(input, config.SanitizationModeBlock); got.Decision != "allow" {
+			t.Errorf("default: expected allow for %q, got block: %s", cmd, got.Reason)
+		}
+		if got := EvaluateGateWithPushGate(input, config.SanitizationModeBlock, &config.PushGateConfig{}); got.Decision != "allow" {
+			t.Errorf("empty policy: expected allow for %q, got block: %s", cmd, got.Reason)
+		}
+	}
+}
+
 func TestGateAllowsSafeCommands(t *testing.T) {
 	safe := []string{
 		"ls -la",
@@ -49,7 +79,7 @@ func TestGateBlocksPushToMain(t *testing.T) {
 
 	for _, cmd := range blocked {
 		input := makeGateInput("Bash", BashToolInput{Command: cmd})
-		result := EvaluateGate(input, config.SanitizationModeBlock)
+		result := evalMainProtected(input, config.SanitizationModeBlock)
 		if result.Decision != "block" {
 			t.Errorf("expected block for %q, got allow", cmd)
 		}
@@ -113,7 +143,7 @@ func TestGateBlocksBypassVectors(t *testing.T) {
 	}
 	for _, cmd := range blocked {
 		input := makeGateInput("Bash", BashToolInput{Command: cmd})
-		result := EvaluateGate(input, config.SanitizationModeBlock)
+		result := evalMainProtected(input, config.SanitizationModeBlock)
 		if result.Decision != "block" {
 			t.Errorf("BYPASS: expected block for %q, got allow", cmd)
 		}
@@ -125,18 +155,19 @@ func TestGateSkipWorkflowGateOverride(t *testing.T) {
 	t.Setenv(skipWorkflowGateEnv, "1")
 	// Operation gate would normally block; override allows it.
 	input := makeGateInput("Bash", BashToolInput{Command: "git push origin main"})
-	if got := EvaluateGate(input, config.SanitizationModeBlock); got.Decision != "allow" {
+	if got := evalMainProtected(input, config.SanitizationModeBlock); got.Decision != "allow" {
 		t.Errorf("override should allow push-to-main, got block: %s", got.Reason)
 	}
 	// Secret-read gate stays ON even with the override.
 	input = makeGateInput("Bash", BashToolInput{Command: "cat .env"})
-	if got := EvaluateGate(input, config.SanitizationModeBlock); got.Decision != "block" {
+	if got := evalMainProtected(input, config.SanitizationModeBlock); got.Decision != "block" {
 		t.Error("override must NOT disable the secret-read gate")
 	}
 }
 
-// Force pushes are blocked only when they target main/master (#2124); the
-// feature-branch cases live in gate_forcepush_test.go.
+// With protected_branches [main, master], force pushes to them are blocked
+// (#2124); the feature-branch and block_force_push cases live in
+// gate_forcepush_test.go.
 func TestGateBlocksForcePushToMain(t *testing.T) {
 	blocked := []string{
 		"git push -f origin main",
@@ -149,7 +180,7 @@ func TestGateBlocksForcePushToMain(t *testing.T) {
 
 	for _, cmd := range blocked {
 		input := makeGateInput("Bash", BashToolInput{Command: cmd})
-		result := EvaluateGate(input, config.SanitizationModeBlock)
+		result := evalMainProtected(input, config.SanitizationModeBlock)
 		if result.Decision != "block" {
 			t.Errorf("expected block for %q, got allow", cmd)
 		}
@@ -353,7 +384,7 @@ func TestGateWarnModeStillBlocksNonSanitizationGates(t *testing.T) {
 
 	for _, tc := range cases {
 		input := makeGateInput("Bash", BashToolInput{Command: tc.cmd})
-		result := EvaluateGate(input, config.SanitizationModeWarn)
+		result := evalMainProtected(input, config.SanitizationModeWarn)
 		if result.Decision != "block" {
 			t.Errorf("warn mode: expected block for %s (%q), got allow", tc.name, tc.cmd)
 		}
@@ -391,7 +422,7 @@ func TestGateDisabledModeStillBlocksNonSanitizationGates(t *testing.T) {
 
 	for _, tc := range cases {
 		input := makeGateInput("Bash", BashToolInput{Command: tc.cmd})
-		result := EvaluateGate(input, config.SanitizationModeDisabled)
+		result := evalMainProtected(input, config.SanitizationModeDisabled)
 		if result.Decision != "block" {
 			t.Errorf("disabled mode: expected block for %s (%q), got allow", tc.name, tc.cmd)
 		}

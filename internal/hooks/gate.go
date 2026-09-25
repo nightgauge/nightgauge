@@ -51,7 +51,18 @@ func Block(reason string) GateDecision {
 //   - "warn": log pattern matches but allow through
 //   - "block": block pattern matches (legacy default)
 //   - "disabled": skip sanitization pattern checks entirely
+//
+// EvaluateGate applies the shipped push-gate defaults: no protected branches
+// and no force-push block, so it blocks no push. Use EvaluateGateWithPushGate
+// to apply a repository's hooks.push_gate configuration.
 func EvaluateGate(inputJSON []byte, mode config.SanitizationMode) GateDecision {
+	return EvaluateGateWithPushGate(inputJSON, mode, nil)
+}
+
+// EvaluateGateWithPushGate is EvaluateGate with the repository's
+// hooks.push_gate policy (#2124). A nil policy is the shipped default: the
+// hook blocks no push and repository rulesets decide.
+func EvaluateGateWithPushGate(inputJSON []byte, mode config.SanitizationMode, pushGate *config.PushGateConfig) GateDecision {
 	var input GateInput
 	if err := json.Unmarshal(inputJSON, &input); err != nil {
 		// If we can't parse input, allow through (fail open)
@@ -60,7 +71,7 @@ func EvaluateGate(inputJSON []byte, mode config.SanitizationMode) GateDecision {
 
 	switch input.ToolName {
 	case "Bash":
-		return evaluateBashGate(input, mode)
+		return evaluateBashGate(input, mode, pushGate)
 	case "Edit", "Write":
 		return evaluateFileGate(input.ToolInput)
 	default:
@@ -69,7 +80,7 @@ func EvaluateGate(inputJSON []byte, mode config.SanitizationMode) GateDecision {
 }
 
 // skipWorkflowGateEnv, when set to "1", short-circuits the operation-classification
-// gates (push-to-main, force-push, destructive-git) and the sanitization scan.
+// gates (configurable push gate, destructive-git) and the sanitization scan.
 // It is an explicit, text-free escape hatch (issue #4069 AC: "an override path
 // that does NOT require rewording human-readable text") for the rare case where
 // the parser still misclassifies a legitimate command. Secret read/write and
@@ -82,7 +93,7 @@ const skipWorkflowGateEnv = "NIGHTGAUGE_SKIP_WORKFLOW_GATE"
 // gates parse the command's real argv (per pipeline segment) rather than
 // substring-matching the raw command string, so words inside echoes, commit
 // messages, `--body` payloads, and heredocs no longer trigger false positives.
-func evaluateBashGate(input GateInput, mode config.SanitizationMode) GateDecision {
+func evaluateBashGate(input GateInput, mode config.SanitizationMode, pushGate *config.PushGateConfig) GateDecision {
 	var toolInput BashToolInput
 	if err := json.Unmarshal(input.ToolInput, &toolInput); err != nil || toolInput.Command == "" {
 		return Allow()
@@ -95,12 +106,11 @@ func evaluateBashGate(input GateInput, mode config.SanitizationMode) GateDecisio
 	skipOpGates := os.Getenv(skipWorkflowGateEnv) == "1"
 
 	if !skipOpGates {
-		// Gate 1: Block push to main/master
-		// A force push to any other branch is allowed (#2124): force-push policy
-		// belongs to server-side rulesets, and this gate is the local fallback
-		// that keeps main/master safe where no ruleset exists.
-		if isMainPush(segments, gateCwd(input.Cwd)) && !isModelUpdatePush(cmd) {
-			return Block("Direct push to main/master blocked. Use the PR workflow with /nightgauge:pr-create.")
+		// Gate 1: configurable push gate (hooks.push_gate, #2124). Off by
+		// default: push policy belongs to server-side rulesets, and this gate
+		// is an opt-in local fallback for repositories without one.
+		if reason := pushGateReason(segments, gateCwd(input.Cwd), pushGate); reason != "" && !isModelUpdatePush(cmd) {
+			return Block(reason)
 		}
 
 		// Gate 3: Block destructive git operations
@@ -291,13 +301,33 @@ func baseName(cmd string) string {
 	return cmd
 }
 
-// isMainPush detects a real `git push` that targets main/master: a refspec
-// naming it, or a force push whose destination is the current branch (no
-// refspec, or a bare `HEAD` refspec) while that branch or its upstream is
-// main/master, or a forced `--all`/`--branches`/`--mirror`. The working
-// directory starts at cwd and follows `cd X` segments and `git -C X`, so the
-// current branch is read from the repository the push actually runs in.
-func isMainPush(segments []Segment, cwd string) bool {
+// pushGateReason applies hooks.push_gate to every real `git push` among the
+// segments and returns a block reason, or "" to allow. With a nil or empty
+// policy it always allows.
+//
+// Semantics:
+//   - protected_branches: a push whose refspec names a protected branch is
+//     blocked, forced or not. A forced push with no refspec (or a bare `HEAD`
+//     refspec) is blocked when the current branch or its upstream is
+//     protected. A forced `--all`/`--branches`/`--mirror` is blocked because
+//     its targets cannot be resolved (fail closed).
+//   - block_force_push: with protected_branches set, it additionally blocks
+//     every forced push to a protected branch (already implied above, so it
+//     changes nothing there); with protected_branches empty it blocks every
+//     forced push to any branch.
+//
+// The working directory starts at cwd and follows `cd X` segments and
+// `git -C X`, so the current branch is read from the repository the push
+// actually runs in.
+func pushGateReason(segments []Segment, cwd string, policy *config.PushGateConfig) string {
+	if policy == nil {
+		return ""
+	}
+	protected := policy.ProtectedBranches
+	if len(protected) == 0 && !policy.BlockForcePush {
+		return ""
+	}
+	blockAllForced := policy.BlockForcePush && len(protected) == 0
 	dir := cwd
 	for _, seg := range segments {
 		argv := seg.CommandArgv()
@@ -320,22 +350,36 @@ func isMainPush(segments []Segment, cwd string) bool {
 			continue
 		}
 		forced := pushIsForced(norm[2:])
+		if forced && blockAllForced {
+			return "Force push blocked by hooks.push_gate.block_force_push."
+		}
+		if len(protected) == 0 {
+			continue
+		}
 		for _, f := range refs {
-			if refTargetsMain(f) {
-				return true
+			if b := refTargetsProtected(f, protected); b != "" {
+				return protectedReason(b)
 			}
-			if forced && strings.TrimPrefix(f, "+") == "HEAD" && currentBranchIsMain(gitDir) {
-				return true
+			if forced && strings.TrimPrefix(f, "+") == "HEAD" {
+				if b := currentBranchProtected(gitDir, protected); b != "" {
+					return protectedReason(b)
+				}
 			}
 		}
 		if forced && hasAnyLongFlag(norm[2:], "--all", "--branches", "--mirror") {
-			return true
+			return "Forced --all/--branches/--mirror push blocked: hooks.push_gate.protected_branches is set and the targets cannot be resolved."
 		}
-		if forced && len(refs) == 0 && currentBranchIsMain(gitDir) {
-			return true
+		if forced && len(refs) == 0 {
+			if b := currentBranchProtected(gitDir, protected); b != "" {
+				return protectedReason(b)
+			}
 		}
 	}
-	return false
+	return ""
+}
+
+func protectedReason(branch string) string {
+	return "Direct push to protected branch '" + branch + "' blocked by hooks.push_gate.protected_branches. Use the PR workflow with /nightgauge:pr-create."
 }
 
 // pushIsForced reports whether `git push` args force the update: -f/--force,
@@ -393,19 +437,23 @@ func gateCwd(cwd string) string {
 	return wd
 }
 
-// currentBranchIsMain reports whether dir's checked-out branch, or the branch
-// its upstream merges into, is main/master. A detached HEAD or a directory
-// outside a repository has no current branch, so it cannot push one to main.
-func currentBranchIsMain(dir string) bool {
+// currentBranchProtected returns the protected branch that dir's checked-out
+// branch, or the branch its upstream merges into, names; "" when neither is
+// protected. A detached HEAD or a directory outside a repository has no
+// current branch, so it cannot push one implicitly.
+func currentBranchProtected(dir string, protected []string) string {
 	branch := gitOutput(dir, "symbolic-ref", "--short", "-q", "HEAD")
 	if branch == "" {
-		return false
+		return ""
 	}
-	if refTargetsMain(branch) {
-		return true
+	if b := refTargetsProtected(branch, protected); b != "" {
+		return b
 	}
 	merge := gitOutput(dir, "config", "--get", "branch."+branch+".merge")
-	return merge != "" && refTargetsMain(merge)
+	if merge == "" {
+		return ""
+	}
+	return refTargetsProtected(merge, protected)
 }
 
 func gitOutput(dir string, args ...string) string {
@@ -418,19 +466,24 @@ func gitOutput(dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// refTargetsMain reports whether a push refspec resolves to refs/heads/main or
-// refs/heads/master. It handles a bare `main`/`+main`, the destination side of a
-// `src:dst` refspec, and fully-qualified `refs/heads/main` forms
-// (`HEAD:refs/heads/main`, `refs/heads/master`, `+refs/heads/main`).
-func refTargetsMain(f string) bool {
-	lower := strings.ToLower(f)
-	target := lower
-	if i := strings.Index(lower, ":"); i >= 0 {
-		target = lower[i+1:] // destination side of src:dst
+// refTargetsProtected returns the protected branch a push refspec resolves
+// to, or "". It handles a bare `main`/`+main`, the destination side of a
+// `src:dst` refspec, and fully-qualified `refs/heads/<b>` forms
+// (`HEAD:refs/heads/main`, `+refs/heads/main`). Matching is case-insensitive.
+func refTargetsProtected(f string, protected []string) string {
+	target := f
+	if i := strings.Index(target, ":"); i >= 0 {
+		target = target[i+1:] // destination side of src:dst
 	}
 	target = strings.TrimPrefix(target, "+")
 	target = strings.TrimPrefix(target, "refs/heads/")
-	return target == "main" || target == "master"
+	for _, p := range protected {
+		p = strings.TrimPrefix(strings.TrimSpace(p), "refs/heads/")
+		if p != "" && strings.EqualFold(target, p) {
+			return p
+		}
+	}
+	return ""
 }
 
 // isModelUpdatePush checks if a push is a legitimate complexity model update.
