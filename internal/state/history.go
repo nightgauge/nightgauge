@@ -69,6 +69,12 @@ type V2RunRecord struct {
 	// Additive `omitempty`: records written before trace capture omit it, and
 	// the TS reader's non-strict z.object() strips it for older readers.
 	RunID string `json:"run_id,omitempty"`
+	// RequestedAdapter and RequestedModel are a remote run request's pin
+	// (#1656, ADR-022 § 2), next to the stages' served adapter and
+	// model_selection, so a hop away from the request is visible. Local
+	// record only: the platform mapper does not send them.
+	RequestedAdapter string `json:"requested_adapter,omitempty"`
+	RequestedModel   string `json:"requested_model,omitempty"`
 	// Repo is the "owner/name" this run belongs to. Required by the platform's
 	// strict ExecutionHistoryRunRecordV4 telemetry contract — without it the
 	// VSCode uploader cannot map a run to a repo and the dashboard run list
@@ -1698,14 +1704,17 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 		IssueNumber:   snap.IssueNumber,
 		RunID:         snap.RunID,
 		Repo:          snap.Repo,
-		Title:         input.Title,
-		Branch:        branch,
-		BaseBranch:    baseBranch,
-		ExecutionMode: "automatic",
-		StartedAt:     startedAt,
-		CompletedAt:   now.Format(time.RFC3339),
-		TotalDuration: durationMs,
-		Outcome:       outcome,
+		// The remote run request's pin (#1656), never rewritten by a hop.
+		RequestedAdapter: snap.RequestedAdapter,
+		RequestedModel:   snap.RequestedModel,
+		Title:            input.Title,
+		Branch:           branch,
+		BaseBranch:       baseBranch,
+		ExecutionMode:    "automatic",
+		StartedAt:        startedAt,
+		CompletedAt:      now.Format(time.RFC3339),
+		TotalDuration:    durationMs,
+		Outcome:          outcome,
 		// Issue body captured at pickup (#183). Bounded here as a safety net in
 		// case a caller (e.g. the IPC path reading a runtime state the extension
 		// populated) supplies an unbounded value; the pickup capture already caps

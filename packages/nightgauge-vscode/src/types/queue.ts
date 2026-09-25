@@ -119,6 +119,14 @@ export interface QueueItem {
   /** Repository name (for cross-repo queue display, Issue #2188) */
   repoName?: string;
   /**
+   * A remote run request's pin (#1656, ADR-022 § 2): the adapter and model a
+   * dashboard or mobile trigger asked for, already accepted by Go's
+   * queue.validatePin. Every stage of the run dispatches on them. Absent on
+   * every other item.
+   */
+  requestedAdapter?: string;
+  requestedModel?: string;
+  /**
    * Reason this item is paused. Only present when `status === "paused"`.
    *
    * @see Issue #3001 — terminal failure preservation

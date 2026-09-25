@@ -914,3 +914,53 @@ describe("PipelineBridge — run identity mapping (#370 / ADR-017 step 0b)", () 
     expect(seenParams?.runId).toBe("01890a5d-ac96-774b-bcce-b302099a8057");
   });
 });
+
+// #1656: the adapter pin reaches every pipeline stage, not only refinement.
+// Before #1656 handleRunStage built its RunStageParams without it, so neither
+// a #1545 cap hop nor a remote run request's pin ever reached SkillRunner.
+describe("PipelineBridge — adapter pin forwarding (#1545, #1656)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  async function forwardedParams(overrides: Record<string, unknown>) {
+    const { SkillRunner } = await import("../../src/services/SkillRunner");
+    const runStage = vi.fn().mockResolvedValue({
+      success: true,
+      exitCode: 0,
+      inputTokens: 1,
+      outputTokens: 1,
+    });
+    vi.mocked(SkillRunner).mockImplementation(function () {
+      return { runStage, abort: vi.fn(), isRunning: false } as any;
+    });
+    const ipc = makeIpcClient();
+    new PipelineBridge(ipc as any, createLogger(), null, null, makeOfflineManager() as any);
+    ipc.emit("pipeline.runStage", makeRunStageParams(overrides));
+    await vi.waitFor(() => expect(runStage).toHaveBeenCalledTimes(1));
+    return runStage.mock.calls[0][0];
+  }
+
+  it("forwards a remote run request's pin and its requested mark", async () => {
+    const params = await forwardedParams({
+      adapterPin: "opencode",
+      adapterPinRequested: true,
+      model: "lmstudio/qwen/qwen3.8-27b",
+    });
+    expect(params.adapterPin).toBe("opencode");
+    expect(params.adapterPinRequested).toBe(true);
+    expect(params.model).toBe("lmstudio/qwen/qwen3.8-27b");
+  });
+
+  it("forwards a cap hop's pin without the requested mark", async () => {
+    const params = await forwardedParams({ adapterPin: "codex" });
+    expect(params.adapterPin).toBe("codex");
+    expect(params.adapterPinRequested).toBeUndefined();
+  });
+
+  it("forwards no pin on an ordinary dispatch", async () => {
+    const params = await forwardedParams({});
+    expect(params.adapterPin).toBeUndefined();
+    expect(params.adapterPinRequested).toBeUndefined();
+  });
+});

@@ -81,6 +81,10 @@ type capacityDispatch struct {
 	predictedModel string
 	modelFloors    map[string]string
 	jobClass       string
+	// pinnedModel is a remote run request's model while it is in force
+	// (#1656). Every stage then runs it, so the windows ahead are the pinned
+	// model's, and a soft-route to another model is refused instead.
+	pinnedModel string
 }
 
 // capacityGateOutcome is what enforceIssueCapacity hands back to the
@@ -158,9 +162,13 @@ func (s *Scheduler) enforceIssueCapacity(ctx context.Context, d capacityDispatch
 		if st == d.stage {
 			continue
 		}
-		model := s.resolveDispatchModel(st, d.item.Number, d.workspaceRoot,
-			routedStageModel(st, d.predictedModel, d.decision), d.modelFloors, d.jobClass)
-		adapter := capacityStageAdapter(d.workspaceRoot, st, d.adapterName)
+		model := d.pinnedModel
+		adapter := d.adapterName
+		if model == "" {
+			model = s.resolveDispatchModel(st, d.item.Number, d.workspaceRoot,
+				routedStageModel(st, d.predictedModel, d.decision), d.modelFloors, d.jobClass)
+			adapter = capacityStageAdapter(d.workspaceRoot, st, d.adapterName)
+		}
 		consider(st, model, DispatchContextWindow(ctx, d.workspaceRoot, adapter, model))
 	}
 
@@ -175,7 +183,12 @@ func (s *Scheduler) enforceIssueCapacity(ctx context.Context, d capacityDispatch
 		return out
 	}
 
-	if cfg.SoftRoute {
+	pinNote := ""
+	if cfg.SoftRoute && d.pinnedModel != "" {
+		pinNote = fmt.Sprintf("; the run is pinned to %s by a remote run request, so it is not soft-routed to another model", d.pinnedModel)
+		logf("capacity: size %s exceeds the cap %s of %s on %s (%d tokens)%s",
+			size, res.MaxSize, bindStage, bindModel, bindWindow, pinNote)
+	} else if cfg.SoftRoute {
 		fallbacks := s.capacityFallbacks(ctx, d, cfg.CapacityFallbackModels, bindModel)
 		if alt, ok := sizeGate.FirstAdmittingFallback(size, fallbacks); ok {
 			if bindStage != d.stage {
@@ -205,8 +218,8 @@ func (s *Scheduler) enforceIssueCapacity(ctx context.Context, d capacityDispatch
 		}
 	}
 
-	reason := fmt.Sprintf("context_window_exceeded: capacity: refused at stage %s: stage %s on %s: %s",
-		d.stage, bindStage, bindModel, res.Reason)
+	reason := fmt.Sprintf("context_window_exceeded: capacity: refused at stage %s: stage %s on %s: %s%s",
+		d.stage, bindStage, bindModel, res.Reason, pinNote)
 	_, out.workRecovered = s.refusePreDispatch(d.item, d.runtime, d.workspaceRoot, d.stage, d.tracer, "capacity", reason)
 	// The kind travels as a structured gate result as well as in the prose:
 	// the CLI autonomous wrapper re-derives the kind from the failed stage

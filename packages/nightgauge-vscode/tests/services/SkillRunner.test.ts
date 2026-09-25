@@ -194,7 +194,8 @@ describe("SkillRunner", () => {
       undefined, // targetRepoOverride — params.repo (Issue #3867)
       "01890a5d-ac96-774b-bcce-b302099a8057", // runId — params.runId (#228)
       undefined, // effortOverride — params.effort, the wire envelope (#581)
-      undefined // adapterPin — params.adapterPin, the cap-recovery hop (#1545)
+      undefined, // adapterPin — params.adapterPin, the cap-recovery hop (#1545)
+      undefined // adapterPinRequested — a remote run request's pin (#1656)
     );
   });
 
@@ -214,7 +215,7 @@ describe("SkillRunner", () => {
     // targetRepoOverride is the 14th positional argument; runId (#228),
     // effortOverride (#581) and adapterPin (#1545) follow it, so it is
     // fourth-from-last.
-    expect(call[call.length - 4]).toBe("nightgauge/acmeapp-platform");
+    expect(call[call.length - 5]).toBe("nightgauge/acmeapp-platform");
   });
 
   // #228: the run's UUID (params.runId) must be forwarded to
@@ -230,7 +231,7 @@ describe("SkillRunner", () => {
     await promise;
 
     const call = vi.mocked(runStageSkillHeadless).mock.calls[0];
-    expect(call[call.length - 3]).toBe("01890a5d-ac96-774b-bcce-b302099a8057");
+    expect(call[call.length - 4]).toBe("01890a5d-ac96-774b-bcce-b302099a8057");
   });
 
   // #581: the wire envelope's effort (params.effort) must be forwarded as the
@@ -246,7 +247,7 @@ describe("SkillRunner", () => {
     await promise;
 
     const call = vi.mocked(runStageSkillHeadless).mock.calls[0];
-    expect(call[call.length - 2]).toBe("high");
+    expect(call[call.length - 3]).toBe("high");
   });
 
   // #1545: a cap-recovery provider hop the Go scheduler decided must reach the
@@ -262,7 +263,23 @@ describe("SkillRunner", () => {
     await promise;
 
     const call = vi.mocked(runStageSkillHeadless).mock.calls[0];
-    expect(call[call.length - 1]).toBe("codex");
+    expect(call[call.length - 2]).toBe("codex");
+    expect(call[call.length - 1]).toBeUndefined();
+  });
+
+  // #1656: a remote run request's pin arrives with adapterPinRequested, which
+  // makes the pin strict in runStageSkillHeadless (no fallback walk).
+  it("forwards params.adapterPinRequested as the trailing argument", async () => {
+    const params = createDefaultParams({ adapterPin: "opencode", adapterPinRequested: true });
+
+    const promise = runner.runStage(params);
+    await Promise.resolve();
+    capturedState.callbacks!.onComplete!(makeSuccessResult());
+    await promise;
+
+    const call = vi.mocked(runStageSkillHeadless).mock.calls[0];
+    expect(call[call.length - 2]).toBe("opencode");
+    expect(call[call.length - 1]).toBe(true);
   });
 
   // ── Failure path ────────────────────────────────────────────────────────

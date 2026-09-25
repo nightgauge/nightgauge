@@ -27,6 +27,11 @@ changelog, and the release workflow refuses a tag that does not.
   OpenCode section now says what `warnings` and `notes` carry, and that notes
   never change the doctor's verdict.
 
+- **A cap-recovery adapter hop now reaches the extension's pipeline stages
+  (#1656).** The extension forwarded the #1545 hop pin only to the refinement
+  stage, so a capped run the Go scheduler moved to another provider still
+  dispatched its later stages on the capped one.
+
 - **The knowledge base is committed, and every statement of that agrees
   (#2042).** The generated `.nightgauge/.gitignore` no longer ignores
   `/knowledge/` wholesale — an enabled knowledge base used to be scaffolded,
@@ -46,6 +51,18 @@ changelog, and the release workflow refuses a tag that does not.
   `plan: "local"`, and falls back to `unknown` for the session if the server
   rejects it. ADR-018 records the rule.
 
+- **A remote trigger can choose the adapter and model its run executes on
+  (#1656).** A dashboard or mobile `trigger` may carry `adapter` and `model`
+  (the `-m` value, such as `lmstudio/qwen/qwen3.8-27b`). The agent checks them
+  before it acks: the allow-list, pattern and length, adapter health (a gated
+  adapter cannot be enabled remotely), the operator's own adapter pin, the
+  performance mode's ceiling, provider credentials and the local OpenCode
+  catalog. A pair it cannot serve is acked `rejected` with a short reason
+  category, and the run is never queued. A valid pair pins every stage
+  exactly: no fallback, re-route or model-swap retry replaces it, and a stage
+  that cannot run it fails naming the pin. The run record keeps
+  `requested_adapter`/`requested_model` next to what served, so a cap-hop
+  shows as a hop. ADR-022 § 2 records the contract.
 - **`install-agent-skills.sh --opencode-only` installs Nightgauge into your own
   OpenCode (#1666).** It copies every skill and adds one `/nightgauge-<name>`
   command per skill under `~/.config/opencode`, or under `<dir>/.opencode` with

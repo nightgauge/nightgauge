@@ -774,7 +774,7 @@ type openCodeAnthropicOptionsJSON struct {
 //
 // It refuses a model the adapter cannot dispatch; an anthropic/ model while
 // ANTHROPIC_API_KEY is unset and a platform provider's model
-// (openCodeCredentialRefusal); a provider key that is neither a declared
+// (OpenCodeCredentialRefusal); a provider key that is neither a declared
 // endpoint nor a provider OpenCode's bundled catalog knows, a local one
 // included; an anthropic model whose entry it cannot pin: one the bundled
 // catalog does not list, or a fast-mode entry (openCodeAnthropicModelRefusal);
@@ -797,7 +797,7 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 	if strings.ContainsAny(model, "{}") {
 		return OpenCodeRunConfig{}, fmt.Errorf("model %q is refused: OpenCode substitutes {env:...} and {file:...} references in its config, so a model id may not contain a brace", model)
 	}
-	if err := openCodeCredentialRefusal(model, in.Lookup); err != nil {
+	if err := OpenCodeCredentialRefusal(model, in.Lookup); err != nil {
 		return OpenCodeRunConfig{}, err
 	}
 	if err := openCodeCheckRunRoot(in.RunRoot); err != nil {

@@ -82,16 +82,21 @@ type RunStageParams struct {
 	// resolution rung including its own env overrides, because every one of
 	// those rungs would point back at the provider whose cap just cost the run
 	// a stage.
-	AdapterPin        string   `json:"adapterPin,omitempty"`
-	MaxTokens         int      `json:"maxTokens,omitempty"`
-	TimeoutMs         int      `json:"timeoutMs"`
-	SkillContent      string   `json:"skillContent"`
-	ContextFile       string   `json:"contextFile,omitempty"`
-	OutputFile        string   `json:"outputFile,omitempty"`
-	WorktreeDir       string   `json:"worktreeDir"`
-	Repo              string   `json:"repo"`
-	AllowedTools      []string `json:"allowedTools,omitempty"`
-	SkillFallbackUsed bool     `json:"skillFallbackUsed,omitempty"`
+	AdapterPin string `json:"adapterPin,omitempty"`
+	// AdapterPinRequested marks adapterPin as a remote run request's pin
+	// (#1656) rather than a cap-recovery hop. The extension then never walks
+	// the fallback chain for it: an adapter that cannot serve the request
+	// fails the stage, because the requester must not be served by another.
+	AdapterPinRequested bool     `json:"adapterPinRequested,omitempty"`
+	MaxTokens           int      `json:"maxTokens,omitempty"`
+	TimeoutMs           int      `json:"timeoutMs"`
+	SkillContent        string   `json:"skillContent"`
+	ContextFile         string   `json:"contextFile,omitempty"`
+	OutputFile          string   `json:"outputFile,omitempty"`
+	WorktreeDir         string   `json:"worktreeDir"`
+	Repo                string   `json:"repo"`
+	AllowedTools        []string `json:"allowedTools,omitempty"`
+	SkillFallbackUsed   bool     `json:"skillFallbackUsed,omitempty"`
 	// AutonomousMode signals to TS SkillRunner that this stage is running
 	// under the autonomous scheduler, enabling escalation+pause on stall
 	// instead of silent kill. Issue #2656.
