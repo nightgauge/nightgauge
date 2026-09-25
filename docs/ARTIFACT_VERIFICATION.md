@@ -101,8 +101,8 @@ An SPDX SBOM is also attached to each release.
 
 ## What we scan before publishing
 
-- **ClamAV** over every `.vsix` and every built binary, in both `release.yml`
-  and `marketplace-publish.yml`, before attestation and before publish. The
+- **ClamAV** over every `.vsix` and every built binary, once, in `release.yml`, before attestation. `marketplace-publish.yml`
+  publishes those same scanned files and builds nothing (#2151). The
   JSON report is retained as a run artifact. See `scripts/malware-scan.sh`.
 - **`govulncheck`** over the Go module graph, gating on reachable
   vulnerabilities.
