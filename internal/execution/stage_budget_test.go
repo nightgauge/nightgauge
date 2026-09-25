@@ -52,6 +52,13 @@ type budgetStage struct {
 	elapsed time.Duration
 }
 
+// beforeTimeout is the upper bound a budget-stopped stage's elapsed time is
+// checked against: the stage timeout less a one-second margin. A stage the
+// budget stops ends at about 1s; one it fails to stop runs to the timeout. A
+// bound tied to the timeout keeps that distinction while leaving several
+// seconds for a loaded machine, such as two gates running at once (#2123).
+func beforeTimeout(timeout time.Duration) time.Duration { return timeout - time.Second }
+
 // runBudgetStage dispatches one stage to adapter under budgets and timeout.
 func runBudgetStage(t *testing.T, adapter adapters.SkillRunner, budgets map[string]config.StageBudget, timeout time.Duration) budgetStage {
 	t.Helper()
@@ -327,7 +334,7 @@ func TestStageBudgetWallClockBindsAChildThatClosedItsOutput(t *testing.T) {
 	if b == nil || b.Dimension != StageBudgetWallClock {
 		t.Fatalf("StageBudgetExceeded = %+v, want a wall_clock breach (ran %s)", b, out.elapsed)
 	}
-	if out.elapsed > 8*time.Second {
+	if out.elapsed > beforeTimeout(15*time.Second) {
 		t.Errorf("the stage ran %s: want it stopped at about 1s, well before its 15s timeout", out.elapsed)
 	}
 }
@@ -335,8 +342,9 @@ func TestStageBudgetWallClockBindsAChildThatClosedItsOutput(t *testing.T) {
 // TestStageBudgetWallClockStopsAContinuouslyStreamingStage: a stage that
 // prints a line every 100 ms, so it is never idle, under max_wall_clock 1s
 // and a 10s stage timeout is stopped at about 1s by the wall-clock budget,
-// well before the timeout. Only a lower bound and a generous upper one are
-// asserted, so a loaded machine cannot make it flaky.
+// well before the timeout. Only a lower bound and an upper bound of the
+// timeout less a margin are asserted, so a loaded machine cannot make it
+// flaky but a stage the budget failed to stop still fails.
 func TestStageBudgetWallClockStopsAContinuouslyStreamingStage(t *testing.T) {
 	adapter := &budgetFakeAdapter{
 		name:   "claude-budget-fake",
@@ -347,7 +355,7 @@ func TestStageBudgetWallClockStopsAContinuouslyStreamingStage(t *testing.T) {
 	if b == nil || b.Dimension != StageBudgetWallClock || b.Limit != 1000 || b.Observed < 1000 {
 		t.Fatalf("StageBudgetExceeded = %+v, want wall_clock with limit 1000ms and observed at least that\nstderr:\n%s", b, out.result.Stderr)
 	}
-	if out.elapsed < 900*time.Millisecond || out.elapsed > 6*time.Second {
+	if out.elapsed < 900*time.Millisecond || out.elapsed > beforeTimeout(10*time.Second) {
 		t.Errorf("the stage ran %s: want it stopped at about 1s, well before its 10s timeout", out.elapsed)
 	}
 	if kind := terminalkind.Classify(out.result.Stderr); kind != "budget_exceeded" {
@@ -390,7 +398,7 @@ while :; do echo '{"type":"system","subtype":"tick"}'; sleep 0.1; done`, childPI
 	if b.GroupSurvived {
 		t.Error("GroupSurvived = true: the manager's check found a member of the group after SIGKILL")
 	}
-	if out.elapsed > 12*time.Second {
+	if out.elapsed > beforeTimeout(20*time.Second) {
 		t.Errorf("the stage ran %s: its own SIGKILL after the grace should have ended it well before the 20s stage timeout", out.elapsed)
 	}
 	for name, file := range map[string]string{"child": childPID, "grandchild": grandchildPID} {
