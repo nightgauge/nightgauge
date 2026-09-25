@@ -143,20 +143,20 @@ pipeline:
   in its own runner (`skillRunner`) asks the Go binary for its budget over
   `pipeline.resolveStageBudgets`, which calls the same resolver, so the
   defaults and the zero-cost rule are never re-implemented in the extension.
-  It counts turns on the stream (a main-thread claude assistant message, or an
-  OpenCode `step_finish` the SDK stage CLI forwards with its reason and
-  tokens), checks tokens after every usage event, and runs the wall clock
-  from spawn. On a breach it sends SIGTERM to the stage's whole process tree,
-  SIGKILL after 10s, verifies no member survives, and fails the stage with
+  The budget is fetched before the stage's process is spawned (a 5s timeout),
+  so the turn budget is passed as the native cap (`--max-turns` for claude
+  and grok, OpenCode's `steps` via `NIGHTGAUGE_STAGE_MAX_TURNS`). When it
+  cannot be fetched, a stage on a local model is refused before spawn; any
+  other stage runs under its USD caps with one warning. On the stream it
+  counts the same turns as the executor (a main-thread claude assistant
+  message; an OpenCode `step_finish`, a codex completed non-message item, a
+  gemini `tool_use` and a grok `usage`, which the SDK stage CLI forwards as
+  activity lines; copilot has none, see ADAPTER_MATRIX), checks tokens after
+  every usage event, and runs the wall clock from spawn. On a breach it sends
+  SIGTERM to the stage's whole process tree, SIGKILL after 10s, verifies no
+  member survives, and fails the stage with
   `stage_budget_exceeded:<dimension> observed=… ceiling=…`, which classifies
-  as `budget_exceeded`. The runner is synchronous, so the first dispatch of a
-  stage, adapter and model resolves its budget while the process starts and
-  is armed when the answer arrives (the counters run from spawn, so nothing is
-  missed); later dispatches of the same shape are armed before spawn and pass
-  the turn budget as the native cap (`--max-turns`, or OpenCode's `steps` via
-  `NIGHTGAUGE_STAGE_MAX_TURNS`). When the budget cannot be resolved, a stage
-  on a local model is stopped at once and later dispatches of it are refused
-  before spawn; any other stage runs under its USD caps with one warning.
+  as `budget_exceeded`.
 
 ### Pre-flight cost estimate (#1213)
 

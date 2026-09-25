@@ -168,6 +168,8 @@ export class OutputFormatter {
             event: activity.event,
             ...(activity.reason !== undefined && { reason: activity.reason }),
             ...(activity.tokens !== undefined && { tokens: activity.tokens }),
+            ...(activity.turn !== undefined && { turn: activity.turn }),
+            ...(activity.asksAnother !== undefined && { asksAnother: activity.asksAnother }),
           },
         })
       );

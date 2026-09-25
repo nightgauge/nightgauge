@@ -58,7 +58,9 @@ export async function runCliCommand(
   args: string[],
   prompt: string,
   cwd: string,
-  env: NodeJS.ProcessEnv
+  env: NodeJS.ProcessEnv,
+  /** Called with each complete stdout line while the child runs (#1668). */
+  onLine?: (line: string) => void
 ): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -69,9 +71,17 @@ export async function runCliCommand(
 
     let stdout = "";
     let stderr = "";
+    let pending = "";
 
     child.stdout.on("data", (chunk) => {
-      stdout += String(chunk);
+      const text = String(chunk);
+      stdout += text;
+      if (onLine) {
+        pending += text;
+        const lines = pending.split("\n");
+        pending = lines.pop() ?? "";
+        for (const line of lines) onLine(line);
+      }
     });
 
     child.stderr.on("data", (chunk) => {
@@ -144,6 +154,8 @@ export function createCliQueryFn(options: {
   promptDelivery?: PromptDelivery;
   /** The opencode adapter's run: required for, and only read by, `adapter: "opencode"`. */
   openCode?: OpenCodeQueryContext;
+  /** Signs of life, and turn boundaries, while the child runs (#1657, #1668). */
+  onActivity?: (activity: AdapterActivity) => void;
 }): SDKQueryFunction {
   const delivery = options.promptDelivery ?? "stdin";
 
@@ -255,7 +267,15 @@ export function createCliQueryFn(options: {
       }
     }
 
-    const result = await runCliCommand(options.command, finalArgs, stdinPrompt, cwd, env);
+    const onActivity = options.onActivity;
+    const result = await runCliCommand(
+      options.command,
+      finalArgs,
+      stdinPrompt,
+      cwd,
+      env,
+      onActivity ? (line) => forwardCliTurnActivity(options.adapter, line, onActivity) : undefined
+    );
     if (promptFilePath) {
       unlink(promptFilePath).catch(() => {});
     }
@@ -475,6 +495,32 @@ function openCodeStepFinishActivity(part: unknown): {
 }
 
 /**
+ * The stage's resolved turn budget the extension passes in
+ * `NIGHTGAUGE_STAGE_MAX_TURNS` (#1668), or undefined when it is absent or not
+ * a positive integer.
+ */
+export function stageBudgetMaxTurns(env: NodeJS.ProcessEnv): number | undefined {
+  const raw = env.NIGHTGAUGE_STAGE_MAX_TURNS?.trim() ?? "";
+  return /^[1-9][0-9]*$/.test(raw) ? Number(raw) : undefined;
+}
+
+/**
+ * Lower a CLI's `--max-turns <n>` in `args`, in place, to the stage's
+ * resolved turn budget (#1668), or add it when absent. No budget, no change.
+ */
+export function applyStageTurnBudget(args: string[], env: NodeJS.ProcessEnv): void {
+  const budget = stageBudgetMaxTurns(env);
+  if (budget === undefined) return;
+  const at = args.indexOf("--max-turns");
+  if (at >= 0 && at + 1 < args.length) {
+    const current = Number(args[at + 1]);
+    if (!(current > 0) || budget < current) args[at + 1] = String(budget);
+  } else {
+    args.push("--max-turns", String(budget));
+  }
+}
+
+/**
  * The turn cap an OpenCode query's per-run config is built with: the query's
  * own `maxTurns`, lowered to the stage's resolved turn budget when the
  * extension that launched this stage passes one in
@@ -486,14 +532,62 @@ export function openCodeStageMaxTurns(
   queryMaxTurns: number | undefined,
   env: NodeJS.ProcessEnv
 ): number | undefined {
-  const raw = env.NIGHTGAUGE_STAGE_MAX_TURNS?.trim() ?? "";
-  const budget = /^[1-9][0-9]*$/.test(raw) ? Number(raw) : undefined;
+  const budget = stageBudgetMaxTurns(env);
   const query =
     queryMaxTurns !== undefined && Number.isInteger(queryMaxTurns) && queryMaxTurns > 0
       ? queryMaxTurns
       : undefined;
   if (budget === undefined) return queryMaxTurns;
   return query === undefined ? budget : Math.min(query, budget);
+}
+
+/**
+ * Tell `onActivity` about one stdout line of a running codex, gemini or grok
+ * process when it marks a model turn (#1668), with the boundaries the Go
+ * executor's stage turn budget counts (internal/execution/stage_budget.go):
+ *
+ *   - codex (`exec --json`): an `item.completed` whose item is not the
+ *     agent's message or reasoning (a command, a file change, a tool call) is
+ *     a turn that asks for another;
+ *   - gemini (`--output-format stream-json`): a `tool_use` is a turn that asks
+ *     for another;
+ *   - grok (`streaming-json`): a `usage` is a turn; a `tool_call` asks for
+ *     another.
+ *
+ * Copilot prints plain text with no turn boundary, so nothing is forwarded
+ * for it: its wall clock and token budgets bound it. Only the event type and
+ * the two flags are passed on, never any content. Never throws.
+ */
+export function forwardCliTurnActivity(
+  adapter: NightgaugeAdapter,
+  line: string,
+  onActivity: (activity: AdapterActivity) => void
+): void {
+  if (!line.includes('"type"')) return;
+  try {
+    const parsed = JSON.parse(line) as { type?: unknown; item?: { type?: unknown } };
+    const type = parsed.type;
+    let activity: AdapterActivity | undefined;
+    if (adapter === "codex" && type === "item.completed") {
+      const itemType = parsed.item?.type;
+      if (
+        typeof itemType === "string" &&
+        itemType !== "agent_message" &&
+        itemType !== "reasoning"
+      ) {
+        activity = { adapter, event: type, turn: true, asksAnother: true };
+      }
+    } else if (adapter === "gemini" && type === "tool_use") {
+      activity = { adapter, event: type, turn: true, asksAnother: true };
+    } else if (adapter === "grok" && type === "usage") {
+      activity = { adapter, event: type, turn: true, asksAnother: false };
+    } else if (adapter === "grok" && type === "tool_call") {
+      activity = { adapter, event: type, asksAnother: true };
+    }
+    if (activity) onActivity(activity);
+  } catch {
+    // Not an event line, or the callback failed: neither affects the stage.
+  }
 }
 
 /**

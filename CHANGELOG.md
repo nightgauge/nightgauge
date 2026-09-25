@@ -42,6 +42,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **Editor-launched stages fetch their stage budget before they spawn
+  (#1668).** The extension now resolves a stage's turn, wall-clock and token
+  budget from the Go binary (5s timeout) before starting its process, so a
+  local-model stage whose budget cannot be resolved is never started, and the
+  turn budget is always passed as the adapter's native cap. Codex, gemini and
+  grok stages now have their turns counted on the stream too (copilot prints
+  no turn boundary, documented in `docs/ADAPTER_MATRIX.md`), and an OpenCode
+  stage's compaction count now reaches its run record.
+
 - **Endpoint-aware OpenCode dispatch (#1679).** When several declared
   endpoints serve a stage's model id (`opencode.endpoints[].models`), the
   scheduler runs the stage on the healthy one with the most free slots

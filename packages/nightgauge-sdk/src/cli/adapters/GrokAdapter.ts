@@ -21,7 +21,7 @@ import type {
   QueryFunctionOptions,
 } from "./ICliAdapter.js";
 import { verifyCLIInstalled } from "./validateCLIAuth.js";
-import { createCliQueryFn, parseCliArgs } from "./cliQueryHelper.js";
+import { createCliQueryFn, parseCliArgs, applyStageTurnBudget } from "./cliQueryHelper.js";
 import { AdapterError } from "./errors.js";
 import { resolveAndValidateModel } from "./modelPreflight.js";
 import { grokCliEffortFlag } from "./grokEffort.js";
@@ -111,9 +111,12 @@ export class GrokAdapter implements ICliAdapter {
     );
   }
 
-  async createQueryFunction(_options?: QueryFunctionOptions): Promise<SDKQueryFunction> {
+  async createQueryFunction(options?: QueryFunctionOptions): Promise<SDKQueryFunction> {
     const command = process.env.NIGHTGAUGE_GROK_CLI_COMMAND ?? this.cliCommand;
     const args = parseCliArgs(process.env.NIGHTGAUGE_GROK_CLI_ARGS, this.getDefaultArgs());
+
+    // The stage's resolved turn budget lowers grok's own --max-turns (#1668).
+    applyStageTurnBudget(args, process.env);
 
     const grokModel = resolveAndValidateModel(
       "grok",
@@ -132,6 +135,7 @@ export class GrokAdapter implements ICliAdapter {
       command,
       args,
       adapter: this.name,
+      onActivity: options?.onActivity,
       promptDelivery: "prompt-file",
     });
   }

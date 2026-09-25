@@ -3444,7 +3444,9 @@ export async function initializeServices(
           // Context-window telemetry (#1668) rides the "complete" notify.
           if (
             pipelineStateService &&
-            (result.peakStepInputTokens !== undefined || result.contextWindowTokens !== undefined)
+            (result.peakStepInputTokens !== undefined ||
+              result.contextWindowTokens !== undefined ||
+              result.compactionCount !== undefined)
           ) {
             await pipelineStateService
               .updateTokens({
@@ -3453,6 +3455,7 @@ export async function initializeServices(
                 stage,
                 peakStepInputTokens: result.peakStepInputTokens,
                 contextWindowTokens: result.contextWindowTokens,
+                compactionCount: result.compactionCount,
               })
               .catch((err) => logger.warn("Failed to record stage context telemetry", { err }));
           }

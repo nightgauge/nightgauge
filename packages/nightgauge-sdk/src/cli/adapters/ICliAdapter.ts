@@ -71,6 +71,10 @@ export interface AdapterActivity {
    * from them (#1668). Never any text.
    */
   readonly tokens?: AdapterActivityTokens;
+  /** This event is a model turn, as the stage turn budget counts one (#1668). */
+  readonly turn?: boolean;
+  /** The stage's latest turn asks for another (a tool call) (#1668). */
+  readonly asksAnother?: boolean;
 }
 
 /** One OpenCode step's token counts, as `step_finish.part.tokens` reports them. */
