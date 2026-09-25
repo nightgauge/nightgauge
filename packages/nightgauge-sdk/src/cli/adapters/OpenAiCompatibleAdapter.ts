@@ -65,6 +65,8 @@ interface Preset {
   defaultApiKeyEnv: string;
   defaultTimeoutMs: number;
   docsUrl: string;
+  /** How to make a model available on this kind of server. */
+  modelHint: string;
 }
 
 const PRESETS: Readonly<Record<OpenAiCompatibleName, Preset>> = Object.freeze({
@@ -76,6 +78,7 @@ const PRESETS: Readonly<Record<OpenAiCompatibleName, Preset>> = Object.freeze({
     defaultApiKeyEnv: "NIGHTGAUGE_LM_STUDIO_API_KEY",
     defaultTimeoutMs: 180_000,
     docsUrl: "https://lmstudio.ai/docs",
+    modelHint: "Load a model in LM Studio: open LM Studio → Model tab → load a model.",
   },
   ollama: {
     displayName: "Ollama",
@@ -85,6 +88,7 @@ const PRESETS: Readonly<Record<OpenAiCompatibleName, Preset>> = Object.freeze({
     defaultApiKeyEnv: "NIGHTGAUGE_OLLAMA_API_KEY",
     defaultTimeoutMs: 300_000,
     docsUrl: "https://ollama.com/library",
+    modelHint: "Download a model first: ollama pull llama3.1",
   },
 });
 
@@ -190,7 +194,7 @@ export class OpenAiCompatibleAdapter implements ICliAdapter {
       throwConfigInvalid(
         label,
         `${preset.envPrefix}_MODEL`,
-        `Set ${preset.envPrefix}_MODEL to a model the server at ${baseUrl} serves.`,
+        `Set ${preset.envPrefix}_MODEL to a model the server at ${baseUrl} serves.\n${preset.modelHint}`,
         preset.docsUrl
       );
     }
