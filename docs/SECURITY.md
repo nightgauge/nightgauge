@@ -88,8 +88,8 @@ sanitization:
 
 One developer/manual escape hatch exists:
 
-| Variable                          | Description                                                                                                                                                                                                                                                          |
-| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Variable                          | Description                                                                                                                                                                                                                                                      |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `NIGHTGAUGE_SKIP_WORKFLOW_GATE=1` | Developer/manual escape hatch — bypass the operation gates (configured push gate, destructive-git) and the sanitization scan for one command. Secret read/write and pre-push validation gates stay ON. MUST NOT be set in skillRunner/orchestrator environments. |
 
 #### Operation parsing, not substring matching (#4069)
