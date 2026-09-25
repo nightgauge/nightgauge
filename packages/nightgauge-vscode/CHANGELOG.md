@@ -9,6 +9,16 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.4.8] - 2026-09-25
+
+### Security
+
+- The extension you install from the VS Code Marketplace or Open VSX is now
+  the exact file attached to the GitHub Release: same SHA-256 as the
+  release's `checksums.txt`, covered by the same provenance attestation.
+  Registry builds used to be a separate rebuild with a different digest
+  (#2151).
+
 ## [0.4.7] - 2026-09-25
 
 ### Removed
@@ -738,7 +748,8 @@ shipped as [0.2.1].
 - Settings for authentication provider, model selection, and paths
 - Settings for notification sounds, volume, and Do Not Disturb respect
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.4.7...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.4.8...HEAD
+[0.4.8]: https://github.com/nightgauge/nightgauge/compare/v0.4.7...v0.4.8
 [0.4.7]: https://github.com/nightgauge/nightgauge/compare/v0.4.6...v0.4.7
 [0.4.6]: https://github.com/nightgauge/nightgauge/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/nightgauge/nightgauge/compare/v0.4.4...v0.4.5
