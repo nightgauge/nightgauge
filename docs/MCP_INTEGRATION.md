@@ -504,7 +504,7 @@ If `${ENV_VAR}` is not substituted, ensure the variable is exported in your
 shell before launching the Claude CLI:
 
 ```bash
-export GITHUB_TOKEN=ghp_...
+export GITHUB_TOKEN=<your-github-token>
 claude ...
 ```
 

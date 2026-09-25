@@ -929,7 +929,7 @@ literal token in the machine-tier file, never in `config.local.yaml`:
 ```yaml
 # ~/.nightgauge/config.yaml (machine tier — outside every repository)
 github_auth:
-  token: ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+  token: <your-personal-access-token>
 ```
 
 #### Multi-Org Setup
