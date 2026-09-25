@@ -14,6 +14,16 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Security
+
+- **The VS Code Marketplace and Open VSX now serve the exact VSIX the GitHub
+  Release published (#2151).** The registry publish used to rebuild the
+  extension from the tag, so the registries served a second artifact whose
+  SHA-256 differed from the release's `checksums.txt`. It now downloads the
+  release's own VSIXs, verifies each against `checksums.txt` and its
+  `release.yml` provenance attestation, checks version and channel, and
+  publishes those files unchanged. Build once, promote the same bytes.
+
 ## [0.4.7] - 2026-09-25
 
 ### Added

@@ -2,18 +2,20 @@
 #
 # This is the ONLY Marketplace / Open VSX publish path. release.yml builds the
 # per-target VSIXs and attaches them to the GitHub Release; it never publishes
-# to a registry. This workflow is re-runnable on its own: build the per-target
-# binaries and VSIXs exactly as release.yml does, verify
-# the PAT against the publisher, attest, publish. It never touches the GitHub
-# Release or the Homebrew tap.
+# to a registry. This workflow promotes those exact files (#2151): it downloads
+# the tag's release VSIXs, verifies each against the release's checksums.txt
+# and its release.yml provenance attestation, checks version and channel,
+# verifies the PAT, and publishes. It builds nothing, so the registries serve
+# the same SHA-256 the release records. It is re-runnable on its own and never
+# touches the GitHub Release or the Homebrew tap. Run release.yml first.
 #
 # Dispatch it ON THE TAG, never from a branch:
 #
 #   gh workflow run marketplace-publish.yml --ref v0.2.2 -f registries=both
 #
 # The tag is the run's own ref (`github.ref`), not a free-text input, for three
-# reasons: the build-provenance attestation then names the tag's commit as the
-# source (a dispatch from `main` would attest whatever `main` pointed at); the
+# reasons: the tag selects the GitHub Release to promote and the attestation
+# source ref every VSIX must carry (refs/tags/<tag>); the
 # `production` environment's tag-only branch policy applies, exactly as it does
 # to release.yml; and the workflow definition that runs is the one at the tag,
 # so a publish is reproducible against the tagged tree. A fix to this file
@@ -51,18 +53,11 @@ concurrency:
 
 jobs:
   publish:
-    name: Package ${{ github.ref_name }} and publish (${{ inputs.registries }})
-    # macos-latest, not ubuntu: Apple `codesign` runs only on macOS. macOS
-    # still cross-compiles linux/amd64 (CGO_ENABLED=0). Proven on the rc
-    # channel first (v0.4.4-rc.2) before this workflow adopted it.
-    #
-    # COST: free only because this repository is PUBLIC and this is a STANDARD
-    # runner. Verified, not assumed -- the timing API reports MACOS total_ms 0
-    # (`gh api repos/.../actions/runs/<id>/timing`). Making the repository
-    # private would bill macOS at 10x the Linux rate, and a larger runner such
-    # as macos-14-xlarge is billed even when public.
-    runs-on: macos-latest
-    timeout-minutes: 30
+    name: Promote ${{ github.ref_name }} release VSIXs to ${{ inputs.registries }}
+    # Linux: nothing is built or signed here any more, so macOS (needed for
+    # `codesign` in release.yml) buys nothing.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     # The `production` environment admits `v*` tag refs only, so a dispatch
     # from a branch is refused by GitHub before a runner is assigned -- the
     # same gate release.yml runs behind.
@@ -70,8 +65,7 @@ jobs:
 
     permissions:
       contents: read
-      id-token: write # artifact attestations (OIDC)
-      attestations: write # artifact attestations
+      attestations: read # verify release.yml's provenance attestations
 
     steps:
       - name: Require a stable release tag as the run's ref
@@ -107,19 +101,6 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
-      - name: Setup Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
-          cache-dependency-path: go.sum
-
-      - name: Clear stale npx cache (arm64/x64 esbuild mismatch)
-        run: rm -rf ~/.npm/_npx
-
-      - name: Install dependencies
-        run: npm ci
-
       - name: Extract version from tag
         id: version
         env:
@@ -133,7 +114,7 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
-      # Verify the PAT BEFORE spending minutes on a build, and fail loudly:
+      # Verify the PAT BEFORE touching the artifacts, and fail loudly:
       # this workflow exists only to publish, so a missing or invalid PAT is
       # an error here, not a skip.
       - name: Verify VSCE_PAT against the publisher
@@ -156,7 +137,7 @@ jobs:
           exit 1
 
       # Open VSX (#1316): the namespace is the same identifier as the
-      # Marketplace publisher. Verified before the build for the same reason.
+      # Marketplace publisher. Verified up front for the same reason.
       - name: Verify OVSX_PAT against the namespace
         if: ${{ inputs.registries == 'open-vsx' || inputs.registries == 'both' }}
         env:
@@ -174,223 +155,69 @@ jobs:
           echo "::error::OVSX_PAT verification failed after 5 attempts"
           exit 1
 
-      # Cross-compile every target binary up front so each platform-specific
-      # .vsix can bundle the matching one. The extension loads its Go binary from
-      # the bundled dist/bin/ (no runtime download), so a single universal .vsix
-      # would ship one arch and break on the others. `make build-all` emits
-      # bin/nightgauge-{darwin-arm64,darwin-amd64,linux-amd64}.
-      - name: Build all Go binaries (per-target VSIX bundling)
+      # Build once, promote the same bytes (#2151). The registries get the
+      # exact VSIXs release.yml built, scanned, attested and attached to the
+      # GitHub Release, so the digest a user verifies against the release's
+      # checksums.txt is the digest the Marketplace and Open VSX serve. Nothing
+      # is compiled, packaged, rescanned or re-attested here. release.yml
+      # packages with the same channel resolver (marketplace-channel.sh), so
+      # the pre-release flag vsce bakes in at package time is already right.
+      - name: Download the release's VSIXs and checksums
+        working-directory: packages/nightgauge-vscode
         env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
           VERSION: ${{ steps.version.outputs.version }}
-        run: make build-all VERSION="$VERSION"
-
-      # Sign before anything packages these binaries. The VSIX freezes whatever
-      # is in dist/bin/, so signing afterwards would ship an unsigned copy while
-      # reporting success. No-ops with a notice when the Apple secrets are
-      # absent, so a secretless re-run still completes.
-      - name: Sign the macOS binaries
-        env:
-          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
-          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-        run: |
-          bash scripts/sign-macos-binaries.sh \
-            bin/nightgauge-darwin-arm64 bin/nightgauge-darwin-amd64
-
-      # Build EVERY workspace before testing, not just the SDK. The VSCode suite
-      # has an integration test (tests/integration/failureTaxonomyPackaging.test.ts)
-      # asserting `dist/failure-taxonomy.yaml` exists — a file only the extension's
-      # own `build:assets` step produces. Building the SDK alone left it absent, so
-      # `Run tests` could never pass here. ci.yml does not hit this because its
-      # VSCode job runs the root `npm run build` before testing.
-      # Tests are not re-run here: they already ran in the tag's release run.
-      - name: Build all workspaces (SDK + extension assets)
-        run: npm run build
-
-      - name: Inject release version
-        working-directory: packages/nightgauge-vscode
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: npm version "$VERSION" --no-git-tag-version --allow-same-version
-
-      # Split the canonical `npm run package` (build + vsce package) so we can
-      # stamp `dist/build-info.json` AFTER the build pipeline writes into
-      # `dist/` but BEFORE `vsce package` freezes it. Before legacy issue 3650 the stamp ran
-      # earlier and any future `dist/` rewrite (rm -rf in clean step, new
-      # asset path) could silently omit it from the .vsix and leave
-      # ExtensionStalenessService stuck in `state: "unknown"` on the
-      # installed extension. legacy issue 3650 (Part B).
-      - name: Build extension (pre-package)
-        working-directory: packages/nightgauge-vscode
-        run: npm run build
-
-      # Legacy issues 3300 / 3650: stamp build provenance so ExtensionStalenessService
-      # can detect when the running extension is behind workspace HEAD and
-      # refuse autonomous dispatch on critical-path drift. Stamping happens
-      # AFTER `npm run build` so dist/ already exists in its final shape, and
-      # the helper script asserts the file is parseable JSON before we
-      # continue — a missing stamp is a hard fail, not a silent skip.
-      - name: Stamp build provenance
-        env:
-          BUILD_BRANCH: ${{ github.ref_name }}
-        run: |
-          DIST=packages/nightgauge-vscode/dist
-          BUILD_SHA=$(git rev-parse HEAD)
-          COMMIT_TIMESTAMP=$(git log -1 --format=%cI HEAD)
-          BUILD_TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          cat > "$DIST/build-info.json" <<EOF_BUILD_INFO
-          {
-            "commitSha": "$BUILD_SHA",
-            "branch": "$BUILD_BRANCH",
-            "commitTimestamp": "$COMMIT_TIMESTAMP",
-            "buildTimestamp": "$BUILD_TIMESTAMP",
-            "schemaVersion": "1"
-          }
-          EOF_BUILD_INFO
-          echo "Stamped: $BUILD_SHA ($BUILD_BRANCH @ $COMMIT_TIMESTAMP)"
-          bash packages/nightgauge-vscode/scripts/check-build-info.sh \
-            "$DIST/build-info.json"
-
-      # Package one .vsix PER VS Code target, each bundling the matching binary
-      # swapped into dist/bin/. `vsce package --target <t>` names the file
-      # nightgauge-vscode-<version>-<t>.vsix; the Marketplace serves the
-      # correct one per user automatically. A single universal .vsix would ship
-      # one arch and fail to launch the backend on every other platform.
-      - name: Package per-target VSIXs
-        working-directory: packages/nightgauge-vscode
         run: |
           set -euo pipefail
-          # vsce target -> Makefile binary suffix (GOOS-GOARCH)
-          # vsce target -> Makefile binary suffix, as a case rather than an
-          # associative array. `declare -A` needs bash 4, and macOS ships bash
-          # 3.2 for licensing reasons, so the array silently mangles into an
-          # unbound variable there. Keeping this portable means the same step
-          # runs on ubuntu and on the macos runner that codesigning requires.
-          bin_suffix() {
-            case "$1" in
-              darwin-arm64) echo darwin-arm64 ;;
-              darwin-x64)   echo darwin-amd64 ;;
-              linux-x64)    echo linux-amd64 ;;
-              *) echo "unknown target $1" >&2; return 1 ;;
-            esac
-          }
-          # vsce records the pre-release flag in the VSIX manifest at PACKAGE
-          # time; `publish --pre-release` on a VSIX packaged without it is
-          # refused (#1299). Use the same resolver as both publish steps.
-          VERSION="$(node -p "require('./package.json').version")"
-          CHANNEL=()
-          CHANNEL_NAME="$(bash "$GITHUB_WORKSPACE/scripts/marketplace-channel.sh" "$VERSION")"
-          if [[ "$CHANNEL_NAME" == "pre-release" ]]; then
-            CHANNEL=(--pre-release)
-            echo "Version $VERSION → packaging as pre-release"
-          else
-            echo "Version $VERSION → packaging as release"
-          fi
-          mkdir -p dist/bin
-          for T in darwin-arm64 darwin-x64 linux-x64; do
-            SRC="../../bin/nightgauge-$(bin_suffix "$T")"
-            [[ -f "$SRC" ]] || { echo "ERROR: missing $SRC (did 'make build-all' run?)"; exit 1; }
-            cp "$SRC" dist/bin/nightgauge
-            chmod +x dist/bin/nightgauge
-            npx @vscode/vsce@3.9.2 package --no-dependencies --target "$T" ${CHANNEL[@]+"${CHANNEL[@]}"}
-          done
-          echo "Packaged:"; ls -1 *.vsix
-
-      # Defense-in-depth: every .vsix must carry the build-info stamp AND a
-      # bundled binary before it reaches the Marketplace — and must NOT ship
-      # source maps or type declarations (.vscodeignore drift).
-      - name: Verify VSIX contents
-        working-directory: packages/nightgauge-vscode
-        env:
-          # Non-empty only when a signing certificate is configured, so the
-          # assertion is strict on a real release and informational otherwise.
-          APPLE_SIGNING_EXPECTED: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-        run: |
-          set -euo pipefail
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern "nightgauge-vscode-*-${VERSION}.vsix" --pattern checksums.txt
           shopt -s nullglob
-          COUNT=0
-          for VSIX in *.vsix; do
-            COUNT=$((COUNT + 1))
-            unzip -l "$VSIX" | grep -q 'extension/dist/build-info.json' \
-              || { echo "ERROR: $VSIX missing build-info.json (ExtensionStalenessService would report 'unknown')"; exit 1; }
-            unzip -l "$VSIX" | grep -q 'extension/dist/bin/nightgauge' \
-              || { echo "ERROR: $VSIX missing bundled Go binary"; exit 1; }
-            unzip -l "$VSIX" | grep -q 'extension/dist/sdk-cli.cjs' \
-              || { echo "ERROR: $VSIX missing bundled SDK CLI"; exit 1; }
-            # Webviews must execute only code inside the package. The vendored
-            # marked build is what lets the output window CSP carry no remote
-            # origin; shipping without it invites a CDN <script src> back in.
-            unzip -l "$VSIX" | grep -q 'extension/dist/vendor/marked.umd.js' \
-              || { echo "ERROR: $VSIX missing vendored webview asset dist/vendor/marked.umd.js"; exit 1; }
-            if unzip -l "$VSIX" | grep -qE '\.(map|d\.ts)$'; then echo "ERROR: $VSIX ships source maps or type declarations"; exit 1; fi
+          VSIXES=(./*.vsix)
+          [[ "${#VSIXES[@]}" -eq 3 ]] || { echo "::error::expected 3 per-target VSIXs on release $TAG, found ${#VSIXES[@]}"; exit 1; }
+          printf '%s\n' "${VSIXES[@]}"
 
-            # Assert the PACKAGED binary is Developer ID signed, not merely the
-            # one the signing step touched. The VSIX freezes a copy, so this is
-            # the only check that speaks for what a user installs -- and the
-            # 0.4.2 Open VSX publish is the standing reminder that a step's own
-            # success line is not evidence.
-            case "$VSIX" in
-              *darwin*)
-                unzip -p "$VSIX" extension/dist/bin/nightgauge > "$RUNNER_TEMP/packaged-bin"
-                if [[ -n "${APPLE_SIGNING_EXPECTED:-}" ]]; then
-                  codesign -dvvv "$RUNNER_TEMP/packaged-bin" 2>&1 \
-                    | grep -q 'Authority=Developer ID Application' \
-                    || { echo "ERROR: $VSIX ships a binary that is not Developer ID signed"; exit 1; }
-                  codesign -dv "$RUNNER_TEMP/packaged-bin" 2>&1 | grep -q 'flags=0x10000(runtime)' \
-                    || { echo "ERROR: $VSIX binary lacks the hardened runtime"; exit 1; }
-                  echo "OK: $VSIX carries a Developer ID signature with hardened runtime"
-                else
-                  codesign -dv "$RUNNER_TEMP/packaged-bin" 2>&1 | grep -q 'adhoc' \
-                    && echo "NOTE: $VSIX binary is ad-hoc signed (no Apple secrets configured)"
-                fi
-                rm -f "$RUNNER_TEMP/packaged-bin"
-                ;;
-            esac
-            echo "OK: $VSIX"
-          done
-          [[ "$COUNT" -eq 3 ]] || { echo "ERROR: expected 3 per-target VSIXs, found $COUNT"; exit 1; }
-
-      # Malware-scan every artifact BEFORE anything is attested or published.
-      # v0.4.4 reached the Marketplace unscanned by us and was flagged there
-      # (6/66, all generic heuristics, artifact clean). Whatever a scanner is
-      # going to say, we say it first. Runs on macOS via Homebrew because this
-      # job needs macos-latest for `codesign`.
-      #
-      # The gate is not clamscan's exit code: clamscan exits 0 both for a clean
-      # artifact and for one it never read. malware-scan.sh additionally asserts
-      # a floor on bytes actually scanned. See scripts/malware-scan.sh.
-      - name: Malware scan (ClamAV)
+      # Each VSIX must be the byte-identical file the release recorded, carry
+      # a provenance attestation signed by release.yml for this tag, and name
+      # the tag's version and channel in its manifest. Any mismatch stops the
+      # run before a single registry call.
+      - name: Verify digest, provenance and channel of each VSIX
+        working-directory: packages/nightgauge-vscode
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          brew install --quiet clamav
-          CLAMETC="$(brew --prefix)/etc/clamav"
-          mkdir -p "$CLAMETC" "$(brew --prefix)/var/lib/clamav"
-          sed 's/^Example/#Example/' "$CLAMETC/freshclam.conf.sample" > "$CLAMETC/freshclam.conf"
-          freshclam --quiet
-          bash scripts/malware-scan.sh \
-            --report "$RUNNER_TEMP/clamav-report.json" \
-            packages/nightgauge-vscode/*.vsix bin/
-
-      - name: Upload malware scan report
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: clamav-scan-report${{ github.job }}
-          path: ${{ runner.temp }}/clamav-report.json
-          if-no-files-found: warn
-
-      - name: Attest VSIXs
-        if: ${{ !github.event.repository.private }}
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: packages/nightgauge-vscode/*.vsix
+          CHANNEL_NAME="$(bash "$GITHUB_WORKSPACE/scripts/marketplace-channel.sh" "$VERSION")"
+          for VSIX in ./*.vsix; do
+            VSIX="${VSIX#./}"
+            EXPECTED=$(awk -v f="$VSIX" '$2 == f { print $1 }' checksums.txt)
+            [[ -n "$EXPECTED" ]] || { echo "::error::$VSIX is not listed in the release's checksums.txt"; exit 1; }
+            ACTUAL=$(shasum -a 256 "$VSIX" | awk '{ print $1 }')
+            [[ "$ACTUAL" == "$EXPECTED" ]] || { echo "::error::$VSIX digest $ACTUAL does not match checksums.txt ($EXPECTED)"; exit 1; }
+            if [[ "${{ github.event.repository.private }}" != "true" ]]; then
+              gh attestation verify "$VSIX" --repo "$GITHUB_REPOSITORY" \
+                --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+                --source-ref "refs/tags/$TAG"
+            fi
+            MANIFEST=$(unzip -p "$VSIX" extension.vsixmanifest)
+            grep -q "Version=\"$VERSION\"" <<<"$MANIFEST" \
+              || { echo "::error::$VSIX manifest does not carry version $VERSION"; exit 1; }
+            if grep -q 'Microsoft.VisualStudio.Code.PreRelease" Value="true"' <<<"$MANIFEST"; then
+              PACKAGED=pre-release
+            else
+              PACKAGED=release
+            fi
+            [[ "$PACKAGED" == "$CHANNEL_NAME" ]] \
+              || { echo "::error::$VSIX was packaged as $PACKAGED but $VERSION resolves to $CHANNEL_NAME"; exit 1; }
+            echo "OK: $VSIX sha256=$ACTUAL channel=$PACKAGED"
+          done
+          rm checksums.txt
 
       # --- VS Code Marketplace ---
       # The PAT was VERIFIED against the publisher in the "Verify VSCE_PAT
-      # against the publisher" step above, before any build work was spent;
+      # against the publisher" step above, before any artifact was fetched;
       # this workflow exists only to publish, so there is no skip branch. The
       # `secrets` context cannot be used in a step-level `if:` — GitHub rejects
       # the whole workflow at load time — so do NOT gate this step on
@@ -442,10 +269,3 @@ jobs:
           # step and leave a partial release that a re-run could not repair.
           bash "$GITHUB_WORKSPACE/scripts/publish-vsix-set.sh" \
             open-vsx "$VERSION" ${CHANNEL[@]+"${CHANNEL[@]}"}
-
-      - name: Upload the published VSIXs as a workflow artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: marketplace-vsix-${{ steps.version.outputs.version }}
-          path: packages/nightgauge-vscode/*.vsix
-          retention-days: 90

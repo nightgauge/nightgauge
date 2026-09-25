@@ -899,8 +899,10 @@ main ──●──●──●──●──●──
    merges, `brew` serves the previous version and `release-watchdog.yml` is
    red (`scripts/verify-release-channels.sh`)
 9. `gh workflow run marketplace-publish.yml --ref v0.4.0 -f registries=both`
-   → publishes the per-target VSIXs to the VS Code Marketplace and Open VSX
-   (even 0.x minor lines are stable; odd 0.x minor lines are pre-release)
+   → promotes the release's own per-target VSIXs to the VS Code Marketplace
+   and Open VSX after verifying each against `checksums.txt` and its
+   `release.yml` attestation (even 0.x minor lines are stable; odd 0.x minor
+   lines are pre-release)
 
 ### Per-Repository Workflows
 
@@ -954,8 +956,9 @@ gh release download v0.2.0 -p 'nightgauge-vscode-darwin-arm64-*.vsix' -D /tmp/re
 gh attestation verify /tmp/rel/nightgauge-vscode-darwin-arm64-*.vsix --owner nightgauge
 
 # 10. Publish to the registries — ON THE TAG, never from a branch. The run
-#     verifies VSCE_PAT / OVSX_PAT against the publisher before building, packages
-#     resolves the registry channel, attests, publishes. The `production` environment refuses
+#     verifies VSCE_PAT / OVSX_PAT, downloads the release's VSIXs, checks each
+#     against checksums.txt and its release.yml attestation, checks version and
+#     channel, and publishes those exact files. It builds nothing. The `production` environment refuses
 #     a branch ref, and the workflow refuses anything that is not vX.Y.Z.
 gh workflow run marketplace-publish.yml --ref v0.4.0 -f registries=both
 gh run watch
@@ -966,10 +969,14 @@ npx --yes @vscode/vsce@3.9.2 show nightgauge.nightgauge-vscode --json | jq '.ver
 curl -s https://open-vsx.org/api/nightgauge/nightgauge-vscode | jq '{version,preRelease}'
 ```
 
-The registries do not receive the GitHub Release's VSIX bytes: the publish
-workflow rebuilds from the tag with the same recipe and attests its own
-output. A registry VSIX and the release asset of the same target are two
-attested artifacts of one tree; either verifies with `gh attestation verify`.
+**Build once, promote the same bytes** (#2151). The registries receive the
+GitHub Release's own VSIX files, so the SHA-256 the Marketplace and Open VSX
+serve is the one in the release's `checksums.txt`, and the one attestation
+`release.yml` made covers every channel. The publish workflow refuses a file
+whose digest, attestation (signer `release.yml`, source `refs/tags/<tag>`),
+version or pre-release flag does not match, before any registry call. Until
+v0.4.7 it rebuilt from the tag instead, so a registry VSIX was a second
+artifact with its own digest.
 
 ### Rollback
 
