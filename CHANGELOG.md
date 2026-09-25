@@ -24,6 +24,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **A declared OpenCode endpoint can be marked as forwarding to a hosted API
+  (#1679, part 1).** `opencode.endpoints[].self_hosted: false` makes an
+  endpoint non-local whatever its address, so a loopback proxy such as
+  LiteLLM is no longer priced at $0 and no longer escapes a USD cap. Unset,
+  locality still follows the entry's kind and base URL. The `lmstudio` and
+  `ollama` ids cannot carry the mark. An Ollama cloud model (tag `cloud` or
+  ending in `-cloud`) is now refused before spawn with an `ollama-cloud/<model>`
+  remediation, and its cost is recorded as unstamped instead of a stamped $0.
 - **Adapter lists now come from the registry (#1670).** The agentic-gate
   error in `RunStage` and the `--adapter` help of `nightgauge run` and
   `nightgauge autonomous run` are generated from the adapter registry, so they

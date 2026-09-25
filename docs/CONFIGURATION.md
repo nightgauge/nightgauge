@@ -5214,6 +5214,14 @@ setup walk-through:
 | `opencode.formatter`           | Machine | OpenCode formatter (default `true`)                                                                                                                                 |
 | `opencode.endpoints[]`         | Machine | Named model servers: `id`, `provider`, `base_url`, `allow_lan`, `limit`, `timeouts`, `api_key_env`, `self_hosted`, `max_concurrency`, `models[]` (`id`, `variants`) |
 
+An endpoint on loopback or your private network is treated as a model server
+you run, and its stages are priced at $0. If the endpoint is a local proxy to a
+hosted API (for example LiteLLM), set `self_hosted: false` on its entry: its
+stages are then priced like any hosted model and a USD cap binds them. The
+`lmstudio` and `ollama` ids cannot be marked this way. Ollama models tagged
+`cloud` (or ending in `-cloud`) run on Ollama's hosted service; they are
+refused on an `ollama` endpoint, so dispatch them as `ollama-cloud/<model>`.
+
 Route a stage to the adapter from the project tier with
 `pipeline.stage_adapters.<stage>: opencode` (see [ui.core](#uicore)). The
 enable switch is the environment variable `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1`,

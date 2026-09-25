@@ -52,12 +52,15 @@ type OpenCodeEndpointConfig struct {
 	// literal, and this struct never carries the value itself.
 	APIKeyEnv string `yaml:"api_key_env,omitempty" json:"api_key_env,omitempty"`
 
-	// SelfHosted marks a model the endpoint runs itself, as opposed to one it
-	// forwards to a hosted service through a gateway or proxy (ADR-022
-	// § Endpoints, "An endpoint can forward"). Cost stamping's consumption of
-	// this field is #1679's job, not this issue's; it is only parsed, stored
-	// and passed through here.
-	SelfHosted bool `yaml:"self_hosted,omitempty" json:"self_hosted,omitempty"`
+	// SelfHosted says whether the endpoint runs its models itself, as
+	// opposed to forwarding to a hosted service through a gateway or proxy
+	// (ADR-022 § Endpoints, "An endpoint can forward"). Unset, locality
+	// follows the entry's kind and base_url (#2128): a loopback or
+	// private-network server is local and priced at $0. false marks an
+	// endpoint that forwards to a hosted API, such as a LiteLLM proxy on
+	// loopback: it is never local, so it is never priced at $0 and never
+	// escapes a USD cap (#1679). true states the model runs on that server.
+	SelfHosted *bool `yaml:"self_hosted,omitempty" json:"self_hosted,omitempty"`
 
 	// MaxConcurrency is the declared capacity of the endpoint: how many
 	// concurrent dispatches the operator judges it can serve. It is never

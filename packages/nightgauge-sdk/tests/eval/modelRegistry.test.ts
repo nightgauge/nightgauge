@@ -240,7 +240,7 @@ interface ProviderForCases {
     name: string;
     adapter: string;
     model: string;
-    endpoints: { id: string; provider: string; base_url: string }[];
+    endpoints: { id: string; provider: string; base_url: string; self_hosted?: boolean }[];
     local: boolean;
   }[];
 }
@@ -309,6 +309,7 @@ describe("model registry — locality by declared endpoint (#2128)", () => {
       id: e.id,
       provider: e.provider,
       baseUrl: e.base_url,
+      selfHosted: e.self_hosted,
     }));
     expect(isLocalModel(tc.adapter, tc.model, endpoints)).toBe(tc.local);
   });
