@@ -2,7 +2,7 @@
 
 Pipeline skills are portable Markdown specs that must run **without modification**
 under every execution adapter — Claude (headless + SDK), Codex, Gemini, Grok,
-Copilot, ollama, lm-studio, Cursor. This document is the contract that keeps them portable
+Copilot, OpenCode, Cursor. This document is the contract that keeps them portable
 and the guard that enforces it. Introduced by #4029.
 
 > TL;DR for skill authors: never hardcode a `~/.vscode/extensions/...` path,
@@ -114,7 +114,7 @@ fragments at render time, so skill rendering is no longer model-independent.
   anything, and no skill file contains adapter-conditional syntax.
 - **Base-only is the fallback, and it is a correct rendering.** An unknown
   model, a tier name that resolves to no descriptor, a provider with no registry
-  entries by design (ollama, lm-studio), an unreadable fragment, or no `--model`
+  entries by design (a local model on an OpenCode endpoint), an unreadable fragment, or no `--model`
   at all: every one of these renders the base document and exits 0. That is
   byte-for-byte the behavior that predates overlays.
 

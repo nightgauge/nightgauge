@@ -240,8 +240,8 @@ that expansion would otherwise have erased.
 
 ## 7. Fail-open, everywhere
 
-Unknown model, local provider with no registry entry (ollama, lm-studio — by
-design), unreadable fragment: every one of these renders base-only for the
+Unknown model, local model with no registry entry (a model on a local OpenCode
+endpoint — by design), unreadable fragment: every one of these renders base-only for the
 provider and model segments, and exits 0. A malformed overlay must never take
 down a run. Unreadable-but-present fragments are reported in `warnings` rather
 than swallowed, because that case is a typo, not an absence.

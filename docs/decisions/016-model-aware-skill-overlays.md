@@ -9,6 +9,12 @@ eval system + `ModelDescriptor` registry), [docs/SKILL_PORTABILITY.md](../SKILL_
 
 ---
 
+> **Amended by #2128 (2026-09-24):** the `lm-studio` and `ollama` adapters this
+> record names were removed. Local models now run only through the `opencode`
+> adapter against an OpenAI-compatible server, and the eval judge uses the
+> `openai-compatible` backend. The body below is kept as the record of the
+> decision; see [DEPRECATIONS.md](../DEPRECATIONS.md#lm-studio-and-ollama-adapters--opencode-and-openai-compatible).
+
 ## Executive Summary
 
 Pipeline skills are written once and executed by every model the router can

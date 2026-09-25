@@ -103,41 +103,11 @@ The degraded summary line is special-cased for this row, because the generic
 one ("pipeline will run but some features may be limited") is false in exactly
 this case.
 
-### Local-server reachability (`http` kind, #57)
+### Local model servers
 
-`ollama` / `lm-studio` health includes a bounded (2 s) HTTP probe of the
-local server's `/models` endpoint (`server_url` / `server_reachable` in the
-JSON). The base URL comes from `NIGHTGAUGE_OLLAMA_BASE_URL` /
-`NIGHTGAUGE_LM_STUDIO_BASE_URL`, defaulting to the servers' standard local
-ports. An adapter with its model env set but no listening server now reports
-`ok: false` with remediation — previously it could report healthy with no
-server running at all.
-
-### Local-model catalog membership (`http` kind, #520)
-
-Reachability alone is not readiness. After the server answers, doctor parses
-the OpenAI-compatible catalog (`{"object":"list","data":[{"id":"<model>"},
-...]}` — confirmed against LM Studio `GET /v1/models`) and checks that the
-resolved model id is present.
-
-Model resolution: `NIGHTGAUGE_LM_STUDIO_MODEL` / `NIGHTGAUGE_OLLAMA_MODEL`
-first, then the machine-tier key (`lm_studio.model` / `ollama.model` in
-`~/.nightgauge/config.yaml`). The workspace `lm_studio` block is not read
-(#3338). There is no default model.
-
-JSON fields on the adapter row:
-
-| Field      | When set                                         | Meaning                                                             |
-| ---------- | ------------------------------------------------ | ------------------------------------------------------------------- |
-| `model`    | a model id was resolved                          | the id doctor will look up in the catalog                           |
-| `model_ok` | catalog was evaluated, or no model is configured | `true` when the id is in `data[].id`; `false` when missing or unset |
-
-`ok` is `false` when the model is unconfigured or absent from the catalog,
-even if `installed` and `server_reachable` stay `true`. Remediation names
-the configured id and a pull command (`lms get <model>` / `ollama pull
-<model>`). When no model is configured the remediation states that the
-adapter requires `model` and has no default. The healthy path (`model` in
-the catalog) still reports `ok: true`.
+The doctor has no adapter row for a local model server: the `lm-studio` and
+`ollama` adapters, and their HTTP reachability and catalog checks, were removed
+(#2128). A local model runs through `opencode`, whose rows are below.
 
 ### CLI catalog drift detection (`cli` kind, #551, #604)
 
@@ -395,8 +365,8 @@ branch reads this field to print the failing check name(s) alongside
 
 Every adapter declares whether it drives a real agentic tool loop
 (`agentic` on the SDK `ICliAdapter`; `Agentic()` on the Go `SkillRunner`).
-Chat-completion-only adapters — `ollama`, `lm-studio`, and the TypeScript
-`gemini-sdk` — cannot edit files, run shell commands, or call `gh`, so
+Chat-completion-only adapters — the TypeScript `gemini-sdk` and
+`openai-compatible` — cannot edit files, run shell commands, or call `gh`, so
 **pipeline dispatch rejects them** with remediation at every entry point:
 the SDK CLI preflight (`runAdapterPreflightChecks`), the VSCode prerequisite
 check (primary, fallback walker, and auto-router enumeration), and the Go

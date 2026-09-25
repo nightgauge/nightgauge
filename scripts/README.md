@@ -84,8 +84,9 @@ available for direct invocation.
 ./scripts/run-stage.sh gemini feature-dev 554 --model gemini-2.5-pro
 ```
 
-**Supported Adapters:** `codex`, `gemini` (plus `lm-studio`, `copilot` for the
-adapters wired in `skillRunner.ts`).
+**Supported Adapters:** the agentic non-Claude adapters wired in
+`skillRunner.ts`, such as `codex`, `gemini`, `copilot` and `opencode`.
+Chat-only adapters (`gemini-sdk`, `openai-compatible`) are refused.
 
 **Supported Stages:**
 

@@ -51,9 +51,10 @@ checks are performed by deterministic code wherever possible.
 
 ### Model portability
 
-- Claude, Codex, Gemini, GitHub Copilot, and compatible local-model adapters
+- Claude, Codex, Gemini, GitHub Copilot, Grok, and OpenCode adapters
 - Configurable model routing and performance policies
-- Local Ollama and LM Studio support
+- Local models on any OpenAI-compatible server (LM Studio, Ollama, oMLX, …)
+  through OpenCode
 - Provider-neutral usage and evaluation records
 
 ## Local-first operation

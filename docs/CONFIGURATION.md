@@ -2169,15 +2169,16 @@ authority is now the model registry
 The scales below are deliberately NOT re-derived from it: they are ratios, not
 rates, and re-deriving them would move every cost cap.
 
-| Adapter      | Default scale | Effective cap (base = $23, feature-dev, sonnet/medium, elevated) |
-| ------------ | ------------- | ---------------------------------------------------------------- |
-| `claude`     | 1.0×          | $23.00 (preserves PR #3209 calibration byte-for-byte)            |
-| `codex`      | 0.7×          | $16.10                                                           |
-| `gemini`     | 0.4×          | $9.20                                                            |
-| `gemini-sdk` | 0.4×          | $9.20                                                            |
-| `copilot`    | 0.2×          | $4.60                                                            |
-| `lm-studio`  | 0.0           | _switches to time-based cap_ — see `pipeline.stage_time_caps`    |
-| `ollama`     | 0.0           | _switches to time-based cap_                                     |
+| Adapter             | Default scale | Effective cap (base = $23, feature-dev, sonnet/medium, elevated)                |
+| ------------------- | ------------- | ------------------------------------------------------------------------------- |
+| `claude`            | 1.0×          | $23.00 (preserves PR #3209 calibration byte-for-byte)                           |
+| `codex`             | 0.7×          | $16.10                                                                          |
+| `gemini`            | 0.4×          | $9.20                                                                           |
+| `gemini-sdk`        | 0.4×          | $9.20                                                                           |
+| `copilot`           | 0.2×          | $4.60                                                                           |
+| `grok`              | 0.6×          | $13.80                                                                          |
+| `openai-compatible` | 0.0           | _switches to time-based cap_ — see `pipeline.stage_time_caps`                   |
+| `opencode`          | by model      | local or unpriced model → 0.0; priced hosted model borrows its provider's scale |
 
 **Cross-axis composition example.** `feature-dev` on `gemini` with the
 `gemini-2.5-pro` model (the shipped default is `gemini-2.5-flash`) in
@@ -2190,8 +2191,8 @@ $23.00 × 1.0 (no Claude family match) × 1.0 (elevated) × 0.4 (gemini) = $9.20
 `provider_scale=0` is the explicit "this provider has no meaningful
 per-token cost — switch to time-based cap" signal. It is distinct from
 `modelScale` and `modeMultiplier`, both of which reject `0` as a typo.
-Local adapters (lm-studio, ollama) opt into time-based termination via
-this asymmetry.
+Local execution (`openai-compatible`, or `opencode` on a local model) opts
+into time-based termination via this asymmetry.
 
 ---
 
@@ -2207,7 +2208,7 @@ pipeline:
   cost_cap_provider_scale:
     gemini: 0.5 # tighten gemini further than the 0.4 default
     codex: 1.0 # opt out — give codex stages a Claude-equivalent ceiling
-    lm-studio: 0.0 # explicit (also the default)
+    openai-compatible: 0.0 # explicit (also the default)
 ```
 
 **Environment variable:**
@@ -2216,7 +2217,7 @@ pipeline:
 # Adapter is uppercased; hyphens become underscores
 export NIGHTGAUGE_COST_CAP_PROVIDER_SCALE_GEMINI=0.5
 export NIGHTGAUGE_COST_CAP_PROVIDER_SCALE_GEMINI_SDK=0.4
-export NIGHTGAUGE_COST_CAP_PROVIDER_SCALE_LM_STUDIO=0.0
+export NIGHTGAUGE_COST_CAP_PROVIDER_SCALE_OPENAI_COMPATIBLE=0.0
 ```
 
 ---
@@ -2355,8 +2356,8 @@ export NIGHTGAUGE_PIPELINE_RUNAWAY_CEILING_MULTIPLIER=4.0
 #### pipeline.stage_time_caps
 
 Per-stage absolute time cap (in **seconds**) used as the fallback hard
-ceiling when `cost_cap_provider_scale.<adapter>` is `0` (lm-studio,
-ollama). Token cost is meaningless for local adapters but runaway loops
+ceiling when the stage's provider scale is `0` (`openai-compatible`, or
+`opencode` on a local model). Token cost is meaningless for local models but runaway loops
 are still a real failure mode — `stage_time_caps` is the explicit knob
 that bounds them.
 
@@ -2369,7 +2370,7 @@ escape hatch intact. The kill diagnostic identifies the path
 `0` (the default) means uncapped on time. Computing per-stage defaults
 from `p95(elapsed) × 1.5` over historical data is **out-of-scope for
 Issue #3229** (per AC #4) and tracked as a follow-up audit. Until that
-audit lands, lm-studio / ollama runs are uncapped on time unless the
+audit lands, local-model runs are uncapped on time unless the
 operator opts in here.
 
 ```yaml
@@ -3952,8 +3953,8 @@ When using the Claude adapter, effort is resolved with this precedence:
 > This is **registry data, not a code list** — no model names are hardcoded
 > anywhere on the dispatch path, and none are enumerated here. A model that
 > declares `supported_efforts: []` has no effort axis and the flag is dropped
-> (Haiku declares `[]` today); a model with no registry entry at all (local
-> ollama/lm-studio, unregistered ids) gets no `--effort` either — the gate
+> (Haiku declares `[]` today); a model with no registry entry at all (a local
+> OpenCode endpoint's model, unregistered ids) gets no `--effort` either — the gate
 > fails closed. Read the current answer from
 > `packages/nightgauge-sdk/src/eval/model-registry.json`; to change it, edit
 > that entry and run `scripts/sync-model-registry.sh`. Valid levels: `low`,
@@ -5439,56 +5440,20 @@ variables are available:
 | -------------------------- | ------ | -------- | ------------------------- |
 | `nightgauge.gemini.apiKey` | string | _(none)_ | API key (stored securely) |
 
-#### LM Studio Adapter Environment Variables
+#### OpenAI-compatible Adapter Environment Variables
 
-LM Studio is chat-completion-only. These settings apply to evaluation, judging,
-and summarization; pipeline dispatch rejects this adapter because it cannot edit
-files or run tools.
+`openai-compatible` is chat-completion-only: it serves evaluation, judging and
+summarization, and pipeline dispatch rejects it. It replaced the removed
+`lm-studio` and `ollama` adapters (#2128); local models for pipeline stages run
+through the `opencode` adapter
+([MULTI_BACKEND_SETUP.md § Local Models](./MULTI_BACKEND_SETUP.md#local-models-opencode)).
 
-When using the `lm-studio` adapter, the following environment variables are
-available:
-
-| Variable                          | Description             | Default                    |
-| --------------------------------- | ----------------------- | -------------------------- |
-| `NIGHTGAUGE_LM_STUDIO_BASE_URL`   | LM Studio server URL    | `http://localhost:1234/v1` |
-| `NIGHTGAUGE_LM_STUDIO_MODEL`      | Model name (required)   | _(none)_                   |
-| `NIGHTGAUGE_LM_STUDIO_API_KEY`    | API key (value ignored) | `lm-studio`                |
-| `NIGHTGAUGE_LM_STUDIO_TIMEOUT_MS` | Request timeout ms      | `180000`                   |
-
-#### LM Studio VSCode Settings
-
-| Setting                           | Type    | Default                      | Description                           |
-| --------------------------------- | ------- | ---------------------------- | ------------------------------------- |
-| `nightgauge.lmStudio.baseUrl`     | string  | `"http://localhost:1234/v1"` | LM Studio server URL                  |
-| `nightgauge.lmStudio.model`       | string  | _(none)_                     | Model name to use                     |
-| `nightgauge.lmStudio.timeoutMs`   | number  | `180000`                     | Request timeout (ms)                  |
-| `nightgauge.lmStudio.toolCalling` | boolean | `false`                      | Enable tool calling (model-dependent) |
-| `nightgauge.lmStudio.maxTokens`   | number  | `8192`                       | Max tokens per response               |
-
-> **Note**: LM Studio only supports `localhost` connections. Remote LM Studio
-> servers are not supported.
-
-**Example:**
-
-```yaml
-ui:
-  core:
-    adapter: lm-studio
-
-lm_studio:
-  model: "lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF"
-  base_url: "http://localhost:1234/v1"
-  api_key: "lm-studio"
-  timeout_ms: 180000
-  max_tokens: 8192
-  stream_options:
-    include_usage: true
-  tool_calling: false
-```
-
-> **Setup guide**: See
-> [MULTI_BACKEND_SETUP.md](./MULTI_BACKEND_SETUP.md#lm-studio-local-model) for
-> full LM Studio server setup, model loading, and troubleshooting.
+| Variable                                   | Description                                 | Default                                |
+| ------------------------------------------ | ------------------------------------------- | -------------------------------------- |
+| `NIGHTGAUGE_OPENAI_COMPATIBLE_BASE_URL`    | Server base URL                             | _(required, no default)_               |
+| `NIGHTGAUGE_OPENAI_COMPATIBLE_MODEL`       | Model id as the server lists it             | _(required)_                           |
+| `NIGHTGAUGE_OPENAI_COMPATIBLE_API_KEY_ENV` | Name of the variable that holds the API key | `NIGHTGAUGE_OPENAI_COMPATIBLE_API_KEY` |
+| `NIGHTGAUGE_OPENAI_COMPATIBLE_TIMEOUT_MS`  | Request timeout ms                          | `180000`                               |
 
 #### Copilot Adapter Environment Variables
 

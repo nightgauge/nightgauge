@@ -39,9 +39,9 @@ Docs: https://docs.anthropic.com/en/docs/claude-code
 | `AUTH_EXPIRED`       | Authentication has expired                      | OAuth-based adapters    |
 | `BINARY_NOT_FOUND`   | CLI binary not installed or not in PATH         | CLI-based adapters      |
 | `VERSION_MISMATCH`   | CLI version is too old                          | Codex, Gemini           |
-| `SERVER_UNREACHABLE` | Local HTTP server not responding                | LM Studio, Ollama       |
-| `MODEL_NOT_FOUND`    | Model not loaded or not pulled                  | LM Studio, Ollama       |
-| `CONFIG_INVALID`     | Required configuration is missing or invalid    | LM Studio, Ollama       |
+| `SERVER_UNREACHABLE` | Local HTTP server not responding                | OpenAI-compatible       |
+| `MODEL_NOT_FOUND`    | Model not loaded or not pulled                  | OpenAI-compatible       |
+| `CONFIG_INVALID`     | Required configuration is missing or invalid    | OpenAI-compatible       |
 | `TIMEOUT`            | Auth check timed out in non-interactive context | Claude Headless, Gemini |
 
 ## Per-Adapter Auth Validation
@@ -132,32 +132,21 @@ Validates presence of `GEMINI_API_KEY` or `GOOGLE_API_KEY`.
 **Fix:** `export GEMINI_API_KEY=your_key` (get key at aistudio.google.com/apikey)
 **Docs:** https://ai.google.dev/gemini-api/docs
 
-### LM Studio (`lm-studio`)
+### OpenAI-compatible (`openai-compatible`)
 
-No auth validation (LM Studio accepts any API key string). Errors occur at query time.
-
-**Error scenarios:**
-
-- `CONFIG_INVALID` — `NIGHTGAUGE_LM_STUDIO_MODEL` not set
-- `MODEL_NOT_FOUND` — HTTP 404/400 from server (model not loaded)
-- `SERVER_UNREACHABLE` — Server returned unexpected HTTP error
-
-**Fix for model not found:** Open LM Studio → Model tab → search and load the model
-**Docs:** https://lmstudio.ai/docs
-
-### Ollama (`ollama`)
-
-No auth validation (Ollama accepts any API key string). Errors occur at query time.
+No auth validation: the key is optional and sent only when the variable
+`NIGHTGAUGE_OPENAI_COMPATIBLE_API_KEY_ENV` names is set. Errors occur at query
+time.
 
 **Error scenarios:**
 
-- `CONFIG_INVALID` — `NIGHTGAUGE_OLLAMA_MODEL` not set
-- `MODEL_NOT_FOUND` — HTTP 404/400 from server (model not pulled)
+- `CONFIG_INVALID` — `NIGHTGAUGE_OPENAI_COMPATIBLE_BASE_URL` or
+  `NIGHTGAUGE_OPENAI_COMPATIBLE_MODEL` not set
+- `MODEL_NOT_FOUND` — HTTP 404/400 from server (model not loaded or pulled)
 - `SERVER_UNREACHABLE` — Server returned unexpected HTTP error
 
-**Fix for model not found:** `ollama pull <model>`
-**Fix for server unreachable:** `ollama serve`
-**Docs:** https://ollama.com/library
+**Fix for model not found:** load or pull the model on the server, then name it
+exactly as `GET /v1/models` lists it.
 
 ### GitHub Copilot (`copilot`)
 
@@ -262,24 +251,16 @@ throwAuthError("My Adapter", "No API key found", "export MY_KEY=xxx", "https://d
 throwBinaryNotFound("My Adapter", "mytool", "npm install -g mytool", "https://docs.example.com");
 
 // Model not available
-throwModelNotFound("Ollama", "llama3.1", "ollama pull llama3.1", "ollama serve");
+throwModelNotFound("My Server", "my-model", "load my-model on the server", "start the server");
 
 // Server not responding
-throwServerUnreachable(
-  "LM Studio",
-  "http://localhost:1234/v1",
-  "Start LM Studio and enable the server"
-);
+throwServerUnreachable("My Server", "http://127.0.0.1:8080/v1", "Start the server");
 
 // Version too old
 throwVersionMismatch("Gemini", "0.20.0", "0.29.0", "npm update @google/gemini-cli");
 
 // Config key missing
-throwConfigInvalid(
-  "Ollama",
-  "NIGHTGAUGE_OLLAMA_MODEL",
-  "Set model: export NIGHTGAUGE_OLLAMA_MODEL=llama3.1"
-);
+throwConfigInvalid("My Adapter", "MY_ADAPTER_MODEL", "Set model: export MY_ADAPTER_MODEL=my-model");
 
 // Command timed out
 throwTimeoutError(

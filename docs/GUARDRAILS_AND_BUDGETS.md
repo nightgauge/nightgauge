@@ -94,7 +94,8 @@ pipeline:
   4h is the largest stage timeout routing assigns), so they only stop
   runaways.
 - **Native turn cap rises from 200 to 400.** Before stage budgets, claude,
-  claude-sdk, grok, lm-studio and ollama dispatches passed `--max-turns 200`
+  claude-sdk and grok dispatches (and the since-removed lm-studio and ollama
+  adapters) passed `--max-turns 200`
   and OpenCode stages ran with 200 steps. A hosted stage now gets the turn
   budget, 400 by default, as that cap; a zero-cost stage keeps 200.
 - **Unlimited is explicit.** Only `-1` lifts a ceiling, and every dispatch
@@ -105,10 +106,10 @@ pipeline:
   copilot.
 - **Zero-cost rule.** A stage on a zero-cost provider has no USD cap that can
   stop it, so it always runs under non-zero ceilings: a `-1` there is refused,
-  with a warning. Zero-cost means a model server you run (LM Studio, Ollama,
-  or an OpenCode endpoint the machine-tier `opencode:` block declares as
-  `lm-studio` or `ollama` under its own id) or a model the registry prices at
-  $0. Its turn default stays at the 200 steps OpenCode stages already had.
+  with a warning. Zero-cost means a model on a local OpenCode endpoint (one
+  the machine-tier `opencode:` block declares as an `lm-studio` or `ollama`
+  endpoint, or whose base URL is `localhost`, loopback or private) or a model
+  the registry prices at $0. Its turn default stays at the 200 steps OpenCode stages already had.
   A hosted model the registry cannot price is not zero-cost and keeps the
   hosted defaults, but no USD cap binds it either, so its `-1` is refused
   too.
@@ -170,8 +171,8 @@ known direction.
 band)` returns `undefined` when a provider serves no model in a band, and the
 stage is reported **unpriced** — the TypeScript analogue of Go's
 `Stamped=false`. The total then excludes it and is a **floor**, not an estimate,
-and the notification renders "unpriced" rather than a number. A local provider
-(ollama, lm-studio) has no registry entries by design: "free" and "unknown" are
+and the notification renders "unpriced" rather than a number. A local model
+(on a local OpenCode endpoint) has no registry entries by design: "free" and "unknown" are
 different answers and only one of them is safe to add into a total. `copilot`,
 which _is_ in the registry at $0, prices as a real 0.
 

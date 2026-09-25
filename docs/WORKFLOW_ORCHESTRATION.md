@@ -33,7 +33,7 @@ to the floor.
 | Plan the run                     | engine (`selectExecutor` → `WorkflowSpec`)                                  | Always produces a provider-neutral `WorkflowSpec`                                     |
 | Canonical event tree + run-state | `WorkflowEvent` contract + `WorkflowExecutor` journal                       | `schemaVersion` 4 node tree; one append-only journal per run                          |
 | Reference execution              | `SdkFanoutRunner` (`runSdkFanout`)                                          | Universal floor; defines the contract; hard process/concurrency ceiling               |
-| `sdk-fanout` provider execution  | `SdkFanoutExecutors`                                                        | Turns Codex / Gemini / Copilot / LM Studio / Ollama into runner bindings              |
+| `sdk-fanout` provider execution  | `SdkFanoutExecutors`                                                        | Turns Codex / Gemini / Copilot / OpenAI-compatible into runner bindings               |
 | Accelerated execution            | `adapter.runWorkflow?()`                                                    | Optional offload backend (Claude native Dynamic Workflows, research preview)          |
 | Capability declaration           | `OrchestrationCapability` on `ICliAdapter`                                  | `native-workflow` \| `sdk-fanout` (replaced the dead 4-boolean `AdapterCapabilities`) |
 | Backend resolution + durability  | `WorkflowExecutor`                                                          | Native vs floor, budget, quota gate, journal, cross-process resume                    |
@@ -46,7 +46,7 @@ to the floor.
 `sdk-fanout`) via `getOrchestrationCapability()`, plus an optional
 `runWorkflow?()` offload hook (`cli/adapters/ICliAdapter.ts`). The two Claude
 adapters declare `native-workflow`; Codex / Gemini / Gemini-SDK / Copilot /
-LM Studio / Ollama declare `sdk-fanout`. The verified-dead 4-boolean
+OpenCode / OpenAI-compatible declare `sdk-fanout`. The verified-dead 4-boolean
 `AdapterCapabilities` was deleted (no backwards-compat shim — pre-customer
 mandate).
 
@@ -152,7 +152,7 @@ finding F1).
 the floor: it turns an `ICliAdapter` (Codex et al.) into `{ runAgent, runJudge }`
 bindings by running **one ephemeral agent per fanned-out unit** — `codex exec
 --ephemeral` for Codex, the adapter's own `createQueryFunction(...)` single-shot
-exec for Gemini / Copilot / LM Studio / Ollama. Execution is injected behind an
+exec for Gemini / Copilot / OpenAI-compatible. Execution is injected behind an
 `EphemeralExec` seam so the bindings are unit-testable with a fake exec. Usage is
 honest: every record carries `estimated: true`, with real token counts taken from
 the provider's result message when reported and left at zero (never invented)

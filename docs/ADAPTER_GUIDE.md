@@ -12,31 +12,30 @@ Nightgauge includes ten provider adapters; seven have the agentic tool
 loop required for pipeline execution. Pick an agentic adapter for issue-to-PR
 work; use chat-only adapters for evaluation, judging, or summarization.
 
-| Priority                                                              | Recommended Adapter | Category       |
-| --------------------------------------------------------------------- | ------------------- | -------------- |
-| Primary tested pipeline path                                          | **Claude Headless** | Cloud AI (CLI) |
-| Direct SDK integration                                                | **Claude SDK**      | Cloud AI (SDK) |
-| OpenAI models                                                         | **Codex**           | Cloud AI (CLI) |
-| Google agentic pipeline                                               | **Gemini CLI**      | Experimental   |
-| GitHub agentic pipeline                                               | **Copilot**         | Experimental   |
-| xAI Grok Build CLI                                                    | **Grok**            | Beta           |
-| Agentic path to a self-run model, or another CLI to a hosted provider | **OpenCode**        | Experimental   |
-| Google API evaluation                                                 | **Gemini SDK**      | Chat-only      |
-| Privacy / offline evaluation                                          | **Ollama**          | Chat-only      |
-| GUI-based local evaluation                                            | **LM Studio**       | Chat-only      |
+| Priority                                                    | Recommended Adapter   | Category       |
+| ----------------------------------------------------------- | --------------------- | -------------- |
+| Primary tested pipeline path                                | **Claude Headless**   | Cloud AI (CLI) |
+| Direct SDK integration                                      | **Claude SDK**        | Cloud AI (SDK) |
+| OpenAI models                                               | **Codex**             | Cloud AI (CLI) |
+| Google agentic pipeline                                     | **Gemini CLI**        | Experimental   |
+| GitHub agentic pipeline                                     | **Copilot**           | Experimental   |
+| xAI Grok Build CLI                                          | **Grok**              | Beta           |
+| Local models (agentic), or another CLI to a hosted provider | **OpenCode**          | Experimental   |
+| Google API evaluation                                       | **Gemini SDK**        | Chat-only      |
+| Evaluation on any OpenAI-compatible server                  | **OpenAI-compatible** | Chat-only      |
 
 ### Decision Matrix
 
-| Factor              | Claude SDK | Claude Headless |   Codex    | Gemini SDK | Gemini CLI | Copilot  |   Grok    | Ollama  | LM Studio |
-| ------------------- | :--------: | :-------------: | :--------: | :--------: | :--------: | :------: | :-------: | :-----: | :-------: |
-| **Cost**            | Per-token  |  Subscription   | Per-token  | Per-token  | Per-token  | Per-req  | Per-token |  Free   |   Free    |
-| **Privacy**         |   Cloud    |      Cloud      |   Cloud    |   Cloud    |   Cloud    |  Cloud   |   Cloud   |  Local  |   Local   |
-| **Setup**           |  API key   |   OAuth login   | CLI login  |  API key   |  API key   | GH login | CLI login | Install |  Install  |
-| **Quality**         |  Highest   |      High       |    High    |    High    |    High    |   Good   |   High    | Varies  |  Varies   |
-| **Session Resume**  |     ✓      |        ✗        | ✓ (opt-in) |     ✗      |     ✗      |    ✗     |     ✗     |    ✗    |     ✗     |
-| **Token Tracking**  |     ✓      |        ✗        |     ✓      |     ✓      |     ✓      |    ⚠️    |     ✓     |    ✓    |     ✓     |
-| **Offline**         |     ✗      |        ✗        |     ✗      |     ✗      |     ✗      |    ✗     |     ✗     |    ✓    |     ✓     |
-| **Pipeline stages** |     ✓      |        ✓        |  ✓ (beta)  |     ✗      |  ✓ (exp.)  | ✓ (exp.) | ✓ (beta)  |    ✗    |     ✗     |
+| Factor              | Claude SDK | Claude Headless |   Codex    | Gemini SDK | Gemini CLI | Copilot  |   Grok    |
+| ------------------- | :--------: | :-------------: | :--------: | :--------: | :--------: | :------: | :-------: |
+| **Cost**            | Per-token  |  Subscription   | Per-token  | Per-token  | Per-token  | Per-req  | Per-token |
+| **Privacy**         |   Cloud    |      Cloud      |   Cloud    |   Cloud    |   Cloud    |  Cloud   |   Cloud   |
+| **Setup**           |  API key   |   OAuth login   | CLI login  |  API key   |  API key   | GH login | CLI login |
+| **Quality**         |  Highest   |      High       |    High    |    High    |    High    |   Good   |   High    |
+| **Session Resume**  |     ✓      |        ✗        | ✓ (opt-in) |     ✗      |     ✗      |    ✗     |     ✗     |
+| **Token Tracking**  |     ✓      |        ✗        |     ✓      |     ✓      |     ✓      |    ⚠️    |     ✓     |
+| **Offline**         |     ✗      |        ✗        |     ✗      |     ✗      |     ✗      |    ✗     |     ✗     |
+| **Pipeline stages** |     ✓      |        ✓        |  ✓ (beta)  |     ✗      |  ✓ (exp.)  | ✓ (exp.) | ✓ (beta)  |
 
 OpenCode has no column here: it dispatches through whatever provider its
 `-m <provider>/<model>` names, so cost, privacy, and offline posture are
@@ -701,166 +700,45 @@ local model servers side by side; the anchor does not exist yet. -->
 
 ---
 
-## Local AI Adapters
+## Local Models
 
-These adapters connect to locally running model servers and do not require a
-model-provider cloud API. Review Nightgauge platform, telemetry, forge, and
-notification settings separately before describing an entire run as offline or
-private. Quality depends on the model you choose.
+Local models run only through the [OpenCode](#opencode) adapter, which drives
+a real tool loop against any OpenAI-compatible server the operator runs: LM
+Studio, Ollama, oMLX, MTPLX, llama.cpp, vLLM and the like. Declare the server
+as an endpoint under `opencode.endpoints` in the machine tier. A model counts
+as local when its endpoint is declared local or its base URL is a loopback or
+private address, whatever the provider key is called. Review Nightgauge
+platform, telemetry, forge and notification settings separately before
+describing an entire run as offline or private.
 
-The `lm-studio` and `ollama` adapters below stay chat-completion-only: they are
-HTTP bridges with no tool loop, and `Manager.RunStage` refuses to dispatch a
-pipeline stage to either. [OpenCode](#opencode) is the agentic path to the same
-kind of self-run model server — it drives a real tool loop against it, the same
-way it drives one against a hosted provider.
+The `lm-studio` and `ollama` adapters were removed (#2128). A config, flag or
+environment variable that still names either fails with an error naming the
+setting and the replacement; see
+[DEPRECATIONS.md](DEPRECATIONS.md#lm-studio-and-ollama-adapters--opencode-and-openai-compatible).
 
-### Ollama
+### OpenAI-compatible (evaluation and judging)
 
-> **Pipeline limitation:** Ollama is chat-completion-only. It is available for
-> evaluation, judging, and summarization, but cannot edit files or run pipeline
-> stages.
-
-Open-source local model runner. Best for quick setup with popular open models.
-
-**Prerequisites:**
-
-- Ollama installed ([ollama.com](https://ollama.com))
-- A model pulled locally
-
-**Quick Start:**
+`openai-compatible` is a chat-completion client for any server that speaks the
+OpenAI chat-completions API, local or hosted. It has no tool loop, so it is
+never agentic: `Manager.RunStage` refuses to dispatch a pipeline stage to it.
+It serves evaluation, judging and summarization.
 
 ```bash
-# Install Ollama
-# macOS: brew install ollama
-# Linux: curl -fsSL https://ollama.com/install.sh | sh
-
-# Pull a model
-ollama pull llama3.1
-
-# Start Ollama server (if not already running)
-ollama serve
-
-# Configure
-export NIGHTGAUGE_OLLAMA_MODEL=llama3.1
+export NIGHTGAUGE_OPENAI_COMPATIBLE_BASE_URL=http://127.0.0.1:1234/v1 # required, no default
+export NIGHTGAUGE_OPENAI_COMPATIBLE_MODEL=your-model-name              # required
 ```
 
-```yaml
-# .nightgauge/config.yaml
-ui:
-  core:
-    adapter: ollama
-ollama:
-  model: llama3.1
-  # base_url: http://localhost:11434/v1   # default
-  # timeout_ms: 300000                     # default: 5 minutes
-```
+| Variable                                   | Description                                                                               |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| `NIGHTGAUGE_OPENAI_COMPATIBLE_BASE_URL`    | Server base URL (required, no default)                                                    |
+| `NIGHTGAUGE_OPENAI_COMPATIBLE_MODEL`       | Model id exactly as the server's `GET /v1/models` lists it (required)                     |
+| `NIGHTGAUGE_OPENAI_COMPATIBLE_API_KEY_ENV` | Name of the variable holding the API key (default `NIGHTGAUGE_OPENAI_COMPATIBLE_API_KEY`) |
+| `NIGHTGAUGE_OPENAI_COMPATIBLE_TIMEOUT_MS`  | Request timeout in ms (default: 180000)                                                   |
 
-**Verification:**
-
-```bash
-# Check Ollama is running
-curl -s http://localhost:11434/v1/models | head -5
-
-# Check model is available
-ollama list
-```
-
-**Known Limitations:**
-
-- Quality depends entirely on the chosen model
-- No multi-turn conversations
-- No session resume
-- Slower than cloud adapters (depends on hardware)
-- Default timeout is 5 minutes (local models can be slow to load)
-
-**Troubleshooting:**
-
-| Problem            | Solution                                                 |
-| ------------------ | -------------------------------------------------------- |
-| Connection refused | Run `ollama serve` to start the server                   |
-| Model not found    | Run `ollama pull <model-name>`                           |
-| Slow responses     | Use a smaller model or increase `timeout_ms`             |
-| Out of memory      | Use a quantized model variant (e.g., `llama3.1:8b-q4_0`) |
-
-**Environment Variables:**
-
-| Variable                       | Description                                       |
-| ------------------------------ | ------------------------------------------------- |
-| `NIGHTGAUGE_OLLAMA_MODEL`      | Model name (required, no default)                 |
-| `NIGHTGAUGE_OLLAMA_BASE_URL`   | Server URL (default: `http://localhost:11434/v1`) |
-| `NIGHTGAUGE_OLLAMA_API_KEY`    | Auth string (default: `ollama`)                   |
-| `NIGHTGAUGE_OLLAMA_TIMEOUT_MS` | Timeout in ms (default: 300000)                   |
-
----
-
-### LM Studio
-
-> **Pipeline limitation:** LM Studio is chat-completion-only. It is available
-> for evaluation, judging, and summarization, but cannot edit files or run
-> pipeline stages.
-
-Desktop application with a GUI for managing and running local models. Best for
-users who prefer a visual interface for model management.
-
-**Prerequisites:**
-
-- LM Studio installed ([lmstudio.ai](https://lmstudio.ai))
-- A model downloaded and loaded in LM Studio
-- Local server started in LM Studio
-
-**Quick Start:**
-
-```bash
-# 1. Download and install LM Studio from lmstudio.ai
-# 2. Open LM Studio, download a model from the Discover tab
-# 3. Load the model and start the local server (Developer tab)
-
-# Configure
-export NIGHTGAUGE_LM_STUDIO_MODEL=your-model-name
-```
-
-```yaml
-# .nightgauge/config.yaml
-ui:
-  core:
-    adapter: lm-studio
-lm-studio:
-  model: your-model-name # required — matches loaded model in LM Studio
-  # base_url: http://localhost:1234/v1   # default
-  # timeout_ms: 180000                    # default: 3 minutes
-```
-
-**Verification:**
-
-```bash
-# Check LM Studio server is running
-curl -s http://localhost:1234/v1/models
-```
-
-**Known Limitations:**
-
-- Quality depends on the chosen model
-- No multi-turn conversations
-- No session resume
-- Must manually start the server in LM Studio's UI
-- Default timeout is 3 minutes
-
-**Troubleshooting:**
-
-| Problem            | Solution                                             |
-| ------------------ | ---------------------------------------------------- |
-| Connection refused | Start the local server in LM Studio's Developer tab  |
-| Model not found    | Ensure the model is loaded (not just downloaded)     |
-| Slow responses     | Use a smaller/quantized model; increase `timeout_ms` |
-
-**Environment Variables:**
-
-| Variable                          | Description                                      |
-| --------------------------------- | ------------------------------------------------ |
-| `NIGHTGAUGE_LM_STUDIO_MODEL`      | Model name (required, no default)                |
-| `NIGHTGAUGE_LM_STUDIO_BASE_URL`   | Server URL (default: `http://localhost:1234/v1`) |
-| `NIGHTGAUGE_LM_STUDIO_API_KEY`    | Auth string (default: `lm-studio`)               |
-| `NIGHTGAUGE_LM_STUDIO_TIMEOUT_MS` | Timeout in ms (default: 180000)                  |
+An `Authorization` header is sent only when the named key variable is set, so
+a local server never receives a placeholder key. A judge on a loopback or
+private base URL is local and costs $0; one on a hosted base URL reports its
+cost as an estimate.
 
 ---
 
@@ -893,21 +771,19 @@ export NIGHTGAUGE_ADAPTER=codex
 When no adapter is explicitly configured, Nightgauge auto-detects based on
 available credentials (checked in order):
 
-1. `ANTHROPIC_API_KEY` set → **Claude SDK**
-2. `GEMINI_API_KEY` or `GOOGLE_API_KEY` set → **Gemini SDK**
-3. `NIGHTGAUGE_OLLAMA_MODEL` set → **Ollama**
-4. `NIGHTGAUGE_LM_STUDIO_MODEL` set → **LM Studio**
-5. `COPILOT_GITHUB_TOKEN` set → **Copilot**
-6. Default fallback → **Claude Headless**
+1. `GEMINI_API_KEY` or `GOOGLE_API_KEY` set → **Gemini SDK**
+2. `ANTHROPIC_API_KEY` set → **Claude SDK**
+3. `COPILOT_GITHUB_TOKEN` set → **Copilot**
+4. Default fallback → **Claude Headless**
 
 This auto-detection sequence applies to the standalone SDK CLI. The VS Code
 extension always maps its Claude choice to Claude Headless so the Marketplace
 artifact never depends on or redistributes the optional Agent SDK.
 
 For pipeline execution, the agentic truth gate still applies after detection:
-Gemini SDK, Ollama, and LM Studio are rejected and must be replaced with an
-agentic adapter. Their auto-detection remains useful for evaluation, judging,
-and summarization surfaces.
+Gemini SDK and OpenAI-compatible are rejected and must be replaced with an
+agentic adapter. They remain useful for evaluation, judging, and summarization
+surfaces.
 
 ### Mid-Pipeline Switching
 
@@ -931,15 +807,15 @@ scripts/run-stage.sh codex feature-planning 42
 Not all adapters support all pipeline features. This table shows which pipeline
 capabilities are available per adapter:
 
-| Feature                 | Claude SDK | Claude HL |   Codex   | Gemini SDK | Gemini CLI | Copilot | Ollama | LM Studio |
-| ----------------------- | :--------: | :-------: | :-------: | :--------: | :--------: | :-----: | :----: | :-------: |
-| All 6 pipeline stages   |     ✓      |     ✓     |  ✓ beta   |     ✗      |   ✓ exp.   | ✓ exp.  |   ✗    |     ✗     |
-| Multi-turn conversation |     ✓      |     ✗     |     ✗     |     ✓      |     ✗      |    ✗    |   ✗    |     ✗     |
-| Session resume          |     ✓      |     ✗     |    ✓\*    |     ✗      |     ✗      |    ✗    |   ✗    |     ✗     |
-| Token usage tracking    |     ✓‡     |     ✗     |    ✓‡     |     ✓      |     ✓      |   ⚠️    |   ✓    |     ✓     |
-| Streaming JSON output   |     ✓      |     ✗     |     ✓     |     ✓      |     ✓      |    ✗    |   ✗    |     ✗     |
-| Cost reporting          |     ✓      |     ✗     |    ✗†     |     ✗†     |     ✗†     |    ✗    |  N/A   |    N/A    |
-| System steering         |   preset   |  preset   | AGENTS.md | GEMINI.md  | GEMINI.md  | prompt  | prompt |  prompt   |
+| Feature                 | Claude SDK | Claude HL |   Codex   | Gemini SDK | Gemini CLI | Copilot |
+| ----------------------- | :--------: | :-------: | :-------: | :--------: | :--------: | :-----: |
+| All 6 pipeline stages   |     ✓      |     ✓     |  ✓ beta   |     ✗      |   ✓ exp.   | ✓ exp.  |
+| Multi-turn conversation |     ✓      |     ✗     |     ✗     |     ✓      |     ✗      |    ✗    |
+| Session resume          |     ✓      |     ✗     |    ✓\*    |     ✗      |     ✗      |    ✗    |
+| Token usage tracking    |     ✓‡     |     ✗     |    ✓‡     |     ✓      |     ✓      |   ⚠️    |
+| Streaming JSON output   |     ✓      |     ✗     |     ✓     |     ✓      |     ✓      |    ✗    |
+| Cost reporting          |     ✓      |     ✗     |    ✗†     |     ✗†     |     ✗†     |    ✗    |
+| System steering         |   preset   |  preset   | AGENTS.md | GEMINI.md  | GEMINI.md  | prompt  |
 
 \* Codex session resume is opt-in via `NIGHTGAUGE_CODEX_RESUME_ENABLED=true`
 † Codex and the Gemini adapters report real token counts but no provider USD cost
@@ -964,7 +840,7 @@ assumption (#4028):
   [Generated steering is never committed](#generated-steering-is-never-committed).
 - **Gemini** (`gemini` / `gemini-sdk`): a generated `GEMINI.md`
   (`GeminiContextGenerator`, gitignored).
-- **lm-studio / ollama / copilot**: no preset; guidance arrives via the prompt.
+- **openai-compatible / copilot**: no preset; guidance arrives via the prompt.
 
 `systemPromptPresetForAdapter()` resolves the preset (Claude only); the per-adapter
 context generators self-guard by adapter name.
