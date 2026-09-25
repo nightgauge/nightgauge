@@ -34,7 +34,9 @@
 
 import {
   getModelDescriptor,
+  isLocalModel,
   isLocalProvider,
+  type LocalEndpoint,
   parseOpenCodeModel,
   providerFor,
 } from "@nightgauge/sdk";
@@ -45,7 +47,7 @@ import type {
   HistoryStageTokenUsage,
 } from "../../schemas/executionHistory";
 import { ExecutionHistoryReader } from "../../utils/executionHistoryReader";
-import { getOpenCodeModel } from "../../utils/resolvers/modelResolver";
+import { getOpenCodeEndpoints, getOpenCodeModel } from "../../utils/resolvers/modelResolver";
 import { getLimitsSettings } from "../../config/limitsSettings";
 import type {
   UsageConfidence,
@@ -99,6 +101,12 @@ export const LOCAL_TELEMETRY_METERED_ADAPTERS: readonly ExecutionAdapter[] = [
 export type ConfiguredOpenCodeModel = () => string | undefined;
 
 /**
+ * Supplies the endpoints the machine-tier `opencode.endpoints[]` declares
+ * (#1678). Locality follows them, not the provider-key brand (#2128).
+ */
+export type DeclaredOpenCodeEndpoints = () => readonly LocalEndpoint[];
+
+/**
  * What one adapter's snapshot measures, and which of its stages count.
  *
  * `provider` narrows a `pay-per-token` snapshot to one provider's stages: an
@@ -139,6 +147,8 @@ interface StageEvent {
   confidence: UsageConfidence;
   /** The provider that served the stage (`lm-studio`, `anthropic`, `other`, ...). */
   provider: string;
+  /** Whether a server the operator runs served the stage (#2128). */
+  local: boolean;
 }
 
 /**
@@ -272,7 +282,8 @@ function startOfNextLocalMonth(now: Date): Date {
  */
 function collectStageEvents(
   records: readonly ExecutionHistoryRecord[],
-  adapter: ExecutionAdapter
+  adapter: ExecutionAdapter,
+  endpoints: readonly LocalEndpoint[] = []
 ): StageEvent[] {
   const events: StageEvent[] = [];
   for (const record of records) {
@@ -291,12 +302,15 @@ function collectStageEvents(
       if (!usage || usage.adapter !== adapter) {
         continue;
       }
+      const provider = stageProvider(adapter, usage, record.stages[stage]);
+      const model = usage.model ?? record.stages[stage]?.model_selection?.model ?? "";
       events.push({
         at,
         costUsd: usage.cost_usd,
         tokens: usage.input + usage.output + usage.cache_read + usage.cache_creation,
         confidence: stageCostConfidence(usage),
-        provider: stageProvider(adapter, usage, record.stages[stage]),
+        provider,
+        local: isLocalProvider(provider) || isLocalModel(adapter, model, endpoints),
       });
     }
   }
@@ -310,7 +324,7 @@ function collectStageEvents(
  */
 function isMetered(event: StageEvent, metering: Metering): boolean {
   if (metering.plan === "local") {
-    return isLocalProvider(event.provider);
+    return event.local;
   }
   return metering.provider === undefined || event.provider === metering.provider;
 }
@@ -358,7 +372,8 @@ export class LocalTelemetryUsageProvider implements UsageProvider {
   constructor(
     private readonly source: UsageHistorySource,
     private readonly sessionClock: UsageSessionClock,
-    private readonly configuredOpenCodeModel: ConfiguredOpenCodeModel = () => undefined
+    private readonly configuredOpenCodeModel: ConfiguredOpenCodeModel = () => undefined,
+    private readonly declaredOpenCodeEndpoints: DeclaredOpenCodeEndpoints = () => []
   ) {}
 
   /** Wire the provider to a workspace's on-disk history and config. */
@@ -372,7 +387,8 @@ export class LocalTelemetryUsageProvider implements UsageProvider {
           ExecutionHistoryReader.readDateRange(workspaceRoot, startDate, endDate),
       },
       sessionClock,
-      () => getOpenCodeModel(workspaceRoot)
+      () => getOpenCodeModel(workspaceRoot),
+      () => getOpenCodeEndpoints(workspaceRoot)
     );
   }
 
@@ -401,7 +417,7 @@ export class LocalTelemetryUsageProvider implements UsageProvider {
       return null;
     }
     const provider = providerFor(adapter, configured);
-    if (isLocalProvider(provider)) {
+    if (isLocalModel(adapter, configured, this.declaredOpenCodeEndpoints())) {
       return { plan: "local" };
     }
     return provider === "other" ? null : { plan: "pay-per-token", provider };
@@ -443,7 +459,7 @@ export class LocalTelemetryUsageProvider implements UsageProvider {
     const horizonEnd = new Date(now.getTime() + DAY_MS);
 
     const records = await this.source.readDateRange(horizonStart, horizonEnd);
-    const attributed = collectStageEvents(records, adapter);
+    const attributed = collectStageEvents(records, adapter, this.declaredOpenCodeEndpoints());
     const events = attributed.filter((event) => isMetered(event, metering));
     if (events.length === 0) {
       return null;
@@ -454,10 +470,7 @@ export class LocalTelemetryUsageProvider implements UsageProvider {
     // stages no provider bills, and needs no note.
     const excludedHosted =
       metering.plan === "local"
-        ? attributed.filter(
-            (event) =>
-              !isLocalProvider(event.provider) && event.at.getTime() >= monthStart.getTime()
-          )
+        ? attributed.filter((event) => !event.local && event.at.getTime() >= monthStart.getTime())
         : [];
 
     const plan: UsagePlanKind = metering.plan;

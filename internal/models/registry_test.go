@@ -253,6 +253,18 @@ type providerForCases struct {
 		Error           bool   `json:"error"`
 	} `json:"dispatch_model_for"`
 	IsLocalProvider map[string]bool `json:"is_local_provider"`
+	IsLocalBaseURL  map[string]bool `json:"is_local_base_url"`
+	IsLocalModel    []struct {
+		Name      string `json:"name"`
+		Adapter   string `json:"adapter"`
+		Model     string `json:"model"`
+		Endpoints []struct {
+			ID       string `json:"id"`
+			Provider string `json:"provider"`
+			BaseURL  string `json:"base_url"`
+		} `json:"endpoints"`
+		Local bool `json:"local"`
+	} `json:"is_local_model"`
 }
 
 func loadProviderForCases(t *testing.T) providerForCases {
@@ -344,6 +356,39 @@ func TestIsLocalProvider(t *testing.T) {
 	for _, p := range []string{"lm-studio", "ollama", "other", "copilot", "lmstudio"} {
 		if _, listed := table[p]; !listed {
 			t.Errorf("the is_local_provider table must list %q", p)
+		}
+	}
+}
+
+// TestIsLocalBaseURL pins which base URLs are a server the operator runs:
+// localhost, a loopback or a private-network IP literal, never by DNS (#2128).
+func TestIsLocalBaseURL(t *testing.T) {
+	table := loadProviderForCases(t).IsLocalBaseURL
+	if len(table) == 0 {
+		t.Fatal("the is_local_base_url table is empty")
+	}
+	for u, want := range table {
+		if got := IsLocalBaseURL(u); got != want {
+			t.Errorf("IsLocalBaseURL(%q) = %v, want %v", u, got, want)
+		}
+	}
+}
+
+// TestIsLocalModel pins locality by declared endpoint, not provider-key brand
+// (#2128): an omlx key on a declared local endpoint is local, an undeclared
+// unknown key is not.
+func TestIsLocalModel(t *testing.T) {
+	cases := loadProviderForCases(t).IsLocalModel
+	if len(cases) == 0 {
+		t.Fatal("the is_local_model table is empty")
+	}
+	for _, tc := range cases {
+		eps := make([]LocalEndpoint, 0, len(tc.Endpoints))
+		for _, e := range tc.Endpoints {
+			eps = append(eps, LocalEndpoint{ID: e.ID, Provider: e.Provider, BaseURL: e.BaseURL})
+		}
+		if got := IsLocalModel(tc.Adapter, tc.Model, eps); got != tc.Local {
+			t.Errorf("%s: IsLocalModel(%s, %s) = %v, want %v", tc.Name, tc.Adapter, tc.Model, got, tc.Local)
 		}
 	}
 }

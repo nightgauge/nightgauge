@@ -551,3 +551,52 @@ func ollamaParameter(parameters, name string) int {
 	}
 	return 0
 }
+
+// IsLocalBaseURL reports whether baseURL is a server the operator runs: an
+// http or https URL whose host is localhost, a loopback address or a
+// private-network address (RFC 1918, IPv6 unique-local). A host name other
+// than localhost is never resolved, so it is not local. A URL carrying a user
+// name or password is not local: it is refused as an endpoint anyway (#2128).
+// Mirrors isLocalBaseUrl in the SDK modelRegistry.ts.
+func IsLocalBaseURL(baseURL string) bool {
+	u, err := url.Parse(baseURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && (ip.IsLoopback() || ip.IsPrivate())
+}
+
+// IsLocalEndpoint reports whether a declared endpoint (#1678) is a model
+// server the operator runs: its kind is lm-studio or ollama, or its base URL
+// is local (IsLocalBaseURL), whatever brand its id carries.
+func IsLocalEndpoint(ep LocalEndpoint) bool {
+	return IsLocalProvider(ep.Provider) || IsLocalBaseURL(ep.BaseURL)
+}
+
+// IsLocalModel reports whether model, dispatched on adapter, runs on a server
+// the operator runs (#2128). Locality follows the declared endpoint, not the
+// provider-key brand: an opencode model whose provider key is the id of a
+// declared endpoint is local exactly when that endpoint is
+// (IsLocalEndpoint), so omlx/... on a declared loopback endpoint is local.
+// An undeclared key is local only when ProviderFor normalizes it to a local
+// provider; "other" stays non-local. Mirrors isLocalModel in the SDK
+// modelRegistry.ts.
+func IsLocalModel(adapter, model string, endpoints []LocalEndpoint) bool {
+	if adapter == openCodeAdapter {
+		key, _, ok := splitOpenCodeModel(model)
+		if !ok {
+			return false
+		}
+		for _, ep := range endpoints {
+			if ep.ID == key {
+				return IsLocalEndpoint(ep)
+			}
+		}
+	}
+	return IsLocalProvider(ProviderFor(adapter, model))
+}

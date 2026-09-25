@@ -10,7 +10,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import type { z } from "zod";
-import type { PipelineStage } from "@nightgauge/sdk";
+import { parse as parseYaml } from "yaml";
+import type { LocalEndpoint, PipelineStage } from "@nightgauge/sdk";
 import {
   CODEX_DEFAULT_BASE_MODEL,
   CODEX_TIER_MODEL_MAP,
@@ -1327,6 +1328,38 @@ function isValidOpenCodeModelValue(value: string): boolean {
     return false;
   }
   return true;
+}
+
+/**
+ * The endpoints the machine-tier `opencode.endpoints[]` declares (#1678), as
+ * id, kind and base URL, for deciding locality by endpoint (#2128). An entry
+ * missing any of them, or a config that cannot be read, declares nothing.
+ * The base URL is used only to classify the endpoint and is never shown.
+ */
+export function getOpenCodeEndpoints(workspaceRoot?: string): LocalEndpoint[] {
+  const root = workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!root) {
+    return [];
+  }
+  try {
+    const pathResult = resolveConfigPathSync(root);
+    if (!pathResult.exists) {
+      return [];
+    }
+    const parsed: unknown = parseYaml(readEffectiveConfigTextSync(pathResult));
+    const entries = (parsed as { opencode?: { endpoints?: unknown } } | null)?.opencode?.endpoints;
+    if (!Array.isArray(entries)) {
+      return [];
+    }
+    return entries.flatMap((e: unknown) => {
+      const { id, provider, base_url } = (e ?? {}) as Record<string, unknown>;
+      return typeof id === "string" && typeof provider === "string" && typeof base_url === "string"
+        ? [{ id, provider, baseUrl: base_url }]
+        : [];
+    });
+  } catch {
+    return [];
+  }
 }
 
 /**

@@ -299,6 +299,87 @@ export function isLocalProvider(provider: string): boolean {
   return provider === "lm-studio" || provider === "ollama";
 }
 
+/** A declared OpenCode endpoint (#1678): its id is the provider key a stage names on `-m`. */
+export interface LocalEndpoint {
+  id: string;
+  /** The endpoint's kind: `lm-studio`, `ollama` or `openai-compatible`. */
+  provider: string;
+  /** The server's OpenAI-compatible API root. */
+  baseUrl: string;
+}
+
+/** An IPv4 literal on loopback or a private network (RFC 1918). */
+function isLocalIPv4(host: string): boolean {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (!m) return false;
+  const [a, b] = [Number(m[1]), Number(m[2])];
+  if (m.slice(1).some((o) => Number(o) > 255)) return false;
+  return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+}
+
+/** An IPv6 literal (brackets stripped) on loopback or unique-local (fc00::/7). */
+function isLocalIPv6(host: string): boolean {
+  if (!host.includes(":")) return false;
+  if (host === "::1") return true;
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(host);
+  if (mapped) return isLocalIPv4(mapped[1]);
+  return /^f[cd][0-9a-f]{0,2}:/.test(host);
+}
+
+/**
+ * Whether `baseUrl` is a server the operator runs: an http or https URL whose
+ * host is `localhost`, a loopback or a private-network IP literal. A host name
+ * other than `localhost` is never resolved, so it is not local; a URL carrying
+ * a user name or password is not local (#2128). Mirrors the Go
+ * `models.IsLocalBaseURL`.
+ */
+export function isLocalBaseUrl(baseUrl: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(baseUrl);
+  } catch {
+    return false;
+  }
+  if ((u.protocol !== "http:" && u.protocol !== "https:") || u.username || u.password) {
+    return false;
+  }
+  const host = u.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
+  if (host === "localhost" || host.endsWith(".localhost")) return true;
+  return isLocalIPv4(host) || isLocalIPv6(host);
+}
+
+/**
+ * Whether a declared endpoint is a model server the operator runs: its kind is
+ * `lm-studio` or `ollama`, or its base URL is local. Mirrors the Go
+ * `models.IsLocalEndpoint`.
+ */
+export function isLocalEndpoint(ep: LocalEndpoint): boolean {
+  return isLocalProvider(ep.provider) || isLocalBaseUrl(ep.baseUrl);
+}
+
+/**
+ * Whether `model`, dispatched on `adapter`, runs on a server the operator runs
+ * (#2128). Locality follows the declared endpoint, not the provider-key brand:
+ * an `opencode` model whose provider key is a declared endpoint's id is local
+ * exactly when that endpoint is, so `omlx/...` on a declared loopback endpoint
+ * is local. An undeclared key is local only when {@link providerFor}
+ * normalizes it to a local provider; `other` stays non-local. Mirrors the Go
+ * `models.IsLocalModel`.
+ */
+export function isLocalModel(
+  adapter: string,
+  model: string,
+  endpoints: readonly LocalEndpoint[] = []
+): boolean {
+  if (adapter === OPENCODE_ADAPTER) {
+    const split = splitOpenCodeModel(model);
+    if (!split) return false;
+    const ep = endpoints.find((e) => e.id === split.key);
+    if (ep) return isLocalEndpoint(ep);
+  }
+  return isLocalProvider(providerFor(adapter, model));
+}
+
 /**
  * ADR-022 § 1's normalization table: the OpenCode provider keys Nightgauge
  * recognizes and the registry provider each one names. Every other key is
