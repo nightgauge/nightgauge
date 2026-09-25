@@ -170,10 +170,10 @@ The following operations are automatically blocked:
 **Example: What a blocked operation looks like**
 
 ```
-> Running: git push origin main
+> Running: git push origin main   (with hooks.push_gate.protected_branches: [main])
 
 ⚠️ Hook blocked this action:
-   Direct push to main/master blocked. Use the PR workflow with /nightgauge:pr-create.
+   Direct push to protected branch 'main' blocked by hooks.push_gate.protected_branches. Use the PR workflow with /nightgauge:pr-create.
 
 The operation was not executed. Please use the recommended workflow instead.
 ```

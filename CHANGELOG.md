@@ -546,6 +546,17 @@ create --body-file` call, so the compact profile (and its tests) pin
 
 ### Changed
 
+- **The workflow gate no longer blocks pushes to `main`/`master` by default;
+  the push gate is now configurable and off unless set (#2124, part 2).**
+  `hooks.push_gate.protected_branches` (default `[]`, no implicit
+  `main`/`master`) blocks a push naming a listed branch, a forced push whose
+  current branch or upstream is listed, and a forced `--all`/`--mirror`.
+  `hooks.push_gate.block_force_push` (default `false`) blocks every forced
+  push when no branches are listed. With the defaults the hook blocks no
+  push and repository rulesets decide. A repository that relied on the old
+  hardcoded gate sets `protected_branches: [main, master]`. See
+  `docs/CONFIGURATION.md § hooks.push_gate`.
+
 - **The workflow gate lets an agent force-push its own feature branch
   (#2124, part 1).** After rebasing a PR branch, `git push --force-with-lease`
   (or `-f`, `--force-if-includes`, `+branch`) no longer needs handing to the

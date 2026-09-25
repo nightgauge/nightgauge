@@ -52,7 +52,7 @@ const SPAWN_TIMEOUT_MS = 5000;
 // MARKER prefixes a careful-gate denial (#1635, unchanged).
 const MARKER = "[nightgauge-gate:careful]";
 
-// WORKFLOW_MARKER prefixes a workflow-gate denial: push-to-main, force-push,
+// WORKFLOW_MARKER prefixes a workflow-gate denial: configured push gate,
 // destructive git, secret read/write, sensitive-file edits, and (for a
 // mutating tool id this plugin cannot safely map to a Claude-shaped payload)
 // an unmapped-mutation denial — see TOOL_CLASSIFICATION's "blocked" entries.

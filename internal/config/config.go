@@ -115,6 +115,34 @@ func (s *SanitizationConfig) ResolvedMode() SanitizationMode {
 	return DefaultSanitizationMode
 }
 
+// HooksConfig holds settings for the local Claude Code / OpenCode hooks.
+type HooksConfig struct {
+	PushGate *PushGateConfig `json:"pushGate,omitempty" yaml:"push_gate,omitempty"`
+}
+
+// PushGateConfig configures the workflow gate's optional push gate (#2124).
+// Both fields default to off: with no configuration the hook blocks no push
+// and the forge's repository rulesets decide.
+//
+//   - ProtectedBranches: branch names (no implicit main/master). A push whose
+//     refspec names one is blocked; so is a forced push whose implicit target
+//     (current branch or its upstream) is one, and a forced --all/--mirror.
+//   - BlockForcePush: with ProtectedBranches empty, blocks every forced push to
+//     any branch. With ProtectedBranches set, forced pushes to those branches
+//     are already blocked, so it adds nothing.
+type PushGateConfig struct {
+	ProtectedBranches []string `json:"protectedBranches,omitempty" yaml:"protected_branches,omitempty"`
+	BlockForcePush    bool     `json:"blockForcePush,omitempty" yaml:"block_force_push,omitempty"`
+}
+
+// PushGateOrNil returns the configured push gate, or nil (the off default).
+func (h *HooksConfig) PushGateOrNil() *PushGateConfig {
+	if h == nil {
+		return nil
+	}
+	return h.PushGate
+}
+
 // GitHubAuthConfig holds org-to-user fallback mappings for multi-identity workspaces.
 // Used when per-repo github_user is not set — resolves the gh CLI user for each org.
 //
@@ -865,6 +893,9 @@ type Config struct {
 
 	// Sanitization settings
 	Sanitization *SanitizationConfig `json:"sanitization,omitempty" yaml:"sanitization,omitempty"`
+
+	// Hooks settings (hooks.push_gate, #2124)
+	Hooks *HooksConfig `json:"hooks,omitempty" yaml:"hooks,omitempty"`
 
 	// Feedback loop / health monitoring settings
 	FeedbackLoop *FeedbackLoopConfig `json:"feedbackLoop,omitempty" yaml:"feedback_loop,omitempty"`
@@ -2049,6 +2080,7 @@ type yamlConfigNested struct {
 	Projects     []ProjectEntry      `yaml:"projects,omitempty"`
 	LogLevel     string              `yaml:"logLevel"`
 	Sanitization *SanitizationConfig `yaml:"sanitization,omitempty"`
+	Hooks        *HooksConfig        `yaml:"hooks,omitempty"`
 	FeedbackLoop *FeedbackLoopConfig `yaml:"feedback_loop,omitempty"`
 	Platform     struct {
 		// APIURL / LicenseKey mirror the VSCode extension's PlatformConfigSchema
@@ -2098,6 +2130,7 @@ type yamlConfigFlat struct {
 	DefaultRepo      string                       `yaml:"defaultRepo"`
 	LogLevel         string                       `yaml:"logLevel"`
 	Sanitization     *SanitizationConfig          `yaml:"sanitization,omitempty"`
+	Hooks            *HooksConfig                 `yaml:"hooks,omitempty"`
 	FeedbackLoop     *FeedbackLoopConfig          `yaml:"feedback_loop,omitempty"`
 	Telemetry        *TelemetryConfig             `yaml:"telemetry,omitempty"`
 	RemoteCommands   *RemoteCommandsConfig        `yaml:"remote_commands,omitempty"`
@@ -2294,6 +2327,7 @@ func parseYAMLNested(data []byte) (*Config, error) {
 		cfg.GitHubAPILedger = nested.GitHub.APILedger
 	}
 	cfg.Sanitization = nested.Sanitization
+	cfg.Hooks = nested.Hooks
 	cfg.FeedbackLoop = nested.FeedbackLoop
 	cfg.Telemetry = nested.Platform.Telemetry
 	cfg.PlatformEnabled = nested.Platform.Enabled
@@ -2401,6 +2435,7 @@ func parseYAMLFlat(data []byte) (*Config, error) {
 	cfg.GitHubUser = flat.GitHubUser
 	cfg.GitHubAuth = flat.GitHubAuth
 	cfg.Sanitization = flat.Sanitization
+	cfg.Hooks = flat.Hooks
 	cfg.FeedbackLoop = flat.FeedbackLoop
 	cfg.Telemetry = flat.Telemetry
 	cfg.RemoteCommands = flat.RemoteCommands

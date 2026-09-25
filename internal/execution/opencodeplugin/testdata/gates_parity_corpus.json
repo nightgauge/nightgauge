@@ -1,10 +1,10 @@
 [
   {
-    "name": "workflow: bash push to main is blocked",
+    "name": "workflow: bash push to main is allowed by default (hooks.push_gate unset)",
     "gate": "workflow",
     "tool": "bash",
     "command": "git push origin main",
-    "expect": "block"
+    "expect": "allow"
   },
   {
     "name": "workflow: bash push to a feature branch is allowed",

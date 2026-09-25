@@ -4797,9 +4797,10 @@ sanitization:
 > decided the gate is not for it; neither is what an unconfigured workspace
 > gets.
 >
-> **Scope:** Mode only affects Gate 6 (sanitization pattern matching). Security
-> gates (push-to-main, force-push, destructive-git, secret-read, secret-write)
-> always block regardless of mode.
+> **Scope:** Mode only affects Gate 6 (sanitization pattern matching). The
+> other gates (the configured push gate, destructive-git, secret-read,
+> secret-write) block regardless of mode. The push gate is off unless
+> [`hooks.push_gate`](#hookspush_gate) configures it.
 
 **Escape hatch:** `NIGHTGAUGE_SKIP_WORKFLOW_GATE=1` bypasses the operation
 gates and the sanitization scan for one command. Secret read/write and
@@ -4810,6 +4811,32 @@ environments.
 
 - `nightgauge hook workflow-gate` (PreToolUse:Bash) and
   `nightgauge hook sanitize-prompt` (PreToolUse:Task)
+
+---
+
+### hooks.push_gate
+
+Optional local push gate in the PreToolUse workflow gate (#2124). **Off by
+default:** with no configuration the hook blocks no push, and the forge's
+repository rulesets decide what may be pushed where. Configure it only for a
+repository with no ruleset protecting its branches.
+
+```yaml
+hooks:
+  push_gate:
+    protected_branches: [main] # default: [] (no implicit main/master)
+    block_force_push: false # default: false
+```
+
+| Key                  | Default | Effect                                                                                                                                                                                                                                                                                                                             |
+| -------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `protected_branches` | `[]`    | A push whose refspec names a listed branch (`main`, `+main`, `HEAD:main`, `refs/heads/main`) is blocked, forced or not. A forced push with no refspec or a bare `HEAD` refspec is blocked when the current branch or its upstream is listed. A forced `--all`/`--branches`/`--mirror` is blocked (its targets cannot be resolved). |
+| `block_force_push`   | `false` | With `protected_branches` empty, blocks every forced push (`-f`, `--force`, `--force-with-lease`, `--force-if-includes`, `+refspec`) to any branch. With `protected_branches` set, forced pushes to those branches are already blocked, so it adds nothing.                                                                        |
+
+Wrapper forms (`bash -c`, `env`, `sudo`, `xargs`, `git -C dir`, `cd dir &&`)
+are resolved before matching. `NIGHTGAUGE_SKIP_WORKFLOW_GATE=1` bypasses it.
+
+**Used by:** `nightgauge hook workflow-gate` (PreToolUse:Bash)
 
 ---
 

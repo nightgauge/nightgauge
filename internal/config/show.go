@@ -33,6 +33,7 @@ type renderView struct {
 	LogLevel     string              `yaml:"logLevel,omitempty"`
 	APIKey       string              `yaml:"api_key,omitempty"`
 	Sanitization *SanitizationConfig `yaml:"sanitization,omitempty"`
+	Hooks        *HooksConfig        `yaml:"hooks,omitempty"`
 	FeedbackLoop *FeedbackLoopConfig `yaml:"feedback_loop,omitempty"`
 	Platform     *renderPlatform     `yaml:"platform,omitempty"`
 	// #1048: the whole pipeline: block was absent from this view, so
@@ -96,6 +97,7 @@ func toRenderView(cfg *Config) renderView {
 		LogLevel:       cfg.LogLevel,
 		APIKey:         redactConfigSecret(cfg.APIKey),
 		Sanitization:   cfg.Sanitization,
+		Hooks:          cfg.Hooks,
 		FeedbackLoop:   cfg.FeedbackLoop,
 		RemoteCommands: cfg.RemoteCommands,
 		AgentTeams:     cfg.AgentTeams,

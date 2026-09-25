@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -187,7 +188,19 @@ func TestPreToolUseGates_OutputValidatesAgainstSchema(t *testing.T) {
 // TestWorkflowGate_DeniesDirectPushToMain is the headline case from #354: the
 // gate already decided "block" correctly, but the decision never reached Claude
 // Code. Assert the denial arrives in the shape that actually blocks.
+//
+// Since #2124 the push gate is opt-in, so the test runs in a repository that
+// sets hooks.push_gate.protected_branches: [main].
 func TestWorkflowGate_DeniesDirectPushToMain(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".nightgauge"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfgYAML := "owner: nightgauge\nhooks:\n  push_gate:\n    protected_branches: [main]\n"
+	if err := os.WriteFile(filepath.Join(root, ".nightgauge", "config.yaml"), []byte(cfgYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
 	out := runHookCmd(t, hookWorkflowGateCmd,
 		`{"tool_name":"Bash","tool_input":{"command":"git push origin main"}}`)
 
