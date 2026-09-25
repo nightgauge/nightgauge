@@ -316,6 +316,12 @@ type AutonomousState struct {
 	// client too old to know the field.
 	BoardRecoveryInFlight int `json:"boardRecoveryInFlight"`
 
+	// EndpointSlots is the scheduler's endpoint slot ledger (#1679): slots
+	// in use per declared OpenCode endpoint and every stage waiting for one.
+	// Runtime-only, like BoardRecoveryInFlight: stamped onto the snapshot
+	// Status() returns, never persisted.
+	EndpointSlots *EndpointSlotsStatus `json:"endpointSlots,omitempty"`
+
 	// LifetimeIssueFailures tracks failures across sessions (NOT cleared on
 	// Resume). Used to enforce the per-issue terminal-failure cap so a single
 	// broken issue cannot be retried indefinitely. Cleared only by an explicit
@@ -3281,6 +3287,14 @@ func issueBackoffDuration(failureCount int) time.Duration {
 
 // Status returns a snapshot of the current autonomous scheduler state.
 func (as *AutonomousScheduler) Status() AutonomousState {
+	// Read before as.mu is taken: the ledger is under the Scheduler's own
+	// lock, and holding both at once would order the two locks here.
+	var endpointSlots *EndpointSlotsStatus
+	if as.scheduler != nil {
+		if slots := as.scheduler.EndpointSlots(); len(slots.Endpoints) > 0 || len(slots.Waiting) > 0 {
+			endpointSlots = &slots
+		}
+	}
 	as.mu.Lock()
 	defer as.mu.Unlock()
 	// Return a deep copy
@@ -3322,6 +3336,7 @@ func (as *AutonomousScheduler) Status() AutonomousState {
 	// count includes the refinement loop, so reporting it here would tell an
 	// operator board mutations are pending whenever autonomous is running.
 	snapshot.BoardRecoveryInFlight = as.BoardRecoveryInFlight()
+	snapshot.EndpointSlots = endpointSlots
 	return snapshot
 }
 

@@ -13,6 +13,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/adaptercompat"
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
+	"github.com/nightgauge/nightgauge/internal/runstate"
 )
 
 // The opencode adapter's doctor checks (#1627, ADR-022 § 17, § 20,
@@ -561,6 +562,7 @@ func openCodeInjectedContext(content, key, id string) int {
 // override, when the block sets one.
 func checkOpenCodeEndpoints(p openCodeProbe, settings config.OpenCodeConfig, endpoints []adapters.OpenCodeEndpoint, run *adapters.OpenCodeRunConfig, oc *OpenCodeHealth, block, warn func(string)) {
 	key, modelID, _ := strings.Cut(settings.Model, "/")
+	inUse := openCodeSlotsInUse(p)
 	for _, ep := range endpoints {
 		model := ""
 		injected := ep.Limit.Context
@@ -573,6 +575,10 @@ func checkOpenCodeEndpoints(p openCodeProbe, settings config.OpenCodeConfig, end
 		}
 		r := p.endpoint(adapters.OpenCodeEndpointTarget{ID: ep.ID, Kind: ep.Provider, BaseURL: ep.BaseURL, Legacy: ep.Legacy}, model, injected)
 		r.Slots = ep.MaxConcurrency
+		if inUse != nil {
+			n := inUse[ep.ID]
+			r.SlotsInUse = &n
+		}
 		oc.Endpoints = append(oc.Endpoints, r)
 		switch {
 		case !r.Ready && model != "":
@@ -587,6 +593,26 @@ func checkOpenCodeEndpoints(p openCodeProbe, settings config.OpenCodeConfig, end
 			warn(fmt.Sprintf("endpoint %s is on another machine and is reached over plain http, so a stage's prompts and repository content cross the network unencrypted", ep.ID))
 		}
 	}
+}
+
+// openCodeSlotsInUse reads the endpoint slot ledger a running scheduler
+// publishes (#1679), or nil when there is none or its writer has exited.
+func openCodeSlotsInUse(p openCodeProbe) map[string]int {
+	if p.home == nil {
+		return nil
+	}
+	home, err := p.home()
+	if err != nil || home == "" {
+		return nil
+	}
+	slots, err := adapters.ReadOpenCodeEndpointSlots(adapters.OpenCodeEndpointSlotsPath(home))
+	if err != nil || slots.PID <= 0 || !runstate.ProcessAlive(slots.PID) {
+		return nil
+	}
+	if slots.InUse == nil {
+		return map[string]int{}
+	}
+	return slots.InUse
 }
 
 // openCodeOfflinePosture describes what the per-run config sets that keeps a

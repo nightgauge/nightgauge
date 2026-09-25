@@ -346,6 +346,13 @@ export const HistoryStageDetailSchema = z.object({
       endpoint: z.string().optional(),
     })
     .optional(),
+  /**
+   * Every move of this stage's OpenCode dispatch from one declared endpoint to
+   * another serving the same model id (#1679), as `[from, to]` endpoint ids in
+   * order. Mirrors Go's `V2StageDetail.EndpointFailover`. Absent when the
+   * stage never moved.
+   */
+  endpoint_failover: z.array(z.tuple([z.string(), z.string()])).optional(),
   /** Context handoff file size in bytes (Issue #1009) */
   context_file_size_bytes: z.number().int().min(0).optional(),
   /** Failure category for weighted reliability scoring (Issue #1260) */

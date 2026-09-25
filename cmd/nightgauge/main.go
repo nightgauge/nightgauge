@@ -12312,7 +12312,8 @@ func writeAdapterRows(w io.Writer, adapters []doctor.AdapterHealth) {
 }
 
 // renderOpenCodeEndpointRow is one endpoint's readiness line (#1678, AC6): id,
-// kind, reachable, whether the model is loaded, and its declared slots. It
+// kind, reachable, whether the model is loaded, its declared slots, and the
+// slots a running scheduler holds on it (#1679). It
 // never prints the endpoint's base_url, which the row never receives in the
 // first place — OpenCodeEndpointReadiness carries none.
 func renderOpenCodeEndpointRow(ep adapters.OpenCodeEndpointReadiness) string {
@@ -12328,6 +12329,9 @@ func renderOpenCodeEndpointRow(ep adapters.OpenCodeEndpointReadiness) string {
 		slots = strconv.Itoa(ep.Slots)
 	}
 	line := fmt.Sprintf("%s (%s): reachable=%v model_loaded=%s slots=%s", ep.Endpoint, ep.Kind, ep.Reachable, loaded, slots)
+	if ep.SlotsInUse != nil {
+		line += fmt.Sprintf(" in_use=%d", *ep.SlotsInUse)
+	}
 	if ep.Problem != "" {
 		line += "\n          ✗ " + ep.Problem
 	}

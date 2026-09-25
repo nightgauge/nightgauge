@@ -3156,6 +3156,40 @@ hosted API (LiteLLM, say) stamped at $0 and outside every USD cap.
   reports is not read: declared endpoints get the generic `/models` probe only
   (Endpoints narrowing, 2026-09-20).
 
+## Endpoint-aware dispatch (amendment 2026-09-25, #1679)
+
+Implements § Endpoints "Failover". Where the implementation differs from the
+issue's notes, this records what was built.
+
+- **Which endpoints serve a model.** The stage's model names one declared
+  endpoint (`<id>/<model-id>`). Every other declared endpoint that lists the
+  same `<model-id>` under `models` and is a server the operator runs
+  (`models.IsLocalModel`: not `self_hosted: false`, not an Ollama cloud model)
+  also serves it. The legacy flat-key endpoint declares no `models`, so it is
+  only ever the endpoint a model names.
+- **The slot ledger** is a per-endpoint count on the `Scheduler`, under the
+  lock its queue and per-repository accounting already use; it is not a
+  second semaphore. Slots are `max_concurrency`, 1 when unset. A slot is held
+  from dispatch until the stage's session ends.
+- **Selection**: healthy per the #1646 readiness probe, then most free slots,
+  then the lowest median of the endpoint's recent readiness-probe latencies
+  (compared in 10 ms buckets), then config order. #1624's per-step timings are
+  not recorded per endpoint on `main`, so the probe latency the dispatch
+  already measures stands in for them.
+- **Waiting** stages are listed in the autonomous status (`endpointSlots`)
+  and re-checked whenever a slot is released, and every 30 seconds. The
+  scheduler publishes the ledger to `~/.nightgauge/opencode/endpoint-slots.json`
+  (ids and counts only), and `nightgauge doctor --adapters` reads it while the
+  process that wrote it is alive.
+- **Failover** happens at dispatch when readiness refuses an endpoint, and
+  after a run on a `network_unavailable` or `model_unavailable` failure that
+  reported no token usage, which is the evidence available that no step
+  finished. A stage fails over at most once per other endpoint serving the
+  model, after a backoff of n × 2 seconds, and never back to an endpoint it
+  lost. Each move is recorded as `endpoint_failover: [from, to]` on the
+  stage's history record. With no healthy endpoint left the stage fails with
+  the environmental kind, naming the endpoint ids tried.
+
 ## Consequences
 
 - The model layer's one-adapter-one-provider assumption becomes a special

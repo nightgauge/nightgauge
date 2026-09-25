@@ -745,6 +745,10 @@ type issueGetter interface {
 
 // Scheduler reads the project board and dispatches pipeline executions.
 type Scheduler struct {
+	// endpointSlots is the per-endpoint slot ledger of endpoint-aware
+	// OpenCode dispatch (#1679), guarded by mu (endpoint_select.go).
+	endpointSlots *endpointLedger
+
 	client        *gh.Client
 	boardSvc      *gh.BoardService
 	issueSvc      issueGetter
@@ -5181,8 +5185,25 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 	reconciledArm := reconcileNone
 
 	stageIdx := 0
+	// Endpoint-aware OpenCode dispatch (#1679): the slot a stage holds on a
+	// declared endpoint, the endpoints it has lost, and how often it has
+	// failed over. Reset whenever the loop moves to another stage.
+	var endpointHeld endpointLease
+	defer func() { endpointHeld.Release() }()
+	var endpointStage state.PipelineStage
+	endpointLost := map[string]bool{}
+	endpointFailovers := 0
+	endpointFailoverFrom := ""
+
 	for stageIdx < len(stages) {
 		stage := stages[stageIdx]
+		if stage != endpointStage {
+			endpointStage = stage
+			endpointLost = map[string]bool{}
+			endpointFailovers = 0
+			endpointFailoverFrom = ""
+		}
+		endpointHeld.Release()
 
 		// Drop a conflict-exhaustion reason captured for a different stage (a
 		// model-escalation retry stays on the same stage and must keep it).
@@ -5378,8 +5399,21 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// the stage is running); this refuses only a server that does not
 		// answer or a model it has not loaded, before a subagent spawns and
 		// the failure would otherwise land as a generic subagent_crash.
+		//
+		// Endpoint-aware dispatch (#1679): when other declared endpoints
+		// serve the same model id, the stage runs on the healthy one with
+		// the most free slots, waits for a slot when all are full, and is
+		// refused as an environment failure naming every endpoint tried
+		// when none is healthy. It never moves to a hosted provider.
 		if adapterName == "opencode" {
-			if verdict := resolveOpenCodeReadiness(workspaceRoot, model); !verdict.Ready {
+			lease, verdict := s.acquireOpenCodeEndpoint(ctx, endpointRequest{
+				WorktreeDir: workspaceRoot, Model: model, Repo: item.Repo, Issue: item.Number,
+				Stage: stage, Exclude: endpointLost,
+			})
+			if !verdict.Ready {
+				if ctx.Err() != nil {
+					return // cancelled while waiting for a slot
+				}
 				reason := fmt.Sprintf("opencode readiness: %s", verdict.Reason)
 				terminalFailureKind, workRecovered = s.refusePreDispatch(item, runtime, workspaceRoot, stage, tracer,
 					"opencode-readiness", reason)
@@ -5388,6 +5422,20 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				// precise environmental kind the probe found.
 				terminalFailureKind = verdict.Kind
 				return
+			}
+			endpointHeld = lease
+			if lease.Endpoint != "" && lease.Model != model {
+				log.Printf("#%d: stage %s dispatches %s on endpoint %s (endpoint-aware dispatch)",
+					item.Number, stage, lease.Model, lease.Endpoint)
+				model = lease.Model
+				if pinnedModel != "" {
+					pinnedModel = model
+				}
+			}
+			if endpointFailoverFrom != "" && lease.Endpoint != "" {
+				runtime.RecordEndpointFailover(stage, endpointFailoverFrom, lease.Endpoint)
+				log.Printf("#%d: stage %s failed over from endpoint %s to %s", item.Number, stage, endpointFailoverFrom, lease.Endpoint)
+				endpointFailoverFrom = ""
 			}
 		}
 
@@ -6028,6 +6076,8 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// local model.
 		ctxProbe.record(runtime, stage, result, skillData.ContextWindow)
 		err = stageRunErr
+		// The stage's endpoint slot is free once its session has ended.
+		endpointHeld.Release()
 
 		exitCode := 0
 		inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens := 0, 0, 0, 0
@@ -6657,6 +6707,27 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 					})
 				}
 				return
+			}
+
+			// Endpoint failover (#1679): a stage that lost its endpoint
+			// before its first step finished (no usage reported) is
+			// re-dispatched, after a backoff, on another endpoint serving the
+			// same model id — at most once per endpoint serving it. Checked
+			// before every retry, escalation and recovery path, none of which
+			// can help a server that stopped answering.
+			if endpointHeld.Endpoint != "" {
+				lostKind := ResolveTerminalKind(gateRan, gateRes.TerminalKind, stageFailureText(err, result))
+				noStep := result == nil || (result.InputTokens == 0 && result.OutputTokens == 0)
+				if endpointFailoverDecision(endpointHeld, lostKind, noStep, endpointFailovers) {
+					endpointFailovers++
+					endpointLost[endpointHeld.Endpoint] = true
+					endpointFailoverFrom = endpointHeld.Endpoint
+					log.Printf("#%d: stage %s lost endpoint %s (%s) before its first step; failing over (%d/%d)",
+						item.Number, stage, endpointHeld.Endpoint, lostKind, endpointFailovers, endpointHeld.Candidates-1)
+					if sleepEndpointFailoverBackoff(ctx, endpointFailovers) {
+						continue // Re-dispatch the same stage on another endpoint
+					}
+				}
 			}
 
 			// Budget-aware retry: check if partial work was committed (Issue #2338).
