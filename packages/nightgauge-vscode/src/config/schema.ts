@@ -3657,6 +3657,21 @@ export const ForgeConfigSchema = z.object({
 });
 export type ForgeConfig = z.infer<typeof ForgeConfigSchema>;
 
+/**
+ * The `opencode:` block (ADR-022 § 7), machine tier only. Mirrors Go's
+ * `config.OpenCodeConfig`; only `model` is typed here, because the settings
+ * panel persists the chosen OpenCode model (Issue #2138). Every other key
+ * (binary, provider, base_url, endpoints, ...) is validated by the Go loader
+ * and passed through untouched so a panel save never drops it.
+ */
+export const OpenCodeConfigSchema = z
+  .object({
+    /** `<provider>/<model>` a caller that names none runs. */
+    model: z.string().optional(),
+  })
+  .passthrough();
+export type OpenCodeConfig = z.infer<typeof OpenCodeConfigSchema>;
+
 export const NightgaugeConfigSchema = z.object({
   // Config file format version ("1" or "2"). Missing version implies v1.
   schema_version: z.string().optional(),
@@ -3751,6 +3766,9 @@ export const NightgaugeConfigSchema = z.object({
 
   // Work-item source configuration (Issue #2571)
   work_item_source: WorkItemSourceConfigSchema.optional(),
+
+  // OpenCode adapter block, machine tier only (ADR-022 § 7, Issue #2138)
+  opencode: OpenCodeConfigSchema.optional(),
 
   // Mattermost user → GitHub/GitLab identity mappings for per-command authorization (Issue #3377)
   users: z

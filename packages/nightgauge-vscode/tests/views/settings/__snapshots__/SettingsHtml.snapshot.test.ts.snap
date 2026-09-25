@@ -1441,6 +1441,35 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
     </div>
 
       </div>
+      <div id="core-opencode-settings" style="display:none;">
+        <p class="section-note">OpenCode settings are machine tier: they are saved to <code>~/.nightgauge/config.yaml</code>, never to the committed project config.</p>
+        <div class="inline-action-bar">
+        <button type="button"
+                class="btn inline-action-btn"
+                data-action="opencode-refresh-models"
+
+                disabled>
+          Refresh Models
+        </button>
+      </div>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="opencode.model" class="setting-label">OpenCode Model </label>
+        <p class="setting-description">The provider/model OpenCode runs when a caller names none. Models are loaded from your local opencode models catalog.</p>
+
+      </div>
+      <div class="setting-control">
+        <select id="opencode.model"
+                class="select-input"
+                data-path="opencode.model"
+                disabled>
+          <option value="" selected>Not set</option>
+        </select>
+      </div>
+    </div>
+
+      </div>
       <p id="core-non-claude-note" class="section-note" style="display:none;">Non-Claude adapters use adapter-specific authentication and model settings. Claude-specific auth provider and model controls are hidden.</p>
 
     <div class="setting-row ">
@@ -3429,9 +3458,11 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
       function updateCoreAdapterVisibility(adapterValue) {
         const claudeSettings = document.getElementById('core-claude-settings');
         const codexSettings = document.getElementById('core-codex-settings');
+        const openCodeSettings = document.getElementById('core-opencode-settings');
         const nonClaudeNote = document.getElementById('core-non-claude-note');
         const isClaude = adapterValue === 'claude';
         const isCodex = adapterValue === 'codex';
+        const isOpenCode = adapterValue === 'opencode';
 
         if (claudeSettings) {
           claudeSettings.style.display = isClaude ? '' : 'none';
@@ -3439,8 +3470,11 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
         if (codexSettings) {
           codexSettings.style.display = isCodex ? '' : 'none';
         }
+        if (openCodeSettings) {
+          openCodeSettings.style.display = isOpenCode ? '' : 'none';
+        }
         if (nonClaudeNote) {
-          nonClaudeNote.style.display = !isClaude && !isCodex ? '' : 'none';
+          nonClaudeNote.style.display = !isClaude && !isCodex && !isOpenCode ? '' : 'none';
         }
       }
 
@@ -5250,6 +5284,35 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
     </div>
 
       </div>
+      <div id="core-opencode-settings" style="display:none;">
+        <p class="section-note">OpenCode settings are machine tier: they are saved to <code>~/.nightgauge/config.yaml</code>, never to the committed project config.</p>
+        <div class="inline-action-bar">
+        <button type="button"
+                class="btn inline-action-btn"
+                data-action="opencode-refresh-models"
+
+                >
+          Refresh Models
+        </button>
+      </div>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="opencode.model" class="setting-label">OpenCode Model </label>
+        <p class="setting-description">The provider/model OpenCode runs when a caller names none. Models are loaded from your local opencode models catalog.</p>
+
+      </div>
+      <div class="setting-control">
+        <select id="opencode.model"
+                class="select-input"
+                data-path="opencode.model"
+                >
+          <option value="" selected>Not set</option>
+        </select>
+      </div>
+    </div>
+
+      </div>
       <p id="core-non-claude-note" class="section-note" style="display:none;">Non-Claude adapters use adapter-specific authentication and model settings. Claude-specific auth provider and model controls are hidden.</p>
 
     <div class="setting-row ">
@@ -7238,9 +7301,11 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
       function updateCoreAdapterVisibility(adapterValue) {
         const claudeSettings = document.getElementById('core-claude-settings');
         const codexSettings = document.getElementById('core-codex-settings');
+        const openCodeSettings = document.getElementById('core-opencode-settings');
         const nonClaudeNote = document.getElementById('core-non-claude-note');
         const isClaude = adapterValue === 'claude';
         const isCodex = adapterValue === 'codex';
+        const isOpenCode = adapterValue === 'opencode';
 
         if (claudeSettings) {
           claudeSettings.style.display = isClaude ? '' : 'none';
@@ -7248,8 +7313,11 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
         if (codexSettings) {
           codexSettings.style.display = isCodex ? '' : 'none';
         }
+        if (openCodeSettings) {
+          openCodeSettings.style.display = isOpenCode ? '' : 'none';
+        }
         if (nonClaudeNote) {
-          nonClaudeNote.style.display = !isClaude && !isCodex ? '' : 'none';
+          nonClaudeNote.style.display = !isClaude && !isCodex && !isOpenCode ? '' : 'none';
         }
       }
 
@@ -9059,6 +9127,35 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
     </div>
 
       </div>
+      <div id="core-opencode-settings" style="display:none;">
+        <p class="section-note">OpenCode settings are machine tier: they are saved to <code>~/.nightgauge/config.yaml</code>, never to the committed project config.</p>
+        <div class="inline-action-bar">
+        <button type="button"
+                class="btn inline-action-btn"
+                data-action="opencode-refresh-models"
+
+                >
+          Refresh Models
+        </button>
+      </div>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="opencode.model" class="setting-label">OpenCode Model </label>
+        <p class="setting-description">The provider/model OpenCode runs when a caller names none. Models are loaded from your local opencode models catalog.</p>
+
+      </div>
+      <div class="setting-control">
+        <select id="opencode.model"
+                class="select-input"
+                data-path="opencode.model"
+                >
+          <option value="" selected>Not set</option>
+        </select>
+      </div>
+    </div>
+
+      </div>
       <p id="core-non-claude-note" class="section-note" style="display:none;">Non-Claude adapters use adapter-specific authentication and model settings. Claude-specific auth provider and model controls are hidden.</p>
 
     <div class="setting-row ">
@@ -11047,9 +11144,11 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
       function updateCoreAdapterVisibility(adapterValue) {
         const claudeSettings = document.getElementById('core-claude-settings');
         const codexSettings = document.getElementById('core-codex-settings');
+        const openCodeSettings = document.getElementById('core-opencode-settings');
         const nonClaudeNote = document.getElementById('core-non-claude-note');
         const isClaude = adapterValue === 'claude';
         const isCodex = adapterValue === 'codex';
+        const isOpenCode = adapterValue === 'opencode';
 
         if (claudeSettings) {
           claudeSettings.style.display = isClaude ? '' : 'none';
@@ -11057,8 +11156,11 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
         if (codexSettings) {
           codexSettings.style.display = isCodex ? '' : 'none';
         }
+        if (openCodeSettings) {
+          openCodeSettings.style.display = isOpenCode ? '' : 'none';
+        }
         if (nonClaudeNote) {
-          nonClaudeNote.style.display = !isClaude && !isCodex ? '' : 'none';
+          nonClaudeNote.style.display = !isClaude && !isCodex && !isOpenCode ? '' : 'none';
         }
       }
 
@@ -12882,6 +12984,35 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
                checked
                disabled>
         <label for="ui.core.codex.resume_enabled" class="toggle-switch"></label>
+      </div>
+    </div>
+
+      </div>
+      <div id="core-opencode-settings" style="display:none;">
+        <p class="section-note">OpenCode settings are machine tier: they are saved to <code>~/.nightgauge/config.yaml</code>, never to the committed project config.</p>
+        <div class="inline-action-bar">
+        <button type="button"
+                class="btn inline-action-btn"
+                data-action="opencode-refresh-models"
+
+                disabled>
+          Refresh Models
+        </button>
+      </div>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="opencode.model" class="setting-label">OpenCode Model </label>
+        <p class="setting-description">The provider/model OpenCode runs when a caller names none. Models are loaded from your local opencode models catalog.</p>
+
+      </div>
+      <div class="setting-control">
+        <select id="opencode.model"
+                class="select-input"
+                data-path="opencode.model"
+                disabled>
+          <option value="" selected>Not set</option>
+        </select>
       </div>
     </div>
 
@@ -14874,9 +15005,11 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
       function updateCoreAdapterVisibility(adapterValue) {
         const claudeSettings = document.getElementById('core-claude-settings');
         const codexSettings = document.getElementById('core-codex-settings');
+        const openCodeSettings = document.getElementById('core-opencode-settings');
         const nonClaudeNote = document.getElementById('core-non-claude-note');
         const isClaude = adapterValue === 'claude';
         const isCodex = adapterValue === 'codex';
+        const isOpenCode = adapterValue === 'opencode';
 
         if (claudeSettings) {
           claudeSettings.style.display = isClaude ? '' : 'none';
@@ -14884,8 +15017,11 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
         if (codexSettings) {
           codexSettings.style.display = isCodex ? '' : 'none';
         }
+        if (openCodeSettings) {
+          openCodeSettings.style.display = isOpenCode ? '' : 'none';
+        }
         if (nonClaudeNote) {
-          nonClaudeNote.style.display = !isClaude && !isCodex ? '' : 'none';
+          nonClaudeNote.style.display = !isClaude && !isCodex && !isOpenCode ? '' : 'none';
         }
       }
 
@@ -16691,6 +16827,35 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
                checked
                >
         <label for="ui.core.codex.resume_enabled" class="toggle-switch"></label>
+      </div>
+    </div>
+
+      </div>
+      <div id="core-opencode-settings" style="display:none;">
+        <p class="section-note">OpenCode settings are machine tier: they are saved to <code>~/.nightgauge/config.yaml</code>, never to the committed project config.</p>
+        <div class="inline-action-bar">
+        <button type="button"
+                class="btn inline-action-btn"
+                data-action="opencode-refresh-models"
+
+                >
+          Refresh Models
+        </button>
+      </div>
+
+    <div class="setting-row ">
+      <div class="setting-info">
+        <label for="opencode.model" class="setting-label">OpenCode Model </label>
+        <p class="setting-description">The provider/model OpenCode runs when a caller names none. Models are loaded from your local opencode models catalog.</p>
+
+      </div>
+      <div class="setting-control">
+        <select id="opencode.model"
+                class="select-input"
+                data-path="opencode.model"
+                >
+          <option value="" selected>Not set</option>
+        </select>
       </div>
     </div>
 
@@ -18683,9 +18848,11 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
       function updateCoreAdapterVisibility(adapterValue) {
         const claudeSettings = document.getElementById('core-claude-settings');
         const codexSettings = document.getElementById('core-codex-settings');
+        const openCodeSettings = document.getElementById('core-opencode-settings');
         const nonClaudeNote = document.getElementById('core-non-claude-note');
         const isClaude = adapterValue === 'claude';
         const isCodex = adapterValue === 'codex';
+        const isOpenCode = adapterValue === 'opencode';
 
         if (claudeSettings) {
           claudeSettings.style.display = isClaude ? '' : 'none';
@@ -18693,8 +18860,11 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
         if (codexSettings) {
           codexSettings.style.display = isCodex ? '' : 'none';
         }
+        if (openCodeSettings) {
+          openCodeSettings.style.display = isOpenCode ? '' : 'none';
+        }
         if (nonClaudeNote) {
-          nonClaudeNote.style.display = !isClaude && !isCodex ? '' : 'none';
+          nonClaudeNote.style.display = !isClaude && !isCodex && !isOpenCode ? '' : 'none';
         }
       }
 

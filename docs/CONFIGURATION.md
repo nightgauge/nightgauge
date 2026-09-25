@@ -5198,6 +5198,13 @@ dispatch. An unknown key in the block is an error. Full semantics:
 setup walk-through:
 [MULTI_BACKEND_SETUP.md § Local models through OpenCode](MULTI_BACKEND_SETUP.md#local-models-through-opencode-agentic).
 
+The VS Code settings panel shows an **OpenCode Model** select under
+Execution Adapter when the adapter is `opencode`. It lists the models
+`opencode models` reports and saves the choice to `opencode.model` in
+`~/.nightgauge/config.yaml`, from any tab: the panel routes the whole
+`opencode:` block to the machine tier and never writes it to a project or
+local file. It leaves the block's other keys as they are.
+
 | Key                            | Tier    | Description                                                                                                                                                         |
 | ------------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `opencode.binary`              | Machine | Absolute path of the opencode binary to spawn; unset runs the `opencode` on PATH                                                                                    |

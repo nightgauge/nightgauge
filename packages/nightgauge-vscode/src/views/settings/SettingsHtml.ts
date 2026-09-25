@@ -48,10 +48,8 @@ export interface SettingsHtmlOptions {
   codexModels?: string[];
   /**
    * OpenCode catalog from `opencode models` (Issue #1628), refreshed by
-   * `SettingsPanel.refreshOpenCodeModels`. Not yet rendered as a bound select
-   * (OpenCode's `opencode.model` is machine-tier config outside the Zod
-   * schema — see ADR-022 § 7); reserved for consumers such as
-   * "Run Pipeline with Model".
+   * `SettingsPanel.refreshOpenCodeModels`. Rendered as the bound
+   * `opencode.model` select (machine tier, ADR-022 § 7, Issue #2138).
    */
   openCodeModels?: import("../../services/OpenCodeModelCatalogService").OpenCodeModelEntry[];
   /**
@@ -1271,6 +1269,17 @@ function getCoreSectionHtml(
   const g = (path: string) => getSourceForPath(path, sources);
   const isClaudeAdapter = effectiveAdapter === "claude";
   const isCodexAdapter = effectiveAdapter === "codex";
+  const isOpenCodeAdapter = effectiveAdapter === "opencode";
+  const openCodeModel = config.opencode?.model ?? "";
+  const openCodeModelOptions = [
+    { value: "", label: "Not set" },
+    ...Array.from(
+      new Set([
+        ...(options.openCodeModels ?? []).filter((m) => m.selectable).map((m) => m.id),
+        ...(openCodeModel ? [openCodeModel] : []),
+      ])
+    ).map((id) => ({ value: id, label: id })),
+  ];
   const codex = core.codex ?? {};
   const codexModelOptions = getAdapterModelOptions(
     codex.model ?? CODEX_DEFAULT_BASE_MODEL,
@@ -1406,7 +1415,22 @@ function getCoreSectionHtml(
           options
         )}
       </div>
-      <p id="core-non-claude-note" class="section-note" ${isClaudeAdapter || isCodexAdapter ? 'style="display:none;"' : ""}>Non-Claude adapters use adapter-specific authentication and model settings. Claude-specific auth provider and model controls are hidden.</p>
+      <div id="core-opencode-settings" ${isOpenCodeAdapter ? "" : 'style="display:none;"'}>
+        <p class="section-note">OpenCode settings are machine tier: they are saved to <code>~/.nightgauge/config.yaml</code>, never to the committed project config.</p>
+        ${getInlineActionBarHtml([{ action: "opencode-refresh-models", label: "Refresh Models" }], disabled)}
+        ${getSelectHtml(
+          "opencode.model",
+          "OpenCode Model",
+          "The provider/model OpenCode runs when a caller names none. Models are loaded from your local opencode models catalog.",
+          openCodeModel,
+          openCodeModelOptions,
+          disabled,
+          g("opencode.model"),
+          showBadges,
+          options
+        )}
+      </div>
+      <p id="core-non-claude-note" class="section-note" ${isClaudeAdapter || isCodexAdapter || isOpenCodeAdapter ? 'style="display:none;"' : ""}>Non-Claude adapters use adapter-specific authentication and model settings. Claude-specific auth provider and model controls are hidden.</p>
       ${getTextInputHtml(
         "ui.core.context_path",
         "Context Path",
@@ -3525,9 +3549,11 @@ function getScript(): string {
       function updateCoreAdapterVisibility(adapterValue) {
         const claudeSettings = document.getElementById('core-claude-settings');
         const codexSettings = document.getElementById('core-codex-settings');
+        const openCodeSettings = document.getElementById('core-opencode-settings');
         const nonClaudeNote = document.getElementById('core-non-claude-note');
         const isClaude = adapterValue === 'claude';
         const isCodex = adapterValue === 'codex';
+        const isOpenCode = adapterValue === 'opencode';
 
         if (claudeSettings) {
           claudeSettings.style.display = isClaude ? '' : 'none';
@@ -3535,8 +3561,11 @@ function getScript(): string {
         if (codexSettings) {
           codexSettings.style.display = isCodex ? '' : 'none';
         }
+        if (openCodeSettings) {
+          openCodeSettings.style.display = isOpenCode ? '' : 'none';
+        }
         if (nonClaudeNote) {
-          nonClaudeNote.style.display = !isClaude && !isCodex ? '' : 'none';
+          nonClaudeNote.style.display = !isClaude && !isCodex && !isOpenCode ? '' : 'none';
         }
       }
 
