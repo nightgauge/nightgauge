@@ -9,6 +9,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
+	"github.com/nightgauge/nightgauge/internal/models"
 )
 
 // Dispatch-time OpenCode readiness (#1646, ADR-022 § Endpoints).
@@ -94,6 +95,19 @@ func resolveOpenCodeReadiness(worktreeDir, model string) openCodeReadinessVerdic
 		// model this machine's config does not describe at all), neither of
 		// which this dispatch-time server/model-loaded check applies to.
 		return openCodeReadinessVerdict{Ready: true}
+	}
+
+	if target.Provider == "ollama" && models.IsOllamaCloudModel(bareID) {
+		// Ollama serves a cloud-tagged model from its hosted service through
+		// the same local API (ADR-022 § 3 and § Endpoints, #1679): the
+		// endpoint would forward the stage's code to a hosted API and the
+		// stage would be recorded as a local $0. Refused before spawn.
+		return openCodeReadinessVerdict{
+			Kind: TerminalKindModelUnavailable,
+			Reason: fmt.Sprintf(
+				"model %s on endpoint %s is an Ollama cloud model, served from Ollama's hosted service rather than the endpoint: dispatch it as ollama-cloud/%s, the hosted provider, instead",
+				bareID, target.ID, bareID),
+		}
 	}
 
 	result := adapters.ProbeOpenCodeEndpoint(openCodeReadinessHTTPClient, adapters.OpenCodeEndpointTarget{

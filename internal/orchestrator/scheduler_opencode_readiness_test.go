@@ -227,6 +227,22 @@ func TestOpenCodeReadinessPerEndpoint(t *testing.T) {
 	}
 }
 
+// TestOpenCodeReadinessRefusesOllamaCloudModel: a cloud-tagged model on an
+// ollama endpoint is served by Ollama's hosted service, so it is refused
+// before spawn with the ollama-cloud remediation, and the endpoint is never
+// probed (#1679).
+func TestOpenCodeReadinessRefusesOllamaCloudModel(t *testing.T) {
+	withOpenCodeReadinessConfig(t, config.OpenCodeConfig{
+		Endpoints: []config.OpenCodeEndpointConfig{
+			{ID: "gpu-box", Provider: "ollama", BaseURL: "http://127.0.0.1:1/v1", Limit: config.OpenCodeLimit{Context: 8192, Output: 4096}},
+		},
+	})
+	v := resolveOpenCodeReadiness("/workspace", "gpu-box/gpt-oss:120b-cloud")
+	if v.Ready || v.Kind != TerminalKindModelUnavailable || !strings.Contains(v.Reason, "ollama-cloud/gpt-oss:120b-cloud") {
+		t.Errorf("verdict = %+v, want a model_unavailable refusal naming ollama-cloud/gpt-oss:120b-cloud", v)
+	}
+}
+
 // ─── scheduler-level wiring: refuses before spawn, books the refusal like
 // other pre-dispatch refusals, never dispatches ──────────────────────────
 

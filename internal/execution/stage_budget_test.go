@@ -478,6 +478,13 @@ func TestStageCost(t *testing.T) {
       limit:
         context: 131072
         output: 8192
+    - id: litellm
+      provider: openai-compatible
+      base_url: http://127.0.0.1:4001/v1
+      self_hosted: false
+      limit:
+        context: 131072
+        output: 8192
 `)
 	for _, tc := range []struct {
 		adapter, model string
@@ -491,6 +498,11 @@ func TestStageCost(t *testing.T) {
 		// runs, and an undeclared unknown key is still unpriced.
 		{"opencode", "omlx/qwen3-coder-30b", config.StageZeroCost},
 		{"opencode", "mystery/some-model", config.StageUnpriced},
+		// A loopback proxy to a hosted API, marked self_hosted: false, is
+		// never a $0 model a USD cap cannot bind (#1679).
+		{"opencode", "litellm/claude-sonnet-5", config.StageUnpriced},
+		// An Ollama cloud model runs on Ollama's hosted service (#1679).
+		{"opencode", "ollama/gpt-oss:120b-cloud", config.StageUnpriced},
 		// A local serving provider (a RunResult's ModelProvider) is zero.
 		{"lm-studio", "qwen", config.StageZeroCost},
 		{"ollama", "llama3", config.StageZeroCost},

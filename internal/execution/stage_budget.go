@@ -56,47 +56,71 @@ var stageBudgetReapWindow = 2 * time.Second
 // prices at $0. For opencode that includes an endpoint the machine-tier
 // `opencode:` block declares that is local (models.IsLocalEndpoint: kind
 // lm-studio or ollama, or a loopback or private-network base URL, #2128),
-// whose id models.ProviderFor reads as "other". A hosted model the registry cannot
+// whose id models.ProviderFor reads as "other", unless the entry declares
+// self_hosted: false (#1679). An Ollama cloud model is never zero-cost. A hosted model the registry cannot
 // price is unpriced, not zero-cost: that is a registry gap, not a free model.
 func stageCost(adapter, model, worktreeDir string) config.StageCost {
-	if models.IsLocalProvider(models.ProviderFor(adapter, model)) {
+	if adapter == "opencode" {
+		if local, declared := openCodeDeclaredEndpointLocality(model, worktreeDir); declared {
+			if local {
+				return config.StageZeroCost
+			}
+			// A declared endpoint that forwards to a hosted service
+			// (self_hosted: false, #1679) is priced from the registry when
+			// it can be, and unpriced otherwise: never a $0 model.
+			return pricedStageCost(adapter, model)
+		}
+	}
+	// IsLocalModel, not IsLocalProvider alone: an Ollama cloud model on the
+	// ollama key runs on Ollama's hosted service, not the endpoint (#1679).
+	if models.IsLocalModel(adapter, model, nil) {
 		return config.StageZeroCost
 	}
+	if models.IsLocalProvider(models.ProviderFor(adapter, model)) {
+		return config.StageUnpriced
+	}
+	return pricedStageCost(adapter, model)
+}
+
+// pricedStageCost is what the registry's rates make of a model that does not
+// run on a server the operator runs.
+func pricedStageCost(adapter, model string) config.StageCost {
 	cost, priced := tokens.CalculateCostFor(adapter, model, tokens.TokenCounts{Input: 1_000_000, Output: 1_000_000})
 	switch {
 	case priced && cost == 0:
 		return config.StageZeroCost
 	case priced:
 		return config.StagePriced
-	case adapter == "opencode" && openCodeDeclaredLocalEndpoint(model, worktreeDir):
-		return config.StageZeroCost
 	}
 	return config.StageUnpriced
 }
 
-// openCodeDeclaredLocalEndpoint reports whether model's provider key is an
-// endpoint the machine-tier `opencode:` block declares as a model server the
-// operator runs (models.IsLocalEndpoint). A config that cannot be read declares
-// nothing here; the dispatch's own preparation refuses it later.
-func openCodeDeclaredLocalEndpoint(model, worktreeDir string) bool {
+// openCodeDeclaredEndpointLocality reports whether model's provider key is an
+// endpoint the machine-tier `opencode:` block declares (declared), and if so
+// whether the model runs on it (models.IsLocalModel: the endpoint's
+// self_hosted declaration, else its kind or base URL, and never an Ollama
+// cloud model). A config that cannot be read declares nothing here; the
+// dispatch's own preparation refuses it later.
+func openCodeDeclaredEndpointLocality(model, worktreeDir string) (local, declared bool) {
 	key, _, ok := strings.Cut(model, "/")
 	if !ok || key == "" {
-		return false
+		return false, false
 	}
 	settings, err := config.LoadOpenCodeConfig(worktreeDir)
 	if err != nil {
-		return false
+		return false, false
 	}
 	endpoints, err := adapters.OpenCodeEndpoints(settings)
 	if err != nil {
-		return false
+		return false, false
 	}
 	for _, ep := range endpoints {
 		if ep.ID == key {
-			return models.IsLocalEndpoint(models.LocalEndpoint{ID: ep.ID, Provider: ep.Provider, BaseURL: ep.BaseURL})
+			le := models.LocalEndpoint{ID: ep.ID, Provider: ep.Provider, BaseURL: ep.BaseURL, SelfHosted: ep.SelfHosted}
+			return models.IsLocalModel("opencode", model, []models.LocalEndpoint{le}), true
 		}
 	}
-	return false
+	return false, false
 }
 
 // stageBudgetEnforcer holds one stage's budget and what the stream has used

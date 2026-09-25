@@ -165,6 +165,7 @@ export {
   isLocalBaseUrl,
   isLocalEndpoint,
   isLocalModel,
+  isOllamaCloudModel,
   type LocalEndpoint,
   parseOpenCodeModel,
   dispatchModelFor,

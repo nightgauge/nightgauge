@@ -81,6 +81,12 @@ type LocalEndpoint struct {
 	// BaseURL is the server's OpenAI-compatible API root. It is requested and
 	// never reported.
 	BaseURL string
+	// SelfHosted is the entry's self_hosted declaration (#1679): nil when the
+	// entry does not set it, so locality follows Provider and BaseURL; false
+	// marks an endpoint that forwards to a hosted service (a LiteLLM proxy on
+	// loopback, say), which is never local whatever its address; true is the
+	// operator's statement that the model runs on that server.
+	SelfHosted *bool
 }
 
 // LocalDescriptor is what a model on a local server can hold, as the server
@@ -572,10 +578,29 @@ func IsLocalBaseURL(baseURL string) bool {
 }
 
 // IsLocalEndpoint reports whether a declared endpoint (#1678) is a model
-// server the operator runs: its kind is lm-studio or ollama, or its base URL
-// is local (IsLocalBaseURL), whatever brand its id carries.
+// server the operator runs. An explicit self_hosted declaration decides
+// (#1679): false is an endpoint that forwards to a hosted service, such as a
+// loopback proxy to a hosted API, and it is never local. Otherwise its kind
+// is lm-studio or ollama, or its base URL is local (IsLocalBaseURL), whatever
+// brand its id carries.
 func IsLocalEndpoint(ep LocalEndpoint) bool {
+	if ep.SelfHosted != nil {
+		return *ep.SelfHosted
+	}
 	return IsLocalProvider(ep.Provider) || IsLocalBaseURL(ep.BaseURL)
+}
+
+// IsOllamaCloudModel reports whether id, a model id on an Ollama server, is
+// one Ollama serves from its hosted service through the same local API: its
+// tag is "cloud" or ends in "-cloud" (ADR-022 § 3, #1679), as in
+// "gpt-oss:120b-cloud" or "qwen3-coder:cloud". Such a model does not run on
+// the endpoint, so it is never local.
+func IsOllamaCloudModel(id string) bool {
+	_, tag, tagged := strings.Cut(id, ":")
+	if !tagged {
+		return strings.HasSuffix(id, "-cloud")
+	}
+	return tag == "cloud" || strings.HasSuffix(tag, "-cloud")
 }
 
 // IsLocalModel reports whether model, dispatched on adapter, runs on a server
@@ -584,18 +609,25 @@ func IsLocalEndpoint(ep LocalEndpoint) bool {
 // declared endpoint is local exactly when that endpoint is
 // (IsLocalEndpoint), so omlx/... on a declared loopback endpoint is local.
 // An undeclared key is local only when ProviderFor normalizes it to a local
-// provider; "other" stays non-local. Mirrors isLocalModel in the SDK
-// modelRegistry.ts.
+// provider; "other" stays non-local. An Ollama cloud model
+// (IsOllamaCloudModel) on an ollama endpoint or key is never local (#1679).
+// Mirrors isLocalModel in the SDK modelRegistry.ts.
 func IsLocalModel(adapter, model string, endpoints []LocalEndpoint) bool {
 	if adapter == openCodeAdapter {
-		key, _, ok := splitOpenCodeModel(model)
+		key, id, ok := splitOpenCodeModel(model)
 		if !ok {
 			return false
 		}
 		for _, ep := range endpoints {
 			if ep.ID == key {
+				if ep.Provider == "ollama" && IsOllamaCloudModel(id) {
+					return false
+				}
 				return IsLocalEndpoint(ep)
 			}
+		}
+		if ProviderFor(adapter, model) == "ollama" && IsOllamaCloudModel(id) {
+			return false
 		}
 	}
 	return IsLocalProvider(ProviderFor(adapter, model))
