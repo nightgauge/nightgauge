@@ -226,7 +226,8 @@ func CalculateCostFor(adapter, model string, t TokenCounts) (cost float64, stamp
 const openCodeAdapter = "opencode"
 
 // openCodeCost prices an opencode stage (ADR-022 § 3). A model served by a
-// local provider is a stamped zero. A hosted model is priced at the registry
+// local provider is a stamped zero, except an Ollama cloud model
+// (models.IsOllamaCloudModel), which is unstamped. A hosted model is priced at the registry
 // rates of its bare id, and only when the registry lists that id under the
 // same provider: an "other" key such as openrouter bills by its own rates,
 // even for a model id the registry knows. Everything else is unstamped, and
@@ -234,6 +235,11 @@ const openCodeAdapter = "opencode"
 // not from the bill, and reads 0 for a provider it holds no price for.
 func openCodeCost(model string, t TokenCounts) (float64, bool) {
 	provider, id := openCodeServing(model)
+	if provider == "ollama" && models.IsOllamaCloudModel(id) {
+		// Served by Ollama's hosted service through the local API, so no
+		// stamped zero (ADR-022 § 3, #1679); the registry prices no such id.
+		return 0, false
+	}
 	if models.IsLocalProvider(provider) {
 		return 0, true
 	}

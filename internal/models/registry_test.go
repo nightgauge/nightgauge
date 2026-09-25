@@ -261,7 +261,8 @@ type providerForCases struct {
 		Endpoints []struct {
 			ID       string `json:"id"`
 			Provider string `json:"provider"`
-			BaseURL  string `json:"base_url"`
+			BaseURL    string `json:"base_url"`
+			SelfHosted *bool  `json:"self_hosted"`
 		} `json:"endpoints"`
 		Local bool `json:"local"`
 	} `json:"is_local_model"`
@@ -385,7 +386,7 @@ func TestIsLocalModel(t *testing.T) {
 	for _, tc := range cases {
 		eps := make([]LocalEndpoint, 0, len(tc.Endpoints))
 		for _, e := range tc.Endpoints {
-			eps = append(eps, LocalEndpoint{ID: e.ID, Provider: e.Provider, BaseURL: e.BaseURL})
+			eps = append(eps, LocalEndpoint{ID: e.ID, Provider: e.Provider, BaseURL: e.BaseURL, SelfHosted: e.SelfHosted})
 		}
 		if got := IsLocalModel(tc.Adapter, tc.Model, eps); got != tc.Local {
 			t.Errorf("%s: IsLocalModel(%s, %s) = %v, want %v", tc.Name, tc.Adapter, tc.Model, got, tc.Local)

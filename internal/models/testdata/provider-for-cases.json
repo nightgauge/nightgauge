@@ -681,6 +681,61 @@
         }
       ],
       "local": false
+    },
+    {
+      "name": "a loopback proxy endpoint marked self_hosted false is not local (#1679)",
+      "adapter": "opencode",
+      "model": "litellm/claude-sonnet-4-5",
+      "endpoints": [
+        {
+          "id": "litellm",
+          "provider": "openai-compatible",
+          "base_url": "http://127.0.0.1:4000/v1",
+          "self_hosted": false
+        }
+      ],
+      "local": false
+    },
+    {
+      "name": "a loopback endpoint marked self_hosted true is local",
+      "adapter": "opencode",
+      "model": "omlx/qwen3-coder-30b",
+      "endpoints": [
+        {
+          "id": "omlx",
+          "provider": "openai-compatible",
+          "base_url": "http://127.0.0.1:8000/v1",
+          "self_hosted": true
+        }
+      ],
+      "local": true
+    },
+    {
+      "name": "an Ollama cloud model on the ollama key is not local (#1679)",
+      "adapter": "opencode",
+      "model": "ollama/gpt-oss:120b-cloud",
+      "endpoints": [],
+      "local": false
+    },
+    {
+      "name": "an Ollama cloud tag on a declared ollama endpoint is not local",
+      "adapter": "opencode",
+      "model": "gpu-box/qwen3-coder:cloud",
+      "endpoints": [
+        {
+          "id": "gpu-box",
+          "provider": "ollama",
+          "base_url": "http://127.0.0.1:11434/v1"
+        }
+      ],
+      "local": false
+    },
+    {
+      "name": "an Ollama model that runs on the endpoint stays local",
+      "adapter": "opencode",
+      "model": "ollama/qwen3-coder:30b",
+      "endpoints": [],
+      "local": true
     }
   ]
 }
