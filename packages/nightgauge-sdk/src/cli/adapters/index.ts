@@ -16,7 +16,16 @@ export { ClaudeHeadlessAdapter } from "./ClaudeHeadlessAdapter.js";
 export { CodexAdapter } from "./CodexAdapter.js";
 export { GeminiAdapter } from "./GeminiAdapter.js";
 export { GeminiSdkAdapter } from "./GeminiSdkAdapter.js";
-export { LmStudioAdapter } from "./LmStudioAdapter.js";
+export {
+  OpenAiCompatibleAdapter,
+  resolveOpenAiCompatibleConfig,
+  buildOpenAiCompatibleHeaders,
+} from "./OpenAiCompatibleAdapter.js";
+export type {
+  OpenAiCompatibleConfig,
+  OpenAiCompatibleName,
+  ResolvedOpenAiCompatibleConfig,
+} from "./OpenAiCompatibleAdapter.js";
 export { CopilotCliAdapter } from "./CopilotCliAdapter.js";
 export { GrokAdapter, GROK_MIN_KNOWN_VERSION } from "./GrokAdapter.js";
 export { summarizeGrokStream, isGrokQuotaMessage, isGrokAuthMessage } from "./grokStream.js";

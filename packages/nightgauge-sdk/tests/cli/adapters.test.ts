@@ -14,7 +14,7 @@ import { ClaudeHeadlessAdapter } from "../../src/cli/adapters/ClaudeHeadlessAdap
 import { CodexAdapter } from "../../src/cli/adapters/CodexAdapter.js";
 import { GeminiAdapter } from "../../src/cli/adapters/GeminiAdapter.js";
 import { GeminiSdkAdapter } from "../../src/cli/adapters/GeminiSdkAdapter.js";
-import { LmStudioAdapter } from "../../src/cli/adapters/LmStudioAdapter.js";
+import { OpenAiCompatibleAdapter } from "../../src/cli/adapters/OpenAiCompatibleAdapter.js";
 import { CopilotCliAdapter } from "../../src/cli/adapters/CopilotCliAdapter.js";
 import { GrokAdapter } from "../../src/cli/adapters/GrokAdapter.js";
 import type { ICliAdapter } from "../../src/cli/adapters/ICliAdapter.js";
@@ -49,7 +49,7 @@ function allAdapters(): ICliAdapter[] {
     new CodexAdapter(),
     new GeminiAdapter(),
     new GeminiSdkAdapter(),
-    new LmStudioAdapter(),
+    new OpenAiCompatibleAdapter("lm-studio"),
     new CopilotCliAdapter(),
     new GrokAdapter(),
   ];
@@ -199,8 +199,8 @@ describe("SDK-based adapter validateAuth", () => {
     await expect(adapter.validateAuth({})).resolves.toBe("passed");
   });
 
-  it('LmStudioAdapter.validateAuth always returns "passed"', async () => {
-    const adapter = new LmStudioAdapter();
+  it('OpenAiCompatibleAdapter.validateAuth always returns "passed"', async () => {
+    const adapter = new OpenAiCompatibleAdapter("lm-studio");
     await expect(adapter.validateAuth()).resolves.toBe("passed");
     await expect(adapter.validateAuth({})).resolves.toBe("passed");
   });
@@ -223,12 +223,12 @@ describe("createQueryFunction contract", () => {
     await expect(adapter.createQueryFunction()).rejects.toThrow();
   });
 
-  it("LmStudioAdapter.createQueryFunction rejects when model is not configured", async () => {
+  it("OpenAiCompatibleAdapter(lm-studio).createQueryFunction rejects when model is not configured", async () => {
     const original = process.env.NIGHTGAUGE_LM_STUDIO_MODEL;
     delete process.env.NIGHTGAUGE_LM_STUDIO_MODEL;
 
     try {
-      await expect(new LmStudioAdapter().createQueryFunction()).rejects.toThrow(
+      await expect(new OpenAiCompatibleAdapter("lm-studio").createQueryFunction()).rejects.toThrow(
         /NIGHTGAUGE_LM_STUDIO_MODEL/
       );
     } finally {

@@ -372,7 +372,7 @@ export const codexEvalProfile: EvalAdapterProfile = {
 
 /**
  * LM Studio has no local CLI process this executor spawns like Claude/Codex —
- * it is an OpenAI-compatible HTTP server ({@link LmStudioAdapter}, fetch/SSE
+ * it is an OpenAI-compatible HTTP server (the generic OpenAI-compatible backend (`OpenAiCompatibleAdapter`, #2128), fetch/SSE
  * over `/chat/completions`), so there is no argv/stdout dialect to build or
  * parse here. This profile exists so `resolveEvalAdapterProfileForAdapter`
  * (#1622) can resolve `opencode` + a local model to a real, provider-correct
@@ -396,13 +396,13 @@ export const lmStudioEvalProfile: EvalAdapterProfile = {
   buildSpawnPlan(_model, _effort, _reasoning) {
     throw new UnsupportedCellError(
       "lm-studio live eval spawn is not wired yet — it is an HTTP adapter " +
-        "(LmStudioAdapter), not a spawned CLI process. Wiring the live spawn leg is #1658."
+        "(OpenAiCompatibleAdapter), not a spawned CLI process. Wiring the live spawn leg is #1658."
     );
   },
 
   parseResult(_stdout) {
     throw new UnsupportedCellError(
-      "lm-studio has no CLI stdout to parse — it is an HTTP adapter (LmStudioAdapter), " +
+      "lm-studio has no CLI stdout to parse — it is an HTTP adapter (OpenAiCompatibleAdapter), " +
         "not a spawned CLI process. Wiring the live spawn leg is #1658."
     );
   },

@@ -11,8 +11,7 @@ import { ClaudeHeadlessAdapter } from "../../src/cli/adapters/ClaudeHeadlessAdap
 import { CodexAdapter } from "../../src/cli/adapters/CodexAdapter.js";
 import { GeminiAdapter } from "../../src/cli/adapters/GeminiAdapter.js";
 import { GeminiSdkAdapter } from "../../src/cli/adapters/GeminiSdkAdapter.js";
-import { LmStudioAdapter } from "../../src/cli/adapters/LmStudioAdapter.js";
-import { OllamaAdapter } from "../../src/cli/adapters/OllamaAdapter.js";
+import { OpenAiCompatibleAdapter } from "../../src/cli/adapters/OpenAiCompatibleAdapter.js";
 import { CopilotCliAdapter } from "../../src/cli/adapters/CopilotCliAdapter.js";
 import { GrokAdapter } from "../../src/cli/adapters/GrokAdapter.js";
 import type {
@@ -94,7 +93,7 @@ const ADAPTER_TABLE: AdapterTestCase[] = [
     },
   },
   {
-    adapter: new LmStudioAdapter(),
+    adapter: new OpenAiCompatibleAdapter("lm-studio"),
     expected: {
       name: "lm-studio",
       displayName: "LM Studio",
@@ -105,7 +104,7 @@ const ADAPTER_TABLE: AdapterTestCase[] = [
     },
   },
   {
-    adapter: new OllamaAdapter(),
+    adapter: new OpenAiCompatibleAdapter("ollama"),
     expected: {
       name: "ollama",
       displayName: "Ollama",

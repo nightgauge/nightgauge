@@ -6,8 +6,7 @@ import { ClaudeHeadlessAdapter } from "../../src/cli/adapters/ClaudeHeadlessAdap
 import { CodexAdapter } from "../../src/cli/adapters/CodexAdapter.js";
 import { GeminiAdapter } from "../../src/cli/adapters/GeminiAdapter.js";
 import { GeminiSdkAdapter } from "../../src/cli/adapters/GeminiSdkAdapter.js";
-import { LmStudioAdapter } from "../../src/cli/adapters/LmStudioAdapter.js";
-import { OllamaAdapter } from "../../src/cli/adapters/OllamaAdapter.js";
+import { OpenAiCompatibleAdapter } from "../../src/cli/adapters/OpenAiCompatibleAdapter.js";
 import { CopilotCliAdapter } from "../../src/cli/adapters/CopilotCliAdapter.js";
 
 function createMockAdapter(name: NightgaugeAdapter, displayName = "Mock"): ICliAdapter {
@@ -120,8 +119,8 @@ describe("defaultRegistry", () => {
     expect(defaultRegistry.get("codex")).toBeInstanceOf(CodexAdapter);
     expect(defaultRegistry.get("gemini")).toBeInstanceOf(GeminiAdapter);
     expect(defaultRegistry.get("gemini-sdk")).toBeInstanceOf(GeminiSdkAdapter);
-    expect(defaultRegistry.get("lm-studio")).toBeInstanceOf(LmStudioAdapter);
-    expect(defaultRegistry.get("ollama")).toBeInstanceOf(OllamaAdapter);
+    expect(defaultRegistry.get("lm-studio")).toBeInstanceOf(OpenAiCompatibleAdapter);
+    expect(defaultRegistry.get("ollama")).toBeInstanceOf(OpenAiCompatibleAdapter);
     expect(defaultRegistry.get("copilot")).toBeInstanceOf(CopilotCliAdapter);
   });
 });
