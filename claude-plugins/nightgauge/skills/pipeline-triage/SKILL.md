@@ -174,8 +174,8 @@ Safe, reversible operational actions this skill MAY take with `--fix`:
 
 NEVER, even with `--fix`:
 
-- Force-push, reset, or any destructive git op (the safety hooks block these for
-  a reason).
+- Force-push, reset, or any destructive git op (the safety hooks block the
+  dangerous forms for a reason).
 - Merge a PR (let the pr-merge stage handle merges).
 - Edit pipeline state files directly.
 - "Fix" a code-level root cause by improvising — instead file a precise issue

@@ -135,12 +135,16 @@ func TestGateSkipWorkflowGateOverride(t *testing.T) {
 	}
 }
 
-func TestGateBlocksForcePush(t *testing.T) {
+// Force pushes are blocked only when they target main/master (#2124); the
+// feature-branch cases live in gate_forcepush_test.go.
+func TestGateBlocksForcePushToMain(t *testing.T) {
 	blocked := []string{
-		"git push -f origin feat/42",
-		"git push --force origin feat/42",
-		"git push --force-with-lease origin feat/42",
-		"git push origin +feat/42",
+		"git push -f origin main",
+		"git push --force origin master",
+		"git push --force-with-lease origin HEAD:main",
+		"git push origin +main",
+		"git push --mirror --force origin",
+		"git push --all -f origin",
 	}
 
 	for _, cmd := range blocked {
@@ -341,7 +345,7 @@ func TestGateWarnModeStillBlocksNonSanitizationGates(t *testing.T) {
 		cmd  string
 	}{
 		{"push to main", "git push origin main"},
-		{"force push", "git push -f origin feat/42"},
+		{"force push to main", "git push -f origin main"},
 		{"destructive git", "git reset --hard HEAD~1"},
 		{"secret read", "cat .env"},
 		{"secret write", "echo TOKEN=xyz > .env"},
@@ -379,7 +383,7 @@ func TestGateDisabledModeStillBlocksNonSanitizationGates(t *testing.T) {
 		cmd  string
 	}{
 		{"push to main", "git push origin main"},
-		{"force push", "git push -f origin feat/42"},
+		{"force push to main", "git push -f origin main"},
 		{"destructive git", "git reset --hard HEAD~1"},
 		{"secret read", "cat .env"},
 		{"secret write", "echo TOKEN=xyz > .env"},

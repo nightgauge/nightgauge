@@ -102,7 +102,8 @@ security boundary.
 
 - **Claude command gates** — on the Claude plugin path, a PreToolUse hook parses
   `git`/`gh` argv and blocks known destructive patterns, privilege escalation,
-  force pushes, and pushes to `main`. These hooks do not wrap every provider.
+  pushes to `main`, forced or not. A force push to a feature branch is left
+  to server-side rulesets. These hooks do not wrap every provider.
   In particular, autonomous Codex execution may use
   `--dangerously-bypass-approvals-and-sandbox`; run it only in an externally
   isolated environment appropriate for the repository's trust level. See

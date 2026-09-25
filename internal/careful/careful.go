@@ -132,7 +132,7 @@ type Command struct {
 // single pipeline that actually runs a SQL client, so `echo 'DROP TABLE' | psql`
 // is blocked while `echo "DROP TABLE plan"; psql -e 'select 1'` (separate
 // commands, no DROP reaching the client) is not. These complement — they do not
-// duplicate — the always-on workflow gate (main-push, force-push, reset --hard,
+// duplicate — the always-on workflow gate (main-push incl. force, reset --hard,
 // clean -f, secret read/write).
 func DestructiveProdReason(pipelines [][]Command) string {
 	for _, pipe := range pipelines {
