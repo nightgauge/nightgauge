@@ -67,14 +67,6 @@ vi.mock("../../../src/views/settings/NightgaugeYamlService", () => ({
   getConfigValue: vi.fn(),
 }));
 
-vi.mock("../../../src/services/LmStudioService", () => ({
-  LmStudioService: class LmStudioServiceMock {
-    listModels = vi.fn().mockResolvedValue([]);
-    startServer = vi.fn().mockResolvedValue(undefined);
-    loadModel = vi.fn().mockResolvedValue(undefined);
-  },
-}));
-
 vi.mock("../../../src/services/CodexModelCatalogService", () => ({
   CodexModelCatalogService: class CodexModelCatalogServiceMock {
     listModels = vi.fn(() => ["gpt-5.4"]);
@@ -106,15 +98,6 @@ describe("SettingsPanel adapter change handling", () => {
     panel.handleChange("ui.core.adapter", "codex");
 
     expect(refreshCodexModels).not.toHaveBeenCalled();
-  });
-
-  it("does not auto-refresh LM Studio models when adapter changes", () => {
-    const panel = new SettingsPanel({ fsPath: "/ext" } as never, "/workspace") as any;
-    const refreshLmStudioModels = vi.spyOn(panel, "refreshLmStudioModels");
-
-    panel.handleChange("ui.core.adapter", "lm-studio");
-
-    expect(refreshLmStudioModels).not.toHaveBeenCalled();
   });
 
   it("keeps merged-view saves in config.local.yaml after tiers load", async () => {

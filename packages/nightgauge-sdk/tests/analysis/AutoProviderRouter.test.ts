@@ -451,8 +451,7 @@ describe("AutoProviderRouter — RouterExecutionAdapter derivation (#3912)", () 
       "codex",
       "gemini",
       "gemini-sdk",
-      "lm-studio",
-      "ollama",
+      "openai-compatible",
       "copilot",
     ];
     const asNightgauge: NightgaugeAdapter[] = adapters;
@@ -543,12 +542,12 @@ describe("AutoProviderRouter — workflow sub-score (#3912)", () => {
       "feature-dev",
       makeCtx({
         requires_workflow: true,
-        available_adapters: ["codex", "ollama"],
+        available_adapters: ["codex", "openai-compatible"],
         confidence_threshold: 0,
       })
     );
     expect(decision).not.toBeNull();
-    // Codex (sdk-fanout, strong capability + large window) out-scores Ollama.
+    // Codex (sdk-fanout, strong capability + large window) out-scores the OpenAI-compatible backend.
     expect(decision!.adapter).toBe("codex");
   });
 

@@ -51,8 +51,6 @@ export interface GoAdapterHealth {
   version_ok: boolean;
   min_version?: string;
   mcp?: { config_path: string; config_present: boolean; managed_block: boolean };
-  server_url?: string;
-  server_reachable?: boolean;
   model?: string;
   model_ok?: boolean;
   ok: boolean;
@@ -75,8 +73,7 @@ const SDK_ADAPTER_DISPLAY: Record<string, string> = {
   codex: "Codex",
   gemini: "Gemini",
   "gemini-sdk": "Gemini SDK",
-  ollama: "Ollama",
-  "lm-studio": "LM Studio",
+  "openai-compatible": "OpenAI-compatible",
   copilot: "GitHub Copilot",
   grok: "Grok",
   opencode: "OpenCode",
@@ -85,15 +82,6 @@ const SDK_ADAPTER_DISPLAY: Record<string, string> = {
 function displayName(sdkAdapter: string): string {
   return SDK_ADAPTER_DISPLAY[sdkAdapter] ?? sdkAdapter;
 }
-
-/**
- * Local HTTP adapters whose SDK `validateAuth` is a deliberate no-op (they
- * validate model/connectivity at query time, not during auth — a documented
- * adapter contract). Their auth verdict is therefore NOT a readiness signal, so
- * when the Go binary's deterministic checks (model env + claude bridge) are
- * unavailable we cannot claim them ready (#4031 review).
- */
-const LOCAL_HTTP_ADAPTERS: ReadonlySet<string> = new Set(["ollama", "lm-studio"]);
 
 /** Per-stage adapter+model resolution, before health status is attached. */
 export interface StageRouting {
@@ -234,24 +222,16 @@ export function mergeAdapterRows(
     const versionOk = binaryResolved ? (g?.version_ok ?? true) : true;
 
     // Readiness:
-    //  - Go present → honor Go's own ok bit (install/version for CLI/SDK;
-    //    plus server reachability and catalog membership for HTTP, #520)
+    //  - Go present → honor Go's own ok bit (install/version for CLI/SDK)
     //    and combine with the auth verdict. Do not recompute from installed
-    //    + version_ok alone — that papered over model_ok / server_reachable
-    //    failures while installed stayed true.
-    //  - Go absent + local HTTP adapter → its auth probe is a no-op, so we cannot
-    //    confirm the model env / claude bridge; do NOT claim ready.
+    //    + version_ok alone — that papered over model_ok failures while
+    //    installed stayed true.
     //  - Go absent + CLI/SDK adapter → the auth probe IS a real signal (a CLI
     //    adapter can't pass `… auth status` unless installed; SDK adapters check
     //    their API key in validateAuth), so auth alone is a sound readiness proxy.
     let ok: boolean;
     if (binaryResolved) {
       ok = (g?.ok ?? (installed && versionOk)) && authOk;
-    } else if (LOCAL_HTTP_ADAPTERS.has(a)) {
-      ok = false;
-      remediations.push(
-        "Cannot verify readiness without the nightgauge binary — install it or set nightgauge.backend.binaryPath."
-      );
     } else {
       ok = authOk;
     }

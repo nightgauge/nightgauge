@@ -93,22 +93,11 @@ const ADAPTER_TABLE: AdapterTestCase[] = [
     },
   },
   {
-    adapter: new OpenAiCompatibleAdapter("lm-studio"),
+    adapter: new OpenAiCompatibleAdapter(),
     expected: {
-      name: "lm-studio",
-      displayName: "LM Studio",
-      cliCommand: "lm-studio",
-      requiresDirectApiKey: false,
-      agentic: false,
-      orchestrationCapability: "sdk-fanout",
-    },
-  },
-  {
-    adapter: new OpenAiCompatibleAdapter("ollama"),
-    expected: {
-      name: "ollama",
-      displayName: "Ollama",
-      cliCommand: "ollama",
+      name: "openai-compatible",
+      displayName: "OpenAI-compatible",
+      cliCommand: "openai-compatible",
       requiresDirectApiKey: false,
       agentic: false,
       orchestrationCapability: "sdk-fanout",

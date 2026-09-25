@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+
+	"github.com/nightgauge/nightgauge/internal/config"
 )
 
 // AdapterFactory is a constructor function for a SkillRunner.
@@ -34,8 +36,6 @@ func NewRegistry() *Registry {
 			"codex":           func() SkillRunner { return NewCodexAdapter() },
 			"gemini":          func() SkillRunner { return NewGeminiAdapter() },
 			"gemini-sdk":      func() SkillRunner { return NewGeminiSdkAdapter() },
-			"ollama":          func() SkillRunner { return NewOllamaAdapter() },
-			"lm-studio":       func() SkillRunner { return NewLmStudioAdapter() },
 			"copilot":         func() SkillRunner { return NewCopilotAdapter() },
 			"grok":            func() SkillRunner { return NewGrokAdapter() },
 			"opencode":        func() SkillRunner { return NewOpenCodeAdapter() },
@@ -43,7 +43,6 @@ func NewRegistry() *Registry {
 		aliases: map[string]string{
 			"claude":          "claude-headless",
 			"gemini-headless": "gemini",
-			"lmstudio":        "lm-studio",
 			"grok-headless":   "grok",
 			"xai":             "grok",
 		},
@@ -54,6 +53,9 @@ func NewRegistry() *Registry {
 // Get returns a SkillRunner by name, resolving aliases.
 // Returns an error if the adapter name is unknown.
 func (r *Registry) Get(name string) (SkillRunner, error) {
+	if err := config.RetiredAdapterError(name, "adapter"); err != nil {
+		return nil, err
+	}
 	resolved := r.resolve(name)
 	factory, ok := r.factories[resolved]
 	if !ok {
@@ -164,10 +166,6 @@ func adapterBinary(name string) string {
 		return "codex"
 	case strings.HasPrefix(name, "gemini"):
 		return "gemini"
-	case name == "ollama":
-		return "claude" // Ollama uses the claude CLI as SDK bridge
-	case name == "lm-studio":
-		return "claude" // LM Studio uses the claude CLI as SDK bridge
 	case name == "copilot":
 		return "copilot"
 	case name == "grok" || strings.HasPrefix(name, "grok"):
@@ -190,10 +188,6 @@ func adapterDisplayName(name string) string {
 		return "Gemini Headless"
 	case "gemini-sdk":
 		return "Gemini SDK"
-	case "ollama":
-		return "Ollama"
-	case "lm-studio":
-		return "LM Studio"
 	case "copilot":
 		return "GitHub Copilot"
 	case "grok":

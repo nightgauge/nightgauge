@@ -5,7 +5,7 @@
  * --script tool-edit-stop`), a deterministic, loopback-only, scripted
  * OpenAI-compatible server (see internal/stubprovider). It reads the
  * `base_url` the process prints on stdout, points `OpenAiCompatibleAdapter` at it via
- * `NIGHTGAUGE_LM_STUDIO_BASE_URL`, and drives one streamed chat completion
+ * `NIGHTGAUGE_OPENAI_COMPATIBLE_BASE_URL`, and drives one streamed chat completion
  * end to end. This proves the stub works for any base-URL adapter, not just
  * an experimental OpenCode stage.
  *
@@ -170,21 +170,21 @@ describe.skipIf(!isGoAvailable())(
     let savedModel: string | undefined;
 
     beforeAll(async () => {
-      savedBaseUrl = process.env.NIGHTGAUGE_LM_STUDIO_BASE_URL;
-      savedModel = process.env.NIGHTGAUGE_LM_STUDIO_MODEL;
+      savedBaseUrl = process.env.NIGHTGAUGE_OPENAI_COMPATIBLE_BASE_URL;
+      savedModel = process.env.NIGHTGAUGE_OPENAI_COMPATIBLE_MODEL;
       stub = await startStubProvider("tool-edit-stop");
     }, 60_000);
 
     afterAll(async () => {
       if (savedBaseUrl !== undefined) {
-        process.env.NIGHTGAUGE_LM_STUDIO_BASE_URL = savedBaseUrl;
+        process.env.NIGHTGAUGE_OPENAI_COMPATIBLE_BASE_URL = savedBaseUrl;
       } else {
-        delete process.env.NIGHTGAUGE_LM_STUDIO_BASE_URL;
+        delete process.env.NIGHTGAUGE_OPENAI_COMPATIBLE_BASE_URL;
       }
       if (savedModel !== undefined) {
-        process.env.NIGHTGAUGE_LM_STUDIO_MODEL = savedModel;
+        process.env.NIGHTGAUGE_OPENAI_COMPATIBLE_MODEL = savedModel;
       } else {
-        delete process.env.NIGHTGAUGE_LM_STUDIO_MODEL;
+        delete process.env.NIGHTGAUGE_OPENAI_COMPATIBLE_MODEL;
       }
 
       if (!stub) return;
@@ -202,10 +202,10 @@ describe.skipIf(!isGoAvailable())(
     }, 10_000);
 
     it("streams a chat completion from the stub and reports non-zero usage tokens", async () => {
-      process.env.NIGHTGAUGE_LM_STUDIO_BASE_URL = stub.baseUrl;
-      process.env.NIGHTGAUGE_LM_STUDIO_MODEL = "stub/stub-model";
+      process.env.NIGHTGAUGE_OPENAI_COMPATIBLE_BASE_URL = stub.baseUrl;
+      process.env.NIGHTGAUGE_OPENAI_COMPATIBLE_MODEL = "stub/stub-model";
 
-      const adapter = new OpenAiCompatibleAdapter("lm-studio");
+      const adapter = new OpenAiCompatibleAdapter();
       const queryFn = await adapter.createQueryFunction();
 
       const messages: Array<Record<string, unknown>> = [];

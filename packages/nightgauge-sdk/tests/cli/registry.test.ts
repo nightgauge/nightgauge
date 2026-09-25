@@ -44,8 +44,7 @@ describe("AdapterRegistry registration", () => {
       "codex",
       "gemini",
       "gemini-sdk",
-      "lm-studio",
-      "ollama",
+      "openai-compatible",
       "copilot",
       "grok",
     ];
@@ -54,7 +53,7 @@ describe("AdapterRegistry registration", () => {
       registry.register(createMockAdapter(name));
     }
 
-    expect(registry.getNames()).toHaveLength(9);
+    expect(registry.getNames()).toHaveLength(8);
     for (const name of names) {
       expect(registry.has(name)).toBe(true);
       expect(registry.get(name).name).toBe(name);
@@ -144,15 +143,14 @@ describe("defaultRegistry completeness", () => {
     "codex",
     "gemini",
     "gemini-sdk",
-    "lm-studio",
-    "ollama",
+    "openai-compatible",
     "copilot",
     "grok",
     "opencode",
   ];
 
   it("contains exactly the registered adapters", () => {
-    expect(defaultRegistry.getAll()).toHaveLength(10);
+    expect(defaultRegistry.getAll()).toHaveLength(9);
   });
 
   it("has() returns true for every NightgaugeAdapter name", () => {
@@ -233,13 +231,13 @@ describe("multi-tool adapter lookup", () => {
     }
 
     // Verify the matrix has entries for all adapters
-    expect(Object.keys(matrix)).toHaveLength(10);
+    expect(Object.keys(matrix)).toHaveLength(9);
 
     // Claude adapters offload to native workflows; everything else fans out.
     expect(matrix["claude-sdk"]).toBe("native-workflow");
     expect(matrix["claude-headless"]).toBe("native-workflow");
     expect(matrix["codex"]).toBe("sdk-fanout");
-    expect(matrix["lm-studio"]).toBe("sdk-fanout");
+    expect(matrix["openai-compatible"]).toBe("sdk-fanout");
     expect(matrix["opencode"]).toBe("sdk-fanout");
   });
 });

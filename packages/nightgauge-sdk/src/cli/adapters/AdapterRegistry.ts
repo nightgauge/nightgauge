@@ -64,10 +64,8 @@ function createDefaultRegistry(): AdapterRegistry {
   registry.register(new CodexAdapter());
   registry.register(new GeminiAdapter());
   registry.register(new GeminiSdkAdapter());
-  // #2128: one generic OpenAI-compatible eval/judge backend, under the
-  // legacy names until part 3 moves the enum to `openai-compatible`.
-  registry.register(new OpenAiCompatibleAdapter("lm-studio"));
-  registry.register(new OpenAiCompatibleAdapter("ollama"));
+  // #2128: one generic OpenAI-compatible eval/judge backend.
+  registry.register(new OpenAiCompatibleAdapter());
   registry.register(new CopilotCliAdapter());
   registry.register(new GrokAdapter());
   registry.register(new OpenCodeAdapter()); // Issue #1637, ADR-022

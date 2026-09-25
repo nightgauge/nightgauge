@@ -49,7 +49,7 @@ function allAdapters(): ICliAdapter[] {
     new CodexAdapter(),
     new GeminiAdapter(),
     new GeminiSdkAdapter(),
-    new OpenAiCompatibleAdapter("lm-studio"),
+    new OpenAiCompatibleAdapter(),
     new CopilotCliAdapter(),
     new GrokAdapter(),
   ];
@@ -76,8 +76,7 @@ describe("adapter constructors", () => {
       "codex",
       "gemini",
       "gemini-sdk",
-      "lm-studio",
-      "ollama",
+      "openai-compatible",
       "copilot",
       "grok",
     ]);
@@ -200,7 +199,7 @@ describe("SDK-based adapter validateAuth", () => {
   });
 
   it('OpenAiCompatibleAdapter.validateAuth always returns "passed"', async () => {
-    const adapter = new OpenAiCompatibleAdapter("lm-studio");
+    const adapter = new OpenAiCompatibleAdapter();
     await expect(adapter.validateAuth()).resolves.toBe("passed");
     await expect(adapter.validateAuth({})).resolves.toBe("passed");
   });
@@ -223,17 +222,17 @@ describe("createQueryFunction contract", () => {
     await expect(adapter.createQueryFunction()).rejects.toThrow();
   });
 
-  it("OpenAiCompatibleAdapter(lm-studio).createQueryFunction rejects when model is not configured", async () => {
-    const original = process.env.NIGHTGAUGE_LM_STUDIO_MODEL;
-    delete process.env.NIGHTGAUGE_LM_STUDIO_MODEL;
+  it("OpenAiCompatibleAdapter.createQueryFunction rejects when model is not configured", async () => {
+    const original = process.env.NIGHTGAUGE_OPENAI_COMPATIBLE_MODEL;
+    delete process.env.NIGHTGAUGE_OPENAI_COMPATIBLE_MODEL;
 
     try {
-      await expect(new OpenAiCompatibleAdapter("lm-studio").createQueryFunction()).rejects.toThrow(
-        /NIGHTGAUGE_LM_STUDIO_MODEL/
-      );
+      await expect(
+        new OpenAiCompatibleAdapter({ baseUrl: "http://127.0.0.1:1234/v1" }).createQueryFunction()
+      ).rejects.toThrow(/NIGHTGAUGE_OPENAI_COMPATIBLE_MODEL/);
     } finally {
       if (original !== undefined) {
-        process.env.NIGHTGAUGE_LM_STUDIO_MODEL = original;
+        process.env.NIGHTGAUGE_OPENAI_COMPATIBLE_MODEL = original;
       }
     }
   });
@@ -277,7 +276,7 @@ describe("multi-tool requiresDirectApiKey partitioning", () => {
       "copilot",
       "gemini",
       "grok",
-      "lm-studio",
+      "openai-compatible",
     ]);
   });
 });

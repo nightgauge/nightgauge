@@ -97,8 +97,7 @@ describe("defaultRegistry", () => {
     "codex",
     "gemini",
     "gemini-sdk",
-    "lm-studio",
-    "ollama",
+    "openai-compatible",
     "copilot",
     "grok",
     "opencode",
@@ -107,7 +106,7 @@ describe("defaultRegistry", () => {
   it("should contain all built-in adapters", () => {
     const names = defaultRegistry.getNames();
 
-    expect(names).toHaveLength(10);
+    expect(names).toHaveLength(9);
     for (const name of expectedNames) {
       expect(names).toContain(name);
     }
@@ -119,8 +118,7 @@ describe("defaultRegistry", () => {
     expect(defaultRegistry.get("codex")).toBeInstanceOf(CodexAdapter);
     expect(defaultRegistry.get("gemini")).toBeInstanceOf(GeminiAdapter);
     expect(defaultRegistry.get("gemini-sdk")).toBeInstanceOf(GeminiSdkAdapter);
-    expect(defaultRegistry.get("lm-studio")).toBeInstanceOf(OpenAiCompatibleAdapter);
-    expect(defaultRegistry.get("ollama")).toBeInstanceOf(OpenAiCompatibleAdapter);
+    expect(defaultRegistry.get("openai-compatible")).toBeInstanceOf(OpenAiCompatibleAdapter);
     expect(defaultRegistry.get("copilot")).toBeInstanceOf(CopilotCliAdapter);
   });
 });

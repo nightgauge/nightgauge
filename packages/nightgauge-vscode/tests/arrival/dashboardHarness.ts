@@ -387,7 +387,6 @@ export function projectBoardServiceMockModule() {
  * `tests/setup.ts` mocks ConfigBridge suite-wide but its instance omits
  * `getPlatform` (which `AuditLogService`'s base-URL resolver needs). Replacing
  * that mock per-file means re-supplying everything the *renderer* reads too —
- * `getUI` and `getLmStudio` feed the adapter-status widget on every render —
  * so this returns the product's own defaults rather than a hand-picked subset.
  */
 export async function configBridgeMockModule() {
@@ -396,7 +395,6 @@ export async function configBridgeMockModule() {
     isInitialized: vi.fn(() => true),
     getUI: vi.fn(() => DEFAULT_CONFIG.ui),
     getPipeline: vi.fn(() => DEFAULT_CONFIG.pipeline),
-    getLmStudio: vi.fn(() => DEFAULT_CONFIG.lm_studio),
     // undefined → resolvePlatformBaseUrl() returns the production preset.
     getPlatform: vi.fn(() => undefined),
     getEffectiveConfig: vi.fn(() => ({ config: DEFAULT_CONFIG })),

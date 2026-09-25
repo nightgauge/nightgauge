@@ -300,8 +300,7 @@ func TestRunDoctor_FailedChecksNamesRequiredFailures(t *testing.T) {
 // in result.Adapters, never as a required failure that adds to result.Errors.
 func TestRunDoctor_UnhealthyAdapterIsWarningNotError(t *testing.T) {
 	ctx := context.Background()
-	// ollama with no model env set → not ready (an unhealthy adapter).
-	t.Setenv("NIGHTGAUGE_OLLAMA_MODEL", "")
+	// ollama was removed (#2128) → not ready, with the migration as remediation.
 
 	result := RunDoctor(ctx, nil, nil, []string{"ollama"})
 
@@ -309,7 +308,10 @@ func TestRunDoctor_UnhealthyAdapterIsWarningNotError(t *testing.T) {
 		t.Fatalf("expected one ollama adapter entry, got %+v", result.Adapters)
 	}
 	if result.Adapters[0].OK {
-		t.Error("expected ollama to be not-OK with no model env")
+		t.Error("expected the removed ollama adapter to be not-OK")
+	}
+	if !strings.Contains(result.Adapters[0].Remediation, "openai-compatible") {
+		t.Errorf("expected the migration remediation, got %q", result.Adapters[0].Remediation)
 	}
 	for _, e := range result.Errors {
 		if strings.Contains(e, "ollama") {

@@ -8,14 +8,14 @@ describe("SettingsMessageHandler", () => {
 
     handler.handleMessage({
       type: "action",
-      action: "lm-studio-refresh-models",
+      action: "codex-refresh-models",
       payload: {
-        "lm_studio.base_url": "http://localhost:1234/v1",
+        projectNumber: 7,
       },
     });
 
-    expect(onAction).toHaveBeenCalledWith("lm-studio-refresh-models", {
-      "lm_studio.base_url": "http://localhost:1234/v1",
+    expect(onAction).toHaveBeenCalledWith("codex-refresh-models", {
+      projectNumber: 7,
     });
   });
 
@@ -25,14 +25,14 @@ describe("SettingsMessageHandler", () => {
 
     handler.handleMessage({
       type: "action",
-      action: "lm-studio-load-model",
+      action: "opencode-refresh-models",
       payload: {
-        "lm_studio.model": "openai/gpt-oss-20b",
+        projectNumber: 7,
       },
     });
 
-    expect(onAction).toHaveBeenCalledWith("lm-studio-load-model", {
-      "lm_studio.model": "openai/gpt-oss-20b",
+    expect(onAction).toHaveBeenCalledWith("opencode-refresh-models", {
+      projectNumber: 7,
     });
   });
 });

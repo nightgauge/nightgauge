@@ -47,20 +47,19 @@ afterEach(() => {
 describe("resolveOpenAiCompatibleConfig", () => {
   it("prefers explicit config over the environment and trims a trailing slash", () => {
     const r = resolveOpenAiCompatibleConfig(
-      "lm-studio",
       { baseUrl: "http://127.0.0.1:8000/v1/", model: "m" },
-      { NIGHTGAUGE_LM_STUDIO_BASE_URL: "http://other/v1" }
+      { NIGHTGAUGE_OPENAI_COMPATIBLE_BASE_URL: "http://other/v1" }
     );
     expect(r.baseUrl).toBe("http://127.0.0.1:8000/v1");
     expect(r.model).toBe("m");
-    expect(r.apiKeyEnv).toBe("NIGHTGAUGE_LM_STUDIO_API_KEY");
+    expect(r.apiKeyEnv).toBe("NIGHTGAUGE_OPENAI_COMPATIBLE_API_KEY");
   });
 
   it("reads base_url, model and the key variable's name from the environment", () => {
-    const r = resolveOpenAiCompatibleConfig("lm-studio", undefined, {
-      NIGHTGAUGE_LM_STUDIO_BASE_URL: "https://api.example.com/v1",
-      NIGHTGAUGE_LM_STUDIO_MODEL: "judge-1",
-      NIGHTGAUGE_LM_STUDIO_API_KEY_ENV: "MY_KEY",
+    const r = resolveOpenAiCompatibleConfig(undefined, {
+      NIGHTGAUGE_OPENAI_COMPATIBLE_BASE_URL: "https://api.example.com/v1",
+      NIGHTGAUGE_OPENAI_COMPATIBLE_MODEL: "judge-1",
+      NIGHTGAUGE_OPENAI_COMPATIBLE_API_KEY_ENV: "MY_KEY",
     });
     expect(r).toMatchObject({
       baseUrl: "https://api.example.com/v1",
@@ -69,14 +68,9 @@ describe("resolveOpenAiCompatibleConfig", () => {
     });
   });
 
-  it("keeps the lm-studio and ollama preset defaults", () => {
-    expect(resolveOpenAiCompatibleConfig("lm-studio", {}, {}).baseUrl).toBe(
-      "http://localhost:1234/v1"
-    );
-    expect(resolveOpenAiCompatibleConfig("ollama", {}, {}).baseUrl).toBe(
-      "http://localhost:11434/v1"
-    );
-    expect(resolveOpenAiCompatibleConfig("ollama", {}, {}).timeoutMs).toBe(300_000);
+  it("has no default base URL: the server is always named", () => {
+    expect(resolveOpenAiCompatibleConfig({}, {}).baseUrl).toBe("");
+    expect(resolveOpenAiCompatibleConfig({}, {}).timeoutMs).toBe(180_000);
   });
 });
 
@@ -105,7 +99,6 @@ describe("OpenAiCompatibleAdapter query", () => {
   it("posts a streamed chat completion and yields text plus a usage result", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(sseResponse(OK_STREAM));
     const adapter = new OpenAiCompatibleAdapter(
-      "lm-studio",
       { baseUrl: "http://localhost:9000/v1", model: "judge", apiKeyEnv: "JUDGE_KEY" },
       { JUDGE_KEY: "secret" }
     );
@@ -136,7 +129,6 @@ describe("OpenAiCompatibleAdapter query", () => {
   it("omits the Authorization header when the key variable is not set", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(sseResponse(OK_STREAM));
     const adapter = new OpenAiCompatibleAdapter(
-      "lm-studio",
       { baseUrl: "http://localhost:9000/v1", model: "judge", apiKeyEnv: "JUDGE_KEY" },
       {}
     );
@@ -146,21 +138,16 @@ describe("OpenAiCompatibleAdapter query", () => {
 
   it("fails fast on a missing base URL or model", async () => {
     await expect(
-      new OpenAiCompatibleAdapter("lm-studio", { baseUrl: "" }, {}).createQueryFunction()
-    ).rejects.toThrow(/NIGHTGAUGE_LM_STUDIO_BASE_URL/);
+      new OpenAiCompatibleAdapter({ baseUrl: "" }, {}).createQueryFunction()
+    ).rejects.toThrow(/NIGHTGAUGE_OPENAI_COMPATIBLE_BASE_URL/);
     await expect(
-      new OpenAiCompatibleAdapter(
-        "lm-studio",
-        { baseUrl: "http://localhost:1/v1" },
-        {}
-      ).createQueryFunction()
-    ).rejects.toThrow(/NIGHTGAUGE_LM_STUDIO_MODEL/);
+      new OpenAiCompatibleAdapter({ baseUrl: "http://localhost:1/v1" }, {}).createQueryFunction()
+    ).rejects.toThrow(/NIGHTGAUGE_OPENAI_COMPATIBLE_MODEL/);
   });
 
   it("reports an unknown model on HTTP 404", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("nope", { status: 404 }));
     const adapter = new OpenAiCompatibleAdapter(
-      "lm-studio",
       { baseUrl: "http://localhost:9000/v1", model: "missing" },
       {}
     );
@@ -172,20 +159,16 @@ describe("OpenAiCompatibleAdapter query", () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       new Response("boom", { status: 500, statusText: "Internal Server Error" })
     );
-    await expect(collect(new OpenAiCompatibleAdapter("lm-studio", cfg, {}))).rejects.toThrow(
-      /localhost:9000/
-    );
+    await expect(collect(new OpenAiCompatibleAdapter(cfg, {}))).rejects.toThrow(/localhost:9000/);
 
     vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new TypeError("fetch failed"));
-    await expect(collect(new OpenAiCompatibleAdapter("lm-studio", cfg, {}))).rejects.toThrow(
-      /fetch failed/
-    );
+    await expect(collect(new OpenAiCompatibleAdapter(cfg, {}))).rejects.toThrow(/fetch failed/);
   });
 });
 
 describe("OpenAiCompatibleAdapter locality (part-1 logic)", () => {
   const local = (baseUrl: string) =>
-    new OpenAiCompatibleAdapter("lm-studio", { baseUrl, model: "m" }, {}).isLocal();
+    new OpenAiCompatibleAdapter({ baseUrl, model: "m" }, {}).isLocal();
 
   it("is local for loopback and private base URLs", () => {
     expect(local("http://localhost:1234/v1")).toBe(true);

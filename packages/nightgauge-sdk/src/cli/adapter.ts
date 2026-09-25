@@ -14,6 +14,7 @@ import { readAdapterFileConfig } from "./adapterConfig.js";
 // Re-export the canonical type from the adapters module
 export type { NightgaugeAdapter } from "./adapters/ICliAdapter.js";
 import type { NightgaugeAdapter } from "./adapters/ICliAdapter.js";
+import { retiredAdapterMessage } from "./adapters/retiredAdapters.js";
 
 const ADAPTER_ALIASES: Record<string, NightgaugeAdapter> = {
   claude: "claude-sdk",
@@ -23,11 +24,8 @@ const ADAPTER_ALIASES: Record<string, NightgaugeAdapter> = {
   gemini: "gemini",
   "gemini-headless": "gemini",
   "gemini-sdk": "gemini-sdk",
-  "lm-studio": "lm-studio",
-  lm_studio: "lm-studio",
-  // Issue #2591 — Ollama local LLM inference (alias was missing pre-#53:
-  // NIGHTGAUGE_ADAPTER=ollama silently resolved to claude-sdk)
-  ollama: "ollama",
+  // Issue #2128 — the generic OpenAI-compatible judge backend
+  "openai-compatible": "openai-compatible",
   // Issue #1941 — GitHub Copilot aliases
   copilot: "copilot",
   github: "copilot",
@@ -36,8 +34,7 @@ const ADAPTER_ALIASES: Record<string, NightgaugeAdapter> = {
   "grok-headless": "grok",
   xai: "grok",
   // Issue #1615 — OpenCode (ADR-022). Resolving it is gated: see
-  // EXPERIMENTAL_OPENCODE_ENV_VAR. The lm-studio and ollama aliases above keep
-  // pointing at the non-agentic chat-completion bridges.
+  // EXPERIMENTAL_OPENCODE_ENV_VAR.
   opencode: "opencode",
 };
 
@@ -80,6 +77,10 @@ export interface ResolveAdapterOptions {
 }
 
 function aliasOrThrow(value: string, sourceLabel: string): NightgaugeAdapter {
+  const retired = retiredAdapterMessage(value, sourceLabel);
+  if (retired) {
+    throw new AdapterError(retired, "CONFIG_INVALID", value);
+  }
   const resolved = ADAPTER_ALIASES[value.trim().toLowerCase()];
   if (!resolved) {
     throw new AdapterError(
@@ -190,10 +191,6 @@ export function isGeminiAdapterEnabled(env: NodeJS.ProcessEnv = process.env): bo
 
 export function isGeminiSdkAdapterEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return resolveAdapter(env) === "gemini-sdk";
-}
-
-export function isLmStudioAdapterEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return resolveAdapter(env) === "lm-studio";
 }
 
 export function isCopilotAdapterEnabled(env: NodeJS.ProcessEnv = process.env): boolean {

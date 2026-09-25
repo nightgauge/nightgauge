@@ -22,9 +22,9 @@
  *     Gemini uses {@link GEMINI_MODELS}; Grok uses {@link GROK_MODELS}
  *     (absorbing #552 — a Resolve miss used to hand the raw band name
  *     straight to `grok --model`, reaching the CLI unchecked).
- *   - OPEN (claude-sdk, claude-headless, ollama, lm-studio, copilot): no closed
+ *   - OPEN (claude-sdk, claude-headless, openai-compatible, copilot): no closed
  *     set. claude-* accept tier keywords natively (the tier IS a valid model);
- *     ollama/lm-studio draw from a user-defined local catalog unknowable at
+ *     openai-compatible draws from a user-defined server catalog unknowable at
  *     preflight; the copilot CLI adapter does not consume a model id. These
  *     never reject — they pass the (trimmed) value through.
  *
@@ -255,16 +255,10 @@ export const ADAPTER_MODEL_POLICY: Record<NightgaugeAdapter, AdapterModelPolicy>
   },
   // OPEN — user-defined local catalog, unknowable at preflight. Presence (empty
   // vs set) is enforced by the adapters themselves; validity is not our call.
-  "lm-studio": {
+  "openai-compatible": {
     kind: "open",
-    displayName: "LM Studio",
-    envVar: "NIGHTGAUGE_LM_STUDIO_MODEL",
-    resolve: identityResolve,
-  },
-  ollama: {
-    kind: "open",
-    displayName: "Ollama",
-    envVar: "NIGHTGAUGE_OLLAMA_MODEL",
+    displayName: "OpenAI-compatible",
+    envVar: "NIGHTGAUGE_OPENAI_COMPATIBLE_MODEL",
     resolve: identityResolve,
   },
   // OPEN — the Copilot CLI `--model` flag now actually forces the model (#52),

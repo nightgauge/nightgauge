@@ -113,12 +113,12 @@ vi.mock("../../src/services/RepositoryContextLoader", () => ({
 // also lifted and is available when the factory runs.
 const { walkAdapterFallbackMock, resolveStageAdapterMock } = vi.hoisted(() => ({
   walkAdapterFallbackMock: vi.fn(),
-  resolveStageAdapterMock: vi.fn(() => ({ adapter: "lm-studio", source: "stage-config" })),
+  resolveStageAdapterMock: vi.fn(() => ({ adapter: "openai-compatible", source: "stage-config" })),
 }));
-// Force primary prereq failure for `lm-studio` only, so we can pick this
+// Force primary prereq failure for `openai-compatible` only, so we can pick this
 // adapter as the primary in tests that need a prereq failure. Everything
 // else passes (matching the real-world `commandExists` short-circuit under
-// VITEST). For prereq tests we pin `lm-studio` and let the walker decide
+// VITEST). For prereq tests we pin `openai-compatible` and let the walker decide
 // the rest.
 vi.mock("../../src/utils/resolvers/adapterResolver", async () => {
   const actual = await vi.importActual<typeof import("../../src/utils/resolvers/adapterResolver")>(
@@ -151,8 +151,8 @@ test prompt`);
     // need walker behaviour override per-test.
     walkAdapterFallbackMock.mockReturnValue({
       winner: null,
-      hopsAttempted: ["lm-studio"],
-      lastError: "lm-studio model not configured",
+      hopsAttempted: ["openai-compatible"],
+      lastError: "openai-compatible model not configured",
     });
   });
 
@@ -163,7 +163,7 @@ test prompt`);
   it("emits per-hop log lines in the AC #4 format when walker tries fallback", () => {
     walkAdapterFallbackMock.mockReturnValue({
       winner: { adapter: "claude", source: "fallback" },
-      hopsAttempted: ["lm-studio", "codex", "claude"],
+      hopsAttempted: ["openai-compatible", "codex", "claude"],
       lastError: "codex broken",
     });
 
@@ -178,18 +178,18 @@ test prompt`);
     // hopsAttempted[0] which is the failed primary).
     const log = stderrLines.join("");
     expect(log).toMatch(
-      /\[skillRunner\] primary=lm-studio unavailable: [\s\S]*?; falling back to codex per pipeline\.adapter_fallback_chain/
+      /\[skillRunner\] primary=openai-compatible unavailable: [\s\S]*?; falling back to codex per pipeline\.adapter_fallback_chain/
     );
     expect(log).toMatch(
-      /\[skillRunner\] primary=lm-studio unavailable: [\s\S]*?; falling back to claude per pipeline\.adapter_fallback_chain/
+      /\[skillRunner\] primary=openai-compatible unavailable: [\s\S]*?; falling back to claude per pipeline\.adapter_fallback_chain/
     );
   });
 
   it("propagates adapterFallbackChainUsed on success when fallback walked", () => {
     walkAdapterFallbackMock.mockReturnValue({
       winner: { adapter: "codex", source: "fallback" },
-      hopsAttempted: ["lm-studio", "codex"],
-      lastError: "lm-studio model not configured",
+      hopsAttempted: ["openai-compatible", "codex"],
+      lastError: "openai-compatible model not configured",
     });
 
     const onComplete = vi.fn();
@@ -201,7 +201,7 @@ test prompt`);
         adapterDecision: expect.objectContaining({
           adapter: "codex",
           source: "fallback",
-          adapterFallbackChainUsed: ["lm-studio", "codex"],
+          adapterFallbackChainUsed: ["openai-compatible", "codex"],
         }),
       })
     );
@@ -210,7 +210,7 @@ test prompt`);
   it("emits [stage:no-adapter-available] when full chain is exhausted (AC #5)", () => {
     walkAdapterFallbackMock.mockReturnValue({
       winner: null,
-      hopsAttempted: ["lm-studio", "codex", "gemini"],
+      hopsAttempted: ["openai-compatible", "codex", "gemini"],
       lastError: "every adapter unavailable",
     });
 
@@ -221,7 +221,7 @@ test prompt`);
     expect(onError).toHaveBeenCalled();
     const errArg = onError.mock.calls[0][0] as Error;
     expect(errArg.message).toMatch(/^\[stage:no-adapter-available\]/);
-    expect(errArg.message).toContain("adapters_tried=[lm-studio,codex,gemini]");
+    expect(errArg.message).toContain("adapters_tried=[openai-compatible,codex,gemini]");
     expect(errArg.message).toContain("reason=");
 
     // The audit trail rides through to onComplete so HeadlessOrchestrator
@@ -230,7 +230,7 @@ test prompt`);
       expect.objectContaining({
         success: false,
         adapterDecision: expect.objectContaining({
-          adapterFallbackChainUsed: ["lm-studio", "codex", "gemini"],
+          adapterFallbackChainUsed: ["openai-compatible", "codex", "gemini"],
         }),
       })
     );
@@ -243,8 +243,8 @@ test prompt`);
     // chain-exhausted one.
     walkAdapterFallbackMock.mockReturnValue({
       winner: null,
-      hopsAttempted: ["lm-studio"],
-      lastError: "lm-studio model not configured",
+      hopsAttempted: ["openai-compatible"],
+      lastError: "openai-compatible model not configured",
     });
 
     const onError = vi.fn();
@@ -253,7 +253,7 @@ test prompt`);
     expect(onError).toHaveBeenCalled();
     const errArg = onError.mock.calls[0][0] as Error;
     expect(errArg.message).toMatch(/^\[stage:adapter-unavailable\]/);
-    expect(errArg.message).toContain("adapter=lm-studio");
+    expect(errArg.message).toContain("adapter=openai-compatible");
     expect(errArg.message).not.toContain("adapters_tried=");
   });
 });
@@ -408,7 +408,7 @@ test prompt`);
     // visibly land on codex instead of failing.
     walkAdapterFallbackMock.mockReturnValue({
       winner: { adapter: "codex", source: "fallback" },
-      hopsAttempted: ["lm-studio", "codex"],
+      hopsAttempted: ["openai-compatible", "codex"],
       lastError: "",
     });
   });
@@ -459,13 +459,13 @@ test prompt`);
   it("fails the stage when the requested adapter fails its prerequisites, and never walks the chain", () => {
     resolveStageAdapterMock.mockReturnValue({ adapter: "claude", source: "stage-config" });
     const onComplete = vi.fn();
-    runWithPin("lm-studio", true, onComplete);
+    runWithPin("openai-compatible", true, onComplete);
 
     expect(walkAdapterFallbackMock).not.toHaveBeenCalled();
     expect(spawn).not.toHaveBeenCalled();
     const result = onComplete.mock.calls[0]?.[0];
     expect(result.success).toBe(false);
-    expect(String(result.error)).toContain("[stage:adapter-unavailable] adapter=lm-studio");
+    expect(String(result.error)).toContain("[stage:adapter-unavailable] adapter=openai-compatible");
     expect(String(result.error)).toContain("source=remote-request");
   });
 
@@ -483,7 +483,7 @@ test prompt`);
   it("a cap pin that fails its prerequisites still walks the chain as before", () => {
     resolveStageAdapterMock.mockReturnValue({ adapter: "claude", source: "stage-config" });
     const onComplete = vi.fn();
-    runWithPin("lm-studio", undefined, onComplete);
+    runWithPin("openai-compatible", undefined, onComplete);
     mockProcess.emit("close", 0);
 
     expect(walkAdapterFallbackMock).toHaveBeenCalledTimes(1);

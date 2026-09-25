@@ -73,14 +73,6 @@ vi.mock("../../../src/views/settings/NightgaugeYamlService", () => ({
   getConfigValue: vi.fn(),
 }));
 
-vi.mock("../../../src/services/LmStudioService", () => ({
-  LmStudioService: class LmStudioServiceMock {
-    listModels = vi.fn().mockResolvedValue([]);
-    startServer = vi.fn().mockResolvedValue(undefined);
-    loadModel = vi.fn().mockResolvedValue(undefined);
-  },
-}));
-
 vi.mock("../../../src/services/CodexModelCatalogService", () => ({
   CodexModelCatalogService: class CodexModelCatalogServiceMock {
     listModels = vi.fn(() => ["gpt-5.4"]);

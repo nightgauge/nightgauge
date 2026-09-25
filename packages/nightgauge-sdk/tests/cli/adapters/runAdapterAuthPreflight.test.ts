@@ -135,8 +135,7 @@ describe("runAdapterAuthPreflight", () => {
       "codex",
       "gemini",
       "gemini-sdk",
-      "lm-studio",
-      "ollama",
+      "openai-compatible",
       "copilot",
     ];
     const adapters = known.map((n) =>

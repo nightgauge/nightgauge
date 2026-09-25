@@ -1146,6 +1146,7 @@ export { createDefaultPreflightRunner, type PreflightCommandRunner } from "./cli
 
 // Adapter type re-export for consumers wiring per-stage adapter lists.
 export type { NightgaugeAdapter } from "./cli/adapters/ICliAdapter.js";
+export { isRetiredAdapter, retiredAdapterMessage } from "./cli/adapters/retiredAdapters.js";
 // Agentic truth-gate for pipeline dispatch (#57)
 export { isAgenticAdapter } from "./cli/adapters/AdapterRegistry.js";
 

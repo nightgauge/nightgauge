@@ -456,14 +456,14 @@ describe("codexPreflight", () => {
 
 describe("agentic truth-gate (#57)", () => {
   it("rejects chat-completion-only adapters before any other check", async () => {
-    for (const adapter of ["ollama", "lm-studio", "gemini-sdk"] as const) {
+    for (const adapter of ["openai-compatible", "gemini-sdk"] as const) {
       // No runner/cwd needed: the gate fires before branch/docs/model checks.
       await expect(runAdapterPreflightChecks({ adapter })).rejects.toThrow(/chat-completion-only/);
     }
   });
 
   it("names remediation adapters in the rejection", async () => {
-    await expect(runAdapterPreflightChecks({ adapter: "ollama" })).rejects.toThrow(
+    await expect(runAdapterPreflightChecks({ adapter: "openai-compatible" })).rejects.toThrow(
       /claude-sdk, claude-headless, codex, gemini, copilot/
     );
   });
@@ -481,7 +481,7 @@ describe("isAgenticAdapter (#57)", () => {
     ]) {
       expect(isAgenticAdapter(agentic), agentic).toBe(true);
     }
-    for (const chatOnly of ["gemini-sdk", "ollama", "lm-studio"]) {
+    for (const chatOnly of ["gemini-sdk", "openai-compatible"]) {
       expect(isAgenticAdapter(chatOnly), chatOnly).toBe(false);
     }
   });

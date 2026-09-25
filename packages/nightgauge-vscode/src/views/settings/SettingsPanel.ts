@@ -32,15 +32,12 @@ import type { PipelineStateService } from "../../services/PipelineStateService";
 import type { ConfigMergeResult, TierMetadata } from "../../config/configMergeEngine";
 import type { ConfigSourceMap } from "../../config/schema";
 import type { RuntimeStateStore } from "../../config/RuntimeStateStore";
-import { LmStudioService } from "../../services/LmStudioService";
 import { CodexModelCatalogService } from "../../services/CodexModelCatalogService";
 import {
   OpenCodeModelCatalogService,
   type OpenCodeModelEntry,
 } from "../../services/OpenCodeModelCatalogService";
 import { getOpenCodeModel } from "../../utils/resolvers/modelResolver";
-import { Logger } from "../../utils/logger";
-import type { LmStudioModelInfo } from "../../services/LmStudioService";
 import { SecretStorageService, SECRET_KEYS } from "../../services/SecretStorageService";
 import { forgetLicenseKey, persistLicenseKey } from "../../services/licenseKeychainBridge";
 import { IpcClient } from "../../services/IpcClient";
@@ -110,11 +107,8 @@ export class SettingsPanel implements vscode.Disposable {
   private currentConfig: NightgaugeConfig = {};
   private stateService: PipelineStateService | null = null;
   private lockedSections: Set<string> = new Set();
-  private readonly lmStudioLogger = new Logger("Nightgauge LM Studio");
-  private readonly lmStudioService = new LmStudioService(this.lmStudioLogger);
   private readonly codexModelCatalogService = new CodexModelCatalogService();
   private readonly openCodeModelCatalogService = new OpenCodeModelCatalogService();
-  private lmStudioModels: LmStudioModelInfo[] = [];
   private codexModels: string[] = [];
   private openCodeModels: OpenCodeModelEntry[] = [];
   private forgeInstances: ForgeInstanceRow[] = [];
@@ -179,7 +173,6 @@ export class SettingsPanel implements vscode.Disposable {
     private readonly workspaceRoot: string
   ) {
     this.yamlService = new NightgaugeYamlService(workspaceRoot);
-    this.disposables.push(this.lmStudioLogger);
 
     // Set up message handler with tier-aware callbacks
     this.messageHandler = new SettingsMessageHandler({
@@ -316,9 +309,6 @@ export class SettingsPanel implements vscode.Disposable {
       this.disposables
     );
 
-    if (this.currentConfig.ui?.core?.adapter === "lm-studio") {
-      void this.refreshLmStudioModels(true);
-    }
     if (this.currentConfig.ui?.core?.adapter === "codex") {
       this.refreshCodexModels(true);
     }
@@ -438,7 +428,6 @@ export class SettingsPanel implements vscode.Disposable {
       {
         codexModels: this.codexModels,
         openCodeModels: this.openCodeModels,
-        lmStudioModels: this.lmStudioModels,
         stageAdapterPreview,
         performanceMode: previewMode,
         forgeInstances: this.forgeInstances,
@@ -1215,25 +1204,12 @@ export class SettingsPanel implements vscode.Disposable {
   }
 
   private async handleAction(action: string, payload?: Record<string, unknown>): Promise<void> {
-    this.lmStudioLogger.info("LM Studio settings action invoked", {
-      action,
-      payload,
-    });
     switch (action) {
-      case "lm-studio-start-server":
-        await this.handleLmStudioStartServer();
-        break;
-      case "lm-studio-refresh-models":
-        await this.refreshLmStudioModels(false, payload);
-        break;
       case "codex-refresh-models":
         this.refreshCodexModels(false);
         break;
       case "opencode-refresh-models":
         await this.refreshOpenCodeModels(false);
-        break;
-      case "lm-studio-load-model":
-        await this.handleLmStudioLoadModel(payload);
         break;
       case "validate-stage-adapter":
         await this.handleValidateStageAdapter(payload);
@@ -1559,101 +1535,6 @@ export class SettingsPanel implements vscode.Disposable {
     this.updatePanel();
   }
 
-  private getLmStudioPayloadString(
-    payload: Record<string, unknown> | undefined,
-    key: string,
-    fallback: string
-  ): string {
-    const value = payload?.[key];
-    return typeof value === "string" && value.trim() ? value.trim() : fallback;
-  }
-
-  private getLmStudioPayloadNumber(
-    payload: Record<string, unknown> | undefined,
-    key: string,
-    fallback?: number
-  ): number | undefined {
-    const value = payload?.[key];
-    return typeof value === "number" && Number.isFinite(value) ? value : fallback;
-  }
-
-  private async handleLmStudioStartServer(): Promise<void> {
-    const baseUrl = this.currentConfig.lm_studio?.base_url ?? "http://127.0.0.1:1234/v1";
-    const apiKey = this.currentConfig.lm_studio?.api_key ?? "lm-studio";
-
-    try {
-      this.lmStudioLogger.info("Start Server clicked");
-      await this.lmStudioService.startServer(baseUrl, apiKey);
-      await this.refreshLmStudioModels(true);
-      this.lmStudioLogger.info("LM Studio server start flow completed");
-      vscode.window.showInformationMessage("LM Studio server started.");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to start LM Studio server.";
-      this.lmStudioLogger.error("LM Studio server start flow failed", {
-        message,
-      });
-      vscode.window.showErrorMessage(message);
-    }
-  }
-
-  private async refreshLmStudioModels(
-    silent: boolean,
-    payload?: Record<string, unknown>
-  ): Promise<void> {
-    const baseUrl = this.getLmStudioPayloadString(
-      payload,
-      "lm_studio.base_url",
-      this.currentConfig.lm_studio?.base_url ?? "http://127.0.0.1:1234/v1"
-    );
-    const apiKey = this.getLmStudioPayloadString(
-      payload,
-      "lm_studio.api_key",
-      this.currentConfig.lm_studio?.api_key ?? "lm-studio"
-    );
-
-    this.lmStudioLogger.info("Refreshing LM Studio models", {
-      silent,
-      baseUrl,
-    });
-
-    try {
-      const models = await this.lmStudioService.listModels(baseUrl, apiKey);
-      if (models.length === 0) {
-        this.lmStudioModels = [];
-        this.updatePanel();
-        this.lmStudioLogger.warn("LM Studio model refresh returned zero models", { baseUrl });
-        if (!silent) {
-          vscode.window.showWarningMessage(
-            "LM Studio returned no models. Start the server and make sure at least one model is downloaded."
-          );
-        }
-        return;
-      }
-
-      this.lmStudioModels = models;
-      this.updatePanel();
-      this.lmStudioLogger.info("LM Studio models refreshed", {
-        count: models.length,
-        models: models.map((model) => ({ id: model.id, loaded: model.loaded })),
-      });
-      if (!silent) {
-        vscode.window.showInformationMessage(
-          `LM Studio models refreshed: ${models.length} available.`
-        );
-      }
-    } catch (error) {
-      this.lmStudioModels = [];
-      const message =
-        error instanceof Error
-          ? error.message
-          : "Failed to fetch models from LM Studio. Start the server and try again.";
-      this.lmStudioLogger.error("LM Studio model refresh failed", { message, baseUrl });
-      if (!silent) {
-        vscode.window.showErrorMessage(message);
-      }
-    }
-  }
-
   private refreshCodexModels(silent: boolean): void {
     this.codexModels = this.codexModelCatalogService.listModels();
     this.updatePanel();
@@ -1674,61 +1555,6 @@ export class SettingsPanel implements vscode.Disposable {
     if (!silent) {
       const selectable = this.openCodeModels.filter((m) => m.selectable).length;
       vscode.window.showInformationMessage(`OpenCode models refreshed: ${selectable} available.`);
-    }
-  }
-
-  private async handleLmStudioLoadModel(payload?: Record<string, unknown>): Promise<void> {
-    const baseUrl = this.getLmStudioPayloadString(
-      payload,
-      "lm_studio.base_url",
-      this.currentConfig.lm_studio?.base_url ?? "http://127.0.0.1:1234/v1"
-    );
-    const apiKey = this.getLmStudioPayloadString(
-      payload,
-      "lm_studio.api_key",
-      this.currentConfig.lm_studio?.api_key ?? "lm-studio"
-    );
-    const model = this.getLmStudioPayloadString(
-      payload,
-      "lm_studio.model",
-      this.currentConfig.lm_studio?.model ?? ""
-    );
-    const contextLength = this.getLmStudioPayloadNumber(
-      payload,
-      "lm_studio.context_length",
-      this.currentConfig.lm_studio?.context_length
-    );
-
-    this.lmStudioLogger.info("Load Model clicked", {
-      model,
-      contextLength,
-    });
-
-    if (!model) {
-      this.lmStudioLogger.warn("Load Model requested without a selected model");
-      vscode.window.showWarningMessage("Select an LM Studio model first, then load it.");
-      return;
-    }
-
-    try {
-      await this.lmStudioService.startServer(baseUrl, apiKey);
-      await this.lmStudioService.loadModel(model, contextLength);
-      await this.refreshLmStudioModels(true, payload);
-      this.lmStudioLogger.info("LM Studio model load flow completed", {
-        model,
-        contextLength,
-      });
-      vscode.window.showInformationMessage(
-        `LM Studio model loaded: ${model}${contextLength ? ` (context ${contextLength})` : ""}.`
-      );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to load LM Studio model.";
-      this.lmStudioLogger.error("LM Studio model load flow failed", {
-        model,
-        contextLength,
-        message,
-      });
-      vscode.window.showErrorMessage(message);
     }
   }
 

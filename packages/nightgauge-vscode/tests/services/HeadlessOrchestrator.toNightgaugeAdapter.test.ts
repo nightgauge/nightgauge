@@ -64,12 +64,8 @@ describe("toNightgaugeAdapter", () => {
     expect(toNightgaugeAdapter("gemini-sdk", {})).toBe("gemini-sdk");
   });
 
-  it("maps lm-studio → lm-studio (identity)", () => {
-    expect(toNightgaugeAdapter("lm-studio", {})).toBe("lm-studio");
-  });
-
-  it("maps ollama → ollama (identity)", () => {
-    expect(toNightgaugeAdapter("ollama", {})).toBe("ollama");
+  it("maps openai-compatible → openai-compatible (identity)", () => {
+    expect(toNightgaugeAdapter("openai-compatible", {})).toBe("openai-compatible");
   });
 
   it("maps copilot → copilot (identity)", () => {

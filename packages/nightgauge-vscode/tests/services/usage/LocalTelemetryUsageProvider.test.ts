@@ -124,7 +124,7 @@ describe("supports()", () => {
     expect(provider([]).provider.supports(adapter)).toBe(true);
   });
 
-  it.each<ExecutionAdapter>(["lm-studio", "ollama", "opencode"])(
+  it.each<ExecutionAdapter>(["opencode"])(
     "claims %s, which it meters in tokens or dollars by provider (#1665)",
     (adapter) => {
       expect(provider([]).provider.supports(adapter)).toBe(true);
@@ -615,24 +615,4 @@ describe("the local plan (#1665, ADR-018 amendment)", () => {
 
     await expect(p.getSnapshot("opencode")).resolves.toBeNull();
   });
-
-  it.each<ExecutionAdapter>(["lm-studio", "ollama"])(
-    "gives the %s bridge a local snapshot in tokens (ADR-022 § 4)",
-    async (adapter) => {
-      const { provider: p } = provider([
-        runRecord(new Date(2026, 7, 17, 9, 30), {
-          "feature-dev": { cost_usd: 0, adapter, model: "qwen3-coder:30b", input: 70, output: 30 },
-        }),
-      ]);
-
-      const snapshot = await p.getSnapshot(adapter);
-
-      expect(snapshot!.plan.kind).toBe("local");
-      expect(snapshot!.windows.map((w) => [w.unit, w.used, w.limit])).toEqual([
-        ["tokens", 100, null],
-        ["tokens", 100, null],
-        ["tokens", 100, null],
-      ]);
-    }
-  );
 });

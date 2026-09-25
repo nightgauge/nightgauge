@@ -53,8 +53,8 @@ const SUGGESTED_FIX: Record<NightgaugeAdapter, string> = {
   gemini:
     "Set GEMINI_API_KEY/GOOGLE_API_KEY, or run `gcloud auth application-default login` for ADC.",
   "gemini-sdk": "Set GEMINI_API_KEY or GOOGLE_API_KEY in your environment.",
-  "lm-studio": "Start LM Studio locally and load a model (default: http://localhost:1234).",
-  ollama: "Start the Ollama server (`ollama serve`) and pull a model (`ollama pull llama3.2`).",
+  "openai-compatible":
+    "Start the OpenAI-compatible server named by NIGHTGAUGE_OPENAI_COMPATIBLE_BASE_URL and load or pull the model.",
   copilot:
     "Set COPILOT_GITHUB_TOKEN, or run `gh auth login` then `gh extension install github/gh-copilot`.",
   grok: "Run `grok login`, or set XAI_API_KEY (install via `curl -fsSL https://x.ai/cli/install.sh | bash`).",

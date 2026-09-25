@@ -82,7 +82,7 @@ describe("getUsagePanelSectionHtml — empty states (Issue #661)", () => {
 
   it("names the adapter in the unknown-plan empty state, and says unknown not zero", () => {
     const html = getUsagePanelSectionHtml(
-      buildUsagePanelState(unknownUsageSnapshot("ollama", NOW), [makeRun()], NOW),
+      buildUsagePanelState(unknownUsageSnapshot("copilot", NOW), [makeRun()], NOW),
       NOW
     );
 
@@ -90,7 +90,7 @@ describe("getUsagePanelSectionHtml — empty states (Issue #661)", () => {
     // the panel's capture footnote also names the adapter, so a page-wide
     // `toContain` would stay green if the explanation stopped naming it.
     const explanation = html.split('<p class="usage-value">')[1].split("</p>")[0];
-    expect(explanation).toContain("ollama");
+    expect(explanation).toContain("copilot");
     expect(explanation).toContain("unknown");
     expect(explanation).toContain("not zero");
     // Nothing to fill: no bar of any kind, empty or otherwise.

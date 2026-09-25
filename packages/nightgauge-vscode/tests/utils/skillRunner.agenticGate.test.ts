@@ -53,9 +53,9 @@ describe("validateAdapterPrerequisites — agentic truth-gate (#57)", () => {
   it("names the agentic adapters from the SDK registry, not a hand-typed list (#1657)", () => {
     const agentic = AdapterEnumSchema.options.filter((a) => isAgenticAdapter(a));
     expect(agentic).toContain("opencode");
-    expect(agentic).not.toContain("lm-studio");
+    expect(agentic).not.toContain("openai-compatible");
     expect(agenticPipelineAdapters()).toEqual(agentic);
-    const err = validateAdapterPrerequisites("ollama", "/test/workspace", "headless");
+    const err = validateAdapterPrerequisites("openai-compatible", "/test/workspace", "headless");
     expect(err).toContain(`(${agentic.join(", ")})`);
   });
 

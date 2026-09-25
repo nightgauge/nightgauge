@@ -514,8 +514,8 @@ type V2StageTokens struct {
 	CostUSD       float64  `json:"cost_usd"`
 	CacheHitRate  *float64 `json:"cache_hit_rate,omitempty"` // ratio of cache_read / (input + cache_read); nil when no tokens
 	// Adapter is the adapter that executed this stage (Issue #3224). One of
-	// "claude" | "codex" | "gemini" | "gemini-sdk" | "lm-studio" | "ollama" |
-	// "copilot". Free-string at the schema level so adding adapters does not
+	// "claude" | "codex" | "gemini" | "gemini-sdk" | "copilot" | "grok" |
+	// "opencode". Free-string at the schema level so adding adapters does not
 	// require a Go-side enum bump; the TypeScript Zod schema enforces the
 	// canonical set. Empty string maps to absent on the wire via omitempty —
 	// readers must treat absence as adapter-unknown rather than defaulting.

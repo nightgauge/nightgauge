@@ -60,21 +60,6 @@ describe("validateConfig — deprecation warnings", () => {
     expect(w.message).toMatch(/~\/.nightgauge\/config\.yaml/);
   });
 
-  // ── lm_studio ──────────────────────────────────────────────────────────────
-
-  it("warns on lm_studio and keeps valid: true", () => {
-    const result = validateConfig({ lm_studio: { base_url: "http://localhost:1234" } });
-    expect(result.valid).toBe(true);
-    expect(result.errors).toHaveLength(0);
-    expectWarningForField(result.warnings, "lm_studio");
-  });
-
-  it("lm_studio warning message references machine tier", () => {
-    const result = validateConfig({ lm_studio: { base_url: "http://localhost:1234" } });
-    const w = result.warnings.find((w) => w.field === "lm_studio")!;
-    expect(w.message).toMatch(/machine tier/i);
-  });
-
   // ── autonomous.enabled_repos ───────────────────────────────────────────────
 
   it("warns on autonomous.enabled_repos and keeps valid: true", () => {
@@ -176,7 +161,6 @@ describe("validateConfig — deprecation warnings", () => {
   it("emits one warning per deprecated key when all six are present", () => {
     const result = validateConfig({
       github_user: "octocat",
-      lm_studio: { base_url: "http://localhost:1234" },
       autonomous: {
         max_concurrent: 1,
         enabled_repos: ["nightgauge"],
@@ -187,11 +171,10 @@ describe("validateConfig — deprecation warnings", () => {
     });
     expect(result.valid).toBe(true);
     expect(result.errors).toHaveLength(0);
-    expect(result.warnings.length).toBeGreaterThanOrEqual(6);
+    expect(result.warnings.length).toBeGreaterThanOrEqual(5);
 
     const fields = result.warnings.map((w) => w.field);
     expect(fields).toContain("github_user");
-    expect(fields).toContain("lm_studio");
     expect(fields).toContain("autonomous.enabled_repos");
     expect(fields).toContain("autonomous.max_concurrent");
     expect(fields).toContain("autonomous.repositories.nightgauge.sequential");
@@ -229,11 +212,9 @@ describe("validateConfig — deprecation warnings", () => {
     // with only deprecated-but-accepted keys (no type errors) must be valid with warnings.
     const result = validateConfig({
       github_user: "octocat",
-      lm_studio: { base_url: "http://localhost:1234" },
     });
     expect(result.valid).toBe(true);
     expect(result.errors).toHaveLength(0);
     expectWarningForField(result.warnings, "github_user");
-    expectWarningForField(result.warnings, "lm_studio");
   });
 });

@@ -124,7 +124,7 @@ describe("UsageProviderRegistry", () => {
     // not hide the second: the first may have nothing to say today (#709).
     expect(registry.resolveAll("claude").map((p) => p.id)).toEqual(["specific", "general"]);
     expect(registry.resolveAll("codex").map((p) => p.id)).toEqual(["general"]);
-    expect(registry.resolveAll("ollama")).toEqual([]);
+    expect(registry.resolveAll("copilot")).toEqual([]);
   });
 });
 

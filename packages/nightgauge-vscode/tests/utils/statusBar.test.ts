@@ -500,9 +500,9 @@ describe("StatusBarManager", () => {
     });
 
     it("renders an explicit 'usage unknown' state rather than hiding when no provider claims the adapter", () => {
-      statusBar.showUsageSnapshot(makeSnapshot([], "ollama"));
+      statusBar.showUsageSnapshot(makeSnapshot([], "copilot"));
 
-      expect(mockUsageItem.text).toBe("$(flame) ollama usage unknown");
+      expect(mockUsageItem.text).toBe("$(flame) copilot usage unknown");
       expect(mockUsageItem.show).toHaveBeenCalled();
       expect(mockUsageItem.backgroundColor).toBeUndefined();
     });
@@ -529,7 +529,7 @@ describe("StatusBarManager", () => {
       });
 
       it("returns null when the snapshot is unknown (zero windows)", () => {
-        statusBar.showUsageSnapshot(makeSnapshot([], "ollama"));
+        statusBar.showUsageSnapshot(makeSnapshot([], "copilot"));
         expect(statusBar.cycleUsageWindow()).toBeNull();
       });
 
@@ -1140,7 +1140,7 @@ describe("buildUsageTooltip (#659)", () => {
 
   it("explains the unknown state rather than showing an empty list", () => {
     const snapshot: UsageSnapshot = {
-      adapter: "ollama",
+      adapter: "copilot",
       plan: { kind: "unknown" },
       capturedAt: new Date(),
       windows: [],

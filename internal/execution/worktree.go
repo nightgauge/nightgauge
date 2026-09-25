@@ -191,7 +191,7 @@ func readAdapterFromYaml(path string) string {
 // shouldBuildSdkCli returns true for CLI adapters that require SDK CLI artifacts.
 func shouldBuildSdkCli(adapter string) bool {
 	switch adapter {
-	case "codex", "copilot", "lm-studio":
+	case "codex", "copilot":
 		return true
 	default:
 		return false

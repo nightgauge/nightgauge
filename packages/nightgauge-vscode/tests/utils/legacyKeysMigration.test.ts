@@ -143,7 +143,6 @@ describe("runLegacyKeysMigration", () => {
     expect(keys).toContain("pipeline.max_concurrent");
     expect(keys).toContain("autonomous.enabled_repos");
     expect(keys).toContain("notifications.discord.enabled");
-    expect(keys).toContain("lm_studio");
   });
 
   it("autonomous.enabled_repos is now classified as machine tier (#3641)", () => {
@@ -327,19 +326,6 @@ describe("runLegacyKeysMigration", () => {
         }),
       })
     );
-  });
-
-  it("copies lm_studio block to machine tier", async () => {
-    const ctx = makeContext();
-    const store = makeRuntimeStore();
-    const logger = makeLogger();
-
-    const lmStudio = { base_url: "http://localhost:1234", model: "llama3" };
-    mockRead.mockResolvedValue({ success: true, config: { lm_studio: lmStudio } });
-
-    await runLegacyKeysMigration(ctx as any, "/root", store as any, logger as any);
-
-    expect(mockWriteGlobal).toHaveBeenCalledWith(expect.objectContaining({ lm_studio: lmStudio }));
   });
 
   it("migrates per-repo autonomous keys from project YAML to machine tier (#3641)", async () => {

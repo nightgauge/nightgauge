@@ -23,6 +23,7 @@ import {
   EFFORT_LEVELS,
   REASONING_EFFORT_LEVELS,
   TIER_BANDS,
+  retiredAdapterMessage,
   type NightgaugeAdapter,
 } from "@nightgauge/sdk";
 import { PipelineStageSchema } from "../schemas/pipelineState";
@@ -74,17 +75,15 @@ export type EnforcementMode = z.infer<typeof EnforcementModeSchema>;
  * @see Issue #3225 - settings UI per-stage adapter selector
  * @see Issue #1623 - Collapse the four hand-spelled adapter enums into one
  */
-export const AdapterEnumSchema = z.enum([
-  "claude",
-  "codex",
-  "gemini",
-  "gemini-sdk",
-  "lm-studio",
-  "ollama",
-  "copilot",
-  "grok",
-  "opencode",
-]);
+export const AdapterEnumSchema = z.enum(
+  ["claude", "codex", "gemini", "gemini-sdk", "openai-compatible", "copilot", "grok", "opencode"],
+  {
+    // #2128: a removed adapter (lm-studio, ollama) fails with the migration,
+    // not a bare "invalid option".
+    error: (iss) =>
+      typeof iss.input === "string" ? retiredAdapterMessage(iss.input, "adapter") : undefined,
+  }
+);
 export type AdapterEnum = z.infer<typeof AdapterEnumSchema>;
 
 /**
@@ -790,7 +789,7 @@ export const PipelineConfigSchema = z.object({
    *
    * Shape: `{ adapter: { stage: <usd> } }`. Both keys are case-sensitive
    * strings — `adapter` matches the `ExecutionAdapter` union (`claude`,
-   * `codex`, `gemini`, `gemini-sdk`, `lm-studio`, `ollama`, `copilot`)
+   * `codex`, `gemini`, `gemini-sdk`, `openai-compatible`, `copilot`)
    * and `stage` matches the pipeline stage name.
    *
    * @env NIGHTGAUGE_PIPELINE_STAGE_COST_CAP_PER_PROVIDER_<ADAPTER>_<STAGE>
@@ -834,8 +833,8 @@ export const PipelineConfigSchema = z.object({
    *   `effectiveCap = baseCap × modelScale × modeMultiplier × providerScale`.
    *
    * Defaults are seeded from C1 pricing-table ratios (claude=1.0,
-   * codex=0.7, gemini=0.4, gemini-sdk=0.4, copilot=0.2, lm-studio=0.0,
-   * ollama=0.0). `0` is the explicit "switch to time-based cap" signal
+   * codex=0.7, gemini=0.4, gemini-sdk=0.4, copilot=0.2,
+   * openai-compatible=0.0). `0` is the explicit "switch to time-based cap" signal
    * for adapters where token cost is meaningless — see
    * `pipeline.stage_time_caps`.
    *
@@ -844,7 +843,7 @@ export const PipelineConfigSchema = z.object({
    * default Claude users.
    *
    * @env NIGHTGAUGE_COST_CAP_PROVIDER_SCALE_<ADAPTER>
-   *      (uppercase, hyphens → underscores: `GEMINI_SDK`, `LM_STUDIO`)
+   *      (uppercase, hyphens → underscores: `GEMINI_SDK`, `OPENAI_COMPATIBLE`)
    * @see Issue #3229 — Provider-relative cost-cap defaults
    */
   cost_cap_provider_scale: z.record(z.string(), z.number().min(0)).optional(),
@@ -852,7 +851,7 @@ export const PipelineConfigSchema = z.object({
    * Per-stage absolute time cap in seconds (Issue #3229).
    *
    * Wires the time-based fallback used when a provider's
-   * `cost_cap_provider_scale` is `0` (lm-studio, ollama). When the
+   * `cost_cap_provider_scale` is `0` (openai-compatible). When the
    * cost-cap path is disabled, the stall ticker ORs this value with
    * `stage_hard_caps` — whichever is smaller and `> 0` wins, leaving the
    * absolute hard-cap escape hatch intact. `0` (the default) means
@@ -1557,7 +1556,7 @@ export const PipelineConfigSchema = z.object({
    * the resolver uses this list instead of `adapter_fallback_chain` for that
    * stage's primary-failure walk. Precedence: stage override → global
    * `adapter_fallback_chain` → built-in default
-   * (`["claude", "codex", "gemini", "copilot", "lm-studio"]`).
+   * (`["claude", "codex", "gemini", "copilot"]`).
    *
    * Mirrors the `stage_adapters` shape (per-stage override of a global
    * default). Read by the line-based YAML scanner in
@@ -1946,68 +1945,6 @@ export const CopilotConfigSchema = z.object({
   model: z.string().optional(),
 });
 export type CopilotConfig = z.infer<typeof CopilotConfigSchema>;
-
-/**
- * LM Studio stream options
- *
- * @see Issue #2058 - LM Studio adapter and config contract
- */
-export const LmStudioStreamOptionsSchema = z.object({
-  /** Whether to include token usage in streaming responses. Default: true */
-  include_usage: z.boolean().optional(),
-});
-
-/**
- * LM Studio-specific configuration
- *
- * All fields are optional — env vars serve as fallback.
- *
- * @see Issue #2058 - LM Studio adapter and config contract
- * @see docs/spikes/2053-lm-studio-openai-compatible-contract.md
- */
-export const LmStudioConfigSchema = z.object({
-  /** LM Studio server URL. Default: http://127.0.0.1:1234/v1 */
-  base_url: z.string().url().optional(),
-  /** Model identifier as shown in LM Studio (must match loaded model) */
-  model: z.string().optional(),
-  /** Context window requested when loading the model via LM Studio controls */
-  context_length: z.number().int().min(1).optional(),
-  /** Auth header value (any string works). Default: 'lm-studio' */
-  api_key: z.string().optional(),
-  /** Request timeout in ms. Default: 180000 (3 minutes) */
-  timeout_ms: z.number().int().min(1000).optional(),
-  /** Max completion tokens. Default: 8192 */
-  max_tokens: z.number().int().min(1).optional(),
-  /** Streaming options for token usage reporting */
-  stream_options: LmStudioStreamOptionsSchema.optional(),
-  /** Opt-in gate for tool calling (model-dependent). Default: false */
-  tool_calling: z.boolean().optional(),
-});
-export type LmStudioConfig = z.infer<typeof LmStudioConfigSchema>;
-
-/**
- * Ollama configuration for local LLM inference.
- *
- * Ollama is an open-source framework for running local LLMs.
- * Communicates via OpenAI-compatible HTTP API on localhost:11434.
- * All fields are optional — env vars serve as fallback.
- *
- * @see Issue #2591 - Add Ollama adapter for local LLM inference
- * @see packages/nightgauge-sdk/src/cli/adapters/OllamaAdapter.ts
- */
-export const OllamaConfigSchema = z.object({
-  /** Ollama server URL. Default: http://localhost:11434/v1 */
-  base_url: z.string().url().optional(),
-  /** Model identifier (must match a model pulled via 'ollama pull') */
-  model: z.string().optional(),
-  /** API key / auth header value. Default: 'ollama' */
-  api_key: z.string().optional(),
-  /** Request timeout in ms. Default: 300000 (5 minutes) */
-  timeout_ms: z.number().int().min(1000).optional(),
-  /** Max completion tokens. Default: 8192 */
-  max_tokens: z.number().int().min(1).optional(),
-});
-export type OllamaConfig = z.infer<typeof OllamaConfigSchema>;
 
 /**
  * Default model for pipeline stages.
@@ -3806,12 +3743,6 @@ export const NightgaugeConfigSchema = z.object({
   // Audit event emission configuration (Issue #1582)
   audit: AuditConfigSectionSchema.optional(),
 
-  /** @deprecated Phase 5 (#3338) — migrated to machine tier (~/.nightgauge/config.yaml). Will be removed in a future minor version. */
-  lm_studio: LmStudioConfigSchema.optional(),
-
-  // Ollama local inference settings (Issue #2591)
-  ollama: OllamaConfigSchema.optional(),
-
   // Remote command IPC bridge settings (Issue #2170)
   remote: RemoteConfigSchema.optional(),
 
@@ -4229,17 +4160,6 @@ export const DEFAULT_CONFIG: NightgaugeConfig = {
     },
     feature_flags: {},
   },
-  lm_studio: {
-    base_url: "http://127.0.0.1:1234/v1",
-    api_key: "lm-studio",
-    context_length: 32768,
-    timeout_ms: 180000,
-    max_tokens: 8192,
-    tool_calling: false,
-    stream_options: {
-      include_usage: true,
-    },
-  },
   work_item_source: {
     mode: "github",
   },
@@ -4281,66 +4201,59 @@ const NightgaugeConfigWithDeprecationsSchema = NightgaugeConfigSchema.superRefin
     "github_user",
     "github_user is deprecated (Phase 5 / #3338). Migrate to the machine tier: ~/.nightgauge/config.yaml"
   )
-)
-  .superRefine(
-    warnIfPresent(
-      "lm_studio",
-      "lm_studio is deprecated (Phase 5 / #3338). Migrate to the machine tier: ~/.nightgauge/config.yaml"
-    )
-  )
-  .superRefine((obj, ctx) => {
-    const autonomous = obj.autonomous as Record<string, unknown> | undefined;
-    if (!autonomous) return;
+).superRefine((obj, ctx) => {
+  const autonomous = obj.autonomous as Record<string, unknown> | undefined;
+  if (!autonomous) return;
 
-    if (autonomous.enabled_repos !== undefined) {
+  if (autonomous.enabled_repos !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message:
+        "autonomous.enabled_repos is deprecated (reclassified to Machine tier in #3643). " +
+        "Use the runtime tier instead: nightgauge.runtime.autonomous.enabled_repos",
+      path: ["autonomous", "enabled_repos"],
+      params: { severity: "warning" },
+    });
+  }
+
+  if (autonomous.max_concurrent !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message:
+        "autonomous.max_concurrent is deprecated (#3195). Use pipeline.max_concurrent instead.",
+      path: ["autonomous", "max_concurrent"],
+      params: { severity: "warning" },
+    });
+  }
+
+  const repositories = autonomous.repositories as
+    Record<string, Record<string, unknown>> | undefined;
+  if (!repositories) return;
+
+  for (const [repoKey, repoVal] of Object.entries(repositories)) {
+    if (typeof repoVal !== "object" || repoVal === null) continue;
+    if (repoVal.sequential !== undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          "autonomous.enabled_repos is deprecated (reclassified to Machine tier in #3643). " +
-          "Use the runtime tier instead: nightgauge.runtime.autonomous.enabled_repos",
-        path: ["autonomous", "enabled_repos"],
+          `autonomous.repositories.${repoKey}.sequential is deprecated (reclassified to Machine tier in #3643). ` +
+          "Configure per-repo overrides in the machine tier config.",
+        path: ["autonomous", "repositories", repoKey, "sequential"],
         params: { severity: "warning" },
       });
     }
-
-    if (autonomous.max_concurrent !== undefined) {
+    if (repoVal.max_concurrent !== undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          "autonomous.max_concurrent is deprecated (#3195). Use pipeline.max_concurrent instead.",
-        path: ["autonomous", "max_concurrent"],
+          `autonomous.repositories.${repoKey}.max_concurrent is deprecated (reclassified to Machine tier in #3643). ` +
+          "Configure per-repo overrides in the machine tier config.",
+        path: ["autonomous", "repositories", repoKey, "max_concurrent"],
         params: { severity: "warning" },
       });
     }
-
-    const repositories = autonomous.repositories as
-      Record<string, Record<string, unknown>> | undefined;
-    if (!repositories) return;
-
-    for (const [repoKey, repoVal] of Object.entries(repositories)) {
-      if (typeof repoVal !== "object" || repoVal === null) continue;
-      if (repoVal.sequential !== undefined) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message:
-            `autonomous.repositories.${repoKey}.sequential is deprecated (reclassified to Machine tier in #3643). ` +
-            "Configure per-repo overrides in the machine tier config.",
-          path: ["autonomous", "repositories", repoKey, "sequential"],
-          params: { severity: "warning" },
-        });
-      }
-      if (repoVal.max_concurrent !== undefined) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message:
-            `autonomous.repositories.${repoKey}.max_concurrent is deprecated (reclassified to Machine tier in #3643). ` +
-            "Configure per-repo overrides in the machine tier config.",
-          path: ["autonomous", "repositories", repoKey, "max_concurrent"],
-          params: { severity: "warning" },
-        });
-      }
-    }
-  });
+  }
+});
 
 // ============================================================================
 // Validation Functions

@@ -491,6 +491,7 @@ func TestStageCost(t *testing.T) {
 		// runs, and an undeclared unknown key is still unpriced.
 		{"opencode", "omlx/qwen3-coder-30b", config.StageZeroCost},
 		{"opencode", "mystery/some-model", config.StageUnpriced},
+		// A local serving provider (a RunResult's ModelProvider) is zero.
 		{"lm-studio", "qwen", config.StageZeroCost},
 		{"ollama", "llama3", config.StageZeroCost},
 		{"copilot", "sonnet", config.StageZeroCost},

@@ -139,10 +139,6 @@ import {
   getCodexCliArgs,
   getCodexResumeEnabled,
   getCopilotModel,
-  getLmStudioModel,
-  getLmStudioBaseUrl,
-  getLmStudioApiKey,
-  getLmStudioTimeoutMs,
   getStageModelsMatrix,
   getTypeOverrides,
   modelSupportsEffort,
@@ -3265,7 +3261,7 @@ export function validateAdapterPrerequisites(
   stageModel?: string
 ): string | null {
   // Agentic truth-gate (#57): chat-completion-only adapters (gemini-sdk,
-  // ollama, lm-studio) have no tool loop — a pipeline stage dispatched to
+  // openai-compatible) have no tool loop — a pipeline stage dispatched to
   // them emits prose instead of commits. This gate covers primary dispatch,
   // the fallback walker, and auto-router enumeration (all funnel through
   // here). Eval/judge surfaces don't run this check and keep chat-only
@@ -3339,44 +3335,6 @@ export function validateAdapterPrerequisites(
     }
     // gemini-sdk doesn't need CLI — it uses @google/genai directly.
     // API key validation happens at runtime in GeminiSdkAdapter.validateAuth().
-    return null;
-  }
-
-  if (adapter === "lm-studio") {
-    if (mode === "interactive") {
-      return (
-        "LM Studio adapter supports headless execution only. " +
-        'Use "Nightgauge: Run Stage" (headless) or switch adapter back to Claude for interactive mode.'
-      );
-    }
-    // LM Studio uses direct HTTP — no CLI executable needed.
-    // Model must be configured (empty string = runtime error in LmStudioAdapter).
-    const lmModel = getLmStudioModel(workspaceRoot);
-    if (!lmModel) {
-      return (
-        "LM Studio adapter requires a model name. " +
-        "Set NIGHTGAUGE_LM_STUDIO_MODEL or add lm_studio.model to .nightgauge/config.yaml. " +
-        'Example: lm_studio:\n  model: "lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF"'
-      );
-    }
-    // Still need node + SDK CLI for run-stage.sh execution
-    if (!commandExists("node")) {
-      return "LM Studio adapter requires `node` in PATH.";
-    }
-    const lmCliEntry = path.join(
-      workspaceRoot,
-      "packages",
-      "nightgauge-sdk",
-      "dist",
-      "cli",
-      "index.js"
-    );
-    if (!fs.existsSync(lmCliEntry)) {
-      return (
-        `LM Studio adapter requires built Nightgauge SDK CLI at ${lmCliEntry}. ` +
-        "Run: npm run -w @nightgauge/sdk build"
-      );
-    }
     return null;
   }
 
@@ -4958,37 +4916,6 @@ export function runStageSkillHeadless(
     );
   }
 
-  // LM Studio model and server configuration (Issue #2057)
-  // LM Studio remains the deliberate exception (#3214, #387): it has no
-  // registry tier hierarchy, so the served model is whatever is loaded
-  // locally. Record the mismatch for every dispatched band and demote the
-  // source to config so history stays honest.
-  const lmStudioEnv: Record<string, string> = {};
-  if (adapter === "lm-studio") {
-    const bandMapping = requestedBand ? getAdapterModelForBand(requestedBand, adapter) : undefined;
-    if (bandMapping?.mismatch) {
-      callbacks?.onStderr?.(
-        `[skillRunner] LM Studio cannot honor dispatched tier "${bandMapping.model}" — using configured local model.\n`
-      );
-    }
-    const lmStudioModel = getLmStudioModel(workspaceRoot);
-    modelDecision.model = lmStudioModel;
-    modelDecision.source = "config";
-    lmStudioEnv.NIGHTGAUGE_LM_STUDIO_MODEL = lmStudioModel;
-    callbacks?.onStderr?.(`[skillRunner] LM Studio model: ${lmStudioModel || "(unconfigured)"}\n`);
-
-    const lmStudioBaseUrl = getLmStudioBaseUrl(workspaceRoot);
-    lmStudioEnv.NIGHTGAUGE_LM_STUDIO_BASE_URL = lmStudioBaseUrl;
-    callbacks?.onStderr?.(`[skillRunner] LM Studio base URL: ${lmStudioBaseUrl}\n`);
-
-    const lmStudioApiKey = getLmStudioApiKey(workspaceRoot);
-    lmStudioEnv.NIGHTGAUGE_LM_STUDIO_API_KEY = lmStudioApiKey;
-
-    const lmStudioTimeoutMs = getLmStudioTimeoutMs(workspaceRoot);
-    lmStudioEnv.NIGHTGAUGE_LM_STUDIO_TIMEOUT_MS = String(lmStudioTimeoutMs);
-    callbacks?.onStderr?.(`[skillRunner] LM Studio timeout: ${lmStudioTimeoutMs}ms\n`);
-  }
-
   // OpenCode model (Issue #1657). The SDK OpenCodeAdapter the stage CLI runs
   // reads its `<provider>/<model>` from NIGHTGAUGE_MODEL and passes the same
   // value to `nightgauge opencode config --model` (#1648), so this is the one
@@ -5131,8 +5058,7 @@ export function runStageSkillHeadless(
   // fable) can never leak to the CLI as --model.
   //
   // NOT validated here: `claude` (passes --model as a tier arg natively, sets no
-  // model env), and `ollama` (an OPEN adapter not wired into skillRunner's
-  // spawn branches — no ollamaEnv exists; codexPreflight covers it generically).
+  // model env).
   //
   // On failure we DO NOT throw: runStageSkillHeadless returns a handle and
   // reports failures via callbacks (mirroring the prereq / skill-not-found paths
@@ -5156,11 +5082,6 @@ export function runStageSkillHeadless(
       copilotEnv.NIGHTGAUGE_COPILOT_MODEL = validateModelForAdapter(
         "copilot",
         copilotEnv.NIGHTGAUGE_COPILOT_MODEL
-      ).model;
-    } else if (adapter === "lm-studio" && lmStudioEnv.NIGHTGAUGE_LM_STUDIO_MODEL) {
-      lmStudioEnv.NIGHTGAUGE_LM_STUDIO_MODEL = validateModelForAdapter(
-        "lm-studio",
-        lmStudioEnv.NIGHTGAUGE_LM_STUDIO_MODEL
       ).model;
     }
   } catch (validationError) {
@@ -5204,11 +5125,9 @@ export function runStageSkillHeadless(
         ? geminiEnv.NIGHTGAUGE_GEMINI_MODEL
         : adapter === "copilot"
           ? copilotEnv.NIGHTGAUGE_COPILOT_MODEL
-          : adapter === "lm-studio"
-            ? lmStudioEnv.NIGHTGAUGE_LM_STUDIO_MODEL
-            : adapter === "opencode"
-              ? opencodeEnv.NIGHTGAUGE_MODEL
-              : undefined) || modelDecision.model;
+          : adapter === "opencode"
+            ? opencodeEnv.NIGHTGAUGE_MODEL
+            : undefined) || modelDecision.model;
 
   // ── Worktree write containment: baseline (Issue #129) ─────────────────
   // Snapshot the dirty state of every configured workspace repo the stage does
@@ -5261,7 +5180,6 @@ export function runStageSkillHeadless(
     ...grokEnv,
     ...codexEnv, // Merge Codex model config env vars (Issue #1656)
     ...copilotEnv, // Merge Copilot model + auth env vars (Issue #1946)
-    ...lmStudioEnv, // Merge LM Studio config env vars (Issue #2057)
     ...opencodeEnv, // OpenCode dispatch model (Issue #1657)
     ...perRepoTokenEnv, // Merge per-repo GitHub token (Issue #2487)
     // Always inject absolute CLAUDE_PLUGIN_ROOT so hook scripts resolve correctly
@@ -5314,8 +5232,8 @@ export function runStageSkillHeadless(
   // spawn — so a stage killed early still has its model on record (#367).
   //
   // It fires HERE, not at resolution time, because the adapter branches above
-  // mutate modelDecision after the fact: gemini, gemini-sdk, copilot and
-  // lm-studio all overwrite `.model`, and three of them overwrite `.source` to
+  // mutate modelDecision after the fact: gemini, gemini-sdk and copilot
+  // all overwrite `.model`, and some of them overwrite `.source` to
   // "config". Firing before those ran reported a decision the run did not make,
   // which is the same two-writer disagreement #1016 is about, merely narrowed
   // to four adapters. This is the first point where the values are final.
@@ -5698,7 +5616,7 @@ export function runStageSkillHeadless(
 
   // Per-stage time cap (Issue #3229): the time-based fallback for
   // adapters where token cost is structurally meaningless
-  // (`provider_scale=0`, e.g. lm-studio, ollama). When the provider
+  // (`provider_scale=0`, e.g. a local opencode endpoint). When the provider
   // scale fires the "switch to time-cap" sentinel we OR this value with
   // the existing `hardCapMs` ticker — whichever is smaller and `> 0`
   // wins, leaving the absolute hard-cap escape hatch intact.

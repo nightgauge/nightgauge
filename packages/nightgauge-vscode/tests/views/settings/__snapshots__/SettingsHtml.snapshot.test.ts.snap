@@ -1044,7 +1044,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
                 class="select-input"
                 data-path="ui.core.adapter"
                 disabled>
-          <option value="claude" selected>Claude</option><option value="codex" >Codex</option><option value="gemini" >Gemini CLI</option><option value="gemini-sdk" >Gemini SDK</option><option value="lm-studio" >LM Studio</option><option value="ollama" >Ollama</option><option value="copilot" >GitHub Copilot CLI</option><option value="grok" >Grok Build CLI</option><option value="opencode" >OpenCode (Experimental)</option>
+          <option value="claude" selected>Claude</option><option value="codex" >Codex</option><option value="gemini" >Gemini CLI</option><option value="gemini-sdk" >Gemini SDK</option><option value="copilot" >GitHub Copilot CLI</option><option value="grok" >Grok Build CLI</option><option value="opencode" >OpenCode (Experimental)</option>
         </select>
       </div>
     </div>
@@ -1437,285 +1437,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
                checked
                disabled>
         <label for="ui.core.codex.resume_enabled" class="toggle-switch"></label>
-      </div>
-    </div>
-
-      </div>
-      <div id="core-lm-studio-settings" style="display:none;">
-        <p class="section-note">LM Studio uses one configured backend model for all pipeline stages. Claude stage routing does not apply.</p>
-        <div class="inline-action-bar">
-        <button type="button"
-                class="btn inline-action-btn"
-                data-action="lm-studio-start-server"
-
-                disabled>
-          Start Server
-        </button>
-
-        <button type="button"
-                class="btn inline-action-btn"
-                data-action="lm-studio-refresh-models"
-
-                disabled>
-          Refresh Models
-        </button>
-
-        <button type="button"
-                class="btn inline-action-btn"
-                data-action="lm-studio-load-model"
-                title="Loads the selected model into LM Studio using the configured context length"
-                disabled>
-          Load Model
-        </button>
-      </div>
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.model" class="setting-label">Selected Model </label>
-        <p class="setting-description">Model identifier from the LM Studio server and used for every stage run</p>
-        <p id="lm-studio-model-capacity" class="setting-description"></p>
-      </div>
-      <div class="setting-control">
-        <select id="lm_studio.model"
-                class="select-input"
-                data-path="lm_studio.model"
-                disabled>
-          <option value="" selected>Refresh models...</option>
-        </select>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.context_length" class="setting-label">Context Length </label>
-        <p class="setting-description">Applied when loading the model from this panel. Existing LM Studio sessions keep their current context window.</p>
-      </div>
-      <div class="setting-control context-length-control">
-        <input type="number"
-               id="lm_studio.context_length"
-               class="number-input"
-               data-path="lm_studio.context_length"
-               value="32768"
-               min="1"
-               step="1"
-               disabled>
-        <button type="button"
-                id="lm-studio-use-max-context"
-                class="btn inline-action-btn"
-                title="Set context length to the selected model's maximum supported value"
-                disabled>
-          Use Max
-        </button>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.base_url" class="setting-label">Base URL </label>
-        <p class="setting-description">LM Studio OpenAI-compatible server base URL</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="lm_studio.base_url"
-               class="text-input"
-               data-path="lm_studio.base_url"
-               value="http://127.0.0.1:1234/v1"
-               placeholder="http://127.0.0.1:1234/v1"
-               disabled>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.api_key" class="setting-label">API Key </label>
-        <p class="setting-description">Auth header value sent to LM Studio; any string is accepted by the local server</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="lm_studio.api_key"
-               class="text-input"
-               data-path="lm_studio.api_key"
-               value="lm-studio"
-               placeholder="lm-studio"
-               disabled>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.timeout_ms" class="setting-label">Timeout (ms) </label>
-        <p class="setting-description">Request timeout for local inference</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="number"
-               id="lm_studio.timeout_ms"
-               class="number-input"
-               data-path="lm_studio.timeout_ms"
-               value="180000"
-               min="1000"
-
-               step="1000"
-               disabled>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.max_tokens" class="setting-label">Max Tokens </label>
-        <p class="setting-description">Maximum completion tokens requested from LM Studio</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="number"
-               id="lm_studio.max_tokens"
-               class="number-input"
-               data-path="lm_studio.max_tokens"
-               value="8192"
-               min="1"
-
-               step="1"
-               disabled>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.tool_calling" class="setting-label">Enable Tool Calling </label>
-        <p class="setting-description">Allow tool calling for models that reliably support it</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="checkbox"
-               id="lm_studio.tool_calling"
-               class="toggle-input"
-               data-path="lm_studio.tool_calling"
-
-               disabled>
-        <label for="lm_studio.tool_calling" class="toggle-switch"></label>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.stream_options.include_usage" class="setting-label">Include Usage In Stream </label>
-        <p class="setting-description">Request token usage metadata in streamed responses</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="checkbox"
-               id="lm_studio.stream_options.include_usage"
-               class="toggle-input"
-               data-path="lm_studio.stream_options.include_usage"
-               checked
-               disabled>
-        <label for="lm_studio.stream_options.include_usage" class="toggle-switch"></label>
-      </div>
-    </div>
-
-      </div>
-      <div id="core-ollama-settings" style="display:none;">
-        <p class="section-note">Ollama uses one configured backend model for all pipeline stages. Claude stage routing does not apply.</p>
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ollama.model" class="setting-label">Selected Model </label>
-        <p class="setting-description">Model identifier pulled into Ollama and used for every stage run</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="ollama.model"
-               class="text-input"
-               data-path="ollama.model"
-               value=""
-               placeholder="llama3.1"
-               disabled>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ollama.base_url" class="setting-label">Base URL </label>
-        <p class="setting-description">Ollama OpenAI-compatible server base URL</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="ollama.base_url"
-               class="text-input"
-               data-path="ollama.base_url"
-               value="http://localhost:11434/v1"
-               placeholder="http://localhost:11434/v1"
-               disabled>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ollama.api_key" class="setting-label">API Key </label>
-        <p class="setting-description">Auth header value sent to Ollama; local installs usually accept the default placeholder</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="ollama.api_key"
-               class="text-input"
-               data-path="ollama.api_key"
-               value="ollama"
-               placeholder="ollama"
-               disabled>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ollama.timeout_ms" class="setting-label">Timeout (ms) </label>
-        <p class="setting-description">Request timeout for local inference</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="number"
-               id="ollama.timeout_ms"
-               class="number-input"
-               data-path="ollama.timeout_ms"
-               value="300000"
-               min="1000"
-
-               step="1000"
-               disabled>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ollama.max_tokens" class="setting-label">Max Tokens </label>
-        <p class="setting-description">Maximum completion tokens requested from Ollama</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="number"
-               id="ollama.max_tokens"
-               class="number-input"
-               data-path="ollama.max_tokens"
-               value="8192"
-               min="1"
-
-               step="1"
-               disabled>
       </div>
     </div>
 
@@ -3708,13 +3429,9 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
       function updateCoreAdapterVisibility(adapterValue) {
         const claudeSettings = document.getElementById('core-claude-settings');
         const codexSettings = document.getElementById('core-codex-settings');
-        const lmStudioSettings = document.getElementById('core-lm-studio-settings');
-        const ollamaSettings = document.getElementById('core-ollama-settings');
         const nonClaudeNote = document.getElementById('core-non-claude-note');
         const isClaude = adapterValue === 'claude';
         const isCodex = adapterValue === 'codex';
-        const isLmStudio = adapterValue === 'lm-studio';
-        const isOllama = adapterValue === 'ollama';
 
         if (claudeSettings) {
           claudeSettings.style.display = isClaude ? '' : 'none';
@@ -3722,40 +3439,8 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
         if (codexSettings) {
           codexSettings.style.display = isCodex ? '' : 'none';
         }
-        if (lmStudioSettings) {
-          lmStudioSettings.style.display = isLmStudio ? '' : 'none';
-        }
-        if (ollamaSettings) {
-          ollamaSettings.style.display = isOllama ? '' : 'none';
-        }
         if (nonClaudeNote) {
-          nonClaudeNote.style.display = !isClaude && !isCodex && !isLmStudio && !isOllama ? '' : 'none';
-        }
-      }
-
-      function updateLmStudioModelMetadata() {
-        const modelSelect = document.querySelector('[data-path="lm_studio.model"]');
-        const metadataEl = document.getElementById('lm-studio-model-capacity');
-        const useMaxBtn = document.getElementById('lm-studio-use-max-context');
-
-        if (!modelSelect || !metadataEl) return;
-
-        const selectedOption = modelSelect.options[modelSelect.selectedIndex];
-        const maxContext = Number(selectedOption?.dataset?.maxContextLength || '');
-        const currentContext = Number(selectedOption?.dataset?.currentContextLength || '');
-        const hasMaxContext = Number.isFinite(maxContext) && maxContext > 0;
-        const hasCurrentContext = Number.isFinite(currentContext) && currentContext > 0;
-
-        if (hasMaxContext && hasCurrentContext) {
-          metadataEl.textContent = 'Detected max context: ' + maxContext.toLocaleString() + ' tokens. Loaded context: ' + currentContext.toLocaleString() + ' tokens.';
-        } else if (hasMaxContext) {
-          metadataEl.textContent = 'Detected max context: ' + maxContext.toLocaleString() + ' tokens.';
-        } else {
-          metadataEl.textContent = 'Refresh models to detect this model\\'s maximum supported context length.';
-        }
-
-        if (useMaxBtn) {
-          useMaxBtn.disabled = !hasMaxContext || modelSelect.disabled;
+          nonClaudeNote.style.display = !isClaude && !isCodex ? '' : 'none';
         }
       }
 
@@ -3775,9 +3460,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
         setModified(true);
         if (path === 'ui.core.adapter') {
           updateCoreAdapterVisibility(value || element.dataset.inheritedValue || 'claude');
-        }
-        if (path === 'lm_studio.model') {
-          updateLmStudioModelMetadata();
         }
         vscode.postMessage({ type: 'change', path, value });
         if (path.indexOf('pipeline.stage_adapters.') === 0) {
@@ -3829,22 +3511,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
       // Select inputs
       document.querySelectorAll('.select-input').forEach(select => {
         select.addEventListener('change', () => handleChange(select));
-      });
-
-      document.getElementById('lm-studio-use-max-context')?.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-
-        const modelSelect = document.querySelector('[data-path="lm_studio.model"]');
-        const contextInput = document.querySelector('[data-path="lm_studio.context_length"]');
-        if (!modelSelect || !contextInput) return;
-
-        const selectedOption = modelSelect.options[modelSelect.selectedIndex];
-        const maxContext = Number(selectedOption?.dataset?.maxContextLength || '');
-        if (!Number.isFinite(maxContext) || maxContext <= 0) return;
-
-        contextInput.value = String(maxContext);
-        handleChange(contextInput);
       });
 
       // Checkbox group inputs (trusted_stages)
@@ -3977,25 +3643,10 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
           e.preventDefault();
           e.stopPropagation();
 
-          const textValue = (path) => {
-            const el = document.querySelector('[data-path="' + path + '"]');
-            return el ? el.value : undefined;
-          };
-          const numberValue = (path) => {
-            const el = document.querySelector('[data-path="' + path + '"]');
-            if (!el || el.value === '') return undefined;
-            const parsed = Number(el.value);
-            return Number.isFinite(parsed) ? parsed : undefined;
-          };
-
           vscode.postMessage({
             type: 'action',
             action: btn.dataset.action,
             payload: {
-              'lm_studio.model': textValue('lm_studio.model'),
-              'lm_studio.base_url': textValue('lm_studio.base_url'),
-              'lm_studio.api_key': textValue('lm_studio.api_key'),
-              'lm_studio.context_length': numberValue('lm_studio.context_length'),
               projectNumber: btn.dataset.projectNumber
                 ? Number(btn.dataset.projectNumber)
                 : undefined,
@@ -4116,8 +3767,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
       if (adapterSelect) {
         updateCoreAdapterVisibility(adapterSelect.value || adapterSelect.dataset.inheritedValue || 'claude');
       }
-      updateLmStudioModelMetadata();
-
       // Handle messages from extension
       window.addEventListener('message', event => {
         const message = event.data;
@@ -4148,9 +3797,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
               }
                if (path === 'ui.core.adapter') {
                  updateCoreAdapterVisibility(String(value || ''));
-               }
-               if (path === 'lm_studio.model') {
-                 updateLmStudioModelMetadata();
                }
              });
             setModified(true);
@@ -5207,7 +4853,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
                 class="select-input"
                 data-path="ui.core.adapter"
                 >
-          <option value="claude" selected>Claude</option><option value="codex" >Codex</option><option value="gemini" >Gemini CLI</option><option value="gemini-sdk" >Gemini SDK</option><option value="lm-studio" >LM Studio</option><option value="ollama" >Ollama</option><option value="copilot" >GitHub Copilot CLI</option><option value="grok" >Grok Build CLI</option><option value="opencode" >OpenCode (Experimental)</option>
+          <option value="claude" selected>Claude</option><option value="codex" >Codex</option><option value="gemini" >Gemini CLI</option><option value="gemini-sdk" >Gemini SDK</option><option value="copilot" >GitHub Copilot CLI</option><option value="grok" >Grok Build CLI</option><option value="opencode" >OpenCode (Experimental)</option>
         </select>
       </div>
     </div>
@@ -5600,285 +5246,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
                checked
                >
         <label for="ui.core.codex.resume_enabled" class="toggle-switch"></label>
-      </div>
-    </div>
-
-      </div>
-      <div id="core-lm-studio-settings" style="display:none;">
-        <p class="section-note">LM Studio uses one configured backend model for all pipeline stages. Claude stage routing does not apply.</p>
-        <div class="inline-action-bar">
-        <button type="button"
-                class="btn inline-action-btn"
-                data-action="lm-studio-start-server"
-
-                >
-          Start Server
-        </button>
-
-        <button type="button"
-                class="btn inline-action-btn"
-                data-action="lm-studio-refresh-models"
-
-                >
-          Refresh Models
-        </button>
-
-        <button type="button"
-                class="btn inline-action-btn"
-                data-action="lm-studio-load-model"
-                title="Loads the selected model into LM Studio using the configured context length"
-                >
-          Load Model
-        </button>
-      </div>
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.model" class="setting-label">Selected Model </label>
-        <p class="setting-description">Model identifier from the LM Studio server and used for every stage run</p>
-        <p id="lm-studio-model-capacity" class="setting-description"></p>
-      </div>
-      <div class="setting-control">
-        <select id="lm_studio.model"
-                class="select-input"
-                data-path="lm_studio.model"
-                >
-          <option value="" selected>Refresh models...</option>
-        </select>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.context_length" class="setting-label">Context Length </label>
-        <p class="setting-description">Applied when loading the model from this panel. Existing LM Studio sessions keep their current context window.</p>
-      </div>
-      <div class="setting-control context-length-control">
-        <input type="number"
-               id="lm_studio.context_length"
-               class="number-input"
-               data-path="lm_studio.context_length"
-               value="32768"
-               min="1"
-               step="1"
-               >
-        <button type="button"
-                id="lm-studio-use-max-context"
-                class="btn inline-action-btn"
-                title="Set context length to the selected model's maximum supported value"
-                >
-          Use Max
-        </button>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.base_url" class="setting-label">Base URL </label>
-        <p class="setting-description">LM Studio OpenAI-compatible server base URL</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="lm_studio.base_url"
-               class="text-input"
-               data-path="lm_studio.base_url"
-               value="http://127.0.0.1:1234/v1"
-               placeholder="http://127.0.0.1:1234/v1"
-               >
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.api_key" class="setting-label">API Key </label>
-        <p class="setting-description">Auth header value sent to LM Studio; any string is accepted by the local server</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="lm_studio.api_key"
-               class="text-input"
-               data-path="lm_studio.api_key"
-               value="lm-studio"
-               placeholder="lm-studio"
-               >
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.timeout_ms" class="setting-label">Timeout (ms) </label>
-        <p class="setting-description">Request timeout for local inference</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="number"
-               id="lm_studio.timeout_ms"
-               class="number-input"
-               data-path="lm_studio.timeout_ms"
-               value="180000"
-               min="1000"
-
-               step="1000"
-               >
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.max_tokens" class="setting-label">Max Tokens </label>
-        <p class="setting-description">Maximum completion tokens requested from LM Studio</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="number"
-               id="lm_studio.max_tokens"
-               class="number-input"
-               data-path="lm_studio.max_tokens"
-               value="8192"
-               min="1"
-
-               step="1"
-               >
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.tool_calling" class="setting-label">Enable Tool Calling </label>
-        <p class="setting-description">Allow tool calling for models that reliably support it</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="checkbox"
-               id="lm_studio.tool_calling"
-               class="toggle-input"
-               data-path="lm_studio.tool_calling"
-
-               >
-        <label for="lm_studio.tool_calling" class="toggle-switch"></label>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.stream_options.include_usage" class="setting-label">Include Usage In Stream </label>
-        <p class="setting-description">Request token usage metadata in streamed responses</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="checkbox"
-               id="lm_studio.stream_options.include_usage"
-               class="toggle-input"
-               data-path="lm_studio.stream_options.include_usage"
-               checked
-               >
-        <label for="lm_studio.stream_options.include_usage" class="toggle-switch"></label>
-      </div>
-    </div>
-
-      </div>
-      <div id="core-ollama-settings" style="display:none;">
-        <p class="section-note">Ollama uses one configured backend model for all pipeline stages. Claude stage routing does not apply.</p>
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ollama.model" class="setting-label">Selected Model </label>
-        <p class="setting-description">Model identifier pulled into Ollama and used for every stage run</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="ollama.model"
-               class="text-input"
-               data-path="ollama.model"
-               value=""
-               placeholder="llama3.1"
-               >
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ollama.base_url" class="setting-label">Base URL </label>
-        <p class="setting-description">Ollama OpenAI-compatible server base URL</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="ollama.base_url"
-               class="text-input"
-               data-path="ollama.base_url"
-               value="http://localhost:11434/v1"
-               placeholder="http://localhost:11434/v1"
-               >
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ollama.api_key" class="setting-label">API Key </label>
-        <p class="setting-description">Auth header value sent to Ollama; local installs usually accept the default placeholder</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="ollama.api_key"
-               class="text-input"
-               data-path="ollama.api_key"
-               value="ollama"
-               placeholder="ollama"
-               >
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ollama.timeout_ms" class="setting-label">Timeout (ms) </label>
-        <p class="setting-description">Request timeout for local inference</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="number"
-               id="ollama.timeout_ms"
-               class="number-input"
-               data-path="ollama.timeout_ms"
-               value="300000"
-               min="1000"
-
-               step="1000"
-               >
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ollama.max_tokens" class="setting-label">Max Tokens </label>
-        <p class="setting-description">Maximum completion tokens requested from Ollama</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="number"
-               id="ollama.max_tokens"
-               class="number-input"
-               data-path="ollama.max_tokens"
-               value="8192"
-               min="1"
-
-               step="1"
-               >
       </div>
     </div>
 
@@ -7871,13 +7238,9 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
       function updateCoreAdapterVisibility(adapterValue) {
         const claudeSettings = document.getElementById('core-claude-settings');
         const codexSettings = document.getElementById('core-codex-settings');
-        const lmStudioSettings = document.getElementById('core-lm-studio-settings');
-        const ollamaSettings = document.getElementById('core-ollama-settings');
         const nonClaudeNote = document.getElementById('core-non-claude-note');
         const isClaude = adapterValue === 'claude';
         const isCodex = adapterValue === 'codex';
-        const isLmStudio = adapterValue === 'lm-studio';
-        const isOllama = adapterValue === 'ollama';
 
         if (claudeSettings) {
           claudeSettings.style.display = isClaude ? '' : 'none';
@@ -7885,40 +7248,8 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
         if (codexSettings) {
           codexSettings.style.display = isCodex ? '' : 'none';
         }
-        if (lmStudioSettings) {
-          lmStudioSettings.style.display = isLmStudio ? '' : 'none';
-        }
-        if (ollamaSettings) {
-          ollamaSettings.style.display = isOllama ? '' : 'none';
-        }
         if (nonClaudeNote) {
-          nonClaudeNote.style.display = !isClaude && !isCodex && !isLmStudio && !isOllama ? '' : 'none';
-        }
-      }
-
-      function updateLmStudioModelMetadata() {
-        const modelSelect = document.querySelector('[data-path="lm_studio.model"]');
-        const metadataEl = document.getElementById('lm-studio-model-capacity');
-        const useMaxBtn = document.getElementById('lm-studio-use-max-context');
-
-        if (!modelSelect || !metadataEl) return;
-
-        const selectedOption = modelSelect.options[modelSelect.selectedIndex];
-        const maxContext = Number(selectedOption?.dataset?.maxContextLength || '');
-        const currentContext = Number(selectedOption?.dataset?.currentContextLength || '');
-        const hasMaxContext = Number.isFinite(maxContext) && maxContext > 0;
-        const hasCurrentContext = Number.isFinite(currentContext) && currentContext > 0;
-
-        if (hasMaxContext && hasCurrentContext) {
-          metadataEl.textContent = 'Detected max context: ' + maxContext.toLocaleString() + ' tokens. Loaded context: ' + currentContext.toLocaleString() + ' tokens.';
-        } else if (hasMaxContext) {
-          metadataEl.textContent = 'Detected max context: ' + maxContext.toLocaleString() + ' tokens.';
-        } else {
-          metadataEl.textContent = 'Refresh models to detect this model\\'s maximum supported context length.';
-        }
-
-        if (useMaxBtn) {
-          useMaxBtn.disabled = !hasMaxContext || modelSelect.disabled;
+          nonClaudeNote.style.display = !isClaude && !isCodex ? '' : 'none';
         }
       }
 
@@ -7938,9 +7269,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
         setModified(true);
         if (path === 'ui.core.adapter') {
           updateCoreAdapterVisibility(value || element.dataset.inheritedValue || 'claude');
-        }
-        if (path === 'lm_studio.model') {
-          updateLmStudioModelMetadata();
         }
         vscode.postMessage({ type: 'change', path, value });
         if (path.indexOf('pipeline.stage_adapters.') === 0) {
@@ -7992,22 +7320,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
       // Select inputs
       document.querySelectorAll('.select-input').forEach(select => {
         select.addEventListener('change', () => handleChange(select));
-      });
-
-      document.getElementById('lm-studio-use-max-context')?.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-
-        const modelSelect = document.querySelector('[data-path="lm_studio.model"]');
-        const contextInput = document.querySelector('[data-path="lm_studio.context_length"]');
-        if (!modelSelect || !contextInput) return;
-
-        const selectedOption = modelSelect.options[modelSelect.selectedIndex];
-        const maxContext = Number(selectedOption?.dataset?.maxContextLength || '');
-        if (!Number.isFinite(maxContext) || maxContext <= 0) return;
-
-        contextInput.value = String(maxContext);
-        handleChange(contextInput);
       });
 
       // Checkbox group inputs (trusted_stages)
@@ -8140,25 +7452,10 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
           e.preventDefault();
           e.stopPropagation();
 
-          const textValue = (path) => {
-            const el = document.querySelector('[data-path="' + path + '"]');
-            return el ? el.value : undefined;
-          };
-          const numberValue = (path) => {
-            const el = document.querySelector('[data-path="' + path + '"]');
-            if (!el || el.value === '') return undefined;
-            const parsed = Number(el.value);
-            return Number.isFinite(parsed) ? parsed : undefined;
-          };
-
           vscode.postMessage({
             type: 'action',
             action: btn.dataset.action,
             payload: {
-              'lm_studio.model': textValue('lm_studio.model'),
-              'lm_studio.base_url': textValue('lm_studio.base_url'),
-              'lm_studio.api_key': textValue('lm_studio.api_key'),
-              'lm_studio.context_length': numberValue('lm_studio.context_length'),
               projectNumber: btn.dataset.projectNumber
                 ? Number(btn.dataset.projectNumber)
                 : undefined,
@@ -8279,8 +7576,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
       if (adapterSelect) {
         updateCoreAdapterVisibility(adapterSelect.value || adapterSelect.dataset.inheritedValue || 'claude');
       }
-      updateLmStudioModelMetadata();
-
       // Handle messages from extension
       window.addEventListener('message', event => {
         const message = event.data;
@@ -8311,9 +7606,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
               }
                if (path === 'ui.core.adapter') {
                  updateCoreAdapterVisibility(String(value || ''));
-               }
-               if (path === 'lm_studio.model') {
-                 updateLmStudioModelMetadata();
                }
              });
             setModified(true);
@@ -9370,7 +8662,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
                 class="select-input"
                 data-path="ui.core.adapter"
                 >
-          <option value="claude" selected>Claude</option><option value="codex" >Codex</option><option value="gemini" >Gemini CLI</option><option value="gemini-sdk" >Gemini SDK</option><option value="lm-studio" >LM Studio</option><option value="ollama" >Ollama</option><option value="copilot" >GitHub Copilot CLI</option><option value="grok" >Grok Build CLI</option><option value="opencode" >OpenCode (Experimental)</option>
+          <option value="claude" selected>Claude</option><option value="codex" >Codex</option><option value="gemini" >Gemini CLI</option><option value="gemini-sdk" >Gemini SDK</option><option value="copilot" >GitHub Copilot CLI</option><option value="grok" >Grok Build CLI</option><option value="opencode" >OpenCode (Experimental)</option>
         </select>
       </div>
     </div>
@@ -9763,285 +9055,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
                checked
                >
         <label for="ui.core.codex.resume_enabled" class="toggle-switch"></label>
-      </div>
-    </div>
-
-      </div>
-      <div id="core-lm-studio-settings" style="display:none;">
-        <p class="section-note">LM Studio uses one configured backend model for all pipeline stages. Claude stage routing does not apply.</p>
-        <div class="inline-action-bar">
-        <button type="button"
-                class="btn inline-action-btn"
-                data-action="lm-studio-start-server"
-
-                >
-          Start Server
-        </button>
-
-        <button type="button"
-                class="btn inline-action-btn"
-                data-action="lm-studio-refresh-models"
-
-                >
-          Refresh Models
-        </button>
-
-        <button type="button"
-                class="btn inline-action-btn"
-                data-action="lm-studio-load-model"
-                title="Loads the selected model into LM Studio using the configured context length"
-                >
-          Load Model
-        </button>
-      </div>
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.model" class="setting-label">Selected Model </label>
-        <p class="setting-description">Model identifier from the LM Studio server and used for every stage run</p>
-        <p id="lm-studio-model-capacity" class="setting-description"></p>
-      </div>
-      <div class="setting-control">
-        <select id="lm_studio.model"
-                class="select-input"
-                data-path="lm_studio.model"
-                >
-          <option value="" selected>Refresh models...</option>
-        </select>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.context_length" class="setting-label">Context Length </label>
-        <p class="setting-description">Applied when loading the model from this panel. Existing LM Studio sessions keep their current context window.</p>
-      </div>
-      <div class="setting-control context-length-control">
-        <input type="number"
-               id="lm_studio.context_length"
-               class="number-input"
-               data-path="lm_studio.context_length"
-               value="32768"
-               min="1"
-               step="1"
-               >
-        <button type="button"
-                id="lm-studio-use-max-context"
-                class="btn inline-action-btn"
-                title="Set context length to the selected model's maximum supported value"
-                >
-          Use Max
-        </button>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.base_url" class="setting-label">Base URL </label>
-        <p class="setting-description">LM Studio OpenAI-compatible server base URL</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="lm_studio.base_url"
-               class="text-input"
-               data-path="lm_studio.base_url"
-               value="http://127.0.0.1:1234/v1"
-               placeholder="http://127.0.0.1:1234/v1"
-               >
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.api_key" class="setting-label">API Key </label>
-        <p class="setting-description">Auth header value sent to LM Studio; any string is accepted by the local server</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="lm_studio.api_key"
-               class="text-input"
-               data-path="lm_studio.api_key"
-               value="lm-studio"
-               placeholder="lm-studio"
-               >
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.timeout_ms" class="setting-label">Timeout (ms) </label>
-        <p class="setting-description">Request timeout for local inference</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="number"
-               id="lm_studio.timeout_ms"
-               class="number-input"
-               data-path="lm_studio.timeout_ms"
-               value="180000"
-               min="1000"
-
-               step="1000"
-               >
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.max_tokens" class="setting-label">Max Tokens </label>
-        <p class="setting-description">Maximum completion tokens requested from LM Studio</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="number"
-               id="lm_studio.max_tokens"
-               class="number-input"
-               data-path="lm_studio.max_tokens"
-               value="8192"
-               min="1"
-
-               step="1"
-               >
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.tool_calling" class="setting-label">Enable Tool Calling </label>
-        <p class="setting-description">Allow tool calling for models that reliably support it</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="checkbox"
-               id="lm_studio.tool_calling"
-               class="toggle-input"
-               data-path="lm_studio.tool_calling"
-
-               >
-        <label for="lm_studio.tool_calling" class="toggle-switch"></label>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.stream_options.include_usage" class="setting-label">Include Usage In Stream </label>
-        <p class="setting-description">Request token usage metadata in streamed responses</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="checkbox"
-               id="lm_studio.stream_options.include_usage"
-               class="toggle-input"
-               data-path="lm_studio.stream_options.include_usage"
-               checked
-               >
-        <label for="lm_studio.stream_options.include_usage" class="toggle-switch"></label>
-      </div>
-    </div>
-
-      </div>
-      <div id="core-ollama-settings" style="display:none;">
-        <p class="section-note">Ollama uses one configured backend model for all pipeline stages. Claude stage routing does not apply.</p>
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ollama.model" class="setting-label">Selected Model </label>
-        <p class="setting-description">Model identifier pulled into Ollama and used for every stage run</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="ollama.model"
-               class="text-input"
-               data-path="ollama.model"
-               value=""
-               placeholder="llama3.1"
-               >
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ollama.base_url" class="setting-label">Base URL </label>
-        <p class="setting-description">Ollama OpenAI-compatible server base URL</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="ollama.base_url"
-               class="text-input"
-               data-path="ollama.base_url"
-               value="http://localhost:11434/v1"
-               placeholder="http://localhost:11434/v1"
-               >
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ollama.api_key" class="setting-label">API Key </label>
-        <p class="setting-description">Auth header value sent to Ollama; local installs usually accept the default placeholder</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="ollama.api_key"
-               class="text-input"
-               data-path="ollama.api_key"
-               value="ollama"
-               placeholder="ollama"
-               >
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ollama.timeout_ms" class="setting-label">Timeout (ms) </label>
-        <p class="setting-description">Request timeout for local inference</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="number"
-               id="ollama.timeout_ms"
-               class="number-input"
-               data-path="ollama.timeout_ms"
-               value="300000"
-               min="1000"
-
-               step="1000"
-               >
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ollama.max_tokens" class="setting-label">Max Tokens </label>
-        <p class="setting-description">Maximum completion tokens requested from Ollama</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="number"
-               id="ollama.max_tokens"
-               class="number-input"
-               data-path="ollama.max_tokens"
-               value="8192"
-               min="1"
-
-               step="1"
-               >
       </div>
     </div>
 
@@ -12034,13 +11047,9 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
       function updateCoreAdapterVisibility(adapterValue) {
         const claudeSettings = document.getElementById('core-claude-settings');
         const codexSettings = document.getElementById('core-codex-settings');
-        const lmStudioSettings = document.getElementById('core-lm-studio-settings');
-        const ollamaSettings = document.getElementById('core-ollama-settings');
         const nonClaudeNote = document.getElementById('core-non-claude-note');
         const isClaude = adapterValue === 'claude';
         const isCodex = adapterValue === 'codex';
-        const isLmStudio = adapterValue === 'lm-studio';
-        const isOllama = adapterValue === 'ollama';
 
         if (claudeSettings) {
           claudeSettings.style.display = isClaude ? '' : 'none';
@@ -12048,40 +11057,8 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
         if (codexSettings) {
           codexSettings.style.display = isCodex ? '' : 'none';
         }
-        if (lmStudioSettings) {
-          lmStudioSettings.style.display = isLmStudio ? '' : 'none';
-        }
-        if (ollamaSettings) {
-          ollamaSettings.style.display = isOllama ? '' : 'none';
-        }
         if (nonClaudeNote) {
-          nonClaudeNote.style.display = !isClaude && !isCodex && !isLmStudio && !isOllama ? '' : 'none';
-        }
-      }
-
-      function updateLmStudioModelMetadata() {
-        const modelSelect = document.querySelector('[data-path="lm_studio.model"]');
-        const metadataEl = document.getElementById('lm-studio-model-capacity');
-        const useMaxBtn = document.getElementById('lm-studio-use-max-context');
-
-        if (!modelSelect || !metadataEl) return;
-
-        const selectedOption = modelSelect.options[modelSelect.selectedIndex];
-        const maxContext = Number(selectedOption?.dataset?.maxContextLength || '');
-        const currentContext = Number(selectedOption?.dataset?.currentContextLength || '');
-        const hasMaxContext = Number.isFinite(maxContext) && maxContext > 0;
-        const hasCurrentContext = Number.isFinite(currentContext) && currentContext > 0;
-
-        if (hasMaxContext && hasCurrentContext) {
-          metadataEl.textContent = 'Detected max context: ' + maxContext.toLocaleString() + ' tokens. Loaded context: ' + currentContext.toLocaleString() + ' tokens.';
-        } else if (hasMaxContext) {
-          metadataEl.textContent = 'Detected max context: ' + maxContext.toLocaleString() + ' tokens.';
-        } else {
-          metadataEl.textContent = 'Refresh models to detect this model\\'s maximum supported context length.';
-        }
-
-        if (useMaxBtn) {
-          useMaxBtn.disabled = !hasMaxContext || modelSelect.disabled;
+          nonClaudeNote.style.display = !isClaude && !isCodex ? '' : 'none';
         }
       }
 
@@ -12101,9 +11078,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
         setModified(true);
         if (path === 'ui.core.adapter') {
           updateCoreAdapterVisibility(value || element.dataset.inheritedValue || 'claude');
-        }
-        if (path === 'lm_studio.model') {
-          updateLmStudioModelMetadata();
         }
         vscode.postMessage({ type: 'change', path, value });
         if (path.indexOf('pipeline.stage_adapters.') === 0) {
@@ -12155,22 +11129,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
       // Select inputs
       document.querySelectorAll('.select-input').forEach(select => {
         select.addEventListener('change', () => handleChange(select));
-      });
-
-      document.getElementById('lm-studio-use-max-context')?.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-
-        const modelSelect = document.querySelector('[data-path="lm_studio.model"]');
-        const contextInput = document.querySelector('[data-path="lm_studio.context_length"]');
-        if (!modelSelect || !contextInput) return;
-
-        const selectedOption = modelSelect.options[modelSelect.selectedIndex];
-        const maxContext = Number(selectedOption?.dataset?.maxContextLength || '');
-        if (!Number.isFinite(maxContext) || maxContext <= 0) return;
-
-        contextInput.value = String(maxContext);
-        handleChange(contextInput);
       });
 
       // Checkbox group inputs (trusted_stages)
@@ -12303,25 +11261,10 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
           e.preventDefault();
           e.stopPropagation();
 
-          const textValue = (path) => {
-            const el = document.querySelector('[data-path="' + path + '"]');
-            return el ? el.value : undefined;
-          };
-          const numberValue = (path) => {
-            const el = document.querySelector('[data-path="' + path + '"]');
-            if (!el || el.value === '') return undefined;
-            const parsed = Number(el.value);
-            return Number.isFinite(parsed) ? parsed : undefined;
-          };
-
           vscode.postMessage({
             type: 'action',
             action: btn.dataset.action,
             payload: {
-              'lm_studio.model': textValue('lm_studio.model'),
-              'lm_studio.base_url': textValue('lm_studio.base_url'),
-              'lm_studio.api_key': textValue('lm_studio.api_key'),
-              'lm_studio.context_length': numberValue('lm_studio.context_length'),
               projectNumber: btn.dataset.projectNumber
                 ? Number(btn.dataset.projectNumber)
                 : undefined,
@@ -12442,8 +11385,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
       if (adapterSelect) {
         updateCoreAdapterVisibility(adapterSelect.value || adapterSelect.dataset.inheritedValue || 'claude');
       }
-      updateLmStudioModelMetadata();
-
       // Handle messages from extension
       window.addEventListener('message', event => {
         const message = event.data;
@@ -12474,9 +11415,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
               }
                if (path === 'ui.core.adapter') {
                  updateCoreAdapterVisibility(String(value || ''));
-               }
-               if (path === 'lm_studio.model') {
-                 updateLmStudioModelMetadata();
                }
              });
             setModified(true);
@@ -13551,7 +12489,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
                 class="select-input"
                 data-path="ui.core.adapter"
                 disabled>
-          <option value="claude" selected>Claude</option><option value="codex" >Codex</option><option value="gemini" >Gemini CLI</option><option value="gemini-sdk" >Gemini SDK</option><option value="lm-studio" >LM Studio</option><option value="ollama" >Ollama</option><option value="copilot" >GitHub Copilot CLI</option><option value="grok" >Grok Build CLI</option><option value="opencode" >OpenCode (Experimental)</option>
+          <option value="claude" selected>Claude</option><option value="codex" >Codex</option><option value="gemini" >Gemini CLI</option><option value="gemini-sdk" >Gemini SDK</option><option value="copilot" >GitHub Copilot CLI</option><option value="grok" >Grok Build CLI</option><option value="opencode" >OpenCode (Experimental)</option>
         </select>
       </div>
     </div>
@@ -13944,285 +12882,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
                checked
                disabled>
         <label for="ui.core.codex.resume_enabled" class="toggle-switch"></label>
-      </div>
-    </div>
-
-      </div>
-      <div id="core-lm-studio-settings" style="display:none;">
-        <p class="section-note">LM Studio uses one configured backend model for all pipeline stages. Claude stage routing does not apply.</p>
-        <div class="inline-action-bar">
-        <button type="button"
-                class="btn inline-action-btn"
-                data-action="lm-studio-start-server"
-
-                disabled>
-          Start Server
-        </button>
-
-        <button type="button"
-                class="btn inline-action-btn"
-                data-action="lm-studio-refresh-models"
-
-                disabled>
-          Refresh Models
-        </button>
-
-        <button type="button"
-                class="btn inline-action-btn"
-                data-action="lm-studio-load-model"
-                title="Loads the selected model into LM Studio using the configured context length"
-                disabled>
-          Load Model
-        </button>
-      </div>
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.model" class="setting-label">Selected Model </label>
-        <p class="setting-description">Model identifier from the LM Studio server and used for every stage run</p>
-        <p id="lm-studio-model-capacity" class="setting-description"></p>
-      </div>
-      <div class="setting-control">
-        <select id="lm_studio.model"
-                class="select-input"
-                data-path="lm_studio.model"
-                disabled>
-          <option value="" selected>Refresh models...</option>
-        </select>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.context_length" class="setting-label">Context Length </label>
-        <p class="setting-description">Applied when loading the model from this panel. Existing LM Studio sessions keep their current context window.</p>
-      </div>
-      <div class="setting-control context-length-control">
-        <input type="number"
-               id="lm_studio.context_length"
-               class="number-input"
-               data-path="lm_studio.context_length"
-               value="32768"
-               min="1"
-               step="1"
-               disabled>
-        <button type="button"
-                id="lm-studio-use-max-context"
-                class="btn inline-action-btn"
-                title="Set context length to the selected model's maximum supported value"
-                disabled>
-          Use Max
-        </button>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.base_url" class="setting-label">Base URL </label>
-        <p class="setting-description">LM Studio OpenAI-compatible server base URL</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="lm_studio.base_url"
-               class="text-input"
-               data-path="lm_studio.base_url"
-               value="http://127.0.0.1:1234/v1"
-               placeholder="http://127.0.0.1:1234/v1"
-               disabled>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.api_key" class="setting-label">API Key </label>
-        <p class="setting-description">Auth header value sent to LM Studio; any string is accepted by the local server</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="lm_studio.api_key"
-               class="text-input"
-               data-path="lm_studio.api_key"
-               value="lm-studio"
-               placeholder="lm-studio"
-               disabled>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.timeout_ms" class="setting-label">Timeout (ms) </label>
-        <p class="setting-description">Request timeout for local inference</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="number"
-               id="lm_studio.timeout_ms"
-               class="number-input"
-               data-path="lm_studio.timeout_ms"
-               value="180000"
-               min="1000"
-
-               step="1000"
-               disabled>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.max_tokens" class="setting-label">Max Tokens </label>
-        <p class="setting-description">Maximum completion tokens requested from LM Studio</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="number"
-               id="lm_studio.max_tokens"
-               class="number-input"
-               data-path="lm_studio.max_tokens"
-               value="8192"
-               min="1"
-
-               step="1"
-               disabled>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.tool_calling" class="setting-label">Enable Tool Calling </label>
-        <p class="setting-description">Allow tool calling for models that reliably support it</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="checkbox"
-               id="lm_studio.tool_calling"
-               class="toggle-input"
-               data-path="lm_studio.tool_calling"
-
-               disabled>
-        <label for="lm_studio.tool_calling" class="toggle-switch"></label>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.stream_options.include_usage" class="setting-label">Include Usage In Stream </label>
-        <p class="setting-description">Request token usage metadata in streamed responses</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="checkbox"
-               id="lm_studio.stream_options.include_usage"
-               class="toggle-input"
-               data-path="lm_studio.stream_options.include_usage"
-               checked
-               disabled>
-        <label for="lm_studio.stream_options.include_usage" class="toggle-switch"></label>
-      </div>
-    </div>
-
-      </div>
-      <div id="core-ollama-settings" style="display:none;">
-        <p class="section-note">Ollama uses one configured backend model for all pipeline stages. Claude stage routing does not apply.</p>
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ollama.model" class="setting-label">Selected Model </label>
-        <p class="setting-description">Model identifier pulled into Ollama and used for every stage run</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="ollama.model"
-               class="text-input"
-               data-path="ollama.model"
-               value=""
-               placeholder="llama3.1"
-               disabled>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ollama.base_url" class="setting-label">Base URL </label>
-        <p class="setting-description">Ollama OpenAI-compatible server base URL</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="ollama.base_url"
-               class="text-input"
-               data-path="ollama.base_url"
-               value="http://localhost:11434/v1"
-               placeholder="http://localhost:11434/v1"
-               disabled>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ollama.api_key" class="setting-label">API Key </label>
-        <p class="setting-description">Auth header value sent to Ollama; local installs usually accept the default placeholder</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="ollama.api_key"
-               class="text-input"
-               data-path="ollama.api_key"
-               value="ollama"
-               placeholder="ollama"
-               disabled>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ollama.timeout_ms" class="setting-label">Timeout (ms) </label>
-        <p class="setting-description">Request timeout for local inference</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="number"
-               id="ollama.timeout_ms"
-               class="number-input"
-               data-path="ollama.timeout_ms"
-               value="300000"
-               min="1000"
-
-               step="1000"
-               disabled>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ollama.max_tokens" class="setting-label">Max Tokens </label>
-        <p class="setting-description">Maximum completion tokens requested from Ollama</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="number"
-               id="ollama.max_tokens"
-               class="number-input"
-               data-path="ollama.max_tokens"
-               value="8192"
-               min="1"
-
-               step="1"
-               disabled>
       </div>
     </div>
 
@@ -16215,13 +14874,9 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
       function updateCoreAdapterVisibility(adapterValue) {
         const claudeSettings = document.getElementById('core-claude-settings');
         const codexSettings = document.getElementById('core-codex-settings');
-        const lmStudioSettings = document.getElementById('core-lm-studio-settings');
-        const ollamaSettings = document.getElementById('core-ollama-settings');
         const nonClaudeNote = document.getElementById('core-non-claude-note');
         const isClaude = adapterValue === 'claude';
         const isCodex = adapterValue === 'codex';
-        const isLmStudio = adapterValue === 'lm-studio';
-        const isOllama = adapterValue === 'ollama';
 
         if (claudeSettings) {
           claudeSettings.style.display = isClaude ? '' : 'none';
@@ -16229,40 +14884,8 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
         if (codexSettings) {
           codexSettings.style.display = isCodex ? '' : 'none';
         }
-        if (lmStudioSettings) {
-          lmStudioSettings.style.display = isLmStudio ? '' : 'none';
-        }
-        if (ollamaSettings) {
-          ollamaSettings.style.display = isOllama ? '' : 'none';
-        }
         if (nonClaudeNote) {
-          nonClaudeNote.style.display = !isClaude && !isCodex && !isLmStudio && !isOllama ? '' : 'none';
-        }
-      }
-
-      function updateLmStudioModelMetadata() {
-        const modelSelect = document.querySelector('[data-path="lm_studio.model"]');
-        const metadataEl = document.getElementById('lm-studio-model-capacity');
-        const useMaxBtn = document.getElementById('lm-studio-use-max-context');
-
-        if (!modelSelect || !metadataEl) return;
-
-        const selectedOption = modelSelect.options[modelSelect.selectedIndex];
-        const maxContext = Number(selectedOption?.dataset?.maxContextLength || '');
-        const currentContext = Number(selectedOption?.dataset?.currentContextLength || '');
-        const hasMaxContext = Number.isFinite(maxContext) && maxContext > 0;
-        const hasCurrentContext = Number.isFinite(currentContext) && currentContext > 0;
-
-        if (hasMaxContext && hasCurrentContext) {
-          metadataEl.textContent = 'Detected max context: ' + maxContext.toLocaleString() + ' tokens. Loaded context: ' + currentContext.toLocaleString() + ' tokens.';
-        } else if (hasMaxContext) {
-          metadataEl.textContent = 'Detected max context: ' + maxContext.toLocaleString() + ' tokens.';
-        } else {
-          metadataEl.textContent = 'Refresh models to detect this model\\'s maximum supported context length.';
-        }
-
-        if (useMaxBtn) {
-          useMaxBtn.disabled = !hasMaxContext || modelSelect.disabled;
+          nonClaudeNote.style.display = !isClaude && !isCodex ? '' : 'none';
         }
       }
 
@@ -16282,9 +14905,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
         setModified(true);
         if (path === 'ui.core.adapter') {
           updateCoreAdapterVisibility(value || element.dataset.inheritedValue || 'claude');
-        }
-        if (path === 'lm_studio.model') {
-          updateLmStudioModelMetadata();
         }
         vscode.postMessage({ type: 'change', path, value });
         if (path.indexOf('pipeline.stage_adapters.') === 0) {
@@ -16336,22 +14956,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
       // Select inputs
       document.querySelectorAll('.select-input').forEach(select => {
         select.addEventListener('change', () => handleChange(select));
-      });
-
-      document.getElementById('lm-studio-use-max-context')?.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-
-        const modelSelect = document.querySelector('[data-path="lm_studio.model"]');
-        const contextInput = document.querySelector('[data-path="lm_studio.context_length"]');
-        if (!modelSelect || !contextInput) return;
-
-        const selectedOption = modelSelect.options[modelSelect.selectedIndex];
-        const maxContext = Number(selectedOption?.dataset?.maxContextLength || '');
-        if (!Number.isFinite(maxContext) || maxContext <= 0) return;
-
-        contextInput.value = String(maxContext);
-        handleChange(contextInput);
       });
 
       // Checkbox group inputs (trusted_stages)
@@ -16484,25 +15088,10 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
           e.preventDefault();
           e.stopPropagation();
 
-          const textValue = (path) => {
-            const el = document.querySelector('[data-path="' + path + '"]');
-            return el ? el.value : undefined;
-          };
-          const numberValue = (path) => {
-            const el = document.querySelector('[data-path="' + path + '"]');
-            if (!el || el.value === '') return undefined;
-            const parsed = Number(el.value);
-            return Number.isFinite(parsed) ? parsed : undefined;
-          };
-
           vscode.postMessage({
             type: 'action',
             action: btn.dataset.action,
             payload: {
-              'lm_studio.model': textValue('lm_studio.model'),
-              'lm_studio.base_url': textValue('lm_studio.base_url'),
-              'lm_studio.api_key': textValue('lm_studio.api_key'),
-              'lm_studio.context_length': numberValue('lm_studio.context_length'),
               projectNumber: btn.dataset.projectNumber
                 ? Number(btn.dataset.projectNumber)
                 : undefined,
@@ -16623,8 +15212,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
       if (adapterSelect) {
         updateCoreAdapterVisibility(adapterSelect.value || adapterSelect.dataset.inheritedValue || 'claude');
       }
-      updateLmStudioModelMetadata();
-
       // Handle messages from extension
       window.addEventListener('message', event => {
         const message = event.data;
@@ -16655,9 +15242,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
               }
                if (path === 'ui.core.adapter') {
                  updateCoreAdapterVisibility(String(value || ''));
-               }
-               if (path === 'lm_studio.model') {
-                 updateLmStudioModelMetadata();
                }
              });
             setModified(true);
@@ -17714,7 +16298,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
                 class="select-input"
                 data-path="ui.core.adapter"
                 >
-          <option value="claude" selected>Claude</option><option value="codex" >Codex</option><option value="gemini" >Gemini CLI</option><option value="gemini-sdk" >Gemini SDK</option><option value="lm-studio" >LM Studio</option><option value="ollama" >Ollama</option><option value="copilot" >GitHub Copilot CLI</option><option value="grok" >Grok Build CLI</option><option value="opencode" >OpenCode (Experimental)</option>
+          <option value="claude" selected>Claude</option><option value="codex" >Codex</option><option value="gemini" >Gemini CLI</option><option value="gemini-sdk" >Gemini SDK</option><option value="copilot" >GitHub Copilot CLI</option><option value="grok" >Grok Build CLI</option><option value="opencode" >OpenCode (Experimental)</option>
         </select>
       </div>
     </div>
@@ -18107,285 +16691,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
                checked
                >
         <label for="ui.core.codex.resume_enabled" class="toggle-switch"></label>
-      </div>
-    </div>
-
-      </div>
-      <div id="core-lm-studio-settings" style="display:none;">
-        <p class="section-note">LM Studio uses one configured backend model for all pipeline stages. Claude stage routing does not apply.</p>
-        <div class="inline-action-bar">
-        <button type="button"
-                class="btn inline-action-btn"
-                data-action="lm-studio-start-server"
-
-                >
-          Start Server
-        </button>
-
-        <button type="button"
-                class="btn inline-action-btn"
-                data-action="lm-studio-refresh-models"
-
-                >
-          Refresh Models
-        </button>
-
-        <button type="button"
-                class="btn inline-action-btn"
-                data-action="lm-studio-load-model"
-                title="Loads the selected model into LM Studio using the configured context length"
-                >
-          Load Model
-        </button>
-      </div>
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.model" class="setting-label">Selected Model </label>
-        <p class="setting-description">Model identifier from the LM Studio server and used for every stage run</p>
-        <p id="lm-studio-model-capacity" class="setting-description"></p>
-      </div>
-      <div class="setting-control">
-        <select id="lm_studio.model"
-                class="select-input"
-                data-path="lm_studio.model"
-                >
-          <option value="" selected>Refresh models...</option>
-        </select>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.context_length" class="setting-label">Context Length </label>
-        <p class="setting-description">Applied when loading the model from this panel. Existing LM Studio sessions keep their current context window.</p>
-      </div>
-      <div class="setting-control context-length-control">
-        <input type="number"
-               id="lm_studio.context_length"
-               class="number-input"
-               data-path="lm_studio.context_length"
-               value="32768"
-               min="1"
-               step="1"
-               >
-        <button type="button"
-                id="lm-studio-use-max-context"
-                class="btn inline-action-btn"
-                title="Set context length to the selected model's maximum supported value"
-                >
-          Use Max
-        </button>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.base_url" class="setting-label">Base URL </label>
-        <p class="setting-description">LM Studio OpenAI-compatible server base URL</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="lm_studio.base_url"
-               class="text-input"
-               data-path="lm_studio.base_url"
-               value="http://127.0.0.1:1234/v1"
-               placeholder="http://127.0.0.1:1234/v1"
-               >
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.api_key" class="setting-label">API Key </label>
-        <p class="setting-description">Auth header value sent to LM Studio; any string is accepted by the local server</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="lm_studio.api_key"
-               class="text-input"
-               data-path="lm_studio.api_key"
-               value="lm-studio"
-               placeholder="lm-studio"
-               >
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.timeout_ms" class="setting-label">Timeout (ms) </label>
-        <p class="setting-description">Request timeout for local inference</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="number"
-               id="lm_studio.timeout_ms"
-               class="number-input"
-               data-path="lm_studio.timeout_ms"
-               value="180000"
-               min="1000"
-
-               step="1000"
-               >
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.max_tokens" class="setting-label">Max Tokens </label>
-        <p class="setting-description">Maximum completion tokens requested from LM Studio</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="number"
-               id="lm_studio.max_tokens"
-               class="number-input"
-               data-path="lm_studio.max_tokens"
-               value="8192"
-               min="1"
-
-               step="1"
-               >
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.tool_calling" class="setting-label">Enable Tool Calling </label>
-        <p class="setting-description">Allow tool calling for models that reliably support it</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="checkbox"
-               id="lm_studio.tool_calling"
-               class="toggle-input"
-               data-path="lm_studio.tool_calling"
-
-               >
-        <label for="lm_studio.tool_calling" class="toggle-switch"></label>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="lm_studio.stream_options.include_usage" class="setting-label">Include Usage In Stream </label>
-        <p class="setting-description">Request token usage metadata in streamed responses</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="checkbox"
-               id="lm_studio.stream_options.include_usage"
-               class="toggle-input"
-               data-path="lm_studio.stream_options.include_usage"
-               checked
-               >
-        <label for="lm_studio.stream_options.include_usage" class="toggle-switch"></label>
-      </div>
-    </div>
-
-      </div>
-      <div id="core-ollama-settings" style="display:none;">
-        <p class="section-note">Ollama uses one configured backend model for all pipeline stages. Claude stage routing does not apply.</p>
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ollama.model" class="setting-label">Selected Model </label>
-        <p class="setting-description">Model identifier pulled into Ollama and used for every stage run</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="ollama.model"
-               class="text-input"
-               data-path="ollama.model"
-               value=""
-               placeholder="llama3.1"
-               >
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ollama.base_url" class="setting-label">Base URL </label>
-        <p class="setting-description">Ollama OpenAI-compatible server base URL</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="ollama.base_url"
-               class="text-input"
-               data-path="ollama.base_url"
-               value="http://localhost:11434/v1"
-               placeholder="http://localhost:11434/v1"
-               >
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ollama.api_key" class="setting-label">API Key </label>
-        <p class="setting-description">Auth header value sent to Ollama; local installs usually accept the default placeholder</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="ollama.api_key"
-               class="text-input"
-               data-path="ollama.api_key"
-               value="ollama"
-               placeholder="ollama"
-               >
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ollama.timeout_ms" class="setting-label">Timeout (ms) </label>
-        <p class="setting-description">Request timeout for local inference</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="number"
-               id="ollama.timeout_ms"
-               class="number-input"
-               data-path="ollama.timeout_ms"
-               value="300000"
-               min="1000"
-
-               step="1000"
-               >
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ollama.max_tokens" class="setting-label">Max Tokens </label>
-        <p class="setting-description">Maximum completion tokens requested from Ollama</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="number"
-               id="ollama.max_tokens"
-               class="number-input"
-               data-path="ollama.max_tokens"
-               value="8192"
-               min="1"
-
-               step="1"
-               >
       </div>
     </div>
 
@@ -20378,13 +18683,9 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
       function updateCoreAdapterVisibility(adapterValue) {
         const claudeSettings = document.getElementById('core-claude-settings');
         const codexSettings = document.getElementById('core-codex-settings');
-        const lmStudioSettings = document.getElementById('core-lm-studio-settings');
-        const ollamaSettings = document.getElementById('core-ollama-settings');
         const nonClaudeNote = document.getElementById('core-non-claude-note');
         const isClaude = adapterValue === 'claude';
         const isCodex = adapterValue === 'codex';
-        const isLmStudio = adapterValue === 'lm-studio';
-        const isOllama = adapterValue === 'ollama';
 
         if (claudeSettings) {
           claudeSettings.style.display = isClaude ? '' : 'none';
@@ -20392,40 +18693,8 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
         if (codexSettings) {
           codexSettings.style.display = isCodex ? '' : 'none';
         }
-        if (lmStudioSettings) {
-          lmStudioSettings.style.display = isLmStudio ? '' : 'none';
-        }
-        if (ollamaSettings) {
-          ollamaSettings.style.display = isOllama ? '' : 'none';
-        }
         if (nonClaudeNote) {
-          nonClaudeNote.style.display = !isClaude && !isCodex && !isLmStudio && !isOllama ? '' : 'none';
-        }
-      }
-
-      function updateLmStudioModelMetadata() {
-        const modelSelect = document.querySelector('[data-path="lm_studio.model"]');
-        const metadataEl = document.getElementById('lm-studio-model-capacity');
-        const useMaxBtn = document.getElementById('lm-studio-use-max-context');
-
-        if (!modelSelect || !metadataEl) return;
-
-        const selectedOption = modelSelect.options[modelSelect.selectedIndex];
-        const maxContext = Number(selectedOption?.dataset?.maxContextLength || '');
-        const currentContext = Number(selectedOption?.dataset?.currentContextLength || '');
-        const hasMaxContext = Number.isFinite(maxContext) && maxContext > 0;
-        const hasCurrentContext = Number.isFinite(currentContext) && currentContext > 0;
-
-        if (hasMaxContext && hasCurrentContext) {
-          metadataEl.textContent = 'Detected max context: ' + maxContext.toLocaleString() + ' tokens. Loaded context: ' + currentContext.toLocaleString() + ' tokens.';
-        } else if (hasMaxContext) {
-          metadataEl.textContent = 'Detected max context: ' + maxContext.toLocaleString() + ' tokens.';
-        } else {
-          metadataEl.textContent = 'Refresh models to detect this model\\'s maximum supported context length.';
-        }
-
-        if (useMaxBtn) {
-          useMaxBtn.disabled = !hasMaxContext || modelSelect.disabled;
+          nonClaudeNote.style.display = !isClaude && !isCodex ? '' : 'none';
         }
       }
 
@@ -20445,9 +18714,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
         setModified(true);
         if (path === 'ui.core.adapter') {
           updateCoreAdapterVisibility(value || element.dataset.inheritedValue || 'claude');
-        }
-        if (path === 'lm_studio.model') {
-          updateLmStudioModelMetadata();
         }
         vscode.postMessage({ type: 'change', path, value });
         if (path.indexOf('pipeline.stage_adapters.') === 0) {
@@ -20499,22 +18765,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
       // Select inputs
       document.querySelectorAll('.select-input').forEach(select => {
         select.addEventListener('change', () => handleChange(select));
-      });
-
-      document.getElementById('lm-studio-use-max-context')?.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-
-        const modelSelect = document.querySelector('[data-path="lm_studio.model"]');
-        const contextInput = document.querySelector('[data-path="lm_studio.context_length"]');
-        if (!modelSelect || !contextInput) return;
-
-        const selectedOption = modelSelect.options[modelSelect.selectedIndex];
-        const maxContext = Number(selectedOption?.dataset?.maxContextLength || '');
-        if (!Number.isFinite(maxContext) || maxContext <= 0) return;
-
-        contextInput.value = String(maxContext);
-        handleChange(contextInput);
       });
 
       // Checkbox group inputs (trusted_stages)
@@ -20647,25 +18897,10 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
           e.preventDefault();
           e.stopPropagation();
 
-          const textValue = (path) => {
-            const el = document.querySelector('[data-path="' + path + '"]');
-            return el ? el.value : undefined;
-          };
-          const numberValue = (path) => {
-            const el = document.querySelector('[data-path="' + path + '"]');
-            if (!el || el.value === '') return undefined;
-            const parsed = Number(el.value);
-            return Number.isFinite(parsed) ? parsed : undefined;
-          };
-
           vscode.postMessage({
             type: 'action',
             action: btn.dataset.action,
             payload: {
-              'lm_studio.model': textValue('lm_studio.model'),
-              'lm_studio.base_url': textValue('lm_studio.base_url'),
-              'lm_studio.api_key': textValue('lm_studio.api_key'),
-              'lm_studio.context_length': numberValue('lm_studio.context_length'),
               projectNumber: btn.dataset.projectNumber
                 ? Number(btn.dataset.projectNumber)
                 : undefined,
@@ -20786,8 +19021,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
       if (adapterSelect) {
         updateCoreAdapterVisibility(adapterSelect.value || adapterSelect.dataset.inheritedValue || 'claude');
       }
-      updateLmStudioModelMetadata();
-
       // Handle messages from extension
       window.addEventListener('message', event => {
         const message = event.data;
@@ -20818,9 +19051,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
               }
                if (path === 'ui.core.adapter') {
                  updateCoreAdapterVisibility(String(value || ''));
-               }
-               if (path === 'lm_studio.model') {
-                 updateLmStudioModelMetadata();
                }
              });
             setModified(true);

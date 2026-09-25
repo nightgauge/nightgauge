@@ -7,7 +7,7 @@
 # @see Issue #1947 - Add Copilot adapter routing
 set -euo pipefail
 
-ADAPTER="${1:?Adapter name required (e.g. lm-studio, codex, gemini-sdk, copilot)}"
+ADAPTER="${1:?Adapter name required (e.g. codex, gemini-sdk, copilot)}"
 STAGE="${2:?Stage name required (e.g. feature-planning)}"
 ISSUE_NUMBER="${3:?Issue number required}"
 

@@ -18,10 +18,9 @@
  * completion only, with no tool loop, so it is never agentic (#57) and serves
  * the eval, judge and summarization surfaces only.
  *
- * It is registered under the `lm-studio` and `ollama` adapter names, as two
- * presets with their historical defaults, until part 3 of #2128 replaces
- * those names with `openai-compatible` in the adapter enum, schema and
- * settings UI.
+ * It is the `openai-compatible` adapter (#2128 part 3), which replaced the
+ * `lm-studio` and `ollama` adapters. Its settings come from explicit config
+ * or the `NIGHTGAUGE_OPENAI_COMPATIBLE_*` environment variables.
  */
 
 import type {
@@ -39,12 +38,8 @@ import type {
 import { throwConfigInvalid, throwModelNotFound, throwServerUnreachable } from "./errors.js";
 import { isLocalBaseUrl } from "../../eval/modelRegistry.js";
 
-/**
- * Adapter names this backend serves today. The `openai-compatible` adapter
- * name itself joins the adapter enum, schema and settings UI in #2128 part 3,
- * which retires these two; until then they are presets of this one backend.
- */
-export type OpenAiCompatibleName = Extract<NightgaugeAdapter, "lm-studio" | "ollama">;
+/** The adapter name this backend serves. */
+export type OpenAiCompatibleName = Extract<NightgaugeAdapter, "openai-compatible">;
 
 /** Explicit configuration; any field left out is read from the environment. */
 export interface OpenAiCompatibleConfig {
@@ -55,41 +50,17 @@ export interface OpenAiCompatibleConfig {
   timeoutMs?: number;
 }
 
-/** Where a preset reads its settings from and what it defaults to. */
-interface Preset {
-  displayName: string;
-  cliCommand: string;
-  envPrefix: string;
-  defaultBaseUrl: string;
+/** Where the backend reads its settings from and what it defaults to. */
+const SETTINGS = Object.freeze({
+  displayName: "OpenAI-compatible",
+  cliCommand: "openai-compatible",
+  envPrefix: "NIGHTGAUGE_OPENAI_COMPATIBLE",
   /** The variable read for a key when no `<PREFIX>_API_KEY_ENV` names one. */
-  defaultApiKeyEnv: string;
-  defaultTimeoutMs: number;
-  docsUrl: string;
-  /** How to make a model available on this kind of server. */
-  modelHint: string;
-}
-
-const PRESETS: Readonly<Record<OpenAiCompatibleName, Preset>> = Object.freeze({
-  "lm-studio": {
-    displayName: "LM Studio",
-    cliCommand: "lm-studio",
-    envPrefix: "NIGHTGAUGE_LM_STUDIO",
-    defaultBaseUrl: "http://localhost:1234/v1",
-    defaultApiKeyEnv: "NIGHTGAUGE_LM_STUDIO_API_KEY",
-    defaultTimeoutMs: 180_000,
-    docsUrl: "https://lmstudio.ai/docs",
-    modelHint: "Load a model in LM Studio: open LM Studio → Model tab → load a model.",
-  },
-  ollama: {
-    displayName: "Ollama",
-    cliCommand: "ollama",
-    envPrefix: "NIGHTGAUGE_OLLAMA",
-    defaultBaseUrl: "http://localhost:11434/v1",
-    defaultApiKeyEnv: "NIGHTGAUGE_OLLAMA_API_KEY",
-    defaultTimeoutMs: 300_000,
-    docsUrl: "https://ollama.com/library",
-    modelHint: "Download a model first: ollama pull llama3.1",
-  },
+  defaultApiKeyEnv: "NIGHTGAUGE_OPENAI_COMPATIBLE_API_KEY",
+  defaultTimeoutMs: 180_000,
+  docsUrl: "https://platform.openai.com/docs/api-reference/chat",
+  modelHint:
+    "Load or pull the model on the server, then name it exactly as GET /v1/models lists it.",
 });
 
 /** Fully resolved settings for one query function. */
@@ -103,17 +74,17 @@ export interface ResolvedOpenAiCompatibleConfig {
 /**
  * Resolve the backend's settings: explicit config first, then
  * `<PREFIX>_BASE_URL`, `<PREFIX>_MODEL`, `<PREFIX>_API_KEY_ENV` and
- * `<PREFIX>_TIMEOUT_MS`, then the preset's defaults.
+ * `<PREFIX>_TIMEOUT_MS` (prefix `NIGHTGAUGE_OPENAI_COMPATIBLE`), then the
+ * defaults. There is no default base URL: the server is always named.
  */
 export function resolveOpenAiCompatibleConfig(
-  name: OpenAiCompatibleName,
   config: OpenAiCompatibleConfig = {},
   env: NodeJS.ProcessEnv = process.env
 ): ResolvedOpenAiCompatibleConfig {
-  const p = PRESETS[name];
+  const p = SETTINGS;
   const rawTimeout = env[`${p.envPrefix}_TIMEOUT_MS`];
   const parsedTimeout = rawTimeout ? parseInt(rawTimeout, 10) : NaN;
-  let baseUrl = (config.baseUrl ?? env[`${p.envPrefix}_BASE_URL`] ?? p.defaultBaseUrl).trim();
+  let baseUrl = (config.baseUrl ?? env[`${p.envPrefix}_BASE_URL`] ?? "").trim();
   // A loop, not /\/+$/: that regex backtracks polynomially on many slashes.
   while (baseUrl.endsWith("/")) baseUrl = baseUrl.slice(0, -1);
   const apiKeyEnv =
@@ -141,26 +112,21 @@ export function buildOpenAiCompatibleHeaders(
 type Usage = { prompt_tokens?: number; completion_tokens?: number };
 
 export class OpenAiCompatibleAdapter implements ICliAdapter {
-  readonly name: OpenAiCompatibleName;
-  readonly displayName: string;
-  readonly cliCommand: string;
+  readonly name: OpenAiCompatibleName = "openai-compatible";
+  readonly displayName: string = SETTINGS.displayName;
+  readonly cliCommand: string = SETTINGS.cliCommand;
   // Chat completion only, zero tool handling: barred from pipeline dispatch
   // (#57); serves the eval, judge and summarization surfaces.
   readonly agentic = false;
 
   constructor(
-    name: OpenAiCompatibleName,
     private readonly config: OpenAiCompatibleConfig = {},
     private readonly env: NodeJS.ProcessEnv = process.env
-  ) {
-    this.name = name;
-    this.displayName = PRESETS[name].displayName;
-    this.cliCommand = PRESETS[name].cliCommand;
-  }
+  ) {}
 
   /** The settings a query function would use now. */
   resolveConfig(): ResolvedOpenAiCompatibleConfig {
-    return resolveOpenAiCompatibleConfig(this.name, this.config, this.env);
+    return resolveOpenAiCompatibleConfig(this.config, this.env);
   }
 
   /**
@@ -177,7 +143,7 @@ export class OpenAiCompatibleAdapter implements ICliAdapter {
   }
 
   async createQueryFunction(_options?: QueryFunctionOptions): Promise<SDKQueryFunction> {
-    const preset = PRESETS[this.name];
+    const preset = SETTINGS;
     const label = preset.displayName;
     const { baseUrl, model, apiKeyEnv, timeoutMs } = this.resolveConfig();
     const env = this.env;

@@ -39,6 +39,8 @@ import {
   type ExecutionAdapter,
   DEFAULT_EXECUTION_ADAPTER,
   VALID_ADAPTERS,
+  RetiredAdapterConfigError,
+  assertAdapterNotRetired,
   readAdapterFromFile,
 } from "./modelResolver";
 import { ADAPTER_ID_ALTERNATION } from "../../config/schema";
@@ -178,6 +180,7 @@ export function resolveStageAdapter(
   // Step 1 — env var: NIGHTGAUGE_PIPELINE_STAGE_ADAPTER_<STAGE>
   const envKey = `NIGHTGAUGE_PIPELINE_STAGE_ADAPTER_${stage.toUpperCase().replace(/-/g, "_")}`;
   const envAdapter = env[envKey];
+  assertAdapterNotRetired(envAdapter, envKey);
   if (envAdapter && VALID_ADAPTERS.includes(envAdapter)) {
     return { adapter: envAdapter as ExecutionAdapter, source: "env" };
   }
@@ -241,6 +244,7 @@ export function getGlobalAdapterWithSource(workspaceRoot?: string): {
 } {
   // 1. Environment variable
   const envAdapter = process.env.NIGHTGAUGE_UI_CORE_ADAPTER;
+  assertAdapterNotRetired(envAdapter, "NIGHTGAUGE_UI_CORE_ADAPTER");
   if (envAdapter && VALID_ADAPTERS.includes(envAdapter)) {
     return { adapter: envAdapter as ExecutionAdapter, configured: true };
   }
@@ -332,6 +336,10 @@ function getStageAdapterFromYaml(
       }
 
       if (inStageAdapters) {
+        const raw = trimmed.match(/^([a-z][-a-z]*):\s*['"]?([A-Za-z0-9_-]+)['"]?/);
+        if (raw && raw[1] === stage) {
+          assertAdapterNotRetired(raw[2], `pipeline.stage_adapters.${stage}`);
+        }
         const match = trimmed.match(
           new RegExp(`^([a-z][-a-z]*):\\s*['"]?(${ADAPTER_ID_ALTERNATION})['"]?(?:\\s+#.*)?$`)
         );
@@ -340,7 +348,7 @@ function getStageAdapterFromYaml(
           if (VALID_ADAPTERS.includes(adapter)) {
             return adapter as ExecutionAdapter;
           }
-          // Matched literal but not in VALID_ADAPTERS (e.g. "ollama") — fall
+          // Matched literal but not in VALID_ADAPTERS — fall
           // through to the global step rather than returning an invalid value.
           return undefined;
         }
@@ -349,6 +357,7 @@ function getStageAdapterFromYaml(
 
     return undefined;
   } catch (error) {
+    if (error instanceof RetiredAdapterConfigError) throw error;
     console.error("Failed to read stage_adapters from nightgauge config:", error);
     return undefined;
   }
@@ -366,8 +375,8 @@ function getStageAdapterFromYaml(
  * Order is intentional: cloud-quality adapters first (claude → codex → gemini),
  * then host-OS-tied (copilot). The walker skips the failed primary, so a
  * `claude` primary failure with the default chain walks
- * `codex → gemini → copilot`. Chat-completion-only adapters (lm-studio,
- * ollama, gemini-sdk) are NOT fallback candidates: the #57 agentic gate
+ * `codex → gemini → copilot`. Chat-completion-only adapters
+ * (openai-compatible, gemini-sdk) are NOT fallback candidates: the #57 agentic gate
  * rejects them for pipeline dispatch, so a rung would always be dead.
  */
 export const DEFAULT_ADAPTER_FALLBACK_CHAIN: ExecutionAdapter[] = [
@@ -431,6 +440,10 @@ export function readAdapterFallbackChainFromYaml(workspaceRoot?: string): Execut
       }
 
       if (inFallbackChain) {
+        assertAdapterNotRetired(
+          trimmed.match(/^-\s+['"]?([A-Za-z0-9_-]+)['"]?/)?.[1],
+          "pipeline.adapter_fallback_chain"
+        );
         const match = trimmed.match(
           new RegExp(`^-\\s+['"]?(${ADAPTER_ID_ALTERNATION})['"]?(?:\\s+#.*)?$`)
         );
@@ -445,6 +458,7 @@ export function readAdapterFallbackChainFromYaml(workspaceRoot?: string): Execut
 
     return chain;
   } catch (error) {
+    if (error instanceof RetiredAdapterConfigError) throw error;
     console.error("Failed to read adapter_fallback_chain from nightgauge config:", error);
     return [];
   }
@@ -532,6 +546,10 @@ export function readStageAdapterFallbackFromYaml(
       }
 
       if (inThisStage) {
+        assertAdapterNotRetired(
+          trimmed.match(/^-\s+['"]?([A-Za-z0-9_-]+)['"]?/)?.[1],
+          `pipeline.stage_adapter_fallback.${stage}`
+        );
         const match = trimmed.match(
           new RegExp(`^-\\s+['"]?(${ADAPTER_ID_ALTERNATION})['"]?(?:\\s+#.*)?$`)
         );
@@ -546,6 +564,7 @@ export function readStageAdapterFallbackFromYaml(
 
     return chain;
   } catch (error) {
+    if (error instanceof RetiredAdapterConfigError) throw error;
     console.error("Failed to read stage_adapter_fallback from nightgauge config:", error);
     return [];
   }
@@ -984,7 +1003,7 @@ export function enumerateAvailableAdapters(
 ): RouterExecutionAdapter[] {
   // Derive candidates from the canonical adapter set (VALID_ADAPTERS ==
   // AdapterEnumSchema.options) so the auto-router considers every selectable
-  // adapter — incl. ollama — rather than a stale hand-maintained subset (#4030).
+  // adapter rather than a stale hand-maintained subset (#4030).
   // Each is still gated by `validate`.
   const candidates = VALID_ADAPTERS as readonly ExecutionAdapter[];
   const passing = candidates.filter((adapter) => validate(adapter) === null).map(toRouterAdapter);
