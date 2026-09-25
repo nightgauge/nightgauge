@@ -59,6 +59,27 @@ export interface AdapterActivity {
   readonly adapter: NightgaugeAdapter;
   /** The child's event type, such as `step_start`, `step_finish` or `tool_use`. */
   readonly event: string;
+  /**
+   * A `step_finish`'s reason (`stop`, `tool-calls`, ...): whether the model
+   * asks for another step. The caller counts steps against a turn budget
+   * with it (#1668).
+   */
+  readonly reason?: string;
+  /**
+   * A `step_finish`'s token counts (`part.tokens`), numbers only: the caller
+   * enforces a token budget mid-run and takes the per-step peak prompt size
+   * from them (#1668). Never any text.
+   */
+  readonly tokens?: AdapterActivityTokens;
+}
+
+/** One OpenCode step's token counts, as `step_finish.part.tokens` reports them. */
+export interface AdapterActivityTokens {
+  readonly input: number;
+  readonly output: number;
+  readonly reasoning: number;
+  readonly cacheRead: number;
+  readonly cacheWrite: number;
 }
 
 export interface QueryFunctionOptions {

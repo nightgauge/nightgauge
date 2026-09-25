@@ -15203,6 +15203,25 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             const durationMs = Date.now() - startTime;
             this.currentProcess = null;
 
+            // Context-window telemetry (#1668), forwarded where stage usage is,
+            // so the "complete" notify carries it to RecordStageContext.
+            if (
+              this.stateService &&
+              (result.peakStepInputTokens !== undefined || result.contextWindowTokens !== undefined)
+            ) {
+              try {
+                await this.stateService.updateTokens({
+                  inputTokens: 0,
+                  outputTokens: 0,
+                  stage,
+                  peakStepInputTokens: result.peakStepInputTokens,
+                  contextWindowTokens: result.contextWindowTokens,
+                });
+              } catch (err) {
+                this.logger.warn("Failed to record stage context telemetry", { stage, err });
+              }
+            }
+
             // Capture the stage-exit telemetry the diagnostic record needs
             // (Issue #109). `result.tokenUsage` is the BOOKED per-stage total —
             // the reconciled accumulator on the normal path, the live estimate

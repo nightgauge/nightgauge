@@ -74,6 +74,7 @@ import type {
   ModelRouteResult,
   NotificationsReloadTokensResult,
   PipelineMaxConcurrentResult,
+  PipelineResolveStageBudgetsResult,
   PipelineStatus,
   PlatformStatus,
   PlatformSyncTelemetryResult,
@@ -258,6 +259,10 @@ export class IpcClientGenerated extends IpcClientBase {
 
   async pipelineSetPaused(issueNumber: number, paused: boolean, repo?: string, runId?: string): Promise<void> {
     await this.call<void>('pipeline.setPaused', { issueNumber, paused, repo, runId });
+  }
+
+  async pipelineResolveStageBudgets(repo: string, stage: string, adapter: string, model?: string): Promise<PipelineResolveStageBudgetsResult> {
+    return this.call<PipelineResolveStageBudgetsResult>('pipeline.resolveStageBudgets', { repo, stage, adapter, model });
   }
 
   async pipelineSetMaxConcurrent(maxConcurrent: number, persist: boolean): Promise<PipelineMaxConcurrentResult> {

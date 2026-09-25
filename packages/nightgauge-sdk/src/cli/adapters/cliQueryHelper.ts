@@ -21,7 +21,7 @@ import type {
   SDKQueryFunction,
   SDKQueryOptions,
 } from "../../orchestrator/StageExecutor.js";
-import type { AdapterActivity, NightgaugeAdapter } from "./ICliAdapter.js";
+import type { AdapterActivity, AdapterActivityTokens, NightgaugeAdapter } from "./ICliAdapter.js";
 import type { OpenCodeRunConfig, OpenCodeRunConfigRequest } from "./OpenCodeAdapter.js";
 import { applyCodexSandboxProfile } from "./codexSandbox.js";
 import {
@@ -439,6 +439,63 @@ export const OPENCODE_ACTIVITY_EVENTS: ReadonlySet<string> = new Set([
   "tool_use",
 ]);
 
+function activityCount(n: unknown): number {
+  return typeof n === "number" && Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/**
+ * A step_finish's reason and token counts (#1668), numbers and the reason
+ * only: the caller budgets and measures steps with them. Absent parts stay
+ * absent rather than reading as zero.
+ */
+function openCodeStepFinishActivity(part: unknown): {
+  reason?: string;
+  tokens?: AdapterActivityTokens;
+} {
+  if (typeof part !== "object" || part === null) return {};
+  const p = part as { reason?: unknown; tokens?: unknown };
+  const out: { reason?: string; tokens?: AdapterActivityTokens } = {};
+  if (typeof p.reason === "string") out.reason = p.reason;
+  if (typeof p.tokens === "object" && p.tokens !== null) {
+    const t = p.tokens as {
+      input?: unknown;
+      output?: unknown;
+      reasoning?: unknown;
+      cache?: { read?: unknown; write?: unknown };
+    };
+    out.tokens = {
+      input: activityCount(t.input),
+      output: activityCount(t.output),
+      reasoning: activityCount(t.reasoning),
+      cacheRead: activityCount(t.cache?.read),
+      cacheWrite: activityCount(t.cache?.write),
+    };
+  }
+  return out;
+}
+
+/**
+ * The turn cap an OpenCode query's per-run config is built with: the query's
+ * own `maxTurns`, lowered to the stage's resolved turn budget when the
+ * extension that launched this stage passes one in
+ * `NIGHTGAUGE_STAGE_MAX_TURNS` (#1668), so OpenCode's own `steps` cap stops
+ * the stage where the budget does. A value that is not a positive integer is
+ * ignored.
+ */
+export function openCodeStageMaxTurns(
+  queryMaxTurns: number | undefined,
+  env: NodeJS.ProcessEnv
+): number | undefined {
+  const raw = env.NIGHTGAUGE_STAGE_MAX_TURNS?.trim() ?? "";
+  const budget = /^[1-9][0-9]*$/.test(raw) ? Number(raw) : undefined;
+  const query =
+    queryMaxTurns !== undefined && Number.isInteger(queryMaxTurns) && queryMaxTurns > 0
+      ? queryMaxTurns
+      : undefined;
+  if (budget === undefined) return queryMaxTurns;
+  return query === undefined ? budget : Math.min(query, budget);
+}
+
 /**
  * Tell `onActivity` about one stdout line of a running opencode process when
  * it is an {@link OPENCODE_ACTIVITY_EVENTS} event. Only the event's type is
@@ -451,9 +508,14 @@ export function forwardOpenCodeActivity(
 ): void {
   if (onActivity === undefined || !line.includes('"type"')) return;
   try {
-    const event = (JSON.parse(line) as { type?: unknown }).type;
+    const parsed = JSON.parse(line) as { type?: unknown; part?: unknown };
+    const event = parsed.type;
     if (typeof event === "string" && OPENCODE_ACTIVITY_EVENTS.has(event)) {
-      onActivity({ adapter: "opencode", event });
+      onActivity({
+        adapter: "opencode",
+        event,
+        ...(event === "step_finish" ? openCodeStepFinishActivity(parsed.part) : {}),
+      });
     }
   } catch {
     // Not an event line, or the callback failed: neither affects the stage.
@@ -725,7 +787,7 @@ async function* openCodeQuery(
   const cwd = queryOptions.options?.cwd;
   const worktree = cwd !== undefined ? resolvePath(cwd) : run.worktree;
   const stage = queryOptions.options?.stage ?? run.stage;
-  const maxTurns = queryOptions.options?.maxTurns;
+  const maxTurns = openCodeStageMaxTurns(queryOptions.options?.maxTurns, process.env);
   const runId = queryOptions.options?.runId;
   const skillDir = queryOptions.options?.skillDir;
   // The per-run config is the query's own: its stage, its turn budget and its

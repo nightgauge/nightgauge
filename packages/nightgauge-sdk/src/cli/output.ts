@@ -163,7 +163,12 @@ export class OutputFormatter {
         JSON.stringify({
           level: "debug",
           message: ADAPTER_ACTIVITY_MESSAGE,
-          data: { adapter: activity.adapter, event: activity.event },
+          data: {
+            adapter: activity.adapter,
+            event: activity.event,
+            ...(activity.reason !== undefined && { reason: activity.reason }),
+            ...(activity.tokens !== undefined && { tokens: activity.tokens }),
+          },
         })
       );
       return;

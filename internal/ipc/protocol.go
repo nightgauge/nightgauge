@@ -1061,6 +1061,47 @@ type PipelineNotifyStageTransitionParams struct {
 	// run request pin on this run (#1656). A run without it never inherits a
 	// pin, even for the same issue.
 	RemoteRunID string `json:"remoteRunId,omitempty"`
+	// PeakStepInputTokens, ContextWindowTokens and CompactionCount are an
+	// editor-launched stage's context-window telemetry (#1668), sent on
+	// "complete" only: the largest prompt one model step sent (input plus
+	// cache read plus cache write, the max over steps, never a sum), the
+	// context window the stage ran with, and the compaction events counted in
+	// the run dir's events file. The handler records them with
+	// RecordStageContext, as the scheduler path does (#1653), only when both
+	// the peak and the window are present, and drops a notify whose values
+	// are negative or whose peak exceeds 10x its window. CompactionCount is a
+	// pointer so a counted 0 differs from "not counted".
+	PeakStepInputTokens int  `json:"peakStepInputTokens,omitempty"`
+	ContextWindowTokens int  `json:"contextWindowTokens,omitempty"`
+	CompactionCount     *int `json:"compactionCount,omitempty"`
+}
+
+// PipelineResolveStageBudgetsParams are parameters for
+// pipeline.resolveStageBudgets (#1668): the stage an editor-launched dispatch
+// runs, on which adapter and model. Repo ("owner/name") selects the
+// repository whose .nightgauge config holds pipeline.stage_budgets; an
+// unknown or empty repo falls back to the server's workspace root.
+type PipelineResolveStageBudgetsParams struct {
+	Repo    string `json:"repo"`
+	Stage   string `json:"stage"`
+	Adapter string `json:"adapter"`
+	Model   string `json:"model,omitempty"`
+}
+
+// PipelineResolveStageBudgetsResult is the non-USD stage budget (#1652) the
+// Go executor would enforce for the same dispatch. A positive ceiling binds;
+// -1 means unlimited, which is only ever returned for a priced stage.
+// ZeroCost reports a stage no USD cap can bind at $0 (a local or $0-priced
+// model). ContextWindowTokens is the window the dispatch runs with, 0 when
+// unknown (ADR-023 Q10). Warnings are the lines the executor logs for the
+// dispatch, such as a refused -1.
+type PipelineResolveStageBudgetsResult struct {
+	MaxTurns            int      `json:"maxTurns"`
+	MaxWallClockMs      int64    `json:"maxWallClockMs"`
+	MaxTokens           int      `json:"maxTokens"`
+	ZeroCost            bool     `json:"zeroCost"`
+	ContextWindowTokens int      `json:"contextWindowTokens,omitempty"`
+	Warnings            []string `json:"warnings,omitempty"`
 }
 
 // PipelineNotifyStageProgressParams are parameters for pipeline.notifyStageProgress.

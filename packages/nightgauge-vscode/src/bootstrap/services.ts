@@ -129,6 +129,7 @@ import { ApproveCommandHandler } from "../services/ApproveCommandHandler";
 import { RejectCommandHandler } from "../services/RejectCommandHandler";
 import { AgentRegistrationService } from "../services/AgentRegistrationService";
 import { IpcClient } from "../services/IpcClient";
+import { setStageBudgetResolver } from "../utils/stageBudget";
 import { SecretStorageService, SECRET_KEYS } from "../services/SecretStorageService";
 import { getGlobalConfigPath } from "../utils/globalConfigResolver";
 import {
@@ -1487,6 +1488,19 @@ export async function initializeServices(
     // warning-only, so one slot can no longer fail another for doing its job.
     setRunningWorktreePathsProvider(() => cpmRef.getActiveSlots().map((s) => s.worktreePath));
     context.subscriptions.push({ dispose: () => setRunningWorktreePathsProvider(null) });
+
+    // #1668: editor-launched stages take their non-USD stage budgets (#1652)
+    // from the Go binary, so the defaults and the zero-cost floor live in one
+    // place.
+    setStageBudgetResolver((request) =>
+      IpcClient.getInstance().pipelineResolveStageBudgets(
+        request.repo,
+        request.stage,
+        request.adapter,
+        request.model
+      )
+    );
+    context.subscriptions.push({ dispose: () => setStageBudgetResolver(null) });
 
     // Set up per-slot output channels
     slotOutputManager = new SlotOutputManager();
@@ -3426,6 +3440,22 @@ export async function initializeServices(
         onComplete: async (result) => {
           // Remove from active executions first (Issue #81)
           activeExtensionExecutions.delete(stage);
+
+          // Context-window telemetry (#1668) rides the "complete" notify.
+          if (
+            pipelineStateService &&
+            (result.peakStepInputTokens !== undefined || result.contextWindowTokens !== undefined)
+          ) {
+            await pipelineStateService
+              .updateTokens({
+                inputTokens: 0,
+                outputTokens: 0,
+                stage,
+                peakStepInputTokens: result.peakStepInputTokens,
+                contextWindowTokens: result.contextWindowTokens,
+              })
+              .catch((err) => logger.warn("Failed to record stage context telemetry", { err }));
+          }
 
           if (result.success) {
             logger.info("Stage completed successfully", { stage, issueNumber });

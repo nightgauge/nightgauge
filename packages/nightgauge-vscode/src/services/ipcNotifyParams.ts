@@ -80,6 +80,16 @@ export interface NotifyStageTransitionParams {
    * to record the trigger's remote run request pin on this run.
    */
   remoteRunId?: string;
+  /**
+   * Context-window telemetry (#1668), on `complete` only: the largest prompt
+   * one model step sent (input + cache read + cache write, the max over
+   * steps, never a sum), the window the stage ran with, and the compaction
+   * events counted in the run dir. Omitted when not observed; Go records
+   * them only when both the peak and the window are present.
+   */
+  peakStepInputTokens?: number;
+  contextWindowTokens?: number;
+  compactionCount?: number;
 }
 
 /** Mirrors `PipelineNotifyStageProgressParams` (internal/ipc/protocol.go). */
