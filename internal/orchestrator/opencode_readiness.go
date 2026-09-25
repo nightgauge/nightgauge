@@ -172,3 +172,27 @@ func openCodeDispatchWindow(ctx context.Context, worktreeDir, model string) int 
 	}
 	return window
 }
+
+// openCodeConfiguredModel is the machine-tier opencode.model a stage on the
+// opencode adapter dispatches when its own model names no provider (a tier,
+// or a bare registry id), and "" when the model already names one, or
+// opencode.model is unset or does not load: the adapter's model check then
+// refuses the stage with its own reason.
+func openCodeConfiguredModel(worktreeDir, model string) string {
+	if strings.Contains(model, "/") {
+		return ""
+	}
+	loadSettings := openCodeReadinessLoadSettings
+	if loadSettings == nil {
+		loadSettings = config.LoadOpenCodeConfig
+	}
+	settings, err := loadSettings(worktreeDir)
+	if err != nil {
+		return ""
+	}
+	configured := strings.TrimSpace(settings.Model)
+	if _, err := adapters.OpenCodeModelArg(configured); err != nil {
+		return ""
+	}
+	return configured
+}

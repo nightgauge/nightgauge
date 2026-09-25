@@ -16,6 +16,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A pipeline stage on the opencode adapter now runs `opencode.model` (#2160).**
+  The routing handed every stage a tier such as `sonnet`, which the opencode
+  adapter refuses because it names no provider, so `nightgauge run --adapter
+opencode` failed at issue-pickup before any model was called. A stage whose
+  model names no provider now dispatches the operator's `opencode.model`,
+  pinned; with `opencode.model` unset the stage is still refused.
+
 - **`nightgauge doctor` and the pre-dispatch check now reach OpenAI-compatible
   endpoints correctly (#2158).** An `opencode.endpoints[]` server was probed
   at `/models` instead of its base URL's `/v1/models`, so a healthy MTPLX,
