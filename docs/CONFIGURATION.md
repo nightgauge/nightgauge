@@ -5187,6 +5187,38 @@ export NIGHTGAUGE_EPIC_SUMMARY_SUMMARY_DIR=docs/epics
 
 ---
 
+## OpenCode adapter (`opencode`)
+
+The `opencode:` block configures the Experimental `opencode` adapter
+([ADR-022](decisions/022-opencode-multi-provider-adapter.md)). Every key is
+**Machine** tier: it is read from `~/.nightgauge/config.yaml` only, and a
+committed project config that declares `opencode:` refuses every `opencode`
+dispatch. An unknown key in the block is an error. Full semantics:
+[SETTINGS_ARCHITECTURE.md § The `opencode` block](SETTINGS_ARCHITECTURE.md#the-opencode-block);
+setup walk-through:
+[MULTI_BACKEND_SETUP.md § Local models through OpenCode](MULTI_BACKEND_SETUP.md#local-models-through-opencode-agentic).
+
+| Key                            | Tier    | Description                                                                                                                                                         |
+| ------------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `opencode.binary`              | Machine | Absolute path of the opencode binary to spawn; unset runs the `opencode` on PATH                                                                                    |
+| `opencode.inherit_user_config` | Machine | Layer your own OpenCode config into runs (default `false`)                                                                                                          |
+| `opencode.model`               | Machine | `<provider>/<model>` used when a caller names no model                                                                                                              |
+| `opencode.provider`            | Machine | `lm-studio` or `ollama`; the endpoint id becomes `lmstudio` or `ollama`                                                                                             |
+| `opencode.base_url`            | Machine | `http`/`https` URL of the model server, no user name or password                                                                                                    |
+| `opencode.limit.context`       | Machine | Context limit; overrides the discovered window, clamped to the loaded window                                                                                        |
+| `opencode.limit.output`        | Machine | Output limit; overrides the discovered or derived value                                                                                                             |
+| `opencode.timeouts.header`     | Machine | Wait for the first response byte (default `3m`)                                                                                                                     |
+| `opencode.timeouts.chunk`      | Machine | Wait between streamed chunks (default `3m`)                                                                                                                         |
+| `opencode.snapshot`            | Machine | OpenCode snapshots (default `false`)                                                                                                                                |
+| `opencode.lsp`                 | Machine | OpenCode LSP (default `true`)                                                                                                                                       |
+| `opencode.formatter`           | Machine | OpenCode formatter (default `true`)                                                                                                                                 |
+| `opencode.endpoints[]`         | Machine | Named model servers: `id`, `provider`, `base_url`, `allow_lan`, `limit`, `timeouts`, `api_key_env`, `self_hosted`, `max_concurrency`, `models[]` (`id`, `variants`) |
+
+Route a stage to the adapter from the project tier with
+`pipeline.stage_adapters.<stage>: opencode` (see [ui.core](#uicore)). The
+enable switch is the environment variable `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1`,
+not a config key.
+
 ## UI Configuration (VSCode-Specific)
 
 UI settings control the VSCode extension's visual behavior. Current `ui.*`

@@ -154,6 +154,17 @@ language:
 - "Focus on the API docs" - Limit scope to specific documentation
 - "Auto-fix simple issues" - Automatically fix obvious problems
 
+### Choose an Adapter
+
+The pipeline runs each stage through an adapter: `claude-headless` (the
+default), `claude-sdk`, `codex`, `gemini`, `gemini-sdk`, `copilot`, `grok`
+(xAI) and `opencode` (Experimental; hosted providers or a model server you run,
+such as LM Studio or Ollama). Bring your own coding agent and model: pick one
+with `--adapter`, `NIGHTGAUGE_ADAPTER`, or per stage with
+`pipeline.stage_adapters.<stage>`. Prerequisites and trade-offs for each are in
+[ADAPTER_GUIDE.md](ADAPTER_GUIDE.md); local model setup is in
+[MULTI_BACKEND_SETUP.md § Local models through OpenCode](MULTI_BACKEND_SETUP.md#local-models-through-opencode-agentic).
+
 ### Using with Other AI Assistants
 
 For AI assistants without native plugin support:

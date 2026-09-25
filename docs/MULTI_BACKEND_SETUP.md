@@ -376,7 +376,74 @@ endpoint fields and the isolation rules are in
 [SETTINGS_ARCHITECTURE.md § The `opencode` block](SETTINGS_ARCHITECTURE.md#the-opencode-block);
 operator templates are in `configs/opencode/`.
 
-For evaluation and judging on the same kind of server, use the chat-only
+### Local models through OpenCode (agentic)
+
+The `opencode` adapter is **Experimental**: every dispatch is refused unless
+`NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` is set where the pipeline runs, and each
+allowed dispatch prints the controls not yet enforced. The design record is
+[ADR-022](decisions/022-opencode-multi-provider-adapter.md); this section only
+covers the configuration mechanics.
+
+**1. Declare the server in the machine tier.** The `opencode:` block is read
+from `~/.nightgauge/config.yaml` only; a committed project config that
+declares it refuses every `opencode` dispatch. Pick the block for your server
+(loopback defaults shown):
+
+```yaml
+# ~/.nightgauge/config.yaml — LM Studio
+opencode:
+  provider: lm-studio # endpoint id: lmstudio
+  base_url: http://127.0.0.1:1234/v1
+  model: lmstudio/qwen/qwen3.8-27b
+```
+
+```yaml
+# ~/.nightgauge/config.yaml — Ollama
+opencode:
+  provider: ollama # endpoint id: ollama
+  base_url: http://localhost:11434/v1
+  model: ollama/qwen3:32b
+```
+
+**2. Name the model as `provider/model`.** OpenCode takes `-m
+<provider>/<model>`, split on the first `/`: `lmstudio/qwen/qwen3.8-27b` is
+provider key `lmstudio`, model `qwen/qwen3.8-27b`. There is no bare-id
+fallback. Route a stage to the adapter with
+`pipeline.stage_adapters.<stage>: opencode`.
+
+**3. Keep the context limit at or below what the server has loaded.** A
+dispatch discovers the window from the server once per process: LM Studio's
+`/api/v0/models` `loaded_context_length` (the loaded window, not
+`max_context_length`, the model maximum), or the `num_ctx` an Ollama
+Modelfile sets. An optional `limit.context` overrides it but is clamped to the
+loaded window with a warning:
+
+```yaml
+opencode:
+  limit:
+    context: 32768 # at or below loaded_context_length / num_ctx
+    output: 8192
+```
+
+Why it matters: OpenCode never compacts a session whose `limit.context` is 0
+(opencode 1.18.30), and LM Studio reports a context limit of 0, so without a
+real limit the run grows until the server rejects a request past its window.
+Nightgauge therefore refuses a dispatch whose limits neither `limit` nor the
+server gives. An Ollama model with no `num_ctx` in its Modelfile is
+unresolved: set `num_ctx`, or `opencode.limit.context`.
+
+**4. Check readiness with `nightgauge doctor`.** The `opencode` row reports,
+in the order a dispatch meets them: the enable gate, the `opencode:` block and
+the per-run config it produces (discovered limits included), the binary and
+its version against the compat manifest, the model catalog, any machine-wide
+managed OpenCode config, and the readiness of each declared model server
+against the context limit a dispatch would use. A blocking finding marks the
+adapter not OK; the server is named by its endpoint id, never its address.
+
+Key reference: [SETTINGS_ARCHITECTURE.md § The `opencode` block](SETTINGS_ARCHITECTURE.md#the-opencode-block)
+and [CONFIGURATION.md § OpenCode](CONFIGURATION.md#opencode-adapter-opencode).
+
+**Chat-only:** for evaluation and judging on the same kind of server, use the chat-only
 `openai-compatible` backend, configured by `NIGHTGAUGE_OPENAI_COMPATIBLE_*`
 (see [ADAPTER_GUIDE.md § OpenAI-compatible](ADAPTER_GUIDE.md#openai-compatible-evaluation-and-judging)).
 

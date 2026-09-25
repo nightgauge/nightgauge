@@ -4396,7 +4396,7 @@ func runCmd() *cobra.Command {
 	cmd.Flags().IntVar(&maxPerRepo, "max-per-repo", 1, "Max concurrent pipelines per repo")
 	cmd.Flags().IntVar(&issueNumber, "issue", 0, "Specific issue number to run")
 	cmd.Flags().StringVar(&repoName, "repo", "", "Target repository for an explicit issue number (owner/repo, or a bare name resolved against --owner). Defaults to this checkout's configured repo.")
-	cmd.Flags().StringVar(&adapterName, "adapter", "", "AI adapter (claude-headless, claude-sdk, codex, gemini, gemini-sdk)")
+	cmd.Flags().StringVar(&adapterName, "adapter", "", adapterFlagUsage("AI adapter", ""))
 
 	// `nightgauge run state {get,set,resume,discard,detect}` —
 	// durable run-state.json (Issue #3238).
@@ -11029,7 +11029,7 @@ func autonomousRunCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would run without executing")
 	cmd.Flags().BoolVar(&allowSelfRepo, "allow-self-repo", false, "Permit dispatching issues in the running binary's own repo (#292 — a stage editing that repo can be destroyed by the unfixed version of itself)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output final status as JSON")
-	cmd.Flags().StringVar(&adapterName, "adapter", "", "AI adapter for stages this process runs itself (claude-headless, claude-sdk, codex, gemini, gemini-sdk); defaults to ui.core.adapter")
+	cmd.Flags().StringVar(&adapterName, "adapter", "", adapterFlagUsage("AI adapter for stages this process runs itself", "; defaults to ui.core.adapter"))
 	cmd.Flags().BoolVar(&attach, "attach", false,
 		"Succeed quietly when a scheduler is already running for this workspace, instead of refusing")
 	return cmd
@@ -13942,4 +13942,11 @@ func finishQueueRun(cmd *cobra.Command, summary orchestrator.QueueRunSummary, er
 		return &orchestrator.QueueRunFailedError{Summary: summary}
 	}
 	return nil
+}
+
+// adapterFlagUsage builds an --adapter flag's help from the adapter registry
+// (#1670), so the list a user reads can never drift from the adapters that
+// actually exist.
+func adapterFlagUsage(prefix, suffix string) string {
+	return fmt.Sprintf("%s (%s)%s", prefix, strings.Join(adapters.NewRegistry().Names(), ", "), suffix)
 }

@@ -14,7 +14,7 @@ automation, and more — without modifying Nightgauge itself.
 
 MCP servers expose tools that AI agents can call during a pipeline stage.
 Pipeline stages run as CLI subprocesses of whichever provider the stage is
-configured to use (Claude, Codex, …), so any MCP server made available to that
+configured to use (Claude, Codex, Gemini, Copilot, Grok, OpenCode, …), so any MCP server made available to that
 provider is reachable from the stage agent.
 
 You declare MCP servers **once**, the Claude-native way (`.mcp.json` at the repo
@@ -50,10 +50,11 @@ MCP tool calls during stage     ← e.g., mcp__filesystem__read_file
 Different CLI providers read MCP configuration from different places. You author
 the config once (Claude-native), and the pipeline bridges it to each provider.
 
-| Provider         | Reads MCP servers from                                                       | How it gets there                                                               |
-| ---------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| Claude (CLI/SDK) | `.mcp.json` (repo root) and `.claude/settings.json`                          | Native — Claude reads these directly.                                           |
-| Codex (`codex`)  | `$CODEX_HOME/config.toml` (default `~/.codex/config.toml`) `[mcp_servers.*]` | **Provisioned automatically** by the pipeline before every Codex stage (#4025). |
+| Provider              | Reads MCP servers from                                                       | How it gets there                                                               |
+| --------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Claude (CLI/SDK)      | `.mcp.json` (repo root) and `.claude/settings.json`                          | Native — Claude reads these directly.                                           |
+| Codex (`codex`)       | `$CODEX_HOME/config.toml` (default `~/.codex/config.toml`) `[mcp_servers.*]` | **Provisioned automatically** by the pipeline before every Codex stage (#4025). |
+| OpenCode (`opencode`) | The per-run config's `mcp` block                                             | **Written per run** by the pipeline from the repository's servers (#1626).      |
 
 ### How Codex provisioning works
 
@@ -114,6 +115,24 @@ Properties of the provisioning:
 > **Verifying end-to-end.** After a Codex stage runs, confirm the servers landed:
 > `grep -A3 'BEGIN NIGHTGAUGE MANAGED MCP' "${CODEX_HOME:-$HOME/.codex}/config.toml"`.
 > Codex's own `codex mcp list` will then include the provisioned servers.
+
+### OpenCode (Experimental)
+
+An `opencode` stage receives exactly the pipeline's MCP servers — the ones a
+Claude stage gets from `.mcp.json` and `.claude/settings.json` — and no others
+(#1626). Nightgauge writes them into the run's own per-run config, never into
+your OpenCode config directory:
+
+- **Read from the forge, not the worktree.** Both files are read at the head
+  of the repository's default branch, so a server a stage added to `.mcp.json`
+  does not start in the next stage without review. If the read fails, the
+  stage gets no MCP server and a warning on stderr says why.
+- **Your global OpenCode MCP servers are not inherited** (#1616). Runs are
+  isolated from your own OpenCode config unless
+  `opencode.inherit_user_config` is turned on.
+- **Tool calls to a repository's own MCP server are blocked closed** by the
+  plugin gate until a tool mapping exists; see
+  [ADAPTER_MATRIX.md § 10. opencode](ADAPTER_MATRIX.md#10-opencode).
 
 ---
 

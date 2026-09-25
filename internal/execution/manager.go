@@ -224,8 +224,8 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	// dispatch through RunStage and keep chat-only adapters.
 	if !adapter.Agentic() {
 		return nil, fmt.Errorf(
-			"adapter %q is chat-completion-only (no agentic tool loop): pipeline stages cannot edit files, run shell commands, or call gh through it; set an agentic adapter (claude, claude-sdk, codex, gemini, gemini-sdk, copilot) via --adapter or NIGHTGAUGE_ADAPTER",
-			adapter.Name(),
+			"adapter %q is chat-completion-only (no agentic tool loop): pipeline stages cannot edit files, run shell commands, or call gh through it; set an agentic adapter (%s) via --adapter or NIGHTGAUGE_ADAPTER",
+			adapter.Name(), strings.Join(adapters.NewRegistry().AgenticNames(), ", "),
 		)
 	}
 
