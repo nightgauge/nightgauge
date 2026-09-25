@@ -1094,6 +1094,11 @@ type OpenCodeEndpointReadiness struct {
 	// Slots is the endpoint's declared capacity (OpenCodeEndpoint.
 	// MaxConcurrency), never measured or probed. 0 means not declared.
 	Slots int `json:"slots,omitempty"`
+	// SlotsInUse is how many of those slots a running scheduler's
+	// endpoint-aware dispatch holds right now (#1679), read from the ledger
+	// it publishes (OpenCodeEndpointSlots); nil when no live scheduler has
+	// published one.
+	SlotsInUse *int `json:"slots_in_use,omitempty"`
 }
 
 // ProbeOpenCodeEndpoint checks one model server the operator runs: whether it

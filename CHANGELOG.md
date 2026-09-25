@@ -24,6 +24,19 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **Endpoint-aware OpenCode dispatch (#1679).** When several declared
+  endpoints serve a stage's model id (`opencode.endpoints[].models`), the
+  scheduler runs the stage on the healthy one with the most free slots
+  (`max_concurrency`, default 1), so parallel stages spread across machines. A
+  stage that finds every slot taken waits and is listed under `endpointSlots`
+  in the autonomous status; `nightgauge doctor --adapters` shows `in_use` per
+  endpoint. An endpoint that fails readiness at dispatch, or stops answering
+  before a stage's first step, is swapped for another serving the same model,
+  with a backoff and at most one attempt per endpoint, recorded in run history
+  as `endpoint_failover: [from, to]`. With none healthy the stage fails as an
+  environment failure naming every endpoint tried. A dispatch never moves to
+  a hosted endpoint (`self_hosted: false`) or a hosted provider; that stays
+  with `adapter_fallback_chain`.
 - **A declared OpenCode endpoint can be marked as forwarding to a hosted API
   (#1679, part 1).** `opencode.endpoints[].self_hosted: false` makes an
   endpoint non-local whatever its address, so a loopback proxy such as

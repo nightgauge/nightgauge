@@ -268,6 +268,10 @@ type V2StageDetail struct {
 	// Additive `omitempty`: records written before this omit the field and
 	// readers default to nil.
 	Phases []V2PhaseDetail `json:"phases,omitempty"`
+	// EndpointFailover is every move of this stage's OpenCode dispatch from
+	// one declared endpoint to another serving the same model id (#1679), as
+	// [from, to] endpoint ids in order. Absent when the stage never moved.
+	EndpointFailover [][2]string `json:"endpoint_failover,omitempty"`
 	// LastOutputLines is the tail of subagent stdout/stderr captured at
 	// terminal failure (Issue #3001). Bounded by the runtime ring buffer
 	// (≤200 lines × ≤1KB/line ≈ 200KB). Only populated for the stage that
@@ -1450,6 +1454,10 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 		// keeping ordinary records lean. Issue #4172.
 		if iters := snap.RalphIterations[stageName]; iters > 1 {
 			detail.AttemptsUntilSuccess = iters
+		}
+
+		if moves := snap.StageEndpointFailovers[stageName]; len(moves) > 0 {
+			detail.EndpointFailover = append([][2]string(nil), moves...)
 		}
 
 		// Check for stage error

@@ -86,10 +86,11 @@ func TestWriteAdapterRows_WarnFloorIsAWarnRow(t *testing.T) {
 // No base_url or host appears — the row never receives one.
 func TestWriteAdapterRows_OpenCodeEndpointRows(t *testing.T) {
 	loadedTrue, loadedFalse := true, false
+	one := 1
 	oc := &doctor.OpenCodeHealth{
 		Enabled: true,
 		Endpoints: []adapters.OpenCodeEndpointReadiness{
-			{Endpoint: "mtplx", Kind: "openai-compatible", Reachable: true, Loaded: &loadedTrue, Ready: true, Slots: 2},
+			{Endpoint: "mtplx", Kind: "openai-compatible", Reachable: true, Loaded: &loadedTrue, Ready: true, Slots: 2, SlotsInUse: &one},
 			{Endpoint: "mtplx-remote", Kind: "openai-compatible", Reachable: false, Loaded: &loadedFalse, Problem: "endpoint mtplx-remote is not answering (connection refused)"},
 		},
 	}
@@ -99,7 +100,7 @@ func TestWriteAdapterRows_OpenCodeEndpointRows(t *testing.T) {
 	writeAdapterRows(&buf, []doctor.AdapterHealth{row})
 	out := buf.String()
 	for _, want := range []string{
-		"endpoint mtplx (openai-compatible): reachable=true model_loaded=yes slots=2",
+		"endpoint mtplx (openai-compatible): reachable=true model_loaded=yes slots=2 in_use=1",
 		"endpoint mtplx-remote (openai-compatible): reachable=false model_loaded=no slots=not declared",
 		"endpoint mtplx-remote is not answering (connection refused)",
 	} {

@@ -47,6 +47,9 @@ func TestMain(m *testing.M) {
 	gittest.IsolateProcess()
 	reconcileExecGh = refuseUnstubbedGh
 	finalizeDueSurvivalRecords = refuseUnstubbedSurvivalSweep
+	// Never publish the endpoint slot ledger into the real home (#1679); a
+	// test that checks publication points it at its own temp dir.
+	openCodeEndpointSlotsPath = func() string { return "" }
 	code := m.Run()
 	if calls := unstubbedGhCalls(); len(calls) > 0 {
 		fmt.Fprintf(os.Stderr,

@@ -5214,6 +5214,14 @@ setup walk-through:
 | `opencode.formatter`           | Machine | OpenCode formatter (default `true`)                                                                                                                                 |
 | `opencode.endpoints[]`         | Machine | Named model servers: `id`, `provider`, `base_url`, `allow_lan`, `limit`, `timeouts`, `api_key_env`, `self_hosted`, `max_concurrency`, `models[]` (`id`, `variants`) |
 
+When more than one endpoint lists the same model id under `models`, a stage
+whose model names any of them can run on any of them. The scheduler picks a
+healthy endpoint with a free slot (`max_concurrency`, 1 when unset), makes the
+stage wait when all slots are taken, and moves the stage to another endpoint
+serving the same model if its endpoint stops answering before the first step.
+It never moves a stage to an endpoint marked `self_hosted: false` or to a
+hosted provider. `nightgauge doctor --adapters` shows the slots in use.
+
 An endpoint on loopback or your private network is treated as a model server
 you run, and its stages are priced at $0. If the endpoint is a local proxy to a
 hosted API (for example LiteLLM), set `self_hosted: false` on its entry: its
