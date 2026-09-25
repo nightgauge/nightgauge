@@ -306,6 +306,13 @@ export interface LocalEndpoint {
   provider: string;
   /** The server's OpenAI-compatible API root. */
   baseUrl: string;
+  /**
+   * The entry's `self_hosted` declaration (#1679): absent when unset, so
+   * locality follows `provider` and `baseUrl`; `false` marks an endpoint that
+   * forwards to a hosted service (a loopback LiteLLM proxy, say), which is
+   * never local; `true` states the model runs on that server.
+   */
+  selfHosted?: boolean;
 }
 
 /** An IPv4 literal on loopback or a private network (RFC 1918). */
@@ -354,7 +361,21 @@ export function isLocalBaseUrl(baseUrl: string): boolean {
  * `models.IsLocalEndpoint`.
  */
 export function isLocalEndpoint(ep: LocalEndpoint): boolean {
+  if (ep.selfHosted !== undefined) return ep.selfHosted;
   return isLocalProvider(ep.provider) || isLocalBaseUrl(ep.baseUrl);
+}
+
+/**
+ * Whether `id`, a model id on an Ollama server, is one Ollama serves from its
+ * hosted service through the same local API: its tag is `cloud` or ends in
+ * `-cloud` (ADR-022 § 3, #1679). Such a model is never local. Mirrors the Go
+ * `models.IsOllamaCloudModel`.
+ */
+export function isOllamaCloudModel(id: string): boolean {
+  const colon = id.indexOf(":");
+  if (colon < 0) return id.endsWith("-cloud");
+  const tag = id.slice(colon + 1);
+  return tag === "cloud" || tag.endsWith("-cloud");
 }
 
 /**
@@ -375,7 +396,11 @@ export function isLocalModel(
     const split = splitOpenCodeModel(model);
     if (!split) return false;
     const ep = endpoints.find((e) => e.id === split.key);
-    if (ep) return isLocalEndpoint(ep);
+    if (ep) {
+      if (ep.provider === "ollama" && isOllamaCloudModel(split.id)) return false;
+      return isLocalEndpoint(ep);
+    }
+    if (providerFor(adapter, model) === "ollama" && isOllamaCloudModel(split.id)) return false;
   }
   return isLocalProvider(providerFor(adapter, model));
 }

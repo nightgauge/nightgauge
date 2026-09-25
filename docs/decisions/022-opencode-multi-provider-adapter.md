@@ -3129,6 +3129,33 @@ is installed only with `--with-plugin`, which warns before consent that OpenCode
 will npm-install `@opencode-ai/plugin` into the config root on its next start
 and block there when offline. The installer itself still fetches nothing.
 
+## Endpoint locality: `self_hosted` is an explicit override (amendment 2026-09-25, #1679)
+
+#2128 moved locality from the provider-key brand to the declared endpoint: an
+entry whose kind is `lm-studio` or `ollama`, or whose `base_url` is loopback or
+a private-network address, is a server the operator runs, and its stages are
+stamped `cost_usd: 0`. That replaced § 3's rule that an `openai-compatible`
+entry is stamped only with `self_hosted: true`. It left a loopback proxy to a
+hosted API (LiteLLM, say) stamped at $0 and outside every USD cap.
+
+- **`self_hosted` is tri-state.** Unset, locality follows the kind and
+  `base_url` as #2128 decided. `false` marks an endpoint that forwards to a
+  hosted service: it is never local, so its stages are priced from the
+  registry when it lists the model and unstamped otherwise, and a USD cap
+  treats them as unpriced, never as $0. `true` states that the model runs on
+  the server.
+- **The `lmstudio` and `ollama` ids cannot be marked `self_hosted: false`.**
+  Cost pricing reads those two keys as local without the machine-tier config,
+  so the mark would not reach it. The entry is refused with a message asking
+  for another id.
+- **Ollama cloud models are refused before spawn.** A model whose tag is
+  `cloud` or ends in `-cloud` on an `ollama` endpoint fails dispatch-time
+  readiness as `model_unavailable`, naming `ollama-cloud/<model>` as the
+  remediation, and its cost is unstamped rather than a stamped zero (the
+  refusal § 3 and § Endpoints assigned to #1679). A `remote_host` that Ollama
+  reports is not read: declared endpoints get the generic `/models` probe only
+  (Endpoints narrowing, 2026-09-20).
+
 ## Consequences
 
 - The model layer's one-adapter-one-provider assumption becomes a special

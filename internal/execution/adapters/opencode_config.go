@@ -236,7 +236,7 @@ type OpenCodeEndpoint struct {
 	// the legacy endpoint.
 	AllowLAN       bool
 	APIKeyEnv      string
-	SelfHosted     bool
+	SelfHosted     *bool
 	MaxConcurrency int
 	Models         []config.OpenCodeEndpointModel
 }
@@ -352,6 +352,11 @@ func openCodeDeclaredEndpoint(entry config.OpenCodeEndpointConfig, i int) (OpenC
 			return OpenCodeEndpoint{}, err
 		}
 	}
+	if entry.SelfHosted != nil && !*entry.SelfHosted && openCodeLocalPricedIDs[entry.ID] {
+		return OpenCodeEndpoint{}, fmt.Errorf(
+			"%s.id %q is marked self_hosted: false, but cost pricing reads the %s key as a model server you run and would price its stages at $0: give an endpoint that forwards to a hosted service another id",
+			key, entry.ID, entry.ID)
+	}
 	if entry.Limit.Context <= 0 || entry.Limit.Output <= 0 {
 		return OpenCodeEndpoint{}, fmt.Errorf(
 			"%s.limit.context and .limit.output are not both set for endpoint %s: a declared endpoint is never probed for the context it has loaded (2026-09-20 scope narrowing), so its limits must be declared",
@@ -385,6 +390,12 @@ func openCodeDeclaredEndpoint(entry config.OpenCodeEndpointConfig, i int) (OpenC
 		Models:         entry.Models,
 	}, nil
 }
+
+// openCodeLocalPricedIDs are the provider keys cost pricing
+// (tokens.CalculateCostFor) reads as a local provider without consulting the
+// machine-tier config, so an endpoint with one of these ids cannot be marked
+// as forwarding to a hosted service (#1679).
+var openCodeLocalPricedIDs = map[string]bool{"lmstudio": true, "ollama": true}
 
 // openCodeReservedIDRefusal refuses an id that collides with a provider key
 // OpenCode's bundled catalog (openCodeCatalogEnv, captured from the

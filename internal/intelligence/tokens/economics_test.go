@@ -310,6 +310,9 @@ func TestCalculateCostForOpenCodeUnstamped(t *testing.T) {
 		"openrouter/claude-sonnet-5",
 		"openai/gpt-9-preview",
 		"lmstudio-remote/qwen/qwen3.8-27b",
+		// Ollama cloud models are served by Ollama's hosted service (#1679).
+		"ollama/gpt-oss:120b-cloud",
+		"ollama/qwen3-coder:cloud",
 		"anthropic/sonnet",
 		"sonnet",
 		"",

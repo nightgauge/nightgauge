@@ -1517,3 +1517,24 @@ func TestOpenCodeEndpointsRequiresDeclaredLimits(t *testing.T) {
 		t.Fatalf("no declared limit: err = %v, want one naming limit.context/limit.output", err)
 	}
 }
+
+// TestOpenCodeEndpointsHostedMarkOnALocalPricedID: an endpoint marked
+// self_hosted: false forwards to a hosted service, and the lmstudio and
+// ollama keys are priced as local without the machine-tier config, so the
+// two together are refused rather than priced at $0 (#1679). Any other id
+// may carry the mark, and it is passed through.
+func TestOpenCodeEndpointsHostedMarkOnALocalPricedID(t *testing.T) {
+	hosted := false
+	limit := config.OpenCodeLimit{Context: 8192, Output: 4096}
+	cfg := config.OpenCodeConfig{Endpoints: []config.OpenCodeEndpointConfig{{
+		ID: "lmstudio", Provider: "lm-studio", BaseURL: "http://127.0.0.1:1234/v1", SelfHosted: &hosted, Limit: limit,
+	}}}
+	if _, err := OpenCodeEndpoints(cfg); err == nil || !strings.Contains(err.Error(), "self_hosted: false") {
+		t.Fatalf("lmstudio marked hosted: err = %v, want a refusal naming self_hosted: false", err)
+	}
+	cfg.Endpoints[0].ID, cfg.Endpoints[0].Provider = "litellm", "openai-compatible"
+	eps, err := OpenCodeEndpoints(cfg)
+	if err != nil || len(eps) != 1 || eps[0].SelfHosted == nil || *eps[0].SelfHosted {
+		t.Fatalf("litellm marked hosted = %+v, %v; want the mark passed through", eps, err)
+	}
+}
