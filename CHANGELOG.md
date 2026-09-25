@@ -120,6 +120,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **Settings panel saves the OpenCode model (#2138).** The VS Code settings
+  panel renders the OpenCode model catalog as a bound `opencode.model` select
+  and saves the choice to the machine-tier `~/.nightgauge/config.yaml`. The TS
+  config schema now declares the `opencode:` block (`model` typed, the other
+  keys passed through), matching Go's `config.OpenCodeConfig`, and the settings
+  panel routes the whole block to the machine tier.
+
 - **`Nightgauge: Setup OpenCode Skills` installs Nightgauge into your own
   OpenCode (#1671).** The new `nightgauge.setupOpenCode` command, and a
   one-time prompt at activation when `opencode` is on PATH, write the same
