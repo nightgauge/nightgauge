@@ -281,7 +281,7 @@ block is an error.
 opencode:
   binary: /home/you/.nightgauge/tools/opencode/node_modules/.bin/opencode # optional pin; see below
   inherit_user_config: false # true layers your own OpenCode config into runs
-  model: lmstudio/qwen/qwen3.8-27b # used when a caller names no model
+  model: lmstudio/qwen/qwen3.8-27b # used when a caller or a pipeline stage names no provider
   provider: lm-studio # lm-studio | ollama; the endpoint id is lmstudio | ollama
   base_url: http://127.0.0.1:1234/v1
   limit: # optional: overrides the limits discovered from the server

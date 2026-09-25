@@ -5391,6 +5391,19 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			adapterName = s.execMgr.AdapterName()
 		}
 
+		// An OpenCode stage never dispatches a tier: the router's haiku|sonnet
+		// band names no provider, and the adapter never infers one (ADR-022
+		// § 5). The operator's opencode.model names both, so a stage whose
+		// model is not provider-qualified runs it, pinned: no tier the
+		// capacity or context-budget routes would swap in can dispatch on
+		// OpenCode either. A requested model (#1656) is already pinned.
+		if adapterName == "opencode" && pinnedModel == "" {
+			if configured := openCodeConfiguredModel(workspaceRoot, model); configured != "" {
+				log.Printf("#%d: stage %s dispatches opencode.model %s in place of %s", item.Number, stage, configured, model)
+				model, pinnedModel = configured, configured
+			}
+		}
+
 		// Dispatch-time OpenCode readiness (#1646, ADR-022 § Endpoints):
 		// before anything is created, probe the SPECIFIC local endpoint this
 		// stage would dispatch to — never "some local server somewhere"
