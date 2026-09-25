@@ -136,6 +136,7 @@ import type { SlotOutputManager } from "../views/SlotOutputManager";
 import type { PluginSetupService } from "../services/PluginSetupService";
 import type { CodexSetupService } from "../services/CodexSetupService";
 import type { GrokSetupService } from "../services/GrokSetupService";
+import type { OpenCodeSetupService } from "../services/OpenCodeSetupService";
 import type { PipelineStateService } from "../services/PipelineStateService";
 import type { HeadlessOrchestrator } from "../services/HeadlessOrchestrator";
 import type { IssueQueueService } from "../services/IssueQueueService";
@@ -175,6 +176,7 @@ export interface AllCommandDeps {
   pluginSetupService: PluginSetupService;
   codexSetupService: CodexSetupService;
   grokSetupService: GrokSetupService;
+  openCodeSetupService: OpenCodeSetupService;
   headlessOrchestrator: HeadlessOrchestrator | null;
   pipelineStateService: PipelineStateService | null;
   issueQueueService: IssueQueueService | null;
@@ -234,6 +236,7 @@ export function registerAllCommands(deps: AllCommandDeps): void {
     pluginSetupService,
     codexSetupService,
     grokSetupService,
+    openCodeSetupService,
     headlessOrchestrator,
     pipelineStateService,
     issueQueueService,
@@ -351,6 +354,14 @@ export function registerAllCommands(deps: AllCommandDeps): void {
   const setupGrokCommand = vscode.commands.registerCommand("nightgauge.setupGrok", async () => {
     await grokSetupService.showSetupPrompt();
   });
+
+  // OpenCode setup: bundled skills, commands and (opt-in) plugin only (#1671)
+  const setupOpenCodeCommand = vscode.commands.registerCommand(
+    "nightgauge.setupOpenCode",
+    async () => {
+      await openCodeSetupService.showSetupPrompt();
+    }
+  );
 
   // Development only: install agent skills from this workspace's skills/.
   // Codex and Grok setup above install only what the extension bundles: the
@@ -919,6 +930,7 @@ export function registerAllCommands(deps: AllCommandDeps): void {
     setupPluginsCommand,
     setupCodexCommand,
     setupGrokCommand,
+    setupOpenCodeCommand,
     setupCodexFromWorkspaceCommand,
     setupGrokFromWorkspaceCommand,
     resetSessionCommand,
