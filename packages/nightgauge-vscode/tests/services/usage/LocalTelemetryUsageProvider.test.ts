@@ -23,6 +23,7 @@ import {
 import type { UsagePlanKind } from "../../../src/services/usage/types";
 import { hostedSpendExcludedNote } from "../../../src/services/usage/format";
 import type { ExecutionAdapter } from "../../../src/config/schema";
+import type { LocalEndpoint } from "@nightgauge/sdk";
 import {
   ExecutionHistoryRunRecordV2Schema,
   type ExecutionHistoryRecord,
@@ -92,7 +93,8 @@ const SESSION_START = new Date(2026, 7, 17, 9, 0, 0);
 function provider(
   records: ExecutionHistoryRecord[],
   sessionStart = SESSION_START,
-  openCodeModel?: string
+  openCodeModel?: string,
+  endpoints: LocalEndpoint[] = []
 ) {
   const source = new FakeHistorySource(records);
   return {
@@ -100,7 +102,8 @@ function provider(
     provider: new LocalTelemetryUsageProvider(
       source,
       sessionClock(sessionStart),
-      () => openCodeModel
+      () => openCodeModel,
+      () => endpoints
     ),
   };
 }
@@ -375,6 +378,40 @@ describe("confidence", () => {
 
 /** The history reads the provider sees for an `opencode` month (#1665). */
 const LOCAL_MODEL = "lmstudio/qwen/qwen3.8-27b";
+
+describe("the local plan follows the declared endpoint (#2128)", () => {
+  const OMLX_MODEL = "omlx/qwen3-coder-30b";
+  const OMLX: LocalEndpoint = {
+    id: "omlx",
+    provider: "openai-compatible",
+    baseUrl: "http://127.0.0.1:8000/v1",
+  };
+  const records = () => [
+    runRecord(new Date(2026, 7, 17, 9, 30), {
+      "feature-dev": {
+        cost_usd: 0,
+        adapter: "opencode",
+        model: OMLX_MODEL,
+        input: 3000,
+        output: 400,
+        cache_read: 0,
+        cache_creation: 100,
+      },
+    }),
+  ];
+
+  it("gives an omlx model on a declared local endpoint the local plan, counting its stages", async () => {
+    const { provider: p } = provider(records(), SESSION_START, OMLX_MODEL, [OMLX]);
+    const snapshot = await p.getSnapshot("opencode");
+    expect(snapshot!.plan.kind).toBe("local");
+    expect(snapshot!.windows.find((w) => w.scope === "monthly")!.used).toBe(3500);
+  });
+
+  it("leaves an undeclared omlx key non-local", async () => {
+    const { provider: p } = provider(records(), SESSION_START, OMLX_MODEL, []);
+    expect(await p.getSnapshot("opencode")).toBeNull();
+  });
+});
 
 describe("the local plan (#1665, ADR-018 amendment)", () => {
   it("has local in the plan-kind union", async () => {

@@ -54,8 +54,9 @@ var stageBudgetReapWindow = 2 * time.Second
 // adapter with model in worktreeDir (#1652). Zero-cost is a provider no USD
 // cap can bind: a model server the operator runs, or a model the registry
 // prices at $0. For opencode that includes an endpoint the machine-tier
-// `opencode:` block declares as lm-studio or ollama, whose id
-// models.ProviderFor reads as "other". A hosted model the registry cannot
+// `opencode:` block declares that is local (models.IsLocalEndpoint: kind
+// lm-studio or ollama, or a loopback or private-network base URL, #2128),
+// whose id models.ProviderFor reads as "other". A hosted model the registry cannot
 // price is unpriced, not zero-cost: that is a registry gap, not a free model.
 func stageCost(adapter, model, worktreeDir string) config.StageCost {
 	if models.IsLocalProvider(models.ProviderFor(adapter, model)) {
@@ -75,7 +76,7 @@ func stageCost(adapter, model, worktreeDir string) config.StageCost {
 
 // openCodeDeclaredLocalEndpoint reports whether model's provider key is an
 // endpoint the machine-tier `opencode:` block declares as a model server the
-// operator runs (lm-studio or ollama). A config that cannot be read declares
+// operator runs (models.IsLocalEndpoint). A config that cannot be read declares
 // nothing here; the dispatch's own preparation refuses it later.
 func openCodeDeclaredLocalEndpoint(model, worktreeDir string) bool {
 	key, _, ok := strings.Cut(model, "/")
@@ -92,7 +93,7 @@ func openCodeDeclaredLocalEndpoint(model, worktreeDir string) bool {
 	}
 	for _, ep := range endpoints {
 		if ep.ID == key {
-			return models.IsLocalProvider(ep.Provider)
+			return models.IsLocalEndpoint(models.LocalEndpoint{ID: ep.ID, Provider: ep.Provider, BaseURL: ep.BaseURL})
 		}
 	}
 	return false

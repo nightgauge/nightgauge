@@ -16,6 +16,17 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A model on a declared local endpoint now counts as local, whatever its
+  provider key (#2128, part 1).** Locality used to follow the key's brand, so
+  only `lmstudio/...` and `ollama/...` were local. An `omlx/...` or
+  `mtplx/...` model on a declared OpenCode endpoint was priced as hosted and
+  never got the `local` plan. Go and the SDK now decide locality the same way.
+  A key that names a declared endpoint is local when the endpoint is an
+  `lm-studio` or `ollama` endpoint, or when its base URL is `localhost`, a
+  loopback address or a private-network address. The zero-cost stage budget
+  and the usage panel's `local` plan both use this rule. An undeclared unknown
+  key is still hosted.
+
 - **The stage-budget wall-clock tests no longer fail when two gates run at
   once (#2123).** Their upper bounds were fixed wall times (6s, 8s, 12s).
   They are now each stage's timeout less one second. A stage the budget stops

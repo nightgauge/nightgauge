@@ -17,6 +17,8 @@ import {
   resolveModelForAdapter,
   providerForAdapter,
   providerFor,
+  isLocalBaseUrl,
+  isLocalModel,
   isLocalProvider,
   parseOpenCodeModel,
   dispatchModelFor,
@@ -233,6 +235,14 @@ interface ProviderForCases {
     error?: boolean;
   }[];
   is_local_provider: Record<string, boolean>;
+  is_local_base_url: Record<string, boolean>;
+  is_local_model: {
+    name: string;
+    adapter: string;
+    model: string;
+    endpoints: { id: string; provider: string; base_url: string }[];
+    local: boolean;
+  }[];
 }
 
 const PROVIDER_FOR_CASES: ProviderForCases = JSON.parse(
@@ -282,6 +292,25 @@ describe("model registry — provider for a multi-provider adapter (ADR-022, #16
     for (const p of ["lm-studio", "ollama", "other", "copilot", "lmstudio"]) {
       expect(PROVIDER_FOR_CASES.is_local_provider).toHaveProperty([p]);
     }
+  });
+});
+
+describe("model registry — locality by declared endpoint (#2128)", () => {
+  it("isLocalBaseUrl matches the shared table", () => {
+    const table = Object.entries(PROVIDER_FOR_CASES.is_local_base_url);
+    expect(table.length).toBeGreaterThan(0);
+    for (const [url, want] of table) {
+      expect(isLocalBaseUrl(url), url).toBe(want);
+    }
+  });
+
+  it.each(PROVIDER_FOR_CASES.is_local_model)("isLocalModel: $name", (tc) => {
+    const endpoints = tc.endpoints.map((e) => ({
+      id: e.id,
+      provider: e.provider,
+      baseUrl: e.base_url,
+    }));
+    expect(isLocalModel(tc.adapter, tc.model, endpoints)).toBe(tc.local);
   });
 });
 

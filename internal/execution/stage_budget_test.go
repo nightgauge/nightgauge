@@ -472,7 +472,7 @@ func TestStageCost(t *testing.T) {
       limit:
         context: 131072
         output: 8192
-    - id: gateway
+    - id: omlx
       provider: openai-compatible
       base_url: http://127.0.0.1:4000/v1
       limit:
@@ -486,7 +486,11 @@ func TestStageCost(t *testing.T) {
 		{"opencode", "lmstudio/qwen/qwen3.8-27b", config.StageZeroCost},
 		{"opencode", "ollama/llama3", config.StageZeroCost},
 		{"opencode", "gpubox/qwen3-coder", config.StageZeroCost},
-		{"opencode", "gateway/some-model", config.StageUnpriced},
+		// Locality follows the declared endpoint, not the key's brand (#2128):
+		// an openai-compatible endpoint on loopback is a server the operator
+		// runs, and an undeclared unknown key is still unpriced.
+		{"opencode", "omlx/qwen3-coder-30b", config.StageZeroCost},
+		{"opencode", "mystery/some-model", config.StageUnpriced},
 		{"lm-studio", "qwen", config.StageZeroCost},
 		{"ollama", "llama3", config.StageZeroCost},
 		{"copilot", "sonnet", config.StageZeroCost},
