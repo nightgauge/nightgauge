@@ -41,24 +41,24 @@ passthrough. The validation framework runs both paths and compares outputs.
 
 ### Hooks (16 tests)
 
-| Operation                       | Type  | Input                              | Behavior Verified            |
-| ------------------------------- | ----- | ---------------------------------- | ---------------------------- |
-| workflow-gate: allow npm        | stdin | `{"tool_name":"Bash",...}`         | Safe command passes          |
-| workflow-gate: allow git status | stdin | `{"tool_name":"Bash",...}`         | Read-only git passes         |
-| workflow-gate: block force push | stdin | `{"tool_name":"Bash",...}`         | Destructive ops blocked      |
-| workflow-gate: block push main  | stdin | `{"tool_name":"Bash",...}`         | Direct-to-main blocked       |
-| workflow-gate: block .env read  | stdin | `{"tool_name":"Bash",...}`         | Secret file access blocked   |
-| workflow-gate: allow Edit       | stdin | `{"tool_name":"Edit",...}`         | Normal file edits pass       |
-| workflow-gate: block Write .env | stdin | `{"tool_name":"Write",...}`        | Secret file writes blocked   |
-| stop-verify: no plan            | args  | `--workdir /tmp`                   | Returns ok:true when no plan |
-| check-deps                      | none  | —                                  | Lists dependency status      |
-| validate-hooks (alias)          | none  | —                                  | Alias matches check-deps     |
-| version-check: match            | args  | `--plugin-version --skill-version` | Matching versions pass       |
-| version-check: mismatch         | args  | `--plugin-version --skill-version` | Mismatch produces warning    |
-| sanitize: allow normal          | args  | `--input "..."`                    | Normal prompts pass          |
-| sanitize: block injection       | args  | `--input "..."`                    | Injection attempts blocked   |
-| inject-context: /tmp            | args  | `--workdir /tmp`                   | Context extraction works     |
-| notify: pipeline_complete       | args  | `--event --message`                | Notification dispatched      |
+| Operation                               | Type  | Input                              | Behavior Verified            |
+| --------------------------------------- | ----- | ---------------------------------- | ---------------------------- |
+| workflow-gate: allow npm                | stdin | `{"tool_name":"Bash",...}`         | Safe command passes          |
+| workflow-gate: allow git status         | stdin | `{"tool_name":"Bash",...}`         | Read-only git passes         |
+| workflow-gate: block force push to main | stdin | `{"tool_name":"Bash",...}`         | Force push to main blocked   |
+| workflow-gate: block push main          | stdin | `{"tool_name":"Bash",...}`         | Direct-to-main blocked       |
+| workflow-gate: block .env read          | stdin | `{"tool_name":"Bash",...}`         | Secret file access blocked   |
+| workflow-gate: allow Edit               | stdin | `{"tool_name":"Edit",...}`         | Normal file edits pass       |
+| workflow-gate: block Write .env         | stdin | `{"tool_name":"Write",...}`        | Secret file writes blocked   |
+| stop-verify: no plan                    | args  | `--workdir /tmp`                   | Returns ok:true when no plan |
+| check-deps                              | none  | —                                  | Lists dependency status      |
+| validate-hooks (alias)                  | none  | —                                  | Alias matches check-deps     |
+| version-check: match                    | args  | `--plugin-version --skill-version` | Matching versions pass       |
+| version-check: mismatch                 | args  | `--plugin-version --skill-version` | Mismatch produces warning    |
+| sanitize: allow normal                  | args  | `--input "..."`                    | Normal prompts pass          |
+| sanitize: block injection               | args  | `--input "..."`                    | Injection attempts blocked   |
+| inject-context: /tmp                    | args  | `--workdir /tmp`                   | Context extraction works     |
+| notify: pipeline_complete               | args  | `--event --message`                | Notification dispatched      |
 
 ### Git (2 tests, Go-only)
 
