@@ -1034,8 +1034,8 @@ export function getCostCapModeMultiplier(
  * `getStageTimeCapMs`). It is distinct from `modelScale` and
  * `modeMultiplier` which both reject `0` as a typo because zeroing the
  * Claude cap by accident would silently kill all stage runs. Provider
- * scale accepts `0` only because local adapters (lm-studio, ollama) are
- * the explicit opt-in to time-cap mode — a typo there cannot land us
+ * scale accepts `0` only because local execution (a local opencode
+ * endpoint, openai-compatible) is the explicit opt-in to time-cap mode — a typo there cannot land us
  * with a bogus $0 cap on a paid adapter.
  *
  * @see Issue #3229 — Provider-relative cost-cap defaults + override path
@@ -1054,8 +1054,7 @@ export const DEFAULT_COST_CAP_PROVIDER_SCALE: Record<
   "gemini-sdk": 0.4,
   copilot: 0.2,
   grok: 0.6,
-  "lm-studio": 0.0,
-  ollama: 0.0,
+  "openai-compatible": 0.0,
 };
 
 /**
@@ -1082,7 +1081,7 @@ const OPENCODE_PROVIDER_SCALE_ADAPTER: Partial<
  * entry whatever the model. `opencode` is multi-provider (ADR-022), so its
  * scale follows the `<provider>/<model>` it dispatches:
  *   - a local provider (`lmstudio/…`, `ollama/…`) → `0.0`, the time-cap
- *     sentinel, exactly as the lm-studio / ollama adapters;
+ *     sentinel;
  *   - a hosted model the registry cannot price (`openrouter/…`, `groq/…`,
  *     an id the registry lists under another provider) → `0.0` too: its cost
  *     is unstamped $0, so a cost cap could never bind, and time-cap mode
@@ -1115,7 +1114,7 @@ export function costCapProviderScale(
  *
  * Accepts `NIGHTGAUGE_COST_CAP_PROVIDER_SCALE_<ADAPTER>` where the
  * adapter is uppercased and hyphens become underscores (so `gemini-sdk`
- * maps to `GEMINI_SDK` and `lm-studio` to `LM_STUDIO`).
+ * maps to `GEMINI_SDK` and `openai-compatible` to `OPENAI_COMPATIBLE`).
  *
  * Returns the parsed non-negative float (including `0`), or undefined
  * when missing/invalid (NaN or negative).
@@ -1204,7 +1203,7 @@ export function getCostCapProviderScale(
       }
 
       if (inScale) {
-        // Adapter entries: gemini: 0.4 | "lm-studio": 0.0 | gemini-sdk: 0.4
+        // Adapter entries: gemini: 0.4 | "openai-compatible": 0.0 | gemini-sdk: 0.4
         const match = trimmed.match(/^["']?([a-z][-a-z]*)["']?\s*:\s*([0-9]+(?:\.[0-9]+)?)/);
         if (match && match[1] === adapter) {
           const parsed = Number.parseFloat(match[2]);
@@ -1307,7 +1306,7 @@ export function getStageCostCapPerProviderUsd(
       }
 
       if (inOverrides) {
-        // Adapter row at 4-space indent: "  gemini:" or "  \"lm-studio\":"
+        // Adapter row at 4-space indent: "  gemini:" or "  \"gemini-sdk\":"
         const adapterMatch = line.match(/^ {4}["']?([a-z][-a-z]*)["']?\s*:\s*$/);
         if (adapterMatch) {
           currentAdapter = adapterMatch[1];
@@ -1377,8 +1376,8 @@ export function getTimeCapModeStageCapMs(stage: string, workspaceRoot?: string):
  * Get the per-stage time cap (in milliseconds).
  *
  * The time cap is the fallback hard ceiling for adapters where token
- * cost is structurally meaningless (`provider_scale=0`, e.g. lm-studio,
- * ollama). When `provider_scale=0` zeroes out `effectiveCap` in
+ * cost is structurally meaningless (`provider_scale=0`, e.g. a
+ * local opencode endpoint). When `provider_scale=0` zeroes out `effectiveCap` in
  * {@link getEffectiveStageCostCap}, the caller (`skillRunner.ts`) ORs
  * this value with the existing `getStageHardCapMs` ticker — whichever is
  * smaller and `> 0` wins, leaving the absolute hard-cap escape hatch
@@ -1484,8 +1483,7 @@ export function getStageTimeCapMs(stage: string, workspaceRoot?: string): number
  * (no multiplier ever resurrects a disabled cap).
  *
  * `providerScale === 0` is the explicit "switch to time-based cap"
- * signal for local execution (the lm-studio / ollama adapters, and an
- * `opencode` stage whose `adapterModel` names a local provider); when it fires we
+ * signal for local execution (an `opencode` stage whose `adapterModel` names a local provider); when it fires we
  * short-circuit `effectiveCap` to 0 and the caller routes to
  * `getStageTimeCapMs` for the hard-cap ticker.
  *
@@ -1521,7 +1519,7 @@ export function getEffectiveStageCostCap(
   }
   const providerScale = getCostCapProviderScale(adapter, workspaceRoot, adapterModel);
   if (providerScale === 0) {
-    // Explicit "switch to time-cap" signal (lm-studio / ollama). Skip
+    // Explicit "switch to time-cap" signal (local execution). Skip
     // the model/mode multipliers entirely — they don't apply when the
     // cost-cap path is disabled in favor of time-based termination.
     return {

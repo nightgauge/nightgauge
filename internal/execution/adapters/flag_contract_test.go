@@ -47,8 +47,8 @@ func flagContractHelpDir() (dir string, overridden bool) {
 }
 
 // flagContractAdapters are the CLI adapters with a compat manifest: the ones
-// that spawn an upstream CLI whose help can be captured. claude-sdk,
-// gemini-sdk, lm-studio and ollama have none.
+// that spawn an upstream CLI whose help can be captured. claude-sdk
+// and gemini-sdk have none.
 var flagContractAdapters = []string{"claude-headless", "codex", "copilot", "gemini", "grok", "opencode"}
 
 // helpSubcommand is the subcommand an adapter's argv starts with. Its flags

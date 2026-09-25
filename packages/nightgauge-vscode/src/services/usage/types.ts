@@ -47,10 +47,10 @@ import type { ClaudeFeedHealth } from "./claudeStatusLineSetup";
  *   provider would be the second producer; none exists yet.
  * - `local` — the model runs on a server the operator runs, so no provider
  *   bills it (Issue #1665, ADR-022 § 4). Produced by
- *   `LocalTelemetryUsageProvider` for `opencode` with a local configured model
- *   and for the `lm-studio` and `ollama` bridges. Its windows count tokens
- *   (`unit: "tokens"`, `limit: null`) and it never carries a `usd` window: a
- *   $0 bar is the silently-zeroed bar #658 forbids.
+ *   `LocalTelemetryUsageProvider` for `opencode` with a local configured
+ *   model. Its windows count tokens (`unit: "tokens"`, `limit: null`) and it
+ *   never carries a `usd` window: a $0 bar is the silently-zeroed bar #658
+ *   forbids.
  * - `unknown` — no provider could describe this adapter. Always paired with an
  *   empty `windows` list; see `unknownUsageSnapshot`.
  */

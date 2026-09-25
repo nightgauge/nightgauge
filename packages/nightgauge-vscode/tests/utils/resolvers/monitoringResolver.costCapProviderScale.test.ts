@@ -10,7 +10,7 @@
  *     guarantees no regression for default Claude users (AC #5)
  *   - non-Claude adapters get a proportionally tighter ceiling
  *     reflecting their lower per-token cost
- *   - lm-studio / ollama (0.0×) opt into time-based cap mode
+ *   - openai-compatible (0.0×) opts into time-based cap mode
  *     (`provider_scale=0` is a deliberate sentinel, not a typo guard)
  *
  * Composition: effectiveCap = baseCap × modelScale × modeMultiplier × providerScale
@@ -55,15 +55,14 @@ const PROVIDER_ENV_KEYS = [
   "NIGHTGAUGE_COST_CAP_PROVIDER_SCALE_GEMINI",
   "NIGHTGAUGE_COST_CAP_PROVIDER_SCALE_GEMINI_SDK",
   "NIGHTGAUGE_COST_CAP_PROVIDER_SCALE_COPILOT",
-  "NIGHTGAUGE_COST_CAP_PROVIDER_SCALE_LM_STUDIO",
-  "NIGHTGAUGE_COST_CAP_PROVIDER_SCALE_OLLAMA",
+  "NIGHTGAUGE_COST_CAP_PROVIDER_SCALE_OPENAI_COMPATIBLE",
   "NIGHTGAUGE_COST_CAP_PROVIDER_SCALE_OPENCODE",
 ];
 
 const OVERRIDE_ENV_KEYS = [
   "NIGHTGAUGE_PIPELINE_STAGE_COST_CAP_PER_PROVIDER_GEMINI_FEATURE_DEV",
   "NIGHTGAUGE_PIPELINE_STAGE_COST_CAP_PER_PROVIDER_CODEX_PR_CREATE",
-  "NIGHTGAUGE_PIPELINE_STAGE_COST_CAP_PER_PROVIDER_LM_STUDIO_FEATURE_DEV",
+  "NIGHTGAUGE_PIPELINE_STAGE_COST_CAP_PER_PROVIDER_OPENAI_COMPATIBLE_FEATURE_DEV",
 ];
 
 const COST_CAP_BASE_ENV_KEYS = [
@@ -118,9 +117,8 @@ describe("DEFAULT_COST_CAP_PROVIDER_SCALE table", () => {
     expect(DEFAULT_COST_CAP_PROVIDER_SCALE.copilot).toBe(0.2);
   });
 
-  it("lm-studio and ollama are 0.0 — switch to time-based cap", () => {
-    expect(DEFAULT_COST_CAP_PROVIDER_SCALE["lm-studio"]).toBe(0.0);
-    expect(DEFAULT_COST_CAP_PROVIDER_SCALE.ollama).toBe(0.0);
+  it("openai-compatible is 0.0 — switch to time-based cap", () => {
+    expect(DEFAULT_COST_CAP_PROVIDER_SCALE["openai-compatible"]).toBe(0.0);
   });
 
   it("covers every single-provider ExecutionAdapter — drift guard", () => {
@@ -230,8 +228,7 @@ describe("getCostCapProviderScale — defaults", () => {
     ["gemini", 0.4],
     ["gemini-sdk", 0.4],
     ["copilot", 0.2],
-    ["lm-studio", 0.0],
-    ["ollama", 0.0],
+    ["openai-compatible", 0.0],
   ] as const)("returns the seeded default for %s (%s)", (adapter, expected) => {
     expect(getCostCapProviderScale(adapter)).toBe(expected);
   });
@@ -248,9 +245,9 @@ describe("getCostCapProviderScale — env-var overrides", () => {
     expect(getCostCapProviderScale("gemini-sdk")).toBe(0.6);
   });
 
-  it("hyphenated adapters parse: LM_STUDIO maps to lm-studio", () => {
-    process.env.NIGHTGAUGE_COST_CAP_PROVIDER_SCALE_LM_STUDIO = "0.3";
-    expect(getCostCapProviderScale("lm-studio")).toBe(0.3);
+  it("hyphenated adapters parse: OPENAI_COMPATIBLE maps to openai-compatible", () => {
+    process.env.NIGHTGAUGE_COST_CAP_PROVIDER_SCALE_OPENAI_COMPATIBLE = "0.3";
+    expect(getCostCapProviderScale("openai-compatible")).toBe(0.3);
   });
 
   it("env value of 0 is accepted (provider_scale=0 = time-cap mode)", () => {
@@ -296,12 +293,12 @@ describe("getCostCapProviderScale — file-config overrides", () => {
   cost_cap_provider_scale:
     gemini: 0.6
     codex: 0.8
-    "lm-studio": 0.0
+    "openai-compatible": 0.0
 `;
     fs.writeFileSync(path.join(tmpDir, ".nightgauge", "config.yaml"), cfg);
     expect(getCostCapProviderScale("gemini", tmpDir)).toBe(0.6);
     expect(getCostCapProviderScale("codex", tmpDir)).toBe(0.8);
-    expect(getCostCapProviderScale("lm-studio", tmpDir)).toBe(0.0);
+    expect(getCostCapProviderScale("openai-compatible", tmpDir)).toBe(0.0);
   });
 
   it("env override beats config file", () => {
@@ -353,9 +350,10 @@ describe("getStageCostCapPerProviderUsd — env-var overrides", () => {
     expect(getStageCostCapPerProviderUsd("gemini", "feature-dev")).toBe(15);
   });
 
-  it("hyphenated adapter and stage map correctly: lm-studio + feature-dev", () => {
-    process.env.NIGHTGAUGE_PIPELINE_STAGE_COST_CAP_PER_PROVIDER_LM_STUDIO_FEATURE_DEV = "20";
-    expect(getStageCostCapPerProviderUsd("lm-studio", "feature-dev")).toBe(20);
+  it("hyphenated adapter and stage map correctly: openai-compatible + feature-dev", () => {
+    process.env.NIGHTGAUGE_PIPELINE_STAGE_COST_CAP_PER_PROVIDER_OPENAI_COMPATIBLE_FEATURE_DEV =
+      "20";
+    expect(getStageCostCapPerProviderUsd("openai-compatible", "feature-dev")).toBe(20);
   });
 
   it("ignores non-numeric env value", () => {
@@ -424,7 +422,7 @@ describe("getEffectiveStageCostCap — providerScale composition (AC #6 matrix)"
     label: string;
     stage: string;
     baseCap: number;
-    adapter: "claude" | "codex" | "gemini" | "gemini-sdk" | "lm-studio" | "ollama" | "copilot";
+    adapter: "claude" | "codex" | "gemini" | "gemini-sdk" | "openai-compatible" | "copilot";
     model?: string;
     effort?: string;
     mode: "efficiency" | "elevated" | "maximum";
@@ -503,13 +501,13 @@ describe("getEffectiveStageCostCap — providerScale composition (AC #6 matrix)"
 });
 
 describe("getEffectiveStageCostCap — providerScale=0 → time-cap fallback", () => {
-  it("lm-studio short-circuits effectiveCap to 0 with providerScale=0", () => {
+  it("openai-compatible short-circuits effectiveCap to 0 with providerScale=0", () => {
     const result = getEffectiveStageCostCap(
       "feature-dev",
       undefined,
       undefined,
       "elevated",
-      "lm-studio"
+      "openai-compatible"
     );
     expect(result.baseCap).toBe(23.0);
     expect(result.providerScale).toBe(0);
@@ -518,18 +516,6 @@ describe("getEffectiveStageCostCap — providerScale=0 → time-cap fallback", (
     // apply when the cost-cap path is disabled).
     expect(result.scale).toBe(1.0);
     expect(result.modeMultiplier).toBe(1.0);
-  });
-
-  it("ollama also short-circuits to providerScale=0", () => {
-    const result = getEffectiveStageCostCap(
-      "feature-dev",
-      undefined,
-      undefined,
-      "maximum",
-      "ollama"
-    );
-    expect(result.providerScale).toBe(0);
-    expect(result.effectiveCap).toBe(0);
   });
 
   it("env override providerScale=0 also triggers time-cap mode", () => {
@@ -632,13 +618,13 @@ describe("getEffectiveStageCostCap — per-(provider, stage) override path", () 
 describe("getEffectiveStageCostCap — adapter-switch recompute (Issue #3231)", () => {
   // AC #2 of the cost-cap spec, exercised here as a regression test: when
   // skillRunner's fallback walker switches the adapter (e.g. claude → gemini
-  // → lm-studio), the cost cap MUST be computed against the FINAL adapter,
+  // → openai-compatible), the cost cap MUST be computed against the FINAL adapter,
   // not the primary. Today this is satisfied implicitly because
   // skillRunner.ts:2384 calls getEffectiveStageCostCap AFTER the walker has
   // run — but a future refactor that reorders these calls would silently
   // regress. This test pins the contract: identical args except for the
   // adapter must produce different effective caps.
-  it("claude → lm-studio fallback flips providerScale to 0 (time-cap mode)", () => {
+  it("claude → openai-compatible fallback flips providerScale to 0 (time-cap mode)", () => {
     const claude = getEffectiveStageCostCap(
       "feature-dev",
       { model: "claude-sonnet-4-6", effort: "medium" },
@@ -648,17 +634,17 @@ describe("getEffectiveStageCostCap — adapter-switch recompute (Issue #3231)", 
     );
     const lmStudio = getEffectiveStageCostCap(
       "feature-dev",
-      // lm-studio doesn't use claude model/effort, but the API still accepts
+      // openai-compatible doesn't use claude model/effort, but the API still accepts
       // them — the fallback path passes undefined here. We pin both shapes.
       undefined,
       undefined,
       "elevated",
-      "lm-studio"
+      "openai-compatible"
     );
     // Claude path: providerScale=1.0, capped USD.
     expect(claude.providerScale).toBe(1.0);
     expect(claude.effectiveCap).toBeGreaterThan(0);
-    // LM Studio path: providerScale=0 → effectiveCap collapses to 0
+    // Local path: providerScale=0 → effectiveCap collapses to 0
     // (time-cap fallback mode).
     expect(lmStudio.providerScale).toBe(0);
     expect(lmStudio.effectiveCap).toBe(0);

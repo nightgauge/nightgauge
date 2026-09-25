@@ -169,8 +169,6 @@ export function getSectionForPath(path: string): string | undefined {
     pr: "pull_request",
     pull_request: "pull_request",
     ui: "core",
-    lm_studio: "core",
-    ollama: "core",
     model_routing: "routing",
   };
   return sectionMap[prefix] ?? prefix;

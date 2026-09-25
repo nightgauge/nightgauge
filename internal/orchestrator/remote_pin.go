@@ -28,12 +28,17 @@ const RemotePinMaxModelBytes = 200
 // packages/nightgauge-vscode/src/config/schema.ts), because a requested pin is
 // executed there. `claude` is the id, not the Go registry's `claude-headless`.
 // Each one also resolves in adapters.NewRegistry(), which supplies Agentic and
-// ValidateModel; lm-studio and ollama resolve but are not agentic, so they are
-// always refused. TestRemotePinAllowListMatchesTheExtension fails when the two
+// ValidateModel. TestRemotePinAllowListMatchesTheExtension fails when the two
 // lists differ.
 var remotePinAdapters = []string{
-	"claude", "codex", "copilot", "gemini", "gemini-sdk", "grok", "lm-studio", "ollama", "opencode",
+	"claude", "codex", "copilot", "gemini", "gemini-sdk", "grok", "opencode",
 }
+
+// remotePinJudgeOnlyAdapters are extension adapter ids that are never
+// dispatched to run a pipeline stage: openai-compatible is the chat-only eval
+// judge backend (#2128), with no Go runner. They are the only extension ids
+// the allow-list leaves out.
+var remotePinJudgeOnlyAdapters = []string{"openai-compatible"}
 
 var (
 	// remotePinOpenCodeModelRE is an opencode `-m` value: a provider key, a

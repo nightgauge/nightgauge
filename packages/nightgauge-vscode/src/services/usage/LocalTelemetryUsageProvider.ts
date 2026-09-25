@@ -68,11 +68,6 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  *
  * - `claude`, `codex`, `gemini`, `gemini-sdk`, `grok` bill per token, so their
  *   windows are dollars (`pay-per-token`).
- * - `lm-studio` / `ollama` run locally against the user's own hardware. Their
- *   `cost_usd` is a genuine `$0` (the Go writer documents that it never marks
- *   those `cost_unstamped`), so a dollar bar for them would sit at 0% forever
- *   — exactly the silently-zeroed bar #658 forbids. They are metered in tokens
- *   under the `local` plan instead (ADR-022 § 4).
  * - `opencode` is multi-provider (ADR-022): the provider of its configured
  *   model decides the plan. A local provider is `local` (tokens); a hosted
  *   one is `pay-per-token` (dollars) over that provider's stages only. See
@@ -89,8 +84,6 @@ export const LOCAL_TELEMETRY_METERED_ADAPTERS: readonly ExecutionAdapter[] = [
   "gemini",
   "gemini-sdk",
   "grok",
-  "lm-studio",
-  "ollama",
   "opencode",
 ];
 
@@ -399,8 +392,8 @@ export class LocalTelemetryUsageProvider implements UsageProvider {
   /**
    * What `adapter`'s snapshot measures, or `null` when nothing can be said.
    *
-   * A single-provider adapter's provider decides: `lm-studio` and `ollama` are
-   * `local`, the rest `pay-per-token`. For `opencode` the provider of the
+   * A single-provider adapter's provider decides: every one is
+   * `pay-per-token`. For `opencode` the provider of the
    * configured model decides (ADR-022 § 1): a local provider is `local`, a
    * hosted one is `pay-per-token` over that provider's stages. With no
    * configured model, or one whose provider is `other`, there is no provider

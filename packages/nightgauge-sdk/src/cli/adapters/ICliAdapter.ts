@@ -34,8 +34,9 @@ export type NightgaugeAdapter =
   | "codex"
   | "gemini"
   | "gemini-sdk"
-  | "lm-studio" // Issue #2058 — LM Studio local inference
-  | "ollama" // Issue #2591 — Ollama local LLM inference
+  // Issue #2128 — generic OpenAI-compatible judge/eval backend (chat
+  // completion only; replaced the lm-studio and ollama adapters)
+  | "openai-compatible"
   | "copilot" // Issue #1941 epic / #1942 implementation — GitHub Copilot CLI adapter
   | "grok" // Issue #522 / #524 — Grok Build CLI adapter
   // Issue #1612 / #1615 — OpenCode multi-provider adapter, experimental and

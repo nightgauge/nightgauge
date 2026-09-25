@@ -23,12 +23,11 @@ describe("SettingsHtml core section", () => {
     expect(html).toContain('<option value="codex"');
     expect(html).toContain('<option value="gemini"');
     expect(html).toContain('<option value="gemini-sdk"');
-    expect(html).toContain('<option value="lm-studio"');
-    expect(html).toContain('<option value="ollama"');
+    // #2128: the removed lm-studio and ollama adapters are no longer offered.
+    expect(html).not.toContain('<option value="lm-studio"');
+    expect(html).not.toContain('<option value="ollama"');
+    expect(html).not.toContain("lm_studio.");
     expect(html).toContain('<option value="copilot"');
-    expect(html).toContain("Refresh Models");
-    expect(html).toContain("Use Max");
-    expect(html).toContain('data-path="lm_studio.context_length"');
     expect(html).toContain('data-path="ui.core.auth_provider"');
     expect(html).toContain('data-path="ui.core.default_model"');
     expect(html).toContain('data-path="ui.core.codex.model"');
@@ -41,48 +40,6 @@ describe("SettingsHtml core section", () => {
     expect(html).toContain('data-path="ui.core.codex.cli_command"');
     expect(html).toContain('data-path="ui.core.codex.cli_args"');
     expect(html).toContain('data-path="ui.core.codex.resume_enabled"');
-  });
-
-  it("renders LM Studio models into the dropdown", () => {
-    const config = getDefaultConfig() as NightgaugeConfig;
-    config.ui = {
-      ...config.ui,
-      core: {
-        ...config.ui?.core,
-        adapter: "lm-studio",
-      },
-    };
-    config.lm_studio = {
-      ...config.lm_studio,
-      model: "openai/gpt-oss-20b",
-    };
-
-    const html = getSettingsHtml(
-      { cspSource: "test-csp" } as any,
-      config,
-      new Set(),
-      {},
-      undefined,
-      {
-        lmStudioModels: [
-          {
-            id: "openai/gpt-oss-20b",
-            loaded: true,
-            maxContextLength: 65536,
-            currentContextLength: 32768,
-          },
-          { id: "qwen2.5-coder-7b", loaded: false },
-        ],
-      }
-    );
-
-    expect(html).toContain('<select id="lm_studio.model"');
-    expect(html).toContain(
-      '<option value="openai/gpt-oss-20b" selected data-max-context-length="65536" data-current-context-length="32768">openai/gpt-oss-20b (loaded)</option>'
-    );
-    expect(html).toContain('<option value="qwen2.5-coder-7b" >qwen2.5-coder-7b</option>');
-    expect(html).toContain('data-max-context-length="65536"');
-    expect(html).toContain('data-current-context-length="32768"');
   });
 
   it("shows codex selected with codex-specific controls and hides Claude-only fields", () => {

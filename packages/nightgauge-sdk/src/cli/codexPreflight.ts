@@ -62,8 +62,7 @@ const MODEL_ENV_BY_ADAPTER: Partial<Record<NightgaugeAdapter, string>> = {
   codex: "NIGHTGAUGE_CODEX_MODEL",
   gemini: "NIGHTGAUGE_GEMINI_MODEL",
   "gemini-sdk": "NIGHTGAUGE_GEMINI_MODEL",
-  "lm-studio": "NIGHTGAUGE_LM_STUDIO_MODEL",
-  ollama: "NIGHTGAUGE_OLLAMA_MODEL",
+  "openai-compatible": "NIGHTGAUGE_OPENAI_COMPATIBLE_MODEL",
   copilot: "NIGHTGAUGE_COPILOT_MODEL",
 };
 
@@ -71,7 +70,7 @@ const MODEL_ENV_BY_ADAPTER: Partial<Record<NightgaugeAdapter, string>> = {
  * Model↔provider validation (#4021): fail fast when the configured model is
  * invalid for the active adapter, surfacing the actionable AdapterError message
  * during preflight rather than as an opaque CLI error at spawn time. A no-op for
- * adapters with OPEN model sets (claude-*, ollama, lm-studio, copilot).
+ * adapters with OPEN model sets (claude-*, openai-compatible, copilot).
  */
 function validateModelEnvForAdapter(adapter: NightgaugeAdapter, env: NodeJS.ProcessEnv): void {
   const modelEnvVar = MODEL_ENV_BY_ADAPTER[adapter];

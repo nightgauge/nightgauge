@@ -67,8 +67,7 @@ const ADAPTER_CONTEXT_WINDOW_TOKENS: Record<RouterExecutionAdapter, number> = {
   codex: 256_000,
   gemini: 1_000_000,
   "gemini-sdk": 1_000_000,
-  "lm-studio": 32_000,
-  ollama: 32_000,
+  "openai-compatible": 32_000,
   copilot: 64_000,
   grok: 500_000,
   // Fallback ONLY: used when the caller supplies neither
@@ -116,8 +115,7 @@ const CAPABILITY_MATRIX: Record<RouterStageCategory, Record<RouterExecutionAdapt
     codex: 0.7,
     gemini: 0.75,
     "gemini-sdk": 0.75,
-    "lm-studio": 0.4,
-    ollama: 0.4,
+    "openai-compatible": 0.4,
     copilot: 0.65,
     grok: 0.8,
     opencode: 0.4,
@@ -128,8 +126,7 @@ const CAPABILITY_MATRIX: Record<RouterStageCategory, Record<RouterExecutionAdapt
     codex: 0.75,
     gemini: 0.85,
     "gemini-sdk": 0.85,
-    "lm-studio": 0.45,
-    ollama: 0.45,
+    "openai-compatible": 0.45,
     copilot: 0.7,
     grok: 0.82,
     opencode: 0.45,
@@ -140,8 +137,7 @@ const CAPABILITY_MATRIX: Record<RouterStageCategory, Record<RouterExecutionAdapt
     codex: 0.85,
     gemini: 0.78,
     "gemini-sdk": 0.78,
-    "lm-studio": 0.55,
-    ollama: 0.55,
+    "openai-compatible": 0.55,
     copilot: 0.75,
     grok: 0.84,
     opencode: 0.55,
@@ -152,8 +148,7 @@ const CAPABILITY_MATRIX: Record<RouterStageCategory, Record<RouterExecutionAdapt
     codex: 0.82,
     gemini: 0.78,
     "gemini-sdk": 0.78,
-    "lm-studio": 0.5,
-    ollama: 0.5,
+    "openai-compatible": 0.5,
     copilot: 0.7,
     grok: 0.8,
     opencode: 0.5,
@@ -166,8 +161,7 @@ const CAPABILITY_MATRIX: Record<RouterStageCategory, Record<RouterExecutionAdapt
     codex: 0.7,
     gemini: 0.7,
     "gemini-sdk": 0.7,
-    "lm-studio": 0.65,
-    ollama: 0.65,
+    "openai-compatible": 0.65,
     copilot: 0.7,
     grok: 0.7,
     opencode: 0.65,
@@ -178,8 +172,7 @@ const CAPABILITY_MATRIX: Record<RouterStageCategory, Record<RouterExecutionAdapt
     codex: 0.78,
     gemini: 0.75,
     "gemini-sdk": 0.75,
-    "lm-studio": 0.5,
-    ollama: 0.5,
+    "openai-compatible": 0.5,
     copilot: 0.7,
     grok: 0.78,
     opencode: 0.5,
@@ -205,7 +198,7 @@ function categorizeStage(stage: string): RouterStageCategory {
  * understands, via the provider-aware model registry (#56). Claude passes the
  * tier through unchanged (the `claude` CLI accepts tier aliases natively);
  * providers without a fable-equivalent resolve `fable` to their strongest
- * band model. Local adapters (ollama/lm-studio) have no tier hierarchy — the
+ * band model. Local adapters (openai-compatible) have no tier hierarchy — the
  * tier alias is returned unchanged and the dispatcher falls back to the
  * configured local model, exactly like the performance-mode mismatch path.
  */

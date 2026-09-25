@@ -86,8 +86,8 @@ const ALL_AUTH_ENV_KEYS = [
   "GH_TOKEN",
   "GITHUB_TOKEN",
   "COPILOT_GITHUB_TOKEN",
-  "NIGHTGAUGE_OLLAMA_MODEL",
-  "NIGHTGAUGE_LM_STUDIO_MODEL",
+  "NIGHTGAUGE_OPENAI_COMPATIBLE_MODEL",
+  "NIGHTGAUGE_OPENAI_COMPATIBLE_BASE_URL",
 ];
 
 // ---------------------------------------------------------------------------
@@ -499,15 +499,19 @@ describe("copilot: validateAuth() BINARY_NOT_FOUND when CLI absent", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Suite: ollama — CONFIG_INVALID when model env var not set
+// Suite: openai-compatible — CONFIG_INVALID when model env var not set
 // ---------------------------------------------------------------------------
 
-describe("ollama: createQueryFunction() CONFIG_INVALID when model unset", () => {
+describe("openai-compatible: createQueryFunction() CONFIG_INVALID when model unset", () => {
   let envSnapshot: EnvSnapshot;
 
   beforeEach(() => {
-    envSnapshot = snapshotEnv(["NIGHTGAUGE_OLLAMA_MODEL"]);
-    delete process.env.NIGHTGAUGE_OLLAMA_MODEL;
+    envSnapshot = snapshotEnv([
+      "NIGHTGAUGE_OPENAI_COMPATIBLE_MODEL",
+      "NIGHTGAUGE_OPENAI_COMPATIBLE_BASE_URL",
+    ]);
+    delete process.env.NIGHTGAUGE_OPENAI_COMPATIBLE_MODEL;
+    process.env.NIGHTGAUGE_OPENAI_COMPATIBLE_BASE_URL = "http://127.0.0.1:1234/v1";
   });
 
   afterEach(() => {
@@ -516,53 +520,16 @@ describe("ollama: createQueryFunction() CONFIG_INVALID when model unset", () => 
   });
 
   it("throws AdapterError with CONFIG_INVALID", async () => {
-    const adapter = defaultRegistry.get("ollama");
+    const adapter = defaultRegistry.get("openai-compatible");
     const err = await adapter.createQueryFunction().catch((e) => e);
     expect(err).toBeInstanceOf(AdapterError);
     expect((err as AdapterError).category).toBe("CONFIG_INVALID" satisfies AdapterErrorCategory);
   });
 
-  it("error message mentions NIGHTGAUGE_OLLAMA_MODEL", async () => {
-    const adapter = defaultRegistry.get("ollama");
+  it("error message mentions NIGHTGAUGE_OPENAI_COMPATIBLE_MODEL", async () => {
+    const adapter = defaultRegistry.get("openai-compatible");
     const err = await adapter.createQueryFunction().catch((e) => e);
-    expect((err as AdapterError).message).toMatch(/NIGHTGAUGE_OLLAMA_MODEL/);
-  });
-
-  it("error message includes how to pull a model", async () => {
-    const adapter = defaultRegistry.get("ollama");
-    const err = await adapter.createQueryFunction().catch((e) => e);
-    expect((err as AdapterError).message).toMatch(/ollama pull/i);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Suite: lm-studio — CONFIG_INVALID when model env var not set
-// ---------------------------------------------------------------------------
-
-describe("lm-studio: createQueryFunction() CONFIG_INVALID when model unset", () => {
-  let envSnapshot: EnvSnapshot;
-
-  beforeEach(() => {
-    envSnapshot = snapshotEnv(["NIGHTGAUGE_LM_STUDIO_MODEL"]);
-    delete process.env.NIGHTGAUGE_LM_STUDIO_MODEL;
-  });
-
-  afterEach(() => {
-    restoreEnv(envSnapshot);
-    vi.restoreAllMocks();
-  });
-
-  it("throws AdapterError with CONFIG_INVALID", async () => {
-    const adapter = defaultRegistry.get("lm-studio");
-    const err = await adapter.createQueryFunction().catch((e) => e);
-    expect(err).toBeInstanceOf(AdapterError);
-    expect((err as AdapterError).category).toBe("CONFIG_INVALID" satisfies AdapterErrorCategory);
-  });
-
-  it("error message mentions NIGHTGAUGE_LM_STUDIO_MODEL", async () => {
-    const adapter = defaultRegistry.get("lm-studio");
-    const err = await adapter.createQueryFunction().catch((e) => e);
-    expect((err as AdapterError).message).toMatch(/NIGHTGAUGE_LM_STUDIO_MODEL/);
+    expect((err as AdapterError).message).toMatch(/NIGHTGAUGE_OPENAI_COMPATIBLE_MODEL/);
   });
 });
 

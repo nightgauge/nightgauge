@@ -1354,8 +1354,8 @@ type PipelineConfig struct {
 	// StageAdapters maps a pipeline stage to the execution adapter that runs
 	// it — the canonical pipeline.stage_adapters.<stage> schema shared with
 	// the VSCode resolver and the SDK CLI (#54). Values use the collapsed
-	// adapter vocabulary (claude|codex|gemini|gemini-sdk|lm-studio|ollama|
-	// copilot); the Go registry maps "claude" to its headless flavor.
+	// adapter vocabulary (claude|codex|gemini|gemini-sdk|copilot|grok|
+	// opencode); the Go registry maps "claude" to its headless flavor.
 	StageAdapters map[string]string `yaml:"stage_adapters,omitempty" json:"stageAdapters,omitempty"`
 
 	// AdapterFallbackChain is the ordered pipeline.adapter_fallback_chain —
@@ -1653,7 +1653,7 @@ func (f stageBudgetField) resolve(key string, own, base, builtin int64) int64 {
 func stageBudgetUnlimitedEffect(key string) string {
 	switch key {
 	case "max_turns":
-		return "no turn budget: turns are not counted on the stream and none is passed to the adapter, so only the adapter's own default cap applies (--max-turns 200 for claude, claude-sdk, grok, lm-studio and ollama; 200 OpenCode steps; none for codex, gemini and copilot)"
+		return "no turn budget: turns are not counted on the stream and none is passed to the adapter, so only the adapter's own default cap applies (--max-turns 200 for claude, claude-sdk and grok; 200 OpenCode steps; none for codex, gemini and copilot)"
 	case "max_wall_clock":
 		return "no wall-clock budget: only the stage timeout bounds the stage's run time"
 	}
@@ -2178,6 +2178,11 @@ func DefaultConfig() *Config {
 // setup mistake. See docs/SETTINGS_ARCHITECTURE.md for the tier model.
 func Load(workspaceRoot string) (*Config, error) {
 	cfg, err := load(workspaceRoot)
+	if err == nil {
+		if rerr := ValidateNoRetiredAdapters(cfg); rerr != nil {
+			return nil, rerr
+		}
+	}
 	// The GitHub request ledger is a process-wide instrument switched on
 	// before anything has read config, so the opt-out has to be pushed to it
 	// from here (#1347). Applied on EVERY successful load, not once: a

@@ -21,6 +21,7 @@ import {
   TIER_BANDS,
   escalationLadder,
   isTierBand,
+  retiredAdapterMessage,
   type TierBand,
 } from "@nightgauge/sdk";
 import { resolveConfigPathSync, logDeprecationWarning } from "../configPathResolver";
@@ -357,8 +358,7 @@ export const DEFAULT_EXECUTION_ADAPTER: ExecutionAdapter = "claude";
  * Valid adapter values for runtime validation — the SINGLE SOURCE OF TRUTH is
  * `AdapterEnumSchema`. Deriving from it (rather than a hand-maintained parallel
  * array) prevents the "settings UI offers an adapter the runtime silently drops
- * to claude" drift that the schema comment warns about — e.g. `ollama`, which is
- * a fully-wired adapter and selectable in the settings UI (#4030).
+ * to claude" drift that the schema comment warns about (#4030).
  */
 export const VALID_ADAPTERS: readonly string[] = AdapterEnumSchema.options;
 
@@ -411,6 +411,25 @@ export function getExecutionAdapter(workspaceRoot?: string): ExecutionAdapter {
  *
  * Exported for reuse by `adapterResolver.ts` (Issue #3221).
  */
+/**
+ * Throw the #2128 migration error when `value` names a removed adapter
+ * (`lm-studio`, `ollama`). `where` names the setting that carried it.
+ */
+export function assertAdapterNotRetired(value: string | undefined | null, where: string): void {
+  const message = retiredAdapterMessage(value, where);
+  if (message) {
+    throw new RetiredAdapterConfigError(message);
+  }
+}
+
+/** The error {@link assertAdapterNotRetired} throws; config readers rethrow it. */
+export class RetiredAdapterConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RetiredAdapterConfigError";
+  }
+}
+
 export function readAdapterFromFile(filePath: string): ExecutionAdapter | null {
   try {
     const content = fs.readFileSync(filePath, "utf-8");
@@ -441,6 +460,8 @@ export function readAdapterFromFile(filePath: string): ExecutionAdapter | null {
       }
 
       if (inCore) {
+        const raw = trimmed.match(/^adapter:\s*['"]?([A-Za-z0-9_-]+)['"]?/);
+        assertAdapterNotRetired(raw?.[1], `ui.core.adapter in ${filePath}`);
         const match = trimmed.match(
           new RegExp(`^adapter:\\s*['"]?(${ADAPTER_ID_ALTERNATION})['"]?(?:\\s+#.*)?$`)
         );
@@ -449,7 +470,8 @@ export function readAdapterFromFile(filePath: string): ExecutionAdapter | null {
         }
       }
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof RetiredAdapterConfigError) throw error;
     // File doesn't exist or can't be read
   }
   return null;
@@ -1066,241 +1088,6 @@ export function getCodexResumeEnabled(workspaceRoot?: string): boolean {
   } catch (error) {
     console.error("Failed to read Codex resume setting from nightgauge config:", error);
     return false;
-  }
-}
-
-// ============================================================================
-// LM Studio Configuration
-// ============================================================================
-
-/**
- * Get the LM Studio model from env or config.
- * Priority: NIGHTGAUGE_LM_STUDIO_MODEL env → lm_studio.model → ''
- * @see Issue #2057 - Route pipeline stage execution through LM Studio
- */
-export function getLmStudioModel(workspaceRoot?: string): string {
-  const envModel = process.env.NIGHTGAUGE_LM_STUDIO_MODEL;
-  if (envModel) return envModel;
-
-  const root = workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  if (!root) {
-    return "";
-  }
-
-  try {
-    const pathResult = resolveConfigPathSync(root);
-    if (!pathResult.exists) {
-      return "";
-    }
-
-    if (pathResult.isLegacy) {
-      logDeprecationWarning(pathResult.path);
-    }
-
-    const configContent = readEffectiveConfigTextSync(pathResult);
-    const lines = configContent.split("\n");
-    let inLmStudio = false;
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-
-      if (trimmed === "lm_studio:" && !line.startsWith(" ")) {
-        inLmStudio = true;
-        continue;
-      }
-
-      if (trimmed && !trimmed.startsWith("#") && /^[a-z_]+:/.test(trimmed)) {
-        if (!line.startsWith(" ")) {
-          inLmStudio = false;
-        }
-      }
-
-      if (inLmStudio) {
-        const match = trimmed.match(/^model:\s*['"]?([^'"#\s]+)['"]?(?:\s+#.*)?$/);
-        if (match) {
-          return match[1];
-        }
-      }
-    }
-
-    return "";
-  } catch (error) {
-    console.error("Failed to read LM Studio model from nightgauge config:", error);
-    return "";
-  }
-}
-
-/**
- * Get the LM Studio base URL from env or config.
- * Priority: NIGHTGAUGE_LM_STUDIO_BASE_URL env → lm_studio.base_url → 'http://127.0.0.1:1234/v1'
- * @see Issue #2057 - Route pipeline stage execution through LM Studio
- */
-export function getLmStudioBaseUrl(workspaceRoot?: string): string {
-  const envUrl = process.env.NIGHTGAUGE_LM_STUDIO_BASE_URL;
-  if (envUrl) return envUrl;
-
-  const root = workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  if (!root) {
-    return "http://127.0.0.1:1234/v1";
-  }
-
-  try {
-    const pathResult = resolveConfigPathSync(root);
-    if (!pathResult.exists) {
-      return "http://127.0.0.1:1234/v1";
-    }
-
-    if (pathResult.isLegacy) {
-      logDeprecationWarning(pathResult.path);
-    }
-
-    const configContent = readEffectiveConfigTextSync(pathResult);
-    const lines = configContent.split("\n");
-    let inLmStudio = false;
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-
-      if (trimmed === "lm_studio:" && !line.startsWith(" ")) {
-        inLmStudio = true;
-        continue;
-      }
-
-      if (trimmed && !trimmed.startsWith("#") && /^[a-z_]+:/.test(trimmed)) {
-        if (!line.startsWith(" ")) {
-          inLmStudio = false;
-        }
-      }
-
-      if (inLmStudio) {
-        const match = trimmed.match(/^base_url:\s*['"]?([^'"#\s]+)['"]?(?:\s+#.*)?$/);
-        if (match) {
-          return match[1];
-        }
-      }
-    }
-
-    return "http://127.0.0.1:1234/v1";
-  } catch (error) {
-    console.error("Failed to read LM Studio base URL from nightgauge config:", error);
-    return "http://127.0.0.1:1234/v1";
-  }
-}
-
-/**
- * Get the LM Studio API key from env or config.
- * Priority: NIGHTGAUGE_LM_STUDIO_API_KEY env → lm_studio.api_key → 'lm-studio'
- * @see Issue #2057 - Route pipeline stage execution through LM Studio
- */
-export function getLmStudioApiKey(workspaceRoot?: string): string {
-  const envKey = process.env.NIGHTGAUGE_LM_STUDIO_API_KEY;
-  if (envKey) return envKey;
-
-  const root = workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  if (!root) {
-    return "lm-studio";
-  }
-
-  try {
-    const pathResult = resolveConfigPathSync(root);
-    if (!pathResult.exists) {
-      return "lm-studio";
-    }
-
-    if (pathResult.isLegacy) {
-      logDeprecationWarning(pathResult.path);
-    }
-
-    const configContent = readEffectiveConfigTextSync(pathResult);
-    const lines = configContent.split("\n");
-    let inLmStudio = false;
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-
-      if (trimmed === "lm_studio:" && !line.startsWith(" ")) {
-        inLmStudio = true;
-        continue;
-      }
-
-      if (trimmed && !trimmed.startsWith("#") && /^[a-z_]+:/.test(trimmed)) {
-        if (!line.startsWith(" ")) {
-          inLmStudio = false;
-        }
-      }
-
-      if (inLmStudio) {
-        const match = trimmed.match(/^api_key:\s*['"]?([^'"#\s]+)['"]?(?:\s+#.*)?$/);
-        if (match) {
-          return match[1];
-        }
-      }
-    }
-
-    return "lm-studio";
-  } catch (error) {
-    console.error("Failed to read LM Studio API key from nightgauge config:", error);
-    return "lm-studio";
-  }
-}
-
-/**
- * Get the LM Studio request timeout in milliseconds from env or config.
- * Priority: NIGHTGAUGE_LM_STUDIO_TIMEOUT_MS env → lm_studio.timeout_ms → 180000
- * @see Issue #2057 - Route pipeline stage execution through LM Studio
- */
-export function getLmStudioTimeoutMs(workspaceRoot?: string): number {
-  const envMs = process.env.NIGHTGAUGE_LM_STUDIO_TIMEOUT_MS;
-  if (envMs) {
-    const parsed = parseInt(envMs, 10);
-    if (!isNaN(parsed)) return parsed;
-  }
-
-  const root = workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  if (!root) {
-    return 180_000;
-  }
-
-  try {
-    const pathResult = resolveConfigPathSync(root);
-    if (!pathResult.exists) {
-      return 180_000;
-    }
-
-    if (pathResult.isLegacy) {
-      logDeprecationWarning(pathResult.path);
-    }
-
-    const configContent = readEffectiveConfigTextSync(pathResult);
-    const lines = configContent.split("\n");
-    let inLmStudio = false;
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-
-      if (trimmed === "lm_studio:" && !line.startsWith(" ")) {
-        inLmStudio = true;
-        continue;
-      }
-
-      if (trimmed && !trimmed.startsWith("#") && /^[a-z_]+:/.test(trimmed)) {
-        if (!line.startsWith(" ")) {
-          inLmStudio = false;
-        }
-      }
-
-      if (inLmStudio) {
-        const match = trimmed.match(/^timeout_ms:\s*(\d+)(?:\s+#.*)?$/);
-        if (match) {
-          return parseInt(match[1], 10);
-        }
-      }
-    }
-
-    return 180_000;
-  } catch (error) {
-    console.error("Failed to read LM Studio timeout from nightgauge config:", error);
-    return 180_000;
   }
 }
 

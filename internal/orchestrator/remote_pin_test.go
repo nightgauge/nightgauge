@@ -144,21 +144,23 @@ func TestRemotePinAdapterWithoutModel(t *testing.T) {
 	}
 }
 
-// The allow-list is the extension's dispatch vocabulary, because the
-// extension executes the pin, and every entry must resolve in the Go
-// registry, which supplies Agentic and ValidateModel.
+// The allow-list is the extension's dispatch vocabulary, less its judge-only
+// ids, because the extension executes the pin, and every entry must resolve
+// in the Go registry, which supplies Agentic and ValidateModel.
 func TestRemotePinAllowListMatchesTheExtension(t *testing.T) {
 	src, err := os.ReadFile(filepath.Join("..", "..", "packages", "nightgauge-vscode", "src", "config", "schema.ts"))
 	if err != nil {
 		t.Fatalf("read schema.ts: %v", err)
 	}
-	block := regexp.MustCompile(`(?s)export const AdapterEnumSchema = z\.enum\(\[(.*?)\]\)`).FindSubmatch(src)
+	block := regexp.MustCompile(`(?s)export const AdapterEnumSchema = z\.enum\(\s*\[(.*?)\]`).FindSubmatch(src)
 	if block == nil {
 		t.Fatal("AdapterEnumSchema not found in schema.ts")
 	}
 	var ext []string
 	for _, m := range regexp.MustCompile(`"([a-z0-9-]+)"`).FindAllSubmatch(block[1], -1) {
-		ext = append(ext, string(m[1]))
+		if id := string(m[1]); !slices.Contains(remotePinJudgeOnlyAdapters, id) {
+			ext = append(ext, id)
+		}
 	}
 	slices.Sort(ext)
 	got := slices.Clone(remotePinAdapters)
@@ -221,7 +223,8 @@ func TestRemotePinPublicDetailIsACategory(t *testing.T) {
 		setup                func(*remotePinFakes)
 	}{
 		{"nope", "", "adapter-not-allowed", nil},
-		{"lm-studio", "", "adapter-not-agentic: lm-studio", nil},
+		{"lm-studio", "", "adapter-not-allowed", nil},
+		{"openai-compatible", "", "adapter-not-allowed", nil},
 		{"opencode", remotePinLocalModel, "adapter-unavailable: opencode",
 			func(f *remotePinFakes) { f.usable, f.usableWhy = false, "see /home/someone/.config/opencode" }},
 		{"opencode", "lmstudio/qwen/other-model", "model-not-in-catalog", nil},

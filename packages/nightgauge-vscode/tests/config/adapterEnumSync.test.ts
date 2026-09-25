@@ -62,10 +62,8 @@ describe("adapter enum sync (#4030)", () => {
 
   it("runtime VALID_ADAPTERS == AdapterEnumSchema (no silent-drop drift, #4030)", () => {
     // The schema comment warns that a drift here silently drops a user's adapter
-    // selection to the default. ollama was the historical gap; opencode (#1623)
-    // is the current one being guarded.
+    // selection to the default. opencode (#1623) is the one being guarded.
     expect([...VALID_ADAPTERS].sort()).toEqual(CANONICAL);
-    expect(VALID_ADAPTERS).toContain("ollama");
     expect(VALID_ADAPTERS).toContain("opencode");
   });
 

@@ -65,8 +65,17 @@ describe("ExecutionAdapterSchema", () => {
     expect(ExecutionAdapterSchema.safeParse("codex").success).toBe(true);
   });
 
-  it("accepts lm-studio", () => {
-    expect(ExecutionAdapterSchema.safeParse("lm-studio").success).toBe(true);
+  it("accepts openai-compatible", () => {
+    expect(ExecutionAdapterSchema.safeParse("openai-compatible").success).toBe(true);
+  });
+
+  // #2128: the removed lm-studio and ollama adapters fail with the migration.
+  it.each(["lm-studio", "ollama"])("rejects the removed %s adapter with the migration", (name) => {
+    const result = ExecutionAdapterSchema.safeParse(name);
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0].message).toMatch(
+      /removed \(#2128\).*opencode adapter against any OpenAI-compatible server.*openai-compatible/
+    );
   });
 
   it("accepts gemini", () => {

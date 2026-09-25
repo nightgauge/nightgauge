@@ -56,7 +56,6 @@ import type {
   AutomationsConfig,
   UIConfig,
   PlatformConfig,
-  LmStudioConfig,
   ConfigValidationError,
 } from "../config/schema";
 import { resolvePlatformHostKey } from "../config/schema";
@@ -444,15 +443,6 @@ export class ConfigBridge implements vscode.Disposable {
    */
   getPlatform(): PlatformConfig | undefined {
     return this.cachedResult?.config.platform;
-  }
-
-  /**
-   * Get LM Studio local inference configuration section
-   *
-   * @see Issue #2058 - LM Studio adapter and config contract
-   */
-  getLmStudio(): LmStudioConfig | undefined {
-    return this.cachedResult?.config.lm_studio;
   }
 
   // ============================================================================

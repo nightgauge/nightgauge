@@ -105,7 +105,6 @@ export const LEGACY_KEYS: LegacyKeyDescriptor[] = [
     targetTier: "machine",
     machineKeyPath: "notifications.discord.enabled",
   },
-  { key: "lm_studio", targetTier: "machine", machineKeyPath: "lm_studio" },
 ];
 
 /**

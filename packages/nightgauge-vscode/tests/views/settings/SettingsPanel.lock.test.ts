@@ -102,8 +102,6 @@ describe("SettingsPanel per-section lock behavior", () => {
       expect(getSectionForPath("ui.core.adapter")).toBe("core");
       expect(getSectionForPath("ui.core.auth_provider")).toBe("core");
       expect(getSectionForPath("ui.core.default_model")).toBe("core");
-      expect(getSectionForPath("lm_studio.model")).toBe("core");
-      expect(getSectionForPath("ollama.model")).toBe("core");
     });
 
     it("maps model_routing.* paths to routing section", () => {
@@ -122,8 +120,6 @@ describe("SettingsPanel per-section lock behavior", () => {
       expect(isSectionLocked("pipeline.ci_timeout", lockedSections)).toBe(true);
       expect(isSectionLocked("commands.test", lockedSections)).toBe(true);
       expect(isSectionLocked("ui.core.adapter", lockedSections)).toBe(true);
-      expect(isSectionLocked("lm_studio.model", lockedSections)).toBe(true);
-      expect(isSectionLocked("ollama.model", lockedSections)).toBe(true);
       expect(isSectionLocked("model_routing.mode", lockedSections)).toBe(true);
     });
 
@@ -168,8 +164,6 @@ describe("SettingsPanel per-section lock behavior", () => {
       "pipeline.ci_timeout",
       "commands.test",
       "ui.core.adapter",
-      "lm_studio.model",
-      "ollama.model",
       "model_routing.mode",
       "project.number",
       "pull_request.merge_strategy",

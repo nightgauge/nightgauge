@@ -151,20 +151,38 @@ describe("resolveStageAdapter — stage-config precedence (Issue #3221)", () => 
     });
   });
 
-  it("resolves 'ollama' from stage_adapters (now in VALID_ADAPTERS, #4030)", () => {
-    // #4030 derived VALID_ADAPTERS from AdapterEnumSchema (which includes
-    // ollama), closing the drift where a selected ollama silently fell back to
-    // claude. ollama is now honored as a real stage-config override.
+  // #2128: ollama and lm-studio were removed. A config that still names one
+  // fails loudly with the migration instead of silently falling through.
+  it("refuses a stage_adapters entry naming the removed ollama adapter", () => {
     const yaml = `pipeline:
   stage_adapters:
     feature-dev: ollama
 `;
     fs.writeFileSync(path.join(tmpRoot, ".nightgauge", "config.yaml"), yaml);
 
-    expect(resolveStageAdapter("feature-dev", tmpRoot)).toEqual({
-      adapter: "ollama",
-      source: "stage-config",
-    });
+    expect(() => resolveStageAdapter("feature-dev", tmpRoot)).toThrow(
+      /pipeline\.stage_adapters\.feature-dev names adapter "ollama", which was removed \(#2128\).*openai-compatible/
+    );
+  });
+
+  it("refuses the removed lm-studio adapter from the per-stage env var", () => {
+    expect(() =>
+      resolveStageAdapter("feature-dev", tmpRoot, {
+        NIGHTGAUGE_PIPELINE_STAGE_ADAPTER_FEATURE_DEV: "lm-studio",
+      })
+    ).toThrow(/removed \(#2128\)/);
+  });
+
+  it("refuses a fallback chain entry naming the removed lm-studio adapter", () => {
+    fs.writeFileSync(
+      path.join(tmpRoot, ".nightgauge", "config.yaml"),
+      `pipeline:
+  adapter_fallback_chain:
+    - codex
+    - lm-studio
+`
+    );
+    expect(() => readAdapterFallbackChainFromYaml(tmpRoot)).toThrow(/removed \(#2128\)/);
   });
 });
 
@@ -664,7 +682,7 @@ describe("readStageAdapterFallbackFromYaml (Issue #3231)", () => {
       - gemini
       - copilot
     feature-planning:
-      - lm-studio
+      - grok
 `
     );
     expect(readStageAdapterFallbackFromYaml("feature-dev", tmpRoot)).toEqual([
@@ -672,7 +690,7 @@ describe("readStageAdapterFallbackFromYaml (Issue #3231)", () => {
       "gemini",
       "copilot",
     ]);
-    expect(readStageAdapterFallbackFromYaml("feature-planning", tmpRoot)).toEqual(["lm-studio"]);
+    expect(readStageAdapterFallbackFromYaml("feature-planning", tmpRoot)).toEqual(["grok"]);
   });
 
   it("filters invalid adapter names", () => {
@@ -765,10 +783,10 @@ describe("getEffectiveFallbackChain (Issue #3231 / AC #1, #2, #7)", () => {
   stage_adapter_fallback:
     feature-dev:
       - copilot
-      - lm-studio
+      - grok
 `
     );
-    expect(getEffectiveFallbackChain("feature-dev", tmpRoot)).toEqual(["copilot", "lm-studio"]);
+    expect(getEffectiveFallbackChain("feature-dev", tmpRoot)).toEqual(["copilot", "grok"]);
     // Stages without an override fall through to the global chain.
     expect(getEffectiveFallbackChain("feature-planning", tmpRoot)).toEqual(["codex", "gemini"]);
   });
@@ -873,14 +891,14 @@ describe("walkAdapterFallback (Issue #3231 / AC #3, #5)", () => {
     - codex
   stage_adapter_fallback:
     feature-dev:
-      - lm-studio
+      - grok
 `
     );
     const validate = (_a: ExecutionAdapter): string | null => null;
     const result = walkAdapterFallback("claude", "claude broken", validate, tmpRoot, "feature-dev");
-    // Stage override wins — lm-studio, not codex.
-    expect(result.winner).toEqual({ adapter: "lm-studio", source: "fallback" });
-    expect(result.hopsAttempted).toEqual(["claude", "lm-studio"]);
+    // Stage override wins — grok, not codex.
+    expect(result.winner).toEqual({ adapter: "grok", source: "fallback" });
+    expect(result.hopsAttempted).toEqual(["claude", "grok"]);
   });
 
   it("disable_fallback: true short-circuits the walker (AC #7)", () => {

@@ -16,6 +16,21 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **Breaking: the `lm-studio` and `ollama` adapters are removed (#2128,
+  part 3).** Local models now run through the `opencode` adapter against any
+  OpenAI-compatible server (LM Studio, Ollama, llama.cpp, vLLM), declared under
+  `opencode.endpoints` in the machine-tier config. The eval judge uses the new
+  `openai-compatible` backend, configured by `NIGHTGAUGE_OPENAI_COMPATIBLE_BASE_URL`,
+  `NIGHTGAUGE_OPENAI_COMPATIBLE_MODEL` and, optionally,
+  `NIGHTGAUGE_OPENAI_COMPATIBLE_API_KEY_ENV`; it has no default base URL. The
+  Go adapters, the doctor's local-HTTP checks, the `lm_studio` and `ollama`
+  config blocks, the settings UI's LM Studio and Ollama panels, and the
+  `NIGHTGAUGE_LM_STUDIO_*` and `NIGHTGAUGE_OLLAMA_*` adapter variables are
+  gone. **Migration:** a config, flag or environment variable that still names
+  `lm-studio` or `ollama` as an adapter now fails with an error naming the
+  setting and the replacement. Set the adapter to `opencode` and declare the
+  server as an endpoint, or use `openai-compatible` for the judge.
+
 - **One OpenAI-compatible backend now serves the LM Studio and Ollama judges
   (#2128, part 2).** The SDK's `LmStudioAdapter` and `OllamaAdapter` were the
   same chat-completions client with different defaults. Both are deleted, with

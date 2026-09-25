@@ -1012,7 +1012,7 @@ type PipelineNotifyStageTransitionParams struct {
 	// buckets every stage as 'unknown'.
 	Model string `json:"model,omitempty"`
 	// Adapter is the adapter/runtime that executed the stage (claude | codex |
-	// gemini | gemini-sdk | lm-studio | ollama | copilot). Threaded here (#268)
+	// gemini | gemini-sdk | copilot | grok | opencode). Threaded here (#268)
 	// so the notify handler records it as the runtime's per-stage StageAdapter;
 	// BuildV2Record projects it onto V2StageTokens.Adapter, which the platform
 	// mapper emits as StageMetric.provider (V5) — the wire field the platform

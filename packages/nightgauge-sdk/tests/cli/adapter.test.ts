@@ -3,7 +3,6 @@ import {
   isCodexAdapterEnabled,
   isGeminiAdapterEnabled,
   isGeminiSdkAdapterEnabled,
-  isLmStudioAdapterEnabled,
   isCopilotAdapterEnabled,
   isOpenCodeAdapterEnabled,
   requiresDirectApiKey,
@@ -64,20 +63,19 @@ describe("adapter resolution", () => {
     expect(requiresDirectApiKey("gemini")).toBe(false);
   });
 
-  it("resolves lm-studio adapter from explicit env", () => {
-    expect(resolveAdapter({ NIGHTGAUGE_ADAPTER: "lm-studio" })).toBe("lm-studio");
-    expect(isLmStudioAdapterEnabled({ NIGHTGAUGE_ADAPTER: "lm-studio" })).toBe(true);
+  it("resolves the openai-compatible judge backend from explicit env", () => {
+    expect(resolveAdapter({ NIGHTGAUGE_ADAPTER: "openai-compatible" })).toBe("openai-compatible");
   });
 
-  it("resolves lm_studio alias to lm-studio", () => {
-    expect(resolveAdapter({ NIGHTGAUGE_ADAPTER: "lm_studio" })).toBe("lm-studio");
-  });
-
-  // #53: the ollama alias was missing — NIGHTGAUGE_ADAPTER=ollama silently
-  // resolved to claude-sdk.
-  it("resolves ollama adapter from explicit env", () => {
-    expect(resolveAdapter({ NIGHTGAUGE_ADAPTER: "ollama" })).toBe("ollama");
-  });
+  // #2128: the lm-studio and ollama adapters were removed. Naming one fails
+  // loudly with the migration instead of an "unknown adapter" error.
+  for (const retired of ["lm-studio", "lm_studio", "lmstudio", "ollama", "Ollama"]) {
+    it(`refuses the removed ${retired} adapter with the migration`, () => {
+      expect(() => resolveAdapter({ NIGHTGAUGE_ADAPTER: retired })).toThrow(
+        /removed \(#2128\).*opencode adapter against any OpenAI-compatible server.*openai-compatible/
+      );
+    });
+  }
 
   it("throws on an unknown explicit adapter instead of silently running claude-sdk", () => {
     expect(() => resolveAdapter({ NIGHTGAUGE_ADAPTER: "olama" })).toThrow(
@@ -88,8 +86,8 @@ describe("adapter resolution", () => {
     );
   });
 
-  it("lm-studio does not require a direct API key", () => {
-    expect(requiresDirectApiKey("lm-studio")).toBe(false);
+  it("openai-compatible does not require a direct API key", () => {
+    expect(requiresDirectApiKey("openai-compatible")).toBe(false);
   });
 
   it("detects gemini adapter mode from env", () => {
@@ -262,14 +260,6 @@ describe("opencode adapter resolution and enable gate (#1615)", () => {
         { stage: "feature-dev" }
       )
     ).toBe("opencode");
-  });
-
-  // Regression guard: OpenCode is the agentic local path, but these aliases
-  // keep pointing at the non-agentic chat-completion bridges (ADR-022 § 6).
-  it("leaves the local chat-completion aliases on their own adapters", () => {
-    expect(resolveAdapter({ NIGHTGAUGE_ADAPTER: "lm_studio", ...ON })).toBe("lm-studio");
-    expect(resolveAdapter({ NIGHTGAUGE_ADAPTER: "lm-studio", ...ON })).toBe("lm-studio");
-    expect(resolveAdapter({ NIGHTGAUGE_ADAPTER: "ollama", ...ON })).toBe("ollama");
   });
 
   // Only the exact value "1" opens the switch, matching the Go gate.

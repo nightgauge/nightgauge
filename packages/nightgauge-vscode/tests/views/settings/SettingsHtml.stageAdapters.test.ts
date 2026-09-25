@@ -12,15 +12,7 @@ const STAGES = [
   "pr-merge",
 ];
 
-const ADAPTER_VALUES = [
-  "claude",
-  "codex",
-  "gemini",
-  "gemini-sdk",
-  "lm-studio",
-  "ollama",
-  "copilot",
-];
+const ADAPTER_VALUES = ["claude", "codex", "gemini", "gemini-sdk", "copilot"];
 
 describe("SettingsHtml per-stage adapter matrix (Issue #3225)", () => {
   it("renders all six stage rows with adapter selects bound to pipeline.stage_adapters.<stage>", () => {
@@ -36,7 +28,7 @@ describe("SettingsHtml per-stage adapter matrix (Issue #3225)", () => {
     }
   });
 
-  it("includes the global-default option plus the seven adapter ids in each stage select", () => {
+  it("includes the global-default option plus the adapter ids in each stage select", () => {
     const config = getDefaultConfig() as NightgaugeConfig;
     const html = getSettingsHtml({ cspSource: "test-csp" } as any, config);
 
@@ -199,7 +191,7 @@ describe("SettingsHtml per-stage adapter matrix (Issue #3225)", () => {
         stageAdapterPreview: [
           {
             stage: "feature-dev",
-            adapter: "lm-studio",
+            adapter: "openai-compatible",
             source: "stage-config",
             model: "opus",
             modelMismatch: true,

@@ -122,14 +122,6 @@ vi.mock("../../../src/services/IpcClient", () => ({
   },
 }));
 
-vi.mock("../../../src/services/LmStudioService", () => ({
-  LmStudioService: class {
-    listModels = vi.fn().mockResolvedValue([]);
-    startServer = vi.fn().mockResolvedValue(undefined);
-    loadModel = vi.fn().mockResolvedValue(undefined);
-  },
-}));
-
 vi.mock("../../../src/services/CodexModelCatalogService", () => ({
   CodexModelCatalogService: class {
     listModels = vi.fn(() => []);

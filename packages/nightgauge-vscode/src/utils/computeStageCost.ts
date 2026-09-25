@@ -296,7 +296,7 @@ export function computeStageCost(
   const computed = computeFromRegistry(adapter, model, tokens);
   if (computed === null) {
     // Two distinct populations land here, and `'unknown'` is right for both:
-    //   - local-adapter stages (lm-studio/ollama), whose catalog the
+    //   - local-provider stages (lm-studio/ollama models), whose catalog the
     //     registry deliberately does not carry; and
     //   - any model id the registry has never heard of.
     // Both are "$0 because we cannot price it", NOT "$0 because it is free".

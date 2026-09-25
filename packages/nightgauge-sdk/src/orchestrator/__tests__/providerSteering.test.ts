@@ -25,8 +25,7 @@ describe("systemPromptPresetForAdapter (#4028)", () => {
       "codex",
       "gemini",
       "gemini-sdk",
-      "lm-studio",
-      "ollama",
+      "openai-compatible",
       "copilot",
       "opencode",
     ]) {

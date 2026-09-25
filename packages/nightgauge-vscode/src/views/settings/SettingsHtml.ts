@@ -54,12 +54,6 @@ export interface SettingsHtmlOptions {
    * "Run Pipeline with Model".
    */
   openCodeModels?: import("../../services/OpenCodeModelCatalogService").OpenCodeModelEntry[];
-  lmStudioModels?: Array<{
-    id: string;
-    loaded?: boolean;
-    maxContextLength?: number;
-    currentContextLength?: number;
-  }>;
   /**
    * Per-stage `(adapter, model)` resolution preview computed from
    * `resolveStageAdapter` + `getModeStageAdapterModel` under the active
@@ -112,7 +106,8 @@ export const STAGE_ADAPTER_STAGES = [
  *
  * Only agentic adapters belong here. `AdapterEnumSchema` intentionally remains
  * broader for backward-compatible parsing and non-pipeline eval/judge surfaces;
- * Gemini SDK, LM Studio, and Ollama have no repository-changing tool loop.
+ * Gemini SDK and the openai-compatible judge backend have no repository-changing
+ * tool loop.
  */
 export const STAGE_ADAPTER_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
   { value: "", label: "(Use global default)" },
@@ -538,49 +533,6 @@ function getInlineActionBarHtml(
   return `<div class="inline-action-bar">${buttonsHtml}</div>`;
 }
 
-function getLmStudioModelOptions(
-  currentModel: string,
-  models: Array<{
-    id: string;
-    loaded?: boolean;
-    maxContextLength?: number;
-    currentContextLength?: number;
-  }>
-): Array<{
-  value: string;
-  label: string;
-  loaded?: boolean;
-  maxContextLength?: number;
-  currentContextLength?: number;
-}> {
-  const options: Array<{
-    value: string;
-    label: string;
-    loaded?: boolean;
-    maxContextLength?: number;
-    currentContextLength?: number;
-  }> = [{ value: "", label: models.length > 0 ? "Select a model..." : "Refresh models..." }];
-
-  const seen = new Set<string>();
-  for (const model of models) {
-    if (!model.id || seen.has(model.id)) continue;
-    seen.add(model.id);
-    options.push({
-      value: model.id,
-      label: model.loaded ? `${model.id} (loaded)` : model.id,
-      loaded: model.loaded,
-      maxContextLength: model.maxContextLength,
-      currentContextLength: model.currentContextLength,
-    });
-  }
-
-  if (currentModel && !seen.has(currentModel)) {
-    options.push({ value: currentModel, label: `${currentModel} (configured)` });
-  }
-
-  return options;
-}
-
 function getAdapterModelOptions(
   currentModel: string,
   recommendedModels: string[]
@@ -590,100 +542,6 @@ function getAdapterModelOptions(
     options.unshift({ value: currentModel, label: `${currentModel} (configured)` });
   }
   return options;
-}
-
-function getLmStudioModelSelectHtml(
-  id: string,
-  label: string,
-  description: string,
-  value: string,
-  options: Array<{
-    value: string;
-    label: string;
-    loaded?: boolean;
-    maxContextLength?: number;
-    currentContextLength?: number;
-  }>,
-  disabled: boolean = false,
-  source?: ViewTier | "cli" | "default",
-  showBadge: boolean = true
-): string {
-  const optionsHtml = options
-    .map((opt) => {
-      const maxContextAttr =
-        opt.maxContextLength !== undefined
-          ? ` data-max-context-length="${opt.maxContextLength}"`
-          : "";
-      const currentContextAttr =
-        opt.currentContextLength !== undefined
-          ? ` data-current-context-length="${opt.currentContextLength}"`
-          : "";
-      return `<option value="${escapeHtml(opt.value)}" ${value === opt.value ? "selected" : ""}${maxContextAttr}${currentContextAttr}>${escapeHtml(opt.label)}</option>`;
-    })
-    .join("");
-  const badgeHtml = showBadge && source ? getUxTierBadgeHtml(source) : "";
-  const modifiedClass = source && source !== "default" ? "setting-modified" : "";
-  const teamTierDisabled = showBadge && source === "project";
-  const isDisabled = disabled || teamTierDisabled;
-  const editBtnHtml = teamTierDisabled ? getEditTeamConfigBtnHtml() : "";
-
-  return `
-    <div class="setting-row ${modifiedClass}">
-      <div class="setting-info">
-        <label for="${id}" class="setting-label">${escapeHtml(label)} ${badgeHtml}${editBtnHtml}</label>
-        <p class="setting-description">${escapeHtml(description)}</p>
-        <p id="lm-studio-model-capacity" class="setting-description"></p>
-      </div>
-      <div class="setting-control">
-        <select id="${id}"
-                class="select-input"
-                data-path="${id}"
-                ${isDisabled ? "disabled" : ""}>
-          ${optionsHtml}
-        </select>
-      </div>
-    </div>
-  `;
-}
-
-function getLmStudioContextLengthHtml(
-  value: number | undefined,
-  disabled: boolean,
-  source: ViewTier | "cli" | "default",
-  showBadge: boolean
-): string {
-  const badgeHtml = showBadge && source ? getUxTierBadgeHtml(source) : "";
-  const modifiedClass = source && source !== "default" ? "setting-modified" : "";
-  const teamTierDisabled = showBadge && source === "project";
-  const isDisabled = disabled || teamTierDisabled;
-  const editBtnHtml = teamTierDisabled ? getEditTeamConfigBtnHtml() : "";
-  const valueStr = value !== undefined ? String(value) : "";
-
-  return `
-    <div class="setting-row ${modifiedClass}">
-      <div class="setting-info">
-        <label for="lm_studio.context_length" class="setting-label">Context Length ${badgeHtml}${editBtnHtml}</label>
-        <p class="setting-description">Applied when loading the model from this panel. Existing LM Studio sessions keep their current context window.</p>
-      </div>
-      <div class="setting-control context-length-control">
-        <input type="number"
-               id="lm_studio.context_length"
-               class="number-input"
-               data-path="lm_studio.context_length"
-               value="${valueStr}"
-               min="1"
-               step="1"
-               ${isDisabled ? "disabled" : ""}>
-        <button type="button"
-                id="lm-studio-use-max-context"
-                class="btn inline-action-btn"
-                title="Set context length to the selected model's maximum supported value"
-                ${isDisabled ? "disabled" : ""}>
-          Use Max
-        </button>
-      </div>
-    </div>
-  `;
 }
 
 /**
@@ -1410,18 +1268,10 @@ function getCoreSectionHtml(
         ? (options.effectiveAdapter ?? core.adapter ?? "claude")
         : (core.adapter ?? "claude");
   const effectiveAdapter = adapter || options.inheritedGlobalAdapter || "claude";
-  const lmStudio = config.lm_studio ?? {};
-  const ollama = config.ollama ?? {};
   const g = (path: string) => getSourceForPath(path, sources);
   const isClaudeAdapter = effectiveAdapter === "claude";
   const isCodexAdapter = effectiveAdapter === "codex";
-  const isLmStudioAdapter = effectiveAdapter === "lm-studio";
-  const isOllamaAdapter = effectiveAdapter === "ollama";
   const codex = core.codex ?? {};
-  const lmStudioModelOptions = getLmStudioModelOptions(
-    lmStudio.model ?? "",
-    options.lmStudioModels ?? []
-  );
   const codexModelOptions = getAdapterModelOptions(
     codex.model ?? CODEX_DEFAULT_BASE_MODEL,
     Array.from(new Set([...(options.codexModels ?? []), ...(codex.model ? [codex.model] : [])]))
@@ -1447,8 +1297,6 @@ function getCoreSectionHtml(
           { value: "codex", label: "Codex" },
           { value: "gemini", label: "Gemini CLI" },
           { value: "gemini-sdk", label: "Gemini SDK" },
-          { value: "lm-studio", label: "LM Studio" },
-          { value: "ollama", label: "Ollama" },
           { value: "copilot", label: "GitHub Copilot CLI" },
           { value: "grok", label: "Grok Build CLI" },
           { value: "opencode", label: "OpenCode (Experimental)" },
@@ -1558,168 +1406,7 @@ function getCoreSectionHtml(
           options
         )}
       </div>
-      <div id="core-lm-studio-settings" ${isLmStudioAdapter ? "" : 'style="display:none;"'}>
-        <p class="section-note">LM Studio uses one configured backend model for all pipeline stages. Claude stage routing does not apply.</p>
-        ${getInlineActionBarHtml(
-          [
-            { action: "lm-studio-start-server", label: "Start Server" },
-            { action: "lm-studio-refresh-models", label: "Refresh Models" },
-            {
-              action: "lm-studio-load-model",
-              label: "Load Model",
-              title: "Loads the selected model into LM Studio using the configured context length",
-            },
-          ],
-          disabled
-        )}
-        ${getLmStudioModelSelectHtml(
-          "lm_studio.model",
-          "Selected Model",
-          "Model identifier from the LM Studio server and used for every stage run",
-          lmStudio.model ?? "",
-          lmStudioModelOptions,
-          disabled,
-          g("lm_studio.model"),
-          showBadges
-        )}
-        ${getLmStudioContextLengthHtml(
-          lmStudio.context_length ?? 32768,
-          disabled,
-          g("lm_studio.context_length"),
-          showBadges
-        )}
-        ${getTextInputHtml(
-          "lm_studio.base_url",
-          "Base URL",
-          "LM Studio OpenAI-compatible server base URL",
-          lmStudio.base_url ?? "http://127.0.0.1:1234/v1",
-          "http://127.0.0.1:1234/v1",
-          disabled,
-          g("lm_studio.base_url"),
-          showBadges,
-          options
-        )}
-        ${getTextInputHtml(
-          "lm_studio.api_key",
-          "API Key",
-          "Auth header value sent to LM Studio; any string is accepted by the local server",
-          lmStudio.api_key ?? "lm-studio",
-          "lm-studio",
-          disabled,
-          g("lm_studio.api_key"),
-          showBadges,
-          options
-        )}
-        ${getNumberInputHtml(
-          "lm_studio.timeout_ms",
-          "Timeout (ms)",
-          "Request timeout for local inference",
-          lmStudio.timeout_ms ?? 180000,
-          1000,
-          undefined,
-          1000,
-          disabled,
-          g("lm_studio.timeout_ms"),
-          showBadges,
-          options
-        )}
-        ${getNumberInputHtml(
-          "lm_studio.max_tokens",
-          "Max Tokens",
-          "Maximum completion tokens requested from LM Studio",
-          lmStudio.max_tokens ?? 8192,
-          1,
-          undefined,
-          1,
-          disabled,
-          g("lm_studio.max_tokens"),
-          showBadges,
-          options
-        )}
-        ${getToggleHtml(
-          "lm_studio.tool_calling",
-          "Enable Tool Calling",
-          "Allow tool calling for models that reliably support it",
-          lmStudio.tool_calling ?? false,
-          disabled,
-          g("lm_studio.tool_calling"),
-          showBadges,
-          options
-        )}
-        ${getToggleHtml(
-          "lm_studio.stream_options.include_usage",
-          "Include Usage In Stream",
-          "Request token usage metadata in streamed responses",
-          lmStudio.stream_options?.include_usage ?? true,
-          disabled,
-          g("lm_studio.stream_options.include_usage"),
-          showBadges,
-          options
-        )}
-      </div>
-      <div id="core-ollama-settings" ${isOllamaAdapter ? "" : 'style="display:none;"'}>
-        <p class="section-note">Ollama uses one configured backend model for all pipeline stages. Claude stage routing does not apply.</p>
-        ${getTextInputHtml(
-          "ollama.model",
-          "Selected Model",
-          "Model identifier pulled into Ollama and used for every stage run",
-          ollama.model ?? "",
-          "llama3.1",
-          disabled,
-          g("ollama.model"),
-          showBadges,
-          options
-        )}
-        ${getTextInputHtml(
-          "ollama.base_url",
-          "Base URL",
-          "Ollama OpenAI-compatible server base URL",
-          ollama.base_url ?? "http://localhost:11434/v1",
-          "http://localhost:11434/v1",
-          disabled,
-          g("ollama.base_url"),
-          showBadges,
-          options
-        )}
-        ${getTextInputHtml(
-          "ollama.api_key",
-          "API Key",
-          "Auth header value sent to Ollama; local installs usually accept the default placeholder",
-          ollama.api_key ?? "ollama",
-          "ollama",
-          disabled,
-          g("ollama.api_key"),
-          showBadges,
-          options
-        )}
-        ${getNumberInputHtml(
-          "ollama.timeout_ms",
-          "Timeout (ms)",
-          "Request timeout for local inference",
-          ollama.timeout_ms ?? 300000,
-          1000,
-          undefined,
-          1000,
-          disabled,
-          g("ollama.timeout_ms"),
-          showBadges,
-          options
-        )}
-        ${getNumberInputHtml(
-          "ollama.max_tokens",
-          "Max Tokens",
-          "Maximum completion tokens requested from Ollama",
-          ollama.max_tokens ?? 8192,
-          1,
-          undefined,
-          1,
-          disabled,
-          g("ollama.max_tokens"),
-          showBadges,
-          options
-        )}
-      </div>
-      <p id="core-non-claude-note" class="section-note" ${isClaudeAdapter || isCodexAdapter || isLmStudioAdapter || isOllamaAdapter ? 'style="display:none;"' : ""}>Non-Claude adapters use adapter-specific authentication and model settings. Claude-specific auth provider and model controls are hidden.</p>
+      <p id="core-non-claude-note" class="section-note" ${isClaudeAdapter || isCodexAdapter ? 'style="display:none;"' : ""}>Non-Claude adapters use adapter-specific authentication and model settings. Claude-specific auth provider and model controls are hidden.</p>
       ${getTextInputHtml(
         "ui.core.context_path",
         "Context Path",
@@ -3838,13 +3525,9 @@ function getScript(): string {
       function updateCoreAdapterVisibility(adapterValue) {
         const claudeSettings = document.getElementById('core-claude-settings');
         const codexSettings = document.getElementById('core-codex-settings');
-        const lmStudioSettings = document.getElementById('core-lm-studio-settings');
-        const ollamaSettings = document.getElementById('core-ollama-settings');
         const nonClaudeNote = document.getElementById('core-non-claude-note');
         const isClaude = adapterValue === 'claude';
         const isCodex = adapterValue === 'codex';
-        const isLmStudio = adapterValue === 'lm-studio';
-        const isOllama = adapterValue === 'ollama';
 
         if (claudeSettings) {
           claudeSettings.style.display = isClaude ? '' : 'none';
@@ -3852,40 +3535,8 @@ function getScript(): string {
         if (codexSettings) {
           codexSettings.style.display = isCodex ? '' : 'none';
         }
-        if (lmStudioSettings) {
-          lmStudioSettings.style.display = isLmStudio ? '' : 'none';
-        }
-        if (ollamaSettings) {
-          ollamaSettings.style.display = isOllama ? '' : 'none';
-        }
         if (nonClaudeNote) {
-          nonClaudeNote.style.display = !isClaude && !isCodex && !isLmStudio && !isOllama ? '' : 'none';
-        }
-      }
-
-      function updateLmStudioModelMetadata() {
-        const modelSelect = document.querySelector('[data-path="lm_studio.model"]');
-        const metadataEl = document.getElementById('lm-studio-model-capacity');
-        const useMaxBtn = document.getElementById('lm-studio-use-max-context');
-
-        if (!modelSelect || !metadataEl) return;
-
-        const selectedOption = modelSelect.options[modelSelect.selectedIndex];
-        const maxContext = Number(selectedOption?.dataset?.maxContextLength || '');
-        const currentContext = Number(selectedOption?.dataset?.currentContextLength || '');
-        const hasMaxContext = Number.isFinite(maxContext) && maxContext > 0;
-        const hasCurrentContext = Number.isFinite(currentContext) && currentContext > 0;
-
-        if (hasMaxContext && hasCurrentContext) {
-          metadataEl.textContent = 'Detected max context: ' + maxContext.toLocaleString() + ' tokens. Loaded context: ' + currentContext.toLocaleString() + ' tokens.';
-        } else if (hasMaxContext) {
-          metadataEl.textContent = 'Detected max context: ' + maxContext.toLocaleString() + ' tokens.';
-        } else {
-          metadataEl.textContent = 'Refresh models to detect this model\\'s maximum supported context length.';
-        }
-
-        if (useMaxBtn) {
-          useMaxBtn.disabled = !hasMaxContext || modelSelect.disabled;
+          nonClaudeNote.style.display = !isClaude && !isCodex ? '' : 'none';
         }
       }
 
@@ -3905,9 +3556,6 @@ function getScript(): string {
         setModified(true);
         if (path === 'ui.core.adapter') {
           updateCoreAdapterVisibility(value || element.dataset.inheritedValue || 'claude');
-        }
-        if (path === 'lm_studio.model') {
-          updateLmStudioModelMetadata();
         }
         vscode.postMessage({ type: 'change', path, value });
         if (path.indexOf('pipeline.stage_adapters.') === 0) {
@@ -3959,22 +3607,6 @@ function getScript(): string {
       // Select inputs
       document.querySelectorAll('.select-input').forEach(select => {
         select.addEventListener('change', () => handleChange(select));
-      });
-
-      document.getElementById('lm-studio-use-max-context')?.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-
-        const modelSelect = document.querySelector('[data-path="lm_studio.model"]');
-        const contextInput = document.querySelector('[data-path="lm_studio.context_length"]');
-        if (!modelSelect || !contextInput) return;
-
-        const selectedOption = modelSelect.options[modelSelect.selectedIndex];
-        const maxContext = Number(selectedOption?.dataset?.maxContextLength || '');
-        if (!Number.isFinite(maxContext) || maxContext <= 0) return;
-
-        contextInput.value = String(maxContext);
-        handleChange(contextInput);
       });
 
       // Checkbox group inputs (trusted_stages)
@@ -4107,25 +3739,10 @@ function getScript(): string {
           e.preventDefault();
           e.stopPropagation();
 
-          const textValue = (path) => {
-            const el = document.querySelector('[data-path="' + path + '"]');
-            return el ? el.value : undefined;
-          };
-          const numberValue = (path) => {
-            const el = document.querySelector('[data-path="' + path + '"]');
-            if (!el || el.value === '') return undefined;
-            const parsed = Number(el.value);
-            return Number.isFinite(parsed) ? parsed : undefined;
-          };
-
           vscode.postMessage({
             type: 'action',
             action: btn.dataset.action,
             payload: {
-              'lm_studio.model': textValue('lm_studio.model'),
-              'lm_studio.base_url': textValue('lm_studio.base_url'),
-              'lm_studio.api_key': textValue('lm_studio.api_key'),
-              'lm_studio.context_length': numberValue('lm_studio.context_length'),
               projectNumber: btn.dataset.projectNumber
                 ? Number(btn.dataset.projectNumber)
                 : undefined,
@@ -4246,8 +3863,6 @@ function getScript(): string {
       if (adapterSelect) {
         updateCoreAdapterVisibility(adapterSelect.value || adapterSelect.dataset.inheritedValue || 'claude');
       }
-      updateLmStudioModelMetadata();
-
       // Handle messages from extension
       window.addEventListener('message', event => {
         const message = event.data;
@@ -4278,9 +3893,6 @@ function getScript(): string {
               }
                if (path === 'ui.core.adapter') {
                  updateCoreAdapterVisibility(String(value || ''));
-               }
-               if (path === 'lm_studio.model') {
-                 updateLmStudioModelMetadata();
                }
              });
             setModified(true);

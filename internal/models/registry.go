@@ -423,6 +423,9 @@ func ProviderForAdapter(adapter string) string {
 		return "google"
 	case adapter == "grok" || strings.HasPrefix(adapter, "grok-"):
 		return "xai"
+	// lm-studio and ollama are no longer adapters (#2128), but serving
+	// providers flow through here too (a RunResult's ModelProvider), so each
+	// stays its own provider.
 	case adapter == "copilot", adapter == "ollama", adapter == "lm-studio":
 		return adapter
 	default:

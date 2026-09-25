@@ -334,8 +334,7 @@ export function isPerformanceMode(value: unknown): value is PerformanceMode {
  *
  * Returns `{ model, mismatch: true }` when the mode profile names a tier but
  * the adapter's provider has no registry band for it — by design every tier
- * for `lm-studio` / `ollama`, whose user-configured local model serves all
- * tiers. In that case `model` echoes the canonical alias so callers can
+ * for a local provider, whose user-configured local model serves all tiers. In that case `model` echoes the canonical alias so callers can
  * include it in the warning log; the dispatcher MUST fall back to the
  * adapter's configured default and demote `modelDecision.source` to
  * `"config"` so run history does not falsely advertise `"performance-mode"`

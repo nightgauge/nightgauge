@@ -92,10 +92,12 @@ describe("validateModelForAdapter — Gemini (closed)", () => {
 });
 
 describe("validateModelForAdapter — open adapters never reject", () => {
-  it("passes arbitrary local model ids through for ollama / lm-studio", () => {
-    expect(validateModelForAdapter("ollama", "llama3.1").model).toBe("llama3.1");
-    expect(validateModelForAdapter("lm-studio", "qwen2.5-coder").model).toBe("qwen2.5-coder");
-    expect(validateModelForAdapter("ollama", "custom:tag").model).toBe("custom:tag");
+  it("passes arbitrary server model ids through for openai-compatible", () => {
+    expect(validateModelForAdapter("openai-compatible", "llama3.1").model).toBe("llama3.1");
+    expect(validateModelForAdapter("openai-compatible", "qwen2.5-coder").model).toBe(
+      "qwen2.5-coder"
+    );
+    expect(validateModelForAdapter("openai-compatible", "custom:tag").model).toBe("custom:tag");
   });
 
   it("accepts both tiers and arbitrary ids for claude adapters (tier IS the model)", () => {
@@ -169,8 +171,7 @@ describe("ADAPTER_MODEL_POLICY invariant", () => {
       "codex",
       "gemini",
       "gemini-sdk",
-      "lm-studio",
-      "ollama",
+      "openai-compatible",
       "copilot",
       "grok",
       "opencode",

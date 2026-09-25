@@ -268,8 +268,8 @@ type RuntimeState struct {
 
 	// StageAdapters captures the adapter resolved at each stage's start
 	// (Issue #3224). Keys are stage names; values are the adapter id (one of
-	// "claude" | "codex" | "gemini" | "gemini-sdk" | "lm-studio" | "ollama" |
-	// "copilot"). Mirrors StageModes — keyed by stage rather than appended to
+	// "claude" | "codex" | "gemini" | "gemini-sdk" | "copilot" | "grok" |
+	// "opencode"). Mirrors StageModes — keyed by stage rather than appended to
 	// StageResult so the value survives stage failures, stalls, and crashes.
 	// BuildV2Record reads from this map and falls back to V2RunInput's
 	// DefaultAdapter when a stage has no entry.

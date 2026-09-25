@@ -5,7 +5,7 @@
  * profile for every non-Claude adapter:
  *   - gemini / gemini-sdk → NIGHTGAUGE_GEMINI_MODEL stamped to mapped id.
  *   - copilot             → NIGHTGAUGE_COPILOT_MODEL stamped to mapped id.
- *   - lm-studio           → keeps configured local model and demotes
+ *   - openai-compatible           → keeps configured local model and demotes
  *                           modelDecision.source to "config" via the warning
  *                           path (the spawn env keeps the configured local
  *                           model untouched).
@@ -85,7 +85,7 @@ vi.mock("../../src/utils/nightgaugeConfig", async () => {
         env === "gemini-sdk" ||
         env === "copilot" ||
         env === "codex" ||
-        env === "lm-studio"
+        env === "openai-compatible"
       ) {
         return env;
       }
@@ -165,7 +165,7 @@ allowed-tools: Read Write Edit
 Test content.
 `;
 
-function setExistsForAdapter(adapter: "gemini" | "gemini-sdk" | "copilot" | "lm-studio") {
+function setExistsForAdapter(adapter: "gemini" | "gemini-sdk" | "copilot" | "openai-compatible") {
   vi.mocked(fs.existsSync).mockImplementation((p: unknown) => {
     const filePath = String(p);
     if (filePath.includes("SKILL.md") || filePath.includes("skills/")) return true;
@@ -347,14 +347,14 @@ describe("copilot adapter — performance-mode wiring (Issue #3214)", () => {
   });
 });
 
-describe("lm-studio adapter — agentic gate bars pipeline dispatch (#57)", () => {
+describe("openai-compatible adapter — agentic gate bars pipeline dispatch (#57)", () => {
   beforeEach(() => {
-    process.env.NIGHTGAUGE_UI_CORE_ADAPTER = "lm-studio";
-    setExistsForAdapter("lm-studio");
+    process.env.NIGHTGAUGE_UI_CORE_ADAPTER = "openai-compatible";
+    setExistsForAdapter("openai-compatible");
     vi.mocked(spawn).mockReturnValue(createMockChildProcess());
   });
 
-  // lm-studio is chat-completion-only: the agentic gate rejects it as
+  // openai-compatible is chat-completion-only: the agentic gate rejects it as
   // primary and fails closed unless the user explicitly configured fallback.
   it("fails closed without silently dispatching another provider", () => {
     vi.mocked(getPerformanceMode).mockReturnValue("maximum");

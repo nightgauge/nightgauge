@@ -220,10 +220,10 @@ func TestCancelWithGrace_NilProcess_DoesNotPanic(t *testing.T) {
 }
 
 // TestRunStage_NonAgenticAdapter_RejectedBeforeSpawn guards the #57 agentic
-// truth-gate: chat-completion-only adapters (ollama/lm-studio bridges) must be
-// rejected with remediation before any command is built or spawned.
+// truth-gate: a chat-completion-only adapter must be rejected with remediation
+// before any command is built or spawned.
 func TestRunStage_NonAgenticAdapter_RejectedBeforeSpawn(t *testing.T) {
-	m := NewManager(t.TempDir(), adapters.NewOllamaAdapter())
+	m := NewManager(t.TempDir(), chatOnlyAdapter{adapters.NewClaudeAdapter()})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -1600,3 +1600,10 @@ func TestComposeStageEnv_AdapterExportReplacesTheInheritedValue(t *testing.T) {
 		}
 	}
 }
+
+// chatOnlyAdapter is a stand-in for an adapter without an agentic tool loop.
+// No built-in adapter is chat-only since #2128 removed lm-studio and ollama,
+// so the truth-gate is exercised through this wrapper.
+type chatOnlyAdapter struct{ adapters.SkillRunner }
+
+func (chatOnlyAdapter) Agentic() bool { return false }

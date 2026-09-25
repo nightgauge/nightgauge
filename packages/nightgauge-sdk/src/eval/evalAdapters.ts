@@ -383,7 +383,7 @@ export const codexEvalProfile: EvalAdapterProfile = {
  * fails loudly instead of shelling out to a CLI that does not exist.
  */
 export const lmStudioEvalProfile: EvalAdapterProfile = {
-  adapter: "lm-studio",
+  adapter: "opencode",
   provider: "lm-studio",
   hasSeparateThinkingKnob: false,
   defaultCommand: "lms",

@@ -14,7 +14,6 @@ import {
   type GeminiAuthMethod,
   type GeminiModel,
   type CopilotConfig,
-  type LmStudioConfig,
   type AdapterEnumSchema,
   DEFAULT_CONFIG,
 } from "./schema";
@@ -79,21 +78,6 @@ export interface CoreSettings {
 
   /** Copilot model override (Issue #1945) */
   copilotModel: string | undefined;
-
-  /** LM Studio model name (Issue #2058) */
-  lmStudioModel: string | undefined;
-
-  /** LM Studio server base URL (Issue #2058) */
-  lmStudioBaseUrl: string | undefined;
-
-  /** LM Studio request timeout in ms (Issue #2058) */
-  lmStudioTimeoutMs: number | undefined;
-
-  /** LM Studio tool calling enabled (Issue #2058) */
-  lmStudioToolCalling: boolean | undefined;
-
-  /** LM Studio max tokens per response (Issue #2058) */
-  lmStudioMaxTokens: number | undefined;
 }
 
 /**
@@ -102,17 +86,14 @@ export interface CoreSettings {
  * @deprecated Use DEFAULT_CONFIG.ui.core from schema.ts instead.
  * Kept for backward compatibility.
  */
-export const DEFAULT_CORE_SETTINGS: CoreSettings = mapToLegacyShape(
-  DEFAULT_CONFIG.ui?.core,
-  DEFAULT_CONFIG.lm_studio
-);
+export const DEFAULT_CORE_SETTINGS: CoreSettings = mapToLegacyShape(DEFAULT_CONFIG.ui?.core);
 
 /**
  * Map ConfigBridge UICoreConfig to legacy CoreSettings shape
  *
  * Handles the snake_case → camelCase transformations.
  */
-function mapToLegacyShape(config?: UICoreConfig, lmStudio?: LmStudioConfig): CoreSettings {
+function mapToLegacyShape(config?: UICoreConfig): CoreSettings {
   const defaults = DEFAULT_CONFIG.ui!.core!;
 
   return {
@@ -124,11 +105,6 @@ function mapToLegacyShape(config?: UICoreConfig, lmStudio?: LmStudioConfig): Cor
     geminiAuthMethod: config?.gemini?.auth_method ?? defaults.gemini!.auth_method!,
     geminiModel: config?.gemini?.model ?? defaults.gemini!.model!,
     copilotModel: config?.copilot?.model,
-    lmStudioModel: lmStudio?.model,
-    lmStudioBaseUrl: lmStudio?.base_url,
-    lmStudioTimeoutMs: lmStudio?.timeout_ms,
-    lmStudioToolCalling: lmStudio?.tool_calling,
-    lmStudioMaxTokens: lmStudio?.max_tokens,
   };
 }
 
@@ -144,15 +120,14 @@ export function getCoreSettings(): CoreSettings {
 
   if (!configBridge.isInitialized()) {
     console.debug("[Nightgauge] ConfigBridge not initialized, using defaults for core");
-    return mapToLegacyShape(DEFAULT_CONFIG.ui?.core, DEFAULT_CONFIG.lm_studio);
+    return mapToLegacyShape(DEFAULT_CONFIG.ui?.core);
   }
 
   const ui = configBridge.getUI();
-  const lmStudio = configBridge.getLmStudio();
-  return mapToLegacyShape(ui?.core, lmStudio);
+  return mapToLegacyShape(ui?.core);
 }
 
 /**
  * Re-export UICoreConfig and adapter config types for consumers
  */
-export type { UICoreConfig, GeminiAuthMethod, GeminiModel, CopilotConfig, LmStudioConfig };
+export type { UICoreConfig, GeminiAuthMethod, GeminiModel, CopilotConfig };

@@ -773,8 +773,8 @@ func TestContextBudgetRefusal_SuccessfulReRouteDispatches(t *testing.T) {
 }
 
 // TestContextBudgetRefusal_UnknownWindowFailsOpenAndLogsTheBranch dispatches
-// pr-merge on the ollama adapter — a local provider OverlayKeys never
-// resolves a registry descriptor for by design (ADR 016 §2) — so
+// pr-merge on an adapter whose provider OverlayKeys never resolves a registry
+// descriptor for (ADR 016 §2) — so
 // skillData.ContextWindow is 0 and the fit check takes ADR 023 §4's
 // unknown-window branch: dispatch proceeds unchecked, and the branch taken is
 // logged so a trace can tell "checked and passed" from "not checked".
@@ -790,7 +790,7 @@ func TestContextBudgetRefusal_UnknownWindowFailsOpenAndLogsTheBranch(t *testing.
 	writeBigSkillFile(t, root, "nightgauge-pr-merge", contextBudgetBigBytes)
 
 	runner := newRefusalCapturingStageRunner()
-	s := newRefusalSchedulerWithAdapter(root, runner, adapters.NewOllamaAdapter())
+	s := newRefusalSchedulerWithAdapter(root, runner, unknownProviderAdapter{adapters.NewClaudeAdapter()})
 
 	item := types.BoardItem{Number: 1648, Repo: "nightgauge/nightgauge", ID: "item-1648"}
 	logs := captureLog(t, func() { s.runPipeline(context.Background(), item) })
@@ -978,3 +978,9 @@ func TestCapacityRefusal_KnownSizeRefusedAtTheFirstStage(t *testing.T) {
 		}
 	}
 }
+
+// unknownProviderAdapter runs as an adapter name no provider maps to, so
+// OverlayKeys resolves no registry descriptor for it.
+type unknownProviderAdapter struct{ adapters.SkillRunner }
+
+func (unknownProviderAdapter) Name() string { return "unmapped-adapter" }

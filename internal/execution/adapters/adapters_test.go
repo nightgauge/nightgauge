@@ -493,142 +493,6 @@ func TestGeminiSdkAdapter(t *testing.T) {
 	}
 }
 
-func TestOllamaAdapter(t *testing.T) {
-	adapter := NewOllamaAdapter()
-	if adapter.Name() != "ollama" {
-		t.Errorf("Name = %q", adapter.Name())
-	}
-	if !adapter.UsesStdin() {
-		t.Error("Ollama adapter should use stdin (uses claude CLI bridge)")
-	}
-
-	t.Setenv("NIGHTGAUGE_OLLAMA_MODEL", "llama2")
-	t.Setenv("NIGHTGAUGE_OLLAMA_BASE_URL", "http://localhost:11434/v1")
-
-	cmd, args, env := adapter.BuildCommand(RunOptions{
-		SkillPath:    "/skills/feature-dev/SKILL.md",
-		IssueNumber:  2592,
-		Repo:         "nightgauge/nightgauge",
-		Stage:        "feature-dev",
-		AllowedTools: []string{"Read", "Edit"},
-	})
-
-	if cmd != "claude" {
-		t.Errorf("cmd = %q, want claude", cmd)
-	}
-	if !containsArg(args, "-p") {
-		t.Error("missing -p flag")
-	}
-	if !containsArg(args, "stream-json") {
-		t.Error("missing stream-json output format")
-	}
-	if !containsArg(args, "--allowedTools") {
-		t.Error("missing --allowedTools flag")
-	}
-	if env["NIGHTGAUGE_ADAPTER"] != "ollama" {
-		t.Errorf("adapter env = %q, want ollama", env["NIGHTGAUGE_ADAPTER"])
-	}
-	if env["NIGHTGAUGE_OLLAMA_MODEL"] != "llama2" {
-		t.Errorf("ollama model not passed through: %q", env["NIGHTGAUGE_OLLAMA_MODEL"])
-	}
-	if env["NIGHTGAUGE_OLLAMA_BASE_URL"] != "http://localhost:11434/v1" {
-		t.Errorf("ollama base url not passed through: %q", env["NIGHTGAUGE_OLLAMA_BASE_URL"])
-	}
-}
-
-func TestOllamaAdapterEnvVarPassthrough(t *testing.T) {
-	adapter := NewOllamaAdapter()
-
-	t.Setenv("NIGHTGAUGE_OLLAMA_MODEL", "codellama")
-	t.Setenv("NIGHTGAUGE_OLLAMA_API_KEY", "test-key")
-	t.Setenv("NIGHTGAUGE_OLLAMA_TIMEOUT_MS", "600000")
-
-	_, _, env := adapter.BuildCommand(RunOptions{
-		SkillPath:   "/skills/test/SKILL.md",
-		IssueNumber: 2592,
-		Repo:        "nightgauge/nightgauge",
-		Stage:       "feature-dev",
-	})
-
-	if env["NIGHTGAUGE_OLLAMA_MODEL"] != "codellama" {
-		t.Errorf("model not passed: %q", env["NIGHTGAUGE_OLLAMA_MODEL"])
-	}
-	if env["NIGHTGAUGE_OLLAMA_API_KEY"] != "test-key" {
-		t.Errorf("api key not passed: %q", env["NIGHTGAUGE_OLLAMA_API_KEY"])
-	}
-	if env["NIGHTGAUGE_OLLAMA_TIMEOUT_MS"] != "600000" {
-		t.Errorf("timeout not passed: %q", env["NIGHTGAUGE_OLLAMA_TIMEOUT_MS"])
-	}
-}
-
-func TestLmStudioAdapter(t *testing.T) {
-	adapter := NewLmStudioAdapter()
-	if adapter.Name() != "lm-studio" {
-		t.Errorf("Name = %q", adapter.Name())
-	}
-	if !adapter.UsesStdin() {
-		t.Error("LM Studio adapter should use stdin (uses claude CLI bridge)")
-	}
-
-	t.Setenv("NIGHTGAUGE_LM_STUDIO_MODEL", "mistral-7b")
-	t.Setenv("NIGHTGAUGE_LM_STUDIO_BASE_URL", "http://localhost:1234/v1")
-
-	cmd, args, env := adapter.BuildCommand(RunOptions{
-		SkillPath:    "/skills/feature-dev/SKILL.md",
-		IssueNumber:  2597,
-		Repo:         "nightgauge/nightgauge",
-		Stage:        "feature-dev",
-		AllowedTools: []string{"Read", "Edit"},
-	})
-
-	if cmd != "claude" {
-		t.Errorf("cmd = %q, want claude", cmd)
-	}
-	if !containsArg(args, "-p") {
-		t.Error("missing -p flag")
-	}
-	if !containsArg(args, "stream-json") {
-		t.Error("missing stream-json output format")
-	}
-	if !containsArg(args, "--allowedTools") {
-		t.Error("missing --allowedTools flag")
-	}
-	if env["NIGHTGAUGE_ADAPTER"] != "lm-studio" {
-		t.Errorf("adapter env = %q, want lm-studio", env["NIGHTGAUGE_ADAPTER"])
-	}
-	if env["NIGHTGAUGE_LM_STUDIO_MODEL"] != "mistral-7b" {
-		t.Errorf("lm studio model not passed through: %q", env["NIGHTGAUGE_LM_STUDIO_MODEL"])
-	}
-	if env["NIGHTGAUGE_LM_STUDIO_BASE_URL"] != "http://localhost:1234/v1" {
-		t.Errorf("lm studio base url not passed through: %q", env["NIGHTGAUGE_LM_STUDIO_BASE_URL"])
-	}
-}
-
-func TestLmStudioAdapterEnvVarPassthrough(t *testing.T) {
-	adapter := NewLmStudioAdapter()
-
-	t.Setenv("NIGHTGAUGE_LM_STUDIO_MODEL", "llama-3")
-	t.Setenv("NIGHTGAUGE_LM_STUDIO_API_KEY", "custom-key")
-	t.Setenv("NIGHTGAUGE_LM_STUDIO_TIMEOUT_MS", "300000")
-
-	_, _, env := adapter.BuildCommand(RunOptions{
-		SkillPath:   "/skills/test/SKILL.md",
-		IssueNumber: 2597,
-		Repo:        "nightgauge/nightgauge",
-		Stage:       "feature-dev",
-	})
-
-	if env["NIGHTGAUGE_LM_STUDIO_MODEL"] != "llama-3" {
-		t.Errorf("model not passed: %q", env["NIGHTGAUGE_LM_STUDIO_MODEL"])
-	}
-	if env["NIGHTGAUGE_LM_STUDIO_API_KEY"] != "custom-key" {
-		t.Errorf("api key not passed: %q", env["NIGHTGAUGE_LM_STUDIO_API_KEY"])
-	}
-	if env["NIGHTGAUGE_LM_STUDIO_TIMEOUT_MS"] != "300000" {
-		t.Errorf("timeout not passed: %q", env["NIGHTGAUGE_LM_STUDIO_TIMEOUT_MS"])
-	}
-}
-
 func TestCopilotAdapter(t *testing.T) {
 	adapter := NewCopilotAdapter()
 	if adapter.Name() != "copilot" {
@@ -768,19 +632,6 @@ func TestCopilotAdapterModelInjection(t *testing.T) {
 	}
 }
 
-func TestRegistryAliasLmStudio(t *testing.T) {
-	registry := NewRegistry()
-
-	// "lmstudio" should resolve to "lm-studio"
-	adapter, err := registry.Get("lmstudio")
-	if err != nil {
-		t.Fatalf("Get(lmstudio) error: %v", err)
-	}
-	if adapter.Name() != "lm-studio" {
-		t.Errorf("alias lmstudio resolved to %q, want lm-studio", adapter.Name())
-	}
-}
-
 func TestRegistryGet(t *testing.T) {
 	registry := NewRegistry()
 
@@ -793,8 +644,6 @@ func TestRegistryGet(t *testing.T) {
 		{"codex", "codex"},
 		{"gemini", "gemini"},
 		{"gemini-sdk", "gemini-sdk"},
-		{"ollama", "ollama"},
-		{"lm-studio", "lm-studio"},
 		{"copilot", "copilot"},
 		{"opencode", "opencode"},
 	}
@@ -845,7 +694,7 @@ func TestRegistryNames(t *testing.T) {
 	registry := NewRegistry()
 	names := registry.Names()
 
-	expected := []string{"claude-headless", "claude-sdk", "codex", "copilot", "gemini", "gemini-sdk", "grok", "lm-studio", "ollama", "opencode"}
+	expected := []string{"claude-headless", "claude-sdk", "codex", "copilot", "gemini", "gemini-sdk", "grok", "opencode"}
 	if len(names) != len(expected) {
 		t.Fatalf("Names() = %v, want %v", names, expected)
 	}
@@ -860,8 +709,8 @@ func TestRegistryList(t *testing.T) {
 	registry := NewRegistry()
 	infos := registry.List()
 
-	if len(infos) != 10 {
-		t.Fatalf("List() returned %d items, want 10", len(infos))
+	if len(infos) != 8 {
+		t.Fatalf("List() returned %d items, want 8", len(infos))
 	}
 
 	// Verify each info has the expected fields
@@ -921,7 +770,6 @@ func TestRegistryResolvePrecedence(t *testing.T) {
 	// The pre-#54 API-key auto-detect is gone — exported keys and model env
 	// vars no longer influence which adapter runs.
 	t.Setenv("ANTHROPIC_API_KEY", "sk-would-have-picked-claude-sdk")
-	t.Setenv("NIGHTGAUGE_OLLAMA_MODEL", "would-have-picked-ollama")
 	t.Setenv("NIGHTGAUGE_ADAPTER", "")
 
 	registry := NewRegistry()
@@ -985,12 +833,8 @@ func TestAdapterAgenticDeclarations(t *testing.T) {
 		{NewGeminiSdkAdapter(), true},
 		{NewCopilotAdapter(), true},
 		// OpenCode drives a real tool loop against local and hosted models
-		// alike (ADR-022 § 6); the chat bridges below stay barred.
+		// alike (ADR-022 § 6).
 		{NewOpenCodeAdapter(), true},
-		// The local bridges bottom out in the TypeScript fetch/SSE adapters
-		// with zero tool handling — barred from pipeline dispatch.
-		{NewOllamaAdapter(), false},
-		{NewLmStudioAdapter(), false},
 	}
 	for _, c := range cases {
 		if got := c.adapter.Agentic(); got != c.want {
@@ -1080,8 +924,8 @@ func TestRunIDEnvVar_AllAdapters(t *testing.T) {
 
 	registry := NewRegistry()
 	names := registry.Names()
-	if len(names) != 10 {
-		t.Fatalf("registry has %d adapters (%v), the run-identity contract was written against 10 — "+
+	if len(names) != 8 {
+		t.Fatalf("registry has %d adapters (%v), the run-identity contract was written against 8 — "+
 			"if an adapter was added, confirm it exports NIGHTGAUGE_RUN_ID and update this count",
 			len(names), names)
 	}
@@ -1144,8 +988,8 @@ func TestTargetRepoEnvVar_AllAdapters(t *testing.T) {
 
 	registry := NewRegistry()
 	names := registry.Names()
-	if len(names) != 10 {
-		t.Fatalf("registry has %d adapters (%v), the target-repo contract was written against 10 — "+
+	if len(names) != 8 {
+		t.Fatalf("registry has %d adapters (%v), the target-repo contract was written against 8 — "+
 			"if an adapter was added, confirm it exports NIGHTGAUGE_TARGET_REPO and update this count",
 			len(names), names)
 	}
@@ -1209,8 +1053,6 @@ var outputFormatPosture = map[string]struct {
 	"claude-sdk":      {"stream-json", "passes --output-format stream-json; the env var mirrors the flag"},
 	"gemini":          {"stream-json", "passes --output-format stream-json; the env var mirrors the flag (added by #416 — it was the one adapter with the flag but no matching export)"},
 	"gemini-sdk":      {"stream-json", "passes --output-format stream-json; the env var mirrors the flag"},
-	"ollama":          {"stream-json", "claude-CLI bridge; passes --output-format stream-json"},
-	"lm-studio":       {"stream-json", "claude-CLI bridge; passes --output-format stream-json"},
 	"copilot": {"stream-json", "the copilot CLI has NO --output-format flag, so there is no flag to mirror; " +
 		"the export describes the NDJSON shape ParseCopilotStreamLine reads back out"},
 	"codex": {"", "INTENTIONAL OMISSION (#416 AC3). The codex CLI has no --output-format flag at all — it selects " +
@@ -1297,5 +1139,23 @@ func TestOutputFormatEnvVar_AllAdapters(t *testing.T) {
 					name, outputFormatEnvVar, got, want.value, want.why)
 			}
 		})
+	}
+}
+
+// TestRegistryRejectsRetiredAdapters: the lm-studio and ollama adapters were
+// removed (#2128). Naming one fails loudly with the migration, never an
+// "unknown adapter" error or a silent fallback.
+func TestRegistryRejectsRetiredAdapters(t *testing.T) {
+	registry := NewRegistry()
+	for _, name := range []string{"lm-studio", "lmstudio", "ollama", "Ollama"} {
+		_, err := registry.Get(name)
+		if err == nil {
+			t.Fatalf("Get(%q) succeeded, want the retired-adapter error", name)
+		}
+		for _, want := range []string{"removed", "opencode", "openai-compatible", "OpenAI-compatible server"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("Get(%q) error %q does not mention %q", name, err, want)
+			}
+		}
 	}
 }

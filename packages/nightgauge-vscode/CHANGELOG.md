@@ -9,6 +9,14 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Removed
+
+- **Breaking:** the LM Studio and Ollama execution adapters, and their
+  settings panels, are removed (#2128). Run local models with the OpenCode
+  adapter against any OpenAI-compatible server. A config that still selects
+  `lm-studio` or `ollama` now fails with an error that names the setting and
+  the replacement.
+
 ### Fixed
 
 - A cap-recovery adapter hop from the Go scheduler now reaches every pipeline

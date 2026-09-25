@@ -253,7 +253,7 @@ func TestShouldBuildSdkCli(t *testing.T) {
 	}{
 		{"codex", true},
 		{"copilot", true},
-		{"lm-studio", true},
+		{"lm-studio", false},
 		{"claude", false},
 		{"gemini", false},
 		{"gemini-sdk", false},
@@ -309,13 +309,13 @@ ui:
 	t.Run("handles quoted adapter value", func(t *testing.T) {
 		dir := t.TempDir()
 		cfg := filepath.Join(dir, "config.yaml")
-		content := "ui:\n  core:\n    adapter: \"lm-studio\"\n"
+		content := "ui:\n  core:\n    adapter: \"opencode\"\n"
 		if err := os.WriteFile(cfg, []byte(content), 0644); err != nil {
 			t.Fatal(err)
 		}
 		got := readAdapterFromYaml(cfg)
-		if got != "lm-studio" {
-			t.Errorf("got %q, want %q", got, "lm-studio")
+		if got != "opencode" {
+			t.Errorf("got %q, want %q", got, "opencode")
 		}
 	})
 }

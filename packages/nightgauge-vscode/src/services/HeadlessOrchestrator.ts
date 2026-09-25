@@ -1098,10 +1098,8 @@ export function toNightgaugeAdapter(
       return "gemini";
     case "gemini-sdk":
       return "gemini-sdk";
-    case "lm-studio":
-      return "lm-studio";
-    case "ollama":
-      return "ollama";
+    case "openai-compatible":
+      return "openai-compatible";
     case "copilot":
       return "copilot";
     case "grok":

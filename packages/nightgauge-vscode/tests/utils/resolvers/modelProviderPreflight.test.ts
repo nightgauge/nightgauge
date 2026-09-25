@@ -31,7 +31,9 @@ describe("model↔provider preflight at the extension boundary (#4021)", () => {
   });
 
   it("passes arbitrary local model ids through for open adapters", () => {
-    expect(validateModelForAdapter("lm-studio", "qwen2.5-coder").model).toBe("qwen2.5-coder");
+    expect(validateModelForAdapter("openai-compatible", "qwen2.5-coder").model).toBe(
+      "qwen2.5-coder"
+    );
     expect(validateModelForAdapter("copilot", "gpt-4o").model).toBe("gpt-4o");
   });
 });

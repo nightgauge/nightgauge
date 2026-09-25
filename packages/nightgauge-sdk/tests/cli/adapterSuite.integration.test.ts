@@ -29,8 +29,7 @@ const ALL_ADAPTER_NAMES: NightgaugeAdapter[] = [
   "codex",
   "gemini",
   "gemini-sdk",
-  "lm-studio",
-  "ollama",
+  "openai-compatible",
   "copilot",
   "grok",
   "opencode",
@@ -69,10 +68,8 @@ const ALL_AUTH_ENV_KEYS = [
   "GH_TOKEN",
   "GITHUB_TOKEN",
   "COPILOT_GITHUB_TOKEN",
-  "NIGHTGAUGE_OLLAMA_MODEL",
-  "NIGHTGAUGE_OLLAMA_BASE_URL",
-  "NIGHTGAUGE_LM_STUDIO_MODEL",
-  "NIGHTGAUGE_LM_STUDIO_BASE_URL",
+  "NIGHTGAUGE_OPENAI_COMPATIBLE_MODEL",
+  "NIGHTGAUGE_OPENAI_COMPATIBLE_BASE_URL",
 ];
 
 // ---------------------------------------------------------------------------
@@ -82,7 +79,7 @@ const ALL_AUTH_ENV_KEYS = [
 describe("defaultRegistry: registration", () => {
   it("contains all built-in adapters", () => {
     const names = defaultRegistry.getNames();
-    expect(names).toHaveLength(10);
+    expect(names).toHaveLength(9);
     for (const name of ALL_ADAPTER_NAMES) {
       expect(names, `missing adapter '${name}'`).toContain(name);
     }
@@ -231,8 +228,8 @@ describe.each(ALL_ADAPTER_NAMES)("validateAuth() with runner — %s", (name) => 
     process.env.GEMINI_API_KEY = "test-gemini";
     process.env.GOOGLE_API_KEY = "test-google";
     process.env.GH_TOKEN = "ghp_test";
-    process.env.NIGHTGAUGE_OLLAMA_MODEL = "llama2";
-    process.env.NIGHTGAUGE_LM_STUDIO_MODEL = "test-model";
+    process.env.NIGHTGAUGE_OPENAI_COMPATIBLE_BASE_URL = "http://127.0.0.1:1234/v1";
+    process.env.NIGHTGAUGE_OPENAI_COMPATIBLE_MODEL = "test-model";
     adapter = defaultRegistry.get(name);
   });
 
@@ -267,8 +264,8 @@ describe.each(ALL_ADAPTER_NAMES)("createQueryFunction() — %s", (name) => {
   beforeEach(() => {
     envSnapshot = snapshotEnv(ALL_AUTH_ENV_KEYS);
     // Set env vars that local adapters need to avoid early throw
-    process.env.NIGHTGAUGE_OLLAMA_MODEL = "llama2";
-    process.env.NIGHTGAUGE_LM_STUDIO_MODEL = "test-model";
+    process.env.NIGHTGAUGE_OPENAI_COMPATIBLE_BASE_URL = "http://127.0.0.1:1234/v1";
+    process.env.NIGHTGAUGE_OPENAI_COMPATIBLE_MODEL = "test-model";
     adapter = defaultRegistry.get(name);
   });
 
@@ -312,48 +309,31 @@ describe("adapter-specific: codex — orchestration capability", () => {
   });
 });
 
-describe("adapter-specific: ollama — model env var required for createQueryFunction", () => {
+describe("adapter-specific: openai-compatible — model env var required for createQueryFunction", () => {
   let envSnapshot: EnvSnapshot;
 
   beforeEach(() => {
-    envSnapshot = snapshotEnv(["NIGHTGAUGE_OLLAMA_MODEL"]);
+    envSnapshot = snapshotEnv([
+      "NIGHTGAUGE_OPENAI_COMPATIBLE_MODEL",
+      "NIGHTGAUGE_OPENAI_COMPATIBLE_BASE_URL",
+    ]);
+    process.env.NIGHTGAUGE_OPENAI_COMPATIBLE_BASE_URL = "http://127.0.0.1:1234/v1";
   });
 
   afterEach(() => {
     restoreEnv(envSnapshot);
   });
 
-  it("createQueryFunction rejects when NIGHTGAUGE_OLLAMA_MODEL is unset", async () => {
-    delete process.env.NIGHTGAUGE_OLLAMA_MODEL;
-    const adapter = defaultRegistry.get("ollama");
-    await expect(adapter.createQueryFunction()).rejects.toThrow(/NIGHTGAUGE_OLLAMA_MODEL/);
+  it("createQueryFunction rejects when NIGHTGAUGE_OPENAI_COMPATIBLE_MODEL is unset", async () => {
+    delete process.env.NIGHTGAUGE_OPENAI_COMPATIBLE_MODEL;
+    const adapter = defaultRegistry.get("openai-compatible");
+    await expect(adapter.createQueryFunction()).rejects.toThrow(
+      /NIGHTGAUGE_OPENAI_COMPATIBLE_MODEL/
+    );
   });
 
   it("declares the sdk-fanout orchestration capability", () => {
-    const adapter = defaultRegistry.get("ollama");
-    expect(adapter.getOrchestrationCapability()).toBe("sdk-fanout");
-  });
-});
-
-describe("adapter-specific: lm-studio — model env var required for createQueryFunction", () => {
-  let envSnapshot: EnvSnapshot;
-
-  beforeEach(() => {
-    envSnapshot = snapshotEnv(["NIGHTGAUGE_LM_STUDIO_MODEL"]);
-  });
-
-  afterEach(() => {
-    restoreEnv(envSnapshot);
-  });
-
-  it("createQueryFunction rejects when NIGHTGAUGE_LM_STUDIO_MODEL is unset", async () => {
-    delete process.env.NIGHTGAUGE_LM_STUDIO_MODEL;
-    const adapter = defaultRegistry.get("lm-studio");
-    await expect(adapter.createQueryFunction()).rejects.toThrow(/NIGHTGAUGE_LM_STUDIO_MODEL/);
-  });
-
-  it("declares the sdk-fanout orchestration capability", () => {
-    const adapter = defaultRegistry.get("lm-studio");
+    const adapter = defaultRegistry.get("openai-compatible");
     expect(adapter.getOrchestrationCapability()).toBe("sdk-fanout");
   });
 });

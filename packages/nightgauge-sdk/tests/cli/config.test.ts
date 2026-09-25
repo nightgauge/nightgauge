@@ -1,23 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { ConfigValidationError, loadConfigFromEnv, validateConfig } from "../../src/cli/config.js";
 
-describe("lm-studio adapter config", () => {
-  it("allows lm-studio adapter without ANTHROPIC_API_KEY", () => {
-    const config = loadConfigFromEnv({ NIGHTGAUGE_ADAPTER: "lm-studio" });
-    expect(config.adapter).toBe("lm-studio");
+describe("openai-compatible adapter config", () => {
+  it("allows the openai-compatible adapter without ANTHROPIC_API_KEY", () => {
+    const config = loadConfigFromEnv({ NIGHTGAUGE_ADAPTER: "openai-compatible" });
+    expect(config.adapter).toBe("openai-compatible");
     expect(config.apiKey).toBe("");
   });
 
-  it("validateConfig skips apiKey enforcement for lm-studio adapter", () => {
-    const config = loadConfigFromEnv({ NIGHTGAUGE_ADAPTER: "lm-studio" });
-    expect(() => validateConfig(config, { NIGHTGAUGE_ADAPTER: "lm-studio" })).not.toThrow();
-  });
-
-  it("does not auto-select lm-studio from env alone (requires explicit NIGHTGAUGE_ADAPTER)", () => {
-    const config = loadConfigFromEnv({
-      NIGHTGAUGE_LM_STUDIO_MODEL: "llama-3",
-    });
-    expect(config.adapter).not.toBe("lm-studio");
+  it("refuses the removed lm-studio adapter with the migration (#2128)", () => {
+    expect(() => loadConfigFromEnv({ NIGHTGAUGE_ADAPTER: "lm-studio" })).toThrow(
+      /removed \(#2128\)/
+    );
   });
 });
 

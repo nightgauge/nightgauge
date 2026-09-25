@@ -146,40 +146,6 @@ describe("mergeAdapterRows (#4031)", () => {
     expect(rows[0].sdkAdapter).toBe("codex");
   });
 
-  it("does NOT mark a local HTTP adapter ready in the binary-missing fallback", () => {
-    // ollama/lm-studio validateAuth is a no-op (authOk always true), so the
-    // auth-only fallback must not claim them ready when Go facts are absent.
-    const rows = mergeAdapterRows(["ollama"], [], authResult({ ollama: { ok: true } }), false);
-    expect(rows[0].authOk).toBe(true);
-    expect(rows[0].ok).toBe(false);
-    expect(rows[0].remediations.join(" ")).toMatch(/Cannot verify readiness/);
-  });
-
-  it("honors Go ok=false for HTTP catalog misses even when installed stays true (#520)", () => {
-    const missing: GoAdapterHealth = {
-      adapter: "lm-studio",
-      kind: "http",
-      installed: true,
-      version_ok: true,
-      server_reachable: true,
-      model: "google/gemma-4-26b-a4b",
-      model_ok: false,
-      ok: false,
-      remediation:
-        "Configured model google/gemma-4-26b-a4b is not in the server catalog. Download it with: lms get google/gemma-4-26b-a4b",
-    };
-    const rows = mergeAdapterRows(
-      ["lm-studio"],
-      [missing],
-      authResult({ "lm-studio": { ok: true } }),
-      true
-    );
-    expect(rows[0].installed).toBe(true);
-    expect(rows[0].authOk).toBe(true);
-    expect(rows[0].ok).toBe(false);
-    expect(rows[0].remediations.join(" ")).toMatch(/lms get/);
-  });
-
   it("shows the display name 'OpenCode' for the opencode SDK adapter (#1628)", () => {
     const rows = mergeAdapterRows(["opencode"], [], authResult({ opencode: { ok: true } }), false);
     expect(rows).toHaveLength(1);

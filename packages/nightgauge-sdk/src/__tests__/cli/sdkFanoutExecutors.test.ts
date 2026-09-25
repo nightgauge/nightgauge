@@ -367,7 +367,7 @@ describe("SdkFanoutExecutors (#3911)", () => {
       try {
         const run = async (baseUrl: string) =>
           makeSdkFanoutBindings(
-            new OpenAiCompatibleAdapter("lm-studio", { baseUrl, model: "judge" }, {})
+            new OpenAiCompatibleAdapter({ baseUrl, model: "judge" }, {})
           ).runAgent({ agentId: "j0", prompt: "judge", provider: "lm-studio" });
 
         const local = await run("http://127.0.0.1:8000/v1");
